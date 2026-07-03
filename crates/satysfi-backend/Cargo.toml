@@ -1,0 +1,9 @@
+[package]
+name = "satysfi-backend"
+description = "Box/glue model, typesetting context, line and page breaking for SATySFi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]

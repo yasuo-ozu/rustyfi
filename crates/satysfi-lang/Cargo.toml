@@ -1,0 +1,12 @@
+[package]
+name = "satysfi-lang"
+description = "Abstract syntax tree, elaboration, evaluator, and primitives for SATySFi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+satysfi-syntax.workspace = true
+satysfi-backend.workspace = true
+thiserror.workspace = true

@@ -1,0 +1,19 @@
+[package]
+name = "satysfi-cli"
+description = "SATySFi command line interface: compile .saty documents to PDF"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "satysfi-rust"
+path = "src/main.rs"
+
+[dependencies]
+satysfi-syntax.workspace = true
+satysfi-backend.workspace = true
+satysfi-lang.workspace = true
+satysfi-pdf.workspace = true
+clap.workspace = true
+anyhow.workspace = true

@@ -1,0 +1,26 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/satysfi-syntax",
+    "crates/satysfi-backend",
+    "crates/satysfi-lang",
+    "crates/satysfi-pdf",
+    "crates/satysfi-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "LGPL-3.0"
+authors = ["Yasuo Ozu <yasuo@ozu.email>"]
+
+[workspace.dependencies]
+syan = { path = "../syan2/core" }
+satysfi-syntax = { path = "crates/satysfi-syntax" }
+satysfi-backend = { path = "crates/satysfi-backend" }
+satysfi-lang = { path = "crates/satysfi-lang" }
+satysfi-pdf = { path = "crates/satysfi-pdf" }
+thiserror = "2"
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+pdf-writer = "0.13"

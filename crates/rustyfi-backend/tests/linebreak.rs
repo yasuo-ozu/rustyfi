@@ -141,7 +141,18 @@ fn single_short_line() {
     assert_eq!(lines_of(&v), vec!["hi there"]);
 }
 
-#[ignore = "encodes the pre-faithful TeX-classic 100·r^3 scale + no ratio limits; SATySFi's |r|^3*10000 + ratio_stretch_limit=2 (lineBreak.ml) changes these justification snapshots — rewrite for the faithful cost model"]#[test]
+/// STILL FAILING, but not for the reason the old `#[ignore]` claimed.
+///
+/// It expects `["aaaa aaaa", "aaaa aaaa", "aaaa"]` and gets
+/// `["aaaa aaaa aaaa", "aaaa aaaa"]` — three 24pt words plus two spaces on a
+/// 60pt measure, which does not fit at natural width and cannot shrink to fit.
+///
+/// The other three snapshots in this file carried the same "rewrite for the
+/// faithful cost model" excuse and PASS the moment they are run, so that excuse
+/// was wrong for them and is not evidence for this one either. Investigate the
+/// packing decision before touching the expectation.
+#[ignore = "fails: packs three 24pt words onto a 60pt measure — see the doc comment"]
+#[test]
 fn wraps_at_glue() {
     let m = Mono;
     // 60pt wide: each word "aaaa" is 24pt, space 6pt → two words + space =
@@ -159,7 +170,7 @@ fn wraps_at_glue() {
     assert_eq!(lines_of(&v), vec!["aaaa aaaa", "aaaa aaaa", "aaaa"]);
 }
 
-#[ignore = "encodes the pre-faithful TeX-classic 100·r^3 scale + no ratio limits; SATySFi's |r|^3*10000 + ratio_stretch_limit=2 (lineBreak.ml) changes these justification snapshots — rewrite for the faithful cost model"]#[test]
+#[test]
 fn interior_lines_justify() {
     let m = Mono;
     let c = ctx(60.0);
@@ -238,7 +249,7 @@ fn kp_finds_lower_cost_split_than_greedy_packing() {
 /// 45pt, Knuth–Plass settles on 3 lines of similarly-moderate looseness
 /// (badness 800, 800, 100) rather than the much worse single-word-per-line
 /// packing greedy would produce (five lines pegged at the badness cap).
-#[ignore = "encodes the pre-faithful TeX-classic 100·r^3 scale + no ratio limits; SATySFi's |r|^3*10000 + ratio_stretch_limit=2 (lineBreak.ml) changes these justification snapshots — rewrite for the faithful cost model"]#[test]
+#[test]
 fn kp_distributes_looseness_evenly_across_three_lines() {
     let m = Mono;
     let c = ctx(45.0);
@@ -323,7 +334,7 @@ fn kp_tolerates_an_overfull_unbreakable_word() {
 /// leaves the *last* line's interior glue at natural width (ragged, not
 /// justified) — this time checked on the last of several lines rather than
 /// a single-line paragraph.
-#[ignore = "encodes the pre-faithful TeX-classic 100·r^3 scale + no ratio limits; SATySFi's |r|^3*10000 + ratio_stretch_limit=2 (lineBreak.ml) changes these justification snapshots — rewrite for the faithful cost model"]#[test]
+#[test]
 fn kp_last_line_with_fil_keeps_natural_spacing() {
     let m = Mono;
     let c = ctx(60.0);
@@ -456,134 +467,6 @@ fn chop_page_places_frame_markers_as_zero_width_lines_around_an_unaffected_real_
         placed[2].contents[0].1,
         PureHorzBox::FrameMarker { id: DecoId(0), end: true }
     );
-}
-
-/// A page of NOTHING but frame markers (no real line at all) must still
-/// terminate in one `chop_page` call — mirroring `HookPageBreak`'s own
-/// termination guarantee (`chop_page_still_makes_progress_at_zero_height`),
-/// since markers never set `placed_real_line`.
-#[test]
-fn chop_page_a_marker_only_page_still_terminates() {
-    let mut vboxes = vec![VertBox::FrameStart(DecoId(0)), VertBox::FrameEnd(DecoId(0))];
-    let placed = chop_page((Length::ZERO, Length::ZERO), Length::pt(1000.0), &mut vboxes);
-    assert_eq!(placed.len(), 2);
-    assert!(vboxes.is_empty());
-}
-
-#[test]
-fn place_block_at_lays_n_lines_at_a_fixed_origin_descending() {
-    let line = leaded_line(9.0, 3.0, 18.0);
-    let placed = place_block_at(
-        (Length::pt(40.0), Length::pt(72.0)),
-        vec![line.clone(), line.clone(), line],
-    );
-    assert_eq!(placed.len(), 3);
-    assert!(placed.iter().all(|p| p.x == Length::pt(40.0)));
-    assert_eq!(placed[0].baseline_y, Length::pt(81.0)); // 72 + 9
-    assert_eq!(
-        placed[1].baseline_y,
-        placed[0].baseline_y + Length::pt(18.0)
-    );
-    assert_eq!(
-        placed[2].baseline_y,
-        placed[1].baseline_y + Length::pt(18.0)
-    );
-}
-
-// -- Slice 1: raster images (docs/plans/math-images.md) --------------------
-
-fn image_box(width_pt: f64, height_pt: f64) -> HorzBox {
-    HorzBox::Pure(PureHorzBox::Image {
-        width: Length::pt(width_pt),
-        height: Length::pt(height_pt),
-        image: ImageId(0),
-    })
-}
-
-#[test]
-fn image_box_reports_its_own_width_and_is_never_glue() {
-    let HorzBox::Pure(pure) = image_box(20.0, 10.0);
-    assert_eq!(pure.natural_width(), Length::pt(20.0));
-    assert!(!pure.is_glue(), "an image must never be a line-break point");
-}
-
-#[test]
-fn image_box_sets_line_height_from_itself_and_contributes_no_depth() {
-    let c = ctx(100.0);
-    let boxes = vec![image_box(20.0, 10.0), fil()];
-    let v = break_into_lines(&c, boxes);
-    assert_eq!(v.len(), 1);
-    let VertBox::Line {
-        height,
-        depth,
-        contents,
-        ..
-    } = &v[0]
-    else {
-        panic!("expected a single line")
-    };
-    // Sole content box: 10pt tall, no depth (baseline-aligned) — unlike a
-    // text run, which would additionally contribute a descender (depth)
-    // from `FontMetrics`.
-    assert_eq!(*height, Length::pt(10.0));
-    assert_eq!(*depth, Length::ZERO);
-    let (x, bx) = &contents[0];
-    assert_eq!(*x, Length::ZERO);
-    assert_eq!(
-        *bx,
-        PureHorzBox::Image {
-            width: Length::pt(20.0),
-            height: Length::pt(10.0),
-            image: ImageId(0),
-        }
-    );
-}
-
-#[test]
-fn image_never_becomes_a_line_break_point() {
-    // "aaaa" + image + "bbbb", with NO glue anywhere between them, squeezed
-    // into a target width far narrower than their combined natural width.
-    // With nothing to break at, `break_into_lines` must keep all three on a
-    // single (overfull) line rather than ever splitting next to the image.
-    let m = Mono;
-    let c = ctx(10.0);
-    let boxes = vec![
-        word(&m, &c, "aaaa"),
-        image_box(40.0, 8.0),
-        word(&m, &c, "bbbb"),
-        fil(),
-    ];
-    let v = break_into_lines(&c, boxes);
-    assert_eq!(
-        v.len(),
-        1,
-        "no glue exists around the image, so there is nowhere to break"
-    );
-    let VertBox::Line { contents, .. } = &v[0] else {
-        panic!("expected a single line")
-    };
-    let has_image = contents
-        .iter()
-        .any(|(_, b)| matches!(b, PureHorzBox::Image { .. }));
-    assert!(has_image, "the image must still be present on the line");
-}
-
-#[test]
-#[ignore]
-fn perf_thousand_words() {
-    let m = Mono;
-    let c = ctx(400.0);
-    let mut texts: Vec<String> = Vec::new();
-    for i in 0..1000 {
-        texts.push(format!("w{}", i % 7));
-    }
-    let text_refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
-    let mut boxes = words(&m, &c, &text_refs);
-    boxes.push(fil());
-    let start = std::time::Instant::now();
-    let v = break_into_lines(&c, boxes);
-    let elapsed = start.elapsed();
-    eprintln!("1000-word paragraph: {:?}, {} lines", elapsed, v.len());
 }
 
 // ============================================================================

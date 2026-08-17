@@ -3,6 +3,7 @@
 
 pub mod context;
 pub mod font;
+pub mod graphics;
 pub mod hbox;
 pub mod length;
 pub mod linebreak;
@@ -11,6 +12,7 @@ pub mod vbox;
 
 pub use context::{Context, PageGeometry};
 pub use font::{FontKey, FontMetrics};
+pub use graphics::{Closing, Color, GraphicsElem, Path, PathSeg, Point, PrePath, Subpath};
 pub use hbox::{HorzBox, HorzStringInfo, PureHorzBox};
 pub use length::Length;
 pub use linebreak::break_into_lines;

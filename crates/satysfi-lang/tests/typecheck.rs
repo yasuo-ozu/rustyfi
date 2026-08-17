@@ -141,40 +141,6 @@ fn user_variant_payload_type_mismatch_is_rejected() {
 }
 
 // ============================================================================
-// `color` built-in variant (frontend-completion.md §Slice1-B): `Gray of
-// float | RGB of (float*float*float) | CMYK of (float*float*float*float)` —
-// no base type, no primitive, ordinary `Ast::Ctor`/`Value::Ctor` plumbing.
-// ============================================================================
-
-#[test]
-fn color_variant_ctors_typecheck() {
-    assert_well_typed("let c = Gray 0.5 in c");
-    assert_well_typed("let c = RGB (0.5, 0.5, 0.5) in c");
-    assert_well_typed("let c = CMYK (0.1, 0.2, 0.3, 0.4) in c");
-}
-
-#[test]
-fn color_variant_ctors_are_pattern_matchable() {
-    assert_well_typed(
-        "match Gray 0.5 with
-         | Gray(x)      -> x
-         | RGB(r, g, b) -> r
-         | CMYK(c, m, y, k) -> c",
-    );
-}
-
-#[test]
-fn color_variant_payload_type_mismatch_is_rejected() {
-    assert_type_error("RGB (true, 0.5, 0.5)");
-}
-
-#[test]
-fn color_variant_wrong_ctor_arity_is_rejected() {
-    // `Gray` takes exactly one `float` payload, not a 3-tuple.
-    assert_type_error("Gray (0.1, 0.2, 0.3)");
-}
-
-// ============================================================================
 // Match: arm-type joining and guards.
 // ============================================================================
 
@@ -361,7 +327,7 @@ fn primitive_names_are_cross_checked_against_primitives_source() {
     let src = include_str!("../src/primitives.rs");
     assert_eq!(
         typecheck::PRIMITIVE_NAMES.len(),
-        71,
+        61,
         "keep this in sync with primitives.rs's prims! table and \
          types_unify.rs's every_registered_primitive_has_a_type test"
     );
@@ -581,4 +547,44 @@ fn module_qualified_inline_command_reference_has_a_command_type() {
          in
          { \\Helper.shout{ hi } }",
     );
+}
+
+// ============================================================================
+// Slice 1 graphics primitives (docs/plans/graphics-subsystem.md §2/§5): no
+// `@require`, no type synonyms (`point` isn't parsed as a synonym yet — see
+// the plan's §5) — just the seven new prims' own signatures, exercised by
+// inference alone, exactly the "minimal self-contained module" the plan's
+// acceptance criterion asks for.
+// ============================================================================
+
+#[test]
+fn graphics_path_fill_stroke_typecheck() {
+    // `point = length * length` unifies against `start-path`/`line-to`'s
+    // `point` domain via plain tuple literals (no synonym needed); `fill`/
+    // `stroke` both consume the resulting `path` and the built-in `color`
+    // variant (`Gray`/`RGB`).
+    assert_well_typed(
+        "let p = close-with-line (line-to (1pt, 1pt) (start-path (0pt, 0pt))) in
+         let g = fill (Gray(0.)) p in
+         stroke 1pt (RGB(0., 0., 0.)) p",
+    );
+}
+
+#[test]
+fn terminate_path_is_also_a_valid_path_source() {
+    assert_well_typed("terminate-path (start-path (0pt, 0pt))");
+}
+
+#[test]
+fn inline_graphics_callback_typechecks() {
+    // `(point -> graphics list)` — a function argument nested inside
+    // `inline-graphics`'s arrow chain; the callback here ignores its point
+    // argument and returns an empty list, exactly Slice 1's eager-callback
+    // shortcut (see `prim_inline_graphics`'s doc comment).
+    assert_well_typed("inline-graphics 1pt 1pt 1pt (fun pt -> [])");
+}
+
+#[test]
+fn fill_rejects_a_non_color_first_argument() {
+    assert_type_error("fill 1 (terminate-path (start-path (0pt, 0pt)))");
 }

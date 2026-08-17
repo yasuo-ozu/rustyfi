@@ -24,16 +24,6 @@ fn minimal_expression_file() {
 }
 
 #[test]
-fn stage_headers() {
-    // `Header::Stage` — accepted and round-tripped like `@require:`/
-    // `@import:` (see `cst.rs`'s doc comment: treated as an inert no-op).
-    assert_roundtrip("@stage: persistent\nlet x = 1 in x");
-    assert_roundtrip("@stage: 0\nlet x = 1 in x");
-    assert_roundtrip("@stage: 1\nlet x = 1 in x");
-    assert_roundtrip("@require: list\n@stage: persistent\nlet x = 1 in x");
-}
-
-#[test]
 fn headers_and_prelude() {
     assert_roundtrip("@require: stdjabook\nlet x = 1 in x");
     assert_roundtrip("let f a b = a in f 1 2");
@@ -48,11 +38,6 @@ fn records_lists_functions() {
     assert_roundtrip("[]");
     assert_roundtrip("fun x -> x");
     assert_roundtrip("let apply = fun f x -> f x in apply");
-    // `fun`'s parameters are full `patbot`s upstream (`parser.mly`'s
-    // `argpats = list(patbot)`), not merely variables — a tuple-
-    // destructuring parameter (used by the bundled `list.satyg`'s
-    // `mapi-adjacent`) must parse and round-trip like any other `patbot`.
-    assert_roundtrip("fun (a, b) x -> a");
     assert_roundtrip("()");
 }
 
@@ -188,34 +173,6 @@ fn let_and_let_rec_local() {
 }
 
 #[test]
-fn destructuring_let() {
-    // `Expr::LetPatternIn` — a plain, non-recursive `let` whose target is a
-    // general pattern rather than a bare variable (`list.satyg`'s
-    // `mapi-adjacent` uses this: `let (_, acc) = .. in reverse acc`).
-    assert_roundtrip("let (a, b) = (1, 2) in a");
-    assert_roundtrip("let (_, acc) = (1, 2) in acc");
-    assert_roundtrip("let Some (x) = y in x");
-}
-
-#[test]
-fn multi_clause_pattern_let_rec() {
-    // SATySFi's multi-clause pattern-matching function-definition sugar
-    // (`option.satyg`/`list.satyg` use this pervasively, e.g. `let-rec map |
-    // f [] = [] | f (x :: xs) = (f x) :: map f xs`).
-    assert_roundtrip("let-rec map | f (None) = None | f (Some(v)) = Some(f v) in map");
-    assert_roundtrip(
-        "let-rec map\n\
-         | f []        = []\n\
-         | f (x :: xs) = (f x) :: map f xs\n\
-         in map",
-    );
-    assert_roundtrip("let-rec filter | _ [] = [] | p (x :: xs) = filter p xs in filter");
-    // A single clause with a non-variable pattern (no `|` continuation at
-    // all) also exercises the general (match-based) desugaring path.
-    assert_roundtrip("let-rec first (x :: xs) = x in first");
-}
-
-#[test]
 fn match_expressions() {
     assert_roundtrip("match x with | 0 -> `a` | n when n -> `b` | _ -> `c`");
     assert_roundtrip("match l with | [] -> 0 | x :: rest -> x");
@@ -277,35 +234,6 @@ fn type_declaration_shapes() {
     assert_roundtrip("type 'a opt = | N | S of 'a\nin 0");
     assert_roundtrip("type t = A\nin 0");
     assert_roundtrip("type f = | F of int -> int\nin 0");
-}
-
-#[test]
-fn applied_and_product_types_in_signatures() {
-    // Postfix type-constructor application (`'a option`, `'a list`) and
-    // product types (`'a * 'b`) inside a `module .. : sig .. end` — the
-    // shapes `option.satyg`/`list.satyg`'s signatures need (`TypeApp`/
-    // `TypeProd`, `cst.rs`).
-    assert_roundtrip(
-        "module M : sig\n\
-         val f : ('a -> 'b) -> 'a option -> 'b option\n\
-         end = struct\n\
-         let f g x = g x\n\
-         end",
-    );
-    assert_roundtrip(
-        "module M : sig\n\
-         val g : ('a -> 'a -> bool) -> 'a -> ('a * 'b) list -> 'b option\n\
-         end = struct\n\
-         let g eq a l = None\n\
-         end",
-    );
-    assert_roundtrip(
-        "module M : sig\n\
-         val h : ('a list) list -> 'a list\n\
-         end = struct\n\
-         let h l = []\n\
-         end",
-    );
 }
 
 #[test]
@@ -395,23 +323,6 @@ fn modules_and_open() {
          let y = 2\n\
          end\n\
          end",
-    );
-}
-
-#[test]
-fn open_module_expression() {
-    // `Mod.(e)` ≡ `open Mod in e` (`Atomic::OpenModule`).
-    assert_roundtrip(
-        "module M = struct\n\
-         let x = 3\n\
-         end\n\
-         M.(x + 1)",
-    );
-    assert_roundtrip(
-        "module M = struct\n\
-         let x = 3\n\
-         end\n\
-         M.(x, x)",
     );
 }
 

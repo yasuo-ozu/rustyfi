@@ -251,6 +251,49 @@ fn non_winansi_text_errors_politely() {
     let _ = std::fs::remove_file(&tmp);
 }
 
+fn compile_graphics_fixture() -> Vec<u8> {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/graphics.saty");
+    let merged = load_and_merge(&fixture);
+    let metrics = satysfi_pdf::Base14Metrics;
+    let doc = satysfi_lang::compile_document_cst(&merged, &metrics)
+        .expect("graphics fixture must compile");
+    assert_eq!(doc.pages.len(), 1);
+    satysfi_pdf::render_pdf(&doc.geometry, &doc.pages).expect("PDF rendering must succeed")
+}
+
+/// End-to-end coverage for the Slice 1 graphics primitives
+/// (`docs/plans/graphics-subsystem.md`): `start-path`/`line-to`/
+/// `close-with-line` build a 20pt-square `path`, `fill`/`stroke` turn it
+/// into `graphics`, and a local `\graphics` command (`inline-graphics`)
+/// places it on the page. Checked by scanning the uncompressed content
+/// stream for the path operators the rectangle must produce — the box's
+/// local path coordinates are exact regardless of where real line/page
+/// layout ends up placing the box (`place_graphics` translates the whole
+/// box via one `cm`, never per-coordinate).
+#[test]
+fn graphics_fixture_compiles_and_renders_path_operators() {
+    let bytes = compile_graphics_fixture();
+    assert!(bytes.starts_with(b"%PDF-"), "not a PDF header");
+
+    let hay = String::from_utf8_lossy(&bytes);
+    // Path construction: move to the rectangle's start, three line-tos, then
+    // `close_path` (`h`, zero operands, so bounded by newlines not spaces).
+    for op in ["0 0 m", "20 0 l", "20 20 l", "0 20 l", "\nh\n"] {
+        assert!(hay.contains(op), "content stream missing {op:?}:\n{hay}");
+    }
+    // Fill (even-odd — upstream's `op_f'`) in RGB red, then a 1pt gray
+    // stroke — each re-emits its own copy of the path before painting it.
+    for op in ["1 0 0 rg", "f*", "1 w", "0 G", "\nS\n"] {
+        assert!(hay.contains(op), "content stream missing {op:?}:\n{hay}");
+    }
+    // The whole box is placed via a single `cm` translate, not a per-
+    // coordinate flip.
+    assert!(
+        hay.contains(" cm\n"),
+        "content stream missing the box's placement transform:\n{hay}"
+    );
+}
+
 /// Multi-file loading through the loader crate: a document `@require:`s the
 /// `stdja-mini` stdlib package and `@import:`s a local library, whose
 /// bindings (a value, a command, a function) all resolve.

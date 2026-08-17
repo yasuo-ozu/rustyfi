@@ -72,6 +72,7 @@ fn measure(line: &[PureHorzBox]) -> LineMetrics {
             }
             PureHorzBox::OuterFil => has_fil = true,
             PureHorzBox::FixedEmpty { width } => natural += *width,
+            PureHorzBox::Graphics { width, .. } => natural += *width,
         }
     }
     LineMetrics {
@@ -342,6 +343,16 @@ fn layout_line(ctx: &Context, line: Vec<PureHorzBox>, width: Length, is_last: bo
                 }
             }
             PureHorzBox::FixedEmpty { width } => *width,
+            PureHorzBox::Graphics {
+                width,
+                height: h,
+                depth: d,
+                ..
+            } => {
+                height = height.max(*h);
+                depth = depth.max(*d);
+                *width
+            }
         };
         contents.push((x, bx));
         x += advance;

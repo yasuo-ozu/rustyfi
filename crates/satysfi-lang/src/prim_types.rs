@@ -66,18 +66,32 @@ pub fn t_context() -> MonoType {
 pub fn t_document() -> MonoType {
     MonoType::Base(BaseType::Document)
 }
-/// `color` (`primitives.cppo.ml:187-190`'s `Gray of float | RGB of
-/// (float*float*float) | CMYK of (float*float*float*float)`) — a built-in
-/// **variant**, not a `BaseType`: it costs a `VariantDecl` (registered by
-/// [`builtin_variants`] below), no base type, no `Value` change, no backend
-/// (mirrors `t_document`'s shape, but through `MonoType::Variant` since
-/// there is no `BaseType::Color`). `Gray`/`RGB`/`CMYK` typecheck and
-/// evaluate as ordinary `Ast::Ctor`/`Value::Ctor` values; not yet
-/// *consumable* (no `set-text-color` — needs a `Context.text_color` field,
-/// deferred to a later Roadmap item), but sufficient for `color.satyh` to
-/// compile.
+/// `pre-path` (vminst.ml's `tPRP`; v0.0.6 `PrePathType`).
+pub fn t_prepath() -> MonoType {
+    MonoType::Base(BaseType::PrePath)
+}
+/// `path` (vminst.ml's `tPATH`; v0.0.6 `PathType`).
+pub fn t_path() -> MonoType {
+    MonoType::Base(BaseType::Path)
+}
+/// `graphics` (vminst.ml's `tGR`; v0.0.6 `GraphicsType`).
+pub fn t_graphics() -> MonoType {
+    MonoType::Base(BaseType::Graphics)
+}
+/// `color` — a built-in *variant* (`Gray`/`RGB`/`CMYK`, see
+/// [`builtin_variants`]), not a `BaseType`: upstream's `color` isn't a
+/// `base_type` case either (`evalUtil.ml`'s colors are an ordinary
+/// constructor value), so this resolves to a nominal, argument-less
+/// `MonoType::Variant` exactly like `t_option`-style lookups would.
 pub fn t_color() -> MonoType {
     MonoType::Variant("color".to_string(), Vec::new())
+}
+/// `point = length * length` (vminst.ml's `tPT = tPROD[tLN;tLN]`) —
+/// structural, not a `BaseType`: a point is just a 2-tuple of lengths,
+/// matching the runtime representation (`Value::Tuple([Length, Length])`,
+/// see `primitives.rs`'s `as_point`/`make_point_value`).
+pub fn t_point() -> MonoType {
+    product(vec![t_length(), t_length()])
 }
 
 /// `dom -> cod` (vminst.ml's `@->`).
@@ -363,49 +377,43 @@ pub fn primitive_type(name: &str) -> Option<PolyType> {
         // value it names.
         "inline-fil" => poly0(t_inline_boxes()),
 
-        // ---- frontend-completion.md §Slice 1.A: the ~18 pure primitives ----
-        // (`|>` is excluded here on purpose — it is elaborated directly to
-        // ordinary `Apply`, never a `scope`/env-bound name, so it has no
-        // primitive type scheme at all; see `elaborate.rs`'s `climb`.)
-
-        // vminst.ml:2729/2744/2759/2774/2789/2804 `FloatSine`/`FloatArcSine`/
-        // `FloatCosine`/`FloatArcCosine`/`FloatTangent`/`FloatArcTangent`:
-        // all `~% (tFL @-> tFL)`.
-        "sin" => poly0(arrow(t_float(), t_float())),
-        "asin" => poly0(arrow(t_float(), t_float())),
-        "cos" => poly0(arrow(t_float(), t_float())),
-        "acos" => poly0(arrow(t_float(), t_float())),
-        "tan" => poly0(arrow(t_float(), t_float())),
-        "atan" => poly0(arrow(t_float(), t_float())),
-        // vminst.ml:2819 `FloatArcTangent2`: `~% (tFL @-> tFL @-> tFL)`,
-        // params `(flt1, flt2)` in that order, so `flt1.atan2(flt2)`.
-        "atan2" => poly0(arrows(vec![t_float(), t_float()], t_float())),
-        // vminst.ml:2835 `FloatLogarithm`: natural log, not log10.
-        "log" => poly0(arrow(t_float(), t_float())),
-        // vminst.ml:2850 `FloatExponential`.
-        "exp" => poly0(arrow(t_float(), t_float())),
-        // vminst.ml:2865/2880 `PrimitiveCeil`/`PrimitiveFloor`: both
-        // `~% (tFL @-> tFL)` — the RESULT is `float`, not `int` (contrast
-        // `round`, above).
-        "ceil" => poly0(arrow(t_float(), t_float())),
-        "floor" => poly0(arrow(t_float(), t_float())),
-        // vminst.ml:2319 `PrimitiveShowFloat`: `~% (tFL @-> tS)`.
-        "show-float" => poly0(arrow(t_float(), t_string())),
-
-        // vminst.ml:2159 `PrimitiveStringByteLength`: `~% (tS @-> tI)`.
-        "string-byte-length" => poly0(arrow(t_string(), t_int())),
-        // vminst.ml:2123 `PrimitiveStringSubBytes`:
-        // `~% (tS @-> tI @-> tI @-> tS)`.
-        "string-sub-bytes" => poly0(arrows(vec![t_string(), t_int(), t_int()], t_string())),
-        // vminst.ml:2196 `PrimitiveStringUnexplode`: `~% ((tL tI) @-> tS)`.
-        "string-unexplode" => poly0(arrow(list(t_int()), t_string())),
-
-        // vminst.ml:2056 `PrimitiveDisplayMessage`: `~% (tS @-> tU)`.
-        "display-message" => poly0(arrow(t_string(), t_unit())),
-        // vminst.ml:3133 `AbortWithMessage`: `~% (tS @-> (~@ tv))` — a
-        // fresh-per-instantiation type variable (see `!`/`::`'s `poly1`
-        // above for the same pattern).
-        "abort-with-message" => poly1(|a| arrow(t_string(), a)),
+        // ==== Slice 1 graphics primitives (docs/plans/graphics-subsystem.md
+        // §2) — paths, fill/stroke, and the `inline-graphics` on-page sink.
+        // Argument order transcribed from `tools/gencode/vminst.ml`:
+        // `start-path` :713, `line-to` :727, `terminate-path` :759,
+        // `close-with-line` :773, `fill` :2398, `stroke` :2381,
+        // `inline-graphics` :1872. ====================================
+        //
+        // `start-path : point -> pre-path`.
+        "start-path" => poly0(arrow(t_point(), t_prepath())),
+        // `line-to : point -> pre-path -> pre-path` (point first).
+        "line-to" => poly0(arrows(vec![t_point(), t_prepath()], t_prepath())),
+        // `terminate-path : pre-path -> path` — finishes an OPEN subpath.
+        "terminate-path" => poly0(arrow(t_prepath(), t_path())),
+        // `close-with-line : pre-path -> path` — closes with a straight
+        // segment back to the subpath's start.
+        "close-with-line" => poly0(arrow(t_prepath(), t_path())),
+        // `fill : color -> path -> graphics` — even-odd filled region.
+        "fill" => poly0(arrows(vec![t_color(), t_path()], t_graphics())),
+        // `stroke : length -> color -> path -> graphics` — width first.
+        "stroke" => poly0(arrows(
+            vec![t_length(), t_color(), t_path()],
+            t_graphics(),
+        )),
+        // `inline-graphics : length -> length -> length -> (point ->
+        // graphics list) -> inline-boxes` — a box of size (w, h, d) carrying
+        // the callback's graphics, the minimal on-page sink for `graphics`
+        // values (see that primitive's body, `primitives.rs`, for the
+        // eager-callback-at-origin caveat this signature doesn't capture).
+        "inline-graphics" => poly0(arrows(
+            vec![
+                t_length(),
+                t_length(),
+                t_length(),
+                arrow(t_point(), list(t_graphics())),
+            ],
+            t_inline_boxes(),
+        )),
 
         _ => return None,
     })
@@ -510,18 +518,20 @@ pub fn builtin_variants() -> Vec<VariantDecl> {
         param_vars: Vec::new(),
     };
 
-    // `color` (frontend-completion.md §Slice1-B) — nullary variant (no type
-    // parameters, so `param_vars` is empty, same as `itemize` above):
-    // `Gray of float | RGB of (float*float*float) | CMYK of
-    // (float*float*float*float)` (`primitives.cppo.ml:187-190`). Unblocks
-    // **[stdlib]** `color.satyh`'s `Color.rgb`/`Color.gray`/`Color.cmyk`
-    // constructor wrappers.
+    // `color` (Slice 1 graphics prerequisite, docs/plans/graphics-
+    // subsystem.md's "current state" note): `Gray : float`, `RGB :
+    // float*float*float`, `CMYK : float*float*float*float`, exactly
+    // `primitives.cppo.ml:187-190`. `fill`/`stroke` are this decl's first
+    // consumers (`as_color`, `primitives.rs`).
     let color_decl = VariantDecl {
         name: "color".to_string(),
         params: 0,
         ctors: vec![
             ("Gray".to_string(), Some(t_float())),
-            ("RGB".to_string(), Some(product(vec![t_float(), t_float(), t_float()]))),
+            (
+                "RGB".to_string(),
+                Some(product(vec![t_float(), t_float(), t_float()])),
+            ),
             (
                 "CMYK".to_string(),
                 Some(product(vec![t_float(), t_float(), t_float(), t_float()])),

@@ -26,10 +26,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Primitive types with no internal structure — the subset of v0.0.6's
 /// `base_type` (`types.cppo.ml:255`) that this milestone's primitives need.
-/// (`EnvType`/`PrePathType`/`PathType`/`GraphicsType`/`ImageType`/`RegExpType`/
-/// `TextInfoType`/`InputPosType` are not yet used by anything in
-/// `primitives.rs` and are left out; add them here when a primitive needs
-/// them.)
+/// (`EnvType`/`ImageType`/`RegExpType`/`TextInfoType`/`InputPosType` are not
+/// yet used by anything in `primitives.rs` and are left out; add them here
+/// when a primitive needs them. `PrePathType`/`PathType`/`GraphicsType` were
+/// in that same "not yet used" list until the Slice-1 graphics primitives
+/// — see `docs/plans/graphics-subsystem.md` — needed them.)
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum BaseType {
     Unit,
@@ -50,6 +51,12 @@ pub enum BaseType {
     BlockBoxes,
     Context,
     Document,
+    /// `pre-path` (v0.0.6: `PrePathType`).
+    PrePath,
+    /// `path` (v0.0.6: `PathType`).
+    Path,
+    /// `graphics` (v0.0.6: `GraphicsType`).
+    Graphics,
 }
 
 impl BaseType {
@@ -69,6 +76,9 @@ impl BaseType {
             BaseType::BlockBoxes => "block-boxes",
             BaseType::Context => "context",
             BaseType::Document => "document",
+            BaseType::PrePath => "pre-path",
+            BaseType::Path => "path",
+            BaseType::Graphics => "graphics",
         }
     }
 }

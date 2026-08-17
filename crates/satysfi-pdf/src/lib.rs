@@ -4,16 +4,14 @@
 
 pub mod base14;
 pub mod cid;
-pub mod fonts;
 pub mod ttf;
 
 pub use base14::Base14Metrics;
 pub use cid::render_pdf_ttf;
-pub use fonts::{FontConfigError, FontFlags, FontRegistry, FontSource};
 pub use ttf::{FontError, TtfFontStore};
 
 use pdf_writer::{Content, Finish, Name, Pdf, Rect, Ref, Str};
-use satysfi_backend::{Page, PageGeometry, PureHorzBox};
+use satysfi_backend::{Closing, Color, GraphicsElem, Page, PageGeometry, Path, PathSeg, PureHorzBox};
 
 #[derive(Debug, thiserror::Error)]
 pub enum PdfError {
@@ -89,22 +87,134 @@ fn page_content(page: &Page, paper_h: f32) -> Result<Vec<u8>, PdfError> {
     for line in &page.lines {
         let y = paper_h - line.baseline_y.0 as f32;
         for (dx, bx) in &line.contents {
-            let PureHorzBox::InnerString { info, text, .. } = bx else {
-                continue;
-            };
-            let encoded = winansi(text)?;
-            let font_idx = (info.font.0 as usize).min(FONT_RES_NAMES.len() - 1);
-            content.begin_text();
-            content.set_font(
-                Name(FONT_RES_NAMES[font_idx].as_bytes()),
-                info.size.0 as f32,
-            );
-            content.next_line((line.x + *dx).0 as f32, y);
-            content.show(Str(&encoded));
-            content.end_text();
+            match bx {
+                PureHorzBox::InnerString { info, text, .. } => {
+                    let encoded = winansi(text)?;
+                    let font_idx = (info.font.0 as usize).min(FONT_RES_NAMES.len() - 1);
+                    content.begin_text();
+                    content.set_font(
+                        Name(FONT_RES_NAMES[font_idx].as_bytes()),
+                        info.size.0 as f32,
+                    );
+                    content.next_line((line.x + *dx).0 as f32, y);
+                    content.show(Str(&encoded));
+                    content.end_text();
+                }
+                PureHorzBox::Graphics { elems, .. } => {
+                    place_graphics(&mut content, elems, (line.x + *dx).0 as f32, y);
+                }
+                _ => {}
+            }
         }
     }
     Ok(content.finish().into_vec())
+}
+
+/// Emit `elems` (already resolved to box-local coordinates — see
+/// `PureHorzBox::Graphics`) into `content`, wrapped in one `save_state`/
+/// `transform`/`restore_state` that translates the whole box to its placed
+/// PDF-space anchor `(tx, ty)` — the **same** already-flipped
+/// `(line.x + dx, paper_h - baseline_y)` anchor a text run on that line uses
+/// (`page_content` above), so element coordinates stay box-local (exactly
+/// `graphicD.ml`'s per-box `cm` wrapping). Shared by both `render_pdf`
+/// (base-14, this module) and `render_pdf_ttf` (CID TrueType, `cid.rs`) — a
+/// graphics box renders identically regardless of which font backend the
+/// rest of the page uses, since path ops carry no font/text state.
+///
+/// **Coordinate space.** SATySFi graphics are y-**up** (PDF-native) inside a
+/// `Path`/`Subpath`'s own coordinates, but *page* layout is y-**down**
+/// (`y = paper_h - baseline_y`); that flip already happened in the anchor
+/// `(tx, ty)` passed in here, via the `cm` translate below — never per
+/// coordinate — so a naive per-coordinate re-flip inside `emit_path` would
+/// mirror every path vertically. Don't add one.
+pub(crate) fn place_graphics(content: &mut Content, elems: &[GraphicsElem], tx: f32, ty: f32) {
+    content.save_state();
+    content.transform([1.0, 0.0, 0.0, 1.0, tx, ty]);
+    for elem in elems {
+        content.save_state();
+        match elem {
+            // Upstream fills with the even-odd rule (`op_f'`,
+            // `graphicD.ml:246`), not nonzero-winding — matters for
+            // self-intersecting/nested subpaths (e.g. a frame = outer ⊕
+            // inner rectangle).
+            GraphicsElem::Fill(color, path) => {
+                set_fill_color(content, *color);
+                emit_path(content, path);
+                content.fill_even_odd();
+            }
+            GraphicsElem::Stroke(width, color, path) => {
+                set_stroke_color(content, *color);
+                content.set_line_width(width.0 as f32);
+                emit_path(content, path);
+                content.stroke();
+            }
+        }
+        content.restore_state();
+    }
+    content.restore_state();
+}
+
+fn set_fill_color(content: &mut Content, color: Color) {
+    match color {
+        Color::Gray(g) => content.set_fill_gray(g as f32),
+        Color::Rgb(r, g, b) => content.set_fill_rgb(r as f32, g as f32, b as f32),
+        Color::Cmyk(c, m, y, k) => content.set_fill_cmyk(c as f32, m as f32, y as f32, k as f32),
+    };
+}
+
+fn set_stroke_color(content: &mut Content, color: Color) {
+    match color {
+        Color::Gray(g) => content.set_stroke_gray(g as f32),
+        Color::Rgb(r, g, b) => content.set_stroke_rgb(r as f32, g as f32, b as f32),
+        Color::Cmyk(c, m, y, k) => {
+            content.set_stroke_cmyk(c as f32, m as f32, y as f32, k as f32)
+        }
+    };
+}
+
+/// Emit one `Path`'s subpaths as `m`/`l`/`c`/`h` operators (per
+/// `graphicD.ml`'s `pdfops_of_path`): `move_to(start)`, then each `PathSeg`
+/// as `line_to`/`cubic_to`, then the closing — `Open` emits nothing,
+/// `Line` emits `close_path` (`h`), `Bezier(c1, c2)` emits a final
+/// `cubic_to(c1, c2, start)` then `close_path`.
+fn emit_path(content: &mut Content, path: &Path) {
+    for sub in &path.subpaths {
+        content.move_to(sub.start.0 .0 as f32, sub.start.1 .0 as f32);
+        for seg in &sub.segs {
+            match seg {
+                PathSeg::Line(pt) => {
+                    content.line_to(pt.0 .0 as f32, pt.1 .0 as f32);
+                }
+                PathSeg::Bezier(c1, c2, dest) => {
+                    content.cubic_to(
+                        c1.0 .0 as f32,
+                        c1.1 .0 as f32,
+                        c2.0 .0 as f32,
+                        c2.1 .0 as f32,
+                        dest.0 .0 as f32,
+                        dest.1 .0 as f32,
+                    );
+                }
+            }
+        }
+        match sub.closing {
+            Closing::Open => {}
+            Closing::Line => {
+                content.close_path();
+            }
+            Closing::Bezier(c1, c2) => {
+                content.cubic_to(
+                    c1.0 .0 as f32,
+                    c1.1 .0 as f32,
+                    c2.0 .0 as f32,
+                    c2.1 .0 as f32,
+                    sub.start.0 .0 as f32,
+                    sub.start.1 .0 as f32,
+                );
+                content.close_path();
+            }
+        }
+    }
 }
 
 /// Encode to WinAnsi. Milestone 1 accepts ASCII 32..=126 (what the metrics

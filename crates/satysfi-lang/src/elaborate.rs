@@ -479,124 +479,17 @@ fn rec_bindings(
     }
     let mut bindings = Vec::with_capacity(all.len());
     for rb in all {
-        let value_ast = rec_clause_value(&rb.params, &rb.value, &rb.extra, &rec_scope)?;
+        let mut inner = rec_scope.clone();
+        for p in &rb.params {
+            inner = inner.with(&p.name);
+        }
+        let mut value_ast = expr(&rb.value, &inner)?;
+        for p in rb.params.iter().rev() {
+            value_ast = Ast::Lambda(p.name.clone(), Rc::new(value_ast));
+        }
         bindings.push((rb.name.name.clone(), Rc::new(value_ast)));
     }
     Ok((bindings, rec_scope))
-}
-
-/// Elaborate the (possibly multi-clause) value of one `let-rec` binding
-/// (`RecBinding`/`RecClause`: `name [|] patbot* = value (| patbot* =
-/// value)*`). Faithfully, a multi-clause function definition desugars into
-/// one curried function of `n` fresh parameters (`n` = every clause's shared
-/// arity — an `IllegalArgumentLength`-style error if they disagree) that
-/// matches a tuple of them against each clause's patterns in turn, first
-/// clause first (`option.satyg`'s `let-rec map | f (None) = None | f
-/// (Some(v)) = Some(f v)` is exactly this: 2 clauses, arity 2). At arity 1
-/// the "tuple" is just the single fresh parameter itself, no `Ast::Tuple`
-/// wrapper (matches `list.satyg`'s single-parameter-pattern clauses, e.g.
-/// `let-rec append lst1 lst2 = ..` mixed with genuinely-refutable single
-/// clauses elsewhere).
-///
-/// The single-clause, all-variable-parameter case (`let-rec f x y = ..`, no
-/// `|` at all — overwhelmingly the common shape) is special-cased to the
-/// original direct `Lambda` chain: behaviorally identical to the general
-/// path (variable patterns always match and simply bind), it just skips
-/// building a throwaway `Match`/fresh-variable indirection for what nearly
-/// every binding actually looks like.
-fn rec_clause_value(
-    params0: &[c::PatBot],
-    value0: &c::Expr,
-    extra: &[c::RecClause],
-    scope: &Scope,
-) -> Result<Ast, ElabError> {
-    let arity = params0.len();
-    for cl in extra {
-        if cl.params.len() != arity {
-            return err(
-                cl.bar.0,
-                format!(
-                    "every clause of a multi-clause 'let-rec' binding must bind the \
-                     same number of parameters (expected {arity}, got {})",
-                    cl.params.len()
-                ),
-            );
-        }
-    }
-
-    if extra.is_empty() && params0.iter().all(is_var_patbot) {
-        let mut inner = scope.clone();
-        for p in params0 {
-            inner = inner.with(patbot_var_name(p));
-        }
-        let mut value_ast = expr(value0, &inner)?;
-        for p in params0.iter().rev() {
-            value_ast = Ast::Lambda(patbot_var_name(p).to_string(), Rc::new(value_ast));
-        }
-        return Ok(value_ast);
-    }
-
-    let fresh: Vec<String> = (0..arity).map(|i| format!("%rec_arg{i}")).collect();
-    let mut arms = Vec::with_capacity(1 + extra.len());
-    arms.push(rec_clause_arm(params0, value0, scope)?);
-    for cl in extra {
-        arms.push(rec_clause_arm(&cl.params, &cl.value, scope)?);
-    }
-    let dummy = Span::default();
-    let scrutinee = if arity == 1 {
-        Ast::Var(fresh[0].clone(), dummy)
-    } else {
-        Ast::Tuple(fresh.iter().map(|f| Ast::Var(f.clone(), dummy)).collect())
-    };
-    let mut body = Ast::Match(Box::new(scrutinee), arms);
-    for f in fresh.iter().rev() {
-        body = Ast::Lambda(f.clone(), Rc::new(body));
-    }
-    Ok(body)
-}
-
-fn is_var_patbot(p: &c::PatBot) -> bool {
-    matches!(p, c::PatBot::Var(_))
-}
-
-/// Panics if `p` isn't `PatBot::Var` — callers must check [`is_var_patbot`] first.
-fn patbot_var_name(p: &c::PatBot) -> &str {
-    match p {
-        c::PatBot::Var(v) => &v.name,
-        _ => unreachable!("patbot_var_name called on a non-Var PatBot"),
-    }
-}
-
-/// One `patbot* = value` clause of a multi-clause `let-rec`, lowered to a
-/// [`MatchArm`] over the clause's parameter patterns (see
-/// [`rec_clause_value`]'s doc comment for the arity-1-vs-N pattern shape) —
-/// the body sees every name the patterns bind, exactly like an ordinary
-/// `match` arm ([`match_arm`], below).
-fn rec_clause_arm(
-    params: &[c::PatBot],
-    value: &c::Expr,
-    scope: &Scope,
-) -> Result<MatchArm, ElabError> {
-    let pats: Vec<Pattern> = params.iter().map(patbot).collect::<Result<_, _>>()?;
-    let mut names = Vec::new();
-    for p in &pats {
-        collect_pattern_names(p, &mut names);
-    }
-    let mut inner = scope.clone();
-    for n in &names {
-        inner = inner.with(n);
-    }
-    let body = expr(value, &inner)?;
-    let pat = if pats.len() == 1 {
-        pats.into_iter().next().unwrap()
-    } else {
-        Pattern::Tuple(pats)
-    };
-    Ok(MatchArm {
-        pat,
-        guard: None,
-        body,
-    })
 }
 
 fn expr(e: &c::Expr, scope: &Scope) -> Result<Ast, ElabError> {
@@ -631,33 +524,6 @@ fn expr(e: &c::Expr, scope: &Scope) -> Result<Ast, ElabError> {
                 Box::new(body_ast),
             ))
         }
-        // `let pat = value in body` (`nxnonrecdec`'s general-pattern case —
-        // see `cst::ast::Expr::LetPatternIn`'s doc comment for why this is a
-        // separate variant from `LetIn` above). Lowered to the same
-        // single-arm-`match` machinery a `match` expression's own arms use
-        // (`pattern`/`collect_pattern_names`, below): `value` is elaborated
-        // under the OUTER scope (a destructuring let's right-hand side never
-        // sees its own bound names, same as `LetIn`), then matched against
-        // `pat`, whose bound names are in scope for `body`.
-        c::Expr::LetPatternIn { pat, value, body, .. } => {
-            let value_ast = expr(value, scope)?;
-            let lowered_pat = pattern(pat)?;
-            let mut names = Vec::new();
-            collect_pattern_names(&lowered_pat, &mut names);
-            let mut inner = scope.clone();
-            for n in &names {
-                inner = inner.with(n);
-            }
-            let body_ast = expr(body, &inner)?;
-            Ok(Ast::Match(
-                Box::new(value_ast),
-                vec![MatchArm {
-                    pat: lowered_pat,
-                    guard: None,
-                    body: body_ast,
-                }],
-            ))
-        }
         c::Expr::If {
             cond,
             then_branch,
@@ -668,22 +534,19 @@ fn expr(e: &c::Expr, scope: &Scope) -> Result<Ast, ElabError> {
             Box::new(expr(then_branch, scope)?),
             Box::new(expr(else_branch, scope)?),
         )),
-        // `fun patbot+ -> body` (`nxlambda`'s `LAMBDA argpats ARROW nxlor`,
-        // `argpats = list(patbot)` — see `cst::ast::Expr::Fun`'s doc
-        // comment). Delegates to `rec_clause_value` (below), the SAME
-        // arity-preserving pattern-currying `let-rec` already needs for its
-        // own `patbot*` clause parameters (`fun`'s `extra` clause list is
-        // simply empty — a lambda has no `|`-alternation): the common
-        // all-plain-variable case still becomes a direct `Lambda` chain,
-        // with no `Match`/fresh-variable indirection, and only a genuine
-        // destructuring parameter (e.g. the bundled `list.satyg`'s
-        // `mapi-adjacent`: `fun (i, acc) x leftopt rightopt -> ..`) pays for
-        // the general path.
         c::Expr::Fun { kw, params, body, .. } => {
             if params.is_empty() {
                 return err(kw.0, "'fun' needs at least one parameter");
             }
-            rec_clause_value(params, body, &[], scope)
+            let mut inner = scope.clone();
+            for p in params {
+                inner = inner.with(&p.name);
+            }
+            let mut ast = expr(body, &inner)?;
+            for p in params.iter().rev() {
+                ast = Ast::Lambda(p.name.clone(), Rc::new(ast));
+            }
+            Ok(ast)
         }
         c::Expr::Match {
             scrutinee,
@@ -718,7 +581,19 @@ fn expr(e: &c::Expr, scope: &Scope) -> Result<Ast, ElabError> {
         // there is no further sequence of sibling top bindings to thread a
         // scope through here.
         c::Expr::OpenIn { name, body, .. } => {
-            open_module(&name.name, name.span, scope, |s| expr(body, s))
+            let prefix = format!("{}.", name.name);
+            let matches = scope.names_with_prefix(&prefix);
+            let mut inner = scope.clone();
+            for q in &matches {
+                inner = inner.with(&q[prefix.len()..]);
+            }
+            let body_ast = expr(body, &inner)?;
+            let mut ast = body_ast;
+            for q in matches.into_iter().rev() {
+                let suffix = q[prefix.len()..].to_string();
+                ast = Ast::LetIn(suffix, Box::new(Ast::Var(q, name.span)), Box::new(ast));
+            }
+            Ok(ast)
         }
         // `while cond do body` (`nxwhl`).
         c::Expr::WhileDo { cond, body, .. } => Ok(Ast::WhileDo(
@@ -818,14 +693,7 @@ fn op_chain(chain: &c::OpChain, scope: &Scope) -> Result<Ast, ElabError> {
         let mut ops: VecDeque<(String, Span, Token)> = VecDeque::with_capacity(chain.tail.len());
         for rhs in &chain.tail {
             let text = rhs.op.op_text();
-            // `|>` (frontend-completion.md §Slice1-A / stdlib-port.md Blocker
-            // B) is handled entirely by `climb`'s special case below — it is
-            // deliberately NOT a `scope`-bound name (no runtime primitive, no
-            // `prim_types` entry: `a |> f` lowers straight to `Apply(f, a)`,
-            // ordinary application the inferencer/evaluator already handle),
-            // so it must skip the "unbound operator" gate every other
-            // operator token goes through.
-            if text != "|>" && !scope.contains(&text) {
+            if !scope.contains(&text) {
                 return err(rhs.op.span, format!("unbound operator '{text}'"));
             }
             ops.push_back((text, rhs.op.span, rhs.op.tok.clone()));
@@ -846,16 +714,7 @@ fn op_chain(chain: &c::OpChain, scope: &Scope) -> Result<Ast, ElabError> {
 /// `atom (op atom)*` sequence (`atoms.len() == ops.len() + 1`). Every binop
 /// elaborates uniformly to `Apply(Apply(Var(op_text), lhs), rhs)` — SATySFi
 /// binops (including `::`, see the `primitives.rs` note) are just env-bound
-/// primitives, no special-cased AST node needed — **except `|>`**, which is
-/// reverse application (`a |> f` ≡ `f a`, upstream `primitives.cppo.ml:552`)
-/// special-cased directly to `Apply(rhs, lhs)` rather than
-/// `Apply(Apply(Var("|>"), lhs), rhs)`: no primitive named `"|>"` is ever
-/// registered (see `op_chain`'s matching skip of the scope-contains gate),
-/// since applying a user-supplied closure isn't something any current
-/// primitive body does. `|>` sits at level 1 (loosest, left-associative,
-/// see `op_prec`), so `a |> f |> g` folds as `(a |> f) |> g` = `g (f a)`,
-/// matching the bundled `list.satyg`'s pipe-heavy style (`reverse`,
-/// `map-adjacent`, `map-with-ends`).
+/// primitives, no special-cased AST node needed.
 fn climb(
     atoms: &mut VecDeque<Ast>,
     ops: &mut VecDeque<(String, Span, Token)>,
@@ -875,14 +734,10 @@ fn climb(
             Assoc::Right => prec,
         };
         let rhs = climb(atoms, ops, next_min);
-        lhs = if text == "|>" {
-            Ast::Apply(Box::new(rhs), Box::new(lhs))
-        } else {
-            Ast::Apply(
-                Box::new(Ast::Apply(Box::new(Ast::Var(text, span)), Box::new(lhs))),
-                Box::new(rhs),
-            )
-        };
+        lhs = Ast::Apply(
+            Box::new(Ast::Apply(Box::new(Ast::Var(text, span)), Box::new(lhs))),
+            Box::new(rhs),
+        );
     }
     lhs
 }
@@ -993,37 +848,6 @@ fn app_arg_to_ast(arg: &c::AppArg, scope: &Scope) -> Result<Ast, ElabError> {
     }
 }
 
-/// Shared machinery for `open Name in body` (`Expr::OpenIn`) and `Name.(body)`
-/// (`Atomic::OpenModule`, `nxbot`'s `OPENMODULE nxlet RPAREN` production —
-/// `Mod.(e)` ≡ `open Mod in e`): bring every `"Name."`-prefixed name
-/// currently in scope into unqualified scope, elaborate `body` under that
-/// extended scope (via the supplied closure — generic because `Expr::OpenIn`'s
-/// body is a plain `Expr` but `Atomic::OpenModule`'s is a `ParenBody`, so
-/// `Mod.(e, e, …)` can produce a tuple exactly like `Atomic::Paren`), then
-/// wrap the result in one `LetIn` alias per matched name (`x = Name.x`) —
-/// there is no separate "module scope" at the `Ast` level, so the aliasing
-/// must be visible there too.
-fn open_module(
-    module_name: &str,
-    name_span: Span,
-    scope: &Scope,
-    body: impl FnOnce(&Scope) -> Result<Ast, ElabError>,
-) -> Result<Ast, ElabError> {
-    let prefix = format!("{module_name}.");
-    let matches = scope.names_with_prefix(&prefix);
-    let mut inner = scope.clone();
-    for q in &matches {
-        inner = inner.with(&q[prefix.len()..]);
-    }
-    let body_ast = body(&inner)?;
-    let mut ast = body_ast;
-    for q in matches.into_iter().rev() {
-        let suffix = q[prefix.len()..].to_string();
-        ast = Ast::LetIn(suffix, Box::new(Ast::Var(q, name_span)), Box::new(ast));
-    }
-    Ok(ast)
-}
-
 fn atomic(a: &c::Atomic, scope: &Scope) -> Result<Ast, ElabError> {
     match a {
         c::Atomic::Length(l) => match Length::from_unit(l.value, &l.unit) {
@@ -1045,9 +869,6 @@ fn atomic(a: &c::Atomic, scope: &Scope) -> Result<Ast, ElabError> {
         }
         c::Atomic::Unit { .. } => Ok(Ast::Unit),
         c::Atomic::Paren { inner, .. } => paren_body(inner, scope),
-        c::Atomic::OpenModule { grp, body } => {
-            open_module(&grp.open.name, grp.open.span, scope, |s| paren_body(body, s))
-        }
         c::Atomic::Record { body, .. } => record_body_to_ast(body, scope),
         c::Atomic::List { items, .. } => {
             let mut out = Vec::with_capacity(items.len());
@@ -1393,7 +1214,6 @@ fn cmd_arg_chain(e: &c::Expr, scope: &Scope) -> Result<Vec<Ast>, ElabError> {
         }
         c::Expr::LetRecIn { kw, .. } => err(kw.0, "unexpected 'let-rec' as a command argument"),
         c::Expr::LetIn { kw, .. } => err(kw.0, "unexpected 'let' as a command argument"),
-        c::Expr::LetPatternIn { kw, .. } => err(kw.0, "unexpected 'let' as a command argument"),
         c::Expr::If { kw, .. } => err(kw.0, "unexpected 'if' as a command argument"),
         c::Expr::Fun { kw, .. } => err(kw.0, "unexpected 'fun' as a command argument"),
         c::Expr::Match { kw, .. } => err(kw.0, "unexpected 'match' as a command argument"),

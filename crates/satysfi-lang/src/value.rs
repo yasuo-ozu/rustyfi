@@ -68,6 +68,14 @@ pub enum Value {
         def: &'static PrimDef,
         applied: Vec<Value>,
     },
+    /// `pre-path` (Slice 1 graphics; `start-path`/`line-to`'s result — see
+    /// `docs/plans/graphics-subsystem.md` §1).
+    PrePath(satysfi_backend::PrePath),
+    /// `path` (`terminate-path`/`close-with-line`'s result).
+    Path(satysfi_backend::Path),
+    /// `graphics` — one resolved drawing element (`fill`/`stroke`'s result);
+    /// a `graphics list` is just `Value::List` of these, same as upstream.
+    Graphics(satysfi_backend::GraphicsElem),
 }
 
 impl Value {
@@ -95,6 +103,9 @@ impl Value {
             Value::Closure { .. } => "function",
             Value::CompiledClosure { .. } => "function",
             Value::Prim { .. } => "function",
+            Value::PrePath(_) => "pre-path",
+            Value::Path(_) => "path",
+            Value::Graphics(_) => "graphics",
         }
     }
 }

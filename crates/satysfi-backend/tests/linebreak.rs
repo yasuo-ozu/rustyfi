@@ -391,3 +391,47 @@ fn perf_thousand_words() {
     let elapsed = start.elapsed();
     eprintln!("1000-word paragraph: {:?}, {} lines", elapsed, v.len());
 }
+
+// ============================================================================
+// Slice 1 graphics box (docs/plans/graphics-subsystem.md §3): a
+// `PureHorzBox::Graphics` measures like `Image` did for width, but — unlike
+// `Image` — carries a real depth, and is never a legal line-break point.
+// ============================================================================
+
+fn graphics_box(width: f64, height: f64, depth: f64) -> PureHorzBox {
+    PureHorzBox::Graphics {
+        width: Length::pt(width),
+        height: Length::pt(height),
+        depth: Length::pt(depth),
+        elems: vec![],
+    }
+}
+
+#[test]
+fn graphics_box_natural_width_and_is_not_glue() {
+    let gbox = graphics_box(20.0, 20.0, 2.0);
+    assert_eq!(gbox.natural_width(), Length::pt(20.0));
+    assert!(!gbox.is_glue());
+}
+
+#[test]
+fn graphics_box_contributes_height_and_depth_to_its_line() {
+    let c = ctx(100.0);
+    let line = vec![HorzBox::Pure(graphics_box(20.0, 20.0, 2.0))];
+    let lines = break_into_lines(&c, line);
+    assert_eq!(lines.len(), 1);
+    match &lines[0] {
+        VertBox::Line {
+            height,
+            depth,
+            contents,
+        } => {
+            assert_eq!(*height, Length::pt(20.0));
+            assert_eq!(*depth, Length::pt(2.0));
+            assert_eq!(contents.len(), 1);
+            assert_eq!(contents[0].0, Length::ZERO);
+            assert_eq!(contents[0].1.natural_width(), Length::pt(20.0));
+        }
+        VertBox::Skip(_) => panic!("expected a Line, got a Skip"),
+    }
+}

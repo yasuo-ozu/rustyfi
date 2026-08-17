@@ -20,7 +20,7 @@ use satysfi_backend::{FontKey, Page, PageGeometry, PureHorzBox};
 use ttf_parser::{Face, GlyphId};
 
 use crate::ttf::TtfFontStore;
-use crate::{PdfError, FONT_RES_NAMES};
+use crate::{place_graphics, PdfError, FONT_RES_NAMES};
 
 /// Which glyphs of one physical font file are referenced anywhere in the
 /// document, and the (first-seen) source character for each — enough to
@@ -132,25 +132,30 @@ fn page_content(
     for line in &page.lines {
         let y = paper_h - line.baseline_y.0 as f32;
         for (dx, bx) in &line.contents {
-            let PureHorzBox::InnerString { info, text, .. } = bx else {
-                continue;
-            };
-            let file_idx = store.file_index(info.font);
-            let face = store
-                .face_by_file(file_idx)
-                .ok_or_else(|| PdfError::NoGlyph(text.chars().next().unwrap_or('\u{FFFD}')))?;
-            let file_usage = usage.entry(file_idx).or_default();
-            let encoded = encode_glyph_run(&face, text, file_usage)?;
+            match bx {
+                PureHorzBox::InnerString { info, text, .. } => {
+                    let file_idx = store.file_index(info.font);
+                    let face = store.face_by_file(file_idx).ok_or_else(|| {
+                        PdfError::NoGlyph(text.chars().next().unwrap_or('\u{FFFD}'))
+                    })?;
+                    let file_usage = usage.entry(file_idx).or_default();
+                    let encoded = encode_glyph_run(&face, text, file_usage)?;
 
-            let font_idx = (info.font.0 as usize).min(FONT_RES_NAMES.len() - 1);
-            content.begin_text();
-            content.set_font(
-                Name(FONT_RES_NAMES[font_idx].as_bytes()),
-                info.size.0 as f32,
-            );
-            content.next_line((line.x + *dx).0 as f32, y);
-            content.show(Str(&encoded));
-            content.end_text();
+                    let font_idx = (info.font.0 as usize).min(FONT_RES_NAMES.len() - 1);
+                    content.begin_text();
+                    content.set_font(
+                        Name(FONT_RES_NAMES[font_idx].as_bytes()),
+                        info.size.0 as f32,
+                    );
+                    content.next_line((line.x + *dx).0 as f32, y);
+                    content.show(Str(&encoded));
+                    content.end_text();
+                }
+                PureHorzBox::Graphics { elems, .. } => {
+                    place_graphics(&mut content, elems, (line.x + *dx).0 as f32, y);
+                }
+                _ => {}
+            }
         }
     }
     Ok(content.finish().into_vec())

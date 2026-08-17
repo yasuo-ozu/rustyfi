@@ -1,0 +1,30 @@
+% Slice 1 graphics fixture (docs/plans/graphics-subsystem.md): exercises the
+% seven new prims directly — start-path/line-to/close-with-line build a 20pt
+% square `path`, fill/stroke turn it into `graphics`, and a local `\graphics`
+% command (a tiny let-inline wrapping inline-graphics) is the on-page sink.
+%
+% Deliberately NOT `@require: gr`: the real gr.satyh needs `pervasives`'s
+% `point` type synonym, which this port doesn't parse yet (§5 of the plan) —
+% this fixture is the no-@require six-prim subset the plan's Slice 1 targets
+% instead.
+
+@require: stdja-mini
+
+let p =
+  close-with-line
+    (line-to (0pt, 20pt)
+       (line-to (20pt, 20pt)
+          (line-to (20pt, 0pt)
+             (start-path (0pt, 0pt)))))
+
+let-inline ctx \graphics =
+  inline-graphics 20pt 20pt 0pt
+    (fun pt -> [ fill (RGB(1., 0., 0.)) p; stroke 1pt (Gray(0.)) p ])
+
+in
+document (|
+  title = {Graphics};
+  author = {yasuo};
+|) '<
+  +p { A rectangle drawn with the graphics primitives: \graphics; here. }
+>

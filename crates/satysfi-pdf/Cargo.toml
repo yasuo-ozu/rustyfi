@@ -11,12 +11,6 @@ satysfi-backend.workspace = true
 pdf-writer.workspace = true
 thiserror.workspace = true
 ttf-parser.workspace = true
-serde.workspace = true
-# Not (yet) a workspace-shared dependency: `fonts.rs` is the only consumer of
-# JSON parsing in this workspace today, so it is declared directly here
-# rather than promoted to `[workspace.dependencies]` (see fonts.rs's module
-# doc for why plain JSON was chosen over hand-rolling a parser).
-serde_json = "1"
 
 [dev-dependencies]
 

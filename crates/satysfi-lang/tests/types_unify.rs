@@ -419,28 +419,16 @@ fn every_registered_primitive_has_a_type() {
         "block-skip",
         // ---- phase 4, part 2 addition ----
         "set-font-key",
-        // ---- frontend-completion.md §Slice 1.A: the ~18 pure primitives ----
-        // (`|>` excluded: no primitive of its own — see `elaborate.rs`'s
-        // `climb` and this crate's `prims!` table comment.)
-        "sin",
-        "asin",
-        "cos",
-        "acos",
-        "tan",
-        "atan",
-        "atan2",
-        "log",
-        "exp",
-        "ceil",
-        "floor",
-        "show-float",
-        "string-byte-length",
-        "string-sub-bytes",
-        "string-unexplode",
-        "display-message",
-        "abort-with-message",
+        // ---- Slice 1 graphics primitives (docs/plans/graphics-subsystem.md) ----
+        "start-path",
+        "line-to",
+        "terminate-path",
+        "close-with-line",
+        "fill",
+        "stroke",
+        "inline-graphics",
     ];
-    assert_eq!(NAMES.len(), 71, "keep this list in sync with primitives.rs's prims! table");
+    assert_eq!(NAMES.len(), 61, "keep this list in sync with primitives.rs's prims! table");
     for name in NAMES {
         assert!(
             prim_types::primitive_type(name).is_some(),

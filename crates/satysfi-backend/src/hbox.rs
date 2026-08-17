@@ -1,4 +1,5 @@
 use crate::font::FontKey;
+use crate::graphics::GraphicsElem;
 use crate::length::Length;
 
 /// Which font/size a string box is set in (`horz_string_info`).
@@ -32,6 +33,19 @@ pub enum PureHorzBox {
     /// v0.0.6: `PHSFixedEmpty`). Unlike `OuterEmpty` this is never a legal
     /// line-break point (see `is_glue`).
     FixedEmpty { width: Length },
+    /// A box carrying resolved `graphics` elements (`inline-graphics`;
+    /// v0.0.6: `PHGFixedGraphics`), coordinates already relative to the
+    /// box's baseline-left origin. Unlike `Image`-style boxes this carries a
+    /// real depth (a graphics box can extend below the baseline), so both
+    /// `height` and `depth` feed line metrics (see `linebreak.rs`'s
+    /// `measure`/`layout_line`). Never a legal line-break point (see
+    /// `is_glue`).
+    Graphics {
+        width: Length,
+        height: Length,
+        depth: Length,
+        elems: Vec<GraphicsElem>,
+    },
 }
 
 impl PureHorzBox {
@@ -41,6 +55,7 @@ impl PureHorzBox {
             PureHorzBox::OuterEmpty { natural, .. } => *natural,
             PureHorzBox::OuterFil => Length::ZERO,
             PureHorzBox::FixedEmpty { width } => *width,
+            PureHorzBox::Graphics { width, .. } => *width,
         }
     }
 

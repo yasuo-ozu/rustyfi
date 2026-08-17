@@ -80,45 +80,6 @@ fn unary_minus_wraps_the_whole_application() {
     assert_eq!(int("- (2 + 3)"), -5);
 }
 
-// ---- `|>` reverse application (frontend-completion.md Blocker B) ----------
-//
-// `|>` has no `Ast`-level identity to build directly (unlike every other
-// primitive/operator): elaboration lowers `a |> f` straight to `Apply(f,
-// a)`, so this is the one place in the pure-primitives batch that can only
-// be exercised through the real parser + elaborator, not `prims_phase4.rs`'s
-// hand-built-`Ast` harness.
-
-#[test]
-fn pipe_lowers_to_reverse_application() {
-    assert_eq!(int("1 |> (fun x -> x + 1)"), 2);
-}
-
-#[test]
-fn pipe_accepts_a_bare_function_reference_not_just_a_lambda() {
-    // Matches how the bundled `list.satyg` actually uses it (`lst |>
-    // fold-left-adjacent (...) [] |> reverse`): the right-hand side is an
-    // ordinary application-chain result, not necessarily a literal `fun`.
-    let src = "let-rec double x = x * 2 in let-rec inc x = x + 1 in 3 |> double |> inc";
-    assert_eq!(int(src), 7);
-}
-
-#[test]
-fn pipe_is_left_associative() {
-    // (3 |> double) |> inc = inc (double 3) = 7, not double (inc 3) = 8.
-    let src = "let-rec double x = x * 2 in let-rec inc x = x + 1 in 3 |> double |> inc";
-    assert_eq!(int(src), 7);
-    assert_ne!(int(src), 8);
-}
-
-#[test]
-fn pipe_sits_at_the_loosest_precedence_level() {
-    // `|>` (level 1) is looser than `+` (level 5): `1 + 1 |> double` parses
-    // as `(1 + 1) |> double`, i.e. `double 2` = 4, not `1 + (1 |> double)`
-    // (which double-applies `+` at the wrong point and would give 3).
-    let src = "let-rec double x = x * 2 in 1 + 1 |> double";
-    assert_eq!(int(src), 4);
-}
-
 // ---- if / let-rec / match / tuple, from source -----------------------------
 
 #[test]

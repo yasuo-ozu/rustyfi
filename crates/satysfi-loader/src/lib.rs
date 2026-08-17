@@ -139,11 +139,6 @@ pub fn load(entry: &Path, opts: &LoadOptions) -> Result<LoadedProgram, LoadError
                         },
                     )?
                 }
-                // `@stage: persistent` / `@stage: 0` / `@stage: 1` — this
-                // port is single-stage only, so the header carries no
-                // loader-visible information (see `cst::Header::Stage`'s
-                // doc comment); it drives no dependency edge.
-                satysfi_syntax::cst::Header::Stage(_) => continue,
             };
             let dep_canon = canonicalize(&resolved)?;
             let dep_id = alloc_id(dep_canon, &mut next_id, &mut id_of, &mut path_of);

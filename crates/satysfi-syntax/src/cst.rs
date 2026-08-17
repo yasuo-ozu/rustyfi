@@ -45,22 +45,11 @@ pub struct File {
     pub eoi: EoiTok,
 }
 
-/// `@require:` / `@import:` / `@stage:` header element.
+/// `@require:` / `@import:` header element. Accepted and currently ignored.
 #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
 pub enum Header {
-    /// Accepted and currently ignored (driven by the loader crate).
     Require(HeaderRequireTok),
-    /// Accepted and currently ignored (driven by the loader crate).
     Import(HeaderImportTok),
-    /// `@stage: persistent` / `@stage: 0` / `@stage: 1`. Accepted and
-    /// treated as an inert no-op: this port only implements single-stage
-    /// (stage-0) compilation (no `&(…)`/`~(…)` quotation), so there is no
-    /// second stage for `persistent`/`1` to actually select — every stage
-    /// header is interpreted as ordinary stage-0 code. Sound for any file
-    /// that (like the bundled `option.satyg`/`list.satyg`) contains no
-    /// staging brackets; see `docs/plans/stdlib-port.md`'s Risks section for
-    /// the general (unimplemented) staging case.
-    Stage(HeaderStageTok),
 }
 
 /// A top-level non-recursive binding: `let name param* = expr`.
@@ -391,33 +380,6 @@ pub mod ast {
             in_kw: KwIn,
             body: Box<Expr>,
         },
-        /// `let pat = value in body` (`nxnonrecdec`'s zero-additional-
-        /// parameter case: the bound target is a general pattern, not
-        /// merely a variable name — SATySFi's destructuring `let`, e.g.
-        /// `let (_, acc) = pair in acc`, used by the bundled
-        /// `list.satyg`'s `mapi-adjacent`). Kept as a SEPARATE variant from
-        /// [`Expr::LetIn`] above (rather than widening `LetIn`'s `name:
-        /// VarTok` field to a pattern) because `LetIn` additionally curries
-        /// `params` for the ordinary `let f x y = ..` function-definition
-        /// shape, which upstream keys off the bound target being a plain
-        /// variable — the two shapes never overlap in real source (a
-        /// destructuring target is never itself applied to further curried
-        /// parameters). **Must stay after `LetIn`**: a bare-variable target
-        /// like `let x = 1 in x` parses as this variant too (`PatBot::Var`),
-        /// so `LetIn` (tried first, and not needing any pattern-lowering)
-        /// wins for every ordinary `let`, leaving this variant to match only
-        /// when the target isn't a plain variable. Only the no-`argpart`
-        /// (no additional curried parameters after the pattern) form is
-        /// implemented — `nxnonrecdec`'s `argpart` has no use in the
-        /// bundled stdlib.
-        LetPatternIn {
-            kw: KwLet,
-            pat: super::PatErased,
-            eq: DefEqTok,
-            value: Box<Expr>,
-            in_kw: KwIn,
-            body: Box<Expr>,
-        },
         /// `if cond then a else b` (`nxif`; `else` is never optional in
         /// this grammar, so there is no dangling-else ambiguity).
         If {
@@ -428,19 +390,10 @@ pub mod ast {
             else_kw: KwElse,
             else_branch: Box<Expr>,
         },
-        /// `fun x y -> body` (`nxlambda`'s `LAMBDA argpats ARROW nxlor`
-        /// production, `parser.mly:713`). `argpats = list(patbot)`
-        /// upstream — a lambda's parameters are full `patbot`s, not merely
-        /// variables (e.g. the bundled `list.satyg`'s `mapi-adjacent`:
-        /// `fun (i, acc) x leftopt rightopt -> ..`, a tuple-DESTRUCTURING
-        /// first parameter), lowered by `curry_lambda_abstract_pattern` —
-        /// this port's `elaborate::rec_clause_value` (shared with
-        /// multi-clause `let-rec`, which faces the exact same
-        /// arity-preserving pattern-currying problem) reproduces that
-        /// directly, so this field is `PatBot`, matching `RecBinding`'s.
+        /// `fun x y -> body`
         Fun {
             kw: KwFun,
-            params: Vec<PatBot>,
+            params: Vec<VarTok>,
             arrow: ArrowTok,
             body: Box<Expr>,
         },
@@ -497,38 +450,12 @@ pub mod ast {
         Ops(OpChain),
     }
 
-    /// One `name [|] patbot* = value [| patbot* = value]*` clause GROUP of a
-    /// `let-rec` (also reused, from outside this module, by top-level
-    /// `let-rec`). `params` is `patbot*` (`recdecargpart`'s plain `argpats`
-    /// form, optionally preceded by a `leading_bar` — `recdecargpart`'s
-    /// `BAR argpatlst` alternative, used for the OCaml-style "every clause,
-    /// including the first, gets a `|`" layout the bundled packages write,
-    /// e.g. `list.satyg`'s `let-rec map\n  | f [] = []\n  | f (x :: xs) =
-    /// ..`; `parser.mly`'s rarer `COLON ty BAR` type-annotated form is not
-    /// supported — no bundled package uses it). `extra` holds any further
-    /// `| patbot* = value` continuation clauses (`nxrecdecpar`) — SATySFi's
-    /// multi-clause pattern-matching function-definition sugar. Every
-    /// clause in the group must bind the same number of parameters (checked
-    /// at elaboration — upstream's `IllegalArgumentLength` — not here); the
-    /// (possibly plural) clauses desugar to one curried function that
-    /// matches a tuple of fresh parameters against each clause's patterns
-    /// in turn — see `elaborate.rs`'s `rec_clause_value`.
+    /// One `name param* = value` clause of a `let-rec` (also reused, from
+    /// outside this module, by top-level `let-rec`).
     #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
     pub struct RecBinding {
         pub name: VarTok,
-        pub leading_bar: Option<BarTok>,
-        pub params: Vec<PatBot>,
-        pub eq: DefEqTok,
-        pub value: super::ExprErased,
-        pub extra: Vec<RecClause>,
-    }
-
-    /// A `| patbot* = value` continuation clause of a multi-clause
-    /// `let-rec` binding (see [`RecBinding`]'s doc comment).
-    #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
-    pub struct RecClause {
-        pub bar: BarTok,
-        pub params: Vec<PatBot>,
+        pub params: Vec<VarTok>,
         pub eq: DefEqTok,
         pub value: super::ExprErased,
     }
@@ -668,19 +595,6 @@ pub mod ast {
             paren: ParenGroup<()>,
             #[group(self.paren)]
             inner: Box<ParenBody>,
-        },
-        /// `Mod.(e)` ≡ `open Mod in e` (`nxbot`'s `OPENMODULE nxlet RPAREN`
-        /// production). Reuses `ParenBody` exactly like `Atomic::Paren`
-        /// above (so `Mod.(e, e, …)` would elaborate to a tuple the same
-        /// way, though no bundled package writes it that way) — the `Mod.(`
-        /// sigil is the open delimiter (`OpenModuleTok`, carrying the
-        /// module name), closed by a plain `)`. Elaborated via the same
-        /// machinery as `Expr::OpenIn` (`elaborate.rs`'s `open_module`
-        /// helper).
-        OpenModule {
-            grp: OpenModuleGroup<()>,
-            #[group(self.grp)]
-            body: Box<ParenBody>,
         },
         /// `(| label = expr; … |)` or `(| base with label = expr; … |)`
         /// (`nxrecordsynt`; see [`RecordBody`]).
@@ -917,68 +831,23 @@ pub mod ast {
         pub semi: Option<ListPunctTok>,
     }
 
-    /// A minimal type-expression grammar for `type` declarations and
-    /// signature (`val .. : ty`) annotations (`txfunc`/`txprod`/`txapppre`/
-    /// `txapp`/`txbot`, simplified). Function arrows (right-associative),
-    /// 2+-way product types (`*`, [`TypeProd`]), a SINGLE-argument postfix
-    /// type-constructor application (`'a option`, `'a list`; see
-    /// [`TypeApp`]), parenthesized grouping, bare/qualified names, and type
-    /// variables are supported; list/record/command types and
-    /// optional-argument arrows (`?->`) are not — such input is rejected
-    /// with a parse error. Self-recursive only through `Fun`'s codomain
-    /// (right recursion); parenthesized nesting goes through the
+    /// A minimal type-expression grammar for `type` declarations
+    /// (`txfunc`/`txapppre`/`txbot`, drastically simplified). Only function
+    /// arrows, bare/qualified names, type variables, and parenthesized
+    /// grouping are supported; product types (`*`), list/record/command
+    /// types, optional-argument arrows (`?->`), and applied type
+    /// constructors (`'a t`, `(int, int) t`) are not — such input is
+    /// rejected with a parse error. Self-recursive only through `Fun`'s
+    /// codomain (right recursion); parenthesized nesting goes through the
     /// [`super::TyErased`] leaf.
     #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
     pub enum TypeExpr {
-        /// `dom -> cod` (right-associative). `dom` is a [`TypeProd`] (not
-        /// just [`TypeAtom`]) so e.g. `'a option -> 'b option` and `'a *
-        /// 'b -> 'c` both parse at their expected precedence (application
-        /// binds tighter than `*`, which binds tighter than `->`).
+        /// `dom -> cod` (right-associative).
         Fun {
-            dom: TypeProd,
+            dom: TypeAtom,
             arrow: ArrowTok,
             cod: Box<TypeExpr>,
         },
-        /// The non-arrow fallthrough. Despite the name (kept stable — see
-        /// the module's compile-time-blowup note on why every recursion
-        /// edge here is deliberate), this holds a full [`TypeProd`], not a
-        /// bare [`TypeAtom`]: a product/application with no enclosing arrow
-        /// is still just "the whole type expression minus `->`".
-        Atom(TypeProd),
-    }
-
-    /// `txprod`: one or more `*`-separated [`TypeApp`]s (a product type),
-    /// or just a single one if there's no `*` at all — flattened to a
-    /// `Vec` (the same deferred-fold technique as `OpChain`/`PatCons`)
-    /// rather than modeled as its own right-recursive rule, keeping
-    /// `TypeExpr` a singleton SCC.
-    #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
-    pub struct TypeProd {
-        pub first: TypeApp,
-        pub rest: Vec<StarType>,
-    }
-
-    /// A `* ty` continuation of a [`TypeProd`].
-    #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
-    pub struct StarType {
-        pub star: ExactTimesTok,
-        pub ty: TypeApp,
-    }
-
-    /// `txapppre`/`txapp`, restricted to a single argument: an atomic type,
-    /// optionally followed by ONE postfix type-constructor name (`'a
-    /// option`, `('a list) list`) — a faithful subset of upstream's fully
-    /// N-ary `txapp` chain (which allows a longer sequence of
-    /// un-parenthesized arguments before the final name); the bundled
-    /// `option.satyg`/`list.satyg` signatures never need more than one
-    /// argument, so a longer chain is rejected here rather than modeled.
-    /// **Must try `Applied` before `Atom`**: both start with the same
-    /// [`TypeAtom`] shapes, and only trying to also consume a trailing name
-    /// distinguishes them (mirrors `Expr::Overwrite`'s note on the same
-    /// backtracking shape).
-    #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
-    pub enum TypeApp {
-        Applied { arg: TypeAtom, ctor: VarTok },
         Atom(TypeAtom),
     }
 

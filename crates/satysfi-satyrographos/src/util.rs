@@ -1,16 +1,77 @@
-//! Small dependency-free helpers: an RFC 3339 UTC timestamp for receipts
-//! (plan §5.2's `installed_at`) and a SHA-256 file digest (plan §5.2's
-//! optional-phase-1 `sha256`). Kept here rather than pulling in `chrono`:
-//! the plan (§7.1) names `sha2`/`toml`/`tar`/`flate2` as the crate's deps
-//! and nothing for time, and the timestamp is only ever *written*, never
-//! parsed back, so a hand-rolled formatter suffices.
+//! Small shared helpers used across the crate's storage and parsing layers:
+//!
+//! - filesystem/TOML plumbing that every module would otherwise re-spell —
+//!   [`read_to_string`], [`read_dir_paths`], [`remove_file_if_exists`], and the
+//!   atomic [`write_toml_atomic`] (temp-sibling + rename), each threading the
+//!   operated-on path into [`Error::io`] uniformly;
+//! - an RFC 3339 UTC timestamp for receipts (plan §5.2's `installed_at`) and
+//!   SHA-256 digests (plan §5.2's optional-phase-1 `sha256`). Kept here rather
+//!   than pulling in `chrono`: the plan (§7.1) names `sha2`/`toml`/`tar`/
+//!   `flate2` as the crate's deps and nothing for time, and the timestamp is
+//!   only ever *written*, never parsed back, so a hand-rolled formatter
+//!   suffices.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use crate::error::Error;
+
+/// Read `path` to a `String`, mapping any I/O failure to [`Error::io`] with the
+/// path that failed — the read half of every manifest/receipt/lockfile/index
+/// parse in the crate.
+pub(crate) fn read_to_string(path: &Path) -> Result<String, Error> {
+    std::fs::read_to_string(path).map_err(|e| Error::io(path, e))
+}
+
+/// The paths of every entry directly under `dir` (unsorted, raw
+/// directory-iteration order — callers sort as needed), mapping both the
+/// `read_dir` failure and any per-entry failure to [`Error::io`] against `dir`.
+/// An absent directory is an error, matching a bare `read_dir`.
+pub(crate) fn read_dir_paths(dir: &Path) -> Result<Vec<PathBuf>, Error> {
+    let mut paths = Vec::new();
+    for entry in std::fs::read_dir(dir).map_err(|e| Error::io(dir, e))? {
+        paths.push(entry.map_err(|e| Error::io(dir, e))?.path());
+    }
+    Ok(paths)
+}
+
+/// The final path component of a directory-entry path as an owned, lossy
+/// `String`. Entry paths from [`read_dir_paths`] always have one.
+pub(crate) fn file_name(path: &Path) -> String {
+    path.file_name()
+        .expect("directory entry path has a final component")
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// Remove the file at `path`, treating an already-absent file as success (so
+/// receipt/orphan cleanup stays idempotent); any other I/O failure is
+/// [`Error::io`].
+pub(crate) fn remove_file_if_exists(path: &Path) -> Result<(), Error> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(Error::io(path, e)),
+    }
+}
+
+/// Serialise `value` to pretty TOML and write it to `path` atomically: write a
+/// hidden sibling temp file (`.<filename>.tmp`) then rename it over `path`, so a
+/// concurrent reader never observes a half-written file (the discipline shared
+/// by receipts and the lockfile). The caller ensures `path`'s parent exists.
+pub(crate) fn write_toml_atomic<T: Serialize>(path: &Path, value: &T) -> Result<(), Error> {
+    let text = toml::to_string_pretty(value).expect("value serialises to TOML");
+    let tmp = match path.file_name().and_then(|n| n.to_str()) {
+        Some(name) => path.with_file_name(format!(".{name}.tmp")),
+        None => path.with_extension("tmp"),
+    };
+    std::fs::write(&tmp, text).map_err(|e| Error::io(&tmp, e))?;
+    std::fs::rename(&tmp, path).map_err(|e| Error::io(path, e))?;
+    Ok(())
+}
 
 /// Current wall-clock time as an RFC 3339 UTC string, e.g.
 /// `2026-07-04T12:00:00Z`. Uses Howard Hinnant's `civil_from_days` to turn
@@ -46,12 +107,17 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
     (if m <= 2 { y + 1 } else { y }, m, d)
 }
 
+/// Lowercase-hex SHA-256 of an in-memory byte slice.
+pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    hex(&hasher.finalize())
+}
+
 /// Lowercase-hex SHA-256 of the file at `path`.
 pub fn sha256_file(path: &Path) -> Result<String, Error> {
     let bytes = std::fs::read(path).map_err(|e| Error::io(path, e))?;
-    let mut hasher = Sha256::new();
-    hasher.update(&bytes);
-    Ok(hex(&hasher.finalize()))
+    Ok(sha256_hex(&bytes))
 }
 
 /// A deterministic content digest of the source at `path` (plan §5.3's
@@ -67,11 +133,8 @@ pub fn sha256_tree(path: &Path) -> Result<String, Error> {
     let mut entries: Vec<(String, String)> = Vec::new();
     let mut stack = vec![(path.to_path_buf(), String::new())];
     while let Some((dir, rel)) = stack.pop() {
-        let read = std::fs::read_dir(&dir).map_err(|e| Error::io(&dir, e))?;
-        for entry in read {
-            let entry = entry.map_err(|e| Error::io(&dir, e))?;
-            let p = entry.path();
-            let name = entry.file_name().to_string_lossy().into_owned();
+        for p in read_dir_paths(&dir)? {
+            let name = file_name(&p);
             let child_rel = if rel.is_empty() {
                 name
             } else {

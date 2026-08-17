@@ -5,13 +5,23 @@
 use std::path::{Path, PathBuf};
 
 use crate::error::Error;
-use crate::{receipts, roots, stage};
+use crate::roots::RootSelection;
+use crate::{receipts, stage, util};
 
 /// Shared root-selection flags for uninstall/list/status (plan §7.2).
 #[derive(Debug, Default, Clone)]
 pub struct RootOptions {
     pub lib_root: Option<PathBuf>,
     pub dest: Option<PathBuf>,
+}
+
+impl RootSelection for RootOptions {
+    fn lib_root(&self) -> Option<&Path> {
+        self.lib_root.as_deref()
+    }
+    fn dest(&self) -> Option<&Path> {
+        self.dest.as_deref()
+    }
 }
 
 /// The `dist/<category>` directories that pruning must never remove (plan
@@ -21,7 +31,7 @@ const PRUNE_STOP_DEPTH: usize = 3;
 
 /// Uninstall the package named `name`.
 pub fn uninstall(name: &str, opts: &RootOptions) -> Result<(), Error> {
-    let root = roots::resolve_root(opts.lib_root.as_deref(), opts.dest.as_deref())?;
+    let root = opts.resolve_root()?;
 
     // No receipt → `NotInstalled` (CLI exit 4). This is the only source of
     // truth for what we may delete.
@@ -30,11 +40,7 @@ pub fn uninstall(name: &str, opts: &RootOptions) -> Result<(), Error> {
     let mut dirs_to_prune: Vec<PathBuf> = Vec::new();
     for file in &receipt.files {
         let path = stage::safe_join(&root, &file.dst)?;
-        match std::fs::remove_file(&path) {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(Error::io(&path, e)),
-        }
+        util::remove_file_if_exists(&path)?;
         if let Some(parent) = path.parent() {
             dirs_to_prune.push(parent.to_path_buf());
         }

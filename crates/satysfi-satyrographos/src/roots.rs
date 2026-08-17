@@ -40,6 +40,37 @@ pub fn resolve_root(lib_root: Option<&Path>, dest: Option<&Path>) -> Result<Path
     Err(Error::RootResolution)
 }
 
+/// The shared `--lib-root`/`--dest` root selection carried by both
+/// [`InstallOptions`](crate::ops::install::InstallOptions) and
+/// [`RootOptions`](crate::ops::uninstall::RootOptions). Implementing it in one
+/// place keeps every operation's root resolution identical (plan §4): the
+/// install/reconcile/registry paths go through [`resolve_managed_root`] (which
+/// also lays down the `.satyrographos/` skeleton), and the read-only
+/// list/status/uninstall paths through [`resolve_root`].
+///
+/// [`resolve_managed_root`]: RootSelection::resolve_managed_root
+/// [`resolve_root`]: RootSelection::resolve_root
+pub(crate) trait RootSelection {
+    fn lib_root(&self) -> Option<&Path>;
+    fn dest(&self) -> Option<&Path>;
+
+    /// Resolve the target root by the plan §4 precedence (see the free
+    /// [`resolve_root`] function).
+    fn resolve_root(&self) -> Result<PathBuf, Error> {
+        resolve_root(self.lib_root(), self.dest())
+    }
+
+    /// [`resolve_root`](Self::resolve_root), then ensure the root's
+    /// `.satyrographos/` bookkeeping skeleton exists — the prelude every
+    /// materialising operation (`install`, registry install, reconcile) runs
+    /// before staging.
+    fn resolve_managed_root(&self) -> Result<PathBuf, Error> {
+        let root = self.resolve_root()?;
+        ensure_managed(&root)?;
+        Ok(root)
+    }
+}
+
 /// The `<root>/.satyrographos/` bookkeeping directory.
 pub fn managed_dir(root: &Path) -> PathBuf {
     root.join(MANAGED_DIR)

@@ -798,19 +798,26 @@ fn needs_parens_as_operand(ty: &MonoType) -> bool {
     matches!(ty, MonoType::Func(_, _) | MonoType::Product(_))
 }
 
+/// Print `ty` as a postfix/product/function-domain operand, wrapping it in
+/// parens exactly when [`needs_parens_as_operand`] says a bare rendering
+/// would misgroup.
+fn fmt_operand(ty: &MonoType, f: &mut fmt::Formatter<'_>, namer: &mut VarNamer) -> fmt::Result {
+    if needs_parens_as_operand(&resolve(ty)) {
+        f.write_str("(")?;
+        fmt_mono(ty, f, namer)?;
+        f.write_str(")")
+    } else {
+        fmt_mono(ty, f, namer)
+    }
+}
+
 fn fmt_mono(ty: &MonoType, f: &mut fmt::Formatter<'_>, namer: &mut VarNamer) -> fmt::Result {
     let ty = resolve(ty);
     match &ty {
         MonoType::Var(v) => write!(f, "{}", namer.name_for(v.ptr_key())),
         MonoType::Base(b) => write!(f, "{b}"),
         MonoType::Func(dom, cod) => {
-            if needs_parens_as_operand(&resolve(dom)) {
-                f.write_str("(")?;
-                fmt_mono(dom, f, namer)?;
-                f.write_str(")")?;
-            } else {
-                fmt_mono(dom, f, namer)?;
-            }
+            fmt_operand(dom, f, namer)?;
             f.write_str(" -> ")?;
             let rcod = resolve(cod);
             if is_atomic(&rcod) {
@@ -826,13 +833,7 @@ fn fmt_mono(ty: &MonoType, f: &mut fmt::Formatter<'_>, namer: &mut VarNamer) -> 
                 if i > 0 {
                     f.write_str(" * ")?;
                 }
-                if needs_parens_as_operand(&resolve(t)) {
-                    f.write_str("(")?;
-                    fmt_mono(t, f, namer)?;
-                    f.write_str(")")?;
-                } else {
-                    fmt_mono(t, f, namer)?;
-                }
+                fmt_operand(t, f, namer)?;
             }
             Ok(())
         }
@@ -865,14 +866,8 @@ fn fmt_postfix(
     f: &mut fmt::Formatter<'_>,
     namer: &mut VarNamer,
 ) -> fmt::Result {
-    if needs_parens_as_operand(&resolve(operand)) {
-        f.write_str("(")?;
-        fmt_mono(operand, f, namer)?;
-        write!(f, ") {suffix}")
-    } else {
-        fmt_mono(operand, f, namer)?;
-        write!(f, " {suffix}")
-    }
+    fmt_operand(operand, f, namer)?;
+    write!(f, " {suffix}")
 }
 
 fn fmt_cmd(

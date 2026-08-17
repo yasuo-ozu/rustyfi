@@ -6,7 +6,8 @@ use std::path::PathBuf;
 
 use crate::error::Error;
 use crate::ops::uninstall::RootOptions;
-use crate::{receipts, roots, stage};
+use crate::roots::RootSelection;
+use crate::{receipts, stage};
 
 /// Presence report for one package.
 #[derive(Debug, Clone)]
@@ -42,7 +43,7 @@ impl StatusReport {
 
 /// Report status for `name` (if given) or every installed package.
 pub fn status(name: Option<&str>, opts: &RootOptions) -> Result<StatusReport, Error> {
-    let root = roots::resolve_root(opts.lib_root.as_deref(), opts.dest.as_deref())?;
+    let root = opts.resolve_root()?;
 
     let receipts = match name {
         Some(name) => vec![receipts::read(&root, name)?],

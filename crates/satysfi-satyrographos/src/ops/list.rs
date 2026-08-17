@@ -3,7 +3,8 @@
 
 use crate::error::Error;
 use crate::ops::uninstall::RootOptions;
-use crate::{receipts, roots};
+use crate::receipts;
+use crate::roots::RootSelection;
 
 /// A one-line summary of an installed package.
 #[derive(Debug, Clone)]
@@ -15,7 +16,7 @@ pub struct PackageSummary {
 
 /// List every installed package, sorted by name.
 pub fn list(opts: &RootOptions) -> Result<Vec<PackageSummary>, Error> {
-    let root = roots::resolve_root(opts.lib_root.as_deref(), opts.dest.as_deref())?;
+    let root = opts.resolve_root()?;
     let receipts = receipts::list_all(&root)?;
     Ok(receipts
         .into_iter()

@@ -22,15 +22,52 @@ pub fn eval_error<T>(msg: impl Into<String>) -> Result<T, EvalError> {
     })
 }
 
+/// Comma-separated, sorted field names of a record — the "(available fields:
+/// …)" hint shared by the field-access and field-update error messages.
+pub(crate) fn available_fields(map: &std::collections::BTreeMap<String, Value>) -> String {
+    let mut keys: Vec<&str> = map.keys().map(|s| s.as_str()).collect();
+    keys.sort();
+    keys.join(", ")
+}
+
 /// Evaluation state: the font-metrics seam (and later: cross references,
 /// image tables, mutable stores).
 pub struct Interp<'a> {
     pub metrics: &'a dyn FontMetrics,
+    /// Memoized compilations of command-argument / embed `Ast`s reached
+    /// through `read_inline`/`read_block` (see [`Interp::eval_arg`]). Keyed by
+    /// the argument node's address: these nodes live inside the program's
+    /// `Rc<Vec<IText>>`/`Rc<Vec<BText>>`, which are kept alive for the whole
+    /// interpreter run, so the addresses are stable and re-reading the same
+    /// quoted text reuses its already-compiled argument closures.
+    arg_cache: std::collections::HashMap<usize, crate::compile::CompiledExpr>,
 }
 
 impl<'a> Interp<'a> {
     pub fn new(metrics: &'a dyn FontMetrics) -> Self {
-        Interp { metrics }
+        Interp {
+            metrics,
+            arg_cache: std::collections::HashMap::new(),
+        }
+    }
+
+    /// Evaluate a command-argument / embedded expression reached from
+    /// `read_inline`/`read_block`, compiling it once (on first sight) and
+    /// running the cached compiled closure thereafter. Behavior is identical
+    /// to [`Interp::eval`] — the compiled argument uses no global
+    /// constant-folding, so every free name resolves through `env.lookup`
+    /// exactly as tree-walking would.
+    pub(crate) fn eval_arg(&mut self, env: &Env, arg: &Ast) -> Result<Value, EvalError> {
+        let key = arg as *const Ast as usize;
+        let compiled = match self.arg_cache.get(&key) {
+            Some(c) => c.clone(),
+            None => {
+                let c = crate::compile::compile_arg(arg);
+                self.arg_cache.insert(key, c.clone());
+                c
+            }
+        };
+        compiled.run(env, self)
     }
 
     pub fn eval(&mut self, env: &Env, ast: &Ast) -> Result<Value, EvalError> {
@@ -197,16 +234,12 @@ impl<'a> Interp<'a> {
             Ast::AccessField(e, label, span) => {
                 let v = self.eval(env, e)?;
                 match v {
-                    Value::Record(map) => map.get(label).cloned().ok_or_else(|| {
-                        let mut keys: Vec<&str> = map.keys().map(|s| s.as_str()).collect();
-                        keys.sort();
-                        EvalError {
-                            span: Some(*span),
-                            msg: format!(
-                                "record has no field '{label}' (available fields: {})",
-                                keys.join(", ")
-                            ),
-                        }
+                    Value::Record(map) => map.get(label).cloned().ok_or_else(|| EvalError {
+                        span: Some(*span),
+                        msg: format!(
+                            "record has no field '{label}' (available fields: {})",
+                            available_fields(&map)
+                        ),
                     }),
                     other => Err(EvalError {
                         span: Some(*span),
@@ -232,12 +265,10 @@ impl<'a> Interp<'a> {
                 match v {
                     Value::Record(mut map) => {
                         if !map.contains_key(label) {
-                            let mut keys: Vec<&str> = map.keys().map(|s| s.as_str()).collect();
-                            keys.sort();
                             return eval_error(format!(
                                 "cannot update field '{label}': record has no such field \
                                  (available fields: {})",
-                                keys.join(", ")
+                                available_fields(&map)
                             ));
                         }
                         map.insert(label.clone(), new_v);
@@ -288,6 +319,11 @@ impl<'a> Interp<'a> {
                 let inner = env.child();
                 inner.define(param, arg);
                 self.eval(&inner, &body)
+            }
+            Value::CompiledClosure { param, body, env } => {
+                let inner = env.child();
+                inner.define(param, arg);
+                body.run(&inner, self)
             }
             Value::Prim { def, mut applied } => {
                 applied.push(arg);

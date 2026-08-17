@@ -21,6 +21,7 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 use crate::error::Error;
+use crate::util;
 
 /// The name of the per-package manifest, at the root of an install source.
 pub const MANIFEST_NAME: &str = "satysfi-package.toml";
@@ -116,7 +117,7 @@ pub fn discover(source_root: &Path) -> Result<Vec<PackagePlan>, Error> {
         });
     }
     if has_manifest {
-        let text = std::fs::read_to_string(&manifest_path).map_err(|e| Error::io(&manifest_path, e))?;
+        let text = util::read_to_string(&manifest_path)?;
         let manifest: Manifest = toml::from_str(&text).map_err(|source| Error::Manifest {
             path: manifest_path.clone(),
             source,
@@ -187,10 +188,7 @@ fn plan_from_fallback(source_root: &Path) -> Result<PackagePlan, Error> {
         .to_string();
     let packages = source_root.join("packages");
     let mut files = Vec::new();
-    let entries = std::fs::read_dir(&packages).map_err(|e| Error::io(&packages, e))?;
-    for entry in entries {
-        let entry = entry.map_err(|e| Error::io(&packages, e))?;
-        let p = entry.path();
+    for p in util::read_dir_paths(&packages)? {
         let is_lib = p
             .extension()
             .and_then(|e| e.to_str())
@@ -244,11 +242,8 @@ fn collect_dir(dir: &Path, dst_prefix: &str, out: &mut Vec<PlannedFile>) -> Resu
     }
     let mut stack = vec![(dir.to_path_buf(), String::new())];
     while let Some((cur, rel)) = stack.pop() {
-        let entries = std::fs::read_dir(&cur).map_err(|e| Error::io(&cur, e))?;
-        for entry in entries {
-            let entry = entry.map_err(|e| Error::io(&cur, e))?;
-            let p = entry.path();
-            let name = entry.file_name().to_string_lossy().into_owned();
+        for p in util::read_dir_paths(&cur)? {
+            let name = util::file_name(&p);
             let child_rel = if rel.is_empty() {
                 name
             } else {

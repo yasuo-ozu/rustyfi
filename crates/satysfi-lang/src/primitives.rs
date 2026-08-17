@@ -301,6 +301,64 @@ fn as_length(v: Value) -> Result<Length, EvalError> {
     }
 }
 
+// ---- primitive-body macros ----------------------------------------------------
+//
+// The arithmetic, comparison, boolean, and unary-conversion primitives all
+// share one strict-call shape: the (already-evaluated) operands are popped
+// right-to-left through a type extractor, then the result is re-wrapped as a
+// `Value`. These macros capture that shape so each primitive is a single line.
+// The vminst.ml citations for each stay on the `prims!` registration table
+// above; per-primitive notes ride along on the invocations below.
+
+/// A strict binary primitive. Pops `b` then `a` (i.e. rightmost argument
+/// first, matching application order) through the given extractor(s) and wraps
+/// `body` as `Value::$ctor`. Accepts either one extractor for both operands or
+/// a `(as_a, as_b)` pair when the operands have different types.
+macro_rules! binop_prim {
+    ($name:ident, ($as_a:path, $as_b:path), $ctor:ident, |$a:ident, $b:ident| $body:expr) => {
+        fn $name(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+            let $b = $as_b(args.pop().unwrap())?;
+            let $a = $as_a(args.pop().unwrap())?;
+            Ok(Value::$ctor($body))
+        }
+    };
+    ($name:ident, $as:path, $ctor:ident, |$a:ident, $b:ident| $body:expr) => {
+        binop_prim!($name, ($as, $as), $ctor, |$a, $b| $body);
+    };
+}
+
+/// A strict binary comparison: like `binop_prim!` but always wraps as
+/// `Value::Bool`.
+macro_rules! cmp_prim {
+    ($name:ident, $as:path, |$a:ident, $b:ident| $body:expr) => {
+        binop_prim!($name, ($as, $as), Bool, |$a, $b| $body);
+    };
+}
+
+/// A strict unary primitive: pops one operand through `as` and wraps `body`
+/// as `Value::$ctor`.
+macro_rules! unop_prim {
+    ($name:ident, $as:path, $ctor:ident, |$a:ident| $body:expr) => {
+        fn $name(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+            let $a = $as(args.pop().unwrap())?;
+            Ok(Value::$ctor($body))
+        }
+    };
+}
+
+/// A strict binary primitive with a fallible body: `body` is the function's
+/// tail expression and must itself yield `Result<Value, EvalError>`, so it can
+/// guard cases like division by zero.
+macro_rules! binop_prim_try {
+    ($name:ident, $as:path, |$a:ident, $b:ident| $body:expr) => {
+        fn $name(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+            let $b = $as(args.pop().unwrap())?;
+            let $a = $as(args.pop().unwrap())?;
+            $body
+        }
+    };
+}
+
 // ---- text conversion ----------------------------------------------------------
 
 /// Convert quoted inline text to boxes under `ctx` (the core of
@@ -323,13 +381,13 @@ pub fn read_inline(
                 })?;
                 let mut v = interp.apply(cmd, Value::Context(Box::new(ctx.clone())))?;
                 for arg in args {
-                    let arg_v = interp.eval(env, arg)?;
+                    let arg_v = interp.eval_arg(env, arg)?;
                     v = interp.apply(v, arg_v)?;
                 }
                 out.extend(as_inline_boxes(v)?);
             }
             IText::Embed { expr, span } => {
-                let v = interp.eval(env, expr)?;
+                let v = interp.eval_arg(env, expr)?;
                 match v {
                     Value::InlineText {
                         elems: sub_elems,
@@ -376,13 +434,13 @@ pub fn read_block(
                 })?;
                 let mut v = interp.apply(cmd, Value::Context(Box::new(ctx.clone())))?;
                 for arg in args {
-                    let arg_v = interp.eval(env, arg)?;
+                    let arg_v = interp.eval_arg(env, arg)?;
                     v = interp.apply(v, arg_v)?;
                 }
                 out.extend(as_block_boxes(v)?);
             }
             BText::Embed { expr, span } => {
-                let v = interp.eval(env, expr)?;
+                let v = interp.eval_arg(env, expr)?;
                 match v {
                     Value::BlockText {
                         elems: sub_elems,
@@ -504,200 +562,70 @@ fn prim_page_break(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, 
 
 // ---- int arithmetic -------------------------------------------------------
 
-fn prim_int_add(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
-    let b = as_int(args.pop().unwrap())?;
-    let a = as_int(args.pop().unwrap())?;
-    Ok(Value::Int(a + b))
-}
+binop_prim!(prim_int_add, as_int, Int, |a, b| a + b);
+binop_prim!(prim_int_sub, as_int, Int, |a, b| a - b);
+binop_prim!(prim_int_mul, as_int, Int, |a, b| a * b);
 
-fn prim_int_sub(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
-    let b = as_int(args.pop().unwrap())?;
-    let a = as_int(args.pop().unwrap())?;
-    Ok(Value::Int(a - b))
-}
-
-fn prim_int_mul(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
-    let b = as_int(args.pop().unwrap())?;
-    let a = as_int(args.pop().unwrap())?;
-    Ok(Value::Int(a * b))
-}
-
-/// OCaml catches `Division_by_zero` and reports `"division by zero"`.
-fn prim_int_div(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
-    let b = as_int(args.pop().unwrap())?;
-    let a = as_int(args.pop().unwrap())?;
-    if b == 0 {
-        return eval_error("division by zero");
-    }
+// OCaml catches `Division_by_zero` and reports `"division by zero"`; `mod`
+// (see `Mod` in vminst.ml) shares that behavior.
+binop_prim_try!(prim_int_div, as_int, |a, b| if b == 0 {
+    eval_error("division by zero")
+} else {
     Ok(Value::Int(a / b))
-}
-
-/// Same division-by-zero behavior as `/` (see `Mod` in vminst.ml).
-fn prim_int_mod(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
-    let b = as_int(args.pop().unwrap())?;
-    let a = as_int(args.pop().unwrap())?;
-    if b == 0 {
-        return eval_error("division by zero");
-    }
+});
+binop_prim_try!(prim_int_mod, as_int, |a, b| if b == 0 {
+    eval_error("division by zero")
+} else {
     Ok(Value::Int(a % b))
-}
+});
 
 // ---- int comparisons -------------------------------------------------------
 
-fn prim_int_eq(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
-    let b = as_int(args.pop().unwrap())?;
-    let a = as_int(args.pop().unwrap())?;
-    Ok(Value::Bool(a == b))
-}
-
-fn prim_int_ne(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
-    let b = as_int(args.pop().unwrap())?;
-    let a = as_int(args.pop().unwrap())?;
-    Ok(Value::Bool(a != b))
-}
-
-fn prim_int_lt(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
-    let b = as_int(args.pop().unwrap())?;
-    let a = as_int(args.pop().unwrap())?;
-    Ok(Value::Bool(a < b))
-}
-
-fn prim_int_gt(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
-    let b = as_int(args.pop().unwrap())?;
-    let a = as_int(args.pop().unwrap())?;
-    Ok(Value::Bool(a > b))
-}
-
-fn prim_int_le(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
-    let b = as_int(args.pop().unwrap())?;
-    let a = as_int(args.pop().unwrap())?;
-    Ok(Value::Bool(a <= b))
-}
-
-fn prim_int_ge(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
-    let b = as_int(args.pop().unwrap())?;
-    let a = as_int(args.pop().unwrap())?;
-    Ok(Value::Bool(a >= b))
-}
+cmp_prim!(prim_int_eq, as_int, |a, b| a == b);
+cmp_prim!(prim_int_ne, as_int, |a, b| a != b);
+cmp_prim!(prim_int_lt, as_int, |a, b| a < b);
+cmp_prim!(prim_int_gt, as_int, |a, b| a > b);
+cmp_prim!(prim_int_le, as_int, |a, b| a <= b);
+cmp_prim!(prim_int_ge, as_int, |a, b| a >= b);
 
 // ---- bool -------------------------------------------------------------------
 
-/// Strict (both arguments already evaluated by the caller before this native
-/// runs): real SATySFi source-level `&&`/`||` short-circuit via elaboration
-/// into `if`, which is out of scope here.
-fn prim_bool_and(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
-    let b = as_bool(args.pop().unwrap())?;
-    let a = as_bool(args.pop().unwrap())?;
-    Ok(Value::Bool(a && b))
-}
-
-fn prim_bool_or(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
-    let b = as_bool(args.pop().unwrap())?;
-    let a = as_bool(args.pop().unwrap())?;
-    Ok(Value::Bool(a || b))
-}
-
-fn prim_bool_not(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
-    let a = as_bool(args.pop().unwrap())?;
-    Ok(Value::Bool(!a))
-}
+// Strict (both arguments already evaluated by the caller before these natives
+// run): real SATySFi source-level `&&`/`||` short-circuit via elaboration into
+// `if`, which is out of scope here.
+binop_prim!(prim_bool_and, as_bool, Bool, |a, b| a && b);
+binop_prim!(prim_bool_or, as_bool, Bool, |a, b| a || b);
+unop_prim!(prim_bool_not, as_bool, Bool, |a| !a);
 
 // ---- float --------------------------------------------------------------------
 
-fn prim_float_add(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
-    let b = as_float(args.pop().unwrap())?;
-    let a = as_float(args.pop().unwrap())?;
-    Ok(Value::Float(a + b))
-}
+binop_prim!(prim_float_add, as_float, Float, |a, b| a + b);
+binop_prim!(prim_float_sub, as_float, Float, |a, b| a - b);
+binop_prim!(prim_float_mul, as_float, Float, |a, b| a * b);
+binop_prim!(prim_float_div, as_float, Float, |a, b| a / b);
+unop_prim!(prim_float_of_int, as_int, Float, |n| n as f64);
 
-fn prim_float_sub(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
-    let b = as_float(args.pop().unwrap())?;
-    let a = as_float(args.pop().unwrap())?;
-    Ok(Value::Float(a - b))
-}
-
-fn prim_float_mul(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
-    let b = as_float(args.pop().unwrap())?;
-    let a = as_float(args.pop().unwrap())?;
-    Ok(Value::Float(a * b))
-}
-
-fn prim_float_div(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
-    let b = as_float(args.pop().unwrap())?;
-    let a = as_float(args.pop().unwrap())?;
-    Ok(Value::Float(a / b))
-}
-
-fn prim_float_of_int(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
-    let n = as_int(args.pop().unwrap())?;
-    Ok(Value::Float(n as f64))
-}
-
-/// `PrimitiveRound` in vminst.ml is, despite the name, `int_of_float`
-/// (truncation toward zero), not rounding to nearest.
-fn prim_round(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
-    let x = as_float(args.pop().unwrap())?;
-    Ok(Value::Int(x as i64))
-}
+// `PrimitiveRound` in vminst.ml is, despite the name, `int_of_float`
+// (truncation toward zero), not rounding to nearest.
+unop_prim!(prim_round, as_float, Int, |x| x as i64);
 
 // ---- length ---------------------------------------------------------------------
 
-fn prim_length_add(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
-    let b = as_length(args.pop().unwrap())?;
-    let a = as_length(args.pop().unwrap())?;
-    Ok(Value::Length(a + b))
-}
+binop_prim!(prim_length_add, as_length, Length, |a, b| a + b);
+binop_prim!(prim_length_sub, as_length, Length, |a, b| a - b);
+binop_prim!(prim_length_scale, (as_length, as_float), Length, |a, b| a * b);
+binop_prim!(prim_length_div, as_length, Float, |a, b| a / b);
+cmp_prim!(prim_length_lt, as_length, |a, b| a < b);
 
-fn prim_length_sub(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
-    let b = as_length(args.pop().unwrap())?;
-    let a = as_length(args.pop().unwrap())?;
-    Ok(Value::Length(a - b))
-}
-
-fn prim_length_scale(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
-    let b = as_float(args.pop().unwrap())?;
-    let a = as_length(args.pop().unwrap())?;
-    Ok(Value::Length(a * b))
-}
-
-fn prim_length_div(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
-    let b = as_length(args.pop().unwrap())?;
-    let a = as_length(args.pop().unwrap())?;
-    Ok(Value::Float(a / b))
-}
-
-fn prim_length_lt(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
-    let b = as_length(args.pop().unwrap())?;
-    let a = as_length(args.pop().unwrap())?;
-    Ok(Value::Bool(a < b))
-}
-
-/// `LengthGreaterThan` in vminst.ml is implemented as `len2 <% len1`, i.e.
-/// `a >' b` iff `b <' a` — the same ordering, just flipped operands.
-fn prim_length_gt(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
-    let b = as_length(args.pop().unwrap())?;
-    let a = as_length(args.pop().unwrap())?;
-    Ok(Value::Bool(b < a))
-}
+// `LengthGreaterThan` in vminst.ml is implemented as `len2 <% len1`, i.e.
+// `a >' b` iff `b <' a` — the same ordering, just flipped operands.
+cmp_prim!(prim_length_gt, as_length, |a, b| b < a);
 
 // ---- string -----------------------------------------------------------------------
 
-fn prim_string_concat(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
-    let b = as_str(args.pop().unwrap())?;
-    let a = as_str(args.pop().unwrap())?;
-    Ok(Value::Str(a + &b))
-}
-
-fn prim_arabic(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
-    let n = as_int(args.pop().unwrap())?;
-    Ok(Value::Str(n.to_string()))
-}
-
-fn prim_string_same(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
-    let b = as_str(args.pop().unwrap())?;
-    let a = as_str(args.pop().unwrap())?;
-    Ok(Value::Bool(a == b))
-}
+binop_prim!(prim_string_concat, as_str, Str, |a, b| a + &b);
+unop_prim!(prim_arabic, as_int, Str, |n| n.to_string());
+cmp_prim!(prim_string_same, as_str, |a, b| a == b);
 
 // ---- list -----------------------------------------------------------------
 
@@ -731,12 +659,9 @@ fn prim_deref(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalE
 
 // ---- string, continued -----------------------------------------------------
 
-/// `string-length : string -> int` (vminst.ml `PrimitiveStringLength`) —
-/// counts Unicode scalar values (`BatUTF8.length`), not UTF-8 bytes.
-fn prim_string_length(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
-    let s = as_str(args.pop().unwrap())?;
-    Ok(Value::Int(s.chars().count() as i64))
-}
+// `string-length : string -> int` (vminst.ml `PrimitiveStringLength`) —
+// counts Unicode scalar values (`BatUTF8.length`), not UTF-8 bytes.
+unop_prim!(prim_string_length, as_str, Int, |s| s.chars().count() as i64);
 
 /// `string-sub : string -> int -> int -> string` (vminst.ml
 /// `PrimitiveStringSub`) — a substring addressed by Unicode-scalar-value
@@ -759,13 +684,12 @@ fn prim_string_sub(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, 
     }
 }
 
-/// `string-explode : string -> int list` (vminst.ml
-/// `PrimitiveStringExplode`) — the string's Unicode scalar values (code
-/// points) in order, not its bytes.
-fn prim_string_explode(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
-    let s = as_str(args.pop().unwrap())?;
-    Ok(Value::List(s.chars().map(|c| Value::Int(c as i64)).collect()))
-}
+// `string-explode : string -> int list` (vminst.ml `PrimitiveStringExplode`)
+// — the string's Unicode scalar values (code points) in order, not its bytes.
+unop_prim!(prim_string_explode, as_str, List, |s| s
+    .chars()
+    .map(|c| Value::Int(c as i64))
+    .collect());
 
 fn prim_embed_string(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
     let s = as_str(args.pop().unwrap())?;

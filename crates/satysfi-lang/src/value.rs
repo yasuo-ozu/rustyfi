@@ -1,12 +1,18 @@
 //! Runtime values (a milestone-1 subset of `syntactic_value`).
 
 use crate::ast::{Ast, BText, IText, MathElem};
+use crate::compile::CompiledExpr;
 use crate::primitives::PrimDef;
 use satysfi_backend::{Context, HorzBox, Length, Page, PageGeometry, VertBox};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
 
+// `Value::CompiledClosure` carries a crate-internal `CompiledExpr` body (an
+// opaque compiled-closure handle). External code can obtain such a value but
+// cannot name, construct, or inspect its body, which is the intent — so the
+// `private_interfaces` lint for that one field is deliberately allowed.
+#[allow(private_interfaces)]
 #[derive(Clone, Debug)]
 pub enum Value {
     Unit,
@@ -45,6 +51,18 @@ pub enum Value {
         body: Rc<Ast>,
         env: Env,
     },
+    /// A closure produced by the closure-compiling evaluator
+    /// ([`crate::compile`]). Semantically identical to [`Value::Closure`] —
+    /// same captured `Env`, same "function" type name — but its body is an
+    /// already-compiled [`CompiledExpr`] run directly by
+    /// [`crate::eval::Interp::apply`] rather than re-tree-walked. The
+    /// tree-walking `eval` never produces this; the compiled path never
+    /// produces `Closure`.
+    CompiledClosure {
+        param: String,
+        body: CompiledExpr,
+        env: Env,
+    },
     /// A (possibly partially applied) native primitive.
     Prim {
         def: &'static PrimDef,
@@ -75,6 +93,7 @@ impl Value {
             Value::BlockBoxes(_) => "block-boxes",
             Value::Document(_) => "document",
             Value::Closure { .. } => "function",
+            Value::CompiledClosure { .. } => "function",
             Value::Prim { .. } => "function",
         }
     }

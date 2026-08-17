@@ -7,8 +7,9 @@ use std::path::{Path, PathBuf};
 
 use crate::error::Error;
 use crate::receipts::{self, FileEntry, Receipt, Source, SCHEMA_VERSION};
+use crate::roots::RootSelection;
 use crate::util;
-use crate::{archive, manifest, roots, stage};
+use crate::{archive, manifest, stage};
 
 /// Options for [`install`] (plan §7.2).
 #[derive(Debug, Default, Clone)]
@@ -18,6 +19,15 @@ pub struct InstallOptions {
     /// `-l`/`--library NAME` filter (repeatable). `None` means no filter.
     pub libraries: Option<Vec<String>>,
     pub force: bool,
+}
+
+impl RootSelection for InstallOptions {
+    fn lib_root(&self) -> Option<&Path> {
+        self.lib_root.as_deref()
+    }
+    fn dest(&self) -> Option<&Path> {
+        self.dest.as_deref()
+    }
 }
 
 /// What [`install`] materialised.
@@ -46,8 +56,7 @@ pub(crate) fn install_inner(
     opts: &InstallOptions,
     source_override: Option<Source>,
 ) -> Result<InstallReport, Error> {
-    let root = roots::resolve_root(opts.lib_root.as_deref(), opts.dest.as_deref())?;
-    roots::ensure_managed(&root)?;
+    let root = opts.resolve_managed_root()?;
 
     let prepared = archive::prepare(source, &root)?;
     let plans = manifest::discover(&prepared.source_root)?;

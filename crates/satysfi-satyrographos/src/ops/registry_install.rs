@@ -26,7 +26,8 @@ use crate::error::Error;
 use crate::ops::install::{self, InstallOptions, InstallReport};
 use crate::receipts::Source;
 use crate::registry::{self, RegistryOptions};
-use crate::{roots, stage};
+use crate::roots::{self, RootSelection};
+use crate::stage;
 
 /// The concrete `(version, tarball_url, sha256)` an index lookup resolved to —
 /// exactly what the lockfile pins so a later install is reproducible without
@@ -82,8 +83,7 @@ pub fn install_resolved(
 ) -> Result<InstallReport, Error> {
     // Resolve the root now so the download lands under it (same filesystem as
     // `dist/`, plan §5.4 step 3 / §6) and is verified before anything is staged.
-    let root = roots::resolve_root(opts.lib_root.as_deref(), opts.dest.as_deref())?;
-    roots::ensure_managed(&root)?;
+    let root = opts.resolve_managed_root()?;
 
     let tarball = roots::tmp_dir(&root).join(format!(
         "download-{}-{}.tar.gz",

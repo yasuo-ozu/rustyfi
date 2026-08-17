@@ -40,6 +40,7 @@ use std::path::Path;
 
 use crate::error::Error;
 use crate::manifest::{self, FileDecl, FileKind, Manifest, PackageMeta, PackagePlan};
+use crate::util;
 
 /// The upstream build-file name (plan §2/§5.5).
 pub const SATYRISTES_NAME: &str = "Satyristes";
@@ -424,7 +425,7 @@ fn parse_dependencies(args: &[Sexp]) -> BTreeMap<String, String> {
 /// [`crate::manifest::plan_from_manifest`]).
 pub fn read(source_root: &Path) -> Result<Vec<PackagePlan>, Error> {
     let path = source_root.join(SATYRISTES_NAME);
-    let text = std::fs::read_to_string(&path).map_err(|e| Error::io(&path, e))?;
+    let text = util::read_to_string(&path)?;
     let forms = parse(&text).map_err(|pe| Error::Satyristes {
         path: path.clone(),
         message: pe.to_string(),

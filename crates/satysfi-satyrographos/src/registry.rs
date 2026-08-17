@@ -218,18 +218,11 @@ fn git_head(repo: &Path) -> Result<String, Error> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-/// A filesystem-safe cache subdirectory name for a registry URL (a hex SHA-256
-/// of the URL, so two different registries never collide in the cache).
+/// A filesystem-safe cache subdirectory name for a registry URL (the first 8
+/// bytes of its SHA-256 as hex, so two different registries never collide in the
+/// cache).
 fn cache_key(url: &str) -> String {
-    use sha2::{Digest, Sha256};
-    let mut hasher = Sha256::new();
-    hasher.update(url.as_bytes());
-    let digest = hasher.finalize();
-    let mut s = String::with_capacity(16);
-    for b in &digest[..8] {
-        s.push_str(&format!("{b:02x}"));
-    }
-    s
+    util::sha256_hex(url.as_bytes())[..16].to_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -271,7 +264,7 @@ pub fn lookup(reg: &Registry, name: &str) -> Result<PackageIndex, Error> {
             name: name.to_string(),
         });
     }
-    let text = std::fs::read_to_string(&path).map_err(|e| Error::io(&path, e))?;
+    let text = util::read_to_string(&path)?;
     toml::from_str(&text).map_err(|source| Error::RegistryIndex {
         message: format!("{}: {source}", path.display()),
     })
@@ -338,9 +331,7 @@ pub fn all_package_names(reg: &Registry) -> Result<Vec<String>, Error> {
         return Ok(Vec::new());
     }
     let mut names = Vec::new();
-    for entry in std::fs::read_dir(&dir).map_err(|e| Error::io(&dir, e))? {
-        let entry = entry.map_err(|e| Error::io(&dir, e))?;
-        let path = entry.path();
+    for path in util::read_dir_paths(&dir)? {
         if path.extension().and_then(|e| e.to_str()) == Some("toml") {
             if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
                 names.push(stem.to_string());

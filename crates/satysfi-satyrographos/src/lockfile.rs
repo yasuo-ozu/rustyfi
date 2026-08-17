@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::Error;
 use crate::satyrfile::{SourceSpec, MANIFEST_NAME};
+use crate::util;
 
 /// The lockfile filename (a sibling of `Satyrfile.toml`).
 pub const LOCK_NAME: &str = "Satyrfile.lock";
@@ -75,7 +76,7 @@ pub fn read(path: &Path) -> Result<Lockfile, Error> {
     if !path.is_file() {
         return Ok(Lockfile::default());
     }
-    let text = std::fs::read_to_string(path).map_err(|e| Error::io(path, e))?;
+    let text = util::read_to_string(path)?;
     toml::from_str(&text).map_err(|source| Error::Lockfile {
         path: path.to_path_buf(),
         source,
@@ -85,12 +86,5 @@ pub fn read(path: &Path) -> Result<Lockfile, Error> {
 /// Serialise and atomically write `lock` to `path` (temp file + rename, so a
 /// reader never sees a half-written lockfile — same discipline as receipts).
 pub fn write(path: &Path, lock: &Lockfile) -> Result<(), Error> {
-    let text = toml::to_string_pretty(lock).expect("lockfile serialises");
-    let tmp = match path.file_name().and_then(|n| n.to_str()) {
-        Some(name) => path.with_file_name(format!(".{name}.tmp")),
-        None => path.with_extension("tmp"),
-    };
-    std::fs::write(&tmp, text).map_err(|e| Error::io(&tmp, e))?;
-    std::fs::rename(&tmp, path).map_err(|e| Error::io(path, e))?;
-    Ok(())
+    util::write_toml_atomic(path, lock)
 }

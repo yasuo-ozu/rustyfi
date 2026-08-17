@@ -226,6 +226,21 @@ fn sg_exit_code(err: &sg::Error) -> i32 {
     }
 }
 
+/// Finish a package-manager or multicall handler: success is exit `0`; an
+/// error is reported to stderr under the shared lowercase `error: {e}`
+/// convention and mapped to an exit code by `code` (`sg_exit_code` for the
+/// package manager, a constant `1` for multicall). The compile path keeps its
+/// own `Error: {e:#}` reporting and is deliberately not routed through here.
+fn finish<E: std::fmt::Display>(result: Result<(), E>, code: impl FnOnce(&E) -> i32) -> i32 {
+    match result {
+        Ok(()) => 0,
+        Err(e) => {
+            eprintln!("error: {e}");
+            code(&e)
+        }
+    }
+}
+
 fn run_satyrographos(m: &ArgMatches) -> i32 {
     let result = match m.subcommand() {
         Some(("install", sm)) => cmd_install(sm),
@@ -239,13 +254,7 @@ fn run_satyrographos(m: &ArgMatches) -> i32 {
             return 2;
         }
     };
-    match result {
-        Ok(()) => 0,
-        Err(e) => {
-            eprintln!("error: {e}");
-            sg_exit_code(&e)
-        }
-    }
+    finish(result, sg_exit_code)
 }
 
 fn root_options(m: &ArgMatches) -> sg::RootOptions {
@@ -265,6 +274,15 @@ fn registry_options(m: &ArgMatches) -> sg::RegistryOptions {
     }
 }
 
+/// The nearest `Satyrfile.toml`, searched upward from the current directory
+/// (plan §5.3), or `None` if there is none. Callers map the `None` case to the
+/// exit-`3` [`sg::Error::SatyrfileNotFound`]. Shared by manifest-mode `install`
+/// and by `update`.
+fn find_manifest() -> Option<PathBuf> {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    sg::find_upward(&cwd)
+}
+
 fn cmd_install(m: &ArgMatches) -> Result<(), sg::Error> {
     // No PATH → phase-2 manifest mode (reconcile the nearest Satyrfile.toml).
     let Some(arg) = m.get_one::<String>("path") else {
@@ -273,9 +291,10 @@ fn cmd_install(m: &ArgMatches) -> Result<(), sg::Error> {
     let libraries: Option<Vec<String>> = m
         .get_many::<String>("library")
         .map(|vals| vals.cloned().collect());
+    let sg::RootOptions { lib_root, dest } = root_options(m);
     let opts = sg::InstallOptions {
-        lib_root: m.get_one::<PathBuf>("lib_root").cloned(),
-        dest: m.get_one::<PathBuf>("dest").cloned(),
+        lib_root,
+        dest,
         libraries,
         force: m.get_flag("force"),
     };
@@ -339,11 +358,9 @@ fn nearest_registry_url() -> Option<String> {
 /// the root to a `lib-satysfi/` sibling of the manifest if one exists (§3:
 /// "Satyrfile.toml — sibling to lib-satysfi/").
 fn cmd_install_manifest(m: &ArgMatches) -> Result<(), sg::Error> {
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let manifest = sg::find_upward(&cwd).ok_or(sg::Error::SatyrfileNotFound)?;
+    let manifest = find_manifest().ok_or(sg::Error::SatyrfileNotFound)?;
 
-    let mut lib_root = m.get_one::<PathBuf>("lib_root").cloned();
-    let dest = m.get_one::<PathBuf>("dest").cloned();
+    let sg::RootOptions { mut lib_root, dest } = root_options(m);
     if lib_root.is_none() && dest.is_none() && std::env::var_os("SATYSFI_LIB_ROOT").is_none() {
         if let Some(dir) = manifest.parent() {
             let sibling = dir.join("lib-satysfi");
@@ -411,8 +428,7 @@ fn cmd_search(m: &ArgMatches) -> Result<(), sg::Error> {
 /// `update` (plan §8, §5.4 step 1): re-fetch the index and report available
 /// upgrades against the nearest `Satyrfile.lock` (does not apply them).
 fn cmd_update(m: &ArgMatches) -> Result<(), sg::Error> {
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let manifest = sg::find_upward(&cwd).ok_or(sg::Error::SatyrfileNotFound)?;
+    let manifest = find_manifest().ok_or(sg::Error::SatyrfileNotFound)?;
     let report = sg::update(&manifest, &registry_options(m))?;
 
     if let Some(commit) = &report.commit {
@@ -478,13 +494,7 @@ fn cmd_status(m: &ArgMatches) -> i32 {
 
 fn run_multicall(m: &ArgMatches) -> i32 {
     match m.subcommand() {
-        Some(("install", sm)) => match multicall_install(sm) {
-            Ok(()) => 0,
-            Err(e) => {
-                eprintln!("error: {e}");
-                1
-            }
-        },
+        Some(("install", sm)) => finish(multicall_install(sm), |_| 1),
         _ => {
             eprintln!("error: no multicall subcommand given");
             2

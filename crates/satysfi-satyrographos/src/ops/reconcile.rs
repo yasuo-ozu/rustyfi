@@ -30,8 +30,9 @@ use crate::ops::install::{self, InstallOptions, InstallReport};
 use crate::ops::registry_install::{self, Resolved};
 use crate::ops::uninstall::RootOptions;
 use crate::registry::RegistryOptions;
+use crate::roots::RootSelection;
 use crate::satyrfile::{self, SourceKind};
-use crate::{receipts, roots, stage, util};
+use crate::{receipts, stage, util};
 
 /// What manifest-mode [`install_manifest`] did.
 #[derive(Debug, Default)]
@@ -75,8 +76,7 @@ pub fn install_manifest_reg(
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."));
 
-    let root = roots::resolve_root(opts.lib_root.as_deref(), opts.dest.as_deref())?;
-    roots::ensure_managed(&root)?;
+    let root = opts.resolve_managed_root()?;
 
     let lock_path = lockfile::lock_path_for(manifest_path);
     let old_lock = lockfile::read(&lock_path)?;
@@ -243,11 +243,7 @@ fn clear_orphans(root: &Path, src: &Path) -> Result<(), Error> {
     for plan in &plans {
         for pf in &plan.files {
             let live = stage::safe_join(root, &pf.dst)?;
-            match std::fs::remove_file(&live) {
-                Ok(()) => {}
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                Err(e) => return Err(Error::io(&live, e)),
-            }
+            util::remove_file_if_exists(&live)?;
         }
     }
     Ok(())

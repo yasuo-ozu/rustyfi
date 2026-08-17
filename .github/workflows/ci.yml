@@ -1,0 +1,103 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  # The `syan` parser framework is a **path dependency** (`../syan2-ergo/core`
+  # in the workspace Cargo.toml). CI checks out `yasuo-ozu/syan` at this ref
+  # into a sibling `syan2-ergo/` directory so the path resolves.
+  #
+  # PREREQUISITE: the ergonomics API this project consumes (span-carrying
+  # ParseError, #[derive(TokenLeaves)], the atom-generic Group family,
+  # IntoParseStream for Vec) currently lives on syan's `api-ergonomics`
+  # branch, which MUST be pushed to `yasuo-ozu/syan` for CI to compile.
+  # Once that work merges to syan's default branch, change this to `main`
+  # (and, if desired, repoint the Cargo.toml path back to `../syan2/core`).
+  SYAN_REF: api-ergonomics
+
+jobs:
+  test:
+    name: build · clippy · test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout this project
+        uses: actions/checkout@v4
+        with:
+          path: satysfi-rust-converted
+      - name: Checkout syan (path dependency) as ../syan2-ergo
+        uses: actions/checkout@v4
+        with:
+          repository: yasuo-ozu/syan
+          ref: ${{ env.SYAN_REF }}
+          path: syan2-ergo
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: satysfi-rust-converted
+      # Formatting is not yet enforced (the codebase is hand-formatted, not
+      # rustfmt-normalized); reported for visibility, does not fail the build.
+      - name: Formatting (advisory)
+        continue-on-error: true
+        working-directory: satysfi-rust-converted
+        run: cargo fmt --all --check
+      - name: Clippy
+        working-directory: satysfi-rust-converted
+        run: cargo clippy --workspace --all-targets
+      - name: Test
+        working-directory: satysfi-rust-converted
+        run: cargo test --workspace
+
+  corpus:
+    name: satysfi-* corpus regression
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout this project
+        uses: actions/checkout@v4
+        with:
+          path: satysfi-rust-converted
+      - name: Checkout syan (path dependency) as ../syan2-ergo
+        uses: actions/checkout@v4
+        with:
+          repository: yasuo-ozu/syan
+          ref: ${{ env.SYAN_REF }}
+          path: syan2-ergo
+      # The regression corpus: the author's real-world SATySFi packages. The
+      # harness lexes/parses every .saty/.satyh/.satyg in these repos and
+      # enforces "never panic" + a lex-coverage floor (see
+      # crates/satysfi-syntax/tests/corpus.rs). It does NOT require full
+      # compilation — this port is a v0.0.x subset without stdlib loading.
+      - name: Checkout satysfi-class-jlreq
+        uses: actions/checkout@v4
+        with:
+          repository: yasuo-ozu/satysfi-class-jlreq
+          path: corpus/satysfi-class-jlreq
+      - name: Checkout satysfi-latexcmds
+        uses: actions/checkout@v4
+        with:
+          repository: yasuo-ozu/satysfi-latexcmds
+          path: corpus/satysfi-latexcmds
+      - name: Checkout satysfi-xpath
+        uses: actions/checkout@v4
+        with:
+          repository: yasuo-ozu/satysfi-xpath
+          path: corpus/satysfi-xpath
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: satysfi-rust-converted
+      - name: Run corpus regression
+        working-directory: satysfi-rust-converted
+        env:
+          SATYSFI_CORPUS_DIR: >-
+            ${{ github.workspace }}/corpus/satysfi-class-jlreq:${{ github.workspace }}/corpus/satysfi-latexcmds:${{ github.workspace }}/corpus/satysfi-xpath
+        run: cargo test -p satysfi-syntax --test corpus -- --nocapture

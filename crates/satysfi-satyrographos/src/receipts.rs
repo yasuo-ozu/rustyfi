@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::Error;
 use crate::roots;
+use crate::util;
 
 /// The current receipt schema version (plan §5.2).
 pub const SCHEMA_VERSION: u32 = 1;
@@ -97,7 +98,7 @@ pub fn read(root: &Path, name: &str) -> Result<Receipt, Error> {
 }
 
 fn read_file(p: &Path) -> Result<Receipt, Error> {
-    let text = std::fs::read_to_string(p).map_err(|e| Error::io(p, e))?;
+    let text = util::read_to_string(p)?;
     toml::from_str(&text).map_err(|source| Error::Receipt {
         path: p.to_path_buf(),
         source,
@@ -110,23 +111,13 @@ fn read_file(p: &Path) -> Result<Receipt, Error> {
 pub fn write(root: &Path, receipt: &Receipt) -> Result<(), Error> {
     let dir = roots::receipts_dir(root);
     std::fs::create_dir_all(&dir).map_err(|e| Error::io(&dir, e))?;
-    let final_path = path(root, &receipt.name);
-    let tmp_path = dir.join(format!(".{}.toml.tmp", receipt.name));
-    let text = toml::to_string_pretty(receipt).expect("receipt serialises");
-    std::fs::write(&tmp_path, text).map_err(|e| Error::io(&tmp_path, e))?;
-    std::fs::rename(&tmp_path, &final_path).map_err(|e| Error::io(&final_path, e))?;
-    Ok(())
+    util::write_toml_atomic(&path(root, &receipt.name), receipt)
 }
 
 /// Remove the receipt for `name` (best-effort: a missing file is not an
 /// error, so uninstall stays idempotent once the files are gone).
 pub fn remove(root: &Path, name: &str) -> Result<(), Error> {
-    let p = path(root, name);
-    match std::fs::remove_file(&p) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(Error::io(&p, e)),
-    }
+    util::remove_file_if_exists(&path(root, name))
 }
 
 /// All receipts under `root`, sorted by package name. An absent
@@ -138,10 +129,7 @@ pub fn list_all(root: &Path) -> Result<Vec<Receipt>, Error> {
         return Ok(Vec::new());
     }
     let mut receipts = Vec::new();
-    let entries = std::fs::read_dir(&dir).map_err(|e| Error::io(&dir, e))?;
-    for entry in entries {
-        let entry = entry.map_err(|e| Error::io(&dir, e))?;
-        let p = entry.path();
+    for p in util::read_dir_paths(&dir)? {
         // Skip the `.<name>.toml.tmp` write-staging files and anything that
         // is not a `.toml`.
         let is_toml = p.extension().and_then(|e| e.to_str()) == Some("toml");

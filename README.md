@@ -70,7 +70,38 @@ crates/
   satysfi-cli/       chimera binary: satysfi-rust / satysfi / satyrographos
 ```
 
-Requires a checkout of `syan2` at `../syan2` (path dependency).
+Requires a checkout of the `syan` parser framework as a sibling `../syan2-ergo`
+(path dependency; currently the `api-ergonomics` branch of `yasuo-ozu/syan`).
+
+## Testing & CI
+
+`cargo test --workspace` runs the unit/integration suite (315+ tests).
+
+**Corpus regression** — `crates/satysfi-syntax/tests/corpus.rs` runs the
+lexer and parser over the author's real-world SATySFi packages
+(`github.com/yasuo-ozu/satysfi-*`) and guards against regressions. Because
+this port is a **v0.0.x subset without stdlib loading**, real packages do not
+compile end-to-end — most do not even fully parse yet — so the harness does
+not assert "must compile". It enforces what is meaningful for a growing
+front-end: (1) the frontend must **never panic** on real input, (2) a
+**lex-coverage floor** (our `lexer.mll` port handles ~89% of real files; the
+rest are the unsupported `@`-positioned string literal), and (3) a **parse
+ratchet** (the count that fully parses is tracked and only ratchets up as the
+grammar grows). It is driven by `$SATYSFI_CORPUS_DIR` (a `:`-separated list of
+repo roots) and **skips** when that is unset, so a plain `cargo test` without
+the corpus checked out stays green:
+
+```console
+$ SATYSFI_CORPUS_DIR=../satysfi-class-jlreq:../satysfi-latexcmds:../satysfi-xpath \
+    cargo test -p satysfi-syntax --test corpus -- --nocapture
+```
+
+**GitHub Actions** (`.github/workflows/ci.yml`) runs the suite plus the corpus
+job (cloning the `satysfi-*` packages). Because `syan` is a path dependency,
+CI checks out `yasuo-ozu/syan` (at `$SYAN_REF`, default `api-ergonomics`) into
+a sibling `syan2-ergo/`. **That branch must be pushed to `yasuo-ozu/syan`** for
+CI to compile; once it merges to syan's default branch, set `SYAN_REF` to
+`main`.
 
 ## Roadmap
 

@@ -2,6 +2,7 @@
 //! language core of the SATySFi port.
 
 pub mod ast;
+pub(crate) mod compile;
 pub mod elaborate;
 pub mod eval;
 pub mod prim_types;
@@ -50,7 +51,12 @@ pub fn compile_document_cst(
     let program = elaborate::elaborate_program(file, &scope)?;
     typecheck::typecheck(&program)?;
     let mut interp = eval::Interp::new(metrics);
-    match interp.eval(&env, &program.body)? {
+    // Compile the elaborated body into a closure tree once, then run it. This
+    // is the fast path; `eval::Interp::eval` remains the reference tree-walker
+    // (used, e.g., in unit tests to cross-check that both produce identical
+    // values). See `compile.rs` for the design and correctness argument.
+    let compiled = compile::compile_program(&program.body, &env);
+    match compiled.run(&env, &mut interp)? {
         Value::Document(doc) => Ok(doc),
         other => Err(CompileError::NotADocument(other.type_name())),
     }

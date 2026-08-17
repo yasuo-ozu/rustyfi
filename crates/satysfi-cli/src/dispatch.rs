@@ -30,14 +30,13 @@ pub fn build_cli() -> Command {
         // `satysfi-rust` personality: compiler + nested package manager.
         .subcommand(
             compile_command("satysfi-rust")
-                .version(env!("CARGO_PKG_VERSION"))
                 .subcommand(satyrographos_command())
                 .subcommand(multicall_command())
                 .args_conflicts_with_subcommands(true)
                 .subcommand_negates_reqs(true),
         )
         // `satysfi` personality: compiler only.
-        .subcommand(compile_command("satysfi").version(env!("CARGO_PKG_VERSION")))
+        .subcommand(compile_command("satysfi"))
         // `satyrographos` personality: package manager only.
         .subcommand(satyrographos_command())
 }
@@ -47,6 +46,7 @@ pub fn build_cli() -> Command {
 /// `-o/--output`, `--lib-root`, `--target-version`).
 fn compile_command(name: &'static str) -> Command {
     Command::new(name)
+        .version(env!("CARGO_PKG_VERSION"))
         .about("Compile a SATySFi (.saty) document to PDF.")
         .arg(
             Arg::new("input")

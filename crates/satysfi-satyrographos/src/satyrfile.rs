@@ -23,6 +23,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::error::Error;
+use crate::util;
 
 /// The manifest filename located by [`find_upward`].
 pub const MANIFEST_NAME: &str = "Satyrfile.toml";
@@ -128,7 +129,7 @@ impl SourceSpec {
 
 /// Read and parse the `Satyrfile.toml` at `path`.
 pub fn read(path: &Path) -> Result<Satyrfile, Error> {
-    let text = std::fs::read_to_string(path).map_err(|e| Error::io(path, e))?;
+    let text = util::read_to_string(path)?;
     toml::from_str(&text).map_err(|source| Error::Satyrfile {
         path: path.to_path_buf(),
         source,

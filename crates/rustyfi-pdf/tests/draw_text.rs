@@ -67,6 +67,7 @@ fn page_with_fill_then_text() -> Page {
         height: Length::pt(20.0),
         depth: Length::pt(0.0),
         elems,
+        origin_independent: false,
     };
     Page {
         lines: vec![PlacedLine {
@@ -161,6 +162,7 @@ fn base14_draw_text_on_an_empty_run_emits_no_text_operators() {
         height: Length::ZERO,
         depth: Length::ZERO,
         elems,
+        origin_independent: false,
     };
     let page = Page {
         lines: vec![PlacedLine {
@@ -247,6 +249,7 @@ fn cid_draw_text_run_survives_pdftotext_extraction() {
         height: ascender,
         depth: descender,
         elems,
+        origin_independent: false,
     };
     let page = Page {
         lines: vec![PlacedLine {
@@ -304,6 +307,7 @@ fn a_text_free_graphics_box_is_unaffected_by_the_nested_emitter_plumbing() {
         height: Length::pt(20.0),
         depth: Length::pt(0.0),
         elems,
+        origin_independent: false,
     };
     let page = Page {
         lines: vec![PlacedLine {
@@ -358,6 +362,7 @@ fn an_image_nested_inside_a_draw_text_run_gets_its_xobject_registered() {
         height: Length::pt(10.0),
         depth: Length::ZERO,
         elems,
+        origin_independent: false,
     };
     let page = Page {
         lines: vec![PlacedLine {

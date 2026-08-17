@@ -6528,9 +6528,15 @@ fn prim_raise_inline(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value
 /// used by `math.satyh`'s `+math`'s `\eqn`/`\math-list`/`\align`, never
 /// invoked eagerly.
 fn prim_embed_block_breakable(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
-    let _bb = as_block_boxes(args.pop().unwrap())?;
-    let _ctx = as_context(args.pop().unwrap())?;
-    Ok(Value::InlineBoxes(Vec::new()))
+    let bb = as_block_boxes(args.pop().unwrap())?;
+    let ctx = as_context(args.pop().unwrap())?;
+    // Embed the block inline, top-anchored (the block's FIRST line sits on the
+    // surrounding text baseline — same as `embed-block-top`). Was a no-op stub
+    // that silently DROPPED the block, so figbox's inline `\fig-block`/
+    // `\fig-center` (which `embed-block-breakable` a `+fig-block`) rendered an
+    // empty frame. `make_embedded_block` splits the box's height/depth around
+    // the first line so the pager accounts for the embedded figure's extent.
+    Ok(make_embedded_block(ctx.paragraph_width, bb, false))
 }
 
 /// `unite-path : path -> path -> path` — FAITHFUL: `path` is upstream's
@@ -8164,12 +8170,15 @@ fn prim_line_stack_bottom(_interp: &mut Interp, mut args: Vec<Value>) -> Result<
         });
         prev_depth = depth;
     }
-    // Route through `make_embedded_block` so the multi-line height/depth split
-    // is correct (top-anchored): `vconcat`/`margin`/`hvmargin` in figbox build
-    // their figures via this primitive, and the old `measure_block` sum
-    // under-reported the box's depth, making the pager over-pack pages around
-    // multi-row figures (see `make_embedded_block`).
-    Ok(make_embedded_block(wid, block, false))
+    // Route through `make_embedded_block` with `anchor_last = true`:
+    // `line-stack-bottom` is BOTTOM-anchored (SATySFi vminst.ml:1229 — the
+    // result baseline is the LAST stacked line's baseline), so the box's height
+    // spans everything above that last line and its depth is the last line's
+    // depth. Top-anchoring (`false`) put the baseline at the FIRST line, which
+    // dropped the whole stack below the baseline — e.g. figbox's `margin`/
+    // `hvmargin` (a `line-stack-bottom` of [top-mgn; content; bot-mgn]) had its
+    // content rendered below its frame (the E=mc² bug).
+    Ok(make_embedded_block(wid, block, true))
 }
 
 /// `add-footnote : block-boxes -> inline-boxes` (vminst.ml:1130

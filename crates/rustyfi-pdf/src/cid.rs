@@ -192,7 +192,7 @@ pub fn render_pdf_ttf_with(
     // One Image XObject per image actually placed on a page — shared with
     // `render_pdf` (base-14, `lib.rs`); see that module's doc comment on
     // this section.
-    let used = used_images(pages);
+    let used = used_images(pages, &extras.page_graphics);
     let img_refs = write_image_xobjects(&mut pdf, || next_ref(&mut alloc), images, &used);
     // One Form XObject per imported PDF page (`load-pdf-image`,
     // docs/plans/design-load-pdf-image.md §3) — shared with `render_pdf`

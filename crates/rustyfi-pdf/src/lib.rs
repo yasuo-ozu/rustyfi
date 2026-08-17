@@ -47,11 +47,20 @@ const FONT_RES_NAMES: [&str; 3] = ["F0", "F1", "F2"];
 // ============================================================================
 
 /// Every `ImageId` (as its raw `usize` index into a `DocumentValue::images`-
-/// shaped table) that appears in at least one placed line across `pages` —
-/// the writer only emits an XObject for an image actually placed on a page,
-/// not merely decoded (a document can `load-image` something it never
-/// places).
-fn used_images(pages: &[Page]) -> BTreeSet<usize> {
+/// shaped table) that appears in at least one placed line across `pages`, OR
+/// in a page's `overlays` deco-graphics underlay (`fire_hooks`' §D
+/// `page_graphics`) — the writer only emits an XObject for an image actually
+/// placed on a page, not merely decoded (a document can `load-image`
+/// something it never places).
+///
+/// Scanning the overlay is essential for images drawn *inside a decoration*:
+/// e.g. `figbox`'s `+fig-on-right`/`+fig-on-left` draw their figure with
+/// `draw-text` from the frame's `deco`, so the image box only ever lives in
+/// `page_graphics` (a `GraphicsElem::Text` run), never in a placed line. Each
+/// `include-image` call mints its own `ImageId`, so even when the same file is
+/// also placed normally elsewhere, the deco's id is distinct and would go
+/// uncollected — no XObject, and its `/ImN Do` would dangle.
+fn used_images(pages: &[Page], overlays: &[Vec<GraphicsElem>]) -> BTreeSet<usize> {
     let mut used = BTreeSet::new();
     for page in pages {
         for line in &page.lines {
@@ -60,7 +69,37 @@ fn used_images(pages: &[Page]) -> BTreeSet<usize> {
             }
         }
     }
+    for overlay in overlays {
+        for elem in overlay {
+            scan_graphics_images(elem, &mut used);
+        }
+    }
     used
+}
+
+/// Recursive `GraphicsElem` scan for [`used_images`], mirroring
+/// [`scan_box_images`] one level up: a `draw-text` run (`GraphicsElem::Text`)
+/// can carry image boxes in its `contents`, and `Group`/`Clip` nest further
+/// graphics. `Fill`/`Stroke`/`DashedStroke` are pure vector ops with no image.
+fn scan_graphics_images(elem: &GraphicsElem, used: &mut BTreeSet<usize>) {
+    match elem {
+        GraphicsElem::Text { contents, .. } => {
+            for (_, b) in contents {
+                scan_box_images(b, used);
+            }
+        }
+        GraphicsElem::Group(inner) => {
+            for e in inner {
+                scan_graphics_images(e, used);
+            }
+        }
+        GraphicsElem::Clip(_, inner) => {
+            for e in inner {
+                scan_graphics_images(e, used);
+            }
+        }
+        GraphicsElem::Fill(..) | GraphicsElem::Stroke(..) | GraphicsElem::DashedStroke(..) => {}
+    }
 }
 
 /// Recursive box scan for `used_images`: an `Image` can also hide inside a
@@ -698,7 +737,7 @@ pub fn render_pdf_with(
     // imported PDF page (`load-pdf-image`, docs/plans/design-load-pdf-image.md
     // §3) — same `used` set, same `next_ref` allocator, disjoint `Im`/`Fm`
     // resource names.
-    let used = used_images(pages);
+    let used = used_images(pages, &extras.page_graphics);
     let img_refs = write_image_xobjects(&mut pdf, &mut next_ref, images, &used);
     let form_refs = write_form_xobjects(&mut pdf, &mut next_ref, images, &used);
 

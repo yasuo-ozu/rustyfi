@@ -17,7 +17,10 @@ pub mod v1;
 pub mod value;
 
 use crossref::{CrossRefs, Verdict};
-use rustyfi_backend::{placed_line_extent, DecoId, FontMetrics, GraphicsElem, Length, PureHorzBox};
+use rustyfi_backend::{
+    place_block_at, placed_line_extent, DecoId, FontMetrics, GraphicsElem, Length, PureHorzBox,
+    VertBox,
+};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
@@ -1621,6 +1624,14 @@ struct OpenFrame {
     /// Insertion order — used to sort same-page fires back into outer-before-
     /// inner document order (see the ordering note below).
     open_seq: usize,
+    /// `true` once this frame has already emitted a head (`decoH`) or middle
+    /// (`decoM`) fragment on an EARLIER page — i.e. its `FrameStart` landed on
+    /// a previous page and it is still open. Drives the S/H/M/T choice: a
+    /// non-carried frame closing on its start page fires `decoS`; a carried one
+    /// fires `decoT`. At each page boundary a still-open frame fires `decoH`
+    /// (first spanned page) or `decoM` (subsequent) and its per-page extent is
+    /// reset. `false` for the common single-page frame (unchanged behaviour).
+    carried: bool,
 }
 
 /// Fire every placed page-break hook and §D decoration, in document order,
@@ -1645,11 +1656,15 @@ struct OpenFrame {
 ///   need the writers' cell/stack arithmetic replicated lang-side. No
 ///   bundled package puts an `\href`/frame inside one today.
 /// - A `block-frame-breakable` frame whose `FrameStart` and `FrameEnd` land
-///   on DIFFERENT pages fires nothing (dropped silently at page end) —
-///   multi-page fragments (`decoH`/`decoM`/`decoT`) need a body-vs-header/
-///   footer split this port's `Page` doesn't carry yet; single-page frames
-///   (the common case: `code.satyh` blocks, `itemize` bullets, `annot`'s
-///   frames) fire `decoS`.
+///   on DIFFERENT pages now fires per-page fragments: `decoS` if it opens and
+///   closes on one page, else `decoH` on its first (opening) page, `decoM` on
+///   each fully-contained middle page, and `decoT` on its closing page — the
+///   `pageBreak.ml` fragment split. Each fragment's rect spans only that
+///   page's content extent; the top pad is applied only to the head/single
+///   fragment and the bottom pad only to the tail/single fragment. This is
+///   what lets `figbox`'s `+fig-on-right`/`+fig-on-left` (which draw their
+///   image in `decoH`) render on figures whose surrounding text wraps across a
+///   page break.
 ///
 /// `pub` (rather than crate-private) so unit tests can drive it directly
 /// against a hand-built `DocumentValue`, without going through a full
@@ -1657,12 +1672,23 @@ struct OpenFrame {
 pub fn fire_hooks(interp: &mut eval::Interp, doc: &DocumentValue) -> Result<(), eval::EvalError> {
     interp.page_graphics = doc.pages.iter().map(|_| Vec::new()).collect();
     let mut next_open_seq: usize = 0;
+    // Frames persist ACROSS pages: a `block-frame-breakable` whose `FrameStart`
+    // and `FrameEnd` straddle a page break stays in `open` between pages so its
+    // head/middle fragments fire at each boundary and its tail fires when the
+    // `FrameEnd` finally arrives. Single-page frames are pushed and removed
+    // within one page's walk exactly as before.
+    let mut open: Vec<OpenFrame> = Vec::new();
 
     for (i, page) in doc.pages.iter().enumerate() {
         interp.current_page = Some(i);
         let page_number = (i + 1) as i64; // 1-based, = pbinfo#page-number
-        let mut open: Vec<OpenFrame> = Vec::new();
-        // (open_seq, graphics) per closed block-frame fragment on this page,
+        // Frames carried over from a previous page start a fresh per-page
+        // extent: their fragment on THIS page spans only this page's lines.
+        for f in &mut open {
+            f.top = None;
+            f.bottom = None;
+        }
+        // (open_seq, graphics) per block-frame fragment fired on this page,
         // sorted by open order before being appended to the page's underlay
         // — see the doc comment on the ordering this preserves.
         let mut closings: Vec<(usize, Vec<GraphicsElem>)> = Vec::new();
@@ -1704,6 +1730,7 @@ pub fn fire_hooks(interp: &mut eval::Interp, doc: &DocumentValue) -> Result<(), 
                             top: None,
                             bottom: None,
                             open_seq: next_open_seq,
+                            carried: false,
                         });
                         next_open_seq += 1;
                     }
@@ -1711,48 +1738,40 @@ pub fn fire_hooks(interp: &mut eval::Interp, doc: &DocumentValue) -> Result<(), 
                         // Close the innermost still-open frame with this id
                         // (well-nested by construction: `prim_block_frame_
                         // breakable` always emits a matched Start/End pair
-                        // around its own contents).
+                        // around its own contents). A frame carried over from
+                        // an earlier page fires its TAIL fragment (`decoT`,
+                        // bottom pad only); one that opened on this page fires
+                        // the single-fragment `decoS` (both pads).
                         if let Some(pos) = open.iter().rposition(|f| f.id == *id) {
                             let frame = open.remove(pos);
-                            let (pads, width, deco_s) = match &interp.decos[frame.id.0] {
-                                eval::DecoEntry::Block { pads, width, decoset } => {
-                                    (*pads, *width, decoset[0].clone())
-                                }
-                                eval::DecoEntry::Inline { .. } => {
-                                    return eval::eval_error(
-                                        "BUG: inline deco behind a block-frame marker",
-                                    )
-                                }
-                            };
-                            // No real line ever appeared between Start/End
-                            // (an empty frame) -> degenerate zero-height
-                            // rect anchored at the Start marker's own
-                            // baseline, rather than a fabricated extent.
-                            let top = frame.top.unwrap_or(frame.marker_baseline);
-                            let bottom = frame.bottom.unwrap_or(frame.marker_baseline);
-                            let frame_top = top - pads.t;
-                            let frame_bottom = bottom + pads.b;
-                            let pt = (frame.x, doc.geometry.paper_height - frame_bottom);
-                            // S2 (docs/plans/design-reflowable-html.md §4):
-                            // record which DecoId is firing so a
-                            // `register-destination` call inside `deco_s`
-                            // (annot.satyh's `register-location-frame`)
-                            // can tag itself with it — see
-                            // `Interp::current_deco_id`'s doc comment.
-                            interp.current_deco_id = Some(frame.id);
-                            let gr = primitives::apply_deco(
-                                interp,
-                                deco_s,
-                                pt,
-                                width,
-                                frame_bottom - frame_top,
-                                Length::ZERO,
+                            let (deco_idx, incl_top) =
+                                if frame.carried { (3, false) } else { (0, true) };
+                            let gr = fire_block_frame_fragment(
+                                interp, doc, &frame, deco_idx, incl_top, true,
                             )?;
-                            interp.current_deco_id = None;
                             closings.push((frame.open_seq, gr));
                         }
-                        // An End with no matching Start on this page can't
-                        // happen given well-nested markers; ignored if it did.
+                        // An End with no matching open frame can't happen given
+                        // well-nested markers; ignored if it did.
+                    }
+                    PureHorzBox::EmbeddedBlock { block, anchor_last, .. } => {
+                        // A `block-frame-breakable` can also hide INSIDE an
+                        // `embed-block-breakable` (figbox's inline
+                        // `\fig-on-right`/`\fig-on-left`, which draw their image
+                        // from the frame's deco): its `FrameStart`/`FrameEnd`
+                        // markers live in this atomic box's own placed lines, not
+                        // the page flow, so the walk above never sees them. Fire
+                        // those nested decos with absolute coordinates.
+                        fire_embedded_block_frames(
+                            interp,
+                            doc,
+                            line.x + *dx,
+                            line.baseline_y,
+                            block,
+                            *anchor_last,
+                            &mut next_open_seq,
+                            &mut closings,
+                        )?;
                     }
                     _ => {}
                 }
@@ -1770,8 +1789,35 @@ pub fn fire_hooks(interp: &mut eval::Interp, doc: &DocumentValue) -> Result<(), 
                 }
             }
         }
-        // Frames still open at page end are dropped (see the doc comment's
-        // "Known scope cuts" — no cross-page fragment support yet).
+        // Frames still open at page end straddle the following page break: fire
+        // this page's fragment — a HEAD (`decoH`, top pad only) the first time a
+        // frame spans, a MIDDLE (`decoM`, no pads) on every later page — and
+        // keep the frame open so its remaining fragments (and eventual `decoT`)
+        // fire on the pages ahead. A frame that never accumulated a real line
+        // on this page (top/bottom still `None`) contributes nothing and does
+        // NOT advance its fragment state: it stays `carried` as it was, so a
+        // frame that opened at the very bottom of a page (no room for a line)
+        // still fires its HEAD (or, if it also closes with content on a single
+        // later page, a `decoS`) on the first page that actually holds its
+        // content. Collect fires first (can't hold `&open` across the `&mut
+        // interp` deco call), then mark exactly the frames that fired.
+        let mut page_end_fires: Vec<(usize, Vec<GraphicsElem>)> = Vec::new();
+        let mut fired_seqs: Vec<usize> = Vec::new();
+        for frame in &open {
+            if frame.top.is_none() && frame.bottom.is_none() {
+                continue;
+            }
+            let (deco_idx, incl_top) = if frame.carried { (2, false) } else { (1, true) };
+            let gr = fire_block_frame_fragment(interp, doc, frame, deco_idx, incl_top, false)?;
+            page_end_fires.push((frame.open_seq, gr));
+            fired_seqs.push(frame.open_seq);
+        }
+        for f in &mut open {
+            if fired_seqs.contains(&f.open_seq) {
+                f.carried = true;
+            }
+        }
+        closings.extend(page_end_fires);
 
         closings.sort_by_key(|(seq, _)| *seq);
         for (_, gr) in closings {
@@ -1779,6 +1825,138 @@ pub fn fire_hooks(interp: &mut eval::Interp, doc: &DocumentValue) -> Result<(), 
         }
     }
     interp.current_page = None;
+    Ok(())
+}
+
+/// Fire one placed `block-frame-breakable` fragment's decoration (`decoS`/
+/// `decoH`/`decoM`/`decoT` picked by `deco_idx` — 0/1/2/3, evalUtil.ml:169
+/// `get_decoset` order) with its final geometry, returning the graphics it
+/// draws (absolute page coordinates). `incl_top_pad`/`incl_bot_pad` select
+/// which of the frame's `pads.t`/`pads.b` this fragment carries: the single
+/// (`decoS`) fragment carries both, the head only the top, the tail only the
+/// bottom, and a middle neither — matching `pageBreak.ml`'s per-fragment
+/// padding. The rect spans the frame's accumulated (top, bottom) extent on the
+/// current page; an empty frame (no real line between Start/End) falls back to
+/// the Start marker's own baseline for a degenerate zero-height rect.
+fn fire_block_frame_fragment(
+    interp: &mut eval::Interp,
+    doc: &DocumentValue,
+    frame: &OpenFrame,
+    deco_idx: usize,
+    incl_top_pad: bool,
+    incl_bot_pad: bool,
+) -> Result<Vec<GraphicsElem>, eval::EvalError> {
+    let (pads, width, deco) = match &interp.decos[frame.id.0] {
+        eval::DecoEntry::Block { pads, width, decoset } => {
+            (*pads, *width, decoset[deco_idx].clone())
+        }
+        eval::DecoEntry::Inline { .. } => {
+            return eval::eval_error("BUG: inline deco behind a block-frame marker")
+        }
+    };
+    let top = frame.top.unwrap_or(frame.marker_baseline);
+    let bottom = frame.bottom.unwrap_or(frame.marker_baseline);
+    let frame_top = if incl_top_pad { top - pads.t } else { top };
+    let frame_bottom = if incl_bot_pad { bottom + pads.b } else { bottom };
+    let pt = (frame.x, doc.geometry.paper_height - frame_bottom);
+    // S2 (docs/plans/design-reflowable-html.md §4): record which DecoId is
+    // firing so a `register-destination` call inside the deco (annot.satyh's
+    // `register-location-frame`) can tag itself with it — see
+    // `Interp::current_deco_id`'s doc comment.
+    interp.current_deco_id = Some(frame.id);
+    let gr = primitives::apply_deco(
+        interp,
+        deco,
+        pt,
+        width,
+        frame_bottom - frame_top,
+        Length::ZERO,
+    )?;
+    interp.current_deco_id = None;
+    Ok(gr)
+}
+
+/// Fire block-frame decorations that live INSIDE an `EmbeddedBlock` inline box.
+///
+/// figbox's inline `\fig-on-right`/`\fig-on-left` wrap a `block-frame-breakable`
+/// (whose deco draws the figure image) in `embed-block-breakable`, so the
+/// frame's `FrameStart`/`FrameEnd` markers end up in the embedded block's OWN
+/// placed lines, never the page flow that [`fire_hooks`] walks — the image
+/// would silently never render. Replicate `place_embedded_block`'s transform
+/// (`rustyfi-pdf`): `place_block_at` from a zero origin, then shift so the
+/// anchor line (first for top-anchor, last for bottom) sits at the box's inline
+/// baseline. Converting that writer y-up geometry back to page y-down, inner
+/// line `i`'s absolute baseline is `baseline_ydown + (bl_i - anchor_offset)` and
+/// its x is `tx + line.x + dx`. Over those absolute lines we run the same
+/// frame-open/close tracking and `fire_block_frame_fragment` as the main walk.
+/// The box is atomic (one inline box, not page-broken), so every nested frame
+/// opens and closes within it and fires a single-fragment `decoS`. Nested
+/// `EmbeddedBlock`s (a figbox inside a figbox) recurse.
+#[allow(clippy::too_many_arguments)]
+fn fire_embedded_block_frames(
+    interp: &mut eval::Interp,
+    doc: &DocumentValue,
+    tx: Length,
+    baseline_ydown: Length,
+    block: &[VertBox],
+    anchor_last: bool,
+    next_open_seq: &mut usize,
+    out: &mut Vec<(usize, Vec<GraphicsElem>)>,
+) -> Result<(), eval::EvalError> {
+    let placed = place_block_at((Length::ZERO, Length::ZERO), block.to_vec());
+    let anchor = if anchor_last { placed.last() } else { placed.first() };
+    let Some(anchor) = anchor else {
+        return Ok(());
+    };
+    let anchor_offset = anchor.baseline_y;
+    let mut open: Vec<OpenFrame> = Vec::new();
+    for pl in &placed {
+        let abs_baseline = baseline_ydown + (pl.baseline_y - anchor_offset);
+        for (dx, bx) in &pl.contents {
+            match bx {
+                PureHorzBox::FrameMarker { id, end: false } => {
+                    open.push(OpenFrame {
+                        id: *id,
+                        x: tx + pl.x + *dx,
+                        marker_baseline: abs_baseline,
+                        top: None,
+                        bottom: None,
+                        open_seq: *next_open_seq,
+                        carried: false,
+                    });
+                    *next_open_seq += 1;
+                }
+                PureHorzBox::FrameMarker { id, end: true } => {
+                    if let Some(pos) = open.iter().rposition(|f| f.id == *id) {
+                        let frame = open.remove(pos);
+                        let gr = fire_block_frame_fragment(interp, doc, &frame, 0, true, true)?;
+                        out.push((frame.open_seq, gr));
+                    }
+                }
+                PureHorzBox::EmbeddedBlock { block: inner, anchor_last: al, .. } => {
+                    fire_embedded_block_frames(
+                        interp,
+                        doc,
+                        tx + pl.x + *dx,
+                        abs_baseline,
+                        inner,
+                        *al,
+                        next_open_seq,
+                        out,
+                    )?;
+                }
+                _ => {}
+            }
+        }
+        if let Some((height, depth)) = placed_line_extent(pl) {
+            let top = abs_baseline - height;
+            let bottom = abs_baseline + depth;
+            for f in &mut open {
+                f.top = Some(f.top.map_or(top, |t| t.min(top)));
+                f.bottom = Some(f.bottom.map_or(bottom, |b| b.max(bottom)));
+            }
+        }
+    }
     Ok(())
 }
 

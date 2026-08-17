@@ -39,6 +39,7 @@ fn page_with_graphics_box() -> Page {
         height: Length::pt(20.0),
         depth: Length::pt(0.0),
         elems,
+        origin_independent: false,
     };
     Page {
         lines: vec![PlacedLine {
@@ -114,6 +115,7 @@ fn render_elems(elems: Vec<GraphicsElem>) -> String {
         height: Length::pt(20.0),
         depth: Length::pt(0.0),
         elems,
+        origin_independent: false,
     };
     let page = Page {
         lines: vec![PlacedLine {

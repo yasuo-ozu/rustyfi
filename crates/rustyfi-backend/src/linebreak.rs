@@ -79,6 +79,17 @@ const BADNESS_INF: f64 = 10_000.0;
 /// (LINE_PENALTY + badness)^2 [+/- penalty^2]`.
 const LINE_PENALTY: f64 = 10.0;
 
+/// SATySFi's ratio limits (lineBreak.ml:507-508): a line stretched beyond
+/// `+2.0` is `LBTooShort` (dropped); shrunk beyond `-1.0` is `LBTooLong`.
+const RATIO_STRETCH_LIMIT: f64 = 2.0;
+const RATIO_SHRINK_LIMIT: f64 = -1.0;
+/// `badness_for_too_long` (lineBreak.ml:989) — the cost of a kept `LBTooLong`
+/// line; also the cap for the elastic `|ratio|³·10000` badness.
+const BADNESS_TOO_LONG: f64 = 100_000.0;
+/// A dropped (`LBTooShort`) line: huge so the DP never prefers it, but finite
+/// so a paragraph with no feasible partition still typesets.
+const BADNESS_DROPPED: f64 = 1.0e12;
+
 /// A candidate line's shape, used both to score it (badness/demerits) and
 /// to lay it out once chosen.
 struct LineMetrics {
@@ -319,7 +330,14 @@ fn badness(width: Length, metrics: &LineMetrics) -> f64 {
         }
         if metrics.stretch.is_positive() {
             let ratio = slack / metrics.stretch;
-            (100.0 * ratio.abs().powi(3)).min(BADNESS_INF)
+            if ratio > RATIO_STRETCH_LIMIT {
+                // `LBTooShort` (lineBreak.ml:507, `ratio_stretch_limit = 2.0`):
+                // an over-stretched line is dropped from the graph.
+                BADNESS_DROPPED
+            } else {
+                // SATySFi `calculate_badness` (lineBreak.ml:986): `|ratio|³·10000`.
+                (10000.0 * ratio.abs().powi(3)).min(BADNESS_TOO_LONG)
+            }
         } else {
             no_stretch_badness(slack, width)
         }
@@ -327,7 +345,12 @@ fn badness(width: Length, metrics: &LineMetrics) -> f64 {
         // Overfull: needs to shrink.
         if metrics.shrink.is_positive() {
             let ratio = slack / metrics.shrink;
-            (100.0 * ratio.abs().powi(3)).min(BADNESS_INF)
+            if ratio < RATIO_SHRINK_LIMIT {
+                // `LBTooLong` (lineBreak.ml:508): kept at `badness_for_too_long`.
+                BADNESS_TOO_LONG
+            } else {
+                (10000.0 * ratio.abs().powi(3)).min(BADNESS_TOO_LONG)
+            }
         } else if metrics.has_glue {
             // Overfull with real interword glue that can't shrink (monospace/
             // `+code`, `set-space-ratio r 0 0`): breaking BEFORE the word that
@@ -376,7 +399,12 @@ fn badness(width: Length, metrics: &LineMetrics) -> f64 {
 /// disproportionately more than the same ratio against real stretch/shrink.
 fn no_stretch_badness(slack: Length, width: Length) -> f64 {
     let ratio = slack / width.max(Length::pt(1.0));
-    (BADNESS_INF * ratio.abs().powi(3)).min(BADNESS_INF)
+    // Consistent with the elastic badness cap (`BADNESS_TOO_LONG = 100_000`):
+    // a rigid line with no elasticity must be able to cost MORE than any
+    // elastic line, not be capped cheaper at `BADNESS_INF` — otherwise the DP
+    // prefers cramming short rigid lines (over-breaking CJK) over correctly
+    // packing them. Scaled 100× steeper than the elastic `|r|³·10000`.
+    (BADNESS_TOO_LONG * ratio.abs().powi(3)).min(BADNESS_TOO_LONG)
 }
 
 /// Fold a break's own penalty into its line's demerits, TeX's classic
@@ -387,16 +415,13 @@ fn no_stretch_badness(slack: Length, width: Length) -> f64 {
 /// penalty is always 0, so this is exactly today's formula whenever no
 /// discretionary is involved.
 fn demerits(b: f64, penalty: i32) -> f64 {
-    let base = (LINE_PENALTY + b) * (LINE_PENALTY + b);
+    // SATySFi's edge weight is LINEAR (`badness + pnltybreak`, lineBreak.ml:1013),
+    // not TeX's squared demerit.
+    let base = LINE_PENALTY + b;
     if penalty <= FORCED_BREAK_PENALTY {
         base
     } else {
-        let p = penalty as f64;
-        if penalty > 0 {
-            base + p * p
-        } else {
-            (base - p * p).max(0.0)
-        }
+        (base + penalty as f64).max(0.0)
     }
 }
 
@@ -409,6 +434,36 @@ pub fn break_into_lines(ctx: &Context, boxes: Vec<HorzBox>) -> Vec<VertBox> {
 
     if n == 0 {
         return Vec::new();
+    }
+
+    // SATySFi's UNREACHABLE fallback (lineBreak.ml:1122-1133). When the whole
+    // paragraph fits on one line at its natural width but has too little
+    // stretch to justify to the column, SATySFi's graph has NO permissible
+    // path to the terminal — every candidate line is `LBTooShort`, which adds
+    // no edge (lineBreak.ml:1015) — so `shortest_path` returns `None` and it
+    // emits a SINGLE natural-width (ragged) line rather than a justified split.
+    //
+    // The port's DP scores rather than drops, so it would instead pick a
+    // pathological word-per-line split: the single full line is over-stretched
+    // (`BADNESS_DROPPED`), while each short one-word piece is merely expensive
+    // (`no_stretch_badness`, bounded), and the pieces' aggregate undercuts the
+    // dropped single line — putting each word on its own line (a raw
+    // `line-break ... ` with no trailing `inline-fil`; every doc-class `+p`
+    // appends one, so real prose and the whole corpus never reach here). Match
+    // SATySFi: if the whole paragraph fits on one line yet that line can't be
+    // justified (`BADNESS_DROPPED`), emit it as one natural ragged line.
+    //
+    // Guards: a paragraph ending in `inline-fil` justifies with badness 0 (the
+    // `has_fil` branch of `badness`) so it never satisfies the condition; and a
+    // paragraph carrying a forced break (mandatory newline) must keep that
+    // break, so it is excluded here.
+    {
+        let whole = line_content(&pure, 0, n);
+        let wm = measure(&whole);
+        let has_forced_break = pure.iter().any(PureHorzBox::is_forced_break);
+        if !has_forced_break && wm.natural <= width && badness(width, &wm) >= BADNESS_DROPPED {
+            return vec![layout_line(ctx, whole, width, true)];
+        }
     }
 
     // Legal breakpoints: a glue-or-discretionary box (`is_break_point`)

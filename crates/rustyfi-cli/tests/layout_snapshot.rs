@@ -261,6 +261,7 @@ fn write_box(out: &mut String, indent: usize, dx: Length, bx: &PureHorzBox) {
             height,
             depth,
             elems,
+            origin_independent: _,
         } => {
             let _ = writeln!(
                 out,
@@ -453,6 +454,12 @@ fn write_vbox(out: &mut String, indent: usize, vb: &VertBox) {
         // arm).
         VertBox::ListMark(kind) => {
             let _ = writeln!(out, "{pad}VListMark kind={kind:?}");
+        }
+        VertBox::ParagTop(l) => {
+            let _ = writeln!(out, "{pad}VParagTop {}", fmt_len(*l));
+        }
+        VertBox::FramePad(l) => {
+            let _ = writeln!(out, "{pad}VFramePad {}", fmt_len(*l));
         }
     }
 }

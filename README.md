@@ -70,8 +70,11 @@ crates/
   rustyfi-cli/       chimera binary: rustyfi-rust / rustyfi / satyrographos
 ```
 
-Requires a checkout of the `syan` parser framework as a sibling `../syan2-ergo`
-(path dependency; currently the `api-ergonomics` branch of `yasuo-ozu/syan`).
+The `syan` parser framework is VENDORED as a git submodule at `vendor/syan2`
+(tracking `main`), not referenced from a sibling checkout: an external path
+dependency changes with no version bump to notice, which has silently broken
+this build before. Clone with `--recurse-submodules`, or run
+`git submodule update --init` afterwards.
 
 ## Testing & CI
 
@@ -102,6 +105,58 @@ CI checks out `yasuo-ozu/syan` (at `$SYAN_REF`, default `api-ergonomics`) into
 a sibling `syan2-ergo/`. **That branch must be pushed to `yasuo-ozu/syan`** for
 CI to compile; once it merges to syan's default branch, set `SYAN_REF` to
 `main`.
+
+## Performance
+
+Measured by `scripts/benchmark.py` against the ORIGINAL OCaml SATySFi over the
+same vendored corpus `scripts/layout_fidelity.py` uses for layout fidelity, so
+the two can be read together:
+
+```console
+$ cargo build --release --bin rustyfi-rust
+$ scripts/benchmark.py --runs 3 --json bench.json
+```
+
+Minimum CPU time of 3 interleaved runs, SATySFi 0.0.11 vs this port
+(2026-08-10; 20-core Linux box at load 1.84; `--bytecomp` is upstream's
+bytecode compiler, the fair comparison point for the evaluator):
+
+| doc | upstream | upstream `--bytecomp` | port cold | port cached | cold ÷ bytecomp |
+|---|---|---|---|---|---|
+| latexcmds | 1.38 s | 1.34 s | 0.48 s | 0.32 s | **0.36×** |
+| xpath | 12.66 s | 3.33 s | 4.04 s | 0.38 s | **1.21×** |
+| enumitem | 3.18 s | 3.12 s | 1.27 s | 0.42 s | **0.41×** |
+| easytable | 3.63 s | 3.56 s | 1.61 s | 0.46 s | **0.45×** |
+| figbox | 3.26 s | 3.07 s | 1.86 s | 0.51 s | **0.61×** |
+| slydifi | 2.26 s | 1.75 s | 1.21 s | 0.44 s | **0.69×** |
+| gakushin | — | — | 0.53 s | 0.31 s | — |
+
+Peak RSS (same runs): the port uses 57–84 MB against upstream's 84–125 MB on
+every document **except figbox**, where it uses 190 MB against 109 MB and emits
+a 3.2× larger PDF — both point at the image pipeline holding decoded data
+resident. Page counts match upstream everywhere except figbox (20 vs 21).
+
+Reading the table honestly:
+
+- **`xpath` is the one loss**, at 1.21× upstream's bytecode compiler. It is also
+  where `--bytecomp` helps upstream most (12.66 s → 3.33 s), and those are the
+  same fact: that document is dominated by user-level path arithmetic rather
+  than by layout, so it measures evaluator against evaluator, and a closure-tree
+  interpreter loses to a real VM. Against upstream's *default* interpreter the
+  port is still 3.1× faster.
+- **`port cached` has no upstream counterpart.** SATySFi has no
+  content-addressed compile cache, so that column measures a facility upstream
+  does not have, not a fairer version of the same work.
+- **`gakushin` cannot be built by upstream at all**: it pulls in `fss`, which
+  names its faces in Satyrographos package syntax (`fonts-junicode:Junicode-Bold`),
+  and the vendored corpus carries package *sources*, not font packages. The port
+  only survives it by falling back to a name heuristic — anything containing
+  `bold` gets the bold face — so it renders in the CLI's three default faces
+  rather than in Junicode. That is why the doc is checked in self-snapshot mode.
+- Both engines are measured **cold on cross-references** (upstream's
+  `.satysfi-aux` is deleted before each of its runs, the port runs `--no-aux`),
+  and every configuration gets a warm-up run, so no column is charged for
+  first-touch page-cache cost that another column avoids.
 
 ## Roadmap
 

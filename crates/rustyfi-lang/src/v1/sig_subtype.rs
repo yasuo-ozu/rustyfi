@@ -71,7 +71,7 @@ pub(crate) fn val_subsumes(
 /// (`"#7"`) — the escaped-skolem probe, and (structurally) the v1 twin of
 /// `typecheck.rs`'s `collect_generalizable`.
 fn mono_mentions_stamp(ty: &MonoType, marker: &str) -> bool {
-    match resolve(ty) {
+    match &*resolve(ty) {
         MonoType::Var(_) | MonoType::Base(_) => false,
         MonoType::Func(row, a, b) => {
             row_mentions_stamp(&row, marker)
@@ -91,7 +91,7 @@ fn mono_mentions_stamp(ty: &MonoType, marker: &str) -> bool {
 }
 
 fn row_mentions_stamp(row: &Row, marker: &str) -> bool {
-    match resolve_row(row) {
+    match &*resolve_row(row) {
         Row::Empty | Row::Var(_) => false,
         Row::Cons(_, t, rest) => mono_mentions_stamp(&t, marker) || row_mentions_stamp(&rest, marker),
     }

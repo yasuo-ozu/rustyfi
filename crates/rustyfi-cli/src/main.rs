@@ -21,6 +21,33 @@ mod cache;
 mod dispatch;
 mod format;
 
+/// Read an auxiliary cross-reference table, or an empty one if the file is
+/// absent, unreadable, or not the flat `{"key": "value"}` object upstream
+/// SATySFi writes.
+///
+/// Best-effort by design: an aux file is a hint that lets the fixpoint start
+/// closer to its answer, never an input the result depends on, so a corrupt or
+/// foreign one costs a trial rather than a wrong render or an error.
+fn read_aux(path: &Path) -> rustyfi_lang::crossref::AuxTable {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Default::default();
+    };
+    match serde_json::from_str::<std::collections::BTreeMap<String, String>>(&text) {
+        Ok(t) => t,
+        Err(_) => Default::default(),
+    }
+}
+
+/// Write `aux` back out, as the same flat JSON object upstream SATySFi reads.
+/// `AuxTable` is a `BTreeMap`, so the bytes are deterministic for a given
+/// table. Failure is ignored for the same reason a read failure is: a missing
+/// aux file only costs a fixpoint trial next time.
+fn write_aux(path: &Path, aux: &rustyfi_lang::crossref::AuxTable) {
+    if let Ok(text) = serde_json::to_string(aux) {
+        let _ = std::fs::write(path, text);
+    }
+}
+
 fn main() {
     // Compat fix: the recursive-descent parser + elaborator use deep stacks on
     // real documents (the ~300-line official SATySFi demo overflows the default
@@ -206,6 +233,34 @@ fn cmd_compile(m: &ArgMatches) -> anyhow::Result<()> {
         Some(store) => store,
         None => &base14,
     };
+    // Auxiliary cross-reference file (upstream SATySFi's `<doc>.satysfi-aux`,
+    // same name and same flat JSON object, so the two interoperate): seeds the
+    // cross-reference fixpoint from the previous run so a forward reference
+    // resolves on the first trial instead of forcing a second. Disabled by
+    // `--no-aux`.
+    //
+    // Unlike the compile cache, this is NOT forced off by `--timing`: a cache
+    // hit skips every phase, leaving a profiling run nothing to measure, but an
+    // aux file skips no phase — it only changes how many fixpoint trials are
+    // needed, which is exactly what a profiling run wants to see. A cold
+    // measurement asks for `--no-aux` (and, comparing against upstream
+    // SATySFi, deletes its `.satysfi-aux` too — upstream reads one by default
+    // just the same).
+    //
+    // This cannot change the output: `rustyfi_lang` discards the seed and
+    // redoes the fixpoint cold if the final trial turned out to depend on a
+    // seeded value it never re-derived (`CrossRefs::seed_unvalidated`).
+    let aux_path: Option<PathBuf> = if m.get_flag("no_aux") {
+        None
+    } else {
+        Some(
+            m.get_one::<PathBuf>("aux_file")
+                .cloned()
+                .unwrap_or_else(|| input.with_extension("satysfi-aux")),
+        )
+    };
+    let mut aux = aux_path.as_deref().map(read_aux).unwrap_or_default();
+
     let t_compile = std::time::Instant::now();
     let doc = match version {
         rustyfi_syntax::RustyfiVersion::V0_1 => {
@@ -213,8 +268,9 @@ fn cmd_compile(m: &ArgMatches) -> anyhow::Result<()> {
             // binding lists — no merge_program; each file keeps its own
             // FileV1 CST (plan C1). Slice 1's lowering erases the module
             // wrapper lang-side (rustyfi_lang::v1::lower).
-            rustyfi_lang::compile_document_v1(&program.files, metrics)
+            rustyfi_lang::compile_document_v1_with_aux(&program.files, metrics, &mut aux)
                 .map_err(|e| anyhow::anyhow!("{}: {e}", input.display()))?
+                .0
         }
         _ => {
             // Slice X4a (docs/plans/design-cross-version-import.md §"Slice
@@ -232,12 +288,18 @@ fn cmd_compile(m: &ArgMatches) -> anyhow::Result<()> {
                 .iter()
                 .any(|f| matches!(f.cst, rustyfi_loader::LoadedCst::V0_1(_)));
             if has_v01_dep {
-                rustyfi_lang::compile_document_v006_xver(&program.files, metrics)
-                    .map_err(|e| anyhow::anyhow!("{}: {e}", input.display()))?
+                rustyfi_lang::compile_document_v006_xver_with_aux(
+                    &program.files,
+                    metrics,
+                    &mut aux,
+                )
+                .map_err(|e| anyhow::anyhow!("{}: {e}", input.display()))?
+                .0
             } else {
                 let merged = merge_program(program);
-                rustyfi_lang::compile_document_cst(&merged, metrics)
+                rustyfi_lang::compile_document_cst_with_aux(&merged, metrics, &mut aux)
                     .map_err(|e| anyhow::anyhow!("{}: {e}", input.display()))?
+                    .0
             }
         }
     };
@@ -332,6 +394,14 @@ fn cmd_compile(m: &ArgMatches) -> anyhow::Result<()> {
         .with_context(|| format!("cannot write {}", output.display()))?;
 
     let line_count: usize = doc.pages.iter().map(|p| p.lines.len()).sum();
+
+    // Persist the cross-reference table for next time, so a forward reference
+    // resolves on the first trial (see `aux_path` above). Written only after a
+    // successful render, and only on the compile path — a cache hit returned
+    // long before here, leaving the previous run's file exactly as it was.
+    if let Some(path) = &aux_path {
+        write_aux(path, &aux);
+    }
 
     // Populate the cache for next time (best-effort: a cache-write failure
     // must never fail an otherwise-successful compile).

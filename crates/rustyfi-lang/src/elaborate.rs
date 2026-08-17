@@ -70,9 +70,31 @@ fn err<T>(span: Span, msg: impl Into<String>) -> Result<T, ElabError> {
 /// unchanged. Absent from the map means "no known optionals" — the
 /// overwhelmingly common case, and every existing name's default, so
 /// ordinary application is unaffected.
+/// Overlay size at which a [`Scope`]'s name set folds down into a fresh shared
+/// base — the same persistent split, and the same reason, as
+/// `typecheck::OVERLAY_CAP`.
+const NAMES_OVERLAY_CAP: usize = 64;
+
 #[derive(Clone, Debug)]
 pub struct Scope<'s> {
-    names: HashSet<String>,
+    /// The names in scope, split into a large SHARED base (`Rc`, cloned by a
+    /// refcount bump) and a small overlay of the most recent bindings, folded
+    /// into a fresh base once it reaches [`NAMES_OVERLAY_CAP`].
+    ///
+    /// `Scope::with` clones the whole scope per binding, which is the natural
+    /// way to write a lexical walk — but a flat `HashSet<String>` made that
+    /// O(program x scope): measured at 4-11 MILLION `String` allocations per
+    /// corpus document (~4-8k scope clones, each copying 1300-2600 names), and
+    /// the dominant cost of elaboration. Exactly the shape `TypeEnv` had before
+    /// it was made persistent.
+    ///
+    /// `Rc<str>` rather than `String` so even the capped overlay copy is
+    /// refcount bumps. The set is insert-only — nothing ever removes a name —
+    /// which is what makes the shared base sound without tombstones. (The two
+    /// maps below DO support removal, but they stay flat: they hold ~15 entries
+    /// where this holds thousands, 1-2% of the clone traffic.)
+    names_base: Rc<HashSet<Rc<str>>>,
+    names_overlay: HashSet<Rc<str>>,
     optional_shape: std::collections::HashMap<String, Vec<bool>>,
     /// A module member's bare (sibling-visible) local name → the ACTUAL Ast
     /// key its value is bound under (module-completion bug fix, see
@@ -127,7 +149,8 @@ impl<'s> Scope<'s> {
         version: RustyfiVersion,
     ) -> Scope<'s> {
         Scope {
-            names: names.into_iter().collect(),
+            names_base: Rc::new(names.into_iter().map(Rc::from).collect()),
+            names_overlay: HashSet::new(),
             optional_shape: std::collections::HashMap::new(),
             renames: std::collections::HashMap::new(),
             version,
@@ -157,9 +180,22 @@ impl<'s> Scope<'s> {
     /// leading function's arity — or an outer module member's qualified
     /// redirect — just by sharing its name.
     fn insert(&mut self, name: &str) {
-        self.names.insert(name.to_string());
+        self.names_overlay.insert(Rc::from(name));
+        self.promote_names();
         self.optional_shape.remove(name);
         self.renames.remove(name);
+    }
+
+    /// Fold the name overlay into a fresh shared base once it reaches
+    /// [`NAMES_OVERLAY_CAP`], bounding what every later `with` has to copy.
+    /// Amortized O(1) per binding, as in `typecheck::TypeEnv::maybe_promote`.
+    fn promote_names(&mut self) {
+        if self.names_overlay.len() < NAMES_OVERLAY_CAP {
+            return;
+        }
+        let mut base = (*self.names_base).clone();
+        base.extend(self.names_overlay.drain());
+        self.names_base = Rc::new(base);
     }
 
     /// Like [`Scope::insert`], but also records `name`'s full per-position
@@ -168,7 +204,8 @@ impl<'s> Scope<'s> {
     /// (`walk_bindings`'s `TopBinding::Let`/`LetInline`/`LetBlock`/`LetMath`
     /// arms, `Expr::LetIn`/`Expr::LetMathIn`).
     fn insert_with_shape(&mut self, name: &str, shape: Vec<bool>) {
-        self.names.insert(name.to_string());
+        self.names_overlay.insert(Rc::from(name));
+        self.promote_names();
         if shape.iter().any(|&opt| opt) {
             self.optional_shape.insert(name.to_string(), shape);
         } else {
@@ -207,7 +244,7 @@ impl<'s> Scope<'s> {
     }
 
     fn contains(&self, name: &str) -> bool {
-        self.names.contains(name)
+        self.names_overlay.contains(name) || self.names_base.contains(name)
     }
 
     /// `name`'s recorded leading-optional-parameter count (the maximal
@@ -235,14 +272,17 @@ impl<'s> Scope<'s> {
     /// which brings a module's `"M."`-prefixed names into unqualified
     /// scope). Sorted for deterministic alias-binding order.
     fn names_with_prefix(&self, prefix: &str) -> Vec<String> {
-        let mut out: Vec<String> = self
-            .names
+        // A `BTreeSet` gives the sorted, DEDUPLICATED result the flat
+        // `HashSet` did: a name re-inserted after a promotion can sit in both
+        // layers, and `open` binding an alias twice would not be harmless.
+        self.names_overlay
             .iter()
+            .chain(self.names_base.iter())
             .filter(|n| n.starts_with(prefix))
-            .cloned()
-            .collect();
-        out.sort();
-        out
+            .map(|n| n.to_string())
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect()
     }
 }
 

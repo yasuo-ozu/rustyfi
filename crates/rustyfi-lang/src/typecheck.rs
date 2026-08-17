@@ -484,8 +484,20 @@ const OVERLAY_CAP: usize = 64;
 /// shadow earlier — but `with`/`with_all` no longer copy the whole environment.
 #[derive(Clone, Default)]
 pub(crate) struct TypeEnv<'s> {
-    base: std::rc::Rc<HashMap<Symbol<'s>, PolyType>>,
-    overlay: HashMap<Symbol<'s>, PolyType>,
+    // Schemes are held by `Rc`, not by value. Every `with` clones the overlay,
+    // and a `PolyType` clone is a DEEP copy of its whole type tree — measured
+    // at 0.6M-1.8M type nodes copied per corpus document, an order of
+    // magnitude more than `instantiate` and `generalize` together, and the
+    // largest single cost left in typechecking. An `Rc` makes that clone a
+    // refcount bump.
+    //
+    // Sharing is sound because it changes nothing that was not already shared:
+    // cloning a `PolyType` copied the type's STRUCTURE but its `TyVarRef`s are
+    // `Rc<RefCell<..>>`, so the mutable cells unification writes through were
+    // common to every copy already. A `PolyType`'s structure is immutable once
+    // built.
+    base: std::rc::Rc<HashMap<Symbol<'s>, std::rc::Rc<PolyType>>>,
+    overlay: HashMap<Symbol<'s>, std::rc::Rc<PolyType>>,
     /// Slice X2b (`docs/plans/design-cross-version-import.md` §"Slice X2"): the
     /// set of names bound by a REAL program binding (`with`/`with_all`, not the
     /// `with_primitive` primitive-seeding loops). `version_scoped_type_env`
@@ -522,7 +534,7 @@ impl<'s> TypeEnv<'s> {
     pub(crate) fn with(&self, name: Symbol<'s>, poly: PolyType) -> TypeEnv<'s> {
         let mut e = self.clone();
         e.overlay_shadowed.insert(name);
-        e.overlay.insert(name, poly);
+        e.overlay.insert(name, std::rc::Rc::new(poly));
         e.maybe_promote();
         e
     }
@@ -537,13 +549,16 @@ impl<'s> TypeEnv<'s> {
     /// builtin" from "user-shadowed" (see its doc comment).
     fn with_primitive(&self, name: Symbol<'s>, poly: PolyType) -> TypeEnv<'s> {
         let mut e = self.clone();
-        e.overlay.insert(name, poly);
+        e.overlay.insert(name, std::rc::Rc::new(poly));
         e.maybe_promote();
         e
     }
 
     pub(crate) fn get(&self, name: Symbol<'s>) -> Option<&PolyType> {
-        self.overlay.get(&name).or_else(|| self.base.get(&name))
+        self.overlay
+            .get(&name)
+            .or_else(|| self.base.get(&name))
+            .map(|p| &**p)
     }
 
     /// Whether `name` was bound by a real program binding (Slice X2b) — the
@@ -558,7 +573,7 @@ impl<'s> TypeEnv<'s> {
         let mut e = self.clone();
         for (name, poly) in schemes {
             e.overlay_shadowed.insert(name);
-            e.overlay.insert(name, poly);
+            e.overlay.insert(name, std::rc::Rc::new(poly));
             e.maybe_promote();
         }
         e
@@ -734,7 +749,7 @@ fn mono_alpha_eq(
     rmap: &mut HashMap<usize, usize>,
     rmap_rev: &mut HashMap<usize, usize>,
 ) -> bool {
-    match (resolve(a), resolve(b)) {
+    match (&*resolve(a), &*resolve(b)) {
         (MonoType::Var(va), MonoType::Var(vb)) => {
             bijective_pair(va.ptr_key(), vb.ptr_key(), vmap, vmap_rev)
         }
@@ -782,7 +797,7 @@ fn row_alpha_eq(
     rmap: &mut HashMap<usize, usize>,
     rmap_rev: &mut HashMap<usize, usize>,
 ) -> bool {
-    match (resolve_row(a), resolve_row(b)) {
+    match (&*resolve_row(a), &*resolve_row(b)) {
         (Row::Empty, Row::Empty) => true,
         (Row::Var(va), Row::Var(vb)) => {
             bijective_pair(va.ptr_key(), vb.ptr_key(), rmap, rmap_rev)
@@ -1866,7 +1881,7 @@ impl<'s> Checker<'s> {
             (t_block_boxes(), "block", "inline")
         };
 
-        match resolve(&tv) {
+        match &*resolve(&tv) {
             MonoType::InlineCmd(_) if is_inline => {
                 return Ok(generalize(self.ctx.level(), &tv));
             }
@@ -1926,7 +1941,7 @@ impl<'s> Checker<'s> {
             // `Ast::Lambda`, which infers `Row::Empty` — `prim_types::arrow`)
             // — guard it defensively rather than silently dropping/mis-
             // attributing a label (risk 1 of the spec).
-            if !matches!(resolve_row(&ctx_row), Row::Empty) {
+            if !matches!(&*resolve_row(&ctx_row), Row::Empty) {
                 return Err(TypeError::simple(
                     span,
                     format!(
@@ -1988,7 +2003,7 @@ impl<'s> Checker<'s> {
             // it in `option(..)` per call, since call-site args always arrive
             // pre-wrapped as `Some`/`None` (`elaborate.rs`'s `app_arg_to_ast`).
             doms.into_iter()
-                .map(|d| match resolve(&d) {
+                .map(|d| match resolve(&d).into_owned() {
                     MonoType::Variant(vname, mut vargs) if vname == "option" && vargs.len() == 1 => {
                         optional(vargs.pop().unwrap())
                     }
@@ -2028,7 +2043,7 @@ impl<'s> Checker<'s> {
         )?;
         let params: Vec<CmdArgType> = doms
             .into_iter()
-            .map(|d| match resolve(&d) {
+            .map(|d| match resolve(&d).into_owned() {
                 MonoType::Variant(vname, mut vargs) if vname == "option" && vargs.len() == 1 => {
                     optional(vargs.pop().unwrap())
                 }
@@ -2082,7 +2097,7 @@ impl<'s> Checker<'s> {
         let (row_sub, d_sub) = slots.pop().unwrap();
         let (row_ctx, d_ctx) = slots.pop().unwrap();
         for (which, row) in [("context", &row_ctx), ("'sub'", &row_sub), ("'sup'", &row_sup)] {
-            if !matches!(resolve_row(row), Row::Empty) {
+            if !matches!(&*resolve_row(row), Row::Empty) {
                 return Err(TypeError::simple(
                     span,
                     format!(
@@ -2961,7 +2976,7 @@ impl<'s> Checker<'s> {
                         ))
                     }
                 };
-                match resolve(&tcmd) {
+                match &*resolve(&tcmd) {
                     MonoType::InlineCmd(params) => {
                         self.check_cmd_args(env, self.text(*name), *span, &params, args)
                     }
@@ -3020,7 +3035,7 @@ impl<'s> Checker<'s> {
                         ))
                     }
                 };
-                match resolve(&tcmd) {
+                match &*resolve(&tcmd) {
                     MonoType::BlockCmd(params) => {
                         self.check_cmd_args(env, self.text(*name), *span, &params, args)
                     }
@@ -3090,7 +3105,7 @@ impl<'s> Checker<'s> {
                         ))
                     }
                 };
-                match resolve(&tcmd) {
+                match &*resolve(&tcmd) {
                     MonoType::MathCmd(params) => {
                         self.check_cmd_args(env, self.text(*name), *span, &params, args)
                     }
@@ -3157,7 +3172,8 @@ fn peel_func_chain(ty: MonoType) -> (Vec<MonoType>, MonoType) {
     let mut doms = Vec::new();
     let mut cur = ty;
     loop {
-        match resolve(&cur) {
+        // Owned: this walk moves each arrow's domain/codomain out.
+        match resolve(&cur).into_owned() {
             MonoType::Func(_row, dom, cod) => {
                 doms.push(*dom);
                 cur = *cod;
@@ -3179,7 +3195,8 @@ fn peel_func_chain_rows(ty: MonoType) -> (Vec<(Row, MonoType)>, MonoType) {
     let mut slots = Vec::new();
     let mut cur = ty;
     loop {
-        match resolve(&cur) {
+        // Owned, as in `peel_func_chain`.
+        match resolve(&cur).into_owned() {
             MonoType::Func(row, dom, cod) => {
                 slots.push((*row, *dom));
                 cur = *cod;
@@ -3202,14 +3219,14 @@ fn peel_func_chain_rows(ty: MonoType) -> (Vec<(Row, MonoType)>, MonoType) {
 /// identically.
 fn harvest_slot(row: Row, dom: MonoType) -> CmdArgType {
     let mut opt_labels: Vec<(String, MonoType)> = Vec::new();
-    let mut cur = resolve_row(&row);
+    let mut cur = resolve_row(&row).into_owned();
     loop {
         match cur {
             Row::Empty => break,
             Row::Var(_) => break,
             Row::Cons(label, lty, rest) => {
                 opt_labels.push((label, *lty));
-                cur = resolve_row(&rest);
+                cur = resolve_row(&rest).into_owned();
             }
         }
     }

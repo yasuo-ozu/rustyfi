@@ -513,6 +513,64 @@ fn math_fixture_renders_superscript_raised_and_scaled() {
     );
 }
 
+/// Compile the 2-trial hook-page fixture against an auxiliary cross-reference
+/// table, returning the PDF, the trial count, and the table the run produced.
+fn compile_hook_page_with_aux(
+    aux: &mut rustyfi_lang::crossref::AuxTable,
+) -> (Vec<u8>, u32) {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hook-page.saty");
+    let merged = load_and_merge(&fixture);
+    let metrics = rustyfi_pdf::Base14Metrics;
+    let (doc, trials) = rustyfi_lang::compile_document_cst_with_aux(&merged, &metrics, aux)
+        .expect("hook-page fixture must compile");
+    let bytes = rustyfi_pdf::render_pdf(&doc.geometry, &doc.pages, &doc.images)
+        .expect("PDF rendering must succeed");
+    (bytes, trials)
+}
+
+/// The auxiliary file's whole point: seeding the cross-reference fixpoint from
+/// a previous run resolves a forward reference on the FIRST trial, where a cold
+/// run needs a second — and produces exactly the same document either way.
+///
+/// `hook-page.saty` is the fixture that provably needs two trials cold (see
+/// the test above), which is what makes the 2 -> 1 drop meaningful here.
+#[test]
+fn an_auxiliary_table_resolves_the_fixture_in_one_trial_with_identical_output() {
+    let mut aux = rustyfi_lang::crossref::AuxTable::new();
+    let (cold, cold_trials) = compile_hook_page_with_aux(&mut aux);
+    assert_eq!(cold_trials, 2, "cold, this fixture takes two trials");
+    assert!(!aux.is_empty(), "the run must leave a table to carry forward");
+
+    let (warm, warm_trials) = compile_hook_page_with_aux(&mut aux);
+    assert_eq!(warm_trials, 1, "seeded, the forward reference resolves at once");
+    assert_eq!(
+        cold, warm,
+        "an auxiliary table may change how fast the fixpoint converges, never \
+         what it converges to"
+    );
+}
+
+/// Seeding cannot freeze a wrong answer. A seeded value the layout reads and
+/// the run then contradicts marks the layout stale exactly as an in-run value
+/// would, so the fixpoint still converges on the correct document.
+#[test]
+fn a_wrong_auxiliary_table_still_converges_to_the_same_document() {
+    let mut aux = rustyfi_lang::crossref::AuxTable::new();
+    let (cold, _) = compile_hook_page_with_aux(&mut aux);
+
+    // Corrupt every value the previous run recorded.
+    let poisoned: rustyfi_lang::crossref::AuxTable = aux
+        .keys()
+        .map(|k| (k.clone(), "999".to_string()))
+        .collect();
+    let mut poisoned = poisoned;
+    let (out, _) = compile_hook_page_with_aux(&mut poisoned);
+    assert_eq!(
+        cold, out,
+        "a poisoned auxiliary table must not survive into the output"
+    );
+}
+
 fn compile_hook_page_fixture() -> (Vec<u8>, u32) {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hook-page.saty");
     let merged = load_and_merge(&fixture);

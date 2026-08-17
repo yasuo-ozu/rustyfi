@@ -35,7 +35,7 @@ fn unify_links_a_variable_left_to_right() {
     let v = ctx.fresh_var();
     let var_ty = MonoType::Var(v.clone());
     unify(&var_ty, &t_int()).unwrap();
-    assert!(matches!(types::resolve(&var_ty), MonoType::Base(BaseType::Int)));
+    assert!(matches!(&*types::resolve(&var_ty), MonoType::Base(BaseType::Int)));
 }
 
 #[test]
@@ -44,7 +44,7 @@ fn unify_links_a_variable_right_to_left() {
     let v = ctx.fresh_var();
     let var_ty = MonoType::Var(v.clone());
     unify(&t_int(), &var_ty).unwrap();
-    assert!(matches!(types::resolve(&var_ty), MonoType::Base(BaseType::Int)));
+    assert!(matches!(&*types::resolve(&var_ty), MonoType::Base(BaseType::Int)));
 }
 
 #[test]
@@ -55,7 +55,7 @@ fn two_variables_unify_to_the_same_representative() {
     unify(&MonoType::Var(v1.clone()), &MonoType::Var(v2.clone())).unwrap();
     // Resolving either one and then unifying with a concrete type pins both.
     unify(&MonoType::Var(v1.clone()), &t_string()).unwrap();
-    assert!(matches!(types::resolve(&MonoType::Var(v2)), MonoType::Base(BaseType::String)));
+    assert!(matches!(&*types::resolve(&MonoType::Var(v2)), MonoType::Base(BaseType::String)));
 }
 
 // ============================================================================
@@ -105,8 +105,8 @@ fn func_types_unify_argument_and_result_wise() {
     let concrete = arrow(t_int(), t_bool());
     let generic = arrow(MonoType::Var(a.clone()), MonoType::Var(b.clone()));
     unify(&generic, &concrete).unwrap();
-    assert!(matches!(types::resolve(&MonoType::Var(a)), MonoType::Base(BaseType::Int)));
-    assert!(matches!(types::resolve(&MonoType::Var(b)), MonoType::Base(BaseType::Bool)));
+    assert!(matches!(&*types::resolve(&MonoType::Var(a)), MonoType::Base(BaseType::Int)));
+    assert!(matches!(&*types::resolve(&MonoType::Var(b)), MonoType::Base(BaseType::Bool)));
 }
 
 #[test]
@@ -129,7 +129,7 @@ fn list_types_unify_through_their_element_type() {
     let mut ctx = TypeContext::new();
     let v = ctx.fresh_var();
     unify(&list(MonoType::Var(v.clone())), &list(t_int())).unwrap();
-    assert!(matches!(types::resolve(&MonoType::Var(v)), MonoType::Base(BaseType::Int)));
+    assert!(matches!(&*types::resolve(&MonoType::Var(v)), MonoType::Base(BaseType::Int)));
 }
 
 #[test]
@@ -137,7 +137,7 @@ fn ref_types_unify_through_their_pointee_type() {
     let mut ctx = TypeContext::new();
     let v = ctx.fresh_var();
     unify(&reff(MonoType::Var(v.clone())), &reff(t_int())).unwrap();
-    assert!(matches!(types::resolve(&MonoType::Var(v)), MonoType::Base(BaseType::Int)));
+    assert!(matches!(&*types::resolve(&MonoType::Var(v)), MonoType::Base(BaseType::Int)));
 }
 
 // ============================================================================
@@ -187,23 +187,23 @@ fn open_row_var_subsumes_a_bigger_closed_row_leaving_it_fully_closed() {
     // extraction (see `unify::row_extract`): it now contains exactly `a`
     // and `b`, with nothing left open.
     let mut seen = Vec::new();
-    let mut cur = resolve_row(&Row::Var(rv));
+    let mut cur = resolve_row(&Row::Var(rv)).into_owned();
     loop {
         match cur {
             Row::Empty => break,
             Row::Var(_) => panic!("row should have been fully closed by subsumption"),
             Row::Cons(label, ty, rest) => {
                 seen.push((label, ty));
-                cur = resolve_row(&rest);
+                cur = resolve_row(&rest).into_owned();
             }
         }
     }
     seen.sort_by(|a, b| a.0.cmp(&b.0));
     assert_eq!(seen.len(), 2);
     assert_eq!(seen[0].0, "a");
-    assert!(matches!(types::resolve(&seen[0].1), MonoType::Base(BaseType::Int)));
+    assert!(matches!(&*types::resolve(&seen[0].1), MonoType::Base(BaseType::Int)));
     assert_eq!(seen[1].0, "b");
-    assert!(matches!(types::resolve(&seen[1].1), MonoType::Base(BaseType::String)));
+    assert!(matches!(&*types::resolve(&seen[1].1), MonoType::Base(BaseType::String)));
 }
 
 #[test]
@@ -216,7 +216,7 @@ fn two_open_row_vars_unify_by_linking_and_union_their_kinds() {
 
     // Whichever one ended up as the representative carries the union of
     // both required-label sets.
-    let rep = match resolve_row(&Row::Var(rv1)) {
+    let rep = match resolve_row(&Row::Var(rv1)).into_owned() {
         Row::Var(v) => v,
         other => panic!("expected an unresolved row variable, got {other:?}"),
     };
@@ -318,7 +318,7 @@ fn a_variable_from_an_outer_level_does_not_generalize() {
 
     // The outer variable is untouched by instantiation: both bodies still
     // share the very same `outer` cell.
-    let (MonoType::Var(o1), MonoType::Var(o2)) = (types::resolve(&dom1), types::resolve(&dom2)) else {
+    let (MonoType::Var(o1), MonoType::Var(o2)) = (&*types::resolve(&dom1), &*types::resolve(&dom2)) else {
         panic!("expected variables");
     };
     assert!(o1.same(&o2));
@@ -326,7 +326,7 @@ fn a_variable_from_an_outer_level_does_not_generalize() {
 
     // The inner (generalized) variable, on the other hand, is fresh each
     // instantiation.
-    let (MonoType::Var(i1), MonoType::Var(i2)) = (types::resolve(&cod1), types::resolve(&cod2)) else {
+    let (MonoType::Var(i1), MonoType::Var(i2)) = (&*types::resolve(&cod1), &*types::resolve(&cod2)) else {
         panic!("expected variables");
     };
     assert!(!i1.same(&i2));

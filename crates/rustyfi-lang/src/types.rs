@@ -14,6 +14,7 @@
 //!    `RecordType` plus a plain type variable that merely carries a
 //!    `RecordKind` label-subset constraint. See [`Row`].
 
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap};
 use std::fmt;
@@ -456,31 +457,48 @@ pub enum Row {
 /// unresolved) — callers that need a fully dereferenced tree should
 /// `resolve` again at each level as they recurse, which is exactly what
 /// `unify` and `Display` do.
-pub fn resolve(ty: &MonoType) -> MonoType {
+///
+/// # Why `Cow`
+///
+/// This is the hottest function in the typechecker — ~316k calls on a corpus
+/// document, and its cost is dominated by COPYING types, not by following
+/// links. It used to return an owned `MonoType`, which meant the common case
+/// (the argument is already resolved: not a variable, or a free one) ended in
+/// `ty.clone()` — a full deep copy of a type produced solely to hand back an
+/// owned value the caller then only inspected. Measured, that pointless tail
+/// copy was **87-89% of all type nodes cloned during typechecking**, and
+/// typecheck time tracks cloned-node volume near-linearly across the whole
+/// corpus.
+///
+/// So the common case now borrows. Only the link-following path allocates,
+/// and only because the `Bound` payload lives behind a `RefCell` whose guard
+/// cannot outlive this frame. Callers that just match on the result want
+/// `&*resolve(..)`; the few that keep it want `.into_owned()`.
+pub fn resolve(ty: &MonoType) -> Cow<'_, MonoType> {
     if let MonoType::Var(v) = ty {
         let next = match &*v.0.borrow() {
             TyVarLink::Bound(inner) => Some(inner.clone()),
             TyVarLink::Free { .. } => None,
         };
         if let Some(inner) = next {
-            return resolve(&inner);
+            return Cow::Owned(resolve(&inner).into_owned());
         }
     }
-    ty.clone()
+    Cow::Borrowed(ty)
 }
 
-/// The row analogue of [`resolve`].
-pub fn resolve_row(row: &Row) -> Row {
+/// The row analogue of [`resolve`], `Cow` for the same reason.
+pub fn resolve_row(row: &Row) -> Cow<'_, Row> {
     if let Row::Var(v) = row {
         let next = match &*v.0.borrow() {
             RowVarLink::Bound(inner) => Some(inner.clone()),
             RowVarLink::Free { .. } => None,
         };
         if let Some(inner) = next {
-            return resolve_row(&inner);
+            return Cow::Owned(resolve_row(&inner).into_owned());
         }
     }
-    row.clone()
+    Cow::Borrowed(row)
 }
 
 // ============================================================================
@@ -643,11 +661,11 @@ fn collect_generalizable(
     vars: &mut Vec<TyVarRef>,
     row_vars: &mut Vec<RowVarRef>,
 ) {
-    match resolve(ty) {
+    match &*resolve(ty) {
         MonoType::Var(v) => {
             if let Some(lv) = v.level() {
-                if lv > level && !vars.iter().any(|x| x.same(&v)) {
-                    vars.push(v);
+                if lv > level && !vars.iter().any(|x| x.same(v)) {
+                    vars.push(v.clone());
                 }
             }
         }
@@ -658,19 +676,19 @@ fn collect_generalizable(
             collect_generalizable(level, &b, vars, row_vars);
         }
         MonoType::Product(ts) => {
-            for t in &ts {
+            for t in ts {
                 collect_generalizable(level, t, vars, row_vars);
             }
         }
         MonoType::List(t) | MonoType::Ref(t) => collect_generalizable(level, &t, vars, row_vars),
         MonoType::Record(row) => collect_generalizable_row(level, &row, vars, row_vars),
         MonoType::Variant(_, args) => {
-            for t in &args {
+            for t in args {
                 collect_generalizable(level, t, vars, row_vars);
             }
         }
         MonoType::InlineCmd(cs) | MonoType::BlockCmd(cs) | MonoType::MathCmd(cs) => {
-            for c in &cs {
+            for c in cs {
                 collect_generalizable(level, &c.ty, vars, row_vars);
                 for (_, lty) in &c.opt_labels {
                     collect_generalizable(level, lty, vars, row_vars);
@@ -686,12 +704,12 @@ fn collect_generalizable_row(
     vars: &mut Vec<TyVarRef>,
     row_vars: &mut Vec<RowVarRef>,
 ) {
-    match resolve_row(row) {
+    match &*resolve_row(row) {
         Row::Empty => {}
         Row::Var(v) => {
             if let Some(lv) = v.level() {
-                if lv > level && !row_vars.iter().any(|x| x.same(&v)) {
-                    row_vars.push(v);
+                if lv > level && !row_vars.iter().any(|x| x.same(v)) {
+                    row_vars.push(v.clone());
                 }
             }
         }
@@ -733,12 +751,12 @@ pub(crate) fn substitute(
     var_map: &HashMap<usize, MonoType>,
     row_map: &HashMap<usize, Row>,
 ) -> MonoType {
-    match resolve(ty) {
+    match &*resolve(ty) {
         MonoType::Var(v) => var_map
             .get(&v.ptr_key())
             .cloned()
-            .unwrap_or(MonoType::Var(v)),
-        MonoType::Base(b) => MonoType::Base(b),
+            .unwrap_or_else(|| MonoType::Var(v.clone())),
+        MonoType::Base(b) => MonoType::Base(*b),
         MonoType::Func(row, a, b) => MonoType::Func(
             Box::new(substitute_row(&row, var_map, row_map)),
             Box::new(substitute(&a, var_map, row_map)),
@@ -751,7 +769,7 @@ pub(crate) fn substitute(
         MonoType::Ref(t) => MonoType::Ref(Box::new(substitute(&t, var_map, row_map))),
         MonoType::Record(row) => MonoType::Record(substitute_row(&row, var_map, row_map)),
         MonoType::Variant(name, args) => MonoType::Variant(
-            name,
+            name.clone(),
             args.iter().map(|t| substitute(t, var_map, row_map)).collect(),
         ),
         MonoType::InlineCmd(cs) => MonoType::InlineCmd(substitute_cmd_args(&cs, var_map, row_map)),
@@ -765,11 +783,14 @@ pub(crate) fn substitute_row(
     var_map: &HashMap<usize, MonoType>,
     row_map: &HashMap<usize, Row>,
 ) -> Row {
-    match resolve_row(row) {
+    match &*resolve_row(row) {
         Row::Empty => Row::Empty,
-        Row::Var(v) => row_map.get(&v.ptr_key()).cloned().unwrap_or(Row::Var(v)),
+        Row::Var(v) => row_map
+            .get(&v.ptr_key())
+            .cloned()
+            .unwrap_or_else(|| Row::Var(v.clone())),
         Row::Cons(label, t, rest) => Row::Cons(
-            label,
+            label.clone(),
             Box::new(substitute(&t, var_map, row_map)),
             Box::new(substitute_row(&rest, var_map, row_map)),
         ),
@@ -882,7 +903,7 @@ fn fmt_operand(ty: &MonoType, f: &mut fmt::Formatter<'_>, namer: &mut VarNamer) 
 
 fn fmt_mono(ty: &MonoType, f: &mut fmt::Formatter<'_>, namer: &mut VarNamer) -> fmt::Result {
     let ty = resolve(ty);
-    match &ty {
+    match &*ty {
         MonoType::Var(v) => write!(f, "{}", namer.name_for(v.ptr_key())),
         MonoType::Base(b) => write!(f, "{b}"),
         MonoType::Func(row, dom, cod) => {
@@ -996,14 +1017,14 @@ fn fmt_opt_labels(
 /// …) ` (a free-var tail adding `| ?'rN`) for a non-empty 0.1 row.
 fn fmt_func_row(row: &Row, f: &mut fmt::Formatter<'_>, namer: &mut VarNamer) -> fmt::Result {
     let mut fields: Vec<(String, MonoType)> = Vec::new();
-    let mut cur = resolve_row(row);
+    let mut cur = resolve_row(row).into_owned();
     let tail_name = loop {
         match cur {
             Row::Empty => break None,
             Row::Var(v) => break Some(namer.name_for(v.ptr_key())),
             Row::Cons(label, ty, rest) => {
                 fields.push((label, *ty));
-                cur = resolve_row(&rest);
+                cur = resolve_row(&rest).into_owned();
             }
         }
     };
@@ -1030,14 +1051,14 @@ fn fmt_func_row(row: &Row, f: &mut fmt::Formatter<'_>, namer: &mut VarNamer) -> 
 
 fn fmt_row(row: &Row, f: &mut fmt::Formatter<'_>, namer: &mut VarNamer) -> fmt::Result {
     let mut fields: Vec<(String, MonoType)> = Vec::new();
-    let mut cur = resolve_row(row);
+    let mut cur = resolve_row(row).into_owned();
     let tail_name = loop {
         match cur {
             Row::Empty => break None,
             Row::Var(v) => break Some(namer.name_for(v.ptr_key())),
             Row::Cons(label, ty, rest) => {
                 fields.push((label, *ty));
-                cur = resolve_row(&rest);
+                cur = resolve_row(&rest).into_owned();
             }
         }
     };

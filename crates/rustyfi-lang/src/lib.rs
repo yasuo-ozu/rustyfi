@@ -97,6 +97,19 @@ pub fn compile_document_cst_with_trials(
     file: &rustyfi_syntax::cst::File,
     metrics: &dyn FontMetrics,
 ) -> Result<(std::rc::Rc<DocumentValue>, u32), CompileError> {
+    compile_document_cst_with_aux(file, metrics, &mut crossref::AuxTable::new())
+}
+
+/// [`compile_document_cst_with_trials`] threading an AUXILIARY cross-reference table: `aux` seeds the
+/// fixpoint from a previous run and is overwritten with the final table.
+/// Seeding only affects how fast the fixpoint converges — see
+/// [`crossref::CrossRefs::seeded`] and [`crossref::CrossRefs::seed_unvalidated`],
+/// which together guarantee the output is the same as a cold run's.
+pub fn compile_document_cst_with_aux(
+    file: &rustyfi_syntax::cst::File,
+    metrics: &dyn FontMetrics,
+    aux: &mut crossref::AuxTable,
+) -> Result<(std::rc::Rc<DocumentValue>, u32), CompileError> {
     let timing = std::env::var_os("RUSTYFI_TIMING").is_some();
     let t = std::time::Instant::now();
     let env0 = primitives::base_env();
@@ -137,7 +150,12 @@ pub fn compile_document_cst_with_trials(
     if timing {
         eprintln!("TIMING   compile-tree     {:>8.1}ms", t.elapsed().as_secs_f64() * 1e3);
     }
-    eval_document_trials(&compiled, metrics, rustyfi_syntax::RustyfiVersion::V0_0_6)
+    eval_document_trials(
+        &compiled,
+        metrics,
+        rustyfi_syntax::RustyfiVersion::V0_0_6,
+        aux,
+    )
 }
 
 /// The compile-once + fixpoint-trial tail shared by the `V0_0_6` and `V0_1`
@@ -152,12 +170,42 @@ fn eval_document_trials(
     compiled: &compile::CompiledExpr,
     metrics: &dyn FontMetrics,
     version: rustyfi_syntax::RustyfiVersion,
+    aux: &mut crossref::AuxTable,
 ) -> Result<(std::rc::Rc<DocumentValue>, u32), CompileError> {
+    // Seed the fixpoint from the previous run's auxiliary table, if any, then
+    // police the result: if the final trial READ a seeded value it never
+    // re-derived, the layout depended on something this run cannot verify, so
+    // redo cold. That is what keeps a warm build byte-identical to a cold one
+    // — the aux file may only change how FAST the fixpoint converges, never
+    // what it converges to (see `CrossRefs::seed_unvalidated`).
+    if !aux.is_empty() {
+        let (doc, trials, table, unvalidated) =
+            eval_trials_seeded(compiled, metrics, version, aux.clone())?;
+        if !unvalidated {
+            *aux = table;
+            return Ok((doc, trials));
+        }
+    }
+    let (doc, trials, table, _) =
+        eval_trials_seeded(compiled, metrics, version, crossref::AuxTable::new())?;
+    *aux = table;
+    Ok((doc, trials))
+}
+
+/// One complete fixpoint run against `seed`. Returns the final cross-reference
+/// table alongside the document, plus whether the seed turned out to be
+/// load-bearing but unverified ([`CrossRefs::seed_unvalidated`]).
+fn eval_trials_seeded(
+    compiled: &compile::CompiledExpr,
+    metrics: &dyn FontMetrics,
+    version: rustyfi_syntax::RustyfiVersion,
+    seed: crossref::AuxTable,
+) -> Result<(std::rc::Rc<DocumentValue>, u32, crossref::AuxTable, bool), CompileError> {
     // The cross-reference table persists across trials — it *is* the
     // fixpoint state (docs/plans/hooks-annotations-crossref.md's Risks:
     // "what resets per trial vs what persists").
     let timing = std::env::var_os("RUSTYFI_TIMING").is_some();
-    let crossrefs = Rc::new(RefCell::new(CrossRefs::new()));
+    let crossrefs = Rc::new(RefCell::new(CrossRefs::seeded(seed)));
     let mut trials = 0u32;
     loop {
         trials += 1;
@@ -199,7 +247,8 @@ fn eval_document_trials(
                 t_hooks.elapsed().as_secs_f64() * 1e3
             );
         }
-        match crossrefs.borrow_mut().verdict() {
+        let verdict = crossrefs.borrow_mut().verdict();
+        match verdict {
             Verdict::NeedsAnotherTrial => continue,
             Verdict::CanTerminate(_) | Verdict::CountMax => {
                 // Attach the final trial's accumulated extras. `doc` is
@@ -218,7 +267,13 @@ fn eval_document_trials(
                 // as `extras` above (only known once `fire_hooks` has run).
                 final_doc.reflow_links = std::mem::take(&mut interp.link_decos);
                 final_doc.reflow_dests = std::mem::take(&mut interp.dest_decos);
-                return Ok((Rc::new(final_doc), trials));
+                let refs = crossrefs.borrow();
+                return Ok((
+                    Rc::new(final_doc),
+                    trials,
+                    refs.export(),
+                    refs.seed_unvalidated(),
+                ));
             }
         }
     }
@@ -248,6 +303,19 @@ pub fn compile_document_v1(
 pub fn compile_document_v1_with_trials(
     files: &[rustyfi_loader::LoadedFile],
     metrics: &dyn FontMetrics,
+) -> Result<(std::rc::Rc<DocumentValue>, u32), CompileError> {
+    compile_document_v1_with_aux(files, metrics, &mut crossref::AuxTable::new())
+}
+
+/// [`compile_document_v1_with_trials`] threading an AUXILIARY cross-reference table: `aux` seeds the
+/// fixpoint from a previous run and is overwritten with the final table.
+/// Seeding only affects how fast the fixpoint converges — see
+/// [`crossref::CrossRefs::seeded`] and [`crossref::CrossRefs::seed_unvalidated`],
+/// which together guarantee the output is the same as a cold run's.
+pub fn compile_document_v1_with_aux(
+    files: &[rustyfi_loader::LoadedFile],
+    metrics: &dyn FontMetrics,
+    aux: &mut crossref::AuxTable,
 ) -> Result<(std::rc::Rc<DocumentValue>, u32), CompileError> {
     use rustyfi_syntax::RustyfiVersion;
 
@@ -533,7 +601,7 @@ pub fn compile_document_v1_with_trials(
         let env0_v006 = primitives::base_env_with_version(RustyfiVersion::V0_0_6);
         compile::compile_program_xver(&body, &env0, &env0_v006)
     };
-    eval_document_trials(&compiled, metrics, RustyfiVersion::V0_1)
+    eval_document_trials(&compiled, metrics, RustyfiVersion::V0_1, aux)
 }
 
 /// Compile a loader-resolved SATySFi 0.0.6 program (`LoadOptions { version:
@@ -576,6 +644,19 @@ pub fn compile_document_v006_xver(
 pub fn compile_document_v006_xver_with_trials(
     files: &[rustyfi_loader::LoadedFile],
     metrics: &dyn FontMetrics,
+) -> Result<(std::rc::Rc<DocumentValue>, u32), CompileError> {
+    compile_document_v006_xver_with_aux(files, metrics, &mut crossref::AuxTable::new())
+}
+
+/// [`compile_document_v006_xver_with_trials`] threading an AUXILIARY cross-reference table: `aux` seeds the
+/// fixpoint from a previous run and is overwritten with the final table.
+/// Seeding only affects how fast the fixpoint converges — see
+/// [`crossref::CrossRefs::seeded`] and [`crossref::CrossRefs::seed_unvalidated`],
+/// which together guarantee the output is the same as a cold run's.
+pub fn compile_document_v006_xver_with_aux(
+    files: &[rustyfi_loader::LoadedFile],
+    metrics: &dyn FontMetrics,
+    aux: &mut crossref::AuxTable,
 ) -> Result<(std::rc::Rc<DocumentValue>, u32), CompileError> {
     use rustyfi_syntax::RustyfiVersion;
 
@@ -805,7 +886,7 @@ pub fn compile_document_v006_xver_with_trials(
     // trials (see `compile_document_cst_with_trials`).
     let body = ast::debrand(&program.body, &store);
     let compiled = compile::compile_program_xver(&body, &env0, &env0_v006);
-    eval_document_trials(&compiled, metrics, RustyfiVersion::V0_0_6)
+    eval_document_trials(&compiled, metrics, RustyfiVersion::V0_0_6, aux)
 }
 
 // ============================================================================

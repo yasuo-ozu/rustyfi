@@ -28,12 +28,14 @@ rustyfi-satyrographos.workspace = true
 clap.workspace = true
 anyhow.workspace = true
 sha2.workspace = true
+# The auxiliary cross-reference file (`<doc>.satysfi-aux`) is upstream
+# SATySFi's flat JSON object, so reading/writing it byte-compatibly wants a
+# real JSON implementation rather than hand-rolled escaping. Already in this
+# binary's dependency graph via rustyfi-pdf — declaring it adds no crate.
+serde_json = "1"
+
 
 [dev-dependencies]
-# Test-only: tests/fonts.rs writes a temporary fonts.rustyfi-hash /
-# default-font.rustyfi-hash pair and uses serde_json to serialize the paths
-# correctly (rather than hand-formatting JSON strings).
-serde_json = "1"
 # Test-only image decoding, kept available to this crate's test suite. Already
 # a root workspace dependency (`image 0.25`, `png`+`jpeg` features), so this is
 # not a new dependency — it reuses the pinned version. (Its former consumer,

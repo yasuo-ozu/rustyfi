@@ -128,9 +128,27 @@ fn compile_command(name: &'static str) -> Command {
                     "Print a per-phase wall-clock breakdown to stderr \
                      (load / elaborate / typecheck / eval trials / render), for \
                      performance evaluation. Implies --no-cache so every phase \
-                     actually runs.",
+                     actually runs (it does NOT imply --no-aux: an aux file \
+                     skips no phase, it only changes the fixpoint trial count).",
                 )
                 .action(ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("no_aux")
+                .long("no-aux")
+                .help(
+                    "Do not read or write the auxiliary cross-reference file.                      By default a compile seeds its cross-reference fixpoint                      from `<doc>.satysfi-aux` (same name and JSON format                      upstream SATySFi uses, so the two interoperate) and                      rewrites it afterwards, which lets a forward reference                      resolve on the first trial instead of forcing a second.                      Output is identical either way. Implied by --timing.",
+                )
+                .action(ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("aux_file")
+                .long("aux-file")
+                .value_name("FILE")
+                .help(
+                    "Override the auxiliary cross-reference file's path                      (default: the input document's path with its extension                      replaced by `.satysfi-aux`).",
+                )
+                .value_parser(value_parser!(PathBuf)),
         )
         .arg(
             Arg::new("cache_dir")

@@ -109,19 +109,27 @@ struct LineMetrics {
     has_glue: bool,
 }
 
-fn measure(line: &[PureHorzBox]) -> LineMetrics {
-    let mut natural = Length::ZERO;
-    let mut stretch = Length::ZERO;
-    let mut shrink = Length::ZERO;
-    let mut has_fil = false;
-    let mut has_glue = false;
-    let mut cjk_natural = Length::ZERO;
-    for bx in line {
+impl LineMetrics {
+    fn empty() -> LineMetrics {
+        LineMetrics {
+            natural: Length::ZERO,
+            stretch: Length::ZERO,
+            shrink: Length::ZERO,
+            has_fil: false,
+            has_glue: false,
+            cjk_natural: Length::ZERO,
+        }
+    }
+
+    /// Fold one box into the running metrics. Extracted from [`measure`] so
+    /// that [`measure_range`] can accumulate over a line WITHOUT materializing
+    /// it — see that function.
+    fn push(&mut self, bx: &PureHorzBox) {
         match bx {
             PureHorzBox::InnerString { width, text, .. } => {
-                natural += *width;
+                self.natural += *width;
                 if text.chars().any(is_cjk) {
-                    cjk_natural += *width;
+                    self.cjk_natural += *width;
                 }
             }
             PureHorzBox::OuterEmpty {
@@ -129,14 +137,14 @@ fn measure(line: &[PureHorzBox]) -> LineMetrics {
                 shrinkable,
                 stretchable,
             } => {
-                natural += *n;
-                stretch += *stretchable;
-                shrink += *shrinkable;
-                has_glue = true;
+                self.natural += *n;
+                self.stretch += *stretchable;
+                self.shrink += *shrinkable;
+                self.has_glue = true;
             }
-            PureHorzBox::OuterFil => has_fil = true,
-            PureHorzBox::FixedEmpty { width } => natural += *width,
-            PureHorzBox::Image { width, .. } => natural += *width,
+            PureHorzBox::OuterFil => self.has_fil = true,
+            PureHorzBox::FixedEmpty { width } => self.natural += *width,
+            PureHorzBox::Image { width, .. } => self.natural += *width,
             // §4 (hyphenation): a discretionary that does NOT end this line
             // renders its `no_break` slot (matches `hbox.rs::natural_width`
             // and upstream's `get_leftmost/rightmost` no-break choice) —
@@ -144,19 +152,19 @@ fn measure(line: &[PureHorzBox]) -> LineMetrics {
             // no-op until §4 fills `no_break`.
             PureHorzBox::Discretionary { no_break, .. } => {
                 for b in no_break {
-                    natural += b.natural_width();
+                    self.natural += b.natural_width();
                 }
             }
-            PureHorzBox::Graphics { width, .. } => natural += *width,
+            PureHorzBox::Graphics { width, .. } => self.natural += *width,
             // Counted as a fil for width purposes (upstream `Fils(1)`), same
             // as `OuterFil` above — no `natural` contribution.
-            PureHorzBox::GraphicsOuter { .. } => has_fil = true,
-            PureHorzBox::Math { width, .. } => natural += *width,
+            PureHorzBox::GraphicsOuter { .. } => self.has_fil = true,
+            PureHorzBox::Math { width, .. } => self.natural += *width,
             // Zero-width marker; fired lang-side after placement.
             PureHorzBox::HookPageBreak { .. } => {}
-            PureHorzBox::Tabular(tab) => natural += tab.width,
-            PureHorzBox::EmbeddedBlock { width, .. } => natural += *width,
-            PureHorzBox::Frame { width, .. } => natural += *width,
+            PureHorzBox::Tabular(tab) => self.natural += tab.width,
+            PureHorzBox::EmbeddedBlock { width, .. } => self.natural += *width,
+            PureHorzBox::Frame { width, .. } => self.natural += *width,
             PureHorzBox::FrameMarker { .. } => {}
             // Zero-width marker; fired to the page bottom by `chop_page`.
             PureHorzBox::Footnote { .. } => {}
@@ -165,14 +173,60 @@ fn measure(line: &[PureHorzBox]) -> LineMetrics {
             PureHorzBox::InlineMark(_) => {}
         }
     }
-    LineMetrics {
-        natural,
-        stretch,
-        shrink,
-        has_fil,
-        has_glue,
-        cjk_natural,
+}
+
+fn measure(line: &[PureHorzBox]) -> LineMetrics {
+    let mut m = LineMetrics::empty();
+    for bx in line {
+        m.push(bx);
     }
+    m
+}
+
+/// The metrics [`measure`]`(&`[`line_content`]`(pure, start, raw_end))` would
+/// give, computed WITHOUT building that vector.
+///
+/// This is the line breaker's inner loop: the DP measures every candidate line
+/// for every candidate break, and `line_content` clones each box of the span —
+/// including the `String` inside every `InnerString` — purely so `measure` can
+/// walk it. Measured on the corpus that was 20.6M string allocations for
+/// easytable alone (23.1M boxes cloned across 426,795 calls), and the reason
+/// `line-break` accounted for 92 % of that document's evaluation time.
+///
+/// Nothing about the result changes: this visits exactly the boxes
+/// `line_content` would emit, in exactly that order, so every floating-point
+/// addition happens in the same order and the metrics are bit-identical — which
+/// is what lets it touch the line breaker (the component
+/// `docs/plans/design-layout-fidelity.md` treats as delicately balanced)
+/// without moving a single break.
+///
+/// `line_content` itself stays: the chosen lines really do need their boxes.
+fn measure_range(pure: &[PureHorzBox], start: usize, raw_end: usize) -> LineMetrics {
+    let mut m = LineMetrics::empty();
+    if start > 0 {
+        if let PureHorzBox::Discretionary { post_break, .. } = &pure[start - 1] {
+            for b in post_break {
+                m.push(b);
+            }
+        }
+    }
+    for bx in trim_trailing_glue(trim_leading_glue(&pure[start..raw_end])) {
+        if let PureHorzBox::Discretionary { no_break, .. } = bx {
+            for b in no_break {
+                m.push(b);
+            }
+        } else {
+            m.push(bx);
+        }
+    }
+    if raw_end < pure.len() {
+        if let PureHorzBox::Discretionary { pre_break, .. } = &pure[raw_end] {
+            for b in pre_break {
+                m.push(b);
+            }
+        }
+    }
+    m
 }
 
 /// Whether `c` is a CJK glyph that this port lays out rigidly (no stretchable
@@ -606,7 +660,7 @@ pub fn break_into_lines(ctx: &Context, boxes: Vec<HorzBox>) -> Vec<VertBox> {
                 // Can't happen (starts/ends interleave), but guard anyway.
                 continue;
             }
-            let mut metrics = measure(&line_content(&pure, start, raw_end));
+            let mut metrics = measure_range(&pure, start, raw_end);
             // The break itself, if it's a chosen discretionary, carries
             // `pre_break` onto the CLOSED line (the hyphen/etc. that
             // actually prints before the break) — §4 (hyphenation);

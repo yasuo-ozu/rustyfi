@@ -45,16 +45,16 @@ pub enum UnifyError {
 pub fn unify(a: &MonoType, b: &MonoType) -> Result<(), UnifyError> {
     let ra = resolve(a);
     let rb = resolve(b);
-    match (&ra, &rb) {
+    match (&*ra, &*rb) {
         (MonoType::Var(v1), MonoType::Var(v2)) if v1.same(v2) => Ok(()),
-        (MonoType::Var(v), _) => bind_var(v, rb.clone()),
-        (_, MonoType::Var(v)) => bind_var(v, ra.clone()),
+        (MonoType::Var(v), _) => bind_var(v, (*rb).clone()),
+        (_, MonoType::Var(v)) => bind_var(v, (*ra).clone()),
 
         (MonoType::Base(x), MonoType::Base(y)) => {
             if x == y {
                 Ok(())
             } else {
-                Err(UnifyError::Mismatch { expected: ra.clone(), found: rb.clone() })
+                Err(UnifyError::Mismatch { expected: (*ra).clone(), found: (*rb).clone() })
             }
         }
 
@@ -81,7 +81,7 @@ pub fn unify(a: &MonoType, b: &MonoType) -> Result<(), UnifyError> {
 
         (MonoType::Variant(n1, a1), MonoType::Variant(n2, a2)) => {
             if n1 != n2 {
-                return Err(UnifyError::Mismatch { expected: ra.clone(), found: rb.clone() });
+                return Err(UnifyError::Mismatch { expected: (*ra).clone(), found: (*rb).clone() });
             }
             if a1.len() != a2.len() {
                 return Err(UnifyError::ArityMismatch { expected: a1.len(), found: a2.len() });
@@ -96,7 +96,7 @@ pub fn unify(a: &MonoType, b: &MonoType) -> Result<(), UnifyError> {
         | (MonoType::BlockCmd(c1), MonoType::BlockCmd(c2))
         | (MonoType::MathCmd(c1), MonoType::MathCmd(c2)) => unify_cmd_args(c1, c2),
 
-        _ => Err(UnifyError::Mismatch { expected: ra.clone(), found: rb.clone() }),
+        _ => Err(UnifyError::Mismatch { expected: (*ra).clone(), found: (*rb).clone() }),
     }
 }
 
@@ -195,7 +195,7 @@ fn bind_var(v: &TyVarRef, ty: MonoType) -> Result<(), UnifyError> {
 /// typechecker.ml:480-500), extending an open row with a fresh field if
 /// necessary.
 fn row_require_label(row: &Row, label: &str) -> Result<(), UnifyError> {
-    match resolve_row(row) {
+    match &*resolve_row(row) {
         Row::Empty => Err(UnifyError::MissingLabel {
             label: label.to_string(),
             ty: MonoType::Record(Row::Empty),
@@ -226,8 +226,11 @@ fn row_require_label(row: &Row, label: &str) -> Result<(), UnifyError> {
 // ============================================================================
 
 fn unify_row(a: &Row, b: &Row) -> Result<(), UnifyError> {
-    let ra = resolve_row(a);
-    let rb = resolve_row(b);
+    // Owned, unlike `unify` above: the arms below destructure the row apart.
+    // Rows are tiny (`Empty` for every 0.0.6 function type), so the copy this
+    // costs is nothing like the one `resolve` used to make for whole types.
+    let ra = resolve_row(a).into_owned();
+    let rb = resolve_row(b).into_owned();
     match (ra, rb) {
         (Row::Empty, Row::Empty) => Ok(()),
         (Row::Var(v1), Row::Var(v2)) if v1.same(&v2) => Ok(()),
@@ -267,7 +270,8 @@ fn unify_row(a: &Row, b: &Row) -> Result<(), UnifyError> {
 /// a fresh remainder row variable" instead of requiring the whole row to
 /// match up front.
 fn row_extract(row: &Row, label: &str) -> Result<(MonoType, Row), UnifyError> {
-    match resolve_row(row) {
+    // Owned for the same reason as `unify_row`: this rebuilds the row.
+    match resolve_row(row).into_owned() {
         Row::Empty => Err(UnifyError::MissingLabel {
             label: label.to_string(),
             ty: MonoType::Record(Row::Empty),
@@ -317,7 +321,7 @@ fn bind_row_var(v: &RowVarRef, row: Row) -> Result<(), UnifyError> {
 // ============================================================================
 
 fn occurs_var(tv: &TyVarRef, ty: &MonoType) -> bool {
-    match resolve(ty) {
+    match &*resolve(ty) {
         MonoType::Var(v) => {
             if v.same(tv) {
                 return true;
@@ -344,7 +348,7 @@ fn occurs_var(tv: &TyVarRef, ty: &MonoType) -> bool {
 }
 
 fn occurs_var_in_row(tv: &TyVarRef, row: &Row) -> bool {
-    match resolve_row(row) {
+    match &*resolve_row(row) {
         Row::Empty => false,
         Row::Var(_) => false,
         Row::Cons(_, t, rest) => occurs_var(tv, &t) || occurs_var_in_row(tv, &rest),
@@ -352,7 +356,7 @@ fn occurs_var_in_row(tv: &TyVarRef, row: &Row) -> bool {
 }
 
 fn occurs_rowvar_in_type(rv: &RowVarRef, ty: &MonoType) -> bool {
-    match resolve(ty) {
+    match &*resolve(ty) {
         MonoType::Var(_) => false,
         MonoType::Base(_) => false,
         MonoType::Func(row, a, b) => {
@@ -371,7 +375,7 @@ fn occurs_rowvar_in_type(rv: &RowVarRef, ty: &MonoType) -> bool {
 }
 
 fn occurs_rowvar_in_row(rv: &RowVarRef, row: &Row) -> bool {
-    match resolve_row(row) {
+    match &*resolve_row(row) {
         Row::Empty => false,
         Row::Var(v) => {
             if v.same(rv) {

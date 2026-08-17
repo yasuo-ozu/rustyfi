@@ -89,7 +89,7 @@ fn deps_with_v006_errors_naming_both_axes() {
         .arg("--deps")
         .arg(&deps)
         .arg("--target-version")
-        .arg("0.0.6")
+        .arg("0.0")
         .arg("--no-cache")
         .output()
         .expect("failed to run the rustyfi binary");

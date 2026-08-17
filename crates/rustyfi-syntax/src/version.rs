@@ -149,7 +149,7 @@ impl fmt::Display for RustyfiVersion {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error(
     "unrecognized SATySFi version {input:?}; supported values: \
-     0.0 (aliases: 0.0.6, v0.0), 0.1 (aliases: 0.1.x, v0.1, v0.1.0; not yet implemented)"
+     0.0 (alias: v0.0), 0.1 (aliases: 0.1.x, v0.1, v0.1.0; not yet implemented)"
 )]
 pub struct ParseVersionError {
     /// The string that failed to parse.
@@ -166,7 +166,7 @@ impl FromStr for RustyfiVersion {
             .or_else(|| normalized.strip_prefix('V'))
             .unwrap_or(normalized);
         match normalized {
-            "0.0.6" | "0.0" => Ok(Self::V0_0),
+            "0.0" => Ok(Self::V0_0),
             "0.1" | "0.1.x" | "0.1.0" => Ok(Self::V0_1),
             _ => Err(ParseVersionError {
                 input: s.to_string(),
@@ -349,7 +349,7 @@ mod tests {
 
     #[test]
     fn from_str_accepts_0_0_forms() {
-        for s in ["0.0.6", "0.0", "v0.0.6", "V0.0.6"] {
+        for s in ["0.0", "v0.0", "V0.0"] {
             assert_eq!(
                 s.parse::<RustyfiVersion>().unwrap_or_else(|e| panic!("{s:?}: {e}")),
                 RustyfiVersion::V0_0,
@@ -371,11 +371,14 @@ mod tests {
 
     #[test]
     fn from_str_rejects_unknown_forms() {
-        for s in ["", "1.0", "0.0.7", "garbage", "0.2"] {
+        // `0.0.6` and `v0.0.6` were accepted as aliases and are now rejected:
+        // the language tag names a GENERATION, and spelling it as an upstream
+        // patch release is what the `V0_0_6` -> `V0_0` rename set out to stop.
+        for s in ["", "1.0", "0.0.6", "v0.0.6", "0.0.7", "garbage", "0.2"] {
             let err = s.parse::<RustyfiVersion>().unwrap_err();
             assert_eq!(err.input, s);
             let msg = err.to_string();
-            assert!(msg.contains("0.0.6"), "message should list supported values: {msg}");
+            assert!(msg.contains("0.0"), "message should list supported values: {msg}");
             assert!(msg.contains("0.1"), "message should list supported values: {msg}");
         }
     }

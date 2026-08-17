@@ -3,7 +3,7 @@
 //! `elaborate`; consumed by the evaluator.
 
 use satysfi_backend::Length;
-use satysfi_syntax::Span;
+use satysfi_syntax::{SatysfiVersion, Span};
 use std::rc::Rc;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -77,6 +77,39 @@ pub enum Ast {
         param: String,
         body: Rc<Ast>,
     },
+    /// A version tag around one spliced cross-version dependency binding's
+    /// RHS (Slice X2a, `docs/plans/design-cross-version-import.md`
+    /// §"Slice X2 — per-group primitive environment", Option C).
+    /// `elaborate.rs`'s cross-version splice wraps each binding contributed
+    /// by a `LoadedCst::V0_0_6` dependency (`lib.rs`'s
+    /// `compile_document_v1_with_trials` splice arm) in
+    /// `VersionScope(V0_0_6, rhs)`, at RHS granularity (never the
+    /// surrounding `LetIn`/`LetRecIn` node, and never the continuation that
+    /// follows it — see `elaborate::elaborate_program_with_versions`'s doc
+    /// comment). Three consumers read the tag, all pushing/popping a cursor
+    /// around recursing into `body`:
+    /// - `compile.rs`'s `Compiler::current_version` — which base
+    ///   environment (`V0_1`'s or `V0_0_6`'s) an unshadowed `Ast::Var`
+    ///   constant-folds against, so a version-forked primitive
+    ///   (`page-break`, `math-*`, …) freezes to the RIGHT version's
+    ///   `PrimDef` at compile time (`compile.rs:120-192`'s existing fold —
+    ///   X2a's whole mechanism rides on that fold already being the only
+    ///   version-sensitive resolution in the pipeline).
+    /// - `eval.rs`'s `Interp::version` — the R2 fix: any runtime fork that
+    ///   reads it (`primitives.rs`'s `reflect_math_elem`/
+    ///   `coerce_graphics_result`/`make_paren_run`) sees `V0_0_6` while
+    ///   evaluating on behalf of this subtree.
+    /// - `typecheck.rs`'s base-type-env swap — the subtree's *internal*
+    ///   forked-primitive-type use (e.g. constructing a `page` ADT to hand
+    ///   to `page-break`) checks against `V0_0_6`'s primitive types.
+    ///
+    /// **Never emitted on a pure single-version load** — `elaborate_program`
+    /// delegates to `elaborate_program_with_versions` with an empty index
+    /// set, so this variant is structurally inert (no arm anywhere ever
+    /// executes) on the pure-0.0.6 and pure-0.1 paths; the GOLDEN
+    /// byte-identical invariant holds because the code producing/consuming
+    /// it is simply never reached there, not because of any runtime check.
+    VersionScope(SatysfiVersion, Box<Ast>),
 }
 
 /// One command-application argument (SATySFi 0.1 optional-arg-rows increment

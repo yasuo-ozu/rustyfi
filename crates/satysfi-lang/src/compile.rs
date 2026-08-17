@@ -38,6 +38,7 @@
 use crate::ast::{Ast, Pattern};
 use crate::eval::{available_fields, eval_error, match_pattern, EvalError, Interp};
 use crate::value::{Env, Value};
+use satysfi_syntax::SatysfiVersion;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashSet};
 use std::rc::Rc;
@@ -80,18 +81,77 @@ impl std::fmt::Debug for CompiledExpr {
 struct Compiler<'b> {
     /// Innermost scope frame last. A name present in any frame is a *local*.
     scopes: Vec<HashSet<String>>,
-    /// The base environment, when globals may be constant-folded. `None` for
-    /// lazily-compiled command arguments (see [`compile_arg`]), where the
-    /// captured environment's local frames are unknown, so *every* free name
-    /// must fall back to `env.lookup` to stay correct.
-    globals: Option<&'b Env>,
+    /// The `V0_1`-slot base environment, when globals may be constant-folded.
+    /// `None` for lazily-compiled command arguments (see [`compile_arg`]),
+    /// where the captured environment's local frames are unknown, so *every*
+    /// free name must fall back to `env.lookup` to stay correct.
+    ///
+    /// For a PURE (non-cross-version) compile this is simply *the* base
+    /// environment, regardless of which language generation it actually
+    /// binds — [`Compiler::new`] always parks it here and leaves
+    /// `globals_v006`/`current_version` at their defaults, so `globals_for`
+    /// always resolves back to this same field and the fold is unchanged
+    /// from before Slice X2a (`docs/plans/design-cross-version-import.md`
+    /// §"Slice X2 — per-group primitive environment").
+    globals_v01: Option<&'b Env>,
+    /// The `V0_0_6`-slot base environment — `Some` only for a cross-version
+    /// splice compile ([`Compiler::new_xver`]), used exclusively while
+    /// `current_version` is `V0_0_6` (i.e. while folding inside an
+    /// `Ast::VersionScope(V0_0_6, _)` subtree). `None` on every pure path,
+    /// so `globals_for(V0_0_6)` there is `None` — irrelevant, since no
+    /// `VersionScope` node is ever emitted on a pure path (§X2.2.2).
+    globals_v006: Option<&'b Env>,
+    /// Which of the two envs above is active for the primitive fold right
+    /// now — `V0_1` outside any `VersionScope`, or the tag of the innermost
+    /// enclosing one (`Ast::VersionScope`'s compile arm below). Only ever
+    /// changes away from its initial value on a cross-version splice
+    /// compile, where `Ast::VersionScope(V0_0_6, _)` nodes actually occur.
+    current_version: SatysfiVersion,
 }
 
 impl<'b> Compiler<'b> {
+    /// The ordinary (pre-X2a-shaped) constructor: one base environment,
+    /// constant-folded as before. `globals: None` (used for lazily-compiled
+    /// command arguments, [`compile_arg`]) or `Some` (a top-level program,
+    /// [`compile_program`]) — byte-identical to every caller before this
+    /// slice, since `current_version` never moves off its initial `V0_1` slot
+    /// (no `VersionScope` node exists in a tree compiled through this path).
     fn new(globals: Option<&'b Env>) -> Compiler<'b> {
         Compiler {
             scopes: Vec::new(),
-            globals,
+            globals_v01: globals,
+            globals_v006: None,
+            current_version: SatysfiVersion::V0_1,
+        }
+    }
+
+    /// The cross-version-splice constructor (Slice X2a): `env_v01` folds
+    /// every `Ast::Var` OUTSIDE a `VersionScope`; `env_v006` folds every
+    /// `Ast::Var` INSIDE an `Ast::VersionScope(V0_0_6, _)` subtree — see the
+    /// `Ast::VersionScope` compile arm below. The top-level program body
+    /// always starts un-wrapped (`V0_1`), so `current_version` starts there
+    /// too.
+    fn new_xver(env_v01: &'b Env, env_v006: &'b Env) -> Compiler<'b> {
+        Compiler {
+            scopes: Vec::new(),
+            globals_v01: Some(env_v01),
+            globals_v006: Some(env_v006),
+            current_version: SatysfiVersion::V0_1,
+        }
+    }
+
+    /// The base environment currently active for the primitive fold —
+    /// `V0_1`'s slot outside any `VersionScope`, `V0_0_6`'s slot inside one
+    /// (only ever populated by [`Compiler::new_xver`]).
+    fn globals_for(&self, version: SatysfiVersion) -> Option<&'b Env> {
+        match version {
+            SatysfiVersion::V0_1 => self.globals_v01,
+            SatysfiVersion::V0_0_6 => self.globals_v006,
+            // `SatysfiVersion` is `#[non_exhaustive]` (future 0.1.z-era
+            // variants); this crate only ever constructs the two matched
+            // above, and `Compiler`'s two env slots are exactly those two —
+            // there is no third slot to resolve to.
+            _ => None,
         }
     }
 
@@ -136,7 +196,9 @@ impl<'b> Compiler<'b> {
         if self.is_local(name) {
             return None;
         }
-        let Value::Prim { def, applied } = self.globals.and_then(|g| g.lookup(name))? else {
+        let Value::Prim { def, applied } =
+            self.globals_for(self.current_version).and_then(|g| g.lookup(name))?
+        else {
             return None;
         };
         if !applied.is_empty() || def.arity != args.len() {
@@ -180,8 +242,11 @@ impl<'b> Compiler<'b> {
             Ast::Var(name, span) => {
                 if self.is_local(name) {
                     lookup_var(name.clone(), *span)
-                } else if let Some(v) = self.globals.and_then(|g| g.lookup(name)) {
-                    // Unshadowed base-environment name: fold to its value.
+                } else if let Some(v) = self.globals_for(self.current_version).and_then(|g| g.lookup(name)) {
+                    // Unshadowed base-environment name: fold to its value —
+                    // against `current_version`'s slot, so a version-forked
+                    // primitive referenced inside an `Ast::VersionScope`
+                    // folds to THAT version's `PrimDef` (Slice X2a).
                     CompiledExpr::new(move |_, _| Ok(v.clone()))
                 } else {
                     // Defensive: elaboration guarantees every `Var` is in
@@ -551,6 +616,27 @@ impl<'b> Compiler<'b> {
                     ))
                 })
             }
+            // Slice X2a (`docs/plans/design-cross-version-import.md`
+            // §"Slice X2 — per-group primitive environment", Option C): push
+            // the tag, compile `body` (recursively — every nested
+            // `Ast::Var`/saturated-prim fold reached from here, INCLUDING
+            // inside a nested `Ast::Lambda`'s body, since `compile` recurses
+            // eagerly at COMPILE time, not lazily at apply time — sees
+            // `current_version == v`), pop. This is the whole mechanism: a
+            // version-forked primitive name folds to `v`'s `PrimDef` here,
+            // and nowhere else does version-sensitive resolution happen
+            // (X2.0). `is_local` (checked first, in every `Var`/
+            // `try_saturated_prim` arm above) still shadows this — a local
+            // binding of the same name is untouched regardless of the
+            // cursor. Never reached on a pure single-version compile: no
+            // `Ast::VersionScope` node is ever produced there
+            // (`elaborate_program_with_versions`'s empty `v006_indices`).
+            Ast::VersionScope(v, body) => {
+                let prev = std::mem::replace(&mut self.current_version, *v);
+                let c = self.compile(body);
+                self.current_version = prev;
+                c
+            }
         }
     }
 }
@@ -625,6 +711,16 @@ fn pattern_vars(pat: &Pattern, out: &mut Vec<String>) {
 /// constant-folded to their captured values.
 pub(crate) fn compile_program(ast: &Ast, base_env: &Env) -> CompiledExpr {
     Compiler::new(Some(base_env)).compile(ast)
+}
+
+/// Compile a top-level program body that may contain `Ast::VersionScope`
+/// nodes (Slice X2a — a cross-version splice, `lib.rs`'s
+/// `compile_document_v1_with_trials`): `base_env` folds every unshadowed
+/// `Ast::Var` OUTSIDE a `VersionScope`, `base_env_v006` folds every one
+/// INSIDE an `Ast::VersionScope(V0_0_6, _)` subtree. See
+/// [`Compiler::new_xver`].
+pub(crate) fn compile_program_xver(ast: &Ast, base_env: &Env, base_env_v006: &Env) -> CompiledExpr {
+    Compiler::new_xver(base_env, base_env_v006).compile(ast)
 }
 
 /// Compile a command argument / embed expression evaluated later inside

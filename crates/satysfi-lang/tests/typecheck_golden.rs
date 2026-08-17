@@ -163,26 +163,41 @@ fn as_v01(f: &LoadedFile) -> &satysfi_syntax::cst_v1::FileV1 {
 /// V0_1 analogue of `merge_program_v006` — mirrors `lib.rs`'s
 /// `compile_document_v1_with_trials` assembly step (lowering each
 /// dependency + the entry through `v1::lower`), stopping short of eval.
+/// Also returns the X2a `v006_indices` set (mirrors production's — see
+/// `elaborate::elaborate_program_with_versions`), so callers can wrap
+/// spliced V0_0_6 bindings the same way production does.
 fn merge_program_v01(
     files: &[LoadedFile],
-) -> Result<satysfi_syntax::cst::File, v1::lower::LowerError> {
+) -> Result<(satysfi_syntax::cst::File, std::collections::HashSet<usize>), v1::lower::LowerError> {
     let (entry, deps) = files
         .split_last()
         .expect("loader always yields at least the entry file");
     let mut prelude = Vec::new();
+    let mut v006_indices = std::collections::HashSet::new();
     for dep in deps {
-        // X1 (design-cross-version-import.md §5): mirror production's
+        // X1/X2a (design-cross-version-import.md §5, §"Slice X2 — per-group
+        // primitive environment"): mirror production's
         // `compile_document_v1_with_trials` dep loop, which is now a
         // MIXED-version list. A V0_1 dep is lowered as before; a V0_0_6 dep (a
         // 0.0.6-corpus `@require:` target reached under a V0_1 entry) splices
-        // its `cst::File.prelude` bindings directly. Production also runs the
-        // forked-name guard on that path, but this typecheck-differential
-        // harness only needs to not panic + emit a stable line, so it splices
-        // unconditionally. (The V0_0_6-first branch in `one_line` — the 0.0.6
-        // golden lines — never reaches here and is untouched by X1.)
+        // its `cst::File.prelude` bindings directly, and its contributed
+        // top-level indices are recorded into `v006_indices` — mirroring
+        // production's index bookkeeping — so `one_line`'s V0_1 branch can
+        // call `elaborate::elaborate_program_with_versions` the same way
+        // `compile_document_v1_with_trials` does, keeping the two in sync
+        // for a mixed-version fixture's `Ast::VersionScope` shape. Production
+        // ALSO runs the forked-name guard on this path, but this
+        // typecheck-differential harness only needs to not panic + emit a
+        // stable line, so it still splices unconditionally, guard-free. (The
+        // V0_0_6-first branch in `one_line` — the 0.0.6 golden lines — never
+        // reaches here and is untouched by X1/X2a.)
         match &dep.cst {
             LoadedCst::V0_1(cst) => prelude.extend(v1::lower::lower_file_v1(cst)?),
-            LoadedCst::V0_0_6(cst) => prelude.extend(cst.prelude.iter().cloned()),
+            LoadedCst::V0_0_6(cst) => {
+                let start = prelude.len();
+                prelude.extend(cst.prelude.iter().cloned());
+                v006_indices.extend(start..prelude.len());
+            }
         }
     }
     let entry_cst = as_v01(entry);
@@ -191,13 +206,16 @@ fn merge_program_v01(
         satysfi_syntax::cst_v1::FileV1::Document { eoi, .. } => eoi.clone(),
         _ => unreachable!("lower_document_v1 already rejected a Library entry"),
     };
-    Ok(satysfi_syntax::cst::File {
-        headers: Vec::new(),
-        prelude,
-        in_kw: Some(satysfi_syntax::leaf::KwIn(satysfi_syntax::Span::default())),
-        body: Some(body),
-        eoi,
-    })
+    Ok((
+        satysfi_syntax::cst::File {
+            headers: Vec::new(),
+            prelude,
+            in_kw: Some(satysfi_syntax::leaf::KwIn(satysfi_syntax::Span::default())),
+            body: Some(body),
+            eoi,
+        },
+        v006_indices,
+    ))
 }
 
 /// Load + elaborate + `typecheck_verbose` one entry file, trying V0_0_6
@@ -230,11 +248,16 @@ fn one_line(tag: &str, entry: &Path) -> String {
             };
             match satysfi_loader::load(entry, &opts_01) {
                 Ok(program) => match merge_program_v01(&program.files) {
-                    Ok(file) => render(tag, "0.1", || {
+                    Ok((file, v006_indices)) => render(tag, "0.1", || {
                         let env = primitives::base_env_with_version(SatysfiVersion::V0_1);
                         let scope = elaborate::Scope::new(env.names());
-                        let program = elaborate::elaborate_program(&file, &scope)
-                            .map_err(|e| format!("elaborate: {e}"))?;
+                        let program = elaborate::elaborate_program_with_versions(
+                            &file,
+                            &scope,
+                            &v006_indices,
+                            None,
+                        )
+                        .map_err(|e| format!("elaborate: {e}"))?;
                         typecheck::typecheck_verbose_with_version(&program, SatysfiVersion::V0_1)
                             .map_err(|e| format!("{e}"))
                     }),

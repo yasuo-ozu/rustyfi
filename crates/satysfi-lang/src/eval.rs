@@ -10,6 +10,16 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 /// See [`Interp::decos`].
+///
+/// X2b audit note (`Ast::VersionScope`'s eval arm, below): a deco `Value`
+/// pushed here carries no record of which `interp.version` was active when
+/// the closure was captured. Its consumers (`primitives::apply_deco`, called
+/// only from `lib.rs`'s post-page-break hook-firing pass) read
+/// `interp.version` at FIRE time instead — correct for a pure single-version
+/// program (the flag never changes), but a known residual gap for a
+/// cross-version splice, since fire time is always outside any
+/// `VersionScope`'s save/restore window. See the `Ast::VersionScope` eval
+/// arm's doc comment for the full analysis.
 #[derive(Clone, Debug)]
 pub enum DecoEntry {
     Inline {
@@ -89,6 +99,19 @@ pub struct Interp<'a> {
     /// `Rc<Vec<IText>>`/`Rc<Vec<BText>>`, which are kept alive for the whole
     /// interpreter run, so the addresses are stable and re-reading the same
     /// quoted text reuses its already-compiled argument closures.
+    ///
+    /// X2b audit (design doc Risk S4, arg-cache version bleed): SAFE.
+    /// [`Interp::eval_arg`] caches `crate::compile::compile_arg(arg)`'s
+    /// output, not its evaluated `Value` — and `compile_arg` (via
+    /// `Compiler::new(None)`) never constant-folds a global name (its
+    /// `globals_v01`/`globals_v006` are both `None`), so every free name in
+    /// a cached `CompiledExpr` resolves dynamically through the `env`
+    /// argument passed to `.run()` at each call, not through anything baked
+    /// in at compile/cache time. Re-running the same cached `CompiledExpr`
+    /// under a different `self.version` (e.g. the same quoted-text AST node
+    /// reached once inside a `VersionScope` and once outside) therefore
+    /// still resolves names correctly for whichever call it is. No fix
+    /// needed.
     arg_cache: std::collections::HashMap<usize, crate::compile::CompiledExpr>,
     /// §B/§C accumulators (docs/plans/hooks-annotations-crossref.md):
     /// link annotations / named destinations / outline entries, plus the
@@ -447,6 +470,60 @@ impl<'a> Interp<'a> {
                     "non-exhaustive match: no arm matched a value of type {}",
                     v.type_name()
                 ))
+            }
+            // Slice X2a/X2b (`docs/plans/design-cross-version-import.md`
+            // §"Slice X2 — per-group primitive environment") — the R2 fix:
+            // save/restore `self.version` around evaluating `body`, so any
+            // runtime fork that reads it SYNCHRONOUSLY, as part of this
+            // `self.eval(env, body)` call's own tree walk, sees `V0_0_6`
+            // instead of whatever version was ambient at the call site.
+            // Never reached on a pure single-version program (no
+            // `Ast::VersionScope` node is ever produced there). Exception-
+            // safe: `r` captures the `Result` (`Ok` or `Err`) before the
+            // restore runs unconditionally, so an inner eval error still
+            // leaves `self.version` correctly popped (no early-return gap).
+            //
+            // X2b audit (exhaustive grep of every `interp.version`/
+            // `self.version` runtime read reachable from a `PrimDef::run`,
+            // per the design doc's Risk S3): exactly three sites exist, all
+            // in `primitives.rs`.
+            //   - `read_inline`'s `IText::EmbedMath` fallback (~:1254) and
+            //     `make_paren_run`'s calling-convention dispatch (~:5886)
+            //     are both reached SYNCHRONOUSLY — they run as part of laying
+            //     out inline/math content while the surrounding `Ast` is
+            //     still being tree-walked, i.e. strictly inside whatever
+            //     `self.eval(env, body)` call is on the stack — so this
+            //     save/restore covers them. Verified, no fix needed.
+            //   - `coerce_graphics_result` (~:4021, reached only via
+            //     `apply_deco`) is DIFFERENT: `apply_deco`'s only two callers
+            //     (`lib.rs`'s `fire_inline_frame` and the block-frame-close
+            //     arm of the page-break hook-firing pass) run in a wholly
+            //     separate, LATER pass — after `break_pages` has placed every
+            //     line and the top-level `eval()` call (and every
+            //     `VersionScope` it contained) has already returned. A deco
+            //     closure captured from a spliced `V0_0_6` dependency's
+            //     `\block-frame-breakable`/inline-frame use is therefore
+            //     fired with `self.version` back at whatever the ambient
+            //     top-level version is, NOT the `V0_0_6` it was defined
+            //     under — `coerce_graphics_result` can then coerce the
+            //     closure's `list graphics` (0.0.6 shape) result the 0.1 way
+            //     (or vice versa). This save/restore, scoped to `eval`'s
+            //     synchronous body window, structurally CANNOT cover a
+            //     later, separate pass — a real fix needs the closure's
+            //     origin version threaded through `DecoEntry`
+            //     (`primitives.rs`'s two `interp.decos.push` sites) and
+            //     restored around `apply_deco` at fire time (`lib.rs`'s
+            //     `fire_hooks`/`fire_inline_frame`), both outside this
+            //     slice's file scope. Tracked as a known residual for a
+            //     follow-up slice; not exercised by the X2/X2b test corpus
+            //     (which uses `page-break`/math-split, not frames/decos,
+            //     across a version boundary).
+            Ast::VersionScope(v, body) => {
+                let prev = self.version;
+                self.version = *v;
+                let r = self.eval(env, body);
+                self.version = prev;
+                r
             }
         }
     }

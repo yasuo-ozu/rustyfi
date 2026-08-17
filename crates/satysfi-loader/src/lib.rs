@@ -298,6 +298,14 @@ fn load_legacy(entry: &Path, opts: &LoadOptions) -> Result<LoadedProgram, LoadEr
     // dependency edges are discovered, below; irrelevant (never consulted)
     // for a `V0_0_6` load.
     let mut require_targets: HashSet<u32> = HashSet::new();
+    // X4a Q4-mirror (design-cross-version-import.md §X4.3 item 2): node ids
+    // reached via at least one `@require:` edge that resolved PHYSICALLY
+    // under `dist-v01/packages/` — the "resolves under the 0.1 corpus" half
+    // of the mirrored per-file detection rule. Populated in lockstep with
+    // `require_targets`, below; irrelevant (never consulted) for a `V0_1`
+    // load (that load uses `require_targets`/`is_dist_packages_target`
+    // instead).
+    let mut require_v01_targets: HashSet<u32> = HashSet::new();
     let mut adjacency: HashMap<u32, Vec<u32>> = HashMap::new();
     let mut processed: HashSet<u32> = HashSet::new();
 
@@ -342,6 +350,29 @@ fn load_legacy(entry: &Path, opts: &LoadOptions) -> Result<LoadedProgram, LoadEr
                         SatysfiVersion::V0_1
                     },
                 ),
+            // X4a Q4-mirror (design-cross-version-import.md §X4.3 item 2): a
+            // `V0_0_6`-rooted load's NON-entry file defaults to `opts.version`
+            // (`V0_0_6`) unless `sniff_version` returns `Some(V0_1)`, in which
+            // case it MUST default to `V0_1` when this id was reached via at
+            // least one `@require:` edge that resolved physically under the
+            // 0.1 corpus `dist-v01/packages/` (the mirror of `require_targets`
+            // + `is_dist_packages_target` above) — a `module … :> sig …`-headed
+            // 0.1 package (e.g. `v01-sealed.satyh`) sniffs `None` just like a
+            // 0.0.6 `module`-headed corpus file does (`version.rs`'s own doc
+            // comment: a bare `module` head is deliberately no signal), so
+            // this provenance fallback is what actually resolves it. This is a
+            // PURE WIDENING: nothing that used to resolve `V0_0_6` can flip to
+            // `V0_1` unless it is BOTH under `dist-v01/packages/` AND reached
+            // via `@require:` — `require_v01_targets` is empty for every
+            // existing 0.0.6 fixture (none of them ever resolves a
+            // `dist-v01/packages/` target), so this arm's `unwrap_or` falls
+            // through to `V0_0_6` exactly as before for every pre-X4a load.
+            SatysfiVersion::V0_0_6 if id != entry_id => satysfi_syntax::sniff_version(&src)
+                .unwrap_or(if require_v01_targets.contains(&id) {
+                    SatysfiVersion::V0_1
+                } else {
+                    SatysfiVersion::V0_0_6
+                }),
             other => other,
         };
         let cst: LoadedCst = match file_version {
@@ -443,9 +474,19 @@ fn load_legacy(entry: &Path, opts: &LoadOptions) -> Result<LoadedProgram, LoadEr
             // provenance downgrade (a genuinely-0.1 package dropped there
             // still wins via its own `Some(V0_1)` sniff, per the rule).
             let is_corpus_target = is_require && is_dist_packages_target(&dep_canon);
+            // X4a Q4-mirror: the same narrowing, for the 0.1 corpus —
+            // `is_require && is_dist_v01_packages_target(&dep_canon)`.
+            // Deliberately checked independently of `is_corpus_target`
+            // (`dist` and `dist-v01` never both match the same path), so a
+            // `@require:` edge lands in at most one of `require_targets`/
+            // `require_v01_targets`.
+            let is_v01_corpus_target = is_require && is_dist_v01_packages_target(&dep_canon);
             let dep_id = alloc_id(dep_canon, &mut next_id, &mut id_of, &mut path_of);
             if is_corpus_target {
                 require_targets.insert(dep_id);
+            }
+            if is_v01_corpus_target {
+                require_v01_targets.insert(dep_id);
             }
             deps.push(dep_id);
             worklist.push(dep_id);
@@ -497,6 +538,23 @@ fn is_dist_packages_target(path: &Path) -> bool {
     let comps: Vec<_> = path.components().collect();
     comps.windows(2).any(|w| {
         w[0].as_os_str() == "dist" && w[1].as_os_str() == "packages"
+    })
+}
+
+/// Whether `path` lives under a `dist-v01/packages/` directory — the 0.1
+/// corpus layout (Slice X4a, `docs/plans/design-cross-version-import.md`
+/// §X4.3 item 2), the MIRROR of [`is_dist_packages_target`] used by the
+/// symmetric per-file version detector to default a sniff-`None` 0.1-corpus
+/// dependency (e.g. a `module … :> sig …`-headed package like
+/// `v01-sealed.satyh`) to `V0_1` under a `V0_0_6`-rooted load. Matches ANY
+/// two consecutive components `dist-v01` then `packages` — deliberately NOT
+/// `dist` then `packages` (the inverse of `is_dist_packages_target`'s own
+/// care to exclude `dist-v01`), so the two helpers are mutually exclusive on
+/// every real path.
+fn is_dist_v01_packages_target(path: &Path) -> bool {
+    let comps: Vec<_> = path.components().collect();
+    comps.windows(2).any(|w| {
+        w[0].as_os_str() == "dist-v01" && w[1].as_os_str() == "packages"
     })
 }
 

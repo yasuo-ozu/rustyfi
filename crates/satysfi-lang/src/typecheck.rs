@@ -386,10 +386,60 @@ pub(crate) fn base_type_env_with_version(version: SatysfiVersion) -> TypeEnv {
     let mut env = TypeEnv::default();
     for name in PRIMITIVE_NAMES {
         if let Some(poly) = prim_types::primitive_type_with_version(name, version) {
-            env = env.with(*name, poly);
+            // `with_primitive`, not `with`: this is seeding the BASE env,
+            // not a user binding, so it must not mark `name` as
+            // user-shadowed (see `TypeEnv::with_primitive`'s doc comment).
+            env = env.with_primitive(*name, poly);
         }
     }
     env
+}
+
+/// Slice X2a/X2b (`docs/plans/design-cross-version-import.md` §"Slice X2 —
+/// per-group primitive environment"): the `Ast::VersionScope(version, _)`
+/// typecheck arm's env swap. `TypeEnv` is a flat, persistent-clone name ->
+/// scheme map (no separate "local scope stack" the way `compile.rs`'s
+/// `Compiler` has) — so, mirroring the fold's `is_local`-first discipline as
+/// closely as this shape allows, this clones `env` and OVERWRITES every
+/// `PRIMITIVE_NAMES` entry with `version`'s primitive type, leaving every
+/// other (non-primitive-named — i.e. user/local) binding untouched. This
+/// makes a version-forked primitive's INTERNAL use inside the returned env
+/// (e.g. a spliced 0.0.6 dependency constructing a `page` ADT to hand to
+/// `page-break`) check against `version`'s shapes (X2.4's "internal
+/// forked-type use — handled by X2"), while any binder introduced AFTER this
+/// call (an ordinary `Ast::LetIn`'s `env.with_all`, reached while inferring
+/// `body`) still shadows normally, exactly as before.
+///
+/// X2b fix (was: "known narrow gap, documented, not fixed" in X2a): a
+/// primitive name legitimately shadowed by a *user* binding introduced
+/// BEFORE this `VersionScope` is reached (rather than inside it) must NOT
+/// be re-stomped by this overwrite. Since a flat `TypeEnv` carries no
+/// lexical-scope stack the way `compile.rs`'s `Compiler::scopes` does, the
+/// provenance is tracked directly on `TypeEnv` instead: every REAL program
+/// binding goes through `TypeEnv::with`/`with_all` (`Ast::LetIn`, lambda
+/// params, pattern binds, `LetRecIn`, top-level decls — every call site
+/// except the two primitive-seeding loops here and in
+/// `base_type_env_with_version`), which records the bound name in
+/// `TypeEnv::shadowed`; the two primitive-seeding loops use
+/// `TypeEnv::with_primitive` instead, which does NOT record it. So
+/// `e.shadowed.contains(name)` is exactly "has a real user binding rebound
+/// this primitive name anywhere on the path from the program root to
+/// here" — skip the overwrite for those, matching `compile.rs`'s
+/// `is_local`-first discipline; every other (untouched-builtin) name still
+/// gets `version`'s scheme, unchanged from X2a.
+fn version_scoped_type_env(env: &TypeEnv, version: SatysfiVersion) -> TypeEnv {
+    let mut e = env.clone();
+    for name in PRIMITIVE_NAMES {
+        if e.shadowed.contains(*name) {
+            // A user binding shadows this primitive name already — respect
+            // it instead of re-stomping it with `version`'s builtin scheme.
+            continue;
+        }
+        if let Some(poly) = prim_types::primitive_type_with_version(name, version) {
+            e = e.with_primitive(*name, poly);
+        }
+    }
+    e
 }
 
 // ============================================================================
@@ -402,10 +452,38 @@ pub(crate) fn base_type_env_with_version(version: SatysfiVersion) -> TypeEnv {
 #[derive(Clone, Default)]
 pub(crate) struct TypeEnv {
     vars: HashMap<String, PolyType>,
+    /// Slice X2b (`docs/plans/design-cross-version-import.md` §"Slice X2 —
+    /// per-group primitive environment"): the set of names bound by a REAL
+    /// program binding (via `with`/`with_all`, as opposed to the primitive-
+    /// seeding loops which use `with_primitive`). `version_scoped_type_env`
+    /// consults this to tell "still the untouched builtin primitive scheme"
+    /// apart from "a user binding shadowed this name", so its
+    /// `Ast::VersionScope` overwrite doesn't clobber a user shadow. Persistent
+    /// like `vars` (cloned alongside it by every `with`/`with_all` call) —
+    /// harmless, unqueried overhead on every pure single-version path, since
+    /// `version_scoped_type_env` is only ever reached from the
+    /// `Ast::VersionScope` arm, which no pure-version program ever produces.
+    shadowed: std::collections::HashSet<String>,
 }
 
 impl TypeEnv {
     pub(crate) fn with(&self, name: impl Into<String>, poly: PolyType) -> TypeEnv {
+        let name = name.into();
+        let mut e = self.clone();
+        e.shadowed.insert(name.clone());
+        e.vars.insert(name, poly);
+        e
+    }
+
+    /// Install/refresh a BASE PRIMITIVE scheme without recording `name` in
+    /// `shadowed` — used ONLY by the two call sites that seed or refresh a
+    /// `PRIMITIVE_NAMES` entry directly (`base_type_env_with_version`,
+    /// `version_scoped_type_env`), as opposed to a real program binding
+    /// (`Ast::LetIn`/lambda param/pattern bind/`LetRecIn`/top-level decl),
+    /// which always goes through `with`/`with_all` instead. This is exactly
+    /// what lets `version_scoped_type_env` distinguish "still untouched
+    /// builtin" from "user-shadowed" (see its doc comment).
+    fn with_primitive(&self, name: impl Into<String>, poly: PolyType) -> TypeEnv {
         let mut e = self.clone();
         e.vars.insert(name.into(), poly);
         e
@@ -433,11 +511,16 @@ impl TypeEnv {
     /// `#[allow(dead_code)]`: the accessor is the spec's §4-F deliverable;
     /// its sole consumer, the `Decl::Module` revocation mechanism, is the
     /// one 2d-3 piece deferred (see `v1/module_check.rs`'s module doc).
+    /// Also un-marks each removed name in `shadowed` (Slice X2b): once a
+    /// binding is gone, it is no longer "a user shadow" for
+    /// `version_scoped_type_env` to respect — just absent, same as if it
+    /// had never been bound.
     #[allow(dead_code)]
     pub(crate) fn without_all(&self, names: &[String]) -> TypeEnv {
         let mut e = self.clone();
         for n in names {
             e.vars.remove(n);
+            e.shadowed.remove(n);
         }
         e
     }
@@ -1506,6 +1589,27 @@ impl Checker {
     /// `set_version`, e.g. `:2237`'s bare-builtins test construction).
     pub(crate) fn install_builtin_variants(&mut self, version: SatysfiVersion) {
         self.version = version;
+        self.install_additional_builtin_variants(version);
+    }
+
+    /// Slice X2a: register `version`'s builtin variant/ctor set WITHOUT
+    /// touching `self.version` (unlike [`Checker::install_builtin_
+    /// variants`], which also sets the whole-session version tag) — called
+    /// from the `Ast::VersionScope` `infer` arm below, lazily, the first
+    /// time a version-scoped subtree is reached, so a `V0_0_6`-only ADT like
+    /// `page` (`A0Paper`/…/`A4Paper`/`UserDefinedPaper`, gated on
+    /// `has_page_adt()`, `prim_types.rs`'s `builtin_variants_with_version`)
+    /// is constructible/matchable inside a spliced dependency's internal
+    /// `page-break A4Paper …` call even though the whole-program `Checker`
+    /// was built under `V0_1` (where `page` isn't registered at all).
+    /// `self.ctors`/`self.variants` are flat, last-writer-wins, program-
+    /// global tables already (`hide_ctors`'s doc comment); every
+    /// `builtin_variants_with_version` entry OTHER than `page` is identical
+    /// between the two versions (only `page` is gated by `has_page_adt()`,
+    /// `prim_types.rs:2119`), so this is a safe additive merge, not a
+    /// replace — idempotent across repeated `VersionScope` nodes of the same
+    /// version.
+    pub(crate) fn install_additional_builtin_variants(&mut self, version: SatysfiVersion) {
         for decl in builtin_variants_with_version(version) {
             let decl = Rc::new(decl);
             self.variants.insert(decl.name.clone(), decl.clone());
@@ -2488,6 +2592,21 @@ impl Checker {
                 )?;
                 Ok(tbase)
             }
+
+            // Slice X2a (`docs/plans/design-cross-version-import.md`
+            // §"Slice X2 — per-group primitive environment"): swap the
+            // active primitive-type env to `version`'s for `body` — see
+            // `version_scoped_type_env`'s doc comment — and make sure
+            // `version`'s builtin ADTs (e.g. `page`, `V0_0_6`-only) are
+            // registered in the (otherwise whole-program-tagged) ctor table
+            // — see `install_additional_builtin_variants`'s doc comment.
+            // Never reached on a pure single-version program (no
+            // `Ast::VersionScope` node is ever produced there).
+            Ast::VersionScope(version, body) => {
+                self.install_additional_builtin_variants(*version);
+                let scoped = version_scoped_type_env(env, *version);
+                self.infer(&scoped, body)
+            }
         }
     }
 
@@ -2921,6 +3040,7 @@ pub(crate) fn ast_span(ast: &Ast) -> Option<Span> {
         Ast::Var(_, span) => Some(*span),
         Ast::Overwrite(_, span, _) => Some(*span),
         Ast::AccessField(_, _, span) => Some(*span),
+        Ast::VersionScope(_, inner) => ast_span(inner),
         _ => None,
     }
 }
@@ -3151,6 +3271,114 @@ mod l3_per_binding_tests {
         assert!(
             after.is_ok(),
             "A(1) should typecheck after declare_variant: {after:?}"
+        );
+    }
+}
+
+// ============================================================================
+// Slice X2b (`docs/plans/design-cross-version-import.md` §"Slice X2 —
+// per-group primitive environment", the shadowing-fix follow-up to X2a):
+// `version_scoped_type_env`'s `Ast::VersionScope` overwrite must not
+// re-stomp a `PRIMITIVE_NAMES` entry the user already shadowed BEFORE the
+// `VersionScope` is reached. A `#[cfg(test)]` unit module (mirroring
+// `l3_per_binding_tests` above) since `Checker`/`TypeEnv`/`Ast` are all
+// `pub(crate)` or crate-private-shaped enough that a hand-built synthetic
+// `Ast` fixture (no parser/elaborator round-trip needed to pin this one
+// shape) is the most direct way to exercise the exact env-swap path.
+// ============================================================================
+#[cfg(test)]
+mod x2b_shadow_tests {
+    use super::*;
+
+    /// `let page-break = 42 in <VersionScope V0_0_6> page-break` — infer
+    /// the whole tree under a `V0_1`-ambient `Checker`. `page-break` is a
+    /// `PRIMITIVE_NAMES` member (a version-forked one, no less: its `V0_0_6`
+    /// scheme takes the `page` ADT, its `V0_1` scheme a `length * length`
+    /// tuple — see `page_prims.rs`). BEFORE this slice's fix,
+    /// `version_scoped_type_env`'s overwrite loop unconditionally replaced
+    /// every `PRIMITIVE_NAMES` entry with `version`'s builtin scheme the
+    /// moment it entered the `VersionScope`, so the user's `page-break = 42`
+    /// binding would have been silently re-stomped with `V0_0_6`'s builtin
+    /// `page-break` (a curried function type) — inferring the inner `Var`
+    /// as a function, not `int`. With the fix, `version_scoped_type_env`
+    /// sees `page-break` recorded in `env.shadowed` (set by the `LetIn`
+    /// arm's `env.with_all`, which goes through `TypeEnv::with`) and skips
+    /// the overwrite for that one name, so the `Var` resolves through the
+    /// untouched user binding and the whole expression types as `int`.
+    #[test]
+    fn version_scope_does_not_clobber_a_user_shadowed_primitive() {
+        assert!(
+            PRIMITIVE_NAMES.contains(&"page-break"),
+            "fixture assumption: page-break must be a PRIMITIVE_NAMES member"
+        );
+
+        let span = Span::default();
+        let ast = Ast::LetIn(
+            "page-break".to_string(),
+            Box::new(Ast::Int(42)),
+            Box::new(Ast::VersionScope(
+                SatysfiVersion::V0_0_6,
+                Box::new(Ast::Var("page-break".to_string(), span)),
+            )),
+        );
+        let program = Program {
+            type_decls: Vec::new(),
+            synonym_decls: Vec::new(),
+            body: ast,
+        };
+
+        let mut checker = Checker::new_with_version(&program, SatysfiVersion::V0_1)
+            .expect("checker construction over an empty-decls program should succeed");
+        let env = base_type_env_with_version(SatysfiVersion::V0_1);
+        let ty = checker.infer(&env, &program.body).unwrap_or_else(|e| {
+            panic!(
+                "inferring the version-scoped `Var` over the user's shadowed \
+                 `page-break = 42` binding should type-check as `int`, not error: {e}"
+            )
+        });
+        assert!(
+            matches!(ty, MonoType::Base(BaseType::Int)),
+            "the VersionScope env swap must respect the user's `page-break` shadow \
+             (expected MonoType::Base(BaseType::Int), got {ty:?} instead) — a \
+             MonoType::Func here would mean version_scoped_type_env re-stomped the \
+             user binding with V0_0_6's builtin page-break scheme"
+        );
+    }
+
+    /// Companion positive control (same shape as the test above, MINUS the
+    /// enclosing user shadow): a version-forked primitive referenced inside
+    /// a `VersionScope` still resolves to `version`'s own (function-typed)
+    /// scheme — X2a's original headline capability, unaffected by the X2b
+    /// shadow-respecting change above. Contrasts directly with
+    /// `version_scope_does_not_clobber_a_user_shadowed_primitive`'s `int`
+    /// result: same `page-break` name, same `VersionScope(V0_0_6, _)`, only
+    /// difference is the absence of a prior `let page-break = …` shadow.
+    #[test]
+    fn version_scope_still_resolves_unshadowed_forked_primitive() {
+        let span = Span::default();
+        let ast = Ast::VersionScope(
+            SatysfiVersion::V0_0_6,
+            Box::new(Ast::Var("page-break".to_string(), span)),
+        );
+        let program = Program {
+            type_decls: Vec::new(),
+            synonym_decls: Vec::new(),
+            body: ast,
+        };
+        let mut checker = Checker::new_with_version(&program, SatysfiVersion::V0_1)
+            .expect("checker construction over an empty-decls program should succeed");
+        let env = base_type_env_with_version(SatysfiVersion::V0_1);
+        let ty = checker.infer(&env, &program.body).unwrap_or_else(|e| {
+            panic!(
+                "an unshadowed page-break reference inside a VersionScope should still \
+                 type-check (X2a's original capability, unaffected by X2b): {e}"
+            )
+        });
+        assert!(
+            matches!(ty, MonoType::Func(..)),
+            "page-break (unshadowed) inside a VersionScope should still resolve to its \
+             builtin (function-typed) scheme, got {ty:?} instead — the X2b shadow guard \
+             must not have blocked this NON-shadowed overwrite"
         );
     }
 }

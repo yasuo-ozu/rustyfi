@@ -304,6 +304,44 @@ pub struct Program {
 /// document, or an already-merged file) or it is a genuine library file,
 /// which is a (clean) error to hand to `elaborate_program` directly.
 pub fn elaborate_program(file: &cst::File, prelude_scope: &Scope) -> Result<Program, ElabError> {
+    elaborate_program_with_versions(file, prelude_scope, &HashSet::new(), None)
+}
+
+/// Like [`elaborate_program`], but additionally marking a subset of
+/// `file.prelude`'s TOP-LEVEL entries (by index) as originating from a
+/// spliced `V0_0_6` dependency (Slice X2a,
+/// `docs/plans/design-cross-version-import.md` §"Slice X2 — per-group
+/// primitive environment", Option C). Every `Binding` this splices in from
+/// one of those entries — and, recursively, every binding inside a `module ..
+/// = struct .. end` at such an index — has its elaborated RHS wrapped in
+/// [`Ast::VersionScope`]`(V0_0_6, _)`, so `compile.rs`/`eval.rs`/
+/// `typecheck.rs` resolve THAT subtree's version-forked primitives (and
+/// runtime-version reads) against `V0_0_6` instead of the merged program's
+/// ambient `V0_1`.
+///
+/// `v006_indices` is empty for every existing caller (`elaborate_program`
+/// above delegates here with `&HashSet::new()`), which makes `this_v006`
+/// (below) `false` for every item and so never constructs a `VersionScope`
+/// node — the pure-0.0.6 and pure-0.1 paths are therefore byte-identical to
+/// before this slice (same code, an always-false extra branch).
+///
+/// `wrap_body_version` (Slice X4a, `docs/plans/design-cross-version-import.md`
+/// §X4.3 item 3): when `Some(v)`, the file's own document TAIL expression
+/// (`file.body`, elaborated into `body_ast` below) is additionally wrapped in
+/// `Ast::VersionScope(v, _)` — the ONE new capability X4 needs beyond X2.2's
+/// indexed-`prelude`-item wrapping, because a `V0_0_6` ENTRY's tail expression
+/// (e.g. a bare `page-break doc` with no intermediate `let`) is itself
+/// `V0_0_6`-authored code that may reference forked primitives directly, not
+/// just its `prelude` bindings. `None` for every pre-X4a caller
+/// (`elaborate_program` above, and `compile_document_v1_with_trials`'s
+/// existing call site) — byte-identical, since `match None { .. }` never
+/// constructs the extra node.
+pub fn elaborate_program_with_versions(
+    file: &cst::File,
+    prelude_scope: &Scope,
+    v006_indices: &HashSet<usize>,
+    wrap_body_version: Option<SatysfiVersion>,
+) -> Result<Program, ElabError> {
     let Some(body) = &file.body else {
         return err(
             Span::default(),
@@ -319,6 +357,7 @@ pub fn elaborate_program(file: &cst::File, prelude_scope: &Scope) -> Result<Prog
         &[],
         &mut type_decls,
         &mut synonym_decls,
+        v006_indices,
     )?;
     // `final_scope` (mod_path `[]`) already IS `prelude_scope` plus every
     // top-level name — including each one's `Scope::optional_arity` entry,
@@ -327,11 +366,27 @@ pub fn elaborate_program(file: &cst::File, prelude_scope: &Scope) -> Result<Prog
     // marker-less-optional-call defaulting a top-level function's own
     // sibling declarations do.
     let body_ast = expr(body, &final_scope)?;
+    let body_ast = match wrap_body_version {
+        Some(v) => Ast::VersionScope(v, Box::new(body_ast)),
+        None => body_ast,
+    };
     Ok(Program {
         type_decls,
         synonym_decls,
         body: nest(bindings, body_ast),
     })
+}
+
+/// Wrap `value` in [`Ast::VersionScope`]`(V0_0_6, _)` iff `this_v006` — the
+/// one-line helper every `walk_bindings` binding-construction arm below
+/// calls right after building its (fully elaborated) RHS. See
+/// [`elaborate_program_with_versions`]'s doc comment.
+fn maybe_v006_scope(value: Ast, this_v006: bool) -> Ast {
+    if this_v006 {
+        Ast::VersionScope(SatysfiVersion::V0_0_6, Box::new(value))
+    } else {
+        value
+    }
 }
 
 /// Elaborate a whole file into one expression, discarding any `type`
@@ -576,11 +631,18 @@ fn walk_bindings(
     mod_path: &[String],
     type_decls: &mut Vec<UserTypeDecl>,
     synonym_decls: &mut Vec<UserSynonymDecl>,
+    v006_indices: &HashSet<usize>,
 ) -> Result<(Vec<Binding>, Vec<String>, Scope), ElabError> {
     let mut bindings: Vec<Binding> = Vec::new();
     let mut running = scope.clone();
     let mut exported: Vec<String> = Vec::new();
-    for top in items {
+    for (item_idx, top) in items.iter().enumerate() {
+        // Slice X2a: is THIS top-level item (and everything nested inside
+        // it, e.g. a `module .. = struct .. end`'s own decls — see the
+        // `Module` arm below) part of a spliced V0_0_6 dependency? Always
+        // `false` for `elaborate_program`'s empty `v006_indices` (the
+        // pure-0.0.6 / pure-0.1 paths), so this is a dead branch there.
+        let this_v006 = v006_indices.contains(&item_idx);
         match top {
             cst::TopBinding::Let(top_let) => {
                 // Same curry-with-patterns desugaring as a `let-rec` clause
@@ -592,6 +654,7 @@ fn walk_bindings(
                 let top_let_params = params_to_patbots(&top_let.params);
                 let value =
                     rec_clause_value(&top_let_params, &top_let.value, &[], &running)?;
+                let value = maybe_v006_scope(value, this_v006);
                 push_named_binding(
                     mod_path,
                     top_let.name.name.clone(),
@@ -607,6 +670,25 @@ fn walk_bindings(
                 let (recs, rec_scope) = rec_bindings(first, ands, &running)?;
                 running = rec_scope;
                 let names: Vec<String> = recs.iter().map(|(n, _)| n.clone()).collect();
+                // Slice X2a: RHS granularity — wrap EACH recursive clause's
+                // own body individually (not the `LetRecIn` node as a
+                // whole), matching `elaborate_program_with_versions`'s doc
+                // comment.
+                let recs = if this_v006 {
+                    recs.into_iter()
+                        .map(|(n, body)| {
+                            (
+                                n,
+                                Rc::new(Ast::VersionScope(
+                                    SatysfiVersion::V0_0_6,
+                                    Box::new((*body).clone()),
+                                )),
+                            )
+                        })
+                        .collect()
+                } else {
+                    recs
+                };
                 bindings.push(Binding::LetRec(recs));
                 for n in names {
                     export_alias(mod_path, n, 0, &mut bindings, &mut running, &mut exported);
@@ -617,6 +699,7 @@ fn walk_bindings(
             } => {
                 let value_ast =
                     elaborate_let_inline(ctx.as_ref(), params, value, &running, "read-inline")?;
+                let value_ast = maybe_v006_scope(value_ast, this_v006);
                 push_named_binding(
                     mod_path,
                     cmd.name.clone(),
@@ -633,6 +716,7 @@ fn walk_bindings(
             } => {
                 let value_ast =
                     elaborate_let_inline(ctx.as_ref(), params, value, &running, "read-block")?;
+                let value_ast = maybe_v006_scope(value_ast, this_v006);
                 push_named_binding(
                     mod_path,
                     cmd.name.clone(),
@@ -648,6 +732,7 @@ fn walk_bindings(
                 cmd, params, value, ..
             } => {
                 let value_ast = elaborate_let_math(params, value, &running)?;
+                let value_ast = maybe_v006_scope(value_ast, this_v006);
                 push_named_binding(
                     mod_path,
                     cmd.name.clone(),
@@ -672,6 +757,7 @@ fn walk_bindings(
             },
             cst::TopBinding::LetMutable { name, value, .. } => {
                 let value_ast = expr(value, &running)?;
+                let value_ast = maybe_v006_scope(value_ast, this_v006);
                 push_named_binding(
                     mod_path,
                     name.name.clone(),
@@ -702,12 +788,24 @@ fn walk_bindings(
                 child_path.push(name.name.clone());
                 let inner_items: Vec<&cst::TopBinding> =
                     decls.iter().map(|d| d.0.as_ref()).collect();
+                // Slice X2a: a nested `module .. = struct .. end` has no
+                // index correspondence to the OUTER `v006_indices` (that set
+                // indexes THIS level's `items`, not `inner_items`) — if the
+                // enclosing item is itself v006-marked, every inner item is
+                // too (the whole subtree came from the same spliced 0.0.6
+                // file); otherwise none are.
+                let inner_v006: HashSet<usize> = if this_v006 {
+                    (0..inner_items.len()).collect()
+                } else {
+                    HashSet::new()
+                };
                 let (inner_bindings, inner_exported, inner_running) = walk_bindings(
                     &inner_items,
                     &running,
                     &child_path,
                     type_decls,
                     synonym_decls,
+                    &inner_v006,
                 )?;
                 // A module's own bare (unqualified) member names never leak
                 // past this `end`: `push_named_binding` (used by every

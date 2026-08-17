@@ -154,6 +154,79 @@ fn require_resolves_against_lib_root_dist_packages() {
     assert_eq!(file_names(&program), vec!["stdlib.satyh", "doc.saty"]);
 }
 
+// ============================================================================
+// Slice X4a (docs/plans/design-cross-version-import.md §"Slice X4 — reverse
+// direction"): a V0_0_6-rooted load's `@require:` reaches the 0.1 corpus
+// `dist-v01/packages/`, and the resolved target is tagged V0_1 (the Q4-mirror
+// rule) even though its `module …` head gives `sniff_version` no signal.
+// ============================================================================
+
+#[test]
+fn require_resolves_against_lib_root_dist_v01_packages() {
+    let dir = TempDir::new("require-v01");
+    let lib_root = dir.path().join("lib");
+    fs::create_dir_all(lib_root.join("dist-v01").join("packages")).unwrap();
+    fs::write(
+        lib_root.join("dist-v01").join("packages").join("v01lib.satyh"),
+        "module V01Lib = struct\n  val x = 1\nend\n",
+    )
+    .unwrap();
+    let entry = dir.write("doc.saty", "@require: v01lib\nlet x = 1 in x");
+
+    let opts = LoadOptions {
+        lib_root: Some(lib_root),
+        version: SatysfiVersion::V0_0_6,
+        ..Default::default()
+    };
+    let program = load(&entry, &opts).expect("load should succeed");
+
+    assert_eq!(program.files.len(), 2);
+    assert_eq!(file_names(&program), vec!["v01lib.satyh", "doc.saty"]);
+    assert!(
+        matches!(program.files[0].version, SatysfiVersion::V0_1),
+        "a dist-v01/packages/ @require: target must be tagged V0_1 (Q4-mirror), \
+         even though its `module ..` head gives sniff_version no signal"
+    );
+    assert!(
+        matches!(program.files[0].cst, satysfi_loader::LoadedCst::V0_1(_)),
+        "a V0_1-tagged file must carry a V0_1-parsed cst"
+    );
+    assert!(
+        matches!(program.files[1].version, SatysfiVersion::V0_0_6),
+        "the V0_0_6 entry must stay V0_0_6"
+    );
+}
+
+/// A pure-0.0.6 load with NO `dist-v01/packages/` target must be completely
+/// unaffected by the X4a Q4-mirror rule — every node stays `V0_0_6`, exactly
+/// as `require_resolves_against_lib_root_dist_packages` above already pins,
+/// re-asserted here with the `version` field explicit (the non-regression
+/// invariant the X4a task brief calls out by name).
+#[test]
+fn pure_v006_load_is_unaffected_by_the_v01_q4_mirror_rule() {
+    let dir = TempDir::new("require-pure-v006");
+    let lib_root = dir.path().join("lib");
+    fs::create_dir_all(lib_root.join("dist").join("packages")).unwrap();
+    fs::write(
+        lib_root.join("dist").join("packages").join("stdlib.satyh"),
+        "let s = 1",
+    )
+    .unwrap();
+    let entry = dir.write("doc.saty", "@require: stdlib\nlet x = 1 in x");
+
+    let opts = LoadOptions {
+        lib_root: Some(lib_root),
+        version: SatysfiVersion::V0_0_6,
+        ..Default::default()
+    };
+    let program = load(&entry, &opts).expect("load should succeed");
+
+    for f in &program.files {
+        assert_eq!(f.version, SatysfiVersion::V0_0_6, "{:?}", f.path);
+        assert!(matches!(f.cst, satysfi_loader::LoadedCst::V0_0_6(_)));
+    }
+}
+
 #[test]
 fn mutual_import_cycle_is_reported_naming_both_files() {
     let dir = TempDir::new("cycle");

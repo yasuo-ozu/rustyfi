@@ -24,3 +24,4 @@ pub(crate) mod module_check;
 pub(crate) mod sig_subtype;
 pub(crate) mod static_env;
 pub(crate) mod surface;
+pub(crate) mod xver_adapt;

@@ -171,9 +171,28 @@ fn cmd_compile(m: &ArgMatches) -> anyhow::Result<()> {
                 .map_err(|e| anyhow::anyhow!("{}: {e}", input.display()))?
         }
         _ => {
-            let merged = merge_program(program);
-            satysfi_lang::compile_document_cst(&merged, metrics)
-                .map_err(|e| anyhow::anyhow!("{}: {e}", input.display()))?
+            // Slice X4a (docs/plans/design-cross-version-import.md §"Slice
+            // X4 — reverse direction"): a V0_0_6-rooted load whose
+            // dependency graph contains at least one foreign V0_1 node (a
+            // `@require:` of a `dist-v01/packages/` package, per the
+            // loader's Q4-mirror rule) routes through the new
+            // `compile_document_v006_xver` entry point instead of the
+            // pure-0.0.6 `merge_program`/`compile_document_cst` path — ONLY
+            // when such a dependency is actually present, so a pure-0.0.6
+            // load (the overwhelming majority — every existing fixture)
+            // takes the exact old path, byte-identical.
+            let has_v01_dep = program
+                .files
+                .iter()
+                .any(|f| matches!(f.cst, satysfi_loader::LoadedCst::V0_1(_)));
+            if has_v01_dep {
+                satysfi_lang::compile_document_v006_xver(&program.files, metrics)
+                    .map_err(|e| anyhow::anyhow!("{}: {e}", input.display()))?
+            } else {
+                let merged = merge_program(program);
+                satysfi_lang::compile_document_cst(&merged, metrics)
+                    .map_err(|e| anyhow::anyhow!("{}: {e}", input.display()))?
+            }
         }
     };
 

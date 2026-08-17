@@ -71,6 +71,42 @@ fn run_with_big_stack(f: impl FnOnce() + Send + 'static) {
         .expect("big-stack thread panicked (see assertion above)");
 }
 
+/// Every parenthesised string operand in an uncompressed content stream,
+/// concatenated in order.
+///
+/// A word is NOT one `Tj` operand. `Context::initial` installs the en-US
+/// hyphenation dictionary (`rustyfi-backend`'s `context.rs`), so
+/// `text_to_boxes` splits each hyphenatable Latin word into fragments joined
+/// by empty-slot `Discretionary`s: "Reference" renders as `(Ref) Tj … (er) Tj
+/// … (ence) Tj`, whether or not the line breaker takes any of those breaks.
+///
+/// The fallbacks below run only when `pdftotext` is unavailable, and what they
+/// are actually asserting is that the text REACHED the PDF at all — so they
+/// join the operands back up rather than assume where the hyphenator split.
+/// Asserting on `(Reference)` instead made those five tests pass or fail on
+/// whether poppler happened to be on `PATH`.
+fn content_literals(bytes: &[u8]) -> String {
+    let mut out = String::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] != b'(' {
+            i += 1;
+            continue;
+        }
+        i += 1;
+        while i < bytes.len() && bytes[i] != b')' {
+            // `\)` and friends are literal content, not a terminator.
+            if bytes[i] == b'\\' && i + 1 < bytes.len() {
+                i += 1;
+            }
+            out.push(bytes[i] as char);
+            i += 1;
+        }
+        i += 1;
+    }
+    out
+}
+
 fn compile_fixture() -> Vec<u8> {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/minimal.saty");
     let merged = load_and_merge(&fixture);
@@ -114,14 +150,15 @@ fn fixture_compiles_to_valid_pdf_with_expected_text() {
         _ => {
             // Fallback: content streams are uncompressed, so the Tj string
             // operands are directly visible in the bytes.
-            let hay = String::from_utf8_lossy(&bytes);
             // `\emph{SATySFi-in-Rust}.` sets the emphasized word (oblique) and
             // the trailing `.` as separate text runs, so the period is not part
-            // of this operand.
-            for expected in ["(Hello,)", "(world!)", "(SATySFi-in-Rust)"] {
+            // of the same operand — and hyphenation splits the words further
+            // still, hence `content_literals`.
+            let hay = content_literals(&bytes);
+            for expected in ["Hello,", "world!", "SATySFi-in-Rust"] {
                 assert!(
                     hay.contains(expected),
-                    "content stream missing {expected:?}"
+                    "content stream missing {expected:?}:\n{hay}"
                 );
             }
         }
@@ -182,11 +219,11 @@ fn phase2_fixture_compiles_and_renders_expected_text() {
             );
         }
         _ => {
-            let hay = String::from_utf8_lossy(&bytes);
-            for expected in ["(Bracketed)", "(Announced)", "(Countdown)", "(complete.)"] {
+            let hay = content_literals(&bytes);
+            for expected in ["Bracketed", "Announced", "Countdown", "complete."] {
                 assert!(
                     hay.contains(expected),
-                    "content stream missing {expected:?}"
+                    "content stream missing {expected:?}:\n{hay}"
                 );
             }
         }
@@ -244,11 +281,11 @@ fn phase2b_fixture_compiles_and_renders_expected_text() {
             );
         }
         _ => {
-            let hay = String::from_utf8_lossy(&bytes);
-            for expected in ["(Countdown)", "(complete.)"] {
+            let hay = content_literals(&bytes);
+            for expected in ["Countdown", "complete."] {
                 assert!(
                     hay.contains(expected),
-                    "content stream missing {expected:?}"
+                    "content stream missing {expected:?}:\n{hay}"
                 );
             }
         }
@@ -889,8 +926,8 @@ fn footnote_fixture_places_the_footnote_body_below_the_reference_and_renders_its
             );
         }
         _ => {
-            let hay = String::from_utf8_lossy(&bytes);
-            for expected in ["(Reference)", "(distinctive)", "(footnote)"] {
+            let hay = content_literals(&bytes);
+            for expected in ["Reference", "distinctive", "footnote"] {
                 assert!(
                     hay.contains(expected),
                     "content stream missing {expected:?} — the footnote body text \
@@ -973,8 +1010,8 @@ fn v01_footnote_scheme_body_renders_through_page_break() {
                 );
             }
             _ => {
-                let hay = String::from_utf8_lossy(&bytes);
-                for expected in ["(Reference)", "(Distinctive)", "(footnote)"] {
+                let hay = content_literals(&bytes);
+                for expected in ["Reference", "Distinctive", "footnote"] {
                     assert!(
                         hay.contains(expected),
                         "content stream missing {expected:?} — the FootnoteScheme body \

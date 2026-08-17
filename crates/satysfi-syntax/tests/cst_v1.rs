@@ -193,12 +193,20 @@ fn document_fun_wildcard_and_tuple_destructure_params() {
     };
     assert_eq!(params.len(), 2, "the tuple param plus the plain-variable param");
     assert!(
-        params[0].opts.is_none() && matches!(&params[0].body, cst_v1::ast::PatBot::Paren { .. }),
+        params[0].opts.is_none()
+            && matches!(
+                &params[0].body,
+                cst_v1::ast::ParamBody::Pat(cst_v1::ast::PatBot::Paren { .. })
+            ),
         "first param should be the (i, acc) tuple pattern, got {:?}",
         params[0]
     );
     assert!(
-        params[1].opts.is_none() && matches!(&params[1].body, cst_v1::ast::PatBot::Var(_)),
+        params[1].opts.is_none()
+            && matches!(
+                &params[1].body,
+                cst_v1::ast::ParamBody::Pat(cst_v1::ast::PatBot::Var(_))
+            ),
         "second param should be the plain variable x, got {:?}",
         params[1]
     );
@@ -218,6 +226,25 @@ fn document_labeled_optional_arguments() {
     assert_roundtrip_v1("let add ?(bias = b, scale = s) x = x in add 1");
     // A bundle heading a bare-constructor argument (`BundledCtor`).
     assert_roundtrip_v1("f ?(a = 1) None");
+}
+
+/// optional-arg-rows increment 3a: a `?(l = x, …)` labeled-optional bundle
+/// on an inline/block command's OWN parameter list — grammar-wise this
+/// already parsed at increment 1 (`cst_v1::Param.opts`), this pins it stays
+/// that way once `lower_command_params` actually consumes it (rather than
+/// erroring) rather than a grammar regression.
+#[test]
+fn command_param_bundle_round_trips() {
+    assert_roundtrip_v1(
+        "module M = struct\n\
+         val inline ctx \\c ?(a = x, b = y) t = t\n\
+         end",
+    );
+    assert_roundtrip_v1(
+        "module M = struct\n\
+         val block ctx +sec ?(label = l, outline-title = o) title inner = inner\n\
+         end",
+    );
 }
 
 #[test]
@@ -471,8 +498,9 @@ fn library_op_named_value() {
 
 /// G2: closed type-level records (`(| l : ty |)`) now parse (`TypeAtom::
 /// Record`) — round-trips, and the field list/names come through as
-/// expected. The `| ?'r` row-var tail form stays a parse error (see
-/// `type_record_rowvar_tail_is_still_a_parse_error` below).
+/// expected. The `| ?'r` row-var tail form NOW ALSO parses (optional-arg-rows
+/// increment 2 — see `type_record_rowvar_tail_now_parses_and_round_trips`
+/// below).
 #[test]
 fn type_record_round_trips() {
     let src = "module M = struct\n\
@@ -528,17 +556,36 @@ fn type_record_as_fun_domain_and_in_sig_round_trips() {
     );
 }
 
-/// The open form's `| ?'r` row-var tail is NOT modeled (deferred to the
-/// paused optional-arg-rows track): the group can't be fully consumed, so
-/// this stays a parse error.
+/// optional-arg-rows increment 2: the open form's `| ?'r` row-var tail now
+/// parses (round-trips) and its `row_tail` comes through with the expected
+/// row-variable name.
 #[test]
-fn type_record_rowvar_tail_is_still_a_parse_error() {
-    assert!(parse_file_v1(
-        "module M = struct\n\
-         type t = (| x : int | ?'r |)\n\
-         end"
-    )
-    .is_err());
+fn type_record_rowvar_tail_now_parses_and_round_trips() {
+    let src = "module M = struct\n\
+               type t = (| x : int | ?'r |)\n\
+               end";
+    assert_roundtrip_v1(src);
+
+    let file = parse_file_v1(src).unwrap();
+    let cst_v1::FileV1::Library { binds, .. } = file else {
+        panic!("expected a library file");
+    };
+    let cst_v1::Bind::Type { first, .. } = &binds[0] else {
+        panic!("expected a Type bind, got {:?}", binds[0]);
+    };
+    let cst_v1::TypeBodyV1::Synonym(ty) = &first.body else {
+        panic!("expected t's body to be a synonym, got {:?}", first.body);
+    };
+    let cst_v1::ast::TypeExpr::Atom(cst_v1::ast::TypeProd { first: app, .. }) = ty else {
+        panic!("expected a bare TypeProd, got {ty:?}");
+    };
+    let cst_v1::ast::TypeApp::Atom(cst_v1::ast::TypeAtom::Record { inner, .. }) = app else {
+        panic!("expected TypeAtom::Record, got {app:?}");
+    };
+    let names: Vec<String> = inner.fields.iter().map(|f| f.name.name.clone()).collect();
+    assert_eq!(names, vec!["x".to_string()]);
+    let tail = inner.row_tail.as_ref().expect("expected a row_tail");
+    assert_eq!(tail.var.name, "r");
 }
 
 /// `=` is the record-EXPRESSION field separator, not the record-TYPE one —
@@ -1315,9 +1362,16 @@ fn command_type_and_long_lower_shapes() {
 }
 
 /// Negatives: `math […]` still fails at the `[` (`math` is still a plain
-/// `VarTok`, never a keyword until the math-split phase claims it), and
-/// neither `?`-suffixed nor `?(…)`-prefixed command-arg slots parse (roadmap
-/// phase 4, unchanged).
+/// `VarTok`, never a keyword until the math-split phase claims it — that's
+/// optional-arg-rows increment 3b), a `?`-suffixed slot (`int?`) still never
+/// parses (0.1 has no such positional-optional marker at all, only the
+/// closed-map `?(…)` prefix), and a `?(…)`-prefixed slot with NO mandatory
+/// type following the bundle (`[?(l : int)]` alone, nothing after the
+/// bundle) still fails — the bundle prefix is optional, but the slot's own
+/// `ty` is not (`TypeCmdArgItemV1.opts: Option<..>`, `ty: TyErasedV1`, not
+/// `Option<TyErasedV1>`). A well-formed `?(l:τ,…) τ_arg` DOES now parse —
+/// see `command_type_opt_labels_round_trips` (optional-arg-rows increment
+/// 3a, "roadmap phase 4" landed).
 #[test]
 fn command_type_negatives() {
     assert!(parse_file_v1(
@@ -1344,4 +1398,72 @@ fn command_type_negatives() {
          end"
     )
     .is_err());
+}
+
+/// optional-arg-rows increment 3a: `inline [?(l:τ,…) τ_arg, …]` / `block
+/// […]` — the `?(l : τ, …)` labeled-optional command-type row PREFIX,
+/// round-tripping on a single- and a two-label bundle, mixed with a
+/// trailing plain (unbundled) slot, plus the empty-list `opts: None` case
+/// stays byte-identical (`command_type_round_trips`, above, untouched).
+#[test]
+fn command_type_opt_labels_round_trips() {
+    assert_roundtrip_v1(
+        "module M = struct\n\
+         signature S = sig\n\
+         val \\show : inline [?(a : int) inline-text, block-text]\n\
+         val +put : block [?(a : int, b : bool) inline-text]\n\
+         end\n\
+         end",
+    );
+}
+
+/// Shape assertion for the `?(l:τ,…)` command-type row: the parsed tree
+/// actually carries `opts` with the right entries (surface order, NOT yet
+/// sorted — sorting is a `typecheck.rs`-side concern, §7.3/§14 risk 3), and
+/// a plain slot right after a bundled one still parses with `opts: None`.
+#[test]
+fn command_type_opt_labels_shape() {
+    let src = "module M = struct\n\
+               signature S = sig\n\
+               val \\show : inline [?(b : bool, a : int) inline-text, block-text]\n\
+               end\n\
+               end";
+    let file = parse_file_v1(src).unwrap();
+    let cst_v1::FileV1::Library { binds, .. } = file else {
+        panic!("expected a library file");
+    };
+    let cst_v1::Bind::Signature { sig_, .. } = &binds[0] else {
+        panic!("expected a Bind::Signature, got {:?}", binds[0]);
+    };
+    let cst_v1::ast::SigExpr::Bot(cst_v1::ast::SigBotV1::Sig { decls, .. }) = &*sig_.0 else {
+        panic!("expected SigExpr::Bot(SigBotV1::Sig)");
+    };
+    let cst_v1::ast::Decl::ValHorzCmd { ty, .. } = &*decls[0].0 else {
+        panic!("expected decls[0] to be ValHorzCmd, got {:?}", decls[0].0);
+    };
+    let cst_v1::ast::TypeExpr::Atom(cst_v1::ast::TypeProd { first, .. }) = ty else {
+        panic!("expected a bare TypeProd, got {ty:?}");
+    };
+    let cst_v1::ast::TypeApp::InlineCmdTy { args, .. } = first else {
+        panic!("expected TypeApp::InlineCmdTy, got {first:?}");
+    };
+    assert_eq!(args.len(), 2, "{args:?}");
+    let bundle = args[0].opts.as_ref().expect("first slot should carry a bundle");
+    let labels: Vec<&str> = bundle.entries.iter().map(|e| e.label.name.as_str()).collect();
+    assert_eq!(labels, vec!["b", "a"], "surface order preserved, not yet sorted");
+    assert!(args[1].opts.is_none(), "second slot should carry no bundle");
+}
+
+/// Empty `?()` bundle in a command-type row PARSES (the grammar tolerates it
+/// — non-emptiness is enforced later, at lowering: `v1/lower.rs::
+/// lower_type_cmd_args`, mirroring every other `?(…)` bundle in this port).
+#[test]
+fn command_type_empty_opt_labels_parses_but_is_a_lower_concern() {
+    assert_roundtrip_v1(
+        "module M = struct\n\
+         signature S = sig\n\
+         val \\show : inline [?() inline-text]\n\
+         end\n\
+         end",
+    );
 }

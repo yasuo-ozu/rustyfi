@@ -240,13 +240,13 @@ pub struct SigAnnotV1 {
 }
 
 /// One parameter of a [`Bind`] (`param_unit`, `parser_v1.mly:635-646`): an
-/// optional `?(l = x, …)` labeled-optional binder bundle, then a plain
-/// `patbot`. Defined INSIDE [`mod@ast`] and re-exported here so that
-/// [`ast::Expr::Fun`]/[`ast::Expr::LetIn`]/[`ast::RecClauseV1`] can reference
-/// it without a boundary-crossing Parse-trait cycle (the `TypeBindsErasedV1`
-/// E0275 hazard). The `( pat : τ )` ascribed form is still deferred (roadmap
-/// optional-arg-rows increment 2).
-pub use ast::{OptParamEntryV1, OptParamsV1, Param};
+/// optional `?(l = x, …)` labeled-optional binder bundle, then either a
+/// plain `patbot` or a `( pat : τ )` ascribed pattern (optional-arg-rows
+/// increment 2 — [`ast::ParamBody::Ascribed`]). Defined INSIDE [`mod@ast`]
+/// and re-exported here so that [`ast::Expr::Fun`]/[`ast::Expr::LetIn`]/
+/// [`ast::RecClauseV1`] can reference it without a boundary-crossing
+/// Parse-trait cycle (the `TypeBindsErasedV1` E0275 hazard).
+pub use ast::{AscribedInnerV1, OptParamEntryV1, OptParamsV1, Param, ParamBody};
 
 /// Every arm of `bind` (`parser_v1.mly:415-440`) — upstream's own
 /// nonterminal name (Sub-slice 2c retires the prior stopgap `V1`-suffixed
@@ -620,19 +620,48 @@ pub mod ast {
     use syan::parse::{Parse, Unparse};
 
     /// One `param_unit` (`parser_v1.mly:635-646`): an optional `?(l = x, …)`
-    /// labeled-optional binder bundle, then a plain `patbot`. Held inside
-    /// `mod ast` (re-exported at [`super::Param`]) so the roots that carry
-    /// param lists (`Expr::Fun`/`Expr::LetIn`/`RecClauseV1`) reference it
-    /// without a boundary Parse-trait cycle. A bare `patbot` param parses
-    /// `Param { opts: None, body }` directly — the `?`-headed `opts` `Option`
-    /// is tried first, failing on a non-`?` head with no token stolen, so
-    /// every existing all-plain fixture parses byte-identically.
+    /// labeled-optional binder bundle, then a [`ParamBody`] (a plain
+    /// `patbot`, or a `( pat : τ )` ascribed pattern). Held inside `mod ast`
+    /// (re-exported at [`super::Param`]) so the roots that carry param lists
+    /// (`Expr::Fun`/`Expr::LetIn`/`RecClauseV1`) reference it without a
+    /// boundary Parse-trait cycle. A bare `patbot` param parses `Param {
+    /// opts: None, body: ParamBody::Pat(_) }` directly — the `?`-headed
+    /// `opts` `Option` is tried first, failing on a non-`?` head with no
+    /// token stolen, so every existing all-plain fixture parses
+    /// byte-identically.
     #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
     pub struct Param {
         pub opts: Option<OptParamsV1>,
-        /// Increment 1: a plain `patbot` only; the `( pat : τ )` ascribed
-        /// form is optional-arg-rows increment 2.
-        pub body: PatBot,
+        pub body: ParamBody,
+    }
+
+    /// A `param_unit`'s trailing shape (`parser_v1.mly:635-646`): either a
+    /// plain `patbot`, or a `( pattern : typ )` ascribed pattern
+    /// (optional-arg-rows increment 2; `parser_v1.mly:641-645`).
+    #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
+    pub enum ParamBody {
+        /// Tried FIRST — preserves today's parse for every existing fixture:
+        /// `( x : int )` fails `patbot`'s own paren body at the `:` (a
+        /// `patbot` paren group expects only more patterns/`,`/`)`) and
+        /// backtracks here cleanly (ordered choice, no token stolen).
+        Pat(PatBot),
+        /// `( pattern : typ )` — a FULL `pattern` (not `patbot`) ascribed
+        /// with a full `typ`, both via erasers (same cycle-avoidance
+        /// discipline as every other satellite in this module).
+        Ascribed {
+            paren: ParenGroup<()>,
+            #[group(self.paren)]
+            inner: AscribedInnerV1,
+        },
+    }
+
+    /// An ascribed param's group content: `pattern : typ` (`parser_v1.mly`'s
+    /// `param_unit`, `:641-645`).
+    #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
+    pub struct AscribedInnerV1 {
+        pub pat: super::PatErasedV1,
+        pub colon: ColonTok,
+        pub ty: super::TyErasedV1,
     }
 
     /// A `?(l = x, …)` labeled-optional parameter bundle (`parser_v1.mly`'s
@@ -1203,21 +1232,39 @@ pub mod ast {
 
     /// A type-expression grammar (`typ`/`typ_prod`/`typ_app`/`typ_bot`,
     /// `parser_v1.mly:685-752`, simplified — same scope as
-    /// [`crate::cst::ast::TypeExpr`], "basic" per the S5 spec's acceptance
-    /// table: row polymorphism (`?'r`, open records) is deferred). Widened
-    /// (Sub-slice 2b) from Slice 1's `Fun{dom: TypeAtom, ..} | Atom(TypeAtom)`
-    /// to also spell products (`length * length`, [`TypeProd`]) and prefix
-    /// type application (`list int`, [`TypeApp`]) — without them a `type`
-    /// bind could declare almost nothing. Minus the `?(…)` optional-domain
-    /// prefix (labeled rows are roadmap phase 4): `dom -> cod`
-    /// right-recursive through `cod` only (the root's unchanged self-loop).
-    /// Self-recursive only through `Fun`'s codomain (right recursion);
-    /// parenthesized nesting goes through [`super::TyErasedV1`]. `TypeExpr`
-    /// was unreachable from `FileV1` before 2b (`Bind` had no type
-    /// ascriptions and `Param` was `Pat`-only); `Type` binds are its first
-    /// reachable use.
+    /// [`crate::cst::ast::TypeExpr`]). Widened (Sub-slice 2b) from Slice 1's
+    /// `Fun{dom: TypeAtom, ..} | Atom(TypeAtom)` to also spell products
+    /// (`length * length`, [`TypeProd`]) and prefix type application (`list
+    /// int`, [`TypeApp`]) — without them a `type` bind could declare almost
+    /// nothing. Optional-arg-rows increment 2 adds the `?(…)` labeled-optional
+    /// domain prefix ([`TypeExpr::OptRowFun`]) — a row-variable TAIL inside
+    /// that prefix (`?(… | ?'r) ->`) parses but is rejected at lowering
+    /// (needs signature-level row quantification, L4/2d territory, not this
+    /// increment): `dom -> cod` right-recursive through `cod` only (the
+    /// root's unchanged self-loop). Self-recursive only through `Fun`'s/
+    /// `OptRowFun`'s codomain (right recursion); parenthesized nesting goes
+    /// through [`super::TyErasedV1`]. `TypeExpr` was unreachable from
+    /// `FileV1` before 2b (`Bind` had no type ascriptions and `Param` was
+    /// `Pat`-only); `Type` binds are its first reachable use.
     #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
     pub enum TypeExpr {
+        /// `?(l : ty, … [| ?'r]) dom -> cod` (`typ` `:688-693`, `typ_opt_dom`
+        /// `:753-758`; optional-arg-rows increment 2). `?`-headed — neither
+        /// `Fun`/`Atom` (headed by `TypeProd`) can start with
+        /// `OptionalTypeTok`, so declared order relative to them is
+        /// safety-neutral; declared first to mirror the upstream `typ`
+        /// production order. Lowered (`v1/lower.rs`) to
+        /// `cst::ast::TypeExpr::OptRowFun`, thence (`typecheck.rs`) to
+        /// `MonoType::Func(Row::Cons(l1, ty1, … Row::Empty), dom, cod)` — a
+        /// CLOSED row, matching what `Ast::LambdaOpt` infers (increment 1),
+        /// so an explicit `?(l:τ)->` signature unifies against an actual
+        /// `?(l=x)`-taking function.
+        OptRowFun {
+            opt_dom: TypeOptDomV1,
+            dom: TypeProd,
+            arrow: ArrowTok,
+            cod: Box<TypeExpr>,
+        },
         /// `dom -> cod` (right-associative). This field is `TypeExpr`'s own
         /// self-loop (the root SCC). `dom` widened from [`TypeAtom`] to
         /// [`TypeProd`] (Sub-slice 2b) so e.g. `'a option -> 'b option` and
@@ -1232,6 +1279,49 @@ pub mod ast {
         /// enclosing arrow is still just "the whole type expression minus
         /// `->`".
         Atom(TypeProd),
+    }
+
+    /// `?(l : ty, … [| ?'r])` — the (possibly row-tailed) labeled-optional
+    /// domain prefix of a [`TypeExpr::OptRowFun`] (`typ_opt_dom`,
+    /// `parser_v1.mly:753-758`).
+    #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
+    pub struct TypeOptDomV1 {
+        pub q: OptionalTypeTok,
+        pub paren: ParenGroup<()>,
+        #[group(self.paren)]
+        pub inner: TypeOptDomInnerV1,
+    }
+
+    /// A [`TypeOptDomV1`]'s group content: one or more `label : typ` entries
+    /// (nonempty enforced at lowering), then an optional `| ?'r` row-variable
+    /// tail (`typ_opt_dom` `:756-757`) — parsed, but rejected with a
+    /// `LowerError` (needs signature-level row quantification — L4/2d
+    /// territory, not this increment; contrast [`TypeRecordInnerV1`]'s own
+    /// `row_tail`, which the SAME increment DOES complete, since a bare
+    /// record-typed value has no `quant`-list obligation to satisfy).
+    #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
+    pub struct TypeOptDomInnerV1 {
+        pub entries: Vec<TypeOptEntryV1>,
+        pub row_tail: Option<RowTailV1>,
+    }
+
+    /// One `label : typ,` entry of a [`TypeOptDomV1`] (last `,` optional;
+    /// `typ_opt_dom_entry`, `parser_v1.mly:759-762` — COLON, unlike the
+    /// value-level `?(l = e)` bundle's `=`).
+    #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
+    pub struct TypeOptEntryV1 {
+        pub label: VarTok,
+        pub colon: ColonTok,
+        pub ty: super::TyErasedV1,
+        pub comma: Option<CommaTok>,
+    }
+
+    /// `| ?'r` — a row-variable tail (shared by [`TypeOptDomInnerV1`] and
+    /// [`TypeRecordInnerV1`]; `parser_v1.mly:748-749`/`:756-757`).
+    #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
+    pub struct RowTailV1 {
+        pub bar: BarTok,
+        pub var: RowVarTok,
     }
 
     /// `typ_prod` (`parser_v1.mly:696-709`): one or more `*`-separated
@@ -1270,11 +1360,12 @@ pub mod ast {
     ///   BlockCmdTy): `inline [τ, …]`/`block [τ, …]` command types
     ///   (`parser.mly:730-735`, `typ_cmd_arg` `:763-774`), `KwInline`/
     ///   `KwBlock`-headed (already V0_1 keywords since `val inline`/`val
-    ///   block` binds, 2b — zero lexer work). Two deliberate supersets of
-    ///   upstream: each bracketed slot is a full [`TyErasedV1`] (`TypeExpr`),
-    ///   not upstream's narrower `typ_prod`; and there is no `?(label: τ,
-    ///   …)` optional-labeled-slot prefix (roadmap phase 4 — a `?(` here is
-    ///   still a parse error). `math […]` is deliberately NOT added: `math`
+    ///   block` binds, 2b — zero lexer work). One deliberate superset of
+    ///   upstream remains: each bracketed slot is a full [`TyErasedV1`]
+    ///   (`TypeExpr`), not upstream's narrower `typ_prod`. The `?(label: τ,
+    ///   …)` optional-labeled-slot prefix (roadmap phase 4) now IS modeled —
+    ///   see [`TypeCmdArgItemV1::opts`] (optional-arg-rows increment 3a).
+    ///   `math […]` is deliberately NOT added: `math`
     ///   is not a V0_1 keyword (it stays the 0.0.6-style type NAME v1 sigs
     ///   still use for `embed-math`-shaped members until the math-split
     ///   phase brings `val math`'s argument types and claims the keyword —
@@ -1318,21 +1409,54 @@ pub mod ast {
         Atom(TypeAtom),
     }
 
-    /// One `[…]`-bracketed command-type argument slot: `τ,` (`,`-separated,
-    /// last `,` optional — the [`ListItem`] pattern). A full [`TyErasedV1`]
-    /// per slot (permissive superset of upstream's `typ_cmd_arg`, which
-    /// additionally allows an `?(label: τ, …)` prefix — NOT modeled here,
-    /// roadmap phase 4; a `?(` in the list is unchanged, a parse error).
+    /// One `[…]`-bracketed command-type argument slot: an optional
+    /// `?(l : τ, …)` labeled-optional bundle PREFIX (optional-arg-rows
+    /// increment 3a — upstream `typ_cmd_arg : option(typ_opt_dom) typ_prod`,
+    /// `parser.mly:753-773`; roadmap phase 4, now landed), then the
+    /// mandatory `τ,` (`,`-separated, last `,` optional — the [`ListItem`]
+    /// pattern). A full [`TyErasedV1`] per slot (permissive superset of
+    /// upstream's narrower `typ_prod`). `opts` is `Option`-tried first: a
+    /// non-`?`-headed slot (every existing command-type element) fails the
+    /// `?` head with no token stolen, so `opts: None` parses exactly as
+    /// before this increment.
     #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
     pub struct TypeCmdArgItemV1 {
+        pub opts: Option<TypeCmdOptDomV1>,
+        pub ty: super::TyErasedV1,
+        pub comma: Option<CommaTok>,
+    }
+
+    /// `?(l : τ, …)` — a CLOSED command-type optional bundle (optional-arg-
+    /// rows increment 3a; upstream `typ_opt_dom`, `parser.mly:755-761`,
+    /// minus the `| ?'r` row-variable tail: command optional-argument types
+    /// are closed maps, never rows — upstream itself silently DISCARDS a
+    /// written row variable here, `parser.mly:859-869`'s literal `TODO
+    /// (error)` — so this port doesn't model one either; a stray `?'r` inside
+    /// a command-type bracket is a parse error, faithfully matching
+    /// upstream's "never actually usable" treatment of it). Mirrors
+    /// [`ast::CstTypeOptDom`]-shaped satellites elsewhere in this file.
+    #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
+    pub struct TypeCmdOptDomV1 {
+        pub q: OptionalTypeTok,
+        pub paren: ParenGroup<()>,
+        #[group(self.paren)]
+        pub entries: Vec<TypeCmdOptEntryV1>,
+    }
+
+    /// One `label : τ,` entry of a [`TypeCmdOptDomV1`] bundle (the last `,`
+    /// is optional).
+    #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
+    pub struct TypeCmdOptEntryV1 {
+        pub label: VarTok,
+        pub colon: ColonTok,
         pub ty: super::TyErasedV1,
         pub comma: Option<CommaTok>,
     }
 
     /// An atomic type expression. `parser_v1.mly:740-752`'s record forms are
-    /// modeled (closed record types, via [`TypeAtom::Record`]); the `| ?'r`
-    /// rowvar tail stays a parse error, deferred to the paused
-    /// optional-arg-rows track.
+    /// fully modeled: both the closed form and the open (row-var-tailed) form
+    /// share [`TypeAtom::Record`], distinguished by
+    /// [`TypeRecordInnerV1::row_tail`] (optional-arg-rows increment 2).
     #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
     pub enum TypeAtom {
         /// `( ty )`
@@ -1341,15 +1465,17 @@ pub mod ast {
             #[group(self.paren)]
             inner: super::TyErasedV1,
         },
-        /// `(| l1 : ty1, l2 : ty2, … |)` — a CLOSED record type (`typ_bot`'s
-        /// `L_RECORD` arm, `parser_v1.mly:746-747`; `typ_record_elem`
-        /// `:775-777` — COLON fields, unlike record EXPRESSIONS' `l = e`).
-        /// The open form's `| ?'r` row-var tail (`:748-749`) is NOT modeled
-        /// — a `|` after the fields leaves the group unconsumed and stays a
-        /// parse error, deferred to the optional-arg-rows track (its §6.3
-        /// adds `row_tail` here). Lowered to the existing
-        /// `cst::ast::TypeAtom::Record` (`cst.rs:1344`) and thence to a
-        /// closed `MonoType::Record` row (`typecheck.rs:512`).
+        /// `(| l1 : ty1, l2 : ty2, … |)` (closed) or `(| l1 : ty1, … | ?'r |)`
+        /// (open — a row-variable tail; optional-arg-rows increment 2)
+        /// (`typ_bot`'s two `L_RECORD` arms, `parser_v1.mly:746-749`;
+        /// `typ_record_elem` `:775-777` — COLON fields, unlike record
+        /// EXPRESSIONS' `l = e`). Lowered (`v1/lower.rs`): the closed form to
+        /// the existing `cst::ast::TypeAtom::Record` (`cst.rs:1344`) and
+        /// thence to a closed `MonoType::Record` row (`typecheck.rs:512`);
+        /// the open form to the additive `cst::ast::TypeAtom::RecordOpen`
+        /// and thence to an OPEN `MonoType::Record(Row::Var(…))` — a fresh
+        /// row variable, using the existing generic `Row`/`RowVarRef`/
+        /// `unify_row` machinery (no new type machinery needed).
         Record {
             rec: RecordGroup<()>,
             #[group(self.rec)]
@@ -1366,13 +1492,14 @@ pub mod ast {
         Name(VarTok),
     }
 
-    /// A [`TypeAtom::Record`]'s group content. A separate struct (rather
-    /// than an inline `Vec` payload) so the paused optional-arg-rows track
-    /// can add its `row_tail: Option<RowTailV1>` as a purely additive field
-    /// (its spec §6.3 names this struct).
+    /// A [`TypeAtom::Record`]'s group content: the field list, plus an
+    /// optional `| ?'r` row-variable tail (optional-arg-rows increment 2 —
+    /// present ⇒ an OPEN record type; absent ⇒ closed, byte-identical to
+    /// before this increment).
     #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
     pub struct TypeRecordInnerV1 {
         pub fields: Vec<TypeRecordFieldV1>,
+        pub row_tail: Option<RowTailV1>,
     }
 
     /// One `l : ty,` field (last `,` optional — the [`ListItem`] pattern).

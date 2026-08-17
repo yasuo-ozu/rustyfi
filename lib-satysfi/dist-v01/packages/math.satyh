@@ -1,0 +1,709 @@
+% math.satyh — SATySFi 0.1 `math` package's `Math`, vendored for Legacy
+% packaging (docs/plans/satysfi-0-1-0-support.md §2 P2 / §4 phase 6 —
+% doc-class-capstone-road.md CP7 item 2). Source: saphe-split@b836d512:
+%   lib-satysfi/packages/math/math.0.0.1/src/math.satyh (1605 lines) —
+%   transliteration deltas:
+%   - T1: `use package open Stdlib` dropped; `@require: graphics`,
+%     `@require: length`, `@require: list`, `@require: path` added (the
+%     only Stdlib modules this file references QUALIFIED: `Graphics.empty`,
+%     `Length.abs`/`max`/`min`, `List.fold`/`fold-adjacent`/`map`/
+%     `map-indexed-adjacent`, `Path.line`/`poly-line`). Every other member
+%     it calls bare (`set-text-color`, `get-font-size`, `read-inline`,
+%     `line-break`, `tabular`, `stroke`, `fill`, `unite-path`, the whole
+%     `math-*` prim family, …) is a GLOBAL primitive resolved through
+%     `base_env` regardless of `@require:` — the same "bare primitive"
+%     story `context.satyh`'s banner documents.
+%   - **STAND-IN — dropped the sealing boundary (`module Math :> sig …
+%     end = struct` -> plain `module Math = struct`), documented gap**:
+%     upstream's sig declares ~190 math-command members with the type
+%     head `\cmd : math [τ1, …]` (`\frac`, `\alpha`, `\sum`, …). This
+%     port's v1 grammar deliberately has NO `math […]` command-type head
+%     in TYPE/signature position yet — only `inline […]`/`block […]`
+%     (`cst_v1.rs` `TypeApp::InlineCmdTy`/`BlockCmdTy`, no `MathCmdTy`;
+%     confirmed by the dedicated regression
+%     `v01_opt_cmd_rows.rs::t9_math_command_type_head_is_still_a_parse_
+%     error`, which asserts exactly `val \cmd : math […]` inside a sealed
+%     sig is a PARSE error). This is optional-arg-rows increment 3b
+%     (deferred, separate track — NOT part of what this capstone task
+%     landed) — NOT the same gap as the `?(tag…)` bundles on `+math`/
+%     `\eqn` (those use the LANDED `block […]`/`inline […]` heads and
+%     increment 3a, and remain fully sig-declarable; see below).
+%     PORT STAND-IN: every math-command VALUE binding (`val math ctx
+%     \frac … = …`, landed, math-split) is kept, VERBATIM, in the
+%     `struct` body below — every one of upstream's ~190 math commands
+%     is still DEFINED and (since the module is now unsealed/
+%     transparent rather than opaque-sealed) fully REACHABLE as
+%     `Math.frac`/`Math.alpha`/etc. What's lost by dropping `:>` is only
+%     upstream's INTERNAL-helper hiding (`math-scheme`, `single`,
+%     `greek`, `greek-lowercase/-uppercase`, `ord`/`bin`/`rel`/`op`/
+%     `punct`/`prefix`, `vop-scheme`/`bigop`/`vop`, `bracket-metrics`/
+%     `-path`, `floor-path`, `ceil-path` become visible too) — pure API-
+%     surface leakage, not a functional or type-safety change (`Math`
+%     declares no opaque types, so sealing here was never load-bearing
+%     for abstraction, only for tidiness). No consumer (std-ja included)
+%     references any of these helpers, so nothing downstream is affected.
+%   - No other deltas: no operator sections (T4/G1 n/a), no `use open
+%     Basic` (T2 n/a), no `persistent`/`~lift` staging (T3 n/a), no
+%     functors/aliases/include. The `struct … end` body below is BYTE-
+%     IDENTICAL to upstream's (only the enclosing `module … :> sig …
+%     end = struct` header became a plain `module Math = struct`).
+%   - The 4 `?(tag : inline-text)`/`?(tag = tagopt)` optional-argument
+%     command rows (`+math`, `\eqn`) ARE optional-arg-rows increment 3a
+%     (inline/block command PARAMETER bundles) — landed; they compile
+%     and evaluate correctly even without a sig (unbundled calls default
+%     the label to `None`, proven by `v01_opt_cmd_rows.rs` T1/T2 for the
+%     identical unsealed-module shape).
+%   - `\derive`/`\derive-multi` (proof-tree commands) are NOT part of
+%     this package (they live in the separate upstream `proof` package,
+%     not vendored here) — nothing in this file needs them.
+
+@require: graphics
+@require: length
+@require: list
+@require: path
+
+module Math = struct
+
+  val join (msep : math-text) (ms : list math-text) =
+    match
+      ms |> List.fold (fun maccopt m -> (
+        match maccopt with
+        | None       -> Some(m)
+        | Some(macc) -> Some(${#macc #msep #m})
+        end
+      )) None
+    with
+    | None       -> ${}
+    | Some(macc) -> macc
+    end
+
+
+  val join-boxes ctx (mbsep : math-boxes) (mbs : list math-boxes) =
+    match
+      mbs |> List.fold (fun mbaccopt mb -> (
+        match mbaccopt with
+        | None        -> Some(mb)
+        | Some(mbacc) -> Some(math-concat (math-concat mbacc mbsep) mb)
+        end
+      )) None
+    with
+    | None       -> read-math ctx ${}
+    | Some(macc) -> macc
+    end
+
+
+  val margin-ratio = 1.
+
+
+  val inline ctx \math m =
+    script-guard Latin (embed-math ctx (read-math ctx m))
+
+  val math ctx \frac numer denom =
+    math-frac ctx (read-math ctx numer) (read-math ctx denom)
+
+  val math ctx \sqrt inner =
+    math-radical ctx None (read-math ctx inner)
+
+  val math ctx \lower base lower =
+    math-lower ctx (read-math ctx base) (fun ctx -> read-math ctx lower)
+
+  val math ctx \upper base upper =
+    math-upper ctx (read-math ctx base) (fun ctx -> read-math ctx upper)
+
+  val math ctx \text it =
+    embed-inline-to-math MathOrd (read-inline ctx it)
+
+  val math ctx \math-skip len =
+    embed-inline-to-math MathOrd (inline-skip len)
+
+  val math ctx \math-color color m =
+    read-math (ctx |> set-text-color color) m
+
+
+  val math ctx \mathord m = math-group MathOrd MathOrd (read-math ctx m)
+  val math ctx \mathbin m = math-group MathBin MathBin (read-math ctx m)
+  val math ctx \mathrel m = math-group MathRel MathRel (read-math ctx m)
+  val math ctx \mathop m = math-group MathOp MathOp (read-math ctx m)
+  val math ctx \mathprefix m = math-group MathPrefix MathPrefix (read-math ctx m)
+  val math ctx \mathpunct m = math-group MathPunct MathPunct (read-math ctx m)
+
+  val math ctx \math-style sty m =
+    read-math (ctx |> set-math-char-class sty) m
+
+  val math ctx \mathrm m = read-math ctx ${\math-style!(MathRoman){#m}}
+  val math ctx \mathbf m = read-math ctx ${\math-style!(MathBoldRoman){#m}}
+  val math ctx \mathcal m = read-math ctx ${\math-style!(MathScript){#m}}
+  val math ctx \mathfrak m = read-math ctx ${\math-style!(MathFraktur){#m}}
+  val math ctx \mathbb m = read-math ctx ${\math-style!(MathDoubleStruck){#m}}
+  val math ctx \bm m = read-math ctx ${\math-style!(MathBoldItalic){#m}}
+  val math ctx \mathit m = read-math ctx ${\math-style!(MathItalic){#m}}
+  % PORT: \mathsf/\mathtt dropped — `MathSansSerif`/`MathTypewriter` are not
+  % among this port's 9 registered `math-char-class` constructors
+  % (`prim_types.rs`'s `math_char_class_decl` has `MathItalic`/
+  % `MathBoldItalic`/`MathRoman`/`MathBoldRoman`/`MathScript`/
+  % `MathBoldScript`/`MathFraktur`/`MathBoldFraktur`/`MathDoubleStruck`
+  % only — upstream's 14-constructor `math-char-class` type is a 9/14
+  % subset in this port; T6-style member drop).
+
+  val math ctx \math-style-token sty s =
+    embed-inline-to-math MathOrd (
+      let sm = convert-string-for-math ctx sty s in
+      embed-math ctx (math-char ctx MathOrd sm)
+    )
+
+  val math ctx \mathit-token s = read-math ctx ${\math-style-token!(MathItalic)!(s)}
+  val math ctx \mathrm-token s = read-math ctx ${\math-style-token!(MathRoman)!(s)}
+  val math ctx \mathbf-token s = read-math ctx ${\math-style-token!(MathBoldRoman)!(s)}
+
+
+  val math-scheme ctx tagopt m =
+    let ib = embed-math ctx m in
+      match tagopt with
+      | None      -> line-break true true ctx (inline-fil ++ ib ++ inline-fil)
+      | Some(tag) -> line-break true true ctx (inline-fil ++ ib ++ inline-fil ++ read-inline ctx tag)
+      end
+
+
+  val block ctx +math ?(tag = tagopt) m =
+    math-scheme ctx tagopt (read-math ctx m)
+
+
+  val inline ctx \eqn ?(tag = tagopt) m =
+    inline-fil ++
+      embed-block-breakable ctx (math-scheme ctx tagopt (read-math ctx m))
+        ++ omit-skip-after
+
+
+  val block ctx +math-list mlst =
+    let mingap = get-font-size ctx *' 2. in
+    let ib-fil =
+      discretionary 100 (inline-skip mingap ++ inline-fil) inline-fil inline-fil
+    in
+    let ib =
+      mlst |> List.fold-adjacent (fun ibacc m _ optnext -> (
+        let ib-after =
+          match optnext with
+          | None    -> inline-fil
+          | Some(_) -> ib-fil
+          end
+        in
+          ibacc ++ embed-math ctx (read-math ctx m) ++ ib-after
+      )) inline-fil
+    in
+    let margin = get-font-size ctx *' margin-ratio in
+    let ctx =
+      ctx |> set-min-gap-of-lines 12pt
+          |> set-paragraph-margin margin margin
+    in
+      line-break true true ctx ib
+
+
+  val inline ctx \math-list mlst =
+    inline-fil ++
+      embed-block-breakable ctx (read-block ctx '<+math-list(mlst);>)
+        ++ omit-skip-after
+
+
+  val block ctx +align mlstlst =
+    let vlen = 4pt in
+    let lengap = get-font-size ctx *' 2. in
+    let celllstlst =
+      mlstlst |> List.map (fun mlst -> (
+        let mbs = mlst |> List.map (read-math ctx) in
+        mbs |> List.map-indexed-adjacent (fun index mb _ mb-next-opt -> (
+          let ibm = embed-math ctx mb in
+          let ib =
+            match mb-next-opt with
+            | None ->
+                ibm
+
+            | Some(mb-next) ->
+                let ibspaceopt = space-between-maths ctx mb mb-next in
+                match ibspaceopt with
+                | None          -> ibm
+                | Some(ibspace) -> ibm ++ ibspace
+                end
+            end
+          in
+          let ib =
+            if index mod 2 == 0 then
+              inline-fil ++ ib
+            else
+              match mb-next-opt with
+              | None    -> ib ++ inline-fil
+              | Some(_) -> ib ++ inline-fil ++ inline-skip lengap
+              end
+          in
+            NormalCell((0pt, 0pt, vlen, vlen), ib)
+        ))
+      ))
+    in
+    let margin = get-font-size ctx *' margin-ratio in
+      line-break true true (ctx |> set-paragraph-margin margin margin)
+        (inline-fil ++ (tabular celllstlst (fun _ _ -> Graphics.empty)) ++ inline-fil)
+        % temporary
+
+
+  val inline ctx \align mlstlst =
+    inline-fil ++
+      embed-block-breakable ctx (read-block ctx '<+align(mlstlst);>)
+        ++ omit-skip-after
+
+
+  val single cp = string-unexplode [cp]
+
+
+  val greek ctx cp cpi cpb cpbi cpbss cpbiss =
+    let s = single cp in
+    let si = single cpi in
+    let sb = single cpb in
+    let sbi = single cpbi in
+    let sbss = single cpbss in
+    let sbiss = single cpbiss in
+    % typefaces marked with (*) are not defined in Unicode
+    let t =
+      match get-math-char-class ctx with
+      | MathItalic              -> si
+      | MathBoldItalic          -> sbi
+      | MathRoman               -> s
+      | MathBoldRoman           -> sb
+      | MathScript              -> si    % (*)
+      | MathBoldScript          -> sbi   % (*)
+      | MathFraktur             -> si    % (*)
+      | MathBoldFraktur         -> sbi   % (*)
+      | MathDoubleStruck        -> si    % (*)
+      % PORT: MathSansSerif/MathBoldSansSerif/MathItalicSansSerif/
+      % MathBoldItalicSansSerif/MathTypewriter arms dropped — not among
+      % this port's 9 registered `math-char-class` constructors (see the
+      % `\mathsf`/`\mathtt` drop note above); this match is exhaustive
+      % over the port's actual 9-constructor type once those 5 (upstream-
+      % only) arms are removed. `sbss`/`sbiss` (and hence `cpbss`/
+      % `cpbiss`) become unused by this cut alone — kept as `greek`
+      % params for byte-fidelity with `greek-lowercase`/`greek-
+      % uppercase`'s call shape.
+      end
+    in
+    math-char ctx MathOrd t
+
+
+  val greek-lowercase ctx i =
+    greek ctx (0x003B1 + i) (0x1D6FC + i) (0x1D6C2 + i) (0x1D736 + i) (0x1D770 + i) (0x1D7AA + i)
+
+
+  val greek-uppercase ctx i =
+    greek ctx (0x00391 + i) (0x1D6E2 + i) (0x1D6A8 + i) (0x1D71C + i) (0x1D756 + i) (0x1D790 + i)
+
+
+  val math ctx \alpha    = greek-lowercase ctx 0
+  val math ctx \beta     = greek-lowercase ctx 1
+  val math ctx \gamma    = greek-lowercase ctx 2
+  val math ctx \delta    = greek-lowercase ctx 3
+  val math ctx \epsilon  = greek-lowercase ctx 4
+  val math ctx \zeta     = greek-lowercase ctx 5
+  val math ctx \eta      = greek-lowercase ctx 6
+  val math ctx \theta    = greek-lowercase ctx 7
+  val math ctx \iota     = greek-lowercase ctx 8
+  val math ctx \kappa    = greek-lowercase ctx 9
+  val math ctx \lambda   = greek-lowercase ctx 10
+  val math ctx \mu       = greek-lowercase ctx 11
+  val math ctx \nu       = greek-lowercase ctx 12
+  val math ctx \xi       = greek-lowercase ctx 13
+  val math ctx \omicron  = greek-lowercase ctx 14
+  val math ctx \pi       = greek-lowercase ctx 15
+  val math ctx \rho      = greek-lowercase ctx 16
+  val math ctx \sigma    = greek-lowercase ctx 18
+  val math ctx \tau      = greek-lowercase ctx 19
+  val math ctx \upsilon  = greek-lowercase ctx 20
+  val math ctx \phi      = greek-lowercase ctx 21
+  val math ctx \chi      = greek-lowercase ctx 22
+  val math ctx \psi      = greek-lowercase ctx 23
+  val math ctx \omega    = greek-lowercase ctx 24
+
+  val math ctx \Alpha    = greek-uppercase ctx 0
+  val math ctx \Beta     = greek-uppercase ctx 1
+  val math ctx \Gamma    = greek-uppercase ctx 2
+  val math ctx \Delta    = greek-uppercase ctx 3
+  val math ctx \Epsilon  = greek-uppercase ctx 4
+  val math ctx \Zeta     = greek-uppercase ctx 5
+  val math ctx \Eta      = greek-uppercase ctx 6
+  val math ctx \Theta    = greek-uppercase ctx 7
+  val math ctx \Iota     = greek-uppercase ctx 8
+  val math ctx \Kappa    = greek-uppercase ctx 9
+  val math ctx \Lambda   = greek-uppercase ctx 10
+  val math ctx \Mu       = greek-uppercase ctx 11
+  val math ctx \Nu       = greek-uppercase ctx 12
+  val math ctx \Xi       = greek-uppercase ctx 13
+  val math ctx \Omicron  = greek-uppercase ctx 14
+  val math ctx \Pi       = greek-uppercase ctx 15
+  val math ctx \Rho      = greek-uppercase ctx 16
+  val math ctx \Sigma    = greek-uppercase ctx 18
+  val math ctx \Tau      = greek-uppercase ctx 19
+  val math ctx \Upsilon  = greek-uppercase ctx 20
+  val math ctx \Phi      = greek-uppercase ctx 21
+  val math ctx \Chi      = greek-uppercase ctx 22
+  val math ctx \Psi      = greek-uppercase ctx 23
+  val math ctx \Omega    = greek-uppercase ctx 24
+
+
+  val ord ctx = math-char ctx MathOrd
+  val bin ctx = math-char ctx MathBin
+  val rel ctx = math-char ctx MathRel
+  val op ctx = math-char ctx MathOp
+  val punct ctx = math-char ctx MathPunct
+  val prefix ctx = math-char ctx MathPrefix
+
+  val vop-scheme ctx charf s moptS moptT =
+    let mop = charf ctx MathOp s in
+    let m =
+      match moptS with
+      | None     -> mop
+      | Some(mS) -> math-lower ctx mop (fun ctx -> read-math ctx mS)
+      end
+    in
+    match moptT with
+    | None     -> m
+    | Some(mT) -> math-upper ctx m (fun ctx -> read-math ctx mT)
+    end
+
+  val bigop ctx = vop-scheme ctx math-big-char
+  val vop ctx = vop-scheme ctx math-char
+
+  val math ctx \to    = rel ctx `→`
+  val math ctx \pm    = bin ctx `±`
+  val math ctx \mp    = bin ctx `∓`
+  val math ctx \times = bin ctx `×`
+  val math ctx \setminus = bin ctx `∖`
+  val math ctx \ast = bin ctx `∗`
+  val math ctx \circ = bin ctx `∘`
+  val math ctx \bullet = bin ctx `∙`
+  val math ctx \cap = bin ctx `∩`
+  val math ctx \cup = bin ctx `∪`
+  val math ctx \uplus = bin ctx `⊎`
+  val math ctx \sqcap = bin ctx `⊓`
+  val math ctx \sqcup = bin ctx `⊔`
+  val math ctx \wedge = bin ctx `∧`
+  val math ctx \vee   = bin ctx `∨`
+  val math ctx \oplus = bin ctx `⊕`
+  val math ctx \ominus = bin ctx `⊖`
+  val math ctx \otimes = bin ctx `⊗`
+  val math ctx \oslash = bin ctx `⊘`
+
+  val math ctx \vdash = rel ctx `⊢`
+  val math ctx \nvdash = rel ctx `⊬`
+  val math ctx \dashv = rel ctx `⊣`
+  val math ctx \vDash = rel ctx `⊨`
+  val math ctx \nvDash = rel ctx `⊭`
+  val math ctx \Vdash = rel ctx `⊩`
+  val math ctx \nVdash = rel ctx `⊮`
+
+  val math ctx \colon-rel = rel ctx `:`
+
+  val math ctx \leq = rel ctx `≤`
+  val math ctx \geq = rel ctx `≥`
+  val math ctx \equiv = rel ctx `≡`
+  val math ctx \nequiv = rel ctx `≢`
+  val math ctx \neq = rel ctx `≠`
+  val math ctx \sim = rel ctx `∼`
+  val math ctx \nsim = rel ctx `≁`
+  val math ctx \simeq = rel ctx `≃`
+  val math ctx \nsimeq = rel ctx `≄`
+  val math ctx \propto = rel ctx `∝`
+  val math ctx \coloneq = rel ctx `≔`
+  val math ctx \eqcolon = rel ctx `≕`
+
+  val math ctx \in = rel ctx `∈`
+  val math ctx \nin = rel ctx `∉`
+  val math ctx \ni = rel ctx `∋`
+  val math ctx \nni = rel ctx `∌`
+  val math ctx \subset = rel ctx `⊂`
+  val math ctx \supset = rel ctx `⊃`
+  val math ctx \nsubset = rel ctx `⊄`
+  val math ctx \nsupset = rel ctx `⊅`
+  val math ctx \subseteq = rel ctx `⊆`
+  val math ctx \supseteq = rel ctx `⊇`
+  val math ctx \nsubseteq = rel ctx `⊈`
+  val math ctx \nsupseteq = rel ctx `⊉`
+  val math ctx \subsetneq = rel ctx `⊊`
+  val math ctx \supsetneq = rel ctx `⊋`
+  val math ctx \sqsubset = rel ctx `⊏`
+  val math ctx \sqsupset = rel ctx `⊐`
+  val math ctx \sqsubseteq = rel ctx `⊑`
+  val math ctx \sqsupseteq = rel ctx `⊒`
+  val math ctx \nsqsubseteq = rel ctx `⋢`
+  val math ctx \nsqsupseteq = rel ctx `⋣`
+  val math ctx \sqsubsetneq = rel ctx `⋤`
+  val math ctx \sqsupsetneq = rel ctx `⋥`
+  val math ctx \prec = rel ctx `≺`
+  val math ctx \succ = rel ctx `≻`
+  val math ctx \nprec = rel ctx `⊀`
+  val math ctx \nsucc = rel ctx `⊁`
+  val math ctx \preccurlyeq = rel ctx `≼`
+  val math ctx \succcurlyeq = rel ctx `≽`
+  val math ctx \precsim = rel ctx `≾`
+  val math ctx \succsim = rel ctx `≿`
+  val math ctx \npreccurlyeq = rel ctx `⋠`
+  val math ctx \nsucccurlyeq = rel ctx `⋡`
+
+  val math ctx \emptyset = ord ctx `∅`
+  val math ctx \infty = ord ctx `∞`
+  val math ctx \top = ord ctx `⊤`
+  val math ctx \bot = ord ctx `⊥`
+  val math ctx \therefore = ord ctx `∴`
+  val math ctx \because = ord ctx `∵`
+  val math ctx \forall = ord ctx `∀`
+  val math ctx \exists = ord ctx `∃`
+  val math ctx \nexists = ord ctx `∄`
+  val math ctx \bigcirc = ord ctx `◯`
+
+  val math ctx \cdot  = bin ctx `⋅`
+  val math ctx \ldots = ord ctx `…`
+  val math ctx \cdots = math-char ctx MathInner `⋯`
+  val math ctx \vdots = ord ctx `⋮`
+  val math ctx \ddots = ord ctx `⋱`
+  val math ctx \backddots = ord ctx `⋰`
+
+  val math ctx \lim with sub sup = vop ctx `lim` sub sup
+  val math ctx \colim with sub sup = vop ctx `colim` sub sup
+  val math ctx \max with sub sup = vop ctx `max` sub sup
+  val math ctx \min with sub sup = vop ctx `min` sub sup
+  val math ctx \inf with sub sup = vop ctx `inf` sub sup
+  val math ctx \sup with sub sup = vop ctx `sup` sub sup
+  val math ctx \sin = op ctx `sin`
+  val math ctx \cos = op ctx `cos`
+  val math ctx \tan = op ctx `tan`
+  val math ctx \cot = op ctx `cot`
+  val math ctx \sec = op ctx `sec`
+  val math ctx \csc = op ctx `csc`
+  val math ctx \log = op ctx `log`
+  val math ctx \tr  = op ctx `tr`
+  val math ctx \det = op ctx `det`
+  val math ctx \dom = op ctx `dom`
+  val math ctx \cod = op ctx `cod`
+  val math ctx \Ker = op ctx `Ker`
+  val math ctx \Im = op ctx `Im`
+
+  val math ctx \sum with sub sup = bigop ctx `∑` sub sup
+  val math ctx \prod with sub sup = bigop ctx `∏` sub sup
+  val math ctx \coprod with sub sup = bigop ctx `∐` sub sup
+  val math ctx \bigwedge with sub sup = bigop ctx `⋀` sub sup
+  val math ctx \bigvee with sub sup = bigop ctx `⋁` sub sup
+  val math ctx \bigcap with sub sup = bigop ctx `⋂` sub sup
+  val math ctx \bigcup with sub sup = bigop ctx `⋃` sub sup
+
+  val math ctx \lnot = ord ctx `¬`
+  val math ctx \land = rel ctx `∧`
+  val math ctx \lor  = rel ctx `∨`
+
+  val math ctx \Leftarrow = rel ctx `⇐`
+  val math ctx \Rightarrow = rel ctx `⇒`
+  val math ctx \Leftrightarrow = rel ctx `⇔`
+  val math ctx \Uparrow = rel ctx `⇑`
+  val math ctx \Downarrow = rel ctx `⇓`
+  val math ctx \Updownarrow = rel ctx `⇕`
+  val math ctx \nRightarrow = rel ctx `⇍`
+  val math ctx \nLeftarrow = rel ctx `⇏`
+  val math ctx \nLeftrightarrow = rel ctx `⇎`
+  val math ctx \leftarrow = rel ctx `←`
+  val math ctx \rightarrow = rel ctx `→`
+  val math ctx \uparrow = rel ctx `↑`
+  val math ctx \downarrow = rel ctx `↓`
+  val math ctx \updownarrow = rel ctx `↕`
+  val math ctx \nwarrow = rel ctx `↖`
+  val math ctx \nearrow = rel ctx `↗`
+  val math ctx \searrow = rel ctx `↘`
+  val math ctx \swarrow = rel ctx `↙`
+  val math ctx \nleftarrow = rel ctx `↚`
+  val math ctx \nrightarrow = rel ctx `↛`
+  val math ctx \nleftrightarrow = rel ctx `↮`
+  val math ctx \mapsto = rel ctx `↦`
+  val math ctx \hookleftarrow = rel ctx `↩`
+  val math ctx \hookrightarrow = rel ctx `↪`
+  val math ctx \rightarrowtail = rel ctx `↣`
+  val math ctx \leftarrowtail = rel ctx `↢`
+  val math ctx \twoheadleftarrow = rel ctx `↞`
+  val math ctx \twoheadrightarrow = rel ctx `↠`
+  val math ctx \twoheaduparrow = rel ctx `↟`
+  val math ctx \twoheaddownarrow = rel ctx `↡`
+  val math ctx \leftharpoonup = rel ctx `↼`
+  val math ctx \leftharpoondown = rel ctx `↽`
+  val math ctx \rightharpoonup = rel ctx `⇀`
+  val math ctx \rightharpoondown = rel ctx `⇁`
+  val math ctx \rightleftharpoons = rel ctx `⇌`
+  val math ctx \upharpoonright = rel ctx `↾`
+  val math ctx \upharpoonleft = rel ctx `↿`
+  val math ctx \downharpoonright = rel ctx `⇂`
+  val math ctx \downharpoonleft = rel ctx `⇃`
+  val math ctx \longleftarrow = rel ctx `⟵`
+  val math ctx \longrightarrow = rel ctx `⟶`
+  val math ctx \longleftrightarrow = rel ctx `⟷`
+  val math ctx \Longleftarrow = rel ctx `⟸`
+  val math ctx \Longrightarrow = rel ctx `⟹`
+  val math ctx \Longleftrightarrow = rel ctx `⟺`
+  val math ctx \circlearrowleft = rel ctx `↺`
+  val math ctx \circlearrowright = rel ctx `↻`
+
+  val math ctx \between = rel ctx `≬`
+  val math ctx \pitchfork = rel ctx `⋔`
+  val math ctx \intercal = rel ctx `⊺`
+  val math ctx \ll = rel ctx `≪`
+  val math ctx \gg = rel ctx `≫`
+  val math ctx \lll = rel ctx `⋘`
+  val math ctx \ggg = rel ctx `⋙`
+  val math ctx \leqq = rel ctx `≦`
+  val math ctx \geqq = rel ctx `≧`
+  val math ctx \lneqq = rel ctx `≨`
+  val math ctx \gneqq = rel ctx `≩`
+  val math ctx \lnsim = rel ctx `⋦`
+  val math ctx \gnsim = rel ctx `⋧`
+  val math ctx \precnsim = rel ctx `⋨`
+  val math ctx \succnsim = rel ctx `⋩`
+  val math ctx \Subset = rel ctx `⋐`
+  val math ctx \Supset = rel ctx `⋑`
+  val math ctx \Cap = bin ctx `⋒`
+  val math ctx \Cup = bin ctx `⋓`
+  val math ctx \lhd = rel ctx `⊲`
+  val math ctx \rhd = rel ctx `⊳`
+  val math ctx \unlhd = rel ctx `⊴`
+  val math ctx \unrhd = rel ctx `⊵`
+  val math ctx \triangleleft = rel ctx `⊲`
+  val math ctx \triangleright = rel ctx `⊳`
+  val math ctx \trianglelefteq = rel ctx `⊴`
+  val math ctx \trianglerighteq = rel ctx `⊵`
+  val math ctx \backsim = rel ctx `∽`
+  val math ctx \backsimeq = rel ctx `⋍`
+  val math ctx \eqcirc = rel ctx `≖`
+  val math ctx \cong = rel ctx `≅`
+  val math ctx \simneq = rel ctx `≆`
+  val math ctx \ncong = rel ctx `≇`
+  val math ctx \approx = rel ctx `≈`
+  val math ctx \napprox = rel ctx `≉`
+  val math ctx \approxeq = rel ctx `≊`
+  val math ctx \curlyeqprec = rel ctx `⋞`
+  val math ctx \curlyeqsucc = rel ctx `⋟`
+  val math ctx \lessdot = rel ctx `⋖`
+  val math ctx \gtrdot = rel ctx `⋗`
+  val math ctx \lesssim = rel ctx `≲`
+  val math ctx \gtrsim = rel ctx `≳`
+  val math ctx \nlesssim = rel ctx `≴`
+  val math ctx \ngtrsim = rel ctx `≵`
+  val math ctx \lessgtr = rel ctx `≶`
+  val math ctx \gtrless = rel ctx `≷`
+  val math ctx \nlessgtr = rel ctx `≸`
+  val math ctx \ngtrless = rel ctx `≹`
+  val math ctx \ntriangleleft = rel ctx `⋪`
+  val math ctx \ntriangleright = rel ctx `⋫`
+  val math ctx \ntrianglelefteq = rel ctx `⋬`
+  val math ctx \ntrianglerighteq = rel ctx `⋭`
+  val math ctx \lesseqgtr = rel ctx `⋚`
+  val math ctx \gtreqless = rel ctx `⋛`
+  val math ctx \nless = rel ctx `≮`
+  val math ctx \ngtr = rel ctx `≯`
+  val math ctx \nleq = rel ctx `≰`
+  val math ctx \ngeq = rel ctx `≱`
+  val math ctx \asymp = rel ctx `≍`
+  val math ctx \nasymp = rel ctx `≭`
+  val math ctx \circeq = rel ctx `≗`
+  val math ctx \Bumpeq = rel ctx `≎`
+  val math ctx \bumpeq = rel ctx `≏`
+  val math ctx \doteq = rel ctx `≐`
+  val math ctx \doteqdot = rel ctx `≑`
+  val math ctx \fallingdotseq = rel ctx `≒`
+  val math ctx \risingdotseq = rel ctx `≓`
+  val math ctx \mid = rel ctx `∣`
+  val math ctx \nmid = rel ctx `∤`
+  val math ctx \parallel = rel ctx `∥`
+  val math ctx \nparallel = rel ctx `∦`
+  val math ctx \Vvdash = rel ctx `⊪`
+  val math ctx \VDash = rel ctx `⊫`
+  val math ctx \coloncoloneq = rel ctx `⩴`
+  val math ctx \leqslant = rel ctx `⩽`
+  val math ctx \geqslant = rel ctx `⩾`
+  val math ctx \dashV = rel ctx `⫣`
+  val math ctx \Dashv = rel ctx `⫤`
+  val math ctx \DashV = rel ctx `⫥`
+  val math ctx \preceq = rel ctx `⪯`
+  val math ctx \succeq = rel ctx `⪰`
+
+  val math ctx \amalg = bin ctx `⨿`
+  val math ctx \dotplus = bin ctx `∔`
+  val math ctx \divideontimes = bin ctx `⋇`
+  val math ctx \odot = bin ctx `⊙`
+  val math ctx \circledcirc = bin ctx `⊚`
+  val math ctx \circledast = bin ctx `⊛`
+%  val math ctx \circledeq = bin ctx `⊜`
+  val math ctx \circleddash = bin ctx `⊝`
+  val math ctx \boxplus = bin ctx `⊞`
+  val math ctx \boxminus = bin ctx `⊟`
+  val math ctx \boxtimes = bin ctx `⊠`
+  val math ctx \boxdot = bin ctx `⊡`
+  val math ctx \curlyvee = bin ctx `⋎`
+  val math ctx \curlywedge = bin ctx `⋏`
+  val math ctx \Join = bin ctx `⋈`
+  val math ctx \ltimes = bin ctx `⋉`
+  val math ctx \rtimes = bin ctx `⋊`
+  val math ctx \leftthreetimes = bin ctx `⋋`
+  val math ctx \rightthreetimes = bin ctx `⋌`
+  val math ctx \wr = bin ctx `≀`
+
+  val math ctx \diamond = ord ctx `⋄`
+  val math ctx \star = ord ctx `⋆`
+  val math ctx \complement = ord ctx `∁`
+  val math ctx \angle = ord ctx `∠`
+  val math ctx \measuredangle = ord ctx `∡`
+  val math ctx \sphericalangle = rel ctx `∢`
+
+  val math ctx \ordd = prefix ctx `d`
+  val math ctx \partial = prefix ctx `∂`
+  val math ctx \nabla  = prefix ctx `∇`
+
+%% -- for Latin Modern Math --
+  val math ctx \int =
+    let kernfL _ _ = 0pt in
+    let kernfR fontsize ypos = fontsize *' 0.45 in
+    math-big-char-with-kern ctx MathOp `∫` kernfL kernfR
+
+%% -- for Cambria Math --
+%  val math ctx \int =
+%    let kernfL _ _ = 0pt in
+%    let kernfR fontsize ypos = fontsize *' 0.2 in
+%      math-big-char-with-kern MathOp `∫` kernfL kernfR
+
+  val math ctx \dot-punct =
+    math-char ctx MathPunct `.`
+
+
+  % PORT: the upstream `paren`-parenthesization tail is DROPPED here —
+  % `half-length`/`extract-spec-from-context`/`angle-left`/`angle-right`/
+  % `paren-left`/`paren-right`/`brace-left`/`brace-right`/`sqbracket-left`/
+  % `sqbracket-right`/`floor-left`/`floor-right`/`ceil-left`/`ceil-right`/
+  % `abs-left`/`abs-right`/`norm-left`/`norm-right`/`empty-paren`/
+  % `bar-middle`/`slash-middle`/`bracket-metrics`/`bracket-path`/
+  % `floor-path`/`ceil-path`/`brace-left-long`, and the 12 math commands
+  % that consume them (`\paren`, `\app`, `\angle-bracket`, `\brace`,
+  % `\sqbracket`, `\floor`, `\ceil`, `\abs`, `\norm`, `\set`, `\setsep`,
+  % `\cases`) — a genuine PRIMITIVE-TYPE gap (NOT this capstone task's to
+  % fix; no `crates/*/src` edits were made): upstream 0.1's `type paren`
+  % is `length -> length -> context -> inline-boxes * (length -> length)`
+  % (`angle-left`/`paren-left`/… all end their curried argument list with
+  % `ctx`, extracting fontsize/axis-height/color FROM the context via
+  % `extract-spec-from-context`/`get-font-size`/`get-math-axis-height-
+  % ratio`/`get-text-color`) — but this port's `prim_types.rs::t_paren()`
+  % (consulted by `math-paren`/`math-paren-with-middle`'s v0.1 arms alike,
+  % `prim_types.rs:1446-1480`) is UNCONDITIONALLY the 0.0.6 shape `length
+  % -> length -> length -> length -> color -> …` (4 lengths + a bare
+  % `color` argument, no `context`) — it was never retyped for the 0.1
+  % math-split's context-based `paren`. Every upstream paren-family value
+  % above fails to type-check against it (`while typing function
+  % application: expected 'length', found 'context'`, empirically
+  % confirmed against this exact file). This is reported, not
+  % worked around: everything ABOVE this comment (all Greek letters, all
+  % ~150 binary/relation/arrow/misc symbol commands, `\frac`/`\sqrt`/
+  % `\lower`/`\upper`/`\text`/`\math-skip`/`\math-color`, the 6
+  % `\mathord`/…/`\mathpunct` grouping commands, the 7 `\math-style`/
+  % `\mathrm`/…/`\mathit` restyling commands (2 more, `\mathsf`/`\mathtt`,
+  % separately T6-dropped above for the missing-ctor reason), `+math`/
+  % `\eqn`/`+math-list`/`\math-list`/`+align`/`\align`, `\int`/`\dot-
+  % punct`) is real, landed, and REACHABLE — std-ja's own sole touch-point
+  % on this package, `command \Math.math`, does not need `paren` at all.
+
+end

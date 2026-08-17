@@ -6,7 +6,7 @@
 //! `images.rs` pattern) — a full compile is overkill for pure-eval
 //! primitives with no context/layout dependency.
 
-use satysfi_backend::{DocInfo, FontKey, FontMetrics, Length};
+use satysfi_backend::{Context, DocInfo, FontKey, FontMetrics, Length};
 use satysfi_lang::eval::Interp;
 use satysfi_lang::value::Value;
 use satysfi_lang::{prim_types, primitives, types};
@@ -514,4 +514,86 @@ fn bare_constants_bound_under_v01() {
             "{name} must stay bound under V0_1"
         );
     }
+}
+
+// ============================================================================
+// 10. G6 (`…/tmp/g6-g7-standins.md` §5.2) — the hyphenation/unidata loader +
+// setter stand-ins evaluate ACCEPT-AND-RETURN (never a `stringify-math`-
+// style hard error), and `here` resolves to the empty string.
+// ============================================================================
+
+fn as_context(v: Value) -> Context {
+    match v {
+        Value::Context(c) => *c,
+        other => panic!("expected a context, got {other:?}"),
+    }
+}
+
+#[test]
+fn load_hyphenation_dictionary_accepts_and_returns_unit() {
+    let mono = Mono;
+    let mut interp = Interp::new(&mono);
+    let env = primitives::base_env_with_version(SatysfiVersion::V0_1);
+    let v = call(
+        &mut interp,
+        &env,
+        "load-hyphenation-dictionary",
+        vec![Value::Str("english".to_string())],
+    );
+    assert!(matches!(v, Value::Unit), "expected Value::Unit, got {v:?}");
+}
+
+#[test]
+fn load_unicode_char_database_accepts_and_returns_unit() {
+    let mono = Mono;
+    let mut interp = Interp::new(&mono);
+    let env = primitives::base_env_with_version(SatysfiVersion::V0_1);
+    let v = call(
+        &mut interp,
+        &env,
+        "load-unicode-char-database",
+        vec![
+            Value::Str("Scripts.txt".to_string()),
+            Value::Str("EastAsianWidth.txt".to_string()),
+            Value::Str("LineBreak.txt".to_string()),
+        ],
+    );
+    assert!(matches!(v, Value::Unit), "expected Value::Unit, got {v:?}");
+}
+
+#[test]
+fn set_hyphenation_dictionary_and_set_unicode_char_database_are_no_ops() {
+    let mono = Mono;
+    let mut interp = Interp::new(&mono);
+    let env = primitives::base_env_with_version(SatysfiVersion::V0_1);
+
+    let ctx0 = as_context(call(
+        &mut interp,
+        &env,
+        "get-initial-context",
+        vec![Value::Length(Length::pt(100.0)), Value::Unit],
+    ));
+
+    let ctx1 = as_context(call(
+        &mut interp,
+        &env,
+        "set-hyphenation-dictionary",
+        vec![Value::Unit, Value::Context(Box::new(ctx0.clone()))],
+    ));
+    assert_eq!(ctx1, ctx0, "set-hyphenation-dictionary must return ctx unchanged");
+
+    let ctx2 = as_context(call(
+        &mut interp,
+        &env,
+        "set-unicode-char-database",
+        vec![Value::Unit, Value::Context(Box::new(ctx0.clone()))],
+    ));
+    assert_eq!(ctx2, ctx0, "set-unicode-char-database must return ctx unchanged");
+}
+
+#[test]
+fn here_resolves_to_the_empty_string() {
+    let env = primitives::base_env_with_version(SatysfiVersion::V0_1);
+    let v = env.lookup("here").expect("'here' must be bound under V0_1");
+    assert_eq!(as_string(v), "");
 }

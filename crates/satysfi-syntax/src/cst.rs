@@ -1227,6 +1227,19 @@ pub mod ast {
     pub enum Param {
         Optional { q: OptionalTok, name: VarTok },
         Pat(PatBot),
+        /// A SATySFi 0.1 `?(l = x, …)` labeled-optional command-parameter
+        /// bundle (optional-arg-rows increment 3a), lowered from
+        /// `cst_v1::Param { opts: Some(_), body }` by
+        /// `v1/lower.rs::lower_command_params`. Reuses [`CstOptBinders`]
+        /// verbatim (the same node a value-level `fun ?(l = x) p -> ..`
+        /// bundle lowers to, increment 1) — `?(`-headed, so distinct from
+        /// the 0.0.6 `?:`-headed [`Param::Optional`] above (no arm overlap,
+        /// no grammar ambiguity: this variant is never PARSED directly by
+        /// this 0.0.6-frozen `cst.rs`, only ever *constructed* by the 0.1
+        /// lowering path). Consumed by `elaborate.rs`'s bundle-aware
+        /// `curry_cmd_params_v1`, which emits `Ast::LambdaOpt` for it — see
+        /// that function's doc comment.
+        Bundled { opts: CstOptBinders, body: PatBot },
     }
 
     /// `pattr`: a `patbot`, followed by any number of `:: patbot` segments.
@@ -1343,6 +1356,55 @@ pub mod ast {
         /// bare [`TypeAtom`]: a product/application with no enclosing arrow
         /// is still just "the whole type expression minus `->`".
         Atom(TypeProd),
+        /// `?(l1 : ty1, …) dom -> cod` — a SATySFi 0.1 labeled-optional
+        /// function TYPE domain (upstream `typ`'s second production,
+        /// `parser_v1.mly:688-691`; "optional-arg-rows increment 2"). Lowered
+        /// (`typecheck.rs`) to `MonoType::Func(Row::Cons(l1, ty1, …
+        /// Row::Empty), dom, cod)` — a CLOSED row, matching what
+        /// `Ast::LambdaOpt` infers (increment 1), so an explicit `?(l:τ)->`
+        /// signature unifies against an actual `?(l=x)`-taking function.
+        /// `?`-headed — token-disjoint from `Fun`/`Atom` (neither
+        /// [`TypeProd`] nor [`TypeAtom`] can start with [`OptionalTypeTok`]),
+        /// so declared order is safety-neutral; appended last, this file's
+        /// convention for 0.1 additions. Additive 0.0.6 accept-surface
+        /// widening (this whole track's established §7 pattern): a 0.0.6
+        /// program containing `?(l : int) -> int` NOW parses (previously a
+        /// parse error — no old `TypeExpr` arm starts with `?`) and reaches
+        /// `typecheck.rs::lower_type_expr`'s version gate, which rejects it
+        /// under `V0_0_6` with a version-error message (an improvement over
+        /// the old parse error).
+        OptRowFun {
+            opt_dom: CstTypeOptDom,
+            dom: TypeProd,
+            arrow: ArrowTok,
+            cod: Box<TypeExpr>,
+        },
+    }
+
+    /// `?(l = ty, …)` — the closed labeled-optional-domain prefix of
+    /// [`TypeExpr::OptRowFun`]. No row-variable-tail field: row-tailed
+    /// optional domains need signature-level row quantification
+    /// (`parser_v1.mly`'s `rowquant`/`quant`) — L4/2d territory, not this
+    /// increment; `cst_v1`'s own `TypeOptDomInnerV1` models the tail at parse
+    /// level and rejects it with a `LowerError` before ever reaching here
+    /// (`v1/lower.rs`).
+    #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
+    pub struct CstTypeOptDom {
+        pub q: OptionalTypeTok,
+        pub paren: ParenGroup<()>,
+        #[group(self.paren)]
+        pub entries: Vec<CstTypeOptEntry>,
+    }
+
+    /// One `label : ty,` entry of a [`CstTypeOptDom`] (last `,` optional —
+    /// matching the 0.1 lowering convention this file's other additive nodes
+    /// use, e.g. [`CstOptArgEntry`], rather than the frozen grammar's `;`).
+    #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
+    pub struct CstTypeOptEntry {
+        pub label: VarTok,
+        pub colon: ColonTok,
+        pub ty: super::TyErased,
+        pub comma: Option<CommaTok>,
     }
 
     /// One `ty ?->` leading domain of a [`TypeExpr::Fun`]'s optional-argument
@@ -1427,6 +1489,51 @@ pub mod ast {
         Var(TypeVarTok),
         /// A (possibly qualified) type name, e.g. `int`, `string`.
         Name(VarTok),
+        /// `(| l1 : ty1, … | ?'r |)` — a SATySFi 0.1 OPEN record type: a
+        /// row-variable tail after the fields (upstream `typ_bot`'s SECOND
+        /// `L_RECORD`/`R_RECORD` production, `parser_v1.mly:748-749`;
+        /// "optional-arg-rows increment 2"). Lowered (`typecheck.rs`) to
+        /// `MonoType::Record(Row::Cons(l1, ty1, … Row::Var(fresh)))` — the
+        /// row variable unifies structurally as an open record's tail
+        /// (permitting additional fields at the unification site), reusing
+        /// the existing generic `Row`/`RowVarRef`/`unify_row` machinery — no
+        /// new type machinery needed. Genuinely a NEW shape, not a widening
+        /// of the frozen [`TypeAtom::Record`] (0.0.6's `txrecord` grammar has
+        /// no row-var tail at all, confirmed by grep of upstream
+        /// `parser.mly`) — additive, appended after `Record`/`Var`/`Name`.
+        /// Comma-separated fields, matching this file's other 0.1 additive
+        /// nodes ([`CstOptArgEntry`], [`CstOptBinderEntry`]) rather than the
+        /// frozen `Record`'s upstream-0.0.6 `;` separator. Unreachable from a
+        /// `V0_0_6` token stream by construction: [`RowVarTok`] is only ever
+        /// emitted by the lexer under [`crate::version::SatysfiVersion::
+        /// V0_1`] (`lexer.rs`'s `'?'` arm), so no 0.0.6 parse can ever
+        /// produce this variant — no elaborate/typecheck-time version gate
+        /// is needed here (contrast [`TypeExpr::OptRowFun`], which IS
+        /// reachable from 0.0.6 lexing and so DOES need one).
+        RecordOpen {
+            rec: RecordGroup<()>,
+            #[group(self.rec)]
+            inner: CstRecordOpenInner,
+        },
+    }
+
+    /// A [`TypeAtom::RecordOpen`]'s group content: one or more `,`-separated
+    /// fields (nonempty enforced at lowering, matching the closed form),
+    /// then a mandatory `| ?'r` row-variable tail.
+    #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
+    pub struct CstRecordOpenInner {
+        pub fields: Vec<CstRecordOpenField>,
+        pub bar: BarTok,
+        pub var: RowVarTok,
+    }
+
+    /// One `l : ty,` field of a [`TypeAtom::RecordOpen`] (last `,` optional).
+    #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
+    pub struct CstRecordOpenField {
+        pub name: VarTok,
+        pub colon: ColonTok,
+        pub ty: super::TyErased,
+        pub comma: Option<CommaTok>,
     }
 
     /// One `l : ty;` field of a [`TypeAtom::Record`] (`txrecord`,
@@ -1453,11 +1560,35 @@ pub mod ast {
     /// TypeAtom`, a fresh cycle through non-root types — see
     /// `AppArgErased`'s doc comment for the identical hazard) and per this
     /// port's usual permissive-superset simplification.
+    ///
+    /// `opt_labels` (optional-arg-rows increment 3a) is the lowered
+    /// `?(l:τ,…)` command-type row PREFIX on this slot (`TypeCmdOptDomV1` at
+    /// the `cst_v1` side): a flat list of `label : ty` fields, no wrapping
+    /// `?(` sigil/group of its own at this (already-lowered) target — purely
+    /// a data carrier, populated by `v1/lower.rs::lower_type_cmd_args` and
+    /// read by `typecheck.rs`'s `lower_type_atom` `Cmd` arm. Since no real
+    /// 0.0.6 `TypeCmdArgItem` position can ever contain a bare `label :`
+    /// shape (0.0.6's grammar has no colon here at all), every 0.0.6-parsed
+    /// fixture yields `opt_labels == []`, byte-identical to before this
+    /// field existed.
     #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
     pub struct TypeCmdArgItem {
+        pub opt_labels: Vec<TypeCmdOptField>,
         pub ty: super::TyErased,
         pub opt: Option<OptionalTypeTok>,
         pub semi: Option<ListPunctTok>,
+    }
+
+    /// One `label : ty,` field of a [`TypeCmdArgItem::opt_labels`] bundle
+    /// (optional-arg-rows increment 3a; the last `,` is optional, matching
+    /// this port's other 0.1-additive comma-separated satellite fields —
+    /// [`CstOptBinderEntry`], [`CstTypeOptEntry`]).
+    #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
+    pub struct TypeCmdOptField {
+        pub label: VarTok,
+        pub colon: ColonTok,
+        pub ty: super::TyErased,
+        pub comma: Option<CommaTok>,
     }
 
     /// The command-type keyword closing a [`TypeAtom::Cmd`]'s bracketed list.

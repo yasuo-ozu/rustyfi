@@ -819,3 +819,64 @@ end
     assert!(msg.contains("exists in module `M`"), "{msg}");
     assert!(msg.contains("not exported by its signature"), "{msg}");
 }
+
+// ============================================================================
+// optional-arg-rows increment 2 — the unsoundness gate's PROOF: a sealed
+// signature whose `val` declares a labeled-optional-argument type
+// (`?(bias : int) int -> int`, `TypeExpr::OptRowFun`) matches an increment-1
+// `?(bias = …)`-taking implementation END-TO-END through the SAME `unify`-
+// based subsumption path every other sealed `val` flows through — because
+// `MonoType::Func` now carries the optional-arg `Row` and
+// `typecheck::lower_type_expr`'s `OptRowFun` arm lowers the sig to the SAME
+// closed-row `Func` that `Ast::LambdaOpt` infers for the impl. And two
+// mismatches (a declared optional label ABSENT from the impl; a WRONG
+// codomain type) are rejected — proving the row and the domains are really
+// carried through subsumption, not silently dropped (spec §13 risk 1).
+// ============================================================================
+
+/// V1 (the sealed-sig PROOF): `val f : ?(bias : int) int -> int` over an
+/// increment-1 `val f ?(bias = b) x = …` impl seals, and a plain `M.f 1`
+/// (no bundle — `bias` defaults) type-checks against the committed scheme.
+#[test]
+fn v1_opt_arg_typed_sig_matches_opt_taking_impl() {
+    let lib = "\
+module M :> sig
+  val f : ?(bias : int) int -> int
+end = struct
+  val f ?(bias = b) x = x + (match b with None -> 0 | Some v -> v end)
+end
+";
+    assert_accepts(lib, "M.f 1");
+}
+
+/// V2 reject: the sig declares an optional `bias`, but the impl is a plain
+/// `val f x = …` with no optional argument at all — the declared row
+/// `Cons(bias, int, Empty)` cannot unify against the impl's empty row, so
+/// sealing is rejected (the "declared optional label absent from impl" case).
+#[test]
+fn v2_opt_arg_sig_over_plain_impl_rejects() {
+    let lib = "\
+module M :> sig
+  val f : ?(bias : int) int -> int
+end = struct
+  val f x = x + 1
+end
+";
+    assert_type_error(lib, "M.f 1");
+}
+
+/// V3 reject: the impl DOES take the optional `bias`, but its codomain is
+/// `bool`, not the declared `int` — the domain/codomain still flow through
+/// subsumption alongside the row, so the `int` vs `bool` codomain clash is
+/// caught (the "wrong type" case).
+#[test]
+fn v3_opt_arg_sig_wrong_codomain_rejects() {
+    let lib = "\
+module M :> sig
+  val f : ?(bias : int) int -> int
+end = struct
+  val f ?(bias = b) x = x == (match b with None -> 0 | Some v -> v end)
+end
+";
+    assert_type_error(lib, "M.f 1");
+}

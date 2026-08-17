@@ -181,6 +181,23 @@ pub fn t_document() -> MonoType {
 pub fn t_color() -> MonoType {
     MonoType::Variant("color".to_string(), Vec::new())
 }
+/// `hyphenation` (dev-0-1-0 `types.cppo.ml`'s opaque `HyphenationType`) — G6
+/// stand-in (`…/tmp/g6-g7-standins.md` §1.3): NOT a declared `BaseType` or
+/// `VariantDecl`, just the nominal-`Variant` fallthrough `name_to_mono`
+/// already gives any unrecognized sig type name (`typecheck.rs:500`), the
+/// same shape the already-vendored `color.satyh` seals through.
+/// `load-hyphenation-dictionary`'s return type and
+/// `set-hyphenation-dictionary`'s domain both spell this helper, so sealing
+/// subsumption unifies them structurally — no `types.rs` touch needed.
+pub fn t_hyphenation() -> MonoType {
+    MonoType::Variant("hyphenation".to_string(), Vec::new())
+}
+/// `unicode-char-database` (dev-0-1-0 `types.cppo.ml`'s opaque
+/// `UnidataType`) — G6 stand-in, same nominal-`Variant` shape as
+/// [`t_hyphenation`] just above.
+pub fn t_unicode_char_database() -> MonoType {
+    MonoType::Variant("unicode-char-database".to_string(), Vec::new())
+}
 /// `pre-path` (vminst.ml's `tPRP`; v0.0.6 `PrePathType`).
 pub fn t_prepath() -> MonoType {
     MonoType::Base(BaseType::PrePath)
@@ -437,14 +454,28 @@ pub fn inline_cmd(args: Vec<CmdArgType>) -> MonoType {
     MonoType::InlineCmd(args)
 }
 
-/// `mandatory` command-argument entry.
+/// `mandatory` command-argument entry (0.0.6 positional model; also the
+/// V0_1 shape for a slot with no `?(…)` bundle at all — `opt_labels` empty
+/// either way).
 pub fn mandatory(ty: MonoType) -> CmdArgType {
-    CmdArgType { optional: false, ty }
+    CmdArgType { optional: false, opt_labels: Vec::new(), ty }
 }
 
-/// `optional` (`?`) command-argument entry.
+/// `optional` (`?`) command-argument entry (0.0.6 positional model only —
+/// `opt_labels` stays empty; V0_1 never sets `optional: true`, see
+/// [`labeled`]).
 pub fn optional(ty: MonoType) -> CmdArgType {
-    CmdArgType { optional: true, ty }
+    CmdArgType { optional: true, opt_labels: Vec::new(), ty }
+}
+
+/// A SATySFi 0.1 labeled command-argument entry (optional-arg-rows increment
+/// 3a; upstream `CommandArgType(LabelMap.t, typ)`, `types.cppo.ml:214-215`):
+/// `ty` is the slot's mandatory argument, `opt_labels` its CLOSED `?(l:τ,…)`
+/// bundle (kept sorted by label by the caller — `command_scheme`'s harvest,
+/// `lower_type_atom`'s sig lowering). `optional` is always `false`: V0_1 has
+/// no whole-slot `ty?` positional-optional model at all.
+pub fn labeled(opt_labels: Vec<(String, MonoType)>, ty: MonoType) -> CmdArgType {
+    CmdArgType { optional: false, opt_labels, ty }
 }
 
 /// A type scheme with no quantified variables (vminst.ml's `~%` wraps a
@@ -558,6 +589,48 @@ pub fn primitive_type_with_version(name: &str, version: SatysfiVersion) -> Optio
             ],
             t_math_boxes(),
         )),
+
+        // ==== G6 (`…/tmp/g6-g7-standins.md` §1): hyphenation/unidata loader
+        // + setter stand-ins, and the `here` lex-time-constant stand-in —
+        // all V0_1-only (genuinely absent from 0.0.6 upstream, so these
+        // fall through to the catch-all `_ => return None` under V0_0_6).
+        // Types are FAITHFUL to upstream (`vminst.ml`/`primitives.cppo.ml`);
+        // bodies (`primitives.rs`) are ACCEPT-AND-RETURN stand-ins, not
+        // hard errors like `stringify-math` above, because std-ja
+        // *evaluates* `load-unicode-char-database`/`load-hyphenation-
+        // dictionary` at module load time. ====
+        //
+        // `load-hyphenation-dictionary : string -> hyphenation`
+        // (`vminst.ml`'s `LoadHyphenationDictionary`).
+        "load-hyphenation-dictionary" if version == SatysfiVersion::V0_1 => {
+            poly0(arrow(t_string(), t_hyphenation()))
+        }
+        // `load-unicode-char-database : string -> string -> string ->
+        // unicode-char-database` (`vminst.ml`'s `LoadUnicodeCharDatabase` —
+        // Scripts.txt/EastAsianWidth.txt/LineBreak.txt paths).
+        "load-unicode-char-database" if version == SatysfiVersion::V0_1 => poly0(arrows(
+            vec![t_string(), t_string(), t_string()],
+            t_unicode_char_database(),
+        )),
+        // `set-hyphenation-dictionary : hyphenation -> context -> context`
+        // — STAND-IN no-op (see `primitives.rs`'s
+        // `prim_set_hyphenation_dictionary`); closes scout gap G4.
+        "set-hyphenation-dictionary" if version == SatysfiVersion::V0_1 => poly0(arrows(
+            vec![t_hyphenation(), t_context()],
+            t_context(),
+        )),
+        // `set-unicode-char-database : unicode-char-database -> context ->
+        // context` — STAND-IN no-op (see `primitives.rs`'s
+        // `prim_set_unicode_char_database`); closes scout gap G4.
+        "set-unicode-char-database" if version == SatysfiVersion::V0_1 => poly0(arrows(
+            vec![t_unicode_char_database(), t_context()],
+            t_context(),
+        )),
+        // `here : string` — upstream is a lex-time constant (the source
+        // file's directory); the port models it as a V0_1-only nullary
+        // constant bound to `Value::Str(String::new())` (`primitives.rs`'s
+        // `base_env_with_version`), so its type is simply `string`.
+        "here" if version == SatysfiVersion::V0_1 => poly0(t_string()),
 
         // ---- milestone-1 natives (no vminst.ml entry — local signatures) ----
         //

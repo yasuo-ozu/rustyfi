@@ -23,15 +23,15 @@ use crate::ast::{Ast, BText, IText, MathElem, Pattern};
 use crate::elaborate::{Program, UserSynonymDecl, UserTypeDecl};
 pub use crate::exhaustive::MatchWarning;
 use crate::prim_types::{
-    self, arrow, builtin_variants_with_version, list, mandatory, optional, product, reff,
+    self, arrow, builtin_variants_with_version, labeled, list, mandatory, optional, product, reff,
     t_block_boxes,
     t_block_text, t_bool, t_context, t_deco, t_decoset, t_document, t_float, t_graphics, t_image,
     t_inline_boxes, t_inline_text, t_int, t_length, t_math_boxes, t_math_text, t_option, t_path,
     t_prepath, t_string, t_unit, VariantDecl,
 };
 use crate::types::{
-    self, generalize, instantiate, resolve, BaseType, CmdArgType, Kind, MonoType, PolyType, Row,
-    TypeContext,
+    self, generalize, instantiate, resolve, resolve_row, BaseType, CmdArgType, Kind, MonoType,
+    PolyType, Row, TypeContext,
 };
 use crate::unify::{unify, UnifyError};
 use satysfi_syntax::cst::ast::{CmdTypeKind, TypeApp, TypeAtom, TypeExpr, TypeProd};
@@ -319,6 +319,15 @@ pub const PRIMITIVE_NAMES: &[&str] = &[
     "embed-inline-to-math",
     "get-math-axis-height-ratio",
     "%math-attach-scripts",
+    // ---- G6 (`…/tmp/g6-g7-standins.md` §1): hyphenation/unidata loader +
+    // setter stand-ins, and the `here` lex-time-constant stand-in. All 5
+    // are V0_1-only (`primitive_type_with_version` returns `None` for them
+    // under V0_0_6, same pattern as the L5a comment below documents). ----
+    "load-hyphenation-dictionary",
+    "load-unicode-char-database",
+    "set-hyphenation-dictionary",
+    "set-unicode-char-database",
+    "here",
     // ---- added in 0.1 — L5a (prim-retype-sweep §2): bitwise ops, Unicode
     // string ops, `read-file`, `register-document-information`. All 11
     // unbound under V0_0_6 (`base_type_env_with_version`'s
@@ -517,10 +526,31 @@ fn lower_type_atom(
                 .iter()
                 .map(|a| {
                     let ty = lower_type_expr(&a.ty, tyvars, version);
-                    if a.opt.is_some() {
-                        optional(ty)
+                    // SATySFi 0.1 closed command optional-label map
+                    // (optional-arg-rows increment 3a): `?(l:τ,…)` prefixing
+                    // this slot's mandatory `ty`. Sorted by label so
+                    // `unify_cmd_args`'s zip-equal equal-domain test is
+                    // order-insensitive against whatever surface order the
+                    // sig was written in (`command_scheme`'s harvest sorts
+                    // the same way). Every 0.0.6-reachable item has
+                    // `opt_labels == []` (that grammar has no such prefix at
+                    // all), so this is a no-op there — the existing
+                    // `optional`/`mandatory` split on the 0.0.6 positional
+                    // `?` suffix marker is unaffected.
+                    if a.opt_labels.is_empty() {
+                        if a.opt.is_some() {
+                            optional(ty)
+                        } else {
+                            mandatory(ty)
+                        }
                     } else {
-                        mandatory(ty)
+                        let mut labels: Vec<(String, MonoType)> = a
+                            .opt_labels
+                            .iter()
+                            .map(|f| (f.label.name.clone(), lower_type_expr(&f.ty, tyvars, version)))
+                            .collect();
+                        labels.sort_by(|x, y| x.0.cmp(&y.0));
+                        labeled(labels, ty)
                     }
                 })
                 .collect();
@@ -546,6 +576,33 @@ fn lower_type_atom(
                     Box::new(rest),
                 )
             });
+            MonoType::Record(row)
+        }
+        // `(| l1 : ty1, … | ?'r |)` — a SATySFi 0.1 OPEN record type
+        // (optional-arg-rows increment 2): same fold as the closed form
+        // above, but the row's TAIL is a fresh `Row::Var` rather than
+        // `Row::Empty` — reusing the existing generic `Row`/`RowVarRef`/
+        // `unify_row` machinery (no new type machinery). The row variable's
+        // *name* (`?'r`) is not itself tracked anywhere past this point (the
+        // same permissive-fallback philosophy `TypeAtom::Var`'s "should not
+        // happen" case above already uses for an untracked name) — this
+        // increment models one open record type at a time, not
+        // cross-signature shared-row polymorphism (that needs the `rowquant`
+        // grammar this track deliberately defers, see `cst.rs`'s
+        // `TypeAtom::RecordOpen` doc comment). No `V0_0_6` version gate is
+        // needed: `TypeAtom::RecordOpen` is unreachable from a `V0_0_6` token
+        // stream by construction (see that variant's doc comment).
+        TypeAtom::RecordOpen { inner, .. } => {
+            let row = inner.fields.iter().rev().fold(
+                Row::Var(types::new_row_var(0)),
+                |rest, f| {
+                    Row::Cons(
+                        f.name.name.clone(),
+                        Box::new(lower_type_expr(&f.ty, tyvars, version)),
+                        Box::new(rest),
+                    )
+                },
+            );
             MonoType::Record(row)
         }
         TypeAtom::Var(tv) => match tyvars.get(&tv.name) {
@@ -639,6 +696,93 @@ pub(crate) fn lower_type_expr(
             })
         }
         TypeExpr::Atom(prod) => lower_type_prod(prod, tyvars, version),
+        // `?(l1 : ty1, …) dom -> cod` — optional-arg-rows increment 2: a
+        // CLOSED row (`Row::Cons(l1, ty1, … Row::Empty)`), matching what
+        // `Ast::LambdaOpt` infers (increment 1) — see this fn's own callers
+        // (`declare_synonym`/`build_variant_decl`), which reject this node
+        // under `V0_0_6` via `check_type_expr_v0_1_only` BEFORE ever
+        // reaching here, so by the time this arm runs the version is always
+        // `V0_1` for any input that could legally have parsed this node from
+        // real 0.1 source (a 0.0.6 source hitting this arm is caught by that
+        // earlier gate, with a clear version-error message rather than
+        // silently building a nonsense type here).
+        TypeExpr::OptRowFun { opt_dom, dom, cod, .. } => {
+            let row = opt_dom.entries.iter().rev().fold(Row::Empty, |acc, e| {
+                Row::Cons(
+                    e.label.name.clone(),
+                    Box::new(lower_type_expr(&e.ty, tyvars, version)),
+                    Box::new(acc),
+                )
+            });
+            MonoType::Func(
+                Box::new(row),
+                Box::new(lower_type_prod(dom, tyvars, version)),
+                Box::new(lower_type_expr(cod, tyvars, version)),
+            )
+        }
+    }
+}
+
+/// optional-arg-rows increment 2: reject a `?(l : ty) -> ...`
+/// labeled-optional-argument type domain under `V0_0_6` with a clear version
+/// error, mirroring `elaborate.rs`'s `Expr::FunRows`/`AppArg::Bundled`
+/// value-level gates (§9.2/§9.3 there) — the TYPE-level analogue. It lives
+/// here (not `elaborate.rs`) because a `type`/ctor-payload `TypeExpr` is
+/// never routed through the elaborator at all: `UserTypeDecl`/
+/// `UserSynonymDecl` (`elaborate.rs`) carry a raw CST `TypeExpr` fragment
+/// straight through to [`Checker::declare_variant`]/[`Checker::
+/// declare_synonym`], the first (and only) place `Checker.version` is in
+/// scope for it. A cheap existence walk, not a lowering pass —
+/// [`lower_type_expr`] itself stays total/infallible for every other caller
+/// (its own doc comment) — this is called BEFORE it, at each dual-version
+/// entry point.
+fn check_type_expr_v0_1_only(ty: &TypeExpr, version: SatysfiVersion) -> Result<(), TypeError> {
+    if version.has_row_polymorphism() {
+        return Ok(());
+    }
+    if let Some(span) = find_opt_row_fun_in_expr(ty) {
+        return Err(TypeError::simple(
+            Some(span),
+            "`?(l : ty) -> ...` labeled-optional-argument type domains are SATySFi \
+             0.1 syntax — this file is compiled as 0.0.6",
+        ));
+    }
+    Ok(())
+}
+
+fn find_opt_row_fun_in_expr(ty: &TypeExpr) -> Option<Span> {
+    match ty {
+        TypeExpr::OptRowFun { opt_dom, .. } => Some(opt_dom.q.0),
+        TypeExpr::Fun { dom, cod, .. } => {
+            find_opt_row_fun_in_prod(dom).or_else(|| find_opt_row_fun_in_expr(cod))
+        }
+        TypeExpr::Atom(p) => find_opt_row_fun_in_prod(p),
+    }
+}
+
+fn find_opt_row_fun_in_prod(p: &TypeProd) -> Option<Span> {
+    find_opt_row_fun_in_app(&p.first)
+        .or_else(|| p.rest.iter().find_map(|s| find_opt_row_fun_in_app(&s.ty)))
+}
+
+fn find_opt_row_fun_in_app(a: &TypeApp) -> Option<Span> {
+    match a {
+        TypeApp::Applied { arg, .. } => find_opt_row_fun_in_atom(arg),
+        TypeApp::Atom(at) => find_opt_row_fun_in_atom(at),
+    }
+}
+
+fn find_opt_row_fun_in_atom(a: &TypeAtom) -> Option<Span> {
+    match a {
+        TypeAtom::Cmd { args, .. } => args.iter().find_map(|it| find_opt_row_fun_in_expr(&it.ty)),
+        TypeAtom::Paren { inner, .. } => find_opt_row_fun_in_expr(inner),
+        TypeAtom::Record { fields, .. } => {
+            fields.iter().find_map(|f| find_opt_row_fun_in_expr(&f.ty))
+        }
+        TypeAtom::RecordOpen { inner, .. } => {
+            inner.fields.iter().find_map(|f| find_opt_row_fun_in_expr(&f.ty))
+        }
+        TypeAtom::Var(_) | TypeAtom::Name(_) => None,
     }
 }
 
@@ -680,6 +824,15 @@ fn collect_type_vars(ty: &TypeExpr, out: &mut Vec<String>) {
             }
             TypeAtom::Var(tv) => push(&tv.name, out),
             TypeAtom::Name(_) => {}
+            // optional-arg-rows increment 2: an open record's fields carry
+            // type vars same as a closed record's; its row-variable tail
+            // (`?'r`) is a ROW var, a different namespace this fn doesn't
+            // track (it collects `TypeAtom::Var`/`'a`-style tyvars only).
+            TypeAtom::RecordOpen { inner, .. } => {
+                for f in &inner.fields {
+                    walk_expr(&f.ty, out);
+                }
+            }
         }
     }
     fn walk_app(app: &TypeApp, out: &mut Vec<String>) {
@@ -704,6 +857,15 @@ fn collect_type_vars(ty: &TypeExpr, out: &mut Vec<String>) {
                 walk_expr(cod, out);
             }
             TypeExpr::Atom(prod) => walk_prod(prod, out),
+            // optional-arg-rows increment 2: a labeled-optional domain's
+            // entry types can mention tyvars same as any other domain.
+            TypeExpr::OptRowFun { opt_dom, dom, cod, .. } => {
+                for e in &opt_dom.entries {
+                    walk_expr(&e.ty, out);
+                }
+                walk_prod(dom, out);
+                walk_expr(cod, out);
+            }
         }
     }
     walk_expr(ty, out);
@@ -792,6 +954,7 @@ fn build_variant_decl(
         let payload = match ty {
             None => None,
             Some(t) => {
+                check_type_expr_v0_1_only(t, version)?;
                 Some(expand_synonyms(&lower_type_expr(t, &tyvar_map, version), synonyms)?)
             }
         };
@@ -1006,6 +1169,11 @@ fn expand_synonyms_cmd_args(
         .map(|c| {
             Ok(CmdArgType {
                 optional: c.optional,
+                opt_labels: c
+                    .opt_labels
+                    .iter()
+                    .map(|(l, t)| Ok((l.clone(), expand_synonyms(t, synonyms)?)))
+                    .collect::<Result<_, TypeError>>()?,
                 ty: expand_synonyms(&c.ty, synonyms)?,
             })
         })
@@ -1127,10 +1295,14 @@ impl Checker {
     /// One synonym registration — moved verbatim from the former
     /// `new_with_version` loop body. Does NOT cycle-check (matching the
     /// original register-all-then-check shape); call `check_cycles` when
-    /// done registering.
-    pub(crate) fn declare_synonym(&mut self, decl: &UserSynonymDecl) {
+    /// done registering. Optional-arg-rows increment 2: now fallible —
+    /// `check_type_expr_v0_1_only` rejects a `?(l:ty)->` domain in the
+    /// synonym's body under `V0_0_6` before it is ever lowered.
+    pub(crate) fn declare_synonym(&mut self, decl: &UserSynonymDecl) -> Result<(), TypeError> {
+        check_type_expr_v0_1_only(&decl.body, self.version)?;
         self.synonyms
             .insert(decl.name.clone(), build_synonym_decl(decl, self.version));
+        Ok(())
     }
 
     /// Cycle-check the accumulated synonym table — a thin wrapper over the
@@ -1163,7 +1335,7 @@ impl Checker {
         let mut c = Checker::empty();
         c.set_version(version);
         for usd in &program.synonym_decls {
-            c.declare_synonym(usd);
+            c.declare_synonym(usd)?;
         }
         c.check_cycles()?;
         c.install_builtin_variants(version);
@@ -1267,50 +1439,119 @@ impl Checker {
             _ => {}
         }
 
-        let (mut doms, result) = peel_func_chain(tv);
-        if doms.is_empty() {
-            return Err(TypeError::simple(
+        // optional-arg-rows increment 3a: V0_1 harvests each param's closed
+        // `?(l:τ,…)` label map from the `Row` that `Ast::LambdaOpt` leaves on
+        // that param's own arrow (`peel_func_chain_rows`), instead of the
+        // 0.0.6 "`_ option` domain ⇒ optional slot" heuristic below (which
+        // stays untouched, byte-identical, under V0_0_6 — it never sees a
+        // non-`Row::Empty` row at all, since V0_0_6 code never builds
+        // `Ast::LambdaOpt`).
+        let params: Vec<CmdArgType> = if self.version.has_row_polymorphism() {
+            let (mut slots, result) = peel_func_chain_rows(tv);
+            if slots.is_empty() {
+                return Err(TypeError::simple(
+                    span,
+                    format!(
+                        "the binding for '{name}' must be a function taking a \
+                         context as its first argument (e.g. via `val inline ctx \
+                         {name} .. = ..`)"
+                    ),
+                ));
+            }
+            let (ctx_row, ctx_ty) = slots.remove(0);
+            // A labeled bundle can never legally land on the ctx binder
+            // (`elaborate_let_inline` always wraps it in a plain
+            // `Ast::Lambda`, which infers `Row::Empty` — `prim_types::arrow`)
+            // — guard it defensively rather than silently dropping/mis-
+            // attributing a label (risk 1 of the spec).
+            if !matches!(resolve_row(&ctx_row), Row::Empty) {
+                return Err(TypeError::simple(
+                    span,
+                    format!(
+                        "the context argument of '{name}' cannot carry a labeled \
+                         optional bundle"
+                    ),
+                ));
+            }
+            self.unify_ctx(
+                &t_context(),
+                &ctx_ty,
                 span,
-                format!(
-                    "the binding for '{name}' must be a function taking a \
-                     context as its first argument (e.g. via `let-inline ctx \
-                     {name} .. = ..`)"
-                ),
-            ));
-        }
-        let ctx_ty = doms.remove(0);
-        self.unify_ctx(
-            &t_context(),
-            &ctx_ty,
-            span,
-            &format!("the context argument of '{name}'"),
-        )?;
-        self.unify_ctx(
-            &want_result,
-            &result,
-            span,
-            &format!("the result of '{name}'"),
-        )?;
-        // Optional command params, this milestone's simplification
-        // (`docs/plans/frontend-completion.md` Sub-area 2 / `command_scheme`'s
-        // doc comment): there is no def-site `?:param` marker (this grammar
-        // has none), so a param is treated as optional exactly when its
-        // *inferred* domain resolves to `_ option` — i.e. the body actually
-        // uses it as an `option` (`match p with Some .. | None -> ..`, etc.).
-        // `CmdArgType.ty` then stores the option's INNER type (peeled), so it
-        // matches the `[ty?; ..]` signature-lowering shape 1:1
-        // (`lower_type_atom`'s `TypeAtom::Cmd` arm) — `check_cmd_args` re-wraps
-        // it in `option(..)` per call, since call-site args always arrive
-        // pre-wrapped as `Some`/`None` (`elaborate.rs`'s `app_arg_to_ast`).
-        let params: Vec<CmdArgType> = doms
-            .into_iter()
-            .map(|d| match resolve(&d) {
-                MonoType::Variant(vname, mut vargs) if vname == "option" && vargs.len() == 1 => {
-                    optional(vargs.pop().unwrap())
-                }
-                _ => mandatory(d),
-            })
-            .collect();
+                &format!("the context argument of '{name}'"),
+            )?;
+            self.unify_ctx(
+                &want_result,
+                &result,
+                span,
+                &format!("the result of '{name}'"),
+            )?;
+            slots
+                .into_iter()
+                .map(|(row, dom)| {
+                    let mut opt_labels: Vec<(String, MonoType)> = Vec::new();
+                    let mut cur = resolve_row(&row);
+                    loop {
+                        match cur {
+                            Row::Empty => break,
+                            // An under-constrained (free) row var defaults to
+                            // no labels — the common case for a positional
+                            // slot with no `?(…)` bundle at all.
+                            Row::Var(_) => break,
+                            Row::Cons(label, lty, rest) => {
+                                opt_labels.push((label, *lty));
+                                cur = resolve_row(&rest);
+                            }
+                        }
+                    }
+                    opt_labels.sort_by(|a, b| a.0.cmp(&b.0));
+                    labeled(opt_labels, dom)
+                })
+                .collect()
+        } else {
+            let (mut doms, result) = peel_func_chain(tv);
+            if doms.is_empty() {
+                return Err(TypeError::simple(
+                    span,
+                    format!(
+                        "the binding for '{name}' must be a function taking a \
+                         context as its first argument (e.g. via `let-inline ctx \
+                         {name} .. = ..`)"
+                    ),
+                ));
+            }
+            let ctx_ty = doms.remove(0);
+            self.unify_ctx(
+                &t_context(),
+                &ctx_ty,
+                span,
+                &format!("the context argument of '{name}'"),
+            )?;
+            self.unify_ctx(
+                &want_result,
+                &result,
+                span,
+                &format!("the result of '{name}'"),
+            )?;
+            // Optional command params, this milestone's simplification
+            // (`docs/plans/frontend-completion.md` Sub-area 2 / `command_scheme`'s
+            // doc comment): there is no def-site `?:param` marker (this grammar
+            // has none), so a param is treated as optional exactly when its
+            // *inferred* domain resolves to `_ option` — i.e. the body actually
+            // uses it as an `option` (`match p with Some .. | None -> ..`, etc.).
+            // `CmdArgType.ty` then stores the option's INNER type (peeled), so it
+            // matches the `[ty?; ..]` signature-lowering shape 1:1
+            // (`lower_type_atom`'s `TypeAtom::Cmd` arm) — `check_cmd_args` re-wraps
+            // it in `option(..)` per call, since call-site args always arrive
+            // pre-wrapped as `Some`/`None` (`elaborate.rs`'s `app_arg_to_ast`).
+            doms.into_iter()
+                .map(|d| match resolve(&d) {
+                    MonoType::Variant(vname, mut vargs) if vname == "option" && vargs.len() == 1 => {
+                        optional(vargs.pop().unwrap())
+                    }
+                    _ => mandatory(d),
+                })
+                .collect()
+        };
         let cmd_ty = if is_inline {
             MonoType::InlineCmd(params)
         } else {
@@ -2358,6 +2599,28 @@ fn peel_func_chain(ty: MonoType) -> (Vec<MonoType>, MonoType) {
                 cur = *cod;
             }
             other => return (doms, other),
+        }
+    }
+}
+
+/// [`peel_func_chain`]'s row-carrying twin (optional-arg-rows increment 3a):
+/// same greedy unwrap, but keeps each arrow's own (resolved) optional-
+/// argument [`Row`] alongside its domain, since a V0_1 command's `LambdaOpt`-
+/// produced arrows carry each parameter's `?(l:τ,…)` bundle on that
+/// PARAMETER's own arrow (the arrow whose *domain* is the labeled argument —
+/// see `Checker::command_scheme`'s V0_1 harvest). Used only by
+/// `command_scheme`; `check_cmd_args`/`math_command_scheme*` still use the
+/// row-blind `peel_func_chain` (they never harvest labels).
+fn peel_func_chain_rows(ty: MonoType) -> (Vec<(Row, MonoType)>, MonoType) {
+    let mut slots = Vec::new();
+    let mut cur = ty;
+    loop {
+        match resolve(&cur) {
+            MonoType::Func(row, dom, cod) => {
+                slots.push((*row, *dom));
+                cur = *cod;
+            }
+            other => return (slots, other),
         }
     }
 }

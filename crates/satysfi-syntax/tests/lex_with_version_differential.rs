@@ -193,3 +193,31 @@ fn v0_1_gates_signature_and_include_keywords() {
     let toks = lex_with_version("signature include", SatysfiVersion::V0_0_6).unwrap();
     assert!(toks.iter().all(|a| !matches!(a.slot, Token::Signature | Token::Include)));
 }
+
+/// optional-arg-rows increment 2: `?'r` — a row variable — is ONE token
+/// (`Token::RowVar`) under V0_1, adjacency-required (mirrors
+/// `v0_1_lexes_coerce_as_one_token`'s `:>` shape); a space between `?` and
+/// `'r` must NOT fuse; and V0_0_6 never produces `RowVar` at all — `?'r`
+/// stays the historical two tokens (`OptionalType` then `TypeVar`).
+#[test]
+fn v0_1_lexes_row_var_as_one_token() {
+    use satysfi_syntax::token::Token;
+    let toks = lex_with_version("(| x : int | ?'r |)", SatysfiVersion::V0_1).unwrap();
+    assert!(toks
+        .iter()
+        .any(|a| matches!(&a.slot, Token::RowVar(s) if s == "r")));
+    // adjacency is required: a spaced `? 'r` stays OptionalType + TypeVar
+    let toks = lex_with_version("? 'r", SatysfiVersion::V0_1).unwrap();
+    assert!(toks.iter().any(|a| matches!(a.slot, Token::OptionalType)));
+    assert!(toks
+        .iter()
+        .any(|a| matches!(&a.slot, Token::TypeVar(s) if s == "r")));
+    assert!(toks.iter().all(|a| !matches!(a.slot, Token::RowVar(_))));
+    // V0_0_6 never produces RowVar: `?'r` stays the historical two tokens.
+    let toks = lex_with_version("?'r", SatysfiVersion::V0_0_6).unwrap();
+    assert!(toks.iter().any(|a| matches!(a.slot, Token::OptionalType)));
+    assert!(toks
+        .iter()
+        .any(|a| matches!(&a.slot, Token::TypeVar(s) if s == "r")));
+    assert!(toks.iter().all(|a| !matches!(a.slot, Token::RowVar(_))));
+}

@@ -1,0 +1,6 @@
+% Vendoring capstone (doc-class-capstone-road.md CP7 item 3): compiles the
+% functor-free `code` PORT STAND-IN (dist-v01/packages/code.satyh) through
+% the full loader. Proves the nested-plain-module `Code.Default` and its
+% two-level-qualified `\code` command reach the real pipeline.
+@require: code
+1

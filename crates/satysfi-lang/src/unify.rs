@@ -27,6 +27,16 @@ pub enum UnifyError {
 
     #[error("command argument optionality mismatch for `{ty}` (`?` on one side only)")]
     OptionalMismatch { ty: MonoType },
+
+    /// SATySFi 0.1's closed command optional-label map is INVARIANT under
+    /// unification (upstream `subtype_label_map_with_equal_domain`,
+    /// `signatureSubtyping.ml:482,511-516`): a supplied/declared label set
+    /// mismatch — either side has a label the other doesn't — is always
+    /// rejected, never widened/narrowed. `expected`/`found` are each a
+    /// formatted `?(l1 : τ1, …)` rendering of the two sides' label sets (or
+    /// `?()` for an empty one) for a readable message.
+    #[error("command optional-argument label set mismatch: expected `{expected}`, found `{found}`")]
+    CmdLabelMismatch { expected: String, found: String },
 }
 
 /// Unify two monomorphic types in place: free variables get linked
@@ -98,9 +108,42 @@ fn unify_cmd_args(a: &[CmdArgType], b: &[CmdArgType]) -> Result<(), UnifyError> 
         if x.optional != y.optional {
             return Err(UnifyError::OptionalMismatch { ty: x.ty.clone() });
         }
+        // SATySFi 0.1 closed command optional-label map: EQUAL DOMAIN (both
+        // sides kept sorted by label at every producer — `command_scheme`'s
+        // harvest, `lower_type_atom`'s sig lowering). A label present on only
+        // one side makes the lengths or the pairwise names diverge here,
+        // exactly upstream's "invariant label set under a seal"
+        // (`signatureSubtyping.ml:511-516`). A no-op when both sides are `[]`
+        // (every 0.0.6-reachable `CmdArgType`), so this is byte-identical for
+        // the frozen corpus.
+        if x.opt_labels.len() != y.opt_labels.len()
+            || x.opt_labels.iter().zip(&y.opt_labels).any(|((lx, _), (ly, _))| lx != ly)
+        {
+            return Err(UnifyError::CmdLabelMismatch {
+                expected: fmt_opt_label_set(&x.opt_labels),
+                found: fmt_opt_label_set(&y.opt_labels),
+            });
+        }
+        for ((_, tx), (_, ty2)) in x.opt_labels.iter().zip(&y.opt_labels) {
+            unify(tx, ty2)?;
+        }
         unify(&x.ty, &y.ty)?;
     }
     Ok(())
+}
+
+/// Render a closed optional-label set as `?(l1 : τ1, …)` (or `?()` if empty)
+/// for a [`UnifyError::CmdLabelMismatch`] message.
+fn fmt_opt_label_set(labels: &[(String, MonoType)]) -> String {
+    let mut s = String::from("?(");
+    for (i, (l, t)) in labels.iter().enumerate() {
+        if i > 0 {
+            s.push_str(", ");
+        }
+        s.push_str(&format!("{l} : {t}"));
+    }
+    s.push(')');
+    s
 }
 
 // ============================================================================

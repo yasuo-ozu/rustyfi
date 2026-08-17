@@ -297,9 +297,9 @@ fn removed_prims_are_unbound_in_v01() {
     }
 }
 
-/// Test 6 (§6.3): the 8 prims 0.1 adds (math-split spec §2.2) are unbound
-/// under V0_0_6 in both the runtime env and the type table, and bound
-/// under V0_1.
+/// Test 6 (§6.3): the 8 prims 0.1 adds (math-split spec §2.2), plus G6's 4
+/// table prims (`…/tmp/g6-g7-standins.md` §5.1), are unbound under V0_0_6
+/// in both the runtime env and the type table, and bound under V0_1.
 #[test]
 fn added_prims_are_unbound_in_006() {
     for name in [
@@ -311,6 +311,11 @@ fn added_prims_are_unbound_in_006() {
         "embed-inline-to-math",
         "get-math-axis-height-ratio",
         "%math-attach-scripts",
+        // G6 table prims:
+        "load-hyphenation-dictionary",
+        "load-unicode-char-database",
+        "set-hyphenation-dictionary",
+        "set-unicode-char-database",
     ] {
         assert!(
             primitives::base_env_with_version(SatysfiVersion::V0_0_6)
@@ -333,4 +338,31 @@ fn added_prims_are_unbound_in_006() {
             "'{name}' should have a V0_1 type"
         );
     }
+}
+
+/// G6 (`…/tmp/g6-g7-standins.md` §5.1): `here` is a bare CONSTANT (not a
+/// `prims!` table row), so it needs its own gating assertion — unbound (env
+/// + type table) under V0_0_6, bound under V0_1.
+#[test]
+fn here_constant_is_unbound_in_006() {
+    assert!(
+        primitives::base_env_with_version(SatysfiVersion::V0_0_6)
+            .lookup("here")
+            .is_none(),
+        "'here' should be unbound in the V0_0_6 runtime env"
+    );
+    assert!(
+        prim_types::primitive_type("here").is_none(),
+        "'here' should have no V0_0_6 type"
+    );
+    assert!(
+        primitives::base_env_with_version(SatysfiVersion::V0_1)
+            .lookup("here")
+            .is_some(),
+        "'here' should be bound in the V0_1 runtime env"
+    );
+    assert!(
+        prim_types::primitive_type_with_version("here", SatysfiVersion::V0_1).is_some(),
+        "'here' should have a V0_1 type"
+    );
 }

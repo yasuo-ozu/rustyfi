@@ -249,20 +249,20 @@ fn kind_bridging_type_variable_rejects_a_record_missing_the_required_label() {
 #[test]
 fn command_arg_types_unify_elementwise() {
     let c1 = MonoType::InlineCmd(vec![
-        CmdArgType { optional: false, ty: t_int() },
-        CmdArgType { optional: true, ty: t_string() },
+        CmdArgType { optional: false, opt_labels: vec![], ty: t_int() },
+        CmdArgType { optional: true, opt_labels: vec![], ty: t_string() },
     ]);
     let c2 = MonoType::InlineCmd(vec![
-        CmdArgType { optional: false, ty: t_int() },
-        CmdArgType { optional: true, ty: t_string() },
+        CmdArgType { optional: false, opt_labels: vec![], ty: t_int() },
+        CmdArgType { optional: true, opt_labels: vec![], ty: t_string() },
     ]);
     assert!(unify(&c1, &c2).is_ok());
 }
 
 #[test]
 fn command_arg_optionality_mismatch_is_an_error() {
-    let c1 = MonoType::InlineCmd(vec![CmdArgType { optional: false, ty: t_int() }]);
-    let c2 = MonoType::InlineCmd(vec![CmdArgType { optional: true, ty: t_int() }]);
+    let c1 = MonoType::InlineCmd(vec![CmdArgType { optional: false, opt_labels: vec![], ty: t_int() }]);
+    let c2 = MonoType::InlineCmd(vec![CmdArgType { optional: true, opt_labels: vec![], ty: t_int() }]);
     let err = unify(&c1, &c2).unwrap_err();
     assert!(matches!(err, UnifyError::OptionalMismatch { .. }));
 }
@@ -622,6 +622,14 @@ fn every_v01_only_primitive_has_a_type_under_v0_1_and_none_under_v0_0_6() {
         "<.",
         ">=.",
         "<=.",
+        // ---- G6 (`…/tmp/g6-g7-standins.md` §1): hyphenation/unidata loader
+        // + setter stand-ins, and the `here` lex-time-constant stand-in —
+        // the hand-sync twin of `typecheck::PRIMITIVE_NAMES`'s own G6 block.
+        "load-hyphenation-dictionary",
+        "load-unicode-char-database",
+        "set-hyphenation-dictionary",
+        "set-unicode-char-database",
+        "here",
     ];
     for name in V01_ONLY_NAMES {
         assert!(

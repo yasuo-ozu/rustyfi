@@ -1,0 +1,7 @@
+% Vendoring capstone (doc-class-capstone-road.md CP7 item 1): compiles the
+% real upstream `annot` package (dist-v01/packages/annot.satyh) through the
+% full loader. Not itself a document — proves `Annot`'s sealed sig (with its
+% one optional-arg-rows-increment-3a command row, `\href`) elaborates,
+% type-checks, and evaluates through the real pipeline.
+@require: annot
+1

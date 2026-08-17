@@ -1,0 +1,8 @@
+% Vendoring capstone (doc-class-capstone-road.md CP7 item 2): compiles the
+% real upstream `math` package (dist-v01/packages/math.satyh) through the
+% full loader. Not itself a document — proves the ~180 landed math-command
+% VALUE bindings (Greek letters, operators, relations, `\frac`/`\sqrt`/…,
+% `+math`/`\eqn` with their optional-arg-rows increment 3a `?(tag…)` rows)
+% elaborate, type-check, and evaluate.
+@require: math
+1

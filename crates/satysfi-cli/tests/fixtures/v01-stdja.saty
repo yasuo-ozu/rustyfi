@@ -1,0 +1,37 @@
+% THE CAPSTONE (doc-class-capstone-road.md CP7 item 5 / CP8): a real
+% upstream SATySFi 0.1 document class, `std-ja`
+% (dist-v01/packages/std-ja.satyh — vendored verbatim, modulo the two
+% documented math-package stand-ins its `Math` dependency needed), driving
+% the FULL pipeline: V0_1 lex -> cst_v1 parse -> loader (`@require:`
+% transitive resolution across annot/math/code/hyph-english/unidata/the 4
+% font stand-ins/the 15 stdlib leaf packages) -> v1 lowering -> shared
+% elaborate/typecheck(V0_1)/sealing -> eval -> line break -> page break ->
+% PDF. Latin-only, math-free body (per the G7 single-DejaVu-face
+% constraint — `std-ja`'s CJK path, `set-cjk-font`/`FontIpaEx`, is real and
+% present in the class but simply never exercised by this fixture, exactly
+% like the tier4 capstone's own Latin-only body never exercises stdjabook's
+% CJK path).
+@require: std-ja
+
+StdJa.document (|
+  title  = {SATySFi in Rust: The 0.1 Capstone},
+  author = {The Vendoring Agents},
+|) '<
+  +StdJa.p {
+    This is a real upstream SATySFi 0.1 document class, std-ja, rendered
+    end to end through the Rust port: loader, elaboration, typechecking,
+    evaluation, line breaking, page breaking, and PDF rendering.
+  }
+  +StdJa.section{Introduction}<
+    +StdJa.p {
+      This section proves that a sealed 0.1 module with optional-argument
+      rows, closed record types, and command-argument bundles compiles and
+      renders through the real pipeline.
+    }
+  >
+  +StdJa.section{Conclusion}<
+    +StdJa.p {
+      The quick brown fox jumps over the lazy dog.
+    }
+  >
+>

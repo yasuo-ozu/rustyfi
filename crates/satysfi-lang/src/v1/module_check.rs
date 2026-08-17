@@ -125,7 +125,7 @@ fn check_program_inner(
     match &rewritten {
         Some((synonym_decls, type_decls)) => {
             for usd in synonym_decls {
-                ck.declare_synonym(usd);
+                ck.declare_synonym(usd)?;
             }
             ck.check_cycles()?;
             ck.install_builtin_variants(SatysfiVersion::V0_1);
@@ -135,7 +135,7 @@ fn check_program_inner(
         }
         None => {
             for usd in &program.synonym_decls {
-                ck.declare_synonym(usd);
+                ck.declare_synonym(usd)?;
             }
             ck.check_cycles()?;
             ck.install_builtin_variants(SatysfiVersion::V0_1);
@@ -937,6 +937,32 @@ fn rename_type_expr(
             cod: Box::new(rename_type_expr(cod, ctx, env)?),
         },
         cst::ast::TypeExpr::Atom(p) => cst::ast::TypeExpr::Atom(rename_type_prod(p, ctx, env)?),
+        // optional-arg-rows increment 2: `?(l1 : ty1, …) dom -> cod` — no
+        // type NAME of its own to resolve at this level (`opt_dom`'s entries
+        // are `label : ty` pairs, not type references), so this arm just
+        // recurses into every `ty`/`dom`/`cod` sub-expression, exactly like
+        // `Fun`'s `opts`/`dom`/`cod` above.
+        cst::ast::TypeExpr::OptRowFun { opt_dom, dom, arrow, cod } => cst::ast::TypeExpr::OptRowFun {
+            opt_dom: cst::ast::CstTypeOptDom {
+                q: opt_dom.q.clone(),
+                paren: opt_dom.paren.clone(),
+                entries: opt_dom
+                    .entries
+                    .iter()
+                    .map(|e| {
+                        Ok(cst::ast::CstTypeOptEntry {
+                            label: e.label.clone(),
+                            colon: e.colon.clone(),
+                            ty: cst::TyErased(Box::new(rename_type_expr(&e.ty.0, ctx, env)?)),
+                            comma: e.comma.clone(),
+                        })
+                    })
+                    .collect::<Result<_, TypeError>>()?,
+            },
+            dom: rename_type_prod(dom, ctx, env)?,
+            arrow: arrow.clone(),
+            cod: Box::new(rename_type_expr(cod, ctx, env)?),
+        },
     })
 }
 
@@ -986,6 +1012,23 @@ fn rename_type_atom(
                 .iter()
                 .map(|it| {
                     Ok(cst::ast::TypeCmdArgItem {
+                        // optional-arg-rows increment 3a: a `?(l:τ,…)` label
+                        // type could itself name a sealed abstract type
+                        // (`?(deco : M.t)`) — recurse each field's `ty` the
+                        // same as the slot's own mandatory `ty` below, or a
+                        // seal-pierce leak follows (spec §8/§14 risk 2).
+                        opt_labels: it
+                            .opt_labels
+                            .iter()
+                            .map(|f| {
+                                Ok(cst::ast::TypeCmdOptField {
+                                    label: f.label.clone(),
+                                    colon: f.colon.clone(),
+                                    ty: cst::TyErased(Box::new(rename_type_expr(&f.ty.0, ctx, env)?)),
+                                    comma: f.comma.clone(),
+                                })
+                            })
+                            .collect::<Result<_, TypeError>>()?,
                         ty: cst::TyErased(Box::new(rename_type_expr(&it.ty.0, ctx, env)?)),
                         opt: it.opt.clone(),
                         semi: it.semi.clone(),
@@ -1016,6 +1059,29 @@ fn rename_type_atom(
         cst::ast::TypeAtom::Name(n) => {
             cst::ast::TypeAtom::Name(rename_type_name(&n.name, n.span, ctx, env, 0)?)
         }
+        // optional-arg-rows increment 2: an open record type's row-variable
+        // tail names no TYPE (it's a row variable, a different namespace
+        // entirely — `rename_type_name` never sees it), so only the field
+        // types need renaming; `bar`/`var` pass through unchanged.
+        cst::ast::TypeAtom::RecordOpen { rec, inner } => cst::ast::TypeAtom::RecordOpen {
+            rec: rec.clone(),
+            inner: cst::ast::CstRecordOpenInner {
+                fields: inner
+                    .fields
+                    .iter()
+                    .map(|f| {
+                        Ok(cst::ast::CstRecordOpenField {
+                            name: f.name.clone(),
+                            colon: f.colon.clone(),
+                            ty: cst::TyErased(Box::new(rename_type_expr(&f.ty.0, ctx, env)?)),
+                            comma: f.comma.clone(),
+                        })
+                    })
+                    .collect::<Result<_, TypeError>>()?,
+                bar: inner.bar.clone(),
+                var: inner.var.clone(),
+            },
+        },
     })
 }
 
@@ -1453,6 +1519,18 @@ fn collect_v1_type_vars(ty: &ast_v1::TypeExpr, out: &mut Vec<(String, Span)>) {
             collect_v1_type_vars(cod, out);
         }
         ast_v1::TypeExpr::Atom(p) => collect_v1_type_vars_prod(p, out),
+        // optional-arg-rows increment 2: a labeled-optional domain's entry
+        // types are nested type positions — walk each one, same as `dom`/
+        // `cod` (the row-variable tail, if any, is a ROW var, a different
+        // namespace this walker doesn't track — `check_tyvar_closure` below
+        // only enforces closure over TYPE vars).
+        ast_v1::TypeExpr::OptRowFun { opt_dom, dom, cod, .. } => {
+            for e in &opt_dom.inner.entries {
+                collect_v1_type_vars(&e.ty.0, out);
+            }
+            collect_v1_type_vars_prod(dom, out);
+            collect_v1_type_vars(cod, out);
+        }
     }
 }
 
@@ -1473,9 +1551,18 @@ fn collect_v1_type_vars_app(a: &ast_v1::TypeApp, out: &mut Vec<(String, Span)>) 
             }
         }
         // Command-type argument slots (Sub-slice 2d-2) are full `TypeExpr`s
-        // — walk each one, same as any other nested type position.
+        // — walk each one, same as any other nested type position. A slot's
+        // `?(l:τ,…)` optional-label bundle (optional-arg-rows increment 3a)
+        // is the same kind of nested type position — walk its field types
+        // too, or a quantified type variable used ONLY inside a bundle
+        // (`?(l : 'a)`) would go unregistered.
         ast_v1::TypeApp::InlineCmdTy { args, .. } | ast_v1::TypeApp::BlockCmdTy { args, .. } => {
             for a in args {
+                if let Some(dom) = &a.opts {
+                    for e in &dom.entries {
+                        collect_v1_type_vars(&e.ty.0, out);
+                    }
+                }
                 collect_v1_type_vars(&a.ty.0, out);
             }
         }

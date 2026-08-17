@@ -1,0 +1,74 @@
+% annot.satyh — SATySFi 0.1 `annot` package's `Annot`, vendored for Legacy
+% packaging (docs/plans/satysfi-0-1-0-support.md §2 P2 / §4 phase 6 —
+% doc-class-capstone-road.md CP7 item 1). Source: saphe-split@b836d512:
+%   lib-satysfi/packages/annot/annot.0.0.1/src/annot.satyh (54 lines) —
+%   transliteration deltas:
+%   - T1: `use package open Stdlib` dropped; `@require: deco` added (the
+%     only Stdlib module this file references — `Deco.empty`; `Graphics.
+%     empty` is a GLOBAL primitive alias, not the `Graphics` module —
+%     wait: `Graphics.empty` IS `graphics.satyh`'s `Graphics.empty`
+%     member, so `@require: graphics` is added too).
+%   - No other deltas: byte-identical body below the banner. The ONE
+%     optional-argument site (`val inline ctx \href ?(border = borderopt)
+%     …` + the sig row `inline [?(border : length * color) string,
+%     inline-text]`) is optional-arg-rows increment 3a (inline command
+%     PARAMETER bundle + command-type row) — landed. `register-link-to-
+%     uri`/`register-link-to-location`/`register-destination`/`get-
+%     leftmost-script`/`get-rightmost-script`/`script-guard` are all
+%     landed Group-A/E primitives.
+
+@require: deco
+@require: graphics
+
+module Annot :> sig
+  val \href : inline [?(border : length * color) string, inline-text]
+  val link-to-uri-frame : string -> option (length * color) -> deco-set
+  val link-to-location-frame : string -> option (length * color) -> deco-set
+  val register-location-frame : string -> deco-set
+end = struct
+
+  val link-to-uri-frame uri borderopt =
+    let deco (x, y) w h d =
+      let () = register-link-to-uri uri (x, y) w h d borderopt in
+      Graphics.empty
+    in
+    (deco, deco, deco, deco)
+
+
+  val link-to-location-frame name borderopt =
+    let deco (x, y) w h d =
+      let () = register-link-to-location name (x, y) w h d borderopt in
+      Graphics.empty
+    in
+    (deco, deco, deco, deco)
+
+
+  val inline ctx \href ?(border = borderopt) uri inner =
+    let ib = read-inline ctx inner in
+    let ibL =
+      match get-leftmost-script ib with
+      | Some(scriptL) -> script-guard scriptL inline-nil
+      | None          -> inline-nil
+      end
+    in
+    let ibR =
+      match get-rightmost-script ib with
+      | Some(scriptR) -> script-guard scriptR inline-nil
+      | None          -> inline-nil
+      end
+    in
+    let ib-frame =
+      inline-frame-breakable (0pt, 0pt, 0pt, 0pt) (link-to-uri-frame uri borderopt) ib
+    in
+    ibL ++ ib-frame ++ ibR
+
+
+  val register-location-frame key =
+    let decoR (x, y) w h d =
+      let () = register-destination key (x, y +' h) in
+      Graphics.empty
+    in
+    let decoI = Deco.empty in
+    (decoR, decoR, decoI, decoI)
+
+end

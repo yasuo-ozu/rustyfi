@@ -1,0 +1,9 @@
+@require: v01-mini
+@require: font-junicode
+
+let open V01Mini in
+let ctx = set-font Latin (FontJunicode.normal, 1., 0.)
+            (get-initial-context 440pt (command \math)) in
+document (| title = `font` |) '<
+  +p { Quick brown fox. }
+>

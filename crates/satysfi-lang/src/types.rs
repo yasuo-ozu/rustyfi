@@ -399,10 +399,21 @@ pub enum MonoType {
 
 /// One command argument type: `ty` for a mandatory argument, or `ty?` for
 /// an optional one (v0.0.6: `MandatoryArgumentType` / `OptionalArgumentType`,
-/// types.cppo.ml:326-328).
+/// types.cppo.ml:326-328). `optional`/`opt_labels` are version-discriminated
+/// by construction (optional-arg-rows increment 3a): under `V0_0_6`
+/// (positional model) `optional` marks a whole-slot `ty?` optional and
+/// `opt_labels` is always empty; under `V0_1` (labeled model, upstream
+/// `CommandArgType of typ LabelMap.t * typ`, `types.cppo.ml:214`) `optional`
+/// is always `false` and `opt_labels` carries this slot's `?(l:τ,…)` bundle —
+/// a CLOSED map (no row variable: upstream discards one if written,
+/// `parser.mly:866`'s `TODO (error)`). Kept **sorted by label** at every
+/// producer (`command_scheme`'s harvest, `lower_type_atom`'s sig lowering) so
+/// `unify`/`Display`/sealing are order-insensitive — see `unify_cmd_args`'s
+/// zip-equal equal-domain test.
 #[derive(Clone, Debug)]
 pub struct CmdArgType {
     pub optional: bool,
+    pub opt_labels: Vec<(String, MonoType)>,
     pub ty: MonoType,
 }
 
@@ -661,6 +672,9 @@ fn collect_generalizable(
         MonoType::InlineCmd(cs) | MonoType::BlockCmd(cs) | MonoType::MathCmd(cs) => {
             for c in &cs {
                 collect_generalizable(level, &c.ty, vars, row_vars);
+                for (_, lty) in &c.opt_labels {
+                    collect_generalizable(level, lty, vars, row_vars);
+                }
             }
         }
     }
@@ -770,6 +784,11 @@ fn substitute_cmd_args(
     cs.iter()
         .map(|c| CmdArgType {
             optional: c.optional,
+            opt_labels: c
+                .opt_labels
+                .iter()
+                .map(|(l, t)| (l.clone(), substitute(t, var_map, row_map)))
+                .collect(),
             ty: substitute(&c.ty, var_map, row_map),
         })
         .collect()
@@ -936,12 +955,40 @@ fn fmt_cmd(
         if i > 0 {
             f.write_str("; ")?;
         }
+        fmt_opt_labels(&c.opt_labels, f, namer)?;
         fmt_mono(&c.ty, f, namer)?;
         if c.optional {
             f.write_str("?")?;
         }
     }
     write!(f, "] {suffix}")
+}
+
+/// Prefix-print a command argument slot's closed optional-label map (0.1's
+/// `CmdArgType.opt_labels`): `?(l : τ, …) ` before the slot's mandatory `ty`,
+/// or nothing at all when the map is empty (guaranteeing byte-identical
+/// output for every 0.0.6-reachable `CmdArgType`, since those are always
+/// `opt_labels == []`) — the command-type analogue of `fmt_func_row`, minus
+/// the row-variable tail (command optional maps are closed, never open).
+fn fmt_opt_labels(
+    labels: &[(String, MonoType)],
+    f: &mut fmt::Formatter<'_>,
+    namer: &mut VarNamer,
+) -> fmt::Result {
+    if labels.is_empty() {
+        return Ok(());
+    }
+    let mut fields = labels.to_vec();
+    fields.sort_by(|a, b| a.0.cmp(&b.0));
+    f.write_str("?(")?;
+    for (i, (label, ty)) in fields.iter().enumerate() {
+        if i > 0 {
+            f.write_str(", ")?;
+        }
+        write!(f, "{label} : ")?;
+        fmt_mono(ty, f, namer)?;
+    }
+    f.write_str(") ")
 }
 
 /// Prefix-print a function type's optional-argument row: nothing at all for

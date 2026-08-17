@@ -520,7 +520,7 @@ fn lower_rec_clause(c: &ast_v1::RecClauseV1) -> Result<cst::ast::RecBinding, Low
         let ps = c
             .params
             .iter()
-            .map(|p| lower_pat_bot(&p.body))
+            .map(|p| lower_param_body(&p.body))
             .collect::<Result<_, _>>()?;
         (ps, value_expr)
     } else {
@@ -602,13 +602,62 @@ pub(crate) fn lower_type_expr(
 ) -> Result<cst::ast::TypeExpr, LowerError> {
     Ok(match t {
         ast_v1::TypeExpr::Fun { dom, arrow, cod } => cst::ast::TypeExpr::Fun {
-            // 0.1 `?(…)` domains: phase 4.
+            // 0.1 has no `?->` domain-suffix syntax at all (that's 0.0.6's
+            // own fused sigil, dropped in 0.1) — `opts` here is always empty.
+            // The 0.1 `?(…) ->` PREFIX form is `ast_v1::TypeExpr::OptRowFun`,
+            // a separate arm below (optional-arg-rows increment 2).
             opts: Vec::new(),
             dom: lower_type_prod(dom, tyenv)?,
             arrow: arrow.clone(),
             cod: Box::new(lower_type_expr(cod, tyenv)?),
         },
         ast_v1::TypeExpr::Atom(p) => cst::ast::TypeExpr::Atom(lower_type_prod(p, tyenv)?),
+        // `?(l1 : ty1, … [| ?'r]) dom -> cod` (optional-arg-rows increment
+        // 2). A row-variable tail is parsed but rejected here: it needs
+        // signature-level row quantification (`rowquant`/`quant`,
+        // `parser_v1.mly:631-633`) — L4/2d territory, not this increment
+        // (contrast the record-type row-tail below, which THIS increment
+        // DOES complete — a bare record type has no `quant`-list obligation
+        // to satisfy).
+        ast_v1::TypeExpr::OptRowFun { opt_dom, dom, arrow, cod } => {
+            if let Some(tail) = &opt_dom.inner.row_tail {
+                return Err(unsupported(
+                    "a row-variable tail in an optional-argument type domain (`| ?'r`)",
+                    "row quantification arrives with signature enforcement — \
+                     roadmap L4 / Sub-slice 2d",
+                    tail.var.span,
+                ));
+            }
+            if opt_dom.inner.entries.is_empty() {
+                return Err(unsupported(
+                    "an empty `?()` optional-argument type domain",
+                    "a `?(…)` domain must bind at least one label",
+                    opt_dom.q.0,
+                ));
+            }
+            cst::ast::TypeExpr::OptRowFun {
+                opt_dom: cst::ast::CstTypeOptDom {
+                    q: opt_dom.q.clone(),
+                    paren: clone_paren(&opt_dom.paren),
+                    entries: opt_dom
+                        .inner
+                        .entries
+                        .iter()
+                        .map(|e| {
+                            Ok(cst::ast::CstTypeOptEntry {
+                                label: e.label.clone(), // labels are NOT type names
+                                colon: e.colon.clone(),
+                                ty: cst::TyErased(Box::new(lower_type_expr(&e.ty.0, tyenv)?)),
+                                comma: e.comma.clone(),
+                            })
+                        })
+                        .collect::<Result<_, LowerError>>()?,
+                },
+                dom: lower_type_prod(dom, tyenv)?,
+                arrow: arrow.clone(),
+                cod: Box::new(lower_type_expr(cod, tyenv)?),
+            }
+        }
     })
 }
 
@@ -697,10 +746,17 @@ fn lower_type_app(a: &ast_v1::TypeApp, tyenv: &TypeNameEnv) -> Result<cst::ast::
     }
 }
 
-/// Each `[…]`-bracketed command-type slot lowers to one mandatory
+/// Each `[…]`-bracketed command-type slot lowers to one
 /// `cst::ast::TypeCmdArgItem` (`opt: None` — 2d-2's grammar has no `?`
-/// suffix; `semi: None` — these synthetic items are never re-unparsed, only
-/// fed to `elaborate`/`typecheck`, so the `;`-separator token is immaterial).
+/// suffix of its own; `semi: None` — these synthetic items are never
+/// re-unparsed, only fed to `elaborate`/`typecheck`, so the `;`-separator
+/// token is immaterial). `opt_labels` (optional-arg-rows increment 3a)
+/// carries this slot's `?(l:τ,…)` prefix bundle, if any — a flat,
+/// *surface-order* list; `typecheck.rs`'s `lower_type_atom` `Cmd` arm is
+/// responsible for sorting it into the closed map's canonical order (kept
+/// unsorted here, matching every other lowering site in this file, which
+/// never itself imposes a canonical order on anything — that's a
+/// typecheck-time concern).
 fn lower_type_cmd_args(
     args: &[ast_v1::TypeCmdArgItemV1],
     tyenv: &TypeNameEnv,
@@ -708,6 +764,29 @@ fn lower_type_cmd_args(
     args.iter()
         .map(|a| {
             Ok(cst::ast::TypeCmdArgItem {
+                opt_labels: match &a.opts {
+                    None => Vec::new(),
+                    Some(dom) => {
+                        if dom.entries.is_empty() {
+                            return Err(unsupported(
+                                "an empty `?()` command-type optional-label bundle",
+                                "a `?(…)` bundle must bind at least one label",
+                                dom.q.0,
+                            ));
+                        }
+                        dom.entries
+                            .iter()
+                            .map(|e| {
+                                Ok(cst::ast::TypeCmdOptField {
+                                    label: e.label.clone(),
+                                    colon: e.colon.clone(),
+                                    ty: cst::TyErased(Box::new(lower_type_expr(&e.ty.0, tyenv)?)),
+                                    comma: e.comma.clone(),
+                                })
+                            })
+                            .collect::<Result<_, LowerError>>()?
+                    }
+                },
                 ty: cst::TyErased(Box::new(lower_type_expr(&a.ty.0, tyenv)?)),
                 opt: None,
                 semi: None,
@@ -722,24 +801,56 @@ fn lower_type_atom(a: &ast_v1::TypeAtom, tyenv: &TypeNameEnv) -> Result<cst::ast
             paren: paren.clone(),
             inner: cst::TyErased(Box::new(lower_type_expr(&inner.0, tyenv)?)),
         },
-        ast_v1::TypeAtom::Record { rec, inner } => cst::ast::TypeAtom::Record {
-            rec: rec.clone(),
-            fields: inner
-                .fields
-                .iter()
-                .map(|f| {
-                    Ok(cst::ast::TypeRecordField {
-                        name: f.name.clone(),   // labels are NOT type names —
-                        colon: f.colon.clone(), // no `tyenv.qualify` on `name`
-                        ty: cst::TyErased(Box::new(lower_type_expr(&f.ty.0, tyenv)?)),
-                        // `,` dropped (`semi: None`) — synthetic tree is
-                        // never unparsed; `lower_record_field`/
-                        // `lower_type_cmd_args` precedent.
-                        semi: None,
+        // Closed form (`row_tail: None`) transcribes to the existing
+        // `cst::ast::TypeAtom::Record`, byte-identical to before this
+        // increment. Open form (`row_tail: Some(_)`, optional-arg-rows
+        // increment 2) transcribes to the additive
+        // `cst::ast::TypeAtom::RecordOpen` instead — a fresh row variable at
+        // the `typecheck.rs` end, not the SAME variable across occurrences
+        // (this increment models one open record type at a time, not
+        // cross-signature shared-row polymorphism).
+        ast_v1::TypeAtom::Record { rec, inner } if inner.row_tail.is_none() => {
+            cst::ast::TypeAtom::Record {
+                rec: rec.clone(),
+                fields: inner
+                    .fields
+                    .iter()
+                    .map(|f| {
+                        Ok(cst::ast::TypeRecordField {
+                            name: f.name.clone(),   // labels are NOT type names —
+                            colon: f.colon.clone(), // no `tyenv.qualify` on `name`
+                            ty: cst::TyErased(Box::new(lower_type_expr(&f.ty.0, tyenv)?)),
+                            // `,` dropped (`semi: None`) — synthetic tree is
+                            // never unparsed; `lower_record_field`/
+                            // `lower_type_cmd_args` precedent.
+                            semi: None,
+                        })
                     })
-                })
-                .collect::<Result<_, LowerError>>()?,
-        },
+                    .collect::<Result<_, LowerError>>()?,
+            }
+        }
+        ast_v1::TypeAtom::Record { rec, inner } => {
+            let tail = inner.row_tail.as_ref().expect("guarded by the arm above");
+            cst::ast::TypeAtom::RecordOpen {
+                rec: rec.clone(),
+                inner: cst::ast::CstRecordOpenInner {
+                    fields: inner
+                        .fields
+                        .iter()
+                        .map(|f| {
+                            Ok(cst::ast::CstRecordOpenField {
+                                name: f.name.clone(),
+                                colon: f.colon.clone(),
+                                ty: cst::TyErased(Box::new(lower_type_expr(&f.ty.0, tyenv)?)),
+                                comma: None,
+                            })
+                        })
+                        .collect::<Result<_, LowerError>>()?,
+                    bar: tail.bar.clone(),
+                    var: tail.var.clone(),
+                },
+            }
+        }
         ast_v1::TypeAtom::Var(v) => cst::ast::TypeAtom::Var(v.clone()),
         // NO `tyenv.qualify` — see `AppliedLong`'s doc comment above; the
         // same "already absolute" argument applies bare.
@@ -809,13 +920,13 @@ fn lower_param_units(
     if params.iter().all(|p| p.opts.is_none()) {
         let ps = params
             .iter()
-            .map(|p| Ok(cst::ast::Param::Pat(lower_pat_bot(&p.body)?)))
+            .map(|p| Ok(cst::ast::Param::Pat(lower_param_body(&p.body)?)))
             .collect::<Result<_, LowerError>>()?;
         return Ok((ps, body));
     }
     let mut chain = body;
     for p in params.iter().rev() {
-        let param_pat = lower_pat_bot(&p.body)?;
+        let param_pat = lower_param_body(&p.body)?;
         chain = match &p.opts {
             Some(opts) => cst::ast::Expr::FunRows {
                 kw: KwFun(opts.q.0),
@@ -835,24 +946,31 @@ fn lower_param_units(
     Ok((Vec::new(), chain))
 }
 
-/// Reject a `?(l = x, …)` bundle on an inline/block/math *command* parameter:
-/// its labeled optionals belong in the 0.1 command-argument encoding, which
-/// is roadmap phase 5 (optional-arg-rows increment 3). All-plain params lower
-/// as before.
+/// Lower an inline/block/math command binding's own `Param` list, preserving
+/// order 1:1 (each `cst_v1::Param` maps to exactly one `cst::ast::Param` —
+/// unlike the value-level `FunRows` desugar, which right-folds a bundled
+/// unit into a lambda chain and returns an EMPTY param list, a command
+/// binding's `params` vec carries order straight into `curry_cmd_params_v1`).
+/// A plain (non-bundled) unit lowers to `Param::Pat` as before (optional-
+/// arg-rows increment 1 and earlier); a `?(l = x, …)`-bundled unit
+/// (optional-arg-rows increment 3a) lowers to the additive
+/// `cst::ast::Param::Bundled`, consumed by `elaborate.rs`'s bundle-aware
+/// `curry_cmd_params_v1`. Shared by `ValueInline`/`ValueBlock` (which accept
+/// a bundle freely) AND `ValueMath` (`lower_value_math` rejects a bundle
+/// itself, BEFORE calling this — math command parameter bundles are
+/// optional-arg-rows increment 3b, `?(name=…)` on `val math ctx \derive`).
 fn lower_command_params(
     params: &[cst_v1::Param],
 ) -> Result<Vec<cst::ast::Param>, LowerError> {
-    if let Some(p) = params.iter().find(|p| p.opts.is_some()) {
-        return Err(unsupported(
-            "a `?(l = e)` labeled optional on an inline/block/math command parameter",
-            "labeled optionals on commands need the 0.1 command-argument encoding — \
-             roadmap phase 5 (optional-arg-rows increment 3)",
-            p.opts.as_ref().unwrap().q.0,
-        ));
-    }
     params
         .iter()
-        .map(|p| Ok(cst::ast::Param::Pat(lower_pat_bot(&p.body)?)))
+        .map(|p| match &p.opts {
+            None => Ok(cst::ast::Param::Pat(lower_param_body(&p.body)?)),
+            Some(opts) => Ok(cst::ast::Param::Bundled {
+                opts: lower_opt_binders(opts)?,
+                body: lower_param_body(&p.body)?,
+            }),
+        })
         .collect()
 }
 
@@ -1022,6 +1140,20 @@ fn lower_value_math(
     eq: &DefEqTok,
     body: &ast_v1::Expr,
 ) -> Result<cst::TopBinding, LowerError> {
+    // Reject a `?(l = x, …)` bundle on a `val math` parameter BEFORE it ever
+    // reaches `lower_command_params` (which — optional-arg-rows increment
+    // 3a — freely accepts one for `ValueInline`/`ValueBlock`): math command
+    // parameter bundles (`val math ctx \derive ?(name = …) …`) are optional-
+    // arg-rows increment 3b (needs `math_command_scheme_v01`'s own row
+    // harvest, not yet wired — `typecheck.rs`'s doc comment on that fn).
+    if let Some(p) = params.iter().find(|p| p.opts.is_some()) {
+        return Err(unsupported(
+            "a `?(l = e)` labeled optional on a `val math` command parameter",
+            "math command parameter bundles need `math_command_scheme_v01`'s \
+             own optional-label harvest — roadmap increment 3b",
+            p.opts.as_ref().unwrap().q.0,
+        ));
+    }
     let body = lower_expr(body)?;
     let span = eq.0;
     let (sub_name, sup_name, wrapped_body) = match scripts {
@@ -1166,7 +1298,7 @@ fn lower_expr(e: &ast_v1::Expr) -> Result<cst::ast::Expr, LowerError> {
                     kw: kw.clone(),
                     params: params
                         .iter()
-                        .map(|p| lower_pat_bot(&p.body))
+                        .map(|p| lower_param_body(&p.body))
                         .collect::<Result<_, _>>()?,
                     arrow: arrow.clone(),
                     body: Box::new(body_expr),
@@ -1641,6 +1773,29 @@ fn lower_pat_bot(p: &ast_v1::PatBot) -> Result<cst::ast::PatBot, LowerError> {
                 .iter()
                 .map(lower_pat_list_item)
                 .collect::<Result<_, _>>()?,
+        }),
+    }
+}
+
+/// A [`ast_v1::Param`]'s trailing shape (optional-arg-rows increment 2):
+/// either a plain `patbot` (unchanged path), or a `( pattern : typ )`
+/// ascribed pattern. The ascription's `typ` is DROPPED — a documented
+/// carve-out, precedent `cst::ast::RecBinding.ascription`'s own
+/// parse-and-ignore (`cst.rs:729-737`; enforcing it needs an `Ast`-level
+/// ascription node, a typechecker-completion follow-up, not this increment).
+/// Once dropped, `( pat : typ )` reduces exactly to a trivially-parenthesized
+/// FULL pattern — precisely [`cst::ast::PatBot::Paren`]'s own shape (a single
+/// `first` pattern, no `rest`), since the ascribed form's parens were already
+/// there in the source.
+fn lower_param_body(pb: &ast_v1::ParamBody) -> Result<cst::ast::PatBot, LowerError> {
+    match pb {
+        ast_v1::ParamBody::Pat(p) => lower_pat_bot(p),
+        ast_v1::ParamBody::Ascribed { paren, inner } => Ok(cst::ast::PatBot::Paren {
+            paren: paren.clone(),
+            inner: Box::new(cst::ast::PatternParenBody {
+                first: erase_pat(lower_pattern(&inner.pat)?),
+                rest: Vec::new(),
+            }),
         }),
     }
 }

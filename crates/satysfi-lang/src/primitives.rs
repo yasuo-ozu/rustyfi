@@ -546,6 +546,20 @@ prims! {
     v01 "embed-inline-to-math" (2) => prim_embed_inline_to_math;
     v01 "get-math-axis-height-ratio" (1) => prim_get_math_axis_height_ratio;
     v01 "%math-attach-scripts" (4) => prim_math_attach_scripts;
+
+    // ==== G6 (`…/tmp/g6-g7-standins.md` §1): hyphenation/unidata loader +
+    // setter stand-ins, V0_1-only (genuinely absent from 0.0.6 upstream).
+    // FAITHFUL types (`prim_types.rs`); ACCEPT-AND-RETURN bodies, not
+    // hard-error stand-ins like `stringify-math` above — std-ja evaluates
+    // `val unidata = load-unicode-char-database …` at module LOAD time, so
+    // an erroring stand-in would break every consumer at load, not just at
+    // use. `set-hyphenation-dictionary`/`set-unicode-char-database` close
+    // scout gap G4 (`context.satyh`'s R7 restore checklist). ====
+    v01 "load-hyphenation-dictionary" (1) => prim_load_hyphenation_dictionary;
+    v01 "load-unicode-char-database"  (3) => prim_load_unicode_char_database;
+    v01 "set-hyphenation-dictionary"  (2) => prim_set_hyphenation_dictionary;
+    v01 "set-unicode-char-database"   (2) => prim_set_unicode_char_database;
+
     "raise-inline" (2) => prim_raise_inline;
     "embed-block-breakable" (2) => prim_embed_block_breakable;
     "unite-path" (2) => prim_unite_path;
@@ -683,6 +697,21 @@ pub fn base_env_with_version(version: SatysfiVersion) -> Env {
     // marker `chop_page` (satysfi-backend) treats as "end this page here".
     // FAITHFUL — `mitou-report.satyh`'s `document` unblocker.
     env.define("clear-page", Value::BlockBoxes(vec![VertBox::ClearPage]));
+    // `here : string` (G6, `…/tmp/g6-g7-standins.md` §1.1) — upstream `here`
+    // is a LEXER keyword that expands at lex time to a string constant (the
+    // current source file's directory, `Filename.dirname`). This port has
+    // no such lexer entry (`here` lexes as a plain `Token::Var`, resolvable
+    // through `base_env` like any identifier — `lexer.rs` needs no change);
+    // instead it's modeled as a V0_1-only nullary CONSTANT, exactly the
+    // `inline-nil`/`clear-page` idiom just above, bound to the empty string.
+    // The returned value is never dereferenced as a real path: its only
+    // upstream consumers (`unidata.satyh`/`hyph-english.satyh`) immediately
+    // feed `here ^ …` into the G6 `load-*` stand-ins above, which pop and
+    // drop the path unread. V0_1-only because `here` is genuinely absent
+    // from 0.0.6 upstream.
+    if version == SatysfiVersion::V0_1 {
+        env.define("here", Value::Str(String::new()));
+    }
     env
 }
 
@@ -4679,6 +4708,66 @@ fn prim_math_attach_scripts(interp: &mut Interp, mut args: Vec<Value>) -> Result
     let sup_opt = as_option_math_text(sup_v)?;
     let out = attach_scripts(interp, &ctx, (*base).clone(), sub_opt, sup_opt)?;
     Ok(Value::MathBoxes(Rc::new(out)))
+}
+
+/// `load-hyphenation-dictionary : string -> hyphenation` (`vminst.ml`'s
+/// `LoadHyphenationDictionary`: upstream calls `LoadHyph.main abspath` to
+/// build a `BCHyphenation` constant). STAND-IN: no-op; this port has no
+/// `Context::hyphen_dictionary` field yet (gap G4,
+/// `…/tmp/vendoring-scout.md` §2 — restore checklist R7). ACCEPT-AND-RETURN
+/// (not a `stringify-math`-style hard error): `unidata.satyh`/
+/// `hyph-english.satyh` evaluate this at module LOAD time, so std-ja's
+/// `@require:` closure must not fail merely for referencing it. The path
+/// argument is popped and dropped — `here`'s doc comment (`primitives.rs`'s
+/// `base_env_with_version`) explains why the empty-string stand-in for
+/// `here` never surfaces as a real, dereferenced path here.
+fn prim_load_hyphenation_dictionary(
+    _interp: &mut Interp,
+    mut args: Vec<Value>,
+) -> Result<Value, EvalError> {
+    let _path = args.pop().unwrap();
+    Ok(Value::Unit)
+}
+
+/// `load-unicode-char-database : string -> string -> string ->
+/// unicode-char-database` (`vminst.ml`'s `LoadUnicodeCharDatabase`:
+/// upstream builds `(ScriptDataMap, LineBreakDataMap)` from the three
+/// Unicode data file paths into a `BCUnidata` constant). STAND-IN: no-op,
+/// same rationale as `prim_load_hyphenation_dictionary` above (gap G4,
+/// restore checklist R7) — all three paths are popped and dropped.
+fn prim_load_unicode_char_database(
+    _interp: &mut Interp,
+    mut args: Vec<Value>,
+) -> Result<Value, EvalError> {
+    args.truncate(0);
+    Ok(Value::Unit)
+}
+
+/// `set-hyphenation-dictionary : hyphenation -> context -> context`
+/// (`vminst.ml`'s setter: upstream stores `{ ctx with hyphen_dictionary }`).
+/// STAND-IN no-op: returns `ctx` unchanged, the opaque `hyphenation` token
+/// (always `Value::Unit`, see `t_hyphenation`'s doc comment) is popped and
+/// dropped. Closes scout gap G4 — `context.satyh`'s R7 restore checklist.
+fn prim_set_hyphenation_dictionary(
+    _interp: &mut Interp,
+    mut args: Vec<Value>,
+) -> Result<Value, EvalError> {
+    let ctx = args.pop().unwrap();
+    let _dict = args.pop().unwrap();
+    Ok(ctx)
+}
+
+/// `set-unicode-char-database : unicode-char-database -> context ->
+/// context` (`vminst.ml`'s setter: upstream stores `{ ctx with script_map;
+/// line_break_map }`). STAND-IN no-op, same shape as
+/// `prim_set_hyphenation_dictionary` above — closes scout gap G4.
+fn prim_set_unicode_char_database(
+    _interp: &mut Interp,
+    mut args: Vec<Value>,
+) -> Result<Value, EvalError> {
+    let ctx = args.pop().unwrap();
+    let _db = args.pop().unwrap();
+    Ok(ctx)
 }
 
 fn prim_math_char_v006(interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {

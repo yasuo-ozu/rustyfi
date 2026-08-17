@@ -748,8 +748,30 @@ impl Lexer {
                     // /`->`, a downstream parse error, matching upstream.
                     // Under V0_0_6 this stays byte-identical (pinned by
                     // `lex_with_version_differential.rs`).
+                    //
+                    // optional-arg-rows increment 2: under V0_1, `?` directly
+                    // followed by `'` + a lowercase name (no space — one
+                    // lexeme, matching upstream `ROWVAR`, `lexer_v1.mll:310
+                    // -311`) is a row variable (`Token::RowVar`), e.g. `?'r`
+                    // in a row-var record tail `(| … | ?'r |)`. A SPACE
+                    // between `?` and `'r` (`? 'r`) must NOT fuse — and
+                    // naturally doesn't, since this whole match arm only
+                    // runs once per token (space-skipping happens between
+                    // token scans, not inside it), so `? 'r` lexes as two
+                    // separate tokens (`OptionalType` then `TypeVar`), same
+                    // as it always has.
                     let tok = if self.version == SatysfiVersion::V0_1 {
-                        Token::OptionalType
+                        if self.peek() == Some('\'') {
+                            if let Some(len) = self.ident_len_at(1) {
+                                self.bump(); // consume the `'`
+                                let name = self.take(len);
+                                Token::RowVar(name)
+                            } else {
+                                Token::OptionalType
+                            }
+                        } else {
+                            Token::OptionalType
+                        }
                     } else {
                         match self.peek() {
                             Some(':') => {

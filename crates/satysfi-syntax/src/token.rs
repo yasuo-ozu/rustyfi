@@ -271,6 +271,15 @@ pub enum Token {
     Optional, // `?:`
     #[leaf(name = "OmissionTok", expect = "'?*'")]
     Omission, // `?*`
+    /// `?'r` — a SATySFi 0.1 row variable (upstream `ROWVAR`,
+    /// `lexer_v1.mll:310-311`; "optional-arg-rows increment 2"). `RowVarTok`
+    /// carries the name sans sigil, exactly like [`Token::TypeVar`]/
+    /// `TypeVarTok`. V0_1-only: the lexer (`lexer.rs`'s `'?'` arm) only ever
+    /// mints this under `SatysfiVersion::V0_1`; under `V0_0_6`, `?'r` stays
+    /// two tokens (`OptionalType` then `TypeVar`), byte-identical to before
+    /// this addition.
+    #[leaf(name = "RowVarTok", expect = "a row variable (\"?'r\")", field = "name")]
+    RowVar(String), // `?'r`
 
     // ---- commands (payload includes the `\`/`+` sigil) ----
     #[leaf(name = "HorzCmdTok", expect = "an inline command", field = "name")]
@@ -418,6 +427,7 @@ impl std::fmt::Display for Token {
             OptionalArrow => write!(f, "?->"),
             Optional => write!(f, "?:"),
             Omission => write!(f, "?*"),
+            RowVar(s) => write!(f, "?'{s}"),
             HorzCmd(s) | VertCmd(s) | MathCmd(s) | HorzMacro(s) | VertMacro(s) => {
                 write!(f, "{s}")
             }

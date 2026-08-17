@@ -2,28 +2,31 @@
 % packaging (docs/plans/satysfi-0-1-0-support.md §2 P2 / §4 phase 6).
 % Source: saphe-split@b836d512:lib-satysfi/packages/stdlib/stdlib.0.0.1/
 %   src/context.satyh — transliteration deltas:
-%   - T6 PARTIAL VENDOR: 7 of the 28 upstream members (and their sig lines)
+%   - T6 PARTIAL VENDOR: 5 of the 28 upstream members (and their sig lines)
 %     are dropped — this port has no backing primitive for any of them yet
 %     (gap G4, `…/tmp/vendoring-scout.md` §2):
-%       * `set-hyphenation-dictionary : hyphenation -> context -> context`
-%         (also drops the `hyphenation` base type, unregistered)
-%       * `set-unicode-char-database : unicode-char-database -> context ->
-%         context` (also drops the `unicode-char-database` base type)
 %       * `set-hyphen-min : int -> int -> context -> context`
 %       * `set-min-paragraph-ascender-and-descender : length -> length ->
 %         context -> context`
 %       * `set-adjacent-stretch-ratio : float -> context -> context`
 %       * `set-word-break-penalty : int -> context -> context`
 %       * `get-every-word-break : context -> inline-boxes * inline-boxes`
-%     21/28 members remain — every other upstream member's backing
+%     23/28 members remain — every other upstream member's backing
 %     primitive is landed (`get-initial-context`, `set-math-command`,
 %     `set-code-text-command`, `set-min-gap-of-lines`, `set-space-ratio`,
 %     `get-math-axis-height-ratio`, `set-paragraph-margin`, `set-font-size`,
 %     `get-font-size`, `set-text-color`, `get-text-color`, `set-leading`,
 %     `get-text-width`, `set-manual-rising`, `set-hyphen-penalty`,
 %     `set-math-variant-char`, `set-math-char`, `set-math-char-class`,
-%     `get-math-char-class`, `set-every-word-break`). RESTORE CHECKLIST
-%     (R7): re-add the 7 members above verbatim once G4's primitives land.
+%     `get-math-char-class`, `set-every-word-break`,
+%     `set-hyphenation-dictionary`, `set-unicode-char-database`).
+%     RESTORE CHECKLIST (R7): re-add the 5 members above verbatim once G4's
+%     remaining primitives land. `set-hyphenation-dictionary`/
+%     `set-unicode-char-database` were themselves restored by G6
+%     (`…/tmp/g6-g7-standins.md` §1.4 item 6) — STAND-IN no-op setters
+%     (`primitives.rs`'s `prim_set_hyphenation_dictionary`/
+%     `prim_set_unicode_char_database`); parity only (R4 below — std-ja
+%     calls these bare, not `Context.`-qualified).
 %   No other deltas: `initial`'s sig type is `inline [math-text]` (the
 %   dev-0-1-0 math-split rename of 0.0.6's `math`) — `t_math_text()`/
 %   `t_math()` are the same `MonoType` under both surface names
@@ -50,6 +53,8 @@ module Context :> sig
   val set-math-char-class : math-char-class -> context -> context
   val get-math-char-class : context -> math-char-class
   val set-every-word-break : inline-boxes -> inline-boxes -> context -> context
+  val set-hyphenation-dictionary : hyphenation -> context -> context
+  val set-unicode-char-database : unicode-char-database -> context -> context
 end = struct
 
   val initial = get-initial-context %PRIMITIVE
@@ -91,5 +96,9 @@ end = struct
   val get-math-char-class = get-math-char-class %PRIMITIVE
 
   val set-every-word-break = set-every-word-break %PRIMITIVE
+
+  val set-hyphenation-dictionary = set-hyphenation-dictionary %PRIMITIVE
+
+  val set-unicode-char-database = set-unicode-char-database %PRIMITIVE
 
 end

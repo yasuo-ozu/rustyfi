@@ -1236,3 +1236,248 @@ fn v01_strings_document_renders_to_extractable_text_and_info_dict() {
         let _ = std::fs::remove_file(&tmp);
     });
 }
+
+// ============================================================================
+// G7 (`…/tmp/g6-g7-standins.md` §5.5): the first real-document render of a
+// G7 font stand-in package. Mirrors `tier4_stdjabook_capstone_renders_to_
+// extractable_text` above (skip-gated on a real DejaVu TrueType face, same
+// `TtfFontStore`/`render_pdf_ttf` path), but V0_1 and driven by
+// `font-junicode`. Latin-only, math-free body (R1: every abbrev collapses
+// to the single loaded `FontKey(0)` face — the tier4 constraint) so the
+// bare single-face store suffices; independent of the full std-ja
+// capstone, which still awaits CP4.
+// ============================================================================
+
+#[test]
+fn v01_font_standin_renders_to_extractable_text() {
+    let font = match find_regular_ttf() {
+        Some(p) => p,
+        None => {
+            eprintln!("skipping v01 font stand-in capstone: no DejaVu TrueType font found");
+            return;
+        }
+    };
+    run_with_big_stack(move || {
+        let entry = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/v01-font.saty");
+        let program = satysfi_loader::load(
+            &entry,
+            &satysfi_loader::LoadOptions {
+                lib_root: Some(lib_root().join("dist-v01").join("packages")),
+                version: satysfi_syntax::SatysfiVersion::V0_1,
+                ..Default::default()
+            },
+        )
+        .expect("v01-mini.satyh + font-junicode.satyh + v01-font.saty must load");
+        assert_eq!(
+            program.files.len(),
+            3,
+            "expected font-junicode.satyh + v01-mini.satyh + the entry"
+        );
+
+        let store = satysfi_pdf::TtfFontStore::load(&font, None, None)
+            .expect("load DejaVu regular face");
+        let doc = satysfi_lang::compile_document_v1(&program.files, &store).expect(
+            "the G7 font stand-in capstone must compile end-to-end (FontJunicode.normal : \
+             font must seal, flow through set-font, and resolve via the name-heuristic to \
+             the single loaded DejaVu face)",
+        );
+        assert!(!doc.pages.is_empty(), "expected at least one page");
+        assert!(
+            doc.pages.iter().any(|p| !p.lines.is_empty()),
+            "expected at least one non-empty page"
+        );
+
+        let bytes = satysfi_pdf::render_pdf_ttf(&doc.geometry, &doc.pages, &store, &doc.images)
+            .expect("PDF rendering must succeed");
+        assert!(bytes.starts_with(b"%PDF-"), "not a PDF header");
+        assert!(
+            bytes.windows(9).any(|w| w == b"FontFile2"),
+            "expected an embedded TrueType font (FontFile2) in the capstone PDF"
+        );
+
+        let tmp = std::env::temp_dir()
+            .join(format!("satysfi-rust-e2e-v01-font-{}.pdf", std::process::id()));
+        std::fs::write(&tmp, &bytes).unwrap();
+        let pdftotext = Command::new("pdftotext").arg(&tmp).arg("-").output();
+        match pdftotext {
+            Ok(out) if out.status.success() => {
+                let text = String::from_utf8_lossy(&out.stdout);
+                for word in ["Quick", "brown", "fox"] {
+                    assert!(
+                        text.contains(word),
+                        "pdftotext output missing {word:?} — the G7 font stand-in capstone \
+                         must render extractable Latin body text:\n{text}"
+                    );
+                }
+            }
+            _ => eprintln!(
+                "pdftotext unavailable; the PDF-header + FontFile2-embed checks already passed"
+            ),
+        }
+        let _ = std::fs::remove_file(&tmp);
+    });
+}
+
+// ============================================================================
+// SATySFi 0.1 document-class capstone (doc-class-capstone-road.md): a real
+// upstream 0.1 document class (`std-ja`) rendering a PDF through the port,
+// mirroring `tier4_stdjabook_capstone_renders_to_extractable_text` above but
+// for the V0_1 spine. Three per-package smoke tests (CP7 items 1-3) prove
+// each newly-vendored dependency compiles through the real loader +
+// `compile_document_v1` on its own before the capstone composes all of them
+// (plus the already-proven wave-0/1/2 stdlib packages and the G6/G7
+// stand-ins) into one document.
+// ============================================================================
+
+/// Compile `fixture` (a `@require:`-only smoke file, body `1`) through the
+/// real loader + `compile_document_v1`; accepts either a real document or
+/// `NotADocument` (the body is a dummy `1`, never a `document` value) —
+/// same "type-checking + evaluation succeeded" bar `v01_sealing.rs`'s/
+/// `v01_opt_cmd_rows.rs`'s own harnesses use, reproduced here since this
+/// crate has no shared test-support library target.
+fn assert_v01_package_compiles(fixture_name: &str) {
+    let fixture_name = fixture_name.to_string();
+    run_with_big_stack(move || assert_v01_package_compiles_inner(&fixture_name));
+}
+
+fn assert_v01_package_compiles_inner(fixture_name: &str) {
+    let entry = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(fixture_name);
+    let program = satysfi_loader::load(
+        &entry,
+        &satysfi_loader::LoadOptions {
+            lib_root: Some(lib_root().join("dist-v01").join("packages")),
+            version: satysfi_syntax::SatysfiVersion::V0_1,
+            ..Default::default()
+        },
+    )
+    .unwrap_or_else(|e| panic!("{fixture_name} must load: {e}"));
+
+    struct NoFonts;
+    impl satysfi_backend::FontMetrics for NoFonts {
+        fn advance(&self, _f: satysfi_backend::FontKey, _c: char, _size: satysfi_backend::Length) -> Option<satysfi_backend::Length> {
+            None
+        }
+        fn ascender(&self, _f: satysfi_backend::FontKey, size: satysfi_backend::Length) -> satysfi_backend::Length {
+            size
+        }
+        fn descender(&self, _f: satysfi_backend::FontKey, _size: satysfi_backend::Length) -> satysfi_backend::Length {
+            satysfi_backend::Length::pt(0.0)
+        }
+    }
+
+    match satysfi_lang::compile_document_v1(&program.files, &NoFonts) {
+        Ok(_) | Err(satysfi_lang::CompileError::NotADocument(_)) => {}
+        Err(other) => panic!("{fixture_name} must compile end-to-end through the real pipeline, got: {other}"),
+    }
+}
+
+/// CP7 item 1: the real upstream `annot` package (`\href` with its ONE
+/// optional-arg-rows increment 3a command row) through the real loader.
+#[test]
+fn v01_annot_package_compiles_through_real_loader() {
+    assert_v01_package_compiles("v01-annot-package.saty");
+}
+
+/// CP7 item 2: the real upstream `math` package — ~180 landed math-command
+/// value bindings, plus `+math`/`\eqn`'s optional-arg-rows increment 3a
+/// `?(tag…)` rows — through the real loader. (The package's sealing
+/// boundary and its `paren`-family tail are documented stand-in drops —
+/// see `math.satyh`'s own banner.)
+#[test]
+fn v01_math_package_compiles_through_real_loader() {
+    assert_v01_package_compiles("v01-math-package.saty");
+}
+
+/// CP7 item 3: the functor-free `code` PORT STAND-IN — a nested plain
+/// module (`Code.Default`) and its two-level-qualified `\code` command —
+/// through the real loader.
+#[test]
+fn v01_code_package_compiles_through_real_loader() {
+    assert_v01_package_compiles("v01-code-package.saty");
+}
+
+/// THE MARQUEE CAPSTONE (doc-class-capstone-road.md CP8): a real upstream
+/// 0.1 document class, `std-ja` (`dist-v01/packages/std-ja.satyh`), through
+/// the FULL pipeline to a PDF whose text `pdftotext` can extract — the 0.1
+/// analogue of `tier4_stdjabook_capstone_renders_to_extractable_text`
+/// above. `std-ja` transitively `@require:`s `annot`/`math`/`code`/
+/// `hyph-english`/`unidata`/the 4 G7 font stand-ins/the wave-0/1/2 stdlib
+/// leaf packages — this is the composition of every package this capstone
+/// vendored, driven by ONE real document.
+#[test]
+fn v01_stdja_capstone_renders_to_extractable_text() {
+    let font = match find_regular_ttf() {
+        Some(p) => p,
+        None => {
+            eprintln!("skipping v01 std-ja capstone: no DejaVu TrueType font found");
+            return;
+        }
+    };
+    run_with_big_stack(move || {
+        let entry = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/v01-stdja.saty");
+        let program = satysfi_loader::load(
+            &entry,
+            &satysfi_loader::LoadOptions {
+                lib_root: Some(lib_root().join("dist-v01").join("packages")),
+                version: satysfi_syntax::SatysfiVersion::V0_1,
+                ..Default::default()
+            },
+        )
+        .expect("std-ja.satyh + its full transitive @require: graph + v01-stdja.saty must load");
+
+        let store = satysfi_pdf::TtfFontStore::load(&font, None, None)
+            .expect("load DejaVu regular face");
+        let doc = satysfi_lang::compile_document_v1(&program.files, &store).expect(
+            "the std-ja capstone must compile end-to-end: sealed module + records-in-type-\
+             position + optional-arg-rows increments 1/2/3a, through real elaborate/typecheck/\
+             sealing/eval",
+        );
+        assert!(!doc.pages.is_empty(), "expected at least one page");
+        assert!(
+            doc.pages.iter().any(|p| !p.lines.is_empty()),
+            "expected at least one non-empty page"
+        );
+
+        let bytes = satysfi_pdf::render_pdf_ttf(&doc.geometry, &doc.pages, &store, &doc.images)
+            .expect("PDF rendering must succeed");
+        assert!(bytes.starts_with(b"%PDF-"), "not a PDF header");
+        assert!(
+            bytes.windows(9).any(|w| w == b"FontFile2"),
+            "expected an embedded TrueType font (FontFile2) in the capstone PDF"
+        );
+
+        let tmp =
+            std::env::temp_dir().join(format!("satysfi-rust-e2e-v01-stdja-{}.pdf", std::process::id()));
+        std::fs::write(&tmp, &bytes).unwrap();
+        let pdftotext = Command::new("pdftotext").arg(&tmp).arg("-").output();
+        match pdftotext {
+            Ok(out) if out.status.success() => {
+                let text = String::from_utf8_lossy(&out.stdout);
+                // The document record's title/author, rendered by std-ja's
+                // own `+make-title` (real path/bezier graphics deco).
+                assert!(text.contains("SATySFi in Rust"), "missing title:\n{text}");
+                assert!(text.contains("The Vendoring Agents"), "missing author:\n{text}");
+                // `+section`'s auto-numbering (`section-scheme`'s
+                // `arabic (!num-section)`), unbundled (no `?(label=…)`
+                // passed — increment 3a's None-defaulting path, live).
+                assert!(text.contains("1. Introduction"), "missing section 1 title:\n{text}");
+                assert!(text.contains("2. Conclusion"), "missing section 2 title:\n{text}");
+                // Body text through `+StdJa.p`/`read-inline`.
+                for word in ["quick", "brown", "fox"] {
+                    assert!(
+                        text.contains(word),
+                        "pdftotext output missing {word:?} — the std-ja capstone must render \
+                         extractable Latin body text:\n{text}"
+                    );
+                }
+                // The footer's page number (`— #it-pageno; —`, `arabic`
+                // through `get-standard-context`'s em-dash-flanked format).
+                assert!(text.contains('1'), "missing footer page number:\n{text}");
+            }
+            _ => eprintln!(
+                "pdftotext unavailable; the PDF-header + FontFile2-embed checks already passed"
+            ),
+        }
+        let _ = std::fs::remove_file(&tmp);
+    });
+}

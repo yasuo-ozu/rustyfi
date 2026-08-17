@@ -825,3 +825,188 @@ Context.get-text-width (Context.set-leading 15pt ctx)";
         assert_eq!(as_length(v), Length::pt(400.0));
     });
 }
+
+// ============================================================================
+// G6 (`…/tmp/g6-g7-standins.md` §5.3): `unidata.satyh`/`hyph-english.satyh`
+// — the two leaf packages G6's loader stand-ins unblock. Both `val`s
+// EVALUATE `load-*` at module load (not lazily), so a plain `@require:`
+// closure that reaches them proves the loaders are accept-and-return, not
+// hard errors. Sealed sigs: `HyphEnglish.hyphenation : hyphenation`,
+// `Unidata.unidata : unicode-char-database` — both nominal-`Variant`
+// opaque types (§1.3), round-tripping through sealing subsumption.
+// ============================================================================
+
+#[test]
+fn hyph_english_bare_hyphenation_is_unbound_without_qualification() {
+    run_with_big_stack(|| {
+        assert_bare_access_unbound("hyph-english-bare", "hyph-english", "hyphenation");
+    });
+}
+
+#[test]
+fn unidata_bare_unidata_is_unbound_without_qualification() {
+    run_with_big_stack(|| {
+        assert_bare_access_unbound("unidata-bare", "unidata", "unidata");
+    });
+}
+
+#[test]
+fn hyph_unidata_packages_seal_and_load() {
+    run_with_big_stack(|| {
+        let src = "@require: v01-mini
+@require: unidata
+@require: hyph-english
+
+let h = HyphEnglish.hyphenation in
+let u = Unidata.unidata in
+let open V01Mini in
+document (| title = `hyph-unidata` |) '<
+  +p { ok. }
+>";
+        let doc = TempDoc::new("hyph-unidata-capstone", src);
+        let opts = LoadOptions {
+            lib_root: Some(lib_root()),
+            version: SatysfiVersion::V0_1,
+            ..Default::default()
+        };
+        let program = satysfi_loader::load(&doc.0, &opts)
+            .expect("v01-mini + unidata + hyph-english should load");
+        assert_eq!(
+            program.files.len(),
+            4,
+            "expected unidata.satyh + hyph-english.satyh + v01-mini.satyh + the entry"
+        );
+
+        let doc_value = satysfi_lang::compile_document_v1(&program.files, &Mono).expect(
+            "unidata.satyh + hyph-english.satyh + v01-mini.satyh should compile to a document \
+             (the load-* stand-ins must be accept-and-return, evaluated at module load)",
+        );
+        assert_eq!(doc_value.pages.len(), 1);
+    });
+}
+
+// ============================================================================
+// G7 (`…/tmp/g6-g7-standins.md` §5.4): the 4 pure `.satyh` font stand-in
+// packages — `font-junicode`/`font-latin-modern`/`font-latin-modern-math`/
+// `font-ipa-ex` — ZERO Rust edits. Proves G8's `font` -> `t_string()` arm
+// (`typecheck.rs:499`) through real sealing subsumption: each package's
+// sig spells `font`, the body a backtick abbrev STRING, and
+// `set-font`/`set-math-font` accept the sealed members downstream.
+// ============================================================================
+
+#[test]
+fn font_junicode_bare_normal_is_unbound_without_qualification() {
+    assert_bare_access_unbound("font-junicode-bare", "font-junicode", "normal");
+}
+
+#[test]
+fn font_latin_modern_math_bare_main_is_unbound_without_qualification() {
+    assert_bare_access_unbound("font-lmm-bare", "font-latin-modern-math", "main");
+}
+
+#[test]
+fn font_packages_seal_and_resolve() {
+    run_with_big_stack(|| {
+        let src = "@require: v01-mini
+@require: font-junicode
+@require: font-latin-modern-math
+
+let open V01Mini in
+let ctx0 = get-initial-context 440pt (command \\math) in
+let ctx = ctx0
+  |> set-font Latin (FontJunicode.normal, 1., 0.)
+  |> set-math-font FontLatinModernMath.main in
+let n = embed-string (arabic 1) in
+document (| title = `f` |) '<
+  +p { Font #n;. }
+>";
+        let v = compile_v01_via_loader_with_metrics("font-packages-seal-resolve", src, &Mono)
+            .expect(
+                "font-junicode.satyh + font-latin-modern-math.satyh + v01-mini.satyh should \
+                 compile (FontJunicode.normal : font must seal as string and flow through \
+                 set-font, and set-math-font must accept the bare font member)",
+            );
+        match v {
+            Value::Document(_) => {}
+            other => panic!("expected a document, got {other:?}"),
+        }
+    });
+}
+
+/// Negative probe (spec §5.4): `FontJunicode.normal` is really `string`
+/// (G8), not a nominal `length`-like type — using it where a `length` is
+/// expected must fail to typecheck.
+#[test]
+fn font_junicode_normal_is_not_a_length() {
+    run_with_big_stack(|| {
+        let src = "@require: font-junicode
+FontJunicode.normal +' 1pt";
+        let err = compile_v01_via_loader("font-junicode-not-length", src)
+            .err()
+            .unwrap_or_else(|| {
+                panic!("expected `FontJunicode.normal +' 1pt` to fail to typecheck, it compiled")
+            });
+        assert!(
+            err.contains("typecheck"),
+            "expected a typecheck error, got: {err}"
+        );
+    });
+}
+
+// ---- per-package compile tests for the remaining two G7 stand-ins
+// (`font-latin-modern`/`font-ipa-ex`), mirroring the other vendored
+// packages' bare-access + value-resolves pair. ----
+
+#[test]
+fn font_latin_modern_bare_sans_is_unbound_without_qualification() {
+    assert_bare_access_unbound("font-latin-modern-bare", "font-latin-modern", "sans");
+}
+
+#[test]
+fn font_latin_modern_members_are_the_expected_006_corpus_abbrevs() {
+    let src = "@require: font-latin-modern
+(FontLatinModern.mono, FontLatinModern.sans)";
+    let v = compile_v01_via_loader("font-latin-modern-abbrevs", src)
+        .expect("font-latin-modern.satyh should compile");
+    let vs = as_tuple(v);
+    assert_eq!(as_str(vs[0].clone()), "lmmono");
+    assert_eq!(as_str(vs[1].clone()), "lmsans");
+}
+
+#[test]
+fn font_ipa_ex_bare_mincho_is_unbound_without_qualification() {
+    assert_bare_access_unbound("font-ipa-ex-bare", "font-ipa-ex", "mincho");
+}
+
+#[test]
+fn font_ipa_ex_members_are_the_expected_006_corpus_abbrevs() {
+    let src = "@require: font-ipa-ex
+(FontIpaEx.mincho, FontIpaEx.gothic)";
+    let v = compile_v01_via_loader("font-ipa-ex-abbrevs", src)
+        .expect("font-ipa-ex.satyh should compile");
+    let vs = as_tuple(v);
+    assert_eq!(as_str(vs[0].clone()), "ipaexm");
+    assert_eq!(as_str(vs[1].clone()), "ipaexg");
+}
+
+#[test]
+fn font_junicode_members_are_the_expected_006_corpus_abbrevs() {
+    let src = "@require: font-junicode
+(FontJunicode.normal, FontJunicode.bold, FontJunicode.italic, FontJunicode.bold-italic)";
+    let v = compile_v01_via_loader("font-junicode-abbrevs", src)
+        .expect("font-junicode.satyh should compile");
+    let vs = as_tuple(v);
+    assert_eq!(as_str(vs[0].clone()), "Junicode");
+    assert_eq!(as_str(vs[1].clone()), "Junicode-b");
+    assert_eq!(as_str(vs[2].clone()), "Junicode-it");
+    assert_eq!(as_str(vs[3].clone()), "Junicode-bi");
+}
+
+#[test]
+fn font_latin_modern_math_main_is_the_expected_006_corpus_abbrev() {
+    let src = "@require: font-latin-modern-math
+FontLatinModernMath.main";
+    let v = compile_v01_via_loader("font-lmm-abbrev", src)
+        .expect("font-latin-modern-math.satyh should compile");
+    assert_eq!(as_str(v), "lmodern");
+}

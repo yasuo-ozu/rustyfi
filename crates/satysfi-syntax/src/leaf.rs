@@ -563,5 +563,5 @@ leaf_eq! {
         HorzCmdTok { name }, VertCmdTok { name }, CharTok { text }, ItemTok { depth },
         HeaderRequireTok { content }, HeaderImportTok { content }, TypeVarTok { name },
         UnopExclamTok { text }, MathCharTok { text }, MathCmdTok { name },
-        PrimesTok { count }, OpenModuleTok { name }
+        PrimesTok { count }, OpenModuleTok { name }, RowVarTok { name }
 }

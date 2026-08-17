@@ -715,7 +715,11 @@ fn curry_cmd_params(
 /// `[ctxvar] let-inline \cmd param* = value` / `[ctxvar] let-block +cmd
 /// param* = value` (`nxhorzdec`/`nxvertdec` in `parser.mly`, lines 548-577).
 /// Each `param` is upstream's `arg` (`cst.rs`'s `Param` doc comment — a full
-/// patbot, or a `?:`-marked variable), curried via `curry_cmd_params`.
+/// patbot, a `?:`-marked variable, or — optional-arg-rows increment 3a — a
+/// `?(l = x, …)` labeled-optional bundle), curried via the bundle-aware
+/// `curry_cmd_params_v1` (which delegates to the original `curry_cmd_params`
+/// wholesale when no bundle is present, so this stays byte-identical for
+/// every existing binding).
 ///
 /// Two forms, confirmed against v0.0.6 `parser.mly`:
 /// * with an explicit leading context variable, the value is elaborated
@@ -735,18 +739,17 @@ fn elaborate_let_inline(
     scope: &Scope,
     reader: &str,
 ) -> Result<Ast, ElabError> {
-    let patbots = params_to_patbots(params);
     match ctx {
         Some(ctxvar) => {
             let ctx_scope = scope.with(&ctxvar.name);
-            let value_ast = curry_cmd_params(&patbots, &ctx_scope, |inner| expr(value, inner))?;
+            let value_ast = curry_cmd_params_v1(params, &ctx_scope, |inner| expr(value, inner))?;
             Ok(Ast::Lambda(ctxvar.name.clone(), Rc::new(value_ast)))
         }
         None => {
             const IMPLICIT_CTX: &str = "%context";
             let dummy = Span::default();
             let ctx_scope = scope.with(IMPLICIT_CTX);
-            let curried = curry_cmd_params(&patbots, &ctx_scope, |inner| {
+            let curried = curry_cmd_params_v1(params, &ctx_scope, |inner| {
                 let value_ast = expr(value, inner)?;
                 let read_fn = scoped_var(reader, dummy, inner)?;
                 let ctx_var = scoped_var(IMPLICIT_CTX, dummy, inner)?;
@@ -775,8 +778,7 @@ fn elaborate_let_math(
     value: &c::Expr,
     scope: &Scope,
 ) -> Result<Ast, ElabError> {
-    let patbots = params_to_patbots(params);
-    curry_cmd_params(&patbots, scope, |inner| expr(value, inner))
+    curry_cmd_params_v1(params, scope, |inner| expr(value, inner))
 }
 
 /// Elaborate one `let-rec` clause group (shared by the local `Expr::LetRecIn`
@@ -899,6 +901,40 @@ fn fun_rows_to_ast(
              this file is compiled as 0.0.6",
         );
     }
+    let mut inner = scope.clone();
+    for e in &opts.entries {
+        inner = inner.with(&e.var.name);
+    }
+    let body_ast = if is_var_patbot(param) {
+        let body_scope = inner.with(patbot_var_name(param));
+        expr(body, &body_scope)?
+    } else {
+        let pat = patbot(param)?;
+        let mut names = Vec::new();
+        collect_pattern_names(&pat, &mut names);
+        let mut body_scope = inner;
+        for n in &names {
+            body_scope = body_scope.with(n);
+        }
+        expr(body, &body_scope)?
+    };
+    lambda_opt_from(opts, param, body_ast)
+}
+
+/// Build an `Ast::LambdaOpt` from a `?(l = x, …)` binder bundle, its
+/// positional param, and an ALREADY-ELABORATED inner body — the shared core
+/// factored out of [`fun_rows_to_ast`] (a value-level `fun ?(l = x) p ->
+/// body` unit) so [`curry_cmd_params_v1`]'s bundle arm (a command
+/// parameter bundle, optional-arg-rows increment 3a) can reuse the exact
+/// same binder logic. Duplicate labels in one binder list are rejected. A
+/// `PatBot::Var` param becomes the `LambdaOpt`'s param directly; any other
+/// pattern desugars to a fresh `%opt_arg` var + `Match`, exactly like
+/// `rec_clause_value`'s destructuring-parameter path.
+fn lambda_opt_from(
+    opts: &c::CstOptBinders,
+    param: &c::PatBot,
+    inner_body_ast: Ast,
+) -> Result<Ast, ElabError> {
     let mut opt_pairs: Vec<(String, String)> = Vec::with_capacity(opts.entries.len());
     let mut seen = HashSet::new();
     for e in &opts.entries {
@@ -913,35 +949,21 @@ fn fun_rows_to_ast(
         }
         opt_pairs.push((e.label.name.clone(), e.var.name.clone()));
     }
-    let mut inner = scope.clone();
-    for (_, binder) in &opt_pairs {
-        inner = inner.with(binder);
-    }
     if is_var_patbot(param) {
-        let pname = patbot_var_name(param).to_string();
-        let body_scope = inner.with(&pname);
-        let body_ast = expr(body, &body_scope)?;
         Ok(Ast::LambdaOpt {
             opts: opt_pairs,
-            param: pname,
-            body: Rc::new(body_ast),
+            param: patbot_var_name(param).to_string(),
+            body: Rc::new(inner_body_ast),
         })
     } else {
         let fresh = "%opt_arg".to_string();
         let pat = patbot(param)?;
-        let mut names = Vec::new();
-        collect_pattern_names(&pat, &mut names);
-        let mut body_scope = inner;
-        for n in &names {
-            body_scope = body_scope.with(n);
-        }
-        let body_ast = expr(body, &body_scope)?;
         let matched = Ast::Match(
             Box::new(Ast::Var(fresh.clone(), Span::default())),
             vec![MatchArm {
                 pat,
                 guard: None,
-                body: body_ast,
+                body: inner_body_ast,
             }],
         );
         Ok(Ast::LambdaOpt {
@@ -949,6 +971,112 @@ fn fun_rows_to_ast(
             param: fresh,
             body: Rc::new(matched),
         })
+    }
+}
+
+/// The bundle-aware command-parameter currier (optional-arg-rows increment
+/// 3a): the same overall shape as [`curry_cmd_params`] — extend the scope
+/// with every name this parameter list binds, build the innermost value
+/// once against the fully-extended scope, then curry back outward — but
+/// additionally handles a `Param::Bundled { opts, body }` entry (`?(l = x,
+/// …) pat`) by emitting an `Ast::LambdaOpt` for that slot (via
+/// [`lambda_opt_from`]) instead of a plain `Ast::Lambda`/`Match`.
+///
+/// **Delegates wholesale to [`curry_cmd_params`]** when `params` contains no
+/// `Bundled` entry at all — the exact same tested code path as before this
+/// increment, so every 0.0.6 command binding and every V0_1 one that
+/// doesn't use a bundle (the overwhelming majority) is byte-identical.
+///
+/// **Version-gated** exactly like `fun_rows_to_ast`: a `Bundled` entry
+/// reaching the general fold below under `!scope.version.
+/// has_row_polymorphism()` is rejected with the same version error — purely
+/// defensive, since only `v1/lower.rs::lower_command_params` ever
+/// constructs `Param::Bundled`, and `lower_value_math` additionally rejects
+/// it outright for a `val math` binding's own parameter list before it ever
+/// reaches elaboration (math command bundles are optional-arg-rows
+/// increment 3b).
+fn curry_cmd_params_v1(
+    params: &[c::Param],
+    scope: &Scope,
+    build_value: impl FnOnce(&Scope) -> Result<Ast, ElabError>,
+) -> Result<Ast, ElabError> {
+    if !params.iter().any(|p| matches!(p, c::Param::Bundled { .. })) {
+        let patbots = params_to_patbots(params);
+        return curry_cmd_params(&patbots, scope, build_value);
+    }
+    if !scope.version.has_row_polymorphism() {
+        let bundle_span = params
+            .iter()
+            .find_map(|p| match p {
+                c::Param::Bundled { opts, .. } => Some(opts.q.0),
+                _ => None,
+            })
+            .expect("just checked a `Param::Bundled` entry exists");
+        return err(
+            bundle_span,
+            "labeled optional arguments (`?(l = x)`) are SATySFi 0.1 syntax — \
+             this file is compiled as 0.0.6",
+        );
+    }
+    let mut inner = scope.clone();
+    for p in params {
+        inner = match p {
+            c::Param::Bundled { opts, body } => {
+                for e in &opts.entries {
+                    inner = inner.with(&e.var.name);
+                }
+                extend_with_patbot(inner, body)?
+            }
+            _ => extend_with_patbot(inner, &param_to_patbot(p))?,
+        };
+    }
+    let mut value_ast = build_value(&inner)?;
+    let dummy = Span::default();
+    for (i, p) in params.iter().enumerate().rev() {
+        value_ast = match p {
+            c::Param::Bundled { opts, body } => lambda_opt_from(opts, body, value_ast)?,
+            c::Param::Optional { name, .. } => Ast::Lambda(name.name.clone(), Rc::new(value_ast)),
+            c::Param::Pat(pat) if is_var_patbot(pat) => {
+                Ast::Lambda(patbot_var_name(pat).to_string(), Rc::new(value_ast))
+            }
+            c::Param::Pat(pat) => {
+                let pp = patbot(pat)?;
+                let fresh = format!("%cmd_arg{i}");
+                Ast::Lambda(
+                    fresh.clone(),
+                    Rc::new(Ast::Match(
+                        Box::new(Ast::Var(fresh, dummy)),
+                        vec![MatchArm {
+                            pat: pp,
+                            guard: None,
+                            body: value_ast,
+                        }],
+                    )),
+                )
+            }
+        };
+    }
+    Ok(value_ast)
+}
+
+/// Extend `scope` with every name patbot `p` binds: its single var name if
+/// it's a plain `PatBot::Var`, else every name the full pattern binds
+/// (`collect_pattern_names`) — the scope half of `curry_cmd_params_v1`'s
+/// general fold (mirroring `curry_cmd_params`'s own inline scope-extension,
+/// factored out here since the bundle-aware fold interleaves it with a
+/// bundle's own binder names).
+fn extend_with_patbot(scope: Scope, p: &c::PatBot) -> Result<Scope, ElabError> {
+    if is_var_patbot(p) {
+        Ok(scope.with(patbot_var_name(p)))
+    } else {
+        let pat = patbot(p)?;
+        let mut names = Vec::new();
+        collect_pattern_names(&pat, &mut names);
+        let mut s = scope;
+        for n in &names {
+            s = s.with(n);
+        }
+        Ok(s)
     }
 }
 
@@ -962,6 +1090,20 @@ fn param_to_patbot(p: &c::Param) -> c::PatBot {
     match p {
         c::Param::Optional { name, .. } => c::PatBot::Var(name.clone()),
         c::Param::Pat(pat) => pat.clone(),
+        // A `?(l = x, …)` command-parameter bundle (optional-arg-rows
+        // increment 3a) never reaches this widener: it is only ever
+        // constructed by `v1/lower.rs::lower_command_params` for a command
+        // binding's OWN `Param` list, and `curry_cmd_params_v1` — the only
+        // caller for that list — checks for a `Bundled` entry itself and
+        // routes around `params_to_patbots`/`param_to_patbot` entirely when
+        // one is present (see that function's doc comment). A plain `let`/
+        // `let-rec`'s `Param` list (the only other caller of this widener)
+        // can never contain one either — `lower_param_units` always
+        // right-folds a bundled unit into an `Expr::FunRows` chain instead,
+        // returning an EMPTY `Param` list when any unit is bundled.
+        c::Param::Bundled { .. } => {
+            unreachable!("a `?(l = x)` command-parameter bundle cannot reach `param_to_patbot`")
+        }
     }
 }
 

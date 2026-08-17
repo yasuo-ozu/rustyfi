@@ -1,0 +1,25 @@
+% unidata.satyh — SATySFi 0.1 `Unidata` (G6, `…/tmp/g6-g7-standins.md` §1.4
+% item 5 / vendoring-scout.md gap G6).
+% Source: saphe-split@b836d512:lib-satysfi/packages/unidata/unidata.0.0.1/
+%   src/unidata.satyh — transliteration deltas: NONE, verbatim below the
+%   banner (T8: byte-identical body). No `@require:` — uses only the global
+%   `load-unicode-char-database` prim + `here`/`^` (both global constants/
+%   prims, resolved through `base_env`, not module-qualified).
+% PORT STAND-IN: `load-unicode-char-database` accepts and drops its three
+% path arguments, returning the opaque `unicode-char-database` token
+% (`Value::Unit`) — this port has no native Unicode script/line-break data
+% tables yet (gap G6). `here` is the empty-string stand-in for the lexer's
+% upstream source-directory constant (both ports' doc comments,
+% `primitives.rs`). `unicode-char-database` is a nominal-`Variant` opaque
+% type (no `types.rs`/`name_to_mono` entry) — see `prim_types.rs`'s
+% `t_unicode_char_database` doc comment.
+
+module Unidata :> sig
+  val unidata : unicode-char-database
+end = struct
+  val unidata =
+    load-unicode-char-database
+      (here ^ `/../unidata/Scripts.txt`)
+      (here ^ `/../unidata/EastAsianWidth.txt`)
+      (here ^ `/../unidata/LineBreak.txt`)
+end

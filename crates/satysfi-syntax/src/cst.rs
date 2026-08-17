@@ -654,6 +654,24 @@ pub mod ast {
             arrow: ArrowTok,
             body: Box<Expr>,
         },
+        /// `fun ?(l = x, …) p -> body` — a SATySFi 0.1 labeled-optional
+        /// lambda unit (one `?(…)` bundle + one positional param). This is
+        /// an **additive** 0.1 node: 0.0.6 has no `?(…)` param bundle, so it
+        /// is reachable in a 0.0.6 parse only for input that used to be a
+        /// parse error (a leading `?` cannot begin `Fun`'s `Vec<PatBot>`),
+        /// where `elaborate` rejects it under a V0_0_6 [`crate::version`]
+        /// gate. The V0_1 pipeline reaches it by lowering a `cst_v1` param
+        /// bundle (multi-unit lambdas lower to a nested `FunRows`/`Fun`
+        /// chain). Placed right after [`Expr::Fun`] so a plain `fun x -> …`
+        /// still matches `Fun` first (its `?`-headed `opts` cannot begin a
+        /// `PatBot`, so `Fun` cleanly backtracks here for a bundled unit).
+        FunRows {
+            kw: KwFun,
+            opts: CstOptBinders,
+            param: PatBot,
+            arrow: ArrowTok,
+            body: Box<Expr>,
+        },
         /// `match scrutinee with [|] pat [when g] -> body (| pat [when g] -> body)*`
         Match {
             kw: KwMatch,
@@ -897,6 +915,65 @@ pub mod ast {
             accesses: Vec<AccessSeg>,
         },
         Ctor(CtorTok),
+        /// `?(l = e, …) atom` — a SATySFi 0.1 labeled-optional application
+        /// bundle paired with the positional argument it precedes (pairing
+        /// them in one arm rejects a dangling trailing bundle `f x ?(l=1)` at
+        /// parse time, as upstream does). Additive 0.1 node; the `?(`-head is
+        /// token-disjoint from every 0.0.6 `AppArg` arm (0.0.6's `Optional`
+        /// is `?:`-headed, a distinct token), so no previously-parsing input
+        /// changes shape. Elaboration rejects it under a V0_0_6 version gate.
+        Bundled {
+            opts: CstOptArgs,
+            excl: Option<UnopExclamTok>,
+            atom: Atomic,
+            accesses: Vec<AccessSeg>,
+        },
+        /// `?(l = e, …) Ctor` — as [`AppArg::Bundled`] but the positional
+        /// argument is a bare constructor.
+        BundledCtor { opts: CstOptArgs, ctor: CtorTok },
+    }
+
+    /// A SATySFi 0.1 `?(l = x, …)` optional-parameter binder bundle (for
+    /// [`Expr::FunRows`]): the `?` sigil, then a parenthesized `,`-separated
+    /// list of `label = binder` entries.
+    #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
+    pub struct CstOptBinders {
+        pub q: OptionalTypeTok,
+        pub paren: ParenGroup<()>,
+        #[group(self.paren)]
+        pub entries: Vec<CstOptBinderEntry>,
+    }
+
+    /// One `label = binder` entry of a [`CstOptBinders`] bundle (the last
+    /// `,` is optional; `=` is upstream's `EXACT_EQ`, reusing [`DefEqTok`]).
+    #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
+    pub struct CstOptBinderEntry {
+        pub label: VarTok,
+        pub eq: DefEqTok,
+        pub var: VarTok,
+        pub comma: Option<CommaTok>,
+    }
+
+    /// A SATySFi 0.1 `?(l = e, …)` optional-argument bundle (for
+    /// [`AppArg::Bundled`]/[`AppArg::BundledCtor`]): the `?` sigil, then a
+    /// parenthesized `,`-separated list of `label = expr` entries.
+    #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
+    pub struct CstOptArgs {
+        pub q: OptionalTypeTok,
+        pub paren: ParenGroup<()>,
+        #[group(self.paren)]
+        pub entries: Vec<CstOptArgEntry>,
+    }
+
+    /// One `label = expr` entry of a [`CstOptArgs`] bundle — a FULL
+    /// expression (`?(bias = 1 + n)`), routed through [`super::ExprErased`]
+    /// so this satellite never joins `Expr`'s SCC.
+    #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
+    pub struct CstOptArgEntry {
+        pub label: VarTok,
+        pub eq: DefEqTok,
+        pub value: super::ExprErased,
+        pub comma: Option<CommaTok>,
     }
 
     /// `nxbot` (plus the ctor-head case usually found in `nxun`): an atomic

@@ -1,0 +1,95 @@
+% context.satyh — SATySFi 0.1 stdlib `Context`, vendored for Legacy
+% packaging (docs/plans/satysfi-0-1-0-support.md §2 P2 / §4 phase 6).
+% Source: saphe-split@b836d512:lib-satysfi/packages/stdlib/stdlib.0.0.1/
+%   src/context.satyh — transliteration deltas:
+%   - T6 PARTIAL VENDOR: 7 of the 28 upstream members (and their sig lines)
+%     are dropped — this port has no backing primitive for any of them yet
+%     (gap G4, `…/tmp/vendoring-scout.md` §2):
+%       * `set-hyphenation-dictionary : hyphenation -> context -> context`
+%         (also drops the `hyphenation` base type, unregistered)
+%       * `set-unicode-char-database : unicode-char-database -> context ->
+%         context` (also drops the `unicode-char-database` base type)
+%       * `set-hyphen-min : int -> int -> context -> context`
+%       * `set-min-paragraph-ascender-and-descender : length -> length ->
+%         context -> context`
+%       * `set-adjacent-stretch-ratio : float -> context -> context`
+%       * `set-word-break-penalty : int -> context -> context`
+%       * `get-every-word-break : context -> inline-boxes * inline-boxes`
+%     21/28 members remain — every other upstream member's backing
+%     primitive is landed (`get-initial-context`, `set-math-command`,
+%     `set-code-text-command`, `set-min-gap-of-lines`, `set-space-ratio`,
+%     `get-math-axis-height-ratio`, `set-paragraph-margin`, `set-font-size`,
+%     `get-font-size`, `set-text-color`, `get-text-color`, `set-leading`,
+%     `get-text-width`, `set-manual-rising`, `set-hyphen-penalty`,
+%     `set-math-variant-char`, `set-math-char`, `set-math-char-class`,
+%     `get-math-char-class`, `set-every-word-break`). RESTORE CHECKLIST
+%     (R7): re-add the 7 members above verbatim once G4's primitives land.
+%   No other deltas: `initial`'s sig type is `inline [math-text]` (the
+%   dev-0-1-0 math-split rename of 0.0.6's `math`) — `t_math_text()`/
+%   `t_math()` are the same `MonoType` under both surface names
+%   (`prim_types.rs`), so this needs no further translation.
+
+module Context :> sig
+  val initial : length -> inline [math-text] -> context
+  val set-math-command : inline [math-text] -> context -> context
+  val set-code-text-command : inline [string] -> context -> context
+  val set-min-gap-of-lines : length -> context -> context
+  val set-space-ratio : float -> float -> float -> context -> context
+  val get-math-axis-height-ratio : context -> float
+  val set-paragraph-margin : length -> length -> context -> context
+  val set-font-size : length -> context -> context
+  val get-font-size : context -> length
+  val set-text-color : color -> context -> context
+  val get-text-color : context -> color
+  val set-leading : length -> context -> context
+  val get-text-width : context -> length
+  val set-manual-rising : length -> context -> context
+  val set-hyphen-penalty : int -> context -> context
+  val set-math-variant-char : int -> (math-char-class -> int) -> context -> context
+  val set-math-char : int -> int -> math-class -> context -> context
+  val set-math-char-class : math-char-class -> context -> context
+  val get-math-char-class : context -> math-char-class
+  val set-every-word-break : inline-boxes -> inline-boxes -> context -> context
+end = struct
+
+  val initial = get-initial-context %PRIMITIVE
+
+  val set-math-command = set-math-command %PRIMITIVE
+
+  val set-code-text-command = set-code-text-command %PRIMITIVE
+
+  val set-min-gap-of-lines = set-min-gap-of-lines %PRIMITIVE
+
+  val set-space-ratio = set-space-ratio %PRIMITIVE
+
+  val get-math-axis-height-ratio = get-math-axis-height-ratio %PRIMITIVE
+
+  val set-paragraph-margin = set-paragraph-margin %PRIMITIVE
+
+  val set-font-size = set-font-size %PRIMITIVE
+
+  val get-font-size = get-font-size %PRIMITIVE
+
+  val set-text-color = set-text-color %PRIMITIVE
+
+  val get-text-color = get-text-color %PRIMITIVE
+
+  val set-leading = set-leading %PRIMITIVE
+
+  val get-text-width = get-text-width %PRIMITIVE
+
+  val set-manual-rising = set-manual-rising %PRIMITIVE
+
+  val set-hyphen-penalty = set-hyphen-penalty %PRIMITIVE
+
+  val set-math-variant-char = set-math-variant-char %PRIMITIVE
+
+  val set-math-char = set-math-char %PRIMITIVE
+
+  val set-math-char-class = set-math-char-class %PRIMITIVE
+
+  val get-math-char-class = get-math-char-class %PRIMITIVE
+
+  val set-every-word-break = set-every-word-break %PRIMITIVE
+
+end

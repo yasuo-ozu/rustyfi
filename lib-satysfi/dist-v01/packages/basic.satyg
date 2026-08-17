@@ -1,0 +1,30 @@
+% basic.satyg — SATySFi 0.1 stdlib `Basic`, vendored for Legacy packaging
+% (docs/plans/satysfi-0-1-0-support.md §2 P2 / §4 phase 6).
+% Source: saphe-split@b836d512:lib-satysfi/packages/stdlib/stdlib.0.0.1/
+%   src/basic.satyg — transliteration deltas:
+%   - T6: `signature Ord = sig type t :: o val compare : t -> t -> ordering
+%     end` dropped outright. `signature` (named signature declarations,
+%     Sub-slice 2d-3) is unbuilt in this port; its only upstream consumers
+%     are the functor packages (`map.satyg`/`set.satyg`), themselves
+%     BLOCKED on 2f (functors) and out of this wave — nothing in Wave 0/1
+%     references `Ord`.
+%   Everything else is byte-identical: `Basic` is an UNSEALED module (no
+%   `:>`), so its `ordering`/`vector`/`point`/`paren`/`paddings` type
+%   synonyms and the `Less`/`Equal`/`Greater` constructors are exported as
+%   `Basic.ordering` etc. (types; LONG_LOWER, Sub-slice 2d-2) and bare
+%   (constructors; the "Ctor carve-out", `v1/lower.rs:152-159` — ctors
+%   never carry module qualification in this port, sealed or not).
+
+module Basic = struct
+
+  type ordering = Less | Equal | Greater
+
+  type vector = length * length
+
+  type point = length * length
+
+  type paren = length -> length -> context -> inline-boxes * (length -> length)
+
+  type paddings = length * length * length * length
+
+end

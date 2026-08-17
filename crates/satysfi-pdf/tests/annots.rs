@@ -78,6 +78,7 @@ fn extras() -> DocExtras {
             },
         ],
         page_graphics: Vec::new(),
+        doc_info: None,
     }
 }
 

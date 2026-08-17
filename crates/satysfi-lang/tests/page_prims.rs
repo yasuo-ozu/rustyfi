@@ -336,7 +336,7 @@ fn page_break_retypes_per_version() {
     let v006 = primitive_type_with_version("page-break", SatysfiVersion::V0_0_6)
         .expect("page-break must have a v0.0.6 type");
     match v006.body() {
-        MonoType::Func(dom, _cod) => match dom.as_ref() {
+        MonoType::Func(_row, dom, _cod) => match dom.as_ref() {
             MonoType::Variant(name, args) => {
                 assert_eq!(name, "page", "v0.0.6 page-break's first arg must be the `page` ADT");
                 assert!(args.is_empty());
@@ -349,7 +349,7 @@ fn page_break_retypes_per_version() {
     let v01 = primitive_type_with_version("page-break", SatysfiVersion::V0_1)
         .expect("page-break must have a v0.1 type");
     match v01.body() {
-        MonoType::Func(dom, _cod) => match dom.as_ref() {
+        MonoType::Func(_row, dom, _cod) => match dom.as_ref() {
             MonoType::Product(elems) => {
                 assert_eq!(elems.len(), 2, "v0.1's page-break first arg is (length * length)");
                 for elem in elems {

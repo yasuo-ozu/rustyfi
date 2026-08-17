@@ -97,6 +97,19 @@ impl SatysfiVersion {
         matches!(self, Self::V0_1)
     }
 
+    /// Whether the `graphics` type is a **collection** (0.1's `GraphicD.t =
+    /// 'a element list`, with `Clip`/`Group` container elements — a
+    /// graphics-producing callback returns ONE `graphics` value) as opposed
+    /// to `V0_0_6`'s single drawing element (a callback returns `list
+    /// graphics`). `false` for `V0_0_6`; `true` for `V0_1`. Backs the L5b
+    /// graphics-collection sweep (`docs/plans/…/prim-retype-sweep.md` §3.1):
+    /// every fork in the shared `place_graphics`/`coerce_graphics_result`
+    /// machinery keys on this one method, so the env and type-env agree by
+    /// construction (mirrors `math_is_split`'s role for the math slice).
+    pub fn graphics_is_collection(&self) -> bool {
+        matches!(self, Self::V0_1)
+    }
+
     /// Whether this port actually implements this version end-to-end
     /// (lexer through PDF rendering). Both generations, Slice 1 scope for
     /// `V0_1` — see `docs/plans/satysfi-0-1-0-support.md` §3.
@@ -389,6 +402,9 @@ mod tests {
 
         assert!(!SatysfiVersion::V0_0_6.math_is_split());
         assert!(SatysfiVersion::V0_1.math_is_split());
+
+        assert!(!SatysfiVersion::V0_0_6.graphics_is_collection());
+        assert!(SatysfiVersion::V0_1.graphics_is_collection());
     }
 
     #[test]

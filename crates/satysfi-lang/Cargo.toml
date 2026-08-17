@@ -22,3 +22,11 @@ hyphenation = { version = "0.8.4", features = ["embed_en-us"] }
 # plural), so this is now a real dependency, not just a test harness one.
 # No cycle: satysfi-loader depends only on satysfi-syntax.
 satysfi-loader.workspace = true
+# L5a (prim-retype-sweep §2.2): UAX #15 normalization + UAX #29 grapheme
+# segmentation for the 0.1-only string prims (`normalize-string-to-nf{c,d}`,
+# `split-grapheme-cluster`). Declared directly here (NOT promoted to
+# `[workspace.dependencies]`) per this crate's own Cargo.toml boundary for
+# this slice of work — pure Rust, table-embedded, no feature flags needed;
+# upstream uses uunf/uuseg for exactly these two purposes.
+unicode-normalization = "0.1"
+unicode-segmentation = "1"

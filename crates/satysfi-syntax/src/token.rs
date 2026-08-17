@@ -181,6 +181,13 @@ pub enum Token {
     /// identifier under 0.0.6.
     #[leaf(name = "KwPackage", expect = "'package'")]
     Package,
+    /// `math` — SATySFi 0.1-only keyword (`val math <ctx> \cmd … = …`,
+    /// `parser_v1.mly:452-453` dispatch, MATH reserved at :240); a plain
+    /// identifier under 0.0.6 (0.0.6 has no `math` keyword — the word
+    /// survives only as the surface name of `BaseType::MathText`,
+    /// `math-split` spec §1.1).
+    #[leaf(name = "KwMath", expect = "'math'")]
+    Math,
 
     // ---- grouping delimiters ----
     #[leaf(name = "LParenTok", expect = "'('")]
@@ -372,6 +379,7 @@ impl std::fmt::Display for Token {
             Include => write!(f, "include"),
             Use => write!(f, "use"),
             Package => write!(f, "package"),
+            Math => write!(f, "math"),
             LParen => write!(f, "("),
             RParen => write!(f, ")"),
             BRecord => write!(f, "(|"),

@@ -1,0 +1,7 @@
+@require: stdja-mini
+
+let-math \frac m n = math-frac m n in
+document (| title = `v01 math` |) '<
+  +p { Pythagoras: ${a^2 + b^2 = c^2}. }
+  +p { Fraction: ${\frac{1}{x + 1}}. }
+>

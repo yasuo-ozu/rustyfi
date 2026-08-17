@@ -20,6 +20,14 @@
 //! already accepted the program. `assert_accepts` treats both `Ok` and
 //! `NotADocument` as "type-checking accepted"; `assert_type_error` demands
 //! exactly `CompileError::Type` and returns its message for content checks.
+//!
+//! Sub-slice 2d-2 (`…/tmp/slice2d2-opaque-types.md` §5) extends this suite
+//! with its own U-numbered group below: opaque type sealing, transparent
+//! type equality, constructor hiding, command-type decls, and `LONG_LOWER`
+//! qualified type names. `assert_accepts_multi`/`assert_type_error_multi`
+//! are this group's twin of `assert_accepts`/`assert_type_error`, taking
+//! SEVERAL dependency libraries (needed by U10/U11's cross-module
+//! `LONG_LOWER` fixtures) instead of exactly one.
 
 use satysfi_backend::{FontKey, FontMetrics, Length};
 use satysfi_lang::CompileError;
@@ -77,6 +85,41 @@ fn assert_accepts(lib_src: &str, doc_src: &str) {
 /// for content assertions.
 fn assert_type_error(lib_src: &str, doc_src: &str) -> String {
     match run(lib_src, doc_src) {
+        Err(CompileError::Type(e)) => e.to_string(),
+        Err(other) => panic!("expected a Type error, got: {other}"),
+        Ok(()) => panic!("expected type-checking to reject, but compilation succeeded"),
+    }
+}
+
+/// [`run`]'s multi-dependency twin (Sub-slice 2d-2's U10/U11 need TWO
+/// separate `module … = struct … end` library files, one referencing the
+/// other's types via `LONG_LOWER`).
+fn run_multi(lib_srcs: &[&str], doc_src: &str) -> Result<(), CompileError> {
+    let mut files: Vec<LoadedFile> = lib_srcs
+        .iter()
+        .enumerate()
+        .map(|(i, src)| LoadedFile {
+            path: std::path::PathBuf::from(format!("lib{i}.satyh")),
+            cst: LoadedCst::V0_1(parse_file_v1(src).unwrap_or_else(|e| panic!("lib parse failed: {e}"))),
+        })
+        .collect();
+    files.push(LoadedFile {
+        path: std::path::PathBuf::from("doc.saty"),
+        cst: LoadedCst::V0_1(parse_file_v1(doc_src).unwrap_or_else(|e| panic!("doc parse failed: {e}"))),
+    });
+    let mono = Mono;
+    satysfi_lang::compile_document_v1(&files, &mono).map(|_| ())
+}
+
+fn assert_accepts_multi(lib_srcs: &[&str], doc_src: &str) {
+    match run_multi(lib_srcs, doc_src) {
+        Ok(()) | Err(CompileError::NotADocument(_)) => {}
+        Err(other) => panic!("expected type-checking to accept, got: {other}"),
+    }
+}
+
+fn assert_type_error_multi(lib_srcs: &[&str], doc_src: &str) -> String {
+    match run_multi(lib_srcs, doc_src) {
         Err(CompileError::Type(e)) => e.to_string(),
         Err(other) => panic!("expected a Type error, got: {other}"),
         Ok(()) => panic!("expected type-checking to reject, but compilation succeeded"),
@@ -296,15 +339,16 @@ fn t14_unbound_quant_tyvar_message() {
     assert!(msg.contains("quantifier list"), "{msg}");
 }
 
-/// T15 placeholder decls: every non-`Val` `Decl` arm errors naming its
-/// owning sub-slice — never panics.
+/// T15 placeholder decls: every remaining non-`Val`/non-`Type`/non-command
+/// `Decl` arm errors naming its owning sub-slice — never panics. Sub-slice
+/// 2d-2 retires the `type t :: o`/`type u = int`/`val \c : ..`/`val +p : ..`
+/// rows this test used to pin as placeholders (§4-D of the opaque-types
+/// spec: `TypeOpaque`/`Type`/`ValHorzCmd`/`ValVertCmd` are processed for
+/// real now) — their NEW behavior is covered by `v1::module_check`'s own
+/// U-numbered test group below instead.
 #[test]
 fn t15_placeholder_decls_name_their_sub_slice() {
     let cases: &[(&str, &str)] = &[
-        ("type t :: o", "2d-2"),
-        ("type u = int", "2d-2"),
-        (r"val \c : int", "2d-2"),
-        ("val +p : int", "2d-2"),
         ("module N : sig end", "2d-3"),
         ("signature S = sig end", "2d-3"),
         ("include S", "2e"),
@@ -356,4 +400,422 @@ type t = int
 end
 ";
     assert_accepts(lib, "M.sum-list [1, 2, 3] + !M.c");
+}
+
+// ============================================================================
+// Sub-slice 2d-2 (`…/tmp/slice2d2-opaque-types.md` §5): opaque type sealing,
+// transparent type equality, constructor hiding, command-type decls,
+// `LONG_LOWER` qualified type names.
+// ============================================================================
+
+/// The spec's own worked example (§3): `type t :: o` opaque, a plain `val`
+/// pair (`make`/`get`), and a sealed inline command (`\show`).
+const WORKED_EXAMPLE: &str = "\
+module M :> sig
+  type t :: o
+  val make : int -> t
+  val get : t -> int
+  val \\show : inline [t]
+end = struct
+  type t = | T of int
+  val make n = T n
+  val get x = match x with | T n -> n end
+  val inline ctx \\show x = read-inline ctx (embed-string (arabic (get x)))
+end
+";
+
+/// U1 opaque accept: the worked example, doc `M.get (M.make 3)` compiles
+/// clean.
+#[test]
+fn u1_opaque_accept() {
+    assert_accepts(WORKED_EXAMPLE, "M.get (M.make 3)");
+}
+
+/// U2 THE OPACITY FINGERPRINT: `M.get 3` (an `int`, not the opaque `M.t`)
+/// is REJECTED, as is `(M.make 3) + 1` — the one test pair distinguishing
+/// real abstraction from parse-and-ignore. Messages contain `M.t` and NOT
+/// `#` (pins `strip_stamps`, = U17).
+#[test]
+fn u2_opacity_fingerprint() {
+    let msg = assert_type_error(WORKED_EXAMPLE, "M.get 3");
+    assert!(msg.contains("M.t"), "{msg}");
+    assert!(!msg.contains('#'), "no stamp should leak: {msg}");
+
+    let msg2 = assert_type_error(WORKED_EXAMPLE, "(M.make 3) + 1");
+    assert!(!msg2.contains('#'), "no stamp should leak: {msg2}");
+}
+
+/// U3 inside-transparency (synonym impl): `type t :: o` over `type t = int;
+/// val make n = n; val get x = x + 1` — accepts inside (`t ≡ int`
+/// transparently); `M.get (M.make 1)` ✓, `M.get 5` ✗ (outside, `t` is
+/// opaque).
+#[test]
+fn u3_inside_transparency_synonym_impl() {
+    let lib = "\
+module M :> sig
+  type t :: o
+  val make : int -> t
+  val get : t -> int
+end = struct
+  type t = int
+  val make n = n
+  val get x = x + 1
+end
+";
+    assert_accepts(lib, "M.get (M.make 1)");
+    assert_type_error(lib, "M.get 5");
+}
+
+/// U5 transparent equality accept: sig `type sz = int  val width : sz` over
+/// impl `type sz = int  val width = 10`; doc `M.width + 1` ✓ (concrete
+/// outside).
+#[test]
+fn u5_transparent_equality_accept() {
+    let lib = "\
+module M :> sig
+  type sz = int
+  val width : sz
+end = struct
+  type sz = int
+  val width = 10
+end
+";
+    assert_accepts(lib, "M.width + 1");
+}
+
+/// U6 transparent mismatch: sig `type sz = string` over impl `type sz =
+/// int` → a precise message naming both sides.
+#[test]
+fn u6_transparent_mismatch() {
+    let lib = "\
+module M :> sig
+  type sz = string
+end = struct
+  type sz = int
+  val x = 1
+end
+";
+    let msg = assert_type_error(lib, "1");
+    assert!(msg.contains("string"), "{msg}");
+    assert!(msg.contains("int"), "{msg}");
+    assert!(msg.contains("does not match its signature"), "{msg}");
+}
+
+/// U7 kind/arity: `type t :: o -> o` over `type t 'a = list 'a` ✓ (with
+/// `val wrap 'a : 'a -> t 'a`); `type t :: o` over the same impl → arity
+/// error; `type t :: nat` → unsupported-kind error; opaque decl with no
+/// impl type → width error.
+#[test]
+fn u7_kind_and_arity_checks() {
+    let lib_ok = "\
+module M :> sig
+  type t :: o -> o
+  val wrap 'a : 'a -> t 'a
+end = struct
+  type t 'a = list 'a
+  val wrap x = [x]
+end
+";
+    assert_accepts(lib_ok, "M.wrap 1");
+
+    let lib_arity = "\
+module M :> sig
+  type t :: o
+  val wrap : int -> t
+end = struct
+  type t 'a = list 'a
+  val wrap x = [x]
+end
+";
+    let msg = assert_type_error(lib_arity, "1");
+    assert!(msg.contains("arity"), "{msg}");
+
+    let lib_kind = "\
+module M :> sig
+  type t :: nat
+end = struct
+  type t = int
+  val x = 1
+end
+";
+    let msg = assert_type_error(lib_kind, "1");
+    assert!(msg.contains("unsupported kind"), "{msg}");
+
+    let lib_width = "\
+module M :> sig
+  type t :: o
+end = struct
+  val x = 1
+end
+";
+    let msg = assert_type_error(lib_width, "1");
+    assert!(msg.contains("never defines it"), "{msg}");
+}
+
+/// U8 command decls: the worked example's `\show` seals cleanly; a depth
+/// mismatch, a wrong command-type KIND (`block` declared over an `inline`
+/// impl), and a plain (non-command) declared type over a command impl all
+/// reject; `val +p : block [inline-text]` over a `val block` impl accepts.
+#[test]
+fn u8_command_decls() {
+    assert_accepts(WORKED_EXAMPLE, "1");
+
+    // depth mismatch: `val \show : inline [int]` (wrong element type —
+    // the impl passes it an `M.t`-typed argument).
+    let lib_depth_mismatch = "\
+module M :> sig
+  type t :: o
+  val make : int -> t
+  val \\show : inline [int]
+end = struct
+  type t = | T of int
+  val make n = T n
+  val get x = match x with | T n -> n end
+  val inline ctx \\show x = read-inline ctx (embed-string (arabic (get x)))
+end
+";
+    let msg = assert_type_error(lib_depth_mismatch, "1");
+    assert!(msg.contains("\\show"), "{msg}");
+
+    let lib_wrong_kind = "\
+module M :> sig
+  type t :: o
+  val make : int -> t
+  val \\show : block [t]
+end = struct
+  type t = | T of int
+  val make n = T n
+  val inline ctx \\show x = read-inline ctx (embed-string `x`)
+end
+";
+    // `\show` is `\`-sigiled, hence always `ValHorzCmd` regardless of the
+    // TYPE spelled after `:` — declaring `block […]` for it is a shape
+    // violation against the required `inline […]` shape (the sigil, not
+    // the spelling, decides `Decl::ValHorzCmd` vs `ValVertCmd`).
+    let msg = assert_type_error(lib_wrong_kind, "1");
+    assert!(msg.contains("needs an `inline [...]` command type"), "{msg}");
+
+    let lib_plain_type = "\
+module M :> sig
+  type t :: o
+  val make : int -> t
+  val \\show : int
+end = struct
+  type t = | T of int
+  val make n = T n
+  val inline ctx \\show x = read-inline ctx (embed-string `x`)
+end
+";
+    let msg = assert_type_error(lib_plain_type, "1");
+    assert!(!msg.is_empty(), "{msg}");
+
+    let lib_block_ok = "\
+module M :> sig
+  val +p : block [inline-text]
+end = struct
+  val block ctx +p it = read-block ctx '< >
+end
+";
+    assert_accepts(lib_block_ok, "1");
+}
+
+/// U9 ctor hiding: `T 1` (expression) → `constructor T belongs to type t,
+/// which module M's signature seals abstract`; `match M.make 1 with T n ->
+/// n end` (pattern) → same diagnostic; wildcard `match M.make 1 with _ ->
+/// 0 end` ✓ (exhaustive.rs's unknown-domain fact, zero edits).
+#[test]
+fn u9_ctor_hiding() {
+    let msg = assert_type_error(WORKED_EXAMPLE, "T 1");
+    assert!(msg.contains("constructor `T` belongs to type `t`"), "{msg}");
+    assert!(msg.contains("module `M`'s signature seals abstract"), "{msg}");
+
+    let msg = assert_type_error(WORKED_EXAMPLE, "match M.make 1 with T n -> n end");
+    assert!(msg.contains("constructor `T` belongs to type `t`"), "{msg}");
+
+    assert_accepts(WORKED_EXAMPLE, "match M.make 1 with _ -> 0 end");
+}
+
+/// U10 hidden type via `LONG_LOWER`: impl has `type u = int` the sig omits;
+/// a second lib's SEALED sig `val g : M.u -> int` → "exists in module `M`
+/// but is not exported"; an UNSEALED lib's bare `type s = M.u` → same
+/// (phase B's general path).
+#[test]
+fn u10_hidden_type_via_long_lower() {
+    let lib_m = "\
+module M :> sig
+  val f : int -> int
+end = struct
+  type u = int
+  val f x = x + 1
+end
+";
+    let lib_n = "\
+module N :> sig
+  val g : M.u -> int
+end = struct
+  val g x = x
+end
+";
+    let msg = assert_type_error_multi(&[lib_m, lib_n], "1");
+    assert!(msg.contains("exists in module `M`"), "{msg}");
+    assert!(msg.contains("not exported by its signature"), "{msg}");
+
+    let lib_n2 = "\
+module N = struct
+  type s = M.u
+  val g x = x
+end
+";
+    let msg2 = assert_type_error_multi(&[lib_m, lib_n2], "1");
+    assert!(msg2.contains("exists in module `M`"), "{msg2}");
+    assert!(msg2.contains("not exported by its signature"), "{msg2}");
+}
+
+/// U11 THE LEAK FIXTURE: `module N :> sig type s = M.t val get2 : s -> int
+/// end = struct type s = M.t val get2 = M.get end` — `N.get2 (M.make 3)`
+/// flows (stamp equality, the leak fix did NOT block the legitimate path);
+/// `N.get2 3` is REJECTED (the synonym table did not pierce `M`'s seal
+/// down to `int`, `M.t`'s concrete impl).
+#[test]
+fn u11_leak_fixture() {
+    let lib_m = "\
+module M :> sig
+  type t :: o
+  val make : int -> t
+  val get : t -> int
+end = struct
+  type t = int
+  val make n = n
+  val get x = x + 1
+end
+";
+    let lib_n = "\
+module N :> sig
+  type s = M.t
+  val get2 : s -> int
+end = struct
+  type s = M.t
+  val get2 = M.get
+end
+";
+    assert_accepts_multi(&[lib_m, lib_n], "N.get2 (M.make 3)");
+    let msg = assert_type_error_multi(&[lib_m, lib_n], "N.get2 3");
+    assert!(!msg.is_empty(), "{msg}");
+}
+
+/// U12 sealed nested module + sibling: `module M = struct module N :> sig
+/// type t :: o val mk : int -> t end = struct … end val result = M.N.mk 1
+/// end` ✓ (a sibling reaches a nested module through the SAME full
+/// qualified path elaboration always exports, `M.N.mk` — not a bare `N.mk`,
+/// even from directly inside M's own struct); a sibling treating `M.N.mk 1`
+/// as `int` ✗ (sibling is OUTSIDE the child seal).
+#[test]
+fn u12_sealed_nested_module_and_sibling() {
+    let lib_ok = "\
+module M = struct
+  module N :> sig
+    type t :: o
+    val mk : int -> t
+  end = struct
+    type t = int
+    val mk n = n
+  end
+  val result = M.N.mk 1
+end
+";
+    assert_accepts(lib_ok, "1");
+
+    let lib_bad = "\
+module M = struct
+  module N :> sig
+    type t :: o
+    val mk : int -> t
+  end = struct
+    type t = int
+    val mk n = n
+  end
+  val result = M.N.mk 1 + 1
+end
+";
+    let msg = assert_type_error(lib_bad, "1");
+    assert!(!msg.is_empty(), "{msg}");
+}
+
+/// U13 self-containment: sig `val f : u -> u` where the sig declares `type
+/// t :: o` (opting into type control) but NOT `u` (impl-defined) →
+/// "mentions its type `u` without declaring it". A module whose sig
+/// declares ZERO types at all is exempt (T6's pinned pre-2d-2 accept
+/// behavior — a bare own-type reference with no sig-level type control at
+/// all stays implicitly transparent).
+#[test]
+fn u13_self_containment() {
+    let lib = "\
+module M :> sig
+  type t :: o
+  val mk : int -> t
+  val f : u -> u
+end = struct
+  type t = | T of int
+  type u = int
+  val mk n = T n
+  val f x = x
+end
+";
+    let msg = assert_type_error(lib, "1");
+    assert!(msg.contains("mentions its type `u` without declaring it"), "{msg}");
+}
+
+/// U15 zero-value-member module: `module M :> sig type t :: o end = struct
+/// type t = | T end` + doc `T` → hidden-ctor error (the immediate-hide
+/// path — no value member exists for the trigger to ride on).
+#[test]
+fn u15_zero_value_member_immediate_hide() {
+    let lib = "\
+module M :> sig
+  type t :: o
+end = struct
+  type t = | T
+end
+";
+    let msg = assert_type_error(lib, "T");
+    assert!(msg.contains("constructor `T` belongs to type `t`"), "{msg}");
+    assert!(msg.contains("module `M`'s signature seals abstract"), "{msg}");
+}
+
+/// U19 placeholder decls: `module N : sig end` / `signature S = sig end` /
+/// `include S` decls in a sig still produce their 2d-3/2e errors; a sig
+/// `type t = | A` (variant body) produces the NEW 2d-3 ctor-re-export
+/// placeholder.
+#[test]
+fn u19_placeholder_decls_still_error() {
+    let cases: &[(&str, &str)] = &[
+        ("module N : sig end", "2d-3"),
+        ("signature S = sig end", "2d-3"),
+        ("include S", "2e"),
+        ("type t = | A", "2d-3"),
+    ];
+    for (decl, expect) in cases {
+        let lib = format!("module M :> sig {decl} end = struct type t = | A  val x = 1 end");
+        let msg = assert_type_error(&lib, "1");
+        assert!(msg.contains(expect), "decl {decl:?}: expected {expect:?} in {msg:?}");
+    }
+}
+
+/// U20 hidden command member: sig omits `\hidden`; doc `{ \M.hidden; }` →
+/// "value `M.\hidden` exists in module `M` but is not exported by its
+/// signature" (pins the two new command-format matchers, dual-side, like
+/// 2d-1's `:1429` coupling).
+#[test]
+fn u20_hidden_command_member() {
+    let lib = "\
+module M :> sig
+  val x : int
+end = struct
+  val x = 1
+  val inline ctx \\hidden = read-inline ctx (embed-string `secret`)
+end
+";
+    let msg = assert_type_error(lib, "{ \\M.hidden; }");
+    assert!(msg.contains("exists in module `M`"), "{msg}");
+    assert!(msg.contains("not exported by its signature"), "{msg}");
 }

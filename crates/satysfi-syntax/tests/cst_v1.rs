@@ -93,11 +93,68 @@ fn let_inline_or_block_in_is_a_parse_error() {
     assert!(parse_file_v1("let block ctx +c = 0 in 1").is_err());
 }
 
-/// Sub-slice 2b exclusion: `val math` belongs to the math split (no arm in
-/// `Bind`) — a parse error.
+/// math-split spec §4.1/§6.3 test 8: `val math` now parses via
+/// `Bind::ValueMath`. `ctx` is MANDATORY — unlike `val inline`/`val block`,
+/// there is no lightweight ctx-less form (contrast `bind_inline`'s two
+/// productions) — so `val math \m = e` (no ctx variable before the `\cmd`)
+/// stays a parse error, just for a different reason than before this spec
+/// (a missing `ctx: VarTok`, not "no arm exists").
 #[test]
-fn val_math_is_a_parse_error() {
+fn val_math_without_ctx_is_a_parse_error() {
     assert!(parse_file_v1(r"module M = struct val math \m = e end").is_err());
+}
+
+/// math-split spec §4.1/§6.3 test 8: `val math ctx \f m = e` (no `with sub
+/// sup`) parses to `Bind::ValueMath` with `scripts: None`.
+#[test]
+fn val_math_with_ctx_parses() {
+    let src = r"module M = struct val math ctx \f m = e end";
+    assert_roundtrip_v1(src);
+    let file = parse_file_v1(src).unwrap();
+    let cst_v1::FileV1::Library { binds, .. } = file else {
+        panic!("expected a library file");
+    };
+    assert_eq!(binds.len(), 1);
+    let cst_v1::Bind::ValueMath { ctx, cmd, params, scripts, .. } = &binds[0] else {
+        panic!("expected Bind::ValueMath, got {:?}", binds[0]);
+    };
+    assert_eq!(ctx.name, "ctx");
+    assert!(matches!(cmd, satysfi_syntax::leaf::AnyHorzCmdTok::Plain(t) if t.name == r"\f"));
+    assert_eq!(params.len(), 1);
+    assert!(scripts.is_none());
+}
+
+/// math-split spec §4.1/§6.3 test 8: `val math ctx \f with sub sup = e`
+/// parses to `Bind::ValueMath` with `scripts: Some(..)`.
+#[test]
+fn val_math_with_scripts_parses() {
+    let src = r"module M = struct val math ctx \f with sub sup = e end";
+    assert_roundtrip_v1(src);
+    let file = parse_file_v1(src).unwrap();
+    let cst_v1::FileV1::Library { binds, .. } = file else {
+        panic!("expected a library file");
+    };
+    assert_eq!(binds.len(), 1);
+    let cst_v1::Bind::ValueMath { ctx, params, scripts, .. } = &binds[0] else {
+        panic!("expected Bind::ValueMath, got {:?}", binds[0]);
+    };
+    assert_eq!(ctx.name, "ctx");
+    assert!(params.is_empty(), "no additional params before `with`");
+    let scripts = scripts.as_ref().expect("Some(ScriptsParamV1)");
+    assert_eq!(scripts.sub.name, "sub");
+    assert_eq!(scripts.sup.name, "sup");
+}
+
+/// math-split spec §6.3 test 8: under V0_0_6, `math` stays an ordinary
+/// identifier (the keyword gate is V0_1-only) — `let math = 3` still
+/// lexes `math` as a plain `Var`, never `Token::Math`.
+#[test]
+fn math_keyword_is_gated_to_v0_1() {
+    let toks = lex_with_version("val math ctx \\f m = e", SatysfiVersion::V0_1).unwrap();
+    assert!(toks.iter().any(|a| matches!(a.slot, Token::Math)));
+    let toks = lex_with_version("let math = 3", SatysfiVersion::V0_0_6).unwrap();
+    assert!(toks.iter().all(|a| !matches!(a.slot, Token::Math)));
+    assert!(toks.iter().any(|a| matches!(&a.slot, Token::Var(s) if s == "math")));
 }
 
 #[test]
@@ -113,6 +170,73 @@ fn document_if_and_fun() {
     assert_roundtrip_v1("if a then if b then 1 else 2 else 3");
     assert_roundtrip_v1("fun x -> x");
     assert_roundtrip_v1("fun x y -> x");
+}
+
+/// Language-completeness sweep gaps 2+3: `Expr::Fun.params` widened from
+/// `Vec<VarTok>` to `Vec<PatBot>` — a wildcard parameter (`fun _ -> …`) and
+/// a tuple-destructuring parameter (`fun (a, b) -> …`, the `list.satyg`
+/// `mapi-adjacent`-shaped case, mixed with a plain-variable parameter in
+/// the same `fun`) both now parse and round-trip, matching upstream
+/// `parser_v1.mly:849-863`'s `argpats = list(patbot)`.
+#[test]
+fn document_fun_wildcard_and_tuple_destructure_params() {
+    assert_roundtrip_v1("fun _ -> 1");
+    assert_roundtrip_v1("fun _ x -> x");
+    assert_roundtrip_v1("fun (a, b) -> a");
+    assert_roundtrip_v1("fun (a, b) x -> a");
+    let file = parse_file_v1("fun (i, acc) x -> acc").unwrap();
+    let cst_v1::FileV1::Document { body, .. } = file else {
+        panic!("expected a document file");
+    };
+    let cst_v1::ast::Expr::Fun { params, .. } = body else {
+        panic!("expected a fun expression");
+    };
+    assert_eq!(params.len(), 2, "the tuple param plus the plain-variable param");
+    assert!(
+        params[0].opts.is_none() && matches!(&params[0].body, cst_v1::ast::PatBot::Paren { .. }),
+        "first param should be the (i, acc) tuple pattern, got {:?}",
+        params[0]
+    );
+    assert!(
+        params[1].opts.is_none() && matches!(&params[1].body, cst_v1::ast::PatBot::Var(_)),
+        "second param should be the plain variable x, got {:?}",
+        params[1]
+    );
+}
+
+// ---- SATySFi 0.1 labeled optional arguments (optional-arg-rows incr. 1) ----
+
+#[test]
+fn document_labeled_optional_arguments() {
+    // Application bundle `?(l = e, …) arg` paired with its positional arg.
+    assert_roundtrip_v1("f ?(a = 1, b = x + 1) y");
+    // Multi-label subset / reordering at the call site.
+    assert_roundtrip_v1("add ?(scale = 3, bias = 1) 2");
+    // A bundled tuple-pattern PARAMETER unit.
+    assert_roundtrip_v1("fun ?(a = x) (p, q) -> p");
+    // A `let` param bundle plus a plain param.
+    assert_roundtrip_v1("let add ?(bias = b, scale = s) x = x in add 1");
+    // A bundle heading a bare-constructor argument (`BundledCtor`).
+    assert_roundtrip_v1("f ?(a = 1) None");
+}
+
+#[test]
+fn old_optional_sigils_no_longer_lex_under_v01() {
+    // SATySFi 0.1 dropped the fused `?:`/`?*` sigils: under V0_1 a bare `?`
+    // is the only `?`-headed token, so `?:`/`?*` lex as `?` + `:`/`*` — the
+    // parse then fails (no grammar consumes them).
+    assert!(parse_file_v1("f ?: 1").is_err());
+    assert!(parse_file_v1("f ?*").is_err());
+    // Confirm the lexer itself: no `Optional`/`Omission` token under V0_1.
+    let toks: Vec<Token> = lex_with_version("?: ?*", SatysfiVersion::V0_1)
+        .unwrap()
+        .into_iter()
+        .map(|a| a.slot)
+        .collect();
+    assert!(
+        !toks.iter().any(|t| matches!(t, Token::Optional | Token::Omission)),
+        "V0_1 must not lex `?:`/`?*` as fused optional tokens, got {toks:?}"
+    );
 }
 
 #[test]
@@ -205,6 +329,42 @@ fn document_command_reference() {
         panic!("expected a sigil-only command name");
     };
     assert_eq!(cmd.name, "\\math");
+}
+
+/// Language-completeness sweep gap 4: `(command \Mod.cmd)` — the SAME
+/// first-class command-reference syntax as [`document_command_reference`]
+/// above, but module-qualified (upstream's `parser_v1.mly:906-908`
+/// `backslash_cmd` accepts `LONG_HORZCMD`, not just bare `HORZCMD`). The
+/// grammar (`Atomic::Command { name: AnyHorzCmdTok, .. }`) already had an
+/// `AnyHorzCmdTok::Mod` arm and needed no CST change — the gap was purely
+/// the lexer's program-mode `\` handling never scanning a dotted path (see
+/// `lexer.rs` tests' `program_mode_qualified_command`).
+#[test]
+fn document_qualified_command_reference() {
+    assert_roundtrip_v1(r"(command \Mod.cmd)");
+
+    let file = parse_file_v1(r"(command \Mod.cmd)").unwrap();
+    let cst_v1::FileV1::Document { body, .. } = file else {
+        panic!("expected a document file");
+    };
+    let cst_v1::ast::Expr::Ops(chain) = body else {
+        panic!("expected an operator-chain expression");
+    };
+    let cst_v1::ast::Atomic::Paren { inner, .. } = chain.head.head else {
+        panic!("expected a parenthesized atomic");
+    };
+    let inner_expr: &cst_v1::ast::Expr = &inner.first;
+    let cst_v1::ast::Expr::Ops(inner_chain) = inner_expr else {
+        panic!("expected the parenthesized body to be an operator chain");
+    };
+    let cst_v1::ast::Atomic::Command { name, .. } = &inner_chain.head.head else {
+        panic!("expected an `Atomic::Command` inside the parens");
+    };
+    let satysfi_syntax::leaf::AnyHorzCmdTok::Mod(cmd) = name else {
+        panic!("expected a module-qualified command name");
+    };
+    assert_eq!(cmd.mods, vec!["Mod".to_string()]);
+    assert_eq!(cmd.name, "\\cmd");
 }
 
 // ---- FileV1::Library ---------------------------------------------------------
@@ -309,13 +469,97 @@ fn library_op_named_value() {
     assert!(matches!(&binds[0], cst_v1::Bind::Value { name, .. } if name.name == "+++"));
 }
 
-/// Sub-slice 2b exclusion: type-level records (`(| l : ty |)`) are not part
-/// of the widened `TypeAtom` grammar — a parse error.
+/// G2: closed type-level records (`(| l : ty |)`) now parse (`TypeAtom::
+/// Record`) — round-trips, and the field list/names come through as
+/// expected. The `| ?'r` row-var tail form stays a parse error (see
+/// `type_record_rowvar_tail_is_still_a_parse_error` below).
 #[test]
-fn type_record_is_a_parse_error() {
+fn type_record_round_trips() {
+    let src = "module M = struct\n\
+               type t = (| x : int |)\n\
+               end";
+    assert_roundtrip_v1(src);
+
+    let file = parse_file_v1(src).unwrap();
+    let cst_v1::FileV1::Library { binds, .. } = file else {
+        panic!("expected a library file");
+    };
+    let cst_v1::Bind::Type { first, .. } = &binds[0] else {
+        panic!("expected a Type bind, got {:?}", binds[0]);
+    };
+    let cst_v1::TypeBodyV1::Synonym(ty) = &first.body else {
+        panic!("expected t's body to be a synonym, got {:?}", first.body);
+    };
+    let cst_v1::ast::TypeExpr::Atom(cst_v1::ast::TypeProd { first: app, .. }) = ty else {
+        panic!("expected a bare TypeProd, got {ty:?}");
+    };
+    let cst_v1::ast::TypeApp::Atom(cst_v1::ast::TypeAtom::Record { inner, .. }) = app else {
+        panic!("expected TypeAtom::Record, got {app:?}");
+    };
+    let names: Vec<String> = inner.fields.iter().map(|f| f.name.name.clone()).collect();
+    assert_eq!(names, vec!["x".to_string()]);
+}
+
+/// Multiple fields (with a trailing comma) and a nested field type.
+#[test]
+fn type_record_multi_field_and_nested_round_trips() {
+    assert_roundtrip_v1(
+        "module M = struct\n\
+         type t = (| title : inline-text, count : int, |)\n\
+         end",
+    );
+    assert_roundtrip_v1(
+        "module M = struct\n\
+         type t = (| f : int -> bool, p : int * int |)\n\
+         end",
+    );
+}
+
+/// A closed record type used as a `Fun` domain, and in a sig `val` decl —
+/// the scout's G2 acceptance shape.
+#[test]
+fn type_record_as_fun_domain_and_in_sig_round_trips() {
+    assert_roundtrip_v1(
+        "module M = struct\n\
+         signature S = sig\n\
+         val document : (| title : inline-text |) -> int\n\
+         end\n\
+         end",
+    );
+}
+
+/// The open form's `| ?'r` row-var tail is NOT modeled (deferred to the
+/// paused optional-arg-rows track): the group can't be fully consumed, so
+/// this stays a parse error.
+#[test]
+fn type_record_rowvar_tail_is_still_a_parse_error() {
     assert!(parse_file_v1(
         "module M = struct\n\
-         type t = (| x : int |)\n\
+         type t = (| x : int | ?'r |)\n\
+         end"
+    )
+    .is_err());
+}
+
+/// `=` is the record-EXPRESSION field separator, not the record-TYPE one —
+/// `(| x = int |)` must still fail to parse as a type.
+#[test]
+fn type_record_eq_separator_is_a_parse_error() {
+    assert!(parse_file_v1(
+        "module M = struct\n\
+         type t = (| x = int |)\n\
+         end"
+    )
+    .is_err());
+}
+
+/// `;` is the 0.0.6 record-type field separator, not 0.1's `,` — still a
+/// parse error under V0_1.
+#[test]
+fn type_record_semicolon_separator_is_a_parse_error() {
+    assert!(parse_file_v1(
+        "module M = struct\n\
+         type t = (| x : int; y : int |)\n\
          end"
     )
     .is_err());
@@ -952,4 +1196,152 @@ fn header_v1_display_names() {
             "@require: pervasives".to_string(),
         ]
     );
+}
+
+// ============================================================================
+// Sub-slice 2d-2: `inline […]`/`block […]` command types, `M.t` LONG_LOWER
+// qualified type paths (§4-A of the opaque-types spec, U18).
+// ============================================================================
+
+/// `inline [τ, …]`/`block […]` round-trip in sig `val` position, including a
+/// two-element list and a bare `[]`.
+#[test]
+fn command_type_round_trips() {
+    assert_roundtrip_v1(
+        "module M = struct\n\
+         signature S = sig\n\
+         val \\show : inline [int, inline-text]\n\
+         val +put : block []\n\
+         end\n\
+         end",
+    );
+}
+
+/// `inline [t] -> t` — a command type used as a function DOMAIN (so `->`
+/// still parses correctly around the bracketed list).
+#[test]
+fn command_type_as_fun_domain_round_trips() {
+    assert_roundtrip_v1(
+        "module M = struct\n\
+         signature S = sig\n\
+         val f : inline [int] -> int\n\
+         end\n\
+         end",
+    );
+}
+
+/// `M.t`, `M.t int`, `A.B.t` — `LONG_LOWER` qualified type names, bare and
+/// applied, including a two-level module path.
+#[test]
+fn long_lower_type_name_round_trips() {
+    assert_roundtrip_v1(
+        "module M = struct\n\
+         signature S = sig\n\
+         val f : N.t\n\
+         val g : N.t int\n\
+         val h : A.B.t\n\
+         end\n\
+         end",
+    );
+}
+
+/// Shape assertions for the command-type/LONG_LOWER grammar: the parsed tree
+/// actually contains the arms the round-trip tests above only check
+/// byte-for-byte re-emission of.
+#[test]
+fn command_type_and_long_lower_shapes() {
+    let src = "module M = struct\n\
+               signature S = sig\n\
+               val \\show : inline [int, inline-text]\n\
+               val +put : block [t]\n\
+               val f : N.t\n\
+               val g : N.t int\n\
+               end\n\
+               end";
+    let file = parse_file_v1(src).unwrap();
+    let cst_v1::FileV1::Library { binds, .. } = file else {
+        panic!("expected a library file");
+    };
+    let cst_v1::Bind::Signature { sig_, .. } = &binds[0] else {
+        panic!("expected a Bind::Signature, got {:?}", binds[0]);
+    };
+    let cst_v1::ast::SigExpr::Bot(cst_v1::ast::SigBotV1::Sig { decls, .. }) = &*sig_.0 else {
+        panic!("expected SigExpr::Bot(SigBotV1::Sig)");
+    };
+    assert_eq!(decls.len(), 4, "{decls:?}");
+
+    let cst_v1::ast::Decl::ValHorzCmd { ty: show_ty, .. } = &*decls[0].0 else {
+        panic!("expected decls[0] to be ValHorzCmd, got {:?}", decls[0].0);
+    };
+    let cst_v1::ast::TypeExpr::Atom(cst_v1::ast::TypeProd { first, .. }) = show_ty else {
+        panic!("expected a bare TypeProd, got {show_ty:?}");
+    };
+    let cst_v1::ast::TypeApp::InlineCmdTy { args, .. } = first else {
+        panic!("expected TypeApp::InlineCmdTy, got {first:?}");
+    };
+    assert_eq!(args.len(), 2, "{args:?}");
+
+    let cst_v1::ast::Decl::ValVertCmd { ty: put_ty, .. } = &*decls[1].0 else {
+        panic!("expected decls[1] to be ValVertCmd, got {:?}", decls[1].0);
+    };
+    let cst_v1::ast::TypeExpr::Atom(cst_v1::ast::TypeProd { first: put_first, .. }) = put_ty else {
+        panic!("expected a bare TypeProd, got {put_ty:?}");
+    };
+    assert!(matches!(put_first, cst_v1::ast::TypeApp::BlockCmdTy { .. }), "{put_first:?}");
+
+    let cst_v1::ast::Decl::Val { ty: f_ty, .. } = &*decls[2].0 else {
+        panic!("expected decls[2] to be Decl::Val, got {:?}", decls[2].0);
+    };
+    let cst_v1::ast::TypeExpr::Atom(cst_v1::ast::TypeProd { first: f_first, .. }) = f_ty else {
+        panic!("expected a bare TypeProd, got {f_ty:?}");
+    };
+    let cst_v1::ast::TypeApp::Atom(cst_v1::ast::TypeAtom::LongName(n_t)) = f_first else {
+        panic!("expected TypeAtom::LongName, got {f_first:?}");
+    };
+    assert_eq!(n_t.mods, vec!["N".to_string()]);
+    assert_eq!(n_t.name, "t");
+
+    let cst_v1::ast::Decl::Val { ty: g_ty, .. } = &*decls[3].0 else {
+        panic!("expected decls[3] to be Decl::Val, got {:?}", decls[3].0);
+    };
+    let cst_v1::ast::TypeExpr::Atom(cst_v1::ast::TypeProd { first: g_first, .. }) = g_ty else {
+        panic!("expected a bare TypeProd, got {g_ty:?}");
+    };
+    let cst_v1::ast::TypeApp::AppliedLong { ctor, .. } = g_first else {
+        panic!("expected TypeApp::AppliedLong, got {g_first:?}");
+    };
+    assert_eq!(ctor.mods, vec!["N".to_string()]);
+    assert_eq!(ctor.name, "t");
+}
+
+/// Negatives: `math […]` still fails at the `[` (`math` is still a plain
+/// `VarTok`, never a keyword until the math-split phase claims it), and
+/// neither `?`-suffixed nor `?(…)`-prefixed command-arg slots parse (roadmap
+/// phase 4, unchanged).
+#[test]
+fn command_type_negatives() {
+    assert!(parse_file_v1(
+        "module M = struct\n\
+         signature S = sig\n\
+         val \\show : math [int]\n\
+         end\n\
+         end"
+    )
+    .is_err());
+    assert!(parse_file_v1(
+        "module M = struct\n\
+         signature S = sig\n\
+         val \\show : inline [int?]\n\
+         end\n\
+         end"
+    )
+    .is_err());
+    assert!(parse_file_v1(
+        "module M = struct\n\
+         signature S = sig\n\
+         val \\show : inline [?(l : int)]\n\
+         end\n\
+         end"
+    )
+    .is_err());
 }

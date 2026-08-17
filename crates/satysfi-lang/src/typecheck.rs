@@ -25,8 +25,9 @@ pub use crate::exhaustive::MatchWarning;
 use crate::prim_types::{
     self, arrow, builtin_variants_with_version, list, mandatory, optional, product, reff,
     t_block_boxes,
-    t_block_text, t_bool, t_context, t_document, t_float, t_inline_boxes, t_inline_text, t_int,
-    t_length, t_math_text, t_option, t_string, t_unit, VariantDecl,
+    t_block_text, t_bool, t_context, t_deco, t_decoset, t_document, t_float, t_graphics, t_image,
+    t_inline_boxes, t_inline_text, t_int, t_length, t_math_boxes, t_math_text, t_option, t_path,
+    t_prepath, t_string, t_unit, VariantDecl,
 };
 use crate::types::{
     self, generalize, instantiate, resolve, BaseType, CmdArgType, Kind, MonoType, PolyType, Row,
@@ -308,6 +309,53 @@ pub const PRIMITIVE_NAMES: &[&str] = &[
     "add-footnote",
     // ---- page-level prims blocking mitou-report/stdjareport ----
     "clear-page",
+    // ---- math-split spec §2.2: added in 0.1 (`math-text`/`math-boxes`
+    // split + `read-math`) ----
+    "read-math",
+    "stringify-math",
+    "set-math-char",
+    "set-math-char-class",
+    "get-math-char-class",
+    "embed-inline-to-math",
+    "get-math-axis-height-ratio",
+    "%math-attach-scripts",
+    // ---- added in 0.1 — L5a (prim-retype-sweep §2): bitwise ops, Unicode
+    // string ops, `read-file`, `register-document-information`. All 11
+    // unbound under V0_0_6 (`base_type_env_with_version`'s
+    // `primitive_type_with_version` filter skips them there, same as the
+    // 8 math-split names just above). `get-initial-text-info` is NOT
+    // listed again here — it's the R1 fork, already present above as one
+    // shared name whose *type* forks per version (`prim_types.rs`). ----
+    "<<",
+    ">>",
+    "band",
+    "bor",
+    "bxor",
+    "bnot",
+    "normalize-string-to-nfc",
+    "normalize-string-to-nfd",
+    "split-grapheme-cluster",
+    "read-file",
+    "register-document-information",
+    // ---- added in 0.1 — L5b (prim-retype-sweep §3.4): the graphics-
+    // collection sweep's 2 added prims. Unbound under V0_0_6 (same
+    // `primitive_type_with_version` filter as the L5a names above); the 3
+    // named + 6 hidden retypes (`tabular`, `get-graphics-bbox`,
+    // `inline-graphics`, `inline-graphics-outer`, `inline-frame-outer/
+    // -inner/-breakable`, `block-frame-breakable`) are NOT listed again
+    // here — each is one shared name whose *type* forks per version
+    // (`prim_types.rs`), already present above. ----
+    "unite-graphics",
+    "clip-graphics-by-path",
+    // ---- language-completeness sweep gap 1: 0.1 float comparisons
+    // (`primitives.rs`'s `prims!` table comment on ">."/"<."/">=."/"<=.").
+    // Unbound under V0_0_6 (same `primitive_type_with_version` V0_1 guard
+    // as the L5a/L5b names above) — confirmed genuinely absent from 0.0.6
+    // upstream, unlike "+."/"-."/"*."/"/." which both generations share.
+    ">.",
+    "<.",
+    ">=.",
+    "<=.",
 ];
 
 // `#[allow(dead_code)]`: kept as the back-compat sibling of
@@ -395,7 +443,7 @@ impl TypeEnv {
 /// and type *synonyms* (a synonym reference is resolved the same nominal
 /// way — see `expand_synonyms`) "just work": the name is resolved nominally,
 /// not by looking anything up at lowering time.
-fn name_to_mono(name: &str) -> MonoType {
+fn name_to_mono(name: &str, version: SatysfiVersion) -> MonoType {
     match name {
         "unit" => t_unit(),
         "bool" => t_bool(),
@@ -405,17 +453,59 @@ fn name_to_mono(name: &str) -> MonoType {
         "string" => t_string(),
         "inline-text" => t_inline_text(),
         "block-text" => t_block_text(),
-        "math" => MonoType::Base(BaseType::MathText),
+        // math-split spec §1.1: the surface-name fork lives HERE, and only
+        // here. `BaseType::MathText` is reused byte-identically as both
+        // 0.0.6's `math` and V0_1's `math-text` (upstream's own rename);
+        // `math-boxes` is V0_1-only, new. Under V0_1 the word `math` in a
+        // type position is deliberately NOT recognized (0.1 has no `math`
+        // type, `types.cppo.ml:148-155`) — it falls through to the nominal-
+        // `Variant` default below, matching upstream's unbound-type error;
+        // under V0_0_6, `math-text`/`math-boxes` likewise stay unbound.
+        "math" if !version.math_is_split() => MonoType::Base(BaseType::MathText),
+        "math-text" if version.math_is_split() => MonoType::Base(BaseType::MathText),
+        "math-boxes" if version.math_is_split() => MonoType::Base(BaseType::MathBoxes),
         "inline-boxes" => t_inline_boxes(),
         "block-boxes" => t_block_boxes(),
         "context" => t_context(),
         "document" => t_document(),
         "text-info" => MonoType::Base(BaseType::TextInfo),
+        // G8 (`docs/plans/…/doc-class-capstone-road.md` §3): the graphics-
+        // tier base/synonym types upstream's `types.cppo.ml` base_type_map
+        // registers (`pre-path`/`path`/`graphics`/`image`, plus the builtin
+        // synonyms `deco`/`deco-set` `primitives.cppo.ml:275-276`, plus the
+        // pragmatic `font` stand-in — see below). Version-gated on V0_1
+        // ONLY: nothing in the frozen 0.0.6 corpus ever runs
+        // `v1::module_check::check_program` (the sole consumer that needs
+        // these names resolved non-nominally), so gating keeps 0.0.6's
+        // `name_to_mono` output byte-identical by construction — the same
+        // spelling as the `math`/`math-text` fork just above. Under V0_0_6
+        // these names still fall through to the nominal
+        // `Variant(name, [])` default, unchanged from before this patch.
+        "pre-path" if version == SatysfiVersion::V0_1 => t_prepath(),
+        "path" if version == SatysfiVersion::V0_1 => t_path(),
+        "graphics" if version == SatysfiVersion::V0_1 => t_graphics(),
+        "image" if version == SatysfiVersion::V0_1 => t_image(),
+        "deco" if version == SatysfiVersion::V0_1 => t_deco(version),
+        "deco-set" if version == SatysfiVersion::V0_1 => t_decoset(version),
+        // `font` decision (roadmap §3): upstream 0.1's `font` is an atomic
+        // base type, but this port's `set-font`/`set-math-font` and the
+        // font stand-in packages all traffic in the 0.0.6
+        // `(abbrev, size_ratio, rising_ratio)` string-keyed triple
+        // (`t_font()`, below) — `font * float * float` in a sig is exactly
+        // that triple's shape once `font` itself is `string`. Mapping
+        // `font` to `t_string()` under V0_1 makes those sigs line up with
+        // zero prim retypes; a faithful `BaseType::Font` is deferred to
+        // real 0.1 envelope font loading (Axis B, per the roadmap).
+        "font" if version == SatysfiVersion::V0_1 => t_string(),
         other => MonoType::Variant(other.to_string(), Vec::new()),
     }
 }
 
-fn lower_type_atom(atom: &TypeAtom, tyvars: &HashMap<String, MonoType>) -> MonoType {
+fn lower_type_atom(
+    atom: &TypeAtom,
+    tyvars: &HashMap<String, MonoType>,
+    version: SatysfiVersion,
+) -> MonoType {
     match atom {
         // `[ty; ty?; ..] inline-cmd`/`block-cmd`/`math-cmd` — the direct
         // wire-up to the existing `CmdArgType.optional` field
@@ -426,7 +516,7 @@ fn lower_type_atom(atom: &TypeAtom, tyvars: &HashMap<String, MonoType>) -> MonoT
             let cmd_args: Vec<CmdArgType> = args
                 .iter()
                 .map(|a| {
-                    let ty = lower_type_expr(&a.ty, tyvars);
+                    let ty = lower_type_expr(&a.ty, tyvars, version);
                     if a.opt.is_some() {
                         optional(ty)
                     } else {
@@ -440,7 +530,7 @@ fn lower_type_atom(atom: &TypeAtom, tyvars: &HashMap<String, MonoType>) -> MonoT
                 CmdTypeKind::Math(_) => MonoType::MathCmd(cmd_args),
             }
         }
-        TypeAtom::Paren { inner, .. } => lower_type_expr(inner, tyvars),
+        TypeAtom::Paren { inner, .. } => lower_type_expr(inner, tyvars, version),
         // `(| l1 : ty1; l2 : ty2; … |)` — a CLOSED record type: fold the
         // fields into a `Row::Cons` chain (in source order) ending in
         // `Row::Empty`, matching `MonoType::Record`'s row representation
@@ -450,7 +540,11 @@ fn lower_type_atom(atom: &TypeAtom, tyvars: &HashMap<String, MonoType>) -> MonoT
         // them, since it's a concrete type, not a lower-bound obligation.
         TypeAtom::Record { fields, .. } => {
             let row = fields.iter().rev().fold(Row::Empty, |rest, f| {
-                Row::Cons(f.name.name.clone(), Box::new(lower_type_expr(&f.ty, tyvars)), Box::new(rest))
+                Row::Cons(
+                    f.name.name.clone(),
+                    Box::new(lower_type_expr(&f.ty, tyvars, version)),
+                    Box::new(rest),
+                )
             });
             MonoType::Record(row)
         }
@@ -465,21 +559,25 @@ fn lower_type_atom(atom: &TypeAtom, tyvars: &HashMap<String, MonoType>) -> MonoT
             // declaration.
             None => MonoType::Var(types::new_ty_var(0)),
         },
-        TypeAtom::Name(name) => name_to_mono(&name.name),
+        TypeAtom::Name(name) => name_to_mono(&name.name, version),
     }
 }
 
 /// `txprod`: a [`TypeProd`] is either a single [`TypeApp`] (returned as-is)
 /// or a genuine `*`-separated product (`MonoType::Product`, always 2+ items
 /// by construction — see [`prim_types::product`]).
-fn lower_type_prod(prod: &TypeProd, tyvars: &HashMap<String, MonoType>) -> MonoType {
+fn lower_type_prod(
+    prod: &TypeProd,
+    tyvars: &HashMap<String, MonoType>,
+    version: SatysfiVersion,
+) -> MonoType {
     if prod.rest.is_empty() {
-        lower_type_app(&prod.first, tyvars)
+        lower_type_app(&prod.first, tyvars, version)
     } else {
         let mut items = Vec::with_capacity(1 + prod.rest.len());
-        items.push(lower_type_app(&prod.first, tyvars));
+        items.push(lower_type_app(&prod.first, tyvars, version));
         for st in &prod.rest {
-            items.push(lower_type_app(&st.ty, tyvars));
+            items.push(lower_type_app(&st.ty, tyvars, version));
         }
         product(items)
     }
@@ -488,11 +586,15 @@ fn lower_type_prod(prod: &TypeProd, tyvars: &HashMap<String, MonoType>) -> MonoT
 /// `txapppre`/`txapp` (restricted to a single argument — see [`TypeApp`]'s
 /// doc comment): either a bare atom, or one atom applied to a single postfix
 /// type-constructor name (`'a option`, `('a list) list`).
-fn lower_type_app(app: &TypeApp, tyvars: &HashMap<String, MonoType>) -> MonoType {
+fn lower_type_app(
+    app: &TypeApp,
+    tyvars: &HashMap<String, MonoType>,
+    version: SatysfiVersion,
+) -> MonoType {
     match app {
-        TypeApp::Atom(atom) => lower_type_atom(atom, tyvars),
+        TypeApp::Atom(atom) => lower_type_atom(atom, tyvars, version),
         TypeApp::Applied { arg, ctor } => {
-            let arg_ty = lower_type_atom(arg, tyvars);
+            let arg_ty = lower_type_atom(arg, tyvars, version);
             match ctor.name.as_str() {
                 "list" => list(arg_ty),
                 "ref" => reff(arg_ty),
@@ -519,17 +621,24 @@ fn lower_type_app(app: &TypeApp, tyvars: &HashMap<String, MonoType>) -> MonoType
 /// rigid-stamp map for the subsumption check) — see this module's
 /// crate-report doc comment and the spec's §2.3 API table. Visibility-only
 /// change; behavior is untouched (2d-1's golden-diff invariant, §4.3-F).
-pub(crate) fn lower_type_expr(ty: &TypeExpr, tyvars: &HashMap<String, MonoType>) -> MonoType {
+pub(crate) fn lower_type_expr(
+    ty: &TypeExpr,
+    tyvars: &HashMap<String, MonoType>,
+    version: SatysfiVersion,
+) -> MonoType {
     match ty {
         TypeExpr::Fun {
             opts, dom, cod, ..
         } => {
-            let result = arrow(lower_type_prod(dom, tyvars), lower_type_expr(cod, tyvars));
+            let result = arrow(
+                lower_type_prod(dom, tyvars, version),
+                lower_type_expr(cod, tyvars, version),
+            );
             opts.iter().rev().fold(result, |acc, opt| {
-                arrow(t_option(lower_type_prod(&opt.ty, tyvars)), acc)
+                arrow(t_option(lower_type_prod(&opt.ty, tyvars, version)), acc)
             })
         }
-        TypeExpr::Atom(prod) => lower_type_prod(prod, tyvars),
+        TypeExpr::Atom(prod) => lower_type_prod(prod, tyvars, version),
     }
 }
 
@@ -631,7 +740,11 @@ fn lower_record_kind(rk: &RecordKind) -> BTreeSet<String> {
 /// `sig_constraint_tests` for a direct demonstration against `unify`
 /// itself).
 #[allow(dead_code)]
-pub(crate) fn lower_sig_item(item: &SigItem, ctx: &mut TypeContext) -> Option<(String, MonoType)> {
+pub(crate) fn lower_sig_item(
+    item: &SigItem,
+    ctx: &mut TypeContext,
+    version: SatysfiVersion,
+) -> Option<(String, MonoType)> {
     let (name, ty, constraints): (&str, &TypeExpr, &[SigConstraint]) = match item {
         SigItem::ValHorzCmd { name, ty, constraints, .. } => (&name.name, ty, constraints),
         SigItem::ValVertCmd { name, ty, constraints, .. } => (&name.name, ty, constraints),
@@ -651,7 +764,7 @@ pub(crate) fn lower_sig_item(item: &SigItem, ctx: &mut TypeContext) -> Option<(S
         };
         tyvars.insert(n, MonoType::Var(v));
     }
-    Some((name.to_string(), lower_type_expr(ty, &tyvars)))
+    Some((name.to_string(), lower_type_expr(ty, &tyvars, version)))
 }
 
 /// Lower one [`UserTypeDecl`] (surfaced by `elaborate::elaborate_program`)
@@ -664,6 +777,7 @@ pub(crate) fn lower_sig_item(item: &SigItem, ctx: &mut TypeContext) -> Option<(S
 fn build_variant_decl(
     decl: &UserTypeDecl,
     synonyms: &HashMap<String, SynonymDecl>,
+    version: SatysfiVersion,
 ) -> Result<VariantDecl, TypeError> {
     let param_vars: Vec<types::TyVarRef> =
         decl.params.iter().map(|_| types::new_ty_var(0)).collect();
@@ -677,7 +791,9 @@ fn build_variant_decl(
     for (name, ty) in &decl.ctors {
         let payload = match ty {
             None => None,
-            Some(t) => Some(expand_synonyms(&lower_type_expr(t, &tyvar_map), synonyms)?),
+            Some(t) => {
+                Some(expand_synonyms(&lower_type_expr(t, &tyvar_map, version), synonyms)?)
+            }
         };
         ctors.push((name.clone(), payload));
     }
@@ -720,7 +836,7 @@ struct SynonymDecl {
     body: MonoType,
 }
 
-fn build_synonym_decl(decl: &UserSynonymDecl) -> SynonymDecl {
+fn build_synonym_decl(decl: &UserSynonymDecl, version: SatysfiVersion) -> SynonymDecl {
     let param_vars: Vec<types::TyVarRef> =
         decl.params.iter().map(|_| types::new_ty_var(0)).collect();
     let tyvar_map: HashMap<String, MonoType> = decl
@@ -731,7 +847,7 @@ fn build_synonym_decl(decl: &UserSynonymDecl) -> SynonymDecl {
         .collect();
     SynonymDecl {
         param_vars,
-        body: lower_type_expr(&decl.body, &tyvar_map),
+        body: lower_type_expr(&decl.body, &tyvar_map, version),
     }
 }
 
@@ -743,7 +859,8 @@ fn build_synonym_decl(decl: &UserSynonymDecl) -> SynonymDecl {
 fn synonym_refs(ty: &MonoType, synonyms: &HashMap<String, SynonymDecl>, out: &mut Vec<String>) {
     match ty {
         MonoType::Var(_) | MonoType::Base(_) => {}
-        MonoType::Func(dom, cod) => {
+        MonoType::Func(row, dom, cod) => {
+            synonym_refs_row(row, synonyms, out);
             synonym_refs(dom, synonyms, out);
             synonym_refs(cod, synonyms, out);
         }
@@ -821,7 +938,8 @@ fn expand_synonyms(
 ) -> Result<MonoType, TypeError> {
     match ty {
         MonoType::Var(_) | MonoType::Base(_) => Ok(ty.clone()),
-        MonoType::Func(dom, cod) => Ok(MonoType::Func(
+        MonoType::Func(row, dom, cod) => Ok(MonoType::Func(
+            Box::new(expand_synonyms_row(row, synonyms)?),
             Box::new(expand_synonyms(dom, synonyms)?),
             Box::new(expand_synonyms(cod, synonyms)?),
         )),
@@ -921,6 +1039,16 @@ pub(crate) struct Checker {
     /// pass (see `typecheck_verbose`); v0.0.6's `exhchecker.ml` warns and
     /// continues rather than rejecting the program.
     warnings: Vec<MatchWarning>,
+    /// The target version this session is checking against (math-split
+    /// spec §1.1/§4.4) — set by [`Checker::install_builtin_variants`] (the
+    /// one call every real construction path already makes with the real
+    /// version, `Checker::empty` alone never does). Threaded into
+    /// `name_to_mono`'s surface-type-name fork and `Ast::LetMathIn`'s
+    /// scheme rule (`math_command_scheme` vs `math_command_scheme_v01`).
+    /// Default (`Checker::empty`, never followed by `install_builtin_
+    /// variants`) is `V0_0_6` — behavior-neutral for every existing
+    /// 0.0.6-only test that never installs builtins at all.
+    version: SatysfiVersion,
 }
 
 /// One elaborated top-level-shaped binding, viewed by reference — the
@@ -962,12 +1090,31 @@ impl Checker {
             variants: HashMap::new(),
             synonyms: HashMap::new(),
             warnings: Vec::new(),
+            version: SatysfiVersion::V0_0_6,
         }
     }
 
+    /// Set the session's target version (math-split spec §1.1/§4.4's
+    /// `Checker.version` field) with NO other side effect — a pure field
+    /// write, safe to call before anything else. `new_with_version`/
+    /// `v1::module_check::check_program`'s session-setup sequences both call
+    /// this FIRST, ahead of their (order-critical, unchanged) `declare_
+    /// synonym` loop, so a V0_1 synonym body that names `math-text`/
+    /// `math-boxes` resolves correctly even though `install_builtin_
+    /// variants` (which also happens to set this field, for every path that
+    /// predates this one) doesn't run until afterward. A no-op for every
+    /// 0.0.6 path: `empty()` already defaults to `V0_0_6`.
+    pub(crate) fn set_version(&mut self, version: SatysfiVersion) {
+        self.version = version;
+    }
+
     /// Register the builtin variant decls for `version` — moved verbatim
-    /// from the former `new_with_version` body.
+    /// from the former `new_with_version` body. Also records `version` on
+    /// `self` (redundant with `set_version` for every path that calls both,
+    /// kept so this method alone is still enough for any caller that skips
+    /// `set_version`, e.g. `:2237`'s bare-builtins test construction).
     pub(crate) fn install_builtin_variants(&mut self, version: SatysfiVersion) {
+        self.version = version;
         for decl in builtin_variants_with_version(version) {
             let decl = Rc::new(decl);
             self.variants.insert(decl.name.clone(), decl.clone());
@@ -983,7 +1130,7 @@ impl Checker {
     /// done registering.
     pub(crate) fn declare_synonym(&mut self, decl: &UserSynonymDecl) {
         self.synonyms
-            .insert(decl.name.clone(), build_synonym_decl(decl));
+            .insert(decl.name.clone(), build_synonym_decl(decl, self.version));
     }
 
     /// Cycle-check the accumulated synonym table — a thin wrapper over the
@@ -997,7 +1144,7 @@ impl Checker {
     /// former local — same map, same contents at the same point in the
     /// sequence).
     pub(crate) fn declare_variant(&mut self, decl: &UserTypeDecl) -> Result<(), TypeError> {
-        let decl = Rc::new(build_variant_decl(decl, &self.synonyms)?);
+        let decl = Rc::new(build_variant_decl(decl, &self.synonyms, self.version)?);
         self.variants.insert(decl.name.clone(), decl.clone());
         for (cname, _) in &decl.ctors {
             self.ctors.insert(cname.clone(), decl.clone());
@@ -1014,6 +1161,7 @@ impl Checker {
         // variant decl is lowered, since a variant's ctor payload may name a
         // synonym (`build_variant_decl` expands through `synonyms`).
         let mut c = Checker::empty();
+        c.set_version(version);
         for usd in &program.synonym_decls {
             c.declare_synonym(usd);
         }
@@ -1205,6 +1353,76 @@ impl Checker {
         Ok(generalize(self.ctx.level(), &MonoType::MathCmd(params)))
     }
 
+    /// `Ast::LetMathIn`'s V0_1 scheme-building rule (math-split spec §4.4) —
+    /// the `val math` analog of `math_command_scheme` above. The lowering
+    /// (`v1/lower.rs::lower_bind_v1`, spec §4.3) ALWAYS synthesizes exactly
+    /// three trailing lambdas around a `val math` body — `fun ctx -> fun sub
+    /// -> fun sup -> …` — so `tv`'s function chain always has at least 3
+    /// domains; the LAST three are peeled off as `(d_ctx, d_sub, d_sup)`
+    /// (`context`, `option math-text`, `option math-text`), the bare result
+    /// must be `math-boxes`, and the REMAINING leading domains become the
+    /// command's ordinary `CmdArgType` params — same shape/heuristic as
+    /// `math_command_scheme`, just with the ctx/sub/sup trio peeled off the
+    /// tail first.
+    fn math_command_scheme_v01(
+        &mut self,
+        name: &str,
+        tv: MonoType,
+        span: Option<Span>,
+    ) -> Result<PolyType, TypeError> {
+        let (mut doms, result) = peel_func_chain(tv);
+        if doms.len() < 3 {
+            return Err(TypeError::simple(
+                span,
+                format!(
+                    "'val math' command '{name}' must take a context and (via the \
+                     synthesized `with sub sup`/`%math-attach-scripts` wrapper) two \
+                     optional scripts as its trailing arguments — see the math-split spec"
+                ),
+            ));
+        }
+        let d_sup = doms.pop().unwrap();
+        let d_sub = doms.pop().unwrap();
+        let d_ctx = doms.pop().unwrap();
+        self.unify_ctx(
+            &t_context(),
+            &d_ctx,
+            span,
+            &format!("the context argument of 'val math' command '{name}'"),
+        )?;
+        self.unify_ctx(
+            &t_option(t_math_text()),
+            &d_sub,
+            span,
+            &format!("the 'sub' argument of 'val math' command '{name}'"),
+        )?;
+        self.unify_ctx(
+            &t_option(t_math_text()),
+            &d_sup,
+            span,
+            &format!("the 'sup' argument of 'val math' command '{name}'"),
+        )?;
+        self.unify_ctx(
+            &t_math_boxes(),
+            &result,
+            span,
+            &format!(
+                "the result of 0.1 math command '{name}' — a `math-boxes`, \
+                 usually via `read-math`"
+            ),
+        )?;
+        let params: Vec<CmdArgType> = doms
+            .into_iter()
+            .map(|d| match resolve(&d) {
+                MonoType::Variant(vname, mut vargs) if vname == "option" && vargs.len() == 1 => {
+                    optional(vargs.pop().unwrap())
+                }
+                _ => mandatory(d),
+            })
+            .collect();
+        Ok(generalize(self.ctx.level(), &MonoType::MathCmd(params)))
+    }
+
     /// Shared by `check_itext`'s `IText::Cmd` and `check_btext`'s
     /// `BText::Cmd`: check a command application's argument count (exact —
     /// every optional param either carries an explicit `?:`/`?*` marker at
@@ -1299,7 +1517,18 @@ impl Checker {
                 self.ctx.enter_level();
                 let tv = self.infer(env, value)?;
                 self.ctx.leave_level();
-                let scheme = self.math_command_scheme(name, tv, ast_span(value))?;
+                // math-split spec §4.4: V0_0_6's `let-math` and V0_1's
+                // `val math` both lower to the SAME `Ast::LetMathIn`
+                // (spec §4.3) — only the SCHEME RULE forks, on
+                // `self.version`, since a `val math` binding's lowering
+                // always synthesizes exactly three trailing ctx/sub/sup
+                // lambdas that `math_command_scheme`'s v0.0.6 rule knows
+                // nothing about.
+                let scheme = if self.version.math_is_split() {
+                    self.math_command_scheme_v01(name, tv, ast_span(value))?
+                } else {
+                    self.math_command_scheme(name, tv, ast_span(value))?
+                };
                 Ok(vec![(name.to_string(), scheme)])
             }
 
@@ -1383,6 +1612,88 @@ impl Checker {
         expand_synonyms(ty, &self.synonyms)
     }
 
+    /// Deregister constructors hidden by a signature seal (Sub-slice 2d-2,
+    /// `v1/module_check.rs`'s ctor-hide trigger — see that module's doc
+    /// comment). Each entry is removed only if the currently-registered
+    /// decl's type name matches, guarding against bare-name ctor collisions
+    /// (`Checker.ctors` is last-writer-wins program-globally, 0.0.6-
+    /// inherited): if a LATER unsealed variant re-registered the same ctor
+    /// name after this one, its entry survives the hide untouched.
+    pub(crate) fn hide_ctors(&mut self, entries: &[(String, String)]) {
+        for (ctor, tyname) in entries {
+            if self.ctors.get(ctor).is_some_and(|d| &d.name == tyname) {
+                self.ctors.remove(ctor);
+            }
+        }
+    }
+
+    /// `f ?(l = e, …) arg` — SATySFi 0.1 labeled-optional application
+    /// inference. Kept OUT of the hot [`Checker::infer`] match (via
+    /// `#[inline(never)]`) so its labeled-optional locals (`Vec`, `Row`) do
+    /// not enlarge the deeply-recursed `infer` stack frame — see
+    /// `infer_lambda_opt`.
+    #[inline(never)]
+    fn infer_apply_opt(
+        &mut self,
+        env: &TypeEnv,
+        func: &Ast,
+        opts: &[(String, Ast)],
+        arg: &Ast,
+    ) -> Result<MonoType, TypeError> {
+        let tf = self.infer(env, func)?;
+        let ta = self.infer(env, arg)?;
+        let tr = self.fresh();
+        let mut opt_tys = Vec::with_capacity(opts.len());
+        for (label, e) in opts {
+            opt_tys.push((label.clone(), self.infer(env, e)?));
+        }
+        let mut row = Row::Var(self.ctx.fresh_row_var());
+        for (label, ty) in opt_tys.into_iter().rev() {
+            row = Row::Cons(label, Box::new(ty), Box::new(row));
+        }
+        self.unify_ctx(
+            &tf,
+            &MonoType::Func(Box::new(row), Box::new(ta), Box::new(tr.clone())),
+            ast_span(func),
+            "function application",
+        )?;
+        Ok(tr)
+    }
+
+    /// `fun ?(l = x, …) p -> body` — SATySFi 0.1 labeled-optional lambda
+    /// inference. Kept OUT of the hot [`Checker::infer`] match
+    /// (`#[inline(never)]`): `infer` recurses to the AST depth of the program
+    /// under check, and Rust sizes a function's stack frame to its LARGEST
+    /// match arm's locals; inlining this arm's `env.clone()` + `Vec`/`Row`
+    /// locals into every `infer` frame measurably enlarged the deep recursion
+    /// (enough to overflow the test harness's small default thread stack on a
+    /// big merged program). Extracting it restores `infer`'s frame to its
+    /// pre-optional-arg size.
+    #[inline(never)]
+    fn infer_lambda_opt(
+        &mut self,
+        env: &TypeEnv,
+        opts: &[(String, String)],
+        param: &str,
+        body: &Ast,
+    ) -> Result<MonoType, TypeError> {
+        let mut inner = env.clone();
+        let mut opt_tys = Vec::with_capacity(opts.len());
+        for (label, binder) in opts {
+            let tl = self.fresh();
+            inner = inner.with(binder.clone(), PolyType::mono(t_option(tl.clone())));
+            opt_tys.push((label.clone(), tl));
+        }
+        let tp = self.fresh();
+        inner = inner.with(param.to_string(), PolyType::mono(tp.clone()));
+        let tb = self.infer(&inner, body)?;
+        let mut row = Row::Empty;
+        for (label, tl) in opt_tys.into_iter().rev() {
+            row = Row::Cons(label, Box::new(tl), Box::new(row));
+        }
+        Ok(MonoType::Func(Box::new(row), Box::new(tp), Box::new(tb)))
+    }
+
     fn infer(&mut self, env: &TypeEnv, ast: &Ast) -> Result<MonoType, TypeError> {
         match ast {
             Ast::Unit => Ok(t_unit()),
@@ -1408,9 +1719,22 @@ impl Checker {
                 let tf = self.infer(env, f)?;
                 let ta = self.infer(env, a)?;
                 let tr = self.fresh();
+                // Version-split the optional-argument row: 0.0.6 functions
+                // provably carry no labeled optionals (`Row::Empty`, matching
+                // `arrow()` and every prim), so this stays byte-identical
+                // there. Under 0.1 a fresh open row var absorbs the callee's
+                // declared optional row, letting a *plain* call of an
+                // opt-taking function typecheck (defaulting every optional to
+                // `None` at run time) and making higher-order code
+                // row-polymorphic after generalization.
+                let opts_row = if self.version.has_row_polymorphism() {
+                    Row::Var(self.ctx.fresh_row_var())
+                } else {
+                    Row::Empty
+                };
                 self.unify_ctx(
                     &tf,
-                    &arrow(ta, tr.clone()),
+                    &MonoType::Func(Box::new(opts_row), Box::new(ta), Box::new(tr.clone())),
                     ast_span(f),
                     "function application",
                 )?;
@@ -1423,6 +1747,21 @@ impl Checker {
                 let tb = self.infer(&inner, body)?;
                 Ok(arrow(tp, tb))
             }
+
+            // `f ?(l = e, …) arg` (SATySFi 0.1; upstream typechecker.ml's
+            // `Apply(labmap, …)`). The callee must unify with a function
+            // whose optional row carries at least each supplied `l : τ_l`,
+            // with an open tail (a fresh row var) for any further optionals
+            // the callee declares that this call omits.
+            Ast::ApplyOpt { func, opts, arg } => self.infer_apply_opt(env, func, opts, arg),
+
+            // `fun ?(l = x, …) p -> body` (SATySFi 0.1; upstream
+            // `Function(evid_labmap, …)`). Each labeled optional binder `x`
+            // is bound at `option τ_l` inside the body; the resulting
+            // function type carries a CLOSED row `?(l : τ_l, …)` — the very
+            // same fresh `τ_l` shared between the binder's `option τ_l` and
+            // the row's `Cons(l, τ_l)`.
+            Ast::LambdaOpt { opts, param, body } => self.infer_lambda_opt(env, opts, param, body),
 
             Ast::LetIn(name, value, body) => {
                 let schemes = self.infer_binding(env, BindingView::Let { name, value })?;
@@ -2014,7 +2353,7 @@ fn peel_func_chain(ty: MonoType) -> (Vec<MonoType>, MonoType) {
     let mut cur = ty;
     loop {
         match resolve(&cur) {
-            MonoType::Func(dom, cod) => {
+            MonoType::Func(_row, dom, cod) => {
                 doms.push(*dom);
                 cur = *cod;
             }
@@ -2301,13 +2640,13 @@ mod sig_constraint_tests {
         let mut ctx = TypeContext::new();
         let mut saw_record_kind = false;
         for item in &sig.items {
-            let (name, ty) = lower_sig_item(item, &mut ctx).expect("a value item");
+            let (name, ty) = lower_sig_item(item, &mut ctx, SatysfiVersion::V0_0_6).expect("a value item");
             assert_eq!(name, "document");
             // Walk the lowered `Func` chain: `'a`'s fresh variable is the
             // very first domain (`Func(Var('a), Func(option(config),
             // Func(block-text, document)))` — see `lower_type_expr`'s doc
             // comment for the `?->` shape).
-            if let MonoType::Func(dom, _) = &ty {
+            if let MonoType::Func(_row, dom, _) = &ty {
                 if let MonoType::Var(v) = &**dom {
                     if let Kind::Record(labels) = v.kind() {
                         saw_record_kind = true;
@@ -2400,7 +2739,7 @@ mod sig_constraint_tests {
         let mut ctx = TypeContext::new();
         let mut names = Vec::new();
         for item in &sig.items {
-            let (name, _ty) = lower_sig_item(item, &mut ctx).expect("a value item");
+            let (name, _ty) = lower_sig_item(item, &mut ctx, SatysfiVersion::V0_0_6).expect("a value item");
             names.push(name);
         }
         assert_eq!(

@@ -1,0 +1,46 @@
+% pair.satyg — SATySFi 0.1 stdlib `Pair`, vendored for Legacy packaging
+% (docs/plans/satysfi-0-1-0-support.md §2 P2 / §4 phase 6).
+% Source: saphe-split@b836d512:lib-satysfi/packages/stdlib/stdlib.0.0.1/
+%   src/pair.satyg — transliteration deltas:
+%   - T1: `use open Basic` dropped; `@require: basic` added.
+%   - T2: bare `ordering` (in `compare`'s callback types) -> `Basic.ordering`.
+%   - T3: `val persistent ~name 'a 'b … : …` -> `val name 'a 'b … : …`; the
+%     `~lift` member dropped outright.
+
+@require: basic
+
+module Pair :> sig
+  val compare 'a 'b : ('a -> 'a -> Basic.ordering) -> ('b -> 'b -> Basic.ordering) -> 'a * 'b -> 'a * 'b -> Basic.ordering
+  val equal 'a 'b : ('a -> 'a -> bool) -> ('b -> 'b -> bool) -> 'a * 'b -> 'a * 'b -> bool
+  val show 'a 'b : ('a -> string) -> ('b -> string) -> 'a * 'b -> string
+  val first 'a 'b : 'a * 'b -> 'a
+  val second 'a 'b : 'a * 'b -> 'b
+  val map-first 'a1 'a2 'b : ('a1 -> 'a2) -> 'a1 * 'b -> 'a2 * 'b
+  val map-second 'a 'b1 'b2 : ('b1 -> 'b2) -> 'a * 'b1 -> 'a * 'b2
+end = struct
+
+  val compare comp-x comp-y (x1, y1) (x2, y2) =
+    match comp-x x1 x2 with
+    | Equal -> comp-y y1 y2
+    | other -> other
+    end
+
+  val equal eq-x eq-y (x1, y1) (x2, y2) =
+    eq-x x1 x2 && eq-y y1 y2
+
+  val show sh-x sh-y (x, y) =
+    `(` ^ sh-x x ^ `, `# ^ sh-y y ^ `)`
+
+  val first (x, _) =
+    x
+
+  val second (_, y) =
+    y
+
+  val map-first f (x, y) =
+    (f x, y)
+
+  val map-second f (x, y) =
+    (x, f y)
+
+end

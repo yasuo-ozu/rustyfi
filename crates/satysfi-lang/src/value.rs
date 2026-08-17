@@ -54,6 +54,15 @@ pub enum Value {
     /// (see `primitives.rs`'s `as_math`, which accepts either, reflecting a
     /// `MathText`'s `MathElem` tree into `Math` nodes on the fly).
     Math(Rc<Vec<Math>>),
+    /// `math-boxes` (V0_1 only; `BaseType::MathBoxes`) — the evaluated math
+    /// tree `read-math` produces, wrapping the SAME `Math` atom tree
+    /// `Value::Math` uses so every layout/primitive helper is shared
+    /// unchanged (math-split spec §1.2). Distinct from `Value::Math`: no
+    /// V0_0_6 primitive ever produces or consumes this variant, and no V0_1
+    /// primitive ever produces `Value::Math` — the two are kept apart so a
+    /// V0_1 program can't silently pass a `math-text` where `math-boxes` is
+    /// required (`as_math_boxes` is strict).
+    MathBoxes(Rc<Vec<Math>>),
     /// A mutable cell (`let-mutable`'s binding; v0.0.6's `Location`/store
     /// entry). This port uses a directly-shared `RefCell` instead of an
     /// indirection through a separate store table.
@@ -71,6 +80,11 @@ pub enum Value {
     Image(ImageId),
     Document(Rc<DocumentValue>),
     Closure {
+        /// SATySFi 0.1 labeled optional parameters (`label` → `binder`),
+        /// empty for every 0.0.6-built closure. Each binder receives an
+        /// `option`-typed value at application (`Some v` when the call
+        /// supplies `?(label = v)`, `None` otherwise).
+        opt_params: Vec<(String, String)>,
         param: String,
         body: Rc<Ast>,
         env: Env,
@@ -83,6 +97,8 @@ pub enum Value {
     /// tree-walking `eval` never produces this; the compiled path never
     /// produces `Closure`.
     CompiledClosure {
+        /// See [`Value::Closure::opt_params`].
+        opt_params: Vec<(String, String)>,
         param: String,
         body: CompiledExpr,
         env: Env,
@@ -123,6 +139,7 @@ impl Value {
             Value::BlockText { .. } => "block-text",
             Value::MathText { .. } => "math",
             Value::Math(_) => "math",
+            Value::MathBoxes(_) => "math-boxes",
             Value::Ref(_) => "mutable",
             Value::InlineBoxes(_) => "inline-boxes",
             Value::BlockBoxes(_) => "block-boxes",
@@ -199,6 +216,17 @@ pub enum Math {
     /// (`\sum^n_i`-style). The closure is carried opaquely, same as
     /// `Paren`'s; only actually invoked by the real layout engine.
     PullInScripts(MathKind, MathKind, Box<Value>),
+    /// V0_1 only: `read-math`'s captured reading context (math-split spec
+    /// §1.2/§3.3) — the port's coarse-grained stand-in for upstream's
+    /// per-node `context` fields (`types.cppo.ml:1051-1110`). Constructed
+    /// ONLY by the V0_1 primitive `read-math`; no V0_0_6 path ever builds
+    /// or matches this variant. Its layout arm (`primitives.rs`'s
+    /// `layout_math_list`) lays `inner` out with ambient context = `*ctx`
+    /// and size = `ctx.font_size` as an ABSOLUTE override — a `WithContext`
+    /// produced under an `enter_script`ed context already carries the
+    /// script-shrunk size, so the engine's own Sup/Sub shrink never
+    /// double-applies to it (see risk 3 in the math-split spec).
+    WithContext(Box<Context>, Vec<Math>),
 }
 
 /// The base-atom payload of [`Math::Pure`] — mirrors upstream
@@ -248,6 +276,16 @@ pub enum MathElement {
     /// layout time, where the current `Context::font`/`math_char_class` are
     /// available to metrics-probe the remap (`resolve_variant_char`).
     VariantCharPending(String),
+    /// V0_1 only: `embed-inline-to-math`'s payload — already-evaluated
+    /// inline boxes carrying an explicit math class (math-split spec §1.2).
+    /// Contrast `EmbeddedText`'s 0.0.6 closure (evaluated lazily at layout
+    /// time under a `context`); this is eager, already-materialized data,
+    /// matching upstream's `embed_inline_to_math` (which has no context to
+    /// re-apply a closure under). Layout: the same deliberately-cheap
+    /// stand-in rendering path `EmbeddedText` gets today (roadmap E,
+    /// `docs/plans/math-engine.md`) — `math_glyphs_of_inline_boxes` over
+    /// `boxes` directly, no closure application.
+    EmbeddedBoxes { class: MathKind, boxes: Vec<HorzBox> },
 }
 
 /// `math-variant-char`'s 9-field per-style codepoint record

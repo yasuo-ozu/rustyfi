@@ -140,7 +140,7 @@ fn drawn_fills(rules: &[GraphicsElem]) -> Vec<(Color, (Length, Length), (Length,
         .iter()
         .filter_map(|r| match r {
             GraphicsElem::Fill(color, _) => {
-                let (lo, hi) = graphics_bbox(r);
+                let (lo, hi) = graphics_bbox(r).expect("nonempty graphics");
                 if lo == hi {
                     None // a single-point "extent marker", not real ink
                 } else {

@@ -210,10 +210,51 @@ impl<'b> Compiler<'b> {
                 let cbody = self.in_frame([param.clone()], |c| c.compile(body));
                 CompiledExpr::new(move |env, _| {
                     Ok(Value::CompiledClosure {
+                        opt_params: Vec::new(),
                         param: param.clone(),
                         body: cbody.clone(),
                         env: env.clone(),
                     })
+                })
+            }
+            // `fun ?(l = x, …) p -> body` (SATySFi 0.1). The compiled body
+            // sees the optional binders plus the positional param in scope
+            // (they are bound at application by `Interp::apply_with_opts`).
+            Ast::LambdaOpt { opts, param, body } => {
+                let opts = opts.clone();
+                let param = param.clone();
+                let binders: Vec<String> = opts
+                    .iter()
+                    .map(|(_, b)| b.clone())
+                    .chain(std::iter::once(param.clone()))
+                    .collect();
+                let cbody = self.in_frame(binders, |c| c.compile(body));
+                CompiledExpr::new(move |env, _| {
+                    Ok(Value::CompiledClosure {
+                        opt_params: opts.clone(),
+                        param: param.clone(),
+                        body: cbody.clone(),
+                        env: env.clone(),
+                    })
+                })
+            }
+            // `f ?(l = e, …) arg` (SATySFi 0.1) — mirror `Ast::Apply` minus
+            // the saturated-prim fast path (prims reject optionals anyway).
+            Ast::ApplyOpt { func, opts, arg } => {
+                let cf = self.compile(func);
+                let copts: Vec<(String, CompiledExpr)> = opts
+                    .iter()
+                    .map(|(l, e)| (l.clone(), self.compile(e)))
+                    .collect();
+                let ca = self.compile(arg);
+                CompiledExpr::new(move |env, interp| {
+                    let func = cf.run(env, interp)?;
+                    let mut opt_vals = Vec::with_capacity(copts.len());
+                    for (l, ce) in &copts {
+                        opt_vals.push((l.clone(), ce.run(env, interp)?));
+                    }
+                    let arg = ca.run(env, interp)?;
+                    interp.apply_with_opts(func, opt_vals, arg)
                 })
             }
             Ast::LetIn(name, value, rest) => {
@@ -688,6 +729,51 @@ mod tests {
             ),
             (t, c) => panic!("ok/err mismatch: tree={t:?} compiled={c:?}"),
         }
+    }
+
+    /// SATySFi 0.1 labeled-optional lambda/application (`LambdaOpt`/
+    /// `ApplyOpt`): the compiled path and the tree-walker must agree on the
+    /// `Some`/`None` defaulting — a provided `?(bias = e)` binds `Some e`, an
+    /// omitted one (a plain apply of an opt-closure) binds `None`.
+    #[test]
+    fn cross_check_labeled_optionals() {
+        use std::rc::Rc;
+        // `fun ?(bias = b) x -> x + (match b with None -> 0 | Some v -> v end)`
+        let body = app2(
+            "+",
+            var("x"),
+            Ast::Match(
+                Box::new(var("b")),
+                vec![
+                    MatchArm {
+                        pat: Pattern::Ctor("None".to_string(), None),
+                        guard: None,
+                        body: Ast::Int(0),
+                    },
+                    MatchArm {
+                        pat: Pattern::Ctor(
+                            "Some".to_string(),
+                            Some(Box::new(Pattern::Var("v".to_string()))),
+                        ),
+                        guard: None,
+                        body: var("v"),
+                    },
+                ],
+            ),
+        );
+        let lam = Ast::LambdaOpt {
+            opts: vec![("bias".to_string(), "b".to_string())],
+            param: "x".to_string(),
+            body: Rc::new(body),
+        };
+        // provided `?(bias = 40) 2` -> 42
+        assert_agree(&Ast::ApplyOpt {
+            func: Box::new(lam.clone()),
+            opts: vec![("bias".to_string(), Ast::Int(40))],
+            arg: Box::new(Ast::Int(2)),
+        });
+        // omitted (plain apply of an opt-closure) -> bias defaults None -> 2
+        assert_agree(&app1(lam, Ast::Int(2)));
     }
 
     #[test]

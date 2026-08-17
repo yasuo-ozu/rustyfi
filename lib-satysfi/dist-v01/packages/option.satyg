@@ -1,0 +1,69 @@
+% option.satyg — SATySFi 0.1 stdlib `Option`, vendored for Legacy packaging
+% (docs/plans/satysfi-0-1-0-support.md §2 P2 / §4 phase 6).
+% Source: saphe-split@b836d512:lib-satysfi/packages/stdlib/stdlib.0.0.1/
+%   src/option.satyg — transliteration deltas:
+%   - T1: `use open Basic` dropped; `@require: basic` added.
+%   - T2: bare `ordering` (inside the `compare`/`equal` callback types) ->
+%     `Basic.ordering`.
+%   - T3: `val persistent ~name 'a … : …` -> `val name 'a … : …` (quantified
+%     sig decls, `Decl::Val.quant`, landed); the `~lift` member (and its
+%     `&(…)`/`~(…)` quoting body) dropped outright.
+
+@require: basic
+
+module Option :> sig
+  type t 'a = option 'a
+  val compare 'a : ('a -> 'a -> Basic.ordering) -> option 'a -> option 'a -> Basic.ordering
+  val equal 'a : ('a -> 'a -> bool) -> option 'a -> option 'a -> bool
+  val map 'a 'b : ('a -> 'b) -> option 'a -> option 'b
+  val pure 'a : 'a -> option 'a
+  val bind 'a 'b : option 'a -> ('a -> option 'b) -> option 'b
+  val from 'a : 'a -> option 'a -> 'a
+  val is-none 'a : option 'a -> bool
+end = struct
+
+  type t 'a = option 'a
+
+  val compare comp opt1 opt2 =
+    match (opt1, opt2) with
+    | (None, None)         -> Equal
+    | (None, Some(_))      -> Less
+    | (Some(_), None)      -> Greater
+    | (Some(v1), Some(v2)) -> comp v1 v2
+    end
+
+  val equal eq opt1 opt2 =
+    match (opt1, opt2) with
+    | (None, None)         -> true
+    | (Some(v1), Some(v2)) -> eq v1 v2
+    | _                    -> false
+    end
+
+  val map f opt =
+    match opt with
+    | None    -> None
+    | Some(v) -> Some(f v)
+    end
+
+  val pure v =
+    Some(v)
+
+  val bind opt f =
+    match opt with
+    | None    -> None
+    | Some(v) -> f v
+    end
+
+  val from a opt =
+    match opt with
+    | None    -> a
+    | Some(v) -> v
+    end
+
+  val is-none opt =
+    match opt with
+    | None    -> true
+    | Some(_) -> false
+    end
+
+end

@@ -1,0 +1,52 @@
+% ordering.satyg — SATySFi 0.1 stdlib `Ordering`, vendored for Legacy
+% packaging (docs/plans/satysfi-0-1-0-support.md §2 P2 / §4 phase 6).
+% Source: saphe-split@b836d512:lib-satysfi/packages/stdlib/stdlib.0.0.1/
+%   src/ordering.satyg — transliteration deltas:
+%   - T1: `use open Basic` header dropped (Legacy has no `Stdlib` umbrella
+%     to `@require:` against; `Basic`'s members are referenced directly
+%     below, per T2).
+%   - T2: the bare `ordering` TYPE name (Basic's synonym) is qualified
+%     `Basic.ordering` (LONG_LOWER, Sub-slice 2d-2); the `Less`/`Equal`/
+%     `Greater` CONSTRUCTORS stay bare (the Ctor carve-out) — this file is
+%     the deliberately-early R4 smoke test for cross-file qualified-type
+%     identity (`Basic.ordering` declared in `basic.satyg`, matched here).
+%   - T3: `val persistent ~name … = …` -> `val name … = …`; the `~lift`
+%     member (and its `&(…)` quoting bodies) dropped outright.
+%   `@require: basic` added (T1's concrete form).
+
+@require: basic
+
+module Ordering :> sig
+  type t = Basic.ordering
+  val compare : Basic.ordering -> Basic.ordering -> Basic.ordering
+  val equal : Basic.ordering -> Basic.ordering -> bool
+  val show : Basic.ordering -> string
+end = struct
+
+  type t = Basic.ordering
+
+  val compare o1 o2 =
+    match (o1, o2) with
+    | (Less, Less)       -> Equal
+    | (Less, _)          -> Less
+    | (_, Less)          -> Greater
+    | (Equal, Equal)     -> Equal
+    | (Equal, Greater)   -> Less
+    | (Greater, Equal)   -> Greater
+    | (Greater, Greater) -> Equal
+    end
+
+  val equal o1 o2 =
+    match compare o1 o2 with
+    | Equal -> true
+    | _     -> false
+    end
+
+  val show o =
+    match o with
+    | Less    -> `Less`
+    | Equal   -> `Equal`
+    | Greater -> `Greater`
+    end
+
+end

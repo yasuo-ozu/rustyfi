@@ -119,14 +119,15 @@ impl Lexer {
     /// `V0_1` these words still lex the same way (e.g. `let-rec`/`when`/
     /// `while`/`before` simply have no corresponding grammar rule in
     /// `cst_v1.rs`, so using them there is a *parse* error, not a lex
-    /// error). Only the six Slice-1/Sub-slice-2b/Sub-slice-2c additions
-    /// (`rec`/`inline`/`block`/`mutable`/`signature`/`include`) are
-    /// version-gated: SATySFi 0.1's `val rec`/`val inline`/`val
-    /// block`/`val mutable` binds and `signature …`/`include …` binds/decls
-    /// need them as keywords, but 0.0.6 source may use any of them as an
-    /// ordinary identifier (there is no 0.0.6 grammar that would want them
-    /// as keywords), so gating keeps `lex`/`lex_with_version(_, V0_0_6)`
-    /// byte-identical to before this change.
+    /// error). Only the nine Slice-1/Sub-slice-2b/Sub-slice-2c/Axis-B/
+    /// math-split additions (`rec`/`inline`/`block`/`mutable`/`signature`/
+    /// `include`/`use`/`package`/`math`) are version-gated: SATySFi 0.1's
+    /// `val rec`/`val inline`/`val block`/`val mutable`/`val math` binds,
+    /// `signature …`/`include …` binds/decls, and `use …`/`use package …`
+    /// headers need them as keywords, but 0.0.6 source may use any of them
+    /// as an ordinary identifier (there is no 0.0.6 grammar that would want
+    /// them as keywords), so gating keeps `lex`/`lex_with_version(_,
+    /// V0_0_6)` byte-identical to before this change.
     fn keyword(&self, s: &str) -> Option<Token> {
         use Token::*;
         if let Some(tok) = match s {
@@ -186,6 +187,7 @@ impl Lexer {
                 "include" => Some(Include),
                 "use" => Some(Use),
                 "package" => Some(Package),
+                "math" => Some(Math),
                 _ => None,
             };
         }
@@ -543,16 +545,32 @@ impl Lexer {
                     return Ok(());
                 }
                 '\\' => {
+                    // `command \cmd` / `command \Mod.cmd` (gap 4 of the
+                    // V0_1 language-completeness sweep): a first-class
+                    // `command`-value in program position must accept a
+                    // module-qualified name exactly like inline-text mode's
+                    // own `\` handling does (`lex_horizontal`, below) —
+                    // switched from a plain `name_len_at` scan to the same
+                    // `scan_dotted` dotted-path scanner, emitting
+                    // `Token::HorzCmdWithMod` when a `Mod.` prefix was
+                    // present. No mode-stack change either way (program
+                    // mode never pushes a new mode for a bare `\cmd`
+                    // atomic, unlike inline-text mode) — the fix is
+                    // confined to this one arm.
                     self.bump();
-                    let Some(len) = self.name_len_at(0) else {
+                    let Some((mods, name, _)) = self.scan_dotted() else {
                         return self.error(start, "illegal token '\\' in a program area");
                     };
-                    let name = format!("\\{}", self.take(len));
-                    if self.peek() == Some('@') {
-                        self.bump();
-                        self.emit(start, Token::HorzMacro(format!("{name}@")));
+                    let cmd_name = format!("\\{name}");
+                    if mods.is_empty() {
+                        if self.peek() == Some('@') {
+                            self.bump();
+                            self.emit(start, Token::HorzMacro(format!("{cmd_name}@")));
+                        } else {
+                            self.emit(start, Token::HorzCmd(cmd_name));
+                        }
                     } else {
-                        self.emit(start, Token::HorzCmd(name));
+                        self.emit(start, Token::HorzCmdWithMod(mods, cmd_name));
                     }
                     return Ok(());
                 }
@@ -722,20 +740,32 @@ impl Lexer {
                 }
                 '?' => {
                     self.bump();
-                    let tok = match self.peek() {
-                        Some(':') => {
-                            self.bump();
-                            Token::Optional
+                    // SATySFi 0.1 removed the fused `?:`/`?*`/`?->` optional
+                    // sigils: a bare `?` is the only `?`-headed token (it
+                    // heads a `?(l = e, …)` labeled-optional bundle, lexed as
+                    // `OptionalType` + a paren group). So under V0_1 emit only
+                    // `OptionalType`; `?:`/`?*`/`?->` then lex as `?` + `:`/`*`
+                    // /`->`, a downstream parse error, matching upstream.
+                    // Under V0_0_6 this stays byte-identical (pinned by
+                    // `lex_with_version_differential.rs`).
+                    let tok = if self.version == SatysfiVersion::V0_1 {
+                        Token::OptionalType
+                    } else {
+                        match self.peek() {
+                            Some(':') => {
+                                self.bump();
+                                Token::Optional
+                            }
+                            Some('*') => {
+                                self.bump();
+                                Token::Omission
+                            }
+                            Some('-') if self.peek_at(1) == Some('>') => {
+                                self.bump_n(2);
+                                Token::OptionalArrow
+                            }
+                            _ => Token::OptionalType,
                         }
-                        Some('*') => {
-                            self.bump();
-                            Token::Omission
-                        }
-                        Some('-') if self.peek_at(1) == Some('>') => {
-                            self.bump_n(2);
-                            Token::OptionalArrow
-                        }
-                        _ => Token::OptionalType,
                     };
                     self.emit(start, tok);
                     return Ok(());

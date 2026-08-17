@@ -557,7 +557,7 @@ leaf_eq! {
         SubscriptTok, SepTok, BMathGrpTok, EMathGrpTok, HorzCmdTypeTok,
         VertCmdTypeTok, MathCmdTypeTok, OptionalTypeTok, OptionalArrowTok,
         ConstraintTok, CommandTok, KwRec, KwInline, KwBlock, KwMutable,
-        CoerceTok, KwSignature, KwInclude, KwUse, KwPackage;
+        CoerceTok, KwSignature, KwInclude, KwUse, KwPackage, KwMath;
     with_fields:
         VarTok { name }, CtorTok { name }, IntTok { value }, FloatTok { value },
         HorzCmdTok { name }, VertCmdTok { name }, CharTok { text }, ItemTok { depth },

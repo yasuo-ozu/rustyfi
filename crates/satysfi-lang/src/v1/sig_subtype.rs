@@ -71,7 +71,11 @@ pub(crate) fn val_subsumes(
 fn mono_mentions_stamp(ty: &MonoType, marker: &str) -> bool {
     match resolve(ty) {
         MonoType::Var(_) | MonoType::Base(_) => false,
-        MonoType::Func(a, b) => mono_mentions_stamp(&a, marker) || mono_mentions_stamp(&b, marker),
+        MonoType::Func(row, a, b) => {
+            row_mentions_stamp(&row, marker)
+                || mono_mentions_stamp(&a, marker)
+                || mono_mentions_stamp(&b, marker)
+        }
         MonoType::Product(ts) => ts.iter().any(|t| mono_mentions_stamp(t, marker)),
         MonoType::List(t) | MonoType::Ref(t) => mono_mentions_stamp(&t, marker),
         MonoType::Record(row) => row_mentions_stamp(&row, marker),
@@ -181,5 +185,32 @@ mod tests {
         let instantiated = instantiate(&inferred, level);
         unify(&declared, &instantiated).expect("unify should succeed structurally");
         assert!(!mono_mentions_stamp(inferred.body(), "#6"));
+    }
+
+    /// Sub-slice 2d-2 spec §5 U14b: interleaved mint draws for the
+    /// ABSTRACT-TYPE stamp shape (`"M.t#1"`, `module_check.rs`'s opaque
+    /// stamping — distinct from this test file's own skolemized-tyvar
+    /// shape `"'a#7"`, but the exact same suffix-probe mechanism). A
+    /// module member whose inferred scheme mentions an abstract-type stamp
+    /// minted by an EARLIER, unrelated `Decl::TypeOpaque` (`"M.t#1"`) must
+    /// not false-positive THIS val decl's own escape check (marker `"#2"`,
+    /// a later, distinct draw) — the same per-draw-uniqueness argument as
+    /// [`unrelated_stamp_marker_does_not_escape`], made empirical for the
+    /// shape 2d-2 actually mints.
+    #[test]
+    fn interleaved_abstract_type_stamp_does_not_escape() {
+        let mut c = ctx();
+        let inferred = PolyType::mono(crate::prim_types::arrow(
+            MonoType::Base(types::BaseType::Unit),
+            MonoType::Variant("M.t#1".to_string(), Vec::new()),
+        ));
+        let declared = crate::prim_types::arrow(
+            MonoType::Base(types::BaseType::Unit),
+            MonoType::Variant("M.t#1".to_string(), Vec::new()),
+        );
+        // THIS check's own marker ("#2") is a DIFFERENT draw than the one
+        // baked into the inferred scheme's nominal ("#1") — subsumption
+        // must still succeed (structural/nominal match) with no escape.
+        assert!(val_subsumes(&mut c, &inferred, &declared, "#2").is_ok());
     }
 }

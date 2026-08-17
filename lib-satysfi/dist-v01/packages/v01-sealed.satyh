@@ -1,0 +1,43 @@
+% v01-sealed.satyh — SATySFi 0.1 (dev-0-1-0) sealed-module fixture for
+% Sub-slice 2d-2 (opaque types + ctor hiding + command-type decls +
+% LONG_LOWER qualified type names, `…/tmp/slice2d2-opaque-types.md`). This
+% is the spec's own worked example (§3), packaged as the first SEALED 0.1
+% library to reach the CLI e2e suite (E1) — Sub-slice 2d-1 deferred this
+% fixture since it had nothing sealable to seal yet (no type/command
+% members existed before 2d-2).
+%
+% `V01Sealed.t` is opaque outside this module (`type t :: o`): only
+% `make`/`get`/`\show` can construct or inspect one; its single constructor
+% `T` is deregistered at the module's seal point (`\show`'s alias commit,
+% the module's last value member) and unreachable from outside.
+%
+% `v01-mini.satyh` stays UNSEALED and byte-identical: its `document` member
+% takes a record argument, and record types in v1 TYPE position are still a
+% parse error in this port's Slice-1 type grammar — sealing it would hide
+% `document` entirely. See that file's own header comment.
+
+module V01Sealed :> sig
+
+  type t :: o
+
+  val make : int -> t
+
+  val get : t -> int
+
+  val \show : inline [t]
+
+end = struct
+
+  type t = | T of int
+
+  val make n = T n
+
+  val get x =
+    match x with
+    | T n -> n
+    end
+
+  val inline ctx \show x =
+    read-inline ctx (embed-string (arabic (get x)))
+
+end

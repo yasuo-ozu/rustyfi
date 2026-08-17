@@ -17,7 +17,7 @@
 
 module V01Mini = struct
 
-  val inline ctx \math m = embed-math ctx m
+  val inline ctx \math m = embed-math ctx (read-math ctx m)
 
   val document record bt =
     let ctx = get-initial-context 440pt (command \math) in

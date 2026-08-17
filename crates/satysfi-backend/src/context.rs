@@ -38,6 +38,19 @@ pub enum Language {
     NoLanguageSystem,
 }
 
+/// SATySFi 0.1's `math_script_level` (`dev-0-1-0 src/backend/horzBox.ml:
+/// 139-142`) — how many script-nesting levels deep the current math reading
+/// context sits, consulted by [`Context::math_script_level`]. V0_0_6 never
+/// reads this field (its script-size shrink is a fixed per-call constant,
+/// not context-carried); it exists purely for V0_1's `read-math`/`enter-
+/// script` (`satysfi-lang`'s `enter_script`, math-split spec §3.3).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MathScriptLevel {
+    Base,
+    Script,
+    ScriptScript,
+}
+
 /// One script's font selection within a `Context::font_scheme` (D1b,
 /// `docs/plans/text-rendering.md` §1): upstream `font_with_ratio`
 /// (`horzBox.ml`) folded into a plain struct. `ratio` scales `ctx.font_size`
@@ -156,6 +169,11 @@ pub struct Context {
     /// cheap-clone reason as `math_class_map`; `set-math-variant-char`
     /// copy-on-writes it via `Arc::make_mut`.
     pub math_variant_char_map: Arc<BTreeMap<(char, MathCharClass), char>>,
+    /// V0_1-only: how many script-nesting levels deep this reading context
+    /// sits (`math-split` spec §3.3's `enter_script`, port of `dev-0-1-0
+    /// src/frontend/context.ml:52-68`). `Base` under V0_0_6 always — no
+    /// V0_0_6 code path ever reads or bumps this field.
+    pub math_script_level: MathScriptLevel,
 }
 
 impl Context {
@@ -193,6 +211,7 @@ impl Context {
             math_char_class: MathCharClass::Italic,
             math_class_map: Arc::new(default_math_class_map()),
             math_variant_char_map: Arc::new(BTreeMap::new()),
+            math_script_level: MathScriptLevel::Base,
         }
     }
 }

@@ -55,6 +55,28 @@ pub enum Ast {
     AccessField(Box<Ast>, String, Span),
     /// `(| e with label = v |)` (`UTUpdateField`) — functional record update.
     UpdateField(Box<Ast>, String, Box<Ast>),
+    /// `f ?(l = e, …) arg` — SATySFi 0.1 labeled-optional application
+    /// (upstream `Apply(labmap, e1, e2)`). `opts` is non-empty by
+    /// construction: a bundle-less 0.1 application lowers to plain
+    /// [`Ast::Apply`]. Labels are deduplicated at elaboration. At
+    /// beta-reduction a provided `?(l = e)` binds the closure's `l` binder to
+    /// `Some e`; any of the closure's declared labels the call omits bind
+    /// `None` (see `eval::Interp::apply_with_opts`).
+    ApplyOpt {
+        func: Box<Ast>,
+        opts: Vec<(String, Ast)>,
+        arg: Box<Ast>,
+    },
+    /// `fun ?(l = x, …) p -> body` — SATySFi 0.1 labeled-optional lambda
+    /// (upstream `Function(evid_labmap, patbr)`). `opts` maps each label to
+    /// the binder name that receives its `option`-typed value. Pattern
+    /// params are pre-desugared (by `elaborate`) to a fresh var + `Match`,
+    /// like `rec_clause_value`, so `param` here is always a plain binder.
+    LambdaOpt {
+        opts: Vec<(String, String)>,
+        param: String,
+        body: Rc<Ast>,
+    },
 }
 
 /// One quoted math element (structure mirrors the `mathmain`/`mathtop`/

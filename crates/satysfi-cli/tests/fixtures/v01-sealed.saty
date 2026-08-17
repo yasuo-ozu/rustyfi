@@ -1,0 +1,10 @@
+@require: v01-mini
+@require: v01-sealed
+
+let v = V01Sealed.make 41 in
+let answer = embed-string (arabic (V01Sealed.get v + 1)) in
+let open V01Mini in
+document (| title = `v01 sealed` |) '<
+  +p { The answer is #answer;. }
+  +p { Sealed says: \V01Sealed.show(V01Sealed.make 7); }
+>

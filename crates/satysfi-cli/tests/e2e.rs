@@ -1060,3 +1060,179 @@ fn v01_slice1_document_renders_to_extractable_text() {
         let _ = std::fs::remove_file(&tmp);
     });
 }
+
+/// Sub-slice 2d-2 (opaque types + ctor hiding + command-type decls,
+/// `…/tmp/slice2d2-opaque-types.md` §5 E1): the first SEALED SATySFi 0.1
+/// package to reach the CLI e2e suite. `v01-sealed.satyh`'s
+/// `module V01Sealed :> sig … end` seals an opaque `type t`, two plain
+/// `val`s (`make`/`get`) and a command decl (`val \show : inline [t]`);
+/// this fixture both CALLS the sealed value members (`V01Sealed.make`/
+/// `.get`) and the sealed COMMAND (`\V01Sealed.show`) — mirroring
+/// `v01_slice1_document_renders_to_extractable_text` (`lib_root` →
+/// `dist-v01/packages`), the sealed on-disk fixture 2d-1 deferred.
+#[test]
+fn v01_sealed_document_renders_to_extractable_text() {
+    run_with_big_stack(move || {
+        let entry = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/v01-sealed.saty");
+        let program = satysfi_loader::load(
+            &entry,
+            &satysfi_loader::LoadOptions {
+                lib_root: Some(lib_root().join("dist-v01").join("packages")),
+                version: satysfi_syntax::SatysfiVersion::V0_1,
+                ..Default::default()
+            },
+        )
+        .expect("v01-sealed.saty must load");
+        assert_eq!(program.files.len(), 3, "v01-mini.satyh + v01-sealed.satyh + v01-sealed.saty");
+
+        let metrics = satysfi_pdf::Base14Metrics;
+        let doc = satysfi_lang::compile_document_v1(&program.files, &metrics)
+            .expect("the sealed-module capstone must compile end-to-end");
+        assert_eq!(doc.pages.len(), 1);
+        assert!(doc.pages[0].lines.len() >= 2);
+
+        let bytes = satysfi_pdf::render_pdf(&doc.geometry, &doc.pages, &doc.images).unwrap();
+        assert!(bytes.starts_with(b"%PDF-"));
+
+        let tmp =
+            std::env::temp_dir().join(format!("satysfi-rust-e2e-v01-sealed-{}.pdf", std::process::id()));
+        std::fs::write(&tmp, &bytes).unwrap();
+        let pdftotext = Command::new("pdftotext").arg(&tmp).arg("-").output();
+        match pdftotext {
+            Ok(out) if out.status.success() => {
+                let text = String::from_utf8_lossy(&out.stdout);
+                // `V01Sealed.make 41` then `V01Sealed.get v + 1` — the
+                // opaque `t` round-tripped through a sealed val pair.
+                assert!(text.contains("The answer is 42"), "missing sealed val round-trip:\n{text}");
+                // `\V01Sealed.show(V01Sealed.make 7);` — the sealed
+                // COMMAND member, taking an opaque `t`-typed argument.
+                assert!(text.contains("Sealed says: 7"), "missing sealed command output:\n{text}");
+            }
+            _ => eprintln!("skipping text assertion; pdftotext unavailable"),
+        }
+        let _ = std::fs::remove_file(&tmp);
+    });
+}
+
+/// math-split spec §7 acceptance item 1: the `v01-math.saty` capstone —
+/// `${…}` (`a^2 + b^2 = c^2`) and a `val math ctx \frac …` command, both
+/// reaching the page through `read-math` + the V0_1 math prims + the
+/// SHARED (version-agnostic) OpenType MATH layout engine — through the
+/// FULL spine (V0_1 lex -> cst_v1 parse -> loader -> v1 lowering -> shared
+/// elaborate/typecheck(V0_1)/eval -> page-break -> PDF) to a valid,
+/// pdftotext-extractable PDF.
+#[test]
+fn v01_math_document_renders_to_extractable_pdf() {
+    run_with_big_stack(move || {
+        let entry = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/v01-math.saty");
+        let program = satysfi_loader::load(
+            &entry,
+            &satysfi_loader::LoadOptions {
+                lib_root: Some(lib_root().join("dist-v01").join("packages")),
+                version: satysfi_syntax::SatysfiVersion::V0_1,
+                ..Default::default()
+            },
+        )
+        .expect("v01-math.saty must load");
+        assert_eq!(program.files.len(), 2, "v01-mini.satyh + v01-math.saty");
+
+        let metrics = satysfi_pdf::Base14Metrics;
+        let doc = satysfi_lang::compile_document_v1(&program.files, &metrics)
+            .expect("the math-split capstone must compile end-to-end");
+        assert_eq!(doc.pages.len(), 1);
+        assert!(
+            doc.pages[0].lines.len() >= 2,
+            "two +p paragraphs (Pythagoras + Fraction), got {}",
+            doc.pages[0].lines.len()
+        );
+
+        let bytes = satysfi_pdf::render_pdf(&doc.geometry, &doc.pages, &doc.images).unwrap();
+        assert!(bytes.starts_with(b"%PDF-"));
+
+        let tmp =
+            std::env::temp_dir().join(format!("satysfi-rust-e2e-v01-math-{}.pdf", std::process::id()));
+        std::fs::write(&tmp, &bytes).unwrap();
+        let pdftotext = Command::new("pdftotext").arg(&tmp).arg("-").output();
+        match pdftotext {
+            Ok(out) if out.status.success() => {
+                let text = String::from_utf8_lossy(&out.stdout);
+                assert!(text.contains("Pythagoras"), "missing math paragraph 1:\n{text}");
+                assert!(text.contains("Fraction"), "missing math paragraph 2:\n{text}");
+                // The Pythagoras formula's plain-letter atoms (a, b, c) and
+                // digits (2) reach the page as ordinary glyph runs even
+                // though they sit inside `${…}` — pdftotext should still
+                // recover them alongside the prose.
+                for needle in ["a", "b", "c"] {
+                    assert!(
+                        text.contains(needle),
+                        "missing math atom '{needle}' in extracted text:\n{text}"
+                    );
+                }
+            }
+            _ => eprintln!("skipping text assertion; pdftotext unavailable"),
+        }
+        let _ = std::fs::remove_file(&tmp);
+    });
+}
+
+/// L5a (`…/tmp/prim-retype-sweep.md` §4.1): the `v01-strings.saty` capstone
+/// — `register-document-information` (a real preamble binding),
+/// `band`/`normalize-string-to-nfc` reaching the page through `arabic`/
+/// `embed-string` — through the FULL spine (V0_1 lex -> cst_v1 parse ->
+/// loader -> v1 lowering -> shared elaborate/typecheck(V0_1)/eval ->
+/// page-break -> PDF), asserting both the extracted TEXT (bitwise result,
+/// NFC-normalized string) and the `/Info` dictionary this slice adds to
+/// the PDF bytes (`render_pdf_with`, unlike the other v01 capstones above
+/// which use the extras-dropping `render_pdf` wrapper — this one needs
+/// `doc.extras.doc_info` to actually reach the writer, exactly like
+/// `satysfi-cli`'s own `main.rs`).
+#[test]
+fn v01_strings_document_renders_to_extractable_text_and_info_dict() {
+    run_with_big_stack(move || {
+        let entry = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/v01-strings.saty");
+        let program = satysfi_loader::load(
+            &entry,
+            &satysfi_loader::LoadOptions {
+                lib_root: Some(lib_root().join("dist-v01").join("packages")),
+                version: satysfi_syntax::SatysfiVersion::V0_1,
+                ..Default::default()
+            },
+        )
+        .expect("v01-strings.saty must load");
+        assert_eq!(program.files.len(), 2, "v01-mini.satyh + v01-strings.saty");
+
+        let metrics = satysfi_pdf::Base14Metrics;
+        let doc = satysfi_lang::compile_document_v1(&program.files, &metrics)
+            .expect("the L5a scalar/string capstone must compile end-to-end");
+        assert_eq!(doc.pages.len(), 1);
+        assert!(doc.pages[0].lines.len() >= 2, "two +p paragraphs (Bits, NFC)");
+        assert!(doc.extras.doc_info.is_some(), "register-document-information must have registered");
+
+        let bytes = satysfi_pdf::render_pdf_with(&doc.geometry, &doc.pages, &doc.images, &doc.extras)
+            .expect("render_pdf_with must succeed");
+        assert!(bytes.starts_with(b"%PDF-"));
+        let hay = String::from_utf8_lossy(&bytes);
+        for needle in ["/Title", "/Author", "/Keywords", "/Creator (SATySFi)", "/Producer (SATySFi)"] {
+            assert!(hay.contains(needle), "missing {needle:?} in PDF bytes:\n{hay}");
+        }
+
+        let tmp = std::env::temp_dir()
+            .join(format!("satysfi-rust-e2e-v01-strings-{}.pdf", std::process::id()));
+        std::fs::write(&tmp, &bytes).unwrap();
+        let pdftotext = Command::new("pdftotext").arg(&tmp).arg("-").output();
+        match pdftotext {
+            Ok(out) if out.status.success() => {
+                let text = String::from_utf8_lossy(&out.stdout);
+                // `band 5 3` == 1.
+                assert!(text.contains("Bits: 1"), "missing bitwise result:\n{text}");
+                // NFC(string-unexplode [101; 769]) composes "e" + COMBINING
+                // ACUTE ACCENT (2 scalar values) into "é" (1 scalar value)
+                // — the ASCII-only witness `v01-strings.saty` uses (base14
+                // has no glyph for "é" itself).
+                assert!(text.contains("NFC length: 1"), "missing NFC composition witness:\n{text}");
+            }
+            _ => eprintln!("skipping text assertion; pdftotext unavailable"),
+        }
+        let _ = std::fs::remove_file(&tmp);
+    });
+}

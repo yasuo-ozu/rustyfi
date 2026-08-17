@@ -44,8 +44,16 @@ pub enum BaseType {
     InlineText,
     /// `block-text` (v0.0.6: `TextColType`).
     BlockText,
-    /// `math` (v0.0.6: `MathType`) — quoted math text.
+    /// `math` (v0.0.6: `MathType`) — quoted math text. Reused, unmodified,
+    /// as V0_1's `math-text` (upstream literally renamed 0.0.6's `math`,
+    /// `research-stdlib-prims-backend.md:144-147`); see `MathBoxes` for the
+    /// new V0_1-only half of the split.
     MathText,
+    /// `math-boxes` (V0_1 only; `dev-0-1-0` `MathBoxesType`) — the
+    /// evaluated math tree, bridged from `MathText` by the V0_1 primitive
+    /// `read-math`. 0.0.6 has no name for this type (its `math` conflates
+    /// both halves) and no value ever types as this under V0_0_6.
+    MathBoxes,
     /// `image` (v0.0.6: `ImageType`) — a decoded raster image resource
     /// (`load-image`'s result; `docs/plans/math-images.md` §Slice 1).
     Image,
@@ -81,6 +89,7 @@ impl BaseType {
             BaseType::InlineText => "inline-text",
             BaseType::BlockText => "block-text",
             BaseType::MathText => "math",
+            BaseType::MathBoxes => "math-boxes",
             BaseType::Image => "image",
             BaseType::InlineBoxes => "inline-boxes",
             BaseType::BlockBoxes => "block-boxes",
@@ -347,8 +356,26 @@ pub(crate) fn new_row_var(level: u32) -> RowVarRef {
 pub enum MonoType {
     Var(TyVarRef),
     Base(BaseType),
-    /// `dom -> cod`.
-    Func(Box<MonoType>, Box<MonoType>),
+    /// `?(row) dom -> cod` — a function type carrying a labeled
+    /// optional-argument [`Row`] (upstream `FuncType of row * typ * typ`,
+    /// SATySFi 0.1). The row is `Row::Empty` for every 0.0.6-constructed
+    /// function (see [`crate::prim_types::arrow`]), where it prints nothing
+    /// and unifies trivially, so 0.0.6 behavior is byte-identical. A
+    /// non-empty row (`Cons(label, option-payload-type, …)`) records the
+    /// value-level `?(l = e)` labeled optional arguments the function
+    /// accepts (SATySFi 0.1 optional-argument rows). The field is
+    /// **positional** (no `..` in any destructure) deliberately: widening
+    /// this variant makes the compiler flag every match site, guarding
+    /// against a silently-dropped row in the sealed-module subsumption path.
+    ///
+    /// The row is **boxed** (`Box<Row>`, not an inline `Row`) so widening
+    /// `Func` does not enlarge `MonoType` itself (`Row` is a ~40-byte enum;
+    /// inlining it would make `Func` the largest variant and grow every
+    /// stack frame that holds a `MonoType` by value — enough to tip the deep
+    /// recursive typecheck of a large merged program over the default stack).
+    /// A `Box<Row>` keeps `MonoType` at its pre-widening size, so 0.0.6 stack
+    /// usage is unchanged.
+    Func(Box<Row>, Box<MonoType>, Box<MonoType>),
     /// A tuple type, always with at least two elements.
     Product(Vec<MonoType>),
     List(Box<MonoType>),
@@ -614,7 +641,8 @@ fn collect_generalizable(
             }
         }
         MonoType::Base(_) => {}
-        MonoType::Func(a, b) => {
+        MonoType::Func(row, a, b) => {
+            collect_generalizable_row(level, &row, vars, row_vars);
             collect_generalizable(level, &a, vars, row_vars);
             collect_generalizable(level, &b, vars, row_vars);
         }
@@ -697,7 +725,8 @@ pub(crate) fn substitute(
             .cloned()
             .unwrap_or(MonoType::Var(v)),
         MonoType::Base(b) => MonoType::Base(b),
-        MonoType::Func(a, b) => MonoType::Func(
+        MonoType::Func(row, a, b) => MonoType::Func(
+            Box::new(substitute_row(&row, var_map, row_map)),
             Box::new(substitute(&a, var_map, row_map)),
             Box::new(substitute(&b, var_map, row_map)),
         ),
@@ -803,7 +832,7 @@ fn is_atomic(ty: &MonoType) -> bool {
     match ty {
         MonoType::Base(_) | MonoType::Var(_) | MonoType::Record(_) => true,
         MonoType::Variant(_, args) => args.is_empty(),
-        MonoType::Func(_, _)
+        MonoType::Func(_, _, _)
         | MonoType::Product(_)
         | MonoType::List(_)
         | MonoType::Ref(_)
@@ -816,7 +845,7 @@ fn is_atomic(ty: &MonoType) -> bool {
 /// Needs parens as the operand of a postfix constructor (`list`/`ref`/a
 /// single-argument variant) or as an element of a product.
 fn needs_parens_as_operand(ty: &MonoType) -> bool {
-    matches!(ty, MonoType::Func(_, _) | MonoType::Product(_))
+    matches!(ty, MonoType::Func(_, _, _) | MonoType::Product(_))
 }
 
 /// Print `ty` as a postfix/product/function-domain operand, wrapping it in
@@ -837,7 +866,12 @@ fn fmt_mono(ty: &MonoType, f: &mut fmt::Formatter<'_>, namer: &mut VarNamer) -> 
     match &ty {
         MonoType::Var(v) => write!(f, "{}", namer.name_for(v.ptr_key())),
         MonoType::Base(b) => write!(f, "{b}"),
-        MonoType::Func(dom, cod) => {
+        MonoType::Func(row, dom, cod) => {
+            // A row that resolves to bare `Empty` (every 0.0.6 function)
+            // prints nothing extra, keeping every pinned 0.0.6 error-message
+            // string byte-identical. A non-empty row prints `?(l : τ, …) `
+            // before the domain (a free-var tail adds `| ?'rN`).
+            fmt_func_row(row, f, namer)?;
             fmt_operand(dom, f, namer)?;
             f.write_str(" -> ")?;
             let rcod = resolve(cod);
@@ -908,6 +942,43 @@ fn fmt_cmd(
         }
     }
     write!(f, "] {suffix}")
+}
+
+/// Prefix-print a function type's optional-argument row: nothing at all for
+/// an empty (0.0.6) row — guaranteeing byte-identical output — or `?(l : τ,
+/// …) ` (a free-var tail adding `| ?'rN`) for a non-empty 0.1 row.
+fn fmt_func_row(row: &Row, f: &mut fmt::Formatter<'_>, namer: &mut VarNamer) -> fmt::Result {
+    let mut fields: Vec<(String, MonoType)> = Vec::new();
+    let mut cur = resolve_row(row);
+    let tail_name = loop {
+        match cur {
+            Row::Empty => break None,
+            Row::Var(v) => break Some(namer.name_for(v.ptr_key())),
+            Row::Cons(label, ty, rest) => {
+                fields.push((label, *ty));
+                cur = resolve_row(&rest);
+            }
+        }
+    };
+    if fields.is_empty() && tail_name.is_none() {
+        return Ok(());
+    }
+    fields.sort_by(|a, b| a.0.cmp(&b.0));
+    f.write_str("?(")?;
+    for (i, (label, ty)) in fields.iter().enumerate() {
+        if i > 0 {
+            f.write_str(", ")?;
+        }
+        write!(f, "{label} : ")?;
+        fmt_mono(ty, f, namer)?;
+    }
+    if let Some(name) = tail_name {
+        if !fields.is_empty() {
+            f.write_str(" ")?;
+        }
+        write!(f, "| ?{name}")?;
+    }
+    f.write_str(") ")
 }
 
 fn fmt_row(row: &Row, f: &mut fmt::Formatter<'_>, namer: &mut VarNamer) -> fmt::Result {

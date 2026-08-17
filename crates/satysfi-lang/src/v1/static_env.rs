@@ -51,15 +51,21 @@ pub(crate) struct DeclaredVal {
 }
 
 /// One resolved type entry (`types → (arity, opacity)`, upstream `lookup_
-/// type_entry`). 2d-1 constructs none of these (sig `type` decls are 2d-2
-/// placeholder errors, §4.7); the shape is fixed NOW because the abstract-
-/// type representation decision (spec §3.1) pins it, and [`crate::v1::
-/// sig_subtype`]'s unit tests exercise it directly to pin that decision
-/// ahead of the sub-slice that first constructs one for real.
+/// type_entry`). First constructed for real by Sub-slice 2d-2's
+/// `module_check::prescan_seal_types` (opaque decls) and
+/// `module_check::check_transparent_type` (transparent decls); the shape
+/// was fixed a sub-slice early because the abstract-type representation
+/// decision (spec §3.1) pinned it, and [`crate::v1::sig_subtype`]'s unit
+/// tests exercised it directly ahead of the sub-slice that first constructs
+/// one for real.
 #[derive(Clone, Debug)]
-#[allow(dead_code)] // first constructed by 2d-2
 pub(crate) enum TypeOpacity {
-    /// `type t = τ` in a sig: must equal the impl's type (2d-2).
+    /// `type t = τ` in a sig: must equal the impl's type (2d-2). The
+    /// resolved body is stored (rather than just a bare marker) for 2d-3's
+    /// `ElabSig.types` writer to consume — 2d-2 itself never re-reads it
+    /// (transparent resolution flows through the ordinary synonym table
+    /// instead, §2.1's θ-for-free argument), hence the `dead_code` allow.
+    #[allow(dead_code)]
     Transparent(MonoType),
     /// `type t :: kind` in a sig: the stamped abstract nominal key that
     /// escapes the seal, e.g. `"M.t#3"` (§3.1).
@@ -67,12 +73,28 @@ pub(crate) enum TypeOpacity {
 }
 
 #[derive(Clone, Debug)]
-#[allow(dead_code)] // first constructed by 2d-2
 pub(crate) struct DeclaredType {
     /// From `KindV1`: `o -> o` ⇒ 1 (kind_base count − 1).
     pub(crate) arity: usize,
     pub(crate) opacity: TypeOpacity,
+    /// The declaring `type`/`type ::` keyword's span — kept for parity with
+    /// [`DeclaredVal::span`] and future diagnostics; not yet re-read by
+    /// 2d-2 itself (every 2d-2 error already carries its own precise span
+    /// at the reference site).
+    #[allow(dead_code)]
     pub(crate) span: Span,
+}
+
+/// One constructor deregistered by a signature seal (Sub-slice 2d-2, spec
+/// §2.2): `T` → the sealing module and the concrete type name it belonged
+/// to (the same string `typecheck::Checker::hide_ctors`'s identity guard
+/// compares against `VariantDecl.name`). Populated by `module_check`'s
+/// ctor-hide bookkeeping, consulted by `rewrite_hidden_error` to turn a raw
+/// "unknown constructor" error into a precise sealing diagnostic.
+#[derive(Clone, Debug)]
+pub(crate) struct HiddenCtor {
+    pub(crate) module: String,
+    pub(crate) type_name: String,
 }
 
 /// One elaborated signature body (upstream `struct_signature`,
@@ -96,12 +118,11 @@ pub(crate) struct ElabSig {
 
 /// The whole-program static environment the module checker threads
 /// (upstream `type_environment`, staticEnv.ml:134-141, first-order). 2d-1
-/// populates `seals`/`hidden` only; the other maps arrive with their owning
-/// sub-slice (NOT stubbed with dead fields — each field arrives with its
-/// writer, per the spec's §6 item 10 scope guard):
+/// populates `seals`/`hidden`; 2d-2 adds every `types`-shaped map below (the
+/// other maps arrive with their owning sub-slice — NOT stubbed with dead
+/// fields — each field arrives with its writer, per the spec's §6 item 10
+/// scope guard):
 ///
-/// - 2d-2: `pub(crate) types: HashMap<String, DeclaredType>` (stamped
-///   abstracts);
 /// - 2d-3: `pub(crate) modules: HashMap<String, ElabSig>` (module aliases/
 ///   decls); `pub(crate) signatures: HashMap<String, ElabSig>` (`signature S
 ///   = …`).
@@ -114,6 +135,30 @@ pub(crate) struct StaticEnv {
     /// Members hidden by a seal: qualified name → owning module path
     /// (`"M.N"`). Consulted by the unbound-use rewriter (§4.2 step 6).
     pub(crate) hidden: HashMap<String, String>,
+    /// Every sealed module's declared type surface: qualified type name
+    /// (`"M.t"`) → arity/opacity (Sub-slice 2d-2, spec §2.1/§3 phase A/C1).
+    /// The resolution source for `LONG_LOWER` references (`v1/module_
+    /// check.rs`'s `rename_type_name`) and the opaque-stamping/transparent-
+    /// equality machinery.
+    pub(crate) types: HashMap<String, DeclaredType>,
+    /// Struct types NOT named by any sig `type` decl: qualified type name
+    /// (`"M.u"`) → owning module path (`"M"`). An external `M.u` reference
+    /// (or a self-reference from M's own sig without a declaring `type`
+    /// decl) is precisely this map's mirror of `hidden`, for types instead
+    /// of values (Sub-slice 2d-2, spec §3 phase A step 4).
+    pub(crate) hidden_types: HashMap<String, String>,
+    /// Constructors deregistered by a seal: bare ctor name → the owning
+    /// module/type it belonged to (Sub-slice 2d-2, spec §2.2). Consulted by
+    /// `rewrite_hidden_error`'s ctor-format matchers.
+    pub(crate) hidden_ctors: HashMap<String, HiddenCtor>,
+    /// Deferred ctor-deregistration triggers: the qualified alias name of a
+    /// sealed module's LAST value member (elaboration emits every member's
+    /// alias contiguously and in source order, spec §2.2) → the list of
+    /// `(ctor, concrete type name)` pairs to deregister once that alias
+    /// commits. Modules with zero value members hide immediately instead
+    /// (`module_check::check_program`'s `immediate_hides`, never routed
+    /// through this map).
+    pub(crate) ctor_hide_triggers: HashMap<String, Vec<(String, String)>>,
 }
 
 /// Globally unique `#n` suffixes. `#` is not a lexable identifier char in

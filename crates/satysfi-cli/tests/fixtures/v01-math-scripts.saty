@@ -1,0 +1,6 @@
+@require: v01-mini
+
+let open V01Mini in
+document (| title = `v01 lim` |) '<
+  +p { Limit: ${\lim_{n} x}. }
+>

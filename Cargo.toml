@@ -8,6 +8,7 @@ members = [
     "crates/satysfi-cli",
     "crates/satysfi-loader",
     "crates/satysfi-satyrographos",
+    "crates/tsl-satysfi-inst",
 ]
 
 [workspace.package]
@@ -18,6 +19,9 @@ authors = ["Yasuo Ozu <yasuo@ozu.email>"]
 
 [workspace.dependencies]
 syan = { path = "../syan2-ergo/core" }
+tsl-infer = { path = "../type-system-library/crates/tsl-infer" }
+tsl-exhaust = { path = "../type-system-library/crates/tsl-exhaust" }
+tsl-satysfi-inst = { path = "crates/tsl-satysfi-inst" }
 satysfi-syntax = { path = "crates/satysfi-syntax" }
 satysfi-backend = { path = "crates/satysfi-backend" }
 satysfi-lang = { path = "crates/satysfi-lang" }

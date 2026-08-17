@@ -792,7 +792,8 @@ Gr.text-centering (0pt, 0pt) (inline-skip 5pt)";
             .expect("gr.satyh should compile");
         match v {
             Value::Graphics(g) => {
-                let (pmin, pmax) = satysfi_backend::graphics_bbox(&g);
+                let (pmin, pmax) =
+                    satysfi_backend::graphics_bbox(&g).expect("nonempty graphics");
                 assert!(
                     (pmin.0 .0 - (-2.5)).abs() < 1e-6
                         && (pmin.1 .0 - 0.0).abs() < 1e-6

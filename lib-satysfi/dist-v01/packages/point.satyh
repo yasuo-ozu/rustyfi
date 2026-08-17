@@ -1,0 +1,49 @@
+% point.satyh — SATySFi 0.1 stdlib `Point`, vendored for Legacy packaging
+% (docs/plans/satysfi-0-1-0-support.md §2 P2 / §4 phase 6).
+% Source: saphe-split@b836d512:lib-satysfi/packages/stdlib/stdlib.0.0.1/
+%   src/point.satyh — transliteration deltas:
+%   - T1: `use open Basic` / `use Float` / `use Length` / `use Pair` /
+%     `use Vector` dropped; `@require: basic`, `@require: float`,
+%     `@require: length`, `@require: pair`, `@require: vector` added.
+%   - T2: bare `point`/`vector` (Basic's synonyms) -> `Basic.point`/
+%     `Basic.vector`.
+%   - T3: the `~lift` member (`Vector.lift`, itself a dropped member) and
+%     its sig line dropped outright.
+
+@require: basic
+@require: float
+@require: length
+@require: pair
+@require: vector
+
+module Point :> sig
+  type t = Basic.point
+  val get-x : Basic.point -> length
+  val get-y : Basic.point -> length
+  val add : Basic.point -> Basic.vector -> Basic.point
+  val subtract : Basic.point -> Basic.point -> Basic.vector
+  val atan2 : Basic.point -> Basic.point -> float
+  val dividing-point : float -> Basic.point -> Basic.point -> Basic.point
+end = struct
+
+  type t = Basic.point
+
+  val get-x =
+    Vector.get-x
+
+  val get-y =
+    Vector.get-y
+
+  val add =
+    Vector.add
+
+  val subtract =
+    Vector.subtract
+
+  val atan2 (x1, y1) (x2, y2) =
+    Length.atan2 (y2 -' y1) (x2 -' x1)
+
+  val dividing-point t pt1 pt2 =
+    Vector.add (Vector.scale (1. -. t) pt1) (Vector.scale t pt2)
+
+end

@@ -340,6 +340,31 @@ fn math_mode_qualified_command() {
     );
 }
 
+/// Language-completeness sweep gap 4: `command \Mod.cmd` in PROGRAM
+/// position (e.g. `(command \Mod.cmd)`, a first-class `command`-value) must
+/// lex the module-qualified name as one token, exactly like inline-text
+/// mode's own `\Mod.cmd` ([`math_mode_qualified_command`]'s twin) already
+/// does — not split into a bare `\Mod` command followed by a stray `.cmd`.
+/// An unqualified `\cmd` in the same position is unaffected (still a plain
+/// `HorzCmd`, same as [`inline_command_with_args`]'s `\emph`/`\skip`).
+#[test]
+fn program_mode_qualified_command() {
+    assert_eq!(
+        toks(r"(command \Mod.cmd)"),
+        vec![
+            LParen,
+            Command,
+            HorzCmdWithMod(vec!["Mod".into()], r"\cmd".into()),
+            RParen,
+            Eoi
+        ]
+    );
+    assert_eq!(
+        toks(r"(command \cmd)"),
+        vec![LParen, Command, HorzCmd(r"\cmd".into()), RParen, Eoi]
+    );
+}
+
 #[test]
 fn items() {
     assert_eq!(

@@ -312,7 +312,7 @@ fn a_variable_from_an_outer_level_does_not_generalize() {
 
     let inst1 = types::instantiate(&scheme, ctx.level());
     let inst2 = types::instantiate(&scheme, ctx.level());
-    let (MonoType::Func(dom1, cod1), MonoType::Func(dom2, cod2)) = (inst1, inst2) else {
+    let (MonoType::Func(_, dom1, cod1), MonoType::Func(_, dom2, cod2)) = (inst1, inst2) else {
         panic!("expected function types");
     };
 
@@ -571,6 +571,72 @@ fn unknown_primitive_name_has_no_type() {
     assert!(prim_types::primitive_type("not-a-real-primitive").is_none());
 }
 
+// ============================================================================
+// math-split spec §2.2: the 8 V0_1-only additions. NOT folded into `NAMES`
+// above — that list's assertion checks `primitive_type` (the V0_0_6-default
+// wrapper), and every one of these 8 names is deliberately UNBOUND under
+// V0_0_6 (test 6.3-6 of the math-split spec); they're the hand-sync twin of
+// `typecheck::PRIMITIVE_NAMES`'s own "added in 0.1" block instead, verified
+// against `primitive_type_with_version` directly.
+// ============================================================================
+
+#[test]
+fn every_v01_only_primitive_has_a_type_under_v0_1_and_none_under_v0_0_6() {
+    const V01_ONLY_NAMES: &[&str] = &[
+        "read-math",
+        "stringify-math",
+        "set-math-char",
+        "set-math-char-class",
+        "get-math-char-class",
+        "embed-inline-to-math",
+        "get-math-axis-height-ratio",
+        "%math-attach-scripts",
+        // ---- L5a (prim-retype-sweep §2): bitwise ops, Unicode string ops,
+        // `read-file`, `register-document-information` — the hand-sync twin
+        // of `typecheck::PRIMITIVE_NAMES`'s own "added in 0.1 — L5a" block.
+        "<<",
+        ">>",
+        "band",
+        "bor",
+        "bxor",
+        "bnot",
+        "normalize-string-to-nfc",
+        "normalize-string-to-nfd",
+        "split-grapheme-cluster",
+        "read-file",
+        "register-document-information",
+        // ---- L5b (prim-retype-sweep §3.4/§3.6): the 2 graphics-collection
+        // additions. The 3 named + 6 hidden retypes are NOT here — each is
+        // one shared name whose type forks per version (`get-graphics-bbox`,
+        // `tabular`, `inline-graphics`, `inline-graphics-outer`,
+        // `inline-frame-outer/-inner/-breakable`, `block-frame-breakable`),
+        // bound under BOTH versions, so they belong in `NAMES` above (they
+        // already are), not this V0_1-only twin.
+        "unite-graphics",
+        "clip-graphics-by-path",
+        // ---- language-completeness sweep gap 1: 0.1 float comparisons
+        // (`primitives.rs`'s `prims!` table comment on ">."/"<."/">=."/
+        // "<=.") — the hand-sync twin of `typecheck::PRIMITIVE_NAMES`'s own
+        // trailing block.
+        ">.",
+        "<.",
+        ">=.",
+        "<=.",
+    ];
+    for name in V01_ONLY_NAMES {
+        assert!(
+            prim_types::primitive_type_with_version(name, satysfi_syntax::SatysfiVersion::V0_1)
+                .is_some(),
+            "V0_1-only primitive `{name}` has no registered type under V0_1"
+        );
+        assert!(
+            prim_types::primitive_type_with_version(name, satysfi_syntax::SatysfiVersion::V0_0_6)
+                .is_none(),
+            "V0_1-only primitive `{name}` must be unbound under V0_0_6"
+        );
+    }
+}
+
 #[test]
 fn poly_primitives_instantiate_independently() {
     // `::` : 'a -> 'a list -> 'a list — two call sites must not share the
@@ -580,8 +646,8 @@ fn poly_primitives_instantiate_independently() {
     let ty2 = types::instantiate(&scheme, 0);
     // Applying the first instantiation at `int` must not constrain the
     // second instantiation, which we then apply at `bool`.
-    let MonoType::Func(head1, _) = ty1 else { panic!("expected a function type") };
-    let MonoType::Func(head2, _) = ty2 else { panic!("expected a function type") };
+    let MonoType::Func(_, head1, _) = ty1 else { panic!("expected a function type") };
+    let MonoType::Func(_, head2, _) = ty2 else { panic!("expected a function type") };
     unify(&head1, &t_int()).unwrap();
     unify(&head2, &t_bool()).unwrap();
 }

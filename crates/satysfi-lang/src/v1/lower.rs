@@ -24,16 +24,23 @@
 //! **What this module deliberately does NOT lower** (§3.4 of the finale
 //! spec — a real user-facing [`LowerError`], never a panic):
 //!
-//! - `?:`/`?*` application arguments (`AppArg::Optional`/`Omission`) — 0.1's
-//!   optional arguments are *labeled rows* (`?(l = e)`), semantically
-//!   different from 0.0.6's positional `?:` marker; transcribing would bake
-//!   in the wrong semantics. Roadmap phase 4.
+//! - SATySFi 0.1 labeled-optional arguments (`?(l = e, …)`) and parameter
+//!   bundles ARE lowered now (optional-arg-rows increment 1):
+//!   [`AppArg::Bundled`]/[`AppArg::BundledCtor`] and [`Param::opts`] bridge
+//!   to the additive `cst::ast::AppArg::Bundled`/`Expr::FunRows` nodes; the
+//!   0.0.6 `?:`/`?*` positional markers no longer exist under V0_1 (the
+//!   lexer emits only `?` = `OptionalType`). A bundle on an inline/block/
+//!   math *command* parameter, and `?(…)` on the *type* level, remain a
+//!   `LowerError` (roadmap increments 2/3).
 //! - 0.1 math (`Atomic::MathText`, `InlineElem::EmbedMath`, and the whole
-//!   math-element layer) — **not** mechanical:
-//!   [`satysfi_syntax::SatysfiVersion::math_is_split`] is `true` for `V0_1`,
-//!   so 0.1's `${…}` produces a `math-text` value, not 0.0.6's unsplit
-//!   `math` — a structural transcription would be semantically wrong.
-//!   Roadmap phase 2.
+//!   math-element layer) — lowered since the math-split spec (L6): the
+//!   deferral above turned out unnecessary. `${…}`'s *value* is version-
+//!   independent ([`satysfi_syntax::SatysfiVersion::math_is_split`] only
+//!   changes the surrounding TYPE/prim tables, `typecheck.rs`'s
+//!   `name_to_mono`), so `Atomic::MathText`/`InlineElem::EmbedMath`
+//!   transcribe structurally like every other node here — see
+//!   `lower_math_elem_cst`/`lower_math_bot`/`lower_math_script`/
+//!   `lower_math_group_arg`/`lower_math_arg`, below.
 //! - A module-qualified command name (`\Mod.cmd`/`+Mod.cmd`) in *binding*
 //!   position — the cst target field (`TopBinding::LetInline::cmd` /
 //!   `LetBlock::cmd`) is a bare `HorzCmdTok`/`VertCmdTok`.
@@ -53,7 +60,16 @@
 //! through [`lower_bind_v1`]/[`lower_module_bind`]. Constructor names stay
 //! unqualified (the carve-out; see [`TypeNameEnv`]'s doc comment). This is
 //! confined to `v1/lower.rs`: `elaborate.rs`/`typecheck.rs` see the already-
-//! dotted string as an ordinary opaque nominal key.
+//! dotted string as an ordinary opaque nominal key. Sub-slice 2d-2's
+//! `LONG_LOWER` type names (`M.t`, [`ast_v1::TypeAtom::LongName`]/
+//! [`ast_v1::TypeApp::AppliedLong`]) are the fourth site, but a DIFFERENT
+//! formula: [`qualify_type_key`] applied to the token's own `mods`/`name`
+//! directly, bypassing `TypeNameEnv::qualify` entirely — the reference is
+//! already absolute (a dotted head), so there is nothing to resolve against
+//! the LOCAL module's `type` names. Whether the resulting string names a
+//! concrete type, an abstract stamp, or an error is undecidable HERE
+//! (lowering runs before any seal table exists — 2d-1's zero-residue rule);
+//! `v1/module_check.rs` resolves it later by string key.
 //!
 //! **Real modules, qualified exports (Sub-slice 2a).** [`lower_file_v1`] on
 //! `FileV1::Library { module_kw, name, eq, struct_kw, binds, end_kw, .. }`
@@ -126,15 +142,6 @@ fn unsupported(construct: &'static str, hint: &'static str, span: Span) -> Lower
         hint,
         span,
     }
-}
-
-fn unsupported_math(span: Span) -> LowerError {
-    unsupported(
-        "0.1 math (`${...}` / math-mode content)",
-        "0.1 math is semantically split (`math-text`/`math-boxes`) — roadmap \
-         phase 2 (the `math-text`/`math-boxes` split)",
-        span,
-    )
 }
 
 /// Module-path pre-qualification of 0.1 `type` names (Sub-slice 2b; see
@@ -335,13 +342,16 @@ fn lower_bind_v1(
             params,
             eq,
             body,
-        } => Ok(vec![cst::TopBinding::Let(cst::TopLet {
-            let_kw: KwLet(kw.0),
-            name: name.clone(),
-            params: lower_params(params)?,
-            eq: eq.clone(),
-            value: lower_expr(body)?,
-        })]),
+        } => {
+            let (ps, value) = lower_param_units(params, lower_expr(body)?)?;
+            Ok(vec![cst::TopBinding::Let(cst::TopLet {
+                let_kw: KwLet(kw.0),
+                name: name.clone(),
+                params: ps,
+                eq: eq.clone(),
+                value,
+            })])
+        }
         cst_v1::Bind::ValueInline {
             kw,
             ctx,
@@ -354,7 +364,7 @@ fn lower_bind_v1(
             kw: KwLetHorz(kw.0),
             ctx: ctx.clone(),
             cmd: plain_horz(cmd)?,
-            params: lower_params(params)?,
+            params: lower_command_params(params)?,
             eq: eq.clone(),
             value: lower_expr(body)?,
         }]),
@@ -370,10 +380,20 @@ fn lower_bind_v1(
             kw: KwLetVert(kw.0),
             ctx: ctx.clone(),
             cmd: plain_vert(cmd)?,
-            params: lower_params(params)?,
+            params: lower_command_params(params)?,
             eq: eq.clone(),
             value: lower_expr(body)?,
         }]),
+        cst_v1::Bind::ValueMath {
+            kw,
+            ctx,
+            cmd,
+            params,
+            scripts,
+            eq,
+            body,
+            ..
+        } => Ok(vec![lower_value_math(kw, ctx, cmd, params, scripts, eq, body)?]),
         cst_v1::Bind::ValueRec { kw, first, ands, .. } => Ok(vec![cst::TopBinding::LetRec {
             kw: KwLetRec(kw.0),
             first: lower_rec_clause(first)?,
@@ -490,6 +510,23 @@ fn mod_chain_span(c: &ast_v1::ModChainV1) -> Span {
 /// reshape the module doc anticipated, field-by-field against the real
 /// `cst::ast::RecBinding` (`cst.rs:753-762`).
 fn lower_rec_clause(c: &ast_v1::RecClauseV1) -> Result<cst::ast::RecBinding, LowerError> {
+    let value_expr = lower_expr(&c.value.0)?;
+    // `RecBinding.params` is `Vec<PatBot>` (not `Vec<Param>`). All-plain
+    // clauses lower their patterns directly (byte-identical). A clause with a
+    // `?(l = x, …)` bundle desugars to `params: []` + a nested lambda-chain
+    // value — the LetRec lambda-body invariant holds because the chain head
+    // is itself a lambda.
+    let (params, value) = if c.params.iter().all(|p| p.opts.is_none()) {
+        let ps = c
+            .params
+            .iter()
+            .map(|p| lower_pat_bot(&p.body))
+            .collect::<Result<_, _>>()?;
+        (ps, value_expr)
+    } else {
+        let (_, chain) = lower_param_units(&c.params, value_expr)?;
+        (Vec::new(), chain)
+    };
     Ok(cst::ast::RecBinding {
         // `BindName` == `BindName`: shared leaf-level type, clone not
         // re-encode (see the module doc comment).
@@ -498,9 +535,9 @@ fn lower_rec_clause(c: &ast_v1::RecClauseV1) -> Result<cst::ast::RecBinding, Low
         ascription: None,
         // No multi-clause sugar in 0.1.
         leading_bar: None,
-        params: c.params.iter().map(lower_pat_bot).collect::<Result<_, _>>()?,
+        params,
         eq: c.eq.clone(),
-        value: erase_expr(lower_expr(&c.value.0)?),
+        value: erase_expr(value),
         // `RecClause` continuations are a 0.0.6-only surface (cst.rs:779-786).
         extra: Vec::new(),
     })
@@ -594,9 +631,50 @@ fn lower_type_prod(p: &ast_v1::TypeProd, tyenv: &TypeNameEnv) -> Result<cst::ast
 /// The PREFIX → POSTFIX bridge (§3.5 item 1): 0.1 `list int` ↔ cst `int
 /// list`. A real `LowerError` (not a panic) on arity ≥ 2 — the cst target
 /// (`cst::ast::TypeApp`) is single-argument by design (`cst.rs:1297-1312`,
-/// "N-ary applied constructors are not [supported]").
+/// "N-ary applied constructors are not [supported]"). Sub-slice 2d-2 adds
+/// `InlineCmdTy`/`BlockCmdTy` (→ `cst::ast::TypeAtom::Cmd`, wrapped in
+/// `TypeApp::Atom` — a command type is never itself "applied") and
+/// `AppliedLong` (the same prefix→postfix bridge as `Applied`, minus
+/// `tyenv.qualify`: a `LONG_LOWER` head is already absolute, spec §2.4).
 fn lower_type_app(a: &ast_v1::TypeApp, tyenv: &TypeNameEnv) -> Result<cst::ast::TypeApp, LowerError> {
     match a {
+        ast_v1::TypeApp::InlineCmdTy { kw, list, args } => {
+            Ok(cst::ast::TypeApp::Atom(cst::ast::TypeAtom::Cmd {
+                list: list.clone(),
+                args: lower_type_cmd_args(args, tyenv)?,
+                kind: cst::ast::CmdTypeKind::Inline(HorzCmdTypeTok(kw.0)),
+            }))
+        }
+        ast_v1::TypeApp::BlockCmdTy { kw, list, args } => {
+            Ok(cst::ast::TypeApp::Atom(cst::ast::TypeAtom::Cmd {
+                list: list.clone(),
+                args: lower_type_cmd_args(args, tyenv)?,
+                kind: cst::ast::CmdTypeKind::Block(VertCmdTypeTok(kw.0)),
+            }))
+        }
+        ast_v1::TypeApp::AppliedLong { ctor, first, rest } => {
+            if let Some(extra) = rest.first() {
+                return Err(unsupported(
+                    "an applied type constructor with more than one argument",
+                    "the 0.0.6 cst target (`TypeApp`) is single-argument \
+                     (cst.rs:1297-1312) — widen it only when a real package \
+                     needs arity ≥ 2",
+                    type_atom_span(extra),
+                ));
+            }
+            Ok(cst::ast::TypeApp::Applied {
+                arg: lower_type_atom(first, tyenv)?,
+                // NO `tyenv.qualify`: a `LONG_LOWER` head (`M.t`) is already
+                // an absolute dotted reference — qualifying it again would
+                // be wrong (and `qualify` only ever rewrites BARE names
+                // anyway, so this is purely a documentation point, not a
+                // behavioral guard).
+                ctor: VarTok {
+                    name: qualify_type_key(&ctor.mods, &ctor.name),
+                    span: ctor.span,
+                },
+            })
+        }
         ast_v1::TypeApp::Applied { ctor, first, rest } => {
             if let Some(extra) = rest.first() {
                 return Err(unsupported(
@@ -619,13 +697,56 @@ fn lower_type_app(a: &ast_v1::TypeApp, tyenv: &TypeNameEnv) -> Result<cst::ast::
     }
 }
 
+/// Each `[…]`-bracketed command-type slot lowers to one mandatory
+/// `cst::ast::TypeCmdArgItem` (`opt: None` — 2d-2's grammar has no `?`
+/// suffix; `semi: None` — these synthetic items are never re-unparsed, only
+/// fed to `elaborate`/`typecheck`, so the `;`-separator token is immaterial).
+fn lower_type_cmd_args(
+    args: &[ast_v1::TypeCmdArgItemV1],
+    tyenv: &TypeNameEnv,
+) -> Result<Vec<cst::ast::TypeCmdArgItem>, LowerError> {
+    args.iter()
+        .map(|a| {
+            Ok(cst::ast::TypeCmdArgItem {
+                ty: cst::TyErased(Box::new(lower_type_expr(&a.ty.0, tyenv)?)),
+                opt: None,
+                semi: None,
+            })
+        })
+        .collect()
+}
+
 fn lower_type_atom(a: &ast_v1::TypeAtom, tyenv: &TypeNameEnv) -> Result<cst::ast::TypeAtom, LowerError> {
     Ok(match a {
         ast_v1::TypeAtom::Paren { paren, inner } => cst::ast::TypeAtom::Paren {
             paren: paren.clone(),
             inner: cst::TyErased(Box::new(lower_type_expr(&inner.0, tyenv)?)),
         },
+        ast_v1::TypeAtom::Record { rec, inner } => cst::ast::TypeAtom::Record {
+            rec: rec.clone(),
+            fields: inner
+                .fields
+                .iter()
+                .map(|f| {
+                    Ok(cst::ast::TypeRecordField {
+                        name: f.name.clone(),   // labels are NOT type names —
+                        colon: f.colon.clone(), // no `tyenv.qualify` on `name`
+                        ty: cst::TyErased(Box::new(lower_type_expr(&f.ty.0, tyenv)?)),
+                        // `,` dropped (`semi: None`) — synthetic tree is
+                        // never unparsed; `lower_record_field`/
+                        // `lower_type_cmd_args` precedent.
+                        semi: None,
+                    })
+                })
+                .collect::<Result<_, LowerError>>()?,
+        },
         ast_v1::TypeAtom::Var(v) => cst::ast::TypeAtom::Var(v.clone()),
+        // NO `tyenv.qualify` — see `AppliedLong`'s doc comment above; the
+        // same "already absolute" argument applies bare.
+        ast_v1::TypeAtom::LongName(t) => cst::ast::TypeAtom::Name(VarTok {
+            name: qualify_type_key(&t.mods, &t.name),
+            span: t.span,
+        }),
         ast_v1::TypeAtom::Name(n) => cst::ast::TypeAtom::Name(VarTok {
             name: tyenv.qualify(&n.name),
             span: n.span,
@@ -638,7 +759,9 @@ fn lower_type_atom(a: &ast_v1::TypeAtom, tyenv: &TypeNameEnv) -> Result<cst::ast
 fn type_atom_span(a: &ast_v1::TypeAtom) -> Span {
     match a {
         ast_v1::TypeAtom::Paren { paren, .. } => paren.open.0,
+        ast_v1::TypeAtom::Record { rec, .. } => rec.open.0,
         ast_v1::TypeAtom::Var(v) => v.span,
+        ast_v1::TypeAtom::LongName(t) => t.span,
         ast_v1::TypeAtom::Name(n) => n.span,
     }
 }
@@ -667,13 +790,268 @@ fn plain_vert(name: &AnyVertCmdTok) -> Result<VertCmdTok, LowerError> {
     }
 }
 
-fn lower_params(params: &[cst_v1::Param]) -> Result<Vec<cst::ast::Param>, LowerError> {
+/// Lower a `param_unit` list plus the (already-lowered) binding body into a
+/// `(cst params, cst value)` pair (upstream `curry_lambda_abstraction`, one
+/// `UTFunction` per `param_unit`).
+///
+/// - **Every unit plain** (`opts: None`): the params lower directly and
+///   `body` is returned unchanged — byte-identical to the pre-optional-arg
+///   path.
+/// - **Any unit bundled** (`?(l = x, …)`): the whole list right-folds into a
+///   nested `FunRows`/`Fun` lambda chain, and the returned param list is
+///   empty — so the target `TopLet`/`RecBinding`/`LetIn` shape stays frozen
+///   (a bundled binding is `params: []` + a lambda-chain value). This is the
+///   `f p = e ≡ f = fun p -> e` identity applied per unit.
+fn lower_param_units(
+    params: &[cst_v1::Param],
+    body: cst::ast::Expr,
+) -> Result<(Vec<cst::ast::Param>, cst::ast::Expr), LowerError> {
+    if params.iter().all(|p| p.opts.is_none()) {
+        let ps = params
+            .iter()
+            .map(|p| Ok(cst::ast::Param::Pat(lower_pat_bot(&p.body)?)))
+            .collect::<Result<_, LowerError>>()?;
+        return Ok((ps, body));
+    }
+    let mut chain = body;
+    for p in params.iter().rev() {
+        let param_pat = lower_pat_bot(&p.body)?;
+        chain = match &p.opts {
+            Some(opts) => cst::ast::Expr::FunRows {
+                kw: KwFun(opts.q.0),
+                opts: lower_opt_binders(opts)?,
+                param: param_pat,
+                arrow: ArrowTok(opts.q.0),
+                body: Box::new(chain),
+            },
+            None => cst::ast::Expr::Fun {
+                kw: KwFun(Span::default()),
+                params: vec![param_pat],
+                arrow: ArrowTok(Span::default()),
+                body: Box::new(chain),
+            },
+        };
+    }
+    Ok((Vec::new(), chain))
+}
+
+/// Reject a `?(l = x, …)` bundle on an inline/block/math *command* parameter:
+/// its labeled optionals belong in the 0.1 command-argument encoding, which
+/// is roadmap phase 5 (optional-arg-rows increment 3). All-plain params lower
+/// as before.
+fn lower_command_params(
+    params: &[cst_v1::Param],
+) -> Result<Vec<cst::ast::Param>, LowerError> {
+    if let Some(p) = params.iter().find(|p| p.opts.is_some()) {
+        return Err(unsupported(
+            "a `?(l = e)` labeled optional on an inline/block/math command parameter",
+            "labeled optionals on commands need the 0.1 command-argument encoding — \
+             roadmap phase 5 (optional-arg-rows increment 3)",
+            p.opts.as_ref().unwrap().q.0,
+        ));
+    }
     params
         .iter()
-        .map(|p| match p {
-            cst_v1::Param::Pat(pb) => Ok(cst::ast::Param::Pat(lower_pat_bot(pb)?)),
-        })
+        .map(|p| Ok(cst::ast::Param::Pat(lower_pat_bot(&p.body)?)))
         .collect()
+}
+
+/// Transcribe a `?(l = x, …)` parameter-binder bundle to its cst twin. An
+/// empty bundle (`?()`) is a lowering error.
+fn lower_opt_binders(opts: &ast_v1::OptParamsV1) -> Result<cst::ast::CstOptBinders, LowerError> {
+    if opts.entries.is_empty() {
+        return Err(unsupported(
+            "an empty `?()` optional-parameter bundle",
+            "a `?(…)` bundle must bind at least one label",
+            opts.q.0,
+        ));
+    }
+    Ok(cst::ast::CstOptBinders {
+        q: opts.q.clone(),
+        paren: clone_paren(&opts.paren),
+        entries: opts
+            .entries
+            .iter()
+            .map(|e| cst::ast::CstOptBinderEntry {
+                label: e.label.clone(),
+                eq: e.eq.clone(),
+                var: e.var.clone(),
+                comma: e.comma.clone(),
+            })
+            .collect(),
+    })
+}
+
+/// Transcribe a `?(l = e, …)` application-argument bundle to its cst twin
+/// (entry values are full expressions, lowered + erased). Empty (`?()`) is an
+/// error.
+fn lower_opt_args(opts: &ast_v1::OptArgsV1) -> Result<cst::ast::CstOptArgs, LowerError> {
+    if opts.entries.is_empty() {
+        return Err(unsupported(
+            "an empty `?()` optional-argument bundle",
+            "a `?(…)` bundle must supply at least one label",
+            opts.q.0,
+        ));
+    }
+    Ok(cst::ast::CstOptArgs {
+        q: opts.q.clone(),
+        paren: clone_paren(&opts.paren),
+        entries: opts
+            .entries
+            .iter()
+            .map(|e| {
+                Ok(cst::ast::CstOptArgEntry {
+                    label: e.label.clone(),
+                    eq: e.eq.clone(),
+                    value: erase_expr(lower_expr(&e.value.0)?),
+                    comma: e.comma.clone(),
+                })
+            })
+            .collect::<Result<_, LowerError>>()?,
+    })
+}
+
+/// Clone an empty `ParenGroup<()>` marker (open/close tokens only). The
+/// `#[group]`-payload slot is `()`, so this just carries the delimiter spans.
+fn clone_paren(p: &ParenGroup<()>) -> ParenGroup<()> {
+    ParenGroup {
+        open: p.open.clone(),
+        slot: (),
+        close: p.close.clone(),
+    }
+}
+
+// ---- `val math` (math-split spec §4.3): the target — the EXISTING
+// `cst::TopBinding::LetMath` — is deliberately NOT extended with ctx/scripts
+// fields (a back-compat break on the 0.0.6 grammar the same derive parses);
+// instead the ctx/sub/sup binders are synthesized directly into the bind's
+// own VALUE as ordinary `cst::ast::Expr::Fun`/application nodes, reusing the
+// bind's own spans. The synthesis helpers below (`var_atomic`/`atom_expr`/
+// `paren_atomic`/`apply_chain`/`fun1`) build exactly the small slice of
+// `cst::ast::Expr` shapes this needs — a bare variable reference, a
+// parenthesized sub-expression, an application chain, and a one-parameter
+// lambda — by hand, since this is the one place `v1/lower.rs` needs to
+// PRODUCE `cst::ast::Expr` nodes rather than transcribe them from a parsed
+// `cst_v1::ast::Expr`. ----
+
+fn var_tok(name: &str, span: Span) -> VarTok {
+    VarTok {
+        name: name.to_string(),
+        span,
+    }
+}
+
+fn var_atomic(name: &str, span: Span) -> cst::ast::Atomic {
+    cst::ast::Atomic::Var(var_tok(name, span))
+}
+
+/// `( expr )` as an `Atomic::Paren` — needed to embed an arbitrary `Expr`
+/// (the `val math` bind's own body) as ONE application argument, since
+/// `AppArg::Atom.atom: Atomic` can't hold a full `Expr` directly.
+fn paren_atomic(expr: cst::ast::Expr, span: Span) -> cst::ast::Atomic {
+    cst::ast::Atomic::Paren {
+        paren: ParenGroup {
+            open: LParenTok(span),
+            slot: (),
+            close: RParenTok(span),
+        },
+        inner: Box::new(cst::ast::ParenBody {
+            first: cst::ExprErased(Box::new(expr)),
+            rest: Vec::new(),
+        }),
+    }
+}
+
+/// `head arg1 arg2 …` as one `Expr::Ops(OpChain)` node — a curried
+/// application chain with `args.len()` atomic arguments, one `AppExpr`.
+fn apply_chain(head: cst::ast::Atomic, args: Vec<cst::ast::Atomic>) -> cst::ast::Expr {
+    let app_args = args
+        .into_iter()
+        .map(|atom| cst::ast::AppArg::Atom {
+            excl: None,
+            atom,
+            accesses: Vec::new(),
+        })
+        .collect();
+    cst::ast::Expr::Ops(cst::ast::OpChain {
+        head: cst::ast::AppExpr {
+            minus: None,
+            excl: None,
+            head,
+            head_accesses: Vec::new(),
+            args: app_args,
+        },
+        tail: Vec::new(),
+        before: None,
+    })
+}
+
+/// `fun <param> -> <body>` — a one-parameter lambda.
+fn fun1(param_name: &str, span: Span, body: cst::ast::Expr) -> cst::ast::Expr {
+    cst::ast::Expr::Fun {
+        kw: KwFun(span),
+        params: vec![cst::ast::PatBot::Var(var_tok(param_name, span))],
+        arrow: ArrowTok(span),
+        body: Box::new(body),
+    }
+}
+
+/// Lower one `Bind::ValueMath` (math-split spec §4.1/§4.2/§4.3): `val math
+/// <ctx> \cmd <param>* [with <sub> <sup>] = <body>`. Target: the existing
+/// `cst::TopBinding::LetMath` — `elaborate_let_math` (unchanged) curries the
+/// user's own `params` around the synthesized `fun ctx -> fun sub -> fun sup
+/// -> …` chain built here and emits `Ast::LetMathIn`; `Checker::infer_
+/// binding`'s `LetMath` arm (`typecheck.rs`) then branches on `self.version`
+/// to apply `math_command_scheme_v01` instead of the 0.0.6 rule — no
+/// elaborate/eval edit needed at all.
+///
+/// - **with `with sub sup`**: the user's own binders become the `sub`/`sup`
+///   lambda parameters directly; the body is used as written (upstream
+///   WithScripts: closure run with ctx, body's result returned raw).
+/// - **without**: hidden binders `%sub`/`%sup` (unlexable — `%` starts a
+///   comment, so unreachable from real source, the same trick upstream's own
+///   `"%context"` uses), and the body wrapped as `%math-attach-scripts <ctx>
+///   (<body>) %sub %sup` (upstream Simple: closure run with ctx, then
+///   scripts appended under `enter_script`).
+fn lower_value_math(
+    kw: &KwVal,
+    ctx: &VarTok,
+    cmd: &AnyHorzCmdTok,
+    params: &[cst_v1::Param],
+    scripts: &Option<cst_v1::ScriptsParamV1>,
+    eq: &DefEqTok,
+    body: &ast_v1::Expr,
+) -> Result<cst::TopBinding, LowerError> {
+    let body = lower_expr(body)?;
+    let span = eq.0;
+    let (sub_name, sup_name, wrapped_body) = match scripts {
+        Some(sp) => (sp.sub.name.clone(), sp.sup.name.clone(), body),
+        None => (
+            "%sub".to_string(),
+            "%sup".to_string(),
+            apply_chain(
+                var_atomic("%math-attach-scripts", span),
+                vec![
+                    var_atomic(&ctx.name, ctx.span),
+                    paren_atomic(body, span),
+                    var_atomic("%sub", span),
+                    var_atomic("%sup", span),
+                ],
+            ),
+        ),
+    };
+    let value = fun1(
+        &ctx.name,
+        ctx.span,
+        fun1(&sub_name, span, fun1(&sup_name, span, wrapped_body)),
+    );
+    Ok(cst::TopBinding::LetMath {
+        kw: KwLetMath(kw.0),
+        cmd: plain_horz(cmd)?,
+        params: lower_command_params(params)?,
+        eq: eq.clone(),
+        value,
+    })
 }
 
 // ---- Expr ---------------------------------------------------------------
@@ -722,18 +1100,18 @@ fn lower_expr(e: &ast_v1::Expr) -> Result<cst::ast::Expr, LowerError> {
             value,
             in_kw,
             body,
-        } => Ok(cst::ast::Expr::LetIn {
-            kw: kw.clone(),
-            name: name.clone(),
-            params: params
-                .iter()
-                .map(|v| cst::ast::Param::Pat(cst::ast::PatBot::Var(v.clone())))
-                .collect(),
-            eq: eq.clone(),
-            value: Box::new(lower_expr(value)?),
-            in_kw: in_kw.clone(),
-            body: Box::new(lower_expr(body)?),
-        }),
+        } => {
+            let (ps, value_expr) = lower_param_units(params, lower_expr(value)?)?;
+            Ok(cst::ast::Expr::LetIn {
+                kw: kw.clone(),
+                name: name.clone(),
+                params: ps,
+                eq: eq.clone(),
+                value: Box::new(value_expr),
+                in_kw: in_kw.clone(),
+                body: Box::new(lower_expr(body)?),
+            })
+        }
         ast_v1::Expr::LetPatternIn {
             kw,
             pat,
@@ -781,12 +1159,26 @@ fn lower_expr(e: &ast_v1::Expr) -> Result<cst::ast::Expr, LowerError> {
             params,
             arrow,
             body,
-        } => Ok(cst::ast::Expr::Fun {
-            kw: kw.clone(),
-            params: params.iter().map(|v| cst::ast::PatBot::Var(v.clone())).collect(),
-            arrow: arrow.clone(),
-            body: Box::new(lower_expr(body)?),
-        }),
+        } => {
+            let body_expr = lower_expr(body)?;
+            if params.iter().all(|p| p.opts.is_none()) {
+                Ok(cst::ast::Expr::Fun {
+                    kw: kw.clone(),
+                    params: params
+                        .iter()
+                        .map(|p| lower_pat_bot(&p.body))
+                        .collect::<Result<_, _>>()?,
+                    arrow: arrow.clone(),
+                    body: Box::new(body_expr),
+                })
+            } else {
+                // Any `?(l = x, …)` bundle: the whole `fun` desugars to a
+                // nested `FunRows`/`Fun` lambda chain (returned directly as
+                // the lambda expression).
+                let (_, chain) = lower_param_units(params, body_expr)?;
+                Ok(chain)
+            }
+        }
         ast_v1::Expr::Match {
             kw,
             scrutinee,
@@ -862,20 +1254,23 @@ fn lower_access_seg(a: &ast_v1::AccessSeg) -> cst::ast::AccessSeg {
 
 fn lower_app_arg(a: &ast_v1::AppArg) -> Result<cst::ast::AppArg, LowerError> {
     match a {
-        ast_v1::AppArg::Optional { q, .. } => Err(unsupported(
-            "an optional application argument (`?:`)",
-            "0.1's optional arguments are labeled rows (`?(l = e)`), \
-             semantically different from 0.0.6's `?:` marker — roadmap \
-             phase 4 (labeled-optional rows)",
-            q.0,
-        )),
-        ast_v1::AppArg::Omission(t) => Err(unsupported(
-            "an omitted optional application argument (`?*`)",
-            "0.1's optional arguments are labeled rows (`?(l = e)`), \
-             semantically different from 0.0.6's `?*` marker — roadmap \
-             phase 4 (labeled-optional rows)",
-            t.0,
-        )),
+        // `?(l = e, …) atom` — a SATySFi 0.1 labeled-optional bundle paired
+        // with its following positional argument.
+        ast_v1::AppArg::Bundled {
+            opts,
+            excl,
+            atom,
+            accesses,
+        } => Ok(cst::ast::AppArg::Bundled {
+            opts: lower_opt_args(opts)?,
+            excl: excl.clone(),
+            atom: lower_atomic(atom)?,
+            accesses: accesses.iter().map(lower_access_seg).collect(),
+        }),
+        ast_v1::AppArg::BundledCtor { opts, ctor } => Ok(cst::ast::AppArg::BundledCtor {
+            opts: lower_opt_args(opts)?,
+            ctor: ctor.clone(),
+        }),
         ast_v1::AppArg::Atom {
             excl,
             atom,
@@ -931,7 +1326,14 @@ fn lower_atomic(a: &ast_v1::Atomic) -> Result<cst::ast::Atomic, LowerError> {
                 .map(lower_block_elem)
                 .collect::<Result<_, _>>()?,
         }),
-        ast_v1::Atomic::MathText { mgrp, .. } => Err(unsupported_math(mgrp.open.0)),
+        // math-split spec §3.1: the `${…}`/`math`-elaboration split lives
+        // version-independently in `elaborate.rs`'s SHARED math path — only
+        // structural transcription is needed here, exactly like every other
+        // `Atomic` arm above.
+        ast_v1::Atomic::MathText { mgrp, elems } => Ok(cst::ast::Atomic::MathText {
+            mgrp: mgrp.clone(),
+            elems: lower_math_elems(elems)?,
+        }),
     }
 }
 
@@ -994,7 +1396,12 @@ fn lower_inline_elem(e: &ast_v1::InlineElem) -> Result<cst::ast::InlineElem, Low
             var: var.clone(),
             semi: semi.clone(),
         }),
-        ast_v1::InlineElem::EmbedMath { mgrp, .. } => Err(unsupported_math(mgrp.open.0)),
+        // math-split spec §3.1: mechanical transcription, mirror of
+        // `Atomic::MathText` above.
+        ast_v1::InlineElem::EmbedMath { mgrp, elems } => Ok(cst::ast::InlineElem::EmbedMath {
+            mgrp: mgrp.clone(),
+            elems: lower_math_elems(elems)?,
+        }),
         ast_v1::InlineElem::Cmd { name, tail } => Ok(cst::ast::InlineElem::Cmd {
             name: name.clone(),
             tail: lower_cmd_tail(tail)?,
@@ -1067,6 +1474,117 @@ fn lower_cmd_tail(t: &ast_v1::CmdTail) -> Result<cst::ast::CmdTail, LowerError> 
             })
         }
     }
+}
+
+// ---- Math (math-split spec §3.1) -----------------------------------------
+//
+// The cst_v1 math layer is declared shape-identical to `crate::cst::ast`'s
+// (cst_v1.rs's own module doc comment: "no 0.1 delta"), so every function
+// below is a field-wise transcription, exactly like the rest of this
+// module — the ONE non-mechanical seam is `lower_math_arg`'s bridge from
+// cst_v1's flat 6-variant `MathArg` (no `?:`/`?*` forms at all — 0.1's
+// optional math-command arguments are `?(l = e)` labeled bundles, a
+// grammar production this port's `MathArg` node doesn't parse yet, phase 4)
+// onto cst.rs's two-level `MathArg::Plain(MathArgBody::…)` shape.
+
+fn lower_math_elems(elems: &[cst_v1::MathErasedV1]) -> Result<Vec<cst::MathErased>, LowerError> {
+    elems
+        .iter()
+        .map(|e| Ok(cst::MathErased(Box::new(lower_math_elem_cst(e)?))))
+        .collect()
+}
+
+fn lower_math_elem_cst(m: &ast_v1::MathElemCst) -> Result<cst::ast::MathElemCst, LowerError> {
+    Ok(cst::ast::MathElemCst {
+        base: lower_math_bot(&m.base)?,
+        scripts: m
+            .scripts
+            .iter()
+            .map(lower_math_script)
+            .collect::<Result<_, _>>()?,
+    })
+}
+
+fn lower_math_bot(b: &ast_v1::MathBot) -> Result<cst::ast::MathBot, LowerError> {
+    Ok(match b {
+        ast_v1::MathBot::Cmd { name, args } => cst::ast::MathBot::Cmd {
+            // cst_v1's bare `MathCmdTok` carries the dotted-scanned name (no
+            // separate module-qualified math-command token exists at this
+            // node — a `\Mod.cmd` math command isn't produced here), so
+            // `Plain` wrapping is faithful — the same "reuse the existing
+            // tag" shape `plain_horz`/`plain_vert` use (`leaf.rs:119-121`).
+            name: AnyMathCmdTok::Plain(name.clone()),
+            args: args.iter().map(lower_math_arg).collect::<Result<_, _>>()?,
+        },
+        ast_v1::MathBot::Chars(t) => cst::ast::MathBot::Chars(t.clone()),
+        ast_v1::MathBot::Embed(t) => cst::ast::MathBot::Embed(t.clone()),
+        ast_v1::MathBot::Sep(t) => cst::ast::MathBot::Sep(t.clone()),
+        ast_v1::MathBot::Group { mgrp, elems } => cst::ast::MathBot::Group {
+            mgrp: mgrp.clone(),
+            elems: lower_math_elems(elems)?,
+        },
+    })
+}
+
+fn lower_math_script(s: &ast_v1::MathScript) -> Result<cst::ast::MathScript, LowerError> {
+    Ok(match s {
+        ast_v1::MathScript::Super { hat, group } => cst::ast::MathScript::Super {
+            hat: hat.clone(),
+            group: lower_math_group_arg(group)?,
+        },
+        ast_v1::MathScript::Sub { under, group } => cst::ast::MathScript::Sub {
+            under: under.clone(),
+            group: lower_math_group_arg(group)?,
+        },
+        ast_v1::MathScript::Primes(t) => cst::ast::MathScript::Primes(t.clone()),
+    })
+}
+
+fn lower_math_group_arg(g: &ast_v1::MathGroupArg) -> Result<cst::ast::MathGroupArg, LowerError> {
+    Ok(match g {
+        ast_v1::MathGroupArg::Group { mgrp, elems } => cst::ast::MathGroupArg::Group {
+            mgrp: mgrp.clone(),
+            elems: lower_math_elems(elems)?,
+        },
+        ast_v1::MathGroupArg::Bot(b) => {
+            cst::ast::MathGroupArg::Bot(Box::new(lower_math_bot(b)?))
+        }
+    })
+}
+
+fn lower_math_arg(a: &ast_v1::MathArg) -> Result<cst::ast::MathArg, LowerError> {
+    Ok(cst::ast::MathArg::Plain(match a {
+        ast_v1::MathArg::Math { mgrp, elems } => cst::ast::MathArgBody::Math {
+            mgrp: mgrp.clone(),
+            elems: lower_math_elems(elems)?,
+        },
+        ast_v1::MathArg::Inline { igrp, elems } => cst::ast::MathArgBody::Inline {
+            igrp: igrp.clone(),
+            elems: elems
+                .iter()
+                .map(lower_inline_elem)
+                .collect::<Result<_, _>>()?,
+        },
+        ast_v1::MathArg::Block { bgrp, elems } => cst::ast::MathArgBody::Block {
+            bgrp: bgrp.clone(),
+            elems: elems
+                .iter()
+                .map(lower_block_elem)
+                .collect::<Result<_, _>>()?,
+        },
+        ast_v1::MathArg::ParenEscape { paren, inner } => cst::ast::MathArgBody::ParenEscape {
+            paren: paren.clone(),
+            inner: Box::new(lower_paren_body(inner)?),
+        },
+        ast_v1::MathArg::ListEscape { list, items } => cst::ast::MathArgBody::ListEscape {
+            list: list.clone(),
+            items: items.iter().map(lower_list_item).collect::<Result<_, _>>()?,
+        },
+        ast_v1::MathArg::RecordEscape { rec, body } => cst::ast::MathArgBody::RecordEscape {
+            rec: rec.clone(),
+            body: lower_record_body(body)?,
+        },
+    }))
 }
 
 // ---- Pattern layer --------------------------------------------------------
@@ -1385,25 +1903,128 @@ mod tests {
         assert!(matches!(&*decls[1].0, cst::TopBinding::Type(d) if d.name.name == "M.b"));
     }
 
+    /// G2: `type t = (| x : int, y : bool |)` lowers to `cst::ast::
+    /// TypeAtom::Record` with the field list transcribed field-by-field
+    /// (labels, colons, and lowered field types) — the pure-transcription
+    /// arm in `lower_type_atom`.
     #[test]
-    fn optional_app_arg_is_a_lower_error() {
-        let file = parse_v1("f ?:1");
-        let err = lower_document_v1(&file).unwrap_err();
-        assert!(err.to_string().contains("optional"), "{err}");
+    fn type_record_lowers_to_cst_record_atom() {
+        let file = parse_v1("module M = struct\ntype t = (| x : int, y : bool |)\nend");
+        let lowered = lower_file_v1(&file).unwrap_or_else(|e| panic!("lower_file_v1: {e}"));
+        let cst::TopBinding::Module { decls, .. } = &lowered[0] else {
+            panic!("expected a TopBinding::Module");
+        };
+        let cst::TopBinding::Type(t_decl) = &*decls[0].0 else {
+            panic!("expected a Type decl");
+        };
+        let cst::TypeDeclBody::Synonym(ty) = &t_decl.body else {
+            panic!("expected a synonym body");
+        };
+        let cst::ast::TypeExpr::Atom(prod) = ty else {
+            panic!("expected a bare TypeProd");
+        };
+        let cst::ast::TypeApp::Atom(cst::ast::TypeAtom::Record { fields, .. }) = &prod.first else {
+            panic!("expected TypeAtom::Record, got {:?}", prod.first);
+        };
+        assert_eq!(fields.len(), 2);
+        assert_eq!(fields[0].name.name, "x");
+        assert!(
+            matches!(&*fields[0].ty.0, cst::ast::TypeExpr::Atom(p)
+                if matches!(&p.first, cst::ast::TypeApp::Atom(cst::ast::TypeAtom::Name(n)) if n.name == "int")),
+            "{:?}",
+            fields[0].ty.0
+        );
+        assert_eq!(fields[1].name.name, "y");
+        assert!(
+            matches!(&*fields[1].ty.0, cst::ast::TypeExpr::Atom(p)
+                if matches!(&p.first, cst::ast::TypeApp::Atom(cst::ast::TypeAtom::Name(n)) if n.name == "bool")),
+            "{:?}",
+            fields[1].ty.0
+        );
     }
 
+    /// A bare local type name used INSIDE a record type field gets the
+    /// same `tyenv.qualify` every other type position gets (mirrors
+    /// `type_and_chain_inside_module_qualifies_names_and_synonym_reference`
+    /// above, but for a field type rather than a synonym body).
     #[test]
-    fn omission_app_arg_is_a_lower_error() {
-        let file = parse_v1("f ?*");
-        let err = lower_document_v1(&file).unwrap_err();
-        assert!(err.to_string().contains("optional"), "{err}");
+    fn type_record_field_type_is_qualified_like_any_other_type_position() {
+        let file = parse_v1(
+            "module M = struct\n\
+             type config = int\n\
+             type t = (| c : config |)\n\
+             end",
+        );
+        let lowered = lower_file_v1(&file).unwrap_or_else(|e| panic!("lower_file_v1: {e}"));
+        let cst::TopBinding::Module { decls, .. } = &lowered[0] else {
+            panic!("expected a TopBinding::Module");
+        };
+        assert_eq!(decls.len(), 2);
+        let cst::TopBinding::Type(t_decl) = &*decls[1].0 else {
+            panic!("expected decls[1] to be a Type decl");
+        };
+        assert_eq!(t_decl.name.name, "M.t");
+        let cst::TypeDeclBody::Synonym(ty) = &t_decl.body else {
+            panic!("expected a synonym body");
+        };
+        let cst::ast::TypeExpr::Atom(prod) = ty else {
+            panic!("expected a bare TypeProd");
+        };
+        let cst::ast::TypeApp::Atom(cst::ast::TypeAtom::Record { fields, .. }) = &prod.first else {
+            panic!("expected TypeAtom::Record, got {:?}", prod.first);
+        };
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].name.name, "c");
+        let cst::ast::TypeExpr::Atom(field_prod) = &*fields[0].ty.0 else {
+            panic!("expected a bare TypeProd for the field type");
+        };
+        let cst::ast::TypeApp::Atom(cst::ast::TypeAtom::Name(n)) = &field_prod.first else {
+            panic!("expected a bare type name atom, got {:?}", field_prod.first);
+        };
+        assert_eq!(n.name, "M.config", "the field's bare `config` must qualify to M.config");
     }
 
+    /// SATySFi 0.1 dropped the fused `?:`/`?*` optional sigils entirely
+    /// (optional-arg-rows increment 1): under V0_1 the lexer emits only `?` =
+    /// `OptionalType`, so `?:1`/`?*` now lex as `?` + `:`/`*` — a downstream
+    /// PARSE error, no longer reaching the lowerer. Replaced by the labeled
+    /// `?(l = e)` bundle.
     #[test]
-    fn math_text_is_a_lower_error() {
+    fn old_optional_sigils_no_longer_parse() {
+        assert!(satysfi_syntax::parse_file_v1("f ?:1").is_err());
+        assert!(satysfi_syntax::parse_file_v1("f ?*").is_err());
+    }
+
+    /// A `?(l = e, …)` labeled-optional application bundle lowers to
+    /// `AppArg::Bundled`; an empty `?()` bundle is a `LowerError`.
+    #[test]
+    fn empty_opt_arg_bundle_is_a_lower_error() {
+        let file = parse_v1("f ?() x");
+        let err = lower_document_v1(&file).unwrap_err();
+        assert!(err.to_string().contains("optional-argument bundle"), "{err}");
+    }
+
+    /// math-split spec §3.1: `${…}` now lowers STRUCTURALLY — the
+    /// deferral this test used to pin (`math_text_is_a_lower_error`) turned
+    /// out unnecessary, since `${…}`'s *value* is version-independent (only
+    /// the surrounding type/prim tables differ, per `typecheck.rs`'s
+    /// `name_to_mono`). Round-trips `${x}` through `Atomic::MathText` down
+    /// to its one `MathBot::Chars("x")` element.
+    #[test]
+    fn math_text_lowers_structurally() {
         let file = parse_v1("${x}");
-        let err = lower_document_v1(&file).unwrap_err();
-        assert!(err.to_string().contains("math"), "{err}");
+        let ast = lower_document_v1(&file).unwrap_or_else(|e| panic!("lower_document_v1: {e}"));
+        let cst::ast::Expr::Ops(chain) = &ast else {
+            panic!("expected Expr::Ops, got {ast:?}");
+        };
+        let cst::ast::Atomic::MathText { elems, .. } = &chain.head.head else {
+            panic!("expected Atomic::MathText, got {:?}", chain.head.head);
+        };
+        assert_eq!(elems.len(), 1, "one math element (`x`)");
+        let cst::ast::MathBot::Chars(t) = &elems[0].base else {
+            panic!("expected MathBot::Chars, got {:?}", elems[0].base);
+        };
+        assert_eq!(t.text, "x");
     }
 
     /// The shared lexer never actually emits a module-qualified command
@@ -1537,15 +2158,20 @@ mod tests {
 
     /// §4.3-E4 / §5.4 test T17 twin 2: the struct body still lowers
     /// (surfacing its own precise error) whether or not the module carries
-    /// a `:>` annotation — a 0.1-math body error is identical either way,
-    /// since the annotation is no longer consulted by lowering at all.
+    /// a `:>` annotation — a body error is identical either way, since the
+    /// annotation is no longer consulted by lowering at all. Body error:
+    /// an arity-≥2 type application (`pair int int`) — still unsupported
+    /// (§3.4/`lower_type_app`, above) — swapped in from the original 0.1-
+    /// math body error the math-split spec resolved (§3.1: `${…}` now
+    /// lowers structurally, so it can no longer serve as this test's
+    /// "still errors" body).
     #[test]
     fn sig_annot_body_error_is_identical_with_or_without_a_seal() {
-        let sealed = parse_v1("module M :> sig end = struct\nval m = ${x}\nend");
-        let unsealed = parse_v1("module M = struct\nval m = ${x}\nend");
+        let sealed = parse_v1("module M :> sig end = struct\ntype t = pair int int\nend");
+        let unsealed = parse_v1("module M = struct\ntype t = pair int int\nend");
         let sealed_err = lower_file_v1(&sealed).unwrap_err();
         let unsealed_err = lower_file_v1(&unsealed).unwrap_err();
-        assert!(sealed_err.to_string().contains("math"), "{sealed_err}");
+        assert!(sealed_err.to_string().contains("more than one argument"), "{sealed_err}");
         assert_eq!(sealed_err.construct, unsealed_err.construct);
         assert_eq!(sealed_err.hint, unsealed_err.hint);
     }

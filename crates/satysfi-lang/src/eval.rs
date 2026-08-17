@@ -4,8 +4,8 @@
 use crate::ast::{Ast, Pattern};
 use crate::crossref::CrossRefs;
 use crate::value::{Env, Value};
-use satysfi_backend::{FontMetrics, ImageResource, MathCmdId};
-use satysfi_syntax::Span;
+use satysfi_backend::{DocInfo, FontMetrics, ImageResource, MathCmdId};
+use satysfi_syntax::{SatysfiVersion, Span};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -99,6 +99,12 @@ pub struct Interp<'a> {
     pub destinations: Vec<satysfi_backend::NamedDest>,
     pub outline: Vec<satysfi_backend::OutlineEntry>,
     pub page_graphics: Vec<Vec<satysfi_backend::GraphicsElem>>,
+    /// `register-document-information`'s accumulator (prim-retype-sweep
+    /// §2.4) — LAST WRITE WINS, same reset-per-trial policy as
+    /// `outline`/`annotations`/`destinations` above (a fresh `Interp` per
+    /// trial resets this to `None`; the final trial's value is drained into
+    /// `DocExtras::doc_info` by `lib.rs`'s `eval_document_trials`).
+    pub doc_info: Option<DocInfo>,
     /// `Some(0-based page)` only while `fire_hooks` is walking that page —
     /// the port of upstream's `State.during_page_break` + "current page"
     /// (`annotation.ml:15`, `namedDest.ml`'s `notify_pagebreak`).
@@ -118,6 +124,15 @@ pub struct Interp<'a> {
     /// graphics list`), indexed by `GraphicsFnId` — the `hooks` pattern.
     /// Reset per trial like `hooks`/`images`.
     pub outer_graphics: Vec<Value>,
+    /// The target language version this evaluation run is checking against
+    /// (math-split spec §3.4) — consulted only by `read_inline`'s
+    /// `IText::EmbedMath` FALLBACK arm (no installed math command; unit-test
+    /// contexts only — the installed-command path is version-blind already).
+    /// Default `V0_0_6`; `lib.rs`'s `eval_document_trials` (the shared tail
+    /// both `compile_document_cst_with_trials` and
+    /// `compile_document_v1_with_trials` fall into) sets this to the real
+    /// target version on every `Interp` it constructs.
+    pub version: SatysfiVersion,
 }
 
 impl<'a> Interp<'a> {
@@ -133,10 +148,12 @@ impl<'a> Interp<'a> {
             destinations: Vec::new(),
             outline: Vec::new(),
             page_graphics: Vec::new(),
+            doc_info: None,
             current_page: None,
             dest_names: std::collections::HashMap::new(),
             decos: Vec::new(),
             outer_graphics: Vec::new(),
+            version: SatysfiVersion::V0_0_6,
         }
     }
 
@@ -177,10 +194,33 @@ impl<'a> Interp<'a> {
                 self.apply(func, arg)
             }
             Ast::Lambda(param, body) => Ok(Value::Closure {
+                opt_params: Vec::new(),
                 param: param.clone(),
                 body: body.clone(),
                 env: env.clone(),
             }),
+            // `fun ?(l = x, …) p -> body` (SATySFi 0.1). Builds a closure
+            // that additionally binds each labeled-optional param at
+            // application time (`Some`/`None` defaulting in
+            // `apply_with_opts`).
+            Ast::LambdaOpt { opts, param, body } => Ok(Value::Closure {
+                opt_params: opts.clone(),
+                param: param.clone(),
+                body: body.clone(),
+                env: env.clone(),
+            }),
+            // `f ?(l = e, …) arg` (SATySFi 0.1) — evaluate the function, each
+            // labeled optional value, and the positional argument, then
+            // beta-reduce with the optional bundle.
+            Ast::ApplyOpt { func, opts, arg } => {
+                let f = self.eval(env, func)?;
+                let mut opt_vals = Vec::with_capacity(opts.len());
+                for (label, e) in opts {
+                    opt_vals.push((label.clone(), self.eval(env, e)?));
+                }
+                let a = self.eval(env, arg)?;
+                self.apply_with_opts(f, opt_vals, a)
+            }
             Ast::LetIn(name, value, rest) => {
                 let v = self.eval(env, value)?;
                 let inner = env.child();
@@ -431,18 +471,55 @@ impl<'a> Interp<'a> {
     }
 
     pub fn apply(&mut self, func: Value, arg: Value) -> Result<Value, EvalError> {
+        // A plain (0.0.6-shaped) application supplies no optional bundle; a
+        // closure that *does* declare optional params (reached this way from
+        // e.g. a higher-order caller) then defaults every one to `None`,
+        // faithful to upstream's `reduce_beta_list`.
+        self.apply_with_opts(func, Vec::new(), arg)
+    }
+
+    /// Beta-reduce `func` against a positional argument plus a SATySFi 0.1
+    /// labeled-optional bundle. For a closure, each of the closure's declared
+    /// optional params binds `Some v` when the bundle carries its label, else
+    /// `None`; a supplied label the closure does not declare is ignored
+    /// (upstream `reduce_beta` folds over the *closure's* map — the
+    /// typechecker rejects genuinely-wrong labels first). This
+    /// unknown-label-ignore is only sound because typecheck runs first.
+    pub fn apply_with_opts(
+        &mut self,
+        func: Value,
+        opt_vals: Vec<(String, Value)>,
+        arg: Value,
+    ) -> Result<Value, EvalError> {
         match func {
-            Value::Closure { param, body, env } => {
+            Value::Closure {
+                opt_params,
+                param,
+                body,
+                env,
+            } => {
                 let inner = env.child();
+                bind_opt_params(&inner, &opt_params, &opt_vals);
                 inner.define(param, arg);
                 self.eval(&inner, &body)
             }
-            Value::CompiledClosure { param, body, env } => {
+            Value::CompiledClosure {
+                opt_params,
+                param,
+                body,
+                env,
+            } => {
                 let inner = env.child();
+                bind_opt_params(&inner, &opt_params, &opt_vals);
                 inner.define(param, arg);
                 body.run(&inner, self)
             }
             Value::Prim { def, mut applied } => {
+                if !opt_vals.is_empty() {
+                    return eval_error(
+                        "labeled optional arguments to a primitive are roadmap phase 5",
+                    );
+                }
                 applied.push(arg);
                 if applied.len() == def.arity {
                     (def.run)(self, applied)
@@ -455,6 +532,21 @@ impl<'a> Interp<'a> {
                 other.type_name()
             )),
         }
+    }
+}
+
+/// Bind each of a closure's SATySFi 0.1 labeled-optional params into `env`:
+/// `Some v` when `opt_vals` supplies the label, `None` otherwise (upstream
+/// `reduce_beta`'s fold over the closure's own label map). Supplied labels a
+/// closure does not declare are silently ignored — safe only because
+/// typecheck rejects wrong labels first.
+fn bind_opt_params(env: &Env, opt_params: &[(String, String)], opt_vals: &[(String, Value)]) {
+    for (label, binder) in opt_params {
+        let value = match opt_vals.iter().find(|(l, _)| l == label) {
+            Some((_, v)) => Value::Ctor("Some".to_string(), Some(Box::new(v.clone()))),
+            None => Value::Ctor("None".to_string(), None),
+        };
+        env.define(binder.clone(), value);
     }
 }
 

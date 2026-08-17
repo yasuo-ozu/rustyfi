@@ -110,6 +110,13 @@ fn eval_document_trials(
         let env = primitives::base_env_with_version(version);
         let mut interp = eval::Interp::new(metrics);
         interp.crossrefs = crossrefs.clone();
+        // math-split spec §3.4: threads `version` onto the `Interp` so
+        // `read_inline`'s `EmbedMath` fallback arm (no installed math
+        // command — unit-test contexts only) can dispatch between
+        // `reflect_math_elem`/`reflect_math_elem_v01`. Both callers of this
+        // shared tail already receive/pass the real `version`, so this is a
+        // single, version-agnostic line.
+        interp.version = version;
         let doc = match compiled.run(&env, &mut interp)? {
             Value::Document(doc) => doc,
             other => return Err(CompileError::NotADocument(other.type_name())),
@@ -131,6 +138,7 @@ fn eval_document_trials(
                     destinations: std::mem::take(&mut interp.destinations),
                     outline: std::mem::take(&mut interp.outline),
                     page_graphics: std::mem::take(&mut interp.page_graphics),
+                    doc_info: interp.doc_info.take(),
                 };
                 return Ok((Rc::new(final_doc), trials));
             }
@@ -201,7 +209,7 @@ pub fn compile_document_v1_with_trials(
     // -- the shared pipeline, V0_1-tagged (mirrors
     //    compile_document_cst_with_trials line for line) --
     let env0 = primitives::base_env_with_version(SatysfiVersion::V0_1);
-    let scope = elaborate::Scope::new(env0.names());
+    let scope = elaborate::Scope::new_with_version(env0.names(), SatysfiVersion::V0_1);
     let program = elaborate::elaborate_program(&file, &scope)?;
     v1::module_check::check_program(&dep_csts, &program)?;
     let compiled = compile::compile_program(&program.body, &env0);

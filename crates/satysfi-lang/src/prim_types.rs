@@ -51,16 +51,34 @@ pub fn t_inline_text() -> MonoType {
 pub fn t_block_text() -> MonoType {
     MonoType::Base(BaseType::BlockText)
 }
-/// `math` (vminst.ml's `tMATH`).
+/// `math` (v0.0.6, vminst.ml's `tMATH`) / `math-text` (V0_1, upstream's
+/// literal rename of 0.0.6's `math`, dev-0-1-0 `tMT`) — same `MonoType`
+/// (`BaseType::MathText`) under both versions; only the surface NAME differs
+/// (`typecheck.rs`'s `name_to_mono`, version-gated). `${…}`'s unparsed
+/// source, in both generations.
 pub fn t_math_text() -> MonoType {
     MonoType::Base(BaseType::MathText)
 }
-/// `math` — alias of [`t_math_text`], named to match `docs/plans/math-
-/// engine.md`'s own `t_math()` naming (both name the same
+/// `math` — v0.0.6-only alias of [`t_math_text`], named to match
+/// `docs/plans/math-engine.md`'s own `t_math()` naming (both name the same
 /// `BaseType::MathText`; kept as a thin alias rather than renaming the
-/// original, which `IText`/`Ast::MathText`'s existing call sites already use).
+/// original, which `IText`/`Ast::MathText`'s existing call sites already
+/// use). V0_1 code should read `t_math_text()` at its call sites instead —
+/// this alias exists only for 0.0.6 signatures already written against it.
 pub fn t_math() -> MonoType {
     t_math_text()
+}
+/// `math-boxes` (V0_1 only; dev-0-1-0 vminst.ml's `tMB`) — the evaluated
+/// math tree `read-math` produces (math-split spec §1.1). 0.0.6 has no name
+/// for this type (its `math` conflates both halves).
+pub fn t_math_boxes() -> MonoType {
+    MonoType::Base(BaseType::MathBoxes)
+}
+/// `context -> math-boxes` (V0_1 only) — the script-callback type
+/// `math-sup`/`math-sub`/`math-upper`/`math-lower` take in 0.1
+/// (vminst.ml:208-353), evaluated under `enter_script`.
+pub fn t_math_script_fn() -> MonoType {
+    arrow(t_context(), t_math_boxes())
 }
 /// `math-class` (`docs/plans/math-engine.md` §A item 2;
 /// `primitives.cppo.ml:162-170`'s `MathOrd | MathBin | MathRel | MathOp |
@@ -197,6 +215,34 @@ pub fn t_pbinfo() -> MonoType {
         Box::new(types::Row::Empty),
     ))
 }
+/// `tDOCINFODIC` (dev-0-1-0 `src/frontend/primitives.cppo.ml:98-107`):
+/// `register-document-information`'s argument, a *named* record type
+/// `document-information-dictionary` = `(| title : option string, subject
+/// : option string, author : option string, keywords : list string |)`.
+/// Structural here, the same `t_pbinfo` precedent above: upstream registers
+/// a `SynonymType` name for the identical closed row, which this port
+/// deliberately doesn't mirror nominally (cosmetic deviation — revisit only
+/// if a 0.1 package names the type in a signature, prim-retype-sweep §6
+/// item 2).
+pub fn t_doc_info_dictionary() -> MonoType {
+    MonoType::Record(types::Row::Cons(
+        "title".to_string(),
+        Box::new(t_option(t_string())),
+        Box::new(types::Row::Cons(
+            "subject".to_string(),
+            Box::new(t_option(t_string())),
+            Box::new(types::Row::Cons(
+                "author".to_string(),
+                Box::new(t_option(t_string())),
+                Box::new(types::Row::Cons(
+                    "keywords".to_string(),
+                    Box::new(list(t_string())),
+                    Box::new(types::Row::Empty),
+                )),
+            )),
+        )),
+    ))
+}
 /// `page` (vminst.ml's `tPG`) — the one new nominal variant this plan adds:
 /// `A0Paper | A1Paper | ... | A5Paper | USLetter | USLegal |
 /// UserDefinedPaper of (length * length)` (`primitives.cppo.ml:203-212`),
@@ -307,17 +353,33 @@ pub fn t_cell() -> MonoType {
 pub fn t_dash() -> MonoType {
     product(vec![t_length(), t_length(), t_length()])
 }
+/// The result type of a graphics-producing callback (`inline-graphics`'s
+/// `tIGR`, `inline-graphics-outer`'s `tIGRO`, `tabular`'s `tRULESF`,
+/// `t_deco`'s own result): `list graphics` (`tL tGR`) under `V0_0_6`, one
+/// `graphics` collection (`tGR`) under `V0_1` — the hidden alias-redefinition
+/// retype `docs/plans/…/prim-retype-sweep.md` §1.3 surfaces (H1-H6, R2).
+/// Runtime counterpart: `coerce_graphics_result` (`primitives.rs`), keyed on
+/// the same `SatysfiVersion::graphics_is_collection()` capability so the env
+/// and type-env agree by construction.
+pub fn t_graphics_output(version: SatysfiVersion) -> MonoType {
+    if version.graphics_is_collection() {
+        t_graphics()
+    } else {
+        list(t_graphics())
+    }
+}
 /// `deco` (vminst.ml's `tDECO_raw = tPT @-> tLN @-> tLN @-> tLN @-> (tL
-/// tGR)`) — a callback `point -> length -> length -> length -> graphics
-/// list`, invoked (once placed) with its own position and resolved
-/// width/height/depth. `inline-frame-outer`'s stand-in body
-/// (`primitives.rs`) never actually calls it (see that primitive's doc
-/// comment), but it is typed faithfully so callers still type-check exactly
-/// as they would upstream.
-pub fn t_deco() -> MonoType {
+/// tGR)` under `V0_0_6`; dev-0-1-0 redefines the same alias with a bare
+/// `tGR` result — §1.3/H3-H6) — a callback `point -> length -> length ->
+/// length -> {list graphics / graphics}`, invoked (once placed) with its own
+/// position and resolved width/height/depth. `inline-frame-outer`'s
+/// stand-in body (`primitives.rs`) never actually calls it (see that
+/// primitive's doc comment), but it is typed faithfully so callers still
+/// type-check exactly as they would upstream.
+pub fn t_deco(version: SatysfiVersion) -> MonoType {
     arrows(
         vec![t_point(), t_length(), t_length(), t_length()],
-        list(t_graphics()),
+        t_graphics_output(version),
     )
 }
 /// `deco-set = deco * deco * deco * deco` (vminst.ml's `tDECOSET`) —
@@ -327,8 +389,8 @@ pub fn t_deco() -> MonoType {
 /// entirely (like `t_deco()`'s own callers above), but it is typed
 /// faithfully here so callers still type-check exactly as they would
 /// upstream. docs/plans/context-box-prims.md §4.
-pub fn t_decoset() -> MonoType {
-    product(vec![t_deco(); 4])
+pub fn t_decoset(version: SatysfiVersion) -> MonoType {
+    product(vec![t_deco(version); 4])
 }
 /// `font = string * float * float` (vminst.ml's `tFONT`) — an
 /// `(abbrev, size_ratio, rising_ratio)` triple; `set-font`'s second
@@ -337,9 +399,12 @@ pub fn t_font() -> MonoType {
     product(vec![t_string(), t_float(), t_float()])
 }
 
-/// `dom -> cod` (vminst.ml's `@->`).
+/// `dom -> cod` (vminst.ml's `@->`) — a function taking no labeled optional
+/// arguments (`Row::Empty`). This keeps the signature unchanged, so every
+/// 0.0.6 primitive/inference site building a `Func` produces the empty-row
+/// shape by construction, byte-identical to before the row widening.
 pub fn arrow(dom: MonoType, cod: MonoType) -> MonoType {
-    MonoType::Func(Box::new(dom), Box::new(cod))
+    MonoType::Func(Box::new(crate::types::Row::Empty), Box::new(dom), Box::new(cod))
 }
 
 /// Right-folds [`arrow`] over `doms`, ending in `cod` — for chaining
@@ -421,6 +486,79 @@ pub fn primitive_type(name: &str) -> Option<PolyType> {
 /// resolving against `SatysfiVersion::V0_0_6` exactly as before.
 pub fn primitive_type_with_version(name: &str, version: SatysfiVersion) -> Option<PolyType> {
     Some(match name {
+        // ==== math-split spec §2.1: removed in 0.1 — guard these OUT of
+        // the type table under V0_1 before falling through to their
+        // ordinary (0.0.6-only-meaningful) arms further below. Runtime
+        // availability is the `prims!` table's `v006` tag on the same six
+        // names; this guard keeps the two mechanisms in agreement. ====
+        "get-axis-height" | "math-pull-in-scripts" | "math-color" | "math-char-class"
+        | "math-variant-char" | "text-in-math"
+            if version.math_is_split() =>
+        {
+            return None
+        }
+
+        // ==== math-split spec §2.2: added in 0.1 — unbound under V0_0_6
+        // (falls through this guard to the catch-all `_ => return None`
+        // below, since none of these names have a v0.0.6 arm at all). ====
+        //
+        // `read-math : context -> math-text -> math-boxes` (dev-0-1-0
+        // vminst.ml:790-793) — REAL, see `primitives.rs`'s `prim_read_math`.
+        "read-math" if version.math_is_split() => poly0(arrows(
+            vec![t_context(), t_math_text()],
+            t_math_boxes(),
+        )),
+        // `stringify-math : text-info -> math-text -> string` (vminst.ml:
+        // 858) — STAND-IN body (out-of-scope text backend, same scoping
+        // note as `primitives.rs`'s `prim_convert_string_for_math`);
+        // registered so 0.1 packages typecheck.
+        "stringify-math" if version.math_is_split() => poly0(arrows(
+            vec![t_text_info(), t_math_text()],
+            t_string(),
+        )),
+        // `set-math-char : int -> int -> math-class -> context -> context`
+        // (vminst.ml:59) — REAL: inserts into `Context::math_class_map`.
+        "set-math-char" if version.math_is_split() => poly0(arrows(
+            vec![t_int(), t_int(), t_math_class(), t_context()],
+            t_context(),
+        )),
+        // `set-math-char-class : math-char-class -> context -> context`
+        // (vminst.ml:445) — REAL: sets `Context::math_char_class`.
+        "set-math-char-class" if version.math_is_split() => poly0(arrows(
+            vec![t_math_char_class(), t_context()],
+            t_context(),
+        )),
+        // `get-math-char-class : context -> math-char-class` (vminst.ml:459)
+        // — REAL: inverse of `as_math_char_class`.
+        "get-math-char-class" if version.math_is_split() => {
+            poly0(arrow(t_context(), t_math_char_class()))
+        }
+        // `embed-inline-to-math : math-class -> inline-boxes -> math-boxes`
+        // (vminst.ml:432) — REAL data, stand-in render (`MathElement::
+        // EmbeddedBoxes`).
+        "embed-inline-to-math" if version.math_is_split() => poly0(arrows(
+            vec![t_math_class(), t_inline_boxes()],
+            t_math_boxes(),
+        )),
+        // `get-math-axis-height-ratio : context -> float` (vminst.ml:1305)
+        // — REAL: the axis-height ratio `MathC` already scales by.
+        "get-math-axis-height-ratio" if version.math_is_split() => {
+            poly0(arrow(t_context(), t_float()))
+        }
+        // `%math-attach-scripts : context -> math-boxes -> option math-text
+        // -> option math-text -> math-boxes` — hidden (unlexable name, `%`
+        // starts a comment), the synthesized script-attacher `val math`
+        // commands without `with sub sup` lower to (math-split spec §4.3).
+        "%math-attach-scripts" if version.math_is_split() => poly0(arrows(
+            vec![
+                t_context(),
+                t_math_boxes(),
+                t_option(t_math_text()),
+                t_option(t_math_text()),
+            ],
+            t_math_boxes(),
+        )),
+
         // ---- milestone-1 natives (no vminst.ml entry — local signatures) ----
         //
         // `read-inline : context -> inline-text -> inline-boxes`
@@ -723,7 +861,11 @@ pub fn primitive_type_with_version(name: &str, version: SatysfiVersion) -> Optio
         "display-message" => poly0(arrow(t_string(), t_unit())),
         // vminst.ml:3133 `AbortWithMessage`: `~% (tS @-> (~@ tv))` — a
         // fresh-per-instantiation type variable (see `!`/`::`'s `poly1`
-        // above for the same pattern).
+        // above for the same pattern). ZERO-EDIT row (prim-retype-sweep
+        // §1.4/§0.1): dev-0-1-0's vminst.ml row for this name differs only
+        // in NOTATION (`let bid = …` vs `forall "a"`), not in the type
+        // itself — both generations are the identical polymorphic `∀a.
+        // string -> a`, so this one arm serves both versions unchanged.
         "abort-with-message" => poly1(|a| arrow(t_string(), a)),
 
         // ==== Slice 1 graphics primitives (docs/plans/graphics-subsystem.md
@@ -750,40 +892,50 @@ pub fn primitive_type_with_version(name: &str, version: SatysfiVersion) -> Optio
             t_graphics(),
         )),
         // `inline-graphics : length -> length -> length -> (point ->
-        // graphics list) -> inline-boxes` — a box of size (w, h, d) carrying
-        // the callback's graphics, the minimal on-page sink for `graphics`
-        // values (see that primitive's body, `primitives.rs`, for the
-        // eager-callback-at-origin caveat this signature doesn't capture).
+        // {list graphics / graphics}) -> inline-boxes` — a box of size (w,
+        // h, d) carrying the callback's graphics, the minimal on-page sink
+        // for `graphics` values (see that primitive's body, `primitives.rs`,
+        // for the eager-callback-at-origin caveat this signature doesn't
+        // capture). H1 (prim-retype-sweep.md §1.3): the callback's RESULT
+        // forks per version via `t_graphics_output`; row stays untagged
+        // (`Both`) — see `coerce_graphics_result`'s doc comment for why.
         "inline-graphics" => poly0(arrows(
             vec![
                 t_length(),
                 t_length(),
                 t_length(),
-                arrow(t_point(), list(t_graphics())),
+                arrow(t_point(), t_graphics_output(version)),
             ],
             t_inline_boxes(),
         )),
 
         // `tabular : (cell list) list -> (length list -> length list ->
-        // graphics list) -> inline-boxes` (vminst.ml:539, `tRULESF = (tL
-        // tLN) @-> (tL tLN) @-> (tL tGR)` at primitives.cppo.ml:141) — the
-        // ruled-grid primitive; docs/plans/table-subsystem.md §Slice 1.
+        // {list graphics / graphics}) -> inline-boxes` (v0.0.6 vminst.ml:539,
+        // `tRULESF = (tL tLN) @-> (tL tLN) @-> (tL tGR)` at
+        // primitives.cppo.ml:141; dev-0-1-0 inlines the same shape with a
+        // bare `tGR` result, vminst.ml:487-489) — the ruled-grid primitive;
+        // docs/plans/table-subsystem.md §Slice 1. R2 (prim-retype-sweep.md
+        // §1.2): same per-version callback-result fork as `inline-graphics`.
         "tabular" => poly0(arrows(
             vec![
                 list(list(t_cell())),
-                arrows(vec![list(t_length()), list(t_length())], list(t_graphics())),
+                arrows(
+                    vec![list(t_length()), list(t_length())],
+                    t_graphics_output(version),
+                ),
             ],
             t_inline_boxes(),
         )),
 
         // vminst.ml:1891 `BackendInlineGraphicsOuter`: `~% (tLN @-> tLN @->
-        // tIGRO @-> tIB)` — tIGRO = `length -> point -> graphics list` (the
-        // resolved width, then the placed point).
+        // tIGRO @-> tIB)` — tIGRO = `length -> point -> {list graphics /
+        // graphics}` (the resolved width, then the placed point). H2
+        // (prim-retype-sweep.md §1.3): same per-version callback-result fork.
         "inline-graphics-outer" => poly0(arrows(
             vec![
                 t_length(),
                 t_length(),
-                arrows(vec![t_length(), t_point()], list(t_graphics())),
+                arrows(vec![t_length(), t_point()], t_graphics_output(version)),
             ],
             t_inline_boxes(),
         )),
@@ -824,7 +976,33 @@ pub fn primitive_type_with_version(name: &str, version: SatysfiVersion) -> Optio
             t_graphics(),
         )),
         // `get-graphics-bbox : graphics -> point * point`.
-        "get-graphics-bbox" => poly0(arrow(t_graphics(), product(vec![t_point(), t_point()]))),
+        // `get-graphics-bbox` — R3 fork (prim-retype-sweep.md §1.2/§3.5):
+        // v0.0.6 `graphics -> point * point` (vminst.ml:2466); v0.1
+        // `graphics -> option (point * point)` (dev-0-1-0 vminst.ml:2301) —
+        // `graphics` is a collection under 0.1, so an empty one legitimately
+        // has no bbox.
+        "get-graphics-bbox" => {
+            let bbox_ty = product(vec![t_point(), t_point()]);
+            if version.graphics_is_collection() {
+                poly0(arrow(t_graphics(), t_option(bbox_ty)))
+            } else {
+                poly0(arrow(t_graphics(), bbox_ty))
+            }
+        }
+        // `unite-graphics : list graphics -> graphics` (dev-0-1-0
+        // vminst.ml:3119) — v0.1-only (prim-retype-sweep.md §1.1, A12); the
+        // math-split §2.2 mirror-guard idiom — under `V0_0_6` this guard
+        // fails and the match falls through to the catch-all `_ => return
+        // None` at the bottom, so the name is correctly unbound there.
+        "unite-graphics" if version.graphics_is_collection() => {
+            poly0(arrow(list(t_graphics()), t_graphics()))
+        }
+        // `clip-graphics-by-path : path -> graphics -> graphics` (dev-0-1-0
+        // vminst.ml:3105) — v0.1-only (A13).
+        "clip-graphics-by-path" if version.graphics_is_collection() => poly0(arrows(
+            vec![t_path(), t_graphics()],
+            t_graphics(),
+        )),
         // `get-path-bbox : path -> point * point` (vminst.ml:696
         // `PathGetBoundingBox`).
         "get-path-bbox" => poly0(arrow(t_path(), product(vec![t_point(), t_point()]))),
@@ -850,13 +1028,13 @@ pub fn primitive_type_with_version(name: &str, version: SatysfiVersion) -> Optio
         // @-> tIB)`. STAND-IN body — see primitives.rs's
         // `prim_inline_frame_outer` doc comment.
         "inline-frame-outer" => poly0(arrows(
-            vec![t_paddings(), t_deco(), t_inline_boxes()],
+            vec![t_paddings(), t_deco(version), t_inline_boxes()],
             t_inline_boxes(),
         )),
         // vminst.ml:1807 `BackendInnerFrame`: `~% (tPADS @-> tDECO @-> tIB
         // @-> tIB)` — same signature as `inline-frame-outer` above.
         "inline-frame-inner" => poly0(arrows(
-            vec![t_paddings(), t_deco(), t_inline_boxes()],
+            vec![t_paddings(), t_deco(version), t_inline_boxes()],
             t_inline_boxes(),
         )),
         // vminst.ml:1661 `PrimitiveSetManualRising`: `~% (tLN @-> tCTX @->
@@ -921,7 +1099,7 @@ pub fn primitive_type_with_version(name: &str, version: SatysfiVersion) -> Optio
         "get-rightmost-script" => poly0(arrow(t_inline_boxes(), t_option(t_script()))),
         // vminstdef.yaml:1672 `~% (tPADS @-> tDECOSET @-> tIB @-> tIB)`.
         "inline-frame-breakable" => poly0(arrows(
-            vec![t_paddings(), t_decoset(), t_inline_boxes()],
+            vec![t_paddings(), t_decoset(version), t_inline_boxes()],
             t_inline_boxes(),
         )),
         // vminstdef.yaml:2738 `~% (tS @-> tPT @-> tU)`.
@@ -958,43 +1136,173 @@ pub fn primitive_type_with_version(name: &str, version: SatysfiVersion) -> Optio
         // A unless noted. ====
         //
         // vminst.ml:388 `BackendMathChar`: `~% (tMATHCLS @-> tS @-> tMATH)`.
-        "math-char" => poly0(arrows(vec![t_math_class(), t_string()], t_math())),
+        // v0.1 (dev-0-1-0 vminst.ml:358): `ctx -> class -> str -> mb` — ctx
+        // ACCEPTED, not stored on the atom (math-split spec §2.3/§9 risk 1).
+        "math-char" => {
+            if version.math_is_split() {
+                poly0(arrows(
+                    vec![t_context(), t_math_class(), t_string()],
+                    t_math_boxes(),
+                ))
+            } else {
+                poly0(arrows(vec![t_math_class(), t_string()], t_math()))
+            }
+        }
         // vminst.ml:405 `BackendMathBigChar` — same shape, large-operator
         // size class (roadmap D upscales it; Slice 1 renders it the same
-        // size as `math-char`).
-        "math-big-char" => poly0(arrows(vec![t_math_class(), t_string()], t_math())),
+        // size as `math-char`). v0.1 (vminst.ml:374): same fork as `math-char`.
+        "math-big-char" => {
+            if version.math_is_split() {
+                poly0(arrows(
+                    vec![t_context(), t_math_class(), t_string()],
+                    t_math_boxes(),
+                ))
+            } else {
+                poly0(arrows(vec![t_math_class(), t_string()], t_math()))
+            }
+        }
         // vminst.ml:422 `BackendMathCharWithKern`:
-        // `~% (tMATHCLS @-> tS @-> mckf @-> mckf @-> tMATH)`.
-        "math-char-with-kern" => poly0(arrows(
-            vec![t_math_class(), t_string(), t_math_kern_func(), t_math_kern_func()],
-            t_math(),
-        )),
-        // vminst.ml:445 `BackendMathBigCharWithKern` — same shape.
-        "math-big-char-with-kern" => poly0(arrows(
-            vec![t_math_class(), t_string(), t_math_kern_func(), t_math_kern_func()],
-            t_math(),
-        )),
+        // `~% (tMATHCLS @-> tS @-> mckf @-> mckf @-> tMATH)`. v0.1
+        // (vminst.ml:390): `ctx -> class -> str -> kf -> kf -> mb`.
+        "math-char-with-kern" => {
+            if version.math_is_split() {
+                poly0(arrows(
+                    vec![
+                        t_context(),
+                        t_math_class(),
+                        t_string(),
+                        t_math_kern_func(),
+                        t_math_kern_func(),
+                    ],
+                    t_math_boxes(),
+                ))
+            } else {
+                poly0(arrows(
+                    vec![t_math_class(), t_string(), t_math_kern_func(), t_math_kern_func()],
+                    t_math(),
+                ))
+            }
+        }
+        // vminst.ml:445 `BackendMathBigCharWithKern` — same shape. v0.1
+        // (vminst.ml:411): same fork as `math-char-with-kern`.
+        "math-big-char-with-kern" => {
+            if version.math_is_split() {
+                poly0(arrows(
+                    vec![
+                        t_context(),
+                        t_math_class(),
+                        t_string(),
+                        t_math_kern_func(),
+                        t_math_kern_func(),
+                    ],
+                    t_math_boxes(),
+                ))
+            } else {
+                poly0(arrows(
+                    vec![t_math_class(), t_string(), t_math_kern_func(), t_math_kern_func()],
+                    t_math(),
+                ))
+            }
+        }
         // vminst.ml:193 `BackendMathConcat`: `~% (tMATH @-> tMATH @-> tMATH)`.
-        "math-concat" => poly0(arrows(vec![t_math(), t_math()], t_math())),
+        // v0.1 (vminst.ml:181): `mb -> mb -> mb`.
+        "math-concat" => {
+            if version.math_is_split() {
+                poly0(arrows(vec![t_math_boxes(), t_math_boxes()], t_math_boxes()))
+            } else {
+                poly0(arrows(vec![t_math(), t_math()], t_math()))
+            }
+        }
         // vminst.ml:209 `BackendMathGroup`:
-        // `~% (tMATHCLS @-> tMATHCLS @-> tMATH @-> tMATH)`.
-        "math-group" => poly0(arrows(
-            vec![t_math_class(), t_math_class(), t_math()],
-            t_math(),
-        )),
-        // vminst.ml:226 `BackendMathSuperscript`.
-        "math-sup" => poly0(arrows(vec![t_math(), t_math()], t_math())),
-        // vminst.ml:242 `BackendMathSubscript`.
-        "math-sub" => poly0(arrows(vec![t_math(), t_math()], t_math())),
-        // vminst.ml:258 `BackendMathFraction`. Phase C.
-        "math-frac" => poly0(arrows(vec![t_math(), t_math()], t_math())),
+        // `~% (tMATHCLS @-> tMATHCLS @-> tMATH @-> tMATH)`. v0.1
+        // (vminst.ml:194): `class -> class -> mb -> mb`.
+        "math-group" => {
+            if version.math_is_split() {
+                poly0(arrows(
+                    vec![t_math_class(), t_math_class(), t_math_boxes()],
+                    t_math_boxes(),
+                ))
+            } else {
+                poly0(arrows(
+                    vec![t_math_class(), t_math_class(), t_math()],
+                    t_math(),
+                ))
+            }
+        }
+        // vminst.ml:226 `BackendMathSuperscript`. v0.1 (vminst.ml:208):
+        // `ctx -> mb -> (ctx -> mb) -> mb` — the script argument is a
+        // context-taking callback, evaluated under `enter_script`.
+        "math-sup" => {
+            if version.math_is_split() {
+                poly0(arrows(
+                    vec![t_context(), t_math_boxes(), t_math_script_fn()],
+                    t_math_boxes(),
+                ))
+            } else {
+                poly0(arrows(vec![t_math(), t_math()], t_math()))
+            }
+        }
+        // vminst.ml:242 `BackendMathSubscript`. v0.1 (vminst.ml:228): same
+        // shape as `math-sup`.
+        "math-sub" => {
+            if version.math_is_split() {
+                poly0(arrows(
+                    vec![t_context(), t_math_boxes(), t_math_script_fn()],
+                    t_math_boxes(),
+                ))
+            } else {
+                poly0(arrows(vec![t_math(), t_math()], t_math()))
+            }
+        }
+        // vminst.ml:258 `BackendMathFraction`. Phase C. v0.1 (vminst.ml:248):
+        // `ctx -> mb -> mb -> mb`.
+        "math-frac" => {
+            if version.math_is_split() {
+                poly0(arrows(
+                    vec![t_context(), t_math_boxes(), t_math_boxes()],
+                    t_math_boxes(),
+                ))
+            } else {
+                poly0(arrows(vec![t_math(), t_math()], t_math()))
+            }
+        }
         // vminst.ml:274 `BackendMathRadical`:
-        // `~% (tOPT tMATH @-> tMATH @-> tMATH)`. Phase C.
-        "math-radical" => poly0(arrows(vec![t_option(t_math()), t_math()], t_math())),
-        // vminst.ml:352 `BackendMathLowerLimit`. Phase D.
-        "math-lower" => poly0(arrows(vec![t_math(), t_math()], t_math())),
-        // vminst.ml:336 `BackendMathUpperLimit`. Phase D.
-        "math-upper" => poly0(arrows(vec![t_math(), t_math()], t_math())),
+        // `~% (tOPT tMATH @-> tMATH @-> tMATH)`. Phase C. v0.1
+        // (vminst.ml:262): `ctx -> option mb -> mb -> mb`.
+        "math-radical" => {
+            if version.math_is_split() {
+                poly0(arrows(
+                    vec![t_context(), t_option(t_math_boxes()), t_math_boxes()],
+                    t_math_boxes(),
+                ))
+            } else {
+                poly0(arrows(vec![t_option(t_math()), t_math()], t_math()))
+            }
+        }
+        // vminst.ml:352 `BackendMathLowerLimit`. Phase D. v0.1
+        // (vminst.ml:338): same script-callback shape as `math-sup`.
+        "math-lower" => {
+            if version.math_is_split() {
+                poly0(arrows(
+                    vec![t_context(), t_math_boxes(), t_math_script_fn()],
+                    t_math_boxes(),
+                ))
+            } else {
+                poly0(arrows(vec![t_math(), t_math()], t_math()))
+            }
+        }
+        // vminst.ml:336 `BackendMathUpperLimit`. Phase D. v0.1
+        // (vminst.ml:318): same script-callback shape as `math-sup`.
+        "math-upper" => {
+            if version.math_is_split() {
+                poly0(arrows(
+                    vec![t_context(), t_math_boxes(), t_math_script_fn()],
+                    t_math_boxes(),
+                ))
+            } else {
+                poly0(arrows(vec![t_math(), t_math()], t_math()))
+            }
+        }
         // vminst.ml:368 `BackendMathPullInScripts`:
         // `~% (tMATHCLS @-> tMATHCLS @-> (tOPT tMATH @-> tOPT tMATH @-> tMATH)
         // @-> tMATH)`. Phase D.
@@ -1022,27 +1330,78 @@ pub fn primitive_type_with_version(name: &str, version: SatysfiVersion) -> Optio
         // int -> context -> context` (`set-math-variant-char`); `context ->
         // math -> math-class option` (the boundary-class introspection
         // pair).
-        "set-math-variant-char" => poly0(arrows(
-            vec![t_math_char_class(), t_int(), t_int(), t_context()],
-            t_context(),
-        )),
-        "get-left-math-class" => poly0(arrows(
-            vec![t_context(), t_math()],
-            t_option(t_math_class()),
-        )),
-        "get-right-math-class" => poly0(arrows(
-            vec![t_context(), t_math()],
-            t_option(t_math_class()),
-        )),
+        // v0.1 (vminst.ml:36): `int -> (mccls -> int) -> ctx -> ctx` — the
+        // v01 body applies the selector once per each of the 9
+        // `MathCharClass` values and inserts into `math_variant_char_map`
+        // (eager materialization of upstream's stored selector).
+        "set-math-variant-char" => {
+            if version.math_is_split() {
+                poly0(arrows(
+                    vec![
+                        t_int(),
+                        arrow(t_math_char_class(), t_int()),
+                        t_context(),
+                    ],
+                    t_context(),
+                ))
+            } else {
+                poly0(arrows(
+                    vec![t_math_char_class(), t_int(), t_int(), t_context()],
+                    t_context(),
+                ))
+            }
+        }
+        // v0.1 (vminst.ml:128): `mb -> option math-class` — ctx dropped.
+        "get-left-math-class" => {
+            if version.math_is_split() {
+                poly0(arrow(t_math_boxes(), t_option(t_math_class())))
+            } else {
+                poly0(arrows(vec![t_context(), t_math()], t_option(t_math_class())))
+            }
+        }
+        // v0.1 (vminst.ml:146): same fork as `get-left-math-class`.
+        "get-right-math-class" => {
+            if version.math_is_split() {
+                poly0(arrow(t_math_boxes(), t_option(t_math_class())))
+            } else {
+                poly0(arrows(vec![t_context(), t_math()], t_option(t_math_class())))
+            }
+        }
         // vminst.ml:294 `BackendMathParen`:
-        // `~% (tPAREN @-> tPAREN @-> tMATH @-> tMATH)`. Phase D.
-        "math-paren" => poly0(arrows(vec![t_paren(), t_paren(), t_math()], t_math())),
+        // `~% (tPAREN @-> tPAREN @-> tMATH @-> tMATH)`. Phase D. v0.1
+        // (vminst.ml:279): `ctx -> paren -> paren -> mb -> mb`.
+        "math-paren" => {
+            if version.math_is_split() {
+                poly0(arrows(
+                    vec![t_context(), t_paren(), t_paren(), t_math_boxes()],
+                    t_math_boxes(),
+                ))
+            } else {
+                poly0(arrows(vec![t_paren(), t_paren(), t_math()], t_math()))
+            }
+        }
         // vminst.ml:314 `BackendMathParenWithMiddle`:
         // `~% (tPAREN @-> tPAREN @-> tPAREN @-> tL tMATH @-> tMATH)`. Phase D.
-        "math-paren-with-middle" => poly0(arrows(
-            vec![t_paren(), t_paren(), t_paren(), list(t_math())],
-            t_math(),
-        )),
+        // v0.1 (vminst.ml:297): `ctx -> paren*3 -> list mb -> mb`.
+        "math-paren-with-middle" => {
+            if version.math_is_split() {
+                poly0(arrows(
+                    vec![
+                        t_context(),
+                        t_paren(),
+                        t_paren(),
+                        t_paren(),
+                        list(t_math_boxes()),
+                    ],
+                    t_math_boxes(),
+                ))
+            } else {
+                poly0(arrows(
+                    vec![t_paren(), t_paren(), t_paren(), list(t_math())],
+                    t_math(),
+                ))
+            }
+        }
         // vminst.ml:468 `BackendMathText` (named `text-in-math`):
         // `~% (tMATHCLS @-> (tCTX @-> tIB) @-> tMATH)`. Phase E.
         "text-in-math" => poly0(arrows(
@@ -1058,8 +1417,16 @@ pub fn primitive_type_with_version(name: &str, version: SatysfiVersion) -> Optio
         )),
         // vminst.ml:520 `BackendEmbeddedMath` (named `embed-math`):
         // `~% (tCTX @-> tMATH @-> tIB)` — the bridge to the page; `\math`
-        // (math.satyh:439) wraps this.
-        "embed-math" => poly0(arrows(vec![t_context(), t_math()], t_inline_boxes())),
+        // (math.satyh:439) wraps this. v0.1 (vminst.ml:472): `ctx -> mb ->
+        // ib` — `as_math_boxes` then the SAME `layout_math_value`, the
+        // whole MATH-engine reuse in one primitive.
+        "embed-math" => {
+            if version.math_is_split() {
+                poly0(arrows(vec![t_context(), t_math_boxes()], t_inline_boxes()))
+            } else {
+                poly0(arrows(vec![t_context(), t_math()], t_inline_boxes()))
+            }
+        }
         // vminst.ml:77 `PrimitiveSetMathCommand`:
         // `~% (tICMD tMATH @-> tCTX @-> tCTX)` — installs the default
         // command a bare `${…}`-in-text dispatches to. FAITHFUL: interned
@@ -1078,10 +1445,21 @@ pub fn primitive_type_with_version(name: &str, version: SatysfiVersion) -> Optio
         // `~% (tCTX @-> tMATH @-> tMATH @-> tOPT tIB)`. Phase E — STAND-IN
         // body (the full `space_between_math_kinds` table is phase A.4,
         // roadmap); used by `math.satyh`'s `+align`.
-        "space-between-maths" => poly0(arrows(
-            vec![t_context(), t_math(), t_math()],
-            t_option(t_inline_boxes()),
-        )),
+        // v0.1 (vminst.ml:164): `ctx -> mb -> mb -> option ib` — shared
+        // body, only the extractor forks.
+        "space-between-maths" => {
+            if version.math_is_split() {
+                poly0(arrows(
+                    vec![t_context(), t_math_boxes(), t_math_boxes()],
+                    t_option(t_inline_boxes()),
+                ))
+            } else {
+                poly0(arrows(
+                    vec![t_context(), t_math(), t_math()],
+                    t_option(t_inline_boxes()),
+                ))
+            }
+        }
         // vminst.ml:1677 `PrimitiveRaiseInline` (name inferred from usage;
         // not independently confirmed against a `~name:` line):
         // `~% (tLN @-> tIB @-> tIB)`. STAND-IN body — see `primitives.rs`'s
@@ -1150,7 +1528,7 @@ pub fn primitive_type_with_version(name: &str, version: SatysfiVersion) -> Optio
             vec![
                 t_context(),
                 t_paddings(),
-                t_decoset(),
+                t_decoset(version),
                 arrow(t_context(), t_block_boxes()),
             ],
             t_block_boxes(),
@@ -1267,12 +1645,77 @@ pub fn primitive_type_with_version(name: &str, version: SatysfiVersion) -> Optio
         // deliberately out of scope for this PDF port — see
         // `primitives.rs`'s section comment. ====
         //
-        // vminst.ml:953 `TextGetInitialTextModeContext`: `~% (tU @-> tTCTX)`.
-        "get-initial-text-info" => poly0(arrow(t_unit(), t_text_info())),
+        // `get-initial-text-info` — the R1 fork (prim-retype-sweep §2.5,
+        // the `t_page_or_geometry`-style version branch, inlined since it's
+        // one row): v0.0.6 (vminst.ml:953 `TextGetInitialTextModeContext`)
+        // is `~% (tU @-> tTCTX)`; v0.1 (dev-0-1-0 vminst.ml:906) threads the
+        // text-mode default math command (`inline [math-text]`) + a
+        // math-scripts stringifier (`string -> option string -> option
+        // string -> string`) into `tctxsub`. Both bodies are the same
+        // STAND-IN (`primitives.rs`'s `prim_get_initial_text_info_v01`).
+        "get-initial-text-info" => {
+            if version == SatysfiVersion::V0_1 {
+                poly0(arrows(
+                    vec![
+                        inline_cmd(vec![mandatory(t_math_text())]),
+                        arrows(
+                            vec![t_string(), t_option(t_string()), t_option(t_string())],
+                            t_string(),
+                        ),
+                    ],
+                    t_text_info(),
+                ))
+            } else {
+                poly0(arrow(t_unit(), t_text_info()))
+            }
+        }
         // vminst.ml:921 `TextDeepenIndent`: `~% (tI @-> tTCTX @-> tTCTX)`.
         "deepen-indent" => poly0(arrows(vec![t_int(), t_text_info()], t_text_info())),
         // vminst.ml:935 `TextBreak`: `~% (tTCTX @-> tS)`.
         "break" => poly0(arrow(t_text_info(), t_string())),
+
+        // ==== L5a (prim-retype-sweep §2.1-2.4): 11 new v0.1-only rows,
+        // unbound under V0_0_6 (they fall through to the catch-all `_ =>
+        // return None` below, the same math-split §2.2 idiom). ====
+        //
+        // Bitwise ops (dev-0-1-0 vminst.ml :2495/:2477/:2527/:2541/:2513/
+        // :2556) — trivial int -> int (-> int); `<<`/`>>` lex as ordinary
+        // opsymbol-run identifiers under BOTH versions (`primitives.rs`'s
+        // `prims!` table comment), so only the type table's V0_1 guard
+        // decides whether they resolve.
+        "<<" | ">>" | "band" | "bor" | "bxor" if version == SatysfiVersion::V0_1 => {
+            poly0(arrows(vec![t_int(), t_int()], t_int()))
+        }
+        "bnot" if version == SatysfiVersion::V0_1 => poly0(arrow(t_int(), t_int())),
+        // Unicode string ops (dev-0-1-0 vminst.ml :2050/:2066/:2082) — REAL,
+        // `primitives.rs`'s `prim_normalize_string_to_nfc`/`_nfd`/
+        // `prim_split_grapheme_cluster`.
+        "normalize-string-to-nfc" | "normalize-string-to-nfd" if version == SatysfiVersion::V0_1 => {
+            poly0(arrow(t_string(), t_string()))
+        }
+        "split-grapheme-cluster" if version == SatysfiVersion::V0_1 => {
+            poly0(arrow(t_string(), list(t_string())))
+        }
+        // `read-file : string -> list string` (dev-0-1-0 vminst.ml:3073) —
+        // REAL, `primitives.rs`'s `prim_read_file`.
+        "read-file" if version == SatysfiVersion::V0_1 => {
+            poly0(arrow(t_string(), list(t_string())))
+        }
+        // `register-document-information : document-information-dictionary
+        // -> unit` (dev-0-1-0 vminst.ml:2978) — REAL, `primitives.rs`'s
+        // `prim_register_document_information`.
+        "register-document-information" if version == SatysfiVersion::V0_1 => {
+            poly0(arrow(t_doc_info_dictionary(), t_unit()))
+        }
+
+        // ---- language-completeness sweep gap 1: 0.1 float comparisons
+        // (`primitives.rs`'s `prims!` table comment on ">."/"<."/">=."/
+        // "<=." for the upstream citation + the confirmation these are
+        // genuinely absent from 0.0.6) — unbound under V0_0_6, same
+        // catch-all-`_` fallthrough idiom as the L5a/L5b rows above.
+        ">." | "<." | ">=." | "<=." if version == SatysfiVersion::V0_1 => {
+            poly0(arrows(vec![t_float(), t_float()], t_bool()))
+        }
 
         _ => return None,
     })

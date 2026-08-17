@@ -33,7 +33,8 @@ use ttf_parser::{Face, GlyphId};
 use crate::ttf::TtfFontStore;
 use crate::{
     image_res_name, place_embedded_block, place_graphics, place_image, place_math, used_images,
-    write_annotations, write_image_xobjects, write_named_dests, write_outline, PdfError,
+    write_annotations, write_document_info, write_image_xobjects, write_named_dests, write_outline,
+    PdfError,
 };
 
 /// The PDF resource name for physical font file `file_idx` (D1a,
@@ -133,6 +134,11 @@ pub fn render_pdf_ttf_with(
     let dests_id =
         write_named_dests(&mut pdf, || next_ref(&mut alloc), &extras.destinations, &page_ids);
     let outline_id = write_outline(&mut pdf, || next_ref(&mut alloc), &extras.outline);
+    // prim-retype-sweep §2.4 step 5 — see `lib.rs`'s matching comment.
+    if let Some(info) = &extras.doc_info {
+        let info_id = next_ref(&mut alloc);
+        write_document_info(&mut pdf, info_id, info);
+    }
 
     {
         let mut cat = pdf.catalog(catalog_id);

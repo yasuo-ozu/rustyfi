@@ -18,9 +18,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use pdf_writer::types::{ActionType, AnnotationType};
 use pdf_writer::{Content, Finish, Name, Pdf, Rect, Ref, Str, TextStr};
 use satysfi_backend::{
-    place_block_at, Annot, AnnotAction, Closing, Color, DocExtras, GraphicsElem, ImageResource,
-    Length, MathGlyph, NamedDest, OutlineEntry, Page, PageGeometry, Path, PathSeg, PureHorzBox,
-    VertBox,
+    place_block_at, Annot, AnnotAction, Closing, Color, DocExtras, DocInfo, GraphicsElem,
+    ImageResource, Length, MathGlyph, NamedDest, OutlineEntry, Page, PageGeometry, Path, PathSeg,
+    PureHorzBox, VertBox,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -402,6 +402,41 @@ pub(crate) fn write_outline(
     Some(root_id)
 }
 
+/// Emit the PDF `/Info` dictionary at `id` (`prim-retype-sweep §2.4 step
+/// 5`) from `register-document-information`'s registered value — shared by
+/// both writers (`render_pdf_with` above and `cid::render_pdf_ttf_with`).
+/// `pdf.document_info(id)` self-registers with the file trailer (pdf-writer
+/// `structure.rs`'s doc comment), so the caller only needs to allocate
+/// `id` and call this once, gated on `extras.doc_info.is_some()` (an
+/// unregistered document emits no `/Info` object at all, keeping every
+/// pre-L5a PDF byte-identical). `/Title`/`/Subject`/`/Author` are written
+/// only when `Some`; `/Keywords` only when non-empty, joined with a single
+/// space (upstream `String.concat " "`,
+/// `documentInformationDictionary.ml`). DOCUMENTED DEVIATION:
+/// `/Creator`/`/Producer` are written unconditionally *once this function
+/// runs* (i.e. only when the dict is registered at all) — upstream instead
+/// emits them on EVERY document (the `/Info` dict always exists there);
+/// gating the whole dict on registration is what keeps this slice's
+/// byte-identity floor for every existing 0.0.6 fixture (§7 acceptance 4).
+pub(crate) fn write_document_info(pdf: &mut Pdf, id: Ref, info: &DocInfo) {
+    let mut w = pdf.document_info(id);
+    if let Some(title) = &info.title {
+        w.title(TextStr(title));
+    }
+    if let Some(subject) = &info.subject {
+        w.subject(TextStr(subject));
+    }
+    if let Some(author) = &info.author {
+        w.author(TextStr(author));
+    }
+    if !info.keywords.is_empty() {
+        let joined = info.keywords.join(" ");
+        w.keywords(TextStr(&joined));
+    }
+    w.creator(TextStr("SATySFi"));
+    w.producer(TextStr("SATySFi"));
+}
+
 /// Serialize typeset pages into a complete PDF document. `images` is the
 /// document-wide image table (`DocumentValue::images`); pass `&[]` for a
 /// text-only document (nothing in `pages` can reference an id past the end
@@ -451,6 +486,14 @@ pub fn render_pdf_with(
     let annot_refs = write_annotations(&mut pdf, &mut next_ref, &extras.annotations, pages.len());
     let dests_id = write_named_dests(&mut pdf, &mut next_ref, &extras.destinations, &page_ids);
     let outline_id = write_outline(&mut pdf, &mut next_ref, &extras.outline);
+    // prim-retype-sweep §2.4 step 5: `/Info` dict, gated on `Some` so a
+    // document that never called `register-document-information` (every
+    // pre-L5a document included) emits byte-identical bytes to before this
+    // slice.
+    if let Some(info) = &extras.doc_info {
+        let info_id = next_ref();
+        write_document_info(&mut pdf, info_id, info);
+    }
 
     {
         let mut cat = pdf.catalog(catalog_id);
@@ -705,6 +748,25 @@ pub(crate) fn place_graphics(
                 for (dx, bx) in contents {
                     emit_nested(content, bx, (pt.0 + *dx).0 as f32, pt.1 .0 as f32)?;
                 }
+            }
+            // L5b (prim-retype-sweep.md §3.3): 0.1's `graphics` collection
+            // container nodes. Never reached by any 0.0.6 program (no
+            // 0.0.6-visible prim constructs `Group`/`Clip` — see
+            // `GraphicsElem`'s doc comment); the §4.3 golden-PDF
+            // byte-compare is the tripwire that proves it.
+            GraphicsElem::Group(inner) => {
+                // Recurse with a zero anchor: the outer q/cm(tx,ty) frame
+                // above is already active; a nested translate of (0,0) is
+                // what upstream's flat `List.concat` renders to.
+                place_graphics(content, inner, 0.0, 0.0, &mut *emit_nested)?;
+            }
+            GraphicsElem::Clip(path, inner) => {
+                // `graphicD.ml:323-336`: q; path; W' n; contents; Q — the
+                // per-element q…Q wrapper above already provides the q/Q.
+                emit_path(content, path);
+                content.clip_even_odd();
+                content.end_path();
+                place_graphics(content, inner, 0.0, 0.0, &mut *emit_nested)?;
             }
         }
         content.restore_state();

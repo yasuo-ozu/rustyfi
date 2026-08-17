@@ -121,6 +121,18 @@ pub enum GraphicsElem {
         height: Length,
         depth: Length,
     },
+    /// 0.1 collection node (`GraphicD.concat`, dev-0-1-0 `graphicD.ml:23`):
+    /// `unite-graphics`' payload (`docs/plans/…/prim-retype-sweep.md` §3.2).
+    /// Never constructed by any 0.0.6 path — no 0.0.6-visible primitive
+    /// builds one, so it is unreachable from 0.0.6 rendering by construction
+    /// (§4.3's golden-PDF byte-compare is the tripwire that proves it).
+    Group(Vec<GraphicsElem>),
+    /// 0.1 clip node (`GraphicD.make_clip`, `graphicD.ml:97-98`): render
+    /// `contents` clipped to `clip` (even-odd, `Op_W'` — `graphicD.ml:331`).
+    /// The port's `Path` already carries N subpaths, standing in for
+    /// upstream's `path list`. Never constructed by any 0.0.6 path (same
+    /// invariant as `Group` above).
+    Clip(Path, Vec<GraphicsElem>),
 }
 
 // ============================================================================
@@ -205,6 +217,15 @@ pub fn shift_graphics(v: Point, elem: &GraphicsElem) -> GraphicsElem {
             height: *height,
             depth: *depth,
         },
+        // `graphicD.ml:38`: `Group` maps every child; `Clip` shifts its own
+        // clip path AND recurses into its contents.
+        GraphicsElem::Group(gs) => {
+            GraphicsElem::Group(gs.iter().map(|g| shift_graphics(v, g)).collect())
+        }
+        GraphicsElem::Clip(path, gs) => GraphicsElem::Clip(
+            shift_path(v, path),
+            gs.iter().map(|g| shift_graphics(v, g)).collect(),
+        ),
     }
 }
 
@@ -233,6 +254,17 @@ pub fn linear_transform_graphics(mat: (f64, f64, f64, f64), elem: &GraphicsElem)
             height: *height,
             depth: *depth,
         },
+        // Same recursing shape as `shift_graphics` above; the stroke-width
+        // caveat documented on the `Text` arm's doc comment above extends
+        // to any `Stroke`/`DashedStroke` nested inside a transformed `Clip`/
+        // `Group` — no behavior change, just more elements it now reaches.
+        GraphicsElem::Group(gs) => GraphicsElem::Group(
+            gs.iter().map(|g| linear_transform_graphics(mat, g)).collect(),
+        ),
+        GraphicsElem::Clip(path, gs) => GraphicsElem::Clip(
+            linear_transform_path(mat, path),
+            gs.iter().map(|g| linear_transform_graphics(mat, g)).collect(),
+        ),
     }
 }
 
@@ -332,17 +364,141 @@ pub fn path_bbox(path: &Path) -> (Point, Point) {
     )
 }
 
-/// `get-graphics-bbox : graphics -> point * point` (vminst.ml:2466) —
-/// `graphicD.ml`'s `get_element_bbox`, ignoring stroke thickness (matching
-/// upstream's own documented simplification); `Text`'s bbox is the run's
-/// stored `natural_metrics` at its anchor (see that variant's doc comment).
-pub fn graphics_bbox(elem: &GraphicsElem) -> (Point, Point) {
+/// Union two bounding boxes (component-wise min/max of the two corners).
+fn union_bbox((amin, amax): (Point, Point), (bmin, bmax): (Point, Point)) -> (Point, Point) {
+    (
+        (
+            Length(amin.0 .0.min(bmin.0 .0)),
+            Length(amin.1 .0.min(bmin.1 .0)),
+        ),
+        (
+            Length(amax.0 .0.max(bmax.0 .0)),
+            Length(amax.1 .0.max(bmax.1 .0)),
+        ),
+    )
+}
+
+/// `get-graphics-bbox : graphics -> point * point` (v0.0.6 vminst.ml:2466) /
+/// `graphics -> option (point * point)` (dev-0-1-0 vminst.ml:2301,
+/// `docs/plans/…/prim-retype-sweep.md` §3.2 — the L8b "version-blind fix")
+/// — `graphicD.ml`'s `get_bbox`/`get_element_bbox`, ignoring stroke
+/// thickness (matching upstream's own documented simplification); `Text`'s
+/// bbox is the run's stored `natural_metrics` at its anchor (see that
+/// variant's doc comment). `Clip(paths, _)` returns the CLIP PATHS' own
+/// bbox, ignoring `contents` (upstream `graphicD.ml:50-52` — deliberate:
+/// the clip boundary, not what's inside it, bounds the visible ink).
+/// `Group` union-folds its children (`graphicD.ml:61-74`'s fold);
+/// `None` for an empty `Group` (no ink at all) or an empty top-level list —
+/// the caller-visible witness of "nothing here" that v0.0.6 could never
+/// produce (no 0.0.6 constructor yields `Group`/`Clip`).
+pub fn graphics_bbox(elem: &GraphicsElem) -> Option<(Point, Point)> {
     match elem {
         GraphicsElem::Fill(_, p)
         | GraphicsElem::Stroke(_, _, p)
-        | GraphicsElem::DashedStroke(_, _, _, p) => path_bbox(p),
+        | GraphicsElem::DashedStroke(_, _, _, p) => Some(path_bbox(p)),
         GraphicsElem::Text { pt, width, height, depth, .. } => {
-            ((pt.0, pt.1 - *depth), (pt.0 + *width, pt.1 + *height))
+            Some(((pt.0, pt.1 - *depth), (pt.0 + *width, pt.1 + *height)))
         }
+        GraphicsElem::Clip(path, _) => Some(path_bbox(path)),
+        GraphicsElem::Group(gs) => gs
+            .iter()
+            .filter_map(graphics_bbox)
+            .reduce(union_bbox),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rect(x0: f64, y0: f64, x1: f64, y1: f64) -> Path {
+        Path {
+            subpaths: vec![Subpath {
+                start: (Length(x0), Length(y0)),
+                segs: vec![
+                    PathSeg::Line((Length(x1), Length(y0))),
+                    PathSeg::Line((Length(x1), Length(y1))),
+                    PathSeg::Line((Length(x0), Length(y1))),
+                ],
+                closing: Closing::Line,
+            }],
+        }
+    }
+
+    /// L5b §4.2 test 4: `shift-graphics`/`linear-transform-graphics` over a
+    /// `Clip`/`Group` move both the clip path and the contents (the
+    /// `graphicD.ml:38` recursing-arm contract — prim-retype-sweep.md §3.2).
+    #[test]
+    fn shift_and_transform_recurse_into_clip_and_group() {
+        let fill = GraphicsElem::Fill(Color::Gray(0.0), rect(0.0, 0.0, 1.0, 1.0));
+        let group = GraphicsElem::Group(vec![fill.clone(), fill.clone()]);
+        let shifted_group = shift_graphics((Length(2.0), Length(3.0)), &group);
+        match &shifted_group {
+            GraphicsElem::Group(gs) => {
+                assert_eq!(gs.len(), 2);
+                for g in gs {
+                    assert_eq!(
+                        graphics_bbox(g),
+                        Some(((Length(2.0), Length(3.0)), (Length(3.0), Length(4.0))))
+                    );
+                }
+            }
+            other => panic!("expected Group, got {other:?}"),
+        }
+
+        let clip = GraphicsElem::Clip(rect(0.0, 0.0, 5.0, 5.0), vec![fill.clone()]);
+        let shifted_clip = shift_graphics((Length(1.0), Length(1.0)), &clip);
+        match &shifted_clip {
+            GraphicsElem::Clip(path, inner) => {
+                assert_eq!(
+                    path_bbox(path),
+                    ((Length(1.0), Length(1.0)), (Length(6.0), Length(6.0)))
+                );
+                assert_eq!(
+                    graphics_bbox(&inner[0]),
+                    Some(((Length(1.0), Length(1.0)), (Length(2.0), Length(2.0))))
+                );
+            }
+            other => panic!("expected Clip, got {other:?}"),
+        }
+
+        // `linear-transform-graphics` (scale by 2 on both axes) also
+        // recurses into both the clip path AND the contents.
+        let scaled_clip = linear_transform_graphics((2.0, 0.0, 0.0, 2.0), &clip);
+        match &scaled_clip {
+            GraphicsElem::Clip(path, inner) => {
+                assert_eq!(
+                    path_bbox(path),
+                    ((Length(0.0), Length(0.0)), (Length(10.0), Length(10.0)))
+                );
+                assert_eq!(
+                    graphics_bbox(&inner[0]),
+                    Some(((Length(0.0), Length(0.0)), (Length(2.0), Length(2.0))))
+                );
+            }
+            other => panic!("expected Clip, got {other:?}"),
+        }
+    }
+
+    /// `get-graphics-bbox` `Option` semantics (L8b): an empty `Group` has no
+    /// ink and returns `None`; a `Group` of two fills union-folds; a `Clip`
+    /// returns the CLIP PATH's own bbox, ignoring `contents`.
+    #[test]
+    fn bbox_option_semantics() {
+        assert_eq!(graphics_bbox(&GraphicsElem::Group(vec![])), None);
+
+        let a = GraphicsElem::Fill(Color::Gray(0.0), rect(0.0, 0.0, 1.0, 1.0));
+        let b = GraphicsElem::Fill(Color::Gray(0.0), rect(2.0, 2.0, 3.0, 3.0));
+        let group = GraphicsElem::Group(vec![a.clone(), b.clone()]);
+        assert_eq!(
+            graphics_bbox(&group),
+            Some(((Length(0.0), Length(0.0)), (Length(3.0), Length(3.0))))
+        );
+
+        let clip = GraphicsElem::Clip(rect(10.0, 10.0, 20.0, 20.0), vec![a]);
+        assert_eq!(
+            graphics_bbox(&clip),
+            Some(((Length(10.0), Length(10.0)), (Length(20.0), Length(20.0))))
+        );
     }
 }

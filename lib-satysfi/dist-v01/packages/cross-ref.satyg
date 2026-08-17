@@ -1,0 +1,26 @@
+% cross-ref.satyg — SATySFi 0.1 stdlib `CrossRef`, vendored for Legacy
+% packaging (docs/plans/satysfi-0-1-0-support.md §2 P2 / §4 phase 6).
+% Source: saphe-split@b836d512:lib-satysfi/packages/stdlib/stdlib.0.0.1/
+%   src/cross-ref.satyg — transliteration deltas: NONE beyond the banner.
+%   `register-cross-reference`/`get-cross-reference`/`probe-cross-reference`
+%   (Group E) are all landed (`prim_types.rs:1028-1035`).
+
+module CrossRef :> sig
+  type key = string
+  type data = string
+  val register : key -> data -> unit
+  val get : key -> option data
+  val probe : key -> option data
+end = struct
+
+  type key = string
+
+  type data = string
+
+  val register = register-cross-reference %PRIMITIVE
+
+  val get = get-cross-reference %PRIMITIVE
+
+  val probe = probe-cross-reference %PRIMITIVE
+
+end

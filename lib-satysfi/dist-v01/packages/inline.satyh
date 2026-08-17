@@ -1,0 +1,152 @@
+% inline.satyh — SATySFi 0.1 stdlib `Inline`, vendored for Legacy
+% packaging (docs/plans/satysfi-0-1-0-support.md §2 P2 / §4 phase 6).
+% Source: saphe-split@b836d512:lib-satysfi/packages/stdlib/stdlib.0.0.1/
+%   src/inline.satyh — transliteration deltas:
+%   - T1: `use open Basic` / `use List` / `use Deco` dropped; `@require:
+%     basic`, `@require: list`, `@require: deco` added.
+%   - T2: bare `paddings`/`point` (Basic's synonyms) -> `Basic.paddings`/
+%     `Basic.point` in every sig line.
+%   - T4/G1: `concat`'s `( ++ )` operator-section source has no
+%     `Atomic::OpRef` target in this port's v1 grammar — transliterated
+%     to the lambda fallback `fun a b -> a ++ b` (the "++" primitive
+%     itself, and the infix `a ++ b` surface form, are both landed —
+%     only the bare parenthesized-operator-as-value syntax is missing).
+%   - T6: 3 of the 24 upstream members (and their sig lines) dropped —
+%     no backing primitive (gap G5, `…/tmp/vendoring-scout.md` §2), plus
+%     one newly-discovered registration gap (G9, this wave):
+%       * `frame-fixed : length -> paddings -> deco -> inline-boxes ->
+%         inline-boxes` (`inline-frame-fixed` — declared out of port
+%         scope, L5 spec §8)
+%       * `line-stack-top : list inline-boxes -> inline-boxes`
+%         (`line-stack-top` — trivial sibling of the landed
+%         `line-stack-bottom`, just not itself registered yet)
+%       * `frame-inner : paddings -> deco -> inline-boxes -> inline-
+%         boxes` (G9: `inline-frame-inner` DOES exist as a real
+%         primitive — `primitives.rs`'s `"inline-frame-inner" (3) =>
+%         prim_inline_frame_inner` and `prim_types.rs` both register it,
+%         and `primitives::base_env_with_version` binds it — but
+%         `typecheck.rs`'s separately-maintained `PRIMITIVE_NAMES` list
+%         (consulted only by the plain, non-sealed `typecheck_with_
+%         version` path this wave's tests use, per G8) never lists
+%         `"inline-frame-inner"` — only its siblings `"inline-frame-
+%         outer"`/`"inline-frame-breakable"` are present. Confirmed
+%         empirically: referencing it produces "internal error: unbound
+%         variable 'inline-frame-inner' reached the typechecker", the
+%         exact `PRIMITIVE_NAMES`-omission signature. A one-line fix
+%         (add the string to that list) — out of scope: no `.rs` source
+%         edits.)
+%     21/24 members remain; every other member's backing primitive is
+%     landed and correctly registered, including the L5b/G3 H1/H2
+%     singular-`graphics` callback retypes (`graphics-fixed`/`graphics-
+%     outer`, unchanged from upstream — upstream ALREADY declares these
+%     callbacks as `point -> graphics`/`length -> point -> graphics`,
+%     i.e. the v0.1 shape this port's L5b sweep specifically added).
+%
+%   Affected by G8 (see `graphics.satyh`'s banner): `deco`/`deco-set` are
+%   bare sig type names this port's v1 sealing width check doesn't
+%   recognize, so `:>` fails `compile_document_v1`'s seal-width pass
+%   (pre-existing gap). Tested via the "value bar"
+%   (`compile_v01_via_loader`).
+
+@require: basic
+@require: list
+@require: deco
+
+module Inline :> sig
+  val nil : inline-boxes
+  val concat : list inline-boxes -> inline-boxes
+  val fil : inline-boxes
+  val get-natural-metrics : inline-boxes -> length * length * length
+  val get-natural-advance : inline-boxes -> length
+  val skip : length -> inline-boxes
+  val kern : length -> inline-boxes
+  val glue : length -> length -> length -> inline-boxes
+  val frame-outer : Basic.paddings -> deco -> inline-boxes -> inline-boxes
+  val frame-breakable : Basic.paddings -> deco-set -> inline-boxes -> inline-boxes
+  val embed-block-breakable : context -> block-boxes -> inline-boxes
+  val graphics-fixed : length -> length -> length -> (Basic.point -> graphics) -> inline-boxes
+  val graphics-outer : length -> length -> (length -> Basic.point -> graphics) -> inline-boxes
+  val embed-block-top : context -> length -> (context -> block-boxes) -> inline-boxes
+  val embed-block-bottom : context -> length -> (context -> block-boxes) -> inline-boxes
+  val line-stack-bottom : list inline-boxes -> inline-boxes
+  val embed-string : string -> inline-text
+  val embed-math : context -> math-boxes -> inline-boxes
+  val no-break : inline-boxes -> inline-boxes
+  val mandatory-break : context -> inline-boxes
+  val omit-skip-after : inline-boxes
+  val \skip : inline [length]
+  val \no-break : inline [inline-text]
+  val \fil : inline []
+  val \fil-both : inline []
+  val \mandatory-break : inline []
+end = struct
+
+  val nil = inline-nil %PRIMITIVE
+
+  val concat ibs =
+    List.fold (fun a b -> a ++ b) nil ibs
+
+  val fil = inline-fil %PRIMITIVE
+
+  val get-natural-metrics = get-natural-metrics %PRIMITIVE
+
+  val get-natural-advance ib =
+    let (wid, _, _) = get-natural-metrics ib in
+    wid
+
+  val skip = inline-skip %PRIMITIVE
+
+  val kern len =
+    skip (0pt -' len)
+
+  val glue = inline-glue %PRIMITIVE
+
+  val discretionary = discretionary %PRIMITIVE
+
+  val mandatory-break ctx =
+    discretionary 0 (skip (get-text-width ctx *' 2.)) fil nil
+
+  val frame-outer = inline-frame-outer %PRIMITIVE
+
+  val frame-breakable = inline-frame-breakable %PRIMITIVE
+
+  val embed-block-breakable = embed-block-breakable %PRIMITIVE
+
+  val graphics-fixed = inline-graphics %PRIMITIVE
+
+  val graphics-outer = inline-graphics-outer %PRIMITIVE
+
+  val embed-block-top = embed-block-top %PRIMITIVE
+
+  val embed-block-bottom = embed-block-bottom %PRIMITIVE
+
+  val line-stack-bottom = line-stack-bottom %PRIMITIVE
+
+  val embed-string = embed-string %PRIMITIVE
+
+  val embed-math = embed-math %PRIMITIVE
+
+  val no-break ib =
+    inline-frame-outer (0pt, 0pt, 0pt, 0pt) Deco.empty ib
+
+  val omit-skip-after = omit-skip-after %PRIMITIVE
+
+  val inline ctx \skip len =
+    skip len
+
+  val inline ctx \kern len =
+    kern len
+
+  val inline ctx \fil =
+    discretionary 0 nil fil nil
+
+  val inline ctx \fil-both =
+    discretionary 0 nil fil fil
+
+  val inline ctx \mandatory-break =
+    mandatory-break ctx
+
+  val inline ctx \no-break inner =
+    no-break (read-inline ctx inner)
+
+end

@@ -13,8 +13,10 @@ pub mod pagebreak;
 pub mod tabular;
 pub mod vbox;
 
-pub use context::{Context, Language, MathCmdId, PageGeometry, PaperSize, Script, ScriptFont};
-pub use doc::{Annot, AnnotAction, DocExtras, NamedDest, OutlineEntry};
+pub use context::{
+    Context, Language, MathCmdId, MathScriptLevel, PageGeometry, PaperSize, Script, ScriptFont,
+};
+pub use doc::{Annot, AnnotAction, DocExtras, DocInfo, NamedDest, OutlineEntry};
 pub use font::{
     char_script, FontKey, FontMetrics, MathConstants, MathCorner, MathVariantGlyph,
     VertVariantPolicy,

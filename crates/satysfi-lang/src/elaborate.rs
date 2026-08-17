@@ -13,6 +13,7 @@ use satysfi_syntax::cst::{self, ast as c};
 use satysfi_syntax::leaf::{AnyHorzCmdTok, AnyMathCmdTok, AnyVertCmdTok, UnopExclamTok, VarTok};
 use satysfi_syntax::span::Span;
 use satysfi_syntax::token::Token;
+use satysfi_syntax::SatysfiVersion;
 use std::collections::{HashSet, VecDeque};
 use std::rc::Rc;
 
@@ -58,17 +59,41 @@ fn err<T>(span: Span, msg: impl Into<String>) -> Result<T, ElabError> {
 /// `lower_type_expr`) can even express; a non-leading `?:` (`stdja.satyh`'s
 /// `document record ?:configopt inner`) records `0` and keeps its old
 /// marker-optional-only behavior.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct Scope {
     names: HashSet<String>,
     optional_arity: std::collections::HashMap<String, usize>,
+    /// The source-language version this scope elaborates under — gates the
+    /// SATySFi 0.1-only labeled-optional nodes (`Expr::FunRows`,
+    /// `AppArg::Bundled`) so a 0.0.6-compiled file that happens to parse them
+    /// (the additive-`cst` accept-surface widening) is rejected with a
+    /// version error rather than silently accepted. `V0_0_6` by default so
+    /// every existing caller (and the frozen 0.0.6 path) is unaffected.
+    version: SatysfiVersion,
+}
+
+impl Default for Scope {
+    fn default() -> Scope {
+        Scope::new(std::iter::empty())
+    }
 }
 
 impl Scope {
     pub fn new(names: impl IntoIterator<Item = String>) -> Scope {
+        Scope::new_with_version(names, SatysfiVersion::V0_0_6)
+    }
+
+    /// Like [`Scope::new`] but elaborating under an explicit source version —
+    /// the V0_1 compile path (`lib.rs`) uses this so the 0.1 labeled-optional
+    /// nodes are accepted.
+    pub fn new_with_version(
+        names: impl IntoIterator<Item = String>,
+        version: SatysfiVersion,
+    ) -> Scope {
         Scope {
             names: names.into_iter().collect(),
             optional_arity: std::collections::HashMap::new(),
+            version,
         }
     }
 
@@ -852,6 +877,81 @@ fn rec_clause_value(
     Ok(body)
 }
 
+/// Lower a SATySFi 0.1 `fun ?(l = x, …) p -> body` unit (`Expr::FunRows`) to
+/// an [`Ast::LambdaOpt`]. Gated on the V0_1 source version (a 0.0.6-parsed
+/// occurrence — reachable only via the additive-`cst` accept surface — is
+/// rejected here with a version error). Duplicate labels in one binder list
+/// are rejected. Each optional binder and the positional param enter scope
+/// as plain names (labeled optionals have no marker-less padding, so NO
+/// `optional_arity` entry). A pattern param desugars to a fresh var + `Match`
+/// exactly as `rec_clause_value` does for a destructuring parameter.
+fn fun_rows_to_ast(
+    kw_span: Span,
+    opts: &c::CstOptBinders,
+    param: &c::PatBot,
+    body: &c::Expr,
+    scope: &Scope,
+) -> Result<Ast, ElabError> {
+    if !scope.version.has_row_polymorphism() {
+        return err(
+            kw_span,
+            "labeled optional arguments (`?(l = x)`) are SATySFi 0.1 syntax — \
+             this file is compiled as 0.0.6",
+        );
+    }
+    let mut opt_pairs: Vec<(String, String)> = Vec::with_capacity(opts.entries.len());
+    let mut seen = HashSet::new();
+    for e in &opts.entries {
+        if !seen.insert(e.label.name.clone()) {
+            return err(
+                e.label.span,
+                format!(
+                    "duplicate optional label `{}` in one `?(…)` binder list",
+                    e.label.name
+                ),
+            );
+        }
+        opt_pairs.push((e.label.name.clone(), e.var.name.clone()));
+    }
+    let mut inner = scope.clone();
+    for (_, binder) in &opt_pairs {
+        inner = inner.with(binder);
+    }
+    if is_var_patbot(param) {
+        let pname = patbot_var_name(param).to_string();
+        let body_scope = inner.with(&pname);
+        let body_ast = expr(body, &body_scope)?;
+        Ok(Ast::LambdaOpt {
+            opts: opt_pairs,
+            param: pname,
+            body: Rc::new(body_ast),
+        })
+    } else {
+        let fresh = "%opt_arg".to_string();
+        let pat = patbot(param)?;
+        let mut names = Vec::new();
+        collect_pattern_names(&pat, &mut names);
+        let mut body_scope = inner;
+        for n in &names {
+            body_scope = body_scope.with(n);
+        }
+        let body_ast = expr(body, &body_scope)?;
+        let matched = Ast::Match(
+            Box::new(Ast::Var(fresh.clone(), Span::default())),
+            vec![MatchArm {
+                pat,
+                guard: None,
+                body: body_ast,
+            }],
+        );
+        Ok(Ast::LambdaOpt {
+            opts: opt_pairs,
+            param: fresh,
+            body: Rc::new(matched),
+        })
+    }
+}
+
 /// Widen a plain (non-`let-rec`) `let`'s `Param` down to a `PatBot`, so
 /// `TopLet`/`Expr::LetIn` can share `rec_clause_value`'s pattern-currying
 /// machinery with `let-rec` unchanged: the def-site optional marker
@@ -1006,6 +1106,15 @@ fn expr(e: &c::Expr, scope: &Scope) -> Result<Ast, ElabError> {
             }
             rec_clause_value(params, body, &[], scope)
         }
+        // `fun ?(l = x, …) p -> body` — SATySFi 0.1 labeled-optional lambda
+        // unit (one bundle, one positional param).
+        c::Expr::FunRows {
+            kw,
+            opts,
+            param,
+            body,
+            ..
+        } => fun_rows_to_ast(kw.0, opts, param, body, scope),
         c::Expr::Match {
             scrutinee,
             first,
@@ -1249,7 +1358,7 @@ fn app_expr(a: &c::AppExpr, scope: &Scope) -> Result<Ast, ElabError> {
                     let payload = app_arg_to_ast(first, scope)?;
                     let mut ast = Ast::Ctor(ctor.name.clone(), Some(Box::new(payload)));
                     for rest in args_iter {
-                        ast = Ast::Apply(Box::new(ast), Box::new(app_arg_to_ast(rest, scope)?));
+                        ast = apply_one_arg(ast, rest, scope)?;
                     }
                     ast
                 }
@@ -1316,9 +1425,72 @@ fn app_chain_generic(a: &c::AppExpr, scope: &Scope) -> Result<Ast, ElabError> {
         ast = Ast::Apply(Box::new(ast), Box::new(Ast::Ctor("None".to_string(), None)));
     }
     for arg in args_iter {
-        ast = Ast::Apply(Box::new(ast), Box::new(app_arg_to_ast(arg, scope)?));
+        ast = apply_one_arg(ast, arg, scope)?;
     }
     Ok(ast)
+}
+
+/// Apply one application-chain argument to the running `func` AST. A SATySFi
+/// 0.1 `?(l = e, …)`-bundled argument becomes an [`Ast::ApplyOpt`] (carrying
+/// the labeled optionals plus the paired positional argument); every other
+/// argument is an ordinary [`Ast::Apply`].
+fn apply_one_arg(func: Ast, arg: &c::AppArg, scope: &Scope) -> Result<Ast, ElabError> {
+    match arg {
+        c::AppArg::Bundled {
+            opts,
+            excl,
+            atom,
+            accesses,
+        } => {
+            let opt_args = elaborate_opt_args(opts, scope)?;
+            let arg_ast = atomic_head_with_excl(atom, accesses, excl.as_ref(), scope)?;
+            Ok(Ast::ApplyOpt {
+                func: Box::new(func),
+                opts: opt_args,
+                arg: Box::new(arg_ast),
+            })
+        }
+        c::AppArg::BundledCtor { opts, ctor } => {
+            let opt_args = elaborate_opt_args(opts, scope)?;
+            Ok(Ast::ApplyOpt {
+                func: Box::new(func),
+                opts: opt_args,
+                arg: Box::new(Ast::Ctor(ctor.name.clone(), None)),
+            })
+        }
+        _ => Ok(Ast::Apply(Box::new(func), Box::new(app_arg_to_ast(arg, scope)?))),
+    }
+}
+
+/// Elaborate a `?(l = e, …)` optional-argument bundle: version-gate it (a
+/// 0.0.6-parsed occurrence is rejected here), reject a duplicate label within
+/// the one bundle, and elaborate each label's value expression.
+fn elaborate_opt_args(
+    opts: &c::CstOptArgs,
+    scope: &Scope,
+) -> Result<Vec<(String, Ast)>, ElabError> {
+    if !scope.version.has_row_polymorphism() {
+        return err(
+            opts.q.0,
+            "labeled optional arguments (`?(l = e)`) are SATySFi 0.1 syntax — \
+             this file is compiled as 0.0.6",
+        );
+    }
+    let mut out: Vec<(String, Ast)> = Vec::with_capacity(opts.entries.len());
+    let mut seen = HashSet::new();
+    for e in &opts.entries {
+        if !seen.insert(e.label.name.clone()) {
+            return err(
+                e.label.span,
+                format!(
+                    "duplicate optional label `{}` in one `?(…)` bundle",
+                    e.label.name
+                ),
+            );
+        }
+        out.push((e.label.name.clone(), expr(&e.value.0, scope)?));
+    }
+    Ok(out)
 }
 
 /// `a.head`'s recorded leading-optional-parameter count (`Scope::
@@ -1395,6 +1567,15 @@ fn app_arg_to_ast(arg: &c::AppArg, scope: &Scope) -> Result<Ast, ElabError> {
             accesses,
         } => atomic_head_with_excl(atom, accesses, excl.as_ref(), scope),
         c::AppArg::Ctor(ctor) => Ok(Ast::Ctor(ctor.name.clone(), None)),
+        // A `?(l = e, …)` bundle is not a plain argument value — the chain
+        // builder (`apply_one_arg`) routes it to `Ast::ApplyOpt` before it
+        // ever reaches here. Reaching this arm means a bundle sat where only
+        // a value can go (e.g. as a constructor payload).
+        c::AppArg::Bundled { opts, .. } | c::AppArg::BundledCtor { opts, .. } => err(
+            opts.q.0,
+            "a `?(l = e)` labeled-optional bundle cannot be used as a plain \
+             argument value here",
+        ),
     }
 }
 

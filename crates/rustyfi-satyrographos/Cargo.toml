@@ -1,0 +1,33 @@
+[package]
+name = "rustyfi-satyrographos"
+description = "Satyrographos-style package-manager logic for the rustyfi-rust port: manifest parsing, receipts, and atomic install/uninstall transactions (clap-free library)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[features]
+# Default-on (saphe phase 7d slice S1, docs/plans/design-saphe-7d-network.md
+# §2.1/§4): the crate is dev-tooling, so `http(s)://` registry tarballs fetch
+# for real out of the box. `file://` and plain-path tarballs always work
+# regardless of this feature. Pass `--no-default-features` to build a
+# pure-offline embedder with no HTTP client compiled in at all (falls back to
+# `Error::HttpDisabled` for any `http(s)://` tarball_url).
+default = ["http"]
+http = ["dep:ureq"]
+
+[dependencies]
+thiserror.workspace = true
+serde.workspace = true
+toml.workspace = true
+tar.workspace = true
+flate2.workspace = true
+sha2.workspace = true
+# Pinned per design §2.1: pure-Rust TLS (rustls + ring + webpki-roots), no
+# OpenSSL/system cert store, no async runtime (ureq is blocking, matching the
+# rest of this synchronous install pipeline). `gzip` lets a registry serve
+# compressed archives transparently.
+ureq = { version = "2.12", optional = true, default-features = false, features = [
+    "tls",
+    "gzip",
+] }

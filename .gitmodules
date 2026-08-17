@@ -1,0 +1,18 @@
+[submodule "docs-corpus/figbox"]
+	path = docs-corpus/figbox
+	url = https://github.com/monaqa/satysfi-figbox.git
+[submodule "docs-corpus/slydifi"]
+	path = docs-corpus/slydifi
+	url = https://github.com/monaqa/slydifi.git
+[submodule "docs-corpus/easytable"]
+	path = docs-corpus/easytable
+	url = https://github.com/monaqa/satysfi-easytable.git
+[submodule "docs-corpus/enumitem"]
+	path = docs-corpus/enumitem
+	url = https://github.com/monaqa/satysfi-enumitem.git
+[submodule "docs-corpus/satysfi-base"]
+	path = docs-corpus/satysfi-base
+	url = https://github.com/puripuri2100/satysfi-base.git
+[submodule "docs-corpus/the-satysfibook"]
+	path = docs-corpus/the-satysfibook
+	url = https://github.com/gfngfn/the_satysfibook.git

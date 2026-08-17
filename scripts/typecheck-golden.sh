@@ -5,21 +5,21 @@
 # refactor (a class of regression the unit-test suite's spot assertions can
 # miss, since it changes an error/warning *string*, not a verdict).
 #
-# What it does: runs `crates/satysfi-lang/tests/typecheck_golden.rs`'s
+# What it does: runs `crates/rustyfi-lang/tests/typecheck_golden.rs`'s
 # `typecheck_golden` test (an `#[ignore]`d integration test — see that
 # file's doc comment) once against `HEAD` (or a caller-supplied ref) and
 # once against the current working tree, and diffs the two outputs. Each
 # output line is one `OK <tag> (<version>) <n-warnings> [<warnings>]` or
 # `ERR <tag> (<version>) <message>` for every `.saty`/`.satyh`/`.satyg`
 # fixture under `crates/*/tests/fixtures/` plus every bundled package under
-# `lib-satysfi/dist/packages/` (loader-merged via a synthetic
+# `lib-rustyfi/dist/packages/` (loader-merged via a synthetic
 # `@require: <pkg>` entry, the same way `stdja` loads today).
 #
 # Usage:
 #   scripts/typecheck-golden.sh [baseline-ref]
 #
 # `baseline-ref` defaults to `HEAD`. Requires a clean working tree for
-# `crates/satysfi-lang/src/typecheck.rs` (the file this compares) — the
+# `crates/rustyfi-lang/src/typecheck.rs` (the file this compares) — the
 # script stashes nothing; it uses `git show` to materialize the baseline
 # version into a temp file and restores the working-tree version afterward,
 # so uncommitted changes to typecheck.rs are the very thing being tested and
@@ -36,7 +36,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
 baseline_ref="${1:-HEAD}"
-typecheck_rs="crates/satysfi-lang/src/typecheck.rs"
+typecheck_rs="crates/rustyfi-lang/src/typecheck.rs"
 
 work_dir="$(mktemp -d)"
 current_copy="$work_dir/typecheck.rs.current"
@@ -55,7 +55,7 @@ trap restore_working_tree EXIT
 
 run_golden() {
     local out_file="$1"
-    cargo test -p satysfi-lang --test typecheck_golden -- --ignored --nocapture \
+    cargo test -p rustyfi-lang --test typecheck_golden -- --ignored --nocapture \
         > "$out_file.raw" 2>&1
     grep -E '^(OK|ERR) ' "$out_file.raw" | sort > "$out_file"
 }

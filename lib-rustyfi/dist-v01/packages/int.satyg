@@ -1,0 +1,47 @@
+% int.satyg — SATySFi 0.1 stdlib `Int`, vendored for Legacy packaging
+% (docs/plans/rustyfi-0-1-0-support.md §2 P2 / §4 phase 6).
+% Source: saphe-split@b836d512:lib-rustyfi/packages/stdlib/stdlib.0.0.1/
+%   src/int.satyg — transliteration deltas:
+%   - T1: `use open Basic` dropped; `@require: basic` added.
+%   - T2: bare `ordering` -> `Basic.ordering`.
+%   - T3: `val persistent ~name … = …` -> `val name … = …`; `~lift` dropped.
+%   - T4/G1 fallback: `val persistent ~equal = ( == )` — an operator
+%     SECTION in expression position, which this port's v1 grammar has no
+%     `Atomic::OpRef` production for (`cst_v1.rs` Atomic has no twin of
+%     0.0.6's `cst.rs:919` `OpRef`; scout §1 T4). Transliterated to the
+%     lambda fallback `fun n1 n2 -> n1 == n2` — semantically identical,
+%     costs diffability against upstream (documented per T4's "fallback").
+
+@require: basic
+
+module Int :> sig
+  type t = int
+  val compare : int -> int -> Basic.ordering
+  val equal : int -> int -> bool
+  val abs : int -> int
+  val max : int -> int -> int
+  val min : int -> int -> int
+end = struct
+
+  type t = int
+
+  val compare n1 n2 =
+    if n1 == n2 then
+      Equal
+    else if n1 > n2 then
+      Greater
+    else
+      Less
+
+  val equal = fun n1 n2 -> n1 == n2
+
+  val abs n =
+    if n >= 0 then n else - n
+
+  val max n1 n2 =
+    if n1 >= n2 then n1 else n2
+
+  val min n1 n2 =
+    if n1 <= n2 then n1 else n2
+
+end

@@ -1,0 +1,67 @@
+% stdja-mini.satyh — phase 4 proof-of-concept stdlib package, loaded
+% through the multi-file loader (`@require: stdja-mini`), replacing the
+% milestone-1 hardcoded Rust natives `document`, `+p`, and `\emph`.
+% Intentionally tiny — not a port of v0.0.6's dist/packages/stdjabook.satyh
+% (far richer: page headers/footers, section commands, table of contents,
+% itemize rendering, ...). Path mirrors v0.0.6's own layout
+% (dist/packages/<name>.satyh) so a real richer package could later drop
+% in beside it the same way.
+%
+% Deviations from a "real" v0.0.6-style stdjabook.satyh, documented here:
+%
+%  - `document`'s record argument (title/author/...) is accepted but never
+%    rendered, matching exactly what the milestone-1 Rust native used to
+%    do. Since no field of the record is ever read, its parameter's type
+%    stays a fully unconstrained type variable, which unifies against any
+%    record shape a caller happens to pass (e.g. `(| title = ..|)` or
+%    `(| title = ..; author = ..|)` — see the fixtures under
+%    crates/rustyfi-cli/tests/fixtures/).
+%
+%  - The page text width is hardcoded to 440pt (docs/plans/document-
+%    page-model.md §Slice 1's own goal-fixture width), on an `A4Paper`
+%    (595x842pt) page. `document` now calls the REAL 4-arg `page-break`
+%    (`page -> (pbinfo -> page-content-scheme) -> (pbinfo -> page-parts)
+%    -> block-boxes -> document`): a per-page content scheme sets the text
+%    area, and a per-page footer renders `pbinfo#page-number` via `arabic`
+%    (a footer-bearing document was previously nowhere in this shim; it
+%    rides in "for free" on every `@require: stdja-mini` fixture now).
+%    There is still no title block / TOC / section numbering — those need
+%    optional args + the math engine + cross-refs (owned elsewhere; see
+%    the plan's roadmap item D).
+%
+%  - `get-initial-context`'s second argument is now the REAL `[math]
+%    inline-cmd` (`docs/plans/math-engine.md` §G, restored in
+%    prim_types.rs) and is FAITHFULLY installed as `Context::math_command`
+%    (Gap 1, `class-signature-lang-gaps.md`): `read_inline`'s `EmbedMath`
+%    arm applies it to every bare `${…}` in prose. `\math` below is that
+%    installed command, and just forwards to `embed-math` (`+math`'s own
+%    primitive bridge) so a bare `${…}` renders identically to what
+%    `+math(${…})` produces.
+%
+%  - `\emph`/`\bold` switch faces via `set-font-key`, a LOCAL
+%    (non-upstream) primitive (primitives.rs) that sets the context's
+%    `FontKey` directly to the milestone's base-14 oblique/bold face
+%    (keys 2 and 1 respectively), standing in for upstream's much richer
+%    `set-font : script -> (string * float * float) -> context -> context`.
+
+let-inline ctx \math m = embed-math ctx m
+
+let document record bt =
+  let ctx = get-initial-context 440pt (command \math) in
+  let content pbinfo = (| text-origin = (72pt, 100pt); text-height = 640pt |) in
+  let parts pbinfo =
+    (| header-origin = (72pt, 72pt);  header-content = block-nil;
+       footer-origin = (72pt, 800pt); footer-content =
+         line-break true true ctx
+           (inline-fil ++ (read-inline ctx (embed-string (arabic (pbinfo#page-number)))) ++ inline-fil) |)
+  in
+  page-break A4Paper content parts (read-block ctx bt)
+
+let-block ctx +p it =
+  line-break true true ctx (read-inline ctx it ++ inline-fil)
+
+let-inline ctx \emph it =
+  read-inline (set-font-key 2 ctx) it
+
+let-inline ctx \bold it =
+  read-inline (set-font-key 1 ctx) it

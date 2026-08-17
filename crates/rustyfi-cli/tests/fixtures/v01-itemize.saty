@@ -1,0 +1,25 @@
+% `docs/plans/design-reflow-s4-lists.md`: a real 0.1 document exercising
+% `Itemize.listing`/`Itemize.enumerate` (nested bullets + a flat numbered
+% list) through the real loader, AND `V01Mini.emph` — the two S4 levers
+% (list markers, emphasis markers) in one fixture, driven end to end
+% through `--format pdf` / `--format html` / `--format html-reflow` by
+% `crates/rustyfi-cli/tests/format_html_reflow.rs`.
+%
+% `Item(_, items)`'s OUTER wrapper argument's own parent-text field is a
+% conventional throwaway (`itemize.satyh`'s `listing`/`enumerate` both
+% pattern-match it as `Item(_, items)`, discarding the text — confirmed
+% against the UNMODIFIED, pre-S4 `itemize.satyh` too, so this is a
+% pre-existing API convention, not an S4 change): always `{}` here, exactly
+% like every other real `+Itemize.listing`/`+Itemize.enumerate` call site in
+% this repo (`md-ja.satyh`'s `+ul-block`/`+ol-block`,
+% `v01_itemize_proof_mdja.rs`'s own probes).
+@require: v01-mini
+@require: itemize
+
+let open V01Mini in
+document (| title = `list-demo` |) '<
+  +p { Before the list, with \V01Mini.emph{emphasized} text. }
+  +Itemize.listing?(break = true)(Item({}, [Item({top item}, [Item({nested item}, [])])]));
+  +Itemize.enumerate(Item({}, [Item({first entry}, []), Item({second entry}, [])]));
+  +p { After the list. }
+>

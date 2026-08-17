@@ -1,4 +1,4 @@
-# satysfi-rust-converted
+# rustyfi-rust-converted
 
 A native Rust clone of [SATySFi](https://github.com/gfngfn/SATySFi) (reference:
 upstream **v0.0.6**), using the [syan2](../syan2) parser framework for the
@@ -15,15 +15,15 @@ update, itemize (`*` bullets → `Item` constructor trees), math syntax
 (parsed and quoted; typesetting is phase 7), modules (`module`/`struct`/
 `open`, untyped name-mangling), `#var;` text embeds, and **multi-file
 loading** — `@import:`/`@require:` resolve, dedupe, and topologically order
-libraries via the `satysfi-loader` crate (safegraph-backed):
+libraries via the `rustyfi-loader` crate (safegraph-backed):
 
 ```console
-$ cargo run -p satysfi-cli -- crates/satysfi-cli/tests/fixtures/minimal.saty -o out.pdf
+$ cargo run -p rustyfi-cli -- crates/rustyfi-cli/tests/fixtures/minimal.saty -o out.pdf
 ```
 
 What works:
 
-- **Lexer** (`satysfi-syntax`): full case-for-case port of the v0.0.6
+- **Lexer** (`rustyfi-syntax`): full case-for-case port of the v0.0.6
   `lexer.mll` — five mode states (program / vertical / horizontal / active /
   math) with the same stack discipline, eagerly lexing the whole file.
 - **Parser**: syan2 derives over custom `WithSpan<Token, Span>` atoms; a
@@ -31,22 +31,22 @@ What works:
   headers, top-level `let`, `fun`, application, records, lists, string/int/
   float/length literals, inline text with `\cmd` and block text with `+cmd`.
   Token-level `Unparse` round-trip is tested.
-- **Elaboration + typechecking** (`satysfi-lang`): CST → `Ast` with scope
+- **Elaboration + typechecking** (`rustyfi-lang`): CST → `Ast` with scope
   resolution, then mandatory HM type inference (let-polymorphism at Rémy
   levels, row-polymorphic records, user variants, value restriction, real
   `InlineCmd`/`BlockCmd` command types checked at application sites).
 - **Evaluator**: tree-walker with closures; the vminst-named `PrimDef`
   registry (~60 primitives). `document`/`+p`/`\emph` are **not natives** —
-  they come from the in-repo `lib-satysfi/dist/packages/stdja-mini.satyh`
+  they come from the in-repo `lib-rustyfi/dist/packages/stdja-mini.satyh`
   package, written in SATySFi and loaded through `@require:`.
-- **Backend** (`satysfi-backend`): `Length`, horzBox-vocabulary box/glue
+- **Backend** (`rustyfi-backend`): `Length`, horzBox-vocabulary box/glue
   model, Knuth–Plass optimal line breaking (glue-breakpoint DP with
   badness/demerits per lineBreak.ml), single-column page breaking.
-- **PDF** (`satysfi-pdf`): base-14 Helvetica by default; TrueType metrics +
+- **PDF** (`rustyfi-pdf`): base-14 Helvetica by default; TrueType metrics +
   CID/Type0 embedding with ToUnicode (`TtfFontStore`/`render_pdf_ttf`) for
   real fonts (CLI selection pending).
 - **Chimera CLI**: one multicall binary dispatching on argv[0] —
-  `satysfi-rust` (compile + subcommands), `satysfi` (compile), and
+  `rustyfi-rust` (compile + subcommands), `rustyfi` (compile), and
   `satyrographos` (package manager, plan phases 1–4 all implemented:
   `install`/`uninstall`/`list`/`status`/`search`/`update`; local paths,
   tar.gz archives, upstream `Satyristes` packages via a built-in
@@ -61,13 +61,13 @@ What works:
 
 ```
 crates/
-  satysfi-syntax/    Span, Token, mode-stack lexer, ParseStream, grammar (CST)
-  satysfi-backend/   Length, boxes/glue, Context, FontMetrics seam, line/page break
-  satysfi-lang/      Ast, elaborate (typecheck seam), Value, evaluator, primitives
-  satysfi-loader/    @require/@import resolution, dependency graph, load order
-  satysfi-pdf/       pdf-writer backend + base-14 metrics
-  satysfi-satyrographos/  package manager: manifest/receipts/atomic install
-  satysfi-cli/       chimera binary: satysfi-rust / satysfi / satyrographos
+  rustyfi-syntax/    Span, Token, mode-stack lexer, ParseStream, grammar (CST)
+  rustyfi-backend/   Length, boxes/glue, Context, FontMetrics seam, line/page break
+  rustyfi-lang/      Ast, elaborate (typecheck seam), Value, evaluator, primitives
+  rustyfi-loader/    @require/@import resolution, dependency graph, load order
+  rustyfi-pdf/       pdf-writer backend + base-14 metrics
+  rustyfi-satyrographos/  package manager: manifest/receipts/atomic install
+  rustyfi-cli/       chimera binary: rustyfi-rust / rustyfi / satyrographos
 ```
 
 Requires a checkout of the `syan` parser framework as a sibling `../syan2-ergo`
@@ -77,9 +77,9 @@ Requires a checkout of the `syan` parser framework as a sibling `../syan2-ergo`
 
 `cargo test --workspace` runs the unit/integration suite (315+ tests).
 
-**Corpus regression** — `crates/satysfi-syntax/tests/corpus.rs` runs the
+**Corpus regression** — `crates/rustyfi-syntax/tests/corpus.rs` runs the
 lexer and parser over the author's real-world SATySFi packages
-(`github.com/yasuo-ozu/satysfi-*`) and guards against regressions. Because
+(`github.com/yasuo-ozu/rustyfi-*`) and guards against regressions. Because
 this port is a **v0.0.x subset without stdlib loading**, real packages do not
 compile end-to-end — most do not even fully parse yet — so the harness does
 not assert "must compile". It enforces what is meaningful for a growing
@@ -87,17 +87,17 @@ front-end: (1) the frontend must **never panic** on real input, (2) a
 **lex-coverage floor** (our `lexer.mll` port handles ~89% of real files; the
 rest are the unsupported `@`-positioned string literal), and (3) a **parse
 ratchet** (the count that fully parses is tracked and only ratchets up as the
-grammar grows). It is driven by `$SATYSFI_CORPUS_DIR` (a `:`-separated list of
+grammar grows). It is driven by `$RUSTYFI_CORPUS_DIR` (a `:`-separated list of
 repo roots) and **skips** when that is unset, so a plain `cargo test` without
 the corpus checked out stays green:
 
 ```console
-$ SATYSFI_CORPUS_DIR=../satysfi-class-jlreq:../satysfi-latexcmds:../satysfi-xpath \
-    cargo test -p satysfi-syntax --test corpus -- --nocapture
+$ RUSTYFI_CORPUS_DIR=../rustyfi-class-jlreq:../rustyfi-latexcmds:../rustyfi-xpath \
+    cargo test -p rustyfi-syntax --test corpus -- --nocapture
 ```
 
 **GitHub Actions** (`.github/workflows/ci.yml`) runs the suite plus the corpus
-job (cloning the `satysfi-*` packages). Because `syan` is a path dependency,
+job (cloning the `rustyfi-*` packages). Because `syan` is a path dependency,
 CI checks out `yasuo-ozu/syan` (at `$SYAN_REF`, default `api-ergonomics`) into
 a sibling `syan2-ergo/`. **That branch must be pushed to `yasuo-ozu/syan`** for
 CI to compile; once it merges to syan's default branch, set `SYAN_REF` to

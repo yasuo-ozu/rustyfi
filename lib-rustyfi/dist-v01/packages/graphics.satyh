@@ -1,0 +1,135 @@
+% graphics.satyh — SATySFi 0.1 stdlib `Graphics`, vendored for Legacy
+% packaging (docs/plans/rustyfi-0-1-0-support.md §2 P2 / §4 phase 6).
+% Source: saphe-split@b836d512:lib-rustyfi/packages/stdlib/stdlib.0.0.1/
+%   src/graphics.satyh — transliteration deltas:
+%   - T1: `use open Basic` / `use Float` / `use Point` / `use Path` /
+%     `use List` / `use Length` dropped; `@require: basic`, `@require:
+%     float`, `@require: point`, `@require: path`, `@require: list`,
+%     `@require: length` added.
+%   - T2: bare `point` (Basic's synonym) -> `Basic.point` in every sig
+%     line/pattern.
+%   `unite-graphics` (A12), `shift-graphics`, `linear-transform-graphics`,
+%   `get-graphics-bbox`'s `Option` fork (R3), `draw-text`, `stroke`,
+%   `dashed-stroke`, `fill` are all landed (L5b/Group C) — no other deltas.
+%
+%   GAP FOUND (G8, not predicted by the scout's T1-T8 dialect): this
+%   module's SEALED `:>` signature declares several members at type
+%   `graphics` (a bare word, e.g. `val empty : graphics`). Under this
+%   port's v1 module-sealing width check (`v1/module_check.rs`'s
+%   `process_seal_member`, invoked by `v1::module_check::check_program`,
+%   which is what `compile_document_v1` runs), a bare sig type name is
+%   resolved via `typecheck.rs`'s `name_to_mono`, which has NO case for
+%   `"graphics"` (nor `"path"`/`"pre-path"`/`"deco"`/`"deco-set"`/`"image"`)
+%   — unlike `"context"`/`"color"` (a registered builtin variant), these
+%   fall through to a phantom nominal `MonoType::Variant("graphics", [])`
+%   that can never unify with the REAL runtime type
+%   `MonoType::Base(BaseType::Graphics)` primitives like `unite-graphics`
+%   actually produce. Empirically confirmed (probe, not committed): a
+%   sealed module ascribing a member at bare `path` fails
+%   `compile_document_v1` with "module `Path` does not match its
+%   signature: … type mismatch: expected `path`, found `path`" (both
+%   sides `Display` identically since they're both named "path", but are
+%   different `MonoType` shapes underneath) — the exact same shape of bug
+%   applies to `graphics`/`deco`/`deco-set` here and in every other
+%   graphics-tier package. This is a PRE-EXISTING gap (already latent in
+%   Wave 0's own `path.satyh`, never previously exercised because no Wave
+%   0 test ran a `path`-sig-bearing module through `compile_document_v1`)
+%   — not something this vendoring pass introduces, and not fixable
+%   without editing `typecheck.rs`/`v1/module_check.rs` (out of scope: no
+%   `.rs` source edits). CONSEQUENCE: this package's tests use the
+%   "value bar" harness (`compile_v01_via_loader`, real loader ->
+%   `lower_file_v1` prelude -> `elaborate_program` -> plain
+%   `typecheck_with_version` -> `eval`, exactly like 16 of Wave 0's 17
+%   packages) rather than the sealing-checked `compile_document_v1` bar —
+%   the module still loads, lowers, elaborates, typechecks (structurally,
+%   without the extra seal-width pass), and evaluates correctly end to
+%   end through the real production loader; only the OPTIONAL extra
+%   signature-width re-check is skipped. RESTORE CHECKLIST: once
+%   `name_to_mono` gains `"path"`/`"pre-path"`/`"graphics"`/`"deco"`/
+%   `"deco-set"`/`"image"` cases (or an equivalent fix), re-run this
+%   package (and every other graphics-tier package) through
+%   `compile_document_v1` to confirm the seal check now passes.
+
+@require: basic
+@require: float
+@require: point
+@require: path
+@require: list
+@require: length
+
+module Graphics :> sig
+  val overlay : list graphics -> graphics
+  val shift : length * length -> graphics -> graphics
+  val linear-transform : float -> float -> float -> float -> graphics -> graphics
+  val rotate : Basic.point -> float -> graphics -> graphics
+  val scale : Basic.point -> float -> float -> graphics -> graphics
+  val empty : graphics
+  val text-centering : Basic.point -> inline-boxes -> graphics
+  val text-leftward : Basic.point -> inline-boxes -> graphics
+  val text-rightward : Basic.point -> inline-boxes -> graphics
+  val arrow : length -> color -> length -> length -> length -> Basic.point -> Basic.point -> graphics
+  val dashed-arrow : length -> length * length * length -> color -> length -> length -> length -> Basic.point -> Basic.point -> graphics
+end = struct
+
+  val overlay = unite-graphics %PRIMITIVE
+
+  val shift = shift-graphics %PRIMITIVE
+
+  val linear-transform = linear-transform-graphics %PRIMITIVE
+
+  val rotate centpt angle gr =
+    let (centx, centy) = centpt in
+    let rad = angle *. Float.pi /. 180. in
+    gr |> shift (0pt -' centx, 0pt -' centy)
+       |> linear-transform (cos rad) (0. -. (sin rad)) (sin rad) (cos rad)
+       |> shift centpt
+
+  val scale centpt scalex scaley gr =
+    let (centx, centy) = centpt in
+    gr |> shift (0pt -' centx, 0pt -' centy)
+       |> linear-transform scalex 0. 0. scaley
+       |> shift centpt
+
+  val empty =
+    overlay []
+
+  val get-nonempty-graphics-bbox gr =
+    match get-graphics-bbox gr with
+    | None       -> abort-with-message `get-nonempty-graphics-bbox`
+    | Some(bbox) -> bbox
+    end
+
+  val text-centering pt ib =
+    let gr = draw-text pt ib in
+    let ((xmin, _), (xmax, _)) = get-nonempty-graphics-bbox gr in
+    let wid = xmax -' xmin in
+    shift (0pt -' wid *' 0.5, 0pt) gr
+
+  val text-rightward =
+    draw-text
+
+  val text-leftward pt ib =
+    let gr = draw-text pt ib in
+    let ((xmin, _), (xmax, _)) = get-nonempty-graphics-bbox gr in
+    let wid = xmax -' xmin in
+    shift (0pt -' wid, 0pt) gr
+
+  val arrow-scheme strokef color lenL lenM lenP ((x1, y1) as pt1) ((x2, y2) as pt2) =
+    let theta = Point.atan2 pt2 pt1 in
+    let (cx, cy) = (x2 +' lenL *' (cos theta), y2 +' lenL *' (sin theta)) in
+    let (mx, my) = (x2 +' lenM *' (cos theta), y2 +' lenM *' (sin theta)) in
+    let phi = theta +. Float.pi /. 2. in
+    let (p1, q1) = (cx +' lenP *' (cos phi), cy +' lenP *' (sin phi)) in
+    let (p2, q2) = (cx -' lenP *' (cos phi), cy -' lenP *' (sin phi)) in
+    overlay [
+      strokef color (Path.line pt1 (mx, my)),
+      fill color (Path.polygon pt2 [(p1, q1), (mx, my), (p2, q2)]),
+    ]
+
+  val arrow thkns =
+    arrow-scheme (stroke thkns)
+
+  val dashed-arrow thkns dash =
+    arrow-scheme (dashed-stroke thkns dash)
+
+end

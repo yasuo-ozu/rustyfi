@@ -1,0 +1,23 @@
+% hyph-english.satyh — SATySFi 0.1 `HyphEnglish` (G6,
+% `…/tmp/g6-g7-standins.md` §1.4 item 4 / vendoring-scout.md gap G6).
+% Source: saphe-split@b836d512:lib-rustyfi/packages/hyph-english/
+%   hyph-english.0.0.1/src/hyph-english.satyh — transliteration deltas:
+%   NONE, verbatim below the banner (T8: byte-identical body). No
+%   `@require:` — uses only the global `load-hyphenation-dictionary` prim +
+%   `here`/`^` (both global constants/prims, resolved through `base_env`,
+%   not module-qualified).
+% PORT STAND-IN: `load-hyphenation-dictionary` accepts and drops its path
+% argument, returning the opaque `hyphenation` token (`Value::Unit`) — this
+% port has no native `.rustyfi-hyph` dictionary loader yet (gap G6). `here`
+% is the empty-string stand-in for the lexer's upstream source-directory
+% constant (both ports' doc comments, `primitives.rs`). `hyphenation` is a
+% nominal-`Variant` opaque type (no `types.rs`/`name_to_mono` entry) — see
+% `prim_types.rs`'s `t_hyphenation` doc comment.
+
+module HyphEnglish :> sig
+  val hyphenation : hyphenation
+end = struct
+  val hyphenation =
+    load-hyphenation-dictionary
+      (here ^ `/../hyph/english.rustyfi-hyph`)
+end

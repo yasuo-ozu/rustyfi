@@ -1,0 +1,37 @@
+% deco.satyh — SATySFi 0.1 stdlib `Deco`, vendored for Legacy packaging
+% (docs/plans/rustyfi-0-1-0-support.md §2 P2 / §4 phase 6).
+% Source: saphe-split@b836d512:lib-rustyfi/packages/stdlib/stdlib.0.0.1/
+%   src/deco.satyh — transliteration deltas:
+%   - T1: `use Graphics` / `use Path` dropped; `@require: graphics`,
+%     `@require: path` added.
+%   No other deltas: both members already return a SINGLE `graphics`
+%   value (the v0.1 `deco = point -> length -> length -> length ->
+%   graphics` shape, L5b/G3's H3-H6 retype) — byte-faithful to upstream.
+%
+%   Affected by G8 (see `graphics.satyh`'s banner for the full writeup):
+%   `deco`/`graphics` are bare sig type names this port's v1 sealing
+%   width check (`name_to_mono`) doesn't recognize, so this module's
+%   `:>` ascription fails `compile_document_v1`'s seal-width pass with a
+%   spurious mismatch (pre-existing, not introduced here). Tested via the
+%   "value bar" (`compile_v01_via_loader`) instead — real loader ->
+%   lower -> elaborate -> plain typecheck -> eval, proven end to end.
+
+@require: graphics
+@require: path
+
+module Deco :> sig
+  val empty : deco
+  val simple-frame : length -> color -> color -> deco
+end = struct
+
+  val empty _ _ _ _ =
+    Graphics.empty
+
+  val simple-frame t scolor fcolor (x, y) w h d =
+    let path = Path.rectangle (x, y -' d) (x +' w, y +' h) in
+    Graphics.overlay [
+      fill fcolor path,
+      stroke t scolor path,
+    ]
+
+end

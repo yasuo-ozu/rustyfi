@@ -1,0 +1,18 @@
+% docs/plans/design-math-cramped.md Slice A2: a fixture exercising the two
+% cramped sub-formula sites this port implements — a radicand
+% (`Math::Radical`) and a fraction denominator (`Math::Fraction`) — each
+% carrying a nested superscript, so the cramped superscript-shift-up branch
+% (`sup_shift_clamped` in `crates/rustyfi-lang/src/primitives.rs`) actually
+% fires when a real MATH-table font is present. On the base-14/ipaexm/
+% Junicode fixture fonts this renders byte-identical to the uncramped case
+% (`SUP_SHIFT_CRAMPED == SUP_SHIFT`, §2.4) — the divergence is only visible
+% under a host-installed MATH font, which `crates/rustyfi-pdf/tests/
+% math_cramped.rs` guards for and skips without.
+@require: v01-mini
+@require: math
+
+let open V01Mini in
+document (| title = `math cramped` |) '<
+  +p { Radicand: ${\Math.sqrt{x^2}}. }
+  +p { Denominator: ${\Math.frac{1}{y^2}}. }
+>

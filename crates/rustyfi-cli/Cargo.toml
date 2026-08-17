@@ -1,0 +1,42 @@
+[package]
+name = "rustyfi-cli"
+description = "SATySFi command line interface: compile .saty documents to PDF"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "rustyfi-rust"
+path = "src/main.rs"
+
+[features]
+# Forward the registry HTTP client feature to rustyfi-satyrographos (plan §8).
+# Off by default so the default build/test run stays offline; enable for a
+# release binary that fetches `http(s)://` registry tarballs.
+default = []
+http = ["rustyfi-satyrographos/http"]
+
+[dependencies]
+rustyfi-syntax.workspace = true
+rustyfi-backend.workspace = true
+rustyfi-lang.workspace = true
+rustyfi-loader.workspace = true
+rustyfi-pdf.workspace = true
+rustyfi-html.workspace = true
+rustyfi-satyrographos.workspace = true
+clap.workspace = true
+anyhow.workspace = true
+sha2.workspace = true
+
+[dev-dependencies]
+# Test-only: tests/fonts.rs writes a temporary fonts.rustyfi-hash /
+# default-font.rustyfi-hash pair and uses serde_json to serialize the paths
+# correctly (rather than hand-formatting JSON strings).
+serde_json = "1"
+# Test-only: tests/pdf_image_diff.rs decodes the rasterized/golden PNGs for
+# pixel comparison. Already a root workspace dependency (Cargo.toml, `image
+# 0.25`, `png`+`jpeg` features) — this just reuses the pinned version as a
+# dev-dep of this crate, not a new dependency (docs/plans/
+# design-pdf-image-diff-ci.md §9).
+image.workspace = true

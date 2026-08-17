@@ -1,0 +1,39 @@
+[package]
+name = "rustyfi-pdf"
+description = "PDF output backend for SATySFi (pdf-writer based, base-14 fonts)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+rustyfi-backend.workspace = true
+pdf-writer.workspace = true
+thiserror.workspace = true
+ttf-parser.workspace = true
+serde.workspace = true
+# PDF object-model reader for `load-pdf-image` (docs/plans/design-load-pdf-image.md):
+# re-emitting an imported page's object graph as a Form XObject.
+lopdf.workspace = true
+# Not (yet) a workspace-shared dependency: `fonts.rs` is the only consumer of
+# JSON parsing in this workspace today, so it is declared directly here
+# rather than promoted to `[workspace.dependencies]` (see fonts.rs's module
+# doc for why plain JSON was chosen over hand-rolling a parser).
+serde_json = "1"
+# Font subsetting (D5, docs/plans/text-rendering.md §2): typst's `glyf`/CFF
+# subsetter, used to shrink an embedded `FontFile2` to only the glyphs a
+# document actually uses. `default-features = false` drops the
+# `variable-fonts` feature (skrifa/write-fonts/kurbo) — this port never
+# instantiates a variable font to a static instance, so `subset` (not
+# `subset_with_variations`) is the only entry point used.
+subsetter = { version = "0.2.6", default-features = false }
+
+[dev-dependencies]
+# Slice 1 (raster images, docs/plans/math-images.md) end-to-end test: compile
+# a real `.saty`-shaped document through rustyfi-lang (`load-image` +
+# `use-image-by-width`), then render it with this crate's own `render_pdf`.
+# rustyfi-lang has no dependency back on rustyfi-pdf, so this is a one-way,
+# test-only edge, not a cycle.
+rustyfi-lang.workspace = true
+rustyfi-syntax.workspace = true
+

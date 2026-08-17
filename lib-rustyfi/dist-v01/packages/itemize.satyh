@@ -1,0 +1,234 @@
+% itemize.satyh — SATySFi 0.1 `itemize` package's `Itemize`, vendored for
+% Legacy packaging wave-4 Batch B (md-ja's dependency). Source: saphe-
+%   split@b836d512:lib-rustyfi/packages/itemize/itemize.0.0.1/src/
+%   itemize.satyh (124 lines) — transliteration deltas:
+%   - T1: `use package open Stdlib` dropped; `@require: block`,
+%     `@require: hdecoset`, `@require: inline`, `@require: list`,
+%     `@require: option`, `@require: path` added (the only Stdlib
+%     modules this file references QUALIFIED: `Block.form-paragraph`,
+%     `HDecoSet.empty`, `Inline.get-natural-advance`, `List.fold`/
+%     `map-with-ends`/`is-empty`/`map-indexed`, `Option.from`, `Path.
+%     circle`). Every other member it
+%     calls bare (`embed-block-top`, `read-inline`, `set-paragraph-
+%     margin`, `get-text-width`, `block-frame-breakable`, `arabic`,
+%     `embed-string`, `embed-block-breakable`, `block-skip`, `inline-
+%     fil`/`inline-skip`/`inline-graphics`, `fill`, `get-text-color`,
+%     `float`, `Item(_, _)`) is a GLOBAL primitive/ctor resolved through
+%     `base_env` regardless of `@require:` — the same "bare primitive"
+%     story `context.satyh`'s/`math.satyh`'s banners document (and, for
+%     `Item`/`itemize`, `primitives.rs`'s own `set-text-color`/`get-
+%     text-color` doc comments already anticipate this file by name:
+%     "`itemize.satyh`'s `make-bullet` feeds this straight into `fill`").
+%   - T4/G1: upstream's two-line top of the struct —
+%       `val (+++>) = List.fold (+++)`
+%       `val concat-blocks = (+++>) block-nil`
+%     — is TWO instances of the "operator-as-first-class-value" gap this
+%     port's v1 grammar lacks (`inline.satyh`'s/`int.satyg`'s/`string.
+%     satyg`'s banners: no `Atomic::OpRef` in the V0_1 grammar, only in
+%     0.0.6): `(+++)` references the block-concat infix `+++` as a bare
+%     value (fold's combiner), and `(+++>) block-nil` references the
+%     freshly-named `+++>` operator as a bare value (partial application).
+%     Both are collapsed here into ONE plain named helper —
+%       `val concat-blocks bbs = bbs |> List.fold (fun a b -> a +++ b) block-nil`
+%     — with the `+++` op-value replaced by the `inline.satyh`-style
+%     lambda fallback `fun a b -> a +++ b`, and the two upstream infix
+%     uses `bb-parent +++> bbs-children` (in `listing-item`/`listing-
+%     item-breakable`) rewritten to `concat-blocks (bb-parent ::
+%     bbs-children)`. Behaviorally identical: `bb-parent +++> bbs` =
+%     `List.fold (+++) bb-parent bbs`, and since `block-nil` is the `+++`
+%     identity, `List.fold (+++) block-nil (bb-parent :: bbs)` folds to
+%     the same value. (The `+++>` operator NAME itself never survives; a
+%     `val (+++>) params = …` infix bind IS landed — Sub-slice 2b, see
+%     `v01-mini.satyh`'s banner — but the point-free `val (+++>) = …`
+%     spelling that USES an op-value on its RHS is not, so the helper
+%     form is the smallest faithful cut.)
+%   No other deltas below the banner (except S4, next paragraph):
+%   `listing-item`/`listing-item-breakable`/`enumerate-item` (bullet/index
+%   rendering, breakable vs. non-breakable listing variants,
+%   `Item(parent, children)` deconstruction) are byte-identical to upstream.
+%   No `#[test-only]`/`#[test]` blocks exist in the real upstream source at
+%   this pinned commit — nothing to strip.
+%   - S4 (`docs/plans/design-reflow-s4-lists.md`): `listing`/`listing-item`/
+%     `listing-item-breakable`/`enumerate`/`enumerate-item` now additionally
+%     wrap their output in `list-mark`/`inline-mark` calls (list/item
+%     boundaries, ordered-vs-unordered, a fence around the drawn bullet/
+%     number glyph) — these are INERT reflow markers (zero height/width/
+%     depth, stripped before PDF/faithful-HTML placement with zero
+%     contribution, see `crates/rustyfi-backend/src/pagebreak.rs`'s pure-skip
+%     arms and that design doc's §4.3 byte-identity argument): every
+%     rendered byte of PDF/faithful-HTML output is unchanged by this delta,
+%     only the reflow HTML backend (`--format html-reflow`) reads them, to
+%     rebuild real `<ul>`/`<ol>`/`<li>` structure.
+
+@require: block
+@require: hdecoset
+@require: inline
+@require: list
+@require: option
+@require: path
+
+module Itemize :> sig
+  val +listing : block [?(break : bool) itemize]
+  val \listing : inline [?(break : bool) itemize]
+  val +enumerate : block [itemize]
+  val \enumerate : inline [itemize]
+end = struct
+
+  val concat-blocks bbs = bbs |> List.fold (fun a b -> a +++ b) block-nil
+
+
+  val item-indent = 16pt
+  val item-gap = 10pt
+  val item-gap-outer = 6pt
+
+
+  val bullet-graphics color (x, y) =
+    let cx = x +' 4pt in
+    let cy = y +' 4pt in
+    let r = 2pt in
+    fill color (Path.circle (cx, cy) r)
+
+
+  % S4 (`docs/plans/design-reflow-s4-lists.md` §4.1): fence the drawn bullet
+  % circle with `inline-mark` (tag 3 = `BulletStart`, 4 = `BulletEnd`) so the
+  % reflow HTML walker can drop it cleanly (the real `<ul>`/`<ol>` marker
+  % replaces it) — the trailing `inline-skip 8pt` gap is left unfenced (it's
+  % pure spacing, not the bullet glyph itself). Both markers are zero-width
+  % (`Inline.get-natural-advance ib-bullet` below is unaffected — PDF/
+  % faithful-HTML output is byte-identical).
+  val make-bullet ctx =
+    let color = get-text-color ctx in
+    (inline-mark 3) ++ inline-graphics 8pt 8pt 0pt (bullet-graphics color) ++ (inline-mark 4)
+      ++ inline-skip 8pt
+
+
+  val rec listing-item ctx depth is-first is-last (Item(parent, children)) =
+        let ib-bullet = make-bullet ctx in
+        let bullet-width = Inline.get-natural-advance ib-bullet in
+        let parent-indent = item-indent *' (float depth) in
+        let ib-parent =
+          embed-block-top ctx ((get-text-width ctx) -' parent-indent -' bullet-width) (fun ctx ->
+            Block.form-paragraph (ctx |> set-paragraph-margin item-gap item-gap)
+              (read-inline ctx parent ++ inline-fil)
+          )
+        in
+        let bb-parent =
+          Block.form-paragraph (ctx |> set-paragraph-margin item-gap item-gap)
+            ((inline-skip parent-indent) ++ ib-bullet ++ ib-parent)
+        in
+        let bbs-children = List.map-with-ends (listing-item ctx (depth + 1)) children in
+        % S4: wrap this item in `ItemStart`/`ItemEnd` (tags 3/4), and — only
+        % when there ARE children — wrap the whole recursed child group in
+        % its OWN nested `ListStart{ordered=false}`/`ListEnd` (tags 0/2): a
+        % `*`-bullet's children are always unordered bullets too (`enumerate`
+        % never recurses at all, see `enumerate-item` below), and this is
+        % what makes the reflow walker's stack produce a genuinely NESTED
+        % `<ul><li>…<ul><li>…</li></ul></li></ul>` instead of flattening
+        % siblings and children into one `<li>` list (design doc §4.1).
+        let bb-children =
+          if List.is-empty children then block-nil
+          else (list-mark 0) +++ concat-blocks bbs-children +++ (list-mark 2)
+        in
+        (list-mark 3) +++ bb-parent +++ bb-children +++ (list-mark 4)
+
+
+  val rec listing-item-breakable ctx depth is-first is-last (Item(parent, children)) =
+        let ib-bullet = make-bullet ctx in
+        let bullet-width = Inline.get-natural-advance ib-bullet in
+        let parent-indent = item-indent *' (float depth) in
+        let pads = (parent-indent +' bullet-width, 0pt, 0pt, 0pt) in
+        let decos = HDecoSet.empty in
+        let bb-parent =
+          let ctx-frame =
+            let len-top = if is-first then item-gap-outer +' item-gap else item-gap in
+            let len-bottom = if is-last || List.is-empty children then item-gap-outer +' item-gap else item-gap in
+            ctx |> set-paragraph-margin len-top len-bottom
+          in
+          block-frame-breakable ctx-frame pads decos (fun ctx ->
+            Block.form-paragraph ctx
+              (inline-skip (0pt -' bullet-width) ++ ib-bullet ++ read-inline ctx parent ++ inline-fil)
+          )
+        in
+        let bbs-children = List.map-with-ends (listing-item-breakable ctx (depth + 1)) children in
+        % S4: same `ItemStart`/`ItemEnd` + nested-`ListStart`/`ListEnd`
+        % wrapping as `listing-item` above.
+        let bb-children =
+          if List.is-empty children then block-nil
+          else (list-mark 0) +++ concat-blocks bbs-children +++ (list-mark 2)
+        in
+        (list-mark 3) +++ bb-parent +++ bb-children +++ (list-mark 4)
+
+
+  val listing break ctx (Item(_, items)) =
+    % S4: the top-level `<ul>` (`list-mark` tag 0 = `ListStart{ordered=false}`
+    % / 2 = `ListEnd`) around every top-level item — `listing`/`enumerate`
+    % are distinct commands, so `ordered` is an exact bit here, never a
+    % heuristic (design doc §5).
+    if break then
+      let bbs = List.map-with-ends (listing-item-breakable ctx 0) items in
+      (list-mark 0) +++ concat-blocks bbs +++ (list-mark 2)
+    else
+      let bbs = List.map-with-ends (listing-item ctx 0) items in
+      (list-mark 0) +++ concat-blocks bbs +++ (list-mark 2)
+
+
+  val block ctx +listing ?(break = breakopt) item =
+    let break = Option.from false breakopt in
+    listing break ctx item
+
+
+  val inline ctx \listing ?(break = breakopt) item =
+    let break = Option.from false breakopt in
+      inline-fil ++ embed-block-breakable ctx (listing break ctx item)
+        ++ omit-skip-after
+
+
+  val rec enumerate-item index ctx depth (Item(parent, _)) =
+        let color = get-text-color ctx in
+        let parent-indent = item-indent *' (float depth) in
+        % S4: fence the numeral the same way `make-bullet` fences the
+        % bullet circle above (tags 3/4 = `BulletStart`/`BulletEnd`) — the
+        % reflow `<ol>` supplies its own number, so this text is dropped
+        % there but renders exactly as before everywhere else.
+        let ib-index =
+          let it-num = (embed-string (arabic index)) in
+            (inline-mark 3) ++ read-inline ctx {(#it-num;)\ } ++ (inline-mark 4)
+        in
+        let index-width = Inline.get-natural-advance ib-index in
+        let ib-parent =
+          embed-block-top ctx ((get-text-width ctx) -' parent-indent -' index-width) (fun ctx ->
+            Block.form-paragraph (ctx |> set-paragraph-margin item-gap item-gap)
+              (read-inline ctx parent ++ inline-fil)
+          )
+        in
+        let bb-item =
+          Block.form-paragraph (ctx |> set-paragraph-margin item-gap item-gap)
+            ((inline-skip parent-indent) ++ ib-index ++ ib-parent)
+        in
+        % S4: `enumerate-item` never recurses (its own `Item(parent, _)`
+        % pattern discards children — `enumerate` has no nested-numbering
+        % concept upstream), so this only ever needs an `ItemStart`/
+        % `ItemEnd` fence, no nested `ListStart`/`ListEnd`.
+        (list-mark 3) +++ bb-item +++ (list-mark 4)
+
+
+  val enumerate ctx (Item(_, itmzlst)) =
+    % S4: `list-mark` tag 1 = `ListStart{ordered=true}` — `enumerate` always
+    % opens a real `<ol>` (an exact bit, not a heuristic: this is a distinct
+    % command from `listing`, design doc §5).
+    let bblst = List.map-indexed (fun i -> enumerate-item (i + 1) ctx 0) itmzlst in
+    (list-mark 1) +++ concat-blocks bblst +++ (list-mark 2)
+
+
+  val block ctx +enumerate item =
+    enumerate ctx item
+
+
+  val inline ctx \enumerate item =
+    let bb = enumerate ctx item in
+    inline-fil ++
+      embed-block-breakable ctx
+        (block-skip item-gap-outer +++ bb +++ block-skip item-gap-outer)
+      ++ omit-skip-after
+
+end

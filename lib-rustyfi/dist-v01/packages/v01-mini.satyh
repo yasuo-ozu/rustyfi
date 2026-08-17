@@ -1,0 +1,85 @@
+% v01-mini.satyh — SATySFi 0.1 (dev-0-1-0, Legacy packaging) hand-
+% transliteration of lib-rustyfi/dist/packages/stdja-mini.satyh (which
+% stays frozen; see that file's header comments for the semantics both
+% versions share). Deltas, all of them 0.1 surface syntax:
+%   - `module V01Mini = struct … end` wrapper — a REAL module (Sub-slice
+%     2a's v1/lower.rs): every binding is exported qualified (`V01Mini.x`),
+%     exactly 0.0.6 module semantics; a document depending on this package
+%     reaches its bindings via `V01Mini.x`, `\V01Mini.cmd`/`+V01Mini.cmd`,
+%     or `let open V01Mini in`, never bare;
+%   - `val` / `val inline` / `val block` instead of `let`/`let-inline`/
+%     `let-block`;
+%   - `,`-separated records;
+%   - `page-break (210mm, 297mm) …` — 0.1 has no `page` ADT (A4Paper is
+%     gone; L7, docs/plans/rustyfi-0-1-0-support.md), so the paper size is
+%     a plain length pair. 210mm x 297mm IS A4.
+%   - type / val rec …and… / val mutable / val ( binop ) binds — Sub-slice 2b
+%   - `val math ctx \cmd … = …` binds and `read-math` — the math-split spec
+%     (L6): `math` is split into `math-text` (unparsed `${…}` source) /
+%     `math-boxes` (the evaluated tree), bridged by `read-math`; `\math`
+%     mirrors upstream `math.satyh:462-463` (minus `script-guard`), `\frac`
+%     is `math.satyh:465-466` verbatim, `\lim` is the `vop` pattern of
+%     `math.satyh:820` inlined (ASCII-only, so the base-14 `FontMetrics`
+%     stub covers every glyph).
+%   - S4 (`docs/plans/design-reflow-s4-lists.md` §5): `\emph`/`\bold` now
+%     wrap their body in `inline-mark` (INERT reflow markers — zero-width,
+%     stripped before PDF/faithful-HTML placement, see that design doc's
+%     §4.3) so `--format html-reflow` can render a real `<em>`/`<strong>`;
+%     this is an opt-in, per-command wrap (this file is repo-controlled), not
+%     a heuristic — a third-party `\emph` still degrades to plain text.
+
+module V01Mini = struct
+
+  val inline ctx \math m = embed-math ctx (read-math ctx m)
+
+  val math ctx \frac numer denom =
+    math-frac ctx (read-math ctx numer) (read-math ctx denom)
+
+  val math ctx \lim with sub sup =
+    let base = math-char ctx MathOp `lim` in
+    let based =
+      match sub with
+      | None   -> base
+      | Some m -> math-lower ctx base (fun sctx -> read-math sctx m)
+      end
+    in
+    match sup with
+    | None   -> based
+    | Some m -> math-upper ctx based (fun sctx -> read-math sctx m)
+    end
+
+  val document record bt =
+    let ctx = get-initial-context 440pt (command \math) in
+    let content pbinfo = (| text-origin = (72pt, 100pt), text-height = 640pt |) in
+    let parts pbinfo =
+      (| header-origin = (72pt, 72pt),  header-content = block-nil,
+         footer-origin = (72pt, 800pt), footer-content =
+           line-break true true ctx
+             (inline-fil ++ (read-inline ctx (embed-string (arabic (pbinfo#page-number)))) ++ inline-fil) |)
+    in
+    page-break (210mm, 297mm) content parts (read-block ctx bt)
+
+  val block ctx +p it =
+    line-break true true ctx (read-inline ctx it ++ inline-fil)
+
+  val inline ctx \emph it =
+    (inline-mark 0) ++ read-inline (set-font-key 2 ctx) it ++ (inline-mark 2)
+
+  val inline ctx \bold it =
+    (inline-mark 1) ++ read-inline (set-font-key 1 ctx) it ++ (inline-mark 2)
+
+  % ---- Sub-slice 2b surface: type / val rec / val mutable / ( binop ) ----
+
+  type answer-shape = | Known of int | Unknown
+
+  val rec sum-list lst =
+    match lst with
+    | []      -> 0
+    | x :: xs -> x + sum-list xs
+    end
+
+  val (+++) a b = a + b * 2
+
+  val mutable doc-counter <- 0
+
+end

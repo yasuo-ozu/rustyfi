@@ -1,14 +1,15 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/satysfi-syntax",
-    "crates/satysfi-backend",
-    "crates/satysfi-lang",
-    "crates/satysfi-pdf",
-    "crates/satysfi-cli",
-    "crates/satysfi-loader",
-    "crates/satysfi-satyrographos",
-    "crates/tsl-satysfi-inst",
+    "crates/rustyfi-syntax",
+    "crates/rustyfi-backend",
+    "crates/rustyfi-lang",
+    "crates/rustyfi-pdf",
+    "crates/rustyfi-html",
+    "crates/rustyfi-cli",
+    "crates/rustyfi-loader",
+    "crates/rustyfi-satyrographos",
+    "crates/tsl-rustyfi-inst",
 ]
 
 [workspace.package]
@@ -19,15 +20,16 @@ authors = ["Yasuo Ozu <yasuo@ozu.email>"]
 
 [workspace.dependencies]
 syan = { path = "../syan2-ergo/core" }
-tsl-infer = { path = "../type-system-library/crates/tsl-infer" }
-tsl-exhaust = { path = "../type-system-library/crates/tsl-exhaust" }
-tsl-satysfi-inst = { path = "crates/tsl-satysfi-inst" }
-satysfi-syntax = { path = "crates/satysfi-syntax" }
-satysfi-backend = { path = "crates/satysfi-backend" }
-satysfi-lang = { path = "crates/satysfi-lang" }
-satysfi-pdf = { path = "crates/satysfi-pdf" }
-satysfi-loader = { path = "crates/satysfi-loader" }
-satysfi-satyrographos = { path = "crates/satysfi-satyrographos" }
+catasys-infer = { path = "../taipu/crates/catasys-infer" }
+catasys-exhaust = { path = "../taipu/crates/catasys-exhaust" }
+tsl-rustyfi-inst = { path = "crates/tsl-rustyfi-inst" }
+rustyfi-syntax = { path = "crates/rustyfi-syntax" }
+rustyfi-backend = { path = "crates/rustyfi-backend" }
+rustyfi-lang = { path = "crates/rustyfi-lang" }
+rustyfi-pdf = { path = "crates/rustyfi-pdf" }
+rustyfi-html = { path = "crates/rustyfi-html" }
+rustyfi-loader = { path = "crates/rustyfi-loader" }
+rustyfi-satyrographos = { path = "crates/rustyfi-satyrographos" }
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
@@ -49,3 +51,9 @@ newer-type-std = "0.3"
 # (avif/bmp/dds/exr/ff/gif/hdr/ico/pnm/qoi/tga/tiff/webp) and its `rayon`
 # feature are left off to keep the dependency footprint minimal.
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+# PDF object-model reader for `load-pdf-image` (docs/plans/design-load-pdf-image.md
+# S0): parses a foreign PDF's page tree/content stream/resources so a page can be
+# re-embedded as a Form XObject. Pure Rust, no C toolchain. Consumed by
+# rustyfi-lang (parse side) and rustyfi-pdf (re-emit side); rustyfi-backend stays
+# lopdf-free (neutral ImportedObjects/ObjRepr types only).
+lopdf = "0.36"

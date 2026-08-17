@@ -1,0 +1,18 @@
+% font-latin-modern.satyh — SATySFi 0.1 font envelope `FontLatinModern`,
+% Legacy stand-in (docs/plans/…/doc-class-capstone-road.md §3 G7 / CP6,
+% `…/tmp/g6-g7-standins.md` §2.2).
+% Source: saphe-split@b836d512:lib-rustyfi/packages/font-latin-modern/… —
+% ENVELOPE-ONLY upstream (no .satyh); saphe synthesizes
+% `FontLatinModern.{mono,sans} : font` from rustyfi-envelope.yaml
+% `files[].opentype_single.name`. PORT STAND-IN: each `font` value is the
+% abbrev STRING (G8: `font` ≡ `string` under V0_1, `typecheck.rs:499`); the
+% backend resolves it via `set-font`'s name-heuristic / a bare
+% `TtfFontStore::load` single-face store. No `@require:`.
+
+module FontLatinModern :> sig
+  val mono : font
+  val sans : font
+end = struct
+  val mono = `lmmono`
+  val sans = `lmsans`
+end

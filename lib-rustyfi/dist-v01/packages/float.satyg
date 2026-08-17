@@ -1,0 +1,43 @@
+% float.satyg — SATySFi 0.1 stdlib `Float`, vendored for Legacy packaging
+% (docs/plans/rustyfi-0-1-0-support.md §2 P2 / §4 phase 6).
+% Source: saphe-split@b836d512:lib-rustyfi/packages/stdlib/stdlib.0.0.1/
+%   src/float.satyg — transliteration deltas: T3 only (`val persistent
+%   ~name … = …` -> `val name … = …`; the `~lift` member dropped outright).
+%   `exp`/`log` are landed L5a primitives.
+%   RESTORED (language-completeness sweep gap 1): float comparison
+%   operators (`>.`/`<.`/`>=.`/`<=.`) are now registered as v01-only prims
+%   (`primitives.rs`'s `prims!` table / `prim_types.rs`) — the three
+%   members whose bodies use `>=.`/`<=.` (`abs`/`max`/`min`) are re-added
+%   verbatim, matching upstream exactly.
+
+module Float :> sig
+  type t = float
+  val abs : float -> float
+  val max : float -> float -> float
+  val min : float -> float -> float
+  val pi : float
+  val power : float -> float -> float
+  val sqrt : float -> float
+end = struct
+
+  type t = float
+
+  val abs x =
+    if x >=. 0. then x else 0. -. x
+
+  val max x1 x2 =
+    if x1 >=. x2 then x1 else x2
+
+  val min x1 x2 =
+    if x1 <=. x2 then x1 else x2
+
+  val pi =
+    3.1415926536
+
+  val power y x =
+    exp (y *. log x)
+
+  val sqrt =
+    power 0.5
+
+end

@@ -1,0 +1,82 @@
+% hdecoset.satyh — SATySFi 0.1 stdlib `HDecoSet`, vendored for Legacy
+% packaging (docs/plans/rustyfi-0-1-0-support.md §2 P2 / §4 phase 6).
+% Source: saphe-split@b836d512:lib-rustyfi/packages/stdlib/stdlib.0.0.1/
+%   src/hdecoset.satyh — transliteration deltas:
+%   - T1: `use Graphics` / `use Path` dropped; `@require: graphics`,
+%     `@require: path` added.
+%   - G10 (newly discovered this wave): EXPRESSION-LEVEL named `let NAME
+%     param* = … in …` bindings (`cst_v1::ast::Expr::LetIn`) accept
+%     ONLY plain variable names as params (`params: Vec<VarTok>`) — no
+%     wildcards `_` AND no compound patterns like `(x, y)` at all (unlike
+%     `Bind::Value`'s `params: Vec<Param>`, which accepts both, #46's
+%     landed fix — used successfully by `deco.satyh`'s TOP-LEVEL `val
+%     simple-frame t scolor fcolor (x, y) w h d = …`). Every local
+%     `decoS`/`decoH`/`decoM`/`decoT` helper here binds a TUPLE-
+%     PATTERNED first param `(x, y)`, which `Expr::LetIn` simply cannot
+%     express — confirmed empirically ("expected 'let'"/"expected 'end'"
+%     — a full backtrack past the enclosing `module`). Worked around by
+%     switching every such local to the `let NAME = fun pat1 .. patN ->
+%     body in` form instead: `Expr::Fun`'s `params: Vec<PatBot>` DOES
+%     accept both tuple patterns and wildcards, and `Expr::LetIn`'s VALUE
+%     position accepts any expression — so `let deco = fun pt w h d ->
+%     Graphics.empty in` / `let decoS = fun (x, y) w h d -> … in` are
+%     both semantically identical to the (unparseable) upstream forms,
+%     purely a curried-function-VALUE-vs-named-let-with-params spelling
+%     change, no behavior difference.
+%   Otherwise byte-faithful: every `deco`-shaped local (`decoS`/`decoH`/
+%   `decoM`/`decoT`) already returns a SINGLE `graphics` value.
+%
+%   Affected by G8 (see `graphics.satyh`'s banner): `deco-set`/`graphics`
+%   are bare sig type names this port's v1 sealing width check doesn't
+%   recognize, so `:>` fails `compile_document_v1`'s seal-width pass
+%   (pre-existing gap). Tested via the "value bar"
+%   (`compile_v01_via_loader`).
+
+@require: graphics
+@require: path
+
+module HDecoSet :> sig
+  val empty : deco-set
+  val simple-frame-stroke : length -> color -> deco-set
+  val rectangle-round-fill : length -> length -> color -> deco-set
+end = struct
+
+  val empty =
+    let deco = fun pt w h d -> Graphics.empty in
+    (deco, deco, deco, deco)
+
+  val simple-frame-stroke t scolor =
+    let strokef = stroke t scolor in
+    let decoS = fun (x, y) w h d ->
+      strokef (Path.rectangle (x, y -' d) (x +' w, y +' h))
+    in
+    let decoH = fun (x, y) w h d ->
+      strokef (Path.poly-line (x +' w, y -' d) [ (x, y -' d), (x, y +' h), (x +' w, y +' h) ])
+    in
+    let decoM = fun (x, y) w h d ->
+      Graphics.overlay [
+        strokef (Path.line (x, y -' d) (x +' w, y -' d)),
+        strokef (Path.line (x, y +' h) (x +' w, y +' h)),
+      ]
+    in
+    let decoT = fun (x, y) w h d ->
+      strokef (Path.poly-line (x, y -' d) [ (x +' w, y -' d), (x +' w, y +' h), (x, y +' h) ])
+    in
+    (decoS, decoH, decoM, decoT)
+
+  val rectangle-round-fill r extra color =
+    let decoS = fun (x, y) wid hgt dpt ->
+      fill color (Path.rectangle-round r (x, y -' dpt) (x +' wid, y +' hgt))
+    in
+    let decoH = fun (x, y) wid hgt dpt ->
+      fill color (Path.rectangle-round-left r (x, y -' dpt) (x +' wid +' extra, y +' hgt))
+    in
+    let decoM = fun (x, y) wid hgt dpt ->
+      fill color (Path.rectangle (x, y -' dpt) (x +' wid +' extra, y +' hgt))
+    in
+    let decoT = fun (x, y) wid hgt dpt ->
+      fill color (Path.rectangle-round-right r (x -' extra, y -' dpt) (x +' wid, y +' hgt))
+    in
+    (decoS, decoH, decoM, decoT)
+
+end

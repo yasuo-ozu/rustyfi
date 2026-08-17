@@ -1,0 +1,113 @@
+% string.satyg — SATySFi 0.1 stdlib `String`, vendored for Legacy packaging
+% (docs/plans/rustyfi-0-1-0-support.md §2 P2 / §4 phase 6).
+% Source: saphe-split@b836d512:lib-rustyfi/packages/stdlib/stdlib.0.0.1/
+%   src/string.satyg — transliteration deltas:
+%   - T1: `use open Basic` / `use Int` / `use Option` / `use List` dropped;
+%     `@require: basic`, `@require: int`, `@require: option`,
+%     `@require: list` added (the qualified `List.compare Int.compare`/
+%     `Option.map` bodies already read qualified upstream).
+%   - T2: bare `ordering` -> `Basic.ordering`.
+%   - T3: `val persistent ~rec name … = …`# -> `val rec name … = …`
+%     (`string.satyg:70`'s own precedent, per the scout); `val persistent
+%     ~name … = …` -> `val name … = …`; the `~lift` member dropped outright.
+%   - T4/G1 fallback: `val persistent ~append = ( ^ ) %PRIMITIVE` — an
+%     operator SECTION (T4); no `Atomic::OpRef` in this port's v1 grammar,
+%     so transliterated to `fun s1 s2 -> s1 ^ s2`.
+%   All L5a string primitives (`string-same`, `string-sub`, `string-explode`,
+%   `normalize-string-to-nfc/-nfd`, `split-grapheme-cluster`, `split-into-
+%   lines`, …) are landed.
+%   GAP FOUND (not predicted by the scout's T1-T8 dialect; see `list.satyg`'s
+%   own header for the first hit): `concat`'s `fold-adjacent` callback,
+%   `fun s elem _ next-opt -> …`, uses a bare wildcard `_` lambda
+%   PARAMETER — this port's `Expr::Fun` only takes `Vec<VarTok>` (a lexer-
+%   level restriction: `_` never lexes as a `VarTok`). Renamed the ignored
+%   parameter to a real (unused) name, `prevopt` — same semantics.
+
+@require: basic
+@require: int
+@require: option
+@require: list
+
+module String :> sig
+  type t = string
+  val compare : string -> string -> Basic.ordering
+  val equal : string -> string -> bool
+  val append : string -> string -> string
+  val length : string -> int
+  val byte-length : string -> int
+  val sub : string -> int -> int -> string
+  val sub-bytes : string -> int -> int -> string
+  val to-scalar-values : string -> list int
+  val from-scalar-values : list int -> string
+  val normalize-to-nfc : string -> string
+  val normalize-to-nfd : string -> string
+  val split-into-grapheme-clusters : string -> list string
+  val empty : string
+  val split-into-lines : string -> list (int * string)
+  val concat : string -> list string -> string
+  val chop-prefix : string -> string -> option string
+  val chop-suffix : string -> string -> option string
+end = struct
+
+  type t = string
+
+  val equal = string-same %PRIMITIVE
+
+  val append = fun s1 s2 -> s1 ^ s2
+
+  val length = string-length %PRIMITIVE
+
+  val byte-length = string-byte-length %PRIMITIVE
+
+  val sub = string-sub %PRIMITIVE
+
+  val sub-bytes = string-sub-bytes %PRIMITIVE
+
+  val to-scalar-values = string-explode %PRIMITIVE
+
+  val from-scalar-values = string-unexplode %PRIMITIVE
+
+  val normalize-to-nfc = normalize-string-to-nfc %PRIMITIVE
+
+  val normalize-to-nfd = normalize-string-to-nfd %PRIMITIVE
+
+  val split-into-grapheme-clusters = split-grapheme-cluster %PRIMITIVE
+
+  val compare s1 s2 =
+    List.compare Int.compare (to-scalar-values s1) (to-scalar-values s2)
+
+  val empty =
+    ` `
+
+  val split-into-lines = split-into-lines %PRIMITIVE
+
+  val concat sep elems =
+    elems |> List.fold-adjacent (fun s elem prevopt next-opt ->
+      match next-opt with
+      | None    -> s ^ elem
+      | Some(_) -> s ^ elem ^ sep
+      end
+    ) ` `
+
+  val rec chop-aux chars-prefix chars-target =
+    match (chars-prefix, chars-target) with
+    | ([], _) ->
+        Some(chars-target)
+    | (prefix-head :: prefix-tail, target-head :: target-tail) ->
+        if prefix-head == target-head then
+          chop-aux prefix-tail target-tail
+        else
+          None
+    | (_, []) ->
+        None
+    end
+
+  val chop-prefix prefix target =
+    Option.map from-scalar-values (chop-aux (to-scalar-values prefix) (to-scalar-values target))
+
+  val chop-suffix suffix target =
+    let decompose s = List.reverse (to-scalar-values s) in
+    let compose chars = from-scalar-values (List.reverse chars) in
+    Option.map compose (chop-aux (decompose suffix) (decompose target))
+
+end

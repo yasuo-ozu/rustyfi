@@ -1,0 +1,21 @@
+% font-ipa-ex.satyh — SATySFi 0.1 font envelope `FontIpaEx`, Legacy
+% stand-in (docs/plans/…/doc-class-capstone-road.md §3 G7 / CP6,
+% `…/tmp/g6-g7-standins.md` §2.2).
+% Source: saphe-split@b836d512:lib-rustyfi/packages/font-ipa-ex/… —
+% ENVELOPE-ONLY upstream (no .satyh); saphe synthesizes
+% `FontIpaEx.{mincho,gothic} : font` from rustyfi-envelope.yaml
+% `files[].opentype_single.name`. PORT STAND-IN: each `font` value is the
+% abbrev STRING (G8: `font` ≡ `string` under V0_1, `typecheck.rs:499`); the
+% backend resolves it via `set-font`'s name-heuristic / a bare
+% `TtfFontStore::load` single-face store — a Latin-only, CJK-free capstone
+% body never actually demands these CJK abbrevs, so they collapse to the
+% same one loaded face too (§2.3/§2.4 of the spec: a real CJK proof stays
+% skip-gated behind `scripts/download-fonts.sh`). No `@require:`.
+
+module FontIpaEx :> sig
+  val mincho : font
+  val gothic : font
+end = struct
+  val mincho = `ipaexm`
+  val gothic = `ipaexg`
+end

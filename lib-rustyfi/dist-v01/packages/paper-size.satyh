@@ -1,0 +1,27 @@
+% paper-size.satyh — SATySFi 0.1 stdlib `PaperSize`, vendored for Legacy
+% packaging (docs/plans/rustyfi-0-1-0-support.md §2 P2 / §4 phase 6).
+% Source: saphe-split@b836d512:lib-rustyfi/packages/stdlib/stdlib.0.0.1/
+%   src/paper-size.satyh — transliteration deltas: T3 only (`val persistent
+%   ~name = …` -> `val name = …`; no `~lift` members present). Plain
+%   UNSEALED module; each value is a `length * length` pair — 0.1 has no
+%   `page` ADT (A4Paper is gone; L7), so a "paper size" is just this tuple,
+%   consumed directly by `page-break (w, h) …`.
+
+module PaperSize = struct
+
+  val a0 = (841mm, 1189mm)
+  val a1 = (594mm, 841mm)
+  val a2 = (420mm, 594mm)
+  val a3 = (297mm, 420mm)
+  val a4 = (210mm, 297mm)
+  val a5 = (148mm, 210mm)
+  val a6 = (105mm, 148mm)
+  val a7 = (74mm, 105mm)
+  val a8 = (52mm, 74mm)
+  val a9 = (37mm, 52mm)
+  val a10 = (26mm, 37mm)
+
+  val us-letter = (8.5inch, 11inch)
+  val us-legal = (8.5inch, 14inch)
+
+end

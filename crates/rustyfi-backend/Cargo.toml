@@ -1,0 +1,14 @@
+[package]
+name = "rustyfi-backend"
+description = "Box/glue model, typesetting context, line and page breaking for SATySFi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+newer-type.workspace = true
+newer-type-std.workspace = true
+# UAX#14 line breaking: a compiled Unicode pair table, no unidata files to
+# ship (docs/plans/text-rendering.md §3).
+unicode-linebreak = "0.1"

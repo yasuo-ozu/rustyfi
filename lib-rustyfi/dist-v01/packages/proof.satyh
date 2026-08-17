@@ -1,0 +1,126 @@
+% proof.satyh — SATySFi 0.1 `proof` package's `Proof`, vendored for Legacy
+% packaging wave-4 Batch B. Source: saphe-split@b836d512:lib-rustyfi/
+%   packages/proof/proof.0.0.1/src/proof.satyh (86 lines) —
+%   transliteration deltas:
+%   - T1: `use package open Stdlib` dropped; `@require: graphics`,
+%     `@require: inline`, `@require: length`, `@require: path` added
+%     (the only Stdlib modules this file references QUALIFIED:
+%     `Graphics.text-rightward`, `Inline.get-natural-advance`, `Length.
+%     max`, `Path.rectangle`). Every other member it calls bare
+%     (`embed-inline-to-math`, `inline-skip`, `discretionary`, `inline-
+%     fil`, `inline-nil`, `embed-math`, `read-math`, `embed-block-
+%     bottom`, `line-break`, `get-natural-metrics`, `get-text-color`,
+%     `get-font-size`, `get-math-axis-height-ratio`, `inline-graphics`,
+%     `unite-graphics`, `line-stack-bottom`, `fill`, `List.fold-
+%     adjacent`) is a GLOBAL primitive resolved through `base_env`
+%     regardless of `@require:` — the same "bare primitive" story
+%     `context.satyh`'s/`math.satyh`'s banners document. (`List.fold-
+%     adjacent` is `list.satyg`'s own member, called bare here because
+%     upstream calls it unqualified via `use package open Stdlib` too —
+%     wait: this port's `list.satyg` wraps every member under the real
+%     `List` module, so this call is transliterated `List.fold-adjacent`
+%     below, requiring `@require: list` as well.)
+%   No other deltas: `math \math-space`/`derive`/`\derive`/`\derive-
+%   multi` (the proof-tree layout: name label above/below the
+%   inference bar, optional fixed-width wrapping via `embed-block-
+%   bottom`) are byte-identical to upstream below the banner. This is
+%   the ONE package in this port that exercises `math […]` command-type
+%   sig rows WITH an optional-argument prefix (`val \derive : math
+%   [?(name : math-text, b : bool) list math-text, math-text]`) —
+%   `MathCmdTy` reusing `TypeCmdArgItemV1`'s optional-label prefix
+%   machinery (landed, `cst_v1.rs`'s own doc comment on `MathCmdTy`).
+%   `embed-inline-to-math` is a landed V0_1 primitive (`primitives.rs`'s
+%   `prim_embed_inline_to_math`, also exercised by `math.satyh`'s own
+%   `\text`). No `#[test-only]`/`#[test]` blocks exist in the real
+%   upstream source at this pinned commit — nothing to strip.
+
+@require: graphics
+@require: inline
+@require: length
+@require: list
+@require: path
+
+module Proof :> sig
+
+  val \derive : math [?(name : math-text, b : bool) list math-text, math-text]
+  val \derive-multi : math [?(name : math-text, b : bool) length, list math-text, math-text]
+
+end = struct
+
+  val math ctx \math-space len =
+    embed-inline-to-math MathOrd (inline-skip len)
+
+
+  val derive ctx nameopt bopt widopt (mlst1 : list math-text) (m2 : math-text) =
+    let ib-space =
+      match widopt with
+      | None    -> inline-skip 30pt
+      | Some(_) -> discretionary 100 (inline-skip 30pt) inline-fil inline-fil
+      end
+    in
+    embed-inline-to-math MathInner (
+      let ibacc1 =
+        (mlst1 |> List.fold-adjacent (fun ibacc1 m prevopt _ -> (
+          let ibm = embed-math ctx (read-math ctx m) in
+          match prevopt with
+          | None    -> inline-fil ++ ibm
+          | Some(_) -> ibacc1 ++ ib-space ++ ibm
+          end
+        )) inline-nil) ++ inline-fil
+      in
+      let ib1 =
+        match widopt with
+        | None      -> ibacc1
+        | Some(wid) -> embed-block-bottom ctx wid (fun ctx -> line-break true true ctx ibacc1)
+        end
+      in
+      let ib2 = inline-fil ++ (embed-math ctx (read-math ctx m2)) ++ inline-fil in
+      let w =
+        match widopt with
+        | None      -> Length.max (Inline.get-natural-advance ib1) (Inline.get-natural-advance ib2)
+        | Some(wid) -> Length.max wid (Inline.get-natural-advance ib2)
+        end
+      in
+      let color = get-text-color ctx in
+      let thickness = 0.5pt in
+      let gap = 2pt in
+      let (glnamef, wname) =
+        match nameopt with
+        | None ->
+            ((fun _ -> []), 0pt)
+
+        | Some(name) ->
+            let ib = embed-math ctx (read-math ctx name) in
+            let (wname, _, _) = get-natural-metrics ib in
+            let wname =
+              match bopt with
+              | None        -> wname
+              | Some(false) -> wname
+              | Some(true)  -> 0pt
+              end
+            in
+            ((fun pt -> [Graphics.text-rightward pt ib]), wname)
+        end
+      in
+      let axis-height = get-font-size ctx *' get-math-axis-height-ratio ctx in
+      let bar =
+          inline-graphics w (thickness +' gap) gap (fun (x, y) -> (
+            let grs =
+              fill color (Path.rectangle (x, y) (x +' w, y +' thickness))
+                :: (glnamef (x +' w, y -' axis-height))
+            in
+            unite-graphics grs
+          ))
+      in
+        line-stack-bottom [ib1, bar, ib2]
+          ++ inline-skip wname
+    )
+
+
+  val math ctx \derive ?(name = nameopt, b = bopt) ms m =
+    derive ctx nameopt bopt None ms m
+
+  val math ctx \derive-multi ?(name = nameopt, b = bopt) w ms m =
+    derive ctx nameopt bopt (Some(w)) ms m
+
+end

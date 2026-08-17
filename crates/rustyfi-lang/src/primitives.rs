@@ -1318,6 +1318,19 @@ pub fn read_inline(
     for elem in elems {
         match elem {
             IText::Text(text) => text_to_boxes(interp, ctx, text, &mut out)?,
+            // `ImInputHorzEmbeddedCodeText` (`evaluator.cppo.ml:768-779`): hand
+            // the literal to the context's code-text command if one is
+            // installed, else set it as ordinary text
+            // (`DefaultCodeTextCommand`).
+            IText::CodeText(text) => match ctx.code_text_command {
+                Some(id) => {
+                    let cmd = interp.math_commands[id.0].clone();
+                    let v = interp.apply(cmd, Value::Context(Box::new(ctx.clone())))?;
+                    let v = interp.apply(v, Value::Str(text.clone()))?;
+                    out.extend(as_inline_boxes(v)?);
+                }
+                None => text_to_boxes(interp, ctx, text, &mut out)?,
+            },
             IText::Cmd { cmd, args } => {
                 // Resolved at compile time (`crate::quoted`); running it can
                 // still raise the same "unbound inline command" error for the
@@ -8837,11 +8850,12 @@ fn prim_set_font(interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, Eva
 /// this slice's file boundary — so the command argument is accepted (to
 /// keep the arity/signature faithful) and dropped.
 fn prim_set_code_text_command(
-    _interp: &mut Interp,
+    interp: &mut Interp,
     mut args: Vec<Value>,
 ) -> Result<Value, EvalError> {
-    let ctx = as_context(args.pop().unwrap())?;
-    let _cmd = args.pop().unwrap();
+    let mut ctx = as_context(args.pop().unwrap())?;
+    let cmd = args.pop().unwrap();
+    ctx.code_text_command = Some(interp.register_math_command(cmd));
     Ok(Value::Context(Box::new(ctx)))
 }
 

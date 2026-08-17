@@ -407,13 +407,13 @@ impl Lexer {
         Ok(())
     }
 
-    /// Horizontal-mode (inline-text) backtick literal. Upstream treats
-    /// `` `…` `` written inside inline text as literal (un-escaped) character
-    /// content, so — rather than a distinct `InlineElem` grammar arm (which
-    /// the `Vec<InlineElem>` collection parser cannot host without a manual,
-    /// non-peek `Parse` impl that breaks the repetition's termination — see the
-    /// `inline-backtick-literal-gap` note) — it lexes to a plain `Token::Char`
-    /// run, exactly as if the same characters had been typed directly. The
+    /// Horizontal-mode (inline-text) backtick literal, lexed to its own
+    /// `Token::CodeText` so the elaborator can route it through the context's
+    /// code-text command the way upstream does. (It used to lex to a plain
+    /// `Token::Char` run — see that token's doc comment for what that cost.
+    /// A dedicated token keeps the `Vec<InlineElem>` collection parser
+    /// single-token-decidable, which is what the earlier attempt at a
+    /// character-level `InlineElem::Literal` arm could not manage.) The
     /// `#`-controlled flags trim the body's leading (`omit_pre`) / trailing
     /// (`omit_post`) spaces, mirroring the elaborator's `omit_pre_spaces`/
     /// `omit_post_spaces` (the multi-line indent shave `omit_spaces` also does
@@ -427,7 +427,7 @@ impl Lexer {
         if omit_post {
             text = text.trim_end_matches(' ');
         }
-        self.emit(start, Token::Char(text.to_string()));
+        self.emit(start, Token::CodeText(text.to_string()));
         Ok(())
     }
 

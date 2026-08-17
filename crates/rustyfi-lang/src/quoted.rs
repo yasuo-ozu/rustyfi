@@ -57,6 +57,9 @@ pub struct CmdArg {
 #[derive(Clone, Debug)]
 pub enum IText {
     Text(String),
+    /// A backtick literal, dispatched at box-building time through the
+    /// context's `code_text_command` (see `read_inline`).
+    CodeText(String),
     Cmd {
         /// Yields the command's value — the `\emph` binding, already resolved
         /// against the quote site's lexical scope. Running it can still fail

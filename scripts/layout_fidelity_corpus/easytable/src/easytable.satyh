@@ -1,0 +1,422 @@
+@require: base/list-ext
+@require: gr
+@require: option
+@require: color
+@import: matrix
+@import: table-builder
+
+% 罫線のパターン．
+type ruleptn = length list -> length list -> graphics list
+
+% セルの書式
+type cellfmt = context -> inline-text -> cell
+
+module EasyTable: sig
+
+% useful functions
+
+  val convenient-nth : int -> 'a list -> 'a option
+
+% cell format
+  val align-left   : cellfmt
+  val align-center : cellfmt
+  val align-right  : cellfmt
+  val align-left-with-width   : length -> cellfmt
+  val align-center-with-width : length -> cellfmt
+  val align-right-with-width  : length -> cellfmt
+  val equal-spacing : cellfmt
+  val equal-spacing-with-width : length -> cellfmt
+
+  val hmargin : length -> length -> cellfmt -> cellfmt
+  val hmargin-ratio : float -> float -> cellfmt -> cellfmt
+  val vmargin : length -> length -> cellfmt -> cellfmt
+  val vmargin-ratio : float -> float -> cellfmt -> cellfmt
+
+% rule pattern
+  val genrule: (point -> point -> graphics list) -> (int * int) -> (int * int) -> ruleptn
+  val toprule: ruleptn
+  val bottomrule: ruleptn
+  val midrule: (int * int)?-> int -> ruleptn
+  val vertrule: (int * int)?-> int -> ruleptn
+  val horizrule: (int * int)?-> int -> ruleptn
+  val diagrule: (int * int) -> (int * int) -> ruleptn
+  val outerframerule: ruleptn
+  % val header-col-bg: color -> ruleptn
+  val genbgcolor: color -> (int * int) -> (int * int) -> ruleptn
+  val stripe-row: int?-> color -> ruleptn
+  val stripe-col: int?-> color -> ruleptn
+  val whole-bgcolor: color -> ruleptn
+  val column-bgcolor: color -> int -> int -> ruleptn
+  val row-bgcolor: color -> int -> int -> ruleptn
+
+% commands
+  direct \easytable: [(ruleptn list)?; ((TableBuilder.builder -> TableBuilder.builder) list)?; cellfmt list; inline-text list] inline-cmd
+  direct +easytable: [(ruleptn list)?; ((TableBuilder.builder -> TableBuilder.builder) list)?; cellfmt list; inline-text list] block-cmd
+  direct \list-table: [(ruleptn list)?;((TableBuilder.builder -> TableBuilder.builder) list)?; cellfmt list; itemize] inline-cmd
+  direct +list-table: [(ruleptn list)?;((TableBuilder.builder -> TableBuilder.builder) list)?; cellfmt list; itemize] block-cmd
+
+end = struct
+
+% cell format
+
+  let default-pads ctx =
+    let fs = ctx |> get-font-size in
+    (fs *' 0.5, fs *' 0.5, fs *' 0.4, fs *' 0.4)
+
+  let align-left ctx it =
+    NormalCell(default-pads ctx, (read-inline ctx it) ++ inline-fil)
+
+  let align-center ctx it =
+    NormalCell(default-pads ctx, inline-fil ++ (read-inline ctx it) ++ inline-fil)
+
+  let align-right ctx it =
+    NormalCell(default-pads ctx, inline-fil ++ (read-inline ctx it))
+
+  let align-left-with-width wid ctx it =
+    let ib = read-inline ctx it in
+    let (wid-ib, _, _) = get-natural-metrics ib in
+    if wid-ib >' wid then
+      let ib-block = embed-block-top ctx wid
+        (fun ctx1 -> line-break false false ctx1 (ib ++ inline-fil)) in
+        NormalCell(default-pads ctx, ib-block)
+    else
+      let skp = inline-skip (wid -' wid-ib) in
+      NormalCell(default-pads ctx, ib ++ skp ++ inline-fil)
+
+  let align-center-with-width wid ctx it =
+    let ib = read-inline ctx it in
+    let (wid-ib, _, _) = get-natural-metrics ib in
+    if wid-ib >' wid then
+      let ib-block = embed-block-top ctx wid
+        (fun ctx1 -> line-break false false ctx1 (ib ++ inline-fil)) in
+        NormalCell(default-pads ctx, ib-block)
+    else
+      let skp = inline-skip ((wid -' wid-ib) *' 0.5) in
+      NormalCell(default-pads ctx, inline-fil ++ skp ++ ib ++ skp ++ inline-fil)
+
+  let align-right-with-width wid ctx it =
+    let ib = read-inline ctx it in
+    let (wid-ib, _, _) = get-natural-metrics ib in
+    if wid-ib >' wid then
+      let ib-block = embed-block-top ctx wid
+        (fun ctx1 -> line-break false false ctx1 (ib ++ inline-fil)) in
+        NormalCell(default-pads ctx, ib-block)
+    else
+      let skp = inline-skip (wid -' wid-ib) in
+      NormalCell(default-pads ctx, inline-fil ++ skp ++ ib)
+
+  let equal-spacing ctx it =
+    let ib =
+      let ctx1 = ctx |> set-space-ratio 0.33 0.08 1000.  in
+      read-inline ctx1 it
+    in
+    NormalCell(default-pads ctx, ib)
+
+  let equal-spacing-with-width wid ctx it =
+    let ib =
+      let ctx1 = ctx |> set-space-ratio 0.33 0.08 1000.  in
+      embed-block-top ctx1 wid
+        (fun ctx -> line-break false false ctx (read-inline ctx it))
+    in
+    NormalCell(default-pads ctx, ib)
+
+  let hmargin l r cfmt ctx it =
+    match cfmt ctx it with
+      | NormalCell((pl, pr, pt, pb), ib) ->
+          NormalCell((l, r, pt, pb), ib)
+      | MultiCell(i, j, (pl, pr, pt, pb), ib) ->
+          MultiCell(i, j, (l, r, pt, pb), ib)
+      | EmptyCell -> EmptyCell
+
+  let hmargin-ratio l r cfmt ctx it =
+    match cfmt ctx it with
+      | NormalCell((pl, pr, pt, pb), ib) ->
+          NormalCell((pl *' l, pr *' r, pt, pb), ib)
+      | MultiCell(i, j, (pl, pr, pt, pb), ib) ->
+          MultiCell(i, j, (pl *' l, pr *' r, pt, pb), ib)
+      | EmptyCell -> EmptyCell
+
+  let vmargin t b cfmt ctx it =
+    match cfmt ctx it with
+      | NormalCell((pl, pr, pt, pb), ib) ->
+          NormalCell((pl, pr, t, b), ib)
+      | MultiCell(i, j, (pl, pr, pt, pb), ib) ->
+          MultiCell(i, j, (pl, pr, t, b), ib)
+      | EmptyCell -> EmptyCell
+
+  let vmargin-ratio t b cfmt ctx it =
+    match cfmt ctx it with
+      | NormalCell((pl, pr, pt, pb), ib) ->
+          NormalCell((pl, pr, pt *' t, pb *' b), ib)
+      | MultiCell(i, j, (pl, pr, pt, pb), ib) ->
+          MultiCell(i, j, (pl, pr, pt *' t, pb *' b), ib)
+      | EmptyCell -> EmptyCell
+
+  let phantom cfmt ctx it =
+    let phantomf ib =
+      let (w, h, d) = get-natural-metrics ib in
+      inline-graphics w h d (fun (x, y) -> [])
+    in
+    match cfmt ctx it with
+      | NormalCell(pads, ib) ->
+          NormalCell(pads, phantomf ib)
+      | MultiCell(i, j, pads, ib) ->
+          MultiCell(i, j, pads, phantomf ib)
+      | EmptyCell -> EmptyCell
+
+% rule pattern
+
+  % 複数の罫線パターンを結合する．
+  let-rec concat-ruleptn ruleptn-lst xs ys =
+    match ruleptn-lst with
+    | [] -> []
+    | (ruleptn :: others) -> List.append (ruleptn xs ys) (concat-ruleptn others xs ys)
+
+  % convenient-nth 0 lst だったら lst の最初の要素，
+  % convenient-nth 1 lst だったら lst の最初から2番目の要素をとる．
+  % convenient-nth -1 lst だったら lst の最後の要素，
+  % convenient-nth -2 lst だったら lst の最後から2番目の要素をとる，
+  % Python の index のようなイメージ．「ここから最後まで引きたい」ときに便利．
+  let convenient-nth idx lst =
+    if idx >= 0 then
+      lst |> List.nth idx
+    else
+      lst |> List.reverse |> List.nth (-idx - 1)
+
+  % 点 i の行・列と点 j の行・列を与える
+  let genrule grf (rowi, coli) (rowj, colj) xs ys =
+    let xi = xs |> convenient-nth coli in
+    let xj = xs |> convenient-nth colj in
+    let yi = ys |> convenient-nth rowi in
+    let yj = ys |> convenient-nth rowj in
+    match (xi, xj, yi, yj) with
+    | (Some(xi), Some(xj), Some(yi), Some(yj)) ->
+        grf (xi, yi) (xj, yj)
+    | _ -> []
+
+  let simple-rule linewid clr (xi, yi) (xj, yj) =
+    [stroke linewid clr (Gr.line (xi, yi) (xj, yj))]
+
+  let toprule = genrule (simple-rule 1pt Color.black) (0, 0) (0, -1)
+  let bottomrule = genrule (simple-rule 1pt Color.black) (-1, 0) (-1, -1)
+  let vertrule ?:row idx-col =
+    let (row-s, row-e) = row |> Option.from (0, -1) in
+    genrule (simple-rule 0.5pt Color.black) (row-s, idx-col) (row-e, idx-col)
+  let horizrule ?:col idx-row =
+    let (col-s, col-e) = col |> Option.from (0, -1) in
+    genrule (simple-rule 0.5pt Color.black) (idx-row, col-s) (idx-row, col-e)
+  let diagrule = genrule (simple-rule 0.5pt Color.black)
+
+  let midrule ?:col idx-row =
+    let (col-s, col-e) = col |> Option.from (0, -1) in
+    % ちょっと短いラインにしてみる
+    let short-rule (xi, yi) (xj, yj) =
+      [stroke 0.5pt Color.black (Gr.line (xi +' 2pt, yi) (xj -' 2pt, yj))]
+    in
+    genrule short-rule (idx-row, col-s) (idx-row, col-e)
+
+  let outerframerule =
+    % booktabs っぽくちょっと短いラインにしてみる
+    let thick-frame (xi, yi) (xj, yj) =
+      [stroke 1pt Color.black (Gr.rectangle (xi, yi) (xj, yj))]
+    in
+    genrule thick-frame (0, 0) (-1, -1)
+
+  % let whole-bgcolor clr = genrule (fill clr) (0, 0) (-1, 0)
+  let genbgcolor clr (x1, y1) (x2, y2) =
+    % booktabs っぽくちょっと短いラインにしてみる
+    let bg-fill (xi, yi) (xj, yj) =
+      [fill clr (Gr.rectangle (xi, yi) (xj, yj))]
+    in
+    genrule bg-fill (x1, y1) (x2, y2)
+
+  let whole-bgcolor clr = genbgcolor clr (0, 0) (-1, -1)
+  let column-bgcolor clr j1 j2 = genbgcolor clr (0, j1) (-1, j2)
+  let row-bgcolor clr i1 i2 = genbgcolor clr (i1, 0) (i2, -1)
+
+  let range n1 n2 =
+    let-rec aux min max =
+      if min == max then [min] else min :: (aux (min + 1) max)
+    in
+    if n1 < n2 then (aux n1 n2) else (aux n2 n1)
+
+  let stripe-row ?:start-row clr xs ys =
+    let start-row = start-row |> Option.from 0 in
+    let gr row = genbgcolor clr (row, 0) (row + 1, -1) xs ys in
+    let takef idx = idx >= start-row && ( (idx - start-row) mod 2 == 0) in
+
+    (range 0 (List.length ys))
+      |> List.take-while takef
+      |> List.map gr
+      |> List.concat
+
+  let stripe-col ?:start-col clr xs ys =
+    let start-col = start-col |> Option.from 0 in
+    let gr col = genbgcolor clr (0, col) (-1, col + 1) xs ys in
+    let takef idx = idx >= start-col && ( (idx - start-col) mod 2 == 0) in
+
+    (range 0 (List.length xs))
+      |> List.take-while takef
+      |> List.map gr
+      |> List.concat
+
+% commands
+
+  % old impl
+
+  % let-inline ctx \easytable ?:rules-lst-opt cfmtlst it-vector =
+  %   let cell-converter-lst = cfmtlst |> List.map (fun f -> f ctx) in
+  %   let phantom-cell-converter-lst = cfmtlst |> List.map phantom |> List.map (fun f -> f ctx) in
+  %   let it-matrix = Matrix.from-list (List.length cfmtlst) {} it-vector in
+  %   let cell-matrix = Matrix.colmap (cell-converter-lst) it-matrix in
+  %   let phantom-cell-matrix = Matrix.colmap (phantom-cell-converter-lst) it-matrix in
+  % 
+  %   % 罫線の設定．
+  %   let default-rules-lst = [toprule;bottomrule; midrule 1;] in
+  %   let rules-lst = Option.from default-rules-lst rules-lst-opt in
+  %   let rulef = concat-ruleptn rules-lst in
+  % 
+  %   let ib-rule = tabular (Matrix.to-llist phantom-cell-matrix) rulef in
+  %   let ib-table = tabular (Matrix.to-llist cell-matrix) (fun _ _ -> []) in
+  %   let (w, h, d) = get-natural-metrics ib-table in
+  %   inline-graphics w h d (fun (x, y) -> [
+  %     draw-text (x, y) ib-rule;
+  %     draw-text (x, y) ib-table;
+  %   ])
+
+  let-inline ctx \easytable ?:rules-lst-opt ?:tbconvflst cfmtlst it-vector =
+    let default-rules-lst = [toprule;bottomrule; midrule 1;] in
+    let rules-lst = rules-lst-opt |> Option.from default-rules-lst in
+    let tbconvflst = tbconvflst |> Option.from [] in
+    let tbconvertf = tbconvflst |> List.fold-left (fun a b t -> b (a t)) (fun t -> t) in
+    TableBuilder.(
+    it-vector |> from-list (cfmtlst |> List.length)
+              |> align-col cfmtlst
+              |> tbconvertf
+              |> set-rules rules-lst
+              |> build ctx
+    )
+
+  let itemize-to-it-matrix (Item(_, lst-item)) =
+    let itemize-to-it-vector (Item(it, lst-item)) =
+      let extract-it-from-item (Item(it-inner, _)) = it-inner in
+      let inner-items = List.map extract-it-from-item lst-item in
+      inner-items
+    in
+    Matrix.from-llist(List.map itemize-to-it-vector lst-item)
+
+  let-inline ctx \list-table ?:rules-lst-opt ?:tbconvflst cfmtlst item =
+    let default-rules-lst = [toprule;bottomrule; midrule 1;] in
+    let rules-lst = rules-lst-opt |> Option.from default-rules-lst in
+    let tbconvflst = tbconvflst |> Option.from [] in
+    let tbconvertf = tbconvflst |> List.fold-left (fun a b t -> b (a t)) (fun t -> t) in
+    TableBuilder.(
+      item |> from-itemize
+           |> align-col cfmtlst
+           |> tbconvertf
+           |> set-rules rules-lst
+           |> build ctx
+    )
+
+  let-block ctx +easytable ?:rules-lst-opt ?:tbconvflst cfmtlst it-vector =
+    let default-rules-lst = [toprule;bottomrule; midrule 1;] in
+    let rules-lst = rules-lst-opt |> Option.from default-rules-lst in
+    let tbconvflst = tbconvflst |> Option.from [] in
+    let ib-easytable =
+      read-inline ctx
+        {\easytable?:(rules-lst)?:(tbconvflst)(cfmtlst)(it-vector);}
+    in
+    let ib = inline-fil ++ ib-easytable ++ inline-fil in
+    line-break true true ctx ib
+
+  let-block ctx +list-table ?:rules-lst-opt ?:tbconvflst cfmtlst item =
+    let default-rules-lst = [toprule;bottomrule; midrule 1;] in
+    let rules-lst = rules-lst-opt |> Option.from default-rules-lst in
+    let tbconvflst = tbconvflst |> Option.from [] in
+    let ib-listtable =
+      read-inline ctx
+        {\list-table?:(rules-lst)?:(tbconvflst)(cfmtlst)(item);}
+    in
+    let ib = inline-fil ++ ib-listtable ++ inline-fil in
+    line-break true true ctx ib
+
+end
+
+
+module EasyTableAlias : sig
+
+  % cell format
+  val l : cellfmt
+  val c : cellfmt
+  val r : cellfmt
+  val lw : length -> cellfmt
+  val cw : length -> cellfmt
+  val rw : length -> cellfmt
+  val eq-sp : cellfmt
+  val eq-wd : length -> cellfmt
+
+  % cell format converter
+  val hmgn : length -> length -> cellfmt -> cellfmt
+  val hmgnr : float -> float -> cellfmt -> cellfmt
+  val vmgn : length -> length -> cellfmt -> cellfmt
+  val vmgnr : float -> float -> cellfmt -> cellfmt
+
+  % rule pattern
+  val t : ruleptn
+  val b : ruleptn
+  val m : (int * int)?-> int -> ruleptn
+  val v : (int * int)?-> int -> ruleptn
+  val h : (int * int)?-> int -> ruleptn
+  val d : (int * int) -> (int * int) -> ruleptn
+
+  val bg-a : color -> ruleptn
+  val bg-r : color -> int -> int -> ruleptn
+  val bg-c : color -> int -> int -> ruleptn
+  val stripe-r : int ?-> color -> ruleptn
+  val stripe-c : int ?-> color -> ruleptn
+
+  val rect : ruleptn
+
+  % table-builder converter
+  val merge: int * int -> int * int -> cellfmt -> TableBuilder.builder -> TableBuilder.builder
+  val set-fmt- : int * int -> cellfmt -> TableBuilder.builder -> TableBuilder.builder
+  val set-fmt-range : int * int -> int * int -> cellfmt -> TableBuilder.builder -> TableBuilder.builder
+  val convert-text-range : int * int -> int * int -> (inline-text -> inline-text) -> TableBuilder.builder -> TableBuilder.builder
+
+end = struct
+
+  let l = EasyTable.align-left
+  let c = EasyTable.align-center
+  let r = EasyTable.align-right
+  let lw = EasyTable.align-left-with-width
+  let cw = EasyTable.align-center-with-width
+  let rw = EasyTable.align-right-with-width
+  let eq-sp = EasyTable.equal-spacing
+  let eq-wd = EasyTable.equal-spacing-with-width
+
+  let hmgn = EasyTable.hmargin
+  let hmgnr = EasyTable.hmargin-ratio
+  let vmgn = EasyTable.vmargin
+  let vmgnr = EasyTable.vmargin-ratio
+
+  let t = EasyTable.toprule
+  let b = EasyTable.bottomrule
+  let m = EasyTable.midrule
+  let v = EasyTable.vertrule
+  let h = EasyTable.horizrule
+  let d = EasyTable.diagrule
+
+  let rect = EasyTable.outerframerule
+
+  let bg-a = EasyTable.whole-bgcolor
+  let bg-r = EasyTable.row-bgcolor
+  let bg-c = EasyTable.column-bgcolor
+  let stripe-r = EasyTable.stripe-row
+  let stripe-c = EasyTable.stripe-col
+
+  let merge = TableBuilder.merge
+  let set-fmt- = TableBuilder.set-fmt-
+  let set-fmt-range = TableBuilder.set-fmt-range
+  let convert-text-range = TableBuilder.convert-text-range
+
+end

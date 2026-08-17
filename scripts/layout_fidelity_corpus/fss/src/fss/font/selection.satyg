@@ -1,0 +1,260 @@
+@require: base/base
+@require: base/eq
+@require: base/ord
+@require: base/float
+@import: font
+@import: combination
+@import: style
+@import: axes
+@import: context
+@import: selection-cond
+@import: set
+
+
+module FssFontSelection : sig
+
+  val find-optimal-font : fss-extended-context -> fss-font-combination
+
+  val set-debug-level : int -> unit
+
+end = struct
+  let module-name = `fss/font/selection`
+
+  let-mutable current-debug-level <- 0
+  let set-debug-level level =
+    current-debug-level <- level
+
+
+  type score = float
+
+  module Score : sig
+
+    val ord : (score Ord.t) implicit
+    val eq : (score Eq.t) implicit
+
+    val conj : score -> score -> score
+    val disj : score -> score -> score
+
+    val compare : score -> score -> ordering
+
+    val unit-conj : score
+    val unit-disj : score
+
+    val is-truthy : score -> bool
+
+    val of-float : float -> score
+
+    val (<) : score -> score -> bool
+    val (==) : score -> score -> bool
+
+    val to-string : score -> string
+
+  end = struct
+
+    let conj a b =
+      (a +. b)
+
+    let disj a b =
+      Float.(min a b)
+
+    let unit-conj =
+      0.
+    let unit-disj =
+      Float.inf
+
+    let of-float f =
+      f
+
+    let to-string a =
+      show-float a
+
+    let (<) a b =
+      Float.(a < b)
+
+    let (==) a b =
+      Float.(a == b)
+
+    let is-truthy s =
+      s < unit-disj
+
+    let compare a b =
+      if Float.(a < b)
+      then Lt
+      else if Float.(a > b)
+            then Gt
+            else Eq
+
+    let ord =
+      Ord.make compare
+
+    let eq = Ord.derive-eq ord
+
+  end
+
+
+  let log-message level context message =
+    if !current-debug-level >= level
+    then
+      display-message (module-name ^ `: `# ^ context ^ `: `# ^ message)
+    else ()
+
+  let debug-font-combination level context font-comb =
+    log-message level context (FssFontCombination.to-string font-comb)
+
+  let info-font-combination context font-comb =
+    debug-font-combination 0 context font-comb
+
+  let font-selection-score-style cond target =
+    let width-score =
+      if string-same cond#width target#width
+      then 0.
+      else 0.1
+    in
+    let weight-score =
+      if string-same cond#weight target#weight
+      then 0.
+      else 0.1
+    in
+    let style-score =
+      if string-same cond#style target#style
+      then 0.
+      else 1.
+    in
+    Score.of-float (width-score +. weight-score +. style-score)
+
+  let font-selection-score-length coeff cond target =
+    let sq-coeff = coeff *. coeff in
+    let diff = (cond -' target) /' target in
+    Score.of-float (diff *. diff /. sq-coeff)
+
+  let font-selection-score-float coeff cond target =
+    let sq-coeff = coeff *. coeff in
+    let diff = (cond -. target) in
+    Score.of-float (diff *. diff /. sq-coeff)
+
+  let font-selection-score-int coeff cond target =
+    font-selection-score-float coeff (float cond) (float target)
+
+  % This should be updated when SATySFi changed script type
+  let font-selection-score-script cond target =
+    match (cond, target) with
+    | (HanIdeographic, HanIdeographic) -> Score.unit-conj
+    | (Kana, Kana) -> Score.unit-conj
+    | (Latin, Latin) -> Score.unit-conj
+    | (OtherScript, OtherScript) -> Score.unit-conj
+    | (_, _) -> Score.unit-disj
+
+  let-rec font-selection-score cond ectx =
+    let ctx = FssExtendedContext.get-context ectx in
+    let fa = FssExtendedContext.get-font-axes ectx in
+    match cond with
+    | And cs ->
+      List.map (fun cond -> font-selection-score cond ectx) cs
+      |> List.fold-left Score.conj Score.unit-conj
+    | Style style ->
+      font-selection-score-style style fa#style
+    | LengthSingle (field, value) ->
+      let target =
+        match field with
+        | FontSize ->
+          get-font-size ctx
+      in
+      font-selection-score-length 100. value target
+    | FloatSingle (field, value) ->
+      let fa =
+        match field with
+        | Weight -> fa#weight
+      in
+      font-selection-score-float 100. value fa
+    | IntSingle (field, value) ->
+      let fa =
+        match field with
+        | Width -> fa#width
+        | Slant -> fa#slant
+      in
+      font-selection-score-int 100. value fa
+
+  let concat-somes-rev xs =
+    let f acc x =
+      match x with
+      | Some x -> x :: acc
+      | None -> acc
+    in
+    List.fold-left f [] xs
+
+  let sort-by-score-desc score-f fonts =
+    let ses =
+      let ord =
+        Ord.make (fun (a, _) (b, _) ->
+          Score.compare b a)
+      in
+      let snd-with-debug (score, font) =
+        let () =
+          debug-font-combination
+            2
+            (`sort-by-score-desc: score (` ^ show-float score ^ `)`)
+            font
+        in
+        font
+        |> List.map (fun fp ->
+          (score, fp))
+      in
+      let calc-score (cond, font) =
+        let score = score-f cond in
+        if Score.is-truthy score
+        then Some (score, font)
+        else None
+      in
+      List.map calc-score fonts
+      |> concat-somes-rev
+      |> List.mergesort ord
+      |> List.map snd-with-debug
+      |> List.concat
+    in
+    ses
+
+  let normalize-font-comb =
+    let-rec sub set acc fps =
+      match fps with
+      | [] -> List.reverse acc
+      | (score, fp) :: fps ->
+        if FssFontScript.set-mem fp#script set
+        then sub set acc fps
+        else
+          let set = Set.insert fp#script set in
+          sub set ((score, fp) :: acc) fps
+    in
+    sub Set.empty []
+
+  let find-optimal-font ectx =
+    let font-set = FssExtendedContext.get-font-set ectx in
+    let warn-fuzzy-match (score, fp) =
+      let () =
+        if Score.(score == unit-conj)
+        then ()
+        else
+          log-message
+            (-1)
+            `find-optimal-font`
+            (`Not perfect match: `#
+            ^ FssFontCombination.font-combination-pair-to-string fp
+            ^ #` (score `# ^ show-float score ^ `)`
+            ^ #`: fontset `#
+            ^ FssFontSet.to-string font-set
+            ^ #` axes `#
+            ^ FssExtendedContext.to-string-for-font-selection ectx
+            )
+        
+      in
+      fp
+    in
+    sort-by-score-desc
+      (fun cond -> font-selection-score cond ectx)
+      font-set#conditional-fonts
+    |> List.append (List.map (fun fp -> (Score.unit-disj, fp)) font-set#default-font)
+    |> List.reverse
+    % TODO Optimize font-combination to reduce invocations of set-font
+    |> normalize-font-comb
+    |> List.map warn-fuzzy-match
+
+end

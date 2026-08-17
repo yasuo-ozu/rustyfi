@@ -2052,6 +2052,7 @@ fn lower_list_item(i: &ast_v1::ListItem) -> Result<cst::ast::ListItem, LowerErro
 fn lower_inline_elem(e: &ast_v1::InlineElem) -> Result<cst::ast::InlineElem, LowerError> {
     match e {
         ast_v1::InlineElem::Char(t) => Ok(cst::ast::InlineElem::Char(t.clone())),
+        ast_v1::InlineElem::CodeText(t) => Ok(cst::ast::InlineElem::CodeText(t.clone())),
         ast_v1::InlineElem::Space(t) => Ok(cst::ast::InlineElem::Space(t.clone())),
         ast_v1::InlineElem::Break(t) => Ok(cst::ast::InlineElem::Break(t.clone())),
         ast_v1::InlineElem::Embed { var, semi } => Ok(cst::ast::InlineElem::Embed {

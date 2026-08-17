@@ -1,0 +1,78 @@
+@import: font/axes
+@import: font/context
+
+type style = fss-extended-context -> fss-extended-context
+
+module FssStyle : sig
+
+  val bold : style
+  val medium : style
+
+  val upright : style
+  val italic : style
+
+  val font-size : length -> style
+  val with-font-size : (length -> length) -> style
+
+  val font-set : fss-font-set -> style
+
+  val concat : style list -> style
+
+end = struct
+
+  let concat ss ectx =
+    List.fold-left (fun ectx s -> s ectx) ectx ss
+
+  let bold ectx =
+    let fa = FssExtendedContext.get-font-axes ectx in
+    FssExtendedContext.set-font-axes
+      (| fa with weight = 180. ; style = (| fa#style with weight = `Bold` |) |)
+      ectx
+
+  let medium ectx =
+    let fa = FssExtendedContext.get-font-axes ectx in
+    FssExtendedContext.set-font-axes
+      (| fa with weight = 80. ; style = (| fa#style with weight = ` ` |) |)
+      ectx
+
+  let upright ectx =
+    let fa = FssExtendedContext.get-font-axes ectx in
+    FssExtendedContext.set-font-axes
+      (| fa with slant = 0  ; style = (| fa#style with style = ` ` |) |)
+      ectx
+  let italic ectx =
+    let fa = FssExtendedContext.get-font-axes ectx in
+    FssExtendedContext.set-font-axes
+      (| fa with slant = 100 ; style = (| fa#style with style = `Italic` |) |)
+      ectx
+
+  let with-font-size f ectx =
+    let ctx =
+      FssExtendedContext.get-context ectx
+    in
+    let font-size =
+      get-font-size ctx
+      |> f
+    in
+    let ctx =
+      set-font-size font-size ctx
+    in
+    FssExtendedContext.set-context ctx ectx
+
+  let font-size s =
+    let f _ = s in
+    with-font-size f
+
+
+  let font-set fs ectx =
+    FssExtendedContext.set-font-set fs ectx
+
+end
+
+let bold = FssStyle.bold
+let medium = FssStyle.medium
+let upright = FssStyle.upright
+let italic = FssStyle.italic
+let font-size = FssStyle.font-size
+let with-font-size = FssStyle.with-font-size
+let font-set = FssStyle.font-set

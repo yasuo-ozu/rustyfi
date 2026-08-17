@@ -1,0 +1,48 @@
+@require: base/set
+
+@import: combination
+@import: script
+@import: selection-cond
+
+type fss-font-set-covered-area = script
+
+type fss-font-set =
+  (| default-font : fss-font-combination ;
+    conditional-fonts : (fss-font-selection-cond * fss-font-combination) list ;
+    covered-area : FssFontScript.t Set.t
+  |)
+
+module FssFontSet : sig
+
+  val to-string : fss-font-set -> string
+  val combine : fss-font-set -> fss-font-set -> fss-font-set
+
+end = struct
+
+  let to-string fs = `<font-set>`
+
+  let combine base override =
+    let area-to-be-removed =
+      FssFontScript.set-diff base#covered-area override#covered-area
+    in
+    let filter-font-pair : fss-font-combination -> fss-font-combination =
+      List.filter (fun fp ->
+        FssFontScript.set-mem fp#script area-to-be-removed)
+    in
+    let base-default-font =
+      filter-font-pair base#default-font
+    in
+    let base-conditional-fonts =
+      List.map (fun (cond, fc) ->
+        (cond, filter-font-pair fc))
+        base#conditional-fonts
+    in
+    (| default-font =
+        List.append base-default-font override#default-font;
+      conditional-fonts =
+        List.append base-conditional-fonts override#conditional-fonts;
+      covered-area =
+        FssFontScript.set-union base#covered-area override#covered-area;
+    |)
+
+end

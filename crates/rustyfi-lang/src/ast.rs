@@ -263,6 +263,11 @@ pub enum Pattern<I = String> {
 #[derive(Clone, Debug, PartialEq)]
 pub enum IText<I = String> {
     Text(String),
+    /// A backtick literal inside inline text (`` `…` ``;
+    /// `UTInputHorzEmbeddedCodeText`). Kept apart from `Text` because the
+    /// context's installed code-text command decides how it is set — see
+    /// `Context::code_text_command` and `read_inline`'s arm.
+    CodeText(String),
     Cmd {
         /// Sigil included (`\emph`), matching the environment entry.
         name: I,
@@ -438,6 +443,7 @@ impl<I> IText<I> {
     pub fn map_idents<J>(&self, f: &impl Fn(&I) -> J) -> IText<J> {
         match self {
             IText::Text(s) => IText::Text(s.clone()),
+            IText::CodeText(s) => IText::CodeText(s.clone()),
             IText::Cmd { name, span, args } => IText::Cmd {
                 name: f(name),
                 span: *span,

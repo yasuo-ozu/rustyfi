@@ -1,0 +1,10 @@
+% .satyh files are loaded by the PDF backend.
+% .satyh-markdown and .saty-html files are loaded by the text backend for markdoown and html outputs, respectively.
+% A .satyg file is loaded when the corresponding .satyh or .satyh-* files are not loaded.
+% See https://qiita.com/puripuri2100/items/ca0b054d38480f1bda61 for more details about the load order.
+
+% load standard list package
+@import: rail
+@import: wavyline
+
+let () = ()

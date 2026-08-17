@@ -1097,6 +1097,10 @@ pub mod ast {
     #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
     pub enum InlineElem {
         Char(CharTok),
+        /// A backtick literal written inside inline text (`` `…` ``). Its own
+        /// arm, not a `Char` run, so the elaborator can dispatch it through the
+        /// context's code-text command — see `Token::CodeText`.
+        CodeText(CodeTextTok),
         Space(SpaceTok),
         Break(BreakTok),
         /// `#var;` — embeds a program variable's value as inline content.

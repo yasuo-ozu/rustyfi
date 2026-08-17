@@ -1,0 +1,56 @@
+@require: base/option-ext
+@require: base/string
+
+@require: fss/style
+
+@import: util/byte-string
+@import: util/set
+
+type style-class = SssByteString.t
+
+module Sss : sig
+
+  val declare-style-class : string -> style-class
+  val string-to-style-class : string -> style-class
+
+  val register-style-rule : style-class -> style -> unit
+
+  val get-style-for-class : style-class -> style
+
+end = struct
+
+  let-mutable current-style-classes <- SssSet.empty SssByteString.ord
+  let-mutable current-style-rules <- SssMap.empty SssByteString.ord
+
+  let declare-style-class name =
+    let class =
+      SssByteString.of-ascii-string-opt name
+      |> Option.expect (`Class name shold be an ASCII string but got `# ^ name)
+    in
+    let () =
+      current-style-classes <- SssSet.insert class !current-style-classes
+    in
+    class
+
+  let string-to-style-class name =
+    let class =
+      SssByteString.of-ascii-string-opt name
+      |> Option.expect (`Class name shold be an ASCII string but got `# ^ name)
+    in
+    if SssSet.mem class !current-style-classes
+    then class
+    else abort-with-message (`Style class `# ^ name ^ #` is not defined`)
+
+  let register-style-rule class style =
+    current-style-rules <-
+      SssMap.insert-override class style !current-style-rules
+
+  let get-style-for-class class =
+    match SssMap.find class !current-style-rules with
+    | None -> fun x -> x
+    | Some style -> style
+
+end
+
+let style-class =
+  Sss.get-style-for-class

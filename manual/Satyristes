@@ -1,0 +1,35 @@
+;; Satyrographos manifest for this port's own manual.
+;;
+;; Upstream's convention for a package's documentation is a `(libraryDoc ...)`
+;; block: it names the doc, says how to build it, and installs the built PDF.
+;; This port PARSES AND IGNORES `(libraryDoc ...)` — its Satyristes reader only
+;; consumes `(library ...)` — so the block below is carried for fidelity with
+;; upstream tooling, and the `(library ...)` beside it is what
+;; `rustyfi-rust satyrographos install ./manual` actually acts on.
+;;
+;; Build the PDF first; the install copies it, it does not run the typesetter:
+;;
+;;   rustyfi-rust manual/manual.saty -o manual/manual.pdf
+;;   rustyfi-rust satyrographos install ./manual
+
+(version "0.0.3")
+
+(library
+  (name "rustyfi-manual")
+  (version "0.1.0")
+  (sources
+    ((file "doc/rustyfi-manual.saty" "manual.saty")))
+  (dependencies
+    ((stdja ())
+     (code ())
+     (itemize ()))))
+
+(libraryDoc
+  (name "rustyfi-manual-doc")
+  (version "0.1.0")
+  (build
+    ((rustyfi-rust "manual.saty" "-o" "manual.pdf")))
+  (sources
+    ((doc "rustyfi-manual.pdf" "manual.pdf")))
+  (dependencies
+    ((rustyfi-manual ()))))

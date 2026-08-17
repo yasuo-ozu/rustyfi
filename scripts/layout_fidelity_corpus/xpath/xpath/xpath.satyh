@@ -1,0 +1,325 @@
+@require: list
+@import: util
+@import: curve
+%@import: graph
+@import: rail
+
+open XPathUtil
+type rail = XPathRail.t
+
+module XPath : sig
+    type t
+    type pre
+
+    % SATySFi compatible APIs
+    val unite-path : t -> t -> t
+    val shift-path : point -> t -> t
+    val linear-transform-path : float -> float -> float -> float -> t -> t
+    val get-path-bbox : t -> point * point
+    val start-path : point -> pre
+    val line-to : point -> pre -> pre
+    val bezier-to : point -> point -> point -> pre -> pre
+    val terminate-path : pre -> t
+    val close-with-line : pre -> t
+    val close-with-bezier : point -> point -> pre -> t
+    val stroke : length -> color -> t -> graphics
+    val fill : color -> t -> graphics
+    val dashed-stroke : length -> length * length * length -> color -> t -> graphics
+
+    % conversion
+    val to-embedded-path : t -> path
+    val to-embedded-prepath : pre -> pre-path
+    %val into-graph : t -> XPathGraph.t
+
+    %val remove-inner-edges : delta -> t -> t
+
+    % path transformation functions
+    val offset : length -> pre -> pre
+    val offset-path : length -> t -> t
+    val deformate-path : length -> pre -> t -> t
+    val deformate-path-by-func : (point -> point) -> t -> t
+
+    % val outset-path : length -> t -> t
+    % val inset-path : length -> t -> t
+    % val simplify-path : float -> t -> t
+    % val deformation-by-path : t -> t -> t
+    % val deformation-by-func : (point -> point) -> t -> t
+
+    % path composition functions
+    % val outline-of-path : length -> t -> t
+    % val outline-of-path-with-func : (length -> (length * length) option) -> t -> t
+    % val make-union-of-paths : t -> t -> t
+    % val make-intersection-of-paths : t -> t -> t
+    % val make-difference-of-paths : t -> t -> t
+    % val make-exclusion-of-paths : t -> t -> t
+    % val make-division-of-paths : t -> t -> t
+    % val make-cut-of-paths : t -> t -> t
+    % val combine-paths : t -> t -> t
+    % val break-apart-paths : t -> t -> t
+
+    % analyzing functions
+    % val get-cross-points : t -> t -> point * float list
+    % val get-length-of-path : t -> length
+    % val get-passing-point : float -> t -> point * float
+    % val get-area-level : point -> t -> int
+    % val get-enclosing-path : point -> t -> t
+
+    val get-intersections : length -> t -> point list
+    val get-intersections-with : length -> pre -> t -> point list
+    val get-projection : length -> point -> pre -> point
+    val get-projection-length : length -> point -> pre -> length
+    val get-rough-length : length -> pre -> length
+    val split : length -> length -> pre -> pre * pre
+    val get-point-of-len : length -> length -> pre -> point
+    val get-derivative : length -> length -> pre -> point
+
+end = struct
+
+    type pre = PrePoint of point | PreRail of rail
+    type t = pre list
+
+
+    let offset l pp =
+        match pp with
+        | PrePoint(p) -> PrePoint(p)
+        | PreRail(r) -> PreRail(XPathRail.offset l r)
+
+
+    let offset-path l p =
+        p |> List.map (offset l)
+
+
+    let deformate-path-by-func f p =
+        p |> List.map (fun pp -> (
+            match pp with
+            | PrePoint(p0) -> PrePoint(f p0)
+            | PreRail(r) -> PreRail(XPathRail.deformate f r)
+        ))
+
+
+    let to-embedded-prepath pp =
+        match pp with
+        | PrePoint(p0) -> start-path p0
+        | PreRail(r) ->
+              let (p0, lst) = XPathRail.into-list r in
+              lst |> List.fold-left (fun ret (item, p3) -> (
+                  match item with
+                  | None -> ret |> line-to p3
+                  | Some((p1, p2)) -> ret |> bezier-to p1 p2 p3
+              )) (start-path p0)
+
+
+    let to-embedded-path pat =
+        let impl-outer pp =
+            match pp with
+            | PrePoint(p0) -> start-path p0 |> terminate-path
+            | PreRail(r) ->
+                  let (p0, lst) = XPathRail.into-list r in
+                  let-rec impl lst acc =
+                      match lst with
+                      | [] -> acc |> terminate-path % ERROR
+                      | (None, p3)::[] -> 
+                            if p0 =.. p3 then
+                                acc |> close-with-line
+                            else
+                                acc |> line-to p3 |> terminate-path
+                      | (Some((p1, p2)), p3)::[] ->
+                            if p0 =.. p3 then
+                                acc |> close-with-bezier p1 p2
+                            else
+                                acc |> bezier-to p1 p2 p3 |> terminate-path
+                      | (None, p3)::lst -> acc |> line-to p3 |> impl lst
+                      | (Some((p1, p2)), p3)::lst -> acc |> bezier-to p1 p2 p3 |> impl lst
+                  in
+                  start-path p0 |> impl lst
+        in
+        match pat with
+        | [] -> abort-with-message `ERROR in to-embedded-path`
+        | pp0::pps -> pps |> List.fold-left (fun ret pp -> (
+              impl-outer pp |> unite-path ret
+        )) (impl-outer pp0)
+
+
+    %let into-graph pat =
+    %    pat |> List.fold-left (fun ret pp -> (
+    %        match pp with
+    %        | PrePoint(_) -> ret
+    %        | PreRail(r) -> XPathGraph.add-rail r ret
+    %    )) (XPathGraph.new)
+
+
+    %let get-intersections delta pat =
+    %    into-graph pat |> XPathGraph.as-points
+
+    let get-intersections delta pat =
+        pat |> List.fold-lefti (fun i acc ppi -> (
+            match ppi with
+            | PrePoint(_) -> acc
+            | PreRail(ri) ->
+                pat |> List.fold-lefti (fun j acc ppj -> (
+                  if i == j then
+                      XPathRail.get-cross-points-self delta ri
+                          |> List.append acc |>  uniq (=..)
+                  else
+                    match ppj with
+                    | PrePoint(_) -> acc
+                    | PreRail(rj) ->
+                          XPathRail.get-cross-points delta ri rj
+                              |> List.append acc |> uniq (=..)
+                )) acc
+        )) []
+
+
+    %let remove-inner-edges delta pat =
+    %    into-graph pat |> XPathGraph.remove-inner-edges
+    %                   |> into-closed-rails
+    %                   |> List.map (fun r -> PreRail(r))
+
+
+    let get-intersections-with delta ppat pat =
+        match ppat with
+        | PrePoint(_) -> []
+        | PreRail(rail) ->
+              pat |> List.fold-left (fun acc p -> (
+                  match p with
+                  | PrePoint(_) -> acc
+                  | PreRail(rail2) ->
+                        let (lst, _) = XPathRail.get-cross delta rail rail2 in
+                        XPathRail.migrate-locations lst acc
+              )) []
+              |> List.map (XPathRail.loc-to-point)
+
+
+    let get-projection delta p pp =
+        match pp with
+        | PrePoint(p0) -> p0
+        | PreRail(r) ->
+            XPathRail.get-projection-from-point delta p r
+            |> XPathRail.loc-to-point
+
+
+    let get-projection-length delta p pp =
+        match pp with
+        | PrePoint(_) -> 0pt
+        | PreRail(r) ->
+          let l = XPathRail.get-projection-from-point delta p r in
+          % TODO: lのuがnanになる
+          XPathRail.loc-to-len delta l r
+
+
+    let get-rough-length delta pp =
+        match pp with
+        | PrePoint(_) -> 0pt
+        | PreRail(r) ->
+            XPathRail.get-rough-length delta r
+
+
+    % SATySFi compatible APIs
+
+    let unite-path = List.append
+    let start-path p = PrePoint(p)
+    let terminate-path pp = [pp]
+
+
+    let shift-path v = List.map (fun pp -> (
+        match pp with
+        | PrePoint(p) -> PrePoint(p +.. v)
+        | PreRail(r) -> PreRail(XPathRail.shift v r)
+    ))
+
+
+    let line-to p pp = match pp with
+        | PrePoint(p0) -> PreRail(
+              XPathRail.from-curve (XPathCurve.from-controls (p0, p0, p, p)))
+        | PreRail(r) -> PreRail(XPathRail.line-to p r)
+
+
+    let bezier-to p1 p2 p pp = match pp with
+        | PrePoint(p0) -> PreRail(
+              XPathRail.from-curve (XPathCurve.from-controls (p0, p1, p2, p)))
+        | PreRail(r) -> PreRail(XPathRail.bezier-to p1 p2 p r)
+
+
+    let close-with-line pp = match pp with
+        | PrePoint(p0) -> [PrePoint(p0)]
+        | PreRail(r) -> [PreRail(XPathRail.close r)]
+
+
+    let close-with-bezier p1 p2 pp =
+        [
+            match pp with
+            | PrePoint(p0) -> PreRail(
+                  XPathCurve.from-controls (p0, p1, p2, p0)
+                      |> XPathRail.from-curve
+            )
+            | PreRail(r) -> PreRail(XPathRail.close-with-bezier p1 p2 r)
+        ]
+
+
+    let stroke l color pat = to-embedded-path pat |> stroke l color
+    let fill color pat = to-embedded-path pat |> fill  color
+    let dashed-stroke l (l1, l2, l3) color pat = to-embedded-path pat |> dashed-stroke l (l1, l2, l3) color
+    let get-path-bbox pat = to-embedded-path pat |> get-path-bbox
+    let linear-transform-path a b c d pat =
+        pat |> List.map (fun pp -> (
+            match pp with
+            | PrePoint(p0) ->
+                  let (x, y) = p0 in
+                  PrePoint((x *' a +' y *' b, x *' c +' y *' d))
+            | PreRail(r) -> PreRail(XPathRail.linear-transform (a, b, c, d) r)
+        ))
+
+
+    let get-point-of-len delta len pp =
+        match pp with
+        | PrePoint(_) -> point-nil
+        | PreRail(r) ->
+              XPathRail.len-to-loc delta len r
+              |> XPathRail.loc-to-point
+
+
+    let get-derivative delta len pp =
+        match pp with
+        | PrePoint(_) -> point-nil
+        | PreRail(r) ->
+              let l = XPathRail.len-to-loc delta len r in
+              XPathRail.get-derivative l r
+
+
+    let split delta len pp =
+        match pp with
+        | PrePoint(p) -> (PrePoint(p), PrePoint(p))
+        | PreRail(r) ->
+              let l = XPathRail.len-to-loc delta len r in
+              let (r1, r2) = XPathRail.split-at l r in
+              (PreRail(r1), PreRail(r2))
+
+    
+    % Other algorisms
+
+    let deformate-path delta pp p =
+        let (_, (xmax, _)) = get-path-bbox p in
+        let r = match pp with
+            | PrePoint(_) ->
+                  abort-with-message `deformate-path: invalid prepath is given`
+            | PreRail(r) -> r
+        in
+        let len = XPathRail.get-rough-length delta r in
+        let m = len /' xmax in
+        let f = fun (x, y) -> (
+            let x = length-max x 0pt in
+            let l = XPathRail.len-to-loc delta (x *' m) r in
+            let (x1, y1) = XPathRail.loc-to-point l in
+            let (xd, yd) = if length-abs y <' delta then
+                (0pt, 0pt)
+            else
+                let pd = XPathRail.get-derivative l r in
+                if length-abs (point-norm pd) <' delta then
+                    (0pt, 0pt)
+                else
+                    pd |> point-perp |> point-normalize y
+            in
+            (x1 +' xd, y1 +' yd)
+        ) in
+        deformate-path-by-func f p
+end

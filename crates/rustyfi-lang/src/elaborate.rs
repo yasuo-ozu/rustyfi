@@ -2833,6 +2833,12 @@ fn inline_elems<'s>(
     for el in elems {
         match el {
             c::InlineElem::Char(ch) => text.push_str(&ch.text),
+            c::InlineElem::CodeText(t) => {
+                if !text.is_empty() {
+                    out.push(IText::Text(std::mem::take(&mut text)));
+                }
+                out.push(IText::CodeText(t.text.clone()));
+            }
             c::InlineElem::Space(_) => text.push(' '),
             c::InlineElem::Break(_) => text.push('\n'),
             c::InlineElem::Cmd { name, tail } => {
@@ -3039,6 +3045,7 @@ struct ItemNode<'s> {
 fn inline_elem_span(el: &c::InlineElem) -> Span {
     match el {
         c::InlineElem::Char(t) => t.span,
+        c::InlineElem::CodeText(t) => t.span,
         c::InlineElem::Space(t) => t.0,
         c::InlineElem::Break(t) => t.0,
         c::InlineElem::Embed { var, .. } => var.span,

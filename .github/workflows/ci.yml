@@ -69,14 +69,14 @@ jobs:
     # reference typesetter, poppler, and python3 all come from the pinned flake.
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout this project (with corpus submodules)
+      - name: Checkout this project
         uses: actions/checkout@v4
         with:
           path: rustyfi-rust-converted
-          # The corpus documents AND their upstream reference PDFs live in the
-          # docs-corpus/* submodules (incl. railway + fss, deps of slydifi /
-          # gakushin), so this job needs them checked out.
-          submodules: recursive
+          # The corpus documents AND their upstream reference PDFs are vendored
+          # under `scripts/layout_fidelity_corpus/`, so there is nothing to
+          # check out beyond this repo (it used to need `submodules: recursive`
+          # for the 11 docs-corpus/* submodules).
       - name: Checkout syan (path dependency) as ../syan2-ergo
         uses: actions/checkout@v4
         with:

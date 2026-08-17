@@ -1,0 +1,34 @@
+@import: style
+
+type fss-font-axes =
+  (| width : int ;
+    weight : float ;
+    slant : int;
+    style : fss-font-style;
+%    charset : int;
+%    lang : string;
+  |)
+
+module FssFontAxes : sig
+
+  val to-string : fss-font-axes -> string
+  val extended-context-to-string : (context * fss-font-axes) -> string
+
+end = struct
+
+  let to-string fa =
+    `{ width:` ^ arabic fa#width
+    ^ `, weight:` ^ show-float fa#weight
+    ^ `, slant:` ^ arabic fa#slant
+    ^ `, style:` ^ FssFontStyle.to-string fa#style
+    ^ `}`
+
+  let extended-context-to-string (ctx, fa) =
+    `{ width:` ^ arabic fa#width
+    ^ `, weight:` ^ show-float fa#weight
+    ^ `, slant:` ^ arabic fa#slant
+    ^ `, style:` ^ FssFontStyle.to-string fa#style
+    ^ `, size:` ^ show-float (get-font-size ctx /' 1pt) ^ `pt`
+    ^ `}`
+
+end

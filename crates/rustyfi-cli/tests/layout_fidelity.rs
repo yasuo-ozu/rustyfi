@@ -1,6 +1,6 @@
 //! Layout-fidelity regression test: this Rust port vs. upstream SATySFi.
 //!
-//! Each `docs-corpus/` submodule ships a reference PDF built by the *original*
+//! The vendored corpus ships a reference PDF built by the *original*
 //! OCaml SATySFi. This test rebuilds the same sources with the port and
 //! compares the two PDFs' LAYOUT (word bounding boxes, via poppler
 //! `pdftotext -bbox`) across every complex construct the corpus exercises —
@@ -22,7 +22,7 @@
 //! fails if any document's layout regresses past `scripts/layout_fidelity_
 //! baseline.json`. It is `#[ignore]`d (like `typecheck_golden` /
 //! `pdf_image_diff`) because it needs poppler, python3, and the corpus
-//! submodules; the script itself self-skips (exit 0) when a prerequisite is
+//! the vendored corpus; the script itself self-skips (exit 0) when a prerequisite is
 //! absent, so this never produces a false failure in a bare checkout.
 //!
 //! Run with:  cargo test -p rustyfi-cli --test layout_fidelity -- --ignored --nocapture
@@ -47,7 +47,7 @@ fn tool_present(name: &str) -> bool {
 }
 
 #[test]
-#[ignore = "needs poppler + python3 + docs-corpus submodules; run with --ignored"]
+#[ignore = "needs poppler + python3; run with --ignored"]
 fn layout_matches_upstream_satysfi_within_baseline() {
     let root = repo_root();
     let script = root.join("scripts/layout_fidelity.py");
@@ -64,8 +64,11 @@ fn layout_matches_upstream_satysfi_within_baseline() {
         eprintln!("SKIP layout_fidelity: poppler pdftotext not available");
         return;
     }
-    if !root.join("docs-corpus/latexcmds/doc/latexcmds-doc.pdf").exists() {
-        eprintln!("SKIP layout_fidelity: docs-corpus submodules not checked out");
+    if !root
+        .join("scripts/layout_fidelity_corpus/latexcmds/doc/latexcmds-doc.pdf")
+        .exists()
+    {
+        eprintln!("SKIP layout_fidelity: vendored corpus missing");
         return;
     }
 
@@ -77,7 +80,7 @@ fn layout_matches_upstream_satysfi_within_baseline() {
     // If the ORIGINAL SATySFi is on PATH (e.g. inside `nix develop`, see
     // flake.nix), generate the reference PDFs with it so the comparison is
     // against freshly-produced official output. Otherwise the committed
-    // submodule reference PDFs are used — they are the same official
+    // vendored reference PDFs are used — they are the same official
     // SATySFi 0.0.11 output (the baseline was recorded via --gen-refs and the
     // two agree to <0.01 text_match), so the baseline holds either way.
     if tool_present("satysfi") {

@@ -2,7 +2,7 @@
 """Layout-fidelity comparison: this Rust port vs. upstream SATySFi.
 
 For each corpus document that ships an upstream-built reference PDF (produced by
-the original OCaml SATySFi and committed in its `docs-corpus/` submodule), this
+the original OCaml SATySFi and vendored under `scripts/layout_fidelity_corpus/`), this
 builds the SAME source with the Rust port and compares the two PDFs' *layout* —
 not their bytes. Comparison is via poppler's `pdftotext -bbox`, which emits every
 word's bounding box; the port bundles the SAME fonts SATySFi uses (IPAex / Latin
@@ -47,7 +47,7 @@ Usage:
 
 Exit status: 0 iff every compared document meets its baseline (or --update).
 Self-skips (exit 0 with a SKIP note) if poppler, the port binary, or the
-docs-corpus submodules are missing, so it is safe to invoke unconditionally.
+the vendored corpus is missing, so it is safe to invoke unconditionally.
 """
 
 from __future__ import annotations
@@ -67,7 +67,14 @@ from difflib import SequenceMatcher
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-CORPUS = REPO / "docs-corpus"
+# The corpus is VENDORED next to this script rather than pulled in as git
+# submodules: only three things were ever needed from those 11 repos — each
+# document's own directory (its `.saty`, the upstream-built reference PDF, and
+# any images or relatively-`@import`ed siblings), each package's `src/`, and
+# `satysfi-base/src`. That is 9.4 MB against the submodules' 19 MB, needs no
+# `git submodule update --init` (nor `submodules: recursive` in CI), and cannot
+# drift: the reference PDFs are the fixed point the whole comparison rests on.
+CORPUS = Path(__file__).resolve().parent / "layout_fidelity_corpus"
 LIB_RUSTYFI = REPO / "lib-rustyfi"
 BASELINE_PATH = Path(__file__).resolve().parent / "layout_fidelity_baseline.json"
 
@@ -187,7 +194,7 @@ def prereqs_ok(bin_path: Path) -> list[str]:
     if not bin_path.exists():
         missing.append(f"port binary not built at {bin_path} (run `cargo build -p rustyfi-cli`)")
     if not CORPUS.exists():
-        missing.append(f"{CORPUS} missing (run `git submodule update --init`)")
+        missing.append(f"{CORPUS} missing (the vendored corpus should be committed alongside this script)")
     if not (LIB_RUSTYFI / "dist" / "packages").exists():
         missing.append(f"{LIB_RUSTYFI}/dist/packages missing")
     return missing
@@ -275,6 +282,12 @@ def build_pdf(doc: Doc, bin_path: Path, lib_root: Path, out_pdf: Path, timeout: 
         # masked by a stale cached render. The test must reflect the current
         # binary's layout.
         "--no-cache",
+        # Also ignore any `<doc>.satysfi-aux`: it seeds cross-reference reads,
+        # so honouring one would make a measurement depend on whatever a
+        # previous run left behind — and would WRITE one back into the vendored
+        # corpus, dirtying the working tree on every run. The port resolves
+        # cross-references with its own fixpoint regardless.
+        "--no-aux",
         "--lib-root",
         str(lib_root),
         "--font-dir",

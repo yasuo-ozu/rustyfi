@@ -1,0 +1,135 @@
+@import: rail
+
+type wave-config = (|
+  amplitude : length;
+  lambda : length;
+  slope-ratio: float;  % 正の値を指定。 基本は max-slope >= 1 で用いる。 0 に近いほど傾きが急。
+|)
+
+% 楕円の切れ端を用いて作成する波。
+% 楕円の切れ端なので、比較的かんたんな計算で任意の長さに切ることができる。
+module WavyLine : sig
+
+  % val new: length -> float -> float -> Rail.t
+  val new: length -> wave-config -> Rail.rail
+
+  direct \uwave : [wave-config?; inline-text] inline-cmd
+
+end = struct
+
+% 便利関数
+
+  let minus l = 0pt -' l
+
+  let to-radian angle = angle *. (math-pi /. 180.)
+  let to-degree angle = angle *. (180. /. math-pi)
+
+  % float を float で割ったときの商と余りを求める。
+  % ただし flt1 > 0, flt2 > 0 を仮定する。
+  let float-mod flt1 flt2 =
+    let-rec aux (q, r) =
+      if Float.(r < flt2) then
+        (q, r)
+      else
+        aux (q + 1, r -. flt2)
+    in
+    aux (0, flt1)
+
+% 波形生成
+
+  let form-wave-unit q i =
+    Rail.(
+      match (i mod 4) with
+      | 0 -> q
+      | 1 -> q |> reflect-x |> reflect-y |> reverse
+      | 2 -> q |> reflect-y
+      | 3 -> q |> reflect-x |> reverse
+    )
+
+  let new len conf =
+    let num-waves = len /' (conf#lambda *' 0.25) in
+    let num-units = round num-waves in
+    let residual = num-waves -. (float num-units) in
+
+    let () = display-message (`num-waves: ` ^ (show-float num-waves)) in
+
+    % 単位扇形の中心角。
+    let alpha = acos ( (conf#slope-ratio -. 1.) /. (conf#slope-ratio +. 1.) ) in
+    let unit-segment =
+      let mag-x-ratio = (conf#lambda /' 1pt) *. (0.25 /. (sin alpha)) in
+      let mag-y-ratio = (conf#amplitude /' 1pt) *. (1. /. (1. -. cos alpha)) in
+      Rail.(
+        (circular-sector ?:(to-degree alpha) 1pt) ^ (90.0)
+          |> reflect-x
+          |> scale mag-x-ratio mag-y-ratio
+      )
+    in
+
+    % 0 <= l < 1 を仮定
+    let residual-segment i l =
+      let mag-x-ratio = (conf#lambda /' 1pt) *. (0.25 /. (sin alpha)) in
+      let mag-y-ratio = (conf#amplitude /' 1pt) *. (1. /. (1. -. cos alpha)) in
+      let wav-shape = match i mod 4 with
+      | 0 ->
+          let theta = asin (l *. (sin alpha)) in
+          Rail.(
+            (circular-sector ?:(to-degree theta) 1pt) ^ (90.0)
+              |> reflect-x
+          )
+      | 1 -> 
+          let theta = alpha -. asin ((1. -. l) *. (sin alpha)) in
+          Rail.(
+            circular-sector ?:(to-degree theta) 1pt
+              ^ (270.0 -. (to-degree alpha))
+          )
+      | 2 -> 
+          let theta = asin (l *. (sin alpha)) in
+          Rail.(
+            (circular-sector ?:(to-degree theta) 1pt) ^ (90.0)
+              |> reflect-x |> reflect-y
+          )
+      | _ -> 
+          let theta = alpha -. asin ((1. -. l) *. (sin alpha)) in
+          Rail.(
+            circular-sector ?:(to-degree theta) 1pt
+              ^ (270.0 -. (to-degree alpha))
+              |> reflect-y
+          )
+      in
+      wav-shape |> Rail.scale mag-x-ratio mag-y-ratio
+    in
+
+    Rail.concat [
+      Rail.map-repeat (form-wave-unit unit-segment) num-units;
+      residual-segment num-units residual
+    ]
+
+% command
+
+
+
+  let-inline ctx \uwave ?:conf it =
+    let conf =
+      conf |> Option.from (|
+        amplitude = 0.75pt;
+        lambda = 5pt;
+        slope-ratio = 10.;
+      |)
+    in
+
+    let len-shift-down = 1pt in
+
+    let deco-uwave (x, y) wid ht dp =
+      let rail-wave = new wid conf in
+      let clr = get-text-color ctx in
+      [
+        rail-wave |> Rail.to-path (x, y -' len-shift-down) |> stroke 0.5pt clr
+      ]
+    in
+
+    inline-frame-breakable
+      (0pt, 0pt, 0pt, conf#amplitude *' 2.0 +' len-shift-down)
+        (deco-uwave, deco-uwave, deco-uwave, deco-uwave)
+          (read-inline ctx it)
+
+end

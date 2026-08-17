@@ -818,6 +818,7 @@ impl<'b> Compiler<'b> {
         use crate::ast::IText as A;
         match e {
             A::Text(s) => quoted::IText::Text(s.clone()),
+            A::CodeText(s) => quoted::IText::CodeText(s.clone()),
             A::Cmd { name, span, args } => quoted::IText::Cmd {
                 cmd: self.compile_cmd_name(name, *span, "inline command"),
                 args: args.iter().map(|a| self.compile_cmd_arg(a)).collect(),

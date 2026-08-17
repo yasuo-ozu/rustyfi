@@ -206,6 +206,14 @@ pub struct Context {
     /// built by `Context::initial` directly (unit tests) — the
     /// `get-initial-context` primitive always installs its second argument.
     pub math_command: Option<MathCmdId>,
+    /// `set-code-text-command` (v0.0.6 `context_main.code_text_command`) — the
+    /// `[string] inline-cmd` a backtick literal inside inline text is handed
+    /// to. `None` is upstream's `DefaultCodeTextCommand`: the literal is set as
+    /// ordinary text. A doc class installs one to give code spans a monospace
+    /// face, which is why `` `+easytable…` `` inside `\emph{}` must not simply
+    /// inherit the surrounding italic. Holds the same id-into-`Interp` handle
+    /// as `math_command`; the closure lives in `Interp::math_commands`.
+    pub code_text_command: Option<MathCmdId>,
     /// `\mathrm`/`\bm`/… restyling target (v0.0.6 `context_main.
     /// math_char_class`, `docs/plans/math-engine.md` §F): which Mathematical-
     /// Alphanumeric style block a plain `${…}` letter resolves to. Set by
@@ -296,6 +304,7 @@ impl Context {
             // `convertText.ml:103` — inter-CJK glue stretch ratio.
             adjacent_stretch: 0.025,
             math_command: None,
+            code_text_command: None,
             math_char_class: MathCharClass::Italic,
             math_class_map: Arc::new(default_math_class_map()),
             math_variant_char_map: Arc::new(BTreeMap::new()),

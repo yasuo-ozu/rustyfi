@@ -2962,7 +2962,7 @@ impl<'s> Checker<'s> {
     /// the whole command type against.
     fn check_itext(&mut self, env: &TypeEnv<'s>, it: &IText<'s>) -> Result<(), TypeError> {
         match it {
-            IText::Text(_) => Ok(()),
+            IText::Text(_) | IText::CodeText(_) => Ok(()),
             IText::Cmd { name, span, args } => {
                 let tcmd = match env.get(*name) {
                     Some(poly) => instantiate(poly, self.ctx.level()),

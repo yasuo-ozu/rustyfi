@@ -1,0 +1,31 @@
+@import: font
+@import: script
+
+type fss-font-combination-pair =
+  (| script : FssFontScript.t ;
+     font : fss-font;
+  |)
+
+type fss-font-combination =
+  fss-font-combination-pair list
+
+module FssFontCombination : sig
+
+  val to-string : fss-font-combination -> string
+  val font-combination-pair-to-string : fss-font-combination-pair -> string
+
+end = struct
+
+  let font-combination-pair-to-string f =
+    FssFontScript.to-string f#script ^ #` `# ^ f#font#font-name
+
+  let to-string font-comb =
+    let-rec sub acc font-comb =
+      match font-comb with
+      | [] -> `[` ^ acc ^ `]`
+      | (f :: font-comb) ->
+        sub (font-combination-pair-to-string f ^ `;` ^ acc) font-comb
+    in
+    sub ` ` font-comb
+
+end

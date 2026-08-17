@@ -676,6 +676,7 @@ leaf_eq! {
     with_fields:
         VarTok { name }, CtorTok { name }, IntTok { value }, FloatTok { value },
         HorzCmdTok { name }, VertCmdTok { name }, CharTok { text }, ItemTok { depth },
+        CodeTextTok { text },
         HeaderRequireTok { content }, HeaderImportTok { content }, TypeVarTok { name },
         UnopExclamTok { text }, MathCharTok { text }, MathCmdTok { name },
         PrimesTok { count }, OpenModuleTok { name }, RowVarTok { name }

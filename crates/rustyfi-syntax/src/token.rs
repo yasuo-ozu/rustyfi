@@ -300,6 +300,15 @@ pub enum Token {
     VarInMath(Vec<String>, String),
     #[leaf(name = "CharTok", expect = "inline text", field = "text")]
     Char(String),
+    /// A backtick literal written INSIDE inline text (`` `…` ``). Distinct from
+    /// `Char` because upstream keeps it distinct: it reaches the evaluator as
+    /// `ImInputHorzEmbeddedCodeText` and is dispatched to the context's
+    /// `code_text_command` (`evaluator.cppo.ml:768-779`), which is how a doc
+    /// class sets code spans in a monospace face. Lexing it to a plain `Char`
+    /// run — as this port used to — erases that distinction irrecoverably, so
+    /// the literal inherits whatever face surrounds it (italic, inside `\emph`).
+    #[leaf(name = "CodeTextTok", expect = "an inline code literal", field = "text")]
+    CodeText(String),
     #[leaf(name = "SpaceTok", expect = "a space")]
     Space,
     #[leaf(name = "BreakTok", expect = "a line break")]
@@ -443,6 +452,7 @@ impl std::fmt::Display for Token {
                 }
             }
             Char(s) => write!(f, "{s}"),
+            CodeText(s) => write!(f, "`{s}`"),
             Space => write!(f, " "),
             Break => writeln!(f),
             Item(n) => write!(f, "{}", "*".repeat(*n)),

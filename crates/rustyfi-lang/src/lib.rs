@@ -1666,7 +1666,10 @@ fn walk_inline_elem(
 ) {
     use rustyfi_syntax::cst::ast::InlineElem;
     match el {
-        InlineElem::Char(_) | InlineElem::Space(_) | InlineElem::Break(_) => {}
+        InlineElem::Char(_)
+        | InlineElem::CodeText(_)
+        | InlineElem::Space(_)
+        | InlineElem::Break(_) => {}
         InlineElem::Embed { var, .. } => {
             if var.mods.is_empty() {
                 emit_value(scope, out, &var.name);
@@ -1996,7 +1999,6 @@ pub fn fire_hooks(interp: &mut eval::Interp, doc: &DocumentValue) -> Result<(), 
     // `FrameEnd` finally arrives. Single-page frames are pushed and removed
     // within one page's walk exactly as before.
     let mut open: Vec<OpenFrame> = Vec::new();
-
     for (i, page) in doc.pages.iter().enumerate() {
         interp.current_page = Some(i);
         let page_number = (i + 1) as i64; // 1-based, = pbinfo#page-number
@@ -2015,27 +2017,14 @@ pub fn fire_hooks(interp: &mut eval::Interp, doc: &DocumentValue) -> Result<(), 
             for (dx, bx) in &line.contents {
                 match bx {
                     PureHorzBox::HookPageBreak { id } => {
-                        let closure = interp.hooks[id.0].clone();
-                        let mut fields = BTreeMap::new();
-                        fields.insert("page-number".to_string(), Value::Int(page_number));
-                        let pbinfo = Value::Record(fields);
-                        // PDF page space is y-up; placed geometry
-                        // (`baseline_y`) is page space y-down from the paper
-                        // top — the same flip the writers apply.
-                        let point = Value::Tuple(vec![
-                            Value::Length(line.x + *dx),
-                            Value::Length(doc.geometry.paper_height - line.baseline_y),
-                        ]);
-                        let applied = interp.apply(closure, pbinfo)?;
-                        match interp.apply(applied, point)? {
-                            Value::Unit => {}
-                            other => {
-                                return eval::eval_error(format!(
-                                    "hook-page-break closure returned {}, expected unit",
-                                    other.type_name()
-                                ))
-                            }
-                        }
+                        fire_page_break_hook(
+                            interp,
+                            doc,
+                            page_number,
+                            line.x + *dx,
+                            line.baseline_y,
+                            *id,
+                        )?;
                     }
                     PureHorzBox::Frame { .. } => {
                         fire_inline_frame(interp, doc, i, line.x + *dx, line.baseline_y, bx)?;
@@ -2326,6 +2315,46 @@ fn fire_embedded_block_frames(
 /// `interp.current_page` is already `Some(page)` here (set by `fire_hooks`'s
 /// caller), so a deco body calling `register-link-to-uri` (exactly
 /// `annot.satyh:11-14`) lands its `Annot` on the right page — this is the
+/// Apply one `hook-page-break` closure to `(pbinfo, point)`.
+///
+/// Extracted so the walk can fire a hook wherever it is found, not only at the
+/// top level of a placed line. `stdja`'s `+section` appends its
+/// `hook-page-break` to the heading's inline boxes, and the heading is wrapped
+/// in the title deco's inline FRAME — so all 7 of this manual's hooks sat one
+/// level down and none of them ever fired. That is what left every TOC page
+/// number unresolved: `stdja.satyh:448` registers `<label>:page` from inside
+/// this closure, so the key never reached the cross-reference table, the
+/// fixpoint, or the aux file, and `get-cross-reference` rendered `?`. On pages
+/// 1-2 alone the port emitted 11 such `?` for easytable and 21 for enumitem
+/// where SATySFi emits none.
+fn fire_page_break_hook(
+    interp: &mut eval::Interp,
+    doc: &DocumentValue,
+    page_number: i64,
+    x: Length,
+    baseline_y: Length,
+    id: rustyfi_backend::HookId,
+) -> Result<(), eval::EvalError> {
+    let closure = interp.hooks[id.0].clone();
+    let mut fields = BTreeMap::new();
+    fields.insert("page-number".to_string(), Value::Int(page_number));
+    let pbinfo = Value::Record(fields);
+    // PDF page space is y-up; placed geometry (`baseline_y`) is page space
+    // y-down from the paper top — the same flip the writers apply.
+    let point = Value::Tuple(vec![
+        Value::Length(x),
+        Value::Length(doc.geometry.paper_height - baseline_y),
+    ]);
+    let applied = interp.apply(closure, pbinfo)?;
+    match interp.apply(applied, point)? {
+        Value::Unit => Ok(()),
+        other => eval::eval_error(format!(
+            "hook-page-break closure returned {}, expected unit",
+            other.type_name()
+        )),
+    }
+}
+
 /// entire `\href` unlock.
 fn fire_inline_frame(
     interp: &mut eval::Interp,
@@ -2360,6 +2389,19 @@ fn fire_inline_frame(
     interp.current_deco_id = None;
     interp.page_graphics[page].extend(gr);
     for (dx, child) in contents {
+        // A `hook-page-break` can sit INSIDE the frame — `stdja`'s `+section`
+        // appends one to a heading that the title deco then wraps in a frame —
+        // and the top-level walk never sees it. See `fire_page_break_hook`.
+        if let PureHorzBox::HookPageBreak { id } = child {
+            fire_page_break_hook(
+                interp,
+                doc,
+                (page + 1) as i64,
+                x + *dx,
+                baseline_y,
+                *id,
+            )?;
+        }
         fire_inline_frame(interp, doc, page, x + *dx, baseline_y, child)?;
     }
     Ok(())

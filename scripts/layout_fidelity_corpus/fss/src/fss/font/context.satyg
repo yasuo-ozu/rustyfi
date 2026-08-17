@@ -1,0 +1,79 @@
+@import: axes
+@import: set
+
+type fss-extended-context =
+  (| context : context ;
+     font-set : fss-font-set ;
+     font-axes : fss-font-axes ;
+  |)
+
+type fss-extended-context-non-standard =
+  (| font-set : fss-font-set ;
+     font-axes : fss-font-axes ;
+  |)
+
+module FssExtendedContext : sig
+
+  val get-non-standard-context : fss-extended-context -> fss-extended-context-non-standard
+  val from-non-standard-context : fss-extended-context-non-standard -> context -> fss-extended-context
+
+  val get-context : fss-extended-context -> context
+  val set-context : context -> fss-extended-context -> fss-extended-context
+
+  val get-font-set : fss-extended-context -> fss-font-set
+  val set-font-set : fss-font-set -> fss-extended-context -> fss-extended-context
+
+  val get-font-axes : fss-extended-context -> fss-font-axes
+  val set-font-axes : fss-font-axes -> fss-extended-context -> fss-extended-context
+
+  val get-font-size : fss-extended-context -> length
+  val set-font-size : length -> fss-extended-context -> fss-extended-context
+
+  val to-string : fss-extended-context -> string
+  val to-string-for-font-selection : fss-extended-context -> string
+
+end = struct
+
+  let get-non-standard-context ectx =
+    (| font-set = ectx#font-set ;
+       font-axes = ectx#font-axes ;
+    |)
+  let from-non-standard-context nsctx ctx =
+    (| context = ctx ;
+       font-set = nsctx#font-set ;
+       font-axes = nsctx#font-axes ;
+    |)
+
+  let get-context ectx = ectx#context
+  let set-context ctx ectx = (| ectx with context = ctx |)
+
+  let get-font-set ectx = ectx#font-set
+  let set-font-set fs ectx = (| ectx with font-set = fs |)
+
+  let get-font-axes ectx = ectx#font-axes
+  let set-font-axes fa ectx = (| ectx with font-axes = fa |)
+
+  let get-font-size ectx =
+    get-context ectx
+    |> get-font-size
+
+  let set-font-size l ectx =
+    let ctx =
+      get-context ectx
+      |> set-font-size l
+    in
+    set-context ctx ectx
+
+  let to-string ectx =
+    `{size=` ^ show-float (get-font-size ectx /' 1pt)
+    ^ `;` ^ `font-axes=` ^ FssFontAxes.to-string (get-font-axes ectx)
+    ^ `;` ^ `font-set=` ^ FssFontSet.to-string (get-font-set ectx)
+    ^ `}`
+
+  let to-string-for-font-selection ectx =
+    `{size=` ^ show-float (get-font-size ectx /' 1pt)
+    ^ `;` ^ `font-axes=` ^ FssFontAxes.to-string (get-font-axes ectx)
+    ^ `}`
+
+
+end

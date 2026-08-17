@@ -817,6 +817,7 @@ fn subst_inline_elem(
 ) -> Result<ast_v1::InlineElem, LowerError> {
     Ok(match e {
         ast_v1::InlineElem::Char(t) => ast_v1::InlineElem::Char(t.clone()),
+        ast_v1::InlineElem::CodeText(t) => ast_v1::InlineElem::CodeText(t.clone()),
         ast_v1::InlineElem::Space(t) => ast_v1::InlineElem::Space(t.clone()),
         ast_v1::InlineElem::Break(t) => ast_v1::InlineElem::Break(t.clone()),
         // Site 4 ("found beyond the spec", module doc comment).

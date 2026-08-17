@@ -1,0 +1,14 @@
+% milestone-1 fixture: headers, a top-level let, document/+p/\emph
+@require: stdjabook
+
+let author-name = `yasuo`
+in
+document (|
+  title = {Milestone One};
+  author = {yasuo};
+|) '<
+  +p { Hello, world! This is \emph{SATySFi-in-Rust}. }
+  +p { A second paragraph long enough that greedy line breaking must wrap
+       it onto several lines to prove that the box model, the glue
+       justification, and the page layout all work together end to end. }
+>

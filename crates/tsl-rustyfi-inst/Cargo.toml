@@ -1,9 +1,0 @@
-[package]
-name = "tsl-rustyfi-inst"
-version = "0.0.0"
-edition = "2021"
-publish = false
-
-[dependencies]
-catasys-infer.workspace = true
-catasys-exhaust.workspace = true

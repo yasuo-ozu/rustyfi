@@ -9,7 +9,6 @@ members = [
     "crates/rustyfi-cli",
     "crates/rustyfi-loader",
     "crates/rustyfi-satyrographos",
-    "crates/tsl-rustyfi-inst",
 ]
 
 [workspace.package]
@@ -19,14 +18,11 @@ license = "LGPL-3.0"
 authors = ["Yasuo Ozu <yasuo@ozu.email>"]
 
 [workspace.dependencies]
-# syan from the vendored submodule (vendor/syan2, tracking main) rather than a
-# sibling checkout. A path dep outside the repo is why an upstream change to
-# catasys silently broke tsl-rustyfi-inst; pinning it here makes clones
-# reproducible and upgrades deliberate.
+# syan is vendored as a submodule rather than referenced from a sibling
+# checkout. No dependency here reaches outside the repo: an external path dep
+# changes with no version bump to notice, which has silently broken this build
+# before. Keep it that way.
 syan = { path = "vendor/syan2/core" }
-catasys-infer = { path = "../taipu/crates/catasys-infer" }
-catasys-exhaust = { path = "../taipu/crates/catasys-exhaust" }
-tsl-rustyfi-inst = { path = "crates/tsl-rustyfi-inst" }
 rustyfi-syntax = { path = "crates/rustyfi-syntax" }
 rustyfi-backend = { path = "crates/rustyfi-backend" }
 rustyfi-lang = { path = "crates/rustyfi-lang" }

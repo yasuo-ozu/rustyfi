@@ -174,31 +174,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f1fe948ff07f4bd06c30984e69f5b4899c516a3ef74f34df92a2df2ab535495"
 
 [[package]]
-name = "catasys-diag"
-version = "0.0.0"
-dependencies = [
- "catasys-serialize",
-]
-
-[[package]]
-name = "catasys-exhaust"
-version = "0.0.0"
-dependencies = [
- "catasys-diag",
-]
-
-[[package]]
-name = "catasys-infer"
-version = "0.0.0"
-dependencies = [
- "catasys-diag",
-]
-
-[[package]]
-name = "catasys-serialize"
-version = "0.0.0"
-
-[[package]]
 name = "cbc"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -399,6 +374,7 @@ dependencies = [
  "proc-macro-error",
  "proc-macro2",
  "quote",
+ "safegraph",
  "syn 2.0.118",
  "template-quote",
  "type-leak 0.7.0",
@@ -2174,14 +2150,6 @@ dependencies = [
  "target-triple",
  "termcolor",
  "toml 1.1.4+spec-1.1.0",
-]
-
-[[package]]
-name = "tsl-rustyfi-inst"
-version = "0.0.0"
-dependencies = [
- "catasys-exhaust",
- "catasys-infer",
 ]
 
 [[package]]

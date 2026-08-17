@@ -98,6 +98,11 @@ fn cmd_compile(m: &ArgMatches) -> anyhow::Result<()> {
     let target_version = m.get_one::<String>("target_version").map(String::as_str);
     let deps_flag = m.get_one::<PathBuf>("deps").map(PathBuf::as_path);
     let (version, mode) = resolve_version_and_mode(target_version, deps_flag, &input)?;
+    // Phase-7c saphe solver, C3: whether this compile is package-manager
+    // driven (Envelopes/manifest mode) — decides below whether a sibling
+    // `Satyrfile.lock`'s digest folds into the cache key. Captured before
+    // `mode` is moved into `LoadOptions`.
+    let is_envelopes_mode = matches!(mode, satysfi_loader::LoadMode::Envelopes { .. });
 
     let program = satysfi_loader::load(
         &input,
@@ -115,13 +120,27 @@ fn cmd_compile(m: &ArgMatches) -> anyhow::Result<()> {
     // remaining step below is byte-for-byte the pre-Slice-1 base-14 path.
     let font_store = resolve_font_store(m, lib_root.as_deref())?;
 
+    // Phase-7c saphe solver, C3 (`docs/plans/design-saphe-solver.md` §5.3):
+    // when this compile is package-manager driven (Envelopes/manifest mode),
+    // best-effort locate the project's `Satyrfile.toml`/`Satyrfile.lock`
+    // (upward search from the input, exactly like `--lib-root` discovery)
+    // and fold the lock's digest into the cache key below, so a `saphe
+    // update`/reconcile that changes a locked package's version invalidates
+    // the cache even when the entry document's own bytes did not change. A
+    // project with no `Satyrfile.toml`/lock (or a Legacy-mode compile) simply
+    // folds in `None`, unchanged from before this fold existed.
+    let deps_lock_digest: Option<String> = is_envelopes_mode
+        .then(|| discover_deps_lock_digest(&input))
+        .flatten();
+
     // Content-addressed compile cache (plan: "make recompiling an unchanged
     // document near-instant"). Caching is ON by default; `--no-cache` disables
     // both read and write. The key is computed from the just-loaded program —
     // its resolved input bytes, the compiler/target version, the entry name,
-    // and (Slice 1) the resolved font identity — *before* the expensive
-    // compile+render, so a hit skips them entirely and writes byte-for-byte
-    // the PDF an earlier miss rendered and stored.
+    // (Slice 1) the resolved font identity, and (C3) the resolved deps-lock
+    // digest — *before* the expensive compile+render, so a hit skips them
+    // entirely and writes byte-for-byte the PDF an earlier miss rendered and
+    // stored.
     let cache = if m.get_flag("no_cache") {
         None
     } else {
@@ -135,6 +154,7 @@ fn cmd_compile(m: &ArgMatches) -> anyhow::Result<()> {
             &input,
             font_store.as_ref(),
             format,
+            deps_lock_digest.as_deref(),
         )
     });
     if let (Some(cache), Some(key)) = (&cache, &cache_key) {
@@ -202,7 +222,9 @@ fn cmd_compile(m: &ArgMatches) -> anyhow::Result<()> {
     // render+write step differs, branching on `--format`. `Html` reuses the
     // exact same `doc.geometry`/`doc.pages`/`doc.images`/`doc.extras` inputs
     // the PDF arm does — `render_html` is argument-for-argument with
-    // `render_pdf_with` (`satysfi_pdf::html`'s doc comment).
+    // `render_pdf_with` (`satysfi_html`'s crate doc comment). Since survey
+    // #6 the HTML backend lives in its own `satysfi-html` crate (a peer of
+    // `satysfi-pdf`), not inside `satysfi-pdf` itself.
     let bytes: Vec<u8> = match format {
         format::OutputFormat::Pdf => match &font_store {
             Some(store) => satysfi_pdf::render_pdf_ttf_with(
@@ -222,7 +244,7 @@ fn cmd_compile(m: &ArgMatches) -> anyhow::Result<()> {
         // `@font-face`-embedded fonts, metric-faithful with the layout),
         // `None` keeps Slice 1/2's base-14 `render_html` path exactly.
         format::OutputFormat::Html => match &font_store {
-            Some(store) => satysfi_pdf::render_html_ttf_with(
+            Some(store) => satysfi_html::render_html_ttf_with(
                 &doc.geometry,
                 &doc.pages,
                 store,
@@ -231,7 +253,7 @@ fn cmd_compile(m: &ArgMatches) -> anyhow::Result<()> {
             )?
             .into_bytes(),
             None => {
-                satysfi_pdf::render_html(&doc.geometry, &doc.pages, &doc.images, &doc.extras)?
+                satysfi_html::render_html(&doc.geometry, &doc.pages, &doc.images, &doc.extras)?
                     .into_bytes()
             }
         },
@@ -324,6 +346,24 @@ fn discover_lib_root(input: &std::path::Path) -> Option<PathBuf> {
             return None;
         }
     }
+}
+
+/// Phase-7c saphe solver, C3: find the nearest `Satyrfile.toml` at or above
+/// `input`'s directory (same upward-search shape as [`discover_lib_root`])
+/// and, if its sibling `Satyrfile.lock` exists and has at least one locked
+/// entry, return `Some(digest)`. `None` covers every "nothing to fold in"
+/// case uniformly — no `Satyrfile.toml` found, no lockfile yet, or an empty
+/// one — so the cache key is byte-for-byte unchanged from before this fold
+/// for any project that has not adopted the package manager.
+fn discover_deps_lock_digest(input: &std::path::Path) -> Option<String> {
+    let dir = input.parent()?;
+    let manifest_path = satysfi_satyrographos::satyrfile::find_upward(dir)?;
+    let lock_path = satysfi_satyrographos::lockfile::lock_path_for(&manifest_path);
+    let lock = satysfi_satyrographos::lockfile::read(&lock_path).ok()?;
+    if lock.libraries.is_empty() {
+        return None;
+    }
+    Some(lock.digest())
 }
 
 /// Resolve BOTH axes of the load — the language version (Axis A) and the
@@ -467,9 +507,12 @@ fn sg_exit_code(err: &sg::Error) -> i32 {
     match err {
         // Nothing to operate on (no root, no Satyrfile, or no registry config).
         RootResolution | SatyrfileNotFound | NoRegistry => 3,
-        // Not-found: a missing receipt, or a package/version absent from the index.
+        // Not-found: a missing receipt, or a package/version absent from the
+        // index — including the phase-7c solver's own "no version fits"
+        // outcomes ([`Unsatisfiable`]/[`VersionConflict`]), which are the
+        // solver-graph analogue of a plain [`VersionNotFound`].
         AlreadyInstalled { .. } | NotInstalled { .. } | PackageNotFound { .. }
-        | VersionNotFound { .. } => 4,
+        | VersionNotFound { .. } | Unsatisfiable { .. } | VersionConflict { .. } => 4,
         // Library-selection / filter usage errors (plan §4.1).
         LibraryFilter { .. } | AmbiguousLibrary { .. } => 2,
         // Filesystem / archive / manifest / Satyristes / lockfile / registry-
@@ -479,7 +522,7 @@ fn sg_exit_code(err: &sg::Error) -> i32 {
         | MissingDst { .. } | Satyristes { .. } | AmbiguousSource { .. }
         | Satyrfile { .. } | Lockfile { .. } | UnsupportedSource { .. }
         | GitFailed { .. } | RegistryIndex { .. } | ChecksumMismatch { .. }
-        | HttpDisabled { .. } | HttpFailed { .. } => 5,
+        | HttpDisabled { .. } | HttpFailed { .. } | InvalidVersion { .. } => 5,
     }
 }
 

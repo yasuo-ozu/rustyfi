@@ -38,6 +38,22 @@ pub enum Language {
     NoLanguageSystem,
 }
 
+/// The set of Knuth–Liang hyphenation dictionaries a `Context` may have
+/// installed (`docs/plans/design-hyphenation.md` D3). Deliberately a small
+/// `Copy` tag with **no dependency on the `hyphenation` crate** — `Context`
+/// (this crate, `satysfi-backend`) is cloned constantly, so it cannot own a
+/// `hyphenation::Standard` dictionary (~89 KiB, not cheaply clonable). The
+/// actual dictionaries live in a process-global load-once cache in
+/// `satysfi-lang` (`crates/satysfi-lang/src/hyphenation.rs`), keyed by this
+/// tag.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum HyphenLang {
+    EnglishUS,
+    /// British English (`docs/plans/design-hyphenation.md` §S3's en-GB
+    /// option). Maps to `hyphenation::Language::EnglishGB`.
+    EnglishGB,
+}
+
 /// SATySFi 0.1's `math_script_level` (`dev-0-1-0 src/backend/horzBox.ml:
 /// 139-142`) — how many script-nesting levels deep the current math reading
 /// context sits, consulted by [`Context::math_script_level`]. V0_0_6 never
@@ -83,14 +99,18 @@ pub struct Context {
     pub paragraph_width: Length,
     /// Extra vertical skip inserted above a paragraph
     /// (`set-paragraph-margin`'s first argument; v0.0.6
-    /// `context_main.paragraph_top`, horzBox.ml:227). Not wired into any
-    /// box-producing primitive yet — a future `+p` is expected to turn this
-    /// into a leading `VertBox::Skip`.
+    /// `context_main.paragraph_top`, horzBox.ml:227). Wired into
+    /// `prim_line_break` (`docs/plans/design-silent-fields.md` FIX 3) as a
+    /// leading `VertBox::Skip` around the formed lines. A skip at the very
+    /// top of a page/column is discarded by `chop_page` (mirrors upstream's
+    /// page-top glue suppression), so this does not add space above the
+    /// first paragraph of a page even though the field itself is unchanged.
     pub paragraph_top: Length,
     /// Extra vertical skip inserted below a paragraph
     /// (`set-paragraph-margin`'s second argument; v0.0.6
-    /// `context_main.paragraph_bottom`, horzBox.ml:228). Same "not wired in
-    /// yet" status as `paragraph_top`.
+    /// `context_main.paragraph_bottom`, horzBox.ml:228). Wired into
+    /// `prim_line_break` as a trailing `VertBox::Skip`, same as
+    /// `paragraph_top`.
     pub paragraph_bottom: Length,
     /// A manual vertical shift applied to text set under this context
     /// (`set-manual-rising`'s argument; v0.0.6 `context_main.manual_rising`,
@@ -134,12 +154,37 @@ pub struct Context {
     /// emission, which still always draws in black.
     pub text_color: Color,
     /// `set-hyphen-penalty` (row 3; v0.0.6 `context_main.hyphen_badness`).
-    /// Stored faithfully; no consumer yet (this port has no hyphenation).
+    /// Consumed by `satysfi-lang`'s `flush_word` injection
+    /// (`docs/plans/design-hyphenation.md` §4/D6) as each injected
+    /// `Discretionary`'s `penalty`, but only when `hyphen_dictionary` is
+    /// `Some(_)` — with no dictionary installed this field is stored
+    /// faithfully and has no layout effect, same as before.
     pub hyphen_badness: i64,
+    /// The installed hyphenation dictionary
+    /// (`set-hyphenation-dictionary`/`load-hyphenation-dictionary`; v0.0.6
+    /// `context_main.hyphen_dictionary`). `None` (the `Context::initial`
+    /// default) is a **documented deviation** from upstream's
+    /// default-English: hyphenation is opt-in per document/class here, so
+    /// that no existing fixture's layout changes
+    /// (`docs/plans/design-hyphenation.md` D4/§6, the byte-identity gate).
+    /// `flush_word` (`satysfi-lang`) runs the hyphenation branch **iff**
+    /// this is `Some(tag)` and the run's script is `Latin` (D5).
+    pub hyphen_dictionary: Option<HyphenLang>,
+    /// Minimum number of chars that must precede an accepted hyphenation
+    /// break (`set-hyphen-min`'s first argument; v0.0.6
+    /// `context_main.left_hyphen_min`). Default 3 (D6).
+    pub left_hyphen_min: i64,
+    /// Minimum number of chars that must follow an accepted hyphenation
+    /// break (`set-hyphen-min`'s second argument; v0.0.6
+    /// `context_main.right_hyphen_min`). Default 2 (D6).
+    pub right_hyphen_min: i64,
     /// `set-space-ratio`'s three fields (row 4; v0.0.6
-    /// `context_main.space_natural`/`space_shrink`/`space_stretch`). Stored
-    /// faithfully; interword-glue sizing still uses the line breaker's own
-    /// fixed ratios until `docs/plans/text-rendering.md` wires these in.
+    /// `context_main.space_natural`/`space_shrink`/`space_stretch`). Wired
+    /// into `text_to_boxes`'s interword-glue construction
+    /// (`docs/plans/design-silent-fields.md` FIX 2): natural width =
+    /// `font_size * space_natural`, shrink = `font_size * space_shrink`,
+    /// stretch = `font_size * space_stretch` — each a ratio of `font_size`
+    /// directly, not of the natural width.
     pub space_natural: f64,
     pub space_shrink: f64,
     pub space_stretch: f64,
@@ -174,6 +219,16 @@ pub struct Context {
     /// src/frontend/context.ml:52-68`). `Base` under V0_0_6 always — no
     /// V0_0_6 code path ever reads or bumps this field.
     pub math_script_level: MathScriptLevel,
+    /// Whether the current math sub-formula is laid out "cramped" (TeXbook
+    /// Appendix G): set on the recursive layout `Context` for a radical's
+    /// radicand, a fraction's denominator, and any subscript
+    /// (`docs/plans/design-math-cramped.md` §2.2). Orthogonal to
+    /// `math_script_level` and, unlike it, read by BOTH V0_0_6 and V0_1
+    /// (the bit rides the shared layout-recursion clone, not a version-gated
+    /// primitive). Only consumed by `sup_shift_clamped`'s superscript
+    /// shift-up formula — see the design doc §2.3 for why that is the sole
+    /// positioning formula cramped changes in this port's feature set.
+    pub math_cramped: bool,
 }
 
 impl Context {
@@ -204,6 +259,11 @@ impl Context {
             // `space_stretch = 0.16`.
             text_color: Color::Gray(0.0),
             hyphen_badness: 100,
+            // D4: hyphenation is opt-in (byte-identity gate) — upstream
+            // installs English by default, this port does not.
+            hyphen_dictionary: None,
+            left_hyphen_min: 3,
+            right_hyphen_min: 2,
             space_natural: 0.33,
             space_shrink: 0.08,
             space_stretch: 0.16,
@@ -212,6 +272,7 @@ impl Context {
             math_class_map: Arc::new(default_math_class_map()),
             math_variant_char_map: Arc::new(BTreeMap::new()),
             math_script_level: MathScriptLevel::Base,
+            math_cramped: false,
         }
     }
 }

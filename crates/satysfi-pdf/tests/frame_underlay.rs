@@ -41,7 +41,7 @@ fn page_with_text() -> Page {
             contents: vec![(
                 Length::ZERO,
                 PureHorzBox::InnerString {
-                    info: HorzStringInfo { font: FontKey(0), size: Length::pt(12.0), rising: Length::ZERO },
+                    info: HorzStringInfo { font: FontKey(0), size: Length::pt(12.0), rising: Length::ZERO, color: Color::Gray(0.0) },
                     text: "hi".to_string(),
                     width: Length::pt(12.0),
                     height: Length::pt(9.0),

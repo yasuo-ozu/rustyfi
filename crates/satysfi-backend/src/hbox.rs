@@ -1,5 +1,5 @@
 use crate::font::FontKey;
-use crate::graphics::GraphicsElem;
+use crate::graphics::{Color, GraphicsElem};
 use crate::length::Length;
 use crate::math::MathGlyph;
 use crate::tabular::TabularBox;
@@ -16,6 +16,13 @@ pub struct HorzStringInfo {
     /// field being carried instead of dropped changes no existing output —
     /// both PDF writers add it to the placed `ty` before `Tj`.
     pub rising: Length,
+    /// `set-text-color`'s value at the time this run/glyph was built
+    /// (`Context::text_color`, `context.rs`). Both `PureHorzBox::InnerString`
+    /// (text runs) and `MathGlyph` (math glyphs) embed this same struct, so
+    /// one field threads color to both. `Color::Gray(0.0)` (black) is the
+    /// PDF/HTML default; both writers emit NO color op for a black run, so
+    /// every pre-existing all-black construction site stays byte-identical.
+    pub color: Color,
 }
 
 /// An index into a document-wide table of decoded raster images
@@ -63,9 +70,15 @@ pub struct GraphicsFnId(pub usize);
 ///
 /// **Slice 1 simplification** (see `docs/plans/math-images.md`'s Risks
 /// section): every source format is flattened to 8-bit `DeviceRGB` and any
-/// alpha channel is dropped. Transparency (`/SMask`) and a JPEG `DCTDecode`
-/// passthrough (rather than a full decode/re-encode) are both roadmap, not
-/// Slice 1.
+/// alpha channel is dropped — `samples`/`px_w`/`px_h` are always populated
+/// this way (the HTML backend's `<img>` data URI and the PDF writer's
+/// non-JPEG path both rely on that). Transparency (`/SMask`) is still
+/// roadmap. A JPEG `DCTDecode` passthrough (JPEG DCTDecode passthrough
+/// slice, see `write_image_xobjects` in `satysfi-pdf`) is no longer
+/// roadmap: `jpeg_dct` additionally carries the source's original,
+/// still-DCT-encoded bytes when `load-image` recognized it as a baseline
+/// JPEG, so the PDF writer can embed those bytes directly instead of
+/// re-encoding the flattened RGB8 samples.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ImageResource {
     /// Row-major, top-to-bottom, 3-bytes-per-pixel RGB8 samples with no
@@ -74,6 +87,208 @@ pub struct ImageResource {
     pub samples: Vec<u8>,
     pub px_w: u32,
     pub px_h: u32,
+    /// `Some` when the source file `load-image` decoded was itself a
+    /// baseline (or extended-sequential) 8-bit JPEG with 1 or 3 color
+    /// components — see `sniff_baseline_jpeg_dct`'s doc comment for exactly
+    /// which JPEGs qualify and why the rest fall back to `None` (and thus to
+    /// the flattened-RGB8 embedding above). `None` for every non-JPEG
+    /// source, and for a JPEG this port doesn't yet know how to map to a PDF
+    /// colorspace without guessing (progressive, 12-bit, or 4-component
+    /// CMYK/YCCK).
+    pub jpeg_dct: Option<JpegDct>,
+    /// `Some` when this resource is an imported page of an external PDF
+    /// (`load-pdf-image`, docs/plans/design-load-pdf-image.md) rather than a
+    /// decoded raster image. `samples`/`px_w`/`px_h` are left at their
+    /// default/empty values in that case — every raster consumer keeps
+    /// reading those fields unchanged; PDF-page consumers branch on this
+    /// field instead. Additive: every pre-existing `ImageResource { .. }`
+    /// construction site gets `pdf: None`.
+    pub pdf: Option<PdfPageResource>,
+}
+
+/// An embedded page of an external PDF (`load-pdf-image`), carrying just
+/// enough of the source page's object graph to re-emit it as a PDF **Form
+/// XObject** (docs/plans/design-load-pdf-image.md §2-3). Parsed by
+/// `satysfi-lang` (via `lopdf`) and consumed by `satysfi-pdf`'s writer; this
+/// struct itself is `lopdf`-free plain data so `satysfi-backend` need not
+/// depend on `lopdf`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PdfPageResource {
+    /// The source page's `/MediaBox`, `(x0, y0, x1, y1)` in raw PDF points
+    /// (upstream `loadPdf.ml`: MediaBox only, no `/CropBox` fallback).
+    pub media_box: (f64, f64, f64, f64),
+    /// The page's content stream(s), already inflated (`/FlateDecode`
+    /// resolved) and concatenated (with a separating space per PDF rules
+    /// when a page has more than one content stream) — ready to wrap
+    /// verbatim in a Form XObject's stream body.
+    pub content: Vec<u8>,
+    /// The imported object subtree reachable from the page's `/Resources`,
+    /// self-contained and keyed by source object number so the writer can
+    /// remap references to freshly allocated output `Ref`s. Local id `0` is
+    /// reserved (PDF object number 0 is always free/unused in a well-formed
+    /// file) and holds the page's own `/Resources` dictionary itself
+    /// (whether it was a direct or an indirect object in the source); every
+    /// other entry is a real source object number.
+    pub resources: ImportedObjects,
+}
+
+/// A serialized subtree of a *foreign* PDF's object graph, self-contained
+/// and neutral (no `lopdf` types) so it can cross the `satysfi-backend`
+/// boundary as plain data. See `PdfPageResource::resources`'s doc comment
+/// for the local-id convention.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ImportedObjects(pub Vec<(u32, ObjRepr)>);
+
+/// A minimal sum type mirroring the PDF object grammar, just enough to
+/// re-emit an imported object verbatim (`docs/plans/design-load-pdf-image.md`
+/// §2). `Ref(u32)` refers to another entry's local id in the same
+/// `ImportedObjects` table (or, in principle, to an object outside the
+/// imported subtree — the writer should treat an unresolved `Ref` as a bug
+/// in the importer, not attempt to fetch it).
+#[derive(Clone, Debug, PartialEq)]
+pub enum ObjRepr {
+    Null,
+    Bool(bool),
+    Int(i64),
+    Real(f64),
+    /// A PDF name's raw bytes, without the leading `/` and with `#xx`
+    /// escapes already decoded (mirrors `lopdf::Object::Name`).
+    Name(Vec<u8>),
+    /// A PDF string's raw bytes (mirrors `lopdf::Object::String`, literal or
+    /// hex — both collapse to bytes here since we only ever re-emit them).
+    String(Vec<u8>),
+    Ref(u32),
+    Array(Vec<ObjRepr>),
+    Dict(Vec<(Vec<u8>, ObjRepr)>),
+    /// A stream object: its dictionary entries (excluding `/Length`, which
+    /// the writer derives) plus already-decompressed content bytes. The
+    /// writer decides filtering/compression at write time; the imported
+    /// content is kept in cleartext form here so no `lopdf`-specific codec
+    /// state needs to cross the boundary.
+    Stream(Vec<(Vec<u8>, ObjRepr)>, Vec<u8>),
+}
+
+/// The original, still-DCT-encoded bytes of a source JPEG file, plus just
+/// enough metadata (`components`) for the PDF writer to pick the matching
+/// `/ColorSpace` — never re-derived from the flattened `samples` (those have
+/// already lost whatever the JPEG's own YCbCr subsampling/quantization
+/// looked like; the whole point of a passthrough is to hand the PDF viewer
+/// the exact bytes the encoder produced).
+#[derive(Clone, Debug, PartialEq)]
+pub struct JpegDct {
+    /// The complete original file contents, `FFD8` (SOI) to `FFD9` (EOI)
+    /// and everything in between, byte-for-byte as `load-image` read it —
+    /// this is exactly the stream a PDF `/Filter /DCTDecode` XObject wants.
+    pub bytes: Vec<u8>,
+    /// Color components declared by the JPEG's own SOF marker: `1`
+    /// (grayscale, maps to `/DeviceGray`) or `3` (YCbCr/RGB, maps to
+    /// `/DeviceRGB`). `sniff_baseline_jpeg_dct` never returns any other
+    /// value here (4-component CMYK/YCCK is rejected, not represented).
+    pub components: u8,
+}
+
+impl ImageResource {
+    /// Scan raw file bytes for a JPEG **SOF0** (baseline DCT) or **SOF1**
+    /// (extended sequential DCT) marker — the two JPEG variants a PDF
+    /// `/Filter /DCTDecode` XObject can safely wrap verbatim, matching
+    /// upstream SATySFi's own JPEG special-case (`imageInfo.ml`'s bypass of
+    /// full decode/re-encode for `Jpeg`). Returns `None` — meaning "fall
+    /// back to the flattened RGB8 embedding" — for:
+    ///
+    /// - anything that isn't a JPEG at all (no `FFD8` SOI marker);
+    /// - a malformed/truncated JPEG (a marker's declared segment length runs
+    ///   past the end of the buffer, or entropy-coded scan data is reached
+    ///   before any SOF marker was seen);
+    /// - progressive, lossless, arithmetic-coded, or hierarchical JPEGs
+    ///   (any SOF marker other than `0xC0`/`0xC1`) — a real PDF viewer's
+    ///   `DCTDecode` support for these is inconsistent, so this port only
+    ///   trusts the two most common, universally-supported variants;
+    /// - non-8-bit sample precision;
+    /// - anything other than 1 (grayscale) or 3 (YCbCr/RGB) color
+    ///   components — in particular 4-component CMYK/YCCK JPEGs, whose
+    ///   correct PDF embedding depends on an Adobe APP14 marker's transform
+    ///   flag (some CMYK JPEGs store inverted samples) that this port does
+    ///   not attempt to interpret.
+    ///
+    /// `bytes` is consumed (not just borrowed) so the `Some` case can hand
+    /// the original file contents straight into `JpegDct` with no copy.
+    pub fn sniff_baseline_jpeg_dct(bytes: Vec<u8>) -> Option<JpegDct> {
+        if bytes.len() < 4 || bytes[0] != 0xFF || bytes[1] != 0xD8 {
+            return None; // no SOI marker: not a JPEG.
+        }
+        let mut i = 2usize;
+        while i < bytes.len() {
+            if bytes[i] != 0xFF {
+                return None; // not aligned on a marker; bail rather than guess.
+            }
+            // Marker codes may be preceded by any number of 0xFF fill bytes.
+            let mut j = i + 1;
+            while j < bytes.len() && bytes[j] == 0xFF {
+                j += 1;
+            }
+            if j >= bytes.len() {
+                return None;
+            }
+            let marker = bytes[j];
+            i = j + 1;
+            // Standalone markers carry no length-prefixed segment: SOI
+            // (stray, shouldn't recur but is harmless), EOI, TEM, RSTn.
+            if marker == 0xD8 || marker == 0xD9 || marker == 0x01 || (0xD0..=0xD7).contains(&marker)
+            {
+                continue;
+            }
+            if i + 2 > bytes.len() {
+                return None;
+            }
+            let seg_len = u16::from_be_bytes([bytes[i], bytes[i + 1]]) as usize;
+            if seg_len < 2 || i + seg_len > bytes.len() {
+                return None;
+            }
+            if marker == 0xDA {
+                return None; // start-of-scan reached before any SOF: bail.
+            }
+            // SOF0..SOF15 (0xC0..0xCF) except 0xC4 (DHT), 0xC8 (JPG
+            // extension, reserved), 0xCC (DAC) — those codes overlap the
+            // SOF range but aren't frame headers.
+            let is_sof = (0xC0..=0xCF).contains(&marker) && ![0xC4, 0xC8, 0xCC].contains(&marker);
+            if is_sof {
+                if marker != 0xC0 && marker != 0xC1 {
+                    return None; // progressive/lossless/hierarchical: bail.
+                }
+                // Segment payload after the 2-byte length: precision(1),
+                // height(2 BE), width(2 BE), num_components(1).
+                let payload = &bytes[i + 2..i + seg_len];
+                if payload.len() < 6 {
+                    return None;
+                }
+                let precision = payload[0];
+                let components = payload[5];
+                return if precision == 8 && (components == 1 || components == 3) {
+                    Some(JpegDct { bytes, components })
+                } else {
+                    None
+                };
+            }
+            i += seg_len;
+        }
+        None
+    }
+
+    /// The image's intrinsic dimensions for aspect-ratio math
+    /// (`use-image-by-width`, docs/plans/design-load-pdf-image.md §4): pixel
+    /// extents for a raster resource, MediaBox point extents for an
+    /// imported PDF page. Both ratios are dimensionless (px/px or pt/pt), so
+    /// callers can apply the exact same `height = width * ih/iw` formula
+    /// regardless of kind — only the placement CTM (satysfi-pdf) needs to
+    /// know which units these actually are.
+    pub fn intrinsic_dims_pt(&self) -> (f64, f64) {
+        if let Some(pdf) = &self.pdf {
+            let (x0, y0, x1, y1) = pdf.media_box;
+            (x1 - x0, y1 - y0)
+        } else {
+            (self.px_w as f64, self.px_h as f64)
+        }
+    }
 }
 
 /// A milestone-1 subset of `pure_horz_box` from horzBox.ml, keeping its

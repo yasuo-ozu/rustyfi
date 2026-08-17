@@ -14,10 +14,10 @@
 //! Slice 3+ territory — see `emit_box`'s doc comment below.
 //!
 //! **Slice 3** (§Slice 3, "real fonts + math"): `@font-face` data-URI
-//! embedding (`html/fonts.rs`) so text/math runs use the SAME TrueType face
-//! the [`crate::TtfFontStore`] PDF path embeds (metric-faithful
+//! embedding (`fonts.rs`) so text/math runs use the SAME TrueType face
+//! the [`satysfi_pdf::TtfFontStore`] PDF path embeds (metric-faithful
 //! positioning — see this module's `Ctx`/`render_html_ttf_with`), `Image`
-//! boxes as `<img>` data URIs (`html/image.rs`, a hand-rolled uncompressed
+//! boxes as `<img>` data URIs (`image.rs`, a hand-rolled uncompressed
 //! BMP container — no PNG/image-codec dependency), and `Math` glyphs as
 //! positioned `<span>`s (reusing the same run-emission path as
 //! `InnerString`, per the design doc's math row) with `Math.rules` (the
@@ -37,19 +37,16 @@
 //! since Slice 1/2 — see `render_html_impl`'s per-page loop below for the
 //! coordinate-frame reconciliation).
 //!
-//! **Location, deliberately not a new crate.** The design doc specs a
-//! dedicated `satysfi-html` crate, a peer of `satysfi-pdf`. Adding one means
-//! a new workspace member, which means editing the root `Cargo.toml` — off
-//! limits for this slice (a hard project constraint: the root manifest is
-//! reserved for concurrent, unrelated work). This module lives in
-//! `satysfi-pdf` instead, since that crate already depends on
-//! `satysfi-backend` for every box/geometry type used below and is already a
-//! workspace member — no new dependency, no manifest edit. It is written to
-//! be extraction-ready: nothing here touches `pdf_writer` or any other
-//! PDF-specific type, only `satysfi_backend` types and `String` building, so
-//! lifting it into its own `satysfi-html` crate later (per the design doc)
-//! is a pure file move plus a `Cargo.toml`/`pub mod` edit — a DEFERRED
-//! FOLLOW-UP, not attempted here.
+//! **Location.** This is its own `satysfi-html` crate, a peer of
+//! `satysfi-pdf` (per the design doc's original spec, survey #6). It depends
+//! on `satysfi-backend` for every box/geometry type used below, plus
+//! `satysfi-pdf` for [`satysfi_pdf::TtfFontStore`] (the one type this module
+//! reuses rather than re-implements — only its `pub` `file_index`/
+//! `file_bytes` accessors are used, so this is a plain one-way dependency,
+//! not a cycle: `satysfi-pdf` does not depend on `satysfi-html`). Nothing
+//! here touches `pdf_writer` or any other PDF-specific type, only
+//! `satysfi_backend`/`satysfi_pdf::TtfFontStore` types and `String`
+//! building.
 
 mod base64;
 mod fonts;
@@ -61,11 +58,11 @@ use std::collections::BTreeSet;
 use std::fmt::Write as _;
 
 use satysfi_backend::{
-    place_block_at, DocExtras, FontKey, HorzStringInfo, ImageResource, Length, Page, PageGeometry,
-    PureHorzBox, VertBox,
+    place_block_at, Color, DocExtras, FontKey, HorzStringInfo, ImageResource, Length, Page,
+    PageGeometry, PureHorzBox, VertBox,
 };
 
-use crate::ttf::TtfFontStore;
+use satysfi_pdf::TtfFontStore;
 
 /// Slice 1 never actually constructs this — every text run is valid
 /// UTF-8/HTML-escapable, and no font/image embedding (the error-prone parts,
@@ -120,12 +117,12 @@ impl Ctx<'_> {
 /// Serialize typeset pages to a single, self-contained HTML document, using
 /// generic system-font fallback (Slice 1/2 behavior, unchanged): no
 /// `@font-face` block, every run styled by the plain `.run` CSS class. This
-/// is the base-14 twin of [`crate::render_pdf_with`] — pass
+/// is the base-14 twin of [`satysfi_pdf::render_pdf_with`] — pass
 /// [`render_html_ttf_with`] a real [`TtfFontStore`] instead when the
 /// document was typeset against real embedded fonts, for metric-faithful
 /// output (Slice 3, see this module's doc comment).
 ///
-/// Argument-for-argument with [`crate::render_pdf_with`] (`lib.rs:459`):
+/// Argument-for-argument with [`satysfi_pdf::render_pdf_with`] (`lib.rs:459`):
 /// `geometry` (reads only `paper_width`/`paper_height`, exactly like the PDF
 /// writer), `pages` (the post-page-break `Vec<PlacedLine>` per `Page`),
 /// `images` (the document-wide image table — `Image` boxes resolve their
@@ -152,7 +149,7 @@ pub fn render_html(
 }
 
 /// Same as [`render_html`], but rendering under a real [`TtfFontStore`] —
-/// the HTML twin of [`crate::render_pdf_ttf_with`] (`cid.rs`). Every text
+/// the HTML twin of [`satysfi_pdf::render_pdf_ttf_with`] (`cid.rs`). Every text
 /// and math run's `<span>` gets an explicit `font-family` naming the
 /// `@font-face` embedding this function adds to the `<style>` block for
 /// every physical font file the document actually referenced, so the
@@ -347,14 +344,31 @@ fn emit_box(out: &mut String, bx: &PureHorzBox, tx: f64, ty: f64, ctx: &Ctx) {
         } => {
             if let Some(res) = ctx.images.get(image.0) {
                 let top = ty - height.0;
-                let uri = image::data_uri(res);
                 let w = width.0;
                 let h = height.0;
-                let _ = write!(
-                    out,
-                    "<img style=\"position:absolute; left:{tx}pt; top:{top}pt; \
-                     width:{w}pt; height:{h}pt;\" src=\"{uri}\" alt=\"\">\n",
-                );
+                if res.pdf.is_some() {
+                    // `load-pdf-image` (docs/plans/design-load-pdf-image.md
+                    // §3.4): a raster `<img>`/BMP data URI has no samples to
+                    // encode for an imported PDF page (`res.samples` is
+                    // empty). A faithful HTML rendering would need to
+                    // rasterize the page — out of scope here — so this
+                    // emits a bordered placeholder box at the box's
+                    // resolved dimensions instead of silently producing a
+                    // degenerate 0x0 image.
+                    let _ = write!(
+                        out,
+                        "<div style=\"position:absolute; left:{tx}pt; top:{top}pt; \
+                         width:{w}pt; height:{h}pt; box-sizing:border-box; \
+                         border:1px solid #888;\" title=\"PDF page image\"></div>\n",
+                    );
+                } else {
+                    let uri = image::data_uri(res);
+                    let _ = write!(
+                        out,
+                        "<img style=\"position:absolute; left:{tx}pt; top:{top}pt; \
+                         width:{w}pt; height:{h}pt;\" src=\"{uri}\" alt=\"\">\n",
+                    );
+                }
             }
         }
         // §Slice 2: a box carrying resolved `graphics` elements — one
@@ -519,9 +533,16 @@ fn emit_run(out: &mut String, info: &HorzStringInfo, text: &str, tx: f64, top: f
         Some(family) => format!(" font-family:\"{family}\";"),
         None => String::new(),
     };
+    // Non-black only, mirroring both PDF writers' `q…Q`-scoped fill-color
+    // guard, so an all-black document's HTML output is unchanged.
+    let color_style = if info.color != Color::Gray(0.0) {
+        format!(" color:{};", svg::css_color(info.color))
+    } else {
+        String::new()
+    };
     let _ = write!(
         out,
-        "<span class=\"run\" style=\"left:{tx}pt; top:{top}pt; font-size:{size}pt;{family_style}\">{}</span>\n",
+        "<span class=\"run\" style=\"left:{tx}pt; top:{top}pt; font-size:{size}pt;{family_style}{color_style}\">{}</span>\n",
         escape_html(text),
     );
 }

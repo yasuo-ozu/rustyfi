@@ -29,6 +29,7 @@ fn text_run(text: &str) -> PureHorzBox {
             font: FontKey(0),
             size: Length::pt(12.0),
             rising: Length::ZERO,
+            color: Color::Gray(0.0),
         },
         text: text.to_string(),
         width: Length::pt(80.0),
@@ -48,7 +49,7 @@ fn page_with_run(bx: PureHorzBox) -> Page {
 }
 
 fn render(page: &Page) -> String {
-    satysfi_pdf::render_html(&geometry(), std::slice::from_ref(page), &[], &DocExtras::default())
+    satysfi_html::render_html(&geometry(), std::slice::from_ref(page), &[], &DocExtras::default())
         .expect("HTML rendering must succeed")
 }
 
@@ -395,7 +396,7 @@ fn ttf_render_emits_font_face_with_embedded_ttf_and_spans_reference_it() {
     let store = TtfFontStore::load(&path, None, None).expect("load font");
 
     let page = page_with_run(text_run("Hello"));
-    let html = satysfi_pdf::render_html_ttf_with(
+    let html = satysfi_html::render_html_ttf_with(
         &geometry(),
         std::slice::from_ref(&page),
         &store,
@@ -431,7 +432,7 @@ fn ttf_render_emits_font_face_with_embedded_ttf_and_spans_reference_it() {
 fn ttf_render_with_no_runs_emits_no_font_face() {
     let path = need_font!();
     let store = TtfFontStore::load(&path, None, None).expect("load font");
-    let html = satysfi_pdf::render_html_ttf_with(
+    let html = satysfi_html::render_html_ttf_with(
         &geometry(),
         &[],
         &store,
@@ -472,6 +473,8 @@ fn small_image() -> ImageResource {
         ],
         px_w: 2,
         px_h: 2,
+        jpeg_dct: None,
+        pdf: None,
     }
 }
 
@@ -485,7 +488,7 @@ fn image_box_renders_as_an_img_data_uri() {
         image: ImageId(0),
     };
     let page = page_with_run(bx);
-    let html = satysfi_pdf::render_html(
+    let html = satysfi_html::render_html(
         &geometry(),
         std::slice::from_ref(&page),
         &[small_image()],
@@ -543,6 +546,7 @@ fn math_box_renders_glyph_spans_and_fraction_rule() {
                 font,
                 size,
                 rising: Length::ZERO,
+                color: Color::Gray(0.0),
             },
             text: c.to_string(),
             gid: None,
@@ -571,7 +575,7 @@ fn math_box_renders_glyph_spans_and_fraction_rule() {
     };
 
     let page = page_with_run(math);
-    let html = satysfi_pdf::render_html_ttf_with(
+    let html = satysfi_html::render_html_ttf_with(
         &geometry(),
         std::slice::from_ref(&page),
         &store,
@@ -617,7 +621,7 @@ fn pages_with_runs(n: usize) -> Vec<Page> {
 #[test]
 fn two_page_document_renders_two_page_divs() {
     let pages = pages_with_runs(2);
-    let html = satysfi_pdf::render_html(&geometry(), &pages, &[], &DocExtras::default())
+    let html = satysfi_html::render_html(&geometry(), &pages, &[], &DocExtras::default())
         .expect("HTML rendering must succeed");
 
     assert_eq!(
@@ -632,7 +636,7 @@ fn two_page_document_renders_two_page_divs() {
 #[test]
 fn print_css_sizes_the_page_and_breaks_between_pages() {
     let pages = pages_with_runs(2);
-    let html = satysfi_pdf::render_html(&geometry(), &pages, &[], &DocExtras::default())
+    let html = satysfi_html::render_html(&geometry(), &pages, &[], &DocExtras::default())
         .expect("HTML rendering must succeed");
 
     // `@page` pins the printed sheet to the document's own paper size
@@ -661,7 +665,7 @@ fn single_page_document_has_no_page_break_after_rule_match() {
     // since the rule text itself is unconditionally emitted (see the test
     // above) regardless of page count.
     let pages = pages_with_runs(1);
-    let html = satysfi_pdf::render_html(&geometry(), &pages, &[], &DocExtras::default())
+    let html = satysfi_html::render_html(&geometry(), &pages, &[], &DocExtras::default())
         .expect("HTML rendering must succeed");
     assert_eq!(
         html.matches("<div class=\"page\"").count(),
@@ -691,7 +695,7 @@ fn page_graphics_underlay_renders_as_a_flipped_svg_underneath_the_text() {
     )]];
 
     let page = page_with_run(text_run("on top"));
-    let html = satysfi_pdf::render_html(
+    let html = satysfi_html::render_html(
         &geometry(),
         std::slice::from_ref(&page),
         &[],

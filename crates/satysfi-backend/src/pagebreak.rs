@@ -189,8 +189,25 @@ pub fn chop_page(
                 leading,
                 contents,
             } => {
+                // `docs/plans/design-silent-fields.md` FIX 3's page-top glue
+                // suppression: any `VertBox::Skip` accumulated before the
+                // FIRST real line of this page/column (`prev_baseline ==
+                // None`) is discarded, not added to `y0` — mirroring
+                // upstream's page-top glue discard (glue at the very top of
+                // a page/column doesn't accumulate; the OCaml page breaker
+                // drops leading glue the same way TeX drops glue/kerns at
+                // the top of a page). This is what keeps a paragraph's
+                // `paragraph_top` margin from adding a spurious gap above
+                // the first paragraph of a page — without it, wiring
+                // `paragraph_top` in would shift every page's content down
+                // by 18pt. `HookPageBreak`/`FrameStart`/`FrameEnd` markers
+                // above don't consume `pending_skip` and don't set
+                // `placed_real_line`, so a marker-then-skip prefix (e.g. a
+                // `block-frame-breakable`'s `FrameStart` immediately
+                // followed by its `pad_t` skip) is covered by this same
+                // branch too — `prev_baseline` is still `None`.
                 let baseline = match prev_baseline {
-                    None => y0 + pending_skip + *h,
+                    None => y0 + *h,
                     Some(b) => b + leading.max(*h) + pending_skip,
                 };
                 // A committed line's footnotes shrink the usable page
@@ -372,8 +389,16 @@ pub fn place_block_at(origin: (Length, Length), vboxes: Vec<VertBox>) -> Vec<Pla
                 contents,
                 ..
             } => {
+                // Same page/column-top leading-glue suppression as
+                // `chop_page` (`docs/plans/design-silent-fields.md` FIX 3):
+                // a solidified block (header/footer/footnote column) placed
+                // at a fixed origin discards any leading `VertBox::Skip`
+                // before its first real line, so a footer whose content is
+                // built via `line-break` (default `paragraph_top` = 18pt,
+                // e.g. `stdja-mini`'s page-number footer) stays anchored at
+                // its `footer-origin` rather than dropping 18pt below it.
                 let baseline = match prev_baseline {
-                    None => y0 + pending_skip + height,
+                    None => y0 + height,
                     Some(b) => b + leading.max(height) + pending_skip,
                 };
                 pending_skip = Length::ZERO;

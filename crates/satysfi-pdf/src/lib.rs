@@ -6,23 +6,21 @@
 pub mod base14;
 pub mod cid;
 pub mod fonts;
-pub mod html;
 pub mod ttf;
 
 pub use base14::Base14Metrics;
 pub use cid::{render_pdf_ttf, render_pdf_ttf_with};
 pub use fonts::{FontConfigError, FontFlags, FontRegistry, FontSource};
-pub use html::{render_html, render_html_ttf_with, HtmlError};
 pub use ttf::{FontError, TtfFontStore};
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use pdf_writer::types::{ActionType, AnnotationType};
-use pdf_writer::{Content, Finish, Name, Pdf, Rect, Ref, Str, TextStr};
+use pdf_writer::{Content, Filter, Finish, Name, Pdf, Rect, Ref, Str, TextStr};
 use satysfi_backend::{
     place_block_at, Annot, AnnotAction, Closing, Color, DocExtras, DocInfo, GraphicsElem,
-    ImageResource, Length, MathGlyph, NamedDest, OutlineEntry, Page, PageGeometry, Path, PathSeg,
-    PureHorzBox, VertBox,
+    ImageResource, Length, MathGlyph, NamedDest, ObjRepr, OutlineEntry, Page, PageGeometry, Path,
+    PathSeg, PureHorzBox, VertBox,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -119,12 +117,19 @@ fn image_res_name(id: usize) -> String {
 
 /// Write one Image XObject per id in `used`, returning each id's freshly
 /// allocated indirect reference for the caller's `/XObject` resource
-/// dictionaries. Slice 1 always flattens to flat, uncompressed 8-bit
-/// `DeviceRGB` samples (`ImageResource`'s doc comment in satysfi-backend
-/// covers the alpha-dropping/JPEG-`DCTDecode`-passthrough caveats) — no
-/// `/Filter` at all, matching this crate's existing "uncompressed content
-/// streams" style (see this module's doc comment) rather than adding a
-/// `FlateDecode`/`DCTDecode` encoding step.
+/// dictionaries.
+///
+/// **JPEG DCTDecode passthrough.** When `im.jpeg_dct` is `Some` (`load-image`
+/// recognized the source file as a baseline/extended-sequential 8-bit
+/// JPEG — see `ImageResource::sniff_baseline_jpeg_dct`), the ORIGINAL,
+/// still-DCT-encoded file bytes are embedded verbatim with `/Filter
+/// /DCTDecode` and a `/ColorSpace` chosen from the JPEG's own component
+/// count (`/DeviceGray` for 1, `/DeviceRGB` for 3) — no decode/re-encode,
+/// matching upstream SATySFi's own JPEG special-case. Every other image
+/// (non-JPEG, or a JPEG variant this port doesn't map to a PDF colorspace)
+/// keeps Slice 1's original path: flat, uncompressed 8-bit `DeviceRGB`
+/// samples with no `/Filter` at all, matching this crate's existing
+/// "uncompressed content streams" style (see this module's doc comment).
 fn write_image_xobjects(
     pdf: &mut Pdf,
     mut next_ref: impl FnMut() -> Ref,
@@ -140,14 +145,168 @@ fn write_image_xobjects(
             // missing one image is a far more graceful failure than a panic.
             continue;
         };
+        if im.pdf.is_some() {
+            // An imported PDF page (`load-pdf-image`) is NOT a raster image —
+            // `write_form_xobjects` (below) handles it as a Form XObject
+            // instead. Skipping here also keeps `used_images`/`scan_box_images`
+            // a single shared scan for both writers rather than needing a
+            // second, kind-aware traversal.
+            continue;
+        }
         let r = next_ref();
         refs.insert(id, r);
-        let mut xo = pdf.image_xobject(r, &im.samples);
-        xo.width(im.px_w as i32);
-        xo.height(im.px_h as i32);
-        xo.color_space().device_rgb();
-        xo.bits_per_component(8);
-        xo.finish();
+        if let Some(dct) = &im.jpeg_dct {
+            let mut xo = pdf.image_xobject(r, &dct.bytes);
+            xo.filter(Filter::DctDecode);
+            xo.width(im.px_w as i32);
+            xo.height(im.px_h as i32);
+            if dct.components == 1 {
+                xo.color_space().device_gray();
+            } else {
+                xo.color_space().device_rgb();
+            }
+            xo.bits_per_component(8);
+            xo.finish();
+        } else {
+            let mut xo = pdf.image_xobject(r, &im.samples);
+            xo.width(im.px_w as i32);
+            xo.height(im.px_h as i32);
+            xo.color_space().device_rgb();
+            xo.bits_per_component(8);
+            xo.finish();
+        }
+    }
+    refs
+}
+
+// ============================================================================
+// Imported PDF pages as Form XObjects (`load-pdf-image`,
+// docs/plans/design-load-pdf-image.md §3). Shared by both writers exactly
+// like the raster Image XObject support above.
+// ============================================================================
+
+/// The PDF resource name for form-embedded PDF-page id `id` (e.g. `Fm3`) —
+/// disjoint from `image_res_name`'s `ImN` so Image and Form XObjects never
+/// collide in the shared `/XObject` resource dictionary (§3.1; PDF's
+/// `/XObject` dict does not distinguish Image vs Form — the `/Subtype`
+/// lives inside each stream).
+fn form_res_name(id: usize) -> String {
+    format!("Fm{id}")
+}
+
+/// Re-emit one neutral `ObjRepr` value into a fresh `Obj` writer, remapping
+/// any `Ref(local_id)` through `remap` (an unresolved local id — should not
+/// happen, since `remap` covers every non-zero-local-id entry the importer
+/// recorded — degrades to `Null` rather than panicking). A `Stream` payload
+/// cannot legally appear here (streams must be indirect objects in PDF; the
+/// importer only ever produces one at the top level of an indirect entry,
+/// reached via `write_pdf_obj`, never nested) — defensively written as
+/// `Null` if it somehow does.
+fn write_pdf_obj_value(obj: pdf_writer::Obj<'_>, repr: &ObjRepr, remap: &BTreeMap<u32, Ref>) {
+    match repr {
+        ObjRepr::Null => obj.primitive(pdf_writer::Null),
+        ObjRepr::Bool(b) => obj.primitive(*b),
+        // PDF integers in a resource subtree (font descriptors, array
+        // lengths, flags, ...) fit comfortably in i32; `pdf-writer` only
+        // implements `Primitive` for `i32`.
+        ObjRepr::Int(n) => obj.primitive(*n as i32),
+        ObjRepr::Real(r) => obj.primitive(*r as f32),
+        ObjRepr::Name(n) => obj.primitive(Name(n)),
+        ObjRepr::String(s) => obj.primitive(Str(s)),
+        ObjRepr::Ref(local_id) => match remap.get(local_id) {
+            Some(r) => obj.primitive(*r),
+            None => obj.primitive(pdf_writer::Null),
+        },
+        ObjRepr::Array(items) => {
+            let mut arr = obj.array();
+            for item in items {
+                write_pdf_obj_value(arr.push(), item, remap);
+            }
+            arr.finish();
+        }
+        ObjRepr::Dict(entries) => {
+            let mut dict = obj.dict();
+            for (k, v) in entries {
+                write_pdf_obj_value(dict.insert(Name(k)), v, remap);
+            }
+            dict.finish();
+        }
+        ObjRepr::Stream(..) => obj.primitive(pdf_writer::Null),
+    }
+}
+
+/// Write one imported object (§3.1's `collect_direct_objects` /
+/// `Pdf.addobj` analogue) at its freshly allocated `out_ref`: a `Stream`
+/// entry becomes an indirect stream (dict entries copied verbatim, minus
+/// `/Length` which `pdf-writer` derives); anything else becomes a plain
+/// indirect object.
+fn write_pdf_obj(pdf: &mut Pdf, out_ref: Ref, repr: &ObjRepr, remap: &BTreeMap<u32, Ref>) {
+    match repr {
+        ObjRepr::Stream(entries, bytes) => {
+            let mut stream = pdf.stream(out_ref, bytes);
+            for (k, v) in entries {
+                write_pdf_obj_value(stream.insert(Name(k)), v, remap);
+            }
+            stream.finish();
+        }
+        other => write_pdf_obj_value(pdf.indirect(out_ref), other, remap),
+    }
+}
+
+/// Write one Form XObject per id in `used` whose `ImageResource` carries a
+/// `pdf` payload (`load-pdf-image`) — ids without one (ordinary raster
+/// images) are skipped; `write_image_xobjects` already handled those.
+///
+/// Per id: allocate a fresh output `Ref` for every non-zero local id in
+/// `PdfPageResource.resources` (the imported object graph), write each of
+/// those objects with its references remapped, then emit the page's own
+/// content stream as a `/Subtype /Form` XObject whose `/BBox` is the source
+/// `/MediaBox` and whose `/Resources` is the (also remapped) local-id-0
+/// root dictionary — the direct analogue of upstream `loadPdf.ml`'s
+/// `xobject_of_page` (design doc §3.1).
+fn write_form_xobjects(
+    pdf: &mut Pdf,
+    mut next_ref: impl FnMut() -> Ref,
+    images: &[ImageResource],
+    used: &BTreeSet<usize>,
+) -> BTreeMap<usize, Ref> {
+    let mut refs = BTreeMap::new();
+    for &id in used {
+        let Some(im) = images.get(id) else { continue };
+        let Some(pdf_res) = &im.pdf else { continue };
+
+        let mut remap: BTreeMap<u32, Ref> = BTreeMap::new();
+        let mut root_repr: Option<&ObjRepr> = None;
+        for (local_id, repr) in &pdf_res.resources.0 {
+            if *local_id == 0 {
+                root_repr = Some(repr);
+            } else {
+                remap.entry(*local_id).or_insert_with(&mut next_ref);
+            }
+        }
+        for (local_id, repr) in &pdf_res.resources.0 {
+            if *local_id != 0 {
+                write_pdf_obj(pdf, remap[local_id], repr, &remap);
+            }
+        }
+
+        let form_ref = next_ref();
+        let (x0, y0, x1, y1) = pdf_res.media_box;
+        {
+            let mut fx = pdf.form_xobject(form_ref, &pdf_res.content);
+            fx.bbox(Rect::new(x0 as f32, y0 as f32, x1 as f32, y1 as f32));
+            // Explicit identity `/Matrix` (§3.1: form-space == the source
+            // page's own MediaBox space, no extra transform beyond `/BBox`)
+            // — written out rather than left implicit so the object is
+            // self-describing; the actual box-to-page scale/translate lives
+            // entirely in the placement `cm` operator (`place_form`, §3.3).
+            fx.matrix([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+            if let Some(root) = root_repr {
+                write_pdf_obj_value(fx.insert(Name(b"Resources")), root, &remap);
+            }
+            fx.finish();
+        }
+        refs.insert(id, form_ref);
     }
     refs
 }
@@ -166,6 +325,45 @@ fn place_image(content: &mut Content, id: usize, tx: f32, ty: f32, width: f32, h
     content.save_state();
     content.transform([width, 0.0, 0.0, height, tx, ty]);
     content.x_object(Name(image_res_name(id).as_bytes()));
+    content.restore_state();
+}
+
+/// Emit the content-stream operators that place one imported-PDF-page Form
+/// box (§3.3): `q  sx 0 0 sy (tx - sx*x0) (ty - sy*y0) cm  /FmN Do  Q`.
+///
+/// Unlike an Image XObject (which draws into the unit square, so
+/// `place_image`'s matrix is a plain `[w, 0, 0, h, tx, ty]` scale), a Form
+/// XObject draws in its own user space — the source page's `/MediaBox`
+/// coordinates — so the CTM must map that box onto the placed
+/// `(tx, ty, w, h)` box: scale by `w/(x1-x0)`, `h/(y1-y0)` and translate the
+/// MediaBox's own origin `(x0, y0)` to `(tx, ty)`. `pdf-writer`'s
+/// `FormXObject::bbox` already clips to `/MediaBox` in the form's own
+/// (unscaled) user space, so this CTM is the only place the box-to-page
+/// scale factor is applied.
+fn place_form(
+    content: &mut Content,
+    id: usize,
+    tx: f32,
+    ty: f32,
+    width: f32,
+    height: f32,
+    media_box: (f64, f64, f64, f64),
+) {
+    let (x0, y0, x1, y1) = media_box;
+    let bbox_w = (x1 - x0) as f32;
+    let bbox_h = (y1 - y0) as f32;
+    let sx = if bbox_w != 0.0 { width / bbox_w } else { 1.0 };
+    let sy = if bbox_h != 0.0 { height / bbox_h } else { 1.0 };
+    content.save_state();
+    content.transform([
+        sx,
+        0.0,
+        0.0,
+        sy,
+        tx - sx * x0 as f32,
+        ty - sy * y0 as f32,
+    ]);
+    content.x_object(Name(form_res_name(id).as_bytes()));
     content.restore_state();
 }
 
@@ -195,6 +393,14 @@ pub(crate) fn place_math(
     for glyph in glyphs {
         let encoded = encode(glyph)?;
         let res_name = name_for(glyph.info.font);
+        // Shared by both writers (`crate::emit_box` and `cid::emit_box`), so
+        // wrapping color here once covers colored math glyphs for both — see
+        // the `InnerString` arms' identical non-black-only `q…Q` guard.
+        let colored = glyph.info.color != Color::Gray(0.0);
+        if colored {
+            content.save_state();
+            set_fill_color(content, glyph.info.color);
+        }
         content.begin_text();
         content.set_font(Name(res_name.as_bytes()), glyph.info.size.0 as f32);
         content.next_line(
@@ -203,6 +409,9 @@ pub(crate) fn place_math(
         );
         content.show(Str(&encoded));
         content.end_text();
+        if colored {
+            content.restore_state();
+        }
     }
     Ok(())
 }
@@ -477,9 +686,13 @@ pub fn render_pdf_with(
     let font_ids: Vec<Ref> = (0..3).map(|_| next_ref()).collect();
 
     // One Image XObject per image actually placed on a page (Slice 1:
-    // raster images, docs/plans/math-images.md).
+    // raster images, docs/plans/math-images.md), plus one Form XObject per
+    // imported PDF page (`load-pdf-image`, docs/plans/design-load-pdf-image.md
+    // §3) — same `used` set, same `next_ref` allocator, disjoint `Im`/`Fm`
+    // resource names.
     let used = used_images(pages);
     let img_refs = write_image_xobjects(&mut pdf, &mut next_ref, images, &used);
+    let form_refs = write_form_xobjects(&mut pdf, &mut next_ref, images, &used);
 
     let page_ids: Vec<Ref> = pages.iter().map(|_| next_ref()).collect();
     let content_ids: Vec<Ref> = pages.iter().map(|_| next_ref()).collect();
@@ -526,7 +739,7 @@ pub fn render_pdf_with(
         pages.iter().zip(&page_ids).zip(&content_ids).enumerate()
     {
         let overlay = extras.page_graphics.get(i).map(|v| v.as_slice()).unwrap_or(&[]);
-        let content = page_content(page, paper_h, overlay)?;
+        let content = page_content(page, paper_h, overlay, images)?;
         pdf.stream(content_id, &content);
 
         let mut p = pdf.page(page_id);
@@ -546,10 +759,13 @@ pub fn render_pdf_with(
         // three base fonts above already make (a page that never actually
         // shows a given image just leaves its resource entry unused, which
         // PDF permits).
-        if !img_refs.is_empty() {
+        if !img_refs.is_empty() || !form_refs.is_empty() {
             let mut x_objects = resources.x_objects();
             for (&id, &r) in &img_refs {
                 x_objects.pair(Name(image_res_name(id).as_bytes()), r);
+            }
+            for (&id, &r) in &form_refs {
+                x_objects.pair(Name(form_res_name(id).as_bytes()), r);
             }
             x_objects.finish();
         }
@@ -561,24 +777,34 @@ pub fn render_pdf_with(
 }
 
 /// Build one page's content stream: `BT … Tf … Td … Tj … ET` runs for text
-/// and `q … cm /ImN Do Q` runs for images, with the y axis flipped from
-/// page coordinates (downward) to PDF (upward). `overlay` (§D deco
-/// graphics, already in absolute PDF y-up page coordinates — see
-/// `fire_hooks`) is drawn FIRST, so it sits under the page's text/images
-/// (background fills/borders).
-fn page_content(page: &Page, paper_h: f32, overlay: &[GraphicsElem]) -> Result<Vec<u8>, PdfError> {
+/// and `q … cm /ImN Do Q` / `q … cm /FmN Do Q` runs for raster
+/// images / imported PDF pages, with the y axis flipped from page
+/// coordinates (downward) to PDF (upward). `overlay` (§D deco graphics,
+/// already in absolute PDF y-up page coordinates — see `fire_hooks`) is
+/// drawn FIRST, so it sits under the page's text/images (background
+/// fills/borders). `images` (the document-wide image table) is only
+/// consulted to tell an ordinary raster `Image` box from an imported-PDF-page
+/// one (`place_image` vs `place_form`) — see `emit_box`'s `Image` arm.
+fn page_content(
+    page: &Page,
+    paper_h: f32,
+    overlay: &[GraphicsElem],
+    images: &[ImageResource],
+) -> Result<Vec<u8>, PdfError> {
     let mut content = Content::new();
     // `place_graphics` emits its `q`/`cm`/`Q` wrapper UNCONDITIONALLY, even
     // for an empty slice — guard it so an extras-free (or hook-free) page's
     // content stream stays byte-identical to before this slice (§A9's
     // byte-identity floor).
     if !overlay.is_empty() {
-        place_graphics(&mut content, overlay, 0.0, 0.0, &mut |c, bx, x, y| emit_box(c, bx, x, y))?;
+        place_graphics(&mut content, overlay, 0.0, 0.0, &mut |c, bx, x, y| {
+            emit_box(c, bx, x, y, images)
+        })?;
     }
     for line in &page.lines {
         let y = paper_h - line.baseline_y.0 as f32;
         for (dx, bx) in &line.contents {
-            emit_box(&mut content, bx, (line.x + *dx).0 as f32, y)?;
+            emit_box(&mut content, bx, (line.x + *dx).0 as f32, y, images)?;
         }
     }
     Ok(content.finish().into_vec())
@@ -603,11 +829,22 @@ fn page_content(page: &Page, paper_h: f32, overlay: &[GraphicsElem]) -> Result<V
 /// `cm` translate to `(tx, ty)` positions its box-local y-up path
 /// coordinates the identical way a standalone `inline-graphics` box does —
 /// cell text and rules land in the same frame this way.
-fn emit_box(content: &mut Content, bx: &PureHorzBox, tx: f32, ty: f32) -> Result<(), PdfError> {
+fn emit_box(
+    content: &mut Content,
+    bx: &PureHorzBox,
+    tx: f32,
+    ty: f32,
+    images: &[ImageResource],
+) -> Result<(), PdfError> {
     match bx {
         PureHorzBox::InnerString { info, text, .. } => {
             let encoded = winansi(text)?;
             let font_idx = (info.font.0 as usize).min(FONT_RES_NAMES.len() - 1);
+            let colored = info.color != Color::Gray(0.0);
+            if colored {
+                content.save_state();
+                set_fill_color(content, info.color);
+            }
             content.begin_text();
             content.set_font(
                 Name(FONT_RES_NAMES[font_idx].as_bytes()),
@@ -616,16 +853,37 @@ fn emit_box(content: &mut Content, bx: &PureHorzBox, tx: f32, ty: f32) -> Result
             content.next_line(tx, ty + info.rising.0 as f32);
             content.show(Str(&encoded));
             content.end_text();
+            if colored {
+                content.restore_state();
+            }
         }
         PureHorzBox::Image {
             width,
             height,
             image,
         } => {
-            place_image(content, image.0, tx, ty, width.0 as f32, height.0 as f32);
+            // `load-pdf-image` (docs/plans/design-load-pdf-image.md §3.3):
+            // an imported PDF page is placed as a Form XObject (its own
+            // MediaBox-to-box CTM), not an Image XObject — everything else
+            // about the box (width/height already resolved by
+            // `use-image-by-width`) is identical between the two kinds.
+            match images.get(image.0).and_then(|im| im.pdf.as_ref()) {
+                Some(pdf_res) => place_form(
+                    content,
+                    image.0,
+                    tx,
+                    ty,
+                    width.0 as f32,
+                    height.0 as f32,
+                    pdf_res.media_box,
+                ),
+                None => place_image(content, image.0, tx, ty, width.0 as f32, height.0 as f32),
+            }
         }
         PureHorzBox::Graphics { elems, .. } => {
-            place_graphics(content, elems, tx, ty, &mut |c, bx, x, y| emit_box(c, bx, x, y))?;
+            place_graphics(content, elems, tx, ty, &mut |c, bx, x, y| {
+                emit_box(c, bx, x, y, images)
+            })?;
         }
         PureHorzBox::Math { glyphs, rules, .. } => {
             // base-14 never sees `gid: Some(_)` (no provider here overrides
@@ -641,7 +899,9 @@ fn emit_box(content: &mut Content, bx: &PureHorzBox, tx: f32, ty: f32) -> Result
             // the SAME already-flipped anchor `place_math` just used for the
             // glyphs (see `place_graphics`'s own doc comment on why no
             // second y-flip belongs here).
-            place_graphics(content, rules, tx, ty, &mut |c, bx, x, y| emit_box(c, bx, x, y))?;
+            place_graphics(content, rules, tx, ty, &mut |c, bx, x, y| {
+                emit_box(c, bx, x, y, images)
+            })?;
         }
         PureHorzBox::Tabular(tab) => {
             for cell in &tab.cells {
@@ -651,13 +911,16 @@ fn emit_box(content: &mut Content, bx: &PureHorzBox, tx: f32, ty: f32) -> Result
                         cbx,
                         tx + (cell.x + *cdx).0 as f32,
                         ty + cell.baseline_y.0 as f32,
+                        images,
                     )?;
                 }
             }
-            place_graphics(content, &tab.rules, tx, ty, &mut |c, bx, x, y| emit_box(c, bx, x, y))?;
+            place_graphics(content, &tab.rules, tx, ty, &mut |c, bx, x, y| {
+                emit_box(c, bx, x, y, images)
+            })?;
         }
         PureHorzBox::EmbeddedBlock { block, .. } => {
-            place_embedded_block(block, tx, ty, |cbx, x, y| emit_box(content, cbx, x, y))?;
+            place_embedded_block(block, tx, ty, |cbx, x, y| emit_box(content, cbx, x, y, images))?;
         }
         // §D: an inline frame's contents, on the frame's own baseline —
         // mirrors the `Tabular` recursion above. The frame's deco graphics
@@ -666,7 +929,7 @@ fn emit_box(content: &mut Content, bx: &PureHorzBox, tx: f32, ty: f32) -> Result
         // (`page_content`'s `overlay` prologue).
         PureHorzBox::Frame { contents, .. } => {
             for (dx, cbx) in contents {
-                emit_box(content, cbx, tx + dx.0 as f32, ty)?;
+                emit_box(content, cbx, tx + dx.0 as f32, ty, images)?;
             }
         }
         _ => {}
@@ -777,7 +1040,7 @@ pub(crate) fn place_graphics(
     Ok(())
 }
 
-fn set_fill_color(content: &mut Content, color: Color) {
+pub(crate) fn set_fill_color(content: &mut Content, color: Color) {
     match color {
         Color::Gray(g) => content.set_fill_gray(g as f32),
         Color::Rgb(r, g, b) => content.set_fill_rgb(r as f32, g as f32, b as f32),

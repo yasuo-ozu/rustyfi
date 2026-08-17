@@ -45,6 +45,19 @@ fn fixture_path() -> String {
         .to_string()
 }
 
+/// The checked-in JPEG fixture (JPEG DCTDecode passthrough slice): a tiny
+/// 8x4 baseline (SOF0, 3-component YCbCr/RGB) JPEG, generated with Pillow —
+/// same pixel dimensions as `dot.png` above so the two tests are directly
+/// comparable, deliberately NOT square for the same reason `dot.png` isn't
+/// (see `satysfi-lang/tests/images.rs`'s `fixture_path` doc comment).
+fn jpeg_fixture_path() -> String {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/dot.jpg")
+        .to_str()
+        .expect("fixture path must be valid UTF-8")
+        .to_string()
+}
+
 /// `document`/`+p`/`\emph` are no longer hardcoded Rust natives (phase 4 of
 /// the satysfi-lang port): they're ordinary bindings in the real
 /// `stdja-mini` stdlib package (`lib-satysfi/dist/packages/stdja-mini.satyh`).
@@ -143,4 +156,79 @@ fn text_only_document_has_no_xobject_and_is_unaffected_by_the_images_parameter()
     let text = String::from_utf8_lossy(&bytes);
     assert!(!text.contains("/XObject"), "no image was ever placed: {text}");
     assert!(!text.contains("/Subtype /Image"));
+}
+
+// ============================================================================
+// JPEG DCTDecode passthrough
+// ============================================================================
+
+#[test]
+fn jpeg_image_embeds_via_dctdecode_passthrough_not_a_flate_reencode() {
+    // Same shape as `image_in_a_paragraph_renders_as_a_pdf_image_xobject`
+    // above, but with the JPEG fixture instead of the PNG one.
+    let src = "let-inline ctx \\fig it = use-image-by-width (load-image `__FIXTURE__`) 40pt
+         in
+         document (||) '< +p { here: \\fig{ignored} done } >"
+        .replace("__FIXTURE__", &jpeg_fixture_path());
+
+    let doc = compile_document_with_stdlib(&src);
+    assert_eq!(doc.images.len(), 1);
+    // The eager RGB8 decode (still needed for `use-image-by-width`'s
+    // aspect-ratio math and the HTML backend) sees the same 8x4 pixel grid
+    // `dot.png` does.
+    assert_eq!(doc.images[0].px_w, 8);
+    assert_eq!(doc.images[0].px_h, 4);
+    // The JPEG-specific passthrough metadata (`ImageResource::jpeg_dct`)
+    // must ALSO be present: `dot.jpg` is a baseline (SOF0), 8-bit,
+    // 3-component YCbCr/RGB JPEG, exactly what `sniff_baseline_jpeg_dct`
+    // accepts.
+    let dct = doc.images[0]
+        .jpeg_dct
+        .as_ref()
+        .expect("a baseline JPEG source must record jpeg_dct");
+    assert_eq!(dct.components, 3, "dot.jpg is a 3-component YCbCr/RGB JPEG");
+
+    let bytes = satysfi_pdf::render_pdf(&doc.geometry, &doc.pages, &doc.images)
+        .expect("render_pdf must succeed with a JPEG Image box present");
+    assert!(bytes.starts_with(b"%PDF-"));
+
+    let text = String::from_utf8_lossy(&bytes);
+    assert!(text.contains("/Subtype /Image"));
+    assert!(text.contains("/XObject"));
+    assert!(text.contains(" Do"));
+    assert!(
+        text.contains("/Filter /DCTDecode"),
+        "expected the JPEG to be embedded via a DCTDecode passthrough: {text}"
+    );
+    assert!(text.contains("/DeviceRGB"), "3-component JPEG maps to DeviceRGB: {text}");
+    assert!(text.contains("/BitsPerComponent 8"));
+    assert!(
+        !text.contains("/FlateDecode"),
+        "a DCTDecode passthrough image must not ALSO be FlateDecode re-encoded: {text}"
+    );
+
+    // The embedded XObject stream must be the ORIGINAL JPEG file's bytes,
+    // verbatim — not a decode-then-recompress. This writer emits streams
+    // uncompressed at the PDF-container level (no filter chaining on top of
+    // `/Filter /DCTDecode`), so the fixture's exact byte sequence must
+    // appear as a contiguous run inside the PDF output.
+    let original = std::fs::read(jpeg_fixture_path()).expect("fixture must be readable");
+    let embedded_verbatim = bytes.windows(original.len()).any(|w| w == original.as_slice());
+    assert!(
+        embedded_verbatim,
+        "expected the original {}-byte JPEG embedded verbatim in the PDF, not a re-encoded copy",
+        original.len()
+    );
+
+    // And to rule out a coincidental match against the flattened,
+    // decode-then-reencode form: 8x4 RGB8 with no padding is only 96 bytes,
+    // far shorter than (and byte-for-byte different from) the original
+    // JPEG file — so this is genuinely asserting "original JPEG size", not
+    // "decoded RGB size", per this slice's whole point.
+    let decoded_rgb_len = 8 * 4 * 3;
+    assert_ne!(
+        original.len(),
+        decoded_rgb_len,
+        "sanity: fixture's JPEG size must differ from its flattened RGB8 size"
+    );
 }

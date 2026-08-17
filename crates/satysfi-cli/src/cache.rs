@@ -124,6 +124,15 @@ impl Cache {
 ///    document/version/font would collide on the same key, so a hit from one
 ///    format would write the OTHER format's bytes to the requested output
 ///    (wrong extension, unparseable content).
+/// 8. (phase-7c saphe solver, C3 — `docs/plans/design-saphe-solver.md` §5.3)
+///    `deps_lock` — the resolved `Satyrfile.lock`'s
+///    [`satysfi_satyrographos::Lockfile::digest`], when the compile is
+///    driven by a solved package-manager lock (Envelopes/manifest mode);
+///    `None` when no lock is in play. Without this, a `saphe update` that
+///    changes a locked package's version — but leaves every already-resolved
+///    `@require:`/`use` *input file* byte-identical — would silently keep
+///    serving the OLD lock's cached render, since nothing else in this key
+///    would have changed.
 ///
 /// The loader does not retain raw file bytes, so each file is re-read from its
 /// canonical path here. Length-prefixing makes the concatenation unambiguous
@@ -136,6 +145,7 @@ pub fn compute_key(
     entry: &Path,
     font_store: Option<&satysfi_pdf::TtfFontStore>,
     format: OutputFormat,
+    deps_lock: Option<&str>,
 ) -> Option<String> {
     hash_inputs(
         program.files.iter().map(|f| f.path.as_path()),
@@ -144,6 +154,7 @@ pub fn compute_key(
         entry,
         font_store,
         format,
+        deps_lock,
     )
 }
 
@@ -157,6 +168,7 @@ fn hash_inputs<'a>(
     entry: &Path,
     font_store: Option<&satysfi_pdf::TtfFontStore>,
     format: OutputFormat,
+    deps_lock: Option<&str>,
 ) -> Option<String> {
     let mut h = Sha256::new();
     h.update(b"satysfi-rust-compile-cache\x00v2\x00");
@@ -190,6 +202,14 @@ fn hash_inputs<'a>(
     }
     h.update(b"\x00format\x00");
     h.update(format.cache_tag().as_bytes());
+    h.update(b"\x00deps_lock\x00");
+    match deps_lock {
+        Some(digest) => {
+            h.update(b"\x01");
+            h.update(digest.as_bytes());
+        }
+        None => h.update(b"\x00"),
+    }
     Some(hex(&h.finalize()))
 }
 
@@ -274,8 +294,8 @@ mod tests {
         let dir = scratch();
         let a = dir.join("a.saty");
         std::fs::write(&a, b"@require: foo\ndocument (||) '<>\n").unwrap();
-        let k1 = hash_inputs([a.as_path()].into_iter(), "0.1.0", SatysfiVersion::DEFAULT, &a, None, OutputFormat::Pdf).unwrap();
-        let k2 = hash_inputs([a.as_path()].into_iter(), "0.1.0", SatysfiVersion::DEFAULT, &a, None, OutputFormat::Pdf).unwrap();
+        let k1 = hash_inputs([a.as_path()].into_iter(), "0.1.0", SatysfiVersion::DEFAULT, &a, None, OutputFormat::Pdf, None).unwrap();
+        let k2 = hash_inputs([a.as_path()].into_iter(), "0.1.0", SatysfiVersion::DEFAULT, &a, None, OutputFormat::Pdf, None).unwrap();
         assert_eq!(k1, k2, "same inputs must hash identically");
         assert_eq!(k1.len(), 64, "sha-256 hex is 64 chars");
         std::fs::remove_dir_all(&dir).ok();
@@ -286,9 +306,9 @@ mod tests {
         let dir = scratch();
         let a = dir.join("a.saty");
         std::fs::write(&a, b"document (||) '<>\n").unwrap();
-        let before = hash_inputs([a.as_path()].into_iter(), "0.1.0", SatysfiVersion::DEFAULT, &a, None, OutputFormat::Pdf).unwrap();
+        let before = hash_inputs([a.as_path()].into_iter(), "0.1.0", SatysfiVersion::DEFAULT, &a, None, OutputFormat::Pdf, None).unwrap();
         std::fs::write(&a, b"document (||) '< >\n").unwrap();
-        let after = hash_inputs([a.as_path()].into_iter(), "0.1.0", SatysfiVersion::DEFAULT, &a, None, OutputFormat::Pdf).unwrap();
+        let after = hash_inputs([a.as_path()].into_iter(), "0.1.0", SatysfiVersion::DEFAULT, &a, None, OutputFormat::Pdf, None).unwrap();
         assert_ne!(before, after, "a one-byte edit must change the key");
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -298,8 +318,8 @@ mod tests {
         let dir = scratch();
         let a = dir.join("a.saty");
         std::fs::write(&a, b"document (||) '<>\n").unwrap();
-        let v1 = hash_inputs([a.as_path()].into_iter(), "0.1.0", SatysfiVersion::DEFAULT, &a, None, OutputFormat::Pdf).unwrap();
-        let v2 = hash_inputs([a.as_path()].into_iter(), "0.2.0", SatysfiVersion::DEFAULT, &a, None, OutputFormat::Pdf).unwrap();
+        let v1 = hash_inputs([a.as_path()].into_iter(), "0.1.0", SatysfiVersion::DEFAULT, &a, None, OutputFormat::Pdf, None).unwrap();
+        let v2 = hash_inputs([a.as_path()].into_iter(), "0.2.0", SatysfiVersion::DEFAULT, &a, None, OutputFormat::Pdf, None).unwrap();
         assert_ne!(v1, v2, "a compiler-version bump must invalidate the key");
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -311,7 +331,7 @@ mod tests {
         let b = dir.join("b.satyh");
         std::fs::write(&a, b"document (||) '<>\n").unwrap();
         std::fs::write(&b, b"let x = 1\n").unwrap();
-        let one = hash_inputs([a.as_path()].into_iter(), "0.1.0", SatysfiVersion::DEFAULT, &a, None, OutputFormat::Pdf).unwrap();
+        let one = hash_inputs([a.as_path()].into_iter(), "0.1.0", SatysfiVersion::DEFAULT, &a, None, OutputFormat::Pdf, None).unwrap();
         let two = hash_inputs(
             [b.as_path(), a.as_path()].into_iter(),
             "0.1.0",
@@ -319,6 +339,7 @@ mod tests {
             &a,
             None,
             OutputFormat::Pdf,
+            None,
         )
         .unwrap();
         assert_ne!(one, two, "adding a resolved dependency must change the key");
@@ -345,7 +366,7 @@ mod tests {
         let store = satysfi_pdf::TtfFontStore::load(&font_path, None, None).expect("load font");
 
         let without_font =
-            hash_inputs([a.as_path()].into_iter(), "0.1.0", SatysfiVersion::DEFAULT, &a, None, OutputFormat::Pdf)
+            hash_inputs([a.as_path()].into_iter(), "0.1.0", SatysfiVersion::DEFAULT, &a, None, OutputFormat::Pdf, None)
                 .unwrap();
         let with_font = hash_inputs(
             [a.as_path()].into_iter(),
@@ -354,6 +375,7 @@ mod tests {
             &a,
             Some(&store),
             OutputFormat::Pdf,
+            None,
         )
         .unwrap();
         assert_ne!(
@@ -374,9 +396,46 @@ mod tests {
         let dir = scratch();
         let a = dir.join("a.saty");
         std::fs::write(&a, b"document (||) '<>\n").unwrap();
-        let pdf = hash_inputs([a.as_path()].into_iter(), "0.1.0", SatysfiVersion::DEFAULT, &a, None, OutputFormat::Pdf).unwrap();
-        let html = hash_inputs([a.as_path()].into_iter(), "0.1.0", SatysfiVersion::DEFAULT, &a, None, OutputFormat::Html).unwrap();
+        let pdf = hash_inputs([a.as_path()].into_iter(), "0.1.0", SatysfiVersion::DEFAULT, &a, None, OutputFormat::Pdf, None).unwrap();
+        let html = hash_inputs([a.as_path()].into_iter(), "0.1.0", SatysfiVersion::DEFAULT, &a, None, OutputFormat::Html, None).unwrap();
         assert_ne!(pdf, html, "--format pdf and --format html must hash to different keys");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Phase-7c saphe solver, C3: the resolved dependency lock's digest must
+    /// be part of the key — otherwise re-solving to a different locked
+    /// version, with the document's own bytes unchanged, would silently keep
+    /// serving a stale cached render.
+    #[test]
+    fn key_changes_with_deps_lock_digest() {
+        let dir = scratch();
+        let a = dir.join("a.saty");
+        std::fs::write(&a, b"document (||) '<>\n").unwrap();
+        let no_lock =
+            hash_inputs([a.as_path()].into_iter(), "0.1.0", SatysfiVersion::DEFAULT, &a, None, OutputFormat::Pdf, None)
+                .unwrap();
+        let lock_a = hash_inputs(
+            [a.as_path()].into_iter(),
+            "0.1.0",
+            SatysfiVersion::DEFAULT,
+            &a,
+            None,
+            OutputFormat::Pdf,
+            Some("digest-aaaa"),
+        )
+        .unwrap();
+        let lock_b = hash_inputs(
+            [a.as_path()].into_iter(),
+            "0.1.0",
+            SatysfiVersion::DEFAULT,
+            &a,
+            None,
+            OutputFormat::Pdf,
+            Some("digest-bbbb"),
+        )
+        .unwrap();
+        assert_ne!(no_lock, lock_a, "an absent lock vs. a present one must differ");
+        assert_ne!(lock_a, lock_b, "two different lock digests must hash to different keys");
         std::fs::remove_dir_all(&dir).ok();
     }
 

@@ -6,7 +6,7 @@
 //! SAME face whose metrics the layout engine measured with, closing the
 //! design doc's §Risks "font-metric fidelity" gap. Mirrors the CID PDF
 //! writer's own per-FILE dedup (`cid.rs`'s `FontUsage`/`usage: BTreeMap
-//! <usize, FontUsage>`, keyed by [`crate::ttf::TtfFontStore::file_index`]
+//! <usize, FontUsage>`, keyed by [`satysfi_pdf::TtfFontStore::file_index`]
 //! rather than by `FontKey`, since bold/oblique with no configured face
 //! fall back to sharing the regular file — one `@font-face` per FILE, not
 //! per `FontKey` slot, avoids embedding the same bytes twice).
@@ -14,7 +14,7 @@
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 
-use crate::ttf::TtfFontStore;
+use satysfi_pdf::TtfFontStore;
 
 use super::base64;
 

@@ -893,8 +893,7 @@ pub fn primitive_type_with_version(name: &str, version: SatysfiVersion) -> Optio
         "block-skip" => poly0(arrow(t_length(), t_block_boxes())),
 
         // ---- images (Slice 1: raster images; docs/plans/math-images.md,
-        // mirroring v0.0.6 vminstdef.yaml:540/:554; `load-pdf-image`,
-        // vminstdef.yaml:525, is deferred) ----
+        // mirroring v0.0.6 vminstdef.yaml:540/:554) ----
         // `load-image : string -> image`.
         "load-image" => poly0(arrow(t_string(), t_image())),
         // `use-image-by-width : image -> length -> inline-boxes`.
@@ -902,6 +901,9 @@ pub fn primitive_type_with_version(name: &str, version: SatysfiVersion) -> Optio
             vec![t_image(), t_length()],
             t_inline_boxes(),
         )),
+        // `load-pdf-image : string -> int -> image` (v0.0.6 vminstdef.yaml:525;
+        // docs/plans/design-load-pdf-image.md). Path + 1-based page number.
+        "load-pdf-image" => poly0(arrows(vec![t_string(), t_int()], t_image())),
 
         // ---- inline-fil ----
         // Not a primitive *function* at all (`base_env` binds it directly
@@ -1611,8 +1613,17 @@ pub fn primitive_type_with_version(name: &str, version: SatysfiVersion) -> Optio
         // `primitives.rs`'s `prim_get_text_color`/`make_color_value`.
         "get-text-color" => poly0(arrow(t_context(), t_color())),
         // vminst.ml:1692 `PrimitiveSetHyphenPenalty`: `~% (tI @-> tCTX @-> tCTX)`.
-        // FAITHFUL store; no consumer yet (no hyphenation).
+        // FAITHFUL store; consumed by `flush_word`'s hyphenation injection
+        // when a dictionary is installed (`docs/plans/design-hyphenation.md`).
         "set-hyphen-penalty" => poly0(arrow(t_int(), arrow(t_context(), t_context()))),
+        // vminstdef.yaml:1163-1177 `PrimitiveSetHyphenMin`:
+        // `int -> int -> context -> context`, params
+        // `(left_hyphen_min, right_hyphen_min)`
+        // (`docs/plans/design-hyphenation.md` §7).
+        "set-hyphen-min" => poly0(arrows(
+            vec![t_int(), t_int(), t_context()],
+            t_context(),
+        )),
         // vminst.ml:1309 `PrimitiveSetSpaceRatio`:
         // `~% (tFL @-> tFL @-> tFL @-> tCTX @-> tCTX)`, params
         // `(natural, shrink, stretch)`. FAITHFUL store; consumption by the

@@ -567,19 +567,26 @@ fn compile_page_footer_fixture() -> std::rc::Rc<satysfi_lang::value::DocumentVal
 
 /// End-to-end coverage for the Slice 1 real `page-break`
 /// (docs/plans/document-page-model.md): a 40-paragraph body overflows a
-/// 640pt content scheme onto a second A4Paper page, and a footer closure
+/// 640pt content scheme onto multiple A4Paper pages, and a footer closure
 /// renders `pbinfo#page-number` per page. Rendering each page on its own
 /// (a 1-page slice of `doc.pages`) makes each page's footer glyph
 /// unambiguous in its content stream — the load-bearing assertion that the
 /// per-page loop re-`interp.apply`s the parts closure with an
 /// *incremented* page number, not the same one twice.
+///
+/// Page count re-baselined 2 -> 4 by `docs/plans/design-silent-fields.md`
+/// FIX 3: each of the 40 paragraphs now carries its `paragraph_top`/
+/// `paragraph_bottom` margins (18pt + 18pt default), so the same body
+/// occupies proportionally more vertical space and spills onto four pages.
+/// The per-page footer-number assertions (page[0] -> "(1)", page[1] ->
+/// "(2)") are unaffected — only the total-page count changed.
 #[test]
-fn page_footer_fixture_overflows_to_two_pages_with_incrementing_footer_numbers() {
+fn page_footer_fixture_overflows_to_multiple_pages_with_incrementing_footer_numbers() {
     let doc = compile_page_footer_fixture();
     assert_eq!(
         doc.pages.len(),
-        2,
-        "the 40-paragraph body must overflow onto exactly 2 pages, got {}",
+        4,
+        "the 40-paragraph body must overflow onto exactly 4 pages, got {}",
         doc.pages.len()
     );
 

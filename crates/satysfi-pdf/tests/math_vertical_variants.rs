@@ -682,6 +682,65 @@ fn approx(a: Length, b: Length, tol: f64) -> bool {
 }
 
 // ----------------------------------------------------------------------
+// S2 gid-remap-robust CID prediction (docs/plans/design-cff-embedding.md
+// §6.3): a CFF-outline math font (this file's "Noto Sans Math" case) now
+// takes the writer's `write_font_cff` S2 path, which emits `subsetter`'s
+// REMAPPED gid (CID == new gid) as the content-stream CID rather than the
+// raw face gid `ttf-parser`/`face.glyph_index` returns — the CFF sibling of
+// D5's long-standing glyf-file subsetting, except CFF has no
+// `/CIDToGIDMap` to hide the renumbering behind (`cid.rs`'s module doc).
+// Below, `original_gids_used`/`expected_cid` independently replicate
+// EXACTLY the two calls `render_pdf_ttf_with`/`write_font_cff` themselves
+// make (`subsetter::GlyphRemapper::new_from_glyphs_sorted` +
+// `subsetter::subset`) against the SAME full per-font usage set a test's
+// page actually contains, so the tests below assert against a value
+// DERIVED from the real subsetter API — never a hardcoded/re-pinned CID
+// number, which would silently rot the next time this host's fontconfig
+// resolves a different "Noto Sans Math" build (different `usage` -> a
+// different remapping).
+
+/// The ORIGINAL face gid every `MathGlyph` in `glyphs` resolves to — a raw
+/// MATH-table variant (`gid: Some(_)`) is used directly, otherwise (`gid:
+/// None`) each char of `.text` goes through `face.glyph_index`, mirroring
+/// `emit_box`'s `Math` arm / `encode_glyph_run` (`cid.rs`) exactly. Since
+/// every test below renders a single-box page against a single physical
+/// font file (`FontKey(0)`, no bold/oblique), this is exactly the
+/// `usage.glyphs` key set `render_pdf_ttf_with`'s Pass 1a would build for
+/// that file — independently reconstructed here without touching the
+/// writer's internals.
+fn original_gids_used(face: &Face, glyphs: &[satysfi_backend::MathGlyph]) -> Vec<u16> {
+    glyphs
+        .iter()
+        .flat_map(|g| match g.gid {
+            Some(gid) => vec![gid],
+            None => g
+                .text
+                .chars()
+                .map(|c| face.glyph_index(c).expect("MathGlyph.text char has a gid").0)
+                .collect(),
+        })
+        .collect()
+}
+
+/// The exact CID `write_font_cff`'s S2 subsetting will emit for
+/// `original_gid`, given the full original-gid usage set the document
+/// actually references for this font file (`used_gids`, from
+/// `original_gids_used` above) — computed via the SAME
+/// `subsetter::GlyphRemapper::new_from_glyphs_sorted` + `subsetter::subset`
+/// calls `render_pdf_ttf_with`/`write_font_cff` make (`cid.rs`), so this
+/// tracks the real writer instead of predicting/hardcoding a specific
+/// number. Falls back to `original_gid` unchanged when subsetting this
+/// exact usage set fails (mirrors `write_font_cff`'s S1 whole-OTF
+/// fallback for a seac composite / CFF2 face).
+fn expected_cid(font_bytes: &[u8], used_gids: &[u16], original_gid: u16) -> u16 {
+    let remapper = subsetter::GlyphRemapper::new_from_glyphs_sorted(used_gids);
+    match subsetter::subset(font_bytes, 0, &remapper) {
+        Ok(_) => remapper.get(original_gid).unwrap_or(original_gid),
+        Err(_) => original_gid,
+    }
+}
+
+// ----------------------------------------------------------------------
 // Test plan item 2 (e2e B3a): `∑` grows via `math-big-char`.
 // ----------------------------------------------------------------------
 
@@ -775,23 +834,39 @@ fn big_char_sum_variant_grows_and_emits_variant_gid() {
     );
 
     // -- e2e through the real CID pipeline: the content stream's Tj operand
-    // for this run is the exact 2-byte-BE variant gid, not the base gid.
+    // for this run is the exact 2-byte-BE CID the writer assigns the variant
+    // gid, not the base gid. For a CFF font (S2,
+    // docs/plans/design-cff-embedding.md §6.3), that CID is `subsetter`'s
+    // REMAPPED gid, not the raw face gid — `expected_cid` (this file's
+    // module-level helper) derives it via the real subsetter API against
+    // this page's actual usage set (a single glyph: the variant itself),
+    // rather than hardcoding/re-pinning a number.
     let geometry = PageGeometry::default();
-    let page = page_for(math_box(run_math(&big_src, &store).unwrap()), &geometry);
+    let e2e_box = math_box(run_math(&big_src, &store).unwrap());
+    let (_, _, _, e2e_glyphs) = as_math_parts(e2e_box.clone());
+    let used_gids = original_gids_used(&face, &e2e_glyphs);
+    let page = page_for(e2e_box, &geometry);
     let pdf_bytes = render_pdf_ttf(&geometry, &[page], &store, &[]).expect("render");
     assert!(pdf_bytes.starts_with(b"%PDF-"));
     let content = content_stream(&pdf_bytes);
 
-    let variant_bytes = expected_variant.0.to_be_bytes();
+    let font_bytes = std::fs::read(&path).expect("read font file for subsetter cross-check");
+    let variant_cid = expected_cid(&font_bytes, &used_gids, expected_variant.0);
+    let variant_bytes = variant_cid.to_be_bytes();
     let variant_repr = pdf_str_repr(&variant_bytes);
     assert!(
         contains_subslice(&content, &variant_repr),
-        "expected the content stream to contain the variant gid's Tj operand \
+        "expected the content stream to contain the variant gid's (remapped) Tj operand \
          {variant_repr:02x?} ({:?}); content stream = {:?}",
         String::from_utf8_lossy(&variant_repr),
         String::from_utf8_lossy(&content)
     );
 
+    // The base (non-variant) gid was never used anywhere in this page, so it
+    // never gets a CID assignment at all (`GlyphRemapper` only maps glyphs it
+    // was asked to remap) — its RAW gid bytes should not appear as a Tj
+    // operand, exactly like the pre-S2 assertion, just no longer assuming
+    // the variant's own bytes are unremapped.
     let base_bytes = base_gid.0.to_be_bytes();
     let base_repr = pdf_str_repr(&base_bytes);
     if base_repr != variant_repr {
@@ -978,20 +1053,26 @@ fn paren_stretches_around_tall_inner_and_short_inner_stays_record0() {
     }
 
     // -- e2e through the real CID pipeline: the content stream contains the
-    // '(' variant gid's Tj operand.
+    // '(' variant gid's Tj operand. For a CFF font (S2,
+    // docs/plans/design-cff-embedding.md §6.3) the CID actually emitted is
+    // `subsetter`'s REMAPPED gid, not the raw face gid — `expected_cid`
+    // derives it via the real subsetter API against this page's actual
+    // 3-glyph usage set ('(', ∑-variant, ')'), not a hardcoded number.
     let geometry = PageGeometry::default();
-    let page = page_for(
-        math_box(run_math(&tall_src, &store).unwrap()),
-        &geometry,
-    );
+    let e2e_box = math_box(run_math(&tall_src, &store).unwrap());
+    let (_, _, _, e2e_glyphs) = as_math_parts(e2e_box.clone());
+    let used_gids = original_gids_used(&face, &e2e_glyphs);
+    let page = page_for(e2e_box, &geometry);
     let pdf_bytes = render_pdf_ttf(&geometry, &[page], &store, &[]).expect("render");
     assert!(pdf_bytes.starts_with(b"%PDF-"));
     let content = content_stream(&pdf_bytes);
     let open_gid = open.gid.expect("open paren has a variant gid");
-    let open_repr = pdf_str_repr(&open_gid.to_be_bytes());
+    let font_bytes = std::fs::read(&path).expect("read font file for subsetter cross-check");
+    let open_cid = expected_cid(&font_bytes, &used_gids, open_gid);
+    let open_repr = pdf_str_repr(&open_cid.to_be_bytes());
     assert!(
         contains_subslice(&content, &open_repr),
-        "expected the content stream to contain the '(' variant gid's Tj operand \
+        "expected the content stream to contain the '(' variant gid's (remapped) Tj operand \
          {open_repr:02x?}; content stream = {:?}",
         String::from_utf8_lossy(&content)
     );
@@ -1089,9 +1170,15 @@ fn very_tall_paren_is_built_from_assembly_parts() {
     // "smallest stream" / "stream with BT" heuristics can't reliably isolate
     // the page content stream here. Instead verify the assembly part gid
     // reached the ToUnicode CMap (`beginbfchar`) — a distinctive, cleanly
-    // isolated stream that render_pdf_ttf only populates with gids it actually
-    // emitted (Identity-H: the CID IS the raw gid), proving the part became a
-    // real emitted glyph.
+    // isolated stream that render_pdf_ttf only populates with gids it
+    // actually emitted, proving the part became a real emitted glyph. The
+    // CMap's source CID is keyed by whatever the writer actually emitted for
+    // that glyph, which for a CFF font (S2,
+    // docs/plans/design-cff-embedding.md §6.3) is `subsetter`'s REMAPPED gid
+    // rather than the raw face gid — `expected_cid` (this file's
+    // module-level helper) derives that CID via the real subsetter API
+    // against this page's own full usage set (`glyphs`, above), instead of
+    // assuming the CMap key equals the raw gid.
     let geometry = PageGeometry::default();
     let page = page_for(math_box(run_math(&src, &store).unwrap()), &geometry);
     let pdf_bytes = render_pdf_ttf(&geometry, &[page], &store, &[]).expect("render");
@@ -1102,12 +1189,16 @@ fn very_tall_paren_is_built_from_assembly_parts() {
         .expect("a ToUnicode CMap stream (beginbfchar)")
         .to_vec();
     let some_part = placed_open_parts[0];
-    // CMap entries are `<GGGG> <UUUU>` uppercase-hex; the emitted part gid
-    // must appear as a source CID.
-    let gid_hex = format!("<{:04X}>", some_part).into_bytes();
+    let font_bytes = std::fs::read(&path).expect("read font file for subsetter cross-check");
+    let used_gids = original_gids_used(&face, &glyphs);
+    let some_part_cid = expected_cid(&font_bytes, &used_gids, some_part);
+    // CMap entries are `<GGGG> <UUUU>` uppercase-hex; the emitted part gid's
+    // (remapped) CID must appear as a source CID.
+    let gid_hex = format!("<{:04X}>", some_part_cid).into_bytes();
     assert!(
         contains_subslice(&cmap, &gid_hex),
-        "expected the ToUnicode CMap to map the assembly part gid {some_part} ({}); CMap = {:?}",
+        "expected the ToUnicode CMap to map the assembly part gid {some_part} (CID {some_part_cid}, \
+         {}); CMap = {:?}",
         String::from_utf8_lossy(&gid_hex),
         String::from_utf8_lossy(&cmap)
     );

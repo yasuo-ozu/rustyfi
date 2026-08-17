@@ -4,7 +4,7 @@
 //! recursive box scan finding an `Image` nested inside a `Frame`.
 
 use satysfi_backend::{
-    DecoId, FontKey, HorzStringInfo, ImageId, ImageResource, Length, Page, PageGeometry,
+    Color, DecoId, FontKey, HorzStringInfo, ImageId, ImageResource, Length, Page, PageGeometry,
     PlacedLine, PureHorzBox,
 };
 
@@ -21,7 +21,7 @@ fn geometry() -> PageGeometry {
 #[test]
 fn frame_content_renders_at_the_frames_placed_anchor_plus_its_own_offset() {
     let inner = PureHorzBox::InnerString {
-        info: HorzStringInfo { font: FontKey(0), size: Length::pt(12.0), rising: Length::ZERO },
+        info: HorzStringInfo { font: FontKey(0), size: Length::pt(12.0), rising: Length::ZERO, color: Color::Gray(0.0) },
         text: "hi".to_string(),
         width: Length::pt(12.0),
         height: Length::pt(9.0),
@@ -78,7 +78,13 @@ fn used_images_recurses_into_a_frames_contents() {
             contents: vec![(Length::ZERO, frame)],
         }],
     };
-    let images = vec![ImageResource { samples: vec![0u8; 3 * 2 * 2], px_w: 2, px_h: 2 }];
+    let images = vec![ImageResource {
+        samples: vec![0u8; 3 * 2 * 2],
+        px_w: 2,
+        px_h: 2,
+        jpeg_dct: None,
+        pdf: None,
+    }];
     let geometry = geometry();
     let bytes = satysfi_pdf::render_pdf(&geometry, std::slice::from_ref(&page), &images)
         .expect("render must succeed");

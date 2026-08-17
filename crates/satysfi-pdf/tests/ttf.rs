@@ -9,7 +9,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use satysfi_backend::{
-    FontKey, FontMetrics, HorzStringInfo, Length, Page, PageGeometry, PlacedLine, PureHorzBox,
+    Color, FontKey, FontMetrics, HorzStringInfo, Length, Page, PageGeometry, PlacedLine,
+    PureHorzBox,
 };
 use satysfi_pdf::{render_pdf_ttf, TtfFontStore};
 
@@ -119,7 +120,7 @@ fn build_line(store: &TtfFontStore, geometry: &PageGeometry, text: &str, font: F
         contents: vec![(
             Length::ZERO,
             PureHorzBox::InnerString {
-                info: HorzStringInfo { font, size, rising: Length::ZERO },
+                info: HorzStringInfo { font, size, rising: Length::ZERO, color: Color::Gray(0.0) },
                 text: text.to_string(),
                 width,
                 height: ascender,
@@ -204,13 +205,12 @@ fn subsetting_is_reproducible_across_reruns() {
     assert_eq!(a, b, "two renders of the same document must be byte-identical");
 }
 
-/// D5's `glyf`-presence gate: a CFF-outline OpenType face (no `glyf` table
-/// at all — this host's `NotoSansTagalog-Regular.otf`, or any single-face
-/// non-collection `.otf` fontconfig turns up) must NOT be subsetted (the
-/// `subsetter` crate's TrueType path doesn't apply) and must still degrade
-/// gracefully to the pre-D5 whole-file embed rather than erroring — the
-/// module doc's "first honest gate" for CFF/`CIDFontType0` being out of
-/// scope.
+/// A CFF-outline OpenType face (no `glyf` table at all — this host's
+/// `NotoSansTagalog-Regular.otf`, a TeX Gyre `.otf`, or any single-face
+/// non-collection `.otf` fontconfig turns up) now takes the
+/// `CIDFontType0`/`FontFile3` embed path
+/// (docs/plans/design-cff-embedding.md) rather than the invalid pre-design
+/// `CIDFontType2`/`FontFile2` whole-file embed.
 fn find_cff_otf() -> Option<PathBuf> {
     let output = Command::new("fc-list").output().ok()?;
     if !output.status.success() {
@@ -241,8 +241,19 @@ fn find_cff_otf() -> Option<PathBuf> {
     None
 }
 
+/// S1+S2 (docs/plans/design-cff-embedding.md §6.2, §6.3): a CFF-outline
+/// OpenType face must embed as `CIDFontType0`/`/FontFile3 /Subtype
+/// /OpenType`, with no `/CIDToGIDMap` at all (illegal for `CIDFontType0`) —
+/// true whether the writer subsets it (S2) or falls back to a whole-OTF
+/// embed (S1, when `subsetter::subset` declines this exact usage set, e.g. a
+/// seac composite/CFF2 face). The size relationship below is derived from an
+/// INDEPENDENT `subsetter::subset` call against the same single-glyph usage
+/// set the writer itself would build, rather than hardcoding "always bigger"
+/// (true only under S1) or "always smaller" (true only when S2's subsetting
+/// succeeds) — see `subsetter_can_subset_cff_and_the_writer_now_uses_it`
+/// below for the underlying primitive this cross-checks.
 #[test]
-fn cff_face_falls_back_to_whole_file_embed_without_erroring() {
+fn cff_face_embeds_as_fontfile3_cidfonttype0() {
     let Some(path) = find_cff_otf() else {
         eprintln!("skipping: no CFF-outline .otf found via fc-list on this system");
         return;
@@ -256,30 +267,327 @@ fn cff_face_falls_back_to_whole_file_embed_without_erroring() {
     };
     let geometry = PageGeometry::default();
     // Use whatever char this face actually has a glyph for — its own
-    // repertoire is arbitrary (Tagalog, or whatever fc-list found).
+    // repertoire is arbitrary (Tagalog, Latin, or whatever fc-list found).
     let face = store.face(FontKey(0)).expect("parse face");
-    let Some(c) = "Aa1 .".chars().find(|&c| face.glyph_index(c).is_some()) else {
+    // Excludes space/`.` from the probe set for THIS test specifically (kept
+    // in the sibling tests below, which don't pdftotext-check a single
+    // char): a lone space is a poor pdftotext round-trip probe (whitespace
+    // trimming makes `text.contains(' ')` unreliable).
+    let Some(c) = "Aa1".chars().find(|&c| face.glyph_index(c).is_some()) else {
         eprintln!("skipping: face has none of the trivial probe glyphs");
         return;
     };
+    let probe_gid = face.glyph_index(c).expect("probe char has a gid").0;
     drop(face);
     let page = Page {
         lines: vec![build_line(&store, &geometry, &c.to_string(), FontKey(0))],
     };
 
-    let pdf_bytes = render_pdf_ttf(&geometry, &[page], &store, &[]).expect(
-        "a CFF face must degrade to whole-file embed, not error",
-    );
+    let pdf_bytes = render_pdf_ttf(&geometry, &[page], &store, &[])
+        .expect("a CFF face must render via the CIDFontType0/FontFile3 path, not error");
     assert!(pdf_bytes.starts_with(b"%PDF-"));
-    // No `glyf` table => `write_font`'s subsetter gate is skipped entirely
-    // => the whole input file is embedded verbatim (pre-D5 behavior for
-    // this face), so the PDF is at least as large as the source file.
-    let font_len = std::fs::metadata(&path).expect("stat font file").len() as usize;
+
     assert!(
-        pdf_bytes.len() > font_len,
-        "expected whole-file embed: PDF ({} bytes) should exceed the source face ({} bytes)",
+        contains(&pdf_bytes, b"/FontFile3"),
+        "expected a /FontFile3 stream for a CFF-outline face"
+    );
+    assert!(
+        contains(&pdf_bytes, b"/CIDFontType0"),
+        "expected a /CIDFontType0 descendant font for a CFF-outline face"
+    );
+    assert!(
+        contains(&pdf_bytes, b"/OpenType"),
+        "expected the FontFile3 stream to carry /Subtype /OpenType"
+    );
+    assert!(
+        !contains(&pdf_bytes, b"/CIDToGIDMap"),
+        "CIDFontType0 must NOT carry a /CIDToGIDMap (PDF 32000 9.7.4.2)"
+    );
+    // Whether the PDF should be smaller (S2 subsetting succeeded) or bigger
+    // (S1 whole-OTF fallback) than the source face depends on whether THIS
+    // font/usage combination is subsettable at all — determined by directly
+    // calling the same `subsetter::subset` the writer itself calls, not
+    // assumed.
+    let font_len = std::fs::metadata(&path).expect("stat font file").len() as usize;
+    let font_bytes = std::fs::read(&path).expect("read font file");
+    let remapper = subsetter::GlyphRemapper::new_from_glyphs_sorted(&[probe_gid]);
+    let subsetting_succeeds = subsetter::subset(&font_bytes, 0, &remapper).is_ok();
+    if subsetting_succeeds {
+        assert!(
+            pdf_bytes.len() < font_len,
+            "subsetter can subset this face's single-glyph usage, so the writer's S2 path \
+             should have produced a SUBSET embed: PDF ({} bytes) should be smaller than the \
+             source face ({} bytes)",
+            pdf_bytes.len(),
+            font_len,
+        );
+    } else {
+        assert!(
+            pdf_bytes.len() > font_len,
+            "subsetter declines this face's single-glyph usage, so the writer's S1 fallback \
+             should have produced a whole-OTF embed: PDF ({} bytes) should exceed the source \
+             face ({} bytes)",
+            pdf_bytes.len(),
+            font_len,
+        );
+    }
+
+    let Ok(which) = Command::new("which").arg("pdftotext").output() else {
+        return;
+    };
+    if !which.status.success() {
+        return;
+    }
+    let mut tmp = std::env::temp_dir();
+    tmp.push(format!("satysfi-pdf-cff-fontfile3-test-{}.pdf", std::process::id()));
+    std::fs::File::create(&tmp)
+        .and_then(|mut f| f.write_all(&pdf_bytes))
+        .expect("write temp pdf");
+    let output = Command::new("pdftotext").arg(&tmp).arg("-").output().expect("run pdftotext");
+    let _ = std::fs::remove_file(&tmp);
+    assert!(output.status.success(), "pdftotext failed: {output:?}");
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        text.contains(c),
+        "pdftotext output missing the CFF-embedded probe char {c:?}, got {text:?}"
+    );
+}
+
+/// S2 (docs/plans/design-cff-embedding.md §6.3): the pinned `subsetter`
+/// crate subsets CFF fonts cleanly on its own — normalising its output to
+/// CID-keyed with `CID == new_gid` — and `write_font_cff` now uses exactly
+/// this (`cid.rs`'s module doc / `write_font_cff`'s doc comment describe the
+/// two-pass content-remap this required). This test is decoupled from
+/// `render_pdf_ttf`/`write_font_cff` entirely — it calls `subsetter::subset`
+/// directly against the discovered CFF file — so it stays meaningful
+/// regardless of which embed path the writer takes for a given face/usage
+/// (S1's whole-OTF fallback still exists for the seac-composite/CFF2 faces
+/// `subsetter` legitimately declines, exercised by the `Err` arm below).
+#[test]
+fn subsetter_can_subset_cff_and_the_writer_now_uses_it() {
+    let Some(path) = find_cff_otf() else {
+        eprintln!("skipping: no CFF-outline .otf found via fc-list on this system");
+        return;
+    };
+    let bytes = std::fs::read(&path).expect("read font file");
+    let Ok(face) = ttf_parser::Face::parse(&bytes, 0) else {
+        eprintln!("skipping: {path:?} failed to parse as a face at all");
+        return;
+    };
+    // Prefer a short Latin run (exercises several glyphs, more
+    // representative of real subsetting) and fall back to a single probe
+    // glyph, exactly like the sibling S1 test above.
+    let text = ["Hello", "Aa1 ."]
+        .into_iter()
+        .find(|s| s.chars().all(|c| face.glyph_index(c).is_some()))
+        .map(str::to_string)
+        .or_else(|| {
+            "Aa1 .".chars().find(|&c| face.glyph_index(c).is_some()).map(|c| c.to_string())
+        });
+    let Some(text) = text else {
+        eprintln!("skipping: face has none of the trivial probe glyphs");
+        return;
+    };
+    let glyphs: Vec<u16> = text
+        .chars()
+        .filter_map(|c| face.glyph_index(c).map(|g| g.0))
+        .collect();
+    drop(face);
+
+    let remapper = subsetter::GlyphRemapper::new_from_glyphs_sorted(&glyphs);
+    match subsetter::subset(&bytes, 0, &remapper) {
+        Ok(subset) => {
+            assert!(
+                subset.len() < bytes.len(),
+                "expected the subsetter's CFF output ({} bytes) to be smaller than the whole \
+                 source OTF ({} bytes) for {path:?} (glyphs {glyphs:?})",
+                subset.len(),
+                bytes.len(),
+            );
+            assert_eq!(
+                &subset[0..4],
+                b"OTTO",
+                "subsetter's CFF output should itself be a valid OTTO-flavoured sfnt"
+            );
+        }
+        Err(e) => {
+            // Not a test failure: `subsetter` legitimately declines some
+            // glyph sets (seac composites, CFF2) — that's exactly the case
+            // S1's whole-OTF fallback exists for.
+            eprintln!(
+                "subsetter declined {path:?} (glyphs {glyphs:?}): {e:?} — expected for e.g. \
+                 seac composites/CFF2, S1's whole-OTF path covers this case"
+            );
+        }
+    }
+}
+
+/// The actual writer output for a CFF face round-trips through `pdftotext`
+/// regardless of whether the probe text is a single char or a short run —
+/// whether this run's CID is the original face gid (S1 fallback) or
+/// `subsetter`'s remapped gid (S2, `write_font_cff`'s doc comment) is an
+/// internal detail: `/W`, ToUnicode, and content all key off the SAME CID
+/// either way, so pdftotext extraction is unaffected. This is really
+/// re-confirming `cff_face_embeds_as_fontfile3_cidfonttype0`'s round trip
+/// with a richer (multi-glyph) probe text.
+#[test]
+fn cff_face_multi_glyph_text_roundtrips_through_pdftotext() {
+    let Some(path) = find_cff_otf() else {
+        eprintln!("skipping: no CFF-outline .otf found via fc-list on this system");
+        return;
+    };
+    let store = match TtfFontStore::load(&path, None, None) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("skipping: {path:?} failed to load as a face at all: {e}");
+            return;
+        }
+    };
+    let geometry = PageGeometry::default();
+    let face = store.face(FontKey(0)).expect("parse face");
+    let text = ["Hello", "Aa1 ."]
+        .into_iter()
+        .find(|s| s.chars().all(|c| face.glyph_index(c).is_some()))
+        .map(str::to_string)
+        .or_else(|| {
+            "Aa1 .".chars().find(|&c| face.glyph_index(c).is_some()).map(|c| c.to_string())
+        });
+    let Some(text) = text else {
+        eprintln!("skipping: face has none of the trivial probe glyphs");
+        return;
+    };
+    drop(face);
+
+    let page = Page {
+        lines: vec![build_line(&store, &geometry, &text, FontKey(0))],
+    };
+    let pdf_bytes = render_pdf_ttf(&geometry, &[page], &store, &[])
+        .expect("a CFF face must render via the CIDFontType0/FontFile3 path");
+    assert!(pdf_bytes.starts_with(b"%PDF-"));
+
+    let Ok(which) = Command::new("which").arg("pdftotext").output() else {
+        return;
+    };
+    if !which.status.success() {
+        return;
+    }
+    let mut tmp = std::env::temp_dir();
+    tmp.push(format!("satysfi-pdf-cff-multiglyph-test-{}.pdf", std::process::id()));
+    std::fs::File::create(&tmp)
+        .and_then(|mut f| f.write_all(&pdf_bytes))
+        .expect("write temp pdf");
+    let output = Command::new("pdftotext").arg(&tmp).arg("-").output().expect("run pdftotext");
+    let _ = std::fs::remove_file(&tmp);
+    assert!(output.status.success(), "pdftotext failed: {output:?}");
+    let extracted = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        extracted.contains(text.trim()),
+        "pdftotext output missing {text:?}, got {extracted:?}"
+    );
+}
+
+/// Byte-search helper for the structural CFF assertions above — the tests
+/// only need "does this marker appear anywhere in the serialized PDF", not a
+/// real PDF parse (mirrors how `subsetted_base_font_carries_a_subset_tag`
+/// above already string-searches the raw bytes).
+fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack.windows(needle.len()).any(|w| w == needle)
+}
+
+/// The bundled `lmsans` face (real Latin Modern Sans, `scripts/download-fonts.sh`
+/// — replaces the old Noto glyf stand-in now that CFF embedding exists,
+/// docs/plans/design-cff-embedding.md) is itself a CFF-outline OpenType face,
+/// so it must take the same `CIDFontType0`/`/FontFile3` path as the
+/// fontconfig-discovered CFF faces above — this is the concrete, named
+/// abbrev a `set-font` call actually resolves to, not just "some CFF found on
+/// the host". Skips gracefully if `scripts/download-fonts.sh` hasn't been run
+/// in this checkout (the font is gitignored, not committed).
+///
+/// Also the S2 SIZE-WIN check (docs/plans/design-cff-embedding.md §8): the
+/// probe text "Latin Modern Sans" uses only a small fraction of lmsans's
+/// full glyph repertoire (Latin Modern ships hundreds of glyphs — accents,
+/// ligatures, extended Latin, etc.), a genuine "multi-glyph-but-not-all-
+/// glyphs" document, so a real subset embed must be substantially SMALLER
+/// than the whole source OTF — unlike `cff_face_embeds_as_fontfile3_cidfonttype0`'s
+/// single-glyph probe (which can't rule out subsetting having declined this
+/// particular face), this is deterministic and host-independent (a bundled,
+/// checked-in-by-download font, not fontconfig's arbitrary pick).
+#[test]
+fn lmsans_bundled_font_embeds_as_fontfile3_cidfonttype0() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../lib-satysfi/dist/fonts/lmsans10-regular.otf");
+    if !path.is_file() {
+        eprintln!(
+            "skipping: {path:?} not present — run `scripts/download-fonts.sh` first \
+             (font binaries are gitignored, not committed)"
+        );
+        return;
+    }
+    let store = TtfFontStore::load(&path, None, None).expect("load bundled lmsans10-regular.otf");
+    let face = store.face(FontKey(0)).expect("parse bundled lmsans face");
+    assert!(
+        face.tables().glyf.is_none() && face.tables().cff.is_some(),
+        "lmsans10-regular.otf is expected to be CFF-outline (no glyf table)"
+    );
+    drop(face);
+
+    let geometry = PageGeometry::default();
+    let text = "Latin Modern Sans";
+    let page = Page {
+        lines: vec![build_line(&store, &geometry, text, FontKey(0))],
+    };
+    let pdf_bytes = render_pdf_ttf(&geometry, &[page], &store, &[])
+        .expect("lmsans (a CFF face) must render via the CIDFontType0/FontFile3 path");
+    assert!(pdf_bytes.starts_with(b"%PDF-"));
+
+    assert!(
+        contains(&pdf_bytes, b"/FontFile3"),
+        "expected a /FontFile3 stream for the lmsans CFF-outline face"
+    );
+    assert!(
+        contains(&pdf_bytes, b"/CIDFontType0"),
+        "expected a /CIDFontType0 descendant font for the lmsans CFF-outline face"
+    );
+    assert!(
+        contains(&pdf_bytes, b"/OpenType"),
+        "expected the FontFile3 stream to carry /Subtype /OpenType"
+    );
+    assert!(
+        !contains(&pdf_bytes, b"/CIDToGIDMap"),
+        "CIDFontType0 must NOT carry a /CIDToGIDMap (PDF 32000 9.7.4.2)"
+    );
+
+    // S2 size win: a real subset embed of a handful of glyphs must be
+    // substantially smaller than the whole (hundreds-of-glyphs) source OTF —
+    // see this test's doc comment.
+    let font_len = std::fs::metadata(&path).expect("stat lmsans font file").len() as usize;
+    assert!(
+        pdf_bytes.len() < font_len,
+        "expected S2 real CFF subsetting: the PDF ({} bytes, embedding only the glyphs \
+         {text:?} uses) should be SMALLER than the whole lmsans OTF ({} bytes) — this is the \
+         size win S2 has over S1's always-whole-OTF embed",
         pdf_bytes.len(),
         font_len,
+    );
+
+    let Ok(which) = Command::new("which").arg("pdftotext").output() else {
+        return;
+    };
+    if !which.status.success() {
+        return;
+    }
+    let mut tmp = std::env::temp_dir();
+    tmp.push(format!("satysfi-pdf-lmsans-fontfile3-test-{}.pdf", std::process::id()));
+    std::fs::File::create(&tmp)
+        .and_then(|mut f| f.write_all(&pdf_bytes))
+        .expect("write temp pdf");
+    let output = Command::new("pdftotext").arg(&tmp).arg("-").output().expect("run pdftotext");
+    let _ = std::fs::remove_file(&tmp);
+    assert!(output.status.success(), "pdftotext failed: {output:?}");
+    let extracted = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        extracted.contains(text),
+        "pdftotext output missing {text:?}, got {extracted:?}"
     );
 }
 
@@ -312,7 +620,7 @@ fn math_variant_gid_survives_subsetting() {
     let geometry = PageGeometry::default();
     let size = Length::pt(18.0);
     let glyph = satysfi_backend::MathGlyph {
-        info: HorzStringInfo { font: FontKey(0), size, rising: Length::ZERO },
+        info: HorzStringInfo { font: FontKey(0), size, rising: Length::ZERO, color: Color::Gray(0.0) },
         // ToUnicode source char for this synthetic "variant" — arbitrary,
         // just needs to be searchable in `pdftotext` output.
         text: "+".to_string(),

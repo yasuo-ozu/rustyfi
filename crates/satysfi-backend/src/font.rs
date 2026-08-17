@@ -17,6 +17,10 @@ pub struct MathConstants {
     pub axis_height: f64,
     pub superscript_bottom_min: f64,
     pub superscript_shift_up: f64,
+    /// `superscript_shift_up_cramped` — OpenType `SuperscriptShiftUpCramped`,
+    /// the lowered shift-up used when the enclosing sub-formula is "cramped"
+    /// (TeXbook Appendix G rule 18a; `docs/plans/design-math-cramped.md`).
+    pub superscript_shift_up_cramped: f64,
     pub superscript_baseline_drop_max: f64,
     pub subscript_top_max: f64,
     pub subscript_shift_down: f64,
@@ -205,6 +209,18 @@ pub trait FontMetrics {
     /// scheme configured for this script" — the caller then falls back to
     /// `(ctx.font, 1.0, 0.0)`, i.e. today's single-font behavior.
     fn default_script_font(&self, _script: Script) -> Option<(FontKey, f64, f64)> {
+        None
+    }
+
+    /// The configured default math font, from `default-font.satysfi-hash`'s
+    /// optional `"math"` abbrev (`docs/plans/design-math-cramped.md` §4 Slice
+    /// B). `None` means "no math default configured" — the caller
+    /// (`get-initial-context`) then leaves `Context::math_font` at its
+    /// `Context::initial` seed (`FontKey(0)`, the regular text face), i.e.
+    /// today's behavior. Every pre-Slice-B provider (`Base14Metrics`, a bare
+    /// `TtfFontStore::load`, a registry with no `"math"` entry) returns
+    /// `None` here, so this is purely additive.
+    fn default_math_font(&self) -> Option<FontKey> {
         None
     }
 }

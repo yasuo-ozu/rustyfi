@@ -40,7 +40,9 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 use crate::error::Error;
+use crate::solve::DepSource;
 use crate::util;
+use crate::version::{Constraint, Version};
 
 /// The environment variable consulted for the registry URL when no
 /// `--registry` flag and no `Satyrfile.toml` `[registry]` url is given
@@ -246,6 +248,14 @@ pub struct PackageIndex {
 pub struct VersionEntry {
     pub tarball_url: String,
     pub sha256: String,
+    /// This version's own declared dependencies (`name -> constraint text`,
+    /// e.g. `"^1.2.0"`, `"1.2.0"`, or `"*"` — `version::Constraint::parse`
+    /// syntax), feeding the phase-7c solver's transitive walk
+    /// (`solve::RegistryDepSource`). `#[serde(default)]` so an index written
+    /// before this field existed still parses — such a package is simply
+    /// treated as a leaf (no declared dependencies).
+    #[serde(default)]
+    pub dependencies: BTreeMap<String, String>,
 }
 
 impl Registry {
@@ -298,6 +308,30 @@ pub fn select_version<'a>(
         })
 }
 
+/// Every version of `idx` that parses as a [`Version`] (design §3.2),
+/// **sorted descending** (highest first) — the order the solver's
+/// highest-version-first candidate search wants. An index entry whose key
+/// does not parse as `major.minor.patch[-pre]` is silently skipped rather
+/// than failing the whole lookup (mirrors `#[serde(default)]` on
+/// [`VersionEntry::dependencies`]'s back-compat stance: a malformed one entry
+/// should not break every other version).
+pub fn available_versions(idx: &PackageIndex) -> Vec<Version> {
+    let mut versions: Vec<Version> = idx.versions.keys().filter_map(|s| Version::parse(s).ok()).collect();
+    versions.sort();
+    versions.reverse();
+    versions
+}
+
+/// The index entry for the exact version `v` (matched by re-parsing each key,
+/// since [`PackageIndex::versions`] is keyed by the original version string,
+/// not a [`Version`]).
+pub fn entry_for<'a>(idx: &'a PackageIndex, v: &Version) -> Option<&'a VersionEntry> {
+    idx.versions
+        .iter()
+        .find(|(k, _)| Version::parse(k).ok().as_ref() == Some(v))
+        .map(|(_, entry)| entry)
+}
+
 /// A simple "semver-ish" ordering (plan §5.4 step 2: "simple string/semver-ish
 /// comparison"): compare dotted components numerically where both parse as
 /// integers, else lexically; a shorter prefix (`1.0` vs `1.0.1`) sorts lower.
@@ -340,6 +374,41 @@ pub fn all_package_names(reg: &Registry) -> Result<Vec<String>, Error> {
     }
     names.sort();
     Ok(names)
+}
+
+/// Adapts a live, already-[`acquire`]d [`Registry`] index to the solver's
+/// [`DepSource`] trait (design §4.1/§5.1): each call does a fresh
+/// `packages/<name>.toml` lookup, so the solver can recurse into any package
+/// name its dependency edges name without the caller having to pre-load the
+/// whole index.
+pub struct RegistryDepSource<'a> {
+    reg: &'a Registry,
+}
+
+impl<'a> RegistryDepSource<'a> {
+    pub fn new(reg: &'a Registry) -> Self {
+        RegistryDepSource { reg }
+    }
+}
+
+impl<'a> DepSource for RegistryDepSource<'a> {
+    fn versions(&self, name: &str) -> Result<Vec<Version>, Error> {
+        let idx = lookup(self.reg, name)?;
+        Ok(available_versions(&idx))
+    }
+
+    fn deps(&self, name: &str, v: &Version) -> Result<Vec<(String, Constraint)>, Error> {
+        let idx = lookup(self.reg, name)?;
+        let entry = entry_for(&idx, v).ok_or_else(|| Error::VersionNotFound {
+            name: name.to_string(),
+            version: v.to_string(),
+        })?;
+        entry
+            .dependencies
+            .iter()
+            .map(|(dep_name, req)| Ok((dep_name.clone(), Constraint::parse(req)?)))
+            .collect()
+    }
 }
 
 // ---------------------------------------------------------------------------

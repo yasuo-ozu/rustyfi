@@ -36,6 +36,35 @@
 //!   expected — renders, proving the reverse (coarsening) relabel
 //!   `v1::xver_adapt::relabel_or_reject_name`'s new `(V0_1, V0_0_6)` arm
 //!   implements.
+//!
+//! Slice X4b (`docs/plans/design-cross-version-import.md` §X4.5, extended
+//! beyond its own math-only sketch by the task brief this increment
+//! implements) — a NEGATIVE FINDING, not a new crossing capability: a `V0_1`
+//! dependency's `deco`/`deco-set` VALUE export (via a module `sig`, the ONE
+//! textual site 0.1's grammar can express such an ascription at all — an
+//! ordinary unsealed `val` has no ascription syntax whatsoever) turns out to
+//! be UNCOERCIBLE given this port's hard constraints: every 0.1 module
+//! signature annotation is the `:>` form, and `v1::module_check`'s
+//! (untouched) phase-D spine walk conformance-checks EVERY such annotation,
+//! name-keyed, unconditionally — so any splice-time coercion that makes the
+//! crossing value's real shape differ from the module's own declared
+//! `deco`/`deco-set` scheme (the ENTIRE POINT of a list<->single coercion)
+//! trips that same enforcement again, wherever the coercion is spliced
+//! (verified empirically — see `v1::xver_adapt`'s own "X4b" doc comment for
+//! the full derivation). So X4b adds exactly one thing: a CLEAR, EARLY
+//! rejection (`v1::xver_adapt::reject_deco_exports_v01_sig`) instead of a
+//! confusing downstream `module_check`/ordinary-`TypeError` failure.
+//!
+//! - [`reverse_deco_export_via_sig_rejected`] (X4b): a small inline `V0_1`
+//!   fixture — a module `V01DecoExport :> sig val my-deco : deco end =
+//!   struct .. end` — `@require:`d by a `V0_0_6` entry, is rejected with
+//!   `CompileError::CrossVersionUnsupportedName { slice: "X4b", .. }` at
+//!   compile time, never reaching eval (whether or not the entry even
+//!   references `my-deco`).
+//! - [`reverse_deco_export_curried_sig_still_rejected`] (X4b, same
+//!   diagnostic): a `deco` export whose module SIG `val` type is curried
+//!   (`length -> deco`) is ALSO rejected — the same clear diagnostic
+//!   applies regardless of shape, since no shape is coercible here.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -348,4 +377,90 @@ V01Mini.document (|title = `v01-math-reverse`|) '<
     );
 }
 
+// ============================================================================
+// X4b: a `V0_1` dependency's `deco` export (module-SIG-typed — the only
+// textual site 0.1's grammar can express a bare `deco` ascription at all)
+// CANNOT be soundly value-coerced given this port's hard constraints (see
+// this file's module doc comment, and `v1::xver_adapt`'s own "X4b" doc
+// comment for the full derivation) — it is rejected with a clear, early
+// diagnostic instead of a confusing downstream `module_check`/ordinary-
+// `TypeError` failure.
+// ============================================================================
+
+// A module typed via its own `sig`: its `val my-deco : deco` item is the
+// ONE surface site 0.1's grammar can express a bare `deco` ascription at
+// all (an ordinary unsealed `val` binding carries no ascription syntax at
+// all — `cst_v1::Bind::Value`'s own doc comment).
+const V01_DECO_EXPORT_PKG_SRC: &str = "\
+module V01DecoExport :> sig
+  val my-deco : deco
+end = struct
+  val my-deco (x, y) w h d =
+    fill (Gray(0.0))
+      (close-with-line
+         (line-to (x +' w, y +' h)
+            (line-to (x +' w, y)
+               (start-path (x, y)))))
+end
+";
+
+#[test]
+fn reverse_deco_export_via_sig_rejected() {
+    let dir = TempDir::new("deco-export-rejected");
+    dir.write("dist-v01/packages/v01-deco-export.satyh", V01_DECO_EXPORT_PKG_SRC);
+    // The entry does not even need to USE `my-deco` — the rejection is
+    // driven purely by the dependency's OWN sig text (`v1::xver_adapt::
+    // reject_deco_exports_v01_sig`), independent of consumer usage.
+    dir.write("entry.saty", "@require: v01-deco-export\n\n0\n");
+    let files = load_v006(&dir, "entry.saty");
+
+    let mono = Mono;
+    let err = satysfi_lang::compile_document_v006_xver(&files, &mono).expect_err(
+        "a V0_1 dependency exporting a module-sig-typed `: deco` value must be rejected — no \
+         sound coercion exists given `v1::module_check`'s unconditional, name-keyed sig \
+         conformance enforcement (see `v1::xver_adapt`'s own X4b doc comment)",
+    );
+    match err {
+        CompileError::CrossVersionUnsupportedName { name, slice, .. } => {
+            assert_eq!(name, "deco");
+            assert_eq!(slice, "X4b");
+        }
+        other => panic!("expected CrossVersionUnsupportedName, got: {other}"),
+    }
+}
+
+/// X4b, same diagnostic regardless of shape: a module SIG `val` item typed
+/// `length -> deco` (a curried prefix before the `deco` leaf) is ALSO
+/// rejected — there is no shape of module-sig `deco` export this direction
+/// can coerce, so the curried case hits the identical rejection path as
+/// the bare case above.
+#[test]
+fn reverse_deco_export_curried_sig_still_rejected() {
+    let dir = TempDir::new("deco-export-curried-negative");
+    dir.write(
+        "dist-v01/packages/v01-deco-curried.satyh",
+        "\
+module V01DecoCurried :> sig
+  val my-deco : length -> deco
+end = struct
+  val my-deco t (x, y) w h d =
+    fill (Gray(0.0)) (close-with-line (line-to (x +' w, y +' h) (start-path (x, y))))
+end
+",
+    );
+    dir.write("entry.saty", "@require: v01-deco-curried\n\n0\n");
+    let files = load_v006(&dir, "entry.saty");
+
+    let mono = Mono;
+    let err = satysfi_lang::compile_document_v006_xver(&files, &mono).expect_err(
+        "a curried-prefix module-sig `deco` export must also be rejected",
+    );
+    match err {
+        CompileError::CrossVersionUnsupportedName { name, slice, .. } => {
+            assert_eq!(name, "deco");
+            assert_eq!(slice, "X4b");
+        }
+        other => panic!("expected CrossVersionUnsupportedName, got: {other}"),
+    }
+}
 

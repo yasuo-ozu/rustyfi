@@ -6,7 +6,7 @@
 //! `images.rs` pattern) — a full compile is overkill for pure-eval
 //! primitives with no context/layout dependency.
 
-use satysfi_backend::{Context, DocInfo, FontKey, FontMetrics, Length};
+use satysfi_backend::{Context, DocInfo, FontKey, FontMetrics, HyphenLang, Length};
 use satysfi_lang::eval::Interp;
 use satysfi_lang::value::Value;
 use satysfi_lang::{prim_types, primitives, types};
@@ -517,9 +517,11 @@ fn bare_constants_bound_under_v01() {
 }
 
 // ============================================================================
-// 10. G6 (`…/tmp/g6-g7-standins.md` §5.2) — the hyphenation/unidata loader +
-// setter stand-ins evaluate ACCEPT-AND-RETURN (never a `stringify-math`-
-// style hard error), and `here` resolves to the empty string.
+// 10. G6 (`…/tmp/g6-g7-standins.md` §5.2) — `load-unicode-char-database`/
+// `set-unicode-char-database` are still ACCEPT-AND-RETURN stand-ins (never
+// a `stringify-math`-style hard error), `here` resolves to the empty
+// string, and `load-hyphenation-dictionary`/`set-hyphenation-dictionary`
+// are now REAL (`docs/plans/design-hyphenation.md` S1) — no longer no-ops.
 // ============================================================================
 
 fn as_context(v: Value) -> Context {
@@ -530,7 +532,7 @@ fn as_context(v: Value) -> Context {
 }
 
 #[test]
-fn load_hyphenation_dictionary_accepts_and_returns_unit() {
+fn load_hyphenation_dictionary_parses_a_known_name_into_a_hyphen_lang_tag() {
     let mono = Mono;
     let mut interp = Interp::new(&mono);
     let env = primitives::base_env_with_version(SatysfiVersion::V0_1);
@@ -540,7 +542,72 @@ fn load_hyphenation_dictionary_accepts_and_returns_unit() {
         "load-hyphenation-dictionary",
         vec![Value::Str("english".to_string())],
     );
-    assert!(matches!(v, Value::Unit), "expected Value::Unit, got {v:?}");
+    assert!(
+        matches!(v, Value::Hyphenation(HyphenLang::EnglishUS)),
+        "expected Value::Hyphenation(EnglishUS), got {v:?}"
+    );
+}
+
+#[test]
+fn load_hyphenation_dictionary_also_accepts_the_real_stdlib_path_form() {
+    // The real, vendored `hyph-english.satyh` stand-in package calls this
+    // with `here ^ "/../hyph/english.satysfi-hyph"` (an upstream-style
+    // PATH, not a bare name) — `std-ja`/`std-ja-book`/`std-ja-report`/
+    // `md-ja`'s `get-standard-context` all route through it, so this must
+    // resolve to the same tag or every one of those real doc classes'
+    // capstone e2e tests fails at `set-hyphenation-dictionary` time.
+    let mono = Mono;
+    let mut interp = Interp::new(&mono);
+    let env = primitives::base_env_with_version(SatysfiVersion::V0_1);
+    let v = call(
+        &mut interp,
+        &env,
+        "load-hyphenation-dictionary",
+        vec![Value::Str("/../hyph/english.satysfi-hyph".to_string())],
+    );
+    assert!(
+        matches!(v, Value::Hyphenation(HyphenLang::EnglishUS)),
+        "expected Value::Hyphenation(EnglishUS), got {v:?}"
+    );
+}
+
+#[test]
+fn load_hyphenation_dictionary_parses_british_names_into_english_gb_tag() {
+    // en-GB (`docs/plans/design-hyphenation.md` §S3's en-GB option): all
+    // three accepted spellings must resolve to the same tag as
+    // "english"/"en-US" does to `HyphenLang::EnglishUS` above.
+    let mono = Mono;
+    for name in ["british", "en-GB", "british-english"] {
+        let mut interp = Interp::new(&mono);
+        let env = primitives::base_env_with_version(SatysfiVersion::V0_1);
+        let v = call(
+            &mut interp,
+            &env,
+            "load-hyphenation-dictionary",
+            vec![Value::Str(name.to_string())],
+        );
+        assert!(
+            matches!(v, Value::Hyphenation(HyphenLang::EnglishGB)),
+            "{name:?}: expected Value::Hyphenation(EnglishGB), got {v:?}"
+        );
+    }
+}
+
+#[test]
+fn load_hyphenation_dictionary_errors_on_an_unknown_name() {
+    let mono = Mono;
+    let mut interp = Interp::new(&mono);
+    let env = primitives::base_env_with_version(SatysfiVersion::V0_1);
+    let result = try_call(
+        &mut interp,
+        &env,
+        "load-hyphenation-dictionary",
+        vec![Value::Str("klingon".to_string())],
+    );
+    assert!(
+        result.is_err(),
+        "expected an error for an unrecognized dictionary name, got {result:?}"
+    );
 }
 
 #[test]
@@ -562,7 +629,7 @@ fn load_unicode_char_database_accepts_and_returns_unit() {
 }
 
 #[test]
-fn set_hyphenation_dictionary_and_set_unicode_char_database_are_no_ops() {
+fn set_hyphenation_dictionary_is_real_but_set_unicode_char_database_is_still_a_no_op() {
     let mono = Mono;
     let mut interp = Interp::new(&mono);
     let env = primitives::base_env_with_version(SatysfiVersion::V0_1);
@@ -573,15 +640,35 @@ fn set_hyphenation_dictionary_and_set_unicode_char_database_are_no_ops() {
         "get-initial-context",
         vec![Value::Length(Length::pt(100.0)), Value::Unit],
     ));
+    assert_eq!(
+        ctx0.hyphen_dictionary, None,
+        "Context::initial must default to no hyphenation dictionary (D4/byte-identity gate)"
+    );
 
+    // `set-hyphenation-dictionary` (S1, `docs/plans/design-hyphenation.md`)
+    // is now REAL: it writes `Context::hyphen_dictionary`, no longer a
+    // no-op.
     let ctx1 = as_context(call(
         &mut interp,
         &env,
         "set-hyphenation-dictionary",
-        vec![Value::Unit, Value::Context(Box::new(ctx0.clone()))],
+        vec![
+            Value::Hyphenation(HyphenLang::EnglishUS),
+            Value::Context(Box::new(ctx0.clone())),
+        ],
     ));
-    assert_eq!(ctx1, ctx0, "set-hyphenation-dictionary must return ctx unchanged");
+    assert_eq!(ctx1.hyphen_dictionary, Some(HyphenLang::EnglishUS));
+    assert_eq!(
+        Context {
+            hyphen_dictionary: None,
+            ..ctx1.clone()
+        },
+        ctx0,
+        "every other field must be unchanged"
+    );
 
+    // `set-unicode-char-database` is untouched by this slice — still a
+    // no-op.
     let ctx2 = as_context(call(
         &mut interp,
         &env,

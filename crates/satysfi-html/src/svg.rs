@@ -3,7 +3,7 @@
 //! (`satysfi-pdf/src/lib.rs:708,803`) for the HTML writer: turns a
 //! `PureHorzBox::Graphics`/`TabularBox::rules` element list into one inline
 //! `<svg>…</svg>` (one per graphics-bearing box, per the design doc's
-//! per-primitive table), a private submodule of [`crate::html`] (not `pub`,
+//! per-primitive table), a private submodule of the `satysfi-html` crate (not `pub`,
 //! not crate-wide — see that module's doc comment on why this whole feature
 //! lives inside `satysfi-pdf` rather than a new crate).
 //!

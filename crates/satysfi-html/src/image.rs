@@ -109,6 +109,8 @@ mod tests {
             ],
             px_w: 2,
             px_h: 2,
+            jpeg_dct: None,
+            pdf: None,
         }
     }
 

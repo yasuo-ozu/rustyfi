@@ -12,6 +12,9 @@ pdf-writer.workspace = true
 thiserror.workspace = true
 ttf-parser.workspace = true
 serde.workspace = true
+# PDF object-model reader for `load-pdf-image` (docs/plans/design-load-pdf-image.md):
+# re-emitting an imported page's object graph as a Form XObject.
+lopdf.workspace = true
 # Not (yet) a workspace-shared dependency: `fonts.rs` is the only consumer of
 # JSON parsing in this workspace today, so it is declared directly here
 # rather than promoted to `[workspace.dependencies]` (see fonts.rs's module

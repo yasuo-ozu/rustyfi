@@ -68,6 +68,12 @@ pub struct TtfFontStore {
     /// "no script scheme configured" — callers overlay `(ctx.font, 1.0,
     /// 0.0)` themselves, keeping today's single-font behavior.
     script_defaults: [Option<(FontKey, f64, f64)>; 4],
+    /// The `FontKey` allocated for `default-font.satysfi-hash`'s optional
+    /// `"math"` abbrev (`docs/plans/design-math-cramped.md` §4 Slice B).
+    /// `None` for a bare `TtfFontStore::load` or a registry with no `"math"`
+    /// entry — `get-initial-context` then leaves `Context::math_font` at its
+    /// `Context::initial` seed.
+    math_default: Option<FontKey>,
 }
 
 impl TtfFontStore {
@@ -95,6 +101,7 @@ impl TtfFontStore {
             slots,
             abbrevs: BTreeMap::new(),
             script_defaults: [None; 4],
+            math_default: None,
         })
     }
 
@@ -109,12 +116,14 @@ impl TtfFontStore {
         slots: Vec<usize>,
         abbrevs: BTreeMap<String, FontKey>,
         script_defaults: [Option<(FontKey, f64, f64)>; 4],
+        math_default: Option<FontKey>,
     ) -> Self {
         TtfFontStore {
             files,
             slots,
             abbrevs,
             script_defaults,
+            math_default,
         }
     }
 
@@ -176,6 +185,13 @@ impl TtfFontStore {
     /// `(ctx.font, 1.0, 0.0)`).
     pub fn script_default(&self, script: usize) -> Option<(FontKey, f64, f64)> {
         self.script_defaults.get(script).copied().flatten()
+    }
+
+    /// The `FontKey` allocated for the configured `"math"` default abbrev
+    /// (`docs/plans/design-math-cramped.md` §4 Slice B), or `None` when
+    /// nothing was configured.
+    pub fn math_font_default(&self) -> Option<FontKey> {
+        self.math_default
     }
 
     /// Parse the face for a given font key. See the struct doc for why this
@@ -258,6 +274,7 @@ impl FontMetrics for TtfFontStore {
             axis_height: r(c.axis_height()),
             superscript_bottom_min: r(c.superscript_bottom_min()),
             superscript_shift_up: r(c.superscript_shift_up()),
+            superscript_shift_up_cramped: r(c.superscript_shift_up_cramped()),
             superscript_baseline_drop_max: r(c.superscript_baseline_drop_max()),
             subscript_top_max: r(c.subscript_top_max()),
             subscript_shift_down: r(c.subscript_shift_down()),
@@ -461,5 +478,9 @@ impl FontMetrics for TtfFontStore {
 
     fn default_script_font(&self, script: Script) -> Option<(FontKey, f64, f64)> {
         self.script_default(script as usize)
+    }
+
+    fn default_math_font(&self) -> Option<FontKey> {
+        self.math_font_default()
     }
 }

@@ -29,6 +29,18 @@ use satysfi_pdf::{Base14Metrics, TtfFontStore};
 /// Gyre (TrueType/glyf — exercises the CID writer path elsewhere) over Noto
 /// Sans Math (CFF), same discovery order/guard as `tests/math_font.rs`.
 fn find_math_font() -> Option<PathBuf> {
+    // Slice B (`docs/plans/design-math-cramped.md` §4): the repo now bundles
+    // its own MATH-table font at `lib-satysfi/dist/fonts/
+    // DejaVuMathTeXGyre.ttf` (fetched by `scripts/download-fonts.sh`, same
+    // as ipaexm/Junicode). Check it FIRST so this test no longer depends on
+    // a host-wide font install once that script has been run — only fall
+    // through to fontconfig/distro paths when it hasn't.
+    let bundled = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../lib-satysfi/dist/fonts/DejaVuMathTeXGyre.ttf");
+    if bundled.is_file() {
+        return Some(bundled);
+    }
+
     for family in ["DejaVu Math TeX Gyre", "Noto Sans Math"] {
         if let Ok(output) = Command::new("fc-match")
             .args(["--format=%{file}", family])

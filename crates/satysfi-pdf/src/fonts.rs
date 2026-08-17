@@ -74,6 +74,13 @@
 //! than this module loading the regular face's bytes a second time under a
 //! different slot.
 //!
+//! An optional `"math"` key (`docs/plans/design-math-cramped.md` §4 Slice B)
+//! names the abbrev `get-initial-context` seeds `Context::math_font` with,
+//! e.g. `{ "regular": "Junicode", "math": "dejavu-math" }`. Absent ⇒ no
+//! math default is configured, and `math_font` stays at `Context::initial`'s
+//! own seed (`FontKey(0)`, the regular text face) — unchanged pre-Slice-B
+//! behavior.
+//!
 //! # Discovery and error handling
 //!
 //! See [`FontRegistry::discover`] for the full precedence chain. In short: a
@@ -143,6 +150,13 @@ pub struct FontRegistry {
     /// named (or the whole block is absent, or the registry came from
     /// `--font`/CLI flags, which have no `scripts` concept at all).
     script_fonts: [Option<(String, f64, f64)>; 4],
+    /// The abbrev named by `default-font.satysfi-hash`'s optional `"math"`
+    /// key (`docs/plans/design-math-cramped.md` §4 Slice B) — the font
+    /// `get-initial-context` seeds `Context::math_font` with. `None` when
+    /// absent (or the registry came from `--font`/CLI flags, which have no
+    /// `"math"` concept), in which case `math_font` stays at
+    /// `Context::initial`'s own seed (`FontKey(0)`, the regular text face).
+    math_font: Option<String>,
 }
 
 /// Config-less one-off face selection (`--font`/`--font-bold`/
@@ -226,6 +240,13 @@ struct RawDefaultFace {
     oblique: Option<String>,
     #[serde(default)]
     scripts: Option<RawScripts>,
+    /// `docs/plans/design-math-cramped.md` §4 Slice B: the abbrev
+    /// `get-initial-context` seeds `Context::math_font` with. Optional —
+    /// absent means no math default is configured (unchanged pre-Slice-B
+    /// behavior: `Context::math_font` stays at `Context::initial`'s
+    /// `FontKey(0)` seed).
+    #[serde(default)]
+    math: Option<String>,
 }
 
 /// One entry of the `scripts` block: `{ "font-name": abbrev, "ratio": f64,
@@ -405,10 +426,25 @@ impl FontRegistry {
             }
         }
 
+        // Slice B: validate the optional `"math"` abbrev the same way as
+        // `regular`/`bold`/`oblique` — a config that NAMES a math default
+        // but gets the abbrev wrong is a broken config (`Err`), never a
+        // silent fall-back to "no math default configured".
+        if let Some(abbrev) = &raw_default.math {
+            if !faces.contains_key(abbrev) {
+                return Err(FontConfigError::UnknownAbbrev {
+                    path: default_path,
+                    face: "math",
+                    abbrev: abbrev.clone(),
+                });
+            }
+        }
+
         Ok(Some(FontRegistry {
             faces,
             default_faces: [regular, bold, oblique],
             script_fonts,
+            math_font: raw_default.math,
         }))
     }
 
@@ -438,6 +474,7 @@ impl FontRegistry {
             faces,
             default_faces: [CLI_REGULAR.to_string(), bold_abbrev, oblique_abbrev],
             script_fonts: [None, None, None, None],
+            math_font: None,
         })
     }
 
@@ -537,7 +574,23 @@ impl FontRegistry {
             }
         }
 
-        Ok(TtfFontStore::from_parts(files, slots, abbrevs, script_defaults))
+        // Slice B: resolve the configured `"math"` abbrev (if any) to the
+        // `FontKey` just allocated for it — same lookup as the `scripts`
+        // block above, `abbrevs` already has every abbrev (including the
+        // three default faces, via the `or_insert` loop) at this point.
+        let math_default = self.math_font.as_ref().map(|abbrev| {
+            *abbrevs.get(abbrev).unwrap_or_else(|| {
+                panic!("FontRegistry invariant violated: math abbrev {abbrev:?} unresolved")
+            })
+        });
+
+        Ok(TtfFontStore::from_parts(
+            files,
+            slots,
+            abbrevs,
+            script_defaults,
+            math_default,
+        ))
     }
 
     /// Resolve `abbrev` to a loadable file path.

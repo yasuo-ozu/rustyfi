@@ -4,8 +4,8 @@ use crate::ast::{Ast, BText, IText, MathElem};
 use crate::compile::CompiledExpr;
 use crate::primitives::PrimDef;
 use satysfi_backend::{
-    Color, Context, DocExtras, HorzBox, ImageId, ImageResource, Length, MathCharClass, MathKind,
-    Page, PageGeometry, VertBox,
+    Color, Context, DocExtras, HorzBox, HyphenLang, ImageId, ImageResource, Length, MathCharClass,
+    MathKind, Page, PageGeometry, VertBox,
 };
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
@@ -118,6 +118,12 @@ pub enum Value {
     Graphics(satysfi_backend::GraphicsElem),
     /// `text-info` (context-box-prims.md §G sliver).
     TextInfo(TextInfo),
+    /// `hyphenation` (`load-hyphenation-dictionary`'s result;
+    /// `docs/plans/design-hyphenation.md` S1) — the tag `set-hyphenation-
+    /// dictionary` writes into `Context::hyphen_dictionary`. Was always
+    /// `Value::Unit` (a discarded no-op token) before this slice; now
+    /// actually carries which dictionary was requested.
+    Hyphenation(HyphenLang),
 }
 
 impl Value {
@@ -152,6 +158,7 @@ impl Value {
             Value::Path(_) => "path",
             Value::Graphics(_) => "graphics",
             Value::TextInfo(_) => "text-info",
+            Value::Hyphenation(_) => "hyphenation",
         }
     }
 }

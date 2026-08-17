@@ -170,6 +170,36 @@ fn write_index(
     tmp.path().join(index_rel)
 }
 
+/// Write a plain-directory index entry for `name` whose single `version`
+/// declares `deps` (`dep_name -> constraint text`) in a
+/// `[versions."<v>".dependencies]` table (design §3.2's
+/// `VersionEntry.dependencies`) — the phase-7c solver test fixture, alongside
+/// the deps-free [`write_index`]/[`Ver`] used by the rest of this file.
+fn write_index_entry_with_deps(
+    tmp: &TempDir,
+    index_rel: &str,
+    name: &str,
+    version: &str,
+    tarball: &Path,
+    sha: &str,
+    deps: &[(&str, &str)],
+) {
+    let mut toml = format!(
+        "[versions.\"{version}\"]\n\
+         tarball_url = \"{}\"\n\
+         sha256 = \"{}\"\n",
+        file_url(tarball),
+        sha,
+    );
+    if !deps.is_empty() {
+        toml.push_str(&format!("\n[versions.\"{version}\".dependencies]\n"));
+        for (dep, c) in deps {
+            toml.push_str(&format!("{dep} = \"{c}\"\n"));
+        }
+    }
+    tmp.write(&format!("{index_rel}/packages/{name}.toml"), &toml);
+}
+
 fn install_opts(root: &Path) -> InstallOptions {
     InstallOptions {
         dest: Some(root.to_path_buf()),
@@ -428,6 +458,79 @@ fn reconcile_registry_locks_and_is_reproducible_without_index() {
 }
 
 // ---------------------------------------------------------------------------
+// Phase-7c solver wiring: a transitive dependency reaches the closure.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn reconcile_registry_resolves_transitive_dependency_into_the_closure() {
+    let tmp = TempDir::new("closure");
+    let (base_tb, base_sha) = make_tarball(&tmp, "base-package", "1.0.0", "let base = 1\n");
+    let (great_tb, great_sha) = make_tarball(&tmp, "great-package", "1.0.0", "let great = 1\n");
+
+    write_index_entry_with_deps(&tmp, "index", "base-package", "1.0.0", &base_tb, &base_sha, &[]);
+    write_index_entry_with_deps(
+        &tmp,
+        "index",
+        "great-package",
+        "1.0.0",
+        &great_tb,
+        &great_sha,
+        &[("base-package", "^1.0.0")],
+    );
+    let index = tmp.path().join("index");
+
+    // The manifest names only `great-package` directly; `base-package` is
+    // pulled in purely as a transitive dependency of it.
+    let manifest = tmp.write(
+        "proj/Satyrfile.toml",
+        &format!(
+            "[registry]\nurl = \"{}\"\n\n\
+             [[library]]\nname = \"great-package\"\n\
+             source = {{ registry = \"great-package\", version = \"1.0.0\" }}\n",
+            file_url(&index)
+        ),
+    );
+    let root = tmp.path().join("root");
+
+    let report =
+        sg::install_manifest_reg(&manifest, &root_opts(&root), &RegistryOptions::default())
+            .expect("first reconcile resolves the closure");
+    assert_eq!(
+        report.installed.len(),
+        2,
+        "both the direct entry and its transitive dependency materialise"
+    );
+    assert!(root
+        .join("dist/packages/great-package/great-package.satyh")
+        .is_file());
+    assert!(root
+        .join("dist/packages/base-package/base-package.satyh")
+        .is_file(), "transitive dependency materialised too");
+
+    let lock = fs::read_to_string(tmp.path().join("proj/Satyrfile.lock")).unwrap();
+    assert!(lock.contains("name = \"great-package\""), "{lock}");
+    assert!(
+        lock.contains("name = \"base-package\""),
+        "transitive dep locked under its own package name:\n{lock}"
+    );
+    assert!(lock.contains(&base_sha), "transitive dep's sha256 is pinned:\n{lock}");
+
+    // Delete the index entirely: a second reconcile must reproduce the WHOLE
+    // closure (direct + transitive) without re-consulting it — the same
+    // no-index reproducibility guarantee `reconcile_registry_locks_and_is_
+    // reproducible_without_index` checks for a single direct entry, now
+    // extended to a transitive one.
+    fs::remove_dir_all(&index).unwrap();
+    let report =
+        sg::install_manifest_reg(&manifest, &root_opts(&root), &RegistryOptions::default())
+            .expect("second reconcile reproducible without index");
+    assert!(report.installed.is_empty());
+    let mut skipped = report.skipped.clone();
+    skipped.sort();
+    assert_eq!(skipped, ["base-package", "great-package"]);
+}
+
+// ---------------------------------------------------------------------------
 // search
 // ---------------------------------------------------------------------------
 
@@ -531,6 +634,68 @@ fn update_reports_available_upgrade() {
     assert_eq!(rep.upgrades[0].name, "great-package");
     assert_eq!(rep.upgrades[0].current, "1.0.0");
     assert_eq!(rep.upgrades[0].latest, "1.1.0");
+}
+
+/// A newer-but-incompatible version present in the index must NOT be
+/// reported: `great-package` has 1.0.0/1.1.0/2.0.0 published, but a second
+/// locked package (`capper`) declares `great-package ^1.0.0` — capping it
+/// below 2.0.0. `update`'s solver-based diff (design §5.2) must report the
+/// highest version that still fits the *whole* solved graph (1.1.0), not the
+/// index's bare maximum (2.0.0) the pre-solver `select_version(.., None)`
+/// loop would have reported.
+#[test]
+fn update_caps_the_upgrade_at_the_highest_mutually_compatible_version() {
+    let tmp = TempDir::new("update-cap");
+    let (t10, sha10) = make_tarball(&tmp, "great-package", "1.0.0", "let g = 1\n");
+    let (t11, sha11) = make_tarball(&tmp, "great-package", "1.1.0", "let g = 2\n");
+    let (t20, sha20) = make_tarball(&tmp, "great-package", "2.0.0", "let g = 3\n");
+    let (tc, shac) = make_tarball(&tmp, "capper", "1.0.0", "let c = 1\n");
+
+    write_index_entry_with_deps(&tmp, "index", "great-package", "1.0.0", &t10, &sha10, &[]);
+    write_index_entry_with_deps(&tmp, "index", "capper", "1.0.0", &tc, &shac, &[("great-package", "^1.0.0")]);
+    let index = tmp.path().join("index");
+
+    let manifest = tmp.write(
+        "proj/Satyrfile.toml",
+        &format!(
+            "[registry]\nurl = \"{}\"\n\n\
+             [[library]]\nname = \"great-package\"\n\
+             source = {{ registry = \"great-package\", version = \"1.0.0\" }}\n\n\
+             [[library]]\nname = \"capper\"\n\
+             source = {{ registry = \"capper\", version = \"1.0.0\" }}\n",
+            file_url(&index)
+        ),
+    );
+    let root = tmp.path().join("root");
+    sg::install_manifest_reg(&manifest, &root_opts(&root), &RegistryOptions::default())
+        .expect("reconcile at 1.0.0/1.0.0");
+
+    // Now publish great-package 1.1.0 AND 2.0.0.
+    let index_toml = format!(
+        "[versions.\"1.0.0\"]\ntarball_url = \"{}\"\nsha256 = \"{}\"\n\n\
+         [versions.\"1.1.0\"]\ntarball_url = \"{}\"\nsha256 = \"{}\"\n\n\
+         [versions.\"2.0.0\"]\ntarball_url = \"{}\"\nsha256 = \"{}\"\n",
+        file_url(&t10), sha10, file_url(&t11), sha11, file_url(&t20), sha20,
+    );
+    tmp.write("index/packages/great-package.toml", &index_toml);
+
+    let reg = RegistryOptions {
+        url: Some(file_url(&index)),
+        ..Default::default()
+    };
+    let rep = sg::update(&manifest, &reg).expect("update ok");
+    assert_eq!(rep.upgrades.len(), 1, "exactly one upgrade reported: {:?}", rep.upgrades);
+    assert_eq!(rep.upgrades[0].name, "great-package");
+    assert_eq!(rep.upgrades[0].current, "1.0.0");
+    assert_eq!(
+        rep.upgrades[0].latest, "1.1.0",
+        "2.0.0 is published but capped out by capper's ^1.0.0 requirement"
+    );
+    assert!(
+        rep.up_to_date.contains(&"capper".to_string()),
+        "capper itself has no newer version: {:?}",
+        rep.up_to_date
+    );
 }
 
 // ---------------------------------------------------------------------------

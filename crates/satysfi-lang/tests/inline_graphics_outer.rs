@@ -114,10 +114,16 @@ fn inline_graphics_outer_resolves_to_a_graphics_box_with_the_lines_slack_width()
     let Value::BlockBoxes(lines) = v else {
         panic!("expected block-boxes, got {v:?}")
     };
-    assert_eq!(lines.len(), 1, "a single fil-only box should fit on one line");
-    let satysfi_backend::VertBox::Line { contents, .. } = &lines[0] else {
-        panic!("expected a Line, got {:?}", lines[0])
-    };
+    // line-break now brackets the formed paragraph with paragraph_top/bottom
+    // margin Skips (design-silent-fields FIX 3), so the single fil-only line
+    // sits between two VertBox::Skip — find it rather than assuming index 0.
+    let contents = lines
+        .iter()
+        .find_map(|vb| match vb {
+            satysfi_backend::VertBox::Line { contents, .. } => Some(contents),
+            _ => None,
+        })
+        .expect("a single fil-only box should fit on one line");
     assert_eq!(contents.len(), 1);
     let (_, bx) = &contents[0];
     match bx {

@@ -22,6 +22,7 @@ fn page_with_tabular_box() -> Page {
                     font: FontKey(0),
                     size: Length::pt(12.0),
                     rising: Length::ZERO,
+                    color: Color::Gray(0.0),
                 },
                 text: "A".to_string(),
                 width: Length::pt(8.0),

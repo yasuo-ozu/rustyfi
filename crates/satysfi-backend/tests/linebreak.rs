@@ -25,6 +25,7 @@ fn word(m: &Mono, c: &Context, text: &str) -> HorzBox {
             font: c.font,
             size: c.font_size,
             rising: Length::ZERO,
+            color: Color::Gray(0.0),
         },
         text: text.into(),
         width: m.text_width(c.font, text, c.font_size).unwrap(),
@@ -691,7 +692,7 @@ fn frame_box(width: f64, height: f64, depth: f64) -> PureHorzBox {
         contents: vec![(
             Length::ZERO,
             PureHorzBox::InnerString {
-                info: HorzStringInfo { font: FontKey(0), size: Length::pt(12.0), rising: Length::ZERO },
+                info: HorzStringInfo { font: FontKey(0), size: Length::pt(12.0), rising: Length::ZERO, color: Color::Gray(0.0) },
                 text: "x".into(),
                 width: Length::pt(width),
                 height: Length::pt(height),

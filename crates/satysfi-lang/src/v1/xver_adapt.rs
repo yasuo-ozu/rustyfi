@@ -74,6 +74,7 @@
 
 use satysfi_syntax::cst;
 use satysfi_syntax::cst::ast::{TypeApp, TypeAtom, TypeExpr, TypeProd};
+use satysfi_syntax::cst_v1;
 use satysfi_syntax::SatysfiVersion;
 
 use crate::types::{CmdArgType, MonoType, PolyType, Row};
@@ -622,6 +623,24 @@ pub(crate) enum DecoKind {
 /// One top-level `V0_0_6` binding X3b can soundly value-coerce: its own
 /// `: ty` ascription (`RecBinding.ascription`) is *exactly* the bare leaf
 /// `deco`/`deco-set` — see this section's doc comment for the scope.
+///
+/// **Why this stays forward-only (X4b does NOT extend it — see the X4b
+/// section near the bottom of this file for the full derivation).** 0.1's
+/// grammar has no bare top-level type-ascription syntax at all
+/// (`cst_v1::Bind::Value`/`ValueRec`'s own doc comments), so the only
+/// textual site a 0.1 export's `deco`/`deco-set` type could even be NAMED
+/// is a `module M :> sig val name : deco .. end = struct .. end` SIG item —
+/// and EVERY such `:>` annotation is unconditionally conformance-enforced
+/// by `v1::module_check`'s phase-D spine walk (name-keyed, HARD-CONSTRAINT-
+/// untouched). A splice-time coercion that makes the crossing value's real
+/// shape (`graphics list`) differ from the module's own declared `deco`
+/// scheme (`graphics`) — which is the entire point of a reverse coercion —
+/// trips that SAME enforcement again on the coercion's own binding, no
+/// matter where it is spliced (verified empirically). So the reverse
+/// direction cannot soundly wrap a module-sig `deco`/`deco-set` VALUE
+/// export at all; it only detects-and-REJECTS one, via
+/// `reject_deco_exports_v01_sig` (X4b section, below) — a wholly separate,
+/// additive function, not a modification of this one.
 #[derive(Debug, Clone)]
 pub(crate) struct DecoExport {
     pub name: String,
@@ -936,6 +955,232 @@ pub(crate) fn deco_coercion_prelude(exports: &[DecoExport]) -> Vec<cst::TopBindi
     });
     file.prelude
 }
+
+// ============================================================================
+// X4b (the reverse mirror of X3b, above) — FINDING, not a feature: a
+// foreign `V0_1` dependency's `deco`/`deco-set` export returns a single
+// `graphics` (0.1 semantics); every REAL `V0_0_6`-authored consumer call
+// site (`primitives::apply_deco`/`coerce_graphics_result`, fired at render
+// time under `interp.version == V0_0_6` — `lib.rs`'s
+// `compile_document_v006_xver_with_trials` always calls
+// `eval_document_trials(.., SatysfiVersion::V0_0_6)`) expects a `graphics
+// list` back (`coerce_graphics_result`'s `!graphics_is_collection()`
+// branch, `as_list`). A sound coercion would need to wrap the single
+// `graphics` in a SINGLETON LIST — `let name p w h d = [name p w h d]`,
+// the literal inverse of X3b's `unite-graphics` wrap.
+//
+// **Why this is NOT implemented as a coercion (the task brief's own
+// "STOP and report" escape hatch).** 0.1's grammar has NO bare top-level
+// type-ascription syntax at all (`cst_v1::Bind::Value`/`ValueRec`'s own
+// doc comments — no `: ty` on a plain `val`/`val rec`), so the ONLY
+// textual site a 0.1 export's `deco`/`deco-set` type could ever be NAMED
+// is a `module M :> sig val name : deco .. end = struct .. end` SIG item.
+// But EVERY 0.1 module signature annotation is the `:>` (COERCE) form —
+// 0.1 has no OTHER annotation keyword (`SigAnnotV1.coerce: CoerceTok`,
+// unconditionally) — and `v1::module_check`'s (HARD-CONSTRAINT-untouched)
+// phase-D spine walk enforces EVERY such annotation's conformance,
+// UNCONDITIONALLY, for every `Ast::LetIn` node whose name matches a
+// `static_env.seals` entry — this check is PURELY NAME-KEYED, not
+// "first occurrence only": it fires on ANY binding sharing that exact
+// qualified name, wherever it appears in the merged program.
+//
+// This was verified empirically, not merely reasoned about: an earlier
+// version of this slice appended a coercing member INSIDE the exporting
+// module's own `decls` (shadowing the original for both intra-module and
+// qualified-external lookups, mirroring X3b's top-level shadow trick one
+// level deeper) — compiling it produced `v1::module_check`'s own
+// "module `M` does not match its signature: value `name` has type
+// .. graphics list .. but its signature declares .. graphics .." error,
+// because the phase-D walk's `static_env.seals.get(name)` check fires on
+// the SHADOWING binding too (it is keyed by the qualified STRING, not by
+// "the module's own first/original member"). A later attempt to splice
+// the wrap as a SEPARATE top-level binding under the same fully-qualified
+// dotted key (bypassing the module's own `decls` entirely, exploiting the
+// fact that `elaborate.rs`'s top-level `push_named_binding` treats a
+// binder name as an opaque `String` with no identifier-syntax validation)
+// does not escape this either: `module_check`'s spine walk still matches
+// on the exact name at THAT binding's own `Ast::LetIn` node, wherever in
+// the merged program's single sequential chain it occurs. There is no
+// splice-time position for a differently-shaped binding under the sealed
+// name that `v1::module_check` (unmodified) will not re-check against the
+// module's own declared scheme — and re-shaping the VALUE (list vs.
+// single) is the entire point of this coercion, so it can never pass that
+// re-check. Fixing this would require teaching `module_check.rs` to skip
+// (or special-case) a cross-version coercion shadow, which the task's
+// HARD CONSTRAINTS forbid ("compile.rs/eval.rs/module_check.rs/types.rs/
+// value.rs must stay UNTOUCHED — if you need to change them, STOP and
+// report").
+//
+// **What this leaves in place.** `v1::xver_adapt`'s existing forward-only
+// `DecoExport`/`classify_deco_exports`/`deco_coercion_prelude` (above) are
+// UNCHANGED — X4b does not touch X3b's own file/behavior at all. The
+// reverse direction keeps X4a's original conservative posture (reject
+// every forked type name except the proven-identical `math-text`/
+// `math-boxes`), with exactly one additive improvement: a `deco`/
+// `deco-set` VALUE export via a module's `sig` is now rejected with a
+// SPECIFIC, EARLY diagnostic (`reject_deco_exports_v01_sig`, below) —
+// naming the exact offending type — instead of silently splicing verbatim
+// and letting the caller hit a confusing downstream `module_check`/
+// ordinary-`TypeError` failure with no indication of WHY. A bare `type
+// foo = deco` synonym (no value attached — safe with zero coercion, the
+// same reasoning as the forward direction's `type xver-deco-alias = deco`)
+// is unaffected either way: it is not a sig `val` item at all, so this
+// function never sees it, and the ordinary POST-lowering
+// `collect_free_globals` scan (`lib.rs`) already lets it splice verbatim.
+// ============================================================================
+
+/// Detect (to REJECT, never to accept — see this section's doc comment)
+/// a `deco`/`deco-set` mention anywhere in a foreign `V0_1` dependency's OWN
+/// top-level module signature. Operates on the dependency's file's
+/// ORIGINAL, PRE-lowering `cst_v1::FileV1` — `v1::lower::
+/// lower_file_v1_with_surfaces` DROPS a 0.1 module's `sig_annot` entirely
+/// (`v1/lower.rs`'s own "sig_annot is then simply DROPPED" doc comment),
+/// so this is the only stage at which the sig's text still exists; the
+/// ordinary POST-lowering `collect_free_globals` scan (`lib.rs`) can never
+/// see it.
+///
+/// `Ok(())` for a `FileV1::Document` (never a dependency), a `Library`
+/// with no `sig_annot` at all, or one whose signature this port's
+/// unresolved-reference-avoidance (`v1_sigbot_mentions_deco`'s own doc
+/// comment) does not chase (a named signature reference, or a functor) —
+/// a forked type hiding behind one of those is NOT a soundness gap
+/// (X4.8/S2): HM still infers the crossing value's REAL shape at every use
+/// site regardless of what this textual scan saw, so the worst case is an
+/// ordinary `TypeError` far from its cause, never silent corruption.
+pub(crate) fn reject_deco_exports_v01_sig(file: &cst_v1::FileV1) -> Result<(), BoundaryError> {
+    let cst_v1::FileV1::Library {
+        sig_annot: Some(sig_annot),
+        ..
+    } = file
+    else {
+        return Ok(());
+    };
+    if let Some(name) = v1_sigexpr_mentions_deco(&sig_annot.sig_.0) {
+        return Err(BoundaryError::ForkedTypeExport {
+            binding: String::new(),
+            ty_name: name.clone(),
+            from: SatysfiVersion::V0_1,
+            to: SatysfiVersion::V0_0_6,
+            note: forked_note(&name),
+        });
+    }
+    Ok(())
+}
+
+/// Structural (read-only) walk of a 0.1 signature expression, looking for
+/// any `deco`/`deco-set` mention anywhere reachable from it: a direct
+/// inline `sig .. end` body's `val`/`val \cmd`/`val +cmd` items (recursing
+/// into any nested `module`/`signature`/`include` declaration too), or a
+/// `with type` refinement's base. A named-signature reference
+/// (`SigBotV1::Path`/`Var`) or a functor signature is NOT chased further —
+/// see [`reject_deco_exports_v01_sig`]'s own doc comment for why that is
+/// still sound (a false negative here is an ordinary `TypeError`, never
+/// unsoundness).
+fn v1_sigexpr_mentions_deco(se: &cst_v1::ast::SigExpr) -> Option<String> {
+    use cst_v1::ast::SigExpr;
+    match se {
+        SigExpr::Functor { dom, cod, .. } => v1_sigexpr_mentions_deco(dom).or_else(|| v1_sigexpr_mentions_deco(cod)),
+        SigExpr::WithType { base, .. } => v1_sigbot_mentions_deco(base),
+        SigExpr::Bot(bot) => v1_sigbot_mentions_deco(bot),
+    }
+}
+
+fn v1_sigbot_mentions_deco(bot: &cst_v1::ast::SigBotV1) -> Option<String> {
+    use cst_v1::ast::SigBotV1;
+    match bot {
+        // An unresolved named-signature reference — not chased (this
+        // section's doc comment).
+        SigBotV1::Path(_) | SigBotV1::Var(_) => None,
+        SigBotV1::Sig { decls, .. } => decls.iter().find_map(|d| v1_decl_mentions_deco(&d.0)),
+    }
+}
+
+fn v1_decl_mentions_deco(decl: &cst_v1::ast::Decl) -> Option<String> {
+    use cst_v1::ast::Decl;
+    match decl {
+        Decl::Val { ty, .. } | Decl::ValHorzCmd { ty, .. } | Decl::ValVertCmd { ty, .. } => {
+            v1_type_expr_mentions_deco(ty)
+        }
+        // A `type`/opaque-`type` sig item merely NAMES `deco`/`deco-set`
+        // with no attached VALUE — safe, no coercion needed at all (this
+        // section's doc comment's "bare `type foo = deco` synonym" case).
+        Decl::TypeOpaque { .. } | Decl::Type { .. } => None,
+        Decl::Module { sig_, .. } | Decl::Signature { sig_, .. } | Decl::Include { sig_, .. } => {
+            v1_sigexpr_mentions_deco(sig_)
+        }
+    }
+}
+
+/// Structural (read-only) walk of the WIDENED 0.1 type-expression grammar
+/// (`cst_v1::ast::TypeExpr`) — the 0.1-grammar twin of this module's own
+/// `type_expr_mentions_deco`, additionally covering 0.1-only shapes
+/// (`OptRowFun`, prefix `TypeApp::Applied`/`AppliedLong`, the `inline
+/// [..]`/`block [..]`/`math [..]` command-type forms). `Some(name)` for
+/// the first `"deco"`/`"deco-set"` leaf found anywhere in `te`, `None` if
+/// there is none.
+fn v1_type_expr_mentions_deco(te: &cst_v1::ast::TypeExpr) -> Option<String> {
+    use cst_v1::ast::TypeExpr;
+    match te {
+        TypeExpr::OptRowFun { opt_dom, dom, cod, .. } => opt_dom
+            .inner
+            .entries
+            .iter()
+            .find_map(|e| v1_type_expr_mentions_deco(&e.ty.0))
+            .or_else(|| v1_type_prod_mentions_deco(dom))
+            .or_else(|| v1_type_expr_mentions_deco(cod)),
+        TypeExpr::Fun { dom, cod, .. } => {
+            v1_type_prod_mentions_deco(dom).or_else(|| v1_type_expr_mentions_deco(cod))
+        }
+        TypeExpr::Atom(prod) => v1_type_prod_mentions_deco(prod),
+    }
+}
+
+fn v1_type_prod_mentions_deco(tp: &cst_v1::ast::TypeProd) -> Option<String> {
+    v1_type_app_mentions_deco(&tp.first).or_else(|| tp.rest.iter().find_map(|st| v1_type_app_mentions_deco(&st.ty)))
+}
+
+fn v1_type_app_mentions_deco(ta: &cst_v1::ast::TypeApp) -> Option<String> {
+    use cst_v1::ast::TypeApp;
+    match ta {
+        // Prefix application (`list int`, 0.1-only shape): the CTOR itself
+        // is the bare-name position here (unlike the universal postfix
+        // grammar) — check it, plus every argument atom.
+        TypeApp::Applied { ctor, first, rest } => deco_leaf_name(&ctor.name)
+            .or_else(|| v1_type_atom_mentions_deco(first))
+            .or_else(|| rest.iter().find_map(v1_type_atom_mentions_deco)),
+        // `M.t τ…` — a QUALIFIED ctor name; never itself a bare
+        // `"deco"`/`"deco-set"` (those are unqualified builtins), only its
+        // arguments can mention one.
+        TypeApp::AppliedLong { first, rest, .. } => {
+            v1_type_atom_mentions_deco(first).or_else(|| rest.iter().find_map(v1_type_atom_mentions_deco))
+        }
+        TypeApp::InlineCmdTy { args, .. } | TypeApp::BlockCmdTy { args, .. } | TypeApp::MathCmdTy { args, .. } => {
+            args.iter().find_map(v1_type_cmd_arg_mentions_deco)
+        }
+        TypeApp::Atom(atom) => v1_type_atom_mentions_deco(atom),
+    }
+}
+
+fn v1_type_cmd_arg_mentions_deco(item: &cst_v1::ast::TypeCmdArgItemV1) -> Option<String> {
+    item.opts
+        .as_ref()
+        .and_then(|o| o.entries.iter().find_map(|e| v1_type_expr_mentions_deco(&e.ty.0)))
+        .or_else(|| v1_type_expr_mentions_deco(&item.ty.0))
+}
+
+fn v1_type_atom_mentions_deco(atom: &cst_v1::ast::TypeAtom) -> Option<String> {
+    use cst_v1::ast::TypeAtom;
+    match atom {
+        TypeAtom::Paren { inner, .. } => v1_type_expr_mentions_deco(&inner.0),
+        TypeAtom::Record { inner, .. } => inner.fields.iter().find_map(|f| v1_type_expr_mentions_deco(&f.ty.0)),
+        // A bound type variable — never a forked-name candidate.
+        TypeAtom::Var(_) => None,
+        // `M.t` — a qualified name; never itself a bare builtin fork name.
+        TypeAtom::LongName(_) => None,
+        TypeAtom::Name(n) => deco_leaf_name(&n.name),
+    }
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -1316,5 +1561,101 @@ mod tests {
     #[test]
     fn deco_coercion_prelude_empty_is_empty() {
         assert!(deco_coercion_prelude(&[]).is_empty());
+    }
+
+    // ------------------------------------------------------------------
+    // X4b: reject_deco_exports_v01_sig (the reverse direction's finding —
+    // detect-and-reject, not classify-and-wrap; see that function's own
+    // doc comment for why no sound wrap exists here)
+    // ------------------------------------------------------------------
+
+    fn v1_file(src: &str) -> cst_v1::FileV1 {
+        cst_v1::parse_file_v1(src).expect("parse v1 fixture")
+    }
+
+    #[test]
+    fn reject_deco_exports_v01_sig_rejects_bare_sig_val() {
+        // The ONE shape 0.1's grammar can express a bare `deco` ascription
+        // at all: a top-level module's own `sig val name : deco` item
+        // (`cst_v1::Bind::Value` has no ascription syntax of its own) —
+        // still rejected (no sound wrap exists, this function's doc
+        // comment), now with a specific X4b diagnostic.
+        let file = v1_file("module M :> sig\n  val my-deco : deco\nend = struct\n  val my-deco = 0\nend\n");
+        let err =
+            reject_deco_exports_v01_sig(&file).expect_err("a module sig `val : deco` item must still be rejected");
+        match err {
+            BoundaryError::ForkedTypeExport { ty_name, .. } => assert_eq!(ty_name, "deco"),
+        }
+    }
+
+    #[test]
+    fn reject_deco_exports_v01_sig_rejects_bare_sig_decoset() {
+        let file = v1_file("module M :> sig\n  val my-decoset : deco-set\nend = struct\n  val my-decoset = 0\nend\n");
+        let err = reject_deco_exports_v01_sig(&file)
+            .expect_err("a module sig `val : deco-set` item must still be rejected");
+        match err {
+            BoundaryError::ForkedTypeExport { ty_name, .. } => assert_eq!(ty_name, "deco-set"),
+        }
+    }
+
+    #[test]
+    fn reject_deco_exports_v01_sig_rejects_curried_sig_val() {
+        let file =
+            v1_file("module M :> sig\n  val my-deco : length -> deco\nend = struct\n  val my-deco t p w h d = 0\nend\n");
+        let err = reject_deco_exports_v01_sig(&file).expect_err("a curried sig `val` type must still be rejected");
+        match err {
+            BoundaryError::ForkedTypeExport { ty_name, .. } => assert_eq!(ty_name, "deco"),
+        }
+    }
+
+    #[test]
+    fn reject_deco_exports_v01_sig_rejects_nested_module() {
+        let file = v1_file(
+            "module Outer :> sig\n  module Inner : sig val my-deco : deco end\nend = struct\n  \
+             module Inner :> sig val my-deco : deco end = struct val my-deco = 0 end\nend\n",
+        );
+        let err =
+            reject_deco_exports_v01_sig(&file).expect_err("a NESTED module's sig `val : deco` item must still reject");
+        match err {
+            BoundaryError::ForkedTypeExport { ty_name, .. } => assert_eq!(ty_name, "deco"),
+        }
+    }
+
+    #[test]
+    fn reject_deco_exports_v01_sig_ignores_type_only_mention() {
+        // A transparent `type .. = deco` sig item merely NAMING
+        // `deco`/`deco-set` (no value attached) is safe with zero coercion
+        // — this function must not reject it.
+        let file = v1_file(
+            "module M :> sig\n  type xver-deco-alias = deco\nend = struct\n  type xver-deco-alias = deco\nend\n",
+        );
+        assert!(reject_deco_exports_v01_sig(&file).is_ok());
+    }
+
+    #[test]
+    fn reject_deco_exports_v01_sig_ok_for_no_sig() {
+        let file = v1_file("module M = struct\n  val my-deco p w h d = 0\nend\n");
+        assert!(
+            reject_deco_exports_v01_sig(&file).is_ok(),
+            "an UNSEALED module (no sig_annot at all) has no textual site for this check to see"
+        );
+    }
+
+    #[test]
+    fn reject_deco_exports_v01_sig_ok_for_document() {
+        let file = v1_file("0\n");
+        assert!(reject_deco_exports_v01_sig(&file).is_ok(), "a document is never a dependency");
+    }
+
+    #[test]
+    fn reject_deco_exports_v01_sig_does_not_perturb_forward_toplevel_letrec() {
+        // Non-regression: X4b's addition must not change the FORWARD
+        // direction's existing top-level `let-rec` acceptance path at all
+        // (a wholly separate function operating on a wholly separate CST
+        // type — `cst_v1::FileV1`, not `cst::TopBinding`).
+        let prelude = prelude_of("let-rec xver-my-deco : deco | (x, y) w h d = []\n0\n");
+        let exports =
+            classify_deco_exports(&prelude, v006(), v01()).expect("bare `: deco` must still be accepted forward");
+        assert_eq!(exports.len(), 1);
     }
 }

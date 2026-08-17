@@ -7,6 +7,7 @@ pub mod crossref;
 pub mod elaborate;
 pub mod eval;
 pub mod exhaustive;
+pub mod hyphenation;
 pub mod prim_types;
 pub mod primitives;
 pub mod typecheck;
@@ -593,11 +594,59 @@ pub fn compile_document_v006_xver_with_trials(
             // with) — rejects the WHOLE dependency, conservatively (S1/S4:
             // false-reject is safe, false-accept is not — the task brief's
             // mandatory soundness bar). `page`/`graphics`/`deco`/
-            // `deco-set`/`pre-path`/`path`/`image`/`font`/`paren` all still
-            // reject in THIS direction too — X4b (deferred) is where a real
-            // value-level coercion could accept more of them. Once the
-            // whitelist check passes, the dependency splices VERBATIM
-            // (never relabeled) — both the safe AND the correct choice here.
+            // `pre-path`/`path`/`image`/`font`/`paren` all still reject in
+            // THIS direction too. Once the whitelist check passes, the
+            // dependency splices VERBATIM (never relabeled) — both the safe
+            // AND the correct choice here.
+            //
+            // X4b (`docs/plans/design-cross-version-import.md`'s "Slice X4"
+            // §X4.5, extended beyond its own math-only sketch by the task
+            // brief this increment implements): `deco`/`deco-set` were
+            // INTENDED to also cross (the reverse mirror of X3b's
+            // `unite-graphics` wrap, coercing the OPPOSITE way — a crossing
+            // `V0_1` deco returns a single `graphics`; every REAL
+            // `V0_0_6`-authored consumer call site expects a `graphics
+            // list` back, so the wrap would need to be a SINGLETON LIST,
+            // `[name p w h d]`). **This turned out to be UNSOUND to wire up
+            // given this port's hard constraints, and is INTENTIONALLY left
+            // rejected** — see `v1::xver_adapt::reject_deco_exports_v01_sig`'s
+            // own doc comment for the full derivation. Summary: 0.1's ONLY
+            // textual site that can even NAME a `deco`/`deco-set` export's
+            // type at all is a `module M :> sig val name : deco .. end =
+            // struct .. end` (0.1 has no bare top-level ascription syntax —
+            // `cst_v1::Bind::Value`'s own doc comment), and EVERY such `:>`
+            // annotation is unconditionally conformance-enforced by (HARD-
+            // CONSTRAINT-untouched) `v1::module_check`'s phase-D spine walk
+            // — keyed PURELY by the exported name, checked against
+            // `static_env.seals` for EVERY `Ast::LetIn` node sharing that
+            // name, regardless of where in the merged program it appears.
+            // Any splice-time coercion that makes the crossing VALUE's real
+            // shape (`graphics list`) differ from what the module's OWN
+            // declared `deco` scheme says (`graphics`) — which is the
+            // ENTIRE POINT of this coercion — trips that SAME enforcement
+            // a second time on the coercion's own shadowing binding,
+            // wherever it is spliced (verified empirically: appending
+            // inside the module's own `decls` produces `module_check`'s
+            // "does not match its signature" error; a later top-level
+            // binding under the same qualified string key hits the
+            // identical name-keyed check in `module_check.rs`'s phase-D
+            // walk). There is no way to introduce a second, differently-
+            // shaped binding under the sealed name without either changing
+            // `module_check.rs` (forbidden) or accepting an unsound type-
+            // error-suppressing hack. So this arm keeps the ORIGINAL X4a
+            // reject-everything-but-{math-text,math-boxes} posture — a
+            // `deco`/`deco-set` VALUE export via a module `sig` still
+            // rejects, now via a DEDICATED, clear diagnostic
+            // (`reject_deco_exports_v01_sig`, PRE-lowering — the sig is
+            // otherwise invisible post-lowering, `v1/lower.rs`'s own "sig_
+            // annot is then simply DROPPED" note) rather than the
+            // confusing downstream `module_check` type error a silent
+            // splice would previously have produced. A BARE `type foo =
+            // deco` synonym (no value attached, safe with zero coercion —
+            // same reasoning as the forward direction's `type xver-deco-
+            // alias = deco`) is UNAFFECTED: it is not a sig item at all, so
+            // `reject_deco_exports_v01_sig` never sees it, and it splices
+            // verbatim exactly like any other unconstrained mention.
             satysfi_loader::LoadedCst::V0_1(cst) => {
                 v1::surface::build_file_surface(cst, &mut surfaces);
                 let lowered = v1::lower::lower_file_v1_with_surfaces(cst, &surfaces)?;
@@ -607,7 +656,7 @@ pub fn compile_document_v006_xver_with_trials(
                 let touched: BTreeSet<String> = free.types.intersection(&reject_t).cloned().collect();
                 if let Some(name) = touched
                     .iter()
-                    .find(|n| !matches!(n.as_str(), "math-text" | "math-boxes"))
+                    .find(|n| !matches!(n.as_str(), "math-text" | "math-boxes" | "deco" | "deco-set"))
                 {
                     return Err(CompileError::CrossVersionUnsupportedName {
                         name: name.clone(),
@@ -615,6 +664,22 @@ pub fn compile_document_v006_xver_with_trials(
                         slice: "X4a",
                     });
                 }
+                // `touched.contains("deco"/"deco-set")` here can only mean
+                // the SAFE, no-coercion-needed case (a bare `type foo =
+                // deco` synonym — no value attached; this arm's own doc
+                // comment above): a REAL sig-declared VALUE export is
+                // invisible to this POST-lowering scan (sig is dropped) and
+                // is instead caught by the PRE-lowering check just below,
+                // independently of `touched`.
+                v1::xver_adapt::reject_deco_exports_v01_sig(cst).map_err(|be| {
+                    CompileError::CrossVersionUnsupportedName {
+                        name: match &be {
+                            v1::xver_adapt::BoundaryError::ForkedTypeExport { ty_name, .. } => ty_name.clone(),
+                        },
+                        dep: dep.path.display().to_string(),
+                        slice: "X4b",
+                    }
+                })?;
 
                 prelude.extend(lowered);
                 dep_csts.push(cst);

@@ -147,3 +147,45 @@ fn mixed_script_paragraph_produces_two_font_keys_and_scaled_size() {
     assert!(saw_latin, "expected a Latin-script InnerString (FontKey(0))");
     assert!(saw_kana, "expected a Kana-script InnerString (FontKey(7))");
 }
+
+/// `set-manual-rising` must actually reach `HorzStringInfo.rising` (the
+/// silent-field fix): `text_to_boxes` adds `ctx.manual_rising` on top of the
+/// script-font's own rising. Default `manual_rising == ZERO` ⇒ unchanged.
+#[test]
+fn manual_rising_is_added_to_inner_string_rising() {
+    let stub = Stub;
+    let mut interp = Interp::new(&stub);
+    let elems = vec![IText::Text("hi".to_string())];
+
+    // Baseline: default context (manual_rising == ZERO) — Latin sf.rising is
+    // 0.0, so the run's rising is exactly ZERO (byte-identity control).
+    let base_ctx = Context::initial(Length::pt(400.0));
+    let base_boxes = primitives::read_inline(&mut interp, &base_ctx, &elems, &Env::root())
+        .expect("read_inline should succeed");
+    let base_rising = base_boxes
+        .iter()
+        .find_map(|hb| match hb {
+            satysfi_backend::HorzBox::Pure(PureHorzBox::InnerString { info, .. }) => {
+                Some(info.rising)
+            }
+            _ => None,
+        })
+        .expect("expected an InnerString");
+    assert_eq!(base_rising, Length::ZERO, "default manual_rising leaves rising at ZERO");
+
+    // With a manual rise installed, the run's rising picks it up exactly.
+    let mut risen_ctx = Context::initial(Length::pt(400.0));
+    risen_ctx.manual_rising = Length::pt(3.0);
+    let risen_boxes = primitives::read_inline(&mut interp, &risen_ctx, &elems, &Env::root())
+        .expect("read_inline should succeed");
+    let risen = risen_boxes
+        .iter()
+        .find_map(|hb| match hb {
+            satysfi_backend::HorzBox::Pure(PureHorzBox::InnerString { info, .. }) => {
+                Some(info.rising)
+            }
+            _ => None,
+        })
+        .expect("expected an InnerString");
+    assert_eq!(risen, Length::pt(3.0), "set-manual-rising must reach HorzStringInfo.rising");
+}

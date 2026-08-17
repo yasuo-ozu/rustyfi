@@ -1,0 +1,37 @@
+FIXTURE phase2.saty
+GEOMETRY paper=595.276x841.890 text_origin=(0.000,0.000) text_size=595.276x841.890
+PAGES 1
+-- page 0 lines=4 --
+LINE 0 x=72.000 baseline_y=108.616
+  dx=0.000 InnerString font=0 size=12.000 rising=0.000 w=54.024 h=8.616 d=2.484 text="Bracketed"
+  dx=54.024 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
+  dx=57.984 InnerString font=0 size=12.000 rising=0.000 w=19.344 h=8.616 d=2.484 text="text"
+  dx=77.328 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
+  dx=81.288 InnerString font=0 size=12.000 rising=0.000 w=15.336 h=8.616 d=2.484 text="via"
+  dx=96.624 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
+  dx=100.584 InnerString font=0 size=12.000 rising=0.000 w=48.012 h=8.616 d=2.484 text="let-inline."
+  dx=148.596 OuterFil
+LINE 1 x=72.000 baseline_y=162.616
+  dx=0.000 InnerString font=0 size=12.000 rising=0.000 w=60.708 h=8.616 d=2.484 text="Announced"
+  dx=60.708 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
+  dx=64.668 InnerString font=0 size=12.000 rising=0.000 w=19.344 h=8.616 d=2.484 text="text"
+  dx=84.012 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
+  dx=87.972 InnerString font=0 size=12.000 rising=0.000 w=15.336 h=8.616 d=2.484 text="via"
+  dx=103.308 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
+  dx=107.268 InnerString font=0 size=12.000 rising=0.000 w=16.680 h=8.616 d=2.484 text="the"
+  dx=123.948 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
+  dx=127.908 InnerString font=0 size=12.000 rising=0.000 w=56.688 h=8.616 d=2.484 text="lightweight"
+  dx=184.596 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
+  dx=188.556 InnerString font=0 size=12.000 rising=0.000 w=44.676 h=8.616 d=2.484 text="let-inline"
+  dx=233.232 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
+  dx=237.192 InnerString font=0 size=12.000 rising=0.000 w=27.336 h=8.616 d=2.484 text="form."
+  dx=264.528 OuterFil
+LINE 2 x=72.000 baseline_y=216.616
+  dx=0.000 InnerString font=0 size=12.000 rising=0.000 w=60.696 h=8.616 d=2.484 text="Countdown"
+  dx=60.696 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
+  dx=64.656 InnerString font=0 size=12.000 rising=0.000 w=52.020 h=8.616 d=2.484 text="complete."
+  dx=116.676 OuterFil
+LINE 3 x=72.000 baseline_y=808.616
+  dx=0.000 InnerString font=0 size=12.000 rising=0.000 w=6.672 h=8.616 d=2.484 text="1"
+  dx=6.672 OuterFil
+EXTRAS annotations=0 destinations=0 outline=0 page_graphics_pages=1 doc_info=none

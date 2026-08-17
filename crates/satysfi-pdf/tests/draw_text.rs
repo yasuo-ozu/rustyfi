@@ -42,7 +42,7 @@ fn rectangle_path() -> GrPath {
 /// `InnerString` box at box-local `dx = 0` from the text's own anchor `pt`.
 fn page_with_fill_then_text() -> Page {
     let path = rectangle_path();
-    let text_info = HorzStringInfo { font: FontKey(0), size: Length::pt(10.0), rising: Length::ZERO };
+    let text_info = HorzStringInfo { font: FontKey(0), size: Length::pt(10.0), rising: Length::ZERO, color: Color::Gray(0.0) };
     let elems = vec![
         GraphicsElem::Fill(Color::Rgb(1.0, 0.0, 0.0), path),
         GraphicsElem::Text {
@@ -231,7 +231,7 @@ fn cid_draw_text_run_survives_pdftotext_extraction() {
         contents: vec![(
             Length::ZERO,
             PureHorzBox::InnerString {
-                info: HorzStringInfo { font, size, rising: Length::ZERO },
+                info: HorzStringInfo { font, size, rising: Length::ZERO, color: Color::Gray(0.0) },
                 text: text.to_string(),
                 width,
                 height: ascender,
@@ -332,7 +332,13 @@ fn a_text_free_graphics_box_is_unaffected_by_the_nested_emitter_plumbing() {
 #[test]
 fn an_image_nested_inside_a_draw_text_run_gets_its_xobject_registered() {
     let geometry = round_geometry();
-    let image = ImageResource { samples: vec![255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 0], px_w: 2, px_h: 2 };
+    let image = ImageResource {
+        samples: vec![255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 0],
+        px_w: 2,
+        px_h: 2,
+        jpeg_dct: None,
+        pdf: None,
+    };
     let elems = vec![GraphicsElem::Text {
         pt: (Length::pt(0.0), Length::pt(0.0)),
         contents: vec![(

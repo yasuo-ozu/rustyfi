@@ -63,8 +63,10 @@ pub mod registry;
 pub mod roots;
 pub mod satyristes;
 pub mod satyrfile;
+pub mod solve;
 mod stage;
 mod util;
+pub mod version;
 
 pub use error::Error;
 
@@ -84,4 +86,9 @@ pub use satyrfile::{find_upward, LibraryEntry, Satyrfile, SourceSpec};
 pub use ops::registry_install::{install_registry, Resolved};
 pub use ops::search::{search, SearchHit};
 pub use ops::update::{update, Upgrade, UpdateReport};
-pub use registry::RegistryOptions;
+pub use registry::{RegistryDepSource, RegistryOptions};
+
+// Phase-7c solver (plan §7c / design-saphe-solver.md): the version/constraint
+// value types and the backtracking dependency resolver.
+pub use solve::{solve, DepSource, Solution};
+pub use version::{Constraint, Version};

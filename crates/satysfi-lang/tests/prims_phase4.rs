@@ -270,8 +270,13 @@ fn inline_skip_width_is_accounted_for_by_line_breaking() {
 
     match run(&ast) {
         Value::BlockBoxes(mut lines) => {
-            assert_eq!(lines.len(), 1, "should fit on a single line");
-            match lines.remove(0) {
+            // line-break now brackets the paragraph with paragraph_top/bottom
+            // margin Skips (design-silent-fields FIX 3); find the formed Line.
+            let line = lines
+                .into_iter()
+                .find(|vb| matches!(vb, VertBox::Line { .. }))
+                .expect("should fit on a single line");
+            match line {
                 VertBox::Line { contents, .. } => {
                     assert_eq!(contents.len(), 2);
                     let (x0, b0) = &contents[0];

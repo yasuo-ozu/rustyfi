@@ -23,6 +23,7 @@ satysfi-backend.workspace = true
 satysfi-lang.workspace = true
 satysfi-loader.workspace = true
 satysfi-pdf.workspace = true
+satysfi-html.workspace = true
 satysfi-satyrographos.workspace = true
 clap.workspace = true
 anyhow.workspace = true

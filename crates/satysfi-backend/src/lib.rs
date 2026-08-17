@@ -14,7 +14,8 @@ pub mod tabular;
 pub mod vbox;
 
 pub use context::{
-    Context, Language, MathCmdId, MathScriptLevel, PageGeometry, PaperSize, Script, ScriptFont,
+    Context, HyphenLang, Language, MathCmdId, MathScriptLevel, PageGeometry, PaperSize, Script,
+    ScriptFont,
 };
 pub use doc::{Annot, AnnotAction, DocExtras, DocInfo, NamedDest, OutlineEntry};
 pub use font::{
@@ -26,8 +27,8 @@ pub use graphics::{
     shift_path, Closing, Color, Dash, GraphicsElem, Path, PathSeg, Point, PrePath, Subpath,
 };
 pub use hbox::{
-    DecoId, GraphicsFnId, HookId, HorzBox, HorzStringInfo, ImageId, ImageResource, PureHorzBox,
-    FORCED_BREAK_PENALTY,
+    DecoId, GraphicsFnId, HookId, HorzBox, HorzStringInfo, ImageId, ImageResource, ImportedObjects,
+    JpegDct, ObjRepr, PdfPageResource, PureHorzBox, FORCED_BREAK_PENALTY,
 };
 pub use length::Length;
 pub use linebreak::{

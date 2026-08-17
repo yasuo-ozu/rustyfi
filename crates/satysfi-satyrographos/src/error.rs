@@ -194,6 +194,34 @@ pub enum Error {
     /// An `http(s)://` fetch failed (exit `5`).
     #[error("failed to fetch `{url}`: {message}")]
     HttpFailed { url: String, message: String },
+
+    // --- Solver (plan §7c, `version.rs`/`solve.rs`) -------------------------
+    /// A version or constraint string did not parse (`version.rs`): not
+    /// `major.minor.patch[-pre]`, or (for a constraint) not `*`, an exact
+    /// triple, or a `^`-prefixed caret requirement.
+    #[error("invalid version `{text}`: {message}")]
+    InvalidVersion { text: String, message: String },
+
+    /// No available version of `name` satisfies every accumulated constraint
+    /// on it (exit `4`) — a genuine "nothing published fits", as opposed to
+    /// [`Error::VersionConflict`]'s "two requirements can never both fit."
+    #[error(
+        "no version of `{name}` satisfies all requirements: {constraints} (required by: {requirers})",
+        constraints = .constraints.join(", "),
+        requirers = .requirers.join(", ")
+    )]
+    Unsatisfiable {
+        name: String,
+        constraints: Vec<String>,
+        requirers: Vec<String>,
+    },
+
+    /// Two requirements on `name` pin incompatible compat buckets (different
+    /// major, or different `0.x` minor) — they can never both be satisfied by
+    /// any single version, regardless of what the registry publishes
+    /// (exit `4`).
+    #[error("version conflict on `{name}`: `{a}` is incompatible with `{b}`")]
+    VersionConflict { name: String, a: String, b: String },
 }
 
 impl Error {

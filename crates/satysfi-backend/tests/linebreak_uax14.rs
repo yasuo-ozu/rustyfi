@@ -77,6 +77,7 @@ fn ideograph(m: &Mono, c: &Context, ch: char) -> HorzBox {
             font: c.font,
             size: c.font_size,
             rising: Length::ZERO,
+            color: Color::Gray(0.0),
         },
         width: m.text_width(c.font, &text, c.font_size).unwrap(),
         height: m.ascender(c.font, c.font_size),

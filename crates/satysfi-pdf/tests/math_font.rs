@@ -41,6 +41,20 @@ const DBL_D: char = '\u{1D53B}';
 /// generic font when the family isn't installed), then fall back to a few
 /// common distro/nix paths, then skip gracefully.
 fn find_math_font() -> Option<PathBuf> {
+    // Slice B (`docs/plans/design-math-cramped.md` §4): the repo now bundles
+    // its own MATH-table font at `lib-satysfi/dist/fonts/
+    // DejaVuMathTeXGyre.ttf` (fetched by `scripts/download-fonts.sh`, same
+    // as ipaexm/Junicode). Check it FIRST so this test no longer depends on
+    // a host-wide font install once that script has been run — only fall
+    // through to fontconfig/distro paths when it hasn't. DejaVu Math TeX
+    // Gyre covers every codepoint this test needs (Mathematical Italic 'a',
+    // minus sign, Double-Struck R/D).
+    let bundled = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../lib-satysfi/dist/fonts/DejaVuMathTeXGyre.ttf");
+    if bundled.is_file() {
+        return Some(bundled);
+    }
+
     for family in ["Noto Sans Math", "DejaVu Math TeX Gyre"] {
         if let Ok(output) = Command::new("fc-match")
             .args(["--format=%{file}", family])
@@ -241,7 +255,12 @@ fn styled_math_renders_through_cid_pipeline() {
     let descender = store.descender(font, size);
 
     let glyph = satysfi_backend::MathGlyph {
-        info: satysfi_backend::HorzStringInfo { font, size, rising: Length::ZERO },
+        info: satysfi_backend::HorzStringInfo {
+            font,
+            size,
+            rising: Length::ZERO,
+            color: satysfi_backend::Color::Gray(0.0),
+        },
         text: A_ITALIC.to_string(),
         gid: None,
         dx: Length::ZERO,
@@ -274,13 +293,25 @@ fn styled_math_renders_through_cid_pipeline() {
         "output should start with a PDF header"
     );
 
-    // Full-file embedding heuristic (mirrors `tests/ttf.rs`): the raw font
-    // bytes appear verbatim in the output (no subsetting), so the PDF must
-    // be at least as big as the source font file.
+    // Re-baseline (Slice B math default): the discovered math font is now the
+    // bundled DejaVu Math TeX Gyre — a `glyf`-outline face — so the CID writer
+    // takes the SUBSETTING path (`cid.rs`'s D5 subsetter), not the full-embed
+    // fallback this assertion originally assumed. A subsetted `FontFile2` is
+    // (much) smaller than the whole source file, so the correct, font-behavior-
+    // matched check is `PDF < font file` — the exact direction the sibling
+    // `tests/ttf.rs::math_variant_gid_survives_subsetting` (same DejaVu Math
+    // font) already asserts. We ALSO assert the font is genuinely embedded
+    // (`FontFile2` present) so "smaller" can't be satisfied by dropping the
+    // font entirely.
+    assert!(
+        pdf_bytes.windows(9).any(|w| w == b"FontFile2"),
+        "expected an embedded (subsetted) TrueType font (FontFile2) in the math PDF"
+    );
     let font_len = std::fs::metadata(&path).expect("stat font file").len() as usize;
     assert!(
-        pdf_bytes.len() > font_len,
-        "expected the PDF ({} bytes) to be larger than the embedded font file ({} bytes)",
+        pdf_bytes.len() < font_len,
+        "expected the subsetted PDF ({} bytes) to be smaller than the whole source math \
+         font file ({} bytes) — the `glyf`-outline DejaVu Math face takes the subsetting path",
         pdf_bytes.len(),
         font_len
     );

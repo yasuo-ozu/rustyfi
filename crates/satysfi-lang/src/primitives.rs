@@ -20,11 +20,11 @@ use satysfi_backend::{
     graphics_bbox, linear_transform_graphics, linear_transform_path, measure_block,
     natural_metrics, path_bbox, place_block_at, shift_graphics, shift_path, Annot, AnnotAction,
     BreakKind, Cell, Closing, Color, Context, Dash, DecoId, DocExtras, DocInfo, FontKey,
-    GraphicsElem, GraphicsFnId, HookId, HorzBox, HorzStringInfo, ImageId, ImageResource, Language,
-    Length, MathCharClass, MathConstants, MathCorner, MathGlyph, MathKind, MathScriptLevel,
-    NamedDest, Paddings, Page, PageGeometry, OutlineEntry, PaperSize, Path, PathSeg, Point,
-    PrePath, PureHorzBox, Script, ScriptFont, Subpath, TabularBox, VertBox, VertVariantPolicy,
-    FORCED_BREAK_PENALTY,
+    GraphicsElem, GraphicsFnId, HookId, HorzBox, HorzStringInfo, HyphenLang, ImageId, ImageResource,
+    ImportedObjects, Language, Length, MathCharClass, MathConstants, MathCorner, MathGlyph,
+    MathKind, MathScriptLevel, NamedDest, ObjRepr, Paddings, Page, PageGeometry, OutlineEntry,
+    PaperSize, Path, PathSeg, PdfPageResource, Point, PrePath, PureHorzBox, Script, ScriptFont,
+    Subpath, TabularBox, VertBox, VertVariantPolicy, FORCED_BREAK_PENALTY,
 };
 use satysfi_backend::char_script;
 use satysfi_syntax::SatysfiVersion;
@@ -362,10 +362,13 @@ prims! {
     // error carrying the message verbatim.
     "abort-with-message" (1) => prim_abort_with_message;
     // ---- images (Slice 1: raster images; docs/plans/math-images.md).
-    // Mirrors v0.0.6 vminstdef.yaml:540/:554; `load-pdf-image`
-    // (vminstdef.yaml:525) is deferred. ------------------------------------
+    // Mirrors v0.0.6 vminstdef.yaml:540/:554. ------------------------------
     "load-image"          (1) => prim_load_image;         // string -> image
     "use-image-by-width"  (2) => prim_use_image_by_width; // image -> length -> inline-boxes
+    // `load-pdf-image : string -> int -> image` (v0.0.6 vminstdef.yaml:525;
+    // dev-0-1-0 `PrimitiveLoadPdfImage` — same name/type/body across both
+    // versions). docs/plans/design-load-pdf-image.md.
+    "load-pdf-image" (2) => prim_load_pdf_image;
     // `read-file : string -> list string` (dev-0-1-0 vminst.ml :3073;
     // prim-retype-sweep §2.3) — REAL, `load-image`'s cwd-relative-path
     // precedent (`prim_load_image`'s doc comment above): job-directory
@@ -576,6 +579,9 @@ prims! {
     "set-text-color" (2) => prim_set_text_color;
     "get-text-color" (1) => prim_get_text_color;
     "set-hyphen-penalty" (2) => prim_set_hyphen_penalty;
+    // `docs/plans/design-hyphenation.md` §7: `set-hyphen-min : int -> int ->
+    // context -> context` (left_hyphen_min, right_hyphen_min).
+    "set-hyphen-min" (3) => prim_set_hyphen_min;
     "set-space-ratio" (4) => prim_set_space_ratio;
     "split-into-lines" (1) => prim_split_into_lines;
     "block-frame-breakable" (4) => prim_block_frame_breakable;
@@ -587,9 +593,9 @@ prims! {
     // ==== `docs/plans/build-order-to-stdja.md` step 8/9 orphans:
     // `set-dominant-wide-script`/`set-dominant-narrow-script`/`set-language`
     // are now FAITHFUL stores (context-box-prims.md §C landed, group E2) with
-    // real getter round-trips below; `set-every-word-break` and
-    // `register-outline` remain STAND-INs (accepted and dropped) — see their
-    // doc comments. ====
+    // real getter round-trips below; `register-outline` is likewise FAITHFUL
+    // (see its doc comment — it drives real PDF `/Outlines` bookmarks). Only
+    // `set-every-word-break` remains a STAND-IN (accepted and dropped). ====
     "set-dominant-wide-script" (2) => prim_set_dominant_wide_script;
     "set-dominant-narrow-script" (2) => prim_set_dominant_narrow_script;
     "set-language" (3) => prim_set_language;
@@ -754,6 +760,13 @@ fn as_text_info(v: Value) -> Result<TextInfo, EvalError> {
     match v {
         Value::TextInfo(t) => Ok(t),
         other => eval_error(format!("expected a text-info, got {}", other.type_name())),
+    }
+}
+
+fn as_hyphenation(v: Value) -> Result<HyphenLang, EvalError> {
+    match v {
+        Value::Hyphenation(tag) => Ok(tag),
+        other => eval_error(format!("expected a hyphenation, got {}", other.type_name())),
     }
 }
 
@@ -1400,16 +1413,52 @@ fn measure_run(
     Ok(width)
 }
 
+/// Build one `InnerString` box for `text`, measured through [`measure_run`]
+/// with `sf`'s font/size/rising — the single construction site shared by
+/// `text_to_boxes`'s `flush_word` for both the plain (no-hyphenation) path
+/// and each hyphenated fragment / hyphen glyph (`docs/plans/design-
+/// hyphenation.md` §4). Factored out so both paths measure/build identically
+/// — this is part of what makes the width-identity argument (§6/D2) hold:
+/// `measure_run` is purely additive per char (no kerning/ligatures), so
+/// concatenating the fragments this produces reconstructs exactly the box a
+/// single un-split call would have produced.
+fn make_inner_string_pure_box(
+    interp: &Interp,
+    ctx: &Context,
+    sf: ScriptFont,
+    size: Length,
+    rising: Length,
+    text: String,
+) -> Result<PureHorzBox, EvalError> {
+    let width = measure_run(interp, sf.font, ctx.font, &text, size)?;
+    Ok(PureHorzBox::InnerString {
+        info: HorzStringInfo {
+            font: sf.font,
+            size,
+            rising,
+            color: ctx.text_color,
+        },
+        height: interp.metrics.ascender(sf.font, size),
+        depth: interp.metrics.descender(sf.font, size),
+        text,
+        width,
+    })
+}
+
 fn text_to_boxes(
     interp: &mut Interp,
     ctx: &Context,
     text: &str,
     out: &mut Vec<HorzBox>,
 ) -> Result<(), EvalError> {
-    let space_width = interp
-        .metrics
-        .advance(ctx.font, ' ', ctx.font_size)
-        .unwrap_or(ctx.font_size * 0.33);
+    // `docs/plans/design-silent-fields.md` FIX 2: interword glue is
+    // upstream's `context_main.space_natural`/`space_shrink`/`space_stretch`
+    // (`set-space-ratio`), each a ratio of `font_size` — NOT a measured
+    // glyph-advance of the space character and NOT a fraction of the
+    // natural width. `ctx.space_*` always carries a value (defaults
+    // 0.33/0.08/0.16, matching `Context::initial`'s own upstream-faithful
+    // defaults), so this is a plain formula, no fallback needed.
+    let space_width = ctx.font_size * ctx.space_natural;
     let boundary = uax14_boundaries(text);
     let mut word = String::new();
     let flush_word = |word: &mut String, script: Script, out: &mut Vec<HorzBox>| -> Result<(), EvalError> {
@@ -1418,19 +1467,95 @@ fn text_to_boxes(
         }
         let sf = script_font(ctx, script);
         let size = ctx.font_size * sf.ratio;
-        let rising = ctx.font_size * sf.rising;
-        let width = measure_run(interp, sf.font, ctx.font, word, size)?;
-        out.push(HorzBox::Pure(PureHorzBox::InnerString {
-            info: HorzStringInfo {
-                font: sf.font,
+        // The script-font's own baseline raise (a ratio of font_size) PLUS the
+        // manual raise from `set-manual-rising` (`ctx.manual_rising`, an
+        // absolute Length). Both feed `HorzStringInfo.rising`, which every
+        // render path adds to the baseline before `Tj`. `manual_rising`
+        // defaults to `Length::ZERO` (`Context::initial`), so a document that
+        // never calls `set-manual-rising` is byte-identical. Real effect: the
+        // `\SATySFi`/`\LaTeX`/`\TeX` logo kerning.
+        let rising = ctx.font_size * sf.rising + ctx.manual_rising;
+
+        // Knuth-Liang hyphenation opt-in injection
+        // (`docs/plans/design-hyphenation.md` §4/D4/D5): fires ONLY when a
+        // dictionary has been installed (`ctx.hyphen_dictionary ==
+        // Some(tag)`) and the run's script is Latin. With
+        // `hyphen_dictionary == None` (the `Context::initial` default),
+        // `breaks` is always empty and the code below falls straight through
+        // to the single-`InnerString` path — byte-identical to before this
+        // slice (the byte-identity gate, §6).
+        let breaks = match ctx.hyphen_dictionary {
+            Some(tag) if script == Script::Latin => {
+                // S3 (`docs/plans/design-hyphenation.md` §S3): an explicit
+                // soft hyphen (U+00AD) authored in the word takes priority
+                // over dictionary-derived breaks (matches the `hyphenation`
+                // crate's own `Standard::hyphenate` priority rule). Only
+                // reachable here with a soft hyphen still embedded in `word`
+                // because the tokenizer above (`text_to_boxes`'s per-char
+                // loop) defers to this branch instead of splitting on it as
+                // an ordinary UAX#14 boundary — gated on this same
+                // `Some(tag) && Latin` condition, so `hyphen_dictionary ==
+                // None` never reaches `strip_soft_hyphens` and reproduces
+                // exactly today's split-at-soft-hyphen behavior.
+                let (clean, shy_breaks) = crate::hyphenation::strip_soft_hyphens(word);
+                if !shy_breaks.is_empty() {
+                    *word = clean;
+                    shy_breaks
+                } else {
+                    crate::hyphenation::hyphenate_word(
+                        tag,
+                        word,
+                        ctx.left_hyphen_min.max(0) as usize,
+                        ctx.right_hyphen_min.max(0) as usize,
+                    )
+                }
+            }
+            _ => Vec::new(),
+        };
+
+        if breaks.is_empty() {
+            out.push(HorzBox::Pure(make_inner_string_pure_box(
+                interp,
+                ctx,
+                sf,
                 size,
                 rising,
-            },
-            text: std::mem::take(word),
-            width,
-            height: interp.metrics.ascender(sf.font, size),
-            depth: interp.metrics.descender(sf.font, size),
-        }));
+                std::mem::take(word),
+            )?));
+            return Ok(());
+        }
+
+        // Width-identity invariant (§6/D2, also see `make_inner_string_pure_box`'s
+        // doc comment): `measure_run` is purely additive per char (no
+        // kerning/ligatures), so splitting `word` into fragments here and
+        // rejoining them via empty-slot `Discretionary`s (taken only at a
+        // chosen line break) reproduces the exact width/height/depth of the
+        // un-split box when no break is actually taken — only words the DP
+        // *does* break render differently, which is the intended new
+        // behavior, confined to documents that opt in.
+        let chars: Vec<char> = word.chars().collect();
+        let penalty = ctx.hyphen_badness.clamp(i32::MIN as i64, i32::MAX as i64) as i32;
+        let mut prev = 0usize;
+        for &b in &breaks {
+            let fragment: String = chars[prev..b].iter().collect();
+            out.push(HorzBox::Pure(make_inner_string_pure_box(
+                interp, ctx, sf, size, rising, fragment,
+            )?));
+            let hyphen_box =
+                make_inner_string_pure_box(interp, ctx, sf, size, rising, "-".to_string())?;
+            out.push(HorzBox::Pure(PureHorzBox::Discretionary {
+                penalty,
+                pre_break: vec![hyphen_box],
+                post_break: Vec::new(),
+                no_break: Vec::new(),
+            }));
+            prev = b;
+        }
+        let tail: String = chars[prev..].iter().collect();
+        out.push(HorzBox::Pure(make_inner_string_pure_box(
+            interp, ctx, sf, size, rising, tail,
+        )?));
+        word.clear();
         Ok(())
     };
     // `Some(s)` exactly when `word` is non-empty — the script of the run
@@ -1449,8 +1574,13 @@ fn text_to_boxes(
             ) {
                 out.push(HorzBox::Pure(PureHorzBox::OuterEmpty {
                     natural: space_width,
-                    shrinkable: space_width * 0.25,
-                    stretchable: space_width * 0.5,
+                    // Upstream derives shrink/stretch directly as a ratio
+                    // of `font_size` (`ctx.space_shrink`/`space_stretch`),
+                    // NOT as a fraction of `space_width` — the previous
+                    // `space_width * 0.25`/`* 0.5` was a port-invented
+                    // approximation. See FIX 2 above.
+                    shrinkable: ctx.font_size * ctx.space_shrink,
+                    stretchable: ctx.font_size * ctx.space_stretch,
                 }));
             }
             continue;
@@ -1474,7 +1604,20 @@ fn text_to_boxes(
         // have no such existing behavior to preserve, and are exactly
         // where UAX#14 breaking is the whole point (no interword glue at
         // all otherwise, see `is_break_point`'s doc).
-        if !c.is_ascii() {
+        // A soft hyphen (U+00AD) inside a run that the Knuth-Liang injection
+        // above will consume (dictionary installed, Latin script) must NOT
+        // be split here as an ordinary UAX#14 break-after point — doing so
+        // would flush/fragment the word right at the soft hyphen before
+        // `flush_word`'s hyphenation branch ever sees the whole word,
+        // pre-empting `strip_soft_hyphens`'s explicit-break handling (S3,
+        // `docs/plans/design-hyphenation.md` §S3). Instead let it accumulate
+        // into `word` like any other Latin letter. Gated on the exact same
+        // `Some(_) && Latin` condition as that branch, so `hyphen_dictionary
+        // == None` (or a non-Latin run) reproduces exactly today's
+        // split-at-soft-hyphen behavior — the byte-identity gate, §6.
+        let is_gated_soft_hyphen =
+            c == '\u{ad}' && script == Script::Latin && ctx.hyphen_dictionary.is_some();
+        if !c.is_ascii() && !is_gated_soft_hyphen {
             let after = i + c.len_utf8();
             if let Some(kind) = boundary[after] {
                 flush_word(&mut word, script, out)?;
@@ -1513,6 +1656,14 @@ const SCRIPT_SCALE: f64 = 0.7;
 /// no-MATH-table fallback (roadmap: `superscript_shift_up` clamped per
 /// `math.ml:527`, §B1). Not read outside `MathC`.
 const SUP_SHIFT: f64 = 0.5;
+/// Cramped-style superscript raise fallback (`docs/plans/design-math-cramped.md`
+/// §2.4) — the no-MATH-table fallback `sup_shift_clamped` uses in place of
+/// `SuperscriptShiftUpCramped` when there is no real MATH table to read.
+/// Deliberately set EQUAL to `SUP_SHIFT`: every checked-in fixture font has no
+/// MATH table, so cramped and uncramped superscripts get the identical
+/// fallback shift there, keeping legacy output byte-identical. Only a real
+/// MATH font (host-installed, test-guarded) makes cramped/uncramped diverge.
+const SUP_SHIFT_CRAMPED: f64 = SUP_SHIFT;
 /// Subscript drop, as a fraction of `ctx.font_size` — `MathC`'s
 /// no-MATH-table fallback (roadmap: `subscript_shift_down` per
 /// `math.ml:545`, §B1). Not read outside `MathC`.
@@ -1540,12 +1691,19 @@ const FRAC_DENOM_SHIFT_FALLBACK: f64 = 0.33;
 /// `size` for glyph-relative queries like `script_scale`/kerning).
 struct MathC {
     c: Option<MathConstants>,
+    /// `ctx.math_cramped` at the point this `MathC` was built
+    /// (`docs/plans/design-math-cramped.md` §2.1) — whether the current
+    /// math sub-formula is laid out cramped. Consulted only by
+    /// `sup_shift`/`sup_shift_clamped`, the sole positioning formula cramped
+    /// changes in this port's feature set.
+    cramped: bool,
 }
 
 impl MathC {
-    fn of(interp: &Interp, font: FontKey) -> Self {
+    fn of(interp: &Interp, ctx: &Context) -> Self {
         Self {
-            c: interp.metrics.math_constants(font),
+            c: interp.metrics.math_constants(ctx.math_font),
+            cramped: ctx.math_cramped,
         }
     }
 
@@ -1553,9 +1711,22 @@ impl MathC {
     /// no `math.ml:524-533` clamp) — the shape `layout_math_atom`'s callers
     /// need when no base/script ink extent is at hand yet.
     fn sup_shift(&self, s: Length) -> Length {
-        self.c
-            .map(|c| s * c.superscript_shift_up)
-            .unwrap_or(s * SUP_SHIFT)
+        match self.c {
+            None => {
+                s * if self.cramped {
+                    SUP_SHIFT_CRAMPED
+                } else {
+                    SUP_SHIFT
+                }
+            }
+            Some(c) => {
+                s * if self.cramped {
+                    c.superscript_shift_up_cramped
+                } else {
+                    c.superscript_shift_up
+                }
+            }
+        }
     }
 
     /// Flat, unclamped subscript drop (mirrors `sup_shift`).
@@ -1592,7 +1763,12 @@ impl MathC {
         match self.c {
             None => self.sup_shift(s),
             Some(c) => {
-                let cand1 = s * c.superscript_shift_up;
+                let shift_up = if self.cramped {
+                    c.superscript_shift_up_cramped
+                } else {
+                    c.superscript_shift_up
+                };
+                let cand1 = s * shift_up;
                 let cand2 = h_base - s * c.superscript_baseline_drop_max;
                 let cand3 = s * c.superscript_bottom_min + d_sup;
                 cand1.max(cand2).max(cand3)
@@ -1896,7 +2072,7 @@ fn push_char_glyph(
         msg: format!("math character '{c}' is not available in the current math font"),
     })?;
     out.push(MathGlyph {
-        info: HorzStringInfo { font, size, rising: Length::ZERO },
+        info: HorzStringInfo { font, size, rising: Length::ZERO, color: ctx.text_color },
         text: c.to_string(),
         gid: None,
         dx: *x,
@@ -1934,7 +2110,7 @@ fn push_big_char_glyph(
     {
         Some(v) => {
             out.push(MathGlyph {
-                info: HorzStringInfo { font, size, rising: Length::ZERO },
+                info: HorzStringInfo { font, size, rising: Length::ZERO, color: ctx.text_color },
                 text: c.to_string(),
                 gid: Some(v.gid),
                 dx: *x,
@@ -2002,7 +2178,7 @@ fn push_delimiter_glyph(
                 let base_off = axis - total * 0.5;
                 for (i, (gid, dy_local, adv)) in parts.iter().enumerate() {
                     out.push(MathGlyph {
-                        info: HorzStringInfo { font, size, rising: Length::ZERO },
+                        info: HorzStringInfo { font, size, rising: Length::ZERO, color: ctx.text_color },
                         text: c.to_string(),
                         gid: Some(*gid),
                         dx: *x,
@@ -2026,7 +2202,7 @@ fn push_delimiter_glyph(
         Some(v) => {
             let dy = axis - (v.height - v.depth) * 0.5;
             out.push(MathGlyph {
-                info: HorzStringInfo { font, size, rising: Length::ZERO },
+                info: HorzStringInfo { font, size, rising: Length::ZERO, color: ctx.text_color },
                 text: c.to_string(),
                 gid: Some(v.gid),
                 dx: *x,
@@ -2119,7 +2295,7 @@ fn layout_math_elem(
         MathElem::Sup(base, script) => {
             let base_start = out.len();
             layout_math_elem(interp, ctx, base, size, out, x, last_kind)?;
-            let mc = MathC::of(interp, ctx.math_font);
+            let mc = MathC::of(interp, ctx);
             let script_size = ctx.font_size * mc.script_scale();
             let (h_base, _) = glyphs_extent(&out[base_start..]);
             let (script_glyphs, script_width) = layout_script(interp, ctx, script, script_size)?;
@@ -2143,7 +2319,7 @@ fn layout_math_elem(
         MathElem::Sub(base, script) => {
             let base_start = out.len();
             layout_math_elem(interp, ctx, base, size, out, x, last_kind)?;
-            let mc = MathC::of(interp, ctx.math_font);
+            let mc = MathC::of(interp, ctx);
             let script_size = ctx.font_size * mc.script_scale();
             let (_, d_base) = glyphs_extent(&out[base_start..]);
             let (script_glyphs, script_width) = layout_script(interp, ctx, script, script_size)?;
@@ -2155,7 +2331,7 @@ fn layout_math_elem(
         MathElem::Primes(base, n) => {
             let base_start = out.len();
             layout_math_elem(interp, ctx, base, size, out, x, last_kind)?;
-            let mc = MathC::of(interp, ctx.math_font);
+            let mc = MathC::of(interp, ctx);
             let script_size = ctx.font_size * mc.script_scale();
             let (h_base, _) = glyphs_extent(&out[base_start..]);
             // Upstream desugars primes to exactly this: a superscript of `n`
@@ -2248,18 +2424,41 @@ fn prim_read_block(interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, E
 /// page; milestone-1's `break_into_lines` does not yet model breakability
 /// at all, so both are accepted (to keep the arity/signature faithful to
 /// v0.0.6) and ignored for now.
+///
+/// `docs/plans/design-silent-fields.md` FIX 3: this is upstream's
+/// `form_paragraph` seam — every stdlib caller (`form-paragraph = line-break
+/// true true`, and every direct `line-break _ _ (ctx |> set-paragraph-margin
+/// …)` call for headings/itemize/footnotes) relies on `line-break` itself
+/// to apply `ctx.paragraph_top`/`paragraph_bottom` around the formed lines,
+/// unconditionally of the two breakability bools (those only ever gate
+/// page-break eligibility upstream, never whether the margin applies).
+/// Prepending/appending `VertBox::Skip` here is a no-op in extent for a
+/// caller that already zeroed the margin (e.g. `footnote-scheme.satyh`'s
+/// `set-paragraph-margin 0pt 0pt`), and the leading skip specifically is
+/// further discarded by `chop_page` when it lands at the very top of a
+/// page/column (see that function's `pending_skip` handling) — mirroring
+/// upstream's page-top glue suppression so a page's first paragraph does
+/// not get a spurious gap above it.
 fn prim_line_break(interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
     let ib = as_inline_boxes(args.pop().unwrap())?;
     let ctx = as_context(args.pop().unwrap())?;
     let _is_breakable_bottom = as_bool(args.pop().unwrap())?;
     let _is_breakable_top = as_bool(args.pop().unwrap())?;
-    let mut lines = break_into_lines(&ctx, ib);
-    for vb in &mut lines {
+    let lines = break_into_lines(&ctx, ib);
+    // No lines were actually formed (empty inline content, `break_into_lines`'s
+    // own `n == 0` early return) — don't manufacture a margin around nothing.
+    let mut out = Vec::with_capacity(lines.len() + 2);
+    if !lines.is_empty() {
+        out.push(VertBox::Skip(ctx.paragraph_top));
+        out.extend(lines);
+        out.push(VertBox::Skip(ctx.paragraph_bottom));
+    }
+    for vb in &mut out {
         if let VertBox::Line { contents, .. } = vb {
             resolve_outer_graphics_in_contents(interp, contents)?;
         }
     }
-    Ok(Value::BlockBoxes(lines))
+    Ok(Value::BlockBoxes(out))
 }
 
 /// Look up `field` in a scheme record's fields, erroring with the
@@ -2860,6 +3059,17 @@ fn prim_get_initial_context(
             }
         }
     }
+    // `docs/plans/design-math-cramped.md` §4 Slice B: overlay the configured
+    // `default-font.satysfi-hash` `"math"` abbrev, if any, so a document
+    // with a bundled MATH-table font renders real cramped/uncramped math
+    // metrics with zero `set-math-font` calls (`interp.metrics.
+    // default_math_font` is `None` for every provider with no such config —
+    // `Base14Metrics` and a bare `TtfFontStore::load`/registry-without-
+    // `"math"` all — so this is a no-op there, keeping every pre-Slice-B
+    // fixture's initial context byte-identical).
+    if let Some(font) = interp.metrics.default_math_font() {
+        ctx.math_font = font;
+    }
     Ok(Value::Context(Box::new(ctx)))
 }
 
@@ -3149,6 +3359,18 @@ fn prim_abort_with_message(
 /// matching v0.0.6's `ImageInfo.add_image` (imageInfo.ml): a missing or
 /// undecodable file is a clean `EvalError` at the `load-image` call site
 /// itself, not a surprise deferred all the way to the PDF writer.
+///
+/// JPEG DCTDecode passthrough slice: in addition to the eager RGB8 decode
+/// above (still needed for `use-image-by-width`'s aspect-ratio math and the
+/// HTML backend's `<img>` data URI), this re-reads the same path's raw
+/// bytes and sniffs them for a baseline JPEG (`ImageResource::
+/// sniff_baseline_jpeg_dct`) so the PDF writer can embed the ORIGINAL
+/// DCT-encoded bytes instead of re-encoding the flattened samples. The
+/// second read is best-effort and non-fatal: if it fails (e.g. the file
+/// vanished between the two reads) `jpeg_dct` is simply `None` and this
+/// falls back to the pre-existing flat-RGB8 embedding — the file already
+/// decoded fine above, so that can't be allowed to turn into a `load-image`
+/// error over a passthrough optimization.
 fn prim_load_image(interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
     let path = as_str(args.pop().unwrap())?;
     let decoded = image::open(&path).map_err(|e| EvalError {
@@ -3157,11 +3379,16 @@ fn prim_load_image(interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, E
     })?;
     let rgb = decoded.to_rgb8();
     let (px_w, px_h) = rgb.dimensions();
+    let jpeg_dct = std::fs::read(&path)
+        .ok()
+        .and_then(ImageResource::sniff_baseline_jpeg_dct);
     let id = ImageId(interp.images.len());
     interp.images.push(ImageResource {
         samples: rgb.into_raw(),
         px_w,
         px_h,
+        jpeg_dct,
+        pdf: None,
     });
     Ok(Value::Image(id))
 }
@@ -3178,10 +3405,11 @@ fn prim_use_image_by_width(interp: &mut Interp, mut args: Vec<Value>) -> Result<
         span: None,
         msg: format!("internal error: image id {} out of range", image.0),
     })?;
-    if resource.px_w == 0 {
+    let (iw, ih) = resource.intrinsic_dims_pt();
+    if iw == 0.0 {
         return eval_error("use-image-by-width: image has zero width, cannot scale");
     }
-    let height = width * (resource.px_h as f64 / resource.px_w as f64);
+    let height = width * (ih / iw);
     Ok(Value::InlineBoxes(vec![HorzBox::Pure(
         PureHorzBox::Image {
             width,
@@ -3189,6 +3417,240 @@ fn prim_use_image_by_width(interp: &mut Interp, mut args: Vec<Value>) -> Result<
             image,
         },
     )]))
+}
+
+/// `load-pdf-image : string -> int -> image` (v0.0.6 vminstdef.yaml:525-538
+/// `BackendRegisterPdfImage`, `code: ImageInfo.add_pdf abspath pageno`;
+/// dev-0-1-0 renames the instr to `PrimitiveLoadPdfImage` with the identical
+/// type/body). Loads page `pageno` (1-based) of the PDF at `path`, parsed
+/// eagerly with `lopdf` (mirrors `prim_load_image`'s eager decode), and
+/// stores a `PdfPageResource` — the page's `/MediaBox` (for
+/// `use-image-by-width`'s aspect ratio), its content stream(s) (already
+/// inflated/concatenated by `lopdf::Document::get_page_content`), and its
+/// imported `/Resources` object subtree (for the PDF writer's Form XObject,
+/// docs/plans/design-load-pdf-image.md §3) — as the new resource's `pdf`
+/// field.
+///
+/// Path resolution is cwd-relative, the same documented deviation as
+/// `prim_load_image`/`prim_read_file` (no job-directory threaded through
+/// `Interp` yet).
+///
+/// Errors (all clean `EvalError`, no panics — mirrors upstream
+/// `imageHashTable.ml`'s `add_pdf` / `loadPdf.ml`, see the design doc §4's
+/// table):
+/// - file missing/unreadable → "cannot open '<path>': <e>";
+/// - malformed/unparseable PDF → "cannot parse PDF '<path>': <e>";
+/// - `pageno < 1` → "page number must be >= 1 (got <n>)";
+/// - `pageno` beyond the page count → "'<path>' has no page <n>";
+/// - `/Encrypt` present in the trailer → "'<path>' is encrypted; not
+///   supported" (S1/S2 never attempt decryption);
+/// - no usable `/MediaBox` (missing at every level of the inherited page
+///   tree, wrong array length, or non-numeric entries) → "page <n> of
+///   '<path>' has no usable MediaBox".
+fn prim_load_pdf_image(interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+    let pageno = as_int(args.pop().unwrap())?;
+    let path = as_str(args.pop().unwrap())?;
+    if pageno < 1 {
+        return eval_error(format!(
+            "load-pdf-image: page number must be >= 1 (got {pageno})"
+        ));
+    }
+    let doc = lopdf::Document::load(&path).map_err(|e| {
+        let msg = match &e {
+            lopdf::Error::IO(io_e) => format!("load-pdf-image: cannot open '{path}': {io_e}"),
+            other => format!("load-pdf-image: cannot parse PDF '{path}': {other}"),
+        };
+        EvalError { span: None, msg }
+    })?;
+    if doc.is_encrypted() {
+        return eval_error(format!(
+            "load-pdf-image: '{path}' is encrypted; not supported"
+        ));
+    }
+    let pages = doc.get_pages();
+    let page_id = *pages.get(&(pageno as u32)).ok_or_else(|| EvalError {
+        span: None,
+        msg: format!("load-pdf-image: '{path}' has no page {pageno}"),
+    })?;
+    let page_dict = doc.get_dictionary(page_id).map_err(|e| EvalError {
+        span: None,
+        msg: format!("load-pdf-image: cannot parse PDF '{path}': {e}"),
+    })?;
+    let media_box = resolve_pdf_media_box(&doc, page_dict).ok_or_else(|| EvalError {
+        span: None,
+        msg: format!("load-pdf-image: page {pageno} of '{path}' has no usable MediaBox"),
+    })?;
+    let content = doc.get_page_content(page_id).map_err(|e| EvalError {
+        span: None,
+        msg: format!("load-pdf-image: cannot parse PDF '{path}': {e}"),
+    })?;
+    let resources = import_pdf_resources(&doc, page_dict);
+    let id = ImageId(interp.images.len());
+    interp.images.push(ImageResource {
+        samples: Vec::new(),
+        px_w: 0,
+        px_h: 0,
+        jpeg_dct: None,
+        pdf: Some(PdfPageResource {
+            media_box,
+            content,
+            resources,
+        }),
+    });
+    Ok(Value::Image(id))
+}
+
+/// `/MediaBox` lookup with page-tree inheritance (`lopdf` does not resolve
+/// this automatically, unlike upstream camlpdf's `Pdfpage` helpers — design
+/// doc §1 Risk 3): walk `page_dict`, then its `/Parent` chain, returning the
+/// first `/MediaBox` found as `(x0, y0, x1, y1)` in raw PDF points. `None`
+/// if no ancestor carries a well-formed 4-element numeric array, or if a
+/// `/Parent` cycle is detected.
+fn resolve_pdf_media_box(
+    doc: &lopdf::Document,
+    page_dict: &lopdf::Dictionary,
+) -> Option<(f64, f64, f64, f64)> {
+    let mut cur = page_dict;
+    let mut seen: BTreeSet<(u32, u16)> = BTreeSet::new();
+    loop {
+        if let Ok(obj) = cur.get(b"MediaBox") {
+            if let Ok(arr) = obj.as_array() {
+                if arr.len() == 4 {
+                    let mut v = [0f64; 4];
+                    let mut ok = true;
+                    for (slot, item) in v.iter_mut().zip(arr.iter()) {
+                        match item.as_float() {
+                            Ok(f) => *slot = f as f64,
+                            Err(_) => {
+                                ok = false;
+                                break;
+                            }
+                        }
+                    }
+                    if ok {
+                        return Some((v[0], v[1], v[2], v[3]));
+                    }
+                }
+            }
+        }
+        match cur.get(b"Parent").and_then(|o| o.as_reference()) {
+            Ok(parent_id) => {
+                if !seen.insert(parent_id) {
+                    return None; // cycle
+                }
+                cur = doc.get_dictionary(parent_id).ok()?;
+            }
+            Err(_) => return None,
+        }
+    }
+}
+
+/// Import the page's `/Resources` subtree (walking page-tree inheritance
+/// like `resolve_pdf_media_box`) into a neutral `ImportedObjects` table for
+/// the PDF writer (design doc §2-3). Local id `0` always holds the
+/// (possibly inline) `/Resources` dictionary itself; every other entry is a
+/// real source PDF object number, keyed by `convert_pdf_object`'s
+/// transitive walk of every `Reference` reachable from it.
+fn import_pdf_resources(doc: &lopdf::Document, page_dict: &lopdf::Dictionary) -> ImportedObjects {
+    let mut out: Vec<(u32, ObjRepr)> = Vec::new();
+    let mut seen: BTreeSet<u32> = BTreeSet::new();
+    let root_repr = match resolve_pdf_resources_object(doc, page_dict) {
+        Some(obj) => convert_pdf_object(doc, obj, &mut out, &mut seen),
+        None => ObjRepr::Dict(Vec::new()),
+    };
+    out.insert(0, (0, root_repr));
+    ImportedObjects(out)
+}
+
+/// `/Resources` lookup with page-tree inheritance, mirroring
+/// `resolve_pdf_media_box` but returning the raw (possibly-inline)
+/// `&lopdf::Object` rather than a decoded value, since `/Resources` may
+/// legally be either a direct dictionary or an indirect reference.
+fn resolve_pdf_resources_object<'a>(
+    doc: &'a lopdf::Document,
+    page_dict: &'a lopdf::Dictionary,
+) -> Option<&'a lopdf::Object> {
+    let mut cur = page_dict;
+    let mut seen: BTreeSet<(u32, u16)> = BTreeSet::new();
+    loop {
+        if let Ok(obj) = cur.get(b"Resources") {
+            return Some(obj);
+        }
+        match cur.get(b"Parent").and_then(|o| o.as_reference()) {
+            Ok(parent_id) => {
+                if !seen.insert(parent_id) {
+                    return None;
+                }
+                cur = doc.get_dictionary(parent_id).ok()?;
+            }
+            Err(_) => return None,
+        }
+    }
+}
+
+/// Recursively convert one `lopdf::Object` into the neutral `ObjRepr`
+/// grammar (design doc §2), following every `Reference` transitively and
+/// appending newly-visited indirect objects to `out` keyed by their source
+/// object number (`seen` guards against re-visiting/cycles — a shared
+/// object referenced from multiple places is emitted once and pointed at by
+/// `ObjRepr::Ref` from every occurrence). Stream objects are copied
+/// **verbatim** (still-filtered bytes, `/Filter`/`/DecodeParms` kept as-is;
+/// only `/Length` is dropped since the writer derives it) — unlike the
+/// page's own content stream (`Document::get_page_content`, inflated
+/// separately in `prim_load_pdf_image`), a resource stream (font program,
+/// embedded image XObject, ICC profile, ...) is re-emitted byte-for-byte,
+/// so no decode/re-encode risk is taken on data this importer doesn't need
+/// to understand.
+fn convert_pdf_object(
+    doc: &lopdf::Document,
+    obj: &lopdf::Object,
+    out: &mut Vec<(u32, ObjRepr)>,
+    seen: &mut BTreeSet<u32>,
+) -> ObjRepr {
+    use lopdf::Object as LObj;
+    match obj {
+        LObj::Null => ObjRepr::Null,
+        LObj::Boolean(b) => ObjRepr::Bool(*b),
+        LObj::Integer(n) => ObjRepr::Int(*n),
+        LObj::Real(r) => ObjRepr::Real(*r as f64),
+        LObj::Name(n) => ObjRepr::Name(n.clone()),
+        LObj::String(s, _) => ObjRepr::String(s.clone()),
+        LObj::Array(items) => ObjRepr::Array(
+            items
+                .iter()
+                .map(|it| convert_pdf_object(doc, it, out, seen))
+                .collect(),
+        ),
+        LObj::Dictionary(d) => ObjRepr::Dict(convert_pdf_dict(doc, d, out, seen)),
+        LObj::Stream(s) => {
+            let dict_entries = convert_pdf_dict(doc, &s.dict, out, seen)
+                .into_iter()
+                .filter(|(k, _)| k.as_slice() != b"Length")
+                .collect();
+            ObjRepr::Stream(dict_entries, s.content.clone())
+        }
+        LObj::Reference((obj_num, gen)) => {
+            let (obj_num, gen) = (*obj_num, *gen);
+            if obj_num != 0 && seen.insert(obj_num) {
+                if let Ok(target) = doc.get_object((obj_num, gen)) {
+                    let repr = convert_pdf_object(doc, target, out, seen);
+                    out.push((obj_num, repr));
+                }
+            }
+            ObjRepr::Ref(obj_num)
+        }
+    }
+}
+
+fn convert_pdf_dict(
+    doc: &lopdf::Document,
+    dict: &lopdf::Dictionary,
+    out: &mut Vec<(u32, ObjRepr)>,
+    seen: &mut BTreeSet<u32>,
+) -> Vec<(Vec<u8>, ObjRepr)> {
+    dict.iter()
+        .map(|(k, v)| (k.clone(), convert_pdf_object(doc, v, out, seen)))
+        .collect()
 }
 
 /// `read-file : string -> list string` (dev-0-1-0 vminst.ml:3073
@@ -3855,7 +4317,7 @@ fn prim_discretionary(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Valu
 /// is unchanged.
 fn prim_get_axis_height(interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
     let ctx = as_context(args.pop().unwrap())?;
-    let mc = MathC::of(interp, ctx.math_font);
+    let mc = MathC::of(interp, &ctx);
     Ok(Value::Length(mc.axis(ctx.font_size)))
 }
 
@@ -4463,7 +4925,7 @@ fn math_char_class_value(c: MathCharClass) -> Value {
 /// `ScriptScript`: no-op — saturates at the deepest level, matching
 /// upstream (no `ScriptScriptScript`).
 fn enter_script(interp: &Interp, ctx: &Context) -> Context {
-    let mc = MathC::of(interp, ctx.math_font);
+    let mc = MathC::of(interp, ctx);
     let (scale, next_level) = match ctx.math_script_level {
         MathScriptLevel::Base => (
             mc.c.map(|c| c.script_scale_down).unwrap_or(0.7),
@@ -4751,7 +5213,7 @@ fn prim_get_math_axis_height_ratio(
     mut args: Vec<Value>,
 ) -> Result<Value, EvalError> {
     let ctx = as_context(args.pop().unwrap())?;
-    let ratio = MathC::of(interp, ctx.math_font)
+    let ratio = MathC::of(interp, &ctx)
         .c
         .map(|c| c.axis_height)
         .unwrap_or(0.25);
@@ -4777,21 +5239,51 @@ fn prim_math_attach_scripts(interp: &mut Interp, mut args: Vec<Value>) -> Result
 
 /// `load-hyphenation-dictionary : string -> hyphenation` (`vminst.ml`'s
 /// `LoadHyphenationDictionary`: upstream calls `LoadHyph.main abspath` to
-/// build a `BCHyphenation` constant). STAND-IN: no-op; this port has no
-/// `Context::hyphen_dictionary` field yet (gap G4,
-/// `…/tmp/vendoring-scout.md` §2 — restore checklist R7). ACCEPT-AND-RETURN
-/// (not a `stringify-math`-style hard error): `unidata.satyh`/
-/// `hyph-english.satyh` evaluate this at module LOAD time, so std-ja's
-/// `@require:` closure must not fail merely for referencing it. The path
-/// argument is popped and dropped — `here`'s doc comment (`primitives.rs`'s
-/// `base_env_with_version`) explains why the empty-string stand-in for
-/// `here` never surfaces as a real, dereferenced path here.
+/// build a `BCHyphenation` constant). Real (S1,
+/// `docs/plans/design-hyphenation.md` §7): unlike upstream, which loads a
+/// dictionary from an on-disk `.satysfi-hyph` path, this port has no
+/// filesystem-loaded pattern data — the argument is instead treated as a
+/// dictionary NAME (`"english"`/`"en-US"`, matching the `hyph-english.satyh`
+/// stdlib package's usage) and mapped to the compiled-in `HyphenLang` tag.
+/// An unrecognized name is a hard error rather than a silent no-op, since a
+/// document that asks for a dictionary and gets none would silently render
+/// without hyphenation. The heavy `hyphenation::Standard` dictionary itself
+/// is not loaded here — only the lightweight tag is; the actual load is
+/// deferred (load-once, cached) to `crate::hyphenation::hyphenate_word`'s
+/// first call for that tag.
 fn prim_load_hyphenation_dictionary(
     _interp: &mut Interp,
     mut args: Vec<Value>,
 ) -> Result<Value, EvalError> {
-    let _path = args.pop().unwrap();
-    Ok(Value::Unit)
+    let arg = as_str(args.pop().unwrap())?;
+    // Accept either a bare dictionary NAME ("english"/"en-US") or an
+    // upstream-style PATH ending `.../<name>.satysfi-hyph` — this is what
+    // the real, vendored `hyph-english.satyh` stand-in package actually
+    // passes (`here ^ "/../hyph/english.satysfi-hyph"`, mirroring
+    // upstream's `LoadHyph.main abspath` convention). This port has no
+    // on-disk pattern-file loader (the dictionary is compiled in via
+    // `embed_en-us`), so the path's file stem doubles as the dictionary
+    // name.
+    let stem = std::path::Path::new(&arg)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(arg.as_str())
+        .to_ascii_lowercase();
+    let tag = match stem.as_str() {
+        "english" | "en-us" => HyphenLang::EnglishUS,
+        // en-GB (`docs/plans/design-hyphenation.md` §S3's en-GB option):
+        // "british"/"en-GB"/"british-english", mirroring the "english"/
+        // "en-US" naming pair above.
+        "british" | "en-gb" | "british-english" => HyphenLang::EnglishGB,
+        _ => {
+            return eval_error(format!(
+                "load-hyphenation-dictionary: unknown dictionary {arg:?} \
+                 (supported: \"english\"/\"en-US\", \"british\"/\"en-GB\"/\"british-english\", \
+                 bare or as a `.../<name>.satysfi-hyph`-style path)"
+            ))
+        }
+    };
+    Ok(Value::Hyphenation(tag))
 }
 
 /// `load-unicode-char-database : string -> string -> string ->
@@ -4810,16 +5302,21 @@ fn prim_load_unicode_char_database(
 
 /// `set-hyphenation-dictionary : hyphenation -> context -> context`
 /// (`vminst.ml`'s setter: upstream stores `{ ctx with hyphen_dictionary }`).
-/// STAND-IN no-op: returns `ctx` unchanged, the opaque `hyphenation` token
-/// (always `Value::Unit`, see `t_hyphenation`'s doc comment) is popped and
-/// dropped. Closes scout gap G4 — `context.satyh`'s R7 restore checklist.
+/// Real (S1, `docs/plans/design-hyphenation.md` §7): writes
+/// `Context::hyphen_dictionary = Some(tag)`. This is the ONLY way a
+/// `Context` acquires a dictionary — `Context::initial` seeds `None` (D4),
+/// so a document that never calls this sees byte-identical layout to
+/// before this slice.
 fn prim_set_hyphenation_dictionary(
     _interp: &mut Interp,
     mut args: Vec<Value>,
 ) -> Result<Value, EvalError> {
-    let ctx = args.pop().unwrap();
-    let _dict = args.pop().unwrap();
-    Ok(ctx)
+    let ctx = as_context(args.pop().unwrap())?;
+    let tag = as_hyphenation(args.pop().unwrap())?;
+    Ok(Value::Context(Box::new(Context {
+        hyphen_dictionary: Some(tag),
+        ..ctx
+    })))
 }
 
 /// `set-unicode-char-database : unicode-char-database -> context ->
@@ -6005,7 +6502,7 @@ fn paren_trailing_kernf(
         }
         _ => return None,
     };
-    let mc = MathC::of(interp, ctx.math_font);
+    let mc = MathC::of(interp, ctx);
     let axis = mc.axis(size);
     let (_, _, _, kernf) = make_paren_run(interp, ctx, r, h_in, d_in, axis, size).ok()?;
     Some(kernf)
@@ -6159,7 +6656,7 @@ fn layout_math_atom(
                 // No pull-in (`{x_1}^2`): one sub+sup pair on the same base.
                 let (mut glyphs, mut rules, base_width, left, _) =
                     layout_math_list(interp, ctx, &new_base, size)?;
-                let mc = MathC::of(interp, ctx.math_font);
+                let mc = MathC::of(interp, ctx);
                 let script_size = size * mc.script_scale();
                 // §B3b-2 Edit C: re-derive ONCE (a paren base's dense math
                 // kern function, if `new_base`'s trailing atom is a paren —
@@ -6168,8 +6665,15 @@ fn layout_math_atom(
                 // `lp_math_kern_scheme`'s single scheme feeding both corner
                 // attachments upstream.
                 let paren_kernf = paren_trailing_kernf(interp, ctx, &new_base, size);
+                // Subscripts are always cramped (design-math-cramped.md
+                // §2.2); the superscript inherits the ambient cramped state
+                // unchanged (do NOT flip/reset it here).
+                let sub_ctx = Context {
+                    math_cramped: true,
+                    ..ctx.clone()
+                };
                 let (sub_glyphs, sub_rules, sub_width, _, _) =
-                    layout_math_list(interp, ctx, &sub_script, script_size)?;
+                    layout_math_list(interp, &sub_ctx, &sub_script, script_size)?;
                 let (sup_glyphs, sup_rules, sup_width, _, _) =
                     layout_math_list(interp, ctx, script, script_size)?;
                 let (h_base, d_base) = glyphs_extent(&glyphs);
@@ -6210,7 +6714,7 @@ fn layout_math_atom(
             }
             let (mut glyphs, mut rules, base_width, left, _) =
                 layout_math_list(interp, ctx, base, size)?;
-            let mc = MathC::of(interp, ctx.math_font);
+            let mc = MathC::of(interp, ctx);
             let script_size = size * mc.script_scale();
             let (script_glyphs, script_rules, script_width, _, _) =
                 layout_math_list(interp, ctx, script, script_size)?;
@@ -6251,10 +6755,15 @@ fn layout_math_atom(
             }
             let (mut glyphs, mut rules, base_width, left, _) =
                 layout_math_list(interp, ctx, base, size)?;
-            let mc = MathC::of(interp, ctx.math_font);
+            let mc = MathC::of(interp, ctx);
             let script_size = size * mc.script_scale();
+            // Subscripts are always cramped (design-math-cramped.md §2.2).
+            let sub_ctx = Context {
+                math_cramped: true,
+                ..ctx.clone()
+            };
             let (script_glyphs, script_rules, script_width, _, _) =
-                layout_math_list(interp, ctx, script, script_size)?;
+                layout_math_list(interp, &sub_ctx, script, script_size)?;
             let (_, d_base) = glyphs_extent(&glyphs);
             let (h_sub, _) = glyphs_extent(&script_glyphs);
             let sub_shift = mc.sub_shift_clamped(ctx.font_size, d_base, h_sub);
@@ -6298,7 +6807,15 @@ fn layout_math_atom(
             // upstream's `convert_to_low` call with the ambient `mathctx`
             // unchanged).
             let (num_glyphs, num_rules, num_w, ..) = layout_math_list(interp, ctx, num, size)?;
-            let (den_glyphs, den_rules, den_w, ..) = layout_math_list(interp, ctx, den, size)?;
+            // The denominator is always cramped (design-math-cramped.md
+            // §2.2); the numerator inherits the ambient cramped state
+            // unchanged.
+            let den_ctx = Context {
+                math_cramped: true,
+                ..ctx.clone()
+            };
+            let (den_glyphs, den_rules, den_w, ..) =
+                layout_math_list(interp, &den_ctx, den, size)?;
             let w = num_w.max(den_w);
             // Center the narrower of the two over/under the wider
             // (`math.ml:1140-1155`'s symmetric padding).
@@ -6306,7 +6823,7 @@ fn layout_math_atom(
             let den_dx = (w - den_w) * 0.5;
             let (_, d_numer) = glyphs_extent(&num_glyphs);
             let (h_denom, _) = glyphs_extent(&den_glyphs);
-            let mc = MathC::of(interp, ctx.math_font);
+            let mc = MathC::of(interp, ctx);
             let numer_shift = mc.frac_numer_shift(size, d_numer);
             let denom_shift = mc.frac_denom_shift(size, h_denom);
             let axis = mc.axis(size);
@@ -6347,10 +6864,15 @@ fn layout_math_atom(
             // upstream's harder failure mode; this port's own stand-in
             // policy, predating §B2, already chose "render the radicand
             // without the degree" over erroring — §B2 doesn't change that).
+            // The radicand is always cramped (design-math-cramped.md §2.2).
+            let radicand_ctx = Context {
+                math_cramped: true,
+                ..ctx.clone()
+            };
             let (inner_glyphs, inner_rules, inner_w, ..) =
-                layout_math_list(interp, ctx, inner, size)?;
+                layout_math_list(interp, &radicand_ctx, inner, size)?;
             let (h_cont, d_cont) = glyphs_extent(&inner_glyphs);
-            let mc = MathC::of(interp, ctx.math_font);
+            let mc = MathC::of(interp, ctx);
             let (h_bar, t_bar, l_extra) = mc.radical_bar_metrics(size, h_cont);
             // `_nonnegdpt` (the sign's own, slightly deeper, ink extent —
             // `default_radical`'s downward checkmark stroke pads `d_cont` by
@@ -6424,7 +6946,7 @@ fn layout_math_atom(
             let (inner_glyphs, inner_rules, inner_w, ..) =
                 layout_math_list(interp, ctx, inner, size)?;
             let (h_in, d_in) = inner_ink_extent(&inner_glyphs, &inner_rules);
-            let mc = MathC::of(interp, ctx.math_font);
+            let mc = MathC::of(interp, ctx);
             let axis = mc.axis(size);
             let closure_route = make_paren_run(interp, ctx, l, h_in, d_in, axis, size).and_then(
                 |left| {
@@ -6473,7 +6995,7 @@ fn layout_math_atom(
                 d_in = d_in.max(d);
                 parts.push((part_glyphs, part_rules, part_w));
             }
-            let mc = MathC::of(interp, ctx.math_font);
+            let mc = MathC::of(interp, ctx);
             let axis = mc.axis(size);
             let closure_route = make_paren_run(interp, ctx, l, h_in, d_in, axis, size).and_then(
                 |left| {
@@ -6503,7 +7025,7 @@ fn layout_math_atom(
         Math::UpperLimit(base, upper) => {
             let (mut glyphs, mut rules, base_width, left, right) =
                 layout_math_list(interp, ctx, base, size)?;
-            let mc = MathC::of(interp, ctx.math_font);
+            let mc = MathC::of(interp, ctx);
             let script_size = size * mc.script_scale();
             let (script_glyphs, script_rules, script_width, _, _) =
                 layout_math_list(interp, ctx, upper, script_size)?;
@@ -6518,7 +7040,7 @@ fn layout_math_atom(
         Math::LowerLimit(base, lower) => {
             let (mut glyphs, mut rules, base_width, left, right) =
                 layout_math_list(interp, ctx, base, size)?;
-            let mc = MathC::of(interp, ctx.math_font);
+            let mc = MathC::of(interp, ctx);
             let script_size = size * mc.script_scale();
             let (script_glyphs, script_rules, script_width, _, _) =
                 layout_math_list(interp, ctx, lower, script_size)?;
@@ -6928,14 +7450,35 @@ fn prim_get_text_color(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Val
 }
 
 /// `set-hyphen-penalty : int -> context -> context` (vminst.ml:1692) —
-/// FAITHFUL store (`Context::hyphen_badness`); no consumer yet (this port
-/// has no hyphenation — `code.satyh` sets this to `100000` specifically to
-/// *disable* hyphenation, already this port's behavior regardless).
+/// FAITHFUL store (`Context::hyphen_badness`), now a real consumer:
+/// `text_to_boxes`'s `flush_word` (`docs/plans/design-hyphenation.md` §4/D6)
+/// uses this as each injected `Discretionary`'s `penalty`, but only when a
+/// dictionary is installed via `set-hyphenation-dictionary` — with no
+/// dictionary installed (the default), this is stored but has no layout
+/// effect, same as before. `code.satyh`'s `set-hyphen-penalty 100000` still
+/// works as "disable hyphenation" (huge positive penalty, DP avoids it).
 fn prim_set_hyphen_penalty(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
     let ctx = as_context(args.pop().unwrap())?;
     let n = as_int(args.pop().unwrap())?;
     Ok(Value::Context(Box::new(Context {
         hyphen_badness: n,
+        ..ctx
+    })))
+}
+
+/// `set-hyphen-min : int -> int -> context -> context` (upstream
+/// `vminstdef.yaml:1163-1177`; `docs/plans/design-hyphenation.md` §7) —
+/// writes `Context::left_hyphen_min`/`right_hyphen_min`, each clamped to
+/// `>= 0` (mirrors `set-space-ratio`'s `.max(0.0)` clamping style; a
+/// negative minimum would be meaningless to the min-fragment filter in
+/// `crate::hyphenation::hyphenate_word`).
+fn prim_set_hyphen_min(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+    let ctx = as_context(args.pop().unwrap())?;
+    let right = as_int(args.pop().unwrap())?.max(0);
+    let left = as_int(args.pop().unwrap())?.max(0);
+    Ok(Value::Context(Box::new(Context {
+        left_hyphen_min: left,
+        right_hyphen_min: right,
         ..ctx
     })))
 }

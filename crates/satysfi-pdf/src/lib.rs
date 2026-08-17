@@ -17,8 +17,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use pdf_writer::{Content, Finish, Name, Pdf, Rect, Ref, Str};
 use satysfi_backend::{
-    place_block_at, Closing, Color, GraphicsElem, HorzStringInfo, ImageResource, Length,
-    MathGlyph, Page, PageGeometry, Path, PathSeg, PureHorzBox, VertBox,
+    place_block_at, Closing, Color, GraphicsElem, ImageResource, Length, MathGlyph, Page,
+    PageGeometry, Path, PathSeg, PureHorzBox, VertBox,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -131,18 +131,21 @@ fn place_image(content: &mut Content, id: usize, tx: f32, ty: f32, width: f32, h
 /// uses. `glyph.dy > 0` raises it (a superscript) since PDF y is up — no
 /// second flip here, only an add.
 ///
-/// `encode` turns one glyph's `text` into engine-specific `Tj` bytes: WinAnsi
-/// for `render_pdf` (below), a glyph-id run for `render_pdf_ttf` (`cid.rs`) —
-/// the one thing that differs between the two writers.
+/// `encode` turns one glyph into engine-specific `Tj` bytes: WinAnsi over
+/// `glyph.text` for `render_pdf` (below), a glyph-id run for
+/// `render_pdf_ttf` (`cid.rs`) that additionally special-cases
+/// `glyph.gid.is_some()` (§B3: a raw MATH-table variant glyph, emitted
+/// directly rather than re-derived from `text`) — the whole glyph (not just
+/// `info`/`text`) is threaded through so `encode` can see `gid`.
 pub(crate) fn place_math(
     content: &mut Content,
     glyphs: &[MathGlyph],
     anchor_x: f32,
     anchor_y: f32,
-    mut encode: impl FnMut(&HorzStringInfo, &str) -> Result<Vec<u8>, PdfError>,
+    mut encode: impl FnMut(&MathGlyph) -> Result<Vec<u8>, PdfError>,
 ) -> Result<(), PdfError> {
     for glyph in glyphs {
-        let encoded = encode(&glyph.info, &glyph.text)?;
+        let encoded = encode(glyph)?;
         let font_idx = (glyph.info.font.0 as usize).min(FONT_RES_NAMES.len() - 1);
         content.begin_text();
         content.set_font(
@@ -327,8 +330,18 @@ fn emit_box(content: &mut Content, bx: &PureHorzBox, tx: f32, ty: f32) -> Result
         PureHorzBox::Graphics { elems, .. } => {
             place_graphics(content, elems, tx, ty);
         }
-        PureHorzBox::Math { glyphs, .. } => {
-            place_math(content, glyphs, tx, ty, |_info, text| winansi(text))?;
+        PureHorzBox::Math { glyphs, rules, .. } => {
+            // base-14 never sees `gid: Some(_)` (no provider here overrides
+            // `math_vertical_variant`, §B3's zero-regression contract), so
+            // this ignores `g.gid` entirely and always encodes `g.text`.
+            place_math(content, glyphs, tx, ty, |g| winansi(&g.text))?;
+            // §B2 (`docs/plans/math-engine.md`): the fraction bar/radical
+            // sign+overbar are `Fill`s, not glyphs — placed through the SAME
+            // `place_graphics` an `inline-graphics`/`Tabular` box uses, at
+            // the SAME already-flipped anchor `place_math` just used for the
+            // glyphs (see `place_graphics`'s own doc comment on why no
+            // second y-flip belongs here).
+            place_graphics(content, rules, tx, ty);
         }
         PureHorzBox::Tabular(tab) => {
             for cell in &tab.cells {

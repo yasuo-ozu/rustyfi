@@ -10,7 +10,7 @@
 use crate::ast::{Ast, BText, IText, MatchArm, MathElem, Pattern};
 use satysfi_backend::Length;
 use satysfi_syntax::cst::{self, ast as c};
-use satysfi_syntax::leaf::{AnyHorzCmdTok, AnyVertCmdTok, UnopExclamTok, VarTok};
+use satysfi_syntax::leaf::{AnyHorzCmdTok, AnyMathCmdTok, AnyVertCmdTok, UnopExclamTok, VarTok};
 use satysfi_syntax::span::Span;
 use satysfi_syntax::token::Token;
 use std::collections::{HashSet, VecDeque};
@@ -38,20 +38,26 @@ fn err<T>(span: Span, msg: impl Into<String>) -> Result<T, ElabError> {
 /// `optional_arity` additionally tracks, for a name bound via a plain
 /// (non-`let-rec`) `let`/`let ... in` whose `Param` list has a *leading* run
 /// of `Param::Optional` (`?:name`) entries (`cst.rs`'s `Param` doc comment —
-/// only `TopLet`/`Expr::LetIn` admit that marker), how many such leading
-/// optional parameters it has — e.g. `let to-math ?:iopt e = ..` records 1.
-/// This is the "marker-less optional-argument defaulting" gap
-/// (`docs/plans/frontend-completion.md` Sub-area 2 / `class-signature-lang-
-/// gaps.md`): a bare call site (`to-math e1`, no `?:`/`?*` at all) must
-/// still supply `None` for `iopt` and match `e1` against `e` — see
-/// `app_chain_generic`'s use of [`Scope::optional_arity`]. Absent from the
-/// map (or `0`) means "no known leading optionals" — the overwhelmingly
-/// common case, and every existing name's default, so ordinary application
-/// is unaffected. Only a *prefix* is tracked because that's the only shape
-/// `?->`'s type-level encoding (`typecheck.rs`'s `lower_type_expr`) can even
-/// express; a non-leading `?:` (`stdja.satyh`'s `document record
-/// ?:configopt inner`) records `0` and keeps its old marker-optional-only
-/// behavior.
+/// `TopLet`/`Expr::LetIn` and the three command-binding forms all admit that
+/// marker), how many such leading optional parameters it has — e.g. `let
+/// to-math ?:iopt e = ..` records 1. This is the "marker-less
+/// optional-argument defaulting" gap (`docs/plans/frontend-completion.md`
+/// Sub-area 2 / `class-signature-lang-gaps.md`): a bare call site (`to-math
+/// e1`, no `?:`/`?*` at all) must still supply `None` for `iopt` and match
+/// `e1` against `e` — see `app_chain_generic`'s use of
+/// [`Scope::optional_arity`]. The same map also covers command bindings
+/// (`let-inline`/`let-block`/`let-math` — `cst.rs`'s `Param`, counted by the
+/// same `leading_optional_count`): `walk_bindings`'s `LetInline`/`LetBlock`/
+/// `LetMath` arms record each command's leading
+/// `?:`-marked-param count the same way, so a marker-less inline/block/math
+/// command call (`cmd_args`, `math_bot`'s `Cmd` arm) auto-omits those slots
+/// too. Absent from the map (or `0`) means "no known leading optionals" —
+/// the overwhelmingly common case, and every existing name's default, so
+/// ordinary application is unaffected. Only a *prefix* is tracked because
+/// that's the only shape `?->`'s type-level encoding (`typecheck.rs`'s
+/// `lower_type_expr`) can even express; a non-leading `?:` (`stdja.satyh`'s
+/// `document record ?:configopt inner`) records `0` and keeps its old
+/// marker-optional-only behavior.
 #[derive(Clone, Debug, Default)]
 pub struct Scope {
     names: HashSet<String>,
@@ -86,7 +92,8 @@ impl Scope {
     /// Like [`Scope::insert`], but also records `name`'s leading-optional-
     /// parameter count (see the struct doc comment) — used only at the
     /// handful of binding sites that know a def-site `Param` list
-    /// (`walk_bindings`'s `TopBinding::Let` arm, `Expr::LetIn`).
+    /// (`walk_bindings`'s `TopBinding::Let`/`LetInline`/`LetBlock`/`LetMath`
+    /// arms, `Expr::LetIn`/`Expr::LetMathIn`).
     fn insert_with_arity(&mut self, name: &str, arity: usize) {
         self.names.insert(name.to_string());
         if arity > 0 {
@@ -361,9 +368,10 @@ fn export_alias(
 }
 
 /// `arity` is `local`'s recorded leading-`?:`-optional-parameter count (see
-/// [`Scope`]'s doc comment) — nonzero only for `TopBinding::Let`, whose
-/// `Param` list can carry the marker; every other binding kind here passes
-/// `0`.
+/// [`Scope`]'s doc comment) — nonzero for `TopBinding::Let` and for
+/// `TopBinding::LetInline`/`LetBlock`/`LetMath` (all four have a `Param`
+/// list that can carry the marker — `leading_optional_count`); every other
+/// binding kind here passes `0`.
 fn push_named_binding(
     mod_path: &[String],
     local: String,
@@ -379,10 +387,16 @@ fn push_named_binding(
 }
 
 /// The length of the maximal leading run of `Param::Optional` entries in a
-/// plain `let`'s parameter list (see [`Scope`]'s doc comment) — `0` if
-/// `params` doesn't start with one at all, matching `?->`'s type-level
-/// encoding (`typecheck.rs`'s `lower_type_expr`), which only ever has
-/// optional domains as a *prefix* before the mandatory arrow chain.
+/// `Param` list (see [`Scope`]'s doc comment) — `0` if `params` doesn't
+/// start with one at all, matching `?->`'s type-level encoding
+/// (`typecheck.rs`'s `lower_type_expr`), which only ever has optional
+/// domains as a *prefix* before the mandatory arrow chain. Shared by a plain
+/// `let`'s params and a command binding's (`let-inline`/`let-block`/
+/// `let-math` — `walk_bindings`'s `LetInline`/`LetBlock`/`LetMath` arms,
+/// `Expr::LetMathIn`): both use the same `cst::ast::Param` list now (`cst.rs`'s
+/// `Param` doc comment). Recorded into [`Scope::optional_arity`] so a
+/// marker-less call can auto-omit them (upstream `typecheck_command_
+/// arguments` skips optional slots left unmarked).
 fn leading_optional_count(params: &[c::Param]) -> usize {
     params
         .iter()
@@ -467,7 +481,7 @@ fn walk_bindings(
                     mod_path,
                     cmd.name.clone(),
                     value_ast,
-                    0,
+                    leading_optional_count(params),
                     Binding::Let,
                     &mut bindings,
                     &mut running,
@@ -483,7 +497,7 @@ fn walk_bindings(
                     mod_path,
                     cmd.name.clone(),
                     value_ast,
-                    0,
+                    leading_optional_count(params),
                     Binding::Let,
                     &mut bindings,
                     &mut running,
@@ -498,7 +512,7 @@ fn walk_bindings(
                     mod_path,
                     cmd.name.clone(),
                     value_ast,
-                    0,
+                    leading_optional_count(params),
                     Binding::LetMath,
                     &mut bindings,
                     &mut running,
@@ -608,8 +622,75 @@ fn walk_bindings(
     Ok((bindings, exported, running))
 }
 
+/// Curry a command binding's (`let-inline`/`let-block`/`let-math`) `Param`
+/// list — already widened to `PatBot` by `params_to_patbots` — around a
+/// value built from the fully-extended scope, mirroring `rec_clause_value`'s
+/// two-path shape but per-param rather than clause-tuple (upstream's
+/// `curry_lambda_abstract` builds one `UTFunction` per `cmdarglst` element,
+/// `parser.mly:50-63`, unlike `let-rec`'s single tupled match — an
+/// intentional divergence from `rec_clause_value`'s own arity-N tuple-match
+/// shape, kept here because that's what upstream itself does for command
+/// arguments).
+///
+/// The all-variable-parameter fast path (every existing binding in the
+/// bundled packages) reproduces the plain `Lambda` chain byte-for-byte: it
+/// must, since `elaborate_let_inline`'s "lightweight" (`%context`-wrapping)
+/// form builds its `read-inline`/`read-block` application *inside*
+/// `build_value`, called with the innermost (fully-extended) scope, so the
+/// wrapping ends up nested *inside* every curried parameter exactly like the
+/// original direct implementation. The general (genuine-pattern) path lowers
+/// each parameter to its own `Lambda(%cmd_argN, Match(%cmd_argN, [pat ->
+/// rest]))` — a refutable parameter pattern (e.g. `Some(x)`) can fail to
+/// match at *application* time, exactly like a `match` arm would (see
+/// `eval.rs`'s `Ast::Match` handling for the resulting runtime error).
+fn curry_cmd_params(
+    patbots: &[c::PatBot],
+    scope: &Scope,
+    build_value: impl FnOnce(&Scope) -> Result<Ast, ElabError>,
+) -> Result<Ast, ElabError> {
+    if patbots.iter().all(is_var_patbot) {
+        let mut inner = scope.clone();
+        for p in patbots {
+            inner = inner.with(patbot_var_name(p));
+        }
+        let mut value_ast = build_value(&inner)?;
+        for p in patbots.iter().rev() {
+            value_ast = Ast::Lambda(patbot_var_name(p).to_string(), Rc::new(value_ast));
+        }
+        return Ok(value_ast);
+    }
+    let pats: Vec<Pattern> = patbots.iter().map(patbot).collect::<Result<_, _>>()?;
+    let mut names = Vec::new();
+    for p in &pats {
+        collect_pattern_names(p, &mut names);
+    }
+    let mut inner = scope.clone();
+    for n in &names {
+        inner = inner.with(n);
+    }
+    let mut value_ast = build_value(&inner)?;
+    let dummy = Span::default();
+    for (i, pat) in pats.into_iter().enumerate().rev() {
+        let fresh = format!("%cmd_arg{i}");
+        value_ast = Ast::Lambda(
+            fresh.clone(),
+            Rc::new(Ast::Match(
+                Box::new(Ast::Var(fresh, dummy)),
+                vec![MatchArm {
+                    pat,
+                    guard: None,
+                    body: value_ast,
+                }],
+            )),
+        );
+    }
+    Ok(value_ast)
+}
+
 /// `[ctxvar] let-inline \cmd param* = value` / `[ctxvar] let-block +cmd
 /// param* = value` (`nxhorzdec`/`nxvertdec` in `parser.mly`, lines 548-577).
+/// Each `param` is upstream's `arg` (`cst.rs`'s `Param` doc comment — a full
+/// patbot, or a `?:`-marked variable), curried via `curry_cmd_params`.
 ///
 /// Two forms, confirmed against v0.0.6 `parser.mly`:
 /// * with an explicit leading context variable, the value is elaborated
@@ -624,66 +705,53 @@ fn walk_bindings(
 ///   using `reader` = `"read-inline"` or `"read-block"`.
 fn elaborate_let_inline(
     ctx: Option<&VarTok>,
-    params: &[cst::CmdParam],
+    params: &[c::Param],
     value: &c::Expr,
     scope: &Scope,
     reader: &str,
 ) -> Result<Ast, ElabError> {
+    let patbots = params_to_patbots(params);
     match ctx {
         Some(ctxvar) => {
-            let mut inner = scope.with(&ctxvar.name);
-            for p in params {
-                inner = inner.with(&p.name.name);
-            }
-            let mut value_ast = expr(value, &inner)?;
-            for p in params.iter().rev() {
-                value_ast = Ast::Lambda(p.name.name.clone(), Rc::new(value_ast));
-            }
+            let ctx_scope = scope.with(&ctxvar.name);
+            let value_ast = curry_cmd_params(&patbots, &ctx_scope, |inner| expr(value, inner))?;
             Ok(Ast::Lambda(ctxvar.name.clone(), Rc::new(value_ast)))
         }
         None => {
             const IMPLICIT_CTX: &str = "%context";
             let dummy = Span::default();
-            let mut inner = scope.with(IMPLICIT_CTX);
-            for p in params {
-                inner = inner.with(&p.name.name);
-            }
-            let value_ast = expr(value, &inner)?;
-            let read_fn = scoped_var(reader, dummy, &inner)?;
-            let ctx_var = scoped_var(IMPLICIT_CTX, dummy, &inner)?;
-            let mut curried = Ast::Apply(
-                Box::new(Ast::Apply(Box::new(read_fn), Box::new(ctx_var))),
-                Box::new(value_ast),
-            );
-            for p in params.iter().rev() {
-                curried = Ast::Lambda(p.name.name.clone(), Rc::new(curried));
-            }
+            let ctx_scope = scope.with(IMPLICIT_CTX);
+            let curried = curry_cmd_params(&patbots, &ctx_scope, |inner| {
+                let value_ast = expr(value, inner)?;
+                let read_fn = scoped_var(reader, dummy, inner)?;
+                let ctx_var = scoped_var(IMPLICIT_CTX, dummy, inner)?;
+                Ok(Ast::Apply(
+                    Box::new(Ast::Apply(Box::new(read_fn), Box::new(ctx_var))),
+                    Box::new(value_ast),
+                ))
+            })?;
             Ok(Ast::Lambda(IMPLICIT_CTX.to_string(), Rc::new(curried)))
         }
     }
 }
 
 /// `let-math \cmd param* = expr` (`docs/plans/math-engine.md` §G; upstream
-/// `nxmathdec`, `parser.mly:586-591`): curry `params` straight into a
-/// `Lambda` chain around `value`, with **no** implicit/explicit context
-/// variable at all (contrast `elaborate_let_inline`, which always threads
-/// one) — a math command's own type (`math-cmd`) carries no context
-/// argument. A zero-param binding (e.g. `let-math \to = rel \`→\``) elaborates
-/// to `value` directly, un-wrapped.
+/// `nxmathdec`, `parser.mly:586-591`): curry `params` (upstream's `arg`,
+/// `cst.rs`'s `Param` doc comment) via `curry_cmd_params`, with **no**
+/// implicit/explicit context variable at all (contrast `elaborate_let_inline`,
+/// which always threads one) — a math command's own type (`math-cmd`)
+/// carries no context argument. A zero-param binding (e.g. `let-math \to =
+/// rel \`→\``) elaborates to `value` directly, un-wrapped. Shared by
+/// `TopBinding::LetMath` (via `walk_bindings`) and the expression-level
+/// `Expr::LetMathIn` (`parser.mly:688`, upstream's only command binding with
+/// a local `in`-bodied form — see that variant's doc comment).
 fn elaborate_let_math(
-    params: &[cst::CmdParam],
+    params: &[c::Param],
     value: &c::Expr,
     scope: &Scope,
 ) -> Result<Ast, ElabError> {
-    let mut inner = scope.clone();
-    for p in params {
-        inner = inner.with(&p.name.name);
-    }
-    let mut value_ast = expr(value, &inner)?;
-    for p in params.iter().rev() {
-        value_ast = Ast::Lambda(p.name.name.clone(), Rc::new(value_ast));
-    }
-    Ok(value_ast)
+    let patbots = params_to_patbots(params);
+    curry_cmd_params(&patbots, scope, |inner| expr(value, inner))
 }
 
 /// Elaborate one `let-rec` clause group (shared by the local `Expr::LetRecIn`
@@ -962,6 +1030,32 @@ fn expr(e: &c::Expr, scope: &Scope) -> Result<Ast, ElabError> {
             Ok(Ast::LetMutableIn(
                 name.name.clone(),
                 Box::new(init_ast),
+                Box::new(body_ast),
+            ))
+        }
+        // `let-math \cmd param* = value in body` (`nxletsub`'s `LETMATH`
+        // case, `parser.mly:688`) — upstream's only command binding with a
+        // local `in`-bodied form (`LETHORZ`/`LETVERT` stay top-level-only,
+        // see `cst.rs`'s `Expr::LetMathIn` doc comment). Structurally
+        // identical to the top-level `TopBinding::LetMath` arm of
+        // `walk_bindings`: elaborate the (curried) value under the OUTER
+        // scope via the shared `elaborate_let_math` helper, then record
+        // `cmd`'s leading-`?:`-optional-parameter count for `body`, same as
+        // `Expr::LetIn` just above.
+        c::Expr::LetMathIn {
+            cmd,
+            params,
+            value,
+            body,
+            ..
+        } => {
+            let value_ast = elaborate_let_math(params, value, scope)?;
+            let mut body_scope = scope.clone();
+            body_scope.insert_with_arity(&cmd.name, leading_optional_count(params));
+            let body_ast = expr(body, &body_scope)?;
+            Ok(Ast::LetMathIn(
+                cmd.name.clone(),
+                Box::new(value_ast),
                 Box::new(body_ast),
             ))
         }
@@ -1387,9 +1481,7 @@ fn atomic(a: &c::Atomic, scope: &Scope) -> Result<Ast, ElabError> {
         c::Atomic::BlockText { elems, .. } => {
             Ok(Ast::BlockText(Rc::new(block_elems(elems, scope)?)))
         }
-        c::Atomic::MathText { elems, .. } => {
-            Ok(Ast::MathText(Rc::new(lower_math_elems(elems, scope)?)))
-        }
+        c::Atomic::MathText { elems, .. } => math_block_ast(elems, scope),
     }
 }
 
@@ -1563,6 +1655,15 @@ fn vert_cmd_key(name: &AnyVertCmdTok) -> (String, Span) {
     }
 }
 
+/// [`AnyMathCmdTok`]'s scope key + span — the math-mode analogue of
+/// [`horz_cmd_key`]/[`vert_cmd_key`].
+fn math_cmd_key(name: &AnyMathCmdTok) -> (String, Span) {
+    match name {
+        AnyMathCmdTok::Plain(t) => (t.name.clone(), t.span),
+        AnyMathCmdTok::Mod(t) => (qualify_key(&t.mods, &t.name), t.span),
+    }
+}
+
 /// An inline-text group's content (`{ .. }`): itemize-aware entry point.
 /// `sxsep`'s two alternatives (parser.mly:1039-1042) are a `nonempty_list`
 /// of `*`-headed items (→ `UTItemize`, see [`itemize`]) or plain content;
@@ -1600,10 +1701,11 @@ fn inline_elems(elems: &[c::InlineElem], scope: &Scope) -> Result<Vec<IText>, El
                 if !scope.contains(&key) {
                     return err(span, format!("unbound inline command '{key}'"));
                 }
+                let leading = scope.optional_arity(&key);
                 out.push(IText::Cmd {
                     name: key,
                     span,
-                    args: cmd_args(tail, scope)?,
+                    args: cmd_args(tail, scope, leading)?,
                 });
             }
             c::InlineElem::Embed { var, .. } => {
@@ -1622,6 +1724,11 @@ fn inline_elems(elems: &[c::InlineElem], scope: &Scope) -> Result<Vec<IText>, El
             c::InlineElem::EmbedMath { mgrp, elems } => {
                 if !text.is_empty() {
                     out.push(IText::Text(std::mem::take(&mut text)));
+                }
+                if let Some(first) = elems.first() {
+                    if let c::MathBot::Sep(tok) = &first.base {
+                        return err(tok.0, "a '|'-separated math list cannot be embedded directly in inline text: `${| … |}` here would be a `math list`, but an embedded formula must be a single `math`");
+                    }
                 }
                 let span = mgrp.open.0.unite(mgrp.close.0);
                 out.push(IText::EmbedMath {
@@ -1655,10 +1762,11 @@ fn block_elems(elems: &[c::BlockElem], scope: &Scope) -> Result<Vec<BText>, Elab
                 if !scope.contains(&key) {
                     return err(span, format!("unbound block command '{key}'"));
                 }
+                let leading = scope.optional_arity(&key);
                 out.push(BText::Cmd {
                     name: key,
                     span,
-                    args: cmd_args(tail, scope)?,
+                    args: cmd_args(tail, scope, leading)?,
                 });
             }
             c::BlockElem::Embed { var, .. } => {
@@ -1684,17 +1792,37 @@ fn block_elems(elems: &[c::BlockElem], scope: &Scope) -> Result<Vec<BText>, Elab
 /// optional application (`app_arg_to_ast`'s doc comment) — the one place this
 /// port's optional-arg call-site model is shared between commands and plain
 /// functions.
-fn cmd_args(tail: &c::CmdTail, scope: &Scope) -> Result<Vec<Ast>, ElabError> {
-    match tail {
-        c::CmdTail::Semi(_) => Ok(Vec::new()),
+fn cmd_args(tail: &c::CmdTail, scope: &Scope, leading: usize) -> Result<Vec<Ast>, ElabError> {
+    let args: Vec<&c::AppArg> = match tail {
+        c::CmdTail::Semi(_) => Vec::new(),
         c::CmdTail::Args { first, rest, .. } => {
-            let mut out = vec![app_arg_to_ast(first, scope)?];
+            let mut v: Vec<&c::AppArg> = Vec::with_capacity(1 + rest.len());
+            v.push(first);
             for a in rest {
-                out.push(app_arg_to_ast(a, scope)?);
+                v.push(a);
             }
-            Ok(out)
+            v
+        }
+    };
+    let mut out = Vec::with_capacity(args.len().max(leading));
+    let mut args_iter = args.into_iter().peekable();
+    let mut supplied = 0;
+    while supplied < leading {
+        match args_iter.peek() {
+            Some(c::AppArg::Optional { .. }) | Some(c::AppArg::Omission(_)) => {
+                out.push(app_arg_to_ast(args_iter.next().unwrap(), scope)?);
+                supplied += 1;
+            }
+            _ => break,
         }
     }
+    for _ in supplied..leading {
+        out.push(Ast::Ctor("None".to_string(), None));
+    }
+    for a in args_iter {
+        out.push(app_arg_to_ast(a, scope)?);
+    }
+    Ok(out)
 }
 
 // ---- itemize ---------------------------------------------------------------
@@ -1813,6 +1941,44 @@ fn lower_math_elems(elems: &[cst::MathErased], scope: &Scope) -> Result<Vec<Math
     elems.iter().map(|e| math_elem_cst(e, scope)).collect()
 }
 
+/// `mathblock` (parser.mly:1059-1066): a LEADING `|` puts the math area in
+/// list mode — `${| m | m |}` is upstream-desugared in-grammar to an
+/// ordinary list literal of `math` values (make_cons over UTMath; there is
+/// NO matrix/grid node anywhere in the frontend or math backend) —
+/// otherwise the area is one plain `math` (today's single-MathText path).
+/// Edge cases replicated exactly: list mode triggers only on a LEADING `|`
+/// (`${a|b}` is upstream a parse error); the trailing `|` is mandatory
+/// (`${|a|b}` rejected); `${|}` = empty list, `${||}` = one empty cell;
+/// `|` never carries scripts. Split is over the flat erased stream so the
+/// sibling inline `{| … |}` (sxsep) can reuse it later.
+fn math_block_ast(elems: &[cst::MathErased], scope: &Scope) -> Result<Ast, ElabError> {
+    let leading_sep = matches!(elems.first(), Some(e) if matches!(&e.base, c::MathBot::Sep(_)));
+    if !leading_sep {
+        return Ok(Ast::MathText(Rc::new(lower_math_elems(elems, scope)?)));
+    }
+    for e in elems {
+        if let c::MathBot::Sep(tok) = &e.base {
+            if !e.scripts.is_empty() {
+                return err(tok.0, "a '|' math-list separator cannot carry a script ('^'/'_'/primes)");
+            }
+        }
+    }
+    if !matches!(elems.last(), Some(e) if matches!(&e.base, c::MathBot::Sep(_))) {
+        let c::MathBot::Sep(first) = &elems[0].base else { unreachable!() };
+        return err(first.0, "a '|'-separated math list must end with a trailing '|' (write `${| a | b |}`)");
+    }
+    let mut segments: Vec<Ast> = Vec::new();
+    let mut seg_start = 1usize;
+    for (i, e) in elems.iter().enumerate().skip(1) {
+        if matches!(&e.base, c::MathBot::Sep(_)) {
+            let seg = &elems[seg_start..i];
+            segments.push(Ast::MathText(Rc::new(lower_math_elems(seg, scope)?)));
+            seg_start = i + 1;
+        }
+    }
+    Ok(Ast::List(segments))
+}
+
 fn math_elem_cst(m: &c::MathElemCst, scope: &Scope) -> Result<MathElem, ElabError> {
     let base = math_bot(&m.base, scope)?;
     fold_math_scripts(base, &m.scripts, scope)
@@ -1821,25 +1987,46 @@ fn math_elem_cst(m: &c::MathElemCst, scope: &Scope) -> Result<MathElem, ElabErro
 fn math_bot(b: &c::MathBot, scope: &Scope) -> Result<MathElem, ElabError> {
     match b {
         c::MathBot::Cmd { name, args } => {
-            let mut arg_asts = Vec::with_capacity(args.len());
-            for a in args {
+            let (key, span) = math_cmd_key(name);
+            if !scope.contains(&key) {
+                return err(span, format!("unbound math command '{key}'"));
+            }
+            // Marker-less optional defaulting — the command mirror of
+            // app_chain_generic (upstream typecheck_command_arguments skips
+            // optional slots left unmarked). No non-empty-args guard: a
+            // MathElem::Cmd is always an application (a bare command VALUE is
+            // `command \cmd`), so `${\cmd}` with `[t?] math-cmd` pads too.
+            let leading = scope.optional_arity(&key);
+            let mut arg_asts = Vec::with_capacity(args.len().max(leading));
+            let mut args_iter = args.iter().peekable();
+            let mut supplied = 0;
+            while supplied < leading {
+                match args_iter.peek() {
+                    Some(c::MathArg::Optional { .. }) | Some(c::MathArg::Omission(_)) => {
+                        arg_asts.push(math_arg_to_ast(args_iter.next().unwrap(), scope)?);
+                        supplied += 1;
+                    }
+                    _ => break,
+                }
+            }
+            for _ in supplied..leading {
+                arg_asts.push(Ast::Ctor("None".to_string(), None));
+            }
+            for a in args_iter {
                 arg_asts.push(math_arg_to_ast(a, scope)?);
             }
-            if !scope.contains(&name.name) {
-                return err(name.span, format!("unbound math command '{}'", name.name));
-            }
             Ok(MathElem::Cmd {
-                name: name.name.clone(),
-                span: name.span,
+                name: key,
+                span,
                 args: arg_asts,
             })
         }
         c::MathBot::Chars(tok) => Ok(MathElem::Chars(tok.text.clone())),
         c::MathBot::Embed(tok) => {
-            // Math mode has no qualified-command CST form yet (no
-            // `MathCmdWithModTok`/`AnyMathCmdTok` leaf), but `#var`/`#Mod.var`
-            // embeds already carry a `mods` list (`VarInMathTok`), so those
-            // are mangled the same as everywhere else.
+            // Math commands are qualified via `math_cmd_key` the same way
+            // `horz_cmd_key`/`vert_cmd_key` handle `\Mod.cmd`; `#var`/
+            // `#Mod.var` embeds already carry a `mods` list (`VarInMathTok`),
+            // so those are mangled the same as everywhere else.
             let key = qualify_key(&tok.mods, &tok.name);
             if !scope.contains(&key) {
                 return err(tok.span, format!("unbound variable '{key}'"));
@@ -1849,7 +2036,7 @@ fn math_bot(b: &c::MathBot, scope: &Scope) -> Result<MathElem, ElabError> {
                 span: tok.span,
             })
         }
-        c::MathBot::Sep(tok) => err(tok.0, "math '|' separator is not supported yet (phase 3)"),
+        c::MathBot::Sep(tok) => err(tok.0, "'|' builds a math list and may only be used when the math area starts with '|' (e.g. `${| a | b |}`); it cannot appear mid-formula or inside a `{ … }` math group"),
         c::MathBot::Group { elems, .. } => Ok(MathElem::Group(lower_math_elems(elems, scope)?)),
     }
 }
@@ -1929,28 +2116,40 @@ fn fold_math_scripts(
     Ok(acc)
 }
 
-/// `matharg`: math command arguments either recurse into math (`Math`), are
-/// program-mode escapes (`!(..)`/`![..]`/`!(|..|)`, elaborated exactly like
-/// their `Atomic`/`Expr` counterparts), or are inline/block text escapes
-/// (`!{..}`/`!<..>`, elaborated to `InlineText`/`BlockText` Asts — see
-/// `cst.rs`'s doc comment on `MathArg` for why the lexer already makes these
-/// token-identical to `Atomic`'s own bracket forms).
+/// `matharg` (parser.mly:1138-1146 + narg 1201-1210): `?:`-supplied desugars
+/// to `Some(<body>)`, `?*` to `None` — the math-command mirror of
+/// `app_arg_to_ast`'s `AppArg::Optional`/`Omission` arms. A mandatory
+/// (`Plain`) argument elaborates its body directly with no wrapping.
 fn math_arg_to_ast(arg: &c::MathArg, scope: &Scope) -> Result<Ast, ElabError> {
     match arg {
-        c::MathArg::Math { elems, .. } => {
-            Ok(Ast::MathText(Rc::new(lower_math_elems(elems, scope)?)))
-        }
-        c::MathArg::Inline { elems, .. } => inline_text_ast(elems, scope),
-        c::MathArg::Block { elems, .. } => Ok(Ast::BlockText(Rc::new(block_elems(elems, scope)?))),
-        c::MathArg::ParenEscape { inner, .. } => paren_body(inner, scope),
-        c::MathArg::ListEscape { items, .. } => {
+        c::MathArg::Plain(body) => math_arg_body_to_ast(body, scope),
+        c::MathArg::Optional { body, .. } => Ok(Ast::Ctor(
+            "Some".to_string(),
+            Some(Box::new(math_arg_body_to_ast(body, scope)?)),
+        )),
+        c::MathArg::Omission(_) => Ok(Ast::Ctor("None".to_string(), None)),
+    }
+}
+
+/// The six `matharg` body shapes (`cst.rs`'s `MathArgBody` doc comment):
+/// recurse into math (`Math`), program-mode escapes (`!(..)`/`![..]`/
+/// `!(|..|)`, elaborated exactly like their `Atomic`/`Expr` counterparts), or
+/// inline/block text escapes (`!{..}`/`!<..>`, elaborated to
+/// `InlineText`/`BlockText` Asts).
+fn math_arg_body_to_ast(body: &c::MathArgBody, scope: &Scope) -> Result<Ast, ElabError> {
+    match body {
+        c::MathArgBody::Math { elems, .. } => math_block_ast(elems, scope),
+        c::MathArgBody::Inline { elems, .. } => inline_text_ast(elems, scope),
+        c::MathArgBody::Block { elems, .. } => Ok(Ast::BlockText(Rc::new(block_elems(elems, scope)?))),
+        c::MathArgBody::ParenEscape { inner, .. } => paren_body(inner, scope),
+        c::MathArgBody::ListEscape { items, .. } => {
             let mut out = Vec::with_capacity(items.len());
             for it in items {
                 out.push(expr(&it.value, scope)?);
             }
             Ok(Ast::List(out))
         }
-        c::MathArg::RecordEscape { body, .. } => record_body_to_ast(body, scope),
+        c::MathArgBody::RecordEscape { body, .. } => record_body_to_ast(body, scope),
     }
 }
 

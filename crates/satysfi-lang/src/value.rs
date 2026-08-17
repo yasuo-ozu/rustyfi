@@ -4,8 +4,8 @@ use crate::ast::{Ast, BText, IText, MathElem};
 use crate::compile::CompiledExpr;
 use crate::primitives::PrimDef;
 use satysfi_backend::{
-    Color, Context, HorzBox, ImageId, ImageResource, Length, MathKind, Page, PageGeometry,
-    VertBox,
+    Color, Context, HorzBox, ImageId, ImageResource, Length, MathCharClass, MathKind, Page,
+    PageGeometry, VertBox,
 };
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
@@ -162,11 +162,14 @@ pub enum Math {
     Sub(Vec<Math>, Vec<Math>),
     /// `math-color`.
     ChangeColor(Color, Vec<Math>),
-    /// `math-char-class` (`\mathrm`/`\mathbf`/…) — the ctor name of the
-    /// `math-char-class` variant (`"MathRoman"`, `"MathBoldItalic"`, …;
-    /// `docs/plans/math-engine.md` §F — restyling itself is roadmap, this
-    /// just carries which style was requested).
-    ChangeCharClass(String, Vec<Math>),
+    /// `math-char-class` (`\mathrm`/`\mathbf`/…) — the resolved
+    /// [`MathCharClass`] a `math-char-class` primitive call named (`\mathrm`
+    /// -> `MathRoman` -> `MathCharClass::Roman`, …; `docs/plans/
+    /// math-engine.md` §F). Its layout arm (`primitives.rs`) sets
+    /// `Context::math_char_class` to this while laying out the inner list,
+    /// which is what makes `VariantCharPending`'s per-char remap style-
+    /// sensitive.
+    ChangeCharClass(MathCharClass, Vec<Math>),
     /// `math-frac`: numerator, denominator.
     Fraction(Vec<Math>, Vec<Math>),
     /// `math-radical`: `\sqrt[degree]{radicand}` — `None` degree is the
@@ -232,6 +235,16 @@ pub enum MathElement {
         big: bool,
         style: Box<MathVariantStyle>,
     },
+    /// One MATHCHAR token from a `${…}` literal, not yet resolved to a
+    /// `MathKind`/codepoint — `reflect_math_elem`'s `MathElem::Chars` arm
+    /// pushes exactly one of these per token (the lexer already groups a
+    /// symbol run or a single latin digit/letter into one token; see gap 5's
+    /// "one atom per run" note), deferring both the whole-token class-map
+    /// lookup (`Context::math_class_map`) and the per-char variant remap
+    /// (`Context::math_variant_char_map`/`default_math_variant_char`) to
+    /// layout time, where the current `Context::font`/`math_char_class` are
+    /// available to metrics-probe the remap (`resolve_variant_char`).
+    VariantCharPending(String),
 }
 
 /// `math-variant-char`'s 9-field per-style codepoint record

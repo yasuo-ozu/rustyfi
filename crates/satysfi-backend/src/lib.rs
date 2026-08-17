@@ -12,8 +12,10 @@ pub mod pagebreak;
 pub mod tabular;
 pub mod vbox;
 
-pub use context::{Context, PageGeometry, PaperSize};
-pub use font::{FontKey, FontMetrics};
+pub use context::{Context, MathCmdId, PageGeometry, PaperSize};
+pub use font::{
+    FontKey, FontMetrics, MathConstants, MathCorner, MathVariantGlyph, VertVariantPolicy,
+};
 pub use graphics::{
     graphics_bbox, linear_transform_graphics, linear_transform_path, shift_graphics, shift_path,
     Closing, Color, Dash, GraphicsElem, Path, PathSeg, Point, PrePath, Subpath,
@@ -25,7 +27,9 @@ pub use length::Length;
 pub use linebreak::{
     break_into_lines, break_opportunities, fit_cell, measure_block, natural_metrics, BreakKind,
 };
-pub use math::{MathGlyph, MathKind};
+pub use math::{
+    default_math_class_map, default_math_variant_char, MathCharClass, MathGlyph, MathKind,
+};
 pub use pagebreak::{chop_page, place_block_at, Page, PlacedLine};
 pub use tabular::{Cell, Paddings, TabularBox, TabularCellBox};
 pub use vbox::VertBox;

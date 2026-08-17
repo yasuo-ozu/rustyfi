@@ -229,3 +229,32 @@ ${\\foo}",
         "expected an unbound-math-command error, got: {err}"
     );
 }
+
+/// Inverse of [`val_only_math_cmd_is_not_exposed_unqualified`]: even though a
+/// `val`-only (no `direct`) sig item never exposes its command UNQUALIFIED,
+/// the module's own qualified binding is always inserted (`TopBinding::Module`
+/// binds `N.\foo` regardless of `direct` — see its doc comment in
+/// `elaborate.rs`). So the fully QUALIFIED reference `${\N.foo}` must still
+/// resolve, proving `AnyMathCmdTok::Mod`/`math_cmd_key` reach a module-scoped
+/// math command even when it is not `direct`-exposed unqualified.
+#[test]
+fn val_only_math_cmd_is_reachable_when_qualified() {
+    let dir = TempDir::new("val-only-qualified");
+    dir.write(
+        "lib.satyh",
+        "module N : sig
+  val \\foo : [] math-cmd
+end = struct
+  let-math \\foo = math-char MathOrd `x`
+end
+",
+    );
+    let entry = dir.write(
+        "entry.saty",
+        "@import: lib
+in
+${\\N.foo}",
+    );
+    let v = compile_via_loader(&entry).expect("qualified \\N.foo should compile and evaluate");
+    assert!(matches!(v, Value::MathText { .. }), "expected a math value, got {v:?}");
+}

@@ -250,6 +250,10 @@ pub const PRIMITIVE_NAMES: &[&str] = &[
     "math-color",
     "math-char-class",
     "math-variant-char",
+    // ---- gap 7 (`docs/plans/math-mode-language-gaps.md`) ----
+    "set-math-variant-char",
+    "get-left-math-class",
+    "get-right-math-class",
     "math-paren",
     "math-paren-with-middle",
     "text-in-math",
@@ -984,9 +988,12 @@ impl Checker {
             // is no separate math-command token), so an alias site only
             // ever reaches this generic `Ast::LetIn` path (never
             // `Ast::LetMathIn`, which is produced only at a math command's
-            // OWN definition site — see that variant's doc comment). Pass a
-            // already-`MathCmd`-typed alias through unchanged, exactly like
-            // the `InlineCmd`/`BlockCmd` arms above do for their own kind.
+            // OWN definition site — top-level `let-math` via `walk_bindings`,
+            // or the expression-level `let-math .. in ..` form,
+            // `elaborate.rs`'s `Expr::LetMathIn` arm — never at an alias
+            // site; see that variant's doc comment). Pass a already-
+            // `MathCmd`-typed alias through unchanged, exactly like the
+            // `InlineCmd`/`BlockCmd` arms above do for their own kind.
             MonoType::MathCmd(_) if is_inline => {
                 return Ok(generalize(self.ctx.level(), &tv));
             }
@@ -1081,9 +1088,11 @@ impl Checker {
 
     /// Shared by `check_itext`'s `IText::Cmd` and `check_btext`'s
     /// `BText::Cmd`: check a command application's argument count (exact —
-    /// every optional param must carry an explicit `?:`/`?*` marker at the
-    /// call site, so its slot is never actually *absent* from `args`; see
-    /// `elaborate.rs`'s `cmd_args`) and each argument's type against `params`
+    /// every optional param either carries an explicit `?:`/`?*` marker at
+    /// the call site, or is `None`-padded by elaboration when the call
+    /// leaves a leading optional slot unmarked entirely — see
+    /// `elaborate.rs`'s `cmd_args`/`leading_optional_count` — so its slot
+    /// is never actually *absent* from `args`) and each argument's type against `params`
     /// (already resolved to a concrete `MonoType::InlineCmd`/`BlockCmd`'s
     /// payload by the caller). An `optional` param's `args[i]` is always a
     /// `Some(..)`/`None` value (`app_arg_to_ast`'s desugaring), so it's
@@ -1695,9 +1704,10 @@ impl Checker {
     /// recursing). `Cmd`/`Embed` are where math meets the ordinary
     /// expression language (`docs/plans/math-engine.md` §G): a `Cmd`'s
     /// `name` must resolve to a genuine `MathCmd` type (checked exactly
-    /// like `check_itext`'s `IText::Cmd`, via `check_cmd_args` — math
-    /// commands never carry an optional `?:` argument, but `check_cmd_args`
-    /// handles that generically anyway), and an `Embed`'s (`#expr`) type
+    /// like `check_itext`'s `IText::Cmd`, via `check_cmd_args` — a math
+    /// command's optional `?:`/`?*`-marked or marker-less-padded arguments
+    /// are handled by `check_cmd_args` the same generic way), and an
+    /// `Embed`'s (`#expr`) type
     /// must unify with `math` (a math command parameter, or another
     /// program-mode value that itself produces math — `Value::Math`/
     /// `Value::MathText` are the two runtime shapes this unifies against,

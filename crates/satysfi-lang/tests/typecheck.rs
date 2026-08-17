@@ -361,7 +361,7 @@ fn primitive_names_are_cross_checked_against_primitives_source() {
     let src = include_str!("../src/primitives.rs");
     assert_eq!(
         typecheck::PRIMITIVE_NAMES.len(),
-        156,
+        159,
         "keep this in sync with primitives.rs's prims! table and \
          types_unify.rs's every_registered_primitive_has_a_type test"
     );

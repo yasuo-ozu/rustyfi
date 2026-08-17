@@ -494,6 +494,9 @@ fn every_registered_primitive_has_a_type() {
         "math-color",
         "math-char-class",
         "math-variant-char",
+        "set-math-variant-char",
+        "get-left-math-class",
+        "get-right-math-class",
         "math-paren",
         "math-paren-with-middle",
         "text-in-math",
@@ -539,7 +542,7 @@ fn every_registered_primitive_has_a_type() {
         // ---- page-level prims blocking mitou-report/stdjareport ----
         "clear-page",
     ];
-    assert_eq!(NAMES.len(), 156, "keep this list in sync with primitives.rs's prims! table");
+    assert_eq!(NAMES.len(), 159, "keep this list in sync with primitives.rs's prims! table");
     for name in NAMES {
         assert!(
             prim_types::primitive_type(name).is_some(),

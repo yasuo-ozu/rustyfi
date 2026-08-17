@@ -1,12 +1,31 @@
 use crate::font::FontKey;
 use crate::graphics::Color;
 use crate::length::Length;
+use crate::math::{default_math_class_map, MathCharClass, MathKind};
+use std::collections::BTreeMap;
+use std::sync::Arc;
+
+/// Opaque handle to the context's installed math command
+/// (`get-initial-context`'s second argument / `set-math-command`; v0.0.6
+/// `context_main.math_command`). The closure VALUE lives lang-side in
+/// `Interp::math_commands` — this crate cannot depend on
+/// `satysfi_lang::Value`, so this is the same id-into-an-`Interp`-table
+/// seam as `ImageId`/`HookId` (hbox.rs).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MathCmdId(pub usize);
 
 /// The typesetting context (a milestone-1 subset of `context_main` in
 /// horzBox.ml). Grows field by field as primitives need them.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Context {
     pub font: FontKey,
+    /// The dedicated math font (v0.0.6 context_main.math_font; set-math-font).
+    /// Math layout measures/emits glyphs under THIS key, falling back to `font`
+    /// per-glyph when it has no glyph (see primitives::math_glyph_font). Seeded
+    /// FontKey(0) — same as font — so a math-OTF regular face renders styled
+    /// math with no further setup, base-14/non-math degrades to today. The
+    /// OpenType MATH-table slice keys its lookups on this same FontKey.
+    pub math_font: FontKey,
     pub font_size: Length,
     /// Baseline-to-baseline distance.
     pub leading: Length,
@@ -46,6 +65,32 @@ pub struct Context {
     pub space_natural: f64,
     pub space_shrink: f64,
     pub space_stretch: f64,
+    /// The installed `[math] inline-cmd` applied to bare `${…}` in inline
+    /// text (v0.0.6 `context_main.math_command`). `None` only for contexts
+    /// built by `Context::initial` directly (unit tests) — the
+    /// `get-initial-context` primitive always installs its second argument.
+    pub math_command: Option<MathCmdId>,
+    /// `\mathrm`/`\bm`/… restyling target (v0.0.6 `context_main.
+    /// math_char_class`, `docs/plans/math-engine.md` §F): which Mathematical-
+    /// Alphanumeric style block a plain `${…}` letter resolves to. Set by
+    /// `Math::ChangeCharClass`'s layout arm (`primitives.rs`), consulted by
+    /// `resolve_variant_char`. Defaults to `Italic` — v0.0.6's own default
+    /// (plain math letters are italic unless restyled).
+    pub math_char_class: MathCharClass,
+    /// Upstream `default_math_class_map` (`primitives.cppo.ml:465-480`):
+    /// whole-TOKEN entries (`=`, `-`, `,`, …) consulted BEFORE the per-char
+    /// variant lookup below. `Arc` (not per-`Context` `BTreeMap`) since every
+    /// `Context` shares the same default table unless a future primitive
+    /// overrides it; cloning a `Context` (routine — every `..ctx` spread)
+    /// stays a cheap refcount bump.
+    pub math_class_map: Arc<BTreeMap<String, (String, MathKind)>>,
+    /// `set-math-variant-char`'s runtime override table (gap 7,
+    /// `docs/plans/math-engine.md` §F): `(source char, style) -> replacement
+    /// char`, consulted BEFORE `default_math_variant_char`'s built-in
+    /// Mathematical-Alphanumeric remap. Empty by default. `Arc` for the same
+    /// cheap-clone reason as `math_class_map`; `set-math-variant-char`
+    /// copy-on-writes it via `Arc::make_mut`.
+    pub math_variant_char_map: Arc<BTreeMap<(char, MathCharClass), char>>,
 }
 
 impl Context {
@@ -53,6 +98,7 @@ impl Context {
     pub fn initial(paragraph_width: Length) -> Context {
         Context {
             font: FontKey(0),
+            math_font: FontKey(0),
             font_size: Length::pt(12.0),
             leading: Length::pt(18.0),
             paragraph_width,
@@ -70,6 +116,10 @@ impl Context {
             space_natural: 0.33,
             space_shrink: 0.08,
             space_stretch: 0.16,
+            math_command: None,
+            math_char_class: MathCharClass::Italic,
+            math_class_map: Arc::new(default_math_class_map()),
+            math_variant_char_map: Arc::new(BTreeMap::new()),
         }
     }
 }

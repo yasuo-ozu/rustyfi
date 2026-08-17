@@ -1,0 +1,817 @@
+//! `docs/plans/math-engine.md` §B3 (MATH-table `MathVariants` — big-operator
+//! vertical variants + stretchy delimiters): tests for
+//! `TtfFontStore::math_vertical_variant` (`VertVariantPolicy::BigOp`/
+//! `AtLeast`), `push_big_char_glyph`/`push_delimiter_glyph`
+//! (`satysfi-lang/src/primitives.rs`), and the `MathGlyph.gid` raw-gid
+//! channel through the real CID pipeline (`render_pdf_ttf`).
+//!
+//! Font discovery mirrors `tests/math_font.rs`/`tests/math_fraction_radical.rs`
+//! (copied, not shared — matches this repo's existing per-file convention):
+//! fontconfig first, then a handful of common distro/nix paths, then a
+//! graceful skip. Unlike the shared `find_math_font` (whichever family
+//! resolves first), §B3's unit tests (test plan item 1) need BOTH fonts
+//! independently — DejaVu Math TeX Gyre exercises the glyf path, Noto Sans
+//! Math the CFF `glyph_bounding_box` path (`ttf-parser` lib.rs:2172) — so
+//! this file adds per-family locators alongside the shared either-font one.
+
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+use satysfi_backend::{FontKey, FontMetrics, HorzBox, Length, Page, PageGeometry, PlacedLine, PureHorzBox, VertVariantPolicy};
+use satysfi_lang::value::Value;
+use satysfi_lang::{elaborate, eval, primitives, typecheck, CompileError};
+use satysfi_pdf::{render_pdf_ttf, TtfFontStore};
+use ttf_parser::Face;
+
+/// Independently replicates `TtfFontStore::math_vertical_variant`'s
+/// `VertVariantPolicy::AtLeast` selection (`ttf.rs`): the smallest
+/// `vertical_constructions` record whose `advance_measurement` (design
+/// units, scaled by `size`/`units_per_em`) covers `target`, else the
+/// largest record — used to check the SELECTION independently of what the
+/// returned `MathVariantGlyph.advance` field happens to mean (see this
+/// file's module doc comment / the `vertical_variant_unit_*` tests' own
+/// comment on why `.advance` itself isn't the right thing to assert
+/// `>= target` against).
+fn expected_at_least_gid(face: &Face, c: char, size: Length, target: Length) -> u16 {
+    let gid = face.glyph_index(c).expect("cmap has the char");
+    let construction = face
+        .tables()
+        .math
+        .expect("MATH table")
+        .variants
+        .expect("MathVariants subtable")
+        .vertical_constructions
+        .get(gid)
+        .expect("char has a vertical GlyphConstruction");
+    let n = construction.variants.len();
+    let upem = face.units_per_em() as f64;
+    let min_du = (target.0 / size.0) * upem;
+    let mut chosen = construction
+        .variants
+        .get(n - 1)
+        .expect("at least one variant record")
+        .variant_glyph
+        .0;
+    for i in 0..n {
+        let v = construction.variants.get(i).expect("index < n");
+        if v.advance_measurement as f64 >= min_du {
+            chosen = v.variant_glyph.0;
+            break;
+        }
+    }
+    chosen
+}
+
+// ----------------------------------------------------------------------
+// Font discovery.
+// ----------------------------------------------------------------------
+
+fn find_family(family: &str, fallbacks: &[&str]) -> Option<PathBuf> {
+    if let Ok(output) = Command::new("fc-match")
+        .args(["--format=%{file}", family])
+        .output()
+    {
+        if output.status.success() {
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !path.is_empty()
+                && Path::new(&path).is_file()
+                && (path.contains("Math") || path.contains("math"))
+            {
+                return Some(PathBuf::from(path));
+            }
+        }
+    }
+    for candidate in fallbacks {
+        if Path::new(candidate).is_file() {
+            return Some(PathBuf::from(candidate));
+        }
+    }
+    None
+}
+
+fn find_dejavu_math() -> Option<PathBuf> {
+    find_family(
+        "DejaVu Math TeX Gyre",
+        &[
+            "/usr/share/texmf/fonts/opentype/public/dejavu-otf/DejaVuMathTeXGyre.ttf",
+            "/usr/share/fonts/opentype/dejavu-math-tex-gyre/DejaVuMathTeXGyre.ttf",
+            "/usr/share/fonts/truetype/tex-gyre/texgyredejavu-math.otf",
+        ],
+    )
+}
+
+fn find_noto_math() -> Option<PathBuf> {
+    find_family(
+        "Noto Sans Math",
+        &[
+            "/usr/share/fonts/noto/NotoSansMath-Regular.ttf",
+            "/usr/share/fonts/truetype/noto/NotoSansMath-Regular.ttf",
+            "/usr/share/fonts/opentype/noto/NotoSansMath-Regular.ttf",
+            "/usr/share/fonts/OTF/NotoSansMath-Regular.otf",
+            "/usr/share/fonts/noto-fonts/NotoSansMath-Regular.ttf",
+            "/run/current-system/sw/share/fonts/truetype/NotoSansMath-Regular.ttf",
+        ],
+    )
+}
+
+/// Either font (whichever fontconfig resolves first) — used by the e2e
+/// tests, which only need ONE real MATH font, mirroring `math_font.rs`'s
+/// `find_math_font`.
+fn find_math_font() -> Option<PathBuf> {
+    for family in ["Noto Sans Math", "DejaVu Math TeX Gyre"] {
+        if let Some(p) = find_family(family, &[]) {
+            return Some(p);
+        }
+    }
+    find_dejavu_math().or_else(find_noto_math)
+}
+
+macro_rules! need_font {
+    ($finder:expr, $label:expr) => {
+        match $finder {
+            Some(path) => path,
+            None => {
+                eprintln!(
+                    "skipping: no {} font found on this system (tried fc-match \
+                     and common nix/distro paths)",
+                    $label
+                );
+                return;
+            }
+        }
+    };
+}
+
+// ----------------------------------------------------------------------
+// Test plan item 1 (unit): `TtfFontStore::math_vertical_variant`.
+// ----------------------------------------------------------------------
+
+/// Runs every unit assertion from the spec's test plan against one font,
+/// panicking (with the font path in every message) on failure so a `#[test]`
+/// per font gives a precise, attributable failure.
+fn assert_vertical_variant_unit(path: &Path) {
+    let store = TtfFontStore::load(path, None, None).expect("load math font");
+    let face = store.face(FontKey(0)).expect("parse face");
+    let size = Length::pt(12.0);
+    let upem = face.units_per_em() as f64;
+
+    // -- BigOp('∑'): gid != base cmap gid, IS a member of the enumerated
+    // vertical_constructions variant list, height+depth > the base
+    // record's (record[0], enumerated — not hardcoded).
+    let sum_gid = face
+        .glyph_index('∑')
+        .unwrap_or_else(|| panic!("{path:?}: cmap has no ∑"));
+    let math_table = face
+        .tables()
+        .math
+        .unwrap_or_else(|| panic!("{path:?}: no MATH table"));
+    let variants_table = math_table
+        .variants
+        .unwrap_or_else(|| panic!("{path:?}: no MathVariants subtable"));
+    let sum_construction = variants_table
+        .vertical_constructions
+        .get(sum_gid)
+        .unwrap_or_else(|| panic!("{path:?}: ∑ has no vertical GlyphConstruction"));
+    let n = sum_construction.variants.len();
+    assert!(
+        n >= 1,
+        "{path:?}: expected at least one prepared variant record for ∑, got {n}"
+    );
+    let sum_variant_gids: Vec<u16> = sum_construction
+        .variants
+        .into_iter()
+        .map(|v| v.variant_glyph.0)
+        .collect();
+    let base_rec = sum_construction
+        .variants
+        .get(0)
+        .expect("record[0] must exist since n >= 1");
+    let base_bbox = face
+        .glyph_bounding_box(base_rec.variant_glyph)
+        .unwrap_or_else(|| panic!("{path:?}: base ∑ record has no bbox"));
+    let base_h = size.0 * (base_bbox.y_max.max(0) as f64) / upem;
+    let base_d = size.0 * ((-(base_bbox.y_min.min(0) as i32)) as f64) / upem;
+
+    let big = store
+        .math_vertical_variant(FontKey(0), '∑', size, VertVariantPolicy::BigOp)
+        .unwrap_or_else(|| panic!("{path:?}: expected Some for BigOp('∑')"));
+    assert_ne!(
+        big.gid, sum_gid.0,
+        "{path:?}: BigOp variant gid should differ from the plain cmap gid"
+    );
+    assert!(
+        sum_variant_gids.contains(&big.gid),
+        "{path:?}: BigOp gid {} not among ∑'s enumerated variant records {sum_variant_gids:?}",
+        big.gid
+    );
+    assert!(
+        big.height.0 + big.depth.0 > base_h + base_d,
+        "{path:?}: BigOp variant (h+d={}) should exceed record[0]'s (h+d={})",
+        big.height.0 + big.depth.0,
+        base_h + base_d
+    );
+
+    // -- AtLeast(2.0*size) on '(': advance >= 2.0*size.
+    let paren_gid = face
+        .glyph_index('(')
+        .unwrap_or_else(|| panic!("{path:?}: cmap has no '('"));
+    let paren_construction = variants_table
+        .vertical_constructions
+        .get(paren_gid)
+        .unwrap_or_else(|| panic!("{path:?}: '(' has no vertical GlyphConstruction"));
+    let record0_gid = paren_construction
+        .variants
+        .get(0)
+        .unwrap_or_else(|| panic!("{path:?}: '(' construction has no record[0]"))
+        .variant_glyph
+        .0;
+
+    // NOTE on `.advance`: `MathVariantGlyph.advance` is the variant GLYPH's
+    // own horizontal advance width (`face.glyph_hor_advance`, hmtx-based) —
+    // matching upstream `fontFormat.ml`'s `get_math_glyph_metrics`, whose
+    // `wid` is likewise `get_glyph_metrics`'s (hmtx) width, not the
+    // OpenType `advance_measurement` used to SELECT the record. It's the
+    // right quantity for a caller's horizontal cursor step
+    // (`push_delimiter_glyph`'s `*x += v.advance`) but, for a narrow glyph
+    // like `(` that only grows TALLER (not much wider) as it stretches, it
+    // does NOT itself grow past `target` (a VERTICAL measurement) — so the
+    // correct thing to check here is that the SELECTION POLICY picked the
+    // right record (independently replicated via `expected_at_least_gid`,
+    // directly off `advance_measurement`), not that the returned
+    // `.advance` field exceeds `target`.
+    let target = size * 2.0;
+    let expected_gid = expected_at_least_gid(&face, '(', size, target);
+    // Sanity: for this to be a meaningful test, `target` must actually
+    // exceed record[0]'s own coverage (else the "AtLeast" policy would
+    // trivially degenerate to the `AtLeast(tiny)` case below).
+    assert_ne!(
+        expected_gid, record0_gid,
+        "{path:?}: test target {target:?} should force a non-record[0] selection \
+         (pick a larger target if this ever fails)"
+    );
+    let at_least = store
+        .math_vertical_variant(FontKey(0), '(', size, VertVariantPolicy::AtLeast(target))
+        .unwrap_or_else(|| panic!("{path:?}: expected Some for AtLeast(2*size) on '('"));
+    assert_eq!(
+        at_least.gid, expected_gid,
+        "{path:?}: AtLeast(2*size) should select the smallest record whose \
+         advance_measurement covers 2*size (independently computed gid {expected_gid}), got {}",
+        at_least.gid
+    );
+    // `.advance` is still self-consistent: exactly the SELECTED variant
+    // glyph's own hmtx horizontal advance, scaled.
+    let expected_advance = size
+        * (face
+            .glyph_hor_advance(ttf_parser::GlyphId(at_least.gid))
+            .expect("selected variant has an hmtx advance") as f64
+            / upem);
+    assert!(
+        (at_least.advance.0 - expected_advance.0).abs() < 1e-6,
+        "{path:?}: `.advance` should be the selected variant glyph's own hmtx advance \
+         ({expected_advance:?}), got {:?}",
+        at_least.advance
+    );
+
+    // -- AtLeast(tiny) on '(': returns record[0].
+    let tiny = Length::pt(1e-6);
+    let at_tiny = store
+        .math_vertical_variant(FontKey(0), '(', size, VertVariantPolicy::AtLeast(tiny))
+        .unwrap_or_else(|| panic!("{path:?}: expected Some for AtLeast(tiny) on '('"));
+    assert_eq!(
+        at_tiny.gid, record0_gid,
+        "{path:?}: AtLeast(tiny) should return record[0]'s gid ({record0_gid}), got {}",
+        at_tiny.gid
+    );
+
+    // -- no-construction char ('a'): None.
+    let none = store.math_vertical_variant(FontKey(0), 'a', size, VertVariantPolicy::BigOp);
+    assert!(
+        none.is_none(),
+        "{path:?}: expected None for 'a' (no vertical construction), got {none:?}"
+    );
+}
+
+#[test]
+fn vertical_variant_unit_dejavu() {
+    let path = need_font!(find_dejavu_math(), "DejaVu Math TeX Gyre");
+    assert_vertical_variant_unit(&path);
+}
+
+#[test]
+fn vertical_variant_unit_noto() {
+    // Noto Sans Math is a CFF (OpenType-CFF) font — `Face::glyph_bounding_box`
+    // takes the outline-tracing path (`ttf-parser` lib.rs:2172), not the
+    // glyf `loca`/`glyf` table path DejaVu (a TrueType-outline font) uses.
+    let path = need_font!(find_noto_math(), "Noto Sans Math");
+    assert_vertical_variant_unit(&path);
+}
+
+// ----------------------------------------------------------------------
+// Pipeline helpers (mirrors `math_font.rs`/`math_fraction_radical.rs`'s
+// `run_math`/`with_ctx`/`math_box`).
+// ----------------------------------------------------------------------
+
+fn run_math(src: &str, metrics: &dyn FontMetrics) -> Result<Value, CompileError> {
+    let file = satysfi_syntax::parse_file(src)?;
+    let env = primitives::base_env();
+    let scope = elaborate::Scope::new(env.names());
+    let program = elaborate::elaborate_program(&file, &scope)?;
+    typecheck::typecheck(&program)?;
+    let mut interp = eval::Interp::new(metrics);
+    Ok(interp.eval(&env, &program.body)?)
+}
+
+fn with_ctx(body: &str) -> String {
+    format!(
+        "let-inline ctx \\dummy m = inline-nil\n\
+         in\n\
+         let ctx = get-initial-context 200pt (command \\dummy) in\n\
+         {body}"
+    )
+}
+
+fn math_box(v: Value) -> PureHorzBox {
+    match v {
+        Value::InlineBoxes(boxes) => {
+            assert_eq!(boxes.len(), 1, "expected exactly one box, got {boxes:?}");
+            match boxes.into_iter().next().unwrap() {
+                HorzBox::Pure(m @ PureHorzBox::Math { .. }) => m,
+                other => panic!("expected a PureHorzBox::Math, got {other:?}"),
+            }
+        }
+        other => panic!("expected inline-boxes, got {other:?}"),
+    }
+}
+
+fn as_math_parts(bx: PureHorzBox) -> (Length, Length, Length, Vec<satysfi_backend::MathGlyph>) {
+    match bx {
+        PureHorzBox::Math {
+            width,
+            height,
+            depth,
+            glyphs,
+            ..
+        } => (width, height, depth, glyphs),
+        other => panic!("expected PureHorzBox::Math, got {other:?}"),
+    }
+}
+
+fn page_for(bx: PureHorzBox, geometry: &PageGeometry) -> Page {
+    Page {
+        lines: vec![PlacedLine {
+            x: geometry.text_origin.0,
+            baseline_y: geometry.text_origin.1 + Length::pt(60.0),
+            contents: vec![(Length::ZERO, bx)],
+        }],
+    }
+}
+
+// ----------------------------------------------------------------------
+// PDF content-stream introspection: byte-exact reproduction of
+// `pdf-writer` 0.13's `Str::write` escaping (verified against
+// `pdf-writer-0.13.0/src/object.rs`) so we can search the REAL emitted
+// bytes for a specific 2-byte-BE glyph id's `Tj` operand — searching the
+// lossy-UTF8 string (like `math_fraction_radical.rs` does for pure-ASCII
+// operators such as `f*`) would corrupt non-ASCII glyph-id bytes, and
+// searching the raw bytes naively would risk a false-positive hit inside
+// the ALSO-embedded (whole, unsubsetted) font file. We narrow the search to
+// just the content stream: `render_pdf_ttf` embeds exactly two `stream` /
+// `endstream` objects for a single-page, no-image document (the content
+// stream and the font file), and the content stream is always by far the
+// smaller of the two.
+// ----------------------------------------------------------------------
+
+fn pdf_str_repr(bytes: &[u8]) -> Vec<u8> {
+    if bytes.iter().all(|b| b.is_ascii()) {
+        let is_balanced = {
+            let mut depth = 0i32;
+            let mut ok = true;
+            for &b in bytes {
+                match b {
+                    b'(' => depth += 1,
+                    b')' => {
+                        if depth > 0 {
+                            depth -= 1;
+                        } else {
+                            ok = false;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            ok && depth == 0
+        };
+        let mut out = vec![b'('];
+        let mut balanced_flag: Option<bool> = None;
+        for &byte in bytes {
+            match byte {
+                b'(' | b')' => {
+                    let bal =
+                        *balanced_flag.get_or_insert_with(|| byte != b')' && is_balanced);
+                    if !bal {
+                        out.push(b'\\');
+                    }
+                    out.push(byte);
+                }
+                b'\\' => out.extend(b"\\\\"),
+                b' '..=b'~' => out.push(byte),
+                b'\n' => out.extend(b"\\n"),
+                b'\r' => out.extend(b"\\r"),
+                b'\t' => out.extend(b"\\t"),
+                0x08 => out.extend(b"\\b"),
+                0x0c => out.extend(b"\\f"),
+                _ => {
+                    out.push(b'\\');
+                    out.push(b'0' + (byte >> 6));
+                    out.push(b'0' + ((byte >> 3) & 7));
+                    out.push(b'0' + (byte & 7));
+                }
+            }
+        }
+        out.push(b')');
+        out
+    } else {
+        let mut out = vec![b'<'];
+        let hex = |b: u8| -> u8 {
+            if b < 10 {
+                b'0' + b
+            } else {
+                b'A' + (b - 10)
+            }
+        };
+        for &byte in bytes {
+            out.push(hex(byte >> 4));
+            out.push(hex(byte & 0xF));
+        }
+        out.push(b'>');
+        out
+    }
+}
+
+fn contains_subslice(haystack: &[u8], needle: &[u8]) -> bool {
+    if needle.is_empty() || needle.len() > haystack.len() {
+        return false;
+    }
+    haystack.windows(needle.len()).any(|w| w == needle)
+}
+
+/// All `stream`/`endstream` payloads in a raw PDF byte buffer.
+fn extract_streams(pdf: &[u8]) -> Vec<&[u8]> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while let Some(rel) = find_subslice(&pdf[i..], b"stream") {
+        let mut start = i + rel + b"stream".len();
+        if pdf.get(start) == Some(&b'\r') {
+            start += 1;
+        }
+        if pdf.get(start) == Some(&b'\n') {
+            start += 1;
+        }
+        match find_subslice(&pdf[start..], b"endstream") {
+            Some(end_rel) => {
+                let end = start + end_rel;
+                out.push(&pdf[start..end]);
+                i = end + b"endstream".len();
+            }
+            None => break,
+        }
+    }
+    out
+}
+
+fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() || needle.len() > haystack.len() {
+        return None;
+    }
+    haystack.windows(needle.len()).position(|w| w == needle)
+}
+
+/// The content stream out of `extract_streams`' output: for a single-page,
+/// no-image document the ONLY other stream is the (much larger)
+/// unsubsetted embedded font file.
+fn content_stream(pdf: &[u8]) -> Vec<u8> {
+    let streams = extract_streams(pdf);
+    let content = streams
+        .iter()
+        .min_by_key(|s| s.len())
+        .expect("expected at least one PDF stream object");
+    assert!(
+        streams.len() >= 2,
+        "expected >= 2 stream objects (content + embedded font), got {}",
+        streams.len()
+    );
+    // Sanity: the picked stream really does look like a content stream, not
+    // (e.g.) a pathologically small font table.
+    assert!(
+        contains_subslice(content, b"BT") && contains_subslice(content, b"Tf"),
+        "the shortest stream object doesn't look like a content stream \
+         (missing BT/Tf) -- got {} bytes: {:?}",
+        content.len(),
+        String::from_utf8_lossy(content)
+    );
+    content.to_vec()
+}
+
+fn approx(a: Length, b: Length, tol: f64) -> bool {
+    (a.0 - b.0).abs() < tol
+}
+
+// ----------------------------------------------------------------------
+// Test plan item 2 (e2e B3a): `∑` grows via `math-big-char`.
+// ----------------------------------------------------------------------
+
+#[test]
+fn big_char_sum_variant_grows_and_emits_variant_gid() {
+    let path = need_font!(find_math_font(), "MATH");
+    let store = TtfFontStore::load(&path, None, None).expect("load math font");
+    let face = store.face(FontKey(0)).expect("parse face");
+    // `with_ctx`'s `get-initial-context` defaults `font_size` to 12pt
+    // (`Context::initial`) -- matches `math_fraction_radical.rs`'s own
+    // `size` convention for the same reason.
+    let size = Length::pt(12.0);
+
+    // Independently (ttf-parser, no hardcoded gids) compute the BigOp
+    // record[1] variant gid the port's own policy is supposed to select,
+    // and the plain base gid it must NOT select.
+    let base_gid = face.glyph_index('∑').expect("cmap has ∑");
+    let construction = face
+        .tables()
+        .math
+        .expect("MATH table")
+        .variants
+        .expect("MathVariants")
+        .vertical_constructions
+        .get(base_gid)
+        .expect("∑ has a vertical GlyphConstruction");
+    let n = construction.variants.len();
+    let expected_variant = construction
+        .variants
+        .get(if n >= 2 { 1 } else { 0 })
+        .expect("record[1] (or [0])")
+        .variant_glyph;
+
+    // -- Non-big baseline: plain `math-char MathOp` ∑, no growth.
+    let base_src = with_ctx("embed-math ctx (math-char MathOp `∑`)");
+    let base_v = run_math(&base_src, &store).expect("plain ∑ should compile");
+    // `_base_h`/`_base_d` deliberately unused for the growth comparison
+    // below (see that assertion's comment for why the plain run's box
+    // height/depth is the wrong baseline) — this run only proves `gid: None`.
+    let (_, _base_h, _base_d, base_glyphs) = as_math_parts(math_box(base_v));
+    assert_eq!(base_glyphs.len(), 1);
+    assert_eq!(
+        base_glyphs[0].gid, None,
+        "plain (non-big) ∑ should stay on the cmap path (gid: None)"
+    );
+
+    // -- Big: `math-big-char MathOp` ∑.
+    let big_src = with_ctx("embed-math ctx (math-big-char MathOp `∑`)");
+    let big_v = run_math(&big_src, &store).expect("math-big-char MathOp `∑` should compile");
+    let (_, big_h, big_d, big_glyphs) = as_math_parts(math_box(big_v));
+    assert_eq!(big_glyphs.len(), 1, "expected exactly 1 glyph, got {big_glyphs:?}");
+    assert_eq!(
+        big_glyphs[0].gid,
+        Some(expected_variant.0),
+        "expected the BigOp policy's record[1] (or [0] if only one) variant gid"
+    );
+    assert_ne!(
+        big_glyphs[0].gid,
+        Some(base_gid.0),
+        "the big-char glyph must NOT be the plain base gid"
+    );
+
+    // -- Growth: >20% more height+depth than the base (non-variant) glyph's
+    // own ink bbox. NOT a comparison against the plain (non-big) run's
+    // `PureHorzBox::Math` height/depth above (`base_h`/`base_d`) — those
+    // come from `push_char_glyph`, which (a long-standing, pre-§B3
+    // convention this port's whole math engine relies on, e.g.
+    // `math_fraction_radical.rs`'s own documented "ascender/descender ARE
+    // h_cont/d_cont" comment) reports the FONT-WIDE ascender/descender for
+    // every plain glyph, not that glyph's own ink — an inflated, unrelated
+    // quantity that can (and empirically does, for at least one of the two
+    // test fonts) already exceed even a stretched-variant's real ink,
+    // making that comparison meaningless. `math_vertical_variant`'s own
+    // `MathVariantGlyph.height`/`.depth` are real per-glyph ink bboxes
+    // (`ttf.rs`'s doc comment on the struct), so the fair, ink-vs-ink
+    // baseline is the UNSTRETCHED base glyph's own bbox — computed
+    // independently via `ttf-parser`, exactly like `assert_vertical_variant_unit`'s
+    // `base_h`/`base_d` above.
+    let base_bbox = face
+        .glyph_bounding_box(base_gid)
+        .expect("base ∑ glyph has a bbox");
+    let base_ink_h = size.0 * (base_bbox.y_max.max(0) as f64) / (face.units_per_em() as f64);
+    let base_ink_d =
+        size.0 * ((-(base_bbox.y_min.min(0) as i32)) as f64) / (face.units_per_em() as f64);
+    let base_ink_extent = base_ink_h + base_ink_d;
+    let big_extent = big_h.0 + big_d.0;
+    assert!(
+        big_extent > base_ink_extent * 1.2,
+        "expected the big ∑ variant's height+depth ({big_extent}) to exceed the base \
+         (non-variant) glyph's own ink height+depth ({base_ink_extent}) by more than 20%"
+    );
+
+    // -- e2e through the real CID pipeline: the content stream's Tj operand
+    // for this run is the exact 2-byte-BE variant gid, not the base gid.
+    let geometry = PageGeometry::default();
+    let page = page_for(math_box(run_math(&big_src, &store).unwrap()), &geometry);
+    let pdf_bytes = render_pdf_ttf(&geometry, &[page], &store, &[]).expect("render");
+    assert!(pdf_bytes.starts_with(b"%PDF-"));
+    let content = content_stream(&pdf_bytes);
+
+    let variant_bytes = expected_variant.0.to_be_bytes();
+    let variant_repr = pdf_str_repr(&variant_bytes);
+    assert!(
+        contains_subslice(&content, &variant_repr),
+        "expected the content stream to contain the variant gid's Tj operand \
+         {variant_repr:02x?} ({:?}); content stream = {:?}",
+        String::from_utf8_lossy(&variant_repr),
+        String::from_utf8_lossy(&content)
+    );
+
+    let base_bytes = base_gid.0.to_be_bytes();
+    let base_repr = pdf_str_repr(&base_bytes);
+    if base_repr != variant_repr {
+        assert!(
+            !contains_subslice(&content, &base_repr),
+            "the content stream should NOT contain the plain base gid's Tj \
+             operand {base_repr:02x?}; content stream = {:?}",
+            String::from_utf8_lossy(&content)
+        );
+    }
+}
+
+// ----------------------------------------------------------------------
+// Test plan item 3 (e2e B3b): `(`/`)` stretch around a tall inner, with a
+// short-inner control that must fall back to record[0].
+// ----------------------------------------------------------------------
+
+/// A well-typed but never-invoked `paren` closure (`length -> length ->
+/// length -> length -> color -> (inline-boxes, length -> length)`,
+/// `prim_types::t_paren`) — the B3b(i) `Math::Paren` arm never calls `_l`/
+/// `_r`, so its body's shape only has to typecheck, matching this file's
+/// `with_ctx`/`\dummy`-command convention of "present, well-typed, inert".
+const DUMMY_PAREN: &str = "(fun hgt dpt hgtaxis fontsize color -> (inline-nil, (fun x -> x)))";
+
+#[test]
+fn paren_stretches_around_tall_inner_and_short_inner_stays_record0() {
+    let path = need_font!(find_math_font(), "MATH");
+    let store = TtfFontStore::load(&path, None, None).expect("load math font");
+    let face = store.face(FontKey(0)).expect("parse face");
+    // `with_ctx`'s `get-initial-context` defaults `font_size` to 12pt
+    // (`Context::initial`) -- matches `math_fraction_radical.rs`'s own
+    // `size` convention for the same reason.
+    let size = Length::pt(12.0);
+
+    // `(` and `)` are DIFFERENT glyphs with their own, independent
+    // `GlyphConstruction`s -- record[0] gids must be computed separately for
+    // each (an earlier version of this test wrongly reused '('s record[0]
+    // for ')' too, which fails on both fonts since open/close parens are
+    // never the same glyph).
+    let record0_gid_of = |c: char| -> u16 {
+        let gid = face.glyph_index(c).expect("cmap has the char");
+        face.tables()
+            .math
+            .expect("MATH table")
+            .variants
+            .expect("MathVariants")
+            .vertical_constructions
+            .get(gid)
+            .expect("char has a vertical GlyphConstruction")
+            .variants
+            .get(0)
+            .expect("record[0]")
+            .variant_glyph
+            .0
+    };
+    let open_record0_gid = record0_gid_of('(');
+    let close_record0_gid = record0_gid_of(')');
+
+    let mc = store
+        .math_constants(FontKey(0))
+        .expect("MATH font should expose MathConstants");
+    let axis = size * mc.axis_height;
+
+    // -- Control: a short (empty) inner must emit record[0]'s gid (no
+    // stretch needed). NOT a single ordinary char (`x`): `push_char_glyph`
+    // reports a plain glyph's height/depth as the FONT-WIDE ascender/
+    // descender (the same long-standing, pre-§B3 convention noted in
+    // `big_char_sum_variant_grows_and_emits_variant_gid`'s comment above),
+    // which for both test fonts is comfortably TALLER than record[0]'s own
+    // coverage (empirically: DejaVu's target from one plain char is
+    // ~12.4pt vs. record[0]'s own ~10.8pt; Noto's is ~19.0pt vs. ~11.3pt) —
+    // i.e. under the REAL, ascender/descender-based `inner_ink_extent` this
+    // port's whole math engine uses (`layout_math_value`'s own fold, which
+    // `Math::Paren`'s target formula deliberately mirrors — see that arm's
+    // comment), a single ordinary character is NOT actually "short" enough
+    // to stay at record[0] on either test font. An EMPTY inner (`${}`,
+    // `inner_ink_extent` folds to `(ZERO, ZERO)`) robustly IS: its target
+    // reduces to `2*axis` (~6.6-6.7pt on both fonts), well under
+    // record[0]'s own coverage on both.
+    let short_src = with_ctx(&format!(
+        "embed-math ctx (math-paren {DUMMY_PAREN} {DUMMY_PAREN} ${{}})"
+    ));
+    let short_v =
+        run_math(&short_src, &store).expect("math-paren over an empty inner should compile");
+    let (_, _, _, short_glyphs) = as_math_parts(math_box(short_v));
+    assert_eq!(
+        short_glyphs.len(),
+        2,
+        "expected '(', ')' -- 2 glyphs (empty inner), got {short_glyphs:?}"
+    );
+    assert_eq!(
+        short_glyphs[0].gid,
+        Some(open_record0_gid),
+        "short inner: the '(' should stay at record[0] (gid {open_record0_gid})"
+    );
+    assert_eq!(
+        short_glyphs[1].gid,
+        Some(close_record0_gid),
+        "short inner: the ')' should stay at record[0] (gid {close_record0_gid})"
+    );
+
+    // -- Tall inner: `math-big-char MathOp` ∑ (already proven, above test,
+    // to have a REAL, substantially larger ink extent than a plain char) --
+    // its own extent forces the parens to stretch to a later, non-record[0]
+    // variant.
+    let tall_inner_src = "(math-big-char MathOp `∑`)";
+    let tall_src = with_ctx(&format!(
+        "embed-math ctx (math-paren {DUMMY_PAREN} {DUMMY_PAREN} {tall_inner_src})"
+    ));
+    let tall_v =
+        run_math(&tall_src, &store).expect("math-paren over a tall inner should compile");
+    let (_, paren_h, paren_d, tall_glyphs) = as_math_parts(math_box(tall_v));
+    assert_eq!(
+        tall_glyphs.len(),
+        3,
+        "expected '(', ∑, ')' -- 3 glyphs, got {tall_glyphs:?}"
+    );
+
+    let open = &tall_glyphs[0];
+    let close = &tall_glyphs[2];
+    assert_ne!(
+        open.gid,
+        Some(open_record0_gid),
+        "tall inner: the '(' should have stretched past record[0] (gid {open_record0_gid}), got {:?}",
+        open.gid
+    );
+    assert_ne!(
+        close.gid,
+        Some(close_record0_gid),
+        "tall inner: the ')' should have stretched past record[0] (gid {close_record0_gid}), got {:?}",
+        close.gid
+    );
+
+    // -- Sized to cover the inner extent: the whole paren box's height+depth
+    // must be at least the standalone tall-inner run's own height+depth
+    // (the big ∑ alone, measured independently above).
+    let inner_alone_src = with_ctx(&format!("embed-math ctx {tall_inner_src}"));
+    let inner_alone_v =
+        run_math(&inner_alone_src, &store).expect("the tall inner alone should compile");
+    let (_, inner_h, inner_d, _) = as_math_parts(math_box(inner_alone_v));
+    assert!(
+        paren_h.0 + paren_d.0 >= inner_h.0 + inner_d.0 - 1e-6,
+        "expected the paren box's height+depth ({}) to cover the tall inner's own \
+         ({}) ",
+        paren_h.0 + paren_d.0,
+        inner_h.0 + inner_d.0
+    );
+
+    // -- Centering: dy = axis - (height - depth) / 2 (y-up), NOT mirrored
+    // below the baseline -- the placed ink [dy - depth, dy + height]
+    // straddles the axis, and matches the exact formula.
+    for (label, g) in [("'('", open), ("')'", close)] {
+        let expected_dy = axis - (g.height - g.depth) * 0.5;
+        assert!(
+            approx(g.dy, expected_dy, 1e-6),
+            "{label}: expected dy = axis - (h-d)/2 = {expected_dy:?}, got {:?}",
+            g.dy
+        );
+        let placed_bottom = g.dy - g.depth;
+        let placed_top = g.dy + g.height;
+        assert!(
+            placed_bottom.0 <= axis.0 + 1e-6 && placed_top.0 >= axis.0 - 1e-6,
+            "{label}: placed ink [{:?}, {:?}] should straddle the axis ({axis:?}) -- \
+             NOT mirrored entirely below the baseline",
+            placed_bottom,
+            placed_top
+        );
+    }
+
+    // -- e2e through the real CID pipeline: the content stream contains the
+    // '(' variant gid's Tj operand.
+    let geometry = PageGeometry::default();
+    let page = page_for(
+        math_box(run_math(&tall_src, &store).unwrap()),
+        &geometry,
+    );
+    let pdf_bytes = render_pdf_ttf(&geometry, &[page], &store, &[]).expect("render");
+    assert!(pdf_bytes.starts_with(b"%PDF-"));
+    let content = content_stream(&pdf_bytes);
+    let open_gid = open.gid.expect("open paren has a variant gid");
+    let open_repr = pdf_str_repr(&open_gid.to_be_bytes());
+    assert!(
+        contains_subslice(&content, &open_repr),
+        "expected the content stream to contain the '(' variant gid's Tj operand \
+         {open_repr:02x?}; content stream = {:?}",
+        String::from_utf8_lossy(&content)
+    );
+}

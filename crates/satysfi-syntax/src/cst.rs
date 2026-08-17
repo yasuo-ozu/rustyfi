@@ -140,22 +140,6 @@ pub struct TopLet {
     pub value: ast::Expr,
 }
 
-/// A `let-inline`/`let-block`/`let-math` parameter: a plain variable, or
-/// upstream's def-site optional-parameter marker `?:name` (`parser.mly`'s
-/// `?:` binder in `cmdarglst`, e.g. `annot.satyh`'s `let-inline ctx \href
-/// ?:borderopt uri inner = ..`). The `?:` is parsed and then simply erased
-/// at elaboration (`elaborate.rs`'s `elaborate_let_inline`/
-/// `elaborate_let_math` read only `.name`): this port infers a parameter's
-/// optionality purely from its *inferred* type resolving to `_ option`
-/// (`typecheck.rs`'s `command_scheme` doc comment), not from any def-site
-/// marker, so accepting `?:` here is solely so verbatim upstream `.satyh`
-/// source parses — it adds no new semantics.
-#[derive(Parse, Unparse, Debug, Clone, PartialEq)]
-pub struct CmdParam {
-    pub opt: Option<OptionalTok>,
-    pub name: VarTok,
-}
-
 /// One top-level declaration (`nxtoplevel`/`nxstruct`'s per-declaration
 /// alternatives). `LetInline`/`LetBlock` only exist here — see the module
 /// doc comment.
@@ -170,13 +154,13 @@ pub enum TopBinding {
     /// `let name param* = expr`
     Let(TopLet),
     /// `[ctxvar] let-inline \cmd param* = expr` (`nxhorzdec`; each `param`
-    /// is a plain variable or a `?:`-marked one — see [`CmdParam`] — not a
-    /// full argument pattern).
+    /// is upstream's `arg` — a full patbot, or a `?:`-marked variable, see
+    /// [`ast::Param`]'s doc comment — `parser.mly:622-624`).
     LetInline {
         kw: KwLetHorz,
         ctx: Option<VarTok>,
         cmd: HorzCmdTok,
-        params: Vec<CmdParam>,
+        params: Vec<ast::Param>,
         eq: DefEqTok,
         value: ast::Expr,
     },
@@ -185,7 +169,7 @@ pub enum TopBinding {
         kw: KwLetVert,
         ctx: Option<VarTok>,
         cmd: VertCmdTok,
-        params: Vec<CmdParam>,
+        params: Vec<ast::Param>,
         eq: DefEqTok,
         value: ast::Expr,
     },
@@ -203,7 +187,7 @@ pub enum TopBinding {
     LetMath {
         kw: KwLetMath,
         cmd: HorzCmdTok,
-        params: Vec<CmdParam>,
+        params: Vec<ast::Param>,
         eq: DefEqTok,
         value: ast::Expr,
     },
@@ -656,6 +640,23 @@ pub mod ast {
             in_kw: KwIn,
             body: Box<Expr>,
         },
+        /// `let-math \cmd param* = expr in body` (`nxletsub`'s `LETMATH`
+        /// case, `parser.mly:688` — upstream's ONLY command binding with an
+        /// expression-level `in` form; `LETHORZ`/`LETVERT` stay
+        /// top-level-only, see the module doc comment on
+        /// [`super::TopBinding::LetInline`]/`LetBlock`). Same shape as
+        /// [`super::TopBinding::LetMath`] — no leading context variable,
+        /// `cmd` reuses the plain `HorzCmdTok` token — plus the `in body`
+        /// suffix; `Box<Expr>` self-loops on the recurse root like `LetIn`.
+        LetMathIn {
+            kw: KwLetMath,
+            cmd: HorzCmdTok,
+            params: Vec<Param>,
+            eq: DefEqTok,
+            value: Box<Expr>,
+            in_kw: KwIn,
+            body: Box<Expr>,
+        },
         /// `open Name in body` (`nxletsub`'s `OPEN` case).
         OpenIn {
             kw: KwOpen,
@@ -1087,19 +1088,30 @@ pub mod ast {
         pub name: VarTok,
     }
 
-    /// One curried parameter of an ordinary (non-`let-rec`) `let` —
-    /// `nxnonrecdec`'s `arg`: a full pattern, or upstream's def-site
-    /// optional-parameter marker `?:name` (`parser.mly`'s `OPTIONAL
-    /// vartok`), e.g. `stdja.satyh`'s `let document record ?:configopt
-    /// inner = ..`. Upstream's `let-rec`/`fun` argument grammar
-    /// (`recdecargpart`/`argpats` — [`RecBinding`]/[`AndBinding`]/
-    /// `Expr::Fun`) has no such alternative, only plain `let` does, so only
-    /// [`super::TopLet`]/`Expr::LetIn` use this; those two keep
-    /// `Vec<PatBot>` unchanged. Elaborated (`elaborate.rs`) by simply
-    /// widening `Optional` to `PatBot::Var` before the ordinary
-    /// pattern-currying machinery runs — the `?:` marker carries no further
-    /// semantics in this port (`typecheck.rs`'s `command_scheme` doc
-    /// comment: optionality is inferred structurally, not from this marker).
+    /// One curried parameter of an ordinary (non-`let-rec`) `let`, or of a
+    /// `let-inline`/`let-block`/`let-math` command binding — upstream's
+    /// `arg` nonterminal (`nxnonrecdec`'s `argpart`/`cmdarglst`,
+    /// `parser.mly:622-624`: `arg: patbot | OPTIONAL defedvar`): a full
+    /// pattern, or the def-site optional-parameter marker `?:name`
+    /// (`parser.mly`'s `OPTIONAL vartok`), e.g. `stdja.satyh`'s `let
+    /// document record ?:configopt inner = ..` and `annot.satyh`'s
+    /// `let-inline ctx \href ?:borderopt uri inner = ..`. Upstream's
+    /// `let-rec`/`fun` argument grammar (`recdecargpart`/`argpats` —
+    /// [`RecBinding`]/[`AndBinding`]/`Expr::Fun`) has no such alternative,
+    /// only plain `let` and the three command-binding forms do — all four
+    /// keep `Vec<Param>` ([`super::TopLet`], `Expr::LetIn`,
+    /// [`super::TopBinding::LetInline`]/`LetBlock`/`LetMath`,
+    /// [`Expr::LetMathIn`]). Elaborated (`elaborate.rs`) by widening
+    /// `Optional` to `PatBot::Var` (`params_to_patbots`) before the ordinary
+    /// pattern-currying machinery runs (plain `let`'s `rec_clause_value`, or
+    /// a command binding's `curry_cmd_params`) — the `?:` marker carries no
+    /// further semantics of its own in this port (`typecheck.rs`'s
+    /// `command_scheme` doc comment: optionality is inferred structurally,
+    /// not from this marker); for a command binding, the maximal *leading*
+    /// run of `?:`-marked params is additionally counted by `elaborate.rs`'s
+    /// `leading_optional_count` and recorded into the binding's
+    /// `Scope::optional_arity`, so a marker-less call site can auto-omit
+    /// those slots (see `cmd_args`/`math_bot`'s `Cmd` arm).
     #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
     pub enum Param {
         Optional { q: OptionalTok, name: VarTok },
@@ -1375,8 +1387,9 @@ pub mod ast {
     /// `mathbot`.
     #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
     pub enum MathBot {
-        /// `\cmd matharg*` (`mcmd list(matharg)`).
-        Cmd { name: MathCmdTok, args: Vec<MathArg> },
+        /// `\cmd matharg*` (`mcmd list(matharg)`), sigil-only or
+        /// module-qualified (`\Mod.cmd matharg*`).
+        Cmd { name: AnyMathCmdTok, args: Vec<MathArg> },
         Chars(MathCharTok),
         /// `#var` (`VARINMATH`; math mode never trails this with `;` —
         /// unlike `#var;` in inline/block text, the lexer doesn't switch to
@@ -1421,18 +1434,32 @@ pub mod ast {
         Bot(Box<MathBot>),
     }
 
-    /// `matharg`: one command argument in math mode — a math/inline/block
-    /// group, or a `!`-escaped program-mode value. The lexer already
-    /// switches mode on the escape sigil (`!(` / `![` / `!(|` / `!{` /
-    /// `!<` all emit ordinary `LParen`/`BList`/`BRecord`/`BHorzGrp`/
+    /// `matharg` (parser.mly:1138-1146 + narg 1201-1210): one math-mode
+    /// command argument — a mandatory body, a `?:`-supplied optional
+    /// (UTOptionalArgument), or `?*` (UTOmission). The six body shapes live
+    /// once in [`MathArgBody`]; Optional/Omission/Plain are first-token-disjoint.
+    #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
+    pub enum MathArg {
+        Optional { q: OptionalTok, body: MathArgBody },
+        Omission(OmissionTok),
+        Plain(MathArgBody),
+    }
+
+    /// The six body shapes shared by mandatory and `?:`-optional math args:
+    /// a math/inline/block group, or a `!`-escaped program-mode value. The
+    /// lexer already switches mode on the escape sigil (`!(` / `![` / `!(|` /
+    /// `!{` / `!<` all emit ordinary `LParen`/`BList`/`BRecord`/`BHorzGrp`/
     /// `BVertGrp` tokens — see `lexer.rs`'s `lex_math`), so at the token
     /// level the escapes are indistinguishable from `Atomic`'s own
     /// `Paren`/`List`/`Record` shapes; reusing those bodies directly here
     /// (rather than going through a full `ExprErased`, which would also
     /// happily swallow a *following* `matharg` bracket group as a trailing
     /// application argument) keeps each `matharg` exactly one bracket group.
+    /// NOT `Box<MathArg>`: a direct self-loop on a non-root type is what
+    /// `#[recurse]` rejects, and upstream's grammar is non-recursive here
+    /// anyway.
     #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
-    pub enum MathArg {
+    pub enum MathArgBody {
         /// `{ math }`.
         Math {
             mgrp: MathGroup<()>,

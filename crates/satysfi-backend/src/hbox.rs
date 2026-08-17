@@ -127,11 +127,26 @@ pub enum PureHorzBox {
     /// the run's outer metrics (computed by `read_math`), so the line
     /// breaker never re-enters the math engine. Never a legal line-break
     /// point (see `is_glue`) — a math run is laid out and flowed atomically.
+    ///
+    /// `rules` (§B2, `docs/plans/math-engine.md`): filled paths the run
+    /// needs alongside its glyphs — the fraction bar and radical sign/overbar
+    /// are `Fill`s, not glyphs, since neither is drawable through a font's
+    /// `Tj` at all. Box-local, y-**up** coordinates relative to this box's
+    /// own baseline-left origin — exactly `PureHorzBox::Graphics::elems`'
+    /// convention (see that variant's doc comment), NOT `MathGlyph::dy`'s
+    /// sign (which happens to agree: up is positive either way, just via a
+    /// different type). `natural_width` is unaffected (rules never extend the
+    /// run's own advance — a bar/radical-sign always sits within `glyphs`'
+    /// already-measured span). Empty for the Slice-1 `read_math` path (its
+    /// `MathElem` tree has no `Fraction`/`Radical` production at all) and for
+    /// every atom the faithful `layout_math_atom` path doesn't specially
+    /// handle.
     Math {
         width: Length,
         height: Length,
         depth: Length,
         glyphs: Vec<MathGlyph>,
+        rules: Vec<GraphicsElem>,
     },
     /// A deferred page-break hook (`hook-page-break`; v0.0.6's
     /// `PHGHookPageBreak`). Carries only the opaque token — no closure, no

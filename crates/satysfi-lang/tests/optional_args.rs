@@ -62,9 +62,15 @@ fn int(src: &str) -> i64 {
 // ============================================================================
 // 1. An inline command with an optional argument: `?:` supplied vs `?*`
 //    omitted, both parsed via `CmdTail::Args`'s leading-`AppArg` grammar.
+//    `name`'s def-site `?:` marker (Gap 4, `docs/plans/math-mode-language-
+//    gaps.md`) additionally registers `\greet`'s leading-optional-arity as
+//    1 (`leading_optional_count`), enabling the marker-less bare-call
+//    padding test below — it changes nothing for the explicit `?:`/`?*`
+//    call sites already exercised here (arity only matters for a call that
+//    supplies NO marker at all).
 // ============================================================================
 
-const GREET_CMD: &str = "let-inline ctx \\greet name =
+const GREET_CMD: &str = "let-inline ctx \\greet ?:name =
   read-inline ctx (
     match name with
     | Some(_) -> { Hello there, my dear friend! }
@@ -105,6 +111,44 @@ fn inline_command_with_only_an_omission_marker_still_evaluates() {
          if w >' 0pt then 1 else 0"
     );
     assert_eq!(int(&src), 1);
+}
+
+/// Gap 4 (`docs/plans/math-mode-language-gaps.md`): a command call that
+/// leaves its leading `?:`-marked optional slot completely unmarked —
+/// `{ \greet; }`, `CmdTail::Semi` with zero `AppArg`s at all — must
+/// auto-pad a `None` for it (`cmd_args`'s `leading` param, fed by
+/// `\greet`'s registered `optional_arity` of 1) and render IDENTICALLY to
+/// the explicit `?*`-omission call above.
+#[test]
+fn inline_command_marker_less_bare_call_pads_the_same_as_explicit_omission() {
+    // `==`/`>'` aren't polymorphic over `length` in this language, so the
+    // two widths are returned as a tuple and compared in Rust (same style
+    // as `math_package.rs`'s `gap2_pull_in_scripts_resolver_receives_the_
+    // actual_scripts`).
+    let src = format!(
+        "{GREET_CMD}\
+         let base = get-initial-context 200pt (command \\math) in
+         let ib-bare = read-inline base {{ \\greet; }} in
+         let ib-omitted = read-inline base {{ \\greet?*; }} in
+         let (w-bare, _, _) = get-natural-metrics ib-bare in
+         let (w-omitted, _, _) = get-natural-metrics ib-omitted in
+         (w-bare, w-omitted)"
+    );
+    match run(&src).unwrap() {
+        Value::Tuple(vs) if vs.len() == 2 => {
+            let mut it = vs.into_iter();
+            let (Value::Length(w_bare), Value::Length(w_omitted)) =
+                (it.next().unwrap(), it.next().unwrap())
+            else {
+                panic!("expected two lengths");
+            };
+            assert_eq!(
+                w_bare, w_omitted,
+                "marker-less `{{ \\greet; }}` should elaborate exactly like explicit `{{ \\greet?*; }}`"
+            );
+        }
+        other => panic!("expected a (length * length) tuple, got {other:?}"),
+    }
 }
 
 // ============================================================================

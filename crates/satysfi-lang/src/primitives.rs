@@ -16,14 +16,16 @@ use crate::eval::{available_fields, eval_error, EvalError, Interp};
 use crate::value::{DocumentValue, Env, Value};
 use std::collections::BTreeMap;
 use satysfi_backend::{
-    break_into_lines, break_opportunities, chop_page, fit_cell, graphics_bbox,
-    linear_transform_graphics, linear_transform_path, measure_block, natural_metrics,
-    place_block_at, shift_graphics, shift_path, BreakKind, Cell, Closing, Color, Context, Dash,
-    FontKey, GraphicsElem, HookId, HorzBox, HorzStringInfo, ImageId, ImageResource, Length,
-    MathGlyph, MathKind, Paddings, Page, PageGeometry, PaperSize, Path, PathSeg, Point, PrePath,
-    PureHorzBox, Subpath, TabularBox, VertBox, FORCED_BREAK_PENALTY,
+    break_into_lines, break_opportunities, chop_page, default_math_variant_char, fit_cell,
+    graphics_bbox, linear_transform_graphics, linear_transform_path, measure_block,
+    natural_metrics, place_block_at, shift_graphics, shift_path, BreakKind, Cell, Closing, Color,
+    Context, Dash, FontKey, GraphicsElem, HookId, HorzBox, HorzStringInfo, ImageId, ImageResource,
+    Length, MathCharClass, MathConstants, MathCorner, MathGlyph, MathKind, Paddings, Page,
+    PageGeometry, PaperSize, Path, PathSeg, Point, PrePath, PureHorzBox, Subpath, TabularBox,
+    VertBox, VertVariantPolicy, FORCED_BREAK_PENALTY,
 };
 use std::rc::Rc;
+use std::sync::Arc;
 
 /// Font keys agreed with the milestone-1 base-14 metrics provider.
 pub const FONT_REGULAR: FontKey = FontKey(0);
@@ -172,11 +174,9 @@ prims! {
     // vminst.ml:1247 `PrimitiveGetInitialContext`:
     // `~% (tLN @-> tICMD tMATH @-> tCTX)` — a paragraph width and the
     // *default math command* (the handler used for bare `${...}` math
-    // embedded directly in inline text) to seed `context_main.math_command`
-    // with. This port has no math typesetting at all yet (deferred to
-    // phase 7), so the second argument is accepted (to keep the arity/
-    // signature shape faithful to v0.0.6) and simply ignored; only the
-    // `length` argument feeds `Context::initial`.
+    // embedded directly in inline text). FAITHFUL: the second argument is
+    // interned via `Interp::register_math_command` and installed as
+    // `Context::math_command`, consulted by `read_inline`'s `EmbedMath` arm.
     "get-initial-context" (2) => prim_get_initial_context;
     // LOCAL, non-upstream primitive: `set-font-key : int -> context ->
     // context`, sets `Context::font` directly to `FontKey(n)`. v0.0.6 has no
@@ -346,6 +346,13 @@ prims! {
     "math-color" (2) => prim_math_color;
     "math-char-class" (2) => prim_math_char_class;
     "math-variant-char" (2) => prim_math_variant_char;
+    // ==== gap 7 (`docs/plans/math-mode-language-gaps.md`): the
+    // `set-math-variant-char`/`get-left-math-class`/`get-right-math-class`
+    // trio no bundled `.satyh` consumer needed yet, built on gap 5's
+    // `Context::math_variant_char_map` + `VariantCharPending`. ====
+    "set-math-variant-char" (4) => prim_set_math_variant_char;
+    "get-left-math-class" (2) => prim_get_left_math_class;
+    "get-right-math-class" (2) => prim_get_right_math_class;
     "math-paren" (3) => prim_math_paren;
     "math-paren-with-middle" (4) => prim_math_paren_with_middle;
     "text-in-math" (2) => prim_text_in_math;
@@ -834,7 +841,38 @@ pub fn read_inline(
                 }
             }
             IText::EmbedMath { elems, .. } => {
-                out.push(HorzBox::Pure(read_math(interp, ctx, elems)?));
+                // Upstream: a bare `${…}` in inline text evaluates by
+                // applying the context's installed `[math] inline-cmd` to
+                // (ctx, the math value) — `apply(cmd, ctx)` then
+                // `apply(_, math)`, exactly like `IText::Cmd` above.
+                let installed = ctx
+                    .math_command
+                    .and_then(|id| interp.math_commands.get(id.0).cloned());
+                match installed {
+                    Some(cmd) => {
+                        let v = interp.apply(cmd, Value::Context(Box::new(ctx.clone())))?;
+                        let v = interp.apply(
+                            v,
+                            Value::MathText {
+                                elems: Rc::clone(elems),
+                                env: env.clone(),
+                            },
+                        )?;
+                        out.extend(as_inline_boxes(v)?);
+                    }
+                    None => {
+                        // No installed command (contexts built by
+                        // `Context::initial` directly, i.e. unit tests):
+                        // reflect + lay out through the faithful engine so
+                        // `\cmd`/`#var` still evaluate — the same machinery
+                        // `+math(${…})` uses via `as_math`.
+                        let mut atoms = Vec::new();
+                        for e in elems.iter() {
+                            reflect_math_elem(interp, e, env, &mut atoms)?;
+                        }
+                        out.push(HorzBox::Pure(layout_math_value(interp, ctx, &atoms)?));
+                    }
+                }
             }
         }
     }
@@ -997,15 +1035,332 @@ fn text_to_boxes(
 // `PureHorzBox::Math`, fixed-constant shift/scale (no MATH table — see the
 // plan's "What Slice 1 deliberately does NOT do").
 
-/// Superscript/subscript size ratio (roadmap: `script_percent_scale_down /
-/// 100` from the MATH table, §B).
+/// Superscript/subscript size ratio, used ONLY as `MathC`'s fallback when
+/// the current math font has no OpenType MATH table (`script_percent_scale_down
+/// / 100`, §B1). Not read anywhere outside `MathC` — every layout site goes
+/// through `MathC::script_scale`/`sup_shift_clamped`/etc. so a MATH-table
+/// font gets the real per-font ratio instead.
 const SCRIPT_SCALE: f64 = 0.7;
-/// Superscript raise, as a fraction of `ctx.font_size` (roadmap:
-/// `superscript_shift_up` clamped per `math.ml:527`, §B).
+/// Superscript raise, as a fraction of `ctx.font_size` — `MathC`'s
+/// no-MATH-table fallback (roadmap: `superscript_shift_up` clamped per
+/// `math.ml:527`, §B1). Not read outside `MathC`.
 const SUP_SHIFT: f64 = 0.5;
-/// Subscript drop, as a fraction of `ctx.font_size` (roadmap:
-/// `subscript_shift_down` per `math.ml:545`, §B).
+/// Subscript drop, as a fraction of `ctx.font_size` — `MathC`'s
+/// no-MATH-table fallback (roadmap: `subscript_shift_down` per
+/// `math.ml:545`, §B1). Not read outside `MathC`.
 const SUB_SHIFT: f64 = 0.25;
+/// `MathC::frac_numer_shift`'s no-MATH-table fallback: a flat,
+/// content-independent numerator raise, as a fraction of the fraction's own
+/// LOCAL size (§B2 — mirrors `sup_shift_clamped`'s None-branch style, which
+/// also ignores ink extent with no MATH table). Not read outside `MathC`.
+const FRAC_NUMER_SHIFT_FALLBACK: f64 = 0.33;
+/// `MathC::frac_denom_shift`'s no-MATH-table fallback (mirrors
+/// `FRAC_NUMER_SHIFT_FALLBACK`; applied as a downward, i.e. negative, shift
+/// by the caller). Not read outside `MathC`.
+const FRAC_DENOM_SHIFT_FALLBACK: f64 = 0.33;
+
+/// `docs/plans/math-engine.md` §B1's MATH-table resolver: one query of
+/// `interp.metrics.math_constants(font)` per laid-out math run, memoized
+/// here so every shift/scale/kern site in that run reads the SAME `Option`
+/// instead of re-querying — and so a font with no MATH table (every
+/// `Base14Metrics` call, and any TTF that lacks one) transparently falls
+/// back to the flat pre-MATH-table constants above, keeping today's
+/// fixtures byte-identical. Fields are ratios of the font size (`§1`);
+/// callers multiply by whichever size is in scope (`ctx.font_size` for the
+/// shift magnitudes — matching the pre-existing "shift doesn't shrink with
+/// nesting" behavior these constants always had — or the atom's own local
+/// `size` for glyph-relative queries like `script_scale`/kerning).
+struct MathC {
+    c: Option<MathConstants>,
+}
+
+impl MathC {
+    fn of(interp: &Interp, font: FontKey) -> Self {
+        Self {
+            c: interp.metrics.math_constants(font),
+        }
+    }
+
+    /// Flat, unclamped superscript raise (`math.ml:527`'s `h_supstd` alone,
+    /// no `math.ml:524-533` clamp) — the shape `layout_math_atom`'s callers
+    /// need when no base/script ink extent is at hand yet.
+    fn sup_shift(&self, s: Length) -> Length {
+        self.c
+            .map(|c| s * c.superscript_shift_up)
+            .unwrap_or(s * SUP_SHIFT)
+    }
+
+    /// Flat, unclamped subscript drop (mirrors `sup_shift`).
+    fn sub_shift(&self, s: Length) -> Length {
+        self.c
+            .map(|c| s * c.subscript_shift_down)
+            .unwrap_or(s * SUB_SHIFT)
+    }
+
+    /// `script_percent_scale_down / 100`, or the fixed `SCRIPT_SCALE`
+    /// fallback. Nesting-level scale gap (documented in the plan): upstream
+    /// switches to `script_script_percent_scale_down` one level deeper;
+    /// this port applies `script_scale_down` uniformly at every depth.
+    fn script_scale(&self) -> f64 {
+        self.c.map(|c| c.script_scale_down).unwrap_or(SCRIPT_SCALE)
+    }
+
+    /// `math.ml`'s `h_bar` (axis height): the vertical center math content
+    /// (fraction bars, `get-axis-height`) aligns to. Falls back to the same
+    /// fixed `0.25` ratio `prim_get_axis_height` used before this slice.
+    fn axis(&self, s: Length) -> Length {
+        self.c.map(|c| s * c.axis_height).unwrap_or(s * 0.25)
+    }
+
+    /// `math.ml:524-533` `superscript_baseline_height`, clamped: the
+    /// MAGNITUDE of the upward shift a superscript needs given the base's
+    /// own ink height (`h_base`, a positive extent above ITS baseline) and
+    /// the superscript's own ink depth (`d_sup`, a positive extent below
+    /// ITS baseline — i.e. `MathGlyph.height`/`.depth`, not upstream's
+    /// signed `Length.negate`d fields). Falls back to the flat `sup_shift`
+    /// (ignoring `h_base`/`d_sup`) when there's no MATH table, so base-14
+    /// output is untouched by this clamp.
+    fn sup_shift_clamped(&self, s: Length, h_base: Length, d_sup: Length) -> Length {
+        match self.c {
+            None => self.sup_shift(s),
+            Some(c) => {
+                let cand1 = s * c.superscript_shift_up;
+                let cand2 = h_base - s * c.superscript_baseline_drop_max;
+                let cand3 = s * c.superscript_bottom_min + d_sup;
+                cand1.max(cand2).max(cand3)
+            }
+        }
+    }
+
+    /// `math.ml:545-553` `subscript_baseline_depth`, clamped: the MAGNITUDE
+    /// of the downward shift, given the base's own ink depth (`d_base`) and
+    /// the subscript's own ink height (`h_sub`). Mirrors
+    /// `sup_shift_clamped`'s fallback behavior.
+    fn sub_shift_clamped(&self, s: Length, d_base: Length, h_sub: Length) -> Length {
+        match self.c {
+            None => self.sub_shift(s),
+            Some(c) => {
+                let cand1 = s * c.subscript_shift_down;
+                let cand2 = d_base + s * c.subscript_baseline_drop_min;
+                let cand3 = h_sub - s * c.subscript_top_max;
+                cand1.max(cand2).max(cand3)
+            }
+        }
+    }
+
+    /// `math.ml:562-573` `correct_script_baseline_heights`: when a base
+    /// carries BOTH a subscript and a superscript, nudge the two
+    /// already-clamped shift magnitudes apart so their ink keeps at least
+    /// `sub_superscript_gap_min` clearance. `d_sup`/`h_sub` are the same ink
+    /// extents `sup_shift_clamped`/`sub_shift_clamped` took; `sup`/`sub` are
+    /// their (already clamped) outputs. A no-op when there's no MATH table
+    /// — the flat fallback shifts are never additionally corrected, so
+    /// base-14 output stays exactly `(sup, sub)`.
+    fn correct_script_gap(
+        &self,
+        s: Length,
+        d_sup: Length,
+        h_sub: Length,
+        sup: Length,
+        sub: Length,
+    ) -> (Length, Length) {
+        let Some(c) = self.c else {
+            return (sup, sub);
+        };
+        let gap_min = s * c.sub_superscript_gap_min;
+        let gap = (sup - d_sup) - (h_sub - sub);
+        if gap < gap_min {
+            let corr = (gap_min - gap) * 0.5;
+            (sup + corr, sub + corr)
+        } else {
+            (sup, sub)
+        }
+    }
+
+    /// `math.ml:596-602` `upper_limit_baseline_height`, clamped: the
+    /// MAGNITUDE of the upward shift for an `\overset`-like upper limit,
+    /// given the base's own ink height (`h_base`) and the limit content's
+    /// own ink depth (`d_up`). Falls back to the flat `sup_shift` (same
+    /// shape upstream's superscript raise uses) with no MATH table.
+    fn upper_limit_shift(&self, s: Length, h_base: Length, d_up: Length) -> Length {
+        match self.c {
+            None => self.sup_shift(s),
+            Some(c) => {
+                let cand1 = h_base + s * c.upper_limit_baseline_rise_min;
+                let cand2 = h_base + s * c.upper_limit_gap_min + d_up;
+                cand1.max(cand2)
+            }
+        }
+    }
+
+    /// `math.ml:605-611` `lower_limit_baseline_depth`, clamped: mirrors
+    /// `upper_limit_shift` for a lower limit, given the base's own ink
+    /// depth (`d_base`) and the limit content's own ink height (`h_low`).
+    fn lower_limit_shift(&self, s: Length, d_base: Length, h_low: Length) -> Length {
+        match self.c {
+            None => self.sub_shift(s),
+            Some(c) => {
+                let cand1 = d_base + s * c.lower_limit_baseline_drop_min;
+                let cand2 = d_base + s * c.lower_limit_gap_min + h_low;
+                cand1.max(cand2)
+            }
+        }
+    }
+
+    /// `math.ml:982-991` `horz_fraction_bar`'s rule thickness (also
+    /// `radical_bar_metrics`'s `t_bar` — both are "the same generic rule
+    /// ratio" in the pre-MATH-table fixed-constant world, §B2):
+    /// `fraction_rule_thickness`, or the fixed `0.04` fallback. Multiplied
+    /// by the ambient LOCAL nesting `size` (not `ctx.font_size` — a
+    /// fraction/radical's own metrics DO shrink with nesting, matching
+    /// upstream's `FontInfo.actual_math_font_size`, unlike the sup/sub shift
+    /// constants' documented `ctx.font_size` simplification above).
+    fn frac_rule(&self, s: Length) -> Length {
+        self.c
+            .map(|c| s * c.fraction_rule_thickness)
+            .unwrap_or(s * 0.04)
+    }
+
+    /// `math.ml:574-583` `numerator_baseline_height`, clamped: the
+    /// MAGNITUDE of the upward shift a numerator needs given its own ink
+    /// depth (`d_numer`, a positive extent below ITS baseline — this port's
+    /// convention, see `sup_shift_clamped`'s doc comment; upstream's
+    /// `Length.negate d_numer` becomes a plain ADD of `d_numer` here, not a
+    /// subtract — getting this sign wrong would shrink the raise for a
+    /// deeper numerator instead of growing it, overlapping the bar). Falls
+    /// back to a flat, content-independent ratio with no MATH table
+    /// (mirrors `sup_shift_clamped`'s None-branch style).
+    fn frac_numer_shift(&self, s: Length, d_numer: Length) -> Length {
+        match self.c {
+            None => s * FRAC_NUMER_SHIFT_FALLBACK,
+            Some(c) => {
+                let std = s * c.fraction_numer_shift_up;
+                let gap = self.axis(s) + self.frac_rule(s) * 0.5 + s * c.fraction_numer_gap_min
+                    + d_numer;
+                std.max(gap)
+            }
+        }
+    }
+
+    /// `math.ml:585-594` `denominator_baseline_depth`, clamped: mirrors
+    /// `frac_numer_shift`. Returns the SIGNED (already-negative) drop the
+    /// caller applies straight to `dy` — unlike the sup/sub methods'
+    /// positive-magnitude-then-caller-negates convention — because
+    /// upstream's own `d_denombl` is signed too, so there's no sign flip to
+    /// make here (and `h_denom`, a HEIGHT not a depth, is subtracted
+    /// directly, matching upstream's un-negated use of it).
+    fn frac_denom_shift(&self, s: Length, h_denom: Length) -> Length {
+        match self.c {
+            None => -(s * FRAC_DENOM_SHIFT_FALLBACK),
+            Some(c) => {
+                let std = -(s * c.fraction_denom_shift_down);
+                let gap = self.axis(s) - self.frac_rule(s) * 0.5 - s * c.fraction_denom_gap_min
+                    - h_denom;
+                std.min(gap)
+            }
+        }
+    }
+
+    /// `math.ml:620-626` `radical_bar_metrics`: `(h_bar, t_bar, l_extra)` —
+    /// the bar's height above baseline (radicand height + gap, so the bar
+    /// always clears the radicand with no separate raise needed), its rule
+    /// thickness, and the extra ascender the WHOLE radical run reports
+    /// above the bar. Fallback ratios (§B2, no MATH table):
+    /// vertical_gap=0.06, rule=0.04 (same fixed ratio `frac_rule` falls back
+    /// to), extra_ascender=0.06.
+    fn radical_bar_metrics(&self, s: Length, h_cont: Length) -> (Length, Length, Length) {
+        match self.c {
+            Some(c) => (
+                h_cont + s * c.radical_vertical_gap,
+                s * c.radical_rule_thickness,
+                s * c.radical_extra_ascender,
+            ),
+            None => (h_cont + s * 0.06, s * 0.04, s * 0.06),
+        }
+    }
+}
+
+/// The ink height/depth of an already-laid-out run, as positive magnitudes
+/// (`MathGlyph.dy` is signed, up-positive; `.height`/`.depth` are always
+/// non-negative extents from EACH glyph's own local baseline) — the same
+/// aggregate `read_math`/`layout_math_value` compute for a whole
+/// `PureHorzBox::Math`, reused here per sub-run so `MathC`'s clamp formulas
+/// have an `h_base`/`d_sup`/etc to clamp against. Empty input -> `(ZERO,
+/// ZERO)` (an empty base/script contributes no clamp pressure).
+fn glyphs_extent(glyphs: &[MathGlyph]) -> (Length, Length) {
+    let mut height = Length::ZERO;
+    let mut depth = Length::ZERO;
+    for g in glyphs {
+        height = height.max(g.dy + g.height);
+        depth = depth.max(g.depth - g.dy);
+    }
+    (height, depth)
+}
+
+/// `glyphs_extent` plus `rules`' own bounding boxes folded in — exactly the
+/// aggregate `layout_math_value` computes for a whole `PureHorzBox::Math`
+/// (see that function's doc comment on why a bare `Fill`, e.g. a fraction
+/// bar/radical sign, needs its own bbox folded in rather than being silently
+/// undercounted). §B3b(i) reuses this to size a stretchy delimiter to its
+/// enclosed run's REAL ink (glyphs + any drawn rules), not just its glyphs.
+fn inner_ink_extent(glyphs: &[MathGlyph], rules: &[GraphicsElem]) -> (Length, Length) {
+    let (mut height, mut depth) = glyphs_extent(glyphs);
+    for r in rules {
+        let ((_, min_y), (_, max_y)) = graphics_bbox(r);
+        height = height.max(max_y);
+        depth = depth.max(-min_y);
+    }
+    (height, depth)
+}
+
+/// `math.ml:1040-1075`'s superscript kern tuck: the italic correction of
+/// the base's TRAILING glyph plus the two corner kerns — the base's
+/// top-right sampled at the height the raised superscript's ink starts
+/// (`l_base = sup_shift - d_sup`, `superscript_correction_heights`'s first
+/// component), and the superscript's own bottom-left sampled (at the
+/// superscript's OWN size) at the height the base's ink ends (`l_sup =
+/// h_base - sup_shift`, that function's second component) — the extra
+/// horizontal gap upstream inserts between a base and a raised superscript
+/// so slanted glyphs (an italic integral, say) don't collide with what's
+/// stacked above them. `size`/`script_size` are the local sizes the base/
+/// script glyphs were actually measured at (NOT `ctx.font_size`, unlike the
+/// shift magnitude — these feed a design-units conversion that must match
+/// each glyph's own em square). Every lookup misses to `Length::ZERO` (no
+/// MATH table, no glyph, no kern data, ...), so base-14 output is
+/// untouched: this returns exactly `Length::ZERO` whenever `ctx.math_font`
+/// has no MATH table.
+#[allow(clippy::too_many_arguments)]
+fn superscript_kern(
+    interp: &Interp,
+    ctx: &Context,
+    size: Length,
+    script_size: Length,
+    base_glyphs: &[MathGlyph],
+    script_glyphs: &[MathGlyph],
+    sup_shift: Length,
+    h_base: Length,
+    d_sup: Length,
+) -> Length {
+    let font = ctx.math_font;
+    let last_base = base_glyphs.last().and_then(|g| g.text.chars().last());
+    let first_script = script_glyphs.first().and_then(|g| g.text.chars().next());
+    let l_italic = last_base
+        .and_then(|c| interp.metrics.italic_correction(font, c, size))
+        .unwrap_or(Length::ZERO);
+    let l_base = sup_shift - d_sup;
+    let l_sup = h_base - sup_shift;
+    let l_kernbase = last_base
+        .and_then(|c| interp.metrics.math_kern(font, c, size, MathCorner::TopRight, l_base))
+        .unwrap_or(Length::ZERO);
+    let l_kernsup = first_script
+        .and_then(|c| {
+            interp
+                .metrics
+                .math_kern(font, c, script_size, MathCorner::BottomLeft, l_sup)
+        })
+        .unwrap_or(Length::ZERO);
+    l_italic + l_kernbase + l_kernsup
+}
 
 /// A minimal stand-in for v0.0.6's per-codepoint math-class table
 /// (`primitives.cppo.ml`) + `normalize_math_kind` (`math.ml:240`) — just
@@ -1034,9 +1389,26 @@ fn space_before(prev: MathKind, cur: MathKind, font_size: Length) -> Length {
     }
 }
 
-/// Measure one math character at `size` under `ctx.font` and push it as a
-/// `MathGlyph` at the running `*x` (`dy = 0`; callers shift scripts
-/// afterward), advancing `*x` past it.
+/// FontKey a math glyph c@size should measure/emit in: dedicated ctx.math_font
+/// when it can render c, else text ctx.font. The one place math diverges from
+/// text font; the MATH-table slice keys lookups on the same returned FontKey.
+fn math_glyph_font(interp: &Interp, ctx: &Context, c: char, size: Length) -> FontKey {
+    if interp.metrics.advance(ctx.math_font, c, size).is_some() {
+        ctx.math_font
+    } else {
+        ctx.font
+    }
+}
+
+/// gap-5 metrics-probe predicate, now math-font-aware.
+fn math_char_available(interp: &Interp, ctx: &Context, c: char, size: Length) -> bool {
+    interp.metrics.advance(ctx.math_font, c, size).is_some()
+        || interp.metrics.advance(ctx.font, c, size).is_some()
+}
+
+/// Measure one math character at `size` under `math_glyph_font(ctx, c)` and
+/// push it as a `MathGlyph` at the running `*x` (`dy = 0`; callers shift
+/// scripts afterward), advancing `*x` past it.
 fn push_char_glyph(
     interp: &mut Interp,
     ctx: &Context,
@@ -1045,40 +1417,121 @@ fn push_char_glyph(
     out: &mut Vec<MathGlyph>,
     x: &mut Length,
 ) -> Result<(), EvalError> {
-    let advance = interp.metrics.advance(ctx.font, c, size).ok_or_else(|| EvalError {
+    let font = math_glyph_font(interp, ctx, c, size);
+    let advance = interp.metrics.advance(font, c, size).ok_or_else(|| EvalError {
         span: None,
-        msg: format!(
-            "math character '{c}' is not available in the current font (WinAnsi only)"
-        ),
+        msg: format!("math character '{c}' is not available in the current math font"),
     })?;
     out.push(MathGlyph {
-        info: HorzStringInfo {
-            font: ctx.font,
-            size,
-        },
+        info: HorzStringInfo { font, size },
         text: c.to_string(),
+        gid: None,
         dx: *x,
         dy: Length::ZERO,
         width: advance,
-        height: interp.metrics.ascender(ctx.font, size),
-        depth: interp.metrics.descender(ctx.font, size),
+        height: interp.metrics.ascender(font, size),
+        depth: interp.metrics.descender(font, size),
     });
     *x += advance;
     Ok(())
 }
 
+/// `push_char_glyph`'s big-operator sibling (§B3a): try the v0.0.6 `BigOp`
+/// vertical variant (`fontInfo.ml:386-401` — the 2nd `MathVariants` record if
+/// present, else the 1st) unconditionally. Upstream's own guard is
+/// `is_in_display && is_big`, but `math.ml`'s `convert_math_char` hardcodes
+/// `is_in_display = true`, so it reduces to just `is_big` — a big operator
+/// grows even inline, even at script size, exactly like upstream; the port
+/// tracks no display/inline distinction and needs none here. On any miss (no
+/// MATH table, no vertical construction for `c`, or a variant/hmtx/bbox
+/// lookup failure — every base-14 call, always) falls back to
+/// `push_char_glyph`, byte-identical to pre-§B3 output.
+fn push_big_char_glyph(
+    interp: &mut Interp,
+    ctx: &Context,
+    c: char,
+    size: Length,
+    out: &mut Vec<MathGlyph>,
+    x: &mut Length,
+) -> Result<(), EvalError> {
+    let font = math_glyph_font(interp, ctx, c, size);
+    match interp
+        .metrics
+        .math_vertical_variant(font, c, size, VertVariantPolicy::BigOp)
+    {
+        Some(v) => {
+            out.push(MathGlyph {
+                info: HorzStringInfo { font, size },
+                text: c.to_string(),
+                gid: Some(v.gid),
+                dx: *x,
+                dy: Length::ZERO,
+                width: v.advance,
+                height: v.height,
+                depth: v.depth,
+            });
+            *x += v.advance;
+            Ok(())
+        }
+        None => push_char_glyph(interp, ctx, c, size, out, x),
+    }
+}
+
+/// One stretchy-delimiter glyph (§B3b(i)): the smallest `MathVariants`
+/// record whose `advance_measurement` covers `target` (else the largest
+/// record — `VertVariantPolicy::AtLeast`), centered on the math axis
+/// (`dy = axis - (h - d) / 2`; y-**up**, same sign convention as
+/// `shift_and_append`'s `dy_shift` — see that function's doc comment on the
+/// mirroring trap a flipped sign causes). Falls back to the pre-§B3 baseline
+/// base glyph (`push_char_glyph`) when there's no vertical construction,
+/// keeping base-14 output identical to before this slice.
+fn push_delimiter_glyph(
+    interp: &mut Interp,
+    ctx: &Context,
+    c: char,
+    size: Length,
+    target: Length,
+    axis: Length,
+    out: &mut Vec<MathGlyph>,
+    x: &mut Length,
+) -> Result<(), EvalError> {
+    let font = math_glyph_font(interp, ctx, c, size);
+    match interp
+        .metrics
+        .math_vertical_variant(font, c, size, VertVariantPolicy::AtLeast(target))
+    {
+        Some(v) => {
+            let dy = axis - (v.height - v.depth) * 0.5;
+            out.push(MathGlyph {
+                info: HorzStringInfo { font, size },
+                text: c.to_string(),
+                gid: Some(v.gid),
+                dx: *x,
+                dy,
+                width: v.advance,
+                height: v.height,
+                depth: v.depth,
+            });
+            *x += v.advance;
+            Ok(())
+        }
+        None => push_char_glyph(interp, ctx, c, size, out, x),
+    }
+}
+
 /// Lay out `elems` in isolation (its own local `x` starting at 0, its own
-/// spacing state), at the fixed script size `ctx.font_size * SCRIPT_SCALE` —
-/// the shape a `Sup`/`Sub`/`Primes` script needs before its glyphs get
-/// re-anchored onto the base's running `x` and shifted by the caller.
-/// Returns the glyphs (still at local coordinates) and the script's total
-/// width.
+/// spacing state) at `size` — the shape a `Sup`/`Sub`/`Primes` script needs
+/// before its glyphs get re-anchored onto the base's running `x` and
+/// shifted by the caller. `size` is the caller's `MathC::script_scale`-
+/// derived script size (real MATH-table ratio when available, `SCRIPT_SCALE`
+/// otherwise — §B1). Returns the glyphs (still at local coordinates) and
+/// the script's total width.
 fn layout_script(
     interp: &mut Interp,
     ctx: &Context,
     elems: &[MathElem],
+    size: Length,
 ) -> Result<(Vec<MathGlyph>, Length), EvalError> {
-    let size = ctx.font_size * SCRIPT_SCALE;
     let mut glyphs = Vec::new();
     let mut x = Length::ZERO;
     let mut last_kind: Option<MathKind> = None;
@@ -1141,24 +1594,67 @@ fn layout_math_elem(
             Ok(())
         }
         MathElem::Sup(base, script) => {
+            let base_start = out.len();
             layout_math_elem(interp, ctx, base, size, out, x, last_kind)?;
-            let (script_glyphs, script_width) = layout_script(interp, ctx, script)?;
-            place_script(out, x, script_glyphs, script_width, ctx.font_size * SUP_SHIFT);
+            let mc = MathC::of(interp, ctx.math_font);
+            let script_size = ctx.font_size * mc.script_scale();
+            let (h_base, _) = glyphs_extent(&out[base_start..]);
+            let (script_glyphs, script_width) = layout_script(interp, ctx, script, script_size)?;
+            let (_, d_sup) = glyphs_extent(&script_glyphs);
+            let sup_shift = mc.sup_shift_clamped(ctx.font_size, h_base, d_sup);
+            let kern = superscript_kern(
+                interp,
+                ctx,
+                size,
+                script_size,
+                &out[base_start..],
+                &script_glyphs,
+                sup_shift,
+                h_base,
+                d_sup,
+            );
+            *x += kern;
+            place_script(out, x, script_glyphs, script_width, sup_shift);
             Ok(())
         }
         MathElem::Sub(base, script) => {
+            let base_start = out.len();
             layout_math_elem(interp, ctx, base, size, out, x, last_kind)?;
-            let (script_glyphs, script_width) = layout_script(interp, ctx, script)?;
-            place_script(out, x, script_glyphs, script_width, -(ctx.font_size * SUB_SHIFT));
+            let mc = MathC::of(interp, ctx.math_font);
+            let script_size = ctx.font_size * mc.script_scale();
+            let (_, d_base) = glyphs_extent(&out[base_start..]);
+            let (script_glyphs, script_width) = layout_script(interp, ctx, script, script_size)?;
+            let (h_sub, _) = glyphs_extent(&script_glyphs);
+            let sub_shift = mc.sub_shift_clamped(ctx.font_size, d_base, h_sub);
+            place_script(out, x, script_glyphs, script_width, -sub_shift);
             Ok(())
         }
         MathElem::Primes(base, n) => {
+            let base_start = out.len();
             layout_math_elem(interp, ctx, base, size, out, x, last_kind)?;
+            let mc = MathC::of(interp, ctx.math_font);
+            let script_size = ctx.font_size * mc.script_scale();
+            let (h_base, _) = glyphs_extent(&out[base_start..]);
             // Upstream desugars primes to exactly this: a superscript of `n`
             // U+2032 `′` chars (`parser.mly:1082`).
             let primes = vec![MathElem::Chars("\u{2032}".repeat(*n))];
-            let (script_glyphs, script_width) = layout_script(interp, ctx, &primes)?;
-            place_script(out, x, script_glyphs, script_width, ctx.font_size * SUP_SHIFT);
+            let (script_glyphs, script_width) =
+                layout_script(interp, ctx, &primes, script_size)?;
+            let (_, d_sup) = glyphs_extent(&script_glyphs);
+            let sup_shift = mc.sup_shift_clamped(ctx.font_size, h_base, d_sup);
+            let kern = superscript_kern(
+                interp,
+                ctx,
+                size,
+                script_size,
+                &out[base_start..],
+                &script_glyphs,
+                sup_shift,
+                h_base,
+                d_sup,
+            );
+            *x += kern;
+            place_script(out, x, script_glyphs, script_width, sup_shift);
             Ok(())
         }
         MathElem::Cmd { name, span, .. } => Err(EvalError {
@@ -1203,6 +1699,7 @@ pub fn read_math(
         height,
         depth,
         glyphs,
+        rules: Vec::new(),
     })
 }
 
@@ -1581,20 +2078,20 @@ fn prim_get_text_width(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Val
     Ok(Value::Length(ctx.paragraph_width))
 }
 
-/// `get-initial-context : length -> <second argument, ignored> -> context`
-/// (vminst.ml `PrimitiveGetInitialContext`) — see the `prims!` table
-/// comment: the second argument (v0.0.6's default math command) is
-/// accepted but not used, since this port has no math typesetting yet. Its
-/// *value* is simply discarded at runtime regardless of what
-/// `prim_types.rs` declares its type to be (see that module's comment on
-/// this same primitive for why the declared type was relaxed to `unit`).
+/// `get-initial-context : length -> [math] inline-cmd -> context`
+/// (vminst.ml `PrimitiveGetInitialContext`) — the second argument is the
+/// default math command a bare `${…}` in inline text dispatches to (v0.0.6
+/// `context_main.math_command`); interned via
+/// `Interp::register_math_command`, carried as `Context::math_command`.
 fn prim_get_initial_context(
-    _interp: &mut Interp,
+    interp: &mut Interp,
     mut args: Vec<Value>,
 ) -> Result<Value, EvalError> {
-    let _ignored = args.pop().unwrap();
+    let cmd = args.pop().unwrap();
     let width = as_length(args.pop().unwrap())?;
-    Ok(Value::Context(Box::new(Context::initial(width))))
+    let mut ctx = Context::initial(width);
+    ctx.math_command = Some(interp.register_math_command(cmd));
+    Ok(Value::Context(Box::new(ctx)))
 }
 
 /// `set-font-key : int -> context -> context` — LOCAL, non-upstream
@@ -2282,18 +2779,16 @@ fn prim_discretionary(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Valu
 /// (docs/plans/stdlib-port.md's Tier-2 decoration/graphics wave) — centers
 /// text vertically around the math axis.
 ///
-/// STAND-IN: upstream reads the ratio from the *math* font's OpenType MATH
-/// table (`FontInfo.get_axis_height mfabbrev fontsize`, see
-/// `docs/plans/math-engine.md`'s §E, which lists this same primitive as an
-/// un-ported math-engine dependency). This port has no math font/MATH-table
-/// plumbing at all yet, so this returns a fixed `0.25` ratio of the
-/// context's current `font_size` instead — the same ratio
-/// `pervasives.satyh`'s `\SATySFi`/`\LaTeX` already use for manual rising,
-/// a plausible approximation for common text/math faces. Revisit once a
-/// real math font with MATH-table data is loadable.
-fn prim_get_axis_height(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+/// FAITHFUL (§B1): reads `axis_height` from `ctx.math_font`'s OpenType MATH
+/// table via `MathC` (`FontInfo.get_axis_height mfabbrev fontsize`), falling
+/// back to the same fixed `0.25` ratio of `ctx.font_size` this returned
+/// before this slice (`pervasives.satyh`'s `\SATySFi`/`\LaTeX` manual-rising
+/// ratio) whenever the font has no MATH table — so base-14/non-math output
+/// is unchanged.
+fn prim_get_axis_height(interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
     let ctx = as_context(args.pop().unwrap())?;
-    Ok(Value::Length(ctx.font_size * 0.25))
+    let mc = MathC::of(interp, ctx.math_font);
+    Ok(Value::Length(mc.axis(ctx.font_size)))
 }
 
 // ============================================================================
@@ -2537,18 +3032,21 @@ fn as_math_kind(v: Value) -> Result<MathKind, EvalError> {
     }
 }
 
-/// `math-char-class` = `Value::Ctor("MathItalic"|…, None)` — kept as the
-/// bare constructor NAME (not resolved to anything further yet): the actual
-/// Unicode-math-block restyling it names is roadmap F, so nothing here
-/// needs more than "which style was requested" (see `value.rs`'s
-/// `Math::ChangeCharClass` doc comment).
-fn as_math_char_class(v: Value) -> Result<String, EvalError> {
+/// `math-char-class` = `Value::Ctor("MathItalic"|…, None)`, resolved to the
+/// backend's [`MathCharClass`] (gap 5, `docs/plans/math-engine.md` §F — see
+/// `value.rs`'s `Math::ChangeCharClass` doc comment).
+fn as_math_char_class(v: Value) -> Result<MathCharClass, EvalError> {
     match v {
         Value::Ctor(name, None) => match name.as_str() {
-            "MathItalic" | "MathBoldItalic" | "MathRoman" | "MathBoldRoman" | "MathScript"
-            | "MathBoldScript" | "MathFraktur" | "MathBoldFraktur" | "MathDoubleStruck" => {
-                Ok(name)
-            }
+            "MathItalic" => Ok(MathCharClass::Italic),
+            "MathBoldItalic" => Ok(MathCharClass::BoldItalic),
+            "MathRoman" => Ok(MathCharClass::Roman),
+            "MathBoldRoman" => Ok(MathCharClass::BoldRoman),
+            "MathScript" => Ok(MathCharClass::Script),
+            "MathBoldScript" => Ok(MathCharClass::BoldScript),
+            "MathFraktur" => Ok(MathCharClass::Fraktur),
+            "MathBoldFraktur" => Ok(MathCharClass::BoldFraktur),
+            "MathDoubleStruck" => Ok(MathCharClass::DoubleStruck),
             other => eval_error(format!(
                 "expected a math-char-class constructor, got '{other}'"
             )),
@@ -2627,13 +3125,13 @@ fn reflect_math_elem(
 ) -> Result<(), EvalError> {
     match elem {
         MathElem::Chars(s) => {
-            for c in s.chars() {
-                out.push(Math::Pure(MathElement::Char {
-                    class: ascii_math_kind(c),
-                    big: false,
-                    chars: c.to_string(),
-                }));
-            }
+            // One atom per MATHCHAR token (gap 5's "one atom per run" —
+            // the lexer already grouped a symbol run or a single latin
+            // digit/letter into `s`); class + codepoint remap are both
+            // deferred to `layout_math_atom`'s `VariantCharPending` arm,
+            // where `Context::math_class_map`/`math_variant_char_map` and
+            // the current font are available.
+            out.push(Math::Pure(MathElement::VariantCharPending(s.clone())));
             Ok(())
         }
         MathElem::Group(elems) => {
@@ -2842,11 +3340,11 @@ fn prim_math_upper(interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, E
 
 /// `math-pull-in-scripts : math-class -> math-class -> (math option -> math
 /// option -> math) -> math` (vminst.ml:368) — FAITHFUL construction: the
-/// resolver closure is stored opaquely, never called here (it's only ever
-/// invoked by the real layout engine once a following `^`/`_` needs routing
-/// into limits, roadmap D). `embed-math`'s stand-in layout (below) calls it
-/// once with `(None, None)` for the common unscripted case (a bare
-/// `\sum`/`\int` with nothing pulled in).
+/// resolver closure is stored opaquely here, only ever invoked by
+/// `layout_pull_in_scripts` (Gap 2, `class-signature-lang-gaps.md`) — with
+/// the subscript/superscript actually pulled in off an enclosing `Sub`/`Sup`
+/// (`{scripts} m^{sup}`-style), or with `(None, None)` for the common
+/// unscripted case (a bare `\sum`/`\int` with nothing pulled in).
 fn prim_math_pull_in_scripts(interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
     let resolver = args.pop().unwrap();
     let cls2 = as_math_kind(args.pop().unwrap())?;
@@ -2940,24 +3438,191 @@ fn prim_convert_string_for_math(
     Ok(Value::Str(s))
 }
 
-/// `set-math-command : [math] inline-cmd -> context -> context` — STAND-IN:
-/// Slice 1 fuses `${…}` handling directly into `read_inline`'s `EmbedMath`
-/// arm, so the installed command has nowhere to be consulted from yet;
-/// accepted and dropped, matching `get-initial-context`'s own historical
-/// stand-in shape before this plan restored its faithful type.
-fn prim_set_math_command(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
-    let ctx = as_context(args.pop().unwrap())?;
-    let _cmd = args.pop().unwrap();
+/// `set-math-variant-char : math-char-class -> int -> int -> context ->
+/// context` (gap 7, `docs/plans/math-mode-language-gaps.md`) — FAITHFUL:
+/// installs a per-`(source char, style)` override into
+/// `Context::math_variant_char_map`, consulted by `resolve_variant_char`
+/// BEFORE the built-in `default_math_variant_char` table. `Arc::make_mut`
+/// copy-on-writes the map so contexts that never call this keep sharing one
+/// `Arc`-refcounted empty table.
+fn prim_set_math_variant_char(
+    _interp: &mut Interp,
+    mut args: Vec<Value>,
+) -> Result<Value, EvalError> {
+    let mut ctx = as_context(args.pop().unwrap())?;
+    let cpto = as_int(args.pop().unwrap())?;
+    let cpfrom = as_int(args.pop().unwrap())?;
+    let cls = as_math_char_class(args.pop().unwrap())?;
+    let from = u32::try_from(cpfrom)
+        .ok()
+        .and_then(char::from_u32)
+        .ok_or_else(|| EvalError {
+            span: None,
+            msg: format!("set-math-variant-char: {cpfrom} is not a valid Unicode codepoint"),
+        })?;
+    let to = u32::try_from(cpto)
+        .ok()
+        .and_then(char::from_u32)
+        .ok_or_else(|| EvalError {
+            span: None,
+            msg: format!("set-math-variant-char: {cpto} is not a valid Unicode codepoint"),
+        })?;
+    Arc::make_mut(&mut ctx.math_variant_char_map).insert((from, cls), to);
     Ok(Value::Context(Box::new(ctx)))
 }
 
+/// The `MathKind` one `MathElement` atom presents as its own boundary class
+/// — `Char`/`CharWithKern`/`EmbeddedText`/`VariantChar` carry an explicit
+/// `class` field; `VariantCharPending` (gap 5 — not yet resolved to a class
+/// at this point in the tree) consults `ctx.math_class_map` the same way
+/// `layout_math_atom`'s own arm does, defaulting to `Ord` when the token
+/// isn't a whole-token class-map entry (mirrors `layout_math_atom`'s
+/// fallback path, whose per-char variant remap never changes the class).
+fn math_element_kind(ctx: &Context, me: &MathElement) -> MathKind {
+    match me {
+        MathElement::Char { class, .. }
+        | MathElement::CharWithKern { class, .. }
+        | MathElement::EmbeddedText { class, .. }
+        | MathElement::VariantChar { class, .. } => *class,
+        MathElement::VariantCharPending(s) => ctx
+            .math_class_map
+            .get(s.as_str())
+            .map(|(_, kind)| *kind)
+            .unwrap_or(MathKind::Ord),
+    }
+}
+
+/// Upstream `get_left_math_kind`/`get_right_math_kind` (math.ml:481-524),
+/// fused into one direction-parameterized walk over a `&[Math]` list's
+/// FIRST (`left = true`) or LAST (`left = false`) element: `Pure` atoms
+/// report their own class (`math_element_kind`); `Group`/`PullInScripts`
+/// present an explicit, possibly-asymmetric left/right pair; `Sup`/`Sub`/
+/// `UpperLimit`/`LowerLimit` recurse into their `base`; `Fraction`/
+/// `Radical` are always `Inner`; `Paren`/`ParenWithMiddle` are always
+/// `Open`/`Close`; `ChangeColor`/`ChangeCharClass` recurse into `inner`; an
+/// empty list is the synthetic `End` boundary sentinel (`MathKind::End`,
+/// `horzBox.ml:134`) — `make_math_class_option_value` maps that to `None`,
+/// same as upstream's own list-boundary handling.
+fn boundary_math_kind(ctx: &Context, ms: &[Math], left: bool) -> MathKind {
+    let m = if left { ms.first() } else { ms.last() };
+    let Some(m) = m else {
+        return MathKind::End;
+    };
+    match m {
+        Math::Pure(me) => math_element_kind(ctx, me),
+        Math::Group(cls1, cls2, _) => {
+            if left {
+                *cls1
+            } else {
+                *cls2
+            }
+        }
+        Math::PullInScripts(cls1, cls2, _) => {
+            if left {
+                *cls1
+            } else {
+                *cls2
+            }
+        }
+        Math::Sup(base, _)
+        | Math::Sub(base, _)
+        | Math::UpperLimit(base, _)
+        | Math::LowerLimit(base, _) => boundary_math_kind(ctx, base, left),
+        Math::Fraction(..) | Math::Radical(..) => MathKind::Inner,
+        Math::Paren(..) | Math::ParenWithMiddle(..) => {
+            if left {
+                MathKind::Open
+            } else {
+                MathKind::Close
+            }
+        }
+        Math::ChangeColor(_, inner) | Math::ChangeCharClass(_, inner) => {
+            boundary_math_kind(ctx, inner, left)
+        }
+    }
+}
+
+fn left_math_kind(ctx: &Context, ms: &[Math]) -> MathKind {
+    boundary_math_kind(ctx, ms, true)
+}
+
+fn right_math_kind(ctx: &Context, ms: &[Math]) -> MathKind {
+    boundary_math_kind(ctx, ms, false)
+}
+
+/// `math-class option` — `MathKind::End` (the empty-list sentinel) becomes
+/// `None`; every real class becomes `Some(<ctor>)`, round-tripping exactly
+/// with `as_math_kind`'s ctor names.
+fn make_math_class_option_value(mk: MathKind) -> Value {
+    let name = match mk {
+        MathKind::Ord => "MathOrd",
+        MathKind::Bin => "MathBin",
+        MathKind::Rel => "MathRel",
+        MathKind::Op => "MathOp",
+        MathKind::Punct => "MathPunct",
+        MathKind::Open => "MathOpen",
+        MathKind::Close => "MathClose",
+        MathKind::Prefix => "MathPrefix",
+        MathKind::Inner => "MathInner",
+        MathKind::End => return Value::Ctor("None".to_string(), None),
+    };
+    Value::Ctor(
+        "Some".to_string(),
+        Some(Box::new(Value::Ctor(name.to_string(), None))),
+    )
+}
+
+/// `get-left-math-class : context -> math -> math-class option` (gap 7).
+fn prim_get_left_math_class(interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+    let m = as_math(interp, args.pop().unwrap())?;
+    let ctx = as_context(args.pop().unwrap())?;
+    Ok(make_math_class_option_value(left_math_kind(&ctx, &m)))
+}
+
+/// `get-right-math-class : context -> math -> math-class option` (gap 7).
+fn prim_get_right_math_class(
+    interp: &mut Interp,
+    mut args: Vec<Value>,
+) -> Result<Value, EvalError> {
+    let m = as_math(interp, args.pop().unwrap())?;
+    let ctx = as_context(args.pop().unwrap())?;
+    Ok(make_math_class_option_value(right_math_kind(&ctx, &m)))
+}
+
+/// `set-math-command : [math] inline-cmd -> context -> context`
+/// FAITHFUL: installs the command `read_inline`'s `EmbedMath` arm applies
+/// to bare `${…}`.
+fn prim_set_math_command(interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+    let mut ctx = as_context(args.pop().unwrap())?;
+    let cmd = args.pop().unwrap();
+    ctx.math_command = Some(interp.register_math_command(cmd));
+    Ok(Value::Context(Box::new(ctx)))
+}
+
+/// Resolve a font abbrev to one of the 3 base faces by name heuristic — the
+/// only font-name resolution this milestone has. Shared by set-font/set-math-font.
+fn resolve_font_abbrev(abbrev: &str) -> FontKey {
+    let lower = abbrev.to_ascii_lowercase();
+    if lower.contains("bold") {
+        FONT_BOLD
+    } else if lower.contains("it") || lower.contains("obl") || lower.contains("slant") {
+        FONT_OBLIQUE
+    } else {
+        FONT_REGULAR
+    }
+}
+
 /// `set-math-font : string -> context -> context` (vminst.ml:1495) —
-/// Phase B STAND-IN: no `MathFontStore`/font-selection-by-abbreviation
-/// exists yet; accepted and dropped.
+/// Faithful-STORAGE stand-in: no math-font registry/slot reachable here, so
+/// resolve the abbrev by the SAME base-face heuristic set-font uses and
+/// store in `Context::math_font`. A math OTF configured as the CLI regular
+/// face (FontKey 0) makes styled math render. Per-abbrev math-file
+/// selection = MATH-table slice.
 fn prim_set_math_font(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
     let ctx = as_context(args.pop().unwrap())?;
-    let _name = args.pop().unwrap();
-    Ok(Value::Context(Box::new(ctx)))
+    let abbrev = as_str(args.pop().unwrap())?;
+    let math_font = resolve_font_abbrev(&abbrev);
+    Ok(Value::Context(Box::new(Context { math_font, ..ctx })))
 }
 
 /// `space-between-maths : context -> math -> math -> inline-boxes option`
@@ -3047,38 +3712,56 @@ fn layout_math_value(
     ctx: &Context,
     elems: &[Math],
 ) -> Result<PureHorzBox, EvalError> {
-    let (glyphs, width, _left, _right) = layout_math_list(interp, ctx, elems, ctx.font_size)?;
+    let (glyphs, rules, width, _left, _right) =
+        layout_math_list(interp, ctx, elems, ctx.font_size)?;
     let mut height = Length::ZERO;
     let mut depth = Length::ZERO;
     for g in &glyphs {
         height = height.max(g.dy + g.height);
         depth = depth.max(g.depth - g.dy);
     }
+    // §B2: a fraction bar/radical sign is a `Fill` with no `MathGlyph`
+    // backing it at all, so the glyph-only aggregation above would silently
+    // undercount a run whose bar/sign extends above every glyph's own ink
+    // (e.g. `${\sqrt{2}}`'s `l_extra` ascender). Fold every rule's own
+    // (y-up, box-local — same frame as `MathGlyph::dy`) bounding box in too.
+    for r in &rules {
+        let ((_, min_y), (_, max_y)) = graphics_bbox(r);
+        height = height.max(max_y);
+        depth = depth.max(-min_y);
+    }
     Ok(PureHorzBox::Math {
         width,
         height,
         depth,
         glyphs,
+        rules,
     })
 }
 
 /// Lay out a flat `&[Math]` list at `size`, threading inter-atom spacing
 /// (`space_before`, Slice 1's minimal spacer) and returning the glyphs (at
-/// LOCAL coordinates starting at `x = 0`), the total width, and the
-/// boundary classes on either end (needed by a `Group` ancestor, which can
-/// present different left/right classes — see `Math::Group`'s doc comment).
+/// LOCAL coordinates starting at `x = 0`), any graphics `rules` an atom
+/// pushed (§B2, `docs/plans/math-engine.md`; shifted horizontally by the
+/// same running `x` a glyph gets — `layout_math_list` never shifts an
+/// atom vertically, only `shift_and_append`'s callers do), the total width,
+/// and the boundary classes on either end (needed by a `Group` ancestor,
+/// which can present different left/right classes — see `Math::Group`'s doc
+/// comment).
 fn layout_math_list(
     interp: &mut Interp,
     ctx: &Context,
     elems: &[Math],
     size: Length,
-) -> Result<(Vec<MathGlyph>, Length, MathKind, MathKind), EvalError> {
+) -> Result<(Vec<MathGlyph>, Vec<GraphicsElem>, Length, MathKind, MathKind), EvalError> {
     let mut glyphs = Vec::new();
+    let mut rules = Vec::new();
     let mut x = Length::ZERO;
     let mut last_kind: Option<MathKind> = None;
     let mut first_kind: Option<MathKind> = None;
     for atom in elems {
-        let (atom_glyphs, atom_width, left, right) = layout_math_atom(interp, ctx, atom, size)?;
+        let (atom_glyphs, atom_rules, atom_width, left, right) =
+            layout_math_atom(interp, ctx, atom, size)?;
         if let Some(prev) = last_kind {
             x += space_before(prev, left, ctx.font_size);
         }
@@ -3088,187 +3771,729 @@ fn layout_math_list(
             g.dx = base_x + g.dx;
             glyphs.push(g);
         }
+        for r in &atom_rules {
+            rules.push(shift_graphics((base_x, Length::ZERO), r));
+        }
         x = base_x + atom_width;
         last_kind = Some(right);
     }
     let left = first_kind.unwrap_or(MathKind::Ord);
     let right = last_kind.unwrap_or(MathKind::Ord);
-    Ok((glyphs, x, left, right))
+    Ok((glyphs, rules, x, left, right))
+}
+
+/// Upstream `check_subscript` (math.ml:682-699): if a superscript base's
+/// LAST element is itself a `Sub`, strip it — returning `(subscript script,
+/// new base)` where the new base is the preceding elements followed by the
+/// inner `Sub`'s own base, so `{x_1}^2` becomes one base carrying both a
+/// sub and a sup. Recurses through `ChangeColor`/`ChangeCharClass`.
+fn check_subscript(base: &[Math]) -> Option<(Vec<Math>, Vec<Math>)> {
+    let (last, head) = base.split_last()?;
+    match last {
+        Math::Sub(inner_base, sub_script) => {
+            let mut new_base = head.to_vec();
+            new_base.extend(inner_base.iter().cloned());
+            Some((sub_script.clone(), new_base))
+        }
+        Math::ChangeColor(color, inner) => {
+            let (sub_script, inner_new) = check_subscript(inner)?;
+            let mut new_base = head.to_vec();
+            new_base.push(Math::ChangeColor(color.clone(), inner_new));
+            Some((vec![Math::ChangeColor(color.clone(), sub_script)], new_base))
+        }
+        Math::ChangeCharClass(cls, inner) => {
+            let (sub_script, inner_new) = check_subscript(inner)?;
+            let mut new_base = head.to_vec();
+            new_base.push(Math::ChangeCharClass(cls.clone(), inner_new));
+            Some((vec![Math::ChangeCharClass(cls.clone(), sub_script)], new_base))
+        }
+        _ => None,
+    }
+}
+
+/// Upstream `invoke_pull_in_scripts` (math.ml:957-966): call a
+/// `math-pull-in-scripts` resolver with the actual pulled-in scripts —
+/// `resolver : math option -> math option -> math`, SUBSCRIPT option first,
+/// SUPERSCRIPT second — then splice the returned math after the remaining
+/// base as ONE `Group(cls1, cls2, …)` atom and lay the whole list out.
+#[allow(clippy::too_many_arguments)]
+fn layout_pull_in_scripts(
+    interp: &mut Interp,
+    ctx: &Context,
+    head: &[Math],
+    cls1: MathKind,
+    cls2: MathKind,
+    resolver: &Value,
+    sub: Option<&[Math]>,
+    sup: Option<&[Math]>,
+    size: Length,
+) -> Result<(Vec<MathGlyph>, Vec<GraphicsElem>, Length, MathKind, MathKind), EvalError> {
+    let opt_math = |o: Option<&[Math]>| match o {
+        Some(m) => Value::Ctor(
+            "Some".to_string(),
+            Some(Box::new(Value::Math(Rc::new(m.to_vec())))),
+        ),
+        None => Value::Ctor("None".to_string(), None),
+    };
+    let partial = interp.apply(resolver.clone(), opt_math(sub))?;
+    let result = interp.apply(partial, opt_math(sup))?;
+    let resolved = as_math(interp, result)?;
+    let mut items: Vec<Math> = head.to_vec();
+    items.push(Math::Group(cls1, cls2, (*resolved).clone()));
+    layout_math_list(interp, ctx, &items, size)
+}
+
+/// Gap 5's metrics-probe fallback policy: resolve `c` under `ctx`'s current
+/// `math_char_class` (checking the runtime override map first, then the
+/// built-in `default_math_variant_char` table), but only actually EMIT the
+/// remapped codepoint if the current font can render it
+/// (`interp.metrics.advance` returns `Some`) — otherwise fall back to the
+/// source char `c` (its class, from `Context::math_class_map`/
+/// `ascii_math_kind`-style inference, is kept regardless). This is what
+/// keeps base-14/WinAnsi documents byte-identical (`Base14Metrics` returns
+/// `None` outside ASCII 32-126) while a math-capable TTF, or a permissive
+/// test stub, gets the real Mathematical-Alphanumeric glyph automatically.
+fn resolve_variant_char(interp: &Interp, ctx: &Context, c: char, size: Length) -> char {
+    let mapped = ctx
+        .math_variant_char_map
+        .get(&(c, ctx.math_char_class))
+        .copied()
+        .or_else(|| default_math_variant_char(ctx.math_char_class, c));
+    match mapped {
+        Some(m) if math_char_available(interp, ctx, m, size) => m,
+        _ => c,
+    }
 }
 
 /// Lay out one `Math` atom at `size` (LOCAL coordinates, `x` starting at
-/// 0), returning its glyphs, width, and left/right boundary class.
+/// 0), returning its glyphs, any graphics `rules` it pushed (§B2 — only the
+/// `Fraction`/`Radical` arms produce any; every other arm forwards its
+/// children's), width, and left/right boundary class.
 fn layout_math_atom(
     interp: &mut Interp,
     ctx: &Context,
     atom: &Math,
     size: Length,
-) -> Result<(Vec<MathGlyph>, Length, MathKind, MathKind), EvalError> {
+) -> Result<(Vec<MathGlyph>, Vec<GraphicsElem>, Length, MathKind, MathKind), EvalError> {
     match atom {
-        Math::Pure(MathElement::Char { class, chars, .. })
-        | Math::Pure(MathElement::CharWithKern { class, chars, .. }) => {
+        Math::Pure(MathElement::Char { class, big, chars })
+        | Math::Pure(MathElement::CharWithKern { class, big, chars, .. }) => {
             let mut glyphs = Vec::new();
             let mut x = Length::ZERO;
             for c in chars.chars() {
-                push_char_glyph(interp, ctx, c, size, &mut glyphs, &mut x)?;
+                if *big {
+                    push_big_char_glyph(interp, ctx, c, size, &mut glyphs, &mut x)?;
+                } else {
+                    push_char_glyph(interp, ctx, c, size, &mut glyphs, &mut x)?;
+                }
             }
-            Ok((glyphs, x, *class, *class))
+            Ok((glyphs, Vec::new(), x, *class, *class))
         }
         Math::Pure(MathElement::VariantChar { class, style, .. }) => {
+            // Select the target codepoints by the CURRENT restyling
+            // (`Context::math_char_class`, set by `ChangeCharClass`'s
+            // layout arm below) rather than always `style.italic` — these
+            // are explicit per-style codepoints the caller built
+            // (`math-variant-char`), so no metrics-probe fallback (unlike
+            // `resolve_variant_char`): `push_char_glyph` errors like any
+            // other explicit-codepoint atom if the font can't render it.
+            let text = match ctx.math_char_class {
+                MathCharClass::Italic => &style.italic,
+                MathCharClass::BoldItalic => &style.bold_italic,
+                MathCharClass::Roman => &style.roman,
+                MathCharClass::BoldRoman => &style.bold_roman,
+                MathCharClass::Script => &style.script,
+                MathCharClass::BoldScript => &style.bold_script,
+                MathCharClass::Fraktur => &style.fraktur,
+                MathCharClass::BoldFraktur => &style.bold_fraktur,
+                MathCharClass::DoubleStruck => &style.double_struck,
+            };
             let mut glyphs = Vec::new();
             let mut x = Length::ZERO;
-            for c in style.italic.chars() {
+            for c in text.chars() {
                 push_char_glyph(interp, ctx, c, size, &mut glyphs, &mut x)?;
             }
-            Ok((glyphs, x, *class, *class))
+            Ok((glyphs, Vec::new(), x, *class, *class))
         }
-        Math::Pure(MathElement::EmbeddedText { .. }) => {
-            eval_error("text-in-math rendering needs box-in-math nesting (roadmap E)".to_string())
+        Math::Pure(MathElement::VariantCharPending(s)) => {
+            // One MATHCHAR token, resolved now that `ctx` (font +
+            // math_char_class + both override maps) is available: first
+            // try the whole-TOKEN class map (`=`, `-`, `,`, … ->
+            // (replacement, MathKind)); if the token isn't there, fall back
+            // to a per-char variant remap (gap 5's metrics-probe policy)
+            // with `MathKind::Ord`.
+            let mut glyphs = Vec::new();
+            let mut x = Length::ZERO;
+            if let Some((target, kind)) = ctx.math_class_map.get(s.as_str()) {
+                let kind = *kind;
+                let all_renderable = target
+                    .chars()
+                    .all(|c| math_char_available(interp, ctx, c, size));
+                let chosen = if all_renderable { target.clone() } else { s.clone() };
+                for c in chosen.chars() {
+                    push_char_glyph(interp, ctx, c, size, &mut glyphs, &mut x)?;
+                }
+                return Ok((glyphs, Vec::new(), x, kind, kind));
+            }
+            for c in s.chars() {
+                let chosen = resolve_variant_char(interp, ctx, c, size);
+                push_char_glyph(interp, ctx, chosen, size, &mut glyphs, &mut x)?;
+            }
+            Ok((glyphs, Vec::new(), x, MathKind::Ord, MathKind::Ord))
+        }
+        Math::Pure(MathElement::EmbeddedText { class, body }) => {
+            let v = interp.apply((**body).clone(), Value::Context(Box::new(ctx.clone())))?;
+            let boxes = as_inline_boxes(v)?;
+            let (glyphs, width) = math_glyphs_of_inline_boxes(&boxes);
+            Ok((glyphs, Vec::new(), width, *class, *class))
         }
         Math::Group(cls1, cls2, inner) => {
-            let (glyphs, width, _, _) = layout_math_list(interp, ctx, inner, size)?;
-            Ok((glyphs, width, *cls1, *cls2))
+            let (glyphs, rules, width, _, _) = layout_math_list(interp, ctx, inner, size)?;
+            Ok((glyphs, rules, width, *cls1, *cls2))
         }
         Math::Sup(base, script) => {
-            let (mut glyphs, base_width, left, _) = layout_math_list(interp, ctx, base, size)?;
-            let script_size = size * SCRIPT_SCALE;
-            let (script_glyphs, script_width, _, _) =
+            // Upstream MathSuperscript: (1) check_subscript merges a
+            // base-tail `Sub` into one base + (sub, sup) pair;
+            // (2) check_pull_in hands the script(s) to a base-tail
+            // `PullInScripts` resolver.
+            if let Some((sub_script, new_base)) = check_subscript(base) {
+                if let Some((Math::PullInScripts(cls1, cls2, resolver), head)) =
+                    new_base.split_last()
+                {
+                    return layout_pull_in_scripts(
+                        interp,
+                        ctx,
+                        head,
+                        *cls1,
+                        *cls2,
+                        resolver,
+                        Some(&sub_script),
+                        Some(script),
+                        size,
+                    );
+                }
+                // No pull-in (`{x_1}^2`): one sub+sup pair on the same base.
+                let (mut glyphs, mut rules, base_width, left, _) =
+                    layout_math_list(interp, ctx, &new_base, size)?;
+                let mc = MathC::of(interp, ctx.math_font);
+                let script_size = size * mc.script_scale();
+                let (sub_glyphs, sub_rules, sub_width, _, _) =
+                    layout_math_list(interp, ctx, &sub_script, script_size)?;
+                let (sup_glyphs, sup_rules, sup_width, _, _) =
+                    layout_math_list(interp, ctx, script, script_size)?;
+                let (h_base, d_base) = glyphs_extent(&glyphs);
+                let (_, d_sup) = glyphs_extent(&sup_glyphs);
+                let (h_sub, _) = glyphs_extent(&sub_glyphs);
+                let sup_shift_raw = mc.sup_shift_clamped(ctx.font_size, h_base, d_sup);
+                let sub_shift_raw = mc.sub_shift_clamped(ctx.font_size, d_base, h_sub);
+                let (sup_shift, sub_shift) =
+                    mc.correct_script_gap(ctx.font_size, d_sup, h_sub, sup_shift_raw, sub_shift_raw);
+                let kern = superscript_kern(
+                    interp, ctx, size, script_size, &glyphs, &sup_glyphs, sup_shift, h_base, d_sup,
+                );
+                shift_and_append(
+                    &mut glyphs, &mut rules, sub_glyphs, sub_rules, base_width, -sub_shift,
+                );
+                shift_and_append(
+                    &mut glyphs, &mut rules, sup_glyphs, sup_rules, base_width + kern, sup_shift,
+                );
+                return Ok((
+                    glyphs,
+                    rules,
+                    base_width + sub_width.max(kern + sup_width),
+                    left,
+                    MathKind::Ord,
+                ));
+            }
+            if let Some((Math::PullInScripts(cls1, cls2, resolver), head)) = base.split_last() {
+                return layout_pull_in_scripts(
+                    interp, ctx, head, *cls1, *cls2, resolver, None, Some(script), size,
+                );
+            }
+            let (mut glyphs, mut rules, base_width, left, _) =
+                layout_math_list(interp, ctx, base, size)?;
+            let mc = MathC::of(interp, ctx.math_font);
+            let script_size = size * mc.script_scale();
+            let (script_glyphs, script_rules, script_width, _, _) =
                 layout_math_list(interp, ctx, script, script_size)?;
-            shift_and_append(&mut glyphs, script_glyphs, base_width, ctx.font_size * SUP_SHIFT);
-            Ok((glyphs, base_width + script_width, left, MathKind::Ord))
+            let (h_base, _) = glyphs_extent(&glyphs);
+            let (_, d_sup) = glyphs_extent(&script_glyphs);
+            let sup_shift = mc.sup_shift_clamped(ctx.font_size, h_base, d_sup);
+            let kern = superscript_kern(
+                interp, ctx, size, script_size, &glyphs, &script_glyphs, sup_shift, h_base, d_sup,
+            );
+            shift_and_append(
+                &mut glyphs, &mut rules, script_glyphs, script_rules, base_width + kern, sup_shift,
+            );
+            Ok((glyphs, rules, base_width + kern + script_width, left, MathKind::Ord))
         }
         Math::Sub(base, script) => {
-            let (mut glyphs, base_width, left, _) = layout_math_list(interp, ctx, base, size)?;
-            let script_size = size * SCRIPT_SCALE;
-            let (script_glyphs, script_width, _, _) =
+            // Upstream MathSubscript: a `PullInScripts` at the base list's
+            // TAIL receives the subscript itself instead of a corner script.
+            if let Some((Math::PullInScripts(cls1, cls2, resolver), head)) = base.split_last() {
+                return layout_pull_in_scripts(
+                    interp,
+                    ctx,
+                    head,
+                    *cls1,
+                    *cls2,
+                    resolver,
+                    Some(script),
+                    None,
+                    size,
+                );
+            }
+            let (mut glyphs, mut rules, base_width, left, _) =
+                layout_math_list(interp, ctx, base, size)?;
+            let mc = MathC::of(interp, ctx.math_font);
+            let script_size = size * mc.script_scale();
+            let (script_glyphs, script_rules, script_width, _, _) =
                 layout_math_list(interp, ctx, script, script_size)?;
+            let (_, d_base) = glyphs_extent(&glyphs);
+            let (h_sub, _) = glyphs_extent(&script_glyphs);
+            let sub_shift = mc.sub_shift_clamped(ctx.font_size, d_base, h_sub);
             shift_and_append(
-                &mut glyphs,
-                script_glyphs,
-                base_width,
-                -(ctx.font_size * SUB_SHIFT),
+                &mut glyphs, &mut rules, script_glyphs, script_rules, base_width, -sub_shift,
             );
-            Ok((glyphs, base_width + script_width, left, MathKind::Ord))
+            Ok((glyphs, rules, base_width + script_width, left, MathKind::Ord))
         }
-        Math::ChangeColor(_, inner) | Math::ChangeCharClass(_, inner) => {
-            // stand-in: color/char-class restyling doesn't affect Slice-1
-            // glyph rendering yet (roadmap B/F) — just render the content.
-            let (glyphs, width, left, right) = layout_math_list(interp, ctx, inner, size)?;
-            Ok((glyphs, width, left, right))
+        Math::ChangeColor(_, inner) => {
+            // stand-in: color restyling doesn't affect Slice-1 glyph
+            // rendering yet (roadmap B) — just render the content.
+            let (glyphs, rules, width, left, right) = layout_math_list(interp, ctx, inner, size)?;
+            Ok((glyphs, rules, width, left, right))
+        }
+        Math::ChangeCharClass(cls, inner) => {
+            // gap 5: no longer a layout no-op — lay `inner` out under a
+            // context with `math_char_class` set to `cls`, which is what
+            // `VariantCharPending`/`VariantChar`'s arms above consult.
+            let ctx2 = Context {
+                math_char_class: *cls,
+                ..ctx.clone()
+            };
+            let (glyphs, rules, width, left, right) = layout_math_list(interp, &ctx2, inner, size)?;
+            Ok((glyphs, rules, width, left, right))
         }
         Math::Fraction(num, den) => {
-            // stand-in: a real fraction bar needs the graphics `fill`
-            // rectangle (roadmap C, cross-plan dependency on
-            // docs/plans/graphics-subsystem.md); render as "num / den".
+            // §B2 (`docs/plans/math-engine.md`): real numerator/denominator
+            // placement (`math.ml:574-594` `numerator_baseline_height`/
+            // `denominator_baseline_depth`) plus a bar `Fill` — replaces the
+            // ASCII "num / den" stand-in. `num`/`den` are laid out at the
+            // SAME `size` as this atom (no script-scale reduction — a
+            // fraction's own numerator/denominator aren't scripts, matching
+            // upstream's `convert_to_low` call with the ambient `mathctx`
+            // unchanged).
+            let (num_glyphs, num_rules, num_w, ..) = layout_math_list(interp, ctx, num, size)?;
+            let (den_glyphs, den_rules, den_w, ..) = layout_math_list(interp, ctx, den, size)?;
+            let w = num_w.max(den_w);
+            // Center the narrower of the two over/under the wider
+            // (`math.ml:1140-1155`'s symmetric padding).
+            let num_dx = (w - num_w) * 0.5;
+            let den_dx = (w - den_w) * 0.5;
+            let (_, d_numer) = glyphs_extent(&num_glyphs);
+            let (h_denom, _) = glyphs_extent(&den_glyphs);
+            let mc = MathC::of(interp, ctx.math_font);
+            let numer_shift = mc.frac_numer_shift(size, d_numer);
+            let denom_shift = mc.frac_denom_shift(size, h_denom);
+            let axis = mc.axis(size);
+            let rule = mc.frac_rule(size);
             let mut glyphs = Vec::new();
-            let mut x = Length::ZERO;
-            let (num_glyphs, num_w, ..) = layout_math_list(interp, ctx, num, size)?;
-            append_at(&mut glyphs, &mut x, num_glyphs, num_w);
-            push_char_glyph(interp, ctx, '/', size, &mut glyphs, &mut x)?;
-            let (den_glyphs, den_w, ..) = layout_math_list(interp, ctx, den, size)?;
-            append_at(&mut glyphs, &mut x, den_glyphs, den_w);
-            Ok((glyphs, x, MathKind::Inner, MathKind::Inner))
+            let mut rules = Vec::new();
+            // `num dy>0` (raised above the axis), `den dy<0` (`frac_denom_
+            // shift` is already signed negative — see that method's doc
+            // comment) — both applied via the SAME up-positive `dy_shift`
+            // `shift_and_append` uses for Sup/Sub.
+            shift_and_append(
+                &mut glyphs, &mut rules, num_glyphs, num_rules, num_dx, numer_shift,
+            );
+            shift_and_append(
+                &mut glyphs, &mut rules, den_glyphs, den_rules, den_dx, denom_shift,
+            );
+            // The bar itself: `rect x∈[0,w], y∈[axis·s, axis·s+rule·s]`
+            // (§B2's test-plan shape — a deliberate simplification of
+            // upstream's own `Rectangle((xpos, ypos+h_bar+t_bar/2), (wid,
+            // t_bar))`, which centers the rule on its OWN half-thickness
+            // rather than sitting flush on the axis; this port picks the
+            // simpler flush-on-axis placement instead).
+            rules.push(GraphicsElem::Fill(
+                ctx.text_color,
+                rect_path((Length::ZERO, axis), (w, rule)),
+            ));
+            Ok((glyphs, rules, w, MathKind::Inner, MathKind::Inner))
         }
         Math::Radical(_degree, inner) => {
-            // stand-in: real radical-bar metrics are roadmap C; prefix "√".
+            // §B2: real bar metrics (`math.ml:620-626` `radical_bar_
+            // metrics`) plus a ported `default_radical` checkmark `Fill`
+            // (`primitives.cppo.ml:311-355`) and an overbar rect `Fill` —
+            // replaces the U+221A stand-in. `RadicalWithDegree` (`_degree =
+            // Some(..)`, `\sqrt[n]{..}`) stays unimplemented exactly as
+            // before this slice — the degree is carried faithfully in the
+            // `Math` value but silently NOT drawn, matching upstream's own
+            // parity note (`math.ml:886-899`'s `failwith "unsupported"` is
+            // upstream's harder failure mode; this port's own stand-in
+            // policy, predating §B2, already chose "render the radicand
+            // without the degree" over erroring — §B2 doesn't change that).
+            let (inner_glyphs, inner_rules, inner_w, ..) =
+                layout_math_list(interp, ctx, inner, size)?;
+            let (h_cont, d_cont) = glyphs_extent(&inner_glyphs);
+            let mc = MathC::of(interp, ctx.math_font);
+            let (h_bar, t_bar, l_extra) = mc.radical_bar_metrics(size, h_cont);
+            // `_nonnegdpt` (the sign's own, slightly deeper, ink extent —
+            // `default_radical`'s downward checkmark stroke pads `d_cont` by
+            // `size*0.1`, upstream's own `nonnegdpt`) isn't threaded into
+            // this atom's reported `depth` directly: unlike upstream's own
+            // `d_whole = d_cont` (`math.ml:884`, a "temporary" simplification
+            // per its own comment there), this port's `layout_math_value`
+            // folds every rule's `graphics_bbox` into the OUTER box's
+            // height/depth (§B2's correctness fix, `PureHorzBox::Math`'s doc
+            // comment), so the sign's real ink depth reaches the top-level
+            // box automatically THROUGH the drawn `Fill` — no separate
+            // manual accounting needed here.
+            let (sign_path, sign_w, _nonnegdpt) = radical_sign_geometry(size, h_bar, t_bar, d_cont);
+            let mut rules = vec![GraphicsElem::Fill(ctx.text_color, sign_path)];
+            // Overbar + radicand share the same x-range right after the
+            // sign (`math.ml:1163-1176`'s `hbbar`/`hbback`/`hblstC`); the
+            // radicand itself stays at `dy = 0` (its own baseline), exactly
+            // upstream — `h_bar` already clears it via the vertical-gap add
+            // in `radical_bar_metrics`, so no raise is needed here.
+            rules.push(GraphicsElem::Fill(
+                ctx.text_color,
+                rect_path((sign_w, h_bar), (inner_w, t_bar)),
+            ));
+            // `l_extra`: the extra ascender ABOVE the bar this run reports
+            // to its container (upstream `h_whole = h_rad +% l_extra`,
+            // `math.ml:882`) — no ink of its own, just headroom, so there's
+            // no glyph/fill shape to naturally carry it. A single-point
+            // "extent marker" `Fill` (a subpath with a `move_to` and no
+            // further segments paints nothing — PDF's `f` on a degenerate
+            // zero-length path is a no-op) reports it through the SAME
+            // `graphics_bbox` fold `layout_math_value` already does for
+            // every rule, without adding a new return channel just for this
+            // one field.
+            rules.push(GraphicsElem::Fill(
+                ctx.text_color,
+                Path {
+                    subpaths: vec![Subpath {
+                        start: (Length::ZERO, h_bar + t_bar + l_extra),
+                        segs: Vec::new(),
+                        closing: Closing::Open,
+                    }],
+                },
+            ));
             let mut glyphs = Vec::new();
-            let mut x = Length::ZERO;
-            push_char_glyph(interp, ctx, '\u{221A}', size, &mut glyphs, &mut x)?;
-            let (inner_glyphs, inner_w, ..) = layout_math_list(interp, ctx, inner, size)?;
-            append_at(&mut glyphs, &mut x, inner_glyphs, inner_w);
-            Ok((glyphs, x, MathKind::Inner, MathKind::Inner))
+            for mut g in inner_glyphs {
+                g.dx = sign_w + g.dx;
+                glyphs.push(g);
+            }
+            for r in &inner_rules {
+                rules.push(shift_graphics((sign_w, Length::ZERO), r));
+            }
+            Ok((glyphs, rules, sign_w + inner_w, MathKind::Inner, MathKind::Inner))
         }
         Math::Paren(_l, _r, inner) => {
-            // stand-in: real stretchy-delimiter drawing is roadmap D
-            // (glyph-assembly/graphics paths); bracket with literal parens.
+            // §B3b(i): a real MATH-native stretchy delimiter, sized to cover
+            // the inner run's own ink extent (glyphs + drawn rules) and
+            // centered on the math axis, replacing the literal-parenthesis
+            // stand-in. `_l`/`_r` (the `make_paren` closures selecting
+            // bracket/brace/abs/… glyphs) are still not invoked — every
+            // delimiter renders as a correctly-SIZED `(`/`)` regardless of
+            // the requested kind (identity-wrong exactly as before this
+            // slice, no worse — the `make_paren`-invocation follow-up,
+            // §B3b-2, is out of scope here). Inner is laid out FIRST (to
+            // measure `h_in`/`d_in`) but appended to `glyphs` only after the
+            // opening delimiter is pushed, so the emitted glyph ORDER
+            // ('(', inner..., ')') matches pre-§B3 exactly — local
+            // coordinates make the layout call itself order-independent.
+            let (inner_glyphs, inner_rules, inner_w, ..) =
+                layout_math_list(interp, ctx, inner, size)?;
+            let (h_in, d_in) = inner_ink_extent(&inner_glyphs, &inner_rules);
+            let mc = MathC::of(interp, ctx.math_font);
+            let axis = mc.axis(size);
+            let target = (h_in - axis).max(axis + d_in) * 2.0;
             let mut glyphs = Vec::new();
+            let mut rules = Vec::new();
             let mut x = Length::ZERO;
-            push_char_glyph(interp, ctx, '(', size, &mut glyphs, &mut x)?;
-            let (inner_glyphs, inner_w, ..) = layout_math_list(interp, ctx, inner, size)?;
-            append_at(&mut glyphs, &mut x, inner_glyphs, inner_w);
-            push_char_glyph(interp, ctx, ')', size, &mut glyphs, &mut x)?;
-            Ok((glyphs, x, MathKind::Open, MathKind::Close))
+            push_delimiter_glyph(interp, ctx, '(', size, target, axis, &mut glyphs, &mut x)?;
+            append_at(&mut glyphs, &mut rules, &mut x, inner_glyphs, inner_rules, inner_w);
+            push_delimiter_glyph(interp, ctx, ')', size, target, axis, &mut glyphs, &mut x)?;
+            Ok((glyphs, rules, x, MathKind::Open, MathKind::Close))
         }
         Math::ParenWithMiddle(_l, _r, _m, mlstlst) => {
-            let mut glyphs = Vec::new();
-            let mut x = Length::ZERO;
-            push_char_glyph(interp, ctx, '(', size, &mut glyphs, &mut x)?;
-            for (i, part) in mlstlst.iter().enumerate() {
-                if i > 0 {
-                    push_char_glyph(interp, ctx, '|', size, &mut glyphs, &mut x)?;
-                }
-                let (part_glyphs, part_w, ..) = layout_math_list(interp, ctx, part, size)?;
-                append_at(&mut glyphs, &mut x, part_glyphs, part_w);
+            // Same policy as `Math::Paren`, but ONE shared `target`/`axis`
+            // over every part (the tallest part's ink drives the size of
+            // every delimiter, including the `|`s — both test fonts carry
+            // vertical constructions for `|`, so it grows too, not just the
+            // outer parens).
+            let mut parts = Vec::with_capacity(mlstlst.len());
+            let mut h_in = Length::ZERO;
+            let mut d_in = Length::ZERO;
+            for part in mlstlst {
+                let (part_glyphs, part_rules, part_w, ..) =
+                    layout_math_list(interp, ctx, part, size)?;
+                let (h, d) = inner_ink_extent(&part_glyphs, &part_rules);
+                h_in = h_in.max(h);
+                d_in = d_in.max(d);
+                parts.push((part_glyphs, part_rules, part_w));
             }
-            push_char_glyph(interp, ctx, ')', size, &mut glyphs, &mut x)?;
-            Ok((glyphs, x, MathKind::Open, MathKind::Close))
+            let mc = MathC::of(interp, ctx.math_font);
+            let axis = mc.axis(size);
+            let target = (h_in - axis).max(axis + d_in) * 2.0;
+            let mut glyphs = Vec::new();
+            let mut rules = Vec::new();
+            let mut x = Length::ZERO;
+            push_delimiter_glyph(interp, ctx, '(', size, target, axis, &mut glyphs, &mut x)?;
+            for (i, (part_glyphs, part_rules, part_w)) in parts.into_iter().enumerate() {
+                if i > 0 {
+                    push_delimiter_glyph(interp, ctx, '|', size, target, axis, &mut glyphs, &mut x)?;
+                }
+                append_at(&mut glyphs, &mut rules, &mut x, part_glyphs, part_rules, part_w);
+            }
+            push_delimiter_glyph(interp, ctx, ')', size, target, axis, &mut glyphs, &mut x)?;
+            Ok((glyphs, rules, x, MathKind::Open, MathKind::Close))
         }
         Math::UpperLimit(base, upper) => {
-            let (mut glyphs, base_width, left, right) = layout_math_list(interp, ctx, base, size)?;
-            let script_size = size * SCRIPT_SCALE;
-            let (script_glyphs, script_width, _, _) =
+            let (mut glyphs, mut rules, base_width, left, right) =
+                layout_math_list(interp, ctx, base, size)?;
+            let mc = MathC::of(interp, ctx.math_font);
+            let script_size = size * mc.script_scale();
+            let (script_glyphs, script_rules, script_width, _, _) =
                 layout_math_list(interp, ctx, upper, script_size)?;
-            shift_and_append(&mut glyphs, script_glyphs, base_width, ctx.font_size * SUP_SHIFT);
-            Ok((glyphs, base_width + script_width, left, right))
+            let (h_base, _) = glyphs_extent(&glyphs);
+            let (_, d_up) = glyphs_extent(&script_glyphs);
+            let up_shift = mc.upper_limit_shift(ctx.font_size, h_base, d_up);
+            shift_and_append(
+                &mut glyphs, &mut rules, script_glyphs, script_rules, base_width, up_shift,
+            );
+            Ok((glyphs, rules, base_width + script_width, left, right))
         }
         Math::LowerLimit(base, lower) => {
-            let (mut glyphs, base_width, left, right) = layout_math_list(interp, ctx, base, size)?;
-            let script_size = size * SCRIPT_SCALE;
-            let (script_glyphs, script_width, _, _) =
+            let (mut glyphs, mut rules, base_width, left, right) =
+                layout_math_list(interp, ctx, base, size)?;
+            let mc = MathC::of(interp, ctx.math_font);
+            let script_size = size * mc.script_scale();
+            let (script_glyphs, script_rules, script_width, _, _) =
                 layout_math_list(interp, ctx, lower, script_size)?;
+            let (_, d_base) = glyphs_extent(&glyphs);
+            let (h_low, _) = glyphs_extent(&script_glyphs);
+            let low_shift = mc.lower_limit_shift(ctx.font_size, d_base, h_low);
             shift_and_append(
-                &mut glyphs,
-                script_glyphs,
-                base_width,
-                -(ctx.font_size * SUB_SHIFT),
+                &mut glyphs, &mut rules, script_glyphs, script_rules, base_width, -low_shift,
             );
-            Ok((glyphs, base_width + script_width, left, right))
+            Ok((glyphs, rules, base_width + script_width, left, right))
         }
         Math::PullInScripts(cls1, cls2, resolver) => {
-            // Real usage: call the resolver with (None, None) — the common
-            // "nothing pulled in" case (a bare `\sum`/`\int` with no
-            // immediately-following `^`/`_`) — and lay out the result.
-            let none = Value::Ctor("None".to_string(), None);
-            let partial = interp.apply((**resolver).clone(), none.clone())?;
-            let result = interp.apply(partial, none)?;
-            let m = as_math(interp, result)?;
-            let (glyphs, width, _, _) = layout_math_list(interp, ctx, &m, size)?;
-            Ok((glyphs, width, *cls1, *cls2))
+            // Not consumed by an enclosing Sub/Sup (bare `\sum` with no
+            // scripts): resolver gets (None, None).
+            layout_pull_in_scripts(interp, ctx, &[], *cls1, *cls2, resolver, None, None, size)
         }
     }
 }
 
-/// Append `glyphs` (already at LOCAL coordinates relative to their own run)
-/// onto `out` at the running `*x`, advancing `*x` past them — the
-/// no-spacing-adjustment sibling of `layout_math_list`'s per-atom loop, used
-/// by the structural stand-ins above (fraction/radical/paren) that
+/// Append `glyphs`/`rules` (already at LOCAL coordinates relative to their
+/// own run) onto `out_glyphs`/`out_rules` at the running `*x`, advancing `*x`
+/// past them — the no-spacing-adjustment sibling of `layout_math_list`'s
+/// per-atom loop, used by the structural stand-ins above (paren) that
 /// concatenate sub-runs directly rather than through the spacing table.
-fn append_at(out: &mut Vec<MathGlyph>, x: &mut Length, glyphs: Vec<MathGlyph>, width: Length) {
+/// `rules` shifts horizontally only (`shift_graphics` with a zero `dy` —
+/// `append_at`'s callers never raise/lower a sub-run, only `dx`-place it;
+/// contrast `shift_and_append` below, which does both).
+fn append_at(
+    out_glyphs: &mut Vec<MathGlyph>,
+    out_rules: &mut Vec<GraphicsElem>,
+    x: &mut Length,
+    glyphs: Vec<MathGlyph>,
+    rules: Vec<GraphicsElem>,
+    width: Length,
+) {
     let base_x = *x;
     for mut g in glyphs {
         g.dx = base_x + g.dx;
-        out.push(g);
+        out_glyphs.push(g);
+    }
+    for r in &rules {
+        out_rules.push(shift_graphics((base_x, Length::ZERO), r));
     }
     *x = base_x + width;
 }
 
-/// Append `glyphs` (LOCAL coordinates, from an isolated `layout_math_list`
-/// call) onto `out`, shifting every glyph right by `dx_shift` (its base's
-/// own width — placing the script right after the base) and up/down by
-/// `dy_shift` (`> 0` raises, superscript; `< 0` lowers, subscript) — the
-/// `Math`-atom analog of Slice 1's `place_script`, which instead threads a
-/// single running `x` across a flat `MathElem` list.
+/// Append `glyphs`/`rules` (LOCAL coordinates, from an isolated
+/// `layout_math_list` call) onto `out_glyphs`/`out_rules`, shifting every
+/// glyph/rule right by `dx_shift` (its base's own width — placing the
+/// script/numerator/denominator/radicand right after the preceding content)
+/// and up/down by `dy_shift` (`> 0` raises, `< 0` lowers) — the `Math`-atom
+/// analog of Slice 1's `place_script`, which instead threads a single
+/// running `x` across a flat `MathElem` list. `rules` go through the SAME
+/// `shift_graphics` (`docs/plans/graphics-subsystem.md`) a standalone
+/// `inline-graphics` box's `shift-graphics` primitive uses — box-local,
+/// y-**up** coordinates, exactly `MathGlyph::dy`'s sign convention (§B2's
+/// critical correctness note: get this sign wrong and a fraction bar/
+/// radical mirrors instead of landing at the axis).
 fn shift_and_append(
-    out: &mut Vec<MathGlyph>,
+    out_glyphs: &mut Vec<MathGlyph>,
+    out_rules: &mut Vec<GraphicsElem>,
     glyphs: Vec<MathGlyph>,
+    rules: Vec<GraphicsElem>,
     dx_shift: Length,
     dy_shift: Length,
 ) {
     for mut g in glyphs {
         g.dx = dx_shift + g.dx;
         g.dy = g.dy + dy_shift;
-        out.push(g);
+        out_glyphs.push(g);
     }
+    for r in &rules {
+        out_rules.push(shift_graphics((dx_shift, dy_shift), r));
+    }
+}
+
+/// An axis-aligned rectangle `Fill` path, box-local (y-**up**): bottom-left
+/// corner `origin`, extending `size.0` right and `size.1` up. Shared by the
+/// fraction bar and the radical overbar (§B2) — both are exactly this
+/// shape, just at different `y`/width.
+fn rect_path(origin: Point, size: (Length, Length)) -> Path {
+    let (x, y) = origin;
+    let (w, h) = size;
+    Path {
+        subpaths: vec![Subpath {
+            start: (x, y),
+            segs: vec![
+                PathSeg::Line((x + w, y)),
+                PathSeg::Line((x + w, y + h)),
+                PathSeg::Line((x, y + h)),
+            ],
+            closing: Closing::Line,
+        }],
+    }
+}
+
+/// Port of `default_radical` (`primitives.cppo.ml:311-355`): the radical
+/// checkmark's `GeneralPath`, plus its own natural advance (`wid`, upstream's
+/// `PHGFixedGraphics`'s declared width) and `nonnegdpt` (its own depth
+/// extent, upstream's declared `depth` — returned for completeness though
+/// §B2's overall `Math::Radical` depth uses `d_cont` directly, matching
+/// upstream's own "temporary" simplification, see that arm's call site).
+/// `size` is the ambient LOCAL nesting size (upstream `fontsize`); `hgt_bar`/
+/// `t_bar` come from `MathC::radical_bar_metrics`; `dpt` is the radicand's
+/// own depth (a NON-NEGATIVE magnitude, this port's convention — see
+/// `sup_shift_clamped`'s doc comment; upstream's signed `Length.negate dpt`
+/// becomes a plain ADD of `dpt` here).
+///
+/// Box-local origin `(0, 0)` = this atom's own baseline-left corner (where
+/// upstream's `graphics (xpos, ypos)` closure is finally called with the
+/// box's placed anchor — every point below is relative to that same origin,
+/// matching `PathSeg`/`Subpath`'s y-**up** convention).
+fn radical_sign_geometry(
+    size: Length,
+    hgt_bar: Length,
+    t_bar: Length,
+    dpt: Length,
+) -> (Path, Length, Length) {
+    let w_m = size * 0.02;
+    let w1 = size * 0.1;
+    let w2 = size * 0.15;
+    let w3 = size * 0.4;
+    let w_a = size * 0.18;
+    let h1 = size * 0.3;
+    let h2 = size * 0.375;
+
+    let nonnegdpt = dpt + size * 0.1;
+    let l_r = hgt_bar + nonnegdpt;
+
+    let wid = w_m + w1 + w2 + w3;
+    let a1 = (h2 - h1) / w1;
+    let a2 = h2 / w2;
+    let a3 = l_r / w3;
+    let t1 = t_bar * (1.0 + a1 * a1).sqrt();
+    let t3 = t_bar * (((1.0 + a3 * a3).sqrt() - 1.0) / a3);
+    let h_a = h1 + t1 + w_a * a1;
+    let w_b = (l_r + t_bar - h_a - (w1 + w2 + w3 - t3 - w_a) * a3) * (-1.0 / (a2 + a3));
+    let h_b = h_a - w_b * a2;
+
+    let path = Path {
+        subpaths: vec![Subpath {
+            start: (wid, hgt_bar),
+            segs: vec![
+                PathSeg::Line((w_m + w1 + w2, -nonnegdpt)),
+                PathSeg::Line((w_m + w1, -nonnegdpt + h2)),
+                PathSeg::Line((w_m, -nonnegdpt + h1)),
+                PathSeg::Line((w_m, -nonnegdpt + h1 + t1)),
+                PathSeg::Line((w_m + w_a, -nonnegdpt + h_a)),
+                PathSeg::Line((w_m + w_a + w_b, -nonnegdpt + h_b)),
+                PathSeg::Line((wid - t3, hgt_bar + t_bar)),
+                PathSeg::Line((wid, hgt_bar + t_bar)),
+            ],
+            closing: Closing::Line,
+        }],
+    };
+    (path, wid, nonnegdpt)
+}
+
+/// Gap 6: flatten `text-in-math`'s embedded `inline-boxes` (already laid out
+/// by `read_inline` against the math atom's own context) into `MathGlyph`s
+/// nestable in a math run — the box-in-math bridge `layout_math_atom`'s
+/// `EmbeddedText` arm needs. Mirrors `linebreak.rs`'s `natural_metrics`
+/// exhaustive `PureHorzBox` walk EXACTLY (same variant list, same "what
+/// advances `x`" choice per variant) so an added/renamed `PureHorzBox`
+/// variant can't silently drop content here without also breaking that
+/// walk. Caveats (faithful to what's actually renderable at Slice 1): only
+/// `InnerString`/nested `Math` boxes contribute real glyphs (hence height/
+/// depth, computed by the caller from the returned glyphs); every other
+/// box kind (`Image`/`Graphics`/`Tabular`/`EmbeddedBlock`/…) keeps its
+/// horizontal space but contributes no ink; text run at full (non-script)
+/// size regardless of the math run's own `size` (upstream-faithful — a
+/// `text-in-math` body is laid out once, by `read_inline`, before this
+/// function ever sees it).
+fn math_glyphs_of_inline_boxes(boxes: &[HorzBox]) -> (Vec<MathGlyph>, Length) {
+    fn go(pure: &PureHorzBox, out: &mut Vec<MathGlyph>, x: &mut Length) {
+        match pure {
+            PureHorzBox::InnerString {
+                info,
+                text,
+                width,
+                height,
+                depth,
+            } => {
+                out.push(MathGlyph {
+                    info: info.clone(),
+                    text: text.clone(),
+                    gid: None,
+                    dx: *x,
+                    dy: Length::ZERO,
+                    width: *width,
+                    height: *height,
+                    depth: *depth,
+                });
+                *x += *width;
+            }
+            PureHorzBox::OuterEmpty { natural, .. } => *x += *natural,
+            PureHorzBox::OuterFil => {}
+            PureHorzBox::FixedEmpty { width } => *x += *width,
+            PureHorzBox::Image { width, .. } => *x += *width,
+            PureHorzBox::Discretionary { no_break, .. } => {
+                for p in no_break {
+                    go(p, out, x);
+                }
+            }
+            PureHorzBox::Graphics { width, .. } => *x += *width,
+            PureHorzBox::Math { width, glyphs, .. } => {
+                for g in glyphs {
+                    let mut g = g.clone();
+                    g.dx = *x + g.dx;
+                    out.push(g);
+                }
+                *x += *width;
+            }
+            PureHorzBox::HookPageBreak { .. } => {}
+            PureHorzBox::Tabular(tab) => *x += tab.width,
+            PureHorzBox::EmbeddedBlock { width, .. } => *x += *width,
+        }
+    }
+    let mut glyphs = Vec::new();
+    let mut x = Length::ZERO;
+    for HorzBox::Pure(p) in boxes {
+        go(p, &mut glyphs, &mut x);
+    }
+    (glyphs, x)
 }
 
 // ============================================================================
@@ -3598,14 +4823,7 @@ fn prim_set_font(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, Ev
     let ctx = as_context(args.pop().unwrap())?;
     let (abbrev, _size_ratio, _rising_ratio) = as_font(args.pop().unwrap())?;
     let _script = args.pop().unwrap();
-    let lower = abbrev.to_ascii_lowercase();
-    let font = if lower.contains("bold") {
-        FONT_BOLD
-    } else if lower.contains("it") || lower.contains("obl") || lower.contains("slant") {
-        FONT_OBLIQUE
-    } else {
-        FONT_REGULAR
-    };
+    let font = resolve_font_abbrev(&abbrev);
     Ok(Value::Context(Box::new(Context { font, ..ctx })))
 }
 

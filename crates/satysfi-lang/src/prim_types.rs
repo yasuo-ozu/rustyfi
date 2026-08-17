@@ -76,8 +76,11 @@ pub fn t_math_class() -> MonoType {
 /// MathBoldScript | MathFraktur | MathBoldFraktur | MathDoubleStruck`) — a
 /// built-in variant, registered by [`builtin_variants`]. Needed for
 /// `math.satyh`'s `sig` (`\math-style : [math-char-class; math] math-cmd`)
-/// and its `\mathrm`/`\mathbf`/`\mathcal`/… definitions to type-check, even
-/// though the actual Unicode-math-block restyling it names is roadmap F.
+/// and its `\mathrm`/`\mathbf`/`\mathcal`/… definitions to type-check —
+/// gap 5 (`docs/plans/math-mode-language-gaps.md`) resolves the actual
+/// Unicode-math-block restyling this variant names (`satysfi_backend::
+/// MathCharClass`/`resolve_variant_char`) once evaluation reaches a value
+/// of this type.
 pub fn t_math_char_class() -> MonoType {
     MonoType::Variant("math-char-class".to_string(), Vec::new())
 }
@@ -567,8 +570,10 @@ pub fn primitive_type(name: &str) -> Option<PolyType> {
         // (`class-signature-lang-gaps.md` gap 1) constructs the first-class
         // command reference this needs; every call site now passes
         // `(command \math)` (or a local stub command) instead of `()`.
-        // `prim_get_initial_context` (primitives.rs) still ignores the
-        // *value* completely — this only tightens the declared type.
+        // FAITHFUL: `prim_get_initial_context` (primitives.rs) interns the
+        // command via `Interp::register_math_command` and installs it as
+        // `Context::math_command`, consulted by `read_inline`'s `EmbedMath`
+        // arm for bare `${…}` in prose.
         "get-initial-context" => poly0(arrow(
             t_length(),
             arrow(inline_cmd(vec![mandatory(t_math_text())]), t_context()),
@@ -941,6 +946,23 @@ pub fn primitive_type(name: &str) -> Option<PolyType> {
             vec![t_math_class(), t_math_variant_style()],
             t_math(),
         )),
+        // gap 7 (`docs/plans/math-mode-language-gaps.md`) — no bundled
+        // `.satyh` consumer, but v0.0.6-shaped: `math-char-class -> int ->
+        // int -> context -> context` (`set-math-variant-char`); `context ->
+        // math -> math-class option` (the boundary-class introspection
+        // pair).
+        "set-math-variant-char" => poly0(arrows(
+            vec![t_math_char_class(), t_int(), t_int(), t_context()],
+            t_context(),
+        )),
+        "get-left-math-class" => poly0(arrows(
+            vec![t_context(), t_math()],
+            t_option(t_math_class()),
+        )),
+        "get-right-math-class" => poly0(arrows(
+            vec![t_context(), t_math()],
+            t_option(t_math_class()),
+        )),
         // vminst.ml:294 `BackendMathParen`:
         // `~% (tPAREN @-> tPAREN @-> tMATH @-> tMATH)`. Phase D.
         "math-paren" => poly0(arrows(vec![t_paren(), t_paren(), t_math()], t_math())),
@@ -969,10 +991,10 @@ pub fn primitive_type(name: &str) -> Option<PolyType> {
         "embed-math" => poly0(arrows(vec![t_context(), t_math()], t_inline_boxes())),
         // vminst.ml:77 `PrimitiveSetMathCommand`:
         // `~% (tICMD tMATH @-> tCTX @-> tCTX)` — installs the default
-        // command a bare `${…}`-in-text dispatches to. STAND-IN body: Slice
-        // 1 fuses `${…}` handling directly into `read_inline`'s `EmbedMath`
-        // arm, so the installed command isn't consulted anywhere yet (not
-        // called by `math.satyh` itself; registered for signature parity).
+        // command a bare `${…}`-in-text dispatches to. FAITHFUL: interned
+        // via `Interp::register_math_command` and installed as
+        // `Context::math_command`, consulted by `read_inline`'s `EmbedMath`
+        // arm.
         "set-math-command" => poly0(arrow(
             inline_cmd(vec![mandatory(t_math())]),
             arrow(t_context(), t_context()),

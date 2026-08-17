@@ -120,11 +120,14 @@ pub enum IText {
     /// `#expr;` — an embedded expression evaluating to inline-text, spliced
     /// in place (`UTInputHorzContent`).
     Embed { expr: Ast, span: Span },
-    /// `${…}` embedded math (`UTInputHorzEmbeddedMath`); `read_inline`
-    /// (`primitives.rs`'s `read_math`) walks this into a `PureHorzBox::Math`
-    /// as of `docs/plans/math-engine.md` §Slice 1 (fixed-constant
-    /// super/subscript shift/scale, no MATH table yet). `MathElem::Cmd`/
-    /// `Embed` still error cleanly — the math package itself is roadmap A.
+    /// `${…}` embedded math (`UTInputHorzEmbeddedMath`). `read_inline`'s
+    /// `EmbedMath` arm (`primitives.rs`) applies the context's installed
+    /// `[math] inline-cmd` (`Context::math_command`, Gap 1 —
+    /// `class-signature-lang-gaps.md`) to `(ctx, math value)`, exactly like
+    /// upstream — `\cmd`/`#var` inside the literal go through
+    /// `reflect_math_elem`/`as_math`. Contexts with no installed command
+    /// (built by `Context::initial` directly, i.e. unit tests) fall back to
+    /// reflecting + laying out through the same faithful engine directly.
     EmbedMath {
         elems: Rc<Vec<MathElem>>,
         span: Span,

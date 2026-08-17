@@ -4,7 +4,7 @@
 use crate::ast::{Ast, Pattern};
 use crate::crossref::CrossRefs;
 use crate::value::{Env, Value};
-use satysfi_backend::{FontMetrics, ImageResource};
+use satysfi_backend::{FontMetrics, ImageResource, MathCmdId};
 use satysfi_syntax::Span;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -55,6 +55,12 @@ pub struct Interp<'a> {
     /// exception), read back by `fire_hooks` once `break_pages` has placed
     /// every hook and its final geometry is known.
     pub hooks: Vec<Value>,
+    /// Installed-math-command table (`get-initial-context`/
+    /// `set-math-command` push here; `Context::math_command` holds the
+    /// index) — the `ImageId`/`HookId`-style seam, because the backend
+    /// `Context` cannot hold a lang-side `Value`. Read back by
+    /// `read_inline`'s `EmbedMath` arm.
+    pub math_commands: Vec<Value>,
     /// The cross-reference table, shared with the compile driver
     /// (`lib.rs::compile_document_cst`) across every trial of the fixpoint
     /// loop — unlike `hooks`/`images`, this must *not* reset per trial, so
@@ -77,6 +83,7 @@ impl<'a> Interp<'a> {
             metrics,
             images: Vec::new(),
             hooks: Vec::new(),
+            math_commands: Vec::new(),
             crossrefs: Rc::new(RefCell::new(CrossRefs::new())),
             arg_cache: std::collections::HashMap::new(),
         }
@@ -351,6 +358,13 @@ impl<'a> Interp<'a> {
                 ))
             }
         }
+    }
+
+    /// Intern an installed math command, returning the handle a `Context`
+    /// carries (`Context::math_command`).
+    pub fn register_math_command(&mut self, cmd: Value) -> MathCmdId {
+        self.math_commands.push(cmd);
+        MathCmdId(self.math_commands.len() - 1)
     }
 
     pub fn apply(&mut self, func: Value, arg: Value) -> Result<Value, EvalError> {

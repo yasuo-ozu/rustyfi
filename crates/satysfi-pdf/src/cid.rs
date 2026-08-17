@@ -207,15 +207,36 @@ fn emit_box(
         PureHorzBox::Graphics { elems, .. } => {
             place_graphics(content, elems, tx, ty);
         }
-        PureHorzBox::Math { glyphs, .. } => {
-            place_math(content, glyphs, tx, ty, |info, text| {
-                let file_idx = store.file_index(info.font);
-                let face = store.face_by_file(file_idx).ok_or_else(|| {
-                    PdfError::NoGlyph(text.chars().next().unwrap_or('\u{FFFD}'))
-                })?;
+        PureHorzBox::Math { glyphs, rules, .. } => {
+            place_math(content, glyphs, tx, ty, |g| {
+                let file_idx = store.file_index(g.info.font);
                 let file_usage = usage.entry(file_idx).or_default();
-                encode_glyph_run(&face, text, file_usage)
+                match g.gid {
+                    // §B3: a raw MATH-table variant glyph id
+                    // (`push_big_char_glyph`/`push_delimiter_glyph`) — not
+                    // necessarily cmap-reachable from `g.text`, so emit it
+                    // directly (Identity-H: content bytes ARE gids) rather
+                    // than re-deriving a gid through `glyph_index`.
+                    Some(gid) => {
+                        file_usage
+                            .glyphs
+                            .entry(gid)
+                            .or_insert(g.text.chars().next().unwrap_or('\u{FFFD}'));
+                        Ok(gid.to_be_bytes().to_vec())
+                    }
+                    None => {
+                        let face = store.face_by_file(file_idx).ok_or_else(|| {
+                            PdfError::NoGlyph(g.text.chars().next().unwrap_or('\u{FFFD}'))
+                        })?;
+                        encode_glyph_run(&face, &g.text, file_usage)
+                    }
+                }
             })?;
+            // §B2: same fraction-bar/radical-sign `Fill`s as `render_pdf`'s
+            // base-14 writer (`lib.rs`'s Math arm) — the CID writer shares
+            // `place_graphics` unchanged, since a filled path carries no
+            // font/text state either writer needs to specialize.
+            place_graphics(content, rules, tx, ty);
         }
         PureHorzBox::Tabular(tab) => {
             for cell in &tab.cells {

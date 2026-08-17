@@ -396,6 +396,52 @@ fn optional_argument_type_grammar() {
 }
 
 #[test]
+fn math_command_names_plain_and_qualified() {
+    use satysfi_syntax::leaf::AnyMathCmdTok;
+
+    let file = parse_file(r"${\cmd{x}}").unwrap();
+    let Some(cst::ast::Expr::Ops(chain)) = file.body else {
+        panic!("expected Ops body");
+    };
+    let cst::ast::Atomic::MathText { elems, .. } = chain.head.head else {
+        panic!("expected math text");
+    };
+    let cst::ast::MathBot::Cmd { name, .. } = &elems[0].base else {
+        panic!("expected a math command");
+    };
+    assert!(matches!(name, AnyMathCmdTok::Plain(t) if t.name == r"\cmd"));
+
+    let file = parse_file(r"${\Mod.cmd{x}}").unwrap();
+    let Some(cst::ast::Expr::Ops(chain)) = file.body else {
+        panic!("expected Ops body");
+    };
+    let cst::ast::Atomic::MathText { elems, .. } = chain.head.head else {
+        panic!("expected math text");
+    };
+    let cst::ast::MathBot::Cmd { name, .. } = &elems[0].base else {
+        panic!("expected a math command");
+    };
+    match name {
+        AnyMathCmdTok::Mod(t) => {
+            assert_eq!(t.mods, vec!["Mod".to_string()]);
+            assert_eq!(t.name, r"\cmd");
+        }
+        AnyMathCmdTok::Plain(_) => panic!("expected a qualified math command"),
+    }
+}
+
+#[test]
+fn math_lists() {
+    // Gap 3 (`docs/plans/math-mode-language-gaps.md`): a leading `|` puts
+    // the math area in list mode (`mathblock`, parser.mly:1059-1066).
+    // `Token::Sep` already round-tripped before Gap 3 landed (elaboration,
+    // not parsing, used to reject these) — this just documents the shape.
+    assert_roundtrip("${| a | b |}");
+    assert_roundtrip("${|}");
+    assert_roundtrip("${||}");
+}
+
+#[test]
 fn itemize_markers() {
     let file = parse_file("{ * a ** b }").unwrap();
     let Some(cst::ast::Expr::Ops(chain)) = file.body else {
@@ -415,6 +461,67 @@ fn math_round_trips() {
     assert_roundtrip("${a_1'}");
     assert_roundtrip("${\\cmd!(3){x}}");
     assert_roundtrip("{ a ${x+y} b }");
+    assert_roundtrip("${\\Mod.cmd{x}}");
+}
+
+#[test]
+fn math_optional_args_round_trip() {
+    // Gap 4 (`docs/plans/math-mode-language-gaps.md`): `matharg`'s `?:`-
+    // supplied (`MathArg::Optional`), `?*`-omitted (`MathArg::Omission`), and
+    // plain (`MathArg::Plain`) shapes, the latter two exercising the
+    // `!`-escape body forms too (`MathArgBody`'s `ParenEscape`).
+    assert_roundtrip("${\\cmd?:{x}{y}}");
+    assert_roundtrip("${\\cmd?*{y}}");
+    assert_roundtrip("${\\cmd?:!(3){y}}");
+}
+
+#[test]
+fn math_optional_args_cst_shape() {
+    use satysfi_syntax::leaf::AnyMathCmdTok;
+
+    let file = parse_file(r"${\cmd?:{x}{y}}").unwrap();
+    let Some(cst::ast::Expr::Ops(chain)) = file.body else {
+        panic!("expected Ops body");
+    };
+    let cst::ast::Atomic::MathText { elems, .. } = chain.head.head else {
+        panic!("expected math text");
+    };
+    let cst::ast::MathBot::Cmd { name, args } = &elems[0].base else {
+        panic!("expected a math command");
+    };
+    assert!(matches!(name, AnyMathCmdTok::Plain(t) if t.name == r"\cmd"));
+    assert_eq!(args.len(), 2);
+    match &args[0] {
+        cst::ast::MathArg::Optional { body, .. } => {
+            assert!(matches!(body, cst::ast::MathArgBody::Math { .. }));
+        }
+        other => panic!("expected an Optional matharg, got {other:?}"),
+    }
+    match &args[1] {
+        cst::ast::MathArg::Plain(body) => {
+            assert!(matches!(body, cst::ast::MathArgBody::Math { .. }));
+        }
+        other => panic!("expected a Plain matharg, got {other:?}"),
+    }
+
+    let file = parse_file(r"${\cmd?*{y}}").unwrap();
+    let Some(cst::ast::Expr::Ops(chain)) = file.body else {
+        panic!("expected Ops body");
+    };
+    let cst::ast::Atomic::MathText { elems, .. } = chain.head.head else {
+        panic!("expected math text");
+    };
+    let cst::ast::MathBot::Cmd { args, .. } = &elems[0].base else {
+        panic!("expected a math command");
+    };
+    assert_eq!(args.len(), 2);
+    assert!(matches!(args[0], cst::ast::MathArg::Omission(_)));
+    match &args[1] {
+        cst::ast::MathArg::Plain(body) => {
+            assert!(matches!(body, cst::ast::MathArgBody::Math { .. }));
+        }
+        other => panic!("expected a Plain matharg, got {other:?}"),
+    }
 }
 
 #[test]

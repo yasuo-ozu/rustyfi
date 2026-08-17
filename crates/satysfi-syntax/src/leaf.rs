@@ -87,6 +87,8 @@ qualified_name_tokens! {
     HorzCmdWithModTok => HorzCmdWithMod, "a qualified inline command";
     /// A module-qualified block command, e.g. `+Mod.cmd`.
     VertCmdWithModTok => VertCmdWithMod, "a qualified block command";
+    /// A module-qualified math command, e.g. `\Mod.cmd` in math mode.
+    MathCmdWithModTok => MathCmdWithMod, "a qualified math command";
 }
 
 /// Either sigil-only (`\cmd`) or module-qualified (`\Mod.cmd`) inline command
@@ -104,6 +106,14 @@ pub enum AnyHorzCmdTok {
 pub enum AnyVertCmdTok {
     Plain(VertCmdTok),
     Mod(VertCmdWithModTok),
+}
+
+/// Either sigil-only (`\cmd`) or module-qualified (`\Mod.cmd`) math
+/// command name in math mode — the math analogue of `AnyHorzCmdTok`.
+#[derive(Parse, Unparse, Debug, Clone, PartialEq)]
+pub enum AnyMathCmdTok {
+    Plain(MathCmdTok),
+    Mod(MathCmdWithModTok),
 }
 
 /// A length constant such as `12pt` (two payload fields, hand-written).

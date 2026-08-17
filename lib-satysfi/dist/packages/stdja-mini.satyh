@@ -31,9 +31,12 @@
 %
 %  - `get-initial-context`'s second argument is now the REAL `[math]
 %    inline-cmd` (`docs/plans/math-engine.md` §G, restored in
-%    prim_types.rs): a local `\math` stub (never actually invoked, since
-%    this mini-package has no math mode) is defined below purely so
-%    `(command \math)` can be passed here.
+%    prim_types.rs) and is FAITHFULLY installed as `Context::math_command`
+%    (Gap 1, `class-signature-lang-gaps.md`): `read_inline`'s `EmbedMath`
+%    arm applies it to every bare `${…}` in prose. `\math` below is that
+%    installed command, and just forwards to `embed-math` (`+math`'s own
+%    primitive bridge) so a bare `${…}` renders identically to what
+%    `+math(${…})` produces.
 %
 %  - `\emph`/`\bold` switch faces via `set-font-key`, a LOCAL
 %    (non-upstream) primitive (primitives.rs) that sets the context's
@@ -41,7 +44,7 @@
 %    (keys 2 and 1 respectively), standing in for upstream's much richer
 %    `set-font : script -> (string * float * float) -> context -> context`.
 
-let-inline ctx \math m = inline-nil
+let-inline ctx \math m = embed-math ctx m
 
 let document record bt =
   let ctx = get-initial-context 440pt (command \math) in

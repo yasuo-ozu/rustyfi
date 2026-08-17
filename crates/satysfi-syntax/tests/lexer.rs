@@ -328,6 +328,19 @@ fn math_mode() {
 }
 
 #[test]
+fn math_mode_qualified_command() {
+    assert_eq!(
+        toks(r"${\Mod.cmd}"),
+        vec![
+            BMathGrp,
+            MathCmdWithMod(vec!["Mod".into()], r"\cmd".into()),
+            EMathGrp,
+            Eoi
+        ]
+    );
+}
+
+#[test]
 fn items() {
     assert_eq!(
         toks("{* a\n** b}"),

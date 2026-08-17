@@ -193,6 +193,50 @@ fn math_text_quotes_to_a_math_value() {
     );
 }
 
+#[test]
+fn qualified_math_command_resolves_to_the_mangled_key() {
+    // `\M.cmd` in math mode should elaborate against the module-qualified
+    // scope key `"M.\cmd"` (see `qualify_key`'s doc comment on the
+    // name-mangling scheme), the same way `\M.cmd` already does in inline
+    // text.
+    let src = "module M = struct let-math \\cmd x = x end in ${\\M.cmd{1}}";
+    let ast = elaborate_only(src);
+    // `module M = struct .. end in body` elaborates to a `LetMathIn`
+    // (binding `M`'s local `\cmd`) wrapping a `LetIn` (re-binding the
+    // module-qualified key `M.\cmd` to it — see `nested_module_mangles_recursively`
+    // for the same shape with plain `let`), wrapping `body`; unwrap both to
+    // reach the `${..}` literal.
+    let satysfi_lang::ast::Ast::LetMathIn(_, _, inner) = ast else {
+        panic!("expected LetMathIn at the top, got {ast:?}");
+    };
+    let satysfi_lang::ast::Ast::LetIn(_, _, body) = *inner else {
+        panic!("expected LetIn nested inside, got {inner:?}");
+    };
+    let satysfi_lang::ast::Ast::MathText(elems) = *body else {
+        panic!("expected a MathText literal, got {body:?}");
+    };
+    assert_eq!(elems.len(), 1);
+    match &elems[0] {
+        satysfi_lang::ast::MathElem::Cmd { name, .. } => {
+            assert_eq!(name, "M.\\cmd");
+        }
+        other => panic!("expected MathElem::Cmd, got {other:?}"),
+    }
+}
+
+#[test]
+fn unqualified_reference_to_a_module_only_math_command_is_unbound() {
+    // Without the `M.` qualifier, `\cmd` is never brought into scope by a
+    // `module M = struct .. end` binding (mirrors
+    // `module_unqualified_name_is_out_of_scope_after_end` for plain `let`).
+    let src = "module M = struct let-math \\cmd x = x end in ${\\cmd{1}}";
+    let err = eval_str(src).unwrap_err();
+    assert!(
+        err.to_string().contains("unbound"),
+        "expected an unbound-command error, got {err}"
+    );
+}
+
 // ---- modules / open ---------------------------------------------------------
 
 #[test]

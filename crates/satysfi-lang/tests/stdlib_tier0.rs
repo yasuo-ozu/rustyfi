@@ -1133,10 +1133,12 @@ get-natural-metrics (FootnoteScheme.main ctx ibf bbf)";
 // module — same "cheapest whole-module proof" rationale as
 // `require_gr_rectangle_compiles_and_evaluates`/`require_math_compiles_and_
 // evaluates` above: success here means the WHOLE file (sig match included)
-// typechecked, not merely parsed. Actually invoking `\derive` would need a
-// real `${…}`-embedded user math-cmd call, which `read_math`'s `MathElem::
-// Cmd` arm doesn't support yet (`primitives.rs`: "needs the math package
-// (phase 7 roadmap A)") — out of scope for porting this one package file.
+// typechecked, not merely parsed. Actually invoking `\derive` needs a real
+// `${…}`-embedded user math-cmd call under a document context — the
+// production `EmbedMath` path (`read_inline`'s installed-`Context::
+// math_command` arm, Gap 1) resolves `MathElem::Cmd` fine via
+// `reflect_math_elem`/`as_math`; exercising `\derive` end to end is simply
+// out of scope for porting this one package file (no fixture builds one).
 // ============================================================================
 
 #[test]
@@ -1147,6 +1149,31 @@ in
 0";
         let v = compile_via_loader("proof-basic", src).expect("proof.satyh should compile");
         assert_eq!(as_int(v), 0);
+    });
+}
+
+/// Gap 4 (`docs/plans/math-mode-language-gaps.md`) flagship: `\derive :
+/// [math?; bool?; math list; math] math-cmd` called BARE (no `?:`/`?*`
+/// marker at all) with only its two mandatory arguments — `\derive`'s
+/// `?:nameopt ?:bopt` leading params register `optional_arity("\derive")
+/// == 2`, so `math_bot`'s `Cmd` arm auto-pads `[None, None, <math list>,
+/// <math>]` before applying (Gap 3's `math_block_ast` turns `{|A|}` into
+/// the `math list` literal `[MathText([A])]`). `math-concat` forces
+/// `as_math` -> `reflect_math_elem`, which actually APPLIES `\derive`'s
+/// closure to those four arguments and runs `derive` all the way to its
+/// `text-in-math` result value — real evaluation, not just a parse/
+/// typecheck smoke test. `derive`'s body is itself `text-in-math` (Gap 6,
+/// out of scope): laying THAT out would hard-error, so this only forces
+/// evaluation via `math-concat`, never `embed-math`/layout on the result.
+#[test]
+fn gap4_derive_marker_less_optional_args_evaluate_via_math_concat() {
+    run_with_big_stack(|| {
+        let src = "@require: proof
+in
+let _ = math-concat ${\\derive{|A|}{B}} ${x} in 1";
+        let v = compile_via_loader("gap4-derive-bare", src)
+            .expect("bare \\derive{|A|}{B} should elaborate, typecheck, and evaluate");
+        assert_eq!(as_int(v), 1);
     });
 }
 

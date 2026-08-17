@@ -587,6 +587,7 @@ fn math_box(width: f64, height: f64, depth: f64) -> PureHorzBox {
         height: Length::pt(height),
         depth: Length::pt(depth),
         glyphs: vec![],
+        rules: vec![],
     }
 }
 

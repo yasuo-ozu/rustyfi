@@ -18,10 +18,16 @@ below covers every complex part of the corpus that the port can currently build:
   enumitem   nested and heavily-customized itemize / enumerate
   easytable  tables: cells, rules, alignment, multi-row/col
   figbox     figures, floats, image boxes, captions (composes easytable+enumitem)
+  slydifi    slides: frames, layers, absolute placement
+  gakushin   a real grant-application form (self-snapshot only)
 
-(slydifi — slides — is intentionally excluded: its doc needs the un-bundled
-third-party `railway` package AND a math primitive the port does not yet
-implement. gakushin has no committed upstream PDF to compare against.)
+(`gakushin` has no committed upstream PDF to compare against — it is checked in
+SELF-SNAPSHOT mode — and upstream cannot build it at all without the
+Satyrographos-installed `fonts-junicode` package, which the vendored corpus does
+not carry. An earlier version of this note said `slydifi` was excluded for
+needing an un-bundled `railway` package and an unimplemented math primitive;
+that stopped being true when `railway` was vendored and the primitive landed —
+it is in `DOCS`, it builds, and it matches upstream's 30 pages.)
 
 Metrics per document (all font-robust, since fonts are identical):
 

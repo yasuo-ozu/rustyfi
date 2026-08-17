@@ -2,6 +2,9 @@
 % seven new prims directly — start-path/line-to/close-with-line build a 20pt
 % square `path`, fill/stroke turn it into `graphics`, and a local `\graphics`
 % command (a tiny let-inline wrapping inline-graphics) is the on-page sink.
+% Also exercises roadmap C1's `draw-text` (a real inline text run inside the
+% callback, above the fill/stroke rectangle) — the box was grown to 40pt tall
+% so the run at (0pt, 25pt) fits within it.
 %
 % Deliberately NOT `@require: gr`: the real gr.satyh needs `pervasives`'s
 % `point` type synonym, which this port doesn't parse yet (§5 of the plan) —
@@ -18,8 +21,10 @@ let p =
              (start-path (0pt, 0pt)))))
 
 let-inline ctx \graphics =
-  inline-graphics 20pt 20pt 0pt
-    (fun pt -> [ fill (RGB(1., 0., 0.)) p; stroke 1pt (Gray(0.)) p ])
+  inline-graphics 20pt 40pt 0pt
+    (fun pt ->
+      [ fill (RGB(1., 0., 0.)) p; stroke 1pt (Gray(0.)) p;
+        draw-text (0pt, 25pt) (read-inline ctx {Hi}) ])
 
 in
 document (|

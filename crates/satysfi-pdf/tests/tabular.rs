@@ -21,6 +21,7 @@ fn page_with_tabular_box() -> Page {
                 info: HorzStringInfo {
                     font: FontKey(0),
                     size: Length::pt(12.0),
+                    rising: Length::ZERO,
                 },
                 text: "A".to_string(),
                 width: Length::pt(8.0),

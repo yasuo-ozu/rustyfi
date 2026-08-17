@@ -181,8 +181,9 @@ fn line_stack_bottom_stacks_each_element_as_one_line_at_the_widest_natural_width
 
 // ============================================================================
 // `add-footnote` (footnote-scheme.satyh) — `block-boxes -> inline-boxes`.
-// STAND-IN: no page-bottom float accumulator yet, so the block is dropped
-// and an empty `inline-boxes` is returned (documented no-op).
+// FAITHFUL: wraps the block in a zero-metric `PureHorzBox::Footnote`
+// marker that `chop_page` (satysfi-backend) later extracts and bottom-
+// places (docs/plans/document-page-model.md §C).
 // ============================================================================
 
 #[test]
@@ -196,10 +197,20 @@ fn add_footnote_rejects_a_non_block_boxes_argument() {
 }
 
 #[test]
-fn add_footnote_evaluates_to_empty_inline_boxes_stand_in() {
+fn add_footnote_wraps_the_block_in_a_footnote_marker() {
     match eval_str("add-footnote (block-skip 10pt)") {
         Value::InlineBoxes(boxes) => {
-            assert!(boxes.is_empty(), "stand-in add-footnote drops the block content")
+            assert_eq!(boxes.len(), 1);
+            match &boxes[0] {
+                satysfi_backend::HorzBox::Pure(PureHorzBox::Footnote { block }) => {
+                    assert_eq!(
+                        block,
+                        &vec![VertBox::Skip(Length::pt(10.0))],
+                        "the footnote marker must carry the block unchanged"
+                    );
+                }
+                other => panic!("expected a Footnote marker, got {other:?}"),
+            }
         }
         other => panic!("expected inline-boxes, got {other:?}"),
     }

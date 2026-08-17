@@ -1,3 +1,4 @@
+use crate::context::Script;
 use crate::length::Length;
 
 /// An abstract handle to a loaded font face. Milestone 1 knows three: the
@@ -54,6 +55,42 @@ pub enum MathCorner {
     TopLeft,
     BottomRight,
     BottomLeft,
+}
+
+/// Classify one character into the four-way script bucket a font scheme is
+/// indexed by (D1b, `docs/plans/text-rendering.md` §1/§Slice 2). Deviation
+/// from the spec's originally-proposed standalone `CharScript` enum: this
+/// port already has `context::Script` (Group E, `set-dominant-*-script`)
+/// with the exact same four constructors in the exact same order
+/// (`HanIdeographic=0, Kana=1, Latin=2, OtherScript=3`) — introducing a
+/// second, structurally-identical enum just to keep "per-char classifier"
+/// and "context-stored dominant script" conceptually separate would add a
+/// conversion at every call site for no behavioral gain, so this reuses
+/// `Script` directly as the per-char classification result too.
+///
+/// Upstream classifies via `Scripts.txt` + East-Asian-width
+/// (`scriptDataMap.ml:74-167`, itself labelled "temporary" by its own
+/// comment); this range classifier has no unidata file to ship and matches
+/// upstream's *observable* output for the stdja corpus, not the full
+/// Unicode script property. CJK punctuation/fullwidth forms classify as
+/// `HanIdeographic` (not `OtherScript`) so `「」。、` render in the CJK
+/// (mincho) face, matching upstream's Kana/Han default-font assignment.
+pub fn char_script(c: char) -> Script {
+    match c as u32 {
+        // Hiragana, Katakana (+ phonetic extensions).
+        0x3040..=0x30FF | 0x31F0..=0x31FF => Script::Kana,
+        // CJK Unified Ideographs (+ Ext-A), CJK symbols/punctuation,
+        // compatibility ideographs, halfwidth/fullwidth forms.
+        0x3400..=0x4DBF
+        | 0x4E00..=0x9FFF
+        | 0xF900..=0xFAFF
+        | 0x3000..=0x303F
+        | 0xFF00..=0xFFEF
+        | 0x20000..=0x2FA1F => Script::HanIdeographic,
+        // Basic Latin .. Latin Extended-B.
+        0x0000..=0x024F => Script::Latin,
+        _ => Script::OtherScript,
+    }
 }
 
 /// The seam between typesetting and font data: the line breaker and the box
@@ -127,6 +164,49 @@ pub trait FontMetrics {
     ) -> Option<MathVariantGlyph> {
         None
     }
+
+    /// Build a vertically-stretched delimiter/big-op from the OpenType MATH
+    /// `GlyphAssembly` of `c` (`docs/plans/math-engine.md` §B — the
+    /// stretch-beyond-the-largest-discrete-variant path). Returns the placed
+    /// parts as `(gid, dy, advance)`, bottom-to-top, where `dy` is the
+    /// **y-up, box-local** vertical offset of the part's own baseline (the
+    /// bottom part sits at `dy = 0`, each subsequent part is raised by the
+    /// previous part's advance minus their connector overlap), and `advance`
+    /// is the part glyph's design-unit `full_advance` scaled to `size` (the
+    /// vertical extent it contributes). The parts stack with overlaps
+    /// `>= min_connector_overlap`, repeating `extender` parts as many times as
+    /// needed to reach `target`. `None` when the font has no MATH table, no
+    /// vertical construction for `c`, or that construction has no
+    /// `GlyphAssembly` — every caller must treat `None` as "fall back to the
+    /// largest discrete variant" (`push_delimiter_glyph`), so a provider that
+    /// never overrides this (every base-14 provider) is unaffected.
+    fn math_vertical_assembly(
+        &self,
+        _font: FontKey,
+        _c: char,
+        _size: Length,
+        _target: Length,
+    ) -> Option<Vec<(u16, Length, Length)>> {
+        None
+    }
+
+    /// Resolve a registry abbrev (`"ipaexm"`, `"Junicode-b"`, ...) to its
+    /// `FontKey` (D1a). `None` means either "no such abbrev in this
+    /// provider's registry" or "this provider has no registry at all" (every
+    /// pre-D1 provider, `Base14Metrics`) — the caller then falls back to the
+    /// milestone-1 3-face name heuristic (`resolve_font_abbrev` free fn,
+    /// satysfi-lang), keeping every pre-D1 `set-font` call byte-identical.
+    fn resolve_font_abbrev(&self, _abbrev: &str) -> Option<FontKey> {
+        None
+    }
+
+    /// The configured default `(font, ratio, rising)` for `script`, from
+    /// `default-font.satysfi-hash`'s `scripts` block (D1a). `None` means "no
+    /// scheme configured for this script" — the caller then falls back to
+    /// `(ctx.font, 1.0, 0.0)`, i.e. today's single-font behavior.
+    fn default_script_font(&self, _script: Script) -> Option<(FontKey, f64, f64)> {
+        None
+    }
 }
 
 /// How to pick a vertically-grown MATH variant (`MathVariants`, §B3).
@@ -157,4 +237,23 @@ pub struct MathVariantGlyph {
     pub advance: Length,
     pub height: Length,
     pub depth: Length,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn char_script_classifies_the_stdja_corpus() {
+        assert_eq!(char_script('あ'), Script::Kana); // Hiragana
+        assert_eq!(char_script('ア'), Script::Kana); // Katakana
+        assert_eq!(char_script('漢'), Script::HanIdeographic);
+        assert_eq!(char_script('A'), Script::Latin);
+        assert_eq!(char_script('z'), Script::Latin);
+        assert_eq!(char_script('é'), Script::Latin); // Latin-1 Supplement
+        assert_eq!(char_script('→'), Script::OtherScript); // U+2192 arrow
+        assert_eq!(char_script('。'), Script::HanIdeographic); // CJK punctuation
+        assert_eq!(char_script('「'), Script::HanIdeographic);
+        assert_eq!(char_script('、'), Script::HanIdeographic);
+    }
 }

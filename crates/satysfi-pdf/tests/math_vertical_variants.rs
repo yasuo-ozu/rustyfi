@@ -291,6 +291,171 @@ fn assert_vertical_variant_unit(path: &Path) {
     );
 }
 
+// ----------------------------------------------------------------------
+// Test plan item 1b (unit): `TtfFontStore::math_vertical_assembly`
+// (§B — GlyphAssembly stretch beyond the largest discrete variant).
+// ----------------------------------------------------------------------
+
+/// Independently read `(`'s vertical `GlyphAssembly` off the font (ttf-parser,
+/// NO hardcoded gids): the ordered part gids bottom-to-top, which of them are
+/// extenders, the min connector overlap, and the largest discrete variant's
+/// `advance_measurement` (so the test can pick a `target` guaranteed to lie
+/// beyond it).
+struct ParenAssembly {
+    part_gids: Vec<u16>,
+    extender_gids: Vec<u16>,
+    non_extender_gids: Vec<u16>,
+    largest_variant_advance_du: f64,
+    upem: f64,
+}
+
+fn read_paren_assembly(face: &Face, c: char) -> ParenAssembly {
+    let gid = face.glyph_index(c).expect("cmap has the char");
+    let variants = face
+        .tables()
+        .math
+        .expect("MATH table")
+        .variants
+        .expect("MathVariants subtable");
+    let construction = variants
+        .vertical_constructions
+        .get(gid)
+        .expect("char has a vertical GlyphConstruction");
+    let assembly = construction
+        .assembly
+        .expect("this delimiter has a GlyphAssembly (both DejaVu Math & Noto Math do)");
+    let mut part_gids = Vec::new();
+    let mut extender_gids = Vec::new();
+    let mut non_extender_gids = Vec::new();
+    for p in assembly.parts {
+        part_gids.push(p.glyph_id.0);
+        if p.part_flags.extender() {
+            extender_gids.push(p.glyph_id.0);
+        } else {
+            non_extender_gids.push(p.glyph_id.0);
+        }
+    }
+    let n = construction.variants.len();
+    let largest_variant_advance_du = if n == 0 {
+        0.0
+    } else {
+        construction
+            .variants
+            .get(n - 1)
+            .expect("largest variant")
+            .advance_measurement as f64
+    };
+    ParenAssembly {
+        part_gids,
+        extender_gids,
+        non_extender_gids,
+        largest_variant_advance_du,
+        upem: face.units_per_em() as f64,
+    }
+}
+
+fn assert_vertical_assembly_unit(path: &Path) {
+    let store = TtfFontStore::load(path, None, None).expect("load math font");
+    let face = store.face(FontKey(0)).expect("parse face");
+    let size = Length::pt(12.0);
+
+    let asm = read_paren_assembly(&face, '(');
+    assert!(
+        !asm.extender_gids.is_empty(),
+        "{path:?}: '(' assembly should have at least one extender part"
+    );
+    assert!(
+        !asm.non_extender_gids.is_empty(),
+        "{path:?}: '(' assembly should have at least one non-extender (hook) part"
+    );
+
+    // A target well beyond the largest DISCRETE variant record: at 12pt the
+    // largest '(' variant is `largest_variant_advance_du * size/upem`; ask for
+    // ~6x that so the assembly must repeat the extender many times.
+    let largest_pt = size.0 * asm.largest_variant_advance_du / asm.upem;
+    let target = Length::pt(largest_pt * 6.0);
+
+    let parts = store
+        .math_vertical_assembly(FontKey(0), '(', size, target)
+        .unwrap_or_else(|| panic!("{path:?}: expected Some assembly for a tall '('"));
+
+    // Every placed part gid must belong to `(`'s enumerated assembly parts.
+    for (gid, _dy, _adv) in &parts {
+        assert!(
+            asm.part_gids.contains(gid),
+            "{path:?}: placed part gid {gid} is not among '('s assembly parts {:?}",
+            asm.part_gids
+        );
+    }
+
+    // MULTIPLE part gids: top hook + repeated extenders + bottom hook.
+    assert!(
+        parts.len() > asm.part_gids.len(),
+        "{path:?}: a very tall '(' must emit MORE placed parts ({}) than the {} distinct \
+         assembly parts — i.e. the extender is repeated",
+        parts.len(),
+        asm.part_gids.len()
+    );
+    let placed_gids: Vec<u16> = parts.iter().map(|(g, _, _)| *g).collect();
+    // Each non-extender (hook) part appears exactly once.
+    for hook in &asm.non_extender_gids {
+        let count = placed_gids.iter().filter(|g| *g == hook).count();
+        assert_eq!(
+            count, 1,
+            "{path:?}: non-extender hook gid {hook} should be placed exactly once, got {count}"
+        );
+    }
+    // At least one extender part is repeated (appears more than once).
+    let repeated_extender = asm
+        .extender_gids
+        .iter()
+        .any(|ext| placed_gids.iter().filter(|g| *g == ext).count() > 1);
+    assert!(
+        repeated_extender,
+        "{path:?}: a very tall '(' must repeat an extender part; placed gids = {placed_gids:?}"
+    );
+
+    // The stacked assembly covers `target` (bottom baseline 0 .. top part's
+    // baseline+advance), and parts stack monotonically upward.
+    let total = parts
+        .last()
+        .map(|(_, dy, adv)| dy.0 + adv.0)
+        .expect("at least one part");
+    assert!(
+        total >= target.0 - 1e-6,
+        "{path:?}: stacked assembly extent ({total}) should cover target ({})",
+        target.0
+    );
+    let mut prev_dy = f64::NEG_INFINITY;
+    for (_, dy, _) in &parts {
+        assert!(
+            dy.0 >= prev_dy - 1e-6,
+            "{path:?}: parts must be placed bottom-to-top (non-decreasing dy)"
+        );
+        prev_dy = dy.0;
+    }
+
+    // A non-stretchy char with no vertical construction/assembly ('a'): None.
+    assert!(
+        store
+            .math_vertical_assembly(FontKey(0), 'a', size, target)
+            .is_none(),
+        "{path:?}: 'a' has no assembly -> None"
+    );
+}
+
+#[test]
+fn vertical_assembly_unit_dejavu() {
+    let path = need_font!(find_dejavu_math(), "DejaVu Math TeX Gyre");
+    assert_vertical_assembly_unit(&path);
+}
+
+#[test]
+fn vertical_assembly_unit_noto() {
+    let path = need_font!(find_noto_math(), "Noto Sans Math");
+    assert_vertical_assembly_unit(&path);
+}
+
 #[test]
 fn vertical_variant_unit_dejavu() {
     let path = need_font!(find_dejavu_math(), "DejaVu Math TeX Gyre");
@@ -644,12 +809,28 @@ fn big_char_sum_variant_grows_and_emits_variant_gid() {
 // short-inner control that must fall back to record[0].
 // ----------------------------------------------------------------------
 
-/// A well-typed but never-invoked `paren` closure (`length -> length ->
-/// length -> length -> color -> (inline-boxes, length -> length)`,
-/// `prim_types::t_paren`) — the B3b(i) `Math::Paren` arm never calls `_l`/
-/// `_r`, so its body's shape only has to typecheck, matching this file's
-/// `with_ctx`/`\dummy`-command convention of "present, well-typed, inert".
-const DUMMY_PAREN: &str = "(fun hgt dpt hgtaxis fontsize color -> (inline-nil, (fun x -> x)))";
+/// A well-typed but POISONED `paren` closure (`length -> length -> length ->
+/// length -> color -> (inline-boxes, length -> length)`, `prim_types::
+/// t_paren`) — under §B3b-2, the closure route is PRIMARY (`make_paren_run`
+/// actually invokes `_l`/`_r`), so a closure that returns a valid
+/// `(inline-boxes, kernf)` tuple (this constant's pre-§B3b-2 shape) would
+/// now be INVOKED and its (empty, `inline-nil`) result used verbatim,
+/// breaking every assertion below that expects the §B3b(i) MATH-native
+/// variant-gid fallback path (record[0]/stretched selection, `dy`
+/// centering, …). Poisoned with a runtime (not typecheck) error —
+/// `string-sub \`x\` 9 9` is well-typed (`string -> int -> int -> string`)
+/// but out-of-bounds on the 1-char string `` `x` `` (`prim_string_sub`
+/// rejects `pos+wid > len`) — inside a discarded function application, so
+/// the poison only fires once the closure is actually CALLED with 5 args
+/// (curried, call-by-value: the outer `fun hgt dpt hgtaxis fontsize color
+/// -> ...` doesn't evaluate its body, hence doesn't evaluate the
+/// application/its argument, until fully applied). `make_paren_run`
+/// forwards that `EvalError` up through `interp.apply`'s `?`, and
+/// `Math::Paren`'s `Err(_) => paren_variant_fallback(...)` arm catches it —
+/// exercising exactly the §B3b(i) fallback this file's existing assertions
+/// need, now via the EvalError path rather than "never invoked".
+const DUMMY_PAREN: &str = "(fun hgt dpt hgtaxis fontsize color -> \
+     (fun s -> (inline-nil, (fun x -> x))) (string-sub `x` 9 9))";
 
 #[test]
 fn paren_stretches_around_tall_inner_and_short_inner_stays_record0() {
@@ -815,3 +996,120 @@ fn paren_stretches_around_tall_inner_and_short_inner_stays_record0() {
         String::from_utf8_lossy(&content)
     );
 }
+
+// ----------------------------------------------------------------------
+// Test plan item 1c (e2e wiring): a delimiter taller than any discrete
+// variant record is built from `GlyphAssembly` parts by
+// `push_delimiter_glyph` (§B) — driven through the real lang layout.
+// ----------------------------------------------------------------------
+
+/// The set of `(`'s enumerated `GlyphAssembly` part gids (ttf-parser, no
+/// hardcoded gids), plus the set of its DISCRETE variant record gids — used
+/// to distinguish "the paren was built from assembly parts" from "the paren
+/// picked a single discrete variant".
+fn paren_assembly_and_variant_gids(face: &Face, c: char) -> (Vec<u16>, Vec<u16>) {
+    let gid = face.glyph_index(c).expect("cmap has the char");
+    let construction = face
+        .tables()
+        .math
+        .expect("MATH table")
+        .variants
+        .expect("MathVariants")
+        .vertical_constructions
+        .get(gid)
+        .expect("char has a vertical GlyphConstruction");
+    let assembly_gids: Vec<u16> = construction
+        .assembly
+        .expect("delimiter has a GlyphAssembly")
+        .parts
+        .into_iter()
+        .map(|p| p.glyph_id.0)
+        .collect();
+    let variant_gids: Vec<u16> = construction
+        .variants
+        .into_iter()
+        .map(|v| v.variant_glyph.0)
+        .collect();
+    (assembly_gids, variant_gids)
+}
+
+#[test]
+fn very_tall_paren_is_built_from_assembly_parts() {
+    let path = need_font!(find_math_font(), "MATH");
+    let store = TtfFontStore::load(&path, None, None).expect("load math font");
+    let face = store.face(FontKey(0)).expect("parse face");
+
+    let (open_asm_gids, open_variant_gids) = paren_assembly_and_variant_gids(&face, '(');
+
+    // A deeply-nested fraction of big operators: four stacked rows of ∑, far
+    // taller than the largest discrete '(' variant record — so the paren must
+    // stretch via `GlyphAssembly` (top hook + repeated extenders + bottom
+    // hook), not a single discrete variant glyph. `DUMMY_PAREN` forces the
+    // MATH-native fallback path (`paren_variant_fallback` ->
+    // `push_delimiter_glyph`) that carries the assembly wiring.
+    let big = "(math-big-char MathOp `∑`)";
+    let row = format!("(math-frac {big} {big})");
+    let tall_inner = format!("(math-frac {row} {row})");
+    let src = with_ctx(&format!(
+        "embed-math ctx (math-paren {DUMMY_PAREN} {DUMMY_PAREN} {tall_inner})"
+    ));
+    let v = run_math(&src, &store).expect("tall nested-fraction paren should compile");
+    let (_, _, _, glyphs) = as_math_parts(math_box(v));
+
+    // Among the laid-out glyphs, the ones belonging to `(`'s assembly part
+    // set: there must be MULTIPLE (top + repeated extenders + bottom), and
+    // more than the number of DISTINCT assembly parts (extender repeated).
+    let placed_open_parts: Vec<u16> = glyphs
+        .iter()
+        .filter_map(|g| g.gid)
+        .filter(|gid| open_asm_gids.contains(gid))
+        .collect();
+    assert!(
+        placed_open_parts.len() > open_asm_gids.len(),
+        "expected the tall '(' to be built from MULTIPLE assembly parts (extender repeated): \
+         placed {placed_open_parts:?} vs {} distinct assembly parts {open_asm_gids:?}",
+        open_asm_gids.len()
+    );
+    // Sanity: the placed parts are assembly parts, NOT a single discrete
+    // variant glyph (the two gid sets are disjoint for these fonts).
+    let placed_open_variants: Vec<u16> = glyphs
+        .iter()
+        .filter_map(|g| g.gid)
+        .filter(|gid| open_variant_gids.contains(gid) && !open_asm_gids.contains(gid))
+        .collect();
+    assert!(
+        placed_open_variants.is_empty(),
+        "the tall '(' should have used assembly parts, not a discrete variant glyph, but found \
+         discrete-variant gids {placed_open_variants:?}"
+    );
+
+    // e2e: the assembly part gids flow through the real CID pipeline. This
+    // tall run embeds the (unsubsetted, ~half-MB) font whose raw CFF/glyf
+    // bytes contain stray `BT`/`Tf`/`stream` byte sequences, so the
+    // "smallest stream" / "stream with BT" heuristics can't reliably isolate
+    // the page content stream here. Instead verify the assembly part gid
+    // reached the ToUnicode CMap (`beginbfchar`) — a distinctive, cleanly
+    // isolated stream that render_pdf_ttf only populates with gids it actually
+    // emitted (Identity-H: the CID IS the raw gid), proving the part became a
+    // real emitted glyph.
+    let geometry = PageGeometry::default();
+    let page = page_for(math_box(run_math(&src, &store).unwrap()), &geometry);
+    let pdf_bytes = render_pdf_ttf(&geometry, &[page], &store, &[]).expect("render");
+    assert!(pdf_bytes.starts_with(b"%PDF-"));
+    let cmap = extract_streams(&pdf_bytes)
+        .into_iter()
+        .find(|s| contains_subslice(s, b"beginbfchar"))
+        .expect("a ToUnicode CMap stream (beginbfchar)")
+        .to_vec();
+    let some_part = placed_open_parts[0];
+    // CMap entries are `<GGGG> <UUUU>` uppercase-hex; the emitted part gid
+    // must appear as a source CID.
+    let gid_hex = format!("<{:04X}>", some_part).into_bytes();
+    assert!(
+        contains_subslice(&cmap, &gid_hex),
+        "expected the ToUnicode CMap to map the assembly part gid {some_part} ({}); CMap = {:?}",
+        String::from_utf8_lossy(&gid_hex),
+        String::from_utf8_lossy(&cmap)
+    );
+}
+

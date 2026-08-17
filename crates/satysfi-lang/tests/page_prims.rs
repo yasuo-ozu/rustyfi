@@ -266,6 +266,7 @@ fn hook_page_break_block_fires_through_chop_page_and_fire_hooks() {
         geometry: PageGeometry::default(),
         pages: vec![Page { lines }],
         images: Vec::new(),
+        extras: Default::default(),
     };
     satysfi_lang::fire_hooks(&mut interp, &doc).expect("fire_hooks should succeed");
     assert_eq!(
@@ -276,9 +277,11 @@ fn hook_page_break_block_fires_through_chop_page_and_fire_hooks() {
 }
 
 // ============================================================================
-// `page-break-multicolumn` (stdjareport.satyh's `document`) — STAND-IN:
-// falls back to the single-column `page-break` behavior (see
-// `primitives.rs`'s `prim_page_break_multicolumn` doc comment).
+// `page-break-multicolumn` (stdjareport.satyh's `document`) — FAITHFUL: a
+// `[]` shift list is a genuine ONE-column layout whose hooks still fire
+// (`page_break_core`; docs/plans/document-page-model.md §A). Real
+// multi-column geometry (2+ shifts) is covered by
+// `crates/satysfi-lang/tests/multicolumn.rs`.
 // ============================================================================
 
 #[test]
@@ -296,7 +299,7 @@ fn page_break_multicolumn_typechecks_over_the_full_7_arg_signature() {
 }
 
 #[test]
-fn page_break_multicolumn_falls_back_to_single_column_and_evaluates() {
+fn page_break_multicolumn_with_an_empty_shift_list_is_one_column_and_evaluates() {
     let mono = Mono;
     let src = format!(
         "{PREAMBLE}
@@ -310,7 +313,7 @@ fn page_break_multicolumn_falls_back_to_single_column_and_evaluates() {
     assert_eq!(
         doc.pages.len(),
         1,
-        "the STAND-IN renders every column as one column on one page"
+        "an empty shift list is one column (the prepended zero shift)"
     );
     assert_eq!(doc.pages[0].lines.len(), 1);
 }

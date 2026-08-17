@@ -9,16 +9,18 @@ pub mod fonts;
 pub mod ttf;
 
 pub use base14::Base14Metrics;
-pub use cid::render_pdf_ttf;
+pub use cid::{render_pdf_ttf, render_pdf_ttf_with};
 pub use fonts::{FontConfigError, FontFlags, FontRegistry, FontSource};
 pub use ttf::{FontError, TtfFontStore};
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use pdf_writer::{Content, Finish, Name, Pdf, Rect, Ref, Str};
+use pdf_writer::types::{ActionType, AnnotationType};
+use pdf_writer::{Content, Finish, Name, Pdf, Rect, Ref, Str, TextStr};
 use satysfi_backend::{
-    place_block_at, Closing, Color, GraphicsElem, ImageResource, Length, MathGlyph, Page,
-    PageGeometry, Path, PathSeg, PureHorzBox, VertBox,
+    place_block_at, Annot, AnnotAction, Closing, Color, DocExtras, GraphicsElem, ImageResource,
+    Length, MathGlyph, NamedDest, OutlineEntry, Page, PageGeometry, Path, PathSeg, PureHorzBox,
+    VertBox,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -54,13 +56,56 @@ fn used_images(pages: &[Page]) -> BTreeSet<usize> {
     for page in pages {
         for line in &page.lines {
             for (_, bx) in &line.contents {
-                if let PureHorzBox::Image { image, .. } = bx {
-                    used.insert(image.0);
-                }
+                scan_box_images(bx, &mut used);
             }
         }
     }
     used
+}
+
+/// Recursive box scan for `used_images`: an `Image` can also hide inside a
+/// `Tabular` cell, an `EmbeddedBlock`'s stacked lines, (§D) a `Frame`'s
+/// contents, or (roadmap C1) a `draw-text` run's `GraphicsElem::Text`
+/// contents (`read-inline`d text passed to `draw-text` can itself carry a
+/// `use-image-by-width` box) — a pre-existing gap for the first two, closed
+/// alongside the new `Frame`/`Graphics` recursion this slice adds.
+fn scan_box_images(bx: &PureHorzBox, used: &mut BTreeSet<usize>) {
+    match bx {
+        PureHorzBox::Image { image, .. } => {
+            used.insert(image.0);
+        }
+        PureHorzBox::Frame { contents, .. } => {
+            for (_, b) in contents {
+                scan_box_images(b, used);
+            }
+        }
+        PureHorzBox::Graphics { elems, .. } => {
+            for elem in elems {
+                if let GraphicsElem::Text { contents, .. } = elem {
+                    for (_, b) in contents {
+                        scan_box_images(b, used);
+                    }
+                }
+            }
+        }
+        PureHorzBox::Tabular(tab) => {
+            for cell in &tab.cells {
+                for (_, b) in &cell.contents {
+                    scan_box_images(b, used);
+                }
+            }
+        }
+        PureHorzBox::EmbeddedBlock { block, .. } => {
+            for vb in block {
+                if let VertBox::Line { contents, .. } = vb {
+                    for (_, b) in contents {
+                        scan_box_images(b, used);
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 /// The PDF resource name for image `id` (e.g. `Im3`) — shared verbatim by
@@ -142,17 +187,18 @@ pub(crate) fn place_math(
     glyphs: &[MathGlyph],
     anchor_x: f32,
     anchor_y: f32,
+    name_for: &dyn Fn(satysfi_backend::FontKey) -> String,
     mut encode: impl FnMut(&MathGlyph) -> Result<Vec<u8>, PdfError>,
 ) -> Result<(), PdfError> {
     for glyph in glyphs {
         let encoded = encode(glyph)?;
-        let font_idx = (glyph.info.font.0 as usize).min(FONT_RES_NAMES.len() - 1);
+        let res_name = name_for(glyph.info.font);
         content.begin_text();
-        content.set_font(
-            Name(FONT_RES_NAMES[font_idx].as_bytes()),
-            glyph.info.size.0 as f32,
+        content.set_font(Name(res_name.as_bytes()), glyph.info.size.0 as f32);
+        content.next_line(
+            anchor_x + glyph.dx.0 as f32,
+            anchor_y + glyph.dy.0 as f32 + glyph.info.rising.0 as f32,
         );
-        content.next_line(anchor_x + glyph.dx.0 as f32, anchor_y + glyph.dy.0 as f32);
         content.show(Str(&encoded));
         content.end_text();
     }
@@ -195,6 +241,167 @@ pub(crate) fn place_embedded_block(
     Ok(())
 }
 
+/// Write one indirect Link annotation object per entry, returning
+/// page-index -> the refs that page's `/Annots` array must list.
+/// Upstream: `Annotation.of_annotation` + `add_to_pdf` (annotation.ml).
+pub(crate) fn write_annotations(
+    pdf: &mut Pdf,
+    mut next_ref: impl FnMut() -> Ref,
+    annots: &[Annot],
+    n_pages: usize,
+) -> BTreeMap<usize, Vec<Ref>> {
+    let mut by_page: BTreeMap<usize, Vec<Ref>> = BTreeMap::new();
+    for a in annots {
+        if a.page >= n_pages {
+            continue; // out-of-range page: skip gracefully (mirrors write_image_xobjects's stance)
+        }
+        let r = next_ref();
+        let mut ann = pdf.annotation(r);
+        ann.subtype(AnnotationType::Link);
+        let (x1, y1, x2, y2) = a.rect;
+        ann.rect(Rect::new(x1.0 as f32, y1.0 as f32, x2.0 as f32, y2.0 as f32));
+        // Upstream always writes a border — width 0 when None
+        // (annotation.ml's `(Length.zero, None)` arm) — which suppresses the
+        // PDF default 1pt border. Match it.
+        let width = a.border.as_ref().map(|(w, _)| w.0 as f32).unwrap_or(0.0);
+        ann.border(0.0, 0.0, width, None);
+        if let Some((_, color)) = &a.border {
+            match *color {
+                Color::Gray(g) => {
+                    ann.color_gray(g as f32);
+                }
+                Color::Rgb(r, g, b) => {
+                    ann.color_rgb(r as f32, g as f32, b as f32);
+                }
+                Color::Cmyk(c, m, y, k) => {
+                    ann.color_cmyk(c as f32, m as f32, y as f32, k as f32);
+                }
+            }
+        }
+        let mut act = ann.action();
+        match &a.action {
+            AnnotAction::Uri(uri) => {
+                act.action_type(ActionType::Uri);
+                act.uri(Str(uri.as_bytes()));
+            }
+            AnnotAction::GotoName(name) => {
+                act.action_type(ActionType::GoTo);
+                act.destination_named(Name(name.as_bytes()));
+            }
+        }
+        act.finish();
+        ann.finish();
+        by_page.entry(a.page).or_default().push(r);
+    }
+    by_page
+}
+
+/// Write the `/Dests` name dictionary (PDF-1.1-style, exactly upstream
+/// namedDest.ml's `Pdf.Dictionary` in the catalog — not a 1.2 name tree).
+/// Each value is `[page /XYZ x y 0]`. Returns None when there is nothing to
+/// write. Duplicate names: last registration wins (BTreeMap dedupe).
+pub(crate) fn write_named_dests(
+    pdf: &mut Pdf,
+    mut next_ref: impl FnMut() -> Ref,
+    dests: &[NamedDest],
+    page_ids: &[Ref],
+) -> Option<Ref> {
+    let mut dedup: BTreeMap<&str, &NamedDest> = BTreeMap::new();
+    for d in dests {
+        if d.page < page_ids.len() {
+            dedup.insert(d.name.as_str(), d);
+        }
+    }
+    if dedup.is_empty() {
+        return None;
+    }
+    let id = next_ref();
+    let mut dict = pdf.destinations(id); // TypedDict<Destination>, chunk.rs:236
+    for (name, d) in dedup {
+        dict.insert(Name(name.as_bytes()))
+            .page(page_ids[d.page])
+            .xyz(d.x.0 as f32, d.y.0 as f32, None);
+    }
+    dict.finish();
+    Some(id)
+}
+
+/// Write the whole `/Outlines` tree from the flat `(level, …)` list
+/// (upstream outline.ml via camlpdf's Pdfmarks.add_bookmarks). Nesting is
+/// derived from `level` exactly like Pdfmarks: an entry is a child of the
+/// nearest preceding entry with a smaller level. `/Count` is the number of
+/// descendants, negated when the item is closed (`is_open == false`);
+/// the root `/Count` counts top-level items. Returns None when empty.
+pub(crate) fn write_outline(
+    pdf: &mut Pdf,
+    mut next_ref: impl FnMut() -> Ref,
+    entries: &[OutlineEntry],
+) -> Option<Ref> {
+    if entries.is_empty() {
+        return None;
+    }
+    let root_id = next_ref();
+    let ids: Vec<Ref> = entries.iter().map(|_| next_ref()).collect();
+
+    // parent[i] / children / prev / next, all by index, from the level walk.
+    let mut parent: Vec<Option<usize>> = vec![None; entries.len()];
+    let mut stack: Vec<usize> = Vec::new(); // indices of open ancestors
+    for i in 0..entries.len() {
+        while let Some(&top) = stack.last() {
+            if entries[top].level < entries[i].level {
+                break;
+            }
+            stack.pop();
+        }
+        parent[i] = stack.last().copied();
+        stack.push(i);
+    }
+    let mut children: Vec<Vec<usize>> = vec![Vec::new(); entries.len()];
+    let mut top_level: Vec<usize> = Vec::new();
+    for i in 0..entries.len() {
+        match parent[i] {
+            Some(p) => children[p].push(i),
+            None => top_level.push(i),
+        }
+    }
+    // descendants(i) for /Count
+    fn descendants(children: &[Vec<usize>], i: usize) -> i32 {
+        children[i].iter().map(|&c| 1 + descendants(children, c)).sum()
+    }
+
+    {
+        let mut root = pdf.outline(root_id);
+        root.first(ids[*top_level.first().unwrap()]);
+        root.last(ids[*top_level.last().unwrap()]);
+        root.count(top_level.len() as i32);
+    }
+    // Emit each item with Title/Parent/Prev/Next/First/Last/Count/Dest.
+    for (i, e) in entries.iter().enumerate() {
+        let mut item = pdf.outline_item(ids[i]);
+        item.title(TextStr(&e.text));
+        item.parent(parent[i].map(|p| ids[p]).unwrap_or(root_id));
+        let sibs: &Vec<usize> = match parent[i] {
+            Some(p) => &children[p],
+            None => &top_level,
+        };
+        let pos = sibs.iter().position(|&x| x == i).unwrap();
+        if pos > 0 {
+            item.prev(ids[sibs[pos - 1]]);
+        }
+        if pos + 1 < sibs.len() {
+            item.next(ids[sibs[pos + 1]]);
+        }
+        if let (Some(&f), Some(&l)) = (children[i].first(), children[i].last()) {
+            item.first(ids[f]);
+            item.last(ids[l]);
+            let n = descendants(&children, i);
+            item.count(if e.is_open { n } else { -n });
+        }
+        item.dest_name(Name(e.dest_name.as_bytes()));
+    }
+    Some(root_id)
+}
+
 /// Serialize typeset pages into a complete PDF document. `images` is the
 /// document-wide image table (`DocumentValue::images`); pass `&[]` for a
 /// text-only document (nothing in `pages` can reference an id past the end
@@ -204,6 +411,21 @@ pub fn render_pdf(
     geometry: &PageGeometry,
     pages: &[Page],
     images: &[ImageResource],
+) -> Result<Vec<u8>, PdfError> {
+    render_pdf_with(geometry, pages, images, &DocExtras::default())
+}
+
+/// Same as [`render_pdf`], but also emits the §B/§C/§D extras (`/Annots`,
+/// `/Dests`, `/Outlines`, per-page deco-graphics underlays) accumulated
+/// while evaluating the document (`DocumentValue::extras`). `render_pdf`
+/// above is a thin wrapper over this with `&DocExtras::default()`, which
+/// emits none of the new catalog keys/annotations — every pre-Slice-A
+/// document (and every existing test call site) stays byte-identical.
+pub fn render_pdf_with(
+    geometry: &PageGeometry,
+    pages: &[Page],
+    images: &[ImageResource],
+    extras: &DocExtras,
 ) -> Result<Vec<u8>, PdfError> {
     let mut pdf = Pdf::new();
     let mut alloc = 1;
@@ -225,7 +447,21 @@ pub fn render_pdf(
     let page_ids: Vec<Ref> = pages.iter().map(|_| next_ref()).collect();
     let content_ids: Vec<Ref> = pages.iter().map(|_| next_ref()).collect();
 
-    pdf.catalog(catalog_id).pages(page_tree_id);
+    // §B/§C: link annotations, named destinations, the outline tree.
+    let annot_refs = write_annotations(&mut pdf, &mut next_ref, &extras.annotations, pages.len());
+    let dests_id = write_named_dests(&mut pdf, &mut next_ref, &extras.destinations, &page_ids);
+    let outline_id = write_outline(&mut pdf, &mut next_ref, &extras.outline);
+
+    {
+        let mut cat = pdf.catalog(catalog_id);
+        cat.pages(page_tree_id);
+        if let Some(d) = dests_id {
+            cat.destinations(d); // /Dests, structure.rs:55
+        }
+        if let Some(o) = outline_id {
+            cat.outlines(o); // /Outlines, structure.rs:62
+        }
+    }
     {
         let mut tree = pdf.pages(page_tree_id);
         tree.kids(page_ids.iter().copied());
@@ -241,14 +477,20 @@ pub fn render_pdf(
     let paper_h = geometry.paper_height.0 as f32;
     let media_box = Rect::new(0.0, 0.0, geometry.paper_width.0 as f32, paper_h);
 
-    for ((page, &page_id), &content_id) in pages.iter().zip(&page_ids).zip(&content_ids) {
-        let content = page_content(page, paper_h)?;
+    for (i, ((page, &page_id), &content_id)) in
+        pages.iter().zip(&page_ids).zip(&content_ids).enumerate()
+    {
+        let overlay = extras.page_graphics.get(i).map(|v| v.as_slice()).unwrap_or(&[]);
+        let content = page_content(page, paper_h, overlay)?;
         pdf.stream(content_id, &content);
 
         let mut p = pdf.page(page_id);
         p.media_box(media_box);
         p.parent(page_tree_id);
         p.contents(content_id);
+        if let Some(refs) = annot_refs.get(&i) {
+            p.annotations(refs.iter().copied()); // structure.rs:1227
+        }
         let mut resources = p.resources();
         let mut fonts = resources.fonts();
         for (i, res_name) in FONT_RES_NAMES.iter().enumerate() {
@@ -275,9 +517,19 @@ pub fn render_pdf(
 
 /// Build one page's content stream: `BT … Tf … Td … Tj … ET` runs for text
 /// and `q … cm /ImN Do Q` runs for images, with the y axis flipped from
-/// page coordinates (downward) to PDF (upward).
-fn page_content(page: &Page, paper_h: f32) -> Result<Vec<u8>, PdfError> {
+/// page coordinates (downward) to PDF (upward). `overlay` (§D deco
+/// graphics, already in absolute PDF y-up page coordinates — see
+/// `fire_hooks`) is drawn FIRST, so it sits under the page's text/images
+/// (background fills/borders).
+fn page_content(page: &Page, paper_h: f32, overlay: &[GraphicsElem]) -> Result<Vec<u8>, PdfError> {
     let mut content = Content::new();
+    // `place_graphics` emits its `q`/`cm`/`Q` wrapper UNCONDITIONALLY, even
+    // for an empty slice — guard it so an extras-free (or hook-free) page's
+    // content stream stays byte-identical to before this slice (§A9's
+    // byte-identity floor).
+    if !overlay.is_empty() {
+        place_graphics(&mut content, overlay, 0.0, 0.0, &mut |c, bx, x, y| emit_box(c, bx, x, y))?;
+    }
     for line in &page.lines {
         let y = paper_h - line.baseline_y.0 as f32;
         for (dx, bx) in &line.contents {
@@ -316,7 +568,7 @@ fn emit_box(content: &mut Content, bx: &PureHorzBox, tx: f32, ty: f32) -> Result
                 Name(FONT_RES_NAMES[font_idx].as_bytes()),
                 info.size.0 as f32,
             );
-            content.next_line(tx, ty);
+            content.next_line(tx, ty + info.rising.0 as f32);
             content.show(Str(&encoded));
             content.end_text();
         }
@@ -328,20 +580,23 @@ fn emit_box(content: &mut Content, bx: &PureHorzBox, tx: f32, ty: f32) -> Result
             place_image(content, image.0, tx, ty, width.0 as f32, height.0 as f32);
         }
         PureHorzBox::Graphics { elems, .. } => {
-            place_graphics(content, elems, tx, ty);
+            place_graphics(content, elems, tx, ty, &mut |c, bx, x, y| emit_box(c, bx, x, y))?;
         }
         PureHorzBox::Math { glyphs, rules, .. } => {
             // base-14 never sees `gid: Some(_)` (no provider here overrides
             // `math_vertical_variant`, §B3's zero-regression contract), so
             // this ignores `g.gid` entirely and always encodes `g.text`.
-            place_math(content, glyphs, tx, ty, |g| winansi(&g.text))?;
+            let name_for = |k: satysfi_backend::FontKey| {
+                FONT_RES_NAMES[(k.0 as usize).min(FONT_RES_NAMES.len() - 1)].to_string()
+            };
+            place_math(content, glyphs, tx, ty, &name_for, |g| winansi(&g.text))?;
             // §B2 (`docs/plans/math-engine.md`): the fraction bar/radical
             // sign+overbar are `Fill`s, not glyphs — placed through the SAME
             // `place_graphics` an `inline-graphics`/`Tabular` box uses, at
             // the SAME already-flipped anchor `place_math` just used for the
             // glyphs (see `place_graphics`'s own doc comment on why no
             // second y-flip belongs here).
-            place_graphics(content, rules, tx, ty);
+            place_graphics(content, rules, tx, ty, &mut |c, bx, x, y| emit_box(c, bx, x, y))?;
         }
         PureHorzBox::Tabular(tab) => {
             for cell in &tab.cells {
@@ -354,15 +609,32 @@ fn emit_box(content: &mut Content, bx: &PureHorzBox, tx: f32, ty: f32) -> Result
                     )?;
                 }
             }
-            place_graphics(content, &tab.rules, tx, ty);
+            place_graphics(content, &tab.rules, tx, ty, &mut |c, bx, x, y| emit_box(c, bx, x, y))?;
         }
         PureHorzBox::EmbeddedBlock { block, .. } => {
             place_embedded_block(block, tx, ty, |cbx, x, y| emit_box(content, cbx, x, y))?;
+        }
+        // §D: an inline frame's contents, on the frame's own baseline —
+        // mirrors the `Tabular` recursion above. The frame's deco graphics
+        // are NOT emitted here — they were fired lang-side into
+        // `DocExtras::page_graphics` and drawn as the page underlay
+        // (`page_content`'s `overlay` prologue).
+        PureHorzBox::Frame { contents, .. } => {
+            for (dx, cbx) in contents {
+                emit_box(content, cbx, tx + dx.0 as f32, ty)?;
+            }
         }
         _ => {}
     }
     Ok(())
 }
+
+/// Callback `place_graphics` invokes for each box a `GraphicsElem::Text` run
+/// carries, at BOX-LOCAL coordinates — the surrounding `q; cm` translate maps
+/// them onto the page, so implementations just call their own `emit_box`
+/// unchanged (PDF text/image/path operators all compose with the CTM).
+pub(crate) type NestedEmitter<'a> =
+    &'a mut dyn FnMut(&mut Content, &PureHorzBox, f32, f32) -> Result<(), PdfError>;
 
 /// Emit `elems` (already resolved to box-local coordinates — see
 /// `PureHorzBox::Graphics`) into `content`, wrapped in one `save_state`/
@@ -381,7 +653,20 @@ fn emit_box(content: &mut Content, bx: &PureHorzBox, tx: f32, ty: f32) -> Result
 /// `(tx, ty)` passed in here, via the `cm` translate below — never per
 /// coordinate — so a naive per-coordinate re-flip inside `emit_path` would
 /// mirror every path vertically. Don't add one.
-pub(crate) fn place_graphics(content: &mut Content, elems: &[GraphicsElem], tx: f32, ty: f32) {
+///
+/// **`GraphicsElem::Text` and the CTM.** A `draw-text` run's boxes are
+/// emitted via `emit_nested` at BOX-LOCAL coordinates `(pt.x + dx, pt.y)` —
+/// *inside* the `q; cm` translate below, exactly like every other element
+/// here — so PDF text ops (`BT`/`Td`/`Tj`) compose with the CTM the same way
+/// a filled path does. Adding an absolute anchor or a second y-flip here
+/// would double-place the run — don't.
+pub(crate) fn place_graphics(
+    content: &mut Content,
+    elems: &[GraphicsElem],
+    tx: f32,
+    ty: f32,
+    emit_nested: NestedEmitter<'_>,
+) -> Result<(), PdfError> {
     content.save_state();
     content.transform([1.0, 0.0, 0.0, 1.0, tx, ty]);
     for elem in elems {
@@ -411,14 +696,21 @@ pub(crate) fn place_graphics(content: &mut Content, elems: &[GraphicsElem], tx: 
                 emit_path(content, path);
                 content.stroke();
             }
-            // `draw-text` STAND-IN (see `GraphicsElem::Text`'s doc comment,
-            // satysfi-backend/src/graphics.rs): the anchor point carries no
-            // renderable content, so this emits nothing.
-            GraphicsElem::Text(_) => {}
+            // `draw-text` (roadmap C1): re-enter the writer's own per-box
+            // emission at box-local coordinates `pt + dx` for each box the
+            // run carries — see `GraphicsElem::Text`'s doc comment
+            // (satysfi-backend/src/graphics.rs) and this function's own
+            // "Text and the CTM" note above.
+            GraphicsElem::Text { pt, contents, .. } => {
+                for (dx, bx) in contents {
+                    emit_nested(content, bx, (pt.0 + *dx).0 as f32, pt.1 .0 as f32)?;
+                }
+            }
         }
         content.restore_state();
     }
     content.restore_state();
+    Ok(())
 }
 
 fn set_fill_color(content: &mut Content, color: Color) {

@@ -14,6 +14,43 @@ use std::sync::Arc;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MathCmdId(pub usize);
 
+/// v0.0.6 `CharBasis.script`, SURFACE subset: the four constructors a
+/// `script` VALUE can carry (`get_script`, evalUtil.ml:235-241; the port's
+/// `script` variant decl, prim_types.rs `script_decl`). Upstream's
+/// internal-only `CommonNarrow`/`CommonWide`/`Inherited` (charBasis.ml:11-13)
+/// arise solely inside the char decoder — group D (text-rendering.md Slice
+/// 2) adds them there if its `normalize_script` port needs them; context
+/// storage never sees them. Discriminants index `langsys_scheme`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Script {
+    HanIdeographic = 0,
+    /// Upstream internal name `HiraganaOrKatakana`; surface ctor `Kana`.
+    Kana = 1,
+    Latin = 2,
+    OtherScript = 3,
+}
+
+/// v0.0.6 `CharBasis.language_system` (the port's `language` variant decl).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Language {
+    Japanese,
+    English,
+    NoLanguageSystem,
+}
+
+/// One script's font selection within a `Context::font_scheme` (D1b,
+/// `docs/plans/text-rendering.md` §1): upstream `font_with_ratio`
+/// (`horzBox.ml`) folded into a plain struct. `ratio` scales `ctx.font_size`
+/// for this script's glyphs (e.g. a CJK face set at 0.88 of the Latin size,
+/// stdja's `ipaexm` convention); `rising` is a further fraction-of-size
+/// baseline raise (`fontInfo.ml`'s `get_font_with_ratio`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ScriptFont {
+    pub font: FontKey,
+    pub ratio: f64,
+    pub rising: f64,
+}
+
 /// The typesetting context (a milestone-1 subset of `context_main` in
 /// horzBox.ml). Grows field by field as primitives need them.
 #[derive(Clone, Debug, PartialEq)]
@@ -49,6 +86,34 @@ pub struct Context {
     /// has no analogue here yet) — `pervasives.satyh`'s `\SATySFi`/`\LaTeX`/
     /// `\TeX` set it, but this port has nothing downstream that reads it.
     pub manual_rising: Length,
+    /// `set-dominant-wide-script` (v0.0.6 `context_main.dominant_wide_script`,
+    /// horzBox.ml:218). FAITHFUL storage; round-trips via
+    /// `get-dominant-wide-script`. The layout consumer (`normalize_script`'s
+    /// CommonWide arm → CJK font selection) is group D, text-rendering.md
+    /// Slice 2.
+    pub dominant_wide_script: Script,
+    /// `set-dominant-narrow-script` (horzBox.ml:219). Same status.
+    pub dominant_narrow_script: Script,
+    /// `set-language`/`get-language` (v0.0.6 `context_main.langsys_scheme`,
+    /// horzBox.ml:216 — a script→language_system map). Stored as a dense
+    /// 4-slot array indexed by `Script`'s discriminant; upstream's "absent
+    /// from map" IS `NoLanguageSystem` (`get_language_system`'s default,
+    /// horzBox.ml:483-487), so the empty map and `[NoLanguageSystem; 4]`
+    /// are indistinguishable — no Option needed. Consumer: OpenType
+    /// language-system shaping, group D.
+    pub langsys_scheme: [Language; 4],
+    /// `set-font`'s per-script font/ratio/rising scheme (D1b; v0.0.6
+    /// `context_main.font_scheme`, horzBox.ml:214), indexed by `Script`'s
+    /// discriminant (`char_script`'s classification of a run). Resolution
+    /// rule (back-compat critical, see `set-font`'s doc in satysfi-lang):
+    /// `Latin`-script text keeps reading `Context::font` directly, NOT this
+    /// scheme's `Latin` slot — `set-font Latin f` writes BOTH so the two
+    /// stay in sync, but every pre-D1 `set-font-key`/`\bold`/`\emph` call
+    /// (which only ever touches `font`) is unaffected. Seeded to `{ font:
+    /// FontKey(0), ratio: 1.0, rising: 0.0 }` for all four scripts —
+    /// identical to today's single-font behavior until a `set-font` call or
+    /// a configured `default-font.satysfi-hash` `scripts` block overlays it.
+    pub font_scheme: [ScriptFont; 4],
     /// `set-text-color`/`get-text-color` (docs/plans/context-box-prims.md
     /// §Slice 1 row 1-2; v0.0.6 `context_main.text_color`). FAITHFUL storage
     /// — round-trips exactly (`itemize.satyh`'s bullet `fill` color depends
@@ -107,6 +172,14 @@ impl Context {
             paragraph_top: Length::pt(18.0),
             paragraph_bottom: Length::pt(18.0),
             manual_rising: Length::ZERO,
+            dominant_wide_script: Script::OtherScript,
+            dominant_narrow_script: Script::OtherScript,
+            langsys_scheme: [Language::NoLanguageSystem; 4],
+            font_scheme: [ScriptFont {
+                font: FontKey(0),
+                ratio: 1.0,
+                rising: 0.0,
+            }; 4],
             // v0.0.6's `get_pdf_mode_initial_context` (primitives.cppo.ml):
             // `text_color = DeviceGray 0.`, `hyphen_badness = 100`,
             // `space_natural = 0.33`, `space_shrink = 0.08`,

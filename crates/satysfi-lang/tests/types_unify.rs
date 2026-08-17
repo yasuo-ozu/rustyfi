@@ -368,6 +368,7 @@ fn every_registered_primitive_has_a_type() {
         "line-break",
         "page-break",
         "page-break-multicolumn",
+        "page-break-two-column",
         "+",
         "-",
         "*",
@@ -453,6 +454,8 @@ fn every_registered_primitive_has_a_type() {
         "inline-graphics",
         // ---- docs/plans/table-subsystem.md §Slice 1 ----
         "tabular",
+        // ---- roadmap C2 (docs/plans/graphics-subsystem.md §D) ----
+        "inline-graphics-outer",
         // ---- gr.satyh roadmap prims (docs/plans/graphics-subsystem.md
         // §Full roadmap A/B/C/D) ----
         "bezier-to",
@@ -462,6 +465,7 @@ fn every_registered_primitive_has_a_type() {
         "shift-graphics",
         "linear-transform-graphics",
         "get-graphics-bbox",
+        "get-path-bbox",
         "dashed-stroke",
         "draw-text",
         // ---- pervasives.satyh unblockers (docs/plans/stdlib-port.md) ----
@@ -477,6 +481,8 @@ fn every_registered_primitive_has_a_type() {
         "hook-page-break-block",
         "register-cross-reference",
         "get-cross-reference",
+        // ---- group E1: hooks-annotations-crossref.md §A closer ----
+        "probe-cross-reference",
         // ---- docs/plans/math-engine.md §A + §G ----
         "math-char",
         "math-big-char",
@@ -535,6 +541,15 @@ fn every_registered_primitive_has_a_type() {
         "set-every-word-break",
         "register-outline",
         "extract-string",
+        // ---- group E2: dominant-script/language getters (context-box-
+        // prims.md §C landed) ----
+        "get-dominant-wide-script",
+        "get-dominant-narrow-script",
+        "get-language",
+        // ---- group E3: text-mode-context sliver (context-box-prims.md §G) ----
+        "get-initial-text-info",
+        "deepen-indent",
+        "break",
         // ---- proof.satyh/footnote-scheme.satyh unblockers (tail-prims sweep) ----
         "embed-block-bottom",
         "line-stack-bottom",
@@ -542,7 +557,7 @@ fn every_registered_primitive_has_a_type() {
         // ---- page-level prims blocking mitou-report/stdjareport ----
         "clear-page",
     ];
-    assert_eq!(NAMES.len(), 159, "keep this list in sync with primitives.rs's prims! table");
+    assert_eq!(NAMES.len(), 169, "keep this list in sync with primitives.rs's prims! table");
     for name in NAMES {
         assert!(
             prim_types::primitive_type(name).is_some(),

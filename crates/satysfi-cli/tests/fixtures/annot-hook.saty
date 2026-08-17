@@ -1,0 +1,30 @@
+% Group A fixture (docs/plans/hooks-annotations-crossref.md §B/§C): a raw
+% `hook-page-break` closure registers a named destination and a URI link
+% annotation on the page it fires on; a top-level `register-outline` call
+% registers a 2-entry outline, one item keyed to the same destination name.
+% Exercises /Annots + /Dests + /Outlines end-to-end without needing the
+% frame/deco machinery (§D) `annot.satyh`'s \href uses — see `href.saty` for
+% that path. Sequencing mirrors `annot.satyh:17`'s `let () = ... in ...`
+% style.
+
+@require: stdja-mini
+
+let-inline ctx \annothook =
+  hook-page-break (fun pbinfo pt -> (
+    let () = register-destination `top` pt in
+    register-link-to-uri `https://example.com/` pt 100pt 10pt 2pt None
+  ))
+
+in
+let () =
+  register-outline [
+    (0, `Top`, `top`, true);
+    (0, `Elsewhere`, `nowhere`, false);
+  ]
+in
+document (|
+  title = {Annot Hook};
+  author = {yasuo};
+|) '<
+  +p { Hook: \annothook; here. }
+>

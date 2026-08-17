@@ -162,14 +162,6 @@ fn assert_ok(out: &Output, ctx: &str) {
     );
 }
 
-/// Whether `haystack` contains `needle` verbatim (naive search — fine for
-/// the bounded needle sizes used in this file).
-fn contains_subslice(haystack: &[u8], needle: &[u8]) -> bool {
-    !needle.is_empty()
-        && haystack.len() >= needle.len()
-        && haystack.windows(needle.len()).any(|w| w == needle)
-}
-
 /// Deliverable 1e, case 1: a fixture whose body needs a real font (a
 /// non-WinAnsi café/→) compiles through `--font-dir`, embeds the real font
 /// file, and round-trips through `pdftotext` (proving the `ToUnicode` CMap
@@ -208,24 +200,17 @@ fn real_font_fixture_renders_through_ttf_path_and_roundtrips() {
         &pdf_bytes[..pdf_bytes.len().min(16)]
     );
 
-    // Whole-file embedding (no subsetting yet, `cid.rs`'s `write_font` doc
-    // comment): the PDF must be at least as large as the source font file,
-    // and a representative chunk of the font's own bytes must appear
-    // verbatim in the output (a full-file substring search would be
-    // needlessly slow for a multi-hundred-KB needle; a chunk is just as
-    // conclusive proof of verbatim embedding).
+    // D5 (docs/plans/text-rendering.md §2): the embedded `FontFile2` is now
+    // SUBSET to the glyphs `realfont.saty`'s body actually uses, so the
+    // whole output PDF is much SMALLER than the source font file (inverted
+    // from the pre-D5 whole-file-embed assertion this test used to make —
+    // see `satysfi-pdf/tests/ttf.rs`'s matching update).
     let font_bytes = std::fs::read(&font_path).expect("read font file");
     assert!(
-        pdf_bytes.len() > font_bytes.len(),
-        "expected the PDF ({} bytes) to be larger than the embedded font file ({} bytes)",
+        pdf_bytes.len() < font_bytes.len(),
+        "expected the subsetted PDF ({} bytes) to be smaller than the source font file ({} bytes)",
         pdf_bytes.len(),
         font_bytes.len()
-    );
-    let mid = font_bytes.len() / 2;
-    let chunk = &font_bytes[mid..(mid + 256).min(font_bytes.len())];
-    assert!(
-        contains_subslice(&pdf_bytes, chunk),
-        "expected the embedded font's own bytes to appear verbatim in the PDF"
     );
 
     let pdftotext = Command::new("pdftotext")

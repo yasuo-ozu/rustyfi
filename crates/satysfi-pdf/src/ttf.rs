@@ -4,11 +4,13 @@
 //! measures through `ttf-parser`'s `cmap`/`hmtx`/`hhea`/`OS/2` tables instead
 //! of hardcoded AFM widths.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use satysfi_backend::{
-    FontKey, FontMetrics, Length, MathConstants, MathCorner, MathVariantGlyph, VertVariantPolicy,
+    FontKey, FontMetrics, Length, MathConstants, MathCorner, MathVariantGlyph, Script,
+    VertVariantPolicy,
 };
 use ttf_parser::Face;
 
@@ -45,9 +47,27 @@ pub enum FontError {
 pub struct TtfFontStore {
     /// One entry per physical font file that was actually loaded.
     files: Vec<Vec<u8>>,
-    /// `FontKey(0)=regular, 1=bold, 2=oblique` -> index into `files`. Missing
-    /// bold/oblique share the regular slot (index 0).
-    slot: [usize; 3],
+    /// `FontKey(0)=regular, 1=bold, 2=oblique, 3.. = registry abbrevs` ->
+    /// index into `files`. Missing bold/oblique share the regular slot
+    /// (index 0). WAS a fixed `[usize; 3]`; grown to `Vec` (D1a,
+    /// docs/plans/text-rendering.md §1) so `FontRegistry::build_store` can
+    /// allocate one slot per configured abbrev beyond the three seeded
+    /// defaults, with `slots[0..3]` staying regular/bold/oblique exactly as
+    /// before — a 3-slot store (every call site that only ever used
+    /// `TtfFontStore::load`) is byte-identical to pre-D1a behavior.
+    slots: Vec<usize>,
+    /// Registry abbrev ("ipaexm", "Junicode-b", ...) -> the `FontKey`
+    /// allocated for it by `FontRegistry::build_store`. Empty for a bare
+    /// `TtfFontStore::load` (no registry involved) — `resolve_font_abbrev`
+    /// then returns `None` and callers fall back to the 3-face name
+    /// heuristic (`resolve_font_abbrev` free fn, satysfi-lang).
+    abbrevs: BTreeMap<String, FontKey>,
+    /// The configured default `(font, ratio, rising)` per `Script`
+    /// (`context::Script` as `usize`), from `default-font.satysfi-hash`'s
+    /// optional `scripts` block (D1a). `None` per-slot (the default) means
+    /// "no script scheme configured" — callers overlay `(ctx.font, 1.0,
+    /// 0.0)` themselves, keeping today's single-font behavior.
+    script_defaults: [Option<(FontKey, f64, f64)>; 4],
 }
 
 impl TtfFontStore {
@@ -59,21 +79,46 @@ impl TtfFontStore {
         oblique: Option<&Path>,
     ) -> Result<Self, FontError> {
         let mut files = vec![Self::read_and_validate(regular)?];
-        let mut slot = [0usize; 3];
+        let mut slots = vec![0usize, 0, 0];
 
         if let Some(path) = bold {
             files.push(Self::read_and_validate(path)?);
-            slot[1] = files.len() - 1;
+            slots[1] = files.len() - 1;
         }
         if let Some(path) = oblique {
             files.push(Self::read_and_validate(path)?);
-            slot[2] = files.len() - 1;
+            slots[2] = files.len() - 1;
         }
 
-        Ok(TtfFontStore { files, slot })
+        Ok(TtfFontStore {
+            files,
+            slots,
+            abbrevs: BTreeMap::new(),
+            script_defaults: [None; 4],
+        })
     }
 
-    fn read_and_validate(path: &Path) -> Result<Vec<u8>, FontError> {
+    /// Builder used only by [`crate::fonts::FontRegistry::build_store`]
+    /// (D1a): construct a store with the three default slots already
+    /// loaded (via [`Self::load`]) plus every other configured abbrev's
+    /// file appended as its own slot (deduped by canonical path against
+    /// files already loaded), and the abbrev -> `FontKey` map that
+    /// `resolve_font_abbrev` consults.
+    pub(crate) fn from_parts(
+        files: Vec<Vec<u8>>,
+        slots: Vec<usize>,
+        abbrevs: BTreeMap<String, FontKey>,
+        script_defaults: [Option<(FontKey, f64, f64)>; 4],
+    ) -> Self {
+        TtfFontStore {
+            files,
+            slots,
+            abbrevs,
+            script_defaults,
+        }
+    }
+
+    pub(crate) fn read_and_validate(path: &Path) -> Result<Vec<u8>, FontError> {
         let bytes = fs::read(path).map_err(|source| FontError::Io {
             path: path.to_path_buf(),
             source,
@@ -86,27 +131,51 @@ impl TtfFontStore {
         Ok(bytes)
     }
 
-    /// Clamp an arbitrary `FontKey` onto the three known slots, mirroring
-    /// `base14::Base14Metrics`'s treatment of out-of-range keys.
-    fn key_slot(font: FontKey) -> usize {
-        (font.0 as usize).min(2)
+    /// Clamp an arbitrary `FontKey` onto the known slots, mirroring
+    /// `base14::Base14Metrics`'s treatment of out-of-range keys. Was
+    /// `min(2)` when the store only ever had 3 slots; a 3-slot store's
+    /// clamp is unchanged (`min(2) == min(len - 1)` when `len == 3`).
+    fn key_slot(&self, font: FontKey) -> usize {
+        (font.0 as usize).min(self.slots.len() - 1)
     }
 
     /// The physical-file index backing `font` (after bold/oblique fallback).
     /// Used by the CID embedder to dedup: two `FontKey`s that resolve to the
     /// same file are embedded (and their Type0 font object shared) once.
     pub fn file_index(&self, font: FontKey) -> usize {
-        self.slot[Self::key_slot(font)]
+        self.slots[self.key_slot(font)]
     }
 
-    /// Number of distinct font files backing this store (1..=3).
+    /// Number of distinct font files backing this store.
     pub fn num_files(&self) -> usize {
         self.files.len()
+    }
+
+    /// Number of allocated `FontKey` slots (3 for a bare `load`; 3 + one
+    /// per extra configured abbrev for a registry-built store).
+    pub fn num_slots(&self) -> usize {
+        self.slots.len()
     }
 
     /// Raw bytes of a physical file, for `FontFile2` embedding.
     pub fn file_bytes(&self, file_index: usize) -> &[u8] {
         &self.files[file_index]
+    }
+
+    /// Resolve a registry abbrev ("ipaexm", "Junicode-b", ...) to its
+    /// allocated `FontKey`, or `None` if the store has no such abbrev
+    /// (either it wasn't configured, or the store came from a bare `load`).
+    pub fn abbrev_key(&self, abbrev: &str) -> Option<FontKey> {
+        self.abbrevs.get(abbrev).copied()
+    }
+
+    /// The configured default `(font, ratio, rising)` for `script` (as its
+    /// `usize` discriminant — `context::Script`), from
+    /// `default-font.satysfi-hash`'s `scripts` block, or `None` when no
+    /// scheme was configured for that script (the caller then falls back to
+    /// `(ctx.font, 1.0, 0.0)`).
+    pub fn script_default(&self, script: usize) -> Option<(FontKey, f64, f64)> {
+        self.script_defaults.get(script).copied().flatten()
     }
 
     /// Parse the face for a given font key. See the struct doc for why this
@@ -300,5 +369,97 @@ impl FontMetrics for TtfFontStore {
             height: size * (bbox.y_max.max(0) as f64 / upem),
             depth: size * ((-(bbox.y_min.min(0) as i32)) as f64 / upem),
         })
+    }
+
+    /// §B (`GlyphAssembly`): stretch `c` beyond the largest discrete
+    /// `MathVariants` record by stacking the assembly's `GlyphPart`s
+    /// vertically, repeating `extender` parts to reach `target`. Faithful to
+    /// the OpenType "assembling glyphs" recipe (and `math.ml`'s
+    /// `MathVariants`/`GlyphConstruction` reader): parts are listed
+    /// bottom-to-top; every non-extender part is placed exactly once, and all
+    /// extender parts are repeated the same number of times `r` (the smallest
+    /// `r` whose stacked extent, at the minimum `min_connector_overlap`
+    /// overlap, covers `target`). Each connection overlaps by exactly
+    /// `min_connector_overlap` design units (the smallest legal overlap, which
+    /// yields the LONGEST assembly for a given part count — so the result
+    /// always covers `target`). Returns `(gid, dy, advance)` per placed part
+    /// with `dy` the y-up box-local baseline offset (bottom part at `dy = 0`,
+    /// each next part raised by the previous part's advance minus the
+    /// overlap) and `advance` the part's `full_advance` scaled to `size`.
+    fn math_vertical_assembly(
+        &self,
+        font: FontKey,
+        c: char,
+        size: Length,
+        target: Length,
+    ) -> Option<Vec<(u16, Length, Length)>> {
+        let face = self.face(font)?;
+        let gid = face.glyph_index(c)?;
+        let variants = face.tables().math?.variants?;
+        let construction = variants.vertical_constructions.get(gid)?;
+        let assembly = construction.assembly?;
+        let parts: Vec<ttf_parser::math::GlyphPart> = assembly.parts.into_iter().collect();
+        if parts.is_empty() {
+            return None;
+        }
+        let upem = face.units_per_em() as f64;
+        let overlap_du = variants.min_connector_overlap as f64;
+        // The extent of an ordered part list, in design units, at the minimum
+        // (`min_connector_overlap`) overlap on every connection — i.e. the
+        // longest the list can stack. `sum(full_advance) - overlap *
+        // (count - 1)`.
+        let extent_du = |seq: &[&ttf_parser::math::GlyphPart]| -> f64 {
+            if seq.is_empty() {
+                return 0.0;
+            }
+            let sum: f64 = seq.iter().map(|p| p.full_advance as f64).sum();
+            sum - overlap_du * (seq.len() as f64 - 1.0)
+        };
+        let target_du = (target.0 / size.0) * upem;
+        // Grow the extender repeat count `r` until the stack covers `target`
+        // (or a hard cap keeps a pathological/degenerate assembly from
+        // looping forever — 256 repeats is far past any real delimiter).
+        let build = |r: usize| -> Vec<&ttf_parser::math::GlyphPart> {
+            let mut seq: Vec<&ttf_parser::math::GlyphPart> = Vec::new();
+            for p in &parts {
+                let times = if p.part_flags.extender() { r } else { 1 };
+                for _ in 0..times {
+                    seq.push(p);
+                }
+            }
+            seq
+        };
+        let has_extender = parts.iter().any(|p| p.part_flags.extender());
+        let mut r = if has_extender { 1 } else { 0 };
+        let mut seq = build(r);
+        while has_extender && extent_du(&seq) < target_du && r < 256 {
+            r += 1;
+            seq = build(r);
+        }
+        if seq.is_empty() {
+            return None;
+        }
+        // Place bottom-to-top. `advance` is the scaled full_advance; each next
+        // part's baseline is raised by `advance - overlap`.
+        let overlap_scaled = size * (overlap_du / upem);
+        let mut out = Vec::with_capacity(seq.len());
+        let mut cursor = Length::ZERO;
+        for p in &seq {
+            let advance = size * (p.full_advance as f64 / upem);
+            out.push((p.glyph_id.0, cursor, advance));
+            cursor += advance - overlap_scaled;
+        }
+        Some(out)
+    }
+
+    // ---- D1a: registry-abbrev resolution (docs/plans/text-rendering.md
+    // §1a) ---------------------------------------------------------------
+
+    fn resolve_font_abbrev(&self, abbrev: &str) -> Option<FontKey> {
+        self.abbrev_key(abbrev)
+    }
+
+    fn default_script_font(&self, script: Script) -> Option<(FontKey, f64, f64)> {
+        self.script_default(script as usize)
     }
 }

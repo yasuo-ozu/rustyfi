@@ -2,6 +2,7 @@
 //! backend of the SATySFi port (a milestone-1 subset of `src/backend/`).
 
 pub mod context;
+pub mod doc;
 pub mod font;
 pub mod graphics;
 pub mod hbox;
@@ -12,16 +13,19 @@ pub mod pagebreak;
 pub mod tabular;
 pub mod vbox;
 
-pub use context::{Context, MathCmdId, PageGeometry, PaperSize};
+pub use context::{Context, Language, MathCmdId, PageGeometry, PaperSize, Script, ScriptFont};
+pub use doc::{Annot, AnnotAction, DocExtras, NamedDest, OutlineEntry};
 pub use font::{
-    FontKey, FontMetrics, MathConstants, MathCorner, MathVariantGlyph, VertVariantPolicy,
+    char_script, FontKey, FontMetrics, MathConstants, MathCorner, MathVariantGlyph,
+    VertVariantPolicy,
 };
 pub use graphics::{
-    graphics_bbox, linear_transform_graphics, linear_transform_path, shift_graphics, shift_path,
-    Closing, Color, Dash, GraphicsElem, Path, PathSeg, Point, PrePath, Subpath,
+    graphics_bbox, linear_transform_graphics, linear_transform_path, path_bbox, shift_graphics,
+    shift_path, Closing, Color, Dash, GraphicsElem, Path, PathSeg, Point, PrePath, Subpath,
 };
 pub use hbox::{
-    HookId, HorzBox, HorzStringInfo, ImageId, ImageResource, PureHorzBox, FORCED_BREAK_PENALTY,
+    DecoId, GraphicsFnId, HookId, HorzBox, HorzStringInfo, ImageId, ImageResource, PureHorzBox,
+    FORCED_BREAK_PENALTY,
 };
 pub use length::Length;
 pub use linebreak::{
@@ -30,6 +34,6 @@ pub use linebreak::{
 pub use math::{
     default_math_class_map, default_math_variant_char, MathCharClass, MathGlyph, MathKind,
 };
-pub use pagebreak::{chop_page, place_block_at, Page, PlacedLine};
+pub use pagebreak::{chop_page, place_block_at, placed_line_extent, Page, PlacedLine};
 pub use tabular::{Cell, Paddings, TabularBox, TabularCellBox};
 pub use vbox::VertBox;

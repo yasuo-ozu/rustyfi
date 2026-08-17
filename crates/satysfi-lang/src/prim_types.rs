@@ -263,6 +263,11 @@ pub fn t_script() -> MonoType {
 pub fn t_language() -> MonoType {
     MonoType::Variant("language".to_string(), Vec::new())
 }
+/// `text-info` (vminst.ml's `tTCTX`; v0.0.6 `TextInfoType`) — the text-mode
+/// context. §G sliver: only the three pure prims below produce/consume it.
+pub fn t_text_info() -> MonoType {
+    MonoType::Base(BaseType::TextInfo)
+}
 /// `paddings` (vminst.ml's `tPADS = tPROD [tLN;tLN;tLN;tLN]`) — a plain
 /// 4-tuple `(paddingL, paddingR, paddingT, paddingB)`, matching the runtime
 /// shape `primitives.rs`'s `as_paddings` reads (mirrors `evalUtil.ml`'s
@@ -422,14 +427,29 @@ pub fn primitive_type(name: &str) -> Option<PolyType> {
         // page-content-scheme) -> (pbinfo -> page-parts) -> block-boxes ->
         // document` (vminst.ml:1065 `BackendPageBreakingMultiColumn`:
         // `~% (tPG @-> tL tLN @-> (tU @-> tBB) @-> (tU @-> tBB) @->
-        // tPAGECONTF @-> tPAGEPARTSF @-> tBB @-> tDOC)`) — typed faithfully
-        // so `stdjareport.satyh` type-checks; the body is a STAND-IN, see
-        // `primitives.rs`'s `prim_page_break_multicolumn` doc comment.
+        // tPAGECONTF @-> tPAGEPARTSF @-> tBB @-> tDOC)`) — FAITHFUL, see
+        // `primitives.rs`'s `prim_page_break_multicolumn` / `page_break_core`.
         "page-break-multicolumn" => poly0(arrows(
             vec![
                 t_page(),
                 list(t_length()),
                 arrow(t_unit(), t_block_boxes()),
+                arrow(t_unit(), t_block_boxes()),
+                arrow(t_pbinfo(), t_page_content_scheme()),
+                arrow(t_pbinfo(), t_page_parts()),
+                t_block_boxes(),
+            ],
+            t_document(),
+        )),
+        // `page-break-two-column : page -> length -> (unit -> block-boxes)
+        // -> (pbinfo -> page-content-scheme) -> (pbinfo -> page-parts) ->
+        // block-boxes -> document` (vminst.ml:1041
+        // `BackendPageBreakingTwoColumn`: `~% (tPG @-> tLN @-> (tU @-> tBB)
+        // @-> tPAGECONTF @-> tPAGEPARTSF @-> tBB @-> tDOC)`).
+        "page-break-two-column" => poly0(arrows(
+            vec![
+                t_page(),
+                t_length(),
                 arrow(t_unit(), t_block_boxes()),
                 arrow(t_pbinfo(), t_page_content_scheme()),
                 arrow(t_pbinfo(), t_page_parts()),
@@ -727,6 +747,18 @@ pub fn primitive_type(name: &str) -> Option<PolyType> {
             t_inline_boxes(),
         )),
 
+        // vminst.ml:1891 `BackendInlineGraphicsOuter`: `~% (tLN @-> tLN @->
+        // tIGRO @-> tIB)` — tIGRO = `length -> point -> graphics list` (the
+        // resolved width, then the placed point).
+        "inline-graphics-outer" => poly0(arrows(
+            vec![
+                t_length(),
+                t_length(),
+                arrows(vec![t_length(), t_point()], list(t_graphics())),
+            ],
+            t_inline_boxes(),
+        )),
+
         // ==== gr.satyh roadmap prims (docs/plans/graphics-subsystem.md
         // §Full roadmap A/B/C/D) — signatures from `tools/gencode/vminst.ml`:
         // `bezier-to` :742, `close-with-bezier` :787, `shift-path` :663,
@@ -764,16 +796,17 @@ pub fn primitive_type(name: &str) -> Option<PolyType> {
         )),
         // `get-graphics-bbox : graphics -> point * point`.
         "get-graphics-bbox" => poly0(arrow(t_graphics(), product(vec![t_point(), t_point()]))),
+        // `get-path-bbox : path -> point * point` (vminst.ml:696
+        // `PathGetBoundingBox`).
+        "get-path-bbox" => poly0(arrow(t_path(), product(vec![t_point(), t_point()]))),
         // `dashed-stroke : length -> dash -> color -> path -> graphics`
         // (width first, like `stroke`, with the dash pattern inserted next).
         "dashed-stroke" => poly0(arrows(
             vec![t_length(), t_dash(), t_color(), t_path()],
             t_graphics(),
         )),
-        // `draw-text : point -> inline-boxes -> graphics` — STAND-IN body
-        // (see `primitives.rs`'s `prim_draw_text`); typed faithfully so
-        // `gr.satyh`'s callers still type-check exactly as they would
-        // upstream.
+        // `draw-text : point -> inline-boxes -> graphics` — FAITHFUL (see
+        // `primitives.rs`'s `prim_draw_text`).
         "draw-text" => poly0(arrows(vec![t_point(), t_inline_boxes()], t_graphics())),
 
         // ==== pervasives.satyh unblockers (docs/plans/stdlib-port.md) ====
@@ -788,6 +821,12 @@ pub fn primitive_type(name: &str) -> Option<PolyType> {
         // @-> tIB)`. STAND-IN body — see primitives.rs's
         // `prim_inline_frame_outer` doc comment.
         "inline-frame-outer" => poly0(arrows(
+            vec![t_paddings(), t_deco(), t_inline_boxes()],
+            t_inline_boxes(),
+        )),
+        // vminst.ml:1807 `BackendInnerFrame`: `~% (tPADS @-> tDECO @-> tIB
+        // @-> tIB)` — same signature as `inline-frame-outer` above.
+        "inline-frame-inner" => poly0(arrows(
             vec![t_paddings(), t_deco(), t_inline_boxes()],
             t_inline_boxes(),
         )),
@@ -839,6 +878,9 @@ pub fn primitive_type(name: &str) -> Option<PolyType> {
         }
         // vminstdef.yaml:1808 `~% (tS @-> tOPT tS)`.
         "get-cross-reference" => poly0(arrow(t_string(), t_option(t_string()))),
+        // vminst.ml:3043 `BackendProbeCrossReference`: `~% (tS @-> tOPT tS)`
+        // — `get-cross-reference` without the recorded miss. FAITHFUL.
+        "probe-cross-reference" => poly0(arrow(t_string(), t_option(t_string()))),
 
         // ==== docs/plans/hooks-annotations-crossref.md §B/§D: annot.satyh's
         // prim surface. STAND-IN bodies — see primitives.rs's
@@ -1104,9 +1146,9 @@ pub fn primitive_type(name: &str) -> Option<PolyType> {
         // `line-stack-bottom`): `~% ((tL tIB) @-> tIB)`. FAITHFUL — see
         // `primitives.rs`'s `prim_line_stack_bottom`.
         "line-stack-bottom" => poly0(arrow(list(t_inline_boxes()), t_inline_boxes())),
-        // vminst.ml:1130 `PrimitiveAddFootnote` (named `add-footnote`):
-        // `~% (tBB @-> tIB)`. STAND-IN (no page-bottom float accumulator
-        // yet) — see `primitives.rs`'s `prim_add_footnote`.
+        // vminst.ml:1130 PrimitiveAddFootnote: ~% (tBB @-> tIB). FAITHFUL —
+        // see primitives.rs's prim_add_footnote (footnote float
+        // accumulator, docs/plans/document-page-model.md §C).
         "add-footnote" => poly0(arrow(t_block_boxes(), t_inline_boxes())),
         // vminst.ml:1463 `PrimitiveSetFont`: `~% (tSCR @-> tFONT @-> tCTX @-> tCTX)`.
         // STAND-IN: single `FontKey` slot, script ignored — see
@@ -1140,23 +1182,31 @@ pub fn primitive_type(name: &str) -> Option<PolyType> {
         "get-natural-length" => poly0(arrow(t_block_boxes(), t_length())),
 
         // ==== `docs/plans/build-order-to-stdja.md` step 8/9 orphans: the
-        // remaining stdja.satyh primitives with no prior slice. STAND-INs
-        // (accepted, dropped) for the same reason `set-math-font`/
-        // `set-code-text-command` above are — no per-script/-language state
-        // lives on this port's `Context` yet (`docs/plans/text-rendering.md`
-        // Slice 1 territory). ====
+        // remaining stdja.satyh primitives with no prior slice.
+        // `set-dominant-wide-script`/`set-dominant-narrow-script`/
+        // `set-language` (rows 15/17/18) are now FAITHFUL stores
+        // (context-box-prims.md §C landed, group E2) with real getter
+        // round-trips just below; `set-every-word-break`/`register-outline`
+        // remain STAND-INs (accepted, dropped) — see their `primitives.rs`
+        // doc comments. ====
         //
-        // vminstdef.yaml:1377 `PrimitiveSetDominantWideScript`:
+        // vminst.ml:1511 `PrimitiveSetDominantWideScript`:
         // `~% (tSCR @-> tCTX @-> tCTX)`.
         "set-dominant-wide-script" => poly0(arrow(t_script(), arrow(t_context(), t_context()))),
-        // vminstdef.yaml:1402 `PrimitiveSetDominantNarrowScript`: same shape.
+        // vminst.ml:1539 `PrimitiveSetDominantNarrowScript`: same shape.
         "set-dominant-narrow-script" => poly0(arrow(t_script(), arrow(t_context(), t_context()))),
-        // vminstdef.yaml:1427 `PrimitiveSetLangSys`:
+        // vminst.ml:1568 `PrimitiveSetLangSys`:
         // `~% (tSCR @-> tLANG @-> tCTX @-> tCTX)`.
         "set-language" => poly0(arrows(
             vec![t_script(), t_language(), t_context()],
             t_context(),
         )),
+        // vminst.ml:1526/1555 `PrimitiveGetDominantWideScript`/
+        // `...NarrowScript`: `~% (tCTX @-> tSCR)`. FAITHFUL.
+        "get-dominant-wide-script" => poly0(arrow(t_context(), t_script())),
+        "get-dominant-narrow-script" => poly0(arrow(t_context(), t_script())),
+        // vminst.ml:1587 `PrimitiveGetLangSys`: `~% (tSCR @-> tCTX @-> tLANG)`.
+        "get-language" => poly0(arrows(vec![t_script(), t_context()], t_language())),
         // vminst.ml:3007 `PrimitiveSetEveryWordBreak`:
         // `~% (tIB @-> tIB @-> tCTX @-> tCTX)`.
         "set-every-word-break" => poly0(arrows(
@@ -1181,6 +1231,19 @@ pub fn primitive_type(name: &str) -> Option<PolyType> {
         // et al. already flatten into the same `Vec<HorzBox>` — see
         // `primitives.rs`'s `prim_extract_string`).
         "extract-string" => poly0(arrow(t_inline_boxes(), t_string())),
+
+        // ==== docs/plans/context-box-prims.md §G (text-mode-context
+        // sliver): the three PURE text-info prims. The text/html backends
+        // (`stringify-inline`/`stringify-block`, `.satyh-text` loading) are
+        // deliberately out of scope for this PDF port — see
+        // `primitives.rs`'s section comment. ====
+        //
+        // vminst.ml:953 `TextGetInitialTextModeContext`: `~% (tU @-> tTCTX)`.
+        "get-initial-text-info" => poly0(arrow(t_unit(), t_text_info())),
+        // vminst.ml:921 `TextDeepenIndent`: `~% (tI @-> tTCTX @-> tTCTX)`.
+        "deepen-indent" => poly0(arrows(vec![t_int(), t_text_info()], t_text_info())),
+        // vminst.ml:935 `TextBreak`: `~% (tTCTX @-> tS)`.
+        "break" => poly0(arrow(t_text_info(), t_string())),
 
         _ => return None,
     })

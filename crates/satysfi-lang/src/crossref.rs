@@ -64,9 +64,9 @@ impl CrossRefs {
         }
     }
 
-    /// `crossRef.ml:?` — like [`Self::get`] but records no miss (roadmap §A's
-    /// `probe-cross-reference`).
-    #[allow(dead_code)]
+    /// `crossRef.ml:112` — like [`Self::get`] but records no miss
+    /// (`probe-cross-reference`): probing an absent key must NOT force
+    /// another fixpoint trial.
     pub fn probe(&self, k: &str) -> Option<String> {
         self.table.get(k).cloned()
     }

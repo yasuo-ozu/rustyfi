@@ -91,6 +91,8 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
+use satysfi_backend::FontKey;
+
 use crate::ttf::{FontError, TtfFontStore};
 
 /// One font source, as resolved from `fonts.satysfi-hash` (`src` already
@@ -135,6 +137,12 @@ pub struct FontRegistry {
     /// to decide when to pass `None` (rather than resolving and loading the
     /// same file a second time) to `TtfFontStore::load`.
     default_faces: [String; 3],
+    /// Per-script default `(abbrev, ratio, rising)`, indexed by
+    /// `Script`'s discriminant (D1a) — from `default-font.satysfi-hash`'s
+    /// optional `scripts` block. `None` per-slot when that script wasn't
+    /// named (or the whole block is absent, or the registry came from
+    /// `--font`/CLI flags, which have no `scripts` concept at all).
+    script_fonts: [Option<(String, f64, f64)>; 4],
 }
 
 /// Config-less one-off face selection (`--font`/`--font-bold`/
@@ -204,7 +212,11 @@ struct RawFontEntry {
 }
 
 /// Raw shape of `default-font.satysfi-hash` (port-specific; see module
-/// docs). Only `regular` is required.
+/// docs). Only `regular` is required. `scripts` (D1a,
+/// docs/plans/text-rendering.md §1a) is the optional per-script default
+/// scheme mirroring upstream `setDefaultFont.ml`'s shape — absent entirely
+/// ⇒ every script defaults to `(FontKey(0), 1.0, 0.0)`, i.e. today's
+/// single-font behavior (`TtfFontStore::script_default` returns `None`).
 #[derive(Debug, Deserialize)]
 struct RawDefaultFace {
     regular: String,
@@ -212,6 +224,56 @@ struct RawDefaultFace {
     bold: Option<String>,
     #[serde(default)]
     oblique: Option<String>,
+    #[serde(default)]
+    scripts: Option<RawScripts>,
+}
+
+/// One entry of the `scripts` block: `{ "font-name": abbrev, "ratio": f64,
+/// "rising": f64 }`.
+#[derive(Debug, Deserialize)]
+struct RawScriptFont {
+    #[serde(rename = "font-name")]
+    font_name: String,
+    ratio: f64,
+    rising: f64,
+}
+
+/// The four script slots `default-font.satysfi-hash`'s `scripts` block may
+/// name, each optional (an absent script keeps the `(FontKey(0), 1.0, 0.0)`
+/// default). Field names mirror upstream's own script identifiers
+/// (`han-ideographic`/`kana`/`latin`/`other-script`).
+#[derive(Debug, Deserialize, Default)]
+struct RawScripts {
+    #[serde(rename = "han-ideographic")]
+    han_ideographic: Option<RawScriptFont>,
+    kana: Option<RawScriptFont>,
+    latin: Option<RawScriptFont>,
+    #[serde(rename = "other-script")]
+    other_script: Option<RawScriptFont>,
+}
+
+/// Load `path`'s bytes into `files` (via
+/// [`TtfFontStore::read_and_validate`]), or reuse an already-loaded file's
+/// index when `path` canonicalizes to one already in `file_by_path` (D1a
+/// dedup: two abbrevs naming the same physical font file share one embedded
+/// copy). Falls back to the path as-given when canonicalization fails (a
+/// bad path is then reported by `read_and_validate`'s own `Io` error,
+/// rather than silently treated as "never seen before" and read a second
+/// time under a slightly different string).
+fn load_or_dedup(
+    files: &mut Vec<Vec<u8>>,
+    file_by_path: &mut BTreeMap<PathBuf, usize>,
+    path: &Path,
+) -> Result<usize, FontConfigError> {
+    let canon = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    if let Some(&idx) = file_by_path.get(&canon) {
+        return Ok(idx);
+    }
+    let bytes = TtfFontStore::read_and_validate(path)?;
+    let idx = files.len();
+    files.push(bytes);
+    file_by_path.insert(canon, idx);
+    Ok(idx)
 }
 
 /// Synthetic abbrev names for the config-less `--font`/`--font-bold`/
@@ -319,9 +381,34 @@ impl FontRegistry {
             }
         }
 
+        // D1a: validate + resolve the optional `scripts` block. Same
+        // doctrine as the three default faces above — a script naming an
+        // abbrev absent from `faces` is a broken config (`Err`), never a
+        // silent fall-back.
+        let mut script_fonts: [Option<(String, f64, f64)>; 4] = [None, None, None, None];
+        if let Some(scripts) = raw_default.scripts {
+            for (idx, name, entry) in [
+                (0usize, "han-ideographic", scripts.han_ideographic),
+                (1, "kana", scripts.kana),
+                (2, "latin", scripts.latin),
+                (3, "other-script", scripts.other_script),
+            ] {
+                let Some(entry) = entry else { continue };
+                if !faces.contains_key(&entry.font_name) {
+                    return Err(FontConfigError::UnknownAbbrev {
+                        path: default_path,
+                        face: name,
+                        abbrev: entry.font_name,
+                    });
+                }
+                script_fonts[idx] = Some((entry.font_name, entry.ratio, entry.rising));
+            }
+        }
+
         Ok(Some(FontRegistry {
             faces,
             default_faces: [regular, bold, oblique],
+            script_fonts,
         }))
     }
 
@@ -350,32 +437,107 @@ impl FontRegistry {
         Ok(FontRegistry {
             faces,
             default_faces: [CLI_REGULAR.to_string(), bold_abbrev, oblique_abbrev],
+            script_fonts: [None, None, None, None],
         })
     }
 
-    /// Resolve the three seeded default faces and build a [`TtfFontStore`],
-    /// via the *existing* [`TtfFontStore::load`] — whose bold/oblique
-    /// fall-back-to-regular behavior is exactly what an unconfigured
-    /// bold/oblique slot should do, so this passes `None` for a slot whose
-    /// abbrev equals the regular one rather than re-resolving and loading
-    /// the same file under a second slot.
+    /// Resolve every configured abbrev and build an N-slot [`TtfFontStore`]
+    /// (D1a, docs/plans/text-rendering.md §1a): the three seeded default
+    /// faces occupy `FontKey(0/1/2)` exactly as before (byte-identical to
+    /// the pre-D1a 3-slot build for a config with no other abbrevs), and
+    /// every OTHER abbrev in [`Self::faces`] gets its own slot beyond that,
+    /// deduped against every file already loaded (by canonical path) so two
+    /// abbrevs naming the same physical font file share one embedded copy.
+    ///
+    /// **Eager, not lazy.** Upstream (`fontInfo.ml:24-132`) loads a face the
+    /// first time a script/abbrev actually needs it. `TtfFontStore` cannot
+    /// do that without unsafe self-referential storage or a crate like
+    /// `owned-ttf-parser` (see `ttf.rs`'s struct doc on why `Face` is
+    /// reparsed on demand instead of cached) — over a realistic registry
+    /// (~11 files, ~20 MB for the stdja family) eager loading is simpler and
+    /// cheap enough; revisit only if a huge registry appears.
     pub fn build_store(&self) -> Result<TtfFontStore, FontConfigError> {
-        let regular = self.resolve(&self.default_faces[0])?;
-        let bold = if self.default_faces[1] == self.default_faces[0] {
-            None
-        } else {
+        // Resolve every path FIRST (can fail with `UnsupportedCollectionIndex`
+        // — a pure config check, no I/O) before any file is actually read —
+        // preserves the pre-D1a guarantee that a bad config abbrev is
+        // reported without touching disk at all
+        // (`build_store_rejects_nonzero_collection_index_without_touching_
+        // disk`), now extended to every abbrev, not just the three defaults.
+        let regular_path = self.resolve(&self.default_faces[0])?;
+        let bold_path = if self.default_faces[1] != self.default_faces[0] {
             Some(self.resolve(&self.default_faces[1])?)
-        };
-        let oblique = if self.default_faces[2] == self.default_faces[0] {
-            None
         } else {
-            Some(self.resolve(&self.default_faces[2])?)
+            None
         };
-        Ok(TtfFontStore::load(
-            &regular,
-            bold.as_deref(),
-            oblique.as_deref(),
-        )?)
+        let oblique_path = if self.default_faces[2] != self.default_faces[0] {
+            Some(self.resolve(&self.default_faces[2])?)
+        } else {
+            None
+        };
+        let mut other_paths: Vec<(String, PathBuf)> = Vec::new();
+        for abbrev in self.faces.keys() {
+            if self.default_faces.contains(abbrev) {
+                continue; // handled below, mapped to FontKey(0/1/2).
+            }
+            other_paths.push((abbrev.clone(), self.resolve(abbrev)?));
+        }
+
+        let mut files: Vec<Vec<u8>> = Vec::new();
+        let mut file_by_path: BTreeMap<PathBuf, usize> = BTreeMap::new();
+
+        // Step 1: the three default slots, in `FontKey(0/1/2)` order —
+        // dedup only regular-vs-{bold,oblique} by ABBREV-NAME equality
+        // (unchanged pre-D1a behavior: `TtfFontStore::load`'s own
+        // bold/oblique-falls-back-to-regular convention).
+        let regular_idx = load_or_dedup(&mut files, &mut file_by_path, &regular_path)?;
+        let mut slots = vec![regular_idx, regular_idx, regular_idx];
+        if let Some(path) = &bold_path {
+            slots[1] = load_or_dedup(&mut files, &mut file_by_path, path)?;
+        }
+        if let Some(path) = &oblique_path {
+            slots[2] = load_or_dedup(&mut files, &mut file_by_path, path)?;
+        }
+
+        // Step 2: every other configured abbrev gets its own slot
+        // (`FontKey(3)`, `FontKey(4)`, ... in map-iteration/abbrev-sorted
+        // order — the exact allocation order is not part of the contract,
+        // only that each distinct abbrev gets a distinct `FontKey` unless
+        // it shares a file with one already loaded).
+        let mut abbrevs: BTreeMap<String, FontKey> = BTreeMap::new();
+        for (abbrev, path) in &other_paths {
+            let idx = load_or_dedup(&mut files, &mut file_by_path, path)?;
+            let key = FontKey(slots.len() as u16);
+            slots.push(idx);
+            abbrevs.insert(abbrev.clone(), key);
+        }
+
+        // Step 3: the three default-face abbrevs resolve to FontKey(0/1/2)
+        // regardless of what slot (if any) step 2 gave a same-named-but-
+        // different-abbrev file — `resolve_font_abbrev("Junicode")` must
+        // agree with `set-font-key 0` when "Junicode" IS the regular face.
+        // `or_insert` (not a plain overwrite): when bold/oblique default to
+        // the SAME abbrev string as regular (the common case — no bold/
+        // oblique configured), all three loop iterations see that one
+        // string, and the FIRST (smallest, i.e. regular's own FontKey(0))
+        // must win, not the last.
+        for (i, abbrev) in self.default_faces.iter().enumerate() {
+            abbrevs.entry(abbrev.clone()).or_insert(FontKey(i as u16));
+        }
+
+        // `scripts` block: resolve each configured abbrev to the FontKey
+        // just allocated for it (always present — `discover` validated
+        // every `scripts` abbrev against `faces` up front).
+        let mut script_defaults: [Option<(FontKey, f64, f64)>; 4] = [None, None, None, None];
+        for (i, entry) in self.script_fonts.iter().enumerate() {
+            if let Some((abbrev, ratio, rising)) = entry {
+                let key = *abbrevs.get(abbrev).unwrap_or_else(|| {
+                    panic!("FontRegistry invariant violated: scripts abbrev {abbrev:?} unresolved")
+                });
+                script_defaults[i] = Some((key, *ratio, *rising));
+            }
+        }
+
+        Ok(TtfFontStore::from_parts(files, slots, abbrevs, script_defaults))
     }
 
     /// Resolve `abbrev` to a loadable file path.
@@ -722,5 +884,170 @@ mod tests {
             store.advance(satysfi_backend::FontKey(0), 'A', size),
             store.advance(satysfi_backend::FontKey(1), 'A', size)
         );
+    }
+
+    // ---- D1a: N-slot store, abbrev roundtrip, file dedup, `scripts` block
+    // (docs/plans/text-rendering.md §1a) --------------------------------
+
+    /// A second real TrueType file, distinct from `find_regular_font`'s
+    /// (DejaVu Sans Mono vs. DejaVu Sans) — needed to prove a genuinely
+    /// different abbrev gets its own physical-file slot, not just dedup.
+    fn find_second_font() -> Option<PathBuf> {
+        if let Ok(output) = Command::new("fc-match")
+            .args(["--format=%{file}", "DejaVu Sans Mono"])
+            .output()
+        {
+            if output.status.success() {
+                let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !path.is_empty() && Path::new(&path).is_file() {
+                    return Some(PathBuf::from(path));
+                }
+            }
+        }
+        for candidate in [
+            "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+            "/run/current-system/sw/share/fonts/truetype/DejaVuSansMono.ttf",
+        ] {
+            if Path::new(candidate).is_file() {
+                return Some(PathBuf::from(candidate));
+            }
+        }
+        None
+    }
+
+    macro_rules! need_second_font {
+        () => {
+            match find_second_font() {
+                Some(path) => path,
+                None => {
+                    eprintln!("skipping: no DejaVuSansMono-like TrueType font found");
+                    return;
+                }
+            }
+        };
+    }
+
+    #[test]
+    fn build_store_allocates_extra_slots_and_dedups_shared_files() {
+        let regular = need_font!();
+        let mono = need_second_font!();
+        let dir = tmpdir("extra-abbrevs");
+        write_hash_dir(
+            &dir,
+            &format!(
+                r#"{{ "reg": {{ "src": {:?} }},
+                     "mono": {{ "src": {:?} }},
+                     "regalias": {{ "src": {:?} }} }}"#,
+                regular.to_str().unwrap(),
+                mono.to_str().unwrap(),
+                regular.to_str().unwrap(),
+            ),
+            Some(r#"{ "regular": "reg" }"#),
+        );
+        let registry = FontRegistry::discover(Some(&dir), None, &FontFlags::default())
+            .unwrap()
+            .unwrap();
+        let store = registry.build_store().expect("build_store should succeed");
+
+        // Two distinct physical files ("reg"/"regalias" share one; "mono" is
+        // its own), five allocated FontKey slots (0/1/2 default + mono +
+        // regalias).
+        assert_eq!(store.num_files(), 2, "reg and regalias must dedup to one file");
+        assert_eq!(store.num_slots(), 5);
+
+        // abbrev_key roundtrip: the three default-face abbrevs resolve to
+        // FontKey(0/1/2) regardless of iteration order (step 3 override);
+        // the two "extra" abbrevs get later slots.
+        assert_eq!(store.abbrev_key("reg"), Some(satysfi_backend::FontKey(0)));
+        let mono_key = store.abbrev_key("mono").expect("mono abbrev resolves");
+        let regalias_key = store.abbrev_key("regalias").expect("regalias abbrev resolves");
+        assert_ne!(mono_key, satysfi_backend::FontKey(0));
+        assert_ne!(regalias_key, satysfi_backend::FontKey(0));
+        assert_ne!(mono_key, regalias_key);
+        assert_eq!(store.abbrev_key("no-such-abbrev"), None);
+
+        // File-index dedup: "regalias" backs the SAME physical file as the
+        // regular slot; "mono" backs a DIFFERENT one.
+        assert_eq!(store.file_index(regalias_key), store.file_index(satysfi_backend::FontKey(0)));
+        assert_ne!(store.file_index(mono_key), store.file_index(satysfi_backend::FontKey(0)));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn scripts_block_parses_and_resolves_default_script_font() {
+        let regular = need_font!();
+        let cjk_stand_in = need_second_font!();
+        let dir = tmpdir("scripts-block");
+        write_hash_dir(
+            &dir,
+            &format!(
+                r#"{{ "reg": {{ "src": {:?} }}, "cjk": {{ "src": {:?} }} }}"#,
+                regular.to_str().unwrap(),
+                cjk_stand_in.to_str().unwrap(),
+            ),
+            Some(
+                r#"{ "regular": "reg",
+                     "scripts": {
+                       "han-ideographic": { "font-name": "cjk", "ratio": 0.88, "rising": 0.0 },
+                       "latin":           { "font-name": "reg", "ratio": 1.0,  "rising": 0.0 }
+                     } }"#,
+            ),
+        );
+        let registry = FontRegistry::discover(Some(&dir), None, &FontFlags::default())
+            .unwrap()
+            .unwrap();
+        let store = registry.build_store().expect("build_store should succeed");
+
+        let cjk_key = store.abbrev_key("cjk").expect("cjk abbrev resolves");
+        // Script indices: HanIdeographic=0, Kana=1, Latin=2, OtherScript=3
+        // (`context::Script`'s discriminants).
+        assert_eq!(store.script_default(0), Some((cjk_key, 0.88, 0.0)));
+        assert_eq!(
+            store.script_default(2),
+            Some((satysfi_backend::FontKey(0), 1.0, 0.0))
+        );
+        // Unconfigured scripts stay `None` (caller falls back to
+        // `(ctx.font, 1.0, 0.0)`).
+        assert_eq!(store.script_default(1), None); // Kana
+        assert_eq!(store.script_default(3), None); // OtherScript
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn scripts_block_is_absent_by_default() {
+        let font_path = need_font!();
+        let dir = tmpdir("no-scripts-block");
+        write_hash_dir(
+            &dir,
+            &format!(r#"{{ "reg": {{ "src": {:?} }} }}"#, font_path.to_str().unwrap()),
+            Some(r#"{ "regular": "reg" }"#),
+        );
+        let registry = FontRegistry::discover(Some(&dir), None, &FontFlags::default())
+            .unwrap()
+            .unwrap();
+        let store = registry.build_store().expect("build_store should succeed");
+        for script in 0..4 {
+            assert_eq!(store.script_default(script), None);
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn scripts_block_unknown_abbrev_is_an_error() {
+        let font_path = need_font!();
+        let dir = tmpdir("scripts-unknown-abbrev");
+        write_hash_dir(
+            &dir,
+            &format!(r#"{{ "reg": {{ "src": {:?} }} }}"#, font_path.to_str().unwrap()),
+            Some(
+                r#"{ "regular": "reg",
+                     "scripts": { "kana": { "font-name": "nope", "ratio": 1.0, "rising": 0.0 } } }"#,
+            ),
+        );
+        let err = FontRegistry::discover(Some(&dir), None, &FontFlags::default()).unwrap_err();
+        assert!(matches!(err, FontConfigError::UnknownAbbrev { .. }), "{err}");
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

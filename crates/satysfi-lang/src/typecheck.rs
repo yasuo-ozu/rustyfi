@@ -116,6 +116,7 @@ pub const PRIMITIVE_NAMES: &[&str] = &[
     "line-break",
     "page-break",
     "page-break-multicolumn",
+    "page-break-two-column",
     "+",
     "-",
     "*",
@@ -202,6 +203,8 @@ pub const PRIMITIVE_NAMES: &[&str] = &[
     "inline-graphics",
     // ---- docs/plans/table-subsystem.md §Slice 1 ----
     "tabular",
+    // ---- roadmap C2 (docs/plans/graphics-subsystem.md §D) ----
+    "inline-graphics-outer",
     // ---- gr.satyh roadmap prims (docs/plans/graphics-subsystem.md §Full
     // roadmap A/B/C/D) ----
     "bezier-to",
@@ -211,6 +214,7 @@ pub const PRIMITIVE_NAMES: &[&str] = &[
     "shift-graphics",
     "linear-transform-graphics",
     "get-graphics-bbox",
+    "get-path-bbox",
     "dashed-stroke",
     "draw-text",
     // ---- pervasives.satyh unblockers (docs/plans/stdlib-port.md) ----
@@ -226,6 +230,8 @@ pub const PRIMITIVE_NAMES: &[&str] = &[
     "hook-page-break-block",
     "register-cross-reference",
     "get-cross-reference",
+    // ---- group E1: hooks-annotations-crossref.md §A closer ----
+    "probe-cross-reference",
     // ---- docs/plans/hooks-annotations-crossref.md §B/§D (annot.satyh) ----
     "get-leftmost-script",
     "get-rightmost-script",
@@ -285,6 +291,15 @@ pub const PRIMITIVE_NAMES: &[&str] = &[
     "set-every-word-break",
     "register-outline",
     "extract-string",
+    // ---- group E2: dominant-script/language getters (context-box-prims.md
+    // §C landed) ----
+    "get-dominant-wide-script",
+    "get-dominant-narrow-script",
+    "get-language",
+    // ---- group E3: text-mode-context sliver (context-box-prims.md §G) ----
+    "get-initial-text-info",
+    "deepen-indent",
+    "break",
     // ---- proof.satyh/footnote-scheme.satyh unblockers (tail-prims sweep) ----
     "embed-block-bottom",
     "line-stack-bottom",
@@ -373,6 +388,7 @@ fn name_to_mono(name: &str) -> MonoType {
         "block-boxes" => t_block_boxes(),
         "context" => t_context(),
         "document" => t_document(),
+        "text-info" => MonoType::Base(BaseType::TextInfo),
         other => MonoType::Variant(other.to_string(), Vec::new()),
     }
 }

@@ -24,6 +24,7 @@ fn word(m: &Mono, c: &Context, text: &str) -> HorzBox {
         info: HorzStringInfo {
             font: c.font,
             size: c.font_size,
+            rising: Length::ZERO,
         },
         text: text.into(),
         width: m.text_width(c.font, text, c.font_size).unwrap(),
@@ -59,6 +60,8 @@ fn lines_of(v: &[VertBox]) -> Vec<String> {
             VertBox::Skip(_) => "<skip>".into(),
             VertBox::ClearPage => "<clear-page>".into(),
             VertBox::HookPageBreak(_) => "<hook>".into(),
+            VertBox::FrameStart(_) => "<frame-start>".into(),
+            VertBox::FrameEnd(_) => "<frame-end>".into(),
         })
         .collect()
 }
@@ -412,6 +415,55 @@ fn chop_page_still_makes_progress_at_zero_height() {
     assert_eq!(remaining.len(), 1);
 }
 
+/// §C1 (docs/plans/hooks-annotations-crossref.md): `chop_page` over
+/// `[FrameStart, Line, FrameEnd]` places 3 `PlacedLine`s — the two markers
+/// zero-width/contentless, the real line's own geometry unaffected by their
+/// presence — and a marker-only page still terminates (same guarantee
+/// `HookPageBreak` already has, `pagebreak.rs`'s `placed_real_line`).
+#[test]
+fn chop_page_places_frame_markers_as_zero_width_lines_around_an_unaffected_real_line() {
+    let line = leaded_line(9.0, 3.0, 18.0);
+    let mut vboxes = vec![
+        VertBox::FrameStart(DecoId(0)),
+        line,
+        VertBox::FrameEnd(DecoId(0)),
+    ];
+    let placed = chop_page((Length::pt(10.0), Length::pt(10.0)), Length::pt(1000.0), &mut vboxes);
+    assert_eq!(placed.len(), 3);
+    assert!(vboxes.is_empty());
+
+    assert_eq!(placed[0].contents.len(), 1);
+    assert_eq!(placed[0].contents[0].0, Length::ZERO);
+    assert_eq!(
+        placed[0].contents[0].1,
+        PureHorzBox::FrameMarker { id: DecoId(0), end: false }
+    );
+
+    // The real line's own geometry is unaffected by the markers around it —
+    // same baseline it would get with no markers at all (`y0 + height`,
+    // since it's the first REAL line placed).
+    assert_eq!(placed[1].baseline_y, Length::pt(19.0));
+    assert_eq!(placed[1].contents.len(), 0);
+
+    assert_eq!(placed[2].contents.len(), 1);
+    assert_eq!(
+        placed[2].contents[0].1,
+        PureHorzBox::FrameMarker { id: DecoId(0), end: true }
+    );
+}
+
+/// A page of NOTHING but frame markers (no real line at all) must still
+/// terminate in one `chop_page` call — mirroring `HookPageBreak`'s own
+/// termination guarantee (`chop_page_still_makes_progress_at_zero_height`),
+/// since markers never set `placed_real_line`.
+#[test]
+fn chop_page_a_marker_only_page_still_terminates() {
+    let mut vboxes = vec![VertBox::FrameStart(DecoId(0)), VertBox::FrameEnd(DecoId(0))];
+    let placed = chop_page((Length::ZERO, Length::ZERO), Length::pt(1000.0), &mut vboxes);
+    assert_eq!(placed.len(), 2);
+    assert!(vboxes.is_empty());
+}
+
 #[test]
 fn place_block_at_lays_n_lines_at_a_fixed_origin_descending() {
     let line = leaded_line(9.0, 3.0, 18.0);
@@ -617,6 +669,59 @@ fn math_box_contributes_height_and_depth_to_its_line() {
             assert_eq!(contents.len(), 1);
             assert_eq!(contents[0].0, Length::ZERO);
             assert_eq!(contents[0].1.natural_width(), Length::pt(30.0));
+        }
+        _ => panic!("expected a Line, got something else"),
+    }
+}
+
+// ============================================================================
+// §D inline frame (docs/plans/hooks-annotations-crossref.md): a
+// `PureHorzBox::Frame`'s outer width/height/depth (padding already folded
+// in by `make_inline_frame`) drive line metrics exactly like `Graphics`/
+// `Math` above, and it's never a legal line-break point (the atomic model:
+// contents are pre-fit, the frame never splits).
+// ============================================================================
+
+fn frame_box(width: f64, height: f64, depth: f64) -> PureHorzBox {
+    PureHorzBox::Frame {
+        width: Length::pt(width),
+        height: Length::pt(height),
+        depth: Length::pt(depth),
+        deco: DecoId(0),
+        contents: vec![(
+            Length::ZERO,
+            PureHorzBox::InnerString {
+                info: HorzStringInfo { font: FontKey(0), size: Length::pt(12.0), rising: Length::ZERO },
+                text: "x".into(),
+                width: Length::pt(width),
+                height: Length::pt(height),
+                depth: Length::pt(depth),
+            },
+        )],
+    }
+}
+
+#[test]
+fn frame_box_natural_width_is_the_outer_width_and_is_not_glue() {
+    let fbox = frame_box(24.0, 9.0, 3.0);
+    assert_eq!(fbox.natural_width(), Length::pt(24.0));
+    assert!(!fbox.is_glue());
+    assert!(!fbox.is_break_point());
+}
+
+#[test]
+fn frame_box_grows_line_height_and_depth_by_its_own_padded_metrics() {
+    let c = ctx(100.0);
+    let line = vec![HorzBox::Pure(frame_box(24.0, 9.0, 3.0))];
+    let lines = break_into_lines(&c, line);
+    assert_eq!(lines.len(), 1);
+    match &lines[0] {
+        VertBox::Line { height, depth, contents, .. } => {
+            assert_eq!(*height, Length::pt(9.0));
+            assert_eq!(*depth, Length::pt(3.0));
+            assert_eq!(contents.len(), 1);
+            assert_eq!(contents[0].0, Length::ZERO);
+            assert_eq!(contents[0].1.natural_width(), Length::pt(24.0));
         }
         _ => panic!("expected a Line, got something else"),
     }

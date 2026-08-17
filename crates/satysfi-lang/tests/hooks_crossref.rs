@@ -109,6 +109,46 @@ fn get_cross_reference_miss_returns_none_and_marks_it_unresolved() {
     );
 }
 
+/// `probe-cross-reference` on a missing key must NOT record a miss — unlike
+/// `get-cross-reference`'s miss test above, whose `verdict()` payload carries
+/// the missed key, this one's payload must be empty.
+#[test]
+fn probe_miss_records_no_unresolved_and_does_not_retrial() {
+    let env = primitives::base_env();
+    let mono = Mono;
+    let mut interp = eval::Interp::new(&mono);
+    let ast = app1(var("probe-cross-reference"), str_lit("missing"));
+    let v = interp.eval(&env, &ast).expect("evaluation should succeed");
+    match v {
+        Value::Ctor(name, None) => assert_eq!(name, "None"),
+        other => panic!("expected None, got {other:?}"),
+    }
+    assert_eq!(
+        interp.crossrefs.borrow_mut().verdict(),
+        Verdict::CanTerminate(vec![]),
+        "probing an absent key must not force another fixpoint trial"
+    );
+}
+
+#[test]
+fn probe_hit_after_register_round_trips() {
+    let env = primitives::base_env();
+    let mono = Mono;
+    let mut interp = eval::Interp::new(&mono);
+    let ast = Ast::Sequential(
+        Box::new(app2("register-cross-reference", str_lit("k"), str_lit("v"))),
+        Box::new(app1(var("probe-cross-reference"), str_lit("k"))),
+    );
+    let v = interp.eval(&env, &ast).expect("evaluation should succeed");
+    match v {
+        Value::Ctor(name, Some(payload)) => {
+            assert_eq!(name, "Some");
+            assert!(matches!(*payload, Value::Str(s) if s == "v"));
+        }
+        other => panic!("expected Some(\"v\"), got {other:?}"),
+    }
+}
+
 /// (iii) `fire_hooks` over a hand-built one-hook `DocumentValue` invokes the
 /// closure with `page-number = 1` — no compile/fixpoint driver involved, so
 /// this pins the seam itself: `PureHorzBox::HookPageBreak`'s `HookId` looks
@@ -155,6 +195,7 @@ fn fire_hooks_invokes_the_closure_with_the_correct_page_number() {
             }],
         }],
         images: Vec::new(),
+        extras: Default::default(),
     };
 
     satysfi_lang::fire_hooks(&mut interp, &doc).expect("fire_hooks should succeed");
@@ -212,6 +253,7 @@ fn fire_hooks_numbers_pages_one_based_in_document_order() {
         geometry: PageGeometry::default(),
         pages: vec![hook_free_page, hook_page],
         images: Vec::new(),
+        extras: Default::default(),
     };
 
     satysfi_lang::fire_hooks(&mut interp, &doc).expect("fire_hooks should succeed");

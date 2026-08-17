@@ -241,7 +241,7 @@ fn styled_math_renders_through_cid_pipeline() {
     let descender = store.descender(font, size);
 
     let glyph = satysfi_backend::MathGlyph {
-        info: satysfi_backend::HorzStringInfo { font, size },
+        info: satysfi_backend::HorzStringInfo { font, size, rising: Length::ZERO },
         text: A_ITALIC.to_string(),
         gid: None,
         dx: Length::ZERO,

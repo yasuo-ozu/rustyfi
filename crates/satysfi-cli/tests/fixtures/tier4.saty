@@ -1,0 +1,15 @@
+@require: stdjabook
+in
+document (|
+  title = {Capstone Rendering Test};
+  author = {SATySFi in Rust};
+  show-toc = false;
+  show-title = true;
+|) ?* '<
+  +p {
+    The quick brown fox jumps over the lazy dog. This Latin paragraph is long
+    enough that greedy line breaking wraps it onto several lines, driving the
+    real StdJaBook document class end to end through the loader, elaboration,
+    typechecking, evaluation, line breaking, page breaking, and PDF rendering.
+  }
+>

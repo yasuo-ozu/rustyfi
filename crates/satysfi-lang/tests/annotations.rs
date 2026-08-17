@@ -10,16 +10,18 @@
 //!   `annot.satyh` actually uses.
 //! - **Eval** (direct `Ast` apply chains through `eval::Interp` +
 //!   `primitives::base_env()`, mirroring `tests/prims_phase4.rs`'s style) —
-//!   round-trips the frame stand-in and confirms the register-* prims
-//!   evaluate without panicking (they are documented STAND-INs: see
-//!   `primitives.rs`'s `prim_register_destination`/
-//!   `prim_register_link_to_uri`/`prim_register_link_to_location` doc
-//!   comments for why `/Annots` emission is deferred past this slice's file
-//!   boundary).
+//!   `inline-frame-breakable` builds a real atomic `PureHorzBox::Frame` and
+//!   interns its decoset's `decoS`; the register-* prims are FAITHFUL as of
+//!   roadmap Group A (docs/plans/hooks-annotations-crossref.md §B): they
+//!   error outside `fire_hooks`' `current_page` window (§0.5) and record a
+//!   real `Annot`/`NamedDest` inside it — see `primitives.rs`'s
+//!   `prim_register_destination`/`register_link` doc comments.
 //!
-//! `annot.satyh` itself is ported by a later sweep (out of scope here) —
-//! this file only proves its primitive dependencies exist, type-check
-//! against their real `vminstdef.yaml` signatures, and evaluate.
+//! `annot.satyh` itself is loaded by the capstone suite (`register-*`/
+//! `inline-frame-breakable` reach the PDF end-to-end via `crates/satysfi-cli/
+//! tests/fixtures/href.saty`) — this file only proves the primitive surface
+//! type-checks against `vminstdef.yaml` and evaluates correctly in
+//! isolation.
 
 use satysfi_backend::{FontKey, FontMetrics, HorzBox, Length, PureHorzBox};
 use satysfi_lang::ast::Ast;
@@ -243,48 +245,99 @@ fn get_leftmost_and_rightmost_script_return_none_stand_in() {
     }
 }
 
+/// The four-closure `deco-set` argument is popped and only its first
+/// element (`decoS`) is kept/interned (see the prim's doc comment — the
+/// atomic `PureHorzBox::Frame` never splits, so only the whole-frame closure
+/// is reachable); a dummy `(fun _ _ _ _ -> [])`-shaped tuple stands in here
+/// since the closures themselves are never invoked at construction time
+/// (only later, by `fire_hooks`/`apply_deco`).
+fn dummy_decoset() -> Ast {
+    Ast::Tuple(vec![Ast::Unit, Ast::Unit, Ast::Unit, Ast::Unit])
+}
+
 #[test]
-fn inline_frame_breakable_pads_horizontally_and_drops_the_decoset() {
-    // The deco-set argument is popped and never inspected (see the prim's
-    // doc comment), so a bare `Ast::Unit` stands in for it here — the point
-    // is that it's accepted without being read.
+fn inline_frame_breakable_builds_an_atomic_frame_and_interns_the_decoset() {
     let ast = apply_all(
         "inline-frame-breakable",
         vec![
             Ast::Tuple(vec![len(2.0), len(3.0), len(4.0), len(5.0)]),
-            Ast::Unit,
+            dummy_decoset(),
             var("inline-nil"),
         ],
     );
-    let Value::InlineBoxes(boxes) = run(&ast) else {
+    let env = primitives::base_env();
+    let mono = Mono;
+    let mut interp = eval::Interp::new(&mono);
+    let v = interp.eval(&env, &ast).expect("evaluation should succeed");
+    let Value::InlineBoxes(boxes) = v else {
         panic!("expected inline-boxes")
     };
     assert_eq!(
         boxes,
-        vec![
-            HorzBox::Pure(PureHorzBox::FixedEmpty {
-                width: Length::pt(2.0)
-            }),
-            HorzBox::Pure(PureHorzBox::FixedEmpty {
-                width: Length::pt(3.0)
-            }),
-        ],
-        "only paddingL/paddingR wrap the (empty) inner content; paddingT/ \
-         paddingB and the deco-set are dropped, exactly like inline-frame-outer"
+        vec![HorzBox::Pure(PureHorzBox::Frame {
+            width: Length::pt(5.0),  // paddingL + inner(0) + paddingR
+            height: Length::pt(4.0), // inner(0) + paddingT
+            depth: Length::pt(5.0),  // inner(0) + paddingB
+            deco: satysfi_backend::DecoId(0),
+            contents: Vec::new(),
+        })],
+        "an atomic PureHorzBox::Frame, padded on all four sides, empty \
+         contents for an empty inner run"
+    );
+    assert_eq!(
+        interp.decos.len(),
+        1,
+        "the deco-set's first (decoS) closure must be interned into interp.decos"
     );
 }
 
+/// `register-destination`/`register-link-to-*` are gated on
+/// `interp.current_page` (§0.5: they only succeed while `fire_hooks` is
+/// walking a page — i.e. from a hook or a fired decoration).
+fn eval_during_page_break(ast: &Ast) -> Result<(Value, eval::Interp<'static>), eval::EvalError> {
+    // `Mono` is a unit struct (no data), so leaking one `'static` reference
+    // is cheap and lets the returned `Interp` outlive this function without
+    // fighting the borrow checker over `mono`'s local lifetime.
+    let metrics: &'static Mono = Box::leak(Box::new(Mono));
+    let env = primitives::base_env();
+    let mut interp = eval::Interp::new(metrics);
+    interp.current_page = Some(0);
+    let v = interp.eval(&env, ast)?;
+    Ok((v, interp))
+}
+
 #[test]
-fn register_destination_evaluates_to_unit_recording_nothing_yet() {
+fn register_destination_outside_a_page_break_errors() {
     let ast = apply_all(
         "register-destination",
         vec![str_lit("chapter1"), point(10.0, 20.0)],
     );
-    assert!(matches!(run(&ast), Value::Unit));
+    let err = try_run(&ast).expect_err("must error outside fire_hooks' current_page window");
+    assert!(
+        err.msg.contains("page breaking"),
+        "error should name the during-page-break gate: {}",
+        err.msg
+    );
 }
 
 #[test]
-fn register_link_to_uri_evaluates_to_unit_with_no_border() {
+fn register_destination_during_a_page_break_records_a_named_destination() {
+    let ast = apply_all(
+        "register-destination",
+        vec![str_lit("chapter1"), point(10.0, 20.0)],
+    );
+    let (v, interp) = eval_during_page_break(&ast).expect("must succeed inside the window");
+    assert!(matches!(v, Value::Unit));
+    assert_eq!(interp.destinations.len(), 1);
+    let d = &interp.destinations[0];
+    assert_eq!(d.page, 0);
+    assert_eq!(d.name, "nameddest0");
+    assert_eq!(d.x, Length::pt(10.0));
+    assert_eq!(d.y, Length::pt(20.0));
+}
+
+#[test]
+fn register_link_to_uri_outside_a_page_break_errors() {
     let ast = apply_all(
         "register-link-to-uri",
         vec![
@@ -296,11 +349,46 @@ fn register_link_to_uri_evaluates_to_unit_with_no_border() {
             border_none(),
         ],
     );
-    assert!(matches!(run(&ast), Value::Unit));
+    let err = try_run(&ast).expect_err("must error outside fire_hooks' current_page window");
+    assert!(
+        err.msg.contains("page breaking"),
+        "error should name the during-page-break gate: {}",
+        err.msg
+    );
 }
 
 #[test]
-fn register_link_to_uri_evaluates_to_unit_with_a_border() {
+fn register_link_to_uri_during_a_page_break_records_an_annot_with_no_border() {
+    let ast = apply_all(
+        "register-link-to-uri",
+        vec![
+            str_lit("https://example.com"),
+            point(0.0, 0.0),
+            len(10.0),
+            len(10.0),
+            len(10.0),
+            border_none(),
+        ],
+    );
+    let (v, interp) = eval_during_page_break(&ast).expect("must succeed inside the window");
+    assert!(matches!(v, Value::Unit));
+    assert_eq!(interp.annotations.len(), 1);
+    let a = &interp.annotations[0];
+    assert_eq!(a.page, 0);
+    assert_eq!(a.border, None);
+    assert_eq!(
+        a.rect,
+        (Length::pt(0.0), Length::pt(-10.0), Length::pt(10.0), Length::pt(10.0)),
+        "rect = (x, y - depth, x + width, y + height)"
+    );
+    assert_eq!(
+        a.action,
+        satysfi_backend::AnnotAction::Uri("https://example.com".to_string())
+    );
+}
+
+#[test]
+fn register_link_to_uri_during_a_page_break_records_an_annot_with_a_border() {
     let ast = apply_all(
         "register-link-to-uri",
         vec![
@@ -312,7 +400,12 @@ fn register_link_to_uri_evaluates_to_unit_with_a_border() {
             border_some(1.0, 0.5),
         ],
     );
-    assert!(matches!(run(&ast), Value::Unit));
+    let (_v, interp) = eval_during_page_break(&ast).expect("must succeed inside the window");
+    assert_eq!(interp.annotations.len(), 1);
+    assert_eq!(
+        interp.annotations[0].border,
+        Some((Length::pt(1.0), satysfi_backend::Color::Gray(0.5)))
+    );
 }
 
 #[test]
@@ -337,7 +430,7 @@ fn register_link_to_uri_rejects_a_malformed_border_argument_without_panicking() 
 }
 
 #[test]
-fn register_link_to_location_evaluates_to_unit_recording_nothing_yet() {
+fn register_link_to_location_outside_a_page_break_errors() {
     let ast = apply_all(
         "register-link-to-location",
         vec![
@@ -349,5 +442,34 @@ fn register_link_to_location_evaluates_to_unit_recording_nothing_yet() {
             border_none(),
         ],
     );
-    assert!(matches!(run(&ast), Value::Unit));
+    let err = try_run(&ast).expect_err("must error outside fire_hooks' current_page window");
+    assert!(
+        err.msg.contains("page breaking"),
+        "error should name the during-page-break gate: {}",
+        err.msg
+    );
+}
+
+#[test]
+fn register_link_to_location_during_a_page_break_resolves_through_the_shared_name_table() {
+    let ast = apply_all(
+        "register-link-to-location",
+        vec![
+            str_lit("chapter1"),
+            point(0.0, 0.0),
+            len(10.0),
+            len(10.0),
+            len(10.0),
+            border_none(),
+        ],
+    );
+    let (v, interp) = eval_during_page_break(&ast).expect("must succeed inside the window");
+    assert!(matches!(v, Value::Unit));
+    assert_eq!(interp.annotations.len(), 1);
+    assert_eq!(
+        interp.annotations[0].action,
+        satysfi_backend::AnnotAction::GotoName("nameddest0".to_string()),
+        "the key resolves through the SAME dest_name table register-destination uses, \
+         minting a stable name even though nothing has registered that destination yet"
+    );
 }

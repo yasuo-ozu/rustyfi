@@ -1,0 +1,15 @@
+% Group A fixture (docs/plans/hooks-annotations-crossref.md §D): the real
+% `annot.satyh` `\href`, exercising `inline-frame-breakable` +
+% `fire_inline_frame` end-to-end -> a genuine /Annots Link/URI annotation
+% with a non-degenerate rect, drawn from running text (the dominant,
+% unbroken-frame case Slice B targets).
+
+@require: stdja-mini
+@require: annot
+
+document (|
+  title = {Href};
+  author = {yasuo};
+|) '<
+  +p { A link: \href?*(`https://example.com/`){click here} in running text. }
+>

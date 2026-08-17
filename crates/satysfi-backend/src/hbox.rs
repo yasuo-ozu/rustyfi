@@ -10,6 +10,12 @@ use crate::vbox::VertBox;
 pub struct HorzStringInfo {
     pub font: FontKey,
     pub size: Length,
+    /// A manual baseline raise (D1b, `ScriptFont::rising` scaled by the
+    /// run's font size — `fontInfo.ml`'s `get_font_with_ratio`). `ZERO` for
+    /// every pre-D1 construction site and every stdja default, so this
+    /// field being carried instead of dropped changes no existing output —
+    /// both PDF writers add it to the placed `ty` before `Tj`.
+    pub rising: Length,
 }
 
 /// An index into a document-wide table of decoded raster images
@@ -31,6 +37,23 @@ pub struct ImageId(pub usize);
 /// geometry is final. See docs/plans/hooks-annotations-crossref.md.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct HookId(pub usize);
+
+/// An opaque index into a lang-side table of deferred *decoration* closures
+/// (`Interp::decos`) — `HookId`'s twin for §D frames
+/// (docs/plans/hooks-annotations-crossref.md §D: the resolved struct layout).
+/// The backend carries it through line breaking and never learns what the
+/// deco draws; `fire_hooks` (satysfi-lang) fires it with the frame's placed
+/// `(x, y, w, h, d)` and accumulates the returned graphics onto the page.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct DecoId(pub usize);
+
+/// An opaque index into a lang-side table of deferred `inline-graphics-outer`
+/// callbacks (`Interp::outer_graphics`) — `HookId`'s exact pattern: the box
+/// stays POD-cloneable, and a lang-side post-pass (`resolve_outer_graphics_*`
+/// in satysfi-lang's primitives, run by `line-break`/`tabular`) reads the
+/// token back once line layout has resolved the box's width.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct GraphicsFnId(pub usize);
 
 /// A decoded raster image, referenced by `PureHorzBox::Image`/`Value::Image`
 /// via its `ImageId` index. Mirrors v0.0.6's `ImageInfo` (`imageInfo.ml`)
@@ -118,6 +141,21 @@ pub enum PureHorzBox {
         depth: Length,
         elems: Vec<GraphicsElem>,
     },
+    /// `inline-graphics-outer` (v0.0.6 `PHGOuterFilGraphics`,
+    /// vminst.ml:1891): a graphics box whose WIDTH stretches like
+    /// `inline-fil` (upstream widinfo `{natural = 0; stretchable = Fils(1)}`,
+    /// lineBreak.ml:40-48). `width` starts at ZERO and is written by
+    /// `justify_line` with the box's per-fil slack share; the box is then
+    /// replaced by a resolved `Graphics` in a lang-side post-pass that fires
+    /// `fn_id`'s callback with that width (see `GraphicsFnId`). NOT glue
+    /// (`is_glue` = false — upstream's box is pure content, never a break
+    /// point), but counted as a fil by `measure`/`justify_line`.
+    GraphicsOuter {
+        height: Length,
+        depth: Length,
+        width: Length,
+        fn_id: GraphicsFnId,
+    },
     /// A laid-out inline math run (`${…}`; docs/plans/math-engine.md §Slice
     /// 1): one box carrying its own pre-shifted sub-glyphs, each with a
     /// vertical offset relative to this box's baseline (`MathGlyph::dy`) —
@@ -178,6 +216,45 @@ pub enum PureHorzBox {
         depth: Length,
         block: Vec<VertBox>,
     },
+    /// An inline frame (`inline-frame-outer`/`-inner`/`-breakable`;
+    /// upstream `PHGOuterFrame`/`PHGInnerFrame`/`HorzFrameBreakable`) —
+    /// ATOMIC in this port: contents are pre-fit at their natural width
+    /// (`fit_cell` — the same no-Context fit tabular cells use), and the
+    /// frame never splits across a line break (the breakable variant fires
+    /// only its whole-frame deco, see `prim_inline_frame_breakable`).
+    /// `width`/`height`/`depth` are the OUTER dims (padding included;
+    /// baseline unshifted — padding grows the box, upstream lineBreak.ml's
+    /// frame metrics). `contents` carry x-offsets from the frame's left edge
+    /// (pad-L already applied), all on the frame's own baseline — the
+    /// writers recurse exactly like `Tabular` cells. `deco` is fired
+    /// lang-side after placement; the writers draw nothing for it here.
+    Frame {
+        width: Length,
+        height: Length,
+        depth: Length,
+        deco: DecoId,
+        contents: Vec<(Length, PureHorzBox)>,
+    },
+    /// A placed block-frame marker (`VertBox::FrameStart`/`FrameEnd` after
+    /// page breaking) — zero-width, renders nothing (writers' wildcard arm),
+    /// read back by `fire_hooks` only.
+    FrameMarker { id: DecoId, end: bool },
+    /// `add-footnote`'s marker (v0.0.6 `PHGFootnote(imvblst)`,
+    /// `horzBox.ml:283` → `ImHorzFootnote`, `:306`): a zero-width/height/
+    /// depth inline box carrying the footnote's already-assembled block.
+    /// Rides the paragraph like `HookPageBreak` (writers skip it via their
+    /// wildcard arm); `chop_page` (pagebreak.rs) extracts it when the line
+    /// carrying it is COMMITTED to a page, reserves the block's stacked
+    /// height at the page bottom, and bottom-places the block in the same
+    /// column (upstream `pageBreak.ml:131-142` + `handlePdf.ml:400-403`).
+    /// The marker itself stays in the placed line's contents (render-inert)
+    /// — extraction is a read-only scan, unlike upstream's removing
+    /// `embed_page_info` (`pageInfo.ml:47`). Consequence: the block payload
+    /// appears both (inert) inside its referencing line and (rendered) as
+    /// bottom-placed lines — any future exhaustive consumer of a placed
+    /// line's contents must treat this variant as inert or it will
+    /// double-count the body.
+    Footnote { block: Vec<VertBox> },
 }
 
 /// TeX's forced-break convention: a discretionary penalty this low or
@@ -194,15 +271,29 @@ impl PureHorzBox {
             PureHorzBox::OuterFil => Length::ZERO,
             PureHorzBox::FixedEmpty { width } => *width,
             PureHorzBox::Image { width, .. } => *width,
-            // §3 never fills the slots, so there's nothing to sum yet;
-            // §4 (hyphenation) will need to measure `no_break`/`pre_break`.
-            PureHorzBox::Discretionary { .. } => Length::ZERO,
+            // Un-taken discretionary: renders as `no_break` (§4, hyphenation
+            // — `linebreak.rs`'s `line_content` handles the taken case,
+            // which never reaches this generic accessor). Empty for §3
+            // (UAX#14-only discretionaries), hence zero then.
+            PureHorzBox::Discretionary { no_break, .. } => no_break
+                .iter()
+                .map(PureHorzBox::natural_width)
+                .fold(Length::ZERO, |acc, w| acc + w),
             PureHorzBox::Graphics { width, .. } => *width,
+            // Fil semantics: zero natural width, like `OuterFil` — a
+            // resolved box is a `Graphics`, never re-measured as this
+            // variant (see the variant's own doc comment).
+            PureHorzBox::GraphicsOuter { .. } => Length::ZERO,
             PureHorzBox::Math { width, .. } => *width,
             // `EvHorzHookPageBreak` has width `Length.zero` (pageInfo.ml:42).
             PureHorzBox::HookPageBreak { .. } => Length::ZERO,
             PureHorzBox::Tabular(tab) => tab.width,
             PureHorzBox::EmbeddedBlock { width, .. } => *width,
+            PureHorzBox::Frame { width, .. } => *width,
+            PureHorzBox::FrameMarker { .. } => Length::ZERO,
+            // Zero width, like `HookPageBreak` (`ImHorzFootnote` is skipped
+            // by every width scan upstream, lineBreak.ml:1200/1254).
+            PureHorzBox::Footnote { .. } => Length::ZERO,
         }
     }
 

@@ -12,6 +12,11 @@ satysfi-backend.workspace = true
 thiserror.workspace = true
 # Raster image decoding for `load-image` (docs/plans/math-images.md §Slice 1).
 image.workspace = true
+# Knuth-Liang hyphenation (D4, docs/plans/text-rendering.md §3): en-US
+# patterns only, embedded at compile time (no dictionary files to ship at
+# runtime) — the same Liang/TeX pattern data upstream's
+# `dist/hyph/english.satysfi-hyph` carries.
+hyphenation = { version = "0.8.4", features = ["embed_en-us"] }
 
 [dev-dependencies]
 # Test-only: tests/stdlib_tier0.rs drives the real multi-file loader (lib_root

@@ -4,8 +4,8 @@ use crate::ast::{Ast, BText, IText, MathElem};
 use crate::compile::CompiledExpr;
 use crate::primitives::PrimDef;
 use satysfi_backend::{
-    Color, Context, HorzBox, ImageId, ImageResource, Length, MathCharClass, MathKind, Page,
-    PageGeometry, VertBox,
+    Color, Context, DocExtras, HorzBox, ImageId, ImageResource, Length, MathCharClass, MathKind,
+    Page, PageGeometry, VertBox,
 };
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
@@ -100,6 +100,8 @@ pub enum Value {
     /// `graphics` — one resolved drawing element (`fill`/`stroke`'s result);
     /// a `graphics list` is just `Value::List` of these, same as upstream.
     Graphics(satysfi_backend::GraphicsElem),
+    /// `text-info` (context-box-prims.md §G sliver).
+    TextInfo(TextInfo),
 }
 
 impl Value {
@@ -132,6 +134,7 @@ impl Value {
             Value::PrePath(_) => "pre-path",
             Value::Path(_) => "path",
             Value::Graphics(_) => "graphics",
+            Value::TextInfo(_) => "text-info",
         }
     }
 }
@@ -266,6 +269,17 @@ pub struct MathVariantStyle {
     pub double_struck: String,
 }
 
+/// `text-info` (v0.0.6 `BCTextModeContext` carrying
+/// `TextBackend.text_mode_context`, src/text-mode/textBackend.ml:1-5).
+/// PDF-port sliver: upstream's second field, `escape_list`, is omitted —
+/// no v0.0.6 primitive can set it (TextBackend.set_escape_list has no
+/// vminst.ml caller), so it is invariantly `[]` upstream. `indent` is
+/// invariantly >= 0 (`deepen_indent` clamps the increment).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TextInfo {
+    pub indent: i64,
+}
+
 /// The final result of evaluating a document.
 #[derive(Clone, Debug)]
 pub struct DocumentValue {
@@ -279,6 +293,12 @@ pub struct DocumentValue {
     /// writer can emit one Image XObject per image actually used.
     /// `docs/plans/math-images.md` §Slice 1.
     pub images: Vec<ImageResource>,
+    /// §B/§C/§D extras (annotations / destinations / outline / per-page deco
+    /// overlays), attached by the compile driver AFTER the final trial's
+    /// `fire_hooks` — `prim_page_break` cannot fill this (hooks/decos fire
+    /// only after placement), so it packages `DocExtras::default()` and
+    /// `compile_document_cst_with_trials` overwrites it on the winning trial.
+    pub extras: DocExtras,
 }
 
 /// A lexical environment: a frame chain (`environment` in the OCaml).

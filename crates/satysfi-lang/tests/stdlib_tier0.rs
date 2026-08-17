@@ -545,15 +545,14 @@ Geom.div-perp (0pt, 0pt) (1pt, 0pt) 0.5 10pt";
 // (`docs/plans/graphics-subsystem.md` §Full roadmap A/B/C/D): `bezier-to`,
 // `close-with-bezier`, `shift-path`, `linear-transform-path`,
 // `shift-graphics`, `linear-transform-graphics`, `get-graphics-bbox`,
-// `dashed-stroke` (all FAITHFUL), and `draw-text` (a documented STAND-IN,
-// see `GraphicsElem::Text`'s doc comment). These tests prove the triple
+// `dashed-stroke`, and `draw-text` (all FAITHFUL — `draw-text` as of roadmap
+// C1, see `GraphicsElem::Text`'s doc comment). These tests prove the triple
 // nested `@require:` resolves and exercise every new prim through REAL
 // `Gr.*` module code (not bare primitive calls), except `draw-text`/
 // `get-graphics-bbox`, which `gr.satyh` only ever composes inside
 // `Gr.text-centering`/`-leftward` — covered separately, below, via bare
-// primitive calls (the `Gr.*` functions that use them are never invoked by
-// any bundled package in a no-real-text way, so a direct call is the
-// faithful way to exercise them here).
+// primitive calls and (for `Gr.text-centering` itself) a direct `Gr.*` call
+// with real-width content (`inline-skip`, no font metrics needed).
 // ============================================================================
 
 #[test]
@@ -682,10 +681,11 @@ Gr.dashed-arrow 1pt (2pt, 2pt, 0pt) (Gray(0.)) 5pt 3pt 2pt (0pt, 0pt) (10pt, 0pt
 #[test]
 fn require_get_graphics_bbox_is_faithful_on_a_fill() {
     run_with_big_stack(|| {
-        // `get-graphics-bbox`/`draw-text` are only ever composed inside
-        // `Gr.text-centering`/`-leftward` (both built on the `draw-text`
-        // STAND-IN) — exercise the FAITHFUL `Fill`/`Stroke` bbox path
-        // directly instead: a rectangle's bbox is exactly its own corners.
+        // Exercise the `Fill`/`Stroke` bbox path directly: a rectangle's
+        // bbox is exactly its own corners. (`draw-text`'s own bbox is
+        // covered separately below, now that it's FAITHFUL — roadmap C1 —
+        // and `Gr.text-centering`/`-leftward` are exercised via
+        // `require_gr_text_centering_centers_on_the_runs_real_width`.)
         let src = "@require: gr
 in
 get-graphics-bbox (fill (Gray(0.)) (Gr.rectangle (0pt, 0pt) (10pt, 20pt)))";
@@ -708,19 +708,22 @@ get-graphics-bbox (fill (Gray(0.)) (Gr.rectangle (0pt, 0pt) (10pt, 20pt)))";
 }
 
 #[test]
-fn require_draw_text_stand_in_composes_with_shift_and_bbox() {
+fn require_draw_text_composes_with_shift_and_bbox_on_an_empty_run() {
     run_with_big_stack(|| {
-        // `draw-text` is a STAND-IN (`GraphicsElem::Text`, anchor point
-        // only) — prove it still composes correctly with the FAITHFUL
-        // `shift-graphics`/`get-graphics-bbox` (exactly how `Gr.text-
-        // centering`/`-leftward` use them), with no real font/line-break
-        // pass needed: shifting a `Text(1, 2)` by `(5, 5)` then taking its
-        // bbox gives the single point `(6, 7)`.
+        // `draw-text` is now FAITHFUL (`GraphicsElem::Text`, roadmap C1) —
+        // prove it still composes correctly with `shift-graphics`/
+        // `get-graphics-bbox` (exactly how `Gr.text-centering`/`-leftward`
+        // use them), with no real font/line-break pass needed: an EMPTY run
+        // (`inline-nil`) has zero `natural_metrics`, so shifting a
+        // `Text{pt: (1, 2), width: 0, height: 0, depth: 0}` by `(5, 5)` then
+        // taking its bbox still gives the single point `(6, 7)` — the same
+        // assertion the pre-C1 stand-in proved, now for the right reason
+        // (zero-size run, not "content dropped").
         let src = "@require: gr
 in
 get-graphics-bbox (shift-graphics (5pt, 5pt) (draw-text (1pt, 2pt) inline-nil))";
         let v =
-            compile_via_loader("gr-draw-text-standin", src).expect("gr.satyh should compile");
+            compile_via_loader("gr-draw-text-empty-run", src).expect("gr.satyh should compile");
         match v {
             Value::Tuple(vs) if vs.len() == 2 => {
                 let (x0, y0) = as_point_f64(&vs[0]);
@@ -731,6 +734,116 @@ get-graphics-bbox (shift-graphics (5pt, 5pt) (draw-text (1pt, 2pt) inline-nil))"
                         && (x1 - 6.0).abs() < 1e-6
                         && (y1 - 7.0).abs() < 1e-6,
                     "expected bbox (6,7)-(6,7), got ({x0},{y0})-({x1},{y1})"
+                );
+            }
+            other => panic!("expected a (point*point) tuple, got {other:?}"),
+        }
+    });
+}
+
+#[test]
+fn draw_text_bbox_is_the_runs_real_natural_width() {
+    run_with_big_stack(|| {
+        // `draw-text (0pt,0pt) (inline-skip 5pt)`: a `FixedEmpty{5pt}` box
+        // needs no font metrics (no glyphs), so `NoFonts` suffices, and its
+        // `natural_metrics` are exactly `(5pt, 0pt, 0pt)` — real width, not
+        // the pre-C1 stand-in's always-zero-size box.
+        let src = "get-graphics-bbox (draw-text (0pt, 0pt) (inline-skip 5pt))";
+        let v = compile_via_loader("draw-text-real-width", src).expect("should compile");
+        match v {
+            Value::Tuple(vs) if vs.len() == 2 => {
+                let (x0, y0) = as_point_f64(&vs[0]);
+                let (x1, y1) = as_point_f64(&vs[1]);
+                assert!(
+                    (x0 - 0.0).abs() < 1e-6
+                        && (y0 - 0.0).abs() < 1e-6
+                        && (x1 - 5.0).abs() < 1e-6
+                        && (y1 - 0.0).abs() < 1e-6,
+                    "expected bbox (0,0)-(5,0), got ({x0},{y0})-({x1},{y1})"
+                );
+            }
+            other => panic!("expected a (point*point) tuple, got {other:?}"),
+        }
+    });
+}
+
+#[test]
+fn require_gr_text_centering_centers_on_the_runs_real_width() {
+    run_with_big_stack(|| {
+        // The `gr.satyh` consumer path this whole roadmap item exists for
+        // (C1's design summary): `Gr.text-centering` needs `get-graphics-
+        // bbox` to report a REAL width for a `draw-text` run — previously
+        // meaningless under the always-zero-size stand-in. `inline-skip 5pt`
+        // needs no font metrics either.
+        let src = "@require: gr
+in
+Gr.text-centering (0pt, 0pt) (inline-skip 5pt)";
+        let v = compile_via_loader("gr-text-centering-real-width", src)
+            .expect("gr.satyh should compile");
+        match v {
+            Value::Graphics(g) => {
+                let (pmin, pmax) = satysfi_backend::graphics_bbox(&g);
+                assert!(
+                    (pmin.0 .0 - (-2.5)).abs() < 1e-6
+                        && (pmin.1 .0 - 0.0).abs() < 1e-6
+                        && (pmax.0 .0 - 2.5).abs() < 1e-6
+                        && (pmax.1 .0 - 0.0).abs() < 1e-6,
+                    "expected bbox (-2.5,0)-(2.5,0), got {pmin:?}-{pmax:?}"
+                );
+            }
+            other => panic!("expected a Graphics value, got {other:?}"),
+        }
+    });
+}
+
+#[test]
+fn get_path_bbox_of_a_rectangle_is_its_own_corners() {
+    run_with_big_stack(|| {
+        let src = "@require: gr
+in
+get-path-bbox (Gr.rectangle (0pt, 0pt) (10pt, 20pt))";
+        let v = compile_via_loader("get-path-bbox-rectangle", src)
+            .expect("gr.satyh should compile");
+        match v {
+            Value::Tuple(vs) if vs.len() == 2 => {
+                let (x0, y0) = as_point_f64(&vs[0]);
+                let (x1, y1) = as_point_f64(&vs[1]);
+                assert!(
+                    (x0 - 0.0).abs() < 1e-6
+                        && (y0 - 0.0).abs() < 1e-6
+                        && (x1 - 10.0).abs() < 1e-6
+                        && (y1 - 20.0).abs() < 1e-6,
+                    "expected bbox (0,0)-(10,20), got ({x0},{y0})-({x1},{y1})"
+                );
+            }
+            other => panic!("expected a (point*point) tuple, got {other:?}"),
+        }
+    });
+}
+
+#[test]
+fn get_path_bbox_of_a_circle_is_exact_not_the_control_hull() {
+    run_with_big_stack(|| {
+        // C3b: `Gr.circle` is 3 `bezier-to`s + `close-with-bezier`
+        // (`k = 0.55228`), the same shape `require_gr_circle_exercises_
+        // bezier_to_and_close_with_bezier` above pins structurally. The
+        // exact cubic-extrema bbox is the circle's own tight bounds
+        // `((40,40),(60,60))`; the (pre-C3b) control-point hull would
+        // overshoot the diagonal corners by `10 * 0.55228 ≈ 5.52pt`.
+        let src = "@require: gr
+in
+get-path-bbox (Gr.circle (50pt, 50pt) 10pt)";
+        let v = compile_via_loader("get-path-bbox-circle", src).expect("gr.satyh should compile");
+        match v {
+            Value::Tuple(vs) if vs.len() == 2 => {
+                let (x0, y0) = as_point_f64(&vs[0]);
+                let (x1, y1) = as_point_f64(&vs[1]);
+                assert!(
+                    (x0 - 40.0).abs() < 1e-3
+                        && (y0 - 40.0).abs() < 1e-3
+                        && (x1 - 60.0).abs() < 1e-3
+                        && (y1 - 60.0).abs() < 1e-3,
+                    "expected exact bbox (40,40)-(60,60), got ({x0},{y0})-({x1},{y1})"
                 );
             }
             other => panic!("expected a (point*point) tuple, got {other:?}"),
@@ -819,10 +932,12 @@ fn require_picture_draw_line_compiles_and_evaluates() {
     run_with_big_stack(|| {
         // `Picture.draw-line` runs `draw-line-scheme`'s full bbox-vs-slope
         // geometry (the meatiest part of `picture.satyh`) between two
-        // synthetic `node`s (`point * graphics`, built directly with the
-        // `draw-text` STAND-IN so no real font metrics are needed — same
-        // trick `require_draw_text_stand_in_...` above uses) and renders
-        // one stroked, open, single-segment connecting line.
+        // synthetic `node`s (`point * graphics`, built directly from
+        // `draw-text (.., inline-nil)` — an EMPTY run, so no real font
+        // metrics are needed, same trick
+        // `require_draw_text_composes_with_shift_and_bbox_on_an_empty_run`
+        // above uses) and renders one stroked, open, single-segment
+        // connecting line.
         let src = "@require: picture
 in
 Picture.draw-line 1pt (Gray(0.))
@@ -1097,10 +1212,14 @@ document (|
 // `no-break`/`add-footnote`, all already proven above or in
 // `hooks_crossref.rs`) already exists. `FootnoteScheme.main` is exercised
 // directly (its `sig` exposes only plain `val`s, no `direct` command) with
-// trivial `ibf`/`bbf` callbacks — `add-footnote` is a documented STAND-IN
-// (drops the block content, returns empty inline-boxes) but still
-// typechecks/evaluates, so this proves the module compiles end to end, not
-// that the footnote text is actually collected onto the page.
+// trivial `ibf`/`bbf` callbacks. `add-footnote` is now FAITHFUL (wraps the
+// block in a zero-metric `PureHorzBox::Footnote` marker,
+// docs/plans/document-page-model.md §C); `get-natural-metrics` measures the
+// marker's OWN zero width/height/depth (it never re-enters the wrapped
+// block), so the asserted metrics are unaffected by that change — this
+// still only proves the module compiles/evaluates end to end, not that the
+// footnote text lands on the page (that needs a real `chop_page` run,
+// covered by `crates/satysfi-cli/tests/e2e.rs`'s footnote fixture).
 // ============================================================================
 
 #[test]

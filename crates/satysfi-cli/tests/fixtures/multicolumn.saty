@@ -1,0 +1,30 @@
+% F3 fixture (docs/plans/document-page-model.md §A, item #8): real
+% `page-break-multicolumn` with a NON-trivial `columnhookf` — a 2-column
+% layout (`[250pt]`, i.e. 2 columns after the prepended zero shift) whose
+% hook emits a recognizable marker line at the start of EVERY column, so a
+% full page carries exactly 2 hook lines (one per column).
+
+@require: stdja-mini
+
+let ctx = get-initial-context 200pt (command \math)
+
+let content pbinfo = (| text-origin = (72pt, 72pt); text-height = 300pt |)
+
+let parts pbinfo =
+  (| header-origin = (0pt, 0pt); header-content = block-nil;
+     footer-origin = (0pt, 0pt); footer-content = block-nil |)
+
+let columnhookf () =
+  line-break true true ctx (read-inline ctx {COLMARK})
+
+let columnendhookf () = block-nil
+
+let-rec repeat n f =
+  if n <= 0 then block-nil
+  else (f n) +++ (repeat (n - 1) f)
+
+let paragraph n =
+  line-break true true ctx (read-inline ctx {This line helps overflow the column.})
+
+in
+page-break-multicolumn A4Paper [250pt] columnhookf columnendhookf content parts (repeat 60 paragraph)

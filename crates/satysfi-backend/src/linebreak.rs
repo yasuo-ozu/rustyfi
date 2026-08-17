@@ -108,15 +108,29 @@ fn measure(line: &[PureHorzBox]) -> LineMetrics {
             PureHorzBox::OuterFil => has_fil = true,
             PureHorzBox::FixedEmpty { width } => natural += *width,
             PureHorzBox::Image { width, .. } => natural += *width,
-            // Zero-width and empty-slotted for §3; contributes nothing to
-            // a line it doesn't end (see `hbox.rs::natural_width`).
-            PureHorzBox::Discretionary { .. } => {}
+            // §4 (hyphenation): a discretionary that does NOT end this line
+            // renders its `no_break` slot (matches `hbox.rs::natural_width`
+            // and upstream's `get_leftmost/rightmost` no-break choice) —
+            // empty for every UAX#14-only discretionary (§3), so this is a
+            // no-op until §4 fills `no_break`.
+            PureHorzBox::Discretionary { no_break, .. } => {
+                for b in no_break {
+                    natural += b.natural_width();
+                }
+            }
             PureHorzBox::Graphics { width, .. } => natural += *width,
+            // Counted as a fil for width purposes (upstream `Fils(1)`), same
+            // as `OuterFil` above — no `natural` contribution.
+            PureHorzBox::GraphicsOuter { .. } => has_fil = true,
             PureHorzBox::Math { width, .. } => natural += *width,
             // Zero-width marker; fired lang-side after placement.
             PureHorzBox::HookPageBreak { .. } => {}
             PureHorzBox::Tabular(tab) => natural += tab.width,
             PureHorzBox::EmbeddedBlock { width, .. } => natural += *width,
+            PureHorzBox::Frame { width, .. } => natural += *width,
+            PureHorzBox::FrameMarker { .. } => {}
+            // Zero-width marker; fired to the page bottom by `chop_page`.
+            PureHorzBox::Footnote { .. } => {}
         }
     }
     LineMetrics {
@@ -184,6 +198,12 @@ pub fn natural_metrics(boxes: &[HorzBox]) -> (Length, Length, Length) {
                     *height = (*height).max(*h);
                     *depth = (*depth).max(*d);
                 }
+                // Zero width contribution (fil semantics); height/depth
+                // still feed the run's outer metrics.
+                PureHorzBox::GraphicsOuter { height: h, depth: d, .. } => {
+                    *height = (*height).max(*h);
+                    *depth = (*depth).max(*d);
+                }
                 PureHorzBox::HookPageBreak { .. } => {}
                 PureHorzBox::Tabular(tab) => {
                     *width += tab.width;
@@ -200,6 +220,18 @@ pub fn natural_metrics(boxes: &[HorzBox]) -> (Length, Length, Length) {
                     *height = (*height).max(*h);
                     *depth = (*depth).max(*d);
                 }
+                PureHorzBox::Frame {
+                    width: w,
+                    height: h,
+                    depth: d,
+                    ..
+                } => {
+                    *width += *w;
+                    *height = (*height).max(*h);
+                    *depth = (*depth).max(*d);
+                }
+                PureHorzBox::FrameMarker { .. } => {}
+                PureHorzBox::Footnote { .. } => {}
             }
         }
     }
@@ -233,9 +265,13 @@ pub fn measure_block(block: &[VertBox]) -> (Length, Length) {
                 depth += *d;
             }
             VertBox::Skip(s) => height += *s,
-            // `clear-page`/`hook-page-break-block` markers contribute zero
-            // height, same as upstream's `ImVertFixedEmpty(_, Length.zero)`.
-            VertBox::ClearPage | VertBox::HookPageBreak(_) => {}
+            // `clear-page`/`hook-page-break-block`/frame markers contribute
+            // zero height, same as upstream's
+            // `ImVertFixedEmpty(_, Length.zero)`.
+            VertBox::ClearPage
+            | VertBox::HookPageBreak(_)
+            | VertBox::FrameStart(_)
+            | VertBox::FrameEnd(_) => {}
         }
     }
     (height, depth)
@@ -407,7 +443,18 @@ pub fn break_into_lines(ctx: &Context, boxes: Vec<HorzBox>) -> Vec<VertBox> {
                 // Can't happen (starts/ends interleave), but guard anyway.
                 continue;
             }
-            let metrics = measure(line_content(&pure, start, raw_end));
+            let mut metrics = measure(&line_content(&pure, start, raw_end));
+            // The break itself, if it's a chosen discretionary, carries
+            // `pre_break` onto the CLOSED line (the hyphen/etc. that
+            // actually prints before the break) — §4 (hyphenation);
+            // empty for a UAX#14-only discretionary (§3), so a no-op then.
+            if raw_end < n {
+                if let PureHorzBox::Discretionary { pre_break, .. } = &pure[raw_end] {
+                    for b in pre_break {
+                        metrics.natural += b.natural_width();
+                    }
+                }
+            }
             let b = badness(width, &metrics);
             let d = demerits(b, penalty);
             let cand_cost = dp[i].0 + d;
@@ -448,7 +495,7 @@ pub fn break_into_lines(ctx: &Context, boxes: Vec<HorzBox>) -> Vec<VertBox> {
         .into_iter()
         .enumerate()
         .map(|(idx, (start, raw_end))| {
-            let content: Vec<PureHorzBox> = line_content(&pure, start, raw_end).to_vec();
+            let content = line_content(&pure, start, raw_end);
             layout_line(ctx, content, width, idx + 1 == line_count)
         })
         .collect()
@@ -485,9 +532,43 @@ fn trim_leading_glue(line: &[PureHorzBox]) -> &[PureHorzBox] {
 }
 
 /// The actual content of a line spanning `pure[start..raw_end)`, with
-/// leading and trailing glue trimmed.
-fn line_content(pure: &[PureHorzBox], start: usize, raw_end: usize) -> &[PureHorzBox] {
-    trim_trailing_glue(trim_leading_glue(&pure[start..raw_end]))
+/// leading and trailing glue trimmed, and every `Discretionary` resolved
+/// to what actually renders on this line (§4, hyphenation — `linebreak.rs`
+/// module doc, "the first filler"):
+/// - a discretionary the line does NOT end on renders its `no_break` slot
+///   (spliced in place, matching `measure`'s treatment of one that survives
+///   into a line's interior — shouldn't normally happen since discretionaries
+///   are break candidates, but a run of several collapses to just the
+///   first, see `break_into_lines`'s comment, so later ones in the run can
+///   land here as ordinary un-taken candidates);
+/// - the break this line WAS chosen to end on (`pure[raw_end]`, only when
+///   `raw_end < pure.len()`) contributes its `pre_break` slot at the line's
+///   end (the hyphen prints here);
+/// - the break the PREVIOUS line was chosen to end on (`pure[start - 1]`,
+///   only when `start > 0`) contributes its `post_break` slot at this
+///   line's start (continuation text after the hyphen).
+/// Every slot is empty for a UAX#14-only discretionary (§3), so this is
+/// behavior-identical to the old borrow-only version until §4 fills them.
+fn line_content(pure: &[PureHorzBox], start: usize, raw_end: usize) -> Vec<PureHorzBox> {
+    let mut out = Vec::new();
+    if start > 0 {
+        if let PureHorzBox::Discretionary { post_break, .. } = &pure[start - 1] {
+            out.extend(post_break.iter().cloned());
+        }
+    }
+    for bx in trim_trailing_glue(trim_leading_glue(&pure[start..raw_end])) {
+        if let PureHorzBox::Discretionary { no_break, .. } = bx {
+            out.extend(no_break.iter().cloned());
+        } else {
+            out.push(bx.clone());
+        }
+    }
+    if raw_end < pure.len() {
+        if let PureHorzBox::Discretionary { pre_break, .. } = &pure[raw_end] {
+            out.extend(pre_break.iter().cloned());
+        }
+    }
+    out
 }
 
 /// Assign x offsets, justifying interior lines by distributing slack into
@@ -546,7 +627,7 @@ fn justify_line(
 
     let fil_count = line
         .iter()
-        .filter(|b| matches!(b, PureHorzBox::OuterFil))
+        .filter(|b| matches!(b, PureHorzBox::OuterFil | PureHorzBox::GraphicsOuter { .. }))
         .count();
     let stretch_total: Length = line
         .iter()
@@ -578,8 +659,8 @@ fn justify_line(
     let mut height = Length::ZERO;
     let mut depth = Length::ZERO;
 
-    for bx in line {
-        let advance = match &bx {
+    for mut bx in line {
+        let advance = match &mut bx {
             PureHorzBox::InnerString {
                 width,
                 height: h,
@@ -639,6 +720,27 @@ fn justify_line(
                 depth = depth.max(*d);
                 *width
             }
+            // `inline-graphics-outer`: shares slack equally with real fils
+            // (upstream `Fils(nfil)` counts both, `fil_count` above), and
+            // WRITES the resolved per-fil share back into the box — read
+            // back by the lang-side post-pass (`resolve_outer_graphics_in_
+            // contents`, satysfi-lang's primitives) once this line is done.
+            PureHorzBox::GraphicsOuter {
+                height: h,
+                depth: d,
+                width: w,
+                ..
+            } => {
+                height = height.max(*h);
+                depth = depth.max(*d);
+                let adv = if fil_count > 0 && slack.is_positive() {
+                    slack * (1.0 / fil_count as f64)
+                } else {
+                    Length::ZERO
+                };
+                *w = adv;
+                adv
+            }
             // Unlike `Image` (all height, zero depth), a math run grows
             // *both* line dimensions: a superscript raises `height`, a
             // subscript deepens `depth` (docs/plans/math-engine.md §Slice 1).
@@ -677,6 +779,25 @@ fn justify_line(
                 depth = depth.max(*d);
                 *width
             }
+            // An inline frame is exactly as "tall" as it reports (padding
+            // already folded into `height`/`depth` by `make_inline_frame`),
+            // same height/depth-driving shape as `Graphics`/`Tabular` above.
+            PureHorzBox::Frame {
+                width,
+                height: h,
+                depth: d,
+                ..
+            } => {
+                height = height.max(*h);
+                depth = depth.max(*d);
+                *width
+            }
+            // Zero-width/height/depth marker (`is_glue == false`); read back
+            // by `fire_hooks`, after placement.
+            PureHorzBox::FrameMarker { .. } => Length::ZERO,
+            // Zero-width/height/depth marker (`is_glue == false`); extracted
+            // and bottom-placed by `chop_page` at page-commit time.
+            PureHorzBox::Footnote { .. } => Length::ZERO,
         };
         contents.push((x, bx));
         x += advance;

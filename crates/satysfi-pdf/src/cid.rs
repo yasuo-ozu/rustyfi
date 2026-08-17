@@ -5,25 +5,49 @@
 //! streams against real embedded font files instead of WinAnsi bytes against
 //! the built-in base-14 fonts.
 //!
-//! Deferred to a later phase: subsetting (fonts are embedded whole — see the
-//! comment on `write_font`), kerning/shaping (advances come straight from
-//! `FontMetrics`, matching the milestone-1 line breaker), and CFF/OpenType-CFF
+//! D5 (docs/plans/text-rendering.md §2) subsets a `glyf`-outline face's
+//! `FontFile2` down to the glyphs the document actually used, via a
+//! translating `/CIDToGIDMap` stream — see `write_font`'s doc comment for
+//! the design (raw original gid stays the CID; only the embedded font's OWN
+//! internal glyph ids get renumbered by the subsetter).
+//!
+//! Still deferred: kerning/shaping (advances come straight from
+//! `FontMetrics`, matching the milestone-1 line breaker) and CFF/OpenType-CFF
 //! outlines (`CIDFontType0`) — only TrueType outlines (`CIDFontType2`) are
-//! handled.
+//! handled; a CFF face's `FontFile2` embed is invalid PDF (out of this
+//! port's scope, `fonts.rs`'s module doc flags the same gap for TTC
+//! collection members). A `.ttc` member is likewise never subset today
+//! (`subsetter::subset`'s output is a standalone sfnt, which `FontFile2`
+//! requires — embedding a raw TTC index directly would be invalid; routing
+//! TTC members through the subset path unconditionally is a documented
+//! follow-on, not implemented here).
 
 use std::collections::BTreeMap;
 
 use pdf_writer::types::{CidFontType, FontFlags};
 use pdf_writer::{Content, Finish, Name, Pdf, Rect, Ref, Str};
 use pdf_writer::types::{SystemInfo, UnicodeCmap};
-use satysfi_backend::{FontKey, ImageResource, Page, PageGeometry, PureHorzBox};
+use satysfi_backend::{DocExtras, FontKey, GraphicsElem, ImageResource, Page, PageGeometry, PureHorzBox};
 use ttf_parser::{Face, GlyphId};
 
 use crate::ttf::TtfFontStore;
 use crate::{
     image_res_name, place_embedded_block, place_graphics, place_image, place_math, used_images,
-    write_image_xobjects, PdfError, FONT_RES_NAMES,
+    write_annotations, write_image_xobjects, write_named_dests, write_outline, PdfError,
 };
+
+/// The PDF resource name for physical font file `file_idx` (D1a,
+/// docs/plans/text-rendering.md §1a) — one name per *file* actually
+/// embedded, replacing the old fixed `FONT_RES_NAMES: [&str; 3]` table that
+/// could only name `FontKey(0/1/2)` and not a registry slot beyond that.
+/// Both the page `/Resources /Font` dictionary and every `Tf` operand this
+/// writer emits go through this single naming function, so they always
+/// agree. For a document using only the default regular face, `file_idx` is
+/// always `0` and this is `"F0"` — the same resource name the pre-D1a fixed
+/// table produced, so that path stays byte-identical.
+pub(crate) fn font_res_name(file_idx: usize) -> String {
+    format!("F{file_idx}")
+}
 
 /// Which glyphs of one physical font file are referenced anywhere in the
 /// document, and the (first-seen) source character for each — enough to
@@ -45,6 +69,21 @@ pub fn render_pdf_ttf(
     store: &TtfFontStore,
     images: &[ImageResource],
 ) -> Result<Vec<u8>, PdfError> {
+    render_pdf_ttf_with(geometry, pages, store, images, &DocExtras::default())
+}
+
+/// Same as [`render_pdf_ttf`], but also emits the §B/§C/§D extras
+/// (`/Annots`, `/Dests`, `/Outlines`, per-page deco-graphics underlays)
+/// accumulated while evaluating the document (`DocumentValue::extras`).
+/// `render_pdf_ttf` above is a thin wrapper over this with
+/// `&DocExtras::default()`.
+pub fn render_pdf_ttf_with(
+    geometry: &PageGeometry,
+    pages: &[Page],
+    store: &TtfFontStore,
+    images: &[ImageResource],
+    extras: &DocExtras,
+) -> Result<Vec<u8>, PdfError> {
     let paper_h = geometry.paper_height.0 as f32;
 
     // Pass 1: build each page's content stream (Identity-H glyph-id runs
@@ -52,8 +91,9 @@ pub fn render_pdf_ttf(
     // font file were used.
     let mut usage: BTreeMap<usize, FontUsage> = BTreeMap::new();
     let mut page_contents = Vec::with_capacity(pages.len());
-    for page in pages {
-        page_contents.push(page_content(page, paper_h, store, &mut usage)?);
+    for (i, page) in pages.iter().enumerate() {
+        let overlay = extras.page_graphics.get(i).map(|v| v.as_slice()).unwrap_or(&[]);
+        page_contents.push(page_content(page, paper_h, store, &mut usage, overlay)?);
     }
 
     let mut pdf = Pdf::new();
@@ -84,7 +124,26 @@ pub fn render_pdf_ttf(
     let page_ids: Vec<Ref> = pages.iter().map(|_| next_ref(&mut alloc)).collect();
     let content_ids: Vec<Ref> = pages.iter().map(|_| next_ref(&mut alloc)).collect();
 
-    pdf.catalog(catalog_id).pages(page_tree_id);
+    // §B/§C: link annotations, named destinations, the outline tree — refs
+    // allocated right after `page_ids` (needed by `write_named_dests`); the
+    // chunk model makes object-write order irrelevant, only ref
+    // availability matters.
+    let annot_refs =
+        write_annotations(&mut pdf, || next_ref(&mut alloc), &extras.annotations, pages.len());
+    let dests_id =
+        write_named_dests(&mut pdf, || next_ref(&mut alloc), &extras.destinations, &page_ids);
+    let outline_id = write_outline(&mut pdf, || next_ref(&mut alloc), &extras.outline);
+
+    {
+        let mut cat = pdf.catalog(catalog_id);
+        cat.pages(page_tree_id);
+        if let Some(d) = dests_id {
+            cat.destinations(d);
+        }
+        if let Some(o) = outline_id {
+            cat.outlines(o);
+        }
+    }
     {
         let mut tree = pdf.pages(page_tree_id);
         tree.kids(page_ids.iter().copied());
@@ -104,8 +163,8 @@ pub fn render_pdf_ttf(
 
     let media_box = Rect::new(0.0, 0.0, geometry.paper_width.0 as f32, paper_h);
 
-    for ((&page_id, &content_id), content_bytes) in
-        page_ids.iter().zip(&content_ids).zip(&page_contents)
+    for (i, ((&page_id, &content_id), content_bytes)) in
+        page_ids.iter().zip(&content_ids).zip(&page_contents).enumerate()
     {
         pdf.stream(content_id, content_bytes);
 
@@ -113,13 +172,22 @@ pub fn render_pdf_ttf(
         p.media_box(media_box);
         p.parent(page_tree_id);
         p.contents(content_id);
+        if let Some(refs) = annot_refs.get(&i) {
+            p.annotations(refs.iter().copied());
+        }
         let mut resources = p.resources();
         let mut fonts = resources.fonts();
-        for (i, res_name) in FONT_RES_NAMES.iter().enumerate() {
-            let file_idx = store.file_index(FontKey(i as u16));
-            if let Some(&font_ref) = type0_ids.get(&file_idx) {
-                fonts.pair(Name(res_name.as_bytes()), font_ref);
-            }
+        // D1a: one resource name per *used* physical font FILE (not per
+        // `FontKey` slot — `FONT_RES_NAMES`'s fixed 3-entry table couldn't
+        // name a slot beyond 2, and per-file naming also collapses the
+        // bold-falls-back-to-regular alias correctly, matching `emit_box`'s
+        // own `font_res_name`).
+        let names: Vec<(String, Ref)> = type0_ids
+            .iter()
+            .map(|(&file_idx, &font_ref)| (font_res_name(file_idx), font_ref))
+            .collect();
+        for (name, font_ref) in &names {
+            fonts.pair(Name(name.as_bytes()), *font_ref);
         }
         fonts.finish();
         // Registered on every page uniformly, the same simplification the
@@ -146,13 +214,22 @@ pub fn render_pdf_ttf(
 /// backend's x-offsets are authoritative, so no kerning/shaping is applied
 /// here beyond what `FontMetrics` already measured. Image placement
 /// (`place_image`, `crate::lib`) is identical between the two writers.
+/// `overlay` (§D deco graphics) is drawn FIRST, same as `lib.rs`'s
+/// `page_content` — see that function's doc comment for the byte-identity
+/// guard on an empty overlay.
 fn page_content(
     page: &Page,
     paper_h: f32,
     store: &TtfFontStore,
     usage: &mut BTreeMap<usize, FontUsage>,
+    overlay: &[GraphicsElem],
 ) -> Result<Vec<u8>, PdfError> {
     let mut content = Content::new();
+    if !overlay.is_empty() {
+        place_graphics(&mut content, overlay, 0.0, 0.0, &mut |c, bx, x, y| {
+            emit_box(c, bx, x, y, store, usage)
+        })?;
+    }
     for line in &page.lines {
         let y = paper_h - line.baseline_y.0 as f32;
         for (dx, bx) in &line.contents {
@@ -187,13 +264,12 @@ fn emit_box(
             let file_usage = usage.entry(file_idx).or_default();
             let encoded = encode_glyph_run(&face, text, file_usage)?;
 
-            let font_idx = (info.font.0 as usize).min(FONT_RES_NAMES.len() - 1);
             content.begin_text();
             content.set_font(
-                Name(FONT_RES_NAMES[font_idx].as_bytes()),
+                Name(font_res_name(file_idx).as_bytes()),
                 info.size.0 as f32,
             );
-            content.next_line(tx, ty);
+            content.next_line(tx, ty + info.rising.0 as f32);
             content.show(Str(&encoded));
             content.end_text();
         }
@@ -205,10 +281,13 @@ fn emit_box(
             place_image(content, image.0, tx, ty, width.0 as f32, height.0 as f32);
         }
         PureHorzBox::Graphics { elems, .. } => {
-            place_graphics(content, elems, tx, ty);
+            place_graphics(content, elems, tx, ty, &mut |c, bx, x, y| {
+                emit_box(c, bx, x, y, store, usage)
+            })?;
         }
         PureHorzBox::Math { glyphs, rules, .. } => {
-            place_math(content, glyphs, tx, ty, |g| {
+            let name_for = |k: FontKey| font_res_name(store.file_index(k));
+            place_math(content, glyphs, tx, ty, &name_for, |g| {
                 let file_idx = store.file_index(g.info.font);
                 let file_usage = usage.entry(file_idx).or_default();
                 match g.gid {
@@ -236,7 +315,9 @@ fn emit_box(
             // base-14 writer (`lib.rs`'s Math arm) — the CID writer shares
             // `place_graphics` unchanged, since a filled path carries no
             // font/text state either writer needs to specialize.
-            place_graphics(content, rules, tx, ty);
+            place_graphics(content, rules, tx, ty, &mut |c, bx, x, y| {
+                emit_box(c, bx, x, y, store, usage)
+            })?;
         }
         PureHorzBox::Tabular(tab) => {
             for cell in &tab.cells {
@@ -251,12 +332,20 @@ fn emit_box(
                     )?;
                 }
             }
-            place_graphics(content, &tab.rules, tx, ty);
+            place_graphics(content, &tab.rules, tx, ty, &mut |c, bx, x, y| {
+                emit_box(c, bx, x, y, store, usage)
+            })?;
         }
         PureHorzBox::EmbeddedBlock { block, .. } => {
             place_embedded_block(block, tx, ty, |cbx, x, y| {
                 emit_box(content, cbx, x, y, store, usage)
             })?;
+        }
+        // §D: see `crate::emit_box`'s (base-14, `lib.rs`) matching arm.
+        PureHorzBox::Frame { contents, .. } => {
+            for (dx, cbx) in contents {
+                emit_box(content, cbx, tx + dx.0 as f32, ty, store, usage)?;
+            }
         }
         _ => {}
     }
@@ -283,11 +372,24 @@ fn encode_glyph_run(
 /// Write the Type0 font, its CIDFontType2 descendant, FontDescriptor,
 /// FontFile2 and ToUnicode CMap for one physical font file.
 ///
-/// The font file is embedded in full (`FontFile2` holds the whole input
-/// file's bytes): subsetting is deferred to a later phase, so a document
-/// that uses only a handful of glyphs from e.g. a ~700 KB TrueType face still
-/// pays for the whole face in the output PDF. Only the metrics tables
-/// (`/W`, `ToUnicode`) are trimmed to the glyphs actually used.
+/// **Subsetting (D5).** Content-stream generation (`page_content`, pass 1)
+/// runs before this function and bakes ORIGINAL face glyph ids into every
+/// `Tj` as Identity-H CIDs — renumbering CIDs here would force a two-pass
+/// restructure of the whole writer (and the math raw-gid channel,
+/// `emit_box`'s `Math` arm). Instead: the content stream and `/W`/ToUnicode
+/// (both keyed by original gid = CID) stay EXACTLY as before; only the
+/// embedded `FontFile2` is subsetted (via the `subsetter` crate, `glyf`
+/// faces only) and a translating `/CIDToGIDMap` stream maps each original
+/// gid (CID) to its renumbered gid inside the subset font — the PDF spec's
+/// documented mechanism for exactly this split (§9.7.4.3). Deviation from
+/// upstream (`fontFormat.ml`'s `SubsetMap`, which interns original->subset
+/// ids and renumbers the CIDs themselves): same rendered glyphs, different
+/// CID space; documented, not a fidelity gap.
+///
+/// A face with no `glyf` table (CFF, out of scope) or a subsetting failure
+/// both degrade gracefully to the pre-D5 whole-file embed with
+/// `CIDToGIDMap=Identity` — subsetting is a size optimization, never a
+/// hard requirement for a correct PDF.
 fn write_font(
     pdf: &mut Pdf,
     alloc: &mut i32,
@@ -305,6 +407,11 @@ fn write_font(
     let descriptor_ref = next_ref();
     let font_file_ref = next_ref();
     let to_unicode_ref = next_ref();
+    // Allocated unconditionally (mirrors the other refs above); only
+    // actually written as a PDF object when subsetting succeeds (see
+    // `subset` below) — an allocated-but-unwritten ref number is harmless
+    // (pdf-writer's chunk model doesn't require contiguous object use).
+    let c2g_ref = next_ref();
 
     let face = store
         .face_by_file(file_idx)
@@ -315,7 +422,24 @@ fn write_font(
     // `unitsPerEm` (DejaVu et al. use 2048).
     let scale = |v: f64| (v * 1000.0 / units_per_em) as f32;
 
-    let base_name = base_font_name(&face, file_idx);
+    // --- D5: subset the font file down to the glyphs `usage` references.
+    // `glyf`-only (CFF faces are out of scope, see the module doc); any
+    // subsetting failure (`.ok()`) degrades to the whole-file embed rather
+    // than a hard error — subsetting is a size optimization only. ---
+    let glyphs: Vec<u16> = usage.glyphs.keys().copied().collect();
+    let subset: Option<(Vec<u8>, subsetter::GlyphRemapper)> = if face.tables().glyf.is_some() {
+        let remapper = subsetter::GlyphRemapper::new_from_glyphs_sorted(&glyphs);
+        subsetter::subset(store.file_bytes(file_idx), 0, &remapper)
+            .ok()
+            .map(|bytes| (bytes, remapper))
+    } else {
+        None
+    };
+
+    let base_name = match &subset {
+        Some(_) => format!("{}+{}", subset_tag(&glyphs), base_font_name(&face, file_idx)),
+        None => base_font_name(&face, file_idx),
+    };
 
     // --- ToUnicode CMap (required: this is what keeps text extraction
     // working for an Identity-H-encoded, glyph-indexed content stream). ---
@@ -342,10 +466,12 @@ fn write_font(
         t0.to_unicode(to_unicode_ref);
     }
 
-    // --- CIDFontType2 descendant: CIDToGIDMap=Identity (we hand out raw
-    // TrueType glyph indices as CIDs directly, since we never subset/remap
-    // them), CIDSystemInfo Adobe-Identity-0 (no predefined CJK ordering —
-    // CIDs are just glyph indices). ---
+    // --- CIDFontType2 descendant: CIDs are raw ORIGINAL TrueType glyph
+    // indices (never renumbered, see `write_font`'s doc comment);
+    // CIDSystemInfo Adobe-Identity-0 (no predefined CJK ordering). The
+    // CID->embedded-glyph-id translation is `/CIDToGIDMap`: a stream when
+    // subsetted (D5), the `Identity` predefined name otherwise (pre-D5
+    // behavior, unchanged). ---
     let widths: BTreeMap<u16, f32> = usage
         .glyphs
         .keys()
@@ -370,7 +496,11 @@ fn write_font(
         });
         cid.font_descriptor(descriptor_ref);
         cid.default_width(default_width);
-        cid.cid_to_gid_map_predefined(Name(b"Identity"));
+        if subset.is_some() {
+            cid.cid_to_gid_map_stream(c2g_ref);
+        } else {
+            cid.cid_to_gid_map_predefined(Name(b"Identity"));
+        }
 
         if !widths.is_empty() {
             let mut w = cid.widths();
@@ -418,11 +548,55 @@ fn write_font(
         fd.font_file2(font_file_ref);
     }
 
-    // --- FontFile2: the whole input font file, uncompressed (see the
-    // module-level doc comment re: subsetting). ---
-    pdf.stream(font_file_ref, store.file_bytes(file_idx));
+    // --- FontFile2: the subsetted font when D5 succeeded, else the whole
+    // input file verbatim (pre-D5 behavior) — both uncompressed. ---
+    match &subset {
+        Some((bytes, _)) => pdf.stream(font_file_ref, bytes),
+        None => pdf.stream(font_file_ref, store.file_bytes(file_idx)),
+    };
+
+    // --- /CIDToGIDMap stream (D5 only): `2*(max_used_gid+1)` big-endian
+    // u16s, `bytes[2*cid..] = remapper.get(cid).unwrap_or(0)` for every
+    // `cid` from 0 up to the highest gid actually used — gaps (a CID that's
+    // never shown) map to `.notdef` (0), which is harmless since no content
+    // stream operand ever names them. ---
+    if let Some((_, remapper)) = &subset {
+        let max_cid = usage.glyphs.keys().copied().max().unwrap_or(0);
+        let mut map_bytes = vec![0u8; 2 * (max_cid as usize + 1)];
+        for cid in 0..=max_cid {
+            let new_gid = remapper.get(cid).unwrap_or(0);
+            let at = 2 * cid as usize;
+            map_bytes[at..at + 2].copy_from_slice(&new_gid.to_be_bytes());
+        }
+        pdf.stream(c2g_ref, &map_bytes);
+    }
 
     Ok(())
+}
+
+/// A deterministic 6-uppercase-letter subset tag for `/BaseFont` (PDF 32000
+/// §9.6.4: `XXXXXX+FontName`), folded from the used-gid set so identical
+/// input produces an identical tag across reruns (reproducible builds) —
+/// `glyphs` is already sorted (a `BTreeMap`'s key iteration order,
+/// `FontUsage::glyphs`), so hashing it is deterministic regardless of the
+/// order glyphs were first encountered while walking the document.
+fn subset_tag(glyphs: &[u16]) -> String {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    glyphs.hash(&mut hasher);
+    // NOTE: `hasher.finish()` would silently resolve to `pdf_writer::Finish`
+    // (a blanket `impl<T> Finish for T { fn finish(self) {} }` this module
+    // already imports for the builder-pattern types) instead of
+    // `std::hash::Hasher::finish`, since a by-value match wins over the
+    // autoref `&self` the real `Hasher::finish` needs — fully qualify.
+    let mut h = Hasher::finish(&hasher);
+    let mut tag = String::with_capacity(6);
+    for _ in 0..6 {
+        tag.push((b'A' + (h % 26) as u8) as char);
+        h /= 26;
+    }
+    tag
 }
 
 /// Write a `/W` array as a run of `Widths::consecutive` calls over

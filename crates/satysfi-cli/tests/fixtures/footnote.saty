@@ -1,0 +1,26 @@
+% F1 fixture (docs/plans/document-page-model.md §C): a DIRECT `add-footnote`
+% call, with no `footnote-scheme.satyh` dependency — this proves the
+% `chop_page` float accumulator itself, not the cross-reference fixpoint
+% `footnote-scheme.satyh` layers on top. A single reference line embeds a
+% zero-metric footnote marker whose block carries distinctive text;
+% `chop_page` must extract it at line-commit time, reserve its stacked
+% height at the column bottom, and bottom-place it on the SAME page as the
+% referencing line (upstream `pageBreak.ml:131-142` + `handlePdf.ml:400-403`).
+
+@require: stdja-mini
+
+let ctx = get-initial-context 400pt (command \math)
+
+let content pbinfo = (| text-origin = (72pt, 72pt); text-height = 300pt |)
+
+let parts pbinfo =
+  (| header-origin = (0pt, 0pt); header-content = block-nil;
+     footer-origin = (0pt, 0pt); footer-content = block-nil |)
+
+let body =
+  line-break true true ctx
+    (read-inline ctx {Reference line with a footnote marker.}
+     ++ add-footnote (read-block ctx '< +p{ This is the distinctive footnote body text. } >))
+
+in
+page-break A4Paper content parts body

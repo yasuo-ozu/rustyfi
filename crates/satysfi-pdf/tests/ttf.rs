@@ -119,7 +119,7 @@ fn build_line(store: &TtfFontStore, geometry: &PageGeometry, text: &str, font: F
         contents: vec![(
             Length::ZERO,
             PureHorzBox::InnerString {
-                info: HorzStringInfo { font, size },
+                info: HorzStringInfo { font, size, rising: Length::ZERO },
                 text: text.to_string(),
                 width,
                 height: ascender,
@@ -147,15 +147,266 @@ fn render_pdf_ttf_produces_a_pdf_with_embedded_font() {
         "output should start with a PDF header"
     );
 
-    // Full-file embedding heuristic: the raw font bytes appear verbatim in
-    // the output (no subsetting yet), so the PDF must be at least as big as
-    // the source font file.
+    // D5 (docs/plans/text-rendering.md §2): the embedded `FontFile2` is now
+    // SUBSET to the ~10 glyphs "Hello World" actually uses, so the whole PDF
+    // is much SMALLER than the source face (inverted from the pre-D5
+    // whole-file-embed assertion this test used to make).
+    let font_len = std::fs::metadata(&path).expect("stat font file").len() as usize;
+    assert!(
+        pdf_bytes.len() < font_len,
+        "expected the subsetted PDF ({} bytes) to be smaller than the source font file ({} bytes)",
+        pdf_bytes.len(),
+        font_len
+    );
+}
+
+/// A subsetted font's `/BaseFont` carries the PDF-spec subset tag
+/// (`XXXXXX+FontName`, six uppercase letters then `+`) — the signal a real
+/// PDF consumer / `qpdf --check` uses to know this copy of "FontName" is a
+/// partial glyph set, not the whole face.
+#[test]
+fn subsetted_base_font_carries_a_subset_tag() {
+    let path = need_font!();
+    let store = TtfFontStore::load(&path, None, None).expect("load font");
+    let geometry = PageGeometry::default();
+    let page = Page {
+        lines: vec![build_line(&store, &geometry, "Hi", FontKey(0))],
+    };
+    let pdf_bytes = render_pdf_ttf(&geometry, &[page], &store, &[]).expect("render");
+    let text = String::from_utf8_lossy(&pdf_bytes);
+    let base_font = text
+        .split("/BaseFont")
+        .nth(1)
+        .and_then(|rest| rest.split('/').nth(1))
+        .map(|s| s.split_whitespace().next().unwrap_or(""))
+        .unwrap_or("");
+    assert!(
+        base_font.len() >= 8
+            && base_font.as_bytes()[6] == b'+'
+            && base_font[..6].bytes().all(|b| b.is_ascii_uppercase()),
+        "expected a `XXXXXX+Name` subset tag in /BaseFont, got {base_font:?} (raw: {text})"
+    );
+}
+
+/// D5 reruns are reproducible: subsetting the same document twice yields
+/// byte-identical output (the subset tag is a deterministic hash of the
+/// used-gid set, not e.g. a random UUID or a timestamp).
+#[test]
+fn subsetting_is_reproducible_across_reruns() {
+    let path = need_font!();
+    let store = TtfFontStore::load(&path, None, None).expect("load font");
+    let geometry = PageGeometry::default();
+    let page = || Page {
+        lines: vec![build_line(&store, &geometry, "Reproducible", FontKey(0))],
+    };
+    let a = render_pdf_ttf(&geometry, &[page()], &store, &[]).expect("render 1");
+    let b = render_pdf_ttf(&geometry, &[page()], &store, &[]).expect("render 2");
+    assert_eq!(a, b, "two renders of the same document must be byte-identical");
+}
+
+/// D5's `glyf`-presence gate: a CFF-outline OpenType face (no `glyf` table
+/// at all — this host's `NotoSansTagalog-Regular.otf`, or any single-face
+/// non-collection `.otf` fontconfig turns up) must NOT be subsetted (the
+/// `subsetter` crate's TrueType path doesn't apply) and must still degrade
+/// gracefully to the pre-D5 whole-file embed rather than erroring — the
+/// module doc's "first honest gate" for CFF/`CIDFontType0` being out of
+/// scope.
+fn find_cff_otf() -> Option<PathBuf> {
+    let output = Command::new("fc-list").output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    for line in text.lines() {
+        let Some(path_str) = line.split(':').next() else {
+            continue;
+        };
+        if !path_str.ends_with(".otf") {
+            continue; // skip .ttc (collection) and .ttf entries
+        }
+        let path = PathBuf::from(path_str);
+        if !path.is_file() {
+            continue;
+        }
+        let Ok(bytes) = std::fs::read(&path) else {
+            continue;
+        };
+        let Ok(face) = ttf_parser::Face::parse(&bytes, 0) else {
+            continue;
+        };
+        if face.tables().glyf.is_none() && face.tables().cff.is_some() {
+            return Some(path);
+        }
+    }
+    None
+}
+
+#[test]
+fn cff_face_falls_back_to_whole_file_embed_without_erroring() {
+    let Some(path) = find_cff_otf() else {
+        eprintln!("skipping: no CFF-outline .otf found via fc-list on this system");
+        return;
+    };
+    let store = match TtfFontStore::load(&path, None, None) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("skipping: {path:?} failed to load as a face at all: {e}");
+            return;
+        }
+    };
+    let geometry = PageGeometry::default();
+    // Use whatever char this face actually has a glyph for — its own
+    // repertoire is arbitrary (Tagalog, or whatever fc-list found).
+    let face = store.face(FontKey(0)).expect("parse face");
+    let Some(c) = "Aa1 .".chars().find(|&c| face.glyph_index(c).is_some()) else {
+        eprintln!("skipping: face has none of the trivial probe glyphs");
+        return;
+    };
+    drop(face);
+    let page = Page {
+        lines: vec![build_line(&store, &geometry, &c.to_string(), FontKey(0))],
+    };
+
+    let pdf_bytes = render_pdf_ttf(&geometry, &[page], &store, &[]).expect(
+        "a CFF face must degrade to whole-file embed, not error",
+    );
+    assert!(pdf_bytes.starts_with(b"%PDF-"));
+    // No `glyf` table => `write_font`'s subsetter gate is skipped entirely
+    // => the whole input file is embedded verbatim (pre-D5 behavior for
+    // this face), so the PDF is at least as large as the source file.
     let font_len = std::fs::metadata(&path).expect("stat font file").len() as usize;
     assert!(
         pdf_bytes.len() > font_len,
-        "expected the PDF ({} bytes) to be larger than the embedded font file ({} bytes)",
+        "expected whole-file embed: PDF ({} bytes) should exceed the source face ({} bytes)",
         pdf_bytes.len(),
-        font_len
+        font_len,
+    );
+}
+
+/// D5 x §B3 interaction (module doc, "Interactions verified"): a raw
+/// MATH-table variant gid (`MathGlyph::gid: Some(_)`, not necessarily
+/// cmap-reachable from `text`) inserted into `usage.glyphs` by `emit_box`'s
+/// `Math` arm must survive subsetting — the `subsetter` crate's `glyf`
+/// composite closure is generic over "whatever gids you asked to keep",
+/// cmap-reachability is irrelevant to it. Forces a `glyf` (TrueType) face
+/// (DejaVu, not a CFF math font) so subsetting actually fires, and picks an
+/// arbitrary but definitely-valid gid (glyph 3, comfortably below any
+/// reasonable `maxp.numGlyphs`) as the "variant" — this test only cares
+/// that the CID pipeline round-trips a non-cmap-driven gid post-subsetting,
+/// not that gid 3 is any particular real MATH construction.
+#[test]
+fn math_variant_gid_survives_subsetting() {
+    let path = need_font!();
+    let store = TtfFontStore::load(&path, None, None).expect("load font");
+    let face = store.face(FontKey(0)).expect("parse face");
+    let num_glyphs = face.number_of_glyphs();
+    if num_glyphs < 4 {
+        eprintln!("skipping: face has too few glyphs to pick an arbitrary gid");
+        return;
+    }
+    let variant_gid: u16 = 3;
+    let advance = face.glyph_hor_advance(ttf_parser::GlyphId(variant_gid)).unwrap_or(0) as f64;
+    let units_per_em = face.units_per_em() as f64;
+    drop(face);
+
+    let geometry = PageGeometry::default();
+    let size = Length::pt(18.0);
+    let glyph = satysfi_backend::MathGlyph {
+        info: HorzStringInfo { font: FontKey(0), size, rising: Length::ZERO },
+        // ToUnicode source char for this synthetic "variant" — arbitrary,
+        // just needs to be searchable in `pdftotext` output.
+        text: "+".to_string(),
+        gid: Some(variant_gid),
+        dx: Length::ZERO,
+        dy: Length::ZERO,
+        width: size * (advance / units_per_em),
+        height: size * 0.7,
+        depth: Length::ZERO,
+    };
+    let line = PlacedLine {
+        x: geometry.text_origin.0,
+        baseline_y: geometry.text_origin.1 + size,
+        contents: vec![(
+            Length::ZERO,
+            PureHorzBox::Math {
+                width: glyph.width,
+                height: glyph.height,
+                depth: glyph.depth,
+                glyphs: vec![glyph],
+                rules: vec![],
+            },
+        )],
+    };
+    let page = Page { lines: vec![line] };
+
+    let pdf_bytes = render_pdf_ttf(&geometry, &[page], &store, &[]).expect(
+        "a raw MATH-variant gid must render through the (now subsetting) CID pipeline",
+    );
+    assert!(pdf_bytes.starts_with(b"%PDF-"));
+    // Subsetting fired (this is a `glyf` face): much smaller than the
+    // source, exactly like the plain-text `render_pdf_ttf_produces_a_pdf_
+    // with_embedded_font` case.
+    let font_len = std::fs::metadata(&path).expect("stat font file").len() as usize;
+    assert!(
+        pdf_bytes.len() < font_len,
+        "expected subsetting to fire for a `glyf` face even with a raw-gid Math box"
+    );
+
+    let Ok(which) = Command::new("which").arg("pdftotext").output() else {
+        return;
+    };
+    if !which.status.success() {
+        return;
+    }
+    let mut tmp = std::env::temp_dir();
+    tmp.push(format!("satysfi-pdf-ttf-mathgid-test-{}.pdf", std::process::id()));
+    std::fs::File::create(&tmp)
+        .and_then(|mut f| f.write_all(&pdf_bytes))
+        .expect("write temp pdf");
+    let output = Command::new("pdftotext").arg(&tmp).arg("-").output().expect("run pdftotext");
+    let _ = std::fs::remove_file(&tmp);
+    assert!(output.status.success(), "pdftotext failed: {output:?}");
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        text.contains('+'),
+        "pdftotext output missing the ToUnicode-mapped '+' for the raw variant gid, got {text:?}"
+    );
+}
+
+/// `qpdf --check` (when the binary happens to be on `PATH` — not installed
+/// on this dev machine, so this test is skip-gated exactly like the
+/// `pdftotext` checks) validates the subsetted PDF's object/xref structure
+/// end to end: a real, independent PDF parser, not just "our own writer
+/// didn't panic".
+#[test]
+fn qpdf_check_accepts_a_subsetted_pdf() {
+    let Ok(which) = Command::new("which").arg("qpdf").output() else {
+        eprintln!("skipping: `which` not available");
+        return;
+    };
+    if !which.status.success() {
+        eprintln!("skipping: qpdf not on PATH");
+        return;
+    }
+    let path = need_font!();
+    let store = TtfFontStore::load(&path, None, None).expect("load font");
+    let geometry = PageGeometry::default();
+    let page = Page {
+        lines: vec![build_line(&store, &geometry, "Hello World", FontKey(0))],
+    };
+    let pdf_bytes = render_pdf_ttf(&geometry, &[page], &store, &[]).expect("render");
+
+    let mut tmp = std::env::temp_dir();
+    tmp.push(format!("satysfi-pdf-ttf-qpdf-test-{}.pdf", std::process::id()));
+    std::fs::File::create(&tmp)
+        .and_then(|mut f| f.write_all(&pdf_bytes))
+        .expect("write temp pdf");
+    let output = Command::new("qpdf").arg("--check").arg(&tmp).output().expect("run qpdf");
+    let _ = std::fs::remove_file(&tmp);
+    assert!(
+        output.status.success(),
+        "qpdf --check reported problems: {}",
+        String::from_utf8_lossy(&output.stderr)
     );
 }
 

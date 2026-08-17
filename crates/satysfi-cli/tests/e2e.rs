@@ -49,6 +49,18 @@ fn load_and_merge(entry: &Path) -> satysfi_syntax::cst::File {
     }
 }
 
+/// `annot` (and its `@require` chain: pervasives, color, gr, option) parses
+/// deeply enough to overflow the default 8 MiB test-thread stack — mirrors
+/// `satysfi-lang/tests/stdlib_tier0.rs`'s helper of the same name.
+fn run_with_big_stack(f: impl FnOnce() + Send + 'static) {
+    std::thread::Builder::new()
+        .stack_size(64 * 1024 * 1024)
+        .spawn(f)
+        .expect("spawn big-stack thread")
+        .join()
+        .expect("big-stack thread panicked (see assertion above)");
+}
+
 fn compile_fixture() -> Vec<u8> {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/minimal.saty");
     let merged = load_and_merge(&fixture);
@@ -269,7 +281,12 @@ fn compile_graphics_fixture() -> Vec<u8> {
 /// stream for the path operators the rectangle must produce — the box's
 /// local path coordinates are exact regardless of where real line/page
 /// layout ends up placing the box (`place_graphics` translates the whole
-/// box via one `cm`, never per-coordinate).
+/// box via one `cm`, never per-coordinate). Also covers roadmap C1
+/// (`draw-text`, real glyph emission): the same callback draws a real
+/// `read-inline`d text run above the rectangle, and the content stream
+/// must additionally carry that run's `Td`/`Tj` — end-to-end proof
+/// `place_graphics`'s `NestedEmitter` reaches `render_pdf`'s own text path
+/// through the full compile pipeline, not just a hand-built `Page`.
 #[test]
 fn graphics_fixture_compiles_and_renders_path_operators() {
     let bytes = compile_graphics_fixture();
@@ -292,6 +309,15 @@ fn graphics_fixture_compiles_and_renders_path_operators() {
         hay.contains(" cm\n"),
         "content stream missing the box's placement transform:\n{hay}"
     );
+
+    // Roadmap C1: `draw-text (0pt, 25pt) (read-inline ctx {Hi})` inside the
+    // same callback — a real inline text run, emitted via `place_graphics`'s
+    // `NestedEmitter` re-entering the writer's own `emit_box` at the run's
+    // box-local anchor. (Page count still 1: `compile_graphics_fixture`
+    // already asserts `doc.pages.len() == 1` before rendering.)
+    for op in ["0 25 Td", "(Hi) Tj"] {
+        assert!(hay.contains(op), "content stream missing {op:?}:\n{hay}");
+    }
 }
 
 /// `list.satyg` + `stdja-mini` + this fixture's own `\tabular` definition
@@ -583,4 +609,381 @@ fn page_footer_fixture_overflows_to_two_pages_with_incrementing_footer_numbers()
         !hay2.contains("(1)"),
         "page 2 must not show page 1's footer glyph:\n{hay2}"
     );
+}
+
+// ============================================================================
+// Group A: /Annots + /Dests + /Outlines emission (docs/plans/
+// hooks-annotations-crossref.md §B/§C) — `annot-hook.saty` reaches them via
+// a raw `hook-page-break` closure (no §D frame/deco firing needed);
+// `href_fixture_*` below exercises the §D path (`inline-frame-breakable`)
+// through the real `annot.satyh` `\href`.
+// ============================================================================
+
+fn compile_annot_hook_fixture() -> std::rc::Rc<satysfi_lang::value::DocumentValue> {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/annot-hook.saty");
+    let merged = load_and_merge(&fixture);
+    let metrics = satysfi_pdf::Base14Metrics;
+    satysfi_lang::compile_document_cst(&merged, &metrics)
+        .expect("annot-hook fixture must compile")
+}
+
+/// A raw `hook-page-break` closure registers a named destination
+/// (`register-destination`) and a URI link (`register-link-to-uri`) on the
+/// page it fires on; a top-level `register-outline` call registers a
+/// 2-entry outline, one item keyed to the same destination. `render_pdf`
+/// (the 3-arg wrapper) would silently drop all of this — this fixture must
+/// go through `render_pdf_with(..., &doc.extras)`.
+#[test]
+fn annot_hook_fixture_emits_annots_dests_and_outlines() {
+    let doc = compile_annot_hook_fixture();
+    assert_eq!(doc.pages.len(), 1);
+    let bytes = satysfi_pdf::render_pdf_with(&doc.geometry, &doc.pages, &doc.images, &doc.extras)
+        .expect("PDF rendering must succeed");
+    assert!(bytes.starts_with(b"%PDF-"), "not a PDF header");
+    let hay = String::from_utf8_lossy(&bytes);
+
+    for needle in [
+        "/Annots",
+        "/Subtype /Link",
+        "/URI (https://example.com/)",
+        "/Dests",
+        "/XYZ",
+        "/Outlines",
+        "/Title",
+    ] {
+        assert!(hay.contains(needle), "content missing {needle:?}:\n{hay}");
+    }
+
+    // The outline item keyed `top` and the /Dests destination it points at
+    // must share the SAME minted name (`nameddest0` — the first key seen,
+    // by `register-destination`, since it fires before `register-outline`
+    // resolves the same key through the shared `dest_name` table).
+    assert!(
+        hay.contains("nameddest0"),
+        "the outline item's /Dest and the /Dests key must agree on a shared name:\n{hay}"
+    );
+}
+
+fn compile_href_fixture() -> std::rc::Rc<satysfi_lang::value::DocumentValue> {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/href.saty");
+    let merged = load_and_merge(&fixture);
+    let metrics = satysfi_pdf::Base14Metrics;
+    satysfi_lang::compile_document_cst(&merged, &metrics).expect("href fixture must compile")
+}
+
+/// The real `annot.satyh` `\href` end-to-end: `inline-frame-breakable`
+/// builds the atomic frame, `fire_hooks`/`fire_inline_frame` fires its
+/// `decoS` (`link-to-uri-frame`) once placed, landing a real `/Annots`
+/// entry with a non-degenerate rect (the frame's fitted content width).
+#[test]
+fn href_fixture_emits_a_real_link_annotation_with_a_nonzero_width_rect() {
+    run_with_big_stack(|| {
+        let doc = compile_href_fixture();
+        let bytes =
+            satysfi_pdf::render_pdf_with(&doc.geometry, &doc.pages, &doc.images, &doc.extras)
+                .expect("PDF rendering must succeed");
+        let hay = String::from_utf8_lossy(&bytes);
+        assert!(hay.contains("/Annots"), "missing /Annots:\n{hay}");
+        assert!(
+            hay.contains("/URI (https://example.com/)"),
+            "missing /URI:\n{hay}"
+        );
+
+        // Parse the four /Rect operands and assert a positive width — proof
+        // the frame's fitted content ("click here") actually measured to
+        // something, not a degenerate zero-size box.
+        let idx = hay.find("/Rect").expect("missing /Rect array");
+        let rest = &hay[idx + "/Rect".len()..];
+        let open = rest.find('[').expect("/Rect must be followed by an array");
+        let close = rest.find(']').unwrap();
+        let nums: Vec<f64> = rest[open + 1..close]
+            .split_whitespace()
+            .map(|s| s.parse().expect("a /Rect operand must be a number"))
+            .collect();
+        assert_eq!(nums.len(), 4, "/Rect must have 4 operands: {nums:?}");
+        let width = (nums[2] - nums[0]).abs();
+        assert!(
+            width > 0.0,
+            "the link rect must have a positive width, got {nums:?}"
+        );
+    });
+}
+
+// ============================================================================
+// Group B (docs/plans/document-page-model.md §C, item #5): the real
+// `add-footnote` float accumulator. F1 below is the data-loss regression —
+// it FAILS at HEAD (before this group's `chop_page` accumulator) because
+// the footnote body text is silently dropped by the old STAND-IN.
+// ============================================================================
+
+fn compile_footnote_fixture() -> std::rc::Rc<satysfi_lang::value::DocumentValue> {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/footnote.saty");
+    let merged = load_and_merge(&fixture);
+    let metrics = satysfi_pdf::Base14Metrics;
+    satysfi_lang::compile_document_cst(&merged, &metrics)
+        .expect("footnote fixture must compile")
+}
+
+/// `add-footnote`'s block ends up on the SAME page as its referencing line,
+/// bottom-placed below it (`baseline_y` strictly greater than every body
+/// line's), and its text actually reaches the rendered PDF's content
+/// stream — the assertion that FAILS at HEAD today, when `add-footnote`
+/// was a documented no-op that dropped the block.
+#[test]
+fn footnote_fixture_places_the_footnote_body_below_the_reference_and_renders_its_text() {
+    let doc = compile_footnote_fixture();
+    assert_eq!(
+        doc.pages.len(),
+        1,
+        "the short body + footnote should fit on one page, got {}",
+        doc.pages.len()
+    );
+
+    let lines = &doc.pages[0].lines;
+    assert!(
+        lines.len() >= 2,
+        "expected at least the reference line and the footnote line, got {}",
+        lines.len()
+    );
+    let max_baseline = lines
+        .iter()
+        .map(|l| l.baseline_y.0)
+        .fold(f64::MIN, f64::max);
+    let reference_baseline = lines[0].baseline_y.0;
+    assert!(
+        max_baseline > reference_baseline,
+        "the bottom-placed footnote line's baseline ({max_baseline}) must sit \
+         strictly below the reference line's ({reference_baseline})"
+    );
+
+    let bytes = satysfi_pdf::render_pdf(&doc.geometry, &doc.pages, &doc.images)
+        .expect("PDF rendering must succeed");
+    assert!(bytes.starts_with(b"%PDF-"), "not a PDF header");
+
+    let tmp =
+        std::env::temp_dir().join(format!("satysfi-rust-e2e-footnote-{}.pdf", std::process::id()));
+    std::fs::write(&tmp, &bytes).unwrap();
+    let pdftotext = Command::new("pdftotext").arg(&tmp).arg("-").output();
+
+    match pdftotext {
+        Ok(out) if out.status.success() => {
+            let text = String::from_utf8_lossy(&out.stdout);
+            assert!(
+                text.contains("Reference line with a footnote marker."),
+                "pdftotext output missing the reference line:\n{text}"
+            );
+            assert!(
+                text.contains("This is the distinctive footnote body text."),
+                "pdftotext output missing the footnote body text — the data-loss \
+                 regression this fixture guards against:\n{text}"
+            );
+        }
+        _ => {
+            let hay = String::from_utf8_lossy(&bytes);
+            for expected in ["(Reference)", "(distinctive)", "(footnote)"] {
+                assert!(
+                    hay.contains(expected),
+                    "content stream missing {expected:?} — the footnote body text \
+                     must reach the rendered PDF:\n{hay}"
+                );
+            }
+        }
+    }
+    let _ = std::fs::remove_file(&tmp);
+}
+
+// ============================================================================
+// Group B (docs/plans/document-page-model.md §A, item #8): real multi-
+// column `page-break-two-column` / `page-break-multicolumn`. F2 proves a
+// genuine SECOND column at a shifted x-origin (not the old single-column
+// stand-in); F3 proves `columnhookf` fires once per COLUMN (not once per
+// page) by counting its marker line per page.
+// ============================================================================
+
+fn compile_twocolumn_fixture() -> std::rc::Rc<satysfi_lang::value::DocumentValue> {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/twocolumn.saty");
+    let merged = load_and_merge(&fixture);
+    let metrics = satysfi_pdf::Base14Metrics;
+    satysfi_lang::compile_document_cst(&merged, &metrics)
+        .expect("twocolumn fixture must compile")
+}
+
+/// `page-break-two-column A4Paper 250pt …`: page 1 must carry lines at BOTH
+/// the content scheme's own `text-origin.x` (72pt) and that plus the
+/// 250pt shift (322pt) — real second-column geometry, not a same-x
+/// single-column fallback.
+#[test]
+fn twocolumn_fixture_places_a_second_column_at_the_shifted_x_origin() {
+    let doc = compile_twocolumn_fixture();
+    assert!(!doc.pages.is_empty());
+
+    let page1 = &doc.pages[0];
+    let text_origin_x = 72.0_f64;
+    let shifted_x = 72.0_f64 + 250.0;
+
+    let has_col1 = page1
+        .lines
+        .iter()
+        .any(|l| (l.x.0 - text_origin_x).abs() < 0.01);
+    let has_col2 = page1
+        .lines
+        .iter()
+        .any(|l| (l.x.0 - shifted_x).abs() < 0.01);
+    assert!(
+        has_col1,
+        "page 1 should have lines at the first column's x = 72pt, got x values: {:?}",
+        page1.lines.iter().map(|l| l.x.0).collect::<Vec<_>>()
+    );
+    assert!(
+        has_col2,
+        "page 1 should have lines at the second column's x = 322pt (72pt + 250pt shift), got x values: {:?}",
+        page1.lines.iter().map(|l| l.x.0).collect::<Vec<_>>()
+    );
+}
+
+fn compile_multicolumn_fixture() -> std::rc::Rc<satysfi_lang::value::DocumentValue> {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/multicolumn.saty");
+    let merged = load_and_merge(&fixture);
+    let metrics = satysfi_pdf::Base14Metrics;
+    satysfi_lang::compile_document_cst(&merged, &metrics)
+        .expect("multicolumn fixture must compile")
+}
+
+fn count_colmark_lines(page: &satysfi_backend::Page) -> usize {
+    fn text_of(bx: &satysfi_backend::PureHorzBox, out: &mut String) {
+        match bx {
+            satysfi_backend::PureHorzBox::InnerString { text, .. } => out.push_str(text),
+            satysfi_backend::PureHorzBox::Discretionary { no_break, .. } => {
+                for b in no_break {
+                    text_of(b, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    page.lines
+        .iter()
+        .filter(|l| {
+            let mut s = String::new();
+            for (_, bx) in &l.contents {
+                text_of(bx, &mut s);
+            }
+            s.contains("COLMARK")
+        })
+        .count()
+}
+
+/// `page-break-multicolumn A4Paper [250pt] …`: `columnhookf` fires at the
+/// start of EVERY column (pageBreak.ml:700), so a full 2-column page must
+/// carry exactly 2 `COLMARK` lines — one per column, not one per page.
+#[test]
+fn multicolumn_fixture_fires_the_column_hook_once_per_column() {
+    let doc = compile_multicolumn_fixture();
+    assert!(
+        doc.pages.len() >= 2,
+        "the 60-paragraph body over 300pt/column should span multiple pages, got {}",
+        doc.pages.len()
+    );
+    // Every page but possibly the last (which may run out of content
+    // mid-column) should show 2 COLMARK lines; the FIRST page is
+    // guaranteed full content on both columns.
+    let first_page_marks = count_colmark_lines(&doc.pages[0]);
+    assert_eq!(
+        first_page_marks, 2,
+        "page 1 (guaranteed full) must carry exactly 2 COLMARK lines (one per column), got {first_page_marks}"
+    );
+}
+
+// ============================================================================
+// Capstone (build-order-to-stdja.md item #2): a real `@require: stdjabook`
+// document rendered end-to-end through the FULL pipeline (loader -> elaborate
+// -> typecheck -> eval -> line break -> page break -> PDF) to a PDF whose text
+// `pdftotext` can extract. The document classes are already proven to
+// load+evaluate (stdlib_tier0.rs); this closes the loop with the
+// render_pdf -> pdftotext layer for a full document class. The body is Latin
+// (WinAnsi, renders via base-14); CJK glyph rendering is gated on an
+// embeddable TrueType CJK face the host lacks (see Group D / download-fonts.sh).
+// ============================================================================
+
+/// Locate a real regular TrueType face (DejaVu) for the capstone: the
+/// stdjabook footer's em-dash page number is not in base-14, so a real font
+/// is required — which also exercises Group D's `TtfFontStore` end-to-end.
+fn find_regular_ttf() -> Option<PathBuf> {
+    for family in ["DejaVuSerif", "DejaVuSans"] {
+        if let Ok(output) = Command::new("fc-match")
+            .args(["--format=%{file}", family])
+            .output()
+        {
+            if output.status.success() {
+                let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !path.is_empty() && Path::new(&path).is_file() && path.ends_with(".ttf") {
+                    return Some(PathBuf::from(path));
+                }
+            }
+        }
+    }
+    for candidate in [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+        "/run/current-system/sw/share/fonts/truetype/DejaVuSans.ttf",
+    ] {
+        if Path::new(candidate).is_file() {
+            return Some(PathBuf::from(candidate));
+        }
+    }
+    None
+}
+
+#[test]
+fn tier4_stdjabook_capstone_renders_to_extractable_text() {
+    let font = match find_regular_ttf() {
+        Some(p) => p,
+        None => {
+            eprintln!("skipping tier4 capstone: no DejaVu TrueType font found");
+            return;
+        }
+    };
+    run_with_big_stack(move || {
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/tier4.saty");
+        let merged = load_and_merge(&fixture);
+        let store = satysfi_pdf::TtfFontStore::load(&font, None, None)
+            .expect("load DejaVu regular face");
+        let doc = satysfi_lang::compile_document_cst(&merged, &store)
+            .expect("tier4 stdjabook capstone must compile end-to-end");
+        assert!(!doc.pages.is_empty(), "expected at least one page");
+        assert!(
+            doc.pages.iter().any(|p| !p.lines.is_empty()),
+            "expected at least one non-empty page"
+        );
+
+        let bytes = satysfi_pdf::render_pdf_ttf(&doc.geometry, &doc.pages, &store, &doc.images)
+            .expect("PDF rendering must succeed");
+        assert!(bytes.starts_with(b"%PDF-"), "not a PDF header");
+        assert!(
+            bytes.windows(9).any(|w| w == b"FontFile2"),
+            "expected an embedded TrueType font (FontFile2) in the capstone PDF"
+        );
+
+        let tmp =
+            std::env::temp_dir().join(format!("satysfi-rust-e2e-tier4-{}.pdf", std::process::id()));
+        std::fs::write(&tmp, &bytes).unwrap();
+        let pdftotext = Command::new("pdftotext").arg(&tmp).arg("-").output();
+        match pdftotext {
+            Ok(out) if out.status.success() => {
+                let text = String::from_utf8_lossy(&out.stdout);
+                for word in ["quick", "brown", "fox"] {
+                    assert!(
+                        text.contains(word),
+                        "pdftotext output missing {word:?} — the stdjabook capstone must \
+                         render extractable Latin body text:\n{text}"
+                    );
+                }
+            }
+            _ => eprintln!(
+                "pdftotext unavailable; the PDF-header + FontFile2-embed checks already passed"
+            ),
+        }
+        let _ = std::fs::remove_file(&tmp);
+    });
 }

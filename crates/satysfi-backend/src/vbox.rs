@@ -1,4 +1,4 @@
-use crate::hbox::{HookId, PureHorzBox};
+use crate::hbox::{DecoId, HookId, PureHorzBox};
 use crate::length::Length;
 
 /// A milestone-1 subset of `vert_box`: a typeset line or vertical space.
@@ -34,4 +34,12 @@ pub enum VertBox {
     /// page's `pbinfo` and the point where it sits in the flow. Contributes
     /// zero height, same as `ClearPage`.
     HookPageBreak(HookId),
+    /// `block-frame-breakable`'s frame-extent markers (§D): the frame's
+    /// indented contents sit between a `FrameStart(id)`/`FrameEnd(id)` pair;
+    /// `chop_page`/`place_block_at` place each as a zero-height marker
+    /// `PlacedLine` (the `HookPageBreak` pattern) and `fire_hooks` derives
+    /// each page fragment's rect from the real lines between them. The
+    /// frame's pads/width/deco-set live lang-side (`DecoEntry::Block`).
+    FrameStart(DecoId),
+    FrameEnd(DecoId),
 }

@@ -9,6 +9,21 @@ use satysfi_syntax::Span;
 use std::cell::RefCell;
 use std::rc::Rc;
 
+/// See [`Interp::decos`].
+#[derive(Clone, Debug)]
+pub enum DecoEntry {
+    Inline {
+        deco: Value,
+    },
+    Block {
+        pads: satysfi_backend::Paddings,
+        /// The frame's OUTER width (the wrapping context's paragraph_width).
+        width: satysfi_backend::Length,
+        /// `(decoS, decoH, decoM, decoT)` — evalUtil.ml:169 `get_decoset`.
+        decoset: [Value; 4],
+    },
+}
+
 #[derive(Debug, thiserror::Error)]
 #[error("{}{msg}", .span.map(|s| format!("{s}: ")).unwrap_or_default())]
 pub struct EvalError {
@@ -75,6 +90,34 @@ pub struct Interp<'a> {
     /// interpreter run, so the addresses are stable and re-reading the same
     /// quoted text reuses its already-compiled argument closures.
     arg_cache: std::collections::HashMap<usize, crate::compile::CompiledExpr>,
+    /// §B/§C accumulators (docs/plans/hooks-annotations-crossref.md):
+    /// link annotations / named destinations / outline entries, plus the
+    /// per-page deco-graphics overlays (§D). All reset per trial (fresh
+    /// `Interp`); the FINAL trial's contents are moved into
+    /// `DocumentValue::extras` by `compile_document_cst_with_trials`.
+    pub annotations: Vec<satysfi_backend::Annot>,
+    pub destinations: Vec<satysfi_backend::NamedDest>,
+    pub outline: Vec<satysfi_backend::OutlineEntry>,
+    pub page_graphics: Vec<Vec<satysfi_backend::GraphicsElem>>,
+    /// `Some(0-based page)` only while `fire_hooks` is walking that page —
+    /// the port of upstream's `State.during_page_break` + "current page"
+    /// (`annotation.ml:15`, `namedDest.ml`'s `notify_pagebreak`).
+    pub current_page: Option<usize>,
+    /// `namedDest.ml`'s key -> "nameddest{N}" sanitizer table (`name_from_
+    /// hash_table`): arbitrary user keys become stable PDF name strings,
+    /// shared by register-destination / register-link-to-location /
+    /// register-outline within one trial.
+    dest_names: std::collections::HashMap<String, String>,
+    /// §D deco-closure table (`DecoId` indexes here) — `hooks`' twin for
+    /// decorations. `Inline` holds one `deco` closure
+    /// (`point -> length -> length -> length -> graphics list`); `Block`
+    /// holds a block frame's four-closure deco-set + the geometry the
+    /// markers can't carry. Reset per trial.
+    pub decos: Vec<DecoEntry>,
+    /// Deferred `inline-graphics-outer` callbacks (`length -> point ->
+    /// graphics list`), indexed by `GraphicsFnId` — the `hooks` pattern.
+    /// Reset per trial like `hooks`/`images`.
+    pub outer_graphics: Vec<Value>,
 }
 
 impl<'a> Interp<'a> {
@@ -86,6 +129,14 @@ impl<'a> Interp<'a> {
             math_commands: Vec::new(),
             crossrefs: Rc::new(RefCell::new(CrossRefs::new())),
             arg_cache: std::collections::HashMap::new(),
+            annotations: Vec::new(),
+            destinations: Vec::new(),
+            outline: Vec::new(),
+            page_graphics: Vec::new(),
+            current_page: None,
+            dest_names: std::collections::HashMap::new(),
+            decos: Vec::new(),
+            outer_graphics: Vec::new(),
         }
     }
 
@@ -365,6 +416,18 @@ impl<'a> Interp<'a> {
     pub fn register_math_command(&mut self, cmd: Value) -> MathCmdId {
         self.math_commands.push(cmd);
         MathCmdId(self.math_commands.len() - 1)
+    }
+
+    /// `namedDest.ml:name_from_hash_table` — the stable PDF name for `key`,
+    /// minting `nameddest{N}` on first sight. Also used by `register-outline`
+    /// (upstream `Outline.make_entry` calls `NamedDest.get`, which mints too).
+    pub fn dest_name(&mut self, key: &str) -> String {
+        if let Some(n) = self.dest_names.get(key) {
+            return n.clone();
+        }
+        let n = format!("nameddest{}", self.dest_names.len());
+        self.dest_names.insert(key.to_string(), n.clone());
+        n
     }
 
     pub fn apply(&mut self, func: Value, arg: Value) -> Result<Value, EvalError> {

@@ -292,3 +292,60 @@ fn gap6_text_in_math_renders_through_read_inline() {
     let joined: String = glyphs.iter().map(|g| g.text.as_str()).collect();
     assert!(joined.contains("ab"), "expected a glyph whose text contains \"ab\", got {glyphs:?}");
 }
+
+// ============================================================================
+// `convert-string-for-math` — the whole-string Mathematical-Alphanumeric
+// remap (`vminstdef.yaml` `PrimitiveConvertStringForMath`;
+// `types.cppo.ml:1602` `convert_math_variant_char`). Reuses gap 5's
+// `default_math_variant_char` + `default_math_class_map` over a whole string
+// under a passed `math-char-class`.
+// ============================================================================
+
+fn as_string(v: Value) -> String {
+    match v {
+        Value::Str(s) => s,
+        other => panic!("expected a string, got {other:?}"),
+    }
+}
+
+/// `convert-string-for-math ctx MathItalic `abc``: each ASCII small letter
+/// maps to its normal-italic Mathematical-Alphanumeric codepoint (the
+/// U+1D44E block — `a`→U+1D44E, `b`→U+1D44F, `c`→U+1D450). NOT gated on font
+/// availability (this is a string primitive, unlike the rendering-path
+/// `resolve_variant_char`), so `Mono` is irrelevant here.
+#[test]
+fn convert_string_for_math_italic_maps_abc_to_1d44e_block() {
+    let src = with_ctx("convert-string-for-math ctx MathItalic `abc`");
+    let v = run(&src).expect("convert-string-for-math should compile and evaluate");
+    assert_eq!(as_string(v), "\u{1D44E}\u{1D44F}\u{1D450}");
+}
+
+/// Special-cased letter (`h` under Italic → U+210E PLANCK CONSTANT, an
+/// upstream exception, not U+1D455) and pass-through for chars with no
+/// variant mapping (a space and a digit stay unchanged).
+#[test]
+fn convert_string_for_math_italic_passthrough_and_h_exception() {
+    let src = with_ctx("convert-string-for-math ctx MathItalic `h 7`");
+    let v = run(&src).expect("convert-string-for-math should compile and evaluate");
+    // 'h' -> U+210E, ' ' and '7' have no Italic variant -> unchanged.
+    assert_eq!(as_string(v), "\u{210E} 7");
+}
+
+/// A whole-token `math_class_map` hit (`-` → U+2212 MINUS SIGN) short-circuits
+/// the per-char path, exactly as upstream's `MathClassMap.find_opt s` does
+/// before the per-char loop.
+#[test]
+fn convert_string_for_math_whole_token_class_map_minus() {
+    let src = with_ctx("convert-string-for-math ctx MathItalic `-`");
+    let v = run(&src).expect("convert-string-for-math should compile and evaluate");
+    assert_eq!(as_string(v), "\u{2212}");
+}
+
+/// The passed `math-char-class` (not the context's default `MathItalic`)
+/// drives the remap: under `MathBoldRoman`, `A` → U+1D400.
+#[test]
+fn convert_string_for_math_uses_passed_class() {
+    let src = with_ctx("convert-string-for-math ctx MathBoldRoman `A`");
+    let v = run(&src).expect("convert-string-for-math should compile and evaluate");
+    assert_eq!(as_string(v), "\u{1D400}");
+}

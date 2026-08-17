@@ -76,6 +76,7 @@ fn ideograph(m: &Mono, c: &Context, ch: char) -> HorzBox {
         info: HorzStringInfo {
             font: c.font,
             size: c.font_size,
+            rising: Length::ZERO,
         },
         width: m.text_width(c.font, &text, c.font_size).unwrap(),
         height: m.ascender(c.font, c.font_size),
@@ -107,6 +108,8 @@ fn lines_of(v: &[VertBox]) -> Vec<String> {
             VertBox::Skip(_) => "<skip>".into(),
             VertBox::ClearPage => "<clear-page>".into(),
             VertBox::HookPageBreak(_) => "<hook>".into(),
+            VertBox::FrameStart(_) => "<frame-start>".into(),
+            VertBox::FrameEnd(_) => "<frame-end>".into(),
         })
         .collect()
 }

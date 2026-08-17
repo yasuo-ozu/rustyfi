@@ -22,7 +22,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use satysfi_backend::{FontKey, FontMetrics, HorzBox, Length, MathGlyph, PureHorzBox};
+use satysfi_backend::{FontKey, FontMetrics, GraphicsElem, HorzBox, Length, MathGlyph, PureHorzBox};
 use satysfi_lang::value::Value;
 use satysfi_lang::{elaborate, eval, primitives, typecheck};
 use satysfi_loader::{LoadOptions, LoadedProgram};
@@ -209,6 +209,77 @@ fn math_glyphs(v: Value) -> Vec<MathGlyph> {
         }
         other => panic!("expected inline-boxes, got {other:?}"),
     }
+}
+
+/// Like [`math_glyphs`] but also returns the drawn `rules` — B3b-2 delimiter
+/// identity lives in the drawn graphics, not the glyphs.
+fn math_box(v: Value) -> (Vec<MathGlyph>, Vec<GraphicsElem>) {
+    match v {
+        Value::InlineBoxes(boxes) => {
+            assert_eq!(boxes.len(), 1, "expected exactly one box, got {boxes:?}");
+            match boxes.into_iter().next().unwrap() {
+                HorzBox::Pure(PureHorzBox::Math { glyphs, rules, .. }) => (glyphs, rules),
+                other => panic!("expected a PureHorzBox::Math, got {other:?}"),
+            }
+        }
+        other => panic!("expected inline-boxes, got {other:?}"),
+    }
+}
+
+/// `embed-math ctx <delim_math>` through the real `math.satyh` under the
+/// plain `Mono` stub (no MATH table) — the make_paren closures draw via
+/// graphics, needing no font, so this exercises the base-14-shaped path.
+fn delim_box(delim_math: &str) -> (Vec<MathGlyph>, Vec<GraphicsElem>) {
+    let src = format!(
+        "@require: math\n\
+         let-inline ctx \\math mm = embed-math ctx mm\n\
+         let ctx = get-initial-context 100pt (command \\math)\n\
+         in\n\
+         embed-math ctx {delim_math}"
+    );
+    let v = compile_via_loader_with_metrics("b3b2-identity", &src, &Mono)
+        .unwrap_or_else(|e| panic!("compile failed for {delim_math}: {e}"));
+    math_box(v)
+}
+
+/// B3b-2: the `make_paren` closure route restores delimiter IDENTITY.
+/// `\paren` fills bezier bowls; `\abs` strokes bars — DIFFERENT shapes, not
+/// the identical stretched `(` that B3b(i) collapsed every delimiter to. And
+/// because the closures draw via graphics (not font glyphs), this works under
+/// the plain `Mono` stub with no MATH font at all.
+#[test]
+fn b3b2_paren_and_abs_draw_different_shapes_through_the_closures() {
+    run_with_big_stack(|| {
+        let (paren_g, paren_r) = delim_box(r"${\paren{x}}");
+        let (abs_g, abs_r) = delim_box(r"${\abs{x}}");
+        // Identity restored: only the inner `x` glyph remains; the
+        // delimiters are DRAWN ink, not `(`/`)` glyphs (B3b(i) gave 3 glyphs,
+        // 0 rules and made \abs identical to \paren).
+        assert_eq!(paren_g.len(), 1, "paren: inner glyph only, delimiters drawn");
+        assert_eq!(abs_g.len(), 1, "abs: inner glyph only");
+        assert!(!paren_r.is_empty(), "paren draws its delimiters");
+        assert!(!abs_r.is_empty(), "abs draws its delimiters");
+        assert!(
+            paren_r.iter().all(|r| matches!(r, GraphicsElem::Fill(..))),
+            "paren draws filled bowls, got {paren_r:?}"
+        );
+        assert!(
+            abs_r.iter().any(|r| matches!(r, GraphicsElem::Stroke(..))),
+            "abs draws stroked bars, got {abs_r:?}"
+        );
+    });
+}
+
+/// B3b-2: `\brace` also draws (via the closures) and differs from `\paren` —
+/// both fill, but distinct shapes ⇒ distinct total advances. Confirms the
+/// closure route is exercised for more than one delimiter kind.
+#[test]
+fn b3b2_brace_draws_and_differs_from_paren() {
+    run_with_big_stack(|| {
+        let (brace_g, brace_r) = delim_box(r"${\brace{x}}");
+        assert_eq!(brace_g.len(), 1, "brace: inner glyph only");
+        assert!(!brace_r.is_empty(), "brace draws its delimiters");
+    });
 }
 
 // ============================================================================

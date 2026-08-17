@@ -149,10 +149,14 @@ fn cmd_compile(m: &ArgMatches) -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("{}: {e}", input.display()))?;
 
     let bytes = match &font_store {
-        Some(store) => {
-            satysfi_pdf::render_pdf_ttf(&doc.geometry, &doc.pages, store, &doc.images)?
-        }
-        None => satysfi_pdf::render_pdf(&doc.geometry, &doc.pages, &doc.images)?,
+        Some(store) => satysfi_pdf::render_pdf_ttf_with(
+            &doc.geometry,
+            &doc.pages,
+            store,
+            &doc.images,
+            &doc.extras,
+        )?,
+        None => satysfi_pdf::render_pdf_with(&doc.geometry, &doc.pages, &doc.images, &doc.extras)?,
     };
     std::fs::write(&output, &bytes)
         .with_context(|| format!("cannot write {}", output.display()))?;

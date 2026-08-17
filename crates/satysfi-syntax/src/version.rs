@@ -43,9 +43,17 @@ pub enum SatysfiVersion {
     /// surface syntax this port's `satysfi-syntax` / `satysfi-loader` /
     /// `satysfi-lang` implement.
     V0_0_6,
-    /// SATySFi 0.1.x: `use <Ident>` headers and the reworked (F-ing
-    /// Modules-based) module system. **Not implemented** by this port; see
-    /// [`SatysfiVersion::is_implemented`].
+    /// SATySFi 0.1.x: the `dev-0-1-0` language generation — an ML-style
+    /// module system (F-ing Modules-based), row-polymorphic records and
+    /// optional-argument encodings, and a reworked surface grammar —
+    /// shared near-identically by `saphe-split` (confirmed by direct diff;
+    /// see `docs/plans/satysfi-0-1-0-support.md` §1.1). This says nothing
+    /// about *packaging*: `V0_1` documents may resolve dependencies via
+    /// either today's `@require:`/`@import:` headers (`dev-0-1-0`'s own
+    /// model, and this port's `LoadMode::Legacy` — Slice 1's target) or the
+    /// `use`/manifest/lockfile model (`saphe-split`'s `LoadMode::Envelopes`,
+    /// a later milestone) — see `satysfi_loader::LoadMode`. **Not yet fully
+    /// implemented** by this port; see [`SatysfiVersion::is_implemented`].
     V0_1,
 }
 
@@ -53,24 +61,47 @@ impl SatysfiVersion {
     /// The version this port targets when none is specified.
     pub const DEFAULT: Self = Self::V0_0_6;
 
-    /// Whether this version's surface syntax resolves multi-file programs
-    /// via `@require: name` / `@import: name` header lines (as opposed to
-    /// 0.1's `use Name` module headers).
-    ///
-    /// This is the loader's divergence point: `satysfi_loader::load` reads
-    /// this to decide which header form it should be parsing / resolving.
-    pub fn uses_require_headers(&self) -> bool {
-        match self {
-            Self::V0_0_6 => true,
-            Self::V0_1 => false,
-        }
+    /// Whether this version has an ML-style module system (`module M =
+    /// struct ... end` bindings that erase to stamped-flat names, `val`
+    /// bindings inside them, later: signatures/functors). `false` for
+    /// `V0_0_6` (which has only its own non-parameterized, single-level
+    /// `module`/`sig` surface — see `docs/plans/class-signature-lang-gaps.md`
+    /// — not a real module *system*); `true` for `V0_1`.
+    pub fn has_module_system(&self) -> bool {
+        matches!(self, Self::V0_1)
+    }
+
+    /// Whether this version's type system has row-polymorphic records and
+    /// optional-argument rows (`?(l = e)` bundles, `?'r` row variables).
+    /// `false` for `V0_0_6` (closed `Kind::Record` rows only); `true` for
+    /// `V0_1`.
+    pub fn has_row_polymorphism(&self) -> bool {
+        matches!(self, Self::V0_1)
+    }
+
+    /// Whether `page-break`/`page-break-multicolumn`/`page-break-two-column`
+    /// take the `page` ADT (`A4Paper`/`UserDefinedPaper`) as their paper-size
+    /// argument, as opposed to `V0_1`'s plain `length * length`. Deliberately
+    /// phrased as an assertion about `V0_0_6`'s surface (not "is it 0.0.6"),
+    /// so a future third generation that also drops the ADT reads correctly
+    /// without touching call sites — see L7 in the main plan.
+    pub fn has_page_adt(&self) -> bool {
+        matches!(self, Self::V0_0_6)
+    }
+
+    /// Whether the `math` type is split into `math-text` (unparsed `${...}`
+    /// source) / `math-boxes` (evaluated tree) with a `read-math` primitive
+    /// bridging them, as opposed to `V0_0_6`'s single unsplit `math` type.
+    /// `false` for `V0_0_6`; `true` for `V0_1`.
+    pub fn math_is_split(&self) -> bool {
+        matches!(self, Self::V0_1)
     }
 
     /// Whether this port actually implements this version end-to-end
-    /// (lexer through PDF rendering). Only [`SatysfiVersion::V0_0_6`] is
-    /// implemented today.
+    /// (lexer through PDF rendering). Both generations, Slice 1 scope for
+    /// `V0_1` — see `docs/plans/satysfi-0-1-0-support.md` §3.
     pub fn is_implemented(&self) -> bool {
-        matches!(self, Self::V0_0_6)
+        matches!(self, Self::V0_0_6 | Self::V0_1)
     }
 
     /// Every version this enum currently distinguishes (implemented or
@@ -81,7 +112,7 @@ impl SatysfiVersion {
 
     /// The subset of [`SatysfiVersion::all`] this port can actually load.
     pub fn supported() -> &'static [SatysfiVersion] {
-        &[Self::V0_0_6]
+        &[Self::V0_0_6, Self::V0_1]
     }
 }
 
@@ -133,26 +164,29 @@ impl FromStr for SatysfiVersion {
 
 /// Best-effort detection of a document's target version from its source
 /// text, by inspecting the header-like lines at the top of the file (before
-/// any prelude bindings).
+/// any prelude bindings), and, failing that, the first content line.
 ///
-/// - A `@require:` / `@import:` / `@stage:` header line (0.0.x's header
-///   syntax; verified against this port's own lexer/parser) yields
-///   `Some(V0_0_6)`.
-/// - A `use <Ident>` header line — 0.1's replacement module-header syntax —
-///   yields `Some(V0_1)`. **This half of the heuristic is best-effort**: the
-///   exact 0.1.0 grammar could not be confirmed against upstream from this
-///   sandbox (no network access to GitHub / zenn.dev at the time this was
-///   written), so this only recognizes the widely-referenced `use Name`
-///   shape and may both over- and under-match real 0.1 documents.
+/// - A `@stage:` header line is a real, direct signal: 0.1's lexer rejects it
+///   outright, so seeing it at all yields `Some(V0_0_6)`.
+/// - `@require:` / `@import:` header lines are *transparent*: byte-identical
+///   in both v0.0.6 and dev-0-1-0, so their presence pins neither axis — they
+///   are skipped just like a blank/comment line.
+/// - A `use`-shaped header line — 0.1/Saphe's module-header syntax, see
+///   [`is_use_header`] — yields `Some(V0_1)`. **This half of the heuristic is
+///   best-effort**: the exact grammar could not be confirmed against
+///   upstream from this sandbox (no network access to GitHub / zenn.dev at
+///   the time this was written).
 /// - Blank lines and `%`-comments (SATySFi's line-comment syntax, both
 ///   versions) are skipped while looking for the first header-shaped line.
-/// - Returns `None` if no header-shaped line is found before other content
-///   (e.g. a bare `let ... in ...` document with no headers at all, which
-///   is valid and version-ambiguous in 0.0.x).
+/// - Once a non-blank, non-comment, non-header line is reached (headers are
+///   only valid at the top of a file), that single line is inspected for a
+///   content-level signal (see [`sniff_content_line`]) and the result —
+///   including `None` — is returned regardless.
+/// - Returns `None` if no signal is found at all (e.g. a bare `let ... in
+///   ...` document with no headers, which is valid and version-ambiguous in
+///   0.0.x).
 pub fn sniff_version(src: &str) -> Option<SatysfiVersion> {
     for raw_line in src.lines() {
-        // Strip a trailing `%`-comment (SATySFi's only comment form) before
-        // inspecting the line, then trim whitespace.
         let line = match raw_line.find('%') {
             Some(idx) => &raw_line[..idx],
             None => raw_line,
@@ -163,33 +197,104 @@ pub fn sniff_version(src: &str) -> Option<SatysfiVersion> {
             continue;
         }
 
-        if line.starts_with("@require:") || line.starts_with("@import:") || line.starts_with("@stage:")
-        {
+        // `@stage:` is a real signal: 0.1's lexer rejects it outright (the
+        // header-lexing rule dropped the `"stage" -> HEADER_STAGE*` arm
+        // between v0.0.6 and dev-0-1-0 — see this plan's header intro), so
+        // seeing it at all means 0.0.6.
+        if line.starts_with("@stage:") {
             return Some(SatysfiVersion::V0_0_6);
         }
 
-        if let Some(rest) = line.strip_prefix("use ") {
-            let name = rest.trim();
-            let is_ident_like = !name.is_empty()
-                && name
-                    .chars()
-                    .next()
-                    .map(|c| c.is_ascii_uppercase())
-                    .unwrap_or(false)
-                && name
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.');
-            if is_ident_like {
-                return Some(SatysfiVersion::V0_1);
-            }
+        // `@require:`/`@import:` are *transparent*: byte-identical in both
+        // v0.0.6 and dev-0-1-0 (same citation), so their presence pins
+        // neither axis. Skip past them exactly like a blank/comment line —
+        // do NOT return here (that was the S1 bug: this used to return
+        // `Some(V0_0_6)` on the very first `@require:`, misclassifying every
+        // 0.1-syntax-body-with-legacy-headers document, which is Slice 1's
+        // own target shape).
+        if line.starts_with("@require:") || line.starts_with("@import:") {
+            continue;
         }
 
-        // First non-blank, non-comment, non-header line: no more headers can
-        // follow (headers are only valid at the top of a file), so stop
-        // looking.
-        return None;
+        if is_use_header(line) {
+            return Some(SatysfiVersion::V0_1);
+        }
+
+        // First non-blank, non-comment, non-header line: headers are only
+        // valid at the top of a file, so inspect this one line for a
+        // content-level signal, then stop looking regardless of the result.
+        return sniff_content_line(line);
     }
     None
+}
+
+/// Recognize a `use`-shaped 0.1/Saphe header line: bare `use Ident[.Ident]*`,
+/// `use package ...`, `use open ...`, or `use #[attr] ...`. Best-effort
+/// (Saphe's exact grammar is `saphe-split`-only and not yet ported), but
+/// deliberately broader than "bare `use Ident`" per S1 — narrow enough that
+/// no 0.0.6 keyword or identifier can start a line with `use ` (0.0.6 has no
+/// `use` keyword at all), so widening this can only ever gain true positives,
+/// never introduce a false positive against the 0.0.6 corpus.
+fn is_use_header(line: &str) -> bool {
+    let Some(rest) = line.strip_prefix("use") else {
+        return false;
+    };
+    let Some(rest) = rest.strip_prefix(|c: char| c.is_whitespace()) else {
+        return false; // `used`, `user`, ... — not the `use` keyword
+    };
+    let rest = rest.trim_start();
+    if rest.is_empty() {
+        return false;
+    }
+    if rest.starts_with('#') {
+        return true; // `use #[attr] ...`
+    }
+    let first_word = rest.split_whitespace().next().unwrap_or("");
+    if first_word == "package" || first_word == "open" {
+        return true; // `use package ...` / `use open ...`
+    }
+    // bare `use Ident[.Ident]*` (possibly followed by `as .../of ...`, which
+    // this only requires the *first* word to look like a module path for).
+    first_word
+        .chars()
+        .next()
+        .map(|c| c.is_ascii_uppercase())
+        .unwrap_or(false)
+        && first_word
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.')
+}
+
+/// Inspect the first non-header content line for a version signal.
+/// `module <Upper> ... = struct` is deliberately **not** checked here — see
+/// §1.4 step 3 of the plan: 0.0.6's `TopBinding::Module` makes the sig
+/// annotation optional and all 29 shipped 0.0.6 packages open with a
+/// `module` head after their headers, so a `module` head is no signal in
+/// either direction and correctly falls through to `None` below.
+fn sniff_content_line(line: &str) -> Option<SatysfiVersion> {
+    if starts_with_word(line, "val") {
+        return Some(SatysfiVersion::V0_1);
+    }
+    for kw in ["let-rec", "let-inline", "let-block", "let-math", "let-mutable"] {
+        if starts_with_word(line, kw) {
+            return Some(SatysfiVersion::V0_0_6);
+        }
+    }
+    None
+}
+
+/// True if `line` starts with `word` followed by a word boundary (end of
+/// string or non-identifier character) — so `"val"` matches `"val f = .."`
+/// but not an identifier like `"values"` or `"val-like"`.
+fn starts_with_word(line: &str, word: &str) -> bool {
+    match line.strip_prefix(word) {
+        Some(rest) => rest
+            .chars()
+            .next()
+            .map(|c| !(c.is_ascii_alphanumeric() || c == '-' || c == '_'))
+            .unwrap_or(true),
+        None => false,
+    }
 }
 
 #[cfg(test)]
@@ -237,10 +342,20 @@ mod tests {
 
     #[test]
     fn capability_probes() {
-        assert!(SatysfiVersion::V0_0_6.uses_require_headers());
         assert!(SatysfiVersion::V0_0_6.is_implemented());
-        assert!(!SatysfiVersion::V0_1.uses_require_headers());
-        assert!(!SatysfiVersion::V0_1.is_implemented());
+        assert!(SatysfiVersion::V0_1.is_implemented());
+
+        assert!(!SatysfiVersion::V0_0_6.has_module_system());
+        assert!(SatysfiVersion::V0_1.has_module_system());
+
+        assert!(!SatysfiVersion::V0_0_6.has_row_polymorphism());
+        assert!(SatysfiVersion::V0_1.has_row_polymorphism());
+
+        assert!(SatysfiVersion::V0_0_6.has_page_adt());
+        assert!(!SatysfiVersion::V0_1.has_page_adt());
+
+        assert!(!SatysfiVersion::V0_0_6.math_is_split());
+        assert!(SatysfiVersion::V0_1.math_is_split());
     }
 
     #[test]
@@ -259,25 +374,104 @@ mod tests {
     }
 
     #[test]
-    fn sniff_v0_0_6_on_require_and_import_and_stage() {
+    fn sniff_require_import_are_transparent_stage_still_pins() {
+        // `@require:`/`@import:` no longer pin a version by themselves — with
+        // no other signal on the first content line (a bare, non-hyphenated
+        // `let`), the result is `None` (falls to `SatysfiVersion::DEFAULT`
+        // downstream in `resolve_version`, not sniffed here). This is the S1
+        // fix itself: pre-fix, all three of the first assertions below
+        // returned `Some(V0_0_6)` directly at the header line.
+        assert_eq!(sniff_version("@require: stdlib\nlet x = 1 in x"), None);
+        assert_eq!(sniff_version("@import: helper\nlet x = 1 in x"), None);
+        // Leading blank lines / comments before a transparent header must
+        // still not confuse the sniffer into inventing a signal.
         assert_eq!(
-            sniff_version("@require: stdlib\nlet x = 1 in x"),
-            Some(SatysfiVersion::V0_0_6)
+            sniff_version("% a comment\n\n@require: stdlib\nlet x = 1 in x"),
+            None
         );
-        assert_eq!(
-            sniff_version("@import: helper\nlet x = 1 in x"),
-            Some(SatysfiVersion::V0_0_6)
-        );
+        // `@stage:` is the one header that IS still a real, direct signal
+        // (0.1's lexer rejects it outright).
         assert_eq!(
             sniff_version("@stage: 0\nlet x = 1 in x"),
             Some(SatysfiVersion::V0_0_6)
         );
-        // Leading blank lines / comments before the header must not
-        // confuse the sniffer.
+    }
+
+    #[test]
+    fn sniff_require_then_module_is_none() {
+        // The S1 bug case: a legacy-header-then-module-body file (Slice 1's
+        // own target shape — a V0_1-syntax library reached through the
+        // unmodified `@require:` loader) must sniff `None`, not `V0_0_6`
+        // (the old bug) and not `V0_1` (no positive signal for it either —
+        // `module` is deliberately not a signal).
         assert_eq!(
-            sniff_version("% a comment\n\n@require: stdlib\nlet x = 1 in x"),
-            Some(SatysfiVersion::V0_0_6)
+            sniff_version("@require: pervasives\nmodule V01Mini = struct\nval x = 1\nend"),
+            None
         );
+        assert_eq!(
+            sniff_version("@import: helper\n@require: pervasives\nmodule M = struct\nend"),
+            None
+        );
+    }
+
+    #[test]
+    fn sniff_val_head_is_v0_1() {
+        assert_eq!(
+            sniff_version("@require: pervasives\nval x = 1"),
+            Some(SatysfiVersion::V0_1)
+        );
+        // No headers at all — `val` at the very first content line still
+        // signals V0_1.
+        assert_eq!(sniff_version("val f x = x"), Some(SatysfiVersion::V0_1));
+    }
+
+    #[test]
+    fn sniff_hyphenated_let_head_is_v0_0_6() {
+        for src in [
+            "let-rec f x = x",
+            "let-inline ctx \\emph x = x",
+            "let-block ctx +p x = x",
+            "let-math \\frac x y = x",
+            "let-mutable r <- 0",
+        ] {
+            assert_eq!(sniff_version(src), Some(SatysfiVersion::V0_0_6), "src: {src:?}");
+        }
+    }
+
+    #[test]
+    fn sniff_use_shapes_broader_than_bare_ident() {
+        for src in ["use package foo", "use open Foo", "use #[attr] Foo"] {
+            assert_eq!(sniff_version(src), Some(SatysfiVersion::V0_1), "src: {src:?}");
+        }
+    }
+
+    #[test]
+    fn sniff_lib_satysfi_corpus_never_v0_1() {
+        // Every vendored 0.0.6 package must sniff `None` or `Some(V0_0_6)`,
+        // never `Some(V0_1)` — the non-regression guarantee §3's Acceptance
+        // depends on.
+        let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../../lib-satysfi/dist/packages");
+        let mut checked = 0usize;
+        for entry in std::fs::read_dir(root).expect("lib-satysfi/dist/packages must exist") {
+            let path = entry.expect("readable dir entry").path();
+            // The vendored 29-package corpus uses both `.satyh` (27 of them,
+            // plus this port's own `stdja-mini.satyh`) and `.satyg` (`list`,
+            // `option` — 2 of them) extensions; a `.satyh`-only filter would
+            // undercount the real corpus to 28 and never reach the `>= 29`
+            // floor below.
+            if !matches!(path.extension().and_then(|e| e.to_str()), Some("satyh") | Some("satyg")) {
+                continue;
+            }
+            let src = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path:?}: {e}"));
+            let sniffed = sniff_version(&src);
+            assert_ne!(
+                sniffed,
+                Some(SatysfiVersion::V0_1),
+                "{path:?} sniffed as V0_1 (got {sniffed:?})"
+            );
+            checked += 1;
+        }
+        assert!(checked >= 29, "expected to check the full 29-package corpus, got {checked}");
     }
 
     #[test]

@@ -551,7 +551,7 @@ leaf_eq! {
         KwOpen, KwVal, KwDirect, OptionalTok, OmissionTok, SuperscriptTok,
         SubscriptTok, SepTok, BMathGrpTok, EMathGrpTok, HorzCmdTypeTok,
         VertCmdTypeTok, MathCmdTypeTok, OptionalTypeTok, OptionalArrowTok,
-        ConstraintTok, CommandTok;
+        ConstraintTok, CommandTok, KwRec, KwInline, KwBlock;
     with_fields:
         VarTok { name }, CtorTok { name }, IntTok { value }, FloatTok { value },
         HorzCmdTok { name }, VertCmdTok { name }, CharTok { text }, ItemTok { depth },

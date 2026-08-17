@@ -23,6 +23,15 @@ fn lib_root() -> PathBuf {
 /// (against [`lib_root`]), then concatenate the dependency-ordered library
 /// preludes ahead of the entry document's own prelude — exactly
 /// `satysfi-cli`'s `merge_program` (src/main.rs).
+fn as_v006(cst: satysfi_loader::LoadedCst) -> satysfi_syntax::cst::File {
+    match cst {
+        satysfi_loader::LoadedCst::V0_0_6(f) => f,
+        satysfi_loader::LoadedCst::V0_1(_) => {
+            unreachable!("this test's load_and_merge is the V0_0_6-only path")
+        }
+    }
+}
+
 fn load_and_merge(entry: &Path) -> satysfi_syntax::cst::File {
     let program = satysfi_loader::load(
         entry,
@@ -35,17 +44,18 @@ fn load_and_merge(entry: &Path) -> satysfi_syntax::cst::File {
 
     let mut files = program.files;
     let entry_file = files.pop().expect("loader always yields the entry last");
+    let entry_cst = as_v006(entry_file.cst);
     let mut prelude = Vec::new();
     for lib in files {
-        prelude.extend(lib.cst.prelude);
+        prelude.extend(as_v006(lib.cst).prelude);
     }
-    prelude.extend(entry_file.cst.prelude);
+    prelude.extend(entry_cst.prelude);
     satysfi_syntax::cst::File {
         headers: Vec::new(),
         prelude,
-        in_kw: entry_file.cst.in_kw,
-        body: entry_file.cst.body,
-        eoi: entry_file.cst.eoi,
+        in_kw: entry_cst.in_kw,
+        body: entry_cst.body,
+        eoi: entry_cst.eoi,
     }
 }
 
@@ -983,6 +993,58 @@ fn tier4_stdjabook_capstone_renders_to_extractable_text() {
             _ => eprintln!(
                 "pdftotext unavailable; the PDF-header + FontFile2-embed checks already passed"
             ),
+        }
+        let _ = std::fs::remove_file(&tmp);
+    });
+}
+
+/// Slice 1 capstone (docs/plans/satysfi-0-1-0-support.md §3): a real
+/// SATySFi 0.1 document — `val`-bound module library, comma records,
+/// match…end, tuple page size — through the FULL spine (V0_1 lex -> cst_v1
+/// parse -> loader -> v1 lowering -> shared elaborate/typecheck(V0_1)/eval
+/// -> page break -> PDF) to pdftotext-extractable text. Base-14 only (the
+/// fixture is all-WinAnsi, no capstone font dependency, so this never
+/// skips like the tier4 capstone above can).
+#[test]
+fn v01_slice1_document_renders_to_extractable_text() {
+    run_with_big_stack(move || {
+        let entry = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/v01-minimal.saty");
+        let program = satysfi_loader::load(
+            &entry,
+            &satysfi_loader::LoadOptions {
+                lib_root: Some(lib_root().join("dist-v01").join("packages")), // §4.3
+                version: satysfi_syntax::SatysfiVersion::V0_1,
+            },
+        )
+        .expect("V0_1 must load once is_implemented() is flipped");
+        assert_eq!(program.files.len(), 2, "v01-mini.satyh + v01-minimal.saty");
+        assert!(matches!(program.files[0].cst, satysfi_loader::LoadedCst::V0_1(_)));
+
+        let metrics = satysfi_pdf::Base14Metrics;
+        let doc = satysfi_lang::compile_document_v1(&program.files, &metrics)
+            .expect("the Slice-1 v0.1 capstone must compile end-to-end");
+        assert_eq!(doc.pages.len(), 1);
+        assert!(doc.pages[0].lines.len() >= 3);
+
+        let bytes = satysfi_pdf::render_pdf(&doc.geometry, &doc.pages, &doc.images).unwrap();
+        assert!(bytes.starts_with(b"%PDF-"));
+        // A4 via the v01 tuple page size: 210mm = 595.276pt.
+        assert!((doc.geometry.paper_width.0 - 595.276).abs() < 0.01);
+
+        let tmp = std::env::temp_dir().join(format!("satysfi-rust-e2e-v01-{}.pdf", std::process::id()));
+        std::fs::write(&tmp, &bytes).unwrap();
+        let pdftotext = Command::new("pdftotext").arg(&tmp).arg("-").output();
+        match pdftotext {
+            Ok(out) if out.status.success() => {
+                let text = String::from_utf8_lossy(&out.stdout);
+                // match…end evaluated: Some 41 -> 41 + 1.
+                assert!(text.contains("The answer is 42"), "missing match/…/end result:\n{text}");
+                // \emph through the val-inline binding.
+                assert!(text.contains("Emphasis"), "missing \\emph output:\n{text}");
+                // The v01-mini footer (pbinfo#page-number via arabic).
+                assert!(text.contains('1'), "missing footer page number:\n{text}");
+            }
+            _ => eprintln!("skipping text assertion; pdftotext unavailable"),
         }
         let _ = std::fs::remove_file(&tmp);
     });

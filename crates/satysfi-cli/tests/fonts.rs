@@ -36,6 +36,23 @@ fn minimal_fixture() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/minimal.saty")
 }
 
+/// A `--lib-root`-shaped directory with NO `dist/hash/` — i.e. genuinely
+/// "nothing configured" — regardless of whether `scripts/download-fonts.sh`
+/// has already been run against the real `lib_root()` (which then
+/// legitimately DOES carry a `dist/hash/fonts.satysfi-hash` /
+/// `default-font.satysfi-hash`, for `crates/satysfi-cli/tests/cjk_render.rs`
+/// and the CJK end-to-end proof). Only `dist/packages` is symlinked in (all
+/// the loader needs to resolve `@require: stdja-mini`), so this stays a
+/// thin proxy rather than a real copy of the whole package tree.
+fn font_free_lib_root(work: &Path) -> PathBuf {
+    let root = work.join("no-font-lib-root");
+    let dist = root.join("dist");
+    std::fs::create_dir_all(&dist).unwrap();
+    std::os::unix::fs::symlink(lib_root().join("dist/packages"), dist.join("packages"))
+        .expect("symlink dist/packages into the font-free lib root");
+    root
+}
+
 fn tmpdir(tag: &str) -> PathBuf {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -152,6 +169,15 @@ fn write_font_config(work: &Path, font_path: &Path) -> PathBuf {
     root
 }
 
+fn as_v006(cst: satysfi_loader::LoadedCst) -> satysfi_syntax::cst::File {
+    match cst {
+        satysfi_loader::LoadedCst::V0_0_6(f) => f,
+        satysfi_loader::LoadedCst::V0_1(_) => {
+            unreachable!("this test's ground-truth path is V0_0_6-only")
+        }
+    }
+}
+
 fn assert_ok(out: &Output, ctx: &str) {
     assert!(
         out.status.success(),
@@ -247,11 +273,17 @@ fn real_font_fixture_renders_through_ttf_path_and_roundtrips() {
 fn no_font_config_matches_base14_byte_for_byte() {
     let work = tmpdir("no-font-config");
     let out = work.join("out.pdf");
+    // A `dist/hash`-free lib root — NOT `lib_root()` directly, which (once
+    // `scripts/download-fonts.sh` has been run for the CJK proof,
+    // `tests/cjk_render.rs`) legitimately carries a real font config and so
+    // would no longer exercise the "nothing configured" invariant this test
+    // is about.
+    let font_free_root = font_free_lib_root(&work);
 
     let output = Command::new(bin())
         .arg(minimal_fixture())
         .args(["-o".as_ref(), out.as_os_str()])
-        .args(["--lib-root".as_ref(), lib_root().as_os_str()])
+        .args(["--lib-root".as_ref(), font_free_root.as_os_str()])
         .args(["--no-cache"])
         .output()
         .expect("spawn satysfi-rust");
@@ -264,24 +296,25 @@ fn no_font_config_matches_base14_byte_for_byte() {
     let program = satysfi_loader::load(
         &minimal_fixture(),
         &satysfi_loader::LoadOptions {
-            lib_root: Some(lib_root()),
+            lib_root: Some(font_free_root.clone()),
             ..Default::default()
         },
     )
     .expect("load fixture");
     let mut files = program.files;
     let entry = files.pop().expect("loader always yields the entry last");
+    let entry_cst = as_v006(entry.cst);
     let mut prelude = Vec::new();
     for lib in files {
-        prelude.extend(lib.cst.prelude);
+        prelude.extend(as_v006(lib.cst).prelude);
     }
-    prelude.extend(entry.cst.prelude);
+    prelude.extend(entry_cst.prelude);
     let merged = satysfi_syntax::cst::File {
         headers: Vec::new(),
         prelude,
-        in_kw: entry.cst.in_kw,
-        body: entry.cst.body,
-        eoi: entry.cst.eoi,
+        in_kw: entry_cst.in_kw,
+        body: entry_cst.body,
+        eoi: entry_cst.eoi,
     };
     let metrics = satysfi_pdf::Base14Metrics;
     let doc = satysfi_lang::compile_document_cst(&merged, &metrics).expect("compile fixture");
@@ -308,6 +341,11 @@ fn changing_font_config_invalidates_the_compile_cache() {
     let work = tmpdir("cache-invalidate");
     let cache_dir = work.join("cache");
     let out = work.join("out.pdf");
+    // `dist/hash`-free (see `font_free_lib_root`'s doc): keeps this test's
+    // "first run" genuinely base-14, independent of whether the real
+    // `lib_root()` has since gained a font config via
+    // `scripts/download-fonts.sh` (`tests/cjk_render.rs`).
+    let font_free_root = font_free_lib_root(&work);
 
     let was_cached = |out: &Output| String::from_utf8_lossy(&out.stderr).contains("(cached)");
 
@@ -315,7 +353,7 @@ fn changing_font_config_invalidates_the_compile_cache() {
     let first = Command::new(bin())
         .arg(minimal_fixture())
         .args(["-o".as_ref(), out.as_os_str()])
-        .args(["--lib-root".as_ref(), lib_root().as_os_str()])
+        .args(["--lib-root".as_ref(), font_free_root.as_os_str()])
         .args(["--cache-dir".as_ref(), cache_dir.as_os_str()])
         .output()
         .expect("spawn satysfi-rust (first)");
@@ -330,7 +368,7 @@ fn changing_font_config_invalidates_the_compile_cache() {
     let second = Command::new(bin())
         .arg(minimal_fixture())
         .args(["-o".as_ref(), out.as_os_str()])
-        .args(["--lib-root".as_ref(), lib_root().as_os_str()])
+        .args(["--lib-root".as_ref(), font_free_root.as_os_str()])
         .args(["--cache-dir".as_ref(), cache_dir.as_os_str()])
         .args(["--font-dir".as_ref(), font_root.as_os_str()])
         .output()
@@ -350,7 +388,7 @@ fn changing_font_config_invalidates_the_compile_cache() {
     let third = Command::new(bin())
         .arg(minimal_fixture())
         .args(["-o".as_ref(), out.as_os_str()])
-        .args(["--lib-root".as_ref(), lib_root().as_os_str()])
+        .args(["--lib-root".as_ref(), font_free_root.as_os_str()])
         .args(["--cache-dir".as_ref(), cache_dir.as_os_str()])
         .args(["--font-dir".as_ref(), font_root.as_os_str()])
         .output()

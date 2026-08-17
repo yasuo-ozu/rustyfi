@@ -123,6 +123,40 @@ impl Unparse<crate::token::Atom> for BindName {
     }
 }
 
+impl From<VarTok> for BindName {
+    /// Synthesize a binding name from a bare variable token. Used only by
+    /// the 0.1 lowering (`satysfi-lang/src/v1/lower.rs`), which builds
+    /// synthetic 0.0.6 CST out of parsed `cst_v1` nodes. Purely additive:
+    /// no parse production changes, no existing behavior touched — the
+    /// "frozen" contract on this file (`cst_v1.rs`'s module doc) is about
+    /// the 0.0.6 grammar/behavior, which an inherent conversion cannot
+    /// affect, same spirit as the plan's blessed visibility-only edits
+    /// (`docs/plans/satysfi-0-1-0-support.md` §3 Acceptance (b)).
+    fn from(v: VarTok) -> BindName {
+        BindName {
+            name: v.name.clone(),
+            span: v.span,
+            repr: BindNameRepr::Var(v),
+        }
+    }
+}
+
+#[cfg(test)]
+mod bind_name_tests {
+    use super::*;
+
+    #[test]
+    fn from_var_tok_preserves_name_and_span() {
+        let v = VarTok {
+            name: "foo".to_string(),
+            span: Span::default(),
+        };
+        let bn: BindName = v.clone().into();
+        assert_eq!(bn.name, v.name);
+        assert_eq!(bn.span, v.span);
+    }
+}
+
 /// A top-level non-recursive binding: `let name param* = expr`. `params` is
 /// `Vec<ast::PatBot>` (not merely `Vec<VarTok>`), matching `RecBinding`'s
 /// field of the same name (`nxnonrecdec`'s `argpart` is `patbot*` upstream

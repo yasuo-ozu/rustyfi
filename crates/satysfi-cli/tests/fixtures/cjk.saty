@@ -1,0 +1,20 @@
+% CJK glyph-rendering proof fixture (docs/plans/text-rendering.md, Group D
+% closure): a real Japanese sentence mixing kanji (HanIdeographic script)
+% and hiragana/katakana (Kana script), set through stdja-mini's plain
+% `document`/`+p`. No `set-font` call anywhere in this file: `document`
+% calls `get-initial-context`, which overlays the configured
+% `default-font.satysfi-hash` `scripts` block onto `Context::font_scheme`
+% automatically (primitives.rs's `prim_get_initial_context`) — so when the
+% font root's `scripts` block points `han-ideographic`/`kana` at `ipaexm`
+% (exactly what `scripts/download-fonts.sh` writes), this sentence renders
+% under the real IPAex face with zero extra wiring here, proving D1a/D1b's
+% per-script `font_scheme` end to end through the ordinary document path.
+
+@require: stdja-mini
+
+document (|
+  title = {CJK Rendering Proof};
+  author = {yasuo};
+|) '<
+  +p { 日本語のテスト文です }
+>

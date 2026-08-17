@@ -7,6 +7,7 @@
 
 use crate::span::{Loc, Span};
 use crate::token::{Atom, Token};
+use crate::version::SatysfiVersion;
 
 #[derive(Debug, thiserror::Error)]
 #[error("{span}: {msg}")]
@@ -24,9 +25,21 @@ enum Mode {
     Math,
 }
 
-/// Lex a whole source file (a `.saty` document, i.e. program mode at the top).
+/// Lex a whole source file under SATySFi 0.0.6's grammar (a `.saty` document,
+/// i.e. program mode at the top). This is the crate's original, frozen entry
+/// point: unchanged behavior, now a thin wrapper over [`lex_with_version`].
 pub fn lex(src: &str) -> Result<Vec<Atom>, LexError> {
-    Lexer::new(src, Mode::Program).run()
+    lex_with_version(src, SatysfiVersion::V0_0_6)
+}
+
+/// Lex a whole source file under an explicit target version. `V0_0_6`
+/// through this entry point is byte-for-byte [`lex`]'s own behavior — pinned
+/// by a differential test that lexes every vendored 0.0.6 package and
+/// fixture through both `lex(src)` and `lex_with_version(src, V0_0_6)`,
+/// asserting identical token streams
+/// (`crates/satysfi-syntax/tests/lex_with_version_differential.rs`).
+pub fn lex_with_version(src: &str, version: SatysfiVersion) -> Result<Vec<Atom>, LexError> {
+    Lexer::new(src, Mode::Program, version).run()
 }
 
 struct Lexer {
@@ -37,6 +50,7 @@ struct Lexer {
     byte: usize,
     stack: Vec<Mode>,
     out: Vec<Atom>,
+    version: SatysfiVersion,
 }
 
 fn is_small(c: char) -> bool {
@@ -86,57 +100,8 @@ fn is_mathsymbol(c: char) -> bool {
     is_mathsymbol_top(c) || c == '?'
 }
 
-fn keyword(s: &str) -> Option<Token> {
-    use Token::*;
-    Some(match s {
-        // `not` is deliberately NOT reserved here — see `token.rs`'s
-        // `Token::Mod` doc comment: it lexes as an ordinary `Var`/`VarTok`,
-        // the same as any other primitive name, so `not expr` parses
-        // through the existing `AppExpr` application-chain machinery.
-        "mod" => Mod,
-        "if" => If,
-        "then" => Then,
-        "else" => Else,
-        "let" => Let,
-        "let-rec" => LetRec,
-        "and" => LetAnd,
-        "in" => In,
-        "fun" => Fun,
-        "true" => True,
-        "false" => False,
-        "before" => Before,
-        "while" => While,
-        "do" => Do,
-        "let-mutable" => LetMutable,
-        "match" => Match,
-        "with" => With,
-        "when" => When,
-        "as" => As,
-        "type" => Type,
-        "of" => Of,
-        "module" => Module,
-        "struct" => Struct,
-        "sig" => Sig,
-        "val" => Val,
-        "end" => End,
-        "direct" => Direct,
-        "constraint" => Constraint,
-        "let-inline" => LetHorz,
-        "let-block" => LetVert,
-        "let-math" => LetMath,
-        "controls" => Controls,
-        "cycle" => Cycle,
-        "inline-cmd" => HorzCmdType,
-        "block-cmd" => VertCmdType,
-        "math-cmd" => MathCmdType,
-        "command" => Command,
-        "open" => Open,
-        _ => return None,
-    })
-}
-
 impl Lexer {
-    fn new(src: &str, initial: Mode) -> Self {
+    fn new(src: &str, initial: Mode, version: SatysfiVersion) -> Self {
         Lexer {
             chars: src.chars().collect(),
             pos: 0,
@@ -145,7 +110,79 @@ impl Lexer {
             byte: 0,
             stack: vec![initial],
             out: Vec::new(),
+            version,
         }
+    }
+
+    /// Look up a scanned identifier-shaped word against the keyword table.
+    /// The base table (every 0.0.6 keyword) is version-independent — under
+    /// `V0_1` these words still lex the same way (e.g. `let-rec`/`when`/
+    /// `while`/`before` simply have no corresponding grammar rule in
+    /// `cst_v1.rs`, so using them there is a *parse* error, not a lex
+    /// error). Only the three Slice-1 additions (`rec`/`inline`/`block`) are
+    /// version-gated: SATySFi 0.1's `val rec`/`val inline`/`val block`
+    /// binds need them as keywords, but 0.0.6 source may use any of them as
+    /// an ordinary identifier (there is no 0.0.6 grammar that would want
+    /// them as keywords), so gating keeps `lex`/`lex_with_version(_,
+    /// V0_0_6)` byte-identical to before this change.
+    fn keyword(&self, s: &str) -> Option<Token> {
+        use Token::*;
+        if let Some(tok) = match s {
+            // `not` is deliberately NOT reserved — it lexes as an ordinary
+            // `Var`/`VarTok` (see `token.rs`'s `Token::Mod` doc comment), so
+            // `not expr` parses through the existing `AppExpr` application
+            // chain in both generations.
+            "mod" => Some(Mod),
+            "if" => Some(If),
+            "then" => Some(Then),
+            "else" => Some(Else),
+            "let" => Some(Let),
+            "let-rec" => Some(LetRec),
+            "and" => Some(LetAnd),
+            "in" => Some(In),
+            "fun" => Some(Fun),
+            "true" => Some(True),
+            "false" => Some(False),
+            "before" => Some(Before),
+            "while" => Some(While),
+            "do" => Some(Do),
+            "let-mutable" => Some(LetMutable),
+            "match" => Some(Match),
+            "with" => Some(With),
+            "when" => Some(When),
+            "as" => Some(As),
+            "type" => Some(Type),
+            "of" => Some(Of),
+            "module" => Some(Module),
+            "struct" => Some(Struct),
+            "sig" => Some(Sig),
+            "val" => Some(Val),
+            "end" => Some(End),
+            "direct" => Some(Direct),
+            "constraint" => Some(Constraint),
+            "let-inline" => Some(LetHorz),
+            "let-block" => Some(LetVert),
+            "let-math" => Some(LetMath),
+            "controls" => Some(Controls),
+            "cycle" => Some(Cycle),
+            "inline-cmd" => Some(HorzCmdType),
+            "block-cmd" => Some(VertCmdType),
+            "math-cmd" => Some(MathCmdType),
+            "command" => Some(Command),
+            "open" => Some(Open),
+            _ => None,
+        } {
+            return Some(tok);
+        }
+        if self.version == SatysfiVersion::V0_1 {
+            return match s {
+                "rec" => Some(Rec),
+                "inline" => Some(Inline),
+                "block" => Some(Block),
+                _ => None,
+            };
+        }
+        None
     }
 
     fn loc(&self) -> Loc {
@@ -693,7 +730,7 @@ impl Lexer {
                 _ if is_small(c) => {
                     let len = self.name_len_at(0).unwrap();
                     let name = self.take(len);
-                    let tok = keyword(&name).unwrap_or(Token::Var(name));
+                    let tok = self.keyword(&name).unwrap_or(Token::Var(name));
                     self.emit(start, tok);
                     return Ok(());
                 }
@@ -750,19 +787,34 @@ impl Lexer {
         let tok = match headertype.as_str() {
             "require" => Token::HeaderRequire(content),
             "import" => Token::HeaderImport(content),
-            "stage" => match content.as_str() {
-                "persistent" => Token::HeaderPersistent0,
-                "0" => Token::HeaderStage0,
-                "1" => Token::HeaderStage1,
-                _ => {
+            "stage" => {
+                // SATySFi 0.1's lexer dropped the `"stage" -> HEADER_STAGE*`
+                // arm entirely: staging is per-binding (`val ~x`, `val
+                // persistent ~x`) rather than a whole-file `@stage:` header.
+                // Seeing `@stage:` under `V0_1` is therefore a real, direct
+                // lex-level signal that the source is not valid 0.1 (mirrors
+                // `version::sniff_version`'s own use of this fact).
+                if self.version == SatysfiVersion::V0_1 {
                     return self.error(
                         start,
-                        format!(
-                            "undefined stage type '{content}'; should be 'persistent', '0', or '1'."
-                        ),
-                    )
+                        "the '@stage:' header does not exist in SATySFi 0.1 \
+                         (staging is per-binding there: 'val ~x' / 'val persistent ~x')",
+                    );
                 }
-            },
+                match content.as_str() {
+                    "persistent" => Token::HeaderPersistent0,
+                    "0" => Token::HeaderStage0,
+                    "1" => Token::HeaderStage1,
+                    _ => {
+                        return self.error(
+                            start,
+                            format!(
+                                "undefined stage type '{content}'; should be 'persistent', '0', or '1'."
+                            ),
+                        )
+                    }
+                }
+            }
             _ => return self.error(start, format!("undefined header type '{headertype}'")),
         };
         self.emit(start, tok);

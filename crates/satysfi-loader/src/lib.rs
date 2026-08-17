@@ -19,8 +19,7 @@
 //! - A cycle in the dependency graph is an error naming the files involved.
 
 mod error;
-mod graph;
-mod resolve;
+mod v006;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -51,13 +50,57 @@ pub struct LoadOptions {
     pub version: SatysfiVersion,
 }
 
+/// A parsed file's CST, tagged by which grammar generation produced it.
+/// `load()` picks the variant per `LoadOptions::version` (`V0_0_6` →
+/// `V0_0_6`, `V0_1` → `V0_1`) — see `load`'s dispatch, below. Every file
+/// in one `LoadedProgram` carries the same variant, since `opts.version` is
+/// one value for the whole load; the enum exists so `LoadedFile` has a
+/// single field type rather than forcing every consumer of `LoadedProgram`
+/// to be generic over the CST type.
+#[derive(Debug)]
+pub enum LoadedCst {
+    V0_0_6(satysfi_syntax::cst::File),
+    V0_1(satysfi_syntax::cst_v1::FileV1),
+}
+
+impl LoadedCst {
+    /// Whether this file is a document (has a body) rather than a library.
+    /// Used by `load()`'s entry/dependency-shape validation
+    /// (`DocumentAsDependency`/`LibraryAsEntry`) uniformly across both
+    /// generations, so that validation logic itself needs no `match` at its
+    /// call sites.
+    pub fn is_document(&self) -> bool {
+        match self {
+            Self::V0_0_6(f) => f.body.is_some(),
+            Self::V0_1(f) => matches!(f, satysfi_syntax::cst_v1::FileV1::Document { .. }),
+        }
+    }
+
+    /// This file's `@require:`/`@import:`/`@stage:` headers. Both
+    /// generations reuse `cst::Header` verbatim under `LoadMode::Legacy`
+    /// (dev-0-1-0's header lexing is byte-identical to 0.0.6's), so there
+    /// is exactly one `Header` type for both variants to share, not two.
+    fn headers(&self) -> &[satysfi_syntax::cst::Header] {
+        match self {
+            Self::V0_0_6(f) => &f.headers,
+            Self::V0_1(f) => match f {
+                satysfi_syntax::cst_v1::FileV1::Document { headers, .. }
+                | satysfi_syntax::cst_v1::FileV1::Library { headers, .. } => headers,
+            },
+        }
+    }
+}
+
 /// One parsed file in a loaded program.
 #[derive(Debug)]
 pub struct LoadedFile {
     /// Canonicalized path to the file on disk.
     pub path: PathBuf,
-    /// The file's parsed concrete syntax tree.
-    pub cst: satysfi_syntax::cst::File,
+    /// The file's parsed concrete syntax tree, tagged by grammar
+    /// generation. Was `cst: satysfi_syntax::cst::File` before `V0_1`
+    /// support; every consumer must now match on the variant. See
+    /// `LoadedCst`'s doc comment.
+    pub cst: LoadedCst,
 }
 
 /// A fully loaded, dependency-resolved program.
@@ -83,7 +126,7 @@ pub fn load(entry: &Path, opts: &LoadOptions) -> Result<LoadedProgram, LoadError
     let mut next_id: u32 = 0;
     let mut id_of: HashMap<PathBuf, u32> = HashMap::new();
     let mut path_of: HashMap<u32, PathBuf> = HashMap::new();
-    let mut cst_of: HashMap<u32, satysfi_syntax::cst::File> = HashMap::new();
+    let mut cst_of: HashMap<u32, LoadedCst> = HashMap::new();
     let mut adjacency: HashMap<u32, Vec<u32>> = HashMap::new();
     let mut processed: HashSet<u32> = HashSet::new();
 
@@ -101,16 +144,36 @@ pub fn load(entry: &Path, opts: &LoadOptions) -> Result<LoadedProgram, LoadError
             path: path.clone(),
             source,
         })?;
-        let cst = satysfi_syntax::parse_file(&src).map_err(|source| LoadError::Parse {
-            path: path.clone(),
-            source,
-        })?;
+        let cst: LoadedCst = match opts.version {
+            SatysfiVersion::V0_0_6 => LoadedCst::V0_0_6(
+                satysfi_syntax::parse_file(&src).map_err(|source| LoadError::Parse {
+                    path: path.clone(),
+                    source,
+                })?,
+            ),
+            SatysfiVersion::V0_1 => LoadedCst::V0_1(
+                satysfi_syntax::parse_file_v1(&src).map_err(|source| LoadError::Parse {
+                    path: path.clone(),
+                    source,
+                })?,
+            ),
+            // `SatysfiVersion` is `#[non_exhaustive]` — a catch-all is
+            // required even though `load`'s `is_implemented()` guard above
+            // already rejects every version this crate doesn't handle
+            // before the loop starts. Unreachable in practice; a clear
+            // message rather than a silent wrong-parse if `is_implemented()`
+            // and this match ever drift apart.
+            other => unreachable!(
+                "SatysfiVersion::is_implemented() admitted {other} but load()'s \
+                 parse dispatch has no arm for it"
+            ),
+        };
 
         if id == entry_id {
-            if cst.body.is_none() {
+            if !cst.is_document() {
                 return Err(LoadError::LibraryAsEntry { path });
             }
-        } else if cst.body.is_some() {
+        } else if cst.is_document() {
             return Err(LoadError::DocumentAsDependency { path });
         }
 
@@ -120,10 +183,10 @@ pub fn load(entry: &Path, opts: &LoadOptions) -> Result<LoadedProgram, LoadError
             .unwrap_or_else(|| PathBuf::from("."));
 
         let mut deps = Vec::new();
-        for header in &cst.headers {
+        for header in cst.headers() {
             let resolved = match header {
                 satysfi_syntax::cst::Header::Import(tok) => {
-                    resolve::resolve_import(&dir, &tok.content).map_err(|searched| {
+                    v006::resolve::resolve_import(&dir, &tok.content).map_err(|searched| {
                         LoadError::UnresolvedImport {
                             name: tok.content.clone(),
                             from: path.clone(),
@@ -132,12 +195,11 @@ pub fn load(entry: &Path, opts: &LoadOptions) -> Result<LoadedProgram, LoadError
                     })?
                 }
                 satysfi_syntax::cst::Header::Require(tok) => {
-                    resolve::resolve_require(opts.lib_root.as_deref(), &tok.content).map_err(
-                        |searched| LoadError::UnresolvedRequire {
+                    v006::resolve::resolve_require(opts.lib_root.as_deref(), &tok.content)
+                        .map_err(|searched| LoadError::UnresolvedRequire {
                             name: tok.content.clone(),
                             searched,
-                        },
-                    )?
+                        })?
                 }
                 // `@stage: persistent` / `@stage: 0` / `@stage: 1` — this
                 // port is single-stage only, so the header carries no
@@ -155,9 +217,9 @@ pub fn load(entry: &Path, opts: &LoadOptions) -> Result<LoadedProgram, LoadError
         cst_of.insert(id, cst);
     }
 
-    let order = graph::toposort(&adjacency)
+    let order = v006::graph::toposort(&adjacency)
         .map_err(|chain_ids| LoadError::Cycle {
-            chain: graph::chain_to_paths(&chain_ids, &path_of),
+            chain: v006::graph::chain_to_paths(&chain_ids, &path_of),
         })?;
 
     let files = order

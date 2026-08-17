@@ -64,20 +64,30 @@ impl Drop for TempDoc {
 /// `stdlib_tier0.rs`'s own copy: the loader guarantees dependency-first
 /// order with the entry document last, so every library's prelude is
 /// spliced ahead of the entry's own, in that order.
+fn as_v006(cst: satysfi_loader::LoadedCst) -> satysfi_syntax::cst::File {
+    match cst {
+        satysfi_loader::LoadedCst::V0_0_6(f) => f,
+        satysfi_loader::LoadedCst::V0_1(_) => {
+            unreachable!("this test's merge_program is the V0_0_6-only path")
+        }
+    }
+}
+
 fn merge_program(program: LoadedProgram) -> satysfi_syntax::cst::File {
     let mut files = program.files;
     let entry = files.pop().expect("loader always yields the entry last");
+    let entry_cst = as_v006(entry.cst);
     let mut prelude = Vec::new();
     for lib in files {
-        prelude.extend(lib.cst.prelude);
+        prelude.extend(as_v006(lib.cst).prelude);
     }
-    prelude.extend(entry.cst.prelude);
+    prelude.extend(entry_cst.prelude);
     satysfi_syntax::cst::File {
         headers: Vec::new(),
         prelude,
-        in_kw: entry.cst.in_kw,
-        body: entry.cst.body,
-        eoi: entry.cst.eoi,
+        in_kw: entry_cst.in_kw,
+        body: entry_cst.body,
+        eoi: entry_cst.eoi,
     }
 }
 

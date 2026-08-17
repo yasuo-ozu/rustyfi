@@ -23,7 +23,8 @@ use crate::ast::{Ast, BText, IText, MathElem, Pattern};
 use crate::elaborate::{Program, UserSynonymDecl, UserTypeDecl};
 pub use crate::exhaustive::MatchWarning;
 use crate::prim_types::{
-    self, arrow, builtin_variants, list, mandatory, optional, product, reff, t_block_boxes,
+    self, arrow, builtin_variants_with_version, list, mandatory, optional, product, reff,
+    t_block_boxes,
     t_block_text, t_bool, t_context, t_document, t_float, t_inline_boxes, t_inline_text, t_int,
     t_length, t_math_text, t_option, t_string, t_unit, VariantDecl,
 };
@@ -35,6 +36,7 @@ use crate::unify::{unify, UnifyError};
 use satysfi_syntax::cst::ast::{CmdTypeKind, TypeApp, TypeAtom, TypeExpr, TypeProd};
 use satysfi_syntax::cst::{RecordKind, SigConstraint, SigItem};
 use satysfi_syntax::span::Span;
+use satysfi_syntax::SatysfiVersion;
 use std::collections::{BTreeSet, HashMap};
 use std::fmt;
 use std::rc::Rc;
@@ -308,10 +310,20 @@ pub const PRIMITIVE_NAMES: &[&str] = &[
     "clear-page",
 ];
 
+// `#[allow(dead_code)]`: kept as the back-compat sibling of
+// `base_type_env_with_version` (mirrors `primitives::base_env`'s public
+// wrapper) even though every current internal caller goes straight to
+// `base_type_env_with_version` — `typecheck_verbose`/`typecheck` bypass this
+// fn directly via `typecheck_verbose_with_version`/`typecheck_with_version`.
+#[allow(dead_code)]
 fn base_type_env() -> TypeEnv {
+    base_type_env_with_version(SatysfiVersion::V0_0_6)
+}
+
+fn base_type_env_with_version(version: SatysfiVersion) -> TypeEnv {
     let mut env = TypeEnv::default();
     for name in PRIMITIVE_NAMES {
-        if let Some(poly) = prim_types::primitive_type(name) {
+        if let Some(poly) = prim_types::primitive_type_with_version(name, version) {
             env = env.with(*name, poly);
         }
     }
@@ -888,7 +900,14 @@ struct Checker {
 }
 
 impl Checker {
+    // See `base_type_env`'s `#[allow(dead_code)]` note above — same shape,
+    // same reason.
+    #[allow(dead_code)]
     fn new(program: &Program) -> Result<Checker, TypeError> {
+        Self::new_with_version(program, SatysfiVersion::V0_0_6)
+    }
+
+    fn new_with_version(program: &Program, version: SatysfiVersion) -> Result<Checker, TypeError> {
         // Synonyms are registered (and checked for cycles) before any
         // variant decl is lowered, since a variant's ctor payload may name a
         // synonym (`build_variant_decl` expands through `synonyms`).
@@ -900,7 +919,7 @@ impl Checker {
 
         let mut ctors = HashMap::new();
         let mut variants = HashMap::new();
-        for decl in builtin_variants() {
+        for decl in builtin_variants_with_version(version) {
             let decl = Rc::new(decl);
             variants.insert(decl.name.clone(), decl.clone());
             for (cname, _) in &decl.ctors {
@@ -1853,8 +1872,23 @@ pub(crate) fn ast_span(ast: &Ast) -> Option<Span> {
 /// program, so these never turn a would-have-passed program into a
 /// `TypeError`.
 pub fn typecheck_verbose(program: &Program) -> Result<Vec<MatchWarning>, TypeError> {
-    let mut checker = Checker::new(program)?;
-    let env = base_type_env();
+    typecheck_verbose_with_version(program, SatysfiVersion::V0_0_6)
+}
+
+/// Same as [`typecheck_verbose`], for a given target `version` — threads
+/// through to `Checker::new_with_version`/`base_type_env_with_version` so a
+/// `V0_1` program's `page-break` resolves against the `length * length`
+/// tuple type (`prim_types::t_page_or_geometry`) and never sees `page`'s
+/// `VariantDecl` (gated out of `builtin_variants_with_version(V0_1)`) — a
+/// `V0_1` program that writes `A4Paper` gets the SAME "unbound constructor"
+/// error upstream's own 0.1 compiler would give it, which is the faithful
+/// behavior (the ADT is genuinely gone, not merely discouraged).
+pub fn typecheck_verbose_with_version(
+    program: &Program,
+    version: SatysfiVersion,
+) -> Result<Vec<MatchWarning>, TypeError> {
+    let mut checker = Checker::new_with_version(program, version)?;
+    let env = base_type_env_with_version(version);
     checker.infer(&env, &program.body)?;
     Ok(checker.warnings)
 }
@@ -1866,7 +1900,13 @@ pub fn typecheck_verbose(program: &Program) -> Result<Vec<MatchWarning>, TypeErr
 /// (`lib.rs`'s `compile_document_cst`, `compile.rs`, and every test that
 /// predates §Slice 1) is therefore unaffected by the new pass.
 pub fn typecheck(program: &Program) -> Result<(), TypeError> {
-    typecheck_verbose(program).map(|_warnings| ())
+    typecheck_with_version(program, SatysfiVersion::V0_0_6)
+}
+
+/// Same as [`typecheck`], for a given target `version`. See
+/// `typecheck_verbose_with_version`'s doc comment.
+pub fn typecheck_with_version(program: &Program, version: SatysfiVersion) -> Result<(), TypeError> {
+    typecheck_verbose_with_version(program, version).map(|_warnings| ())
 }
 
 // ============================================================================

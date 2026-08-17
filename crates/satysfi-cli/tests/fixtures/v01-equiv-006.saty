@@ -1,0 +1,17 @@
+% The 0.0.6-syntax twin of v01-minimal.saty (satysfi-lang/tests/v01_slice1.rs
+% §8.2's semantic-equivalence proof): same content, same stdja-mini-shaped
+% library (@require: stdja-mini instead of v01-mini), spelled with 0.0.6's
+% `let`/`;`-records/`A4Paper` surface instead of 0.1's `val`/`,`-records/
+% tuple-page-size surface. 210mm x 297mm (v01-mini's page-break argument) IS
+% A4Paper, so the two documents' geometry must match exactly.
+
+@require: stdja-mini
+
+let answer = embed-string (arabic (match Some 41 with
+  | None -> 0
+  | Some n -> n + 1))
+in
+document (|title = `v01`;|) '<
+  +p { The answer is #answer;. }
+  +p { \emph{ Emphasis } works. }
+>

@@ -134,8 +134,6 @@ fn cmd_compile(m: &ArgMatches) -> anyhow::Result<()> {
         }
     }
 
-    let merged = merge_program(program);
-
     // `Some(store)` ⇒ typeset and render through the real embedded TrueType
     // face (Type0/CIDFontType2, `render_pdf_ttf`); `None` ⇒ today's base-14
     // path, verbatim (same `Base14Metrics` instance, same `render_pdf` call),
@@ -145,8 +143,21 @@ fn cmd_compile(m: &ArgMatches) -> anyhow::Result<()> {
         Some(store) => store,
         None => &base14,
     };
-    let doc = satysfi_lang::compile_document_cst(&merged, metrics)
-        .map_err(|e| anyhow::anyhow!("{}: {e}", input.display()))?;
+    let doc = match version {
+        satysfi_syntax::SatysfiVersion::V0_1 => {
+            // 0.1 libraries are modules, not prelude-concatenable flat
+            // binding lists — no merge_program; each file keeps its own
+            // FileV1 CST (plan C1). Slice 1's lowering erases the module
+            // wrapper lang-side (satysfi_lang::v1::lower).
+            satysfi_lang::compile_document_v1(&program.files, metrics)
+                .map_err(|e| anyhow::anyhow!("{}: {e}", input.display()))?
+        }
+        _ => {
+            let merged = merge_program(program);
+            satysfi_lang::compile_document_cst(&merged, metrics)
+                .map_err(|e| anyhow::anyhow!("{}: {e}", input.display()))?
+        }
+    };
 
     let bytes = match &font_store {
         Some(store) => satysfi_pdf::render_pdf_ttf_with(
@@ -298,19 +309,33 @@ fn resolve_version(
 /// dependency order; untyped elaboration gets the same scoping by prelude
 /// concatenation.)
 fn merge_program(program: satysfi_loader::LoadedProgram) -> satysfi_syntax::cst::File {
+    // `merge_program` is the V0_0_6-only path; V0_1 goes through
+    // `compile_document_v1` once it exists. `LoadedCst::V0_1` is genuinely
+    // unreachable today: `is_implemented()` still gates `V0_1` out at
+    // `satysfi_loader::load()`.
+    fn as_v006(cst: satysfi_loader::LoadedCst) -> satysfi_syntax::cst::File {
+        match cst {
+            satysfi_loader::LoadedCst::V0_0_6(f) => f,
+            satysfi_loader::LoadedCst::V0_1(_) => unreachable!(
+                "merge_program is the V0_0_6-only path; V0_1 goes through compile_document_v1 once it exists"
+            ),
+        }
+    }
+
     let mut files = program.files;
     let entry = files.pop().expect("loader always yields the entry last");
+    let entry_cst = as_v006(entry.cst);
     let mut prelude = Vec::new();
     for lib in files {
-        prelude.extend(lib.cst.prelude);
+        prelude.extend(as_v006(lib.cst).prelude);
     }
-    prelude.extend(entry.cst.prelude);
+    prelude.extend(entry_cst.prelude);
     satysfi_syntax::cst::File {
         headers: Vec::new(),
         prelude,
-        in_kw: entry.cst.in_kw,
-        body: entry.cst.body,
-        eoi: entry.cst.eoi,
+        in_kw: entry_cst.in_kw,
+        body: entry_cst.body,
+        eoi: entry_cst.eoi,
     }
 }
 

@@ -1,0 +1,10 @@
+@require: v01-mini
+
+let answer = embed-string (arabic (match Some 41 with
+  | None   -> 0
+  | Some n -> n + 1
+end)) in
+document (| title = `v01` |) '<
+  +p { The answer is #answer;. }
+  +p { \emph{ Emphasis } works. }
+>

@@ -1,3 +1,4 @@
 /target
 *.pdf
 /.claude/
+/scripts/.fontcache/

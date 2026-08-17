@@ -12,6 +12,7 @@ pub mod primitives;
 pub mod typecheck;
 pub mod types;
 pub mod unify;
+pub mod v1;
 pub mod value;
 
 use crossref::{CrossRefs, Verdict};
@@ -33,6 +34,8 @@ pub enum CompileError {
     Eval(#[from] eval::EvalError),
     #[error("the file's expression evaluated to {0}, not a document")]
     NotADocument(&'static str),
+    #[error(transparent)]
+    Lower(#[from] v1::lower::LowerError),
 }
 
 /// Compile a `.saty` source string down to a typeset document:
@@ -78,7 +81,22 @@ pub fn compile_document_cst_with_trials(
     // and re-executes the whole tree from scratch, reproducing upstream's
     // `eval_main i env_freezed ast` per trial (`main.ml:337-397`).
     let compiled = compile::compile_program(&program.body, &env0);
+    eval_document_trials(&compiled, metrics, satysfi_syntax::SatysfiVersion::V0_0_6)
+}
 
+/// The compile-once + fixpoint-trial tail shared by the `V0_0_6` and `V0_1`
+/// entry points (`compile_document_cst_with_trials` above and
+/// `compile_document_v1_with_trials` below). Extracted verbatim from what
+/// used to be inline in `compile_document_cst_with_trials` — the only
+/// version-sensitive step is the fresh per-trial env
+/// (`primitives::base_env_with_version(version)`); everything else
+/// (crossrefs persistence, `fire_hooks`, `DocExtras` attach) is identical
+/// regardless of which SATySFi generation produced `compiled`.
+fn eval_document_trials(
+    compiled: &compile::CompiledExpr,
+    metrics: &dyn FontMetrics,
+    version: satysfi_syntax::SatysfiVersion,
+) -> Result<(std::rc::Rc<DocumentValue>, u32), CompileError> {
     // The cross-reference table persists across trials — it *is* the
     // fixpoint state (docs/plans/hooks-annotations-crossref.md's Risks:
     // "what resets per trial vs what persists").
@@ -89,7 +107,7 @@ pub fn compile_document_cst_with_trials(
         // Fresh per trial: `let-mutable` store state resets (== upstream's
         // `env_freezed` re-eval), and a fresh `Interp` resets `hooks`/
         // `images` too — only `crossrefs` is threaded through.
-        let env = primitives::base_env();
+        let env = primitives::base_env_with_version(version);
         let mut interp = eval::Interp::new(metrics);
         interp.crossrefs = crossrefs.clone();
         let doc = match compiled.run(&env, &mut interp)? {
@@ -118,6 +136,72 @@ pub fn compile_document_cst_with_trials(
             }
         }
     }
+}
+
+/// Compile a loader-resolved SATySFi 0.1 program (`LoadOptions { version:
+/// V0_1, .. }`): dependency libraries (`files[..n-1]`, loader
+/// dependency-first order) are module-erased to a flat prelude via
+/// [`v1::lower::lower_file_v1`], the entry (`files[n-1]`, always last —
+/// `LoadedProgram::files`'s contract) via [`v1::lower::lower_document_v1`],
+/// assembled into ONE synthetic `cst::File` — the same shape the CLI's
+/// `merge_program` builds for 0.0.6 — and pushed through the SHARED
+/// elaborate -> typecheck(V0_1) -> compile -> fixpoint-eval pipeline.
+pub fn compile_document_v1(
+    files: &[satysfi_loader::LoadedFile],
+    metrics: &dyn FontMetrics,
+) -> Result<std::rc::Rc<DocumentValue>, CompileError> {
+    compile_document_v1_with_trials(files, metrics).map(|(doc, _trials)| doc)
+}
+
+/// Trial-count-reporting sibling, mirroring
+/// `compile_document_cst_with_trials` (same rationale: fixture tests that
+/// must see the fixpoint iterate).
+pub fn compile_document_v1_with_trials(
+    files: &[satysfi_loader::LoadedFile],
+    metrics: &dyn FontMetrics,
+) -> Result<(std::rc::Rc<DocumentValue>, u32), CompileError> {
+    use satysfi_syntax::SatysfiVersion;
+
+    // -- assemble the synthetic cst::File (merge_program's V0_1 analogue) --
+    let (entry, deps) = files
+        .split_last()
+        .expect("loader always yields at least the entry file");
+    fn as_v01(f: &satysfi_loader::LoadedFile) -> &satysfi_syntax::cst_v1::FileV1 {
+        match &f.cst {
+            satysfi_loader::LoadedCst::V0_1(cst) => cst,
+            satysfi_loader::LoadedCst::V0_0_6(_) => unreachable!(
+                "compile_document_v1 called on a V0_0_6-parsed file — the \
+                 caller's version dispatch (cmd_compile) and the loader's \
+                 single-version parse (load()) both prevent this"
+            ),
+        }
+    }
+    let mut prelude = Vec::new();
+    for dep in deps {
+        prelude.extend(v1::lower::lower_file_v1(as_v01(dep))?);
+    }
+    let entry_cst = as_v01(entry);
+    let body = v1::lower::lower_document_v1(entry_cst)?;
+    let eoi = match entry_cst {
+        satysfi_syntax::cst_v1::FileV1::Document { eoi, .. } => eoi.clone(),
+        _ => unreachable!("lower_document_v1 already rejected a Library entry"),
+    };
+    let file = satysfi_syntax::cst::File {
+        headers: Vec::new(),
+        prelude,
+        in_kw: Some(satysfi_syntax::leaf::KwIn(satysfi_syntax::Span::default())),
+        body: Some(body),
+        eoi,
+    };
+
+    // -- the shared pipeline, V0_1-tagged (mirrors
+    //    compile_document_cst_with_trials line for line) --
+    let env0 = primitives::base_env_with_version(SatysfiVersion::V0_1);
+    let scope = elaborate::Scope::new(env0.names());
+    let program = elaborate::elaborate_program(&file, &scope)?;
+    typecheck::typecheck_with_version(&program, SatysfiVersion::V0_1)?;
+    let compiled = compile::compile_program(&program.body, &env0);
+    eval_document_trials(&compiled, metrics, SatysfiVersion::V0_1)
 }
 
 /// One `block-frame-breakable` frame currently between its `FrameStart`/

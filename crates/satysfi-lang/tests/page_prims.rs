@@ -15,9 +15,11 @@ use satysfi_backend::{
 use satysfi_lang::ast::Ast;
 use satysfi_lang::eval;
 use satysfi_lang::primitives;
+use satysfi_lang::prim_types::{builtin_variants_with_version, primitive_type_with_version};
+use satysfi_lang::types::{BaseType, MonoType};
 use satysfi_lang::value::{DocumentValue, Value};
 use satysfi_lang::{elaborate, typecheck, CompileError};
-use satysfi_syntax::Span;
+use satysfi_syntax::{SatysfiVersion, Span};
 use std::rc::Rc;
 
 struct Mono;
@@ -316,4 +318,74 @@ fn page_break_multicolumn_with_an_empty_shift_list_is_one_column_and_evaluates()
         "an empty shift list is one column (the prepended zero shift)"
     );
     assert_eq!(doc.pages[0].lines.len(), 1);
+}
+
+// ============================================================================
+// L7 (docs/plans/satysfi-0-1-0-support.md §3) — the `page-break` retype:
+// version-tagged primitive table proof-of-concept. Proves `VersionSpan`/
+// `SatysfiVersion::has_page_adt()` gating is wired end to end through
+// `PrimDef`, the type table, and `builtin_variants`.
+// ============================================================================
+
+/// v0.0.6: `page-break`'s first argument is still the `page` ADT
+/// (`MonoType::Variant("page", [])`). v0.1: it's a plain `length * length`
+/// tuple (`MonoType::Product([Length, Length])`), never the ADT — the two
+/// resolved type schemes must differ.
+#[test]
+fn page_break_retypes_per_version() {
+    let v006 = primitive_type_with_version("page-break", SatysfiVersion::V0_0_6)
+        .expect("page-break must have a v0.0.6 type");
+    match v006.body() {
+        MonoType::Func(dom, _cod) => match dom.as_ref() {
+            MonoType::Variant(name, args) => {
+                assert_eq!(name, "page", "v0.0.6 page-break's first arg must be the `page` ADT");
+                assert!(args.is_empty());
+            }
+            other => panic!("expected a `page` variant, got {other:?}"),
+        },
+        other => panic!("expected page-break's type to be a function, got {other:?}"),
+    }
+
+    let v01 = primitive_type_with_version("page-break", SatysfiVersion::V0_1)
+        .expect("page-break must have a v0.1 type");
+    match v01.body() {
+        MonoType::Func(dom, _cod) => match dom.as_ref() {
+            MonoType::Product(elems) => {
+                assert_eq!(elems.len(), 2, "v0.1's page-break first arg is (length * length)");
+                for elem in elems {
+                    assert!(
+                        matches!(elem, MonoType::Base(BaseType::Length)),
+                        "expected a length component, got {elem:?}"
+                    );
+                }
+            }
+            other => panic!("expected a (length * length) product, got {other:?}"),
+        },
+        other => panic!("expected page-break's type to be a function, got {other:?}"),
+    }
+
+    // The two resolved schemes are genuinely different shapes (ADT variant
+    // vs. plain tuple) — a debug-string inequality is a cheap extra check
+    // on top of the structural assertions above.
+    assert_ne!(format!("{v006:?}"), format!("{v01:?}"));
+}
+
+/// `page`'s `VariantDecl` is registered under v0.0.6 (where `has_page_adt()`
+/// is true) and absent under v0.1 (where it's false) — the ADT is genuinely
+/// GONE in 0.1, not merely discouraged: a v0.1 program that writes
+/// `A4Paper` must see an unbound-constructor error, which requires `page`'s
+/// declaration to be entirely missing from `builtin_variants_with_version`.
+#[test]
+fn page_adt_gone_under_v0_1() {
+    let v006_variants = builtin_variants_with_version(SatysfiVersion::V0_0_6);
+    assert!(
+        v006_variants.iter().any(|d| d.name == "page"),
+        "v0.0.6 must still register the `page` ADT"
+    );
+
+    let v01_variants = builtin_variants_with_version(SatysfiVersion::V0_1);
+    assert!(
+        !v01_variants.iter().any(|d| d.name == "page"),
+        "v0.1 must NOT register the `page` ADT — it's gone upstream"
+    );
 }

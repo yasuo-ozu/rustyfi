@@ -19,6 +19,7 @@
 //! user code runs.
 
 use crate::types::{self, BaseType, CmdArgType, MonoType, PolyType, TyVarRef};
+use satysfi_syntax::SatysfiVersion;
 use std::collections::HashMap;
 
 // ============================================================================
@@ -204,6 +205,23 @@ pub fn t_pbinfo() -> MonoType {
 pub fn t_page() -> MonoType {
     MonoType::Variant("page".to_string(), Vec::new())
 }
+/// `page-break`/`page-break-multicolumn`/`page-break-two-column`'s
+/// first-argument type, forked per L7 (docs/plans/satysfi-0-1-0-support.md
+/// §3): `t_page()` (the v0.0.6 9-ctor ADT) under `has_page_adt()`, a plain
+/// `length * length` tuple otherwise. `SatysfiVersion::has_page_adt()` is
+/// the single source of truth for which shape a given version's
+/// `page-break*` family admits — `builtin_variants` below gates the ADT's
+/// own *registration* on the exact same method, so the two can never
+/// disagree (a `V0_1` program can never see a type that calls `t_page()`
+/// while `page`'s `VariantDecl` is absent from its `builtin_variants`
+/// result).
+pub fn t_page_or_geometry(version: SatysfiVersion) -> MonoType {
+    if version.has_page_adt() {
+        t_page()
+    } else {
+        product(vec![t_length(), t_length()])
+    }
+}
 /// `page-content-scheme` (vminst.ml's `tPAGECONT`) — the closed record row
 /// `{| text-origin : point; text-height : length |}` a `page-break`
 /// content-scheme closure returns, applied once per page with that page's
@@ -386,11 +404,22 @@ pub fn poly1<F: FnOnce(MonoType) -> MonoType>(f: F) -> PolyType {
 // The primitive type table.
 // ============================================================================
 
-/// Look up the type scheme of a primitive registered in
+/// Look up the type scheme of a v0.0.6 primitive registered in
 /// `primitives.rs`'s `prims!` table (or the separately-defined
 /// `inline-fil` constant), by its *source* name (sigil included, e.g.
-/// `"\\emph"`, `"+'"`, `"::"`).
+/// `"\\emph"`, `"+'"`, `"::"`). Back-compat wrapper — see
+/// `primitive_type_with_version`'s doc comment.
 pub fn primitive_type(name: &str) -> Option<PolyType> {
+    primitive_type_with_version(name, SatysfiVersion::V0_0_6)
+}
+
+/// Look up the type scheme of a primitive registered in `primitives.rs`'s
+/// `prims!` table, for a given target `version`. Mirrors
+/// `primitives::base_env`/`base_env_with_version`'s split (S4's
+/// `lex`/`lex_with_version` idiom) — unchanged for every one of this
+/// crate's existing `primitive_type(name)` call sites, all of which keep
+/// resolving against `SatysfiVersion::V0_0_6` exactly as before.
+pub fn primitive_type_with_version(name: &str, version: SatysfiVersion) -> Option<PolyType> {
     Some(match name {
         // ---- milestone-1 natives (no vminst.ml entry — local signatures) ----
         //
@@ -415,7 +444,7 @@ pub fn primitive_type(name: &str) -> Option<PolyType> {
         // LOCAL 2-arg `context -> block-boxes -> document`.
         "page-break" => poly0(arrows(
             vec![
-                t_page(),
+                t_page_or_geometry(version),
                 arrow(t_pbinfo(), t_page_content_scheme()),
                 arrow(t_pbinfo(), t_page_parts()),
                 t_block_boxes(),
@@ -431,7 +460,7 @@ pub fn primitive_type(name: &str) -> Option<PolyType> {
         // `primitives.rs`'s `prim_page_break_multicolumn` / `page_break_core`.
         "page-break-multicolumn" => poly0(arrows(
             vec![
-                t_page(),
+                t_page_or_geometry(version),
                 list(t_length()),
                 arrow(t_unit(), t_block_boxes()),
                 arrow(t_unit(), t_block_boxes()),
@@ -448,7 +477,7 @@ pub fn primitive_type(name: &str) -> Option<PolyType> {
         // @-> tPAGECONTF @-> tPAGEPARTSF @-> tBB @-> tDOC)`).
         "page-break-two-column" => poly0(arrows(
             vec![
-                t_page(),
+                t_page_or_geometry(version),
                 t_length(),
                 arrow(t_unit(), t_block_boxes()),
                 arrow(t_pbinfo(), t_page_content_scheme()),
@@ -1324,6 +1353,12 @@ impl VariantDecl {
 /// `None` (the Rust `Option`, not the SATySFi one!) directly, so `None`'s
 /// declared payload here is `Option::None`, not `Some(unit)`.
 pub fn builtin_variants() -> Vec<VariantDecl> {
+    builtin_variants_with_version(SatysfiVersion::V0_0_6)
+}
+
+/// Same as [`builtin_variants`], for a given target `version`. Mirrors the
+/// `base_env`/`primitive_type` split above.
+pub fn builtin_variants_with_version(version: SatysfiVersion) -> Vec<VariantDecl> {
     let option_param = types::new_ty_var(0);
     let option_decl = VariantDecl {
         name: "option".to_string(),
@@ -1407,6 +1442,11 @@ pub fn builtin_variants() -> Vec<VariantDecl> {
     // paper-size constants plus `UserDefinedPaper` carrying a `(length *
     // length)` payload. `page-break`'s first argument; `as_page`
     // (`primitives.rs`) maps each ctor to a backend `PaperSize`.
+    //
+    // L7 (satysfi-0-1-0-support.md §3): GONE in v0.1 upstream (no
+    // replacement ADT — paper sizes are a plain `length * length` tuple
+    // there, see `t_page_or_geometry`), so this declaration is gated on
+    // `has_page_adt()` below rather than being unconditionally registered.
     let page_decl = VariantDecl {
         name: "page".to_string(),
         params: 0,
@@ -1496,15 +1536,18 @@ pub fn builtin_variants() -> Vec<VariantDecl> {
         param_vars: Vec::new(),
     };
 
-    vec![
+    let mut decls = vec![
         option_decl,
         itemize_decl,
         color_decl,
         script_decl,
         language_decl,
-        page_decl,
         cell_decl,
         math_class_decl,
         math_char_class_decl,
-    ]
+    ];
+    if version.has_page_adt() {
+        decls.push(page_decl);
+    }
+    decls
 }

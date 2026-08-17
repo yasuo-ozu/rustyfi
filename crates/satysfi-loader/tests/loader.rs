@@ -74,7 +74,7 @@ fn single_doc_no_headers() {
 
     assert_eq!(program.files.len(), 1);
     assert_eq!(program.files[0].path, fs::canonicalize(&entry).unwrap());
-    assert!(program.files[0].cst.body.is_some());
+    assert!(program.files[0].cst.is_document());
 }
 
 #[test]
@@ -253,36 +253,13 @@ fn import_resolves_relative_to_the_containing_file_not_the_entry_dir() {
     );
 }
 
-#[test]
-fn unimplemented_version_is_rejected_before_touching_disk() {
-    let dir = TempDir::new("unsupported-version");
-    // Deliberately do NOT create `missing.saty`: an `UnsupportedVersion`
-    // error must be returned before `load` ever reads the entry file.
-    let entry = dir.path().join("missing.saty");
-
-    let opts = LoadOptions {
-        lib_root: None,
-        version: SatysfiVersion::V0_1,
-    };
-    let err = load(&entry, &opts).expect_err("0.1 must be rejected");
-    let msg = err.to_string();
-
-    match &err {
-        LoadError::UnsupportedVersion {
-            requested,
-            supported,
-        } => {
-            assert_eq!(*requested, SatysfiVersion::V0_1);
-            assert_eq!(supported, &vec![SatysfiVersion::V0_0_6]);
-        }
-        other => panic!("expected LoadError::UnsupportedVersion, got {other:?}"),
-    }
-    assert!(msg.contains("0.1"), "message should name the requested version: {msg}");
-    assert!(
-        msg.contains("0.0.6"),
-        "message should name the supported version: {msg}"
-    );
-}
+// `unimplemented_version_is_rejected_before_touching_disk` (formerly here)
+// deleted at the 0.1.0 Slice 1 finale's flip commit
+// (v1-finale-spec.md §7 item 2): its premise — `SatysfiVersion::V0_1` is
+// gated out of `is_implemented()` — is now false, and `SatysfiVersion` has
+// exactly two variants, so no unimplemented version remains to substitute.
+// `LoadError::UnsupportedVersion` itself stays alive (`lib.rs`'s
+// `is_implemented()` guard in `load()`) for any future third generation.
 
 #[test]
 fn default_load_options_targets_v0_0_6() {

@@ -1,0 +1,38 @@
+% v01-mini.satyh — SATySFi 0.1 (dev-0-1-0, Legacy packaging) hand-
+% transliteration of lib-satysfi/dist/packages/stdja-mini.satyh (which
+% stays frozen; see that file's header comments for the semantics both
+% versions share). Deltas, all of them 0.1 surface syntax:
+%   - `module V01Mini = struct … end` wrapper (erased flat by Slice 1's
+%     v1/lower.rs — the module name is dropped, names stay unqualified);
+%   - `val` / `val inline` / `val block` instead of `let`/`let-inline`/
+%     `let-block`;
+%   - `,`-separated records;
+%   - `page-break (210mm, 297mm) …` — 0.1 has no `page` ADT (A4Paper is
+%     gone; L7, docs/plans/satysfi-0-1-0-support.md), so the paper size is
+%     a plain length pair. 210mm x 297mm IS A4.
+
+module V01Mini = struct
+
+  val inline ctx \math m = embed-math ctx m
+
+  val document record bt =
+    let ctx = get-initial-context 440pt (command \math) in
+    let content pbinfo = (| text-origin = (72pt, 100pt), text-height = 640pt |) in
+    let parts pbinfo =
+      (| header-origin = (72pt, 72pt),  header-content = block-nil,
+         footer-origin = (72pt, 800pt), footer-content =
+           line-break true true ctx
+             (inline-fil ++ (read-inline ctx (embed-string (arabic (pbinfo#page-number)))) ++ inline-fil) |)
+    in
+    page-break (210mm, 297mm) content parts (read-block ctx bt)
+
+  val block ctx +p it =
+    line-break true true ctx (read-inline ctx it ++ inline-fil)
+
+  val inline ctx \emph it =
+    read-inline (set-font-key 2 ctx) it
+
+  val inline ctx \bold it =
+    read-inline (set-font-key 1 ctx) it
+
+end

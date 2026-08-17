@@ -26,6 +26,7 @@ use satysfi_backend::{
     ScriptFont, Subpath, TabularBox, VertBox, VertVariantPolicy, FORCED_BREAK_PENALTY,
 };
 use satysfi_backend::char_script;
+use satysfi_syntax::SatysfiVersion;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -34,24 +35,65 @@ pub const FONT_REGULAR: FontKey = FontKey(0);
 pub const FONT_BOLD: FontKey = FontKey(1);
 pub const FONT_OBLIQUE: FontKey = FontKey(2);
 
+/// Which target version(s) a `PrimDef` row is registered under. Mirrors
+/// `SatysfiVersion`'s two-variant shape today; `#[non_exhaustive]` for the
+/// same reason `SatysfiVersion` is (a future third generation gets a new
+/// arm here, not a redesign) — every `match` on this type needs a wildcard.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VersionSpan {
+    /// Registered under every version this port implements. The default
+    /// for every `prims!` line that omits a tag — used by ~120 of today's
+    /// ~151 entries (L5's estimate), including every entry this L7 patch
+    /// does not touch.
+    Both,
+    V0_0_6Only,
+    V0_1Only,
+}
+
+impl VersionSpan {
+    /// Whether a `PrimDef`/type-table row tagged `self` should be visible
+    /// under `version`. `Both` always allows; `V0_0_6Only`/`V0_1Only` allow
+    /// exactly their own version — no partial/future-version fallback (a
+    /// third generation gets its own new `VersionSpan` arm, not silent
+    /// inclusion under an existing one).
+    pub fn allows(self, version: SatysfiVersion) -> bool {
+        match (self, version) {
+            (VersionSpan::Both, _) => true,
+            (VersionSpan::V0_0_6Only, SatysfiVersion::V0_0_6) => true,
+            (VersionSpan::V0_1Only, SatysfiVersion::V0_1) => true,
+            _ => false,
+        }
+    }
+}
+
 pub struct PrimDef {
     pub name: &'static str,
     pub arity: usize,
     pub run: fn(&mut Interp, Vec<Value>) -> Result<Value, EvalError>,
+    pub version: VersionSpan,
 }
 
 impl std::fmt::Debug for PrimDef {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "PrimDef({}/{})", self.name, self.arity)
+        write!(f, "PrimDef({}/{}, {:?})", self.name, self.arity, self.version)
     }
 }
 
 macro_rules! prims {
-    ($($name:literal ($arity:literal) => $f:path;)*) => {
+    ($($($tag:ident)? $name:literal ($arity:literal) => $f:path;)*) => {
         static PRIM_DEFS: &[PrimDef] = &[
-            $(PrimDef { name: $name, arity: $arity, run: $f },)*
+            $(PrimDef {
+                name: $name,
+                arity: $arity,
+                run: $f,
+                version: prims!(@span $($tag)?),
+            },)*
         ];
     };
+    (@span) => { VersionSpan::Both };
+    (@span v006) => { VersionSpan::V0_0_6Only };
+    (@span v01) => { VersionSpan::V0_1Only };
 }
 
 prims! {
@@ -62,22 +104,33 @@ prims! {
     // the paragraph's top/bottom edge is breakable across a page boundary.
     "line-break" (4) => prim_line_break;
     // `page -> (pbinfo -> page-content-scheme) -> (pbinfo -> page-parts) ->
-    // block-boxes -> document` (vminst.ml:1024, `BackendPageBreaking`);
-    // docs/plans/document-page-model.md §Slice 1.
-    "page-break" (4) => prim_page_break;
-    // `page -> length list -> (unit -> block-boxes) -> (unit ->
-    // block-boxes) -> (pbinfo -> page-content-scheme) -> (pbinfo ->
-    // page-parts) -> block-boxes -> document` (vminst.ml:1065
-    // `BackendPageBreakingMultiColumn`) — FAITHFUL, see
-    // `prim_page_break_multicolumn`'s doc comment and `page_break_core`
-    // (pageBreak.ml:726 `main_multicolumn`).
-    "page-break-multicolumn" (7) => prim_page_break_multicolumn;
-    // `page -> length -> (unit -> block-boxes) -> (pbinfo ->
-    // page-content-scheme) -> (pbinfo -> page-parts) -> block-boxes ->
-    // document` (vminst.ml:1041 `BackendPageBreakingTwoColumn`) — sugar for
-    // a two-column `MultiColumn` (vminst.ml:1062), see
-    // `prim_page_break_two_column`.
-    "page-break-two-column" (6) => prim_page_break_two_column;
+    // block-boxes -> document` (vminst.ml:1024, `BackendPageBreaking`) —
+    // v0.0.6's `page` ADT argument (docs/plans/document-page-model.md
+    // §Slice 1). v0.1 sibling below: L7 (docs/plans/
+    // satysfi-0-1-0-support.md §3) — the `page` ADT is GONE upstream in
+    // 0.1; `page-break`'s first argument becomes a plain `length * length`.
+    v006 "page-break" (4) => prim_page_break_v006;
+    // v0.1: `(length * length) -> (pbinfo -> page-content-scheme) ->
+    // (pbinfo -> page-parts) -> block-boxes -> document` — same arity,
+    // same `page_break_core` backing loop, only the first argument's SHAPE
+    // (and how it's extracted from a `Value`) differs. Slice 1's ONE
+    // proving fixture (`v01-minimal.saty`) exercises this arm.
+    v01  "page-break" (4) => prim_page_break_v01;
+
+    // `page-break-multicolumn`: v0.0.6 (vminst.ml:1065
+    // `BackendPageBreakingMultiColumn`) / v0.1 pair, same fork shape as
+    // `page-break` above — FAITHFUL on the v006 side (see
+    // `prim_page_break_multicolumn_v006`'s doc comment), untested by Slice
+    // 1's fixture (which only calls plain `page-break`) but registered for
+    // type-table completeness/symmetry with the other two members of this
+    // primitive family.
+    v006 "page-break-multicolumn" (7) => prim_page_break_multicolumn_v006;
+    v01  "page-break-multicolumn" (7) => prim_page_break_multicolumn_v01;
+
+    // `page-break-two-column`: v0.0.6 (vminst.ml:1041
+    // `BackendPageBreakingTwoColumn`) / v0.1 pair, same fork shape.
+    v006 "page-break-two-column" (6) => prim_page_break_two_column_v006;
+    v01  "page-break-two-column" (6) => prim_page_break_two_column_v01;
 
     // ---- int arithmetic (vminst.ml: Plus/Minus/Times/Divides/Mod) --------
     "+" (2) => prim_int_add;
@@ -440,10 +493,27 @@ prims! {
     "break" (1) => prim_break;
 }
 
-/// The base environment `document` programs start in.
+/// The base environment v0.0.6 `document` programs start in. Back-compat
+/// wrapper — unchanged behavior, so none of this crate's ~90 existing
+/// `base_env()` call sites (production and tests) need editing when
+/// `VersionSpan` gating lands. Mirrors `satysfi-syntax`'s
+/// `lex`/`lex_with_version` split (S4).
 pub fn base_env() -> Env {
+    base_env_with_version(SatysfiVersion::V0_0_6)
+}
+
+/// The base environment for a given target version — filters `PRIM_DEFS` by
+/// `VersionSpan::allows`, so e.g. a `V0_1` env binds `prim_page_break_v01`
+/// under the name `"page-break"`, never `prim_page_break_v006`, and vice
+/// versa. The five bare-constant `env.define`s below (`inline-fil` etc. —
+/// these live outside `PrimDef`/`VersionSpan` entirely) stay unconditional
+/// (`Both`, until a later phase's audit says otherwise).
+pub fn base_env_with_version(version: SatysfiVersion) -> Env {
     let env = Env::root();
     for def in PRIM_DEFS {
+        if !def.version.allows(version) {
+            continue;
+        }
         env.define(
             def.name,
             Value::Prim {
@@ -709,6 +779,30 @@ fn as_page(v: Value) -> Result<PaperSize, EvalError> {
             )),
         },
         other => eval_error(format!("expected a page, got {}", other.type_name())),
+    }
+}
+
+/// v0.1's `page-break`'s first argument: a plain `(length * length)` tuple
+/// — the `page` ADT (`as_page` above) no longer exists upstream in 0.1
+/// (docs/plans/document-page-model.md's "0.1.0 note"; L7,
+/// docs/plans/satysfi-0-1-0-support.md §3). Maps straight into
+/// `PaperSize::UserDefined`, the exact same backend value `as_page`'s own
+/// `UserDefinedPaper` arm produces — the retype is "drop the ADT wrapper,"
+/// not "change what geometry `page-break` can express," so
+/// `PaperSize::UserDefined`'s tuple payload is reused verbatim on both
+/// sides of the fork; only the *source Value shape* differs.
+fn as_page_v01(v: Value) -> Result<PaperSize, EvalError> {
+    match v {
+        Value::Tuple(vs) if vs.len() == 2 => {
+            let mut it = vs.into_iter();
+            let w = as_length(it.next().unwrap())?;
+            let h = as_length(it.next().unwrap())?;
+            Ok(PaperSize::UserDefined(w, h))
+        }
+        other => eval_error(format!(
+            "expected a page as (length * length), got {}",
+            other.type_name()
+        )),
     }
 }
 
@@ -2023,10 +2117,17 @@ fn read_parts_scheme(v: Value) -> Result<(Point, Vec<VertBox>, Point, Vec<VertBo
 /// case upstream added it for.
 const PAGE_NUMBER_LIMIT: i64 = 10_000;
 
-/// The real 4-arg `page-break` (docs/plans/document-page-model.md §Slice 1)
-/// — upstream `BCDocument(pagesize, SingleColumn, (fun () -> []),
+/// The real 4-arg `page-break`, v0.0.6 arm (docs/plans/document-page-model.md
+/// §Slice 1) — upstream `BCDocument(pagesize, SingleColumn, (fun () -> []),
 /// (fun () -> []), …)` (vminst.ml:1039): one zero-shift column, no hooks.
-fn prim_page_break(interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+/// L7 (satysfi-0-1-0-support.md §3): forked from the v0.1 arm below ONLY in
+/// its first-argument extraction (`as_page` vs `as_page_v01`) — deliberately
+/// two separate functions, not one function branching on a `version`
+/// parameter, per that plan's §6 risk note ("separate functions per tag,
+/// never in-function `if version` branching, so a 'shared' function is
+/// genuinely shared code"). `page_break_core` below IS that genuinely
+/// shared code.
+fn prim_page_break_v006(interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
     let bb = as_block_boxes(args.pop().unwrap())?;
     let pagepartsf = args.pop().unwrap();
     let pagecontf = args.pop().unwrap();
@@ -2043,13 +2144,37 @@ fn prim_page_break(interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, E
     )
 }
 
+/// v0.1 arm of `page-break` — L7's one proof-of-concept retyped primitive.
+/// Identical to `prim_page_break_v006` above except `as_page_v01` in place
+/// of `as_page`; everything downstream (`page_break_core`, `chop_page`,
+/// `place_block_at`, `DocumentValue` assembly) is the SAME shared code both
+/// arms call, unedited by this fork.
+fn prim_page_break_v01(interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+    let bb = as_block_boxes(args.pop().unwrap())?;
+    let pagepartsf = args.pop().unwrap();
+    let pagecontf = args.pop().unwrap();
+    let paper = as_page_v01(args.pop().unwrap())?;
+    page_break_core(
+        interp,
+        paper,
+        vec![Length::ZERO],
+        None,
+        None,
+        pagecontf,
+        pagepartsf,
+        bb,
+    )
+}
+
 /// `page-break-two-column : page -> length -> (unit -> block-boxes) ->
 /// (pbinfo -> page-content-scheme) -> (pbinfo -> page-parts) ->
-/// block-boxes -> document` (vminst.ml:1041 `BackendPageBreakingTwoColumn`)
-/// — upstream builds `MultiColumn([origin_shift])` with the user's column
-/// hook and a trivial column-end hook (vminst.ml:1062); the `length` is the
-/// x-shift of the SECOND column's origin.
-fn prim_page_break_two_column(
+/// block-boxes -> document` (vminst.ml:1041 `BackendPageBreakingTwoColumn`),
+/// v0.0.6 arm — upstream builds `MultiColumn([origin_shift])` with the
+/// user's column hook and a trivial column-end hook (vminst.ml:1062); the
+/// `length` is the x-shift of the SECOND column's origin. See
+/// `prim_page_break_v006`'s doc comment for the fork rationale; unchanged
+/// from the former `prim_page_break_two_column` body except the rename.
+fn prim_page_break_two_column_v006(
     interp: &mut Interp,
     mut args: Vec<Value>,
 ) -> Result<Value, EvalError> {
@@ -2071,14 +2196,40 @@ fn prim_page_break_two_column(
     )
 }
 
+/// v0.1 arm of `page-break-two-column`. Untested by Slice 1's own fixture
+/// (which exercises plain `page-break` only) but registered for type-table
+/// completeness/symmetry — see the `prims!` table comment above.
+fn prim_page_break_two_column_v01(
+    interp: &mut Interp,
+    mut args: Vec<Value>,
+) -> Result<Value, EvalError> {
+    let bb = as_block_boxes(args.pop().unwrap())?;
+    let pagepartsf = args.pop().unwrap();
+    let pagecontf = args.pop().unwrap();
+    let columnhookf = args.pop().unwrap();
+    let origin_shift = as_length(args.pop().unwrap())?;
+    let paper = as_page_v01(args.pop().unwrap())?;
+    page_break_core(
+        interp,
+        paper,
+        vec![Length::ZERO, origin_shift],
+        Some(columnhookf),
+        None,
+        pagecontf,
+        pagepartsf,
+        bb,
+    )
+}
+
 /// `page-break-multicolumn : page -> length list -> (unit -> block-boxes)
 /// -> (unit -> block-boxes) -> (pbinfo -> page-content-scheme) -> (pbinfo
 /// -> page-parts) -> block-boxes -> document` (vminst.ml:1065
-/// `BackendPageBreakingMultiColumn`) — FAITHFUL: the shift list gives
-/// columns 2..N's x-origin shifts; upstream prepends `Length.zero` for
+/// `BackendPageBreakingMultiColumn`), v0.0.6 arm — FAITHFUL: the shift list
+/// gives columns 2..N's x-origin shifts; upstream prepends `Length.zero` for
 /// column 1 (pageBreak.ml:762), so `stdjareport.satyh:403`'s `[]` is a
-/// one-column layout whose hooks still fire per column/page.
-fn prim_page_break_multicolumn(
+/// one-column layout whose hooks still fire per column/page. Unchanged from
+/// the former `prim_page_break_multicolumn` body except the rename.
+fn prim_page_break_multicolumn_v006(
     interp: &mut Interp,
     mut args: Vec<Value>,
 ) -> Result<Value, EvalError> {
@@ -2092,6 +2243,35 @@ fn prim_page_break_multicolumn(
         origin_shifts.push(as_length(v)?);
     }
     let paper = as_page(args.pop().unwrap())?;
+    page_break_core(
+        interp,
+        paper,
+        origin_shifts,
+        Some(columnhookf),
+        Some(columnendhookf),
+        pagecontf,
+        pagepartsf,
+        bb,
+    )
+}
+
+/// v0.1 arm of `page-break-multicolumn`. Untested by Slice 1's own fixture;
+/// registered for type-table completeness/symmetry, same caveat as
+/// `prim_page_break_two_column_v01` above.
+fn prim_page_break_multicolumn_v01(
+    interp: &mut Interp,
+    mut args: Vec<Value>,
+) -> Result<Value, EvalError> {
+    let bb = as_block_boxes(args.pop().unwrap())?;
+    let pagepartsf = args.pop().unwrap();
+    let pagecontf = args.pop().unwrap();
+    let columnendhookf = args.pop().unwrap();
+    let columnhookf = args.pop().unwrap();
+    let mut origin_shifts = vec![Length::ZERO];
+    for v in as_list(args.pop().unwrap())? {
+        origin_shifts.push(as_length(v)?);
+    }
+    let paper = as_page_v01(args.pop().unwrap())?;
     page_break_core(
         interp,
         paper,

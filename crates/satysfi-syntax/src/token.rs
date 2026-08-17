@@ -138,6 +138,17 @@ pub enum Token {
     Command,
     #[leaf(name = "KwOpen", expect = "'open'")]
     Open,
+    /// `rec` — SATySFi 0.1-only keyword (`val rec`/`let rec`); under 0.0.6
+    /// this word stays a plain identifier (see `lexer.rs`'s version-gated
+    /// keyword table).
+    #[leaf(name = "KwRec", expect = "'rec'")]
+    Rec,
+    /// `inline` — SATySFi 0.1-only keyword (`val inline \cmd = ...`).
+    #[leaf(name = "KwInline", expect = "'inline'")]
+    Inline,
+    /// `block` — SATySFi 0.1-only keyword (`val block +cmd = ...`).
+    #[leaf(name = "KwBlock", expect = "'block'")]
+    Block,
 
     // ---- grouping delimiters ----
     #[leaf(name = "LParenTok", expect = "'('")]
@@ -316,6 +327,9 @@ impl std::fmt::Display for Token {
             MathCmdType => write!(f, "math-cmd"),
             Command => write!(f, "command"),
             Open => write!(f, "open"),
+            Rec => write!(f, "rec"),
+            Inline => write!(f, "inline"),
+            Block => write!(f, "block"),
             LParen => write!(f, "("),
             RParen => write!(f, ")"),
             BRecord => write!(f, "(|"),

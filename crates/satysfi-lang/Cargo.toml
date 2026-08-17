@@ -17,11 +17,8 @@ image.workspace = true
 # runtime) — the same Liang/TeX pattern data upstream's
 # `dist/hyph/english.satysfi-hyph` carries.
 hyphenation = { version = "0.8.4", features = ["embed_en-us"] }
-
-[dev-dependencies]
-# Test-only: tests/stdlib_tier0.rs drives the real multi-file loader (lib_root
-# = this repo's lib-satysfi/) to prove `@require: list`/`option` compile
-# end-to-end, mirroring the CLI's load -> merge -> elaborate -> typecheck ->
-# eval pipeline (satysfi-cli's main.rs) without introducing a cyclic
-# workspace dependency (satysfi-loader only depends on satysfi-syntax).
+# 0.1.0 Slice 1 finale (v1-finale-spec.md §5.1): `compile_document_v1`'s
+# signature is fixed to `files: &[satysfi_loader::LoadedFile]` (un-merged,
+# plural), so this is now a real dependency, not just a test harness one.
+# No cycle: satysfi-loader depends only on satysfi-syntax.
 satysfi-loader.workspace = true

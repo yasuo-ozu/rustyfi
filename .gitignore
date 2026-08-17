@@ -30,3 +30,7 @@ __pycache__/
 .DS_Store
 *.swp
 *~
+
+# Stand-in entries written beside fixtures by typecheck_golden.rs (swept at
+# test start; ignored so an aborted run never leaves one tracked).
+rustyfi-golden-doc-*

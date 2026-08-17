@@ -20,7 +20,7 @@
 //! This wrapper just drives that script against the FRESHLY BUILT binary
 //! (`CARGO_BIN_EXE_rustyfi-rust`) so `cargo test` picks up the current code, and
 //! fails if any document's layout regresses past `scripts/layout_fidelity_
-//! baseline.json`. It is `#[ignore]`d (like `typecheck_golden` /
+//! baseline.json`. It is `#[ignore]`d (like `typecheck_corpus` /
 //! `pdf_image_diff`) because it needs poppler, python3, and the corpus
 //! the vendored corpus; the script itself self-skips (exit 0) when a prerequisite is
 //! absent, so this never produces a false failure in a bare checkout.

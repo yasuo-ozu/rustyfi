@@ -1,6 +1,6 @@
 //! Box-tree / render-layout snapshot harness (next-work survey item #3:
 //! "no golden/snapshot infrastructure — the suite can stay green while box
-//! positions drift"). This is the missing safety net: `typecheck_golden.rs`
+//! positions drift"). This is the missing safety net: `typecheck_corpus.rs`
 //! covers typecheck OUTPUT, and the e2e capstones (`tests/e2e.rs` etc.) only
 //! grep a handful of `pdftotext` substrings out of the final PDF — neither
 //! would notice a systematic shift in line spacing, box widths, or page

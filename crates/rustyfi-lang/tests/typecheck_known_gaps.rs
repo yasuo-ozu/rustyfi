@@ -1,7 +1,7 @@
 //! The inputs the whole-corpus golden harness cannot typecheck, pinned here
 //! individually with the REASON each one fails.
 //!
-//! `typecheck_golden.rs` walks every fixture and bundled package and records
+//! `typecheck_corpus.rs` walks every fixture and bundled package and records
 //! one line per input. Eleven of those lines were `ERR`, and a bare `ERR` line
 //! in a golden file is a poor record: it pins a failure without saying whether
 //! the failure is intended, and it renders whatever error the harness's own
@@ -12,15 +12,24 @@
 //! embedded via `include_str!` (the fixture files stay where they are: all but
 //! one are live fixtures for other tests, `envelopes/v01-mini.satyh` alone
 //! being referenced by fifteen), and the golden walk skips them. What remains
-//! in `snapshots/typecheck_golden.txt` is then exactly "everything that should
+//! `typecheck_corpus.rs`'s explicit case list is then exactly "everything that should
 //! typecheck, does".
 //!
-//! None of these eleven is an unknown bug, and as of the X3/X3b/X3c work none
-//! is blocked by the cross-version BRIDGE any more. They fall into two groups:
-//! four files that are not entry documents at all, and seven whose versions
-//! link fine but whose PACKAGES differ in their own API — a 0.1 document asking
-//! its 0.0.6-generation dependency for something that generation never had
-//! (`List.fold`, `+listing`'s `?:break`, `\mathsf`, 0.1's math-command shape).
+//! Five remain, and none is a port bug. Four are simply not standalone entry
+//! documents: the corpus walk feeds every source file in as an entry, including
+//! ones that only ever appear behind an `@require:`.
+//!
+//! The fifth is the cross-version capstone, excluded for a CORRECT reason
+//! rather than a missing feature: `@require:` now prefers the entry's own
+//! generation, so as a 0.1 entry against the full lib root it resolves `list`
+//! to the 0.1 corpus, whose `List` has `fold` where the fixture (deliberately
+//! written against 0.0.6's) calls `fold-left`. `xver_capstone.rs` exercises it
+//! properly, against a lib root exposing only the 0.0.6 corpus.
+//!
+//! The other seven this file used to carry were 0.1 documents reaching 0.0.6
+//! packages. They compile and render (X3/X3b/X3c plus same-generation
+//! `@require:` resolution) AND now typecheck in the golden harness, so they sit
+//! in `typecheck_corpus.rs`'s `DOCUMENTS` list with the rest of the corpus.
 //!
 //! `Why::CrossVersionForkedBuiltin` is deliberately KEPT with no current users.
 //! It is the discriminating machinery for the gate, and the gate still exists
@@ -98,7 +107,7 @@ enum Why {
     /// They are pinned here so the exclusion is a recorded fact with a reason
     /// rather than a silent omission, and the assertion is deliberately on the
     /// HARNESS's failure text: if the harness ever learns to merge per-version,
-    /// this stops matching and these move into the snapshot where they belong.
+    /// this stops matching and these move into `typecheck_corpus.rs` instead.
     HarnessIsSingleVersion,
 }
 
@@ -113,6 +122,38 @@ struct KnownGap {
 fn known_gaps() -> Vec<KnownGap> {
     vec![
         // ---- group 1: not standalone entry documents ---------------------
+        KnownGap {
+            path: "crates/rustyfi-cli/tests/fixtures/envelopes/doc.saty",
+            src: include_str!("../../rustyfi-cli/tests/fixtures/envelopes/doc.saty"),
+            why: Why::NotAnEntryDocument,
+        },
+        KnownGap {
+            path: "crates/rustyfi-cli/tests/fixtures/envelopes/v01-mini.satyh",
+            src: include_str!("../../rustyfi-cli/tests/fixtures/envelopes/v01-mini.satyh"),
+            why: Why::NotAnEntryDocument,
+        },
+        KnownGap {
+            path: "crates/rustyfi-cli/tests/fixtures/multifile/helpers.satyh",
+            src: include_str!("../../rustyfi-cli/tests/fixtures/multifile/helpers.satyh"),
+            why: Why::NotAnEntryDocument,
+        },
+        KnownGap {
+            path: "crates/rustyfi-cli/tests/fixtures/xver-capstone-helper.satyh",
+            src: include_str!("../../rustyfi-cli/tests/fixtures/xver-capstone-helper.satyh"),
+            why: Why::NotAnEntryDocument,
+        },
+        // ---- group 2: mixed-version programs the golden harness can't hold ----
+        KnownGap {
+            // The cross-version capstone itself. Written against 0.0.6's
+            // `List` (`fold-left`), and `@require:` now prefers the entry's
+            // own generation, so as a 0.1 entry against the full lib root it
+            // gets the 0.1 `List` (which has `fold`). That is correct
+            // behaviour, and the capstone proves what it is meant to prove in
+            // `xver_capstone.rs`, which loads it against a 0.0.6-ONLY root.
+            path: "crates/rustyfi-cli/tests/fixtures/xver-capstone.saty",
+            src: include_str!("../../rustyfi-cli/tests/fixtures/xver-capstone.saty"),
+            why: Why::HarnessIsSingleVersion,
+        },
     ]
 }
 
@@ -263,7 +304,7 @@ fn brief(r: &Result<(), String>) -> String {
 fn known_gaps_still_fail_for_the_recorded_reason() {
     // Elaboration and typechecking recurse deeply over the merged prelude of a
     // real document class; the default 2 MiB test stack overflows on it. Same
-    // 64 MiB thread `typecheck_golden.rs` runs on.
+    // 64 MiB thread `typecheck_corpus.rs` runs on.
     std::thread::Builder::new()
         .stack_size(64 * 1024 * 1024)
         .spawn(check_known_gaps)
@@ -273,6 +314,16 @@ fn known_gaps_still_fail_for_the_recorded_reason() {
 }
 
 fn check_known_gaps() {
+    // Tripwire. Both tests in this file iterate `known_gaps()`, so an EMPTY
+    // list makes both pass while asserting nothing — which is exactly what
+    // happened once: a bulk edit meant to drop the seven closed cross-version
+    // entries took the rest with them, and the suite stayed green for it.
+    // If the last real gap is ever genuinely closed, delete this file rather
+    // than leaving an empty harness behind.
+    assert!(
+        !known_gaps().is_empty(),
+        "known_gaps() is empty — this file's tests would pass vacuously"
+    );
     let root = repo_root();
     // A panic or an abort skips `TempEntry::drop`, and these files are written
     // BESIDE real fixtures (the loader resolves a relative `@import:` against
@@ -374,37 +425,8 @@ fn check_known_gaps() {
     assert!(
         unexpected.is_empty(),
         "these inputs no longer fail the way this file records — if a gap was \
-         CLOSED, delete its entry here and re-pin snapshots/typecheck_golden.txt \
-         so the corpus covers it:\n  {}",
+         CLOSED, delete its entry here and add it to `typecheck_corpus.rs`'s \
+         DOCUMENTS list so the corpus covers it:\n  {}",
         unexpected.join("\n  ")
-    );
-}
-
-/// The golden corpus and this file must partition the inputs: nothing listed
-/// here may also appear in the committed golden snapshot.
-#[test]
-fn known_gaps_are_excluded_from_the_golden_snapshot() {
-    let snapshot = fs::read_to_string(
-        repo_root().join("crates/rustyfi-lang/tests/snapshots/typecheck_golden.txt"),
-    )
-    .expect("read the golden snapshot");
-
-    let mut leaked = Vec::new();
-    for gap in known_gaps() {
-        if snapshot.lines().any(|l| l.contains(gap.path)) {
-            leaked.push(gap.path);
-        }
-    }
-    assert!(
-        leaked.is_empty(),
-        "these are asserted in this file AND present in the golden snapshot; \
-         the golden walk should skip them:\n  {}",
-        leaked.join("\n  ")
-    );
-    assert!(
-        !snapshot.lines().any(|l| l.starts_with("ERR ")),
-        "the golden snapshot should contain no ERR lines — every input it \
-         walks is expected to typecheck. Move any new failure into {}",
-        file!()
     );
 }

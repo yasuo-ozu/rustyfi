@@ -403,6 +403,9 @@ fn every_registered_primitive_has_a_type() {
         "string-length",
         "string-sub",
         "string-explode",
+        "regexp-of-string",
+        "string-match",
+        "split-on-regexp",
         "embed-string",
         "inline-fil",
         // ---- phase 4, part 1 additions ----
@@ -447,6 +450,7 @@ fn every_registered_primitive_has_a_type() {
         "abort-with-message",
         // ---- Slice 1 additions (raster images; docs/plans/math-images.md) ----
         "load-image",
+        "load-pdf-image",
         "use-image-by-width",
         // ---- Slice 1 graphics primitives (docs/plans/graphics-subsystem.md) ----
         "start-path",
@@ -524,7 +528,9 @@ fn every_registered_primitive_has_a_type() {
         "set-text-color",
         "get-text-color",
         "set-hyphen-penalty",
+        "set-hyphen-min",
         "set-space-ratio",
+        "set-space-ratio-between-scripts",
         "split-into-lines",
         "block-frame-breakable",
         "embed-block-top",
@@ -563,9 +569,11 @@ fn every_registered_primitive_has_a_type() {
     ];
     assert_eq!(
         NAMES.len(),
-        171,
+        177,
         "keep this list in sync with primitives.rs's prims! table \
-         (docs/plans/design-reflow-s4-lists.md §4.1 added 2: list-mark, inline-mark)"
+         (docs/plans/design-reflow-s4-lists.md §4.1 added 2: list-mark, inline-mark; \
+         layout-fidelity slydifi added 2: set-space-ratio-between-scripts, and \
+         set-hyphen-min which had a prim+type but was missing from the name lists)"
     );
     for name in NAMES {
         assert!(

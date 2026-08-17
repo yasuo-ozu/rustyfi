@@ -169,6 +169,12 @@ mod bind_name_tests {
 pub struct TopLet {
     pub let_kw: KwLet,
     pub name: BindName,
+    /// Optional `: ty` type ascription (`let f : ty x = e`, `let x : ty = e`),
+    /// upstream's `patbotwithann` — parse-and-ignore, exactly like
+    /// [`ast::RecBinding::ascription`] (this untyped elaborator has nothing to
+    /// check it against). Sits before `params`, matching `patbotwithann
+    /// argpart`.
+    pub ascription: Option<ast::RecAscription>,
     pub params: Vec<ast::Param>,
     pub eq: DefEqTok,
     pub value: ast::Expr,
@@ -187,6 +193,21 @@ pub enum TopBinding {
     },
     /// `let name param* = expr`
     Let(TopLet),
+    /// `let pat = expr` — a top-level (or `struct`-level) DESTRUCTURING `let`
+    /// whose target is a general pattern, not a plain variable (e.g.
+    /// `satysfi-xpath`'s `let (ulim1, ulim2) = (0. -. eps, 1. +. eps)`). The
+    /// `struct`-body twin of [`ast::Expr::LetPatternIn`], and — for the same
+    /// reason it sits after `Expr::LetIn` — **must stay after `Let`**: an
+    /// ordinary `let x = e` parses through `Let` first (its `name: BindName`
+    /// only accepts a bare var/op), leaving this to match only a non-variable
+    /// pattern target. No `argpart` (curried params after the pattern), as
+    /// upstream's `nxnonrecdec` never uses one here.
+    LetPattern {
+        let_kw: KwLet,
+        pat: PatErased,
+        eq: DefEqTok,
+        value: ast::Expr,
+    },
     /// `[ctxvar] let-inline \cmd param* = expr` (`nxhorzdec`; each `param`
     /// is upstream's `arg` — a full patbot, or a `?:`-marked variable, see
     /// [`ast::Param`]'s doc comment — `parser.mly:622-624`).
@@ -394,13 +415,29 @@ pub struct RecordKindField {
     pub semi: Option<ListPunctTok>,
 }
 
-/// A minimal `type` declaration. `parser.mly`'s `nxvariantdec` additionally
-/// supports type parameters used non-trivially (see [`TypeDeclBody::Synonym`]'s
-/// doc comment) and mutual (`and`) recursion between type declarations —
-/// neither is implemented yet; such input is rejected with a parse error.
+/// A `type` declaration, optionally with mutual (`and`) recursion between
+/// several type declarations (`parser.mly`'s `nxvariantdec` `and`-chain, e.g.
+/// `satysfi-base`'s `stream.satyg`: `type 'a state = … and 'a u = ('a state)
+/// Promise.t`). The head clause is `kw`..`body`; every further `and`-clause is
+/// an [`AndTypeClause`]. All clauses in one chain are mutually visible — they
+/// lower to consecutive `UserTypeDecl`/`UserSynonymDecl`s, exactly the shape
+/// the 0.1 lowering (`v1/lower.rs`) already produces for `type … and …`, which
+/// the typechecker resolves with the same forward-reference tolerance.
 #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
 pub struct TypeDecl {
     pub kw: KwType,
+    pub tyvars: Vec<TypeVarTok>,
+    pub name: VarTok,
+    pub eq: DefEqTok,
+    pub body: TypeDeclBody,
+    pub ands: Vec<AndTypeClause>,
+}
+
+/// One `and 'a name = body` continuation of a [`TypeDecl`]'s mutual-recursion
+/// chain (mirrors [`AndBinding`] for `let`-rec).
+#[derive(Parse, Unparse, Debug, Clone, PartialEq)]
+pub struct AndTypeClause {
+    pub and_kw: KwAnd,
     pub tyvars: Vec<TypeVarTok>,
     pub name: VarTok,
     pub eq: DefEqTok,
@@ -595,6 +632,9 @@ pub mod ast {
         LetIn {
             kw: KwLet,
             name: super::BindName,
+            /// Optional `: ty` ascription (`let f : ty x = e in ..`) —
+            /// parse-and-ignore, like [`RecBinding::ascription`].
+            ascription: Option<RecAscription>,
             params: Vec<Param>,
             eq: DefEqTok,
             value: Box<Expr>,

@@ -243,6 +243,9 @@ prims! {
     "string-length" (1) => prim_string_length;
     "string-sub" (3) => prim_string_sub;
     "string-explode" (1) => prim_string_explode;
+    "regexp-of-string" (1) => prim_regexp_of_string;
+    "string-match" (2) => prim_string_match;
+    "split-on-regexp" (2) => prim_split_on_regexp;
 
     // ---- text embedding (vminst.ml:1707 PrimitiveEmbed: string -> inline-
     // text; the interp body wraps the string as a one-element quoted text) --
@@ -596,6 +599,7 @@ prims! {
     // context -> context` (left_hyphen_min, right_hyphen_min).
     "set-hyphen-min" (3) => prim_set_hyphen_min;
     "set-space-ratio" (4) => prim_set_space_ratio;
+    "set-space-ratio-between-scripts" (6) => prim_set_space_ratio_between_scripts;
     "split-into-lines" (1) => prim_split_into_lines;
     "block-frame-breakable" (4) => prim_block_frame_breakable;
     "embed-block-top" (3) => prim_embed_block_top;
@@ -840,6 +844,106 @@ fn as_str(v: Value) -> Result<String, EvalError> {
         Value::Str(s) => Ok(s),
         other => eval_error(format!("expected string, got {}", other.type_name())),
     }
+}
+
+// `regexp-of-string : string -> regexp` — the port models a `regexp` as its
+// underlying pattern string, so this is the identity on the string.
+fn prim_regexp_of_string(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+    let s = as_str(args.pop().unwrap())?;
+    Ok(Value::Str(s))
+}
+
+// `string-match : regexp -> string -> bool` — whether `input` matches the
+// pattern in full (anchored). Only the character-class subset `satysfi-base`'s
+// `char.satyg` uses (`[…]`, with `a-z` ranges and an optional leading `^`
+// negation) is modeled; any other pattern is compared literally.
+fn prim_string_match(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+    let input = as_str(args.pop().unwrap())?;
+    let pattern = as_str(args.pop().unwrap())?;
+    Ok(Value::Bool(regexp_full_match(&pattern, &input)))
+}
+
+fn regexp_full_match(pattern: &str, input: &str) -> bool {
+    let p: Vec<char> = pattern.chars().collect();
+    if p.len() >= 2 && p[0] == '[' && p[p.len() - 1] == ']' {
+        // A character class matches exactly one character.
+        let mut chars = input.chars();
+        match (chars.next(), chars.next()) {
+            (Some(c), None) => char_in_class(&p[1..p.len() - 1], c),
+            _ => false,
+        }
+    } else {
+        input == pattern
+    }
+}
+
+// `split-on-regexp : regexp -> string -> (int * string) list` — split `input`
+// at every character matching the (single-character) pattern, pairing each
+// resulting segment with its starting code-point offset. Handles the pattern
+// forms base uses: a `[…]` class, an escaped literal (`\.`), or a bare
+// literal character; anything else never matches (one segment = the whole
+// string).
+fn prim_split_on_regexp(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+    let input = as_str(args.pop().unwrap())?;
+    let pattern = as_str(args.pop().unwrap())?;
+    let is_delim = single_char_matcher(&pattern);
+    let mut segments: Vec<Value> = Vec::new();
+    let mut seg_start = 0usize;
+    let mut cur = String::new();
+    for (idx, c) in input.chars().enumerate() {
+        if is_delim(c) {
+            segments.push(Value::Tuple(vec![
+                Value::Int(seg_start as i64),
+                Value::Str(std::mem::take(&mut cur)),
+            ]));
+            seg_start = idx + 1;
+        } else {
+            cur.push(c);
+        }
+    }
+    segments.push(Value::Tuple(vec![Value::Int(seg_start as i64), Value::Str(cur)]));
+    Ok(Value::List(segments))
+}
+
+/// A predicate matching one character against a `regexp` pattern's single-char
+/// forms (a `[…]` class, an escaped literal `\X`, or a bare literal char).
+fn single_char_matcher(pattern: &str) -> Box<dyn Fn(char) -> bool> {
+    let p: Vec<char> = pattern.chars().collect();
+    if p.len() >= 2 && p[0] == '[' && p[p.len() - 1] == ']' {
+        let cls: Vec<char> = p[1..p.len() - 1].to_vec();
+        Box::new(move |c| char_in_class(&cls, c))
+    } else if p.len() == 2 && p[0] == '\\' {
+        let lit = p[1];
+        Box::new(move |c| c == lit)
+    } else if p.len() == 1 {
+        let lit = p[0];
+        Box::new(move |c| c == lit)
+    } else {
+        Box::new(|_| false)
+    }
+}
+
+fn char_in_class(cls: &[char], c: char) -> bool {
+    let (neg, cls) = match cls.first() {
+        Some('^') => (true, &cls[1..]),
+        _ => (false, cls),
+    };
+    let mut i = 0;
+    let mut found = false;
+    while i < cls.len() {
+        if i + 2 < cls.len() && cls[i + 1] == '-' {
+            if cls[i] <= c && c <= cls[i + 2] {
+                found = true;
+            }
+            i += 3;
+        } else {
+            if cls[i] == c {
+                found = true;
+            }
+            i += 1;
+        }
+    }
+    found ^ neg
 }
 
 fn as_length(v: Value) -> Result<Length, EvalError> {
@@ -1410,17 +1514,19 @@ fn measure_run(
 ) -> Result<Length, EvalError> {
     let mut width = Length::ZERO;
     for c in text.chars() {
+        // A character absent from BOTH the run font and the fallback degrades
+        // to a `.notdef`-style box (half-em advance) rather than aborting the
+        // whole document — the way real typesetters render an uncovered glyph.
+        // (satysfi-base's `enumitem`/the SATySFi Book use a few glyphs — `□`,
+        // `〚` — that the bundled Latin face lacks; a faithful per-glyph
+        // font-fallback via run-splitting is the documented follow-up.) This
+        // only ever changes behavior for a glyph that would otherwise be a
+        // hard error, so covered-glyph documents are byte-identical.
         let advance = interp
             .metrics
             .advance(font, c, size)
             .or_else(|| interp.metrics.advance(fallback_font, c, size))
-            .ok_or_else(|| EvalError {
-                span: None,
-                msg: format!(
-                    "character {c:?} is not available in font {font:?} \
-                     (nor the fallback font {fallback_font:?})"
-                ),
-            })?;
+            .unwrap_or(size * 0.5);
         width += advance;
     }
     Ok(width)
@@ -2080,10 +2186,17 @@ fn push_char_glyph(
     x: &mut Length,
 ) -> Result<(), EvalError> {
     let font = math_glyph_font(interp, ctx, c, size);
-    let advance = interp.metrics.advance(font, c, size).ok_or_else(|| EvalError {
-        span: None,
-        msg: format!("math character '{c}' is not available in the current math font"),
-    })?;
+    // Graceful degradation for a math character neither the math font nor the
+    // text font can render (e.g. `⋯` U+22EF under the bundled faces): fall back
+    // to a half-em advance and let the glyph degrade to `.notdef` at render
+    // time (`gid: None`, resolved by `cid::encode_glyph_run`), exactly as the
+    // text path does in `measure_run` — a missing glyph must not abort the whole
+    // document. This only ever changes behavior for a glyph that would otherwise
+    // be a hard error, so covered-glyph documents stay byte-identical.
+    let advance = interp
+        .metrics
+        .advance(font, c, size)
+        .unwrap_or(size * 0.5);
     out.push(MathGlyph {
         info: HorzStringInfo { font, size, rising: Length::ZERO, color: ctx.text_color },
         text: c.to_string(),
@@ -2831,9 +2944,13 @@ fn page_break_core(
 
 // ---- int arithmetic -------------------------------------------------------
 
-binop_prim!(prim_int_add, as_int, Int, |a, b| a + b);
-binop_prim!(prim_int_sub, as_int, Int, |a, b| a - b);
-binop_prim!(prim_int_mul, as_int, Int, |a, b| a * b);
+// Wrapping arithmetic to match OCaml's native `int` (SATySFi's `int` is an
+// OCaml int, which wraps on overflow) — and, decisively, so a debug build does
+// not panic on the large intermediate products base's float bit-twiddling
+// (`exp2i`, `ldexp`, `frexp`) computes.
+binop_prim!(prim_int_add, as_int, Int, |a, b| a.wrapping_add(b));
+binop_prim!(prim_int_sub, as_int, Int, |a, b| a.wrapping_sub(b));
+binop_prim!(prim_int_mul, as_int, Int, |a, b| a.wrapping_mul(b));
 
 // OCaml catches `Division_by_zero` and reports `"division by zero"`; `mod`
 // (see `Mod` in vminst.ml) shares that behavior.
@@ -7626,6 +7743,28 @@ fn prim_set_space_ratio(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Va
         space_stretch: stretch,
         ..ctx
     })))
+}
+
+/// `set-space-ratio-between-scripts : float -> float -> float -> script ->
+/// script -> context -> context` (slydifi's arctic theme). STAND-IN: this port
+/// has no script-aware line breaking and inserts no inter-script glue at all
+/// (see [`prim_get_leftmost_script`]), so there is no per-script-pair spacing
+/// to store — the primitive validates its arguments (three ratios and two
+/// scripts) and returns the context unchanged. slydifi only ever calls it with
+/// `0. 0. 0.` to SUPPRESS inter-script spacing, which the port already does, so
+/// the observable layout matches upstream. Tuning a non-zero ratio would need
+/// real script-boundary glue first (`docs/plans/text-rendering.md` follow-on).
+fn prim_set_space_ratio_between_scripts(
+    _interp: &mut Interp,
+    mut args: Vec<Value>,
+) -> Result<Value, EvalError> {
+    let ctx = as_context(args.pop().unwrap())?;
+    let _script2 = as_script(args.pop().unwrap())?;
+    let _script1 = as_script(args.pop().unwrap())?;
+    let _stretch = as_float(args.pop().unwrap())?;
+    let _shrink = as_float(args.pop().unwrap())?;
+    let _natural = as_float(args.pop().unwrap())?;
+    Ok(Value::Context(Box::new(ctx)))
 }
 
 /// `split-into-lines : string -> (int * string) list` (vminst.ml:2269) —

@@ -250,6 +250,14 @@ fn phase2b_fixture_compiles_and_renders_expected_text() {
 /// writing it to a temp file that itself `@require:`s `stdja-mini` — `\emph`
 /// is no longer a Rust native, so exercising it (even for this error-path
 /// test) needs the real package.
+///
+/// Text the Base14 metrics can't represent (here: CJK `こんにちは`, which the
+/// WinAnsi-encoded base-14 fonts have no glyphs for) must fail *politely* at
+/// the PDF-encoding stage rather than crash. Note the error now surfaces from
+/// `render_pdf` (as `Unencodable`), not from `compile_document_cst`: the
+/// compile pipeline degrades unknown glyphs to `.notdef`/`GlyphId(0)` for the
+/// TTF/CID path and so returns `Ok`, but the base-14 WinAnsi encoder still
+/// refuses characters outside its code page with a helpful message.
 #[test]
 fn non_winansi_text_errors_politely() {
     let tmp = std::env::temp_dir().join(format!(
@@ -264,10 +272,12 @@ fn non_winansi_text_errors_politely() {
 
     let merged = load_and_merge(&tmp);
     let metrics = rustyfi_pdf::Base14Metrics;
-    let err = rustyfi_lang::compile_document_cst(&merged, &metrics).unwrap_err();
+    let doc = rustyfi_lang::compile_document_cst(&merged, &metrics)
+        .expect("compile degrades unknown glyphs; the encoding error is raised at render time");
+    let err = rustyfi_pdf::render_pdf(&doc.geometry, &doc.pages, &doc.images).unwrap_err();
     let msg = err.to_string();
     assert!(
-        msg.contains("WinAnsi") || msg.contains("not available"),
+        msg.contains("Unencodable") || msg.contains("WinAnsi") || msg.contains("not available"),
         "unhelpful error: {msg}"
     );
     let _ = std::fs::remove_file(&tmp);

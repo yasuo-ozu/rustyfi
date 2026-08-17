@@ -110,6 +110,17 @@ pub enum Ast {
     /// byte-identical invariant holds because the code producing/consuming
     /// it is simply never reached there, not because of any runtime check.
     VersionScope(RustyfiVersion, Box<Ast>),
+    /// `ModuleScope(["M", "N"], rhs)`: marks that `rhs` is the body of a
+    /// member of module `M.N`, so a BARE constructor reference inside it
+    /// resolves against that module's constructors first (the type/ctor analog
+    /// of `push_named_binding`'s value `Scope::rename`). Transparent
+    /// everywhere except `Checker::infer`/`bind_pattern`, which push the path
+    /// onto `Checker::ctor_scope` and try qualified ctor keys before the bare
+    /// fallback — no constructor NAME string ever changes (so eval,
+    /// exhaustiveness, and error/warning text stay byte-identical). Wraps a
+    /// module member's RHS only (never the spine `LetIn`/`LetRecIn` node),
+    /// exactly like `VersionScope`.
+    ModuleScope(Vec<String>, Box<Ast>),
 }
 
 /// One command-application argument (SATySFi 0.1 optional-arg-rows increment

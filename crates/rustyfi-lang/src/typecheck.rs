@@ -154,6 +154,9 @@ pub const PRIMITIVE_NAMES: &[&str] = &[
     "string-length",
     "string-sub",
     "string-explode",
+    "regexp-of-string",
+    "string-match",
+    "split-on-regexp",
     "embed-string",
     "inline-fil",
     // ---- phase 4, part 1 additions (context ops / box combinators) ----
@@ -199,6 +202,7 @@ pub const PRIMITIVE_NAMES: &[&str] = &[
     "abort-with-message",
     // ---- Slice 1 additions (raster images; docs/plans/math-images.md) ----
     "load-image",
+    "load-pdf-image",
     "use-image-by-width",
     // ---- Slice 1 graphics primitives (docs/plans/graphics-subsystem.md) ----
     "start-path",
@@ -289,7 +293,9 @@ pub const PRIMITIVE_NAMES: &[&str] = &[
     "set-text-color",
     "get-text-color",
     "set-hyphen-penalty",
+    "set-hyphen-min",
     "set-space-ratio",
+    "set-space-ratio-between-scripts",
     "split-into-lines",
     "block-frame-breakable",
     "embed-block-top",
@@ -1560,6 +1566,12 @@ pub(crate) struct Checker {
     /// variants`) is `V0_0_6` — behavior-neutral for every existing
     /// 0.0.6-only test that never installs builtins at all.
     version: RustyfiVersion,
+    /// The module path of the member body currently being inferred (pushed by
+    /// the `Ast::ModuleScope` arm; empty at top level). A BARE constructor
+    /// reference is looked up under `<path>.Ctor` (innermost prefix first)
+    /// before the bare fallback — so two modules' same-named constructors
+    /// (`Term.Paren` vs `Type.Paren`) no longer collide. See [`Ast::ModuleScope`].
+    ctor_scope: Vec<String>,
 }
 
 /// One elaborated top-level-shaped binding, viewed by reference — the
@@ -1602,6 +1614,7 @@ impl Checker {
             synonyms: HashMap::new(),
             warnings: Vec::new(),
             version: RustyfiVersion::V0_0_6,
+            ctor_scope: Vec::new(),
         }
     }
 
@@ -1684,6 +1697,17 @@ impl Checker {
         self.variants.insert(decl.name.clone(), decl.clone());
         for (cname, _) in &decl.ctors {
             self.ctors.insert(cname.clone(), decl.clone());
+        }
+        // If the variant's own type name is module-qualified (`M.t`), also
+        // register each constructor under a qualified key (`M.Ctor`) so a
+        // within-module bare reference (via `Checker::lookup_ctor`, driven by
+        // `Ast::ModuleScope`) resolves to THIS module's ctor even when another
+        // module declares the same bare ctor name. Builtins have undotted type
+        // names, so this adds nothing for them.
+        if let Some((modpfx, _)) = decl.name.rsplit_once('.') {
+            for (cname, _) in &decl.ctors {
+                self.ctors.insert(format!("{modpfx}.{cname}"), decl.clone());
+            }
         }
         Ok(())
     }
@@ -2265,6 +2289,14 @@ impl Checker {
             if self.ctors.get(ctor).is_some_and(|d| &d.name == tyname) {
                 self.ctors.remove(ctor);
             }
+            // Also drop the module-qualified key registered by
+            // `declare_variant` (guarded by the same decl-identity check).
+            if let Some((modpfx, _)) = tyname.rsplit_once('.') {
+                let q = format!("{modpfx}.{ctor}");
+                if self.ctors.get(&q).is_some_and(|d| &d.name == tyname) {
+                    self.ctors.remove(&q);
+                }
+            }
         }
     }
 
@@ -2644,7 +2676,32 @@ impl Checker {
                 let scoped = version_scoped_type_env(env, *version);
                 self.infer(&scoped, body)
             }
+            // A module member's body: resolve its bare constructor references
+            // against `path`'s constructors first. `path` is the full absolute
+            // module path (nested modules wrap with `["M","N"]`), so replace
+            // rather than push.
+            Ast::ModuleScope(path, body) => {
+                let saved = std::mem::replace(&mut self.ctor_scope, path.clone());
+                let r = self.infer(env, body);
+                self.ctor_scope = saved;
+                r
+            }
         }
+    }
+
+    /// Look up a constructor honoring the current [`Checker::ctor_scope`]: try
+    /// the innermost-out module-qualified keys (`M.N.Ctor`, `M.Ctor`) before
+    /// the bare fallback (`Ctor`). Keeps the returned decl's ctor NAME strings
+    /// bare — only the table KEY is qualified — so eval/exhaustiveness/error
+    /// text are untouched.
+    fn lookup_ctor(&self, name: &str) -> Option<Rc<VariantDecl>> {
+        for k in (1..=self.ctor_scope.len()).rev() {
+            let key = format!("{}.{}", self.ctor_scope[..k].join("."), name);
+            if let Some(d) = self.ctors.get(&key) {
+                return Some(d.clone());
+            }
+        }
+        self.ctors.get(name).cloned()
     }
 
     /// Shared by `Ast::Ctor` and pattern-matching's `Pattern::Ctor`: look up
@@ -2663,7 +2720,7 @@ impl Checker {
         payload: Option<&Ast>,
         expected_result: Option<&MonoType>,
     ) -> Result<MonoType, TypeError> {
-        let decl = self.ctors.get(name).cloned().ok_or_else(|| {
+        let decl = self.lookup_ctor(name).ok_or_else(|| {
             TypeError::simple(None, format!("unknown constructor '{name}'"))
         })?;
         let args: Vec<MonoType> = (0..decl.params).map(|_| self.fresh()).collect();
@@ -2753,7 +2810,7 @@ impl Checker {
                 self.bind_pattern(env, tail, &list(elem))
             }
             Pattern::Ctor(name, payload) => {
-                let decl = self.ctors.get(name).cloned().ok_or_else(|| {
+                let decl = self.lookup_ctor(name).ok_or_else(|| {
                     TypeError::simple(None, format!("unknown constructor '{name}' in a pattern"))
                 })?;
                 let args: Vec<MonoType> = (0..decl.params).map(|_| self.fresh()).collect();
@@ -3078,6 +3135,7 @@ pub(crate) fn ast_span(ast: &Ast) -> Option<Span> {
         Ast::Overwrite(_, span, _) => Some(*span),
         Ast::AccessField(_, _, span) => Some(*span),
         Ast::VersionScope(_, inner) => ast_span(inner),
+        Ast::ModuleScope(_, inner) => ast_span(inner),
         _ => None,
     }
 }

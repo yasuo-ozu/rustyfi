@@ -46,6 +46,82 @@ pub(crate) fn toposort(adjacency: &HashMap<u32, Vec<u32>>) -> Result<Vec<u32>, V
     }
 }
 
+/// SATySFi's own load order: a post-order depth-first traversal from the entry
+/// document, visiting each file's dependencies in the exact order their
+/// `@require:`/`@import:` headers appear (`adjacency[id]` is built in header
+/// order). A file is appended to the order only after all its transitive
+/// dependencies, so the result is dependency-first with the entry last — the
+/// same as a topological sort, but with a *deterministic* tie-break that
+/// mirrors upstream (`main.ml`'s recursive header resolution).
+///
+/// This matters because SATySFi's global-merge module model lets a library use
+/// a module (e.g. `Option.map`) it never `@require:`s itself, relying on some
+/// *earlier-loaded* file to have defined it. An arbitrary valid topological
+/// order (what a generic toposort yields) can legally place the user before
+/// that definition; header-order DFS reproduces the order the source was
+/// written against, so a document `@require:`ing `option` before `fss/fss`
+/// gets `Option` defined before `fss`'s internals reference it.
+///
+/// On a cycle, returns `Err` with the concrete cycle chain (via
+/// [`find_cycle`]), matching the previous `safegraph` path's error shape.
+pub(crate) fn header_order_toposort(
+    adjacency: &HashMap<u32, Vec<u32>>,
+    entry_id: u32,
+) -> Result<Vec<u32>, Vec<u32>> {
+    #[derive(Clone, Copy, PartialEq)]
+    enum State {
+        InProgress,
+        Done,
+    }
+
+    // Iterative post-order DFS: each stack frame carries the node and the index
+    // of the next child (dependency) to descend into. Recursion would be
+    // simpler but the frozen corpus's `base` tree nests deeply enough to make
+    // an explicit stack the safe choice.
+    let mut state: HashMap<u32, State> = HashMap::new();
+    let mut order: Vec<u32> = Vec::new();
+
+    // A single DFS rooted at `entry_id` reaches every node (the loader only
+    // ever allocates an id by discovering it as a dependency of a file it is
+    // already walking from the entry), so one root suffices; a defensive
+    // sweep over any stragglers follows.
+    let mut roots: Vec<u32> = vec![entry_id];
+    roots.extend(adjacency.keys().copied().filter(|&k| k != entry_id));
+
+    for root in roots {
+        if state.contains_key(&root) {
+            continue;
+        }
+        let mut stack: Vec<(u32, usize)> = vec![(root, 0)];
+        state.insert(root, State::InProgress);
+        while let Some(&(node, child_idx)) = stack.last() {
+            let children = adjacency.get(&node).map(Vec::as_slice).unwrap_or(&[]);
+            if child_idx < children.len() {
+                stack.last_mut().unwrap().1 += 1;
+                let child = children[child_idx];
+                match state.get(&child).copied() {
+                    Some(State::Done) => {}
+                    Some(State::InProgress) => {
+                        // Back-edge into a node still on the stack — a cycle.
+                        return Err(find_cycle(adjacency, child));
+                    }
+                    None => {
+                        state.insert(child, State::InProgress);
+                        stack.push((child, 0));
+                    }
+                }
+            } else {
+                // All dependencies emitted: this node comes next (post-order).
+                order.push(node);
+                state.insert(node, State::Done);
+                stack.pop();
+            }
+        }
+    }
+
+    Ok(order)
+}
+
 /// Reconstruct one concrete cycle passing through `start`, using the
 /// original (dependent -> dependency) adjacency map. `start` is guaranteed by
 /// the caller to lie on some cycle (it came out of `safegraph`'s

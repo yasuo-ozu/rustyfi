@@ -14,7 +14,7 @@ use rustyfi_syntax::leaf::{AnyHorzCmdTok, AnyMathCmdTok, AnyVertCmdTok, UnopExcl
 use rustyfi_syntax::span::Span;
 use rustyfi_syntax::token::Token;
 use rustyfi_syntax::RustyfiVersion;
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashSet, HashMap, VecDeque};
 use std::rc::Rc;
 
 #[derive(Debug, thiserror::Error)]
@@ -270,32 +270,148 @@ enum LoweredTypeDecl {
     Synonym(UserSynonymDecl),
 }
 
-fn lower_type_decl(decl: &cst::TypeDecl) -> LoweredTypeDecl {
-    let params: Vec<String> = decl.tyvars.iter().map(|v| v.name.clone()).collect();
-    match &decl.body {
+/// Lower one `type` binding, including every `and`-clause of a mutual-
+/// recursion chain (`type A = … and B = …`), into consecutive lowered decls —
+/// all clauses share one program-global decl space, so their mutual references
+/// resolve with the same forward-reference tolerance the typechecker already
+/// gives the 0.1 lowering's consecutive `type … and …` output.
+fn lower_type_decl(
+    decl: &cst::TypeDecl,
+    mod_path: &[String],
+    tymap: &HashMap<String, String>,
+) -> Vec<LoweredTypeDecl> {
+    let mut out = Vec::with_capacity(1 + decl.ands.len());
+    out.push(lower_one_type_clause(&decl.tyvars, &decl.name, &decl.body, mod_path, tymap));
+    for a in &decl.ands {
+        out.push(lower_one_type_clause(&a.tyvars, &a.name, &a.body, mod_path, tymap));
+    }
+    out
+}
+
+/// A module's type declaration is registered under its MODULE-QUALIFIED name
+/// (`M.t`), and any within-module reference to a module-local type name in its
+/// body is rewritten to the same qualified name (`tymap`, built by
+/// `walk_bindings`). This keeps two modules' same-named types (e.g. every
+/// `satysfi-base` module's `type t`) from colliding in the program-global
+/// synonym/variant tables. The `contains('.')` guard leaves an
+/// already-qualified name (the 0.1 lowering emits `"M.t"` directly) alone; a
+/// top-level (`mod_path` empty) declaration stays bare — the golden fast path.
+fn lower_one_type_clause(
+    tyvars: &[rustyfi_syntax::leaf::TypeVarTok],
+    name: &VarTok,
+    body: &cst::TypeDeclBody,
+    mod_path: &[String],
+    tymap: &HashMap<String, String>,
+) -> LoweredTypeDecl {
+    let params: Vec<String> = tyvars.iter().map(|v| v.name.clone()).collect();
+    let qname = if name.name.contains('.') {
+        name.name.clone()
+    } else {
+        qualify_key(mod_path, &name.name)
+    };
+    match body {
         cst::TypeDeclBody::Variant { first, rest, .. } => {
             let mut ctors = Vec::with_capacity(1 + rest.len());
-            ctors.push((
-                first.ctor.name.clone(),
-                first.of_ty.as_ref().map(|o| o.ty.clone()),
-            ));
+            let mut push_ctor = |cname: String, payload: Option<&cst::OfType>| {
+                let ty = payload.map(|o| {
+                    let mut t = o.ty.clone();
+                    qualify_ty(&mut t, tymap);
+                    t
+                });
+                ctors.push((cname, ty));
+            };
+            push_ctor(first.ctor.name.clone(), first.of_ty.as_ref());
             for bv in rest {
-                ctors.push((
-                    bv.def.ctor.name.clone(),
-                    bv.def.of_ty.as_ref().map(|o| o.ty.clone()),
-                ));
+                push_ctor(bv.def.ctor.name.clone(), bv.def.of_ty.as_ref());
             }
             LoweredTypeDecl::Variant(UserTypeDecl {
-                name: decl.name.name.clone(),
+                name: qname,
                 params,
                 ctors,
             })
         }
-        cst::TypeDeclBody::Synonym(ty) => LoweredTypeDecl::Synonym(UserSynonymDecl {
-            name: decl.name.name.clone(),
-            params,
-            body: ty.clone(),
-        }),
+        cst::TypeDeclBody::Synonym(ty) => {
+            let mut b = ty.clone();
+            qualify_ty(&mut b, tymap);
+            LoweredTypeDecl::Synonym(UserSynonymDecl {
+                name: qname,
+                params,
+                body: b,
+            })
+        }
+    }
+}
+
+// ---- within-module type-reference qualification ----------------------------
+// Rewrite a cloned CST `TypeExpr` in place, replacing every module-local BARE
+// type-name reference with its module-qualified name (`tymap`: bare -> `M.t`).
+// A `Mod.t` reference (`TypeAtom::NameMod`) is already absolute and left as-is;
+// a name not in `tymap` (builtins, external names) is untouched.
+
+fn qualify_ty(ty: &mut c::TypeExpr, map: &HashMap<String, String>) {
+    if map.is_empty() {
+        return;
+    }
+    match ty {
+        c::TypeExpr::Fun { opts, dom, cod, .. } => {
+            for o in opts {
+                qualify_prod(&mut o.ty, map);
+            }
+            qualify_prod(dom, map);
+            qualify_ty(cod, map);
+        }
+        c::TypeExpr::Atom(prod) => qualify_prod(prod, map),
+        c::TypeExpr::OptRowFun { opt_dom, dom, cod, .. } => {
+            for e in &mut opt_dom.entries {
+                qualify_ty(&mut e.ty.0, map);
+            }
+            qualify_prod(dom, map);
+            qualify_ty(cod, map);
+        }
+    }
+}
+
+fn qualify_prod(p: &mut c::TypeProd, map: &HashMap<String, String>) {
+    qualify_app(&mut p.first, map);
+    for s in &mut p.rest {
+        qualify_app(&mut s.ty, map);
+    }
+}
+
+fn qualify_app(a: &mut c::TypeApp, map: &HashMap<String, String>) {
+    qualify_atom(&mut a.head, map);
+    for at in &mut a.rest {
+        qualify_atom(at, map);
+    }
+}
+
+fn qualify_atom(at: &mut c::TypeAtom, map: &HashMap<String, String>) {
+    match at {
+        c::TypeAtom::Name(n) => {
+            if let Some(q) = map.get(&n.name) {
+                n.name = q.clone();
+            }
+        }
+        c::TypeAtom::Paren { inner, .. } => qualify_ty(&mut inner.0, map),
+        c::TypeAtom::Record { fields, .. } => {
+            for f in fields {
+                qualify_ty(&mut f.ty.0, map);
+            }
+        }
+        c::TypeAtom::RecordOpen { inner, .. } => {
+            for f in &mut inner.fields {
+                qualify_ty(&mut f.ty.0, map);
+            }
+        }
+        c::TypeAtom::Cmd { args, .. } => {
+            for it in args {
+                for l in &mut it.opt_labels {
+                    qualify_ty(&mut l.ty.0, map);
+                }
+                qualify_ty(&mut it.ty.0, map);
+            }
+        }
+        c::TypeAtom::Var(_) | c::TypeAtom::NameMod(_) => {}
     }
 }
 
@@ -378,6 +494,7 @@ pub fn elaborate_program_with_versions(
         &mut type_decls,
         &mut synonym_decls,
         v006_indices,
+        &HashMap::new(),
     )?;
     // `final_scope` (mod_path `[]`) already IS `prelude_scope` plus every
     // top-level name — including each one's `Scope::optional_arity` entry,
@@ -518,12 +635,24 @@ fn export_alias(
     running: &mut Scope,
     exported: &mut Vec<String>,
 ) {
-    running.insert_with_shape(&local, shape.clone());
     if mod_path.is_empty() {
+        running.insert_with_shape(&local, shape);
         exported.push(local);
     } else {
+        // Same anti-leak scheme as `push_named_binding`: the `let-rec` value
+        // is bound under a MANGLED key (`$M.local` — `rec_bindings` uses the
+        // same key), the qualified alias points at it, and a bare sibling
+        // reference is redirected there via `Scope::rename`. Binding the value
+        // under the bare `local` (the old behavior) leaked it into the flat
+        // program scope, silently shadowing a primitive or another module's
+        // same-named binding for everything after this module — e.g.
+        // satysfi-base's `Float.round : float -> float` shadowing the builtin
+        // `round : float -> int`.
         let qual = qualify_key(mod_path, &local);
-        bindings.push(Binding::Let(qual.clone(), Ast::Var(local, Span::default())));
+        let mangled = format!("${qual}");
+        bindings.push(Binding::Let(qual.clone(), Ast::Var(mangled.clone(), Span::default())));
+        running.insert_with_shape(&local, shape.clone());
+        running.rename(&local, &mangled);
         running.insert_with_shape(&qual, shape);
         exported.push(qual);
     }
@@ -592,6 +721,11 @@ fn push_named_binding(
     } else {
         let qual = qualify_key(mod_path, &local);
         let mangled = format!("${qual}");
+        // Mark the member's own RHS as belonging to `mod_path`, so a bare
+        // constructor reference inside it resolves against this module's
+        // constructors first (see `Ast::ModuleScope`). Transparent to eval /
+        // type inference otherwise.
+        let value = Ast::ModuleScope(mod_path.to_vec(), Box::new(value));
         bindings.push(make_binding(mangled.clone(), value));
         bindings.push(Binding::Let(qual.clone(), Ast::Var(mangled.clone(), Span::default())));
         running.insert_with_shape(&local, shape.clone());
@@ -679,10 +813,27 @@ fn walk_bindings(
     type_decls: &mut Vec<UserTypeDecl>,
     synonym_decls: &mut Vec<UserSynonymDecl>,
     v006_indices: &HashSet<usize>,
+    tymap: &HashMap<String, String>,
 ) -> Result<(Vec<Binding>, Vec<String>, Scope), ElabError> {
     let mut bindings: Vec<Binding> = Vec::new();
     let mut running = scope.clone();
     let mut exported: Vec<String> = Vec::new();
+    // Module-local type-name qualification map (bare -> `M.t`). A no-op at the
+    // top level (`mod_path` empty) — the golden fast path. Pre-scan ALL of this
+    // level's `type` decls first so mutual/forward references (`type 'a state
+    // = … and 'a u = ('a state) …`) resolve.
+    let mut level_tymap = tymap.clone();
+    if !mod_path.is_empty() {
+        for top in items {
+            if let cst::TopBinding::Type(decl) = top {
+                for n in std::iter::once(&decl.name).chain(decl.ands.iter().map(|a| &a.name)) {
+                    if !n.name.contains('.') {
+                        level_tymap.insert(n.name.clone(), qualify_key(mod_path, &n.name));
+                    }
+                }
+            }
+        }
+    }
     for (item_idx, top) in items.iter().enumerate() {
         // Slice X2a: is THIS top-level item (and everything nested inside
         // it, e.g. a `module .. = struct .. end`'s own decls — see the
@@ -721,10 +872,56 @@ fn walk_bindings(
                     &mut exported,
                 );
             }
+            cst::TopBinding::LetPattern { pat, value, .. } => {
+                // Destructuring `let pat = value` at struct/top level (the
+                // binding twin of `Expr::LetPatternIn`): evaluate `value` ONCE
+                // under a hidden internal name, then bind each pattern
+                // variable to `match hidden with pat -> var` — so every name
+                // is a normal (module-qualifiable) member. `%`-prefixed names
+                // are internal-only and never exported.
+                let value_ast = expr(value, &running)?;
+                let value_ast = maybe_v006_scope(value_ast, this_v006);
+                let lowered_pat = pattern(pat)?;
+                let mut names = Vec::new();
+                collect_pattern_names(&lowered_pat, &mut names);
+                let hidden = format!("%patbind.{}.{}", mod_path.join("."), item_idx);
+                let scrut = if mod_path.is_empty() {
+                    value_ast
+                } else {
+                    Ast::ModuleScope(mod_path.to_vec(), Box::new(value_ast))
+                };
+                bindings.push(Binding::Let(hidden.clone(), scrut));
+                running.insert_with_shape(&hidden, Vec::new());
+                for n in &names {
+                    let extract = Ast::Match(
+                        Box::new(Ast::Var(hidden.clone(), Span::default())),
+                        vec![MatchArm {
+                            pat: lowered_pat.clone(),
+                            guard: None,
+                            body: Ast::Var(n.clone(), Span::default()),
+                        }],
+                    );
+                    push_named_binding(
+                        mod_path,
+                        n.clone(),
+                        extract,
+                        Vec::new(),
+                        Binding::Let,
+                        &mut bindings,
+                        &mut running,
+                        &mut exported,
+                    );
+                }
+            }
             cst::TopBinding::LetRec { first, ands, .. } => {
-                let (recs, rec_scope) = rec_bindings(first, ands, &running)?;
+                let (recs, rec_scope) = rec_bindings(first, ands, &running, mod_path)?;
                 running = rec_scope;
-                let names: Vec<String> = recs.iter().map(|(n, _)| n.clone()).collect();
+                // BARE clause names (for `export_alias`) — the `recs` keys are
+                // now MANGLED inside a module, so derive names from the source.
+                let names: Vec<String> = std::iter::once(&first.name.name)
+                    .chain(ands.iter().map(|a| &a.binding.name.name))
+                    .cloned()
+                    .collect();
                 // Slice X2a: RHS granularity — wrap EACH recursive clause's
                 // own body individually (not the `LetRecIn` node as a
                 // whole), matching `elaborate_program_with_versions`'s doc
@@ -743,6 +940,23 @@ fn walk_bindings(
                         .collect()
                 } else {
                     recs
+                };
+                // Mark each clause body as belonging to `mod_path` (ctor
+                // scoping — see `Ast::ModuleScope`); a no-op at top level.
+                let recs: Vec<(String, Rc<Ast>)> = if mod_path.is_empty() {
+                    recs
+                } else {
+                    recs.into_iter()
+                        .map(|(n, body)| {
+                            (
+                                n,
+                                Rc::new(Ast::ModuleScope(
+                                    mod_path.to_vec(),
+                                    Box::new((*body).clone()),
+                                )),
+                            )
+                        })
+                        .collect()
                 };
                 bindings.push(Binding::LetRec(recs));
                 for n in names {
@@ -813,10 +1027,14 @@ fn walk_bindings(
             // shape. They are still surfaced (unqualified — variant types
             // are nominal by name only, see `UserTypeDecl`; synonyms the
             // same way, see `UserSynonymDecl`) for the typechecker.
-            cst::TopBinding::Type(decl) => match lower_type_decl(decl) {
-                LoweredTypeDecl::Variant(v) => type_decls.push(v),
-                LoweredTypeDecl::Synonym(s) => synonym_decls.push(s),
-            },
+            cst::TopBinding::Type(decl) => {
+                for lowered in lower_type_decl(decl, mod_path, &level_tymap) {
+                    match lowered {
+                        LoweredTypeDecl::Variant(v) => type_decls.push(v),
+                        LoweredTypeDecl::Synonym(s) => synonym_decls.push(s),
+                    }
+                }
+            }
             cst::TopBinding::LetMutable { name, value, .. } => {
                 let value_ast = expr(value, &running)?;
                 let value_ast = maybe_v006_scope(value_ast, this_v006);
@@ -868,6 +1086,7 @@ fn walk_bindings(
                     type_decls,
                     synonym_decls,
                     &inner_v006,
+                    &level_tymap,
                 )?;
                 // A module's own bare (unqualified) member names never leak
                 // past this `end`: `push_named_binding` (used by every
@@ -882,8 +1101,26 @@ fn walk_bindings(
                 // `LetRecIn`/`LetMutableIn` nodes, not ones nested inside a
                 // wrapper sub-expression).
                 bindings.extend(inner_bindings);
+                // The enclosing context's own module prefix (`Outer.` when
+                // this whole `walk_bindings` is elaborating `module Outer`'s
+                // body). Used to also expose each nested member under its
+                // ENCLOSING-relative name so a sibling's `Inner.double`
+                // reference resolves (a nested module `N` inside `M` binds its
+                // members as `M.N.x`, but a sibling writes `N.x`).
+                let self_prefix = if mod_path.is_empty() {
+                    String::new()
+                } else {
+                    format!("{}.", mod_path.join("."))
+                };
                 for q in &inner_exported {
-                    running.insert_with_shape(q, inner_running.optional_shape(q).to_vec());
+                    let shape = inner_running.optional_shape(q).to_vec();
+                    running.insert_with_shape(q, shape.clone());
+                    if !self_prefix.is_empty() {
+                        if let Some(rel) = q.strip_prefix(&self_prefix) {
+                            running.insert_with_shape(rel, shape);
+                            running.rename(rel, q);
+                        }
+                    }
                 }
                 if let Some(sig_annot) = sig {
                     for item in &sig_annot.items {
@@ -927,6 +1164,24 @@ fn walk_bindings(
                     // under its bare suffix locally; it doesn't itself mint
                     // a new qualified name, so nothing goes into `exported`
                     // here.
+                }
+                // Also overlay the opened module's DIRECT type members so a
+                // later bare reference to one resolves to its qualified name
+                // (the type analog of the value re-exposure above). Only
+                // direct members (`M.t`, never `M.N.t`), mirroring the value
+                // `names_with_prefix` rule; the module is already fully walked
+                // (`open` names an earlier module), so `type_decls`/
+                // `synonym_decls` hold its qualified entries.
+                for q in type_decls
+                    .iter()
+                    .map(|d| &d.name)
+                    .chain(synonym_decls.iter().map(|s| &s.name))
+                {
+                    if let Some(suffix) = q.strip_prefix(&prefix) {
+                        if !suffix.contains('.') {
+                            level_tymap.insert(suffix.to_string(), q.clone());
+                        }
+                    }
                 }
             }
         }
@@ -1080,6 +1335,7 @@ fn rec_bindings(
     first: &c::RecBinding,
     ands: &[c::AndBinding],
     scope: &Scope,
+    mod_path: &[String],
 ) -> Result<(Vec<(String, Rc<Ast>)>, Scope), ElabError> {
     let all: Vec<&c::RecBinding> = std::iter::once(first)
         .chain(ands.iter().map(|a| &a.binding))
@@ -1088,10 +1344,27 @@ fn rec_bindings(
     for rb in &all {
         rec_scope = rec_scope.with(&rb.name.name);
     }
+    // Inside a `module M = struct .. end`, bind each clause under a MANGLED key
+    // (`$M.name`) and redirect its (self/mutual/sibling) bare references there,
+    // so the recursive value never leaks into the flat program scope under its
+    // bare name (see `export_alias`). A top-level (`mod_path` empty) `let-rec`
+    // keeps bare keys — the golden fast path.
+    let key_of = |name: &str| -> String {
+        if mod_path.is_empty() {
+            name.to_string()
+        } else {
+            format!("${}", qualify_key(mod_path, name))
+        }
+    };
+    if !mod_path.is_empty() {
+        for rb in &all {
+            rec_scope.rename(&rb.name.name, &key_of(&rb.name.name));
+        }
+    }
     let mut bindings = Vec::with_capacity(all.len());
     for rb in all {
         let value_ast = rec_clause_value(&rb.params, &rb.value, &rb.extra, &rec_scope)?;
-        bindings.push((rb.name.name.clone(), Rc::new(value_ast)));
+        bindings.push((key_of(&rb.name.name), Rc::new(value_ast)));
     }
     Ok((bindings, rec_scope))
 }
@@ -1447,7 +1720,7 @@ fn expr(e: &c::Expr, scope: &Scope) -> Result<Ast, ElabError> {
         c::Expr::LetRecIn {
             first, ands, body, ..
         } => {
-            let (bindings, rec_scope) = rec_bindings(first, ands, scope)?;
+            let (bindings, rec_scope) = rec_bindings(first, ands, scope, &[])?;
             let body_ast = expr(body, &rec_scope)?;
             Ok(Ast::LetRecIn(bindings, Box::new(body_ast)))
         }
@@ -1790,6 +2063,31 @@ fn climb(
 // ---- application chains --------------------------------------------------
 
 fn app_expr(a: &c::AppExpr, scope: &Scope) -> Result<Ast, ElabError> {
+    // `not` binds looser than application (upstream `nxbot: NOT nxbot` in
+    // parser.mly): `not f x` means `not (f x)`, NOT `(not f) x`. This port's
+    // lexer deliberately leaves `not` an ordinary identifier (so it can still
+    // be passed first-class in ARGUMENT position — e.g. `List.map not xs`),
+    // so we recognise the logical-negation form only in HEAD position with at
+    // least one argument: re-fold the arguments into a single inner
+    // application and apply the `not` primitive to it. A bare `not` (no args)
+    // or a `not` sitting in argument position keeps resolving to the `not`
+    // primitive as an ordinary value, exactly as before.
+    if a.minus.is_none()
+        && a.excl.is_none()
+        && a.head_accesses.is_empty()
+        && !a.args.is_empty()
+    {
+        if let c::Atomic::Var(v) = &a.head {
+            if v.name == "not" && scope.contains("not") && scope.resolve("not") == "not" {
+                let not_fn = scoped_var("not", v.span, scope)?;
+                let mut inner = app_arg_to_ast(&a.args[0], scope)?;
+                for rest in &a.args[1..] {
+                    inner = apply_one_arg(inner, rest, scope)?;
+                }
+                return Ok(Ast::Apply(Box::new(not_fn), Box::new(inner)));
+            }
+        }
+    }
     let ast = if a.excl.is_none() && a.head_accesses.is_empty() {
         if let c::Atomic::Ctor(ctor) = &a.head {
             // A constructor head: the first argument (if any) is its payload
@@ -2077,7 +2375,16 @@ fn open_module(
     let mut ast = body_ast;
     for q in matches.into_iter().rev() {
         let suffix = q[prefix.len()..].to_string();
-        ast = Ast::LetIn(suffix, Box::new(Ast::Var(q, name_span)), Box::new(ast));
+        // `q` may itself be a `Scope::rename` alias rather than a real binding
+        // key: for a NESTED module opened from a sibling (`Score.(…)` inside
+        // `module FssFontSelection`, where `Score`'s members are bound under
+        // the fully-qualified `FssFontSelection.Score.<`), the prefix-matched
+        // name `Score.<` is only a relative alias registered by
+        // `walk_bindings`. Resolve it to the actual Ast key so the emitted
+        // `Var` refers to a binding that exists. For a top-level module the
+        // rename is identity, so this is a no-op there.
+        let key = scope.resolve(&q);
+        ast = Ast::LetIn(suffix, Box::new(Ast::Var(key, name_span)), Box::new(ast));
     }
     Ok(ast)
 }
@@ -2390,11 +2697,10 @@ fn inline_elems(elems: &[c::InlineElem], scope: &Scope) -> Result<Vec<IText>, El
                 if !scope.contains(&key) {
                     return err(span, format!("unbound inline command '{key}'"));
                 }
-                let leading = scope.optional_arity(&key);
                 out.push(IText::Cmd {
                     name: scope.resolve(&key),
                     span,
-                    args: cmd_args(tail, scope, leading)?,
+                    args: cmd_args(tail, scope, scope.optional_shape(&key))?,
                 });
             }
             c::InlineElem::Embed { var, .. } => {
@@ -2451,11 +2757,10 @@ fn block_elems(elems: &[c::BlockElem], scope: &Scope) -> Result<Vec<BText>, Elab
                 if !scope.contains(&key) {
                     return err(span, format!("unbound block command '{key}'"));
                 }
-                let leading = scope.optional_arity(&key);
                 out.push(BText::Cmd {
                     name: scope.resolve(&key),
                     span,
-                    args: cmd_args(tail, scope, leading)?,
+                    args: cmd_args(tail, scope, scope.optional_shape(&key))?,
                 });
             }
             c::BlockElem::Embed { var, .. } => {
@@ -2488,7 +2793,7 @@ fn block_elems(elems: &[c::BlockElem], scope: &Scope) -> Result<Vec<BText>, Elab
 /// (`param_optional_shape` only marks `Param::Optional` positions, and
 /// `Scope::optional_arity` only ever reads the *leading* run of such
 /// positions) — so the two mechanisms never interact.
-fn cmd_args(tail: &c::CmdTail, scope: &Scope, leading: usize) -> Result<Vec<CmdArg>, ElabError> {
+fn cmd_args(tail: &c::CmdTail, scope: &Scope, shape: &[bool]) -> Result<Vec<CmdArg>, ElabError> {
     let args: Vec<&c::AppArg> = match tail {
         c::CmdTail::Semi(_) => Vec::new(),
         c::CmdTail::Args { first, rest, .. } => {
@@ -2500,26 +2805,41 @@ fn cmd_args(tail: &c::CmdTail, scope: &Scope, leading: usize) -> Result<Vec<CmdA
             v
         }
     };
-    let mut out = Vec::with_capacity(args.len().max(leading));
+    // Marker-less optional-argument defaulting, position by position against
+    // the command's declared `Param` shape (`Scope::optional_shape`) — the
+    // command-argument twin of `app_chain_generic`. At a declared OPTIONAL
+    // slot an explicit `?:e`/`?*` is consumed; anything else (a bare
+    // positional, or no argument left) synthesizes a `None` WITHOUT consuming,
+    // and the same argument is re-examined at the next slot — so an optional
+    // ANYWHERE in the list auto-omits, not just a leading run (e.g.
+    // `enumitem`'s `+item : [cfg?; inline-text; cfg?; block-text]`, whose
+    // second optional sits after a mandatory argument). A command's arity is
+    // fixed by its declared type, so a trailing omitted optional IS filled
+    // with `None` (unlike `app_chain_generic`, which may curry and so stops).
+    let mut out = Vec::with_capacity(args.len().max(shape.len()));
     let mut args_iter = args.into_iter().peekable();
-    let mut supplied = 0;
-    while supplied < leading {
-        match args_iter.peek() {
-            Some(c::AppArg::Optional { .. }) | Some(c::AppArg::Omission(_)) => {
-                out.push(CmdArg {
+    let mut pos = 0usize;
+    while pos < shape.len() {
+        if shape[pos] {
+            match args_iter.peek() {
+                Some(c::AppArg::Optional { .. }) | Some(c::AppArg::Omission(_)) => {
+                    out.push(CmdArg {
+                        opts: Vec::new(),
+                        arg: app_arg_to_ast(args_iter.next().unwrap(), scope)?,
+                    });
+                }
+                _ => out.push(CmdArg {
                     opts: Vec::new(),
-                    arg: app_arg_to_ast(args_iter.next().unwrap(), scope)?,
-                });
-                supplied += 1;
+                    arg: Ast::Ctor("None".to_string(), None),
+                }),
             }
-            _ => break,
+        } else {
+            match args_iter.next() {
+                Some(a) => out.push(cmd_arg_to_ast(a, scope)?),
+                None => break,
+            }
         }
-    }
-    for _ in supplied..leading {
-        out.push(CmdArg {
-            opts: Vec::new(),
-            arg: Ast::Ctor("None".to_string(), None),
-        });
+        pos += 1;
     }
     for a in args_iter {
         out.push(cmd_arg_to_ast(a, scope)?);

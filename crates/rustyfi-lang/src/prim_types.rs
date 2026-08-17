@@ -813,6 +813,20 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
         "string-sub" => poly0(arrows(vec![t_string(), t_int(), t_int()], t_string())),
         // vminst.ml:2212 `PrimitiveStringExplode`: `~% (tS @-> (tL tI))`.
         "string-explode" => poly0(arrow(t_string(), list(t_int()))),
+        // `regexp-of-string : string -> regexp` / `string-match : regexp ->
+        // string -> bool` (vminst.ml `PrimitiveRegExpOfString`/
+        // `PrimitiveStringMatch`). The port models `regexp` as its underlying
+        // pattern `string` (see `primitives.rs`); `satysfi-base`'s `char.satyg`
+        // only ever builds character-class patterns (`[0-9]`, `[A-Za-z]`, …).
+        "regexp-of-string" => poly0(arrow(t_string(), t_string())),
+        "string-match" => poly0(arrows(vec![t_string(), t_string()], t_bool())),
+        // `split-on-regexp : regexp -> string -> (int * string) list`
+        // (vminst.ml `PrimitiveSplitOnRegExp`) — split points paired with the
+        // segment between them (`satysfi-base`/figbox split a path on `\.`).
+        "split-on-regexp" => poly0(arrows(
+            vec![t_string(), t_string()],
+            list(product(vec![t_int(), t_string()])),
+        )),
 
         // ---- list cons ----
         // primitives.cppo.ml:547: `ptycons = ~% ((~@ tv2) @-> (tL (~@ tv2))
@@ -1639,6 +1653,25 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
         // line breaker is a `docs/plans/text-rendering.md` follow-on.
         "set-space-ratio" => poly0(arrows(
             vec![t_float(), t_float(), t_float(), t_context()],
+            t_context(),
+        )),
+        // vminst.ml `PrimitiveSetSpaceRatioBetweenScripts`:
+        // `float -> float -> float -> script -> script -> context -> context`
+        // (natural, shrink, stretch, then the two adjacent scripts). Used by
+        // slydifi's arctic theme. STAND-IN store — this port has no
+        // script-aware line breaking and inserts no inter-script glue (see
+        // `primitives.rs`'s `get-leftmost-script`), so there is nothing to
+        // tune; slydifi only calls it with `0. 0. 0.` to SUPPRESS that glue,
+        // which the port already does, so the observable output matches.
+        "set-space-ratio-between-scripts" => poly0(arrows(
+            vec![
+                t_float(),
+                t_float(),
+                t_float(),
+                t_script(),
+                t_script(),
+                t_context(),
+            ],
             t_context(),
         )),
         // vminst.ml:2269 `PrimitiveSplitIntoLines`:

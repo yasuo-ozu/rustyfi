@@ -637,6 +637,9 @@ impl<'b> Compiler<'b> {
                 self.current_version = prev;
                 c
             }
+            // Ctor-scoping marker — transparent to compilation (typecheck runs
+            // on the uncompiled body; see `Ast::ModuleScope`).
+            Ast::ModuleScope(_, body) => self.compile(body),
         }
     }
 }

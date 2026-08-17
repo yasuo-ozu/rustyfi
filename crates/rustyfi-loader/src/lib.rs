@@ -496,9 +496,16 @@ fn load_legacy(entry: &Path, opts: &LoadOptions) -> Result<LoadedProgram, LoadEr
         cst_of.insert(id, cst);
     }
 
-    let order = graph::toposort(&adjacency).map_err(|chain_ids| LoadError::Cycle {
-        chain: graph::chain_to_paths(&chain_ids, &path_of),
-    })?;
+    // SATySFi's own deterministic header-order post-order DFS (from the entry
+    // document), NOT a generic topological sort: the global-merge module model
+    // lets a library reference a module it never `@require:`s itself, so the
+    // order must match the one the sources were written against — a file that
+    // `@require:`s `option` before `fss/fss` must have `Option` in scope for
+    // `fss`'s internals. See `graph::header_order_toposort`.
+    let order =
+        graph::header_order_toposort(&adjacency, entry_id).map_err(|chain_ids| LoadError::Cycle {
+            chain: graph::chain_to_paths(&chain_ids, &path_of),
+        })?;
 
     let files = order
         .into_iter()

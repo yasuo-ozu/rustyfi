@@ -46,6 +46,14 @@ fn int(src: &str) -> i64 {
     }
 }
 
+fn boolean(src: &str) -> bool {
+    match eval_str(src) {
+        Ok(Value::Bool(b)) => b,
+        Ok(other) => panic!("{src:?} evaluated to {other:?}, not a bool"),
+        Err(e) => panic!("{src:?} failed to parse/typecheck/evaluate: {e}"),
+    }
+}
+
 // ---- `let ( op ) = ..` / `let ( op ) param* = ..` -------------------------
 
 #[test]
@@ -110,4 +118,46 @@ fn module_sig_val_paren_op_parses_with_unresolved_type_name() {
     let src = "module M : sig val (-->) : t -> t -> t end = struct \
         let (-->) a b = a end";
     rustyfi_syntax::parse_file(src).expect("the parenthesized-operator sig/struct form should parse");
+}
+
+// ---- `not` binds looser than application (real-world compat round 4) ------
+
+#[test]
+fn not_binds_looser_than_application() {
+    // Upstream `not f x` is `not (f x)`, NOT `(not f) x` (which would apply
+    // `not` to a function value and fail to typecheck). The blocker case was
+    // `satysfi-xpath`'s `util.satyh`: `not float-zero-or-nan (a +. 1.)`.
+    // `id true` is `true`, so `not id true` must be `not (id true)` = `false`.
+    let src = "let id = fun b -> b in not id true";
+    assert!(!boolean(src), "`not id true` must fold as `not (id true)`");
+}
+
+#[test]
+fn not_still_first_class_in_argument_position() {
+    // The looser-binding rule only fires when `not` is the HEAD of an
+    // application; a `not` sitting in ARGUMENT position stays the ordinary
+    // `not` primitive value, so it can still be passed to a higher-order
+    // function. `apply not true` = `not true` = `false`.
+    let src = "let apply = fun f x -> f x in apply not true";
+    assert!(!boolean(src), "`not` in argument position must stay first-class");
+}
+
+// ---- nested-module operator via local-open (real-world compat round 4) ----
+
+#[test]
+fn nested_module_operator_local_open() {
+    // `satysfi-fss`'s `fss/font/selection.satyg`: a nested `module Inner`
+    // whose members (including an operator `(<)`) are bound under the fully-
+    // qualified `Outer.Inner.<`, referenced from a sibling via a local-open
+    // `Inner.(z < z)`. `open_module` must resolve the relative alias
+    // `Inner.<` to its actual qualified binding key, or the overlaid `<`
+    // reaches the typechecker unbound.
+    let src = "module Outer : sig val run : int end = struct \
+        module Inner : sig val (<) : int -> int -> bool val z : int end = struct \
+            let (<) a b = true \
+            let z = 5 \
+        end \
+        let run = if Inner.(z < z) then 1 else 2 \
+    end in Outer.run";
+    assert_eq!(int(src), 1);
 }

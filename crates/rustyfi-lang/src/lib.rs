@@ -915,6 +915,13 @@ fn walk_top_binding(tb: &rustyfi_syntax::cst::TopBinding, scope: &mut XverScope,
             scope.truncate_to(mark);
             scope.push_value(&tl.name.name);
         }
+        TopBinding::LetPattern { value, .. } => {
+            // Destructuring `let pat = value`: only the scrutinee references
+            // free globals. The pattern-bound names become new bindings; not
+            // pushing them here is sound (this walk over-approximates the free
+            // set — see the module banner).
+            walk_expr(value, scope, out);
+        }
         TopBinding::LetInline { ctx, cmd, params, value, .. } => {
             let mark = scope.mark();
             if let Some(c) = ctx {
@@ -1088,8 +1095,19 @@ fn walk_patbot_binder(pb: &rustyfi_syntax::cst::ast::PatBot, scope: &mut XverSco
 }
 
 fn walk_type_decl(td: &rustyfi_syntax::cst::TypeDecl, scope: &mut XverScope, out: &mut FreeGlobals) {
+    walk_type_decl_body(&td.body, scope, out);
+    for a in &td.ands {
+        walk_type_decl_body(&a.body, scope, out);
+    }
+}
+
+fn walk_type_decl_body(
+    body: &rustyfi_syntax::cst::TypeDeclBody,
+    scope: &mut XverScope,
+    out: &mut FreeGlobals,
+) {
     use rustyfi_syntax::cst::TypeDeclBody;
-    match &td.body {
+    match body {
         TypeDeclBody::Variant { first, rest, .. } => {
             walk_variant_def(first, scope, out);
             for bv in rest {

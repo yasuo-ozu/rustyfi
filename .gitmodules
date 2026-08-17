@@ -16,3 +16,18 @@
 [submodule "docs-corpus/the-satysfibook"]
 	path = docs-corpus/the-satysfibook
 	url = https://github.com/gfngfn/the_satysfibook.git
+[submodule "docs-corpus/latexcmds"]
+	path = docs-corpus/latexcmds
+	url = https://github.com/yasuo-ozu/satysfi-latexcmds.git
+[submodule "docs-corpus/xpath"]
+	path = docs-corpus/xpath
+	url = https://github.com/yasuo-ozu/satysfi-xpath.git
+[submodule "docs-corpus/gakushin"]
+	path = docs-corpus/gakushin
+	url = https://github.com/yasuo-ozu/gakushin-satysfi.git
+[submodule "docs-corpus/railway"]
+	path = docs-corpus/railway
+	url = https://github.com/monaqa/satysfi-railway.git
+[submodule "docs-corpus/fss"]
+	path = docs-corpus/fss
+	url = https://github.com/na4zagin3/satysfi-fss.git

@@ -498,7 +498,11 @@ fn encode_glyph_run(
 ) -> Result<Vec<u8>, PdfError> {
     let mut out = Vec::with_capacity(text.len() * 2);
     for c in text.chars() {
-        let gid = face.glyph_index(c).ok_or(PdfError::NoGlyph(c))?;
+        // A character the face doesn't cover degrades to `.notdef` (gid 0)
+        // rather than aborting the whole PDF — matching `measure_run`'s
+        // half-em placeholder box. (Uncovered glyphs like `□`/`〚` in
+        // satysfi-base docs; faithful per-glyph font-fallback is future work.)
+        let gid = face.glyph_index(c).unwrap_or(GlyphId(0));
         usage.glyphs.entry(gid.0).or_insert(c);
         let cid = remap.and_then(|r| r.get(gid.0)).unwrap_or(gid.0);
         out.extend_from_slice(&cid.to_be_bytes());

@@ -561,6 +561,7 @@ fn lower_bind_v1<'s>(
             Ok(vec![cst::TopBinding::Let(cst::TopLet {
                 let_kw: KwLet(kw.0),
                 name: name.clone(),
+                ascription: None,
                 params: ps,
                 eq: eq.clone(),
                 value,
@@ -947,6 +948,7 @@ fn alias_member_decls(
         out.push(cst::StructDecl(Box::new(cst::TopBinding::Let(cst::TopLet {
             let_kw: KwLet(span),
             name: cst::BindName::from(var_tok(x, span)),
+            ascription: None,
             params: Vec::new(),
             eq: DefEqTok(span),
             value: target_ref,
@@ -994,6 +996,7 @@ fn alias_member_decls(
             name: var_tok(&qualify_type_key(alias_path, tname), span),
             eq: DefEqTok(span),
             body: cst::TypeDeclBody::Synonym(ty),
+            ands: Vec::new(),
         }))));
     }
     for (qname, child) in &surface.mods {
@@ -1087,6 +1090,9 @@ fn lower_type_single(
             },
             cst_v1::TypeBodyV1::Synonym(ty) => cst::TypeDeclBody::Synonym(lower_type_expr(ty, tyenv)?),
         },
+        // 0.1's `type … and …` chain is lowered to CONSECUTIVE 0.0.6
+        // `TopBinding::Type`s (one per clause), so each carries no own `and`.
+        ands: Vec::new(),
     }))
 }
 
@@ -1760,6 +1766,7 @@ fn lower_expr(e: &ast_v1::Expr) -> Result<cst::ast::Expr, LowerError> {
             Ok(cst::ast::Expr::LetIn {
                 kw: kw.clone(),
                 name: name.clone(),
+                ascription: None,
                 params: ps,
                 eq: eq.clone(),
                 value: Box::new(value_expr),

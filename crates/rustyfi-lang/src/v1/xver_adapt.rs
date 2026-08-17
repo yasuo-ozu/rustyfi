@@ -494,6 +494,9 @@ fn relabel_top_binding_types(
     match &mut tb {
         cst::TopBinding::Type(td) => {
             relabel_type_decl_body(&mut td.body, from, to)?;
+            for a in td.ands.iter_mut() {
+                relabel_type_decl_body(&mut a.body, from, to)?;
+            }
         }
         cst::TopBinding::Module { decls, .. } => {
             for d in decls.iter_mut() {

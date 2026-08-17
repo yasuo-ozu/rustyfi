@@ -361,8 +361,10 @@ fn primitive_names_are_cross_checked_against_primitives_source() {
     let src = include_str!("../src/primitives.rs");
     assert_eq!(
         typecheck::PRIMITIVE_NAMES.len(),
-        202,
-        "keep this in sync with primitives.rs's prims! table and \
+        208,
+        "real-world-compat round 6 added 3: regexp-of-string, string-match, \
+         split-on-regexp (satysfi-base char.satyg / figbox). keep this in sync \
+         with primitives.rs's prims! table and \
          types_unify.rs's every_registered_primitive_has_a_type test \
          (math-split spec §2.2 added 8: read-math, stringify-math, \
          set-math-char, set-math-char-class, get-math-char-class, \

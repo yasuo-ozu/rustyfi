@@ -60,23 +60,23 @@ jobs:
         working-directory: rustyfi-rust-converted
         run: cargo test --workspace
 
-  image-diff:
-    name: "PDF image-diff (visual regression)"
-    # `runs-on: ubuntu-latest` (a rolling image) pins poppler+freetype only
-    # as tightly as GitHub's `ubuntu-latest` label does; the goldens under
-    # crates/rustyfi-cli/tests/golden_images/ were authored against
-    # `pdftoppm version 25.10.0` (docs/plans/design-pdf-image-diff-ci.md
-    # §4/§6's poppler-pinning discipline). The `pdftoppm -v` step below logs
-    # the actual version on every run so a runner-image poppler bump shows
-    # up as a visible, deliberate line in the job log rather than a mystery
-    # flake; if drift ever bites, the documented escape hatch is pinning a
-    # `container:` image on this job instead of `runs-on`.
+  layout-fidelity:
+    name: "Layout fidelity (vs upstream SATySFi)"
+    # Rebuilds every corpus document with the port and compares its PDF LAYOUT
+    # (word bounding boxes via poppler `pdftotext`) against the upstream-built
+    # reference PDF each docs-corpus submodule ships — see
+    # docs/plans/design-layout-fidelity.md. `pdftotext -v` is logged so a
+    # runner-image poppler bump is a visible line, not a mystery flake.
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout this project
+      - name: Checkout this project (with corpus submodules)
         uses: actions/checkout@v4
         with:
           path: rustyfi-rust-converted
+          # The corpus documents AND their upstream reference PDFs live in the
+          # docs-corpus/* submodules (incl. railway + fss, deps of slydifi /
+          # gakushin), so this job needs them checked out.
+          submodules: recursive
       - name: Checkout syan (path dependency) as ../syan2-ergo
         uses: actions/checkout@v4
         with:
@@ -89,29 +89,24 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: rustyfi-rust-converted
-      # 1. pin poppler (as tightly as the runner image allows) — the goldens
-      #    were authored against THIS version; the next step logs it.
-      - name: Install poppler-utils (pdftoppm)
+      # poppler `pdftotext` extracts the per-word bounding boxes we compare.
+      - name: Install poppler-utils (pdftotext)
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends poppler-utils
-      - name: Log pdftoppm version (goldens are pinned to this)
-        run: pdftoppm -v
-      # 2. fetch the sha1-pinned fonts (network) so the embedded-font
-      #    fixtures (realfont.saty, cjk.saty) run instead of self-skipping —
-      #    unlike the `test` job above, this job needs them.
+      - name: Log pdftotext version
+        run: pdftotext -v
+      # The corpus docs set Japanese text in the bundled IPAex fonts, so the
+      # sha1-pinned fonts must be present (else the port falls back to base-14
+      # and every Japanese run is unencodable).
       - name: Download fonts (scripts/download-fonts.sh)
         working-directory: rustyfi-rust-converted
         run: sh scripts/download-fonts.sh
-      # 3. run ONLY the image-diff test, including its #[ignore]d body.
-      - name: PDF image-diff test
+      # Runs the #[ignore]d layout_fidelity test, which drives
+      # scripts/layout_fidelity.py against the freshly built binary. python3 is
+      # preinstalled on ubuntu-latest. The script self-skips (green) if a
+      # prerequisite is somehow absent.
+      - name: Layout-fidelity test
         working-directory: rustyfi-rust-converted
-        run: cargo test -p rustyfi-cli --test pdf_image_diff -- --ignored --nocapture
-      # 4. on failure, upload actual/diff PNGs for eyeballing.
-      - name: Upload image-diff failure artifacts
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: image-diff-failures
-          path: rustyfi-rust-converted/target/golden_images_out/
+        run: cargo test -p rustyfi-cli --test layout_fidelity -- --ignored --nocapture
 
   corpus:
     name: rustyfi-* corpus regression

@@ -550,6 +550,9 @@ impl<'a> Interp<'a> {
                 self.version = prev;
                 r
             }
+            // Ctor-scoping marker — transparent at runtime (constructor tags
+            // are bare strings; see `Ast::ModuleScope`).
+            Ast::ModuleScope(_, body) => self.eval(env, body),
         }
     }
 

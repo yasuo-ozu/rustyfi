@@ -1,4 +1,6 @@
 /target
+# the standalone design POC builds into its own target/
+/docs/plans/dup-checkpoint-poc/target/
 /scripts/layout_fidelity_corpus/*/*.port.pdf
 /scripts/layout_fidelity_corpus/*/*.satysfi.pdf
 

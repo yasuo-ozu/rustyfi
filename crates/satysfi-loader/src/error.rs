@@ -69,6 +69,72 @@ pub enum LoadError {
         requested: SatysfiVersion,
         supported: Vec<SatysfiVersion>,
     },
+
+    /// `LoadMode::Envelopes` was requested for a version with no `use`
+    /// headers (plan §1.2: the rejected combination). Checked before any file
+    /// is read.
+    #[error(
+        "SATySFi {version} has no `use` headers; `Envelopes` mode requires 0.1 \
+         (drop --deps, or pass --target-version 0.1)"
+    )]
+    InvalidModeVersion { version: SatysfiVersion },
+
+    /// Envelopes mode, Ld3a: a `satysfi-deps.yaml` was supplied but its
+    /// consumption (envelope graph resolution) is not implemented yet.
+    /// Follow-up: Ld3b.
+    #[error(
+        "{path}: satysfi-deps.yaml consumption is not implemented yet (Ld3b); \
+         only `use … of` local dependencies are supported so far"
+    )]
+    DepsConfigUnsupported { path: PathBuf },
+
+    /// `use package Mod` with no deps config to resolve `Mod` against
+    /// (upstream's used_as map is empty). Follow-up: Ld3b.
+    #[error(
+        "{from}: cannot resolve `use package {module}` — no pre-resolved \
+         dependency graph; pass --deps <satysfi-deps.yaml> (package resolution \
+         lands in Ld3b)"
+    )]
+    PackageDependencyUnresolved { module: String, from: PathBuf },
+
+    /// Bare `use Mod` at document/open level (upstream `CannotUseHeaderUse`):
+    /// a document cannot reach into a package's internals by module name.
+    /// Permanent (not a stub): Ld3b's closed resolver handles bare `use` only
+    /// *inside* envelope source trees.
+    #[error(
+        "{from}: bare `use {module}` is only allowed between files inside one \
+         package; a document must say `use package {module}` or `use {module} \
+         of \"<path>\"`"
+    )]
+    BareUseOutsidePackage { module: String, from: PathBuf },
+
+    /// `` use … of `relpath` `` matched no candidate file on disk.
+    #[error(
+        "cannot resolve `use … of `{relpath}`` from {}; searched: {}",
+        .from.display(),
+        format_searched(.searched)
+    )]
+    UnresolvedUseOf {
+        relpath: String,
+        from: PathBuf,
+        searched: Vec<PathBuf>,
+    },
+
+    /// A `use`-family header under Legacy mode (the mode that resolves
+    /// `@require:`/`@import:`). Names the fix.
+    #[error(
+        "{from}: `{header}` requires Envelopes mode (pass --deps, or let a \
+         `use` header pin it); this load ran in Legacy (@require/@import) mode"
+    )]
+    EnvelopeHeaderUnderLegacy { header: String, from: PathBuf },
+
+    /// A Legacy (`@require:`/`@import:`) header under Envelopes mode. Names
+    /// the fix.
+    #[error(
+        "{from}: `{header}` is a Legacy (@require/@import) header; Envelopes \
+         mode resolves `use package` / `use … of` headers only"
+    )]
+    LegacyHeaderUnderEnvelopes { header: String, from: PathBuf },
 }
 
 fn format_versions(versions: &[SatysfiVersion]) -> String {

@@ -186,6 +186,30 @@ impl FromStr for SatysfiVersion {
 ///   ...` document with no headers, which is valid and version-ambiguous in
 ///   0.0.x).
 pub fn sniff_version(src: &str) -> Option<SatysfiVersion> {
+    sniff_headers(src).version
+}
+
+/// What [`sniff_headers`] learned from the header block. `version` is exactly
+/// [`sniff_version`]'s result (Axis A); `envelope_headers` is the Axis-B
+/// signal the plan's detection ladder step 3 needs
+/// (`docs/plans/satysfi-0-1-0-support.md` §1.4: "a `use`-shaped header … pins
+/// Axis B = `LoadMode::Envelopes`"). A `use`-shaped header sets BOTH.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct HeaderSniff {
+    /// The detected target version, if any (`None` = ambiguous/no signal).
+    pub version: Option<SatysfiVersion>,
+    /// Whether a `use`-shaped (Envelopes/Saphe) header was seen. When `true`,
+    /// `version` is also `Some(V0_1)` (a `use` header is a 0.1-only construct).
+    pub envelope_headers: bool,
+}
+
+/// Best-effort detection of a document's target version AND packaging axis
+/// from its source text — see [`sniff_version`]'s doc comment for the
+/// version-detection rules. The one addition: a `use`-shaped header line
+/// ([`is_use_header`]) sets both `version = Some(V0_1)` and
+/// `envelope_headers = true`, so the CLI's detection ladder can pin
+/// `LoadMode::Envelopes` off it (Ld3a).
+pub fn sniff_headers(src: &str) -> HeaderSniff {
     for raw_line in src.lines() {
         let line = match raw_line.find('%') {
             Some(idx) => &raw_line[..idx],
@@ -202,7 +226,10 @@ pub fn sniff_version(src: &str) -> Option<SatysfiVersion> {
         // between v0.0.6 and dev-0-1-0 — see this plan's header intro), so
         // seeing it at all means 0.0.6.
         if line.starts_with("@stage:") {
-            return Some(SatysfiVersion::V0_0_6);
+            return HeaderSniff {
+                version: Some(SatysfiVersion::V0_0_6),
+                envelope_headers: false,
+            };
         }
 
         // `@require:`/`@import:` are *transparent*: byte-identical in both
@@ -217,15 +244,21 @@ pub fn sniff_version(src: &str) -> Option<SatysfiVersion> {
         }
 
         if is_use_header(line) {
-            return Some(SatysfiVersion::V0_1);
+            return HeaderSniff {
+                version: Some(SatysfiVersion::V0_1),
+                envelope_headers: true,
+            };
         }
 
         // First non-blank, non-comment, non-header line: headers are only
         // valid at the top of a file, so inspect this one line for a
         // content-level signal, then stop looking regardless of the result.
-        return sniff_content_line(line);
+        return HeaderSniff {
+            version: sniff_content_line(line),
+            envelope_headers: false,
+        };
     }
-    None
+    HeaderSniff::default()
 }
 
 /// Recognize a `use`-shaped 0.1/Saphe header line: bare `use Ident[.Ident]*`,
@@ -494,5 +527,49 @@ mod tests {
             sniff_version("use Foo\nlet x = 1 in x"),
             Some(SatysfiVersion::V0_1)
         );
+    }
+
+    #[test]
+    fn sniff_headers_reports_envelope_axis() {
+        // A `use`-shaped header pins BOTH axes: version V0_1 and the Axis-B
+        // Envelopes signal.
+        for src in ["use package foo", "use open Foo", "use Foo\nlet x = 1 in x"] {
+            let sniff = sniff_headers(src);
+            assert_eq!(sniff.version, Some(SatysfiVersion::V0_1), "src: {src:?}");
+            assert!(sniff.envelope_headers, "src: {src:?}");
+        }
+    }
+
+    #[test]
+    fn sniff_headers_no_envelope_axis_for_legacy_or_ambiguous() {
+        // `@require:`-only / `val`-head / headerless files never set the
+        // Envelopes signal.
+        for src in [
+            "@require: pervasives\nval x = 1",
+            "@stage: 0\nlet x = 1 in x",
+            "let x = 1 in x",
+            "",
+        ] {
+            assert!(
+                !sniff_headers(src).envelope_headers,
+                "src {src:?} must not pin Envelopes"
+            );
+        }
+    }
+
+    #[test]
+    fn sniff_version_is_a_sniff_headers_wrapper() {
+        // The back-compat wrapper must agree with the struct's `version`
+        // field for every representative input.
+        for src in [
+            "use package foo",
+            "@require: stdlib\nlet x = 1 in x",
+            "@stage: 0\nx",
+            "val f x = x",
+            "let-rec f x = x",
+            "",
+        ] {
+            assert_eq!(sniff_version(src), sniff_headers(src).version, "src: {src:?}");
+        }
     }
 }

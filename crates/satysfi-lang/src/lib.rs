@@ -140,12 +140,15 @@ fn eval_document_trials(
 
 /// Compile a loader-resolved SATySFi 0.1 program (`LoadOptions { version:
 /// V0_1, .. }`): dependency libraries (`files[..n-1]`, loader
-/// dependency-first order) are module-erased to a flat prelude via
+/// dependency-first order) are each lowered to one `TopBinding::Module`
+/// (qualified exports; Sub-slice 2a — see `v1/lower.rs`'s module doc) via
 /// [`v1::lower::lower_file_v1`], the entry (`files[n-1]`, always last —
 /// `LoadedProgram::files`'s contract) via [`v1::lower::lower_document_v1`],
 /// assembled into ONE synthetic `cst::File` — the same shape the CLI's
 /// `merge_program` builds for 0.0.6 — and pushed through the SHARED
 /// elaborate -> typecheck(V0_1) -> compile -> fixpoint-eval pipeline.
+/// Signature ascriptions (`:>`) are enforced per binding by
+/// `v1::module_check::check_program` — Sub-slice 2d-1.
 pub fn compile_document_v1(
     files: &[satysfi_loader::LoadedFile],
     metrics: &dyn FontMetrics,
@@ -176,9 +179,10 @@ pub fn compile_document_v1_with_trials(
             ),
         }
     }
+    let dep_csts: Vec<&satysfi_syntax::cst_v1::FileV1> = deps.iter().map(as_v01).collect();
     let mut prelude = Vec::new();
-    for dep in deps {
-        prelude.extend(v1::lower::lower_file_v1(as_v01(dep))?);
+    for dep in &dep_csts {
+        prelude.extend(v1::lower::lower_file_v1(dep)?);
     }
     let entry_cst = as_v01(entry);
     let body = v1::lower::lower_document_v1(entry_cst)?;
@@ -199,7 +203,7 @@ pub fn compile_document_v1_with_trials(
     let env0 = primitives::base_env_with_version(SatysfiVersion::V0_1);
     let scope = elaborate::Scope::new(env0.names());
     let program = elaborate::elaborate_program(&file, &scope)?;
-    typecheck::typecheck_with_version(&program, SatysfiVersion::V0_1)?;
+    v1::module_check::check_program(&dep_csts, &program)?;
     let compiled = compile::compile_program(&program.body, &env0);
     eval_document_trials(&compiled, metrics, SatysfiVersion::V0_1)
 }

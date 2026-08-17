@@ -19,13 +19,46 @@
 //! - A cycle in the dependency graph is an error naming the files involved.
 
 mod error;
+mod graph;
 mod v006;
+mod v01x;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 pub use error::LoadError;
 pub use satysfi_syntax::SatysfiVersion;
+
+/// How multi-file dependencies are declared and resolved — Axis B of
+/// `docs/plans/satysfi-0-1-0-support.md` §1.2. Orthogonal to
+/// [`SatysfiVersion`] (Axis A, the grammar generation), except that the one
+/// combination with no upstream analogue — `V0_0_6` + `Envelopes` — is
+/// rejected by [`load`] up front (plan §1.3's table).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum LoadMode {
+    /// `@require:`/`@import:` header search against [`LoadOptions::lib_root`] —
+    /// today's only mode, and `dev-0-1-0`'s *only* mode too (its headers are
+    /// byte-identical to 0.0.6's, minus `@stage:`). The [`Default`], so every
+    /// existing `LoadOptions { .., ..Default::default() }` call site is
+    /// unchanged — mirroring exactly how `version` was added.
+    #[default]
+    Legacy,
+    /// `use package` / `use … of` headers resolved the `saphe-split` way
+    /// (upstream ≈ "0.1.0-alpha.1"): local files by relative path, packages
+    /// from a pre-solved envelope graph. Requires `version == V0_1`.
+    Envelopes {
+        /// Path to a pre-resolved `satysfi-deps.yaml` (upstream's mandatory
+        /// `--deps` flag on `satysfi build`, `saphe-split:bin/satysfi.ml`,
+        /// `flag_deps`). `None` = no package dependencies available: any `use
+        /// package` header is a [`LoadError::PackageDependencyUnresolved`].
+        /// `Some(_)` is **not implemented in Ld3a** — it returns
+        /// [`LoadError::DepsConfigUnsupported`] naming Ld3b — but the field
+        /// exists from day one so Ld3b need not re-break every `match` on this
+        /// enum, and so the CLI can wire `--deps` through immediately with an
+        /// honest error.
+        deps: Option<PathBuf>,
+    },
+}
 
 /// Options controlling header resolution.
 ///
@@ -48,6 +81,12 @@ pub struct LoadOptions {
     /// loader implements). [`load`] rejects any version for which
     /// [`SatysfiVersion::is_implemented`] is false before doing any work.
     pub version: SatysfiVersion,
+    /// How dependencies are resolved. Defaults to [`LoadMode::Legacy`], so
+    /// every pre-Ld3a call site (which either uses `..Default::default()` or
+    /// names only `lib_root`/`version`) behaves identically. Ignored by the
+    /// Envelopes backend (which resolves `use … of` relative paths and, in
+    /// Ld3b, a `satysfi-deps.yaml` envelope graph — never `lib_root`).
+    pub mode: LoadMode,
 }
 
 /// A parsed file's CST, tagged by which grammar generation produced it.
@@ -76,17 +115,27 @@ impl LoadedCst {
         }
     }
 
-    /// This file's `@require:`/`@import:`/`@stage:` headers. Both
-    /// generations reuse `cst::Header` verbatim under `LoadMode::Legacy`
-    /// (dev-0-1-0's header lexing is byte-identical to 0.0.6's), so there
-    /// is exactly one `Header` type for both variants to share, not two.
-    fn headers(&self) -> &[satysfi_syntax::cst::Header] {
+    /// This `V0_0_6` file's `@require:`/`@import:`/`@stage:` headers, or
+    /// `None` for a `V0_1` file. Each generation's header list has a distinct
+    /// element type since Ld3a (`V0_1` carries `HeaderV1`, the union grammar),
+    /// so the shared facade offers one total accessor per generation rather
+    /// than one `Header`-typed accessor for both.
+    fn headers_v006(&self) -> Option<&[satysfi_syntax::cst::Header]> {
         match self {
-            Self::V0_0_6(f) => &f.headers,
-            Self::V0_1(f) => match f {
+            Self::V0_0_6(f) => Some(&f.headers),
+            Self::V0_1(_) => None,
+        }
+    }
+
+    /// This `V0_1` file's headers (the `HeaderV1` union — Legacy `@`-headers
+    /// plus the three `use` forms), or `None` for a `V0_0_6` file.
+    fn headers_v1(&self) -> Option<&[satysfi_syntax::cst_v1::HeaderV1]> {
+        match self {
+            Self::V0_0_6(_) => None,
+            Self::V0_1(f) => Some(match f {
                 satysfi_syntax::cst_v1::FileV1::Document { headers, .. }
                 | satysfi_syntax::cst_v1::FileV1::Library { headers, .. } => headers,
-            },
+            }),
         }
     }
 }
@@ -111,8 +160,11 @@ pub struct LoadedProgram {
     pub files: Vec<LoadedFile>,
 }
 
-/// Load `entry` (a `.saty` document) and its full transitive `@require:` /
-/// `@import:` dependency graph.
+/// Load `entry` (a `.saty` document) and its full transitive dependency
+/// graph, dispatching on [`LoadOptions::mode`] (Axis B). [`LoadMode::Legacy`]
+/// resolves `@require:`/`@import:` headers ([`load_legacy`]);
+/// [`LoadMode::Envelopes`] resolves `use package`/`use … of` headers
+/// (`v01x::open_doc`).
 pub fn load(entry: &Path, opts: &LoadOptions) -> Result<LoadedProgram, LoadError> {
     if !opts.version.is_implemented() {
         return Err(LoadError::UnsupportedVersion {
@@ -121,6 +173,69 @@ pub fn load(entry: &Path, opts: &LoadOptions) -> Result<LoadedProgram, LoadError
         });
     }
 
+    match &opts.mode {
+        LoadMode::Legacy => load_legacy(entry, opts),
+        LoadMode::Envelopes { deps } => {
+            // The one combination with no upstream analogue (plan §1.2, §1.3
+            // row 4): 0.0.6 has no `use` headers to resolve against an
+            // envelope graph at all. Reject before touching the filesystem,
+            // like the version guard above. `!matches!(.., V0_1)` rather than
+            // `== V0_0_6`: `SatysfiVersion` is `#[non_exhaustive]`, so any
+            // hypothetical future third variant defaults to *rejected* under
+            // Envelopes until someone decides otherwise.
+            if !matches!(opts.version, SatysfiVersion::V0_1) {
+                return Err(LoadError::InvalidModeVersion {
+                    version: opts.version,
+                });
+            }
+            v01x::open_doc::load(entry, deps.as_deref(), opts)
+        }
+    }
+}
+
+/// Resolve one Legacy (`@require:`/`@import:`/`@stage:`) header to a file
+/// path, or `None` for `@stage:` (which drives no dependency edge). Shared by
+/// the `V0_0_6` and `V0_1`-Legacy header loops in [`load_legacy`].
+fn resolve_legacy_header(
+    header: &satysfi_syntax::cst::Header,
+    dir: &Path,
+    from: &Path,
+    opts: &LoadOptions,
+) -> Result<Option<PathBuf>, LoadError> {
+    Ok(Some(match header {
+        satysfi_syntax::cst::Header::Import(tok) => {
+            v006::resolve::resolve_import(dir, &tok.content).map_err(|searched| {
+                LoadError::UnresolvedImport {
+                    name: tok.content.clone(),
+                    from: from.to_path_buf(),
+                    searched,
+                }
+            })?
+        }
+        satysfi_syntax::cst::Header::Require(tok) => {
+            v006::resolve::resolve_require(opts.lib_root.as_deref(), &tok.content).map_err(
+                |searched| LoadError::UnresolvedRequire {
+                    name: tok.content.clone(),
+                    searched,
+                },
+            )?
+        }
+        // `@stage: persistent` / `@stage: 0` / `@stage: 1` — this port is
+        // single-stage only, so the header carries no loader-visible
+        // information (see `cst::Header::Stage`'s doc comment); it drives no
+        // dependency edge.
+        satysfi_syntax::cst::Header::Stage(_) => return Ok(None),
+    }))
+}
+
+/// The `LoadMode::Legacy` backend: `@require:`/`@import:` header resolution
+/// against `lib_root`, recursive parse, and dependency-first ordering. The
+/// body is the pre-Ld3a `load()` verbatim (Ld1's shared worklist/validation
+/// shell around the `v006::` calls), with the header loop now dispatching per
+/// grammar generation so a `V0_1`-under-Legacy file with a `use` header gets
+/// a typed [`LoadError::EnvelopeHeaderUnderLegacy`] (a better diagnostic than
+/// the old parse error) — the only Legacy-visible behavior change in Ld3a.
+fn load_legacy(entry: &Path, opts: &LoadOptions) -> Result<LoadedProgram, LoadError> {
     let entry_canon = canonicalize(entry)?;
 
     let mut next_id: u32 = 0;
@@ -182,31 +297,48 @@ pub fn load(entry: &Path, opts: &LoadOptions) -> Result<LoadedProgram, LoadError
             .map(Path::to_path_buf)
             .unwrap_or_else(|| PathBuf::from("."));
 
-        let mut deps = Vec::new();
-        for header in cst.headers() {
-            let resolved = match header {
-                satysfi_syntax::cst::Header::Import(tok) => {
-                    v006::resolve::resolve_import(&dir, &tok.content).map_err(|searched| {
-                        LoadError::UnresolvedImport {
-                            name: tok.content.clone(),
-                            from: path.clone(),
-                            searched,
+        // Collect this file's resolved dependency paths (per grammar
+        // generation), then allocate ids for them uniformly below — so the
+        // id/worklist bookkeeping is written exactly once.
+        let mut resolved_deps: Vec<PathBuf> = Vec::new();
+        if let Some(headers) = cst.headers_v006() {
+            for header in headers {
+                if let Some(resolved) = resolve_legacy_header(header, &dir, &path, opts)? {
+                    resolved_deps.push(resolved);
+                }
+            }
+        } else if let Some(headers) = cst.headers_v1() {
+            use satysfi_syntax::cst_v1::HeaderV1;
+            for header in headers {
+                match header {
+                    // dev-0-1-0 semantics under Legacy: an `@`-header on a 0.1
+                    // file resolves exactly like a 0.0.6 one (unchanged from
+                    // Ld2).
+                    HeaderV1::Legacy(h) => {
+                        if let Some(resolved) = resolve_legacy_header(h, &dir, &path, opts)? {
+                            resolved_deps.push(resolved);
                         }
-                    })?
+                    }
+                    // A `use`-family header under Legacy mode: previously a
+                    // *parse* error (no `use` grammar existed); now a typed
+                    // *mode* error naming the fix. This is the single
+                    // Legacy-path behavior change in all of Ld3a — a
+                    // previously-failing input fails better; no
+                    // previously-succeeding input changes.
+                    HeaderV1::UsePackage { .. }
+                    | HeaderV1::UseOf { .. }
+                    | HeaderV1::Use { .. } => {
+                        return Err(LoadError::EnvelopeHeaderUnderLegacy {
+                            header: header.display_name(),
+                            from: path.clone(),
+                        });
+                    }
                 }
-                satysfi_syntax::cst::Header::Require(tok) => {
-                    v006::resolve::resolve_require(opts.lib_root.as_deref(), &tok.content)
-                        .map_err(|searched| LoadError::UnresolvedRequire {
-                            name: tok.content.clone(),
-                            searched,
-                        })?
-                }
-                // `@stage: persistent` / `@stage: 0` / `@stage: 1` — this
-                // port is single-stage only, so the header carries no
-                // loader-visible information (see `cst::Header::Stage`'s
-                // doc comment); it drives no dependency edge.
-                satysfi_syntax::cst::Header::Stage(_) => continue,
-            };
+            }
+        }
+
+        let mut deps = Vec::new();
+        for resolved in resolved_deps {
             let dep_canon = canonicalize(&resolved)?;
             let dep_id = alloc_id(dep_canon, &mut next_id, &mut id_of, &mut path_of);
             deps.push(dep_id);
@@ -217,10 +349,9 @@ pub fn load(entry: &Path, opts: &LoadOptions) -> Result<LoadedProgram, LoadError
         cst_of.insert(id, cst);
     }
 
-    let order = v006::graph::toposort(&adjacency)
-        .map_err(|chain_ids| LoadError::Cycle {
-            chain: v006::graph::chain_to_paths(&chain_ids, &path_of),
-        })?;
+    let order = graph::toposort(&adjacency).map_err(|chain_ids| LoadError::Cycle {
+        chain: graph::chain_to_paths(&chain_ids, &path_of),
+    })?;
 
     let files = order
         .into_iter()
@@ -235,14 +366,14 @@ pub fn load(entry: &Path, opts: &LoadOptions) -> Result<LoadedProgram, LoadError
     Ok(LoadedProgram { files })
 }
 
-fn canonicalize(path: &Path) -> Result<PathBuf, LoadError> {
+pub(crate) fn canonicalize(path: &Path) -> Result<PathBuf, LoadError> {
     std::fs::canonicalize(path).map_err(|source| LoadError::Io {
         path: path.to_path_buf(),
         source,
     })
 }
 
-fn alloc_id(
+pub(crate) fn alloc_id(
     path: PathBuf,
     next_id: &mut u32,
     id_of: &mut HashMap<PathBuf, u32>,

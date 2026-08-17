@@ -86,11 +86,18 @@ fn cmd_compile(m: &ArgMatches) -> anyhow::Result<()> {
         .or_else(|| discover_lib_root(&input));
 
     let target_version = m.get_one::<String>("target_version").map(String::as_str);
-    let version = resolve_version(target_version, &input)?;
+    let deps_flag = m.get_one::<PathBuf>("deps").map(PathBuf::as_path);
+    let (version, mode) = resolve_version_and_mode(target_version, deps_flag, &input)?;
 
-    let program =
-        satysfi_loader::load(&input, &satysfi_loader::LoadOptions { lib_root: lib_root.clone(), version })
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let program = satysfi_loader::load(
+        &input,
+        &satysfi_loader::LoadOptions {
+            lib_root: lib_root.clone(),
+            version,
+            mode,
+        },
+    )
+    .map_err(|e| anyhow::anyhow!("{e}"))?;
 
     // Text-rendering plan, Slice 1: resolve font configuration (flags >
     // --font-dir/$SATYSFI_FONT_DIR > --lib-root) into a real TtfFontStore,
@@ -259,18 +266,31 @@ fn discover_lib_root(input: &std::path::Path) -> Option<PathBuf> {
     }
 }
 
-/// Combine the `--target-version` flag with best-effort version detection
-/// from the input's header lines (`satysfi_syntax::sniff_version`):
+/// Resolve BOTH axes of the load — the language version (Axis A) and the
+/// packaging mode (Axis B, `satysfi_loader::LoadMode`) — from the
+/// `--target-version` flag, the `--deps` flag, and best-effort header
+/// detection (`satysfi_syntax::sniff_headers`). This is the plan's detection
+/// ladder (§1.4) in its Ld3a-minimal form.
 ///
+/// Axis A (version), exactly as before this became two-axis:
 /// - flag given, sniffer disagrees: warn to stderr, obey the flag;
 /// - flag given: obey it (the loader still rejects unimplemented versions);
-/// - no flag, sniffer detects an unimplemented version: fail now with a
-///   hint, rather than confuse the user with a 0.0.6 parse error;
+/// - no flag, sniffer detects an unimplemented version: fail now with a hint;
 /// - otherwise: the default, 0.0.6.
-fn resolve_version(
+///
+/// Axis B (mode):
+/// - `--deps <FILE>` given → `Envelopes { deps: Some(FILE) }` (ladder step 2);
+/// - else a `use`-shaped header sniffed → `Envelopes { deps: None }` (step 3);
+/// - else `Legacy` (step 4).
+///
+/// The rejected combination (Axis A = 0.0.6, Axis B = Envelopes) is surfaced
+/// here, early and naming the flag that pinned each axis, rather than left to
+/// the loader's `InvalidModeVersion` backstop.
+fn resolve_version_and_mode(
     flag: Option<&str>,
+    deps_flag: Option<&Path>,
     input: &Path,
-) -> anyhow::Result<satysfi_syntax::SatysfiVersion> {
+) -> anyhow::Result<(satysfi_syntax::SatysfiVersion, satysfi_loader::LoadMode)> {
     use satysfi_syntax::SatysfiVersion;
 
     let flag = flag
@@ -279,28 +299,64 @@ fn resolve_version(
         .map_err(|e| anyhow::anyhow!("--target-version: {e}"))?;
     // Sniffing is advisory only: if the file is unreadable, let the loader
     // report the I/O error on its own terms.
-    let sniffed = std::fs::read_to_string(input)
+    let sniff = std::fs::read_to_string(input)
         .ok()
-        .and_then(|src| satysfi_syntax::sniff_version(&src));
+        .map(|src| satysfi_syntax::sniff_headers(&src))
+        .unwrap_or_default();
 
-    match (flag, sniffed) {
+    // ---- Axis A: the language version ----
+    let version = match (flag, sniff.version) {
         (Some(v), Some(s)) if s != v => {
             eprintln!(
                 "warning: {} looks like a SATySFi {s} document, but --target-version {v} \
                  was given; proceeding as {v}",
                 input.display()
             );
-            Ok(v)
+            v
         }
-        (Some(v), _) => Ok(v),
-        (None, Some(s)) if !s.is_implemented() => Err(anyhow::anyhow!(
-            "{}: SATySFi {s} documents are not supported yet; supported: 0.0.6 \
-             (detected a 0.1-style `use` header; pass `--target-version 0.0.6` to \
-             force 0.0.6 interpretation)",
+        (Some(v), _) => v,
+        (None, Some(s)) if !s.is_implemented() => {
+            return Err(anyhow::anyhow!(
+                "{}: SATySFi {s} documents are not supported yet; supported: 0.0.6, 0.1 \
+                 (detected a 0.1-style `use` header; pass `--target-version 0.0.6` to \
+                 force 0.0.6 interpretation)",
+                input.display()
+            ));
+        }
+        (None, _) => SatysfiVersion::DEFAULT,
+    };
+
+    // ---- Axis B: the packaging mode ----
+    let mode = if let Some(deps) = deps_flag {
+        satysfi_loader::LoadMode::Envelopes {
+            deps: Some(deps.to_path_buf()),
+        }
+    } else if sniff.envelope_headers {
+        satysfi_loader::LoadMode::Envelopes { deps: None }
+    } else {
+        satysfi_loader::LoadMode::Legacy
+    };
+
+    // The rejected combination (plan §1.3 row 4): 0.0.6 has no `use` headers.
+    // Name the flag that pinned each axis — a diagnostic the loader's
+    // `InvalidModeVersion` backstop cannot give.
+    if matches!(mode, satysfi_loader::LoadMode::Envelopes { .. })
+        && !matches!(version, SatysfiVersion::V0_1)
+    {
+        let axis_b = if deps_flag.is_some() {
+            "--deps"
+        } else {
+            "a `use` header"
+        };
+        return Err(anyhow::anyhow!(
+            "{}: {axis_b} selects Envelopes packaging mode, which requires SATySFi 0.1, \
+             but the language version resolved to {version}; pass --target-version 0.1, \
+             or drop --deps / the `use` header",
             input.display()
-        )),
-        (None, _) => Ok(SatysfiVersion::DEFAULT),
+        ));
     }
+
+    Ok((version, mode))
 }
 
 /// Concatenate the dependency-ordered library preludes ahead of the entry

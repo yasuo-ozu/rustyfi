@@ -110,8 +110,86 @@ fn lex_and_lex_with_version_v0_0_6_agree_on_mode_coverage_snippets() {
         "let inline = 1 in inline",
         "let block = 1 in block",
         "rec + inline + block",
+        "let mutable = 1 in mutable",
+        "rec + inline + block + mutable",
+        // Sub-slice 2c: the four new V0_1 lexemes, exercised as 0.0.6
+        // input. `:>` must stay two tokens; `signature`/`include` must
+        // stay identifiers; a dotted-UPPER path must stay the exact
+        // "module path must end with a variable name" error (Err/Err).
+        "a :> b",
+        "x : > y",
+        "a ::> b",
+        "let signature = 1 in signature",
+        "let include = 1 in include",
+        "signature + include",
+        "A.B.C",
+        "Mod.x + A.b",
     ];
     for src in snippets {
         assert_same(src, src);
     }
+}
+
+/// Sub-slice 2b: the V0_1-only `mutable` keyword gate — nothing in this
+/// file's other test asserts the V0_1 branch of `lex_with_version` at all
+/// (both tests above are 0.0.6-agreement guardrails), so this pins the
+/// positive case directly: `mutable` lexes as `Token::Mutable` under V0_1
+/// and stays a plain identifier under V0_0_6 (the same gating shape as
+/// `rec`/`inline`/`block`, `lexer.rs`'s `keyword()`).
+#[test]
+fn v0_1_gates_the_bind_keywords() {
+    use satysfi_syntax::token::Token;
+    let toks = lex_with_version("val mutable x <- 0", SatysfiVersion::V0_1).unwrap();
+    assert!(toks.iter().any(|a| matches!(a.slot, Token::Mutable)));
+    let toks = lex_with_version("val mutable x <- 0", SatysfiVersion::V0_0_6).unwrap();
+    assert!(toks.iter().all(|a| !matches!(a.slot, Token::Mutable)));
+}
+
+/// Sub-slice 2c: the `:>` COERCE token — adjacency-required, `::` wins on
+/// `::>`, and V0_0_6 never produces it.
+#[test]
+fn v0_1_lexes_coerce_as_one_token() {
+    use satysfi_syntax::token::Token;
+    let toks = lex_with_version("M :> S", SatysfiVersion::V0_1).unwrap();
+    assert!(toks.iter().any(|a| matches!(a.slot, Token::Coerce)));
+    // adjacency is required: a spaced `: >` stays Colon + BinopGt
+    let toks = lex_with_version("M : > S", SatysfiVersion::V0_1).unwrap();
+    assert!(toks.iter().all(|a| !matches!(a.slot, Token::Coerce)));
+    // `::` wins on `::>` (upstream lexer_v1.mll:280 vs :288 parity)
+    let toks = lex_with_version("a ::> b", SatysfiVersion::V0_1).unwrap();
+    assert!(toks.iter().any(|a| matches!(a.slot, Token::Cons)));
+    assert!(toks.iter().all(|a| !matches!(a.slot, Token::Coerce)));
+    // and V0_0_6 never produces Coerce
+    let toks = lex_with_version("M :> S", SatysfiVersion::V0_0_6).unwrap();
+    assert!(toks.iter().all(|a| !matches!(a.slot, Token::Coerce)));
+}
+
+/// Sub-slice 2c: `LONG_UPPER` dotted module/signature paths — V0_1 only;
+/// V0_0_6 keeps the historical lex error, and dotted-ending-in-lower is
+/// untouched in both.
+#[test]
+fn v0_1_lexes_long_upper_paths() {
+    use satysfi_syntax::token::Token;
+    let toks = lex_with_version("A.B.C", SatysfiVersion::V0_1).unwrap();
+    assert!(toks.iter().any(|a| matches!(
+        &a.slot,
+        Token::LongUpper(m, s) if m == &["A".to_string(), "B".to_string()] && s == "C"
+    )));
+    // dotted-ending-in-lower is untouched
+    let toks = lex_with_version("A.B.c", SatysfiVersion::V0_1).unwrap();
+    assert!(toks.iter().any(|a| matches!(&a.slot, Token::VarWithMod(..))));
+    // V0_0_6 keeps the exact historical error
+    let err = lex_with_version("A.B.C", SatysfiVersion::V0_0_6).unwrap_err();
+    assert!(err.to_string().contains("module path must end with a variable name"));
+}
+
+/// Sub-slice 2c: `signature`/`include` are V0_1-only keywords.
+#[test]
+fn v0_1_gates_signature_and_include_keywords() {
+    use satysfi_syntax::token::Token;
+    let toks = lex_with_version("signature include", SatysfiVersion::V0_1).unwrap();
+    assert!(toks.iter().any(|a| matches!(a.slot, Token::Signature)));
+    assert!(toks.iter().any(|a| matches!(a.slot, Token::Include)));
+    let toks = lex_with_version("signature include", SatysfiVersion::V0_0_6).unwrap();
+    assert!(toks.iter().all(|a| !matches!(a.slot, Token::Signature | Token::Include)));
 }

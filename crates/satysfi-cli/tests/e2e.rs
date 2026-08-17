@@ -1014,6 +1014,10 @@ fn v01_slice1_document_renders_to_extractable_text() {
             &satysfi_loader::LoadOptions {
                 lib_root: Some(lib_root().join("dist-v01").join("packages")), // §4.3
                 version: satysfi_syntax::SatysfiVersion::V0_1,
+                // Legacy packaging (this 0.1 fixture uses `@require:`); the
+                // Axis-B default. Spelled via `..Default::default()` so the
+                // Ld3a `mode` field addition needs no explicit value here.
+                ..Default::default()
             },
         )
         .expect("V0_1 must load once is_implemented() is flipped");
@@ -1024,7 +1028,7 @@ fn v01_slice1_document_renders_to_extractable_text() {
         let doc = satysfi_lang::compile_document_v1(&program.files, &metrics)
             .expect("the Slice-1 v0.1 capstone must compile end-to-end");
         assert_eq!(doc.pages.len(), 1);
-        assert!(doc.pages[0].lines.len() >= 3);
+        assert!(doc.pages[0].lines.len() >= 4);
 
         let bytes = satysfi_pdf::render_pdf(&doc.geometry, &doc.pages, &doc.images).unwrap();
         assert!(bytes.starts_with(b"%PDF-"));
@@ -1043,6 +1047,13 @@ fn v01_slice1_document_renders_to_extractable_text() {
                 assert!(text.contains("Emphasis"), "missing \\emph output:\n{text}");
                 // The v01-mini footer (pbinfo#page-number via arabic).
                 assert!(text.contains('1'), "missing footer page number:\n{text}");
+                // Sub-slice 2b surface: `val rec sum-list`, `let mutable`/
+                // `<-`, `if`/`even`, and `val (+++)` all through the third
+                // `+p` paragraph.
+                assert!(
+                    text.contains("Sum 10 count 42 parity even label 7"),
+                    "missing sub-slice 2b paragraph:\n{text}"
+                );
             }
             _ => eprintln!("skipping text assertion; pdftotext unavailable"),
         }

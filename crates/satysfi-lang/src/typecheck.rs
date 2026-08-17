@@ -320,7 +320,7 @@ fn base_type_env() -> TypeEnv {
     base_type_env_with_version(SatysfiVersion::V0_0_6)
 }
 
-fn base_type_env_with_version(version: SatysfiVersion) -> TypeEnv {
+pub(crate) fn base_type_env_with_version(version: SatysfiVersion) -> TypeEnv {
     let mut env = TypeEnv::default();
     for name in PRIMITIVE_NAMES {
         if let Some(poly) = prim_types::primitive_type_with_version(name, version) {
@@ -338,19 +338,29 @@ fn base_type_env_with_version(version: SatysfiVersion) -> TypeEnv {
 // ============================================================================
 
 #[derive(Clone, Default)]
-struct TypeEnv {
+pub(crate) struct TypeEnv {
     vars: HashMap<String, PolyType>,
 }
 
 impl TypeEnv {
-    fn with(&self, name: impl Into<String>, poly: PolyType) -> TypeEnv {
+    pub(crate) fn with(&self, name: impl Into<String>, poly: PolyType) -> TypeEnv {
         let mut e = self.clone();
         e.vars.insert(name.into(), poly);
         e
     }
 
-    fn get(&self, name: &str) -> Option<&PolyType> {
+    pub(crate) fn get(&self, name: &str) -> Option<&PolyType> {
         self.vars.get(name)
+    }
+
+    /// Extend with each scheme in order (later shadows earlier) — the
+    /// canonical way to commit `infer_binding`'s result.
+    pub(crate) fn with_all(&self, schemes: Vec<(String, PolyType)>) -> TypeEnv {
+        let mut e = self.clone();
+        for (name, poly) in schemes {
+            e = e.with(name, poly);
+        }
+        e
     }
 }
 
@@ -503,7 +513,13 @@ fn lower_type_app(app: &TypeApp, tyvars: &HashMap<String, MonoType>) -> MonoType
 /// `option_row`/arity-changing encoding (that's the full-roadmap R2 item);
 /// this only needs the two encodings to *unify*, which a plain `option`
 /// domain already does.
-fn lower_type_expr(ty: &TypeExpr, tyvars: &HashMap<String, MonoType>) -> MonoType {
+/// `pub(crate)`: Sub-slice 2d-1's `v1/module_check.rs` reuses this exact
+/// lowering for a sig `val`'s declared type, twice per decl (§3.4's
+/// skolemize-by-lowering — a flexible-var map for the committed scheme, a
+/// rigid-stamp map for the subsumption check) — see this module's
+/// crate-report doc comment and the spec's §2.3 API table. Visibility-only
+/// change; behavior is untouched (2d-1's golden-diff invariant, §4.3-F).
+pub(crate) fn lower_type_expr(ty: &TypeExpr, tyvars: &HashMap<String, MonoType>) -> MonoType {
     match ty {
         TypeExpr::Fun {
             opts, dom, cod, ..
@@ -882,7 +898,7 @@ fn expand_synonyms_cmd_args(
 // The checker.
 // ============================================================================
 
-struct Checker {
+pub(crate) struct Checker {
     ctx: TypeContext,
     /// Constructor name -> the (`Rc`-shared) declaration it belongs to.
     /// Later declarations shadow earlier ones of the same ctor name, mirroring
@@ -893,10 +909,38 @@ struct Checker {
     /// variant's full constructor set given the scrutinee's resolved
     /// `MonoType::Variant(name, _)`.
     variants: HashMap<String, Rc<VariantDecl>>,
+    /// The synonym table — previously a local of `new_with_version`, dropped
+    /// after construction. Promoted to a field so `declare_variant` can
+    /// expand ctor payloads through it after construction time (per-binding
+    /// registration). Behavior-neutral for the whole-program path: it is
+    /// populated by the same `build_synonym_decl` calls in the same order,
+    /// and nothing reads it after the variant decls are built (same as
+    /// today).
+    synonyms: HashMap<String, SynonymDecl>,
     /// Non-fatal diagnostics accumulated by the exhaustiveness/redundancy
     /// pass (see `typecheck_verbose`); v0.0.6's `exhchecker.ml` warns and
     /// continues rather than rejecting the program.
     warnings: Vec<MatchWarning>,
+}
+
+/// One elaborated top-level-shaped binding, viewed by reference — the
+/// typecheck-side mirror of `elaborate::Binding` and of the four Let-shaped
+/// `Ast` spine variants (`ast.rs`). 2d's module checker constructs these
+/// directly from its own per-`val` walk; the whole-program path never
+/// constructs one explicitly (its `infer` arms pass the same references
+/// through).
+pub(crate) enum BindingView<'a> {
+    /// `Ast::LetIn` — plain value OR `\`/`+`-sigiled command binding; the
+    /// sigil dispatch (`command_scheme`) stays inside the checker, exactly
+    /// as today.
+    Let { name: &'a str, value: &'a Ast },
+    /// `Ast::LetMathIn` — a math-command binding (distinct variant by
+    /// construction).
+    LetMath { name: &'a str, value: &'a Ast },
+    /// `Ast::LetRecIn`'s binding group (all names in scope in all bodies).
+    LetRec(&'a [(String, Rc<Ast>)]),
+    /// `Ast::LetMutableIn` — value restriction, never generalized.
+    LetMutable { name: &'a str, init: &'a Ast },
 }
 
 impl Checker {
@@ -907,38 +951,78 @@ impl Checker {
         Self::new_with_version(program, SatysfiVersion::V0_0_6)
     }
 
+    /// Bare session: empty tables, fresh `TypeContext`. Registers NOTHING —
+    /// not even builtins — so `new_with_version` can compose the exact
+    /// statement order of the original monolithic constructor (§5 channel
+    /// 8 of the L3 spec).
+    pub(crate) fn empty() -> Checker {
+        Checker {
+            ctx: TypeContext::new(),
+            ctors: HashMap::new(),
+            variants: HashMap::new(),
+            synonyms: HashMap::new(),
+            warnings: Vec::new(),
+        }
+    }
+
+    /// Register the builtin variant decls for `version` — moved verbatim
+    /// from the former `new_with_version` body.
+    pub(crate) fn install_builtin_variants(&mut self, version: SatysfiVersion) {
+        for decl in builtin_variants_with_version(version) {
+            let decl = Rc::new(decl);
+            self.variants.insert(decl.name.clone(), decl.clone());
+            for (cname, _) in &decl.ctors {
+                self.ctors.insert(cname.clone(), decl.clone());
+            }
+        }
+    }
+
+    /// One synonym registration — moved verbatim from the former
+    /// `new_with_version` loop body. Does NOT cycle-check (matching the
+    /// original register-all-then-check shape); call `check_cycles` when
+    /// done registering.
+    pub(crate) fn declare_synonym(&mut self, decl: &UserSynonymDecl) {
+        self.synonyms
+            .insert(decl.name.clone(), build_synonym_decl(decl));
+    }
+
+    /// Cycle-check the accumulated synonym table — a thin wrapper over the
+    /// existing free fn `check_synonym_cycles`.
+    pub(crate) fn check_cycles(&self) -> Result<(), TypeError> {
+        check_synonym_cycles(&self.synonyms)
+    }
+
+    /// One variant-decl registration — moved verbatim from the former
+    /// `new_with_version` loop body (reads `&self.synonyms` instead of the
+    /// former local — same map, same contents at the same point in the
+    /// sequence).
+    pub(crate) fn declare_variant(&mut self, decl: &UserTypeDecl) -> Result<(), TypeError> {
+        let decl = Rc::new(build_variant_decl(decl, &self.synonyms)?);
+        self.variants.insert(decl.name.clone(), decl.clone());
+        for (cname, _) in &decl.ctors {
+            self.ctors.insert(cname.clone(), decl.clone());
+        }
+        Ok(())
+    }
+
+    /// The original whole-program constructor, re-expressed as the exact
+    /// same statement sequence through the methods above: synonyms →
+    /// cycle-check → builtins → user variant decls. This order-preservation
+    /// is load-bearing (see the L3 spec §5 channels 2, 7, 8).
     fn new_with_version(program: &Program, version: SatysfiVersion) -> Result<Checker, TypeError> {
         // Synonyms are registered (and checked for cycles) before any
         // variant decl is lowered, since a variant's ctor payload may name a
         // synonym (`build_variant_decl` expands through `synonyms`).
-        let mut synonyms: HashMap<String, SynonymDecl> = HashMap::new();
+        let mut c = Checker::empty();
         for usd in &program.synonym_decls {
-            synonyms.insert(usd.name.clone(), build_synonym_decl(usd));
+            c.declare_synonym(usd);
         }
-        check_synonym_cycles(&synonyms)?;
-
-        let mut ctors = HashMap::new();
-        let mut variants = HashMap::new();
-        for decl in builtin_variants_with_version(version) {
-            let decl = Rc::new(decl);
-            variants.insert(decl.name.clone(), decl.clone());
-            for (cname, _) in &decl.ctors {
-                ctors.insert(cname.clone(), decl.clone());
-            }
-        }
+        c.check_cycles()?;
+        c.install_builtin_variants(version);
         for utd in &program.type_decls {
-            let decl = Rc::new(build_variant_decl(utd, &synonyms)?);
-            variants.insert(decl.name.clone(), decl.clone());
-            for (cname, _) in &decl.ctors {
-                ctors.insert(cname.clone(), decl.clone());
-            }
+            c.declare_variant(utd)?;
         }
-        Ok(Checker {
-            ctx: TypeContext::new(),
-            ctors,
-            variants,
-            warnings: Vec::new(),
-        })
+        Ok(c)
     }
 
     fn fresh(&mut self) -> MonoType {
@@ -1170,6 +1254,135 @@ impl Checker {
 
     // ---- expressions -------------------------------------------------------
 
+    /// THE L3 DELIVERABLE. Infer the scheme(s) of ONE binding against a
+    /// static `env`, WITHOUT extending anything: returns the
+    /// `(name, PolyType)` pairs in binding order (singleton for
+    /// Let/LetMath/LetMutable; group order for LetRec). The caller decides
+    /// what to put in the environment — the whole-program path commits them
+    /// verbatim (`env.with_all`).
+    ///
+    /// Level discipline, sigil dispatch, generalization, and the
+    /// value-restriction asymmetry are all INSIDE this method, moved
+    /// verbatim from the four former `infer` Let arms — callers cannot get
+    /// them wrong.
+    pub(crate) fn infer_binding(
+        &mut self,
+        env: &TypeEnv,
+        binding: BindingView<'_>,
+    ) -> Result<Vec<(String, PolyType)>, TypeError> {
+        match binding {
+            BindingView::Let { name, value } => {
+                self.ctx.enter_level();
+                let tv = self.infer(env, value)?;
+                self.ctx.leave_level();
+                let scheme = match command_sigil(name) {
+                    // A `\`/`+`-named binding: either a genuine `let-inline`/
+                    // `let-block` definition (`value` is the
+                    // `Lambda(ctxvar, Lambda(p1, .., body))` chain
+                    // `elaborate_let_inline` builds) or a qualified-name
+                    // alias of one (`value` is a bare `Ast::Var`, from a
+                    // module's own `M.\cmd` re-export or an `open`) — see
+                    // `command_scheme`.
+                    Some(sigil) => self.command_scheme(name, sigil, tv, ast_span(value))?,
+                    None => generalize(self.ctx.level(), &tv),
+                };
+                Ok(vec![(name.to_string(), scheme)])
+            }
+
+            // `let-math \cmd param* = expr in body` (`docs/plans/math-
+            // engine.md` §G) — structurally identical to the `Let` command-
+            // binding rule above, but for a binding that is ALREADY known
+            // (by construction, via the dedicated Ast variant) to be a math
+            // command, so there is no sigil to dispatch on and no "which
+            // kind of `\`-binding is this" ambiguity to resolve.
+            BindingView::LetMath { name, value } => {
+                self.ctx.enter_level();
+                let tv = self.infer(env, value)?;
+                self.ctx.leave_level();
+                let scheme = self.math_command_scheme(name, tv, ast_span(value))?;
+                Ok(vec![(name.to_string(), scheme)])
+            }
+
+            BindingView::LetRec(bindings) => {
+                self.ctx.enter_level();
+                let mut rec_env = env.clone();
+                let mut vars = Vec::with_capacity(bindings.len());
+                for (name, _) in bindings {
+                    let v = self.fresh();
+                    vars.push(v.clone());
+                    rec_env = rec_env.with(name.clone(), PolyType::mono(v));
+                }
+                for ((name, val), v) in bindings.iter().zip(vars.iter()) {
+                    let tv = self.infer(&rec_env, val)?;
+                    self.unify_ctx(
+                        v,
+                        &tv,
+                        ast_span(val),
+                        &format!("let-rec binding '{name}'"),
+                    )?;
+                }
+                self.ctx.leave_level();
+                let mut schemes = Vec::with_capacity(bindings.len());
+                for ((name, _), v) in bindings.iter().zip(vars.iter()) {
+                    let scheme = generalize(self.ctx.level(), v);
+                    schemes.push((name.clone(), scheme));
+                }
+                Ok(schemes)
+            }
+
+            BindingView::LetMutable { name, init } => {
+                // NO generalization: `let-mutable`'s binding is the
+                // classic ML "value restriction" case — a mutable reference
+                // must stay monomorphic, or `let-mutable r <- [] in ((r <-
+                // 1 :: !r); (r <- true :: !r); !r)`-style code could smuggle
+                // an `int` and a `bool` through the very same cell. Binding
+                // it via `PolyType::mono` (not `generalize`) enforces this
+                // directly: every use of `name` in `body` shares the exact
+                // same `Ref` type, not a fresh instantiation.
+                let tinit = self.infer(env, init)?;
+                Ok(vec![(name.to_string(), PolyType::mono(reff(tinit)))])
+            }
+        }
+    }
+
+    /// Infer one expression against a static env — a `pub(crate)` wrapper
+    /// over the private `infer` below (kept private to leave the ~40
+    /// internal `self.infer(` call sites zero-diff). 2d uses this for the
+    /// document body and for any non-binding expression it must check.
+    pub(crate) fn infer_expr(&mut self, env: &TypeEnv, ast: &Ast) -> Result<MonoType, TypeError> {
+        self.infer(env, ast)
+    }
+
+    /// Drain accumulated non-fatal match warnings (exhaustiveness /
+    /// redundancy). The whole-program path keeps reading the `warnings`
+    /// field directly, so its behavior is untouched; this is additive for
+    /// per-binding callers.
+    pub(crate) fn take_warnings(&mut self) -> Vec<MatchWarning> {
+        std::mem::take(&mut self.warnings)
+    }
+
+    /// Mutable access to the inference context — 2d's sig lowering needs it
+    /// (`lower_sig_item(item, &mut ctx)`, already taking `&mut
+    /// TypeContext`), and 2d's subsumption check will mint fresh vars
+    /// through it.
+    pub(crate) fn ctx_mut(&mut self) -> &mut TypeContext {
+        &mut self.ctx
+    }
+
+    /// Expand every synonym reference inside `ty` against this session's
+    /// synonym table — a `pub(crate)` accessor over the private free fn
+    /// [`expand_synonyms`], added for Sub-slice 2d-1's `v1/module_check.rs`
+    /// (spec §2.3/§4.2 step 1d): a sig `val`'s declared type may mention the
+    /// module's own `type t = ..` synonym (by its pre-qualified `"M.t"`
+    /// name, `v1/lower.rs`'s `TypeNameEnv`), and must expand through the
+    /// SAME table the impl side's `build_variant_decl`/ordinary inference
+    /// already does, so e.g. `val f : t -> t` over `type t = int` checks
+    /// against the impl's expanded `int -> int`. Visibility-additive only;
+    /// `expand_synonyms` itself and its call sites are untouched.
+    pub(crate) fn expand_synonyms_in(&self, ty: &MonoType) -> Result<MonoType, TypeError> {
+        expand_synonyms(ty, &self.synonyms)
+    }
+
     fn infer(&mut self, env: &TypeEnv, ast: &Ast) -> Result<MonoType, TypeError> {
         match ast {
             Ast::Unit => Ok(t_unit()),
@@ -1212,21 +1425,8 @@ impl Checker {
             }
 
             Ast::LetIn(name, value, body) => {
-                self.ctx.enter_level();
-                let tv = self.infer(env, value)?;
-                self.ctx.leave_level();
-                let scheme = match command_sigil(name) {
-                    // A `\`/`+`-named binding: either a genuine `let-inline`/
-                    // `let-block` definition (`value` is the
-                    // `Lambda(ctxvar, Lambda(p1, .., body))` chain
-                    // `elaborate_let_inline` builds) or a qualified-name
-                    // alias of one (`value` is a bare `Ast::Var`, from a
-                    // module's own `M.\cmd` re-export or an `open`) — see
-                    // `command_scheme`.
-                    Some(sigil) => self.command_scheme(name, sigil, tv, ast_span(value))?,
-                    None => generalize(self.ctx.level(), &tv),
-                };
-                let inner = env.with(name.clone(), scheme);
+                let schemes = self.infer_binding(env, BindingView::Let { name, value })?;
+                let inner = env.with_all(schemes);
                 self.infer(&inner, body)
             }
 
@@ -1238,39 +1438,15 @@ impl Checker {
             // to dispatch on and no "which kind of `\`-binding is this"
             // ambiguity to resolve.
             Ast::LetMathIn(name, value, body) => {
-                self.ctx.enter_level();
-                let tv = self.infer(env, value)?;
-                self.ctx.leave_level();
-                let scheme = self.math_command_scheme(name, tv, ast_span(value))?;
-                let inner = env.with(name.clone(), scheme);
+                let schemes = self.infer_binding(env, BindingView::LetMath { name, value })?;
+                let inner = env.with_all(schemes);
                 self.infer(&inner, body)
             }
 
             Ast::LetRecIn(bindings, body) => {
-                self.ctx.enter_level();
-                let mut rec_env = env.clone();
-                let mut vars = Vec::with_capacity(bindings.len());
-                for (name, _) in bindings {
-                    let v = self.fresh();
-                    vars.push(v.clone());
-                    rec_env = rec_env.with(name.clone(), PolyType::mono(v));
-                }
-                for ((name, val), v) in bindings.iter().zip(vars.iter()) {
-                    let tv = self.infer(&rec_env, val)?;
-                    self.unify_ctx(
-                        v,
-                        &tv,
-                        ast_span(val),
-                        &format!("let-rec binding '{name}'"),
-                    )?;
-                }
-                self.ctx.leave_level();
-                let mut body_env = env.clone();
-                for ((name, _), v) in bindings.iter().zip(vars.iter()) {
-                    let scheme = generalize(self.ctx.level(), v);
-                    body_env = body_env.with(name.clone(), scheme);
-                }
-                self.infer(&body_env, body)
+                let schemes = self.infer_binding(env, BindingView::LetRec(bindings))?;
+                let inner = env.with_all(schemes);
+                self.infer(&inner, body)
             }
 
             Ast::IfThenElse(cond, then_b, else_b) => {
@@ -1372,15 +1548,10 @@ impl Checker {
 
             Ast::LetMutableIn(name, init, body) => {
                 // NO generalization: `let-mutable`'s binding is the
-                // classic ML "value restriction" case — a mutable reference
-                // must stay monomorphic, or `let-mutable r <- [] in ((r <-
-                // 1 :: !r); (r <- true :: !r); !r)`-style code could smuggle
-                // an `int` and a `bool` through the very same cell. Binding
-                // it via `PolyType::mono` (not `generalize`) enforces this
-                // directly: every use of `name` in `body` shares the exact
-                // same `Ref` type, not a fresh instantiation.
-                let tinit = self.infer(env, init)?;
-                let inner = env.with(name.clone(), PolyType::mono(reff(tinit)));
+                // classic ML "value restriction" case — see
+                // `infer_binding`'s `BindingView::LetMutable` arm.
+                let schemes = self.infer_binding(env, BindingView::LetMutable { name, init })?;
+                let inner = env.with_all(schemes);
                 self.infer(&inner, body)
             }
 
@@ -1907,6 +2078,192 @@ pub fn typecheck(program: &Program) -> Result<(), TypeError> {
 /// `typecheck_verbose_with_version`'s doc comment.
 pub fn typecheck_with_version(program: &Program, version: SatysfiVersion) -> Result<(), TypeError> {
     typecheck_verbose_with_version(program, version).map(|_warnings| ())
+}
+
+// ============================================================================
+// L3 (`…/tmp/l3-typecheck-refactor.md` §8.2): per-binding ≡ whole-program
+// equivalence, and session-incrementality. A `#[cfg(test)]` unit module
+// since `BindingView`/`Checker`/`infer_binding` etc. are `pub(crate)` — an
+// integration test can't reach them.
+// ============================================================================
+#[cfg(test)]
+mod l3_per_binding_tests {
+    use super::*;
+    use crate::{elaborate, primitives};
+
+    fn elaborate_src(src: &str) -> Program {
+        let file = satysfi_syntax::parse_file(src).expect("parse failed");
+        let env = primitives::base_env();
+        let scope = elaborate::Scope::new(env.names());
+        elaborate::elaborate_program(&file, &scope).expect("elaborate failed")
+    }
+
+    /// Manually drive the checker per binding: walk `program.body`'s Let
+    /// chain constructing `BindingView`s by hand, `infer_binding` +
+    /// `with_all` at each step, `infer_expr` on the non-Let tail. This is
+    /// exactly what `infer`'s own recursion does internally (§2.4) — driven
+    /// here from outside the engine through the `pub(crate)` per-binding
+    /// API, the same way 2d's `v1/module_check.rs` will.
+    fn drive_manually(
+        program: &Program,
+        version: SatysfiVersion,
+    ) -> Result<Vec<MatchWarning>, TypeError> {
+        let mut checker = Checker::new_with_version(program, version)?;
+        let mut env = base_type_env_with_version(version);
+        let mut ast: &Ast = &program.body;
+        loop {
+            ast = match ast {
+                Ast::LetIn(name, value, body) => {
+                    let schemes = checker.infer_binding(&env, BindingView::Let { name, value })?;
+                    env = env.with_all(schemes);
+                    body
+                }
+                Ast::LetMathIn(name, value, body) => {
+                    let schemes =
+                        checker.infer_binding(&env, BindingView::LetMath { name, value })?;
+                    env = env.with_all(schemes);
+                    body
+                }
+                Ast::LetRecIn(bindings, body) => {
+                    let schemes = checker.infer_binding(&env, BindingView::LetRec(bindings))?;
+                    env = env.with_all(schemes);
+                    body
+                }
+                Ast::LetMutableIn(name, init, body) => {
+                    let schemes =
+                        checker.infer_binding(&env, BindingView::LetMutable { name, init })?;
+                    env = env.with_all(schemes);
+                    body
+                }
+                other => {
+                    checker.infer_expr(&env, other)?;
+                    break;
+                }
+            };
+        }
+        Ok(checker.take_warnings())
+    }
+
+    /// Elaborate `src` once, then compare `typecheck_verbose_with_version`
+    /// against the manual per-binding drive: identical verdict, identical
+    /// `TypeError` `Display` on error, identical `MatchWarning` list (incl.
+    /// order — `MatchWarning` derives `PartialEq`) on success.
+    fn assert_equivalent(src: &str) {
+        let version = SatysfiVersion::V0_0_6;
+        let program = elaborate_src(src);
+        let whole = typecheck_verbose_with_version(&program, version);
+        let manual = drive_manually(&program, version);
+        match (whole, manual) {
+            (Ok(w1), Ok(w2)) => {
+                assert_eq!(w1, w2, "warnings differ for {src:?}");
+            }
+            (Err(e1), Err(e2)) => {
+                assert_eq!(
+                    format!("{e1}"),
+                    format!("{e2}"),
+                    "error strings differ for {src:?}"
+                );
+            }
+            (Ok(w), Err(e)) => panic!(
+                "{src:?}: whole-program accepted (warnings={w:?}), manual drive rejected: {e}"
+            ),
+            (Err(e), Ok(w)) => panic!(
+                "{src:?}: whole-program rejected ({e}), manual drive accepted (warnings={w:?})"
+            ),
+        }
+    }
+
+    #[test]
+    fn per_binding_drive_matches_whole_program_across_binding_kinds() {
+        let cases: &[&str] = &[
+            // ---- plain `let` ----
+            "let x = 1 in x + 1",
+            "let x = 1 in x + true", // failing: type mismatch
+            // ---- polymorphic `let` ----
+            "let id = fun x -> x in (id 1, id true)",
+            // ---- `let-inline` command binding (+ its application) ----
+            "let-inline ctx \\emph it = read-inline ctx it
+             in
+             { \\emph{ ok } }",
+            "let-inline ctx \\bad = ctx + 1
+             in
+             ()", // failing: not context-headed
+            // ---- `let-block` command binding (+ its application) ----
+            "let-block ctx +p it = line-break true true ctx (read-inline ctx it)
+             in
+             '< +p{ ok } >",
+            "let-block ctx +duo a b = read-block ctx a
+             in
+             '< +duo{x} >", // failing: wrong arity
+            // ---- `let-math` command binding ----
+            "let-math \\g m = ${#m#m} in 0",
+            "let-math \\f = 3 in 0", // failing: value isn't `math`
+            // ---- `let-rec` group ----
+            "let-rec is-even n = if n == 0 then true else is-odd (n - 1)
+             and is-odd n = if n == 0 then false else is-even (n - 1)
+             in
+             is-even 4",
+            "let-rec f n = if n == 0 then 0 else (f true)
+             in
+             f 1", // failing: recursive use at a mismatched type
+            // ---- `let-mutable` (value restriction) ----
+            "let-mutable x <- 0
+             in
+             (x <- 5)",
+            "let-mutable r <- []
+             in
+             ((r <- (1 :: !r)) before (r <- (true :: !r)))", // failing: value restriction
+            // ---- a `match` to also exercise warning accumulation ----
+            "match Some 1 with
+             | Some n -> n
+             | None -> 0",
+        ];
+        for src in cases {
+            assert_equivalent(src);
+        }
+    }
+
+    /// §8.2.2: session-incrementality. `declare_variant` after
+    /// `infer_binding` affects only *later* checking against the session —
+    /// a ctor referenced before its `declare_variant` fails with the same
+    /// "unknown constructor" error the whole-program path gives for a
+    /// genuinely-undeclared one; after `declare_variant`, it typechecks.
+    #[test]
+    fn session_incrementality_declare_variant_affects_only_later_bindings() {
+        let program = elaborate_src("type t = | A of int in 0");
+        assert_eq!(program.type_decls.len(), 1);
+        let decl = &program.type_decls[0];
+
+        let mut checker = Checker::empty();
+        checker.install_builtin_variants(SatysfiVersion::V0_0_6);
+        let env = base_type_env_with_version(SatysfiVersion::V0_0_6);
+
+        // Before `declare_variant`, `A` is unknown — same message shape a
+        // genuinely-undeclared constructor gets.
+        let a_payload = Ast::Ctor("A".to_string(), Some(Box::new(Ast::Int(1))));
+        let before = checker
+            .infer_binding(&env, BindingView::Let { name: "before", value: &a_payload })
+            .expect_err("`A` should be unknown before declare_variant");
+        assert_eq!(format!("{before}"), "unknown constructor 'A'");
+
+        let nosuch_payload = Ast::Ctor("NoSuchCtor".to_string(), None);
+        let genuinely_unknown = checker
+            .infer_binding(&env, BindingView::Let { name: "n", value: &nosuch_payload })
+            .expect_err("a genuinely undeclared ctor should also fail");
+        assert_eq!(format!("{genuinely_unknown}"), "unknown constructor 'NoSuchCtor'");
+
+        // After `declare_variant`, `A` becomes visible and typechecks —
+        // this later binding sees it; the earlier `before` call above is
+        // unaffected (it already returned its error).
+        checker
+            .declare_variant(decl)
+            .expect("declare_variant should succeed");
+        let after = checker.infer_binding(&env, BindingView::Let { name: "after", value: &a_payload });
+        assert!(
+            after.is_ok(),
+            "A(1) should typecheck after declare_variant: {after:?}"
+        );
+    }
 }
 
 // ============================================================================

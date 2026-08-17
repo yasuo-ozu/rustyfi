@@ -1,4 +1,10 @@
-@require: v01-mini
+% doc.saty — the Ld3a Envelopes-mode capstone: the v01-minimal document,
+% but reaching its library through the saphe-split `use … of` local header
+% instead of `@require:`. The referenced module (`V01Mini`) is still opened
+% explicitly with `let open V01Mini in`, exactly as in the Legacy fixture —
+% Ld3a lowering ignores headers, so the only difference from v01-minimal.saty
+% is the header family (and thus the LoadMode that resolves it).
+use open V01Mini of `./v01-mini`
 
 let answer = embed-string (arabic (match Some 41 with
   | None   -> 0

@@ -83,6 +83,11 @@ qualified_name_tokens! {
     VarInMathTok => VarInMath, "a variable reference in math";
     /// A module-qualified variable, e.g. `Mod.x`.
     VarWithModTok => VarWithMod, "a qualified variable name";
+    /// A dotted module path ending in an UPPER segment, e.g. `A.B.C`
+    /// (upstream `LONG_UPPER`) — module-expression paths, functor
+    /// application operands, and signature paths (`mod_chain`,
+    /// `sigexpr_bot`). V0_1-only (a lex error under V0_0_6).
+    LongUpperTok => LongUpper, "a qualified module path";
     /// A module-qualified inline command, e.g. `\Mod.cmd`.
     HorzCmdWithModTok => HorzCmdWithMod, "a qualified inline command";
     /// A module-qualified block command, e.g. `+Mod.cmd`.
@@ -551,7 +556,8 @@ leaf_eq! {
         KwOpen, KwVal, KwDirect, OptionalTok, OmissionTok, SuperscriptTok,
         SubscriptTok, SepTok, BMathGrpTok, EMathGrpTok, HorzCmdTypeTok,
         VertCmdTypeTok, MathCmdTypeTok, OptionalTypeTok, OptionalArrowTok,
-        ConstraintTok, CommandTok, KwRec, KwInline, KwBlock;
+        ConstraintTok, CommandTok, KwRec, KwInline, KwBlock, KwMutable,
+        CoerceTok, KwSignature, KwInclude, KwUse, KwPackage;
     with_fields:
         VarTok { name }, CtorTok { name }, IntTok { value }, FloatTok { value },
         HorzCmdTok { name }, VertCmdTok { name }, CharTok { text }, ItemTok { depth },

@@ -100,8 +100,8 @@ fn v01_document_compiles_and_matches_0_0_6_twin_geometry() {
     assert_eq!(trials, 1, "no cross-references in this fixture — one trial suffices");
     assert_eq!(doc_v1.pages.len(), 1);
     assert!(
-        doc_v1.pages[0].lines.len() >= 3,
-        "two +p paragraphs + the footer line, got {}",
+        doc_v1.pages[0].lines.len() >= 4,
+        "three +p paragraphs + the footer line, got {}",
         doc_v1.pages[0].lines.len()
     );
 
@@ -113,6 +113,7 @@ fn v01_document_compiles_and_matches_0_0_6_twin_geometry() {
         &LoadOptions {
             lib_root: Some(lib_root_006),
             version: SatysfiVersion::V0_0_6,
+            ..Default::default()
         },
     )
     .unwrap_or_else(|e| panic!("loading v01-equiv-006.saty: {e}"));

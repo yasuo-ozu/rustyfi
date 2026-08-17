@@ -1,7 +1,7 @@
 //! `cst_v1` round-trip and negative tests — the S5 slice's own test plan
 //! items 2 and 3 (`docs/plans/satysfi-0-1-0-support.md` cst_v1 design spec
 //! §7): parse+unparse a hand-written 0.1-syntax snippet and assert every
-//! `FileV1`/`BindV1`/`Expr` node round-trips losslessly (`Parse` ∘ `Unparse`
+//! `FileV1`/`Bind`/`Expr` node round-trips losslessly (`Parse` ∘ `Unparse`
 //! = id at the token level), plus assert that SATySFi-0.1-invalid input is
 //! rejected. Lowering/e2e tests (spec items 4-6) are out of scope for this
 //! slice — `satysfi-syntax` only produces `FileV1`/`parse_file_v1`.
@@ -42,6 +42,62 @@ fn document_let_forms() {
     // `let pat = value in body` — a non-bare-variable pattern.
     assert_roundtrip_v1("let (a, b) = (1, 2) in a");
     assert_roundtrip_v1("let [a, b] = [1, 2] in a");
+}
+
+/// Sub-slice 2b: expression-level `let rec … and … in` — the full
+/// `and`-chain (Slice 1's single-clause restriction is retired).
+#[test]
+fn document_let_rec_and_in() {
+    assert_roundtrip_v1(
+        "let rec even n = if n <= 0 then true else odd n\n\
+         and odd n = if n <= 0 then false else even n in even 4",
+    );
+
+    let file = parse_file_v1(
+        "let rec even n = odd n and odd n = even n in even 4",
+    )
+    .unwrap();
+    let cst_v1::FileV1::Document { body, .. } = file else {
+        panic!("expected a document file");
+    };
+    let cst_v1::ast::Expr::LetRecIn { first, ands, .. } = body else {
+        panic!("expected Expr::LetRecIn");
+    };
+    assert_eq!(first.name.name, "even");
+    assert_eq!(ands.len(), 1);
+    assert_eq!(ands[0].clause.name.name, "odd");
+}
+
+/// Sub-slice 2b: expression-level `let mutable x <- init in body`.
+#[test]
+fn document_let_mutable_in() {
+    assert_roundtrip_v1("let mutable c <- 0 in c <- !c + 1");
+
+    let file = parse_file_v1("let mutable c <- 0 in c").unwrap();
+    let cst_v1::FileV1::Document { body, .. } = file else {
+        panic!("expected a document file");
+    };
+    let cst_v1::ast::Expr::LetMutableIn { name, .. } = body else {
+        panic!("expected Expr::LetMutableIn");
+    };
+    assert_eq!(name.name, "c");
+}
+
+/// Sub-slice 2b exclusion: 0.0.6 has no `Expr::LetInlineIn`/`LetBlockIn` at
+/// all (`LETHORZ`/`LETVERT` are top-level-only), so there is nothing to
+/// transcribe an expression-level `let inline`/`let block` to — a parse
+/// error, documented.
+#[test]
+fn let_inline_or_block_in_is_a_parse_error() {
+    assert!(parse_file_v1(r"let inline ctx \c = 0 in 1").is_err());
+    assert!(parse_file_v1("let block ctx +c = 0 in 1").is_err());
+}
+
+/// Sub-slice 2b exclusion: `val math` belongs to the math split (no arm in
+/// `Bind`) — a parse error.
+#[test]
+fn val_math_is_a_parse_error() {
+    assert!(parse_file_v1(r"module M = struct val math \m = e end").is_err());
 }
 
 #[test]
@@ -162,8 +218,111 @@ fn library_val_forms() {
     );
 }
 
+/// Sub-slice 2b: `val rec … and …` — lossless round-trip; parsed shape has
+/// `ValueRec` with 1 `and`.
+#[test]
+fn library_val_rec_and_chain() {
+    let src = "module M = struct\n\
+               val rec even n = odd n\n\
+               and odd n = even n\n\
+               end";
+    assert_roundtrip_v1(src);
+
+    let file = parse_file_v1(src).unwrap();
+    let cst_v1::FileV1::Library { binds, .. } = file else {
+        panic!("expected a library file");
+    };
+    assert_eq!(binds.len(), 1);
+    let cst_v1::Bind::ValueRec { first, ands, .. } = &binds[0] else {
+        panic!("expected a ValueRec bind, got {:?}", binds[0]);
+    };
+    assert_eq!(first.name.name, "even");
+    assert_eq!(ands.len(), 1);
+    assert_eq!(ands[0].clause.name.name, "odd");
+}
+
+/// Sub-slice 2b: `val mutable x <- e`.
+#[test]
+fn library_val_mutable() {
+    let src = "module M = struct\n\
+               val mutable c <- 0\n\
+               end";
+    assert_roundtrip_v1(src);
+
+    let file = parse_file_v1(src).unwrap();
+    let cst_v1::FileV1::Library { binds, .. } = file else {
+        panic!("expected a library file");
+    };
+    assert_eq!(binds.len(), 1);
+    assert!(matches!(&binds[0], cst_v1::Bind::ValueMutable { name, .. } if name.name == "c"));
+}
+
+/// Sub-slice 2b: `type` binds — the variant/synonym split, postfix-tyvars
+/// parse (`u 'a`), products (`int * int`), and prefix application
+/// (`option t`, 1 argument — the arity guard only fires at LOWERING, so a
+/// 2-argument application is pinned as a lowering-error test instead, not
+/// here; see `v1/lower.rs`'s `type_app_arity_2_is_a_lower_error`).
+#[test]
+fn library_type_binds() {
+    let src = "module M = struct\n\
+               type t = | A of int * int | B\n\
+               and u 'a = t -> option t\n\
+               end";
+    assert_roundtrip_v1(src);
+
+    let file = parse_file_v1(src).unwrap();
+    let cst_v1::FileV1::Library { binds, .. } = file else {
+        panic!("expected a library file");
+    };
+    assert_eq!(binds.len(), 1);
+    let cst_v1::Bind::Type { first, ands, .. } = &binds[0] else {
+        panic!("expected a Type bind, got {:?}", binds[0]);
+    };
+    assert_eq!(first.name.name, "t");
+    assert_eq!(ands.len(), 1);
+    assert_eq!(ands[0].bind.name.name, "u");
+    assert_eq!(ands[0].bind.tyvars.len(), 1, "`u 'a` — one postfix tyvar");
+    let cst_v1::TypeBodyV1::Variant { first: a_def, rest, .. } = &first.body else {
+        panic!("expected t's body to be a variant");
+    };
+    assert_eq!(a_def.ctor.name, "A");
+    assert_eq!(rest.len(), 1);
+    assert_eq!(rest[0].def.ctor.name, "B");
+    let cst_v1::TypeBodyV1::Synonym(_) = &ands[0].bind.body else {
+        panic!("expected u's body to be a synonym");
+    };
+}
+
+/// Sub-slice 2b: `bound_identifier` retirement — `val (+++) a b = a`.
+#[test]
+fn library_op_named_value() {
+    let src = "module M = struct\n\
+               val (+++) a b = a\n\
+               end";
+    assert_roundtrip_v1(src);
+
+    let file = parse_file_v1(src).unwrap();
+    let cst_v1::FileV1::Library { binds, .. } = file else {
+        panic!("expected a library file");
+    };
+    assert_eq!(binds.len(), 1);
+    assert!(matches!(&binds[0], cst_v1::Bind::Value { name, .. } if name.name == "+++"));
+}
+
+/// Sub-slice 2b exclusion: type-level records (`(| l : ty |)`) are not part
+/// of the widened `TypeAtom` grammar — a parse error.
+#[test]
+fn type_record_is_a_parse_error() {
+    assert!(parse_file_v1(
+        "module M = struct\n\
+         type t = (| x : int |)\n\
+         end"
+    )
+    .is_err());
+}
+
 /// The `stdja-mini.satyh` transliteration from the cst_v1 design spec's §3
-/// (Slice-1 `BindV1` ground truth), covering all three `BindV1` arms plus a
+/// (Slice-1 `Bind` ground truth), covering all three `Bind` arms plus a
 /// comma-record inside `document`'s call, one tuple (`page-break`'s
 /// argument), and one `let open M in`-shaped local use elsewhere in the
 /// file's expr layer (via a small standalone snippet below — `stdja-mini`
@@ -194,10 +353,92 @@ end
     };
     assert_eq!(name.name, "StdjaMini");
     assert_eq!(binds.len(), 4);
-    assert!(matches!(binds[0], cst_v1::BindV1::Value { .. }));
-    assert!(matches!(binds[1], cst_v1::BindV1::ValueBlock { .. }));
-    assert!(matches!(binds[2], cst_v1::BindV1::ValueInline { .. }));
-    assert!(matches!(binds[3], cst_v1::BindV1::ValueInline { .. }));
+    assert!(matches!(binds[0], cst_v1::Bind::Value { .. }));
+    assert!(matches!(binds[1], cst_v1::Bind::ValueBlock { .. }));
+    assert!(matches!(binds[2], cst_v1::Bind::ValueInline { .. }));
+    assert!(matches!(binds[3], cst_v1::Bind::ValueInline { .. }));
+}
+
+/// Sub-slice 2a: a nested `module N = struct … end` bind round-trips
+/// losslessly and the parsed shape is exactly the nested `Bind::Module`.
+#[test]
+fn library_nested_module_bind() {
+    let src = "module M = struct\n\
+               val x = 1\n\
+               module N = struct\n\
+               val y = 2\n\
+               end\n\
+               val z = 3\n\
+               end";
+    assert_roundtrip_v1(src);
+
+    let file = parse_file_v1(src).unwrap();
+    let cst_v1::FileV1::Library { name, binds, .. } = file else {
+        panic!("expected a library file");
+    };
+    assert_eq!(name.name, "M");
+    assert_eq!(binds.len(), 3);
+    assert!(matches!(binds[0], cst_v1::Bind::Value { .. }));
+    let cst_v1::Bind::Module {
+        name: inner_name,
+        sig_annot: None,
+        body,
+        ..
+    } = &binds[1]
+    else {
+        panic!("expected binds[1] to be a nested module bind");
+    };
+    let cst_v1::ast::ModExpr::Struct { binds: inner_binds, .. } = &*body.0 else {
+        panic!("expected a struct-literal body");
+    };
+    assert_eq!(inner_name.name, "N");
+    assert_eq!(inner_binds.len(), 1);
+    assert!(matches!(&*inner_binds[0].0, cst_v1::Bind::Value { .. }));
+    assert!(matches!(binds[2], cst_v1::Bind::Value { .. }));
+}
+
+/// Sub-slice 2c retires the Slice-1/2a struct-literal-only restriction:
+/// `module M = N` (a bare module alias) now parses fine, as
+/// `ModExpr::Var` — it is Sub-slice 2d's `LowerError` at LOWERING time, not
+/// a parse error (see `v1/lower.rs`'s `module_alias_is_a_lower_error`).
+/// What remains a parse error is `FileV1`'s own top-level shape: neither of
+/// these has any `FileV1` production at all.
+#[test]
+fn module_alias_at_top_level_is_still_a_parse_error() {
+    // A bare `module M = N` (no `struct … end`) is not `main_lib` — the
+    // top-level library production is always `MODULE UPPER
+    // option(sig_annot) EXACT_EQ STRUCT bind* END`, never a bare modexpr.
+    assert!(parse_file_v1("module M = N").is_err());
+    assert!(
+        parse_file_v1(
+            "module M = struct\n\
+             val x = 1\n\
+             end\n\
+             module P = M"
+        )
+        .is_err(),
+        "a second top-level form after the library's closing `end` has no \
+         FileV1 shape at all"
+    );
+}
+
+/// Regression pin: a document's module-qualified variable reference still
+/// parses as `Atomic::VarWithMod` (unaffected by the new `Bind::Module`
+/// arm — `VarWithMod` was already Slice-1 grammar).
+#[test]
+fn document_qualified_var_still_parses_as_var_with_mod() {
+    assert_roundtrip_v1("M.x");
+    let file = parse_file_v1("M.x").unwrap();
+    let cst_v1::FileV1::Document { body, .. } = file else {
+        panic!("expected a document file");
+    };
+    let cst_v1::ast::Expr::Ops(chain) = body else {
+        panic!("expected an operator-chain expression");
+    };
+    assert!(matches!(
+        chain.head.head,
+        cst_v1::ast::Atomic::VarWithMod(_)
+    ));
 }
 
 #[test]
@@ -279,4 +520,436 @@ fn v0_0_6_source_is_not_valid_v0_1_library_syntax() {
     ))
     .expect("lib-satysfi/dist/packages/stdja-mini.satyh must exist");
     assert!(parse_file_v1(&v006_src).is_err());
+}
+
+// ---- Sub-slice 2c: module/signature grammar ----------------------------
+
+/// §5.1 item 1: `main_lib`'s `:>` signature annotation.
+#[test]
+fn library_sig_annot() {
+    let src = "module M :> sig val x : int end = struct\n\
+               val x = 1\n\
+               end";
+    assert_roundtrip_v1(src);
+
+    let file = parse_file_v1(src).unwrap();
+    let cst_v1::FileV1::Library { sig_annot, .. } = file else {
+        panic!("expected a library file");
+    };
+    let sig_annot = sig_annot.expect("sig_annot must be Some");
+    let cst_v1::ast::SigExpr::Bot(cst_v1::ast::SigBotV1::Sig { decls, .. }) = &*sig_annot.sig_.0
+    else {
+        panic!("expected SigExpr::Bot(SigBotV1::Sig), got {:?}", sig_annot.sig_.0);
+    };
+    assert_eq!(decls.len(), 1);
+    assert!(
+        matches!(&*decls[0].0, cst_v1::ast::Decl::Val { name, .. } if name.name == "x"),
+        "{:?}",
+        decls[0].0
+    );
+}
+
+/// §5.1 item 2: the bind-level `option(sig_annot)`.
+#[test]
+fn library_nested_module_sig_annot() {
+    let src = "module M = struct\n\
+               module N :> sig val y : int end = struct\n\
+               val y = 2\n\
+               end\n\
+               end";
+    assert_roundtrip_v1(src);
+
+    let file = parse_file_v1(src).unwrap();
+    let cst_v1::FileV1::Library { binds, .. } = file else {
+        panic!("expected a library file");
+    };
+    assert_eq!(binds.len(), 1);
+    let cst_v1::Bind::Module { name, sig_annot, .. } = &binds[0] else {
+        panic!("expected a nested module bind");
+    };
+    assert_eq!(name.name, "N");
+    assert!(sig_annot.is_some());
+}
+
+/// §5.1 item 3: module aliases and (possibly long) module paths.
+#[test]
+fn library_module_alias_and_paths() {
+    let src = "module M = struct\n\
+               module N = struct val x = 1 end\n\
+               module P = N\n\
+               module Q = A.B.C\n\
+               end";
+    assert_roundtrip_v1(src);
+
+    let file = parse_file_v1(src).unwrap();
+    let cst_v1::FileV1::Library { binds, .. } = file else {
+        panic!("expected a library file");
+    };
+    assert_eq!(binds.len(), 3);
+    let cst_v1::Bind::Module { body: p_body, .. } = &binds[1] else {
+        panic!("expected binds[1] to be P's module bind");
+    };
+    assert!(
+        matches!(
+            &*p_body.0,
+            cst_v1::ast::ModExpr::Var(cst_v1::ast::ModChainV1::Single(_))
+        ),
+        "{:?}",
+        p_body.0
+    );
+    let cst_v1::Bind::Module { body: q_body, .. } = &binds[2] else {
+        panic!("expected binds[2] to be Q's module bind");
+    };
+    let cst_v1::ast::ModExpr::Var(cst_v1::ast::ModChainV1::Long(long)) = &*q_body.0 else {
+        panic!("expected Q's body to be Var(Long), got {:?}", q_body.0);
+    };
+    assert_eq!(long.mods, vec!["A".to_string(), "B".to_string()]);
+    assert_eq!(long.name, "C");
+}
+
+/// §5.1 item 4: a functor literal bind (also exercises `VarWithMod` `X.x`
+/// inside the functor body).
+#[test]
+fn library_functor_bind() {
+    let src = "module M = struct\n\
+               module F = fun (X : sig val x : int end) -> struct val y = X.x end\n\
+               end";
+    assert_roundtrip_v1(src);
+
+    let file = parse_file_v1(src).unwrap();
+    let cst_v1::FileV1::Library { binds, .. } = file else {
+        panic!("expected a library file");
+    };
+    let cst_v1::Bind::Module { body, .. } = &binds[0] else {
+        panic!("expected F's module bind");
+    };
+    assert!(
+        matches!(&*body.0, cst_v1::ast::ModExpr::Functor { .. }),
+        "{:?}",
+        body.0
+    );
+}
+
+/// §5.1 item 5: functor application, plus the App-vs-Var backtrack pin.
+#[test]
+fn library_functor_application() {
+    let src = "module M = struct\n\
+               module P = F X\n\
+               module Q = F.G X.Y\n\
+               module R = N\n\
+               val z = 1\n\
+               end";
+    assert_roundtrip_v1(src);
+
+    let file = parse_file_v1(src).unwrap();
+    let cst_v1::FileV1::Library { binds, .. } = file else {
+        panic!("expected a library file");
+    };
+    assert_eq!(binds.len(), 4);
+    let cst_v1::Bind::Module { body: p_body, .. } = &binds[0] else {
+        panic!("expected P's module bind");
+    };
+    assert!(
+        matches!(
+            &*p_body.0,
+            cst_v1::ast::ModExpr::App {
+                func: cst_v1::ast::ModChainV1::Single(_),
+                arg: cst_v1::ast::ModChainV1::Single(_),
+            }
+        ),
+        "{:?}",
+        p_body.0
+    );
+    let cst_v1::Bind::Module { body: q_body, .. } = &binds[1] else {
+        panic!("expected Q's module bind");
+    };
+    assert!(
+        matches!(
+            &*q_body.0,
+            cst_v1::ast::ModExpr::App {
+                func: cst_v1::ast::ModChainV1::Long(_),
+                arg: cst_v1::ast::ModChainV1::Long(_),
+            }
+        ),
+        "{:?}",
+        q_body.0
+    );
+    let cst_v1::Bind::Module { body: r_body, .. } = &binds[2] else {
+        panic!("expected R's module bind");
+    };
+    assert!(
+        matches!(&*r_body.0, cst_v1::ast::ModExpr::Var(cst_v1::ast::ModChainV1::Single(_))),
+        "the trailing `val z = 1` must not be swallowed as a second chain: {:?}",
+        r_body.0
+    );
+    assert!(matches!(binds[3], cst_v1::Bind::Value { .. }));
+}
+
+/// §5.1 item 6: a `signature` bind plus full `decl` coverage inside its
+/// `sig … end` body — all eight `Decl` forms, `sig end` (empty).
+#[test]
+fn library_signature_bind_and_full_decl_coverage() {
+    let src = "module M = struct\n\
+               signature S = sig\n\
+               type t :: o\n\
+               type m :: o -> o\n\
+               type u 'a = t\n\
+               val x : int\n\
+               val map 'a 'b : ('a -> 'b) -> t -> t\n\
+               val \\emph : int\n\
+               val +p : int\n\
+               module N : sig val y : int end\n\
+               signature T = sig end\n\
+               include T\n\
+               end\n\
+               end";
+    assert_roundtrip_v1(src);
+
+    let file = parse_file_v1(src).unwrap();
+    let cst_v1::FileV1::Library { binds, .. } = file else {
+        panic!("expected a library file");
+    };
+    assert_eq!(binds.len(), 1);
+    let cst_v1::Bind::Signature { name, sig_, .. } = &binds[0] else {
+        panic!("expected a Bind::Signature, got {:?}", binds[0]);
+    };
+    assert_eq!(name.name, "S");
+    let cst_v1::ast::SigExpr::Bot(cst_v1::ast::SigBotV1::Sig { decls, .. }) = &*sig_.0 else {
+        panic!("expected SigExpr::Bot(SigBotV1::Sig)");
+    };
+    assert_eq!(decls.len(), 10, "{decls:?}");
+
+    let cst_v1::ast::Decl::TypeOpaque { name: t_name, kind: t_kind, .. } = &*decls[0].0 else {
+        panic!("expected decls[0] = t to be TypeOpaque, got {:?}", decls[0].0);
+    };
+    assert_eq!(t_name.name, "t");
+    assert!(t_kind.rest.is_empty());
+
+    let cst_v1::ast::Decl::TypeOpaque { name: m_name, kind: m_kind, .. } = &*decls[1].0 else {
+        panic!("expected decls[1] = m to be TypeOpaque, got {:?}", decls[1].0);
+    };
+    assert_eq!(m_name.name, "m");
+    assert_eq!(m_kind.rest.len(), 1);
+
+    assert!(matches!(&*decls[2].0, cst_v1::ast::Decl::Type { .. }), "{:?}", decls[2].0);
+
+    assert!(
+        matches!(&*decls[3].0, cst_v1::ast::Decl::Val { name, .. } if name.name == "x"),
+        "{:?}",
+        decls[3].0
+    );
+
+    let cst_v1::ast::Decl::Val { name: map_name, quant, .. } = &*decls[4].0 else {
+        panic!("expected decls[4] = map to be Decl::Val, got {:?}", decls[4].0);
+    };
+    assert_eq!(map_name.name, "map");
+    assert_eq!(quant.len(), 2);
+
+    assert!(matches!(&*decls[5].0, cst_v1::ast::Decl::ValHorzCmd { .. }), "{:?}", decls[5].0);
+    assert!(matches!(&*decls[6].0, cst_v1::ast::Decl::ValVertCmd { .. }), "{:?}", decls[6].0);
+
+    let cst_v1::ast::Decl::Module { name: n_name, .. } = &*decls[7].0 else {
+        panic!("expected decls[7] = N to be Decl::Module, got {:?}", decls[7].0);
+    };
+    assert_eq!(n_name.name, "N");
+
+    let cst_v1::ast::Decl::Signature { name: t2_name, sig_: t2_sig, .. } = &*decls[8].0 else {
+        panic!("expected decls[8] = T to be Decl::Signature, got {:?}", decls[8].0);
+    };
+    assert_eq!(t2_name.name, "T");
+    let cst_v1::ast::SigExpr::Bot(cst_v1::ast::SigBotV1::Sig { decls: t2_decls, .. }) = &**t2_sig
+    else {
+        panic!("expected T's body to be sig ... end");
+    };
+    assert!(t2_decls.is_empty(), "`sig end` — the empty decl list");
+
+    assert!(matches!(&*decls[9].0, cst_v1::ast::Decl::Include { .. }), "{:?}", decls[9].0);
+}
+
+/// §5.1 item 7: `with [path] type … and …` refinement.
+#[test]
+fn library_with_type() {
+    let src = "module M :> S with type t = int and u = bool = struct\n\
+               type t = int\n\
+               and u = bool\n\
+               val x = 1\n\
+               end";
+    assert_roundtrip_v1(src);
+
+    let file = parse_file_v1(src).unwrap();
+    let cst_v1::FileV1::Library { sig_annot, .. } = file else {
+        panic!("expected a library file");
+    };
+    let sig_annot = sig_annot.expect("sig_annot must be Some");
+    let cst_v1::ast::SigExpr::WithType { base, path, binds, .. } = &*sig_annot.sig_.0 else {
+        panic!("expected SigExpr::WithType, got {:?}", sig_annot.sig_.0);
+    };
+    assert!(matches!(base, cst_v1::ast::SigBotV1::Var(v) if v.name == "S"));
+    assert!(path.is_none());
+    assert_eq!(binds.0.ands.len() + 1, 2, "a chain of 2");
+
+    let src2 = "module M2 :> S with A.B type t = int = struct\n\
+                val x = 1\n\
+                end";
+    assert_roundtrip_v1(src2);
+    let file2 = parse_file_v1(src2).unwrap();
+    let cst_v1::FileV1::Library { sig_annot: sig_annot2, .. } = file2 else {
+        panic!("expected a library file");
+    };
+    let sig_annot2 = sig_annot2.expect("sig_annot must be Some");
+    let cst_v1::ast::SigExpr::WithType { path: path2, .. } = &*sig_annot2.sig_.0 else {
+        panic!("expected SigExpr::WithType, got {:?}", sig_annot2.sig_.0);
+    };
+    assert!(matches!(path2, Some(cst_v1::ast::ModChainV1::Long(_))));
+}
+
+/// §5.1 item 8: `include` binds.
+#[test]
+fn library_include_bind() {
+    let src = "module M = struct\n\
+               include N\n\
+               include A.B.C\n\
+               end";
+    assert_roundtrip_v1(src);
+
+    let file = parse_file_v1(src).unwrap();
+    let cst_v1::FileV1::Library { binds, .. } = file else {
+        panic!("expected a library file");
+    };
+    assert_eq!(binds.len(), 2);
+    let cst_v1::Bind::Include { body: b0, .. } = &binds[0] else {
+        panic!("expected binds[0] to be a Bind::Include, got {:?}", binds[0]);
+    };
+    assert!(matches!(&*b0.0, cst_v1::ast::ModExpr::Var(cst_v1::ast::ModChainV1::Single(_))));
+    let cst_v1::Bind::Include { body: b1, .. } = &binds[1] else {
+        panic!("expected binds[1] to be a Bind::Include, got {:?}", binds[1]);
+    };
+    assert!(matches!(&*b1.0, cst_v1::ast::ModExpr::Var(cst_v1::ast::ModChainV1::Long(_))));
+}
+
+/// §5.1 item 9: a `:>` signature PATH annotation.
+#[test]
+fn library_sig_path_annot() {
+    let src = "module M :> A.B.S = struct\n\
+               val x = 1\n\
+               end";
+    assert_roundtrip_v1(src);
+
+    let file = parse_file_v1(src).unwrap();
+    let cst_v1::FileV1::Library { sig_annot, .. } = file else {
+        panic!("expected a library file");
+    };
+    let sig_annot = sig_annot.expect("sig_annot must be Some");
+    assert!(matches!(&*sig_annot.sig_.0, cst_v1::ast::SigExpr::Bot(cst_v1::ast::SigBotV1::Path(_))));
+}
+
+// ---- Sub-slice 2c: negative pins -----------------------------------------
+
+/// §5.1 item 10 (the left-recursion correction's behavioral fingerprint):
+/// upstream rejects chained `with`, and so does the bot+suffix encoding.
+#[test]
+fn with_cannot_chain() {
+    assert!(parse_file_v1(
+        "module M :> S with type t = int with type u = bool = struct\n\
+         val x = 1\n\
+         end"
+    )
+    .is_err());
+}
+
+/// §5.1 item 11: 0.1's annotation sigil is `:>`, never 0.0.6's `: sig …
+/// end` shape.
+#[test]
+fn bare_colon_module_annotation_is_a_parse_error() {
+    assert!(parse_file_v1("module M : sig end = struct val x = 1 end").is_err());
+}
+
+/// §5.1 item 12 (phase 5 — staged decls have no `Decl` arm yet).
+#[test]
+fn staged_val_decl_is_a_parse_error() {
+    assert!(parse_file_v1(
+        "module M = struct\nsignature S = sig val ~x : int end\nend"
+    )
+    .is_err());
+}
+
+/// §5.1 item 13 (phase 5 — macro decls lex as `HorzMacro`/`VertMacro`, not
+/// `HorzCmdTok`/`VertCmdTok`, so no `Decl` arm accepts them).
+#[test]
+fn macro_decl_is_a_parse_error() {
+    assert!(parse_file_v1(
+        "module M = struct\nsignature S = sig val \\m@ : int end\nend"
+    )
+    .is_err());
+}
+
+/// §5.1 item 14 (phase 4 — no `ROWVAR` token, so `?'r` cannot appear where
+/// a `Decl::Val` expects a `quant`/`colon`).
+#[test]
+fn row_quantifier_is_a_parse_error() {
+    assert!(parse_file_v1(
+        "module M = struct\nsignature S = sig val f (?'r :: (| a |)) : int end\nend"
+    )
+    .is_err());
+}
+
+// ---- Ld3a: HeaderV1 (the `use`-header union grammar) ------------------------
+
+/// Every `use`-header form round-trips, pulled from the real `saphe-split`
+/// demo headers (`demo/demo.saty`, `demo/local.satyh`), plus the Legacy
+/// `@`-header the union grammar also accepts.
+#[test]
+fn header_v1_use_forms_round_trip() {
+    // `use package [open] mod_chain`
+    assert_roundtrip_v1("use package Tabular\n3");
+    assert_roundtrip_v1("use package open Stdlib\n3");
+    assert_roundtrip_v1("use package open Stdlib.Logo\n3");
+    // `use [open] mod_chain of `relpath``
+    assert_roundtrip_v1("use open Local of `./local`\n3");
+    assert_roundtrip_v1("use Local of `./local`\n3");
+    // bare `use [open] mod_chain`
+    assert_roundtrip_v1("use Local\n3");
+    assert_roundtrip_v1("use open Local\n3");
+    // Legacy `@`-headers, still accepted by the one V0_1 grammar.
+    assert_roundtrip_v1("@require: pervasives\n3");
+    assert_roundtrip_v1("@import: helper\n3");
+}
+
+/// A library (`module … = struct … end`) carrying a `use` header round-trips,
+/// and multiple header families coexist in one file (the union grammar).
+#[test]
+fn header_v1_on_library_and_mixed_families() {
+    assert_roundtrip_v1("use package Stdlib.List\nmodule Local = struct\nval x = 1\nend");
+    assert_roundtrip_v1(
+        "use package open Stdlib\n\
+         use package Tabular\n\
+         use open Local of `./local`\n\
+         @require: pervasives\n3",
+    );
+}
+
+/// The `HeaderV1::display_name` helper the loader uses for diagnostics.
+#[test]
+fn header_v1_display_names() {
+    use cst_v1::{FileV1, HeaderV1};
+    let file = parse_file_v1(
+        "use package open Stdlib.Logo\n\
+         use open Local of `./local`\n\
+         use Sibling\n\
+         @require: pervasives\n3",
+    )
+    .unwrap();
+    let FileV1::Document { headers, .. } = file else {
+        panic!("expected a document");
+    };
+    let names: Vec<String> = headers.iter().map(HeaderV1::display_name).collect();
+    assert_eq!(
+        names,
+        vec![
+            "use package Stdlib.Logo".to_string(),
+            "use Local of `./local`".to_string(),
+            "use Sibling".to_string(),
+            "@require: pervasives".to_string(),
+        ]
+    );
 }

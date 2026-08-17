@@ -6,7 +6,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use satysfi_loader::{load, LoadError, LoadOptions, LoadedProgram, SatysfiVersion};
+use satysfi_loader::{load, LoadError, LoadMode, LoadOptions, LoadedProgram, SatysfiVersion};
 
 struct TempDir(PathBuf);
 
@@ -264,4 +264,235 @@ fn import_resolves_relative_to_the_containing_file_not_the_entry_dir() {
 #[test]
 fn default_load_options_targets_v0_0_6() {
     assert_eq!(LoadOptions::default().version, SatysfiVersion::V0_0_6);
+}
+
+// ---------------------------------------------------------------------------
+// Ld3a: LoadMode::Envelopes (the saphe-split `use … of` open resolver).
+// ---------------------------------------------------------------------------
+
+/// Envelopes mode, 0.1, no deps config (the Ld3a happy path).
+fn envelopes_v01() -> LoadOptions {
+    LoadOptions {
+        version: SatysfiVersion::V0_1,
+        mode: LoadMode::Envelopes { deps: None },
+        ..Default::default()
+    }
+}
+
+#[test]
+fn envelopes_use_of_local_chain() {
+    let dir = TempDir::new("env-chain");
+    dir.write("local.satyh", "module Local = struct\nval x = 1\nend");
+    let entry = dir.write("doc.saty", "use open Local of `./local`\nlet x = 1 in x");
+
+    let program = load(&entry, &envelopes_v01()).expect("envelopes load should succeed");
+
+    assert_eq!(file_names(&program), vec!["local.satyh", "doc.saty"]);
+    assert!(program.files[1].cst.is_document(), "entry is a document");
+    assert!(!program.files[0].cst.is_document(), "dependency is a library");
+}
+
+#[test]
+fn envelopes_use_of_transitive_dedup() {
+    let dir = TempDir::new("env-dedup");
+    dir.write("b.satyh", "module B = struct\nval b = 1\nend");
+    dir.write(
+        "a.satyh",
+        "use open B of `./b`\nmodule A = struct\nval a = 1\nend",
+    );
+    let entry = dir.write(
+        "doc.saty",
+        "use open A of `./a`\nuse open B of `./b`\nlet x = 1 in x",
+    );
+
+    let program = load(&entry, &envelopes_v01()).expect("envelopes load should succeed");
+
+    let names = file_names(&program);
+    assert_eq!(
+        names.iter().filter(|n| n.as_str() == "b.satyh").count(),
+        1,
+        "b must be deduplicated: {names:?}"
+    );
+    let b_pos = names.iter().position(|n| n == "b.satyh").unwrap();
+    let a_pos = names.iter().position(|n| n == "a.satyh").unwrap();
+    let doc_pos = names.iter().position(|n| n == "doc.saty").unwrap();
+    assert!(b_pos < a_pos, "b before a: {names:?}");
+    assert_eq!(doc_pos, names.len() - 1, "entry document last: {names:?}");
+}
+
+#[test]
+fn envelopes_use_of_prefers_satyh_over_satyg() {
+    let dir = TempDir::new("env-extpref");
+    dir.write("local.satyh", "module Local = struct\nval x = 1\nend");
+    dir.write("local.satyg", "module Local = struct\nval x = 2\nend");
+    let entry = dir.write("doc.saty", "use open Local of `./local`\nlet x = 1 in x");
+
+    let program = load(&entry, &envelopes_v01()).expect("envelopes load should succeed");
+
+    assert!(program.files[0]
+        .path
+        .to_string_lossy()
+        .ends_with("local.satyh"));
+}
+
+#[test]
+fn envelopes_unresolved_use_of_lists_candidates() {
+    let dir = TempDir::new("env-unresolved");
+    let entry = dir.write("doc.saty", "use open Missing of `./missing`\nlet x = 1 in x");
+
+    let err = load(&entry, &envelopes_v01()).expect_err("missing use…of must fail");
+
+    match err {
+        LoadError::UnresolvedUseOf {
+            relpath, searched, ..
+        } => {
+            assert_eq!(relpath, "./missing");
+            assert_eq!(searched.len(), 2);
+            assert!(searched[0].to_string_lossy().ends_with("missing.satyh"));
+            assert!(searched[1].to_string_lossy().ends_with("missing.satyg"));
+        }
+        other => panic!("expected LoadError::UnresolvedUseOf, got {other:?}"),
+    }
+}
+
+#[test]
+fn envelopes_use_of_cycle_detected() {
+    let dir = TempDir::new("env-cycle");
+    dir.write(
+        "a.satyh",
+        "use open B of `./b`\nmodule A = struct\nval a = 1\nend",
+    );
+    dir.write(
+        "b.satyh",
+        "use open A of `./a`\nmodule B = struct\nval b = 1\nend",
+    );
+    let entry = dir.write("doc.saty", "use open A of `./a`\nlet x = 1 in x");
+
+    let err = load(&entry, &envelopes_v01()).expect_err("cycle must be rejected");
+
+    match err {
+        LoadError::Cycle { chain } => {
+            let names: Vec<String> = chain
+                .iter()
+                .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+                .collect();
+            assert!(names.iter().any(|n| n == "a.satyh"), "chain: {names:?}");
+            assert!(names.iter().any(|n| n == "b.satyh"), "chain: {names:?}");
+        }
+        other => panic!("expected LoadError::Cycle, got {other:?}"),
+    }
+}
+
+#[test]
+fn envelopes_use_package_errors_without_deps() {
+    let dir = TempDir::new("env-usepkg");
+    let entry = dir.write("doc.saty", "use package Stdlib\nlet x = 1 in x");
+
+    let err = load(&entry, &envelopes_v01()).expect_err("use package without deps must fail");
+
+    match err {
+        LoadError::PackageDependencyUnresolved { module, .. } => {
+            assert_eq!(module, "Stdlib");
+        }
+        other => panic!("expected LoadError::PackageDependencyUnresolved, got {other:?}"),
+    }
+}
+
+#[test]
+fn envelopes_bare_use_at_document_level_errors() {
+    let dir = TempDir::new("env-bareuse");
+    let entry = dir.write("doc.saty", "use Local\nlet x = 1 in x");
+
+    let err = load(&entry, &envelopes_v01()).expect_err("bare use at document level must fail");
+
+    match err {
+        LoadError::BareUseOutsidePackage { module, .. } => {
+            assert_eq!(module, "Local");
+        }
+        other => panic!("expected LoadError::BareUseOutsidePackage, got {other:?}"),
+    }
+}
+
+#[test]
+fn envelopes_rejects_v006() {
+    // A nonexistent entry path proves the version/mode guard fires BEFORE any
+    // filesystem access.
+    let opts = LoadOptions {
+        version: SatysfiVersion::V0_0_6,
+        mode: LoadMode::Envelopes { deps: None },
+        ..Default::default()
+    };
+    let err = load(Path::new("/nonexistent/never-read.saty"), &opts)
+        .expect_err("V0_0_6 + Envelopes must be rejected");
+
+    match err {
+        LoadError::InvalidModeVersion { version } => {
+            assert_eq!(version, SatysfiVersion::V0_0_6);
+        }
+        other => panic!("expected LoadError::InvalidModeVersion, got {other:?}"),
+    }
+}
+
+#[test]
+fn envelopes_deps_flag_unsupported_names_ld3b() {
+    let dir = TempDir::new("env-deps");
+    let entry = dir.write("doc.saty", "let x = 1 in x");
+    let opts = LoadOptions {
+        version: SatysfiVersion::V0_1,
+        mode: LoadMode::Envelopes {
+            deps: Some(PathBuf::from("/some/satysfi-deps.yaml")),
+        },
+        ..Default::default()
+    };
+
+    let err = load(&entry, &opts).expect_err("a deps config must be rejected in Ld3a");
+
+    match err {
+        LoadError::DepsConfigUnsupported { path } => {
+            assert_eq!(path, PathBuf::from("/some/satysfi-deps.yaml"));
+        }
+        other => panic!("expected LoadError::DepsConfigUnsupported, got {other:?}"),
+    }
+}
+
+#[test]
+fn legacy_rejects_use_headers_with_mode_hint() {
+    let dir = TempDir::new("legacy-use");
+    // V0_1 grammar, but the DEFAULT (Legacy) mode: a `use` header is a typed
+    // mode error, not the old parse error.
+    let entry = dir.write("doc.saty", "use package X\nlet x = 1 in x");
+    let opts = LoadOptions {
+        version: SatysfiVersion::V0_1,
+        mode: LoadMode::Legacy,
+        ..Default::default()
+    };
+
+    let err = load(&entry, &opts).expect_err("use header under Legacy must fail");
+
+    match err {
+        LoadError::EnvelopeHeaderUnderLegacy { header, .. } => {
+            assert!(header.contains("use package X"), "header: {header}");
+        }
+        other => panic!("expected LoadError::EnvelopeHeaderUnderLegacy, got {other:?}"),
+    }
+}
+
+#[test]
+fn envelopes_rejects_require_headers() {
+    let dir = TempDir::new("env-require");
+    let entry = dir.write("doc.saty", "@require: foo\nlet x = 1 in x");
+
+    let err = load(&entry, &envelopes_v01()).expect_err("@require under Envelopes must fail");
+
+    match err {
+        LoadError::LegacyHeaderUnderEnvelopes { header, .. } => {
+            assert!(header.contains("@require: foo"), "header: {header}");
+        }
+        other => panic!("expected LoadError::LegacyHeaderUnderEnvelopes, got {other:?}"),
+    }
+}
+
+#[test]
+fn default_mode_is_legacy() {
+    assert_eq!(LoadOptions::default().mode, LoadMode::Legacy);
 }

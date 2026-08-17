@@ -34,6 +34,14 @@ pub enum Token {
     TypeVar(String),
     #[leaf(name = "OpenModuleTok", expect = "'Mod.('", field = "name")]
     OpenModule(String), // `Mod.(`
+    /// `M.N.P` — a dotted module path ending in an UPPER segment
+    /// (upstream `LONG_UPPER`, `lexer_v1.mll:357-363`). SATySFi 0.1-only:
+    /// under 0.0.6 this spelling is a lex error ("module path must end
+    /// with a variable name"), unchanged. Payload mirrors
+    /// [`Token::VarWithMod`]: `mods = ["M","N"]`, final segment `"P"` —
+    /// upstream's `(modidents, modident0)` pair carries the same split
+    /// (`parser_v1.mly:407-413` reassembles the chain from it).
+    LongUpper(Vec<String>, String),
     #[leaf(name = "IntTok", expect = "an integer constant", field = "value")]
     IntConst(i64),
     #[leaf(name = "FloatTok", expect = "a float constant", field = "value")]
@@ -149,6 +157,30 @@ pub enum Token {
     /// `block` — SATySFi 0.1-only keyword (`val block +cmd = ...`).
     #[leaf(name = "KwBlock", expect = "'block'")]
     Block,
+    /// `mutable` — SATySFi 0.1-only keyword (`val mutable x <- e`/`let
+    /// mutable x <- e in ..`); under 0.0.6 this word stays a plain
+    /// identifier (see `lexer.rs`'s version-gated keyword table).
+    #[leaf(name = "KwMutable", expect = "'mutable'")]
+    Mutable,
+    /// `signature` — SATySFi 0.1-only keyword (`signature S = sig … end`,
+    /// upstream `lexer_v1.mll:348`); a plain identifier under 0.0.6.
+    #[leaf(name = "KwSignature", expect = "'signature'")]
+    Signature,
+    /// `include` — SATySFi 0.1-only keyword (`include M` binds /
+    /// `include S` decls, `lexer_v1.mll:335`); a plain identifier under
+    /// 0.0.6.
+    #[leaf(name = "KwInclude", expect = "'include'")]
+    Include,
+    /// `use` — SATySFi 0.1-only keyword (Envelopes packaging headers `use
+    /// package …` / `use … of `<path>``, `saphe-split:parser.mly:371-380 @
+    /// b836d512`); a plain identifier under 0.0.6 (no 0.0.6 grammar reserves
+    /// it — see `lexer.rs`'s version-gated keyword table).
+    #[leaf(name = "KwUse", expect = "'use'")]
+    Use,
+    /// `package` — SATySFi 0.1-only keyword (`use package …`); a plain
+    /// identifier under 0.0.6.
+    #[leaf(name = "KwPackage", expect = "'package'")]
+    Package,
 
     // ---- grouping delimiters ----
     #[leaf(name = "LParenTok", expect = "'('")]
@@ -197,6 +229,11 @@ pub enum Token {
     Comma,
     #[leaf(name = "ConsTok", expect = "'::'")]
     Cons, // `::`
+    /// `:>` — signature coercion/ascription (COERCE, `lexer_v1.mll:280`).
+    /// SATySFi 0.1-only: under 0.0.6 the same two characters lex as
+    /// `Colon` + `BinopGt(">")`, unchanged.
+    #[leaf(name = "CoerceTok", expect = "':>'")]
+    Coerce,
     #[leaf(name = "ExactMinusTok", expect = "'-'")]
     ExactMinus,
     #[leaf(name = "DefEqTok", expect = "'='")]
@@ -282,7 +319,7 @@ impl std::fmt::Display for Token {
             HeaderStage1 => write!(f, "@stage: 1"),
             HeaderPersistent0 => write!(f, "@stage: persistent"),
             Var(s) | Constructor(s) => write!(f, "{s}"),
-            VarWithMod(m, s) => write!(f, "{}.{s}", m.join(".")),
+            VarWithMod(m, s) | LongUpper(m, s) => write!(f, "{}.{s}", m.join(".")),
             TypeVar(s) => write!(f, "'{s}"),
             OpenModule(s) => write!(f, "{s}.("),
             IntConst(n) => write!(f, "{n}"),
@@ -330,6 +367,11 @@ impl std::fmt::Display for Token {
             Rec => write!(f, "rec"),
             Inline => write!(f, "inline"),
             Block => write!(f, "block"),
+            Mutable => write!(f, "mutable"),
+            Signature => write!(f, "signature"),
+            Include => write!(f, "include"),
+            Use => write!(f, "use"),
+            Package => write!(f, "package"),
             LParen => write!(f, "("),
             RParen => write!(f, ")"),
             BRecord => write!(f, "(|"),
@@ -353,6 +395,7 @@ impl std::fmt::Display for Token {
             Colon => write!(f, ":"),
             Comma => write!(f, ","),
             Cons => write!(f, "::"),
+            Coerce => write!(f, ":>"),
             ExactMinus => write!(f, "-"),
             DefEq => write!(f, "="),
             ExactTimes => write!(f, "*"),

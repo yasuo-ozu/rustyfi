@@ -9,51 +9,72 @@
 //! copy of `render_parse_error` — so that touching `cst_v1.rs` never touches
 //! `cst.rs`.
 //!
-//! **Scope (Slice 1 only).** SATySFi 0.1's grammar adds a whole ML-style
-//! module system (`bind`/`modexpr`/`sigexpr`/`decl`) on top of an expr/
-//! pattern/type layer that is structurally close to 0.0.6's, plus five
+//! **Scope (through Sub-slice 2c).** SATySFi 0.1's grammar adds a whole
+//! ML-style module system (`bind`/`modexpr`/`sigexpr`/`decl`) on top of an
+//! expr/pattern/type layer that is structurally close to 0.0.6's, plus five
 //! surface deltas: `,`-separated lists/records (not `;`), `EXACT_EQ` for
 //! both definitional and record `=` (reusing [`DefEqTok`] — no new `=`
 //! leaf), mandatory `match … with … end`, per-binding staging instead of a
 //! whole-file `@stage:` header, and no `when`/`while`/`before` at all. This
-//! module builds *only* what the transliterated `stdja-mini.satyh` needs to
-//! parse under 0.1 syntax:
+//! module builds:
 //!
-//! * [`FileV1`] — `header* expr EOI` or `header* module Name = struct
-//!   bind* end EOI` (no signature annotation yet — see below).
-//! * [`BindV1`] — the three `val` forms `stdja-mini` uses (`val`, `val
-//!   inline`, `val block`); the full `Bind` (adding `rec`/`mutable`/`math`/
-//!   `type`/`module`/`signature`/`include`) is deferred to roadmap phase 3.
+//! * [`FileV1`] — `header* expr EOI` or `header* module Name
+//!   option(sig_annot) = struct bind* end EOI`.
+//! * [`Bind`] — every arm of upstream `bind`: `val`/`val inline`/`val
+//!   block` (Slice 1), `val rec … and …`/`val mutable`/`type … and …`
+//!   (Sub-slice 2b), `module … = modexpr`/`signature … = sigexpr`/`include
+//!   modexpr` (Sub-slice 2c).
+//! * [`ast::ModExpr`]/[`ast::SigExpr`]/[`ast::Decl`] — the full
+//!   module/signature grammar (Sub-slice 2c): functor literals/
+//!   application, module paths/aliases, `:>` coercion, `sig … end` with
+//!   every `decl` form, `with type` refinement, `include`.
 //! * A copy of [`crate::cst::ast`]'s expr/pattern/type layer with the 0.1
-//!   deltas applied (see each type's doc comment for the exact delta).
+//!   deltas applied (see each type's doc comment for the exact delta),
+//!   including the full `let rec … and … in`/`let mutable … in` expression
+//!   forms and a widened `TypeExpr` grammar (products, prefix application).
 //!
-//! **Deliberately NOT built yet** (roadmap phase 3, `docs/plans/satysfi-0-1-0
-//! -support.md` §4.2): the `ModExpr`/`SigExpr` recursive roots, `Decl`, the
-//! `StructBind`/`StructDeclV1` connector types, the `BindErased`/`DeclErased`
-//! erasers, and `FileV1::Library`'s `sig_annot` field (a `module Name =
-//! struct … end` library therefore never carries a `: sig … end`
-//! constraint in Slice 1 — such input is rejected with a parse error, a
-//! documented simplification). `Bind`'s "bound name is `LOWER | ( binop )`"
-//! generality (upstream `bound_identifier`) is likewise simplified to a bare
-//! [`VarTok`] here — none of Slice 1's binds need an operator-bound name.
+//! **Grammar shipped with placeholder semantics only (Sub-slice 2c).** Every
+//! module/signature construct beyond Sub-slice 2a's struct-literal
+//! `ModExpr::Struct` body PARSES and round-trips, but lowers to a precise
+//! `LowerError` (`v1/lower.rs`) rather than real semantics — see that
+//! module's doc comment for the placeholder set and the seal rule. Real
+//! signature checking is Sub-slice 2d (2e for `include`, 2f for functors).
 //!
-//! **The `#[recurse]` SCC story (Slice 1).** Exactly three singleton,
-//! directly self-referential roots — the same shape [`crate::cst::ast`]
+//! **Deliberately NOT built yet** (post-2c deferrals): staged `val ~x`/`val
+//! persistent ~x` and macro binds/decls (phase 5, no `KwPersistent` token
+//! yet); `val math` (the math-text/math-boxes split, phase 2); `?(l = e)`
+//! optional parameter bundles and `( pat : typ )` ascribed params; type-level
+//! records/row vars and `inline|block|math […]` command types
+//! (`parser_v1.mly:730-735`); `LONG_LOWER` qualified type paths
+//! (`:720-728,742-743`); row quantifiers (`rowquant`, no `ROWVAR` token).
+//!
+//! **The `#[recurse]` SCC story (Sub-slice 2c: five roots).** Five
+//! singleton, directly self-referential roots — grown from three in
+//! Sub-slice 2b to five in Sub-slice 2c — the same shape [`crate::cst::ast`]
 //! uses, for the same reason (see its module doc comment for the measured
 //! compile-time blowup a naive transcription hits):
 //!
 //! * [`ast::Expr`] (its variants' own `Box<Expr>` children);
 //! * [`ast::PatBot`] (`CtorApplied`'s `Box<PatBot>` argument);
-//! * [`ast::TypeExpr`] (`Fun`'s right-recursive `Box<TypeExpr>` codomain).
+//! * [`ast::TypeExpr`] (`Fun`'s right-recursive `Box<TypeExpr>` codomain);
+//! * [`ast::ModExpr`] (`Functor.body`'s `Box<ModExpr>` self-loop; Sub-slice
+//!   2c);
+//! * [`ast::SigExpr`] (`Functor.dom`/`Functor.cod`'s `Box<SigExpr>`
+//!   self-loop; Sub-slice 2c — encoded left-recursion-safe, `with` is
+//!   bot+suffix, never `With { base: Box<SigExpr> }`; see [`ast::SigExpr`]'s
+//!   own doc comment).
 //!
 //! Every other recursion edge is routed through the erasers declared below
 //! ([`ExprErasedV1`], [`PatErasedV1`], [`PatBotErasedV1`], [`TyErasedV1`],
-//! [`MathErasedV1`]), keeping each SCC a singleton and the wrapped grammar
-//! monomorphized exactly once behind [`crate::stream::EraseStream`]. When
-//! phase 3 adds the module/sig layer, `ModExpr`/`SigExpr` join this same
-//! `#[recurse]` module as two more self-loop roots (their cross-layer edges
-//! into `Expr`/`TypeExpr` are already plain DAG edges through the existing
-//! erasers), per the full design in the S5 spec.
+//! [`MathErasedV1`], [`ModExprErasedV1`], [`SigExprErasedV1`],
+//! [`TypeBindsErasedV1`]), keeping each SCC a singleton and the wrapped
+//! grammar monomorphized exactly once behind [`crate::stream::EraseStream`].
+//! [`ast::Decl`] is a satellite, not a root: it has no `Box<Self>` anywhere
+//! and no type inside the `#[recurse]` module ever names it — it is reached
+//! only through the hand-written [`StructDeclV1`] connector (an opaque leaf
+//! to the SCC analysis, mirroring [`StructBindV1`]), so `SigExpr ↔ Decl`
+//! never forms a rootless static sub-cycle. Full edge-by-edge audit lives in
+//! the Sub-slice 2c spec §1.6.
 
 use crate::leaf::*;
 use crate::span::Span;
@@ -69,6 +90,106 @@ use syan::parse::{Parse, Unparse};
 /// [`crate::cst::Header`]'s absence of a `Stage` variant costs nothing here.
 pub use crate::cst::Header;
 
+/// A 0.1 header element — the UNION of BOTH packaging generations' header
+/// forms (Axis B; see the Ld3a spec §4.1 and
+/// `docs/plans/satysfi-0-1-0-support.md` §1.2). `Legacy` is `dev-0-1-0`'s
+/// `@require:`/`@import:` (byte-identical to 0.0.6's, reusing
+/// [`Header`] — the previous type of `FileV1::*::headers` wholesale); the
+/// three `Use*` forms are `saphe-split`'s `headerelem`
+/// (`parser.mly:371-380 @ b836d512`). Which family is *legal* is a
+/// `LoadMode` question the loader answers ([`satysfi_loader`]), not a grammar
+/// question — this ONE `V0_1` grammar accepts both so the mode error can be
+/// raised at load time with a better message than a lex error would give.
+///
+/// Variant order is parse priority (syan ordered-alternatives, most-specific
+/// first): `UsePackage` (the `package` keyword disambiguates) precedes the
+/// `of`-suffixed `UseOf`, which precedes bare `Use` (longest-match: `use M of
+/// …` must claim its `of` before a bare `use M` matches), which precedes the
+/// token-disjoint `Legacy` (`@`-headers lex to distinct tokens).
+#[derive(Parse, Unparse, Debug, Clone, PartialEq)]
+pub enum HeaderV1 {
+    /// `USE PACKAGE optional_open mod_chain` — depend on an installed package
+    /// by its consumer-chosen alias (`used_as`). Header attributes
+    /// (`#[test-only]` etc., upstream `list(attribute)`) are DEFERRED (Ld3b+).
+    UsePackage {
+        use_kw: KwUse,
+        package_kw: KwPackage,
+        open_kw: Option<KwOpen>,
+        path: ast::ModChainV1,
+    },
+    /// `USE optional_open mod_chain OF STRING` — load a local file by
+    /// backtick-quoted relative path (the `@import:` analog).
+    UseOf {
+        use_kw: KwUse,
+        open_kw: Option<KwOpen>,
+        path: ast::ModChainV1,
+        of_kw: KwOf,
+        relpath: LiteralTok,
+    },
+    /// `USE optional_open mod_chain` — sibling module inside the same package
+    /// (closed resolution; only legal inside envelope source trees, enforced
+    /// by the loader).
+    Use {
+        use_kw: KwUse,
+        open_kw: Option<KwOpen>,
+        path: ast::ModChainV1,
+    },
+    /// `@require:`/`@import:` — Legacy packaging, unchanged shape.
+    Legacy(Header),
+}
+
+impl HeaderV1 {
+    /// A short human-readable name for this header, for loader diagnostics
+    /// (e.g. `use package Stdlib`, `@require: foo`).
+    pub fn display_name(&self) -> String {
+        match self {
+            Self::UsePackage { path, .. } => format!("use package {}", path.render()),
+            Self::UseOf { path, relpath, .. } => {
+                format!("use {} of `{}`", path.render(), relpath.body)
+            }
+            Self::Use { path, .. } => format!("use {}", path.render()),
+            Self::Legacy(Header::Require(t)) => format!("@require: {}", t.content),
+            Self::Legacy(Header::Import(t)) => format!("@import: {}", t.content),
+            Self::Legacy(Header::Stage(_)) => "@stage:".to_string(),
+        }
+    }
+}
+
+impl ast::ModChainV1 {
+    /// The dotted path as source text, e.g. `Stdlib.Logo` or `Local`.
+    pub fn render(&self) -> String {
+        match self {
+            Self::Long(t) => {
+                let mut parts = t.mods.clone();
+                parts.push(t.name.clone());
+                parts.join(".")
+            }
+            Self::Single(t) => t.name.clone(),
+        }
+    }
+
+    /// The HEAD component — the module/envelope identifier the loader keys
+    /// dependency resolution off (upstream's `used_as` map is keyed by it;
+    /// the tail is submodule access, a typecheck-time concern). For `A.B.C`
+    /// that is `A`; for a bare `A` it is `A`.
+    pub fn head_name(&self) -> String {
+        match self {
+            Self::Long(t) => t.mods.first().cloned().unwrap_or_else(|| t.name.clone()),
+            Self::Single(t) => t.name.clone(),
+        }
+    }
+}
+
+/// A binding-position NAME: `LOWER | ( binop )` — upstream 0.1's
+/// `bound_identifier` (`parser_v1.mly:358-363`) is the same nonterminal
+/// 0.0.6's `var` folds ([`crate::cst::BindName`]'s doc comment), and the
+/// leaf-level parse (`VarTok` | `OpNameTok`) is identical in both
+/// generations, so 0.1 reuses the type rather than re-declaring it —
+/// another token-generic, non-recursive import like [`Header`] above.
+/// Retires the Slice-1 "bound name is a bare `VarTok`" simplification
+/// (this module's doc comment).
+pub use crate::cst::BindName;
+
 /// A whole 0.1 `.saty`/`.satyh` file (`main`, upstream `parser_v1.mly:364-
 /// 368`): a header list followed by either a library (`main_lib`) or a
 /// document expression. Unlike 0.0.6's [`crate::cst::File`] (a flat prelude
@@ -80,26 +201,41 @@ pub use crate::cst::Header;
 pub enum FileV1 {
     /// `header* expr EOI` (`parser_v1.mly:367`).
     Document {
-        headers: Vec<Header>,
+        headers: Vec<HeaderV1>,
         body: ast::Expr,
         eoi: EoiTok,
     },
-    /// `header* MODULE UPPER EXACT_EQ STRUCT bind* END EOI`
-    /// (`parser_v1.mly:372-375`, `main_lib`). No signature annotation in
-    /// Slice 1 — see the module doc comment.
+    /// `header* MODULE UPPER option(sig_annot) EXACT_EQ STRUCT bind* END
+    /// EOI` (`parser_v1.mly:372-375`, `main_lib`; `sig_annot = COERCE
+    /// sigexpr`, `:555-557` — Sub-slice 2c). Note 0.1's annotation sigil is
+    /// `:>` (COERCE), never 0.0.6's `: sig … end`.
     Library {
-        headers: Vec<Header>,
+        headers: Vec<HeaderV1>,
         module_kw: KwModule,
         name: CtorTok,
+        sig_annot: Option<SigAnnotV1>,
         eq: DefEqTok,
         struct_kw: KwStruct,
-        binds: Vec<BindV1>,
+        binds: Vec<Bind>,
         end_kw: KwEnd,
         eoi: EoiTok,
     },
 }
 
-/// One parameter of a Slice-1 [`BindV1`] (`param_unit`,
+/// `COERCE sigexpr` — a signature annotation `:> S` (`sig_annot`,
+/// `parser_v1.mly:555-557`). 0.1's annotation sigil is `:>` (COERCE,
+/// `lexer_v1.mll:280`), NOT 0.0.6's `: sig … end` ([`crate::cst::SigAnnot`],
+/// `cst.rs:295-303`) — `module M : S = …` is a 0.1 parse error (pinned in
+/// tests). The signature body goes through [`SigExprErasedV1`]: `SigAnnotV1`
+/// lives outside the `#[recurse]` module, so this is a cross-boundary edge
+/// into the `SigExpr` root (see the module doc comment's SCC story).
+#[derive(Parse, Unparse, Debug, Clone, PartialEq)]
+pub struct SigAnnotV1 {
+    pub coerce: CoerceTok,
+    pub sig_: SigExprErasedV1,
+}
+
+/// One parameter of a Slice-1 [`Bind`] (`param_unit`,
 /// `parser_v1.mly:635-646`, Slice-1 subset). The full form additionally
 /// allows a `?(l = e, …)` optional-argument bundle and a `( pat : typ )`
 /// ascription; both are deferred (roadmap phase 2/4) — `stdja-mini`'s
@@ -109,20 +245,25 @@ pub enum Param {
     Pat(ast::PatBot),
 }
 
-/// Slice-1 subset of `bind` (`parser_v1.mly:415-440`): the three `val`
-/// forms `stdja-mini` uses. The full `Bind` (adding `rec`/`mutable`/`math`
-/// binds, `type`/`module`/`signature`/`include` declarations, and
-/// per-binding staging) is deferred to roadmap phase 3 — see the module doc
-/// comment. Every arm's `=` is `EXACT_EQ` ([`DefEqTok`]) and body is an
-/// [`ast::Expr`]; `name`/`ctx` are plain [`VarTok`]s (see the module doc
-/// comment on the `bound_identifier` simplification).
+/// Every arm of `bind` (`parser_v1.mly:415-440`) — upstream's own
+/// nonterminal name (Sub-slice 2c retires the prior stopgap `V1`-suffixed
+/// name now that this carries the full arm set; helper types like
+/// [`StructBindV1`]/[`TypeBindSingleV1`] keep their `V1` suffix). Every
+/// value arm's `=` is
+/// `EXACT_EQ` ([`DefEqTok`]) and body is an [`ast::Expr`]. `name` is a
+/// [`super::BindName`] wherever upstream's `bound_identifier` reaches it
+/// (`Value`, and the rec clauses inside [`ast::RecClauseV1`]); `ValueMutable`
+/// and `ValueInline`/`ValueBlock`'s `ctx` stay plain [`VarTok`]s — upstream's
+/// `MUTABLE LOWER …`/ctx-variable productions are a plain `LOWER`, not
+/// `bound_identifier` (see [`super::BindName`]'s doc comment for the
+/// ordered-choice-safety argument).
 #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
-pub enum BindV1 {
+pub enum Bind {
     /// `VAL bind_value_nonrec` (`parser_v1.mly:416,442,459-465`): `val
     /// <name> <param>* = <expr>`.
     Value {
         kw: KwVal,
-        name: VarTok,
+        name: BindName,
         params: Vec<Param>,
         eq: DefEqTok,
         body: ast::Expr,
@@ -152,6 +293,211 @@ pub enum BindV1 {
         eq: DefEqTok,
         body: ast::Expr,
     },
+    /// `VAL REC bind_value_nonrec (AND bind_value_nonrec)*`
+    /// (`parser_v1.mly:444-445,455-465`): `val rec f p* = e (and g p* = e)*`.
+    /// With `rec`/`mutable`/`inline`/`block` all lexed as keyword tokens
+    /// under V0_1 (§2 of the sub-slice 2b spec), no arm can steal another's
+    /// input — `Value.name: BindName` cannot match a keyword token — so
+    /// declared order is a documentation/perf choice; `Value` stays first
+    /// because it is the overwhelmingly common arm.
+    ValueRec {
+        kw: KwVal,
+        rec_kw: KwRec,
+        first: ast::RecClauseV1,
+        ands: Vec<ast::AndClauseV1>,
+    },
+    /// `VAL MUTABLE LOWER REVERSED_ARROW expr` (`parser_v1.mly:446-447`):
+    /// `val mutable x <- e`. The name is a plain `LOWER` upstream (not
+    /// `bound_identifier`), hence `VarTok`, matching the cst target
+    /// (`cst::TopBinding::LetMutable.name`, `cst.rs:237`).
+    ValueMutable {
+        kw: KwVal,
+        mutable_kw: KwMutable,
+        name: VarTok,
+        arrow: OverwriteEqTok,
+        value: ast::Expr,
+    },
+    /// `TYPE bind_type_single (AND bind_type_single)*`
+    /// (`parser_v1.mly:432-433,535-544`): `type t 'a* = body (and u 'a* =
+    /// body)*` — variant and synonym forms, mutually recursive across the
+    /// `and` chain.
+    Type {
+        kw: KwType,
+        first: TypeBindSingleV1,
+        ands: Vec<TypeAndV1>,
+    },
+    /// `MODULE UPPER option(sig_annot) EXACT_EQ modexpr` — upstream
+    /// `bind`'s MODULE arm (`parser_v1.mly:434-435`), with the FULL
+    /// `modexpr` body and the optional `:>` annotation (Sub-slice 2c;
+    /// retires 2a's struct-literal-only restriction). The body goes
+    /// through [`ModExprErasedV1`]: `Bind` is outside the `#[recurse]`
+    /// module, and `Bind → ModExpr → StructBindV1 → Bind` is the runtime
+    /// cycle both connectors erase (one break per direction).
+    Module {
+        module_kw: KwModule,
+        name: CtorTok,
+        sig_annot: Option<SigAnnotV1>,
+        eq: DefEqTok,
+        body: ModExprErasedV1,
+    },
+    /// `SIGNATURE UPPER EXACT_EQ sigexpr` (`parser_v1.mly:436-437`).
+    Signature {
+        kw: KwSignature,
+        name: CtorTok,
+        eq: DefEqTok,
+        sig_: SigExprErasedV1,
+    },
+    /// `INCLUDE modexpr` (`:438-439`) — a bind-include includes a MODULE
+    /// (contrast [`ast::Decl::Include`], which includes a signature).
+    Include { kw: KwInclude, body: ModExprErasedV1 },
+}
+
+/// One `bind_type_single` (`parser_v1.mly:539-544`). **0.1 delta from
+/// [`crate::cst::TypeDecl`]:** the type parameters come AFTER the name
+/// (`type t 'a = …`, `tyident LOWER; tyvars list(TYPEVAR)`), where 0.0.6
+/// writes them before (`type 'a t = …`, `cst.rs:401-408`) — the lowering
+/// reorders the fields. No `constraint` suffix exists in 0.1's production.
+#[derive(Parse, Unparse, Debug, Clone, PartialEq)]
+pub struct TypeBindSingleV1 {
+    pub name: VarTok,
+    pub tyvars: Vec<TypeVarTok>,
+    pub eq: DefEqTok,
+    pub body: TypeBodyV1,
+}
+
+/// An `and bind_type_single` continuation (`bind_type`'s
+/// `separated_nonempty_list(AND, …)`, `parser_v1.mly:535-537`).
+#[derive(Parse, Unparse, Debug, Clone, PartialEq)]
+pub struct TypeAndV1 {
+    pub and_kw: KwAnd,
+    pub bind: TypeBindSingleV1,
+}
+
+/// One whole `bind_type` chain — `bind_type_single (AND bind_type_single)*`
+/// (`parser_v1.mly:535-537`) — grouped into a single struct so the sig
+/// layer ([`ast::SigExpr::WithType`], [`ast::Decl::Type`]) can reference the
+/// chain through ONE eraser ([`TypeBindsErasedV1`]). [`Bind::Type`] keeps
+/// its flattened `first`/`ands` fields unchanged (avoiding 2b call-site
+/// churn); the two spellings are the same grammar.
+#[derive(Parse, Unparse, Debug, Clone, PartialEq)]
+pub struct TypeBindsV1 {
+    pub first: TypeBindSingleV1,
+    pub ands: Vec<TypeAndV1>,
+}
+
+/// The right-hand side of one type bind: a variant's constructor list
+/// (`EXACT_EQ BAR? variants`, `parser_v1.mly:540-541,545-553`) or a
+/// transparent synonym (`EXACT_EQ typ`, `:542-543`). Variant-first is
+/// unambiguous for the same reason as [`crate::cst::TypeDeclBody`]
+/// (`cst.rs:410-418`): a variant list is `BarTok`/`CtorTok`-headed and no
+/// [`ast::TypeExpr`] can start with either.
+#[derive(Parse, Unparse, Debug, Clone, PartialEq)]
+pub enum TypeBodyV1 {
+    Variant {
+        leading_bar: Option<BarTok>,
+        first: VariantDefV1,
+        rest: Vec<BarVariantDefV1>,
+    },
+    Synonym(ast::TypeExpr),
+}
+
+/// One `UPPER [OF typ]` variant (`parser_v1.mly:549-553`).
+#[derive(Parse, Unparse, Debug, Clone, PartialEq)]
+pub struct VariantDefV1 {
+    pub ctor: CtorTok,
+    pub of_ty: Option<OfTypeV1>,
+}
+
+/// The `of typ` payload suffix.
+#[derive(Parse, Unparse, Debug, Clone, PartialEq)]
+pub struct OfTypeV1 {
+    pub of_kw: KwOf,
+    pub ty: ast::TypeExpr,
+}
+
+/// A `| UPPER [OF typ]` continuation (`variants`' `separated_nonempty_
+/// list(BAR, variant)`, `parser_v1.mly:545-548`).
+#[derive(Parse, Unparse, Debug, Clone, PartialEq)]
+pub struct BarVariantDefV1 {
+    pub bar: BarTok,
+    pub def: VariantDefV1,
+}
+
+/// One declaration inside a `module … = struct … end` body
+/// (Sub-slice 2a). [`Bind`]'s own alternatives are exactly what a struct
+/// body may contain (`bind*`), so this simply re-parses a [`Bind`] — but
+/// *not* by naming `Bind` as a field type directly: [`Bind`] lives
+/// **outside** the `#[recurse]` module (below), so `Bind -> ModExpr ->
+/// Vec<StructBindV1> -> Bind` would be a self-recursive cycle through a
+/// plain `#[derive(Parse)]`, which (without the `#[recurse]` engine to back
+/// it) is an `E0275` hazard (an unbounded recursive trait-bound
+/// obligation) — exactly [`crate::cst::StructDecl`]'s own rationale
+/// (`cst.rs:262-269`). Hand-writing `Parse`/`Unparse` here — the same trick
+/// as the `erased_leaf_v1!` macro below — sidesteps that: the impl has no
+/// recursive where-bound for the compiler to try to satisfy, it just calls
+/// `Bind::parse` through the stream-erasing adapter at runtime. A
+/// byte-for-byte analogue of [`crate::cst::StructDecl`] (`cst.rs:270-293`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct StructBindV1(pub Box<Bind>);
+
+impl Parse<crate::token::Atom> for StructBindV1 {
+    type Error = syan::error::ParseError;
+
+    fn parse(
+        stream: impl syan::parse::IntoParseStream<Atom = crate::token::Atom>,
+    ) -> Result<Self, Self::Error> {
+        let mut stream = crate::stream::InfallibleAdapter(stream.into_parse_stream());
+        let mut erased = crate::stream::EraseStream::new(&mut stream);
+        let value = <Bind as Parse<_>>::parse(&mut erased)?;
+        Ok(StructBindV1(Box::new(value)))
+    }
+}
+
+impl Unparse<crate::token::Atom> for StructBindV1 {
+    fn unparse<S: syan::parse::unparse::Emitter<crate::token::Atom>>(
+        &self,
+        sink: &mut S,
+    ) -> Result<(), S::Error> {
+        self.0.unparse(sink)
+    }
+}
+
+/// One declaration inside a `sig … end` body (`list(decl)`,
+/// `parser_v1.mly:591`). [`ast::Decl`] lives INSIDE the `#[recurse]` module
+/// and `SigExpr → SigBotV1 → StructDeclV1 → Decl → SigExpr` is a runtime
+/// cycle; naming `ast::Decl` as a plain derived field of [`ast::SigBotV1`]
+/// would re-enter the module's own SCC analysis. Hand-writing
+/// `Parse`/`Unparse` here — the [`crate::cst::StructDecl`] trick
+/// (`cst.rs:262-269`, the `E0275` rationale) — makes this an opaque leaf:
+/// the impl has no recursive where-bound, it just calls `Decl::parse`
+/// through the stream-erasing adapter at runtime, closing the
+/// `SigExpr`↔`Decl` cycle at RUNTIME while keeping both SCCs singletons.
+/// NOTE: deliberately named after [`crate::cst::StructDecl`] (the
+/// mechanism), even though it carries a sig-`decl`, not a struct binding —
+/// the struct-side twin is [`StructBindV1`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct StructDeclV1(pub Box<ast::Decl>);
+
+impl Parse<crate::token::Atom> for StructDeclV1 {
+    type Error = syan::error::ParseError;
+
+    fn parse(
+        stream: impl syan::parse::IntoParseStream<Atom = crate::token::Atom>,
+    ) -> Result<Self, Self::Error> {
+        let mut stream = crate::stream::InfallibleAdapter(stream.into_parse_stream());
+        let mut erased = crate::stream::EraseStream::new(&mut stream);
+        let value = <ast::Decl as Parse<_>>::parse(&mut erased)?;
+        Ok(StructDeclV1(Box::new(value)))
+    }
+}
+
+impl Unparse<crate::token::Atom> for StructDeclV1 {
+    fn unparse<S: syan::parse::unparse::Emitter<crate::token::Atom>>(
+        &self,
+        sink: &mut S,
+    ) -> Result<(), S::Error> {
+        self.0.unparse(sink)
+    }
 }
 
 /// Recursion-edge eraser types for the Slice-1 expr/pattern/type layer —
@@ -209,6 +555,24 @@ erased_leaf_v1! {
     TyErasedV1 => ast::TypeExpr;
     /// An [`ast::MathElemCst`] behind a stream-erasing parse (see above).
     MathErasedV1 => ast::MathElemCst;
+    /// An [`ast::ModExpr`] behind a stream-erasing parse. Carries the
+    /// OUTSIDE→INSIDE edge `Bind::Module.body → ModExpr` — the one edge of
+    /// the `Bind → ModExpr → StructBindV1 → Bind` runtime cycle not already
+    /// erased by the connector (the erasers are for the INSIDE types, not
+    /// for `Bind`).
+    ModExprErasedV1 => ast::ModExpr;
+    /// An [`ast::SigExpr`] behind a stream-erasing parse. Used by
+    /// [`SigAnnotV1`] and [`Bind::Signature`] (outside → the SigExpr root).
+    SigExprErasedV1 => ast::SigExpr;
+    /// A [`TypeBindsV1`] behind a stream-erasing parse. Unlike every other
+    /// eraser this one targets an OUTSIDE type: `SigExpr::WithType` /
+    /// `Decl::Type` (inside) must reach `bind_type`, whose
+    /// `TypeBindSingleV1` re-enters the module through plain-derived
+    /// `ast::TypeExpr` fields — an inside→outside-plain-derive→inside-root
+    /// chain with no precedent in `cst.rs`'s discipline. Erasing at the
+    /// boundary keeps the re-entry behind `EraseStream` (monomorphized
+    /// once), exactly like every other cross-boundary edge.
+    TypeBindsErasedV1 => TypeBindsV1;
 }
 
 /// The recursive expression/pattern/type/text grammar for SATySFi 0.1,
@@ -230,39 +594,58 @@ pub mod ast {
     /// **0.1 deltas from [`crate::cst::ast::Expr`]:** `Match` gains a
     /// mandatory trailing `end` (`parser_v1.mly:792`); `let-rec` becomes
     /// `let rec … in …` (a plain `let` followed by the new [`KwRec`]
-    /// keyword) and, in Slice 1, is single-clause only (no `and`-chain —
-    /// full mutual recursion is deferred to roadmap phase 3); a new
-    /// `LetPatternIn` form covers `let pat = value in body` for any
-    /// non-bare-variable pattern (`parser_v1.mly:796`, `pattern_non_var`);
-    /// `open` requires a leading `let` (`parser_v1.mly:798`, `LET OPEN
-    /// UPPER IN`) where 0.0.6 allows a bare `open Name in body`; and
-    /// `WhileDo`, the `Guard`/`when` match-arm suffix, and `OpChain`'s
-    /// `before` postfix are dropped entirely — SATySFi 0.1's grammar has no
-    /// `WHEN`/`WHILE`/`BEFORE` tokens at all (confirmed by grep of
-    /// `parser_v1.mly`). `Overwrite` (`name <- value`) is kept unchanged
-    /// (`parser_v1.mly:810-812`, `REVERSED_ARROW`) — it is unrelated to the
-    /// removed `before` postfix.
+    /// keyword) with full `and`-chained mutual recursion (Sub-slice 2b —
+    /// Slice 1's single-clause restriction is retired, see
+    /// [`Expr::LetRecIn`]); a new `LetMutableIn` form covers `let mutable x
+    /// <- init in body` (Sub-slice 2b); a new `LetPatternIn` form covers
+    /// `let pat = value in body` for any non-bare-variable pattern
+    /// (`parser_v1.mly:796`, `pattern_non_var`); `open` requires a leading
+    /// `let` (`parser_v1.mly:798`, `LET OPEN UPPER IN`) where 0.0.6 allows a
+    /// bare `open Name in body`; and `WhileDo`, the `Guard`/`when` match-arm
+    /// suffix, and `OpChain`'s `before` postfix are dropped entirely —
+    /// SATySFi 0.1's grammar has no `WHEN`/`WHILE`/`BEFORE` tokens at all
+    /// (confirmed by grep of `parser_v1.mly`). `Overwrite` (`name <- value`)
+    /// is kept unchanged (`parser_v1.mly:810-812`, `REVERSED_ARROW`) — it is
+    /// unrelated to the removed `before` postfix.
     #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
     pub enum Expr {
-        /// `let rec name param* = value in body` (Slice-1 single clause;
-        /// `parser_v1.mly:794` dispatching to `bind_value_rec`,
-        /// `:455-458`).
+        /// `let rec clause (and clause)* in body` (`parser_v1.mly:794-795`
+        /// dispatching to `bind_value_rec`, `:455-458`) — full mutual
+        /// recursion; Slice 1's single-clause restriction is retired
+        /// (Sub-slice 2b).
         LetRecIn {
             let_kw: KwLet,
             rec_kw: KwRec,
+            first: RecClauseV1,
+            ands: Vec<AndClauseV1>,
+            in_kw: KwIn,
+            body: Box<Expr>,
+        },
+        /// `let mutable x <- init in body` (`parser_v1.mly:794-795`
+        /// dispatching to `bind_value`'s MUTABLE arm, `:446-447`). Same
+        /// shape as [`crate::cst::ast::Expr::LetMutableIn`] minus the fused
+        /// keyword: 0.1 spells it `let mutable` (two tokens), 0.0.6
+        /// `let-mutable` (one). Disambiguated one token after `let` by the
+        /// V0_1-gated `mutable` keyword, so declared order relative to the
+        /// other `let`-headed arms is correctness-irrelevant.
+        LetMutableIn {
+            let_kw: KwLet,
+            mutable_kw: KwMutable,
             name: VarTok,
-            params: Vec<VarTok>,
-            eq: DefEqTok,
-            value: Box<Expr>,
+            arrow: OverwriteEqTok,
+            init: Box<Expr>,
             in_kw: KwIn,
             body: Box<Expr>,
         },
         /// `let name param* = value in body` (only a plain variable target
         /// is supported here — a general pattern falls through to
-        /// [`Expr::LetPatternIn`]).
+        /// [`Expr::LetPatternIn`]). `name` is a [`super::BindName`]
+        /// (Sub-slice 2b): upstream's expression-level `let` reaches the
+        /// same `bind_value_nonrec` (`:794-795` → `:459-465`) `val`/`val
+        /// rec` do, so `let (+++) a b = … in` is valid 0.1 here too.
         LetIn {
             kw: KwLet,
-            name: VarTok,
+            name: super::BindName,
             params: Vec<VarTok>,
             eq: DefEqTok,
             value: Box<Expr>,
@@ -332,6 +715,39 @@ pub mod ast {
         /// flattening (unchanged approach here). Must stay last (no leading
         /// keyword).
         Ops(OpChain),
+    }
+
+    /// One `name param* = value` clause of a `val rec`/`let rec` group —
+    /// upstream `bind_value_nonrec` (`parser_v1.mly:459-465`) as reached
+    /// from `bind_value_rec` (`:455-458`). **0.1 deltas from
+    /// [`crate::cst::ast::RecBinding`]:** no `: ty` ascription and no
+    /// multi-clause `| patbot* = value` sugar exist in 0.1 at all
+    /// (`bind_value_nonrec` has neither a `COLON ty` nor a `BAR`
+    /// alternative — 0.0.6's `recdecargpart` machinery has no 0.1
+    /// counterpart), so there are no `ascription`/`leading_bar`/`extra`
+    /// fields to mirror. `params` is upstream's `list(param_unit)`
+    /// restricted to the Slice-1 plain-pattern subset (see [`super::Param`]'s
+    /// doc comment) — held as `Vec<PatBot>` directly, the same proven
+    /// cross-root DAG edge `cst::ast::RecBinding.params` makes
+    /// (`cst.rs:753-762`); `value` goes through [`super::ExprErasedV1`] (not
+    /// `Box<Expr>`) so this struct never joins `Expr`'s SCC — byte-for-byte
+    /// `cst.rs`'s own `RecBinding.value: ExprErased` discipline.
+    #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
+    pub struct RecClauseV1 {
+        pub name: super::BindName,
+        pub params: Vec<PatBot>,
+        pub eq: DefEqTok,
+        pub value: super::ExprErasedV1,
+    }
+
+    /// An `and name param* = value` continuation of a `val rec`/`let rec`
+    /// group (`bind_value_rec`'s `separated_nonempty_list(AND, …)`,
+    /// `parser_v1.mly:455-458`). `and` lexes as `Token::LetAnd` → [`KwAnd`]
+    /// in both generations (`lexer.rs:141`), so no new token is needed.
+    #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
+    pub struct AndClauseV1 {
+        pub and_kw: KwAnd,
+        pub clause: RecClauseV1,
     }
 
     /// One `pat -> body` match arm (`parser_v1.mly:959`). Unlike
@@ -666,25 +1082,81 @@ pub mod ast {
         pub comma: Option<CommaTok>,
     }
 
-    /// A minimal type-expression grammar (`typ`/`typ_prod`/`typ_app`/
-    /// `typ_bot`, `parser_v1.mly:685-752`, drastically simplified — same
-    /// scope as [`crate::cst::ast::TypeExpr`], "basic" per the S5 spec's
-    /// acceptance table: row polymorphism (`?'r`, open records) is
-    /// deferred). Self-recursive only through `Fun`'s codomain (right
-    /// recursion); parenthesized nesting goes through [`super::TyErasedV1`].
+    /// A type-expression grammar (`typ`/`typ_prod`/`typ_app`/`typ_bot`,
+    /// `parser_v1.mly:685-752`, simplified — same scope as
+    /// [`crate::cst::ast::TypeExpr`], "basic" per the S5 spec's acceptance
+    /// table: row polymorphism (`?'r`, open records) is deferred). Widened
+    /// (Sub-slice 2b) from Slice 1's `Fun{dom: TypeAtom, ..} | Atom(TypeAtom)`
+    /// to also spell products (`length * length`, [`TypeProd`]) and prefix
+    /// type application (`list int`, [`TypeApp`]) — without them a `type`
+    /// bind could declare almost nothing. Minus the `?(…)` optional-domain
+    /// prefix (labeled rows are roadmap phase 4): `dom -> cod`
+    /// right-recursive through `cod` only (the root's unchanged self-loop).
+    /// Self-recursive only through `Fun`'s codomain (right recursion);
+    /// parenthesized nesting goes through [`super::TyErasedV1`]. `TypeExpr`
+    /// was unreachable from `FileV1` before 2b (`Bind` had no type
+    /// ascriptions and `Param` was `Pat`-only); `Type` binds are its first
+    /// reachable use.
     #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
     pub enum TypeExpr {
         /// `dom -> cod` (right-associative). This field is `TypeExpr`'s own
-        /// self-loop (the root SCC).
+        /// self-loop (the root SCC). `dom` widened from [`TypeAtom`] to
+        /// [`TypeProd`] (Sub-slice 2b) so e.g. `'a option -> 'b option` and
+        /// `'a * 'b -> 'c` both parse at their expected precedence.
         Fun {
-            dom: TypeAtom,
+            dom: TypeProd,
             arrow: ArrowTok,
             cod: Box<TypeExpr>,
+        },
+        /// The non-arrow fallthrough — widened from [`TypeAtom`] to
+        /// [`TypeProd`] (Sub-slice 2b): a product/application with no
+        /// enclosing arrow is still just "the whole type expression minus
+        /// `->`".
+        Atom(TypeProd),
+    }
+
+    /// `typ_prod` (`parser_v1.mly:696-709`): one or more `*`-separated
+    /// [`TypeApp`]s, flattened to head+`Vec` exactly like
+    /// [`crate::cst::ast::TypeProd`] (`cst.rs:1284-1295`) — the same
+    /// deferred-fold technique as `OpChain`/`PatCons`, keeping `TypeExpr` a
+    /// singleton SCC.
+    #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
+    pub struct TypeProd {
+        pub first: TypeApp,
+        pub rest: Vec<StarType>,
+    }
+
+    /// A `* ty` continuation of a [`TypeProd`].
+    #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
+    pub struct StarType {
+        pub star: ExactTimesTok,
+        pub ty: TypeApp,
+    }
+
+    /// `typ_app` (`parser_v1.mly:711-739`, minus the `LONG_LOWER` qualified
+    /// head — no `LongLowerTok` exists until 2c — and minus the
+    /// `inline|block|math […]` command types, deferred with `val … : ty` sig
+    /// items). **0.1 delta from [`crate::cst::ast::TypeApp`]
+    /// (`cst.rs:1297-1312`):** application is PREFIX and n-ary (`list int`,
+    /// `pair int bool`), not 0.0.6's postfix single-argument (`int list`) —
+    /// the prefix→postfix bridge (with an arity-1 guard: arity ≥ 2 is a
+    /// `LowerError`, not a parse error) lives in `v1/lower.rs`. `Applied`
+    /// (needing at least one argument atom) is tried before `Atom` — a bare
+    /// name has no argument atom to consume and falls through cleanly (a
+    /// following keyword/`=`/`and`/`->`/`*` never parses as a [`TypeAtom`]).
+    #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
+    pub enum TypeApp {
+        Applied {
+            ctor: VarTok,
+            first: TypeAtom,
+            rest: Vec<TypeAtom>,
         },
         Atom(TypeAtom),
     }
 
-    /// An atomic type expression.
+    /// An atomic type expression. `parser_v1.mly:740-752`'s record/rowvar
+    /// `typ_bot` forms stay parse errors — documented like every other
+    /// Slice-1 simplification.
     #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
     pub enum TypeAtom {
         /// `( ty )`
@@ -795,6 +1267,237 @@ pub mod ast {
             body: RecordBody,
         },
     }
+
+    // ---- Sub-slice 2c: the module/signature layer -----------------------
+
+    /// `mod_chain`: `UPPER | LONG_UPPER` (`parser_v1.mly:404-414`). `M.N.P`
+    /// arrives as ONE [`LongUpperTok`] (the V0_1 lexer branch), so a chain is
+    /// always exactly one token — which is what makes [`ModExpr::App`]'s two-
+    /// chain juxtaposition (`F X`, `F.G X.Y`) unambiguous at the token level.
+    /// Token-disjoint arms; order is cosmetic.
+    #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
+    pub enum ModChainV1 {
+        Long(LongUpperTok),
+        Single(CtorTok),
+    }
+
+    /// `modexpr` (`parser_v1.mly:380-403`). SELF-LOOP ROOT: `Functor.body:
+    /// Box<ModExpr>` (`:381-382`). Variant order is parse priority:
+    /// `Functor` (`fun`-headed) and `Struct` (`struct`-headed) are
+    /// keyword-disjoint from everything; `Coerce` (`UPPER :>`) must precede
+    /// `App`/`Var` so the `:>` suffix is claimed before a bare chain matches;
+    /// `App` (two chains, `modexpr_app` `:388-394`) precedes `Var` (one
+    /// chain, `modexpr_bot` `:398-400`) for longest-match. Struct bodies go
+    /// through [`super::StructBindV1`] (the 2a connector, erased), so
+    /// `ModExpr` never statically references [`super::Bind`] — see the
+    /// module doc comment's SCC story.
+    #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
+    pub enum ModExpr {
+        /// `FUN ( UPPER : sigexpr ) ARROW modexpr` (`parser_v1.mly:381-382`).
+        Functor {
+            fun_kw: KwFun,
+            lp: LParenTok,
+            param: CtorTok,
+            colon: ColonTok,
+            dom: Box<SigExpr>,
+            rp: RParenTok,
+            arrow: ArrowTok,
+            body: Box<ModExpr>,
+        },
+        /// `UPPER COERCE sigexpr` (`:383-384`) — coercion applies to a BARE
+        /// module name only, upstream-faithfully (`A.B :> S` is a parse
+        /// error there too).
+        Coerce {
+            name: CtorTok,
+            coerce: CoerceTok,
+            sig_: Box<SigExpr>,
+        },
+        /// `mod_chain mod_chain` — functor application (`:389-394`).
+        App { func: ModChainV1, arg: ModChainV1 },
+        /// `mod_chain` — a (possibly long) module path (`:399-400`).
+        Var(ModChainV1),
+        /// `STRUCT list(bind) END` (`:401-402`) — the (only) form 2a already
+        /// lowered; reuses 2a's connector.
+        Struct {
+            struct_kw: KwStruct,
+            binds: Vec<super::StructBindV1>,
+            end_kw: KwEnd,
+        },
+    }
+
+    /// `sigexpr` (`parser_v1.mly:558-573`). SELF-LOOP ROOT: `Functor.dom`/
+    /// `Functor.cod: Box<SigExpr>` (`:570-571`).
+    ///
+    /// **Left-recursion note (load-bearing).** The naive sketch would write
+    /// `With { base: Box<SigExpr>, … }` — as a syan2 ordered-choice
+    /// production that is LEFT RECURSION (`SigExpr` would begin by parsing
+    /// `SigExpr`; syan2 gives no diagnostic, it just recurses/fails at parse
+    /// time — a known consumer hazard). Upstream is *not* left-recursive:
+    /// the `with` base is `sigexpr_bot` (`:559,564`) and `with` cannot chain
+    /// (the result of a `with` is never itself a valid `with` base). So the
+    /// faithful encoding is bot + one optional-shaped suffix arm, tried
+    /// before the bare-bot fallthrough: `S with type t = int with type u =
+    /// bool` is a parse error here exactly as upstream (pinned in tests).
+    /// NO arm of this enum may ever begin with `Box<SigExpr>`/`SigExpr` as
+    /// its first field — reviewer checklist item.
+    #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
+    pub enum SigExpr {
+        /// `( UPPER : sigexpr ) ARROW sigexpr` (`:570-571`) — the functor
+        /// signature. `(`-headed; no [`SigBotV1`] starts with `(`, so this
+        /// is token-disjoint from the other arms.
+        Functor {
+            lp: LParenTok,
+            param: CtorTok,
+            colon: ColonTok,
+            dom: Box<SigExpr>,
+            rp: RParenTok,
+            arrow: ArrowTok,
+            cod: Box<SigExpr>,
+        },
+        /// `sigexpr_bot WITH TYPE bind_type` (`:559-563`) /
+        /// `sigexpr_bot WITH mod_chain TYPE bind_type` (`:564-569`). The
+        /// `Option<ModChainV1>` is greedy-then-backtrack: on `with type` the
+        /// chain fails (`type` is a keyword token, not `UPPER`/`LONG_UPPER`)
+        /// and collapses to `None`. `binds` goes through
+        /// [`super::TypeBindsErasedV1`].
+        WithType {
+            base: SigBotV1,
+            with_kw: KwWith,
+            path: Option<ModChainV1>,
+            type_kw: KwType,
+            binds: super::TypeBindsErasedV1,
+        },
+        /// A bare `sigexpr_bot` (`:572-573`). Must come after [`WithType`]
+        /// (maximal munch of the `with` suffix).
+        Bot(SigBotV1),
+    }
+
+    /// `sigexpr_bot` (`parser_v1.mly:575-595`) — a satellite (no self-loop;
+    /// no edge back to `SigExpr`). Sig bodies go through
+    /// [`super::StructDeclV1`] (opaque hand-written connector), so
+    /// `SigBotV1` never statically references [`Decl`].
+    #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
+    pub enum SigBotV1 {
+        /// `LONG_UPPER` — a signature path `M.N.S` (`:581-590`).
+        Path(LongUpperTok),
+        /// `UPPER` — a signature name (`:576-580`).
+        Var(CtorTok),
+        /// `SIG list(decl) END` (`:591-595`). `sig` is already a
+        /// version-independent keyword (`lexer.rs`) — zero lexer work.
+        Sig {
+            sig_kw: KwSig,
+            decls: Vec<super::StructDeclV1>,
+            end_kw: KwEnd,
+        },
+    }
+
+    /// `decl` (`parser_v1.mly:597-621`) — one item of a `sig … end` body.
+    /// NOT a root: no arm contains `Decl`; reached only through
+    /// [`super::StructDeclV1`], so `SigExpr ↔ Decl` never forms a rootless
+    /// static sub-cycle (the shape `cst.rs`'s `AppArgErased` doc warns the
+    /// engine rejects). Its recursion-bearing edges are plain DAG edges INTO
+    /// roots: `ty: TypeExpr` (the same satellite→root shape as
+    /// `RecClauseV1.params: Vec<PatBot>`) and `sig_: Box<SigExpr>`.
+    ///
+    /// Deferred arms (parse errors): staged `val ~x`/`val persistent ~x`
+    /// (`:600-603`, phase 5 — `persistent` has no keyword token yet), macro
+    /// decls `val \m : macro-type` (`:608-611`, phase 5), row quantifiers
+    /// (`rowquant`, `:631-633` — no `ROWVAR` token until phase 4).
+    #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
+    pub enum Decl {
+        /// `VAL bound_identifier quant COLON typ` (`:598-599`; `quant`'s
+        /// tyvar list `:623-630` — `val map 'a 'b : ('a -> 'b) -> …`).
+        Val {
+            kw: KwVal,
+            name: super::BindName,
+            quant: Vec<TypeVarTok>,
+            colon: ColonTok,
+            ty: TypeExpr,
+        },
+        /// `VAL BACKSLASH_CMD quant COLON typ` (`:604-605`). Plain
+        /// [`HorzCmdTok`] — upstream uses the bare token, and program mode
+        /// already lexes `\cmd`. Naming mirrors
+        /// [`crate::cst::SigItem::ValHorzCmd`].
+        ValHorzCmd {
+            kw: KwVal,
+            cmd: HorzCmdTok,
+            quant: Vec<TypeVarTok>,
+            colon: ColonTok,
+            ty: TypeExpr,
+        },
+        /// `VAL PLUS_CMD quant COLON typ` (`:606-607`).
+        ValVertCmd {
+            kw: KwVal,
+            cmd: VertCmdTok,
+            quant: Vec<TypeVarTok>,
+            colon: ColonTok,
+            ty: TypeExpr,
+        },
+        /// `TYPE LOWER CONS kind` — an OPAQUE type (`:612-613`). Tried
+        /// before the transparent [`Decl::Type`]: the two share the `type
+        /// name` prefix and are told apart by `::` vs `=`/tyvars
+        /// (backtracking is two tokens deep, cheap).
+        TypeOpaque {
+            kw: KwType,
+            name: VarTok,
+            cons: ConsTok,
+            kind: KindV1,
+        },
+        /// `TYPE bind_type` — transparent type(s) (`:614-615`), sharing the
+        /// grouped chain with [`SigExpr::WithType`].
+        Type {
+            kw: KwType,
+            binds: super::TypeBindsErasedV1,
+        },
+        /// `MODULE UPPER COLON sigexpr` (`:616-617`) — note `:` here (a
+        /// decl constrains), vs `:>` on binds (a bind seals).
+        Module {
+            kw: KwModule,
+            name: CtorTok,
+            colon: ColonTok,
+            sig_: Box<SigExpr>,
+        },
+        /// `SIGNATURE UPPER EXACT_EQ sigexpr` (`:618-619`).
+        Signature {
+            kw: KwSignature,
+            name: CtorTok,
+            eq: DefEqTok,
+            sig_: Box<SigExpr>,
+        },
+        /// `INCLUDE sigexpr` (`:620-621`) — a decl-include includes a
+        /// SIGNATURE (contrast [`super::Bind::Include`], which includes a
+        /// MODULE).
+        Include { kw: KwInclude, sig_: Box<SigExpr> },
+    }
+
+    // Ordered-choice safety of `Decl`: all arms are keyword-headed
+    // (`val`/`type`/`module`/`signature`/`include`); within `val`, the
+    // second token (`BindName`'s `Var`-or-`LParen` vs `HorzCmdTok` vs
+    // `VertCmdTok`) is disjoint; within `type`, `TypeOpaque`-before-`Type`
+    // as documented.
+
+    /// `kind` (`parser_v1.mly:672-677`): `kind_base (ARROW kind_base)*`
+    /// flattened head+`Vec` — the same deferred-fold shape as
+    /// [`TypeProd`]/[`PatCons`], keeping the type acyclic. `kind_base` is a
+    /// bare LOWER (`:678-681`, `MKindName`), so the whole kind grammar is
+    /// token-only. (`kind_row`, `:682-683`, arrives with row quantifiers —
+    /// phase 4.)
+    #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
+    pub struct KindV1 {
+        pub first: VarTok,
+        pub rest: Vec<KindArrowV1>,
+    }
+
+    /// An `-> kind_base` continuation of a [`KindV1`].
+    #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
+    pub struct KindArrowV1 {
+        pub arrow: ArrowTok,
+        pub base: VarTok,
+    }
+
+    // (`Quant` needs no struct: upstream `quant = list(tyquant)
+    // list(rowquant)` (`:623-625`), and with rowquants deferred it is
+    // exactly `Vec<TypeVarTok>` — inlined into `Decl::Val*` above.)
 }
 
 /// Lex ([`crate::lexer::lex_with_version`] under [`crate::version::SatysfiVersion::V0_1`])

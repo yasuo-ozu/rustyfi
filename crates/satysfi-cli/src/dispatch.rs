@@ -81,6 +81,20 @@ fn compile_command(name: &'static str) -> Command {
                 ),
         )
         .arg(
+            Arg::new("deps")
+                .long("deps")
+                .value_name("FILE")
+                .help(
+                    "Pin Envelopes packaging mode (Axis B) and consume a \
+                     pre-resolved satysfi-deps.yaml at FILE. Requires \
+                     --target-version 0.1. Ld3a: local `use … of` dependencies \
+                     resolve; supplying a deps FILE errors (its consumption is \
+                     Ld3b). Without this flag, a `use` header still auto-pins \
+                     Envelopes mode.",
+                )
+                .value_parser(value_parser!(PathBuf)),
+        )
+        .arg(
             Arg::new("no_cache")
                 .long("no-cache")
                 .help(

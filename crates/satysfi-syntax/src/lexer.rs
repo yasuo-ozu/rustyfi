@@ -119,12 +119,14 @@ impl Lexer {
     /// `V0_1` these words still lex the same way (e.g. `let-rec`/`when`/
     /// `while`/`before` simply have no corresponding grammar rule in
     /// `cst_v1.rs`, so using them there is a *parse* error, not a lex
-    /// error). Only the three Slice-1 additions (`rec`/`inline`/`block`) are
-    /// version-gated: SATySFi 0.1's `val rec`/`val inline`/`val block`
-    /// binds need them as keywords, but 0.0.6 source may use any of them as
-    /// an ordinary identifier (there is no 0.0.6 grammar that would want
-    /// them as keywords), so gating keeps `lex`/`lex_with_version(_,
-    /// V0_0_6)` byte-identical to before this change.
+    /// error). Only the six Slice-1/Sub-slice-2b/Sub-slice-2c additions
+    /// (`rec`/`inline`/`block`/`mutable`/`signature`/`include`) are
+    /// version-gated: SATySFi 0.1's `val rec`/`val inline`/`val
+    /// block`/`val mutable` binds and `signature …`/`include …` binds/decls
+    /// need them as keywords, but 0.0.6 source may use any of them as an
+    /// ordinary identifier (there is no 0.0.6 grammar that would want them
+    /// as keywords), so gating keeps `lex`/`lex_with_version(_, V0_0_6)`
+    /// byte-identical to before this change.
     fn keyword(&self, s: &str) -> Option<Token> {
         use Token::*;
         if let Some(tok) = match s {
@@ -179,6 +181,11 @@ impl Lexer {
                 "rec" => Some(Rec),
                 "inline" => Some(Inline),
                 "block" => Some(Block),
+                "mutable" => Some(Mutable),
+                "signature" => Some(Signature),
+                "include" => Some(Include),
+                "use" => Some(Use),
+                "package" => Some(Package),
                 _ => None,
             };
         }
@@ -688,6 +695,15 @@ impl Lexer {
                     if self.peek() == Some(':') {
                         self.bump();
                         self.emit(start, Token::Cons);
+                    } else if self.version == SatysfiVersion::V0_1 && self.peek() == Some('>') {
+                        // 0.1's COERCE `:>` (lexer_v1.mll:280). Tried AFTER
+                        // `::` so `::>` still lexes `Cons` + `BinopGt`, the
+                        // same longest/first-match ocamllex resolves
+                        // (lexer_v1.mll:280 vs :288 — `::` wins on `::>`).
+                        // V0_1-gated: under V0_0_6, `:>` stays `Colon` +
+                        // `BinopGt(">")` — the differential test pins it.
+                        self.bump();
+                        self.emit(start, Token::Coerce);
                     } else {
                         self.emit(start, Token::Colon);
                     }
@@ -746,7 +762,15 @@ impl Lexer {
                             self.emit(start, Token::Constructor(last));
                         }
                     } else if last_is_ctor {
-                        return self.error(start, "module path must end with a variable name");
+                        if self.version == SatysfiVersion::V0_1 {
+                            // 0.1's LONG_UPPER (lexer_v1.mll:357-363):
+                            // `A.B.C` is a module/signature path token.
+                            self.emit(start, Token::LongUpper(mods, last));
+                        } else {
+                            // 0.0.6: unchanged — the exact error string is
+                            // pinned by the differential test (Err/Err arm).
+                            return self.error(start, "module path must end with a variable name");
+                        }
                     } else {
                         self.emit(start, Token::VarWithMod(mods, last));
                     }

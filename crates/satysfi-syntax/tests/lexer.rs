@@ -401,3 +401,26 @@ fn lex_errors() {
     assert!(lex("${ x").is_err(), "unterminated math");
     assert!(lex("`abc").is_err(), "unterminated literal");
 }
+
+#[test]
+fn use_and_package_are_identifiers_under_v0_0_6() {
+    use satysfi_syntax::{lex_with_version, SatysfiVersion};
+    // Under 0.0.6 (the base `lex`), `use`/`package` are plain identifiers —
+    // there is no `use`/`package` keyword. This is the Axis-B keyword-gating
+    // guard (the differential lexer test proves the whole corpus, this pins
+    // the two new words specifically).
+    let v006: Vec<Token> = lex_with_version("use package foo", SatysfiVersion::V0_0_6)
+        .unwrap()
+        .into_iter()
+        .map(|a| a.slot)
+        .collect();
+    assert_eq!(v006, vec![var("use"), var("package"), var("foo"), Eoi]);
+
+    // Under 0.1 the same words are keywords.
+    let v01: Vec<Token> = lex_with_version("use package Foo", SatysfiVersion::V0_1)
+        .unwrap()
+        .into_iter()
+        .map(|a| a.slot)
+        .collect();
+    assert_eq!(v01, vec![Use, Package, Constructor("Foo".into()), Eoi]);
+}

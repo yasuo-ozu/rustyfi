@@ -1,0 +1,143 @@
+name: Release
+
+# Fires when a release is PUBLISHED, not when a tag is pushed: a draft release
+# can be prepared, edited and published deliberately, and only then do binaries
+# get built and attached. `workflow_dispatch` is the escape hatch for
+# re-running a build against an existing tag without re-publishing.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to build and upload to"
+        required: true
+        type: string
+
+# The default token is read-only; uploading assets needs write.
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # One platform failing must not strand the others: a release with four of
+      # five archives attached is recoverable by re-running the one job, whereas
+      # fail-fast would cancel builds that were about to succeed.
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            archive: tar.gz
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            archive: tar.gz
+          # `macos-15-intel` is the x86_64 macOS runner: macos-14 and later are
+          # arm64 by default, so this is the only way to get an Intel build
+          # without cross-compiling.
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            archive: tar.gz
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            archive: tar.gz
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive: zip
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.target }}
+
+      # Only the binary. The rest of the workspace is libraries it already
+      # links, and building `--workspace` here would compile the test-only
+      # dependencies for no benefit.
+      - name: Build
+        run: cargo build --release --locked --bin rustyfi --target ${{ matrix.target }}
+
+      # A cross-built archive that cannot start is worth catching here rather
+      # than in someone's download. Native runners per target, so this always
+      # runs the artifact that ships.
+      - name: Smoke test
+        run: ${{ matrix.target == 'x86_64-pc-windows-msvc' && 'target\${{ matrix.target }}\release\rustyfi.exe --version' || format('./target/{0}/release/rustyfi --version', matrix.target) }}
+
+      # THE BUNDLED PACKAGES ARE NOT OPTIONAL. `rustyfi doc.saty` resolves
+      # `@require: stdja` against a lib-root, so a bare binary cannot typeset
+      # anything that uses the standard library. The 30 `.satyh`/`.satyg`
+      # packages are committed (260 KB) and ship with it.
+      #
+      # THE FONTS ARE NOT BUNDLED, deliberately. They are fetched by
+      # `scripts/download-fonts.sh` (sha1-pinned, each licence text copied
+      # beside the font it covers), and that script needs `fc-match` for one of
+      # them, which does not exist on the Windows runner — an archive whose
+      # contents differ by platform is worse than one that is honestly
+      # incomplete. Without them the port falls back to the base-14 PDF fonts
+      # and CJK will not render; RELEASE.md in the archive says so.
+      - name: Stage archive (unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${{ github.event.release.tag_name || inputs.tag }}"
+          DIR="rustyfi-${TAG}-${{ matrix.target }}"
+          mkdir -p "stage/$DIR"
+          cp "target/${{ matrix.target }}/release/rustyfi" "stage/$DIR/"
+          mkdir -p "stage/$DIR/lib-rustyfi/dist"
+          cp -r lib-rustyfi/dist/packages "stage/$DIR/lib-rustyfi/dist/"
+          cp README.md "stage/$DIR/"
+          sed -e "s|@TAG@|${TAG}|g" -e "s|@TARGET@|${{ matrix.target }}|g" \
+              .github/release-README.md > "stage/$DIR/RELEASE.md"
+          tar -C stage -czf "${DIR}.tar.gz" "$DIR"
+          shasum -a 256 "${DIR}.tar.gz" > "${DIR}.tar.gz.sha256"
+
+      - name: Stage archive (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $tag = "${{ github.event.release.tag_name || inputs.tag }}"
+          $dir = "rustyfi-$tag-${{ matrix.target }}"
+          New-Item -ItemType Directory -Force -Path "stage/$dir" | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/rustyfi.exe" "stage/$dir/"
+          New-Item -ItemType Directory -Force -Path "stage/$dir/lib-rustyfi/dist" | Out-Null
+          Copy-Item -Recurse "lib-rustyfi/dist/packages" "stage/$dir/lib-rustyfi/dist/"
+          Copy-Item "README.md" "stage/$dir/"
+          (Get-Content .github/release-README.md) `
+            -replace '@TAG@', $tag -replace '@TARGET@', '${{ matrix.target }}' |
+            Set-Content "stage/$dir/RELEASE.md"
+          Compress-Archive -Path "stage/$dir" -DestinationPath "$dir.zip"
+          (Get-FileHash "$dir.zip" -Algorithm SHA256).Hash.ToLower() + "  $dir.zip" |
+            Set-Content "$dir.zip.sha256"
+
+      # `gh` is preinstalled on every GitHub runner, so this needs no
+      # third-party action and no token beyond the workflow's own.
+      # `--clobber` makes a re-run idempotent instead of a duplicate-asset error.
+      - name: Upload to the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="${{ github.event.release.tag_name || inputs.tag }}"
+          gh release upload "$TAG" \
+            rustyfi-${TAG}-${{ matrix.target }}.${{ matrix.archive }} \
+            rustyfi-${TAG}-${{ matrix.target }}.${{ matrix.archive }}.sha256 \
+            --repo "${{ github.repository }}" --clobber

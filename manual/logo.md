@@ -1,8 +1,8 @@
 # Rustyfi logo
 
-![The Rustyfi logo](rustyfi-logo.png)
+![The Rustyfi logo](logo.png)
 
-The source is [`manual/logo.saty`](../../manual/logo.saty) — one file — it lives beside
+The source is [`logo.saty`](logo.saty) — one file, built by [`Makefile`](Makefile) — it lives beside
 `manual.saty` because it is dogfood of the same kind: the manual proves the port
 can typeset prose, the logo proves it can typeset vector art. Every mark in the emblem is a
 [`satysfi-xpath`](https://github.com/monaqa/satysfi-xpath) path — there is no
@@ -12,29 +12,21 @@ package manager, the `xpath` package, and the PDF writer.
 
 ## Building
 
-The document `@require:`s `xpath/xpath`, so the library has to be installed
-into a lib-root first. It is **not** reached by a relative `@import:` into the
-corpus tree; `scripts/layout_fidelity_corpus/xpath/Satyristes` is the manifest
-that makes the vendored sources installable.
-
 ```sh
-LIBROOT=$(mktemp -d)
-cp -r lib-rustyfi/dist "$LIBROOT"/
-
-cargo run --bin rustyfi-rust -- satyrographos install \
-    scripts/layout_fidelity_corpus/xpath --lib-root "$LIBROOT"
-
-cargo run --bin rustyfi-rust -- --lib-root "$LIBROOT" --font-dir "$LIBROOT" \
-    -o assets/logo/rustyfi-logo.pdf manual/logo.saty
+make -C manual          # manual.pdf, logo.pdf, logo.png
+make -C manual logo     # just the mark
 ```
 
-`satyrographos list --lib-root "$LIBROOT"` should then report `xpath 0.1.0
-(4 files)`. The raster is derived, not authored:
+The manual builds against the port's own bundled packages and nothing else; the
+logo `@require:`s `xpath/xpath`, which is not bundled, so the Makefile assembles
+a scratch lib-root and INSTALLS `xpath` into it with the port's own
+Satyrographos — deliberately, rather than reaching into the corpus tree with a
+relative `@import:`. `scripts/layout_fidelity_corpus/xpath/Satyristes` is the
+manifest that makes that possible.
 
-```sh
-pdftocairo -png -r 300 -transp -singlefile \
-    assets/logo/rustyfi-logo.pdf assets/logo/rustyfi-logo
-```
+Both documents are compiled `--no-cache --no-aux`: these are reference
+artifacts, and the compile cache is keyed on the SOURCE, so an engine change
+would otherwise be masked by a stale render.
 
 ## What the mark says
 
@@ -49,11 +41,23 @@ lowercase `rustyfi`. The mark is one object — there is no wordmark under the
 emblem, no rule, no kicker, no colophon — because one object is what a mark has
 to be to survive being put in a corner at 32 px.
 
-The face is **Latin Modern Roman** (`lmodern`) — the TeX serif. It is the
-obvious choice twice over: it is what a typesetter's mark should be set in, and
-its high-contrast modern letterforms come from the same engraving era as the
-guilloche behind them. A humanist serif (`Junicode`) and its italic were tried
-against it; both are handsome, and both sit less comfortably on engine-turning.
+The logotype is **calligraphic** — `mathcal` letterforms, which suit an
+engraved seal far better than an upright serif did. Getting them took two
+detours worth recording:
+
+* SATySFi 0.0.6 has no `set-math-char-class`; it arrived with the 0.1 math
+  split, and this document is 0.0.6. So the script alphabet is reached the way
+  it exists in Unicode instead — U+1D4B6.. MATHEMATICAL SCRIPT SMALL A onwards
+  — which needs no math mode at all.
+* Those codepoints render from **DejaVu Math TeX Gyre** (`dejavu-math`) and
+  come out EMPTY from Latin Modern Math (`lmmath`): zero-width boxes, the word
+  simply absent, the braces closing over the gap. `lmmath` is the OTF/CFF face
+  and `dejavu-math` the TrueType one, which is the likely difference. Worth
+  knowing before reaching for `lmmath` for anything outside math mode.
+
+The delimiters and sigils stay in **Latin Modern Roman** (`lmodern`), the TeX
+serif — upright marks against a script logotype, and letterforms from the same
+engraving era as the guilloche behind them.
 
 **Every piece of type on the disc is engraved the same way** — logotype,
 braces, group delimiters and sigils all go through one `engrave` helper. The

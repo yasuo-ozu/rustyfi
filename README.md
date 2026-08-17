@@ -69,11 +69,12 @@ has to keep working in order to render its own documentation.
 - [`manual/manual.saty`](https://raw.githubusercontent.com/yasuo-ozu/satysfi-rust/main/manual/manual.saty)
   — its source
 - [`manual/logo.saty`](https://raw.githubusercontent.com/yasuo-ozu/satysfi-rust/main/manual/logo.saty)
-  — the project mark, drawn entirely in `satysfi-xpath` (see
-  [`assets/logo/`](assets/logo/))
+  — the project mark, drawn entirely in `satysfi-xpath`; notes in
+  [`manual/logo.md`](manual/logo.md), rendered to `manual/logo.pdf` and
+  [`manual/logo.png`](https://raw.githubusercontent.com/yasuo-ozu/satysfi-rust/main/manual/logo.png)
 
 ```console
-$ rustyfi-rust manual/manual.saty -o manual/manual.pdf
+$ make -C manual        # manual.pdf, logo.pdf, logo.png
 ```
 
 ## Layout

@@ -66,6 +66,19 @@ pub fn t_context() -> MonoType {
 pub fn t_document() -> MonoType {
     MonoType::Base(BaseType::Document)
 }
+/// `color` (`primitives.cppo.ml:187-190`'s `Gray of float | RGB of
+/// (float*float*float) | CMYK of (float*float*float*float)`) — a built-in
+/// **variant**, not a `BaseType`: it costs a `VariantDecl` (registered by
+/// [`builtin_variants`] below), no base type, no `Value` change, no backend
+/// (mirrors `t_document`'s shape, but through `MonoType::Variant` since
+/// there is no `BaseType::Color`). `Gray`/`RGB`/`CMYK` typecheck and
+/// evaluate as ordinary `Ast::Ctor`/`Value::Ctor` values; not yet
+/// *consumable* (no `set-text-color` — needs a `Context.text_color` field,
+/// deferred to a later Roadmap item), but sufficient for `color.satyh` to
+/// compile.
+pub fn t_color() -> MonoType {
+    MonoType::Variant("color".to_string(), Vec::new())
+}
 
 /// `dom -> cod` (vminst.ml's `@->`).
 pub fn arrow(dom: MonoType, cod: MonoType) -> MonoType {
@@ -350,6 +363,50 @@ pub fn primitive_type(name: &str) -> Option<PolyType> {
         // value it names.
         "inline-fil" => poly0(t_inline_boxes()),
 
+        // ---- frontend-completion.md §Slice 1.A: the ~18 pure primitives ----
+        // (`|>` is excluded here on purpose — it is elaborated directly to
+        // ordinary `Apply`, never a `scope`/env-bound name, so it has no
+        // primitive type scheme at all; see `elaborate.rs`'s `climb`.)
+
+        // vminst.ml:2729/2744/2759/2774/2789/2804 `FloatSine`/`FloatArcSine`/
+        // `FloatCosine`/`FloatArcCosine`/`FloatTangent`/`FloatArcTangent`:
+        // all `~% (tFL @-> tFL)`.
+        "sin" => poly0(arrow(t_float(), t_float())),
+        "asin" => poly0(arrow(t_float(), t_float())),
+        "cos" => poly0(arrow(t_float(), t_float())),
+        "acos" => poly0(arrow(t_float(), t_float())),
+        "tan" => poly0(arrow(t_float(), t_float())),
+        "atan" => poly0(arrow(t_float(), t_float())),
+        // vminst.ml:2819 `FloatArcTangent2`: `~% (tFL @-> tFL @-> tFL)`,
+        // params `(flt1, flt2)` in that order, so `flt1.atan2(flt2)`.
+        "atan2" => poly0(arrows(vec![t_float(), t_float()], t_float())),
+        // vminst.ml:2835 `FloatLogarithm`: natural log, not log10.
+        "log" => poly0(arrow(t_float(), t_float())),
+        // vminst.ml:2850 `FloatExponential`.
+        "exp" => poly0(arrow(t_float(), t_float())),
+        // vminst.ml:2865/2880 `PrimitiveCeil`/`PrimitiveFloor`: both
+        // `~% (tFL @-> tFL)` — the RESULT is `float`, not `int` (contrast
+        // `round`, above).
+        "ceil" => poly0(arrow(t_float(), t_float())),
+        "floor" => poly0(arrow(t_float(), t_float())),
+        // vminst.ml:2319 `PrimitiveShowFloat`: `~% (tFL @-> tS)`.
+        "show-float" => poly0(arrow(t_float(), t_string())),
+
+        // vminst.ml:2159 `PrimitiveStringByteLength`: `~% (tS @-> tI)`.
+        "string-byte-length" => poly0(arrow(t_string(), t_int())),
+        // vminst.ml:2123 `PrimitiveStringSubBytes`:
+        // `~% (tS @-> tI @-> tI @-> tS)`.
+        "string-sub-bytes" => poly0(arrows(vec![t_string(), t_int(), t_int()], t_string())),
+        // vminst.ml:2196 `PrimitiveStringUnexplode`: `~% ((tL tI) @-> tS)`.
+        "string-unexplode" => poly0(arrow(list(t_int()), t_string())),
+
+        // vminst.ml:2056 `PrimitiveDisplayMessage`: `~% (tS @-> tU)`.
+        "display-message" => poly0(arrow(t_string(), t_unit())),
+        // vminst.ml:3133 `AbortWithMessage`: `~% (tS @-> (~@ tv))` — a
+        // fresh-per-instantiation type variable (see `!`/`::`'s `poly1`
+        // above for the same pattern).
+        "abort-with-message" => poly1(|a| arrow(t_string(), a)),
+
         _ => return None,
     })
 }
@@ -453,5 +510,25 @@ pub fn builtin_variants() -> Vec<VariantDecl> {
         param_vars: Vec::new(),
     };
 
-    vec![option_decl, itemize_decl]
+    // `color` (frontend-completion.md §Slice1-B) — nullary variant (no type
+    // parameters, so `param_vars` is empty, same as `itemize` above):
+    // `Gray of float | RGB of (float*float*float) | CMYK of
+    // (float*float*float*float)` (`primitives.cppo.ml:187-190`). Unblocks
+    // **[stdlib]** `color.satyh`'s `Color.rgb`/`Color.gray`/`Color.cmyk`
+    // constructor wrappers.
+    let color_decl = VariantDecl {
+        name: "color".to_string(),
+        params: 0,
+        ctors: vec![
+            ("Gray".to_string(), Some(t_float())),
+            ("RGB".to_string(), Some(product(vec![t_float(), t_float(), t_float()]))),
+            (
+                "CMYK".to_string(),
+                Some(product(vec![t_float(), t_float(), t_float(), t_float()])),
+            ),
+        ],
+        param_vars: Vec::new(),
+    };
+
+    vec![option_decl, itemize_decl, color_decl]
 }

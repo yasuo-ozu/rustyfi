@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 
 use clap::ArgMatches;
 
+mod cache;
 mod dispatch;
 
 fn main() {
@@ -88,19 +89,80 @@ fn cmd_compile(m: &ArgMatches) -> anyhow::Result<()> {
     let version = resolve_version(target_version, &input)?;
 
     let program =
-        satysfi_loader::load(&input, &satysfi_loader::LoadOptions { lib_root, version })
+        satysfi_loader::load(&input, &satysfi_loader::LoadOptions { lib_root: lib_root.clone(), version })
             .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    // Text-rendering plan, Slice 1: resolve font configuration (flags >
+    // --font-dir/$SATYSFI_FONT_DIR > --lib-root) into a real TtfFontStore,
+    // or `None` when nothing is configured anywhere — in which case every
+    // remaining step below is byte-for-byte the pre-Slice-1 base-14 path.
+    let font_store = resolve_font_store(m, lib_root.as_deref())?;
+
+    // Content-addressed compile cache (plan: "make recompiling an unchanged
+    // document near-instant"). Caching is ON by default; `--no-cache` disables
+    // both read and write. The key is computed from the just-loaded program —
+    // its resolved input bytes, the compiler/target version, the entry name,
+    // and (Slice 1) the resolved font identity — *before* the expensive
+    // compile+render, so a hit skips them entirely and writes byte-for-byte
+    // the PDF an earlier miss rendered and stored.
+    let cache = if m.get_flag("no_cache") {
+        None
+    } else {
+        cache::Cache::open(m.get_one::<PathBuf>("cache_dir").cloned())
+    };
+    let cache_key = cache.as_ref().and_then(|_| {
+        cache::compute_key(
+            &program,
+            env!("CARGO_PKG_VERSION"),
+            version,
+            &input,
+            font_store.as_ref(),
+        )
+    });
+    if let (Some(cache), Some(key)) = (&cache, &cache_key) {
+        if let Some(hit) = cache.get(key) {
+            std::fs::write(&output, &hit.pdf)
+                .with_context(|| format!("cannot write {}", output.display()))?;
+            eprintln!(
+                " ---- ---- ---- ----\n  \
+                 output written on {} ({} page(s), {} line(s)) (cached).",
+                output.display(),
+                hit.pages,
+                hit.lines
+            );
+            return Ok(());
+        }
+    }
+
     let merged = merge_program(program);
 
-    let metrics = satysfi_pdf::Base14Metrics;
-    let doc = satysfi_lang::compile_document_cst(&merged, &metrics)
+    // `Some(store)` ⇒ typeset and render through the real embedded TrueType
+    // face (Type0/CIDFontType2, `render_pdf_ttf`); `None` ⇒ today's base-14
+    // path, verbatim (same `Base14Metrics` instance, same `render_pdf` call),
+    // so existing fixtures/behavior are untouched with no font configured.
+    let base14 = satysfi_pdf::Base14Metrics;
+    let metrics: &dyn satysfi_backend::FontMetrics = match &font_store {
+        Some(store) => store,
+        None => &base14,
+    };
+    let doc = satysfi_lang::compile_document_cst(&merged, metrics)
         .map_err(|e| anyhow::anyhow!("{}: {e}", input.display()))?;
 
-    let bytes = satysfi_pdf::render_pdf(&doc.geometry, &doc.pages)?;
-    std::fs::write(&output, bytes)
+    let bytes = match &font_store {
+        Some(store) => satysfi_pdf::render_pdf_ttf(&doc.geometry, &doc.pages, store)?,
+        None => satysfi_pdf::render_pdf(&doc.geometry, &doc.pages)?,
+    };
+    std::fs::write(&output, &bytes)
         .with_context(|| format!("cannot write {}", output.display()))?;
 
     let line_count: usize = doc.pages.iter().map(|p| p.lines.len()).sum();
+
+    // Populate the cache for next time (best-effort: a cache-write failure
+    // must never fail an otherwise-successful compile).
+    if let (Some(cache), Some(key)) = (&cache, &cache_key) {
+        let _ = cache.put(key, &bytes, doc.pages.len(), line_count);
+    }
+
     eprintln!(
         " ---- ---- ---- ----\n  output written on {} ({} page(s), {} line(s)).",
         output.display(),
@@ -108,6 +170,54 @@ fn cmd_compile(m: &ArgMatches) -> anyhow::Result<()> {
         line_count
     );
     Ok(())
+}
+
+/// Resolve the text-rendering plan's Slice-1 font configuration into a
+/// ready [`satysfi_pdf::TtfFontStore`], or `None` when nothing is configured
+/// (the caller then keeps the base-14 path exactly as before this feature
+/// existed).
+///
+/// Precedence (highest first), mirroring how `lib_root` itself resolves
+/// `--lib-root` > `$SATYSFI_LIB_ROOT` > upward discovery:
+///
+/// 1. `--font` (+ optional `--font-bold`/`--font-oblique`, enforced by clap
+///    to require `--font`) — a config-less one-off, no `fonts.satysfi-hash`
+///    involved.
+/// 2. `--font-dir <DIR>`.
+/// 3. `$SATYSFI_FONT_DIR`.
+/// 4. `lib_root` itself (already resolved by the caller), so a project that
+///    keeps its font config alongside `dist/packages/` needs no extra flag.
+///
+/// A missing configuration at whichever root ends up being examined (or no
+/// root at all) is "nothing configured" (`Ok(None)`); once a
+/// `fonts.satysfi-hash` *is* found, any further problem — malformed JSON, an
+/// unknown default-face abbrev, a font file that fails to load — is a real
+/// error, surfaced to the user via the normal compile-error path rather than
+/// silently substituting base-14 for what looks like a real, if broken,
+/// font configuration (see `satysfi_pdf::fonts`'s module docs).
+fn resolve_font_store(
+    m: &ArgMatches,
+    lib_root: Option<&Path>,
+) -> anyhow::Result<Option<satysfi_pdf::TtfFontStore>> {
+    let font_dir = m
+        .get_one::<PathBuf>("font_dir")
+        .cloned()
+        .or_else(|| std::env::var_os("SATYSFI_FONT_DIR").map(PathBuf::from));
+    let flags = satysfi_pdf::FontFlags {
+        regular: m.get_one::<PathBuf>("font").cloned(),
+        bold: m.get_one::<PathBuf>("font_bold").cloned(),
+        oblique: m.get_one::<PathBuf>("font_oblique").cloned(),
+    };
+
+    let registry = satysfi_pdf::FontRegistry::discover(lib_root, font_dir.as_deref(), &flags)
+        .map_err(|e| anyhow::anyhow!("font configuration: {e}"))?;
+    let Some(registry) = registry else {
+        return Ok(None);
+    };
+    let store = registry
+        .build_store()
+        .map_err(|e| anyhow::anyhow!("font configuration: {e}"))?;
+    Ok(Some(store))
 }
 
 /// The CLI's default `--lib-root` rule (used only when neither `--lib-root`

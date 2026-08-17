@@ -141,6 +141,40 @@ fn user_variant_payload_type_mismatch_is_rejected() {
 }
 
 // ============================================================================
+// `color` built-in variant (frontend-completion.md §Slice1-B): `Gray of
+// float | RGB of (float*float*float) | CMYK of (float*float*float*float)` —
+// no base type, no primitive, ordinary `Ast::Ctor`/`Value::Ctor` plumbing.
+// ============================================================================
+
+#[test]
+fn color_variant_ctors_typecheck() {
+    assert_well_typed("let c = Gray 0.5 in c");
+    assert_well_typed("let c = RGB (0.5, 0.5, 0.5) in c");
+    assert_well_typed("let c = CMYK (0.1, 0.2, 0.3, 0.4) in c");
+}
+
+#[test]
+fn color_variant_ctors_are_pattern_matchable() {
+    assert_well_typed(
+        "match Gray 0.5 with
+         | Gray(x)      -> x
+         | RGB(r, g, b) -> r
+         | CMYK(c, m, y, k) -> c",
+    );
+}
+
+#[test]
+fn color_variant_payload_type_mismatch_is_rejected() {
+    assert_type_error("RGB (true, 0.5, 0.5)");
+}
+
+#[test]
+fn color_variant_wrong_ctor_arity_is_rejected() {
+    // `Gray` takes exactly one `float` payload, not a 3-tuple.
+    assert_type_error("Gray (0.1, 0.2, 0.3)");
+}
+
+// ============================================================================
 // Match: arm-type joining and guards.
 // ============================================================================
 
@@ -327,7 +361,7 @@ fn primitive_names_are_cross_checked_against_primitives_source() {
     let src = include_str!("../src/primitives.rs");
     assert_eq!(
         typecheck::PRIMITIVE_NAMES.len(),
-        54,
+        71,
         "keep this in sync with primitives.rs's prims! table and \
          types_unify.rs's every_registered_primitive_has_a_type test"
     );

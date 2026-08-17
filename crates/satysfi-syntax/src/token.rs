@@ -32,6 +32,7 @@ pub enum Token {
     Constructor(String),
     #[leaf(name = "TypeVarTok", expect = "a type variable", field = "name")]
     TypeVar(String),
+    #[leaf(name = "OpenModuleTok", expect = "'Mod.('", field = "name")]
     OpenModule(String), // `Mod.(`
     #[leaf(name = "IntTok", expect = "an integer constant", field = "value")]
     IntConst(i64),
@@ -168,6 +169,7 @@ pub enum Token {
     ExactMinus,
     #[leaf(name = "DefEqTok", expect = "'='")]
     DefEq, // `=`
+    #[leaf(name = "ExactTimesTok", expect = "'*'")]
     ExactTimes, // `*`
     ExactAmp,   // `&`
     ExactTilde, // `~`

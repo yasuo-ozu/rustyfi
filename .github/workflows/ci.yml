@@ -38,6 +38,11 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      # The e2e tests verify rendered PDFs with `pdftotext` (poppler); without
+      # it they fall back to a brittle raw-byte scan. Install it so CI takes
+      # the reliable extraction path (as local dev does).
+      - name: Install poppler-utils (pdftotext)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends poppler-utils
       - name: Cache
         uses: Swatinem/rust-cache@v2
         with:

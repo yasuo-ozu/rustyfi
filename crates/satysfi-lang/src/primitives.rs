@@ -198,6 +198,48 @@ prims! {
     // vminst.ml:1171 `BackendVertSkip`: `~% (tLN @-> tBB)`, builds
     // `VertFixedBreakable(len)` — our existing `VertBox::Skip(len)`.
     "block-skip" (1) => prim_block_skip;
+
+    // ---- frontend-completion.md §Slice 1.A: the ~18 pure primitives -------
+    // (all use only already-existing `Value`/`BaseType`s — no backend work).
+    // `|>` (reverse application) is NOT here: it is elaborated directly to
+    // `Apply(f, x)` (see `elaborate.rs`'s `climb`), not a runtime primitive.
+
+    // ---- float trig / log / exp / rounding (vminst.ml 2729-2880) ----------
+    "sin" (1) => prim_sin;
+    "asin" (1) => prim_asin;
+    "cos" (1) => prim_cos;
+    "acos" (1) => prim_acos;
+    "tan" (1) => prim_tan;
+    "atan" (1) => prim_atan;
+    "atan2" (2) => prim_atan2;
+    "log" (1) => prim_log;
+    "exp" (1) => prim_exp;
+    // vminst.ml:2865/2880 `PrimitiveCeil`/`PrimitiveFloor`: both `float ->
+    // float` (NOT `int` — easy to mistype, see frontend-completion.md's
+    // Risks section; contrast `round`, above, which does return `int`).
+    "ceil" (1) => prim_ceil;
+    "floor" (1) => prim_floor;
+    // vminst.ml:2319 `PrimitiveShowFloat`: `float -> string`, OCaml's
+    // `string_of_float`.
+    "show-float" (1) => prim_show_float;
+
+    // ---- byte-indexed string ops (vminst.ml 2056-2196) ---------------------
+    // vminst.ml:2159 `PrimitiveStringByteLength`: counts UTF-8 BYTES, unlike
+    // `string-length`'s Unicode-scalar-value count above.
+    "string-byte-length" (1) => prim_string_byte_length;
+    // vminst.ml:2123 `PrimitiveStringSubBytes`: byte-indexed `string-sub`.
+    "string-sub-bytes" (3) => prim_string_sub_bytes;
+    // vminst.ml:2196 `PrimitiveStringUnexplode`: inverse of `string-explode`.
+    "string-unexplode" (1) => prim_string_unexplode;
+
+    // ---- diagnostics (vminst.ml 2056, 3133) --------------------------------
+    // vminst.ml:2056 `PrimitiveDisplayMessage`: `string -> unit`. Upstream
+    // prints to stdout (`print_endline`); see `prim_display_message`'s doc
+    // comment for why this port deliberately prints to stderr instead.
+    "display-message" (1) => prim_display_message;
+    // vminst.ml:3133 `AbortWithMessage`: `string -> 'a` — raises a dynamic
+    // error carrying the message verbatim.
+    "abort-with-message" (1) => prim_abort_with_message;
 }
 
 /// The base environment `document` programs start in.
@@ -298,6 +340,15 @@ fn as_length(v: Value) -> Result<Length, EvalError> {
     match v {
         Value::Length(l) => Ok(l),
         other => eval_error(format!("expected length, got {}", other.type_name())),
+    }
+}
+
+/// Used by `string-unexplode` (the only new Slice-1 primitive that needs a
+/// bare list, as opposed to a per-element extractor applied inside a loop).
+fn as_list(v: Value) -> Result<Vec<Value>, EvalError> {
+    match v {
+        Value::List(items) => Ok(items),
+        other => eval_error(format!("expected list, got {}", other.type_name())),
     }
 }
 
@@ -829,4 +880,164 @@ fn prim_inline_glue(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value,
 fn prim_block_skip(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
     let len = as_length(args.pop().unwrap())?;
     Ok(Value::BlockBoxes(vec![VertBox::Skip(len)]))
+}
+
+// ---- frontend-completion.md §Slice 1.A: the ~18 pure primitives -----------
+//
+// All bodies below are `float -> float` (or `float -> float -> float`)
+// straight wraps of the matching `f64` method — vminst.ml's OCaml bodies
+// (`make_float (sin flt1)`, etc.) are themselves direct wraps of the same
+// IEEE-754 libm functions, so there is no behavioral daylight here.
+
+binop_prim!(prim_atan2, as_float, Float, |a, b| a.atan2(b));
+unop_prim!(prim_sin, as_float, Float, |x| x.sin());
+unop_prim!(prim_asin, as_float, Float, |x| x.asin());
+unop_prim!(prim_cos, as_float, Float, |x| x.cos());
+unop_prim!(prim_acos, as_float, Float, |x| x.acos());
+unop_prim!(prim_tan, as_float, Float, |x| x.tan());
+unop_prim!(prim_atan, as_float, Float, |x| x.atan());
+// vminst.ml:2834 `FloatLogarithm`: OCaml's `log` is the NATURAL logarithm
+// (`ln`), not `log10`.
+unop_prim!(prim_log, as_float, Float, |x| x.ln());
+unop_prim!(prim_exp, as_float, Float, |x| x.exp());
+// `ceil`/`floor` return `float`, unlike `round` (above), which returns
+// `int` — see this file's `prims!` table comment on `"ceil"`/`"floor"`.
+unop_prim!(prim_ceil, as_float, Float, |x| x.ceil());
+unop_prim!(prim_floor, as_float, Float, |x| x.floor());
+
+// `show-float : float -> string` (vminst.ml:2319 `PrimitiveShowFloat`) —
+// OCaml's `string_of_float`. See `ocaml_show_float`'s doc comment (below)
+// for the emulation and its known fidelity limits.
+unop_prim!(prim_show_float, as_float, Str, |x| ocaml_show_float(x));
+
+/// A from-scratch emulation of OCaml's `Stdlib.string_of_float`: format via
+/// a C `%.12g` equivalent (12 significant digits; fixed-point when the
+/// decimal exponent falls in `-4..12`, scientific otherwise; trailing
+/// fractional zeros trimmed), then apply `valid_float_lexem`'s post-pass —
+/// append a trailing `.` when the result would otherwise print as a bare
+/// integer (`"1."`, never `"1"`, so a `float`'s printed form always reads
+/// as a float, not an `int`). Known limitation: this is a Rust
+/// reimplementation of the same specification (OCaml itself defers to the
+/// platform C library's `%.12g`), so it may disagree with OCaml in obscure
+/// corner cases, though it agrees on ordinary values (verified by hand
+/// against real OCaml output for `0.`, `-0.`, `1.`, `100.`, `0.0025`,
+/// `1e+20`, `1e-05`).
+fn ocaml_show_float(x: f64) -> String {
+    if x.is_nan() {
+        return "nan".to_string();
+    }
+    if x.is_infinite() {
+        return if x < 0.0 { "-infinity" } else { "infinity" }.to_string();
+    }
+    const PREC: i32 = 12;
+    // Style-E rendering at precision PREC-1 recovers the correctly-rounded
+    // decimal exponent (a naive `log10().floor()` can be off by one right
+    // at a power of ten, because of binary/decimal rounding).
+    let sci = format!("{:.*e}", (PREC - 1) as usize, x);
+    let epos = sci.find('e').expect("scientific formatting always emits 'e'");
+    let exp: i32 = sci[epos + 1..].parse().expect("well-formed exponent");
+    let body = if exp < -4 || exp >= PREC {
+        let mantissa = trim_trailing_fractional_zeros(&sci[..epos]);
+        format!(
+            "{mantissa}e{}{:02}",
+            if exp < 0 { "-" } else { "+" },
+            exp.abs()
+        )
+    } else {
+        let decimals = (PREC - 1 - exp).max(0) as usize;
+        trim_trailing_fractional_zeros(&format!("{:.*}", decimals, x)).to_string()
+    };
+    if body.bytes().all(|b| b.is_ascii_digit() || b == b'-') {
+        format!("{body}.")
+    } else {
+        body
+    }
+}
+
+/// Strip trailing zeros after a decimal point, then the point itself if
+/// nothing remains after it (`"3.140" -> "3.14"`, `"5.000" -> "5"`);
+/// already-integer-shaped strings (no `.`) pass through unchanged.
+fn trim_trailing_fractional_zeros(s: &str) -> &str {
+    if !s.contains('.') {
+        return s;
+    }
+    s.trim_end_matches('0').trim_end_matches('.')
+}
+
+// `string-byte-length : string -> int` (vminst.ml:2159
+// `PrimitiveStringByteLength`) — UTF-8 BYTE count (`String.length` in
+// OCaml, whose native strings are raw byte sequences), unlike
+// `string-length`'s Unicode-scalar-value count.
+unop_prim!(prim_string_byte_length, as_str, Int, |s| s.len() as i64);
+
+/// `string-sub-bytes : string -> int -> int -> string` (vminst.ml:2123
+/// `PrimitiveStringSubBytes`) — byte-indexed substring (OCaml's
+/// `String.sub`), unlike `string-sub`'s Unicode-scalar-value indexing.
+/// Guards an out-of-range span exactly like `prim_string_sub`'s "illegal
+/// index" dynamic error, AND a split landing inside a multi-byte UTF-8
+/// sequence — impossible for OCaml's byte-oriented strings, but a
+/// `Value::Str` here is a Rust `String`, which must stay valid UTF-8.
+fn prim_string_sub_bytes(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+    let wid = as_int(args.pop().unwrap())?;
+    let pos = as_int(args.pop().unwrap())?;
+    let s = as_str(args.pop().unwrap())?;
+    if wid < 0 || pos < 0 {
+        return eval_error("illegal index for string-sub-bytes");
+    }
+    let (pos, wid) = (pos as usize, wid as usize);
+    match pos.checked_add(wid) {
+        Some(end) if end <= s.len() && s.is_char_boundary(pos) && s.is_char_boundary(end) => {
+            Ok(Value::Str(s[pos..end].to_string()))
+        }
+        _ => eval_error("illegal index for string-sub-bytes"),
+    }
+}
+
+/// `string-unexplode : int list -> string` (vminst.ml:2196
+/// `PrimitiveStringUnexplode`) — the inverse of `string-explode` (above):
+/// each int is a Unicode scalar value (code point), concatenated into one
+/// UTF-8 string. Upstream's `Uchar.of_int` raises on an int that isn't a
+/// valid Unicode scalar value (a surrogate, or out of range); reported here
+/// as the same kind of dynamic error rather than panicking.
+fn prim_string_unexplode(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+    let items = as_list(args.pop().unwrap())?;
+    let mut s = String::new();
+    for v in items {
+        let n = as_int(v)?;
+        match u32::try_from(n).ok().and_then(char::from_u32) {
+            Some(c) => s.push(c),
+            None => {
+                return eval_error(format!(
+                    "string-unexplode: {n} is not a valid Unicode scalar value"
+                ))
+            }
+        }
+    }
+    Ok(Value::Str(s))
+}
+
+/// `display-message : string -> unit` (vminst.ml:2056
+/// `PrimitiveDisplayMessage`) — upstream prints via `print_endline`
+/// (STDOUT); this port deliberately prints to STDERR instead (`eprintln!`),
+/// keeping stdout reserved for actual document output. This matches the
+/// existing house convention: the CLI's own "output written" status line
+/// (`satysfi-cli`'s `main.rs`) is likewise stderr-only, never stdout — a
+/// documented deviation, not an oversight.
+fn prim_display_message(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+    let msg = as_str(args.pop().unwrap())?;
+    eprintln!("{msg}");
+    Ok(Value::Unit)
+}
+
+/// `abort-with-message : string -> 'a` (vminst.ml:3133 `AbortWithMessage`)
+/// — raises a dynamic error carrying `msg` verbatim. The polymorphic result
+/// type (`prim_types.rs`'s `poly1`) is vacuously satisfiable: this always
+/// evaluates to `Err`, never actually producing a value of whatever type
+/// the call site expected.
+fn prim_abort_with_message(
+    _interp: &mut Interp,
+    mut args: Vec<Value>,
+) -> Result<Value, EvalError> {
+    let msg = as_str(args.pop().unwrap())?;
+    eval_error(msg)
 }

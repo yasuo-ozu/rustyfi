@@ -80,6 +80,73 @@ fn compile_command(name: &'static str) -> Command {
                      When omitted, a 0.1-style `use` header is auto-detected.",
                 ),
         )
+        .arg(
+            Arg::new("no_cache")
+                .long("no-cache")
+                .help(
+                    "Bypass the content-addressed compile cache (neither read \
+                     nor write it). Caching is on by default and makes an \
+                     unchanged recompile near-instant.",
+                )
+                .action(ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("cache_dir")
+                .long("cache-dir")
+                .value_name("DIR")
+                .help(
+                    "Override the compile-cache directory (default: \
+                     $XDG_CACHE_HOME/satysfi-rust, then ~/.cache/satysfi-rust, \
+                     then a temp-dir fallback).",
+                )
+                .value_parser(value_parser!(PathBuf)),
+        )
+        .arg(
+            Arg::new("font_dir")
+                .long("font-dir")
+                .value_name("DIR")
+                .help(
+                    "Font root for dist/hash/fonts.satysfi-hash (+ \
+                     default-font.satysfi-hash) discovery — same layout \
+                     convention as --lib-root's dist/packages/. Falls back to \
+                     $SATYSFI_FONT_DIR, then to --lib-root itself. With no font \
+                     configured anywhere, text is set in the built-in base-14 \
+                     fonts (this is the milestone-1 default and stays exactly \
+                     as before).",
+                )
+                .value_parser(value_parser!(PathBuf)),
+        )
+        .arg(
+            Arg::new("font")
+                .long("font")
+                .value_name("FILE")
+                .help(
+                    "Use this TrueType/OpenType file as the regular face \
+                     directly, bypassing fonts.satysfi-hash discovery (a \
+                     config-less one-off). Takes precedence over --font-dir \
+                     and $SATYSFI_FONT_DIR.",
+                )
+                .value_parser(value_parser!(PathBuf)),
+        )
+        .arg(
+            Arg::new("font_bold")
+                .long("font-bold")
+                .value_name("FILE")
+                .help("Bold face for --font (defaults to --font itself when omitted).")
+                .value_parser(value_parser!(PathBuf))
+                .requires("font"),
+        )
+        .arg(
+            Arg::new("font_oblique")
+                .long("font-oblique")
+                .value_name("FILE")
+                .help(
+                    "Oblique/italic face for --font (defaults to --font itself \
+                     when omitted).",
+                )
+                .value_parser(value_parser!(PathBuf))
+                .requires("font"),
+        )
 }
 
 /// The shared `--registry URL` flag (plan §5.4 step 1), attached to the

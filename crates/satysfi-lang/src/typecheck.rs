@@ -31,7 +31,7 @@ use crate::types::{
     TypeContext,
 };
 use crate::unify::{unify, UnifyError};
-use satysfi_syntax::cst::ast::{TypeAtom, TypeExpr};
+use satysfi_syntax::cst::ast::{TypeApp, TypeAtom, TypeExpr, TypeProd};
 use satysfi_syntax::span::Span;
 use std::collections::HashMap;
 use std::fmt;
@@ -166,6 +166,26 @@ pub const PRIMITIVE_NAMES: &[&str] = &[
     // ---- phase 4, part 2 addition (see primitives.rs's `prims!` table
     // comment on `"set-font-key"`) ----
     "set-font-key",
+    // ---- frontend-completion.md §Slice 1.A: the ~18 pure primitives ----
+    // (`|>` excluded — see primitives.rs's `prims!` table comment; it has
+    // no primitive of its own, so it never belongs in this list).
+    "sin",
+    "asin",
+    "cos",
+    "acos",
+    "tan",
+    "atan",
+    "atan2",
+    "log",
+    "exp",
+    "ceil",
+    "floor",
+    "show-float",
+    "string-byte-length",
+    "string-sub-bytes",
+    "string-unexplode",
+    "display-message",
+    "abort-with-message",
 ];
 
 fn base_type_env() -> TypeEnv {
@@ -203,12 +223,19 @@ impl TypeEnv {
 }
 
 // ============================================================================
-// Lowering CST `TypeExpr` (a `type` declaration's ctor payload syntax) to
-// `MonoType`. The grammar (`satysfi_syntax::cst::ast::TypeExpr`/`TypeAtom`)
-// is deliberately minimal — only function arrows, parens, type variables,
-// and bare names; no products, no `list`/`ref` postfix, no applied type
-// constructors (see that module's doc comment) — so this lowering is total
-// (never fails) and needs no arity checking of its own.
+// Lowering CST `TypeExpr` (a `type` declaration's ctor payload syntax, and a
+// `sig .. end`'s `val` annotations — the latter parsed but not yet consulted,
+// see `elaborate.rs`'s module doc comment) to `MonoType`. The grammar
+// (`satysfi_syntax::cst::ast::TypeExpr`/`TypeProd`/`TypeApp`/`TypeAtom`)
+// supports function arrows, parens, type variables, bare names, 2+-way
+// product types (`*`), and a SINGLE-argument postfix type-constructor
+// application (`'a option`, `'a list`) — no record/list-literal/command
+// types or N-ary applied constructors (see that module's doc comment) — so
+// this lowering is total (never fails) and needs no arity checking of its
+// own. `list`/`ref` are recognized specially (they map to this port's
+// dedicated `MonoType::List`/`MonoType::Ref` formers, not a nominal
+// `Variant`, mirroring `prim_types::list`/`reff`); every other applied name
+// (e.g. `option`) becomes a one-argument `MonoType::Variant`.
 // ============================================================================
 
 /// Map a `type` declaration's bare type name to a `MonoType`. Every base
@@ -257,13 +284,46 @@ fn lower_type_atom(atom: &TypeAtom, tyvars: &HashMap<String, MonoType>) -> MonoT
     }
 }
 
+/// `txprod`: a [`TypeProd`] is either a single [`TypeApp`] (returned as-is)
+/// or a genuine `*`-separated product (`MonoType::Product`, always 2+ items
+/// by construction — see [`prim_types::product`]).
+fn lower_type_prod(prod: &TypeProd, tyvars: &HashMap<String, MonoType>) -> MonoType {
+    if prod.rest.is_empty() {
+        lower_type_app(&prod.first, tyvars)
+    } else {
+        let mut items = Vec::with_capacity(1 + prod.rest.len());
+        items.push(lower_type_app(&prod.first, tyvars));
+        for st in &prod.rest {
+            items.push(lower_type_app(&st.ty, tyvars));
+        }
+        product(items)
+    }
+}
+
+/// `txapppre`/`txapp` (restricted to a single argument — see [`TypeApp`]'s
+/// doc comment): either a bare atom, or one atom applied to a single postfix
+/// type-constructor name (`'a option`, `('a list) list`).
+fn lower_type_app(app: &TypeApp, tyvars: &HashMap<String, MonoType>) -> MonoType {
+    match app {
+        TypeApp::Atom(atom) => lower_type_atom(atom, tyvars),
+        TypeApp::Applied { arg, ctor } => {
+            let arg_ty = lower_type_atom(arg, tyvars);
+            match ctor.name.as_str() {
+                "list" => list(arg_ty),
+                "ref" => reff(arg_ty),
+                other => MonoType::Variant(other.to_string(), vec![arg_ty]),
+            }
+        }
+    }
+}
+
 fn lower_type_expr(ty: &TypeExpr, tyvars: &HashMap<String, MonoType>) -> MonoType {
     match ty {
         TypeExpr::Fun { dom, cod, .. } => arrow(
-            lower_type_atom(dom, tyvars),
+            lower_type_prod(dom, tyvars),
             lower_type_expr(cod, tyvars),
         ),
-        TypeExpr::Atom(atom) => lower_type_atom(atom, tyvars),
+        TypeExpr::Atom(prod) => lower_type_prod(prod, tyvars),
     }
 }
 

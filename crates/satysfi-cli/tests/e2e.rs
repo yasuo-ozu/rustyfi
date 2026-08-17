@@ -95,7 +95,10 @@ fn fixture_compiles_to_valid_pdf_with_expected_text() {
             // Fallback: content streams are uncompressed, so the Tj string
             // operands are directly visible in the bytes.
             let hay = String::from_utf8_lossy(&bytes);
-            for expected in ["(Hello,)", "(world!)", "(SATySFi-in-Rust.)"] {
+            // `\emph{SATySFi-in-Rust}.` sets the emphasized word (oblique) and
+            // the trailing `.` as separate text runs, so the period is not part
+            // of this operand.
+            for expected in ["(Hello,)", "(world!)", "(SATySFi-in-Rust)"] {
                 assert!(
                     hay.contains(expected),
                     "content stream missing {expected:?}"

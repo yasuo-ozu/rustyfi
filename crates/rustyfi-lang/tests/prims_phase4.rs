@@ -116,16 +116,16 @@ fn get_initial_context_text_width_matches_the_given_length() {
 }
 
 #[test]
-fn get_initial_context_defaults_paragraph_margins_to_nine_points() {
-    // The default paragraph margin is `font_size * 0.75` = 9pt at the 12pt
-    // initial size — the value measured from SATySFi's actual rendered output
-    // (commit "correct paragraph margin (9pt)"), which the layout-fidelity
-    // corpus depends on (e.g. enumitem matches SATySFi's page count exactly
-    // only at 9pt). Updated from the earlier 18pt assertion accordingly.
+fn get_initial_context_defaults_paragraph_margins_to_eighteen_points() {
+    // The default paragraph margin is 18pt, straight from SATySFi's source
+    // (`primitives.ml:546-548` `paragraph_top`/`paragraph_bottom`). An earlier
+    // "9pt" value had been reverse-fitted to the page-count proxy; the faithful
+    // stacking model (content-base advance + collapsed margins, commit 7ccea09)
+    // restored it to SATySFi's real 18pt. See the layout-fidelity-ceiling memo.
     match run(&initial_ctx(100.0)) {
         Value::Context(ctx) => {
-            assert_eq!(ctx.paragraph_top, Length::pt(9.0));
-            assert_eq!(ctx.paragraph_bottom, Length::pt(9.0));
+            assert_eq!(ctx.paragraph_top, Length::pt(18.0));
+            assert_eq!(ctx.paragraph_bottom, Length::pt(18.0));
         }
         other => panic!("expected a context, got {other:?}"),
     }

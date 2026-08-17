@@ -249,8 +249,8 @@ impl Context {
             // content + same spacing ⇒ same flow). Doc classes that want a
             // different margin still `set-paragraph-margin` explicitly
             // (stdjareport does so for chapter/section headings).
-            paragraph_top: Length::pt(9.0),
-            paragraph_bottom: Length::pt(9.0),
+            paragraph_top: Length::pt(18.0),
+            paragraph_bottom: Length::pt(18.0),
             manual_rising: Length::ZERO,
             dominant_wide_script: Script::OtherScript,
             dominant_narrow_script: Script::OtherScript,

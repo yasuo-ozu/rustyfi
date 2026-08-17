@@ -439,6 +439,7 @@ mod tests {
             height: Length::pt(h),
             depth: Length::pt(d),
             elems: Vec::new(),
+            origin_independent: false,
         })]
     }
 

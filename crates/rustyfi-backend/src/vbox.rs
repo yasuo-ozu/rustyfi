@@ -17,8 +17,23 @@ pub enum VertBox {
         leading: Length,
         contents: Vec<(Length, PureHorzBox)>,
     },
-    /// Fixed vertical space.
+    /// Fixed vertical space (`block-skip`, frame padding, a paragraph's
+    /// *bottom* margin) — NOT padded by `min_first_line_ascender`.
     Skip(Length),
+    /// A paragraph's TOP margin (`prim_line_break` prepends this from
+    /// `ctx.paragraph_top`). Distinguished from `Skip` because SATySFi pads
+    /// only the paragraph `margin_top` up to `min_first_line_ascender`
+    /// (`lineBreak.ml:857`) — `block-skip`s and frame pads get no such pad.
+    /// Accumulates into `pending_skip` exactly like `Skip`; the difference is
+    /// only that its presence enables the ascender pad on the following line.
+    ParagTop(Length),
+    /// A `block-frame-breakable` frame's internal top/bottom padding. Unlike
+    /// `Skip` (a margin, which max-COLLAPSES with adjacent margins), frame
+    /// padding is ADDITIVE — SATySFi adds it to the running height inside the
+    /// frame (`pageBreak.ml:323` `hgttotal +% pads.paddingT`, `:380`
+    /// `+% pads.paddingB`), so it stacks ON TOP of the surrounding
+    /// paragraph margin rather than being absorbed by it.
+    FramePad(Length),
     /// `clear-page`'s marker (`primitives.cppo.ml`'s `VertClearPage`,
     /// `horzBox.ml:346`) — forces the current page to end right here:
     /// `chop_page` closes the page as soon as at least one real `Line` has

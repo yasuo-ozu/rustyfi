@@ -278,7 +278,7 @@ pub fn measure_block(block: &[VertBox]) -> (Length, Length) {
                 height += *h;
                 depth += *d;
             }
-            VertBox::Skip(s) => height += *s,
+            VertBox::Skip(s) | VertBox::ParagTop(s) | VertBox::FramePad(s) => height += *s,
             // `clear-page`/`hook-page-break-block`/frame markers contribute
             // zero height, same as upstream's
             // `ImVertFixedEmpty(_, Length.zero)`.
@@ -339,9 +339,15 @@ fn badness(width: Length, metrics: &LineMetrics) -> f64 {
             // clipping in latexcmds `+code`/`\code`). Force the wrap.
             BADNESS_INF
         } else {
-            // No breakable glue at all (unspaced CJK): nowhere better to break,
-            // so fall back to the continuous overflow score.
-            no_stretch_badness(slack, width)
+            // No breakable glue at all (unspaced CJK) AND overfull: SATySFi's
+            // `ratio_shrink_limit = -1.0` (lineBreak.ml:508) excludes any line
+            // that overflows beyond its shrink capacity — with zero shrink that
+            // is ANY overflow, so the breaker is forced to end the line BEFORE
+            // the char that doesn't fit. The port's continuous
+            // `no_stretch_badness` scored a modest CJK overflow near-zero and
+            // let the DP cram, packing CJK ~0.6 line/page fuller than SATySFi
+            // (easytable 18 vs 19). Force the earlier break.
+            BADNESS_INF
         }
     }
 }
@@ -422,7 +428,20 @@ pub fn break_into_lines(ctx: &Context, boxes: Vec<HorzBox>) -> Vec<VertBox> {
     let mut starts: Vec<usize> = vec![0];
     let mut ends: Vec<usize> = Vec::new();
     for g in 1..n {
-        if pure[g].is_break_point() && !pure[g - 1].is_break_point() {
+        let is_disc = matches!(pure[g], PureHorzBox::Discretionary { .. });
+        // A break candidate is the FIRST box of a run of break points
+        // (`is_break_point && !prev-is-break-point`) — breaking at glue
+        // discards that glue. BUT a `Discretionary` is ALSO a candidate even
+        // when it immediately follows glue: unlike glue, breaking at a
+        // discretionary does NOT discard the glue *before* it. This is exactly
+        // what the `+code` idiom `text ++ inline-fil ++ discretionary` needs —
+        // the line must keep its trailing `inline-fil` (to justify) and break
+        // at the discretionary. Without the discretionary as its own candidate
+        // the run `[fil, disc]` collapsed to the `fil`, so the break discarded
+        // the fil, leaving an underfull line the DP then declined to break —
+        // merging code lines and shoving them off-page via the discretionary's
+        // 2×width no-break skip (whole code blocks rendered a few lines).
+        if (pure[g].is_break_point() && !pure[g - 1].is_break_point()) || is_disc {
             ends.push(g);
             starts.push(g + 1);
         }

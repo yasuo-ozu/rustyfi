@@ -112,6 +112,41 @@ pub trait FontMetrics {
     /// Depth below the baseline at `size` (a positive value).
     fn descender(&self, font: FontKey, size: Length) -> Length;
 
+    /// One glyph's vertical extent from its ACTUAL bounding box —
+    /// `(height above baseline = ymax, depth below baseline = -ymin)`, both in
+    /// `size` units. `None` when the provider has no per-glyph bbox (base-14 /
+    /// test stubs), in which case `run_vextent` falls back to
+    /// `ascender`/`descender`. This is how SATySFi measures glyphs
+    /// (`fontFormat.ml`'s `get_glyph_metrics`: `hgt = ymax`, `dpt = ymin`).
+    fn glyph_vextent(&self, _font: FontKey, _c: char, _size: Length) -> Option<(Length, Length)> {
+        None
+    }
+
+    /// A text run's `(height, depth)` the way SATySFi's `get_metrics_of_word`
+    /// (`fontInfo.ml:192`) computes it: the MAX glyph `ymax` and MAX `-ymin`
+    /// over the run's actual glyph bounding boxes — NOT the font-level
+    /// ascender/descender. Starting the folds at zero clamps a run with no
+    /// descenders (Japanese, digits, TOC leader dots) to depth 0, matching
+    /// SATySFi's much tighter inter-line advance for such content. Falls back
+    /// to `ascender`/`descender` when no glyph exposes a bbox.
+    fn run_vextent(&self, font: FontKey, text: &str, size: Length) -> (Length, Length) {
+        let mut hgt = Length::ZERO;
+        let mut dpt = Length::ZERO;
+        let mut any = false;
+        for c in text.chars() {
+            if let Some((h, d)) = self.glyph_vextent(font, c, size) {
+                hgt = hgt.max(h);
+                dpt = dpt.max(d);
+                any = true;
+            }
+        }
+        if any {
+            (hgt, dpt)
+        } else {
+            (self.ascender(font, size), self.descender(font, size))
+        }
+    }
+
     fn text_width(&self, font: FontKey, text: &str, size: Length) -> Option<Length> {
         let mut w = Length::ZERO;
         for c in text.chars() {

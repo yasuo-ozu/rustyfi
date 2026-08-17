@@ -58,7 +58,7 @@ fn lines_of(v: &[VertBox]) -> Vec<String> {
                 })
                 .collect::<Vec<_>>()
                 .join(" "),
-            VertBox::Skip(_) => "<skip>".into(),
+            VertBox::Skip(_) | VertBox::ParagTop(_) | VertBox::FramePad(_) => "<skip>".into(),
             VertBox::ClearPage => "<clear-page>".into(),
             VertBox::HookPageBreak(_) => "<hook>".into(),
             VertBox::FrameStart(_) => "<frame-start>".into(),
@@ -594,6 +594,7 @@ fn graphics_box(width: f64, height: f64, depth: f64) -> PureHorzBox {
         height: Length::pt(height),
         depth: Length::pt(depth),
         elems: vec![],
+        origin_independent: false,
     }
 }
 

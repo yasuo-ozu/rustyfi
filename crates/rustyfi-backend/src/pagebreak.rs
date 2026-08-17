@@ -10,6 +10,12 @@ use crate::hbox::PureHorzBox;
 use crate::length::Length;
 use crate::vbox::VertBox;
 
+/// SATySFi's `min_first_line_ascender` (default, `primitives.ml:546`): a
+/// paragraph's top margin is padded so its first line has at least this much
+/// ascender slot above the baseline (`lineBreak.ml:857`). Applied to every
+/// inter-block advance.
+const MIN_FIRST_ASCENDER: Length = Length::pt(9.0);
+
 /// One typeset line placed on a page, in page coordinates (y grows downward
 /// from the paper top; the PDF writer flips it).
 #[derive(Clone, Debug, PartialEq)]
@@ -148,6 +154,12 @@ pub fn chop_page(
     // pager under-count pages around tall figures).
     let mut prev_depth = Length::ZERO;
     let mut pending_skip = Length::ZERO;
+    // Additive frame padding (`FramePad`) — stacks ON TOP of `pending_skip`
+    // rather than max-collapsing with it (SATySFi frame padding is additive).
+    let mut pending_pad = Length::ZERO;
+    // Whether the pending margin includes a paragraph TOP (`ParagTop`), which
+    // is the only kind SATySFi pads up to `min_first_line_ascender`.
+    let mut pending_parag = false;
     let mut placed_real_line = false;
     // Distinct from `placed_real_line`: true once ANY line box has been placed,
     // including a zero-extent one (a slydifi frame's `bb-gr` background line).
@@ -172,6 +184,19 @@ pub fn chop_page(
                 // (~+25pt each), the dominant source of the port's
                 // over-pagination vs the original SATySFi.
                 pending_skip = pending_skip.max(*l);
+                idx += 1;
+            }
+            VertBox::ParagTop(l) => {
+                // Same max-collapse as `Skip`, but flags the boundary as a
+                // paragraph top so the following line gets the
+                // `min_first_line_ascender` pad (SATySFi pads `margin_top` only).
+                pending_skip = pending_skip.max(*l);
+                pending_parag = true;
+                idx += 1;
+            }
+            VertBox::FramePad(l) => {
+                // Additive: frame padding stacks on top of the margin.
+                pending_pad += *l;
                 idx += 1;
             }
             VertBox::ClearPage => {
@@ -262,8 +287,31 @@ pub fn chop_page(
                     // `leading - height` lower. Small inter-paragraph margins
                     // (skip <= leading) keep the additive model the flowing
                     // corpus docs are calibrated to.
-                    Some(b) if pending_skip > *leading => b + prev_depth + pending_skip + *h,
-                    Some(b) => b + leading.max(prev_depth + *h) + pending_skip,
+                    // SATySFi's inter-block advance is `prev_depth + margin +
+                    // height` — the NATURAL content height plus the (collapsed)
+                    // paragraph margin, with NO leading floor. Verified by a
+                    // controlled `set-paragraph-margin` sweep against real
+                    // SATySFi 0.0.11: gap == 12pt (content) + margin, exactly
+                    // linear (X=0→12, 5→17, 10→22, 20→32). The leading grid
+                    // (≈18pt) governs only lines WITHIN one paragraph, where
+                    // `pending_skip == 0`; between blocks a small margin gives a
+                    // gap BELOW the leading (e.g. an itemize item-gap of 10 →
+                    // 22pt, not 28). Applying the leading floor to block gaps was
+                    // the bug that over-spaced every list/table by ~6pt/row.
+                    // SATySFi pads the paragraph's top margin up to
+                    // `min_first_line_ascender` (default 9pt, primitives.ml:546):
+                    // `margin_top = paragraph_margin_top + max(0, 9pt - hgt)`
+                    // (lineBreak.ml:857). Folded into the advance this is
+                    // `prev_depth + margin + max(hgt, 9pt)` — a short first line
+                    // (body ascender ≈8.5pt, or a tiny caption/rule line) still
+                    // gets at least a 9pt ascender slot above its baseline. The
+                    // matching `min_last_descender` field is dead in 0.0.11 (it
+                    // is assigned but never read), so only the TOP is padded.
+                    Some(b) if pending_skip + pending_pad > Length::ZERO => {
+                        let asc = if pending_parag { (*h).max(MIN_FIRST_ASCENDER) } else { *h };
+                        b + prev_depth + pending_skip + pending_pad + asc
+                    }
+                    Some(b) => b + leading.max(prev_depth + *h),
                 };
                 // A committed line's footnotes shrink the usable page
                 // bottom the moment it is placed (pageBreak.ml:138,
@@ -282,6 +330,8 @@ pub fn chop_page(
                     break; // this line (and everything after) rolls to the next page
                 }
                 pending_skip = Length::ZERO;
+                pending_pad = Length::ZERO;
+                pending_parag = false;
                 prev_baseline = Some(baseline);
                 prev_depth = *depth;
                 placed_any_line = true;
@@ -328,11 +378,17 @@ pub fn chop_page(
 /// Risks note.)
 fn stack_height(vboxes: &[VertBox]) -> Length {
     let mut prev_baseline: Option<Length> = None;
+    let mut prev_depth = Length::ZERO;
     let mut pending_skip = Length::ZERO;
+    let mut pending_pad = Length::ZERO;
     let mut bottom = Length::ZERO;
     for vb in vboxes {
         match vb {
-            VertBox::Skip(l) => pending_skip += *l,
+            // Collapse adjacent margins (max, not sum) and advance by the same
+            // faithful `prev_depth + margin + height` rule `place_block_at` uses,
+            // so the reserved extent equals the drawn extent.
+            VertBox::Skip(l) | VertBox::ParagTop(l) => pending_skip = pending_skip.max(*l),
+            VertBox::FramePad(l) => pending_pad += *l,
             VertBox::ClearPage | VertBox::HookPageBreak(_) => {}
             VertBox::FrameStart(_) | VertBox::FrameEnd(_) => {}
             VertBox::ListMark(_) => {}
@@ -343,11 +399,16 @@ fn stack_height(vboxes: &[VertBox]) -> Length {
                 ..
             } => {
                 let baseline = match prev_baseline {
-                    None => pending_skip + *height,
-                    Some(b) => b + leading.max(*height) + pending_skip,
+                    None => pending_skip + pending_pad + *height,
+                    Some(b) if pending_skip + pending_pad > Length::ZERO => {
+                        b + prev_depth + pending_skip + pending_pad + *height
+                    }
+                    Some(b) => b + leading.max(prev_depth + *height),
                 };
                 pending_skip = Length::ZERO;
+                pending_pad = Length::ZERO;
                 prev_baseline = Some(baseline);
+                prev_depth = *depth;
                 bottom = baseline + *depth;
             }
         }
@@ -423,6 +484,7 @@ pub fn place_block_at(origin: (Length, Length), vboxes: Vec<VertBox>) -> Vec<Pla
     // already bakes in `prev_depth`), so it only bites for genuinely deep boxes.
     let mut prev_depth = Length::ZERO;
     let mut pending_skip = Length::ZERO;
+    let mut pending_pad = Length::ZERO;
 
     for vbox in vboxes {
         match vbox {
@@ -436,7 +498,9 @@ pub fn place_block_at(origin: (Length, Length), vboxes: Vec<VertBox>) -> Vec<Pla
             // got `item-gap + item-gap` between consecutive items instead of
             // one collapsed `item-gap`, roughly doubling list spacing and
             // pushing the atomic frame past its page (an extra page per slide).
-            VertBox::Skip(l) => pending_skip = pending_skip.max(l),
+            VertBox::Skip(l) | VertBox::ParagTop(l) => pending_skip = pending_skip.max(l),
+            // Additive frame padding (see `chop_page`).
+            VertBox::FramePad(l) => pending_pad += l,
             // No page-breaking happens here (headers/footers aren't
             // page-broken), so `clear-page` has nothing to do.
             VertBox::ClearPage => {}
@@ -487,11 +551,19 @@ pub fn place_block_at(origin: (Length, Length), vboxes: Vec<VertBox>) -> Vec<Pla
                 // The advance folds the paragraph margin into the max AND
                 // clears the previous line's depth, so a deep inline box (a
                 // `+fig-center` figure) is not overlapped by the next line.
+                // Faithful inter-block advance (see `chop_page`): natural
+                // content height plus the collapsed margin, no leading floor —
+                // `prev_depth + margin + height`. The leading grid governs only
+                // margin-free lines within one paragraph (`pending_skip == 0`).
                 let baseline = match prev_baseline {
                     None => y0 + height,
-                    Some(b) => b + leading.max(prev_depth + pending_skip + height),
+                    Some(b) if pending_skip + pending_pad > Length::ZERO => {
+                        b + prev_depth + pending_skip + pending_pad + height
+                    }
+                    Some(b) => b + leading.max(prev_depth + height),
                 };
                 pending_skip = Length::ZERO;
+                pending_pad = Length::ZERO;
                 prev_baseline = Some(baseline);
                 prev_depth = depth;
                 lines.push(PlacedLine {

@@ -17,7 +17,7 @@ use crate::value::{DocumentValue, Env, TextInfo, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use rustyfi_backend::{
     break_into_lines, break_opportunities, chop_page, default_math_variant_char, fit_cell,
-    graphics_bbox, linear_transform_graphics, linear_transform_path, measure_block,
+    graphics_bbox, linear_transform_graphics, linear_transform_path, measure_block, placed_line_extent,
     natural_metrics, path_bbox, place_block_at, shift_graphics, shift_path, Annot, AnnotAction,
     BreakKind, Cell, Closing, Color, Context, Dash, DecoId, DocExtras, DocInfo, FontKey,
     GraphicsElem, GraphicsFnId, HookId, HorzBox, HorzStringInfo, HyphenLang, ImageId, ImageResource,
@@ -1396,7 +1396,11 @@ pub fn read_inline(
             }
         }
     }
-    Ok(out)
+    // Space inline `\code(…)`/`${…}` boxes against adjacent CJK prose the way
+    // SATySFi does (the text-run glue in `text_to_boxes` can't see these
+    // cross-element boundaries). Idempotent — a boundary already carrying glue
+    // is skipped.
+    Ok(insert_box_interscript_glue(out, ctx))
 }
 
 /// Convert quoted block text to vertical boxes (the core of `read-block`).
@@ -1550,6 +1554,11 @@ fn make_inner_string_pure_box(
     text: String,
 ) -> Result<PureHorzBox, EvalError> {
     let width = measure_run(interp, sf.font, ctx.font, &text, size)?;
+    // SATySFi measures a run's height/depth from the ACTUAL per-glyph bounding
+    // boxes (fontInfo.ml `get_metrics_of_word`), not the font-level
+    // ascender/descender — so a no-descender run (CJK, digits, TOC dots) is
+    // shorter and packs tighter at block boundaries.
+    let (height, depth) = interp.metrics.run_vextent(sf.font, &text, size);
     Ok(PureHorzBox::InnerString {
         info: HorzStringInfo {
             font: sf.font,
@@ -1557,11 +1566,90 @@ fn make_inner_string_pure_box(
             rising,
             color: ctx.text_color,
         },
-        height: interp.metrics.ascender(sf.font, size),
-        depth: interp.metrics.descender(sf.font, size),
+        height,
+        depth,
         text,
         width,
     })
+}
+
+/// Whether two adjacent runs' scripts form a Latin↔CJK boundary that gets
+/// SATySFi's default inter-script glue (`primitives.ml:517-524`: entries for
+/// `(Latin, Kana)`, `(Kana, Latin)`, `(Latin, Han)`, `(Han, Latin)` only —
+/// NOT Kana↔Han, and not same-script).
+fn is_latin_cjk_boundary(a: Script, b: Script) -> bool {
+    let is_cjk = |s| matches!(s, Script::HanIdeographic | Script::Kana);
+    (a == Script::Latin && is_cjk(b)) || (is_cjk(a) && b == Script::Latin)
+}
+
+/// Bracket/comma/full-stop characters next to which SATySFi's default
+/// inter-script glue is suppressed. `pure_space_between_scripts`
+/// (`convertText.ml:32`) drops the glue when the left edge is opening
+/// punctuation or the right edge is closing punctuation; the surrounding aki is
+/// then supplied by the separate JLreq class-spacing layer (`between_classes`),
+/// which the port does not model. Suppressing script glue adjacent to ANY of
+/// these is the faithful approximation of that split — it stops the port
+/// rendering "、 𝑛" / "𝑛 」" where SATySFi sets "、𝑛" / "𝑛」".
+fn is_interscript_punct(c: char) -> bool {
+    matches!(
+        c,
+        '(' | ')' | '[' | ']' | '{' | '}' | ',' | '.' | ';' | ':' | '!' | '?'
+            | '、' | '。' | '，' | '．' | '・'
+            | '（' | '）' | '「' | '」' | '『' | '』' | '【' | '】'
+            | '〔' | '〕' | '〈' | '〉' | '《' | '》' | '［' | '］' | '｛' | '｝'
+            | '！' | '？' | '：' | '；'
+    )
+}
+
+/// A box's LEADING glyph for inter-script spacing, or `None` for
+/// glue/discretionary/skip/image (a "transparent" separator — an inter-script
+/// space is never inserted adjacent to one) and for math (reported as a Latin
+/// `'x'`, matching SATySFi where a `${…}` chunk spaces against CJK like Western
+/// text). The char lets the caller apply the `is_interscript_punct` guard.
+fn box_leading_char(b: &HorzBox) -> Option<char> {
+    match b {
+        HorzBox::Pure(PureHorzBox::InnerString { text, .. }) => text.chars().next(),
+        HorzBox::Pure(PureHorzBox::Math { .. }) => Some('x'),
+        _ => None,
+    }
+}
+
+/// A box's TRAILING glyph (see `box_leading_char`).
+fn box_trailing_char(b: &HorzBox) -> Option<char> {
+    match b {
+        HorzBox::Pure(PureHorzBox::InnerString { text, .. }) => text.chars().last(),
+        HorzBox::Pure(PureHorzBox::Math { .. }) => Some('x'),
+        _ => None,
+    }
+}
+
+/// Insert SATySFi's inter-script glue (`default_script_space_map`) between two
+/// DIRECTLY-adjacent boxes whose touching edges are Latin↔CJK — the boundary
+/// that `text_to_boxes` can't see because it spans separate inline elements: a
+/// `\code(…)`/`${…}` box against surrounding CJK prose ("cellfmt 型", "𝑛 番目").
+/// A boundary already carrying a glue/discretionary reads as `None` on one edge
+/// and is skipped, so this is idempotent and never doubles the text-run glue.
+fn insert_box_interscript_glue(boxes: Vec<HorzBox>, ctx: &Context) -> Vec<HorzBox> {
+    if boxes.len() < 2 {
+        return boxes;
+    }
+    let mut out: Vec<HorzBox> = Vec::with_capacity(boxes.len());
+    for b in boxes {
+        if let (Some(pc), Some(cc)) = (out.last().and_then(box_trailing_char), box_leading_char(&b)) {
+            if is_latin_cjk_boundary(char_script(pc), char_script(cc))
+                && !is_interscript_punct(pc)
+                && !is_interscript_punct(cc)
+            {
+                out.push(HorzBox::Pure(PureHorzBox::OuterEmpty {
+                    natural: ctx.font_size * 0.24,
+                    shrinkable: ctx.font_size * 0.08,
+                    stretchable: ctx.font_size * 0.16,
+                }));
+            }
+        }
+        out.push(b);
+    }
+    out
 }
 
 fn text_to_boxes(
@@ -1681,16 +1769,35 @@ fn text_to_boxes(
     // currently being accumulated (D1b: a run also breaks on a script
     // change, not just on whitespace/UAX#14, see `char_script`).
     let mut word_script: Option<Script> = None;
+    // The script of the immediately-preceding *typeset* character (persists
+    // across the UAX#14 discretionary flushing that resets `word_script`), so
+    // an inter-script boundary can be detected even between two single-char
+    // CJK/Latin runs. Reset by an explicit space (no auto inter-script glue is
+    // added adjacent to a real space). See the `is_latin_cjk_boundary` insert.
+    let mut prev_script: Option<Script> = None;
+    // The preceding typeset char itself, for the `is_interscript_punct` guard.
+    let mut prev_char: Option<char> = None;
     for (i, c) in text.char_indices() {
         if c == ' ' || c == '\n' {
             if let Some(s) = word_script.take() {
                 flush_word(&mut word, s, out)?;
             }
-            // Avoid piling up doubled glue at text-run boundaries.
-            if !matches!(
-                out.last(),
-                Some(HorzBox::Pure(PureHorzBox::OuterEmpty { .. }))
-            ) {
+            prev_script = None;
+            prev_char = None;
+            // Avoid piling up doubled glue at text-run boundaries — but ONLY
+            // for elastic (prose) spaces. A RIGID space (shrink == stretch == 0,
+            // i.e. `code.satyh`'s `set-space-ratio (charwid/fs) 0. 0.`) is a
+            // fixed-width verbatim column: SATySFi never collapses consecutive
+            // ones, so the aligned source in a `+code` block keeps its spacing
+            // (`| How       | I`, not the collapsed `| How | I`). Collapsing them
+            // shortened code lines and let the port pack code blocks too tight.
+            let rigid_space = ctx.space_shrink == 0.0 && ctx.space_stretch == 0.0;
+            if rigid_space
+                || !matches!(
+                    out.last(),
+                    Some(HorzBox::Pure(PureHorzBox::OuterEmpty { .. }))
+                )
+            {
                 out.push(HorzBox::Pure(PureHorzBox::OuterEmpty {
                     natural: space_width,
                     // Upstream derives shrink/stretch directly as a ratio
@@ -1705,12 +1812,40 @@ fn text_to_boxes(
             continue;
         }
         let script = char_script(c);
+        // Inter-script glue (`primitives.ml:517-524` `default_script_space_map`,
+        // applied in `convertText.ml` `pure_space_between_scripts`): SATySFi's
+        // default context inserts `(natural 0.24, shrink 0.08, stretch 0.16) *
+        // size` glue between a Latin run and an adjacent CJK (Kana/Han) run —
+        // the space visible as "2 つ" / "+easytable は" that the port otherwise
+        // packs tight ("2つ"). Emitted at the boundary using `prev_script` (a
+        // CJK char resets `word_script` via its UAX#14 discretionary, so this
+        // can't rely on `word_script` alone). The glue is also an
+        // `is_break_point`, matching upstream (the boundary is a legal break).
+        if let (Some(prev), Some(pc)) = (prev_script, prev_char) {
+            if is_latin_cjk_boundary(prev, script)
+                && !is_interscript_punct(pc)
+                && !is_interscript_punct(c)
+            {
+                if let Some(s) = word_script.take() {
+                    if !word.is_empty() {
+                        flush_word(&mut word, s, out)?;
+                    }
+                }
+                out.push(HorzBox::Pure(PureHorzBox::OuterEmpty {
+                    natural: ctx.font_size * 0.24,
+                    shrinkable: ctx.font_size * 0.08,
+                    stretchable: ctx.font_size * 0.16,
+                }));
+            }
+        }
         if let Some(cur) = word_script {
             if cur != script {
                 flush_word(&mut word, cur, out)?;
             }
         }
         word_script = Some(script);
+        prev_script = Some(script);
+        prev_char = Some(c);
         word.push(c);
         // Only non-ASCII text gets UAX#14 discretionaries: plain ASCII
         // stays on exactly today's space/newline-only splitter, so
@@ -2575,7 +2710,7 @@ fn prim_line_break(interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, E
     // own `n == 0` early return) — don't manufacture a margin around nothing.
     let mut out = Vec::with_capacity(lines.len() + 2);
     if !lines.is_empty() {
-        out.push(VertBox::Skip(ctx.paragraph_top));
+        out.push(VertBox::ParagTop(ctx.paragraph_top));
         out.extend(lines);
         out.push(VertBox::Skip(ctx.paragraph_bottom));
     }
@@ -2903,6 +3038,17 @@ fn page_break_core(
         }
         if let Some(hook) = &columnendhookf {
             apply_column_hook(interp, hook, &mut remaining)?;
+        }
+
+        // A trailing pure-skip/glue (e.g. the last block's `paragraph_bottom`)
+        // can roll past the previous page's bottom into a final `chop_page`
+        // that places NO real line — `chop_page` discards it as a page-top
+        // skip, leaving an empty body. SATySFi never emits such a trailing
+        // blank page (glue at the end of the vertical list is dropped), so when
+        // the body is empty AND content is now exhausted, stop before turning
+        // that leftover into a spurious blank page (header/footer included).
+        if remaining.is_empty() && !lines.iter().any(|l| placed_line_extent(l).is_some()) {
+            break;
         }
 
         // ---- parts scheme: this page's header + footer ----
@@ -7868,9 +8014,9 @@ fn prim_block_frame_breakable(
     let indented = indent_left(inner, pad_l);
     let mut out = Vec::with_capacity(indented.len() + 4);
     out.push(VertBox::FrameStart(id));
-    out.push(VertBox::Skip(pad_t));
+    out.push(VertBox::FramePad(pad_t));
     out.extend(indented);
-    out.push(VertBox::Skip(pad_b));
+    out.push(VertBox::FramePad(pad_b));
     out.push(VertBox::FrameEnd(id));
     Ok(Value::BlockBoxes(out))
 }

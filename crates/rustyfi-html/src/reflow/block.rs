@@ -128,7 +128,7 @@ pub(crate) fn walk_vboxes(out: &mut String, vboxes: &[VertBox], ctx: &Ctx) {
                     para.text.push(' ');
                 }
             }
-            VertBox::Skip(len) => {
+            VertBox::Skip(len) | VertBox::ParagTop(len) | VertBox::FramePad(len) => {
                 flush_para(out, &mut para, &mut pending_margin);
                 pending_margin += len.0;
             }

@@ -19,7 +19,7 @@ pub struct Length(pub f64);
 impl Length {
     pub const ZERO: Length = Length(0.0);
 
-    pub fn pt(v: f64) -> Length {
+    pub const fn pt(v: f64) -> Length {
         Length(v)
     }
 

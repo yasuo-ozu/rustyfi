@@ -240,6 +240,19 @@ impl FontMetrics for TtfFontStore {
         size * (-(face.descender() as f64) / units_per_em)
     }
 
+    fn glyph_vextent(&self, font: FontKey, c: char, size: Length) -> Option<(Length, Length)> {
+        let face = self.face(font)?;
+        let gid = face.glyph_index(c)?;
+        // Actual glyph ink box — SATySFi's `get_glyph_metrics` (fontFormat.ml):
+        // `hgt = ymax`, `dpt = ymin`. A blank glyph (space) has no bbox and
+        // contributes nothing to the run's extent.
+        let bbox = face.glyph_bounding_box(gid)?;
+        let units_per_em = face.units_per_em() as f64;
+        let height = size * (bbox.y_max as f64 / units_per_em);
+        let depth = size * (-(bbox.y_min as f64) / units_per_em);
+        Some((height, depth))
+    }
+
     // ---- OpenType MATH table (docs/plans/math-engine.md §B1/§B3) ---------
     //
     // Every accessor below was checked against the installed ttf-parser

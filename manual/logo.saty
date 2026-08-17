@@ -1,18 +1,22 @@
 % The Rustyfi logo — every mark on the page is a `satysfi-xpath` path.
 %
-% Kept beside `manual.saty` because it is dogfood of the same kind: the manual
-% proves the port can typeset prose, this proves it can typeset vector art, and
-% both are built by the port's own binary against an installed package.
+% One file, deliberately: the geometry was briefly split into a `logo.satyh`
+% library so `manual.saty` could carry the mark too, and that is gone. A
+% document cannot be `@import:`ed, so the split only paid off while something
+% else imported it.
 %
 % Build (see the header of ./Satyristes):
-%   rustyfi-rust satyrographos install scripts/layout_fidelity_corpus/xpath \
+%   rustyfi-rust satyrographos install scripts/layout_fidelity_corpus/xpath \\
 %       --lib-root <lib-root>
-%   rustyfi-rust --lib-root <lib-root> --font-dir <lib-root> \
+%   rustyfi-rust --lib-root <lib-root> --font-dir <lib-root> \\
 %       -o ../assets/logo/rustyfi-logo.pdf logo.saty
 @require: color
 @require: math
 @require: list
 @require: xpath/xpath
+
+let pw = 264pt
+let ph = 264pt
 
 %% ---- palette -------------------------------------------------------------
 let c-rim        = Color.rgb 0.34 0.11 0.03
@@ -31,10 +35,10 @@ let c-guilloche2 = Color.rgb 0.93 0.89 0.80
 let tau = 6.283185307179586
 let kappa = 0.5522847498307936   % circle-from-4-beziers magic constant
 
-let pw = 300pt
-let ph = 396pt
-let cx = 150pt
-let cy = 262pt
+let pw = 264pt
+let ph = 264pt
+let cx = 132pt   % = pw/2; the mark is centred on its own page
+let cy = 132pt   % = ph/2
 
 let r-tooth-tip  = 112pt
 let r-tooth-base =  84pt
@@ -182,90 +186,165 @@ let arc-stack r a0 a1 w n (p0, p1, p2) (q0, q1, q2) =
     go 0
 
 %% ---- what sits inside the gear ------------------------------------------
-%% No document. Drawing a sheet of paper — even a spare one — is depiction, and
-%% the mark does not need to show the artefact when it can show the IDEA that
-%% produces it.
+%% The logotype itself, centred. Everything that used to sit under the emblem —
+%% the metric diagram, the rule, the kicker, the colophon — is gone: the mark is
+%% one object now, and one object is what a mark has to be to survive being put
+%% in a corner at 32 px.
 %%
-%% What is left is the abstraction every typesetter actually works against: a
-%% BASELINE, an X-HEIGHT line above it, and a single set line resting between
-%% them. Three elements. That is what typesetting is, before it is any
-%% particular page, and it survives being shrunk to a favicon in a way a page
-%% full of little grey bars never did.
-let base-y   = cy -' 6.5pt          % the baseline, a shade below centre: optical, not metric
-let x-height = 14pt
-let half-w   = 60pt               % how far the rules run, just inside the margin guide
-let set-w    = 46pt               % the one line that has been set
+%% OUTLINED, and outlined the hard way. Neither SATySFi nor this port exposes a
+%% PDF text render mode, so there is no stroked type to ask for: the letters are
+%% drawn twelve times around a small circle in the outline colour and once more
+%% in the disc's own tone on top. What survives between the copies IS the
+%% outline. It is a halo, not a true stroke — at very large sizes the corners
+%% would show it — but at any size this mark is used it reads as outlined type.
+let font-word = (`lmodern`, 1.0, 0.0)
 
-let rule y x0 x1 h =
-    XPath.start-path (x0, y)
-        |> XPath.line-to (x1, y)
-        |> XPath.line-to (x1, y +' h)
-        |> XPath.line-to (x0, y +' h)
-        |> XPath.close-with-line
+let ctx-base =
+    get-initial-context pw (command \math)
+        |> set-dominant-narrow-script Latin
+        |> set-text-color c-ink
 
-%% A rounded-cap bar. `x` is the left edge, `y` the BASELINE it sits on.
-let bar x y w h =
-    let cap = h *' 0.5 in
-    XPath.start-path (x +' cap, y)
-        |> XPath.line-to (x +' w -' cap, y)
-        |> XPath.bezier-to (x +' w, y) (x +' w, y +' h) (x +' w -' cap, y +' h)
-        |> XPath.line-to (x +' cap, y +' h)
-        |> XPath.close-with-bezier (x, y +' h) (x, y)
+%% Two rings, not one: a pale outer halo that lifts the type off the
+%% engine-turning, and a dark inner contour that draws the letterform. Together
+%% they read as engraved rather than as text laid on top of a pattern.
+let outline-n = 16
 
-let rect x0 y0 x1 y1 =
-    XPath.start-path (x0, y0)
-        |> XPath.line-to (x1, y0)
-        |> XPath.line-to (x1, y1)
-        |> XPath.line-to (x0, y1)
-        |> XPath.close-with-line
+let ctx-word ctx =
+    ctx |> set-font-size 30pt
+        |> set-font Latin font-word
+        |> set-dominant-narrow-script Latin
 
-%% An open path, for the dashed guide.
-let hline y x0 x1 =
-    XPath.start-path (x0, y) |> XPath.line-to (x1, y) |> XPath.terminate-path
+%% The disc's own centre tone, so the letter interiors read as holes in the
+%% type rather than as a lighter fill laid over it.
+let c-disc-centre = Color.rgb 1.0 0.993 0.975
+let c-brace       = Color.rgb 0.82 0.42 0.16
 
-%% Registration ticks where the rules end — the only ornament the interior gets.
-let tick x y =
-    XPath.start-path (x -' 0.4pt, y -' 2.6pt)
-        |> XPath.line-to (x +' 0.4pt, y -' 2.6pt)
-        |> XPath.line-to (x +' 0.4pt, y +' 2.6pt)
-        |> XPath.line-to (x -' 0.4pt, y +' 2.6pt)
-        |> XPath.close-with-line
-
-%% The four metric lines, in descending authority: the baseline is solid
-%% because it is not negotiable, the x-height dashed because it is a guide, and
-%% cap and descender dotted because they are only reached when a letter reaches
-%% them. Over them, ONE set line — with an ascender at its left and a descender
-%% at its right, so all four lines are actually in use rather than decorative.
-let cap-h    = 21pt
-let desc-h   = 7pt
-let stem-w   = 6.5pt
-
-let interior =
-    let x0 = cx -' half-w in
-    let x1 = cx +' half-w in
-    let xs = cx -' (set-w *' 0.5) in
-    let guide w pat c y = XPath.dashed-stroke w pat c (hline y x0 x1) in
+%% Every piece of type on the disc is engraved the same way: a pale ring offset
+%% away from the light, a dark contour offset towards it, and the fill on top.
+%% The radii scale with the type — a 2pt relief that models a 30pt logotype
+%% closes the counters of a 15pt delimiter — so callers pass their own.
+let engrave (px, py) rad mk c-fill =
+    let ring r (ox, oy) c =
+        let-rec go i =
+            if i == outline-n then []
+            else
+                let th = tau *. (float i) /. (float outline-n) in
+                (draw-text (px +' ox +' (r *' (cos th)), py +' oy +' (r *' (sin th))) (mk c))
+                    :: (go (i + 1))
+        in
+        go 0
+    in
     List.concat
-        %% Cap and descender are dotted: they are only reached when a letter
-        %% reaches them. The x-height is dashed — a guide. The baseline is
-        %% solid, because it is the one line that is not negotiable.
-        [ [ guide 0.4pt (1.0pt, 3.2pt, 0pt) (Color.rgb 0.78 0.70 0.57) (base-y +' cap-h) ]
-        ; [ guide 0.4pt (1.0pt, 3.2pt, 0pt) (Color.rgb 0.78 0.70 0.57) (base-y -' desc-h) ]
-        ; [ guide 0.5pt (2.2pt, 2.6pt, 0pt) (Color.rgb 0.69 0.59 0.45) (base-y +' x-height) ]
-        ; [ XPath.fill c-oxide-dark (rule base-y x0 x1 0.85pt) ]
-        ; [ XPath.fill c-oxide-dark (tick x0 base-y) ]
-        ; [ XPath.fill c-oxide-dark (tick x1 base-y) ]
-          %% One set line, resting on the baseline, filling the x-height. It is
-          %% the only solid mass inside the disc, so it is where the eye lands.
-        ; [ XPath.fill c-oxide (bar xs base-y set-w x-height) ]
-          %% The same light that falls on the ring falls on the type.
-        ; [ XPath.fill (Color.rgb 0.91 0.49 0.17)
-              (bar (xs +' 1.6pt) (base-y +' x-height -' 2.2pt) (set-w -' 3.2pt) 1.7pt) ]
-        ; [ XPath.fill (Color.rgb 0.55 0.19 0.05)
-              (bar (xs +' 1.6pt) (base-y +' 0.7pt) (set-w -' 3.2pt) 1.2pt) ]
+        [ ring rad (rad *' 0.35, 0pt -' (rad *' 0.35)) (Color.rgb 0.95 0.83 0.60)
+        ; ring (rad *' 0.45) (0pt -' (rad *' 0.12), rad *' 0.12) c-oxide-deep
+        ; [ draw-text (px, py) (mk c-fill) ]
         ]
 
-let emblem =
+%% Draw an inline box centred on a point, rather than from its left edge.
+let centred-text (px, py) ib =
+    let (w, h, d) = get-natural-metrics ib in
+    draw-text (px -' (w *' 0.5), py -' ((h -' d) *' 0.5)) ib
+
+let logotype ctx =
+    let cw = ctx-word ctx in
+    let ib c = read-inline (cw |> set-text-color c) {rustyfi} in
+    %% `{` and `}` are SATySFi's inline-text delimiters — the mode marker you
+    %% cannot write a document without. Flanking the logotype with them says
+    %% what this program eats, in the language's own notation. Set larger and
+    %% lighter than the word so they read as brackets, not as letters.
+    let cb = cw |> set-font-size 46pt in
+    let ib-open  = read-inline cb (embed-string `{`) in
+    let (w, h, d) = get-natural-metrics (ib c-ink) in
+    let (wb, _, _) = get-natural-metrics ib-open in
+    let gap = 6pt in
+    %% Optical centring: on the CAP box, not on the em box — `rustyfi` has no
+    %% capitals and one descender, so metric centring would sit it visibly low.
+    let x = cx -' (w *' 0.5) in
+    let y = cy -' ((h -' d) *' 0.5) in
+    %% The rings are OFF-CENTRE, each towards its own light: the pale one down
+    %% and right, away from the source, the dark contour up and left towards it.
+    %% Concentric rings give a halo — type sitting on a pattern. Offset ones give
+    %% relief, and the relief agrees with the light already falling on the ring.
+    let ring rad (ox, oy) c =
+        let-rec go i =
+            if i == outline-n then []
+            else
+                let th = tau *. (float i) /. (float outline-n) in
+                (draw-text (x +' ox +' (rad *' (cos th)), y +' oy +' (rad *' (sin th))) (ib c))
+                    :: (go (i + 1))
+        in
+        go 0
+    in
+    let brace px str =
+        let mk c = read-inline (cb |> set-text-color c) (embed-string str) in
+        let (bw, bh, bd) = get-natural-metrics (mk c-brace) in
+        engrave (px -' (bw *' 0.5), cy -' ((bh -' bd) *' 0.5)) 1.5pt mk c-brace
+    in
+    List.concat
+        [ brace (x -' gap -' (wb *' 0.5)) `{`
+        ; brace (x +' w +' gap +' (wb *' 0.5)) `}`
+        ; ring 2.0pt (0.7pt, 0pt -' 0.7pt) (Color.rgb 0.95 0.83 0.60)
+        ; ring 0.9pt (0pt -' 0.25pt, 0.25pt) c-oxide-deep
+        ; [ draw-text (x, y) (ib c-disc-centre) ]
+        ]
+
+%% Four marks of SATySFi's own notation, set on the diagonals like the legend
+%% on a coin: `\` opens an inline command, `+` a block one, `$` math mode, and
+%% `@` a file header (`@require:`). Between them and the braces around the
+%% logotype, every mode the language has is named on the mark.
+%%
+%% They come through `embed-string` on BACKTICK STRING literals rather than
+%% being written as inline text, because three of the four are illegal there —
+%% `@`, `;` and `$` are mode-switching tokens, and the lexer is right to refuse
+%% them. Quoting the character as data is the way to typeset a character that
+%% the surrounding syntax reserves.
+let syntax-marks ctx =
+    let c =
+        ctx |> set-font-size 14pt
+            |> set-font Latin font-word
+            |> set-text-color c-oxide-dark
+            |> set-dominant-narrow-script Latin
+    in
+    let r = 63pt in
+    [ (`\`, 0.7853981634)      % NE — inline command
+    ; (`+`, 2.3561944902)       % NW — block command
+    ; (`$`, 3.9269908170)       % SW — math mode
+    ; (`@`, 5.4977871438)       % SE — file header
+    ] |> List.map (fun (mark, th) -> (
+        centred-text (cx +' (r *' (cos th)), cy +' (r *' (sin th)))
+            (read-inline c (embed-string mark))
+    ))
+
+%% The other delimiter GROUPS the language has, on the vertical axis: `(| |)`
+%% opens a record, `< >` a block-text run. With `{ }` already round the
+%% logotype, the three groups a document is actually built out of are all named.
+%%
+%% `[ ]` is deliberately absent. A list is a data literal, not a MODE, and the
+%% inscription is about the modes — adding it would make the ring a punctuation
+%% sampler rather than a statement.
+let mark-ctx ctx =
+    ctx |> set-font-size 16pt
+        |> set-font Latin font-word
+        |> set-dominant-narrow-script Latin
+
+%% Engraved and centred: measure the box once to find the offset, then hand the
+%% colour-parameterised maker to `engrave` so every copy is set identically.
+let engraved-mark ctx (px, py) str =
+    let cm = mark-ctx ctx in
+    let mk c = read-inline (cm |> set-text-color c) (embed-string str) in
+    let (w, h, d) = get-natural-metrics (mk c-oxide) in
+    engrave (px -' (w *' 0.5), py -' ((h -' d) *' 0.5)) 0.62pt mk c-oxide
+
+let group-marks ctx =
+    [ (`(|`, 0pt -' 16pt, 59pt)
+    ; (`|)`, 16pt, 59pt)
+    ; (`<`, 0pt -' 14pt, 0pt -' 61pt)
+    ; (`>`, 14pt, 0pt -' 61pt)
+    ] |> List.map (fun (mark, dx, dy) -> (
+        engraved-mark ctx (cx +' dx, cy +' dy) mark
+    )) |> List.concat
+
+let emblem-graphics ctx =
     List.concat
         %% back to front
         [ [ XPath.fill c-shadow (cog |> XPath.shift-path (1.8pt, 0pt -' 1.8pt)) ]
@@ -298,85 +377,31 @@ let emblem =
         %% the built-in path API does not.
         ; [ XPath.dashed-stroke 0.75pt (2.6pt, 3.0pt, 0pt) c-oxide-dark
               (XPath.offset-path 6pt (circle (cx, cy) r-page)) ]
-        ; interior
+        ; logotype ctx
+        ; syntax-marks ctx
+        ; group-marks ctx
         ]
 
-%% ---- wordmark ------------------------------------------------------------
-%% Modern logotype practice, and it suits a typesetter: a TIGHT lowercase
-%% logotype carrying the weight, everything under it small and tracked wide.
-%% The `fi` is set in oxide — the wordmark's accent, and in a program whose job
-%% is setting type, the most famous ligature in the business.
-let font-sans = (`lmsans`, 1.0, 0.0)
-let font-mono = (`lmmono`, 1.0, 0.0)
 
-let ctx-base =
-    get-initial-context pw (command \math)
-        |> set-dominant-narrow-script Latin
-        |> set-text-color c-ink
+let ctx-page = get-initial-context pw (command \math)
 
-let ctx-word ctx = ctx |> set-font-size 44pt |> set-font Latin font-sans
-
-let ib-rusty ctx = read-inline (ctx-word ctx |> set-text-color c-ink) {rusty}
-let ib-fi    ctx = read-inline (ctx-word ctx |> set-text-color c-oxide) {fi}
-
-let wordmark ctx =
-    line-break false false (ctx |> set-paragraph-margin 15pt 0pt)
-        (inline-fil ++ ib-rusty ctx ++ ib-fi ctx ++ inline-fil)
-
-%% The rule under the logotype is MEASURED, not guessed: `get-natural-metrics`
-%% gives the set width of the same inline boxes, so the rule spans the logotype
-%% exactly — and breaks colour exactly where the `fi` begins. Change the size or
-%% the face and it still lines up.
-let underrule ctx =
-    let (w-all, _, _) = get-natural-metrics (ib-rusty ctx ++ ib-fi ctx) in
-    let (w-dark, _, _) = get-natural-metrics (ib-rusty ctx) in
-    let h = 1.3pt in
-    line-break false false (ctx |> set-paragraph-margin 9pt 0pt)
+let body =
+    line-break false false ctx-page
         (inline-fil
-            ++ inline-graphics w-all h 0pt (fun (x, y) -> (
-                   [ XPath.fill (Color.rgb 0.58 0.55 0.56)
-                       (rect x y (x +' w-dark) (y +' h))
-                   ; XPath.fill c-oxide
-                       (rect (x +' w-dark) y (x +' w-all) (y +' h)) ]
+            ++ inline-graphics pw ph 0pt (fun (x, y) -> (
+                   emblem-graphics ctx-page |> List.map (shift-graphics (x, y))
                ))
             ++ inline-fil)
-
-%% Tracked-out, small, monospaced: the counterweight to a tight logotype.
-let kicker ctx =
-    let c =
-        ctx |> set-font-size 7.6pt
-            |> set-font Latin font-mono
-            |> set-text-color c-oxide-dark
-            |> set-paragraph-margin 11pt 0pt
-    in
-    line-break false false c
-        (inline-fil ++ read-inline c {S A T Y S F I · N A T I V E L Y · I N · R U S T} ++ inline-fil)
-
-%% A colophon line, which is the correct furniture for a typesetter's mark.
-let colophon ctx =
-    let c =
-        ctx |> set-font-size 6.0pt
-            |> set-font Latin font-mono
-            |> set-text-color (Color.rgb 0.66 0.55 0.44)
-            |> set-paragraph-margin 6pt 0pt
-    in
-    line-break false false c
-        (inline-fil ++ read-inline c {T Y P E S E T · B Y · I T S E L F · E V E R Y · M A R K · A N · X P A T H · P A T H} ++ inline-fil)
-
-%% ---- page ----------------------------------------------------------------
-let body =
-    let g =
-        line-break false false ctx-base
-            (inline-graphics pw (r-tooth-tip *' 2.0 +' 8pt) 0pt (fun (x, y) -> (
-                emblem |> List.map (shift-graphics (x, y -' (cy -' r-tooth-tip -' 4pt)))
-            )))
-    in
-    g +++ wordmark ctx-base +++ underrule ctx-base +++ kicker ctx-base +++ colophon ctx-base
 in
 
 page-break (UserDefinedPaper (pw, ph))
     (fun _ -> (|
-        text-origin = (0pt, 20pt);
+        %% Measured, not assumed: `inline-fil` centres the box horizontally and
+        %% nothing centres it vertically, so the text area carries whatever
+        %% correction the render actually needs. Verified by measuring the
+        %% rendered ink's bounding box — equal margins on all four sides.
+        %% Re-measure if the mark's size changes.
+        text-origin = (0pt, 0pt);
         text-height = ph;
     |))
     (fun _ -> (|

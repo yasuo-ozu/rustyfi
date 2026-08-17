@@ -2,7 +2,7 @@
 
 ![The Rustyfi logo](rustyfi-logo.png)
 
-The source is [`manual/logo.saty`](../../manual/logo.saty) — it lives beside
+The source is [`manual/logo.saty`](../../manual/logo.saty) — one file — it lives beside
 `manual.saty` because it is dogfood of the same kind: the manual proves the port
 can typeset prose, the logo proves it can typeset vector art. Every mark in the emblem is a
 [`satysfi-xpath`](https://github.com/monaqa/satysfi-xpath) path — there is no
@@ -44,24 +44,64 @@ There is **no document in it**. Drawing a sheet of paper — even a spare one �
 is depiction, and the mark does not need to show the artefact when it can show
 the idea that produces it.
 
-What sits inside the gear is the abstraction every typesetter actually works
-against: the four metric lines, and **one set line** resting on the baseline
-and filling the x-height. Registration ticks mark where the rules end. That is
-what typesetting is before it is any particular page — and unlike a page full
-of little grey bars, it survives being shrunk to a favicon.
+What sits inside the gear is the **logotype itself**, centred: a tight
+lowercase `rustyfi`. The mark is one object — there is no wordmark under the
+emblem, no rule, no kicker, no colophon — because one object is what a mark has
+to be to survive being put in a corner at 32 px.
 
-The guides are weighted by authority. The **baseline is solid**, because it is
-the one line that is not negotiable. The **x-height is dashed** — a guide, not
-a mark. **Cap and descender are dotted**, because they are only reached when a
-letter reaches them.
+The face is **Latin Modern Roman** (`lmodern`) — the TeX serif. It is the
+obvious choice twice over: it is what a typesetter's mark should be set in, and
+its high-contrast modern letterforms come from the same engraving era as the
+guilloche behind them. A humanist serif (`Junicode`) and its italic were tried
+against it; both are handsome, and both sit less comfortably on engine-turning.
 
-The set line is the only solid mass inside the disc, so it is where the eye
-lands, and it is lit the way the ring is: a lighter bar along its top edge and
-a darker one along the bottom. An earlier attempt gave it an ascender and a
-descender as well; three strokes read as a machine part rather than as type,
-and one is better.
+**Every piece of type on the disc is engraved the same way** — logotype,
+braces, group delimiters and sigils all go through one `engrave` helper. The
+relief radii scale with the type rather than being fixed: a 2.0 pt ring that
+models a 30 pt logotype closes the counters of a 16 pt delimiter, so callers
+pass their own. That is the whole reason the marks read as inlaid metal rather
+than as small flat glyphs sitting on a pattern.
 
-Around it, the dashed ring is the measure's guide, and it is not drawn as
+The type is **outlined, and given relief, the hard way**. Neither SATySFi nor
+this port exposes a PDF text render mode, so there is no stroked type to ask
+for. The letters are drawn as two rings of sixteen `draw-text` copies each,
+plus one more on top in the disc's own centre tone:
+
+  * a pale ring at 2.0 pt, offset DOWN AND RIGHT — away from the light;
+  * a dark contour at 0.9 pt, offset UP AND LEFT — towards it;
+  * the fill, unoffset.
+
+Concentric rings would give a halo, which is type sitting on a pattern. Offset
+rings give relief, and the relief agrees with the light already falling on the
+metal. It is still a fake — at poster size the sixteen corners would show — but
+at every size this mark is used it reads as engraved type, and it lets the
+guilloche run right up to the letterforms.
+
+**The mark speaks SATySFi.** The logotype is flanked by `{` and `}` — the
+inline-text delimiters, the mode marker you cannot write a document without —
+set larger and lighter than the word so they read as brackets rather than as
+letters. `(| |)` opens a record at the top and `< >` a block-text run at the
+bottom, so the three GROUPS a document is built out of are all named. Four
+sigils sit on the diagonals like the legend on a coin: `\` opens an inline
+command, `+` a block one, `$` math mode, `@` a file header (`@require:`).
+
+`[ ]` is deliberately absent. A list is a data literal, not a mode, and the
+inscription is about the modes — adding it would make the ring a punctuation
+sampler rather than a statement.
+
+Those four come through `embed-string` on backtick STRING literals rather than
+being written as inline text, because three of them are illegal there: `@`, `;`
+and `$` are mode-switching tokens and the lexer is right to refuse them
+(`illegal token '@' in an inline text area`). Quoting the character as data is
+how you typeset a character the surrounding syntax reserves — which is itself a
+fair thing for this mark to be demonstrating.
+
+The mark is centred on its page by measurement, not by assumption: with the
+graphics box centred by `inline-fil` it still landed 5.75 pt up and to the left,
+so `text-origin` carries exactly that correction, verified by measuring the
+rendered ink's bounding box (equal margins on all four sides).
+
+Around it, the dashed ring is the type area's guide, and it is not drawn as
 its own circle — it is `XPath.offset-path` applied to the disc outline, which is
 the operation `satysfi-xpath` has and SATySFi's built-in path API does not.
 
@@ -90,27 +130,6 @@ Three other things are worth knowing if you edit it:
   up-left, with the real one on top. The page is not a flat fill either — it
   lifts towards the middle, the way a sheet does under a light.
 
-## The type
-
-A classical emblem wants a contemporary logotype next to it, not a matching
-one. So: a **tight lowercase `rustyfi`** carrying all the weight, with three
-progressively smaller, progressively wider-tracked lines under it — rule,
-monospace kicker, colophon.
-
-The `fi` is set in oxide. It is the wordmark's accent, and in a program whose
-whole job is setting type it is also the most famous ligature in the business.
-(The port measures runs additively and substitutes no ligatures, so it really
-is two glyphs — the joke is in the choice, not in the rendering.)
-
-**The rule under the logotype is measured, not guessed.** `get-natural-metrics`
-returns the set width of the very inline boxes being drawn, so the rule spans
-the logotype exactly — and, measured a second time against `rusty` alone, it
-changes colour at precisely the point where the `fi` begins. Change the size or
-the face and it still lines up; nothing here is a hand-tuned constant.
-
-The last line is a **colophon**, which is the correct furniture for a
-typesetter's mark: it says the thing typeset itself.
-
 ## Palette
 
 | | | |
@@ -122,5 +141,7 @@ typesetter's mark: it says the thing typeset itself.
 | tooth lit | `#A1441A` | the teeth's lit edge |
 | ember | `#F7AE42` | bevel, beading |
 | guilloche | `#E3D6B8` / `#EDE3CC` | the two engine-turnings |
+| relief | `#F2D499` | the logotype's lit ring |
+| brace | `#D16B29` | the inline-text delimiters |
 | ivory | `#FAF4E6` | the page |
-| ink | `#211C1F` | `rusty` |
+| ink | `#211C1F` | measuring only (the logotype is outlined, not filled) |

@@ -57,6 +57,25 @@ What works:
   the SATySFi language version (0.0.6 implemented; 0.1 recognized and
   rejected honestly).
 
+## Manual
+
+The port's own manual is written against the port's bundled packages and
+typeset **by the port**, so everything it exercises — the `stdja` class,
+`code`'s `+code` blocks, `itemize`, cross-references — is a feature the port
+has to keep working in order to render its own documentation.
+
+- [manual.pdf](https://raw.githubusercontent.com/yasuo-ozu/satysfi-rust/main/manual/manual.pdf)
+  — built artifact
+- [`manual/manual.saty`](https://raw.githubusercontent.com/yasuo-ozu/satysfi-rust/main/manual/manual.saty)
+  — its source
+- [`manual/logo.saty`](https://raw.githubusercontent.com/yasuo-ozu/satysfi-rust/main/manual/logo.saty)
+  — the project mark, drawn entirely in `satysfi-xpath` (see
+  [`assets/logo/`](assets/logo/))
+
+```console
+$ rustyfi-rust manual/manual.saty -o manual/manual.pdf
+```
+
 ## Layout
 
 ```

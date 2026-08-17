@@ -41,30 +41,27 @@ lowercase `rustyfi`. The mark is one object — there is no wordmark under the
 emblem, no rule, no kicker, no colophon — because one object is what a mark has
 to be to survive being put in a corner at 32 px.
 
-The logotype is **calligraphic** — `mathcal` letterforms, which suit an
-engraved seal far better than an upright serif did. Getting them took two
-detours worth recording:
+The logotype is set upright, in the face the port registers as `lmodern`.
 
-* SATySFi 0.0.6 has no `set-math-char-class`; it arrived with the 0.1 math
-  split, and this document is 0.0.6. So the script alphabet is reached the way
-  it exists in Unicode instead — U+1D4B6.. MATHEMATICAL SCRIPT SMALL A onwards
-  — which needs no math mode at all.
-* Those codepoints render from **DejaVu Math TeX Gyre** (`dejavu-math`) and
-  come out EMPTY from Latin Modern Math (`lmmath`): zero-width boxes, the word
-  simply absent, the braces closing over the gap. `lmmath` is the OTF/CFF face
-  and `dejavu-math` the TrueType one, which is the likely difference. Worth
-  knowing before reaching for `lmmath` for anything outside math mode.
+That name is worth checking rather than trusting: in
+`lib-rustyfi/dist/hash/fonts.rustyfi-hash`, `lmodern` points at
+`latinmodern-math.otf` — the same file `lmmath` points at. Upstream's
+`lmroman10-regular.otf` is not in this port's roster at all, so what the mark is
+actually set in is Latin Modern Math's upright text alphabet. It is the right
+look — high-contrast modern letterforms from the same engraving era as the
+guilloche — but the abbrev does not say what it is.
 
-The delimiters and sigils stay in **Latin Modern Roman** (`lmodern`), the TeX
-serif — upright marks against a script logotype, and letterforms from the same
-engraving era as the guilloche behind them.
+A calligraphic (`mathcal`) logotype was built and then removed. Two things it
+established are worth keeping even though the result is gone:
 
-**Every piece of type on the disc is engraved the same way** — logotype,
-braces, group delimiters and sigils all go through one `engrave` helper. The
-relief radii scale with the type rather than being fixed: a 2.0 pt ring that
-models a 30 pt logotype closes the counters of a 16 pt delimiter, so callers
-pass their own. That is the whole reason the marks read as inlaid metal rather
-than as small flat glyphs sitting on a pattern.
+* SATySFi 0.0.6 has no `set-math-char-class` — it arrived with the 0.1 math
+  split — so the script alphabet has to be reached as Unicode instead, U+1D4B6..
+  MATHEMATICAL SCRIPT SMALL A onwards, needing no math mode at all.
+* Those codepoints render from `dejavu-math` and come out EMPTY from `lmmath`:
+  zero-width boxes, the word absent, the braces closed over the gap. Since
+  `lmmath` and `lmodern` are the same file, that is not a font-choice problem —
+  it is this OTF/CFF face's Mathematical Alphanumeric glyphs not surviving the
+  port's text path, where DejaVu's TrueType ones do.
 
 The type is **outlined, and given relief, the hard way**. Neither SATySFi nor
 this port exposes a PDF text render mode, so there is no stroked type to ask

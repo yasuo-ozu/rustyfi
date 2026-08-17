@@ -197,15 +197,12 @@ let arc-stack r a0 a1 w n (p0, p1, p2) (q0, q1, q2) =
 %% in the disc's own tone on top. What survives between the copies IS the
 %% outline. It is a halo, not a true stroke — at very large sizes the corners
 %% would show it — but at any size this mark is used it reads as outlined type.
+%% `lmodern` in `lib-rustyfi/dist/hash/fonts.rustyfi-hash` is NOT Latin Modern
+%% Roman: the abbrev points at `latinmodern-math.otf`, the same file `lmmath`
+%% points at. Upstream's `lmroman10-regular.otf` is not in this port's roster at
+%% all. The upright Latin letters this draws are that math font's text alphabet,
+%% which is the right look here — but the name is misleading, so: checked.
 let font-word = (`lmodern`, 1.0, 0.0)
-%% The logotype is set in CALLIGRAPHIC (`mathcal`) letterforms. SATySFi 0.0.6
-%% has no `set-math-char-class` — it arrived with the 0.1 math split, and this
-%% document is 0.0.6 — so the script alphabet is reached the way it exists in
-%% Unicode instead: U+1D4B6.. MATHEMATICAL SCRIPT SMALL A onwards, set in Latin
-%% Modern Math, which carries those glyphs because it is a math font. Same
-%% letterforms `\mathcal` would give, without needing math mode at all.
-let font-script = (`dejavu-math`, 1.0, 0.0)
-let word-script = `𝓇𝓊𝓈𝓉𝓎𝒻𝒾`
 
 let ctx-base =
     get-initial-context pw (command \math)
@@ -218,12 +215,8 @@ let ctx-base =
 let outline-n = 16
 
 let ctx-word ctx =
-    ctx |> set-font-size 24pt
-        |> set-font Latin font-script
-        %% The script letters live in the Mathematical Alphanumeric Symbols
-        %% block, which no script classifier calls Latin, so the OTHER slot has
-        %% to carry the same face or they fall back to the default one.
-        |> set-font OtherScript font-script
+    ctx |> set-font-size 30pt
+        |> set-font Latin font-word
         |> set-dominant-narrow-script Latin
 
 %% The disc's own centre tone, so the letter interiors read as holes in the
@@ -259,16 +252,16 @@ let centred-text (px, py) ib =
 
 let logotype ctx =
     let cw = ctx-word ctx in
-    let ib c = read-inline (cw |> set-text-color c) (embed-string word-script) in
+    let ib c = read-inline (cw |> set-text-color c) {rustyfi} in
     %% `{` and `}` are SATySFi's inline-text delimiters — the mode marker you
     %% cannot write a document without. Flanking the logotype with them says
     %% what this program eats, in the language's own notation. Set larger and
     %% lighter than the word so they read as brackets, not as letters.
-    let cb = cw |> set-font-size 34pt |> set-font Latin font-word in
+    let cb = cw |> set-font-size 46pt in
     let ib-open  = read-inline cb (embed-string `{`) in
     let (w, h, d) = get-natural-metrics (ib c-ink) in
     let (wb, _, _) = get-natural-metrics ib-open in
-    let gap = 5pt in
+    let gap = 6pt in
     %% Optical centring: on the CAP box, not on the em box — `rustyfi` has no
     %% capitals and one descender, so metric centring would sit it visibly low.
     let x = cx -' (w *' 0.5) in
@@ -290,13 +283,13 @@ let logotype ctx =
     let brace px str =
         let mk c = read-inline (cb |> set-text-color c) (embed-string str) in
         let (bw, bh, bd) = get-natural-metrics (mk c-brace) in
-        engrave (px -' (bw *' 0.5), cy -' ((bh -' bd) *' 0.5)) 1.1pt mk c-brace
+        engrave (px -' (bw *' 0.5), cy -' ((bh -' bd) *' 0.5)) 1.5pt mk c-brace
     in
     List.concat
         [ brace (x -' gap -' (wb *' 0.5)) `{`
         ; brace (x +' w +' gap +' (wb *' 0.5)) `}`
-        ; ring 1.6pt (0.55pt, 0pt -' 0.55pt) (Color.rgb 0.95 0.83 0.60)
-        ; ring 0.72pt (0pt -' 0.2pt, 0.2pt) c-oxide-deep
+        ; ring 2.0pt (0.7pt, 0pt -' 0.7pt) (Color.rgb 0.95 0.83 0.60)
+        ; ring 0.9pt (0pt -' 0.25pt, 0.25pt) c-oxide-deep
         ; [ draw-text (x, y) (ib c-disc-centre) ]
         ]
 

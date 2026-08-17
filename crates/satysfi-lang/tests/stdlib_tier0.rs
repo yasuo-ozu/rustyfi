@@ -1089,3 +1089,439 @@ document (|
         }
     });
 }
+
+// ============================================================================
+// `footnote-scheme` (`lib-satysfi/dist/packages/footnote-scheme.satyh`,
+// ported verbatim; `@require: color gr`) — every primitive it needs
+// (`register-cross-reference`/`get-cross-reference`/`hook-page-break`/
+// `no-break`/`add-footnote`, all already proven above or in
+// `hooks_crossref.rs`) already exists. `FootnoteScheme.main` is exercised
+// directly (its `sig` exposes only plain `val`s, no `direct` command) with
+// trivial `ibf`/`bbf` callbacks — `add-footnote` is a documented STAND-IN
+// (drops the block content, returns empty inline-boxes) but still
+// typechecks/evaluates, so this proves the module compiles end to end, not
+// that the footnote text is actually collected onto the page.
+// ============================================================================
+
+#[test]
+fn require_footnote_scheme_main_compiles_and_evaluates() {
+    run_with_big_stack(|| {
+        let src = "@require: footnote-scheme
+let-inline ctx \\math m = inline-nil
+in
+let ctx = get-initial-context 400pt (command \\math) in
+let () = FootnoteScheme.initialize () in
+let () = FootnoteScheme.start-page () in
+let ibf num = inline-nil in
+let bbf num = block-nil in
+get-natural-metrics (FootnoteScheme.main ctx ibf bbf)";
+        let v = compile_via_loader("footnote-scheme-main", src)
+            .expect("footnote-scheme.satyh should compile");
+        match v {
+            Value::Tuple(vs) => assert_eq!(vs.len(), 3, "expected (width, height, depth)"),
+            other => panic!("expected a tuple, got {other:?}"),
+        }
+    });
+}
+
+// ============================================================================
+// `proof` (`lib-satysfi/dist/packages/proof.satyh`, ported verbatim;
+// `@require: gr`) — its only two exports (`\derive`/`\derive-multi`) are
+// `direct`, `math-cmd`-typed bindings; both bodies are plain closures
+// (`let-math ... = derive nameopt bopt ... mlst m`, itself a curried plain
+// `let`) that are never forced to evaluate their insides just by loading the
+// module — same "cheapest whole-module proof" rationale as
+// `require_gr_rectangle_compiles_and_evaluates`/`require_math_compiles_and_
+// evaluates` above: success here means the WHOLE file (sig match included)
+// typechecked, not merely parsed. Actually invoking `\derive` would need a
+// real `${…}`-embedded user math-cmd call, which `read_math`'s `MathElem::
+// Cmd` arm doesn't support yet (`primitives.rs`: "needs the math package
+// (phase 7 roadmap A)") — out of scope for porting this one package file.
+// ============================================================================
+
+#[test]
+fn require_proof_compiles_and_evaluates() {
+    run_with_big_stack(|| {
+        let src = "@require: proof
+in
+0";
+        let v = compile_via_loader("proof-basic", src).expect("proof.satyh should compile");
+        assert_eq!(as_int(v), 0);
+    });
+}
+
+// ============================================================================
+// `cd` (`lib-satysfi/dist/packages/cd.satyh`, ported verbatim;
+// `@require: gr color geom option`) — its `draw-arr-scheme` helper is a
+// PLAIN (non-`let-inline`) function with two def-site optional parameters
+// (`?:t-name-opt`/`?:len-name-opt`), and its `\diagram` sig's record field
+// types use the `?->` optional-arrow arrow-type grammar
+// (`draw-arr : math -> float?-> length ?-> obj -> obj -> graphics list`) —
+// exactly the machinery `optional_args.rs` proves end to end. Every other
+// primitive it needs (`get-graphics-bbox`/`embed-math`/`get-text-color`/
+// `Geom.atan2-point`/`Geom.div-perp`/`Gr.arrow`/`Gr.dashed-arrow`/
+// `Gr.text-rightward`/`-leftward`/`-centering`/`length-abs`) already exists.
+// ============================================================================
+
+#[test]
+fn require_cd_compiles_and_evaluates() {
+    run_with_big_stack(|| {
+        let src = "@require: cd
+in
+0";
+        let v = compile_via_loader("cd-basic", src).expect("cd.satyh should compile");
+        assert_eq!(as_int(v), 0);
+    });
+}
+
+// ============================================================================
+// `mitou-detail` (`lib-satysfi/dist/packages/mitou-detail.satyh`, ported
+// verbatim; `@require: pervasives gr list math color`) — a full document
+// class, structurally close to `stdja.satyh`'s own capstone (title/
+// section/subsection/figure/hook-page-break/cross-reference scheme) but
+// simpler (no TOC, no footnotes). Every primitive it needs already exists
+// (proven by `stdja.satyh`'s own capstone test above using the same set).
+// `MitouDetail.document`'s title block always renders `– #subtitle; –`
+// (U+2013 EN DASH), so this needs the `Wide` (non-ASCII-tolerant) font stub,
+// exactly like the `stdja` capstone test.
+// ============================================================================
+
+#[test]
+fn require_mitou_detail_document_compiles_and_evaluates() {
+    run_with_big_stack(|| {
+        let src = "@require: mitou-detail
+in
+document (|
+  project = {Mitou Detail Capstone};
+  subtitle = {A minimal report};
+|) '<
+  +p {
+    Hello, world! This is a Latin paragraph long enough that greedy line
+    breaking must wrap it onto more than one line, exercising the real
+    line-break and page-break path end to end through MitouDetail.document.
+  }
+>";
+        let v = compile_via_loader_with_metrics("mitou-detail-document", src, &Wide)
+            .expect("mitou-detail.satyh should compile");
+        match v {
+            Value::Document(doc) => {
+                assert!(!doc.pages.is_empty(), "expected at least one page");
+                assert!(
+                    doc.pages.iter().any(|p| !p.lines.is_empty()),
+                    "expected at least one non-empty page"
+                );
+            }
+            other => panic!("expected a document, got {other:?}"),
+        }
+    });
+}
+
+// `mitou-report` — now PORTED (the `clear-page` primitive it needs was wired
+// by the page-prims wave: `VertBox::ClearPage`). Its `document` takes a
+// 5-field record (project/year/creators/manager/jouzai-number).
+#[test]
+fn require_mitou_report_document_compiles_and_evaluates() {
+    run_with_big_stack(|| {
+        let src = "@require: mitou-report
+in
+document (|
+  project = {Mitou Report Capstone};
+  year = 2026;
+  creators = [{Alice}; {Bob}];
+  manager = {Carol};
+  jouzai-number = 7;
+|) '<
+  +p {
+    Hello, world! This is a Latin paragraph long enough that greedy line
+    breaking must wrap it onto more than one line, exercising the real
+    line-break and page-break path end to end through MitouReport.document.
+  }
+>";
+        let v = compile_via_loader_with_metrics("mitou-report-document", src, &Wide)
+            .expect("mitou-report.satyh should compile");
+        match v {
+            Value::Document(doc) => {
+                assert!(!doc.pages.is_empty(), "expected at least one page");
+                assert!(
+                    doc.pages.iter().any(|p| !p.lines.is_empty()),
+                    "expected at least one non-empty page"
+                );
+            }
+            other => panic!("expected a document, got {other:?}"),
+        }
+    });
+}
+
+// `stdjareport` — PORTED (needs hook-page-break-block + page-break-multicolumn,
+// both wired by the page-prims wave; @require footnote-scheme). `document`
+// takes a title/author record + a `?->` optional config (omitted via `?*`),
+// same shape as `stdjabook`.
+#[test]
+fn require_stdjareport_document_compiles_and_evaluates() {
+    run_with_big_stack(|| {
+        let src = "@require: stdjareport
+in
+document (|
+  title = {Report Capstone};
+  author = {SATySFi in Rust};
+|) ?* '<
+  +p {
+    Hello, world! This is a Latin paragraph long enough that greedy line
+    breaking must wrap it onto more than one line, exercising the real
+    line-break and page-break path end to end through StdJaReport.document.
+  }
+>";
+        let v = compile_via_loader_with_metrics("stdjareport-document", src, &Wide)
+            .expect("stdjareport.satyh should compile");
+        match v {
+            Value::Document(doc) => {
+                assert!(!doc.pages.is_empty(), "expected at least one page");
+                assert!(
+                    doc.pages.iter().any(|p| !p.lines.is_empty()),
+                    "expected at least one non-empty page"
+                );
+            }
+            other => panic!("expected a document, got {other:?}"),
+        }
+    });
+}
+
+// `mdja` — PORTED (@require pervasives code math itemize color hdecoset
+// vdecoset annot; all now available — itemize was the last holdout).
+// `document` takes a title/author record.
+#[test]
+fn require_mdja_document_compiles_and_evaluates() {
+    run_with_big_stack(|| {
+        let src = "@require: mdja
+in
+MDJa.document (|
+  title = {MDJa Capstone};
+  author = {SATySFi in Rust};
+|) '<
+  +p {
+    Hello, world! This is a Latin paragraph long enough that greedy line
+    breaking must wrap it onto more than one line, exercising the real
+    line-break and page-break path end to end through MDJa.document.
+  }
+>";
+        let v = compile_via_loader_with_metrics("mdja-document", src, &Wide)
+            .expect("mdja.satyh should compile");
+        match v {
+            Value::Document(doc) => {
+                assert!(!doc.pages.is_empty(), "expected at least one page");
+                assert!(
+                    doc.pages.iter().any(|p| !p.lines.is_empty()),
+                    "expected at least one non-empty page"
+                );
+            }
+            other => panic!("expected a document, got {other:?}"),
+        }
+    });
+}
+
+// ============================================================================
+// `stdjabook` (`lib-satysfi/dist/packages/stdjabook.satyh`, ported verbatim;
+// `@require: pervasives gr list math code color option annot
+// footnote-scheme`) — the same shape as `stdja.satyh`'s own capstone test
+// above, plus a real `\footnote` command (`FootnoteScheme.main`, proven
+// standalone above) and `Code.(command \code)` (`Mod.(e)` local-open —
+// already-supported grammar, `cst.rs`'s `Atomic::OpenModule`). `\*` inside
+// `FootnoteScheme`'s footnote-mark inline text is a lexer-level escape for
+// a literal `*` (`lexer.rs`'s "symbol" class), not a module command. Uses
+// the `Wide` font stub (defined above, ahead of `stdja`'s own capstone
+// test): both the footer's em dash and `\footnote`'s mark text need
+// non-ASCII tolerance the same way `stdja`'s capstone does; `show-toc =
+// false` again avoids the `目次` heading (no real CJK metrics yet).
+// ============================================================================
+
+#[test]
+fn require_stdjabook_document_compiles_and_evaluates() {
+    run_with_big_stack(|| {
+        let src = "@require: stdjabook
+in
+document (|
+  title = {Milestone Capstone};
+  author = {SATySFi in Rust};
+  show-toc = false;
+  show-title = true;
+|) ?* '<
+  +p {
+    Hello, world! This is a Latin paragraph long enough that greedy line
+    breaking must wrap it onto more than one line, exercising the real
+    line-break and page-break path end to end through StdJaBook.document.
+    Here is a footnote\\footnote{A minimal footnote body.} right in the middle.
+  }
+>";
+        let v = compile_via_loader_with_metrics("stdjabook-document", src, &Wide)
+            .expect("stdjabook.satyh should compile");
+        match v {
+            Value::Document(doc) => {
+                assert!(!doc.pages.is_empty(), "expected at least one page");
+                assert!(
+                    doc.pages.iter().any(|p| !p.lines.is_empty()),
+                    "expected at least one non-empty page"
+                );
+            }
+            other => panic!("expected a document, got {other:?}"),
+        }
+    });
+}
+
+// ============================================================================
+// `standalone` (`lib-satysfi/dist/packages/standalone.satyh`, ported
+// verbatim; the file itself has no `@require:` at all) — the minimal
+// one-function document class, `standalone : block-text -> document`. Needs
+// `embed-math`, `get-initial-context [math]`, `set-dominant-narrow-script`/
+// `set-dominant-wide-script`, `command`, and the `A4Paper`/`Latin`/`Kana`
+// variants — all confirmed present (final-coverage sweep). `+p` is NOT a
+// primitive (every doc class, e.g. `stdja-mini.satyh`, defines its own), and
+// `standalone.satyh` defines no block commands at all, so — like the
+// `pervasives`/`footnote-scheme` tests above defining their own local
+// `\math` — the test source defines a local `+p` (`stdja-mini.satyh`'s own
+// one-liner) to build block-text content; no extra `@require:` needed.
+// ============================================================================
+
+#[test]
+fn require_standalone_document_compiles_and_evaluates() {
+    run_with_big_stack(|| {
+        let src = "@require: standalone
+let-block ctx +p it = line-break true true ctx (read-inline ctx it ++ inline-fil)
+in
+standalone '<
+  +p {
+    Hello, world! This is a Latin paragraph long enough that greedy line
+    breaking must wrap it onto more than one line, exercising the real
+    line-break and page-break path end to end through standalone.
+  }
+>";
+        let v = compile_via_loader_with_metrics("standalone-document", src, &Mono)
+            .expect("standalone.satyh should compile");
+        match v {
+            Value::Document(doc) => {
+                assert!(!doc.pages.is_empty(), "expected at least one page");
+                assert!(
+                    doc.pages.iter().any(|p| !p.lines.is_empty()),
+                    "expected at least one non-empty page"
+                );
+            }
+            other => panic!("expected a document, got {other:?}"),
+        }
+    });
+}
+
+// ============================================================================
+// `itemize` (`lib-satysfi/dist/packages/itemize.satyh`, ported verbatim;
+// `@require: pervasives list option gr`) — `Itemize.+listing`/`\listing`/
+// `+enumerate`/`\enumerate`, built on the `itemize` variant type's `Item`
+// constructor and the `{ * .. ** .. }` bullet-marker literal syntax
+// (`satysfi-syntax/tests/roundtrip.rs`'s `itemize_markers`). Its own
+// blockers are all cleared: the parenthesized operator name `let (+++>) =
+// List.fold-left (+++)`, and `listing-item`/`listing-item-breakable`'s
+// type-ascribed, multi-pattern `let-rec .. : context -> int -> bool -> bool
+// -> itemize -> block-boxes | ctx depth is-first is-last (Item(..)) = ..`
+// (`type_ascribed_letrec.rs`), and `+listing`/`\listing`'s def-site `?:`
+// optional binder (`marker_less_optional.rs`).
+// ============================================================================
+
+#[test]
+fn require_itemize_listing_compiles_and_evaluates() {
+    run_with_big_stack(|| {
+        let src = "@require: itemize
+let-inline ctx \\math m = inline-nil
+in
+let ctx = get-initial-context 400pt (command \\math) in
+get-natural-length (read-block ctx '<
+  +listing?*{
+    * Item one is long enough to wrap onto more than one line so that greedy
+      line breaking must actually run over this item's text.
+    * Item two
+  }
+>)";
+        let v = compile_via_loader_with_metrics("itemize-listing", src, &Mono)
+            .expect("itemize.satyh should compile");
+        match v {
+            Value::Length(len) => assert!(len.0 > 0.0, "expected positive block length, got {len:?}"),
+            other => panic!("expected a length, got {other:?}"),
+        }
+    });
+}
+
+// ============================================================================
+// `progsynt` (`lib-satysfi/dist/packages/progsynt.satyh`, ported verbatim;
+// `@require: pervasives list math`) — two small math-object modules (`Term`,
+// `Type`), built on internal `let to-math ?:iopt e = ..` calls, both bare
+// (module-internal leading-`?:` bare calls, `marker_less_optional.rs`) and
+// explicit (`to-math ?:1 e1`). Needs no new primitives (`math-char`/
+// `math-color`/`math-char-class`/`math-group`/`text-in-math`/
+// `get-font-size` all already exist).
+//
+// `Term.var`/`app`/`abs`/`letin`/`paren`/`meta` all build `${..}` MATH-TEXT
+// LITERALS (`\token{..}`/`\sp` `MathElem::Cmd` nodes) — `Ast::MathText` is
+// quoted (`eval.rs`: "captures the environment only, typesetting is phase
+// 7's job"), so building these values is safe; only ACTUALLY RENDERING one
+// (`embed-math`/`read-inline` walking into `layout_math_elem`) would hit the
+// same "math command needs the math package (phase 7 roadmap A)" gap
+// `math_package.rs`'s `require_proof_compiles_and_evaluates` already
+// documents for `\derive` — out of scope here (no `.rs` edits). So, like
+// that test, this exercises every one of `Term`/`Type`'s VALUE-building
+// functions (not just a trivial `0` body) but stops short of rendering.
+// ============================================================================
+
+#[test]
+fn require_progsynt_term_and_type_compile_and_evaluate() {
+    run_with_big_stack(|| {
+        let src = "@require: progsynt
+in
+let mk s = Term.var (math-char MathOrd s) in
+let e1 = mk `x` in
+let e2 = mk `y` in
+let eapp = Term.app e1 e2 in
+let eabs = Term.abs e1 eapp in
+let elet = Term.letin e1 e2 eapp in
+let epar = Term.paren eapp in
+let emeta = Term.meta (math-char MathOrd `m`) in
+let tb = Type.base (math-char MathOrd `A`) in
+let tm = Type.meta (math-char MathOrd `T`) in
+let tarr = open Type in (-->) tb tm in
+eapp#assoc + eabs#assoc + elet#assoc + epar#assoc + emeta#assoc + tarr#assoc";
+        let v = compile_via_loader("progsynt-term-type", src)
+            .expect("progsynt.satyh should compile");
+        assert_eq!(as_int(v), 5);
+    });
+}
+
+// ============================================================================
+// `bnf` (`lib-satysfi/dist/packages/bnf.satyh`, ported verbatim; `@require:
+// math`) — the final bundled package. `BNF.insert-bars`/`tabular-of-math`
+// use `Math`-package math-commands UNQUALIFIED inside their own `${..}`
+// (`Math.join ${\mid} mlst`, `embed-math ctx ${#mnontm \mathrel{: : =}}`) —
+// exactly the cross-module math-command exposure this milestone's
+// `direct_cmd_name`/`TopBinding::Module` machinery (`elaborate.rs`) already
+// generalizes to (see `math_cmd_exposure.rs`'s minimal fixture proving the
+// mechanism in isolation). Calling `+BNF` through `read-block` (rather than
+// stopping at a trivial body) forces the WHOLE pipeline: `Math`'s `\mid`/
+// `\mathrel` resolved unqualified, typechecked as `math-cmd`, and evaluated
+// through `embed-math`'s real `reflect_math_elem`/`MathElem::Cmd` forcing
+// path (not merely built as an unforced `Value::MathText`) — `\mid` renders
+// to non-ASCII `∣` (U+2223), hence the `Wide` stub (defined above, for
+// `stdja`'s em dash), not `Mono`.
+// ============================================================================
+
+#[test]
+fn require_bnf_direct_math_cmd_renders_via_embed_math() {
+    run_with_big_stack(|| {
+        let src = "@require: bnf
+let-inline ctx \\math m = inline-nil
+in
+let ctx = get-initial-context 200pt (command \\math) in
+let mnontm = math-char MathOrd `E` in
+let mlstlst = [[math-char MathOrd `a`]; [math-char MathOrd `b`]] in
+get-natural-length (read-block ctx '<+BNF(mnontm)(mlstlst);>)";
+        let v = compile_via_loader_with_metrics("bnf-direct-math-cmd", src, &Wide)
+            .expect("bnf.satyh should compile");
+        match v {
+            Value::Length(len) => assert!(len.0 > 0.0, "expected positive block length, got {len:?}"),
+            other => panic!("expected a length, got {other:?}"),
+        }
+    });
+}

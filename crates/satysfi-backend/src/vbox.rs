@@ -1,4 +1,4 @@
-use crate::hbox::PureHorzBox;
+use crate::hbox::{HookId, PureHorzBox};
 use crate::length::Length;
 
 /// A milestone-1 subset of `vert_box`: a typeset line or vertical space.
@@ -19,4 +19,19 @@ pub enum VertBox {
     },
     /// Fixed vertical space.
     Skip(Length),
+    /// `clear-page`'s marker (`primitives.cppo.ml`'s `VertClearPage`,
+    /// `horzBox.ml:346`) — forces the current page to end right here:
+    /// `chop_page` closes the page as soon as at least one real `Line` has
+    /// been placed, leaving everything from this marker onward for the next
+    /// page. Contributes zero height (`measure_block`), mirroring
+    /// `pageBreak.ml`'s `PBClearPage` (`solidify`'s
+    /// `ImVertFixedEmpty(Fixed, Length.zero)`).
+    ClearPage,
+    /// `hook-page-break-block`'s marker (`vminst.ml:632`
+    /// `BackendHookPageBreakBlock` / `horzBox.ml:347`'s `VertHookPageBreak`)
+    /// — the block-level analog of `PureHorzBox::HookPageBreak`: an opaque
+    /// index into a lang-side hook table, fired by `fire_hooks` with the
+    /// page's `pbinfo` and the point where it sits in the flow. Contributes
+    /// zero height, same as `ClearPage`.
+    HookPageBreak(HookId),
 }

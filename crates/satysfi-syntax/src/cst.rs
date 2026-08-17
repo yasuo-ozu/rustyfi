@@ -63,6 +63,66 @@ pub enum Header {
     Stage(HeaderStageTok),
 }
 
+/// A binding-position NAME: a plain variable, or `( ‹op› )` — a
+/// parenthesized (possibly user-defined) operator name (`OpNameTok`), e.g.
+/// `let (+++>) = ..` (`itemize.satyh`), `let (-->) t1 t2 = ..` / `val
+/// (-->) : ty` (`progsynt.satyh`). Upstream's `var` nonterminal folds `VAR`
+/// and `LPAREN binop RPAREN` into one production; this is that nonterminal,
+/// reused by [`TopLet::name`], [`ast::Expr::LetIn`]'s `name`,
+/// [`ast::RecBinding::name`], and [`SigItem::Val`]'s `name` — the four
+/// binding positions upstream admits it in. `.name`/`.span` mirror
+/// `VarTok`'s own public fields exactly (e.g. `"+++>"`/the whole `(..)`'s
+/// span for `(+++>)`), so every existing `elaborate.rs`/`typecheck.rs`
+/// callsite that reads `foo.name.name`/`foo.name.span` on one of the four
+/// positions keeps compiling unchanged now that the field type there moves
+/// from `VarTok` to this — an operator name binds/resolves exactly like an
+/// ordinary variable of that string from here on. See also
+/// [`ast::Atomic::OpRef`], the matching atomic-expression form (a bare
+/// value reference, e.g. `(+++)`/`(-->)`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct BindName {
+    pub name: String,
+    pub span: Span,
+    repr: BindNameRepr,
+}
+
+/// [`BindName`]'s two surface forms, parsed with syan's ordinary
+/// enum-variant backtracking (the same technique `Atomic`'s many
+/// alternatives use below) — kept as a separate, non-`pub`-facing enum
+/// purely so `#[derive(Parse, Unparse)]` can pick between them; [`BindName`]
+/// itself is hand-written so it can additionally expose the precomputed
+/// `name`/`span` fields. `Op` first: not a real ambiguity (a plain `VarTok`
+/// never starts with `LParen`), just documents the intended priority.
+#[derive(Parse, Unparse, Debug, Clone, PartialEq)]
+enum BindNameRepr {
+    Op(OpNameTok),
+    Var(VarTok),
+}
+
+impl Parse<crate::token::Atom> for BindName {
+    type Error = syan::error::ParseError;
+
+    fn parse(
+        stream: impl syan::parse::IntoParseStream<Atom = crate::token::Atom>,
+    ) -> Result<Self, Self::Error> {
+        let repr = BindNameRepr::parse(stream)?;
+        let (name, span) = match &repr {
+            BindNameRepr::Op(op) => (op.name.clone(), op.span),
+            BindNameRepr::Var(v) => (v.name.clone(), v.span),
+        };
+        Ok(BindName { name, span, repr })
+    }
+}
+
+impl Unparse<crate::token::Atom> for BindName {
+    fn unparse<S: syan::parse::unparse::Emitter<crate::token::Atom>>(
+        &self,
+        sink: &mut S,
+    ) -> Result<(), S::Error> {
+        self.repr.unparse(sink)
+    }
+}
+
 /// A top-level non-recursive binding: `let name param* = expr`. `params` is
 /// `Vec<ast::PatBot>` (not merely `Vec<VarTok>`), matching `RecBinding`'s
 /// field of the same name (`nxnonrecdec`'s `argpart` is `patbot*` upstream
@@ -74,7 +134,7 @@ pub enum Header {
 #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
 pub struct TopLet {
     pub let_kw: KwLet,
-    pub name: VarTok,
+    pub name: BindName,
     pub params: Vec<ast::Param>,
     pub eq: DefEqTok,
     pub value: ast::Expr,
@@ -245,10 +305,10 @@ pub enum SigItem {
         ty: ast::TypeExpr,
         constraints: Vec<SigConstraint>,
     },
-    /// `val name : ty`.
+    /// `val name : ty` / `val ( ‹op› ) : ty`.
     Val {
         kw: KwVal,
-        name: VarTok,
+        name: BindName,
         colon: ColonTok,
         ty: ast::TypeExpr,
         constraints: Vec<SigConstraint>,
@@ -516,7 +576,7 @@ pub mod ast {
         /// path `Fun`'s doc comment describes.
         LetIn {
             kw: KwLet,
-            name: VarTok,
+            name: super::BindName,
             params: Vec<Param>,
             eq: DefEqTok,
             value: Box<Expr>,
@@ -629,15 +689,25 @@ pub mod ast {
         Ops(OpChain),
     }
 
-    /// One `name [|] patbot* = value [| patbot* = value]*` clause GROUP of a
-    /// `let-rec` (also reused, from outside this module, by top-level
-    /// `let-rec`). `params` is `patbot*` (`recdecargpart`'s plain `argpats`
-    /// form, optionally preceded by a `leading_bar` — `recdecargpart`'s
-    /// `BAR argpatlst` alternative, used for the OCaml-style "every clause,
-    /// including the first, gets a `|`" layout the bundled packages write,
-    /// e.g. `list.satyg`'s `let-rec map\n  | f [] = []\n  | f (x :: xs) =
-    /// ..`; `parser.mly`'s rarer `COLON ty BAR` type-annotated form is not
-    /// supported — no bundled package uses it). `extra` holds any further
+    /// One `name [: ty] [|] patbot* = value [| patbot* = value]*` clause
+    /// GROUP of a `let-rec` (also reused, from outside this module, by
+    /// top-level `let-rec`). `ascription` is `parser.mly`'s rarer
+    /// `COLON ty` type-annotated form (`recdecargpart`'s `COLON ty BAR`
+    /// alternative), e.g. the bundled `itemize.satyh`'s `let-rec
+    /// listing-item : context -> int -> bool -> bool -> itemize ->
+    /// block-boxes | ctx depth is-first is-last (Item(...)) = ..`. Parsed
+    /// but not enforced: this milestone has no signature-*enforcement* pass
+    /// for value-level ascriptions (only module `val`/`direct` signature
+    /// items reach `typecheck.rs`'s `command_scheme`/sig machinery), so the
+    /// ascription is simply a documented parse-and-ignore stand-in — its
+    /// only job is making verbatim upstream source parse. `params` is
+    /// `patbot*` (`recdecargpart`'s plain `argpats` form, optionally
+    /// preceded by a `leading_bar` — `recdecargpart`'s `BAR argpatlst`
+    /// alternative, used both for the OCaml-style "every clause, including
+    /// the first, gets a `|`" layout the bundled packages write, e.g.
+    /// `list.satyg`'s `let-rec map\n  | f [] = []\n  | f (x :: xs) = ..`,
+    /// and for the `COLON ty BAR` form above, whose single clause is *only*
+    /// reachable via a leading `|`). `extra` holds any further
     /// `| patbot* = value` continuation clauses (`nxrecdecpar`) — SATySFi's
     /// multi-clause pattern-matching function-definition sugar. Every
     /// clause in the group must bind the same number of parameters (checked
@@ -647,12 +717,27 @@ pub mod ast {
     /// in turn — see `elaborate.rs`'s `rec_clause_value`.
     #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
     pub struct RecBinding {
-        pub name: VarTok,
+        pub name: super::BindName,
+        pub ascription: Option<RecAscription>,
         pub leading_bar: Option<BarTok>,
         pub params: Vec<PatBot>,
         pub eq: DefEqTok,
         pub value: super::ExprErased,
         pub extra: Vec<RecClause>,
+    }
+
+    /// A `let-rec` binding's optional `: ty` ascription (see [`RecBinding`]'s
+    /// doc comment). A direct (non-erased) `TypeExpr` field: `RecBinding` is
+    /// already inside this `#[recurse]` module (embedded directly by
+    /// `Expr::LetRecIn`, not through an eraser), and connecting it straight
+    /// to `TypeExpr` — one of the module's three self-recursive SCC roots —
+    /// is exactly the same kind of cross-root DAG edge `RecBinding.params:
+    /// Vec<PatBot>` already makes to the `PatBot` root; `TypeExpr` never
+    /// refers back to `Expr`/`PatBot`/`RecBinding`, so no new cycle results.
+    #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
+    pub struct RecAscription {
+        pub colon: ColonTok,
+        pub ty: TypeExpr,
     }
 
     /// A `| patbot* = value` continuation clause of a multi-clause
@@ -794,6 +879,13 @@ pub mod ast {
         Var(VarTok),
         /// `Mod.x` — a module-qualified variable (`VARWITHMOD`).
         VarWithMod(VarWithModTok),
+        /// `( ‹op› )` — a bare reference to a (possibly user-defined)
+        /// operator as a first-class value, e.g. `(+++)`, `(-->)`
+        /// (`nxbot`'s `LPAREN binop RPAREN` alternative — the same syntax
+        /// `super::BindName` accepts in binding position, here used as an
+        /// ordinary atomic expression). Resolves via the same name
+        /// `BinOpTok::op_text` yields, exactly like `Var` (`elaborate.rs`).
+        OpRef(OpNameTok),
         /// `command \cmd` (upstream `nxapp: COMMAND hcmd` →
         /// `UTContentOf(mods, csnm)`): a first-class *value* that simply
         /// names an inline command's own binding — no argument tail, so

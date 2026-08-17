@@ -358,6 +358,62 @@ impl BinOpTok {
     }
 }
 
+/// `( ‹op› )` — a parenthesized (possibly user-defined) operator name.
+/// Two surface uses share this leaf: a binding-position NAME (`cst.rs`'s
+/// `BindName`, e.g. `let (+++>) = ..` / `val (-->) : ty` — the gap blocking
+/// `itemize.satyh`/`progsynt.satyh`) and a bare atomic-expression reference
+/// to an operator as a first-class value (`cst.rs`'s `ast::Atomic::OpRef`,
+/// e.g. `(+++)`). `.name` is the operator's text (`BinOpTok::op_text`);
+/// `.span` covers the whole `( .. )`, delimiters included. Both are
+/// precomputed here (rather than left to the `Spanned` trait) so a
+/// downstream crate with no direct `syan` dependency (`satysfi-lang`) can
+/// read them as plain fields, exactly like every other leaf's `.name`/
+/// `.span`. Hand-written (not `#[leaf(...)]`-generated) for the same reason
+/// as [`BinOpTok`]: it spans three atoms, not one.
+#[derive(Clone, Debug, PartialEq)]
+pub struct OpNameTok {
+    pub name: String,
+    pub span: Span,
+    pub lparen: LParenTok,
+    pub op: BinOpTok,
+    pub rparen: RParenTok,
+}
+
+impl Parse<Atom> for OpNameTok {
+    type Error = ParseError;
+
+    fn parse(stream: impl IntoParseStream<Atom = Atom>) -> Result<Self, Self::Error> {
+        let mut stream = stream.into_parse_stream();
+        let lparen = LParenTok::parse(&mut stream)?;
+        let op = BinOpTok::parse(&mut stream)?;
+        let rparen = RParenTok::parse(&mut stream)?;
+        let name = op.op_text();
+        let span = lparen.span().unite(rparen.span());
+        Ok(OpNameTok {
+            name,
+            span,
+            lparen,
+            op,
+            rparen,
+        })
+    }
+}
+
+impl Unparse<Atom> for OpNameTok {
+    fn unparse<S: Emitter<Atom>>(&self, sink: &mut S) -> Result<(), S::Error> {
+        self.lparen.unparse(sink)?;
+        self.op.unparse(sink)?;
+        self.rparen.unparse(sink)
+    }
+}
+
+impl Spanned for OpNameTok {
+    type Span = Span;
+    fn span(&self) -> Span {
+        self.span
+    }
+}
+
 /// `@stage: persistent` / `@stage: 0` / `@stage: 1` header token
 /// (`cst.rs`'s `Header::Stage`). Hand-written like [`BinOpTok`] above: the
 /// three spellings are separate unit `Token` variants with no shared

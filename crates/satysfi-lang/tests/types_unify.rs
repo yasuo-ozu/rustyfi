@@ -367,6 +367,7 @@ fn every_registered_primitive_has_a_type() {
         "read-block",
         "line-break",
         "page-break",
+        "page-break-multicolumn",
         "+",
         "-",
         "*",
@@ -473,6 +474,7 @@ fn every_registered_primitive_has_a_type() {
         "get-axis-height",
         // ---- docs/plans/hooks-annotations-crossref.md §Slice 1 ----
         "hook-page-break",
+        "hook-page-break-block",
         "register-cross-reference",
         "get-cross-reference",
         // ---- docs/plans/math-engine.md §A + §G ----
@@ -527,10 +529,17 @@ fn every_registered_primitive_has_a_type() {
         "set-dominant-wide-script",
         "set-dominant-narrow-script",
         "set-language",
+        "set-every-word-break",
         "register-outline",
         "extract-string",
+        // ---- proof.satyh/footnote-scheme.satyh unblockers (tail-prims sweep) ----
+        "embed-block-bottom",
+        "line-stack-bottom",
+        "add-footnote",
+        // ---- page-level prims blocking mitou-report/stdjareport ----
+        "clear-page",
     ];
-    assert_eq!(NAMES.len(), 149, "keep this list in sync with primitives.rs's prims! table");
+    assert_eq!(NAMES.len(), 156, "keep this list in sync with primitives.rs's prims! table");
     for name in NAMES {
         assert!(
             prim_types::primitive_type(name).is_some(),

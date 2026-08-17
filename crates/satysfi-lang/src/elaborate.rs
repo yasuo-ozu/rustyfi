@@ -34,33 +34,76 @@ fn err<T>(span: Span, msg: impl Into<String>) -> Result<T, ElabError> {
 /// A flat name set — there is no real namespacing, so a module's qualified
 /// names (`"M.x"`) are just ordinary strings that happen to contain a dot
 /// (see the module doc comment on [`qualify_key`]).
+///
+/// `optional_arity` additionally tracks, for a name bound via a plain
+/// (non-`let-rec`) `let`/`let ... in` whose `Param` list has a *leading* run
+/// of `Param::Optional` (`?:name`) entries (`cst.rs`'s `Param` doc comment —
+/// only `TopLet`/`Expr::LetIn` admit that marker), how many such leading
+/// optional parameters it has — e.g. `let to-math ?:iopt e = ..` records 1.
+/// This is the "marker-less optional-argument defaulting" gap
+/// (`docs/plans/frontend-completion.md` Sub-area 2 / `class-signature-lang-
+/// gaps.md`): a bare call site (`to-math e1`, no `?:`/`?*` at all) must
+/// still supply `None` for `iopt` and match `e1` against `e` — see
+/// `app_chain_generic`'s use of [`Scope::optional_arity`]. Absent from the
+/// map (or `0`) means "no known leading optionals" — the overwhelmingly
+/// common case, and every existing name's default, so ordinary application
+/// is unaffected. Only a *prefix* is tracked because that's the only shape
+/// `?->`'s type-level encoding (`typecheck.rs`'s `lower_type_expr`) can even
+/// express; a non-leading `?:` (`stdja.satyh`'s `document record
+/// ?:configopt inner`) records `0` and keeps its old marker-optional-only
+/// behavior.
 #[derive(Clone, Debug, Default)]
 pub struct Scope {
     names: HashSet<String>,
+    optional_arity: std::collections::HashMap<String, usize>,
 }
 
 impl Scope {
     pub fn new(names: impl IntoIterator<Item = String>) -> Scope {
         Scope {
             names: names.into_iter().collect(),
+            optional_arity: std::collections::HashMap::new(),
         }
     }
 
     fn with(&self, name: &str) -> Scope {
         let mut s = self.clone();
-        s.names.insert(name.to_string());
+        s.insert(name);
         s
     }
 
     /// In-place version of [`Scope::with`], for the folds below that thread
     /// one evolving scope through a sequence of bindings without cloning at
-    /// every step.
+    /// every step. Rebinding a name plainly (no known arity) clears any
+    /// stale [`Scope::optional_arity`] entry, so a local parameter/pattern
+    /// binding can never inherit an outer optional-leading function's
+    /// arity just by sharing its name.
     fn insert(&mut self, name: &str) {
         self.names.insert(name.to_string());
+        self.optional_arity.remove(name);
+    }
+
+    /// Like [`Scope::insert`], but also records `name`'s leading-optional-
+    /// parameter count (see the struct doc comment) — used only at the
+    /// handful of binding sites that know a def-site `Param` list
+    /// (`walk_bindings`'s `TopBinding::Let` arm, `Expr::LetIn`).
+    fn insert_with_arity(&mut self, name: &str, arity: usize) {
+        self.names.insert(name.to_string());
+        if arity > 0 {
+            self.optional_arity.insert(name.to_string(), arity);
+        } else {
+            self.optional_arity.remove(name);
+        }
     }
 
     fn contains(&self, name: &str) -> bool {
         self.names.contains(name)
+    }
+
+    /// `name`'s recorded leading-optional-parameter count, or `0` if none is
+    /// known (see the struct doc comment).
+    fn optional_arity(&self, name: &str) -> usize {
+        self.optional_arity.get(name).copied().unwrap_or(0)
     }
 
     /// Every currently-known name starting with `prefix` (used by `open`,
@@ -191,17 +234,19 @@ pub fn elaborate_program(file: &cst::File, prelude_scope: &Scope) -> Result<Prog
     let items: Vec<&cst::TopBinding> = file.prelude.iter().collect();
     let mut type_decls = Vec::new();
     let mut synonym_decls = Vec::new();
-    let (bindings, exported) = walk_bindings(
+    let (bindings, _exported, final_scope) = walk_bindings(
         &items,
         prelude_scope,
         &[],
         &mut type_decls,
         &mut synonym_decls,
     )?;
-    let mut final_scope = prelude_scope.clone();
-    for name in &exported {
-        final_scope.insert(name);
-    }
+    // `final_scope` (mod_path `[]`) already IS `prelude_scope` plus every
+    // top-level name — including each one's `Scope::optional_arity` entry,
+    // which a manual `insert` per `exported` name would have dropped (see
+    // `Scope`'s doc comment) — so the file body sees the same
+    // marker-less-optional-call defaulting a top-level function's own
+    // sibling declarations do.
     let body_ast = expr(body, &final_scope)?;
     Ok(Program {
         type_decls,
@@ -299,32 +344,50 @@ fn nest(bindings: Vec<Binding>, tail: Ast) -> Ast {
 fn export_alias(
     mod_path: &[String],
     local: String,
+    arity: usize,
     bindings: &mut Vec<Binding>,
     running: &mut Scope,
     exported: &mut Vec<String>,
 ) {
-    running.insert(&local);
+    running.insert_with_arity(&local, arity);
     if mod_path.is_empty() {
         exported.push(local);
     } else {
         let qual = qualify_key(mod_path, &local);
         bindings.push(Binding::Let(qual.clone(), Ast::Var(local, Span::default())));
-        running.insert(&qual);
+        running.insert_with_arity(&qual, arity);
         exported.push(qual);
     }
 }
 
+/// `arity` is `local`'s recorded leading-`?:`-optional-parameter count (see
+/// [`Scope`]'s doc comment) — nonzero only for `TopBinding::Let`, whose
+/// `Param` list can carry the marker; every other binding kind here passes
+/// `0`.
 fn push_named_binding(
     mod_path: &[String],
     local: String,
     value: Ast,
+    arity: usize,
     make_binding: impl FnOnce(String, Ast) -> Binding,
     bindings: &mut Vec<Binding>,
     running: &mut Scope,
     exported: &mut Vec<String>,
 ) {
     bindings.push(make_binding(local.clone(), value));
-    export_alias(mod_path, local, bindings, running, exported);
+    export_alias(mod_path, local, arity, bindings, running, exported);
+}
+
+/// The length of the maximal leading run of `Param::Optional` entries in a
+/// plain `let`'s parameter list (see [`Scope`]'s doc comment) — `0` if
+/// `params` doesn't start with one at all, matching `?->`'s type-level
+/// encoding (`typecheck.rs`'s `lower_type_expr`), which only ever has
+/// optional domains as a *prefix* before the mandatory arrow chain.
+fn leading_optional_count(params: &[c::Param]) -> usize {
+    params
+        .iter()
+        .take_while(|p| matches!(p, c::Param::Optional { .. }))
+        .count()
 }
 
 /// Fold one sequence of top-level-shaped bindings — the file's own prelude
@@ -342,14 +405,24 @@ fn push_named_binding(
 /// `running` (visible to later siblings) and `exported` (bubbled up to
 /// whatever this whole call's caller is folding, so `module N = ..` nested
 /// inside `module M = ..` bubbles `"M.N.x"` all the way out to the file
-/// level).
+/// level) — along with each bubbled name's [`Scope::optional_arity`] (read
+/// back off the recursive call's own final `running`, its third return
+/// value), so a qualified call to a leading-`?:`-optional function from
+/// *outside* its defining module/`let .. in` still auto-omits, not just an
+/// unqualified call from a sibling declaration inside the same one.
+///
+/// The final `running` (this call's own accumulated scope) is returned as a
+/// third element precisely so callers can reuse it wholesale as the scope
+/// for whatever comes *after* this sequence, instead of rebuilding one from
+/// `exported` name strings alone (which would drop every
+/// [`Scope::optional_arity`] entry — see [`elaborate_program`]).
 fn walk_bindings(
     items: &[&cst::TopBinding],
     scope: &Scope,
     mod_path: &[String],
     type_decls: &mut Vec<UserTypeDecl>,
     synonym_decls: &mut Vec<UserSynonymDecl>,
-) -> Result<(Vec<Binding>, Vec<String>), ElabError> {
+) -> Result<(Vec<Binding>, Vec<String>, Scope), ElabError> {
     let mut bindings: Vec<Binding> = Vec::new();
     let mut running = scope.clone();
     let mut exported: Vec<String> = Vec::new();
@@ -369,6 +442,7 @@ fn walk_bindings(
                     mod_path,
                     top_let.name.name.clone(),
                     value,
+                    leading_optional_count(&top_let.params),
                     Binding::Let,
                     &mut bindings,
                     &mut running,
@@ -381,7 +455,7 @@ fn walk_bindings(
                 let names: Vec<String> = recs.iter().map(|(n, _)| n.clone()).collect();
                 bindings.push(Binding::LetRec(recs));
                 for n in names {
-                    export_alias(mod_path, n, &mut bindings, &mut running, &mut exported);
+                    export_alias(mod_path, n, 0, &mut bindings, &mut running, &mut exported);
                 }
             }
             cst::TopBinding::LetInline {
@@ -393,6 +467,7 @@ fn walk_bindings(
                     mod_path,
                     cmd.name.clone(),
                     value_ast,
+                    0,
                     Binding::Let,
                     &mut bindings,
                     &mut running,
@@ -408,6 +483,7 @@ fn walk_bindings(
                     mod_path,
                     cmd.name.clone(),
                     value_ast,
+                    0,
                     Binding::Let,
                     &mut bindings,
                     &mut running,
@@ -422,6 +498,7 @@ fn walk_bindings(
                     mod_path,
                     cmd.name.clone(),
                     value_ast,
+                    0,
                     Binding::LetMath,
                     &mut bindings,
                     &mut running,
@@ -445,6 +522,7 @@ fn walk_bindings(
                     mod_path,
                     name.name.clone(),
                     value_ast,
+                    0,
                     Binding::LetMutable,
                     &mut bindings,
                     &mut running,
@@ -470,7 +548,7 @@ fn walk_bindings(
                 child_path.push(name.name.clone());
                 let inner_items: Vec<&cst::TopBinding> =
                     decls.iter().map(|d| d.0.as_ref()).collect();
-                let (inner_bindings, inner_exported) = walk_bindings(
+                let (inner_bindings, inner_exported, inner_running) = walk_bindings(
                     &inner_items,
                     &running,
                     &child_path,
@@ -479,7 +557,7 @@ fn walk_bindings(
                 )?;
                 bindings.extend(inner_bindings);
                 for q in &inner_exported {
-                    running.insert(q);
+                    running.insert_with_arity(q, inner_running.optional_arity(q));
                 }
                 if let Some(sig_annot) = sig {
                     for item in &sig_annot.items {
@@ -500,11 +578,12 @@ fn walk_bindings(
                                     ),
                                 );
                             }
+                            let arity = running.optional_arity(&qual);
                             bindings.push(Binding::Let(
                                 local.clone(),
                                 Ast::Var(qual, Span::default()),
                             ));
-                            running.insert(&local);
+                            running.insert_with_arity(&local, arity);
                             exported.push(local);
                         }
                     }
@@ -515,8 +594,9 @@ fn walk_bindings(
                 let prefix = format!("{}.", name.name);
                 for q in running.names_with_prefix(&prefix) {
                     let suffix = q[prefix.len()..].to_string();
+                    let arity = running.optional_arity(&q);
                     bindings.push(Binding::Let(suffix.clone(), Ast::Var(q, Span::default())));
-                    running.insert(&suffix);
+                    running.insert_with_arity(&suffix, arity);
                     // `open` only re-exposes an *existing* qualified name
                     // under its bare suffix locally; it doesn't itself mint
                     // a new qualified name, so nothing goes into `exported`
@@ -525,7 +605,7 @@ fn walk_bindings(
             }
         }
     }
-    Ok((bindings, exported))
+    Ok((bindings, exported, running))
 }
 
 /// `[ctxvar] let-inline \cmd param* = value` / `[ctxvar] let-block +cmd
@@ -791,7 +871,12 @@ fn expr(e: &c::Expr, scope: &Scope) -> Result<Ast, ElabError> {
             // widens any `?:name` marker to a plain `PatBot::Var`.
             let let_in_params = params_to_patbots(params);
             let value_ast = rec_clause_value(&let_in_params, value, &[], scope)?;
-            let body_scope = scope.with(&name.name);
+            // Record `name`'s leading-`?:`-optional-parameter count (see
+            // `Scope`'s doc comment) so a later marker-less bare call in
+            // `body` (`app_chain_generic`) auto-omits it, e.g. progsynt.satyh's
+            // `let to-math ?:iopt e = .. in .. to-math e1 ..`.
+            let mut body_scope = scope.clone();
+            body_scope.insert_with_arity(&name.name, leading_optional_count(params));
             let body_ast = expr(body, &body_scope)?;
             Ok(Ast::LetIn(
                 name.name.clone(),
@@ -1103,10 +1188,56 @@ fn app_expr(a: &c::AppExpr, scope: &Scope) -> Result<Ast, ElabError> {
 
 fn app_chain_generic(a: &c::AppExpr, scope: &Scope) -> Result<Ast, ElabError> {
     let mut ast = atomic_head_with_excl(&a.head, &a.head_accesses, a.excl.as_ref(), scope)?;
-    for arg in &a.args {
+    // Marker-less optional-argument defaulting (`Scope`'s doc comment /
+    // `docs/plans/frontend-completion.md` Sub-area 2): if the head is a bare
+    // name (no `!`/`#access`) known to have `leading` leading `?:`-optional
+    // parameters, greedily consume up to `leading` explicit `?:`/`?*`
+    // markers off the front of `a.args` first (an EXPLICIT call site, e.g.
+    // `to-math ?:1 e1`, is elaborated exactly as before — this only ever
+    // adds behavior, never removes it), then synthesize a plain `None` for
+    // every leading optional slot the call left unmarked, before applying
+    // whatever argument follows — e.g. progsynt.satyh's bare `to-math e1`
+    // becomes `Apply(Apply(to-math, None), e1)`, matching what an explicit
+    // `to-math ?* e1` would already elaborate to. Guarded on a non-empty
+    // `a.args` so a bare function-VALUE reference (no application at all,
+    // e.g. `to-math` passed to `List.map`) is left untouched.
+    let leading = if a.excl.is_none() && a.head_accesses.is_empty() && !a.args.is_empty() {
+        head_optional_arity(&a.head, scope)
+    } else {
+        0
+    };
+    let mut args_iter = a.args.iter().peekable();
+    let mut supplied = 0;
+    while supplied < leading {
+        match args_iter.peek() {
+            Some(c::AppArg::Optional { .. }) | Some(c::AppArg::Omission(_)) => {
+                let arg = args_iter.next().unwrap();
+                ast = Ast::Apply(Box::new(ast), Box::new(app_arg_to_ast(arg, scope)?));
+                supplied += 1;
+            }
+            _ => break,
+        }
+    }
+    for _ in supplied..leading {
+        ast = Ast::Apply(Box::new(ast), Box::new(Ast::Ctor("None".to_string(), None)));
+    }
+    for arg in args_iter {
         ast = Ast::Apply(Box::new(ast), Box::new(app_arg_to_ast(arg, scope)?));
     }
     Ok(ast)
+}
+
+/// `a.head`'s recorded leading-optional-parameter count (`Scope::
+/// optional_arity`), for a bare unqualified or module-qualified variable
+/// head only — any other head shape (a parenthesized expression, a
+/// dereferenced/accessed value, …) can never name a known `let`/`let ..
+/// in` binding directly, so it conservatively reports `0`.
+fn head_optional_arity(head: &c::Atomic, scope: &Scope) -> usize {
+    match head {
+        c::Atomic::Var(v) => scope.optional_arity(&v.name),
+        c::Atomic::VarWithMod(v) => scope.optional_arity(&qualify_key(&v.mods, &v.name)),
+        _ => 0,
+    }
 }
 
 /// `!x` / `!x#a#b` (`nxunsub`'s `UNOP_EXCLAM nxbot` — parser.mly:795,
@@ -1193,7 +1324,8 @@ fn open_module(
     let matches = scope.names_with_prefix(&prefix);
     let mut inner = scope.clone();
     for q in &matches {
-        inner = inner.with(&q[prefix.len()..]);
+        let arity = scope.optional_arity(q);
+        inner.insert_with_arity(&q[prefix.len()..], arity);
     }
     let body_ast = body(&inner)?;
     let mut ast = body_ast;
@@ -1223,6 +1355,11 @@ fn atomic(a: &c::Atomic, scope: &Scope) -> Result<Ast, ElabError> {
         c::Atomic::VarWithMod(tok) => {
             scoped_var(&qualify_key(&tok.mods, &tok.name), tok.span, scope)
         }
+        // `(+++)`/`(-->)` — a bare reference to a (possibly user-defined)
+        // operator as a first-class value; resolves exactly like `Var`
+        // above, under the same name `x +++ y`/`x --> y` (an `OpChain`'s
+        // `op_chain`, below) would look up.
+        c::Atomic::OpRef(op) => scoped_var(&op.name, op.span, scope),
         // `(command \cmd)` — a first-class reference to an inline command's
         // own binding (`class-signature-lang-gaps.md` gap 1). No new
         // binding machinery: the command's own `let-inline` binding is the

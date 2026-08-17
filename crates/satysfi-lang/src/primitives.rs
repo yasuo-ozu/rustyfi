@@ -16,12 +16,12 @@ use crate::eval::{available_fields, eval_error, EvalError, Interp};
 use crate::value::{DocumentValue, Env, Value};
 use std::collections::BTreeMap;
 use satysfi_backend::{
-    break_into_lines, break_opportunities, chop_page, graphics_bbox, linear_transform_graphics,
-    linear_transform_path, measure_block, natural_metrics, place_block_at, shift_graphics,
-    shift_path, BreakKind, Cell, Closing, Color, Context, Dash, FontKey, GraphicsElem, HookId,
-    HorzBox, HorzStringInfo, ImageId, ImageResource, Length, MathGlyph, MathKind, Paddings, Page,
-    PageGeometry, PaperSize, Path, PathSeg, Point, PrePath, PureHorzBox, Subpath, TabularBox,
-    VertBox, FORCED_BREAK_PENALTY,
+    break_into_lines, break_opportunities, chop_page, fit_cell, graphics_bbox,
+    linear_transform_graphics, linear_transform_path, measure_block, natural_metrics,
+    place_block_at, shift_graphics, shift_path, BreakKind, Cell, Closing, Color, Context, Dash,
+    FontKey, GraphicsElem, HookId, HorzBox, HorzStringInfo, ImageId, ImageResource, Length,
+    MathGlyph, MathKind, Paddings, Page, PageGeometry, PaperSize, Path, PathSeg, Point, PrePath,
+    PureHorzBox, Subpath, TabularBox, VertBox, FORCED_BREAK_PENALTY,
 };
 use std::rc::Rc;
 
@@ -61,6 +61,12 @@ prims! {
     // block-boxes -> document` (vminst.ml:1024, `BackendPageBreaking`);
     // docs/plans/document-page-model.md §Slice 1.
     "page-break" (4) => prim_page_break;
+    // `page -> length list -> (unit -> block-boxes) -> (unit ->
+    // block-boxes) -> (pbinfo -> page-content-scheme) -> (pbinfo ->
+    // page-parts) -> block-boxes -> document` (vminst.ml:1065
+    // `BackendPageBreakingMultiColumn`) — STAND-IN, see
+    // `prim_page_break_multicolumn`'s doc comment.
+    "page-break-multicolumn" (7) => prim_page_break_multicolumn;
 
     // ---- int arithmetic (vminst.ml: Plus/Minus/Times/Divides/Mod) --------
     "+" (2) => prim_int_add;
@@ -308,6 +314,7 @@ prims! {
     // ==== docs/plans/hooks-annotations-crossref.md §Slice 1: the
     // page-break-hook callback seam + cross-reference fixpoint ====
     "hook-page-break" (1) => prim_hook_page_break;
+    "hook-page-break-block" (1) => prim_hook_page_break_block;
     "register-cross-reference" (2) => prim_register_cross_reference;
     "get-cross-reference" (1) => prim_get_cross_reference;
 
@@ -375,8 +382,16 @@ prims! {
     "set-dominant-wide-script" (2) => prim_set_dominant_wide_script;
     "set-dominant-narrow-script" (2) => prim_set_dominant_narrow_script;
     "set-language" (3) => prim_set_language;
+    "set-every-word-break" (3) => prim_set_every_word_break;
     "register-outline" (1) => prim_register_outline;
     "extract-string" (1) => prim_extract_string;
+
+    // ==== proof.satyh/footnote-scheme.satyh unblockers (tail-prims sweep):
+    // `embed-block-bottom` :1185, `line-stack-bottom` :1229 (both
+    // `tools/gencode/vminst.ml`), `add-footnote` :1130. ====
+    "embed-block-bottom" (3) => prim_embed_block_bottom;
+    "line-stack-bottom" (1) => prim_line_stack_bottom;
+    "add-footnote" (1) => prim_add_footnote;
 }
 
 /// The base environment `document` programs start in.
@@ -415,6 +430,12 @@ pub fn base_env() -> Env {
     // `math.satyh`'s block/inline math wrappers are called by the file
     // itself).
     env.define("omit-skip-after", Value::InlineBoxes(Vec::new()));
+    // `clear-page : block-boxes` (`primitives.cppo.ml:569`) — like
+    // `inline-fil` above, a bare CONSTANT (no vminst.ml entry): a
+    // single-element block-boxes list carrying the `VertBox::ClearPage`
+    // marker `chop_page` (satysfi-backend) treats as "end this page here".
+    // FAITHFUL — `mitou-report.satyh`'s `document` unblocker.
+    env.define("clear-page", Value::BlockBoxes(vec![VertBox::ClearPage]));
     env
 }
 
@@ -1272,17 +1293,64 @@ fn read_parts_scheme(v: Value) -> Result<(Point, Vec<VertBox>, Point, Vec<VertBo
 }
 
 /// The real 4-arg `page-break` (docs/plans/document-page-model.md §Slice
-/// 1): the lang-side per-page loop — the one place that legally holds
-/// `&mut Interp` — `interp.apply`s the two scheme closures once per page
-/// with that page's fresh `pbinfo`, exactly the seam `fire_hooks` already
-/// established. `chop_page`/`place_block_at` (satysfi-backend) do the pure
-/// per-page geometry work; this loop owns the `pageno` state and stops once
-/// the body vboxes are exhausted.
+/// 1): pops its 4 args and hands off to [`page_break_core`], the shared
+/// single-column per-page loop `page-break-multicolumn` (STAND-IN) falls
+/// back to as well.
 fn prim_page_break(interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
     let bb = as_block_boxes(args.pop().unwrap())?;
     let pagepartsf = args.pop().unwrap();
     let pagecontf = args.pop().unwrap();
     let paper = as_page(args.pop().unwrap())?;
+    page_break_core(interp, paper, pagecontf, pagepartsf, bb)
+}
+
+/// `page-break-multicolumn : page -> length list -> (unit -> block-boxes)
+/// -> (unit -> block-boxes) -> (pbinfo -> page-content-scheme) -> (pbinfo
+/// -> page-parts) -> block-boxes -> document` (vminst.ml:1065
+/// `BackendPageBreakingMultiColumn`) — STAND-IN (docs/plans/document-page-
+/// model.md has no multi-column subsystem): `origin_shifts` (one shift per
+/// extra column), `columnhookf`, and `columnendhookf` are popped — so the
+/// arity/typing stays faithful to v0.0.6 and `stdjareport.satyh` type-checks
+/// — and then DISCARDED, never invoked. This falls straight through to the
+/// same single-column [`page_break_core`] the real 4-arg `page-break` uses,
+/// i.e. every "column" renders as one column on one page width.
+/// `stdjareport.satyh`'s `columnhookf`/`columnendhookf` (which fire
+/// `FootnoteScheme.start-page`/`display-message`/mutate
+/// `does-page-breaking-reach-last`) simply never run. Good enough for
+/// `stdjareport.satyh` to load, type-check, and evaluate; real multi-column
+/// pagination (independent per-column height accounting, re-invoking the
+/// hooks between columns) is a roadmap item, not this stand-in.
+fn prim_page_break_multicolumn(
+    interp: &mut Interp,
+    mut args: Vec<Value>,
+) -> Result<Value, EvalError> {
+    let bb = as_block_boxes(args.pop().unwrap())?;
+    let pagepartsf = args.pop().unwrap();
+    let pagecontf = args.pop().unwrap();
+    let _columnendhookf = args.pop().unwrap();
+    let _columnhookf = args.pop().unwrap();
+    let _origin_shifts = as_list(args.pop().unwrap())?
+        .into_iter()
+        .map(as_length)
+        .collect::<Result<Vec<_>, _>>()?;
+    let paper = as_page(args.pop().unwrap())?;
+    page_break_core(interp, paper, pagecontf, pagepartsf, bb)
+}
+
+/// The shared single-column per-page loop backing both `page-break` and the
+/// `page-break-multicolumn` stand-in — the lang-side loop that owns the
+/// `pageno` state and is the one place that legally holds `&mut Interp` to
+/// `interp.apply` the two scheme closures once per page with that page's
+/// fresh `pbinfo`, exactly the seam `fire_hooks` already established.
+/// `chop_page`/`place_block_at` (satysfi-backend) do the pure per-page
+/// geometry work; this loop just stops once the body vboxes are exhausted.
+fn page_break_core(
+    interp: &mut Interp,
+    paper: PaperSize,
+    pagecontf: Value,
+    pagepartsf: Value,
+    bb: Vec<VertBox>,
+) -> Result<Value, EvalError> {
     let (paper_w, paper_h) = paper.dims();
 
     let mut remaining = bb;
@@ -2247,6 +2315,22 @@ fn prim_hook_page_break(interp: &mut Interp, mut args: Vec<Value>) -> Result<Val
     Ok(Value::InlineBoxes(vec![HorzBox::Pure(
         PureHorzBox::HookPageBreak { id },
     )]))
+}
+
+/// `hook-page-break-block : (page-break-info -> point -> unit) ->
+/// block-boxes` (vminst.ml:632 `BackendHookPageBreakBlock`) — the
+/// block-level analog of `prim_hook_page_break` above, FAITHFUL: same
+/// `interp.hooks` push, same opaque `HookId`, but wrapped in a
+/// `VertBox::HookPageBreak` marker instead of an inline box. `chop_page`/
+/// `place_block_at` (satysfi-backend) place it as a zero-height
+/// `PlacedLine` carrying the SAME `PureHorzBox::HookPageBreak` wrapper the
+/// inline primitive uses, so `fire_hooks` (lib.rs) fires it through the
+/// exact same scan with no changes of its own.
+fn prim_hook_page_break_block(interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+    let closure = args.pop().unwrap();
+    let id = HookId(interp.hooks.len());
+    interp.hooks.push(closure);
+    Ok(Value::BlockBoxes(vec![VertBox::HookPageBreak(id)]))
 }
 
 /// `register-cross-reference : string -> string -> unit` (vminstdef.yaml:1793).
@@ -3330,7 +3414,8 @@ fn indent_left(block: Vec<VertBox>, pad_l: Length) -> Vec<VertBox> {
                 leading,
                 contents: contents.into_iter().map(|(x, bx)| (x + pad_l, bx)).collect(),
             },
-            skip @ VertBox::Skip(_) => skip,
+            // `Skip`/`ClearPage`/`HookPageBreak` carry no `x` offsets to shift.
+            other => other,
         })
         .collect()
 }
@@ -3395,6 +3480,108 @@ fn prim_embed_block_top(interp: &mut Interp, mut args: Vec<Value>) -> Result<Val
             block,
         },
     )]))
+}
+
+/// `embed-block-bottom : context -> length -> (context -> block-boxes) ->
+/// inline-boxes` (vminst.ml:1185) — the `embed-block-top` sibling upstream
+/// distinguishes only by which end of the solidified block its baseline
+/// aligns to (`adjust_to_first_line` vs. `adjust_to_last_line`); since
+/// `prim_embed_block_top` above is already a STAND-IN that skips that
+/// distinction (both ends fold into one `measure_block` sum), this is the
+/// exact same construction — kept as its own function/registration entry
+/// only to keep the name and arity faithful to v0.0.6, not because the
+/// bodies differ.
+fn prim_embed_block_bottom(interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+    let k = args.pop().unwrap();
+    let wid = as_length(args.pop().unwrap())?;
+    let ctx = as_context(args.pop().unwrap())?;
+    let inner_ctx = Context {
+        paragraph_width: wid,
+        ..ctx
+    };
+    let block = as_block_boxes(interp.apply(k, Value::Context(Box::new(inner_ctx)))?)?;
+    let (height, depth) = measure_block(&block);
+    Ok(Value::InlineBoxes(vec![HorzBox::Pure(
+        PureHorzBox::EmbeddedBlock {
+            width: wid,
+            height,
+            depth,
+            block,
+        },
+    )]))
+}
+
+/// `line-stack-bottom : inline-boxes list -> inline-boxes` (vminst.ml:1229,
+/// `evalUtil.ml`'s `make_line_stack`) — FAITHFUL: each `inline-boxes` in the
+/// list becomes exactly one line, fit (not broken) to the widest line's
+/// natural width via `fit_cell` (this port's `LineBreak.fit`, already used
+/// by the tabular grid solver — same "no `Context`, `natural_metrics`
+/// height/depth" fallback upstream's `make_line_stack` needs since it too
+/// has no context to lean on). Lines are stacked with zero extra margin
+/// (upstream's `VertParagraph`s all have `margin_top`/`margin_bottom =
+/// None`): each line's `leading` is set to the previous line's depth plus
+/// this line's height, so consecutive baselines sit exactly
+/// `prev_depth + this_height` apart (see `pagebreak.rs`'s
+/// `leading.max(height)` placement formula — this choice makes that `max`
+/// always resolve to our computed `leading`). Like `embed-block-top`, the
+/// upstream `-top`/`-bottom` split (`adjust_to_first_line` vs.
+/// `adjust_to_last_line`) collapses to one shape here; `line-stack-top`
+/// isn't registered because nothing in this sweep's target packages calls
+/// it, but it would be this same construction too.
+fn prim_line_stack_bottom(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+    let hblstlst = as_list(args.pop().unwrap())?
+        .into_iter()
+        .map(as_inline_boxes)
+        .collect::<Result<Vec<_>, _>>()?;
+    let wid = hblstlst
+        .iter()
+        .map(|hbs| natural_metrics(hbs).0)
+        .fold(Length::ZERO, |acc, w| if w > acc { w } else { acc });
+    let mut block = Vec::with_capacity(hblstlst.len());
+    let mut prev_depth = Length::ZERO;
+    for (idx, hbs) in hblstlst.into_iter().enumerate() {
+        let (contents, height, depth) = fit_cell(hbs, wid);
+        let leading = if idx == 0 {
+            height + depth
+        } else {
+            prev_depth + height
+        };
+        block.push(VertBox::Line {
+            height,
+            depth,
+            leading,
+            contents,
+        });
+        prev_depth = depth;
+    }
+    let (height, depth) = measure_block(&block);
+    Ok(Value::InlineBoxes(vec![HorzBox::Pure(
+        PureHorzBox::EmbeddedBlock {
+            width: wid,
+            height,
+            depth,
+            block,
+        },
+    )]))
+}
+
+/// `add-footnote : block-boxes -> inline-boxes` (vminst.ml:1130) —
+/// STAND-IN: upstream wraps `vblst` in a `PHGGFootnote` marker that the
+/// page-breaker later collects into a page-bottom float area (`handlePdf.ml`
+/// / `pageBreak.ml`'s footnote pass) — that accumulator doesn't exist on
+/// this port yet (`docs/plans/document-page-model.md`'s per-page loop has no
+/// float-collection step). Rather than half-build one seam of that
+/// machinery here, this is a documented no-op: the footnote block is
+/// dropped and an empty `inline-boxes` is returned, so
+/// `footnote-scheme.satyh`'s `main`/`main-no-number` typecheck and evaluate
+/// (the footnote reference number/mark inline content is unaffected — only
+/// the actual bottom-of-page footnote text is silently lost) instead of
+/// this primitive being missing outright. A later sweep that builds the
+/// float accumulator (`docs/plans/document-page-model.md`) is the right
+/// place to make this faithful.
+fn prim_add_footnote(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+    let _vblst = as_block_boxes(args.pop().unwrap())?;
+    Ok(Value::InlineBoxes(Vec::new()))
 }
 
 /// `set-font : script -> font -> context -> context` (vminst.ml:1463) —
@@ -3486,6 +3673,21 @@ fn prim_set_language(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value
     let ctx = as_context(args.pop().unwrap())?;
     let _langsys = args.pop().unwrap();
     let _script = args.pop().unwrap();
+    Ok(Value::Context(Box::new(ctx)))
+}
+
+/// `set-every-word-break : inline-boxes -> inline-boxes -> context -> context`
+/// (vminst.ml:3007 `PrimitiveSetEveryWordBreak`) — sets the inline-boxes
+/// inserted before/after every inter-word break (mdja.satyh uses it for a
+/// CJK word-break strut). STAND-IN: accepted and dropped (no per-context
+/// every-word-break state yet), same pattern as `prim_set_language` above.
+fn prim_set_every_word_break(
+    _interp: &mut Interp,
+    mut args: Vec<Value>,
+) -> Result<Value, EvalError> {
+    let ctx = as_context(args.pop().unwrap())?;
+    let _after = args.pop().unwrap();
+    let _before = args.pop().unwrap();
     Ok(Value::Context(Box::new(ctx)))
 }
 

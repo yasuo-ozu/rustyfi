@@ -57,6 +57,8 @@ fn lines_of(v: &[VertBox]) -> Vec<String> {
                 .collect::<Vec<_>>()
                 .join(" "),
             VertBox::Skip(_) => "<skip>".into(),
+            VertBox::ClearPage => "<clear-page>".into(),
+            VertBox::HookPageBreak(_) => "<hook>".into(),
         })
         .collect()
 }
@@ -567,7 +569,7 @@ fn graphics_box_contributes_height_and_depth_to_its_line() {
             assert_eq!(contents[0].0, Length::ZERO);
             assert_eq!(contents[0].1.natural_width(), Length::pt(20.0));
         }
-        VertBox::Skip(_) => panic!("expected a Line, got a Skip"),
+        _ => panic!("expected a Line, got something else"),
     }
 }
 
@@ -615,7 +617,7 @@ fn math_box_contributes_height_and_depth_to_its_line() {
             assert_eq!(contents[0].0, Length::ZERO);
             assert_eq!(contents[0].1.natural_width(), Length::pt(30.0));
         }
-        VertBox::Skip(_) => panic!("expected a Line, got a Skip"),
+        _ => panic!("expected a Line, got something else"),
     }
 }
 
@@ -655,6 +657,6 @@ fn hook_box_contributes_nothing_to_its_line_but_is_still_placed() {
             assert_eq!(contents[0].0, Length::ZERO);
             assert_eq!(contents[0].1, hook_box(0));
         }
-        VertBox::Skip(_) => panic!("expected a Line, got a Skip"),
+        _ => panic!("expected a Line, got something else"),
     }
 }

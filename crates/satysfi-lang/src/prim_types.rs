@@ -414,6 +414,26 @@ pub fn primitive_type(name: &str) -> Option<PolyType> {
             ],
             t_document(),
         )),
+        // `page-break-multicolumn : page -> length list -> (unit ->
+        // block-boxes) -> (unit -> block-boxes) -> (pbinfo ->
+        // page-content-scheme) -> (pbinfo -> page-parts) -> block-boxes ->
+        // document` (vminst.ml:1065 `BackendPageBreakingMultiColumn`:
+        // `~% (tPG @-> tL tLN @-> (tU @-> tBB) @-> (tU @-> tBB) @->
+        // tPAGECONTF @-> tPAGEPARTSF @-> tBB @-> tDOC)`) — typed faithfully
+        // so `stdjareport.satyh` type-checks; the body is a STAND-IN, see
+        // `primitives.rs`'s `prim_page_break_multicolumn` doc comment.
+        "page-break-multicolumn" => poly0(arrows(
+            vec![
+                t_page(),
+                list(t_length()),
+                arrow(t_unit(), t_block_boxes()),
+                arrow(t_unit(), t_block_boxes()),
+                arrow(t_pbinfo(), t_page_content_scheme()),
+                arrow(t_pbinfo(), t_page_parts()),
+                t_block_boxes(),
+            ],
+            t_document(),
+        )),
         // `document`, `+p`, and `\emph` used to have LOCAL signatures here
         // (milestone-1 natives); phase 4 deleted them along with their
         // `primitives.rs` bodies — see this module's doc comment. They are
@@ -601,6 +621,12 @@ pub fn primitive_type(name: &str) -> Option<PolyType> {
         // `inline-fil` above (a bare constant, STAND-IN body; see
         // `primitives.rs`'s `base_env` comment).
         "omit-skip-after" => poly0(t_inline_boxes()),
+        // `clear-page : block-boxes` (`primitives.cppo.ml:569`: `("clear-
+        // page", ~% tBB, ..)`) — same shape as `inline-fil`/`omit-skip-
+        // after` above: a bare constant (`base_env` binds it to
+        // `Value::BlockBoxes(vec![VertBox::ClearPage])`), FAITHFUL —
+        // `mitou-report.satyh`'s `document` unblocker.
+        "clear-page" => poly0(t_block_boxes()),
 
         // ---- frontend-completion.md §Slice 1.A: the ~18 pure primitives ----
         // (`|>` is excluded here on purpose — it is elaborated directly to
@@ -792,6 +818,15 @@ pub fn primitive_type(name: &str) -> Option<PolyType> {
         "hook-page-break" => poly0(arrow(
             arrows(vec![t_pbinfo(), t_point()], t_unit()),
             t_inline_boxes(),
+        )),
+        // vminst.ml:632 `BackendHookPageBreakBlock`:
+        // `~% ((tPBINFO @-> tPT @-> tU) @-> tBB)` — the block-level analog
+        // of `hook-page-break` above, FAITHFUL: see `primitives.rs`'s
+        // `prim_hook_page_break_block`. `stdjareport.satyh`'s `document`
+        // unblocker.
+        "hook-page-break-block" => poly0(arrow(
+            arrows(vec![t_pbinfo(), t_point()], t_unit()),
+            t_block_boxes(),
         )),
         // vminstdef.yaml:1793 `~% (tS @-> tS @-> tU)`.
         "register-cross-reference" => {
@@ -1035,6 +1070,22 @@ pub fn primitive_type(name: &str) -> Option<PolyType> {
             vec![t_context(), t_length(), arrow(t_context(), t_block_boxes())],
             t_inline_boxes(),
         )),
+        // vminst.ml:1185 `PrimitiveEmbeddedVertBottom` (named
+        // `embed-block-bottom`): `~% (tCTX @-> tLN @-> (tCTX @-> tBB) @-> tIB)`.
+        // Same STAND-IN shape as `embed-block-top` above — see
+        // `primitives.rs`'s `prim_embed_block_bottom`.
+        "embed-block-bottom" => poly0(arrows(
+            vec![t_context(), t_length(), arrow(t_context(), t_block_boxes())],
+            t_inline_boxes(),
+        )),
+        // vminst.ml:1229 `PrimitiveLineStackBottom` (named
+        // `line-stack-bottom`): `~% ((tL tIB) @-> tIB)`. FAITHFUL — see
+        // `primitives.rs`'s `prim_line_stack_bottom`.
+        "line-stack-bottom" => poly0(arrow(list(t_inline_boxes()), t_inline_boxes())),
+        // vminst.ml:1130 `PrimitiveAddFootnote` (named `add-footnote`):
+        // `~% (tBB @-> tIB)`. STAND-IN (no page-bottom float accumulator
+        // yet) — see `primitives.rs`'s `prim_add_footnote`.
+        "add-footnote" => poly0(arrow(t_block_boxes(), t_inline_boxes())),
         // vminst.ml:1463 `PrimitiveSetFont`: `~% (tSCR @-> tFONT @-> tCTX @-> tCTX)`.
         // STAND-IN: single `FontKey` slot, script ignored — see
         // `primitives.rs`'s `prim_set_font` (real per-script wiring is
@@ -1082,6 +1133,12 @@ pub fn primitive_type(name: &str) -> Option<PolyType> {
         // `~% (tSCR @-> tLANG @-> tCTX @-> tCTX)`.
         "set-language" => poly0(arrows(
             vec![t_script(), t_language(), t_context()],
+            t_context(),
+        )),
+        // vminst.ml:3007 `PrimitiveSetEveryWordBreak`:
+        // `~% (tIB @-> tIB @-> tCTX @-> tCTX)`.
+        "set-every-word-break" => poly0(arrows(
+            vec![t_inline_boxes(), t_inline_boxes(), t_context()],
             t_context(),
         )),
         // vminstdef.yaml:2794 `BackendRegisterOutline`:

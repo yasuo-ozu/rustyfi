@@ -115,6 +115,7 @@ pub const PRIMITIVE_NAMES: &[&str] = &[
     "read-block",
     "line-break",
     "page-break",
+    "page-break-multicolumn",
     "+",
     "-",
     "*",
@@ -222,6 +223,7 @@ pub const PRIMITIVE_NAMES: &[&str] = &[
     "get-axis-height",
     // ---- docs/plans/hooks-annotations-crossref.md §Slice 1 ----
     "hook-page-break",
+    "hook-page-break-block",
     "register-cross-reference",
     "get-cross-reference",
     // ---- docs/plans/hooks-annotations-crossref.md §B/§D (annot.satyh) ----
@@ -276,8 +278,15 @@ pub const PRIMITIVE_NAMES: &[&str] = &[
     "set-dominant-wide-script",
     "set-dominant-narrow-script",
     "set-language",
+    "set-every-word-break",
     "register-outline",
     "extract-string",
+    // ---- proof.satyh/footnote-scheme.satyh unblockers (tail-prims sweep) ----
+    "embed-block-bottom",
+    "line-stack-bottom",
+    "add-footnote",
+    // ---- page-level prims blocking mitou-report/stdjareport ----
+    "clear-page",
 ];
 
 fn base_type_env() -> TypeEnv {
@@ -1756,10 +1765,23 @@ impl Checker {
 /// comment. A bare (unqualified) name has no `.` at all, so
 /// `rsplit('.').next()` degrades to the whole string, which is exactly what
 /// we want.
+///
+/// **Must also check the second character.** A genuine command name's
+/// sigil is always immediately followed by an identifier (`+p`, `\emph`,
+/// `lexer.rs`'s `name_len_at`-gated `+`/`\` branches never emit `VertCmd`/
+/// `HorzCmd` otherwise) — but a parenthesized-operator NAME (`cst.rs`'s
+/// `BindName`) can bind a string that merely happens to *start* with the
+/// same sigil character, e.g. `let (+++>) = ..` (`itemize.satyh`) or `let
+/// (+.) = ..`. Requiring an alphabetic second character mirrors the
+/// lexer's own split and keeps such an operator name an ordinary variable
+/// binding rather than a false-positive command.
 fn command_sigil(name: &str) -> Option<char> {
     let local = name.rsplit('.').next().unwrap_or(name);
-    match local.chars().next() {
-        Some(c @ ('\\' | '+')) => Some(c),
+    let mut chars = local.chars();
+    match chars.next() {
+        Some(c @ ('\\' | '+')) if chars.next().is_some_and(|c2| c2.is_ascii_alphabetic()) => {
+            Some(c)
+        }
         _ => None,
     }
 }

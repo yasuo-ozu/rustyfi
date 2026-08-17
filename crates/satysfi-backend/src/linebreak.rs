@@ -233,6 +233,9 @@ pub fn measure_block(block: &[VertBox]) -> (Length, Length) {
                 depth += *d;
             }
             VertBox::Skip(s) => height += *s,
+            // `clear-page`/`hook-page-break-block` markers contribute zero
+            // height, same as upstream's `ImVertFixedEmpty(_, Length.zero)`.
+            VertBox::ClearPage | VertBox::HookPageBreak(_) => {}
         }
     }
     (height, depth)

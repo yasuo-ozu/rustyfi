@@ -17,7 +17,7 @@ fn bin() -> PathBuf {
 
 fn out_pdf(tag: &str) -> PathBuf {
     std::env::temp_dir().join(format!(
-        "rustyfi-cli-envelopes-{tag}-{}-{}.pdf",
+        "rustyfi-envelopes-{tag}-{}-{}.pdf",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -71,7 +71,7 @@ fn envelopes_use_of_document_compiles_to_pdf() {
 #[test]
 fn deps_with_v006_errors_naming_both_axes() {
     let dir = std::env::temp_dir().join(format!(
-        "rustyfi-cli-envelopes-reject-{}-{}",
+        "rustyfi-envelopes-reject-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

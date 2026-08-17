@@ -43,9 +43,9 @@ pub enum CompileError {
     #[error(transparent)]
     Lower(#[from] v1::lower::LowerError),
     /// Cross-version import (X1, `docs/plans/design-cross-version-import.md`
-    /// §5): a `V0_0_6` dependency spliced into a `V0_1` program referenced
+    /// §5): a `V0_0` dependency spliced into a `V0_1` program referenced
     /// `name`, a builtin primitive/type that is version-forked (bound, or
-    /// shaped, differently between `V0_0_6` and `V0_1` —
+    /// shaped, differently between `V0_0` and `V0_1` —
     /// `primitives::forked_prim_names`/`typecheck::forked_type_names`). The
     /// merged program's single `base_env_with_version(V0_1)` can only bind
     /// ONE closure per name (§3.2's R1), so silently accepting this would
@@ -162,12 +162,12 @@ pub fn compile_document_cst_with_aux(
     eval_document_trials(
         &compiled,
         metrics,
-        rustyfi_syntax::RustyfiVersion::V0_0_6,
+        rustyfi_syntax::RustyfiVersion::V0_0,
         aux,
     )
 }
 
-/// The compile-once + fixpoint-trial tail shared by the `V0_0_6` and `V0_1`
+/// The compile-once + fixpoint-trial tail shared by the `V0_0` and `V0_1`
 /// entry points (`compile_document_cst_with_trials` above and
 /// `compile_document_v1_with_trials` below). Extracted verbatim from what
 /// used to be inline in `compile_document_cst_with_trials` — the only
@@ -334,17 +334,17 @@ pub fn compile_document_v1_with_aux(
         .expect("loader always yields at least the entry file");
     // Only ever called on the entry: under `compile_document_v1`, the entry
     // is ALWAYS `V0_1` (the loader's own contract — `load_legacy`'s Q4 rule
-    // only ever downgrades a DEPENDENCY to `V0_0_6`, never the entry; see
-    // `LoadedFile::version`'s doc comment). A `V0_0_6` dependency is instead
+    // only ever downgrades a DEPENDENCY to `V0_0`, never the entry; see
+    // `LoadedFile::version`'s doc comment). A `V0_0` dependency is instead
     // routed through the cross-version splice arm below (X1,
     // `docs/plans/design-cross-version-import.md` §5) — it never reaches
     // this helper.
     fn as_v01(f: &rustyfi_loader::LoadedFile) -> &rustyfi_syntax::cst_v1::FileV1 {
         match &f.cst {
             rustyfi_loader::LoadedCst::V0_1(cst) => cst,
-            rustyfi_loader::LoadedCst::V0_0_6(_) => unreachable!(
-                "as_v01 called on a V0_0_6-parsed file — the entry is always \
-                 V0_1 under compile_document_v1, and every V0_0_6 dependency \
+            rustyfi_loader::LoadedCst::V0_0(_) => unreachable!(
+                "as_v01 called on a V0_0-parsed file — the entry is always \
+                 V0_1 under compile_document_v1, and every V0_0 dependency \
                  is routed through the X1 cross-version splice arm instead"
             ),
         }
@@ -360,18 +360,18 @@ pub fn compile_document_v1_with_aux(
     // X1/X2a (design-cross-version-import.md §5, §"Slice X2 — per-group
     // primitive environment"): `deps` is now a MIXED-version list
     // (`LoadedFile::version`). A `V0_1` dep is lowered exactly as before; a
-    // `V0_0_6` dep contributes its `cst::File.prelude` bindings DIRECTLY
+    // `V0_0` dep contributes its `cst::File.prelude` bindings DIRECTLY
     // (they are already `cst::TopBinding`s — §1.1's "no syntactic bridge
     // needed"), positioned dependency-first (loader order, unchanged).
-    // `v006_indices` records which TOP-LEVEL `prelude` slots a V0_0_6 dep
+    // `v006_indices` records which TOP-LEVEL `prelude` slots a V0_0 dep
     // contributed, so `elaborate::elaborate_program_with_versions` (below)
-    // can wrap those bindings' RHS in `Ast::VersionScope(V0_0_6, _)`
+    // can wrap those bindings' RHS in `Ast::VersionScope(V0_0, _)`
     // (Option C, X2.2) — the mechanism that makes a version-forked
     // primitive referenced INSIDE such a dependency (`page-break`,
-    // `math-*`, …) resolve against `V0_0_6`'s `PrimDef`/type/runtime-version
+    // `math-*`, …) resolve against `V0_0`'s `PrimDef`/type/runtime-version
     // instead of the merged program's ambient `V0_1` (X1's R1). `dep_csts`
     // collects the V0_1 subset only — `check_program` (below) has no
-    // `cst_v1` vocabulary for a `V0_0_6` file (§2.5/R3, unchanged by X2a).
+    // `cst_v1` vocabulary for a `V0_0` file (§2.5/R3, unchanged by X2a).
     let mut surfaces = v1::surface::SurfaceEnv::default();
     let mut prelude = Vec::new();
     let mut dep_csts: Vec<&rustyfi_syntax::cst_v1::FileV1> = Vec::new();
@@ -383,15 +383,15 @@ pub fn compile_document_v1_with_aux(
                 prelude.extend(v1::lower::lower_file_v1_with_surfaces(cst, &surfaces)?);
                 dep_csts.push(cst);
             }
-            rustyfi_loader::LoadedCst::V0_0_6(cst) => {
+            rustyfi_loader::LoadedCst::V0_0(cst) => {
                 // X2a: the value half of X1's forked-name guard
                 // (`free.values` against `forked_prim_names`) is REMOVED —
                 // its whole reason to exist (a single `base_env_with_version
                 // (V0_1)` can only bind one closure per name) no longer
                 // holds once this dependency's bindings are version-scoped
-                // (below): inside `Ast::VersionScope(V0_0_6, _)` the
-                // `compile.rs` fold picks the `V0_0_6` `PrimDef`, and
-                // `eval.rs` runs it under `Interp::version = V0_0_6`. The
+                // (below): inside `Ast::VersionScope(V0_0, _)` the
+                // `compile.rs` fold picks the `V0_0` `PrimDef`, and
+                // `eval.rs` runs it under `Interp::version = V0_0`. The
                 // type half (`free.types` against `forked_type_names`) STAYS
                 // conservative — but X2b (design-cross-import-version.md's
                 // "Slice X2" §X2.3/X2.4) NARROWS it to the export boundary
@@ -455,7 +455,7 @@ pub fn compile_document_v1_with_aux(
                 // TEXTUAL `deco`/`deco-set` mention with no attached VALUE (a
                 // `type .. = deco` synonym) is *already* safe with zero
                 // further work. What still needs adapting is the VALUE: a
-                // `V0_0_6` `deco` closure returns `graphics list`
+                // `V0_0` `deco` closure returns `graphics list`
                 // (`prim_types::t_graphics_output`/`coerce_graphics_result`),
                 // but every `V0_1` call site that applies a `deco`
                 // (`primitives::apply_deco`, fired by `fire_inline_frame`/
@@ -499,7 +499,7 @@ pub fn compile_document_v1_with_aux(
                     });
                 }
                 // A module-scoped deco wrapper lives INSIDE the spliced
-                // dependency, hence inside its `VersionScope(V0_0_6, _)`,
+                // dependency, hence inside its `VersionScope(V0_0, _)`,
                 // where `unite-graphics` does not exist. Bind the V0_1
                 // primitive to a plain name FIRST, outside the range
                 // `v006_indices` is about to cover, so the scoped wrapper can
@@ -510,7 +510,7 @@ pub fn compile_document_v1_with_aux(
                 {
                     let probe = v1::xver_adapt::classify_deco_exports(
                         &cst.prelude,
-                        RustyfiVersion::V0_0_6,
+                        RustyfiVersion::V0_0,
                         RustyfiVersion::V0_1,
                     );
                     if probe
@@ -540,7 +540,7 @@ pub fn compile_document_v1_with_aux(
                     // regardless of which combination of the two is touched.)
                     let adapted = v1::xver_adapt::relabel_type_decls(
                         &cst.prelude,
-                        RustyfiVersion::V0_0_6,
+                        RustyfiVersion::V0_0,
                         RustyfiVersion::V0_1,
                     )
                     .map_err(|be| {
@@ -569,7 +569,7 @@ pub fn compile_document_v1_with_aux(
                 {
                     let exports = v1::xver_adapt::classify_deco_exports(
                         &cst.prelude,
-                        RustyfiVersion::V0_0_6,
+                        RustyfiVersion::V0_0,
                         RustyfiVersion::V0_1,
                     )
                     .map_err(|be| {
@@ -586,9 +586,9 @@ pub fn compile_document_v1_with_aux(
                     // Deliberately NOT added to `v006_indices`: this
                     // synthetic code is genuinely `V0_1`-authored (it calls
                     // `unite-graphics`, a `V0_1`-only primitive), not part of
-                    // the spliced `V0_0_6` dependency. (Compile-time folding
+                    // the spliced `V0_0` dependency. (Compile-time folding
                     // would in fact still resolve it correctly even from
-                    // inside a `VersionScope(V0_0_6, _)` — no `V0_0_6`
+                    // inside a `VersionScope(V0_0, _)` — no `V0_0`
                     // `PrimDef` shares this name to collide with, so the fold
                     // cursor misses and `compile.rs` falls back to the
                     // ordinary eval-time `env.lookup`, which always resolves
@@ -634,7 +634,7 @@ pub fn compile_document_v1_with_aux(
     // `compile_document_cst_with_trials` for both halves of that contract.
     let body = {
         let store = symbol::SymbolStore::new();
-        // A spliced `V0_0_6` dependency may name a `V0_0_6`-ONLY primitive
+        // A spliced `V0_0` dependency may name a `V0_0`-ONLY primitive
         // (`text-in-math`, `get-axis-height`, `math-color`, …). Elaboration
         // resolves names against ONE flat set built from the ambient version,
         // and it runs BEFORE `Ast::VersionScope` can mean anything — the scope
@@ -642,26 +642,26 @@ pub fn compile_document_v1_with_aux(
         // "unbound variable" at elaborate time, no matter how correctly the
         // later phases were version-scoped.
         //
-        // So when (and ONLY when) a `V0_0_6` dependency was actually spliced,
+        // So when (and ONLY when) a `V0_0` dependency was actually spliced,
         // widen the elaboration name set to the UNION of both versions'
         // primitives. This set answers one question — "is this a known global
         // rather than a free variable?" — and version-correct resolution still
-        // happens downstream: `compile.rs`'s fold picks the `V0_0_6` `PrimDef`
-        // inside a `VersionScope(V0_0_6, _)`, and `typecheck.rs` picks that
+        // happens downstream: `compile.rs`'s fold picks the `V0_0` `PrimDef`
+        // inside a `VersionScope(V0_0, _)`, and `typecheck.rs` picks that
         // version's scheme. A pure `V0_1` program takes the `else` branch and
         // is byte-identical, keeping its "unbound variable" diagnostics for
-        // `V0_0_6`-only names exactly as sharp as before.
+        // `V0_0`-only names exactly as sharp as before.
         let scope_names: Vec<String> = if v006_indices.is_empty() {
             env0.names()
         } else {
             let mut n = env0.names();
-            n.extend(primitives::base_env_with_version(RustyfiVersion::V0_0_6).names());
+            n.extend(primitives::base_env_with_version(RustyfiVersion::V0_0).names());
             n.sort();
             n.dedup();
             n
         };
         let scope = elaborate::Scope::new_with_version(&store, scope_names, RustyfiVersion::V0_1);
-        // X2a: `v006_indices` is empty whenever no `V0_0_6` dependency was
+        // X2a: `v006_indices` is empty whenever no `V0_0` dependency was
         // spliced above (every pre-X2a caller, and every mixed load with only
         // `V0_1` deps) — `elaborate_program_with_versions` then emits no
         // `Ast::VersionScope` node at all, so `program`/`compiled` are
@@ -676,14 +676,14 @@ pub fn compile_document_v1_with_aux(
     let compiled = if v006_indices.is_empty() {
         compile::compile_program(&body, &env0)
     } else {
-        let env0_v006 = primitives::base_env_with_version(RustyfiVersion::V0_0_6);
+        let env0_v006 = primitives::base_env_with_version(RustyfiVersion::V0_0);
         compile::compile_program_xver(&body, &env0, &env0_v006)
     };
     eval_document_trials(&compiled, metrics, RustyfiVersion::V0_1, aux)
 }
 
 /// Compile a loader-resolved SATySFi 0.0.6 program (`LoadOptions { version:
-/// V0_0_6, .. }`) whose entry (or one of its native 0.0.6 co-dependencies)
+/// V0_0, .. }`) whose entry (or one of its native 0.0.6 co-dependencies)
 /// `@require:`s at least one **foreign 0.1** package — Slice X4a
 /// (`docs/plans/design-cross-version-import.md` §"Slice X4 — reverse
 /// direction", specifically §X4.2's recommended "Option B" mechanism and
@@ -696,7 +696,7 @@ pub fn compile_document_v1_with_aux(
 /// 0.0.6-authored code under an ambient `V0_1` scope never rejects it), and
 /// it is the 0.0.6-authored code — the ENTRY's own top-level bindings and
 /// document tail, plus any native 0.0.6 co-dependency's bindings — that gets
-/// wrapped in [`ast::Ast::VersionScope`]`(V0_0_6, _)` (X2a's Option C,
+/// wrapped in [`ast::Ast::VersionScope`]`(V0_0, _)` (X2a's Option C,
 /// unchanged). A foreign 0.1 dependency splices in UNWRAPPED, exactly like a
 /// native 0.1 dependency does in `compile_document_v1_with_trials` — its own
 /// `:>`-sealed exports are enforced by [`v1::module_check::check_program`]
@@ -707,7 +707,7 @@ pub fn compile_document_v1_with_aux(
 /// **This is a wholly separate sibling of `compile_document_v1_with_trials`,
 /// not a modification of it** — every prior slice's non-regression
 /// discipline: a pure-0.0.6 load (no 0.1 dependency) never reaches this
-/// function at all (the CLI/loader only route here once a `V0_0_6`-rooted
+/// function at all (the CLI/loader only route here once a `V0_0`-rooted
 /// load's dependency graph actually contains a `LoadedCst::V0_1` node), so
 /// [`compile_document_cst_with_trials`] and every existing 0.0.6 corpus
 /// fixture stay byte-identical.
@@ -748,9 +748,9 @@ pub fn compile_document_v006_xver_with_aux(
         .find(|(_, f)| f.cst.is_document())
         .expect("loader validated exactly one document (the entry)");
     let entry_cst = match &entry.cst {
-        rustyfi_loader::LoadedCst::V0_0_6(f) => f,
+        rustyfi_loader::LoadedCst::V0_0(f) => f,
         rustyfi_loader::LoadedCst::V0_1(_) => unreachable!(
-            "compile_document_v006_xver is the V0_0_6-entry sibling of \
+            "compile_document_v006_xver is the V0_0-entry sibling of \
              compile_document_v1 — a V0_1 entry belongs there instead"
         ),
     };
@@ -770,7 +770,7 @@ pub fn compile_document_v006_xver_with_aux(
             // NO guard — same unrestricted-0.0.6-primitive-use posture as
             // `compile_document_cst_with_trials`'s own pure 0.0.6 path
             // (§X4.3 item 4).
-            rustyfi_loader::LoadedCst::V0_0_6(cst) => {
+            rustyfi_loader::LoadedCst::V0_0(cst) => {
                 let start = prelude.len();
                 prelude.extend(cst.prelude.iter().cloned());
                 v006_indices.extend(start..prelude.len());
@@ -791,7 +791,7 @@ pub fn compile_document_v006_xver_with_aux(
             // WHOLE merged program — from ANY source, forward OR reverse —
             // is read under V0_1 vocabulary, unconditionally. That is
             // EXACTLY why the FORWARD arm's `relabel_type_decls(dep.prelude,
-            // V0_0_6, V0_1)` (above) is necessary: a 0.0.6 dependency's OWN
+            // V0_0, V0_1)` (above) is necessary: a 0.0.6 dependency's OWN
             // "math" spelling must be REWRITTEN into "math-text" before it
             // reaches `program.type_decls`, or the hard-coded V0_1 lookup
             // would resolve it to an unrelated unbound nominal.
@@ -801,7 +801,7 @@ pub fn compile_document_v006_xver_with_aux(
             // is ALREADY exactly the ambient (hard-coded V0_1) vocabulary —
             // ZERO relabeling needed OR wanted. Renaming it to 0.0.6's
             // "math" spelling (as `v1::xver_adapt::relabel_or_reject_name`'s
-            // new `(V0_1, V0_0_6)` arm CAN do, and is exercised directly by
+            // new `(V0_1, V0_0)` arm CAN do, and is exercised directly by
             // that module's own unit tests) would be actively WRONG here: it
             // would corrupt text a hard-coded-V0_1 `Checker` needs to read
             // natively, turning a working type into an unbound-nominal
@@ -831,7 +831,7 @@ pub fn compile_document_v006_xver_with_aux(
             // INTENDED to also cross (the reverse mirror of X3b's
             // `unite-graphics` wrap, coercing the OPPOSITE way — a crossing
             // `V0_1` deco returns a single `graphics`; every REAL
-            // `V0_0_6`-authored consumer call site expects a `graphics
+            // `V0_0`-authored consumer call site expects a `graphics
             // list` back, so the wrap would need to be a SINGLETON LIST,
             // `[name p w h d]`). **This turned out to be UNSOUND to wire up
             // given this port's hard constraints, and is INTENTIONALLY left
@@ -916,7 +916,7 @@ pub fn compile_document_v006_xver_with_aux(
     }
 
     // Entry's OWN top-level lets: splice + wrap, same as a native 0.0.6 dep
-    // (§X4.3 item 4 — this is the "one new source of V0_0_6-tagged items"
+    // (§X4.3 item 4 — this is the "one new source of V0_0-tagged items"
     // X4a adds beyond X2.2: not just dependencies, but the entry itself).
     let entry_start = prelude.len();
     prelude.extend(entry_cst.prelude.iter().cloned());
@@ -937,15 +937,15 @@ pub fn compile_document_v006_xver_with_aux(
     let env0 = primitives::base_env_with_version(RustyfiVersion::V0_1);
     let store = symbol::SymbolStore::new();
     let scope = elaborate::Scope::new_with_version(&store, env0.names(), RustyfiVersion::V0_1);
-    // `wrap_body_version = Some(V0_0_6)`: the ENTRY's own document tail
+    // `wrap_body_version = Some(V0_0)`: the ENTRY's own document tail
     // (`file.body`, always 0.0.6-authored here) is wrapped in
-    // `Ast::VersionScope(V0_0_6, _)` too — the one new elaborate.rs
+    // `Ast::VersionScope(V0_0, _)` too — the one new elaborate.rs
     // capability X4a adds beyond X2.2 (§X4.3 item 3).
     let program = elaborate::elaborate_program_with_versions(
         &file,
         &scope,
         &v006_indices,
-        Some(RustyfiVersion::V0_0_6),
+        Some(RustyfiVersion::V0_0),
     )?;
     // Newly REACHABLE from a 0.0.6-rooted compile (previously had exactly
     // one caller) — unmodified: `dep_csts` here is the foreign 0.1
@@ -954,7 +954,7 @@ pub fn compile_document_v006_xver_with_aux(
     // it would be for a pure-0.1 consumer (§X4.1 point 2 — the Q2/sealing
     // resolution: no new enforcement machinery needed).
     v1::module_check::check_program(&dep_csts, &program)?;
-    let env0_v006 = primitives::base_env_with_version(RustyfiVersion::V0_0_6);
+    let env0_v006 = primitives::base_env_with_version(RustyfiVersion::V0_0);
     // `v006_indices` is NEVER empty here (the entry's own bindings are
     // always indexed into it above), so this always takes the `_xver` fold
     // path — matching `compile_document_v1_with_trials`'s own `if v006_
@@ -965,12 +965,12 @@ pub fn compile_document_v006_xver_with_aux(
     // trials (see `compile_document_cst_with_trials`).
     let body = ast::debrand(&program.body, &store);
     let compiled = compile::compile_program_xver(&body, &env0, &env0_v006);
-    eval_document_trials(&compiled, metrics, RustyfiVersion::V0_0_6, aux)
+    eval_document_trials(&compiled, metrics, RustyfiVersion::V0_0, aux)
 }
 
 // ============================================================================
 // X1 forked-name guard (design-cross-version-import.md §5): before splicing
-// a V0_0_6 dependency's `prelude` into a V0_1 program (above), walk it for
+// a V0_0 dependency's `prelude` into a V0_1 program (above), walk it for
 // the free (unqualified, unshadowed) primitive/type names it references and
 // hard-reject any that is version-forked. This is what keeps X1 *sound*
 // rather than silently wrong (§3.2's R1) — see `compile_document_v1_with_
@@ -1017,7 +1017,7 @@ pub fn compile_document_v006_xver_with_aux(
 // ordinary HM unification failure at any incompatible use site).
 // ============================================================================
 
-/// The free, unqualified global names a spliced V0_0_6 dependency's
+/// The free, unqualified global names a spliced V0_0 dependency's
 /// `prelude` references, split by namespace (values/commands vs. types)
 /// because they are checked against DIFFERENT forked-name sets. See
 /// `collect_free_globals`'s doc comment for the walk itself.
@@ -1097,7 +1097,7 @@ fn emit_type(scope: &XverScope, out: &mut FreeGlobals, name: &str) {
     }
 }
 
-/// Enumerate the *free, unqualified* global names a spliced V0_0_6
+/// Enumerate the *free, unqualified* global names a spliced V0_0
 /// dependency references — `TopBinding`/`ast::Expr`/`ast::Pattern`/
 /// `ast::TypeExpr`, each threading a binder scope stack so a locally-bound
 /// name shadows a primitive of the same name (per `XverScope`'s doc

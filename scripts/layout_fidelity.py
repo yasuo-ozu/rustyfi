@@ -210,7 +210,7 @@ def prereqs_ok(bin_path: Path) -> list[str]:
     if find_pdftotext() is None:
         missing.append("poppler `pdftotext` not on PATH")
     if not bin_path.exists():
-        missing.append(f"port binary not built at {bin_path} (run `cargo build -p rustyfi-cli`)")
+        missing.append(f"port binary not built at {bin_path} (run `cargo build -p rustyfi`)")
     if not CORPUS.exists():
         missing.append(f"{CORPUS} missing (the vendored corpus should be committed alongside this script)")
     if not (LIB_RUSTYFI / "dist" / "packages").exists():

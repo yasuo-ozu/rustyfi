@@ -67,7 +67,7 @@ fn tmpdir(tag: &str) -> PathBuf {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
     let p = std::env::temp_dir().join(format!(
-        "rustyfi-cli-format-html-reflow-{tag}-{}-{}-{}",
+        "rustyfi-format-html-reflow-{tag}-{}-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

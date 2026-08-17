@@ -48,13 +48,13 @@ impl FontMetrics for Mono {
 }
 
 /// Merge a loader-resolved 0.0.6 program's preludes into one synthetic
-/// `cst::File`, exactly like `rustyfi-cli`'s private `merge_program`
+/// `cst::File`, exactly like `rustyfi`'s private `merge_program`
 /// (`main.rs`) — reproduced locally the same way `stdlib_tier0.rs` already
-/// does (no `rustyfi-cli` library target to import it from).
+/// does (no `rustyfi` library target to import it from).
 fn merge_program_006(program: LoadedProgram) -> rustyfi_syntax::cst::File {
     fn as_v006(cst: LoadedCst) -> rustyfi_syntax::cst::File {
         match cst {
-            LoadedCst::V0_0_6(f) => f,
+            LoadedCst::V0_0(f) => f,
             LoadedCst::V0_1(_) => unreachable!("this test's 0.0.6 merge path only"),
         }
     }
@@ -76,12 +76,12 @@ fn merge_program_006(program: LoadedProgram) -> rustyfi_syntax::cst::File {
 }
 
 #[test]
-fn v01_document_compiles_and_matches_0_0_6_twin_geometry() {
+fn v01_document_compiles_and_matches_0_0_twin_geometry() {
     // ---- the V0_1 path, gate-bypassed (LoadedFile/LoadedCst are public) ----
     let lib_src = std::fs::read_to_string(repo("lib-rustyfi/dist-v01/packages/v01-mini.satyh"))
         .expect("read v01-mini.satyh");
     let entry_src =
-        std::fs::read_to_string(repo("crates/rustyfi-cli/tests/fixtures/v01-minimal.saty"))
+        std::fs::read_to_string(repo("crates/rustyfi/tests/fixtures/v01-minimal.saty"))
             .expect("read v01-minimal.saty");
     let files = vec![
         LoadedFile {
@@ -94,7 +94,7 @@ fn v01_document_compiles_and_matches_0_0_6_twin_geometry() {
             version: RustyfiVersion::V0_1,
         },
         LoadedFile {
-            path: repo("crates/rustyfi-cli/tests/fixtures/v01-minimal.saty"),
+            path: repo("crates/rustyfi/tests/fixtures/v01-minimal.saty"),
             cst: LoadedCst::V0_1(
                 rustyfi_syntax::parse_file_v1(&entry_src)
                     .unwrap_or_else(|e| panic!("v01-minimal.saty: {e}")),
@@ -118,13 +118,13 @@ fn v01_document_compiles_and_matches_0_0_6_twin_geometry() {
     );
 
     // ---- the 0.0.6 twin, through the REAL loader (@require: stdja-mini) ----
-    let entry_006 = repo("crates/rustyfi-cli/tests/fixtures/v01-equiv-006.saty");
+    let entry_006 = repo("crates/rustyfi/tests/fixtures/v01-equiv-006.saty");
     let lib_root_006 = repo("lib-rustyfi");
     let program_006 = rustyfi_loader::load(
         &entry_006,
         &LoadOptions {
             lib_root: Some(lib_root_006),
-            version: RustyfiVersion::V0_0_6,
+            version: RustyfiVersion::V0_0,
             ..Default::default()
         },
     )

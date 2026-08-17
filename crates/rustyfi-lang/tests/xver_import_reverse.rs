@@ -1,24 +1,24 @@
 //! Slice X4a (`docs/plans/design-cross-version-import.md`'s "Slice X4 —
-//! reverse direction", specifically the X4a sub-slice): a `V0_0_6` document
+//! reverse direction", specifically the X4a sub-slice): a `V0_0` document
 //! `@require:`-ing a `V0_1` package end-to-end — the REVERSE of
 //! `xver_import.rs`'s whole direction.
 //!
 //! Driven through the REAL loader (`rustyfi_loader::load`, `LoadOptions {
-//! version: V0_0_6, .. }`) so the Q4-mirror per-file detection rule
+//! version: V0_0, .. }`) so the Q4-mirror per-file detection rule
 //! (`load_legacy`'s `require_v01_targets` worklist logic) and the new
 //! `resolve_require` `dist-v01/packages/` base are exercised for real, not
 //! bypassed, and through `rustyfi_lang::compile_document_v006_xver` (the new
-//! sibling entry point), so the entry's own `Ast::VersionScope(V0_0_6, _)`
+//! sibling entry point), so the entry's own `Ast::VersionScope(V0_0, _)`
 //! wrap (both `prelude` AND the document tail) and the ambient-`V0_1`
 //! `compile_program_xver`/`check_program` plumbing all run for real:
 //!
-//! - [`reverse_unsealed_v01_dep_renders`] (X4a headline): a `V0_0_6` entry
+//! - [`reverse_unsealed_v01_dep_renders`] (X4a headline): a `V0_0` entry
 //!   `@require:`ing the REAL vendored `v01-mini.satyh` (copied byte-for-byte
 //!   from `lib-rustyfi/dist-v01/packages/`), calling its `document`/`p`
 //!   members module-qualified, renders to a real page with real placed
 //!   content.
 //! - [`reverse_sealed_v01_dep_renders_and_enforces_hiding`] (X4a sealing
-//!   proof, resolves Q2): a `V0_0_6` entry `@require:`ing the REAL vendored
+//!   proof, resolves Q2): a `V0_0` entry `@require:`ing the REAL vendored
 //!   `v01-sealed.satyh`, calling `V01Sealed.make`/`get`/`\show` (allowed) —
 //!   renders — **and** a sibling negative case that instead pattern-matches
 //!   on the sealed `T` constructor directly is rejected by
@@ -27,14 +27,14 @@
 //!   new code on the enforcement side (`v1::module_check` is untouched).
 //! - [`reverse_guard_rejects_forked_export`] (X4a negative): a small inline
 //!   `V0_1` fixture exporting a `graphics`-typed value (a `type .. =
-//!   graphics` synonym) — `@require:`d by a `V0_0_6` entry — rejected with
+//!   graphics` synonym) — `@require:`d by a `V0_0` entry — rejected with
 //!   `CompileError::CrossVersionUnsupportedName { slice: "X4a", .. }`, not a
 //!   mis-render.
 //! - [`reverse_math_export_relabels_and_renders`] (X4a positive, the
 //!   re-derived whitelist): a small inline `V0_1` fixture exporting a
-//!   `math-text`-typed value — a `V0_0_6` entry consumes it where `math` is
+//!   `math-text`-typed value — a `V0_0` entry consumes it where `math` is
 //!   expected — renders, proving the reverse (coarsening) relabel
-//!   `v1::xver_adapt::relabel_or_reject_name`'s new `(V0_1, V0_0_6)` arm
+//!   `v1::xver_adapt::relabel_or_reject_name`'s new `(V0_1, V0_0)` arm
 //!   implements.
 //!
 //! Slice X4b (`docs/plans/design-cross-version-import.md` §X4.5, extended
@@ -57,7 +57,7 @@
 //!
 //! - [`reverse_deco_export_via_sig_rejected`] (X4b): a small inline `V0_1`
 //!   fixture — a module `V01DecoExport :> sig val my-deco : deco end =
-//!   struct .. end` — `@require:`d by a `V0_0_6` entry, is rejected with
+//!   struct .. end` — `@require:`d by a `V0_0` entry, is rejected with
 //!   `CompileError::CrossVersionUnsupportedName { slice: "X4b", .. }` at
 //!   compile time, never reaching eval (whether or not the entry even
 //!   references `my-deco`).
@@ -158,7 +158,7 @@ impl FontMetrics for Mono {
 fn load_v006(dir: &TempDir, entry_rel: &str) -> Vec<rustyfi_loader::LoadedFile> {
     let opts = LoadOptions {
         lib_root: Some(dir.path().to_path_buf()),
-        version: RustyfiVersion::V0_0_6,
+        version: RustyfiVersion::V0_0,
         ..Default::default()
     };
     let program = rustyfi_loader::load(&dir.path().join(entry_rel), &opts)
@@ -195,7 +195,7 @@ V01Mini.document (|title = `v01-reverse`|) '<
     let (doc, _trials) = rustyfi_lang::compile_document_v006_xver_with_trials(&files, &mono)
         .unwrap_or_else(|e| {
             panic!(
-                "a V0_0_6 entry requiring a version-neutral (unsealed) V0_1 package \
+                "a V0_0 entry requiring a version-neutral (unsealed) V0_1 package \
                  should compile+render under X4a: {e}"
             )
         });
@@ -240,7 +240,7 @@ V01Mini.document (|title = `v01-sealed-reverse`|) '<
     let (doc, _trials) = rustyfi_lang::compile_document_v006_xver_with_trials(&files, &mono)
         .unwrap_or_else(|e| {
             panic!(
-                "a V0_0_6 entry using a SEALED V0_1 package's public interface \
+                "a V0_0 entry using a SEALED V0_1 package's public interface \
                  (make/get/\\show) should compile+render under X4a: {e}"
             )
         });
@@ -252,7 +252,7 @@ V01Mini.document (|title = `v01-sealed-reverse`|) '<
     );
 }
 
-/// The negative sibling: a `V0_0_6`-authored entry that instead pattern-
+/// The negative sibling: a `V0_0`-authored entry that instead pattern-
 /// matches on `V01Sealed`'s hidden `T` constructor directly must still be
 /// rejected — `v1::module_check::check_program`'s hidden-constructor
 /// enforcement, driven purely from `V01Sealed`'s OWN `cst_v1` seal (`type t

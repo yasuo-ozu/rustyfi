@@ -29,13 +29,13 @@ enum Mode {
 /// i.e. program mode at the top). This is the crate's original, frozen entry
 /// point: unchanged behavior, now a thin wrapper over [`lex_with_version`].
 pub fn lex(src: &str) -> Result<Vec<Atom>, LexError> {
-    lex_with_version(src, RustyfiVersion::V0_0_6)
+    lex_with_version(src, RustyfiVersion::V0_0)
 }
 
-/// Lex a whole source file under an explicit target version. `V0_0_6`
+/// Lex a whole source file under an explicit target version. `V0_0`
 /// through this entry point is byte-for-byte [`lex`]'s own behavior — pinned
 /// by a differential test that lexes every vendored 0.0.6 package and
-/// fixture through both `lex(src)` and `lex_with_version(src, V0_0_6)`,
+/// fixture through both `lex(src)` and `lex_with_version(src, V0_0)`,
 /// asserting identical token streams
 /// (`crates/rustyfi-syntax/tests/lex_with_version_differential.rs`).
 pub fn lex_with_version(src: &str, version: RustyfiVersion) -> Result<Vec<Atom>, LexError> {
@@ -127,7 +127,7 @@ impl Lexer {
     /// headers need them as keywords, but 0.0.6 source may use any of them
     /// as an ordinary identifier (there is no 0.0.6 grammar that would want
     /// them as keywords), so gating keeps `lex`/`lex_with_version(_,
-    /// V0_0_6)` byte-identical to before this change.
+    /// V0_0)` byte-identical to before this change.
     fn keyword(&self, s: &str) -> Option<Token> {
         use Token::*;
         if let Some(tok) = match s {
@@ -743,7 +743,7 @@ impl Lexer {
                         // `::` so `::>` still lexes `Cons` + `BinopGt`, the
                         // same longest/first-match ocamllex resolves
                         // (lexer_v1.mll:280 vs :288 — `::` wins on `::>`).
-                        // V0_1-gated: under V0_0_6, `:>` stays `Colon` +
+                        // V0_1-gated: under V0_0, `:>` stays `Colon` +
                         // `BinopGt(">")` — the differential test pins it.
                         self.bump();
                         self.emit(start, Token::Coerce);
@@ -771,7 +771,7 @@ impl Lexer {
                     // `OptionalType` + a paren group). So under V0_1 emit only
                     // `OptionalType`; `?:`/`?*`/`?->` then lex as `?` + `:`/`*`
                     // /`->`, a downstream parse error, matching upstream.
-                    // Under V0_0_6 this stays byte-identical (pinned by
+                    // Under V0_0 this stays byte-identical (pinned by
                     // `lex_with_version_differential.rs`).
                     //
                     // optional-arg-rows increment 2: under V0_1, `?` directly
@@ -1204,7 +1204,7 @@ impl Lexer {
                     // `(…)` group lexes via the `(` arm on the next scan,
                     // exactly like program-mode application (`lex_program`'s
                     // `?` arm). The fused `?:`/`?*` sigils no longer exist
-                    // under V0_1. Under V0_0_6 this stays byte-identical
+                    // under V0_1. Under V0_0 this stays byte-identical
                     // (`?:`/`?*` handled, a bare `?` is still an error) —
                     // pinned by `lex_with_version_differential.rs`.
                     if self.version == RustyfiVersion::V0_1 {

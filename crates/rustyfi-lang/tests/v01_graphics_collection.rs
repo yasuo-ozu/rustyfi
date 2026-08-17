@@ -118,7 +118,7 @@ fn as_bbox_option(v: Value) -> Option<((f64, f64), (f64, f64))> {
 
 // ============================================================================
 // 1. `unite-graphics` (A12) / `clip-graphics-by-path` (A13) construct the
-//    new `GraphicsElem` container variants, and are unbound under V0_0_6.
+//    new `GraphicsElem` container variants, and are unbound under V0_0.
 // ============================================================================
 
 #[test]
@@ -154,16 +154,16 @@ fn unite_and_clip_construct() {
         other => panic!("expected a Clip, got {other:?}"),
     }
 
-    // Both unbound under V0_0_6 — env AND type mirror.
+    // Both unbound under V0_0 — env AND type mirror.
     let env006 = primitives::base_env();
     for name in ["unite-graphics", "clip-graphics-by-path"] {
         assert!(
             env006.lookup(name).is_none(),
-            "{name} must be unbound under V0_0_6"
+            "{name} must be unbound under V0_0"
         );
         assert!(
             prim_types::primitive_type(name).is_none(),
-            "{name} must have no type under V0_0_6"
+            "{name} must have no type under V0_0"
         );
         assert!(
             prim_types::primitive_type_with_version(name, RustyfiVersion::V0_1).is_some(),
@@ -225,7 +225,7 @@ fn bbox_option_semantics() {
     let bbox = call(&mut interp, &env, "get-graphics-bbox", vec![clip]);
     assert_eq!(as_bbox_option(bbox), Some(((100.0, 100.0), (150.0, 150.0))));
 
-    // V0_0_6 `get-graphics-bbox` stays un-optioned (existing production
+    // V0_0 `get-graphics-bbox` stays un-optioned (existing production
     // callers `stdlib_tier0.rs`/`math_fraction_radical.rs` keep passing).
     let mut interp006 = Interp::new(&mono);
     let env006 = primitives::base_env();
@@ -362,7 +362,7 @@ fn inline_graphics_callback_result_coerces_per_version() {
     .unwrap_err();
     assert!(err.msg.contains("graphics"), "got: {}", err.msg);
 
-    // V0_0_6 twin: the callback returns a LIST — unchanged existing shape.
+    // V0_0 twin: the callback returns a LIST — unchanged existing shape.
     let mut interp006 = Interp::new(&mono);
     let env006 = primitives::base_env();
     let cb006 = closure1(&mut interp006, &env006, Ast::List(vec![fill_ast()]));
@@ -418,7 +418,7 @@ fn tabular_rules_callback_result_coerces_per_version() {
         other => panic!("expected inline-boxes, got {other:?}"),
     }
 
-    // V0_0_6 twin: rules callback returns a LIST — unchanged.
+    // V0_0 twin: rules callback returns a LIST — unchanged.
     let mut interp006 = Interp::new(&mono);
     let env006 = primitives::base_env();
     let rulesf006 = closure2(&mut interp006, &env006, Ast::List(vec![fill_ast()]));
@@ -522,7 +522,7 @@ fn deco_callback_result_coerces_per_version_when_fired() {
         GraphicsElem::Fill(Color::Gray(_), _)
     ));
 
-    // V0_0_6 twin: the deco closure returns a LIST — unchanged.
+    // V0_0 twin: the deco closure returns a LIST — unchanged.
     let mut interp006 = Interp::new(&mono);
     let env006 = primitives::base_env();
     let deco006 = interp006
@@ -531,7 +531,7 @@ fn deco_callback_result_coerces_per_version_when_fired() {
     interp006.decos.push(DecoEntry::Inline { deco: deco006 });
     let doc006 = doc_with_pages(vec![frame_page()]);
     rustyfi_lang::fire_hooks(&mut interp006, &doc006)
-        .expect("fire_hooks must succeed under V0_0_6");
+        .expect("fire_hooks must succeed under V0_0");
     assert_eq!(interp006.page_graphics[0].len(), 1);
     assert!(matches!(
         interp006.page_graphics[0][0],

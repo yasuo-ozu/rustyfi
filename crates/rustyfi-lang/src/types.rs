@@ -53,7 +53,7 @@ pub enum BaseType {
     /// `math-boxes` (V0_1 only; `dev-0-1-0` `MathBoxesType`) — the
     /// evaluated math tree, bridged from `MathText` by the V0_1 primitive
     /// `read-math`. 0.0.6 has no name for this type (its `math` conflates
-    /// both halves) and no value ever types as this under V0_0_6.
+    /// both halves) and no value ever types as this under V0_0.
     MathBoxes,
     /// `image` (v0.0.6: `ImageType`) — a decoded raster image resource
     /// (`load-image`'s result; `docs/plans/math-images.md` §Slice 1).
@@ -405,7 +405,7 @@ pub enum MonoType {
 /// One command argument type: `ty` for a mandatory argument, or `ty?` for
 /// an optional one (v0.0.6: `MandatoryArgumentType` / `OptionalArgumentType`,
 /// types.cppo.ml:326-328). `optional`/`opt_labels` are version-discriminated
-/// by construction (optional-arg-rows increment 3a): under `V0_0_6`
+/// by construction (optional-arg-rows increment 3a): under `V0_0`
 /// (positional model) `optional` marks a whole-slot `ty?` optional and
 /// `opt_labels` is always empty; under `V0_1` (labeled model, upstream
 /// `CommandArgType of typ LabelMap.t * typ`, `types.cppo.ml:214`) `optional`

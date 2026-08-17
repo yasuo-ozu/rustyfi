@@ -347,7 +347,7 @@ fn page_break_multicolumn_with_an_empty_shift_list_is_one_column_and_evaluates()
 /// resolved type schemes must differ.
 #[test]
 fn page_break_retypes_per_version() {
-    let v006 = primitive_type_with_version("page-break", RustyfiVersion::V0_0_6)
+    let v006 = primitive_type_with_version("page-break", RustyfiVersion::V0_0)
         .expect("page-break must have a v0.0.6 type");
     match v006.body() {
         MonoType::Func(_row, dom, _cod) => match dom.as_ref() {
@@ -398,7 +398,7 @@ fn page_break_retypes_per_version() {
 /// declaration to be entirely missing from `builtin_variants_with_version`.
 #[test]
 fn page_adt_gone_under_v0_1() {
-    let v006_variants = builtin_variants_with_version(RustyfiVersion::V0_0_6);
+    let v006_variants = builtin_variants_with_version(RustyfiVersion::V0_0);
     assert!(
         v006_variants.iter().any(|d| d.name == "page"),
         "v0.0.6 must still register the `page` ADT"

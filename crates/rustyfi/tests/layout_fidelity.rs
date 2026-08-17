@@ -25,13 +25,13 @@
 //! the vendored corpus; the script itself self-skips (exit 0) when a prerequisite is
 //! absent, so this never produces a false failure in a bare checkout.
 //!
-//! Run with:  cargo test -p rustyfi-cli --test layout_fidelity -- --ignored --nocapture
+//! Run with:  cargo test -p rustyfi --test layout_fidelity -- --ignored --nocapture
 
 use std::path::PathBuf;
 use std::process::Command;
 
 fn repo_root() -> PathBuf {
-    // crates/rustyfi-cli -> repo root
+    // crates/rustyfi -> repo root
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
         .canonicalize()

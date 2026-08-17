@@ -123,23 +123,23 @@ fn known_gaps() -> Vec<KnownGap> {
     vec![
         // ---- group 1: not standalone entry documents ---------------------
         KnownGap {
-            path: "crates/rustyfi-cli/tests/fixtures/envelopes/doc.saty",
-            src: include_str!("../../rustyfi-cli/tests/fixtures/envelopes/doc.saty"),
+            path: "crates/rustyfi/tests/fixtures/envelopes/doc.saty",
+            src: include_str!("../../rustyfi/tests/fixtures/envelopes/doc.saty"),
             why: Why::NotAnEntryDocument,
         },
         KnownGap {
-            path: "crates/rustyfi-cli/tests/fixtures/envelopes/v01-mini.satyh",
-            src: include_str!("../../rustyfi-cli/tests/fixtures/envelopes/v01-mini.satyh"),
+            path: "crates/rustyfi/tests/fixtures/envelopes/v01-mini.satyh",
+            src: include_str!("../../rustyfi/tests/fixtures/envelopes/v01-mini.satyh"),
             why: Why::NotAnEntryDocument,
         },
         KnownGap {
-            path: "crates/rustyfi-cli/tests/fixtures/multifile/helpers.satyh",
-            src: include_str!("../../rustyfi-cli/tests/fixtures/multifile/helpers.satyh"),
+            path: "crates/rustyfi/tests/fixtures/multifile/helpers.satyh",
+            src: include_str!("../../rustyfi/tests/fixtures/multifile/helpers.satyh"),
             why: Why::NotAnEntryDocument,
         },
         KnownGap {
-            path: "crates/rustyfi-cli/tests/fixtures/xver-capstone-helper.satyh",
-            src: include_str!("../../rustyfi-cli/tests/fixtures/xver-capstone-helper.satyh"),
+            path: "crates/rustyfi/tests/fixtures/xver-capstone-helper.satyh",
+            src: include_str!("../../rustyfi/tests/fixtures/xver-capstone-helper.satyh"),
             why: Why::NotAnEntryDocument,
         },
         // ---- group 2: mixed-version programs the golden harness can't hold ----
@@ -150,8 +150,8 @@ fn known_gaps() -> Vec<KnownGap> {
             // gets the 0.1 `List` (which has `fold`). That is correct
             // behaviour, and the capstone proves what it is meant to prove in
             // `xver_capstone.rs`, which loads it against a 0.0.6-ONLY root.
-            path: "crates/rustyfi-cli/tests/fixtures/xver-capstone.saty",
-            src: include_str!("../../rustyfi-cli/tests/fixtures/xver-capstone.saty"),
+            path: "crates/rustyfi/tests/fixtures/xver-capstone.saty",
+            src: include_str!("../../rustyfi/tests/fixtures/xver-capstone.saty"),
             why: Why::HarnessIsSingleVersion,
         },
     ]
@@ -191,7 +191,7 @@ impl Drop for TempEntry {
 
 fn as_v006(cst: &LoadedCst) -> &rustyfi_syntax::cst::File {
     match cst {
-        LoadedCst::V0_0_6(f) => f,
+        LoadedCst::V0_0(f) => f,
         LoadedCst::V0_1(_) => unreachable!("as_v006 on a V0_1 file"),
     }
 }
@@ -253,7 +253,7 @@ fn typecheck_source(entry: &Path, version: RustyfiVersion) -> Result<(), String>
     };
     let program = rustyfi_loader::load(entry, &opts).map_err(|e| format!("load: {e}"))?;
     match version {
-        RustyfiVersion::V0_0_6 => {
+        RustyfiVersion::V0_0 => {
             let file = merge_v006(program);
             let env = primitives::base_env();
             let store = rustyfi_lang::symbol::SymbolStore::new();
@@ -375,7 +375,7 @@ fn check_known_gaps() {
         // Checking both halves is what makes a mislabelled case fail. Asserting
         // only "it errors somehow" would not: every one of these errors under
         // some version, so a swapped label would sail through.
-        let as_006 = typecheck_source(&entry, RustyfiVersion::V0_0_6);
+        let as_006 = typecheck_source(&entry, RustyfiVersion::V0_0);
         let as_01 = typecheck_source(&entry, RustyfiVersion::V0_1);
 
         // Both groups error under BOTH versions, so "it errors" proves nothing.

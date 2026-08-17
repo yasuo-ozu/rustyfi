@@ -73,7 +73,7 @@ pub enum Value {
     /// tree `read-math` produces, wrapping the SAME `Math` atom tree
     /// `Value::Math` uses so every layout/primitive helper is shared
     /// unchanged (math-split spec §1.2). Distinct from `Value::Math`: no
-    /// V0_0_6 primitive ever produces or consumes this variant, and no V0_1
+    /// V0_0 primitive ever produces or consumes this variant, and no V0_1
     /// primitive ever produces `Value::Math` — the two are kept apart so a
     /// V0_1 program can't silently pass a `math-text` where `math-boxes` is
     /// required (`as_math_boxes` is strict).
@@ -238,7 +238,7 @@ pub enum Math {
     /// V0_1 only: `read-math`'s captured reading context (math-split spec
     /// §1.2/§3.3) — the port's coarse-grained stand-in for upstream's
     /// per-node `context` fields (`types.cppo.ml:1051-1110`). Constructed
-    /// ONLY by the V0_1 primitive `read-math`; no V0_0_6 path ever builds
+    /// ONLY by the V0_1 primitive `read-math`; no V0_0 path ever builds
     /// or matches this variant. Its layout arm (`primitives.rs`'s
     /// `layout_math_list`) lays `inner` out with ambient context = `*ctx`
     /// and size = `ctx.font_size` as an ABSOLUTE override — a `WithContext`

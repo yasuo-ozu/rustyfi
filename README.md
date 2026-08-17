@@ -18,7 +18,7 @@ loading** — `@import:`/`@require:` resolve, dedupe, and topologically order
 libraries via the `rustyfi-loader` crate (safegraph-backed):
 
 ```console
-$ cargo run -p rustyfi-cli -- crates/rustyfi-cli/tests/fixtures/minimal.saty -o target/out.pdf
+$ cargo run -p rustyfi -- crates/rustyfi/tests/fixtures/minimal.saty -o target/out.pdf
 ```
 
 What works:
@@ -46,7 +46,7 @@ What works:
   CID/Type0 embedding with ToUnicode (`TtfFontStore`/`render_pdf_ttf`) for
   real fonts (CLI selection pending).
 - **Chimera CLI**: one multicall binary dispatching on argv[0] —
-  `rustyfi` (compile + subcommands), `rustyfi` (compile), and
+  `rustyfi` (compile + the subcommand trees) and
   `satyrographos` (package manager, plan phases 1–4 all implemented:
   `install`/`uninstall`/`list`/`status`/`search`/`update`; local paths,
   tar.gz archives, upstream `Satyristes` packages via a built-in
@@ -54,7 +54,7 @@ What works:
   reconcile-driven installs, and sha256-verified remote registries —
   git or plain-dir indexes, HTTP behind an off-by-default feature;
   see docs/chimera-satyrographos-plan.md). `--target-version` selects
-  the SATySFi language version (0.0.6 implemented; 0.1 recognized and
+  the SATySFi language version (0.0 implemented; 0.1 recognized and
   rejected honestly).
 
 ## Manual
@@ -87,7 +87,7 @@ crates/
   rustyfi-loader/    @require/@import resolution, dependency graph, load order
   rustyfi-pdf/       pdf-writer backend + base-14 metrics
   rustyfi-satyrographos/  package manager: manifest/receipts/atomic install
-  rustyfi-cli/       chimera binary: rustyfi / rustyfi / satyrographos
+  rustyfi/           chimera binary: rustyfi / satyrographos
 ```
 
 The `syan` parser framework is VENDORED as a git submodule at `vendor/syan2`

@@ -5,7 +5,7 @@
 //! struct and a source path, it materialises SATySFi packages under
 //! `<lib_root>/dist/{packages,fonts,hash,md}/` (mirroring real
 //! Satyrographos' layout) and records per-package receipts under
-//! `<lib_root>/.satyrographos/receipts/`, so the thin `rustyfi-cli` shell
+//! `<lib_root>/.satyrographos/receipts/`, so the thin `rustyfi` shell
 //! only parses arguments and calls in here.
 //!
 //! ## Phase 1 scope (implemented here)

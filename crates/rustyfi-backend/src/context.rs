@@ -56,7 +56,7 @@ pub enum HyphenLang {
 
 /// SATySFi 0.1's `math_script_level` (`dev-0-1-0 src/backend/horzBox.ml:
 /// 139-142`) — how many script-nesting levels deep the current math reading
-/// context sits, consulted by [`Context::math_script_level`]. V0_0_6 never
+/// context sits, consulted by [`Context::math_script_level`]. V0_0 never
 /// reads this field (its script-size shrink is a fixed per-call constant,
 /// not context-carried); it exists purely for V0_1's `read-math`/`enter-
 /// script` (`rustyfi-lang`'s `enter_script`, math-split spec §3.3).
@@ -237,14 +237,14 @@ pub struct Context {
     pub math_variant_char_map: Arc<BTreeMap<(char, MathCharClass), char>>,
     /// V0_1-only: how many script-nesting levels deep this reading context
     /// sits (`math-split` spec §3.3's `enter_script`, port of `dev-0-1-0
-    /// src/frontend/context.ml:52-68`). `Base` under V0_0_6 always — no
-    /// V0_0_6 code path ever reads or bumps this field.
+    /// src/frontend/context.ml:52-68`). `Base` under V0_0 always — no
+    /// V0_0 code path ever reads or bumps this field.
     pub math_script_level: MathScriptLevel,
     /// Whether the current math sub-formula is laid out "cramped" (TeXbook
     /// Appendix G): set on the recursive layout `Context` for a radical's
     /// radicand, a fraction's denominator, and any subscript
     /// (`docs/plans/design-math-cramped.md` §2.2). Orthogonal to
-    /// `math_script_level` and, unlike it, read by BOTH V0_0_6 and V0_1
+    /// `math_script_level` and, unlike it, read by BOTH V0_0 and V0_1
     /// (the bit rides the shared layout-recursion clone, not a version-gated
     /// primitive). Only consumed by `sup_shift_clamped`'s superscript
     /// shift-up formula — see the design doc §2.3 for why that is the sole

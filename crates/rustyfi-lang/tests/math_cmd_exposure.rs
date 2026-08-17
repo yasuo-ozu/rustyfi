@@ -53,9 +53,9 @@ impl Drop for TempDir {
 
 fn as_v006(cst: rustyfi_loader::LoadedCst) -> rustyfi_syntax::cst::File {
     match cst {
-        rustyfi_loader::LoadedCst::V0_0_6(f) => f,
+        rustyfi_loader::LoadedCst::V0_0(f) => f,
         rustyfi_loader::LoadedCst::V0_1(_) => {
-            unreachable!("this test's merge_program is the V0_0_6-only path")
+            unreachable!("this test's merge_program is the V0_0-only path")
         }
     }
 }

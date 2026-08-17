@@ -108,7 +108,7 @@ jobs:
       # PATH. The script self-skips (green) if a prerequisite is somehow absent.
       - name: Layout-fidelity test (vs original SATySFi)
         working-directory: rustyfi-rust-converted
-        run: nix develop --command cargo test -p rustyfi-cli --test layout_fidelity -- --ignored --nocapture
+        run: nix develop --command cargo test -p rustyfi --test layout_fidelity -- --ignored --nocapture
 
   corpus:
     name: rustyfi-* corpus regression

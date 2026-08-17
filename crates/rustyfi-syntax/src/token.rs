@@ -191,7 +191,7 @@ pub enum Token {
     /// `lexer_v1.mll:310-311`; "optional-arg-rows increment 2"). `RowVarTok`
     /// carries the name sans sigil, exactly like [`Token::TypeVar`]/
     /// `TypeVarTok`. V0_1-only: the lexer (`lexer.rs`'s `'?'` arm) only ever
-    /// mints this under `RustyfiVersion::V0_1`; under `V0_0_6`, `?'r` stays
+    /// mints this under `RustyfiVersion::V0_1`; under `V0_0`, `?'r` stays
     /// two tokens (`OptionalType` then `TypeVar`), byte-identical to before
     /// this addition.
     RowVar(String), // `?'r`

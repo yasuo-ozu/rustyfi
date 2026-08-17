@@ -70,7 +70,7 @@ pub enum MathCharClass {
     /// `math_char_class` 9 → 14 (`b836d512:src/backend/horzBox.ml:98-113`);
     /// v0.0.6 upstream has exactly the 9 above
     /// (`v0.0.6:src/backend/horzBox.ml:147-158`, "TEMPORARY; should add
-    /// more"). These 5 variants are unreachable under V0_0_6 — registration
+    /// more"). These 5 variants are unreachable under V0_0 — registration
     /// (`prim_types.rs::math_char_class_decl`) is V0_1-gated, and typecheck
     /// rejects any unregistered constructor name — so the frozen 0.0.6
     /// surface never learns them (version-blind at THIS enum/backend

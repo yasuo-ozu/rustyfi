@@ -18,7 +18,7 @@
 //!   `prim_register_destination`/`register_link` doc comments.
 //!
 //! `annot.satyh` itself is loaded by the capstone suite (`register-*`/
-//! `inline-frame-breakable` reach the PDF end-to-end via `crates/rustyfi-cli/
+//! `inline-frame-breakable` reach the PDF end-to-end via `crates/rustyfi/
 //! tests/fixtures/href.saty`) — this file only proves the primitive surface
 //! type-checks against `vminstdef.yaml` and evaluates correctly in
 //! isolation.

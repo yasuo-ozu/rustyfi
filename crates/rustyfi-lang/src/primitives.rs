@@ -54,20 +54,20 @@ pub enum VersionSpan {
     /// ~151 entries (L5's estimate), including every entry this L7 patch
     /// does not touch.
     Both,
-    V0_0_6Only,
+    V0_0Only,
     V0_1Only,
 }
 
 impl VersionSpan {
     /// Whether a `PrimDef`/type-table row tagged `self` should be visible
-    /// under `version`. `Both` always allows; `V0_0_6Only`/`V0_1Only` allow
+    /// under `version`. `Both` always allows; `V0_0Only`/`V0_1Only` allow
     /// exactly their own version — no partial/future-version fallback (a
     /// third generation gets its own new `VersionSpan` arm, not silent
     /// inclusion under an existing one).
     pub fn allows(self, version: RustyfiVersion) -> bool {
         match (self, version) {
             (VersionSpan::Both, _) => true,
-            (VersionSpan::V0_0_6Only, RustyfiVersion::V0_0_6) => true,
+            (VersionSpan::V0_0Only, RustyfiVersion::V0_0) => true,
             (VersionSpan::V0_1Only, RustyfiVersion::V0_1) => true,
             _ => false,
         }
@@ -103,7 +103,7 @@ macro_rules! prims {
         ];
     };
     (@span) => { VersionSpan::Both };
-    (@span v006) => { VersionSpan::V0_0_6Only };
+    (@span v006) => { VersionSpan::V0_0Only };
     (@span v01) => { VersionSpan::V0_1Only };
 }
 
@@ -665,7 +665,7 @@ prims! {
 /// `VersionSpan` gating lands. Mirrors `rustyfi-syntax`'s
 /// `lex`/`lex_with_version` split (S4).
 pub fn base_env() -> BaseEnv {
-    base_env_with_version(RustyfiVersion::V0_0_6)
+    base_env_with_version(RustyfiVersion::V0_0)
 }
 
 /// The base environment for a given target version — filters `PRIM_DEFS` by
@@ -753,7 +753,7 @@ pub fn base_env_with_version(version: RustyfiVersion) -> BaseEnv {
 /// `page`-ADT arity would silently get the V0_1 arity instead.
 ///
 /// Filters `PRIM_DEFS` for any row whose `version` is NOT `VersionSpan::Both`
-/// (a `V0_0_6Only`/`V0_1Only` row is exactly a name bound under one version
+/// (a `V0_0Only`/`V0_1Only` row is exactly a name bound under one version
 /// and not the other, OR one half of a same-name v006/v01 PAIR — either way
 /// the name resolves differently, or not at all, across the boundary) plus
 /// `"here"`, the one V0_1-only bare constant that lives OUTSIDE `PRIM_DEFS`
@@ -4003,7 +4003,7 @@ fn prim_split_grapheme_cluster(
 /// (STDOUT); this port deliberately prints to STDERR instead (`eprintln!`),
 /// keeping stdout reserved for actual document output. This matches the
 /// existing house convention: the CLI's own "output written" status line
-/// (`rustyfi-cli`'s `main.rs`) is likewise stderr-only, never stdout — a
+/// (`rustyfi`'s `main.rs`) is likewise stderr-only, never stdout — a
 /// documented deviation, not an oversight.
 fn prim_display_message(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
     let msg = as_str(args.pop().unwrap())?;
@@ -5418,7 +5418,7 @@ fn as_math_char_class(v: Value) -> Result<MathCharClass, EvalError> {
             "MathDoubleStruck" => Ok(MathCharClass::DoubleStruck),
             // math-package completion M3 (V0_1-only registration — these 5
             // ctor names are only ever declared by `builtin_variants` under
-            // V0_1, so under V0_0_6 this arm is simply never reached: the
+            // V0_1, so under V0_0 this arm is simply never reached: the
             // ctor name itself is rejected earlier, at typecheck, as
             // unknown).
             "MathSansSerif" => Ok(MathCharClass::SansSerif),
@@ -7462,7 +7462,7 @@ fn layout_math_atom(
                 // serif/typewriter fields for either (only `math-char-class`
                 // itself widened, `horzBox.ml:98-113`). This arm is
                 // unreachable in practice: `math-variant-char`/
-                // `MathElement::VariantChar` is a V0_0_6-only prim
+                // `MathElement::VariantChar` is a V0_0-only prim
                 // (registered `v006` only, `primitives.rs`'s prim table),
                 // and the 5 new `MathCharClass` ctors are V0_1-only
                 // (`prim_types.rs::math_char_class_decl`) — the two can

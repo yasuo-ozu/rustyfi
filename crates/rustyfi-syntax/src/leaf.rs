@@ -84,7 +84,7 @@ qualified_name_tokens! {
     /// A dotted module path ending in an UPPER segment, e.g. `A.B.C`
     /// (upstream `LONG_UPPER`) — module-expression paths, functor
     /// application operands, and signature paths (`mod_chain`,
-    /// `sigexpr_bot`). V0_1-only (a lex error under V0_0_6).
+    /// `sigexpr_bot`). V0_1-only (a lex error under V0_0).
     LongUpperTok => LongUpper, "a qualified module path";
     /// A module-qualified inline command, e.g. `\Mod.cmd`.
     HorzCmdWithModTok => HorzCmdWithMod, "a qualified inline command";

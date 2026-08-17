@@ -1,13 +1,13 @@
 //! Differential guardrail for the S4/S5 lexer seam (`lex_with_version`):
-//! `lex(src)` and `lex_with_version(src, V0_0_6)` must be **byte-identical**
+//! `lex(src)` and `lex_with_version(src, V0_0)` must be **byte-identical**
 //! for every 0.0.6 source, since `lex` is now defined as a thin wrapper over
-//! `lex_with_version(_, V0_0_6)` (see `lexer.rs`). This is the proof that
+//! `lex_with_version(_, V0_0)` (see `lexer.rs`). This is the proof that
 //! threading a `version` field through `Lexer` and adding the Slice-1
 //! `rec`/`inline`/`block` keyword gate never perturbs existing 0.0.6 lexing.
 //!
 //! Two corpora are exercised:
 //! 1. Every real vendored 0.0.6 package (`lib-rustyfi/dist/packages/`) and
-//!    CLI fixture (`crates/rustyfi-cli/tests/fixtures/`) — real-world 0.0.6
+//!    CLI fixture (`crates/rustyfi/tests/fixtures/`) — real-world 0.0.6
 //!    source, walked recursively.
 //! 2. A hardcoded set of small snippets covering every lexer mode (program,
 //!    vertical, horizontal, active, math) and every new Slice-1 keyword
@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 
 fn assert_same(src: &str, label: &str) {
     let via_lex = lex(src);
-    let via_versioned = lex_with_version(src, RustyfiVersion::V0_0_6);
+    let via_versioned = lex_with_version(src, RustyfiVersion::V0_0);
     match (via_lex, via_versioned) {
         (Ok(a), Ok(b)) => {
             assert_eq!(a, b, "token stream mismatch for {label}");
@@ -34,7 +34,7 @@ fn assert_same(src: &str, label: &str) {
             );
         }
         (a, b) => panic!(
-            "lex(..) and lex_with_version(.., V0_0_6) disagree on success/failure for \
+            "lex(..) and lex_with_version(.., V0_0) disagree on success/failure for \
              {label}: lex={a:?} lex_with_version={b:?}"
         ),
     }
@@ -56,10 +56,10 @@ fn collect_saty_files(dir: &Path, out: &mut Vec<PathBuf>) {
 }
 
 #[test]
-fn lex_and_lex_with_version_v0_0_6_agree_on_real_fixtures() {
+fn lex_and_lex_with_version_v0_0_agree_on_real_fixtures() {
     let roots = [
         concat!(env!("CARGO_MANIFEST_DIR"), "/../../lib-rustyfi/dist/packages"),
-        concat!(env!("CARGO_MANIFEST_DIR"), "/../../crates/rustyfi-cli/tests/fixtures"),
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../../crates/rustyfi/tests/fixtures"),
     ];
     let mut files = Vec::new();
     for root in roots {
@@ -83,7 +83,7 @@ fn lex_and_lex_with_version_v0_0_6_agree_on_real_fixtures() {
 }
 
 #[test]
-fn lex_and_lex_with_version_v0_0_6_agree_on_mode_coverage_snippets() {
+fn lex_and_lex_with_version_v0_0_agree_on_mode_coverage_snippets() {
     let snippets = [
         "let x = 3 in x",
         "let-rec f n = f n in f",
@@ -105,7 +105,7 @@ fn lex_and_lex_with_version_v0_0_6_agree_on_mode_coverage_snippets() {
         // Every Slice-1 keyword spelling, used as a plain identifier under
         // 0.0.6 — the crux of the version-gating change: these three words
         // must lex identically to before (as `Var`) when no version (or
-        // V0_0_6) is requested.
+        // V0_0) is requested.
         "let rec = 1 in rec",
         "let inline = 1 in inline",
         "let block = 1 in block",
@@ -134,19 +134,19 @@ fn lex_and_lex_with_version_v0_0_6_agree_on_mode_coverage_snippets() {
 /// file's other test asserts the V0_1 branch of `lex_with_version` at all
 /// (both tests above are 0.0.6-agreement guardrails), so this pins the
 /// positive case directly: `mutable` lexes as `Token::Mutable` under V0_1
-/// and stays a plain identifier under V0_0_6 (the same gating shape as
+/// and stays a plain identifier under V0_0 (the same gating shape as
 /// `rec`/`inline`/`block`, `lexer.rs`'s `keyword()`).
 #[test]
 fn v0_1_gates_the_bind_keywords() {
     use rustyfi_syntax::token::Token;
     let toks = lex_with_version("val mutable x <- 0", RustyfiVersion::V0_1).unwrap();
     assert!(toks.iter().any(|a| matches!(a.slot, Token::Mutable)));
-    let toks = lex_with_version("val mutable x <- 0", RustyfiVersion::V0_0_6).unwrap();
+    let toks = lex_with_version("val mutable x <- 0", RustyfiVersion::V0_0).unwrap();
     assert!(toks.iter().all(|a| !matches!(a.slot, Token::Mutable)));
 }
 
 /// Sub-slice 2c: the `:>` COERCE token — adjacency-required, `::` wins on
-/// `::>`, and V0_0_6 never produces it.
+/// `::>`, and V0_0 never produces it.
 #[test]
 fn v0_1_lexes_coerce_as_one_token() {
     use rustyfi_syntax::token::Token;
@@ -159,13 +159,13 @@ fn v0_1_lexes_coerce_as_one_token() {
     let toks = lex_with_version("a ::> b", RustyfiVersion::V0_1).unwrap();
     assert!(toks.iter().any(|a| matches!(a.slot, Token::Cons)));
     assert!(toks.iter().all(|a| !matches!(a.slot, Token::Coerce)));
-    // and V0_0_6 never produces Coerce
-    let toks = lex_with_version("M :> S", RustyfiVersion::V0_0_6).unwrap();
+    // and V0_0 never produces Coerce
+    let toks = lex_with_version("M :> S", RustyfiVersion::V0_0).unwrap();
     assert!(toks.iter().all(|a| !matches!(a.slot, Token::Coerce)));
 }
 
 /// Sub-slice 2c: `LONG_UPPER` dotted module/signature paths — V0_1 only;
-/// V0_0_6 keeps the historical lex error, and dotted-ending-in-lower is
+/// V0_0 keeps the historical lex error, and dotted-ending-in-lower is
 /// untouched in both.
 #[test]
 fn v0_1_lexes_long_upper_paths() {
@@ -178,8 +178,8 @@ fn v0_1_lexes_long_upper_paths() {
     // dotted-ending-in-lower is untouched
     let toks = lex_with_version("A.B.c", RustyfiVersion::V0_1).unwrap();
     assert!(toks.iter().any(|a| matches!(&a.slot, Token::VarWithMod(..))));
-    // V0_0_6 keeps the exact historical error
-    let err = lex_with_version("A.B.C", RustyfiVersion::V0_0_6).unwrap_err();
+    // V0_0 keeps the exact historical error
+    let err = lex_with_version("A.B.C", RustyfiVersion::V0_0).unwrap_err();
     assert!(err.to_string().contains("module path must end with a variable name"));
 }
 
@@ -190,14 +190,14 @@ fn v0_1_gates_signature_and_include_keywords() {
     let toks = lex_with_version("signature include", RustyfiVersion::V0_1).unwrap();
     assert!(toks.iter().any(|a| matches!(a.slot, Token::Signature)));
     assert!(toks.iter().any(|a| matches!(a.slot, Token::Include)));
-    let toks = lex_with_version("signature include", RustyfiVersion::V0_0_6).unwrap();
+    let toks = lex_with_version("signature include", RustyfiVersion::V0_0).unwrap();
     assert!(toks.iter().all(|a| !matches!(a.slot, Token::Signature | Token::Include)));
 }
 
 /// optional-arg-rows increment 2: `?'r` — a row variable — is ONE token
 /// (`Token::RowVar`) under V0_1, adjacency-required (mirrors
 /// `v0_1_lexes_coerce_as_one_token`'s `:>` shape); a space between `?` and
-/// `'r` must NOT fuse; and V0_0_6 never produces `RowVar` at all — `?'r`
+/// `'r` must NOT fuse; and V0_0 never produces `RowVar` at all — `?'r`
 /// stays the historical two tokens (`OptionalType` then `TypeVar`).
 #[test]
 fn v0_1_lexes_row_var_as_one_token() {
@@ -213,8 +213,8 @@ fn v0_1_lexes_row_var_as_one_token() {
         .iter()
         .any(|a| matches!(&a.slot, Token::TypeVar(s) if s == "r")));
     assert!(toks.iter().all(|a| !matches!(a.slot, Token::RowVar(_))));
-    // V0_0_6 never produces RowVar: `?'r` stays the historical two tokens.
-    let toks = lex_with_version("?'r", RustyfiVersion::V0_0_6).unwrap();
+    // V0_0 never produces RowVar: `?'r` stays the historical two tokens.
+    let toks = lex_with_version("?'r", RustyfiVersion::V0_0).unwrap();
     assert!(toks.iter().any(|a| matches!(a.slot, Token::OptionalType)));
     assert!(toks
         .iter()

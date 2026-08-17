@@ -167,18 +167,18 @@ struct Compiler<'b> {
     /// from before Slice X2a (`docs/plans/design-cross-version-import.md`
     /// §"Slice X2 — per-group primitive environment").
     globals_v01: Option<&'b BaseEnv>,
-    /// The `V0_0_6`-slot base environment — `Some` only for a cross-version
+    /// The `V0_0`-slot base environment — `Some` only for a cross-version
     /// splice compile ([`Compiler::new_xver`]), used exclusively while
-    /// `current_version` is `V0_0_6` (i.e. while folding inside an
-    /// `Ast::VersionScope(V0_0_6, _)` subtree). `None` on every pure path,
-    /// so `globals_for(V0_0_6)` there is `None` — irrelevant, since no
+    /// `current_version` is `V0_0` (i.e. while folding inside an
+    /// `Ast::VersionScope(V0_0, _)` subtree). `None` on every pure path,
+    /// so `globals_for(V0_0)` there is `None` — irrelevant, since no
     /// `VersionScope` node is ever emitted on a pure path (§X2.2.2).
     globals_v006: Option<&'b BaseEnv>,
     /// Which of the two envs above is active for the primitive fold right
     /// now — `V0_1` outside any `VersionScope`, or the tag of the innermost
     /// enclosing one (`Ast::VersionScope`'s compile arm below). Only ever
     /// changes away from its initial value on a cross-version splice
-    /// compile, where `Ast::VersionScope(V0_0_6, _)` nodes actually occur.
+    /// compile, where `Ast::VersionScope(V0_0, _)` nodes actually occur.
     current_version: RustyfiVersion,
 }
 
@@ -200,7 +200,7 @@ impl<'b> Compiler<'b> {
 
     /// The cross-version-splice constructor (Slice X2a): `env_v01` folds
     /// every `Ast::Var` OUTSIDE a `VersionScope`; `env_v006` folds every
-    /// `Ast::Var` INSIDE an `Ast::VersionScope(V0_0_6, _)` subtree — see the
+    /// `Ast::Var` INSIDE an `Ast::VersionScope(V0_0, _)` subtree — see the
     /// `Ast::VersionScope` compile arm below. The top-level program body
     /// always starts un-wrapped (`V0_1`), so `current_version` starts there
     /// too.
@@ -216,12 +216,12 @@ impl<'b> Compiler<'b> {
     }
 
     /// The base environment currently active for the primitive fold —
-    /// `V0_1`'s slot outside any `VersionScope`, `V0_0_6`'s slot inside one
+    /// `V0_1`'s slot outside any `VersionScope`, `V0_0`'s slot inside one
     /// (only ever populated by [`Compiler::new_xver`]).
     fn globals_for(&self, version: RustyfiVersion) -> Option<&'b BaseEnv> {
         match version {
             RustyfiVersion::V0_1 => self.globals_v01,
-            RustyfiVersion::V0_0_6 => self.globals_v006,
+            RustyfiVersion::V0_0 => self.globals_v006,
             // `RustyfiVersion` is `#[non_exhaustive]` (future 0.1.z-era
             // variants); this crate only ever constructs the two matched
             // above, and `Compiler`'s two env slots are exactly those two —
@@ -1085,7 +1085,7 @@ pub(crate) fn compile_program(ast: &Ast, base_env: &BaseEnv) -> CompiledExpr {
 /// nodes (Slice X2a — a cross-version splice, `lib.rs`'s
 /// `compile_document_v1_with_trials`): `base_env` folds every unshadowed
 /// `Ast::Var` OUTSIDE a `VersionScope`, `base_env_v006` folds every one
-/// INSIDE an `Ast::VersionScope(V0_0_6, _)` subtree. See
+/// INSIDE an `Ast::VersionScope(V0_0, _)` subtree. See
 /// [`Compiler::new_xver`].
 pub(crate) fn compile_program_xver(
     ast: &Ast,

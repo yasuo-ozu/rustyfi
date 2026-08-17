@@ -6,7 +6,7 @@ members = [
     "crates/rustyfi-lang",
     "crates/rustyfi-pdf",
     "crates/rustyfi-html",
-    "crates/rustyfi-cli",
+    "crates/rustyfi",
     "crates/rustyfi-loader",
     "crates/rustyfi-satyrographos",
 ]

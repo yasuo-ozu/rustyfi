@@ -21,7 +21,7 @@ use rustyfi_syntax::{parse_file_v1, RustyfiVersion, Span};
 /// Elaborate one dependency library source (a `module … = struct … end`
 /// file) plus one document-body source, exactly the way
 /// `compile_document_v1_with_trials` assembles its synthetic `cst::File`
-/// (`lib.rs:165-195`) — reproduced locally (no `rustyfi-cli` library target
+/// (`lib.rs:165-195`) — reproduced locally (no `rustyfi` library target
 /// to import it from, same rationale `v01_slice1.rs` already documents).
 fn elaborate_with_lib<'s>(
     store: &'s rustyfi_lang::symbol::SymbolStore,

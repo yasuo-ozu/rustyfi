@@ -49,9 +49,9 @@ fn ipaexm_path() -> PathBuf {
 /// `merge_program` shape `tests/e2e.rs`'s `load_and_merge` uses.
 fn as_v006(cst: rustyfi_loader::LoadedCst) -> rustyfi_syntax::cst::File {
     match cst {
-        rustyfi_loader::LoadedCst::V0_0_6(f) => f,
+        rustyfi_loader::LoadedCst::V0_0(f) => f,
         rustyfi_loader::LoadedCst::V0_1(_) => {
-            unreachable!("this test's load_and_merge is the V0_0_6-only path")
+            unreachable!("this test's load_and_merge is the V0_0-only path")
         }
     }
 }

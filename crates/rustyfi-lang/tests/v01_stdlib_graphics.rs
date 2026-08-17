@@ -151,7 +151,7 @@ impl FontMetrics for Mono {
 fn as_v01(f: &LoadedFile) -> &rustyfi_syntax::cst_v1::FileV1 {
     match &f.cst {
         LoadedCst::V0_1(cst) => cst,
-        LoadedCst::V0_0_6(_) => unreachable!("this test's helper is V0_1-only"),
+        LoadedCst::V0_0(_) => unreachable!("this test's helper is V0_1-only"),
     }
 }
 
@@ -209,7 +209,7 @@ fn compile_v01_via_loader_with_metrics(
     // *selection*, which `base_env_with_version` already resolved) — a
     // graphics-tier package's `graphics`-callback primitives
     // (`inline-graphics`/`inline-graphics-outer`/`tabular`/the deco family)
-    // need this set, or they eval under the default `V0_0_6` behavior
+    // need this set, or they eval under the default `V0_0` behavior
     // (expects the callback to return a LIST) even though everything above
     // was compiled as V0_1.
     interp.version = RustyfiVersion::V0_1;

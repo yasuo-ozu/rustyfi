@@ -118,7 +118,7 @@ impl FontMetrics for Mono {
 fn as_v01(f: &LoadedFile) -> &rustyfi_syntax::cst_v1::FileV1 {
     match &f.cst {
         LoadedCst::V0_1(cst) => cst,
-        LoadedCst::V0_0_6(_) => unreachable!("this test's helper is V0_1-only"),
+        LoadedCst::V0_0(_) => unreachable!("this test's helper is V0_1-only"),
     }
 }
 

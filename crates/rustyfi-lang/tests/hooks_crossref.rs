@@ -4,7 +4,7 @@
 //! hand-built `DocumentValue` — the same `Ast`-apply-chain style
 //! `prims_phase4.rs`/`images.rs` use, no parser involved. The full 2-pass
 //! fixpoint round trip (compile → fire hooks → re-run) is covered
-//! separately by `rustyfi-cli`'s e2e `hook-page.saty` fixture.
+//! separately by `rustyfi`'s e2e `hook-page.saty` fixture.
 
 use rustyfi_backend::{
     FontKey, FontMetrics, HookId, HorzBox, Length, Page, PageGeometry, PlacedLine, PureHorzBox,

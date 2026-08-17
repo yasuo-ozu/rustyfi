@@ -32,7 +32,7 @@
 //! situation, same fix), the `Mono` stub below advances EVERY character
 //! (not just ASCII) rather than trying to source a real CJK-covering TTF
 //! font — these are `rustyfi-lang` "value bar" tests (real
-//! `compile_document_v1` page/line assertions), not `rustyfi-cli`'s
+//! `compile_document_v1` page/line assertions), not `rustyfi`'s
 //! `pdftotext`-asserted PDF-embedding e2e tier, so no real font file is
 //! needed at all.
 
@@ -95,7 +95,7 @@ impl FontMetrics for Mono {
 fn as_v01(f: &LoadedFile) -> &rustyfi_syntax::cst_v1::FileV1 {
     match &f.cst {
         LoadedCst::V0_1(cst) => cst,
-        LoadedCst::V0_0_6(_) => unreachable!("this test's helper is V0_1-only"),
+        LoadedCst::V0_0(_) => unreachable!("this test's helper is V0_1-only"),
     }
 }
 
@@ -105,7 +105,7 @@ fn as_v01(f: &LoadedFile) -> &rustyfi_syntax::cst_v1::FileV1 {
 /// `v01_stdlib.rs`'s/`v01_itemize_proof_mdja.rs`'s own
 /// `compile_v01_via_loader`, with ONE fix: those two files build their
 /// `Scope` with plain `Scope::new(env.names())`, which defaults to
-/// `RustyfiVersion::V0_0_6` (`elaborate.rs`'s own `Scope::new` doc
+/// `RustyfiVersion::V0_0` (`elaborate.rs`'s own `Scope::new` doc
 /// comment) — harmless for THEIR packages (none of `itemize`/`proof`/
 /// `md-ja`'s OWN bare-unbound probes transitively `@require:` a package
 /// whose `?(l = x)`-shaped command definitions get elaborated along the

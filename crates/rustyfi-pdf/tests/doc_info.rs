@@ -3,7 +3,7 @@
 //! `rustyfi-pdf/src/lib.rs`/`cid.rs`), driven through the public
 //! `render_pdf_with` entry point with a hand-built `DocExtras` — the same
 //! shape as `tests/annots.rs`'s Group A coverage (no lang layer involved;
-//! `crates/rustyfi-cli/tests/fixtures/v01-strings.saty` is the end-to-end
+//! `crates/rustyfi/tests/fixtures/v01-strings.saty` is the end-to-end
 //! version through the real `register-document-information` primitive).
 
 use rustyfi_backend::{DocExtras, DocInfo, Length, Page, PageGeometry};

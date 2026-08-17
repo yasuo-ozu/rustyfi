@@ -337,7 +337,7 @@ pub const PRIMITIVE_NAMES: &[&str] = &[
     // ---- G6 (`…/tmp/g6-g7-standins.md` §1): hyphenation/unidata loader +
     // setter stand-ins, and the `here` lex-time-constant stand-in. All 5
     // are V0_1-only (`primitive_type_with_version` returns `None` for them
-    // under V0_0_6, same pattern as the L5a comment below documents). ----
+    // under V0_0, same pattern as the L5a comment below documents). ----
     "load-hyphenation-dictionary",
     "load-unicode-char-database",
     "set-hyphenation-dictionary",
@@ -345,7 +345,7 @@ pub const PRIMITIVE_NAMES: &[&str] = &[
     "here",
     // ---- added in 0.1 — L5a (prim-retype-sweep §2): bitwise ops, Unicode
     // string ops, `read-file`, `register-document-information`. All 11
-    // unbound under V0_0_6 (`base_type_env_with_version`'s
+    // unbound under V0_0 (`base_type_env_with_version`'s
     // `primitive_type_with_version` filter skips them there, same as the
     // 8 math-split names just above). `get-initial-text-info` is NOT
     // listed again here — it's the R1 fork, already present above as one
@@ -362,7 +362,7 @@ pub const PRIMITIVE_NAMES: &[&str] = &[
     "read-file",
     "register-document-information",
     // ---- added in 0.1 — L5b (prim-retype-sweep §3.4): the graphics-
-    // collection sweep's 2 added prims. Unbound under V0_0_6 (same
+    // collection sweep's 2 added prims. Unbound under V0_0 (same
     // `primitive_type_with_version` filter as the L5a names above); the 3
     // named + 6 hidden retypes (`tabular`, `get-graphics-bbox`,
     // `inline-graphics`, `inline-graphics-outer`, `inline-frame-outer/
@@ -373,7 +373,7 @@ pub const PRIMITIVE_NAMES: &[&str] = &[
     "clip-graphics-by-path",
     // ---- language-completeness sweep gap 1: 0.1 float comparisons
     // (`primitives.rs`'s `prims!` table comment on ">."/"<."/">=."/"<=.").
-    // Unbound under V0_0_6 (same `primitive_type_with_version` V0_1 guard
+    // Unbound under V0_0 (same `primitive_type_with_version` V0_1 guard
     // as the L5a/L5b names above) — confirmed genuinely absent from 0.0.6
     // upstream, unlike "+."/"-."/"*."/"/." which both generations share.
     ">.",
@@ -389,7 +389,7 @@ pub const PRIMITIVE_NAMES: &[&str] = &[
 // fn directly via `typecheck_verbose_with_version`/`typecheck_with_version`.
 #[allow(dead_code)]
 fn base_type_env<'s>(store: &'s SymbolStore) -> TypeEnv<'s> {
-    base_type_env_with_version(store, RustyfiVersion::V0_0_6)
+    base_type_env_with_version(store, RustyfiVersion::V0_0)
 }
 
 pub(crate) fn base_type_env_with_version<'s>(
@@ -656,7 +656,7 @@ fn name_to_mono(name: &str, version: RustyfiVersion) -> MonoType {
         // type position is deliberately NOT recognized (0.1 has no `math`
         // type, `types.cppo.ml:148-155`) — it falls through to the nominal-
         // `Variant` default below, matching upstream's unbound-type error;
-        // under V0_0_6, `math-text`/`math-boxes` likewise stay unbound.
+        // under V0_0, `math-text`/`math-boxes` likewise stay unbound.
         "math" if !version.math_is_split() => MonoType::Base(BaseType::MathText),
         "math-text" if version.math_is_split() => MonoType::Base(BaseType::MathText),
         "math-boxes" if version.math_is_split() => MonoType::Base(BaseType::MathBoxes),
@@ -736,7 +736,7 @@ fn name_to_mono(name: &str, version: RustyfiVersion) -> MonoType {
         // the sealed decl's declared type then unifies with
         // `paren-left`/`paren-right`'s inferred `length -> length ->
         // context -> inline-boxes * (length -> length)` by construction.
-        // Under V0_0_6, `paren` keeps falling to the nominal
+        // Under V0_0, `paren` keeps falling to the nominal
         // `Variant("paren", [])` default (the 0.0.6 corpus path is
         // synonym-expansion via `pervasives.satyh`, unchanged).
         "paren" if version == RustyfiVersion::V0_1 => t_paren(version),
@@ -746,7 +746,7 @@ fn name_to_mono(name: &str, version: RustyfiVersion) -> MonoType {
 
 // ============================================================================
 // X1 forked-name guard (design-cross-version-import.md §5): builtin TYPE
-// names that resolve differently — or not at all — between `V0_0_6` and
+// names that resolve differently — or not at all — between `V0_0` and
 // `V0_1`. Companion to `primitives::forked_prim_names` (VALUE names, driven
 // off the `VersionSpan`-tagged `PRIM_DEFS` table); builtin TYPE forks have no
 // such table — they live as inline version guards in
@@ -888,7 +888,7 @@ fn bijective_pair(
     }
 }
 
-/// Every name that means a DIFFERENT TYPE under `V0_0_6` than under `V0_1`,
+/// Every name that means a DIFFERENT TYPE under `V0_0` than under `V0_1`,
 /// i.e. whose `name_to_mono` lowering differs. Its sole consumer is the
 /// cross-version type-boundary guard (`v1::xver_adapt::reject_type_names`,
 /// via `lib.rs`'s `free.types` check), which asks exactly one question: if a
@@ -910,9 +910,9 @@ fn bijective_pair(
 /// pulled it back in.
 ///
 /// A forked primitive VALUE is not this guard's problem: X2a made each 0.0.6
-/// dependency's bindings `Ast::VersionScope(V0_0_6, _)`-wrapped, so a forked
+/// dependency's bindings `Ast::VersionScope(V0_0, _)`-wrapped, so a forked
 /// primitive referenced inside one resolves against 0.0.6's own `PrimDef` and
-/// runs under `Interp::version = V0_0_6`. That is why `lib.rs` already dropped
+/// runs under `Interp::version = V0_0`. That is why `lib.rs` already dropped
 /// the value half of the guard (`free.values` against `forked_prim_names`).
 /// The names below are therefore just the builtin TYPE names, filtered to
 /// those that really do lower differently.
@@ -934,7 +934,7 @@ pub fn forked_type_names() -> BTreeSet<String> {
     .into_iter()
     .filter(|&n| {
         !mono_type_alpha_eq(
-            &name_to_mono(n, RustyfiVersion::V0_0_6),
+            &name_to_mono(n, RustyfiVersion::V0_0),
             &name_to_mono(n, RustyfiVersion::V0_1),
         )
     })
@@ -1026,8 +1026,8 @@ fn lower_type_atom(
         // increment models one open record type at a time, not
         // cross-signature shared-row polymorphism (that needs the `rowquant`
         // grammar this track deliberately defers, see `cst.rs`'s
-        // `TypeAtom::RecordOpen` doc comment). No `V0_0_6` version gate is
-        // needed: `TypeAtom::RecordOpen` is unreachable from a `V0_0_6` token
+        // `TypeAtom::RecordOpen` doc comment). No `V0_0` version gate is
+        // needed: `TypeAtom::RecordOpen` is unreachable from a `V0_0` token
         // stream by construction (see that variant's doc comment).
         TypeAtom::RecordOpen { inner, .. } => {
             let row = inner
@@ -1173,7 +1173,7 @@ pub(crate) fn lower_type_expr(
         // CLOSED row (`Row::Cons(l1, ty1, … Row::Empty)`), matching what
         // `Ast::LambdaOpt` infers (increment 1) — see this fn's own callers
         // (`declare_synonym`/`build_variant_decl`), which reject this node
-        // under `V0_0_6` via `check_type_expr_v0_1_only` BEFORE ever
+        // under `V0_0` via `check_type_expr_v0_1_only` BEFORE ever
         // reaching here, so by the time this arm runs the version is always
         // `V0_1` for any input that could legally have parsed this node from
         // real 0.1 source (a 0.0.6 source hitting this arm is caught by that
@@ -1199,7 +1199,7 @@ pub(crate) fn lower_type_expr(
 }
 
 /// optional-arg-rows increment 2: reject a `?(l : ty) -> ...`
-/// labeled-optional-argument type domain under `V0_0_6` with a clear version
+/// labeled-optional-argument type domain under `V0_0` with a clear version
 /// error, mirroring `elaborate.rs`'s `Expr::FunRows`/`AppArg::Bundled`
 /// value-level gates (§9.2/§9.3 there) — the TYPE-level analogue. It lives
 /// here (not `elaborate.rs`) because a `type`/ctor-payload `TypeExpr` is
@@ -1725,7 +1725,7 @@ pub(crate) struct Checker<'s> {
     /// `name_to_mono`'s surface-type-name fork and `Ast::LetMathIn`'s
     /// scheme rule (`math_command_scheme` vs `math_command_scheme_v01`).
     /// Default (`Checker::empty`, never followed by `install_builtin_
-    /// variants`) is `V0_0_6` — behavior-neutral for every existing
+    /// variants`) is `V0_0` — behavior-neutral for every existing
     /// 0.0.6-only test that never installs builtins at all.
     version: RustyfiVersion,
     /// The module path of the member body currently being inferred (pushed by
@@ -1767,7 +1767,7 @@ impl<'s> Checker<'s> {
     // same reason.
     #[allow(dead_code)]
     fn new(program: &Program<'s>) -> Result<Checker<'s>, TypeError> {
-        Self::new_with_version(program, RustyfiVersion::V0_0_6)
+        Self::new_with_version(program, RustyfiVersion::V0_0)
     }
 
     /// Bare session: empty tables, fresh `TypeContext`. Registers NOTHING —
@@ -1782,7 +1782,7 @@ impl<'s> Checker<'s> {
             variants: HashMap::new(),
             synonyms: HashMap::new(),
             warnings: Vec::new(),
-            version: RustyfiVersion::V0_0_6,
+            version: RustyfiVersion::V0_0,
             ctor_scope: Vec::new(),
         }
     }
@@ -1796,7 +1796,7 @@ impl<'s> Checker<'s> {
     /// `math-boxes` resolves correctly even though `install_builtin_
     /// variants` (which also happens to set this field, for every path that
     /// predates this one) doesn't run until afterward. A no-op for every
-    /// 0.0.6 path: `empty()` already defaults to `V0_0_6`.
+    /// 0.0.6 path: `empty()` already defaults to `V0_0`.
     pub(crate) fn set_version(&mut self, version: RustyfiVersion) {
         self.version = version;
     }
@@ -1822,7 +1822,7 @@ impl<'s> Checker<'s> {
     /// touching `self.version` (unlike [`Checker::install_builtin_
     /// variants`], which also sets the whole-session version tag) — called
     /// from the `Ast::VersionScope` `infer` arm below, lazily, the first
-    /// time a version-scoped subtree is reached, so a `V0_0_6`-only ADT like
+    /// time a version-scoped subtree is reached, so a `V0_0`-only ADT like
     /// `page` (`A0Paper`/…/`A4Paper`/`UserDefinedPaper`, gated on
     /// `has_page_adt()`, `prim_types.rs`'s `builtin_variants_with_version`)
     /// is constructible/matchable inside a spliced dependency's internal
@@ -1850,7 +1850,7 @@ impl<'s> Checker<'s> {
     /// original register-all-then-check shape); call `check_cycles` when
     /// done registering. Optional-arg-rows increment 2: now fallible —
     /// `check_type_expr_v0_1_only` rejects a `?(l:ty)->` domain in the
-    /// synonym's body under `V0_0_6` before it is ever lowered.
+    /// synonym's body under `V0_0` before it is ever lowered.
     pub(crate) fn declare_synonym(&mut self, decl: &UserSynonymDecl) -> Result<(), TypeError> {
         check_type_expr_v0_1_only(&decl.body, self.version)?;
         self.synonyms
@@ -2010,8 +2010,8 @@ impl<'s> Checker<'s> {
         // `?(l:τ,…)` label map from the `Row` that `Ast::LambdaOpt` leaves on
         // that param's own arrow (`peel_func_chain_rows`), instead of the
         // 0.0.6 "`_ option` domain ⇒ optional slot" heuristic below (which
-        // stays untouched, byte-identical, under V0_0_6 — it never sees a
-        // non-`Row::Empty` row at all, since V0_0_6 code never builds
+        // stays untouched, byte-identical, under V0_0 — it never sees a
+        // non-`Row::Empty` row at all, since V0_0 code never builds
         // `Ast::LambdaOpt`).
         let params: Vec<CmdArgType> = if self.version.has_row_polymorphism() {
             let (mut slots, result) = peel_func_chain_rows(tv);
@@ -2369,7 +2369,7 @@ impl<'s> Checker<'s> {
                 self.ctx.enter_level();
                 let tv = self.infer(env, value)?;
                 self.ctx.leave_level();
-                // math-split spec §4.4: V0_0_6's `let-math` and V0_1's
+                // math-split spec §4.4: V0_0's `let-math` and V0_1's
                 // `val math` both lower to the SAME `Ast::LetMathIn`
                 // (spec §4.3) — only the SCHEME RULE forks, on
                 // `self.version`, since a `val math` binding's lowering
@@ -2864,7 +2864,7 @@ impl<'s> Checker<'s> {
             // §"Slice X2 — per-group primitive environment"): swap the
             // active primitive-type env to `version`'s for `body` — see
             // `version_scoped_type_env`'s doc comment — and make sure
-            // `version`'s builtin ADTs (e.g. `page`, `V0_0_6`-only) are
+            // `version`'s builtin ADTs (e.g. `page`, `V0_0`-only) are
             // registered in the (otherwise whole-program-tagged) ctor table
             // — see `install_additional_builtin_variants`'s doc comment.
             // Never reached on a pure single-version program (no
@@ -3355,7 +3355,7 @@ pub(crate) fn ast_span<'s>(ast: &Ast<'s>) -> Option<Span> {
 /// program, so these never turn a would-have-passed program into a
 /// `TypeError`.
 pub fn typecheck_verbose<'s>(program: &Program<'s>) -> Result<Vec<MatchWarning>, TypeError> {
-    typecheck_verbose_with_version(program, RustyfiVersion::V0_0_6)
+    typecheck_verbose_with_version(program, RustyfiVersion::V0_0)
 }
 
 /// Same as [`typecheck_verbose`], for a given target `version` — threads
@@ -3383,7 +3383,7 @@ pub fn typecheck_verbose_with_version<'s>(
 /// (`lib.rs`'s `compile_document_cst`, `compile.rs`, and every test that
 /// predates §Slice 1) is therefore unaffected by the new pass.
 pub fn typecheck<'s>(program: &Program<'s>) -> Result<(), TypeError> {
-    typecheck_with_version(program, RustyfiVersion::V0_0_6)
+    typecheck_with_version(program, RustyfiVersion::V0_0)
 }
 
 /// Same as [`typecheck`], for a given target `version`. See
@@ -3465,7 +3465,7 @@ mod l3_per_binding_tests {
     /// `TypeError` `Display` on error, identical `MatchWarning` list (incl.
     /// order — `MatchWarning` derives `PartialEq`) on success.
     fn assert_equivalent(src: &str) {
-        let version = RustyfiVersion::V0_0_6;
+        let version = RustyfiVersion::V0_0;
         let store = SymbolStore::new();
         let program = elaborate_src(&store, src);
         let whole = typecheck_verbose_with_version(&program, version);
@@ -3553,8 +3553,8 @@ mod l3_per_binding_tests {
         let decl = &program.type_decls[0];
 
         let mut checker = Checker::empty(&store);
-        checker.install_builtin_variants(RustyfiVersion::V0_0_6);
-        let env = base_type_env_with_version(&store, RustyfiVersion::V0_0_6);
+        checker.install_builtin_variants(RustyfiVersion::V0_0);
+        let env = base_type_env_with_version(&store, RustyfiVersion::V0_0);
 
         // Before `declare_variant`, `A` is unknown — same message shape a
         // genuinely-undeclared constructor gets.
@@ -3620,15 +3620,15 @@ mod l3_per_binding_tests {
 mod x2b_shadow_tests {
     use super::*;
 
-    /// `let page-break = 42 in <VersionScope V0_0_6> page-break` — infer
+    /// `let page-break = 42 in <VersionScope V0_0> page-break` — infer
     /// the whole tree under a `V0_1`-ambient `Checker`. `page-break` is a
-    /// `PRIMITIVE_NAMES` member (a version-forked one, no less: its `V0_0_6`
+    /// `PRIMITIVE_NAMES` member (a version-forked one, no less: its `V0_0`
     /// scheme takes the `page` ADT, its `V0_1` scheme a `length * length`
     /// tuple — see `page_prims.rs`). BEFORE this slice's fix,
     /// `version_scoped_type_env`'s overwrite loop unconditionally replaced
     /// every `PRIMITIVE_NAMES` entry with `version`'s builtin scheme the
     /// moment it entered the `VersionScope`, so the user's `page-break = 42`
-    /// binding would have been silently re-stomped with `V0_0_6`'s builtin
+    /// binding would have been silently re-stomped with `V0_0`'s builtin
     /// `page-break` (a curried function type) — inferring the inner `Var`
     /// as a function, not `int`. With the fix, `version_scoped_type_env`
     /// sees `page-break` recorded in `env.shadowed` (set by the `LetIn`
@@ -3649,7 +3649,7 @@ mod x2b_shadow_tests {
             page_break,
             Box::new(Ast::Int(42)),
             Box::new(Ast::VersionScope(
-                RustyfiVersion::V0_0_6,
+                RustyfiVersion::V0_0,
                 Box::new(Ast::Var(page_break, span)),
             )),
         );
@@ -3674,7 +3674,7 @@ mod x2b_shadow_tests {
             "the VersionScope env swap must respect the user's `page-break` shadow \
              (expected MonoType::Base(BaseType::Int), got {ty:?} instead) — a \
              MonoType::Func here would mean version_scoped_type_env re-stomped the \
-             user binding with V0_0_6's builtin page-break scheme"
+             user binding with V0_0's builtin page-break scheme"
         );
     }
 
@@ -3684,14 +3684,14 @@ mod x2b_shadow_tests {
     /// scheme — X2a's original headline capability, unaffected by the X2b
     /// shadow-respecting change above. Contrasts directly with
     /// `version_scope_does_not_clobber_a_user_shadowed_primitive`'s `int`
-    /// result: same `page-break` name, same `VersionScope(V0_0_6, _)`, only
+    /// result: same `page-break` name, same `VersionScope(V0_0, _)`, only
     /// difference is the absence of a prior `let page-break = …` shadow.
     #[test]
     fn version_scope_still_resolves_unshadowed_forked_primitive() {
         let span = Span::default();
         let store = SymbolStore::new();
         let ast = Ast::VersionScope(
-            RustyfiVersion::V0_0_6,
+            RustyfiVersion::V0_0,
             Box::new(Ast::Var(store.intern("page-break"), span)),
         );
         let program = Program {
@@ -3754,7 +3754,7 @@ mod sig_constraint_tests {
         let mut saw_record_kind = false;
         for item in &sig.items {
             let (name, ty) =
-                lower_sig_item(item, &mut ctx, RustyfiVersion::V0_0_6).expect("a value item");
+                lower_sig_item(item, &mut ctx, RustyfiVersion::V0_0).expect("a value item");
             assert_eq!(name, "document");
             // Walk the lowered `Func` chain: `'a`'s fresh variable is the
             // very first domain (`Func(Var('a), Func(option(config),
@@ -3855,7 +3855,7 @@ mod sig_constraint_tests {
         let mut names = Vec::new();
         for item in &sig.items {
             let (name, _ty) =
-                lower_sig_item(item, &mut ctx, RustyfiVersion::V0_0_6).expect("a value item");
+                lower_sig_item(item, &mut ctx, RustyfiVersion::V0_0).expect("a value item");
             names.push(name);
         }
         assert_eq!(

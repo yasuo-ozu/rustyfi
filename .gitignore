@@ -14,3 +14,7 @@
 
 __pycache__/
 
+
+# agent worktrees and session scratch
+/.claude/
+/docs/plans/dup-checkpoint-poc/target/

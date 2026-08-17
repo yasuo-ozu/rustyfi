@@ -78,7 +78,7 @@ fn compile_command(name: &'static str) -> Command {
                 .long("target-version")
                 .value_name("VERSION")
                 .help(
-                    "Target SATySFi language version: 0.0.6 (default) or 0.1. \
+                    "Target SATySFi language version: 0.0 (default) or 0.1. \
                      When omitted, a 0.1-style `use` header is auto-detected.",
                 ),
         )

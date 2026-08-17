@@ -661,15 +661,15 @@ fn unknown_primitive_name_has_no_type() {
 
 // ============================================================================
 // math-split spec §2.2: the 8 V0_1-only additions. NOT folded into `NAMES`
-// above — that list's assertion checks `primitive_type` (the V0_0_6-default
+// above — that list's assertion checks `primitive_type` (the V0_0-default
 // wrapper), and every one of these 8 names is deliberately UNBOUND under
-// V0_0_6 (test 6.3-6 of the math-split spec); they're the hand-sync twin of
+// V0_0 (test 6.3-6 of the math-split spec); they're the hand-sync twin of
 // `typecheck::PRIMITIVE_NAMES`'s own "added in 0.1" block instead, verified
 // against `primitive_type_with_version` directly.
 // ============================================================================
 
 #[test]
-fn every_v01_only_primitive_has_a_type_under_v0_1_and_none_under_v0_0_6() {
+fn every_v01_only_primitive_has_a_type_under_v0_1_and_none_under_v0_0() {
     const V01_ONLY_NAMES: &[&str] = &[
         "read-math",
         "stringify-math",
@@ -726,9 +726,9 @@ fn every_v01_only_primitive_has_a_type_under_v0_1_and_none_under_v0_0_6() {
             "V0_1-only primitive `{name}` has no registered type under V0_1"
         );
         assert!(
-            prim_types::primitive_type_with_version(name, rustyfi_syntax::RustyfiVersion::V0_0_6)
+            prim_types::primitive_type_with_version(name, rustyfi_syntax::RustyfiVersion::V0_0)
                 .is_none(),
-            "V0_1-only primitive `{name}` must be unbound under V0_0_6"
+            "V0_1-only primitive `{name}` must be unbound under V0_0"
         );
     }
 }

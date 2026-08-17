@@ -428,13 +428,13 @@ fn lex_errors() {
 }
 
 #[test]
-fn use_and_package_are_identifiers_under_v0_0_6() {
+fn use_and_package_are_identifiers_under_v0_0() {
     use rustyfi_syntax::{lex_with_version, RustyfiVersion};
     // Under 0.0.6 (the base `lex`), `use`/`package` are plain identifiers —
     // there is no `use`/`package` keyword. This is the Axis-B keyword-gating
     // guard (the differential lexer test proves the whole corpus, this pins
     // the two new words specifically).
-    let v006: Vec<Token> = lex_with_version("use package foo", RustyfiVersion::V0_0_6)
+    let v006: Vec<Token> = lex_with_version("use package foo", RustyfiVersion::V0_0)
         .unwrap()
         .into_iter()
         .map(|a| a.slot)

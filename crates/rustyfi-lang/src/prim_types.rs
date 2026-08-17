@@ -102,14 +102,14 @@ pub fn t_math_class() -> MonoType {
 /// of this type. This TYPE itself (`math-char-class`, nominal, no
 /// parameters) is version-blind; its CONSTRUCTOR SET is not — see
 /// [`builtin_variants_with_version`]'s `math_char_class_decl` (math-package
-/// completion M3: V0_1 registers 14 ctors, V0_0_6 exactly the 9 above).
+/// completion M3: V0_1 registers 14 ctors, V0_0 exactly the 9 above).
 pub fn t_math_char_class() -> MonoType {
     MonoType::Variant("math-char-class".to_string(), Vec::new())
 }
 /// `paren` — version-forked (math-package completion M2), the
 /// `t_deco(version)`/`t_graphics_output(version)`/`t_decoset(version)`
 /// pattern (`:396-411`):
-/// - `V0_0_6` (`pervasives.satyh`'s `type paren = length -> length -> length
+/// - `V0_0` (`pervasives.satyh`'s `type paren = length -> length -> length
 ///   -> length -> color -> inline-boxes * (length -> length)`) — structural,
 ///   like `t_point()`/`t_dash()`/`t_deco()` above: directly the expanded
 ///   function type, not a nominal reference.
@@ -127,7 +127,7 @@ pub fn t_math_char_class() -> MonoType {
 /// `paren-left`/`paren-right`, `\paren`/`\brace`/`\abs`/…) are typed against
 /// this shape directly; this port's type-synonym expansion resolves a
 /// `paren`-named annotation (e.g. `val paren-left : paren` in a `sig`) to
-/// the same shape (V0_0_6: pervasives synonym expansion; V0_1: the
+/// the same shape (V0_0: pervasives synonym expansion; V0_1: the
 /// `name_to_mono("paren", …)` nominal case, `typecheck.rs`), so what
 /// actually matters is that this matches `paren-left`/`paren-right`'s own
 /// INFERRED type, which it does by construction. Gated on
@@ -399,7 +399,7 @@ pub fn t_dash() -> MonoType {
 }
 /// The result type of a graphics-producing callback (`inline-graphics`'s
 /// `tIGR`, `inline-graphics-outer`'s `tIGRO`, `tabular`'s `tRULESF`,
-/// `t_deco`'s own result): `list graphics` (`tL tGR`) under `V0_0_6`, one
+/// `t_deco`'s own result): `list graphics` (`tL tGR`) under `V0_0`, one
 /// `graphics` collection (`tGR`) under `V0_1` — the hidden alias-redefinition
 /// retype `docs/plans/…/prim-retype-sweep.md` §1.3 surfaces (H1-H6, R2).
 /// Runtime counterpart: `coerce_graphics_result` (`primitives.rs`), keyed on
@@ -413,7 +413,7 @@ pub fn t_graphics_output(version: RustyfiVersion) -> MonoType {
     }
 }
 /// `deco` (vminst.ml's `tDECO_raw = tPT @-> tLN @-> tLN @-> tLN @-> (tL
-/// tGR)` under `V0_0_6`; dev-0-1-0 redefines the same alias with a bare
+/// tGR)` under `V0_0`; dev-0-1-0 redefines the same alias with a bare
 /// `tGR` result — §1.3/H3-H6) — a callback `point -> length -> length ->
 /// length -> {list graphics / graphics}`, invoked (once placed) with its own
 /// position and resolved width/height/depth. `inline-frame-outer`'s
@@ -549,7 +549,7 @@ pub fn poly1<F: FnOnce(MonoType) -> MonoType>(f: F) -> PolyType {
 /// `"\\emph"`, `"+'"`, `"::"`). Back-compat wrapper — see
 /// `primitive_type_with_version`'s doc comment.
 pub fn primitive_type(name: &str) -> Option<PolyType> {
-    primitive_type_with_version(name, RustyfiVersion::V0_0_6)
+    primitive_type_with_version(name, RustyfiVersion::V0_0)
 }
 
 /// Look up the type scheme of a primitive registered in `primitives.rs`'s
@@ -557,7 +557,7 @@ pub fn primitive_type(name: &str) -> Option<PolyType> {
 /// `primitives::base_env`/`base_env_with_version`'s split (S4's
 /// `lex`/`lex_with_version` idiom) — unchanged for every one of this
 /// crate's existing `primitive_type(name)` call sites, all of which keep
-/// resolving against `RustyfiVersion::V0_0_6` exactly as before.
+/// resolving against `RustyfiVersion::V0_0` exactly as before.
 pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Option<PolyType> {
     Some(match name {
         // ==== math-split spec §2.1: removed in 0.1 — guard these OUT of
@@ -576,7 +576,7 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
             return None
         }
 
-        // ==== math-split spec §2.2: added in 0.1 — unbound under V0_0_6
+        // ==== math-split spec §2.2: added in 0.1 — unbound under V0_0
         // (falls through this guard to the catch-all `_ => return None`
         // below, since none of these names have a v0.0.6 arm at all). ====
         //
@@ -637,7 +637,7 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
         // ==== G6 (`…/tmp/g6-g7-standins.md` §1): hyphenation/unidata loader
         // + setter stand-ins, and the `here` lex-time-constant stand-in —
         // all V0_1-only (genuinely absent from 0.0.6 upstream, so these
-        // fall through to the catch-all `_ => return None` under V0_0_6).
+        // fall through to the catch-all `_ => return None` under V0_0).
         // Types are FAITHFUL to upstream (`vminst.ml`/`primitives.cppo.ml`);
         // bodies (`primitives.rs`) are ACCEPT-AND-RETURN stand-ins, not
         // hard errors like `stringify-math` above, because std-ja
@@ -1129,7 +1129,7 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
         }
         // `unite-graphics : list graphics -> graphics` (dev-0-1-0
         // vminst.ml:3119) — v0.1-only (prim-retype-sweep.md §1.1, A12); the
-        // math-split §2.2 mirror-guard idiom — under `V0_0_6` this guard
+        // math-split §2.2 mirror-guard idiom — under `V0_0` this guard
         // fails and the match falls through to the catch-all `_ => return
         // None` at the bottom, so the name is correctly unbound there.
         "unite-graphics" if version.graphics_is_collection() => {
@@ -1853,7 +1853,7 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
         "break" => poly0(arrow(t_text_info(), t_string())),
 
         // ==== L5a (prim-retype-sweep §2.1-2.4): 11 new v0.1-only rows,
-        // unbound under V0_0_6 (they fall through to the catch-all `_ =>
+        // unbound under V0_0 (they fall through to the catch-all `_ =>
         // return None` below, the same math-split §2.2 idiom). ====
         //
         // Bitwise ops (dev-0-1-0 vminst.ml :2495/:2477/:2527/:2541/:2513/
@@ -1891,7 +1891,7 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
         // ---- language-completeness sweep gap 1: 0.1 float comparisons
         // (`primitives.rs`'s `prims!` table comment on ">."/"<."/">=."/
         // "<=." for the upstream citation + the confirmation these are
-        // genuinely absent from 0.0.6) — unbound under V0_0_6, same
+        // genuinely absent from 0.0.6) — unbound under V0_0, same
         // catch-all-`_` fallthrough idiom as the L5a/L5b rows above.
         ">." | "<." | ">=." | "<=." if version == RustyfiVersion::V0_1 => {
             poly0(arrows(vec![t_float(), t_float()], t_bool()))
@@ -1980,7 +1980,7 @@ impl VariantDecl {
 /// `None` (the Rust `Option`, not the SATySFi one!) directly, so `None`'s
 /// declared payload here is `Option::None`, not `Some(unit)`.
 pub fn builtin_variants() -> Vec<VariantDecl> {
-    builtin_variants_with_version(RustyfiVersion::V0_0_6)
+    builtin_variants_with_version(RustyfiVersion::V0_0)
 }
 
 /// Same as [`builtin_variants`], for a given target `version`. Mirrors the

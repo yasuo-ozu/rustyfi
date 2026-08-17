@@ -145,14 +145,14 @@ fn val_math_with_scripts_parses() {
     assert_eq!(scripts.sup.name, "sup");
 }
 
-/// math-split spec §6.3 test 8: under V0_0_6, `math` stays an ordinary
+/// math-split spec §6.3 test 8: under V0_0, `math` stays an ordinary
 /// identifier (the keyword gate is V0_1-only) — `let math = 3` still
 /// lexes `math` as a plain `Var`, never `Token::Math`.
 #[test]
 fn math_keyword_is_gated_to_v0_1() {
     let toks = lex_with_version("val math ctx \\f m = e", RustyfiVersion::V0_1).unwrap();
     assert!(toks.iter().any(|a| matches!(a.slot, Token::Math)));
-    let toks = lex_with_version("let math = 3", RustyfiVersion::V0_0_6).unwrap();
+    let toks = lex_with_version("let math = 3", RustyfiVersion::V0_0).unwrap();
     assert!(toks.iter().all(|a| !matches!(a.slot, Token::Math)));
     assert!(toks.iter().any(|a| matches!(&a.slot, Token::Var(s) if s == "math")));
 }
@@ -799,7 +799,7 @@ fn bare_open_without_let_is_rejected_under_v0_1() {
 }
 
 #[test]
-fn v0_0_6_source_is_not_valid_v0_1_library_syntax() {
+fn v0_0_source_is_not_valid_v0_1_library_syntax() {
     // The plain 0.0.6 stdja-mini.satyh (top-level `let`/`let-inline`/
     // `let-block` with no enclosing `module ... = struct ... end`) has no
     // 0.1 `FileV1` shape at all: neither a bare `Document` body (it isn't

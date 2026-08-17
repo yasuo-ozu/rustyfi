@@ -274,7 +274,7 @@ fn cmd_compile(m: &ArgMatches) -> anyhow::Result<()> {
         }
         _ => {
             // Slice X4a (docs/plans/design-cross-version-import.md §"Slice
-            // X4 — reverse direction"): a V0_0_6-rooted load whose
+            // X4 — reverse direction"): a V0_0-rooted load whose
             // dependency graph contains at least one foreign V0_1 node (a
             // `@require:` of a `dist-v01/packages/` package, per the
             // loader's Q4-mirror rule) routes through the new
@@ -602,15 +602,15 @@ fn resolve_version_and_mode(
 /// dependency order; untyped elaboration gets the same scoping by prelude
 /// concatenation.)
 fn merge_program(program: rustyfi_loader::LoadedProgram) -> rustyfi_syntax::cst::File {
-    // `merge_program` is the V0_0_6-only path; V0_1 goes through
+    // `merge_program` is the V0_0-only path; V0_1 goes through
     // `compile_document_v1` once it exists. `LoadedCst::V0_1` is genuinely
     // unreachable today: `is_implemented()` still gates `V0_1` out at
     // `rustyfi_loader::load()`.
     fn as_v006(cst: rustyfi_loader::LoadedCst) -> rustyfi_syntax::cst::File {
         match cst {
-            rustyfi_loader::LoadedCst::V0_0_6(f) => f,
+            rustyfi_loader::LoadedCst::V0_0(f) => f,
             rustyfi_loader::LoadedCst::V0_1(_) => unreachable!(
-                "merge_program is the V0_0_6-only path; V0_1 goes through compile_document_v1 once it exists"
+                "merge_program is the V0_0-only path; V0_1 goes through compile_document_v1 once it exists"
             ),
         }
     }

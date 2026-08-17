@@ -1,10 +1,10 @@
 //! Slice X3a (`docs/plans/design-cross-version-import.md`, "Slice X3 —
 //! forked-type export adapter (detailed design)", specifically the X3a
-//! sub-slice, X3.1-X3.3): the boundary TYPE adapter for a `V0_0_6`
+//! sub-slice, X3.1-X3.3): the boundary TYPE adapter for a `V0_0`
 //! dependency spliced into a `V0_1` program.
 //!
 //! X2a already narrows the *value* half of X1's forked-name guard away (a
-//! spliced binding's RHS runs inside `Ast::VersionScope(V0_0_6, _)`, so an
+//! spliced binding's RHS runs inside `Ast::VersionScope(V0_0, _)`, so an
 //! internally-used version-forked *primitive* resolves against its own
 //! version). The *type* half stays conservative: `lib.rs`'s
 //! `compile_document_v1_with_trials` still hard-rejects a dependency that
@@ -131,7 +131,7 @@ impl std::fmt::Display for BoundaryError {
 
 impl std::error::Error for BoundaryError {}
 
-/// The set of type names X3a refuses to let cross the `V0_0_6` -> `V0_1`
+/// The set of type names X3a refuses to let cross the `V0_0` -> `V0_1`
 /// boundary unadapted: every name [`crate::typecheck::forked_type_names`]
 /// flags, plus `page` (X3.1's note — see this module's doc comment for why
 /// `page` needs adding explicitly rather than falling out of the automatic
@@ -221,7 +221,7 @@ fn reject_if_forked(
 /// type whose runtime `Value` representation is provably identical, or
 /// reject.
 ///
-/// `ty` is the export's type as it would be read under `from` (its `V0_0_6`
+/// `ty` is the export's type as it would be read under `from` (its `V0_0`
 /// meaning). On `Ok`, the returned `PolyType` is what a `to`-version
 /// consumer scope should bind for this export. On `Err`, the caller should
 /// raise a compile error and abort.
@@ -421,13 +421,13 @@ fn relabel_type_atom(
 /// case before X4a).
 ///
 /// **Where each direction is actually WIRED (load-bearing asymmetry).** The
-/// FORWARD `(V0_0_6, V0_1)` arm below IS reached from `lib.rs`'s splice arm,
+/// FORWARD `(V0_0, V0_1)` arm below IS reached from `lib.rs`'s splice arm,
 /// via `relabel_type_decls` — necessary there because
 /// `v1::module_check::check_program_inner` hard-codes `Checker.version =
 /// V0_1` for EVERY type declaration in the merged program (`module_check.rs`
 /// :238-239,271), so a spliced 0.0.6 dependency's own "math" spelling MUST
 /// be rewritten into ambient vocabulary before it reaches
-/// `program.type_decls`. The REVERSE `(V0_1, V0_0_6)` arm below is NOT wired
+/// `program.type_decls`. The REVERSE `(V0_1, V0_0)` arm below is NOT wired
 /// into `lib.rs`'s reverse splice arm (`compile_document_v006_xver_with_
 /// trials`): a foreign 0.1 dependency's own "math-text"/"math-boxes"
 /// spelling is ALREADY that same hard-coded ambient (`V0_1`) vocabulary, so
@@ -440,13 +440,13 @@ fn relabel_type_atom(
 /// utility, ready for a future caller (e.g. an X4b elaborated-IR-level
 /// adapter) not bound by `check_program`'s hard-coded-`V0_1` constraint.
 ///
-/// - **`V0_0_6` -> `V0_1`** (X3a, unchanged): `"math"` relabels in place to
+/// - **`V0_0` -> `V0_1`** (X3a, unchanged): `"math"` relabels in place to
 ///   `"math-text"` — 0.0.6's undifferentiated math type maps to 0.1's
 ///   UNEVALUATED half, the correct direction since a crossing 0.0.6 `math`
 ///   value is exactly a `Value::MathText`/`Value::Math` (never a
 ///   `Value::MathBoxes`, which 0.0.6 has no primitive that ever produces —
 ///   X3.8/S2's soundness backbone).
-/// - **`V0_1` -> `V0_0_6`** (X4a, NEW): `"math-text"` OR `"math-boxes"`
+/// - **`V0_1` -> `V0_0`** (X4a, NEW): `"math-text"` OR `"math-boxes"`
 ///   relabels in place to `"math"` — 0.1's split math types both COARSEN
 ///   safely into 0.0.6's one undifferentiated type. Unlike the forward
 ///   direction, there is no symmetric "must never alias" risk here (X3.8/S2's
@@ -474,11 +474,11 @@ fn relabel_or_reject_name(
     to: RustyfiVersion,
 ) -> Result<(), BoundaryError> {
     match (from, to) {
-        (RustyfiVersion::V0_0_6, RustyfiVersion::V0_1) if name == "math" => {
+        (RustyfiVersion::V0_0, RustyfiVersion::V0_1) if name == "math" => {
             *name = "math-text".to_string();
             Ok(())
         }
-        (RustyfiVersion::V0_1, RustyfiVersion::V0_0_6)
+        (RustyfiVersion::V0_1, RustyfiVersion::V0_0)
             if name == "math-text" || name == "math-boxes" =>
         {
             *name = "math".to_string();
@@ -491,7 +491,7 @@ fn relabel_or_reject_name(
 // ============================================================================
 // `relabel_type_decls` — the actual splice-arm entry point (`lib.rs`'s
 // `compile_document_v1_with_trials`): rewrite every LOAD-BEARING type-text
-// site in a spliced `V0_0_6` dependency's `prelude` (see this module's doc
+// site in a spliced `V0_0` dependency's `prelude` (see this module's doc
 // comment for why `TopBinding::Type`, recursed through `TopBinding::
 // Module`'s nested `decls`, is the complete set of such sites in this
 // port's 0.0.6 grammar).
@@ -584,14 +584,14 @@ fn relabel_variant_def(
 // Unlike `math`, `deco`'s bare NAME needs no textual relabel at all: once
 // accepted, `typecheck::name_to_mono("deco", V0_1)` already resolves it to
 // `t_deco(V0_1)` unconditionally (`typecheck.rs`'s `name_to_mono` — gated on
-// `version == V0_1`, with no analogous `V0_0_6` arm, so the SAME bare word
+// `version == V0_1`, with no analogous `V0_0` arm, so the SAME bare word
 // means the SAME 0.1 arrow-type once the splice stops rejecting it). So a
 // `deco`/`deco-set` mention with no VALUE attached (a bare `type foo = deco`
 // synonym, exactly the fixture `xver_boundary_deco_export_coerces_and_renders`
 // exercises) is *already* safe with zero further work — `relabel_type_decls`
 // above is not even called for it.
 //
-// What genuinely needs adapting is the VALUE: a `V0_0_6`-authored `deco`
+// What genuinely needs adapting is the VALUE: a `V0_0`-authored `deco`
 // closure's body, once fully applied, evaluates to `Value::List` of
 // `Value::Graphics` (`prim_types::t_graphics_output`'s `!graphics_is_collection`
 // arm; `primitives::coerce_graphics_result`'s `else` branch, which the
@@ -682,7 +682,7 @@ pub(crate) enum DecoKind {
     Consumer,
 }
 
-/// One top-level `V0_0_6` binding X3b can soundly value-coerce: its own
+/// One top-level `V0_0` binding X3b can soundly value-coerce: its own
 /// `: ty` ascription (`RecBinding.ascription`) is *exactly* the bare leaf
 /// `deco`/`deco-set` — see this section's doc comment for the scope.
 ///
@@ -729,7 +729,7 @@ pub(crate) struct DecoExport {
     pub arg_downgrades: Vec<Option<DecoKind>>,
 }
 
-/// Scan a spliced `V0_0_6` dependency's `prelude` for every `deco`/
+/// Scan a spliced `V0_0` dependency's `prelude` for every `deco`/
 /// `deco-set` occurrence reachable from a `V0_1` consumer (the SAME
 /// boundary sites `lib.rs`'s `collect_free_globals` already treats as
 /// export text: a top-level `TopBinding::LetRec`'s own ascription, a
@@ -1155,7 +1155,7 @@ fn deco_leaf_name(name: &str) -> Option<String> {
 }
 
 /// Build synthetic, `V0_1`-authored `TopBinding`s that COERCE each
-/// [`DecoExport`]'s already-spliced (`V0_0_6`-semantics, list-returning)
+/// [`DecoExport`]'s already-spliced (`V0_0`-semantics, list-returning)
 /// value into the single-`graphics` shape a `V0_1` consumer's call sites
 /// expect (this section's doc comment). For `DecoKind::Deco`, splices a
 /// SECOND top-level `let` of the SAME name that shadows the original
@@ -1198,8 +1198,8 @@ pub(crate) const XVER_DOWN_DECOSET: &str = "xver-downgrade-decoset";
 /// dependency whose module-scoped deco exports need wrapping.
 ///
 /// An in-module wrapper cannot call `unite-graphics` itself. The whole module
-/// is a spliced `V0_0_6` binding, so `elaborate.rs` wraps its members in
-/// `Ast::VersionScope(V0_0_6, _)` — and under that scope `unite-graphics`, a
+/// is a spliced `V0_0` binding, so `elaborate.rs` wraps its members in
+/// `Ast::VersionScope(V0_0, _)` — and under that scope `unite-graphics`, a
 /// `V0_1`-only primitive, is an unbound variable at run time (observed, not
 /// theorised). Top-level wrappers dodge this by being appended OUTSIDE the
 /// dependency's index range; an in-module one has nowhere else to go.
@@ -1425,11 +1425,11 @@ pub(crate) fn deco_coercion_prelude(exports: &[DecoExport]) -> Vec<cst::TopBindi
 // ============================================================================
 // X4b (the reverse mirror of X3b, above) — FINDING, not a feature: a
 // foreign `V0_1` dependency's `deco`/`deco-set` export returns a single
-// `graphics` (0.1 semantics); every REAL `V0_0_6`-authored consumer call
+// `graphics` (0.1 semantics); every REAL `V0_0`-authored consumer call
 // site (`primitives::apply_deco`/`coerce_graphics_result`, fired at render
-// time under `interp.version == V0_0_6` — `lib.rs`'s
+// time under `interp.version == V0_0` — `lib.rs`'s
 // `compile_document_v006_xver_with_trials` always calls
-// `eval_document_trials(.., RustyfiVersion::V0_0_6)`) expects a `graphics
+// `eval_document_trials(.., RustyfiVersion::V0_0)`) expects a `graphics
 // list` back (`coerce_graphics_result`'s `!graphics_is_collection()`
 // branch, `as_list`). A sound coercion would need to wrap the single
 // `graphics` in a SINGLETON LIST — `let name p w h d = [name p w h d]`,
@@ -1526,7 +1526,7 @@ pub(crate) fn reject_deco_exports_v01_sig(file: &cst_v1::FileV1) -> Result<(), B
             binding: String::new(),
             ty_name: name.clone(),
             from: RustyfiVersion::V0_1,
-            to: RustyfiVersion::V0_0_6,
+            to: RustyfiVersion::V0_0,
             note: forked_note(&name),
         });
     }
@@ -1667,7 +1667,7 @@ mod tests {
     use crate::types::BaseType;
 
     fn v006() -> RustyfiVersion {
-        RustyfiVersion::V0_0_6
+        RustyfiVersion::V0_0
     }
     fn v01() -> RustyfiVersion {
         RustyfiVersion::V0_1
@@ -1842,7 +1842,7 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // Slice X4a: the REVERSE (V0_1 -> V0_0_6) direction of the leaf policy
+    // Slice X4a: the REVERSE (V0_1 -> V0_0) direction of the leaf policy
     // (`relabel_or_reject_name`'s new match arm). NOTE: these pin the PURE
     // function's contract only — `lib.rs`'s `compile_document_v006_xver_
     // with_trials` deliberately does NOT call `adapt_export_annotation`/
@@ -1915,8 +1915,8 @@ mod tests {
 
     #[test]
     fn adapt_export_annotation_forward_math_relabel_is_unaffected_by_the_reverse_arm() {
-        // Non-regression: adding the (V0_1, V0_0_6) arm must not perturb the
-        // EXISTING (V0_0_6, V0_1) "math"->"math-text" relabel.
+        // Non-regression: adding the (V0_1, V0_0) arm must not perturb the
+        // EXISTING (V0_0, V0_1) "math"->"math-text" relabel.
         let ann = parse_ty("math");
         let out =
             adapt_export_annotation(&ann, v006(), v01()).expect("math must still be accepted");

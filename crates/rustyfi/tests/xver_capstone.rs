@@ -147,7 +147,7 @@ fn xver_capstone_renders_to_extractable_text() {
              0.1 @import: helper must all load through one LoadOptions",
         );
 
-        // Sanity: `list`/`option` were actually detected as `V0_0_6` corpus
+        // Sanity: `list`/`option` were actually detected as `V0_0` corpus
         // targets (the X1 Q4 per-file rule) — if this ever regresses to
         // "everything V0_1" the capstone would still fail loudly at parse
         // (0.0.6 module syntax isn't valid 0.1), but pin the provenance
@@ -162,12 +162,12 @@ fn xver_capstone_renders_to_extractable_text() {
         // 0.1-consumes-0.0.6 proof, which is the only thing it exists to show.
         let saw_v006 = program.files[..program.files.len() - 1]
             .iter()
-            .filter(|f| matches!(f.version, rustyfi_syntax::RustyfiVersion::V0_0_6))
+            .filter(|f| matches!(f.version, rustyfi_syntax::RustyfiVersion::V0_0))
             .count();
         assert_eq!(
             saw_v006,
             2,
-            "list.satyg + option.satyg should both be V0_0_6-tagged deps: {:?}",
+            "list.satyg + option.satyg should both be V0_0-tagged deps: {:?}",
             program
                 .files
                 .iter()

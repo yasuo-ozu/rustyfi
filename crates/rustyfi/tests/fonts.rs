@@ -40,7 +40,7 @@ fn minimal_fixture() -> PathBuf {
 /// "nothing configured" — regardless of whether `scripts/download-fonts.sh`
 /// has already been run against the real `lib_root()` (which then
 /// legitimately DOES carry a `dist/hash/fonts.rustyfi-hash` /
-/// `default-font.rustyfi-hash`, for `crates/rustyfi-cli/tests/cjk_render.rs`
+/// `default-font.rustyfi-hash`, for `crates/rustyfi/tests/cjk_render.rs`
 /// and the CJK end-to-end proof). Only `dist/packages` is symlinked in (all
 /// the loader needs to resolve `@require: stdja-mini`), so this stays a
 /// thin proxy rather than a real copy of the whole package tree.
@@ -57,7 +57,7 @@ fn tmpdir(tag: &str) -> PathBuf {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
     let p = std::env::temp_dir().join(format!(
-        "rustyfi-cli-fonts-{tag}-{}-{}-{}",
+        "rustyfi-fonts-{tag}-{}-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -171,9 +171,9 @@ fn write_font_config(work: &Path, font_path: &Path) -> PathBuf {
 
 fn as_v006(cst: rustyfi_loader::LoadedCst) -> rustyfi_syntax::cst::File {
     match cst {
-        rustyfi_loader::LoadedCst::V0_0_6(f) => f,
+        rustyfi_loader::LoadedCst::V0_0(f) => f,
         rustyfi_loader::LoadedCst::V0_1(_) => {
-            unreachable!("this test's ground-truth path is V0_0_6-only")
+            unreachable!("this test's ground-truth path is V0_0-only")
         }
     }
 }

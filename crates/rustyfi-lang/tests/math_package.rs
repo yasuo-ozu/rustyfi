@@ -62,15 +62,15 @@ impl Drop for TempDoc {
 }
 
 /// Merge a loader-resolved program's preludes into one synthetic
-/// `cst::File`, exactly like `rustyfi-cli`'s `merge_program` /
+/// `cst::File`, exactly like `rustyfi`'s `merge_program` /
 /// `stdlib_tier0.rs`'s own copy: the loader guarantees dependency-first
 /// order with the entry document last, so every library's prelude is
 /// spliced ahead of the entry's own, in that order.
 fn as_v006(cst: rustyfi_loader::LoadedCst) -> rustyfi_syntax::cst::File {
     match cst {
-        rustyfi_loader::LoadedCst::V0_0_6(f) => f,
+        rustyfi_loader::LoadedCst::V0_0(f) => f,
         rustyfi_loader::LoadedCst::V0_1(_) => {
-            unreachable!("this test's merge_program is the V0_0_6-only path")
+            unreachable!("this test's merge_program is the V0_0-only path")
         }
     }
 }

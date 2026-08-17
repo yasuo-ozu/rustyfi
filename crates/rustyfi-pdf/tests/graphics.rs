@@ -12,7 +12,7 @@ use rustyfi_backend::{
 /// A 20pt square, traced (0,0) -> (20,0) -> (20,20) -> (0,20) -> close —
 /// exactly `start-path (0,0) |> line-to (20,0) |> line-to (20,20) |>
 /// line-to (0,20) |> close-with-line` would build (this port has no `|>`
-/// yet — see the e2e fixture in `rustyfi-cli/tests/fixtures/graphics.saty`
+/// yet — see the e2e fixture in `rustyfi/tests/fixtures/graphics.saty`
 /// for the real primitive chain).
 fn rectangle_path() -> Path {
     Path {

@@ -33,7 +33,7 @@ fn tmpdir(tag: &str) -> PathBuf {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
     let p = std::env::temp_dir().join(format!(
-        "rustyfi-cli-cache-{tag}-{}-{}-{}",
+        "rustyfi-cache-{tag}-{}-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -193,7 +193,7 @@ fn editing_the_input_invalidates_the_cache() {
     std::fs::remove_dir_all(&work).ok();
 }
 
-/// Timing demonstration (run with `cargo test -p rustyfi-cli --ignored`): a
+/// Timing demonstration (run with `cargo test -p rustyfi --ignored`): a
 /// warm hit is dramatically faster than a cold miss, since it skips
 /// elaborate/typecheck/eval/render. Prints both wall-clock times.
 #[test]

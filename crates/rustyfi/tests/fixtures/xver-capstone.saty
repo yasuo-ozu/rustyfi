@@ -4,7 +4,7 @@
 % `lib-rustyfi/dist/packages/list.satyg` (which itself `@require:`s
 % `option.satyg`) — through the FULL pipeline: V0_1 lex -> cst_v1 parse ->
 % loader (`load_legacy`'s X1 Q4 per-file version detection tags `list`/
-% `option` as `V0_0_6`, everything else stays `V0_1`) -> `v1::lower` ->
+% `option` as `V0_0`, everything else stays `V0_1`) -> `v1::lower` ->
 % shared elaborate/typecheck(V0_1 whole-program, `Ast::VersionScope`-wrapped
 % dependency)/eval -> line break -> page break -> PDF. `List.map`/
 % `List.fold-left`/`Option.from` (all real 0.0.6-defined values, never

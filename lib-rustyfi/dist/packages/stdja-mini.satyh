@@ -15,7 +15,7 @@
 %    stays a fully unconstrained type variable, which unifies against any
 %    record shape a caller happens to pass (e.g. `(| title = ..|)` or
 %    `(| title = ..; author = ..|)` — see the fixtures under
-%    crates/rustyfi-cli/tests/fixtures/).
+%    crates/rustyfi/tests/fixtures/).
 %
 %  - The page text width is hardcoded to 440pt (docs/plans/document-
 %    page-model.md §Slice 1's own goal-fixture width), on an `A4Paper`

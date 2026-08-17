@@ -1,5 +1,5 @@
 [package]
-name = "rustyfi-cli"
+name = "rustyfi"
 description = "SATySFi command line interface: compile .saty documents to PDF"
 version.workspace = true
 edition.workspace = true

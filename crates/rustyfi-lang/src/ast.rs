@@ -143,15 +143,15 @@ pub enum Ast<I = String> {
     /// RHS (Slice X2a, `docs/plans/design-cross-version-import.md`
     /// §"Slice X2 — per-group primitive environment", Option C).
     /// `elaborate.rs`'s cross-version splice wraps each binding contributed
-    /// by a `LoadedCst::V0_0_6` dependency (`lib.rs`'s
+    /// by a `LoadedCst::V0_0` dependency (`lib.rs`'s
     /// `compile_document_v1_with_trials` splice arm) in
-    /// `VersionScope(V0_0_6, rhs)`, at RHS granularity (never the
+    /// `VersionScope(V0_0, rhs)`, at RHS granularity (never the
     /// surrounding `LetIn`/`LetRecIn` node, and never the continuation that
     /// follows it — see `elaborate::elaborate_program_with_versions`'s doc
     /// comment). Three consumers read the tag, all pushing/popping a cursor
     /// around recursing into `body`:
     /// - `compile.rs`'s `Compiler::current_version` — which base
-    ///   environment (`V0_1`'s or `V0_0_6`'s) an unshadowed `Ast::Var`
+    ///   environment (`V0_1`'s or `V0_0`'s) an unshadowed `Ast::Var`
     ///   constant-folds against, so a version-forked primitive
     ///   (`page-break`, `math-*`, …) freezes to the RIGHT version's
     ///   `PrimDef` at compile time (`compile.rs:120-192`'s existing fold —
@@ -159,11 +159,11 @@ pub enum Ast<I = String> {
     ///   version-sensitive resolution in the pipeline).
     /// - `eval.rs`'s `Interp::version` — the R2 fix: any runtime fork that
     ///   reads it (`primitives.rs`'s `reflect_math_elem`/
-    ///   `coerce_graphics_result`/`make_paren_run`) sees `V0_0_6` while
+    ///   `coerce_graphics_result`/`make_paren_run`) sees `V0_0` while
     ///   evaluating on behalf of this subtree.
     /// - `typecheck.rs`'s base-type-env swap — the subtree's *internal*
     ///   forked-primitive-type use (e.g. constructing a `page` ADT to hand
-    ///   to `page-break`) checks against `V0_0_6`'s primitive types.
+    ///   to `page-break`) checks against `V0_0`'s primitive types.
     ///
     /// **Never emitted on a pure single-version load** — `elaborate_program`
     /// delegates to `elaborate_program_with_versions` with an empty index

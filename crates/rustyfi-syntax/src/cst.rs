@@ -697,7 +697,7 @@ pub mod ast {
         /// an **additive** 0.1 node: 0.0.6 has no `?(…)` param bundle, so it
         /// is reachable in a 0.0.6 parse only for input that used to be a
         /// parse error (a leading `?` cannot begin `Fun`'s `Vec<PatBot>`),
-        /// where `elaborate` rejects it under a V0_0_6 [`crate::version`]
+        /// where `elaborate` rejects it under a V0_0 [`crate::version`]
         /// gate. The V0_1 pipeline reaches it by lowering a `cst_v1` param
         /// bundle (multi-unit lambdas lower to a nested `FunRows`/`Fun`
         /// chain). Placed right after [`Expr::Fun`] so a plain `fun x -> …`
@@ -959,7 +959,7 @@ pub mod ast {
         /// parse time, as upstream does). Additive 0.1 node; the `?(`-head is
         /// token-disjoint from every 0.0.6 `AppArg` arm (0.0.6's `Optional`
         /// is `?:`-headed, a distinct token), so no previously-parsing input
-        /// changes shape. Elaboration rejects it under a V0_0_6 version gate.
+        /// changes shape. Elaboration rejects it under a V0_0 version gate.
         Bundled {
             opts: CstOptArgs,
             excl: Option<UnopExclamTok>,
@@ -1413,7 +1413,7 @@ pub mod ast {
         /// program containing `?(l : int) -> int` NOW parses (previously a
         /// parse error — no old `TypeExpr` arm starts with `?`) and reaches
         /// `typecheck.rs::lower_type_expr`'s version gate, which rejects it
-        /// under `V0_0_6` with a version-error message (an improvement over
+        /// under `V0_0` with a version-error message (an improvement over
         /// the old parse error).
         OptRowFun {
             opt_dom: CstTypeOptDom,
@@ -1568,7 +1568,7 @@ pub mod ast {
         /// Comma-separated fields, matching this file's other 0.1 additive
         /// nodes ([`CstOptArgEntry`], [`CstOptBinderEntry`]) rather than the
         /// frozen `Record`'s upstream-0.0.6 `;` separator. Unreachable from a
-        /// `V0_0_6` token stream by construction: [`RowVarTok`] is only ever
+        /// `V0_0` token stream by construction: [`RowVarTok`] is only ever
         /// emitted by the lexer under [`crate::version::RustyfiVersion::
         /// V0_1`] (`lexer.rs`'s `'?'` arm), so no 0.0.6 parse can ever
         /// produce this variant — no elaborate/typecheck-time version gate

@@ -2,7 +2,7 @@
 //! hooks-annotations-crossref.md` §B/§C): `write_annotations`/
 //! `write_named_dests`/`write_outline` (`rustyfi-pdf/src/lib.rs`), driven
 //! through the public `render_pdf_with` entry point with a hand-built
-//! `DocExtras` (no lang layer involved — see `crates/rustyfi-cli/tests/
+//! `DocExtras` (no lang layer involved — see `crates/rustyfi/tests/
 //! fixtures/annot-hook.saty` for the end-to-end version through
 //! `register-*`).
 

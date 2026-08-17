@@ -55,7 +55,7 @@ fn eval_v01(src: &str) -> Result<Value, String> {
 }
 
 /// Parse `src` as a FROZEN 0.0.6 document and elaborate it under a default
-/// (V0_0_6) scope — returns the elaboration error text (or the value on the
+/// (V0_0) scope — returns the elaboration error text (or the value on the
 /// unexpected success). Used to pin the version gate.
 fn elaborate_v006_err(src: &str) -> String {
     let file = parse_file(src).unwrap_or_else(|e| panic!("0.0.6 parse of {src:?}: {e}"));

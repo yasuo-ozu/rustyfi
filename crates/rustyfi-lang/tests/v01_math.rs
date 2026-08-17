@@ -95,12 +95,12 @@ fn lib_file_inline(name: &str, src: &str) -> LoadedFile {
 }
 
 /// Merge a loader-resolved 0.0.6 program's preludes into one synthetic
-/// `cst::File`, exactly like `rustyfi-cli`'s private `merge_program`
+/// `cst::File`, exactly like `rustyfi`'s private `merge_program`
 /// (reproduced locally the same way `v01_slice1.rs` does).
 fn merge_program_006(program: LoadedProgram) -> rustyfi_syntax::cst::File {
     fn as_v006(cst: LoadedCst) -> rustyfi_syntax::cst::File {
         match cst {
-            LoadedCst::V0_0_6(f) => f,
+            LoadedCst::V0_0(f) => f,
             LoadedCst::V0_1(_) => unreachable!("this test's 0.0.6 merge path only"),
         }
     }
@@ -161,7 +161,7 @@ fn assert_geometry_equivalent(a: &DocumentValue, b: &DocumentValue) {
 fn v01_math_matches_006_twin_geometry() {
     let files = vec![
         v01_mini_file(),
-        entry_file_from_disk("crates/rustyfi-cli/tests/fixtures/v01-math.saty"),
+        entry_file_from_disk("crates/rustyfi/tests/fixtures/v01-math.saty"),
     ];
     let mono = Mono;
     let (doc_v1, _trials) = rustyfi_lang::compile_document_v1_with_trials(&files, &mono)
@@ -173,13 +173,13 @@ fn v01_math_matches_006_twin_geometry() {
         doc_v1.pages[0].lines.len()
     );
 
-    let entry_006 = repo("crates/rustyfi-cli/tests/fixtures/v01-math-equiv-006.saty");
+    let entry_006 = repo("crates/rustyfi/tests/fixtures/v01-math-equiv-006.saty");
     let lib_root_006 = repo("lib-rustyfi");
     let program_006 = rustyfi_loader::load(
         &entry_006,
         &LoadOptions {
             lib_root: Some(lib_root_006),
-            version: RustyfiVersion::V0_0_6,
+            version: RustyfiVersion::V0_0,
             ..Default::default()
         },
     )
@@ -198,7 +198,7 @@ fn v01_math_matches_006_twin_geometry() {
 fn v01_scripts_render() {
     let files = vec![
         v01_mini_file(),
-        entry_file_from_disk("crates/rustyfi-cli/tests/fixtures/v01-math-scripts.saty"),
+        entry_file_from_disk("crates/rustyfi/tests/fixtures/v01-math-scripts.saty"),
     ];
     let mono = Mono;
     let (doc, _trials) = rustyfi_lang::compile_document_v1_with_trials(&files, &mono)
@@ -268,7 +268,7 @@ fn val_math_result_must_be_math_boxes() {
 
 /// Test 5 (§6.3): the 6 prims 0.1 removes outright (`math-split` spec
 /// §2.1) are unbound in BOTH the runtime env and the type table under
-/// V0_1, and stay bound under V0_0_6 (the positive twin) — env and
+/// V0_1, and stay bound under V0_0 (the positive twin) — env and
 /// type-env agree by construction (both key on
 /// `RustyfiVersion::math_is_split`/`VersionSpan`).
 #[test]
@@ -291,22 +291,22 @@ fn removed_prims_are_unbound_in_v01() {
             prim_types::primitive_type_with_version(name, RustyfiVersion::V0_1).is_none(),
             "'{name}' should have no V0_1 type"
         );
-        // Twin positive: unaffected under V0_0_6.
+        // Twin positive: unaffected under V0_0.
         assert!(
-            primitives::base_env_with_version(RustyfiVersion::V0_0_6)
+            primitives::base_env_with_version(RustyfiVersion::V0_0)
                 .lookup(name)
                 .is_some(),
-            "'{name}' should stay bound in the V0_0_6 runtime env"
+            "'{name}' should stay bound in the V0_0 runtime env"
         );
         assert!(
-            prim_types::primitive_type_with_version(name, RustyfiVersion::V0_0_6).is_some(),
-            "'{name}' should keep its V0_0_6 type"
+            prim_types::primitive_type_with_version(name, RustyfiVersion::V0_0).is_some(),
+            "'{name}' should keep its V0_0 type"
         );
     }
 }
 
 /// Test 6 (§6.3): the 8 prims 0.1 adds (math-split spec §2.2), plus G6's 4
-/// table prims (`…/tmp/g6-g7-standins.md` §5.1), are unbound under V0_0_6
+/// table prims (`…/tmp/g6-g7-standins.md` §5.1), are unbound under V0_0
 /// in both the runtime env and the type table, and bound under V0_1.
 #[test]
 fn added_prims_are_unbound_in_006() {
@@ -326,14 +326,14 @@ fn added_prims_are_unbound_in_006() {
         "set-unicode-char-database",
     ] {
         assert!(
-            primitives::base_env_with_version(RustyfiVersion::V0_0_6)
+            primitives::base_env_with_version(RustyfiVersion::V0_0)
                 .lookup(name)
                 .is_none(),
-            "'{name}' should be unbound in the V0_0_6 runtime env"
+            "'{name}' should be unbound in the V0_0 runtime env"
         );
         assert!(
             prim_types::primitive_type(name).is_none(),
-            "'{name}' should have no V0_0_6 type"
+            "'{name}' should have no V0_0 type"
         );
         assert!(
             primitives::base_env_with_version(RustyfiVersion::V0_1)
@@ -350,18 +350,18 @@ fn added_prims_are_unbound_in_006() {
 
 /// G6 (`…/tmp/g6-g7-standins.md` §5.1): `here` is a bare CONSTANT (not a
 /// `prims!` table row), so it needs its own gating assertion — unbound (env
-/// + type table) under V0_0_6, bound under V0_1.
+/// + type table) under V0_0, bound under V0_1.
 #[test]
 fn here_constant_is_unbound_in_006() {
     assert!(
-        primitives::base_env_with_version(RustyfiVersion::V0_0_6)
+        primitives::base_env_with_version(RustyfiVersion::V0_0)
             .lookup("here")
             .is_none(),
-        "'here' should be unbound in the V0_0_6 runtime env"
+        "'here' should be unbound in the V0_0 runtime env"
     );
     assert!(
         prim_types::primitive_type("here").is_none(),
-        "'here' should have no V0_0_6 type"
+        "'here' should have no V0_0 type"
     );
     assert!(
         primitives::base_env_with_version(RustyfiVersion::V0_1)
@@ -393,7 +393,7 @@ fn eval_v01_raw_value(
     fn as_v01(f: &LoadedFile) -> &rustyfi_syntax::cst_v1::FileV1 {
         match &f.cst {
             LoadedCst::V0_1(cst) => cst,
-            LoadedCst::V0_0_6(_) => unreachable!("this helper is V0_1-only"),
+            LoadedCst::V0_0(_) => unreachable!("this helper is V0_1-only"),
         }
     }
     let mut prelude = Vec::new();
@@ -570,7 +570,7 @@ let tt-a = convert-string-for-math ctx-tt MathTypewriter (string-unexplode [65])
     assert_eq!(first_cp(&parts[2]), 0x1D670, "MathTypewriter capital A");
 }
 
-/// T-M3-frozen: under V0_0_6, `MathSansSerif` stays an unknown constructor
+/// T-M3-frozen: under V0_0, `MathSansSerif` stays an unknown constructor
 /// (pins the registration gate — the frozen 0.0.6 surface never learns the
 /// 5 new names).
 #[test]
@@ -583,7 +583,7 @@ fn t_m3_new_char_classes_are_unknown_under_v006() {
     let elaborated = rustyfi_lang::elaborate::elaborate_program(&file, &scope)
         .unwrap_or_else(|e| panic!("0.0.6 elaborate: {e}"));
     let err = rustyfi_lang::typecheck::typecheck(&elaborated)
-        .expect_err("'MathSansSerif' must stay an unknown constructor under V0_0_6");
+        .expect_err("'MathSansSerif' must stay an unknown constructor under V0_0");
     assert!(
         err.to_string().contains("MathSansSerif") || err.to_string().contains("unknown"),
         "{err}"

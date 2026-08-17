@@ -10,7 +10,7 @@
 //! Rather than let each of those future divergence points grow its own
 //! ad-hoc flag, the target version is threaded through the pipeline *now*
 //! (see [`crate`]'s consumers: `rustyfi-loader`'s `LoadOptions` and
-//! `rustyfi-cli`'s `--target-version` flag) as a single [`RustyfiVersion`]
+//! `rustyfi`'s `--target-version` flag) as a single [`RustyfiVersion`]
 //! value, and each divergence point is expressed as a method on it. A future
 //! 0.1 implementation flips those methods (and adds new match arms) in one
 //! place instead of scattering `if opt_a && opt_b` checks across the crate
@@ -42,7 +42,7 @@ pub enum RustyfiVersion {
     /// 0.0.x series): `@require:` / `@import:` headers, the module-less
     /// surface syntax this port's `rustyfi-syntax` / `rustyfi-loader` /
     /// `rustyfi-lang` implement.
-    V0_0_6,
+    V0_0,
     /// SATySFi 0.1.x: the `dev-0-1-0` language generation — an ML-style
     /// module system (F-ing Modules-based), row-polymorphic records and
     /// optional-argument encodings, and a reworked surface grammar —
@@ -59,12 +59,12 @@ pub enum RustyfiVersion {
 
 impl RustyfiVersion {
     /// The version this port targets when none is specified.
-    pub const DEFAULT: Self = Self::V0_0_6;
+    pub const DEFAULT: Self = Self::V0_0;
 
     /// Whether this version has an ML-style module system (`module M =
     /// struct ... end` bindings that erase to stamped-flat names, `val`
     /// bindings inside them, later: signatures/functors). `false` for
-    /// `V0_0_6` (which has only its own non-parameterized, single-level
+    /// `V0_0` (which has only its own non-parameterized, single-level
     /// `module`/`sig` surface — see `docs/plans/class-signature-lang-gaps.md`
     /// — not a real module *system*); `true` for `V0_1`.
     pub fn has_module_system(&self) -> bool {
@@ -73,7 +73,7 @@ impl RustyfiVersion {
 
     /// Whether this version's type system has row-polymorphic records and
     /// optional-argument rows (`?(l = e)` bundles, `?'r` row variables).
-    /// `false` for `V0_0_6` (closed `Kind::Record` rows only); `true` for
+    /// `false` for `V0_0` (closed `Kind::Record` rows only); `true` for
     /// `V0_1`.
     pub fn has_row_polymorphism(&self) -> bool {
         matches!(self, Self::V0_1)
@@ -82,17 +82,17 @@ impl RustyfiVersion {
     /// Whether `page-break`/`page-break-multicolumn`/`page-break-two-column`
     /// take the `page` ADT (`A4Paper`/`UserDefinedPaper`) as their paper-size
     /// argument, as opposed to `V0_1`'s plain `length * length`. Deliberately
-    /// phrased as an assertion about `V0_0_6`'s surface (not "is it 0.0.6"),
+    /// phrased as an assertion about `V0_0`'s surface (not "is it 0.0.6"),
     /// so a future third generation that also drops the ADT reads correctly
     /// without touching call sites — see L7 in the main plan.
     pub fn has_page_adt(&self) -> bool {
-        matches!(self, Self::V0_0_6)
+        matches!(self, Self::V0_0)
     }
 
     /// Whether the `math` type is split into `math-text` (unparsed `${...}`
     /// source) / `math-boxes` (evaluated tree) with a `read-math` primitive
-    /// bridging them, as opposed to `V0_0_6`'s single unsplit `math` type.
-    /// `false` for `V0_0_6`; `true` for `V0_1`.
+    /// bridging them, as opposed to `V0_0`'s single unsplit `math` type.
+    /// `false` for `V0_0`; `true` for `V0_1`.
     pub fn math_is_split(&self) -> bool {
         matches!(self, Self::V0_1)
     }
@@ -100,8 +100,8 @@ impl RustyfiVersion {
     /// Whether the `graphics` type is a **collection** (0.1's `GraphicD.t =
     /// 'a element list`, with `Clip`/`Group` container elements — a
     /// graphics-producing callback returns ONE `graphics` value) as opposed
-    /// to `V0_0_6`'s single drawing element (a callback returns `list
-    /// graphics`). `false` for `V0_0_6`; `true` for `V0_1`. Backs the L5b
+    /// to `V0_0`'s single drawing element (a callback returns `list
+    /// graphics`). `false` for `V0_0`; `true` for `V0_1`. Backs the L5b
     /// graphics-collection sweep (`docs/plans/…/prim-retype-sweep.md` §3.1):
     /// every fork in the shared `place_graphics`/`coerce_graphics_result`
     /// machinery keys on this one method, so the env and type-env agree by
@@ -114,18 +114,18 @@ impl RustyfiVersion {
     /// (lexer through PDF rendering). Both generations, Slice 1 scope for
     /// `V0_1` — see `docs/plans/rustyfi-0-1-0-support.md` §3.
     pub fn is_implemented(&self) -> bool {
-        matches!(self, Self::V0_0_6 | Self::V0_1)
+        matches!(self, Self::V0_0 | Self::V0_1)
     }
 
     /// Every version this enum currently distinguishes (implemented or
     /// not), in a stable order, for building help/error text.
     pub fn all() -> &'static [RustyfiVersion] {
-        &[Self::V0_0_6, Self::V0_1]
+        &[Self::V0_0, Self::V0_1]
     }
 
     /// The subset of [`RustyfiVersion::all`] this port can actually load.
     pub fn supported() -> &'static [RustyfiVersion] {
-        &[Self::V0_0_6, Self::V0_1]
+        &[Self::V0_0, Self::V0_1]
     }
 }
 
@@ -138,7 +138,7 @@ impl Default for RustyfiVersion {
 impl fmt::Display for RustyfiVersion {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::V0_0_6 => write!(f, "0.0.6"),
+            Self::V0_0 => write!(f, "0.0"),
             Self::V0_1 => write!(f, "0.1"),
         }
     }
@@ -149,7 +149,7 @@ impl fmt::Display for RustyfiVersion {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error(
     "unrecognized SATySFi version {input:?}; supported values: \
-     0.0.6 (aliases: 0.0, v0.0.6), 0.1 (aliases: 0.1.x, v0.1, v0.1.0; not yet implemented)"
+     0.0 (aliases: 0.0.6, v0.0), 0.1 (aliases: 0.1.x, v0.1, v0.1.0; not yet implemented)"
 )]
 pub struct ParseVersionError {
     /// The string that failed to parse.
@@ -166,7 +166,7 @@ impl FromStr for RustyfiVersion {
             .or_else(|| normalized.strip_prefix('V'))
             .unwrap_or(normalized);
         match normalized {
-            "0.0.6" | "0.0" => Ok(Self::V0_0_6),
+            "0.0.6" | "0.0" => Ok(Self::V0_0),
             "0.1" | "0.1.x" | "0.1.0" => Ok(Self::V0_1),
             _ => Err(ParseVersionError {
                 input: s.to_string(),
@@ -180,7 +180,7 @@ impl FromStr for RustyfiVersion {
 /// any prelude bindings), and, failing that, the first content line.
 ///
 /// - A `@stage:` header line is a real, direct signal: 0.1's lexer rejects it
-///   outright, so seeing it at all yields `Some(V0_0_6)`.
+///   outright, so seeing it at all yields `Some(V0_0)`.
 /// - `@require:` / `@import:` header lines are *transparent*: byte-identical
 ///   in both v0.0.6 and dev-0-1-0, so their presence pins neither axis — they
 ///   are skipped just like a blank/comment line.
@@ -240,7 +240,7 @@ pub fn sniff_headers(src: &str) -> HeaderSniff {
         // seeing it at all means 0.0.6.
         if line.starts_with("@stage:") {
             return HeaderSniff {
-                version: Some(RustyfiVersion::V0_0_6),
+                version: Some(RustyfiVersion::V0_0),
                 envelope_headers: false,
             };
         }
@@ -249,7 +249,7 @@ pub fn sniff_headers(src: &str) -> HeaderSniff {
         // v0.0.6 and dev-0-1-0 (same citation), so their presence pins
         // neither axis. Skip past them exactly like a blank/comment line —
         // do NOT return here (that was the S1 bug: this used to return
-        // `Some(V0_0_6)` on the very first `@require:`, misclassifying every
+        // `Some(V0_0)` on the very first `@require:`, misclassifying every
         // 0.1-syntax-body-with-legacy-headers document, which is Slice 1's
         // own target shape).
         if line.starts_with("@require:") || line.starts_with("@import:") {
@@ -323,7 +323,7 @@ fn sniff_content_line(line: &str) -> Option<RustyfiVersion> {
     }
     for kw in ["let-rec", "let-inline", "let-block", "let-math", "let-mutable"] {
         if starts_with_word(line, kw) {
-            return Some(RustyfiVersion::V0_0_6);
+            return Some(RustyfiVersion::V0_0);
         }
     }
     None
@@ -348,11 +348,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn from_str_accepts_0_0_6_forms() {
+    fn from_str_accepts_0_0_forms() {
         for s in ["0.0.6", "0.0", "v0.0.6", "V0.0.6"] {
             assert_eq!(
                 s.parse::<RustyfiVersion>().unwrap_or_else(|e| panic!("{s:?}: {e}")),
-                RustyfiVersion::V0_0_6,
+                RustyfiVersion::V0_0,
                 "input {s:?}"
             );
         }
@@ -381,29 +381,29 @@ mod tests {
     }
 
     #[test]
-    fn default_is_v0_0_6() {
-        assert_eq!(RustyfiVersion::DEFAULT, RustyfiVersion::V0_0_6);
-        assert_eq!(RustyfiVersion::default(), RustyfiVersion::V0_0_6);
+    fn default_is_v0_0() {
+        assert_eq!(RustyfiVersion::DEFAULT, RustyfiVersion::V0_0);
+        assert_eq!(RustyfiVersion::default(), RustyfiVersion::V0_0);
     }
 
     #[test]
     fn capability_probes() {
-        assert!(RustyfiVersion::V0_0_6.is_implemented());
+        assert!(RustyfiVersion::V0_0.is_implemented());
         assert!(RustyfiVersion::V0_1.is_implemented());
 
-        assert!(!RustyfiVersion::V0_0_6.has_module_system());
+        assert!(!RustyfiVersion::V0_0.has_module_system());
         assert!(RustyfiVersion::V0_1.has_module_system());
 
-        assert!(!RustyfiVersion::V0_0_6.has_row_polymorphism());
+        assert!(!RustyfiVersion::V0_0.has_row_polymorphism());
         assert!(RustyfiVersion::V0_1.has_row_polymorphism());
 
-        assert!(RustyfiVersion::V0_0_6.has_page_adt());
+        assert!(RustyfiVersion::V0_0.has_page_adt());
         assert!(!RustyfiVersion::V0_1.has_page_adt());
 
-        assert!(!RustyfiVersion::V0_0_6.math_is_split());
+        assert!(!RustyfiVersion::V0_0.math_is_split());
         assert!(RustyfiVersion::V0_1.math_is_split());
 
-        assert!(!RustyfiVersion::V0_0_6.graphics_is_collection());
+        assert!(!RustyfiVersion::V0_0.graphics_is_collection());
         assert!(RustyfiVersion::V0_1.graphics_is_collection());
     }
 
@@ -429,7 +429,7 @@ mod tests {
         // `let`), the result is `None` (falls to `RustyfiVersion::DEFAULT`
         // downstream in `resolve_version`, not sniffed here). This is the S1
         // fix itself: pre-fix, all three of the first assertions below
-        // returned `Some(V0_0_6)` directly at the header line.
+        // returned `Some(V0_0)` directly at the header line.
         assert_eq!(sniff_version("@require: stdlib\nlet x = 1 in x"), None);
         assert_eq!(sniff_version("@import: helper\nlet x = 1 in x"), None);
         // Leading blank lines / comments before a transparent header must
@@ -442,7 +442,7 @@ mod tests {
         // (0.1's lexer rejects it outright).
         assert_eq!(
             sniff_version("@stage: 0\nlet x = 1 in x"),
-            Some(RustyfiVersion::V0_0_6)
+            Some(RustyfiVersion::V0_0)
         );
     }
 
@@ -450,7 +450,7 @@ mod tests {
     fn sniff_require_then_module_is_none() {
         // The S1 bug case: a legacy-header-then-module-body file (Slice 1's
         // own target shape — a V0_1-syntax library reached through the
-        // unmodified `@require:` loader) must sniff `None`, not `V0_0_6`
+        // unmodified `@require:` loader) must sniff `None`, not `V0_0`
         // (the old bug) and not `V0_1` (no positive signal for it either —
         // `module` is deliberately not a signal).
         assert_eq!(
@@ -475,7 +475,7 @@ mod tests {
     }
 
     #[test]
-    fn sniff_hyphenated_let_head_is_v0_0_6() {
+    fn sniff_hyphenated_let_head_is_v0_0() {
         for src in [
             "let-rec f x = x",
             "let-inline ctx \\emph x = x",
@@ -483,7 +483,7 @@ mod tests {
             "let-math \\frac x y = x",
             "let-mutable r <- 0",
         ] {
-            assert_eq!(sniff_version(src), Some(RustyfiVersion::V0_0_6), "src: {src:?}");
+            assert_eq!(sniff_version(src), Some(RustyfiVersion::V0_0), "src: {src:?}");
         }
     }
 
@@ -496,7 +496,7 @@ mod tests {
 
     #[test]
     fn sniff_lib_rustyfi_corpus_never_v0_1() {
-        // Every vendored 0.0.6 package must sniff `None` or `Some(V0_0_6)`,
+        // Every vendored 0.0.6 package must sniff `None` or `Some(V0_0)`,
         // never `Some(V0_1)` — the non-regression guarantee §3's Acceptance
         // depends on.
         let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../../lib-rustyfi/dist/packages");
@@ -524,7 +524,7 @@ mod tests {
     }
 
     #[test]
-    fn sniff_v0_0_6_fixtures_are_never_mistaken_for_v0_1() {
+    fn sniff_v0_0_fixtures_are_never_mistaken_for_v0_1() {
         // A representative sample of this port's own 0.0.6 fixtures/tests
         // must not sniff as V0_1.
         for src in [

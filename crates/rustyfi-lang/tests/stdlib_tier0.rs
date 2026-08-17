@@ -2,7 +2,7 @@
 //! `@require: list` (hence, transitively, `@require: option`) — and
 //! `@require: option` alone — must PARSE, ELABORATE, TYPECHECK, and EVALUATE
 //! through the real multi-file loader with this repo's `lib-rustyfi/` as
-//! `lib_root`. This mirrors `rustyfi-cli`'s own production pipeline
+//! `lib_root`. This mirrors `rustyfi`'s own production pipeline
 //! (`main.rs`'s `cmd_compile`: `rustyfi_loader::load` -> merge preludes ->
 //! `compile_document_cst`) rather than a bespoke single-file harness, so it
 //! genuinely exercises `@require:` resolution (including the NESTED
@@ -62,7 +62,7 @@ impl Drop for TempDoc {
 }
 
 /// Merge a loader-resolved program's preludes into one synthetic
-/// `cst::File`, exactly like `rustyfi-cli`'s private `merge_program`
+/// `cst::File`, exactly like `rustyfi`'s private `merge_program`
 /// (`main.rs`): the loader guarantees dependency-first order with the entry
 /// document last, so every library's prelude is spliced ahead of the
 /// entry's own, in that order (the v0.0.6 analog typechecks each library
@@ -70,9 +70,9 @@ impl Drop for TempDoc {
 /// the same scoping by prelude concatenation).
 fn as_v006(cst: rustyfi_loader::LoadedCst) -> rustyfi_syntax::cst::File {
     match cst {
-        rustyfi_loader::LoadedCst::V0_0_6(f) => f,
+        rustyfi_loader::LoadedCst::V0_0(f) => f,
         rustyfi_loader::LoadedCst::V0_1(_) => {
-            unreachable!("this test's merge_program is the V0_0_6-only path")
+            unreachable!("this test's merge_program is the V0_0-only path")
         }
     }
 }
@@ -1235,7 +1235,7 @@ document (|
 // block), so the asserted metrics are unaffected by that change — this
 // still only proves the module compiles/evaluates end to end, not that the
 // footnote text lands on the page (that needs a real `chop_page` run,
-// covered by `crates/rustyfi-cli/tests/e2e.rs`'s footnote fixture).
+// covered by `crates/rustyfi/tests/e2e.rs`'s footnote fixture).
 // ============================================================================
 
 #[test]

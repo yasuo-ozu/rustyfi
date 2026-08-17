@@ -394,7 +394,7 @@ fn register_document_information_registers() {
 
 #[test]
 fn get_initial_text_info_forks() {
-    // V0_0_6: `unit -> text-info` (unchanged).
+    // V0_0: `unit -> text-info` (unchanged).
     let v006_poly = prim_types::primitive_type("get-initial-text-info").unwrap();
     let v006_mono = types::instantiate(&v006_poly, 0);
     match v006_mono {
@@ -440,7 +440,7 @@ fn get_initial_text_info_forks() {
         other => panic!("expected a text-info, got {other:?}"),
     }
 
-    // V0_0_6 eval: unchanged 1-arg behavior.
+    // V0_0 eval: unchanged 1-arg behavior.
     let env006 = primitives::base_env();
     let v = call(
         &mut interp,
@@ -455,7 +455,7 @@ fn get_initial_text_info_forks() {
 }
 
 // ============================================================================
-// 7. Version-gating: the 11 added names are unbound under V0_0_6
+// 7. Version-gating: the 11 added names are unbound under V0_0
 // ============================================================================
 
 #[test]
@@ -478,11 +478,11 @@ fn added_prims_gate_by_version() {
     for name in NAMES {
         assert!(
             env006.lookup(name).is_none(),
-            "{name} must be unbound under V0_0_6"
+            "{name} must be unbound under V0_0"
         );
         assert!(
             prim_types::primitive_type(name).is_none(),
-            "{name} must have no type under V0_0_6"
+            "{name} must have no type under V0_0"
         );
         assert!(
             env01.lookup(name).is_some(),

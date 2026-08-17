@@ -120,7 +120,7 @@ pub struct Scope<'s> {
     /// SATySFi 0.1-only labeled-optional nodes (`Expr::FunRows`,
     /// `AppArg::Bundled`) so a 0.0.6-compiled file that happens to parse them
     /// (the additive-`cst` accept-surface widening) is rejected with a
-    /// version error rather than silently accepted. `V0_0_6` by default so
+    /// version error rather than silently accepted. `V0_0` by default so
     /// every existing caller (and the frozen 0.0.6 path) is unaffected.
     version: RustyfiVersion,
     /// The interner every identifier this scope helps build is minted from.
@@ -137,7 +137,7 @@ pub struct Scope<'s> {
 
 impl<'s> Scope<'s> {
     pub fn new(store: &'s SymbolStore, names: impl IntoIterator<Item = String>) -> Scope<'s> {
-        Scope::new_with_version(store, names, RustyfiVersion::V0_0_6)
+        Scope::new_with_version(store, names, RustyfiVersion::V0_0)
     }
 
     /// Like [`Scope::new`] but elaborating under an explicit source version —
@@ -539,14 +539,14 @@ pub fn elaborate_program<'s>(
 
 /// Like [`elaborate_program`], but additionally marking a subset of
 /// `file.prelude`'s TOP-LEVEL entries (by index) as originating from a
-/// spliced `V0_0_6` dependency (Slice X2a,
+/// spliced `V0_0` dependency (Slice X2a,
 /// `docs/plans/design-cross-version-import.md` §"Slice X2 — per-group
 /// primitive environment", Option C). Every `Binding` this splices in from
 /// one of those entries — and, recursively, every binding inside a `module ..
 /// = struct .. end` at such an index — has its elaborated RHS wrapped in
-/// [`Ast::VersionScope`]`(V0_0_6, _)`, so `compile.rs`/`eval.rs`/
+/// [`Ast::VersionScope`]`(V0_0, _)`, so `compile.rs`/`eval.rs`/
 /// `typecheck.rs` resolve THAT subtree's version-forked primitives (and
-/// runtime-version reads) against `V0_0_6` instead of the merged program's
+/// runtime-version reads) against `V0_0` instead of the merged program's
 /// ambient `V0_1`.
 ///
 /// `v006_indices` is empty for every existing caller (`elaborate_program`
@@ -559,9 +559,9 @@ pub fn elaborate_program<'s>(
 /// §X4.3 item 3): when `Some(v)`, the file's own document TAIL expression
 /// (`file.body`, elaborated into `body_ast` below) is additionally wrapped in
 /// `Ast::VersionScope(v, _)` — the ONE new capability X4 needs beyond X2.2's
-/// indexed-`prelude`-item wrapping, because a `V0_0_6` ENTRY's tail expression
+/// indexed-`prelude`-item wrapping, because a `V0_0` ENTRY's tail expression
 /// (e.g. a bare `page-break doc` with no intermediate `let`) is itself
-/// `V0_0_6`-authored code that may reference forked primitives directly, not
+/// `V0_0`-authored code that may reference forked primitives directly, not
 /// just its `prelude` bindings. `None` for every pre-X4a caller
 /// (`elaborate_program` above, and `compile_document_v1_with_trials`'s
 /// existing call site) — byte-identical, since `match None { .. }` never
@@ -609,13 +609,13 @@ pub fn elaborate_program_with_versions<'s>(
     })
 }
 
-/// Wrap `value` in [`Ast::VersionScope`]`(V0_0_6, _)` iff `this_v006` — the
+/// Wrap `value` in [`Ast::VersionScope`]`(V0_0, _)` iff `this_v006` — the
 /// one-line helper every `walk_bindings` binding-construction arm below
 /// calls right after building its (fully elaborated) RHS. See
 /// [`elaborate_program_with_versions`]'s doc comment.
 fn maybe_v006_scope<'s>(value: Ast<'s>, this_v006: bool) -> Ast<'s> {
     if this_v006 {
-        Ast::VersionScope(RustyfiVersion::V0_0_6, Box::new(value))
+        Ast::VersionScope(RustyfiVersion::V0_0, Box::new(value))
     } else {
         value
     }
@@ -950,7 +950,7 @@ fn walk_bindings<'s>(
     for (item_idx, top) in items.iter().enumerate() {
         // Slice X2a: is THIS top-level item (and everything nested inside
         // it, e.g. a `module .. = struct .. end`'s own decls — see the
-        // `Module` arm below) part of a spliced V0_0_6 dependency? Always
+        // `Module` arm below) part of a spliced V0_0 dependency? Always
         // `false` for `elaborate_program`'s empty `v006_indices` (the
         // pure-0.0.6 / pure-0.1 paths), so this is a dead branch there.
         let this_v006 = v006_indices.contains(&item_idx);
@@ -1044,7 +1044,7 @@ fn walk_bindings<'s>(
                             (
                                 n,
                                 Rc::new(Ast::VersionScope(
-                                    RustyfiVersion::V0_0_6,
+                                    RustyfiVersion::V0_0,
                                     Box::new((*body).clone()),
                                 )),
                             )

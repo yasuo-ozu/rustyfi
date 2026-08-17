@@ -160,7 +160,7 @@ pub struct Interp<'a> {
     /// (math-split spec §3.4) — consulted only by `read_inline`'s
     /// `IText::EmbedMath` FALLBACK arm (no installed math command; unit-test
     /// contexts only — the installed-command path is version-blind already).
-    /// Default `V0_0_6`; `lib.rs`'s `eval_document_trials` (the shared tail
+    /// Default `V0_0`; `lib.rs`'s `eval_document_trials` (the shared tail
     /// both `compile_document_cst_with_trials` and
     /// `compile_document_v1_with_trials` fall into) sets this to the real
     /// target version on every `Interp` it constructs.
@@ -187,7 +187,7 @@ impl<'a> Interp<'a> {
             dest_names: std::collections::HashMap::new(),
             decos: Vec::new(),
             outer_graphics: Vec::new(),
-            version: RustyfiVersion::V0_0_6,
+            version: RustyfiVersion::V0_0,
         }
     }
 

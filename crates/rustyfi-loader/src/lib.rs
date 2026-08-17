@@ -32,7 +32,7 @@ pub use rustyfi_syntax::RustyfiVersion;
 /// How multi-file dependencies are declared and resolved — Axis B of
 /// `docs/plans/rustyfi-0-1-0-support.md` §1.2. Orthogonal to
 /// [`RustyfiVersion`] (Axis A, the grammar generation), except that the one
-/// combination with no upstream analogue — `V0_0_6` + `Envelopes` — is
+/// combination with no upstream analogue — `V0_0` + `Envelopes` — is
 /// rejected by [`load`] up front (plan §1.3's table).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum LoadMode {
@@ -89,15 +89,15 @@ pub struct LoadOptions {
 }
 
 /// A parsed file's CST, tagged by which grammar generation produced it.
-/// `load()` picks the variant per `LoadOptions::version` (`V0_0_6` →
-/// `V0_0_6`, `V0_1` → `V0_1`) — see `load`'s dispatch, below. Every file
+/// `load()` picks the variant per `LoadOptions::version` (`V0_0` →
+/// `V0_0`, `V0_1` → `V0_1`) — see `load`'s dispatch, below. Every file
 /// in one `LoadedProgram` carries the same variant, since `opts.version` is
 /// one value for the whole load; the enum exists so `LoadedFile` has a
 /// single field type rather than forcing every consumer of `LoadedProgram`
 /// to be generic over the CST type.
 #[derive(Debug)]
 pub enum LoadedCst {
-    V0_0_6(rustyfi_syntax::cst::File),
+    V0_0(rustyfi_syntax::cst::File),
     V0_1(rustyfi_syntax::cst_v1::FileV1),
 }
 
@@ -109,28 +109,28 @@ impl LoadedCst {
     /// call sites.
     pub fn is_document(&self) -> bool {
         match self {
-            Self::V0_0_6(f) => f.body.is_some(),
+            Self::V0_0(f) => f.body.is_some(),
             Self::V0_1(f) => matches!(f, rustyfi_syntax::cst_v1::FileV1::Document { .. }),
         }
     }
 
-    /// This `V0_0_6` file's `@require:`/`@import:`/`@stage:` headers, or
+    /// This `V0_0` file's `@require:`/`@import:`/`@stage:` headers, or
     /// `None` for a `V0_1` file. Each generation's header list has a distinct
     /// element type since Ld3a (`V0_1` carries `HeaderV1`, the union grammar),
     /// so the shared facade offers one total accessor per generation rather
     /// than one `Header`-typed accessor for both.
     fn headers_v006(&self) -> Option<&[rustyfi_syntax::cst::Header]> {
         match self {
-            Self::V0_0_6(f) => Some(&f.headers),
+            Self::V0_0(f) => Some(&f.headers),
             Self::V0_1(_) => None,
         }
     }
 
     /// This `V0_1` file's headers (the `HeaderV1` union — Legacy `@`-headers
-    /// plus the three `use` forms), or `None` for a `V0_0_6` file.
+    /// plus the three `use` forms), or `None` for a `V0_0` file.
     fn headers_v1(&self) -> Option<&[rustyfi_syntax::cst_v1::HeaderV1]> {
         match self {
-            Self::V0_0_6(_) => None,
+            Self::V0_0(_) => None,
             Self::V0_1(f) => Some(match f {
                 rustyfi_syntax::cst_v1::FileV1::Document { headers, .. }
                 | rustyfi_syntax::cst_v1::FileV1::Library { headers, .. } => headers,
@@ -177,17 +177,17 @@ pub struct LoadedFile {
     /// envelope sources). Additive metadata — no consumer reads it yet.
     pub origin: FileOrigin,
     /// The `RustyfiVersion` grammar this SPECIFIC file was parsed under —
-    /// always matches `cst`'s variant (`V0_0_6` <-> `LoadedCst::V0_0_6`,
+    /// always matches `cst`'s variant (`V0_0` <-> `LoadedCst::V0_0`,
     /// `V0_1` <-> `LoadedCst::V0_1`). Cross-version import (X1,
     /// `docs/plans/design-cross-version-import.md`): under `LoadMode::
-    /// Envelopes` and under a `LoadOptions { version: V0_0_6, .. }` Legacy
+    /// Envelopes` and under a `LoadOptions { version: V0_0, .. }` Legacy
     /// load, every file in one `LoadedProgram` shares one version (the
     /// load's `opts.version`), exactly as before this field existed. Only a
     /// `LoadOptions { version: V0_1, mode: Legacy, .. }` load can produce a
     /// MIXED-version `files` list: `load_legacy`'s worklist (see its doc
-    /// comment) per-file-detects a `V0_0_6` dependency via the Q4 rule
+    /// comment) per-file-detects a `V0_0` dependency via the Q4 rule
     /// (`design-cross-version-import.md` §5) so a `V0_1` document can
-    /// `@require:` a frozen `V0_0_6` package. Additive — every pre-X1
+    /// `@require:` a frozen `V0_0` package. Additive — every pre-X1
     /// `LoadedFile { .. }` call site now must also name this field, but no
     /// EXISTING (single-version) load's `cst`/`origin`/`path` values change.
     pub version: RustyfiVersion,
@@ -225,7 +225,7 @@ pub fn load(entry: &Path, opts: &LoadOptions) -> Result<LoadedProgram, LoadError
             // row 4): 0.0.6 has no `use` headers to resolve against an
             // envelope graph at all. Reject before touching the filesystem,
             // like the version guard above. `!matches!(.., V0_1)` rather than
-            // `== V0_0_6`: `RustyfiVersion` is `#[non_exhaustive]`, so any
+            // `== V0_0`: `RustyfiVersion` is `#[non_exhaustive]`, so any
             // hypothetical future third variant defaults to *rejected* under
             // Envelopes until someone decides otherwise.
             if !matches!(opts.version, RustyfiVersion::V0_1) {
@@ -240,7 +240,7 @@ pub fn load(entry: &Path, opts: &LoadOptions) -> Result<LoadedProgram, LoadError
 
 /// Resolve one Legacy (`@require:`/`@import:`/`@stage:`) header to a file
 /// path, or `None` for `@stage:` (which drives no dependency edge). Shared by
-/// the `V0_0_6` and `V0_1`-Legacy header loops in [`load_legacy`].
+/// the `V0_0` and `V0_1`-Legacy header loops in [`load_legacy`].
 fn resolve_legacy_header(
     header: &rustyfi_syntax::cst::Header,
     dir: &Path,
@@ -288,14 +288,14 @@ fn load_legacy(entry: &Path, opts: &LoadOptions) -> Result<LoadedProgram, LoadEr
     let mut cst_of: HashMap<u32, LoadedCst> = HashMap::new();
     // X1 (design-cross-version-import.md §5, Q4): the per-file version each
     // graph node was actually parsed under — see `LoadedFile::version`'s doc
-    // comment. Populated in lockstep with `cst_of` below; `V0_0_6` loads
-    // insert `V0_0_6` for every node (unchanged behavior).
+    // comment. Populated in lockstep with `cst_of` below; `V0_0` loads
+    // insert `V0_0` for every node (unchanged behavior).
     let mut version_of: HashMap<u32, RustyfiVersion> = HashMap::new();
     // X1 Q4: node ids reached via at least one `@require:` header edge (as
     // opposed to only `@import:` edges) — the "resolves under `lib_root`'s
     // package tree" half of the per-file detection rule. Populated as
     // dependency edges are discovered, below; irrelevant (never consulted)
-    // for a `V0_0_6` load.
+    // for a `V0_0` load.
     let mut require_targets: HashSet<u32> = HashSet::new();
     // X4a Q4-mirror (design-cross-version-import.md §X4.3 item 2): node ids
     // reached via at least one `@require:` edge that resolved PHYSICALLY
@@ -326,15 +326,15 @@ fn load_legacy(entry: &Path, opts: &LoadOptions) -> Result<LoadedProgram, LoadEr
         // X1"): under a `V0_1` load, every NON-entry file gets its own
         // per-file version — `sniff_version` first (a `use`/`val`-shaped
         // file sniffs `Some(V0_1)` even inside the frozen corpus), else
-        // `V0_0_6` if this id was reached via at least one `@require:` edge
+        // `V0_0` if this id was reached via at least one `@require:` edge
         // (the corpus IS `dist/packages/`, §4), else `opts.version`
         // (`@import:`-relative siblings of the entry, and the entry itself,
-        // stay `V0_1`). A `V0_0_6` load is untouched: `file_version` is
+        // stay `V0_1`). A `V0_0` load is untouched: `file_version` is
         // always `opts.version` there, exactly the old unconditional match.
         let file_version = match opts.version {
             RustyfiVersion::V0_1 if id != entry_id => rustyfi_syntax::sniff_version(&src)
                 .unwrap_or(
-                    // A non-sniffable `@require:` target defaults to V0_0_6
+                    // A non-sniffable `@require:` target defaults to V0_0
                     // ONLY when it is physically under the frozen 0.0.6 corpus
                     // `dist/packages/` (§4). This must EXCLUDE `dist-v01/
                     // packages/` — those are V0_1 packages and the substring
@@ -344,14 +344,14 @@ fn load_legacy(entry: &Path, opts: &LoadOptions) -> Result<LoadedProgram, LoadEr
                     if require_targets.contains(&id)
                         && path.to_string_lossy().contains("/dist/packages/")
                     {
-                        RustyfiVersion::V0_0_6
+                        RustyfiVersion::V0_0
                     } else {
                         RustyfiVersion::V0_1
                     },
                 ),
             // X4a Q4-mirror (design-cross-version-import.md §X4.3 item 2): a
-            // `V0_0_6`-rooted load's NON-entry file defaults to `opts.version`
-            // (`V0_0_6`) unless `sniff_version` returns `Some(V0_1)`, in which
+            // `V0_0`-rooted load's NON-entry file defaults to `opts.version`
+            // (`V0_0`) unless `sniff_version` returns `Some(V0_1)`, in which
             // case it MUST default to `V0_1` when this id was reached via at
             // least one `@require:` edge that resolved physically under the
             // 0.1 corpus `dist-v01/packages/` (the mirror of `require_targets`
@@ -360,23 +360,23 @@ fn load_legacy(entry: &Path, opts: &LoadOptions) -> Result<LoadedProgram, LoadEr
             // 0.0.6 `module`-headed corpus file does (`version.rs`'s own doc
             // comment: a bare `module` head is deliberately no signal), so
             // this provenance fallback is what actually resolves it. This is a
-            // PURE WIDENING: nothing that used to resolve `V0_0_6` can flip to
+            // PURE WIDENING: nothing that used to resolve `V0_0` can flip to
             // `V0_1` unless it is BOTH under `dist-v01/packages/` AND reached
             // via `@require:` — `require_v01_targets` is empty for every
             // existing 0.0.6 fixture (none of them ever resolves a
             // `dist-v01/packages/` target), so this arm's `unwrap_or` falls
-            // through to `V0_0_6` exactly as before for every pre-X4a load.
-            RustyfiVersion::V0_0_6 if id != entry_id => rustyfi_syntax::sniff_version(&src)
+            // through to `V0_0` exactly as before for every pre-X4a load.
+            RustyfiVersion::V0_0 if id != entry_id => rustyfi_syntax::sniff_version(&src)
                 .unwrap_or(if require_v01_targets.contains(&id) {
                     RustyfiVersion::V0_1
                 } else {
-                    RustyfiVersion::V0_0_6
+                    RustyfiVersion::V0_0
                 }),
             other => other,
         };
         let cst: LoadedCst = match file_version {
-            RustyfiVersion::V0_0_6 => {
-                LoadedCst::V0_0_6(rustyfi_syntax::parse_file(&src).map_err(|source| {
+            RustyfiVersion::V0_0 => {
+                LoadedCst::V0_0(rustyfi_syntax::parse_file(&src).map_err(|source| {
                     LoadError::Parse {
                         path: path.clone(),
                         source,
@@ -537,7 +537,7 @@ pub(crate) fn canonicalize(path: &Path) -> Result<PathBuf, LoadError> {
 /// Whether `path` lives under a `dist/packages/` directory — the frozen
 /// 0.0.6 corpus layout (`docs/plans/design-cross-version-import.md` §4/Q4),
 /// the `@require:`-provenance signal the X1 per-file version detector uses to
-/// downgrade a sniff-`None` corpus dependency to `V0_0_6`. Matches ANY two
+/// downgrade a sniff-`None` corpus dependency to `V0_0`. Matches ANY two
 /// consecutive components `dist` then `packages` anywhere in the path, so it
 /// recognizes both this port's own `lib-rustyfi/dist/packages/` and a
 /// Satyrographos-style `<root>/dist/packages/` install — but deliberately
@@ -555,7 +555,7 @@ fn is_dist_packages_target(path: &Path) -> bool {
 /// §X4.3 item 2), the MIRROR of [`is_dist_packages_target`] used by the
 /// symmetric per-file version detector to default a sniff-`None` 0.1-corpus
 /// dependency (e.g. a `module … :> sig …`-headed package like
-/// `v01-sealed.satyh`) to `V0_1` under a `V0_0_6`-rooted load. Matches ANY
+/// `v01-sealed.satyh`) to `V0_1` under a `V0_0`-rooted load. Matches ANY
 /// two consecutive components `dist-v01` then `packages` — deliberately NOT
 /// `dist` then `packages` (the inverse of `is_dist_packages_target`'s own
 /// care to exclude `dist-v01`), so the two helpers are mutually exclusive on

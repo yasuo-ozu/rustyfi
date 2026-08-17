@@ -2,7 +2,7 @@
 //! [`rustyfi_loader::LoadError`]: a `thiserror` enum with one specific
 //! variant per failure mode, each carrying enough context to reconstruct
 //! what went wrong (which path, which package). The CLI layer
-//! (`rustyfi-cli`) maps these variants to the exit codes in the plan's §4
+//! (`rustyfi`) maps these variants to the exit codes in the plan's §4
 //! surface spec (`0` ok, `2` filter, `3` root, `4` receipt, `5` fs/io) —
 //! the exit-code policy stays out of this clap-free crate.
 

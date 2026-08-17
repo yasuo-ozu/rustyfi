@@ -53,7 +53,7 @@
 //! under `tests/snapshots/` from the current compiler's output — e.g.:
 //!
 //! ```text
-//! UPDATE_SNAPSHOTS=1 cargo test -p rustyfi-cli --test layout_snapshot
+//! UPDATE_SNAPSHOTS=1 cargo test -p rustyfi --test layout_snapshot
 //! ```
 //!
 //! A normal `cargo test` run instead compares freshly-serialized output
@@ -87,14 +87,14 @@ fn snapshots_dir() -> PathBuf {
 
 fn as_v006(cst: LoadedCst) -> rustyfi_syntax::cst::File {
     match cst {
-        LoadedCst::V0_0_6(f) => f,
-        LoadedCst::V0_1(_) => unreachable!("compile_v006_fixture is the V0_0_6-only path"),
+        LoadedCst::V0_0(f) => f,
+        LoadedCst::V0_1(_) => unreachable!("compile_v006_fixture is the V0_0-only path"),
     }
 }
 
 /// Load `name` (+ its `@require:`/`@import:` graph) against this repo's
 /// `lib-rustyfi/`, merge dependency preludes ahead of the entry's own
-/// (exactly `rustyfi-cli`'s private `merge_program`, reproduced the same way
+/// (exactly `rustyfi`'s private `merge_program`, reproduced the same way
 /// `tests/e2e.rs`'s `load_and_merge` already does), and compile with
 /// deterministic base-14 metrics — never touching `rustyfi-pdf`'s writers.
 fn compile_v006_fixture(name: &str) -> std::rc::Rc<DocumentValue> {

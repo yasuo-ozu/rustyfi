@@ -61,7 +61,7 @@ impl Lockfile {
     /// lockfile's on-disk `[[library]]` order (which the phase-7c solver's
     /// closure assembly does not guarantee to be manifest order — see
     /// `ops::reconcile`). Feeds the compiler's cache key
-    /// (`rustyfi-cli/src/cache.rs::compute_key`): a re-solve that changes any
+    /// (`rustyfi/src/cache.rs::compute_key`): a re-solve that changes any
     /// locked version changes this digest, which invalidates every cached
     /// render keyed on the old one.
     ///

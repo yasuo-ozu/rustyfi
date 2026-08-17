@@ -1,5 +1,5 @@
 //! Slices X1 + X2a (`docs/plans/design-cross-version-import.md`): a `V0_1`
-//! document `@require:`-ing a `V0_0_6` package end-to-end.
+//! document `@require:`-ing a `V0_0` package end-to-end.
 //!
 //! Driven through the REAL loader (`rustyfi_loader::load`, `LoadOptions {
 //! version: V0_1, .. }`) so the per-file detection rule (`load_legacy`'s Q4
@@ -15,10 +15,10 @@
 //!   `Option.from` all get used, and the resulting document actually
 //!   renders (a real page with real placed content), proving the splice +
 //!   guard pass a genuinely version-neutral dependency through untouched.
-//! - [`xver_page_break_internal_renders`] (X2a headline): a `V0_0_6`
+//! - [`xver_page_break_internal_renders`] (X2a headline): a `V0_0`
 //!   package whose exported command (a NEUTRAL-typed
 //!   `block-boxes -> document`) calls `page-break` INTERNALLY with the
-//!   `V0_0_6` `page` ADT — a shape X1 hard-rejected (`page-break` is
+//!   `V0_0` `page` ADT — a shape X1 hard-rejected (`page-break` is
 //!   version-forked, `primitives::forked_prim_names`) — now renders
 //!   end-to-end through `compile_document_v1`, proving the
 //!   `Ast::VersionScope` mechanism (compile-time fold cursor +
@@ -26,7 +26,7 @@
 //!   rejected case work.
 //! - [`xver_forked_prim_coexist`] (X2a soundness core): the SAME package,
 //!   but the `V0_1` entry ALSO calls `page-break` directly (with `V0_1`'s
-//!   `length * length` geometry) alongside the package's internal `V0_0_6`
+//!   `length * length` geometry) alongside the package's internal `V0_0`
 //!   `page`-ADT call, in the SAME compiled program — this only
 //!   type-checks/evaluates at all if the two calls resolved to their OWN
 //!   version's distinct `page-break` (mismatched arity/type would be a
@@ -34,7 +34,7 @@
 //!   itself the coexistence proof.
 //! - [`negative_case_forked_type_on_boundary_is_still_rejected`] (X2a
 //!   negative, repurposed from X1): X2a removes only the VALUE half of the
-//!   forked-name guard; the TYPE half stays conservative — a `V0_0_6` package
+//!   forked-name guard; the TYPE half stays conservative — a `V0_0` package
 //!   that textually names a forked TYPE on an export-boundary surface site
 //!   (here, a `type` declaration's body — see `v1::xver_adapt`'s module doc
 //!   comment for why that site stays unconditionally checked even after
@@ -46,7 +46,7 @@
 //! - [`xver_internal_forked_type_ascription_renders`] (X2b headline,
 //!   `docs/plans/design-cross-version-import.md`'s "Slice X2" §X2.3/X2.4):
 //!   the guard's TYPE half is narrowed to the export boundary only — a
-//!   `V0_0_6` package whose exported command (still the NEUTRAL
+//!   `V0_0` package whose exported command (still the NEUTRAL
 //!   `block-boxes -> document`) uses an INTERNAL, explicitly `page`-typed
 //!   local `let-rec` (`Expr::LetRecIn`'s own ascription — a shape the
 //!   pre-X2b guard rejected via `collect_free_globals`'s over-conservative
@@ -208,16 +208,16 @@ fn positive_case_list_and_option_render() {
     // The two REQUIRE'd corpus packages (list, option — option is also
     // pulled in transitively by list.satyg's own `@require: option`, so
     // both are deduplicated to ONE node each) must have been detected as
-    // `V0_0_6` (Q4's provenance rule), while the `@import:`-reached helper
+    // `V0_0` (Q4's provenance rule), while the `@import:`-reached helper
     // and the entry itself stay `V0_1`.
     let mut saw_v006 = 0;
     for f in &program.files[..program.files.len() - 1] {
         match f.version {
-            RustyfiVersion::V0_0_6 => {
+            RustyfiVersion::V0_0 => {
                 saw_v006 += 1;
                 assert!(
-                    matches!(f.cst, rustyfi_loader::LoadedCst::V0_0_6(_)),
-                    "a V0_0_6-tagged file must carry a V0_0_6-parsed cst: {:?}",
+                    matches!(f.cst, rustyfi_loader::LoadedCst::V0_0(_)),
+                    "a V0_0-tagged file must carry a V0_0-parsed cst: {:?}",
                     f.path
                 );
             }
@@ -233,7 +233,7 @@ fn positive_case_list_and_option_render() {
     }
     assert_eq!(
         saw_v006, 2,
-        "list.satyg + option.satyg should both be V0_0_6-tagged deps"
+        "list.satyg + option.satyg should both be V0_0-tagged deps"
     );
     let entry_file = program
         .files
@@ -262,17 +262,17 @@ fn positive_case_list_and_option_render() {
 }
 
 // ============================================================================
-// X2a: a V0_0_6 package that uses a version-forked primitive (`page-break`)
+// X2a: a V0_0 package that uses a version-forked primitive (`page-break`)
 // INTERNALLY, behind a neutral-typed (`block-boxes -> document`) export.
 // ============================================================================
 
-/// The `V0_0_6` package: two locally-defined `page-content-info`/
+/// The `V0_0` package: two locally-defined `page-content-info`/
 /// `page-parts` closures plus one exported `make-doc`, all bare (unqualified
 /// — no `module .. = struct .. end` wrapper; `negative_case_forked_primitive_
 /// is_rejected` — X1's original version of this file — already established
 /// that a bare top-level `let` splices unqualified) top-level bindings.
-/// `page-break A4Paper …` is the `V0_0_6`-ONLY shape: `page-break`'s first
-/// argument is the `page` ADT (`A4Paper`/`UserDefinedPaper`) under `V0_0_6`,
+/// `page-break A4Paper …` is the `V0_0`-ONLY shape: `page-break`'s first
+/// argument is the `page` ADT (`A4Paper`/`UserDefinedPaper`) under `V0_0`,
 /// vs. a `length * length` tuple under `V0_1` (`page_prims.rs`'s
 /// `page_break_first_arg_is_page_adt_under_v006`/`_length_pair_under_v01`) —
 /// exactly the shape X1 hard-rejected and X2a now makes sound.
@@ -286,7 +286,7 @@ let xver-parts pbinfo =
 let make-doc body = page-break A4Paper xver-content xver-parts body
 ";
 
-/// Build (and load) the shared X2a fixture tree: the `V0_0_6`
+/// Build (and load) the shared X2a fixture tree: the `V0_0`
 /// `xver-pagebreak` package (above) at `dist/packages/`, the `V0_1`
 /// `xver-helper` math-command helper (reused from the X1 positive case,
 /// reached via `@import:` so it stays `V0_1` under the Q4 rule), and an
@@ -318,8 +318,8 @@ fn load_xver_pagebreak_fixture(tag: &str, entry_tail: &str) -> Vec<rustyfi_loade
         program
             .files
             .iter()
-            .any(|f| matches!(f.cst, rustyfi_loader::LoadedCst::V0_0_6(_))),
-        "xver-pagebreak.satyg should have been detected as V0_0_6 (it's a @require: corpus target)"
+            .any(|f| matches!(f.cst, rustyfi_loader::LoadedCst::V0_0(_))),
+        "xver-pagebreak.satyg should have been detected as V0_0 (it's a @require: corpus target)"
     );
     // `dir` (and its temp files) would be removed on drop right here if kept
     // local — the loader has already read everything it needs into
@@ -342,17 +342,17 @@ fn xver_page_break_internal_renders() {
     let (doc, _trials) = rustyfi_lang::compile_document_v1_with_trials(&files, &mono)
         .unwrap_or_else(|e| {
             panic!(
-                "a V0_0_6 dependency using page-break internally behind a neutral \
+                "a V0_0 dependency using page-break internally behind a neutral \
                  export should now compile+render under X2a: {e}"
             )
         });
 
-    // `A4Paper` (V0_0_6's page ADT) — one page, and the `line-break`d body
+    // `A4Paper` (V0_0's page ADT) — one page, and the `line-break`d body
     // was actually placed onto it (not silently dropped).
     assert_eq!(
         doc.pages.len(),
         1,
-        "one A4 page from the V0_0_6 page-break call"
+        "one A4 page from the V0_0 page-break call"
     );
     assert!(
         !doc.pages[0].lines.is_empty(),
@@ -360,7 +360,7 @@ fn xver_page_break_internal_renders() {
     );
 }
 
-/// X2a soundness core (X2.6's `xver_forked_prim_coexist`): the SAME `V0_0_6`
+/// X2a soundness core (X2.6's `xver_forked_prim_coexist`): the SAME `V0_0`
 /// dependency's internal `page-break A4Paper …` call, PLUS the `V0_1` entry
 /// ALSO calling `page-break` directly with `V0_1`'s `(length * length)`
 /// geometry — in the SAME compiled program. If both calls had resolved to
@@ -388,19 +388,19 @@ fn xver_forked_prim_coexist() {
     let (doc, _trials) = rustyfi_lang::compile_document_v1_with_trials(&files, &mono)
         .unwrap_or_else(|e| {
             panic!(
-                "the V0_0_6 dependency's internal `page-break A4Paper ..` and the V0_1 \
+                "the V0_0 dependency's internal `page-break A4Paper ..` and the V0_1 \
                  entry's own direct `page-break (length * length) ..` call must both \
                  resolve to their OWN version's PrimDef and coexist: {e}"
             )
         });
 
-    // The FINAL result is still `make-doc body` (the V0_0_6 A4 page) — the
+    // The FINAL result is still `make-doc body` (the V0_0 A4 page) — the
     // probe's own document is computed (and discarded) purely to prove its
     // *typecheck+eval* succeeded alongside the dependency's internal call.
     assert_eq!(
         doc.pages.len(),
         1,
-        "one A4 page from the V0_0_6 page-break call"
+        "one A4 page from the V0_0 page-break call"
     );
     assert!(
         !doc.pages[0].lines.is_empty(),
@@ -415,7 +415,7 @@ fn xver_forked_prim_coexist() {
 // body) no longer trips `collect_free_globals`'s free-type scan.
 // ============================================================================
 
-/// The `V0_0_6` package: same neutral-export shape as
+/// The `V0_0` package: same neutral-export shape as
 /// `XVER_PAGEBREAK_PKG_SRC` (`make-doc : block-boxes -> document`), but this
 /// time `page-break`'s first argument is produced by an INTERNAL, explicitly
 /// `page`-typed local `let rec` (`Expr::LetRecIn`'s own `: page` ascription)
@@ -447,9 +447,9 @@ let make-doc body =
 /// would surface as `CompileError::CrossVersionUnsupportedName`, not
 /// whatever assertion below), and (b) the internal ascription's `: page`
 /// text is still MEANINGFUL to the version-scoped typechecker (X2a's
-/// `Ast::VersionScope(V0_0_6, _)` swaps in `base_type_env_with_version
-/// (V0_0_6)` for `make-doc`'s whole body, so `get-page`'s ascribed `page`
-/// type and `A4Paper`'s ctor both resolve under V0_0_6 — if the ascription
+/// `Ast::VersionScope(V0_0, _)` swaps in `base_type_env_with_version
+/// (V0_0)` for `make-doc`'s whole body, so `get-page`'s ascribed `page`
+/// type and `A4Paper`'s ctor both resolve under V0_0 — if the ascription
 /// were silently ignored rather than genuinely accepted-and-typechecked,
 /// a real ascription/value mismatch elsewhere would go undetected; this test
 /// only pins the success path, `xver_boundary_forked_type_page_rejected`
@@ -482,21 +482,21 @@ make-doc body
         panic!("loading the X2b internal-typed-ascription xver fixture should succeed: {e}")
     });
     assert!(
-        program.files.iter().any(|f| matches!(f.cst, rustyfi_loader::LoadedCst::V0_0_6(_))),
-        "xver-internal-typed.satyg should have been detected as V0_0_6 (it's a @require: corpus target)"
+        program.files.iter().any(|f| matches!(f.cst, rustyfi_loader::LoadedCst::V0_0(_))),
+        "xver-internal-typed.satyg should have been detected as V0_0 (it's a @require: corpus target)"
     );
 
     let mono = Mono;
     let (doc, _trials) = rustyfi_lang::compile_document_v1_with_trials(&program.files, &mono)
         .unwrap_or_else(|e| {
             panic!(
-                "a V0_0_6 dependency using a `page`-typed local `let rec` PURELY \
+                "a V0_0 dependency using a `page`-typed local `let rec` PURELY \
                  INTERNALLY (behind a neutral `block-boxes -> document` export) should \
                  now compile+render under X2b: {e}"
             )
         });
 
-    // `A4Paper` (V0_0_6's page ADT, produced by the internal `get-page`) —
+    // `A4Paper` (V0_0's page ADT, produced by the internal `get-page`) —
     // one page, and the `line-break`d body was actually placed onto it.
     assert_eq!(
         doc.pages.len(),
@@ -511,7 +511,7 @@ make-doc body
 
 // ============================================================================
 // X2a negative (repurposed from X1): the TYPE half of the forked-name guard
-// stays conservative — a V0_0_6 dependency that textually names a forked
+// stays conservative — a V0_0 dependency that textually names a forked
 // TYPE is still rejected, even internally (not narrowed to "on the export
 // boundary only" — that's X2b/X3's job, design doc §X2.3/X2.4).
 // ============================================================================
@@ -524,7 +524,7 @@ make-doc body
 /// bare NAME lowers identically under both versions) but its VALUE
 /// representation still forks (0.0.6: a 9-ctor ADT, `Value::Ctor`; 0.1: a
 /// `length*length` tuple, `Value::Product`) — `v1::xver_adapt::
-/// reject_type_names()` adds it explicitly, so a `V0_0_6` dependency naming
+/// reject_type_names()` adds it explicitly, so a `V0_0` dependency naming
 /// it (even in a plain, unused `type` synonym) must still be rejected, now
 /// with `slice: "X3"` (the type-half check moved to `v1::xver_adapt`'s
 /// classification) — *before* any elaboration/typecheck/eval runs on the
@@ -548,9 +548,9 @@ fn negative_case_forked_type_on_boundary_is_still_rejected() {
     assert!(
         matches!(
             program.files[0].cst,
-            rustyfi_loader::LoadedCst::V0_0_6(_)
+            rustyfi_loader::LoadedCst::V0_0(_)
         ),
-        "xver-forked-type.satyg should have been detected as V0_0_6 (it's a @require: corpus target)"
+        "xver-forked-type.satyg should have been detected as V0_0 (it's a @require: corpus target)"
     );
 
     let mono = Mono;
@@ -570,12 +570,12 @@ fn negative_case_forked_type_on_boundary_is_still_rejected() {
 // export adapter", X3.6's test plan): `math` is the sole (a)-class forked
 // type — representationally identical to `V0_1`'s `math-text` (same shared
 // `Value::MathText`/`Value::Math`, `types.rs`'s `BaseType::MathText`) — so a
-// `V0_0_6` export naming it now RELABELS instead of rejecting. Everything
+// `V0_0` export naming it now RELABELS instead of rejecting. Everything
 // else forked (`page`, and every opaque nominal — `deco` included, X3a
 // defers a real value adapter to X3b) still hard-rejects.
 // ============================================================================
 
-/// The `V0_0_6` package: a `type .. = .. of math` variant (the ONE surface
+/// The `V0_0` package: a `type .. = .. of math` variant (the ONE surface
 /// site this port's typechecker actually consults for type text — see
 /// `v1::xver_adapt`'s module doc comment) wrapping/unwrapping a REAL math
 /// value built via `${1}` (embedded math syntax, `BaseType::MathText`).
@@ -584,7 +584,7 @@ fn negative_case_forked_type_on_boundary_is_still_rejected() {
 /// whole-program `Checker` (`typecheck.rs`'s `name_to_mono("math", V0_1)`
 /// falls through to the unbound-nominal default — 0.1 has no `math` type at
 /// all), so `XverMathWrap(${1})` — constructed inside `xver-get-math`'s
-/// `Ast::VersionScope(V0_0_6, _)`-wrapped body — would fail to unify against
+/// `Ast::VersionScope(V0_0, _)`-wrapped body — would fail to unify against
 /// the REAL `Base(MathText)` `${1}` produces: a genuine `TypeError`, not a
 /// silent mis-render. This is what proves the relabel is load-bearing, not
 /// cosmetic.
@@ -641,15 +641,15 @@ page-break (210mm, 297mm) content parts body
     let program = rustyfi_loader::load(&dir.path().join("entry.saty"), &opts)
         .unwrap_or_else(|e| panic!("loading the math-export xver fixture should succeed: {e}"));
     assert!(
-        program.files.iter().any(|f| matches!(f.cst, rustyfi_loader::LoadedCst::V0_0_6(_))),
-        "xver-math-export.satyg should have been detected as V0_0_6 (it's a @require: corpus target)"
+        program.files.iter().any(|f| matches!(f.cst, rustyfi_loader::LoadedCst::V0_0(_))),
+        "xver-math-export.satyg should have been detected as V0_0 (it's a @require: corpus target)"
     );
 
     let mono = Mono;
     let (doc, _trials) = rustyfi_lang::compile_document_v1_with_trials(&program.files, &mono)
         .unwrap_or_else(|e| {
             panic!(
-                "a V0_0_6 dependency exporting a `math`-typed value (via a `type .. of \
+                "a V0_0 dependency exporting a `math`-typed value (via a `type .. of \
                  math` ctor) should relabel to `math-text` and compile+render under X3a: {e}"
             )
         });
@@ -657,11 +657,11 @@ page-break (210mm, 297mm) content parts body
     assert_eq!(doc.pages.len(), 1, "one A4 page");
     assert!(
         !doc.pages[0].lines.is_empty(),
-        "the embedded math body (crossed from the V0_0_6 dependency) must have been placed"
+        "the embedded math body (crossed from the V0_0 dependency) must have been placed"
     );
 }
 
-/// X3.6's `xver_boundary_forked_type_page_rejected` (NEGATIVE): a `V0_0_6`
+/// X3.6's `xver_boundary_forked_type_page_rejected` (NEGATIVE): a `V0_0`
 /// dependency actually EXPORTING (not just naming, unused) a `page`-typed
 /// value still fails loudly at compile time, never reaching eval — `page`'s
 /// runtime representation (a 9-ctor ADT, `Value::Ctor`) has no `V0_1`
@@ -703,7 +703,7 @@ fn xver_boundary_forked_type_page_rejected() {
 
 /// X3.6's `xver_boundary_deco_export_coerces_and_renders` (POSITIVE, X3b —
 /// repurposed from the X3a-era `xver_boundary_deco_export_rejected`): the
-/// `V0_0_6` package below has TWO independent `deco`-touching bindings:
+/// `V0_0` package below has TWO independent `deco`-touching bindings:
 ///
 /// - `xver-deco-alias`, a bare `type .. = deco` synonym — the ORIGINAL X3a
 ///   fixture, which needs no value-level coercion at all (X3b's module doc
@@ -769,15 +769,15 @@ page-break (210mm, 297mm) content parts body
     let program = rustyfi_loader::load(&dir.path().join("entry.saty"), &opts)
         .unwrap_or_else(|e| panic!("loading the deco-export positive fixture should succeed: {e}"));
     assert!(
-        program.files.iter().any(|f| matches!(f.cst, rustyfi_loader::LoadedCst::V0_0_6(_))),
-        "xver-deco-export.satyg should have been detected as V0_0_6 (it's a @require: corpus target)"
+        program.files.iter().any(|f| matches!(f.cst, rustyfi_loader::LoadedCst::V0_0(_))),
+        "xver-deco-export.satyg should have been detected as V0_0 (it's a @require: corpus target)"
     );
 
     let mono = Mono;
     let (doc, _trials) = rustyfi_lang::compile_document_v1_with_trials(&program.files, &mono)
         .unwrap_or_else(|e| {
             panic!(
-                "a V0_0_6 dependency exporting a bare `: deco` value should be value-\
+                "a V0_0 dependency exporting a bare `: deco` value should be value-\
                  coerced (graphics list -> graphics via unite-graphics) and compile+render \
                  under X3b: {e}"
             )
@@ -863,7 +863,7 @@ page-break (210mm, 297mm) content parts body
     let (doc, _trials) = rustyfi_lang::compile_document_v1_with_trials(&program.files, &mono)
         .unwrap_or_else(|e| {
             panic!(
-                "a module-scoped, arrow-tailed V0_0_6 `deco` export should be value-coerced \
+                "a module-scoped, arrow-tailed V0_0 `deco` export should be value-coerced \
                  (graphics list -> graphics) and compile+render: {e}"
             )
         });
@@ -880,11 +880,11 @@ page-break (210mm, 297mm) content parts body
 }
 
 /// X3.6's `xver_boundary_mathboxes_not_aliased` (NEGATIVE/soundness, S2): a
-/// `V0_0_6` export whose crossed value is `math` (relabeled to
+/// `V0_0` export whose crossed value is `math` (relabeled to
 /// `math-text`) must NOT satisfy a `V0_1` `math-boxes` site — `math-boxes`
 /// is `V0_1`-only (the EVALUATED math tree, `BaseType::MathBoxes`,
 /// value.rs:57, deliberately distinct from `BaseType::MathText`) and no
-/// `V0_0_6` value is ever shaped that way. Passing the crossed (still
+/// `V0_0` value is ever shaped that way. Passing the crossed (still
 /// `math-text`) value directly to `embed-math`, which expects `math-boxes`
 /// under `V0_1`, must be a compile-time `TypeError`.
 #[test]
@@ -941,7 +941,7 @@ let bad = embed-math ctx m in
 }
 
 /// X3b positive (`deco-set`, the tuple-of-4 sibling of
-/// `xver_boundary_deco_export_coerces_and_renders`): a `V0_0_6` package
+/// `xver_boundary_deco_export_coerces_and_renders`): a `V0_0` package
 /// exports a bare `: deco-set` value via the mandatory `| ()` idiom
 /// (`elaborate.rs` requires a `let-rec`'s RHS to be a function, so a plain
 /// tuple value can ONLY be written this way — the same idiom
@@ -1005,15 +1005,15 @@ page-break (210mm, 297mm) content parts body
         panic!("loading the deco-set export positive fixture should succeed: {e}")
     });
     assert!(
-        program.files.iter().any(|f| matches!(f.cst, rustyfi_loader::LoadedCst::V0_0_6(_))),
-        "xver-decoset-export.satyg should have been detected as V0_0_6 (it's a @require: corpus target)"
+        program.files.iter().any(|f| matches!(f.cst, rustyfi_loader::LoadedCst::V0_0(_))),
+        "xver-decoset-export.satyg should have been detected as V0_0 (it's a @require: corpus target)"
     );
 
     let mono = Mono;
     let (doc, _trials) = rustyfi_lang::compile_document_v1_with_trials(&program.files, &mono)
         .unwrap_or_else(|e| {
             panic!(
-                "a V0_0_6 dependency exporting a bare `: deco-set` value should be value-\
+                "a V0_0 dependency exporting a bare `: deco-set` value should be value-\
                  coerced (each component's graphics list -> graphics via unite-graphics) and \
                  compile+render under X3b: {e}"
             )

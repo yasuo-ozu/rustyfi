@@ -155,15 +155,15 @@ fn float_greater_or_equal_and_less_or_equal() {
 }
 
 #[test]
-fn float_comparisons_are_unbound_under_v0_0_6() {
+fn float_comparisons_are_unbound_under_v0_0() {
     // Confirms these really are V0_1-only registrations, not a shared
     // `Both` retype — mirrors `types_unify.rs`'s
-    // `every_v01_only_primitive_has_a_type_under_v0_1_and_none_under_v0_0_6`.
+    // `every_v01_only_primitive_has_a_type_under_v0_1_and_none_under_v0_0`.
     for name in [">.", "<.", ">=.", "<=."] {
         assert!(
-            rustyfi_lang::prim_types::primitive_type_with_version(name, RustyfiVersion::V0_0_6)
+            rustyfi_lang::prim_types::primitive_type_with_version(name, RustyfiVersion::V0_0)
                 .is_none(),
-            "`{name}` must be unbound under V0_0_6"
+            "`{name}` must be unbound under V0_0"
         );
         assert!(
             rustyfi_lang::prim_types::primitive_type_with_version(name, RustyfiVersion::V0_1)

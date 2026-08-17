@@ -3,7 +3,7 @@
 % list) through the real loader, AND `V01Mini.emph` — the two S4 levers
 % (list markers, emphasis markers) in one fixture, driven end to end
 % through `--format pdf` / `--format html` / `--format html-reflow` by
-% `crates/rustyfi-cli/tests/format_html_reflow.rs`.
+% `crates/rustyfi/tests/format_html_reflow.rs`.
 %
 % `Item(_, items)`'s OUTER wrapper argument's own parent-text field is a
 % conventional throwaway (`itemize.satyh`'s `listing`/`enumerate` both

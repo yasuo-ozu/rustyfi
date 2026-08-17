@@ -66,7 +66,7 @@ pub(crate) fn resolve_import(dir: &Path, name: &str) -> Result<PathBuf, Vec<Path
 ///   4. `<lib_root>/dist-v01/packages/<name>` (Slice X4a,
 ///      `docs/plans/design-cross-version-import.md` §X4.3 item 1 — the 0.1
 ///      corpus, mirroring candidate 1 with no nested-layout analogue yet).
-///      This is what lets a `V0_0_6`-rooted load's `@require:` reach a 0.1
+///      This is what lets a `V0_0`-rooted load's `@require:` reach a 0.1
 ///      package under `lib-rustyfi/dist-v01/packages/` from the SAME
 ///      `lib_root` a 0.0.6 document also `@require:`s the 0.0.6 corpus
 ///      from. Purely additive — appended LAST, so it only ever adds NEW

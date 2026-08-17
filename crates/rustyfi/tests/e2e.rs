@@ -22,12 +22,12 @@ fn lib_root() -> PathBuf {
 /// Load `entry` and its full `@require:`/`@import:` dependency graph
 /// (against [`lib_root`]), then concatenate the dependency-ordered library
 /// preludes ahead of the entry document's own prelude — exactly
-/// `rustyfi-cli`'s `merge_program` (src/main.rs).
+/// `rustyfi`'s `merge_program` (src/main.rs).
 fn as_v006(cst: rustyfi_loader::LoadedCst) -> rustyfi_syntax::cst::File {
     match cst {
-        rustyfi_loader::LoadedCst::V0_0_6(f) => f,
+        rustyfi_loader::LoadedCst::V0_0(f) => f,
         rustyfi_loader::LoadedCst::V0_1(_) => {
-            unreachable!("this test's load_and_merge is the V0_0_6-only path")
+            unreachable!("this test's load_and_merge is the V0_0-only path")
         }
     }
 }
@@ -1429,7 +1429,7 @@ fn v01_math_document_renders_to_extractable_pdf() {
 /// the PDF bytes (`render_pdf_with`, unlike the other v01 capstones above
 /// which use the extras-dropping `render_pdf` wrapper — this one needs
 /// `doc.extras.doc_info` to actually reach the writer, exactly like
-/// `rustyfi-cli`'s own `main.rs`).
+/// `rustyfi`'s own `main.rs`).
 #[test]
 fn v01_strings_document_renders_to_extractable_text_and_info_dict() {
     run_with_big_stack(move || {

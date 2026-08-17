@@ -75,13 +75,13 @@ impl Drop for TempDoc {
 
 fn as_v006(cst: &LoadedCst) -> &rustyfi_syntax::cst::File {
     match cst {
-        LoadedCst::V0_0_6(f) => f,
+        LoadedCst::V0_0(f) => f,
         LoadedCst::V0_1(_) => unreachable!("as_v006 called on a V0_1-loaded file"),
     }
 }
 
 /// Merge a loader-resolved V0.0.6 program's preludes into one synthetic
-/// `cst::File` — mirrors `rustyfi-cli`'s `merge_program` /
+/// `cst::File` — mirrors `rustyfi`'s `merge_program` /
 /// `stdlib_tier0.rs`'s helper of the same name.
 fn merge_program_v006(program: LoadedProgram) -> rustyfi_syntax::cst::File {
     let mut files = program.files;
@@ -104,7 +104,7 @@ fn merge_program_v006(program: LoadedProgram) -> rustyfi_syntax::cst::File {
 fn as_v01(f: &LoadedFile) -> &rustyfi_syntax::cst_v1::FileV1 {
     match &f.cst {
         LoadedCst::V0_1(cst) => cst,
-        LoadedCst::V0_0_6(_) => unreachable!("as_v01 called on a V0_0_6-loaded file"),
+        LoadedCst::V0_0(_) => unreachable!("as_v01 called on a V0_0-loaded file"),
     }
 }
 
@@ -113,7 +113,7 @@ fn as_v01(f: &LoadedFile) -> &rustyfi_syntax::cst_v1::FileV1 {
 /// dependency + the entry through `v1::lower`), stopping short of eval.
 /// Also returns the X2a `v006_indices` set (mirrors production's — see
 /// `elaborate::elaborate_program_with_versions`), so callers can wrap
-/// spliced V0_0_6 bindings the same way production does.
+/// spliced V0_0 bindings the same way production does.
 fn merge_program_v01(
     files: &[LoadedFile],
 ) -> Result<(rustyfi_syntax::cst::File, std::collections::HashSet<usize>), v1::lower::LowerError> {
@@ -126,7 +126,7 @@ fn merge_program_v01(
         // X1/X2a (design-cross-version-import.md §5, §"Slice X2 — per-group
         // primitive environment"): mirror production's
         // `compile_document_v1_with_trials` dep loop, which is now a
-        // MIXED-version list. A V0_1 dep is lowered as before; a V0_0_6 dep (a
+        // MIXED-version list. A V0_1 dep is lowered as before; a V0_0 dep (a
         // 0.0.6-corpus `@require:` target reached under a V0_1 entry) splices
         // its `cst::File.prelude` bindings directly, and its contributed
         // top-level indices are recorded into `v006_indices` — mirroring
@@ -137,11 +137,11 @@ fn merge_program_v01(
         // ALSO runs the forked-name guard on this path, but this
         // typecheck-differential harness only needs to not panic + emit a
         // stable line, so it still splices unconditionally, guard-free. (The
-        // V0_0_6-first branch in `one_line` — the 0.0.6 golden lines — never
+        // V0_0-first branch in `one_line` — the 0.0.6 golden lines — never
         // reaches here and is untouched by X1/X2a.)
         match &dep.cst {
             LoadedCst::V0_1(cst) => prelude.extend(v1::lower::lower_file_v1(cst)?),
-            LoadedCst::V0_0_6(cst) => {
+            LoadedCst::V0_0(cst) => {
                 let start = prelude.len();
                 prelude.extend(cst.prelude.iter().cloned());
                 v006_indices.extend(start..prelude.len());
@@ -166,14 +166,14 @@ fn merge_program_v01(
     ))
 }
 
-/// Load + elaborate + `typecheck_verbose` one entry file, trying V0_0_6 first
-/// and falling back to V0_1 if the V0_0_6 load itself fails (the corpus mixes
+/// Load + elaborate + `typecheck_verbose` one entry file, trying V0_0 first
+/// and falling back to V0_1 if the V0_0 load itself fails (the corpus mixes
 /// both generations). Returns the generation that actually loaded plus the
 /// typechecker's warnings, or a stage-tagged error string.
 fn typecheck_entry(entry: &Path) -> Result<(RustyfiVersion, Vec<String>), String> {
     let opts_006 = LoadOptions {
         lib_root: Some(lib_root()),
-        version: RustyfiVersion::V0_0_6,
+        version: RustyfiVersion::V0_0,
         ..Default::default()
     };
     match rustyfi_loader::load(entry, &opts_006) {
@@ -186,7 +186,7 @@ fn typecheck_entry(entry: &Path) -> Result<(RustyfiVersion, Vec<String>), String
                 .map_err(|e| format!("elaborate: {e}"))?;
             let warns = typecheck::typecheck_verbose(&program).map_err(|e| format!("{e}"))?;
             Ok((
-                RustyfiVersion::V0_0_6,
+                RustyfiVersion::V0_0,
                 warns.iter().map(|w| format!("{w:?}")).collect(),
             ))
         }
@@ -203,9 +203,9 @@ fn typecheck_entry(entry: &Path) -> Result<(RustyfiVersion, Vec<String>), String
             let env = primitives::base_env_with_version(RustyfiVersion::V0_1);
             let store = rustyfi_lang::symbol::SymbolStore::new();
             // Mirror `lib.rs`'s `compile_document_v1_with_trials`: the scope is
-            // tagged V0_1 (`Scope::new` is V0_0_6 — building this branch's scope
+            // tagged V0_1 (`Scope::new` is V0_0 — building this branch's scope
             // with it elaborated every mixed-version input as 0.0.6), and when a
-            // V0_0_6 dependency was spliced the name set is the UNION of both
+            // V0_0 dependency was spliced the name set is the UNION of both
             // versions', since that dependency may legitimately name a
             // 0.0.6-only primitive and elaboration resolves names before
             // `Ast::VersionScope` means anything.
@@ -213,7 +213,7 @@ fn typecheck_entry(entry: &Path) -> Result<(RustyfiVersion, Vec<String>), String
                 env.names()
             } else {
                 let mut n = env.names();
-                n.extend(primitives::base_env_with_version(RustyfiVersion::V0_0_6).names());
+                n.extend(primitives::base_env_with_version(RustyfiVersion::V0_0).names());
                 n.sort();
                 n.dedup();
                 n
@@ -252,183 +252,183 @@ fn probe_src(pkg: &str) -> String {
 
 const DOCUMENTS: &[Doc] = &[
     Doc {
-        path: "crates/rustyfi-cli/tests/fixtures/annot-hook.saty",
-        src: include_str!("../../rustyfi-cli/tests/fixtures/annot-hook.saty"),
-        version: RustyfiVersion::V0_0_6,
+        path: "crates/rustyfi/tests/fixtures/annot-hook.saty",
+        src: include_str!("../../rustyfi/tests/fixtures/annot-hook.saty"),
+        version: RustyfiVersion::V0_0,
     },
     Doc {
-        path: "crates/rustyfi-cli/tests/fixtures/cjk.saty",
-        src: include_str!("../../rustyfi-cli/tests/fixtures/cjk.saty"),
-        version: RustyfiVersion::V0_0_6,
+        path: "crates/rustyfi/tests/fixtures/cjk.saty",
+        src: include_str!("../../rustyfi/tests/fixtures/cjk.saty"),
+        version: RustyfiVersion::V0_0,
     },
     Doc {
-        path: "crates/rustyfi-cli/tests/fixtures/footnote.saty",
-        src: include_str!("../../rustyfi-cli/tests/fixtures/footnote.saty"),
-        version: RustyfiVersion::V0_0_6,
+        path: "crates/rustyfi/tests/fixtures/footnote.saty",
+        src: include_str!("../../rustyfi/tests/fixtures/footnote.saty"),
+        version: RustyfiVersion::V0_0,
     },
     Doc {
-        path: "crates/rustyfi-cli/tests/fixtures/graphics.saty",
-        src: include_str!("../../rustyfi-cli/tests/fixtures/graphics.saty"),
-        version: RustyfiVersion::V0_0_6,
+        path: "crates/rustyfi/tests/fixtures/graphics.saty",
+        src: include_str!("../../rustyfi/tests/fixtures/graphics.saty"),
+        version: RustyfiVersion::V0_0,
     },
     Doc {
-        path: "crates/rustyfi-cli/tests/fixtures/hook-page.saty",
-        src: include_str!("../../rustyfi-cli/tests/fixtures/hook-page.saty"),
-        version: RustyfiVersion::V0_0_6,
+        path: "crates/rustyfi/tests/fixtures/hook-page.saty",
+        src: include_str!("../../rustyfi/tests/fixtures/hook-page.saty"),
+        version: RustyfiVersion::V0_0,
     },
     Doc {
-        path: "crates/rustyfi-cli/tests/fixtures/href.saty",
-        src: include_str!("../../rustyfi-cli/tests/fixtures/href.saty"),
-        version: RustyfiVersion::V0_0_6,
+        path: "crates/rustyfi/tests/fixtures/href.saty",
+        src: include_str!("../../rustyfi/tests/fixtures/href.saty"),
+        version: RustyfiVersion::V0_0,
     },
     Doc {
-        path: "crates/rustyfi-cli/tests/fixtures/math-cramped.saty",
-        src: include_str!("../../rustyfi-cli/tests/fixtures/math-cramped.saty"),
+        path: "crates/rustyfi/tests/fixtures/math-cramped.saty",
+        src: include_str!("../../rustyfi/tests/fixtures/math-cramped.saty"),
         version: RustyfiVersion::V0_1,
     },
     Doc {
-        path: "crates/rustyfi-cli/tests/fixtures/math.saty",
-        src: include_str!("../../rustyfi-cli/tests/fixtures/math.saty"),
-        version: RustyfiVersion::V0_0_6,
+        path: "crates/rustyfi/tests/fixtures/math.saty",
+        src: include_str!("../../rustyfi/tests/fixtures/math.saty"),
+        version: RustyfiVersion::V0_0,
     },
     Doc {
-        path: "crates/rustyfi-cli/tests/fixtures/minimal.saty",
-        src: include_str!("../../rustyfi-cli/tests/fixtures/minimal.saty"),
-        version: RustyfiVersion::V0_0_6,
+        path: "crates/rustyfi/tests/fixtures/minimal.saty",
+        src: include_str!("../../rustyfi/tests/fixtures/minimal.saty"),
+        version: RustyfiVersion::V0_0,
     },
     Doc {
-        path: "crates/rustyfi-cli/tests/fixtures/multicolumn.saty",
-        src: include_str!("../../rustyfi-cli/tests/fixtures/multicolumn.saty"),
-        version: RustyfiVersion::V0_0_6,
+        path: "crates/rustyfi/tests/fixtures/multicolumn.saty",
+        src: include_str!("../../rustyfi/tests/fixtures/multicolumn.saty"),
+        version: RustyfiVersion::V0_0,
     },
     Doc {
-        path: "crates/rustyfi-cli/tests/fixtures/multifile/main.saty",
-        src: include_str!("../../rustyfi-cli/tests/fixtures/multifile/main.saty"),
-        version: RustyfiVersion::V0_0_6,
+        path: "crates/rustyfi/tests/fixtures/multifile/main.saty",
+        src: include_str!("../../rustyfi/tests/fixtures/multifile/main.saty"),
+        version: RustyfiVersion::V0_0,
     },
     Doc {
-        path: "crates/rustyfi-cli/tests/fixtures/page-footer.saty",
-        src: include_str!("../../rustyfi-cli/tests/fixtures/page-footer.saty"),
-        version: RustyfiVersion::V0_0_6,
+        path: "crates/rustyfi/tests/fixtures/page-footer.saty",
+        src: include_str!("../../rustyfi/tests/fixtures/page-footer.saty"),
+        version: RustyfiVersion::V0_0,
     },
     Doc {
-        path: "crates/rustyfi-cli/tests/fixtures/phase2.saty",
-        src: include_str!("../../rustyfi-cli/tests/fixtures/phase2.saty"),
-        version: RustyfiVersion::V0_0_6,
+        path: "crates/rustyfi/tests/fixtures/phase2.saty",
+        src: include_str!("../../rustyfi/tests/fixtures/phase2.saty"),
+        version: RustyfiVersion::V0_0,
     },
     Doc {
-        path: "crates/rustyfi-cli/tests/fixtures/phase2b.saty",
-        src: include_str!("../../rustyfi-cli/tests/fixtures/phase2b.saty"),
-        version: RustyfiVersion::V0_0_6,
+        path: "crates/rustyfi/tests/fixtures/phase2b.saty",
+        src: include_str!("../../rustyfi/tests/fixtures/phase2b.saty"),
+        version: RustyfiVersion::V0_0,
     },
     Doc {
-        path: "crates/rustyfi-cli/tests/fixtures/realfont.saty",
-        src: include_str!("../../rustyfi-cli/tests/fixtures/realfont.saty"),
-        version: RustyfiVersion::V0_0_6,
+        path: "crates/rustyfi/tests/fixtures/realfont.saty",
+        src: include_str!("../../rustyfi/tests/fixtures/realfont.saty"),
+        version: RustyfiVersion::V0_0,
     },
     Doc {
-        path: "crates/rustyfi-cli/tests/fixtures/table.saty",
-        src: include_str!("../../rustyfi-cli/tests/fixtures/table.saty"),
-        version: RustyfiVersion::V0_0_6,
+        path: "crates/rustyfi/tests/fixtures/table.saty",
+        src: include_str!("../../rustyfi/tests/fixtures/table.saty"),
+        version: RustyfiVersion::V0_0,
     },
     Doc {
-        path: "crates/rustyfi-cli/tests/fixtures/tier4.saty",
-        src: include_str!("../../rustyfi-cli/tests/fixtures/tier4.saty"),
-        version: RustyfiVersion::V0_0_6,
+        path: "crates/rustyfi/tests/fixtures/tier4.saty",
+        src: include_str!("../../rustyfi/tests/fixtures/tier4.saty"),
+        version: RustyfiVersion::V0_0,
     },
     Doc {
-        path: "crates/rustyfi-cli/tests/fixtures/twocolumn.saty",
-        src: include_str!("../../rustyfi-cli/tests/fixtures/twocolumn.saty"),
-        version: RustyfiVersion::V0_0_6,
+        path: "crates/rustyfi/tests/fixtures/twocolumn.saty",
+        src: include_str!("../../rustyfi/tests/fixtures/twocolumn.saty"),
+        version: RustyfiVersion::V0_0,
     },
     Doc {
-        path: "crates/rustyfi-cli/tests/fixtures/v01-annot-package.saty",
-        src: include_str!("../../rustyfi-cli/tests/fixtures/v01-annot-package.saty"),
-        version: RustyfiVersion::V0_0_6,
+        path: "crates/rustyfi/tests/fixtures/v01-annot-package.saty",
+        src: include_str!("../../rustyfi/tests/fixtures/v01-annot-package.saty"),
+        version: RustyfiVersion::V0_0,
     },
     Doc {
-        path: "crates/rustyfi-cli/tests/fixtures/v01-code-package.saty",
-        src: include_str!("../../rustyfi-cli/tests/fixtures/v01-code-package.saty"),
-        version: RustyfiVersion::V0_0_6,
+        path: "crates/rustyfi/tests/fixtures/v01-code-package.saty",
+        src: include_str!("../../rustyfi/tests/fixtures/v01-code-package.saty"),
+        version: RustyfiVersion::V0_0,
     },
     Doc {
-        path: "crates/rustyfi-cli/tests/fixtures/v01-equiv-006.saty",
-        src: include_str!("../../rustyfi-cli/tests/fixtures/v01-equiv-006.saty"),
-        version: RustyfiVersion::V0_0_6,
+        path: "crates/rustyfi/tests/fixtures/v01-equiv-006.saty",
+        src: include_str!("../../rustyfi/tests/fixtures/v01-equiv-006.saty"),
+        version: RustyfiVersion::V0_0,
     },
     Doc {
-        path: "crates/rustyfi-cli/tests/fixtures/v01-font.saty",
-        src: include_str!("../../rustyfi-cli/tests/fixtures/v01-font.saty"),
+        path: "crates/rustyfi/tests/fixtures/v01-font.saty",
+        src: include_str!("../../rustyfi/tests/fixtures/v01-font.saty"),
         version: RustyfiVersion::V0_1,
     },
     Doc {
-        path: "crates/rustyfi-cli/tests/fixtures/v01-footnote-scheme.saty",
-        src: include_str!("../../rustyfi-cli/tests/fixtures/v01-footnote-scheme.saty"),
+        path: "crates/rustyfi/tests/fixtures/v01-footnote-scheme.saty",
+        src: include_str!("../../rustyfi/tests/fixtures/v01-footnote-scheme.saty"),
         version: RustyfiVersion::V0_1,
     },
     Doc {
-        path: "crates/rustyfi-cli/tests/fixtures/v01-itemize.saty",
-        src: include_str!("../../rustyfi-cli/tests/fixtures/v01-itemize.saty"),
+        path: "crates/rustyfi/tests/fixtures/v01-itemize.saty",
+        src: include_str!("../../rustyfi/tests/fixtures/v01-itemize.saty"),
         version: RustyfiVersion::V0_1,
     },
     Doc {
-        path: "crates/rustyfi-cli/tests/fixtures/v01-math-equiv-006.saty",
-        src: include_str!("../../rustyfi-cli/tests/fixtures/v01-math-equiv-006.saty"),
-        version: RustyfiVersion::V0_0_6,
+        path: "crates/rustyfi/tests/fixtures/v01-math-equiv-006.saty",
+        src: include_str!("../../rustyfi/tests/fixtures/v01-math-equiv-006.saty"),
+        version: RustyfiVersion::V0_0,
     },
     Doc {
-        path: "crates/rustyfi-cli/tests/fixtures/v01-math-full.saty",
-        src: include_str!("../../rustyfi-cli/tests/fixtures/v01-math-full.saty"),
+        path: "crates/rustyfi/tests/fixtures/v01-math-full.saty",
+        src: include_str!("../../rustyfi/tests/fixtures/v01-math-full.saty"),
         version: RustyfiVersion::V0_1,
     },
     Doc {
-        path: "crates/rustyfi-cli/tests/fixtures/v01-math-package.saty",
-        src: include_str!("../../rustyfi-cli/tests/fixtures/v01-math-package.saty"),
-        version: RustyfiVersion::V0_0_6,
+        path: "crates/rustyfi/tests/fixtures/v01-math-package.saty",
+        src: include_str!("../../rustyfi/tests/fixtures/v01-math-package.saty"),
+        version: RustyfiVersion::V0_0,
     },
     Doc {
-        path: "crates/rustyfi-cli/tests/fixtures/v01-math-scripts.saty",
-        src: include_str!("../../rustyfi-cli/tests/fixtures/v01-math-scripts.saty"),
+        path: "crates/rustyfi/tests/fixtures/v01-math-scripts.saty",
+        src: include_str!("../../rustyfi/tests/fixtures/v01-math-scripts.saty"),
         version: RustyfiVersion::V0_1,
     },
     Doc {
-        path: "crates/rustyfi-cli/tests/fixtures/v01-math-seal-probe.saty",
-        src: include_str!("../../rustyfi-cli/tests/fixtures/v01-math-seal-probe.saty"),
-        version: RustyfiVersion::V0_0_6,
+        path: "crates/rustyfi/tests/fixtures/v01-math-seal-probe.saty",
+        src: include_str!("../../rustyfi/tests/fixtures/v01-math-seal-probe.saty"),
+        version: RustyfiVersion::V0_0,
     },
     Doc {
-        path: "crates/rustyfi-cli/tests/fixtures/v01-math.saty",
-        src: include_str!("../../rustyfi-cli/tests/fixtures/v01-math.saty"),
+        path: "crates/rustyfi/tests/fixtures/v01-math.saty",
+        src: include_str!("../../rustyfi/tests/fixtures/v01-math.saty"),
         version: RustyfiVersion::V0_1,
     },
     Doc {
-        path: "crates/rustyfi-cli/tests/fixtures/v01-minimal.saty",
-        src: include_str!("../../rustyfi-cli/tests/fixtures/v01-minimal.saty"),
+        path: "crates/rustyfi/tests/fixtures/v01-minimal.saty",
+        src: include_str!("../../rustyfi/tests/fixtures/v01-minimal.saty"),
         version: RustyfiVersion::V0_1,
     },
     Doc {
-        path: "crates/rustyfi-cli/tests/fixtures/v01-sealed.saty",
-        src: include_str!("../../rustyfi-cli/tests/fixtures/v01-sealed.saty"),
+        path: "crates/rustyfi/tests/fixtures/v01-sealed.saty",
+        src: include_str!("../../rustyfi/tests/fixtures/v01-sealed.saty"),
         version: RustyfiVersion::V0_1,
     },
     Doc {
-        path: "crates/rustyfi-cli/tests/fixtures/v01-stdja-book.saty",
-        src: include_str!("../../rustyfi-cli/tests/fixtures/v01-stdja-book.saty"),
+        path: "crates/rustyfi/tests/fixtures/v01-stdja-book.saty",
+        src: include_str!("../../rustyfi/tests/fixtures/v01-stdja-book.saty"),
         version: RustyfiVersion::V0_1,
     },
     Doc {
-        path: "crates/rustyfi-cli/tests/fixtures/v01-stdja-report.saty",
-        src: include_str!("../../rustyfi-cli/tests/fixtures/v01-stdja-report.saty"),
+        path: "crates/rustyfi/tests/fixtures/v01-stdja-report.saty",
+        src: include_str!("../../rustyfi/tests/fixtures/v01-stdja-report.saty"),
         version: RustyfiVersion::V0_1,
     },
     Doc {
-        path: "crates/rustyfi-cli/tests/fixtures/v01-stdja.saty",
-        src: include_str!("../../rustyfi-cli/tests/fixtures/v01-stdja.saty"),
+        path: "crates/rustyfi/tests/fixtures/v01-stdja.saty",
+        src: include_str!("../../rustyfi/tests/fixtures/v01-stdja.saty"),
         version: RustyfiVersion::V0_1,
     },
     Doc {
-        path: "crates/rustyfi-cli/tests/fixtures/v01-strings.saty",
-        src: include_str!("../../rustyfi-cli/tests/fixtures/v01-strings.saty"),
+        path: "crates/rustyfi/tests/fixtures/v01-strings.saty",
+        src: include_str!("../../rustyfi/tests/fixtures/v01-strings.saty"),
         version: RustyfiVersion::V0_1,
     },
 ];
@@ -436,123 +436,123 @@ const DOCUMENTS: &[Doc] = &[
 const PACKAGES: &[Pkg] = &[
     Pkg {
         name: "annot",
-        version: RustyfiVersion::V0_0_6,
+        version: RustyfiVersion::V0_0,
     },
     Pkg {
         name: "bnf",
-        version: RustyfiVersion::V0_0_6,
+        version: RustyfiVersion::V0_0,
     },
     Pkg {
         name: "cd",
-        version: RustyfiVersion::V0_0_6,
+        version: RustyfiVersion::V0_0,
     },
     Pkg {
         name: "code",
-        version: RustyfiVersion::V0_0_6,
+        version: RustyfiVersion::V0_0,
     },
     Pkg {
         name: "color",
-        version: RustyfiVersion::V0_0_6,
+        version: RustyfiVersion::V0_0,
     },
     Pkg {
         name: "deco",
-        version: RustyfiVersion::V0_0_6,
+        version: RustyfiVersion::V0_0,
     },
     Pkg {
         name: "footnote-scheme",
-        version: RustyfiVersion::V0_0_6,
+        version: RustyfiVersion::V0_0,
     },
     Pkg {
         name: "geom",
-        version: RustyfiVersion::V0_0_6,
+        version: RustyfiVersion::V0_0,
     },
     Pkg {
         name: "gr",
-        version: RustyfiVersion::V0_0_6,
+        version: RustyfiVersion::V0_0,
     },
     Pkg {
         name: "hdecoset",
-        version: RustyfiVersion::V0_0_6,
+        version: RustyfiVersion::V0_0,
     },
     Pkg {
         name: "itemize",
-        version: RustyfiVersion::V0_0_6,
+        version: RustyfiVersion::V0_0,
     },
     Pkg {
         name: "list",
-        version: RustyfiVersion::V0_0_6,
+        version: RustyfiVersion::V0_0,
     },
     Pkg {
         name: "math",
-        version: RustyfiVersion::V0_0_6,
+        version: RustyfiVersion::V0_0,
     },
     Pkg {
         name: "mdja",
-        version: RustyfiVersion::V0_0_6,
+        version: RustyfiVersion::V0_0,
     },
     Pkg {
         name: "mitou-detail",
-        version: RustyfiVersion::V0_0_6,
+        version: RustyfiVersion::V0_0,
     },
     Pkg {
         name: "mitou-report",
-        version: RustyfiVersion::V0_0_6,
+        version: RustyfiVersion::V0_0,
     },
     Pkg {
         name: "option",
-        version: RustyfiVersion::V0_0_6,
+        version: RustyfiVersion::V0_0,
     },
     Pkg {
         name: "pervasives",
-        version: RustyfiVersion::V0_0_6,
+        version: RustyfiVersion::V0_0,
     },
     Pkg {
         name: "picture",
-        version: RustyfiVersion::V0_0_6,
+        version: RustyfiVersion::V0_0,
     },
     Pkg {
         name: "progsynt",
-        version: RustyfiVersion::V0_0_6,
+        version: RustyfiVersion::V0_0,
     },
     Pkg {
         name: "proof",
-        version: RustyfiVersion::V0_0_6,
+        version: RustyfiVersion::V0_0,
     },
     Pkg {
         name: "standalone",
-        version: RustyfiVersion::V0_0_6,
+        version: RustyfiVersion::V0_0,
     },
     Pkg {
         name: "stdja",
-        version: RustyfiVersion::V0_0_6,
+        version: RustyfiVersion::V0_0,
     },
     Pkg {
         name: "stdja-mini",
-        version: RustyfiVersion::V0_0_6,
+        version: RustyfiVersion::V0_0,
     },
     Pkg {
         name: "stdjabook",
-        version: RustyfiVersion::V0_0_6,
+        version: RustyfiVersion::V0_0,
     },
     Pkg {
         name: "stdjareport",
-        version: RustyfiVersion::V0_0_6,
+        version: RustyfiVersion::V0_0,
     },
     Pkg {
         name: "table",
-        version: RustyfiVersion::V0_0_6,
+        version: RustyfiVersion::V0_0,
     },
     Pkg {
         name: "tabular",
-        version: RustyfiVersion::V0_0_6,
+        version: RustyfiVersion::V0_0,
     },
     Pkg {
         name: "tabularx",
-        version: RustyfiVersion::V0_0_6,
+        version: RustyfiVersion::V0_0,
     },
     Pkg {
         name: "vdecoset",
-        version: RustyfiVersion::V0_0_6,
+        version: RustyfiVersion::V0_0,
     },
 ];
 

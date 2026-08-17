@@ -75,7 +75,7 @@
 //!
 //! **Additivity** (design doc §8): this module is reached only through the
 //! two `pub fn`s below, themselves reached only via the CLI's
-//! `--format html-reflow` (`rustyfi-cli`). Nothing here changes the
+//! `--format html-reflow` (`rustyfi`). Nothing here changes the
 //! behavior of [`crate::render_html`]/[`crate::render_html_ttf_with`] or
 //! `rustyfi_pdf::render_pdf*` — it only reuses their already-`pub(super)`
 //! (crate-visible) helpers ([`crate::escape_html`], [`crate::svg::css_color`],

@@ -108,7 +108,7 @@ impl FontMetrics for Mono {
 fn as_v01(f: &LoadedFile) -> &rustyfi_syntax::cst_v1::FileV1 {
     match &f.cst {
         LoadedCst::V0_1(cst) => cst,
-        LoadedCst::V0_0_6(_) => unreachable!("this test's helper is V0_1-only"),
+        LoadedCst::V0_0(_) => unreachable!("this test's helper is V0_1-only"),
     }
 }
 
@@ -177,7 +177,7 @@ fn compile_v01_via_loader_with_metrics(
     // primitive (`inline-graphics`/`unite-graphics`/the deco family, all
     // fired for real by `itemize`'s bullets and `proof`'s inference bar)
     // expects the callback to return a single `graphics` under V0_1 but a
-    // `list graphics` under the default V0_0_6 — so this must be set, or
+    // `list graphics` under the default V0_0 — so this must be set, or
     // those callbacks eval-error with "expected list, got graphics".
     interp.version = RustyfiVersion::V0_1;
     interp
@@ -328,7 +328,7 @@ Inline.get-natural-advance (embed-math ctx (read-math ctx ${\\Proof.derive!(mlst
 // author |) -> block-text -> document`, its own `page-break`), so unlike
 // `itemize`/`proof` above this package is exercised with a real, full,
 // hand-written `.saty` document — mirroring `v01_stdlib.rs`'s font/hyph-
-// unidata capstone tests AND `crates/rustyfi-cli/tests/e2e.rs`'s
+// unidata capstone tests AND `crates/rustyfi/tests/e2e.rs`'s
 // `v01_stdja_capstone_renders_to_extractable_text` (same shape, scoped to
 // this crate's own `compile_document_v1` entry point rather than a full
 // PDF render). Exercises: `+h1` (auto-numbering), `+p`, `\emph`/`\strong`,

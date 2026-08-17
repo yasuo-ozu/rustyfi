@@ -361,9 +361,9 @@ dependencies = [
 
 [[package]]
 name = "decycle"
-version = "0.5.1"
+version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ebb9b12a96377519443cee9d24ba4581d0908d42916e71e98e59dcb87b85275b"
+checksum = "b8684fd2873d7d70acba95607ef54f0fe218d362f43b65f6b49082d12ee8baca"
 dependencies = [
  "decycle-impl",
  "decycle-macro",
@@ -371,9 +371,9 @@ dependencies = [
 
 [[package]]
 name = "decycle-impl"
-version = "0.5.1"
+version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c71dc5eab0636057a15230d68334858f50800ca653d43865f11edc5064b03e73"
+checksum = "ace9d8be8a48e2115999aec34726bd08fdea1af9d334c961264b8ac371aad819"
 dependencies = [
  "proc-macro-error",
  "proc-macro2",
@@ -385,9 +385,9 @@ dependencies = [
 
 [[package]]
 name = "decycle-macro"
-version = "0.5.1"
+version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bbd18574ae786a0d6a660eacad4f4794d5649de47610fa61378dbc6fbbd5c3f4"
+checksum = "ce5a627093f3aa4de0747975e6c4e0b9481535936f79f7ea5b1c4464dd1b5ce7"
 dependencies = [
  "decycle-impl",
  "proc-macro-error",

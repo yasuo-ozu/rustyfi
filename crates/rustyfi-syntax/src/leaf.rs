@@ -15,7 +15,7 @@ use crate::span::Span;
 pub use crate::token::*;
 use syan::error::ParseError;
 use syan::parse::unparse::Emitter;
-use syan::parse::{IntoParseStream, Parse, ParseStream, Unparse};
+use syan::parse::{Parse, ParseStream, Unparse};
 use syan::span::Spanned;
 
 /// Multi-field qualified-name leaves: a `(Vec<String>, String)` payload
@@ -34,10 +34,11 @@ macro_rules! qualified_name_tokens {
             }
 
             impl Parse<Atom> for $name {
-                type Error = ParseError;
+                type Error = ParseError<Span>;
 
-                fn parse(stream: impl IntoParseStream<Atom = Atom>) -> Result<Self, Self::Error> {
-                    let mut stream = stream.into_parse_stream();
+                fn parse_stream<S: ParseStream<Atom = Atom>>(
+                        stream: &mut S,
+                    ) -> Result<Self, Self::Error> {
                     match stream.next() {
                         Some(Atom { slot: Token::$variant(mods, name), span }) => {
                             Ok($name { mods, name, span })
@@ -45,12 +46,9 @@ macro_rules! qualified_name_tokens {
                         Some(atom) => {
                             let span = atom.span;
                             stream.push(atom);
-                            Err(ParseError::new(span, concat!("expected ", $desc)))
+                            Err(ParseError::expected(span, $desc))
                         }
-                        None => Err(ParseError::new(
-                            Span::default(),
-                            concat!("expected ", $desc, ", found end of input"),
-                        )),
+                        None => Err(ParseError::eof(Span::default())),
                     }
                 }
             }
@@ -130,10 +128,11 @@ pub struct LengthTok {
 }
 
 impl Parse<Atom> for LengthTok {
-    type Error = ParseError;
+    type Error = ParseError<Span>;
 
-    fn parse(stream: impl IntoParseStream<Atom = Atom>) -> Result<Self, Self::Error> {
-        let mut stream = stream.into_parse_stream();
+    fn parse_stream<S: ParseStream<Atom = Atom>>(
+            stream: &mut S,
+        ) -> Result<Self, Self::Error> {
         match stream.next() {
             Some(Atom {
                 slot: Token::LengthConst(value, unit),
@@ -142,12 +141,9 @@ impl Parse<Atom> for LengthTok {
             Some(atom) => {
                 let span = atom.span;
                 stream.push(atom);
-                Err(ParseError::new(span, "expected a length constant"))
+                Err(ParseError::expected(span, "a length constant"))
             }
-            None => Err(ParseError::new(
-                Span::default(),
-                "expected a length constant, found end of input",
-            )),
+            None => Err(ParseError::eof(Span::default())),
         }
     }
 }
@@ -178,10 +174,11 @@ pub struct LiteralTok {
 }
 
 impl Parse<Atom> for LiteralTok {
-    type Error = ParseError;
+    type Error = ParseError<Span>;
 
-    fn parse(stream: impl IntoParseStream<Atom = Atom>) -> Result<Self, Self::Error> {
-        let mut stream = stream.into_parse_stream();
+    fn parse_stream<S: ParseStream<Atom = Atom>>(
+            stream: &mut S,
+        ) -> Result<Self, Self::Error> {
         match stream.next() {
             Some(Atom {
                 slot:
@@ -200,12 +197,9 @@ impl Parse<Atom> for LiteralTok {
             Some(atom) => {
                 let span = atom.span;
                 stream.push(atom);
-                Err(ParseError::new(span, "expected a string literal"))
+                Err(ParseError::expected(span, "a string literal"))
             }
-            None => Err(ParseError::new(
-                Span::default(),
-                "expected a string literal, found end of input",
-            )),
+            None => Err(ParseError::eof(Span::default())),
         }
     }
 }
@@ -243,10 +237,11 @@ pub struct ExactTimesTok {
 }
 
 impl Parse<Atom> for ExactTimesTok {
-    type Error = ParseError;
+    type Error = ParseError<Span>;
 
-    fn parse(stream: impl IntoParseStream<Atom = Atom>) -> Result<Self, Self::Error> {
-        let mut stream = stream.into_parse_stream();
+    fn parse_stream<S: ParseStream<Atom = Atom>>(
+            stream: &mut S,
+        ) -> Result<Self, Self::Error> {
         match stream.next() {
             Some(Atom {
                 slot: Token::ExactTimes,
@@ -255,12 +250,9 @@ impl Parse<Atom> for ExactTimesTok {
             Some(atom) => {
                 let span = atom.span;
                 stream.push(atom);
-                Err(ParseError::new(span, "expected '*'"))
+                Err(ParseError::expected(span, "'*'"))
             }
-            None => Err(ParseError::new(
-                Span::default(),
-                "expected '*', found end of input",
-            )),
+            None => Err(ParseError::eof(Span::default())),
         }
     }
 }
@@ -295,10 +287,11 @@ pub struct BinOpTok {
 }
 
 impl Parse<Atom> for BinOpTok {
-    type Error = ParseError;
+    type Error = ParseError<Span>;
 
-    fn parse(stream: impl IntoParseStream<Atom = Atom>) -> Result<Self, Self::Error> {
-        let mut stream = stream.into_parse_stream();
+    fn parse_stream<S: ParseStream<Atom = Atom>>(
+            stream: &mut S,
+        ) -> Result<Self, Self::Error> {
         match stream.next() {
             Some(Atom { slot, span })
                 if matches!(
@@ -324,12 +317,9 @@ impl Parse<Atom> for BinOpTok {
             Some(atom) => {
                 let span = atom.span;
                 stream.push(atom);
-                Err(ParseError::new(span, "expected a binary operator"))
+                Err(ParseError::expected(span, "a binary operator"))
             }
-            None => Err(ParseError::new(
-                Span::default(),
-                "expected a binary operator, found end of input",
-            )),
+            None => Err(ParseError::eof(Span::default())),
         }
     }
 }
@@ -398,10 +388,11 @@ pub struct NamingOpTok {
 }
 
 impl Parse<Atom> for NamingOpTok {
-    type Error = ParseError;
+    type Error = ParseError<Span>;
 
-    fn parse(stream: impl IntoParseStream<Atom = Atom>) -> Result<Self, Self::Error> {
-        let mut stream = stream.into_parse_stream();
+    fn parse_stream<S: ParseStream<Atom = Atom>>(
+            stream: &mut S,
+        ) -> Result<Self, Self::Error> {
         match stream.next() {
             Some(Atom { slot, span })
                 if matches!(
@@ -429,15 +420,12 @@ impl Parse<Atom> for NamingOpTok {
             Some(atom) => {
                 let span = atom.span;
                 stream.push(atom);
-                Err(ParseError::new(
+                Err(ParseError::expected(
                     span,
-                    "expected a binary operator, '!', or 'before'",
+                    "a binary operator, '!', or 'before'",
                 ))
             }
-            None => Err(ParseError::new(
-                Span::default(),
-                "expected a binary operator, '!', or 'before', found end of input",
-            )),
+            None => Err(ParseError::eof(Span::default())),
         }
     }
 }
@@ -510,13 +498,14 @@ pub struct OpNameTok {
 }
 
 impl Parse<Atom> for OpNameTok {
-    type Error = ParseError;
+    type Error = ParseError<Span>;
 
-    fn parse(stream: impl IntoParseStream<Atom = Atom>) -> Result<Self, Self::Error> {
-        let mut stream = stream.into_parse_stream();
-        let lparen = LParenTok::parse(&mut stream)?;
-        let op = NamingOpTok::parse(&mut stream)?;
-        let rparen = RParenTok::parse(&mut stream)?;
+    fn parse_stream<S: ParseStream<Atom = Atom>>(
+            stream: &mut S,
+        ) -> Result<Self, Self::Error> {
+        let lparen = LParenTok::parse_stream(&mut *stream)?;
+        let op = NamingOpTok::parse_stream(&mut *stream)?;
+        let rparen = RParenTok::parse_stream(&mut *stream)?;
         let name = op.op_text();
         let span = lparen.span().unite(rparen.span());
         Ok(OpNameTok {
@@ -557,10 +546,11 @@ pub struct HeaderStageTok {
 }
 
 impl Parse<Atom> for HeaderStageTok {
-    type Error = ParseError;
+    type Error = ParseError<Span>;
 
-    fn parse(stream: impl IntoParseStream<Atom = Atom>) -> Result<Self, Self::Error> {
-        let mut stream = stream.into_parse_stream();
+    fn parse_stream<S: ParseStream<Atom = Atom>>(
+            stream: &mut S,
+        ) -> Result<Self, Self::Error> {
         match stream.next() {
             Some(Atom { slot, span })
                 if matches!(
@@ -573,12 +563,9 @@ impl Parse<Atom> for HeaderStageTok {
             Some(atom) => {
                 let span = atom.span;
                 stream.push(atom);
-                Err(ParseError::new(span, "expected '@stage:'"))
+                Err(ParseError::expected(span, "'@stage:'"))
             }
-            None => Err(ParseError::new(
-                Span::default(),
-                "expected '@stage:', found end of input",
-            )),
+            None => Err(ParseError::eof(Span::default())),
         }
     }
 }

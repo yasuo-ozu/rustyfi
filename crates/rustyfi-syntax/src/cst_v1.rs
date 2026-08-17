@@ -72,7 +72,7 @@
 //! ([`ExprErasedV1`], [`PatErasedV1`], [`PatBotErasedV1`], [`TyErasedV1`],
 //! [`MathErasedV1`], [`ModExprErasedV1`], [`SigExprErasedV1`],
 //! [`TypeBindsErasedV1`]), keeping each SCC a singleton and the wrapped
-//! grammar monomorphized exactly once behind [`crate::stream::EraseStream`].
+//! grammar's recursion reborrowing one stream type (syan pins it, not us).
 //! [`ast::Decl`] is a satellite, not a root: it has no `Box<Self>` anywhere
 //! and no type inside the `#[recurse]` module ever names it — it is reached
 //! only through the hand-written [`StructDeclV1`] connector (an opaque leaf
@@ -477,14 +477,12 @@ pub struct BarVariantDefV1 {
 pub struct StructBindV1(pub Box<Bind>);
 
 impl Parse<crate::token::Atom> for StructBindV1 {
-    type Error = syan::error::ParseError;
+    type Error = syan::error::ParseError<crate::span::Span>;
 
-    fn parse(
-        stream: impl syan::parse::IntoParseStream<Atom = crate::token::Atom>,
+    fn parse_stream<S: syan::parse::ParseStream<Atom = crate::token::Atom>>(
+        stream: &mut S,
     ) -> Result<Self, Self::Error> {
-        let mut stream = crate::stream::InfallibleAdapter(stream.into_parse_stream());
-        let mut erased = crate::stream::EraseStream::new(&mut stream);
-        let value = <Bind as Parse<_>>::parse(&mut erased)?;
+        let value = <Bind as Parse<_>>::parse_stream(stream)?;
         Ok(StructBindV1(Box::new(value)))
     }
 }
@@ -515,14 +513,12 @@ impl Unparse<crate::token::Atom> for StructBindV1 {
 pub struct StructDeclV1(pub Box<ast::Decl>);
 
 impl Parse<crate::token::Atom> for StructDeclV1 {
-    type Error = syan::error::ParseError;
+    type Error = syan::error::ParseError<crate::span::Span>;
 
-    fn parse(
-        stream: impl syan::parse::IntoParseStream<Atom = crate::token::Atom>,
+    fn parse_stream<S: syan::parse::ParseStream<Atom = crate::token::Atom>>(
+        stream: &mut S,
     ) -> Result<Self, Self::Error> {
-        let mut stream = crate::stream::InfallibleAdapter(stream.into_parse_stream());
-        let mut erased = crate::stream::EraseStream::new(&mut stream);
-        let value = <ast::Decl as Parse<_>>::parse(&mut erased)?;
+        let value = <ast::Decl as Parse<_>>::parse_stream(stream)?;
         Ok(StructDeclV1(Box::new(value)))
     }
 }
@@ -552,15 +548,13 @@ macro_rules! erased_leaf_v1 {
             pub struct $name(pub Box<$target>);
 
             impl Parse<crate::token::Atom> for $name {
-                type Error = syan::error::ParseError;
+                type Error = syan::error::ParseError<crate::span::Span>;
 
-                fn parse(
-                    stream: impl syan::parse::IntoParseStream<Atom = crate::token::Atom>,
+                fn parse_stream<S: syan::parse::ParseStream<Atom = crate::token::Atom>>(
+                    stream: &mut S,
                 ) -> Result<Self, Self::Error> {
-                    let mut stream =
-                        crate::stream::InfallibleAdapter(stream.into_parse_stream());
-                    let mut erased = crate::stream::EraseStream::new(&mut stream);
-                    let value = <$target as Parse<_>>::parse(&mut erased)?;
+                    // No erasure any more — see `cst.rs`'s `erased_leaf!`.
+                    let value = <$target as Parse<_>>::parse_stream(stream)?;
                     Ok($name(Box::new(value)))
                 }
             }
@@ -606,7 +600,7 @@ erased_leaf_v1! {
     /// `TypeBindSingleV1` re-enters the module through plain-derived
     /// `ast::TypeExpr` fields — an inside→outside-plain-derive→inside-root
     /// chain with no precedent in `cst.rs`'s discipline. Erasing at the
-    /// boundary keeps the re-entry behind `EraseStream` (monomorphized
+    /// boundary keeps the re-entry cheap (one stream type, monomorphized
     /// once), exactly like every other cross-boundary edge.
     TypeBindsErasedV1 => TypeBindsV1;
 }
@@ -1902,7 +1896,7 @@ pub fn parse_file_v1(src: &str) -> Result<FileV1, crate::cst::ParseFileError> {
         })?;
     let mut stream = crate::stream::AtomStream::new(atoms);
     <FileV1 as Parse<_>>::parse(&mut stream).map_err(|e| crate::cst::ParseFileError {
-        span: stream.furthest(),
+        span: *e.span(),
         message: render_parse_error(&e),
     })
 }
@@ -1910,6 +1904,6 @@ pub fn parse_file_v1(src: &str) -> Result<FileV1, crate::cst::ParseFileError> {
 /// Flatten syan's nested error tree into one readable line. A private copy
 /// of [`crate::cst`]'s identical helper (not `pub(crate)` there, and
 /// `cst.rs` stays untouched — see the module doc comment).
-fn render_parse_error(err: &syan::error::ParseError) -> String {
+fn render_parse_error(err: &syan::error::ParseError<Span>) -> String {
     format!("{err:?}")
 }

@@ -69,10 +69,10 @@ fn parse_error_carries_failure_span() {
     // `let answer 42` — the parser reaches the missing `=`.
     let mut stream = AtomStream::new(lex("let answer 42").unwrap());
     let res: Result<LetStmt, _> = Parse::parse(&mut stream);
-    res.unwrap_err();
-    // syan's `ParseError` carries no span, so the failure position is the
-    // stream's high-water mark. The input is single-line, so it sits on line 1.
-    let span: Span = stream.furthest();
+    let err = res.unwrap_err();
+    // The error reports its own position now — `ParseError` is span-generic and
+    // every variant carries one. The input is single-line, so it sits on line 1.
+    let span: Span = *err.span();
     assert_eq!(span.start.line, 1);
 }
 

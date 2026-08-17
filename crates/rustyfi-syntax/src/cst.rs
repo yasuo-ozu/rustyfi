@@ -100,12 +100,12 @@ enum BindNameRepr {
 }
 
 impl Parse<crate::token::Atom> for BindName {
-    type Error = syan::error::ParseError;
+    type Error = syan::error::ParseError<crate::span::Span>;
 
-    fn parse(
-        stream: impl syan::parse::IntoParseStream<Atom = crate::token::Atom>,
+    fn parse_stream<S: syan::parse::ParseStream<Atom = crate::token::Atom>>(
+        stream: &mut S,
     ) -> Result<Self, Self::Error> {
-        let repr = BindNameRepr::parse(stream)?;
+        let repr = BindNameRepr::parse_stream(stream)?;
         let (name, span) = match &repr {
             BindNameRepr::Op(op) => (op.name.clone(), op.span),
             BindNameRepr::Var(v) => (v.name.clone(), v.span),
@@ -292,14 +292,12 @@ pub enum TopBinding {
 pub struct StructDecl(pub Box<TopBinding>);
 
 impl Parse<crate::token::Atom> for StructDecl {
-    type Error = syan::error::ParseError;
+    type Error = syan::error::ParseError<crate::span::Span>;
 
-    fn parse(
-        stream: impl syan::parse::IntoParseStream<Atom = crate::token::Atom>,
+    fn parse_stream<S: syan::parse::ParseStream<Atom = crate::token::Atom>>(
+        stream: &mut S,
     ) -> Result<Self, Self::Error> {
-        let mut stream = crate::stream::InfallibleAdapter(stream.into_parse_stream());
-        let mut erased = crate::stream::EraseStream::new(&mut stream);
-        let value = <TopBinding as Parse<_>>::parse(&mut erased)?;
+        let value = <TopBinding as Parse<_>>::parse_stream(stream)?;
         Ok(StructDecl(Box::new(value)))
     }
 }
@@ -503,8 +501,8 @@ pub struct BarVariantDef {
 /// alone). Routing every recursion edge *except the roots' own self-loops*
 /// through these hand-written leaves keeps each SCC a singleton (`Expr`,
 /// `PatBot`, `TypeExpr`), so each engine stays tiny, and parses the wrapped
-/// grammar behind [`crate::stream::EraseStream`] so it is monomorphized
-/// exactly once crate-wide. Defined *outside* the `#[recurse]` module so the
+/// grammar directly: `parse_stream` reborrows, so one stream type serves
+/// the whole descent. Defined *outside* the `#[recurse]` module so the
 /// macro treats them as opaque leaves (they never appear as cycle edges).
 macro_rules! erased_leaf {
     ($($(#[$doc:meta])* $name:ident => $target:ty;)*) => {
@@ -515,18 +513,18 @@ macro_rules! erased_leaf {
             pub struct $name(pub Box<$target>);
 
             impl Parse<crate::token::Atom> for $name {
-                type Error = syan::error::ParseError;
+                type Error = syan::error::ParseError<crate::span::Span>;
 
-                fn parse(
-                    stream: impl syan::parse::IntoParseStream<Atom = crate::token::Atom>,
+                // No erasure any more. `parse_stream` takes `&mut S` and
+                // recursion REBORROWS, so `S` is a genuine fixed point and the
+                // instantiation set is finite by construction — which is what
+                // `EraseStream` used to buy by pinning everything to
+                // `&mut dyn ParseStream`, at the price of a virtual call per
+                // stream operation. The wrapper now only boxes the value.
+                fn parse_stream<S: syan::parse::ParseStream<Atom = crate::token::Atom>>(
+                    stream: &mut S,
                 ) -> Result<Self, Self::Error> {
-                    let mut stream =
-                        crate::stream::InfallibleAdapter(stream.into_parse_stream());
-                    let mut erased = crate::stream::EraseStream::new(&mut stream);
-                    // From here on the stream type is fixed: exactly one
-                    // monomorphization of the wrapped grammar, no matter how
-                    // deep or varied the call sites.
-                    let value = <$target as Parse<_>>::parse(&mut erased)?;
+                    let value = <$target as Parse<_>>::parse_stream(stream)?;
                     Ok($name(Box::new(value)))
                 }
             }
@@ -1685,7 +1683,7 @@ pub mod ast {
     /// inline-text embed, `MathGroupArg`'s `{ … }` script operand). So
     /// `MathElemCst` ends up structurally acyclic within `#[recurse]`'s SCC
     /// analysis — like `OpChain`/`AppExpr`/`Atomic` — and is monomorphized
-    /// exactly once (at `EraseStream`) regardless of how many distinct call
+    /// exactly once (one stream type) regardless of how many distinct call
     /// sites embed math content. This is *safer* than carving out a real
     /// self-loop would have been, not a shortcut: every recursive edge is
     /// erased, so there is no bounded-depth engine to blow up in the first
@@ -1830,16 +1828,16 @@ pub fn parse_file(src: &str) -> Result<File, ParseFileError> {
         span: e.span,
         message: e.msg,
     })?;
-    // syan's `ParseError` carries no span, so the failure position is the
-    // stream's high-water mark (see `stream::AtomStream`).
+    // The error carries the position it failed at, so no high-water mark is
+    // needed: syan's `ParseError` is span-generic and every variant holds one.
     let mut stream = crate::stream::AtomStream::new(atoms);
     <File as Parse<_>>::parse(&mut stream).map_err(|e| ParseFileError {
-        span: stream.furthest(),
+        span: *e.span(),
         message: render_parse_error(&e),
     })
 }
 
 /// Flatten syan's nested error tree into one readable line.
-fn render_parse_error(err: &syan::error::ParseError) -> String {
+fn render_parse_error(err: &syan::error::ParseError<Span>) -> String {
     format!("{err:?}")
 }

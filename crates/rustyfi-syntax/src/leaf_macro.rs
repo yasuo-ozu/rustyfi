@@ -42,18 +42,16 @@ macro_rules! token_leaves {
         pub struct $leaf(pub $span);
 
         impl ::syan::parse::parse::Parse<$atom> for $leaf {
-            type Error = ::syan::error::ParseError;
-            fn parse(
-                __source: impl ::syan::parse::into_parse_stream::IntoParseStream<Atom = $atom>,
+            type Error = ::syan::error::ParseError<$span>;
+            fn parse_stream<__SyanS: ::syan::parse::parse_stream::ParseStream<Atom = $atom>>(
+                __stream: &mut __SyanS,
             ) -> ::core::result::Result<Self, Self::Error> {
-                use ::syan::parse::into_parse_stream::IntoParseStream;
                 use ::syan::parse::parse_stream::ParseStream;
-                let mut __stream = IntoParseStream::into_parse_stream(__source);
                 // Bound to a `fn` pointer so the `&atom` parameter type is
                 // fixed — a bare closure cannot infer it from an immediate
                 // call (the derive does the same, and says so).
                 let __read_span: fn(&$atom) -> $span = $read;
-                match ParseStream::next(&mut __stream) {
+                match ParseStream::next(__stream) {
                     ::core::option::Option::Some(__atom) => match &__atom.slot {
                         $crate::token::Token::$variant => {
                             let __span = __read_span(&__atom);
@@ -64,18 +62,12 @@ macro_rules! token_leaves {
                             // Pushback is the whole design: a failed leaf must
                             // leave the stream untouched so enum-variant
                             // backtracking can try the next alternative.
-                            ParseStream::push(&mut __stream, __atom);
-                            ::core::result::Result::Err(::syan::error::ParseError::new(
-                                __span,
-                                ::core::concat!("expected ", $expect),
-                            ))
+                            ParseStream::push(__stream, __atom);
+                            ::core::result::Result::Err(::syan::error::ParseError::expected(__span, $expect))
                         }
                     },
                     ::core::option::Option::None => {
-                        ::core::result::Result::Err(::syan::error::ParseError::new(
-                            <$span as ::core::default::Default>::default(),
-                            ::core::concat!("unexpected end of input, expected ", $expect),
-                        ))
+                        ::core::result::Result::Err(::syan::error::ParseError::eof(<$span as ::core::default::Default>::default()))
                     }
                 }
             }
@@ -115,15 +107,13 @@ macro_rules! token_leaves {
         }
 
         impl ::syan::parse::parse::Parse<$atom> for $leaf {
-            type Error = ::syan::error::ParseError;
-            fn parse(
-                __source: impl ::syan::parse::into_parse_stream::IntoParseStream<Atom = $atom>,
+            type Error = ::syan::error::ParseError<$span>;
+            fn parse_stream<__SyanS: ::syan::parse::parse_stream::ParseStream<Atom = $atom>>(
+                __stream: &mut __SyanS,
             ) -> ::core::result::Result<Self, Self::Error> {
-                use ::syan::parse::into_parse_stream::IntoParseStream;
                 use ::syan::parse::parse_stream::ParseStream;
-                let mut __stream = IntoParseStream::into_parse_stream(__source);
                 let __read_span: fn(&$atom) -> $span = $read;
-                match ParseStream::next(&mut __stream) {
+                match ParseStream::next(__stream) {
                     ::core::option::Option::Some(__atom) => match &__atom.slot {
                         $crate::token::Token::$variant(__v) => {
                             let __v = __v.clone();
@@ -135,18 +125,12 @@ macro_rules! token_leaves {
                         }
                         _ => {
                             let __span = __read_span(&__atom);
-                            ParseStream::push(&mut __stream, __atom);
-                            ::core::result::Result::Err(::syan::error::ParseError::new(
-                                __span,
-                                ::core::concat!("expected ", $expect),
-                            ))
+                            ParseStream::push(__stream, __atom);
+                            ::core::result::Result::Err(::syan::error::ParseError::expected(__span, $expect))
                         }
                     },
                     ::core::option::Option::None => {
-                        ::core::result::Result::Err(::syan::error::ParseError::new(
-                            <$span as ::core::default::Default>::default(),
-                            ::core::concat!("unexpected end of input, expected ", $expect),
-                        ))
+                        ::core::result::Result::Err(::syan::error::ParseError::eof(<$span as ::core::default::Default>::default()))
                     }
                 }
             }

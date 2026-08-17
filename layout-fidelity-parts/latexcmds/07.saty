@@ -1,0 +1,21 @@
+@require: stdjareport
+@require: itemize
+@require: annot
+@require: color
+@require: math
+@require: latexcmds/latexcmds
+
+open LatexCmds in
+document (| title = {ぬるほげ}; author = {さぴわ}; |) '<
+    +chapter {ぱぴわくたもれ} <
+        +p {
+            とうへ \parbox(5cm)< +p {ぬるほげさぴわくたもれぬるほげさぴわくたもれ} > もれくた。
+        }
+        +p {
+            とうへ \fbox{\parbox(5cm)< +p {ぬるほげさぴわくたもれぬるほげさぴわくたもれ} >} もれくた。
+        }
+        +p {
+            とうへ \fbox{\parbox?:(Bottom)(5cm)< +p {ぬるほげさぴわくたもれぬるほげさぴわくたもれ} >} もれくた。
+        }
+    >
+>

@@ -134,6 +134,7 @@ fn embedded_block_becomes_a_nested_div_recursively() {
         height: Length::pt(20.0),
         depth: Length::ZERO,
         block: inner_vboxes,
+        anchor_last: false,
     };
     let vboxes = vec![line(embed_box)];
     let html = render(&vboxes);

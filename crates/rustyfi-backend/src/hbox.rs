@@ -355,6 +355,15 @@ pub enum PureHorzBox {
         height: Length,
         depth: Length,
         elems: Vec<GraphicsElem>,
+        /// True when the callback ignored its placed-point argument, so its
+        /// `elems` are PAGE-ABSOLUTE (e.g. a slydifi frame background /
+        /// full-page decoration built with `fun _ -> …`). Such graphics must
+        /// be emitted with an IDENTITY `cm` — NOT translated by the box's
+        /// placed position — otherwise the whole decoration shifts off the
+        /// page (the box is often placed at a negative text-origin). For an
+        /// ordinary position-relative callback this is false and the writer's
+        /// per-box `cm` translate applies as usual.
+        origin_independent: bool,
     },
     /// `inline-graphics-outer` (v0.0.6 `PHGOuterFilGraphics`,
     /// vminst.ml:1891): a graphics box whose WIDTH stretches like
@@ -430,6 +439,12 @@ pub enum PureHorzBox {
         height: Length,
         depth: Length,
         block: Vec<VertBox>,
+        /// Which of the block's lines sits on the surrounding text baseline:
+        /// `false` = the FIRST line (`embed-block-top`, `adjust_to_first_line`),
+        /// `true` = the LAST line (`embed-block-bottom`, `adjust_to_last_line`).
+        /// Governs both this box's height/depth split and where the writers
+        /// anchor the block's inner lines (`place_embedded_block`).
+        anchor_last: bool,
     },
     /// An inline frame (`inline-frame-outer`/`-inner`/`-breakable`;
     /// upstream `PHGOuterFrame`/`PHGInnerFrame`/`HorzFrameBreakable`) —

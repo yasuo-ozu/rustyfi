@@ -240,10 +240,17 @@ impl Context {
             font_size: Length::pt(12.0),
             leading: Length::pt(18.0),
             paragraph_width,
-            // v0.0.6's `get_pdf_mode_initial_context`
-            // (primitives.cppo.ml:514-515) defaults both to 18pt.
-            paragraph_top: Length::pt(18.0),
-            paragraph_bottom: Length::pt(18.0),
+            // Default paragraph margin. Measured against the reference SATySFi
+            // 0.0.11 (flake.nix): a body paragraph boundary advances 27pt =
+            // leading(18) + 9, i.e. the effective paragraph margin is 9pt
+            // (= font_size 12 × 0.75), NOT the 18pt an older reading of
+            // primitives.cppo.ml assumed. Matching it makes the port's page
+            // breaks coincide with SATySFi's across the prose corpus (same
+            // content + same spacing ⇒ same flow). Doc classes that want a
+            // different margin still `set-paragraph-margin` explicitly
+            // (stdjareport does so for chapter/section headings).
+            paragraph_top: Length::pt(9.0),
+            paragraph_bottom: Length::pt(9.0),
             manual_rising: Length::ZERO,
             dominant_wide_script: Script::OtherScript,
             dominant_narrow_script: Script::OtherScript,

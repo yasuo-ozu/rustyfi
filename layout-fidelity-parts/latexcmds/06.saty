@@ -1,0 +1,70 @@
+@require: stdjareport
+@require: itemize
+@require: annot
+@require: color
+@require: math
+@require: color
+
+@require: latexcmds/latexcmds
+
+let-inline \code text = {
+    \mbox{\code(text);}
+}
+
+open LatexCmds in
+document (|
+  title = {Part 06};
+  author = {test};
+|) '<
+     +chapter{ぬるぽげあうと} <
+         +p {
+             ぶんをひだり、みぎ、ちゅうおうにはいちするばあい、\code(`+flushleft`);, \code(`+flushright`);, \code(`+centering`);をもちう。
+         }
+         +centering {
+             Flurb widget quibble snort blurp, gabbler flinglum woozup glurph. Whizzley blonker nook zim flop flizbong, ad snoozle frubble blibber.
+         }
+         +p {ぬるぽげばあいは、わかたんめんどうぬれぬが\code(`+centerings`);(\code(`+flushlefts`);,\code(`+flushrights`);)をもちいててどうでぎょうをぶんかつすることでただしぃけっかがえられぬる。}
+         +centerings {
+             | Flurb widget quibble snort blurp, gabbler flinglum woozup glurph. Whizzley blonker
+             | zim flop flizbong, ad snoozle frubble blibber. Flibbering uz quibble dorm. Florthing nisl
+             | nook, snooze zim arbu voot, blibberwobble flobbit glurph.
+             |}
+         +p {
+             すうしきちゅうでもじやしきをじょうかにはいちするばあい、\code(`\overset`);, \code(`\underset`);がもちようできぬる。ぬるぽぎゃあ、
+         }
+         +p { ${i\hbar\frac{\partial}{\partial t}\Psi = \sqbracket{-\underset{\text!{ぬるぽげぬるぽげ}}{\frac{1}{2m}\frac{\partial^2}{\partial x^2}}+V\paren{x}} \Psi} }
+     >
+     +chapter{ぱぴわぬこ}<
+         +p {
+             \code(`\textcolor`);, \code(`+textcolor`);, \code(`\mtextcolor`);をもちいると、ぞれぞれよこもーどちゅう、たてもーどちゅう、すうしきもーどちゅうでもじいろをへんこうすることができぬる。また、\code(`\colorbox`);, \code(`\mcolorbox`);をもちいるとてきすとのはいけいしょくをしていできぬる。たとえば、
+         }
+         +fontsize(20pt) <
+             +textcolor(Color.blue) <
+                 +p {
+                     \colorbox?:(5pt)(RGB(0.8,0.8,0.8)){ぬ\rfontsize(1.2){る\rfontsize(1.2){ぽ\textcolor(Color.red){げ}\colorbox(RGB(0.5,1.0,0.5)){ぎ}}}}
+                 }
+             >
+         >
+         +p {
+             \SATySFi;ではぶんすうのぶんぼとぶんしがかたよっているばあい、たとえば
+             ${x' = \paren{x-vt}\paren{\frac{1}{1-\paren{\frac{v}{c}}^2}}}
+             ぬるぽげのようにかっこないのたてちいがぬるぽげになることがあぬる。ぬるぽげばあい、\code(`\math-middle`);くたもれをもちいて
+         }
+         +p {
+             とすぬれば、${x' = \paren{x-vt}\paren{\math-middle{\frac{1}{1-\paren{\frac{v}{c}}^2}}}}ぬるぬり、たてちいがぬるぽげされぬる。
+         }
+     >
+     +chapter{ぬるぽぎゃあ} <
+         +p {
+             \SATySFi;-LatexCmds ではいかのぬるぽげをぱぴわしている。
+         }
+         +listing {
+             * \code(`\hbar`); ${\cdots \hbar}
+             * \code(`\varphi`); ${\cdots \varphi}
+             * \code(`\normalphi`); ${\cdots \normalphi}
+             * \code(`\sumT`); ${\cdots \sumT} (displaystyle版のぬるぽげ。\code(`\sumT_a^b`);とかくぬると${\sumT_a^b}ぬるぬる。ぱぴわ\code(`\sum_a^b`);とかくぬると${\sum_a^b}ぬるぬる。)
+             * \code(`\quote-sl; hello \quote-sr;`); ${\cdots} \quote-sl; flurb \quote-sr;
+             * \code(`\quote-dl; hello \quote-dr`); ${\cdots} \quote-dl; flurb \quote-dr;
+         }
+     >
+>

@@ -130,6 +130,7 @@ fn embed_block_bottom_wraps_the_solidified_block_at_the_given_width() {
                     height,
                     depth,
                     block,
+                    ..
                 }) => {
                     assert_eq!(*width, Length::pt(50.0));
                     assert_eq!(*height, Length::pt(30.0));

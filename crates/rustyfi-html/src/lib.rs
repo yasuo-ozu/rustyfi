@@ -388,6 +388,7 @@ fn emit_box(out: &mut String, bx: &PureHorzBox, tx: f64, ty: f64, ctx: &Ctx) {
             height,
             depth,
             elems,
+            origin_independent: _,
         } => {
             svg::emit_graphics(
                 out,

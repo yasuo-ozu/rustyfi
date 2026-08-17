@@ -72,11 +72,19 @@ fn layout_matches_upstream_satysfi_within_baseline() {
     // Drive the freshly built binary so the test reflects the current code.
     let bin = env!("CARGO_BIN_EXE_rustyfi-rust");
 
-    let output = Command::new("python3")
-        .arg(&script)
-        .arg("--bin")
-        .arg(bin)
-        .arg("--keep-going")
+    let mut cmd = Command::new("python3");
+    cmd.arg(&script).arg("--bin").arg(bin).arg("--keep-going");
+    // If the ORIGINAL SATySFi is on PATH (e.g. inside `nix develop`, see
+    // flake.nix), generate the reference PDFs with it so the comparison is
+    // against freshly-produced official output. Otherwise the committed
+    // submodule reference PDFs are used — they are the same official
+    // SATySFi 0.0.11 output (the baseline was recorded via --gen-refs and the
+    // two agree to <0.01 text_match), so the baseline holds either way.
+    if tool_present("satysfi") {
+        cmd.arg("--gen-refs");
+    }
+
+    let output = cmd
         .current_dir(&root)
         .output()
         .expect("failed to spawn python3");

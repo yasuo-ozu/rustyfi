@@ -11,7 +11,7 @@ LINE 0 x=72.000 baseline_y=108.616
   dx=96.624 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
   dx=100.584 InnerString font=0 size=12.000 rising=0.000 w=48.012 h=8.616 d=2.484 text="let-inline."
   dx=148.596 OuterFil
-LINE 1 x=72.000 baseline_y=162.616
+LINE 1 x=72.000 baseline_y=135.616
   dx=0.000 InnerString font=0 size=12.000 rising=0.000 w=60.708 h=8.616 d=2.484 text="Announced"
   dx=60.708 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
   dx=64.668 InnerString font=0 size=12.000 rising=0.000 w=19.344 h=8.616 d=2.484 text="text"
@@ -26,12 +26,13 @@ LINE 1 x=72.000 baseline_y=162.616
   dx=233.232 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
   dx=237.192 InnerString font=0 size=12.000 rising=0.000 w=27.336 h=8.616 d=2.484 text="form."
   dx=264.528 OuterFil
-LINE 2 x=72.000 baseline_y=216.616
+LINE 2 x=72.000 baseline_y=162.616
   dx=0.000 InnerString font=0 size=12.000 rising=0.000 w=60.696 h=8.616 d=2.484 text="Countdown"
   dx=60.696 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
   dx=64.656 InnerString font=0 size=12.000 rising=0.000 w=52.020 h=8.616 d=2.484 text="complete."
   dx=116.676 OuterFil
 LINE 3 x=72.000 baseline_y=808.616
-  dx=0.000 InnerString font=0 size=12.000 rising=0.000 w=6.672 h=8.616 d=2.484 text="1"
-  dx=6.672 OuterFil
+  dx=0.000 OuterFil
+  dx=216.664 InnerString font=0 size=12.000 rising=0.000 w=6.672 h=8.616 d=2.484 text="1"
+  dx=223.336 OuterFil
 EXTRAS annotations=0 destinations=0 outline=0 page_graphics_pages=1 doc_info=none

@@ -137,6 +137,16 @@ pub fn chop_page(
     let mut footnotes: Vec<VertBox> = Vec::new();
     let mut footnote_h = Length::ZERO;
     let mut prev_baseline: Option<Length> = None;
+    // The previous committed line's depth. The baseline-to-baseline advance is
+    // `leading.max(prev_depth + height)` (SATySFi's vertical stacking, `Types`/
+    // `PageBreak.solidify`): the leading (line-skip) governs normal text — where
+    // `leading` (≈18pt) always exceeds `prev_depth + height` (≈2.5 + 9) so this
+    // is a no-op — but a DEEP box (e.g. a multi-row figbox `vconcat` whose
+    // top-anchored `EmbeddedBlock` has a large depth) forces the next baseline
+    // down by its full depth, so its vertical extent is actually spent on the
+    // page rather than being overlapped by the following line (which made the
+    // pager under-count pages around tall figures).
+    let mut prev_depth = Length::ZERO;
     let mut pending_skip = Length::ZERO;
     let mut placed_real_line = false;
     let mut idx = 0;
@@ -144,7 +154,16 @@ pub fn chop_page(
     while idx < vboxes.len() {
         match &vboxes[idx] {
             VertBox::Skip(l) => {
-                pending_skip += *l;
+                // Adjacent vertical skips COLLAPSE to their maximum, not sum:
+                // these are paragraph/block margins (`line-break` wraps each
+                // block in a Skip(paragraph_top) … Skip(paragraph_bottom), so
+                // between two blocks the previous block's bottom margin meets
+                // the next block's top margin). SATySFi's block-box margin
+                // model combines adjacent margins by max (like CSS/TeX margin
+                // collapsing); summing them double-counted every block boundary
+                // (~+25pt each), the dominant source of the port's
+                // over-pagination vs the original SATySFi.
+                pending_skip = pending_skip.max(*l);
                 idx += 1;
             }
             VertBox::ClearPage => {
@@ -224,7 +243,19 @@ pub fn chop_page(
                 // branch too — `prev_baseline` is still `None`.
                 let baseline = match prev_baseline {
                     None => y0 + *h,
-                    Some(b) => b + leading.max(*h) + pending_skip,
+                    // When the pending margin EXCEEDS the leading it is a
+                    // positioning skip (e.g. slydifi's ~125pt bg-graphic
+                    // offset that seats a frame body at its true top), not an
+                    // inter-line gap. SATySFi's stacking rule folds the skip
+                    // into the advance (`max(leading, prev_depth+skip+height)`)
+                    // rather than stacking leading on top of it; for a large
+                    // skip that means `prev_depth + skip + height`, so the line
+                    // sits at the skip's target instead of a spurious
+                    // `leading - height` lower. Small inter-paragraph margins
+                    // (skip <= leading) keep the additive model the flowing
+                    // corpus docs are calibrated to.
+                    Some(b) if pending_skip > *leading => b + prev_depth + pending_skip + *h,
+                    Some(b) => b + leading.max(prev_depth + *h) + pending_skip,
                 };
                 // A committed line's footnotes shrink the usable page
                 // bottom the moment it is placed (pageBreak.ml:138,
@@ -244,6 +275,7 @@ pub fn chop_page(
                 }
                 pending_skip = Length::ZERO;
                 prev_baseline = Some(baseline);
+                prev_depth = *depth;
                 placed_real_line = true;
                 lines.push(PlacedLine {
                     x: x0,
@@ -368,11 +400,29 @@ pub fn place_block_at(origin: (Length, Length), vboxes: Vec<VertBox>) -> Vec<Pla
     let (x0, y0) = origin;
     let mut lines = Vec::new();
     let mut prev_baseline: Option<Length> = None;
+    // The previous line's depth: the next baseline must clear it, otherwise a
+    // line carrying a DEEP inline box (e.g. a `+fig-center` figure — a
+    // `vmargin`-wrapped `EmbeddedBlock` whose table content hangs ~150pt below
+    // its baseline) would be overlapped by the following paragraph/list. Same
+    // `leading.max(prev_depth + …)` rule `chop_page` uses; a no-op for ordinary
+    // text (leading > depth+height) and for `line-stack` rows (whose `leading`
+    // already bakes in `prev_depth`), so it only bites for genuinely deep boxes.
+    let mut prev_depth = Length::ZERO;
     let mut pending_skip = Length::ZERO;
 
     for vbox in vboxes {
         match vbox {
-            VertBox::Skip(l) => pending_skip += l,
+            // Collapse adjacent vertical margins to their max, NOT their sum —
+            // the same rule `chop_page` applies (commit "collapse adjacent
+            // vertical margins"). `place_block_at` both measures an embedded
+            // block's height (via `make_embedded_block`) and renders it (via
+            // `place_embedded_block`), so summing here made every embedded
+            // block over-tall: e.g. a slydifi frame body's `+listing` items,
+            // each a `line-break` emitting `Skip(item-gap)` before and after,
+            // got `item-gap + item-gap` between consecutive items instead of
+            // one collapsed `item-gap`, roughly doubling list spacing and
+            // pushing the atomic frame past its page (an extra page per slide).
+            VertBox::Skip(l) => pending_skip = pending_skip.max(l),
             // No page-breaking happens here (headers/footers aren't
             // page-broken), so `clear-page` has nothing to do.
             VertBox::ClearPage => {}
@@ -408,9 +458,9 @@ pub fn place_block_at(origin: (Length, Length), vboxes: Vec<VertBox>) -> Vec<Pla
             VertBox::ListMark(_) => {}
             VertBox::Line {
                 height,
+                depth,
                 leading,
                 contents,
-                ..
             } => {
                 // Same page/column-top leading-glue suppression as
                 // `chop_page` (`docs/plans/design-silent-fields.md` FIX 3):
@@ -420,12 +470,16 @@ pub fn place_block_at(origin: (Length, Length), vboxes: Vec<VertBox>) -> Vec<Pla
                 // built via `line-break` (default `paragraph_top` = 18pt,
                 // e.g. `stdja-mini`'s page-number footer) stays anchored at
                 // its `footer-origin` rather than dropping 18pt below it.
+                // The advance folds the paragraph margin into the max AND
+                // clears the previous line's depth, so a deep inline box (a
+                // `+fig-center` figure) is not overlapped by the next line.
                 let baseline = match prev_baseline {
                     None => y0 + height,
-                    Some(b) => b + leading.max(height) + pending_skip,
+                    Some(b) => b + leading.max(prev_depth + pending_skip + height),
                 };
                 pending_skip = Length::ZERO;
                 prev_baseline = Some(baseline);
+                prev_depth = depth;
                 lines.push(PlacedLine {
                     x: x0,
                     baseline_y: baseline,

@@ -175,6 +175,7 @@ pub(crate) fn emit_inline(out: &mut String, bx: &PureHorzBox, ctx: &Ctx) {
             height,
             depth,
             elems,
+            origin_independent: _,
         } => emit_graphics_box(out, width.0, height.0, depth.0, elems, ctx),
 
         // `GraphicsOuter` is a DEFERRED lang-side callback (`GraphicsFnId`,

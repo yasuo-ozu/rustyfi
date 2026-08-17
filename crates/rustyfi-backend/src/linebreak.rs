@@ -86,6 +86,11 @@ struct LineMetrics {
     stretch: Length,
     shrink: Length,
     has_fil: bool,
+    /// Whether the line contains any real (breakable) interword glue
+    /// (`OuterEmpty`). Distinguishes a rigid-but-spaced line (monospace/`+code`
+    /// via `set-space-ratio r 0 0`) from unspaced CJK (which breaks between
+    /// characters, not on glue) — the former MUST wrap rather than overflow.
+    has_glue: bool,
 }
 
 fn measure(line: &[PureHorzBox]) -> LineMetrics {
@@ -93,6 +98,7 @@ fn measure(line: &[PureHorzBox]) -> LineMetrics {
     let mut stretch = Length::ZERO;
     let mut shrink = Length::ZERO;
     let mut has_fil = false;
+    let mut has_glue = false;
     for bx in line {
         match bx {
             PureHorzBox::InnerString { width, .. } => natural += *width,
@@ -104,6 +110,7 @@ fn measure(line: &[PureHorzBox]) -> LineMetrics {
                 natural += *n;
                 stretch += *stretchable;
                 shrink += *shrinkable;
+                has_glue = true;
             }
             PureHorzBox::OuterFil => has_fil = true,
             PureHorzBox::FixedEmpty { width } => natural += *width,
@@ -141,6 +148,7 @@ fn measure(line: &[PureHorzBox]) -> LineMetrics {
         stretch,
         shrink,
         has_fil,
+        has_glue,
     }
 }
 
@@ -320,7 +328,19 @@ fn badness(width: Length, metrics: &LineMetrics) -> f64 {
         if metrics.shrink.is_positive() {
             let ratio = slack / metrics.shrink;
             (100.0 * ratio.abs().powi(3)).min(BADNESS_INF)
+        } else if metrics.has_glue {
+            // Overfull with real interword glue that can't shrink (monospace/
+            // `+code`, `set-space-ratio r 0 0`): breaking BEFORE the word that
+            // doesn't fit is the right call, so this must dominate any
+            // hyphen/line penalty. `no_stretch_badness` (below) scores overflow
+            // as a cube of the overflow FRACTION — near-zero for a modest
+            // overflow — which let the DP cram extra words onto an already
+            // overfull line and run text clean off the page edge (visible
+            // clipping in latexcmds `+code`/`\code`). Force the wrap.
+            BADNESS_INF
         } else {
+            // No breakable glue at all (unspaced CJK): nowhere better to break,
+            // so fall back to the continuous overflow score.
             no_stretch_badness(slack, width)
         }
     }
@@ -525,14 +545,26 @@ fn trim_trailing_glue(line: &[PureHorzBox]) -> &[PureHorzBox] {
     &line[..end]
 }
 
-/// A break never leaves glue or an unchosen discretionary at the very
-/// start of the next line either (the old greedy dropped any glue seen
+/// A break never leaves discardable glue or an unchosen discretionary at the
+/// very start of the next line either (the old greedy dropped any glue seen
 /// while `current` was still empty); drop it here so a pathological run of
-/// consecutive break-point boxes doesn't get counted as this line's
-/// content.
+/// consecutive break-point boxes doesn't get counted as this line's content.
+///
+/// A leading `OuterFil` is explicitly NOT dropped — it is not discardable
+/// inter-word glue but user-inserted fill (`inline-fil`), the left half of the
+/// `inline-fil ++ ib ++ inline-fil` centering / `... ++ inline-fil` (right
+/// half) `ib ++ inline-fil`-flush idiom (e.g. stdjareport's centered title
+/// block). Dropping it here silently collapsed every centered/right-flushed
+/// line to the left margin. `trim_trailing_glue` already keeps a trailing
+/// `OuterFil` for the same reason; this is the symmetric leading case.
 fn trim_leading_glue(line: &[PureHorzBox]) -> &[PureHorzBox] {
     let mut start = 0;
-    while start < line.len() && line[start].is_break_point() {
+    while start < line.len()
+        && matches!(
+            line[start],
+            PureHorzBox::OuterEmpty { .. } | PureHorzBox::Discretionary { .. }
+        )
+    {
         start += 1;
     }
     &line[start..]
@@ -585,12 +617,10 @@ fn line_content(pure: &[PureHorzBox], start: usize, raw_end: usize) -> Vec<PureH
 /// overfull, since shrink represents real interword compressibility, not
 /// justification.
 fn layout_line(ctx: &Context, line: Vec<PureHorzBox>, width: Length, is_last: bool) -> VertBox {
-    let (contents, mut height, mut depth) = justify_line(line, width, is_last);
-    // An all-glue line still needs sane metrics.
-    if height == Length::ZERO && depth == Length::ZERO {
-        height = ctx.font_size * 0.75;
-        depth = ctx.font_size * 0.25;
-    }
+    let (contents, height, depth) = justify_line(line, width, is_last);
+    // EXPERIMENT: an all-glue line (e.g. `line-break ctx inline-fil`, used as
+    // a pure spacer with its own paragraph-margin skip) draws nothing and
+    // should occupy zero vertical extent — no strut.
     VertBox::Line {
         height,
         depth,

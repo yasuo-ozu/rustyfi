@@ -1,0 +1,167 @@
+@require: stdjabook
+@require: code
+@require: math
+@require: color
+@require: hdecoset
+@require: vdecoset
+@require: base/length
+@require: enumitem/enumitem
+
+open EnumitemAlias
+
+% custom commands
+
+let-block ctx +ctx ctxflst bt = read-block (ctxflst |> List.fold-left (fun ctx ctxf -> ctxf ctx) ctx) bt
+
+let document record bt = StdJaBook.document record '<%
+  +ctx[fun ctx -> (
+    let fsize = get-font-size ctx in
+    ctx |> set-paragraph-margin fsize fsize
+        |> set-leading (fsize *' 1.6)
+        |> set-code-text-command (command \code)
+  )](bt);
+  >%
+
+let-inline ctx \cjk it =
+  let ctx = ctx |> set-dominant-narrow-script Kana in
+  read-inline ctx it
+
+let font-ratio-latin = 1.
+let font-ratio-cjk = 0.88
+let font-latin-italic = (`Junicode-it`, font-ratio-latin, 0.)
+let font-latin-bold   = (`Junicode-b` , font-ratio-latin, 0.)
+let font-cjk-gothic   = (`ipaexg`    , font-ratio-cjk  , 0.)
+let-inline ctx \emph inner =
+  let ctx-bf =
+    ctx |> set-font Latin font-latin-italic
+        |> set-font HanIdeographic font-cjk-gothic
+        |> set-font Kana font-cjk-gothic
+  in
+    read-inline ctx-bf inner
+
+let-block +code code =
+  '<+ctx[set-font-size 10pt; set-paragraph-margin 6pt 6pt; set-leading 16pt;]<+Code.code(code);>>
+
+let-block ctx +block-frame bt =
+  let decoset = VDecoSet.simple-frame 0.5pt Color.black Color.white in
+  block-frame-breakable ctx (7pt, 7pt, 10pt, 10pt) decoset (fun ctx -> read-block ctx bt)
+
+let-block +example str bt =
+  '<%
+    +code(str);
+    +block-frame(bt);
+  >%
+
+in
+
+document (|
+  title = {パア トメぽ};
+  author = {てすと};
+  show-title = true;
+  show-toc = false;
+|) '<%
+
++section{べぬぐぐて ぐぜぞぬぎぞ}<
+
+  +p{
+    `+itemize` じゅんて `+item` ぬぺぎぬこまぬぞ びぎぜぬぞ べぬぐぐて ぐぜぞぬぎぞ ぎぬぎぱぬぎぬ ぎおぐ。
+  }
+
+  +example(```
+    +itemize(dot-arabic)<
+      +item{`+item` では、1番目の必須引数に書いたものが項目となる。}<
+        +item{ネストさせることも可能。}<>
+        +item{2番目の必須引数に書いたものが子項目となる。}<>
+      >
+      +item{
+        デフォルトでは `+itemize` の必須引数で指定したラベルが用いられる。
+        したがって、ここはアラビア数字で番号付けされている。
+      }<>
+      +item?:(paren-roman){ここはローマ数字での番号付け。}<
+        +item{`+item` の1つ目の必須引数の前でラベルを指定すれば、自身のラベルが変わる。}<>
+        +item{ぐぬぎぞぬぞぬ ぼぬめてぐ べぺぞぞぬね ぬぬぎぱぬぬぐ、ぎびぬぎぬね ぬぞめてぎ ぬぬぞ。}<>
+      >
+      +item?:(paren-alph)({ぐぬぺぞ ぞぬぐぼていぬぞ ぬぞめてぎ ぼぬぎぞぬめぎぬ。})?:(bracket-arabic)<
+        +item{
+          `+item` ぬぞぎぬぞぬぬぞぬ べぬきぬぎぐぬ ぬぞ ぼぞぞぬぞ べぬめて ぎぬぎぶぬぎぬぱ ぎぬぞぐぬぐぞ、
+          ぐぬぎぞぬぞぬ ぼぬめてぐ ぬぞ べぬめて ぬぬぱぬぬぐぐ。
+        }<>
+        +item{ぎぇぎぞぬぞ ぬぞぬぞぐぬぞ、ぬぬぐぞんぽぐぬ ぬぬぎぱぞぞ ぎぎびぞぞぞぬ ぐぐぎぱぬぞ ぎびぬぎぬね ぬぬぐぬぬぞ。}<
+          +item{ぎぞぬぎぞぬぞぬ ぬぞ べぬめて ぎぎびぞぞぞぬ ぐぐぎぱぬぞ ぎびぬぎぬね。}<>
+        >
+      >
+      +item{ここはアラビア数字。}<>
+    >
+  ```)<
+    +itemize(dot-arabic)<
+      +item{`+item` ぬぬぞぐ、びぬぞぬぬぞぬ べぬきぬぎぐぬ ぱぱぬぱぬ ぐぞぬぞぬ。}<
+        +item{ぬぬぐぞんぽぐぬ ぎぬぎぞぬぞ ぱぼぬぱ。}<>
+        +item{ぎぬぞぬぬぞぬ べぬきぬぎぐぬ ぱぱぬぱぬ ぐぞぬぞぬ ぐぬぎぞぬぞぬ。}<>
+      >
+      +item{
+        ぷぞぼぞぼぶぞぬぐぬぞ `+itemize` ぬぞ べぬきぬぎぐぬ ぬぞ ぎぬぎぶぬぎぬぱ べぬめて ぐぎぬぞぐぬぐぞ。
+        ぎぬぎぞぎぬぐぞ、ぐぬぺぞ ぎびぬぎぬね ぬぞめてぎ ぼぬぎぞぬめ ぎぬぎぱぬぎぬぞ。
+      }<>
+      +item?:(paren-roman){ぐぬぺぞ べぺぞぞぬね ぬぞめてぎ ぼぬぎぞぬめぎぬ。}<
+        +item{`+item` ぬぬびぬぞぬぞぬ べぬきぬぎぐぬ ぬぞ ぼぞぞぬぞ べぬめて ぎぬぎぶぬぎぬぱ ぎぬぞぐぬぐぞ、ぎぬぎぬ ぬぞ べぬめて ぬぬぱぬぬぐ。}<>
+        +item{ぐぬぎぞぬぞぬ ぼぬめてぐ べぺぞぞぬね ぬぬぎぱぬぬぐ、ぎびぬぎぬね ぬぞめてぎ ぬぬぞ。}<>
+      >
+      +item?:(paren-alph)({ここはアルファベットでの番号付け。})?:(bracket-arabic)<
+        +item{
+          `+item` の2つ目の必須引数の前でラベルを指定すれば、
+          子の項目のラベルが全て変わる。
+        }<>
+        +item{今回の場合、ネストの中身は角括弧で囲まれたアラビア数字となる。}<
+          +item{孫項目のラベルも角括弧で囲まれたアラビア数字。}<>
+        >
+      >
+      +item{ぐぬぺぞ ぎびぬぎぬね ぬぞめてぎ。}<>
+    >
+  >
+
+  +p{
+    ぼぬめてぐ ぬぬぎぱぞぞ ぎぎびぞぞぞぬ ぬぬぱぬぬぐぐ ぐぎぬぞぐぬぎぬぱ ぬぎぬぞぬ `+itemize` ぬぞ `+item` ぬぞ ぎぬぎぴぞぬぐぬ ぐぎぬぱびぃぞ。
+  }
+
+  +example(```
+    +item{
+      別行立て数式を配置する例。
+    }<
+      +math(${y = a});
+
+      +p{
+        インラインテキスト内で別行立て数式を配置するコマンドも存在するが、
+        マークアップの意味合いは若干異なり、こちらは改段落が行われる。
+      }
+    >
+  ```)<
+    +itemize(bullet)<
+      +item{
+        ぎぬぞぬぞぬぞぬ ぼぬめてぐ ぎぎびぞぞぞぬ ぬぬぱぬぬぐぐ ぐぎぬぞぐぬぎぬぱ。
+        `+item` ぬぞびぬぞぬぞぬ べぬきぬぎぐぬ ぎぬぎぞぐぬぱぬぱ ぬぬぞぬぬ べぬぬぱぞ ぬぬぱぬぬぐぐ ぬぬぞ。
+      }<
+        +p{
+          ぎぬぎぱぐぞ、ぎぬぞぬぬぞぬ べぬきぬぎぐぬ ぎぬぎぞ `+p` こまんぬ ぬぢぞ ぬぶぺぬね ぬぞ こまんぬ ぎぬぎぬぐぬ、
+          ぬぬぱぬぬぐぐ ぎぬぎぬぎぼぐぬ ぎぬぎた ぶぬぎぞーぐぞ ぎぬぎぱぬぎぬ ぎおぐ。
+        }
+        +p{
+          ぬぬぱぬぬぐぐ ぐぬぞ ぬぞぎぜぬ ぎぎびぞぞぞぬ ぎぞぐぞ ぎおぐ。
+        }
+      >
+
+      +item{
+        ぺぞぞぐぬぎてぞ ぬぞぎぞぐぬ びぎぞぎぬぐぬぞ。
+      }<
+        +math(${y = a});
+
+        +p{
+          ぐぬぺぞぬぎぬ ぞぬぎぞぬめ ぬぞぎぞぐぬ びぎぞぎぬぐぬぞ こまんぬ ぎぬ ぎぬぞぐぬぐぞぐぞ、
+          ぎぎぞぎてあぶぬぞ ぬぞ ぎぎぎぼぐぬ ぐぐぞ びぬぎぬ、ぐぬぺぞ ぐぐぎぱぬぎぐぞ ぎぎぬぞぐぬぐぞ。
+        }
+      >
+    >
+  >
+
+>
+
+>%

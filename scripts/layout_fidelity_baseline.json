@@ -1,68 +1,74 @@
 {
   "latexcmds": {
-    "pages": 17,
-    "words": 1015,
-    "lines": 284,
-    "left_margin": 40.0,
-    "text_match": 0.7881,
-    "width_p95_pt": 0.962,
+    "pages": 11,
+    "words": 999,
+    "lines": 291,
+    "left_margin": 80.0,
+    "text_match": 0.8046,
+    "width_p95_pt": 0.944,
     "covers": "math, colored/framed/shadowed boxes, LaTeX-like commands, cross-refs",
-    "upstream_pages": 12
+    "upstream_pages": 12,
+    "page_gap": 1
   },
   "xpath": {
-    "pages": 14,
-    "words": 1438,
-    "lines": 271,
-    "left_margin": 40.0,
-    "text_match": 0.9314,
+    "pages": 11,
+    "words": 1429,
+    "lines": 275,
+    "left_margin": 80.0,
+    "text_match": 0.937,
     "width_p95_pt": 0.19,
     "covers": "vector graphics: paths, bezier curves, intersections, diagrams",
-    "upstream_pages": 11
+    "upstream_pages": 11,
+    "page_gap": 0
   },
   "enumitem": {
-    "pages": 34,
-    "words": 2163,
-    "lines": 807,
+    "pages": 27,
+    "words": 2113,
+    "lines": 791,
     "left_margin": 40.0,
-    "text_match": 0.7693,
+    "text_match": 0.7767,
     "width_p95_pt": 4.56,
     "covers": "nested and heavily-customized itemize / enumerate",
-    "upstream_pages": 27
+    "upstream_pages": 27,
+    "page_gap": 0
   },
   "easytable": {
-    "pages": 23,
-    "words": 2373,
-    "lines": 543,
+    "pages": 19,
+    "words": 2353,
+    "lines": 536,
     "left_margin": 40.0,
-    "text_match": 0.7754,
+    "text_match": 0.7795,
     "width_p95_pt": 15.902,
     "covers": "tables: cells, rules, alignment, multi-row/col",
-    "upstream_pages": 19
+    "upstream_pages": 19,
+    "page_gap": 0
   },
   "figbox": {
-    "pages": 23,
-    "words": 1684,
-    "lines": 507,
-    "left_margin": 40.0,
-    "text_match": 0.7213,
+    "pages": 19,
+    "words": 1669,
+    "lines": 508,
+    "left_margin": 80.0,
+    "text_match": 0.795,
     "width_p95_pt": 8.679,
     "covers": "figures, floats, image boxes, captions (composes easytable+enumitem)",
-    "upstream_pages": 21
+    "upstream_pages": 21,
+    "page_gap": 2
   },
   "slydifi": {
-    "pages": 48,
-    "words": 103,
-    "lines": 43,
+    "pages": 31,
+    "words": 845,
+    "lines": 247,
     "left_margin": 20.0,
-    "text_match": 0.1096,
-    "width_p95_pt": 12.52,
+    "text_match": 0.6909,
+    "width_p95_pt": 13.18,
     "covers": "slides: frames, layout templates, overlays, themed decorations",
-    "upstream_pages": 30
+    "upstream_pages": 30,
+    "page_gap": 1
   },
   "gakushin": {
     "pages": 5,
     "words": 125,
-    "lines": 69,
+    "lines": 68,
     "left_margin": 45.92,
     "covers": "load-pdf-image embedding + the 学振 multi-column form layout (fss)"
   }

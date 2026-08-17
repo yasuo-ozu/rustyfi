@@ -1,0 +1,38 @@
+@require: stdjareport
+@require: itemize
+@require: annot
+@require: color
+@require: math
+@require: color
+
+@require: latexcmds/latexcmds
+
+let-inline \code text = {
+    \mbox{\code(text);}
+}
+
+open LatexCmds in
+document (|
+  title = {Part 03};
+  author = {test};
+|) '<
+     +chapter {ぬるぽげぬこ} <
+         +p {
+             よこもーど、たてもーど、すうしきもーどちゅうでぞれぞれ\code(`\hspace(1pt);`);, \code(`\vspace(1pt);`);, \code(`\mspace(1pt);`);ぬるぽげもちいることできぬる。spaceのかわりにskipとしてもよぃ。せみころんやかっこはしょうりゃくできないぬる。
+         }
+         +p {
+             また、げんざいのもじさいずをきじゅんとしたばいりつをしていするぬるぽげくたもれ\code(`\rquad`);, \code(`\mrquad`);もあぬる。たとえば\code(`\rquad(1.5);`);とすればもじさいずの1.5ばいのくうはくがさくせいされぬる。
+         }
+         +p {
+             さらに、ながさをしていせずにもちえるいかのくたもれもようよういされている。
+         }
+         +listing {
+            * \code(`\quad;`);  ${\cdots}文字サイズの1.0倍の空白
+            * \code(`\hquad;`); ${\cdots}文字サイズの0.5倍の空白
+            * \code(`\qquad;`); ${\cdots}文字サイズの2.0倍の空白
+            * \code(`\mquad;`); ${\cdots}文字サイズの1.0倍の空白(数式モード)
+            * \code(`\mhquad;`);${\cdots}文字サイズの0.5倍の空白(数式モード)
+            * \code(`\mqquad;`);${\cdots}文字サイズの2.0倍の空白(数式モード)
+         }
+     >
+>

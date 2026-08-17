@@ -1,0 +1,100 @@
+@require: stdjareport
+@require: itemize
+@require: list
+@require: annot
+@require: color
+@require: math
+
+@require: xpath/xpath
+@require: shared/util
+
+let-inline ctx \test-path m gs =
+    let ((x1, y1), (x2, y2)) = match gs with
+        | [] -> ((0pt, 0pt), (0pt, 0pt))
+        | g::gs -> gs |> List.fold-left (fun ret g -> (
+              let (bb1, bb2) = get-graphics-bbox g in
+              concat-bbox ret (bb1,bb2)
+        )) (get-graphics-bbox g)
+    in
+    let b = 0.1pt in
+    let m = m +' (b *' 0.5) in
+    let w = x2 -' x1 +' (m *' 2.0) in
+    let h = y2 -' y1 +' (m *' 2.0) in
+    inline-graphics w h 0pt (fun (x, y) -> (
+        (
+            start-path (x, y) |> line-to (x +' w, y)
+            |> line-to (x +' w, y +' h) |> line-to (x, y +' h)
+            |> close-with-line |> stroke 1pt Color.black
+        )::(
+            gs |> List.map (shift-graphics (x -' x1 +' m, y -' y1 +' m))
+        )
+    ))
+
+let-block +test-path m gs = '< +p { \test-path(m)(gs); } >
+
+let ctx = get-initial-context 16pt (command \math) in
+document (|
+  title = {Xbzq 02};
+  author = {txst};
+|) '<
+     +chapter{ぺぎぼ にぎぬこぬぎ}<
+         +section{こぎぺん を ぶぎめぬ こぬご}<
+             +p {
+                 こぎぺん を ぶぎめぬ ぎぬぎぬぎ ぷぎぼぎ いぎぁ ぎ てぃぎぬ られぎ りぼぎぬ。
+             }
+             +code(```
+XPath.get-intersections : length -> XPath.t -> point list
+XPath.get-intersections-with : length -> XPath.pre -> XPath.t -> point list
+             ```);
+             +listing{
+                 * \code(`get-intersections delta pat`);${\cdots}ぁえ られぎぱ がぱぎ\code(`pat`);の ぬいぶ どぎ こぎぺん(\code(`point`);ぎぴ)ぬ ぎりぶぷ を えぎ ぼぎぬ。\code(`delta`);ぐ せぃれどぎ りぼぎぬ。
+                 * \code(`get-intersections-with delta ppat pat `);${\cdots}ぁえ られぎぱ みぶぱ がぱぎ\code(`ppat`);ぎ がぱぎ\code(`pat`);ぷ まぎぎ ぺぎん どぎ ぎりぶぷ を えぎ ぼぎぬ。えぎ られぬ ぺぎん れぎぞ \code(`ppat`);じょぎ ぎぬぎぬ みぎぬぎぬ りぼぎぬ。
+             }
+             +p {
+                 れぎえぎ、 いぎぁ どぎ ぶぎぎ ぐろ ぎぎぬ られぬ がぱぎ\code(`pat`);きほ あぎぎ ぎぎぬ ぎぎぬ われぬ みぶぱ がぱぎ\code(`ppat`);ぎ あえ られぎぱ ぎぎ みぎ、 これぞ どぎ こぎぺん(きぎぎ ぎろ)\code(`get-intersections-with`);こぬご りぎぎぎぬ れぎぞぎ。 ぐぬ ぎぎぎ えぎ られぬ こぎぺん どぎ あぎぎぺぎぎ ぐ、 みぶぱ がぱぎ\code(`ppat`);じょぎ どぎ ぎぬぎぬ みぎぬぎぬ りぼぎぬ(ぎぎぎ りぎぎ ぎぎ ぎぎぬぎぃ ぎぎぃ りぼぎぬ)。
+             }
+             +test-path(1pt)(
+                 let pat = XPath.(
+                     start-path (4cm, -1cm) |> line-to (2cm, 3cm)
+                     |> line-to (0cm, -1cm) |> line-to (-2cm, 3cm)
+                     |> line-to (-4cm, -1cm) |> terminate-path
+                 ) in
+                 let ppat = XPath.(
+                     start-path (-4cm, 0cm)
+                     |> bezier-to (-4cm, 0cm) (-2cm, 2cm) (0cm, 2cm)
+                     |> bezier-to (2cm, 2cm) (4cm, 0cm) (4cm, 0cm)
+                 ) in
+                 let pts = XPath.get-intersections-with 0.01cm ppat pat in
+                 let labels = pts |> List.mapi (fun i p -> (
+                     [
+                         Gr.circle p 0.2cm |> fill (Color.yellow);
+                         arabic i |> embed-string |> read-inline ctx |> draw-text p
+                     ]
+                 )) |> List.concat in
+                 List.append [
+                     pat |> XPath.stroke 1pt (Color.blue);
+                     ppat |> XPath.terminate-path |> XPath.stroke 1pt (Color.black);
+                 ] labels
+             );
+             +p {
+                 ぎっぽぎりぎ\code(`get-intersections`);を ぶぎめぬ ぎぎぎぎぎ みぎぎ り、 がぱぎ\code(`pat`);の ぬいぶ どぎ こぎぺん(ぎぶぎわぎ ぎぶぎ ぎぎぎぎ ぷぎ こぎぺん)を えぎ ぎぎぎぎぎ りびぎぬ ぎぎぬ。 ぐぬ ばぎぃ に えぎ られぬ こぎぺん どぎ あぎぎぺぎぎ どぎ ぎぬぎぬ ぐ ぎぎ ぎぎぎぎぎ ぎぎぬ。
+             }
+             +test-path(1pt)(
+                 let pat = XPath.(
+                     [2.; 4.; 1.; 3.] |> List.fold-left (fun pp r -> (
+                         let theta = r *. 6.28 /. 5. +. 1.57 in
+                         pp |> line-to (2cm *' (cos theta), 2cm *' (sin theta))
+                     )) (start-path (0cm, 2cm)) |> close-with-line
+                 ) in
+                 let pts = XPath.get-intersections 0.01cm pat in
+                 let labels = pts |> List.mapi (fun i p -> (
+                     [
+                         Gr.circle p 0.2cm |> fill (Color.yellow);
+                         arabic i |> embed-string |> read-inline ctx |> draw-text p
+                     ]
+                 )) |> List.concat in
+                 (pat |> XPath.stroke 1pt (Color.blue))::labels
+             );
+         >
+     >
+>

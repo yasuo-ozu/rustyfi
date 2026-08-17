@@ -270,6 +270,11 @@ def build_pdf(doc: Doc, bin_path: Path, lib_root: Path, out_pdf: Path, timeout: 
     cwd = src.parent
     cmd = [
         str(bin_path),
+        # Bypass the content-addressed compile cache: it is keyed on the SOURCE,
+        # not the port binary, so a layout-engine change would otherwise be
+        # masked by a stale cached render. The test must reflect the current
+        # binary's layout.
+        "--no-cache",
         "--lib-root",
         str(lib_root),
         "--font-dir",
@@ -282,6 +287,49 @@ def build_pdf(doc: Doc, bin_path: Path, lib_root: Path, out_pdf: Path, timeout: 
     if proc.returncode != 0 or not out_pdf.exists():
         tail = "\n".join((proc.stdout + proc.stderr).splitlines()[-8:])
         raise RuntimeError(f"port failed to build {doc.name}:\n{tail}")
+
+
+def find_satysfi(explicit: str | None) -> str | None:
+    """The ORIGINAL OCaml SATySFi binary, if available (via `--satysfi`, then
+    PATH — e.g. inside `nix develop`). Used to GENERATE the reference PDFs the
+    baseline is anchored to (see flake.nix)."""
+    if explicit:
+        return explicit if Path(explicit).exists() else None
+    return shutil.which("satysfi")
+
+
+def assemble_satysfi_lib_root(dst: Path, docs: list[Doc]) -> Path:
+    """A `-C` config root for the ORIGINAL SATySFi holding only the NON-stdlib
+    corpus packages (base + each doc's sibling packages). SATySFi's own standard
+    library (stdjabook, math, itemize, ...) comes from its default config path,
+    so — unlike the port's lib-root — we do NOT copy lib-rustyfi here."""
+    pkg = dst / "dist" / "packages"
+    pkg.mkdir(parents=True, exist_ok=True)
+    base_src = CORPUS / "satysfi-base" / "src"
+    if base_src.exists():
+        shutil.copytree(base_src, pkg / "base", dirs_exist_ok=True)
+    for doc in docs:
+        for prefix, srcdir in doc.stage.items():
+            srcpath = CORPUS / srcdir
+            if not srcpath.exists():
+                continue
+            dest = pkg if prefix == "" else pkg / prefix
+            shutil.copytree(srcpath, dest, dirs_exist_ok=True)
+    return dst
+
+
+def build_ref_satysfi(doc: Doc, satysfi: str, lib_root: Path, out_pdf: Path, timeout: int) -> None:
+    """Generate `doc`'s reference PDF with the ORIGINAL SATySFi. `-C <lib_root>`
+    adds the corpus packages to its config search path (its stdlib stays on the
+    default path). Built from the doc's own dir so relative `@import:`s and
+    CWD-relative `load-pdf-image` targets resolve, exactly as for the port."""
+    src = CORPUS / doc.src
+    # `-C` takes the config ROOT; SATySFi searches `<root>/dist/packages/`.
+    cmd = [satysfi, src.name, "-o", str(out_pdf), "-C", str(lib_root)]
+    proc = subprocess.run(cmd, cwd=src.parent, capture_output=True, timeout=timeout, text=True)
+    if proc.returncode != 0 or not out_pdf.exists():
+        tail = "\n".join((proc.stdout + proc.stderr).splitlines()[-10:])
+        raise RuntimeError(f"original SATySFi failed to build {doc.name}:\n{tail}")
 
 
 def extract_pages(pdf: Path, pdftotext: str) -> list[Page]:
@@ -422,6 +470,18 @@ def check_against_baseline(name: str, m: Metrics, base: dict) -> list[str]:
         hi = b * (1 + COUNT_SLACK)
         if not (lo <= m.__dict__[key] <= hi):
             fails.append(f"{key} {m.__dict__[key]} outside baseline {b} ±{int(COUNT_SLACK*100)}%")
+    # Page-count PARITY with the original SATySFi (the goal "the corpus test
+    # matches in page count"): the port's absolute page-count gap to SATySFi
+    # must not GROW beyond its recorded value — it may only shrink toward 0.
+    # This is the enforced convergence guard; `--update` re-pins it, so tightening
+    # the gap (e.g. a spacing fix) is locked in and can never silently regress.
+    if "upstream_pages" in base and "page_gap" in base:
+        gap = abs(m.pages - base["upstream_pages"])
+        if gap > base["page_gap"]:
+            fails.append(
+                f"page-count gap to SATySFi WIDENED: |port {m.pages} - SATySFi "
+                f"{base['upstream_pages']}| = {gap} > baseline gap {base['page_gap']}"
+            )
     return fails
 
 
@@ -454,6 +514,23 @@ def main() -> int:
     ap.add_argument("--bin", type=Path, default=default_bin(), help="path to the rustyfi-rust binary")
     ap.add_argument("--keep-going", action="store_true", help="report all docs even if one fails")
     ap.add_argument("--timeout", type=int, default=600, help="per-doc build timeout (s)")
+    ap.add_argument(
+        "--gen-refs",
+        action="store_true",
+        help="generate the reference PDFs with the ORIGINAL SATySFi (needs `satysfi` on "
+        "PATH — see flake.nix / `nix develop`) instead of using the committed submodule "
+        "PDFs. The two agree on SATySFi 0.0.11, but this makes the reference provenance "
+        "explicit and reproducible.",
+    )
+    ap.add_argument("--satysfi", default=None, help="path to the original SATySFi binary (for --gen-refs)")
+    ap.add_argument(
+        "--out-dir",
+        type=Path,
+        default=None,
+        help="persist the generated PDFs here: <doc>.port.pdf (the port's render) and, "
+        "when a reference exists, <doc>.satysfi.pdf (the original SATySFi render). "
+        "Otherwise PDFs are built in a temp dir and discarded.",
+    )
     ap.add_argument("--verbose", action="store_true")
     args = ap.parse_args()
 
@@ -470,28 +547,56 @@ def main() -> int:
         print(f"no matching docs among {[d.name for d in DOCS]}")
         return 2
 
+    satysfi = None
+    if args.gen_refs:
+        satysfi = find_satysfi(args.satysfi)
+        if satysfi is None:
+            print("SKIP layout-fidelity — --gen-refs given but the original `satysfi` is not "
+                  "available (enter `nix develop`, see flake.nix).")
+            return 0
+
     baseline = {}
     if BASELINE_PATH.exists():
         baseline = json.loads(BASELINE_PATH.read_text())
 
     results: dict[str, dict] = {}
     all_fails: list[str] = []
-    print(f"== layout fidelity: Rust port vs upstream SATySFi ({len(docs)} docs) ==")
+    ref_kind = "original SATySFi (freshly generated)" if satysfi else "upstream SATySFi (submodule PDFs)"
+    print(f"== layout fidelity: Rust port vs {ref_kind} ({len(docs)} docs) ==")
 
     with tempfile.TemporaryDirectory(prefix="rustyfi-layout-") as tmp:
         tmpd = Path(tmp)
         lib_root = assemble_lib_root(tmpd / "libroot", docs)
+        saty_root = assemble_satysfi_lib_root(tmpd / "satyroot", docs) if satysfi else None
         for doc in docs:
             self_mode = doc.ref == ""
-            ref_pdf = None if self_mode else CORPUS / doc.ref
-            if ref_pdf is not None and not ref_pdf.exists():
-                print(f"  {doc.name}: SKIP — no upstream reference at {ref_pdf}")
-                continue
+            # Reference PDF source: freshly generated by the original SATySFi
+            # (--gen-refs), else the committed submodule PDF. gakushin has no
+            # reference either way (its fonts-junicode dep needs Satyrographos),
+            # so it stays a self-snapshot.
+            ref_pdf = None
+            if not self_mode:
+                if satysfi:
+                    ref_pdf = tmpd / f"ref-{doc.name}.pdf"
+                    try:
+                        build_ref_satysfi(doc, satysfi, saty_root, ref_pdf, args.timeout)
+                    except Exception as e:
+                        msg = f"{doc.name}: ERROR generating reference with original SATySFi — {e}"
+                        print("  " + msg)
+                        all_fails.append(msg)
+                        if args.keep_going:
+                            continue
+                        return 1
+                else:
+                    ref_pdf = CORPUS / doc.ref
+                    if not ref_pdf.exists():
+                        print(f"  {doc.name}: SKIP — no upstream reference at {ref_pdf}")
+                        continue
             out_pdf = tmpd / f"{doc.name}.pdf"
             try:
                 build_pdf(doc, args.bin, lib_root, out_pdf, args.timeout)
                 port_pages = extract_pages(out_pdf, pdftotext)
-                ref_pages = None if self_mode else extract_pages(ref_pdf, pdftotext)
+                ref_pages = None if ref_pdf is None else extract_pages(ref_pdf, pdftotext)
             except Exception as e:
                 msg = f"{doc.name}: ERROR — {e}"
                 print("  " + msg)
@@ -500,10 +605,19 @@ def main() -> int:
                     continue
                 return 1
 
+            if args.out_dir:
+                args.out_dir.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(out_pdf, args.out_dir / f"{doc.name}.port.pdf")
+                if ref_pdf is not None:
+                    shutil.copy2(ref_pdf, args.out_dir / f"{doc.name}.satysfi.pdf")
+
             m = compare(port_pages, ref_pages)
             entry = m.to_json() | {"covers": doc.covers}
             if ref_pages is not None:
                 entry["upstream_pages"] = len(ref_pages)
+                # The port's current page-count gap to SATySFi (0 = exact
+                # match). Guarded against widening by check_against_baseline.
+                entry["page_gap"] = abs(m.pages - len(ref_pages))
             results[doc.name] = entry
             print(fmt_report(doc.name, doc.covers, len(ref_pages) if ref_pages is not None else None, m))
 

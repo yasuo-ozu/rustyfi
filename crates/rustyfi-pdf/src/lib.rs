@@ -436,15 +436,23 @@ pub(crate) fn place_embedded_block(
     block: &[VertBox],
     tx: f32,
     ty: f32,
+    anchor_last: bool,
     mut emit_line: impl FnMut(&PureHorzBox, f32, f32) -> Result<(), PdfError>,
 ) -> Result<(), PdfError> {
     let placed = place_block_at((Length::ZERO, Length::ZERO), block.to_vec());
-    let Some(first) = placed.first() else {
+    // Which inner line's baseline coincides with the box's inline baseline
+    // `ty`: the FIRST line for `embed-block-top`, the LAST for
+    // `embed-block-bottom` (upstream `adjust_to_first_line` /
+    // `adjust_to_last_line`). Every other line is offset from it by the
+    // difference of their placed baselines (larger `baseline_y` = further down
+    // the block = drawn lower, i.e. smaller PDF `y`).
+    let anchor = if anchor_last { placed.last() } else { placed.first() };
+    let Some(anchor) = anchor else {
         return Ok(());
     };
-    let first_offset = first.baseline_y;
+    let anchor_offset = anchor.baseline_y;
     for line in &placed {
-        let y = ty - (line.baseline_y - first_offset).0 as f32;
+        let y = ty - (line.baseline_y - anchor_offset).0 as f32;
         for (dx, cbx) in &line.contents {
             emit_line(cbx, tx + (line.x + *dx).0 as f32, y)?;
         }
@@ -880,8 +888,13 @@ fn emit_box(
                 None => place_image(content, image.0, tx, ty, width.0 as f32, height.0 as f32),
             }
         }
-        PureHorzBox::Graphics { elems, .. } => {
-            place_graphics(content, elems, tx, ty, &mut |c, bx, x, y| {
+        PureHorzBox::Graphics { elems, origin_independent, .. } => {
+            // A page-absolute callback (`origin_independent`) already carries
+            // final page coordinates, so anchor at (0,0) — do NOT translate by
+            // the box's placed position (which is often a negative text-origin;
+            // translating shifts a full-page frame background off the page).
+            let (ax, ay) = if *origin_independent { (0.0, 0.0) } else { (tx, ty) };
+            place_graphics(content, elems, ax, ay, &mut |c, bx, x, y| {
                 emit_box(c, bx, x, y, images)
             })?;
         }
@@ -919,8 +932,10 @@ fn emit_box(
                 emit_box(c, bx, x, y, images)
             })?;
         }
-        PureHorzBox::EmbeddedBlock { block, .. } => {
-            place_embedded_block(block, tx, ty, |cbx, x, y| emit_box(content, cbx, x, y, images))?;
+        PureHorzBox::EmbeddedBlock { block, anchor_last, .. } => {
+            place_embedded_block(block, tx, ty, *anchor_last, |cbx, x, y| {
+                emit_box(content, cbx, x, y, images)
+            })?;
         }
         // §D: an inline frame's contents, on the frame's own baseline —
         // mirrors the `Tabular` recursion above. The frame's deco graphics

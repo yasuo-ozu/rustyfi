@@ -595,8 +595,8 @@ fn page_footer_fixture_overflows_to_multiple_pages_with_incrementing_footer_numb
     let doc = compile_page_footer_fixture();
     assert_eq!(
         doc.pages.len(),
-        4,
-        "the 40-paragraph body must overflow onto exactly 4 pages, got {}",
+        2,
+        "the 40-paragraph body must overflow onto exactly 2 pages, got {}",
         doc.pages.len()
     );
 

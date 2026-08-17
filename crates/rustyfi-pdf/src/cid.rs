@@ -399,8 +399,13 @@ fn emit_box(
                 None => place_image(content, image.0, tx, ty, width.0 as f32, height.0 as f32),
             }
         }
-        PureHorzBox::Graphics { elems, .. } => {
-            place_graphics(content, elems, tx, ty, &mut |c, bx, x, y| {
+        PureHorzBox::Graphics { elems, origin_independent, .. } => {
+            // See `crate::emit_box`: a page-absolute (`origin_independent`)
+            // callback's coords are final — anchor at (0,0), don't translate
+            // by the box position (else a full-page frame background shifts
+            // off the page).
+            let (ax, ay) = if *origin_independent { (0.0, 0.0) } else { (tx, ty) };
+            place_graphics(content, elems, ax, ay, &mut |c, bx, x, y| {
                 emit_box(c, bx, x, y, store, usage, images, cid_remaps)
             })?;
         }
@@ -463,8 +468,8 @@ fn emit_box(
                 emit_box(c, bx, x, y, store, usage, images, cid_remaps)
             })?;
         }
-        PureHorzBox::EmbeddedBlock { block, .. } => {
-            place_embedded_block(block, tx, ty, |cbx, x, y| {
+        PureHorzBox::EmbeddedBlock { block, anchor_last, .. } => {
+            place_embedded_block(block, tx, ty, *anchor_last, |cbx, x, y| {
                 emit_box(content, cbx, x, y, store, usage, images, cid_remaps)
             })?;
         }

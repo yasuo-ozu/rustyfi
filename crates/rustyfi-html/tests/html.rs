@@ -311,6 +311,7 @@ fn embedded_block_stacks_lines_from_the_placed_anchor() {
         height: Length::pt(9.0),
         depth: Length::pt(26.0),
         block: vec![line("first"), line("second")],
+        anchor_last: false,
     };
     let html = render(&page_with_run(bx));
 

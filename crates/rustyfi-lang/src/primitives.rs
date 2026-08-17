@@ -4075,17 +4075,39 @@ fn prim_inline_graphics(interp: &mut Interp, mut args: Vec<Value>) -> Result<Val
     let h = as_length(args.pop().unwrap())?;
     let w = as_length(args.pop().unwrap())?;
     let origin = make_point_value((Length::ZERO, Length::ZERO));
-    let list_v = interp.apply(gfun, origin)?;
+    let list_v = interp.apply(gfun.clone(), origin)?;
     // H1 (prim-retype-sweep.md §1.3/§3.4): the callback's result type is
     // `list graphics` under v0.0.6, one `graphics` collection under v0.1 —
     // see `coerce_graphics_result`'s doc comment.
     let elems = coerce_graphics_result(interp, list_v)?;
+    // Detect a PAGE-ABSOLUTE callback: run it again at a far-off probe point
+    // and compare. If the output is byte-identical the callback ignored its
+    // placed-point argument (`fun _ -> …`, e.g. slydifi's frame background /
+    // figbox's `draw-text pt`), so its coordinates are already page-absolute
+    // and the PDF writer must NOT translate them by the box's placed position
+    // (which is often a negative text-origin, shifting the decoration off the
+    // page). A position-relative callback yields different output here, so
+    // `origin_independent` stays false and the per-box `cm` applies as before.
+    // Upstream (`handlePdf.ml`) always calls the callback with the true placed
+    // point and never post-translates; this recovers that for the constant
+    // case without a post-layout deferral. (The extra evaluation must be free
+    // of observable side effects — true of every `Gr`/`draw-text` generator.)
+    let origin_independent = {
+        let probe = make_point_value((Length::pt(4096.0), Length::pt(2731.0)));
+        match interp.apply(gfun, probe) {
+            Ok(v) => coerce_graphics_result(interp, v)
+                .map(|e2| e2 == elems)
+                .unwrap_or(false),
+            Err(_) => false,
+        }
+    };
     Ok(Value::InlineBoxes(vec![HorzBox::Pure(
         PureHorzBox::Graphics {
             width: w,
             height: h,
             depth: d,
             elems,
+            origin_independent,
         },
     )]))
 }
@@ -4144,7 +4166,7 @@ fn resolve_outer_graphics_in_contents(
             // `inline-graphics-outer` itself and its use inside `tabular`
             // cells (`prim_tabular` calls this same function per cell).
             let elems = coerce_graphics_result(interp, listv)?;
-            *bx = PureHorzBox::Graphics { width: w, height: h, depth: d, elems };
+            *bx = PureHorzBox::Graphics { width: w, height: h, depth: d, elems, origin_independent: false };
         }
     }
     Ok(())
@@ -7861,6 +7883,65 @@ fn prim_block_frame_breakable(
 /// (`rustyfi-backend`) — top-aligned (upstream's exact first-line-baseline
 /// `adjust_to_first_line` is a roadmap refinement; see `rustyfi-pdf`'s
 /// `place_embedded_block` for the rendering side of this approximation).
+/// Build an `EmbeddedBlock` inline box. `anchor_last` picks which of the
+/// block's lines lands on the surrounding text baseline: the FIRST
+/// (`embed-block-top`) or the LAST (`embed-block-bottom`) — upstream's
+/// `adjust_to_first_line` / `adjust_to_last_line`.
+///
+/// TOP keeps the historical `measure_block` height/depth verbatim (so every
+/// existing top-embed render is byte-unchanged). BOTTOM measures where the
+/// block's lines actually land (`place_block_at`) and splits around the LAST
+/// line's baseline: height = everything above it, depth = the last line's own
+/// depth — so the box hangs UP from the baseline and the surrounding line
+/// reserves the right space above it.
+fn make_embedded_block(width: Length, block: Vec<VertBox>, anchor_last: bool) -> Value {
+    let first_line_height = block.iter().find_map(|vb| match vb {
+        VertBox::Line { height, .. } => Some(*height),
+        _ => None,
+    });
+    let last_line_depth = block.iter().rev().find_map(|vb| match vb {
+        VertBox::Line { depth, .. } => Some(*depth),
+        _ => None,
+    });
+    let (height, depth) = match (first_line_height, last_line_depth) {
+        // A block with real lines: place it once to learn where each line's
+        // baseline lands, then split the box's TOTAL vertical extent around the
+        // line that sits on the surrounding text baseline — the FIRST line for
+        // top-anchor (`embed-block-top`, `adjust_to_first_line`), the LAST for
+        // bottom-anchor (`embed-block-bottom`, `adjust_to_last_line`).
+        //
+        // `place_block_at` seats the first baseline at `first_h` (origin 0), so
+        // the block spans `[0, last_baseline + last_d]`. The old code summed
+        // every line's height and depth separately (`measure_block`), which is
+        // only correct for a single-line block; for a MULTI-line block it
+        // collapsed `depth` to `Σd` — wildly under-reporting how far the box
+        // extends below its (top-anchored) baseline. `chop_page`'s overflow
+        // test reads exactly that `depth`, so a multi-row `vconcat`/`margin`
+        // figure or a wrapped table cell believed it occupied almost no space
+        // below the baseline and the pager over-packed the page.
+        (Some(first_h), Some(last_d)) => {
+            let placed = place_block_at((Length::ZERO, Length::ZERO), block.clone());
+            let last_baseline = placed.last().map(|l| l.baseline_y).unwrap_or(first_h);
+            let bottom_edge = last_baseline + last_d;
+            if anchor_last {
+                (last_baseline, last_d)
+            } else {
+                (first_h, bottom_edge - first_h)
+            }
+        }
+        // A degenerate line-less block (only skips — no baseline to anchor):
+        // keep `measure_block` (its skip-as-height fallback is right there).
+        _ => measure_block(&block),
+    };
+    Value::InlineBoxes(vec![HorzBox::Pure(PureHorzBox::EmbeddedBlock {
+        width,
+        height,
+        depth,
+        block,
+        anchor_last,
+    })])
+}
+
 fn prim_embed_block_top(interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
     let k = args.pop().unwrap();
     let wid = as_length(args.pop().unwrap())?;
@@ -7870,26 +7951,18 @@ fn prim_embed_block_top(interp: &mut Interp, mut args: Vec<Value>) -> Result<Val
         ..ctx
     };
     let block = as_block_boxes(interp.apply(k, Value::Context(Box::new(inner_ctx)))?)?;
-    let (height, depth) = measure_block(&block);
-    Ok(Value::InlineBoxes(vec![HorzBox::Pure(
-        PureHorzBox::EmbeddedBlock {
-            width: wid,
-            height,
-            depth,
-            block,
-        },
-    )]))
+    Ok(make_embedded_block(wid, block, false))
 }
 
 /// `embed-block-bottom : context -> length -> (context -> block-boxes) ->
-/// inline-boxes` (vminst.ml:1185) — the `embed-block-top` sibling upstream
-/// distinguishes only by which end of the solidified block its baseline
-/// aligns to (`adjust_to_first_line` vs. `adjust_to_last_line`); since
-/// `prim_embed_block_top` above is already a STAND-IN that skips that
-/// distinction (both ends fold into one `measure_block` sum), this is the
-/// exact same construction — kept as its own function/registration entry
-/// only to keep the name and arity faithful to v0.0.6, not because the
-/// bodies differ.
+/// inline-boxes` (vminst.ml:1185) — the `embed-block-top` sibling that anchors
+/// the block's LAST line to the surrounding baseline (`adjust_to_last_line`),
+/// so a multi-line box hangs UP from the text line. Used by latexcmds'
+/// `\parbox?:(Bottom)`. Previously this was byte-identical to
+/// `embed-block-top` (a stand-in), which top-anchored it — visibly wrong (the
+/// box's first line sat on the baseline). `make_embedded_block(.., true)` now
+/// splits the metrics around the last line and `place_embedded_block` anchors
+/// it accordingly.
 fn prim_embed_block_bottom(interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
     let k = args.pop().unwrap();
     let wid = as_length(args.pop().unwrap())?;
@@ -7899,15 +7972,7 @@ fn prim_embed_block_bottom(interp: &mut Interp, mut args: Vec<Value>) -> Result<
         ..ctx
     };
     let block = as_block_boxes(interp.apply(k, Value::Context(Box::new(inner_ctx)))?)?;
-    let (height, depth) = measure_block(&block);
-    Ok(Value::InlineBoxes(vec![HorzBox::Pure(
-        PureHorzBox::EmbeddedBlock {
-            width: wid,
-            height,
-            depth,
-            block,
-        },
-    )]))
+    Ok(make_embedded_block(wid, block, true))
 }
 
 /// `line-stack-bottom : inline-boxes list -> inline-boxes` (vminst.ml:1229,
@@ -7953,15 +8018,12 @@ fn prim_line_stack_bottom(_interp: &mut Interp, mut args: Vec<Value>) -> Result<
         });
         prev_depth = depth;
     }
-    let (height, depth) = measure_block(&block);
-    Ok(Value::InlineBoxes(vec![HorzBox::Pure(
-        PureHorzBox::EmbeddedBlock {
-            width: wid,
-            height,
-            depth,
-            block,
-        },
-    )]))
+    // Route through `make_embedded_block` so the multi-line height/depth split
+    // is correct (top-anchored): `vconcat`/`margin`/`hvmargin` in figbox build
+    // their figures via this primitive, and the old `measure_block` sum
+    // under-reported the box's depth, making the pager over-pack pages around
+    // multi-row figures (see `make_embedded_block`).
+    Ok(make_embedded_block(wid, block, false))
 }
 
 /// `add-footnote : block-boxes -> inline-boxes` (vminst.ml:1130

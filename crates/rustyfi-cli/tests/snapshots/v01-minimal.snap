@@ -12,14 +12,14 @@ LINE 0 x=72.000 baseline_y=108.616
   dx=79.896 InnerString font=0 size=12.000 rising=0.000 w=13.344 h=8.616 d=2.484 text="42"
   dx=93.240 InnerString font=0 size=12.000 rising=0.000 w=3.336 h=8.616 d=2.484 text="."
   dx=96.576 OuterFil
-LINE 1 x=72.000 baseline_y=162.616
+LINE 1 x=72.000 baseline_y=135.616
   dx=0.000 InlineMark kind=EmphStart { strong: false }
   dx=0.000 InnerString font=2 size=12.000 rising=0.000 w=52.680 h=8.616 d=2.484 text="Emphasis"
   dx=52.680 InlineMark kind=EmphEnd
   dx=52.680 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
   dx=56.640 InnerString font=0 size=12.000 rising=0.000 w=34.668 h=8.616 d=2.484 text="works."
   dx=91.308 OuterFil
-LINE 2 x=72.000 baseline_y=216.616
+LINE 2 x=72.000 baseline_y=162.616
   dx=0.000 InnerString font=0 size=12.000 rising=0.000 w=24.672 h=8.616 d=2.484 text="Sum"
   dx=24.672 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
   dx=28.632 InnerString font=0 size=12.000 rising=0.000 w=13.344 h=8.616 d=2.484 text="10"
@@ -38,6 +38,7 @@ LINE 2 x=72.000 baseline_y=216.616
   dx=195.804 InnerString font=0 size=12.000 rising=0.000 w=3.336 h=8.616 d=2.484 text="."
   dx=199.140 OuterFil
 LINE 3 x=72.000 baseline_y=808.616
-  dx=0.000 InnerString font=0 size=12.000 rising=0.000 w=6.672 h=8.616 d=2.484 text="1"
-  dx=6.672 OuterFil
+  dx=0.000 OuterFil
+  dx=216.664 InnerString font=0 size=12.000 rising=0.000 w=6.672 h=8.616 d=2.484 text="1"
+  dx=223.336 OuterFil
 EXTRAS annotations=0 destinations=0 outline=0 page_graphics_pages=1 doc_info=none

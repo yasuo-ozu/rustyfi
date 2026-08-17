@@ -14,7 +14,7 @@ LINE 0 x=72.000 baseline_y=108.616
   dx=109.848 InnerString font=2 size=12.000 rising=0.000 w=89.340 h=8.616 d=2.484 text="SATySFi-in-Rust"
   dx=199.188 InnerString font=0 size=12.000 rising=0.000 w=3.336 h=8.616 d=2.484 text="."
   dx=202.524 OuterFil
-LINE 1 x=72.000 baseline_y=162.616
+LINE 1 x=72.000 baseline_y=135.616
   dx=0.000 InnerString font=0 size=12.000 rising=0.000 w=8.004 h=8.616 d=2.484 text="A"
   dx=8.004 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
   dx=14.100 InnerString font=0 size=12.000 rising=0.000 w=38.688 h=8.616 d=2.484 text="second"
@@ -40,7 +40,7 @@ LINE 1 x=72.000 baseline_y=162.616
   dx=404.552 InnerString font=0 size=12.000 rising=0.000 w=6.000 h=8.616 d=2.484 text="it"
   dx=410.552 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
   dx=416.648 InnerString font=0 size=12.000 rising=0.000 w=23.352 h=8.616 d=2.484 text="onto"
-LINE 2 x=72.000 baseline_y=180.616
+LINE 2 x=72.000 baseline_y=153.616
   dx=0.000 InnerString font=0 size=12.000 rising=0.000 w=38.676 h=8.616 d=2.484 text="several"
   dx=38.676 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
   dx=42.043 InnerString font=0 size=12.000 rising=0.000 w=24.672 h=8.616 d=2.484 text="lines"
@@ -70,7 +70,7 @@ LINE 2 x=72.000 baseline_y=180.616
   dx=377.929 InnerString font=0 size=12.000 rising=0.000 w=26.688 h=8.616 d=2.484 text="page"
   dx=404.617 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
   dx=407.984 InnerString font=0 size=12.000 rising=0.000 w=32.016 h=8.616 d=2.484 text="layout"
-LINE 3 x=72.000 baseline_y=198.616
+LINE 3 x=72.000 baseline_y=171.616
   dx=0.000 InnerString font=0 size=12.000 rising=0.000 w=12.000 h=8.616 d=2.484 text="all"
   dx=12.000 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
   dx=15.960 InnerString font=0 size=12.000 rising=0.000 w=25.332 h=8.616 d=2.484 text="work"
@@ -84,6 +84,7 @@ LINE 3 x=72.000 baseline_y=198.616
   dx=131.184 InnerString font=0 size=12.000 rising=0.000 w=23.352 h=8.616 d=2.484 text="end."
   dx=154.536 OuterFil
 LINE 4 x=72.000 baseline_y=808.616
-  dx=0.000 InnerString font=0 size=12.000 rising=0.000 w=6.672 h=8.616 d=2.484 text="1"
-  dx=6.672 OuterFil
+  dx=0.000 OuterFil
+  dx=216.664 InnerString font=0 size=12.000 rising=0.000 w=6.672 h=8.616 d=2.484 text="1"
+  dx=223.336 OuterFil
 EXTRAS annotations=0 destinations=0 outline=0 page_graphics_pages=1 doc_info=none

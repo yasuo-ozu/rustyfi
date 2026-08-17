@@ -1,0 +1,155 @@
+@require: stdjareport
+@require: itemize
+@require: annot
+@require: code
+@require: gr
+
+@require: easytable/easytable
+@require: enumitem/enumitem
+
+@require: base/typeset/base
+@require: figbox/figbox
+
+open FigBox
+open EasyTableAlias
+
+let-inline \link url text =
+  let ibf ctx =
+    let ctx = ctx |> set-text-color (Color.of-css `darkblue`) in
+    read-inline ctx text
+  in
+  {\href(url){\eval(ibf);}}
+
+let-block ctx +ctx ctxflst bt = read-block (ctxflst |> List.fold-left (fun ctx ctxf -> ctxf ctx) ctx) bt
+
+let document record content = StdJaReport.document record '<%
+  +ctx[
+    set-font-size 12pt;
+    set-paragraph-margin 12pt 12pt;
+    set-leading (12pt *' 1.6);
+    set-code-text-command (command \code);
+  ](content);
+>%
+
+let-block ctx +block-frame bt =
+  let decoset = VDecoSet.simple-frame 0.5pt Color.black Color.white in
+  block-frame-breakable ctx (5pt, 5pt, 10pt, 10pt) decoset (fun ctx -> read-block ctx bt)
+
+let-block +code code = 
+  '<+ctx[set-font-size 10pt; set-paragraph-margin 6pt 6pt; set-leading 16pt;]<+Code.code(code);>>
+
+let-block +example str bt =
+  '<%
+    +code(str);
+    +block-frame(bt);
+  >%
+
+let-inline \pang = {The quick brown fox jumps over the lazy dog.}
+
+let-inline \lipsum = {
+  Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.
+  Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.
+  Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur.
+  Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.
+}
+
+let-inline \jugem = {
+寿限無，寿限無，五劫のすりきれ，
+海砂利水魚の水行末・雲来末・風来末，
+食う寝るところに住むところ，
+やぶら小路のぶら小路，
+パイポパイポ，パイポのシューリンガン，
+シューリンガンのグーリンダイ，
+グーリンダイのポンポコピーのポンポコナーの長久命の長助．
+}
+
+
+in
+document (|
+  title = {Part 03};
+  author = {test};
+|) '<
++chapter{ぐらふぃっくす と てきすと から りふぼっくす を つくる}<%
+
+  +p{
+    たんじゅん な ぐらふぃっくす を もと に りふぼっくす を さくせい したい ばあい は `from-graphics` かんすう をもちいるのが よいでしょう。
+  }
+
+  +example(```
+  +fig-center(from-graphics (150pt, 100pt) [
+    Gr.circle (30pt, 40pt) 20pt |> fill Color.blue;
+    Gr.rectangle (30pt, 40pt) (90pt, 80pt) |> stroke 2pt Color.red;
+    Gr.rectangle-round 4pt (70pt, 90pt) (120pt, 10pt) |> stroke 5pt Color.orange;
+  ] |> frame 1pt (Color.gray 0.8));
+  ```)<%
+  +fig-center(from-graphics (150pt, 100pt) [
+    Gr.circle (30pt, 40pt) 20pt |> fill Color.blue;
+    Gr.rectangle (30pt, 40pt) (90pt, 80pt) |> stroke 2pt Color.red;
+    Gr.rectangle-round 4pt (70pt, 90pt) (120pt, 10pt) |> stroke 5pt Color.orange;
+  ] |> frame 1pt (Color.gray 0.8));
+  >%
+
+  +p{
+    ぐらふぃっくす は いっぱん に ばうんでぃんぐぼっくす と よばれる じょうほう を もっており、
+    その じょうほう をもちいて りふぼっくす の おおきさ を よしなに もとめ させる こと も かのう です。
+    `from-bbox-graphics` を つかえば、 りふぼっくす の おおきさ を しゅどう で していする こと なく りふぼっくす を さくせい できます。
+  }
+
+  +example(```
+  +fig-center(from-bbox-graphics [
+    Gr.circle (30pt, 40pt) 20pt |> fill Color.blue;
+    Gr.rectangle (30pt, 40pt) (90pt, 80pt) |> stroke 2pt Color.red;
+    Gr.rectangle-round 4pt (70pt, 90pt) (120pt, 10pt) |> stroke 5pt Color.orange;
+  ] |> frame 1pt (Color.gray 0.8));
+  ```)<%
+  +fig-center(from-bbox-graphics [
+    Gr.circle (30pt, 40pt) 20pt |> fill Color.blue;
+    Gr.rectangle (30pt, 40pt) (90pt, 80pt) |> stroke 2pt Color.red;
+    Gr.rectangle-round 4pt (70pt, 90pt) (120pt, 10pt) |> stroke 5pt Color.orange;
+  ] |> frame 1pt (Color.gray 0.8));
+  >%
+
+  +p{
+    てきすと や すうしき を はじめ とした いんらいん てきすと や ぶろっく てきすと も `figbox` がた に へんかん する こと ができます。
+  }
+
+  +example(```
+  +fig-center(textbox {The quick brown fox jumps over the lazy dog.});
+  +fig-center(textbox {${x = \frac{-b\pm \sqrt{b^2 - 4ac}}{2a}}});
+  +fig-center(textbox-with-width 100pt
+    {The quick brown fox jumps over the lazy dog.});
+  +fig-center(textblock 150pt '<
+    +p{The quick brown fox jumps over the lazy dog.}
+    +p{The quick brown fox jumps over the lazy dog.}
+  >);
+  ```)<%
+  +fig-center(textbox {The quick brown fox jumps over the lazy dog.});
+  +fig-center(textbox {${x = \frac{-b\pm \sqrt{b^2 - 4ac}}{2a}}});
+  +fig-center(textbox-with-width 100pt
+    {The quick brown fox jumps over the lazy dog.});
+  +fig-center(textblock 150pt '<
+    +p{The quick brown fox jumps over the lazy dog.}
+    +p{The quick brown fox jumps over the lazy dog.}
+  >);
+  >%
+
+  +p{
+    いか は `easytable` ぱっけーじ をもちいて くんだ ひょう を ちゅうおう ぞろえ に する れい です。
+  }
+
+  +example(```
+  +fig-center(textbox {\easytable[l; c; r;]{
+    | header1    | header2      | header3
+    | align left | align center | align right
+    | a          | b            | c
+    | }});
+  ```)<%
+  +fig-center(textbox {\easytable[l; c; r;]{
+    | header1    | header2      | header3
+    | align left | align center | align right
+    | a          | b            | c
+    | }});
+  >%
+
+>%
+>

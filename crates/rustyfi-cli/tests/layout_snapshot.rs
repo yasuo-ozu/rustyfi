@@ -351,6 +351,7 @@ fn write_box(out: &mut String, indent: usize, dx: Length, bx: &PureHorzBox) {
             height,
             depth,
             block,
+            ..
         } => {
             let _ = writeln!(
                 out,

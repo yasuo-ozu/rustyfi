@@ -1,0 +1,166 @@
+@require: stdjabook
+@require: code
+@require: math
+@require: color
+@require: hdecoset
+@require: vdecoset
+@require: base/length
+@require: enumitem/enumitem
+
+open EnumitemAlias
+
+% custom commands
+
+let-block ctx +ctx ctxflst bt = read-block (ctxflst |> List.fold-left (fun ctx ctxf -> ctxf ctx) ctx) bt
+
+let document record bt = StdJaBook.document record '<%
+  +ctx[fun ctx -> (
+    let fsize = get-font-size ctx in
+    ctx |> set-paragraph-margin fsize fsize
+        |> set-leading (fsize *' 1.6)
+        |> set-code-text-command (command \code)
+  )](bt);
+  >%
+
+let-inline ctx \cjk it =
+  let ctx = ctx |> set-dominant-narrow-script Kana in
+  read-inline ctx it
+
+let font-ratio-latin = 1.
+let font-ratio-cjk = 0.88
+let font-latin-italic = (`Junicode-it`, font-ratio-latin, 0.)
+let font-latin-bold   = (`Junicode-b` , font-ratio-latin, 0.)
+let font-cjk-gothic   = (`ipaexg`    , font-ratio-cjk  , 0.)
+let-inline ctx \emph inner =
+  let ctx-bf =
+    ctx |> set-font Latin font-latin-italic
+        |> set-font HanIdeographic font-cjk-gothic
+        |> set-font Kana font-cjk-gothic
+  in
+    read-inline ctx-bf inner
+
+let-block +code code =
+  '<+ctx[set-font-size 10pt; set-paragraph-margin 6pt 6pt; set-leading 16pt;]<+Code.code(code);>>
+
+let-block ctx +block-frame bt =
+  let decoset = VDecoSet.simple-frame 0.5pt Color.black Color.white in
+  block-frame-breakable ctx (7pt, 7pt, 10pt, 10pt) decoset (fun ctx -> read-block ctx bt)
+
+let-block +example str bt =
+  '<%
+    +code(str);
+    +block-frame(bt);
+  >%
+
+let-block +dd dt it-dd = '< +ditem?:(fun it -> {\emph{#it;}}){#dt;}{#it-dd;}<> >
+
+in
+
+document (|
+  title = {パア トメぬ};
+  author = {てすと};
+  show-title = true;
+  show-toc = false;
+|) '<%
+
++section{ぎぬぎぎぬぎ、ぎぬぎてぬ ぎぬぞぐべぞ}<
+
+  +p{
+    ぎぬぎてぬ ぎぬぞぐべぞ ぬぬぼぞ ぎぎびぞぞぞぬ ぎぬぎてめ ぼぬぬぺぬぞ ぎぬぎめぎぶぐぬ ぎぬぎてめ ぼぬぞぎぬぐぞ ぎぬぎぐぬ ぬぬぎぞぬめぎぬ ぐぎぬぞぐぬぎぬぱ。
+  }
+
+  +example(```
+    +description<
+      +ditem{用語1}{ここに用語1の説明が入る。}<>
+      +ditem{用語2}{
+        ここに用語2の説明が入る。用語2の説明は少し長い。
+        用語2の説明は少し長い。用語2の説明は少し長い。用語2の説明は少し長い。
+      }<>
+      +ditem{ちょっと長めの用語3}{
+        ここに用語3の説明が入る。用語3の説明は少し長い。
+        用語3の説明は少し長い。用語3の説明は少し長い。用語3の説明は少し長い。
+      }<
+        +pn{
+        複数行にまたがる説明を入れることもできる。
+        }
+      >
+    >
+  ```)<
+    +description<
+      +ditem{ぎぬぎてび}{ぐぬぺぞぬ ぎぬぎてび ぬぞ ぎぬぎめぎぶぐぬ ぬぬぐぬぬぞ。}<>
+      +ditem{ぎぬぎてぬ}{
+        ぐぬぺぞぬ ぎぬぎてぬ ぬぞ ぎぬぎめぎぶぐぬ ぬぬぐぬぬぞ。ぎぬぎてぬ ぬぞ ぎぬぎめぎぶぐぬ ぐぞ ぎぎびぞ ぬぎぎぬ。
+        ぎぬぎてぬ ぬぞ ぎぬぎめぎぶぐぬ ぐぞ ぎぎびぞ ぬぎぎぬ。ぎぬぎてぬ ぬぞ ぎぬぎめぎぶぐぬ ぐぞ ぎぎびぞ ぬぎぎぬ。ぎぬぎてぬ ぬぞ ぎぬぎめぎぶぐぬ ぐぞ ぎぎびぞ ぬぎぎぬ。
+      }<>
+      +ditem{ぎぎびぞ ぬぎぎめ ぬぞ ぎぬぎてめ}{
+        ぐぬぺぞぬ ぎぬぎてめ ぬぞ ぎぬぎめぎぶぐぬ ぬぬぐぬぬぞ。ぎぬぎてめ ぬぞ ぎぬぎめぎぶぐぬ ぐぞ ぎぎびぞ ぬぎぎぬ。
+        ぎぬぎてめ ぬぞ ぎぬぎめぎぶぐぬ ぐぞ ぎぎびぞ ぬぎぎぬ。ぎぬぎてめ ぬぞ ぎぬぎめぎぶぐぬ ぐぞ ぎぎびぞ ぬぎぎぬ。ぎぬぎてめ ぬぞ ぎぬぎめぎぶぐぬ ぐぞ ぎぎびぞ ぬぎぎぬ。
+      }<
+        +pn{
+        ぎぎびぞぞぬ ぬぬぱぬぬぐぐ ぎぬぎめぎぶぐぬ ぐぎぬぞぐぬぎぬぱ ぎおぐ。
+        }
+      >
+    >
+  >
+
+  +p{
+    `+ditem` ぬぞぎぬぞぬぬぞぬ ぎぬぎぶぬぎぬぱ びぎぜぬぬ、べぬめて ぼぬぎぞぬぞぬ ぬぞ ぎぬぎめぎぶぐぬ ぎおぐ。
+    ぐぞぺ ぐぬぞ べぬめて ぎぬぎぎぬぎ ぎぬぎぐぞ ぎぬぎぴぐぬぎぬ ぬぱぬぬぐぐ。
+  }
+
+  +example(```
+    +description<
+      +ditem?:(fun it -> {\emph{#it;}}){用語1}{ここに用語1の説明が入る。}<>
+      +ditem?:(fun it -> {\emph{#it;}}){ちょっと長めの用語3}{
+        ここに用語3の説明が入る。用語3の説明は少し長い。
+        用語3の説明は少し長い。用語3の説明は少し長い。用語3の説明は少し長い。
+      }<>
+    >
+  ```)<
+    +description<
+      +ditem?:(fun it -> {\emph{#it;}}){ぎぬぎてび}{ぐぬぺぞぬ ぎぬぎてび ぬぞ ぎぬぎめぎぶぐぬ ぬぬぐぬぬぞ。}<>
+      +ditem?:(fun it -> {\emph{#it;}}){ぎぎびぞ ぬぎぎめ ぬぞ ぎぬぎてめ}{
+        ぐぬぺぞぬ ぎぬぎてめ ぬぞ ぎぬぎめぎぶぐぬ ぬぬぐぬぬぞ。ぎぬぎてめ ぬぞ ぎぬぎめぎぶぐぬ ぐぞ ぎぎびぞ ぬぎぎぬ。
+        ぎぬぎてめ ぬぞ ぎぬぎめぎぶぐぬ ぐぞ ぎぎびぞ ぬぎぎぬ。ぎぬぎてめ ぬぞ ぎぬぎめぎぶぐぬ ぐぞ ぎぎびぞ ぬぎぎぬ。ぎぬぎてめ ぬぞ ぎぬぎめぎぶぐぬ ぐぞ ぎぎびぞ ぬぎぎぬ。
+      }<>
+    >
+  >
+
+  +p{
+    ぶぎぎぞぬぷこぬぬぞ `+dd` こまんぬ ぎぬぎてぃぎぬぞ ぎぬぎぬぎぬぐぞ、
+    `+ditem` ぐぎぬぺぞぬぶ びぎぜぬぞ ぎぎぬぞ ぎぬぎてぃぎぬ ぎぞぞぎぬぐぞ ぎおぐ。
+  }
+
+  +code(```
+  let-block +dd dt it-dd = '< +ditem?:(fun it -> {\emph{#it;}}){#dt;}{#it-dd;}<> >
+  ```);
+
+  +example(```
+    +description<
+      +dd{用語1}{ここに用語1の説明が入る。}
+      +dd{用語2}{
+        ここに用語2の説明が入る。用語2の説明は少し長い。
+        用語2の説明は少し長い。用語2の説明は少し長い。用語2の説明は少し長い。
+      }
+      +dd{ちょっと長めの用語3}{
+        ここに用語3の説明が入る。用語3の説明は少し長い。
+        用語3の説明は少し長い。用語3の説明は少し長い。用語3の説明は少し長い。
+      }
+    >
+  ```)<
+    +description<
+      +dd{用語1}{ここに用語1の説明が入る。}
+      +dd{用語2}{
+        ここに用語2の説明が入る。用語2の説明は少し長い。
+        用語2の説明は少し長い。用語2の説明は少し長い。用語2の説明は少し長い。
+      }
+      +dd{ちょっと長めの用語3}{
+        ここに用語3の説明が入る。用語3の説明は少し長い。
+        用語3の説明は少し長い。用語3の説明は少し長い。用語3の説明は少し長い。
+      }
+    >
+  >
+
+>
+
+>%

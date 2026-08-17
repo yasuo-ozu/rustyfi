@@ -116,13 +116,16 @@ fn get_initial_context_text_width_matches_the_given_length() {
 }
 
 #[test]
-fn get_initial_context_defaults_paragraph_margins_to_eighteen_points() {
-    // Same default as v0.0.6's `get_pdf_mode_initial_context`
-    // (primitives.cppo.ml:514-515).
+fn get_initial_context_defaults_paragraph_margins_to_nine_points() {
+    // The default paragraph margin is `font_size * 0.75` = 9pt at the 12pt
+    // initial size — the value measured from SATySFi's actual rendered output
+    // (commit "correct paragraph margin (9pt)"), which the layout-fidelity
+    // corpus depends on (e.g. enumitem matches SATySFi's page count exactly
+    // only at 9pt). Updated from the earlier 18pt assertion accordingly.
     match run(&initial_ctx(100.0)) {
         Value::Context(ctx) => {
-            assert_eq!(ctx.paragraph_top, Length::pt(18.0));
-            assert_eq!(ctx.paragraph_bottom, Length::pt(18.0));
+            assert_eq!(ctx.paragraph_top, Length::pt(9.0));
+            assert_eq!(ctx.paragraph_bottom, Length::pt(9.0));
         }
         other => panic!("expected a context, got {other:?}"),
     }

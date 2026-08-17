@@ -149,6 +149,14 @@ pub fn chop_page(
     let mut prev_depth = Length::ZERO;
     let mut pending_skip = Length::ZERO;
     let mut placed_real_line = false;
+    // Distinct from `placed_real_line`: true once ANY line box has been placed,
+    // including a zero-extent one (a slydifi frame's `bb-gr` background line).
+    // `clear-page` uses THIS (not `placed_real_line`) to decide a page is
+    // non-empty, so a frame whose body is empty/all-graphics (section/title
+    // slides) still ends its page — while `placed_real_line` stays gated on
+    // real height so an overflowing frame BODY isn't forced to roll off a page
+    // whose only prior line was the zero-extent background (keeps slides atomic).
+    let mut placed_any_line = false;
     let mut idx = 0;
 
     while idx < vboxes.len() {
@@ -168,10 +176,10 @@ pub fn chop_page(
             }
             VertBox::ClearPage => {
                 idx += 1;
-                if placed_real_line {
+                if placed_any_line {
                     break; // ends the page right here; the marker is consumed
                 }
-                // Redundant: nothing real placed on this page yet — swallow it.
+                // Redundant: nothing placed on this page yet — swallow it.
             }
             VertBox::HookPageBreak(id) => {
                 let pos = prev_baseline.unwrap_or(y0);
@@ -276,7 +284,13 @@ pub fn chop_page(
                 pending_skip = Length::ZERO;
                 prev_baseline = Some(baseline);
                 prev_depth = *depth;
-                placed_real_line = true;
+                placed_any_line = true;
+                // Only a line with real vertical extent gates the overflow-roll
+                // (a zero-extent frame-background line must not force the body
+                // that follows to roll — see `placed_any_line`).
+                if *h + *depth > Length::ZERO {
+                    placed_real_line = true;
+                }
                 lines.push(PlacedLine {
                     x: x0,
                     baseline_y: baseline,

@@ -2,7 +2,7 @@
   "latexcmds": {
     "pages": 11,
     "words": 999,
-    "lines": 291,
+    "lines": 292,
     "left_margin": 80.0,
     "text_match": 0.8046,
     "width_p95_pt": 0.944,
@@ -55,15 +55,15 @@
     "page_gap": 2
   },
   "slydifi": {
-    "pages": 31,
-    "words": 845,
-    "lines": 247,
-    "left_margin": 20.0,
-    "text_match": 0.6909,
-    "width_p95_pt": 13.18,
+    "pages": 30,
+    "words": 950,
+    "lines": 311,
+    "left_margin": 10.0,
+    "text_match": 0.7408,
+    "width_p95_pt": 12.52,
     "covers": "slides: frames, layout templates, overlays, themed decorations",
     "upstream_pages": 30,
-    "page_gap": 1
+    "page_gap": 0
   },
   "gakushin": {
     "pages": 5,

@@ -269,6 +269,7 @@ fn a_start_line_end_fragment_fires_decos_once_with_the_padded_extent_and_zero_de
                 height: Length::pt(8.0),
                 depth: Length::pt(2.0),
                 elems: Vec::new(),
+                origin_independent: false,
             },
         )],
     };

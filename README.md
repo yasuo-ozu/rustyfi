@@ -18,7 +18,7 @@ loading** — `@import:`/`@require:` resolve, dedupe, and topologically order
 libraries via the `rustyfi-loader` crate (safegraph-backed):
 
 ```console
-$ cargo run -p rustyfi-cli -- crates/rustyfi-cli/tests/fixtures/minimal.saty -o out.pdf
+$ cargo run -p rustyfi-cli -- crates/rustyfi-cli/tests/fixtures/minimal.saty -o target/out.pdf
 ```
 
 What works:

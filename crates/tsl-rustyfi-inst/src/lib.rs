@@ -91,4 +91,15 @@ impl catasys_exhaust::PatSig for RustyfiPatSig {
         let _ = head;
         todo!("look up the complete variant set for a rustyfi sum type")
     }
+
+    /// The type heads of `c`'s fields, left to right; the returned length must
+    /// equal `arity(c)`. Added to `PatSig` upstream (it is what lets the
+    /// completeness test recurse into the columns a constructor exposes), so
+    /// it is stubbed here like its siblings — this whole impl is scaffolding
+    /// for the not-yet-wired `catasys-exhaust` adoption, and wiring it means
+    /// answering all three from the rustyfi type environment at once.
+    fn field_tys(&self, c: &Self::Ctor) -> Vec<Self::TyTag> {
+        let _ = c;
+        todo!("look up a rustyfi variant constructor's field type heads")
+    }
 }

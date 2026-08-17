@@ -19,7 +19,11 @@ license = "LGPL-3.0"
 authors = ["Yasuo Ozu <yasuo@ozu.email>"]
 
 [workspace.dependencies]
-syan = { path = "../syan2-ergo/core" }
+# syan from the vendored submodule (vendor/syan2, tracking main) rather than a
+# sibling checkout. A path dep outside the repo is why an upstream change to
+# catasys silently broke tsl-rustyfi-inst; pinning it here makes clones
+# reproducible and upgrades deliberate.
+syan = { path = "vendor/syan2/core" }
 catasys-infer = { path = "../taipu/crates/catasys-infer" }
 catasys-exhaust = { path = "../taipu/crates/catasys-exhaust" }
 tsl-rustyfi-inst = { path = "crates/tsl-rustyfi-inst" }
@@ -57,3 +61,50 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg"]
 # rustyfi-lang (parse side) and rustyfi-pdf (re-emit side); rustyfi-backend stays
 # lopdf-free (neutral ImportedObjects/ObjRepr types only).
 lopdf = "0.36"
+
+# ---------------------------------------------------------------------------
+# Debug info: "limited" (= `debug = 1`), not cargo's `debug = 2` default.
+#
+# `debug = 2` (`-C debuginfo=full`) emits complete DWARF type descriptions for
+# every generic instantiation. `rustyfi-syntax` derives syan `Parse`/`Unparse`
+# across 173 types — 2242 impls in the expanded crate — and full debuginfo on
+# that is catastrophic. Measured, incrementally, after touching one file:
+#
+#   ONE crate, incremental (rustyfi-syntax, after touching one file):
+#            cargo check            14s          (so it is NOT typeck or macros)
+#   debug =  2 / "full"         18m 55s   3.93 GB rlib
+#   debug =  1 / "limited"       2m 54s   2.35 GB
+#   debug = "line-tables-only"   3m 30s   1.23 GB
+#
+#   WHOLE workspace, clean `cargo test` (the number that actually matters —
+#   the per-crate figures above hide the cost across the dependency graph):
+#   debug =  1 / "limited"          955s    138 GB target/debug   <- current
+#   debug = "line-tables-only"      400s     43 GB
+#
+# So `1` is 2.4x slower and 3.2x larger than `line-tables-only` in practice.
+# It is set here because it was asked for; `line-tables-only` is the cheaper
+# choice if the disk matters more than function-parameter type info. 138 GB is
+# enough to refill this machine's disk on its own — a link failed with SIGBUS
+# (`ld returned 135`) at 98% full while measuring this.
+#
+# A 7000-line crate was producing a 3.93 GB rlib — the largest artifact in the
+# workspace by ~4x, in a target/debug that had reached 71 GB. That is also the
+# likely root of this project's recurring disk exhaustion, since every agent
+# worktree carries its own copy.
+#
+# On rustc 1.90 the numeric levels are 0=none, 1=limited, 2=full, with
+# `line-tables-only` a separate level BETWEEN 0 and 1 — cheaper still (half the
+# rlib) but carrying nothing beyond the line table. `1`/"limited" keeps type
+# information for functions and their parameters, so a backtrace or profiler
+# shows more than file:line, at ~2x the artifact size. That trade is the point
+# of choosing it here.
+#
+# If you need to step through code and inspect locals, override per session:
+#
+#   CARGO_PROFILE_DEV_DEBUG=full cargo build -p <crate>
+#
+# `profile.test` inherits this, so `cargo test` gets it too — which also
+# retires the ad-hoc `CARGO_PROFILE_TEST_DEBUG=0` that was being passed by hand
+# to keep the disk from filling.
+[profile.dev]
+debug = 1

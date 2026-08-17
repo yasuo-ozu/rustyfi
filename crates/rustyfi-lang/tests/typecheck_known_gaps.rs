@@ -1,4 +1,4 @@
-//! The inputs the whole-corpus golden harness cannot typecheck, pinned here
+//! The inputs the whole-corpus walk cannot typecheck, pinned here
 //! individually with the REASON each one fails.
 //!
 //! `typecheck_corpus.rs` walks every fixture and bundled package and records
@@ -11,9 +11,9 @@
 //! So those eleven inputs are asserted here instead, each with its source
 //! embedded via `include_str!` (the fixture files stay where they are: all but
 //! one are live fixtures for other tests, `envelopes/v01-mini.satyh` alone
-//! being referenced by fifteen), and the golden walk skips them. What remains
-//! `typecheck_corpus.rs`'s explicit case list is then exactly "everything that should
-//! typecheck, does".
+//! being referenced by fifteen), and the corpus walk skips them. What remains in
+//! `typecheck_corpus.rs`'s explicit case list is then exactly "everything that
+//! should typecheck, does".
 //!
 //! Five remain, and none is a port bug. Four are simply not standalone entry
 //! documents: the corpus walk feeds every source file in as an entry, including
@@ -359,7 +359,10 @@ fn check_known_gaps() {
             gap.path
         );
 
-        let tmp = TempEntry::beside(&original, gap.src);
+        // The fixture itself: `gap.src` is `include_str!` of this very path, so
+        // writing it back out beside the original was a no-op that only created
+        // debris to sweep and ignore. The literal stays as the readable record.
+        let entry = original.clone();
 
         // The two groups are told apart by WHERE they fail, not by a label we
         // could get wrong:
@@ -372,8 +375,8 @@ fn check_known_gaps() {
         // Checking both halves is what makes a mislabelled case fail. Asserting
         // only "it errors somehow" would not: every one of these errors under
         // some version, so a swapped label would sail through.
-        let as_006 = typecheck_source(&tmp.0, RustyfiVersion::V0_0_6);
-        let as_01 = typecheck_source(&tmp.0, RustyfiVersion::V0_1);
+        let as_006 = typecheck_source(&entry, RustyfiVersion::V0_0_6);
+        let as_01 = typecheck_source(&entry, RustyfiVersion::V0_1);
 
         // Both groups error under BOTH versions, so "it errors" proves nothing.
         // What separates them is HOW the 0.1 side fails: a non-document is

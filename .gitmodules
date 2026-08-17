@@ -1,0 +1,4 @@
+[submodule "vendor/syan2"]
+	path = vendor/syan2
+	url = /home/yasuo/ghq/github.com/yasuo-ozu/syan2
+	branch = api-ergonomics

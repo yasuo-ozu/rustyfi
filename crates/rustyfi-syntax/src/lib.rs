@@ -5,6 +5,8 @@
 
 pub mod cst;
 pub mod cst_v1;
+#[macro_use]
+mod leaf_macro;
 pub mod leaf;
 pub mod lexer;
 pub mod span;

@@ -49,65 +49,6 @@ fn lib_root() -> PathBuf {
     repo_root().join("lib-rustyfi")
 }
 
-/// A uniquely-named copy of an embedded document source, written BESIDE the
-/// fixture it came from and removed on drop.
-///
-/// Beside, not in a temp dir: the loader resolves a relative `@import:` against
-/// the entry's own directory, so a document that imports a sibling only
-/// resolves if its stand-in lives in the same place. Gitignored
-/// (`rustyfi-golden-doc-*`), and swept at test start in case an abort skipped a
-/// `Drop`, so a crash never leaves a file in the corpus other tests walk.
-struct TempEntryBeside(PathBuf);
-
-impl TempEntryBeside {
-    fn new(original: &Path, src: &str) -> TempEntryBeside {
-        static COUNTER: AtomicU64 = AtomicU64::new(0);
-        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let ext = original
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("saty");
-        let path = original.with_file_name(format!(
-            "rustyfi-golden-doc-{}-{}.{ext}",
-            std::process::id(),
-            n
-        ));
-        fs::write(&path, src).expect("write the beside-fixture entry");
-        TempEntryBeside(path)
-    }
-}
-
-/// Remove any `rustyfi-golden-doc-*` left behind by a run that aborted before
-/// `Drop` could fire. These live among real fixtures, and a leftover would be
-/// picked up as a corpus file by anything that walks that directory.
-fn sweep_stale_beside_files(root: &Path) {
-    let mut dirs: Vec<PathBuf> = DOCUMENTS
-        .iter()
-        .filter_map(|d| root.join(d.path).parent().map(Path::to_path_buf))
-        .collect();
-    dirs.sort();
-    dirs.dedup();
-    for dir in dirs {
-        let Ok(entries) = fs::read_dir(&dir) else {
-            continue;
-        };
-        for e in entries.flatten() {
-            if e.file_name()
-                .to_str()
-                .is_some_and(|n| n.starts_with("rustyfi-golden-doc-"))
-            {
-                let _ = fs::remove_file(e.path());
-            }
-        }
-    }
-}
-
-impl Drop for TempEntryBeside {
-    fn drop(&mut self) {
-        let _ = fs::remove_file(&self.0);
-    }
-}
-
 /// A uniquely-named temp `.saty` entry file, cleaned up on drop — used only
 /// for the synthetic `@require: <pkg> in ()` package-probe entries.
 struct TempDoc(PathBuf);
@@ -637,12 +578,16 @@ fn check_all(what: &str, run: impl FnOnce() -> Vec<String> + Send + 'static) {
 fn every_corpus_document_typechecks() {
     check_all("corpus document(s)", || {
         let root = repo_root();
-        sweep_stale_beside_files(&root);
         let mut failures = Vec::new();
         for doc in DOCUMENTS {
-            let original = root.join(doc.path);
-            let tmp = TempEntryBeside::new(&original, doc.src);
-            match typecheck_entry(&tmp.0) {
+            // Load the fixture itself. `doc.src` is `include_str!` of this very
+            // path, so it IS the file's bytes — writing it back out to a
+            // stand-in beside the original and loading that was a provable
+            // no-op, and it cost a sweep, a Drop, and two `.gitignore` rules
+            // for debris an aborted run could leave among real fixtures. The
+            // literal stays because it is what makes each case readable here,
+            // and `include_str!` fails the build if the path stops existing.
+            match typecheck_entry(&root.join(doc.path)) {
                 Ok((version, warns)) if version == doc.version && warns.is_empty() => {}
                 Ok((version, warns)) => failures.push(format!(
                     "{}: expected {:?} with no warnings, got {version:?} with {warns:?}",

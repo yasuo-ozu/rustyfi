@@ -41,6 +41,18 @@ and `width_p95_pt` are the strong fidelity floors we assert hard; pagination and
 line counts are the known-divergent metrics we merely guard against getting worse
 (and report loudly). Re-baseline with `--update` after an intentional change.
 
+Output: each run leaves the pair it compared beside the package it came from,
+
+  scripts/layout_fidelity_corpus/<doc>/<doc>.port.pdf      the port's render
+  scripts/layout_fidelity_corpus/<doc>/<doc>.satysfi.pdf   the reference it was
+                                                           compared against
+
+so when a metric moves you can open the two PDFs the number came from instead of
+re-running to reproduce them. Both suffixes are gitignored; the vendored
+reference itself keeps its own upstream name (`doc.ref`) and stays tracked, and
+`<doc>.satysfi.pdf` is a copy of it under the predictable name. `--out-dir`
+collects every doc into one directory instead; `--no-persist` writes nothing.
+
 Usage:
   scripts/layout_fidelity.py [--doc NAME]... [--update] [--bin PATH]
       [--keep-going] [--verbose]
@@ -583,9 +595,16 @@ def main() -> int:
         "--out-dir",
         type=Path,
         default=None,
-        help="persist the generated PDFs here: <doc>.port.pdf (the port's render) and, "
-        "when a reference exists, <doc>.satysfi.pdf (the original SATySFi render). "
-        "Otherwise PDFs are built in a temp dir and discarded.",
+        help="write every doc's PDFs into this ONE directory instead of each doc's own "
+        "corpus directory. By default each pair lands beside the package it came from, "
+        "in scripts/layout_fidelity_corpus/<doc>/ — <doc>.port.pdf (the port's render) "
+        "and, when a reference exists, <doc>.satysfi.pdf (the reference it was compared "
+        "against). Both suffixes are gitignored.",
+    )
+    ap.add_argument(
+        "--no-persist",
+        action="store_true",
+        help="build in a temp dir and discard, writing no PDFs anywhere.",
     )
     ap.add_argument("--verbose", action="store_true")
     args = ap.parse_args()
@@ -661,11 +680,23 @@ def main() -> int:
                     continue
                 return 1
 
-            if args.out_dir:
-                args.out_dir.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(out_pdf, args.out_dir / f"{doc.name}.port.pdf")
+            # Persist both renders next to the package they came from, so the
+            # pair a failure refers to is sitting where you would look for it
+            # rather than in a temp dir that is already gone. `--out-dir`
+            # collects every doc into one directory instead; `--no-persist`
+            # keeps the old discard-everything behaviour.
+            #
+            # Both suffixes are gitignored, and deliberately so: `.satysfi.pdf`
+            # is a COPY of the reference (which lives at doc.ref under its own
+            # upstream name, e.g. latexcmds/doc/latexcmds-doc.pdf, and stays
+            # tracked). Copying it under the predictable name is what makes the
+            # pair directly diffable — `<doc>.port.pdf` vs `<doc>.satysfi.pdf`.
+            if not args.no_persist:
+                dest = args.out_dir if args.out_dir else (CORPUS / doc.name)
+                dest.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(out_pdf, dest / f"{doc.name}.port.pdf")
                 if ref_pdf is not None:
-                    shutil.copy2(ref_pdf, args.out_dir / f"{doc.name}.satysfi.pdf")
+                    shutil.copy2(ref_pdf, dest / f"{doc.name}.satysfi.pdf")
 
             m = compare(port_pages, ref_pages)
             entry = m.to_json() | {"covers": doc.covers}

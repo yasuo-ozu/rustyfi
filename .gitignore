@@ -1,36 +1,11 @@
 /target
-*.pdf
-# ...except the vendored fidelity corpus's UPSTREAM-BUILT reference PDFs. They
-# are the fixed point the whole layout comparison rests on — without them a
-# fresh clone has a corpus it cannot compare against — so they are committed
-# deliberately, unlike every other PDF in the tree (which is build output).
-!/scripts/layout_fidelity_corpus/**/*.pdf
-/.claude/
+/scripts/layout_fidelity_corpus/*/*.port.pdf
+/scripts/layout_fidelity_corpus/*/*.satysfi.pdf
+
+# ~175 MB of pinned font archives cached by scripts/download-fonts.sh.
 /scripts/.fontcache/
-# SATySFi cross-reference cache written next to a built .saty
+
+# SATySFi cross-reference cache written next to a built .saty.
 *.satysfi-aux
 
-# ---- build outputs that regenerate ----------------------------------------
-# Renders produced by the corpus/fidelity/real-world scripts. `*.pdf` above
-# already covers the files; these name the directories so an accidental
-# `git add -f` on one is at least deliberate.
-/corpus-pdfs/
-/realworld-pdfs/*.pdf
-# Nix build symlinks (`nix build`, and `nix develop` shells that create one).
-/result
-/result-*
-# Python bytecode from importing scripts/layout_fidelity.py as a module (the
-# harness is imported by ad-hoc analysis scripts as well as run directly).
-# Temp entry files `typecheck_known_gaps.rs` writes beside a fixture (it sweeps
-# them itself, but an abort skips the sweep).
-rustyfi-known-gap-*
 __pycache__/
-*.py[cod]
-# ---- editor / OS noise ------------------------------------------------------
-.DS_Store
-*.swp
-*~
-
-# Stand-in entries written beside fixtures by typecheck_golden.rs (swept at
-# test start; ignored so an aborted run never leaves one tracked).
-rustyfi-golden-doc-*

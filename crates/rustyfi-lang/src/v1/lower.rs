@@ -1461,17 +1461,6 @@ fn lower_type_atom(
     })
 }
 
-/// Any reasonable span off a [`ast_v1::TypeAtom`] — used only to point the
-/// arity-≥2 [`LowerError`] at the offending extra argument.
-fn type_atom_span(a: &ast_v1::TypeAtom) -> Span {
-    match a {
-        ast_v1::TypeAtom::Paren { paren, .. } => paren.open.0,
-        ast_v1::TypeAtom::Record { rec, .. } => rec.open.0,
-        ast_v1::TypeAtom::Var(v) => v.span,
-        ast_v1::TypeAtom::LongName(t) => t.span,
-        ast_v1::TypeAtom::Name(n) => n.span,
-    }
-}
 
 fn plain_horz(name: &AnyHorzCmdTok) -> Result<HorzCmdTok, LowerError> {
     match name {

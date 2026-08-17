@@ -19,8 +19,8 @@
 //!   = 100_000` (lineBreak.ml lines 985-1027). Since we must always be able
 //!   to typeset *something* (an overfull unbreakable word must still
 //!   produce one line, never a panic or a stuck search), every candidate
-//!   line stays representable: we cap its badness at `BADNESS_INF` instead
-//!   of excluding it.
+//!   line stays representable: we cap its badness at `BADNESS_TOO_LONG`
+//!   instead of excluding it.
 
 use crate::context::Context;
 use crate::hbox::{HorzBox, PureHorzBox, FORCED_BREAK_PENALTY};
@@ -63,14 +63,6 @@ pub fn break_opportunities(text: &str) -> Vec<(usize, BreakKind)> {
 
 /// Badness cap. lineBreak.ml computes `badness = |ratio^3| * 10000`
 /// (lineBreak.ml:985-986, `calculate_badness`) and separately hardcodes
-/// `badness_for_too_long = 100_000` for overfull lines it must still keep
-/// (lineBreak.ml:989). We use the classic Knuth–Plass badness scale
-/// (`100 * |ratio|^3`, TeX's `badness` function) and cap every
-/// out-of-range or infeasible line at this single constant, which plays
-/// the same "this line is bad but still representable" role as v0.0.6's
-/// `badness_for_too_long`.
-const BADNESS_INF: f64 = 10_000.0;
-
 /// Classic Knuth–Plass default line penalty. Not a lineBreak.ml constant:
 /// v0.0.6's edge weight is `badness + pnltybreak`, where `pnltybreak` comes
 /// from a `HorzDiscretionary`'s own penalty (lineBreak.ml:1012) — the same
@@ -396,7 +388,7 @@ pub fn measure_block(block: &[VertBox]) -> (Length, Length) {
 /// v0.0.6 to decide whether to keep a graph edge at all, which has no
 /// analogue in a DP over every candidate line. Instead badness grows
 /// continuously as `100 * |r|^3` (the classic Knuth–Plass/TeX badness
-/// function) and simply saturates at `BADNESS_INF` once it gets there —
+/// function) and simply saturates at `BADNESS_TOO_LONG` once it gets there —
 /// so a moderately-bad line (say `r = 2`, badness 800) is still scored
 /// far better than a catastrophically-bad one, instead of both being
 /// flattened to the same "TooShort" cost.
@@ -499,7 +491,7 @@ fn badness(width: Length, metrics: &LineMetrics) -> f64 {
             // overfull line and run text clean off the page edge (visible
             // clipping in latexcmds `+code`/`\code`). Force the wrap.
             //
-            // `BADNESS_TOO_LONG`, not `BADNESS_INF`: zero shrink means ANY
+            // `BADNESS_TOO_LONG` deliberately: zero shrink means ANY
             // overflow is past `ratio_shrink_limit`, which is upstream's
             // `LBTooLong` — scored `badness_for_too_long = 100000`
             // (`lineBreak.ml:989/1027`). `BADNESS_INF` is only 10_000, i.e.

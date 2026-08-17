@@ -228,12 +228,26 @@ fn reject_if_forked(
 ///
 /// X3a invariant: `adapt_export_type` only ever returns a type reachable
 /// from `ty` by a **pure relabel with no value coercion** — any leaf that
+// UNWIRED, and worth knowing why before relying on the doc comments below.
+//
+// These five functions are a `MonoType`-level cross-version boundary check.
+// The live path does NOT use them: it is name-based, through
+// `reject_type_names` / `relabel_or_reject_name`, driven by
+// `typecheck::forked_type_names()`. So `adapt_export_type`'s claim to be "the
+// soundness backbone" describes a design that is written but not in force.
+//
+// Kept because the structural check is strictly more precise than the
+// name-based one (it can see a forked leaf nested inside a compound rather
+// than matching a spelling) and is the obvious thing to wire when the boundary
+// needs to tighten. Delete them if that is not the plan — dead code cannot
+// make anything sound.
 /// would require a runtime value adapter is an `Err`. This is the soundness
 /// backbone (X3.6/S1). Because the sole accepted case (`math`) is already
 /// `MathText` <-> `MathText` at the `MonoType` level (`types.rs` draws no
 /// `math`/`math-text` distinction at all — see `BaseType::MathText`'s doc
 /// comment), the `Ok` branch is simply `ty.clone()`: the "relabel" only ever
 /// shows up at the surface-annotation level (`adapt_export_annotation`).
+#[allow(dead_code)]
 pub fn adapt_export_type(
     ty: &PolyType,
     from: RustyfiVersion,
@@ -243,6 +257,7 @@ pub fn adapt_export_type(
     Ok(ty.clone())
 }
 
+#[allow(dead_code)]
 fn check_mono_type(
     ty: &MonoType,
     from: RustyfiVersion,
@@ -279,6 +294,7 @@ fn check_mono_type(
     }
 }
 
+#[allow(dead_code)]
 fn check_row(row: &Row, from: RustyfiVersion, to: RustyfiVersion) -> Result<(), BoundaryError> {
     match row {
         Row::Empty | Row::Var(_) => Ok(()),
@@ -289,6 +305,7 @@ fn check_row(row: &Row, from: RustyfiVersion, to: RustyfiVersion) -> Result<(), 
     }
 }
 
+#[allow(dead_code)]
 fn check_cmd_arg(
     c: &CmdArgType,
     from: RustyfiVersion,
@@ -313,6 +330,7 @@ fn check_cmd_arg(
 /// to `math-text`, and reject if any OTHER forked leaf (`reject_type_names`)
 /// appears anywhere in the structure (S3: a forked leaf nested in a
 /// compound rejects the WHOLE annotation, no partial acceptance).
+#[allow(dead_code)]
 pub fn adapt_export_annotation(
     ann: &TypeExpr,
     from: RustyfiVersion,

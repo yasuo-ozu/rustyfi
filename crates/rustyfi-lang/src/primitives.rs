@@ -8263,6 +8263,12 @@ fn radical_sign_geometry(
 /// size regardless of the math run's own `size` (upstream-faithful — a
 /// `text-in-math` body is laid out once, by `read_inline`, before this
 /// function ever sees it).
+// UNWIRED. `layout_script` builds the same `(Vec<MathGlyph>, Length)` on the
+// live path, so nothing calls this. It is kept rather than deleted because two
+// doc comments above (`:3793`, `:7229`) describe the math/graphics harvesting
+// pair in terms of it, and because it is the upstream-faithful flattening a
+// `text-in-math` body needs if that path is ever wired back up.
+#[allow(dead_code)]
 fn math_glyphs_of_inline_boxes(boxes: &[HorzBox]) -> (Vec<MathGlyph>, Length) {
     fn go(pure: &PureHorzBox, out: &mut Vec<MathGlyph>, x: &mut Length) {
         match pure {

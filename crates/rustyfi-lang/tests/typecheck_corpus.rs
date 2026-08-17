@@ -235,6 +235,9 @@ fn typecheck_entry(entry: &Path) -> Result<(RustyfiVersion, Vec<String>), String
 /// An entry document: its own source, and the generation it must load as.
 struct Doc {
     path: &'static str,
+    /// Kept beside `path` so the case table reads as source-plus-location even
+    /// though the loader reads the file itself.
+    #[allow(dead_code)]
     src: &'static str,
     version: RustyfiVersion,
 }

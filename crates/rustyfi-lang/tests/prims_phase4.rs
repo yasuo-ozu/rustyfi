@@ -275,7 +275,7 @@ fn inline_skip_width_is_accounted_for_by_line_breaking() {
     let ast = app1(ast, boxes_ast);
 
     match run(&ast) {
-        Value::BlockBoxes(mut lines) => {
+        Value::BlockBoxes(lines) => {
             // line-break now brackets the paragraph with paragraph_top/bottom
             // margin Skips (design-silent-fields FIX 3); find the formed Line.
             let line = lines

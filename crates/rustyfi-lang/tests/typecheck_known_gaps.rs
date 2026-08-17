@@ -42,7 +42,6 @@ use rustyfi_loader::{LoadOptions, LoadedCst, LoadedProgram};
 use rustyfi_syntax::RustyfiVersion;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -157,37 +156,6 @@ fn known_gaps() -> Vec<KnownGap> {
     ]
 }
 
-/// A uniquely-named temp entry file, cleaned up on drop.
-///
-/// The source arrives here as a `&str`, but the loader resolves `@require:`
-/// against a real path, so each case is materialized next to the fixture it
-/// came from — beside it, not in a temp dir, so a relative `@import:` still
-/// resolves exactly as it does for the original.
-struct TempEntry(PathBuf);
-
-impl TempEntry {
-    fn beside(original: &Path, src: &str) -> TempEntry {
-        static COUNTER: AtomicU64 = AtomicU64::new(0);
-        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let ext = original
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("saty");
-        let path = original.with_file_name(format!(
-            "rustyfi-known-gap-{}-{}.{ext}",
-            std::process::id(),
-            n
-        ));
-        fs::write(&path, src).expect("write temp entry");
-        TempEntry(path)
-    }
-}
-
-impl Drop for TempEntry {
-    fn drop(&mut self) {
-        let _ = fs::remove_file(&self.0);
-    }
-}
 
 fn as_v006(cst: &LoadedCst) -> &rustyfi_syntax::cst::File {
     match cst {

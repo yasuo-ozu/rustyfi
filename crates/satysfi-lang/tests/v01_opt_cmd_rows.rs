@@ -274,20 +274,118 @@ end
     );
 }
 
-/// `math […]` command TYPE heads are still unsupported (optional-arg-rows
-/// increment 3b — no `KwMath`-gated `TypeApp::MathCmdTy` grammar exists): a
-/// sig spelling one is a PARSE error, not merely a lower error — `math` is
-/// not a V0_1 type-position keyword, so `math [...]` can't even shape up as
-/// any known `TypeApp`/`TypeAtom` (no atom starts with a bare `[`, and
-/// `TypeAtom::Cmd` requires the `inline-cmd`/`block-cmd`/`math-cmd` keyword
-/// AFTER its bracket, not before).
+/// `math […]` command TYPE heads — increment 3b's "still a parse error"
+/// verdict is FLIPPED by math-package completion M1: `cst_v1::TypeApp::
+/// MathCmdTy` is a `KwMath`-headed grammar arm reusing `TypeCmdArgItemV1`
+/// exactly like `InlineCmdTy`/`BlockCmdTy` (inheriting its `?(l:τ,…)`
+/// optional-label PREFIX for free), so the exact `val \derive : math
+/// [?(name:math-text) list math-text, math-text]` row this test used to
+/// pin as a parse error now PARSES. (Name kept for continuity with the
+/// increment-3b history; the assertion is inverted.) Only the SIG grammar
+/// is exercised here — pairing this labeled row with a matching bundled
+/// IMPL is optional-arg-rows increment 3b's remaining M-opt slice
+/// (`v1/lower.rs`'s `lower_value_math` still rejects `?(…)` bundles on
+/// `val math` params; deferred, needed only by the `proof` package, zero
+/// demand in `math.satyh`) — T-M1-seal below exercises the full seal path
+/// with the BARE `math […]` rows `math.satyh` actually uses.
 #[test]
 fn t9_math_command_type_head_is_still_a_parse_error() {
     let src = "module M :> sig\n\
                val \\derive : math [?(name:math-text) list math-text, math-text]\n\
                end = struct val x = 1 end";
     assert!(
-        parse_file_v1(src).is_err(),
-        "a `math [...]` command-type head should not parse yet (increment 3b)"
+        parse_file_v1(src).is_ok(),
+        "a `math [...]` command-type head (with a `?(...)` labeled row) must now parse"
     );
+}
+
+/// T-M1-seal: the sealing gate for a BARE `math […]` row (the shape
+/// `math.satyh` actually uses — zero `?(` in any upstream `math […]` sig
+/// row) — pins §2.2 (the `MathCmdTy` lowering arm), §2.4 (`CmdShape::
+/// Inline` accepting `MonoType::MathCmd`), and `math_command_scheme_v01`'s
+/// `MathCmd([])`/`MathCmd([mandatory, mandatory])` rows.
+#[test]
+fn t_m1_seal_bare_math_rows() {
+    let lib = "\
+module M :> sig
+  val \\frac : math [math-text, math-text]
+  val \\alpha : math []
+end = struct
+  val math ctx \\frac a b =
+    let _ = read-math ctx a in
+    let _ = read-math ctx b in
+    math-char ctx MathOrd `x`
+  val math ctx \\alpha = math-char ctx MathOrd `alpha`
+end
+";
+    assert_accepts(lib, "1");
+}
+
+/// T-M1-roundtrip's typecheck-level twin: the same sig, checked against a
+/// MISMATCHED arity impl (1 declared math-command argument, 2 actual params)
+/// — `ArityMismatch`-shaped rejection (T-M1-mismatch(a)).
+#[test]
+fn t_m1_mismatch_arity() {
+    let lib = "\
+module M :> sig
+  val \\alpha : math [math-text]
+end = struct
+  val math ctx \\alpha a b =
+    let _ = a in
+    let _ = b in
+    read-math ctx a
+end
+";
+    let msg = assert_type_error(lib, "1");
+    assert!(!msg.is_empty(), "expected a non-empty type-error message");
+}
+
+/// T-M1-mismatch(b): a sig declaring `inline […]` for a binding that is
+/// actually a `val math` — the seal shape guard now PASSES (both `\`-sigiled
+/// shapes are accepted early), but subsumption/unify must still reject the
+/// kind mismatch (`InlineCmd` vs `MathCmd`).
+#[test]
+fn t_m1_mismatch_inline_sig_for_math_impl() {
+    let lib = "\
+module M :> sig
+  val \\alpha : inline [math-text]
+end = struct
+  val math ctx \\alpha m = read-math ctx m
+end
+";
+    let msg = assert_type_error(lib, "1");
+    assert!(!msg.is_empty(), "expected a non-empty type-error message");
+}
+
+/// T-M1-mismatch(c): the mirror — a sig declaring `math […]` for a binding
+/// that is actually a `val inline`.
+#[test]
+fn t_m1_mismatch_math_sig_for_inline_impl() {
+    let lib = "\
+module M :> sig
+  val \\greet : math [inline-text]
+end = struct
+  val inline ctx \\greet it = read-inline ctx it
+end
+";
+    let msg = assert_type_error(lib, "1");
+    assert!(!msg.is_empty(), "expected a non-empty type-error message");
+}
+
+/// T-M1-scripts: `val math ctx \lim with sub sup = …`'s synthesized
+/// `with sub sup` trio must not surface as declared command-type slots —
+/// sealed against a ZERO-arity `math []` row.
+#[test]
+fn t_m1_scripts_trio_not_surfaced_as_slots() {
+    let lib = "\
+module M :> sig
+  val \\lim : math []
+end = struct
+  val math ctx \\lim with sub sup =
+    let _ = sub in
+    let _ = sup in
+    math-char ctx MathOp `lim`
+end
+";
+    assert_accepts(lib, "1");
 }

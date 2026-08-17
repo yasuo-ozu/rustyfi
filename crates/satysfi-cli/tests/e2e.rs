@@ -1378,14 +1378,125 @@ fn v01_annot_package_compiles_through_real_loader() {
     assert_v01_package_compiles("v01-annot-package.saty");
 }
 
-/// CP7 item 2: the real upstream `math` package — ~180 landed math-command
-/// value bindings, plus `+math`/`\eqn`'s optional-arg-rows increment 3a
-/// `?(tag…)` rows — through the real loader. (The package's sealing
-/// boundary and its `paren`-family tail are documented stand-in drops —
-/// see `math.satyh`'s own banner.)
+/// CP7 item 2, now FULLY un-stubbed (math-package completion M1-M4): the
+/// real upstream `math` package — SEALED (`module Math :> sig … end`, M1's
+/// `math […]` command-type head + M2's `paren` sig rows), with the
+/// previously-dropped `\paren` family (M2) and `\mathsf`/`\mathtt`/14-arm
+/// greek restyling (M3) restored — through the real loader. Sig
+/// subsumption succeeds for all ~190 command rows + 19 `paren`-typed value
+/// rows.
 #[test]
 fn v01_math_package_compiles_through_real_loader() {
     assert_v01_package_compiles("v01-math-package.saty");
+}
+
+/// Math-package completion M4's headline render: `v01-math-full.saty`
+/// exercises the newly-restored `\paren` family
+/// (`\Math.paren{\Math.frac{1}{2}}`) and `\mathsf`/`\mathtt` (needing a
+/// real Unicode-glyph-bearing font — gated on `find_regular_ttf()`, same
+/// as `v01_font_standin_renders_to_extractable_text`) through
+/// `compile_document_v1` to a valid, pdftotext-extractable PDF.
+#[test]
+fn v01_math_full_package_renders_to_extractable_pdf() {
+    let font = match find_regular_ttf() {
+        Some(p) => p,
+        None => {
+            eprintln!("skipping v01 math-full capstone: no DejaVu TrueType font found");
+            return;
+        }
+    };
+    run_with_big_stack(move || {
+        let entry = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/v01-math-full.saty");
+        let program = satysfi_loader::load(
+            &entry,
+            &satysfi_loader::LoadOptions {
+                lib_root: Some(lib_root().join("dist-v01").join("packages")),
+                version: satysfi_syntax::SatysfiVersion::V0_1,
+                ..Default::default()
+            },
+        )
+        .expect("v01-mini.satyh + math.satyh + v01-math-full.saty must load");
+
+        let store = satysfi_pdf::TtfFontStore::load(&font, None, None)
+            .expect("load DejaVu regular face");
+        let doc = satysfi_lang::compile_document_v1(&program.files, &store).expect(
+            "the sealed math.satyh's \\paren family + \\mathsf/\\mathtt must compile and \
+             render end-to-end",
+        );
+        assert!(!doc.pages.is_empty(), "expected at least one page");
+        assert!(
+            doc.pages[0].lines.len() >= 4,
+            "four +p paragraphs (Paren/Sans-serif/Typewriter/Set), got {}",
+            doc.pages[0].lines.len()
+        );
+
+        let bytes = satysfi_pdf::render_pdf_ttf(&doc.geometry, &doc.pages, &store, &doc.images)
+            .expect("render_pdf_ttf must succeed");
+        assert!(bytes.starts_with(b"%PDF-"));
+
+        let tmp = std::env::temp_dir()
+            .join(format!("satysfi-rust-e2e-v01-math-full-{}.pdf", std::process::id()));
+        std::fs::write(&tmp, &bytes).unwrap();
+        let pdftotext = Command::new("pdftotext").arg(&tmp).arg("-").output();
+        match pdftotext {
+            Ok(out) if out.status.success() => {
+                let text = String::from_utf8_lossy(&out.stdout);
+                for needle in ["Paren:", "Sans-serif:", "Typewriter:", "Set:"] {
+                    assert!(text.contains(needle), "missing {needle:?} in extracted text:\n{text}");
+                }
+            }
+            _ => eprintln!("skipping text assertion; pdftotext unavailable"),
+        }
+        let _ = std::fs::remove_file(&tmp);
+    });
+}
+
+/// Math-package completion M4 seal-surface probe (spec §5): `Math.math-
+/// scheme` — a real internal helper `math.satyh` uses but upstream's own
+/// sig never exports — is UNREACHABLE now that the module is genuinely
+/// sealed. Pins that the `:>` restored in M4 is a real, enforced boundary
+/// (every sig member — `\paren`, `paren-left`, …, all ~190+19 rows — stays
+/// reachable; this asserts the converse for one representative hidden
+/// name).
+#[test]
+fn v01_math_package_hidden_helper_is_unreachable_past_the_seal() {
+    run_with_big_stack(|| {
+        let entry =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/v01-math-seal-probe.saty");
+        let program = satysfi_loader::load(
+            &entry,
+            &satysfi_loader::LoadOptions {
+                lib_root: Some(lib_root().join("dist-v01").join("packages")),
+                version: satysfi_syntax::SatysfiVersion::V0_1,
+                ..Default::default()
+            },
+        )
+        .expect("v01-math-seal-probe.saty must load");
+
+        struct NoFonts;
+        impl satysfi_backend::FontMetrics for NoFonts {
+            fn advance(&self, _f: satysfi_backend::FontKey, _c: char, _size: satysfi_backend::Length) -> Option<satysfi_backend::Length> {
+                None
+            }
+            fn ascender(&self, _f: satysfi_backend::FontKey, size: satysfi_backend::Length) -> satysfi_backend::Length {
+                size
+            }
+            fn descender(&self, _f: satysfi_backend::FontKey, _size: satysfi_backend::Length) -> satysfi_backend::Length {
+                satysfi_backend::Length::pt(0.0)
+            }
+        }
+
+        match satysfi_lang::compile_document_v1(&program.files, &NoFonts) {
+            Err(satysfi_lang::CompileError::Type(e)) => {
+                let msg = e.to_string();
+                assert!(msg.contains("math-scheme"), "expected the hidden member named: {msg}");
+                assert!(msg.contains("Math"), "expected the sealing module named: {msg}");
+            }
+            other => panic!(
+                "expected a Type error naming the hidden `math-scheme` member, got: {other:?}"
+            ),
+        }
+    });
 }
 
 /// CP7 item 3: the functor-free `code` PORT STAND-IN — a nested plain

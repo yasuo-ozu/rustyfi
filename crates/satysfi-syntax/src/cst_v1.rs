@@ -1357,19 +1357,20 @@ pub mod ast {
     /// BEFORE them is cosmetic, not load-bearing):
     ///
     /// - [`InlineCmdTy`](TypeApp::InlineCmdTy)/[`BlockCmdTy`](TypeApp::
-    ///   BlockCmdTy): `inline [τ, …]`/`block [τ, …]` command types
-    ///   (`parser.mly:730-735`, `typ_cmd_arg` `:763-774`), `KwInline`/
-    ///   `KwBlock`-headed (already V0_1 keywords since `val inline`/`val
-    ///   block` binds, 2b — zero lexer work). One deliberate superset of
-    ///   upstream remains: each bracketed slot is a full [`TyErasedV1`]
-    ///   (`TypeExpr`), not upstream's narrower `typ_prod`. The `?(label: τ,
-    ///   …)` optional-labeled-slot prefix (roadmap phase 4) now IS modeled —
-    ///   see [`TypeCmdArgItemV1::opts`] (optional-arg-rows increment 3a).
-    ///   `math […]` is deliberately NOT added: `math`
-    ///   is not a V0_1 keyword (it stays the 0.0.6-style type NAME v1 sigs
-    ///   still use for `embed-math`-shaped members until the math-split
-    ///   phase brings `val math`'s argument types and claims the keyword —
-    ///   spec's §2.3).
+    ///   BlockCmdTy)/[`MathCmdTy`](TypeApp::MathCmdTy): `inline [τ, …]`/
+    ///   `block [τ, …]`/`math [τ, …]` command types (`parser.mly:730-735`,
+    ///   `typ_cmd_arg` `:763-774`; `math […]`: `parser.mly:830-831`),
+    ///   `KwInline`/`KwBlock`/`KwMath`-headed (already V0_1 keywords —
+    ///   `val inline`/`val block`/`val math` binds, 2b; `math`'s keyword
+    ///   status since the math-split, `token.rs`'s `KwMath`, `lexer.rs`'s
+    ///   `"math"` arm — zero lexer work for any of the three). One
+    ///   deliberate superset of upstream remains: each bracketed slot is a
+    ///   full [`TyErasedV1`] (`TypeExpr`), not upstream's narrower
+    ///   `typ_prod`. The `?(label: τ, …)` optional-labeled-slot prefix
+    ///   (roadmap phase 4) now IS modeled — see [`TypeCmdArgItemV1::opts`]
+    ///   (optional-arg-rows increment 3a); `MathCmdTy` reuses
+    ///   `TypeCmdArgItemV1` as-is, so `math [?(l : τ) …]` sig rows work with
+    ///   zero extra grammar (math-completion M1).
     /// - [`AppliedLong`](TypeApp::AppliedLong): `M.t τ…` — the `LONG_LOWER`
     ///   qualified-head twin of `Applied` (`parser.mly:720-728`,
     ///   `LONG_LOWER` `lexer.mll:318`), `VarWithModTok`-headed (already
@@ -1389,6 +1390,22 @@ pub mod ast {
         /// `block [τ, …]` (Sub-slice 2d-2) — see the enum doc comment.
         BlockCmdTy {
             kw: KwBlock,
+            list: ListGroup<()>,
+            #[group(self.list)]
+            args: Vec<TypeCmdArgItemV1>,
+        },
+        /// `math [τ, …]` (math-package completion M1; upstream
+        /// `parser.mly:830-831` `MATH L_SQUARE optterm_list(COMMA,
+        /// typ_cmd_arg) R_SQUARE → MMathCommandType(mncmdargtys)` — same
+        /// `typ_cmd_arg` as inline/block). `KwMath`-headed — `math` has been
+        /// a V0_1 lexer keyword since the math-split (`token.rs`'s
+        /// `KwMath`, `lexer.rs`'s `"math"` arm), so this arm is disjoint
+        /// from `Applied`/`Atom` (a bare `math` can never lex as a `VarTok`
+        /// under V0_1 at all) and ambiguity-free. Reuses
+        /// `TypeCmdArgItemV1`, so `?(l : τ, …)` optional-label prefixes
+        /// (inc3a) work in `math […]` rows with zero extra grammar.
+        MathCmdTy {
+            kw: KwMath,
             list: ListGroup<()>,
             #[group(self.list)]
             args: Vec<TypeCmdArgItemV1>,
@@ -1526,11 +1543,16 @@ pub mod ast {
     }
 
     /// `mathbot` — identical shape to [`crate::cst::ast::MathBot`] (no 0.1
-    /// delta).
+    /// delta; `name` accepts a module-qualified `\Mod.cmd` math command
+    /// too, `AnyMathCmdTok::Mod` — the lexer already emits
+    /// `Token::MathCmdWithMod` for one, `lexer.rs`'s `\\` arm in `Mode::
+    /// Math`, math-package completion M4's `${\Math.paren{…}}`-shaped
+    /// qualified references need it to parse at all).
     #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
     pub enum MathBot {
-        /// `\cmd matharg*`.
-        Cmd { name: MathCmdTok, args: Vec<MathArg> },
+        /// `\cmd matharg*`, sigil-only or module-qualified (`\Mod.cmd
+        /// matharg*`).
+        Cmd { name: AnyMathCmdTok, args: Vec<MathArg> },
         Chars(MathCharTok),
         /// `#var` (math mode never trails this with `;`).
         Embed(VarInMathTok),

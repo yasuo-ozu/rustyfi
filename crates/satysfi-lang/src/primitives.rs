@@ -4152,6 +4152,16 @@ fn as_math_char_class(v: Value) -> Result<MathCharClass, EvalError> {
             "MathFraktur" => Ok(MathCharClass::Fraktur),
             "MathBoldFraktur" => Ok(MathCharClass::BoldFraktur),
             "MathDoubleStruck" => Ok(MathCharClass::DoubleStruck),
+            // math-package completion M3 (V0_1-only registration — these 5
+            // ctor names are only ever declared by `builtin_variants` under
+            // V0_1, so under V0_0_6 this arm is simply never reached: the
+            // ctor name itself is rejected earlier, at typecheck, as
+            // unknown).
+            "MathSansSerif" => Ok(MathCharClass::SansSerif),
+            "MathBoldSansSerif" => Ok(MathCharClass::BoldSansSerif),
+            "MathItalicSansSerif" => Ok(MathCharClass::ItalicSansSerif),
+            "MathBoldItalicSansSerif" => Ok(MathCharClass::BoldItalicSansSerif),
+            "MathTypewriter" => Ok(MathCharClass::Typewriter),
             other => eval_error(format!(
                 "expected a math-char-class constructor, got '{other}'"
             )),
@@ -4389,6 +4399,12 @@ fn math_char_class_ctor_name(c: MathCharClass) -> &'static str {
         MathCharClass::Fraktur => "MathFraktur",
         MathCharClass::BoldFraktur => "MathBoldFraktur",
         MathCharClass::DoubleStruck => "MathDoubleStruck",
+        // math-package completion M3.
+        MathCharClass::SansSerif => "MathSansSerif",
+        MathCharClass::BoldSansSerif => "MathBoldSansSerif",
+        MathCharClass::ItalicSansSerif => "MathItalicSansSerif",
+        MathCharClass::BoldItalicSansSerif => "MathBoldItalicSansSerif",
+        MathCharClass::Typewriter => "MathTypewriter",
     }
 }
 
@@ -5818,15 +5834,39 @@ fn make_paren_run(
     size: Length,
 ) -> Result<(Vec<MathGlyph>, Vec<GraphicsElem>, Length, Value), EvalError> {
     let mut v = paren.clone();
-    let args = [
-        Value::Length(h_in),
-        Value::Length(-d_in),
-        Value::Length(axis),
-        Value::Length(size),
-        make_color_value(ctx.text_color),
-    ];
-    for a in args {
-        v = interp.apply(v, a)?;
+    if interp.version.math_is_split() {
+        // 0.1 protocol (math.ml:640-642): `paren h d ictx` — (height, SIGNED
+        // depth, context). The closure extracts fontsize / axis-ratio (via
+        // `get-math-axis-height-ratio`) / color FROM the context instead of
+        // receiving them as separate explicit arguments (the 0.0.6→0.1
+        // delta, `t_paren`'s doc comment). Upstream's `ictx` is already
+        // scaled to the local (script-level) size at this call site; this
+        // port threads `size` as a separate parameter, so clone-and-set —
+        // BIGGEST RISK (math-completion M2 spec): forgetting this silently
+        // oversizes script-level delimiters (the closure would read the
+        // OUTER context's font_size instead of the local scaled one).
+        let mut c2 = ctx.clone();
+        c2.font_size = size;
+        let args = [
+            Value::Length(h_in),
+            Value::Length(-d_in),
+            Value::Context(Box::new(c2)),
+        ];
+        for a in args {
+            v = interp.apply(v, a)?;
+        }
+    } else {
+        // 0.0.6 protocol (unchanged, byte-identical).
+        let args = [
+            Value::Length(h_in),
+            Value::Length(-d_in),
+            Value::Length(axis),
+            Value::Length(size),
+            make_color_value(ctx.text_color),
+        ];
+        for a in args {
+            v = interp.apply(v, a)?;
+        }
     }
     let (boxes_v, kernf) = match v {
         Value::Tuple(mut items) if items.len() == 2 => {
@@ -5978,6 +6018,23 @@ fn layout_math_atom(
                 MathCharClass::Fraktur => &style.fraktur,
                 MathCharClass::BoldFraktur => &style.bold_fraktur,
                 MathCharClass::DoubleStruck => &style.double_struck,
+                // math-package completion M3: `MathVariantStyle` (this
+                // 9-field record) is deliberately NOT widened to 14 fields
+                // — it models the 0.0.6 `math-variant-char` prim's record
+                // shape, which upstream itself never grew sans-
+                // serif/typewriter fields for either (only `math-char-class`
+                // itself widened, `horzBox.ml:98-113`). This arm is
+                // unreachable in practice: `math-variant-char`/
+                // `MathElement::VariantChar` is a V0_0_6-only prim
+                // (registered `v006` only, `primitives.rs`'s prim table),
+                // and the 5 new `MathCharClass` ctors are V0_1-only
+                // (`prim_types.rs::math_char_class_decl`) — the two can
+                // never co-occur. Closest-analog fallback, purely to keep
+                // the match exhaustive.
+                MathCharClass::SansSerif | MathCharClass::Typewriter => &style.roman,
+                MathCharClass::ItalicSansSerif => &style.italic,
+                MathCharClass::BoldSansSerif => &style.bold_roman,
+                MathCharClass::BoldItalicSansSerif => &style.bold_italic,
             };
             let mut glyphs = Vec::new();
             let mut x = Length::ZERO;

@@ -66,6 +66,20 @@ pub enum MathCharClass {
     Fraktur,
     BoldFraktur,
     DoubleStruck,
+    /// math-package completion M3: upstream dev-0-1-0 widens
+    /// `math_char_class` 9 → 14 (`b836d512:src/backend/horzBox.ml:98-113`);
+    /// v0.0.6 upstream has exactly the 9 above
+    /// (`v0.0.6:src/backend/horzBox.ml:147-158`, "TEMPORARY; should add
+    /// more"). These 5 variants are unreachable under V0_0_6 — registration
+    /// (`prim_types.rs::math_char_class_decl`) is V0_1-gated, and typecheck
+    /// rejects any unregistered constructor name — so the frozen 0.0.6
+    /// surface never learns them (version-blind at THIS enum/backend
+    /// layer, version-gated at the registration layer).
+    SansSerif,
+    BoldSansSerif,
+    ItalicSansSerif,
+    BoldItalicSansSerif,
+    Typewriter,
 }
 
 /// Upstream `default_math_class_map` (`primitives.cppo.ml:465-480`):
@@ -178,6 +192,39 @@ pub fn default_math_variant_char(class: MathCharClass, c: char) -> Option<char> 
                 (_, Some(i)) => cp(0x1D552, i),
                 _ => None,
             },
+        },
+        // math-package completion M3 (`primitives.cppo.ml`'s capitals/
+        // smalls folds, §A.1): these 5 Unicode blocks are gap-free — no
+        // exception chars, unlike Script/Fraktur/DoubleStruck above.
+        // KNOWN pre-existing gap, not widened here: upstream also remaps
+        // DIGITS in every class (sans `0x1D7E2`, bold-sans `0x1D7EC`,
+        // typewriter `0x1D7F6`, …); this function returns `None` for digits
+        // under every class today (a separable, all-class fidelity item —
+        // zero math.satyh demand).
+        MathCharClass::SansSerif => match (cap, small) {
+            (Some(i), _) => cp(0x1D5A0, i),
+            (_, Some(i)) => cp(0x1D5BA, i),
+            _ => None,
+        },
+        MathCharClass::BoldSansSerif => match (cap, small) {
+            (Some(i), _) => cp(0x1D5D4, i),
+            (_, Some(i)) => cp(0x1D5EE, i),
+            _ => None,
+        },
+        MathCharClass::ItalicSansSerif => match (cap, small) {
+            (Some(i), _) => cp(0x1D608, i),
+            (_, Some(i)) => cp(0x1D622, i),
+            _ => None,
+        },
+        MathCharClass::BoldItalicSansSerif => match (cap, small) {
+            (Some(i), _) => cp(0x1D63C, i),
+            (_, Some(i)) => cp(0x1D656, i),
+            _ => None,
+        },
+        MathCharClass::Typewriter => match (cap, small) {
+            (Some(i), _) => cp(0x1D670, i),
+            (_, Some(i)) => cp(0x1D68A, i),
+            _ => None,
         },
     }
 }

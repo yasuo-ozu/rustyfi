@@ -201,17 +201,21 @@ fn qualified_math_command_resolves_to_the_mangled_key() {
     // text.
     let src = "module M = struct let-math \\cmd x = x end in ${\\M.cmd{1}}";
     let ast = elaborate_only(src);
-    // `module M = struct .. end in body` elaborates to a `LetMathIn`
-    // (binding `M`'s local `\cmd`) wrapping a `LetIn` (re-binding the
-    // module-qualified key `M.\cmd` to it — see `nested_module_mangles_recursively`
-    // for the same shape with plain `let`), wrapping `body`; unwrap both to
-    // reach the `${..}` literal.
-    let satysfi_lang::ast::Ast::LetMathIn(_, _, inner) = ast else {
+    // `module M = struct .. end in body` elaborates `\cmd`'s `let-math`
+    // binding under a collision-proof MANGLED key (`"$M.\cmd"` — module-
+    // member bug fix: `push_named_binding` no longer binds a separate bare
+    // `"\cmd"` `LetMathIn` that a later reference could shadow something
+    // else with, see that function's doc comment), wrapping a `LetIn` that
+    // re-binds the module-qualified key `M.\cmd` to `Var("$M.\cmd")`,
+    // wrapping `body`; unwrap both to reach the `${..}` literal.
+    let satysfi_lang::ast::Ast::LetMathIn(mangled_name, _value, rest) = ast else {
         panic!("expected LetMathIn at the top, got {ast:?}");
     };
-    let satysfi_lang::ast::Ast::LetIn(_, _, body) = *inner else {
-        panic!("expected LetIn nested inside, got {inner:?}");
+    assert_eq!(mangled_name, "$M.\\cmd");
+    let satysfi_lang::ast::Ast::LetIn(qualified_name, _alias_value, body) = *rest else {
+        panic!("expected LetIn (the qualified alias) nested inside, got {rest:?}");
     };
+    assert_eq!(qualified_name, "M.\\cmd");
     let satysfi_lang::ast::Ast::MathText(elems) = *body else {
         panic!("expected a MathText literal, got {body:?}");
     };

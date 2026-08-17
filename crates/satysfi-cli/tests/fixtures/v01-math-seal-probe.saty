@@ -1,0 +1,10 @@
+% math-package completion M4 seal-surface probe: `Math.math-scheme` is a
+% real internal helper (`math.satyh`'s `math-scheme`, used by `+math`/
+% `\eqn`) that upstream's sig deliberately does NOT export — referencing it
+% qualified must be rejected now that the module is genuinely sealed
+% (`module Math :> sig … end`), pinning that the seal is real and not
+% merely cosmetic. `assert_v01_package_rejects` (`e2e.rs`) drives this file
+% and asserts the resulting error names both the hidden member and the
+% sealing module.
+@require: math
+Math.math-scheme

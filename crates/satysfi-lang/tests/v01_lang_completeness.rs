@@ -223,3 +223,115 @@ fn qualified_command_reference_typechecks_and_evaluates() {
     // paragraph width) — reaching here at all is the proof.
     let _ = v;
 }
+
+
+// ============================================================================
+// G9 (vendoring wave 2, `inline.satyh`'s banner): `typecheck.rs`'s
+// `PRIMITIVE_NAMES` list omitted `"inline-frame-inner"` even though the
+// primitive itself (`primitives.rs`'s `prim_inline_frame_inner`) and its
+// type (`prim_types.rs`, identical shape to its already-listed sibling
+// `"inline-frame-outer"`) were both already registered for both versions —
+// referencing it produced "internal error: unbound variable
+// 'inline-frame-inner' reached the typechecker". Fixed by adding the one
+// missing name to `PRIMITIVE_NAMES` (see that list's own comment at the fix
+// site). `inline.satyh`'s `Inline.frame-inner` member (dropped by the
+// vendoring wave that found this gap) is restored alongside this fix.
+// ============================================================================
+
+#[test]
+fn inline_frame_inner_typechecks_and_evaluates() {
+    // `inline-frame-inner : paddings -> deco -> inline-boxes -> inline-boxes`
+    // — `deco` is `point -> length -> length -> length -> graphics`; built
+    // here with `draw-text`/`inline-nil` (both bare base primitives, no
+    // `@require:` needed) purely to exercise the type, since the stand-in
+    // body never actually invokes the callback.
+    let v = eval_v01(
+        "inline-frame-inner (0pt, 0pt, 0pt, 0pt) \
+         (fun p w h d -> draw-text (0pt, 0pt) inline-nil) inline-nil",
+    )
+    .expect("`inline-frame-inner` should now be bound and typecheck (G9 fixed)");
+    match v {
+        Value::InlineBoxes(_) => {}
+        other => panic!("expected inline-boxes, got {other:?}"),
+    }
+}
+
+// ============================================================================
+// G10 (vendoring wave 2, `hdecoset.satyh`'s banner): an expression-level
+// named `let NAME param* = value in body` was ORIGINALLY reported to only
+// accept plain variable params (`Vec<VarTok>`), unlike top-level `val`
+// binds and `let rec`, forcing `hdecoset.satyh`/`vdecoset.satyh` to rewrite
+// `let decoS (x, y) w h d = …` as `let decoS = fun (x, y) w h d -> …`.
+// ALREADY FIXED by the time this sweep ran: the optional-arg-rows
+// increments (2/3a) generalized `cst_v1::ast::Param`/`ParamBody` — which
+// `Expr::Fun`, `RecClauseV1`, AND `Expr::LetIn` all share as
+// `params: Vec<Param>` — to carry a full `PatBot` (`ParamBody::Pat`, plus
+// an ascribed-pattern variant), and `v1/lower.rs`'s `lower_param_units` /
+// `lower_param_body` / `lower_pat_bot` chain already lowers all three forms
+// identically. No `cst_v1`/`lower.rs` edit was needed for this gap —
+// confirmed by the tests below, which exercise the ORIGINAL failing shapes
+// (wildcard and tuple params on an expression-level named `let`) end to
+// end.
+// ============================================================================
+
+#[test]
+fn let_binding_wildcard_parameter_ignores_its_argument() {
+    let v = eval_v01("let f _ = 1 in f 5").expect("`let f _ = …` should compile and evaluate");
+    assert_eq!(as_int(v), 1);
+}
+
+#[test]
+fn let_binding_tuple_destructuring_parameter() {
+    let v = eval_v01("let g (a, b) = a in g (3, 4)")
+        .expect("`let g (a, b) = …` should compile and evaluate");
+    assert_eq!(as_int(v), 3);
+}
+
+// ============================================================================
+// G11 (vendoring wave 2, `footnote-scheme.satyh`'s test section): a flat
+// program containing BOTH a `command \math`-shaped value (built via a
+// user-defined `val inline ctx \math m = …` command, the only way this
+// harness has to synthesize a real `context`) AND a `+++` (`block-boxes`
+// concat) application elsewhere was reported to spuriously fail the `+++`
+// site with "type mismatch: expected `int`, found `block-boxes`".
+//
+// INVESTIGATED, NOT AN ENGINE BUG: the failing minimal repro quoted by the
+// original report only reproduces when `\math` is brought into scope via
+// `let open V01Mini in` — and `lib-satysfi/dist-v01/packages/v01-mini.satyh`
+// (the ONLY source of a bare, unqualified `\math` binding in this port's
+// test fixtures) ALSO defines its own test-only `val (+++) a b = a + b * 2`
+// (added for the Sub-slice 2b "`val ( binop )` binds" coverage). `let open
+// V01Mini in` therefore shadows the global block-boxes-concatenating
+// `+++` with V01Mini's own int-typed one for the rest of that scope —
+// textbook `open` shadowing, not a type-inference defect. Confirmed three
+// ways below: (1) a `command \math` built WITHOUT opening V01Mini (a fresh
+// module that does NOT redefine `+++`) never triggers the symptom; (2) the
+// actual blocked scenario — `FootnoteScheme.main` (which itself uses `+++`
+// internally) applied to a real context built through `command \math` via
+// `V01Mini`, all in one flat program — compiles AND evaluates cleanly
+// end-to-end through the real loader (see
+// `v01_stdlib_graphics.rs::footnote_scheme_main_with_a_command_math_context_compiles_and_evaluates`,
+// which supersedes that file's old "GAP FOUND (G11)" comment); (3) the
+// exact literal repro quoted by the report still fails for the diagnosed
+// (expected) reason when reproduced verbatim (not asserted here — see (2)
+// for the regression proof that actually matters: the real blocked test
+// case now works).
+// ============================================================================
+
+#[test]
+fn command_math_value_does_not_shadow_the_global_plus_plus_plus_operator() {
+    // A module that binds a real `\math` command WITHOUT redefining `+++`
+    // (unlike `v01-mini.satyh`'s own test-only `val (+++)`) — proves the
+    // combination of "a `command \math`-shaped value exists" and "`+++` is
+    // used elsewhere" is fine on its own; the G11 report's symptom needs
+    // the V01Mini-specific `+++` shadow, not just the two idioms coexisting.
+    let lib = "module M = struct
+  val inline ctx \\math m = embed-math ctx (read-math ctx m)
+end
+";
+    let src = "let m = command \\M.math in
+let cc = block-skip 1pt +++ block-skip 2pt in
+get-natural-metrics inline-nil";
+    eval_v01_with_lib(lib, src)
+        .expect("`command \\M.math` alongside `+++` should typecheck (G11: not an engine bug)");
+}

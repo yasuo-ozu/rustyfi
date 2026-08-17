@@ -63,6 +63,26 @@ fn err<T>(span: Span, msg: impl Into<String>) -> Result<T, ElabError> {
 pub struct Scope {
     names: HashSet<String>,
     optional_arity: std::collections::HashMap<String, usize>,
+    /// A module member's bare (sibling-visible) local name → the ACTUAL Ast
+    /// key its value is bound under (module-completion bug fix, see
+    /// `push_named_binding`'s doc comment): a member of `module M = struct
+    /// .. end` is bound under a MANGLED key (`"$M.atan2"`, never a valid
+    /// surface identifier, so it can never collide with anything), not a
+    /// bare `"atan2"` `LetIn` — a SIBLING member's body that references it
+    /// bare (as literally written, `Ast::Var("atan2")`) must be redirected
+    /// to that mangled key at construction time (deliberately NOT the
+    /// qualified `"M.atan2"` key — see `push_named_binding`'s doc comment
+    /// for why the distinction matters for opaque-type sealing) — this map
+    /// is that redirect, consulted by [`scoped_var`] and the inline/block/
+    /// math command-key resolution sites. Entries are added ONLY while
+    /// processing a module's own `struct` body (`running`, local to that
+    /// recursive `walk_bindings` call) and are never propagated to the
+    /// caller's outer scope (only `names`/`optional_arity` entries for the
+    /// EXPORTED qualified keys are copied back) — so a rename can only ever
+    /// affect references
+    /// written textually inside that same module, never anything outside
+    /// it or after its `end`.
+    renames: std::collections::HashMap<String, String>,
     /// The source-language version this scope elaborates under — gates the
     /// SATySFi 0.1-only labeled-optional nodes (`Expr::FunRows`,
     /// `AppArg::Bundled`) so a 0.0.6-compiled file that happens to parse them
@@ -93,6 +113,7 @@ impl Scope {
         Scope {
             names: names.into_iter().collect(),
             optional_arity: std::collections::HashMap::new(),
+            renames: std::collections::HashMap::new(),
             version,
         }
     }
@@ -106,12 +127,14 @@ impl Scope {
     /// In-place version of [`Scope::with`], for the folds below that thread
     /// one evolving scope through a sequence of bindings without cloning at
     /// every step. Rebinding a name plainly (no known arity) clears any
-    /// stale [`Scope::optional_arity`] entry, so a local parameter/pattern
-    /// binding can never inherit an outer optional-leading function's
-    /// arity just by sharing its name.
+    /// stale [`Scope::optional_arity`]/[`Scope::rename`] entry, so a local
+    /// parameter/pattern binding can never inherit an outer optional-
+    /// leading function's arity — or an outer module member's qualified
+    /// redirect — just by sharing its name.
     fn insert(&mut self, name: &str) {
         self.names.insert(name.to_string());
         self.optional_arity.remove(name);
+        self.renames.remove(name);
     }
 
     /// Like [`Scope::insert`], but also records `name`'s leading-optional-
@@ -126,6 +149,25 @@ impl Scope {
         } else {
             self.optional_arity.remove(name);
         }
+        self.renames.remove(name);
+    }
+
+    /// Record that a bare reference to `local` (a module member's own
+    /// sibling-visible name) must actually resolve to the Ast key
+    /// `actual_key` (its qualified binding — see [`Scope`]'s `renames`
+    /// field doc comment and `push_named_binding`). `local` stays `true`
+    /// under [`Scope::contains`] (unaffected by this call) — only WHICH KEY
+    /// [`Scope::resolve`] returns for it changes.
+    fn rename(&mut self, local: &str, actual_key: &str) {
+        self.renames.insert(local.to_string(), actual_key.to_string());
+    }
+
+    /// The Ast key a bare reference to `name` should actually use: its
+    /// [`Scope::rename`] redirect, if one is active, else `name` itself
+    /// unchanged (the overwhelmingly common case — every name outside a
+    /// module's own body, and every module member before this fix existed).
+    fn resolve(&self, name: &str) -> String {
+        self.renames.get(name).cloned().unwrap_or_else(|| name.to_string())
     }
 
     fn contains(&self, name: &str) -> bool {
@@ -155,10 +197,15 @@ impl Scope {
 
 /// A `Var` node for a name that must already be in scope (primitive
 /// operators and the internal `%context`/`read-inline`/`read-block` wiring
-/// are all resolved the same way as user variables).
+/// are all resolved the same way as user variables). Existence is checked
+/// against the BARE `name` (unaffected by any active [`Scope::rename`]
+/// redirect); the constructed node's own key goes through
+/// [`Scope::resolve`], so a module member's sibling reference compiles
+/// directly to that member's qualified key when one is active (module-
+/// completion bug fix — see `push_named_binding`'s doc comment).
 fn scoped_var(name: &str, span: Span, scope: &Scope) -> Result<Ast, ElabError> {
     if scope.contains(name) {
-        Ok(Ast::Var(name.to_string(), span))
+        Ok(Ast::Var(scope.resolve(name), span))
     } else {
         err(span, format!("unbound variable '{name}'"))
     }
@@ -373,6 +420,21 @@ fn nest(bindings: Vec<Binding>, tail: Ast) -> Ast {
 /// declarations still inside the same `struct .. end` see it unqualified)
 /// but never to `exported`: per v0.0.6 semantics, after `end` only the
 /// qualified name is visible to what follows.
+///
+/// Only remaining caller: `TopBinding::LetRec`'s per-name loop, where
+/// `local` is ALREADY bound (bare, by construction — a `let rec .. and ..`
+/// group's own mutual-recursion scope needs every clause visible to every
+/// other one by its bare name, which `rec_bindings` sets up before this
+/// runs), so there is no single value this function could re-bind under a
+/// mangled key the way `push_named_binding`'s fix does — the bare name
+/// genuinely stays physically present in the flat `nest()` chain, and so
+/// (pre-existing behavior, not a new regression) can still leak past this
+/// module's `end` if a `let rec` binding's bare name happens to collide
+/// with something reached later in program order. Narrower in practice
+/// than the bug `push_named_binding` fixes (a top-level `let rec .. and
+/// ..` group directly inside a `module .. = struct .. end`, rather than
+/// any of the far more common plain `val`/`let-inline`/`let-block`/
+/// `let-math`/`let mutable` members) — left as a known, separable gap.
 fn export_alias(
     mod_path: &[String],
     local: String,
@@ -397,6 +459,47 @@ fn export_alias(
 /// `TopBinding::LetInline`/`LetBlock`/`LetMath` (all four have a `Param`
 /// list that can carry the marker — `leading_optional_count`); every other
 /// binding kind here passes `0`.
+///
+/// Module-member bug fix: for `mod_path` non-empty (inside a `module M =
+/// struct .. end`), `value` is bound under a MANGLED key
+/// (`"$M.local"` — `$` can never appear in a surface identifier/command
+/// name, so this can never collide with anything user-written), not the
+/// bare `"local"` name the old two-step (`export_alias`, still used by
+/// `TopBinding::LetRec` below) used. The bare `LetIn` used to stay
+/// PHYSICALLY PRESENT in the single flat `nest()` chain this whole program
+/// compiles to; since that chain has no scope-popping of its own, the bare
+/// name stayed bound (and so silently SHADOWED any unrelated same-named
+/// binding — a base primitive, or a different package's own member —
+/// reached later in program order) for literally the rest of the merged
+/// program, not just until this module's `end`. [`Scope::rename`]
+/// redirects a SIBLING member's bare reference (still written `local`, as
+/// in the source) to the mangled key instead — consulted by [`scoped_var`]
+/// and the inline/block/math command-key resolution sites in
+/// `inline_elems`/`block_elems`/`math_bot`.
+///
+/// The qualified alias (`"M.local"` — unchanged in spirit from the old
+/// two-step, just now pointing at the mangled key instead of a bare one)
+/// is still bound separately, and is load-bearing beyond mere qualified
+/// lookup: `v1/module_check.rs`'s sealing pass keys its opaque/stamped
+/// type rewrite on this EXACT qualified string (`static_env.seals`), and
+/// applies it ONLY to a binding whose OWN key matches — a mangled key
+/// never matches, so a member's OWN body (and any SIBLING that reaches it
+/// via the mangled-key redirect) keeps seeing its naturally-inferred,
+/// TRANSPARENT type, exactly as a bare reference always did; only an
+/// EXPLICIT qualified reference (`M.local`, from outside, or written
+/// as such from inside) sees the sig's opaque view. Losing this
+/// distinction (e.g. by binding the real value directly under the
+/// qualified key, or by redirecting sibling references to the qualified
+/// key instead of the mangled one) breaks sealing for any member whose
+/// body uses ANOTHER sealed sibling's value at a type the sig makes
+/// opaque (`v01_sealing.rs`'s `u1_opaque_accept`/`u8_command_decls`/
+/// `u9_ctor_hiding`/`t13_escaped_skolem_message` all pin this).
+///
+/// The redirect and the mangled key both live only in `running`, this
+/// recursive `walk_bindings` call's OWN local scope — neither is ever
+/// copied back to the caller (only the qualified name's existence/arity
+/// is, via `inner_running.optional_arity`), so they can never affect
+/// anything outside this module or after its `end`.
 fn push_named_binding(
     mod_path: &[String],
     local: String,
@@ -407,8 +510,20 @@ fn push_named_binding(
     running: &mut Scope,
     exported: &mut Vec<String>,
 ) {
-    bindings.push(make_binding(local.clone(), value));
-    export_alias(mod_path, local, arity, bindings, running, exported);
+    if mod_path.is_empty() {
+        bindings.push(make_binding(local.clone(), value));
+        running.insert_with_arity(&local, arity);
+        exported.push(local);
+    } else {
+        let qual = qualify_key(mod_path, &local);
+        let mangled = format!("${qual}");
+        bindings.push(make_binding(mangled.clone(), value));
+        bindings.push(Binding::Let(qual.clone(), Ast::Var(mangled.clone(), Span::default())));
+        running.insert_with_arity(&local, arity);
+        running.rename(&local, &mangled);
+        running.insert_with_arity(&qual, arity);
+        exported.push(qual);
+    }
 }
 
 /// The length of the maximal leading run of `Param::Optional` entries in a
@@ -594,6 +709,18 @@ fn walk_bindings(
                     type_decls,
                     synonym_decls,
                 )?;
+                // A module's own bare (unqualified) member names never leak
+                // past this `end`: `push_named_binding` (used by every
+                // ordinary member below) now binds each member DIRECTLY
+                // under its qualified key and registers a `Scope::rename`
+                // redirect for sibling lookups, instead of the old
+                // bare-then-qualified-alias two-step — see that function's
+                // doc comment for the fix and why `nest()`'s single flat
+                // `LetIn` chain made naive scope-popping unsafe (it silently
+                // broke `v1/module_check.rs`'s spine-walking sealing pass,
+                // which only recognizes TOP-LEVEL `LetIn`/`LetMathIn`/
+                // `LetRecIn`/`LetMutableIn` nodes, not ones nested inside a
+                // wrapper sub-expression).
                 bindings.extend(inner_bindings);
                 for q in &inner_exported {
                     running.insert_with_arity(q, inner_running.optional_arity(q));
@@ -1323,7 +1450,16 @@ fn expr(e: &c::Expr, scope: &Scope) -> Result<Ast, ElabError> {
             Box::new(expr(cond, scope)?),
             Box::new(expr(body, scope)?),
         )),
-        // `name <- value` (`nxlambda`'s `OVERWRITEEQ` case).
+        // `name <- value` (`nxlambda`'s `OVERWRITEEQ` case). Existence is
+        // checked against the bare `name.name` (unaffected by any active
+        // `Scope::rename` redirect); the constructed node's own key goes
+        // through `Scope::resolve`, exactly like `scoped_var` — a mutable
+        // module member's sibling overwrite (`first-footnote <- Some m`)
+        // must target the SAME mangled key its `LetMutableIn` is bound
+        // under, or the typechecker's own `Ast::Overwrite` arm (which looks
+        // the name up directly in `env`, independent of `Scope`) reports it
+        // unbound (module-completion bug fix — see `push_named_binding`'s
+        // doc comment).
         c::Expr::Overwrite { name, value, .. } => {
             if !scope.contains(&name.name) {
                 return err(
@@ -1332,7 +1468,7 @@ fn expr(e: &c::Expr, scope: &Scope) -> Result<Ast, ElabError> {
                 );
             }
             Ok(Ast::Overwrite(
-                name.name.clone(),
+                scope.resolve(&name.name),
                 name.span,
                 Box::new(expr(value, scope)?),
             ))
@@ -1426,7 +1562,13 @@ fn op_chain(chain: &c::OpChain, scope: &Scope) -> Result<Ast, ElabError> {
             if text != "|>" && !scope.contains(&text) {
                 return err(rhs.op.span, format!("unbound operator '{text}'"));
             }
-            ops.push_back((text, rhs.op.span, rhs.op.tok.clone()));
+            // `scope.resolve` redirects a module member's own bare
+            // operator (`val (+++) a b = ..` inside `module M = struct ..
+            // end`) to its mangled key, exactly like `scoped_var` — `"|>"`
+            // is never a `Scope::rename` target (it's deliberately never
+            // scope-bound at all, see this arm's own comment above), so
+            // resolving it is a no-op.
+            ops.push_back((scope.resolve(&text), rhs.op.span, rhs.op.tok.clone()));
             atoms.push_back(app_expr(&rhs.rhs, scope)?);
         }
         climb(&mut atoms, &mut ops, 0)
@@ -2026,7 +2168,7 @@ fn inline_elems(elems: &[c::InlineElem], scope: &Scope) -> Result<Vec<IText>, El
                 }
                 let leading = scope.optional_arity(&key);
                 out.push(IText::Cmd {
-                    name: key,
+                    name: scope.resolve(&key),
                     span,
                     args: cmd_args(tail, scope, leading)?,
                 });
@@ -2040,7 +2182,7 @@ fn inline_elems(elems: &[c::InlineElem], scope: &Scope) -> Result<Vec<IText>, El
                     return err(var.span, format!("unbound variable '{key}'"));
                 }
                 out.push(IText::Embed {
-                    expr: Ast::Var(key, var.span),
+                    expr: Ast::Var(scope.resolve(&key), var.span),
                     span: var.span,
                 });
             }
@@ -2087,7 +2229,7 @@ fn block_elems(elems: &[c::BlockElem], scope: &Scope) -> Result<Vec<BText>, Elab
                 }
                 let leading = scope.optional_arity(&key);
                 out.push(BText::Cmd {
-                    name: key,
+                    name: scope.resolve(&key),
                     span,
                     args: cmd_args(tail, scope, leading)?,
                 });
@@ -2098,7 +2240,7 @@ fn block_elems(elems: &[c::BlockElem], scope: &Scope) -> Result<Vec<BText>, Elab
                     return err(var.span, format!("unbound variable '{key}'"));
                 }
                 out.push(BText::Embed {
-                    expr: Ast::Var(key, var.span),
+                    expr: Ast::Var(scope.resolve(&key), var.span),
                     span: var.span,
                 });
             }
@@ -2339,7 +2481,7 @@ fn math_bot(b: &c::MathBot, scope: &Scope) -> Result<MathElem, ElabError> {
                 arg_asts.push(math_arg_to_ast(a, scope)?);
             }
             Ok(MathElem::Cmd {
-                name: key,
+                name: scope.resolve(&key),
                 span,
                 args: arg_asts,
             })
@@ -2355,7 +2497,7 @@ fn math_bot(b: &c::MathBot, scope: &Scope) -> Result<MathElem, ElabError> {
                 return err(tok.span, format!("unbound variable '{key}'"));
             }
             Ok(MathElem::Embed {
-                expr: Ast::Var(key, tok.span),
+                expr: Ast::Var(scope.resolve(&key), tok.span),
                 span: tok.span,
             })
         }

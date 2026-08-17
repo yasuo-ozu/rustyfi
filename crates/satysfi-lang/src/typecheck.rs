@@ -26,8 +26,8 @@ use crate::prim_types::{
     self, arrow, builtin_variants_with_version, labeled, list, mandatory, optional, product, reff,
     t_block_boxes,
     t_block_text, t_bool, t_context, t_deco, t_decoset, t_document, t_float, t_graphics, t_image,
-    t_inline_boxes, t_inline_text, t_int, t_length, t_math_boxes, t_math_text, t_option, t_path,
-    t_prepath, t_string, t_unit, VariantDecl,
+    t_inline_boxes, t_inline_text, t_int, t_length, t_math_boxes, t_math_text, t_option, t_paren,
+    t_path, t_prepath, t_string, t_unit, VariantDecl,
 };
 use crate::types::{
     self, generalize, instantiate, resolve, resolve_row, BaseType, CmdArgType, Kind, MonoType,
@@ -223,6 +223,11 @@ pub const PRIMITIVE_NAMES: &[&str] = &[
     // ---- pervasives.satyh unblockers (docs/plans/stdlib-port.md) ----
     "get-natural-metrics",
     "inline-frame-outer",
+    // vminst.ml:1807 `BackendInnerFrame` — same signature as
+    // `inline-frame-outer` above; the primitive (`primitives.rs`) and its
+    // type (`prim_types.rs`) were both already registered for both
+    // versions, this list simply omitted the name (G9).
+    "inline-frame-inner",
     "set-manual-rising",
     "script-guard",
     "discretionary",
@@ -506,6 +511,16 @@ fn name_to_mono(name: &str, version: SatysfiVersion) -> MonoType {
         // zero prim retypes; a faithful `BaseType::Font` is deferred to
         // real 0.1 envelope font loading (Axis B, per the roadmap).
         "font" if version == SatysfiVersion::V0_1 => t_string(),
+        // math-package completion M2: upstream's sig writes `val paren-left
+        // : paren` (+18 more `paren`-typed rows) and `val angle-left :
+        // length -> paren`. Structural, like `deco`/`deco-set` just above —
+        // the sealed decl's declared type then unifies with
+        // `paren-left`/`paren-right`'s inferred `length -> length ->
+        // context -> inline-boxes * (length -> length)` by construction.
+        // Under V0_0_6, `paren` keeps falling to the nominal
+        // `Variant("paren", [])` default (the 0.0.6 corpus path is
+        // synonym-expansion via `pervasives.satyh`, unchanged).
+        "paren" if version == SatysfiVersion::V0_1 => t_paren(version),
         other => MonoType::Variant(other.to_string(), Vec::new()),
     }
 }

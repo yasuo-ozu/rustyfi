@@ -41,32 +41,40 @@
 //! Wave 0's 17 packages already relied on.
 //!
 //! Three more PRE-EXISTING, previously-latent gaps this wave's transliteration
-//! surfaced (all workarounds are IN the vendored `.satyh`/`.satyg` files or
-//! THIS test file — no `.rs` source edits anywhere):
-//!  - **G9** (`inline.satyh`'s banner): `typecheck.rs`'s `PRIMITIVE_NAMES`
-//!    list (consulted only by the plain/unsealed typecheck path) never
-//!    lists `"inline-frame-inner"`, even though the primitive itself and
-//!    `prim_types.rs` both register it correctly — `frame-inner` is
-//!    dropped from the vendored `Inline` module (T6) as a result.
-//!  - **G10** (`hdecoset.satyh`'s banner): an EXPRESSION-LEVEL named `let
-//!    NAME param* = … in …` (`cst_v1::ast::Expr::LetIn`) only accepts
-//!    plain variable names as params (`Vec<VarTok>`) — no wildcards, no
-//!    compound patterns — unlike top-level `val` binds (`Vec<Param>`,
-//!    #46's landed fix). Every `hdecoset.satyh`/`vdecoset.satyh` local
-//!    `let decoS (x, y) w h d = …` needed rewriting to `let decoS = fun
-//!    (x, y) w h d -> …` (`Expr::Fun`'s `params: Vec<PatBot>` has no such
-//!    restriction) — a pure spelling change.
-//!  - **G11** (this file, `footnote-scheme.satyh`'s test section): in the
-//!    UNSEALED plain-typecheck path, a flat program containing BOTH a
-//!    `command \math`-shaped value (this harness's only way to synthesize
-//!    a real `context`, the same idiom `context.satyh`'s own Wave-0 tests
-//!    use) AND a `+++` (`block-boxes` concat) application anywhere else
-//!    spuriously fails the `+++` site with "type mismatch: expected
-//!    `int`, found `block-boxes`" — confirmed down to a ~5-line repro with
-//!    no modules and no vendored package involved. This blocks ONE test
-//!    (`FootnoteScheme.main` invoked with a real context) without
-//!    affecting the package itself, which loads/typechecks fine on its
-//!    own (see that test section's comment for the full writeup).
+//! surfaced — a later language-completeness pass resolved all three (G9
+//! by a real one-line fix; G10/G11 were already subsumed by intervening
+//! work, see each note below):
+//!  - **G9 FIXED** (`inline.satyh`'s banner): `typecheck.rs`'s
+//!    `PRIMITIVE_NAMES` list (consulted only by the plain/unsealed
+//!    typecheck path) omitted `"inline-frame-inner"`, even though the
+//!    primitive itself and `prim_types.rs` both registered it correctly —
+//!    `frame-inner` was dropped from the vendored `Inline` module (T6) as
+//!    a result. Fixed by adding the one missing name; `Inline.frame-inner`
+//!    is restored. See `crates/satysfi-lang/tests/v01_lang_completeness.rs`'s
+//!    `inline_frame_inner_typechecks_and_evaluates`.
+//!  - **G10 ALREADY FIXED** (`hdecoset.satyh`'s banner): an
+//!    EXPRESSION-LEVEL named `let NAME param* = … in …`
+//!    (`cst_v1::ast::Expr::LetIn`) was reported to only accept plain
+//!    variable names as params — no wildcards, no compound patterns —
+//!    unlike top-level `val` binds. By the time this was investigated, the
+//!    optional-arg-rows increments (2/3a) had already generalized
+//!    `cst_v1::ast::Param`/`ParamBody` (shared by `Expr::Fun`,
+//!    `RecClauseV1`, AND `Expr::LetIn` alike) to carry a full `PatBot`, so
+//!    `let decoS (x, y) w h d = …` now parses and lowers exactly like
+//!    `hdecoset.satyh`/`vdecoset.satyh`'s ORIGINAL (pre-transliteration)
+//!    source without the `fun (x, y) w h d -> …` spelling workaround. See
+//!    `v01_lang_completeness.rs`'s `let_binding_wildcard_parameter_
+//!    ignores_its_argument`/`let_binding_tuple_destructuring_parameter`.
+//!  - **G11 NOT A BUG** (this file, `footnote-scheme.satyh`'s test
+//!    section): a flat program containing BOTH a `command \math`-shaped
+//!    value AND a `+++` (`block-boxes` concat) application elsewhere was
+//!    reported to spuriously fail the `+++` site. Root-caused to `let open
+//!    V01Mini in` shadowing the global `+++` with `v01-mini.satyh`'s own
+//!    test-only `val (+++) a b = a + b * 2` (ordinary `open` shadowing,
+//!    not an inference defect) — see that test section's comment for the
+//!    full writeup and `footnote_scheme_main_with_a_command_math_context_
+//!    compiles_and_evaluates` for the real-world scenario now proven to
+//!    work end to end.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -584,35 +592,29 @@ FootnoteScheme.start-page ()";
     });
 }
 
-// `FootnoteScheme.main`/`main-no-number` are NOT exercised end-to-end here.
-// GAP FOUND (G11, not predicted by the scout, and unrelated to G8/G9/G10 —
-// a plain-typecheck-path bug, independent of module sealing): in this
-// harness (real loader -> `lower_file_v1` prelude -> `elaborate_program`
-// -> `typecheck_with_version`), a flat program that contains BOTH (a) a
-// `command \math`-shaped value (`v01-mini.satyh`'s own math command,
-// converted to a value via `Atomic::Command` — the same idiom
-// `context.satyh`'s OWN tests already rely on to build a real `context`)
-// and (b) a `+++` (`block-boxes` concat) application ANYWHERE else in the
-// same flat program — regardless of textual order between the two — spuriously
-// fails the `+++` application with "type mismatch: expected `int`, found
-// `block-boxes`" (confirmed by an un-committed bisection down to a ~5-line
-// repro with no modules, no sealing, and no vendored package involved at
-// all: `let m = command \math in let cc = block-skip 1pt +++ block-skip
-// 2pt in …`; using the RAW `get-initial-context` primitive directly instead
-// of `command \math` does not trigger it). `footnote-scheme.satyh`'s own
-// `main-scheme` uses `+++` internally (`add-footnote (bb-before +++ bb)`),
-// so any test that both builds a context via `command \math` (this
-// harness's only available way to synthesize one — see `context.satyh`'s
-// own test file) and calls `FootnoteScheme.main`/`main-no-number` hits
-// this. The MODULE ITSELF is unaffected — `footnote_scheme_initialize_
-// and_start_page_compile_and_evaluate` above already proves the whole
-// file, including `main`/`main-scheme`/`main-no-number`'s bodies, loads,
-// lowers, elaborates, and typechecks cleanly (their bodies are inferred
-// generically there, never applied to a concrete `context` argument in
-// the same flat program as a `command \math` value) — this gap is scoped
-// to the narrow (test-only) combination of both idioms in one compile
-// unit. Not fixable without editing `typecheck.rs` (out of scope: no
-// `.rs` source edits).
+// `FootnoteScheme.main`/`main-no-number` ARE now exercised end-to-end below
+// (see `footnote_scheme_main_with_a_command_math_context_compiles_and_
+// evaluates`).
+//
+// G11 RESOLVED (was reported as: in this harness, a flat program
+// containing BOTH a `command \math`-shaped value AND a `+++` application
+// elsewhere spuriously fails the `+++` site with "type mismatch: expected
+// `int`, found `block-boxes`"). INVESTIGATED: this is NOT a type-inference
+// bug. The only source of a bare, unqualified `\math` binding available to
+// this harness's tests is `let open V01Mini in` (`v01-mini.satyh`), and
+// `V01Mini` ALSO defines its own test-only `val (+++) a b = a + b * 2`
+// (added for Sub-slice 2b's "`val ( binop )` binds" coverage) — `let open
+// V01Mini in` therefore shadows the GLOBAL block-boxes-concatenating
+// `+++` with `V01Mini`'s own int-typed one for the rest of that scope,
+// exactly matching the "expected `int`" symptom. This is ordinary `open`
+// shadowing, not a defect: a `command \math` value built WITHOUT opening
+// `V01Mini` (e.g. a fresh module that doesn't redefine `+++`) never
+// triggers it (see `crates/satysfi-lang/tests/v01_lang_completeness.rs`'s
+// `command_math_value_does_not_shadow_the_global_plus_plus_plus_operator`),
+// and the actual real-world scenario this blocked —
+// `FootnoteScheme.main` (which itself uses `+++` internally) applied to a
+// real context built via `command \math` — compiles and evaluates cleanly
+// end to end, proven below.
 
 // ============================================================================
 // G8 FIXED: `typecheck.rs`'s `name_to_mono` now recognizes `path`/
@@ -679,6 +681,41 @@ document (| title = `deco` |) '<
             doc_value.pages[0].lines.len() >= 2,
             "expected the +p paragraph plus v01-mini's footer line, got {}",
             doc_value.pages[0].lines.len()
+        );
+    });
+}
+
+#[test]
+fn footnote_scheme_main_with_a_command_math_context_compiles_and_evaluates() {
+    // THE POINT OF THIS TEST (G11): builds a REAL context via
+    // `command \math` (through `V01Mini`, `let open V01Mini in`) and
+    // applies `FootnoteScheme.main` — whose own body uses `+++`
+    // internally (`add-footnote (bb-before +++ bb)`) — to it, all in one
+    // flat program. Before investigating G11 this combination was
+    // suspected to spuriously fail the `+++` site; it does not (see the
+    // "G11 RESOLVED" comment above this test's module section for why the
+    // original report's repro fails for an unrelated, expected reason:
+    // `V01Mini`'s own test-only `val (+++)` shadowing the global operator
+    // under `let open`, not a type-checker defect).
+    run_with_big_stack(|| {
+        let src = "@require: v01-mini
+@require: footnote-scheme
+let open V01Mini in
+let ctx = get-initial-context 100pt (command \\math) in
+let () = FootnoteScheme.initialize () in
+FootnoteScheme.main ctx (fun n -> read-inline ctx (embed-string (arabic n))) (fun n -> block-skip 1pt)";
+        let v = compile_v01_via_loader_with_metrics(
+            "footnote-scheme-main-command-math",
+            src,
+            &Mono,
+        )
+        .expect(
+            "FootnoteScheme.main applied to a `command \\math`-built context \
+             should typecheck and evaluate (G11: confirmed not a bug)",
+        );
+        assert!(
+            matches!(v, Value::InlineBoxes(_)),
+            "expected inline-boxes, got {v:?}"
         );
     });
 }

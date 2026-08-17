@@ -99,26 +99,53 @@ pub fn t_math_class() -> MonoType {
 /// gap 5 (`docs/plans/math-mode-language-gaps.md`) resolves the actual
 /// Unicode-math-block restyling this variant names (`satysfi_backend::
 /// MathCharClass`/`resolve_variant_char`) once evaluation reaches a value
-/// of this type.
+/// of this type. This TYPE itself (`math-char-class`, nominal, no
+/// parameters) is version-blind; its CONSTRUCTOR SET is not — see
+/// [`builtin_variants_with_version`]'s `math_char_class_decl` (math-package
+/// completion M3: V0_1 registers 14 ctors, V0_0_6 exactly the 9 above).
 pub fn t_math_char_class() -> MonoType {
     MonoType::Variant("math-char-class".to_string(), Vec::new())
 }
-/// `paren` (`pervasives.satyh`'s `type paren = length -> length -> length ->
-/// length -> color -> inline-boxes * (length -> length)`) — structural, like
-/// `t_point()`/`t_dash()`/`t_deco()` above: directly the expanded function
-/// type, not a nominal reference. `math-paren`'s first two arguments
-/// (`math.satyh`'s `paren-left`/`paren-right`, `\paren`/`\brace`/`\abs`/…)
-/// are typed against this shape directly; this port's type-synonym
-/// expansion resolves a `paren`-named annotation (e.g. `val paren-left :
-/// paren` in a `sig`) to the same shape, but — see `typecheck.rs`'s
-/// `lower_sig_item` doc comment — no sig-enforcement pass consults that yet,
-/// so what actually matters is that this matches `paren-left`/`paren-right`'s
-/// own INFERRED type, which it does by construction.
-pub fn t_paren() -> MonoType {
-    arrows(
-        vec![t_length(), t_length(), t_length(), t_length(), t_color()],
-        product(vec![t_inline_boxes(), arrow(t_length(), t_length())]),
-    )
+/// `paren` — version-forked (math-package completion M2), the
+/// `t_deco(version)`/`t_graphics_output(version)`/`t_decoset(version)`
+/// pattern (`:396-411`):
+/// - `V0_0_6` (`pervasives.satyh`'s `type paren = length -> length -> length
+///   -> length -> color -> inline-boxes * (length -> length)`) — structural,
+///   like `t_point()`/`t_dash()`/`t_deco()` above: directly the expanded
+///   function type, not a nominal reference.
+/// - `V0_1` (`primitives.cppo.ml:91`: `tPAREN = tLN @-> tLN @-> tCTX @->
+///   tPROD [tIB; tLN @-> tLN]`) — `length -> length -> context ->
+///   inline-boxes * (length -> length)`: (inner height, inner depth
+///   SIGNED, the context) → (the delimiter boxes, the script-kern
+///   function). The 0.0.6→0.1 delta: the closure now extracts fontsize /
+///   axis-ratio (via `get-math-axis-height-ratio`) / color FROM the
+///   context instead of receiving them as separate explicit arguments —
+///   see `make_paren_run` (`primitives.rs`) for the corresponding runtime
+///   protocol fork.
+///
+/// `math-paren`'s first two arguments (`math.satyh`'s
+/// `paren-left`/`paren-right`, `\paren`/`\brace`/`\abs`/…) are typed against
+/// this shape directly; this port's type-synonym expansion resolves a
+/// `paren`-named annotation (e.g. `val paren-left : paren` in a `sig`) to
+/// the same shape (V0_0_6: pervasives synonym expansion; V0_1: the
+/// `name_to_mono("paren", …)` nominal case, `typecheck.rs`), so what
+/// actually matters is that this matches `paren-left`/`paren-right`'s own
+/// INFERRED type, which it does by construction. Gated on
+/// `math_is_split()` — the same predicate that already forks `math-paren`
+/// itself (`:1446-1455` below), keeping type-env and runtime keyed on the
+/// same capability by construction.
+pub fn t_paren(version: SatysfiVersion) -> MonoType {
+    if version.math_is_split() {
+        arrows(
+            vec![t_length(), t_length(), t_context()],
+            product(vec![t_inline_boxes(), arrow(t_length(), t_length())]),
+        )
+    } else {
+        arrows(
+            vec![t_length(), t_length(), t_length(), t_length(), t_color()],
+            product(vec![t_inline_boxes(), arrow(t_length(), t_length())]),
+        )
+    }
 }
 /// A math-char kern function (`math.satyh`'s `\int`: `let kernfR fontsize
 /// ypos = fontsize *' 0.45 in ...`) — `length -> length -> length`
@@ -1446,11 +1473,14 @@ pub fn primitive_type_with_version(name: &str, version: SatysfiVersion) -> Optio
         "math-paren" => {
             if version.math_is_split() {
                 poly0(arrows(
-                    vec![t_context(), t_paren(), t_paren(), t_math_boxes()],
+                    vec![t_context(), t_paren(version), t_paren(version), t_math_boxes()],
                     t_math_boxes(),
                 ))
             } else {
-                poly0(arrows(vec![t_paren(), t_paren(), t_math()], t_math()))
+                poly0(arrows(
+                    vec![t_paren(version), t_paren(version), t_math()],
+                    t_math(),
+                ))
             }
         }
         // vminst.ml:314 `BackendMathParenWithMiddle`:
@@ -1461,16 +1491,21 @@ pub fn primitive_type_with_version(name: &str, version: SatysfiVersion) -> Optio
                 poly0(arrows(
                     vec![
                         t_context(),
-                        t_paren(),
-                        t_paren(),
-                        t_paren(),
+                        t_paren(version),
+                        t_paren(version),
+                        t_paren(version),
                         list(t_math_boxes()),
                     ],
                     t_math_boxes(),
                 ))
             } else {
                 poly0(arrows(
-                    vec![t_paren(), t_paren(), t_paren(), list(t_math())],
+                    vec![
+                        t_paren(version),
+                        t_paren(version),
+                        t_paren(version),
+                        list(t_math()),
+                    ],
                     t_math(),
                 ))
             }
@@ -2031,24 +2066,43 @@ pub fn builtin_variants_with_version(version: SatysfiVersion) -> Vec<VariantDecl
         param_vars: Vec::new(),
     };
 
-    // `math-char-class` (docs/plans/math-engine.md §F) — nullary variant,
-    // `horzBox.ml:147`'s exact constructor set. Needed for `math.satyh`'s
-    // `\mathrm`/`\mathbf`/`\mathcal`/`\mathfrak`/`\mathbb`/`\bm` to
-    // type-check (each applies `math-char-class` to one of these).
+    // `math-char-class` (docs/plans/math-engine.md §F) — nullary variant.
+    // Constructor set is version-dependent (math-package completion M3):
+    // `v0.0.6` upstream has exactly these 9
+    // (`v0.0.6:src/backend/horzBox.ml:147-158`'s exact set, literally
+    // "TEMPORARY; should add more"); dev-0-1-0 widens `math_char_class`
+    // 9 → 14 (`b836d512:src/backend/horzBox.ml:98-113`), adding
+    // `MathSansSerif`/`MathBoldSansSerif`/`MathItalicSansSerif`/
+    // `MathBoldItalicSansSerif`/`MathTypewriter`. Needed for `math.satyh`'s
+    // `\mathrm`/`\mathbf`/`\mathcal`/`\mathfrak`/`\mathbb`/`\bm`/`\mathsf`/
+    // `\mathtt` to type-check (each applies `math-char-class` to one of
+    // these). Gated on `math_is_split()` so the frozen 0.0.6 surface never
+    // learns the 5 new names (unknown-constructor error preserved,
+    // `typecheck.rs:2257/2347`).
+    let mut math_char_class_ctors = vec![
+        ("MathItalic".to_string(), None),
+        ("MathBoldItalic".to_string(), None),
+        ("MathRoman".to_string(), None),
+        ("MathBoldRoman".to_string(), None),
+        ("MathScript".to_string(), None),
+        ("MathBoldScript".to_string(), None),
+        ("MathFraktur".to_string(), None),
+        ("MathBoldFraktur".to_string(), None),
+        ("MathDoubleStruck".to_string(), None),
+    ];
+    if version.math_is_split() {
+        math_char_class_ctors.extend([
+            ("MathSansSerif".to_string(), None),
+            ("MathBoldSansSerif".to_string(), None),
+            ("MathItalicSansSerif".to_string(), None),
+            ("MathBoldItalicSansSerif".to_string(), None),
+            ("MathTypewriter".to_string(), None),
+        ]);
+    }
     let math_char_class_decl = VariantDecl {
         name: "math-char-class".to_string(),
         params: 0,
-        ctors: vec![
-            ("MathItalic".to_string(), None),
-            ("MathBoldItalic".to_string(), None),
-            ("MathRoman".to_string(), None),
-            ("MathBoldRoman".to_string(), None),
-            ("MathScript".to_string(), None),
-            ("MathBoldScript".to_string(), None),
-            ("MathFraktur".to_string(), None),
-            ("MathBoldFraktur".to_string(), None),
-            ("MathDoubleStruck".to_string(), None),
-        ],
+        ctors: math_char_class_ctors,
         param_vars: Vec::new(),
     };
 

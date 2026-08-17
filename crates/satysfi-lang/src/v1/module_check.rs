@@ -1401,12 +1401,22 @@ fn process_seal_member(
     let rigid_body = ck.expand_synonyms_in(&rigid_raw)?;
 
     match shape {
-        CmdShape::Inline if !matches!(&scheme_body, MonoType::InlineCmd(_)) => {
+        // Math commands share the `\` sigil with inline commands (no
+        // separate sig keyword upstream — `val \frac : math […]` is a
+        // `ValHorzCmd` exactly like `val \it : inline […]`), precedent
+        // `command_scheme`'s alias pass-through (`typecheck.rs:1441-1443`).
+        // Soundness is preserved: a sig declaring `math […]` for an inline
+        // binding (or vice versa) still fails at subsumption/unify
+        // (`UnifyError::Mismatch`) — this guard is only the early,
+        // better-message filter (math-package completion M1).
+        CmdShape::Inline
+            if !matches!(&scheme_body, MonoType::InlineCmd(_) | MonoType::MathCmd(_)) =>
+        {
             return Err(simple_error(
                 Some(kw_span),
                 format!(
                     "module `{}`'s signature: a `val {member_name} :` decl needs an \
-                     `inline [...]` command type",
+                     `inline [...]` or `math [...]` command type",
                     seal.module_name
                 ),
             ));
@@ -1556,7 +1566,9 @@ fn collect_v1_type_vars_app(a: &ast_v1::TypeApp, out: &mut Vec<(String, Span)>) 
         // is the same kind of nested type position — walk its field types
         // too, or a quantified type variable used ONLY inside a bundle
         // (`?(l : 'a)`) would go unregistered.
-        ast_v1::TypeApp::InlineCmdTy { args, .. } | ast_v1::TypeApp::BlockCmdTy { args, .. } => {
+        ast_v1::TypeApp::InlineCmdTy { args, .. }
+        | ast_v1::TypeApp::BlockCmdTy { args, .. }
+        | ast_v1::TypeApp::MathCmdTy { args, .. } => {
             for a in args {
                 if let Some(dom) = &a.opts {
                     for e in &dom.entries {

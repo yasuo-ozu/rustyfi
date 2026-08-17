@@ -701,6 +701,17 @@ fn lower_type_app(a: &ast_v1::TypeApp, tyenv: &TypeNameEnv) -> Result<cst::ast::
                 kind: cst::ast::CmdTypeKind::Block(VertCmdTypeTok(kw.0)),
             }))
         }
+        // `math […]` (math-package completion M1). `lower_type_atom`'s Cmd
+        // arm in `typecheck.rs` already produces `MonoType::MathCmd` for
+        // `CmdTypeKind::Math` and `unify.rs` already dispatches it — no
+        // typecheck/unify change needed for the head itself.
+        ast_v1::TypeApp::MathCmdTy { kw, list, args } => {
+            Ok(cst::ast::TypeApp::Atom(cst::ast::TypeAtom::Cmd {
+                list: list.clone(),
+                args: lower_type_cmd_args(args, tyenv)?,
+                kind: cst::ast::CmdTypeKind::Math(MathCmdTypeTok(kw.0)),
+            }))
+        }
         ast_v1::TypeApp::AppliedLong { ctor, first, rest } => {
             if let Some(extra) = rest.first() {
                 return Err(unsupported(
@@ -1640,12 +1651,15 @@ fn lower_math_elem_cst(m: &ast_v1::MathElemCst) -> Result<cst::ast::MathElemCst,
 fn lower_math_bot(b: &ast_v1::MathBot) -> Result<cst::ast::MathBot, LowerError> {
     Ok(match b {
         ast_v1::MathBot::Cmd { name, args } => cst::ast::MathBot::Cmd {
-            // cst_v1's bare `MathCmdTok` carries the dotted-scanned name (no
-            // separate module-qualified math-command token exists at this
-            // node — a `\Mod.cmd` math command isn't produced here), so
-            // `Plain` wrapping is faithful — the same "reuse the existing
-            // tag" shape `plain_horz`/`plain_vert` use (`leaf.rs:119-121`).
-            name: AnyMathCmdTok::Plain(name.clone()),
+            // `ast_v1::MathBot::Cmd.name` is ALREADY `AnyMathCmdTok`
+            // (math-package completion M4 fix — cst_v1.rs's grammar used to
+            // spell this `MathCmdTok` (sigil-only), which silently
+            // couldn't parse a `\Mod.cmd` qualified math command at all,
+            // even though the shared lexer always emitted
+            // `Token::MathCmdWithMod` for one; both cst.rs's 0.0.6 `MathBot`
+            // and this node now share the exact same tag), so no `Plain`
+            // wrapping is needed here — just carry it through.
+            name: name.clone(),
             args: args.iter().map(lower_math_arg).collect::<Result<_, _>>()?,
         },
         ast_v1::MathBot::Chars(t) => cst::ast::MathBot::Chars(t.clone()),

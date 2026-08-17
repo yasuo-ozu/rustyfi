@@ -1361,14 +1361,15 @@ fn command_type_and_long_lower_shapes() {
     assert_eq!(ctor.name, "t");
 }
 
-/// Negatives: `math […]` still fails at the `[` (`math` is still a plain
-/// `VarTok`, never a keyword until the math-split phase claims it — that's
-/// optional-arg-rows increment 3b), a `?`-suffixed slot (`int?`) still never
-/// parses (0.1 has no such positional-optional marker at all, only the
-/// closed-map `?(…)` prefix), and a `?(…)`-prefixed slot with NO mandatory
-/// type following the bundle (`[?(l : int)]` alone, nothing after the
-/// bundle) still fails — the bundle prefix is optional, but the slot's own
-/// `ty` is not (`TypeCmdArgItemV1.opts: Option<..>`, `ty: TyErasedV1`, not
+/// Negatives: `math […]` now PARSES (math-package completion M1 — see
+/// `math_command_type_head_round_trips`/`math_command_type_shape` below;
+/// this test used to pin it as a parse error under increment 3b). A
+/// `?`-suffixed slot (`int?`) still never parses (0.1 has no such
+/// positional-optional marker at all, only the closed-map `?(…)` prefix),
+/// and a `?(…)`-prefixed slot with NO mandatory type following the bundle
+/// (`[?(l : int)]` alone, nothing after the bundle) still fails — the
+/// bundle prefix is optional, but the slot's own `ty` is not
+/// (`TypeCmdArgItemV1.opts: Option<..>`, `ty: TyErasedV1`, not
 /// `Option<TyErasedV1>`). A well-formed `?(l:τ,…) τ_arg` DOES now parse —
 /// see `command_type_opt_labels_round_trips` (optional-arg-rows increment
 /// 3a, "roadmap phase 4" landed).
@@ -1381,7 +1382,7 @@ fn command_type_negatives() {
          end\n\
          end"
     )
-    .is_err());
+    .is_ok());
     assert!(parse_file_v1(
         "module M = struct\n\
          signature S = sig\n\
@@ -1466,4 +1467,87 @@ fn command_type_empty_opt_labels_parses_but_is_a_lower_concern() {
          end\n\
          end",
     );
+}
+
+// ============================================================================
+// Math-package completion M1: `math […]` command-type head
+// (`TypeApp::MathCmdTy`) — T-M1-roundtrip.
+// ============================================================================
+
+/// `math []`, `math [math-text, math-text]`, `math [?(a : int) int]` (a
+/// labeled-optional row, inheriting inc3a's `TypeCmdArgItemV1.opts` for
+/// free), and `math [list (math-text * inline-text)]` (the `\cases` shape,
+/// upstream `math.satyh:394`) all round-trip byte-for-byte.
+#[test]
+fn math_command_type_head_round_trips() {
+    assert_roundtrip_v1(
+        "module M = struct\n\
+         signature S = sig\n\
+         val \\alpha : math []\n\
+         val \\frac : math [math-text, math-text]\n\
+         val \\derive : math [?(a : int) int]\n\
+         val \\cases : math [list (math-text * inline-text)]\n\
+         end\n\
+         end",
+    );
+}
+
+/// Shape assertion: the parsed tree actually carries `TypeApp::MathCmdTy`
+/// (not merely round-tripping the source bytes), with the right arg count
+/// and the labeled bundle on the first slot.
+#[test]
+fn math_command_type_head_shape() {
+    let src = "module M = struct\n\
+               signature S = sig\n\
+               val \\derive : math [?(a : int) int, math-text]\n\
+               end\n\
+               end";
+    let file = parse_file_v1(src).unwrap();
+    let cst_v1::FileV1::Library { binds, .. } = file else {
+        panic!("expected a library file");
+    };
+    let cst_v1::Bind::Signature { sig_, .. } = &binds[0] else {
+        panic!("expected a Bind::Signature, got {:?}", binds[0]);
+    };
+    let cst_v1::ast::SigExpr::Bot(cst_v1::ast::SigBotV1::Sig { decls, .. }) = &*sig_.0 else {
+        panic!("expected SigExpr::Bot(SigBotV1::Sig)");
+    };
+    let cst_v1::ast::Decl::ValHorzCmd { ty, .. } = &*decls[0].0 else {
+        panic!("expected decls[0] to be ValHorzCmd, got {:?}", decls[0].0);
+    };
+    let cst_v1::ast::TypeExpr::Atom(cst_v1::ast::TypeProd { first, .. }) = ty else {
+        panic!("expected a bare TypeProd, got {ty:?}");
+    };
+    let cst_v1::ast::TypeApp::MathCmdTy { args, .. } = first else {
+        panic!("expected TypeApp::MathCmdTy, got {first:?}");
+    };
+    assert_eq!(args.len(), 2, "{args:?}");
+    let bundle = args[0].opts.as_ref().expect("first slot should carry a bundle");
+    let labels: Vec<&str> = bundle.entries.iter().map(|e| e.label.name.as_str()).collect();
+    assert_eq!(labels, vec!["a"]);
+    assert!(args[1].opts.is_none(), "second slot should carry no bundle");
+}
+
+/// Negative: `math` NOT followed by `[` in type position is still a parse
+/// error (a bare `math` type name, or `math int`, never shaped up as any
+/// known `TypeApp`/`TypeAtom` — `MathCmdTy` requires the bracketed list
+/// immediately after the keyword, same as `InlineCmdTy`/`BlockCmdTy`).
+#[test]
+fn math_command_type_head_without_bracket_is_still_a_parse_error() {
+    assert!(parse_file_v1(
+        "module M = struct\n\
+         signature S = sig\n\
+         val \\show : math\n\
+         end\n\
+         end"
+    )
+    .is_err());
+    assert!(parse_file_v1(
+        "module M = struct\n\
+         signature S = sig\n\
+         val \\show : math int\n\
+         end\n\
+         end"
+    )
+    .is_err());
 }

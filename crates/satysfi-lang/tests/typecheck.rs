@@ -361,7 +361,7 @@ fn primitive_names_are_cross_checked_against_primitives_source() {
     let src = include_str!("../src/primitives.rs");
     assert_eq!(
         typecheck::PRIMITIVE_NAMES.len(),
-        199,
+        200,
         "keep this in sync with primitives.rs's prims! table and \
          types_unify.rs's every_registered_primitive_has_a_type test \
          (math-split spec §2.2 added 8: read-math, stringify-math, \
@@ -374,7 +374,9 @@ fn primitive_names_are_cross_checked_against_primitives_source() {
          unite-graphics, clip-graphics-by-path; language-completeness sweep \
          gap 1 added 4: >., <., >=., <=.; G6 (…/tmp/g6-g7-standins.md §1) \
          added 5: load-hyphenation-dictionary, load-unicode-char-database, \
-         set-hyphenation-dictionary, set-unicode-char-database, here)"
+         set-hyphenation-dictionary, set-unicode-char-database, here; G9 \
+         added 1: inline-frame-inner — the primitive was already registered \
+         in primitives.rs/prim_types.rs, only this list omitted it)"
     );
     for name in typecheck::PRIMITIVE_NAMES {
         // Escape backslashes the way they'd actually appear in Rust source

@@ -1,0 +1,21 @@
+% math-package completion M4: a real render exercising the newly-restored
+% `\paren` family (M2) and `\mathsf`/`\mathtt` (M3), through the SEALED
+% `Math` module (M1's `:>` + ~190-row sig + M2's `paren` rows). `V01Mini`
+% supplies `document`/`+p`/`get-initial-context`; `Math`'s commands are
+% referenced fully qualified (`\Math.paren`/`\Math.frac`/…) rather than via
+% `let open Math in` — `open` brings EVERY `"Math."`-prefixed name into
+% scope regardless of the seal (`elaborate.rs`'s `open_module` is untyped
+% and pre-dates sealing), so opening a module with hidden internal helpers
+% (math.satyh has many: `math-scheme`, `greek`, `bracket-metrics`, …) always
+% fails; a qualified reference only ever touches sig-exported names, so it
+% works cleanly against a real sealed package.
+@require: v01-mini
+@require: math
+
+let open V01Mini in
+document (| title = `math full` |) '<
+  +p { Paren: ${\Math.paren{\Math.frac{1}{2}}}. }
+  +p { Sans-serif: ${\Math.mathsf{A}}. }
+  +p { Typewriter: ${\Math.mathtt{A}}. }
+  +p { Set: ${\Math.set{x}}. }
+>

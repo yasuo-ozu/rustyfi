@@ -2,7 +2,7 @@
 % packaging (docs/plans/satysfi-0-1-0-support.md §2 P2 / §4 phase 6 —
 % doc-class-capstone-road.md CP7 item 2). Source: saphe-split@b836d512:
 %   lib-satysfi/packages/math/math.0.0.1/src/math.satyh (1605 lines) —
-%   transliteration deltas:
+%   transliteration delta:
 %   - T1: `use package open Stdlib` dropped; `@require: graphics`,
 %     `@require: length`, `@require: list`, `@require: path` added (the
 %     only Stdlib modules this file references QUALIFIED: `Graphics.empty`,
@@ -13,56 +13,463 @@
 %     `math-*` prim family, …) is a GLOBAL primitive resolved through
 %     `base_env` regardless of `@require:` — the same "bare primitive"
 %     story `context.satyh`'s banner documents.
-%   - **STAND-IN — dropped the sealing boundary (`module Math :> sig …
-%     end = struct` -> plain `module Math = struct`), documented gap**:
-%     upstream's sig declares ~190 math-command members with the type
-%     head `\cmd : math [τ1, …]` (`\frac`, `\alpha`, `\sum`, …). This
-%     port's v1 grammar deliberately has NO `math […]` command-type head
-%     in TYPE/signature position yet — only `inline […]`/`block […]`
-%     (`cst_v1.rs` `TypeApp::InlineCmdTy`/`BlockCmdTy`, no `MathCmdTy`;
-%     confirmed by the dedicated regression
-%     `v01_opt_cmd_rows.rs::t9_math_command_type_head_is_still_a_parse_
-%     error`, which asserts exactly `val \cmd : math […]` inside a sealed
-%     sig is a PARSE error). This is optional-arg-rows increment 3b
-%     (deferred, separate track — NOT part of what this capstone task
-%     landed) — NOT the same gap as the `?(tag…)` bundles on `+math`/
-%     `\eqn` (those use the LANDED `block […]`/`inline […]` heads and
-%     increment 3a, and remain fully sig-declarable; see below).
-%     PORT STAND-IN: every math-command VALUE binding (`val math ctx
-%     \frac … = …`, landed, math-split) is kept, VERBATIM, in the
-%     `struct` body below — every one of upstream's ~190 math commands
-%     is still DEFINED and (since the module is now unsealed/
-%     transparent rather than opaque-sealed) fully REACHABLE as
-%     `Math.frac`/`Math.alpha`/etc. What's lost by dropping `:>` is only
-%     upstream's INTERNAL-helper hiding (`math-scheme`, `single`,
-%     `greek`, `greek-lowercase/-uppercase`, `ord`/`bin`/`rel`/`op`/
-%     `punct`/`prefix`, `vop-scheme`/`bigop`/`vop`, `bracket-metrics`/
-%     `-path`, `floor-path`, `ceil-path` become visible too) — pure API-
-%     surface leakage, not a functional or type-safety change (`Math`
-%     declares no opaque types, so sealing here was never load-bearing
-%     for abstraction, only for tidiness). No consumer (std-ja included)
-%     references any of these helpers, so nothing downstream is affected.
 %   - No other deltas: no operator sections (T4/G1 n/a), no `use open
 %     Basic` (T2 n/a), no `persistent`/`~lift` staging (T3 n/a), no
-%     functors/aliases/include. The `struct … end` body below is BYTE-
-%     IDENTICAL to upstream's (only the enclosing `module … :> sig …
-%     end = struct` header became a plain `module Math = struct`).
-%   - The 4 `?(tag : inline-text)`/`?(tag = tagopt)` optional-argument
-%     command rows (`+math`, `\eqn`) ARE optional-arg-rows increment 3a
-%     (inline/block command PARAMETER bundles) — landed; they compile
-%     and evaluate correctly even without a sig (unbundled calls default
-%     the label to `None`, proven by `v01_opt_cmd_rows.rs` T1/T2 for the
-%     identical unsealed-module shape).
+%     functors/aliases/include. The `module … :> sig … end = struct …
+%     end` below is BYTE-IDENTICAL to upstream (T1 aside).
 %   - `\derive`/`\derive-multi` (proof-tree commands) are NOT part of
 %     this package (they live in the separate upstream `proof` package,
 %     not vendored here) — nothing in this file needs them.
+%
+%   RESTORED by math-completion M1-M4 (previously a stub — see the prior
+%   banner revision for the full gap history, still in version control):
+%   - M1: the `:>` sealing boundary + its ~190 `val \cmd : math […]`
+%     command-type sig rows (`cst_v1::TypeApp::MathCmdTy`, a landed V0_1
+%     grammar head reusing the inc3a `TypeCmdArgItemV1` optional-label
+%     prefix machinery — zero new typecheck/unify code needed).
+%   - M2: the 12-command `\paren` family + its ~20 helpers
+%     (`half-length`/`extract-spec-from-context`/`angle-left`/`angle-
+%     right`/`paren-left`/`paren-right`/`brace-*`/`bracket-*`/`floor-*`/
+%     `ceil-*`/`abs-*`/`norm-*`/`empty-paren`/`bar-middle`/`slash-
+%     middle`), unblocked by retyping `prim_types.rs::t_paren` to the 0.1
+%     `length -> length -> context -> inline-boxes * (length -> length)`
+%     shape (`primitives.cppo.ml:91`) and rebranching `make_paren_run`'s
+%     runtime protocol to match (`math.ml:640-642`'s `paren h d ictx`).
+%   - M3: `\mathsf`/`\mathtt` + the 14-arm `greek` restyling match,
+%     unblocked by widening `math-char-class` from 9 to upstream's 14
+%     constructors (`SansSerif`/`BoldSansSerif`/`ItalicSansSerif`/
+%     `BoldItalicSansSerif`/`Typewriter`), V0_1-gated at registration —
+%     the frozen 0.0.6 corpus still sees exactly its original 9.
+%   Every member below is now the upstream-faithful, fully-sealed
+%   original: `Math.paren-left`/`math-scheme`/`greek`/`single`/`ord`/
+%   `bin`/`rel`/`op`/`prefix`/`punct`/`bracket-metrics`/`bracket-path`/
+%   `floor-path`/`ceil-path`/… are hidden by the seal exactly as upstream
+%   intended; only the ~190+19 sig-declared members are reachable as
+%   `Math.\cmd`/`Math.paren-left`/etc.
 
 @require: graphics
 @require: length
 @require: list
 @require: path
 
-module Math = struct
+module Math :> sig
+
+  val \math : inline [math-text]
+  val +math : block [?(tag : inline-text) math-text]
+  val \eqn : inline [?(tag : inline-text) math-text]
+  val +math-list : block [list math-text]
+  val \math-list : inline [list math-text]
+  val +align : block [list (list math-text)]
+  val \align : inline [list (list math-text)]
+  val \text : math [inline-text]
+  val \frac : math [math-text, math-text]
+  val \sqrt : math [math-text]
+  val \lower : math [math-text, math-text]
+  val \upper : math [math-text, math-text]
+  val \math-skip : math [length]
+  val \math-color : math [color, math-text]
+  val join : math-text -> list math-text -> math-text
+  val join-boxes : context -> math-boxes -> list math-boxes -> math-boxes %TODO: rename this
+  val half-length : length -> length -> length -> length -> length
+
+  val \mathord : math [math-text]
+  val \mathbin : math [math-text]
+  val \mathrel : math [math-text]
+  val \mathop : math [math-text]
+  val \mathprefix : math [math-text]
+  val \mathpunct : math [math-text]
+
+  val \math-style : math [math-char-class, math-text]
+  val \mathrm : math [math-text]
+  val \mathbf : math [math-text]
+  val \mathcal : math [math-text]
+  val \mathfrak : math [math-text]
+  val \mathbb : math [math-text]
+  val \bm : math [math-text]
+  val \mathit : math [math-text]
+  val \mathsf : math [math-text]
+  val \mathtt : math [math-text]
+
+  val \math-style-token : math [math-char-class, string]
+  val \mathit-token : math [string]
+  val \mathrm-token : math [string]
+  val \mathbf-token : math [string]
+
+  val \alpha   : math []
+  val \beta    : math []
+  val \gamma   : math []
+  val \delta   : math []
+  val \epsilon : math []
+  val \zeta    : math []
+  val \eta     : math []
+  val \theta   : math []
+  val \iota    : math []
+  val \kappa   : math []
+  val \lambda  : math []
+  val \mu      : math []
+  val \nu      : math []
+  val \xi      : math []
+  val \omicron : math []
+  val \pi      : math []
+  val \rho     : math []
+  val \sigma   : math []
+  val \tau     : math []
+  val \upsilon : math []
+  val \phi     : math []
+  val \chi     : math []
+  val \psi     : math []
+  val \omega   : math []
+
+  val \Alpha   : math []
+  val \Beta    : math []
+  val \Gamma   : math []
+  val \Delta   : math []
+  val \Epsilon : math []
+  val \Zeta    : math []
+  val \Eta     : math []
+  val \Theta   : math []
+  val \Iota    : math []
+  val \Kappa   : math []
+  val \Lambda  : math []
+  val \Mu      : math []
+  val \Nu      : math []
+  val \Xi      : math []
+  val \Omicron : math []
+  val \Pi      : math []
+  val \Rho     : math []
+  val \Sigma   : math []
+  val \Tau     : math []
+  val \Upsilon : math []
+  val \Phi     : math []
+  val \Chi     : math []
+  val \Psi     : math []
+  val \Omega   : math []
+
+  val \to : math []
+  val \pm : math []
+  val \mp : math []
+  val \times : math []
+  val \setminus : math []
+  val \ast : math []
+  val \circ : math []
+  val \bullet : math []
+  val \cap : math []
+  val \cup : math []
+  val \uplus : math []
+  val \sqcap : math []
+  val \sqcup : math []
+  val \wedge : math []
+  val \vee : math []
+  val \oplus : math []
+  val \ominus : math []
+  val \otimes : math []
+  val \oslash : math []
+
+  val \vdash : math []
+  val \nvdash : math []
+  val \dashv : math []
+  val \vDash : math []
+  val \nvDash : math []
+  val \Vdash : math []
+  val \nVdash : math []
+
+  val \colon-rel : math []
+
+  val \leq : math []
+  val \geq : math []
+  val \equiv : math []
+  val \nequiv : math []
+  val \neq : math []
+  val \sim : math []
+  val \nsim : math []
+  val \simeq : math []
+  val \nsimeq : math []
+  val \propto : math []
+  val \coloneq : math []
+  val \eqcolon : math []
+
+  val \in : math []
+  val \nin : math []
+  val \ni : math []
+  val \nni : math []
+  val \subset : math []
+  val \supset : math []
+  val \nsubset : math []
+  val \nsupset : math []
+  val \subseteq : math []
+  val \supseteq : math []
+  val \nsubseteq : math []
+  val \nsupseteq : math []
+  val \subsetneq : math []
+  val \supsetneq : math []
+  val \sqsubset : math []
+  val \sqsupset : math []
+  val \sqsubseteq : math []
+  val \sqsupseteq : math []
+  val \nsqsubseteq : math []
+  val \nsqsupseteq : math []
+  val \sqsubsetneq : math []
+  val \sqsupsetneq : math []
+  val \prec : math []
+  val \succ : math []
+  val \nprec : math []
+  val \nsucc : math []
+  val \preccurlyeq : math []
+  val \succcurlyeq : math []
+  val \precsim : math []
+  val \succsim : math []
+  val \npreccurlyeq : math []
+  val \nsucccurlyeq : math []
+
+  val \emptyset : math []
+  val \infty : math []
+  val \top : math []
+  val \bot : math []
+  val \therefore : math []
+  val \because : math []
+  val \forall : math []
+  val \exists : math []
+  val \nexists : math []
+  val \bigcirc : math []
+
+  val \cdot  : math []
+  val \ldots : math []
+  val \cdots : math []
+  val \vdots : math []
+  val \ddots : math []
+  val \backddots : math []
+
+  val \lim : math []
+  val \colim : math []
+  val \max : math []
+  val \min : math []
+  val \inf : math []
+  val \sup : math []
+  val \sin : math []
+  val \cos : math []
+  val \tan : math []
+  val \cot : math []
+  val \sec : math []
+  val \csc : math []
+  val \log : math []
+  val \tr : math []
+  val \det : math []
+  val \dom : math []
+  val \cod : math []
+  val \Ker : math []
+  val \Im : math []
+
+  val \sum : math []
+  val \prod : math []
+  val \coprod : math []
+  val \bigwedge : math []
+  val \bigvee : math []
+  val \bigcap : math []
+  val \bigcup : math []
+
+  val \lnot : math []
+  val \land : math []
+  val \lor : math []
+
+  val \Leftarrow : math []
+  val \Rightarrow : math []
+  val \Leftrightarrow : math []
+  val \Uparrow : math []
+  val \Downarrow : math []
+  val \Updownarrow : math []
+  val \nRightarrow : math []
+  val \nLeftarrow : math []
+  val \nLeftrightarrow : math []
+  val \leftarrow : math []
+  val \rightarrow : math []
+  val \uparrow : math []
+  val \downarrow : math []
+  val \updownarrow : math []
+  val \nwarrow : math []
+  val \nearrow : math []
+  val \searrow : math []
+  val \swarrow : math []
+  val \nleftarrow : math []
+  val \nrightarrow : math []
+  val \nleftrightarrow : math []
+  val \mapsto : math []
+  val \hookleftarrow : math []
+  val \hookrightarrow : math []
+  val \rightarrowtail : math []
+  val \leftarrowtail : math []
+  val \twoheadleftarrow : math []
+  val \twoheadrightarrow : math []
+  val \twoheaduparrow : math []
+  val \twoheaddownarrow : math []
+  val \leftharpoonup : math []
+  val \leftharpoondown : math []
+  val \rightharpoonup : math []
+  val \rightharpoondown : math []
+  val \rightleftharpoons : math []
+  val \upharpoonright : math []
+  val \upharpoonleft : math []
+  val \downharpoonright : math []
+  val \downharpoonleft : math []
+  val \longleftarrow : math []
+  val \longrightarrow : math []
+  val \longleftrightarrow : math []
+  val \Longleftarrow : math []
+  val \Longrightarrow : math []
+  val \Longleftrightarrow : math []
+  val \circlearrowleft : math []
+  val \circlearrowright : math []
+
+  val \between : math []
+  val \pitchfork : math []
+  val \intercal : math []
+  val \ll : math []
+  val \gg : math []
+  val \lll : math []
+  val \ggg : math []
+  val \leqq : math []
+  val \geqq : math []
+  val \lneqq : math []
+  val \gneqq : math []
+  val \lnsim : math []
+  val \gnsim : math []
+  val \precnsim : math []
+  val \succnsim : math []
+  val \Subset : math []
+  val \Supset : math []
+  val \Cap : math []
+  val \Cup : math []
+  val \lhd : math []
+  val \rhd : math []
+  val \unlhd : math []
+  val \unrhd : math []
+  val \triangleleft : math []
+  val \triangleright : math []
+  val \trianglelefteq : math []
+  val \trianglerighteq : math []
+  val \backsim : math []
+  val \backsimeq : math []
+  val \eqcirc : math []
+  val \cong : math []
+  val \simneq : math []
+  val \ncong : math []
+  val \approx : math []
+  val \napprox : math []
+  val \approxeq : math []
+  val \curlyeqprec : math []
+  val \curlyeqsucc : math []
+  val \lessdot : math []
+  val \gtrdot : math []
+  val \lesssim : math []
+  val \gtrsim : math []
+  val \nlesssim : math []
+  val \ngtrsim : math []
+  val \lessgtr : math []
+  val \gtrless : math []
+  val \nlessgtr : math []
+  val \ngtrless : math []
+  val \ntriangleleft : math []
+  val \ntriangleright : math []
+  val \ntrianglelefteq : math []
+  val \ntrianglerighteq : math []
+  val \lesseqgtr : math []
+  val \gtreqless : math []
+  val \nless : math []
+  val \ngtr : math []
+  val \nleq : math []
+  val \ngeq : math []
+  val \asymp : math []
+  val \nasymp : math []
+  val \circeq : math []
+  val \Bumpeq : math []
+  val \bumpeq : math []
+  val \doteq : math []
+  val \doteqdot : math []
+  val \fallingdotseq : math []
+  val \risingdotseq : math []
+  val \mid : math []
+  val \nmid : math []
+  val \parallel : math []
+  val \nparallel : math []
+  val \Vvdash : math []
+  val \VDash : math []
+  val \coloncoloneq : math []
+  val \leqslant : math []
+  val \geqslant : math []
+  val \dashV : math []
+  val \Dashv : math []
+  val \DashV : math []
+  val \preceq : math []
+  val \succeq : math []
+
+  val \amalg : math []
+  val \dotplus : math []
+  val \divideontimes : math []
+  val \odot : math []
+  val \circledcirc : math []
+  val \circledast : math []
+%  val \circledeq : math []
+  val \circleddash : math []
+  val \boxplus : math []
+  val \boxminus : math []
+  val \boxtimes : math []
+  val \boxdot : math []
+  val \curlyvee : math []
+  val \curlywedge : math []
+  val \Join : math []
+  val \ltimes : math []
+  val \rtimes : math []
+  val \leftthreetimes : math []
+  val \rightthreetimes : math []
+  val \wr : math []
+
+  val \diamond : math []
+  val \star : math []
+  val \complement : math []
+  val \angle : math []
+  val \measuredangle : math []
+  val \sphericalangle : math []
+
+  val \int : math []
+
+  val \ordd : math []
+  val \partial : math []
+  val \nabla : math []
+
+  val \paren : math [math-text]
+  val \app : math [math-text, math-text]
+  val \angle-bracket : math [math-text]
+  val \brace : math [math-text]
+  val \sqbracket : math [math-text]
+  val \abs : math [math-text]
+  val \norm : math [math-text]
+  val \floor : math [math-text]
+  val \ceil : math [math-text]
+  val \set : math [math-text]
+  val \setsep : math [math-text, math-text]
+  val \cases : math [list (math-text * inline-text)]
+
+  val paren-left : paren
+  val paren-right : paren
+  val paren : context -> math-boxes -> math-boxes
+  val angle-left : length -> paren
+  val angle-right : length -> paren
+  val brace-left : paren
+  val brace-right : paren
+  val sqbracket-left : paren
+  val sqbracket-right : paren
+  val floor-left : paren
+  val floor-right : paren
+  val ceil-left : paren
+  val ceil-right : paren
+  val abs-left : paren
+  val abs-right : paren
+  val norm-left : paren
+  val norm-right : paren
+  val empty-paren : paren
+  val bar-middle : paren
+  val slash-middle : paren
+
+end = struct
 
   val join (msep : math-text) (ms : list math-text) =
     match
@@ -137,13 +544,8 @@ module Math = struct
   val math ctx \mathbb m = read-math ctx ${\math-style!(MathDoubleStruck){#m}}
   val math ctx \bm m = read-math ctx ${\math-style!(MathBoldItalic){#m}}
   val math ctx \mathit m = read-math ctx ${\math-style!(MathItalic){#m}}
-  % PORT: \mathsf/\mathtt dropped — `MathSansSerif`/`MathTypewriter` are not
-  % among this port's 9 registered `math-char-class` constructors
-  % (`prim_types.rs`'s `math_char_class_decl` has `MathItalic`/
-  % `MathBoldItalic`/`MathRoman`/`MathBoldRoman`/`MathScript`/
-  % `MathBoldScript`/`MathFraktur`/`MathBoldFraktur`/`MathDoubleStruck`
-  % only — upstream's 14-constructor `math-char-class` type is a 9/14
-  % subset in this port; T6-style member drop).
+  val math ctx \mathsf m = read-math ctx ${\math-style!(MathSansSerif){#m}}
+  val math ctx \mathtt m = read-math ctx ${\math-style!(MathTypewriter){#m}}
 
   val math ctx \math-style-token sty s =
     embed-inline-to-math MathOrd (
@@ -272,15 +674,11 @@ module Math = struct
       | MathFraktur             -> si    % (*)
       | MathBoldFraktur         -> sbi   % (*)
       | MathDoubleStruck        -> si    % (*)
-      % PORT: MathSansSerif/MathBoldSansSerif/MathItalicSansSerif/
-      % MathBoldItalicSansSerif/MathTypewriter arms dropped — not among
-      % this port's 9 registered `math-char-class` constructors (see the
-      % `\mathsf`/`\mathtt` drop note above); this match is exhaustive
-      % over the port's actual 9-constructor type once those 5 (upstream-
-      % only) arms are removed. `sbss`/`sbiss` (and hence `cpbss`/
-      % `cpbiss`) become unused by this cut alone — kept as `greek`
-      % params for byte-fidelity with `greek-lowercase`/`greek-
-      % uppercase`'s call shape.
+      | MathSansSerif           -> si    % (*)
+      | MathBoldSansSerif       -> sbss
+      | MathItalicSansSerif     -> si    % (*)
+      | MathBoldItalicSansSerif -> sbiss
+      | MathTypewriter          -> s     % (*)
       end
     in
     math-char ctx MathOrd t
@@ -671,39 +1069,589 @@ module Math = struct
   val math ctx \dot-punct =
     math-char ctx MathPunct `.`
 
+  val half-length hgt dpt hgtaxis fontsize =
+    let minhalflen = fontsize *' 0.5 in
+    let lenappend = fontsize *' 0.1 in
+    Length.max minhalflen ((Length.max (hgt -' hgtaxis) (hgtaxis +' dpt)) +' lenappend)
 
-  % PORT: the upstream `paren`-parenthesization tail is DROPPED here —
-  % `half-length`/`extract-spec-from-context`/`angle-left`/`angle-right`/
-  % `paren-left`/`paren-right`/`brace-left`/`brace-right`/`sqbracket-left`/
-  % `sqbracket-right`/`floor-left`/`floor-right`/`ceil-left`/`ceil-right`/
-  % `abs-left`/`abs-right`/`norm-left`/`norm-right`/`empty-paren`/
-  % `bar-middle`/`slash-middle`/`bracket-metrics`/`bracket-path`/
-  % `floor-path`/`ceil-path`/`brace-left-long`, and the 12 math commands
-  % that consume them (`\paren`, `\app`, `\angle-bracket`, `\brace`,
-  % `\sqbracket`, `\floor`, `\ceil`, `\abs`, `\norm`, `\set`, `\setsep`,
-  % `\cases`) — a genuine PRIMITIVE-TYPE gap (NOT this capstone task's to
-  % fix; no `crates/*/src` edits were made): upstream 0.1's `type paren`
-  % is `length -> length -> context -> inline-boxes * (length -> length)`
-  % (`angle-left`/`paren-left`/… all end their curried argument list with
-  % `ctx`, extracting fontsize/axis-height/color FROM the context via
-  % `extract-spec-from-context`/`get-font-size`/`get-math-axis-height-
-  % ratio`/`get-text-color`) — but this port's `prim_types.rs::t_paren()`
-  % (consulted by `math-paren`/`math-paren-with-middle`'s v0.1 arms alike,
-  % `prim_types.rs:1446-1480`) is UNCONDITIONALLY the 0.0.6 shape `length
-  % -> length -> length -> length -> color -> …` (4 lengths + a bare
-  % `color` argument, no `context`) — it was never retyped for the 0.1
-  % math-split's context-based `paren`. Every upstream paren-family value
-  % above fails to type-check against it (`while typing function
-  % application: expected 'length', found 'context'`, empirically
-  % confirmed against this exact file). This is reported, not
-  % worked around: everything ABOVE this comment (all Greek letters, all
-  % ~150 binary/relation/arrow/misc symbol commands, `\frac`/`\sqrt`/
-  % `\lower`/`\upper`/`\text`/`\math-skip`/`\math-color`, the 6
-  % `\mathord`/…/`\mathpunct` grouping commands, the 7 `\math-style`/
-  % `\mathrm`/…/`\mathit` restyling commands (2 more, `\mathsf`/`\mathtt`,
-  % separately T6-dropped above for the missing-ctor reason), `+math`/
-  % `\eqn`/`+math-list`/`\math-list`/`+align`/`\align`, `\int`/`\dot-
-  % punct`) is real, landed, and REACHABLE — std-ja's own sole touch-point
-  % on this package, `command \Math.math`, does not need `paren` at all.
+  val extract-spec-from-context ctx =
+    let fontsize = get-font-size ctx in
+    let hgtaxis = fontsize *' get-math-axis-height-ratio ctx in
+    let color = get-text-color ctx in
+    (fontsize, hgtaxis, color)
+
+  val angle-left thk hgt dpt ctx =
+    let (fontsize, hgtaxis, color) = extract-spec-from-context ctx in
+    let halflen = half-length hgt dpt hgtaxis fontsize in
+    let widparen = halflen *' 0.375 in
+    let wid = widparen +' fontsize *' 0.1 in
+    let path (xpos, ypos) =
+      start-path (xpos +' wid, ypos +' hgtaxis +' halflen)
+        |> line-to (xpos +' wid -' widparen, ypos +' hgtaxis)
+        |> line-to (xpos +' wid, ypos +' hgtaxis -' halflen)
+        |> terminate-path
+    in
+    let graphics point = stroke thk color (path point) in
+    let kerninfo y =
+      let widkern = widparen in
+      let r = 0. in
+      let gap = Length.abs (y -' hgtaxis) in
+        if halflen *' r <' gap then
+          widkern *' ((gap -' halflen *' r) /' (halflen *' (1. -. r)))
+        else
+          0pt
+    in
+    (inline-graphics wid (hgtaxis +' halflen) (halflen -' hgtaxis) graphics, kerninfo)
+
+  val angle-right thk hgt dpt ctx =
+    let (fontsize, hgtaxis, color) = extract-spec-from-context ctx in
+    let halflen = half-length hgt dpt hgtaxis fontsize in
+    let widparen = halflen *' 0.375 in
+    let wid = widparen +' fontsize *' 0.1 in
+    let path (xpos, ypos) =
+      start-path (xpos, ypos +' hgtaxis +' halflen)
+        |> line-to (xpos +' widparen, ypos +' hgtaxis)
+        |> line-to (xpos, ypos +' hgtaxis -' halflen)
+        |> terminate-path
+    in
+    let graphics point = stroke thk color (path point) in
+    let kerninfo y =
+      let widkern = widparen in
+      let r = 0. in
+      let gap = Length.abs (y -' hgtaxis) in
+        if halflen *' r <' gap then
+          widkern *' ((gap -' halflen *' r) /' (halflen *' (1. -. r)))
+        else
+          0pt
+    in
+      (inline-graphics wid (hgtaxis +' halflen) (halflen -' hgtaxis) graphics, kerninfo)
+
+  val math ctx \angle-bracket m =
+    math-paren ctx (angle-left 0.5pt) (angle-right 0.5pt) (read-math ctx m)
+
+  val paren-left hgt dpt ctx =
+    let (fontsize, hgtaxis, color) = extract-spec-from-context ctx in
+    let halflen = half-length hgt dpt hgtaxis fontsize in
+    let w0 = fontsize *' 0.1 in
+    let w1 = fontsize *' 0.075 +' halflen *' 0.01 in
+    let w2 = halflen *' 0.25 in %temporary
+    let w-extra = fontsize *' 0.1 in
+    let t1 = fontsize *' 0.025 in
+    let t2 = fontsize *' 0.025 in
+
+    let qA = halflen *' 0.35 in
+    let p1 = (w1 +' w2) *' 0.75 in
+    let q1 = halflen *' 0.3 in
+
+    let qB = halflen *' 0.45 in
+    let p2 = w2 *' 0.5 in
+    let q2 = halflen *' 0.2 in
+
+    let path (xpos, ypos) =
+      let ycenter = ypos +' hgtaxis in
+      let x0 = xpos +' w0 in
+      let x1 = x0 +' w1 in
+      let x2 = x1 +' w2 in
+      start-path (x2, ycenter +' halflen)
+        |> bezier-to (x2 -' p1, ycenter +' halflen -' q1) (x0, ycenter +' qA) (x0, ycenter)
+        |> bezier-to (x0, ycenter -' qA) (x2 -' p1, ycenter -' halflen +' q1) (x2, ycenter -' halflen)
+        |> line-to (x2 +' t1, ycenter -' halflen +' t2)
+        |> bezier-to (x2 -' p2, ycenter -' halflen +' q2) (x1, ycenter -' qB) (x1, ycenter)
+        |> bezier-to (x1, ycenter +' qB) (x2 -' p2, ycenter +' halflen -' q2) (x2 +' t1, ycenter +' halflen -' t2)
+        |> close-with-line
+    in
+    let graphics point = fill color (path point) in
+    let kerninfo _ = 0pt in
+      (inline-graphics (w0 +' w1 +' w2 +' w-extra) (hgtaxis +' halflen) (halflen -' hgtaxis) graphics, kerninfo)
+
+  val paren-right hgt dpt ctx =
+    let (fontsize, hgtaxis, color) = extract-spec-from-context ctx in
+    let halflen = half-length hgt dpt hgtaxis fontsize in
+    let w0 = fontsize *' 0.1 in
+    let w1 = fontsize *' 0.075 +' halflen *' 0.01 in
+    let w2 = halflen *' 0.25 in %temporary
+    let w-extra = fontsize *' 0.1 in
+    let t1 = 0pt -' fontsize *' 0.025 in
+    let t2 = fontsize *' 0.025 in
+
+    let qA = halflen *' 0.35 in
+    let p1 = 0pt -' (w1 +' w2) *' 0.75 in
+    let q1 = halflen *' 0.3 in
+
+    let qB = halflen *' 0.45 in
+    let p2 = 0pt -' w2 *' 0.5 in
+    let q2 = halflen *' 0.2 in
+
+    let path (xpos, ypos) =
+      let ycenter = ypos +' hgtaxis in
+      let x0 = xpos +' w-extra +' w2 +' w1 in
+      let x1 = xpos +' w-extra +' w2 in
+      let x2 = xpos +' w-extra in
+      start-path (x2, ycenter +' halflen)
+        |> bezier-to (x2 -' p1, ycenter +' halflen -' q1) (x0, ycenter +' qA) (x0, ycenter)
+        |> bezier-to (x0, ycenter -' qA) (x2 -' p1, ycenter -' halflen +' q1) (x2, ycenter -' halflen)
+        |> line-to (x2 +' t1, ycenter -' halflen +' t2)
+        |> bezier-to (x2 -' p2, ycenter -' halflen +' q2) (x1, ycenter -' qB) (x1, ycenter)
+        |> bezier-to (x1, ycenter +' qB) (x2 -' p2, ycenter +' halflen -' q2) (x2 +' t1, ycenter +' halflen -' t2)
+        |> close-with-line
+    in
+    let graphics point = fill color (path point) in
+    let widparen = w0 +' w1 +' w2 +' w-extra in
+    let kerninfo y =
+      let widkern = widparen *' 0.5 in
+      let r = 0.25 in
+      let gap = Length.abs (y -' hgtaxis) in
+        let diff = Length.min (gap -' halflen *' r) (halflen *' (1. -. r)) in
+        if 0pt <' diff then
+          widkern *' (diff /' (halflen *' (1. -. r)))
+        else
+          0pt
+    in
+    (inline-graphics widparen (hgtaxis +' halflen) (halflen -' hgtaxis) graphics, kerninfo)
+
+
+  val paren ctx mb =
+    math-paren ctx paren-left paren-right mb
+
+
+  val math ctx \paren m =
+    paren ctx (read-math ctx m)
+
+
+  val math ctx \app m1 m2 =
+    read-math ctx ${#m1 \paren{#m2}}
+
+
+  val brace-left hgt dpt ctx =
+    let (fontsize, hgtaxis, color) = extract-spec-from-context ctx in
+
+    let t0 = fontsize *' 0.0125 in
+    let t4 = fontsize *' 0.025 in
+
+    let halflen = half-length hgt dpt hgtaxis fontsize in
+    let h-straight =  halflen *' 0.9 -' fontsize *' 0.3 in
+    let w-straight = h-straight *' 0.15 in
+    let w1 = fontsize *' 0.0125 in
+    let w2 = fontsize *' 0.02 in
+    let w5 = fontsize *' 0.01 in
+    let w6 = fontsize *' 0.015 in
+    let w-extra = fontsize *' 0.1 in
+
+    let x0 = fontsize *' 0.125 in
+    let x1 = fontsize *' 0.25 in
+    let x2 = x1 -' w-straight in
+    let x3 = x2 +' fontsize *' 0.2 in
+    let x4 = x3 +' fontsize *' 0.01 in
+    let x5 = x2 +' fontsize *' 0.0625 in
+    let x6 = x5 +' w-straight in
+    let x7 = fontsize *' 0.225 in
+
+    let p0 = fontsize *' 0.2 in
+    let p1 = x1 +' w1 in
+    let p2 = x2 -' w2 in
+    let p3 = x3 -' fontsize *' 0.1 in
+    let p4 = x4 -' fontsize *' 0.09 in
+    let p5 = x5 -' w5 in
+    let p6 = x6 +' w6 in
+    let p7 = fontsize *' 0.3 in
+
+    let y0 = t0 in
+    let y1 = fontsize *' 0.125 in
+    let y2 = y1 +' h-straight in
+    let y3 = halflen in
+    let y4 = halflen -' t4 in
+    let y5 = halflen -' fontsize *' 0.175 in
+    let y6 = y5 -' h-straight in
+    let y7 = 0pt in
+
+    let q0 = y0 in
+    let q1 = y1 -' (y2 -' y1) *' ((x1 -' p1) /' (x2 -' x1)) in
+    let q2 = y2 +' (y2 -' y1) *' ((p2 -' x2) /' (x2 -' x1)) in
+    let q3 = halflen -' fontsize *' 0.00875 in
+    let q4 = halflen -' t4 -' fontsize *' 0.01 in
+    let q5 = y5 +' (y5 -' y6) *' ((p5 -' x5) /' (x5 -' x6)) in
+    let q6 = y6 -' (y5 -' y6) *' ((x6 -' p6) /' (x5 -' x6)) in
+    let q7 = fontsize *' 0.025 in
+
+    let path (xpos, ypos) =
+      let ycenter = ypos +' hgtaxis in
+      let fP (x, y) = (xpos +' x, ycenter +' y) in
+      let fN (x, y) = (xpos +' x, ycenter -' y) in
+        start-path   (fP (x0, y0))
+          |> bezier-to (fP (p0, q0)) (fP (p1, q1)) (fP (x1, y1))
+          |> line-to (fP (x2, y2))
+          |> bezier-to (fP (p2, q2)) (fP (p3, q3)) (fP (x3, y3))
+          |> line-to (fP (x4, y4))
+          |> bezier-to (fP (p4, q4)) (fP (p5, q5)) (fP (x5, y5))
+          |> line-to (fP (x6, y6))
+          |> bezier-to (fP (p6, q6)) (fP (p7, q7)) (fP (x7, y7))
+          |> bezier-to (fN (p7, q7)) (fN (p6, q6)) (fN (x6, y6))
+          |> line-to (fN (x5, y5))
+          |> bezier-to (fN (p5, q5)) (fN (p4, q4)) (fN (x4, y4))
+          |> line-to (fN (x3, y3))
+          |> bezier-to (fN (p3, q3)) (fN (p2, q2)) (fN (x2, y2))
+          |> line-to (fN (x1, y1))
+          |> bezier-to (fN (p1, q1)) (fN (p0, q0)) (fN (x0, y0))
+          |> close-with-line
+    in
+    let graphics point = fill color (path point) in
+    let kerninfo _ = 0pt in
+    (inline-graphics (x4 +' w-extra) (hgtaxis +' halflen) (halflen -' hgtaxis) graphics, kerninfo)
+
+
+  val brace-right hgt dpt ctx =
+    let (fontsize, hgtaxis, color) = extract-spec-from-context ctx in
+
+    let t0 = fontsize *' 0.0125 in
+    let t4 = fontsize *' 0.025 in
+
+    let halflen = half-length hgt dpt hgtaxis fontsize in
+    let h-straight =  halflen *' 0.9 -' fontsize *' 0.3 in
+    let w-straight = h-straight *' 0.15 in
+    let w1 = fontsize *' 0.0125 in
+    let w2 = fontsize *' 0.02 in
+    let w5 = fontsize *' 0.01 in
+    let w6 = fontsize *' 0.015 in
+    let w-extra = fontsize *' 0.1 in
+
+    let x0 = w-extra +' fontsize *' 0.125 in
+    let x1 = w-extra +' fontsize *' 0.25 in
+    let x2 = x1 -' w-straight in
+    let x3 = x2 +' fontsize *' 0.2 in
+    let x4 = x3 +' fontsize *' 0.01 in
+    let x5 = x2 +' fontsize *' 0.0625 in
+    let x6 = x5 +' w-straight in
+    let x7 = w-extra +' fontsize *' 0.225 in
+
+    let p0 = w-extra +' fontsize *' 0.2 in
+    let p1 = x1 +' w1 in
+    let p2 = x2 -' w2 in
+    let p3 = x3 -' fontsize *' 0.1 in
+    let p4 = x4 -' fontsize *' 0.09 in
+    let p5 = x5 -' w5 in
+    let p6 = x6 +' w6 in
+    let p7 = w-extra +' fontsize *' 0.3 in
+
+    let y0 = t0 in
+    let y1 = fontsize *' 0.125 in
+    let y2 = y1 +' h-straight in
+    let y3 = halflen in
+    let y4 = halflen -' t4 in
+    let y5 = halflen -' fontsize *' 0.175 in
+    let y6 = y5 -' h-straight in
+    let y7 = 0pt in
+
+    let q0 = y0 in
+    let q1 = y1 -' (y2 -' y1) *' ((x1 -' p1) /' (x2 -' x1)) in
+    let q2 = y2 +' (y2 -' y1) *' ((p2 -' x2) /' (x2 -' x1)) in
+    let q3 = halflen -' fontsize *' 0.00875 in
+    let q4 = halflen -' t4 -' fontsize *' 0.01 in
+    let q5 = y5 +' (y5 -' y6) *' ((p5 -' x5) /' (x5 -' x6)) in
+    let q6 = y6 -' (y5 -' y6) *' ((x6 -' p6) /' (x5 -' x6)) in
+    let q7 = fontsize *' 0.025 in
+
+    let path (xpos, ypos) =
+      let ycenter = ypos +' hgtaxis in
+      let fP (x, y) = (xpos +' x4 -' x +' w-extra, ycenter +' y) in
+      let fN (x, y) = (xpos +' x4 -' x +' w-extra, ycenter -' y) in
+        start-path   (fP (x0, y0))
+          |> bezier-to (fP (p0, q0)) (fP (p1, q1)) (fP (x1, y1))
+          |> line-to (fP (x2, y2))
+          |> bezier-to (fP (p2, q2)) (fP (p3, q3)) (fP (x3, y3))
+          |> line-to (fP (x4, y4))
+          |> bezier-to (fP (p4, q4)) (fP (p5, q5)) (fP (x5, y5))
+          |> line-to (fP (x6, y6))
+          |> bezier-to (fP (p6, q6)) (fP (p7, q7)) (fP (x7, y7))
+          |> bezier-to (fN (p7, q7)) (fN (p6, q6)) (fN (x6, y6))
+          |> line-to (fN (x5, y5))
+          |> bezier-to (fN (p5, q5)) (fN (p4, q4)) (fN (x4, y4))
+          |> line-to (fN (x3, y3))
+          |> bezier-to (fN (p3, q3)) (fN (p2, q2)) (fN (x2, y2))
+          |> line-to (fN (x1, y1))
+          |> bezier-to (fN (p1, q1)) (fN (p0, q0)) (fN (x0, y0))
+          |> close-with-line
+    in
+    let graphics point = fill color (path point) in
+    let kerninfo _ = 0pt in
+    (inline-graphics x4 (hgtaxis +' halflen) (halflen -' hgtaxis) graphics, kerninfo)
+
+
+  val brace-left-long hgt dpt ctx =
+    let (fontsize, hgtaxis, color) = extract-spec-from-context ctx in
+    let halflen = half-length hgt dpt hgtaxis fontsize in
+
+    let t0B = fontsize *' 0.05 in
+    let t1A = fontsize *' 0.05 in
+    let t1B = fontsize *' 0.025 in
+    let t2A = halflen *' 0.1 in
+    let t2B = halflen *' 0.15 in
+    let t3A = fontsize *' 0.05 in
+
+    let (x0, y0) = (fontsize *' 0.005, fontsize *' 0.005) in
+    let (p0B, q0B) = (x0 +' t0B, y0) in
+
+    let (x1, y1) = (fontsize *' 0.2, fontsize *' 0.2) in
+    let (p1A, q1A) = (x1, y1 -' t1A) in
+    let (p1B, q1B) = (x1, y1 +' t1B) in
+
+    let theta = atan2 (x1 /' 1pt) (halflen /' 1pt) in
+
+    let (x2, y2) = (fontsize *' 0.175, halflen *' 0.5) in
+
+    let (p2A, q2A) = (x2 +' t2A *' (sin theta), y2 -' t2A *' (cos theta)) in
+    let (p2B, q2B) = (x2 -' t2B *' (sin theta), y2 +' t2B *' (cos theta)) in
+
+    let (x3, y3) = (fontsize *' 0.15, halflen -' fontsize *' 0.2) in
+
+    let (p3A, q3A) = (x3, y3 -' t3A) in
+
+    let path (xpos, ypos) =
+      let ycenter = ypos +' hgtaxis in
+      let fP (x, y) = (xpos +' x, ycenter +' y) in
+      let fN (x, y) = (xpos +' x, ycenter -' y) in
+%        start-path (fP (x0, y0))
+%          |> bezier-to (fP (p0B, q0B)) (fP (p1A, q1A)) (fP (x1, y1))
+%          |> bezier-to (fP (p1B, q1B)) (fP (p2A, q2A)) (fP (x2, y2))
+%          |> close-with-line
+        Path.poly-line (fP (x0, y0)) [
+          fP (p0B, q0B), fP (p1A, q1A), fP (x1, y1),
+          fP (p1B, q1B), fP (p2A, q2A), fP (x2, y2),
+          fP (p2B, q2B), fP (p3A, q3A), fP (x3, y3),
+        ]
+    in
+    let graphics point = fill color (path point) in
+    let kerninfo _ = 0pt in
+    (inline-graphics (x2) (hgtaxis +' halflen) (halflen -' hgtaxis) graphics, kerninfo)
+
+
+  val math ctx \brace m =
+    math-paren ctx brace-left brace-right (read-math ctx m)
+
+
+  val bar-middle hgt dpt ctx =
+    let (fontsize, hgtaxis, color) = extract-spec-from-context ctx in
+    let halflen = half-length hgt dpt hgtaxis fontsize in
+    let halfwid = fontsize *' 0.5 in
+    let graphics (x, y) =
+      stroke 0.5pt color
+        (Path.line (x +' halfwid, y +' hgtaxis -' halflen) (x +' halfwid, y +' hgtaxis +' halflen))
+    in
+    let kerninfo _ = 0pt in
+    (inline-graphics (halfwid *' 2.) (hgtaxis +' halflen) (halflen -' hgtaxis) graphics, kerninfo)
+
+
+  val math ctx \setsep m1 m2 =
+    math-paren-with-middle ctx brace-left brace-right bar-middle [read-math ctx m1, read-math ctx m2]
+
+
+  val slash-middle hgt dpt ctx =
+    let (fontsize, hgtaxis, color) = extract-spec-from-context ctx in
+    let halflen = half-length hgt dpt hgtaxis fontsize in
+    let halfwid = halflen *' 0.5 in
+    let graphics (x, y) =
+      stroke 0.5pt color
+        (Path.line (x, y +' hgtaxis -' halflen) (x +' halfwid *' 2., y +' hgtaxis +' halflen))
+    in
+    let kerninfo _ = 0pt in
+    (inline-graphics (halfwid *' 2.) (hgtaxis +' halflen) (halflen -' hgtaxis) graphics, kerninfo)
+
+
+  val bracket-metrics fontsize halflen =
+    let w0 = fontsize *' 0.1 in
+    let w1 = fontsize *' 0.05 +' halflen *' 0.005 in
+    let w2 = halflen *' 0.3 in
+    let t = fontsize *' 0.03 in
+      (w0, w1, w2, t)
+
+
+  val bracket-path x0 x1 x2 t ypos hgtaxis halflen =
+    let ytop = ypos +' hgtaxis +' halflen in
+    let ybot = ypos +' hgtaxis -' halflen in
+      start-path (x2, ytop)
+        |> line-to (x0, ytop)
+        |> line-to (x0, ybot)
+        |> line-to (x2, ybot)
+        |> line-to (x2, ybot +' t)
+        |> line-to (x1, ybot +' t)
+        |> line-to (x1, ytop -' t)
+        |> line-to (x2, ytop -' t)
+        |> close-with-line
+
+
+  val floor-path x0 x1 x2 t ypos hgtaxis halflen =
+    let ytop = ypos +' hgtaxis +' halflen in
+    let ybot = ypos +' hgtaxis -' halflen in
+      start-path (x0, ytop)
+        |> line-to (x0, ybot)
+        |> line-to (x2, ybot)
+        |> line-to (x2, ybot +' t)
+        |> line-to (x1, ybot +' t)
+        |> line-to (x1, ytop)
+        |> close-with-line
+
+
+  val ceil-path x0 x1 x2 t ypos hgtaxis halflen =
+    let ytop = ypos +' hgtaxis +' halflen in
+    let ybot = ypos +' hgtaxis -' halflen in
+      start-path (x2, ytop)
+        |> line-to (x0, ytop)
+        |> line-to (x0, ybot)
+        |> line-to (x1, ybot)
+        |> line-to (x1, ytop -' t)
+        |> line-to (x2, ytop -' t)
+        |> close-with-line
+
+
+  val bracket-left pathf (hgt : length) (dpt : length) (ctx : context) =
+    let (fontsize, hgtaxis, color) = extract-spec-from-context ctx in
+    let halflen = half-length hgt dpt hgtaxis fontsize in
+    let (w0, w1, w2, t) = bracket-metrics fontsize halflen in
+    let path (xpos, ypos) =
+      let x0 = xpos +' w0 in
+      let x1 = x0 +' w1 in
+      let x2 = x1 +' w2 in
+        pathf x0 x1 x2 t ypos hgtaxis halflen
+    in
+    let graphics point = fill color (path point) in
+    let widparen = w0 +' w1 +' w2 in
+    (inline-graphics widparen (hgtaxis +' halflen) (halflen -' hgtaxis) graphics, (fun _ -> 0pt))
+
+
+  val bracket-right pathf (hgt : length) (dpt : length) (ctx : context) =
+    let (fontsize, hgtaxis, color) = extract-spec-from-context ctx in
+    let halflen = half-length hgt dpt hgtaxis fontsize in
+    let (w0, w1, w2, t) = bracket-metrics fontsize halflen in
+    let widparen = w0 +' w1 +' w2 in
+    let path (xpos, ypos) =
+      let x0 = xpos +' widparen -' w0 in
+      let x1 = x0 -' w1 in
+      let x2 = x1 -' w2 in
+        pathf x0 x1 x2 t ypos hgtaxis halflen
+    in
+    let graphics point = fill color (path point) in
+    (inline-graphics widparen (hgtaxis +' halflen) (halflen -' hgtaxis) graphics, (fun _ -> 0pt))
+
+
+  val sqbracket-left = bracket-left bracket-path
+  val sqbracket-right = bracket-right bracket-path
+  val math ctx \sqbracket m =
+    math-paren ctx sqbracket-left sqbracket-right (read-math ctx m)
+
+
+  val floor-left hgt = bracket-left floor-path hgt
+  val floor-right hgt = bracket-right floor-path hgt
+  val math ctx \floor m =
+    math-paren ctx floor-left floor-right (read-math ctx m)
+
+
+  val ceil-left = bracket-left ceil-path
+  val ceil-right = bracket-right ceil-path
+  val math ctx \ceil m =
+    math-paren ctx ceil-left ceil-right (read-math ctx m)
+
+
+  val empty-paren _ _ _ = (inline-nil, (fun _ -> 0pt))
+
+
+  val abs-left hgt dpt ctx =
+    let (fontsize, hgtaxis, color) = extract-spec-from-context ctx in
+    let halflen = half-length hgt dpt hgtaxis fontsize in
+    let wid = 5.0pt in
+    let path (xpos, ypos) =
+      start-path (xpos +' wid *' 0.5, ypos +' hgtaxis +' halflen)
+        |> line-to (xpos +' wid *' 0.5, ypos +' hgtaxis -' halflen)
+        |> close-with-line
+    in
+    let graphics point = stroke 0.5pt color (path point) in
+    let kerninfo _ = 0pt in
+    (inline-graphics wid (hgtaxis +' halflen) (halflen -' hgtaxis) graphics, kerninfo)
+
+
+  val abs-right hgt dpt ctx =
+    let (fontsize, hgtaxis, color) = extract-spec-from-context ctx in
+    let halflen = half-length hgt dpt hgtaxis fontsize in
+    let wid = 5.0pt in
+    let path (xpos, ypos) =
+      start-path (xpos +' wid *' 0.5, ypos +' hgtaxis +' halflen)
+        |> line-to (xpos +' wid *' 0.5, ypos +' hgtaxis -' halflen)
+        |> close-with-line
+    in
+    let graphics point = stroke 0.5pt color (path point) in
+    let kerninfo _ = 0pt in
+    (inline-graphics wid (hgtaxis +' halflen) (halflen -' hgtaxis) graphics, kerninfo)
+
+
+  val math ctx \abs m =
+    math-paren ctx abs-left abs-right (read-math ctx m)
+
+
+  val norm-left hgt dpt ctx =
+    let (fontsize, hgtaxis, color) = extract-spec-from-context ctx in
+    let halflen = half-length hgt dpt hgtaxis fontsize in
+    let wid = 7.0pt in
+    let path (xpos, ypos) =
+      unite-path (
+        start-path (xpos +' wid *' 0.5 -' 1.2pt, ypos +' hgtaxis +' halflen)
+          |> line-to (xpos +' wid *' 0.5 -' 1.2pt, ypos +' hgtaxis -' halflen)
+          |> close-with-line
+      ) (
+        start-path (xpos +' wid *' 0.5 +' 1.2pt, ypos +' hgtaxis +' halflen)
+          |> line-to (xpos +' wid *' 0.5 +' 1.2pt, ypos +' hgtaxis -' halflen)
+          |> close-with-line
+      )
+    in
+    let graphics point = stroke 0.5pt color (path point) in
+    let kerninfo _ = 0pt in
+    (inline-graphics wid (hgtaxis +' halflen) (halflen -' hgtaxis) graphics, kerninfo)
+
+
+  val norm-right hgt dpt ctx =
+    let (fontsize, hgtaxis, color) = extract-spec-from-context ctx in
+    let halflen = half-length hgt dpt hgtaxis fontsize in
+    let wid = 7.0pt in
+    let path (xpos, ypos) =
+      unite-path (
+        start-path (xpos +' wid *' 0.5 -' 1.2pt, ypos +' hgtaxis +' halflen)
+          |> line-to (xpos +' wid *' 0.5 -' 1.2pt, ypos +' hgtaxis -' halflen)
+          |> close-with-line
+      ) (
+        start-path (xpos +' wid *' 0.5 +' 1.2pt, ypos +' hgtaxis +' halflen)
+          |> line-to (xpos +' wid *' 0.5 +' 1.2pt, ypos +' hgtaxis -' halflen)
+          |> close-with-line
+      )
+    in
+    let graphics point = stroke 0.5pt color (path point) in
+    let kerninfo _ = 0pt in
+    (inline-graphics wid (hgtaxis +' halflen) (halflen -' hgtaxis) graphics, kerninfo)
+
+
+  val math ctx \norm m =
+    math-paren ctx norm-left norm-right (read-math ctx m)
+
+
+  val math ctx \set m =
+    read-math ctx ${\brace{#m}}
+
+
+  val math ctx \cases lst =
+    let m-inner =
+      embed-inline-to-math MathInner (
+        let size = get-font-size ctx in
+        let pads = (0pt, 0pt, size *' 0.25, size *' 0.25) in
+        let celllstlst =
+          lst |> List.map (fun (m, it) -> (
+            let ib1 = embed-math ctx (read-math ctx m) ++ inline-fil in
+            let ib2 = inline-skip size ++ read-inline ctx it ++ inline-fil in
+            [NormalCell(pads, ib1), NormalCell(pads, ib2)]
+          ))
+        in
+        let ib = tabular celllstlst (fun _ _ -> Graphics.empty) in
+        let (_, hgt, dpt) = get-natural-metrics ib in
+        let hgtaxis = size *' get-math-axis-height-ratio ctx in
+        raise-inline (hgtaxis -' (hgt +' dpt) *' 0.5) ib
+      )
+    in
+    math-paren ctx brace-left empty-paren m-inner
+
 
 end

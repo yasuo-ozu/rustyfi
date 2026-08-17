@@ -11,31 +11,24 @@
 %     to the lambda fallback `fun a b -> a ++ b` (the "++" primitive
 %     itself, and the infix `a ++ b` surface form, are both landed —
 %     only the bare parenthesized-operator-as-value syntax is missing).
-%   - T6: 3 of the 24 upstream members (and their sig lines) dropped —
-%     no backing primitive (gap G5, `…/tmp/vendoring-scout.md` §2), plus
-%     one newly-discovered registration gap (G9, this wave):
+%   - T6: originally 3 of the 24 upstream members (and their sig lines)
+%     dropped — 2 remain out of scope (no backing primitive, gap G5,
+%     `…/tmp/vendoring-scout.md` §2); the third, `frame-inner`, is back
+%     (G9 FIXED: `typecheck.rs`'s `PRIMITIVE_NAMES` list — consulted only
+%     by the plain, non-sealed `typecheck_with_version` path this wave's
+%     tests use, per G8 — omitted `"inline-frame-inner"` even though the
+%     primitive itself (`primitives.rs`'s `prim_inline_frame_inner`) and
+%     its type (`prim_types.rs`) were both already registered for both
+%     versions; one line added to that list restores it, see
+%     `crates/satysfi-lang/tests/v01_lang_completeness.rs`'s G9 test for
+%     the regression proof):
 %       * `frame-fixed : length -> paddings -> deco -> inline-boxes ->
 %         inline-boxes` (`inline-frame-fixed` — declared out of port
 %         scope, L5 spec §8)
 %       * `line-stack-top : list inline-boxes -> inline-boxes`
 %         (`line-stack-top` — trivial sibling of the landed
 %         `line-stack-bottom`, just not itself registered yet)
-%       * `frame-inner : paddings -> deco -> inline-boxes -> inline-
-%         boxes` (G9: `inline-frame-inner` DOES exist as a real
-%         primitive — `primitives.rs`'s `"inline-frame-inner" (3) =>
-%         prim_inline_frame_inner` and `prim_types.rs` both register it,
-%         and `primitives::base_env_with_version` binds it — but
-%         `typecheck.rs`'s separately-maintained `PRIMITIVE_NAMES` list
-%         (consulted only by the plain, non-sealed `typecheck_with_
-%         version` path this wave's tests use, per G8) never lists
-%         `"inline-frame-inner"` — only its siblings `"inline-frame-
-%         outer"`/`"inline-frame-breakable"` are present. Confirmed
-%         empirically: referencing it produces "internal error: unbound
-%         variable 'inline-frame-inner' reached the typechecker", the
-%         exact `PRIMITIVE_NAMES`-omission signature. A one-line fix
-%         (add the string to that list) — out of scope: no `.rs` source
-%         edits.)
-%     21/24 members remain; every other member's backing primitive is
+%     22/24 members remain; every other member's backing primitive is
 %     landed and correctly registered, including the L5b/G3 H1/H2
 %     singular-`graphics` callback retypes (`graphics-fixed`/`graphics-
 %     outer`, unchanged from upstream — upstream ALREADY declares these
@@ -62,6 +55,7 @@ module Inline :> sig
   val kern : length -> inline-boxes
   val glue : length -> length -> length -> inline-boxes
   val frame-outer : Basic.paddings -> deco -> inline-boxes -> inline-boxes
+  val frame-inner : Basic.paddings -> deco -> inline-boxes -> inline-boxes
   val frame-breakable : Basic.paddings -> deco-set -> inline-boxes -> inline-boxes
   val embed-block-breakable : context -> block-boxes -> inline-boxes
   val graphics-fixed : length -> length -> length -> (Basic.point -> graphics) -> inline-boxes
@@ -107,6 +101,8 @@ end = struct
     discretionary 0 (skip (get-text-width ctx *' 2.)) fil nil
 
   val frame-outer = inline-frame-outer %PRIMITIVE
+
+  val frame-inner = inline-frame-inner %PRIMITIVE
 
   val frame-breakable = inline-frame-breakable %PRIMITIVE
 

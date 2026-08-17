@@ -366,3 +366,208 @@ fn here_constant_is_unbound_in_006() {
         "'here' should have a V0_1 type"
     );
 }
+
+/// Like `compile_document_v1`, but returns the entry expression's RAW
+/// evaluated `Value` instead of requiring it to be a `DocumentValue` — for
+/// tests that need to inspect an intermediate value (e.g. `inline-boxes`
+/// ink) rather than a full page-broken document. Mirrors
+/// `compile_document_v1_with_trials`'s own assembly (each dep lowered via
+/// `v1::lower::lower_file_v1`, the entry via `v1::lower::lower_document_v1`,
+/// merged into one synthetic `cst::File`) but skips `compile::compile_program`
+/// /the fixpoint-eval/hook-firing loop entirely (irrelevant for a bare
+/// expression with no page break in it) — a single direct
+/// `eval::Interp::eval` call over the elaborated `Ast` suffices.
+fn eval_v01_raw_value(
+    files: &[LoadedFile],
+    metrics: &dyn FontMetrics,
+) -> Result<satysfi_lang::value::Value, String> {
+    let (entry, deps) = files.split_last().expect("at least one file");
+    fn as_v01(f: &LoadedFile) -> &satysfi_syntax::cst_v1::FileV1 {
+        match &f.cst {
+            LoadedCst::V0_1(cst) => cst,
+            LoadedCst::V0_0_6(_) => unreachable!("this helper is V0_1-only"),
+        }
+    }
+    let mut prelude = Vec::new();
+    for dep in deps {
+        prelude.extend(
+            satysfi_lang::v1::lower::lower_file_v1(as_v01(dep)).map_err(|e| format!("lib lower: {e}"))?,
+        );
+    }
+    let entry_cst = as_v01(entry);
+    let body = satysfi_lang::v1::lower::lower_document_v1(entry_cst)
+        .map_err(|e| format!("entry lower: {e}"))?;
+    let eoi = match entry_cst {
+        satysfi_syntax::cst_v1::FileV1::Document { eoi, .. } => eoi.clone(),
+        _ => unreachable!("lower_document_v1 already rejected a Library entry"),
+    };
+    let file = satysfi_syntax::cst::File {
+        headers: Vec::new(),
+        prelude,
+        in_kw: Some(satysfi_syntax::leaf::KwIn(satysfi_syntax::Span::default())),
+        body: Some(body),
+        eoi,
+    };
+    let env0 = primitives::base_env_with_version(SatysfiVersion::V0_1);
+    let scope = satysfi_lang::elaborate::Scope::new_with_version(env0.names(), SatysfiVersion::V0_1);
+    let program =
+        satysfi_lang::elaborate::elaborate_program(&file, &scope).map_err(|e| format!("elaborate: {e}"))?;
+    // No `:>` sealing in any fixture this helper serves, so the public
+    // `typecheck_verbose_with_version` (ordinary inference, no sig-
+    // subsumption pass) is sufficient — `v1::module_check::check_program`
+    // is `pub(crate)`, unreachable from this external integration test.
+    satysfi_lang::typecheck::typecheck_verbose_with_version(&program, SatysfiVersion::V0_1)
+        .map_err(|e| format!("typecheck: {e}"))?;
+    let mut interp = satysfi_lang::eval::Interp::new(metrics);
+    interp.version = SatysfiVersion::V0_1;
+    interp.eval(&env0, &program.body).map_err(|e| format!("eval: {e}"))
+}
+
+// ============================================================================
+// Math-package completion M2: the `t_paren` 0.1 retype (`length -> length ->
+// context -> inline-boxes * (length -> length)`).
+// ============================================================================
+
+/// T-M2-seal: `val paren-left : paren` seals against a real 0.1-shaped
+/// `paren-left hgt dpt ctx = …` body — pins `typecheck.rs`'s
+/// `name_to_mono("paren", V0_1)` case (§3.3) resolving structurally to
+/// `t_paren(V0_1)`, matching the impl's own inferred type by construction.
+#[test]
+fn t_m2_paren_seals_against_the_v01_shape() {
+    let lib = "\
+module M :> sig
+  val paren-left : paren
+end = struct
+  val paren-left hgt dpt ctx =
+    let color = get-text-color ctx in
+    let graphics (x, y) =
+      fill color (start-path (x, y) |> line-to (x +' 3pt, y) |> close-with-line)
+    in
+    let kerninfo _ = 0pt in
+    (inline-graphics 3pt hgt dpt graphics, kerninfo)
+end
+";
+    let files = vec![
+        lib_file_inline("m2-seal", lib),
+        entry_file_inline("1"),
+    ];
+    let mono = Mono;
+    match satysfi_lang::compile_document_v1(&files, &mono) {
+        Ok(_) | Err(CompileError::NotADocument(_)) => {}
+        Err(other) => panic!("T-M2-seal: expected acceptance, got: {other}"),
+    }
+}
+
+/// T-M2-type/T-M2-eval combined: `math-paren ctx paren-left paren-right m`
+/// with REAL 0.1-shaped closures (`hgt dpt ctx -> (inline-boxes, kernf)`,
+/// §3.1) type-checks and evaluates through `embed-math`/`read-inline`, and
+/// — pinning the BIGGEST M2 risk (§8 risk 1: forgetting `c2.font_size =
+/// size` in `make_paren_run`'s V0_1 arm) — the closure route actually ran
+/// (not the font-glyph fallback): the produced graphics contain `Fill` ink,
+/// which `paren_variant_fallback` never emits.
+#[test]
+fn t_m2_paren_closure_route_draws_fill_ink() {
+    use satysfi_backend::{GraphicsElem, HorzBox, PureHorzBox};
+    use satysfi_lang::value::Value;
+
+    let lib = "\
+module M = struct
+  val paren-left hgt dpt ctx =
+    let color = get-text-color ctx in
+    let graphics (x, y) =
+      fill color (start-path (x, y) |> line-to (x +' 3pt, y) |> line-to (x +' 3pt, y +' 3pt) |> close-with-line)
+    in
+    let kerninfo _ = 0pt in
+    (inline-graphics 3pt hgt dpt graphics, kerninfo)
+  val paren-right hgt dpt ctx = paren-left hgt dpt ctx
+end
+";
+    let entry = "\
+@require: v01-mini
+let open V01Mini in
+let ctx = get-initial-context 200pt (command \\math) in
+embed-math ctx (math-paren ctx M.paren-left M.paren-right (read-math ctx ${x}))
+";
+    let files = vec![v01_mini_file(), lib_file_inline("m2-eval", lib), entry_file_inline(entry)];
+    let mono = Mono;
+    let v = eval_v01_raw_value(&files, &mono)
+        .unwrap_or_else(|e| panic!("T-M2-eval: expected evaluation to succeed, got: {e}"));
+    let boxes = match v {
+        Value::InlineBoxes(b) => b,
+        other => panic!("expected inline-boxes, got {other:?}"),
+    };
+    let mut saw_fill = false;
+    for b in &boxes {
+        if let HorzBox::Pure(PureHorzBox::Math { rules, .. }) = b {
+            if rules.iter().any(|r| matches!(r, GraphicsElem::Fill(..))) {
+                saw_fill = true;
+            }
+        }
+    }
+    assert!(
+        saw_fill,
+        "expected the paren closure route to draw Fill ink (not the font-glyph fallback), got {boxes:?}"
+    );
+}
+
+// ============================================================================
+// Math-package completion M3: 9 -> 14 `math-char-class` constructors.
+// ============================================================================
+
+/// T-M3-type/T-M3-remap: `set-math-char-class MathSansSerif`/
+/// `MathTypewriter` type-check and evaluate under V0_1, and
+/// `convert-string-for-math` remaps `A`/`a` to the expected codepoints
+/// (`math.rs`'s capitals/smalls offsets, §4.1).
+#[test]
+fn t_m3_new_char_classes_typecheck_and_remap() {
+    let entry = "\
+@require: v01-mini
+let open V01Mini in
+let ctx = get-initial-context 200pt (command \\math) in
+let ctx-sans = ctx |> set-math-char-class MathSansSerif in
+let ctx-tt = ctx |> set-math-char-class MathTypewriter in
+let sans-a = convert-string-for-math ctx-sans MathSansSerif (string-unexplode [65]) in
+let sans-a-lower = convert-string-for-math ctx-sans MathSansSerif (string-unexplode [97]) in
+let tt-a = convert-string-for-math ctx-tt MathTypewriter (string-unexplode [65]) in
+(string-explode sans-a, string-explode sans-a-lower, string-explode tt-a)
+";
+    let files = vec![v01_mini_file(), entry_file_inline(entry)];
+    let mono = Mono;
+    let v = eval_v01_raw_value(&files, &mono)
+        .unwrap_or_else(|e| panic!("T-M3-remap: expected evaluation to succeed, got: {e}"));
+    let satysfi_lang::value::Value::Tuple(parts) = v else {
+        panic!("expected a 3-tuple");
+    };
+    assert_eq!(parts.len(), 3);
+    fn first_cp(v: &satysfi_lang::value::Value) -> i64 {
+        match v {
+            satysfi_lang::value::Value::List(cps) => match &cps[0] {
+                satysfi_lang::value::Value::Int(n) => *n,
+                other => panic!("expected an int codepoint, got {other:?}"),
+            },
+            other => panic!("expected a codepoint list, got {other:?}"),
+        }
+    }
+    assert_eq!(first_cp(&parts[0]), 0x1D5A0, "MathSansSerif capital A");
+    assert_eq!(first_cp(&parts[1]), 0x1D5BA, "MathSansSerif lowercase a");
+    assert_eq!(first_cp(&parts[2]), 0x1D670, "MathTypewriter capital A");
+}
+
+/// T-M3-frozen: under V0_0_6, `MathSansSerif` stays an unknown constructor
+/// (pins the registration gate — the frozen 0.0.6 surface never learns the
+/// 5 new names).
+#[test]
+fn t_m3_new_char_classes_are_unknown_under_v006() {
+    let src = "let m = MathSansSerif in 0";
+    let file = satysfi_syntax::parse_file(src).unwrap_or_else(|e| panic!("0.0.6 parse: {e}"));
+    let env = primitives::base_env();
+    let scope = satysfi_lang::elaborate::Scope::new(env.names());
+    let elaborated = satysfi_lang::elaborate::elaborate_program(&file, &scope)
+        .unwrap_or_else(|e| panic!("0.0.6 elaborate: {e}"));
+    let err = satysfi_lang::typecheck::typecheck(&elaborated)
+        .expect_err("'MathSansSerif' must stay an unknown constructor under V0_0_6");
+    assert!(
+        err.to_string().contains("MathSansSerif") || err.to_string().contains("unknown"),
+        "{err}"
+    );
+}

@@ -590,10 +590,13 @@ end
 ";
     // `\show` is `\`-sigiled, hence always `ValHorzCmd` regardless of the
     // TYPE spelled after `:` — declaring `block […]` for it is a shape
-    // violation against the required `inline […]` shape (the sigil, not
-    // the spelling, decides `Decl::ValHorzCmd` vs `ValVertCmd`).
+    // violation against the required `inline […]`/`math […]` shape (the
+    // sigil, not the spelling, decides `Decl::ValHorzCmd` vs `ValVertCmd`;
+    // math-package completion M1 widened the guard's accepted set to
+    // `inline […]` OR `math […]`, since math commands share the `\` sigil
+    // too).
     let msg = assert_type_error(lib_wrong_kind, "1");
-    assert!(msg.contains("needs an `inline [...]` command type"), "{msg}");
+    assert!(msg.contains("needs an `inline [...]` or `math [...]` command type"), "{msg}");
 
     let lib_plain_type = "\
 module M :> sig

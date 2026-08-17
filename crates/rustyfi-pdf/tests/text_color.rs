@@ -54,6 +54,7 @@ fn text_box(text: &str, color: Color) -> PureHorzBox {
 #[test]
 fn base14_colored_run_is_scoped_in_q_rg_q_black_run_emits_no_color_op() {
     let page = Page {
+            body_lines: usize::MAX,
         lines: vec![PlacedLine {
             x: Length::pt(50.0),
             baseline_y: Length::pt(100.0),
@@ -105,6 +106,7 @@ fn base14_all_black_page_emits_no_color_ops_at_all() {
     // with BOTH runs black must emit no `q`/`Q`/color op whatsoever —
     // exactly today's pre-fix output for an all-black document.
     let page = Page {
+            body_lines: usize::MAX,
         lines: vec![PlacedLine {
             x: Length::pt(50.0),
             baseline_y: Length::pt(100.0),
@@ -163,6 +165,7 @@ fn base14_colored_math_glyph_is_scoped_in_q_rg_q_black_sibling_glyph_is_not() {
         rules: Vec::new(),
     };
     let page = Page {
+            body_lines: usize::MAX,
         lines: vec![PlacedLine {
             x: Length::pt(50.0),
             baseline_y: Length::pt(100.0),
@@ -255,6 +258,7 @@ fn cid_colored_run_is_scoped_in_q_rg_q_black_run_emits_no_color_op() {
     };
 
     let page = Page {
+            body_lines: usize::MAX,
         lines: vec![PlacedLine {
             x: geo.text_origin.0,
             baseline_y: geo.text_origin.1 + store.ascender(font, size),

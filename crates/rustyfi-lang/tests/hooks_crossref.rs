@@ -188,6 +188,7 @@ fn fire_hooks_invokes_the_closure_with_the_correct_page_number() {
     let doc = DocumentValue {
         geometry: PageGeometry::default(),
         pages: vec![Page {
+            body_lines: usize::MAX,
             lines: vec![PlacedLine {
                 x: Length::ZERO,
                 baseline_y: Length::pt(100.0),
@@ -239,6 +240,7 @@ fn fire_hooks_numbers_pages_one_based_in_document_order() {
     interp.hooks.push(closure);
 
     let hook_free_page = Page {
+            body_lines: usize::MAX,
         lines: vec![PlacedLine {
             x: Length::ZERO,
             baseline_y: Length::pt(50.0),
@@ -246,6 +248,7 @@ fn fire_hooks_numbers_pages_one_based_in_document_order() {
         }],
     };
     let hook_page = Page {
+            body_lines: usize::MAX,
         lines: vec![PlacedLine {
             x: Length::ZERO,
             baseline_y: Length::pt(50.0),

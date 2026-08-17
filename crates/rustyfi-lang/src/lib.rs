@@ -128,12 +128,18 @@ pub fn compile_document_cst_with_aux(
         let scope = elaborate::Scope::new(&store, env0.names());
         let program = elaborate::elaborate_program(file, &scope)?;
         if timing {
-            eprintln!("TIMING   elaborate        {:>8.1}ms", t.elapsed().as_secs_f64() * 1e3);
+            eprintln!(
+                "TIMING   elaborate        {:>8.1}ms",
+                t.elapsed().as_secs_f64() * 1e3
+            );
         }
         let t = std::time::Instant::now();
         typecheck::typecheck(&program)?;
         if timing {
-            eprintln!("TIMING   typecheck        {:>8.1}ms", t.elapsed().as_secs_f64() * 1e3);
+            eprintln!(
+                "TIMING   typecheck        {:>8.1}ms",
+                t.elapsed().as_secs_f64() * 1e3
+            );
         }
         // The compile membrane: resolve every `Symbol` back to its text, so
         // nothing downstream (the `CompiledExpr`, the per-trial `Env`s,
@@ -148,7 +154,10 @@ pub fn compile_document_cst_with_aux(
     let t = std::time::Instant::now();
     let compiled = compile::compile_program(&body, &env0);
     if timing {
-        eprintln!("TIMING   compile-tree     {:>8.1}ms", t.elapsed().as_secs_f64() * 1e3);
+        eprintln!(
+            "TIMING   compile-tree     {:>8.1}ms",
+            t.elapsed().as_secs_f64() * 1e3
+        );
     }
     eval_document_trials(
         &compiled,
@@ -506,17 +515,22 @@ pub fn compile_document_v1_with_aux(
                     // also touched, need no textual relabel at all — see
                     // above — so this single call covers the whole prelude
                     // regardless of which combination of the two is touched.)
-                    let adapted =
-                        v1::xver_adapt::relabel_type_decls(&cst.prelude, RustyfiVersion::V0_0_6, RustyfiVersion::V0_1)
-                            .map_err(|be| CompileError::CrossVersionUnsupportedName {
-                                name: match &be {
-                                    v1::xver_adapt::BoundaryError::ForkedTypeExport { ty_name, .. } => {
-                                        ty_name.clone()
-                                    }
-                                },
-                                dep: dep.path.display().to_string(),
-                                slice: "X3",
-                            })?;
+                    let adapted = v1::xver_adapt::relabel_type_decls(
+                        &cst.prelude,
+                        RustyfiVersion::V0_0_6,
+                        RustyfiVersion::V0_1,
+                    )
+                    .map_err(|be| {
+                        CompileError::CrossVersionUnsupportedName {
+                            name: match &be {
+                                v1::xver_adapt::BoundaryError::ForkedTypeExport {
+                                    ty_name, ..
+                                } => ty_name.clone(),
+                            },
+                            dep: dep.path.display().to_string(),
+                            slice: "X3",
+                        }
+                    })?;
                     prelude.extend(adapted);
                 } else {
                     // Only `deco`/`deco-set` (no `math`) is touched — no
@@ -532,12 +546,16 @@ pub fn compile_document_v1_with_aux(
                         RustyfiVersion::V0_0_6,
                         RustyfiVersion::V0_1,
                     )
-                    .map_err(|be| CompileError::CrossVersionUnsupportedName {
-                        name: match &be {
-                            v1::xver_adapt::BoundaryError::ForkedTypeExport { ty_name, .. } => ty_name.clone(),
-                        },
-                        dep: dep.path.display().to_string(),
-                        slice: "X3b",
+                    .map_err(|be| {
+                        CompileError::CrossVersionUnsupportedName {
+                            name: match &be {
+                                v1::xver_adapt::BoundaryError::ForkedTypeExport {
+                                    ty_name, ..
+                                } => ty_name.clone(),
+                            },
+                            dep: dep.path.display().to_string(),
+                            slice: "X3b",
+                        }
                     })?;
                     // Deliberately NOT added to `v006_indices`: this
                     // synthetic code is genuinely `V0_1`-authored (it calls
@@ -581,8 +599,7 @@ pub fn compile_document_v1_with_aux(
     // `compile_document_cst_with_trials` for both halves of that contract.
     let body = {
         let store = symbol::SymbolStore::new();
-        let scope =
-            elaborate::Scope::new_with_version(&store, env0.names(), RustyfiVersion::V0_1);
+        let scope = elaborate::Scope::new_with_version(&store, env0.names(), RustyfiVersion::V0_1);
         // X2a: `v006_indices` is empty whenever no `V0_0_6` dependency was
         // spliced above (every pre-X2a caller, and every mixed load with only
         // `V0_1` deps) — `elaborate_program_with_versions` then emits no
@@ -801,11 +818,11 @@ pub fn compile_document_v006_xver_with_aux(
 
                 let free = collect_free_globals(&lowered);
                 let reject_t = v1::xver_adapt::reject_type_names();
-                let touched: BTreeSet<String> = free.types.intersection(&reject_t).cloned().collect();
-                if let Some(name) = touched
-                    .iter()
-                    .find(|n| !matches!(n.as_str(), "math-text" | "math-boxes" | "deco" | "deco-set"))
-                {
+                let touched: BTreeSet<String> =
+                    free.types.intersection(&reject_t).cloned().collect();
+                if let Some(name) = touched.iter().find(|n| {
+                    !matches!(n.as_str(), "math-text" | "math-boxes" | "deco" | "deco-set")
+                }) {
                     return Err(CompileError::CrossVersionUnsupportedName {
                         name: name.clone(),
                         dep: dep.path.display().to_string(),
@@ -822,7 +839,9 @@ pub fn compile_document_v006_xver_with_aux(
                 v1::xver_adapt::reject_deco_exports_v01_sig(cst).map_err(|be| {
                     CompileError::CrossVersionUnsupportedName {
                         name: match &be {
-                            v1::xver_adapt::BoundaryError::ForkedTypeExport { ty_name, .. } => ty_name.clone(),
+                            v1::xver_adapt::BoundaryError::ForkedTypeExport { ty_name, .. } => {
+                                ty_name.clone()
+                            }
                         },
                         dep: dep.path.display().to_string(),
                         slice: "X4b",
@@ -856,8 +875,7 @@ pub fn compile_document_v006_xver_with_aux(
     //    since 0.1's grammar is a strict superset) --
     let env0 = primitives::base_env_with_version(RustyfiVersion::V0_1);
     let store = symbol::SymbolStore::new();
-    let scope =
-        elaborate::Scope::new_with_version(&store, env0.names(), RustyfiVersion::V0_1);
+    let scope = elaborate::Scope::new_with_version(&store, env0.names(), RustyfiVersion::V0_1);
     // `wrap_body_version = Some(V0_0_6)`: the ENTRY's own document tail
     // (`file.body`, always 0.0.6-authored here) is wrapped in
     // `Ast::VersionScope(V0_0_6, _)` too — the one new elaborate.rs
@@ -1037,7 +1055,11 @@ fn collect_free_globals(prelude: &[rustyfi_syntax::cst::TopBinding]) -> FreeGlob
     out
 }
 
-fn walk_top_binding(tb: &rustyfi_syntax::cst::TopBinding, scope: &mut XverScope, out: &mut FreeGlobals) {
+fn walk_top_binding(
+    tb: &rustyfi_syntax::cst::TopBinding,
+    scope: &mut XverScope,
+    out: &mut FreeGlobals,
+) {
     use rustyfi_syntax::cst::TopBinding;
     match tb {
         // Recursive: every clause's own name is bound BEFORE any clause body
@@ -1071,7 +1093,13 @@ fn walk_top_binding(tb: &rustyfi_syntax::cst::TopBinding, scope: &mut XverScope,
             // set — see the module banner).
             walk_expr(value, scope, out);
         }
-        TopBinding::LetInline { ctx, cmd, params, value, .. } => {
+        TopBinding::LetInline {
+            ctx,
+            cmd,
+            params,
+            value,
+            ..
+        } => {
             let mark = scope.mark();
             if let Some(c) = ctx {
                 scope.push_value(&c.name);
@@ -1083,7 +1111,13 @@ fn walk_top_binding(tb: &rustyfi_syntax::cst::TopBinding, scope: &mut XverScope,
             scope.truncate_to(mark);
             scope.push_value(&cmd.name);
         }
-        TopBinding::LetBlock { ctx, cmd, params, value, .. } => {
+        TopBinding::LetBlock {
+            ctx,
+            cmd,
+            params,
+            value,
+            ..
+        } => {
             let mark = scope.mark();
             if let Some(c) = ctx {
                 scope.push_value(&c.name);
@@ -1095,7 +1129,9 @@ fn walk_top_binding(tb: &rustyfi_syntax::cst::TopBinding, scope: &mut XverScope,
             scope.truncate_to(mark);
             scope.push_value(&cmd.name);
         }
-        TopBinding::LetMath { cmd, params, value, .. } => {
+        TopBinding::LetMath {
+            cmd, params, value, ..
+        } => {
             let mark = scope.mark();
             for p in params {
                 walk_param_binder(p, scope, out);
@@ -1186,7 +1222,11 @@ fn walk_rec_binding_body(
     }
 }
 
-fn walk_param_binder(p: &rustyfi_syntax::cst::ast::Param, scope: &mut XverScope, out: &mut FreeGlobals) {
+fn walk_param_binder(
+    p: &rustyfi_syntax::cst::ast::Param,
+    scope: &mut XverScope,
+    out: &mut FreeGlobals,
+) {
     use rustyfi_syntax::cst::ast::Param;
     match p {
         Param::Optional { name, .. } => scope.push_value(&name.name),
@@ -1204,21 +1244,33 @@ fn walk_param_binder(p: &rustyfi_syntax::cst::ast::Param, scope: &mut XverScope,
 /// BINDER mode: every `Var`/`AsClause.name` is pushed (never emitted); every
 /// `Ctor`/`CtorApplied.ctor` is a REFERENCE — emitted for completeness (the
 /// corpus's constructors are neutral, but this keeps the walk total).
-fn walk_pattern_binder(pat: &rustyfi_syntax::cst::ast::Pattern, scope: &mut XverScope, out: &mut FreeGlobals) {
+fn walk_pattern_binder(
+    pat: &rustyfi_syntax::cst::ast::Pattern,
+    scope: &mut XverScope,
+    out: &mut FreeGlobals,
+) {
     walk_patcons_binder(&pat.head, scope, out);
     if let Some(ac) = &pat.as_clause {
         scope.push_value(&ac.name.name);
     }
 }
 
-fn walk_patcons_binder(pc: &rustyfi_syntax::cst::ast::PatCons, scope: &mut XverScope, out: &mut FreeGlobals) {
+fn walk_patcons_binder(
+    pc: &rustyfi_syntax::cst::ast::PatCons,
+    scope: &mut XverScope,
+    out: &mut FreeGlobals,
+) {
     walk_patbot_binder(&pc.head, scope, out);
     for seg in &pc.tail {
         walk_patbot_binder(&seg.tail, scope, out);
     }
 }
 
-fn walk_patbot_binder(pb: &rustyfi_syntax::cst::ast::PatBot, scope: &mut XverScope, out: &mut FreeGlobals) {
+fn walk_patbot_binder(
+    pb: &rustyfi_syntax::cst::ast::PatBot,
+    scope: &mut XverScope,
+    out: &mut FreeGlobals,
+) {
     use rustyfi_syntax::cst::ast::PatBot;
     match pb {
         PatBot::CtorApplied { ctor, arg } => {
@@ -1243,7 +1295,11 @@ fn walk_patbot_binder(pb: &rustyfi_syntax::cst::ast::PatBot, scope: &mut XverSco
     }
 }
 
-fn walk_type_decl(td: &rustyfi_syntax::cst::TypeDecl, scope: &mut XverScope, out: &mut FreeGlobals) {
+fn walk_type_decl(
+    td: &rustyfi_syntax::cst::TypeDecl,
+    scope: &mut XverScope,
+    out: &mut FreeGlobals,
+) {
     walk_type_decl_body(&td.body, scope, out);
     for a in &td.ands {
         walk_type_decl_body(&a.body, scope, out);
@@ -1267,7 +1323,11 @@ fn walk_type_decl_body(
     }
 }
 
-fn walk_variant_def(vd: &rustyfi_syntax::cst::VariantDef, scope: &mut XverScope, out: &mut FreeGlobals) {
+fn walk_variant_def(
+    vd: &rustyfi_syntax::cst::VariantDef,
+    scope: &mut XverScope,
+    out: &mut FreeGlobals,
+) {
     // `vd.ctor` DECLARES a new constructor — not a reference, nothing to
     // emit for it.
     if let Some(of_ty) = &vd.of_ty {
@@ -1275,7 +1335,11 @@ fn walk_variant_def(vd: &rustyfi_syntax::cst::VariantDef, scope: &mut XverScope,
     }
 }
 
-fn walk_sig_annot(sig: &rustyfi_syntax::cst::SigAnnot, scope: &mut XverScope, out: &mut FreeGlobals) {
+fn walk_sig_annot(
+    sig: &rustyfi_syntax::cst::SigAnnot,
+    scope: &mut XverScope,
+    out: &mut FreeGlobals,
+) {
     use rustyfi_syntax::cst::SigItem;
     for item in &sig.items {
         match item {
@@ -1292,7 +1356,9 @@ fn walk_sig_annot(sig: &rustyfi_syntax::cst::SigAnnot, scope: &mut XverScope, ou
 fn walk_expr(e: &rustyfi_syntax::cst::ast::Expr, scope: &mut XverScope, out: &mut FreeGlobals) {
     use rustyfi_syntax::cst::ast::Expr;
     match e {
-        Expr::LetRecIn { first, ands, body, .. } => {
+        Expr::LetRecIn {
+            first, ands, body, ..
+        } => {
             let mark = scope.mark();
             scope.push_value(&first.name.name);
             for and in ands {
@@ -1310,7 +1376,13 @@ fn walk_expr(e: &rustyfi_syntax::cst::ast::Expr, scope: &mut XverScope, out: &mu
             walk_expr(body, scope, out);
             scope.truncate_to(mark);
         }
-        Expr::LetIn { name, params, value, body, .. } => {
+        Expr::LetIn {
+            name,
+            params,
+            value,
+            body,
+            ..
+        } => {
             let mark = scope.mark();
             for p in params {
                 walk_param_binder(p, scope, out);
@@ -1322,14 +1394,21 @@ fn walk_expr(e: &rustyfi_syntax::cst::ast::Expr, scope: &mut XverScope, out: &mu
             walk_expr(body, scope, out);
             scope.truncate_to(mark);
         }
-        Expr::LetPatternIn { pat, value, body, .. } => {
+        Expr::LetPatternIn {
+            pat, value, body, ..
+        } => {
             walk_expr(value, scope, out);
             let mark = scope.mark();
             walk_pattern_binder(&pat.0, scope, out);
             walk_expr(body, scope, out);
             scope.truncate_to(mark);
         }
-        Expr::If { cond, then_branch, else_branch, .. } => {
+        Expr::If {
+            cond,
+            then_branch,
+            else_branch,
+            ..
+        } => {
             walk_expr(cond, scope, out);
             walk_expr(then_branch, scope, out);
             walk_expr(else_branch, scope, out);
@@ -1342,7 +1421,9 @@ fn walk_expr(e: &rustyfi_syntax::cst::ast::Expr, scope: &mut XverScope, out: &mu
             walk_expr(body, scope, out);
             scope.truncate_to(mark);
         }
-        Expr::FunRows { opts, param, body, .. } => {
+        Expr::FunRows {
+            opts, param, body, ..
+        } => {
             let mark = scope.mark();
             for e in &opts.entries {
                 scope.push_value(&e.var.name);
@@ -1351,21 +1432,34 @@ fn walk_expr(e: &rustyfi_syntax::cst::ast::Expr, scope: &mut XverScope, out: &mu
             walk_expr(body, scope, out);
             scope.truncate_to(mark);
         }
-        Expr::Match { scrutinee, first, rest, .. } => {
+        Expr::Match {
+            scrutinee,
+            first,
+            rest,
+            ..
+        } => {
             walk_expr(scrutinee, scope, out);
             walk_match_arm(first, scope, out);
             for ba in rest {
                 walk_match_arm(&ba.arm, scope, out);
             }
         }
-        Expr::LetMutableIn { name, init, body, .. } => {
+        Expr::LetMutableIn {
+            name, init, body, ..
+        } => {
             walk_expr(init, scope, out);
             let mark = scope.mark();
             scope.push_value(&name.name);
             walk_expr(body, scope, out);
             scope.truncate_to(mark);
         }
-        Expr::LetMathIn { cmd, params, value, body, .. } => {
+        Expr::LetMathIn {
+            cmd,
+            params,
+            value,
+            body,
+            ..
+        } => {
             let mark = scope.mark();
             for p in params {
                 walk_param_binder(p, scope, out);
@@ -1392,7 +1486,11 @@ fn walk_expr(e: &rustyfi_syntax::cst::ast::Expr, scope: &mut XverScope, out: &mu
     }
 }
 
-fn walk_match_arm(arm: &rustyfi_syntax::cst::ast::MatchArm, scope: &mut XverScope, out: &mut FreeGlobals) {
+fn walk_match_arm(
+    arm: &rustyfi_syntax::cst::ast::MatchArm,
+    scope: &mut XverScope,
+    out: &mut FreeGlobals,
+) {
     let mark = scope.mark();
     walk_pattern_binder(&arm.pat.0, scope, out);
     if let Some(g) = &arm.guard {
@@ -1402,7 +1500,11 @@ fn walk_match_arm(arm: &rustyfi_syntax::cst::ast::MatchArm, scope: &mut XverScop
     scope.truncate_to(mark);
 }
 
-fn walk_opchain(oc: &rustyfi_syntax::cst::ast::OpChain, scope: &mut XverScope, out: &mut FreeGlobals) {
+fn walk_opchain(
+    oc: &rustyfi_syntax::cst::ast::OpChain,
+    scope: &mut XverScope,
+    out: &mut FreeGlobals,
+) {
     walk_appexpr(&oc.head, scope, out);
     for r in &oc.tail {
         walk_appexpr(&r.rhs, scope, out);
@@ -1412,7 +1514,11 @@ fn walk_opchain(oc: &rustyfi_syntax::cst::ast::OpChain, scope: &mut XverScope, o
     }
 }
 
-fn walk_appexpr(ae: &rustyfi_syntax::cst::ast::AppExpr, scope: &mut XverScope, out: &mut FreeGlobals) {
+fn walk_appexpr(
+    ae: &rustyfi_syntax::cst::ast::AppExpr,
+    scope: &mut XverScope,
+    out: &mut FreeGlobals,
+) {
     walk_atomic(&ae.head, scope, out);
     // `head_accesses`: `#label` record-field accesses — field labels, not
     // globals, skip.
@@ -1485,7 +1591,11 @@ fn walk_atomic(a: &rustyfi_syntax::cst::ast::Atomic, scope: &mut XverScope, out:
     }
 }
 
-fn walk_any_horz_cmd_ref(n: &rustyfi_syntax::leaf::AnyHorzCmdTok, scope: &XverScope, out: &mut FreeGlobals) {
+fn walk_any_horz_cmd_ref(
+    n: &rustyfi_syntax::leaf::AnyHorzCmdTok,
+    scope: &XverScope,
+    out: &mut FreeGlobals,
+) {
     use rustyfi_syntax::leaf::AnyHorzCmdTok;
     match n {
         AnyHorzCmdTok::Plain(t) => emit_value(scope, out, &t.name),
@@ -1493,7 +1603,11 @@ fn walk_any_horz_cmd_ref(n: &rustyfi_syntax::leaf::AnyHorzCmdTok, scope: &XverSc
     }
 }
 
-fn walk_any_vert_cmd_ref(n: &rustyfi_syntax::leaf::AnyVertCmdTok, scope: &XverScope, out: &mut FreeGlobals) {
+fn walk_any_vert_cmd_ref(
+    n: &rustyfi_syntax::leaf::AnyVertCmdTok,
+    scope: &XverScope,
+    out: &mut FreeGlobals,
+) {
     use rustyfi_syntax::leaf::AnyVertCmdTok;
     match n {
         AnyVertCmdTok::Plain(t) => emit_value(scope, out, &t.name),
@@ -1501,7 +1615,11 @@ fn walk_any_vert_cmd_ref(n: &rustyfi_syntax::leaf::AnyVertCmdTok, scope: &XverSc
     }
 }
 
-fn walk_any_math_cmd_ref(n: &rustyfi_syntax::leaf::AnyMathCmdTok, scope: &XverScope, out: &mut FreeGlobals) {
+fn walk_any_math_cmd_ref(
+    n: &rustyfi_syntax::leaf::AnyMathCmdTok,
+    scope: &XverScope,
+    out: &mut FreeGlobals,
+) {
     use rustyfi_syntax::leaf::AnyMathCmdTok;
     match n {
         AnyMathCmdTok::Plain(t) => emit_value(scope, out, &t.name),
@@ -1509,14 +1627,22 @@ fn walk_any_math_cmd_ref(n: &rustyfi_syntax::leaf::AnyMathCmdTok, scope: &XverSc
     }
 }
 
-fn walk_paren_body(pb: &rustyfi_syntax::cst::ast::ParenBody, scope: &mut XverScope, out: &mut FreeGlobals) {
+fn walk_paren_body(
+    pb: &rustyfi_syntax::cst::ast::ParenBody,
+    scope: &mut XverScope,
+    out: &mut FreeGlobals,
+) {
     walk_expr(&pb.first.0, scope, out);
     for ce in &pb.rest {
         walk_expr(&ce.value.0, scope, out);
     }
 }
 
-fn walk_record_body(rb: &rustyfi_syntax::cst::ast::RecordBody, scope: &mut XverScope, out: &mut FreeGlobals) {
+fn walk_record_body(
+    rb: &rustyfi_syntax::cst::ast::RecordBody,
+    scope: &mut XverScope,
+    out: &mut FreeGlobals,
+) {
     use rustyfi_syntax::cst::ast::RecordBody;
     match rb {
         RecordBody::Update { base, fields, .. } => {
@@ -1533,7 +1659,11 @@ fn walk_record_body(rb: &rustyfi_syntax::cst::ast::RecordBody, scope: &mut XverS
     }
 }
 
-fn walk_inline_elem(el: &rustyfi_syntax::cst::ast::InlineElem, scope: &mut XverScope, out: &mut FreeGlobals) {
+fn walk_inline_elem(
+    el: &rustyfi_syntax::cst::ast::InlineElem,
+    scope: &mut XverScope,
+    out: &mut FreeGlobals,
+) {
     use rustyfi_syntax::cst::ast::InlineElem;
     match el {
         InlineElem::Char(_) | InlineElem::Space(_) | InlineElem::Break(_) => {}
@@ -1555,7 +1685,11 @@ fn walk_inline_elem(el: &rustyfi_syntax::cst::ast::InlineElem, scope: &mut XverS
     }
 }
 
-fn walk_block_elem(el: &rustyfi_syntax::cst::ast::BlockElem, scope: &mut XverScope, out: &mut FreeGlobals) {
+fn walk_block_elem(
+    el: &rustyfi_syntax::cst::ast::BlockElem,
+    scope: &mut XverScope,
+    out: &mut FreeGlobals,
+) {
     use rustyfi_syntax::cst::ast::BlockElem;
     match el {
         BlockElem::Embed { var, .. } => {
@@ -1570,7 +1704,11 @@ fn walk_block_elem(el: &rustyfi_syntax::cst::ast::BlockElem, scope: &mut XverSco
     }
 }
 
-fn walk_cmd_tail(t: &rustyfi_syntax::cst::ast::CmdTail, scope: &mut XverScope, out: &mut FreeGlobals) {
+fn walk_cmd_tail(
+    t: &rustyfi_syntax::cst::ast::CmdTail,
+    scope: &mut XverScope,
+    out: &mut FreeGlobals,
+) {
     use rustyfi_syntax::cst::ast::CmdTail;
     match t {
         CmdTail::Semi(_) => {}
@@ -1583,14 +1721,22 @@ fn walk_cmd_tail(t: &rustyfi_syntax::cst::ast::CmdTail, scope: &mut XverScope, o
     }
 }
 
-fn walk_math_elem(m: &rustyfi_syntax::cst::ast::MathElemCst, scope: &mut XverScope, out: &mut FreeGlobals) {
+fn walk_math_elem(
+    m: &rustyfi_syntax::cst::ast::MathElemCst,
+    scope: &mut XverScope,
+    out: &mut FreeGlobals,
+) {
     walk_math_bot(&m.base, scope, out);
     for s in &m.scripts {
         walk_math_script(s, scope, out);
     }
 }
 
-fn walk_math_script(s: &rustyfi_syntax::cst::ast::MathScript, scope: &mut XverScope, out: &mut FreeGlobals) {
+fn walk_math_script(
+    s: &rustyfi_syntax::cst::ast::MathScript,
+    scope: &mut XverScope,
+    out: &mut FreeGlobals,
+) {
     use rustyfi_syntax::cst::ast::MathScript;
     match s {
         MathScript::Super { group, .. } | MathScript::Sub { group, .. } => {
@@ -1616,7 +1762,11 @@ fn walk_math_group_arg(
     }
 }
 
-fn walk_math_bot(b: &rustyfi_syntax::cst::ast::MathBot, scope: &mut XverScope, out: &mut FreeGlobals) {
+fn walk_math_bot(
+    b: &rustyfi_syntax::cst::ast::MathBot,
+    scope: &mut XverScope,
+    out: &mut FreeGlobals,
+) {
     use rustyfi_syntax::cst::ast::MathBot;
     match b {
         MathBot::Cmd { name, args } => {
@@ -1640,7 +1790,11 @@ fn walk_math_bot(b: &rustyfi_syntax::cst::ast::MathBot, scope: &mut XverScope, o
     }
 }
 
-fn walk_math_arg(a: &rustyfi_syntax::cst::ast::MathArg, scope: &mut XverScope, out: &mut FreeGlobals) {
+fn walk_math_arg(
+    a: &rustyfi_syntax::cst::ast::MathArg,
+    scope: &mut XverScope,
+    out: &mut FreeGlobals,
+) {
     use rustyfi_syntax::cst::ast::MathArg;
     match a {
         MathArg::Optional { body, .. } => walk_math_arg_body(body, scope, out),
@@ -1681,7 +1835,11 @@ fn walk_math_arg_body(
     }
 }
 
-fn walk_type_expr(te: &rustyfi_syntax::cst::ast::TypeExpr, scope: &mut XverScope, out: &mut FreeGlobals) {
+fn walk_type_expr(
+    te: &rustyfi_syntax::cst::ast::TypeExpr,
+    scope: &mut XverScope,
+    out: &mut FreeGlobals,
+) {
     use rustyfi_syntax::cst::ast::TypeExpr;
     match te {
         TypeExpr::Fun { opts, dom, cod, .. } => {
@@ -1692,7 +1850,9 @@ fn walk_type_expr(te: &rustyfi_syntax::cst::ast::TypeExpr, scope: &mut XverScope
             walk_type_expr(cod, scope, out);
         }
         TypeExpr::Atom(prod) => walk_type_prod(prod, scope, out),
-        TypeExpr::OptRowFun { opt_dom, dom, cod, .. } => {
+        TypeExpr::OptRowFun {
+            opt_dom, dom, cod, ..
+        } => {
             for e in &opt_dom.entries {
                 walk_type_expr(&e.ty.0, scope, out);
             }
@@ -1702,14 +1862,22 @@ fn walk_type_expr(te: &rustyfi_syntax::cst::ast::TypeExpr, scope: &mut XverScope
     }
 }
 
-fn walk_type_prod(tp: &rustyfi_syntax::cst::ast::TypeProd, scope: &mut XverScope, out: &mut FreeGlobals) {
+fn walk_type_prod(
+    tp: &rustyfi_syntax::cst::ast::TypeProd,
+    scope: &mut XverScope,
+    out: &mut FreeGlobals,
+) {
     walk_type_app(&tp.first, scope, out);
     for st in &tp.rest {
         walk_type_app(&st.ty, scope, out);
     }
 }
 
-fn walk_type_app(ta: &rustyfi_syntax::cst::ast::TypeApp, scope: &mut XverScope, out: &mut FreeGlobals) {
+fn walk_type_app(
+    ta: &rustyfi_syntax::cst::ast::TypeApp,
+    scope: &mut XverScope,
+    out: &mut FreeGlobals,
+) {
     // Every atom of a postfix application `arg1 … ctor` — including the final
     // constructor — is a `TypeAtom`, and `walk_type_atom` already emits a bare
     // `Name` (and skips a module-qualified `NameMod`) as an
@@ -1721,7 +1889,11 @@ fn walk_type_app(ta: &rustyfi_syntax::cst::ast::TypeApp, scope: &mut XverScope, 
     }
 }
 
-fn walk_type_atom(atom: &rustyfi_syntax::cst::ast::TypeAtom, scope: &mut XverScope, out: &mut FreeGlobals) {
+fn walk_type_atom(
+    atom: &rustyfi_syntax::cst::ast::TypeAtom,
+    scope: &mut XverScope,
+    out: &mut FreeGlobals,
+) {
     use rustyfi_syntax::cst::ast::TypeAtom;
     match atom {
         TypeAtom::Cmd { args, .. } => {
@@ -1828,8 +2000,8 @@ pub fn fire_hooks(interp: &mut eval::Interp, doc: &DocumentValue) -> Result<(), 
     for (i, page) in doc.pages.iter().enumerate() {
         interp.current_page = Some(i);
         let page_number = (i + 1) as i64; // 1-based, = pbinfo#page-number
-        // Frames carried over from a previous page start a fresh per-page
-        // extent: their fragment on THIS page spans only this page's lines.
+                                          // Frames carried over from a previous page start a fresh per-page
+                                          // extent: their fragment on THIS page spans only this page's lines.
         for f in &mut open {
             f.top = None;
             f.bottom = None;
@@ -1839,7 +2011,7 @@ pub fn fire_hooks(interp: &mut eval::Interp, doc: &DocumentValue) -> Result<(), 
         // — see the doc comment on the ordering this preserves.
         let mut closings: Vec<(usize, Vec<GraphicsElem>)> = Vec::new();
 
-        for line in &page.lines {
+        for (line_idx, line) in page.lines.iter().enumerate() {
             for (dx, bx) in &line.contents {
                 match bx {
                     PureHorzBox::HookPageBreak { id } => {
@@ -1900,7 +2072,9 @@ pub fn fire_hooks(interp: &mut eval::Interp, doc: &DocumentValue) -> Result<(), 
                         // An End with no matching open frame can't happen given
                         // well-nested markers; ignored if it did.
                     }
-                    PureHorzBox::EmbeddedBlock { block, anchor_last, .. } => {
+                    PureHorzBox::EmbeddedBlock {
+                        block, anchor_last, ..
+                    } => {
                         // A `block-frame-breakable` can also hide INSIDE an
                         // `embed-block-breakable` (figbox's inline
                         // `\fig-on-right`/`\fig-on-left`, which draw their image
@@ -1911,6 +2085,7 @@ pub fn fire_hooks(interp: &mut eval::Interp, doc: &DocumentValue) -> Result<(), 
                         fire_embedded_block_frames(
                             interp,
                             doc,
+                            i,
                             line.x + *dx,
                             line.baseline_y,
                             block,
@@ -1926,12 +2101,21 @@ pub fn fire_hooks(interp: &mut eval::Interp, doc: &DocumentValue) -> Result<(), 
             // currently-open frame's (top, bottom) — pad Skips don't create
             // a `PlacedLine` at all, so they're naturally excluded here; the
             // ±pad compensation happens once, at close time, above.
-            if let Some((height, depth)) = placed_line_extent(line) {
-                let top = line.baseline_y - height;
-                let bottom = line.baseline_y + depth;
-                for f in &mut open {
-                    f.top = Some(f.top.map_or(top, |t| t.min(top)));
-                    f.bottom = Some(f.bottom.map_or(bottom, |b| b.max(bottom)));
+            //
+            // BODY lines only (`Page::body_lines`). The header and footer are
+            // appended after the columns, and a frame carried across a page
+            // boundary is open for this whole walk, so counting them stretched
+            // every such frame's fragment from the header baseline to the
+            // footer — easytable's `+code` blocks painted their grey background
+            // over entire pages (4, 11, 12) instead of over their own lines.
+            if line_idx < page.body_lines {
+                if let Some((height, depth)) = placed_line_extent(line) {
+                    let top = line.baseline_y - height;
+                    let bottom = line.baseline_y + depth;
+                    for f in &mut open {
+                        f.top = Some(f.top.map_or(top, |t| t.min(top)));
+                        f.bottom = Some(f.bottom.map_or(bottom, |b| b.max(bottom)));
+                    }
                 }
             }
         }
@@ -1993,9 +2177,11 @@ fn fire_block_frame_fragment(
     incl_bot_pad: bool,
 ) -> Result<Vec<GraphicsElem>, eval::EvalError> {
     let (pads, width, deco) = match &interp.decos[frame.id.0] {
-        eval::DecoEntry::Block { pads, width, decoset } => {
-            (*pads, *width, decoset[deco_idx].clone())
-        }
+        eval::DecoEntry::Block {
+            pads,
+            width,
+            decoset,
+        } => (*pads, *width, decoset[deco_idx].clone()),
         eval::DecoEntry::Inline { .. } => {
             return eval::eval_error("BUG: inline deco behind a block-frame marker")
         }
@@ -2003,7 +2189,11 @@ fn fire_block_frame_fragment(
     let top = frame.top.unwrap_or(frame.marker_baseline);
     let bottom = frame.bottom.unwrap_or(frame.marker_baseline);
     let frame_top = if incl_top_pad { top - pads.t } else { top };
-    let frame_bottom = if incl_bot_pad { bottom + pads.b } else { bottom };
+    let frame_bottom = if incl_bot_pad {
+        bottom + pads.b
+    } else {
+        bottom
+    };
     let pt = (frame.x, doc.geometry.paper_height - frame_bottom);
     // S2 (docs/plans/design-reflowable-html.md §4): record which DecoId is
     // firing so a `register-destination` call inside the deco (annot.satyh's
@@ -2042,6 +2232,7 @@ fn fire_block_frame_fragment(
 fn fire_embedded_block_frames(
     interp: &mut eval::Interp,
     doc: &DocumentValue,
+    page: usize,
     tx: Length,
     baseline_ydown: Length,
     block: &[VertBox],
@@ -2050,7 +2241,11 @@ fn fire_embedded_block_frames(
     out: &mut Vec<(usize, Vec<GraphicsElem>)>,
 ) -> Result<(), eval::EvalError> {
     let placed = place_block_at((Length::ZERO, Length::ZERO), block.to_vec());
-    let anchor = if anchor_last { placed.last() } else { placed.first() };
+    let anchor = if anchor_last {
+        placed.last()
+    } else {
+        placed.first()
+    };
     let Some(anchor) = anchor else {
         return Ok(());
     };
@@ -2079,10 +2274,25 @@ fn fire_embedded_block_frames(
                         out.push((frame.open_seq, gr));
                     }
                 }
-                PureHorzBox::EmbeddedBlock { block: inner, anchor_last: al, .. } => {
+                // An INLINE frame (`inline-frame-outer`/`-inner`/`-breakable`)
+                // can hide in here too, and its deco is the only thing that
+                // draws it. latexcmds' `\fbox`/`\doublebox`/`\ovalbox`/
+                // `\shadowbox` are exactly this — used inside `+listing` items,
+                // whose lines live in an embedded block rather than the page
+                // flow — so 26 of the document's 144 inline frames never fired
+                // at all and every one of those boxes rendered as bare text.
+                PureHorzBox::Frame { .. } => {
+                    fire_inline_frame(interp, doc, page, tx + pl.x + *dx, abs_baseline, bx)?;
+                }
+                PureHorzBox::EmbeddedBlock {
+                    block: inner,
+                    anchor_last: al,
+                    ..
+                } => {
                     fire_embedded_block_frames(
                         interp,
                         doc,
+                        page,
                         tx + pl.x + *dx,
                         abs_baseline,
                         inner,

@@ -71,6 +71,7 @@ fn page_with_fill_then_text() -> Page {
         origin_independent: false,
     };
     Page {
+            body_lines: usize::MAX,
         lines: vec![PlacedLine {
             x: Length::pt(50.0),
             baseline_y: Length::pt(100.0),
@@ -167,6 +168,7 @@ fn base14_draw_text_on_an_empty_run_emits_no_text_operators() {
         origin_independent: false,
     };
     let page = Page {
+            body_lines: usize::MAX,
         lines: vec![PlacedLine {
             x: Length::ZERO,
             baseline_y: Length::ZERO,
@@ -255,6 +257,7 @@ fn cid_draw_text_run_survives_pdftotext_extraction() {
         origin_independent: false,
     };
     let page = Page {
+            body_lines: usize::MAX,
         lines: vec![PlacedLine {
             x: geometry.text_origin.0,
             baseline_y: geometry.text_origin.1 + ascender,
@@ -313,6 +316,7 @@ fn a_text_free_graphics_box_is_unaffected_by_the_nested_emitter_plumbing() {
         origin_independent: false,
     };
     let page = Page {
+            body_lines: usize::MAX,
         lines: vec![PlacedLine {
             x: Length::pt(50.0),
             baseline_y: Length::pt(100.0),
@@ -369,6 +373,7 @@ fn an_image_nested_inside_a_draw_text_run_gets_its_xobject_registered() {
         origin_independent: false,
     };
     let page = Page {
+            body_lines: usize::MAX,
         lines: vec![PlacedLine {
             x: Length::ZERO,
             baseline_y: Length::ZERO,

@@ -387,9 +387,14 @@ class Metrics:
     words: int
     lines: int
     left_margin: float
-    # Both None in self-snapshot mode (no upstream reference to compare to).
+    # All None in self-snapshot mode (no upstream reference to compare to).
     text_match: float | None  # vs reference; 1.0 for the reference against itself
     width_p95_pt: float | None  # vs reference
+    # The REFERENCE's own counts. The count checks measure the port's DEVIATION
+    # FROM UPSTREAM (see `check_against_baseline`), so they have to be recorded.
+    ref_pages: int | None = None
+    ref_lines: int | None = None
+    ref_words: int | None = None
 
     def to_json(self) -> dict:
         d = {
@@ -402,6 +407,13 @@ class Metrics:
             d["text_match"] = round(self.text_match, 4)
         if self.width_p95_pt is not None:
             d["width_p95_pt"] = round(self.width_p95_pt, 3)
+        # Deviation from upstream, not an absolute count: what the guard pins.
+        if self.ref_words is not None:
+            d["upstream_words"] = self.ref_words
+            d["words_dev"] = abs(self.words - self.ref_words)
+        if self.ref_lines is not None:
+            d["upstream_lines"] = self.ref_lines
+            d["lines_dev"] = abs(self.lines - self.ref_lines)
         return d
 
 
@@ -437,6 +449,9 @@ def compare(port: list[Page], ref: list[Page] | None) -> Metrics:
         left_margin=left_margin(port),
         text_match=text_match,
         width_p95_pt=width_p95,
+        ref_pages=None if ref is None else len(ref),
+        ref_lines=None if ref is None else line_count(ref),
+        ref_words=None if ref is None else len(all_words(ref)),
     )
 
 
@@ -464,12 +479,40 @@ def check_against_baseline(name: str, m: Metrics, base: dict) -> list[str]:
             fails.append(
                 f"width_p95_pt {m.width_p95_pt:.3f} > baseline {base['width_p95_pt']:.3f} + {WIDTH_SLACK_PT}"
             )
-    for key in ("pages", "lines", "words"):
-        b = base[key]
-        lo = b * (1 - COUNT_SLACK)
-        hi = b * (1 + COUNT_SLACK)
-        if not (lo <= m.__dict__[key] <= hi):
-            fails.append(f"{key} {m.__dict__[key]} outside baseline {b} ±{int(COUNT_SLACK*100)}%")
+    # Counts are checked as a DEVIATION FROM UPSTREAM that may shrink but never
+    # grow — the same convergence guard `page_gap` already applies to pages.
+    #
+    # They used to be compared against the PORT'S OWN recorded counts ±6%, which
+    # measures drift from our past rather than fidelity, and actively misleads:
+    # latexcmds sat at 1096 words against upstream's 1095 — as close as it has
+    # ever been — and was still reported as a regression because the pinned
+    # baseline said 1029. A document that MOVES TOWARD SATySFi must never fail.
+    for key, dev_key, up_key in (
+        ("lines", "lines_dev", "upstream_lines"),
+        ("words", "words_dev", "upstream_words"),
+    ):
+        ref = getattr(m, f"ref_{key}")
+        if ref is not None and dev_key in base:
+            dev = abs(m.__dict__[key] - ref)
+            if dev > base[dev_key]:
+                fails.append(
+                    f"{key} deviation from SATySFi WIDENED: |port {m.__dict__[key]} - "
+                    f"SATySFi {ref}| = {dev} > baseline {base[dev_key]}"
+                )
+        elif ref is None and key in base:
+            # Self-snapshot (no upstream reference): the port's own history is
+            # all there is, so keep the ±6% drift guard for it.
+            b = base[key]
+            if not (b * (1 - COUNT_SLACK) <= m.__dict__[key] <= b * (1 + COUNT_SLACK)):
+                fails.append(
+                    f"{key} {m.__dict__[key]} outside baseline {b} ±{int(COUNT_SLACK * 100)}%"
+                )
+    # Pages keep the ±6% self-snapshot guard too; against upstream they are
+    # governed by the stricter `page_gap` parity check below.
+    if m.ref_pages is None and "pages" in base:
+        b = base["pages"]
+        if not (b * (1 - COUNT_SLACK) <= m.pages <= b * (1 + COUNT_SLACK)):
+            fails.append(f"pages {m.pages} outside baseline {b} ±{int(COUNT_SLACK * 100)}%")
     # Page-count PARITY with the original SATySFi (the goal "the corpus test
     # matches in page count"): the port's absolute page-count gap to SATySFi
     # must not GROW beyond its recorded value — it may only shrink toward 0.

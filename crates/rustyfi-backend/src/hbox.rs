@@ -445,6 +445,15 @@ pub enum PureHorzBox {
         /// Governs both this box's height/depth split and where the writers
         /// anchor the block's inner lines (`place_embedded_block`).
         anchor_last: bool,
+        /// Built by `embed-block-BREAKABLE` (upstream
+        /// `HorzEmbeddedVertBreakable`) rather than `embed-block-top`/`-bottom`
+        /// (`HorzEmbeddedVert`). Upstream keeps these two apart because the
+        /// breakable one is not laid out as inline content at all: the line
+        /// breaker flushes the current line, splices the block's own vertical
+        /// boxes straight into the vertical list (`AlreadyVert`,
+        /// `lineBreak.ml:809-818`), and starts a fresh line. See
+        /// `break_into_lines`, which does exactly that for this flag.
+        breakable: bool,
     },
     /// An inline frame (`inline-frame-outer`/`-inner`/`-breakable`;
     /// upstream `PHGOuterFrame`/`PHGInnerFrame`/`HorzFrameBreakable`) —

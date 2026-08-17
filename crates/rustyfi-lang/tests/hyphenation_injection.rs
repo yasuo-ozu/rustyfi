@@ -70,8 +70,16 @@ fn boxes_for(ctx: &Context) -> Vec<HorzBox> {
 
 #[test]
 fn no_dictionary_installed_yields_a_single_unsplit_inner_string() {
-    let ctx = Context::initial(Length::pt(400.0));
-    assert_eq!(ctx.hyphen_dictionary, None, "Context::initial must default to no dictionary");
+    // `Context::initial` now installs English by default, as upstream does
+    // (`primitives.cppo.ml:500,607`); this test is about the NO-dictionary
+    // path, so it opts out explicitly.
+    let mut ctx = Context::initial(Length::pt(400.0));
+    assert_eq!(
+        ctx.hyphen_dictionary,
+        Some(HyphenLang::EnglishUS),
+        "Context::initial must default to English, matching upstream"
+    );
+    ctx.hyphen_dictionary = None;
     let boxes = boxes_for(&ctx);
     // boxes: [InnerString(WORD), OuterFil] — no Discretionary at all.
     assert_eq!(boxes.len(), 2, "expected InnerString + trailing fil only: {boxes:?}");
@@ -172,12 +180,16 @@ fn narrow_column_forces_a_mid_word_break_with_a_trailing_hyphen() {
 #[test]
 fn a_huge_hyphen_penalty_disables_the_break_even_though_the_line_overflows() {
     // The `set-hyphen-penalty 100000` disable idiom
-    // (`docs/plans/design-hyphenation.md` D6): even with a dictionary
-    // installed, a huge `hyphen_badness` must make the DP prefer a single
-    // overfull line over paying the hyphenation penalty — exactly like
-    // `rustyfi-backend/tests/linebreak.rs`'s
-    // `kp_tolerates_an_overfull_unbreakable_word` for a word with NO break
-    // points at all.
+    // (`docs/plans/design-hyphenation.md` D6) does NOT extend to the case where
+    // the hyphenated line is itself overfull, because upstream's graph rule
+    // outranks any penalty: `hyphen-` is 42pt on this 40pt measure, so it is
+    // already `LBTooLong`, and a source node contributes only its FIRST
+    // too-long edge before being dropped (`lineBreak.ml:1017-1027`). The
+    // whole-word line is that node's SECOND too-long option, so it is never
+    // offered — no penalty can bring back an edge the graph never had.
+    //
+    // (This asserted a single overfull line when the port scored every overfull
+    // candidate independently, which let a huge penalty outvote them all.)
     let mut ctx = Context::initial(Length::pt(40.0));
     ctx.hyphen_dictionary = Some(HyphenLang::EnglishUS);
     ctx.hyphen_badness = 100_000;
@@ -186,8 +198,8 @@ fn a_huge_hyphen_penalty_disables_the_break_even_though_the_line_overflows() {
 
     assert_eq!(
         lines.len(),
-        1,
-        "expected the whole word on a single overfull line (break disabled): {lines:?}"
+        2,
+        "expected the hyphenated break (the only too-long edge on offer): {lines:?}"
     );
     let VertBox::Line { contents, .. } = &lines[0] else {
         panic!("expected a Line, got {:?}", lines[0]);
@@ -199,7 +211,9 @@ fn a_huge_hyphen_penalty_disables_the_break_even_though_the_line_overflows() {
             _ => None,
         })
         .collect();
-    assert_eq!(joined, WORD, "no hyphen glyph must appear anywhere on the single line");
+    // The break IS taken, so the first line ends with a printed hyphen — that
+    // is the `pre_break` slot doing its job.
+    assert_eq!(joined, "hyphen-", "the taken break prints its hyphen on line 1");
 }
 
 // ---- S3 (`docs/plans/design-hyphenation.md` §S3) ---------------------------
@@ -263,8 +277,8 @@ fn explicit_soft_hyphen_wins_over_dictionary_breaks_and_is_not_rendered() {
 /// ever fires when a dictionary is installed.
 #[test]
 fn soft_hyphen_with_no_dictionary_installed_is_untouched_by_this_slice() {
-    let ctx = Context::initial(Length::pt(400.0));
-    assert_eq!(ctx.hyphen_dictionary, None);
+    let mut ctx = Context::initial(Length::pt(400.0));
+    ctx.hyphen_dictionary = None; // this test is about the no-dictionary path
     let word_with_shy = "hy\u{ad}phenation";
     let boxes = boxes_for_word(&ctx, word_with_shy);
 

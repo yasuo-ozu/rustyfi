@@ -40,6 +40,7 @@ fn text_run(text: &str) -> PureHorzBox {
 
 fn page_with_run(bx: PureHorzBox) -> Page {
     Page {
+            body_lines: usize::MAX,
         lines: vec![PlacedLine {
             x: Length::pt(50.0),
             baseline_y: Length::pt(100.0),
@@ -104,6 +105,7 @@ fn glue_boxes_render_no_extra_span() {
     // `OuterEmpty`/`FixedEmpty` carry no visible content of their own —
     // only the one real `InnerString` run should produce a `<span>`.
     let page = Page {
+            body_lines: usize::MAX,
         lines: vec![PlacedLine {
             x: Length::pt(50.0),
             baseline_y: Length::pt(100.0),
@@ -140,6 +142,7 @@ fn unhandled_box_variants_render_nothing() {
     // `Image`/`Graphics`/etc. are Slice 2/3 — Slice 1's wildcard arm must
     // skip them cleanly rather than panicking or emitting a stray span.
     let page = Page {
+            body_lines: usize::MAX,
         lines: vec![PlacedLine {
             x: Length::ZERO,
             baseline_y: Length::pt(100.0),

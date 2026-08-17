@@ -495,6 +495,7 @@ fn deco_callback_result_coerces_per_version_when_fired() {
             contents: Vec::new(),
         };
         Page {
+            body_lines: usize::MAX,
             lines: vec![PlacedLine {
                 x: Length::pt(50.0),
                 baseline_y: Length::pt(100.0),

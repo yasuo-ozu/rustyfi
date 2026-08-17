@@ -116,10 +116,22 @@ fn lines_of(v: &[VertBox]) -> Vec<String> {
         .collect()
 }
 
-/// CJK has no glue at all: a run of ideographs joined only by zero-width,
-/// zero-penalty discretionaries (exactly what §3's `text_to_boxes` wiring
-/// produces at UAX#14 `Allowed` boundaries) must still wrap, one ideograph
-/// per line, once the measure is too narrow for two.
+/// A run of ideographs joined only by zero-width, zero-penalty discretionaries
+/// wraps at those discretionaries — taking the LEAST-OVERFULL option, not one
+/// ideograph per line.
+///
+/// One 6pt ideograph on an 8pt measure is underfull by 2pt with no glue to
+/// stretch, which is upstream's `LBTooShort`: `calculate_ratios` divides by a
+/// zero stretch and `lineBreak.ml:527` gives that pair NO graph edge at all. So
+/// a one-per-line partition is unreachable for both engines, and the breaker
+/// takes two ideographs (4pt overfull, `LBTooLong`) instead. This test used to
+/// assert one-per-line, from when the port scored rigid underfull lines by
+/// capped absolute shortfall rather than dropping them — the same divergence
+/// that let it prefer a 108pt line on a 440pt column.
+///
+/// Real CJK prose does not go through this path: `text_to_boxes` now hangs
+/// `adjacent_space` glue in each discretionary's `no_break` slot, so a genuine
+/// line has stretch to work with. These boxes are built bare, by hand.
 #[test]
 fn narrow_measure_wraps_cjk_at_ideograph_discretionaries() {
     let mono = Mono;
@@ -138,7 +150,7 @@ fn narrow_measure_wraps_cjk_at_ideograph_discretionaries() {
     let lines = break_into_lines(&ctx, boxes);
     assert_eq!(
         lines_of(&lines),
-        vec!["日", "本", "語", "版"],
-        "each ideograph must land on its own line via the discretionary path"
+        vec!["日本", "語版"],
+        "must wrap at the discretionaries, taking the least-overfull line"
     );
 }

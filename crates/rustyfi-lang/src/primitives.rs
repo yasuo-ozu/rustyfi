@@ -11,24 +11,24 @@
 //! `read-block`/`read-inline`, `line-break`, `++`/`inline-fil`, and the new
 //! `set-font-key` below).
 
-use crate::quoted::{BText, IText, MathElem};
 use crate::eval::{available_fields, eval_error, DecoEntry, EvalError, Interp};
+use crate::quoted::{BText, IText, MathElem};
 use crate::value::{BaseEnv, DocumentValue, Env, TextInfo, Value};
-use std::collections::{BTreeMap, BTreeSet};
+use rustyfi_backend::char_script;
 use rustyfi_backend::{
     break_into_lines, break_opportunities, chop_page, default_math_variant_char, fit_cell,
-    graphics_bbox, linear_transform_graphics, linear_transform_path, measure_block, placed_line_extent,
-    natural_metrics, path_bbox, place_block_at, shift_graphics, shift_path, Annot, AnnotAction,
-    BreakKind, Cell, Closing, Color, Context, Dash, DecoId, DocExtras, DocInfo, FontKey,
-    GraphicsElem, GraphicsFnId, HookId, HorzBox, HorzStringInfo, HyphenLang, ImageId, ImageResource,
-    ImportedObjects, InlineMarkKind, Language, Length, ListMarkKind, MathCharClass, MathConstants,
-    MathCorner, MathGlyph, MathKind, MathScriptLevel, NamedDest, ObjRepr, Paddings, Page,
-    PageGeometry, OutlineEntry, PaperSize, Path, PathSeg, PdfPageResource, Point, PrePath,
-    PureHorzBox, Script, ScriptFont, Subpath, TabularBox, VertBox, VertVariantPolicy,
+    graphics_bbox, linear_transform_graphics, linear_transform_path, measure_block,
+    natural_metrics, path_bbox, place_block_at, placed_line_extent, shift_graphics, shift_path,
+    Annot, AnnotAction, BreakKind, Cell, Closing, Color, Context, Dash, DecoId, DocExtras, DocInfo,
+    FontKey, GraphicsElem, GraphicsFnId, HookId, HorzBox, HorzStringInfo, HyphenLang, ImageId,
+    ImageResource, ImportedObjects, InlineMarkKind, Language, Length, ListMarkKind, MathCharClass,
+    MathConstants, MathCorner, MathGlyph, MathKind, MathScriptLevel, NamedDest, ObjRepr,
+    OutlineEntry, Paddings, Page, PageGeometry, PaperSize, Path, PathSeg, PdfPageResource, Point,
+    PrePath, PureHorzBox, Script, ScriptFont, Subpath, TabularBox, VertBox, VertVariantPolicy,
     FORCED_BREAK_PENALTY,
 };
-use rustyfi_backend::char_script;
 use rustyfi_syntax::RustyfiVersion;
+use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 use std::sync::Arc;
 // L5a (prim-retype-sweep §2.2): UAX #15 normalization / UAX #29 grapheme
@@ -83,7 +83,11 @@ pub struct PrimDef {
 
 impl std::fmt::Debug for PrimDef {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "PrimDef({}/{}, {:?})", self.name, self.arity, self.version)
+        write!(
+            f,
+            "PrimDef({}/{}, {:?})",
+            self.name, self.arity, self.version
+        )
     }
 }
 
@@ -804,10 +808,7 @@ fn as_block_text(v: Value) -> Result<(Rc<Vec<BText>>, Env), EvalError> {
 fn as_inline_boxes(v: Value) -> Result<Vec<HorzBox>, EvalError> {
     match v {
         Value::InlineBoxes(b) => Ok(b),
-        other => eval_error(format!(
-            "expected inline-boxes, got {}",
-            other.type_name()
-        )),
+        other => eval_error(format!("expected inline-boxes, got {}", other.type_name())),
     }
 }
 
@@ -901,7 +902,10 @@ fn prim_split_on_regexp(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Va
             cur.push(c);
         }
     }
-    segments.push(Value::Tuple(vec![Value::Int(seg_start as i64), Value::Str(cur)]));
+    segments.push(Value::Tuple(vec![
+        Value::Int(seg_start as i64),
+        Value::Str(cur),
+    ]));
     Ok(Value::List(segments))
 }
 
@@ -1579,23 +1583,129 @@ fn is_latin_cjk_boundary(a: Script, b: Script) -> bool {
     (a == Script::Latin && is_cjk(b)) || (is_cjk(a) && b == Script::Latin)
 }
 
-/// Bracket/comma/full-stop characters next to which SATySFi's default
-/// inter-script glue is suppressed. `pure_space_between_scripts`
-/// (`convertText.ml:32`) drops the glue when the left edge is opening
-/// punctuation or the right edge is closing punctuation; the surrounding aki is
-/// then supplied by the separate JLreq class-spacing layer (`between_classes`),
-/// which the port does not model. Suppressing script glue adjacent to ANY of
-/// these is the faithful approximation of that split — it stops the port
-/// rendering "、 𝑛" / "𝑛 」" where SATySFi sets "、𝑛" / "𝑛」".
-fn is_interscript_punct(c: char) -> bool {
+/// Upstream `is_open_punctuation` (`charBasis.ml:133`: `OP | QU | JLOP`) —
+/// opening brackets and quotes. Consulted for the LEFT edge of a script
+/// boundary only.
+fn is_open_punct(c: char) -> bool {
     matches!(
         c,
-        '(' | ')' | '[' | ']' | '{' | '}' | ',' | '.' | ';' | ':' | '!' | '?'
-            | '、' | '。' | '，' | '．' | '・'
-            | '（' | '）' | '「' | '」' | '『' | '』' | '【' | '】'
-            | '〔' | '〕' | '〈' | '〉' | '《' | '》' | '［' | '］' | '｛' | '｝'
-            | '！' | '？' | '：' | '；'
+        '(' | '[' | '{' | '"' | '\''
+            | '（' | '「' | '『' | '【' | '〔' | '〈' | '《' | '［' | '｛'
+            | '〖' | '〘' | '〚' | '“' | '‘'
     )
+}
+
+/// Upstream `is_close_punctuation` (`charBasis.ml:139`: `CL | CP | QU | NS |
+/// JLCP | JLNS | JLCM | JLFS`) — closing brackets, quotes, and the kuten/touten
+/// family. Consulted for the RIGHT edge of a script boundary only.
+fn is_close_punct(c: char) -> bool {
+    matches!(
+        c,
+        ')' | ']' | '}' | ',' | '.' | ';' | ':' | '!' | '?' | '"' | '\''
+            | '）' | '」' | '』' | '】' | '〕' | '〉' | '》' | '］' | '｝'
+            | '〗' | '〙' | '〛' | '”' | '’'
+            | '、' | '。' | '，' | '．' | '・' | '！' | '？' | '：' | '；'
+    )
+}
+
+/// Whether SATySFi's default inter-script glue is suppressed between a
+/// left-hand character `l` and a right-hand `r`.
+///
+/// `pure_space_between_scripts` (`convertText.ml:31`) drops the glue when
+/// `is_open_punctuation lbc1 || is_close_punctuation lbc2` — the LEFT edge being
+/// OPENING punctuation, or the RIGHT edge being CLOSING punctuation. The aki
+/// that would otherwise sit there is supplied by the separate JLreq
+/// class-spacing layer.
+///
+/// The port used to test one symmetric "is punctuation" predicate against BOTH
+/// edges, which suppressed far more than upstream: `、` before a Latin/math run
+/// is a *closing* mark on the LEFT, which upstream does not suppress. Since this
+/// glue is also the only break opportunity at such a boundary, suppressing it
+/// left the breaker with nowhere to break — latexcmds ran
+/// `…、${dropcolor}` 32pt past the margin because there was no legal break
+/// between the touten and the math box.
+fn interscript_glue_suppressed(l: char, r: char) -> bool {
+    is_open_punct(l) || is_close_punct(r)
+}
+
+/// JLreq character classes SATySFi's inter-CJK spacing distinguishes
+/// (`charBasis.ml:116-122`). Only the classes that actually change spacing are
+/// modelled; every other CJK character is `None` ("ordinary").
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum JlClass {
+    /// cl-01, fullwidth OPEN punctuation — carries a leading half-width kern.
+    Open,
+    /// cl-02, fullwidth CLOSE punctuation — trailing half-width kern.
+    Close,
+    /// cl-06, kuten (fullwidth full stop) — trailing half-width kern.
+    FullStop,
+    /// cl-07, touten (fullwidth comma) — trailing half-width kern.
+    Comma,
+    /// cl-05, nakaten (fullwidth middle dot) — quarter-width kern BOTH sides.
+    MiddleDot,
+}
+
+fn jl_class(c: char) -> Option<JlClass> {
+    match c {
+        '（' | '「' | '『' | '【' | '〔' | '〈' | '《' | '［' | '｛' | '〖' | '〘' | '〚' => {
+            Some(JlClass::Open)
+        }
+        '）' | '」' | '』' | '】' | '〕' | '〉' | '》' | '］' | '｝' | '〗' | '〙' | '〛' => {
+            Some(JlClass::Close)
+        }
+        '。' | '．' => Some(JlClass::FullStop),
+        '、' | '，' => Some(JlClass::Comma),
+        '・' | '：' | '；' => Some(JlClass::MiddleDot),
+        _ => None,
+    }
+}
+
+/// The glue SATySFi puts between two directly adjacent CJK characters, as
+/// `(natural, shrink, stretch)` ratios of `font_size` — `space_between_chunks`
+/// (`convertText.ml:220`) with `ideographic_single`'s compensating kerns
+/// (`convertText.ml:266`) folded in.
+///
+/// Upstream renders CJK punctuation at its full em and then kerns it back:
+/// `。`/`、`/`）` carry a trailing −0.5em kern, `（` a leading one, `・` −0.25em
+/// on both sides. `pure_space_between_classes` (`convertText.ml:194`) then adds
+/// a half-width space back — natural 0.5em, stretch 0.25em, and shrink 0.25em
+/// unless the pair is "hard" (after a full stop). Net natural width is
+/// therefore unchanged for ordinary text, but each punctuation mark contributes
+/// **0.25em of stretch** — ten times the 0.025em `adjacent_stretch` between two
+/// ordinary characters, and the bulk of the elasticity a Japanese line
+/// justifies with. Two punctuation marks in a row (`」、`, `」。`) get NO space
+/// back, so the pair sets 0.5em tighter than its glyphs.
+fn cjk_pair_space(a: char, b: char, adjacent_stretch: f64) -> (f64, f64, f64) {
+    use JlClass::*;
+    let (ca, cb) = (jl_class(a), jl_class(b));
+    // Kerns from `ideographic_single`, as a NEGATIVE ratio of font_size.
+    let kern = match ca {
+        Some(Close) | Some(FullStop) | Some(Comma) => -0.5,
+        Some(MiddleDot) => -0.25,
+        _ => 0.0,
+    } + match cb {
+        Some(Open) => -0.5,
+        Some(MiddleDot) => -0.25,
+        _ => 0.0,
+    };
+    // `pure_space_between_classes`, in its own match order.
+    let hwsoft = (0.5, 0.25, 0.25);
+    let hwhard = (0.5, 0.0, 0.25);
+    let cls = match (ca, cb) {
+        (Some(Close), Some(Open)) | (Some(Comma), Some(Open)) => Some(hwsoft),
+        (Some(FullStop), Some(Open)) => Some(hwhard),
+        (_, Some(Open)) => Some(hwsoft),
+        (Some(Close), Some(Comma)) | (Some(Close), Some(FullStop)) => None,
+        (Some(Close), _) | (Some(Comma), _) => Some(hwsoft),
+        (Some(FullStop), _) => Some(hwhard),
+        _ => None,
+    };
+    match cls {
+        Some((n, sh, st)) => (kern + n, sh, st),
+        // No class space: `adjacent_space` (natural 0, shrink 0, stretch
+        // `adjacent_stretch`), plus whatever kern the pair carries.
+        None => (kern, 0.0, adjacent_stretch),
+    }
 }
 
 /// A box's LEADING glyph for inter-script spacing, or `None` for
@@ -1632,10 +1742,10 @@ fn insert_box_interscript_glue(boxes: Vec<HorzBox>, ctx: &Context) -> Vec<HorzBo
     }
     let mut out: Vec<HorzBox> = Vec::with_capacity(boxes.len());
     for b in boxes {
-        if let (Some(pc), Some(cc)) = (out.last().and_then(box_trailing_char), box_leading_char(&b)) {
+        if let (Some(pc), Some(cc)) = (out.last().and_then(box_trailing_char), box_leading_char(&b))
+        {
             if is_latin_cjk_boundary(char_script(pc), char_script(cc))
-                && !is_interscript_punct(pc)
-                && !is_interscript_punct(cc)
+                && !interscript_glue_suppressed(pc, cc)
             {
                 out.push(HorzBox::Pure(PureHorzBox::OuterEmpty {
                     natural: ctx.font_size * 0.24,
@@ -1665,103 +1775,104 @@ fn text_to_boxes(
     let space_width = ctx.font_size * ctx.space_natural;
     let boundary = uax14_boundaries(text);
     let mut word = String::new();
-    let flush_word = |word: &mut String, script: Script, out: &mut Vec<HorzBox>| -> Result<(), EvalError> {
-        if word.is_empty() {
-            return Ok(());
-        }
-        let sf = script_font(ctx, script);
-        let size = ctx.font_size * sf.ratio;
-        // The script-font's own baseline raise (a ratio of font_size) PLUS the
-        // manual raise from `set-manual-rising` (`ctx.manual_rising`, an
-        // absolute Length). Both feed `HorzStringInfo.rising`, which every
-        // render path adds to the baseline before `Tj`. `manual_rising`
-        // defaults to `Length::ZERO` (`Context::initial`), so a document that
-        // never calls `set-manual-rising` is byte-identical. Real effect: the
-        // `\SATySFi`/`\LaTeX`/`\TeX` logo kerning.
-        let rising = ctx.font_size * sf.rising + ctx.manual_rising;
-
-        // Knuth-Liang hyphenation opt-in injection
-        // (`docs/plans/design-hyphenation.md` §4/D4/D5): fires ONLY when a
-        // dictionary has been installed (`ctx.hyphen_dictionary ==
-        // Some(tag)`) and the run's script is Latin. With
-        // `hyphen_dictionary == None` (the `Context::initial` default),
-        // `breaks` is always empty and the code below falls straight through
-        // to the single-`InnerString` path — byte-identical to before this
-        // slice (the byte-identity gate, §6).
-        let breaks = match ctx.hyphen_dictionary {
-            Some(tag) if script == Script::Latin => {
-                // S3 (`docs/plans/design-hyphenation.md` §S3): an explicit
-                // soft hyphen (U+00AD) authored in the word takes priority
-                // over dictionary-derived breaks (matches the `hyphenation`
-                // crate's own `Standard::hyphenate` priority rule). Only
-                // reachable here with a soft hyphen still embedded in `word`
-                // because the tokenizer above (`text_to_boxes`'s per-char
-                // loop) defers to this branch instead of splitting on it as
-                // an ordinary UAX#14 boundary — gated on this same
-                // `Some(tag) && Latin` condition, so `hyphen_dictionary ==
-                // None` never reaches `strip_soft_hyphens` and reproduces
-                // exactly today's split-at-soft-hyphen behavior.
-                let (clean, shy_breaks) = crate::hyphenation::strip_soft_hyphens(word);
-                if !shy_breaks.is_empty() {
-                    *word = clean;
-                    shy_breaks
-                } else {
-                    crate::hyphenation::hyphenate_word(
-                        tag,
-                        word,
-                        ctx.left_hyphen_min.max(0) as usize,
-                        ctx.right_hyphen_min.max(0) as usize,
-                    )
-                }
+    let flush_word =
+        |word: &mut String, script: Script, out: &mut Vec<HorzBox>| -> Result<(), EvalError> {
+            if word.is_empty() {
+                return Ok(());
             }
-            _ => Vec::new(),
+            let sf = script_font(ctx, script);
+            let size = ctx.font_size * sf.ratio;
+            // The script-font's own baseline raise (a ratio of font_size) PLUS the
+            // manual raise from `set-manual-rising` (`ctx.manual_rising`, an
+            // absolute Length). Both feed `HorzStringInfo.rising`, which every
+            // render path adds to the baseline before `Tj`. `manual_rising`
+            // defaults to `Length::ZERO` (`Context::initial`), so a document that
+            // never calls `set-manual-rising` is byte-identical. Real effect: the
+            // `\SATySFi`/`\LaTeX`/`\TeX` logo kerning.
+            let rising = ctx.font_size * sf.rising + ctx.manual_rising;
+
+            // Knuth-Liang hyphenation opt-in injection
+            // (`docs/plans/design-hyphenation.md` §4/D4/D5): fires ONLY when a
+            // dictionary has been installed (`ctx.hyphen_dictionary ==
+            // Some(tag)`) and the run's script is Latin. With
+            // `hyphen_dictionary == None` (the `Context::initial` default),
+            // `breaks` is always empty and the code below falls straight through
+            // to the single-`InnerString` path — byte-identical to before this
+            // slice (the byte-identity gate, §6).
+            let breaks = match ctx.hyphen_dictionary {
+                Some(tag) if script == Script::Latin => {
+                    // S3 (`docs/plans/design-hyphenation.md` §S3): an explicit
+                    // soft hyphen (U+00AD) authored in the word takes priority
+                    // over dictionary-derived breaks (matches the `hyphenation`
+                    // crate's own `Standard::hyphenate` priority rule). Only
+                    // reachable here with a soft hyphen still embedded in `word`
+                    // because the tokenizer above (`text_to_boxes`'s per-char
+                    // loop) defers to this branch instead of splitting on it as
+                    // an ordinary UAX#14 boundary — gated on this same
+                    // `Some(tag) && Latin` condition, so `hyphen_dictionary ==
+                    // None` never reaches `strip_soft_hyphens` and reproduces
+                    // exactly today's split-at-soft-hyphen behavior.
+                    let (clean, shy_breaks) = crate::hyphenation::strip_soft_hyphens(word);
+                    if !shy_breaks.is_empty() {
+                        *word = clean;
+                        shy_breaks
+                    } else {
+                        crate::hyphenation::hyphenate_word(
+                            tag,
+                            word,
+                            ctx.left_hyphen_min.max(0) as usize,
+                            ctx.right_hyphen_min.max(0) as usize,
+                        )
+                    }
+                }
+                _ => Vec::new(),
+            };
+
+            if breaks.is_empty() {
+                out.push(HorzBox::Pure(make_inner_string_pure_box(
+                    interp,
+                    ctx,
+                    sf,
+                    size,
+                    rising,
+                    std::mem::take(word),
+                )?));
+                return Ok(());
+            }
+
+            // Width-identity invariant (§6/D2, also see `make_inner_string_pure_box`'s
+            // doc comment): `measure_run` is purely additive per char (no
+            // kerning/ligatures), so splitting `word` into fragments here and
+            // rejoining them via empty-slot `Discretionary`s (taken only at a
+            // chosen line break) reproduces the exact width/height/depth of the
+            // un-split box when no break is actually taken — only words the DP
+            // *does* break render differently, which is the intended new
+            // behavior, confined to documents that opt in.
+            let chars: Vec<char> = word.chars().collect();
+            let penalty = ctx.hyphen_badness.clamp(i32::MIN as i64, i32::MAX as i64) as i32;
+            let mut prev = 0usize;
+            for &b in &breaks {
+                let fragment: String = chars[prev..b].iter().collect();
+                out.push(HorzBox::Pure(make_inner_string_pure_box(
+                    interp, ctx, sf, size, rising, fragment,
+                )?));
+                let hyphen_box =
+                    make_inner_string_pure_box(interp, ctx, sf, size, rising, "-".to_string())?;
+                out.push(HorzBox::Pure(PureHorzBox::Discretionary {
+                    penalty,
+                    pre_break: vec![hyphen_box],
+                    post_break: Vec::new(),
+                    no_break: Vec::new(),
+                }));
+                prev = b;
+            }
+            let tail: String = chars[prev..].iter().collect();
+            out.push(HorzBox::Pure(make_inner_string_pure_box(
+                interp, ctx, sf, size, rising, tail,
+            )?));
+            word.clear();
+            Ok(())
         };
-
-        if breaks.is_empty() {
-            out.push(HorzBox::Pure(make_inner_string_pure_box(
-                interp,
-                ctx,
-                sf,
-                size,
-                rising,
-                std::mem::take(word),
-            )?));
-            return Ok(());
-        }
-
-        // Width-identity invariant (§6/D2, also see `make_inner_string_pure_box`'s
-        // doc comment): `measure_run` is purely additive per char (no
-        // kerning/ligatures), so splitting `word` into fragments here and
-        // rejoining them via empty-slot `Discretionary`s (taken only at a
-        // chosen line break) reproduces the exact width/height/depth of the
-        // un-split box when no break is actually taken — only words the DP
-        // *does* break render differently, which is the intended new
-        // behavior, confined to documents that opt in.
-        let chars: Vec<char> = word.chars().collect();
-        let penalty = ctx.hyphen_badness.clamp(i32::MIN as i64, i32::MAX as i64) as i32;
-        let mut prev = 0usize;
-        for &b in &breaks {
-            let fragment: String = chars[prev..b].iter().collect();
-            out.push(HorzBox::Pure(make_inner_string_pure_box(
-                interp, ctx, sf, size, rising, fragment,
-            )?));
-            let hyphen_box =
-                make_inner_string_pure_box(interp, ctx, sf, size, rising, "-".to_string())?;
-            out.push(HorzBox::Pure(PureHorzBox::Discretionary {
-                penalty,
-                pre_break: vec![hyphen_box],
-                post_break: Vec::new(),
-                no_break: Vec::new(),
-            }));
-            prev = b;
-        }
-        let tail: String = chars[prev..].iter().collect();
-        out.push(HorzBox::Pure(make_inner_string_pure_box(
-            interp, ctx, sf, size, rising, tail,
-        )?));
-        word.clear();
-        Ok(())
-    };
     // `Some(s)` exactly when `word` is non-empty — the script of the run
     // currently being accumulated (D1b: a run also breaks on a script
     // change, not just on whitespace/UAX#14, see `char_script`).
@@ -1775,6 +1886,49 @@ fn text_to_boxes(
     // The preceding typeset char itself, for the `is_interscript_punct` guard.
     let mut prev_char: Option<char> = None;
     for (i, c) in text.char_indices() {
+        // Whitespace normalization around CJK — upstream's rewrite table
+        // (`lineBreakDataMap.ml:143-157`, applied before any box is built):
+        //
+        //   CJK + (SP|BR) + Latin -> deleted      Latin + (SP|BR) + CJK -> deleted
+        //   CJK + BR      + CJK   -> deleted      CJK   + SP      + CJK -> KEPT
+        //   any remaining (SP|BR) touching CJK -> deleted; a leftover BR -> space
+        //
+        // i.e. every space or line break adjacent to a CJK character is dropped
+        // EXCEPT a single literal space between two CJK characters. Japanese
+        // prose is hard-wrapped at arbitrary points in the source, and the
+        // spacing a Latin/CJK boundary wants is supplied by the inter-script
+        // glue below (0.24em) rather than by the author's whitespace — so
+        // keeping it, as the port did, both double-counted that boundary and
+        // turned every source line break into a space: the port set
+        // `あります。 1 つは` and `これは 指定した` where SATySFi sets both tight
+        // (figbox `manual.saty:116-120`).
+        //
+        // Deleting is a plain `continue` that touches NO state: the characters
+        // either side join the same run and still space against each other
+        // through the inter-script rule (and its punctuation guard), exactly as
+        // if the whitespace had never been written.
+        if c == ' ' || c == '\n' {
+            let is_cjk_script = |s| matches!(s, Script::HanIdeographic | Script::Kana);
+            let prev_cjk = prev_script.is_some_and(is_cjk_script);
+            let rest = &text[i + c.len_utf8()..];
+            // Whether more whitespace follows: upstream's rules only ever match
+            // ONE space between the two CJK characters (a longer run falls
+            // through to the delete-everything rules), so a run collapses away.
+            let run_continues = rest
+                .chars()
+                .next()
+                .is_some_and(|ch| matches!(ch, ' ' | '\n'));
+            let next_cjk = rest
+                .chars()
+                .find(|ch| !matches!(ch, ' ' | '\n'))
+                .is_some_and(|ch| is_cjk_script(char_script(ch)));
+            if prev_cjk || next_cjk {
+                let keep = c == ' ' && !run_continues && prev_cjk && next_cjk;
+                if !keep {
+                    continue;
+                }
+            }
+        }
         if c == ' ' || c == '\n' {
             if let Some(s) = word_script.take() {
                 flush_word(&mut word, s, out)?;
@@ -1820,8 +1974,7 @@ fn text_to_boxes(
         // `is_break_point`, matching upstream (the boundary is a legal break).
         if let (Some(prev), Some(pc)) = (prev_script, prev_char) {
             if is_latin_cjk_boundary(prev, script)
-                && !is_interscript_punct(pc)
-                && !is_interscript_punct(c)
+                && !interscript_glue_suppressed(pc, c)
             {
                 if let Some(s) = word_script.take() {
                     if !word.is_empty() {
@@ -1868,11 +2021,74 @@ fn text_to_boxes(
         // split-at-soft-hyphen behavior — the byte-identity gate, §6.
         let is_gated_soft_hyphen =
             c == '\u{ad}' && script == Script::Latin && ctx.hyphen_dictionary.is_some();
-        if !c.is_ascii() && !is_gated_soft_hyphen {
+        // UAX#14 break opportunities apply to ALL text, ASCII included — that
+        // is simply what upstream's line-break engine does (it runs over the
+        // whole run with no script gate). The port used to emit these only for
+        // non-ASCII, later widening to the explicit hyphen; both were
+        // approximations, and the gap they left is load-bearing:
+        //
+        //   - `+fig-center` (54.7pt, unbreakable) made the candidate widths jump
+        //     clean over the feasible window — 400.32pt (ratio 2.72, dropped) to
+        //     455.00pt (overfull) with nothing between — so the breaker fell back
+        //     to a degenerate one-character line.
+        //   - a `+code` line `…?:(drop) ?:(dropcolor)` ran 80pt past the column
+        //     and clean off the paper, because the only break the port allowed
+        //     was at a space, and breaking there left a rigid line 7.7pt short
+        //     (dropped). UAX#14 grants a break between `:` and `(` — offset 2 of
+        //     `?:(drop)…` — which is exactly where SATySFi breaks it.
+        //
+        // Cost: an ASCII run is now split into one `InnerString` per break
+        // opportunity. Widths are unaffected (`measure_run` is purely additive,
+        // see `make_inner_string_pure_box`), so this only changes how the text
+        // is CHUNKED, not where any glyph lands.
+        if !is_gated_soft_hyphen {
             let after = i + c.len_utf8();
             if let Some(kind) = boundary[after] {
                 flush_word(&mut word, script, out)?;
                 word_script = None;
+                // `adjacent_space` (`convertText.ml:101`): between two DIRECTLY
+                // ADJACENT CJK characters SATySFi carries stretchable glue —
+                // natural 0, shrink 0, stretch `font_size * adjacent_stretch` —
+                // in the discretionary's NO-BREAK slot (upstream
+                // `LBDiscretionary(badness, id, [glue], [], [])`, whose first
+                // list is the not-taken content: `lineBreak.ml:1042` folds it in
+                // via `add_width_all`). So it vanishes when the break is taken
+                // and gives the line elasticity when it is not.
+                //
+                // This is the elasticity a Japanese line justifies with. Without
+                // it a CJK line's only give was whatever incidental Latin spaces
+                // it happened to contain — a handful of points across a whole
+                // line — so the breaker could neither fill to the column nor
+                // accept a break that needed a hair of stretch.
+                //
+                // Only between two CJK characters: a CJK/Latin boundary is
+                // `pure_space_between_scripts`'s job (the inter-script glue
+                // above), and upstream falls through to `adjacent_space` only
+                // once that has returned `None` (`space_between_chunks`,
+                // `convertText.ml:220`).
+                let is_cjk = |s| matches!(s, Script::HanIdeographic | Script::Kana);
+                let next_char = text[after..].chars().next();
+                let next_is_cjk = next_char.is_some_and(|nc| is_cjk(char_script(nc)));
+                let no_break = if is_cjk(script) && next_is_cjk {
+                    let (n, sh, st) =
+                        cjk_pair_space(c, next_char.expect("checked"), ctx.adjacent_stretch);
+                    let mut boxes = Vec::new();
+                    // The kern part is RIGID and must never be a break point,
+                    // so it rides as a `FixedEmpty` rather than as glue.
+                    if n != 0.0 {
+                        boxes.push(PureHorzBox::FixedEmpty {
+                            width: ctx.font_size * n,
+                        });
+                    }
+                    boxes.push(PureHorzBox::OuterEmpty {
+                        natural: Length::ZERO,
+                        shrinkable: ctx.font_size * sh,
+                        stretchable: ctx.font_size * st,
+                    });
+                    boxes
+                } else {
+                    Vec::new()
+                };
                 out.push(HorzBox::Pure(PureHorzBox::Discretionary {
                     penalty: match kind {
                         BreakKind::Allowed => 0,
@@ -1880,7 +2096,7 @@ fn text_to_boxes(
                     },
                     pre_break: Vec::new(),
                     post_break: Vec::new(),
-                    no_break: Vec::new(),
+                    no_break,
                 }));
             }
         }
@@ -2130,8 +2346,8 @@ impl MathC {
             None => s * FRAC_NUMER_SHIFT_FALLBACK,
             Some(c) => {
                 let std = s * c.fraction_numer_shift_up;
-                let gap = self.axis(s) + self.frac_rule(s) * 0.5 + s * c.fraction_numer_gap_min
-                    + d_numer;
+                let gap =
+                    self.axis(s) + self.frac_rule(s) * 0.5 + s * c.fraction_numer_gap_min + d_numer;
                 std.max(gap)
             }
         }
@@ -2149,8 +2365,8 @@ impl MathC {
             None => -(s * FRAC_DENOM_SHIFT_FALLBACK),
             Some(c) => {
                 let std = -(s * c.fraction_denom_shift_down);
-                let gap = self.axis(s) - self.frac_rule(s) * 0.5 - s * c.fraction_denom_gap_min
-                    - h_denom;
+                let gap =
+                    self.axis(s) - self.frac_rule(s) * 0.5 - s * c.fraction_denom_gap_min - h_denom;
                 std.min(gap)
             }
         }
@@ -2250,7 +2466,11 @@ fn superscript_kern(
     let l_base = sup_shift - d_sup;
     let l_sup = h_base - sup_shift;
     let l_kernbase = last_base
-        .and_then(|c| interp.metrics.math_kern(font, c, size, MathCorner::TopRight, l_base))
+        .and_then(|c| {
+            interp
+                .metrics
+                .math_kern(font, c, size, MathCorner::TopRight, l_base)
+        })
         .unwrap_or(Length::ZERO);
     let l_kernsup = first_script
         .and_then(|c| {
@@ -2325,12 +2545,14 @@ fn push_char_glyph(
     // text path does in `measure_run` — a missing glyph must not abort the whole
     // document. This only ever changes behavior for a glyph that would otherwise
     // be a hard error, so covered-glyph documents stay byte-identical.
-    let advance = interp
-        .metrics
-        .advance(font, c, size)
-        .unwrap_or(size * 0.5);
+    let advance = interp.metrics.advance(font, c, size).unwrap_or(size * 0.5);
     out.push(MathGlyph {
-        info: HorzStringInfo { font, size, rising: Length::ZERO, color: ctx.text_color },
+        info: HorzStringInfo {
+            font,
+            size,
+            rising: Length::ZERO,
+            color: ctx.text_color,
+        },
         text: c.to_string(),
         gid: None,
         dx: *x,
@@ -2368,7 +2590,12 @@ fn push_big_char_glyph(
     {
         Some(v) => {
             out.push(MathGlyph {
-                info: HorzStringInfo { font, size, rising: Length::ZERO, color: ctx.text_color },
+                info: HorzStringInfo {
+                    font,
+                    size,
+                    rising: Length::ZERO,
+                    color: ctx.text_color,
+                },
                 text: c.to_string(),
                 gid: Some(v.gid),
                 dx: *x,
@@ -2403,9 +2630,10 @@ fn push_delimiter_glyph(
     x: &mut Length,
 ) -> Result<(), EvalError> {
     let font = math_glyph_font(interp, ctx, c, size);
-    let variant = interp
-        .metrics
-        .math_vertical_variant(font, c, size, VertVariantPolicy::AtLeast(target));
+    let variant =
+        interp
+            .metrics
+            .math_vertical_variant(font, c, size, VertVariantPolicy::AtLeast(target));
     // §B (`GlyphAssembly`): if even the largest discrete variant's own ink
     // extent (`height + depth`) still doesn't span `target` — a delimiter
     // taller than anything the font enumerates as a prepared variant — grow
@@ -2424,7 +2652,10 @@ fn push_delimiter_glyph(
                 // glyph's advance.
                 let hadv = match variant {
                     Some(v) => v.advance,
-                    None => interp.metrics.advance(font, c, size).unwrap_or(Length::ZERO),
+                    None => interp
+                        .metrics
+                        .advance(font, c, size)
+                        .unwrap_or(Length::ZERO),
                 };
                 // Total vertical extent of the stacked assembly (local, from
                 // the bottom part's baseline at 0), then center it on the math
@@ -2436,7 +2667,12 @@ fn push_delimiter_glyph(
                 let base_off = axis - total * 0.5;
                 for (i, (gid, dy_local, adv)) in parts.iter().enumerate() {
                     out.push(MathGlyph {
-                        info: HorzStringInfo { font, size, rising: Length::ZERO, color: ctx.text_color },
+                        info: HorzStringInfo {
+                            font,
+                            size,
+                            rising: Length::ZERO,
+                            color: ctx.text_color,
+                        },
                         text: c.to_string(),
                         gid: Some(*gid),
                         dx: *x,
@@ -2460,7 +2696,12 @@ fn push_delimiter_glyph(
         Some(v) => {
             let dy = axis - (v.height - v.depth) * 0.5;
             out.push(MathGlyph {
-                info: HorzStringInfo { font, size, rising: Length::ZERO, color: ctx.text_color },
+                info: HorzStringInfo {
+                    font,
+                    size,
+                    rising: Length::ZERO,
+                    color: ctx.text_color,
+                },
                 text: c.to_string(),
                 gid: Some(v.gid),
                 dx: *x,
@@ -2595,8 +2836,7 @@ fn layout_math_elem(
             // Upstream desugars primes to exactly this: a superscript of `n`
             // U+2032 `′` chars (`parser.mly:1082`).
             let primes = vec![MathElem::Chars("\u{2032}".repeat(*n))];
-            let (script_glyphs, script_width) =
-                layout_script(interp, ctx, &primes, script_size)?;
+            let (script_glyphs, script_width) = layout_script(interp, ctx, &primes, script_size)?;
             let (_, d_sup) = glyphs_extent(&script_glyphs);
             let sup_shift = mc.sup_shift_clamped(ctx.font_size, h_base, d_sup);
             let kern = superscript_kern(
@@ -2642,7 +2882,15 @@ pub fn read_math(
     let mut x = Length::ZERO;
     let mut last_kind: Option<MathKind> = None;
     for e in elems {
-        layout_math_elem(interp, ctx, e, ctx.font_size, &mut glyphs, &mut x, &mut last_kind)?;
+        layout_math_elem(
+            interp,
+            ctx,
+            e,
+            ctx.font_size,
+            &mut glyphs,
+            &mut x,
+            &mut last_kind,
+        )?;
     }
     let width = x;
     let mut height = Length::ZERO;
@@ -3049,13 +3297,16 @@ fn page_break_core(
         }
 
         // ---- parts scheme: this page's header + footer ----
+        // Everything placed so far is body/column content; the header and
+        // footer append AFTER it (see `Page::body_lines`).
+        let body_lines = lines.len();
         let parts = interp.apply(pagepartsf.clone(), pbinfo)?;
         let (header_origin, header_content, footer_origin, footer_content) =
             read_parts_scheme(parts)?;
         lines.extend(place_block_at(header_origin, header_content));
         lines.extend(place_block_at(footer_origin, footer_content));
 
-        pages.push(Page { lines });
+        pages.push(Page { lines, body_lines });
         if remaining.is_empty() {
             break;
         }
@@ -3135,16 +3386,24 @@ unop_prim!(prim_bnot, as_int, Int, |a| !a);
 // `lsl`/`lsr`, NOT arithmetic — `>>` on a negative int does NOT sign-extend,
 // see the `-16 >> 2` witness in the test suite), with upstream's exact
 // dynamic-error message when the shift amount is out of `0..=63`.
-binop_prim_try!(prim_bit_shift_left, as_int, |a, b| if !(0..=63).contains(&b) {
-    eval_error("Bit offset out of bounds for '<<'")
-} else {
-    Ok(Value::Int(((a as u64) << b) as i64))
-});
-binop_prim_try!(prim_bit_shift_right, as_int, |a, b| if !(0..=63).contains(&b) {
-    eval_error("Bit offset out of bounds for '>>'")
-} else {
-    Ok(Value::Int(((a as u64) >> b) as i64))
-});
+binop_prim_try!(
+    prim_bit_shift_left,
+    as_int,
+    |a, b| if !(0..=63).contains(&b) {
+        eval_error("Bit offset out of bounds for '<<'")
+    } else {
+        Ok(Value::Int(((a as u64) << b) as i64))
+    }
+);
+binop_prim_try!(
+    prim_bit_shift_right,
+    as_int,
+    |a, b| if !(0..=63).contains(&b) {
+        eval_error("Bit offset out of bounds for '>>'")
+    } else {
+        Ok(Value::Int(((a as u64) >> b) as i64))
+    }
+);
 
 // ---- bool -------------------------------------------------------------------
 
@@ -3177,7 +3436,8 @@ cmp_prim!(prim_float_le, as_float, |a, b| a <= b);
 
 binop_prim!(prim_length_add, as_length, Length, |a, b| a + b);
 binop_prim!(prim_length_sub, as_length, Length, |a, b| a - b);
-binop_prim!(prim_length_scale, (as_length, as_float), Length, |a, b| a * b);
+binop_prim!(prim_length_scale, (as_length, as_float), Length, |a, b| a
+    * b);
 binop_prim!(prim_length_div, as_length, Float, |a, b| a / b);
 cmp_prim!(prim_length_lt, as_length, |a, b| a < b);
 
@@ -3225,7 +3485,8 @@ fn prim_deref(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalE
 
 // `string-length : string -> int` (vminst.ml `PrimitiveStringLength`) —
 // counts Unicode scalar values (`BatUTF8.length`), not UTF-8 bytes.
-unop_prim!(prim_string_length, as_str, Int, |s| s.chars().count() as i64);
+unop_prim!(prim_string_length, as_str, Int, |s| s.chars().count()
+    as i64);
 
 /// `string-sub : string -> int -> int -> string` (vminst.ml
 /// `PrimitiveStringSub`) — a substring addressed by Unicode-scalar-value
@@ -3318,10 +3579,7 @@ fn prim_get_text_width(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Val
 /// default math command a bare `${…}` in inline text dispatches to (v0.0.6
 /// `context_main.math_command`); interned via
 /// `Interp::register_math_command`, carried as `Context::math_command`.
-fn prim_get_initial_context(
-    interp: &mut Interp,
-    mut args: Vec<Value>,
-) -> Result<Value, EvalError> {
+fn prim_get_initial_context(interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
     let cmd = args.pop().unwrap();
     let width = as_length(args.pop().unwrap())?;
     let mut ctx = Context::initial(width);
@@ -3343,7 +3601,11 @@ fn prim_get_initial_context(
     .enumerate()
     {
         if let Some((font, ratio, rising)) = interp.metrics.default_script_font(script) {
-            ctx.font_scheme[idx] = ScriptFont { font, ratio, rising };
+            ctx.font_scheme[idx] = ScriptFont {
+                font,
+                ratio,
+                rising,
+            };
             if script == Script::Latin {
                 ctx.font = font;
             }
@@ -3553,7 +3815,9 @@ fn ocaml_show_float(x: f64) -> String {
     // decimal exponent (a naive `log10().floor()` can be off by one right
     // at a power of ten, because of binary/decimal rounding).
     let sci = format!("{:.*e}", (PREC - 1) as usize, x);
-    let epos = sci.find('e').expect("scientific formatting always emits 'e'");
+    let epos = sci
+        .find('e')
+        .expect("scientific formatting always emits 'e'");
     let exp: i32 = sci[epos + 1..].parse().expect("well-formed exponent");
     let body = if exp < -4 || exp >= PREC {
         let mantissa = trim_trailing_fractional_zeros(&sci[..epos]);
@@ -3697,10 +3961,7 @@ fn prim_display_message(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Va
 /// type (`prim_types.rs`'s `poly1`) is vacuously satisfiable: this always
 /// evaluates to `Err`, never actually producing a value of whatever type
 /// the call site expected.
-fn prim_abort_with_message(
-    _interp: &mut Interp,
-    mut args: Vec<Value>,
-) -> Result<Value, EvalError> {
+fn prim_abort_with_message(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
     let msg = as_str(args.pop().unwrap())?;
     eval_error(msg)
 }
@@ -4059,7 +4320,10 @@ fn prim_read_file(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, E
         span: None,
         msg: format!("read-file '{path_str}': not valid UTF-8"),
     })?;
-    let mut lines: Vec<Value> = text.split('\n').map(|s| Value::Str(s.to_string())).collect();
+    let mut lines: Vec<Value> = text
+        .split('\n')
+        .map(|s| Value::Str(s.to_string()))
+        .collect();
     if matches!(lines.last(), Some(Value::Str(s)) if s.is_empty()) {
         lines.pop();
     }
@@ -4265,7 +4529,10 @@ fn prim_inline_graphics(interp: &mut Interp, mut args: Vec<Value>) -> Result<Val
 /// into the box and the point `(0pt, 0pt)` — the same shift-covariance
 /// shortcut as `inline-graphics` above (the writer's `cm` supplies the
 /// placed point); the width argument is faithful.
-fn prim_inline_graphics_outer(interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+fn prim_inline_graphics_outer(
+    interp: &mut Interp,
+    mut args: Vec<Value>,
+) -> Result<Value, EvalError> {
     let gfun = args.pop().unwrap();
     let d = as_length(args.pop().unwrap())?;
     let h = as_length(args.pop().unwrap())?;
@@ -4291,7 +4558,13 @@ fn resolve_outer_graphics_in_contents(
     contents: &mut [(Length, PureHorzBox)],
 ) -> Result<(), EvalError> {
     for (_, bx) in contents.iter_mut() {
-        if let PureHorzBox::GraphicsOuter { height, depth, width, fn_id } = bx {
+        if let PureHorzBox::GraphicsOuter {
+            height,
+            depth,
+            width,
+            fn_id,
+        } = bx
+        {
             let (w, h, d) = (*width, *height, *depth);
             let gfun = match interp.outer_graphics.get(fn_id.0) {
                 Some(f) => f.clone(),
@@ -4309,7 +4582,13 @@ fn resolve_outer_graphics_in_contents(
             // `inline-graphics-outer` itself and its use inside `tabular`
             // cells (`prim_tabular` calls this same function per cell).
             let elems = coerce_graphics_result(interp, listv)?;
-            *bx = PureHorzBox::Graphics { width: w, height: h, depth: d, elems, origin_independent: false };
+            *bx = PureHorzBox::Graphics {
+                width: w,
+                height: h,
+                depth: d,
+                elems,
+                origin_independent: false,
+            };
         }
     }
     Ok(())
@@ -4401,7 +4680,10 @@ fn prim_shift_path(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, 
 /// `linear-transform-path : float -> float -> float -> float -> path ->
 /// path` (vminst.ml:678) — apply the 2x2 matrix `(a, b, c, d)` to every
 /// point of the path (`rustyfi_backend::linear_transform_path`).
-fn prim_linear_transform_path(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+fn prim_linear_transform_path(
+    _interp: &mut Interp,
+    mut args: Vec<Value>,
+) -> Result<Value, EvalError> {
     let path = as_path(args.pop().unwrap())?;
     let d = as_float(args.pop().unwrap())?;
     let c = as_float(args.pop().unwrap())?;
@@ -4572,7 +4854,10 @@ fn prim_draw_text(interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, Ev
 /// (vminst.ml:2020 `PrimitiveGetNaturalMetrics`) — FAITHFUL: delegates to
 /// `rustyfi_backend::natural_metrics` (see that function's doc comment for
 /// why no depth sign-flip is needed here, unlike upstream).
-fn prim_get_natural_metrics(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+fn prim_get_natural_metrics(
+    _interp: &mut Interp,
+    mut args: Vec<Value>,
+) -> Result<Value, EvalError> {
     let ib = as_inline_boxes(args.pop().unwrap())?;
     let (width, height, depth) = natural_metrics(&ib);
     Ok(Value::Tuple(vec![
@@ -4742,7 +5027,10 @@ fn prim_hook_page_break(interp: &mut Interp, mut args: Vec<Value>) -> Result<Val
 /// `PlacedLine` carrying the SAME `PureHorzBox::HookPageBreak` wrapper the
 /// inline primitive uses, so `fire_hooks` (lib.rs) fires it through the
 /// exact same scan with no changes of its own.
-fn prim_hook_page_break_block(interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+fn prim_hook_page_break_block(
+    interp: &mut Interp,
+    mut args: Vec<Value>,
+) -> Result<Value, EvalError> {
     let closure = args.pop().unwrap();
     let id = HookId(interp.hooks.len());
     interp.hooks.push(closure);
@@ -4807,14 +5095,20 @@ fn prim_probe_cross_reference(
 /// unconditionally return `None`: `\href` then takes its `None` arm
 /// (`inline-nil`, no guard inserted) — a safe, honest default rather than
 /// fabricating a script this port cannot actually see.
-fn prim_get_leftmost_script(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+fn prim_get_leftmost_script(
+    _interp: &mut Interp,
+    mut args: Vec<Value>,
+) -> Result<Value, EvalError> {
     let _ib = as_inline_boxes(args.pop().unwrap())?;
     Ok(Value::Ctor("None".to_string(), None))
 }
 
 /// See [`prim_get_leftmost_script`] — the rightmost-edge twin, identical
 /// stand-in reasoning.
-fn prim_get_rightmost_script(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+fn prim_get_rightmost_script(
+    _interp: &mut Interp,
+    mut args: Vec<Value>,
+) -> Result<Value, EvalError> {
     let _ib = as_inline_boxes(args.pop().unwrap())?;
     Ok(Value::Ctor("None".to_string(), None))
 }
@@ -4831,7 +5125,10 @@ fn prim_get_rightmost_script(_interp: &mut Interp, mut args: Vec<Value>) -> Resu
 /// text that fits one line — the dominant case); a documented deviation for
 /// a frame that would have split (upstream would additionally fire
 /// `decoH`/`decoM`/`decoT` per fragment).
-fn prim_inline_frame_breakable(interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+fn prim_inline_frame_breakable(
+    interp: &mut Interp,
+    mut args: Vec<Value>,
+) -> Result<Value, EvalError> {
     let inner = as_inline_boxes(args.pop().unwrap())?;
     let decoset = as_decoset(args.pop().unwrap())?;
     let pads = as_paddings(args.pop().unwrap())?;
@@ -4926,7 +5223,10 @@ fn as_border_option(v: Value) -> Result<Option<(Length, Color)>, EvalError> {
 /// into one step, since our firing window (`fire_hooks`) already knows the
 /// page. Errors outside that window (§0.5, `annotation.ml:15`'s
 /// `State.during_page_break` gate).
-fn prim_register_destination(interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+fn prim_register_destination(
+    interp: &mut Interp,
+    mut args: Vec<Value>,
+) -> Result<Value, EvalError> {
     let (x, y) = as_point(args.pop().unwrap())?;
     let key = as_str(args.pop().unwrap())?;
     let Some(page) = interp.current_page else {
@@ -4993,7 +5293,9 @@ fn register_link(
 /// (length * color) option -> unit` (vminstdef.yaml:2753
 /// `BackendRegisterLinkToUri`) — FAITHFUL: see [`register_link`].
 fn prim_register_link_to_uri(interp: &mut Interp, args: Vec<Value>) -> Result<Value, EvalError> {
-    register_link(interp, args, "register-link-to-uri", |_, uri| AnnotAction::Uri(uri))
+    register_link(interp, args, "register-link-to-uri", |_, uri| {
+        AnnotAction::Uri(uri)
+    })
 }
 
 /// `register-link-to-location : string -> point -> length -> length ->
@@ -5004,7 +5306,10 @@ fn prim_register_link_to_uri(interp: &mut Interp, args: Vec<Value>) -> Result<Va
 /// as [`prim_register_destination`], so a link to a not-(yet-)registered
 /// destination still mints a stable name (a viewer no-ops on it), exactly
 /// like upstream.
-fn prim_register_link_to_location(interp: &mut Interp, args: Vec<Value>) -> Result<Value, EvalError> {
+fn prim_register_link_to_location(
+    interp: &mut Interp,
+    args: Vec<Value>,
+) -> Result<Value, EvalError> {
     register_link(interp, args, "register-link-to-location", |interp, key| {
         AnnotAction::GotoName(interp.dest_name(&key))
     })
@@ -5070,7 +5375,10 @@ fn as_math_char_class(v: Value) -> Result<MathCharClass, EvalError> {
                 "expected a math-char-class constructor, got '{other}'"
             )),
         },
-        other => eval_error(format!("expected a math-char-class, got {}", other.type_name())),
+        other => eval_error(format!(
+            "expected a math-char-class, got {}",
+            other.type_name()
+        )),
     }
 }
 
@@ -5336,8 +5644,7 @@ fn enter_script(interp: &Interp, ctx: &Context) -> Context {
             MathScriptLevel::Script,
         ),
         MathScriptLevel::Script => (
-            mc.c
-                .map(|c| c.script_script_scale_down / c.script_scale_down)
+            mc.c.map(|c| c.script_script_scale_down / c.script_scale_down)
                 .unwrap_or(5.0 / 7.0),
             MathScriptLevel::ScriptScript,
         ),
@@ -5360,7 +5667,9 @@ fn enter_script(interp: &Interp, ctx: &Context) -> Context {
 fn flatten_math_scripts(elem: &MathElem) -> (&MathElem, Option<&[MathElem]>, Option<&[MathElem]>) {
     match elem {
         MathElem::Sup(base, sup) => match base.as_ref() {
-            MathElem::Sub(inner, sub) => (inner.as_ref(), Some(sub.as_slice()), Some(sup.as_slice())),
+            MathElem::Sub(inner, sub) => {
+                (inner.as_ref(), Some(sub.as_slice()), Some(sup.as_slice()))
+            }
             _ => (base.as_ref(), None, Some(sup.as_slice())),
         },
         MathElem::Sub(base, sub) => (base.as_ref(), Some(sub.as_slice()), None),
@@ -5577,7 +5886,10 @@ fn prim_set_math_char(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Valu
 
 /// `set-math-char-class : math-char-class -> context -> context`
 /// (vminst.ml:445) — REAL: sets `Context::math_char_class`.
-fn prim_set_math_char_class(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+fn prim_set_math_char_class(
+    _interp: &mut Interp,
+    mut args: Vec<Value>,
+) -> Result<Value, EvalError> {
     let ctx = as_context(args.pop().unwrap())?;
     let cls = as_math_char_class(args.pop().unwrap())?;
     Ok(Value::Context(Box::new(Context {
@@ -5588,7 +5900,10 @@ fn prim_set_math_char_class(_interp: &mut Interp, mut args: Vec<Value>) -> Resul
 
 /// `get-math-char-class : context -> math-char-class` (vminst.ml:459) —
 /// REAL: inverse of `as_math_char_class`.
-fn prim_get_math_char_class(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+fn prim_get_math_char_class(
+    _interp: &mut Interp,
+    mut args: Vec<Value>,
+) -> Result<Value, EvalError> {
     let ctx = as_context(args.pop().unwrap())?;
     Ok(math_char_class_value(ctx.math_char_class))
 }
@@ -5596,7 +5911,10 @@ fn prim_get_math_char_class(_interp: &mut Interp, mut args: Vec<Value>) -> Resul
 /// `embed-inline-to-math : math-class -> inline-boxes -> math-boxes`
 /// (vminst.ml:432) — REAL data, stand-in render (`MathElement::
 /// EmbeddedBoxes`'s doc comment).
-fn prim_embed_inline_to_math(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+fn prim_embed_inline_to_math(
+    _interp: &mut Interp,
+    mut args: Vec<Value>,
+) -> Result<Value, EvalError> {
     let ib = as_inline_boxes(args.pop().unwrap())?;
     let class = as_math_kind(args.pop().unwrap())?;
     Ok(single_math_boxes(Math::Pure(MathElement::EmbeddedBoxes {
@@ -5783,7 +6101,10 @@ fn prim_math_big_char_v01(interp: &mut Interp, mut args: Vec<Value>) -> Result<V
     })))
 }
 
-fn prim_math_char_with_kern_v006(interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+fn prim_math_char_with_kern_v006(
+    interp: &mut Interp,
+    mut args: Vec<Value>,
+) -> Result<Value, EvalError> {
     let kern_r = args.pop().unwrap();
     let kern_l = args.pop().unwrap();
     let s = as_str(args.pop().unwrap())?;
@@ -5917,7 +6238,10 @@ fn prim_math_sup_v01(interp: &mut Interp, mut args: Vec<Value>) -> Result<Value,
     let script_ctx = enter_script(interp, &ctx);
     let script_v = interp.apply(f, Value::Context(Box::new(script_ctx)))?;
     let script = as_math_boxes(script_v)?;
-    Ok(single_math_boxes(Math::Sup((*base).clone(), (*script).clone())))
+    Ok(single_math_boxes(Math::Sup(
+        (*base).clone(),
+        (*script).clone(),
+    )))
 }
 
 fn prim_math_sub_v006(interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
@@ -5938,7 +6262,10 @@ fn prim_math_sub_v01(interp: &mut Interp, mut args: Vec<Value>) -> Result<Value,
     let script_ctx = enter_script(interp, &ctx);
     let script_v = interp.apply(f, Value::Context(Box::new(script_ctx)))?;
     let script = as_math_boxes(script_v)?;
-    Ok(single_math_boxes(Math::Sub((*base).clone(), (*script).clone())))
+    Ok(single_math_boxes(Math::Sub(
+        (*base).clone(),
+        (*script).clone(),
+    )))
 }
 
 fn prim_math_frac_v006(interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
@@ -5955,7 +6282,10 @@ fn prim_math_frac_v01(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Valu
     let m2 = as_math_boxes(args.pop().unwrap())?;
     let m1 = as_math_boxes(args.pop().unwrap())?;
     let _ctx = as_context(args.pop().unwrap())?;
-    Ok(single_math_boxes(Math::Fraction((*m1).clone(), (*m2).clone())))
+    Ok(single_math_boxes(Math::Fraction(
+        (*m1).clone(),
+        (*m2).clone(),
+    )))
 }
 
 /// `math-radical : math option -> math -> math` (vminst.ml:274) — `None`
@@ -5968,7 +6298,9 @@ fn prim_math_radical_v006(interp: &mut Interp, mut args: Vec<Value>) -> Result<V
     let radicand = as_math(interp, m2)?;
     let degree = match opt {
         Value::Ctor(name, payload) if name == "None" && payload.is_none() => None,
-        Value::Ctor(name, Some(payload)) if name == "Some" => Some((*as_math(interp, *payload)?).clone()),
+        Value::Ctor(name, Some(payload)) if name == "Some" => {
+            Some((*as_math(interp, *payload)?).clone())
+        }
         other => {
             return eval_error(format!(
                 "expected a math option (None/Some), got {}",
@@ -5998,7 +6330,10 @@ fn prim_math_radical_v01(_interp: &mut Interp, mut args: Vec<Value>) -> Result<V
             ))
         }
     };
-    Ok(single_math_boxes(Math::Radical(degree, (*radicand).clone())))
+    Ok(single_math_boxes(Math::Radical(
+        degree,
+        (*radicand).clone(),
+    )))
 }
 
 fn prim_math_lower_v006(interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
@@ -6006,7 +6341,10 @@ fn prim_math_lower_v006(interp: &mut Interp, mut args: Vec<Value>) -> Result<Val
     let m1 = args.pop().unwrap();
     let base = as_math(interp, m1)?;
     let lower = as_math(interp, m2)?;
-    Ok(single_math(Math::LowerLimit((*base).clone(), (*lower).clone())))
+    Ok(single_math(Math::LowerLimit(
+        (*base).clone(),
+        (*lower).clone(),
+    )))
 }
 
 /// `math-lower : context -> math-boxes -> (context -> math-boxes) ->
@@ -6030,7 +6368,10 @@ fn prim_math_upper_v006(interp: &mut Interp, mut args: Vec<Value>) -> Result<Val
     let m1 = args.pop().unwrap();
     let base = as_math(interp, m1)?;
     let upper = as_math(interp, m2)?;
-    Ok(single_math(Math::UpperLimit((*base).clone(), (*upper).clone())))
+    Ok(single_math(Math::UpperLimit(
+        (*base).clone(),
+        (*upper).clone(),
+    )))
 }
 
 /// `math-upper : context -> math-boxes -> (context -> math-boxes) ->
@@ -6056,12 +6397,19 @@ fn prim_math_upper_v01(interp: &mut Interp, mut args: Vec<Value>) -> Result<Valu
 /// the subscript/superscript actually pulled in off an enclosing `Sub`/`Sup`
 /// (`{scripts} m^{sup}`-style), or with `(None, None)` for the common
 /// unscripted case (a bare `\sum`/`\int` with nothing pulled in).
-fn prim_math_pull_in_scripts(interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+fn prim_math_pull_in_scripts(
+    interp: &mut Interp,
+    mut args: Vec<Value>,
+) -> Result<Value, EvalError> {
     let resolver = args.pop().unwrap();
     let cls2 = as_math_kind(args.pop().unwrap())?;
     let cls1 = as_math_kind(args.pop().unwrap())?;
     let _ = interp;
-    Ok(single_math(Math::PullInScripts(cls1, cls2, Box::new(resolver))))
+    Ok(single_math(Math::PullInScripts(
+        cls1,
+        cls2,
+        Box::new(resolver),
+    )))
 }
 
 fn prim_math_color(interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
@@ -6403,7 +6751,10 @@ fn make_math_class_option_value(mk: MathKind) -> Value {
 }
 
 /// `get-left-math-class : context -> math -> math-class option` (gap 7).
-fn prim_get_left_math_class_v006(interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+fn prim_get_left_math_class_v006(
+    interp: &mut Interp,
+    mut args: Vec<Value>,
+) -> Result<Value, EvalError> {
     let m = as_math(interp, args.pop().unwrap())?;
     let ctx = as_context(args.pop().unwrap())?;
     Ok(make_math_class_option_value(left_math_kind(&ctx, &m)))
@@ -6416,7 +6767,10 @@ fn prim_get_left_math_class_v006(interp: &mut Interp, mut args: Vec<Value>) -> R
 /// (`math_element_kind`) — this port's own deferred-resolution design, not
 /// upstream's, since upstream's `math` atoms already carry a resolved
 /// class — so a bare default context stands in.
-fn prim_get_left_math_class_v01(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+fn prim_get_left_math_class_v01(
+    _interp: &mut Interp,
+    mut args: Vec<Value>,
+) -> Result<Value, EvalError> {
     let m = as_math_boxes(args.pop().unwrap())?;
     let ctx = Context::initial(Length::ZERO);
     Ok(make_math_class_option_value(left_math_kind(&ctx, &m)))
@@ -6487,7 +6841,10 @@ fn prim_set_math_font(interp: &mut Interp, mut args: Vec<Value>) -> Result<Value
 /// `space_between_math_kinds` table (`math.ml:319-410`, phase A.4,
 /// roadmap); always returns `None` (no extra glue), used by `math.satyh`'s
 /// `+align` — never invoked eagerly (that binding is a `let-block` closure).
-fn prim_space_between_maths_v006(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+fn prim_space_between_maths_v006(
+    _interp: &mut Interp,
+    mut args: Vec<Value>,
+) -> Result<Value, EvalError> {
     let _m2 = args.pop().unwrap();
     let _m1 = args.pop().unwrap();
     let _ctx = as_context(args.pop().unwrap())?;
@@ -6497,7 +6854,10 @@ fn prim_space_between_maths_v006(_interp: &mut Interp, mut args: Vec<Value>) -> 
 /// `space-between-maths : context -> math-boxes -> math-boxes -> inline-
 /// boxes option` (vminst.ml:164) — shared STAND-IN body, only the extractor
 /// forks (`as_math_boxes` vs `as_math`).
-fn prim_space_between_maths_v01(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+fn prim_space_between_maths_v01(
+    _interp: &mut Interp,
+    mut args: Vec<Value>,
+) -> Result<Value, EvalError> {
     let _m2 = as_math_boxes(args.pop().unwrap())?;
     let _m1 = as_math_boxes(args.pop().unwrap())?;
     let _ctx = as_context(args.pop().unwrap())?;
@@ -6516,23 +6876,49 @@ fn prim_raise_inline(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value
 }
 
 /// `embed-block-breakable : context -> block-boxes -> inline-boxes`
-/// (vminst.ml:973) — STAND-IN: no nested page-breakable block-in-inline box
-/// exists yet (`hbox.rs` has no `HorzEmbeddedVertBreakable` analog; roadmap
-/// E, see `docs/plans/math-engine.md` §E). Renders as an empty box rather
-/// than erroring (matching `inline-frame-outer`'s existing "typed
-/// faithfully, stand-in body never renders the real thing" precedent) —
-/// used by `math.satyh`'s `+math`'s `\eqn`/`\math-list`/`\align`, never
-/// invoked eagerly.
-fn prim_embed_block_breakable(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+/// (vminst.ml:973; upstream `HorzEmbeddedVertBreakable`).
+///
+/// The BREAKABLE variant is not merely an inline block: upstream's
+/// `LBEmbeddedVertBreakable` resets the width map to this breakpoint alone
+/// (`lineBreak.ml:1076-1087`), so no candidate line may span it, and the
+/// renderer flushes the line accumulated so far, emits the block as its own
+/// vertical item, then starts a fresh line (`lineBreak.ml:809-818`). It is a
+/// MANDATORY break on both sides, which is exactly what makes it usable as a
+/// line-break primitive.
+///
+/// Modelled here as a forced `Discretionary` either side of the block. Without
+/// them the block was just an inline box, so latexcmds' `\linebreak`
+/// (`inline-fil ++ embed-block-breakable ctx (block-skip gap)`,
+/// `latexcmds.satyh:150`) never broke: the `inline-fil` swallowed the line's
+/// whole slack and shoved everything after it out to the right margin and off
+/// the page edge, where it was silently lost (`このように` / `使い` /
+/// `すぎると` / `読みにくく` all vanished from the render).
+fn prim_embed_block_breakable(
+    _interp: &mut Interp,
+    mut args: Vec<Value>,
+) -> Result<Value, EvalError> {
     let bb = as_block_boxes(args.pop().unwrap())?;
     let ctx = as_context(args.pop().unwrap())?;
     // Embed the block inline, top-anchored (the block's FIRST line sits on the
-    // surrounding text baseline — same as `embed-block-top`). Was a no-op stub
-    // that silently DROPPED the block, so figbox's inline `\fig-block`/
-    // `\fig-center` (which `embed-block-breakable` a `+fig-block`) rendered an
-    // empty frame. `make_embedded_block` splits the box's height/depth around
-    // the first line so the pager accounts for the embedded figure's extent.
-    Ok(make_embedded_block(ctx.paragraph_width, bb, false))
+    // surrounding text baseline — same as `embed-block-top`).
+    // `make_embedded_block` splits the box's height/depth around the first line
+    // so the pager accounts for the embedded figure's extent.
+    let block = match make_embedded_block(ctx.paragraph_width, bb, false, true) {
+        Value::InlineBoxes(boxes) => boxes,
+        other => return Ok(other),
+    };
+    let forced = || {
+        HorzBox::Pure(PureHorzBox::Discretionary {
+            penalty: FORCED_BREAK_PENALTY,
+            pre_break: Vec::new(),
+            post_break: Vec::new(),
+            no_break: Vec::new(),
+        })
+    };
+    let mut out = vec![forced()];
+    out.extend(block);
+    out.push(forced());
+    Ok(Value::InlineBoxes(out))
 }
 
 /// `unite-path : path -> path -> path` — FAITHFUL: `path` is upstream's
@@ -6552,7 +6938,10 @@ fn prim_unite_path(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, 
 /// `set-leading`'s own comment on why IT, not this, is the baseline-distance
 /// setter); accepted and dropped. Used by `math.satyh`'s `+math-list`, never
 /// invoked eagerly.
-fn prim_set_min_gap_of_lines(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+fn prim_set_min_gap_of_lines(
+    _interp: &mut Interp,
+    mut args: Vec<Value>,
+) -> Result<Value, EvalError> {
     let ctx = as_context(args.pop().unwrap())?;
     let _len = as_length(args.pop().unwrap())?;
     Ok(Value::Context(Box::new(ctx)))
@@ -6640,7 +7029,16 @@ fn layout_math_list(
     ctx: &Context,
     elems: &[Math],
     size: Length,
-) -> Result<(Vec<MathGlyph>, Vec<GraphicsElem>, Length, MathKind, MathKind), EvalError> {
+) -> Result<
+    (
+        Vec<MathGlyph>,
+        Vec<GraphicsElem>,
+        Length,
+        MathKind,
+        MathKind,
+    ),
+    EvalError,
+> {
     let mut glyphs = Vec::new();
     let mut rules = Vec::new();
     let mut x = Length::ZERO;
@@ -6692,7 +7090,10 @@ fn check_subscript(base: &[Math]) -> Option<(Vec<Math>, Vec<Math>)> {
             let (sub_script, inner_new) = check_subscript(inner)?;
             let mut new_base = head.to_vec();
             new_base.push(Math::ChangeCharClass(cls.clone(), inner_new));
-            Some((vec![Math::ChangeCharClass(cls.clone(), sub_script)], new_base))
+            Some((
+                vec![Math::ChangeCharClass(cls.clone(), sub_script)],
+                new_base,
+            ))
         }
         _ => None,
     }
@@ -6714,7 +7115,16 @@ fn layout_pull_in_scripts(
     sub: Option<&[Math]>,
     sup: Option<&[Math]>,
     size: Length,
-) -> Result<(Vec<MathGlyph>, Vec<GraphicsElem>, Length, MathKind, MathKind), EvalError> {
+) -> Result<
+    (
+        Vec<MathGlyph>,
+        Vec<GraphicsElem>,
+        Length,
+        MathKind,
+        MathKind,
+    ),
+    EvalError,
+> {
     let opt_math = |o: Option<&[Math]>| match o {
         Some(m) => Value::Ctor(
             "Some".to_string(),
@@ -6853,7 +7263,16 @@ fn paren_variant_fallback(
     d_in: Length,
     axis: Length,
     size: Length,
-) -> Result<(Vec<MathGlyph>, Vec<GraphicsElem>, Length, MathKind, MathKind), EvalError> {
+) -> Result<
+    (
+        Vec<MathGlyph>,
+        Vec<GraphicsElem>,
+        Length,
+        MathKind,
+        MathKind,
+    ),
+    EvalError,
+> {
     let target = (h_in - axis).max(axis + d_in) * 2.0;
     let mut glyphs = Vec::new();
     let mut rules = Vec::new();
@@ -6937,10 +7356,21 @@ fn layout_math_atom(
     ctx: &Context,
     atom: &Math,
     size: Length,
-) -> Result<(Vec<MathGlyph>, Vec<GraphicsElem>, Length, MathKind, MathKind), EvalError> {
+) -> Result<
+    (
+        Vec<MathGlyph>,
+        Vec<GraphicsElem>,
+        Length,
+        MathKind,
+        MathKind,
+    ),
+    EvalError,
+> {
     match atom {
         Math::Pure(MathElement::Char { class, big, chars })
-        | Math::Pure(MathElement::CharWithKern { class, big, chars, .. }) => {
+        | Math::Pure(MathElement::CharWithKern {
+            class, big, chars, ..
+        }) => {
             let mut glyphs = Vec::new();
             let mut x = Length::ZERO;
             for c in chars.chars() {
@@ -7009,7 +7439,11 @@ fn layout_math_atom(
                 let all_renderable = target
                     .chars()
                     .all(|c| math_char_available(interp, ctx, c, size));
-                let chosen = if all_renderable { target.clone() } else { s.clone() };
+                let chosen = if all_renderable {
+                    target.clone()
+                } else {
+                    s.clone()
+                };
                 for c in chosen.chars() {
                     push_char_glyph(interp, ctx, c, size, &mut glyphs, &mut x)?;
                 }
@@ -7024,15 +7458,23 @@ fn layout_math_atom(
         Math::Pure(MathElement::EmbeddedText { class, body }) => {
             let v = interp.apply((**body).clone(), Value::Context(Box::new(ctx.clone())))?;
             let boxes = as_inline_boxes(v)?;
-            let (glyphs, width) = math_glyphs_of_inline_boxes(&boxes);
-            Ok((glyphs, Vec::new(), width, *class, *class))
+            // `math_boxes_of_inline_boxes`, not the glyphs-only walk: embedded
+            // inline content can carry its ink as GRAPHICS rather than glyphs.
+            // latexcmds' `\underset`/`\overset` are exactly that — they reduce
+            // to `text-in-math (… \normal-underset …)`, which draws through
+            // `inline-graphics` + `draw-text`. Harvesting glyphs alone kept the
+            // box's WIDTH and threw the drawing away, so the Schrödinger-equation
+            // example rendered as `[−     + V(x)]Ψ`: a correctly-sized hole where
+            // the fraction and its under-text should be.
+            let (glyphs, rules, width) = math_boxes_of_inline_boxes(&boxes);
+            Ok((glyphs, rules, width, *class, *class))
         }
         Math::Pure(MathElement::EmbeddedBoxes { class, boxes }) => {
             // V0_1 `embed-inline-to-math`: eager, already-materialized
             // boxes, so no closure application (contrast `EmbeddedText`
-            // above) — the same deliberately-cheap stand-in rendering path.
-            let (glyphs, width) = math_glyphs_of_inline_boxes(boxes);
-            Ok((glyphs, Vec::new(), width, *class, *class))
+            // above) — but the same graphics-bearing content is possible.
+            let (glyphs, rules, width) = math_boxes_of_inline_boxes(boxes);
+            Ok((glyphs, rules, width, *class, *class))
         }
         Math::Group(cls1, cls2, inner) => {
             let (glyphs, rules, width, _, _) = layout_math_list(interp, ctx, inner, size)?;
@@ -7087,12 +7529,25 @@ fn layout_math_atom(
                 let (h_sub, _) = glyphs_extent(&sub_glyphs);
                 let sup_shift_raw = mc.sup_shift_clamped(ctx.font_size, h_base, d_sup);
                 let sub_shift_raw = mc.sub_shift_clamped(ctx.font_size, d_base, h_sub);
-                let (sup_shift, sub_shift) =
-                    mc.correct_script_gap(ctx.font_size, d_sup, h_sub, sup_shift_raw, sub_shift_raw);
+                let (sup_shift, sub_shift) = mc.correct_script_gap(
+                    ctx.font_size,
+                    d_sup,
+                    h_sub,
+                    sup_shift_raw,
+                    sub_shift_raw,
+                );
                 let kern = match &paren_kernf {
                     Some(kf) => dense_kern(interp, kf, sup_shift - d_sup),
                     None => superscript_kern(
-                        interp, ctx, size, script_size, &glyphs, &sup_glyphs, sup_shift, h_base, d_sup,
+                        interp,
+                        ctx,
+                        size,
+                        script_size,
+                        &glyphs,
+                        &sup_glyphs,
+                        sup_shift,
+                        h_base,
+                        d_sup,
                     ),
                 };
                 let sub_kern = paren_kernf
@@ -7100,10 +7555,20 @@ fn layout_math_atom(
                     .map(|kf| dense_kern(interp, kf, h_sub - d_base))
                     .unwrap_or(Length::ZERO);
                 shift_and_append(
-                    &mut glyphs, &mut rules, sub_glyphs, sub_rules, base_width + sub_kern, -sub_shift,
+                    &mut glyphs,
+                    &mut rules,
+                    sub_glyphs,
+                    sub_rules,
+                    base_width + sub_kern,
+                    -sub_shift,
                 );
                 shift_and_append(
-                    &mut glyphs, &mut rules, sup_glyphs, sup_rules, base_width + kern, sup_shift,
+                    &mut glyphs,
+                    &mut rules,
+                    sup_glyphs,
+                    sup_rules,
+                    base_width + kern,
+                    sup_shift,
                 );
                 return Ok((
                     glyphs,
@@ -7115,7 +7580,15 @@ fn layout_math_atom(
             }
             if let Some((Math::PullInScripts(cls1, cls2, resolver), head)) = base.split_last() {
                 return layout_pull_in_scripts(
-                    interp, ctx, head, *cls1, *cls2, resolver, None, Some(script), size,
+                    interp,
+                    ctx,
+                    head,
+                    *cls1,
+                    *cls2,
+                    resolver,
+                    None,
+                    Some(script),
+                    size,
                 );
             }
             let (mut glyphs, mut rules, base_width, left, _) =
@@ -7135,13 +7608,32 @@ fn layout_math_atom(
             let kern = match paren_trailing_kernf(interp, ctx, base, size) {
                 Some(kf) => dense_kern(interp, &kf, sup_shift - d_sup),
                 None => superscript_kern(
-                    interp, ctx, size, script_size, &glyphs, &script_glyphs, sup_shift, h_base, d_sup,
+                    interp,
+                    ctx,
+                    size,
+                    script_size,
+                    &glyphs,
+                    &script_glyphs,
+                    sup_shift,
+                    h_base,
+                    d_sup,
                 ),
             };
             shift_and_append(
-                &mut glyphs, &mut rules, script_glyphs, script_rules, base_width + kern, sup_shift,
+                &mut glyphs,
+                &mut rules,
+                script_glyphs,
+                script_rules,
+                base_width + kern,
+                sup_shift,
             );
-            Ok((glyphs, rules, base_width + kern + script_width, left, MathKind::Ord))
+            Ok((
+                glyphs,
+                rules,
+                base_width + kern + script_width,
+                left,
+                MathKind::Ord,
+            ))
         }
         Math::Sub(base, script) => {
             // Upstream MathSubscript: a `PullInScripts` at the base list's
@@ -7182,9 +7674,20 @@ fn layout_math_atom(
                 None => Length::ZERO,
             };
             shift_and_append(
-                &mut glyphs, &mut rules, script_glyphs, script_rules, base_width + kern, -sub_shift,
+                &mut glyphs,
+                &mut rules,
+                script_glyphs,
+                script_rules,
+                base_width + kern,
+                -sub_shift,
             );
-            Ok((glyphs, rules, base_width + kern + script_width, left, MathKind::Ord))
+            Ok((
+                glyphs,
+                rules,
+                base_width + kern + script_width,
+                left,
+                MathKind::Ord,
+            ))
         }
         Math::ChangeColor(_, inner) => {
             // stand-in: color restyling doesn't affect Slice-1 glyph
@@ -7220,8 +7723,7 @@ fn layout_math_atom(
                 math_cramped: true,
                 ..ctx.clone()
             };
-            let (den_glyphs, den_rules, den_w, ..) =
-                layout_math_list(interp, &den_ctx, den, size)?;
+            let (den_glyphs, den_rules, den_w, ..) = layout_math_list(interp, &den_ctx, den, size)?;
             let w = num_w.max(den_w);
             // Center the narrower of the two over/under the wider
             // (`math.ml:1140-1155`'s symmetric padding).
@@ -7241,10 +7743,20 @@ fn layout_math_atom(
             // comment) — both applied via the SAME up-positive `dy_shift`
             // `shift_and_append` uses for Sup/Sub.
             shift_and_append(
-                &mut glyphs, &mut rules, num_glyphs, num_rules, num_dx, numer_shift,
+                &mut glyphs,
+                &mut rules,
+                num_glyphs,
+                num_rules,
+                num_dx,
+                numer_shift,
             );
             shift_and_append(
-                &mut glyphs, &mut rules, den_glyphs, den_rules, den_dx, denom_shift,
+                &mut glyphs,
+                &mut rules,
+                den_glyphs,
+                den_rules,
+                den_dx,
+                denom_shift,
             );
             // The bar itself: `rect x∈[0,w], y∈[axis·s, axis·s+rule·s]`
             // (§B2's test-plan shape — a deliberate simplification of
@@ -7330,7 +7842,13 @@ fn layout_math_atom(
             for r in &inner_rules {
                 rules.push(shift_graphics((sign_w, Length::ZERO), r));
             }
-            Ok((glyphs, rules, sign_w + inner_w, MathKind::Inner, MathKind::Inner))
+            Ok((
+                glyphs,
+                rules,
+                sign_w + inner_w,
+                MathKind::Inner,
+                MathKind::Inner,
+            ))
         }
         Math::Paren(l, r, inner) => {
             // §B3b-2: PRIMARY route is upstream's own `make_paren` closure
@@ -7354,19 +7872,25 @@ fn layout_math_atom(
             let (h_in, d_in) = inner_ink_extent(&inner_glyphs, &inner_rules);
             let mc = MathC::of(interp, ctx);
             let axis = mc.axis(size);
-            let closure_route = make_paren_run(interp, ctx, l, h_in, d_in, axis, size).and_then(
-                |left| {
+            let closure_route =
+                make_paren_run(interp, ctx, l, h_in, d_in, axis, size).and_then(|left| {
                     let right = make_paren_run(interp, ctx, r, h_in, d_in, axis, size)?;
                     Ok((left, right))
-                },
-            );
+                });
             match closure_route {
                 Ok(((lg, lr, lw, _), (rg, rr, rw, _))) => {
                     let mut glyphs = Vec::new();
                     let mut rules = Vec::new();
                     let mut x = Length::ZERO;
                     append_at(&mut glyphs, &mut rules, &mut x, lg, lr, lw);
-                    append_at(&mut glyphs, &mut rules, &mut x, inner_glyphs, inner_rules, inner_w);
+                    append_at(
+                        &mut glyphs,
+                        &mut rules,
+                        &mut x,
+                        inner_glyphs,
+                        inner_rules,
+                        inner_w,
+                    );
                     append_at(&mut glyphs, &mut rules, &mut x, rg, rr, rw);
                     Ok((glyphs, rules, x, MathKind::Open, MathKind::Close))
                 }
@@ -7403,13 +7927,12 @@ fn layout_math_atom(
             }
             let mc = MathC::of(interp, ctx);
             let axis = mc.axis(size);
-            let closure_route = make_paren_run(interp, ctx, l, h_in, d_in, axis, size).and_then(
-                |left| {
+            let closure_route =
+                make_paren_run(interp, ctx, l, h_in, d_in, axis, size).and_then(|left| {
                     let right = make_paren_run(interp, ctx, r, h_in, d_in, axis, size)?;
                     let middle = make_paren_run(interp, ctx, m, h_in, d_in, axis, size)?;
                     Ok((left, right, middle))
-                },
-            );
+                });
             match closure_route {
                 Ok(((lg, lr, lw, _), (rg, rr, rw, _), (mg, mr, mw, _))) => {
                     let mut glyphs = Vec::new();
@@ -7420,7 +7943,14 @@ fn layout_math_atom(
                         if i > 0 {
                             append_at(&mut glyphs, &mut rules, &mut x, mg.clone(), mr.clone(), mw);
                         }
-                        append_at(&mut glyphs, &mut rules, &mut x, part_glyphs, part_rules, part_w);
+                        append_at(
+                            &mut glyphs,
+                            &mut rules,
+                            &mut x,
+                            part_glyphs,
+                            part_rules,
+                            part_w,
+                        );
                     }
                     append_at(&mut glyphs, &mut rules, &mut x, rg, rr, rw);
                     Ok((glyphs, rules, x, MathKind::Open, MathKind::Close))
@@ -7438,10 +7968,23 @@ fn layout_math_atom(
             let (h_base, _) = glyphs_extent(&glyphs);
             let (_, d_up) = glyphs_extent(&script_glyphs);
             let up_shift = mc.upper_limit_shift(ctx.font_size, h_base, d_up);
+            // A LIMIT is CENTERED over its base, not set beside it
+            // (`math.ml:1219-1231`: upstream pads the narrower of the two with
+            // half the difference on each side, so the whole is
+            // `max(w_base, w_up)` wide). Placing it at `base_width` — i.e. to
+            // the right, widening the box to the SUM — set `\sum_a^b`'s limits
+            // off the operator's shoulder instead of above and below it.
+            let (base_dx, script_dx) = center_offsets(base_width, script_width);
+            shift_existing(&mut glyphs, &mut rules, base_dx);
             shift_and_append(
-                &mut glyphs, &mut rules, script_glyphs, script_rules, base_width, up_shift,
+                &mut glyphs,
+                &mut rules,
+                script_glyphs,
+                script_rules,
+                script_dx,
+                up_shift,
             );
-            Ok((glyphs, rules, base_width + script_width, left, right))
+            Ok((glyphs, rules, base_width.max(script_width), left, right))
         }
         Math::LowerLimit(base, lower) => {
             let (mut glyphs, mut rules, base_width, left, right) =
@@ -7453,10 +7996,18 @@ fn layout_math_atom(
             let (_, d_base) = glyphs_extent(&glyphs);
             let (h_low, _) = glyphs_extent(&script_glyphs);
             let low_shift = mc.lower_limit_shift(ctx.font_size, d_base, h_low);
+            // Centered under the base — see the `UpperLimit` arm above.
+            let (base_dx, script_dx) = center_offsets(base_width, script_width);
+            shift_existing(&mut glyphs, &mut rules, base_dx);
             shift_and_append(
-                &mut glyphs, &mut rules, script_glyphs, script_rules, base_width, -low_shift,
+                &mut glyphs,
+                &mut rules,
+                script_glyphs,
+                script_rules,
+                script_dx,
+                -low_shift,
             );
-            Ok((glyphs, rules, base_width + script_width, left, right))
+            Ok((glyphs, rules, base_width.max(script_width), left, right))
         }
         Math::PullInScripts(cls1, cls2, resolver) => {
             // Not consumed by an enclosing Sub/Sup (bare `\sum` with no
@@ -7503,6 +8054,31 @@ fn append_at(
         out_rules.push(shift_graphics((base_x, Length::ZERO), r));
     }
     *x = base_x + width;
+}
+
+/// Horizontal offsets that CENTER a limit against its base: half the width
+/// difference goes to whichever of the two is narrower, so the pair occupies
+/// `max(base, script)` (upstream `math.ml:1219-1231`).
+fn center_offsets(base_width: Length, script_width: Length) -> (Length, Length) {
+    if base_width < script_width {
+        ((script_width - base_width) * 0.5, Length::ZERO)
+    } else {
+        (Length::ZERO, (base_width - script_width) * 0.5)
+    }
+}
+
+/// Slide already-emitted glyphs/rules right by `dx` — used when a limit is
+/// WIDER than its base, so the base itself has to move to stay centered.
+fn shift_existing(glyphs: &mut [MathGlyph], rules: &mut [GraphicsElem], dx: Length) {
+    if dx == Length::ZERO {
+        return;
+    }
+    for g in glyphs.iter_mut() {
+        g.dx = g.dx + dx;
+    }
+    for r in rules.iter_mut() {
+        *r = shift_graphics((dx, Length::ZERO), r);
+    }
 }
 
 /// Append `glyphs`/`rules` (LOCAL coordinates, from an isolated
@@ -7714,7 +8290,12 @@ fn math_glyphs_of_inline_boxes(boxes: &[HorzBox]) -> (Vec<MathGlyph>, Length) {
 /// AND `rules` out of any nested `PureHorzBox::Math` box (a paren closure
 /// could, in principle, embed one via `text-in-math`/`embed-math`).
 fn math_boxes_of_inline_boxes(boxes: &[HorzBox]) -> (Vec<MathGlyph>, Vec<GraphicsElem>, Length) {
-    fn go(pure: &PureHorzBox, out: &mut Vec<MathGlyph>, rules: &mut Vec<GraphicsElem>, x: &mut Length) {
+    fn go(
+        pure: &PureHorzBox,
+        out: &mut Vec<MathGlyph>,
+        rules: &mut Vec<GraphicsElem>,
+        x: &mut Length,
+    ) {
         match pure {
             PureHorzBox::InnerString {
                 info,
@@ -7974,7 +8555,10 @@ fn indent_left(block: Vec<VertBox>, pad_l: Length) -> Vec<VertBox> {
                 height,
                 depth,
                 leading,
-                contents: contents.into_iter().map(|(x, bx)| (x + pad_l, bx)).collect(),
+                contents: contents
+                    .into_iter()
+                    .map(|(x, bx)| (x + pad_l, bx))
+                    .collect(),
             },
             // `Skip`/`ClearPage`/`HookPageBreak` carry no `x` offsets to shift.
             other => other,
@@ -8004,7 +8588,12 @@ fn prim_block_frame_breakable(
     let ctx = as_context(args.pop().unwrap())?;
     let id = DecoId(interp.decos.len());
     interp.decos.push(DecoEntry::Block {
-        pads: Paddings { l: pad_l, r: pad_r, t: pad_t, b: pad_b },
+        pads: Paddings {
+            l: pad_l,
+            r: pad_r,
+            t: pad_t,
+            b: pad_b,
+        },
         width: ctx.paragraph_width,
         decoset,
     });
@@ -8042,7 +8631,12 @@ fn prim_block_frame_breakable(
 /// line's baseline: height = everything above it, depth = the last line's own
 /// depth — so the box hangs UP from the baseline and the surrounding line
 /// reserves the right space above it.
-fn make_embedded_block(width: Length, block: Vec<VertBox>, anchor_last: bool) -> Value {
+fn make_embedded_block(
+    width: Length,
+    block: Vec<VertBox>,
+    anchor_last: bool,
+    breakable: bool,
+) -> Value {
     let first_line_height = block.iter().find_map(|vb| match vb {
         VertBox::Line { height, .. } => Some(*height),
         _ => None,
@@ -8087,6 +8681,7 @@ fn make_embedded_block(width: Length, block: Vec<VertBox>, anchor_last: bool) ->
         depth,
         block,
         anchor_last,
+        breakable,
     })])
 }
 
@@ -8099,7 +8694,7 @@ fn prim_embed_block_top(interp: &mut Interp, mut args: Vec<Value>) -> Result<Val
         ..ctx
     };
     let block = as_block_boxes(interp.apply(k, Value::Context(Box::new(inner_ctx)))?)?;
-    Ok(make_embedded_block(wid, block, false))
+    Ok(make_embedded_block(wid, block, false, false))
 }
 
 /// `embed-block-bottom : context -> length -> (context -> block-boxes) ->
@@ -8120,7 +8715,7 @@ fn prim_embed_block_bottom(interp: &mut Interp, mut args: Vec<Value>) -> Result<
         ..ctx
     };
     let block = as_block_boxes(interp.apply(k, Value::Context(Box::new(inner_ctx)))?)?;
-    Ok(make_embedded_block(wid, block, true))
+    Ok(make_embedded_block(wid, block, true, false))
 }
 
 /// `line-stack-bottom : inline-boxes list -> inline-boxes` (vminst.ml:1229,
@@ -8174,7 +8769,7 @@ fn prim_line_stack_bottom(_interp: &mut Interp, mut args: Vec<Value>) -> Result<
     // dropped the whole stack below the baseline — e.g. figbox's `margin`/
     // `hvmargin` (a `line-stack-bottom` of [top-mgn; content; bot-mgn]) had its
     // content rendered below its frame (the E=mc² bug).
-    Ok(make_embedded_block(wid, block, true))
+    Ok(make_embedded_block(wid, block, true, false))
 }
 
 /// `add-footnote : block-boxes -> inline-boxes` (vminst.ml:1130
@@ -8272,7 +8867,10 @@ fn prim_set_dominant_wide_script(
 ) -> Result<Value, EvalError> {
     let ctx = as_context(args.pop().unwrap())?;
     let dominant_wide_script = as_script(args.pop().unwrap())?;
-    Ok(Value::Context(Box::new(Context { dominant_wide_script, ..ctx })))
+    Ok(Value::Context(Box::new(Context {
+        dominant_wide_script,
+        ..ctx
+    })))
 }
 
 /// `set-dominant-narrow-script : script -> context -> context`
@@ -8283,7 +8881,10 @@ fn prim_set_dominant_narrow_script(
 ) -> Result<Value, EvalError> {
     let ctx = as_context(args.pop().unwrap())?;
     let dominant_narrow_script = as_script(args.pop().unwrap())?;
-    Ok(Value::Context(Box::new(Context { dominant_narrow_script, ..ctx })))
+    Ok(Value::Context(Box::new(Context {
+        dominant_narrow_script,
+        ..ctx
+    })))
 }
 
 /// `set-language : script -> language -> context -> context`
@@ -8296,7 +8897,10 @@ fn prim_set_language(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value
     let script = as_script(args.pop().unwrap())?;
     let mut langsys_scheme = ctx.langsys_scheme;
     langsys_scheme[script as usize] = langsys;
-    Ok(Value::Context(Box::new(Context { langsys_scheme, ..ctx })))
+    Ok(Value::Context(Box::new(Context {
+        langsys_scheme,
+        ..ctx
+    })))
 }
 
 /// `get-dominant-wide-script : context -> script` (vminst.ml:1526) — FAITHFUL.
@@ -8368,7 +8972,12 @@ fn prim_register_outline(interp: &mut Interp, mut args: Vec<Value>) -> Result<Va
         let key = as_str(it.next().unwrap())?;
         let is_open = as_bool(it.next().unwrap())?;
         let dest_name = interp.dest_name(&key);
-        out.push(OutlineEntry { level, text, dest_name, is_open });
+        out.push(OutlineEntry {
+            level,
+            text,
+            dest_name,
+            is_open,
+        });
     }
     interp.outline = out; // replace, not extend
     Ok(Value::Unit)
@@ -8389,9 +8998,10 @@ fn extract_string_pure_one(phb: &PureHorzBox) -> String {
             no_break.iter().map(extract_string_pure_one).collect()
         }
         // Upstream `extract_string` recurses into frames.
-        PureHorzBox::Frame { contents, .. } => {
-            contents.iter().map(|(_, b)| extract_string_pure_one(b)).collect()
-        }
+        PureHorzBox::Frame { contents, .. } => contents
+            .iter()
+            .map(|(_, b)| extract_string_pure_one(b))
+            .collect(),
         _ => String::new(),
     }
 }
@@ -8448,7 +9058,9 @@ fn prim_get_initial_text_info_v01(
 fn prim_deepen_indent(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
     let tinfo = as_text_info(args.pop().unwrap())?;
     let i = as_int(args.pop().unwrap())?;
-    Ok(Value::TextInfo(TextInfo { indent: tinfo.indent + i.max(0) }))
+    Ok(Value::TextInfo(TextInfo {
+        indent: tinfo.indent + i.max(0),
+    }))
 }
 
 /// `break : text-info -> string` (vminst.ml:935 `TextBreak`) — FAITHFUL:
@@ -8535,7 +9147,10 @@ mod page_model_tests {
         let mut fields = BTreeMap::new();
         fields.insert(
             "text-origin".to_string(),
-            Value::Tuple(vec![Value::Length(Length::ZERO), Value::Length(Length::ZERO)]),
+            Value::Tuple(vec![
+                Value::Length(Length::ZERO),
+                Value::Length(Length::ZERO),
+            ]),
         );
         let err = read_content_scheme(Value::Record(fields)).unwrap_err();
         assert!(
@@ -8550,7 +9165,10 @@ mod page_model_tests {
         let mut fields = BTreeMap::new();
         fields.insert(
             "header-origin".to_string(),
-            Value::Tuple(vec![Value::Length(Length::ZERO), Value::Length(Length::ZERO)]),
+            Value::Tuple(vec![
+                Value::Length(Length::ZERO),
+                Value::Length(Length::ZERO),
+            ]),
         );
         fields.insert("header-content".to_string(), Value::BlockBoxes(Vec::new()));
         fields.insert(

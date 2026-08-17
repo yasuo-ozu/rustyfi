@@ -28,6 +28,20 @@ pub struct PlacedLine {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Page {
     pub lines: Vec<PlacedLine>,
+    /// How many leading entries of `lines` are BODY (column) content. The
+    /// page's header and footer are appended after the columns
+    /// (`primitives.rs`'s `page_break_core`), so they occupy `lines[body_lines..]`.
+    ///
+    /// `fire_hooks` needs the split: a `block-frame-breakable` carried across a
+    /// page boundary is "open" for the whole of the next page's walk, so
+    /// accumulating its fragment extent over EVERY line swallowed the header
+    /// and footer too — every carried frame's `decoH` fragment came out
+    /// spanning y=30 (the header baseline) to y=788 (the footer), painting its
+    /// background over the entire page instead of over its own content.
+    ///
+    /// `usize::MAX` means "all lines are body" (no header/footer), which is
+    /// what hand-built test pages want.
+    pub body_lines: usize,
 }
 
 /// The line's own `(height-above-baseline, depth-below-baseline)` as-placed,

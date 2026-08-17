@@ -21,6 +21,15 @@ nix develop -c python3 scripts/layout_fidelity.py --gen-refs --keep-going \
 ```
 
 These are committed via a `.gitignore` exception (the repo otherwise ignores
-`*.pdf`). The biggest is `figbox.port.pdf` (~14 MB) — the port currently embeds
-that manual's images far less compactly than SATySFi (6.4 MB), itself a
-fidelity lead.
+`*.pdf`). The biggest is `figbox.port.pdf` (~20.5 MB against SATySFi's 6.4 MB),
+because **the port writes non-JPEG images completely uncompressed**: the
+`else` branch of the image-XObject writer (`crates/rustyfi-pdf/src/lib.rs:209`)
+emits `im.samples` as raw 8-bit `DeviceRGB` with no `/Filter` at all. figbox
+holds 13 `DCTDecode` streams (the JPEG passthrough, working) and 13 unfiltered
+ones; that single uncompressed image, embedded 13×, is 16 MB of the 20.5.
+
+Duplicate embedding is NOT the cause and not a port bug — SATySFi duplicates
+harder (44 image streams over 2 unique, vs the port's 26 over 2). The whole
+difference is per-copy size: 0.71 MB each for the port, 0.115 MB for SATySFi.
+Deflating those samples (`flate2` is already a workspace dependency) would be
+pixel-lossless and bring the file to rough parity.

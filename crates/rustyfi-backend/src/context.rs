@@ -188,6 +188,19 @@ pub struct Context {
     pub space_natural: f64,
     pub space_shrink: f64,
     pub space_stretch: f64,
+    /// `set-adjacent-stretch` (v0.0.6 `context_main.adjacent_stretch`) — the
+    /// stretch, as a ratio of `font_size`, of the glue SATySFi puts between
+    /// two DIRECTLY ADJACENT CJK characters (`convertText.ml:101`
+    /// `adjacent_space`: natural 0, shrink 0, stretch `font_size * ratio`).
+    ///
+    /// This is what lets a Japanese line fill its column: unspaced CJK has no
+    /// interword glue, so without it a CJK line's only elasticity is whatever
+    /// incidental Latin spaces it happens to contain. The port modelled CJK as
+    /// rigid before this field existed, which left the line breaker unable to
+    /// justify — or to accept an otherwise-fine break that needed a hair of
+    /// give (see `linebreak.rs`'s badness rescue, which existed to paper over
+    /// exactly this).
+    pub adjacent_stretch: f64,
     /// The installed `[math] inline-cmd` applied to bare `${…}` in inline
     /// text (v0.0.6 `context_main.math_command`). `None` only for contexts
     /// built by `Context::initial` directly (unit tests) — the
@@ -263,17 +276,25 @@ impl Context {
             // v0.0.6's `get_pdf_mode_initial_context` (primitives.cppo.ml):
             // `text_color = DeviceGray 0.`, `hyphen_badness = 100`,
             // `space_natural = 0.33`, `space_shrink = 0.08`,
-            // `space_stretch = 0.16`.
+            // `space_stretch = 0.16`, `adjacent_stretch = 0.025`.
             text_color: Color::Gray(0.0),
             hyphen_badness: 100,
-            // D4: hyphenation is opt-in (byte-identity gate) — upstream
-            // installs English by default, this port does not.
-            hyphen_dictionary: None,
+            // Upstream loads `dist/hyph/english.satysfi-hyph` into
+            // `default_hyphen_dictionary` at startup and hands it to EVERY
+            // initial context (`primitives.cppo.ml:500,607`), so English
+            // hyphenation is on by default there. The port used to default to
+            // `None` — opt-in, to hold a byte-identity gate (D4) that the
+            // fidelity work has long since superseded — which left long English
+            // words unbreakable: a `+code` block set `… Vestibulum lobortis` and
+            // ran wide where SATySFi sets `… Vestibu-` / `lum lobortis`.
+            hyphen_dictionary: Some(HyphenLang::EnglishUS),
             left_hyphen_min: 3,
             right_hyphen_min: 2,
             space_natural: 0.33,
             space_shrink: 0.08,
             space_stretch: 0.16,
+            // `convertText.ml:103` — inter-CJK glue stretch ratio.
+            adjacent_stretch: 0.025,
             math_command: None,
             math_char_class: MathCharClass::Italic,
             math_class_map: Arc::new(default_math_class_map()),

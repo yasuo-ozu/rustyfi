@@ -450,20 +450,42 @@ fn badness(width: Length, metrics: &LineMetrics) -> f64 {
             // so an over-stretched one is a genuine `LBTooShort` and still drops
             // — keeping Latin justification, narrow-column footnotes, and the
             // `kp_*` tests unchanged.
-            if metrics.cjk_natural.0 > 0.0 {
-                return no_stretch_badness(slack, width);
-            }
+            // (Historical: a rescue here scored any CJK-bearing line by its
+            // ABSOLUTE underfullness instead of dropping it, because the port
+            // modelled CJK as rigid — such a line had no stretch of its own, so
+            // `LBTooShort` fired for a benign reason and the DP preferred a
+            // drastically SHORT line over a near-full one. CJK now carries real
+            // `adjacent_space` glue (`primitives.rs`'s `text_to_boxes`), so the
+            // premise is gone: a CJK line beyond the stretch limit is genuinely
+            // too loose and drops, exactly as SATySFi's `LBTooShort` does.
+            // Keeping the rescue with real glue actively hurt — it let the DP
+            // take badly underfull lines cheaply, and `layout_line` then
+            // stretched them to justify, opening ~2pt gaps between adjacent CJK
+            // characters where SATySFi has none.)
             return BADNESS_DROPPED;
         }
-        // No elastic capacity at all: score by how underfull the line is.
-        no_stretch_badness(slack, width)
+        // No elastic capacity at all. Upstream's `calculate_ratios` divides the
+        // shortfall by a zero stretch, so the ratio is infinite — always past
+        // `ratio_stretch_limit`, i.e. `LBTooShort`, which gets NO graph edge
+        // (`lineBreak.ml:1014`). Drop it here too.
+        //
+        // A rigid line is NOT normally a problem: the `+code` idiom ends each
+        // line with `inline-fil`, and `has_fil` above already scores those 0.
+        // What this fixes is the line with neither fil NOR glue — scoring it by
+        // absolute underfullness capped at `BADNESS_TOO_LONG` made a
+        // DRASTICALLY short rigid line CHEAPER than a slightly overfull one, so
+        // the breaker took a 108pt line on a 440pt column (badness 42_961)
+        // rather than the near-perfect 434.76pt line sitting right there
+        // (badness 1_144) — latexcmds' `\SATySFi;は\LaTeX;の` line.
+        BADNESS_DROPPED
     } else {
         // Overfull: needs to shrink.
         if metrics.shrink.is_positive() {
             let ratio = slack / metrics.shrink;
             if ratio < RATIO_SHRINK_LIMIT {
-                // `LBTooLong` (lineBreak.ml:508): kept at `badness_for_too_long`.
-                BADNESS_TOO_LONG
+                // `LBTooLong` (lineBreak.ml:508), scaled by the overflow — see
+                // `too_long_badness` on why a flat cost is not survivable here.
+                too_long_badness(slack, width)
             } else {
                 (10000.0 * ratio.abs().powi(3)).min(BADNESS_TOO_LONG)
             }
@@ -476,7 +498,15 @@ fn badness(width: Length, metrics: &LineMetrics) -> f64 {
             // overflow — which let the DP cram extra words onto an already
             // overfull line and run text clean off the page edge (visible
             // clipping in latexcmds `+code`/`\code`). Force the wrap.
-            BADNESS_INF
+            //
+            // `BADNESS_TOO_LONG`, not `BADNESS_INF`: zero shrink means ANY
+            // overflow is past `ratio_shrink_limit`, which is upstream's
+            // `LBTooLong` — scored `badness_for_too_long = 100000`
+            // (`lineBreak.ml:989/1027`). `BADNESS_INF` is only 10_000, i.e.
+            // CHEAPER than a merely mediocre permissible line (ratio 1 scores
+            // 10_000), so it read as "mildly loose" rather than "off the page"
+            // and the DP happily overran the margin.
+            too_long_badness(slack, width)
         } else {
             // No breakable glue at all (unspaced CJK) AND overfull: SATySFi's
             // `ratio_shrink_limit = -1.0` (lineBreak.ml:508) excludes any line
@@ -485,43 +515,67 @@ fn badness(width: Length, metrics: &LineMetrics) -> f64 {
             // the char that doesn't fit. The port's continuous
             // `no_stretch_badness` scored a modest CJK overflow near-zero and
             // let the DP cram, packing CJK ~0.6 line/page fuller than SATySFi
-            // (easytable 18 vs 19). Force the earlier break.
-            BADNESS_INF
+            // (easytable 18 vs 19). Force the earlier break — at upstream's
+            // `LBTooLong` cost, see the sibling branch above on why
+            // `BADNESS_INF` is too cheap to mean "overfull".
+            too_long_badness(slack, width)
         }
     }
 }
 
-/// Badness for a line with *no* elastic capacity at all to absorb its
-/// shortfall/overflow — e.g. a run of zero-width discretionaries with no
-/// glue, exactly what unspaced CJK looks like (`is_break_point`'s doc). Two
-/// failure modes to avoid here, pulling in opposite directions:
-/// - A flat "infinitely bad" (as when some stretch/shrink exists but is
-///   exhausted) ties every such line at the same cost regardless of how
-///   under/overfull it actually is, so the DP's fewer-lines tiebreak
-///   perversely prefers cramming more onto one wildly overfull line over
-///   correctly splitting it — wrong for CJK (see
-///   `narrow_measure_wraps_cjk_at_ideograph_discretionaries`,
-///   tests/linebreak_uax14.rs).
-/// - Scoring it *too* cheaply (the same `100 * ratio^3` scale as a line
-///   that does have stretch/shrink) makes an isolated unbreakable word cost
-///   little enough that the DP prefers many single-word lines over the
-///   correctly-combined, real-glue-justified ones — wrong for Latin (see
-///   `wraps_at_glue` et al., tests/linebreak.rs).
-/// There's nothing to form a ratio against but the target width itself, so
-/// use that, but scaled 100x steeper (`BADNESS_INF * ratio^3`, vs. plain
-/// elastic badness's `100 * ratio^3`) before capping at the same
-/// `BADNESS_INF` ceiling: a `ratio` this small is a much bigger share of
-/// "everything you have" when nothing is elastic at all, so it should cost
-/// disproportionately more than the same ratio against real stretch/shrink.
-fn no_stretch_badness(slack: Length, width: Length) -> f64 {
-    let ratio = slack / width.max(Length::pt(1.0));
-    // Consistent with the elastic badness cap (`BADNESS_TOO_LONG = 100_000`):
-    // a rigid line with no elasticity must be able to cost MORE than any
-    // elastic line, not be capped cheaper at `BADNESS_INF` — otherwise the DP
-    // prefers cramming short rigid lines (over-breaking CJK) over correctly
-    // packing them. Scaled 100× steeper than the elastic `|r|³·10000`.
-    (BADNESS_TOO_LONG * ratio.abs().powi(3)).min(BADNESS_TOO_LONG)
+/// Whether a box puts anything on the page. Glue, kerns and the zero-width
+/// markers do not; everything else does.
+fn carries_ink(b: &PureHorzBox) -> bool {
+    !matches!(
+        b,
+        PureHorzBox::OuterEmpty { .. }
+            | PureHorzBox::OuterFil
+            | PureHorzBox::FixedEmpty { .. }
+            | PureHorzBox::FrameMarker { .. }
+            | PureHorzBox::HookPageBreak { .. }
+            | PureHorzBox::Discretionary { .. }
+    )
 }
+
+/// Whether a candidate line is upstream's `LBTooLong` — overfull past what its
+/// shrink can absorb (`calculate_ratios`, `lineBreak.ml:538-548`). Mirrors
+/// [`badness`]'s overfull branches; kept separate because the DP needs the
+/// CLASSIFICATION, not just the cost (see the one-overfull-edge rule there).
+fn is_too_long(width: Length, m: &LineMetrics) -> bool {
+    let slack = width - m.natural;
+    if slack.0 >= 0.0 {
+        return false;
+    }
+    if m.shrink.is_positive() {
+        (slack / m.shrink) < RATIO_SHRINK_LIMIT
+    } else {
+        true
+    }
+}
+
+/// Cost of an overfull line SATySFi would call `LBTooLong`.
+///
+/// Upstream scores these at a FLAT `badness_for_too_long = 100000`
+/// (`lineBreak.ml:989`) and gets away with it because of a structural rule this
+/// DP has no analogue for: from a given start point it adds only the FIRST
+/// too-long edge and then abandons that start entirely (`is_already_too_long` /
+/// `RemovalSet`, `lineBreak.ml:1017-1027`), so a longer overfull line from the
+/// same start is never even evaluated.
+///
+/// Scoring every overfull line the same flat cost here is catastrophic: a line
+/// 675pt past the margin costs exactly what one 4pt past costs, and since the
+/// DP prefers fewer lines (`LINE_PENALTY`, and the fewer-lines tiebreak), it
+/// swallowed an ENTIRE PARAGRAPH into one 1115pt line rather than pay for a
+/// second line — the whole of latexcmds' `もしどうしても…` paragraph ran off the
+/// page edge. Growing the cost with the overflow restores upstream's effective
+/// ordering (the least-overfull option wins) while keeping every line
+/// representable, and stays far below `BADNESS_DROPPED` so any feasible
+/// partition still beats any overfull one.
+fn too_long_badness(slack: Length, width: Length) -> f64 {
+    let overflow = -slack.0;
+    BADNESS_TOO_LONG * (1.0 + (overflow / width.0).max(0.0))
+}
+
 
 /// Fold a break's own penalty into its line's demerits, TeX's classic
 /// formula (TeXbook ch.14): a positive penalty discourages breaking there
@@ -598,6 +652,9 @@ pub fn break_into_lines(ctx: &Context, boxes: Vec<HorzBox>) -> Vec<VertBox> {
     // virtual start of the paragraph.
     let mut starts: Vec<usize> = vec![0];
     let mut ends: Vec<usize> = Vec::new();
+    // Index of the last box that actually marks the page (see the `g > last_ink`
+    // guard below).
+    let last_ink = pure.iter().rposition(carries_ink).unwrap_or(0);
     for g in 1..n {
         let is_disc = matches!(pure[g], PureHorzBox::Discretionary { .. });
         // A break candidate is the FIRST box of a run of break points
@@ -612,6 +669,15 @@ pub fn break_into_lines(ctx: &Context, boxes: Vec<HorzBox>) -> Vec<VertBox> {
         // the fil, leaving an underfull line the DP then declined to break —
         // merging code lines and shoving them off-page via the discretionary's
         // 2×width no-break skip (whole code blocks rendered a few lines).
+        // A break with NO INK after it is not a real alternative — it just
+        // moves the paragraph's trailing glue onto a blank line. The terminal
+        // break below already covers "end the paragraph here", so offering
+        // these as well let the breaker split `[word, fil]` into an overfull
+        // line PLUS an empty one once the one-overfull-edge rule (below) made
+        // the single-line option unreachable.
+        if g > last_ink {
+            continue;
+        }
         if (pure[g].is_break_point() && !pure[g - 1].is_break_point()) || is_disc {
             ends.push(g);
             starts.push(g + 1);
@@ -635,6 +701,24 @@ pub fn break_into_lines(ctx: &Context, boxes: Vec<HorzBox>) -> Vec<VertBox> {
     // this ratchets (it only ever advances to a `j` just computed above),
     // so no later `dp[j]` can get stuck at infinity.
     let mut floor: usize = 0;
+
+    // Upstream adds at most ONE `LBTooLong` edge per source node and then drops
+    // that node entirely (`is_already_too_long` / `RemovalSet`,
+    // `lineBreak.ml:1017-1027`). Because destinations are visited in order of
+    // increasing line width, the one edge it keeps is the LEAST overfull.
+    //
+    // That rule is structural, and no per-line COST can stand in for it: an
+    // overfull line is worth ~`BADNESS_TOO_LONG` whatever its overflow, so a
+    // partition with fewer overfull lines always wins, however badly each one
+    // overruns. latexcmds' `+code` block was set as 3 lines ending at 589.0 /
+    // 544.9 / 513.4 on a column ending at 515 — one line 74pt past the margin —
+    // where SATySFi takes 4 lines at 519.7 / 526.0 / 519.7, each only a few
+    // points over. Same for the paragraph that got swallowed into a single
+    // 1115pt line.
+    //
+    // `j` ascends, so the first overfull `(i, j)` we meet for a given start `i`
+    // is that start's least-overfull option; every later one is unreachable.
+    let mut spent_overfull: Vec<bool> = vec![false; m + 1];
 
     for j in 1..=m {
         let raw_end = ends[j - 1];
@@ -671,6 +755,12 @@ pub fn break_into_lines(ctx: &Context, boxes: Vec<HorzBox>) -> Vec<VertBox> {
                         metrics.natural += b.natural_width();
                     }
                 }
+            }
+            if is_too_long(width, &metrics) {
+                if spent_overfull[i] {
+                    continue; // this start already used its single overfull edge
+                }
+                spent_overfull[i] = true;
             }
             let b = badness(width, &metrics);
             let d = demerits(b, penalty);
@@ -711,9 +801,25 @@ pub fn break_into_lines(ctx: &Context, boxes: Vec<HorzBox>) -> Vec<VertBox> {
     line_ranges
         .into_iter()
         .enumerate()
-        .map(|(idx, (start, raw_end))| {
+        .flat_map(|(idx, (start, raw_end))| {
             let content = line_content(&pure, start, raw_end);
-            layout_line(ctx, content, width, idx + 1 == line_count)
+            // `LBEmbeddedVertBreakable` (`lineBreak.ml:809-818`): a breakable
+            // embedded block is NOT laid out as a line. Upstream flushes the
+            // line accumulated so far, splices the block's own vertical boxes
+            // into the vertical list as `AlreadyVert`, then starts fresh — the
+            // block's vertical extent IS the gap, with no line leading of its
+            // own. `prim_embed_block_breakable` fences each such block between
+            // forced breaks, so it always lands alone on its own "line" here,
+            // which is exactly the segment to splice.
+            //
+            // Wrapping it in a `layout_line` instead gave it a full leading on
+            // top of its own height: latexcmds' `\linebreak` (whose block is a
+            // `block-skip` of `leading - font_size`) then advanced 36.0pt where
+            // SATySFi advances ~15.5pt — double-spacing every hard-broken line.
+            if let Some(block) = sole_breakable_block(&content) {
+                return block;
+            }
+            vec![layout_line(ctx, content, width, idx + 1 == line_count)]
         })
         .collect()
 }
@@ -798,6 +904,35 @@ fn line_content(pure: &[PureHorzBox], start: usize, raw_end: usize) -> Vec<PureH
         }
     }
     out
+}
+
+/// The inner vertical boxes of a line that holds NOTHING but one breakable
+/// embedded block (plus inert zero-width markers and glue), or `None`.
+/// See its caller in [`break_into_lines`].
+fn sole_breakable_block(content: &[PureHorzBox]) -> Option<Vec<VertBox>> {
+    let mut found: Option<&Vec<VertBox>> = None;
+    for bx in content {
+        match bx {
+            PureHorzBox::EmbeddedBlock {
+                block,
+                breakable: true,
+                ..
+            } => {
+                if found.is_some() {
+                    return None; // two blocks: lay the line out normally
+                }
+                found = Some(block);
+            }
+            // Inert: carries no ink and no width of its own.
+            PureHorzBox::FrameMarker { .. }
+            | PureHorzBox::HookPageBreak { .. }
+            | PureHorzBox::OuterEmpty { .. }
+            | PureHorzBox::OuterFil
+            | PureHorzBox::FixedEmpty { .. } => {}
+            _ => return None,
+        }
+    }
+    found.cloned()
 }
 
 /// Assign x offsets, justifying interior lines by distributing slack into

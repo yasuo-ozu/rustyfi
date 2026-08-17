@@ -147,6 +147,7 @@ fn a_frame_with_a_fill_deco_puts_one_element_in_page_graphics() {
         contents: Vec::new(),
     };
     let page = Page {
+            body_lines: usize::MAX,
         lines: vec![PlacedLine {
             x: Length::pt(50.0),
             baseline_y: Length::pt(100.0),
@@ -176,6 +177,7 @@ fn a_frame_deco_calling_register_link_to_uri_lands_an_annot_with_the_frames_rect
         contents: Vec::new(),
     };
     let page = Page {
+            body_lines: usize::MAX,
         lines: vec![PlacedLine {
             x: Length::pt(50.0),
             baseline_y: Length::pt(100.0),
@@ -222,6 +224,7 @@ fn a_nested_frame_fires_with_its_parents_x_plus_its_own_dx() {
         contents: vec![(Length::pt(5.0), inner_frame)],
     };
     let page = Page {
+            body_lines: usize::MAX,
         lines: vec![PlacedLine {
             x: Length::pt(100.0),
             baseline_y: Length::pt(50.0),
@@ -245,7 +248,8 @@ fn a_nested_frame_fires_with_its_parents_x_plus_its_own_dx() {
 // ============================================================================
 
 fn block_page(lines: Vec<PlacedLine>) -> Page {
-    Page { lines }
+    Page {
+            body_lines: usize::MAX, lines }
 }
 
 #[test]

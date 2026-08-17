@@ -42,6 +42,7 @@ fn page_with_graphics_box() -> Page {
         origin_independent: false,
     };
     Page {
+            body_lines: usize::MAX,
         lines: vec![PlacedLine {
             x: Length::pt(50.0),
             baseline_y: Length::pt(100.0),
@@ -118,6 +119,7 @@ fn render_elems(elems: Vec<GraphicsElem>) -> String {
         origin_independent: false,
     };
     let page = Page {
+            body_lines: usize::MAX,
         lines: vec![PlacedLine {
             x: Length::pt(50.0),
             baseline_y: Length::pt(100.0),

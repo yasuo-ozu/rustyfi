@@ -125,6 +125,28 @@ fn compile_v01(fixture: &Path, work: &Path, fmt: &str, out_ext: &str) -> PathBuf
     out
 }
 
+/// The page's rendered TEXT: tags stripped and whitespace dropped.
+///
+/// A word is not one `<span>`. Hyphenation is on by default (upstream loads
+/// `english.satysfi-hyph` into every initial context), and UAX#14 break
+/// opportunities apply to ASCII, so a word reaches the HTML split across
+/// several adjacent elements on separate source lines. Assertions about what
+/// the page SAYS must look at the text; assertions about how it is MARKED UP
+/// still read `html` directly.
+fn rendered_text(html: &str) -> String {
+    let mut out = String::new();
+    let mut depth = 0usize;
+    for ch in html.chars() {
+        match ch {
+            '<' => depth += 1,
+            '>' => depth = depth.saturating_sub(1),
+            c if depth == 0 && !c.is_whitespace() => out.push(c),
+            _ => {}
+        }
+    }
+    out
+}
+
 /// `--format html-reflow` writes real flowing `<p>` paragraphs (one per
 /// `+p`), in reading order, with their text HTML-escaped-but-intact — and,
 /// the defining difference from the faithful `--format html` twin, NO
@@ -152,18 +174,25 @@ fn format_html_reflow_writes_flowing_paragraphs_in_reading_order() {
     // `tests/format_html.rs`), so this checks each word individually rather
     // than a contiguous sentence substring — the words are still adjacent
     // in the flowing text, just each in its own `<span>`.
+    // Checked against the TEXT, with tags stripped, not against raw markup: a
+    // word is not one `InnerString` in general. An explicit ASCII hyphen is a
+    // UAX#14 break opportunity (`text_to_boxes`), so `let-inline.` is carried as
+    // the two fragments `let-` and `inline.` either side of a zero-width
+    // discretionary — adjacent in the flowing text and rendered identically,
+    // but two `<span>`s in the markup.
+    let text = rendered_text(&html);
     for word in ["Bracketed", "text", "via", "let-inline."] {
-        assert!(html.contains(word), "missing word {word:?} from the first paragraph:\n{html}");
+        assert!(text.contains(word), "missing word {word:?} from the first paragraph:\n{html}");
     }
     for word in ["Announced", "lightweight", "let-inline", "form."] {
-        assert!(html.contains(word), "missing word {word:?} from the second paragraph:\n{html}");
+        assert!(text.contains(word), "missing word {word:?} from the second paragraph:\n{html}");
     }
     for word in ["Countdown", "complete."] {
-        assert!(html.contains(word), "missing word {word:?} from the third paragraph:\n{html}");
+        assert!(text.contains(word), "missing word {word:?} from the third paragraph:\n{html}");
     }
-    let pos_bracket = html.find("Bracketed").expect("missing first paragraph's text");
-    let pos_announce = html.find("Announced").expect("missing second paragraph's text");
-    let pos_chosen = html.find("Countdown").expect("missing third paragraph's (match-computed) text");
+    let pos_bracket = text.find("Bracketed").expect("missing first paragraph's text");
+    let pos_announce = text.find("Announced").expect("missing second paragraph's text");
+    let pos_chosen = text.find("Countdown").expect("missing third paragraph's (match-computed) text");
     assert!(
         pos_bracket < pos_announce && pos_announce < pos_chosen,
         "paragraphs are out of reading order:\n{html}"
@@ -200,7 +229,7 @@ fn format_html_faithful_mode_is_unaffected_by_the_new_reflow_format() {
     let html = std::fs::read_to_string(&out).expect("--format html must write the output file");
     assert!(html.starts_with("<!doctype html>"), "missing doctype:\n{html}");
     assert!(html.contains("<div class=\"page\""), "missing page div:\n{html}");
-    assert!(html.contains("Bracketed"), "missing expected fixture text:\n{html}");
+    assert!(rendered_text(&html).contains("Bracketed"), "missing expected fixture text:\n{html}");
     // The faithful mode's own defining trait, unchanged: every run IS
     // absolutely positioned.
     assert!(html.contains("position: absolute"), "faithful mode must still be absolutely positioned:\n{html}");
@@ -261,11 +290,12 @@ fn format_html_reflow_renders_nested_lists_and_emphasis_for_itemize() {
     // distinctive enough not to collide with the stylesheet's own CSS
     // vocabulary (unlike, say, "top", which trivially substring-matches
     // `margin-top:`/`border-top:` everywhere).
+    let text = rendered_text(&html);
     for word in ["nested", "item", "first", "entry", "second"] {
-        assert!(html.contains(word), "missing item word {word:?}:\n{html}");
+        assert!(text.contains(word), "missing item word {word:?}:\n{html}");
     }
     assert_eq!(
-        html.matches("item").count(),
+        text.matches("item").count(),
         2,
         "expected \"item\" exactly twice (the top item + the nested item):\n{html}"
     );
@@ -273,7 +303,7 @@ fn format_html_reflow_renders_nested_lists_and_emphasis_for_itemize() {
     // `\V01Mini.emph{emphasized}` -> a real `<em>`, never `<strong>`.
     assert!(html.contains("<em>") && html.contains("</em>"), "missing <em>:\n{html}");
     assert!(!html.contains("<strong>"), "must not render <strong> for \\emph:\n{html}");
-    assert!(html.contains("emphasized"), "missing emphasized text:\n{html}");
+    assert!(text.contains("emphasized"), "missing emphasized text:\n{html}");
 
     // The drawn bullet/number glyph run itself (`enumerate`'s arabic
     // numeral, `Itemize.listing`'s circle) must not leak in as its own

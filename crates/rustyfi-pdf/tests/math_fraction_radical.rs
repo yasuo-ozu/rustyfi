@@ -378,6 +378,7 @@ fn radical_fallback_with_base14_is_real_and_deterministic() {
 
 fn page_for(bx: PureHorzBox, geometry: &PageGeometry) -> Page {
     Page {
+            body_lines: usize::MAX,
         lines: vec![PlacedLine {
             x: geometry.text_origin.0,
             baseline_y: geometry.text_origin.1 + Length::pt(40.0),

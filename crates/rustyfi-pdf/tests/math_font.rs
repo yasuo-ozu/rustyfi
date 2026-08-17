@@ -294,7 +294,8 @@ fn styled_math_renders_through_cid_pipeline() {
             },
         )],
     };
-    let page = Page { lines: vec![line] };
+    let page = Page {
+            body_lines: usize::MAX, lines: vec![line] };
 
     let pdf_bytes = render_pdf_ttf(&geometry, &[page], &store, &[]).expect("render");
 

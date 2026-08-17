@@ -14,7 +14,8 @@ LINE 0 x=72.000 baseline_y=108.616
   dx=96.576 OuterFil
 LINE 1 x=72.000 baseline_y=138.100
   dx=0.000 InlineMark kind=EmphStart { strong: false }
-  dx=0.000 InnerString font=2 size=12.000 rising=0.000 w=52.680 h=8.616 d=2.484 text="Emphasis"
+  dx=0.000 InnerString font=2 size=12.000 rising=0.000 w=38.016 h=8.616 d=2.484 text="Empha"
+  dx=38.016 InnerString font=2 size=12.000 rising=0.000 w=14.664 h=8.616 d=2.484 text="sis"
   dx=52.680 InlineMark kind=EmphEnd
   dx=52.680 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
   dx=56.640 InnerString font=0 size=12.000 rising=0.000 w=34.668 h=8.616 d=2.484 text="works."
@@ -28,7 +29,8 @@ LINE 2 x=72.000 baseline_y=167.584
   dx=75.288 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
   dx=79.248 InnerString font=0 size=12.000 rising=0.000 w=13.344 h=8.616 d=2.484 text="42"
   dx=92.592 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
-  dx=96.552 InnerString font=0 size=12.000 rising=0.000 w=29.340 h=8.616 d=2.484 text="parity"
+  dx=96.552 InnerString font=0 size=12.000 rising=0.000 w=17.340 h=8.616 d=2.484 text="par"
+  dx=113.892 InnerString font=0 size=12.000 rising=0.000 w=12.000 h=8.616 d=2.484 text="ity"
   dx=125.892 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
   dx=129.852 InnerString font=0 size=12.000 rising=0.000 w=26.016 h=8.616 d=2.484 text="even"
   dx=155.868 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920

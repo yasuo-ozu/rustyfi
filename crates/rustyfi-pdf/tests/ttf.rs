@@ -138,6 +138,7 @@ fn render_pdf_ttf_produces_a_pdf_with_embedded_font() {
 
     let ascii_line = build_line(&store, &geometry, "Hello World", FontKey(0));
     let page = Page {
+            body_lines: usize::MAX,
         lines: vec![ascii_line],
     };
 
@@ -171,6 +172,7 @@ fn subsetted_base_font_carries_a_subset_tag() {
     let store = TtfFontStore::load(&path, None, None).expect("load font");
     let geometry = PageGeometry::default();
     let page = Page {
+            body_lines: usize::MAX,
         lines: vec![build_line(&store, &geometry, "Hi", FontKey(0))],
     };
     let pdf_bytes = render_pdf_ttf(&geometry, &[page], &store, &[]).expect("render");
@@ -198,6 +200,7 @@ fn subsetting_is_reproducible_across_reruns() {
     let store = TtfFontStore::load(&path, None, None).expect("load font");
     let geometry = PageGeometry::default();
     let page = || Page {
+            body_lines: usize::MAX,
         lines: vec![build_line(&store, &geometry, "Reproducible", FontKey(0))],
     };
     let a = render_pdf_ttf(&geometry, &[page()], &store, &[]).expect("render 1");
@@ -280,6 +283,7 @@ fn cff_face_embeds_as_fontfile3_cidfonttype0() {
     let probe_gid = face.glyph_index(c).expect("probe char has a gid").0;
     drop(face);
     let page = Page {
+            body_lines: usize::MAX,
         lines: vec![build_line(&store, &geometry, &c.to_string(), FontKey(0))],
     };
 
@@ -459,6 +463,7 @@ fn cff_face_multi_glyph_text_roundtrips_through_pdftotext() {
     drop(face);
 
     let page = Page {
+            body_lines: usize::MAX,
         lines: vec![build_line(&store, &geometry, &text, FontKey(0))],
     };
     let pdf_bytes = render_pdf_ttf(&geometry, &[page], &store, &[])
@@ -534,6 +539,7 @@ fn lmsans_bundled_font_embeds_as_fontfile3_cidfonttype0() {
     let geometry = PageGeometry::default();
     let text = "Latin Modern Sans";
     let page = Page {
+            body_lines: usize::MAX,
         lines: vec![build_line(&store, &geometry, text, FontKey(0))],
     };
     let pdf_bytes = render_pdf_ttf(&geometry, &[page], &store, &[])
@@ -645,7 +651,8 @@ fn math_variant_gid_survives_subsetting() {
             },
         )],
     };
-    let page = Page { lines: vec![line] };
+    let page = Page {
+            body_lines: usize::MAX, lines: vec![line] };
 
     let pdf_bytes = render_pdf_ttf(&geometry, &[page], &store, &[]).expect(
         "a raw MATH-variant gid must render through the (now subsetting) CID pipeline",
@@ -700,6 +707,7 @@ fn qpdf_check_accepts_a_subsetted_pdf() {
     let store = TtfFontStore::load(&path, None, None).expect("load font");
     let geometry = PageGeometry::default();
     let page = Page {
+            body_lines: usize::MAX,
         lines: vec![build_line(&store, &geometry, "Hello World", FontKey(0))],
     };
     let pdf_bytes = render_pdf_ttf(&geometry, &[page], &store, &[]).expect("render");
@@ -740,6 +748,7 @@ fn to_unicode_roundtrips_through_pdftotext() {
     // Stack the second line below the first so they don't overlap.
     line2.baseline_y = line1.baseline_y + Length::pt(24.0);
     let page = Page {
+            body_lines: usize::MAX,
         lines: vec![line1, line2],
     };
 

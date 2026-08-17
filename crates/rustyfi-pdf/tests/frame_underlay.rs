@@ -35,6 +35,7 @@ fn triangle_path() -> Path {
 
 fn page_with_text() -> Page {
     Page {
+            body_lines: usize::MAX,
         lines: vec![PlacedLine {
             x: Length::pt(50.0),
             baseline_y: Length::pt(100.0),

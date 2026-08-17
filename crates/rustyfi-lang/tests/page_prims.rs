@@ -267,7 +267,8 @@ fn hook_page_break_block_fires_through_chop_page_and_fire_hooks() {
 
     let doc = DocumentValue {
         geometry: PageGeometry::default(),
-        pages: vec![Page { lines }],
+        pages: vec![Page {
+            body_lines: usize::MAX, lines }],
         images: Vec::new(),
         extras: Default::default(),
         reflow_source: None,

@@ -3,7 +3,8 @@ GEOMETRY paper=595.276x841.890 text_origin=(0.000,0.000) text_size=595.276x841.8
 PAGES 1
 -- page 0 lines=5 --
 LINE 0 x=72.000 baseline_y=108.616
-  dx=0.000 InnerString font=0 size=12.000 rising=0.000 w=30.672 h=8.616 d=2.484 text="Hello,"
+  dx=0.000 InnerString font=0 size=12.000 rising=0.000 w=18.000 h=8.616 d=2.484 text="Hel"
+  dx=18.000 InnerString font=0 size=12.000 rising=0.000 w=12.672 h=8.616 d=2.484 text="lo,"
   dx=30.672 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
   dx=34.632 InnerString font=0 size=12.000 rising=0.000 w=32.004 h=8.616 d=2.484 text="world!"
   dx=66.636 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
@@ -11,65 +12,80 @@ LINE 0 x=72.000 baseline_y=108.616
   dx=93.264 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
   dx=97.224 InnerString font=0 size=12.000 rising=0.000 w=8.664 h=8.616 d=2.484 text="is"
   dx=105.888 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
-  dx=109.848 InnerString font=2 size=12.000 rising=0.000 w=89.340 h=8.616 d=2.484 text="SATySFi-in-Rust"
+  dx=109.848 InnerString font=2 size=12.000 rising=0.000 w=37.344 h=8.616 d=2.484 text="SATyS"
+  dx=147.192 InnerString font=2 size=12.000 rising=0.000 w=13.992 h=8.616 d=2.484 text="Fi-"
+  dx=161.184 InnerString font=2 size=12.000 rising=0.000 w=13.332 h=8.616 d=2.484 text="in-"
+  dx=174.516 InnerString font=2 size=12.000 rising=0.000 w=24.672 h=8.616 d=2.484 text="Rust"
   dx=199.188 InnerString font=0 size=12.000 rising=0.000 w=3.336 h=8.616 d=2.484 text="."
   dx=202.524 OuterFil
 LINE 1 x=72.000 baseline_y=138.100
   dx=0.000 InnerString font=0 size=12.000 rising=0.000 w=8.004 h=8.616 d=2.484 text="A"
   dx=8.004 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
-  dx=14.100 InnerString font=0 size=12.000 rising=0.000 w=38.688 h=8.616 d=2.484 text="second"
-  dx=52.788 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
-  dx=58.883 InnerString font=0 size=12.000 rising=0.000 w=54.696 h=8.616 d=2.484 text="paragraph"
-  dx=113.579 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
-  dx=119.675 InnerString font=0 size=12.000 rising=0.000 w=22.680 h=8.616 d=2.484 text="long"
-  dx=142.355 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
-  dx=148.451 InnerString font=0 size=12.000 rising=0.000 w=40.032 h=8.616 d=2.484 text="enough"
-  dx=188.483 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
-  dx=194.578 InnerString font=0 size=12.000 rising=0.000 w=20.016 h=8.616 d=2.484 text="that"
-  dx=214.594 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
-  dx=220.690 InnerString font=0 size=12.000 rising=0.000 w=36.684 h=8.616 d=2.484 text="greedy"
-  dx=257.374 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
-  dx=263.470 InnerString font=0 size=12.000 rising=0.000 w=18.672 h=8.616 d=2.484 text="line"
-  dx=282.142 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
-  dx=288.237 InnerString font=0 size=12.000 rising=0.000 w=46.020 h=8.616 d=2.484 text="breaking"
-  dx=334.257 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
-  dx=340.353 InnerString font=0 size=12.000 rising=0.000 w=26.004 h=8.616 d=2.484 text="must"
-  dx=366.357 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
-  dx=372.453 InnerString font=0 size=12.000 rising=0.000 w=26.004 h=8.616 d=2.484 text="wrap"
-  dx=398.457 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
-  dx=404.552 InnerString font=0 size=12.000 rising=0.000 w=6.000 h=8.616 d=2.484 text="it"
-  dx=410.552 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
-  dx=416.648 InnerString font=0 size=12.000 rising=0.000 w=23.352 h=8.616 d=2.484 text="onto"
+  dx=11.887 InnerString font=0 size=12.000 rising=0.000 w=18.672 h=8.616 d=2.484 text="sec"
+  dx=30.559 InnerString font=0 size=12.000 rising=0.000 w=20.016 h=8.616 d=2.484 text="ond"
+  dx=50.575 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
+  dx=54.458 InnerString font=0 size=12.000 rising=0.000 w=24.012 h=8.616 d=2.484 text="para"
+  dx=78.470 InnerString font=0 size=12.000 rising=0.000 w=30.684 h=8.616 d=2.484 text="graph"
+  dx=109.154 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
+  dx=113.037 InnerString font=0 size=12.000 rising=0.000 w=22.680 h=8.616 d=2.484 text="long"
+  dx=135.717 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
+  dx=139.600 InnerString font=0 size=12.000 rising=0.000 w=40.032 h=8.616 d=2.484 text="enough"
+  dx=179.632 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
+  dx=183.515 InnerString font=0 size=12.000 rising=0.000 w=20.016 h=8.616 d=2.484 text="that"
+  dx=203.531 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
+  dx=207.414 InnerString font=0 size=12.000 rising=0.000 w=36.684 h=8.616 d=2.484 text="greedy"
+  dx=244.098 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
+  dx=247.982 InnerString font=0 size=12.000 rising=0.000 w=18.672 h=8.616 d=2.484 text="line"
+  dx=266.654 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
+  dx=270.537 InnerString font=0 size=12.000 rising=0.000 w=30.012 h=8.616 d=2.484 text="break"
+  dx=300.549 InnerString font=0 size=12.000 rising=0.000 w=16.008 h=8.616 d=2.484 text="ing"
+  dx=316.557 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
+  dx=320.440 InnerString font=0 size=12.000 rising=0.000 w=26.004 h=8.616 d=2.484 text="must"
+  dx=346.444 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
+  dx=350.327 InnerString font=0 size=12.000 rising=0.000 w=26.004 h=8.616 d=2.484 text="wrap"
+  dx=376.331 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
+  dx=380.214 InnerString font=0 size=12.000 rising=0.000 w=6.000 h=8.616 d=2.484 text="it"
+  dx=386.214 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
+  dx=390.097 InnerString font=0 size=12.000 rising=0.000 w=23.352 h=8.616 d=2.484 text="onto"
+  dx=413.449 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
+  dx=417.332 InnerString font=0 size=12.000 rising=0.000 w=18.672 h=8.616 d=2.484 text="sev"
+  dx=436.004 InnerString font=0 size=12.000 rising=0.000 w=3.996 h=8.616 d=2.484 text="-"
 LINE 2 x=72.000 baseline_y=156.100
-  dx=0.000 InnerString font=0 size=12.000 rising=0.000 w=38.676 h=8.616 d=2.484 text="several"
-  dx=38.676 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
-  dx=42.043 InnerString font=0 size=12.000 rising=0.000 w=24.672 h=8.616 d=2.484 text="lines"
-  dx=66.715 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
-  dx=70.081 InnerString font=0 size=12.000 rising=0.000 w=10.008 h=8.616 d=2.484 text="to"
-  dx=80.089 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
-  dx=83.456 InnerString font=0 size=12.000 rising=0.000 w=30.012 h=8.616 d=2.484 text="prove"
-  dx=113.468 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
-  dx=116.834 InnerString font=0 size=12.000 rising=0.000 w=20.016 h=8.616 d=2.484 text="that"
-  dx=136.850 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
-  dx=140.217 InnerString font=0 size=12.000 rising=0.000 w=16.680 h=8.616 d=2.484 text="the"
-  dx=156.897 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
-  dx=160.263 InnerString font=0 size=12.000 rising=0.000 w=19.344 h=8.616 d=2.484 text="box"
-  dx=179.607 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
-  dx=182.974 InnerString font=0 size=12.000 rising=0.000 w=36.012 h=8.616 d=2.484 text="model,"
-  dx=218.986 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
-  dx=222.353 InnerString font=0 size=12.000 rising=0.000 w=16.680 h=8.616 d=2.484 text="the"
-  dx=239.033 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
-  dx=242.399 InnerString font=0 size=12.000 rising=0.000 w=22.680 h=8.616 d=2.484 text="glue"
-  dx=265.079 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
-  dx=268.446 InnerString font=0 size=12.000 rising=0.000 w=62.688 h=8.616 d=2.484 text="justification,"
-  dx=331.134 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
-  dx=334.500 InnerString font=0 size=12.000 rising=0.000 w=20.016 h=8.616 d=2.484 text="and"
-  dx=354.516 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
-  dx=357.883 InnerString font=0 size=12.000 rising=0.000 w=16.680 h=8.616 d=2.484 text="the"
-  dx=374.563 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
-  dx=377.929 InnerString font=0 size=12.000 rising=0.000 w=26.688 h=8.616 d=2.484 text="page"
-  dx=404.617 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
-  dx=407.984 InnerString font=0 size=12.000 rising=0.000 w=32.016 h=8.616 d=2.484 text="layout"
+  dx=0.000 InnerString font=0 size=12.000 rising=0.000 w=20.004 h=8.616 d=2.484 text="eral"
+  dx=20.004 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
+  dx=24.704 InnerString font=0 size=12.000 rising=0.000 w=24.672 h=8.616 d=2.484 text="lines"
+  dx=49.376 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
+  dx=54.077 InnerString font=0 size=12.000 rising=0.000 w=10.008 h=8.616 d=2.484 text="to"
+  dx=64.085 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
+  dx=68.785 InnerString font=0 size=12.000 rising=0.000 w=30.012 h=8.616 d=2.484 text="prove"
+  dx=98.797 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
+  dx=103.497 InnerString font=0 size=12.000 rising=0.000 w=20.016 h=8.616 d=2.484 text="that"
+  dx=123.513 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
+  dx=128.213 InnerString font=0 size=12.000 rising=0.000 w=16.680 h=8.616 d=2.484 text="the"
+  dx=144.893 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
+  dx=149.594 InnerString font=0 size=12.000 rising=0.000 w=19.344 h=8.616 d=2.484 text="box"
+  dx=168.938 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
+  dx=173.638 InnerString font=0 size=12.000 rising=0.000 w=23.340 h=8.616 d=2.484 text="mod"
+  dx=196.978 InnerString font=0 size=12.000 rising=0.000 w=12.672 h=8.616 d=2.484 text="el,"
+  dx=209.650 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
+  dx=214.350 InnerString font=0 size=12.000 rising=0.000 w=16.680 h=8.616 d=2.484 text="the"
+  dx=231.030 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
+  dx=235.731 InnerString font=0 size=12.000 rising=0.000 w=22.680 h=8.616 d=2.484 text="glue"
+  dx=258.411 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
+  dx=263.111 InnerString font=0 size=12.000 rising=0.000 w=15.336 h=8.616 d=2.484 text="jus"
+  dx=278.447 InnerString font=0 size=12.000 rising=0.000 w=6.000 h=8.616 d=2.484 text="ti"
+  dx=284.447 InnerString font=0 size=12.000 rising=0.000 w=6.000 h=8.616 d=2.484 text="fi"
+  dx=290.447 InnerString font=0 size=12.000 rising=0.000 w=12.672 h=8.616 d=2.484 text="ca"
+  dx=303.119 InnerString font=0 size=12.000 rising=0.000 w=22.680 h=8.616 d=2.484 text="tion,"
+  dx=325.799 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
+  dx=330.499 InnerString font=0 size=12.000 rising=0.000 w=20.016 h=8.616 d=2.484 text="and"
+  dx=350.515 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
+  dx=355.215 InnerString font=0 size=12.000 rising=0.000 w=16.680 h=8.616 d=2.484 text="the"
+  dx=371.895 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
+  dx=376.596 InnerString font=0 size=12.000 rising=0.000 w=26.688 h=8.616 d=2.484 text="page"
+  dx=403.284 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
+  dx=407.984 InnerString font=0 size=12.000 rising=0.000 w=15.336 h=8.616 d=2.484 text="lay"
+  dx=423.320 InnerString font=0 size=12.000 rising=0.000 w=16.680 h=8.616 d=2.484 text="out"
 LINE 3 x=72.000 baseline_y=174.100
   dx=0.000 InnerString font=0 size=12.000 rising=0.000 w=12.000 h=8.616 d=2.484 text="all"
   dx=12.000 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920

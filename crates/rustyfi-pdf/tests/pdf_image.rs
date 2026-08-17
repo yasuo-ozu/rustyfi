@@ -70,6 +70,7 @@ fn page_with_pdf_image_box() -> (Page, Vec<ImageResource>) {
         image: ImageId(0),
     };
     let page = Page {
+            body_lines: usize::MAX,
         lines: vec![PlacedLine {
             x: Length::pt(50.0),
             baseline_y: Length::pt(100.0),
@@ -225,6 +226,7 @@ fn text_only_document_emits_no_form_xobject() {
     // page with no Image box at all must emit neither Image nor Form
     // XObjects.
     let page = Page {
+            body_lines: usize::MAX,
         lines: vec![PlacedLine {
             x: Length::pt(50.0),
             baseline_y: Length::pt(100.0),

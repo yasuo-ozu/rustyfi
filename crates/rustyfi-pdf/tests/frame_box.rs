@@ -35,6 +35,7 @@ fn frame_content_renders_at_the_frames_placed_anchor_plus_its_own_offset() {
         contents: vec![(Length::pt(6.0), inner)],
     };
     let page = Page {
+            body_lines: usize::MAX,
         lines: vec![PlacedLine {
             x: Length::pt(50.0),
             baseline_y: Length::pt(100.0),
@@ -72,6 +73,7 @@ fn used_images_recurses_into_a_frames_contents() {
         contents: vec![(Length::ZERO, image_box)],
     };
     let page = Page {
+            body_lines: usize::MAX,
         lines: vec![PlacedLine {
             x: Length::pt(10.0),
             baseline_y: Length::pt(50.0),

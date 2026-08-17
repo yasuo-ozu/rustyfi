@@ -640,9 +640,14 @@ fn set_hyphenation_dictionary_is_real_but_set_unicode_char_database_is_still_a_n
         "get-initial-context",
         vec![Value::Length(Length::pt(100.0)), Value::Unit],
     ));
+    // Upstream loads `english.satysfi-hyph` into `default_hyphen_dictionary` at
+    // startup and gives it to every initial context (`primitives.cppo.ml:500,607`),
+    // so English is the default here too. (This asserted `None` while the port
+    // held hyphenation opt-in behind the D4 byte-identity gate.)
     assert_eq!(
-        ctx0.hyphen_dictionary, None,
-        "Context::initial must default to no hyphenation dictionary (D4/byte-identity gate)"
+        ctx0.hyphen_dictionary,
+        Some(rustyfi_backend::HyphenLang::EnglishUS),
+        "Context::initial must default to English, matching upstream"
     );
 
     // `set-hyphenation-dictionary` (S1, `docs/plans/design-hyphenation.md`)
@@ -660,7 +665,7 @@ fn set_hyphenation_dictionary_is_real_but_set_unicode_char_database_is_still_a_n
     assert_eq!(ctx1.hyphen_dictionary, Some(HyphenLang::EnglishUS));
     assert_eq!(
         Context {
-            hyphen_dictionary: None,
+            hyphen_dictionary: ctx0.hyphen_dictionary,
             ..ctx1.clone()
         },
         ctx0,

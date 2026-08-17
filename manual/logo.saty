@@ -5,11 +5,7 @@
 % document cannot be `@import:`ed, so the split only paid off while something
 % else imported it.
 %
-% Build (see the header of ./Satyristes):
-%   rustyfi-rust satyrographos install scripts/layout_fidelity_corpus/xpath \\
-%       --lib-root <lib-root>
-%   rustyfi-rust --lib-root <lib-root> --font-dir <lib-root> \\
-%       -o ../assets/logo/rustyfi-logo.pdf logo.saty
+% Build:  make -C manual logo      (see ./Makefile, and ./logo.md for the design)
 @require: color
 @require: math
 @require: list

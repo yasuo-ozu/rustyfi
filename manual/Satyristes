@@ -12,14 +12,11 @@
 ;;   rustyfi-rust manual/manual.saty -o manual/manual.pdf
 ;;   rustyfi-rust satyrographos install ./manual
 ;;
-;; `logo.saty` sits here for the same reason `manual.saty` does — it is built by
-;; the port's own binary against an INSTALLED package rather than a relative
-;; `@import:`, so it needs `xpath` in the lib-root first:
+;; `logo.saty` sits here for the same reason `manual.saty` does, and both are
+;; built by the Makefile beside them, which assembles the lib-root the logo
+;; needs (`xpath`, installed rather than relatively `@import:`ed):
 ;;
-;;   rustyfi-rust satyrographos install scripts/layout_fidelity_corpus/xpath \
-;;       --lib-root <lib-root>
-;;   rustyfi-rust --lib-root <lib-root> --font-dir <lib-root> \
-;;       -o assets/logo/rustyfi-logo.pdf manual/logo.saty
+;;   make -C manual
 
 (version "0.0.3")
 

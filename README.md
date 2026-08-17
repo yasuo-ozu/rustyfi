@@ -1,8 +1,8 @@
 # rustyfi-rust-converted
 
 A native Rust clone of [SATySFi](https://github.com/gfngfn/SATySFi) (reference:
-upstream **v0.0.6**), using the [syan2](../syan2) parser framework for the
-grammar.
+upstream **v0.0.6**), using the [syan](https://crates.io/crates/syan) parser
+framework for the grammar.
 
 ## Status: phases 1–4 core done; slices of 5/6; chimera CLI
 
@@ -90,15 +90,15 @@ crates/
   rustyfi/           chimera binary: rustyfi / satyrographos
 ```
 
-The `syan` parser framework is VENDORED as a git submodule at `vendor/syan2`
-(tracking `main`), not referenced from a sibling checkout: an external path
-dependency changes with no version bump to notice, which has silently broken
-this build before. Clone with `--recurse-submodules`, or run
-`git submodule update --init` afterwards.
+The grammar is built on the [`syan`](https://crates.io/crates/syan) parser
+framework, an ordinary crates.io dependency (`syan = "0.2.0"`). It spent a
+while as a vendored submodule, because the parser fixes this port needed were
+unreleased; 0.2.0 carries them, so a plain `cargo build` on a plain clone is
+all that is required — no submodule init, no sibling checkout.
 
 ## Testing & CI
 
-`cargo test --workspace` runs the unit/integration suite (315+ tests).
+`cargo test --workspace` runs the unit/integration suite (1587 tests).
 
 **Corpus regression** — `crates/rustyfi-syntax/tests/corpus.rs` runs the
 lexer and parser over the author's real-world SATySFi packages
@@ -120,11 +120,9 @@ $ RUSTYFI_CORPUS_DIR=../rustyfi-class-jlreq:../rustyfi-latexcmds:../rustyfi-xpat
 ```
 
 **GitHub Actions** (`.github/workflows/ci.yml`) runs the suite plus the corpus
-job (cloning the `rustyfi-*` packages). Because `syan` is a path dependency,
-CI checks out `yasuo-ozu/syan` (at `$SYAN_REF`, default `api-ergonomics`) into
-a sibling `syan2-ergo/`. **That branch must be pushed to `yasuo-ozu/syan`** for
-CI to compile; once it merges to syan's default branch, set `SYAN_REF` to
-`main`.
+job (cloning the `rustyfi-*` packages). It is a plain checkout — `syan` comes
+from crates.io, so there is no sibling repository to place and no ref to keep
+in sync.
 
 ## Performance
 

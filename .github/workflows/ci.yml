@@ -7,33 +7,14 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  # The `syan` parser framework is a **path dependency** (`../syan2-ergo/core`
-  # in the workspace Cargo.toml). CI checks out `yasuo-ozu/syan` at this ref
-  # into a sibling `syan2-ergo/` directory so the path resolves.
-  #
-  # PREREQUISITE: the ergonomics API this project consumes (span-carrying
-  # ParseError, #[derive(TokenLeaves)], the atom-generic Group family,
-  # IntoParseStream for Vec) currently lives on syan's `api-ergonomics`
-  # branch, which MUST be pushed to `yasuo-ozu/syan` for CI to compile.
-  # Once that work merges to syan's default branch, change this to `main`
-  # (and, if desired, repoint the Cargo.toml path back to `../syan2/core`).
-  SYAN_REF: api-ergonomics
 
 jobs:
   test:
     name: build · clippy · test
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout this project
+      - name: Checkout
         uses: actions/checkout@v4
-        with:
-          path: rustyfi-rust-converted
-      - name: Checkout syan (path dependency) as ../syan2-ergo
-        uses: actions/checkout@v4
-        with:
-          repository: yasuo-ozu/syan
-          ref: ${{ env.SYAN_REF }}
-          path: syan2-ergo
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -45,19 +26,14 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends poppler-utils
       - name: Cache
         uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: rustyfi-rust-converted
       # Formatting is not yet enforced (the codebase is hand-formatted, not
       # rustfmt-normalized); reported for visibility, does not fail the build.
       - name: Formatting (advisory)
         continue-on-error: true
-        working-directory: rustyfi-rust-converted
         run: cargo fmt --all --check
       - name: Clippy
-        working-directory: rustyfi-rust-converted
         run: cargo clippy --workspace --all-targets
       - name: Test
-        working-directory: rustyfi-rust-converted
         run: cargo test --workspace
 
   layout-fidelity:
@@ -69,26 +45,16 @@ jobs:
     # reference typesetter, poppler, and python3 all come from the pinned flake.
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout this project
+      - name: Checkout
         uses: actions/checkout@v4
-        with:
-          path: rustyfi-rust-converted
           # The corpus documents AND their upstream reference PDFs are vendored
           # under `scripts/layout_fidelity_corpus/`, so there is nothing to
           # check out beyond this repo (it used to need `submodules: recursive`
           # for the 11 docs-corpus/* submodules).
-      - name: Checkout syan (path dependency) as ../syan2-ergo
-        uses: actions/checkout@v4
-        with:
-          repository: yasuo-ozu/syan
-          ref: ${{ env.SYAN_REF }}
-          path: syan2-ergo
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
       - name: Cache
         uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: rustyfi-rust-converted
       # Install Nix + the flake's toolchain: the original SATySFi 0.0.11 (the
       # reference typesetter), poppler `pdftotext`, and python3. The layout
       # test's #[ignore]d body sees `satysfi` on PATH and generates the
@@ -101,29 +67,19 @@ jobs:
       # sha1-pinned fonts must be present (else the port falls back to base-14
       # and every Japanese run is unencodable).
       - name: Download fonts (scripts/download-fonts.sh)
-        working-directory: rustyfi-rust-converted
         run: sh scripts/download-fonts.sh
       # Run inside `nix develop` so satysfi / pdftotext / python3 come from the
       # pinned flake; cargo comes from the rustup toolchain on the inherited
       # PATH. The script self-skips (green) if a prerequisite is somehow absent.
       - name: Layout-fidelity test (vs original SATySFi)
-        working-directory: rustyfi-rust-converted
         run: nix develop --command cargo test -p rustyfi --test layout_fidelity -- --ignored --nocapture
 
   corpus:
     name: rustyfi-* corpus regression
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout this project
+      - name: Checkout
         uses: actions/checkout@v4
-        with:
-          path: rustyfi-rust-converted
-      - name: Checkout syan (path dependency) as ../syan2-ergo
-        uses: actions/checkout@v4
-        with:
-          repository: yasuo-ozu/syan
-          ref: ${{ env.SYAN_REF }}
-          path: syan2-ergo
       # The regression corpus: the author's real-world SATySFi packages. The
       # harness lexes/parses every .saty/.satyh/.satyg in these repos and
       # enforces "never panic" + a lex-coverage floor (see
@@ -148,10 +104,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
       - name: Cache
         uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: rustyfi-rust-converted
       - name: Run corpus regression
-        working-directory: rustyfi-rust-converted
         env:
           RUSTYFI_CORPUS_DIR: >-
             ${{ github.workspace }}/corpus/rustyfi-class-jlreq:${{ github.workspace }}/corpus/rustyfi-latexcmds:${{ github.workspace }}/corpus/rustyfi-xpath

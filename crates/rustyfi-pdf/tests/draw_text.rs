@@ -60,6 +60,7 @@ fn page_with_fill_then_text() -> Page {
             width: Length::pt(10.0),
             height: Length::pt(7.5),
             depth: Length::pt(2.5),
+            transform: None,
         },
     ];
     let gbox = PureHorzBox::Graphics {
@@ -156,6 +157,7 @@ fn base14_draw_text_on_an_empty_run_emits_no_text_operators() {
         width: Length::ZERO,
         height: Length::ZERO,
         depth: Length::ZERO,
+        transform: None,
     }];
     let gbox = PureHorzBox::Graphics {
         width: Length::ZERO,
@@ -243,6 +245,7 @@ fn cid_draw_text_run_survives_pdftotext_extraction() {
         width,
         height: ascender,
         depth: descender,
+        transform: None,
     }];
     let gbox = PureHorzBox::Graphics {
         width,
@@ -356,6 +359,7 @@ fn an_image_nested_inside_a_draw_text_run_gets_its_xobject_registered() {
         width: Length::pt(10.0),
         height: Length::pt(10.0),
         depth: Length::ZERO,
+        transform: None,
     }];
     let gbox = PureHorzBox::Graphics {
         width: Length::pt(10.0),

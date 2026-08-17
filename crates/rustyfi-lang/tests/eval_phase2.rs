@@ -6,9 +6,10 @@
 use std::rc::Rc;
 
 use rustyfi_backend::{Context, FontKey, FontMetrics, HorzBox, Length, PureHorzBox};
-use rustyfi_lang::ast::{Ast, IText, MatchArm, Pattern};
+use rustyfi_lang::ast::{Ast, MatchArm, Pattern};
+use rustyfi_lang::quoted::IText;
 use rustyfi_lang::eval::{self, match_pattern, EvalError};
-use rustyfi_lang::value::Value;
+use rustyfi_lang::value::{Env, Value};
 use rustyfi_lang::primitives;
 use rustyfi_syntax::Span;
 
@@ -230,10 +231,13 @@ fn match_pattern_cons_tail_is_rest_of_list() {
         Box::new(Pattern::Var("h".to_string())),
         Box::new(Pattern::Var("t".to_string())),
     );
+    // `match_pattern` binds POSITIONALLY now (Phase 4): slot 0 is `h`, slot 1
+    // is `t`, in the left-to-right order the pattern names them.
     let mut bindings = Vec::new();
     assert!(match_pattern(&pat, &value, &mut bindings));
-    let h = &bindings.iter().find(|(n, _)| n == "h").unwrap().1;
-    let t = &bindings.iter().find(|(n, _)| n == "t").unwrap().1;
+    assert_eq!(bindings.len(), 2);
+    let h = &bindings[0];
+    let t = &bindings[1];
     assert!(matches!(h, Value::Int(1)));
     let Value::List(tail) = t else {
         panic!("expected list")
@@ -616,23 +620,23 @@ fn itext_embed_splices_inline_text() {
     let base_env = primitives::base_env();
     let embedded_value = Value::InlineText {
         elems: inner_elems,
-        env: base_env.clone(),
+        env: Env::root(),
     };
-    let outer_env = base_env.child();
+    // `greeting` is a compile-time binding: `IText::embed` below compiles its
+    // reference against this environment (Phase 4 — the runtime frame chain
+    // holds no names).
+    let mut outer_env = base_env.child();
     outer_env.define("greeting", embedded_value);
 
     let elems = vec![
         IText::Text("hello ".to_string()),
-        IText::Embed {
-            expr: var("greeting"),
-            span: Span::default(),
-        },
+        IText::embed(&var("greeting"), &outer_env, Span::default()),
     ];
 
     let mono = Mono;
     let mut interp = eval::Interp::new(&mono);
     let ctx = Context::initial(Length::pt(400.0));
-    let boxes = primitives::read_inline(&mut interp, &ctx, &elems, &outer_env).unwrap();
+    let boxes = primitives::read_inline(&mut interp, &ctx, &elems, &Env::root()).unwrap();
 
     let words: Vec<&str> = boxes
         .iter()
@@ -644,10 +648,7 @@ fn itext_embed_splices_inline_text() {
     assert_eq!(words, vec!["hello", "world"]);
 
     // A non inline-text embed is a type error, not a panic.
-    let bad_elems = vec![IText::Embed {
-        expr: Ast::Int(1),
-        span: Span::default(),
-    }];
-    let err = primitives::read_inline(&mut interp, &ctx, &bad_elems, &outer_env).unwrap_err();
+    let bad_elems = vec![IText::embed(&Ast::Int(1), &outer_env, Span::default())];
+    let err = primitives::read_inline(&mut interp, &ctx, &bad_elems, &Env::root()).unwrap_err();
     assert!(err.to_string().contains("inline-text"));
 }

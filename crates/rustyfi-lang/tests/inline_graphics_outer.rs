@@ -85,7 +85,7 @@ fn rect_of_width_w_closure() -> Ast {
 
 #[test]
 fn inline_graphics_outer_resolves_to_a_graphics_box_with_the_lines_slack_width() {
-    let env = primitives::base_env();
+    let mut env = primitives::base_env();
     let mono = Mono;
     let mut interp = eval::Interp::new(&mono);
 

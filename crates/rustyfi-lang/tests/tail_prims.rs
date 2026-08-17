@@ -36,7 +36,8 @@ impl FontMetrics for Mono {
 fn typecheck_str(src: &str) -> Result<(), CompileError> {
     let file = rustyfi_syntax::parse_file(src)?;
     let env = primitives::base_env();
-    let scope = elaborate::Scope::new(env.names());
+    let store = rustyfi_lang::symbol::SymbolStore::new();
+    let scope = elaborate::Scope::new(&store, env.names());
     let program = elaborate::elaborate_program(&file, &scope)?;
     typecheck::typecheck(&program)?;
     Ok(())
@@ -59,12 +60,13 @@ fn assert_type_error(src: &str) {
 fn eval_str(src: &str) -> Value {
     let file = rustyfi_syntax::parse_file(src).expect("parse");
     let env = primitives::base_env();
-    let scope = elaborate::Scope::new(env.names());
+    let store = rustyfi_lang::symbol::SymbolStore::new();
+    let scope = elaborate::Scope::new(&store, env.names());
     let program = elaborate::elaborate_program(&file, &scope).expect("elaborate");
     typecheck::typecheck(&program).expect("typecheck");
     let mono = Mono;
     let mut interp = eval::Interp::new(&mono);
-    interp.eval(&env, &program.body).expect("eval")
+    interp.eval(&env, &rustyfi_lang::ast::debrand(&program.body, &store)).expect("eval")
 }
 
 // ============================================================================

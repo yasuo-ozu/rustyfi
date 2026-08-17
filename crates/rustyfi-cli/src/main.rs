@@ -115,6 +115,17 @@ fn cmd_compile(m: &ArgMatches) -> anyhow::Result<()> {
     // `mode` is moved into `LoadOptions`.
     let is_envelopes_mode = matches!(mode, rustyfi_loader::LoadMode::Envelopes { .. });
 
+    // `--timing` (or RUSTYFI_TIMING=1): coarse per-phase wall-clock breakdown to
+    // stderr, for profiling the load→compile→render pipeline without an external
+    // profiler. The flag propagates to the library phases (elaborate/typecheck/
+    // eval trials, which read RUSTYFI_TIMING) via the env var, and forces
+    // `--no-cache` below so every phase actually runs rather than a cache hit.
+    let timing = m.get_flag("timing") || std::env::var_os("RUSTYFI_TIMING").is_some();
+    if timing {
+        std::env::set_var("RUSTYFI_TIMING", "1");
+    }
+    let t_load = std::time::Instant::now();
+
     let program = rustyfi_loader::load(
         &input,
         &rustyfi_loader::LoadOptions {
@@ -124,6 +135,9 @@ fn cmd_compile(m: &ArgMatches) -> anyhow::Result<()> {
         },
     )
     .map_err(|e| anyhow::anyhow!("{e}"))?;
+    if timing {
+        eprintln!("TIMING load(lex+parse)   {:>8.1}ms", t_load.elapsed().as_secs_f64() * 1e3);
+    }
 
     // Text-rendering plan, Slice 1: resolve font configuration (flags >
     // --font-dir/$RUSTYFI_FONT_DIR > --lib-root) into a real TtfFontStore,
@@ -152,7 +166,7 @@ fn cmd_compile(m: &ArgMatches) -> anyhow::Result<()> {
     // digest — *before* the expensive compile+render, so a hit skips them
     // entirely and writes byte-for-byte the PDF an earlier miss rendered and
     // stored.
-    let cache = if m.get_flag("no_cache") {
+    let cache = if m.get_flag("no_cache") || timing {
         None
     } else {
         cache::Cache::open(m.get_one::<PathBuf>("cache_dir").cloned())
@@ -192,6 +206,7 @@ fn cmd_compile(m: &ArgMatches) -> anyhow::Result<()> {
         Some(store) => store,
         None => &base14,
     };
+    let t_compile = std::time::Instant::now();
     let doc = match version {
         rustyfi_syntax::RustyfiVersion::V0_1 => {
             // 0.1 libraries are modules, not prelude-concatenable flat
@@ -236,6 +251,14 @@ fn cmd_compile(m: &ArgMatches) -> anyhow::Result<()> {
     // `render_pdf_with` (`rustyfi_html`'s crate doc comment). Since survey
     // #6 the HTML backend lives in its own `rustyfi-html` crate (a peer of
     // `rustyfi-pdf`), not inside `rustyfi-pdf` itself.
+    if timing {
+        eprintln!(
+            "TIMING compile(elab+eval) {:>8.1}ms  ({} pages)",
+            t_compile.elapsed().as_secs_f64() * 1e3,
+            doc.pages.len()
+        );
+    }
+    let t_render = std::time::Instant::now();
     let bytes: Vec<u8> = match format {
         format::OutputFormat::Pdf => match &font_store {
             Some(store) => rustyfi_pdf::render_pdf_ttf_with(
@@ -302,6 +325,9 @@ fn cmd_compile(m: &ArgMatches) -> anyhow::Result<()> {
             .into_bytes(),
         },
     };
+    if timing {
+        eprintln!("TIMING render(pdf)        {:>8.1}ms", t_render.elapsed().as_secs_f64() * 1e3);
+    }
     std::fs::write(&output, &bytes)
         .with_context(|| format!("cannot write {}", output.display()))?;
 

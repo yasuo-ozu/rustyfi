@@ -122,6 +122,17 @@ fn compile_command(name: &'static str) -> Command {
                 .action(ArgAction::SetTrue),
         )
         .arg(
+            Arg::new("timing")
+                .long("timing")
+                .help(
+                    "Print a per-phase wall-clock breakdown to stderr \
+                     (load / elaborate / typecheck / eval trials / render), for \
+                     performance evaluation. Implies --no-cache so every phase \
+                     actually runs.",
+                )
+                .action(ArgAction::SetTrue),
+        )
+        .arg(
             Arg::new("cache_dir")
                 .long("cache-dir")
                 .value_name("DIR")

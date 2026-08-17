@@ -9,7 +9,8 @@ use rustyfi_lang::{elaborate, primitives, typecheck};
 fn warnings_for(src: &str) -> Vec<typecheck::MatchWarning> {
     let file = rustyfi_syntax::parse_file(src).unwrap_or_else(|e| panic!("parse {src:?}: {e}"));
     let env = primitives::base_env();
-    let scope = elaborate::Scope::new(env.names());
+    let store = rustyfi_lang::symbol::SymbolStore::new();
+    let scope = elaborate::Scope::new(&store, env.names());
     let program = elaborate::elaborate_program(&file, &scope)
         .unwrap_or_else(|e| panic!("elaborate {src:?}: {e}"));
     typecheck::typecheck_verbose(&program).unwrap_or_else(|e| panic!("typecheck {src:?}: {e}"))

@@ -41,7 +41,7 @@ fn none() -> Value {
 /// Apply a named primitive (looked up in `env`) to `args`, left to right.
 fn call(
     interp: &mut Interp,
-    env: &rustyfi_lang::value::Env,
+    env: &rustyfi_lang::value::BaseEnv,
     name: &str,
     args: Vec<Value>,
 ) -> Value {
@@ -58,7 +58,7 @@ fn call(
 
 fn try_call(
     interp: &mut Interp,
-    env: &rustyfi_lang::value::Env,
+    env: &rustyfi_lang::value::BaseEnv,
     name: &str,
     args: Vec<Value>,
 ) -> Result<Value, rustyfi_lang::eval::EvalError> {

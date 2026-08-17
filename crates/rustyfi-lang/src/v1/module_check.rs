@@ -154,7 +154,7 @@
 //! unchanged) — a `with type` there is an explicit reject
 //! ([`check_functor_applications`]), never silently unenforced.
 
-use crate::ast::Ast;
+use crate::ast::branded::Ast;
 use crate::elaborate::{Program, UserSynonymDecl, UserTypeDecl};
 use crate::types::{self, MonoType, PolyType};
 use crate::typecheck::{self, BindingView, Checker, MatchWarning, TypeError};
@@ -180,16 +180,16 @@ use std::collections::HashMap;
 /// `CompileError::Type(#[from])` covers them unchanged. Stamp-strips every
 /// outgoing error message (module doc comment, §2.6) — the one thing this
 /// wrapper adds over [`check_program_inner`].
-pub(crate) fn check_program(
+pub(crate) fn check_program<'s>(
     deps: &[&cst_v1::FileV1],
-    program: &Program,
+    program: &Program<'s>,
 ) -> Result<Vec<MatchWarning>, TypeError> {
     check_program_inner(deps, program).map_err(strip_stamps_error)
 }
 
-fn check_program_inner<'a>(
+fn check_program_inner<'s, 'a>(
     deps: &'a [&'a cst_v1::FileV1],
-    program: &Program,
+    program: &Program<'s>,
 ) -> Result<Vec<MatchWarning>, TypeError> {
     // Sub-slice 2d-3 §2.2/§2.1: the syntactic surface + named-signature
     // table, rebuilt from the SAME `deps` `v1/lower.rs` built its own copy
@@ -235,7 +235,7 @@ fn check_program_inner<'a>(
     )?;
 
     // ---- phase B: session setup with the external-reference rewrite ----
-    let mut ck = Checker::empty();
+    let mut ck = Checker::empty(program.store);
     ck.set_version(RustyfiVersion::V0_1);
     let rewritten = maybe_rewrite_program_types(program, &static_env)?;
     match &rewritten {
@@ -268,16 +268,22 @@ fn check_program_inner<'a>(
     phase_c_finish(&pending, &links, &mut ck, &mut mint, &mut static_env)?;
 
     // ---- phase D: the spine walk with interception ----
-    let mut env = typecheck::base_type_env_with_version(RustyfiVersion::V0_1);
-    let mut ast: &Ast = &program.body;
+    // The static-env tables (`seals`, `hidden`, `ctor_hide_triggers`, …) are
+    // keyed by member-name TEXT — they are built from signature declarations,
+    // not from the elaborated tree — so the spine walk resolves each binder
+    // symbol back to its text to probe them.
+    let store = program.store;
+    let mut env = typecheck::base_type_env_with_version(store, RustyfiVersion::V0_1);
+    let mut ast: &Ast<'s> = &program.body;
     loop {
         ast = match ast {
             Ast::LetIn(name, value, body) => {
                 let schemes = catch_hidden(
-                    ck.infer_binding(&env, BindingView::Let { name, value }),
+                    ck.infer_binding(&env, BindingView::Let { name: *name, value }),
                     &static_env,
                 )?;
-                env = match static_env.seals.get(name.as_str()) {
+                let name_text = store.resolve(*name);
+                env = match static_env.seals.get(name_text) {
                     // the alias binding of a SEALED member: subsumption-
                     // check, then commit the DECLARED scheme (§4.2 steps
                     // 4-5 — sealing).
@@ -289,11 +295,11 @@ fn check_program_inner<'a>(
                             &decl.rigid,
                             &decl.stamp_marker,
                         )
-                        .map_err(|e| seal_mismatch_error(name, decl, inferred, e))?;
-                        env.with(name.clone(), decl.scheme.clone())
+                        .map_err(|e| seal_mismatch_error(name_text, decl, inferred, e))?;
+                        env.with(*name, decl.scheme.clone())
                     }
                     // the alias binding of a HIDDEN member: commit NOTHING.
-                    None if static_env.hidden.contains_key(name.as_str()) => env,
+                    None if static_env.hidden.contains_key(name_text) => env,
                     // every ordinary binding (locals, unsealed aliases,
                     // opens).
                     None => env.with_all(schemes),
@@ -303,7 +309,7 @@ fn check_program_inner<'a>(
                 // member) — fire it AFTER the commit above, so the
                 // module's own members (which just finished checking)
                 // still saw the concrete ctors.
-                if let Some(hides) = static_env.ctor_hide_triggers.get(name.as_str()) {
+                if let Some(hides) = static_env.ctor_hide_triggers.get(name_text) {
                     ck.hide_ctors(hides);
                 }
                 // Sub-slice 2d-3b §3.4: this alias may ALSO be a deferred
@@ -315,8 +321,12 @@ fn check_program_inner<'a>(
                 // `hidden` insert happens ONLY NOW, not in phase A-C —
                 // inserting earlier would trip the phase-D skip-commit arm
                 // just above and break sibling visibility.
-                if let Some((owner, revoked)) = static_env.member_revoke_triggers.get(name.as_str()).cloned() {
-                    env = env.without_all(&revoked);
+                if let Some((owner, revoked)) =
+                    static_env.member_revoke_triggers.get(name_text).cloned()
+                {
+                    let revoked_syms: Vec<_> =
+                        revoked.iter().map(|r| store.intern(r)).collect();
+                    env = env.without_all(&revoked_syms);
                     for r in &revoked {
                         static_env.hidden.insert(r.clone(), owner.clone());
                     }
@@ -325,7 +335,7 @@ fn check_program_inner<'a>(
             }
             Ast::LetMathIn(name, value, body) => {
                 let schemes = catch_hidden(
-                    ck.infer_binding(&env, BindingView::LetMath { name, value }),
+                    ck.infer_binding(&env, BindingView::LetMath { name: *name, value }),
                     &static_env,
                 )?;
                 env = env.with_all(schemes);
@@ -341,7 +351,7 @@ fn check_program_inner<'a>(
             }
             Ast::LetMutableIn(name, init, body) => {
                 let schemes = catch_hidden(
-                    ck.infer_binding(&env, BindingView::LetMutable { name, init }),
+                    ck.infer_binding(&env, BindingView::LetMutable { name: *name, init }),
                     &static_env,
                 )?;
                 env = env.with_all(schemes);
@@ -2801,8 +2811,8 @@ fn refine_variant_body_error(module_name: &str, name: &str, span: Span) -> TypeE
 /// returned and the caller passes the ORIGINAL `program` decls through
 /// untouched — preserving 2d-1's T9 bit-parity argument on every seal-free
 /// program (spec §3 phase B, "empty-map fast path").
-fn maybe_rewrite_program_types(
-    program: &Program,
+fn maybe_rewrite_program_types<'s>(
+    program: &Program<'s>,
     env: &StaticEnv,
 ) -> Result<Option<(Vec<UserSynonymDecl>, Vec<UserTypeDecl>)>, TypeError> {
     if env.types.is_empty() && env.hidden_types.is_empty() {
@@ -3153,10 +3163,10 @@ fn rename_type_name(
 // Phase C: the seal-table val/type half (spec §3 phase C).
 // ============================================================================
 
-fn phase_c_finish(
+fn phase_c_finish<'s>(
     pending: &[PendingSeal],
     links: &[PendingLink],
-    ck: &mut Checker,
+    ck: &mut Checker<'s>,
     mint: &mut StampMint,
     env: &mut StaticEnv,
 ) -> Result<(), TypeError> {
@@ -3338,14 +3348,14 @@ fn phase_c_finish(
 /// ones — the spine still enforces the child's OWN seal against the real
 /// inference; soundness: inferred ⊑ inner (spine) ∧ inner ⊑ outer (link) ⟹
 /// inferred ⊑ outer, what escapes through the parent).
-fn process_link_member(
+fn process_link_member<'s>(
     _kw_span: Span,
     member_name: &str,
     member_span: Span,
     quant: &[TypeVarTok],
     ty: &ast_v1::TypeExpr,
     link: &PendingLink,
-    ck: &mut Checker,
+    ck: &mut Checker<'s>,
     mint: &mut StampMint,
     env: &mut StaticEnv,
 ) -> Result<(), TypeError> {
@@ -3439,10 +3449,10 @@ fn link_mismatch_error(
 /// reference inside it (`type s = N.t`) resolves to the SAME stamp the
 /// impl's already-registered (and already leak-fix-rewritten, phase B)
 /// synonym body does.
-fn check_transparent_type(
+fn check_transparent_type<'s>(
     pt: &PendingTransparent,
     seal: &PendingSeal,
-    ck: &mut Checker,
+    ck: &mut Checker<'s>,
     mint: &mut StampMint,
     env: &mut StaticEnv,
 ) -> Result<(), TypeError> {
@@ -3511,7 +3521,7 @@ enum CmdShape {
 /// [`RenameCtx`] rewrite (§2.1's two opacity-entry-points) and, for a
 /// command decl, the post-expansion shape guard (§2.3).
 #[allow(clippy::too_many_arguments)]
-fn process_seal_member(
+fn process_seal_member<'s>(
     kw_span: Span,
     member_name: &str,
     member_span: Span,
@@ -3521,7 +3531,7 @@ fn process_seal_member(
     seal: &PendingSeal,
     value_names: &[String],
     other_names: &[String],
-    ck: &mut Checker,
+    ck: &mut Checker<'s>,
     mint: &mut StampMint,
     env: &mut StaticEnv,
 ) -> Result<(), TypeError> {
@@ -3832,13 +3842,14 @@ fn check_tyvar_closure(ty: &ast_v1::TypeExpr, quant: &[TypeVarTok]) -> Result<()
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::symbol::SymbolStore;
     use crate::{elaborate, primitives};
     use rustyfi_syntax::{leaf::KwIn, parse_file_v1};
 
     /// Elaborate a bare V0_1 document expression (no dependency libraries)
     /// into a `Program`, the way `l3_per_binding_tests::elaborate_src` does
     /// for 0.0.6 sources.
-    fn elaborate_doc_only(doc_src: &str) -> Program {
+    fn elaborate_doc_only<'s>(store: &'s SymbolStore, doc_src: &str) -> Program<'s> {
         let doc_file = parse_file_v1(doc_src).unwrap_or_else(|e| panic!("v1 parse failed: {e}"));
         let body = lower::lower_document_v1(&doc_file)
             .unwrap_or_else(|e| panic!("lower_document_v1: {e}"));
@@ -3854,7 +3865,7 @@ mod tests {
             eoi,
         };
         let env0 = primitives::base_env_with_version(RustyfiVersion::V0_1);
-        let scope = elaborate::Scope::new(env0.names());
+        let scope = elaborate::Scope::new(store, env0.names());
         elaborate::elaborate_program(&file, &scope).unwrap_or_else(|e| panic!("elaborate: {e}"))
     }
 
@@ -3862,7 +3873,11 @@ mod tests {
     /// document body together, the same assembly `lib.rs::
     /// compile_document_v1_with_trials` and `tests/v01_modules.rs::
     /// elaborate_with_lib` both use.
-    fn elaborate_with_lib(lib_src: &str, doc_src: &str) -> (cst_v1::FileV1, Program) {
+    fn elaborate_with_lib<'s>(
+        store: &'s SymbolStore,
+        lib_src: &str,
+        doc_src: &str,
+    ) -> (cst_v1::FileV1, Program<'s>) {
         let lib_file = parse_file_v1(lib_src).unwrap_or_else(|e| panic!("lib parse failed: {e}"));
         let prelude =
             lower::lower_file_v1(&lib_file).unwrap_or_else(|e| panic!("lower_file_v1: {e}"));
@@ -3881,7 +3896,7 @@ mod tests {
             eoi,
         };
         let env0 = primitives::base_env_with_version(RustyfiVersion::V0_1);
-        let scope = elaborate::Scope::new(env0.names());
+        let scope = elaborate::Scope::new(store, env0.names());
         let program =
             elaborate::elaborate_program(&file, &scope).unwrap_or_else(|e| panic!("elaborate: {e}"));
         (lib_file, program)
@@ -3894,7 +3909,8 @@ mod tests {
     /// involved at all, isolating the parity claim to step 0's session-setup
     /// order (spec §4.2 step 0's rationale).
     fn assert_parity_no_deps(doc_src: &str) {
-        let program = elaborate_doc_only(doc_src);
+        let store = SymbolStore::new();
+        let program = elaborate_doc_only(&store, doc_src);
         let whole = typecheck::typecheck_verbose_with_version(&program, RustyfiVersion::V0_1);
         let per_binding = check_program(&[], &program);
         match (whole, per_binding) {
@@ -3949,7 +3965,8 @@ mod tests {
             "M.x + M.f 1",
             "let y = A 1 in match y with A n -> n | B -> 0 end",
         ] {
-            let (lib_file, program) = elaborate_with_lib(lib_src, doc_src);
+            let store = SymbolStore::new();
+        let (lib_file, program) = elaborate_with_lib(&store, lib_src, doc_src);
             let whole = typecheck::typecheck_verbose_with_version(&program, RustyfiVersion::V0_1);
             let per_binding = check_program(&[&lib_file], &program);
             match (whole, per_binding) {
@@ -4127,7 +4144,8 @@ end
     /// parameter signature — `check_program` accepts.
     #[test]
     fn t_chk1_functor_param_sig_accept() {
-        let (lib_file, program) = elaborate_with_lib(FUNCTOR_LIB, "Lib.A.cmp2 1");
+        let store = SymbolStore::new();
+        let (lib_file, program) = elaborate_with_lib(&store, FUNCTOR_LIB, "Lib.A.cmp2 1");
         check_program(&[&lib_file], &program).expect("IntOrd satisfies Ord — check_program accepts");
     }
 
@@ -4144,7 +4162,8 @@ end
     /// argument, never a merged/confused one.
     #[test]
     fn t_chk3_functor_generativity_distinct_instantiations_do_not_cross_unify() {
-        let (lib_file, program) = elaborate_with_lib(FUNCTOR_LIB, "Lib.A.cmp2 (Lib.FlagOrd.y ())");
+        let store = SymbolStore::new();
+        let (lib_file, program) = elaborate_with_lib(&store, FUNCTOR_LIB, "Lib.A.cmp2 (Lib.FlagOrd.y ())");
         let err = check_program(&[&lib_file], &program)
             .expect_err("A's `cmp2` requires an IntOrd-shaped argument, not FlagOrd's `Yes`");
         assert!(!err.message.is_empty());
@@ -4174,7 +4193,8 @@ module Lib = struct
   module A = Make BadOrd
 end
 ";
-        let (lib_file, program) = elaborate_with_lib(lib, "1");
+        let store = SymbolStore::new();
+        let (lib_file, program) = elaborate_with_lib(&store, lib, "1");
         let err = check_program(&[&lib_file], &program)
             .expect_err("BadOrd is missing `compare` — Ord's width check must reject");
         assert!(

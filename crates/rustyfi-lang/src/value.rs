@@ -1,6 +1,6 @@
 //! Runtime values (a milestone-1 subset of `syntactic_value`).
 
-use crate::ast::{Ast, BText, IText, MathElem};
+use crate::quoted::{BText, IText, MathElem};
 use crate::compile::CompiledExpr;
 use crate::primitives::PrimDef;
 use rustyfi_backend::{
@@ -33,6 +33,12 @@ pub enum Value {
     Context(Box<Context>),
     /// Quoted inline text with its captured environment
     /// (`InputHorzWithEnvironment`).
+    ///
+    /// `elems` is the COMPILED element tree ([`crate::quoted`]): command names
+    /// and embedded expressions were resolved at compile time, so nothing in
+    /// here is looked up by name at layout time. The environment is still
+    /// captured — a compiled node resolves its *locals* against the
+    /// environment it runs in.
     InlineText { elems: Rc<Vec<IText>>, env: Env },
     /// Quoted block text with its captured environment.
     BlockText { elems: Rc<Vec<BText>>, env: Env },
@@ -79,27 +85,25 @@ pub enum Value {
     /// keeps this value cheap to clone, same as `Value::Ref`'s `Rc`.
     Image(ImageId),
     Document(Rc<DocumentValue>),
-    Closure {
-        /// SATySFi 0.1 labeled optional parameters (`label` → `binder`),
-        /// empty for every 0.0.6-built closure. Each binder receives an
-        /// `option`-typed value at application (`Some v` when the call
-        /// supplies `?(label = v)`, `None` otherwise).
-        opt_params: Vec<(String, String)>,
-        param: String,
-        body: Rc<Ast>,
-        env: Env,
-    },
-    /// A closure produced by the closure-compiling evaluator
-    /// ([`crate::compile`]). Semantically identical to [`Value::Closure`] —
-    /// same captured `Env`, same "function" type name — but its body is an
-    /// already-compiled [`CompiledExpr`] run directly by
-    /// [`crate::eval::Interp::apply`] rather than re-tree-walked. The
-    /// tree-walking `eval` never produces this; the compiled path never
-    /// produces `Closure`.
+    /// A closure. Its body is an already-compiled [`CompiledExpr`], run
+    /// directly by [`crate::eval::Interp::apply`].
+    ///
+    /// The name is historical: this used to sit beside an AST-bodied
+    /// `Value::Closure` that the reference tree-walking interpreter produced.
+    /// Phase 3 of `docs/plans/design-symbol-debruijn-slots.md` retired that
+    /// evaluator (quoted text is now compiled eagerly, so a tree-walker cannot
+    /// build a `Value::InlineText` without invoking the compiler anyway), and
+    /// with it the only producer of the AST-bodied variant.
     CompiledClosure {
-        /// See [`Value::Closure::opt_params`].
-        opt_params: Vec<(String, String)>,
-        param: String,
+        /// SATySFi 0.1 labeled optional LABELS, in binder order; empty for
+        /// every 0.0.6-built closure. Each receives an `option`-typed value at
+        /// application (`Some v` when the call supplies `?(label = v)`, `None`
+        /// otherwise). Only the labels survive — a call site matches against
+        /// them by name — while the binders they bind to are slots `0..n` of
+        /// the frame application pushes, so their names are gone (Phase 4).
+        opt_labels: Vec<String>,
+        /// The positional parameter's slot is `opt_labels.len()`, immediately
+        /// after the optional binders, so it needs no field of its own.
         body: CompiledExpr,
         env: Env,
     },
@@ -151,7 +155,6 @@ impl Value {
             Value::BlockBoxes(_) => "block-boxes",
             Value::Image(_) => "image",
             Value::Document(_) => "document",
-            Value::Closure { .. } => "function",
             Value::CompiledClosure { .. } => "function",
             Value::Prim { .. } => "function",
             Value::PrePath(_) => "pre-path",
@@ -387,48 +390,177 @@ pub struct DocumentValue {
     pub reflow_dests: Vec<(DecoId, String)>,
 }
 
-/// A lexical environment: a frame chain (`environment` in the OCaml).
+/// FxHash — the fast, NON-cryptographic hasher `rustc` uses (rustc-hash),
+/// reimplemented here dependency-free. Variable lookup walks the environment
+/// frame chain probing each frame's map by name (~192M probes on a graphics-
+/// heavy doc); std's default SipHash is DoS-resistant but slow for these short,
+/// non-adversarial identifier keys, and dominated the interpreter's runtime.
+/// Processing 8/4/2/1 bytes at a step with a rotate-xor-multiply is ~3-5x
+/// faster and is exactly what an internal, trusted env map wants.
+#[derive(Default)]
+pub(crate) struct FxHasher {
+    hash: usize,
+}
+
+const FX_SEED: usize = 0x51_7c_c1_b7_27_22_0a_95;
+
+impl FxHasher {
+    #[inline]
+    fn add(&mut self, i: usize) {
+        self.hash = (self.hash.rotate_left(5) ^ i).wrapping_mul(FX_SEED);
+    }
+}
+
+impl std::hash::Hasher for FxHasher {
+    #[inline]
+    fn write(&mut self, mut bytes: &[u8]) {
+        while bytes.len() >= 8 {
+            self.add(usize::from_le_bytes(bytes[..8].try_into().unwrap()));
+            bytes = &bytes[8..];
+        }
+        if bytes.len() >= 4 {
+            self.add(u32::from_le_bytes(bytes[..4].try_into().unwrap()) as usize);
+            bytes = &bytes[4..];
+        }
+        if bytes.len() >= 2 {
+            self.add(u16::from_le_bytes(bytes[..2].try_into().unwrap()) as usize);
+            bytes = &bytes[2..];
+        }
+        if let Some(&b) = bytes.first() {
+            self.add(b as usize);
+        }
+    }
+    #[inline]
+    fn write_u8(&mut self, i: u8) {
+        self.add(i as usize);
+    }
+    #[inline]
+    fn write_usize(&mut self, i: usize) {
+        self.add(i);
+    }
+    #[inline]
+    fn finish(&self) -> u64 {
+        self.hash as u64
+    }
+}
+
+#[derive(Default, Clone)]
+pub(crate) struct FxBuild;
+impl std::hash::BuildHasher for FxBuild {
+    type Hasher = FxHasher;
+    #[inline]
+    fn build_hasher(&self) -> FxHasher {
+        FxHasher::default()
+    }
+}
+
+type FxMap = HashMap<Rc<str>, Value, FxBuild>;
+
+/// The **compile-time** environment: the flat name -> value table of
+/// primitives and base constants that [`crate::compile`] folds unshadowed
+/// references against, and whose [`BaseEnv::names`] seed the elaborator's
+/// scope.
+///
+/// This is deliberately NOT the runtime environment. Before Phase 4 of
+/// `docs/plans/design-symbol-debruijn-slots.md` one `Env` served both roles,
+/// with the base environment sitting at the root of the runtime frame chain.
+/// Nothing resolves a name at run time any more — top-level bindings go
+/// through the compiler's `Globals` table, locals through slot indices, and
+/// unshadowed base names are constant-folded at compile time — so the runtime
+/// chain no longer reaches here at all, and the two can be what they actually
+/// are: a name map used while compiling, and a stack of positional frames used
+/// while running.
+#[derive(Clone, Debug, Default)]
+pub struct BaseEnv {
+    vars: FxMap,
+}
+
+impl BaseEnv {
+    pub fn new() -> BaseEnv {
+        BaseEnv::default()
+    }
+
+    /// A copy that can be extended without disturbing this one. There is no
+    /// frame chain here — shadowing is just overwriting in the copy.
+    pub fn child(&self) -> BaseEnv {
+        self.clone()
+    }
+
+    pub fn define(&mut self, name: impl Into<Rc<str>>, value: Value) {
+        self.vars.insert(name.into(), value);
+    }
+
+    pub fn lookup(&self, name: &str) -> Option<Value> {
+        self.vars.get(name).cloned()
+    }
+
+    /// Every name bound here (feeds the elaborator's scope).
+    pub fn names(&self) -> Vec<String> {
+        self.vars.keys().map(|k| k.to_string()).collect()
+    }
+}
+
+/// The **runtime** environment: a chain of positional frames.
+///
+/// Phase 4. A frame is a plain `Vec<Value>`, and a compiled variable reference
+/// is a `(depth, index)` pair resolved at compile time — walk `depth` parents,
+/// index the vector. There are no names here at all: the compiler's scope
+/// stack is 1:1 with this chain (it pushes exactly where a frame is created),
+/// so every local is a static coordinate.
+///
+/// `RefCell` because `let rec` back-patches its siblings into a shared frame
+/// one at a time: the frame is created pre-sized with placeholders and filled
+/// in order, and a closure that captured it sees the later fills, exactly as
+/// the name-keyed version did.
 #[derive(Clone, Debug)]
 pub struct Env(Rc<Frame>);
 
 #[derive(Debug)]
 struct Frame {
-    vars: RefCell<HashMap<String, Value>>,
+    slots: RefCell<Vec<Value>>,
     parent: Option<Env>,
 }
 
 impl Env {
+    /// The empty root frame every program runs in.
     pub fn root() -> Env {
         Env(Rc::new(Frame {
-            vars: RefCell::new(HashMap::new()),
+            slots: RefCell::new(Vec::new()),
             parent: None,
         }))
     }
 
-    pub fn child(&self) -> Env {
+    /// Push a frame holding `slots`, in the order the compiler assigned them.
+    pub fn child(&self, slots: Vec<Value>) -> Env {
         Env(Rc::new(Frame {
-            vars: RefCell::new(HashMap::new()),
+            slots: RefCell::new(slots),
             parent: Some(self.clone()),
         }))
     }
 
-    pub fn define(&self, name: impl Into<String>, value: Value) {
-        self.0.vars.borrow_mut().insert(name.into(), value);
+    #[inline]
+    fn frame_at(&self, depth: u16) -> &Frame {
+        let mut f = self;
+        for _ in 0..depth {
+            f = f
+                .0
+                .parent
+                .as_ref()
+                .expect("compiled slot depth exceeds the runtime frame chain");
+        }
+        &f.0
     }
 
-    pub fn lookup(&self, name: &str) -> Option<Value> {
-        if let Some(v) = self.0.vars.borrow().get(name) {
-            return Some(v.clone());
-        }
-        self.0.parent.as_ref()?.lookup(name)
+    /// Read the local at `(depth, index)`.
+    #[inline]
+    pub fn slot(&self, depth: u16, index: u16) -> Value {
+        self.frame_at(depth).slots.borrow()[index as usize].clone()
     }
 
-    /// All names bound anywhere in the chain (feeds the elaborator's scope).
-    pub fn names(&self) -> Vec<String> {
-        let mut out: Vec<String> = self.0.vars.borrow().keys().cloned().collect();
-        if let Some(p) = &self.0.parent {
-            out.extend(p.names());
-        }
-        out
+    /// Overwrite the local at `(depth, index)` — `let rec`'s back-patch.
+    #[inline]
+    pub fn set_slot(&self, depth: u16, index: u16, value: Value) {
+        self.frame_at(depth).slots.borrow_mut()[index as usize] = value;
     }
 }
+

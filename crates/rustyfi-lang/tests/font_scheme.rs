@@ -4,10 +4,10 @@
 //! (like `tests/text_info.rs`'s "eval half"), sidestepping the parser.
 
 use rustyfi_backend::{Context, FontKey, FontMetrics, Length, PureHorzBox, Script};
-use rustyfi_lang::ast::IText;
+use rustyfi_lang::quoted::IText;
 use rustyfi_lang::eval::Interp;
 use rustyfi_lang::primitives;
-use rustyfi_lang::value::{Env, Value};
+use rustyfi_lang::value::{BaseEnv, Env, Value};
 
 /// Every glyph is half an em wide; `resolve_font_abbrev` names two registry
 /// abbrevs (the D1a upgrade `set-font`/`set-math-font` now consult before
@@ -35,7 +35,7 @@ impl FontMetrics for Stub {
 
 fn set_font(
     interp: &mut Interp,
-    env: &Env,
+    env: &BaseEnv,
     script: &str,
     abbrev: &str,
     ratio: f64,

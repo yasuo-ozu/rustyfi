@@ -234,7 +234,8 @@ fn one_line(tag: &str, entry: &Path) -> String {
             let file = merge_program_v006(program);
             render(tag, "0.0.6", || {
                 let env = primitives::base_env();
-                let scope = elaborate::Scope::new(env.names());
+                let store = rustyfi_lang::symbol::SymbolStore::new();
+                let scope = elaborate::Scope::new(&store, env.names());
                 let program = elaborate::elaborate_program(&file, &scope)
                     .map_err(|e| format!("elaborate: {e}"))?;
                 typecheck::typecheck_verbose(&program).map_err(|e| format!("{e}"))
@@ -250,7 +251,8 @@ fn one_line(tag: &str, entry: &Path) -> String {
                 Ok(program) => match merge_program_v01(&program.files) {
                     Ok((file, v006_indices)) => render(tag, "0.1", || {
                         let env = primitives::base_env_with_version(RustyfiVersion::V0_1);
-                        let scope = elaborate::Scope::new(env.names());
+                        let store = rustyfi_lang::symbol::SymbolStore::new();
+                        let scope = elaborate::Scope::new(&store, env.names());
                         let program = elaborate::elaborate_program_with_versions(
                             &file,
                             &scope,

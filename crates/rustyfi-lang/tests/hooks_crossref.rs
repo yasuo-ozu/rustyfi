@@ -181,8 +181,8 @@ fn fire_hooks_invokes_the_closure_with_the_correct_page_number() {
     );
     let closure = interp
         .eval(&env, &closure_ast)
-        .expect("closure should evaluate to a Value::Closure");
-    assert!(matches!(closure, Value::Closure { .. }));
+        .expect("closure should evaluate to a Value::CompiledClosure");
+    assert!(matches!(closure, Value::CompiledClosure { .. }));
     interp.hooks.push(closure);
 
     let doc = DocumentValue {

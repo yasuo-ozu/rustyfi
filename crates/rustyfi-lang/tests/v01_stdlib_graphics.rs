@@ -198,7 +198,8 @@ fn compile_v01_via_loader_with_metrics(
     };
 
     let env = primitives::base_env_with_version(RustyfiVersion::V0_1);
-    let scope = elaborate::Scope::new(env.names());
+    let store = rustyfi_lang::symbol::SymbolStore::new();
+    let scope = elaborate::Scope::new(&store, env.names());
     let elaborated =
         elaborate::elaborate_program(&file, &scope).map_err(|e| format!("elaborate: {e}"))?;
     typecheck::typecheck_with_version(&elaborated, RustyfiVersion::V0_1)
@@ -214,7 +215,7 @@ fn compile_v01_via_loader_with_metrics(
     // was compiled as V0_1.
     interp.version = RustyfiVersion::V0_1;
     interp
-        .eval(&env, &elaborated.body)
+        .eval(&env, &rustyfi_lang::ast::debrand(&elaborated.body, &store))
         .map_err(|e| format!("eval: {e}"))
 }
 

@@ -8,10 +8,11 @@
 use std::rc::Rc;
 
 use rustyfi_backend::{Context, FontKey, FontMetrics, HorzBox, Length, PureHorzBox};
-use rustyfi_lang::ast::{Ast, IText, MathElem};
+use rustyfi_lang::ast::{Ast, MathElem as AstMathElem};
+use rustyfi_lang::quoted::{IText, MathElem};
 use rustyfi_lang::eval::{self, EvalError};
 use rustyfi_lang::primitives;
-use rustyfi_lang::value::Value;
+use rustyfi_lang::value::{Env, Value};
 use rustyfi_syntax::Span;
 
 struct Mono;
@@ -168,11 +169,13 @@ fn update_field_absent_label_errors() {
 
 #[test]
 fn math_text_quotes_without_evaluating() {
-    let elems = Rc::new(vec![MathElem::Chars("x".to_string())]);
-    let ast = Ast::MathText(elems.clone());
+    let ast = Ast::MathText(Rc::new(vec![AstMathElem::Chars("x".to_string())]));
     match run(&ast).unwrap() {
+        // The element tree is COMPILED into the value (see `quoted`), so this
+        // is no longer the same `Rc` the AST held — but nothing in it was
+        // evaluated, which is what "quotes" means here.
         Value::MathText { elems: got, .. } => {
-            assert!(Rc::ptr_eq(&got, &elems));
+            assert!(matches!(got.as_slice(), [MathElem::Chars(s)] if s == "x"));
         }
         other => panic!("expected MathText, got {}", other.type_name()),
     }
@@ -188,11 +191,10 @@ fn itext_embed_math_renders_through_read_inline() {
         elems: Rc::new(vec![MathElem::Chars("x".to_string())]),
         span: Span::default(),
     }];
-    let env = primitives::base_env();
     let mono = Mono;
     let mut interp = eval::Interp::new(&mono);
     let ctx = Context::initial(Length::pt(400.0));
-    let boxes = primitives::read_inline(&mut interp, &ctx, &elems, &env)
+    let boxes = primitives::read_inline(&mut interp, &ctx, &elems, &Env::root())
         .expect("EmbedMath must render, not error, as of Slice 1");
     assert_eq!(boxes.len(), 1);
     match &boxes[0] {
@@ -218,7 +220,7 @@ fn deref_of_non_ref_errors() {
 #[test]
 fn line_break_arity_four_through_apply_chain() {
     let base = primitives::base_env();
-    let env = base.child();
+    let mut env = base.child();
     let ctx = Context::initial(Length::pt(400.0));
     env.define("ctx0", Value::Context(Box::new(ctx)));
     env.define(

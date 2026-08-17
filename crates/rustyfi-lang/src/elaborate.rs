@@ -7,7 +7,13 @@
 //! This function's signature is the seam where the phase-3 typechecker
 //! (typechecker.ml / unification.ml port) slots in.
 
-use crate::ast::{Ast, BText, CmdArg, IText, MatchArm, MathElem, Pattern};
+// The elaborator emits the BRANDED tree: every lexical identifier is a
+// `Symbol<'s>` interned into the `SymbolStore` carried by [`Scope`]. See
+// `crate::ast`'s module doc comment for what `I` covers (environment keys
+// only — record labels, constructor tags and optional-argument labels stay
+// `String` here exactly as they always were).
+use crate::ast::branded::{Ast, BText, CmdArg, IText, MatchArm, MathElem, Pattern};
+use crate::symbol::{Symbol, SymbolStore};
 use rustyfi_backend::Length;
 use rustyfi_syntax::cst::{self, ast as c};
 use rustyfi_syntax::leaf::{AnyHorzCmdTok, AnyMathCmdTok, AnyVertCmdTok, UnopExclamTok, VarTok};
@@ -65,7 +71,7 @@ fn err<T>(span: Span, msg: impl Into<String>) -> Result<T, ElabError> {
 /// overwhelmingly common case, and every existing name's default, so
 /// ordinary application is unaffected.
 #[derive(Clone, Debug)]
-pub struct Scope {
+pub struct Scope<'s> {
     names: HashSet<String>,
     optional_shape: std::collections::HashMap<String, Vec<bool>>,
     /// A module member's bare (sibling-visible) local name → the ACTUAL Ast
@@ -95,35 +101,49 @@ pub struct Scope {
     /// version error rather than silently accepted. `V0_0_6` by default so
     /// every existing caller (and the frozen 0.0.6 path) is unaffected.
     version: RustyfiVersion,
+    /// The interner every identifier this scope helps build is minted from.
+    ///
+    /// The scope's own tables above stay **text**-keyed: elaboration is a
+    /// string-manipulation pass (it mangles `"M.x"` / `"$M.atan2"` /
+    /// `"%cmd_arg0"` keys, tests command sigils by first character, and scans
+    /// by prefix in [`Scope::names_with_prefix`]), so keying them by `Symbol`
+    /// would only add a resolve on every probe. Interning happens at the
+    /// boundary instead — [`Scope::resolve`] and [`Scope::sym`] are the two
+    /// points where a text key becomes the `Symbol` an `Ast` node carries.
+    store: &'s SymbolStore,
 }
 
-impl Default for Scope {
-    fn default() -> Scope {
-        Scope::new(std::iter::empty())
-    }
-}
-
-impl Scope {
-    pub fn new(names: impl IntoIterator<Item = String>) -> Scope {
-        Scope::new_with_version(names, RustyfiVersion::V0_0_6)
+impl<'s> Scope<'s> {
+    pub fn new(store: &'s SymbolStore, names: impl IntoIterator<Item = String>) -> Scope<'s> {
+        Scope::new_with_version(store, names, RustyfiVersion::V0_0_6)
     }
 
     /// Like [`Scope::new`] but elaborating under an explicit source version —
     /// the V0_1 compile path (`lib.rs`) uses this so the 0.1 labeled-optional
     /// nodes are accepted.
     pub fn new_with_version(
+        store: &'s SymbolStore,
         names: impl IntoIterator<Item = String>,
         version: RustyfiVersion,
-    ) -> Scope {
+    ) -> Scope<'s> {
         Scope {
             names: names.into_iter().collect(),
             optional_shape: std::collections::HashMap::new(),
             renames: std::collections::HashMap::new(),
             version,
+            store,
         }
     }
 
-    fn with(&self, name: &str) -> Scope {
+    /// Intern `name` as-is. Use this where a key is *already* the final Ast
+    /// key (a mangled module key, a freshly minted `%`-prefixed desugar name);
+    /// use [`Scope::resolve`] where a bare source reference is being looked
+    /// up, since only that path applies the module-member rename redirect.
+    fn sym(&self, name: &str) -> Symbol<'s> {
+        self.store.intern(name)
+    }
+
+    fn with(&self, name: &str) -> Scope<'s> {
         let mut s = self.clone();
         s.insert(name);
         s
@@ -167,12 +187,23 @@ impl Scope {
         self.renames.insert(local.to_string(), actual_key.to_string());
     }
 
-    /// The Ast key a bare reference to `name` should actually use: its
-    /// [`Scope::rename`] redirect, if one is active, else `name` itself
+    /// The Ast key a bare reference to `name` should actually use, interned:
+    /// its [`Scope::rename`] redirect, if one is active, else `name` itself
     /// unchanged (the overwhelmingly common case — every name outside a
     /// module's own body, and every module member before this fix existed).
-    fn resolve(&self, name: &str) -> String {
-        self.renames.get(name).cloned().unwrap_or_else(|| name.to_string())
+    ///
+    /// This is the elaborator's main text → [`Symbol`] boundary: almost every
+    /// identifier an `Ast` node carries is minted right here.
+    fn resolve(&self, name: &str) -> Symbol<'s> {
+        self.store.intern(self.resolve_text(name))
+    }
+
+    /// [`Scope::resolve`] before interning — for the one caller that needs to
+    /// *compare* the redirect target against source text rather than embed it
+    /// in a node (`app_chain_generic`'s unary-`not` special case, which must
+    /// only fire when `not` still resolves to itself).
+    fn resolve_text<'a>(&'a self, name: &'a str) -> &'a str {
+        self.renames.get(name).map(|s| s.as_str()).unwrap_or(name)
     }
 
     fn contains(&self, name: &str) -> bool {
@@ -223,7 +254,7 @@ impl Scope {
 /// [`Scope::resolve`], so a module member's sibling reference compiles
 /// directly to that member's qualified key when one is active (module-
 /// completion bug fix — see `push_named_binding`'s doc comment).
-fn scoped_var(name: &str, span: Span, scope: &Scope) -> Result<Ast, ElabError> {
+fn scoped_var<'s>(name: &str, span: Span, scope: &Scope<'s>) -> Result<Ast<'s>, ElabError> {
     if scope.contains(name) {
         Ok(Ast::Var(scope.resolve(name), span))
     } else {
@@ -421,10 +452,16 @@ fn qualify_atom(at: &mut c::TypeAtom, map: &HashMap<String, String>) {
 /// `typecheck::build_variant_decl`), every type *synonym* it surfaced (see
 /// `typecheck::build_synonym_decl`), plus the elaborated document body.
 #[derive(Clone, Debug)]
-pub struct Program {
+pub struct Program<'s> {
     pub type_decls: Vec<UserTypeDecl>,
     pub synonym_decls: Vec<UserSynonymDecl>,
-    pub body: Ast,
+    pub body: Ast<'s>,
+    /// The interner every identifier in `body` was minted from. Carried on
+    /// the program itself (rather than passed alongside it) so that the
+    /// downstream passes — `typecheck`, `v1::module_check`, and the compile
+    /// membrane — keep their existing one-argument signatures and cannot be
+    /// handed a program and a store that don't belong together.
+    pub store: &'s SymbolStore,
 }
 
 /// Elaborate a whole file into a [`Program`] (the elaborated body plus any
@@ -439,7 +476,10 @@ pub struct Program {
 /// time `elaborate_program` runs, either `body` is present (an ordinary
 /// document, or an already-merged file) or it is a genuine library file,
 /// which is a (clean) error to hand to `elaborate_program` directly.
-pub fn elaborate_program(file: &cst::File, prelude_scope: &Scope) -> Result<Program, ElabError> {
+pub fn elaborate_program<'s>(
+    file: &cst::File,
+    prelude_scope: &Scope<'s>,
+) -> Result<Program<'s>, ElabError> {
     elaborate_program_with_versions(file, prelude_scope, &HashSet::new(), None)
 }
 
@@ -472,12 +512,12 @@ pub fn elaborate_program(file: &cst::File, prelude_scope: &Scope) -> Result<Prog
 /// (`elaborate_program` above, and `compile_document_v1_with_trials`'s
 /// existing call site) — byte-identical, since `match None { .. }` never
 /// constructs the extra node.
-pub fn elaborate_program_with_versions(
+pub fn elaborate_program_with_versions<'s>(
     file: &cst::File,
-    prelude_scope: &Scope,
+    prelude_scope: &Scope<'s>,
     v006_indices: &HashSet<usize>,
     wrap_body_version: Option<RustyfiVersion>,
-) -> Result<Program, ElabError> {
+) -> Result<Program<'s>, ElabError> {
     let Some(body) = &file.body else {
         return err(
             Span::default(),
@@ -510,7 +550,8 @@ pub fn elaborate_program_with_versions(
     Ok(Program {
         type_decls,
         synonym_decls,
-        body: nest(bindings, body_ast),
+        body: nest(prelude_scope.store, bindings, body_ast),
+        store: prelude_scope.store,
     })
 }
 
@@ -518,7 +559,7 @@ pub fn elaborate_program_with_versions(
 /// one-line helper every `walk_bindings` binding-construction arm below
 /// calls right after building its (fully elaborated) RHS. See
 /// [`elaborate_program_with_versions`]'s doc comment.
-fn maybe_v006_scope(value: Ast, this_v006: bool) -> Ast {
+fn maybe_v006_scope<'s>(value: Ast<'s>, this_v006: bool) -> Ast<'s> {
     if this_v006 {
         Ast::VersionScope(RustyfiVersion::V0_0_6, Box::new(value))
     } else {
@@ -530,7 +571,7 @@ fn maybe_v006_scope(value: Ast, this_v006: bool) -> Ast {
 /// declarations it surfaces (existing callers that only need the untyped
 /// `Ast`; see [`elaborate_program`] for the version phase 3's typechecker
 /// uses).
-pub fn elaborate(file: &cst::File, prelude_scope: &Scope) -> Result<Ast, ElabError> {
+pub fn elaborate<'s>(file: &cst::File, prelude_scope: &Scope<'s>) -> Result<Ast<'s>, ElabError> {
     Ok(elaborate_program(file, prelude_scope)?.body)
 }
 
@@ -577,13 +618,13 @@ fn direct_cmd_name(item: &cst::SigItem) -> Option<(String, Span)> {
 /// One step of the top-level/struct-decl fold, deferred (see [`nest`]) so
 /// that folding in a `module`'s declarations doesn't require building the
 /// "rest of the program" before the module's own bindings are known.
-enum Binding {
-    Let(String, Ast),
-    LetRec(Vec<(String, Rc<Ast>)>),
-    LetMutable(String, Ast),
+enum Binding<'s> {
+    Let(String, Ast<'s>),
+    LetRec(Vec<(String, Rc<Ast<'s>>)>),
+    LetMutable(String, Ast<'s>),
     /// A `let-math` binding (`docs/plans/math-engine.md` §G) — nests as
     /// `Ast::LetMathIn`, not `Ast::LetIn` (see that variant's doc comment).
-    LetMath(String, Ast),
+    LetMath(String, Ast<'s>),
 }
 
 /// Wrap `tail` in every collected `Binding`, innermost (last-pushed) first —
@@ -591,14 +632,26 @@ enum Binding {
 /// to build `Ast::LetIn`/`Ast::LetRecIn` directly, just deferred into data
 /// first so a `module`'s bindings can be spliced into the flat sequence
 /// before any of it is turned into `Ast`.
-fn nest(bindings: Vec<Binding>, tail: Ast) -> Ast {
+fn nest<'s>(store: &'s SymbolStore, bindings: Vec<Binding<'s>>, tail: Ast<'s>) -> Ast<'s> {
+    // `Binding` carries its key as text (it is minted by string mangling —
+    // `qualify_key`, `$`-prefixing, `open`'s prefix suffixing); interning
+    // happens here, where the key finally becomes an `Ast` node's identifier.
     let mut ast = tail;
     for b in bindings.into_iter().rev() {
         ast = match b {
-            Binding::Let(name, val) => Ast::LetIn(name, Box::new(val), Box::new(ast)),
-            Binding::LetRec(bs) => Ast::LetRecIn(bs, Box::new(ast)),
-            Binding::LetMutable(name, val) => Ast::LetMutableIn(name, Box::new(val), Box::new(ast)),
-            Binding::LetMath(name, val) => Ast::LetMathIn(name, Box::new(val), Box::new(ast)),
+            Binding::Let(name, val) => {
+                Ast::LetIn(store.intern(&name), Box::new(val), Box::new(ast))
+            }
+            Binding::LetRec(bs) => Ast::LetRecIn(
+                bs.into_iter().map(|(n, v)| (store.intern(&n), v)).collect(),
+                Box::new(ast),
+            ),
+            Binding::LetMutable(name, val) => {
+                Ast::LetMutableIn(store.intern(&name), Box::new(val), Box::new(ast))
+            }
+            Binding::LetMath(name, val) => {
+                Ast::LetMathIn(store.intern(&name), Box::new(val), Box::new(ast))
+            }
         };
     }
     ast
@@ -627,12 +680,12 @@ fn nest(bindings: Vec<Binding>, tail: Ast) -> Ast {
 /// ..` group directly inside a `module .. = struct .. end`, rather than
 /// any of the far more common plain `val`/`let-inline`/`let-block`/
 /// `let-math`/`let mutable` members) — left as a known, separable gap.
-fn export_alias(
+fn export_alias<'s>(
     mod_path: &[String],
     local: String,
     shape: Vec<bool>,
-    bindings: &mut Vec<Binding>,
-    running: &mut Scope,
+    bindings: &mut Vec<Binding<'s>>,
+    running: &mut Scope<'s>,
     exported: &mut Vec<String>,
 ) {
     if mod_path.is_empty() {
@@ -650,7 +703,10 @@ fn export_alias(
         // `round : float -> int`.
         let qual = qualify_key(mod_path, &local);
         let mangled = format!("${qual}");
-        bindings.push(Binding::Let(qual.clone(), Ast::Var(mangled.clone(), Span::default())));
+        bindings.push(Binding::Let(
+            qual.clone(),
+            Ast::Var(running.sym(&mangled), Span::default()),
+        ));
         running.insert_with_shape(&local, shape.clone());
         running.rename(&local, &mangled);
         running.insert_with_shape(&qual, shape);
@@ -704,14 +760,14 @@ fn export_alias(
 /// copied back to the caller (only the qualified name's existence/shape
 /// is, via `inner_running.optional_shape`), so they can never affect
 /// anything outside this module or after its `end`.
-fn push_named_binding(
+fn push_named_binding<'s>(
     mod_path: &[String],
     local: String,
-    value: Ast,
+    value: Ast<'s>,
     shape: Vec<bool>,
-    make_binding: impl FnOnce(String, Ast) -> Binding,
-    bindings: &mut Vec<Binding>,
-    running: &mut Scope,
+    make_binding: impl FnOnce(String, Ast<'s>) -> Binding<'s>,
+    bindings: &mut Vec<Binding<'s>>,
+    running: &mut Scope<'s>,
     exported: &mut Vec<String>,
 ) {
     if mod_path.is_empty() {
@@ -727,7 +783,10 @@ fn push_named_binding(
         // type inference otherwise.
         let value = Ast::ModuleScope(mod_path.to_vec(), Box::new(value));
         bindings.push(make_binding(mangled.clone(), value));
-        bindings.push(Binding::Let(qual.clone(), Ast::Var(mangled.clone(), Span::default())));
+        bindings.push(Binding::Let(
+            qual.clone(),
+            Ast::Var(running.sym(&mangled), Span::default()),
+        ));
         running.insert_with_shape(&local, shape.clone());
         running.rename(&local, &mangled);
         running.insert_with_shape(&qual, shape);
@@ -766,7 +825,7 @@ fn param_optional_shape(params: &[c::Param]) -> Vec<bool> {
 /// an empty shape and the block-text mis-binds against `configopt`'s domain.
 /// Returns `&[]`-equivalent for any RHS that is not a bare (module-qualified)
 /// variable reference — a value alias only, never a partial application.
-fn alias_optional_shape(value: &c::Expr, scope: &Scope) -> Vec<bool> {
+fn alias_optional_shape<'s>(value: &c::Expr, scope: &Scope<'s>) -> Vec<bool> {
     let c::Expr::Ops(chain) = value else {
         return Vec::new();
     };
@@ -806,16 +865,16 @@ fn alias_optional_shape(value: &c::Expr, scope: &Scope) -> Vec<bool> {
 /// for whatever comes *after* this sequence, instead of rebuilding one from
 /// `exported` name strings alone (which would drop every
 /// [`Scope::optional_arity`] entry — see [`elaborate_program`]).
-fn walk_bindings(
+fn walk_bindings<'s>(
     items: &[&cst::TopBinding],
-    scope: &Scope,
+    scope: &Scope<'s>,
     mod_path: &[String],
     type_decls: &mut Vec<UserTypeDecl>,
     synonym_decls: &mut Vec<UserSynonymDecl>,
     v006_indices: &HashSet<usize>,
     tymap: &HashMap<String, String>,
-) -> Result<(Vec<Binding>, Vec<String>, Scope), ElabError> {
-    let mut bindings: Vec<Binding> = Vec::new();
+) -> Result<(Vec<Binding<'s>>, Vec<String>, Scope<'s>), ElabError> {
+    let mut bindings: Vec<Binding<'s>> = Vec::new();
     let mut running = scope.clone();
     let mut exported: Vec<String> = Vec::new();
     // Module-local type-name qualification map (bare -> `M.t`). A no-op at the
@@ -881,9 +940,9 @@ fn walk_bindings(
                 // are internal-only and never exported.
                 let value_ast = expr(value, &running)?;
                 let value_ast = maybe_v006_scope(value_ast, this_v006);
-                let lowered_pat = pattern(pat)?;
+                let lowered_pat = pattern(running.store, pat)?;
                 let mut names = Vec::new();
-                collect_pattern_names(&lowered_pat, &mut names);
+                collect_pattern_names(running.store, &lowered_pat, &mut names);
                 let hidden = format!("%patbind.{}.{}", mod_path.join("."), item_idx);
                 let scrut = if mod_path.is_empty() {
                     value_ast
@@ -894,16 +953,16 @@ fn walk_bindings(
                 running.insert_with_shape(&hidden, Vec::new());
                 for n in &names {
                     let extract = Ast::Match(
-                        Box::new(Ast::Var(hidden.clone(), Span::default())),
+                        Box::new(Ast::Var(running.sym(&hidden), Span::default())),
                         vec![MatchArm {
                             pat: lowered_pat.clone(),
                             guard: None,
-                            body: Ast::Var(n.clone(), Span::default()),
+                            body: Ast::Var(running.sym(n), Span::default()),
                         }],
                     );
                     push_named_binding(
                         mod_path,
-                        n.clone(),
+                        n.to_string(),
                         extract,
                         Vec::new(),
                         Binding::Let,
@@ -943,7 +1002,7 @@ fn walk_bindings(
                 };
                 // Mark each clause body as belonging to `mod_path` (ctor
                 // scoping — see `Ast::ModuleScope`); a no-op at top level.
-                let recs: Vec<(String, Rc<Ast>)> = if mod_path.is_empty() {
+                let recs: Vec<(String, Rc<Ast<'s>>)> = if mod_path.is_empty() {
                     recs
                 } else {
                     recs.into_iter()
@@ -1144,7 +1203,7 @@ fn walk_bindings(
                             let shape = running.optional_shape(&qual).to_vec();
                             bindings.push(Binding::Let(
                                 local.clone(),
-                                Ast::Var(qual, Span::default()),
+                                Ast::Var(running.sym(&qual), Span::default()),
                             ));
                             running.insert_with_shape(&local, shape);
                             exported.push(local);
@@ -1158,7 +1217,10 @@ fn walk_bindings(
                 for q in running.names_with_prefix(&prefix) {
                     let suffix = q[prefix.len()..].to_string();
                     let shape = running.optional_shape(&q).to_vec();
-                    bindings.push(Binding::Let(suffix.clone(), Ast::Var(q, Span::default())));
+                    bindings.push(Binding::Let(
+                        suffix.clone(),
+                        Ast::Var(running.sym(&q), Span::default()),
+                    ));
                     running.insert_with_shape(&suffix, shape);
                     // `open` only re-exposes an *existing* qualified name
                     // under its bare suffix locally; it doesn't itself mint
@@ -1210,11 +1272,11 @@ fn walk_bindings(
 /// rest]))` — a refutable parameter pattern (e.g. `Some(x)`) can fail to
 /// match at *application* time, exactly like a `match` arm would (see
 /// `eval.rs`'s `Ast::Match` handling for the resulting runtime error).
-fn curry_cmd_params(
+fn curry_cmd_params<'s>(
     patbots: &[c::PatBot],
-    scope: &Scope,
-    build_value: impl FnOnce(&Scope) -> Result<Ast, ElabError>,
-) -> Result<Ast, ElabError> {
+    scope: &Scope<'s>,
+    build_value: impl FnOnce(&Scope<'s>) -> Result<Ast<'s>, ElabError>,
+) -> Result<Ast<'s>, ElabError> {
     if patbots.iter().all(is_var_patbot) {
         let mut inner = scope.clone();
         for p in patbots {
@@ -1222,14 +1284,17 @@ fn curry_cmd_params(
         }
         let mut value_ast = build_value(&inner)?;
         for p in patbots.iter().rev() {
-            value_ast = Ast::Lambda(patbot_var_name(p).to_string(), Rc::new(value_ast));
+            value_ast = Ast::Lambda(scope.sym(patbot_var_name(p)), Rc::new(value_ast));
         }
         return Ok(value_ast);
     }
-    let pats: Vec<Pattern> = patbots.iter().map(patbot).collect::<Result<_, _>>()?;
+    let pats: Vec<Pattern<'s>> = patbots
+        .iter()
+        .map(|p| patbot(scope.store, p))
+        .collect::<Result<_, _>>()?;
     let mut names = Vec::new();
     for p in &pats {
-        collect_pattern_names(p, &mut names);
+        collect_pattern_names(scope.store, p, &mut names);
     }
     let mut inner = scope.clone();
     for n in &names {
@@ -1238,9 +1303,9 @@ fn curry_cmd_params(
     let mut value_ast = build_value(&inner)?;
     let dummy = Span::default();
     for (i, pat) in pats.into_iter().enumerate().rev() {
-        let fresh = format!("%cmd_arg{i}");
+        let fresh = scope.sym(&format!("%cmd_arg{i}"));
         value_ast = Ast::Lambda(
-            fresh.clone(),
+            fresh,
             Rc::new(Ast::Match(
                 Box::new(Ast::Var(fresh, dummy)),
                 vec![MatchArm {
@@ -1274,18 +1339,18 @@ fn curry_cmd_params(
 ///   `curry_lambda_abstract_pattern params (read-inline %context value)`,
 ///   all wrapped in `Lambda(%context, ..)`. We reproduce that exactly,
 ///   using `reader` = `"read-inline"` or `"read-block"`.
-fn elaborate_let_inline(
+fn elaborate_let_inline<'s>(
     ctx: Option<&VarTok>,
     params: &[c::Param],
     value: &c::Expr,
-    scope: &Scope,
+    scope: &Scope<'s>,
     reader: &str,
-) -> Result<Ast, ElabError> {
+) -> Result<Ast<'s>, ElabError> {
     match ctx {
         Some(ctxvar) => {
             let ctx_scope = scope.with(&ctxvar.name);
             let value_ast = curry_cmd_params_v1(params, &ctx_scope, |inner| expr(value, inner))?;
-            Ok(Ast::Lambda(ctxvar.name.clone(), Rc::new(value_ast)))
+            Ok(Ast::Lambda(scope.sym(&ctxvar.name), Rc::new(value_ast)))
         }
         None => {
             const IMPLICIT_CTX: &str = "%context";
@@ -1300,7 +1365,7 @@ fn elaborate_let_inline(
                     Box::new(value_ast),
                 ))
             })?;
-            Ok(Ast::Lambda(IMPLICIT_CTX.to_string(), Rc::new(curried)))
+            Ok(Ast::Lambda(scope.sym(IMPLICIT_CTX), Rc::new(curried)))
         }
     }
 }
@@ -1315,11 +1380,11 @@ fn elaborate_let_inline(
 /// `TopBinding::LetMath` (via `walk_bindings`) and the expression-level
 /// `Expr::LetMathIn` (`parser.mly:688`, upstream's only command binding with
 /// a local `in`-bodied form — see that variant's doc comment).
-fn elaborate_let_math(
+fn elaborate_let_math<'s>(
     params: &[c::Param],
     value: &c::Expr,
-    scope: &Scope,
-) -> Result<Ast, ElabError> {
+    scope: &Scope<'s>,
+) -> Result<Ast<'s>, ElabError> {
     curry_cmd_params_v1(params, scope, |inner| expr(value, inner))
 }
 
@@ -1331,12 +1396,12 @@ fn elaborate_let_math(
 /// is a *runtime* check (see `eval.rs`'s `Ast::LetRecIn` handling) — nothing
 /// here forces `params` to be non-empty, since a paramterless binding whose
 /// `value` is itself e.g. a `fun ...` expression is equally valid.
-fn rec_bindings(
+fn rec_bindings<'s>(
     first: &c::RecBinding,
     ands: &[c::AndBinding],
-    scope: &Scope,
+    scope: &Scope<'s>,
     mod_path: &[String],
-) -> Result<(Vec<(String, Rc<Ast>)>, Scope), ElabError> {
+) -> Result<(Vec<(String, Rc<Ast<'s>>)>, Scope<'s>), ElabError> {
     let all: Vec<&c::RecBinding> = std::iter::once(first)
         .chain(ands.iter().map(|a| &a.binding))
         .collect();
@@ -1388,12 +1453,12 @@ fn rec_bindings(
 /// path (variable patterns always match and simply bind), it just skips
 /// building a throwaway `Match`/fresh-variable indirection for what nearly
 /// every binding actually looks like.
-fn rec_clause_value(
+fn rec_clause_value<'s>(
     params0: &[c::PatBot],
     value0: &c::Expr,
     extra: &[c::RecClause],
-    scope: &Scope,
-) -> Result<Ast, ElabError> {
+    scope: &Scope<'s>,
+) -> Result<Ast<'s>, ElabError> {
     let arity = params0.len();
     for cl in extra {
         if cl.params.len() != arity {
@@ -1415,12 +1480,14 @@ fn rec_clause_value(
         }
         let mut value_ast = expr(value0, &inner)?;
         for p in params0.iter().rev() {
-            value_ast = Ast::Lambda(patbot_var_name(p).to_string(), Rc::new(value_ast));
+            value_ast = Ast::Lambda(scope.sym(patbot_var_name(p)), Rc::new(value_ast));
         }
         return Ok(value_ast);
     }
 
-    let fresh: Vec<String> = (0..arity).map(|i| format!("%rec_arg{i}")).collect();
+    let fresh: Vec<Symbol<'s>> = (0..arity)
+        .map(|i| scope.sym(&format!("%rec_arg{i}")))
+        .collect();
     let mut arms = Vec::with_capacity(1 + extra.len());
     arms.push(rec_clause_arm(params0, value0, scope)?);
     for cl in extra {
@@ -1428,13 +1495,13 @@ fn rec_clause_value(
     }
     let dummy = Span::default();
     let scrutinee = if arity == 1 {
-        Ast::Var(fresh[0].clone(), dummy)
+        Ast::Var(fresh[0], dummy)
     } else {
-        Ast::Tuple(fresh.iter().map(|f| Ast::Var(f.clone(), dummy)).collect())
+        Ast::Tuple(fresh.iter().map(|f| Ast::Var(*f, dummy)).collect())
     };
     let mut body = Ast::Match(Box::new(scrutinee), arms);
     for f in fresh.iter().rev() {
-        body = Ast::Lambda(f.clone(), Rc::new(body));
+        body = Ast::Lambda(*f, Rc::new(body));
     }
     Ok(body)
 }
@@ -1447,13 +1514,13 @@ fn rec_clause_value(
 /// as plain names (labeled optionals have no marker-less padding, so NO
 /// `optional_arity` entry). A pattern param desugars to a fresh var + `Match`
 /// exactly as `rec_clause_value` does for a destructuring parameter.
-fn fun_rows_to_ast(
+fn fun_rows_to_ast<'s>(
     kw_span: Span,
     opts: &c::CstOptBinders,
     param: &c::PatBot,
     body: &c::Expr,
-    scope: &Scope,
-) -> Result<Ast, ElabError> {
+    scope: &Scope<'s>,
+) -> Result<Ast<'s>, ElabError> {
     if !scope.version.has_row_polymorphism() {
         return err(
             kw_span,
@@ -1469,16 +1536,16 @@ fn fun_rows_to_ast(
         let body_scope = inner.with(patbot_var_name(param));
         expr(body, &body_scope)?
     } else {
-        let pat = patbot(param)?;
+        let pat = patbot(scope.store, param)?;
         let mut names = Vec::new();
-        collect_pattern_names(&pat, &mut names);
+        collect_pattern_names(scope.store, &pat, &mut names);
         let mut body_scope = inner;
         for n in &names {
             body_scope = body_scope.with(n);
         }
         expr(body, &body_scope)?
     };
-    lambda_opt_from(opts, param, body_ast)
+    lambda_opt_from(scope.store, opts, param, body_ast)
 }
 
 /// Build an `Ast::LambdaOpt` from a `?(l = x, …)` binder bundle, its
@@ -1490,12 +1557,15 @@ fn fun_rows_to_ast(
 /// `PatBot::Var` param becomes the `LambdaOpt`'s param directly; any other
 /// pattern desugars to a fresh `%opt_arg` var + `Match`, exactly like
 /// `rec_clause_value`'s destructuring-parameter path.
-fn lambda_opt_from(
+fn lambda_opt_from<'s>(
+    store: &'s SymbolStore,
     opts: &c::CstOptBinders,
     param: &c::PatBot,
-    inner_body_ast: Ast,
-) -> Result<Ast, ElabError> {
-    let mut opt_pairs: Vec<(String, String)> = Vec::with_capacity(opts.entries.len());
+    inner_body_ast: Ast<'s>,
+) -> Result<Ast<'s>, ElabError> {
+    // `(label, binder)`: the label is data and stays text, the binder is a
+    // lexical variable and is interned (see `ast::Ast::LambdaOpt`).
+    let mut opt_pairs: Vec<(String, Symbol<'s>)> = Vec::with_capacity(opts.entries.len());
     let mut seen = HashSet::new();
     for e in &opts.entries {
         if !seen.insert(e.label.name.clone()) {
@@ -1507,19 +1577,19 @@ fn lambda_opt_from(
                 ),
             );
         }
-        opt_pairs.push((e.label.name.clone(), e.var.name.clone()));
+        opt_pairs.push((e.label.name.clone(), store.intern(&e.var.name)));
     }
     if is_var_patbot(param) {
         Ok(Ast::LambdaOpt {
             opts: opt_pairs,
-            param: patbot_var_name(param).to_string(),
+            param: store.intern(patbot_var_name(param)),
             body: Rc::new(inner_body_ast),
         })
     } else {
-        let fresh = "%opt_arg".to_string();
-        let pat = patbot(param)?;
+        let fresh = store.intern("%opt_arg");
+        let pat = patbot(store, param)?;
         let matched = Ast::Match(
-            Box::new(Ast::Var(fresh.clone(), Span::default())),
+            Box::new(Ast::Var(fresh, Span::default())),
             vec![MatchArm {
                 pat,
                 guard: None,
@@ -1555,11 +1625,11 @@ fn lambda_opt_from(
 /// it outright for a `val math` binding's own parameter list before it ever
 /// reaches elaboration (math command bundles are optional-arg-rows
 /// increment 3b).
-fn curry_cmd_params_v1(
+fn curry_cmd_params_v1<'s>(
     params: &[c::Param],
-    scope: &Scope,
-    build_value: impl FnOnce(&Scope) -> Result<Ast, ElabError>,
-) -> Result<Ast, ElabError> {
+    scope: &Scope<'s>,
+    build_value: impl FnOnce(&Scope<'s>) -> Result<Ast<'s>, ElabError>,
+) -> Result<Ast<'s>, ElabError> {
     if !params.iter().any(|p| matches!(p, c::Param::Bundled { .. })) {
         let patbots = params_to_patbots(params);
         return curry_cmd_params(&patbots, scope, build_value);
@@ -1594,16 +1664,20 @@ fn curry_cmd_params_v1(
     let dummy = Span::default();
     for (i, p) in params.iter().enumerate().rev() {
         value_ast = match p {
-            c::Param::Bundled { opts, body } => lambda_opt_from(opts, body, value_ast)?,
-            c::Param::Optional { name, .. } => Ast::Lambda(name.name.clone(), Rc::new(value_ast)),
+            c::Param::Bundled { opts, body } => {
+                lambda_opt_from(scope.store, opts, body, value_ast)?
+            }
+            c::Param::Optional { name, .. } => {
+                Ast::Lambda(scope.sym(&name.name), Rc::new(value_ast))
+            }
             c::Param::Pat(pat) if is_var_patbot(pat) => {
-                Ast::Lambda(patbot_var_name(pat).to_string(), Rc::new(value_ast))
+                Ast::Lambda(scope.sym(patbot_var_name(pat)), Rc::new(value_ast))
             }
             c::Param::Pat(pat) => {
-                let pp = patbot(pat)?;
-                let fresh = format!("%cmd_arg{i}");
+                let pp = patbot(scope.store, pat)?;
+                let fresh = scope.sym(&format!("%cmd_arg{i}"));
                 Ast::Lambda(
-                    fresh.clone(),
+                    fresh,
                     Rc::new(Ast::Match(
                         Box::new(Ast::Var(fresh, dummy)),
                         vec![MatchArm {
@@ -1625,13 +1699,14 @@ fn curry_cmd_params_v1(
 /// general fold (mirroring `curry_cmd_params`'s own inline scope-extension,
 /// factored out here since the bundle-aware fold interleaves it with a
 /// bundle's own binder names).
-fn extend_with_patbot(scope: Scope, p: &c::PatBot) -> Result<Scope, ElabError> {
+fn extend_with_patbot<'s>(scope: Scope<'s>, p: &c::PatBot) -> Result<Scope<'s>, ElabError> {
     if is_var_patbot(p) {
         Ok(scope.with(patbot_var_name(p)))
     } else {
-        let pat = patbot(p)?;
+        let store = scope.store;
+        let pat = patbot(store, p)?;
         let mut names = Vec::new();
-        collect_pattern_names(&pat, &mut names);
+        collect_pattern_names(store, &pat, &mut names);
         let mut s = scope;
         for n in &names {
             s = s.with(n);
@@ -1688,15 +1763,18 @@ fn patbot_var_name(p: &c::PatBot) -> &str {
 /// [`rec_clause_value`]'s doc comment for the arity-1-vs-N pattern shape) —
 /// the body sees every name the patterns bind, exactly like an ordinary
 /// `match` arm ([`match_arm`], below).
-fn rec_clause_arm(
+fn rec_clause_arm<'s>(
     params: &[c::PatBot],
     value: &c::Expr,
-    scope: &Scope,
-) -> Result<MatchArm, ElabError> {
-    let pats: Vec<Pattern> = params.iter().map(patbot).collect::<Result<_, _>>()?;
+    scope: &Scope<'s>,
+) -> Result<MatchArm<'s>, ElabError> {
+    let pats: Vec<Pattern<'s>> = params
+        .iter()
+        .map(|p| patbot(scope.store, p))
+        .collect::<Result<_, _>>()?;
     let mut names = Vec::new();
     for p in &pats {
-        collect_pattern_names(p, &mut names);
+        collect_pattern_names(scope.store, p, &mut names);
     }
     let mut inner = scope.clone();
     for n in &names {
@@ -1715,14 +1793,23 @@ fn rec_clause_arm(
     })
 }
 
-fn expr(e: &c::Expr, scope: &Scope) -> Result<Ast, ElabError> {
+fn expr<'s>(e: &c::Expr, scope: &Scope<'s>) -> Result<Ast<'s>, ElabError> {
     match e {
         c::Expr::LetRecIn {
             first, ands, body, ..
         } => {
             let (bindings, rec_scope) = rec_bindings(first, ands, scope, &[])?;
             let body_ast = expr(body, &rec_scope)?;
-            Ok(Ast::LetRecIn(bindings, Box::new(body_ast)))
+            // `rec_bindings` yields text keys (it mangles module members'
+            // into `$M.name`); intern them here, as `nest` does for the
+            // top-level spine.
+            Ok(Ast::LetRecIn(
+                bindings
+                    .into_iter()
+                    .map(|(n, v)| (scope.sym(&n), v))
+                    .collect(),
+                Box::new(body_ast),
+            ))
         }
         c::Expr::LetIn {
             name,
@@ -1749,7 +1836,7 @@ fn expr(e: &c::Expr, scope: &Scope) -> Result<Ast, ElabError> {
             body_scope.insert_with_shape(&name.name, param_optional_shape(params));
             let body_ast = expr(body, &body_scope)?;
             Ok(Ast::LetIn(
-                name.name.clone(),
+                scope.sym(&name.name),
                 Box::new(value_ast),
                 Box::new(body_ast),
             ))
@@ -1764,9 +1851,9 @@ fn expr(e: &c::Expr, scope: &Scope) -> Result<Ast, ElabError> {
         // `pat`, whose bound names are in scope for `body`.
         c::Expr::LetPatternIn { pat, value, body, .. } => {
             let value_ast = expr(value, scope)?;
-            let lowered_pat = pattern(pat)?;
+            let lowered_pat = pattern(scope.store, pat)?;
             let mut names = Vec::new();
-            collect_pattern_names(&lowered_pat, &mut names);
+            collect_pattern_names(scope.store, &lowered_pat, &mut names);
             let mut inner = scope.clone();
             for n in &names {
                 inner = inner.with(n);
@@ -1839,7 +1926,7 @@ fn expr(e: &c::Expr, scope: &Scope) -> Result<Ast, ElabError> {
             let inner = scope.with(&name.name);
             let body_ast = expr(body, &inner)?;
             Ok(Ast::LetMutableIn(
-                name.name.clone(),
+                scope.sym(&name.name),
                 Box::new(init_ast),
                 Box::new(body_ast),
             ))
@@ -1865,7 +1952,7 @@ fn expr(e: &c::Expr, scope: &Scope) -> Result<Ast, ElabError> {
             body_scope.insert_with_shape(&cmd.name, param_optional_shape(params));
             let body_ast = expr(body, &body_scope)?;
             Ok(Ast::LetMathIn(
-                cmd.name.clone(),
+                scope.sym(&cmd.name),
                 Box::new(value_ast),
                 Box::new(body_ast),
             ))
@@ -1975,12 +2062,12 @@ fn op_prec(tok: &Token) -> (u8, Assoc) {
 /// `nxbfr`'s postfix `before` (see `OpChain::before`'s doc comment in
 /// `cst.rs`): `e1 before e2` → `Ast::Sequential(e1, e2)`, where `e1` is the
 /// whole precedence-folded operator chain.
-fn op_chain(chain: &c::OpChain, scope: &Scope) -> Result<Ast, ElabError> {
+fn op_chain<'s>(chain: &c::OpChain, scope: &Scope<'s>) -> Result<Ast<'s>, ElabError> {
     let head_ast = app_expr(&chain.head, scope)?;
     let folded = if chain.tail.is_empty() {
         head_ast
     } else {
-        let mut atoms: VecDeque<Ast> = VecDeque::with_capacity(chain.tail.len() + 1);
+        let mut atoms: VecDeque<Ast<'s>> = VecDeque::with_capacity(chain.tail.len() + 1);
         atoms.push_back(head_ast);
         let mut ops: VecDeque<(String, Span, Token)> = VecDeque::with_capacity(chain.tail.len());
         for rhs in &chain.tail {
@@ -2001,10 +2088,14 @@ fn op_chain(chain: &c::OpChain, scope: &Scope) -> Result<Ast, ElabError> {
             // is never a `Scope::rename` target (it's deliberately never
             // scope-bound at all, see this arm's own comment above), so
             // resolving it is a no-op.
-            ops.push_back((scope.resolve(&text), rhs.op.span, rhs.op.tok.clone()));
+            ops.push_back((
+                scope.resolve_text(&text).to_string(),
+                rhs.op.span,
+                rhs.op.tok.clone(),
+            ));
             atoms.push_back(app_expr(&rhs.rhs, scope)?);
         }
-        climb(&mut atoms, &mut ops, 0)
+        climb(&mut atoms, &mut ops, 0, scope)
     };
     match &chain.before {
         Some(bt) => Ok(Ast::Sequential(
@@ -2029,11 +2120,12 @@ fn op_chain(chain: &c::OpChain, scope: &Scope) -> Result<Ast, ElabError> {
 /// see `op_prec`), so `a |> f |> g` folds as `(a |> f) |> g` = `g (f a)`,
 /// matching the bundled `list.satyg`'s pipe-heavy style (`reverse`,
 /// `map-adjacent`, `map-with-ends`).
-fn climb(
-    atoms: &mut VecDeque<Ast>,
+fn climb<'s>(
+    atoms: &mut VecDeque<Ast<'s>>,
     ops: &mut VecDeque<(String, Span, Token)>,
     min_prec: u8,
-) -> Ast {
+    scope: &Scope<'s>,
+) -> Ast<'s> {
     let mut lhs = atoms
         .pop_front()
         .expect("one more atom than consumed operators");
@@ -2047,12 +2139,15 @@ fn climb(
             Assoc::Left => prec + 1,
             Assoc::Right => prec,
         };
-        let rhs = climb(atoms, ops, next_min);
+        let rhs = climb(atoms, ops, next_min, scope);
         lhs = if text == "|>" {
             Ast::Apply(Box::new(rhs), Box::new(lhs))
         } else {
             Ast::Apply(
-                Box::new(Ast::Apply(Box::new(Ast::Var(text, span)), Box::new(lhs))),
+                Box::new(Ast::Apply(
+                    Box::new(Ast::Var(scope.sym(&text), span)),
+                    Box::new(lhs),
+                )),
                 Box::new(rhs),
             )
         };
@@ -2062,7 +2157,7 @@ fn climb(
 
 // ---- application chains --------------------------------------------------
 
-fn app_expr(a: &c::AppExpr, scope: &Scope) -> Result<Ast, ElabError> {
+fn app_expr<'s>(a: &c::AppExpr, scope: &Scope<'s>) -> Result<Ast<'s>, ElabError> {
     // `not` binds looser than application (upstream `nxbot: NOT nxbot` in
     // parser.mly): `not f x` means `not (f x)`, NOT `(not f) x`. This port's
     // lexer deliberately leaves `not` an ordinary identifier (so it can still
@@ -2078,7 +2173,7 @@ fn app_expr(a: &c::AppExpr, scope: &Scope) -> Result<Ast, ElabError> {
         && !a.args.is_empty()
     {
         if let c::Atomic::Var(v) = &a.head {
-            if v.name == "not" && scope.contains("not") && scope.resolve("not") == "not" {
+            if v.name == "not" && scope.contains("not") && scope.resolve_text("not") == "not" {
                 let not_fn = scoped_var("not", v.span, scope)?;
                 let mut inner = app_arg_to_ast(&a.args[0], scope)?;
                 for rest in &a.args[1..] {
@@ -2131,7 +2226,7 @@ fn app_expr(a: &c::AppExpr, scope: &Scope) -> Result<Ast, ElabError> {
     }
 }
 
-fn app_chain_generic(a: &c::AppExpr, scope: &Scope) -> Result<Ast, ElabError> {
+fn app_chain_generic<'s>(a: &c::AppExpr, scope: &Scope<'s>) -> Result<Ast<'s>, ElabError> {
     let mut ast = atomic_head_with_excl(&a.head, &a.head_accesses, a.excl.as_ref(), scope)?;
     // Marker-less optional-argument defaulting (`Scope`'s doc comment /
     // `docs/plans/frontend-completion.md` Sub-area 2): if the head is a bare
@@ -2203,7 +2298,11 @@ fn app_chain_generic(a: &c::AppExpr, scope: &Scope) -> Result<Ast, ElabError> {
 /// 0.1 `?(l = e, …)`-bundled argument becomes an [`Ast::ApplyOpt`] (carrying
 /// the labeled optionals plus the paired positional argument); every other
 /// argument is an ordinary [`Ast::Apply`].
-fn apply_one_arg(func: Ast, arg: &c::AppArg, scope: &Scope) -> Result<Ast, ElabError> {
+fn apply_one_arg<'s>(
+    func: Ast<'s>,
+    arg: &c::AppArg,
+    scope: &Scope<'s>,
+) -> Result<Ast<'s>, ElabError> {
     match arg {
         c::AppArg::Bundled {
             opts,
@@ -2234,10 +2333,10 @@ fn apply_one_arg(func: Ast, arg: &c::AppArg, scope: &Scope) -> Result<Ast, ElabE
 /// Elaborate a `?(l = e, …)` optional-argument bundle: version-gate it (a
 /// 0.0.6-parsed occurrence is rejected here), reject a duplicate label within
 /// the one bundle, and elaborate each label's value expression.
-fn elaborate_opt_args(
+fn elaborate_opt_args<'s>(
     opts: &c::CstOptArgs,
-    scope: &Scope,
-) -> Result<Vec<(String, Ast)>, ElabError> {
+    scope: &Scope<'s>,
+) -> Result<Vec<(String, Ast<'s>)>, ElabError> {
     if !scope.version.has_row_polymorphism() {
         return err(
             opts.q.0,
@@ -2245,7 +2344,7 @@ fn elaborate_opt_args(
              this file is compiled as 0.0.6",
         );
     }
-    let mut out: Vec<(String, Ast)> = Vec::with_capacity(opts.entries.len());
+    let mut out: Vec<(String, Ast<'s>)> = Vec::with_capacity(opts.entries.len());
     let mut seen = HashSet::new();
     for e in &opts.entries {
         if !seen.insert(e.label.name.clone()) {
@@ -2267,7 +2366,7 @@ fn elaborate_opt_args(
 /// head only — any other head shape (a parenthesized expression, a
 /// dereferenced/accessed value, …) can never name a known `let`/`let ..
 /// in` binding directly, so it conservatively reports `&[]` (unknown).
-fn head_optional_shape<'a>(head: &c::Atomic, scope: &'a Scope) -> &'a [bool] {
+fn head_optional_shape<'s, 'a>(head: &c::Atomic, scope: &'a Scope<'s>) -> &'a [bool] {
     match head {
         c::Atomic::Var(v) => scope.optional_shape(&v.name),
         c::Atomic::VarWithMod(v) => scope.optional_shape(&qualify_key(&v.mods, &v.name)),
@@ -2291,12 +2390,12 @@ fn head_optional_shape<'a>(head: &c::Atomic, scope: &'a Scope) -> &'a [bool] {
 /// `Apply(Var(excl_text), <head+accesses>)` exactly matching v0.0.6's
 /// `UTApply` shape above (`varnm` there is always unqualified — this CST has
 /// no qualified-`!` form either, so no module-mangling applies to it).
-fn atomic_head_with_excl(
+fn atomic_head_with_excl<'s>(
     head: &c::Atomic,
     accesses: &[c::AccessSeg],
     excl: Option<&UnopExclamTok>,
-    scope: &Scope,
-) -> Result<Ast, ElabError> {
+    scope: &Scope<'s>,
+) -> Result<Ast<'s>, ElabError> {
     let mut ast = atomic(head, scope)?;
     for acc in accesses {
         ast = Ast::AccessField(Box::new(ast), acc.label.name.clone(), acc.label.span);
@@ -2323,7 +2422,7 @@ fn atomic_head_with_excl(
 /// (there is no "just omit the argument entirely, no marker at all" form —
 /// see `docs/plans/frontend-completion.md` Sub-area 2), so elaboration alone
 /// (no typechecker involvement) fully resolves it.
-fn app_arg_to_ast(arg: &c::AppArg, scope: &Scope) -> Result<Ast, ElabError> {
+fn app_arg_to_ast<'s>(arg: &c::AppArg, scope: &Scope<'s>) -> Result<Ast<'s>, ElabError> {
     match arg {
         c::AppArg::Optional { value, .. } => {
             let inner = atomic(value, scope)?;
@@ -2358,12 +2457,12 @@ fn app_arg_to_ast(arg: &c::AppArg, scope: &Scope) -> Result<Ast, ElabError> {
 /// wrap the result in one `LetIn` alias per matched name (`x = Name.x`) —
 /// there is no separate "module scope" at the `Ast` level, so the aliasing
 /// must be visible there too.
-fn open_module(
+fn open_module<'s>(
     module_name: &str,
     name_span: Span,
-    scope: &Scope,
-    body: impl FnOnce(&Scope) -> Result<Ast, ElabError>,
-) -> Result<Ast, ElabError> {
+    scope: &Scope<'s>,
+    body: impl FnOnce(&Scope<'s>) -> Result<Ast<'s>, ElabError>,
+) -> Result<Ast<'s>, ElabError> {
     let prefix = format!("{module_name}.");
     let matches = scope.names_with_prefix(&prefix);
     let mut inner = scope.clone();
@@ -2384,12 +2483,16 @@ fn open_module(
         // `Var` refers to a binding that exists. For a top-level module the
         // rename is identity, so this is a no-op there.
         let key = scope.resolve(&q);
-        ast = Ast::LetIn(suffix, Box::new(Ast::Var(key, name_span)), Box::new(ast));
+        ast = Ast::LetIn(
+            scope.sym(&suffix),
+            Box::new(Ast::Var(key, name_span)),
+            Box::new(ast),
+        );
     }
     Ok(ast)
 }
 
-fn atomic(a: &c::Atomic, scope: &Scope) -> Result<Ast, ElabError> {
+fn atomic<'s>(a: &c::Atomic, scope: &Scope<'s>) -> Result<Ast<'s>, ElabError> {
     match a {
         c::Atomic::Length(l) => match Length::from_unit(l.value, &l.unit) {
             Some(len) => Ok(Ast::Length(len)),
@@ -2445,7 +2548,7 @@ fn atomic(a: &c::Atomic, scope: &Scope) -> Result<Ast, ElabError> {
 }
 
 /// `( expr )` → itself; `( expr, expr, … )` → `Ast::Tuple`.
-fn paren_body(pb: &c::ParenBody, scope: &Scope) -> Result<Ast, ElabError> {
+fn paren_body<'s>(pb: &c::ParenBody, scope: &Scope<'s>) -> Result<Ast<'s>, ElabError> {
     let first = expr(&pb.first, scope)?;
     if pb.rest.is_empty() {
         Ok(first)
@@ -2464,7 +2567,7 @@ fn paren_body(pb: &c::ParenBody, scope: &Scope) -> Result<Ast, ElabError> {
 /// 833-840 — `rcd |> List.fold_left (fun utast1 (fldnm, utastF) ->
 /// UTUpdateField(utast1, fldnm, utastF)) utast`, i.e. exactly one
 /// `UpdateField` per field, left-to-right, threading the accumulator).
-fn record_body_to_ast(body: &c::RecordBody, scope: &Scope) -> Result<Ast, ElabError> {
+fn record_body_to_ast<'s>(body: &c::RecordBody, scope: &Scope<'s>) -> Result<Ast<'s>, ElabError> {
     match body {
         c::RecordBody::Fields(fields) => {
             let mut out = Vec::with_capacity(fields.len());
@@ -2487,17 +2590,17 @@ fn record_body_to_ast(body: &c::RecordBody, scope: &Scope) -> Result<Ast, ElabEr
 // ---- patterns -------------------------------------------------------------
 
 /// `patas`: a `PatCons`, plus an optional `as name` binding.
-fn pattern(p: &c::Pattern) -> Result<Pattern, ElabError> {
-    let head = pat_cons(&p.head)?;
+fn pattern<'s>(store: &'s SymbolStore, p: &c::Pattern) -> Result<Pattern<'s>, ElabError> {
+    let head = pat_cons(store, &p.head)?;
     match &p.as_clause {
-        Some(ac) => Ok(Pattern::As(Box::new(head), ac.name.name.clone())),
+        Some(ac) => Ok(Pattern::As(Box::new(head), store.intern(&ac.name.name))),
         None => Ok(head),
     }
 }
 
 /// `pattr`: `patbot (:: patbot)*`, folded RIGHT (`::` is right-associative):
 /// `a :: b :: c` → `Cons(a, Cons(b, c))`.
-fn pat_cons(pc: &c::PatCons) -> Result<Pattern, ElabError> {
+fn pat_cons<'s>(store: &'s SymbolStore, pc: &c::PatCons) -> Result<Pattern<'s>, ElabError> {
     let mut segs: Vec<&c::PatBot> = Vec::with_capacity(pc.tail.len() + 1);
     segs.push(&pc.head);
     for seg in &pc.tail {
@@ -2505,17 +2608,17 @@ fn pat_cons(pc: &c::PatCons) -> Result<Pattern, ElabError> {
     }
     let mut iter = segs.into_iter().rev();
     let last = iter.next().expect("PatCons always has a head");
-    let mut acc = patbot(last)?;
+    let mut acc = patbot(store, last)?;
     for pb in iter {
-        acc = Pattern::Cons(Box::new(patbot(pb)?), Box::new(acc));
+        acc = Pattern::Cons(Box::new(patbot(store, pb)?), Box::new(acc));
     }
     Ok(acc)
 }
 
-fn patbot(pb: &c::PatBot) -> Result<Pattern, ElabError> {
+fn patbot<'s>(store: &'s SymbolStore, pb: &c::PatBot) -> Result<Pattern<'s>, ElabError> {
     match pb {
         c::PatBot::CtorApplied { ctor, arg } => {
-            Ok(Pattern::Ctor(ctor.name.clone(), Some(Box::new(patbot(arg)?))))
+            Ok(Pattern::Ctor(ctor.name.clone(), Some(Box::new(patbot(store, arg)?))))
         }
         c::PatBot::Ctor(ctor) => Ok(Pattern::Ctor(ctor.name.clone(), None)),
         c::PatBot::Int(i) => Ok(Pattern::Int(i.value)),
@@ -2523,17 +2626,17 @@ fn patbot(pb: &c::PatBot) -> Result<Pattern, ElabError> {
         c::PatBot::False(_) => Ok(Pattern::Bool(false)),
         c::PatBot::Str(l) => Ok(Pattern::Str(l.body.clone())),
         c::PatBot::Wild(_) => Ok(Pattern::Wild),
-        c::PatBot::Var(v) => Ok(Pattern::Var(v.name.clone())),
+        c::PatBot::Var(v) => Ok(Pattern::Var(store.intern(&v.name))),
         c::PatBot::Unit { .. } => Ok(Pattern::Unit),
         c::PatBot::Paren { inner, .. } => {
-            let first = pattern(&inner.first)?;
+            let first = pattern(store, &inner.first)?;
             if inner.rest.is_empty() {
                 Ok(first)
             } else {
                 let mut items = Vec::with_capacity(inner.rest.len() + 1);
                 items.push(first);
                 for r in &inner.rest {
-                    items.push(pattern(&r.value)?);
+                    items.push(pattern(store, &r.value)?);
                 }
                 Ok(Pattern::Tuple(items))
             }
@@ -2541,7 +2644,7 @@ fn patbot(pb: &c::PatBot) -> Result<Pattern, ElabError> {
         c::PatBot::List { items, .. } => {
             let mut acc = Pattern::EmptyList;
             for it in items.iter().rev() {
-                acc = Pattern::Cons(Box::new(pattern(&it.value)?), Box::new(acc));
+                acc = Pattern::Cons(Box::new(pattern(store, &it.value)?), Box::new(acc));
             }
             Ok(acc)
         }
@@ -2551,23 +2654,23 @@ fn patbot(pb: &c::PatBot) -> Result<Pattern, ElabError> {
 /// Collect every name a (lowered) pattern binds — `Var` occurrences plus any
 /// `as name` clauses — so the elaborator can extend the scope for a match
 /// arm's guard and body.
-fn collect_pattern_names(p: &Pattern, out: &mut Vec<String>) {
+fn collect_pattern_names<'s>(store: &'s SymbolStore, p: &Pattern<'s>, out: &mut Vec<&'s str>) {
     match p {
-        Pattern::Var(n) => out.push(n.clone()),
+        Pattern::Var(n) => out.push(store.resolve(*n)),
         Pattern::As(inner, n) => {
-            collect_pattern_names(inner, out);
-            out.push(n.clone());
+            collect_pattern_names(store, inner, out);
+            out.push(store.resolve(*n));
         }
         Pattern::Tuple(ps) => {
             for p in ps {
-                collect_pattern_names(p, out);
+                collect_pattern_names(store, p, out);
             }
         }
         Pattern::Cons(head, tail) => {
-            collect_pattern_names(head, out);
-            collect_pattern_names(tail, out);
+            collect_pattern_names(store, head, out);
+            collect_pattern_names(store, tail, out);
         }
-        Pattern::Ctor(_, Some(inner)) => collect_pattern_names(inner, out),
+        Pattern::Ctor(_, Some(inner)) => collect_pattern_names(store, inner, out),
         Pattern::Wild
         | Pattern::Unit
         | Pattern::Bool(_)
@@ -2578,10 +2681,10 @@ fn collect_pattern_names(p: &Pattern, out: &mut Vec<String>) {
     }
 }
 
-fn match_arm(arm: &c::MatchArm, scope: &Scope) -> Result<MatchArm, ElabError> {
-    let pat = pattern(&arm.pat)?;
+fn match_arm<'s>(arm: &c::MatchArm, scope: &Scope<'s>) -> Result<MatchArm<'s>, ElabError> {
+    let pat = pattern(scope.store, &arm.pat)?;
     let mut names = Vec::new();
-    collect_pattern_names(&pat, &mut names);
+    collect_pattern_names(scope.store, &pat, &mut names);
     let mut inner = scope.clone();
     for n in &names {
         inner = inner.with(n);
@@ -2629,7 +2732,7 @@ fn math_cmd_key(name: &AnyMathCmdTok) -> (String, Span) {
 /// since `InlineElem`'s `ItemBullet` markers are kept flat rather than
 /// grouped in-grammar (see `cst.rs`'s doc comment on `InlineElem`), the
 /// dispatch happens here instead of in the parser.
-fn inline_text_ast(elems: &[c::InlineElem], scope: &Scope) -> Result<Ast, ElabError> {
+fn inline_text_ast<'s>(elems: &[c::InlineElem], scope: &Scope<'s>) -> Result<Ast<'s>, ElabError> {
     // `{| a | b | … |}` horizontal-LIST literal (`sxlist` in parser.mly): a
     // leading `|` (`Sep`) immediately after `{` marks the inline-text-list
     // form — a value of type `inline-text list` — distinct from a plain
@@ -2651,7 +2754,7 @@ fn inline_text_ast(elems: &[c::InlineElem], scope: &Scope) -> Result<Ast, ElabEr
 /// and `|}` are structural and dropped; an interior empty group is a real
 /// empty cell (`{| a | | b |}`). Each cell is elaborated recursively, so a
 /// cell may itself be an itemize (`{* … }`).
-fn inline_text_list(elems: &[c::InlineElem], scope: &Scope) -> Result<Ast, ElabError> {
+fn inline_text_list<'s>(elems: &[c::InlineElem], scope: &Scope<'s>) -> Result<Ast<'s>, ElabError> {
     let mut groups: Vec<&[c::InlineElem]> = Vec::new();
     let mut start = 0usize;
     for (i, e) in elems.iter().enumerate() {
@@ -2681,7 +2784,10 @@ fn inline_text_list(elems: &[c::InlineElem], scope: &Scope) -> Result<Ast, ElabE
 /// slice) — one showing up here is reported as an error rather than
 /// panicking, since a defensive diagnostic is friendlier than a panic even
 /// though the shape should be unreachable.
-fn inline_elems(elems: &[c::InlineElem], scope: &Scope) -> Result<Vec<IText>, ElabError> {
+fn inline_elems<'s>(
+    elems: &[c::InlineElem],
+    scope: &Scope<'s>,
+) -> Result<Vec<IText<'s>>, ElabError> {
     let mut out = Vec::new();
     let mut text = String::new();
     for el in elems {
@@ -2748,7 +2854,7 @@ fn inline_elems(elems: &[c::InlineElem], scope: &Scope) -> Result<Vec<IText>, El
     Ok(out)
 }
 
-fn block_elems(elems: &[c::BlockElem], scope: &Scope) -> Result<Vec<BText>, ElabError> {
+fn block_elems<'s>(elems: &[c::BlockElem], scope: &Scope<'s>) -> Result<Vec<BText<'s>>, ElabError> {
     let mut out = Vec::with_capacity(elems.len());
     for el in elems {
         match el {
@@ -2793,7 +2899,11 @@ fn block_elems(elems: &[c::BlockElem], scope: &Scope) -> Result<Vec<BText>, Elab
 /// (`param_optional_shape` only marks `Param::Optional` positions, and
 /// `Scope::optional_arity` only ever reads the *leading* run of such
 /// positions) — so the two mechanisms never interact.
-fn cmd_args(tail: &c::CmdTail, scope: &Scope, shape: &[bool]) -> Result<Vec<CmdArg>, ElabError> {
+fn cmd_args<'s>(
+    tail: &c::CmdTail,
+    scope: &Scope<'s>,
+    shape: &[bool],
+) -> Result<Vec<CmdArg<'s>>, ElabError> {
     let args: Vec<&c::AppArg> = match tail {
         c::CmdTail::Semi(_) => Vec::new(),
         c::CmdTail::Args { first, rest, .. } => {
@@ -2855,7 +2965,7 @@ fn cmd_args(tail: &c::CmdTail, scope: &Scope, shape: &[bool]) -> Result<Vec<CmdA
 /// arm); every other `AppArg` shape becomes a `CmdArg` with empty `opts` (the
 /// unbundled call — the ONLY shape any pre-3b-β producer, and every
 /// 0.0.6-reachable call, ever emits).
-fn cmd_arg_to_ast(arg: &c::AppArg, scope: &Scope) -> Result<CmdArg, ElabError> {
+fn cmd_arg_to_ast<'s>(arg: &c::AppArg, scope: &Scope<'s>) -> Result<CmdArg<'s>, ElabError> {
     match arg {
         c::AppArg::Bundled {
             opts,
@@ -2881,9 +2991,9 @@ fn cmd_arg_to_ast(arg: &c::AppArg, scope: &Scope) -> Result<CmdArg, ElabError> {
 
 /// One node of the itemize tree being built, before it is lowered to the
 /// `Ctor("Item", ..)` value shape by [`item_node_to_ast`].
-struct ItemNode {
-    text: Ast,
-    children: Vec<ItemNode>,
+struct ItemNode<'s> {
+    text: Ast<'s>,
+    children: Vec<ItemNode<'s>>,
 }
 
 fn inline_elem_span(el: &c::InlineElem) -> Span {
@@ -2907,7 +3017,7 @@ fn inline_elem_span(el: &c::InlineElem) -> Span {
 /// node to `NonValueConstructor("Item", PrimitiveTuple([e1; e2]))` — the
 /// `Item` constructor's `(inline-text * itemize list)` payload shape from
 /// `primitives.cppo.ml:159`).
-fn itemize(elems: &[c::InlineElem], scope: &Scope) -> Result<Ast, ElabError> {
+fn itemize<'s>(elems: &[c::InlineElem], scope: &Scope<'s>) -> Result<Ast<'s>, ElabError> {
     // `sxsep`'s itemize alternative is `nonempty_list(sxitem)` (parser.mly:
     // 1042) — i.e. the *whole* group must be bullets-and-their-content, no
     // leading plain text before the first bullet.
@@ -2961,7 +3071,7 @@ fn itemize(elems: &[c::InlineElem], scope: &Scope) -> Result<Ast, ElabError> {
 /// which is equivalent (and much simpler to transcribe with a mutable tree)
 /// to just always operating on `node.children`'s *last* element: recurse
 /// into it while `i < depth`, otherwise push a new sibling leaf.
-fn insert_last(node: &mut ItemNode, i: usize, depth: usize, new_text: Ast) {
+fn insert_last<'s>(node: &mut ItemNode<'s>, i: usize, depth: usize, new_text: Ast<'s>) {
     if node.children.is_empty() {
         node.children.push(ItemNode {
             text: new_text,
@@ -2979,7 +3089,7 @@ fn insert_last(node: &mut ItemNode, i: usize, depth: usize, new_text: Ast) {
     }
 }
 
-fn item_node_to_ast(node: ItemNode) -> Ast {
+fn item_node_to_ast<'s>(node: ItemNode<'s>) -> Ast<'s> {
     let children = Ast::List(node.children.into_iter().map(item_node_to_ast).collect());
     Ast::Ctor(
         "Item".to_string(),
@@ -2989,7 +3099,10 @@ fn item_node_to_ast(node: ItemNode) -> Ast {
 
 // ---- quoted math ------------------------------------------------------------
 
-fn lower_math_elems(elems: &[cst::MathErased], scope: &Scope) -> Result<Vec<MathElem>, ElabError> {
+fn lower_math_elems<'s>(
+    elems: &[cst::MathErased],
+    scope: &Scope<'s>,
+) -> Result<Vec<MathElem<'s>>, ElabError> {
     elems.iter().map(|e| math_elem_cst(e, scope)).collect()
 }
 
@@ -3003,7 +3116,7 @@ fn lower_math_elems(elems: &[cst::MathErased], scope: &Scope) -> Result<Vec<Math
 /// (`${|a|b}` rejected); `${|}` = empty list, `${||}` = one empty cell;
 /// `|` never carries scripts. Split is over the flat erased stream so the
 /// sibling inline `{| … |}` (sxsep) can reuse it later.
-fn math_block_ast(elems: &[cst::MathErased], scope: &Scope) -> Result<Ast, ElabError> {
+fn math_block_ast<'s>(elems: &[cst::MathErased], scope: &Scope<'s>) -> Result<Ast<'s>, ElabError> {
     let leading_sep = matches!(elems.first(), Some(e) if matches!(&e.base, c::MathBot::Sep(_)));
     if !leading_sep {
         return Ok(Ast::MathText(Rc::new(lower_math_elems(elems, scope)?)));
@@ -3019,7 +3132,7 @@ fn math_block_ast(elems: &[cst::MathErased], scope: &Scope) -> Result<Ast, ElabE
         let c::MathBot::Sep(first) = &elems[0].base else { unreachable!() };
         return err(first.0, "a '|'-separated math list must end with a trailing '|' (write `${| a | b |}`)");
     }
-    let mut segments: Vec<Ast> = Vec::new();
+    let mut segments: Vec<Ast<'s>> = Vec::new();
     let mut seg_start = 1usize;
     for (i, e) in elems.iter().enumerate().skip(1) {
         if matches!(&e.base, c::MathBot::Sep(_)) {
@@ -3031,12 +3144,12 @@ fn math_block_ast(elems: &[cst::MathErased], scope: &Scope) -> Result<Ast, ElabE
     Ok(Ast::List(segments))
 }
 
-fn math_elem_cst(m: &c::MathElemCst, scope: &Scope) -> Result<MathElem, ElabError> {
+fn math_elem_cst<'s>(m: &c::MathElemCst, scope: &Scope<'s>) -> Result<MathElem<'s>, ElabError> {
     let base = math_bot(&m.base, scope)?;
     fold_math_scripts(base, &m.scripts, scope)
 }
 
-fn math_bot(b: &c::MathBot, scope: &Scope) -> Result<MathElem, ElabError> {
+fn math_bot<'s>(b: &c::MathBot, scope: &Scope<'s>) -> Result<MathElem<'s>, ElabError> {
     match b {
         c::MathBot::Cmd { name, args } => {
             let (key, span) = math_cmd_key(name);
@@ -3100,7 +3213,10 @@ fn math_bot(b: &c::MathBot, scope: &Scope) -> Result<MathElem, ElabError> {
     }
 }
 
-fn math_group_arg(g: &c::MathGroupArg, scope: &Scope) -> Result<Vec<MathElem>, ElabError> {
+fn math_group_arg<'s>(
+    g: &c::MathGroupArg,
+    scope: &Scope<'s>,
+) -> Result<Vec<MathElem<'s>>, ElabError> {
     match g {
         c::MathGroupArg::Group { elems, .. } => lower_math_elems(elems, scope),
         c::MathGroupArg::Bot(b) => Ok(vec![math_bot(b, scope)?]),
@@ -3133,11 +3249,11 @@ fn math_group_arg(g: &c::MathGroupArg, scope: &Scope) -> Result<Vec<MathElem>, E
 /// carries the same information (which script, which count, and that they
 /// apply to the same base) without replicating the internal rendering hack,
 /// which has no meaning yet anyway (typesetting is deferred to phase 7).
-fn fold_math_scripts(
-    base: MathElem,
+fn fold_math_scripts<'s>(
+    base: MathElem<'s>,
     scripts: &[c::MathScript],
-    scope: &Scope,
-) -> Result<MathElem, ElabError> {
+    scope: &Scope<'s>,
+) -> Result<MathElem<'s>, ElabError> {
     let mut acc = base;
     let mut i = 0;
     while i < scripts.len() {
@@ -3179,7 +3295,7 @@ fn fold_math_scripts(
 /// to `Some(<body>)`, `?*` to `None` — the math-command mirror of
 /// `app_arg_to_ast`'s `AppArg::Optional`/`Omission` arms. A mandatory
 /// (`Plain`) argument elaborates its body directly with no wrapping.
-fn math_arg_to_ast(arg: &c::MathArg, scope: &Scope) -> Result<Ast, ElabError> {
+fn math_arg_to_ast<'s>(arg: &c::MathArg, scope: &Scope<'s>) -> Result<Ast<'s>, ElabError> {
     match arg {
         c::MathArg::Plain(body) => math_arg_body_to_ast(body, scope),
         c::MathArg::Optional { body, .. } => Ok(Ast::Ctor(
@@ -3195,7 +3311,10 @@ fn math_arg_to_ast(arg: &c::MathArg, scope: &Scope) -> Result<Ast, ElabError> {
 /// `!(|..|)`, elaborated exactly like their `Atomic`/`Expr` counterparts), or
 /// inline/block text escapes (`!{..}`/`!<..>`, elaborated to
 /// `InlineText`/`BlockText` Asts).
-fn math_arg_body_to_ast(body: &c::MathArgBody, scope: &Scope) -> Result<Ast, ElabError> {
+fn math_arg_body_to_ast<'s>(
+    body: &c::MathArgBody,
+    scope: &Scope<'s>,
+) -> Result<Ast<'s>, ElabError> {
     match body {
         c::MathArgBody::Math { elems, .. } => math_block_ast(elems, scope),
         c::MathArgBody::Inline { elems, .. } => inline_text_ast(elems, scope),

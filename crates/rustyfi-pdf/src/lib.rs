@@ -1063,9 +1063,32 @@ pub(crate) fn place_graphics(
             // run carries — see `GraphicsElem::Text`'s doc comment
             // (rustyfi-backend/src/graphics.rs) and this function's own
             // "Text and the CTM" note above.
-            GraphicsElem::Text { pt, contents, .. } => {
-                for (dx, bx) in contents {
-                    emit_nested(content, bx, (pt.0 + *dx).0 as f32, pt.1 .0 as f32)?;
+            GraphicsElem::Text { pt, contents, transform, .. } => {
+                match transform {
+                    // Upright run: emit each box at box-local `pt + dx`, no
+                    // extra `cm` — byte-identical to before the transform field.
+                    None => {
+                        for (dx, bx) in contents {
+                            emit_nested(content, bx, (pt.0 + *dx).0 as f32, pt.1 .0 as f32)?;
+                        }
+                    }
+                    // Rotated/scaled run: push a `cm` carrying the 2×2 matrix
+                    // (row-major `(a,b,c,d)` → PDF `[a c b d]`) plus the `pt`
+                    // translation, then emit each box at its LOCAL offset
+                    // `(dx, 0)` inside it, so the glyphs/image rotate/scale.
+                    Some((a, b, c, d)) => {
+                        content.transform([
+                            *a as f32,
+                            *c as f32,
+                            *b as f32,
+                            *d as f32,
+                            pt.0 .0 as f32,
+                            pt.1 .0 as f32,
+                        ]);
+                        for (dx, bx) in contents {
+                            emit_nested(content, bx, (*dx).0 as f32, 0.0)?;
+                        }
+                    }
                 }
             }
             // L5b (prim-retype-sweep.md §3.3): 0.1's `graphics` collection

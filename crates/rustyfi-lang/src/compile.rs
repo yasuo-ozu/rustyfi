@@ -37,10 +37,11 @@
 
 use crate::ast::{Ast, Pattern};
 use crate::eval::{available_fields, eval_error, match_pattern, EvalError, Interp};
-use crate::value::{Env, Value};
+use crate::quoted;
+use crate::value::{BaseEnv, Env, Value};
 use rustyfi_syntax::RustyfiVersion;
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 use std::rc::Rc;
 
 /// A compiled expression: a reference-counted closure taking the runtime
@@ -74,17 +75,89 @@ impl std::fmt::Debug for CompiledExpr {
     }
 }
 
-/// The lowering pass. Carries the compile-time lexical scope (a stack of
-/// name-sets, one per runtime frame that will exist at that point) and,
-/// optionally, the base environment used for the global constant-folding
-/// fast path.
+/// The flat table of TOP-LEVEL ("spine") binding values — Phase 2 of
+/// `docs/plans/design-symbol-debruijn-slots.md` (§6).
+///
+/// The loader concatenates every library prelude into one synthetic file, and
+/// `elaborate::nest` folds every top-level binding into a nested
+/// `LetIn`/`LetRecIn` **spine** around the document body. Each of those is one
+/// runtime `env.child()` frame, so a document reference to an early prelude
+/// function used to walk one frame per intervening top-level binding: measured
+/// at 13-90 frames per compiled variable lookup, 109M-208M frame probes on a
+/// corpus document. That was the single largest evaluator cost.
+///
+/// A spine binding therefore also gets a **slot index**, assigned at compile
+/// time, and a compiled reference to it reads `table[slot]` instead of walking.
+/// Phase 2 built the frame chain alongside this table, because quoted text
+/// still resolved command names by string against a captured `Env`. Phase 3
+/// removed the last such lookup and Phase 4 the chain itself, so a spine
+/// binding now writes ONLY its slot — a corpus prelude no longer allocates one
+/// frame per top-level binding per fixpoint trial.
+///
+/// Slots are written before they can be read (the spine is unconditional and
+/// executes in order), so nothing needs clearing between fixpoint trials: each
+/// trial simply overwrites every slot as the spine re-executes.
+#[derive(Clone, Default)]
+struct Globals(Rc<RefCell<Vec<Value>>>);
+
+impl Globals {
+    #[inline]
+    fn get(&self, slot: usize) -> Value {
+        self.0.borrow()[slot].clone()
+    }
+
+    #[inline]
+    fn set(&self, slot: usize, v: Value) {
+        self.0.borrow_mut()[slot] = v;
+    }
+
+    /// Size the table once compilation has assigned every slot. The compiled
+    /// closures captured the same `Rc`, so they see this.
+    fn finish(&self, len: usize) {
+        self.0.borrow_mut().resize(len, Value::Unit);
+    }
+}
+
+/// One entry of the compiler's lexical stack.
+enum Scope {
+    /// A real runtime frame, its names in slot order. Contributes one level
+    /// of `depth` to every reference resolved past it.
+    Frame(Vec<String>),
+    /// A top-level (spine) binding and the [`Globals`] slot it was assigned.
+    /// Contributes NO depth — spine bindings build no frame (Phase 4).
+    Global(String, usize),
+}
+
+/// What [`Compiler::resolve`] found for a name.
+enum Binding {
+    /// A local: `(depth, index)` into the runtime frame chain.
+    Local(u16, u16),
+    /// A top-level binding: an index into the [`Globals`] table.
+    Global(usize),
+}
+
+/// The lowering pass. Carries the compile-time lexical scope and, optionally,
+/// the base environment used for the constant-folding fast path.
 struct Compiler<'b> {
-    /// Innermost scope frame last. A name present in any frame is a *local*.
-    scopes: Vec<HashSet<String>>,
-    /// The `V0_1`-slot base environment, when globals may be constant-folded.
-    /// `None` for lazily-compiled command arguments (see [`compile_arg`]),
-    /// where the captured environment's local frames are unknown, so *every*
-    /// free name must fall back to `env.lookup` to stay correct.
+    /// ONE lexical stack, innermost last, holding both kinds of binding the
+    /// compiler can resolve — see [`Scope`].
+    ///
+    /// It has to be one stack. A top-level (spine) binding and a local frame
+    /// can shadow each other in either direction: the cross-version deco
+    /// coercion (`v1::xver_adapt::deco_coercion_prelude`) splices a top-level
+    /// `let` that shadows a `let rec` which — because its right-hand sides
+    /// are not syntactic lambdas — had to fall back to a real frame. Resolving
+    /// locals before globals (or the reverse) gets that backwards; only
+    /// walking a single stack innermost-first gives the binding order the
+    /// name-keyed frame chain used to give for free.
+    scopes: Vec<Scope>,
+    /// Slots assigned so far; also the table's final length.
+    n_globals: usize,
+    /// The table those slots index into, shared with every compiled node that
+    /// reads or writes one.
+    globals: Globals,
+    /// The `V0_1`-slot base environment, when unshadowed names may be
+    /// constant-folded.
     ///
     /// For a PURE (non-cross-version) compile this is simply *the* base
     /// environment, regardless of which language generation it actually
@@ -93,14 +166,14 @@ struct Compiler<'b> {
     /// always resolves back to this same field and the fold is unchanged
     /// from before Slice X2a (`docs/plans/design-cross-version-import.md`
     /// §"Slice X2 — per-group primitive environment").
-    globals_v01: Option<&'b Env>,
+    globals_v01: Option<&'b BaseEnv>,
     /// The `V0_0_6`-slot base environment — `Some` only for a cross-version
     /// splice compile ([`Compiler::new_xver`]), used exclusively while
     /// `current_version` is `V0_0_6` (i.e. while folding inside an
     /// `Ast::VersionScope(V0_0_6, _)` subtree). `None` on every pure path,
     /// so `globals_for(V0_0_6)` there is `None` — irrelevant, since no
     /// `VersionScope` node is ever emitted on a pure path (§X2.2.2).
-    globals_v006: Option<&'b Env>,
+    globals_v006: Option<&'b BaseEnv>,
     /// Which of the two envs above is active for the primitive fold right
     /// now — `V0_1` outside any `VersionScope`, or the tag of the innermost
     /// enclosing one (`Ast::VersionScope`'s compile arm below). Only ever
@@ -111,14 +184,14 @@ struct Compiler<'b> {
 
 impl<'b> Compiler<'b> {
     /// The ordinary (pre-X2a-shaped) constructor: one base environment,
-    /// constant-folded as before. `globals: None` (used for lazily-compiled
-    /// command arguments, [`compile_arg`]) or `Some` (a top-level program,
-    /// [`compile_program`]) — byte-identical to every caller before this
-    /// slice, since `current_version` never moves off its initial `V0_1` slot
-    /// (no `VersionScope` node exists in a tree compiled through this path).
-    fn new(globals: Option<&'b Env>) -> Compiler<'b> {
+    /// constant-folded as before. `current_version` never moves off its
+    /// initial `V0_1` slot here (no `VersionScope` node exists in a tree
+    /// compiled through this path).
+    fn new(globals: Option<&'b BaseEnv>) -> Compiler<'b> {
         Compiler {
             scopes: Vec::new(),
+            n_globals: 0,
+            globals: Globals::default(),
             globals_v01: globals,
             globals_v006: None,
             current_version: RustyfiVersion::V0_1,
@@ -131,9 +204,11 @@ impl<'b> Compiler<'b> {
     /// `Ast::VersionScope` compile arm below. The top-level program body
     /// always starts un-wrapped (`V0_1`), so `current_version` starts there
     /// too.
-    fn new_xver(env_v01: &'b Env, env_v006: &'b Env) -> Compiler<'b> {
+    fn new_xver(env_v01: &'b BaseEnv, env_v006: &'b BaseEnv) -> Compiler<'b> {
         Compiler {
             scopes: Vec::new(),
+            n_globals: 0,
+            globals: Globals::default(),
             globals_v01: Some(env_v01),
             globals_v006: Some(env_v006),
             current_version: RustyfiVersion::V0_1,
@@ -143,7 +218,7 @@ impl<'b> Compiler<'b> {
     /// The base environment currently active for the primitive fold —
     /// `V0_1`'s slot outside any `VersionScope`, `V0_0_6`'s slot inside one
     /// (only ever populated by [`Compiler::new_xver`]).
-    fn globals_for(&self, version: RustyfiVersion) -> Option<&'b Env> {
+    fn globals_for(&self, version: RustyfiVersion) -> Option<&'b BaseEnv> {
         match version {
             RustyfiVersion::V0_1 => self.globals_v01,
             RustyfiVersion::V0_0_6 => self.globals_v006,
@@ -155,23 +230,76 @@ impl<'b> Compiler<'b> {
         }
     }
 
-    /// Is `name` bound by an enclosing local frame (and therefore *not* a
-    /// constant-foldable global)?
-    fn is_local(&self, name: &str) -> bool {
-        self.scopes.iter().any(|frame| frame.contains(name))
+    /// Where `name` lives in the runtime frame chain, if a local frame binds
+    /// it: `(depth, index)` — `depth` frames out from the innermost, then that
+    /// position in the frame.
+    ///
+    /// Frames are searched innermost-first and each frame's names LAST-first,
+    /// so a rebinding shadows the binding it overwrote — matching the
+    /// name-keyed environment this replaced, where a second `define` of the
+    /// same name in one frame simply overwrote the first. (Reachable for a
+    /// pattern that binds one name twice, and for a `let rec` group that
+    /// repeats one.)
+    /// Where the program binds `name`, walking the lexical stack
+    /// innermost-first so the most recent binding wins — the same answer the
+    /// name-keyed frame chain used to give at run time.
+    ///
+    /// Within one frame, names are scanned LAST-first, so a frame that binds
+    /// one name twice resolves to the later slot — matching the environment
+    /// this replaced, where a second `define` of the same name simply
+    /// overwrote the first. (Reachable for a pattern binding one name twice,
+    /// and for a `let rec` group that repeats one.)
+    fn resolve(&self, name: &str) -> Option<Binding> {
+        let mut depth = 0u16;
+        for entry in self.scopes.iter().rev() {
+            match entry {
+                Scope::Frame(names) => {
+                    if let Some(index) = names.iter().rposition(|n| n == name) {
+                        return Some(Binding::Local(depth, index as u16));
+                    }
+                    depth += 1;
+                }
+                Scope::Global(n, slot) => {
+                    if n == name {
+                        return Some(Binding::Global(*slot));
+                    }
+                }
+            }
+        }
+        None
     }
 
-    /// Push a frame binding `names`, compile `body` inside it, then pop. The
-    /// one-frame-per-binding-construct shape mirrors the tree-walker's
-    /// `env.child()` calls exactly.
+    /// Is `name` bound by the program at all? This, not "is it a local", is
+    /// what guards the base-environment constant fold: a top-level binding
+    /// that shadows a primitive name must win.
+    fn is_bound(&self, name: &str) -> bool {
+        self.resolve(name).is_some()
+    }
+
+    /// Assign `name` the next spine slot and record it on the lexical stack.
+    fn alloc_global(&mut self, name: &str) -> usize {
+        let slot = self.n_globals;
+        self.n_globals += 1;
+        self.scopes.push(Scope::Global(name.to_string(), slot));
+        slot
+    }
+
+    /// Push a frame binding `names` (in slot order), compile `body` inside it,
+    /// then pop. This must stay 1:1 with where the emitted code calls
+    /// `env.child(..)` — that correspondence is what makes `(depth, index)`
+    /// mean the same thing at compile time and at run time.
     fn in_frame<R>(
         &mut self,
         names: impl IntoIterator<Item = String>,
         body: impl FnOnce(&mut Compiler<'b>) -> R,
     ) -> R {
-        self.scopes.push(names.into_iter().collect());
+        // Truncate rather than pop: `body` may have pushed `Scope::Global`
+        // entries of its own (the spine continues inside a `let rec` group's
+        // fallback frame), and those belong to this region too.
+        let mark = self.scopes.len();
+        self.scopes.push(Scope::Frame(names.into_iter().collect()));
         let r = body(self);
-        self.scopes.pop();
+        self.scopes.truncate(mark);
         r
     }
 
@@ -182,10 +310,9 @@ impl<'b> Compiler<'b> {
     /// per-argument `Value::Prim` clone + `applied`-vector churn the reference
     /// interpreter performs when currying the arguments in one at a time.
     ///
-    /// This is byte-identical to the tree-walker's saturated application: the
-    /// argument vector handed to `def.run` holds the same values in the same
-    /// (left-to-right) order, so the primitive body — and any type error it
-    /// raises — is unchanged. Under- and over-application, or a shadowed/local
+    /// The argument vector handed to `def.run` holds the same values in the
+    /// same (left-to-right) order as currying them in one at a time would, so
+    /// the primitive body — and any type error it raises — is unchanged. Under- and over-application, or a shadowed/local
     /// `op`, return `None` and fall back to ordinary nested application (which
     /// still specializes any *inner* saturated prim call as it recurses).
     fn try_saturated_prim(&mut self, ast: &Ast) -> Option<CompiledExpr> {
@@ -193,7 +320,7 @@ impl<'b> Compiler<'b> {
         let Ast::Var(name, _) = head else {
             return None;
         };
-        if self.is_local(name) {
+        if self.is_bound(name) {
             return None;
         }
         let Value::Prim { def, applied } =
@@ -236,25 +363,10 @@ impl<'b> Compiler<'b> {
             }
             Ast::Str(s) => {
                 let s = s.clone();
-                // Mirror the tree-walker's per-eval `s.clone()`.
+                // One `String` clone per evaluation, as before.
                 CompiledExpr::new(move |_, _| Ok(Value::Str(s.clone())))
             }
-            Ast::Var(name, span) => {
-                if self.is_local(name) {
-                    lookup_var(name.clone(), *span)
-                } else if let Some(v) = self.globals_for(self.current_version).and_then(|g| g.lookup(name)) {
-                    // Unshadowed base-environment name: fold to its value —
-                    // against `current_version`'s slot, so a version-forked
-                    // primitive referenced inside an `Ast::VersionScope`
-                    // folds to THAT version's `PrimDef` (Slice X2a).
-                    CompiledExpr::new(move |_, _| Ok(v.clone()))
-                } else {
-                    // Defensive: elaboration guarantees every `Var` is in
-                    // scope, so this is unreachable for well-formed programs;
-                    // fall back to the identical runtime lookup + error.
-                    lookup_var(name.clone(), *span)
-                }
-            }
+            Ast::Var(name, span) => self.compile_var_read(name, *span, "variable"),
             Ast::Apply(f, arg) => {
                 // Specialize a *saturated* call to an unshadowed base-env
                 // primitive (`op a1 … aN` with N == arity), if any.
@@ -271,12 +383,12 @@ impl<'b> Compiler<'b> {
                 }
             }
             Ast::Lambda(param, body) => {
-                let param = param.clone();
+                // The parameter is slot 0 of the frame `apply` pushes; its
+                // name is needed only to compile the body.
                 let cbody = self.in_frame([param.clone()], |c| c.compile(body));
                 CompiledExpr::new(move |env, _| {
                     Ok(Value::CompiledClosure {
-                        opt_params: Vec::new(),
-                        param: param.clone(),
+                        opt_labels: Vec::new(),
                         body: cbody.clone(),
                         env: env.clone(),
                     })
@@ -286,18 +398,20 @@ impl<'b> Compiler<'b> {
             // sees the optional binders plus the positional param in scope
             // (they are bound at application by `Interp::apply_with_opts`).
             Ast::LambdaOpt { opts, param, body } => {
-                let opts = opts.clone();
-                let param = param.clone();
+                // Slot order at application: the optional binders in
+                // declaration order, then the positional parameter last —
+                // which is exactly the order `in_frame` records here and
+                // `apply_with_opts` fills.
                 let binders: Vec<String> = opts
                     .iter()
                     .map(|(_, b)| b.clone())
                     .chain(std::iter::once(param.clone()))
                     .collect();
                 let cbody = self.in_frame(binders, |c| c.compile(body));
+                let opt_labels: Vec<String> = opts.iter().map(|(l, _)| l.clone()).collect();
                 CompiledExpr::new(move |env, _| {
                     Ok(Value::CompiledClosure {
-                        opt_params: opts.clone(),
-                        param: param.clone(),
+                        opt_labels: opt_labels.clone(),
                         body: cbody.clone(),
                         env: env.clone(),
                     })
@@ -324,54 +438,32 @@ impl<'b> Compiler<'b> {
             }
             Ast::LetIn(name, value, rest) => {
                 let cvalue = self.compile(value);
-                let name = name.clone();
                 let crest = self.in_frame([name.clone()], |c| c.compile(rest));
                 CompiledExpr::new(move |env, interp| {
                     let v = cvalue.run(env, interp)?;
-                    let inner = env.child();
-                    inner.define(name.clone(), v);
-                    crest.run(&inner, interp)
+                    crest.run(&env.child(vec![v]), interp)
                 })
             }
             // Same run-time shape as `LetIn` (see `ast.rs`'s doc comment).
             Ast::LetMathIn(name, value, rest) => {
                 let cvalue = self.compile(value);
-                let name = name.clone();
                 let crest = self.in_frame([name.clone()], |c| c.compile(rest));
                 CompiledExpr::new(move |env, interp| {
                     let v = cvalue.run(env, interp)?;
-                    let inner = env.child();
-                    inner.define(name.clone(), v);
-                    crest.run(&inner, interp)
+                    crest.run(&env.child(vec![v]), interp)
                 })
             }
             Ast::LetRecIn(bindings, body) => {
                 let names: Vec<String> = bindings.iter().map(|(n, _)| n.clone()).collect();
                 let (cbindings, cbody) = self.in_frame(names.clone(), |c| {
-                    let cbindings: Vec<(String, CompiledExpr)> = bindings
+                    let cbindings: Vec<(std::rc::Rc<str>, CompiledExpr)> = bindings
                         .iter()
-                        .map(|(n, value_ast)| (n.clone(), c.compile(value_ast)))
+                        .map(|(n, value_ast)| (n.as_str().into(), c.compile(value_ast)))
                         .collect();
                     let cbody = c.compile(body);
                     (cbindings, cbody)
                 });
-                CompiledExpr::new(move |env, interp| {
-                    let inner = env.child();
-                    for (name, cval) in &cbindings {
-                        let v = cval.run(&inner, interp)?;
-                        if !matches!(
-                            v,
-                            Value::Closure { .. } | Value::CompiledClosure { .. }
-                        ) {
-                            return eval_error(format!(
-                                "let-rec binding '{name}' must be a function, got {}",
-                                v.type_name()
-                            ));
-                        }
-                        inner.define(name.clone(), v);
-                    }
-                    cbody.run(&inner, interp)
-                })
+                let_rec_frame(cbindings, cbody)
             }
             Ast::IfThenElse(cond, then_e, else_e) => {
                 let ccond = self.compile(cond);
@@ -430,53 +522,57 @@ impl<'b> Compiler<'b> {
                     Ok(Value::Ctor(name.clone(), payload))
                 })
             }
+            // Quoted text is compiled EAGERLY, here, in the lexical scope of
+            // the quote site (Phase 3, `crate::quoted`): command names and
+            // embedded expressions are resolved now rather than by string
+            // against the captured environment at layout time.
             Ast::InlineText(elems) => {
-                let elems = elems.clone();
+                let elems = Rc::new(elems.iter().map(|e| self.compile_itext(e)).collect());
                 CompiledExpr::new(move |env, _| {
                     Ok(Value::InlineText {
-                        elems: elems.clone(),
+                        elems: Rc::clone(&elems),
                         env: env.clone(),
                     })
                 })
             }
             Ast::BlockText(elems) => {
-                let elems = elems.clone();
+                let elems = Rc::new(elems.iter().map(|e| self.compile_btext(e)).collect());
                 CompiledExpr::new(move |env, _| {
                     Ok(Value::BlockText {
-                        elems: elems.clone(),
+                        elems: Rc::clone(&elems),
                         env: env.clone(),
                     })
                 })
             }
             Ast::MathText(elems) => {
-                let elems = elems.clone();
+                let elems = Rc::new(elems.iter().map(|e| self.compile_melem(e)).collect());
                 CompiledExpr::new(move |env, _| {
                     Ok(Value::MathText {
-                        elems: elems.clone(),
+                        elems: Rc::clone(&elems),
                         env: env.clone(),
                     })
                 })
             }
             Ast::LetMutableIn(name, init, body) => {
                 let cinit = self.compile(init);
-                let name = name.clone();
                 let cbody = self.in_frame([name.clone()], |c| c.compile(body));
                 CompiledExpr::new(move |env, interp| {
                     let v = cinit.run(env, interp)?;
-                    let inner = env.child();
-                    inner.define(name.clone(), Value::Ref(Rc::new(RefCell::new(v))));
-                    cbody.run(&inner, interp)
+                    let cell = Value::Ref(Rc::new(RefCell::new(v)));
+                    cbody.run(&env.child(vec![cell]), interp)
                 })
             }
             Ast::Overwrite(name, span, value) => {
+                // `let-mutable` binds a `Value::Ref` cell; overwriting it is a
+                // read of that binding (local slot, top-level slot, or — for
+                // an unresolvable name — the same error as before) followed by
+                // a write THROUGH the shared cell, so no frame is mutated.
+                let cell_of = self.compile_var_read(name, *span, "mutable variable");
                 let name = name.clone();
                 let span = *span;
                 let cvalue = self.compile(value);
                 CompiledExpr::new(move |env, interp| {
-                    let cell = env.lookup(&name).ok_or_else(|| EvalError {
-                        span: Some(span),
-                        msg: format!("unbound mutable variable '{name}' at run time"),
-                    })?;
+                    let cell = cell_of.run(env, interp)?;
                     match cell {
                         Value::Ref(cell) => {
                             let v = cvalue.run(env, interp)?;
@@ -588,14 +684,14 @@ impl<'b> Compiler<'b> {
                 CompiledExpr::new(move |env, interp| {
                     let v = cscrut.run(env, interp)?;
                     for arm in &carms {
+                        // `match_pattern` pushes bindings in exactly the order
+                        // `pattern_vars` collected the names above, so position
+                        // i in this vector IS slot i of the arm's frame.
                         let mut bindings = Vec::new();
                         if !match_pattern(&arm.pat, &v, &mut bindings) {
                             continue;
                         }
-                        let inner = env.child();
-                        for (name, val) in bindings {
-                            inner.define(name, val);
-                        }
+                        let inner = env.child(bindings);
                         if let Some(guard) = &arm.guard {
                             match guard.run(&inner, interp)? {
                                 Value::Bool(true) => {}
@@ -642,6 +738,289 @@ impl<'b> Compiler<'b> {
             Ast::ModuleScope(_, body) => self.compile(body),
         }
     }
+
+    /// Resolve a quoted-text command name (`\emph`, `+p`, a math command) to
+    /// the expression that yields its value — the same three-way
+    /// classification [`Compiler::compile`]'s `Ast::Var` arm performs, but
+    /// falling back to a lookup that reproduces the exact "unbound {kind}
+    /// command '…' at run time" message `read_inline`/`read_block`/
+    /// `reflect_math_elem` used to raise themselves.
+    /// Resolve a NAME REFERENCE to the expression that yields its value —
+    /// the compiler's single three-way classification, shared by `Ast::Var`,
+    /// `Ast::Overwrite`'s cell lookup, and quoted text's command names:
+    ///
+    /// 1. the program binds it — a local frame -> a static `(depth, index)`
+    ///    slot read, a top-level (spine) binding -> its [`Globals`] slot,
+    ///    whichever [`Compiler::resolve`] reaches first;
+    /// 2. an unshadowed base-environment name -> constant-folded to its value,
+    ///    against `current_version`'s slot so a version-forked primitive
+    ///    referenced inside an `Ast::VersionScope` freezes to THAT version's
+    ///    `PrimDef` (Slice X2a);
+    /// 3. otherwise nothing can be resolved — elaboration rejects unbound
+    ///    names long before here, so this is unreachable for a well-formed
+    ///    program; raise the same "unbound {what} '…' at run time" error the
+    ///    runtime name lookup used to.
+    ///
+    /// `what` only shapes that last error: "variable", "mutable variable",
+    /// "inline command", …
+    fn compile_var_read(
+        &mut self,
+        name: &str,
+        span: rustyfi_syntax::Span,
+        what: &'static str,
+    ) -> CompiledExpr {
+        match self.resolve(name) {
+            Some(Binding::Local(depth, index)) => {
+                return CompiledExpr::new(move |env: &Env, _| Ok(env.slot(depth, index)))
+            }
+            Some(Binding::Global(slot)) => {
+                let globals = self.globals.clone();
+                return CompiledExpr::new(move |_, _| Ok(globals.get(slot)));
+            }
+            None => {}
+        }
+        if let Some(v) = self
+            .globals_for(self.current_version)
+            .and_then(|g| g.lookup(name))
+        {
+            return CompiledExpr::new(move |_, _| Ok(v.clone()));
+        }
+        let name = name.to_string();
+        CompiledExpr::new(move |_, _| {
+            Err(EvalError {
+                span: Some(span),
+                msg: format!("unbound {what} '{name}' at run time"),
+            })
+        })
+    }
+
+    fn compile_cmd_name(
+        &mut self,
+        name: &str,
+        span: rustyfi_syntax::Span,
+        kind: &'static str,
+    ) -> CompiledExpr {
+        self.compile_var_read(name, span, kind)
+    }
+
+    fn compile_cmd_arg(&mut self, a: &crate::ast::CmdArg) -> quoted::CmdArg {
+        quoted::CmdArg {
+            opts: a
+                .opts
+                .iter()
+                .map(|(l, e)| (l.clone(), self.compile(e)))
+                .collect(),
+            arg: self.compile(&a.arg),
+        }
+    }
+
+    fn compile_itext(&mut self, e: &crate::ast::IText) -> quoted::IText {
+        use crate::ast::IText as A;
+        match e {
+            A::Text(s) => quoted::IText::Text(s.clone()),
+            A::Cmd { name, span, args } => quoted::IText::Cmd {
+                cmd: self.compile_cmd_name(name, *span, "inline command"),
+                args: args.iter().map(|a| self.compile_cmd_arg(a)).collect(),
+            },
+            A::Embed { expr, span } => quoted::IText::Embed {
+                expr: self.compile(expr),
+                span: *span,
+            },
+            A::EmbedMath { elems, span } => quoted::IText::EmbedMath {
+                elems: Rc::new(elems.iter().map(|m| self.compile_melem(m)).collect()),
+                span: *span,
+            },
+        }
+    }
+
+    fn compile_btext(&mut self, e: &crate::ast::BText) -> quoted::BText {
+        use crate::ast::BText as A;
+        match e {
+            A::Cmd { name, span, args } => quoted::BText::Cmd {
+                cmd: self.compile_cmd_name(name, *span, "block command"),
+                args: args.iter().map(|a| self.compile_cmd_arg(a)).collect(),
+            },
+            A::Embed { expr, span } => quoted::BText::Embed {
+                expr: self.compile(expr),
+                span: *span,
+            },
+        }
+    }
+
+    fn compile_melem(&mut self, e: &crate::ast::MathElem) -> quoted::MathElem {
+        use crate::ast::MathElem as A;
+        match e {
+            A::Chars(s) => quoted::MathElem::Chars(s.clone()),
+            A::Group(es) => {
+                quoted::MathElem::Group(es.iter().map(|x| self.compile_melem(x)).collect())
+            }
+            A::Sub(b, s) => quoted::MathElem::Sub(
+                Box::new(self.compile_melem(b)),
+                s.iter().map(|x| self.compile_melem(x)).collect(),
+            ),
+            A::Sup(b, s) => quoted::MathElem::Sup(
+                Box::new(self.compile_melem(b)),
+                s.iter().map(|x| self.compile_melem(x)).collect(),
+            ),
+            A::Primes(b, n) => quoted::MathElem::Primes(Box::new(self.compile_melem(b)), *n),
+            A::Cmd { name, span, args } => quoted::MathElem::Cmd {
+                cmd: self.compile_cmd_name(name, *span, "math command"),
+                name: name.as_str().into(),
+                span: *span,
+                args: args.iter().map(|a| self.compile_cmd_arg(a)).collect(),
+            },
+            A::Embed { expr, span } => quoted::MathElem::Embed {
+                expr: self.compile(expr),
+                span: *span,
+            },
+        }
+    }
+
+    /// Compile the top-level **spine** — the unbroken chain of Let-shaped
+    /// nodes `elaborate::nest` wraps around the document body, one per
+    /// top-level/`@require`d binding — giving each binding a [`Globals`] slot
+    /// so that references to it compile to an index instead of a frame-chain
+    /// walk (Phase 2, §6).
+    ///
+    /// Each arm evaluates its right-hand side in the same order its
+    /// [`Compiler::compile`] counterpart does, and raises the same errors —
+    /// but writes the result to a slot instead of into a frame. Phase 2 still
+    /// built the frame chain alongside, because quoted text resolved command
+    /// names (`\emph`, `+p` — themselves top-level bindings) by string
+    /// against a captured `Env` at layout time. Phase 3 removed the last such
+    /// lookup, so the chain is gone too: a corpus prelude no longer allocates
+    /// one frame per top-level binding per fixpoint trial.
+    ///
+    /// The first node that is not Let-shaped is the document body; it and
+    /// everything under it compile normally.
+    fn compile_spine(&mut self, ast: &Ast) -> CompiledExpr {
+        match ast {
+            Ast::LetIn(name, value, rest) => self.spine_let(name, value, rest, false),
+            // Same runtime shape as `LetIn` (see `ast.rs`).
+            Ast::LetMathIn(name, value, rest) => self.spine_let(name, value, rest, false),
+            Ast::LetMutableIn(name, init, body) => self.spine_let(name, init, body, true),
+            Ast::LetRecIn(bindings, body) => self.spine_let_rec(bindings, body),
+            // Not a binding — this is the document body.
+            other => self.compile(other),
+        }
+    }
+
+    /// The shared `LetIn`/`LetMathIn`/`LetMutableIn` spine arm. `mutable`
+    /// selects the `let-mutable` form, whose bound value is a fresh `Ref`
+    /// cell (the SAME cell goes into both the frame and the slot, so an
+    /// `Ast::Overwrite` reached through either sees the other's writes).
+    ///
+    /// Note the ordering: `value` is compiled BEFORE the slot is allocated, so
+    /// a reference to `name` inside its own right-hand side still resolves to
+    /// whatever `name` meant before this binding — matching the runtime, which
+    /// evaluates `value` in the outer env and only then creates the frame.
+    fn spine_let(
+        &mut self,
+        name: &str,
+        value: &Ast,
+        rest: &Ast,
+        mutable: bool,
+    ) -> CompiledExpr {
+        let cvalue = self.compile(value);
+        let slot = self.alloc_global(name);
+        let crest = self.compile_spine(rest);
+        let globals = self.globals.clone();
+        CompiledExpr::new(move |env, interp| {
+            let v = cvalue.run(env, interp)?;
+            globals.set(
+                slot,
+                if mutable {
+                    Value::Ref(Rc::new(RefCell::new(v)))
+                } else {
+                    v
+                },
+            );
+            crest.run(env, interp)
+        })
+    }
+
+    /// The `LetRecIn` spine arm.
+    ///
+    /// Slots are allocated for the whole group BEFORE its values are compiled,
+    /// since every name is in scope in every body — but that is only sound
+    /// when no value can *read* a sibling while the group is still being
+    /// filled. At run time the group's frame is populated one binding at a
+    /// time, so a read of a not-yet-defined sibling falls through to the outer
+    /// scope, whereas a slot read would see the previous trial's value. A
+    /// syntactic `fun`/`fun ?(..)` right-hand side cannot read anything at
+    /// definition time (evaluating a lambda never runs its body), which is the
+    /// case every working program is in — the runtime rejects a non-function
+    /// `let-rec` binding anyway. When some value is *not* syntactically a
+    /// lambda, this falls back to an ordinary local frame for the group (the
+    /// spine continues for the body).
+    fn spine_let_rec(&mut self, bindings: &[(String, Rc<Ast>)], body: &Ast) -> CompiledExpr {
+        let all_lambda = bindings
+            .iter()
+            .all(|(_, v)| matches!(**v, Ast::Lambda(..) | Ast::LambdaOpt { .. }));
+        if !all_lambda {
+            let names: Vec<String> = bindings.iter().map(|(n, _)| n.clone()).collect();
+            let (cbindings, cbody) = self.in_frame(names, |c| {
+                let cbindings: Vec<(Rc<str>, CompiledExpr)> = bindings
+                    .iter()
+                    .map(|(n, value_ast)| (n.as_str().into(), c.compile(value_ast)))
+                    .collect();
+                let cbody = c.compile_spine(body);
+                (cbindings, cbody)
+            });
+            return let_rec_frame(cbindings, cbody);
+        }
+        let slots: Vec<usize> = bindings.iter().map(|(n, _)| self.alloc_global(n)).collect();
+        let cbindings: Vec<(Rc<str>, CompiledExpr)> = bindings
+            .iter()
+            .map(|(n, value_ast)| (n.as_str().into(), self.compile(value_ast)))
+            .collect();
+        let cbody = self.compile_spine(body);
+        let globals = self.globals.clone();
+        CompiledExpr::new(move |env, interp| {
+            for ((name, cval), slot) in cbindings.iter().zip(slots.iter()) {
+                let v = cval.run(env, interp)?;
+                if !matches!(v, Value::CompiledClosure { .. }) {
+                    return eval_error(format!(
+                        "let-rec binding '{name}' must be a function, got {}",
+                        v.type_name()
+                    ));
+                }
+                globals.set(*slot, v);
+            }
+            cbody.run(env, interp)
+        })
+    }
+}
+
+/// The ordinary (non-spine) `let-rec` runtime shape, shared by
+/// [`Compiler::compile`]'s arm and [`Compiler::spine_let_rec`]'s fallback.
+fn let_rec_frame(cbindings: Vec<(Rc<str>, CompiledExpr)>, cbody: CompiledExpr) -> CompiledExpr {
+    CompiledExpr::new(move |env, interp| {
+        // Pre-sized with placeholders and back-patched in order: a closure
+        // built by an earlier binding captures this frame and sees the later
+        // fills, which is what makes the group mutually recursive. The names
+        // survive only for the "must be a function" message.
+        //
+        // A value that EAGERLY reads a not-yet-filled sibling therefore sees
+        // the `Unit` placeholder, where the name-keyed chain would have fallen
+        // through to an outer binding of the same name. Only reachable in a
+        // program the next line rejects anyway (a `let rec` right-hand side
+        // that is not a function), and arguably the more faithful answer: the
+        // sibling IS the binding in scope there, so resolving it to an outer
+        // one was accidental.
+        let inner = env.child(vec![Value::Unit; cbindings.len()]);
+        for (i, (name, cval)) in cbindings.iter().enumerate() {
+            let v = cval.run(&inner, interp)?;
+            if !matches!(v, Value::CompiledClosure { .. }) {
+                return eval_error(format!(
+                    "let-rec binding '{name}' must be a function, got {}",
+                    v.type_name()
+                ));
+            }
+            inner.set_slot(0, i as u16, v);
+        }
+        cbody.run(&inner, interp)
+    })
 }
 
 /// One compiled match arm: the (uncompiled) pattern is kept for the runtime
@@ -653,16 +1032,6 @@ struct CompiledArm {
     body: CompiledExpr,
 }
 
-/// The shared local-variable lookup: identical to the tree-walker's
-/// `Ast::Var` arm (same span, same "unbound variable …" message).
-fn lookup_var(name: String, span: rustyfi_syntax::Span) -> CompiledExpr {
-    CompiledExpr::new(move |env, _| {
-        env.lookup(&name).ok_or_else(|| EvalError {
-            span: Some(span),
-            msg: format!("unbound variable '{name}' at run time"),
-        })
-    })
-}
 
 /// Unfold a left-nested application spine `((h a1) a2) … aN` into its head
 /// `h` and the argument list `[a1, a2, …, aN]` in left-to-right (source)
@@ -712,8 +1081,11 @@ fn pattern_vars(pat: &Pattern, out: &mut Vec<String>) {
 /// program's own `let`s become locals as compilation descends; names that
 /// remain free are the (unshadowed) base-environment primitives, which are
 /// constant-folded to their captured values.
-pub(crate) fn compile_program(ast: &Ast, base_env: &Env) -> CompiledExpr {
-    Compiler::new(Some(base_env)).compile(ast)
+pub(crate) fn compile_program(ast: &Ast, base_env: &BaseEnv) -> CompiledExpr {
+    let mut c = Compiler::new(Some(base_env));
+    let compiled = c.compile_spine(ast);
+    c.globals.finish(c.n_globals);
+    compiled
 }
 
 /// Compile a top-level program body that may contain `Ast::VersionScope`
@@ -722,23 +1094,35 @@ pub(crate) fn compile_program(ast: &Ast, base_env: &Env) -> CompiledExpr {
 /// `Ast::Var` OUTSIDE a `VersionScope`, `base_env_v006` folds every one
 /// INSIDE an `Ast::VersionScope(V0_0_6, _)` subtree. See
 /// [`Compiler::new_xver`].
-pub(crate) fn compile_program_xver(ast: &Ast, base_env: &Env, base_env_v006: &Env) -> CompiledExpr {
-    Compiler::new_xver(base_env, base_env_v006).compile(ast)
-}
-
-/// Compile a command argument / embed expression evaluated later inside
-/// `read_inline`/`read_block`. The captured environment's local frames are
-/// not known here, so no global constant-folding is done — every free name
-/// resolves through `env.lookup`, exactly as the tree-walker would.
-pub(crate) fn compile_arg(ast: &Ast) -> CompiledExpr {
-    Compiler::new(None).compile(ast)
+pub(crate) fn compile_program_xver(
+    ast: &Ast,
+    base_env: &BaseEnv,
+    base_env_v006: &BaseEnv,
+) -> CompiledExpr {
+    let mut c = Compiler::new_xver(base_env, base_env_v006);
+    let compiled = c.compile_spine(ast);
+    c.globals.finish(c.n_globals);
+    compiled
 }
 
 #[cfg(test)]
 mod tests {
-    //! Cross-checks that the compiled path (this module) and the reference
-    //! tree-walker ([`crate::eval::Interp::eval`]) produce identical results
-    //! on the same programs, plus opt-in (`#[ignore]`) micro-benchmarks.
+    //! Determinism checks over a broad set of programs, plus opt-in
+    //! (`#[ignore]`) micro-benchmarks.
+    //!
+    //! These used to be a DIFFERENTIAL harness: each program was run through
+    //! both this module's compiler and a reference tree-walking interpreter,
+    //! and the two results compared. Phase 3 of
+    //! `docs/plans/design-symbol-debruijn-slots.md` retired the tree-walker
+    //! (quoted text is compiled eagerly now, so a tree-walker cannot build a
+    //! `Value::InlineText` without invoking the compiler), which removed one
+    //! side of the comparison. Rather than leave a tautology behind, the same
+    //! programs now check the property that actually still has teeth and that
+    //! the project's byte-identical-output constraint depends on: two
+    //! INDEPENDENT compiles, against two freshly built base environments,
+    //! must produce identical output. That is what catches nondeterminism
+    //! leaking in from hash iteration order, allocation addresses, or the
+    //! shared `Globals` table.
     //!
     //! Run the benchmarks with, e.g.:
     //! `cargo test -p rustyfi-lang --release -- --ignored --nocapture bench_`
@@ -746,7 +1130,7 @@ mod tests {
     use super::*;
     use crate::ast::{MatchArm, Pattern};
     use crate::eval::Interp;
-    use crate::value::{Env, Value};
+    use crate::value::{BaseEnv, Env, Value};
     use rustyfi_backend::{FontKey, FontMetrics, Length};
     use rustyfi_syntax::Span;
 
@@ -797,36 +1181,37 @@ mod tests {
         )
     }
 
-    fn eval_tree(env: &Env, ast: &Ast) -> Result<Value, EvalError> {
+    /// Compile `ast` against the compile-time environment `base`, then run it
+    /// in a fresh (empty) runtime frame chain — the same two-environment split
+    /// `lib.rs` uses.
+    fn eval_compiled(base: &BaseEnv, ast: &Ast) -> Result<Value, EvalError> {
         let mono = Mono;
         let mut interp = Interp::new(&mono);
-        interp.eval(env, ast)
+        compile_program(ast, base).run(&Env::root(), &mut interp)
     }
 
-    fn eval_compiled(env: &Env, ast: &Ast) -> Result<Value, EvalError> {
-        let mono = Mono;
-        let mut interp = Interp::new(&mono);
-        compile_program(ast, env).run(env, &mut interp)
-    }
-
-    /// Assert the two evaluators agree on `ast`: identical `Value` (compared
-    /// by structural `Debug`, which is byte-identical for every non-closure
-    /// value) on success, identical error text on failure.
-    fn assert_agree(ast: &Ast) {
-        let env_t = crate::primitives::base_env();
-        let env_c = crate::primitives::base_env();
-        match (eval_tree(&env_t, ast), eval_compiled(&env_c, ast)) {
-            (Ok(t), Ok(c)) => assert_eq!(
-                format!("{t:?}"),
-                format!("{c:?}"),
-                "compiled value differs from tree-walker"
+    /// Compile and run `ast` twice — separate compiles, separate base
+    /// environments, separate interpreters — and require the two runs to agree
+    /// exactly: identical `Value` (compared by structural `Debug`) on success,
+    /// identical error text on failure, and the same success/failure verdict.
+    ///
+    /// See the module comment for why this replaced the compiled-vs-
+    /// tree-walker differential check.
+    fn assert_deterministic(ast: &Ast) {
+        let env_a = crate::primitives::base_env();
+        let env_b = crate::primitives::base_env();
+        match (eval_compiled(&env_a, ast), eval_compiled(&env_b, ast)) {
+            (Ok(a), Ok(b)) => assert_eq!(
+                format!("{a:?}"),
+                format!("{b:?}"),
+                "two independent compiles produced different values"
             ),
-            (Err(t), Err(c)) => assert_eq!(
-                t.to_string(),
-                c.to_string(),
-                "compiled error differs from tree-walker"
+            (Err(a), Err(b)) => assert_eq!(
+                a.to_string(),
+                b.to_string(),
+                "two independent compiles produced different errors"
             ),
-            (t, c) => panic!("ok/err mismatch: tree={t:?} compiled={c:?}"),
+            (a, b) => panic!("ok/err mismatch between two runs: {a:?} vs {b:?}"),
         }
     }
 
@@ -835,7 +1220,7 @@ mod tests {
     /// `Some`/`None` defaulting — a provided `?(bias = e)` binds `Some e`, an
     /// omitted one (a plain apply of an opt-closure) binds `None`.
     #[test]
-    fn cross_check_labeled_optionals() {
+    fn deterministic_labeled_optionals() {
         use std::rc::Rc;
         // `fun ?(bias = b) x -> x + (match b with None -> 0 | Some v -> v end)`
         let body = app2(
@@ -866,38 +1251,38 @@ mod tests {
             body: Rc::new(body),
         };
         // provided `?(bias = 40) 2` -> 42
-        assert_agree(&Ast::ApplyOpt {
+        assert_deterministic(&Ast::ApplyOpt {
             func: Box::new(lam.clone()),
             opts: vec![("bias".to_string(), Ast::Int(40))],
             arg: Box::new(Ast::Int(2)),
         });
         // omitted (plain apply of an opt-closure) -> bias defaults None -> 2
-        assert_agree(&app1(lam, Ast::Int(2)));
+        assert_deterministic(&app1(lam, Ast::Int(2)));
     }
 
     #[test]
-    fn cross_check_literals_and_arithmetic() {
-        assert_agree(&Ast::Int(42));
-        assert_agree(&Ast::Str("hi".to_string()));
-        assert_agree(&Ast::Bool(true));
-        assert_agree(&app2("+", Ast::Int(2), Ast::Int(3)));
-        assert_agree(&app2("*", Ast::Int(7), Ast::Int(6)));
-        assert_agree(&app2("<", Ast::Int(2), Ast::Int(3)));
-        assert_agree(&app2("^", Ast::Str("foo".into()), Ast::Str("bar".into())));
+    fn deterministic_literals_and_arithmetic() {
+        assert_deterministic(&Ast::Int(42));
+        assert_deterministic(&Ast::Str("hi".to_string()));
+        assert_deterministic(&Ast::Bool(true));
+        assert_deterministic(&app2("+", Ast::Int(2), Ast::Int(3)));
+        assert_deterministic(&app2("*", Ast::Int(7), Ast::Int(6)));
+        assert_deterministic(&app2("<", Ast::Int(2), Ast::Int(3)));
+        assert_deterministic(&app2("^", Ast::Str("foo".into()), Ast::Str("bar".into())));
         // division by zero: both must error the same way.
-        assert_agree(&app2("/", Ast::Int(1), Ast::Int(0)));
+        assert_deterministic(&app2("/", Ast::Int(1), Ast::Int(0)));
     }
 
     #[test]
-    fn cross_check_let_lambda_and_capture() {
+    fn deterministic_let_lambda_and_capture() {
         // let const a b = a in const 1 2
-        assert_agree(&Ast::LetIn(
+        assert_deterministic(&Ast::LetIn(
             "id".into(),
             Box::new(Ast::Lambda("x".into(), Rc::new(var("x")))),
             Box::new(app1(var("id"), Ast::Int(7))),
         ));
         // capture of an outer let through a closure: let a = 5 in (fun x -> a + x) 3
-        assert_agree(&Ast::LetIn(
+        assert_deterministic(&Ast::LetIn(
             "a".into(),
             Box::new(Ast::Int(5)),
             Box::new(app1(
@@ -908,8 +1293,8 @@ mod tests {
     }
 
     #[test]
-    fn cross_check_let_rec_fib_and_mutual() {
-        assert_agree(&fib_program(15));
+    fn deterministic_let_rec_fib_and_mutual() {
+        assert_deterministic(&fib_program(15));
         // mutual even/odd
         let even_body = Ast::IfThenElse(
             Box::new(app2("==", var("n"), Ast::Int(0))),
@@ -931,7 +1316,7 @@ mod tests {
                 Rc::new(Ast::Lambda("n".into(), Rc::new(odd_body))),
             ),
         ];
-        assert_agree(&Ast::LetRecIn(
+        assert_deterministic(&Ast::LetRecIn(
             bindings,
             Box::new(Ast::Tuple(vec![
                 app1(var("even"), Ast::Int(10)),
@@ -939,39 +1324,39 @@ mod tests {
             ])),
         ));
         // a non-function let-rec binding errors identically in both paths.
-        assert_agree(&Ast::LetRecIn(
+        assert_deterministic(&Ast::LetRecIn(
             vec![("x".into(), Rc::new(Ast::Int(1)))],
             Box::new(var("x")),
         ));
     }
 
     #[test]
-    fn cross_check_records_lists_tuples_and_fields() {
-        assert_agree(&Ast::Record(vec![
+    fn deterministic_records_lists_tuples_and_fields() {
+        assert_deterministic(&Ast::Record(vec![
             ("a".into(), Ast::Int(1)),
             ("b".into(), Ast::Str("x".into())),
         ]));
-        assert_agree(&Ast::List(vec![Ast::Int(1), Ast::Int(2), Ast::Int(3)]));
-        assert_agree(&Ast::Tuple(vec![Ast::Int(1), Ast::Bool(true)]));
+        assert_deterministic(&Ast::List(vec![Ast::Int(1), Ast::Int(2), Ast::Int(3)]));
+        assert_deterministic(&Ast::Tuple(vec![Ast::Int(1), Ast::Bool(true)]));
         // field access, present and absent (absent => identical error)
         let rec = Ast::Record(vec![("a".into(), Ast::Int(9)), ("b".into(), Ast::Int(8))]);
-        assert_agree(&Ast::AccessField(
+        assert_deterministic(&Ast::AccessField(
             Box::new(rec.clone()),
             "a".into(),
             Span::default(),
         ));
-        assert_agree(&Ast::AccessField(
+        assert_deterministic(&Ast::AccessField(
             Box::new(rec.clone()),
             "zzz".into(),
             Span::default(),
         ));
         // functional update, present and absent
-        assert_agree(&Ast::UpdateField(
+        assert_deterministic(&Ast::UpdateField(
             Box::new(rec.clone()),
             "a".into(),
             Box::new(Ast::Int(100)),
         ));
-        assert_agree(&Ast::UpdateField(
+        assert_deterministic(&Ast::UpdateField(
             Box::new(rec),
             "nope".into(),
             Box::new(Ast::Int(1)),
@@ -979,9 +1364,9 @@ mod tests {
     }
 
     #[test]
-    fn cross_check_match_arms_guards_and_ctors() {
+    fn deterministic_match_arms_guards_and_ctors() {
         // int literal + wildcard
-        assert_agree(&Ast::Match(
+        assert_deterministic(&Ast::Match(
             Box::new(Ast::Int(3)),
             vec![
                 MatchArm {
@@ -997,7 +1382,7 @@ mod tests {
             ],
         ));
         // guard selecting the second arm
-        assert_agree(&Ast::Match(
+        assert_deterministic(&Ast::Match(
             Box::new(Ast::Int(4)),
             vec![
                 MatchArm {
@@ -1018,7 +1403,7 @@ mod tests {
             ],
         ));
         // cons/empty-list, `as`, and ctor payload
-        assert_agree(&Ast::Match(
+        assert_deterministic(&Ast::Match(
             Box::new(Ast::List(vec![Ast::Int(1), Ast::Int(2)])),
             vec![
                 MatchArm {
@@ -1036,7 +1421,7 @@ mod tests {
                 },
             ],
         ));
-        assert_agree(&Ast::Match(
+        assert_deterministic(&Ast::Match(
             Box::new(Ast::Ctor("Some".into(), Some(Box::new(Ast::Int(5))))),
             vec![
                 MatchArm {
@@ -1052,7 +1437,7 @@ mod tests {
             ],
         ));
         // non-exhaustive => identical error
-        assert_agree(&Ast::Match(
+        assert_deterministic(&Ast::Match(
             Box::new(Ast::Int(5)),
             vec![MatchArm {
                 pat: Pattern::Int(1),
@@ -1063,7 +1448,7 @@ mod tests {
     }
 
     #[test]
-    fn cross_check_mutable_while_and_sequential() {
+    fn deterministic_mutable_while_and_sequential() {
         // let-mutable acc <- 0 in
         // let-mutable i <- 0 in
         //   (while i < 5 do (acc <- acc + i before i <- i + 1)) before !acc
@@ -1093,14 +1478,14 @@ mod tests {
                 Box::new(Ast::Sequential(Box::new(while_loop), Box::new(deref("acc")))),
             )),
         );
-        assert_agree(&prog); // 0+1+2+3+4 = 10
+        assert_deterministic(&prog); // 0+1+2+3+4 = 10
     }
 
     // ---- document-level cross-check + shared prep for the doc benchmark ----
 
     /// Merge the `stdja-mini` prelude ahead of `src` (as the loader does),
     /// then elaborate + typecheck, returning `(base_env, elaborated body)`.
-    fn prepare_document(src: &str) -> (Env, Ast) {
+    fn prepare_document(src: &str) -> (BaseEnv, Ast) {
         let lib_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../lib-rustyfi/dist/packages/stdja-mini.satyh");
         let lib_src = std::fs::read_to_string(&lib_path).unwrap();
@@ -1116,10 +1501,13 @@ mod tests {
             eoi: doc_file.eoi,
         };
         let env = crate::primitives::base_env();
-        let scope = crate::elaborate::Scope::new(env.names());
+        let store = crate::symbol::SymbolStore::new();
+        let scope = crate::elaborate::Scope::new(&store, env.names());
         let program = crate::elaborate::elaborate_program(&merged, &scope).unwrap();
         crate::typecheck::typecheck(&program).unwrap();
-        (env, program.body)
+        // De-brand before returning: the store is local to this helper, and
+        // the tests below drive the runtime, which is `Symbol`-free.
+        (env, crate::ast::debrand(&program.body, &store))
     }
 
     fn many_paragraph_src(n: usize) -> String {
@@ -1133,18 +1521,19 @@ mod tests {
     }
 
     #[test]
-    fn cross_check_document_many_paragraphs() {
-        let (env_t, body) = prepare_document(&many_paragraph_src(12));
-        let doc_t = eval_tree(&env_t, &body).unwrap();
-        let (env_c, _) = prepare_document(&many_paragraph_src(12));
-        let doc_c = eval_compiled(&env_c, &body).unwrap();
-        // The whole typeset document (pages/boxes) must be byte-identical.
+    fn deterministic_document_many_paragraphs() {
+        let (env_a, body_a) = prepare_document(&many_paragraph_src(12));
+        let doc_a = eval_compiled(&env_a, &body_a).unwrap();
+        let (env_b, body_b) = prepare_document(&many_paragraph_src(12));
+        let doc_b = eval_compiled(&env_b, &body_b).unwrap();
+        // The whole typeset document (pages/boxes) must come out identical
+        // from two independent elaborate -> typecheck -> compile -> run runs.
         assert_eq!(
-            format!("{doc_t:?}"),
-            format!("{doc_c:?}"),
-            "compiled document differs from tree-walker"
+            format!("{doc_a:?}"),
+            format!("{doc_b:?}"),
+            "two independent runs produced different documents"
         );
-        assert!(matches!(doc_t, Value::Document(_)));
+        assert!(matches!(doc_a, Value::Document(_)));
     }
 
     // ---- benchmarks (opt-in) ----------------------------------------------
@@ -1176,29 +1565,25 @@ mod tests {
         let prog = fib_program(N);
         let env = crate::primitives::base_env();
 
-        let tree = bench_ns(20, || {
-            let _ = eval_tree(&env, &prog).unwrap();
+        // Compilation is one-off; time it separately from repeated execution.
+        let build = bench_ns(20, || {
+            let _ = compile_program(&prog, &env);
         });
-        // Compile once; time only repeated execution (compilation is one-off).
         let compiled = compile_program(&prog, &env);
         let mono = Mono;
         let mut interp = Interp::new(&mono);
-        let comp = bench_ns(20, || {
-            let _ = compiled.run(&env, &mut interp).unwrap();
+        let root = Env::root();
+        let run = bench_ns(20, || {
+            let _ = compiled.run(&root, &mut interp).unwrap();
         });
 
         println!("\n== fib({N}) : {calls} calls/eval ==");
+        println!("  compile   : {build:>9.0} ns  (one-off)");
         println!(
-            "  tree-walk : {:>9.0} ns/eval  ({:>5.1} ns/call)",
-            tree,
-            tree / calls as f64
+            "  run       : {:>9.0} ns/eval  ({:>5.1} ns/call)",
+            run,
+            run / calls as f64
         );
-        println!(
-            "  compiled  : {:>9.0} ns/eval  ({:>5.1} ns/call)",
-            comp,
-            comp / calls as f64
-        );
-        println!("  speedup   : {:.2}x", tree / comp);
     }
 
     #[test]
@@ -1207,16 +1592,19 @@ mod tests {
         const PARAS: usize = 300;
         let (env, body) = prepare_document(&many_paragraph_src(PARAS));
 
-        let tree = bench_ns(20, || {
-            let _ = eval_tree(&env, &body).unwrap();
+        let build = bench_ns(20, || {
+            let _ = compile_program(&body, &env);
         });
-        let comp = bench_ns(20, || {
-            let _ = eval_compiled(&env, &body).unwrap();
+        let compiled = compile_program(&body, &env);
+        let mono = Mono;
+        let mut interp = Interp::new(&mono);
+        let root = Env::root();
+        let run = bench_ns(20, || {
+            let _ = compiled.run(&root, &mut interp).unwrap();
         });
 
         println!("\n== document with {PARAS} paragraphs ==");
-        println!("  tree-walk : {:>10.0} ns/doc", tree);
-        println!("  compiled  : {:>10.0} ns/doc", comp);
-        println!("  speedup   : {:.2}x", tree / comp);
+        println!("  compile   : {build:>10.0} ns  (one-off)");
+        println!("  run       : {run:>10.0} ns/doc");
     }
 }

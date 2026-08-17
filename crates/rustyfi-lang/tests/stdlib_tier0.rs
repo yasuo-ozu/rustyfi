@@ -162,13 +162,14 @@ fn compile_via_loader_with_metrics(
     let file = merge_program(program);
 
     let env = primitives::base_env();
-    let scope = elaborate::Scope::new(env.names());
+    let store = rustyfi_lang::symbol::SymbolStore::new();
+    let scope = elaborate::Scope::new(&store, env.names());
     let elaborated =
         elaborate::elaborate_program(&file, &scope).map_err(|e| format!("elaborate: {e}"))?;
     typecheck::typecheck(&elaborated).map_err(|e| format!("typecheck: {e}"))?;
     let mut interp = eval::Interp::new(metrics);
     interp
-        .eval(&env, &elaborated.body)
+        .eval(&env, &rustyfi_lang::ast::debrand(&elaborated.body, &store))
         .map_err(|e| format!("eval: {e}"))
 }
 

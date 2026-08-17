@@ -23,7 +23,11 @@ use rustyfi_syntax::{parse_file_v1, RustyfiVersion, Span};
 /// `compile_document_v1_with_trials` assembles its synthetic `cst::File`
 /// (`lib.rs:165-195`) — reproduced locally (no `rustyfi-cli` library target
 /// to import it from, same rationale `v01_slice1.rs` already documents).
-fn elaborate_with_lib(lib_src: &str, doc_src: &str) -> Result<elaborate::Program, elaborate::ElabError> {
+fn elaborate_with_lib<'s>(
+    store: &'s rustyfi_lang::symbol::SymbolStore,
+    lib_src: &str,
+    doc_src: &str,
+) -> Result<elaborate::Program<'s>, elaborate::ElabError> {
     let lib_file = parse_file_v1(lib_src).unwrap_or_else(|e| panic!("lib parse failed: {e}"));
     let prelude = lower::lower_file_v1(&lib_file).unwrap_or_else(|e| panic!("lower_file_v1: {e}"));
 
@@ -43,7 +47,7 @@ fn elaborate_with_lib(lib_src: &str, doc_src: &str) -> Result<elaborate::Program
     };
 
     let env0 = primitives::base_env_with_version(RustyfiVersion::V0_1);
-    let scope = elaborate::Scope::new(env0.names());
+    let scope = elaborate::Scope::new(store, env0.names());
     elaborate::elaborate_program(&file, &scope)
 }
 
@@ -60,7 +64,8 @@ end
 /// installs (`elaborate.rs:343-368`).
 #[test]
 fn qualified_access_resolves() {
-    let result = elaborate_with_lib(LIB_SRC, "V01Mini.document 1");
+    let store = rustyfi_lang::symbol::SymbolStore::new();
+    let result = elaborate_with_lib(&store, LIB_SRC, "V01Mini.document 1");
     assert!(result.is_ok(), "expected V01Mini.document to resolve, got {:?}", result.err());
 }
 
@@ -71,7 +76,8 @@ fn qualified_access_resolves() {
 /// closes (`elaborate.rs:349-350`).
 #[test]
 fn bare_access_fails_with_unbound_variable() {
-    let err = elaborate_with_lib(LIB_SRC, "document 1").unwrap_err();
+    let store = rustyfi_lang::symbol::SymbolStore::new();
+    let err = elaborate_with_lib(&store, LIB_SRC, "document 1").unwrap_err();
     let msg = err.to_string();
     assert!(
         msg.contains("unbound variable") && msg.contains("document"),
@@ -84,7 +90,8 @@ fn bare_access_fails_with_unbound_variable() {
 /// `TopBinding::Open`'s `Expr::OpenIn` analogue).
 #[test]
 fn let_open_reexposes_bare_access() {
-    let result = elaborate_with_lib(LIB_SRC, "let open V01Mini in document 1");
+    let store = rustyfi_lang::symbol::SymbolStore::new();
+    let result = elaborate_with_lib(&store, LIB_SRC, "let open V01Mini in document 1");
     assert!(
         result.is_ok(),
         "expected `let open V01Mini in document` to resolve, got {:?}",
@@ -97,7 +104,8 @@ fn let_open_reexposes_bare_access() {
 /// binding is reachable as a two-segment qualified path.
 #[test]
 fn nested_module_qualified_access_resolves() {
-    let result = elaborate_with_lib(LIB_SRC, "V01Mini.N.y");
+    let store = rustyfi_lang::symbol::SymbolStore::new();
+    let result = elaborate_with_lib(&store, LIB_SRC, "V01Mini.N.y");
     assert!(
         result.is_ok(),
         "expected V01Mini.N.y to resolve, got {:?}",
@@ -110,7 +118,8 @@ fn nested_module_qualified_access_resolves() {
 /// close — same flat-leak-is-gone guarantee as (b), one level deeper.
 #[test]
 fn nested_module_bare_inner_name_is_unbound() {
-    let err = elaborate_with_lib(LIB_SRC, "y").unwrap_err();
+    let store = rustyfi_lang::symbol::SymbolStore::new();
+    let err = elaborate_with_lib(&store, LIB_SRC, "y").unwrap_err();
     assert!(err.to_string().contains("unbound variable"), "{err}");
 }
 
@@ -132,7 +141,8 @@ end
 /// `M.sum-list` (a `val rec` binding) resolves qualified.
 #[test]
 fn qualified_val_rec_resolves() {
-    let result = elaborate_with_lib(LIB_SRC_2B, "M.sum-list [1, 2, 3]");
+    let store = rustyfi_lang::symbol::SymbolStore::new();
+    let result = elaborate_with_lib(&store, LIB_SRC_2B, "M.sum-list [1, 2, 3]");
     assert!(result.is_ok(), "expected M.sum-list to resolve, got {:?}", result.err());
 }
 
@@ -140,7 +150,8 @@ fn qualified_val_rec_resolves() {
 /// only-export guarantee `val rec` inherits from ordinary module binds.
 #[test]
 fn bare_val_rec_is_unbound_without_open() {
-    let err = elaborate_with_lib(LIB_SRC_2B, "sum-list [1, 2, 3]").unwrap_err();
+    let store = rustyfi_lang::symbol::SymbolStore::new();
+    let err = elaborate_with_lib(&store, LIB_SRC_2B, "sum-list [1, 2, 3]").unwrap_err();
     assert!(err.to_string().contains("unbound variable"), "{err}");
 }
 
@@ -149,7 +160,8 @@ fn bare_val_rec_is_unbound_without_open() {
 /// `elaborate.rs:533-545,351-368`).
 #[test]
 fn val_mutable_exports_qualified_alias() {
-    let result = elaborate_with_lib(LIB_SRC_2B, "!M.c");
+    let store = rustyfi_lang::symbol::SymbolStore::new();
+    let result = elaborate_with_lib(&store, LIB_SRC_2B, "!M.c");
     assert!(result.is_ok(), "expected !M.c to resolve, got {:?}", result.err());
 }
 
@@ -157,7 +169,8 @@ fn val_mutable_exports_qualified_alias() {
 /// sites need no new syntax — resolution is by operator text).
 #[test]
 fn val_op_named_binding_usable_infix_after_open() {
-    let result = elaborate_with_lib(LIB_SRC_2B, "let open M in 1 +++ 2");
+    let store = rustyfi_lang::symbol::SymbolStore::new();
+    let result = elaborate_with_lib(&store, LIB_SRC_2B, "let open M in 1 +++ 2");
     assert!(
         result.is_ok(),
         "expected `1 +++ 2` after `let open M in` to resolve, got {:?}",
@@ -169,7 +182,8 @@ fn val_op_named_binding_usable_infix_after_open() {
 /// (`"M.t"`-format) name (§4's pre-qualification decision).
 #[test]
 fn type_binds_surface_with_qualified_names() {
-    let program = elaborate_with_lib(LIB_SRC_2B, "1").unwrap_or_else(|e| panic!("elaborate: {e}"));
+    let store = rustyfi_lang::symbol::SymbolStore::new();
+    let program = elaborate_with_lib(&store, LIB_SRC_2B, "1").unwrap_or_else(|e| panic!("elaborate: {e}"));
     assert!(program.type_decls.is_empty(), "`t` is a synonym, not a variant");
     assert_eq!(program.synonym_decls.len(), 1);
     assert_eq!(program.synonym_decls[0].name, "M.t");

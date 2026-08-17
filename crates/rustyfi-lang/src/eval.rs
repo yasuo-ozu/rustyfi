@@ -1,9 +1,16 @@
-//! The tree-walking evaluator (the naive-interpreter shape of
-//! evaluator.cppo.ml; the bytecode VM is intentionally not ported).
+//! Interpreter state and beta-reduction.
+//!
+//! This was the tree-walking evaluator (the naive-interpreter shape of
+//! evaluator.cppo.ml; the bytecode VM was intentionally not ported). Phases 3
+//! and 4 of `docs/plans/design-symbol-debruijn-slots.md` retired the
+//! tree-walk itself — expression evaluation lives entirely in
+//! [`crate::compile`] now — leaving here what is genuinely runtime: the
+//! [`Interp`] state every primitive threads (images, hooks, cross-references,
+//! decorations, …), function application, and pattern matching.
 
 use crate::ast::{Ast, Pattern};
 use crate::crossref::CrossRefs;
-use crate::value::{Env, Value};
+use crate::value::{BaseEnv, Env, Value};
 use rustyfi_backend::{DocInfo, FontMetrics, ImageResource, MathCmdId};
 use rustyfi_syntax::{RustyfiVersion, Span};
 use std::cell::RefCell;
@@ -93,26 +100,6 @@ pub struct Interp<'a> {
     /// handle into each trial's fresh `Interp`. Defaults to a fresh empty
     /// table so existing single-run call sites/unit tests compile unchanged.
     pub crossrefs: Rc<RefCell<CrossRefs>>,
-    /// Memoized compilations of command-argument / embed `Ast`s reached
-    /// through `read_inline`/`read_block` (see [`Interp::eval_arg`]). Keyed by
-    /// the argument node's address: these nodes live inside the program's
-    /// `Rc<Vec<IText>>`/`Rc<Vec<BText>>`, which are kept alive for the whole
-    /// interpreter run, so the addresses are stable and re-reading the same
-    /// quoted text reuses its already-compiled argument closures.
-    ///
-    /// X2b audit (design doc Risk S4, arg-cache version bleed): SAFE.
-    /// [`Interp::eval_arg`] caches `crate::compile::compile_arg(arg)`'s
-    /// output, not its evaluated `Value` — and `compile_arg` (via
-    /// `Compiler::new(None)`) never constant-folds a global name (its
-    /// `globals_v01`/`globals_v006` are both `None`), so every free name in
-    /// a cached `CompiledExpr` resolves dynamically through the `env`
-    /// argument passed to `.run()` at each call, not through anything baked
-    /// in at compile/cache time. Re-running the same cached `CompiledExpr`
-    /// under a different `self.version` (e.g. the same quoted-text AST node
-    /// reached once inside a `VersionScope` and once outside) therefore
-    /// still resolves names correctly for whichever call it is. No fix
-    /// needed.
-    arg_cache: std::collections::HashMap<usize, crate::compile::CompiledExpr>,
     /// §B/§C accumulators (docs/plans/hooks-annotations-crossref.md):
     /// link annotations / named destinations / outline entries, plus the
     /// per-page deco-graphics overlays (§D). All reset per trial (fresh
@@ -188,7 +175,6 @@ impl<'a> Interp<'a> {
             hooks: Vec::new(),
             math_commands: Vec::new(),
             crossrefs: Rc::new(RefCell::new(CrossRefs::new())),
-            arg_cache: std::collections::HashMap::new(),
             annotations: Vec::new(),
             destinations: Vec::new(),
             outline: Vec::new(),
@@ -205,355 +191,26 @@ impl<'a> Interp<'a> {
         }
     }
 
-    /// Evaluate a command-argument / embedded expression reached from
-    /// `read_inline`/`read_block`, compiling it once (on first sight) and
-    /// running the cached compiled closure thereafter. Behavior is identical
-    /// to [`Interp::eval`] — the compiled argument uses no global
-    /// constant-folding, so every free name resolves through `env.lookup`
-    /// exactly as tree-walking would.
-    pub(crate) fn eval_arg(&mut self, env: &Env, arg: &Ast) -> Result<Value, EvalError> {
-        let key = arg as *const Ast as usize;
-        let compiled = match self.arg_cache.get(&key) {
-            Some(c) => c.clone(),
-            None => {
-                let c = crate::compile::compile_arg(arg);
-                self.arg_cache.insert(key, c.clone());
-                c
-            }
-        };
-        compiled.run(env, self)
-    }
-
-    pub fn eval(&mut self, env: &Env, ast: &Ast) -> Result<Value, EvalError> {
-        match ast {
-            Ast::Unit => Ok(Value::Unit),
-            Ast::Bool(b) => Ok(Value::Bool(*b)),
-            Ast::Int(n) => Ok(Value::Int(*n)),
-            Ast::Float(x) => Ok(Value::Float(*x)),
-            Ast::Length(l) => Ok(Value::Length(*l)),
-            Ast::Str(s) => Ok(Value::Str(s.clone())),
-            Ast::Var(name, span) => env.lookup(name).ok_or_else(|| EvalError {
-                span: Some(*span),
-                msg: format!("unbound variable '{name}' at run time"),
-            }),
-            Ast::Apply(f, arg) => {
-                let func = self.eval(env, f)?;
-                let arg = self.eval(env, arg)?;
-                self.apply(func, arg)
-            }
-            Ast::Lambda(param, body) => Ok(Value::Closure {
-                opt_params: Vec::new(),
-                param: param.clone(),
-                body: body.clone(),
-                env: env.clone(),
-            }),
-            // `fun ?(l = x, …) p -> body` (SATySFi 0.1). Builds a closure
-            // that additionally binds each labeled-optional param at
-            // application time (`Some`/`None` defaulting in
-            // `apply_with_opts`).
-            Ast::LambdaOpt { opts, param, body } => Ok(Value::Closure {
-                opt_params: opts.clone(),
-                param: param.clone(),
-                body: body.clone(),
-                env: env.clone(),
-            }),
-            // `f ?(l = e, …) arg` (SATySFi 0.1) — evaluate the function, each
-            // labeled optional value, and the positional argument, then
-            // beta-reduce with the optional bundle.
-            Ast::ApplyOpt { func, opts, arg } => {
-                let f = self.eval(env, func)?;
-                let mut opt_vals = Vec::with_capacity(opts.len());
-                for (label, e) in opts {
-                    opt_vals.push((label.clone(), self.eval(env, e)?));
-                }
-                let a = self.eval(env, arg)?;
-                self.apply_with_opts(f, opt_vals, a)
-            }
-            Ast::LetIn(name, value, rest) => {
-                let v = self.eval(env, value)?;
-                let inner = env.child();
-                inner.define(name.clone(), v);
-                self.eval(&inner, rest)
-            }
-            // `let-math` binds identically to `LetIn` at run time (see
-            // `ast.rs`'s doc comment — the distinct variant is purely a
-            // typecheck-time signal).
-            Ast::LetMathIn(name, value, rest) => {
-                let v = self.eval(env, value)?;
-                let inner = env.child();
-                inner.define(name.clone(), v);
-                self.eval(&inner, rest)
-            }
-            Ast::Record(fields) => {
-                let mut map = std::collections::BTreeMap::new();
-                for (name, e) in fields {
-                    map.insert(name.clone(), self.eval(env, e)?);
-                }
-                Ok(Value::Record(map))
-            }
-            Ast::List(items) => {
-                let mut out = Vec::with_capacity(items.len());
-                for e in items {
-                    out.push(self.eval(env, e)?);
-                }
-                Ok(Value::List(out))
-            }
-            Ast::InlineText(elems) => Ok(Value::InlineText {
-                elems: elems.clone(),
-                env: env.clone(),
-            }),
-            Ast::BlockText(elems) => Ok(Value::BlockText {
-                elems: elems.clone(),
-                env: env.clone(),
-            }),
-            Ast::LetRecIn(bindings, body) => {
-                let inner = env.child();
-                for (name, value_ast) in bindings {
-                    let v = self.eval(&inner, value_ast)?;
-                    if !matches!(v, Value::Closure { .. }) {
-                        return eval_error(format!(
-                            "let-rec binding '{name}' must be a function, got {}",
-                            v.type_name()
-                        ));
-                    }
-                    inner.define(name.clone(), v);
-                }
-                self.eval(&inner, body)
-            }
-            Ast::IfThenElse(cond, then_e, else_e) => match self.eval(env, cond)? {
-                Value::Bool(true) => self.eval(env, then_e),
-                Value::Bool(false) => self.eval(env, else_e),
-                other => eval_error(format!(
-                    "if-then-else condition must be bool, got {}",
-                    other.type_name()
-                )),
-            },
-            Ast::Tuple(items) => {
-                let mut out = Vec::with_capacity(items.len());
-                for e in items {
-                    out.push(self.eval(env, e)?);
-                }
-                Ok(Value::Tuple(out))
-            }
-            Ast::Ctor(name, arg) => {
-                let payload = match arg {
-                    Some(a) => Some(Box::new(self.eval(env, a)?)),
-                    None => None,
-                };
-                Ok(Value::Ctor(name.clone(), payload))
-            }
-            // Quoted math text (`${…}`); like InlineText/BlockText, this only
-            // captures the environment — typesetting is phase 7's job.
-            Ast::MathText(elems) => Ok(Value::MathText {
-                elems: elems.clone(),
-                env: env.clone(),
-            }),
-            // `let-mutable x <- init in body` (`UTLetMutableIn` /
-            // evaluator.cppo.ml's `LetMutableIn`). v0.0.6 evaluates the
-            // initializer in the *outer* environment, allocates a fresh
-            // store location for it, then binds `x` to that location in a
-            // child environment for `body`. We have no separate store table
-            // (see `Value::Ref`'s doc comment), so `x` is bound directly to
-            // a shared `RefCell` cell.
-            Ast::LetMutableIn(name, init, body) => {
-                let v = self.eval(env, init)?;
-                let inner = env.child();
-                inner.define(name.clone(), Value::Ref(Rc::new(RefCell::new(v))));
-                self.eval(&inner, body)
-            }
-            // `x <- e` (`UTOverwrite` / evaluator.cppo.ml's `Overwrite`).
-            // v0.0.6 looks up `x`, requires it to hold a `Location`
-            // (otherwise a "bug" — the type checker is supposed to rule
-            // this out ahead of time), evaluates `e`, and destructively
-            // updates the store; the result is `unit`.
-            Ast::Overwrite(name, span, value) => {
-                let cell = env.lookup(name).ok_or_else(|| EvalError {
-                    span: Some(*span),
-                    msg: format!("unbound mutable variable '{name}' at run time"),
-                })?;
-                match cell {
-                    Value::Ref(cell) => {
-                        let v = self.eval(env, value)?;
-                        *cell.borrow_mut() = v;
-                        Ok(Value::Unit)
-                    }
-                    other => Err(EvalError {
-                        span: Some(*span),
-                        msg: format!(
-                            "cannot overwrite an immutable variable '{name}' (got a value of type {})",
-                            other.type_name()
-                        ),
-                    }),
-                }
-            }
-            // `while cond do body` (`UTWhileDo` / evaluator.cppo.ml's
-            // `WhileDo`) — v0.0.6 recurses with no iteration cap (it's a
-            // faithful loop, not a bounded one), so we do the same.
-            Ast::WhileDo(cond, body) => loop {
-                match self.eval(env, cond)? {
-                    Value::Bool(true) => {
-                        self.eval(env, body)?;
-                    }
-                    Value::Bool(false) => break Ok(Value::Unit),
-                    other => {
-                        return eval_error(format!(
-                            "while-do condition must be bool, got {}",
-                            other.type_name()
-                        ))
-                    }
-                }
-            },
-            // `e1 before e2` (`UTSequential` / evaluator.cppo.ml's
-            // `Sequential`). v0.0.6 asserts at runtime that `e1` evaluated
-            // to `unit` (`BaseConstant(BCUnit)`), but that assertion only
-            // exists because the *type checker* already guarantees `e1 :
-            // unit` — the runtime check is a "this should be impossible"
-            // bug trap, not a feature. This port has no separate type
-            // checker yet, so we simply discard `e1`'s value regardless of
-            // its runtime type.
-            Ast::Sequential(e1, e2) => {
-                self.eval(env, e1)?;
-                self.eval(env, e2)
-            }
-            // `e#label` (`UTAccessField` / evaluator.cppo.ml's
-            // `AccessField`).
-            Ast::AccessField(e, label, span) => {
-                let v = self.eval(env, e)?;
-                match v {
-                    Value::Record(map) => map.get(label).cloned().ok_or_else(|| EvalError {
-                        span: Some(*span),
-                        msg: format!(
-                            "record has no field '{label}' (available fields: {})",
-                            available_fields(&map)
-                        ),
-                    }),
-                    other => Err(EvalError {
-                        span: Some(*span),
-                        msg: format!(
-                            "cannot access field '{label}' of a non-record value (got {})",
-                            other.type_name()
-                        ),
-                    }),
-                }
-            }
-            // `(| e with label = v |)` (`UTUpdateField` / evaluator.cppo.ml's
-            // `UpdateField`) — functional record update. v0.0.6 requires the
-            // field to already exist (`Assoc.find_opt asc1 fldnm` is matched
-            // against `None -> report_bug_reduction "... not found" | Some(_)
-            // -> Assoc.add ...`): updating an absent label is a bug, not a
-            // way to add a new field. We mirror that: absent label is a
-            // runtime error. v0.0.6 also evaluates the replacement value
-            // *before* checking whether the field exists (both `ast1` and
-            // `ast2` are interpreted up front), which we replicate here.
-            Ast::UpdateField(e, label, value) => {
-                let v = self.eval(env, e)?;
-                let new_v = self.eval(env, value)?;
-                match v {
-                    Value::Record(mut map) => {
-                        if !map.contains_key(label) {
-                            return eval_error(format!(
-                                "cannot update field '{label}': record has no such field \
-                                 (available fields: {})",
-                                available_fields(&map)
-                            ));
-                        }
-                        map.insert(label.clone(), new_v);
-                        Ok(Value::Record(map))
-                    }
-                    other => eval_error(format!(
-                        "cannot update field '{label}' of a non-record value (got {})",
-                        other.type_name()
-                    )),
-                }
-            }
-            Ast::Match(scrutinee, arms) => {
-                let v = self.eval(env, scrutinee)?;
-                for arm in arms {
-                    let mut bindings = Vec::new();
-                    if !match_pattern(&arm.pat, &v, &mut bindings) {
-                        continue;
-                    }
-                    let inner = env.child();
-                    for (name, val) in bindings {
-                        inner.define(name, val);
-                    }
-                    if let Some(guard) = &arm.guard {
-                        match self.eval(&inner, guard)? {
-                            Value::Bool(true) => {}
-                            Value::Bool(false) => continue,
-                            other => {
-                                return eval_error(format!(
-                                    "match guard must be bool, got {}",
-                                    other.type_name()
-                                ))
-                            }
-                        }
-                    }
-                    return self.eval(&inner, &arm.body);
-                }
-                eval_error(format!(
-                    "non-exhaustive match: no arm matched a value of type {}",
-                    v.type_name()
-                ))
-            }
-            // Slice X2a/X2b (`docs/plans/design-cross-version-import.md`
-            // §"Slice X2 — per-group primitive environment") — the R2 fix:
-            // save/restore `self.version` around evaluating `body`, so any
-            // runtime fork that reads it SYNCHRONOUSLY, as part of this
-            // `self.eval(env, body)` call's own tree walk, sees `V0_0_6`
-            // instead of whatever version was ambient at the call site.
-            // Never reached on a pure single-version program (no
-            // `Ast::VersionScope` node is ever produced there). Exception-
-            // safe: `r` captures the `Result` (`Ok` or `Err`) before the
-            // restore runs unconditionally, so an inner eval error still
-            // leaves `self.version` correctly popped (no early-return gap).
-            //
-            // X2b audit (exhaustive grep of every `interp.version`/
-            // `self.version` runtime read reachable from a `PrimDef::run`,
-            // per the design doc's Risk S3): exactly three sites exist, all
-            // in `primitives.rs`.
-            //   - `read_inline`'s `IText::EmbedMath` fallback (~:1254) and
-            //     `make_paren_run`'s calling-convention dispatch (~:5886)
-            //     are both reached SYNCHRONOUSLY — they run as part of laying
-            //     out inline/math content while the surrounding `Ast` is
-            //     still being tree-walked, i.e. strictly inside whatever
-            //     `self.eval(env, body)` call is on the stack — so this
-            //     save/restore covers them. Verified, no fix needed.
-            //   - `coerce_graphics_result` (~:4021, reached only via
-            //     `apply_deco`) is DIFFERENT: `apply_deco`'s only two callers
-            //     (`lib.rs`'s `fire_inline_frame` and the block-frame-close
-            //     arm of the page-break hook-firing pass) run in a wholly
-            //     separate, LATER pass — after `break_pages` has placed every
-            //     line and the top-level `eval()` call (and every
-            //     `VersionScope` it contained) has already returned. A deco
-            //     closure captured from a spliced `V0_0_6` dependency's
-            //     `\block-frame-breakable`/inline-frame use is therefore
-            //     fired with `self.version` back at whatever the ambient
-            //     top-level version is, NOT the `V0_0_6` it was defined
-            //     under — `coerce_graphics_result` can then coerce the
-            //     closure's `list graphics` (0.0.6 shape) result the 0.1 way
-            //     (or vice versa). This save/restore, scoped to `eval`'s
-            //     synchronous body window, structurally CANNOT cover a
-            //     later, separate pass — a real fix needs the closure's
-            //     origin version threaded through `DecoEntry`
-            //     (`primitives.rs`'s two `interp.decos.push` sites) and
-            //     restored around `apply_deco` at fire time (`lib.rs`'s
-            //     `fire_hooks`/`fire_inline_frame`), both outside this
-            //     slice's file scope. Tracked as a known residual for a
-            //     follow-up slice; not exercised by the X2/X2b test corpus
-            //     (which uses `page-break`/math-split, not frames/decos,
-            //     across a version boundary).
-            Ast::VersionScope(v, body) => {
-                let prev = self.version;
-                self.version = *v;
-                let r = self.eval(env, body);
-                self.version = prev;
-                r
-            }
-            // Ctor-scoping marker — transparent at runtime (constructor tags
-            // are bare strings; see `Ast::ModuleScope`).
-            Ast::ModuleScope(_, body) => self.eval(env, body),
-        }
+    /// Evaluate `ast` by compiling it against `env` and running the result.
+    ///
+    /// This used to be the reference **tree-walking** interpreter, kept beside
+    /// [`crate::compile`]'s closure compiler so the two could be cross-checked.
+    /// Phase 3 of `docs/plans/design-symbol-debruijn-slots.md` retired it:
+    /// quoted text is now compiled eagerly into [`crate::quoted`]'s name-free
+    /// form, so a tree-walker can no longer build a `Value::InlineText` at all
+    /// without invoking the compiler — there is exactly one evaluator now.
+    ///
+    /// Kept as this thin shim because ~25 integration tests drive the
+    /// evaluator through it. It is precisely what those tests' compiled
+    /// counterpart already did, which is why the differential harness that
+    /// used to compare the two paths is gone: there is nothing left to differ.
+    ///
+    /// `base` is the COMPILE-time environment `ast`'s free names resolve
+    /// against; the program itself runs in a fresh, empty runtime frame chain
+    /// (Phase 4 — the base environment is no longer that chain's root,
+    /// because nothing resolves a name at run time).
+    pub fn eval(&mut self, base: &BaseEnv, ast: &Ast) -> Result<Value, EvalError> {
+        crate::compile::compile_program(ast, base).run(&Env::root(), self)
     }
 
     /// Intern an installed math command, returning the handle a `Context`
@@ -597,27 +254,18 @@ impl<'a> Interp<'a> {
         arg: Value,
     ) -> Result<Value, EvalError> {
         match func {
-            Value::Closure {
-                opt_params,
-                param,
-                body,
-                env,
-            } => {
-                let inner = env.child();
-                bind_opt_params(&inner, &opt_params, &opt_vals);
-                inner.define(param, arg);
-                self.eval(&inner, &body)
-            }
             Value::CompiledClosure {
-                opt_params,
-                param,
+                opt_labels,
                 body,
                 env,
             } => {
-                let inner = env.child();
-                bind_opt_params(&inner, &opt_params, &opt_vals);
-                inner.define(param, arg);
-                body.run(&inner, self)
+                // Slot order: the declared optional binders, then the
+                // positional parameter — exactly what `Ast::LambdaOpt` pushed
+                // onto the compiler's scope stack.
+                let mut slots = Vec::with_capacity(opt_labels.len() + 1);
+                push_opt_slots(&mut slots, &opt_labels, &opt_vals);
+                slots.push(arg);
+                body.run(&env.child(slots), self)
             }
             Value::Prim { def, mut applied } => {
                 if !opt_vals.is_empty() {
@@ -640,38 +288,43 @@ impl<'a> Interp<'a> {
     }
 }
 
-/// Bind each of a closure's SATySFi 0.1 labeled-optional params into `env`:
-/// `Some v` when `opt_vals` supplies the label, `None` otherwise (upstream
-/// `reduce_beta`'s fold over the closure's own label map). Supplied labels a
-/// closure does not declare are silently ignored — safe only because
-/// typecheck rejects wrong labels first.
-fn bind_opt_params(env: &Env, opt_params: &[(String, String)], opt_vals: &[(String, Value)]) {
-    for (label, binder) in opt_params {
-        let value = match opt_vals.iter().find(|(l, _)| l == label) {
+/// Append one slot per declared SATySFi 0.1 labeled-optional parameter, in
+/// declaration order: `Some v` when `opt_vals` supplies that label, `None`
+/// otherwise (upstream `reduce_beta`'s fold over the closure's own label map).
+/// Supplied labels a closure does not declare are silently ignored — safe only
+/// because typecheck rejects wrong labels first.
+fn push_opt_slots(slots: &mut Vec<Value>, opt_labels: &[String], opt_vals: &[(String, Value)]) {
+    for label in opt_labels {
+        slots.push(match opt_vals.iter().find(|(l, _)| l == label) {
             Some((_, v)) => Value::Ctor("Some".to_string(), Some(Box::new(v.clone()))),
             None => Value::Ctor("None".to_string(), None),
-        };
-        env.define(binder.clone(), value);
+        });
     }
 }
 
 /// Structural pattern matching against an already-evaluated scrutinee.
-/// Returns `true` (and appends every binding introduced along the way) on a
-/// structural match; returns `false` (leaving `bindings` for this attempt
-/// unusable — callers must use a fresh `Vec` per arm) otherwise. A pattern
+/// Returns `true` (and appends every bound value, POSITIONALLY, in the order
+/// they were encountered) on a structural match; returns `false` (leaving
+/// `bindings` for this attempt unusable — callers must use a fresh `Vec` per
+/// arm) otherwise.
+///
+/// The push order here is the same left-to-right traversal
+/// `compile::pattern_vars` uses to collect the arm's names, so position `i` in
+/// `bindings` is slot `i` of the frame the arm runs in (Phase 4). Keep the two
+/// in step. A pattern
 /// and a value of mismatched shape is simply "no match", never an error:
 /// this untyped evaluator relies on the (separate, not-yet-ported)
 /// exhaustiveness/type checker to rule out ill-typed matches ahead of time.
-pub fn match_pattern(pat: &Pattern, value: &Value, bindings: &mut Vec<(String, Value)>) -> bool {
+pub fn match_pattern(pat: &Pattern, value: &Value, bindings: &mut Vec<Value>) -> bool {
     match pat {
         Pattern::Wild => true,
-        Pattern::Var(name) => {
-            bindings.push((name.clone(), value.clone()));
+        Pattern::Var(_) => {
+            bindings.push(value.clone());
             true
         }
-        Pattern::As(inner_pat, name) => {
+        Pattern::As(inner_pat, _) => {
             if match_pattern(inner_pat, value, bindings) {
-                bindings.push((name.clone(), value.clone()));
+                bindings.push(value.clone());
                 true
             } else {
                 false

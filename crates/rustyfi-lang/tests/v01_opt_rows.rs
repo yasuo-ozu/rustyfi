@@ -41,14 +41,15 @@ fn eval_v01(src: &str) -> Result<Value, String> {
         eoi,
     };
     let env = primitives::base_env_with_version(RustyfiVersion::V0_1);
-    let scope = elaborate::Scope::new_with_version(env.names(), RustyfiVersion::V0_1);
+    let store = rustyfi_lang::symbol::SymbolStore::new();
+    let scope = elaborate::Scope::new_with_version(&store, env.names(), RustyfiVersion::V0_1);
     let elaborated =
         elaborate::elaborate_program(&file, &scope).map_err(|e| format!("elaborate: {e}"))?;
     typecheck::typecheck_with_version(&elaborated, RustyfiVersion::V0_1)
         .map_err(|e| format!("typecheck: {e}"))?;
     let mut interp = eval::Interp::new(&NoFonts);
     interp
-        .eval(&env, &elaborated.body)
+        .eval(&env, &rustyfi_lang::ast::debrand(&elaborated.body, &store))
         .map_err(|e| format!("eval: {e}"))
 }
 
@@ -58,7 +59,8 @@ fn eval_v01(src: &str) -> Result<Value, String> {
 fn elaborate_v006_err(src: &str) -> String {
     let file = parse_file(src).unwrap_or_else(|e| panic!("0.0.6 parse of {src:?}: {e}"));
     let env = primitives::base_env();
-    let scope = elaborate::Scope::new(env.names());
+    let store = rustyfi_lang::symbol::SymbolStore::new();
+    let scope = elaborate::Scope::new(&store, env.names());
     match elaborate::elaborate_program(&file, &scope) {
         Ok(_) => panic!("expected a version-gate error, but {src:?} elaborated"),
         Err(e) => e.to_string(),
@@ -243,7 +245,8 @@ fn t_opt_row_fun_type_domain_v006_version_gate() {
     let file = parse_file("type adder = ?(bias : int) int -> int in 0")
         .unwrap_or_else(|e| panic!("0.0.6 parse failed: {e}"));
     let env = primitives::base_env();
-    let scope = elaborate::Scope::new(env.names());
+    let store = rustyfi_lang::symbol::SymbolStore::new();
+    let scope = elaborate::Scope::new(&store, env.names());
     let program = elaborate::elaborate_program(&file, &scope)
         .expect("elaborate carries the raw type decl through unchecked");
     let err = typecheck::typecheck(&program)
@@ -286,7 +289,8 @@ fn t_opt_row_fun_type_domain_declares_cleanly_under_v01() {
         eoi,
     };
     let env = primitives::base_env_with_version(RustyfiVersion::V0_1);
-    let scope = elaborate::Scope::new(env.names());
+    let store = rustyfi_lang::symbol::SymbolStore::new();
+    let scope = elaborate::Scope::new(&store, env.names());
     let elaborated = elaborate::elaborate_program(&file, &scope)
         .unwrap_or_else(|e| panic!("elaborate failed: {e}"));
     typecheck::typecheck_with_version(&elaborated, RustyfiVersion::V0_1)

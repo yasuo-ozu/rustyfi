@@ -111,11 +111,12 @@ macro_rules! need_math_font {
 fn run_math(src: &str, metrics: &dyn FontMetrics) -> Result<Value, CompileError> {
     let file = rustyfi_syntax::parse_file(src)?;
     let env = primitives::base_env();
-    let scope = elaborate::Scope::new(env.names());
+    let store = rustyfi_lang::symbol::SymbolStore::new();
+    let scope = elaborate::Scope::new(&store, env.names());
     let program = elaborate::elaborate_program(&file, &scope)?;
     typecheck::typecheck(&program)?;
     let mut interp = eval::Interp::new(metrics);
-    Ok(interp.eval(&env, &program.body)?)
+    Ok(interp.eval(&env, &rustyfi_lang::ast::debrand(&program.body, &store))?)
 }
 
 fn with_ctx(body: &str) -> String {

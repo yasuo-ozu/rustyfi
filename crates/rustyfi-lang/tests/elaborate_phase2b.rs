@@ -34,11 +34,12 @@ impl FontMetrics for Mono {
 fn eval_str(src: &str) -> Result<Value, rustyfi_lang::CompileError> {
     let file = rustyfi_syntax::parse_file(src)?;
     let env = primitives::base_env();
-    let scope = elaborate::Scope::new(env.names());
+    let store = rustyfi_lang::symbol::SymbolStore::new();
+    let scope = elaborate::Scope::new(&store, env.names());
     let ast = elaborate::elaborate(&file, &scope)?;
     let mono = Mono;
     let mut interp = eval::Interp::new(&mono);
-    Ok(interp.eval(&env, &ast)?)
+    Ok(interp.eval(&env, &rustyfi_lang::ast::debrand(&ast, &store))?)
 }
 
 fn int(src: &str) -> i64 {
@@ -50,8 +51,10 @@ fn int(src: &str) -> i64 {
 
 fn elaborate_only(src: &str) -> Ast {
     let file = rustyfi_syntax::parse_file(src).unwrap();
-    let scope = elaborate::Scope::new(primitives::base_env().names());
-    elaborate::elaborate(&file, &scope).unwrap()
+    let store = rustyfi_lang::symbol::SymbolStore::new();
+    let scope = elaborate::Scope::new(&store, primitives::base_env().names());
+    let ast = elaborate::elaborate(&file, &scope).unwrap();
+    rustyfi_lang::ast::debrand(&ast, &store)
 }
 
 // ---- let-mutable / overwrite / while / before, from source -----------------
@@ -168,7 +171,8 @@ fn itemize_rejects_an_illegal_depth_jump() {
     // Depth 3 directly after depth 1 (skipping depth 2) is illegal
     // (parser.mly:343, `"syntax error: illegal item depth .."`).
     let file = rustyfi_syntax::parse_file("{ * a *** b }").unwrap();
-    let scope = elaborate::Scope::new(primitives::base_env().names());
+    let store = rustyfi_lang::symbol::SymbolStore::new();
+    let scope = elaborate::Scope::new(&store, primitives::base_env().names());
     let err = elaborate::elaborate(&file, &scope).unwrap_err();
     assert!(err.to_string().contains("illegal item depth"));
 }

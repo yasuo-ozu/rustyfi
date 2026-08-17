@@ -226,7 +226,8 @@ fn t6_v006_command_param_bundle_version_gate() {
     let file = parse_file("let-inline ctx \\c ?(a = x) t = t in 0")
         .unwrap_or_else(|e| panic!("0.0.6 parse of the command bundle failed: {e}"));
     let env = rustyfi_lang::primitives::base_env();
-    let scope = rustyfi_lang::elaborate::Scope::new(env.names());
+    let store = rustyfi_lang::symbol::SymbolStore::new();
+    let scope = rustyfi_lang::elaborate::Scope::new(&store, env.names());
     let err = rustyfi_lang::elaborate::elaborate_program(&file, &scope)
         .expect_err("a 0.0.6 command binding with a `?(l=x)` bundle must be rejected");
     assert!(

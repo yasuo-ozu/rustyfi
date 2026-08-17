@@ -120,6 +120,18 @@ pub enum GraphicsElem {
         width: Length,
         height: Length,
         depth: Length,
+        /// The accumulated 2×2 linear transform (`linear-transform-graphics`,
+        /// row-major `(a, b, c, d)` — same convention as
+        /// [`linear_transform_point`]) applied to the run about its local
+        /// origin BEFORE the `pt` translation. `None` means identity — the run
+        /// is drawn upright at `pt` exactly as before this field existed, so
+        /// every pre-existing `draw-text` render stays byte-identical. `Some`
+        /// only appears once `rotate-graphics`/`scale-graphics` (figbox's
+        /// `rotate`/`scale`) is composed onto a `draw-text`; the writer then
+        /// emits the run under a `cm` carrying this matrix so the glyphs/image
+        /// actually rotate/scale (upstream's lazy `LinearTrans` render-time
+        /// `cm`, which this port previously dropped for text runs).
+        transform: Option<(f64, f64, f64, f64)>,
     },
     /// 0.1 collection node (`GraphicD.concat`, dev-0-1-0 `graphicD.ml:23`):
     /// `unite-graphics`' payload (`docs/plans/…/prim-retype-sweep.md` §3.2).
@@ -210,13 +222,18 @@ pub fn shift_graphics(v: Point, elem: &GraphicsElem) -> GraphicsElem {
         GraphicsElem::DashedStroke(w, d, c, p) => {
             GraphicsElem::DashedStroke(*w, *d, *c, shift_path(v, p))
         }
-        GraphicsElem::Text { pt, contents, width, height, depth } => GraphicsElem::Text {
-            pt: shift_point(v, *pt),
-            contents: contents.clone(),
-            width: *width,
-            height: *height,
-            depth: *depth,
-        },
+        GraphicsElem::Text { pt, contents, width, height, depth, transform } => {
+            GraphicsElem::Text {
+                pt: shift_point(v, *pt),
+                contents: contents.clone(),
+                width: *width,
+                height: *height,
+                depth: *depth,
+                // A pure translation leaves the run's own 2×2 transform intact
+                // (only `pt` moves) — the affine is `transform·l + pt`.
+                transform: *transform,
+            }
+        }
         // `graphicD.ml:38`: `Group` maps every child; `Clip` shifts its own
         // clip path AND recurses into its contents.
         GraphicsElem::Group(gs) => {
@@ -239,21 +256,31 @@ pub fn linear_transform_graphics(mat: (f64, f64, f64, f64), elem: &GraphicsElem)
         GraphicsElem::DashedStroke(w, d, c, p) => {
             GraphicsElem::DashedStroke(*w, *d, *c, linear_transform_path(mat, p))
         }
-        // **Documented deviation** (extends `prim_linear_transform_graphics`'s
-        // "Eager, unlike upstream" doc comment, rustyfi-lang/src/
-        // primitives.rs): upstream wraps in a lazy `LinearTrans` whose
-        // render-time `cm` also rotates/scales the glyphs; this port's eager
-        // point-map cannot transform a text run, so `rotate-graphics`/
-        // `scale-graphics` over a `draw-text` moves the anchor but does not
-        // rotate the glyphs. No bundled package composes them; same class of
-        // deviation as the already-shipped stroke-width note.
-        GraphicsElem::Text { pt, contents, width, height, depth } => GraphicsElem::Text {
-            pt: linear_transform_point(mat, *pt),
-            contents: contents.clone(),
-            width: *width,
-            height: *height,
-            depth: *depth,
-        },
+        // A `draw-text` run carries the composed 2×2 matrix so the writer can
+        // rotate/scale the glyphs/image at render time (upstream's lazy
+        // `LinearTrans` `cm`). The affine is `transform·l + pt`; pre-composing
+        // `mat` gives `mat·(transform·l + pt) = (mat·transform)·l + mat·pt`, so
+        // `transform ↦ mat·transform` and `pt ↦ mat·pt`. Matrices are row-major
+        // `(a, b, c, d)` = `[[a, b], [c, d]]` (the `linear_transform_point`
+        // convention), so the product below is the standard 2×2 multiply.
+        GraphicsElem::Text { pt, contents, width, height, depth, transform } => {
+            let (ma, mb, mc, md) = mat;
+            let (ta, tb, tc, td) = transform.unwrap_or((1.0, 0.0, 0.0, 1.0));
+            let composed = (
+                ma * ta + mb * tc,
+                ma * tb + mb * td,
+                mc * ta + md * tc,
+                mc * tb + md * td,
+            );
+            GraphicsElem::Text {
+                pt: linear_transform_point(mat, *pt),
+                contents: contents.clone(),
+                width: *width,
+                height: *height,
+                depth: *depth,
+                transform: Some(composed),
+            }
+        }
         // Same recursing shape as `shift_graphics` above; the stroke-width
         // caveat documented on the `Text` arm's doc comment above extends
         // to any `Stroke`/`DashedStroke` nested inside a transformed `Clip`/
@@ -396,8 +423,36 @@ pub fn graphics_bbox(elem: &GraphicsElem) -> Option<(Point, Point)> {
         GraphicsElem::Fill(_, p)
         | GraphicsElem::Stroke(_, _, p)
         | GraphicsElem::DashedStroke(_, _, _, p) => Some(path_bbox(p)),
-        GraphicsElem::Text { pt, width, height, depth, .. } => {
-            Some(((pt.0, pt.1 - *depth), (pt.0 + *width, pt.1 + *height)))
+        GraphicsElem::Text { pt, width, height, depth, transform, .. } => {
+            match transform {
+                // Upright run: its box is the axis-aligned `[0,width]×[-depth,
+                // height]` extent translated to `pt` (unchanged).
+                None => Some(((pt.0, pt.1 - *depth), (pt.0 + *width, pt.1 + *height))),
+                // Rotated/scaled run: transform the four local corners of that
+                // box by the matrix, translate by `pt`, and take the axis-
+                // aligned hull — this is what `get-graphics-bbox` needs so a
+                // `rotate`d figbox reserves the correct (rotated) inline size.
+                Some(mat) => {
+                    let corners = [
+                        (Length::ZERO, -*depth),
+                        (*width, -*depth),
+                        (*width, *height),
+                        (Length::ZERO, *height),
+                    ];
+                    let mut min = (f64::INFINITY, f64::INFINITY);
+                    let mut max = (f64::NEG_INFINITY, f64::NEG_INFINITY);
+                    for c in corners {
+                        let t = linear_transform_point(*mat, c);
+                        let (x, y) = (t.0 .0 + pt.0 .0, t.1 .0 + pt.1 .0);
+                        min = (min.0.min(x), min.1.min(y));
+                        max = (max.0.max(x), max.1.max(y));
+                    }
+                    Some((
+                        (Length(min.0), Length(min.1)),
+                        (Length(max.0), Length(max.1)),
+                    ))
+                }
+            }
         }
         GraphicsElem::Clip(path, _) => Some(path_bbox(path)),
         GraphicsElem::Group(gs) => gs

@@ -11,7 +11,7 @@
 use rustyfi_backend::{Color, FontKey, FontMetrics, GraphicsElem, Length};
 use rustyfi_lang::ast::Ast;
 use rustyfi_lang::eval::Interp;
-use rustyfi_lang::value::{Env, Value};
+use rustyfi_lang::value::{BaseEnv, Value};
 use rustyfi_lang::{prim_types, primitives};
 use rustyfi_syntax::{RustyfiVersion, Span};
 use std::rc::Rc;
@@ -32,7 +32,7 @@ impl FontMetrics for Mono {
 
 /// Apply a named primitive (looked up in `env`) to `args`, left to right —
 /// the `v01_prims_scalar.rs` helper.
-fn call(interp: &mut Interp, env: &Env, name: &str, args: Vec<Value>) -> Value {
+fn call(interp: &mut Interp, env: &BaseEnv, name: &str, args: Vec<Value>) -> Value {
     let mut f = env
         .lookup(name)
         .unwrap_or_else(|| panic!("{name} is not bound"));
@@ -46,7 +46,7 @@ fn call(interp: &mut Interp, env: &Env, name: &str, args: Vec<Value>) -> Value {
 
 fn try_call(
     interp: &mut Interp,
-    env: &Env,
+    env: &BaseEnv,
     name: &str,
     args: Vec<Value>,
 ) -> Result<Value, rustyfi_lang::eval::EvalError> {
@@ -73,7 +73,7 @@ fn gray_val(g: f64) -> Value {
 /// Build a `w` x `h` rectangle path anchored at `(ox, oy)`, via the actual
 /// `start-path`/`line-to`/`close-with-line` primitives (not a hand-built
 /// `Path` struct) — exercises the same code every `.saty` source would.
-fn rect_path(interp: &mut Interp, env: &Env, ox: f64, oy: f64, w: f64, h: f64) -> Value {
+fn rect_path(interp: &mut Interp, env: &BaseEnv, ox: f64, oy: f64, w: f64, h: f64) -> Value {
     let p0 = call(interp, env, "start-path", vec![point_val(ox, oy)]);
     let p1 = call(interp, env, "line-to", vec![point_val(ox + w, oy), p0]);
     let p2 = call(interp, env, "line-to", vec![point_val(ox + w, oy + h), p1]);
@@ -81,7 +81,7 @@ fn rect_path(interp: &mut Interp, env: &Env, ox: f64, oy: f64, w: f64, h: f64) -
     call(interp, env, "close-with-line", vec![p3])
 }
 
-fn fill_val(interp: &mut Interp, env: &Env, path: Value) -> Value {
+fn fill_val(interp: &mut Interp, env: &BaseEnv, path: Value) -> Value {
     call(interp, env, "fill", vec![gray_val(0.0), path])
 }
 
@@ -291,14 +291,14 @@ fn fill_ast() -> Ast {
 
 /// `fun _pt -> <body>` — a 1-ary closure ignoring its argument (matches
 /// `inline-graphics`'s eager-at-origin callback shape).
-fn closure1(interp: &mut Interp, env: &Env, body: Ast) -> Value {
+fn closure1(interp: &mut Interp, env: &BaseEnv, body: Ast) -> Value {
     let ast = Ast::Lambda("_pt".to_string(), Rc::new(body));
     interp.eval(env, &ast).expect("closure AST must evaluate")
 }
 
 /// `fun _xs _ys -> <body>` — a 2-ary closure ignoring both arguments
 /// (matches `tabular`'s rules-callback shape).
-fn closure2(interp: &mut Interp, env: &Env, body: Ast) -> Value {
+fn closure2(interp: &mut Interp, env: &BaseEnv, body: Ast) -> Value {
     let ast = Ast::Lambda(
         "_xs".to_string(),
         Rc::new(Ast::Lambda("_ys".to_string(), Rc::new(body))),

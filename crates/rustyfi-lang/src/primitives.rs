@@ -11,9 +11,9 @@
 //! `read-block`/`read-inline`, `line-break`, `++`/`inline-fil`, and the new
 //! `set-font-key` below).
 
-use crate::ast::{BText, IText, MathElem};
+use crate::quoted::{BText, IText, MathElem};
 use crate::eval::{available_fields, eval_error, DecoEntry, EvalError, Interp};
-use crate::value::{DocumentValue, Env, TextInfo, Value};
+use crate::value::{BaseEnv, DocumentValue, Env, TextInfo, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use rustyfi_backend::{
     break_into_lines, break_opportunities, chop_page, default_math_variant_char, fit_cell,
@@ -660,7 +660,7 @@ prims! {
 /// `base_env()` call sites (production and tests) need editing when
 /// `VersionSpan` gating lands. Mirrors `rustyfi-syntax`'s
 /// `lex`/`lex_with_version` split (S4).
-pub fn base_env() -> Env {
+pub fn base_env() -> BaseEnv {
     base_env_with_version(RustyfiVersion::V0_0_6)
 }
 
@@ -676,8 +676,8 @@ pub fn base_env() -> Env {
 /// provisional; `tests/v01_prims_scalar.rs`'s
 /// `bare_constants_bound_under_v01` proves `base_env_with_version(V0_1)`
 /// still binds all five.
-pub fn base_env_with_version(version: RustyfiVersion) -> Env {
-    let env = Env::root();
+pub fn base_env_with_version(version: RustyfiVersion) -> BaseEnv {
+    let mut env = BaseEnv::new();
     for def in PRIM_DEFS {
         if !def.version.allows(version) {
             continue;
@@ -1314,24 +1314,24 @@ pub fn read_inline(
     for elem in elems {
         match elem {
             IText::Text(text) => text_to_boxes(interp, ctx, text, &mut out)?,
-            IText::Cmd { name, span, args } => {
-                let cmd = env.lookup(name).ok_or_else(|| EvalError {
-                    span: Some(*span),
-                    msg: format!("unbound inline command '{name}' at run time"),
-                })?;
+            IText::Cmd { cmd, args } => {
+                // Resolved at compile time (`crate::quoted`); running it can
+                // still raise the same "unbound inline command" error for the
+                // defensive case the compiler could not resolve.
+                let cmd = cmd.run(env, interp)?;
                 let mut v = interp.apply(cmd, Value::Context(Box::new(ctx.clone())))?;
                 for arg in args {
                     let mut opt_vals = Vec::with_capacity(arg.opts.len());
                     for (label, e) in &arg.opts {
-                        opt_vals.push((label.clone(), interp.eval_arg(env, e)?));
+                        opt_vals.push((label.clone(), e.run(env, interp)?));
                     }
-                    let arg_v = interp.eval_arg(env, &arg.arg)?;
+                    let arg_v = arg.arg.run(env, interp)?;
                     v = interp.apply_with_opts(v, opt_vals, arg_v)?;
                 }
                 out.extend(as_inline_boxes(v)?);
             }
             IText::Embed { expr, span } => {
-                let v = interp.eval_arg(env, expr)?;
+                let v = expr.run(env, interp)?;
                 match v {
                     Value::InlineText {
                         elems: sub_elems,
@@ -1413,24 +1413,21 @@ pub fn read_block(
     let mut out = Vec::new();
     for elem in elems {
         match elem {
-            BText::Cmd { name, span, args } => {
-                let cmd = env.lookup(name).ok_or_else(|| EvalError {
-                    span: Some(*span),
-                    msg: format!("unbound block command '{name}' at run time"),
-                })?;
+            BText::Cmd { cmd, args } => {
+                let cmd = cmd.run(env, interp)?;
                 let mut v = interp.apply(cmd, Value::Context(Box::new(ctx.clone())))?;
                 for arg in args {
                     let mut opt_vals = Vec::with_capacity(arg.opts.len());
                     for (label, e) in &arg.opts {
-                        opt_vals.push((label.clone(), interp.eval_arg(env, e)?));
+                        opt_vals.push((label.clone(), e.run(env, interp)?));
                     }
-                    let arg_v = interp.eval_arg(env, &arg.arg)?;
+                    let arg_v = arg.arg.run(env, interp)?;
                     v = interp.apply_with_opts(v, opt_vals, arg_v)?;
                 }
                 out.extend(as_block_boxes(v)?);
             }
             BText::Embed { expr, span } => {
-                let v = interp.eval_arg(env, expr)?;
+                let v = expr.run(env, interp)?;
                 match v {
                     Value::BlockText {
                         elems: sub_elems,
@@ -4557,7 +4554,14 @@ fn prim_draw_text(interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, Ev
     let (width, height, depth) = natural_metrics(&ib);
     let (mut contents, _, _) = fit_cell(ib, width);
     resolve_outer_graphics_in_contents(interp, &mut contents)?;
-    Ok(Value::Graphics(GraphicsElem::Text { pt, contents, width, height, depth }))
+    Ok(Value::Graphics(GraphicsElem::Text {
+        pt,
+        contents,
+        width,
+        height,
+        depth,
+        transform: None,
+    }))
 }
 
 // ============================================================================
@@ -5189,12 +5193,8 @@ fn reflect_math_elem(
             ));
             Ok(())
         }
-        MathElem::Cmd { name, span, args } => {
-            let cmd = env.lookup(name).ok_or_else(|| EvalError {
-                span: Some(*span),
-                msg: format!("unbound math command '{name}' at run time"),
-            })?;
-            let mut v = cmd;
+        MathElem::Cmd { cmd, args, .. } => {
+            let mut v = cmd.run(env, interp)?;
             for arg in args {
                 // `arg.opts` is always empty here — the math-mode application
                 // grammar has no `?(l=e)` bundle form (see `MathElem::Cmd`'s
@@ -5202,9 +5202,9 @@ fn reflect_math_elem(
                 // uniformly with `read_inline`/`read_block` regardless.
                 let mut opt_vals = Vec::with_capacity(arg.opts.len());
                 for (label, e) in &arg.opts {
-                    opt_vals.push((label.clone(), interp.eval_arg(env, e)?));
+                    opt_vals.push((label.clone(), e.run(env, interp)?));
                 }
-                let arg_v = interp.eval_arg(env, &arg.arg)?;
+                let arg_v = arg.arg.run(env, interp)?;
                 v = interp.apply_with_opts(v, opt_vals, arg_v)?;
             }
             let m = as_math(interp, v)?;
@@ -5212,7 +5212,7 @@ fn reflect_math_elem(
             Ok(())
         }
         MathElem::Embed { expr, span: _ } => {
-            let v = interp.eval_arg(env, expr)?;
+            let v = expr.run(env, interp)?;
             let m = as_math(interp, v)?;
             out.extend(m.iter().cloned());
             Ok(())
@@ -5424,21 +5424,17 @@ fn reflect_scripted_v01(
     env: &Env,
     out: &mut Vec<Math>,
 ) -> Result<(), EvalError> {
-    if let MathElem::Cmd { name, span, args } = base {
-        let cmd = env.lookup(name).ok_or_else(|| EvalError {
-            span: Some(*span),
-            msg: format!("unbound math command '{name}' at run time"),
-        })?;
-        let mut v = cmd;
+    if let MathElem::Cmd { cmd, args, .. } = base {
+        let mut v = cmd.run(env, interp)?;
         for arg in args {
             // `arg.opts` is always empty here too (see the bare-`Cmd` arm
             // above, `reflect_math_elem`) — folded through `apply_with_opts`
             // uniformly regardless.
             let mut opt_vals = Vec::with_capacity(arg.opts.len());
             for (label, e) in &arg.opts {
-                opt_vals.push((label.clone(), interp.eval_arg(env, e)?));
+                opt_vals.push((label.clone(), e.run(env, interp)?));
             }
-            let arg_v = interp.eval_arg(env, &arg.arg)?;
+            let arg_v = arg.arg.run(env, interp)?;
             v = interp.apply_with_opts(v, opt_vals, arg_v)?;
         }
         v = interp.apply(v, Value::Context(Box::new(ctx.clone())))?;
@@ -5507,7 +5503,7 @@ fn reflect_math_elem_v01(
         }
         MathElem::Cmd { .. } => reflect_scripted_v01(interp, ctx, elem, None, None, env, out),
         MathElem::Embed { expr, span: _ } => {
-            let v = interp.eval_arg(env, expr)?;
+            let v = expr.run(env, interp)?;
             let (elems2, env2) = as_math_text(v)?;
             for e in elems2.iter() {
                 reflect_math_elem_v01(interp, ctx, e, &env2, out)?;

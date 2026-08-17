@@ -81,7 +81,8 @@ fn every_new_primitive_resolves_in_base_env_and_has_a_registered_type() {
 fn typecheck_str(src: &str) -> Result<(), CompileError> {
     let file = rustyfi_syntax::parse_file(src)?;
     let env = primitives::base_env();
-    let scope = elaborate::Scope::new(env.names());
+    let store = rustyfi_lang::symbol::SymbolStore::new();
+    let scope = elaborate::Scope::new(&store, env.names());
     let program = elaborate::elaborate_program(&file, &scope)?;
     typecheck::typecheck(&program)?;
     Ok(())

@@ -165,7 +165,8 @@ fn compile_v01_via_loader_with_metrics(
     // `v01_stdlib.rs` never hit this; `itemize`/`proof`/`md-ja` all do
     // (def-site optional command bundles), so this harness must elaborate
     // under an explicit V0_1 scope.
-    let scope = elaborate::Scope::new_with_version(env.names(), RustyfiVersion::V0_1);
+    let store = rustyfi_lang::symbol::SymbolStore::new();
+    let scope = elaborate::Scope::new_with_version(&store, env.names(), RustyfiVersion::V0_1);
     let elaborated =
         elaborate::elaborate_program(&file, &scope).map_err(|e| format!("elaborate: {e}"))?;
     typecheck::typecheck_with_version(&elaborated, RustyfiVersion::V0_1)
@@ -181,7 +182,7 @@ fn compile_v01_via_loader_with_metrics(
     // those callbacks eval-error with "expected list, got graphics".
     interp.version = RustyfiVersion::V0_1;
     interp
-        .eval(&env, &elaborated.body)
+        .eval(&env, &rustyfi_lang::ast::debrand(&elaborated.body, &store))
         .map_err(|e| format!("eval: {e}"))
 }
 

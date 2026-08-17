@@ -97,6 +97,11 @@ struct LineMetrics {
     stretch: Length,
     shrink: Length,
     has_fil: bool,
+    /// Natural width contributed by CJK (ideographic/kana/CJK-punctuation)
+    /// glyphs on this line. Non-zero marks a line SATySFi would justify with
+    /// stretchable inter-character glue but this port renders rigidly — see the
+    /// over-stretch rescue in [`badness`].
+    cjk_natural: Length,
     /// Whether the line contains any real (breakable) interword glue
     /// (`OuterEmpty`). Distinguishes a rigid-but-spaced line (monospace/`+code`
     /// via `set-space-ratio r 0 0`) from unspaced CJK (which breaks between
@@ -110,9 +115,15 @@ fn measure(line: &[PureHorzBox]) -> LineMetrics {
     let mut shrink = Length::ZERO;
     let mut has_fil = false;
     let mut has_glue = false;
+    let mut cjk_natural = Length::ZERO;
     for bx in line {
         match bx {
-            PureHorzBox::InnerString { width, .. } => natural += *width,
+            PureHorzBox::InnerString { width, text, .. } => {
+                natural += *width;
+                if text.chars().any(is_cjk) {
+                    cjk_natural += *width;
+                }
+            }
             PureHorzBox::OuterEmpty {
                 natural: n,
                 shrinkable,
@@ -160,7 +171,24 @@ fn measure(line: &[PureHorzBox]) -> LineMetrics {
         shrink,
         has_fil,
         has_glue,
+        cjk_natural,
     }
+}
+
+/// Whether `c` is a CJK glyph that this port lays out rigidly (no stretchable
+/// inter-character glue) but SATySFi justifies — Hiragana, Katakana, CJK
+/// ideographs (incl. Extension A) and CJK symbols/punctuation. Used by
+/// [`badness`] to spot a line SATySFi would fill that this port would otherwise
+/// drop as over-stretched.
+fn is_cjk(c: char) -> bool {
+    matches!(c,
+        '\u{3000}'..='\u{303F}'   // CJK symbols and punctuation (、。「」…)
+        | '\u{3040}'..='\u{309F}' // Hiragana
+        | '\u{30A0}'..='\u{30FF}' // Katakana
+        | '\u{3400}'..='\u{4DBF}' // CJK Unified Ideographs Extension A
+        | '\u{4E00}'..='\u{9FFF}' // CJK Unified Ideographs
+        | '\u{FF00}'..='\u{FFEF}' // Halfwidth and Fullwidth Forms
+    )
 }
 
 /// `get-natural-metrics` (vminst.ml:2020 `PrimitiveGetNaturalMetrics`;
@@ -330,17 +358,51 @@ fn badness(width: Length, metrics: &LineMetrics) -> f64 {
         }
         if metrics.stretch.is_positive() {
             let ratio = slack / metrics.stretch;
-            if ratio > RATIO_STRETCH_LIMIT {
-                // `LBTooShort` (lineBreak.ml:507, `ratio_stretch_limit = 2.0`):
-                // an over-stretched line is dropped from the graph.
-                BADNESS_DROPPED
-            } else {
-                // SATySFi `calculate_badness` (lineBreak.ml:986): `|ratio|³·10000`.
-                (10000.0 * ratio.abs().powi(3)).min(BADNESS_TOO_LONG)
+            if ratio <= RATIO_STRETCH_LIMIT {
+                // Within the stretch limit: SATySFi `calculate_badness`
+                // (lineBreak.ml:986), `|ratio|³·10000`.
+                return (10000.0 * ratio.abs().powi(3)).min(BADNESS_TOO_LONG);
             }
-        } else {
-            no_stretch_badness(slack, width)
+            // Beyond the stretch limit (`LBTooShort`). SATySFi DROPS such a line,
+            // and so do we — EXCEPT for a line that is already NEARLY FULL. The
+            // port models CJK as rigid discretionaries with no inter-character
+            // glue (unlike SATySFi, whose CJK glue lets any line fill the
+            // column), so a near-full line that MIXES rigid CJK with a single
+            // Latin space is "under-stretched-beyond-limit" for a benign reason:
+            // it reaches the column on its own, needing that lone space to
+            // stretch only a hair. Dropping it (`BADNESS_DROPPED`) made the DP
+            // prefer a rigid, drastically SHORT line (finite `no_stretch_badness`)
+            // over that near-full line (dropped, 1e12) — shredding a CJK+inline-
+            // code paragraph into wildly uneven lines (a 134pt line before a
+            // 442pt one). So for a near-full line, score it by ABSOLUTE
+            // underfullness like a rigid line; a genuinely LOOSE line (large
+            // slack, real stretch it can't cover) still drops, matching SATySFi
+            // and keeping normal Latin justification unchanged.
+            // ...AND only for an essentially-RIGID line: its total stretch is a
+            // negligible fraction of its own width, i.e. a long rigid run (CJK)
+            // carrying a lone incidental space — NOT a Latin line whose several
+            // interword spaces give it real, proportional stretch (that stays a
+            // genuine `LBTooShort` drop, so pure-Latin justification and
+            // narrow-column footnotes are untouched).
+            // A line that CONTAINS CJK is the port's blind spot: SATySFi fills
+            // it via stretchable inter-character glue, so it is never really
+            // `LBTooShort`; this port models CJK as rigid discretionaries with no
+            // such glue, so dropping it (`BADNESS_DROPPED`) made the DP prefer a
+            // drastically SHORT rigid line over a near-full one, shredding
+            // CJK+inline-code paragraphs into wildly uneven lines. Score any
+            // CJK-bearing line by its ABSOLUTE underfullness (`no_stretch_
+            // badness`) so the DP fills it toward the column, exactly as SATySFi
+            // would. A pure-Latin line has real proportional interword stretch,
+            // so an over-stretched one is a genuine `LBTooShort` and still drops
+            // — keeping Latin justification, narrow-column footnotes, and the
+            // `kp_*` tests unchanged.
+            if metrics.cjk_natural.0 > 0.0 {
+                return no_stretch_badness(slack, width);
+            }
+            return BADNESS_DROPPED;
         }
+        // No elastic capacity at all: score by how underfull the line is.
+        no_stretch_badness(slack, width)
     } else {
         // Overfull: needs to shrink.
         if metrics.shrink.is_positive() {

@@ -21,7 +21,7 @@ use rustyfi_backend::{
     break_into_lines, Context, FontKey, FontMetrics, HorzBox, HyphenLang, Length, PureHorzBox,
     VertBox,
 };
-use rustyfi_lang::ast::IText;
+use rustyfi_lang::quoted::IText;
 use rustyfi_lang::eval::Interp;
 use rustyfi_lang::hyphenation::hyphenate_word;
 use rustyfi_lang::primitives;

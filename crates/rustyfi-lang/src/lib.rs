@@ -10,6 +10,8 @@ pub mod exhaustive;
 pub mod hyphenation;
 pub mod prim_types;
 pub mod primitives;
+pub mod quoted;
+pub mod symbol;
 pub mod typecheck;
 pub mod types;
 pub mod unify;
@@ -95,16 +97,46 @@ pub fn compile_document_cst_with_trials(
     file: &rustyfi_syntax::cst::File,
     metrics: &dyn FontMetrics,
 ) -> Result<(std::rc::Rc<DocumentValue>, u32), CompileError> {
+    let timing = std::env::var_os("RUSTYFI_TIMING").is_some();
+    let t = std::time::Instant::now();
     let env0 = primitives::base_env();
-    let scope = elaborate::Scope::new(env0.names());
-    let program = elaborate::elaborate_program(file, &scope)?;
-    typecheck::typecheck(&program)?;
+    // The BRANDED front half lives in its own scope: the `SymbolStore`, the
+    // elaborated `Ast<Symbol>` and the typechecker's tables are all dead by
+    // the time the fixpoint trials run below.
+    //
+    // The DE-BRANDED `body` it yields, however, must stay alive until after
+    // `eval_document_trials` returns — `Interp::eval_arg` memoizes compiled
+    // command arguments by `&Ast` ADDRESS (`eval.rs`'s `arg_cache`), which is
+    // sound only while every node it can reach is pinned. Binding it to a
+    // local (rather than passing `&debrand(..)` as a temporary) is what pins
+    // it, exactly as the elaborated `program` used to.
+    let body = {
+        let store = symbol::SymbolStore::new();
+        let scope = elaborate::Scope::new(&store, env0.names());
+        let program = elaborate::elaborate_program(file, &scope)?;
+        if timing {
+            eprintln!("TIMING   elaborate        {:>8.1}ms", t.elapsed().as_secs_f64() * 1e3);
+        }
+        let t = std::time::Instant::now();
+        typecheck::typecheck(&program)?;
+        if timing {
+            eprintln!("TIMING   typecheck        {:>8.1}ms", t.elapsed().as_secs_f64() * 1e3);
+        }
+        // The compile membrane: resolve every `Symbol` back to its text, so
+        // nothing downstream (the `CompiledExpr`, the per-trial `Env`s,
+        // `Value`) carries the store's borrow. See `ast::debrand`.
+        ast::debrand(&program.body, &store)
+    };
     // Compile the elaborated body into a closure tree ONCE. Each trial below
     // re-runs this same `compiled` against a fresh env + a fresh (except
     // `crossrefs`) `Interp` — safe because `CompiledExpr::run` takes `&self`
     // and re-executes the whole tree from scratch, reproducing upstream's
     // `eval_main i env_freezed ast` per trial (`main.ml:337-397`).
-    let compiled = compile::compile_program(&program.body, &env0);
+    let t = std::time::Instant::now();
+    let compiled = compile::compile_program(&body, &env0);
+    if timing {
+        eprintln!("TIMING   compile-tree     {:>8.1}ms", t.elapsed().as_secs_f64() * 1e3);
+    }
     eval_document_trials(&compiled, metrics, rustyfi_syntax::RustyfiVersion::V0_0_6)
 }
 
@@ -124,14 +156,22 @@ fn eval_document_trials(
     // The cross-reference table persists across trials — it *is* the
     // fixpoint state (docs/plans/hooks-annotations-crossref.md's Risks:
     // "what resets per trial vs what persists").
+    let timing = std::env::var_os("RUSTYFI_TIMING").is_some();
     let crossrefs = Rc::new(RefCell::new(CrossRefs::new()));
     let mut trials = 0u32;
     loop {
         trials += 1;
+        let t_trial = std::time::Instant::now();
         // Fresh per trial: `let-mutable` store state resets (== upstream's
         // `env_freezed` re-eval), and a fresh `Interp` resets `hooks`/
         // `images` too — only `crossrefs` is threaded through.
-        let env = primitives::base_env_with_version(version);
+        //
+        // The runtime environment is now just an empty root frame (Phase 4):
+        // the base environment is a COMPILE-time table, folded into the
+        // compiled tree already, and top-level bindings live in the
+        // compiler's slot table, which the spine rewrites as it re-executes
+        // each trial. Nothing resolves a name here.
+        let env = value::Env::root();
         let mut interp = eval::Interp::new(metrics);
         interp.crossrefs = crossrefs.clone();
         // math-split spec §3.4: threads `version` onto the `Interp` so
@@ -145,11 +185,20 @@ fn eval_document_trials(
             Value::Document(doc) => doc,
             other => return Err(CompileError::NotADocument(other.type_name())),
         };
+        let t_hooks = std::time::Instant::now();
+        let run_ms = t_trial.elapsed().as_secs_f64() * 1e3;
         // Fire every placed page-break hook now that `break_pages` has given
         // every one of them its final page number/point; hooks mutate
         // `crossrefs` (the only place that seam is legally crossed — see
         // `fire_hooks`'s doc comment).
         fire_hooks(&mut interp, &doc)?;
+        if timing {
+            eprintln!(
+                "TIMING   trial {trials}: run(eval+layout) {:>8.1}ms  fire_hooks {:>6.1}ms",
+                run_ms,
+                t_hooks.elapsed().as_secs_f64() * 1e3
+            );
+        }
         match crossrefs.borrow_mut().verdict() {
             Verdict::NeedsAnotherTrial => continue,
             Verdict::CanTerminate(_) | Verdict::CountMax => {
@@ -458,21 +507,31 @@ pub fn compile_document_v1_with_trials(
     // -- the shared pipeline, V0_1-tagged (mirrors
     //    compile_document_cst_with_trials line for line) --
     let env0 = primitives::base_env_with_version(RustyfiVersion::V0_1);
-    let scope = elaborate::Scope::new_with_version(env0.names(), RustyfiVersion::V0_1);
-    // X2a: `v006_indices` is empty whenever no `V0_0_6` dependency was
-    // spliced above (every pre-X2a caller, and every mixed load with only
-    // `V0_1` deps) — `elaborate_program_with_versions` then emits no
-    // `Ast::VersionScope` node at all, so `program`/`compiled` are
-    // structurally IDENTICAL to what the pre-X2a `elaborate_program`/
-    // `compile_program` calls would have produced (the GOLDEN/v01-capstone
-    // non-regression gate).
-    let program = elaborate::elaborate_program_with_versions(&file, &scope, &v006_indices, None)?;
-    v1::module_check::check_program(&dep_csts, &program)?;
+    // Branded front half scoped so the store, the `Ast<Symbol>` tree and the
+    // module checker's tables are dead before the fixpoint trials run; the
+    // de-branded `body` stays pinned for the trials' sake — see
+    // `compile_document_cst_with_trials` for both halves of that contract.
+    let body = {
+        let store = symbol::SymbolStore::new();
+        let scope =
+            elaborate::Scope::new_with_version(&store, env0.names(), RustyfiVersion::V0_1);
+        // X2a: `v006_indices` is empty whenever no `V0_0_6` dependency was
+        // spliced above (every pre-X2a caller, and every mixed load with only
+        // `V0_1` deps) — `elaborate_program_with_versions` then emits no
+        // `Ast::VersionScope` node at all, so `program`/`compiled` are
+        // structurally IDENTICAL to what the pre-X2a `elaborate_program`/
+        // `compile_program` calls would have produced (the GOLDEN/v01-capstone
+        // non-regression gate).
+        let program =
+            elaborate::elaborate_program_with_versions(&file, &scope, &v006_indices, None)?;
+        v1::module_check::check_program(&dep_csts, &program)?;
+        ast::debrand(&program.body, &store)
+    };
     let compiled = if v006_indices.is_empty() {
-        compile::compile_program(&program.body, &env0)
+        compile::compile_program(&body, &env0)
     } else {
         let env0_v006 = primitives::base_env_with_version(RustyfiVersion::V0_0_6);
-        compile::compile_program_xver(&program.body, &env0, &env0_v006)
+        compile::compile_program_xver(&body, &env0, &env0_v006)
     };
     eval_document_trials(&compiled, metrics, RustyfiVersion::V0_1)
 }
@@ -715,7 +774,9 @@ pub fn compile_document_v006_xver_with_trials(
     //    is what lets genuinely 0.0.6-authored code elaborate unrejected,
     //    since 0.1's grammar is a strict superset) --
     let env0 = primitives::base_env_with_version(RustyfiVersion::V0_1);
-    let scope = elaborate::Scope::new_with_version(env0.names(), RustyfiVersion::V0_1);
+    let store = symbol::SymbolStore::new();
+    let scope =
+        elaborate::Scope::new_with_version(&store, env0.names(), RustyfiVersion::V0_1);
     // `wrap_body_version = Some(V0_0_6)`: the ENTRY's own document tail
     // (`file.body`, always 0.0.6-authored here) is wrapped in
     // `Ast::VersionScope(V0_0_6, _)` too — the one new elaborate.rs
@@ -739,7 +800,11 @@ pub fn compile_document_v006_xver_with_trials(
     // path — matching `compile_document_v1_with_trials`'s own `if v006_
     // indices.is_empty() { .. } else { compile_program_xver }` branch,
     // specialized since the `else` arm is the only reachable one.
-    let compiled = compile::compile_program_xver(&program.body, &env0, &env0_v006);
+    // Bound to a local, not passed as a temporary: `Interp::eval_arg`
+    // memoizes by `&Ast` address, so the de-branded tree must outlive the
+    // trials (see `compile_document_cst_with_trials`).
+    let body = ast::debrand(&program.body, &store);
+    let compiled = compile::compile_program_xver(&body, &env0, &env0_v006);
     eval_document_trials(&compiled, metrics, RustyfiVersion::V0_0_6)
 }
 

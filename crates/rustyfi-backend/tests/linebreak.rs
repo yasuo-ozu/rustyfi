@@ -209,6 +209,10 @@ fn last_line_stays_ragged() {
 /// instead pulls a 4th word onto line 1 (natural 66, slightly overfull,
 /// shrinking at ratio -2/3, badness ~29.6) leaving a single trailing word —
 /// far lower total demerits even though line 1 is no longer underfull.
+///
+/// (Line 1's three-word form is pure Latin, so it still drops as `LBTooShort`
+/// when over-stretched — the CJK-line rescue added to `badness` does not touch
+/// it, keeping this pre-existing behavior.)
 #[test]
 fn kp_finds_lower_cost_split_than_greedy_packing() {
     let m = Mono;

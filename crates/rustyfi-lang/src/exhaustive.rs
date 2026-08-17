@@ -22,7 +22,8 @@
 //! into **zero** sub-columns, not one. Get this wrong and `None`/`[]`-style
 //! matches miscount.
 
-use crate::ast::{MatchArm, Pattern};
+use crate::ast::branded::{MatchArm, Pattern};
+use crate::symbol::SymbolStore;
 use crate::prim_types::VariantDecl;
 use crate::types::{resolve, BaseType, MonoType};
 use rustyfi_syntax::span::Span;
@@ -62,7 +63,7 @@ enum HeadKey {
 /// throughout this module rather than borrowed — matches are small
 /// hand-written things, not a performance-critical path (see the plan's
 /// "Matrix blow-up" risk note: no mitigation needed at this milestone).
-type Matrix = Vec<Vec<Pattern>>;
+type Matrix<'s> = Vec<Vec<Pattern<'s>>>;
 
 /// Classify a pattern's head shape, normalizing away `Var`/`As` first
 /// (`exhchecker.ml`'s `normalize_pat`, lines 151-158: a bare variable is
@@ -71,7 +72,7 @@ type Matrix = Vec<Vec<Pattern>>;
 /// key plus that head's sub-patterns (0, 1, or 2 of them: literals/nullary
 /// ctors/`[]` have none, `Ctor(_, Some(p))` has one, `Cons` has two, `Tuple`
 /// has as many as its arity).
-fn head_of(p: &Pattern) -> Option<(HeadKey, Vec<Pattern>)> {
+fn head_of<'s>(p: &Pattern<'s>) -> Option<(HeadKey, Vec<Pattern<'s>>)> {
     match p {
         Pattern::Wild | Pattern::Var(_) => None,
         Pattern::As(inner, _) => head_of(inner),
@@ -96,23 +97,31 @@ fn head_of(p: &Pattern) -> Option<(HeadKey, Vec<Pattern>)> {
 /// `string_of_instance`, exhchecker.ml 16-25, 117-148) — only ever called on
 /// patterns this module builds itself (or copies from the source), so every
 /// variant is worth spelling out reasonably.
-fn render_pattern(p: &Pattern) -> String {
+///
+/// Pattern-bound *variables* are interned, so this takes the store and
+/// resolves them back to their source text — the rendered string lands
+/// verbatim in a [`MatchWarning`] the golden tests diff, so it must be the
+/// name the user wrote, never a symbol index (design doc §7).
+fn render_pattern<'s>(store: &'s SymbolStore, p: &Pattern<'s>) -> String {
+    let go = |q: &Pattern<'s>| render_pattern(store, q);
     match p {
         Pattern::Wild => "_".to_string(),
-        Pattern::Var(name) => name.clone(),
+        Pattern::Var(name) => store.resolve(*name).to_string(),
         Pattern::Unit => "()".to_string(),
         Pattern::Bool(b) => b.to_string(),
         Pattern::Int(n) => n.to_string(),
         Pattern::Str(s) => format!("{s:?}"),
         Pattern::Tuple(ps) => {
-            let inner = ps.iter().map(render_pattern).collect::<Vec<_>>().join(", ");
+            let inner = ps.iter().map(go).collect::<Vec<_>>().join(", ");
             format!("({inner})")
         }
         Pattern::EmptyList => "[]".to_string(),
-        Pattern::Cons(head, tail) => format!("{} :: {}", render_pattern(head), render_pattern(tail)),
-        Pattern::Ctor(name, Some(inner)) => format!("{name}({})", render_pattern(inner)),
+        Pattern::Cons(head, tail) => format!("{} :: {}", go(head), go(tail)),
+        Pattern::Ctor(name, Some(inner)) => format!("{name}({})", go(inner)),
         Pattern::Ctor(name, None) => name.clone(),
-        Pattern::As(inner, name) => format!("{} as {name}", render_pattern(inner)),
+        Pattern::As(inner, name) => {
+            format!("{} as {}", go(inner), store.resolve(*name))
+        }
     }
 }
 
@@ -208,7 +217,7 @@ fn pad_types(mut tys: Vec<MonoType>, arity: usize) -> Vec<MonoType> {
 /// Rebuild a concrete pattern from a head key and its (already-witnessed)
 /// sub-patterns — the inverse of `head_of`, used to reassemble a witness as
 /// `usefulness` unwinds its recursion.
-fn rebuild(head: &HeadKey, subs: &[Pattern]) -> Pattern {
+fn rebuild<'s>(head: &HeadKey, subs: &[Pattern<'s>]) -> Pattern<'s> {
     match head {
         HeadKey::Unit => Pattern::Unit,
         HeadKey::Bool(b) => Pattern::Bool(*b),
@@ -221,7 +230,7 @@ fn rebuild(head: &HeadKey, subs: &[Pattern]) -> Pattern {
     }
 }
 
-fn wildcards(arity: usize) -> Vec<Pattern> {
+fn wildcards<'s>(arity: usize) -> Vec<Pattern<'s>> {
     vec![Pattern::Wild; arity]
 }
 
@@ -232,7 +241,7 @@ fn wildcards(arity: usize) -> Vec<Pattern> {
 /// (an unresolved type variable, or any base type this grammar has no
 /// literal-pattern syntax for) falls back to `_`, which is always
 /// acceptable as a "some other value" witness.
-fn infinite_witness(rty: &MonoType, sigma: &HashSet<HeadKey>) -> Pattern {
+fn infinite_witness<'s>(rty: &MonoType, sigma: &HashSet<HeadKey>) -> Pattern<'s> {
     match rty {
         MonoType::Base(BaseType::Int) => {
             let mut n = 0i64;
@@ -264,7 +273,7 @@ fn infinite_witness(rty: &MonoType, sigma: &HashSet<HeadKey>) -> Pattern {
 /// `S(c, P)`: keep rows whose first pattern is `c` (dropping column 0,
 /// keeping its `arity` sub-patterns in its place) or a wildcard/var
 /// (dropping column 0, filling in `arity` wildcards); drop every other row.
-fn specialize(matrix: &Matrix, key: &HeadKey, arity: usize) -> Matrix {
+fn specialize<'s>(matrix: &Matrix<'s>, key: &HeadKey, arity: usize) -> Matrix<'s> {
     let mut out = Matrix::new();
     for row in matrix {
         match head_of(&row[0]) {
@@ -287,7 +296,7 @@ fn specialize(matrix: &Matrix, key: &HeadKey, arity: usize) -> Matrix {
 /// `D(P)`: keep only rows whose first pattern is a wildcard/var, dropping
 /// column 0 outright (no expansion — there is no constructor to expand
 /// against).
-fn default_matrix(matrix: &Matrix) -> Matrix {
+fn default_matrix<'s>(matrix: &Matrix<'s>) -> Matrix<'s> {
     matrix
         .iter()
         .filter_map(|row| match head_of(&row[0]) {
@@ -299,7 +308,7 @@ fn default_matrix(matrix: &Matrix) -> Matrix {
 
 /// Σ: the distinct head constructors actually present in column 0 of `P`
 /// (wildcard/var rows contribute nothing).
-fn column_heads(matrix: &Matrix) -> HashSet<HeadKey> {
+fn column_heads<'s>(matrix: &Matrix<'s>) -> HashSet<HeadKey> {
     matrix
         .iter()
         .filter_map(|row| head_of(&row[0]).map(|(k, _)| k))
@@ -323,7 +332,12 @@ struct Ctx<'a> {
 /// column) — an invariant `pad_types` exists to preserve across every
 /// recursive call. Returns the witness row (same length as `q`) when `q` is
 /// useful, `None` when `P` already covers it.
-fn usefulness(ctx: &Ctx, matrix: &Matrix, q: &[Pattern], col_types: &[MonoType]) -> Option<Vec<Pattern>> {
+fn usefulness<'s>(
+    ctx: &Ctx,
+    matrix: &Matrix<'s>,
+    q: &[Pattern<'s>],
+    col_types: &[MonoType],
+) -> Option<Vec<Pattern<'s>>> {
     if q.is_empty() {
         // cols = 0: useful iff P has no rows at all.
         return if matrix.is_empty() { Some(Vec::new()) } else { None };
@@ -411,15 +425,16 @@ fn usefulness(ctx: &Ctx, matrix: &Matrix, q: &[Pattern], col_types: &[MonoType])
 /// `exhchecker.ml`'s separate `nonexh_guard` tracking (lines 358-360). A
 /// match whose only catch-all is guarded is therefore correctly reported
 /// non-exhaustive.
-pub fn check_match(
+pub fn check_match<'s>(
+    store: &'s SymbolStore,
     scrutinee_ty: &MonoType,
     scrutinee_span: Option<Span>,
-    arms: &[MatchArm],
+    arms: &[MatchArm<'s>],
     variants: &HashMap<String, Rc<VariantDecl>>,
 ) -> Vec<MatchWarning> {
     let ctx = Ctx { variants };
     let col_types = [scrutinee_ty.clone()];
-    let mut rows: Matrix = Vec::new();
+    let mut rows: Matrix<'s> = Vec::new();
     let mut warnings = Vec::new();
 
     for (i, arm) in arms.iter().enumerate() {
@@ -433,7 +448,7 @@ pub fn check_match(
                 message: format!(
                     "match arm {} (`{}`) is unreachable: already covered by an earlier arm",
                     i + 1,
-                    render_pattern(&arm.pat)
+                    render_pattern(store, &arm.pat)
                 ),
             });
         }
@@ -446,7 +461,7 @@ pub fn check_match(
             span: scrutinee_span,
             message: format!(
                 "this pattern-matching is not exhaustive; example uncovered value: `{}`",
-                render_pattern(&witness[0])
+                render_pattern(store, &witness[0])
             ),
         });
     }

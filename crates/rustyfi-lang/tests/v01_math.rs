@@ -417,7 +417,8 @@ fn eval_v01_raw_value(
         eoi,
     };
     let env0 = primitives::base_env_with_version(RustyfiVersion::V0_1);
-    let scope = rustyfi_lang::elaborate::Scope::new_with_version(env0.names(), RustyfiVersion::V0_1);
+    let store = rustyfi_lang::symbol::SymbolStore::new();
+    let scope = rustyfi_lang::elaborate::Scope::new_with_version(&store, env0.names(), RustyfiVersion::V0_1);
     let program =
         rustyfi_lang::elaborate::elaborate_program(&file, &scope).map_err(|e| format!("elaborate: {e}"))?;
     // No `:>` sealing in any fixture this helper serves, so the public
@@ -428,7 +429,7 @@ fn eval_v01_raw_value(
         .map_err(|e| format!("typecheck: {e}"))?;
     let mut interp = rustyfi_lang::eval::Interp::new(metrics);
     interp.version = RustyfiVersion::V0_1;
-    interp.eval(&env0, &program.body).map_err(|e| format!("eval: {e}"))
+    interp.eval(&env0, &rustyfi_lang::ast::debrand(&program.body, &store)).map_err(|e| format!("eval: {e}"))
 }
 
 // ============================================================================
@@ -569,7 +570,8 @@ fn t_m3_new_char_classes_are_unknown_under_v006() {
     let src = "let m = MathSansSerif in 0";
     let file = rustyfi_syntax::parse_file(src).unwrap_or_else(|e| panic!("0.0.6 parse: {e}"));
     let env = primitives::base_env();
-    let scope = rustyfi_lang::elaborate::Scope::new(env.names());
+    let store = rustyfi_lang::symbol::SymbolStore::new();
+    let scope = rustyfi_lang::elaborate::Scope::new(&store, env.names());
     let elaborated = rustyfi_lang::elaborate::elaborate_program(&file, &scope)
         .unwrap_or_else(|e| panic!("0.0.6 elaborate: {e}"));
     let err = rustyfi_lang::typecheck::typecheck(&elaborated)

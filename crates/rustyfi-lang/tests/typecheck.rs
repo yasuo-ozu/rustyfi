@@ -8,7 +8,8 @@ use rustyfi_lang::{elaborate, primitives, typecheck, CompileError};
 fn typecheck_str(src: &str) -> Result<(), CompileError> {
     let file = rustyfi_syntax::parse_file(src)?;
     let env = primitives::base_env();
-    let scope = elaborate::Scope::new(env.names());
+    let store = rustyfi_lang::symbol::SymbolStore::new();
+    let scope = elaborate::Scope::new(&store, env.names());
     let program = elaborate::elaborate_program(&file, &scope)?;
     typecheck::typecheck(&program)?;
     Ok(())
@@ -880,7 +881,8 @@ fn command_value_of_an_undefined_command_is_rejected() {
     // (elaboration-time, before typechecking ever runs).
     let file = rustyfi_syntax::parse_file("(command \\nonexistent)").unwrap();
     let env = primitives::base_env();
-    let scope = elaborate::Scope::new(env.names());
+    let store = rustyfi_lang::symbol::SymbolStore::new();
+    let scope = elaborate::Scope::new(&store, env.names());
     let err = elaborate::elaborate_program(&file, &scope)
         .expect_err("an undefined command reference should be rejected");
     assert!(

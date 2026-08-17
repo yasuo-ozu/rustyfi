@@ -19,7 +19,8 @@
 //! rejecting them would regress fixtures and tests this milestone still
 //! needs to pass untyped.
 
-use crate::ast::{Ast, BText, CmdArg, IText, MathElem, Pattern};
+use crate::ast::branded::{Ast, BText, CmdArg, IText, MathElem, Pattern};
+use crate::symbol::{Symbol, SymbolStore};
 use crate::elaborate::{Program, UserSynonymDecl, UserTypeDecl};
 pub use crate::exhaustive::MatchWarning;
 use crate::prim_types::{
@@ -90,7 +91,7 @@ impl fmt::Display for TypeError {
 }
 
 impl std::error::Error for TypeError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+    fn source<'s>(&self) -> Option<&(dyn std::error::Error + 'static)> {
         self.source
             .as_ref()
             .map(|e| e as &(dyn std::error::Error + 'static))
@@ -388,18 +389,21 @@ pub const PRIMITIVE_NAMES: &[&str] = &[
 // `base_type_env_with_version` — `typecheck_verbose`/`typecheck` bypass this
 // fn directly via `typecheck_verbose_with_version`/`typecheck_with_version`.
 #[allow(dead_code)]
-fn base_type_env() -> TypeEnv {
-    base_type_env_with_version(RustyfiVersion::V0_0_6)
+fn base_type_env<'s>(store: &'s SymbolStore) -> TypeEnv<'s> {
+    base_type_env_with_version(store, RustyfiVersion::V0_0_6)
 }
 
-pub(crate) fn base_type_env_with_version(version: RustyfiVersion) -> TypeEnv {
+pub(crate) fn base_type_env_with_version<'s>(
+    store: &'s SymbolStore,
+    version: RustyfiVersion,
+) -> TypeEnv<'s> {
     let mut env = TypeEnv::default();
     for name in PRIMITIVE_NAMES {
         if let Some(poly) = prim_types::primitive_type_with_version(name, version) {
             // `with_primitive`, not `with`: this is seeding the BASE env,
             // not a user binding, so it must not mark `name` as
             // user-shadowed (see `TypeEnv::with_primitive`'s doc comment).
-            env = env.with_primitive(*name, poly);
+            env = env.with_primitive(store.intern(name), poly);
         }
     }
     env
@@ -437,16 +441,21 @@ pub(crate) fn base_type_env_with_version(version: RustyfiVersion) -> TypeEnv {
 /// here" — skip the overwrite for those, matching `compile.rs`'s
 /// `is_local`-first discipline; every other (untouched-builtin) name still
 /// gets `version`'s scheme, unchanged from X2a.
-fn version_scoped_type_env(env: &TypeEnv, version: RustyfiVersion) -> TypeEnv {
+fn version_scoped_type_env<'s>(
+    store: &'s SymbolStore,
+    env: &TypeEnv<'s>,
+    version: RustyfiVersion,
+) -> TypeEnv<'s> {
     let mut e = env.clone();
     for name in PRIMITIVE_NAMES {
-        if e.shadowed.contains(*name) {
+        let sym = store.intern(name);
+        if e.is_shadowed(sym) {
             // A user binding shadows this primitive name already — respect
             // it instead of re-stomping it with `version`'s builtin scheme.
             continue;
         }
         if let Some(poly) = prim_types::primitive_type_with_version(name, version) {
-            e = e.with_primitive(*name, poly);
+            e = e.with_primitive(sym, poly);
         }
     }
     e
@@ -459,29 +468,62 @@ fn version_scoped_type_env(env: &TypeEnv, version: RustyfiVersion) -> TypeEnv {
 // consistent with the elaborator it sits directly behind.
 // ============================================================================
 
+/// Overlay size at which a `TypeEnv` folds its recent bindings down into a
+/// fresh shared base (see [`TypeEnv::maybe_promote`]). Bounds the per-`with`
+/// clone cost: every `with` clones only the ≤ this-many-entry overlays plus two
+/// cheap `Rc` bumps of the (large, shared) base, so type inference is O(program
+/// size) instead of the old O(program × env) — the previous flat-`HashMap`-per-
+/// binding clone was ~16M entry-clones on a corpus doc, ~85% of compile time.
+const OVERLAY_CAP: usize = 64;
+
+/// A persistent name → scheme environment split into a large SHARED base
+/// (`Rc`, the accumulated prelude/package bindings — cloned by an `Rc` bump)
+/// and a small mutable OVERLAY of the most recent bindings (cloned in full per
+/// `with`, but capped at [`OVERLAY_CAP`]). Lookups check the overlay first,
+/// then the base. Semantically identical to the old flat map — later bindings
+/// shadow earlier — but `with`/`with_all` no longer copy the whole environment.
 #[derive(Clone, Default)]
-pub(crate) struct TypeEnv {
-    vars: HashMap<String, PolyType>,
-    /// Slice X2b (`docs/plans/design-cross-version-import.md` §"Slice X2 —
-    /// per-group primitive environment"): the set of names bound by a REAL
-    /// program binding (via `with`/`with_all`, as opposed to the primitive-
-    /// seeding loops which use `with_primitive`). `version_scoped_type_env`
-    /// consults this to tell "still the untouched builtin primitive scheme"
-    /// apart from "a user binding shadowed this name", so its
-    /// `Ast::VersionScope` overwrite doesn't clobber a user shadow. Persistent
-    /// like `vars` (cloned alongside it by every `with`/`with_all` call) —
-    /// harmless, unqueried overhead on every pure single-version path, since
-    /// `version_scoped_type_env` is only ever reached from the
-    /// `Ast::VersionScope` arm, which no pure-version program ever produces.
-    shadowed: std::collections::HashSet<String>,
+pub(crate) struct TypeEnv<'s> {
+    base: std::rc::Rc<HashMap<Symbol<'s>, PolyType>>,
+    overlay: HashMap<Symbol<'s>, PolyType>,
+    /// Slice X2b (`docs/plans/design-cross-version-import.md` §"Slice X2"): the
+    /// set of names bound by a REAL program binding (`with`/`with_all`, not the
+    /// `with_primitive` primitive-seeding loops). `version_scoped_type_env`
+    /// consults it (via [`TypeEnv::is_shadowed`]) to tell an untouched builtin
+    /// scheme apart from a user shadow. Same base/overlay split as `vars`.
+    base_shadowed: std::rc::Rc<std::collections::HashSet<Symbol<'s>>>,
+    overlay_shadowed: std::collections::HashSet<Symbol<'s>>,
 }
 
-impl TypeEnv {
-    pub(crate) fn with(&self, name: impl Into<String>, poly: PolyType) -> TypeEnv {
-        let name = name.into();
+impl<'s> TypeEnv<'s> {
+    /// Fold the overlays into fresh shared bases once the vars overlay reaches
+    /// [`OVERLAY_CAP`], keeping every `with`'s overlay clone bounded. Amortized
+    /// O(1) per binding (each promotion is O(base) but only every `OVERLAY_CAP`
+    /// bindings along a path); inference is tree-shaped, so no single env is a
+    /// hot branch point where a boundary promotion could recur.
+    fn maybe_promote(&mut self) {
+        if self.overlay.len() < OVERLAY_CAP {
+            return;
+        }
+        let mut base = (*self.base).clone();
+        for (k, v) in self.overlay.drain() {
+            base.insert(k, v);
+        }
+        self.base = std::rc::Rc::new(base);
+        if !self.overlay_shadowed.is_empty() {
+            let mut sh = (*self.base_shadowed).clone();
+            for k in self.overlay_shadowed.drain() {
+                sh.insert(k);
+            }
+            self.base_shadowed = std::rc::Rc::new(sh);
+        }
+    }
+
+    pub(crate) fn with(&self, name: Symbol<'s>, poly: PolyType) -> TypeEnv<'s> {
         let mut e = self.clone();
-        e.shadowed.insert(name.clone());
-        e.vars.insert(name, poly);
+        e.overlay_shadowed.insert(name);
+        e.overlay.insert(name, poly);
+        e.maybe_promote();
         e
     }
 
@@ -493,22 +535,31 @@ impl TypeEnv {
     /// which always goes through `with`/`with_all` instead. This is exactly
     /// what lets `version_scoped_type_env` distinguish "still untouched
     /// builtin" from "user-shadowed" (see its doc comment).
-    fn with_primitive(&self, name: impl Into<String>, poly: PolyType) -> TypeEnv {
+    fn with_primitive(&self, name: Symbol<'s>, poly: PolyType) -> TypeEnv<'s> {
         let mut e = self.clone();
-        e.vars.insert(name.into(), poly);
+        e.overlay.insert(name, poly);
+        e.maybe_promote();
         e
     }
 
-    pub(crate) fn get(&self, name: &str) -> Option<&PolyType> {
-        self.vars.get(name)
+    pub(crate) fn get(&self, name: Symbol<'s>) -> Option<&PolyType> {
+        self.overlay.get(&name).or_else(|| self.base.get(&name))
+    }
+
+    /// Whether `name` was bound by a real program binding (Slice X2b) — the
+    /// overlay-then-base analogue of the old `shadowed.contains`.
+    fn is_shadowed(&self, name: Symbol<'s>) -> bool {
+        self.overlay_shadowed.contains(&name) || self.base_shadowed.contains(&name)
     }
 
     /// Extend with each scheme in order (later shadows earlier) — the
     /// canonical way to commit `infer_binding`'s result.
-    pub(crate) fn with_all(&self, schemes: Vec<(String, PolyType)>) -> TypeEnv {
+    pub(crate) fn with_all(&self, schemes: Vec<(Symbol<'s>, PolyType)>) -> TypeEnv<'s> {
         let mut e = self.clone();
         for (name, poly) in schemes {
-            e = e.with(name, poly);
+            e.overlay_shadowed.insert(name);
+            e.overlay.insert(name, poly);
+            e.maybe_promote();
         }
         e
     }
@@ -516,23 +567,30 @@ impl TypeEnv {
     /// Remove a set of bindings (Sub-slice 2d-3, `…/tmp/
     /// slice2d3-module-sig-decls.md` §2.3-6): a parent seal revoking a
     /// nested module's outer-hidden members at the parent's seal point —
-    /// see `v1/module_check.rs`'s `member_revoke_triggers`. Persistent-
-    /// clone, like `with`/`with_all`; zero 0.0.6-path callers (V0_1-only).
-    /// `#[allow(dead_code)]`: the accessor is the spec's §4-F deliverable;
-    /// its sole consumer, the `Decl::Module` revocation mechanism, is the
-    /// one 2d-3 piece deferred (see `v1/module_check.rs`'s module doc).
-    /// Also un-marks each removed name in `shadowed` (Slice X2b): once a
-    /// binding is gone, it is no longer "a user shadow" for
-    /// `version_scoped_type_env` to respect — just absent, same as if it
-    /// had never been bound.
+    /// see `v1/module_check.rs`'s `member_revoke_triggers`. Zero 0.0.6-path
+    /// callers (V0_1-only). `#[allow(dead_code)]`: the accessor is the spec's
+    /// §4-F deliverable; its sole consumer, the `Decl::Module` revocation
+    /// mechanism, is the one 2d-3 piece deferred (see `v1/module_check.rs`'s
+    /// module doc). Flattens both layers then removes — cold path, so the
+    /// one-time flatten is fine.
     #[allow(dead_code)]
-    pub(crate) fn without_all(&self, names: &[String]) -> TypeEnv {
-        let mut e = self.clone();
-        for n in names {
-            e.vars.remove(n);
-            e.shadowed.remove(n);
+    pub(crate) fn without_all(&self, names: &[Symbol<'s>]) -> TypeEnv<'s> {
+        let mut vars = (*self.base).clone();
+        for (k, v) in &self.overlay {
+            vars.insert(*k, v.clone());
         }
-        e
+        let mut sh = (*self.base_shadowed).clone();
+        sh.extend(self.overlay_shadowed.iter().copied());
+        for n in names {
+            vars.remove(n);
+            sh.remove(n);
+        }
+        TypeEnv {
+            base: std::rc::Rc::new(vars),
+            overlay: HashMap::new(),
+            base_shadowed: std::rc::Rc::new(sh),
+            overlay_shadowed: std::collections::HashSet::new(),
+        }
     }
 }
 
@@ -1533,7 +1591,12 @@ fn expand_synonyms_cmd_args(
 // The checker.
 // ============================================================================
 
-pub(crate) struct Checker {
+pub(crate) struct Checker<'s> {
+    /// The interner every identifier in the tree being checked came from.
+    /// Needed both to mint derived lookup keys (`"{modpfx}.{ctor}"`) and to
+    /// resolve a `Symbol` back to text for an error message — see
+    /// [`Checker::text`].
+    store: &'s SymbolStore,
     ctx: TypeContext,
     /// Constructor name -> the (`Rc`-shared) declaration it belongs to.
     /// Later declarations shadow earlier ones of the same ctor name, mirroring
@@ -1580,25 +1643,25 @@ pub(crate) struct Checker {
 /// directly from its own per-`val` walk; the whole-program path never
 /// constructs one explicitly (its `infer` arms pass the same references
 /// through).
-pub(crate) enum BindingView<'a> {
+pub(crate) enum BindingView<'a, 's> {
     /// `Ast::LetIn` — plain value OR `\`/`+`-sigiled command binding; the
     /// sigil dispatch (`command_scheme`) stays inside the checker, exactly
     /// as today.
-    Let { name: &'a str, value: &'a Ast },
+    Let { name: Symbol<'s>, value: &'a Ast<'s> },
     /// `Ast::LetMathIn` — a math-command binding (distinct variant by
     /// construction).
-    LetMath { name: &'a str, value: &'a Ast },
+    LetMath { name: Symbol<'s>, value: &'a Ast<'s> },
     /// `Ast::LetRecIn`'s binding group (all names in scope in all bodies).
-    LetRec(&'a [(String, Rc<Ast>)]),
+    LetRec(&'a [(Symbol<'s>, Rc<Ast<'s>>)]),
     /// `Ast::LetMutableIn` — value restriction, never generalized.
-    LetMutable { name: &'a str, init: &'a Ast },
+    LetMutable { name: Symbol<'s>, init: &'a Ast<'s> },
 }
 
-impl Checker {
+impl<'s> Checker<'s> {
     // See `base_type_env`'s `#[allow(dead_code)]` note above — same shape,
     // same reason.
     #[allow(dead_code)]
-    fn new(program: &Program) -> Result<Checker, TypeError> {
+    fn new(program: &Program<'s>) -> Result<Checker<'s>, TypeError> {
         Self::new_with_version(program, RustyfiVersion::V0_0_6)
     }
 
@@ -1606,8 +1669,9 @@ impl Checker {
     /// not even builtins — so `new_with_version` can compose the exact
     /// statement order of the original monolithic constructor (§5 channel
     /// 8 of the L3 spec).
-    pub(crate) fn empty() -> Checker {
+    pub(crate) fn empty(store: &'s SymbolStore) -> Checker<'s> {
         Checker {
+            store,
             ctx: TypeContext::new(),
             ctors: HashMap::new(),
             variants: HashMap::new(),
@@ -1630,6 +1694,13 @@ impl Checker {
     /// 0.0.6 path: `empty()` already defaults to `V0_0_6`.
     pub(crate) fn set_version(&mut self, version: RustyfiVersion) {
         self.version = version;
+    }
+
+    /// A symbol's source text. Every diagnostic this module formats goes
+    /// through here: `Symbol`'s own `Debug` is index-only by design, and the
+    /// golden tests diff the resolved strings (design doc §7).
+    fn text(&self, sym: Symbol<'s>) -> &'s str {
+        self.store.resolve(sym)
     }
 
     /// Register the builtin variant decls for `version` — moved verbatim
@@ -1716,11 +1787,14 @@ impl Checker {
     /// same statement sequence through the methods above: synonyms →
     /// cycle-check → builtins → user variant decls. This order-preservation
     /// is load-bearing (see the L3 spec §5 channels 2, 7, 8).
-    fn new_with_version(program: &Program, version: RustyfiVersion) -> Result<Checker, TypeError> {
+    fn new_with_version(
+        program: &Program<'s>,
+        version: RustyfiVersion,
+    ) -> Result<Checker<'s>, TypeError> {
         // Synonyms are registered (and checked for cycles) before any
         // variant decl is lowered, since a variant's ctor payload may name a
         // synonym (`build_variant_decl` expands through `synonyms`).
-        let mut c = Checker::empty();
+        let mut c = Checker::empty(program.store);
         c.set_version(version);
         for usd in &program.synonym_decls {
             c.declare_synonym(usd)?;
@@ -2078,11 +2152,11 @@ impl Checker {
     /// (frozen-corpus byte-identical).
     fn check_cmd_args(
         &mut self,
-        env: &TypeEnv,
+        env: &TypeEnv<'s>,
         name: &str,
         span: Span,
         params: &[CmdArgType],
-        args: &[CmdArg],
+        args: &[CmdArg<'s>],
     ) -> Result<(), TypeError> {
         if params.len() != args.len() {
             return Err(TypeError::simple(
@@ -2150,15 +2224,15 @@ impl Checker {
     /// them wrong.
     pub(crate) fn infer_binding(
         &mut self,
-        env: &TypeEnv,
-        binding: BindingView<'_>,
-    ) -> Result<Vec<(String, PolyType)>, TypeError> {
+        env: &TypeEnv<'s>,
+        binding: BindingView<'_, 's>,
+    ) -> Result<Vec<(Symbol<'s>, PolyType)>, TypeError> {
         match binding {
             BindingView::Let { name, value } => {
                 self.ctx.enter_level();
                 let tv = self.infer(env, value)?;
                 self.ctx.leave_level();
-                let scheme = match command_sigil(name) {
+                let scheme = match command_sigil(self.text(name)) {
                     // A `\`/`+`-named binding: either a genuine `let-inline`/
                     // `let-block` definition (`value` is the
                     // `Lambda(ctxvar, Lambda(p1, .., body))` chain
@@ -2166,10 +2240,12 @@ impl Checker {
                     // alias of one (`value` is a bare `Ast::Var`, from a
                     // module's own `M.\cmd` re-export or an `open`) — see
                     // `command_scheme`.
-                    Some(sigil) => self.command_scheme(name, sigil, tv, ast_span(value))?,
+                    Some(sigil) => {
+                        self.command_scheme(self.text(name), sigil, tv, ast_span(value))?
+                    }
                     None => generalize(self.ctx.level(), &tv),
                 };
-                Ok(vec![(name.to_string(), scheme)])
+                Ok(vec![(name, scheme)])
             }
 
             // `let-math \cmd param* = expr in body` (`docs/plans/math-
@@ -2190,11 +2266,11 @@ impl Checker {
                 // lambdas that `math_command_scheme`'s v0.0.6 rule knows
                 // nothing about.
                 let scheme = if self.version.math_is_split() {
-                    self.math_command_scheme_v01(name, tv, ast_span(value))?
+                    self.math_command_scheme_v01(self.text(name), tv, ast_span(value))?
                 } else {
-                    self.math_command_scheme(name, tv, ast_span(value))?
+                    self.math_command_scheme(self.text(name), tv, ast_span(value))?
                 };
-                Ok(vec![(name.to_string(), scheme)])
+                Ok(vec![(name, scheme)])
             }
 
             BindingView::LetRec(bindings) => {
@@ -2204,7 +2280,7 @@ impl Checker {
                 for (name, _) in bindings {
                     let v = self.fresh();
                     vars.push(v.clone());
-                    rec_env = rec_env.with(name.clone(), PolyType::mono(v));
+                    rec_env = rec_env.with(*name, PolyType::mono(v));
                 }
                 for ((name, val), v) in bindings.iter().zip(vars.iter()) {
                     let tv = self.infer(&rec_env, val)?;
@@ -2212,14 +2288,14 @@ impl Checker {
                         v,
                         &tv,
                         ast_span(val),
-                        &format!("let-rec binding '{name}'"),
+                        &format!("let-rec binding '{}'", self.text(*name)),
                     )?;
                 }
                 self.ctx.leave_level();
                 let mut schemes = Vec::with_capacity(bindings.len());
                 for ((name, _), v) in bindings.iter().zip(vars.iter()) {
                     let scheme = generalize(self.ctx.level(), v);
-                    schemes.push((name.clone(), scheme));
+                    schemes.push((*name, scheme));
                 }
                 Ok(schemes)
             }
@@ -2234,7 +2310,7 @@ impl Checker {
                 // directly: every use of `name` in `body` shares the exact
                 // same `Ref` type, not a fresh instantiation.
                 let tinit = self.infer(env, init)?;
-                Ok(vec![(name.to_string(), PolyType::mono(reff(tinit)))])
+                Ok(vec![(name, PolyType::mono(reff(tinit)))])
             }
         }
     }
@@ -2243,7 +2319,11 @@ impl Checker {
     /// over the private `infer` below (kept private to leave the ~40
     /// internal `self.infer(` call sites zero-diff). 2d uses this for the
     /// document body and for any non-binding expression it must check.
-    pub(crate) fn infer_expr(&mut self, env: &TypeEnv, ast: &Ast) -> Result<MonoType, TypeError> {
+    pub(crate) fn infer_expr(
+        &mut self,
+        env: &TypeEnv<'s>,
+        ast: &Ast<'s>,
+    ) -> Result<MonoType, TypeError> {
         self.infer(env, ast)
     }
 
@@ -2308,10 +2388,10 @@ impl Checker {
     #[inline(never)]
     fn infer_apply_opt(
         &mut self,
-        env: &TypeEnv,
-        func: &Ast,
-        opts: &[(String, Ast)],
-        arg: &Ast,
+        env: &TypeEnv<'s>,
+        func: &Ast<'s>,
+        opts: &[(String, Ast<'s>)],
+        arg: &Ast<'s>,
     ) -> Result<MonoType, TypeError> {
         let tf = self.infer(env, func)?;
         let ta = self.infer(env, arg)?;
@@ -2345,20 +2425,20 @@ impl Checker {
     #[inline(never)]
     fn infer_lambda_opt(
         &mut self,
-        env: &TypeEnv,
-        opts: &[(String, String)],
-        param: &str,
-        body: &Ast,
+        env: &TypeEnv<'s>,
+        opts: &[(String, Symbol<'s>)],
+        param: Symbol<'s>,
+        body: &Ast<'s>,
     ) -> Result<MonoType, TypeError> {
         let mut inner = env.clone();
         let mut opt_tys = Vec::with_capacity(opts.len());
         for (label, binder) in opts {
             let tl = self.fresh();
-            inner = inner.with(binder.clone(), PolyType::mono(t_option(tl.clone())));
+            inner = inner.with(*binder, PolyType::mono(t_option(tl.clone())));
             opt_tys.push((label.clone(), tl));
         }
         let tp = self.fresh();
-        inner = inner.with(param.to_string(), PolyType::mono(tp.clone()));
+        inner = inner.with(param, PolyType::mono(tp.clone()));
         let tb = self.infer(&inner, body)?;
         let mut row = Row::Empty;
         for (label, tl) in opt_tys.into_iter().rev() {
@@ -2367,7 +2447,7 @@ impl Checker {
         Ok(MonoType::Func(Box::new(row), Box::new(tp), Box::new(tb)))
     }
 
-    fn infer(&mut self, env: &TypeEnv, ast: &Ast) -> Result<MonoType, TypeError> {
+    fn infer(&mut self, env: &TypeEnv<'s>, ast: &Ast<'s>) -> Result<MonoType, TypeError> {
         match ast {
             Ast::Unit => Ok(t_unit()),
             Ast::Bool(_) => Ok(t_bool()),
@@ -2376,7 +2456,7 @@ impl Checker {
             Ast::Length(_) => Ok(t_length()),
             Ast::Str(_) => Ok(t_string()),
 
-            Ast::Var(name, span) => match env.get(name) {
+            Ast::Var(name, span) => match env.get(*name) {
                 Some(poly) => Ok(instantiate(poly, self.ctx.level())),
                 // Should not happen post-elaboration: `elaborate.rs`'s
                 // `scoped_var` already rejects any unbound name before this
@@ -2384,7 +2464,10 @@ impl Checker {
                 // panic anyway, since "should not happen" isn't "cannot".
                 None => Err(TypeError::simple(
                     Some(*span),
-                    format!("internal error: unbound variable '{name}' reached the typechecker"),
+                    format!(
+                        "internal error: unbound variable '{}' reached the typechecker",
+                        self.text(*name)
+                    ),
                 )),
             },
 
@@ -2416,7 +2499,7 @@ impl Checker {
 
             Ast::Lambda(param, body) => {
                 let tp = self.fresh();
-                let inner = env.with(param.clone(), PolyType::mono(tp.clone()));
+                let inner = env.with(*param, PolyType::mono(tp.clone()));
                 let tb = self.infer(&inner, body)?;
                 Ok(arrow(tp, tb))
             }
@@ -2434,10 +2517,10 @@ impl Checker {
             // function type carries a CLOSED row `?(l : τ_l, …)` — the very
             // same fresh `τ_l` shared between the binder's `option τ_l` and
             // the row's `Cons(l, τ_l)`.
-            Ast::LambdaOpt { opts, param, body } => self.infer_lambda_opt(env, opts, param, body),
+            Ast::LambdaOpt { opts, param, body } => self.infer_lambda_opt(env, opts, *param, body),
 
             Ast::LetIn(name, value, body) => {
-                let schemes = self.infer_binding(env, BindingView::Let { name, value })?;
+                let schemes = self.infer_binding(env, BindingView::Let { name: *name, value })?;
                 let inner = env.with_all(schemes);
                 self.infer(&inner, body)
             }
@@ -2450,7 +2533,7 @@ impl Checker {
             // to dispatch on and no "which kind of `\`-binding is this"
             // ambiguity to resolve.
             Ast::LetMathIn(name, value, body) => {
-                let schemes = self.infer_binding(env, BindingView::LetMath { name, value })?;
+                let schemes = self.infer_binding(env, BindingView::LetMath { name: *name, value })?;
                 let inner = env.with_all(schemes);
                 self.infer(&inner, body)
             }
@@ -2493,6 +2576,7 @@ impl Checker {
                 // ever make it. See `exhaustive::check_match`'s doc comment.
                 let resolved_scrut = resolve(&tscrut);
                 let new_warnings = crate::exhaustive::check_match(
+                    self.store,
                     &resolved_scrut,
                     ast_span(scrutinee),
                     arms,
@@ -2562,19 +2646,21 @@ impl Checker {
                 // NO generalization: `let-mutable`'s binding is the
                 // classic ML "value restriction" case — see
                 // `infer_binding`'s `BindingView::LetMutable` arm.
-                let schemes = self.infer_binding(env, BindingView::LetMutable { name, init })?;
+                let schemes =
+                    self.infer_binding(env, BindingView::LetMutable { name: *name, init })?;
                 let inner = env.with_all(schemes);
                 self.infer(&inner, body)
             }
 
             Ast::Overwrite(name, span, value) => {
-                let t_ref = match env.get(name) {
+                let t_ref = match env.get(*name) {
                     Some(poly) => instantiate(poly, self.ctx.level()),
                     None => {
                         return Err(TypeError::simple(
                             Some(*span),
                             format!(
-                                "internal error: unbound mutable variable '{name}' reached the typechecker"
+                                "internal error: unbound mutable variable '{}' reached the typechecker",
+                                self.text(*name)
                             ),
                         ))
                     }
@@ -2584,7 +2670,7 @@ impl Checker {
                     &t_ref,
                     &reff(inner.clone()),
                     Some(*span),
-                    &format!("the overwrite target '{name}'"),
+                    &format!("the overwrite target '{}'", self.text(*name)),
                 )?;
                 let tvalue = self.infer(env, value)?;
                 // Prefer the overwrite's own (always-present) span over
@@ -2596,7 +2682,7 @@ impl Checker {
                     &inner,
                     &tvalue,
                     ast_span(value).or(Some(*span)),
-                    &format!("the overwrite value for '{name}'"),
+                    &format!("the overwrite value for '{}'", self.text(*name)),
                 )?;
                 Ok(t_unit())
             }
@@ -2673,7 +2759,7 @@ impl Checker {
             // `Ast::VersionScope` node is ever produced there).
             Ast::VersionScope(version, body) => {
                 self.install_additional_builtin_variants(*version);
-                let scoped = version_scoped_type_env(env, *version);
+                let scoped = version_scoped_type_env(self.store, env, *version);
                 self.infer(&scoped, body)
             }
             // A module member's body: resolve its bare constructor references
@@ -2715,9 +2801,9 @@ impl Checker {
     /// which just returns the result type instead.
     fn infer_ctor(
         &mut self,
-        env: &TypeEnv,
+        env: &TypeEnv<'s>,
         name: &str,
-        payload: Option<&Ast>,
+        payload: Option<&Ast<'s>>,
         expected_result: Option<&MonoType>,
     ) -> Result<MonoType, TypeError> {
         let decl = self.lookup_ctor(name).ok_or_else(|| {
@@ -2766,13 +2852,13 @@ impl Checker {
     /// every name it binds. Mirrors `typechecker.ml`'s `typecheck_pattern`.
     fn bind_pattern(
         &mut self,
-        env: TypeEnv,
-        pat: &Pattern,
+        env: TypeEnv<'s>,
+        pat: &Pattern<'s>,
         ty: &MonoType,
-    ) -> Result<TypeEnv, TypeError> {
+    ) -> Result<TypeEnv<'s>, TypeError> {
         match pat {
             Pattern::Wild => Ok(env),
-            Pattern::Var(name) => Ok(env.with(name.clone(), PolyType::mono(ty.clone()))),
+            Pattern::Var(name) => Ok(env.with(*name, PolyType::mono(ty.clone()))),
             Pattern::Unit => {
                 self.unify_ctx(&t_unit(), ty, None, "a unit pattern")?;
                 Ok(env)
@@ -2843,7 +2929,7 @@ impl Checker {
             }
             Pattern::As(inner, name) => {
                 let env = self.bind_pattern(env, inner, ty)?;
-                Ok(env.with(name.clone(), PolyType::mono(ty.clone())))
+                Ok(env.with(*name, PolyType::mono(ty.clone())))
             }
         }
     }
@@ -2859,30 +2945,32 @@ impl Checker {
     /// argument against `params`, via `check_cmd_args` — there is no longer
     /// any `context -> arg1 -> .. -> inline-boxes` function shape to unify
     /// the whole command type against.
-    fn check_itext(&mut self, env: &TypeEnv, it: &IText) -> Result<(), TypeError> {
+    fn check_itext(&mut self, env: &TypeEnv<'s>, it: &IText<'s>) -> Result<(), TypeError> {
         match it {
             IText::Text(_) => Ok(()),
             IText::Cmd { name, span, args } => {
-                let tcmd = match env.get(name) {
+                let tcmd = match env.get(*name) {
                     Some(poly) => instantiate(poly, self.ctx.level()),
                     None => {
                         return Err(TypeError::simple(
                             Some(*span),
                             format!(
-                                "internal error: unbound inline command '{name}' reached the typechecker"
+                                "internal error: unbound inline command '{}' reached the typechecker",
+                                self.text(*name)
                             ),
                         ))
                     }
                 };
                 match resolve(&tcmd) {
                     MonoType::InlineCmd(params) => {
-                        self.check_cmd_args(env, name, *span, &params, args)
+                        self.check_cmd_args(env, self.text(*name), *span, &params, args)
                     }
                     other => Err(TypeError::simple(
                         Some(*span),
                         format!(
-                            "internal error: inline command '{name}' does not have an \
-                             inline-cmd type (found `{other}`)"
+                            "internal error: inline command '{}' does not have an \
+                             inline-cmd type (found `{other}`)",
+                            self.text(*name)
                         ),
                     )),
                 }
@@ -2917,29 +3005,31 @@ impl Checker {
 
     /// Block-text analogue of `check_itext`'s `IText::Cmd` case — see its
     /// doc comment; a `BText::Cmd`'s type is `MonoType::BlockCmd(params)`.
-    fn check_btext(&mut self, env: &TypeEnv, bt: &BText) -> Result<(), TypeError> {
+    fn check_btext(&mut self, env: &TypeEnv<'s>, bt: &BText<'s>) -> Result<(), TypeError> {
         match bt {
             BText::Cmd { name, span, args } => {
-                let tcmd = match env.get(name) {
+                let tcmd = match env.get(*name) {
                     Some(poly) => instantiate(poly, self.ctx.level()),
                     None => {
                         return Err(TypeError::simple(
                             Some(*span),
                             format!(
-                                "internal error: unbound block command '{name}' reached the typechecker"
+                                "internal error: unbound block command '{}' reached the typechecker",
+                                self.text(*name)
                             ),
                         ))
                     }
                 };
                 match resolve(&tcmd) {
                     MonoType::BlockCmd(params) => {
-                        self.check_cmd_args(env, name, *span, &params, args)
+                        self.check_cmd_args(env, self.text(*name), *span, &params, args)
                     }
                     other => Err(TypeError::simple(
                         Some(*span),
                         format!(
-                            "internal error: block command '{name}' does not have a \
-                             block-cmd type (found `{other}`)"
+                            "internal error: block command '{}' does not have a \
+                             block-cmd type (found `{other}`)",
+                            self.text(*name)
                         ),
                     )),
                 }
@@ -2970,7 +3060,7 @@ impl Checker {
     /// program-mode value that itself produces math — `Value::Math`/
     /// `Value::MathText` are the two runtime shapes this unifies against,
     /// see `value.rs`).
-    fn check_math_elem(&mut self, env: &TypeEnv, m: &MathElem) -> Result<(), TypeError> {
+    fn check_math_elem(&mut self, env: &TypeEnv<'s>, m: &MathElem<'s>) -> Result<(), TypeError> {
         match m {
             MathElem::Chars(_) => Ok(()),
             MathElem::Group(elems) => {
@@ -2988,26 +3078,28 @@ impl Checker {
             }
             MathElem::Primes(base, _) => self.check_math_elem(env, base),
             MathElem::Cmd { name, span, args } => {
-                let tcmd = match env.get(name) {
+                let tcmd = match env.get(*name) {
                     Some(poly) => instantiate(poly, self.ctx.level()),
                     None => {
                         return Err(TypeError::simple(
                             Some(*span),
                             format!(
-                                "internal error: unbound math command '{name}' reached the typechecker"
+                                "internal error: unbound math command '{}' reached the typechecker",
+                                self.text(*name)
                             ),
                         ))
                     }
                 };
                 match resolve(&tcmd) {
                     MonoType::MathCmd(params) => {
-                        self.check_cmd_args(env, name, *span, &params, args)
+                        self.check_cmd_args(env, self.text(*name), *span, &params, args)
                     }
                     other => Err(TypeError::simple(
                         Some(*span),
                         format!(
-                            "internal error: math command '{name}' does not have a \
-                             math-cmd type (found `{other}`)"
+                            "internal error: math command '{}' does not have a \
+                             math-cmd type (found `{other}`)",
+                            self.text(*name)
                         ),
                     )),
                 }
@@ -3129,7 +3221,7 @@ fn harvest_slot(row: Row, dom: MonoType) -> CmdArgType {
 /// `AccessField` carry one directly (see `ast.rs`'s module doc comment);
 /// everything else falls back to `None`; the resulting `TypeError` then just
 /// prints without a location prefix.
-pub(crate) fn ast_span(ast: &Ast) -> Option<Span> {
+pub(crate) fn ast_span<'s>(ast: &Ast<'s>) -> Option<Span> {
     match ast {
         Ast::Var(_, span) => Some(*span),
         Ast::Overwrite(_, span, _) => Some(*span),
@@ -3146,7 +3238,7 @@ pub(crate) fn ast_span(ast: &Ast) -> Option<Span> {
 /// on a non-exhaustive or redundant `match` rather than rejecting the
 /// program, so these never turn a would-have-passed program into a
 /// `TypeError`.
-pub fn typecheck_verbose(program: &Program) -> Result<Vec<MatchWarning>, TypeError> {
+pub fn typecheck_verbose<'s>(program: &Program<'s>) -> Result<Vec<MatchWarning>, TypeError> {
     typecheck_verbose_with_version(program, RustyfiVersion::V0_0_6)
 }
 
@@ -3158,12 +3250,12 @@ pub fn typecheck_verbose(program: &Program) -> Result<Vec<MatchWarning>, TypeErr
 /// `V0_1` program that writes `A4Paper` gets the SAME "unbound constructor"
 /// error upstream's own 0.1 compiler would give it, which is the faithful
 /// behavior (the ADT is genuinely gone, not merely discouraged).
-pub fn typecheck_verbose_with_version(
-    program: &Program,
+pub fn typecheck_verbose_with_version<'s>(
+    program: &Program<'s>,
     version: RustyfiVersion,
 ) -> Result<Vec<MatchWarning>, TypeError> {
     let mut checker = Checker::new_with_version(program, version)?;
-    let env = base_type_env_with_version(version);
+    let env = base_type_env_with_version(checker.store, version);
     checker.infer(&env, &program.body)?;
     Ok(checker.warnings)
 }
@@ -3174,13 +3266,16 @@ pub fn typecheck_verbose_with_version(
 /// [`typecheck_verbose`] that discards its warnings — every existing caller
 /// (`lib.rs`'s `compile_document_cst`, `compile.rs`, and every test that
 /// predates §Slice 1) is therefore unaffected by the new pass.
-pub fn typecheck(program: &Program) -> Result<(), TypeError> {
+pub fn typecheck<'s>(program: &Program<'s>) -> Result<(), TypeError> {
     typecheck_with_version(program, RustyfiVersion::V0_0_6)
 }
 
 /// Same as [`typecheck`], for a given target `version`. See
 /// `typecheck_verbose_with_version`'s doc comment.
-pub fn typecheck_with_version(program: &Program, version: RustyfiVersion) -> Result<(), TypeError> {
+pub fn typecheck_with_version<'s>(
+    program: &Program<'s>,
+    version: RustyfiVersion,
+) -> Result<(), TypeError> {
     typecheck_verbose_with_version(program, version).map(|_warnings| ())
 }
 
@@ -3195,10 +3290,10 @@ mod l3_per_binding_tests {
     use super::*;
     use crate::{elaborate, primitives};
 
-    fn elaborate_src(src: &str) -> Program {
+    fn elaborate_src<'s>(store: &'s SymbolStore, src: &str) -> Program<'s> {
         let file = rustyfi_syntax::parse_file(src).expect("parse failed");
         let env = primitives::base_env();
-        let scope = elaborate::Scope::new(env.names());
+        let scope = elaborate::Scope::new(store, env.names());
         elaborate::elaborate_program(&file, &scope).expect("elaborate failed")
     }
 
@@ -3208,23 +3303,24 @@ mod l3_per_binding_tests {
     /// exactly what `infer`'s own recursion does internally (§2.4) — driven
     /// here from outside the engine through the `pub(crate)` per-binding
     /// API, the same way 2d's `v1/module_check.rs` will.
-    fn drive_manually(
-        program: &Program,
+    fn drive_manually<'s>(
+        program: &Program<'s>,
         version: RustyfiVersion,
     ) -> Result<Vec<MatchWarning>, TypeError> {
         let mut checker = Checker::new_with_version(program, version)?;
-        let mut env = base_type_env_with_version(version);
-        let mut ast: &Ast = &program.body;
+        let mut env = base_type_env_with_version(program.store, version);
+        let mut ast: &Ast<'s> = &program.body;
         loop {
             ast = match ast {
                 Ast::LetIn(name, value, body) => {
-                    let schemes = checker.infer_binding(&env, BindingView::Let { name, value })?;
+                    let schemes =
+                        checker.infer_binding(&env, BindingView::Let { name: *name, value })?;
                     env = env.with_all(schemes);
                     body
                 }
                 Ast::LetMathIn(name, value, body) => {
                     let schemes =
-                        checker.infer_binding(&env, BindingView::LetMath { name, value })?;
+                        checker.infer_binding(&env, BindingView::LetMath { name: *name, value })?;
                     env = env.with_all(schemes);
                     body
                 }
@@ -3235,7 +3331,7 @@ mod l3_per_binding_tests {
                 }
                 Ast::LetMutableIn(name, init, body) => {
                     let schemes =
-                        checker.infer_binding(&env, BindingView::LetMutable { name, init })?;
+                        checker.infer_binding(&env, BindingView::LetMutable { name: *name, init })?;
                     env = env.with_all(schemes);
                     body
                 }
@@ -3254,7 +3350,8 @@ mod l3_per_binding_tests {
     /// order — `MatchWarning` derives `PartialEq`) on success.
     fn assert_equivalent(src: &str) {
         let version = RustyfiVersion::V0_0_6;
-        let program = elaborate_src(src);
+        let store = SymbolStore::new();
+        let program = elaborate_src(&store, src);
         let whole = typecheck_verbose_with_version(&program, version);
         let manual = drive_manually(&program, version);
         match (whole, manual) {
@@ -3334,25 +3431,32 @@ mod l3_per_binding_tests {
     /// genuinely-undeclared one; after `declare_variant`, it typechecks.
     #[test]
     fn session_incrementality_declare_variant_affects_only_later_bindings() {
-        let program = elaborate_src("type t = | A of int in 0");
+        let store = SymbolStore::new();
+        let program = elaborate_src(&store, "type t = | A of int in 0");
         assert_eq!(program.type_decls.len(), 1);
         let decl = &program.type_decls[0];
 
-        let mut checker = Checker::empty();
+        let mut checker = Checker::empty(&store);
         checker.install_builtin_variants(RustyfiVersion::V0_0_6);
-        let env = base_type_env_with_version(RustyfiVersion::V0_0_6);
+        let env = base_type_env_with_version(&store, RustyfiVersion::V0_0_6);
 
         // Before `declare_variant`, `A` is unknown — same message shape a
         // genuinely-undeclared constructor gets.
         let a_payload = Ast::Ctor("A".to_string(), Some(Box::new(Ast::Int(1))));
         let before = checker
-            .infer_binding(&env, BindingView::Let { name: "before", value: &a_payload })
+            .infer_binding(
+                &env,
+                BindingView::Let { name: store.intern("before"), value: &a_payload },
+            )
             .expect_err("`A` should be unknown before declare_variant");
         assert_eq!(format!("{before}"), "unknown constructor 'A'");
 
         let nosuch_payload = Ast::Ctor("NoSuchCtor".to_string(), None);
         let genuinely_unknown = checker
-            .infer_binding(&env, BindingView::Let { name: "n", value: &nosuch_payload })
+            .infer_binding(
+                &env,
+                BindingView::Let { name: store.intern("n"), value: &nosuch_payload },
+            )
             .expect_err("a genuinely undeclared ctor should also fail");
         assert_eq!(format!("{genuinely_unknown}"), "unknown constructor 'NoSuchCtor'");
 
@@ -3362,7 +3466,10 @@ mod l3_per_binding_tests {
         checker
             .declare_variant(decl)
             .expect("declare_variant should succeed");
-        let after = checker.infer_binding(&env, BindingView::Let { name: "after", value: &a_payload });
+        let after = checker.infer_binding(
+            &env,
+            BindingView::Let { name: store.intern("after"), value: &a_payload },
+        );
         assert!(
             after.is_ok(),
             "A(1) should typecheck after declare_variant: {after:?}"
@@ -3408,23 +3515,26 @@ mod x2b_shadow_tests {
         );
 
         let span = Span::default();
+        let store = SymbolStore::new();
+        let page_break = store.intern("page-break");
         let ast = Ast::LetIn(
-            "page-break".to_string(),
+            page_break,
             Box::new(Ast::Int(42)),
             Box::new(Ast::VersionScope(
                 RustyfiVersion::V0_0_6,
-                Box::new(Ast::Var("page-break".to_string(), span)),
+                Box::new(Ast::Var(page_break, span)),
             )),
         );
         let program = Program {
             type_decls: Vec::new(),
             synonym_decls: Vec::new(),
             body: ast,
+            store: &store,
         };
 
         let mut checker = Checker::new_with_version(&program, RustyfiVersion::V0_1)
             .expect("checker construction over an empty-decls program should succeed");
-        let env = base_type_env_with_version(RustyfiVersion::V0_1);
+        let env = base_type_env_with_version(&store, RustyfiVersion::V0_1);
         let ty = checker.infer(&env, &program.body).unwrap_or_else(|e| {
             panic!(
                 "inferring the version-scoped `Var` over the user's shadowed \
@@ -3451,18 +3561,20 @@ mod x2b_shadow_tests {
     #[test]
     fn version_scope_still_resolves_unshadowed_forked_primitive() {
         let span = Span::default();
+        let store = SymbolStore::new();
         let ast = Ast::VersionScope(
             RustyfiVersion::V0_0_6,
-            Box::new(Ast::Var("page-break".to_string(), span)),
+            Box::new(Ast::Var(store.intern("page-break"), span)),
         );
         let program = Program {
             type_decls: Vec::new(),
             synonym_decls: Vec::new(),
             body: ast,
+            store: &store,
         };
         let mut checker = Checker::new_with_version(&program, RustyfiVersion::V0_1)
             .expect("checker construction over an empty-decls program should succeed");
-        let env = base_type_env_with_version(RustyfiVersion::V0_1);
+        let env = base_type_env_with_version(&store, RustyfiVersion::V0_1);
         let ty = checker.infer(&env, &program.body).unwrap_or_else(|e| {
             panic!(
                 "an unshadowed page-break reference inside a VersionScope should still \

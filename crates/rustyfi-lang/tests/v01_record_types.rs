@@ -117,11 +117,12 @@ fn eval_v01(lib_src: &str, doc_src: &str) -> Result<Value, String> {
     };
 
     let env = primitives::base_env_with_version(RustyfiVersion::V0_1);
-    let scope = elaborate::Scope::new(env.names());
+    let store = rustyfi_lang::symbol::SymbolStore::new();
+    let scope = elaborate::Scope::new(&store, env.names());
     let elaborated = elaborate::elaborate_program(&file, &scope).map_err(|e| format!("elaborate: {e}"))?;
     typecheck::typecheck_with_version(&elaborated, RustyfiVersion::V0_1).map_err(|e| format!("typecheck: {e}"))?;
     let mut interp = eval::Interp::new(&Mono);
-    interp.eval(&env, &elaborated.body).map_err(|e| format!("eval: {e}"))
+    interp.eval(&env, &rustyfi_lang::ast::debrand(&elaborated.body, &store)).map_err(|e| format!("eval: {e}"))
 }
 
 fn as_int(v: Value) -> i64 {

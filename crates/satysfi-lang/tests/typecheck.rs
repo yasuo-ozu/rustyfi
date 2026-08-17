@@ -238,9 +238,20 @@ fn sequential_requires_a_unit_left_hand_side() {
 // Inline/block commands and itemize.
 // ============================================================================
 
+// `\emph`/`+p` are no longer built-in primitives as of phase 4 (they moved
+// to the real `stdja-mini` stdlib package, loaded through the multi-file
+// loader) — these tests define local stand-ins with the same shape
+// (`context -> inline-text -> inline-boxes` / `.. -> block-boxes`) so the
+// typechecking rules they exercise (command-argument unification) are
+// unaffected by that move.
+
 #[test]
 fn inline_command_with_matching_argument_type_typechecks() {
-    assert_well_typed("{ \\emph{ ok } }");
+    assert_well_typed(
+        "let-inline ctx \\emph it = read-inline ctx it
+         in
+         { \\emph{ ok } }",
+    );
 }
 
 #[test]
@@ -248,7 +259,11 @@ fn inline_command_argument_type_mismatch_is_rejected() {
     // `\emph : context -> inline-text -> inline-boxes` — passing a program-
     // mode `int` (via the active-mode `(...)`  escape) instead of
     // inline-text is a type error.
-    assert_type_error("{ \\emph(4); }");
+    assert_type_error(
+        "let-inline ctx \\emph it = read-inline ctx it
+         in
+         { \\emph(4); }",
+    );
 }
 
 #[test]
@@ -257,7 +272,11 @@ fn itemize_value_is_not_inline_text() {
     // inline-text — applying `+p` (which expects `inline-text`) to it must
     // be rejected, confirming itemize really does get its own nominal type
     // rather than silently degrading to `inline-text`.
-    assert_type_error("'< +p { * a } >");
+    assert_type_error(
+        "let-block ctx +p it = line-break true true ctx (read-inline ctx it)
+         in
+         '< +p { * a } >",
+    );
 }
 
 // ============================================================================
@@ -308,7 +327,7 @@ fn primitive_names_are_cross_checked_against_primitives_source() {
     let src = include_str!("../src/primitives.rs");
     assert_eq!(
         typecheck::PRIMITIVE_NAMES.len(),
-        43,
+        54,
         "keep this in sync with primitives.rs's prims! table and \
          types_unify.rs's every_registered_primitive_has_a_type test"
     );
@@ -324,4 +343,208 @@ fn primitive_names_are_cross_checked_against_primitives_source() {
              (PRIMITIVE_NAMES has drifted out of sync)"
         );
     }
+}
+
+// ============================================================================
+// Phase 4/2: user-defined `let-inline`/`let-block` bindings get real command
+// types (`MonoType::InlineCmd`/`BlockCmd`, `Checker::command_scheme`) rather
+// than being unified as plain "context-curried" functions — and a command
+// application (`IText::Cmd`/`BText::Cmd`) is checked against that command
+// type's argument list directly (`Checker::check_cmd_args`): exact arity,
+// then one unification per argument.
+//
+// (Polymorphic commands are intentionally not exercised here: every command
+// argument this milestone's grammar can produce is a mandatory, monomorphic-
+// enough type by construction — `inline-text`/`block-text` literals, or a
+// program-mode expression whose own type is unrelated to `command_scheme`'s
+// generalization step — so there is no case among these rules that actually
+// needs a *quantified* command-argument type variable to exercise; nothing
+// here would tell "poly command" apart from "any other command".)
+// ============================================================================
+
+#[test]
+fn user_defined_inline_command_gets_an_inline_cmd_type_and_applies() {
+    assert_well_typed(
+        "let-inline ctx \\bracket it = read-inline ctx it
+         in
+         { \\bracket{ Bracketed text. } }",
+    );
+}
+
+#[test]
+fn user_defined_block_command_gets_a_block_cmd_type_and_applies() {
+    assert_well_typed(
+        "let-block ctx +box it = read-block ctx it
+         let-block ctx +p it = line-break true true ctx (read-inline ctx it)
+         in
+         '< +box< +p{ Boxed text. } > >",
+    );
+}
+
+#[test]
+fn lightweight_ctx_less_inline_form_still_yields_an_inline_cmd_type() {
+    // The ctx-less form elaborates to `Lambda(%context, Lambda(it,
+    // read-inline %context it))` (`elaborate_let_inline`'s `None` branch) —
+    // structurally just another `context -> inline-text -> inline-boxes`
+    // function, so it must be picked up by the very same `command_scheme`
+    // peeling as the explicit-context form above.
+    assert_well_typed(
+        "let-inline \\whisper it = it
+         in
+         { \\whisper{ hi } }",
+    );
+}
+
+#[test]
+fn inline_command_called_with_too_few_arguments_is_rejected() {
+    let err = assert_type_error(
+        "let-inline ctx \\pair a b = read-inline ctx a
+         in
+         { \\pair{x} }",
+    );
+    let msg = err.to_string();
+    assert!(
+        msg.contains("expects 2 argument") && msg.contains("got 1"),
+        "expected an exact-arity message, got: {msg}"
+    );
+}
+
+#[test]
+fn inline_command_called_with_too_many_arguments_is_rejected() {
+    let err = assert_type_error(
+        "let-inline ctx \\pair a b = read-inline ctx a
+         in
+         { \\pair{x}{y}{z} }",
+    );
+    let msg = err.to_string();
+    assert!(
+        msg.contains("expects 2 argument") && msg.contains("got 3"),
+        "expected an exact-arity message, got: {msg}"
+    );
+}
+
+#[test]
+fn block_command_called_with_wrong_arity_is_rejected() {
+    let err = assert_type_error(
+        "let-block ctx +duo a b = read-block ctx a
+         in
+         '< +duo{x} >",
+    );
+    let msg = err.to_string();
+    assert!(
+        msg.contains("expects 2 argument") && msg.contains("got 1"),
+        "expected an exact-arity message, got: {msg}"
+    );
+}
+
+#[test]
+fn inline_command_argument_type_mismatch_names_the_argument_position() {
+    // A custom command (rather than the built-in `\emph`) whose single
+    // parameter is `inline-text`, called with a program-mode `int` instead
+    // (via the active-mode `(...)` escape) — the message should name the
+    // argument position and both types involved, not just "some unify
+    // failed somewhere".
+    let err = assert_type_error(
+        "let-inline ctx \\only it = read-inline ctx it
+         in
+         { \\only(4); }",
+    );
+    let msg = err.to_string();
+    assert!(msg.contains("argument 1"), "message should name the argument position: {msg}");
+    assert!(msg.contains("\\only"), "message should name the command: {msg}");
+    assert!(msg.contains("inline-text"), "message should mention `inline-text`: {msg}");
+    assert!(msg.contains("int"), "message should mention `int`: {msg}");
+}
+
+#[test]
+fn emph_given_an_int_is_still_rejected_via_the_command_path() {
+    // Regression: `\emph`'s signature moved from a plain `context ->
+    // inline-text -> inline-boxes` function (unified against `IText::Cmd`'s
+    // whole application) to `MonoType::InlineCmd([inline-text])` (checked
+    // argument-by-argument by `check_cmd_args`) — the same ill-typed program
+    // that `inline_command_argument_type_mismatch_is_rejected` already
+    // covers must still be rejected, now via the new code path, with a
+    // message in the new shape. (`\emph` itself moved to the `stdja-mini`
+    // stdlib package in phase 4 — see this file's comment above
+    // `inline_command_with_matching_argument_type_typechecks` — so it's
+    // locally re-declared here with the same shape.)
+    let err = assert_type_error(
+        "let-inline ctx \\emph it = read-inline ctx it
+         in
+         { \\emph(4); }",
+    );
+    let msg = err.to_string();
+    assert!(msg.contains("argument 1"), "message should name the argument position: {msg}");
+    assert!(msg.contains("inline-text"), "message should mention `inline-text`: {msg}");
+    assert!(msg.contains("int"), "message should mention `int`: {msg}");
+}
+
+#[test]
+fn block_command_argument_type_mismatch_is_rejected() {
+    let err = assert_type_error(
+        "let-block ctx +only it = read-block ctx it
+         in
+         '< +only(4); >",
+    );
+    let msg = err.to_string();
+    assert!(msg.contains("argument 1"), "message should name the argument position: {msg}");
+    assert!(msg.contains("block-text"), "message should mention `block-text`: {msg}");
+    assert!(msg.contains("int"), "message should mention `int`: {msg}");
+}
+
+#[test]
+fn inline_command_binding_not_context_headed_is_rejected() {
+    // `\bad`'s first (and only) lambda-bound parameter is used as an `int`
+    // (via `+`) rather than passed through to any context-consuming
+    // primitive, so it can never unify with `context` — the binding itself
+    // must be rejected, independent of whether `\bad` is ever applied.
+    assert_type_error(
+        "let-inline ctx \\bad = ctx + 1
+         in
+         ()",
+    );
+}
+
+#[test]
+fn inline_command_binding_with_wrong_result_type_is_rejected() {
+    // `\bad`'s body is a bare `int`, never routed through `read-inline` (or
+    // anything else that would force `inline-boxes`) — the peeled result
+    // type can't unify with `inline-boxes`.
+    assert_type_error(
+        "let-inline ctx \\bad it = 4
+         in
+         ()",
+    );
+}
+
+#[test]
+fn module_exported_inline_command_via_open_still_applies() {
+    // `Helper.\shout` (bound by `export_alias` as `LetIn(\"M.\\shout\",
+    // Ast::Var(...), ..)`) and then `open`'s own alias-rebinding (another
+    // `Ast::Var`-valued `LetIn`) must both be *transparent* to the command
+    // type `command_scheme` already gave `\shout` at its original
+    // `let-inline` site — see `command_scheme`'s alias branch.
+    assert_well_typed(
+        "module Helper = struct
+           let-inline ctx \\shout it = read-inline ctx it
+         end
+         in
+         open Helper
+         in
+         { \\shout{ hi } }",
+    );
+}
+
+#[test]
+fn module_qualified_inline_command_reference_has_a_command_type() {
+    // Same as above but via the qualified `M.\cmd` form directly, without an
+    // intervening `open` — exercises `export_alias`'s own `Ast::Var`-valued
+    // `LetIn` in isolation.
+    assert_well_typed(
+        "module Helper = struct
+           let-inline ctx \\shout it = read-inline ctx it
+         end
+         in
+         { \\Helper.shout{ hi } }",
+    );
 }

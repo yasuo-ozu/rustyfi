@@ -22,11 +22,14 @@
 use crate::ast::{Ast, BText, IText, MathElem, Pattern};
 use crate::elaborate::{Program, UserTypeDecl};
 use crate::prim_types::{
-    self, arrow, arrows, builtin_variants, list, product, reff, t_block_boxes, t_block_text,
-    t_bool, t_context, t_document, t_float, t_inline_boxes, t_inline_text, t_int, t_length,
-    t_string, t_unit, VariantDecl,
+    self, arrow, builtin_variants, list, mandatory, product, reff, t_block_boxes,
+    t_block_text, t_bool, t_context, t_document, t_float, t_inline_boxes, t_inline_text, t_int,
+    t_length, t_string, t_unit, VariantDecl,
 };
-use crate::types::{self, generalize, instantiate, BaseType, MonoType, PolyType, Row, TypeContext};
+use crate::types::{
+    self, generalize, instantiate, resolve, BaseType, CmdArgType, MonoType, PolyType, Row,
+    TypeContext,
+};
 use crate::unify::{unify, UnifyError};
 use satysfi_syntax::cst::ast::{TypeAtom, TypeExpr};
 use satysfi_syntax::span::Span;
@@ -98,8 +101,11 @@ impl std::error::Error for TypeError {
 // milestone's contract (`primitives.rs`/`prim_types.rs` are read-only), this
 // list is hand-kept in sync and cross-checked against `primitives.rs`'s
 // source text by a test (`tests/typecheck.rs`) rather than derived
-// mechanically. It is exactly `types_unify.rs`'s `every_registered_primitive_
-// has_a_type` test's own `NAMES` list.
+// mechanically. It matches `types_unify.rs`'s `every_registered_primitive_
+// has_a_type` test's own `NAMES` list (phase 4 dropped `document`/`+p`/
+// `\emph` from both — they're no longer primitives at all, see
+// `primitives.rs`'s module doc comment — and added `set-font-key`, the one
+// genuinely new primitive phase 4 introduces).
 // ============================================================================
 
 pub const PRIMITIVE_NAMES: &[&str] = &[
@@ -107,9 +113,6 @@ pub const PRIMITIVE_NAMES: &[&str] = &[
     "read-block",
     "line-break",
     "page-break",
-    "document",
-    "+p",
-    "\\emph",
     "+",
     "-",
     "*",
@@ -146,6 +149,23 @@ pub const PRIMITIVE_NAMES: &[&str] = &[
     "string-explode",
     "embed-string",
     "inline-fil",
+    // ---- phase 4, part 1 additions (context ops / box combinators) ----
+    "set-font-size",
+    "get-font-size",
+    "set-leading",
+    "set-paragraph-margin",
+    "get-text-width",
+    "get-initial-context",
+    "++",
+    "+++",
+    "inline-nil",
+    "block-nil",
+    "inline-skip",
+    "inline-glue",
+    "block-skip",
+    // ---- phase 4, part 2 addition (see primitives.rs's `prims!` table
+    // comment on `"set-font-key"`) ----
+    "set-font-key",
 ];
 
 fn base_type_env() -> TypeEnv {
@@ -320,6 +340,141 @@ impl Checker {
         unify(expected, found).map_err(|e| TypeError::from_unify(span, what, e))
     }
 
+    /// Turn a `\`/`+`-named `LetIn` binding's ordinarily-inferred value type
+    /// `tv` into the genuine command type (`MonoType::InlineCmd`/`BlockCmd`)
+    /// it gets bound under, per this phase's mandate (see this module's
+    /// crate-report entry): a user-defined command is no longer typed as a
+    /// plain "context-curried" function, but as `[τ1; ..; τn] inline-cmd`
+    /// (resp. `block-cmd`), matching v0.0.6's real `HorzCommandType`/
+    /// `VertCommandType` (`typechecker.ml`'s `UTLetHorzIn`/`UTLetVertIn`
+    /// rules).
+    ///
+    /// Two shapes reach this function, per [`command_sigil`]'s call site:
+    ///
+    /// * a genuine `let-inline`/`let-block` definition, whose value is
+    ///   exactly the `Lambda(ctxvar, Lambda(p1, .., Lambda(pn, body)))` chain
+    ///   `elaborate::elaborate_let_inline` builds — so `tv` is a plain `Func`
+    ///   chain `ctx_ty -> t1 -> .. -> tn -> result_ty`. [`peel_func_chain`]
+    ///   recovers that shape; the leading domain must unify with `context`,
+    ///   the final codomain with `inline-boxes`/`block-boxes`, and the
+    ///   domains in between become the command's `CmdArgType` list.
+    /// * a qualified-name *alias* of an already-command-typed binding (a
+    ///   module's own `M.\cmd` re-export, or `open`'s re-binding of it under
+    ///   its bare suffix — both build a `LetIn(name, Ast::Var(qualified),
+    ///   body)`, see `elaborate.rs`'s `export_alias`/`Expr::OpenIn` case): by
+    ///   the time such an alias is processed, the aliased name was *already*
+    ///   run through this same function at its own original `let-inline`/
+    ///   `let-block` site, so its scheme's body is already
+    ///   `MonoType::InlineCmd`/`BlockCmd` — `self.infer` on the `Ast::Var`
+    ///   simply instantiates that scheme, so `tv` here already *is* the
+    ///   command type. This branch is transparent: it passes such a `tv`
+    ///   through unchanged (re-generalized) rather than trying to peel a
+    ///   `Func` chain out of something that isn't one.
+    fn command_scheme(
+        &mut self,
+        name: &str,
+        sigil: char,
+        tv: MonoType,
+        span: Option<Span>,
+    ) -> Result<PolyType, TypeError> {
+        debug_assert!(sigil == '\\' || sigil == '+');
+        let is_inline = sigil == '\\';
+        let (want_result, kind, other_kind) = if is_inline {
+            (t_inline_boxes(), "inline", "block")
+        } else {
+            (t_block_boxes(), "block", "inline")
+        };
+
+        match resolve(&tv) {
+            MonoType::InlineCmd(_) if is_inline => {
+                return Ok(generalize(self.ctx.level(), &tv));
+            }
+            MonoType::BlockCmd(_) if !is_inline => {
+                return Ok(generalize(self.ctx.level(), &tv));
+            }
+            MonoType::InlineCmd(_) | MonoType::BlockCmd(_) => {
+                return Err(TypeError::simple(
+                    span,
+                    format!(
+                        "'{name}' is bound to a {other_kind} command, but its \
+                         name marks it as {article} {kind} command",
+                        article = if kind == "inline" { "an" } else { "a" },
+                    ),
+                ));
+            }
+            _ => {}
+        }
+
+        let (mut doms, result) = peel_func_chain(tv);
+        if doms.is_empty() {
+            return Err(TypeError::simple(
+                span,
+                format!(
+                    "the binding for '{name}' must be a function taking a \
+                     context as its first argument (e.g. via `let-inline ctx \
+                     {name} .. = ..`)"
+                ),
+            ));
+        }
+        let ctx_ty = doms.remove(0);
+        self.unify_ctx(
+            &t_context(),
+            &ctx_ty,
+            span,
+            &format!("the context argument of '{name}'"),
+        )?;
+        self.unify_ctx(
+            &want_result,
+            &result,
+            span,
+            &format!("the result of '{name}'"),
+        )?;
+        let params: Vec<CmdArgType> = doms.into_iter().map(mandatory).collect();
+        let cmd_ty = if is_inline {
+            MonoType::InlineCmd(params)
+        } else {
+            MonoType::BlockCmd(params)
+        };
+        Ok(generalize(self.ctx.level(), &cmd_ty))
+    }
+
+    /// Shared by `check_itext`'s `IText::Cmd` and `check_btext`'s
+    /// `BText::Cmd`: check a command application's argument count (exact —
+    /// no optional arguments exist among today's commands, see this
+    /// function's callers) and each argument's type against `params`
+    /// (already resolved to a concrete `MonoType::InlineCmd`/`BlockCmd`'s
+    /// payload by the caller).
+    fn check_cmd_args(
+        &mut self,
+        env: &TypeEnv,
+        name: &str,
+        span: Span,
+        params: &[CmdArgType],
+        args: &[Ast],
+    ) -> Result<(), TypeError> {
+        if params.len() != args.len() {
+            return Err(TypeError::simple(
+                Some(span),
+                format!(
+                    "command '{name}' expects {} argument{}, got {}",
+                    params.len(),
+                    if params.len() == 1 { "" } else { "s" },
+                    args.len()
+                ),
+            ));
+        }
+        for (i, (param, arg)) in params.iter().zip(args.iter()).enumerate() {
+            let targ = self.infer(env, arg)?;
+            self.unify_ctx(
+                &param.ty,
+                &targ,
+                ast_span(arg).or(Some(span)),
+                &format!("argument {} of '{name}'", i + 1),
+            )?;
+        }
+        Ok(())
+    }
+
     // ---- expressions -------------------------------------------------------
 
     fn infer(&mut self, env: &TypeEnv, ast: &Ast) -> Result<MonoType, TypeError> {
@@ -367,7 +522,17 @@ impl Checker {
                 self.ctx.enter_level();
                 let tv = self.infer(env, value)?;
                 self.ctx.leave_level();
-                let scheme = generalize(self.ctx.level(), &tv);
+                let scheme = match command_sigil(name) {
+                    // A `\`/`+`-named binding: either a genuine `let-inline`/
+                    // `let-block` definition (`value` is the
+                    // `Lambda(ctxvar, Lambda(p1, .., body))` chain
+                    // `elaborate_let_inline` builds) or a qualified-name
+                    // alias of one (`value` is a bare `Ast::Var`, from a
+                    // module's own `M.\cmd` re-export or an `open`) — see
+                    // `command_scheme`.
+                    Some(sigil) => self.command_scheme(name, sigil, tv, ast_span(value))?,
+                    None => generalize(self.ctx.level(), &tv),
+                };
                 let inner = env.with(name.clone(), scheme);
                 self.infer(&inner, body)
             }
@@ -741,13 +906,15 @@ impl Checker {
 
     // ---- inline / block / math text -------------------------------------
 
-    /// Check one inline-text element. Milestone commands are "context-
-    /// curried" plain functions (see `prim_types.rs`'s `+p`/`\emph`
-    /// signatures): a command's own type is unified against `context ->
-    /// arg1 -> .. -> argN -> inline-boxes` built from its actual arguments,
-    /// rather than being modeled through `MonoType::InlineCmd` (which real
-    /// stdlib `[...] inline-cmd`-typed commands, arriving in a later phase,
-    /// will use instead).
+    /// Check one inline-text element. A command's own type is a genuine
+    /// `MonoType::InlineCmd(params)` (`[...] inline-cmd`, mirroring v0.0.6's
+    /// `HorzCommandType`) — bound either by `Ast::LetIn`'s command-binding
+    /// rule (`Checker::command_scheme`) or, for the milestone's built-in
+    /// commands, directly by `prim_types::primitive_type`'s `\emph` entry.
+    /// Checking an application here is exact-arity plus one unification per
+    /// argument against `params`, via `check_cmd_args` — there is no longer
+    /// any `context -> arg1 -> .. -> inline-boxes` function shape to unify
+    /// the whole command type against.
     fn check_itext(&mut self, env: &TypeEnv, it: &IText) -> Result<(), TypeError> {
         match it {
             IText::Text(_) => Ok(()),
@@ -763,20 +930,18 @@ impl Checker {
                         ))
                     }
                 };
-                let mut arg_tys = Vec::with_capacity(args.len());
-                for a in args {
-                    arg_tys.push(self.infer(env, a)?);
+                match resolve(&tcmd) {
+                    MonoType::InlineCmd(params) => {
+                        self.check_cmd_args(env, name, *span, &params, args)
+                    }
+                    other => Err(TypeError::simple(
+                        Some(*span),
+                        format!(
+                            "internal error: inline command '{name}' does not have an \
+                             inline-cmd type (found `{other}`)"
+                        ),
+                    )),
                 }
-                let mut doms = vec![t_context()];
-                doms.extend(arg_tys);
-                let expected = arrows(doms, t_inline_boxes());
-                self.unify_ctx(
-                    &tcmd,
-                    &expected,
-                    Some(*span),
-                    &format!("the inline command '{name}'"),
-                )?;
-                Ok(())
             }
             IText::Embed { expr, span } => {
                 let te = self.infer(env, expr)?;
@@ -806,6 +971,8 @@ impl Checker {
         }
     }
 
+    /// Block-text analogue of `check_itext`'s `IText::Cmd` case — see its
+    /// doc comment; a `BText::Cmd`'s type is `MonoType::BlockCmd(params)`.
     fn check_btext(&mut self, env: &TypeEnv, bt: &BText) -> Result<(), TypeError> {
         match bt {
             BText::Cmd { name, span, args } => {
@@ -820,20 +987,18 @@ impl Checker {
                         ))
                     }
                 };
-                let mut arg_tys = Vec::with_capacity(args.len());
-                for a in args {
-                    arg_tys.push(self.infer(env, a)?);
+                match resolve(&tcmd) {
+                    MonoType::BlockCmd(params) => {
+                        self.check_cmd_args(env, name, *span, &params, args)
+                    }
+                    other => Err(TypeError::simple(
+                        Some(*span),
+                        format!(
+                            "internal error: block command '{name}' does not have a \
+                             block-cmd type (found `{other}`)"
+                        ),
+                    )),
                 }
-                let mut doms = vec![t_context()];
-                doms.extend(arg_tys);
-                let expected = arrows(doms, t_block_boxes());
-                self.unify_ctx(
-                    &tcmd,
-                    &expected,
-                    Some(*span),
-                    &format!("the block command '{name}'"),
-                )?;
-                Ok(())
             }
             BText::Embed { expr, span } => {
                 let te = self.infer(env, expr)?;
@@ -883,6 +1048,47 @@ impl Checker {
                 self.infer(env, expr)?;
                 Ok(())
             }
+        }
+    }
+}
+
+/// If `name` (an `Ast::LetIn` binding's name) is command-shaped, the sigil
+/// that says which kind — `'\\'` for an inline command, `'+'` for a block
+/// command — else `None` for an ordinary variable binding.
+///
+/// Looks only at the *local* segment (after the last `.`): `elaborate.rs`'s
+/// module name-mangling (`qualify_key`) spells a module-qualified command as
+/// e.g. `"M.\cmd"`, sigil included on the local part but never on the
+/// `mods.join(".")` prefix (module names are ordinary identifiers, so they
+/// can never themselves start with `\`/`+`) — see `qualify_key`'s doc
+/// comment. A bare (unqualified) name has no `.` at all, so
+/// `rsplit('.').next()` degrades to the whole string, which is exactly what
+/// we want.
+fn command_sigil(name: &str) -> Option<char> {
+    let local = name.rsplit('.').next().unwrap_or(name);
+    match local.chars().next() {
+        Some(c @ ('\\' | '+')) => Some(c),
+        _ => None,
+    }
+}
+
+/// Greedily unwrap a (resolved) `Func` chain into its list of domains and
+/// final codomain: `dom1 -> dom2 -> .. -> domN -> result` becomes
+/// `(vec![dom1, .., domN], result)`. Only ever follows the *codomain* at
+/// each step (never recurses into a domain, even one that is itself a
+/// `Func`) — used by `Checker::command_scheme` to recover a `let-inline`/
+/// `let-block` binding's `context -> arg1 -> .. -> argN -> result` shape
+/// from its ordinarily-inferred function type.
+fn peel_func_chain(ty: MonoType) -> (Vec<MonoType>, MonoType) {
+    let mut doms = Vec::new();
+    let mut cur = ty;
+    loop {
+        match resolve(&cur) {
+            MonoType::Func(dom, cod) => {
+                doms.push(*dom);
+                cur = *cod;
+            }
+            other => return (doms, other),
         }
     }
 }

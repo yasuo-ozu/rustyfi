@@ -1,6 +1,8 @@
 use satysfi_backend::{FontKey, FontMetrics, Length, PureHorzBox, VertBox};
-use satysfi_lang::value::Value;
-use satysfi_lang::{compile_document, elaborate, eval, primitives};
+use satysfi_lang::value::{DocumentValue, Value};
+use satysfi_lang::{compile_document_cst, elaborate, eval, primitives};
+use std::path::Path;
+use std::rc::Rc;
 
 struct Mono;
 
@@ -28,6 +30,35 @@ fn eval_str(src: &str) -> Result<Value, satysfi_lang::CompileError> {
     let mono = Mono;
     let mut interp = eval::Interp::new(&mono);
     Ok(interp.eval(&env, &ast)?)
+}
+
+/// `document`/`+p`/`\emph` are no longer hardcoded Rust natives (phase 4):
+/// they're now ordinary bindings in the real `stdja-mini` stdlib package
+/// (`lib-satysfi/dist/packages/stdja-mini.satyh`). Tests below that need
+/// them compile `src` the same way the multi-file loader's `merge_program`
+/// does — concatenate the package's prelude ahead of `src`'s own — rather
+/// than pulling in the whole loader crate for a single-file test.
+fn compile_document_with_stdlib(
+    src: &str,
+    metrics: &dyn satysfi_backend::FontMetrics,
+) -> Result<Rc<DocumentValue>, satysfi_lang::CompileError> {
+    let lib_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../lib-satysfi/dist/packages/stdja-mini.satyh");
+    let lib_src = std::fs::read_to_string(&lib_path)
+        .unwrap_or_else(|e| panic!("failed to read {}: {e}", lib_path.display()));
+    let lib_file = satysfi_syntax::parse_file(&lib_src)?;
+    let doc_file = satysfi_syntax::parse_file(src)?;
+
+    let mut prelude = lib_file.prelude;
+    prelude.extend(doc_file.prelude);
+    let merged = satysfi_syntax::cst::File {
+        headers: Vec::new(),
+        prelude,
+        in_kw: doc_file.in_kw,
+        body: doc_file.body,
+        eoi: doc_file.eoi,
+    };
+    compile_document_cst(&merged, metrics)
 }
 
 #[test]
@@ -79,7 +110,7 @@ fn inline_text_quotes_until_read() {
 
 #[test]
 fn document_produces_pages_with_lines() {
-    let doc = compile_document(
+    let doc = compile_document_with_stdlib(
         "document (| title = {T} |) '< +p { hello world } >",
         &Mono,
     )
@@ -99,7 +130,7 @@ fn document_produces_pages_with_lines() {
 
 #[test]
 fn emph_switches_font() {
-    let doc = compile_document("document (||) '< +p { a \\emph{b} } >", &Mono).unwrap();
+    let doc = compile_document_with_stdlib("document (||) '< +p { a \\emph{b} } >", &Mono).unwrap();
     let line = &doc.pages[0].lines[0];
     let fonts: Vec<u16> = line
         .contents
@@ -119,7 +150,7 @@ fn long_paragraph_wraps() {
         para.push_str(&format!("word{i} "));
     }
     let src = format!("document (||) '< +p {{ {para} }} >");
-    let doc = compile_document(&src, &Mono).unwrap();
+    let doc = compile_document_with_stdlib(&src, &Mono).unwrap();
     assert!(
         doc.pages[0].lines.len() > 1,
         "80 words at 12pt monospace must wrap"
@@ -129,7 +160,7 @@ fn long_paragraph_wraps() {
 #[test]
 fn eval_matches_block_boxes_shape() {
     // +p through the public primitives: one paragraph = at least one Line.
-    let doc = compile_document("document (||) '< +p { x } +p { y } >", &Mono).unwrap();
+    let doc = compile_document_with_stdlib("document (||) '< +p { x } +p { y } >", &Mono).unwrap();
     assert!(doc.pages[0].lines.len() >= 2);
     let _shape_check: Vec<VertBox> = Vec::new();
 }

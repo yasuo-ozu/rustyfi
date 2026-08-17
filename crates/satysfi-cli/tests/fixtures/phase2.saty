@@ -1,6 +1,7 @@
 % phase-2 fixture: let-rec, match, let-inline (both the context-taking and
 % the lightweight ctx-less forms), an inline-text `#var;` embed, and +p.
-@require: stdjabook
+
+@require: stdja-mini
 
 let-rec count-down n =
   if n == 0 then true else count-down (n - 1)

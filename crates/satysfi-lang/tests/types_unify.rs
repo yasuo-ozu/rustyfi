@@ -367,9 +367,6 @@ fn every_registered_primitive_has_a_type() {
         "read-block",
         "line-break",
         "page-break",
-        "document",
-        "+p",
-        "\\emph",
         "+",
         "-",
         "*",
@@ -406,8 +403,24 @@ fn every_registered_primitive_has_a_type() {
         "string-explode",
         "embed-string",
         "inline-fil",
+        // ---- phase 4, part 1 additions ----
+        "set-font-size",
+        "get-font-size",
+        "set-leading",
+        "set-paragraph-margin",
+        "get-text-width",
+        "get-initial-context",
+        "++",
+        "+++",
+        "inline-nil",
+        "block-nil",
+        "inline-skip",
+        "inline-glue",
+        "block-skip",
+        // ---- phase 4, part 2 addition ----
+        "set-font-key",
     ];
-    assert_eq!(NAMES.len(), 43, "keep this list in sync with primitives.rs's prims! table");
+    assert_eq!(NAMES.len(), 54, "keep this list in sync with primitives.rs's prims! table");
     for name in NAMES {
         assert!(
             prim_types::primitive_type(name).is_some(),

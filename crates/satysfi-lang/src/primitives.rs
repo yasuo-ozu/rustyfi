@@ -2,9 +2,14 @@
 //! ported one `prims!` line at a time; primitives are registered under their
 //! real v0.0.6 names so later stdlib loading finds them.
 //!
-//! Milestone 1 also hardcodes `document`, `+p`, and `\emph` as natives —
-//! placeholders for the real stdlib definitions that phase 4 loads from
-//! `dist/` (at which point they are deleted from here).
+//! Milestone 1 used to hardcode `document`, `+p`, and `\emph` as natives.
+//! Phase 4 deletes them: the real definitions now live in the `stdja-mini`
+//! stdlib package (`lib-satysfi/dist/packages/stdja-mini.satyh`), loaded
+//! through `satysfi-loader` and typechecked/evaluated exactly like any other
+//! `.satyh` library. See that file's header comment for the small set of
+//! primitives it's built from (`get-initial-context`, `page-break`,
+//! `read-block`/`read-inline`, `line-break`, `++`/`inline-fil`, and the new
+//! `set-font-key` below).
 
 use crate::ast::{BText, IText};
 use crate::eval::{eval_error, EvalError, Interp};
@@ -48,9 +53,6 @@ prims! {
     // the paragraph's top/bottom edge is breakable across a page boundary.
     "line-break" (4) => prim_line_break;
     "page-break" (2) => prim_page_break;
-    "document" (2) => prim_document;
-    "+p" (2) => prim_cmd_p;
-    "\\emph" (2) => prim_cmd_emph;
 
     // ---- int arithmetic (vminst.ml: Plus/Minus/Times/Divides/Mod) --------
     "+" (2) => prim_int_add;
@@ -129,6 +131,73 @@ prims! {
     // ---- text embedding (vminst.ml:1707 PrimitiveEmbed: string -> inline-
     // text; the interp body wraps the string as a one-element quoted text) --
     "embed-string" (1) => prim_embed_string;
+
+    // ---- context ops (phase 4, part 1 — inventory for a future .saty
+    // `document`/`+p`/`\emph`) ------------------------------------------
+    //
+    // vminst.ml:1434 `PrimitiveSetFontSize`: `~% (tLN @-> tCTX @-> tCTX)`.
+    "set-font-size" (2) => prim_set_font_size;
+    // vminst.ml:1449 `PrimitiveGetFontSize`: `~% (tCTX @-> tLN)`.
+    "get-font-size" (1) => prim_get_font_size;
+    // vminst.ml:1633 `PrimitiveSetLeading`: `~% (tLN @-> tCTX @-> tCTX)`,
+    // sets `ctx.leading` — the baseline-to-baseline distance, which is
+    // exactly our existing `Context::leading` field. (There is *also* a
+    // `set-min-gap-of-lines`, vminst.ml:1291-1292, which sets a *different*
+    // field, `min_gap_of_lines` — the minimum extra gap between two lines'
+    // bounding boxes, on top of `leading`. We don't model that separate
+    // field, so `set-leading` is the one that matches "baseline distance"
+    // and an existing Context field.)
+    "set-leading" (2) => prim_set_leading;
+    // vminst.ml:1396 `PrimitiveSetParagraphMargin`:
+    // `~% (tLN @-> tLN @-> tCTX @-> tCTX)`. Sets the new `paragraph_top`/
+    // `paragraph_bottom` fields (see context.rs); not wired into any
+    // box-producing primitive yet (a future `+p` would consult them).
+    "set-paragraph-margin" (3) => prim_set_paragraph_margin;
+    // vminst.ml:1648 `PrimitiveGetTextWidth`: `~% (tCTX @-> tLN)`.
+    "get-text-width" (1) => prim_get_text_width;
+    // vminst.ml:1247 `PrimitiveGetInitialContext`:
+    // `~% (tLN @-> tICMD tMATH @-> tCTX)` — a paragraph width and the
+    // *default math command* (the handler used for bare `${...}` math
+    // embedded directly in inline text) to seed `context_main.math_command`
+    // with. This port has no math typesetting at all yet (deferred to
+    // phase 7), so the second argument is accepted (to keep the arity/
+    // signature shape faithful to v0.0.6) and simply ignored; only the
+    // `length` argument feeds `Context::initial`.
+    "get-initial-context" (2) => prim_get_initial_context;
+    // LOCAL, non-upstream primitive: `set-font-key : int -> context ->
+    // context`, sets `Context::font` directly to `FontKey(n)`. v0.0.6 has no
+    // primitive shaped like this at all — real font switching there goes
+    // through `set-font : script -> (string * float * float) -> context ->
+    // context` (choosing a font *by name* per script, vminst.ml's
+    // `PrimitiveSetFont`), which is far richer than this milestone's
+    // base-14-metrics-by-`FontKey` model can support. `set-font-key` is the
+    // minimal faithful-enough stand-in the `stdja-mini` stdlib package
+    // (lib-satysfi/dist/packages/stdja-mini.satyh) needs to implement
+    // `\emph`/`\bold` by switching to the oblique/bold base-14 face
+    // (`FONT_OBLIQUE`/`FONT_BOLD` above) without inventing a whole font-name
+    // resolution layer. Out-of-range keys are accepted as-is (there is no
+    // registry to validate against yet); an unknown `FontKey` simply fails
+    // later, when a font metrics lookup for it comes up empty.
+    "set-font-key" (2) => prim_set_font_key;
+
+    // ---- box combinators (vminst.ml `HorzConcat`/`VertConcat`/
+    // `BackendVertSkip`/`BackendFixedEmpty`/`BackendOuterEmpty`) ----------
+    //
+    // vminst.ml:803 `HorzConcat`: `~% (tIB @-> tIB @-> tIB)`.
+    "++" (2) => prim_inline_concat;
+    // vminst.ml:818 `VertConcat`: `~% (tBB @-> tBB @-> tBB)`.
+    "+++" (2) => prim_block_concat;
+    // vminst.ml:1757 `BackendFixedEmpty`: `~% (tLN @-> tIB)` — a fixed-width
+    // box with no stretch/shrink (`PureHorzBox::FixedEmpty`, hbox.rs).
+    "inline-skip" (1) => prim_inline_skip;
+    // vminst.ml:1771 `BackendOuterEmpty`: `~% (tLN @-> tLN @-> tLN @-> tIB)`,
+    // params `(widnat, widshrink, widstretch)` in that order — exactly the
+    // (natural, shrinkable, stretchable) field order `PureHorzBox::OuterEmpty`
+    // already uses, so this is a direct wrap, no new box variant needed.
+    "inline-glue" (3) => prim_inline_glue;
+    // vminst.ml:1171 `BackendVertSkip`: `~% (tLN @-> tBB)`, builds
+    // `VertFixedBreakable(len)` — our existing `VertBox::Skip(len)`.
+    "block-skip" (1) => prim_block_skip;
 }
 
 /// The base environment `document` programs start in.
@@ -147,6 +216,13 @@ pub fn base_env() -> Env {
         "inline-fil",
         Value::InlineBoxes(vec![HorzBox::Pure(PureHorzBox::OuterFil)]),
     );
+    // `inline-nil`/`block-nil`: no vminst.ml entry (like `inline-fil` above,
+    // these aren't functions — v0.0.6 gets the empty inline-boxes/
+    // block-boxes list for free from the literal `{}`/`<>` surface syntax,
+    // which this port's syntax layer doesn't (yet) produce standalone; these
+    // constants are the equivalent value bound to a name).
+    env.define("inline-nil", Value::InlineBoxes(Vec::new()));
+    env.define("block-nil", Value::BlockBoxes(Vec::new()));
     env
 }
 
@@ -426,51 +502,6 @@ fn prim_page_break(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, 
     Ok(Value::Document(Rc::new(DocumentValue { geometry, pages })))
 }
 
-/// `document : record -> block-text -> document` (milestone-1 native; the
-/// record's `title`/`author` are accepted but not yet rendered).
-fn prim_document(interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
-    let bt = args.pop().unwrap();
-    let record = args.pop().unwrap();
-    if !matches!(record, Value::Record(_)) {
-        return eval_error(format!(
-            "document expects a record, got {}",
-            record.type_name()
-        ));
-    }
-    let geometry = PageGeometry::default();
-    let ctx = Context::initial(geometry.text_width);
-    let (elems, env) = as_block_text(bt)?;
-    let bb = read_block(interp, &ctx, &elems, &env)?;
-    let pages = break_pages(&geometry, ctx.leading, bb);
-    Ok(Value::Document(Rc::new(DocumentValue { geometry, pages })))
-}
-
-/// `+p : context -> inline-text -> block-boxes` — a paragraph: read the
-/// inline text, append `inline-fil`, break into lines.
-fn prim_cmd_p(interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
-    let it = args.pop().unwrap();
-    let ctx = as_context(args.pop().unwrap())?;
-    let (elems, env) = as_inline_text(it)?;
-    let mut boxes = read_inline(interp, &ctx, &elems, &env)?;
-    boxes.push(HorzBox::Pure(PureHorzBox::OuterFil));
-    Ok(Value::BlockBoxes(break_into_lines(&ctx, boxes)))
-}
-
-/// `\emph : context -> inline-text -> inline-boxes` — re-read the argument
-/// in the oblique face.
-fn prim_cmd_emph(interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
-    let it = args.pop().unwrap();
-    let ctx = as_context(args.pop().unwrap())?;
-    let emph_ctx = Context {
-        font: FONT_OBLIQUE,
-        ..ctx
-    };
-    let (elems, env) = as_inline_text(it)?;
-    Ok(Value::InlineBoxes(read_inline(
-        interp, &emph_ctx, &elems, &env,
-    )?))
-}
-
 // ---- int arithmetic -------------------------------------------------------
 
 fn prim_int_add(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
@@ -742,4 +773,136 @@ fn prim_embed_string(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value
         elems: Rc::new(vec![IText::Text(s)]),
         env: Env::root(),
     })
+}
+
+// ---- context ops ------------------------------------------------------------
+
+/// `set-font-size : length -> context -> context` (vminst.ml
+/// `PrimitiveSetFontSize`).
+fn prim_set_font_size(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+    let ctx = as_context(args.pop().unwrap())?;
+    let size = as_length(args.pop().unwrap())?;
+    Ok(Value::Context(Box::new(Context {
+        font_size: size,
+        ..ctx
+    })))
+}
+
+/// `get-font-size : context -> length` (vminst.ml `PrimitiveGetFontSize`).
+fn prim_get_font_size(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+    let ctx = as_context(args.pop().unwrap())?;
+    Ok(Value::Length(ctx.font_size))
+}
+
+/// `set-leading : length -> context -> context` (vminst.ml
+/// `PrimitiveSetLeading`; see the `prims!` table comment for why this is
+/// the baseline-distance setter and not `set-min-gap-of-lines`).
+fn prim_set_leading(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+    let ctx = as_context(args.pop().unwrap())?;
+    let leading = as_length(args.pop().unwrap())?;
+    Ok(Value::Context(Box::new(Context { leading, ..ctx })))
+}
+
+/// `set-paragraph-margin : length -> length -> context -> context`
+/// (vminst.ml `PrimitiveSetParagraphMargin`).
+fn prim_set_paragraph_margin(
+    _interp: &mut Interp,
+    mut args: Vec<Value>,
+) -> Result<Value, EvalError> {
+    let ctx = as_context(args.pop().unwrap())?;
+    let bottom = as_length(args.pop().unwrap())?;
+    let top = as_length(args.pop().unwrap())?;
+    Ok(Value::Context(Box::new(Context {
+        paragraph_top: top,
+        paragraph_bottom: bottom,
+        ..ctx
+    })))
+}
+
+/// `get-text-width : context -> length` (vminst.ml `PrimitiveGetTextWidth`).
+fn prim_get_text_width(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+    let ctx = as_context(args.pop().unwrap())?;
+    Ok(Value::Length(ctx.paragraph_width))
+}
+
+/// `get-initial-context : length -> <second argument, ignored> -> context`
+/// (vminst.ml `PrimitiveGetInitialContext`) — see the `prims!` table
+/// comment: the second argument (v0.0.6's default math command) is
+/// accepted but not used, since this port has no math typesetting yet. Its
+/// *value* is simply discarded at runtime regardless of what
+/// `prim_types.rs` declares its type to be (see that module's comment on
+/// this same primitive for why the declared type was relaxed to `unit`).
+fn prim_get_initial_context(
+    _interp: &mut Interp,
+    mut args: Vec<Value>,
+) -> Result<Value, EvalError> {
+    let _ignored = args.pop().unwrap();
+    let width = as_length(args.pop().unwrap())?;
+    Ok(Value::Context(Box::new(Context::initial(width))))
+}
+
+/// `set-font-key : int -> context -> context` — LOCAL, non-upstream
+/// primitive; see the `prims!` table comment on `"set-font-key"` for why it
+/// exists. Sets `Context::font` directly to `FontKey(n)`.
+fn prim_set_font_key(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+    let ctx = as_context(args.pop().unwrap())?;
+    let key = as_int(args.pop().unwrap())?;
+    if key < 0 || key > i64::from(u16::MAX) {
+        return eval_error(format!("set-font-key: font key {key} is out of range"));
+    }
+    Ok(Value::Context(Box::new(Context {
+        font: FontKey(key as u16),
+        ..ctx
+    })))
+}
+
+// ---- box combinators ---------------------------------------------------------
+
+/// `++ : inline-boxes -> inline-boxes -> inline-boxes` (vminst.ml
+/// `HorzConcat`).
+fn prim_inline_concat(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+    let mut b = as_inline_boxes(args.pop().unwrap())?;
+    let mut a = as_inline_boxes(args.pop().unwrap())?;
+    a.append(&mut b);
+    Ok(Value::InlineBoxes(a))
+}
+
+/// `+++ : block-boxes -> block-boxes -> block-boxes` (vminst.ml
+/// `VertConcat`).
+fn prim_block_concat(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+    let mut b = as_block_boxes(args.pop().unwrap())?;
+    let mut a = as_block_boxes(args.pop().unwrap())?;
+    a.append(&mut b);
+    Ok(Value::BlockBoxes(a))
+}
+
+/// `inline-skip : length -> inline-boxes` (vminst.ml `BackendFixedEmpty`).
+fn prim_inline_skip(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+    let width = as_length(args.pop().unwrap())?;
+    Ok(Value::InlineBoxes(vec![HorzBox::Pure(
+        PureHorzBox::FixedEmpty { width },
+    )]))
+}
+
+/// `inline-glue : length -> length -> length -> inline-boxes` (vminst.ml
+/// `BackendOuterEmpty`; params `(widnat, widshrink, widstretch)`, i.e.
+/// natural, then shrink, then stretch — the same order `OuterEmpty`'s
+/// fields are already declared in).
+fn prim_inline_glue(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+    let stretchable = as_length(args.pop().unwrap())?;
+    let shrinkable = as_length(args.pop().unwrap())?;
+    let natural = as_length(args.pop().unwrap())?;
+    Ok(Value::InlineBoxes(vec![HorzBox::Pure(
+        PureHorzBox::OuterEmpty {
+            natural,
+            shrinkable,
+            stretchable,
+        },
+    )]))
+}
+
+/// `block-skip : length -> block-boxes` (vminst.ml `BackendVertSkip`).
+fn prim_block_skip(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+    let len = as_length(args.pop().unwrap())?;
+    Ok(Value::BlockBoxes(vec![VertBox::Skip(len)]))
 }

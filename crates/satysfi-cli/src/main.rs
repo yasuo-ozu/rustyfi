@@ -14,7 +14,11 @@ struct Args {
     output: Option<PathBuf>,
 
     /// Library root for `@require:` resolution (packages under
-    /// `<lib-root>/dist/packages/`). Falls back to $SATYSFI_LIB_ROOT.
+    /// `<lib-root>/dist/packages/`). Falls back to $SATYSFI_LIB_ROOT, then
+    /// to the nearest `lib-satysfi/` directory found by searching upward
+    /// from the input file's own directory (so running this from anywhere
+    /// inside a checkout that has a top-level `lib-satysfi/`, e.g. this
+    /// repo, needs no flag or environment variable at all).
     #[arg(long)]
     lib_root: Option<PathBuf>,
 }
@@ -26,7 +30,8 @@ fn main() -> anyhow::Result<()> {
         .unwrap_or_else(|| args.input.with_extension("pdf"));
     let lib_root = args
         .lib_root
-        .or_else(|| std::env::var_os("SATYSFI_LIB_ROOT").map(PathBuf::from));
+        .or_else(|| std::env::var_os("SATYSFI_LIB_ROOT").map(PathBuf::from))
+        .or_else(|| discover_lib_root(&args.input));
 
     let program = satysfi_loader::load(&args.input, &satysfi_loader::LoadOptions { lib_root })
         .map_err(|e| anyhow::anyhow!("{e}"))?;
@@ -48,6 +53,28 @@ fn main() -> anyhow::Result<()> {
         line_count
     );
     Ok(())
+}
+
+/// The CLI's default `--lib-root` rule (used only when neither `--lib-root`
+/// nor `$SATYSFI_LIB_ROOT` is given): starting at `input`'s own directory,
+/// walk upward through its ancestors looking for a `lib-satysfi/`
+/// subdirectory, returning the first one found. This is the simplest rule
+/// that makes `satysfi-rust some/nested/doc.saty` "just work" from anywhere
+/// inside a checkout that has one top-level `lib-satysfi/` (this repo
+/// included), with no flag or environment variable needed, while still
+/// resolving relative to the *document*, not the current working directory
+/// (so it behaves the same regardless of where the command is run from).
+fn discover_lib_root(input: &std::path::Path) -> Option<PathBuf> {
+    let mut dir = input.parent()?.to_path_buf();
+    loop {
+        let candidate = dir.join("lib-satysfi");
+        if candidate.is_dir() {
+            return Some(candidate);
+        }
+        if !dir.pop() {
+            return None;
+        }
+    }
 }
 
 /// Concatenate the dependency-ordered library preludes ahead of the entry

@@ -5,8 +5,10 @@
 //! (both the context-taking and "lightweight" forms).
 
 use satysfi_backend::{FontKey, FontMetrics, Length, PureHorzBox};
-use satysfi_lang::value::Value;
-use satysfi_lang::{compile_document, elaborate, eval, primitives};
+use satysfi_lang::value::{DocumentValue, Value};
+use satysfi_lang::{compile_document_cst, elaborate, eval, primitives};
+use std::path::Path;
+use std::rc::Rc;
 
 struct Mono;
 
@@ -110,8 +112,37 @@ fn tuple_construction_from_source() {
 
 // ---- inline-text embeds through a document ---------------------------------
 
+/// `document`/`+p`/`\emph` are no longer hardcoded Rust natives (phase 4):
+/// they're now ordinary bindings in the real `stdja-mini` stdlib package
+/// (`lib-satysfi/dist/packages/stdja-mini.satyh`). Compile `src` the same
+/// way the multi-file loader's `merge_program` does — concatenate the
+/// package's prelude ahead of `src`'s own — rather than pulling in the
+/// whole loader crate for a single-file test.
+fn compile_document_with_stdlib(
+    src: &str,
+    metrics: &dyn satysfi_backend::FontMetrics,
+) -> Result<Rc<DocumentValue>, satysfi_lang::CompileError> {
+    let lib_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../lib-satysfi/dist/packages/stdja-mini.satyh");
+    let lib_src = std::fs::read_to_string(&lib_path)
+        .unwrap_or_else(|e| panic!("failed to read {}: {e}", lib_path.display()));
+    let lib_file = satysfi_syntax::parse_file(&lib_src)?;
+    let doc_file = satysfi_syntax::parse_file(src)?;
+
+    let mut prelude = lib_file.prelude;
+    prelude.extend(doc_file.prelude);
+    let merged = satysfi_syntax::cst::File {
+        headers: Vec::new(),
+        prelude,
+        in_kw: doc_file.in_kw,
+        body: doc_file.body,
+        eoi: doc_file.eoi,
+    };
+    compile_document_cst(&merged, metrics)
+}
+
 fn document_words(src: &str) -> Vec<String> {
-    let doc = compile_document(src, &Mono).unwrap();
+    let doc = compile_document_with_stdlib(src, &Mono).unwrap();
     doc.pages[0]
         .lines
         .iter()

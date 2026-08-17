@@ -28,6 +28,10 @@ pub enum PureHorzBox {
     },
     /// Infinitely stretchable glue (`inline-fil`).
     OuterFil,
+    /// A fixed-width empty box with no stretch/shrink (`inline-skip`;
+    /// v0.0.6: `PHSFixedEmpty`). Unlike `OuterEmpty` this is never a legal
+    /// line-break point (see `is_glue`).
+    FixedEmpty { width: Length },
 }
 
 impl PureHorzBox {
@@ -36,6 +40,7 @@ impl PureHorzBox {
             PureHorzBox::InnerString { width, .. } => *width,
             PureHorzBox::OuterEmpty { natural, .. } => *natural,
             PureHorzBox::OuterFil => Length::ZERO,
+            PureHorzBox::FixedEmpty { width } => *width,
         }
     }
 

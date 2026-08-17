@@ -1,3 +1,4 @@
+@require: stdja-mini
 @import: helpers
 
 let count-str = embed-string (arabic (twice 21))

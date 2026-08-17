@@ -67,8 +67,16 @@ Requires a checkout of `syan2` at `../syan2` (path dependency).
    modules, multi-file loading); remaining: command macros (`\cmd@`),
    optional args at runtime (parse-and-reject today), `(| e with |)` inside
    signatures, `Mod.(…)`, tabular `|` separators, stages
-3. Real typechecker (HM + rows + command types, behind the elaborate seam)
+3. ◕ Real typechecker — HM inference (Rémy levels, let-polymorphism, value
+   restriction), row-polymorphic records, user variants, command-argument
+   checking inside quoted text; a mandatory pipeline stage. Remaining:
+   module signature enforcement, math command types, exhaustiveness, stages
 4. Full primitive inventory + loading the real `dist/` stdlib
-5. Real fonts (ttf-parser + subsetter, CID/Type0) and Unicode line breaking
-6. Knuth–Plass line breaking, full page model, graphics, hyphenation
+5. ◔ Real fonts — TrueType metrics + CID/Type0 embedding with ToUnicode
+   done (`TtfFontStore`/`render_pdf_ttf`; CLI still defaults to base-14);
+   remaining: CLI font selection, subsetting, shaping/kerning, CFF,
+   Unicode line-break classes
+6. ◔ Paragraph/page model — Knuth–Plass line breaking done (drop-in DP,
+   badness/demerits per lineBreak.ml); remaining: discretionaries/
+   hyphenation, full page model, graphics
 7. Math mode; 8. images/annotations/cross-refs; 9. polish/perf

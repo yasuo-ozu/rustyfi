@@ -1,5 +1,8 @@
-% milestone-1 fixture: headers, a top-level let, document/+p/\emph
-@require: stdjabook
+% milestone-1 fixture: a top-level let, document/+p/\emph
+% (phase 4: document/+p/\emph now come from the real stdja-mini stdlib
+% package, resolved through @require: by the multi-file loader)
+
+@require: stdja-mini
 
 let author-name = `yasuo`
 in

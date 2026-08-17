@@ -5,17 +5,20 @@
 //! for the handful of names vminst.ml doesn't define directly (`::`, `!`,
 //! the comparison trio derived in `general_table`).
 //!
-//! The milestone-only natives (`document`, `+p`, `\emph`, our simplified
-//! `page-break`) have no vminst.ml entry at all — they get local
-//! signatures documented at their definitions, describing what they
-//! actually do in *this* port. Phase 4's stdlib loading is expected to
-//! delete these once the real `.saty` definitions take over.
+//! Milestone 1 used to hardcode local signatures here for `document`, `+p`,
+//! and `\emph`. Phase 4 deleted them along with their `primitives.rs`
+//! bodies: the real definitions now live in the `stdja-mini` stdlib package
+//! (`lib-satysfi/dist/packages/stdja-mini.satyh`), built entirely out of
+//! *other* primitives below and typechecked for real, like any other
+//! `.satyh` library. Our simplified `page-break` still has no vminst.ml
+//! entry at all — it keeps its own local signature, documented at its entry
+//! below.
 //!
 //! Also provides [`builtin_variants`], the seed set of variant type
 //! declarations ([`VariantDecl`]) primitives.cppo.ml registers before any
 //! user code runs.
 
-use crate::types::{self, BaseType, CmdArgType, MonoType, PolyType, Row, TyVarRef};
+use crate::types::{self, BaseType, CmdArgType, MonoType, PolyType, TyVarRef};
 use std::collections::HashMap;
 
 // ============================================================================
@@ -46,6 +49,10 @@ pub fn t_inline_text() -> MonoType {
 }
 pub fn t_block_text() -> MonoType {
     MonoType::Base(BaseType::BlockText)
+}
+/// `math` (vminst.ml's `tMATH`).
+pub fn t_math_text() -> MonoType {
+    MonoType::Base(BaseType::MathText)
 }
 pub fn t_inline_boxes() -> MonoType {
     MonoType::Base(BaseType::InlineBoxes)
@@ -88,6 +95,13 @@ pub fn product(ts: Vec<MonoType>) -> MonoType {
     MonoType::Product(ts)
 }
 
+/// `[...] inline-cmd` (vminst.ml's `tICMD ty` = `HorzCommandType([Mandatory
+/// ty])`: an inline command taking exactly one mandatory argument of type
+/// `ty`).
+pub fn inline_cmd(args: Vec<CmdArgType>) -> MonoType {
+    MonoType::InlineCmd(args)
+}
+
 /// `mandatory` command-argument entry.
 pub fn mandatory(ty: MonoType) -> CmdArgType {
     CmdArgType { optional: false, ty }
@@ -114,15 +128,6 @@ pub fn poly1<F: FnOnce(MonoType) -> MonoType>(f: F) -> PolyType {
     let v = types::new_ty_var(0);
     let body = f(MonoType::Var(v.clone()));
     PolyType::from_vars(vec![v], Vec::new(), body)
-}
-
-/// A type scheme quantified over one fresh *open row* variable, used for
-/// `document`'s "any record" argument (see its definition below — there is
-/// no vminst.ml/primitives.cppo.ml counterpart to transcribe this from).
-fn poly_open_record<F: FnOnce(MonoType) -> MonoType>(f: F) -> PolyType {
-    let rv = types::new_row_var(0);
-    let body = f(MonoType::Record(Row::Var(rv.clone())));
-    PolyType::from_vars(Vec::new(), vec![rv], body)
 }
 
 // ============================================================================
@@ -159,20 +164,13 @@ pub fn primitive_type(name: &str) -> Option<PolyType> {
         // `PageGeometry::default()` and has no header/footer callbacks, so
         // it's typed as exactly what it does at runtime.
         "page-break" => poly0(arrow(t_context(), arrow(t_block_boxes(), t_document()))),
-        // `document : (| .. |) -> block-text -> document` — a LOCAL
-        // signature: `prim_document` (primitives.rs) accepts any record
-        // (it currently ignores its fields entirely) and a block-text
-        // body. The open row variable expresses "any record, with no
-        // required fields", the loosest possible constraint a `Row` can
-        // express.
-        "document" => poly_open_record(|rec_ty| arrow(rec_ty, arrow(t_block_text(), t_document()))),
-        // `+p : context -> inline-text -> block-boxes` — a LOCAL signature
-        // for the milestone's built-in paragraph command; phase 4 replaces
-        // this with the real stdlib `+p`.
-        "+p" => poly0(arrow(t_context(), arrow(t_inline_text(), t_block_boxes()))),
-        // `\emph : context -> inline-text -> inline-boxes` — a LOCAL
-        // signature for the milestone's built-in emphasis command.
-        "\\emph" => poly0(arrow(t_context(), arrow(t_inline_text(), t_inline_boxes()))),
+        // `document`, `+p`, and `\emph` used to have LOCAL signatures here
+        // (milestone-1 natives); phase 4 deleted them along with their
+        // `primitives.rs` bodies — see this module's doc comment. They are
+        // now ordinary `stdja-mini` bindings (a plain `let`, a
+        // `let-block`, and a `let-inline` respectively), typechecked by the
+        // normal rules from the primitives below, with no bespoke entry
+        // needed in this table at all.
 
         // ---- int arithmetic ----
         // vminst.ml:2537 `Plus`: `~% (tI @-> tI @-> tI)`.
@@ -272,6 +270,78 @@ pub fn primitive_type(name: &str) -> Option<PolyType> {
         // ---- text embedding ----
         // vminst.ml:1706 `PrimitiveEmbed`: `~% (tS @-> tIT)`.
         "embed-string" => poly0(arrow(t_string(), t_inline_text())),
+
+        // ---- context ops (phase 4, part 1) ----
+        // vminst.ml:1434 `PrimitiveSetFontSize`: `~% (tLN @-> tCTX @-> tCTX)`.
+        "set-font-size" => poly0(arrow(t_length(), arrow(t_context(), t_context()))),
+        // vminst.ml:1449 `PrimitiveGetFontSize`: `~% (tCTX @-> tLN)`.
+        "get-font-size" => poly0(arrow(t_context(), t_length())),
+        // vminst.ml:1633 `PrimitiveSetLeading`: `~% (tLN @-> tCTX @-> tCTX)`
+        // (see primitives.rs's `prims!` table comment on why this, and not
+        // `set-min-gap-of-lines`, is the baseline-distance setter).
+        "set-leading" => poly0(arrow(t_length(), arrow(t_context(), t_context()))),
+        // vminst.ml:1396 `PrimitiveSetParagraphMargin`:
+        // `~% (tLN @-> tLN @-> tCTX @-> tCTX)`.
+        "set-paragraph-margin" => poly0(arrows(
+            vec![t_length(), t_length(), t_context()],
+            t_context(),
+        )),
+        // vminst.ml:1648 `PrimitiveGetTextWidth`: `~% (tCTX @-> tLN)`.
+        "get-text-width" => poly0(arrow(t_context(), t_length())),
+        // vminst.ml:1247 `PrimitiveGetInitialContext`:
+        // `~% (tLN @-> tICMD tMATH @-> tCTX)`. Faithfully, `tICMD tMATH`
+        // would be `HorzCommandType` (our `MonoType::InlineCmd`) with
+        // exactly one mandatory `math` (`BaseType::MathText`) argument — NOT
+        // `MathCmd` (that former is `MathCommandType`, a *different*
+        // v0.0.6 type used for math-mode commands like `\sqrt`, unrelated
+        // to this argument).
+        //
+        // DEVIATION (phase 4): that faithful second-argument type is a REAL
+        // dead end for the `stdja-mini` stdlib package (dist/packages/
+        // stdja-mini.satyh), which now calls this primitive directly from
+        // ordinary `.satyh` source to build `document`'s initial context.
+        // This port's surface grammar has no way to *construct* a value of
+        // type `[math] inline-cmd` in expression position at all: command
+        // names (`\cmd`) only ever appear as `IText::Cmd`/`BText::Cmd`/
+        // `MathElem::Cmd` heads inside quoted text (see `cst.rs`'s
+        // `Atomic`), never as a plain referenceable value, and there is no
+        // `let-math`-style top-level form to define a math-mode command
+        // binding either — so nothing in-language can ever type-check as
+        // this argument. Since math typesetting doesn't exist yet in this
+        // port (the runtime, `prim_get_initial_context` in primitives.rs,
+        // already ignores the value completely), the second argument's
+        // *declared* type is relaxed here from `[math] inline-cmd` to
+        // `unit`: the simplest type an in-language value can actually
+        // inhabit (the literal `()`), keeping the primitive's arity/shape
+        // faithful to v0.0.6 while making it callable. `stdja-mini.satyh`
+        // passes `()` for this argument.
+        "get-initial-context" => poly0(arrow(t_length(), arrow(t_unit(), t_context()))),
+
+        // ---- context ops, continued (phase 4, part 2 — a LOCAL,
+        // non-upstream primitive; see primitives.rs's `prims!` table
+        // comment on `"set-font-key"` for why it exists) --------------------
+        "set-font-key" => poly0(arrow(t_int(), arrow(t_context(), t_context()))),
+
+        // ---- box combinators ----
+        // vminst.ml:803 `HorzConcat`: `~% (tIB @-> tIB @-> tIB)`.
+        "++" => poly0(arrows(vec![t_inline_boxes(), t_inline_boxes()], t_inline_boxes())),
+        // vminst.ml:818 `VertConcat`: `~% (tBB @-> tBB @-> tBB)`.
+        "+++" => poly0(arrows(vec![t_block_boxes(), t_block_boxes()], t_block_boxes())),
+        // No vminst.ml entry — see `base_env`'s comment on `inline-nil`/
+        // `block-nil` in primitives.rs (the empty-boxes value that v0.0.6
+        // gets for free from `{}`/`<>` literal syntax).
+        "inline-nil" => poly0(t_inline_boxes()),
+        "block-nil" => poly0(t_block_boxes()),
+        // vminst.ml:1757 `BackendFixedEmpty`: `~% (tLN @-> tIB)`.
+        "inline-skip" => poly0(arrow(t_length(), t_inline_boxes())),
+        // vminst.ml:1771 `BackendOuterEmpty`:
+        // `~% (tLN @-> tLN @-> tLN @-> tIB)`.
+        "inline-glue" => poly0(arrows(
+            vec![t_length(), t_length(), t_length()],
+            t_inline_boxes(),
+        )),
+        // vminst.ml:1171 `BackendVertSkip`: `~% (tLN @-> tBB)`.
+        "block-skip" => poly0(arrow(t_length(), t_block_boxes())),
 
         // ---- inline-fil ----
         // Not a primitive *function* at all (`base_env` binds it directly

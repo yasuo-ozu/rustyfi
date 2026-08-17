@@ -11,6 +11,17 @@ pub struct Context {
     pub leading: Length,
     /// Wrap width for paragraphs.
     pub paragraph_width: Length,
+    /// Extra vertical skip inserted above a paragraph
+    /// (`set-paragraph-margin`'s first argument; v0.0.6
+    /// `context_main.paragraph_top`, horzBox.ml:227). Not wired into any
+    /// box-producing primitive yet — a future `+p` is expected to turn this
+    /// into a leading `VertBox::Skip`.
+    pub paragraph_top: Length,
+    /// Extra vertical skip inserted below a paragraph
+    /// (`set-paragraph-margin`'s second argument; v0.0.6
+    /// `context_main.paragraph_bottom`, horzBox.ml:228). Same "not wired in
+    /// yet" status as `paragraph_top`.
+    pub paragraph_bottom: Length,
 }
 
 impl Context {
@@ -21,6 +32,10 @@ impl Context {
             font_size: Length::pt(12.0),
             leading: Length::pt(18.0),
             paragraph_width,
+            // v0.0.6's `get_pdf_mode_initial_context`
+            // (primitives.cppo.ml:514-515) defaults both to 18pt.
+            paragraph_top: Length::pt(18.0),
+            paragraph_bottom: Length::pt(18.0),
         }
     }
 }

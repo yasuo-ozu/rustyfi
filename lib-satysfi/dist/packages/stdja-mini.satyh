@@ -1,0 +1,51 @@
+% stdja-mini.satyh — phase 4 proof-of-concept stdlib package, loaded
+% through the multi-file loader (`@require: stdja-mini`), replacing the
+% milestone-1 hardcoded Rust natives `document`, `+p`, and `\emph`.
+% Intentionally tiny — not a port of v0.0.6's dist/packages/stdjabook.satyh
+% (far richer: page headers/footers, section commands, table of contents,
+% itemize rendering, ...). Path mirrors v0.0.6's own layout
+% (dist/packages/<name>.satyh) so a real richer package could later drop
+% in beside it the same way.
+%
+% Deviations from a "real" v0.0.6-style stdjabook.satyh, documented here:
+%
+%  - `document`'s record argument (title/author/...) is accepted but never
+%    rendered, matching exactly what the milestone-1 Rust native used to
+%    do. Since no field of the record is ever read, its parameter's type
+%    stays a fully unconstrained type variable, which unifies against any
+%    record shape a caller happens to pass (e.g. `(| title = ..|)` or
+%    `(| title = ..; author = ..|)` — see the fixtures under
+%    crates/satysfi-cli/tests/fixtures/).
+%
+%  - The page text width is hardcoded to 160mm, matching
+%    `PageGeometry::default()`'s own A4-with-25mm-margins text width
+%    (satysfi-backend's `context.rs`) — `page-break` (called below) always
+%    uses that same default geometry internally regardless of what
+%    context it's given (see primitives.rs's `prim_page_break`), so there
+%    is no live page-size parameter to thread this through instead.
+%
+%  - `get-initial-context`'s second argument (upstream: the default
+%    math-mode command) has no way to be constructed in this port's
+%    surface grammar yet (no math commands, no first-class command
+%    values) — its registered primitive type was relaxed from `[math]
+%    inline-cmd` to `unit` for exactly this reason (see prim_types.rs's
+%    comment on `"get-initial-context"`); `()` is passed here.
+%
+%  - `\emph`/`\bold` switch faces via `set-font-key`, a LOCAL
+%    (non-upstream) primitive (primitives.rs) that sets the context's
+%    `FontKey` directly to the milestone's base-14 oblique/bold face
+%    (keys 2 and 1 respectively), standing in for upstream's much richer
+%    `set-font : script -> (string * float * float) -> context -> context`.
+
+let document record bt =
+  let ctx = get-initial-context 160mm () in
+  page-break ctx (read-block ctx bt)
+
+let-block ctx +p it =
+  line-break true true ctx (read-inline ctx it ++ inline-fil)
+
+let-inline ctx \emph it =
+  read-inline (set-font-key 2 ctx) it
+
+let-inline ctx \bold it =
+  read-inline (set-font-key 1 ctx) it

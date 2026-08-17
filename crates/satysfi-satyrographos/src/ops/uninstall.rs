@@ -1,0 +1,89 @@
+//! `uninstall` (plan §4.2, §6): remove *only* the files a receipt lists,
+//! then the receipt, then now-empty parent directories — never a recursive
+//! `rm -rf`, so hand-added files under the package's directory survive.
+
+use std::path::{Path, PathBuf};
+
+use crate::error::Error;
+use crate::{receipts, roots, stage};
+
+/// Shared root-selection flags for uninstall/list/status (plan §7.2).
+#[derive(Debug, Default, Clone)]
+pub struct RootOptions {
+    pub lib_root: Option<PathBuf>,
+    pub dest: Option<PathBuf>,
+}
+
+/// The `dist/<category>` directories that pruning must never remove (plan
+/// §6): a package's *own* directory (`dist/packages/<name>/`) may go once
+/// empty, but the shared category roots stay.
+const PRUNE_STOP_DEPTH: usize = 3;
+
+/// Uninstall the package named `name`.
+pub fn uninstall(name: &str, opts: &RootOptions) -> Result<(), Error> {
+    let root = roots::resolve_root(opts.lib_root.as_deref(), opts.dest.as_deref())?;
+
+    // No receipt → `NotInstalled` (CLI exit 4). This is the only source of
+    // truth for what we may delete.
+    let receipt = receipts::read(&root, name)?;
+
+    let mut dirs_to_prune: Vec<PathBuf> = Vec::new();
+    for file in &receipt.files {
+        let path = stage::safe_join(&root, &file.dst)?;
+        match std::fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(Error::io(&path, e)),
+        }
+        if let Some(parent) = path.parent() {
+            dirs_to_prune.push(parent.to_path_buf());
+        }
+    }
+
+    // Remove now-empty parent directories, deepest first, stopping before
+    // the shared `dist/<category>/` roots.
+    dirs_to_prune.sort_by_key(|p| std::cmp::Reverse(p.components().count()));
+    dirs_to_prune.dedup();
+    for dir in dirs_to_prune {
+        prune_empty_upward(&root, &dir)?;
+    }
+
+    receipts::remove(&root, name)?;
+    Ok(())
+}
+
+/// Remove `dir` and its ancestors while they are empty, stopping before any
+/// directory whose depth below `root` is less than [`PRUNE_STOP_DEPTH`]
+/// (i.e. keep `dist/`, `dist/packages/`, `dist/fonts/`, …).
+fn prune_empty_upward(root: &Path, dir: &Path) -> Result<(), Error> {
+    let mut cur = dir.to_path_buf();
+    loop {
+        // Outside the root, or shallower than the shared `dist/<category>/`
+        // roots: never touch.
+        let Ok(rel) = cur.strip_prefix(root) else {
+            break;
+        };
+        if rel.components().count() < PRUNE_STOP_DEPTH {
+            break;
+        }
+        if !is_empty_dir(&cur) {
+            break;
+        }
+        match std::fs::remove_dir(&cur) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(Error::io(&cur, e)),
+        }
+        if !cur.pop() {
+            break;
+        }
+    }
+    Ok(())
+}
+
+fn is_empty_dir(dir: &Path) -> bool {
+    match std::fs::read_dir(dir) {
+        Ok(mut entries) => entries.next().is_none(),
+        Err(_) => false,
+    }
+}

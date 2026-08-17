@@ -4,6 +4,7 @@
 
 use crate::span::Span;
 use crate::token::{Atom, Token};
+use newer_type::implement;
 use syan::error::ParseError;
 use syan::nested::group::EmptyGroup;
 use syan::parse::unparse::Emitter;
@@ -509,9 +510,11 @@ macro_rules! define_groups {
     ($($(#[$doc:meta])* $name:ident: $open:ident, $close:ident;)*) => {
         $(
             $(#[$doc])*
+            #[implement]
             #[derive(Clone, Debug, PartialEq)]
             pub struct $name<T> {
                 pub open: $open,
+                #[implement(newer_type_std::ops::Deref)]
                 pub slot: T,
                 pub close: $close,
             }
@@ -563,13 +566,6 @@ macro_rules! define_groups {
                         group.slot,
                         $name { open: group.open, slot: (), close: group.close },
                     )
-                }
-            }
-
-            impl<T> std::ops::Deref for $name<T> {
-                type Target = T;
-                fn deref(&self) -> &T {
-                    &self.slot
                 }
             }
         )*

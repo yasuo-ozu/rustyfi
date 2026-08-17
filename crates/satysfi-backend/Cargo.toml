@@ -7,3 +7,5 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+newer-type.workspace = true
+newer-type-std.workspace = true

@@ -9,3 +9,5 @@ authors.workspace = true
 [dependencies]
 syan.workspace = true
 thiserror.workspace = true
+newer-type.workspace = true
+newer-type-std.workspace = true

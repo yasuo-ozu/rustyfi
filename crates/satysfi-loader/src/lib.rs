@@ -26,14 +26,29 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 pub use error::LoadError;
+pub use satysfi_syntax::SatysfiVersion;
 
 /// Options controlling header resolution.
+///
+/// Implements [`Default`] (rather than requiring every field to be named at
+/// each construction site) precisely so that adding `version` here did not
+/// force edits to every existing `LoadOptions { lib_root: ... }` call site —
+/// they now read `LoadOptions { lib_root: ..., ..Default::default() }`.
+#[derive(Default)]
 pub struct LoadOptions {
     /// Root used to resolve `@require: name` (searched as
-    /// `<lib_root>/dist/packages/name.{satyh,satyg}`, falling back to
-    /// `<lib_root>/name.{satyh,satyg}`). `None` means there is no package
-    /// root configured, so any `@require:` header fails to resolve.
+    /// `<lib_root>/dist/packages/name.{satyh,satyg}`, then
+    /// `<lib_root>/name.{satyh,satyg}`, then the nested
+    /// `<lib_root>/dist/packages/name/name.{satyh,satyg}` layout the
+    /// Satyrographos installer produces — see `resolve::resolve_require`).
+    /// `None` means there is no package root configured, so any `@require:`
+    /// header fails to resolve.
     pub lib_root: Option<PathBuf>,
+    /// The SATySFi language version the input is expected to conform to.
+    /// Defaults to [`SatysfiVersion::DEFAULT`] (0.0.6, the only version this
+    /// loader implements). [`load`] rejects any version for which
+    /// [`SatysfiVersion::is_implemented`] is false before doing any work.
+    pub version: SatysfiVersion,
 }
 
 /// One parsed file in a loaded program.
@@ -56,6 +71,13 @@ pub struct LoadedProgram {
 /// Load `entry` (a `.saty` document) and its full transitive `@require:` /
 /// `@import:` dependency graph.
 pub fn load(entry: &Path, opts: &LoadOptions) -> Result<LoadedProgram, LoadError> {
+    if !opts.version.is_implemented() {
+        return Err(LoadError::UnsupportedVersion {
+            requested: opts.version,
+            supported: SatysfiVersion::supported().to_vec(),
+        });
+    }
+
     let entry_canon = canonicalize(entry)?;
 
     let mut next_id: u32 = 0;

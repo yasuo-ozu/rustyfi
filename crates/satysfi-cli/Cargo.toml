@@ -10,11 +10,19 @@ authors.workspace = true
 name = "satysfi-rust"
 path = "src/main.rs"
 
+[features]
+# Forward the registry HTTP client feature to satysfi-satyrographos (plan §8).
+# Off by default so the default build/test run stays offline; enable for a
+# release binary that fetches `http(s)://` registry tarballs.
+default = []
+http = ["satysfi-satyrographos/http"]
+
 [dependencies]
 satysfi-syntax.workspace = true
 satysfi-backend.workspace = true
 satysfi-lang.workspace = true
 satysfi-loader.workspace = true
 satysfi-pdf.workspace = true
+satysfi-satyrographos.workspace = true
 clap.workspace = true
 anyhow.workspace = true

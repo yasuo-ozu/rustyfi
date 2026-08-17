@@ -28,6 +28,7 @@ fn load_and_merge(entry: &Path) -> satysfi_syntax::cst::File {
         entry,
         &satysfi_loader::LoadOptions {
             lib_root: Some(lib_root()),
+            ..Default::default()
         },
     )
     .unwrap_or_else(|e| panic!("failed to load {}: {e}", entry.display()));
@@ -257,6 +258,7 @@ fn multifile_import_compiles_and_renders() {
         &entry,
         &satysfi_loader::LoadOptions {
             lib_root: Some(lib_root()),
+            ..Default::default()
         },
     )
     .unwrap();

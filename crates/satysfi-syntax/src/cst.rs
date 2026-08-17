@@ -24,6 +24,7 @@
 use crate::leaf::*;
 use crate::span::Span;
 use crate::stream::TokenStream;
+use newer_type::implement;
 use syan::parse::{Parse, Unparse};
 
 /// A whole `.saty`/`.satyh` file: headers, top-level bindings, `in`, the
@@ -270,6 +271,7 @@ macro_rules! erased_leaf {
     ($($(#[$doc:meta])* $name:ident => $target:ty;)*) => {
         $(
             $(#[$doc])*
+            #[implement(newer_type_std::ops::Deref)]
             #[derive(Debug, Clone, PartialEq)]
             pub struct $name(pub Box<$target>);
 
@@ -296,13 +298,6 @@ macro_rules! erased_leaf {
                     sink: &mut S,
                 ) -> Result<(), S::Error> {
                     self.0.unparse(sink)
-                }
-            }
-
-            impl std::ops::Deref for $name {
-                type Target = $target;
-                fn deref(&self) -> &$target {
-                    &self.0
                 }
             }
         )*

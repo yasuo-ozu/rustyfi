@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use satysfi_syntax::ParseFileError;
+use satysfi_syntax::{ParseFileError, SatysfiVersion};
 
 /// Everything that can go wrong while loading a multi-file SATySFi program.
 #[derive(Debug, thiserror::Error)]
@@ -58,6 +58,25 @@ pub enum LoadError {
     /// The entry file is a library (no body) rather than a document.
     #[error("{path}: entry file must be a document (with an `in ...` body), found a library")]
     LibraryAsEntry { path: PathBuf },
+
+    /// `opts.version` names a SATySFi version this port does not implement
+    /// yet (checked before any file is even read).
+    #[error(
+        "SATySFi {requested} documents are not supported yet; supported: {}",
+        format_versions(.supported)
+    )]
+    UnsupportedVersion {
+        requested: SatysfiVersion,
+        supported: Vec<SatysfiVersion>,
+    },
+}
+
+fn format_versions(versions: &[SatysfiVersion]) -> String {
+    versions
+        .iter()
+        .map(|v| v.to_string())
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn format_searched(searched: &[PathBuf]) -> String {

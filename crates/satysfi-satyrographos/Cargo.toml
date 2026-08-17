@@ -1,0 +1,24 @@
+[package]
+name = "satysfi-satyrographos"
+description = "Satyrographos-style package-manager logic for the satysfi-rust port: manifest parsing, receipts, and atomic install/uninstall transactions (clap-free library)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[features]
+# Off by default so path/archive/local-registry installs stay fully offline
+# (plan §8): with the feature off, no HTTP client is compiled in and the crate
+# builds with `--no-default-features`. Enable it to fetch `http(s)://` registry
+# tarballs; `file://` and plain-path tarballs work regardless.
+default = []
+http = ["dep:ureq"]
+
+[dependencies]
+thiserror.workspace = true
+serde.workspace = true
+toml.workspace = true
+tar.workspace = true
+flate2.workspace = true
+sha2.workspace = true
+ureq = { version = "2.12", optional = true }

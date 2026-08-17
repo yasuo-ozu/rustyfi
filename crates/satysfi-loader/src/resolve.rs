@@ -51,12 +51,17 @@ pub(crate) fn resolve_import(dir: &Path, name: &str) -> Result<PathBuf, Vec<Path
 /// Resolve `@require: name` against the package/library root.
 ///
 /// v0.0.6's `Config.resolve_package` searches a configurable list of library
-/// directories; we approximate that with two fixed candidates under
+/// directories; we approximate that with three fixed candidates under
 /// `lib_root`, in order:
 ///   1. `<lib_root>/dist/packages/<name>` (the standard SATySFi package
-///      layout used by `satysfi-dist`/opam installs).
+///      layout used by `satysfi-dist`/opam installs, and this port's own
+///      no-manifest flat-copy fallback).
 ///   2. `<lib_root>/<name>` (a plain fallback, for a `lib_root` that already
 ///      points directly at a package tree, e.g. in tests).
+///   3. `<lib_root>/dist/packages/<name>/<name>` (the *nested* per-library
+///      layout real Satyrographos produces and this port's manifest-driven
+///      installer materialises — see the chimera plan §3). Purely additive:
+///      candidates 1 and 2 are unchanged.
 ///
 /// If `lib_root` is `None`, there is nowhere to search: returns `Err(vec![])`
 /// immediately (surfaced by `UnresolvedRequire` as "no candidates").
@@ -64,7 +69,12 @@ pub(crate) fn resolve_require(lib_root: Option<&Path>, name: &str) -> Result<Pat
     let Some(root) = lib_root else {
         return Err(Vec::new());
     };
-    let bases = [root.join("dist").join("packages"), root.to_path_buf()];
+    let dist_packages = root.join("dist").join("packages");
+    let bases = [
+        dist_packages.clone(),
+        root.to_path_buf(),
+        dist_packages.join(name),
+    ];
     let mut candidates = Vec::new();
     for base in &bases {
         candidates.extend(candidates_in(base, name));

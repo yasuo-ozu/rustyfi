@@ -7,6 +7,7 @@ members = [
     "crates/satysfi-pdf",
     "crates/satysfi-cli",
     "crates/satysfi-loader",
+    "crates/satysfi-satyrographos",
 ]
 
 [workspace.package]
@@ -22,9 +23,17 @@ satysfi-backend = { path = "crates/satysfi-backend" }
 satysfi-lang = { path = "crates/satysfi-lang" }
 satysfi-pdf = { path = "crates/satysfi-pdf" }
 satysfi-loader = { path = "crates/satysfi-loader" }
+satysfi-satyrographos = { path = "crates/satysfi-satyrographos" }
 thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+tar = "0.4"
+flate2 = "1"
+sha2 = "0.10"
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 pdf-writer = "0.13"
 safegraph = "0.1"
 ttf-parser = "0.25"
+newer-type = "0.3"
+newer-type-std = "0.3"

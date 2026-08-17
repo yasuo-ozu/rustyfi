@@ -1,0 +1,11 @@
+//! The four package-manager operations (plan §4.1-4.4, §7.2), each a thin
+//! orchestration over `roots`/`archive`/`manifest`/`stage`/`receipts`.
+
+pub mod install;
+pub mod list;
+pub mod reconcile;
+pub mod registry_install;
+pub mod search;
+pub mod status;
+pub mod uninstall;
+pub mod update;

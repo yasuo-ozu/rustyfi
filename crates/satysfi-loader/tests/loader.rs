@@ -6,7 +6,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use satysfi_loader::{load, LoadError, LoadOptions, LoadedProgram};
+use satysfi_loader::{load, LoadError, LoadOptions, LoadedProgram, SatysfiVersion};
 
 struct TempDir(PathBuf);
 
@@ -51,7 +51,10 @@ impl Drop for TempDir {
 }
 
 fn no_lib_root() -> LoadOptions {
-    LoadOptions { lib_root: None }
+    LoadOptions {
+        lib_root: None,
+        ..Default::default()
+    }
 }
 
 fn file_names(program: &LoadedProgram) -> Vec<String> {
@@ -141,6 +144,7 @@ fn require_resolves_against_lib_root_dist_packages() {
 
     let opts = LoadOptions {
         lib_root: Some(lib_root),
+        ..Default::default()
     };
     let program = load(&entry, &opts).expect("load should succeed");
 
@@ -247,4 +251,40 @@ fn import_resolves_relative_to_the_containing_file_not_the_entry_dir() {
         "expected sub/common.satyh, got {}",
         common_file.path.display()
     );
+}
+
+#[test]
+fn unimplemented_version_is_rejected_before_touching_disk() {
+    let dir = TempDir::new("unsupported-version");
+    // Deliberately do NOT create `missing.saty`: an `UnsupportedVersion`
+    // error must be returned before `load` ever reads the entry file.
+    let entry = dir.path().join("missing.saty");
+
+    let opts = LoadOptions {
+        lib_root: None,
+        version: SatysfiVersion::V0_1,
+    };
+    let err = load(&entry, &opts).expect_err("0.1 must be rejected");
+    let msg = err.to_string();
+
+    match &err {
+        LoadError::UnsupportedVersion {
+            requested,
+            supported,
+        } => {
+            assert_eq!(*requested, SatysfiVersion::V0_1);
+            assert_eq!(supported, &vec![SatysfiVersion::V0_0_6]);
+        }
+        other => panic!("expected LoadError::UnsupportedVersion, got {other:?}"),
+    }
+    assert!(msg.contains("0.1"), "message should name the requested version: {msg}");
+    assert!(
+        msg.contains("0.0.6"),
+        "message should name the supported version: {msg}"
+    );
+}
+
+#[test]
+fn default_load_options_targets_v0_0_6() {
+    assert_eq!(LoadOptions::default().version, SatysfiVersion::V0_0_6);
 }

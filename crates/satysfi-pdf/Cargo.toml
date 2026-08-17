@@ -10,3 +10,7 @@ authors.workspace = true
 satysfi-backend.workspace = true
 pdf-writer.workspace = true
 thiserror.workspace = true
+ttf-parser.workspace = true
+
+[dev-dependencies]
+

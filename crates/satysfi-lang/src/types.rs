@@ -1,0 +1,940 @@
+//! The type language: base types, the mutable (union-find) representation of
+//! type/row variables, monomorphic and polymorphic types, and level-based
+//! generalization.
+//!
+//! This mirrors `mono_type_main` / `poly_type` / `kind` in v0.0.6's
+//! `src/frontend/types.cppo.ml`, with two deliberate departures documented
+//! at the relevant definitions below:
+//!
+//! 1. **Generalization is level-based (Rémy levels)**, not v0.0.6's
+//!    `quantifiability` flag. See [`TypeContext`], [`generalize`] and
+//!    [`instantiate`].
+//! 2. **Extensible records are a first-class row type** (`Row::Empty` /
+//!    `Row::Var` / `Row::Cons`), not v0.0.6's scheme of a *closed*
+//!    `RecordType` plus a plain type variable that merely carries a
+//!    `RecordKind` label-subset constraint. See [`Row`].
+
+use std::cell::RefCell;
+use std::collections::{BTreeSet, HashMap};
+use std::fmt;
+use std::rc::Rc;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+// ============================================================================
+// Base types
+// ============================================================================
+
+/// Primitive types with no internal structure — the subset of v0.0.6's
+/// `base_type` (`types.cppo.ml:255`) that this milestone's primitives need.
+/// (`EnvType`/`PrePathType`/`PathType`/`GraphicsType`/`ImageType`/`RegExpType`/
+/// `TextInfoType`/`InputPosType` are not yet used by anything in
+/// `primitives.rs` and are left out; add them here when a primitive needs
+/// them.)
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum BaseType {
+    Unit,
+    Bool,
+    Int,
+    Float,
+    Length,
+    String,
+    /// `inline-text` (v0.0.6: `TextRowType`).
+    InlineText,
+    /// `block-text` (v0.0.6: `TextColType`).
+    BlockText,
+    /// `math` (v0.0.6: `MathType`) — quoted math text.
+    MathText,
+    /// `inline-boxes` (v0.0.6: `BoxRowType`).
+    InlineBoxes,
+    /// `block-boxes` (v0.0.6: `BoxColType`).
+    BlockBoxes,
+    Context,
+    Document,
+}
+
+impl BaseType {
+    /// The SATySFi surface-syntax name, used by `Display`.
+    pub fn name(self) -> &'static str {
+        match self {
+            BaseType::Unit => "unit",
+            BaseType::Bool => "bool",
+            BaseType::Int => "int",
+            BaseType::Float => "float",
+            BaseType::Length => "length",
+            BaseType::String => "string",
+            BaseType::InlineText => "inline-text",
+            BaseType::BlockText => "block-text",
+            BaseType::MathText => "math",
+            BaseType::InlineBoxes => "inline-boxes",
+            BaseType::BlockBoxes => "block-boxes",
+            BaseType::Context => "context",
+            BaseType::Document => "document",
+        }
+    }
+}
+
+impl fmt::Display for BaseType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
+// ============================================================================
+// A process-wide id source for variables minted where no `TypeContext` is
+// available (see the doc comment on `instantiate` for why that happens).
+// ============================================================================
+
+/// `TypeContext` hands out ids from its own small counter (see below) for
+/// ordinary inference-time freshness. `instantiate` and `unify`'s row
+/// extension, however, have fixed signatures (per this crate's contract)
+/// that carry no `TypeContext`, yet still need to mint brand new variables
+/// (a fresh copy of each generalized variable; a fresh field/remainder pair
+/// when extending an open row). They draw ids from this separate,
+/// process-wide counter instead.
+///
+/// This is purely cosmetic: variable *identity* is always pointer equality
+/// (`TyVarRef::same` / `RowVarRef::same`), never id equality, so the two
+/// counters can never collide in any way that affects correctness — at
+/// worst two unrelated variables coming from different sources print with
+/// the same debug id. Seeded far away from `TypeContext`'s own counter just
+/// to make that cosmetic overlap unlikely in small examples/tests.
+static FRESH_ID: AtomicU64 = AtomicU64::new(1 << 32);
+
+fn fresh_id() -> u64 {
+    FRESH_ID.fetch_add(1, Ordering::Relaxed)
+}
+
+// ============================================================================
+// Kind (mirrors v0.0.6's `mono_kind` / `FreeID_.kind`, types.cppo.ml:330-333)
+// ============================================================================
+
+/// The kind of a free type variable.
+///
+/// `Record(labels)` mirrors v0.0.6's `RecordKind`: it constrains a variable
+/// that is not yet known to be anything in particular, but which field
+/// access (`e#lbl`) or similar has already shown must eventually resolve to
+/// *some* record type containing (at least) `labels`. Unlike v0.0.6's
+/// `RecordKind`, which pairs each required label with its required field
+/// type directly in the kind, this port stores only the label *names* here:
+/// the field types themselves are tracked by the [`Row`] the variable
+/// eventually gets bound to (see `unify::bind_var`'s `Kind::Record` branch).
+/// This is strictly simpler and loses nothing, because in this port a
+/// concrete record's structure is *always* a first-class `Row` — v0.0.6
+/// needed to carry field types in the kind itself because its concrete
+/// `RecordType` has no notion of "the type of label `l`" separate from the
+/// whole closed association list.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Kind {
+    Universal,
+    Record(BTreeSet<String>),
+}
+
+// ============================================================================
+// Type variables (mirrors v0.0.6's `FreeID_`/`mono_type_variable_info`,
+// types.cppo.ml:121-191, 347-349)
+// ============================================================================
+
+/// The mutable union-find cell behind a type variable.
+#[derive(Debug)]
+pub enum TyVarLink {
+    Free { id: u64, level: u32, kind: Kind },
+    /// This variable has been unified with a concrete type; `resolve`
+    /// chases through this exactly like v0.0.6's `MonoLink`.
+    Bound(MonoType),
+}
+
+/// A reference-counted handle to a type variable's union-find cell. Cloning
+/// a `TyVarRef` shares the same cell (this is the union-find "pointer");
+/// identity (not structure) is what `unify` and `generalize` compare.
+#[derive(Clone, Debug)]
+pub struct TyVarRef(Rc<RefCell<TyVarLink>>);
+
+impl TyVarRef {
+    pub(crate) fn new(id: u64, level: u32, kind: Kind) -> Self {
+        TyVarRef(Rc::new(RefCell::new(TyVarLink::Free { id, level, kind })))
+    }
+
+    /// Identity comparison — the only correct notion of "same variable"
+    /// once links can be mutated in place.
+    pub fn same(&self, other: &TyVarRef) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+
+    pub(crate) fn ptr_key(&self) -> usize {
+        Rc::as_ptr(&self.0) as usize
+    }
+
+    /// `None` if this variable has already been bound.
+    pub fn id(&self) -> Option<u64> {
+        match &*self.0.borrow() {
+            TyVarLink::Free { id, .. } => Some(*id),
+            TyVarLink::Bound(_) => None,
+        }
+    }
+
+    /// `None` if this variable has already been bound.
+    pub fn level(&self) -> Option<u32> {
+        match &*self.0.borrow() {
+            TyVarLink::Free { level, .. } => Some(*level),
+            TyVarLink::Bound(_) => None,
+        }
+    }
+
+    /// No-op if this variable has already been bound.
+    pub fn set_level(&self, new_level: u32) {
+        if let TyVarLink::Free { level, .. } = &mut *self.0.borrow_mut() {
+            *level = new_level;
+        }
+    }
+
+    /// `Kind::Universal` if this variable has already been bound (asking a
+    /// bound variable for its kind is meaningless; callers should `resolve`
+    /// first).
+    pub fn kind(&self) -> Kind {
+        match &*self.0.borrow() {
+            TyVarLink::Free { kind, .. } => kind.clone(),
+            TyVarLink::Bound(_) => Kind::Universal,
+        }
+    }
+
+    /// No-op if this variable has already been bound.
+    pub fn set_kind(&self, new_kind: Kind) {
+        if let TyVarLink::Free { kind, .. } = &mut *self.0.borrow_mut() {
+            *kind = new_kind;
+        }
+    }
+
+    /// Link this variable to a concrete type. Callers (`unify::bind_var`)
+    /// are responsible for the occurs check; this just performs the store.
+    pub fn bind(&self, ty: MonoType) {
+        *self.0.borrow_mut() = TyVarLink::Bound(ty);
+    }
+
+    pub fn is_free(&self) -> bool {
+        matches!(&*self.0.borrow(), TyVarLink::Free { .. })
+    }
+}
+
+impl PartialEq for TyVarRef {
+    fn eq(&self, other: &Self) -> bool {
+        self.same(other)
+    }
+}
+impl Eq for TyVarRef {}
+
+pub(crate) fn new_ty_var(level: u32) -> TyVarRef {
+    TyVarRef::new(fresh_id(), level, Kind::Universal)
+}
+
+// ============================================================================
+// Row variables — the tail of an extensible record row. Structurally a
+// mirror of `TyVarRef`/`TyVarLink`, except its "kind" is simply the set of
+// labels already known to appear in whatever row it eventually resolves to
+// (there is no `Universal` case: an empty set means "no labels required
+// yet", which *is* the universal case for a row).
+// ============================================================================
+
+#[derive(Debug)]
+pub enum RowVarLink {
+    Free {
+        id: u64,
+        level: u32,
+        kind: BTreeSet<String>,
+    },
+    Bound(Row),
+}
+
+#[derive(Clone, Debug)]
+pub struct RowVarRef(Rc<RefCell<RowVarLink>>);
+
+impl RowVarRef {
+    pub(crate) fn new(id: u64, level: u32, kind: BTreeSet<String>) -> Self {
+        RowVarRef(Rc::new(RefCell::new(RowVarLink::Free { id, level, kind })))
+    }
+
+    pub fn same(&self, other: &RowVarRef) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+
+    pub(crate) fn ptr_key(&self) -> usize {
+        Rc::as_ptr(&self.0) as usize
+    }
+
+    pub fn id(&self) -> Option<u64> {
+        match &*self.0.borrow() {
+            RowVarLink::Free { id, .. } => Some(*id),
+            RowVarLink::Bound(_) => None,
+        }
+    }
+
+    pub fn level(&self) -> Option<u32> {
+        match &*self.0.borrow() {
+            RowVarLink::Free { level, .. } => Some(*level),
+            RowVarLink::Bound(_) => None,
+        }
+    }
+
+    pub fn set_level(&self, new_level: u32) {
+        if let RowVarLink::Free { level, .. } = &mut *self.0.borrow_mut() {
+            *level = new_level;
+        }
+    }
+
+    pub fn kind(&self) -> BTreeSet<String> {
+        match &*self.0.borrow() {
+            RowVarLink::Free { kind, .. } => kind.clone(),
+            RowVarLink::Bound(_) => BTreeSet::new(),
+        }
+    }
+
+    pub fn set_kind(&self, new_kind: BTreeSet<String>) {
+        if let RowVarLink::Free { kind, .. } = &mut *self.0.borrow_mut() {
+            *kind = new_kind;
+        }
+    }
+
+    pub fn bind(&self, row: Row) {
+        *self.0.borrow_mut() = RowVarLink::Bound(row);
+    }
+
+    pub fn is_free(&self) -> bool {
+        matches!(&*self.0.borrow(), RowVarLink::Free { .. })
+    }
+}
+
+impl PartialEq for RowVarRef {
+    fn eq(&self, other: &Self) -> bool {
+        self.same(other)
+    }
+}
+impl Eq for RowVarRef {}
+
+pub(crate) fn new_row_var(level: u32) -> RowVarRef {
+    RowVarRef::new(fresh_id(), level, BTreeSet::new())
+}
+
+// ============================================================================
+// Monomorphic types
+// ============================================================================
+
+/// A monomorphic type. Mirrors v0.0.6's `mono_type` (the `type_main`
+/// variant instantiated at `mono_type_variable_info ref`), minus
+/// `SynonymType`/`CodeType` (no type synonyms or multi-stage code in this
+/// milestone) and with `Row`-based records instead of a closed `RecordType`
+/// (see the module doc comment and [`Row`]).
+#[derive(Clone, Debug)]
+pub enum MonoType {
+    Var(TyVarRef),
+    Base(BaseType),
+    /// `dom -> cod`.
+    Func(Box<MonoType>, Box<MonoType>),
+    /// A tuple type, always with at least two elements.
+    Product(Vec<MonoType>),
+    List(Box<MonoType>),
+    Ref(Box<MonoType>),
+    Record(Row),
+    /// A user-defined variant type applied to its arguments, e.g.
+    /// `Variant("option", [int])` for `int option`. Identified by name
+    /// rather than by a fresh `TypeID.t` as in v0.0.6 (`types.cppo.ml:318`)
+    /// — this milestone has no notion of shadowing/re-declaring a variant
+    /// type under the same name within one compilation, so a `String` is
+    /// an adequate (and much simpler) stand-in for v0.0.6's globally-fresh
+    /// `TypeID.t`.
+    Variant(String, Vec<MonoType>),
+    /// `[...] inline-cmd` (v0.0.6: `HorzCommandType`).
+    InlineCmd(Vec<CmdArgType>),
+    /// `[...] block-cmd` (v0.0.6: `VertCommandType`).
+    BlockCmd(Vec<CmdArgType>),
+    /// `[...] math-cmd` (v0.0.6: `MathCommandType`).
+    MathCmd(Vec<CmdArgType>),
+}
+
+/// One command argument type: `ty` for a mandatory argument, or `ty?` for
+/// an optional one (v0.0.6: `MandatoryArgumentType` / `OptionalArgumentType`,
+/// types.cppo.ml:326-328).
+#[derive(Clone, Debug)]
+pub struct CmdArgType {
+    pub optional: bool,
+    pub ty: MonoType,
+}
+
+/// An extensible record row: a sequence of `label : type` bindings ending
+/// either in `Empty` (a *closed* record — exactly these labels and no
+/// others) or in `Var` (an *open* record — at least these labels, plus
+/// whatever the row variable's eventual binding adds).
+///
+/// **Deviation from v0.0.6**: v0.0.6 has no such type former. Its
+/// `RecordType` (types.cppo.ml:319) is always closed, and the only
+/// polymorphism available for records is indirect: a plain type variable
+/// can carry a `RecordKind` (a label-typed lower bound), and unifying that
+/// variable against a concrete closed `RecordType` succeeds if the kind's
+/// labels are a subset of the record's (typechecker.ml:480-500,
+/// `Assoc.domain_included`). That scheme cannot express an open record
+/// *type* standing on its own (e.g. as a function's return type) — only a
+/// variable can be "open". Giving rows their own recursive type former
+/// (`Row::Cons`/`Var`/`Empty`, Rémy-style row polymorphism, as used in
+/// e.g. OCaml's own object/polymorphic-variant rows) is strictly more
+/// general, lets `unify` do genuine label-subsumption with a *remainder*
+/// row variable (see `unify::row_extract`), and is the more standard
+/// design for a fresh implementation. `Kind::Record` is kept for the one
+/// case v0.0.6 also has it for: a variable not yet known to be a record at
+/// all (see `Kind`'s doc comment).
+#[derive(Clone, Debug)]
+pub enum Row {
+    Empty,
+    Var(RowVarRef),
+    Cons(String, Box<MonoType>, Box<Row>),
+}
+
+// ============================================================================
+// resolve / shallow_follow — chase `Bound` links, union-find "find".
+// ============================================================================
+
+/// Follow `Var(_)` → `Bound(ty)` links until reaching either a free
+/// variable or a non-variable type. Does **not** recurse into the
+/// structure of compound types (that's what makes it "shallow": a `Func`
+/// whose domain is itself a bound variable is returned as-is, domain still
+/// unresolved) — callers that need a fully dereferenced tree should
+/// `resolve` again at each level as they recurse, which is exactly what
+/// `unify` and `Display` do.
+pub fn resolve(ty: &MonoType) -> MonoType {
+    if let MonoType::Var(v) = ty {
+        let next = match &*v.0.borrow() {
+            TyVarLink::Bound(inner) => Some(inner.clone()),
+            TyVarLink::Free { .. } => None,
+        };
+        if let Some(inner) = next {
+            return resolve(&inner);
+        }
+    }
+    ty.clone()
+}
+
+/// The row analogue of [`resolve`].
+pub fn resolve_row(row: &Row) -> Row {
+    if let Row::Var(v) = row {
+        let next = match &*v.0.borrow() {
+            RowVarLink::Bound(inner) => Some(inner.clone()),
+            RowVarLink::Free { .. } => None,
+        };
+        if let Some(inner) = next {
+            return resolve_row(&inner);
+        }
+    }
+    row.clone()
+}
+
+// ============================================================================
+// Polymorphic types and level-based generalization
+// ============================================================================
+
+/// A type scheme: a monomorphic body plus the set of that body's free
+/// variables which are quantified over it.
+///
+/// **Deviation from v0.0.6**: v0.0.6 (types.cppo.ml:351-364) represents a
+/// generalized variable by *converting* its `MonoFree` cell into a
+/// `PolyBound` id, so the same physical type carries different
+/// representations depending on whether you're looking at it "as a mono
+/// type" or "as a poly type", and instantiating walks the body rebuilding
+/// `PolyBound` occurrences into fresh `MonoFree` cells
+/// (`typechecker.ml`/`typeenv.ml`'s `instantiate`). This port instead keeps
+/// the quantified variables as ordinary (still-`Free`) `TyVarRef`/
+/// `RowVarRef` cells and simply *remembers which ones they are* (`vars`/
+/// `row_vars` below). `instantiate` then deep-copies `body`, replacing each
+/// remembered variable (found by pointer identity, not by re-deriving
+/// "is this quantifiable") with a fresh one, and leaving every other
+/// variable in `body` (i.e. anything free in the surrounding, not-yet-
+/// generalized context) completely untouched and shared. This is the
+/// standard "efficient generalization via levels" technique used by many
+/// modern ML-family implementations; it avoids v0.0.6's need for a
+/// `quantifiability` flag (`Quantifiable`/`Unquantifiable`,
+/// types.cppo.ml:54) to guard against generalizing a variable that
+/// unification has already linked to something outside the current let
+/// binding — here that's instead simply a consequence of levels: a
+/// variable that unification touches from an outer scope gets its level
+/// lowered (see `unify::occurs_var`/`occurs_var_in_row`), so by the time
+/// `generalize` runs, it no longer looks "deep enough" to quantify.
+#[derive(Clone, Debug)]
+pub struct PolyType {
+    vars: Vec<TyVarRef>,
+    row_vars: Vec<RowVarRef>,
+    body: MonoType,
+}
+
+impl PolyType {
+    /// A trivial scheme with no quantified variables at all.
+    pub fn mono(ty: MonoType) -> PolyType {
+        PolyType {
+            vars: Vec::new(),
+            row_vars: Vec::new(),
+            body: ty,
+        }
+    }
+
+    /// Build a scheme by hand, explicitly naming which variables (which
+    /// must occur free in `body`) are quantified. Used by `prim_types`,
+    /// which constructs polymorphic primitive signatures (`::`, `!`)
+    /// directly rather than via `generalize` (there is no enclosing
+    /// inference level to generalize *from* at primitive-table
+    /// construction time).
+    pub(crate) fn from_vars(vars: Vec<TyVarRef>, row_vars: Vec<RowVarRef>, body: MonoType) -> PolyType {
+        PolyType { vars, row_vars, body }
+    }
+
+    /// The scheme's body, before instantiation — exposed for inspection
+    /// (e.g. arity-checking) without needing to mint fresh variables.
+    pub fn body(&self) -> &MonoType {
+        &self.body
+    }
+
+    pub fn is_monomorphic(&self) -> bool {
+        self.vars.is_empty() && self.row_vars.is_empty()
+    }
+}
+
+impl fmt::Display for PolyType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self.body, f)
+    }
+}
+
+/// Per-inference-run state: the level stack for generalization, and a
+/// counter for fresh variable ids (see `FRESH_ID`'s doc comment for why
+/// `instantiate`/`unify` use a *different* counter than this one — the two
+/// never need to agree, since identity is always by pointer).
+pub struct TypeContext {
+    next_id: u64,
+    level: u32,
+}
+
+impl TypeContext {
+    pub fn new() -> Self {
+        TypeContext { next_id: 0, level: 0 }
+    }
+
+    fn next_id(&mut self) -> u64 {
+        let id = self.next_id;
+        self.next_id += 1;
+        id
+    }
+
+    pub fn level(&self) -> u32 {
+        self.level
+    }
+
+    /// Enter a new `let`-nesting level. Call before inferring the
+    /// right-hand side of a `let`.
+    pub fn enter_level(&mut self) {
+        self.level += 1;
+    }
+
+    /// Leave the current level. Call after inferring the right-hand side
+    /// of a `let`, before calling `generalize`.
+    pub fn leave_level(&mut self) {
+        self.level -= 1;
+    }
+
+    pub fn fresh_var(&mut self) -> TyVarRef {
+        self.fresh_var_with_kind(Kind::Universal)
+    }
+
+    pub fn fresh_var_with_kind(&mut self, kind: Kind) -> TyVarRef {
+        TyVarRef::new(self.next_id(), self.level, kind)
+    }
+
+    pub fn fresh_row_var(&mut self) -> RowVarRef {
+        self.fresh_row_var_with_kind(BTreeSet::new())
+    }
+
+    pub fn fresh_row_var_with_kind(&mut self, kind: BTreeSet<String>) -> RowVarRef {
+        RowVarRef::new(self.next_id(), self.level, kind)
+    }
+}
+
+impl Default for TypeContext {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Quantify every free variable in `ty` whose level is deeper than `level`
+/// (i.e. was created after entering the let binding being generalized).
+/// Typical usage:
+///
+/// ```ignore
+/// ctx.enter_level();
+/// let ty = infer(ctx, rhs)?;
+/// ctx.leave_level();
+/// let scheme = generalize(ctx.level(), &ty);
+/// ```
+pub fn generalize(level: u32, ty: &MonoType) -> PolyType {
+    let mut vars = Vec::new();
+    let mut row_vars = Vec::new();
+    collect_generalizable(level, ty, &mut vars, &mut row_vars);
+    PolyType {
+        vars,
+        row_vars,
+        body: ty.clone(),
+    }
+}
+
+fn collect_generalizable(
+    level: u32,
+    ty: &MonoType,
+    vars: &mut Vec<TyVarRef>,
+    row_vars: &mut Vec<RowVarRef>,
+) {
+    match resolve(ty) {
+        MonoType::Var(v) => {
+            if let Some(lv) = v.level() {
+                if lv > level && !vars.iter().any(|x| x.same(&v)) {
+                    vars.push(v);
+                }
+            }
+        }
+        MonoType::Base(_) => {}
+        MonoType::Func(a, b) => {
+            collect_generalizable(level, &a, vars, row_vars);
+            collect_generalizable(level, &b, vars, row_vars);
+        }
+        MonoType::Product(ts) => {
+            for t in &ts {
+                collect_generalizable(level, t, vars, row_vars);
+            }
+        }
+        MonoType::List(t) | MonoType::Ref(t) => collect_generalizable(level, &t, vars, row_vars),
+        MonoType::Record(row) => collect_generalizable_row(level, &row, vars, row_vars),
+        MonoType::Variant(_, args) => {
+            for t in &args {
+                collect_generalizable(level, t, vars, row_vars);
+            }
+        }
+        MonoType::InlineCmd(cs) | MonoType::BlockCmd(cs) | MonoType::MathCmd(cs) => {
+            for c in &cs {
+                collect_generalizable(level, &c.ty, vars, row_vars);
+            }
+        }
+    }
+}
+
+fn collect_generalizable_row(
+    level: u32,
+    row: &Row,
+    vars: &mut Vec<TyVarRef>,
+    row_vars: &mut Vec<RowVarRef>,
+) {
+    match resolve_row(row) {
+        Row::Empty => {}
+        Row::Var(v) => {
+            if let Some(lv) = v.level() {
+                if lv > level && !row_vars.iter().any(|x| x.same(&v)) {
+                    row_vars.push(v);
+                }
+            }
+        }
+        Row::Cons(_, t, rest) => {
+            collect_generalizable(level, &t, vars, row_vars);
+            collect_generalizable_row(level, &rest, vars, row_vars);
+        }
+    }
+}
+
+/// Instantiate a scheme: replace every quantified variable with a fresh
+/// one at `level`, leaving everything else in the body shared as-is.
+///
+/// Note this takes no `&mut TypeContext` (per this module's contract) —
+/// see `FRESH_ID`'s doc comment for how it still mints fresh, correctly
+/// leveled variables.
+pub fn instantiate(poly: &PolyType, level: u32) -> MonoType {
+    let mut var_map: HashMap<usize, MonoType> = HashMap::new();
+    for v in &poly.vars {
+        let fresh = TyVarRef::new(fresh_id(), level, v.kind());
+        var_map.insert(v.ptr_key(), MonoType::Var(fresh));
+    }
+    let mut row_map: HashMap<usize, Row> = HashMap::new();
+    for v in &poly.row_vars {
+        let fresh = RowVarRef::new(fresh_id(), level, v.kind());
+        row_map.insert(v.ptr_key(), Row::Var(fresh));
+    }
+    substitute(&poly.body, &var_map, &row_map)
+}
+
+/// Deep-copy `ty`, replacing any (resolved) variable found in `var_map`/
+/// `row_map` by pointer identity with its mapped replacement, and cloning
+/// everything else structurally. Shared by `instantiate` (mapping
+/// quantified variables to fresh ones) and by `prim_types::VariantDecl`
+/// (mapping a declaration's parameter placeholders to the concrete
+/// arguments of one particular constructor application).
+pub(crate) fn substitute(
+    ty: &MonoType,
+    var_map: &HashMap<usize, MonoType>,
+    row_map: &HashMap<usize, Row>,
+) -> MonoType {
+    match resolve(ty) {
+        MonoType::Var(v) => var_map
+            .get(&v.ptr_key())
+            .cloned()
+            .unwrap_or(MonoType::Var(v)),
+        MonoType::Base(b) => MonoType::Base(b),
+        MonoType::Func(a, b) => MonoType::Func(
+            Box::new(substitute(&a, var_map, row_map)),
+            Box::new(substitute(&b, var_map, row_map)),
+        ),
+        MonoType::Product(ts) => {
+            MonoType::Product(ts.iter().map(|t| substitute(t, var_map, row_map)).collect())
+        }
+        MonoType::List(t) => MonoType::List(Box::new(substitute(&t, var_map, row_map))),
+        MonoType::Ref(t) => MonoType::Ref(Box::new(substitute(&t, var_map, row_map))),
+        MonoType::Record(row) => MonoType::Record(substitute_row(&row, var_map, row_map)),
+        MonoType::Variant(name, args) => MonoType::Variant(
+            name,
+            args.iter().map(|t| substitute(t, var_map, row_map)).collect(),
+        ),
+        MonoType::InlineCmd(cs) => MonoType::InlineCmd(substitute_cmd_args(&cs, var_map, row_map)),
+        MonoType::BlockCmd(cs) => MonoType::BlockCmd(substitute_cmd_args(&cs, var_map, row_map)),
+        MonoType::MathCmd(cs) => MonoType::MathCmd(substitute_cmd_args(&cs, var_map, row_map)),
+    }
+}
+
+pub(crate) fn substitute_row(
+    row: &Row,
+    var_map: &HashMap<usize, MonoType>,
+    row_map: &HashMap<usize, Row>,
+) -> Row {
+    match resolve_row(row) {
+        Row::Empty => Row::Empty,
+        Row::Var(v) => row_map.get(&v.ptr_key()).cloned().unwrap_or(Row::Var(v)),
+        Row::Cons(label, t, rest) => Row::Cons(
+            label,
+            Box::new(substitute(&t, var_map, row_map)),
+            Box::new(substitute_row(&rest, var_map, row_map)),
+        ),
+    }
+}
+
+fn substitute_cmd_args(
+    cs: &[CmdArgType],
+    var_map: &HashMap<usize, MonoType>,
+    row_map: &HashMap<usize, Row>,
+) -> Vec<CmdArgType> {
+    cs.iter()
+        .map(|c| CmdArgType {
+            optional: c.optional,
+            ty: substitute(&c.ty, var_map, row_map),
+        })
+        .collect()
+}
+
+pub(crate) fn ptr_key(v: &TyVarRef) -> usize {
+    v.ptr_key()
+}
+
+// ============================================================================
+// Display — a SATySFi-syntax-ish pretty printer for error messages.
+//
+// This is intentionally not byte-for-byte identical to v0.0.6's own
+// printer (`display.ml`); it exists to make unification error messages
+// readable, and picks a simple, consistent parenthesization convention:
+// atoms (base types, variables, records, argument-less variants) never
+// need parens; `list`/`ref`/single-argument variants are postfix and only
+// parenthesize a compound (function/product) operand; a function's
+// codomain is parenthesized whenever it isn't itself an atom, which is why
+// `int -> (string list)` prints with parens around the list even though
+// `list` binds tighter than `->` (there's no source-level ambiguity here —
+// the parens are purely for readability in error output).
+// ============================================================================
+
+struct VarNamer {
+    names: HashMap<usize, String>,
+    next: usize,
+}
+
+impl VarNamer {
+    fn new() -> Self {
+        VarNamer {
+            names: HashMap::new(),
+            next: 0,
+        }
+    }
+
+    fn name_for(&mut self, key: usize) -> String {
+        if let Some(n) = self.names.get(&key) {
+            return n.clone();
+        }
+        let n = Self::letter(self.next);
+        self.next += 1;
+        self.names.insert(key, n.clone());
+        n
+    }
+
+    fn letter(i: usize) -> String {
+        let letter = (b'a' + (i % 26) as u8) as char;
+        let suffix = i / 26;
+        if suffix == 0 {
+            format!("'{letter}")
+        } else {
+            format!("'{letter}{suffix}")
+        }
+    }
+}
+
+fn is_atomic(ty: &MonoType) -> bool {
+    match ty {
+        MonoType::Base(_) | MonoType::Var(_) | MonoType::Record(_) => true,
+        MonoType::Variant(_, args) => args.is_empty(),
+        MonoType::Func(_, _)
+        | MonoType::Product(_)
+        | MonoType::List(_)
+        | MonoType::Ref(_)
+        | MonoType::InlineCmd(_)
+        | MonoType::BlockCmd(_)
+        | MonoType::MathCmd(_) => false,
+    }
+}
+
+/// Needs parens as the operand of a postfix constructor (`list`/`ref`/a
+/// single-argument variant) or as an element of a product.
+fn needs_parens_as_operand(ty: &MonoType) -> bool {
+    matches!(ty, MonoType::Func(_, _) | MonoType::Product(_))
+}
+
+fn fmt_mono(ty: &MonoType, f: &mut fmt::Formatter<'_>, namer: &mut VarNamer) -> fmt::Result {
+    let ty = resolve(ty);
+    match &ty {
+        MonoType::Var(v) => write!(f, "{}", namer.name_for(v.ptr_key())),
+        MonoType::Base(b) => write!(f, "{b}"),
+        MonoType::Func(dom, cod) => {
+            if needs_parens_as_operand(&resolve(dom)) {
+                f.write_str("(")?;
+                fmt_mono(dom, f, namer)?;
+                f.write_str(")")?;
+            } else {
+                fmt_mono(dom, f, namer)?;
+            }
+            f.write_str(" -> ")?;
+            let rcod = resolve(cod);
+            if is_atomic(&rcod) {
+                fmt_mono(cod, f, namer)
+            } else {
+                f.write_str("(")?;
+                fmt_mono(cod, f, namer)?;
+                f.write_str(")")
+            }
+        }
+        MonoType::Product(ts) => {
+            for (i, t) in ts.iter().enumerate() {
+                if i > 0 {
+                    f.write_str(" * ")?;
+                }
+                if needs_parens_as_operand(&resolve(t)) {
+                    f.write_str("(")?;
+                    fmt_mono(t, f, namer)?;
+                    f.write_str(")")?;
+                } else {
+                    fmt_mono(t, f, namer)?;
+                }
+            }
+            Ok(())
+        }
+        MonoType::List(t) => fmt_postfix(t, "list", f, namer),
+        MonoType::Ref(t) => fmt_postfix(t, "ref", f, namer),
+        MonoType::Record(row) => fmt_row(row, f, namer),
+        MonoType::Variant(name, args) => match args.as_slice() {
+            [] => write!(f, "{name}"),
+            [one] => fmt_postfix(one, name, f, namer),
+            many => {
+                f.write_str("(")?;
+                for (i, t) in many.iter().enumerate() {
+                    if i > 0 {
+                        f.write_str(", ")?;
+                    }
+                    fmt_mono(t, f, namer)?;
+                }
+                write!(f, ") {name}")
+            }
+        },
+        MonoType::InlineCmd(cs) => fmt_cmd(cs, "inline-cmd", f, namer),
+        MonoType::BlockCmd(cs) => fmt_cmd(cs, "block-cmd", f, namer),
+        MonoType::MathCmd(cs) => fmt_cmd(cs, "math-cmd", f, namer),
+    }
+}
+
+fn fmt_postfix(
+    operand: &MonoType,
+    suffix: &str,
+    f: &mut fmt::Formatter<'_>,
+    namer: &mut VarNamer,
+) -> fmt::Result {
+    if needs_parens_as_operand(&resolve(operand)) {
+        f.write_str("(")?;
+        fmt_mono(operand, f, namer)?;
+        write!(f, ") {suffix}")
+    } else {
+        fmt_mono(operand, f, namer)?;
+        write!(f, " {suffix}")
+    }
+}
+
+fn fmt_cmd(
+    cs: &[CmdArgType],
+    suffix: &str,
+    f: &mut fmt::Formatter<'_>,
+    namer: &mut VarNamer,
+) -> fmt::Result {
+    f.write_str("[")?;
+    for (i, c) in cs.iter().enumerate() {
+        if i > 0 {
+            f.write_str("; ")?;
+        }
+        fmt_mono(&c.ty, f, namer)?;
+        if c.optional {
+            f.write_str("?")?;
+        }
+    }
+    write!(f, "] {suffix}")
+}
+
+fn fmt_row(row: &Row, f: &mut fmt::Formatter<'_>, namer: &mut VarNamer) -> fmt::Result {
+    let mut fields: Vec<(String, MonoType)> = Vec::new();
+    let mut cur = resolve_row(row);
+    let tail_name = loop {
+        match cur {
+            Row::Empty => break None,
+            Row::Var(v) => break Some(namer.name_for(v.ptr_key())),
+            Row::Cons(label, ty, rest) => {
+                fields.push((label, *ty));
+                cur = resolve_row(&rest);
+            }
+        }
+    };
+    fields.sort_by(|a, b| a.0.cmp(&b.0));
+    f.write_str("(| ")?;
+    for (i, (label, ty)) in fields.iter().enumerate() {
+        if i > 0 {
+            f.write_str("; ")?;
+        }
+        write!(f, "{label} : ")?;
+        fmt_mono(ty, f, namer)?;
+    }
+    if let Some(name) = tail_name {
+        if !fields.is_empty() {
+            f.write_str(" ")?;
+        }
+        write!(f, "| {name}")?;
+    }
+    f.write_str(" |)")
+}
+
+impl fmt::Display for MonoType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut namer = VarNamer::new();
+        fmt_mono(self, f, &mut namer)
+    }
+}
+
+impl fmt::Display for Row {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut namer = VarNamer::new();
+        fmt_row(self, f, &mut namer)
+    }
+}

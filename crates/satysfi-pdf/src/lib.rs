@@ -1,9 +1,14 @@
 //! PDF output backend: base-14 Type1 fonts, uncompressed content streams
-//! (the milestone-1 replacement for handlePdf.ml on top of `pdf-writer`).
+//! (the milestone-1 replacement for handlePdf.ml on top of `pdf-writer`),
+//! plus (phase 5) ttf-parser-backed metrics and CID-keyed TrueType embedding.
 
 pub mod base14;
+pub mod cid;
+pub mod ttf;
 
 pub use base14::Base14Metrics;
+pub use cid::render_pdf_ttf;
+pub use ttf::{FontError, TtfFontStore};
 
 use pdf_writer::{Content, Finish, Name, Pdf, Rect, Ref, Str};
 use satysfi_backend::{Page, PageGeometry, PureHorzBox};
@@ -12,6 +17,8 @@ use satysfi_backend::{Page, PageGeometry, PureHorzBox};
 pub enum PdfError {
     #[error("text {0:?} is not encodable in WinAnsi (milestone-1 base fonts)")]
     Unencodable(String),
+    #[error("no glyph for {0:?} in the embedded font")]
+    NoGlyph(char),
     #[error(transparent)]
     Io(#[from] std::io::Error),
 }

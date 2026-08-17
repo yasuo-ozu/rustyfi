@@ -89,17 +89,63 @@ fn scoped_var(name: &str, span: Span, scope: &Scope) -> Result<Ast, ElabError> {
     }
 }
 
-/// Elaborate a whole file into one expression.
+/// A user type declaration, surfaced (but not yet lowered into
+/// [`crate::types::MonoType`] — that's `typecheck::build_variant_decl`'s job)
+/// from a CST [`cst::TypeDecl`]. Ctor payload types are kept as raw CST
+/// `TypeExpr`s: cheap to clone, and this untyped elaborator has no use for
+/// them beyond passing them through to the typechecker.
+#[derive(Clone, Debug)]
+pub struct UserTypeDecl {
+    pub name: String,
+    /// Type-parameter names, in declaration order (e.g. `["a"]` for `'a`).
+    pub params: Vec<String>,
+    /// `(ctor name, payload type expr)`, in declaration order.
+    pub ctors: Vec<(String, Option<c::TypeExpr>)>,
+}
+
+fn lower_type_decl(decl: &cst::TypeDecl) -> UserTypeDecl {
+    let params = decl.tyvars.iter().map(|v| v.name.clone()).collect();
+    let mut ctors = Vec::with_capacity(1 + decl.rest.len());
+    ctors.push((
+        decl.first.ctor.name.clone(),
+        decl.first.of_ty.as_ref().map(|o| o.ty.clone()),
+    ));
+    for bv in &decl.rest {
+        ctors.push((
+            bv.def.ctor.name.clone(),
+            bv.def.of_ty.as_ref().map(|o| o.ty.clone()),
+        ));
+    }
+    UserTypeDecl {
+        name: decl.name.name.clone(),
+        params,
+        ctors,
+    }
+}
+
+/// The result of elaborating a whole file: every `type` declaration it
+/// surfaced (in source order — a later declaration may reference an earlier
+/// one, or itself, since variant types are nominal; see
+/// `typecheck::build_variant_decl`) plus the elaborated document body.
+#[derive(Clone, Debug)]
+pub struct Program {
+    pub type_decls: Vec<UserTypeDecl>,
+    pub body: Ast,
+}
+
+/// Elaborate a whole file into a [`Program`] (the elaborated body plus any
+/// surfaced `type` declarations — see [`elaborate`] for the thin wrapper
+/// existing callers that only want the body keep using).
 ///
 /// **Library files.** `File.body` is `None` for a bare `prelude EOI` file (a
 /// `.satyh` library with no document expression) — a separate loader crate
 /// is responsible for merging a library's `prelude` into a document file's
 /// before this function ever sees it, so unlike phase-1/2a there is no
 /// "top-level bindings must be followed by `in`" check here at all: by the
-/// time `elaborate` runs, either `body` is present (an ordinary document, or
-/// an already-merged file) or it is a genuine library file, which is a
-/// (clean) error to hand to `elaborate` directly.
-pub fn elaborate(file: &cst::File, prelude_scope: &Scope) -> Result<Ast, ElabError> {
+/// time `elaborate_program` runs, either `body` is present (an ordinary
+/// document, or an already-merged file) or it is a genuine library file,
+/// which is a (clean) error to hand to `elaborate_program` directly.
+pub fn elaborate_program(file: &cst::File, prelude_scope: &Scope) -> Result<Program, ElabError> {
     let Some(body) = &file.body else {
         return err(
             Span::default(),
@@ -107,13 +153,25 @@ pub fn elaborate(file: &cst::File, prelude_scope: &Scope) -> Result<Ast, ElabErr
         );
     };
     let items: Vec<&cst::TopBinding> = file.prelude.iter().collect();
-    let (bindings, exported) = walk_bindings(&items, prelude_scope, &[])?;
+    let mut type_decls = Vec::new();
+    let (bindings, exported) = walk_bindings(&items, prelude_scope, &[], &mut type_decls)?;
     let mut final_scope = prelude_scope.clone();
     for name in &exported {
         final_scope.insert(name);
     }
     let body_ast = expr(body, &final_scope)?;
-    Ok(nest(bindings, body_ast))
+    Ok(Program {
+        type_decls,
+        body: nest(bindings, body_ast),
+    })
+}
+
+/// Elaborate a whole file into one expression, discarding any `type`
+/// declarations it surfaces (existing callers that only need the untyped
+/// `Ast`; see [`elaborate_program`] for the version phase 3's typechecker
+/// uses).
+pub fn elaborate(file: &cst::File, prelude_scope: &Scope) -> Result<Ast, ElabError> {
+    Ok(elaborate_program(file, prelude_scope)?.body)
 }
 
 // ---- module name-mangling & the top-level/struct-decl fold ---------------
@@ -225,6 +283,7 @@ fn walk_bindings(
     items: &[&cst::TopBinding],
     scope: &Scope,
     mod_path: &[String],
+    type_decls: &mut Vec<UserTypeDecl>,
 ) -> Result<(Vec<Binding>, Vec<String>), ElabError> {
     let mut bindings: Vec<Binding> = Vec::new();
     let mut running = scope.clone();
@@ -292,7 +351,11 @@ fn walk_bindings(
             // `type` declarations have no runtime effect in this untyped
             // elaborator: constructors are bare `Ctor` atoms and are never
             // scope-checked, so no scope entry (qualified or not) is needed.
-            cst::TopBinding::Type(_) => {}
+            // They are still surfaced (unqualified — variant types are
+            // nominal by name only, see `UserTypeDecl`) for the typechecker.
+            cst::TopBinding::Type(decl) => {
+                type_decls.push(lower_type_decl(decl));
+            }
             cst::TopBinding::LetMutable { name, value, .. } => {
                 let value_ast = expr(value, &running)?;
                 push_named_binding(
@@ -315,7 +378,7 @@ fn walk_bindings(
                 let inner_items: Vec<&cst::TopBinding> =
                     decls.iter().map(|d| d.0.as_ref()).collect();
                 let (inner_bindings, inner_exported) =
-                    walk_bindings(&inner_items, &running, &child_path)?;
+                    walk_bindings(&inner_items, &running, &child_path, type_decls)?;
                 bindings.extend(inner_bindings);
                 for q in &inner_exported {
                     running.insert(q);

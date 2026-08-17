@@ -27,3 +27,4 @@ anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 pdf-writer = "0.13"
 safegraph = "0.1"
+ttf-parser = "0.25"

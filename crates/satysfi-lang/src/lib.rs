@@ -4,7 +4,11 @@
 pub mod ast;
 pub mod elaborate;
 pub mod eval;
+pub mod prim_types;
 pub mod primitives;
+pub mod typecheck;
+pub mod types;
+pub mod unify;
 pub mod value;
 
 use satysfi_backend::FontMetrics;
@@ -16,6 +20,8 @@ pub enum CompileError {
     Parse(#[from] satysfi_syntax::ParseFileError),
     #[error(transparent)]
     Elaborate(#[from] elaborate::ElabError),
+    #[error(transparent)]
+    Type(#[from] typecheck::TypeError),
     #[error(transparent)]
     Eval(#[from] eval::EvalError),
     #[error("the file's expression evaluated to {0}, not a document")]
@@ -41,9 +47,10 @@ pub fn compile_document_cst(
 ) -> Result<std::rc::Rc<DocumentValue>, CompileError> {
     let env = primitives::base_env();
     let scope = elaborate::Scope::new(env.names());
-    let ast = elaborate::elaborate(file, &scope)?;
+    let program = elaborate::elaborate_program(file, &scope)?;
+    typecheck::typecheck(&program)?;
     let mut interp = eval::Interp::new(metrics);
-    match interp.eval(&env, &ast)? {
+    match interp.eval(&env, &program.body)? {
         Value::Document(doc) => Ok(doc),
         other => Err(CompileError::NotADocument(other.type_name())),
     }

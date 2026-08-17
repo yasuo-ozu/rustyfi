@@ -11,6 +11,15 @@
 ;;
 ;;   rustyfi-rust manual/manual.saty -o manual/manual.pdf
 ;;   rustyfi-rust satyrographos install ./manual
+;;
+;; `logo.saty` sits here for the same reason `manual.saty` does — it is built by
+;; the port's own binary against an INSTALLED package rather than a relative
+;; `@import:`, so it needs `xpath` in the lib-root first:
+;;
+;;   rustyfi-rust satyrographos install scripts/layout_fidelity_corpus/xpath \
+;;       --lib-root <lib-root>
+;;   rustyfi-rust --lib-root <lib-root> --font-dir <lib-root> \
+;;       -o assets/logo/rustyfi-logo.pdf manual/logo.saty
 
 (version "0.0.3")
 
@@ -18,11 +27,13 @@
   (name "rustyfi-manual")
   (version "0.1.0")
   (sources
-    ((file "doc/rustyfi-manual.saty" "manual.saty")))
+    ((file "doc/rustyfi-manual.saty" "manual.saty")
+     (file "doc/rustyfi-logo.saty" "logo.saty")))
   (dependencies
     ((stdja ())
      (code ())
-     (itemize ()))))
+     (itemize ())
+     (xpath ()))))
 
 (libraryDoc
   (name "rustyfi-manual-doc")
@@ -31,5 +42,15 @@
     ((rustyfi-rust "manual.saty" "-o" "manual.pdf")))
   (sources
     ((doc "rustyfi-manual.pdf" "manual.pdf")))
+  (dependencies
+    ((rustyfi-manual ()))))
+
+(libraryDoc
+  (name "rustyfi-logo-doc")
+  (version "0.1.0")
+  (build
+    ((rustyfi-rust "logo.saty" "-o" "logo.pdf")))
+  (sources
+    ((doc "rustyfi-logo.pdf" "logo.pdf")))
   (dependencies
     ((rustyfi-manual ()))))

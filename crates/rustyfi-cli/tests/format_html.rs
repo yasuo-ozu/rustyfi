@@ -67,9 +67,18 @@ fn format_html_writes_a_page_div_and_a_word_span() {
     assert_ok(&result, "compile --format html");
 
     let html = std::fs::read_to_string(&out).expect("--format html must write the output file");
-    assert!(html.starts_with("<!doctype html>"), "missing doctype:\n{html}");
-    assert!(html.contains("<div class=\"page\""), "missing page div:\n{html}");
-    assert!(html.contains("<span"), "missing at least one run span:\n{html}");
+    assert!(
+        html.starts_with("<!doctype html>"),
+        "missing doctype:\n{html}"
+    );
+    assert!(
+        html.contains("<div class=\"page\""),
+        "missing page div:\n{html}"
+    );
+    assert!(
+        html.contains("<span"),
+        "missing at least one run span:\n{html}"
+    );
     // Checked against the TEXT, tags stripped: a word is not one `InnerString`.
     // Hyphenation is on by default (as upstream loads english.satysfi-hyph into
     // every initial context), so `Hello,` is carried as `Hel` + `lo,` either
@@ -90,8 +99,14 @@ fn format_html_writes_a_page_div_and_a_word_span() {
         // the fragments are adjacent in the rendered text.
         out.chars().filter(|c| !c.is_whitespace()).collect()
     };
-    assert!(text.contains("Hello,"), "missing expected fixture word:\n{html}");
-    assert!(text.contains("world!"), "missing expected fixture word:\n{html}");
+    assert!(
+        text.contains("Hello,"),
+        "missing expected fixture word:\n{html}"
+    );
+    assert!(
+        text.contains("world!"),
+        "missing expected fixture word:\n{html}"
+    );
 
     std::fs::remove_dir_all(&work).ok();
 }
@@ -115,7 +130,10 @@ fn default_format_is_still_pdf() {
     assert_ok(&result, "compile with no --format");
 
     let bytes = std::fs::read(&out).expect("default format must write the output file");
-    assert!(bytes.starts_with(b"%PDF-"), "default --format must still produce a PDF");
+    assert!(
+        bytes.starts_with(b"%PDF-"),
+        "default --format must still produce a PDF"
+    );
 
     std::fs::remove_dir_all(&work).ok();
 }

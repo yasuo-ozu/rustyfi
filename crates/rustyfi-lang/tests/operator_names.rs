@@ -118,7 +118,8 @@ fn module_sig_val_paren_op_parses_with_unresolved_type_name() {
     // (untyped) elaborator or the typechecker, this only needs to PARSE.
     let src = "module M : sig val (-->) : t -> t -> t end = struct \
         let (-->) a b = a end";
-    rustyfi_syntax::parse_file(src).expect("the parenthesized-operator sig/struct form should parse");
+    rustyfi_syntax::parse_file(src)
+        .expect("the parenthesized-operator sig/struct form should parse");
 }
 
 // ---- `not` binds looser than application (real-world compat round 4) ------
@@ -140,7 +141,10 @@ fn not_still_first_class_in_argument_position() {
     // `not` primitive value, so it can still be passed to a higher-order
     // function. `apply not true` = `not true` = `false`.
     let src = "let apply = fun f x -> f x in apply not true";
-    assert!(!boolean(src), "`not` in argument position must stay first-class");
+    assert!(
+        !boolean(src),
+        "`not` in argument position must stay first-class"
+    );
 }
 
 // ---- nested-module operator via local-open (real-world compat round 4) ----

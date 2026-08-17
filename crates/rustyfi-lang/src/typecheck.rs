@@ -20,16 +20,15 @@
 //! needs to pass untyped.
 
 use crate::ast::branded::{Ast, BText, CmdArg, IText, MathElem, Pattern};
-use crate::symbol::{Symbol, SymbolStore};
 use crate::elaborate::{Program, UserSynonymDecl, UserTypeDecl};
 pub use crate::exhaustive::MatchWarning;
 use crate::prim_types::{
     self, arrow, builtin_variants_with_version, labeled, list, mandatory, optional, product, reff,
-    t_block_boxes,
-    t_block_text, t_bool, t_context, t_deco, t_decoset, t_document, t_float, t_graphics, t_image,
-    t_inline_boxes, t_inline_text, t_int, t_length, t_math_boxes, t_math_text, t_option, t_paren,
-    t_path, t_prepath, t_string, t_unit, VariantDecl,
+    t_block_boxes, t_block_text, t_bool, t_context, t_deco, t_decoset, t_document, t_float,
+    t_graphics, t_image, t_inline_boxes, t_inline_text, t_int, t_length, t_math_boxes, t_math_text,
+    t_option, t_paren, t_path, t_prepath, t_string, t_unit, VariantDecl,
 };
+use crate::symbol::{Symbol, SymbolStore};
 use crate::types::{
     self, generalize, instantiate, resolve, resolve_row, BaseType, CmdArgType, Kind, MonoType,
     PolyType, Row, TypeContext,
@@ -670,18 +669,55 @@ fn name_to_mono(name: &str, version: RustyfiVersion) -> MonoType {
         // tier base/synonym types upstream's `types.cppo.ml` base_type_map
         // registers (`pre-path`/`path`/`graphics`/`image`, plus the builtin
         // synonyms `deco`/`deco-set` `primitives.cppo.ml:275-276`, plus the
-        // pragmatic `font` stand-in — see below). Version-gated on V0_1
-        // ONLY: nothing in the frozen 0.0.6 corpus ever runs
-        // `v1::module_check::check_program` (the sole consumer that needs
-        // these names resolved non-nominally), so gating keeps 0.0.6's
-        // `name_to_mono` output byte-identical by construction — the same
-        // spelling as the `math`/`math-text` fork just above. Under V0_0_6
-        // these names still fall through to the nominal
-        // `Variant(name, [])` default, unchanged from before this patch.
-        "pre-path" if version == RustyfiVersion::V0_1 => t_prepath(),
-        "path" if version == RustyfiVersion::V0_1 => t_path(),
-        "graphics" if version == RustyfiVersion::V0_1 => t_graphics(),
-        "image" if version == RustyfiVersion::V0_1 => t_image(),
+        // pragmatic `font` stand-in — see below).
+        //
+        // `pre-path`/`path`/`graphics`/`image` resolve the SAME WAY under
+        // both versions. The type NAME genuinely is not forked: upstream
+        // registers all four as the same base types in BOTH generations —
+        // 0.0.6 `types.cppo.ml:295-298` and dev-0-1-0 `types.cppo.ml:157`
+        // both map them to `PrePathType`/`PathType`/`GraphicsType`/
+        // `ImageType`, and neither table is cppo-gated. The port agrees:
+        // `t_prepath`/`t_path`/`t_graphics`/`t_image` take no version, and
+        // every primitive producing one (`fill`/`stroke` -> `t_graphics()`)
+        // is version-independent too.
+        //
+        // The VALUE rep does differ upstream — 0.0.6's `BCGraphics` holds a
+        // single `GraphicD.element`, dev-0-1-0's holds `GraphicD.t = element
+        // list` (what `graphics_is_collection` names, and why 0.0.6's `deco`
+        // returns `graphics list` where 0.1's returns one `graphics`) — but
+        // that difference is a SUBSET relation here, not an incompatibility.
+        // The port spells both with one `Value::Graphics(GraphicsElem)`,
+        // using the `GraphicsElem::Group` variant for 0.1's collection form.
+        // 0.0.6 can only ever produce a leaf: `unite-graphics`, the sole
+        // `Group` constructor, is 0.1-only (`primitives.rs`'s `v01` table,
+        // and `prim_types.rs` gates it on `graphics_is_collection`). So a
+        // 0.0.6 `graphics` entering 0.1 is an identity on a value 0.1
+        // already admits, and a 0.1 `Group` reaching 0.0.6 code is safe
+        // because `graphics` is opaque to 0.0.6 source (it has no
+        // destructuring primitive) and every consumer — `shift_graphics`,
+        // `graphics_bbox`, the PDF and SVG writers — handles `Group`
+        // uniformly.
+        //
+        // These four were originally gated on V0_1 to keep 0.0.6's
+        // `name_to_mono` output byte-identical, on the reasoning that
+        // nothing in the frozen 0.0.6 corpus needed them resolved
+        // non-nominally. Cross-version import is that consumer: the gate
+        // made `name_to_mono` DISAGREE across versions, which is precisely
+        // what `forked_type_names()` (below) diffs, so all four were
+        // reported as forked and X3's boundary guard rejected every 0.1
+        // document importing a 0.0.6 dependency that so much as mentions
+        // `graphics` in export position — the sole cause of all 7 gated
+        // fixtures. Ungating restores upstream's own table and drops them
+        // from the fork set, where they never belonged.
+        //
+        // Deliberately NOT ungated: `deco`/`deco-set` (builtin synonyms
+        // whose EXPANSION really does fork — 0.0.6 returns `graphics
+        // list`, 0.1 a single `graphics`; X3b adapts the value instead),
+        // `font` and `paren` (stand-ins, see below).
+        "pre-path" => t_prepath(),
+        "path" => t_path(),
+        "graphics" => t_graphics(),
+        "image" => t_image(),
         "deco" if version == RustyfiVersion::V0_1 => t_deco(version),
         "deco-set" if version == RustyfiVersion::V0_1 => t_decoset(version),
         // `font` decision (roadmap §3): upstream 0.1's `font` is an atomic
@@ -799,9 +835,7 @@ fn row_alpha_eq(
 ) -> bool {
     match (&*resolve_row(a), &*resolve_row(b)) {
         (Row::Empty, Row::Empty) => true,
-        (Row::Var(va), Row::Var(vb)) => {
-            bijective_pair(va.ptr_key(), vb.ptr_key(), rmap, rmap_rev)
-        }
+        (Row::Var(va), Row::Var(vb)) => bijective_pair(va.ptr_key(), vb.ptr_key(), rmap, rmap_rev),
         (Row::Cons(la, ta, ra), Row::Cons(lb, tb, rb)) => {
             la == lb
                 && mono_alpha_eq(&ta, &tb, vmap, vmap_rev, rmap, rmap_rev)
@@ -854,49 +888,58 @@ fn bijective_pair(
     }
 }
 
-/// Every builtin TYPE name whose shape (`primitive_type_with_version`'s
-/// scheme, when it names a PRIMITIVE, and/or `name_to_mono`'s `MonoType`,
-/// when it names a builtin TYPE) differs between `V0_0_6` and `V0_1` — the
-/// type-position companion to `primitives::forked_prim_names`, used by the
-/// same X1 forked-name guard (`lib.rs`'s `compile_document_v1_with_trials`).
-/// Checked names: every value-primitive name (`PRIMITIVE_NAMES` — some of
-/// these, e.g. `page-break`, are ALSO version-forked as values, so appearing
-/// in both sets is harmless and expected), plus the builtin TYPE names
-/// `name_to_mono` version-gates explicitly (`math`/`math-text`/`math-boxes`,
-/// and the V0_1-only graphics/paren tier).
+/// Every name that means a DIFFERENT TYPE under `V0_0_6` than under `V0_1`,
+/// i.e. whose `name_to_mono` lowering differs. Its sole consumer is the
+/// cross-version type-boundary guard (`v1::xver_adapt::reject_type_names`,
+/// via `lib.rs`'s `free.types` check), which asks exactly one question: if a
+/// 0.0.6 dependency writes this name in a type, does the 0.1 consumer read it
+/// as the same type?
+///
+/// This used to ALSO admit any name whose PRIMITIVE scheme forked
+/// (`primitive_type_with_version`, `pt_diff`), which was wrong for a type
+/// check in a way that mattered. `PRIMITIVE_NAMES` is a list of VALUE names —
+/// `band`, `read-file`, `tabular`, `<.` — and none of them is a type, so their
+/// only effect on a type-position guard is via a name collision. There was a
+/// real one: `math-char-class` is both a builtin type (nominal, version-blind
+/// under both) and a primitive whose scheme mentions the genuinely-forked
+/// `math`. Its scheme forking dragged the TYPE name into this set, so the
+/// guard rejected `math.satyh`'s perfectly safe sig mention (`\math-style :
+/// [math-char-class; math] math-cmd`) and, through it, every 0.1 document
+/// reaching the 0.0.6 math package. The design doc says as much in X3.1 —
+/// "only its constructor set forks … keep it out of X3" — but the derivation
+/// pulled it back in.
+///
+/// A forked primitive VALUE is not this guard's problem: X2a made each 0.0.6
+/// dependency's bindings `Ast::VersionScope(V0_0_6, _)`-wrapped, so a forked
+/// primitive referenced inside one resolves against 0.0.6's own `PrimDef` and
+/// runs under `Interp::version = V0_0_6`. That is why `lib.rs` already dropped
+/// the value half of the guard (`free.values` against `forked_prim_names`).
+/// The names below are therefore just the builtin TYPE names, filtered to
+/// those that really do lower differently.
 pub fn forked_type_names() -> BTreeSet<String> {
-    PRIMITIVE_NAMES
-        .iter()
-        .copied()
-        .chain([
-            "math",
-            "math-text",
-            "math-boxes",
-            "pre-path",
-            "path",
-            "graphics",
-            "image",
-            "deco",
-            "deco-set",
-            "font",
-            "paren",
-        ])
-        .filter(|&n| {
-            let pt_a = prim_types::primitive_type_with_version(n, RustyfiVersion::V0_0_6);
-            let pt_b = prim_types::primitive_type_with_version(n, RustyfiVersion::V0_1);
-            let pt_diff = match (&pt_a, &pt_b) {
-                (None, None) => false,
-                (Some(a), Some(b)) => !mono_type_alpha_eq(a.body(), b.body()),
-                _ => true,
-            };
-            let nm_diff = !mono_type_alpha_eq(
-                &name_to_mono(n, RustyfiVersion::V0_0_6),
-                &name_to_mono(n, RustyfiVersion::V0_1),
-            );
-            pt_diff || nm_diff
-        })
-        .map(str::to_string)
-        .collect()
+    [
+        "math",
+        "math-text",
+        "math-boxes",
+        "pre-path",
+        "path",
+        "graphics",
+        "image",
+        "deco",
+        "deco-set",
+        "font",
+        "paren",
+        "math-char-class",
+    ]
+    .into_iter()
+    .filter(|&n| {
+        !mono_type_alpha_eq(
+            &name_to_mono(n, RustyfiVersion::V0_0_6),
+            &name_to_mono(n, RustyfiVersion::V0_1),
+        )
+    })
+    .map(str::to_string)
+    .collect()
 }
 
 fn lower_type_atom(
@@ -936,7 +979,12 @@ fn lower_type_atom(
                         let mut labels: Vec<(String, MonoType)> = a
                             .opt_labels
                             .iter()
-                            .map(|f| (f.label.name.clone(), lower_type_expr(&f.ty, tyvars, version)))
+                            .map(|f| {
+                                (
+                                    f.label.name.clone(),
+                                    lower_type_expr(&f.ty, tyvars, version),
+                                )
+                            })
                             .collect();
                         labels.sort_by(|x, y| x.0.cmp(&y.0));
                         labeled(labels, ty)
@@ -982,16 +1030,17 @@ fn lower_type_atom(
         // needed: `TypeAtom::RecordOpen` is unreachable from a `V0_0_6` token
         // stream by construction (see that variant's doc comment).
         TypeAtom::RecordOpen { inner, .. } => {
-            let row = inner.fields.iter().rev().fold(
-                Row::Var(types::new_row_var(0)),
-                |rest, f| {
+            let row = inner
+                .fields
+                .iter()
+                .rev()
+                .fold(Row::Var(types::new_row_var(0)), |rest, f| {
                     Row::Cons(
                         f.name.name.clone(),
                         Box::new(lower_type_expr(&f.ty, tyvars, version)),
                         Box::new(rest),
                     )
-                },
-            );
+                });
             MonoType::Record(row)
         }
         TypeAtom::Var(tv) => match tyvars.get(&tv.name) {
@@ -1062,7 +1111,11 @@ fn lower_type_app(
     };
     match ctor {
         TypeAtom::Name(name) => {
-            let single = if args.len() == 1 { Some(args[0].clone()) } else { None };
+            let single = if args.len() == 1 {
+                Some(args[0].clone())
+            } else {
+                None
+            };
             match name.name.as_str() {
                 "list" if single.is_some() => list(single.unwrap()),
                 "ref" if single.is_some() => reff(single.unwrap()),
@@ -1106,9 +1159,7 @@ pub(crate) fn lower_type_expr(
     version: RustyfiVersion,
 ) -> MonoType {
     match ty {
-        TypeExpr::Fun {
-            opts, dom, cod, ..
-        } => {
+        TypeExpr::Fun { opts, dom, cod, .. } => {
             let result = arrow(
                 lower_type_prod(dom, tyvars, version),
                 lower_type_expr(cod, tyvars, version),
@@ -1128,7 +1179,9 @@ pub(crate) fn lower_type_expr(
         // real 0.1 source (a 0.0.6 source hitting this arm is caught by that
         // earlier gate, with a clear version-error message rather than
         // silently building a nonsense type here).
-        TypeExpr::OptRowFun { opt_dom, dom, cod, .. } => {
+        TypeExpr::OptRowFun {
+            opt_dom, dom, cod, ..
+        } => {
             let row = opt_dom.entries.iter().rev().fold(Row::Empty, |acc, e| {
                 Row::Cons(
                     e.label.name.clone(),
@@ -1200,9 +1253,10 @@ fn find_opt_row_fun_in_atom(a: &TypeAtom) -> Option<Span> {
         TypeAtom::Record { fields, .. } => {
             fields.iter().find_map(|f| find_opt_row_fun_in_expr(&f.ty))
         }
-        TypeAtom::RecordOpen { inner, .. } => {
-            inner.fields.iter().find_map(|f| find_opt_row_fun_in_expr(&f.ty))
-        }
+        TypeAtom::RecordOpen { inner, .. } => inner
+            .fields
+            .iter()
+            .find_map(|f| find_opt_row_fun_in_expr(&f.ty)),
         TypeAtom::Var(_) | TypeAtom::Name(_) | TypeAtom::NameMod(_) => None,
     }
 }
@@ -1281,7 +1335,9 @@ fn collect_type_vars(ty: &TypeExpr, out: &mut Vec<String>) {
             TypeExpr::Atom(prod) => walk_prod(prod, out),
             // optional-arg-rows increment 2: a labeled-optional domain's
             // entry types can mention tyvars same as any other domain.
-            TypeExpr::OptRowFun { opt_dom, dom, cod, .. } => {
+            TypeExpr::OptRowFun {
+                opt_dom, dom, cod, ..
+            } => {
                 for e in &opt_dom.entries {
                     walk_expr(&e.ty, out);
                 }
@@ -1330,11 +1386,36 @@ pub(crate) fn lower_sig_item(
     version: RustyfiVersion,
 ) -> Option<(String, MonoType)> {
     let (name, ty, constraints): (&str, &TypeExpr, &[SigConstraint]) = match item {
-        SigItem::ValHorzCmd { name, ty, constraints, .. } => (&name.name, ty, constraints),
-        SigItem::ValVertCmd { name, ty, constraints, .. } => (&name.name, ty, constraints),
-        SigItem::Val { name, ty, constraints, .. } => (&name.name, ty, constraints),
-        SigItem::DirectHorzCmd { name, ty, constraints, .. } => (&name.name, ty, constraints),
-        SigItem::DirectVertCmd { name, ty, constraints, .. } => (&name.name, ty, constraints),
+        SigItem::ValHorzCmd {
+            name,
+            ty,
+            constraints,
+            ..
+        } => (&name.name, ty, constraints),
+        SigItem::ValVertCmd {
+            name,
+            ty,
+            constraints,
+            ..
+        } => (&name.name, ty, constraints),
+        SigItem::Val {
+            name,
+            ty,
+            constraints,
+            ..
+        } => (&name.name, ty, constraints),
+        SigItem::DirectHorzCmd {
+            name,
+            ty,
+            constraints,
+            ..
+        } => (&name.name, ty, constraints),
+        SigItem::DirectVertCmd {
+            name,
+            ty,
+            constraints,
+            ..
+        } => (&name.name, ty, constraints),
         SigItem::Type { .. } => return None,
     };
     let mut names = Vec::new();
@@ -1377,7 +1458,10 @@ fn build_variant_decl(
             None => None,
             Some(t) => {
                 check_type_expr_v0_1_only(t, version)?;
-                Some(expand_synonyms(&lower_type_expr(t, &tyvar_map, version), synonyms)?)
+                Some(expand_synonyms(
+                    &lower_type_expr(t, &tyvar_map, version),
+                    synonyms,
+                )?)
             }
         };
         ctors.push((name.clone(), payload));
@@ -1662,10 +1746,16 @@ pub(crate) enum BindingView<'a, 's> {
     /// `Ast::LetIn` — plain value OR `\`/`+`-sigiled command binding; the
     /// sigil dispatch (`command_scheme`) stays inside the checker, exactly
     /// as today.
-    Let { name: Symbol<'s>, value: &'a Ast<'s> },
+    Let {
+        name: Symbol<'s>,
+        value: &'a Ast<'s>,
+    },
     /// `Ast::LetMathIn` — a math-command binding (distinct variant by
     /// construction).
-    LetMath { name: Symbol<'s>, value: &'a Ast<'s> },
+    LetMath {
+        name: Symbol<'s>,
+        value: &'a Ast<'s>,
+    },
     /// `Ast::LetRecIn`'s binding group (all names in scope in all bodies).
     LetRec(&'a [(Symbol<'s>, Rc<Ast<'s>>)]),
     /// `Ast::LetMutableIn` — value restriction, never generalized.
@@ -2004,7 +2094,9 @@ impl<'s> Checker<'s> {
             // pre-wrapped as `Some`/`None` (`elaborate.rs`'s `app_arg_to_ast`).
             doms.into_iter()
                 .map(|d| match resolve(&d).into_owned() {
-                    MonoType::Variant(vname, mut vargs) if vname == "option" && vargs.len() == 1 => {
+                    MonoType::Variant(vname, mut vargs)
+                        if vname == "option" && vargs.len() == 1 =>
+                    {
                         optional(vargs.pop().unwrap())
                     }
                     _ => mandatory(d),
@@ -2096,7 +2188,11 @@ impl<'s> Checker<'s> {
         let (row_sup, d_sup) = slots.pop().unwrap();
         let (row_sub, d_sub) = slots.pop().unwrap();
         let (row_ctx, d_ctx) = slots.pop().unwrap();
-        for (which, row) in [("context", &row_ctx), ("'sub'", &row_sub), ("'sup'", &row_sup)] {
+        for (which, row) in [
+            ("context", &row_ctx),
+            ("'sub'", &row_sub),
+            ("'sup'", &row_sup),
+        ] {
             if !matches!(&*resolve_row(row), Row::Empty) {
                 return Err(TypeError::simple(
                     span,
@@ -2548,7 +2644,8 @@ impl<'s> Checker<'s> {
             // to dispatch on and no "which kind of `\`-binding is this"
             // ambiguity to resolve.
             Ast::LetMathIn(name, value, body) => {
-                let schemes = self.infer_binding(env, BindingView::LetMath { name: *name, value })?;
+                let schemes =
+                    self.infer_binding(env, BindingView::LetMath { name: *name, value })?;
                 let inner = env.with_all(schemes);
                 self.infer(&inner, body)
             }
@@ -2674,9 +2771,9 @@ impl<'s> Checker<'s> {
                         return Err(TypeError::simple(
                             Some(*span),
                             format!(
-                                "internal error: unbound mutable variable '{}' reached the typechecker",
-                                self.text(*name)
-                            ),
+                            "internal error: unbound mutable variable '{}' reached the typechecker",
+                            self.text(*name)
+                        ),
                         ))
                     }
                 };
@@ -2821,9 +2918,9 @@ impl<'s> Checker<'s> {
         payload: Option<&Ast<'s>>,
         expected_result: Option<&MonoType>,
     ) -> Result<MonoType, TypeError> {
-        let decl = self.lookup_ctor(name).ok_or_else(|| {
-            TypeError::simple(None, format!("unknown constructor '{name}'"))
-        })?;
+        let decl = self
+            .lookup_ctor(name)
+            .ok_or_else(|| TypeError::simple(None, format!("unknown constructor '{name}'")))?;
         let args: Vec<MonoType> = (0..decl.params).map(|_| self.fresh()).collect();
         let (payload_ty, result_ty) = decl.instantiate_ctor(name, &args).ok_or_else(|| {
             TypeError::simple(
@@ -2934,7 +3031,9 @@ impl<'s> Checker<'s> {
                     (None, None) => Ok(env),
                     (Some(_), None) => Err(TypeError::simple(
                         None,
-                        format!("constructor pattern '{name}' expects a payload but none was given"),
+                        format!(
+                            "constructor pattern '{name}' expects a payload but none was given"
+                        ),
                     )),
                     (None, Some(_)) => Err(TypeError::simple(
                         None,
@@ -2970,9 +3069,9 @@ impl<'s> Checker<'s> {
                         return Err(TypeError::simple(
                             Some(*span),
                             format!(
-                                "internal error: unbound inline command '{}' reached the typechecker",
-                                self.text(*name)
-                            ),
+                            "internal error: unbound inline command '{}' reached the typechecker",
+                            self.text(*name)
+                        ),
                         ))
                     }
                 };
@@ -3029,9 +3128,9 @@ impl<'s> Checker<'s> {
                         return Err(TypeError::simple(
                             Some(*span),
                             format!(
-                                "internal error: unbound block command '{}' reached the typechecker",
-                                self.text(*name)
-                            ),
+                            "internal error: unbound block command '{}' reached the typechecker",
+                            self.text(*name)
+                        ),
                         ))
                     }
                 };
@@ -3347,8 +3446,8 @@ mod l3_per_binding_tests {
                     body
                 }
                 Ast::LetMutableIn(name, init, body) => {
-                    let schemes =
-                        checker.infer_binding(&env, BindingView::LetMutable { name: *name, init })?;
+                    let schemes = checker
+                        .infer_binding(&env, BindingView::LetMutable { name: *name, init })?;
                     env = env.with_all(schemes);
                     body
                 }
@@ -3463,7 +3562,10 @@ mod l3_per_binding_tests {
         let before = checker
             .infer_binding(
                 &env,
-                BindingView::Let { name: store.intern("before"), value: &a_payload },
+                BindingView::Let {
+                    name: store.intern("before"),
+                    value: &a_payload,
+                },
             )
             .expect_err("`A` should be unknown before declare_variant");
         assert_eq!(format!("{before}"), "unknown constructor 'A'");
@@ -3472,10 +3574,16 @@ mod l3_per_binding_tests {
         let genuinely_unknown = checker
             .infer_binding(
                 &env,
-                BindingView::Let { name: store.intern("n"), value: &nosuch_payload },
+                BindingView::Let {
+                    name: store.intern("n"),
+                    value: &nosuch_payload,
+                },
             )
             .expect_err("a genuinely undeclared ctor should also fail");
-        assert_eq!(format!("{genuinely_unknown}"), "unknown constructor 'NoSuchCtor'");
+        assert_eq!(
+            format!("{genuinely_unknown}"),
+            "unknown constructor 'NoSuchCtor'"
+        );
 
         // After `declare_variant`, `A` becomes visible and typechecks —
         // this later binding sees it; the earlier `before` call above is
@@ -3485,7 +3593,10 @@ mod l3_per_binding_tests {
             .expect("declare_variant should succeed");
         let after = checker.infer_binding(
             &env,
-            BindingView::Let { name: store.intern("after"), value: &a_payload },
+            BindingView::Let {
+                name: store.intern("after"),
+                value: &a_payload,
+            },
         );
         assert!(
             after.is_ok(),
@@ -3642,7 +3753,8 @@ mod sig_constraint_tests {
         let mut ctx = TypeContext::new();
         let mut saw_record_kind = false;
         for item in &sig.items {
-            let (name, ty) = lower_sig_item(item, &mut ctx, RustyfiVersion::V0_0_6).expect("a value item");
+            let (name, ty) =
+                lower_sig_item(item, &mut ctx, RustyfiVersion::V0_0_6).expect("a value item");
             assert_eq!(name, "document");
             // Walk the lowered `Func` chain: `'a`'s fresh variable is the
             // very first domain (`Func(Var('a), Func(option(config),
@@ -3674,8 +3786,7 @@ mod sig_constraint_tests {
         // the positive-presence check itself already works once something
         // does.
         let mut ctx = TypeContext::new();
-        let labels: BTreeSet<String> =
-            ["title", "author"].iter().map(|s| s.to_string()).collect();
+        let labels: BTreeSet<String> = ["title", "author"].iter().map(|s| s.to_string()).collect();
         let v = ctx.fresh_var_with_kind(Kind::Record(labels));
         let constrained = MonoType::Var(v);
         let full = MonoType::Record(Row::Cons(
@@ -3693,8 +3804,7 @@ mod sig_constraint_tests {
     #[test]
     fn kind_record_bound_rejects_a_row_missing_a_required_label() {
         let mut ctx = TypeContext::new();
-        let labels: BTreeSet<String> =
-            ["title", "author"].iter().map(|s| s.to_string()).collect();
+        let labels: BTreeSet<String> = ["title", "author"].iter().map(|s| s.to_string()).collect();
         let v = ctx.fresh_var_with_kind(Kind::Record(labels));
         let constrained = MonoType::Var(v);
         let missing_author = MonoType::Record(Row::Cons(
@@ -3704,7 +3814,10 @@ mod sig_constraint_tests {
         ));
         let err = unify(&constrained, &missing_author)
             .expect_err("row is missing the required 'author' label");
-        assert!(format!("{err:?}").contains("author"), "error should name the missing label: {err:?}");
+        assert!(
+            format!("{err:?}").contains("author"),
+            "error should name the missing label: {err:?}"
+        );
     }
 
     #[test]
@@ -3741,7 +3854,8 @@ mod sig_constraint_tests {
         let mut ctx = TypeContext::new();
         let mut names = Vec::new();
         for item in &sig.items {
-            let (name, _ty) = lower_sig_item(item, &mut ctx, RustyfiVersion::V0_0_6).expect("a value item");
+            let (name, _ty) =
+                lower_sig_item(item, &mut ctx, RustyfiVersion::V0_0_6).expect("a value item");
             names.push(name);
         }
         assert_eq!(

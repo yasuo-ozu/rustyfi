@@ -4,9 +4,9 @@
 //! — no parser or elaborator involved, mirroring `prims_phase4.rs`'s style.
 
 use rustyfi_backend::{Context, FontKey, FontMetrics, Length, MathGlyph, PureHorzBox};
-use rustyfi_lang::quoted::MathElem;
 use rustyfi_lang::eval::Interp;
 use rustyfi_lang::primitives::read_math;
+use rustyfi_lang::quoted::MathElem;
 
 struct Mono;
 

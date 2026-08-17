@@ -158,7 +158,10 @@ const GROUP_E_NAMES: &[&str] = &[
 fn every_group_e_primitive_resolves_in_base_env() {
     let env = primitives::base_env();
     for name in GROUP_E_NAMES {
-        assert!(env.lookup(name).is_some(), "primitive `{name}` is not bound in base_env()");
+        assert!(
+            env.lookup(name).is_some(),
+            "primitive `{name}` is not bound in base_env()"
+        );
     }
 }
 

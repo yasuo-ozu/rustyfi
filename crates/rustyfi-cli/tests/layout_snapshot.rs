@@ -218,9 +218,18 @@ fn write_box(out: &mut String, indent: usize, dx: Length, bx: &PureHorzBox) {
             let _ = writeln!(out, "{pad}dx={} OuterFil", fmt_len(dx));
         }
         PureHorzBox::FixedEmpty { width } => {
-            let _ = writeln!(out, "{pad}dx={} FixedEmpty w={}", fmt_len(dx), fmt_len(*width));
+            let _ = writeln!(
+                out,
+                "{pad}dx={} FixedEmpty w={}",
+                fmt_len(dx),
+                fmt_len(*width)
+            );
         }
-        PureHorzBox::Image { width, height, image } => {
+        PureHorzBox::Image {
+            width,
+            height,
+            image,
+        } => {
             let _ = writeln!(
                 out,
                 "{pad}dx={} Image w={} h={} image_id={}",
@@ -236,7 +245,11 @@ fn write_box(out: &mut String, indent: usize, dx: Length, bx: &PureHorzBox) {
             post_break,
             no_break,
         } => {
-            let _ = writeln!(out, "{pad}dx={} Discretionary penalty={penalty}", fmt_len(dx));
+            let _ = writeln!(
+                out,
+                "{pad}dx={} Discretionary penalty={penalty}",
+                fmt_len(dx)
+            );
             if !pre_break.is_empty() {
                 let _ = writeln!(out, "{pad}  pre_break:");
                 for b in pre_break {
@@ -388,10 +401,21 @@ fn write_box(out: &mut String, indent: usize, dx: Length, bx: &PureHorzBox) {
             }
         }
         PureHorzBox::FrameMarker { id, end } => {
-            let _ = writeln!(out, "{pad}dx={} FrameMarker id={} end={}", fmt_len(dx), id.0, end);
+            let _ = writeln!(
+                out,
+                "{pad}dx={} FrameMarker id={} end={}",
+                fmt_len(dx),
+                id.0,
+                end
+            );
         }
         PureHorzBox::Footnote { block } => {
-            let _ = writeln!(out, "{pad}dx={} Footnote lines={}", fmt_len(dx), block.len());
+            let _ = writeln!(
+                out,
+                "{pad}dx={} Footnote lines={}",
+                fmt_len(dx),
+                block.len()
+            );
             for vb in block {
                 write_vbox(out, indent + 1, vb);
             }
@@ -504,7 +528,11 @@ fn serialize_document(name: &str, doc: &DocumentValue) -> String {
         doc.extras.destinations.len(),
         doc.extras.outline.len(),
         doc.extras.page_graphics.len(),
-        if doc.extras.doc_info.is_some() { "some" } else { "none" }
+        if doc.extras.doc_info.is_some() {
+            "some"
+        } else {
+            "none"
+        }
     );
     out
 }

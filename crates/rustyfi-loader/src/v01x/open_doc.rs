@@ -226,15 +226,17 @@ pub(crate) fn load(
     // `libs_dep ++ libs_local` then the document (`main.ml:323`). Local files
     // and the entry are `FileOrigin::Local`.
     let mut files = prefix;
-    files.extend(order.into_iter().map(|id| LoadedFile {
-        path: path_of[&id].clone(),
-        cst: cst_of
-            .remove(&id)
-            .expect("every graph node id was parsed before toposort"),
-        origin: FileOrigin::Local,
-        // Envelopes mode is `V0_1`-only (`load`'s guard) — every file it
-        // produces is `V0_1`, unconditionally.
-        version: RustyfiVersion::V0_1,
+    files.extend(order.into_iter().map(|id| {
+        LoadedFile {
+            path: path_of[&id].clone(),
+            cst: cst_of
+                .remove(&id)
+                .expect("every graph node id was parsed before toposort"),
+            origin: FileOrigin::Local,
+            // Envelopes mode is `V0_1`-only (`load`'s guard) — every file it
+            // produces is `V0_1`, unconditionally.
+            version: RustyfiVersion::V0_1,
+        }
     }));
 
     Ok(LoadedProgram { files })

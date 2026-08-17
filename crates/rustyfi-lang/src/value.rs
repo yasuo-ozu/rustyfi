@@ -1,8 +1,8 @@
 //! Runtime values (a milestone-1 subset of `syntactic_value`).
 
-use crate::quoted::{BText, IText, MathElem};
 use crate::compile::CompiledExpr;
 use crate::primitives::PrimDef;
+use crate::quoted::{BText, IText, MathElem};
 use rustyfi_backend::{
     AnnotAction, Color, Context, DecoId, DocExtras, HorzBox, HyphenLang, ImageId, ImageResource,
     Length, MathCharClass, MathKind, Page, PageGeometry, VertBox,
@@ -39,13 +39,22 @@ pub enum Value {
     /// here is looked up by name at layout time. The environment is still
     /// captured — a compiled node resolves its *locals* against the
     /// environment it runs in.
-    InlineText { elems: Rc<Vec<IText>>, env: Env },
+    InlineText {
+        elems: Rc<Vec<IText>>,
+        env: Env,
+    },
     /// Quoted block text with its captured environment.
-    BlockText { elems: Rc<Vec<BText>>, env: Env },
+    BlockText {
+        elems: Rc<Vec<BText>>,
+        env: Env,
+    },
     /// Quoted math text with its captured environment (mirrors
     /// `InlineText`/`BlockText`); typesetting is deferred to phase 7, so this
     /// is carried opaquely for now.
-    MathText { elems: Rc<Vec<MathElem>>, env: Env },
+    MathText {
+        elems: Rc<Vec<MathElem>>,
+        env: Env,
+    },
     /// The faithful `math` value (`docs/plans/math-engine.md` §A item 1) —
     /// what every `math-*` primitive (`math-char`, `math-concat`,
     /// `math-sup`, …) builds and consumes, as opposed to `MathText`'s
@@ -249,7 +258,11 @@ pub enum MathElement {
     /// `math-char` / `math-big-char`: a run of math characters, one atom.
     /// `big` selects the large-operator size class (`\sum`/`\int`-style;
     /// roadmap D — Slice 1's layout does not yet upscale it).
-    Char { class: MathKind, big: bool, chars: String },
+    Char {
+        class: MathKind,
+        big: bool,
+        chars: String,
+    },
     /// `math-char-with-kern` / `math-big-char-with-kern`: like `Char`, plus
     /// opaque left/right kern-function closures (each `length -> length ->
     /// length`, fontsize/y-position -> kern amount; `\int`'s italic-correction
@@ -295,7 +308,10 @@ pub enum MathElement {
     /// stand-in rendering path `EmbeddedText` gets today (roadmap E,
     /// `docs/plans/math-engine.md`) — `math_glyphs_of_inline_boxes` over
     /// `boxes` directly, no closure application.
-    EmbeddedBoxes { class: MathKind, boxes: Vec<HorzBox> },
+    EmbeddedBoxes {
+        class: MathKind,
+        boxes: Vec<HorzBox>,
+    },
 }
 
 /// `math-variant-char`'s 9-field per-style codepoint record
@@ -542,11 +558,10 @@ impl Env {
     fn frame_at(&self, depth: u16) -> &Frame {
         let mut f = self;
         for _ in 0..depth {
-            f = f
-                .0
-                .parent
-                .as_ref()
-                .expect("compiled slot depth exceeds the runtime frame chain");
+            f =
+                f.0.parent
+                    .as_ref()
+                    .expect("compiled slot depth exceeds the runtime frame chain");
         }
         &f.0
     }
@@ -563,4 +578,3 @@ impl Env {
         self.frame_at(depth).slots.borrow_mut()[index as usize] = value;
     }
 }
-

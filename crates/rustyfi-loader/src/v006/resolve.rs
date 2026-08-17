@@ -6,6 +6,7 @@
 //! mode-specific `.satyh-<mode>` extension SATySFi also tries — out of scope
 //! here, matching the task's transcription instructions.
 
+use rustyfi_syntax::RustyfiVersion;
 use std::path::{Path, PathBuf};
 
 /// Extensions tried, in preference order, when a header name has none of its
@@ -75,18 +76,45 @@ pub(crate) fn resolve_import(dir: &Path, name: &str) -> Result<PathBuf, Vec<Path
 ///
 /// If `lib_root` is `None`, there is nowhere to search: returns `Err(vec![])`
 /// immediately (surfaced by `UnresolvedRequire` as "no candidates").
-pub(crate) fn resolve_require(lib_root: Option<&Path>, name: &str) -> Result<PathBuf, Vec<PathBuf>> {
+pub(crate) fn resolve_require(
+    lib_root: Option<&Path>,
+    name: &str,
+    version: RustyfiVersion,
+) -> Result<PathBuf, Vec<PathBuf>> {
     let Some(root) = lib_root else {
         return Err(Vec::new());
     };
     let dist_packages = root.join("dist").join("packages");
     let dist_v01_packages = root.join("dist-v01").join("packages");
-    let bases = [
-        dist_packages.clone(),
-        root.to_path_buf(),
-        dist_packages.join(name),
-        dist_v01_packages,
-    ];
+    // Search the load's OWN generation first. Both corpora are bundled side by
+    // side and many names exist in both (`itemize`, `list`, `code`, `deco`, …)
+    // with genuinely different APIs — 0.1's `itemize` has `+listing`'s
+    // `?(break : bool)` label and 0.1's `list` has `fold`, neither of which
+    // their 0.0.6 counterparts ever had. Resolving a 0.1 document's
+    // `@require:` to the 0.0.6 package therefore fails at the USE site with a
+    // missing label or an unbound member, which reads like a compiler gap and
+    // is really just the wrong file.
+    //
+    // Cross-generation resolution stays available as a FALLBACK in both
+    // directions — that is what makes cross-version import reachable at all
+    // (X1-X3) — so this reorders which candidate wins for a name present in
+    // both, and never removes a resolution. A 0.0.6 load is unchanged: its
+    // order is exactly what it always was.
+    let bases: Vec<PathBuf> = if version == RustyfiVersion::V0_1 {
+        vec![
+            dist_v01_packages,
+            dist_packages.clone(),
+            root.to_path_buf(),
+            dist_packages.join(name),
+        ]
+    } else {
+        vec![
+            dist_packages.clone(),
+            root.to_path_buf(),
+            dist_packages.join(name),
+            dist_v01_packages,
+        ]
+    };
     let mut candidates = Vec::new();
     for base in &bases {
         candidates.extend(candidates_in(base, name));

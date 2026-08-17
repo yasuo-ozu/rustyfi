@@ -86,7 +86,12 @@ fn dict(tag: HyphenLang) -> Option<Arc<Standard>> {
 /// caller (`primitives::text_to_boxes`'s `flush_word`) emits the word
 /// exactly as it would with no dictionary installed, which is what keeps
 /// the byte-identity gate provable (`docs/plans/design-hyphenation.md` §6).
-pub fn hyphenate_word(tag: HyphenLang, word: &str, left_min: usize, right_min: usize) -> Vec<usize> {
+pub fn hyphenate_word(
+    tag: HyphenLang,
+    word: &str,
+    left_min: usize,
+    right_min: usize,
+) -> Vec<usize> {
     let Some(dict) = dict(tag) else {
         return Vec::new();
     };

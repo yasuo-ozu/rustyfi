@@ -360,7 +360,11 @@ fn split_into_lines_matches_chop_space_indent() {
                 .collect();
             assert_eq!(
                 pairs,
-                vec![(0, "a".to_string()), (2, "bc".to_string()), (0, String::new())]
+                vec![
+                    (0, "a".to_string()),
+                    (2, "bc".to_string()),
+                    (0, String::new())
+                ]
             );
         }
         other => panic!("expected a list, got {other:?}"),
@@ -377,14 +381,21 @@ fn set_font_switches_to_the_bold_face_by_name_heuristic() {
     ]);
     let ast = app3("set-font", script, font, initial_ctx(100.0));
     match run(&ast) {
-        Value::Context(ctx) => assert_eq!(ctx.font, FontKey(1), "\"bold\" in the abbrev should select FONT_BOLD"),
+        Value::Context(ctx) => assert_eq!(
+            ctx.font,
+            FontKey(1),
+            "\"bold\" in the abbrev should select FONT_BOLD"
+        ),
         other => panic!("expected a context, got {other:?}"),
     }
 }
 
 #[test]
 fn get_natural_length_of_a_single_skip_is_its_own_length() {
-    let ast = app1(var("get-natural-length"), app1(var("block-skip"), len(10.0)));
+    let ast = app1(
+        var("get-natural-length"),
+        app1(var("block-skip"), len(10.0)),
+    );
     assert_len_close(run(&ast), 10.0);
 }
 
@@ -416,7 +427,11 @@ fn dominant_wide_script_round_trips_through_setter_and_getter() {
 fn dominant_narrow_script_round_trips_through_setter_and_getter() {
     let ast = app1(
         var("get-dominant-narrow-script"),
-        app2("set-dominant-narrow-script", ctor("Latin"), initial_ctx(100.0)),
+        app2(
+            "set-dominant-narrow-script",
+            ctor("Latin"),
+            initial_ctx(100.0),
+        ),
     );
     assert_ctor_eq(run(&ast), "Latin");
 }
@@ -438,7 +453,12 @@ fn get_language_defaults_to_no_language_system() {
 #[test]
 fn set_language_is_a_per_script_map_insert_not_a_scalar_overwrite() {
     // `set-language Kana Japanese |> set-language Latin English`
-    let ctx = app3("set-language", ctor("Kana"), ctor("Japanese"), initial_ctx(100.0));
+    let ctx = app3(
+        "set-language",
+        ctor("Kana"),
+        ctor("Japanese"),
+        initial_ctx(100.0),
+    );
     let ctx = app3("set-language", ctor("Latin"), ctor("English"), ctx);
 
     let get = |script: &str, ctx: &Ast| app2("get-language", ctor(script), ctx.clone());
@@ -486,6 +506,12 @@ fn setting_dominant_wide_script_leaves_the_rest_of_the_context_equal() {
         other => panic!("expected a 2-tuple, got {other:?}"),
     };
     assert_eq!(updated.dominant_wide_script, rustyfi_backend::Script::Kana);
-    let expected = rustyfi_backend::Context { dominant_wide_script: updated.dominant_wide_script, ..base };
-    assert_eq!(updated, expected, "only `dominant_wide_script` should differ from the base context");
+    let expected = rustyfi_backend::Context {
+        dominant_wide_script: updated.dominant_wide_script,
+        ..base
+    };
+    assert_eq!(
+        updated, expected,
+        "only `dominant_wide_script` should differ from the base context"
+    );
 }

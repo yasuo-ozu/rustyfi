@@ -116,7 +116,10 @@ fn columnhookf_prepends_its_line_to_the_top_of_every_page() {
 
     let mut hook_count = 0;
     for page in &doc.pages {
-        assert!(!page.lines.is_empty(), "every page should have at least the hook line");
+        assert!(
+            !page.lines.is_empty(),
+            "every page should have at least the hook line"
+        );
         let topmost = page
             .lines
             .iter()
@@ -127,7 +130,11 @@ fn columnhookf_prepends_its_line_to_the_top_of_every_page() {
             "the topmost line of each page must be the columnhookf's own line, got {:?}",
             line_text(topmost)
         );
-        hook_count += page.lines.iter().filter(|l| line_text(l).contains("HOOK")).count();
+        hook_count += page
+            .lines
+            .iter()
+            .filter(|l| line_text(l).contains("HOOK"))
+            .count();
     }
     assert_eq!(
         hook_count,

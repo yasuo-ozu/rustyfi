@@ -141,8 +141,7 @@ fn convert(raw: DepsConfigRaw) -> Result<DepsConfig, String> {
 fn convert_envelope_spec(raw: EnvelopeSpecRaw, ctx: &str) -> Result<EnvelopeSpec, String> {
     let path = parse_abs_path(&raw.path)
         .ok_or_else(|| format!("{ctx}.path: not an absolute path: `{}`", raw.path))?;
-    let dependencies =
-        convert_dependency_list(raw.dependencies, &format!("{ctx}.dependencies"))?;
+    let dependencies = convert_dependency_list(raw.dependencies, &format!("{ctx}.dependencies"))?;
     Ok(EnvelopeSpec {
         name: raw.name,
         path,
@@ -180,9 +179,7 @@ fn convert_dependency(raw: EnvelopeDependencyRaw, ctx: &str) -> Result<EnvelopeD
 fn is_uppercased_identifier(s: &str) -> bool {
     let mut chars = s.chars();
     match chars.next() {
-        Some(c0) if c0.is_ascii_uppercase() => {
-            chars.all(|c| c == '-' || c.is_ascii_alphanumeric())
-        }
+        Some(c0) if c0.is_ascii_uppercase() => chars.all(|c| c == '-' || c.is_ascii_alphanumeric()),
         _ => false,
     }
 }

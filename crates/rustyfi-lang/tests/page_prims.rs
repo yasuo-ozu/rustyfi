@@ -14,8 +14,8 @@ use rustyfi_backend::{
 };
 use rustyfi_lang::ast::Ast;
 use rustyfi_lang::eval;
-use rustyfi_lang::primitives;
 use rustyfi_lang::prim_types::{builtin_variants_with_version, primitive_type_with_version};
+use rustyfi_lang::primitives;
 use rustyfi_lang::types::{BaseType, MonoType};
 use rustyfi_lang::value::{DocumentValue, Value};
 use rustyfi_lang::{elaborate, typecheck, CompileError};
@@ -157,7 +157,11 @@ fn text_line() -> VertBox {
 fn chop_page_ends_the_page_right_after_a_clear_page_marker() {
     let mut vboxes = vec![text_line(), VertBox::ClearPage, text_line()];
     let page1 = chop_page((Length::ZERO, Length::ZERO), Length::pt(400.0), &mut vboxes);
-    assert_eq!(page1.len(), 1, "clear-page ends the page after the first line");
+    assert_eq!(
+        page1.len(),
+        1,
+        "clear-page ends the page after the first line"
+    );
     assert_eq!(vboxes.len(), 1, "only the trailing line should remain");
     let page2 = chop_page((Length::ZERO, Length::ZERO), Length::pt(400.0), &mut vboxes);
     assert_eq!(page2.len(), 1);
@@ -254,7 +258,10 @@ fn hook_page_break_block_fires_through_chop_page_and_fire_hooks() {
     };
 
     let lines = chop_page((Length::ZERO, Length::ZERO), Length::pt(400.0), &mut vboxes);
-    assert!(vboxes.is_empty(), "the hook marker should be fully consumed");
+    assert!(
+        vboxes.is_empty(),
+        "the hook marker should be fully consumed"
+    );
     assert_eq!(
         lines,
         vec![rustyfi_backend::PlacedLine {
@@ -268,7 +275,9 @@ fn hook_page_break_block_fires_through_chop_page_and_fire_hooks() {
     let doc = DocumentValue {
         geometry: PageGeometry::default(),
         pages: vec![Page {
-            body_lines: usize::MAX, lines }],
+            body_lines: usize::MAX,
+            lines,
+        }],
         images: Vec::new(),
         extras: Default::default(),
         reflow_source: None,
@@ -343,7 +352,10 @@ fn page_break_retypes_per_version() {
     match v006.body() {
         MonoType::Func(_row, dom, _cod) => match dom.as_ref() {
             MonoType::Variant(name, args) => {
-                assert_eq!(name, "page", "v0.0.6 page-break's first arg must be the `page` ADT");
+                assert_eq!(
+                    name, "page",
+                    "v0.0.6 page-break's first arg must be the `page` ADT"
+                );
                 assert!(args.is_empty());
             }
             other => panic!("expected a `page` variant, got {other:?}"),
@@ -356,7 +368,11 @@ fn page_break_retypes_per_version() {
     match v01.body() {
         MonoType::Func(_row, dom, _cod) => match dom.as_ref() {
             MonoType::Product(elems) => {
-                assert_eq!(elems.len(), 2, "v0.1's page-break first arg is (length * length)");
+                assert_eq!(
+                    elems.len(),
+                    2,
+                    "v0.1's page-break first arg is (length * length)"
+                );
                 for elem in elems {
                     assert!(
                         matches!(elem, MonoType::Base(BaseType::Length)),

@@ -66,7 +66,9 @@ fn eval_str(src: &str) -> Value {
     typecheck::typecheck(&program).expect("typecheck");
     let mono = Mono;
     let mut interp = eval::Interp::new(&mono);
-    interp.eval(&env, &rustyfi_lang::ast::debrand(&program.body, &store)).expect("eval")
+    interp
+        .eval(&env, &rustyfi_lang::ast::debrand(&program.body, &store))
+        .expect("eval")
 }
 
 // ============================================================================
@@ -75,8 +77,7 @@ fn eval_str(src: &str) -> Value {
 // typechecks and evaluates.
 // ============================================================================
 
-const LENGTH_ABS_SRC: &str =
-    "let length-abs len = if len <' 0pt then 0pt -' len else len
+const LENGTH_ABS_SRC: &str = "let length-abs len = if len <' 0pt then 0pt -' len else len
      in
      length-abs (0pt -' 5pt)";
 
@@ -167,7 +168,9 @@ fn line_stack_bottom_stacks_each_element_as_one_line_at_the_widest_natural_width
         Value::InlineBoxes(boxes) => {
             assert_eq!(boxes.len(), 1);
             match &boxes[0] {
-                rustyfi_backend::HorzBox::Pure(PureHorzBox::EmbeddedBlock { width, block, .. }) => {
+                rustyfi_backend::HorzBox::Pure(PureHorzBox::EmbeddedBlock {
+                    width, block, ..
+                }) => {
                     assert_eq!(*width, Length::pt(20.0), "wid should be the widest line");
                     assert_eq!(block.len(), 2, "each list element becomes its own line");
                     assert!(

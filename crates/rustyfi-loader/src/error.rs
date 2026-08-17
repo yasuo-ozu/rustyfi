@@ -52,7 +52,9 @@ pub enum LoadError {
 
     /// A file reached via `@require:`/`@import:` is a document (has a body)
     /// rather than a library.
-    #[error("{path}: required/imported file must be a library (no `in ...` body), found a document")]
+    #[error(
+        "{path}: required/imported file must be a library (no `in ...` body), found a document"
+    )]
     DocumentAsDependency { path: PathBuf },
 
     /// The entry file is a library (no body) rather than a document.

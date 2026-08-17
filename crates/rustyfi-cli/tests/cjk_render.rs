@@ -98,7 +98,11 @@ const SENTENCE: &str = "日本語のテスト文です";
 fn decode_pdf_string(s: &[u8]) -> Option<Vec<u8>> {
     if s.len() >= 2 && s.first() == Some(&b'<') && s.last() == Some(&b'>') {
         let hex = &s[1..s.len() - 1];
-        let mut digits: Vec<u8> = hex.iter().copied().filter(|b| b.is_ascii_hexdigit()).collect();
+        let mut digits: Vec<u8> = hex
+            .iter()
+            .copied()
+            .filter(|b| b.is_ascii_hexdigit())
+            .collect();
         if digits.len() % 2 == 1 {
             digits.push(b'0');
         }
@@ -152,7 +156,11 @@ fn decode_pdf_string(s: &[u8]) -> Option<Vec<u8>> {
                         let mut val = (d - b'0') as u32;
                         let mut n = 1;
                         i += 2;
-                        while n < 3 && i < inner.len() && inner[i].is_ascii_digit() && inner[i] < b'8' {
+                        while n < 3
+                            && i < inner.len()
+                            && inner[i].is_ascii_digit()
+                            && inner[i] < b'8'
+                        {
                             val = val * 8 + (inner[i] - b'0') as u32;
                             i += 1;
                             n += 1;

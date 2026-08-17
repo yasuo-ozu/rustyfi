@@ -239,7 +239,10 @@ mod tests {
     #[test]
     fn symbols_are_hashable_keys() {
         let store = SymbolStore::new();
-        let set: HashSet<Symbol<'_>> = ["a", "b", "a", "c"].iter().map(|s| store.intern(s)).collect();
+        let set: HashSet<Symbol<'_>> = ["a", "b", "a", "c"]
+            .iter()
+            .map(|s| store.intern(s))
+            .collect();
         assert_eq!(set.len(), 3);
         assert_eq!(std::mem::size_of::<Symbol<'_>>(), 4);
     }

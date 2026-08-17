@@ -280,8 +280,7 @@ fn require_list_mapi_adjacent_uses_a_tuple_pattern_lambda_correctly() {
     let src = "@require: list
 in
 List.mapi-adjacent (fun i x leftopt rightopt -> i) [10; 20; 30]";
-    let v =
-        compile_via_loader("list-mapi-adjacent", src).expect("list.satyg should compile");
+    let v = compile_via_loader("list-mapi-adjacent", src).expect("list.satyg should compile");
     assert_eq!(as_int_list(v), vec![0, 1, 2]);
 }
 
@@ -431,8 +430,7 @@ fn require_pervasives_compiles_and_evaluates_math_pi() {
     let src = "@require: pervasives
 in
 math-pi";
-    let v =
-        compile_via_loader("pervasives-math-pi", src).expect("pervasives.satyh should compile");
+    let v = compile_via_loader("pervasives-math-pi", src).expect("pervasives.satyh should compile");
     match v {
         Value::Float(f) => assert!(
             (f - std::f64::consts::PI).abs() < 1e-9,
@@ -458,8 +456,8 @@ let-inline ctx \\math m = inline-nil
 in
 let ctx = get-initial-context 400pt (command \\math) in
 get-natural-metrics (no-break (mandatory-break ctx))";
-    let v = compile_via_loader("pervasives-no-break", src)
-        .expect("pervasives.satyh should compile");
+    let v =
+        compile_via_loader("pervasives-no-break", src).expect("pervasives.satyh should compile");
     match v {
         Value::Tuple(vs) => {
             assert_eq!(vs.len(), 3);
@@ -733,8 +731,7 @@ fn require_draw_text_composes_with_shift_and_bbox_on_an_empty_run() {
         let src = "@require: gr
 in
 get-graphics-bbox (shift-graphics (5pt, 5pt) (draw-text (1pt, 2pt) inline-nil))";
-        let v =
-            compile_via_loader("gr-draw-text-empty-run", src).expect("gr.satyh should compile");
+        let v = compile_via_loader("gr-draw-text-empty-run", src).expect("gr.satyh should compile");
         match v {
             Value::Tuple(vs) if vs.len() == 2 => {
                 let (x0, y0) = as_point_f64(&vs[0]);
@@ -793,8 +790,7 @@ Gr.text-centering (0pt, 0pt) (inline-skip 5pt)";
             .expect("gr.satyh should compile");
         match v {
             Value::Graphics(g) => {
-                let (pmin, pmax) =
-                    rustyfi_backend::graphics_bbox(&g).expect("nonempty graphics");
+                let (pmin, pmax) = rustyfi_backend::graphics_bbox(&g).expect("nonempty graphics");
                 assert!(
                     (pmin.0 .0 - (-2.5)).abs() < 1e-6
                         && (pmin.1 .0 - 0.0).abs() < 1e-6
@@ -814,8 +810,8 @@ fn get_path_bbox_of_a_rectangle_is_its_own_corners() {
         let src = "@require: gr
 in
 get-path-bbox (Gr.rectangle (0pt, 0pt) (10pt, 20pt))";
-        let v = compile_via_loader("get-path-bbox-rectangle", src)
-            .expect("gr.satyh should compile");
+        let v =
+            compile_via_loader("get-path-bbox-rectangle", src).expect("gr.satyh should compile");
         match v {
             Value::Tuple(vs) if vs.len() == 2 => {
                 let (x0, y0) = as_point_f64(&vs[0]);
@@ -886,7 +882,10 @@ Deco.simple-frame 1pt (Gray(0.)) (Gray(1.)) (0pt, 0pt) 10pt 5pt 2pt";
             Value::List(items) => {
                 assert_eq!(items.len(), 2, "expected [fill; stroke]");
                 assert!(matches!(&items[0], Value::Graphics(GraphicsElem::Fill(..))));
-                assert!(matches!(&items[1], Value::Graphics(GraphicsElem::Stroke(..))));
+                assert!(matches!(
+                    &items[1],
+                    Value::Graphics(GraphicsElem::Stroke(..))
+                ));
             }
             other => panic!("expected a graphics list, got {other:?}"),
         }
@@ -909,7 +908,10 @@ decoS (0pt, 0pt) 10pt 5pt 2pt";
         match v {
             Value::List(items) => {
                 assert_eq!(items.len(), 1, "expected [stroke]");
-                assert!(matches!(&items[0], Value::Graphics(GraphicsElem::Stroke(..))));
+                assert!(matches!(
+                    &items[0],
+                    Value::Graphics(GraphicsElem::Stroke(..))
+                ));
             }
             other => panic!("expected a graphics list, got {other:?}"),
         }
@@ -932,7 +934,10 @@ decoS (0pt, 0pt) 10pt 5pt 2pt";
             Value::List(items) => {
                 assert_eq!(items.len(), 2, "expected [fill-back; stroke-border]");
                 assert!(matches!(&items[0], Value::Graphics(GraphicsElem::Fill(..))));
-                assert!(matches!(&items[1], Value::Graphics(GraphicsElem::Stroke(..))));
+                assert!(matches!(
+                    &items[1],
+                    Value::Graphics(GraphicsElem::Stroke(..))
+                ));
             }
             other => panic!("expected a graphics list, got {other:?}"),
         }
@@ -955,8 +960,7 @@ in
 Picture.draw-line 1pt (Gray(0.))
   ((0pt, 0pt), draw-text (0pt, 0pt) inline-nil)
   ((10pt, 10pt), draw-text (10pt, 10pt) inline-nil)";
-        let v =
-            compile_via_loader("picture-draw-line", src).expect("picture.satyh should compile");
+        let v = compile_via_loader("picture-draw-line", src).expect("picture.satyh should compile");
         match v {
             Value::List(items) => {
                 assert_eq!(items.len(), 1, "expected [stroke]");
@@ -1598,7 +1602,9 @@ get-natural-length (read-block ctx '<
         let v = compile_via_loader_with_metrics("itemize-listing", src, &Mono)
             .expect("itemize.satyh should compile");
         match v {
-            Value::Length(len) => assert!(len.0 > 0.0, "expected positive block length, got {len:?}"),
+            Value::Length(len) => {
+                assert!(len.0 > 0.0, "expected positive block length, got {len:?}")
+            }
             other => panic!("expected a length, got {other:?}"),
         }
     });
@@ -1642,8 +1648,8 @@ let tb = Type.base (math-char MathOrd `A`) in
 let tm = Type.meta (math-char MathOrd `T`) in
 let tarr = open Type in (-->) tb tm in
 eapp#assoc + eabs#assoc + elet#assoc + epar#assoc + emeta#assoc + tarr#assoc";
-        let v = compile_via_loader("progsynt-term-type", src)
-            .expect("progsynt.satyh should compile");
+        let v =
+            compile_via_loader("progsynt-term-type", src).expect("progsynt.satyh should compile");
         assert_eq!(as_int(v), 5);
     });
 }
@@ -1678,7 +1684,9 @@ get-natural-length (read-block ctx '<+BNF(mnontm)(mlstlst);>)";
         let v = compile_via_loader_with_metrics("bnf-direct-math-cmd", src, &Wide)
             .expect("bnf.satyh should compile");
         match v {
-            Value::Length(len) => assert!(len.0 > 0.0, "expected positive block length, got {len:?}"),
+            Value::Length(len) => {
+                assert!(len.0 > 0.0, "expected positive block length, got {len:?}")
+            }
             other => panic!("expected a length, got {other:?}"),
         }
     });

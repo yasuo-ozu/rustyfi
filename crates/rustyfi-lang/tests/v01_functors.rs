@@ -38,13 +38,17 @@ fn run(lib_src: &str, doc_src: &str) -> Result<(), CompileError> {
     let files = vec![
         LoadedFile {
             path: std::path::PathBuf::from("lib.satyh"),
-            cst: LoadedCst::V0_1(parse_file_v1(lib_src).unwrap_or_else(|e| panic!("lib parse failed: {e}"))),
+            cst: LoadedCst::V0_1(
+                parse_file_v1(lib_src).unwrap_or_else(|e| panic!("lib parse failed: {e}")),
+            ),
             origin: Default::default(),
             version: RustyfiVersion::V0_1,
         },
         LoadedFile {
             path: std::path::PathBuf::from("doc.saty"),
-            cst: LoadedCst::V0_1(parse_file_v1(doc_src).unwrap_or_else(|e| panic!("doc parse failed: {e}"))),
+            cst: LoadedCst::V0_1(
+                parse_file_v1(doc_src).unwrap_or_else(|e| panic!("doc parse failed: {e}")),
+            ),
             origin: Default::default(),
             version: RustyfiVersion::V0_1,
         },

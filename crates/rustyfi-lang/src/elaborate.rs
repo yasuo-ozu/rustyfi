@@ -20,7 +20,7 @@ use rustyfi_syntax::leaf::{AnyHorzCmdTok, AnyMathCmdTok, AnyVertCmdTok, UnopExcl
 use rustyfi_syntax::span::Span;
 use rustyfi_syntax::token::Token;
 use rustyfi_syntax::RustyfiVersion;
-use std::collections::{HashSet, HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::rc::Rc;
 
 #[derive(Debug, thiserror::Error)]
@@ -221,7 +221,8 @@ impl<'s> Scope<'s> {
     /// under [`Scope::contains`] (unaffected by this call) — only WHICH KEY
     /// [`Scope::resolve`] returns for it changes.
     fn rename(&mut self, local: &str, actual_key: &str) {
-        self.renames.insert(local.to_string(), actual_key.to_string());
+        self.renames
+            .insert(local.to_string(), actual_key.to_string());
     }
 
     /// The Ast key a bare reference to `name` should actually use, interned:
@@ -265,7 +266,10 @@ impl<'s> Scope<'s> {
     /// [`Scope::optional_arity`]) must see optionals anywhere in the param
     /// list, not just a leading run.
     fn optional_shape(&self, name: &str) -> &[bool] {
-        self.optional_shape.get(name).map(|v| v.as_slice()).unwrap_or(&[])
+        self.optional_shape
+            .get(name)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
     }
 
     /// Every currently-known name starting with `prefix` (used by `open`,
@@ -352,9 +356,17 @@ fn lower_type_decl(
     tymap: &HashMap<String, String>,
 ) -> Vec<LoweredTypeDecl> {
     let mut out = Vec::with_capacity(1 + decl.ands.len());
-    out.push(lower_one_type_clause(&decl.tyvars, &decl.name, &decl.body, mod_path, tymap));
+    out.push(lower_one_type_clause(
+        &decl.tyvars,
+        &decl.name,
+        &decl.body,
+        mod_path,
+        tymap,
+    ));
     for a in &decl.ands {
-        out.push(lower_one_type_clause(&a.tyvars, &a.name, &a.body, mod_path, tymap));
+        out.push(lower_one_type_clause(
+            &a.tyvars, &a.name, &a.body, mod_path, tymap,
+        ));
     }
     out
 }
@@ -432,7 +444,9 @@ fn qualify_ty(ty: &mut c::TypeExpr, map: &HashMap<String, String>) {
             qualify_ty(cod, map);
         }
         c::TypeExpr::Atom(prod) => qualify_prod(prod, map),
-        c::TypeExpr::OptRowFun { opt_dom, dom, cod, .. } => {
+        c::TypeExpr::OptRowFun {
+            opt_dom, dom, cod, ..
+        } => {
             for e in &mut opt_dom.entries {
                 qualify_ty(&mut e.ty.0, map);
             }
@@ -949,8 +963,7 @@ fn walk_bindings<'s>(
                 // `Lambda`-chain behavior exactly; the general path handles
                 // `gr.satyh`-style tuple-destructuring params.
                 let top_let_params = params_to_patbots(&top_let.params);
-                let value =
-                    rec_clause_value(&top_let_params, &top_let.value, &[], &running)?;
+                let value = rec_clause_value(&top_let_params, &top_let.value, &[], &running)?;
                 let value = maybe_v006_scope(value, this_v006);
                 // A parameter-less binding may be a plain value alias
                 // (`let document = StdJa.document`) — inherit the aliased
@@ -1070,7 +1083,11 @@ fn walk_bindings<'s>(
                 }
             }
             cst::TopBinding::LetInline {
-                ctx, cmd, params, value, ..
+                ctx,
+                cmd,
+                params,
+                value,
+                ..
             } => {
                 let value_ast =
                     elaborate_let_inline(ctx.as_ref(), params, value, &running, "read-inline")?;
@@ -1087,7 +1104,11 @@ fn walk_bindings<'s>(
                 );
             }
             cst::TopBinding::LetBlock {
-                ctx, cmd, params, value, ..
+                ctx,
+                cmd,
+                params,
+                value,
+                ..
             } => {
                 let value_ast =
                     elaborate_let_inline(ctx.as_ref(), params, value, &running, "read-block")?;
@@ -1148,7 +1169,9 @@ fn walk_bindings<'s>(
                     &mut exported,
                 );
             }
-            cst::TopBinding::Module { name, sig, decls, .. } => {
+            cst::TopBinding::Module {
+                name, sig, decls, ..
+            } => {
                 // Signature annotations (`sig .. end`) are otherwise
                 // accepted and ignored: this elaborator does no type
                 // checking, so `val`/`type` items have nothing yet to check
@@ -1889,7 +1912,9 @@ fn expr<'s>(e: &c::Expr, scope: &Scope<'s>) -> Result<Ast<'s>, ElabError> {
         // under the OUTER scope (a destructuring let's right-hand side never
         // sees its own bound names, same as `LetIn`), then matched against
         // `pat`, whose bound names are in scope for `body`.
-        c::Expr::LetPatternIn { pat, value, body, .. } => {
+        c::Expr::LetPatternIn {
+            pat, value, body, ..
+        } => {
             let value_ast = expr(value, scope)?;
             let lowered_pat = pattern(scope.store, pat)?;
             let mut names = Vec::new();
@@ -1929,7 +1954,9 @@ fn expr<'s>(e: &c::Expr, scope: &Scope<'s>) -> Result<Ast<'s>, ElabError> {
         // destructuring parameter (e.g. the bundled `list.satyg`'s
         // `mapi-adjacent`: `fun (i, acc) x leftopt rightopt -> ..`) pays for
         // the general path.
-        c::Expr::Fun { kw, params, body, .. } => {
+        c::Expr::Fun {
+            kw, params, body, ..
+        } => {
             if params.is_empty() {
                 return err(kw.0, "'fun' needs at least one parameter");
             }
@@ -2207,11 +2234,7 @@ fn app_expr<'s>(a: &c::AppExpr, scope: &Scope<'s>) -> Result<Ast<'s>, ElabError>
     // application and apply the `not` primitive to it. A bare `not` (no args)
     // or a `not` sitting in argument position keeps resolving to the `not`
     // primitive as an ordinary value, exactly as before.
-    if a.minus.is_none()
-        && a.excl.is_none()
-        && a.head_accesses.is_empty()
-        && !a.args.is_empty()
-    {
+    if a.minus.is_none() && a.excl.is_none() && a.head_accesses.is_empty() && !a.args.is_empty() {
         if let c::Atomic::Var(v) = &a.head {
             if v.name == "not" && scope.contains("not") && scope.resolve_text("not") == "not" {
                 let not_fn = scoped_var("not", v.span, scope)?;
@@ -2366,7 +2389,10 @@ fn apply_one_arg<'s>(
                 arg: Box::new(Ast::Ctor(ctor.name.clone(), None)),
             })
         }
-        _ => Ok(Ast::Apply(Box::new(func), Box::new(app_arg_to_ast(arg, scope)?))),
+        _ => Ok(Ast::Apply(
+            Box::new(func),
+            Box::new(app_arg_to_ast(arg, scope)?),
+        )),
     }
 }
 
@@ -2569,7 +2595,9 @@ fn atomic<'s>(a: &c::Atomic, scope: &Scope<'s>) -> Result<Ast<'s>, ElabError> {
         c::Atomic::Unit { .. } => Ok(Ast::Unit),
         c::Atomic::Paren { inner, .. } => paren_body(inner, scope),
         c::Atomic::OpenModule { grp, body } => {
-            open_module(&grp.open.name, grp.open.span, scope, |s| paren_body(body, s))
+            open_module(&grp.open.name, grp.open.span, scope, |s| {
+                paren_body(body, s)
+            })
         }
         c::Atomic::Record { body, .. } => record_body_to_ast(body, scope),
         c::Atomic::List { items, .. } => {
@@ -2657,9 +2685,10 @@ fn pat_cons<'s>(store: &'s SymbolStore, pc: &c::PatCons) -> Result<Pattern<'s>, 
 
 fn patbot<'s>(store: &'s SymbolStore, pb: &c::PatBot) -> Result<Pattern<'s>, ElabError> {
     match pb {
-        c::PatBot::CtorApplied { ctor, arg } => {
-            Ok(Pattern::Ctor(ctor.name.clone(), Some(Box::new(patbot(store, arg)?))))
-        }
+        c::PatBot::CtorApplied { ctor, arg } => Ok(Pattern::Ctor(
+            ctor.name.clone(),
+            Some(Box::new(patbot(store, arg)?)),
+        )),
         c::PatBot::Ctor(ctor) => Ok(Pattern::Ctor(ctor.name.clone(), None)),
         c::PatBot::Int(i) => Ok(Pattern::Int(i.value)),
         c::PatBot::True(_) => Ok(Pattern::Bool(true)),
@@ -2781,7 +2810,10 @@ fn inline_text_ast<'s>(elems: &[c::InlineElem], scope: &Scope<'s>) -> Result<Ast
     if matches!(elems.first(), Some(c::InlineElem::Sep(_))) {
         return inline_text_list(elems, scope);
     }
-    if elems.iter().any(|e| matches!(e, c::InlineElem::ItemBullet(_))) {
+    if elems
+        .iter()
+        .any(|e| matches!(e, c::InlineElem::ItemBullet(_)))
+    {
         itemize(elems, scope)
     } else {
         Ok(Ast::InlineText(Rc::new(inline_elems(elems, scope)?)))
@@ -3171,13 +3203,21 @@ fn math_block_ast<'s>(elems: &[cst::MathErased], scope: &Scope<'s>) -> Result<As
     for e in elems {
         if let c::MathBot::Sep(tok) = &e.base {
             if !e.scripts.is_empty() {
-                return err(tok.0, "a '|' math-list separator cannot carry a script ('^'/'_'/primes)");
+                return err(
+                    tok.0,
+                    "a '|' math-list separator cannot carry a script ('^'/'_'/primes)",
+                );
             }
         }
     }
     if !matches!(elems.last(), Some(e) if matches!(&e.base, c::MathBot::Sep(_))) {
-        let c::MathBot::Sep(first) = &elems[0].base else { unreachable!() };
-        return err(first.0, "a '|'-separated math list must end with a trailing '|' (write `${| a | b |}`)");
+        let c::MathBot::Sep(first) = &elems[0].base else {
+            unreachable!()
+        };
+        return err(
+            first.0,
+            "a '|'-separated math list must end with a trailing '|' (write `${| a | b |}`)",
+        );
     }
     let mut segments: Vec<Ast<'s>> = Vec::new();
     let mut seg_start = 1usize;
@@ -3365,7 +3405,9 @@ fn math_arg_body_to_ast<'s>(
     match body {
         c::MathArgBody::Math { elems, .. } => math_block_ast(elems, scope),
         c::MathArgBody::Inline { elems, .. } => inline_text_ast(elems, scope),
-        c::MathArgBody::Block { elems, .. } => Ok(Ast::BlockText(Rc::new(block_elems(elems, scope)?))),
+        c::MathArgBody::Block { elems, .. } => {
+            Ok(Ast::BlockText(Rc::new(block_elems(elems, scope)?)))
+        }
         c::MathArgBody::ParenEscape { inner, .. } => paren_body(inner, scope),
         c::MathArgBody::ListEscape { items, .. } => {
             let mut out = Vec::with_capacity(items.len());
@@ -3393,11 +3435,7 @@ fn omit_spaces(omit_pre: bool, omit_post: bool, raw: &str) -> String {
     } else {
         raw.to_string()
     };
-    let s2 = if omit_post {
-        omit_post_spaces(&s1)
-    } else {
-        s1
-    };
+    let s2 = if omit_post { omit_post_spaces(&s1) } else { s1 };
     let min_indent = min_indent_space(&s2);
     let shaved = shave_indent(&s2, min_indent);
     let mut chars: Vec<char> = shaved.chars().collect();

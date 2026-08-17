@@ -39,7 +39,10 @@ fn tmpdir(tag: &str) -> PathBuf {
 }
 
 fn sha256_of(path: &Path) -> String {
-    let out = Command::new("sha256sum").arg(path).output().expect("sha256sum");
+    let out = Command::new("sha256sum")
+        .arg(path)
+        .output()
+        .expect("sha256sum");
     String::from_utf8_lossy(&out.stdout)
         .split_whitespace()
         .next()
@@ -65,7 +68,13 @@ fn make_tarball(work: &Path, name: &str, version: &str) -> (PathBuf, String) {
     let tarball = work.join(format!("tarballs/{name}-{version}.tar.gz"));
     std::fs::create_dir_all(tarball.parent().unwrap()).unwrap();
     let ok = Command::new("tar")
-        .args(["-czf", tarball.to_str().unwrap(), "-C", src.to_str().unwrap(), "."])
+        .args([
+            "-czf",
+            tarball.to_str().unwrap(),
+            "-C",
+            src.to_str().unwrap(),
+            ".",
+        ])
         .status()
         .unwrap()
         .success();
@@ -132,7 +141,11 @@ fn cli_registry_install_from_plain_index() {
         ],
         None,
     );
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("installed great-package 1.0.0"), "{stdout}");
     assert!(root
@@ -146,15 +159,31 @@ fn cli_registry_install_from_plain_index() {
 fn cli_search_golden_output() {
     let work = tmpdir("cli-search");
     let (gp, gp_sha) = make_tarball(&work, "great-package", "1.0.0");
-    write_index_entry(&work, "great-package", "A great SATySFi package", &[("1.0.0", &gp, &gp_sha)]);
+    write_index_entry(
+        &work,
+        "great-package",
+        "A great SATySFi package",
+        &[("1.0.0", &gp, &gp_sha)],
+    );
     let (ft, ft_sha) = make_tarball(&work, "fonts-theano", "0.2.0");
-    let index = write_index_entry(&work, "fonts-theano", "Theano didot fonts", &[("0.2.0", &ft, &ft_sha)]);
+    let index = write_index_entry(
+        &work,
+        "fonts-theano",
+        "Theano didot fonts",
+        &[("0.2.0", &ft, &ft_sha)],
+    );
 
-    let out = run(&["search", "package", "--registry", &file_url(&index)], None);
+    let out = run(
+        &["search", "package", "--registry", &file_url(&index)],
+        None,
+    );
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
     // "package" matches great-package's name/description only.
-    assert_eq!(stdout, "great-package 1.0.0 — A great SATySFi package\n", "{stdout:?}");
+    assert_eq!(
+        stdout, "great-package 1.0.0 — A great SATySFi package\n",
+        "{stdout:?}"
+    );
 
     // A broad term ("a" appears in both names) listing both, sorted by name.
     let out = run(&["search", "a", "--registry", &file_url(&index)], None);
@@ -195,7 +224,11 @@ fn cli_update_golden_output() {
     .unwrap();
     let root = work.join("root");
     let out = run(&["install", "--dest", root.to_str().unwrap()], Some(&proj));
-    assert!(out.status.success(), "reconcile stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "reconcile stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     // `update` reports 1.1.0 as an available upgrade (does not apply it).
     let out = run(&["update"], Some(&proj));
@@ -208,7 +241,10 @@ fn cli_update_golden_output() {
     // The lock is unchanged (still 1.0.0) — update only reports.
     let lock = std::fs::read_to_string(proj.join("Satyrfile.lock")).unwrap();
     assert!(lock.contains("version = \"1.0.0\""), "{lock}");
-    assert!(!lock.contains("1.1.0"), "update must not apply the upgrade:\n{lock}");
+    assert!(
+        !lock.contains("1.1.0"),
+        "update must not apply the upgrade:\n{lock}"
+    );
 
     let _ = std::fs::remove_dir_all(&work);
 }
@@ -233,7 +269,10 @@ fn cli_sha256_mismatch_exits_5_and_touches_nothing() {
         None,
     );
     assert_eq!(out.status.code(), Some(5), "checksum mismatch is exit 5");
-    assert!(!root.join("dist").exists(), "dist/ must be untouched on mismatch");
+    assert!(
+        !root.join("dist").exists(),
+        "dist/ must be untouched on mismatch"
+    );
 
     let _ = std::fs::remove_dir_all(&work);
 }

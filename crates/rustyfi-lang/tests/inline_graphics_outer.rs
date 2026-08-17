@@ -95,10 +95,7 @@ fn inline_graphics_outer_resolves_to_a_graphics_box_with_the_lines_slack_width()
 
     // `inline-graphics-outer 5pt 0pt (fun w pt -> [...])`
     let ib_ast = app1(
-        app1(
-            app1(var("inline-graphics-outer"), len(5.0)),
-            len(0.0),
-        ),
+        app1(app1(var("inline-graphics-outer"), len(5.0)), len(0.0)),
         rect_of_width_w_closure(),
     );
     // `line-break true true ctx ib`
@@ -110,7 +107,9 @@ fn inline_graphics_outer_resolves_to_a_graphics_box_with_the_lines_slack_width()
         ib_ast,
     );
 
-    let v = interp.eval(&env, &line_break_ast).expect("evaluation should succeed");
+    let v = interp
+        .eval(&env, &line_break_ast)
+        .expect("evaluation should succeed");
     let Value::BlockBoxes(lines) = v else {
         panic!("expected block-boxes, got {v:?}")
     };

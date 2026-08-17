@@ -23,8 +23,8 @@
 //! matches miscount.
 
 use crate::ast::branded::{MatchArm, Pattern};
-use crate::symbol::SymbolStore;
 use crate::prim_types::VariantDecl;
+use crate::symbol::SymbolStore;
 use crate::types::{resolve, BaseType, MonoType};
 use rustyfi_syntax::span::Span;
 use std::collections::{HashMap, HashSet};
@@ -156,7 +156,10 @@ fn signature(rty: &MonoType, variants: &HashMap<String, Rc<VariantDecl>>) -> Sig
                 decl.ctors
                     .iter()
                     .map(|(cname, payload)| {
-                        (HeadKey::Ctor(cname.clone()), if payload.is_some() { 1 } else { 0 })
+                        (
+                            HeadKey::Ctor(cname.clone()),
+                            if payload.is_some() { 1 } else { 0 },
+                        )
                     })
                     .collect(),
             ),
@@ -340,7 +343,11 @@ fn usefulness<'s>(
 ) -> Option<Vec<Pattern<'s>>> {
     if q.is_empty() {
         // cols = 0: useful iff P has no rows at all.
-        return if matrix.is_empty() { Some(Vec::new()) } else { None };
+        return if matrix.is_empty() {
+            Some(Vec::new())
+        } else {
+            None
+        };
     }
 
     if let Some((key, sub_pats)) = head_of(&q[0]) {

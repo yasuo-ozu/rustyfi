@@ -179,12 +179,18 @@ fn forked_note(name: &str) -> &'static str {
              stand-in there, with no shared representation against 0.1's real \
              primitive type"
         }
-        _ => "no proven-identical Value representation across the version boundary \
-              (X3a's whitelist is `math` only)",
+        _ => {
+            "no proven-identical Value representation across the version boundary \
+              (X3a's whitelist is `math` only)"
+        }
     }
 }
 
-fn reject_if_forked(name: &str, from: RustyfiVersion, to: RustyfiVersion) -> Result<(), BoundaryError> {
+fn reject_if_forked(
+    name: &str,
+    from: RustyfiVersion,
+    to: RustyfiVersion,
+) -> Result<(), BoundaryError> {
     if name == "math" {
         return Ok(());
     }
@@ -237,7 +243,11 @@ pub fn adapt_export_type(
     Ok(ty.clone())
 }
 
-fn check_mono_type(ty: &MonoType, from: RustyfiVersion, to: RustyfiVersion) -> Result<(), BoundaryError> {
+fn check_mono_type(
+    ty: &MonoType,
+    from: RustyfiVersion,
+    to: RustyfiVersion,
+) -> Result<(), BoundaryError> {
     match ty {
         MonoType::Var(_) | MonoType::Base(_) => Ok(()),
         MonoType::Func(row, dom, cod) => {
@@ -279,7 +289,11 @@ fn check_row(row: &Row, from: RustyfiVersion, to: RustyfiVersion) -> Result<(), 
     }
 }
 
-fn check_cmd_arg(c: &CmdArgType, from: RustyfiVersion, to: RustyfiVersion) -> Result<(), BoundaryError> {
+fn check_cmd_arg(
+    c: &CmdArgType,
+    from: RustyfiVersion,
+    to: RustyfiVersion,
+) -> Result<(), BoundaryError> {
     for (_, ty) in &c.opt_labels {
         check_mono_type(ty, from, to)?;
     }
@@ -309,7 +323,11 @@ pub fn adapt_export_annotation(
     Ok(out)
 }
 
-fn relabel_type_expr(te: &mut TypeExpr, from: RustyfiVersion, to: RustyfiVersion) -> Result<(), BoundaryError> {
+fn relabel_type_expr(
+    te: &mut TypeExpr,
+    from: RustyfiVersion,
+    to: RustyfiVersion,
+) -> Result<(), BoundaryError> {
     match te {
         TypeExpr::Fun { opts, dom, cod, .. } => {
             for o in opts.iter_mut() {
@@ -319,7 +337,9 @@ fn relabel_type_expr(te: &mut TypeExpr, from: RustyfiVersion, to: RustyfiVersion
             relabel_type_expr(cod, from, to)
         }
         TypeExpr::Atom(prod) => relabel_type_prod(prod, from, to),
-        TypeExpr::OptRowFun { opt_dom, dom, cod, .. } => {
+        TypeExpr::OptRowFun {
+            opt_dom, dom, cod, ..
+        } => {
             for e in opt_dom.entries.iter_mut() {
                 relabel_type_expr(&mut e.ty.0, from, to)?;
             }
@@ -329,7 +349,11 @@ fn relabel_type_expr(te: &mut TypeExpr, from: RustyfiVersion, to: RustyfiVersion
     }
 }
 
-fn relabel_type_prod(tp: &mut TypeProd, from: RustyfiVersion, to: RustyfiVersion) -> Result<(), BoundaryError> {
+fn relabel_type_prod(
+    tp: &mut TypeProd,
+    from: RustyfiVersion,
+    to: RustyfiVersion,
+) -> Result<(), BoundaryError> {
     relabel_type_app(&mut tp.first, from, to)?;
     for st in tp.rest.iter_mut() {
         relabel_type_app(&mut st.ty, from, to)?;
@@ -337,7 +361,11 @@ fn relabel_type_prod(tp: &mut TypeProd, from: RustyfiVersion, to: RustyfiVersion
     Ok(())
 }
 
-fn relabel_type_app(ta: &mut TypeApp, from: RustyfiVersion, to: RustyfiVersion) -> Result<(), BoundaryError> {
+fn relabel_type_app(
+    ta: &mut TypeApp,
+    from: RustyfiVersion,
+    to: RustyfiVersion,
+) -> Result<(), BoundaryError> {
     // Every atom of the application (arguments and the final constructor) is a
     // `TypeAtom`; `relabel_type_atom` already relabels a bare `Name` via
     // `relabel_or_reject_name` and passes a qualified `Mod.t` through, so
@@ -349,7 +377,11 @@ fn relabel_type_app(ta: &mut TypeApp, from: RustyfiVersion, to: RustyfiVersion) 
     Ok(())
 }
 
-fn relabel_type_atom(atom: &mut TypeAtom, from: RustyfiVersion, to: RustyfiVersion) -> Result<(), BoundaryError> {
+fn relabel_type_atom(
+    atom: &mut TypeAtom,
+    from: RustyfiVersion,
+    to: RustyfiVersion,
+) -> Result<(), BoundaryError> {
     match atom {
         TypeAtom::Cmd { args, .. } => {
             for a in args.iter_mut() {
@@ -436,7 +468,11 @@ fn relabel_type_atom(atom: &mut TypeAtom, from: RustyfiVersion, to: RustyfiVersi
 ///   `deco-set`/`pre-path`/`path`/`image`/`font`/`paren`).
 /// - Everything else (an ordinary user type name, or a shared builtin like
 ///   `int`/`string`) passes through untouched, in either direction.
-fn relabel_or_reject_name(name: &mut String, from: RustyfiVersion, to: RustyfiVersion) -> Result<(), BoundaryError> {
+fn relabel_or_reject_name(
+    name: &mut String,
+    from: RustyfiVersion,
+    to: RustyfiVersion,
+) -> Result<(), BoundaryError> {
     match (from, to) {
         (RustyfiVersion::V0_0_6, RustyfiVersion::V0_1) if name == "math" => {
             *name = "math-text".to_string();
@@ -626,6 +662,24 @@ pub(crate) enum DecoKind {
     Deco,
     /// `deco-set = deco * deco * deco * deco` — a 4-tuple of `deco`s.
     DecoSet,
+    /// A `paren` export (`math.satyh`'s `paren-left`/`brace-left`/… — 17 of
+    /// them, all module-scoped, two arrow-tailed). 0.0.6 spells it `h -> d ->
+    /// axis -> size -> color -> (inline-boxes, length -> length)`; 0.1 spells
+    /// it `h -> d -> context -> ..` and has the closure pull fontsize, axis
+    /// ratio and colour out of the context itself (`t_paren`,
+    /// `primitives::make_paren_run`). The wrapper presents 0.1's interface and
+    /// re-derives 0.0.6's three extra arguments from the context.
+    Paren,
+    /// Not a deco PRODUCER but a deco CONSUMER: an export that TAKES a
+    /// `deco`/`deco-set` as an argument, e.g. `code.satyh`'s `val scheme :
+    /// deco-set -> color -> context -> string -> block-boxes`. The coercion
+    /// runs the other way — contravariantly. A 0.1 caller supplies a 0.1
+    /// deco (returning one `graphics`), and the 0.0.6 callee will invoke it
+    /// expecting a `graphics list`, so each such argument is DOWNGRADED by
+    /// wrapping its result in a singleton list — the literal inverse of the
+    /// `unite-graphics` upgrade. Which positions to downgrade is carried in
+    /// [`DecoExport::arg_downgrades`].
+    Consumer,
 }
 
 /// One top-level `V0_0_6` binding X3b can soundly value-coerce: its own
@@ -653,6 +707,26 @@ pub(crate) enum DecoKind {
 pub(crate) struct DecoExport {
     pub name: String,
     pub kind: DecoKind,
+    /// How many arguments the export takes BEFORE its `deco` tail — the
+    /// `3` in `simple-frame : length -> color -> color -> deco`. The
+    /// generated wrapper eta-expands over exactly this many extra
+    /// parameters, then over `deco`'s own four. `0` is the bare `: deco`
+    /// case X3b originally supported.
+    pub lead_arity: usize,
+    /// The enclosing `module .. = struct .. end` chain, outermost first;
+    /// empty for a top-level binding. A module-scoped export CANNOT be
+    /// wrapped by a top-level shadowing binding — `let Deco.simple-frame`
+    /// is not syntax — so its wrapper is appended INSIDE the module's own
+    /// `decls` instead (`inject_module_deco_wrappers`), where ordinary
+    /// sequential shadowing applies (`elaborate.rs`'s `walk_bindings`
+    /// folds decls through a `running` scope, so a later decl shadows an
+    /// earlier one of the same name).
+    pub module_path: Vec<String>,
+    /// For [`DecoKind::Consumer`]: one slot per leading argument, `Some(kind)`
+    /// where that argument is a bare `deco`/`deco-set` needing the
+    /// contravariant downgrade, `None` where it passes straight through.
+    /// Empty for every producer.
+    pub arg_downgrades: Vec<Option<DecoKind>>,
 }
 
 /// Scan a spliced `V0_0_6` dependency's `prelude` for every `deco`/
@@ -681,7 +755,7 @@ pub(crate) fn classify_deco_exports(
 ) -> Result<Vec<DecoExport>, BoundaryError> {
     let mut out = Vec::new();
     for tb in prelude {
-        classify_top_binding_deco(tb, &mut out, from, to)?;
+        classify_top_binding_deco(tb, &mut out, &[], from, to)?;
     }
     Ok(out)
 }
@@ -689,26 +763,73 @@ pub(crate) fn classify_deco_exports(
 fn classify_top_binding_deco(
     tb: &cst::TopBinding,
     out: &mut Vec<DecoExport>,
+    module_path: &[String],
     from: RustyfiVersion,
     to: RustyfiVersion,
 ) -> Result<(), BoundaryError> {
     match tb {
         cst::TopBinding::LetRec { first, ands, .. } => {
-            classify_rec_binding_deco(first, out, from, to)?;
+            classify_rec_binding_deco(first, out, module_path, from, to)?;
             for a in ands {
-                classify_rec_binding_deco(&a.binding, out, from, to)?;
+                classify_rec_binding_deco(&a.binding, out, module_path, from, to)?;
             }
             Ok(())
         }
-        cst::TopBinding::Module { sig, decls, .. } => {
+        cst::TopBinding::Module {
+            name, sig, decls, ..
+        } => {
+            let mut inner = module_path.to_vec();
+            inner.push(name.name.clone());
+            // A module's SIG is the export surface: a `val x : .. -> deco`
+            // item names a real value crossing the boundary, and (unlike the
+            // top-level case) its `decls` counterpart may be an ordinary
+            // `let`, so the sig is the only place the type is written. Wrap
+            // what has a deco TAIL; reject anything that merely mentions
+            // `deco` somewhere else in the type, which the positional
+            // wrapper could not express.
+            let mut wrapped: std::collections::HashSet<String> = std::collections::HashSet::new();
             if let Some(sig) = sig {
                 for item in &sig.items {
                     if let Some(ty) = sig_item_value_ty(item) {
-                        reject_if_mentions_deco(ty, from, to)?;
+                        match (
+                            sig_item_value_name(item),
+                            deco_tail_of(ty),
+                            deco_consumer_plan(ty),
+                        ) {
+                            (Some(n), Some((kind, lead_arity)), _) => {
+                                wrapped.insert(n.to_string());
+                                out.push(DecoExport {
+                                    name: n.to_string(),
+                                    kind,
+                                    lead_arity,
+                                    module_path: inner.clone(),
+                                    arg_downgrades: Vec::new(),
+                                });
+                            }
+                            (Some(n), None, Some(plan)) => {
+                                wrapped.insert(n.to_string());
+                                out.push(DecoExport {
+                                    name: n.to_string(),
+                                    kind: DecoKind::Consumer,
+                                    lead_arity: plan.len(),
+                                    module_path: inner.clone(),
+                                    arg_downgrades: plan,
+                                });
+                            }
+                            _ => reject_if_mentions_deco(ty, from, to)?,
+                        }
                     }
                 }
             }
             for d in decls {
+                // A decl whose sig item we just scheduled for wrapping needs
+                // no separate check: its own ascription (if any) names the
+                // same type the sig does.
+                if let Some(n) = top_binding_bound_name(&d.0) {
+                    if wrapped.contains(n) {
+                        continue;
+                    }
+                }
                 reject_if_nested_value_mentions_deco(&d.0, from, to)?;
             }
             Ok(())
@@ -724,17 +845,36 @@ fn classify_top_binding_deco(
 fn classify_rec_binding_deco(
     rb: &cst::ast::RecBinding,
     out: &mut Vec<DecoExport>,
+    module_path: &[String],
     from: RustyfiVersion,
     to: RustyfiVersion,
 ) -> Result<(), BoundaryError> {
     let Some(asc) = &rb.ascription else {
         return Ok(());
     };
+    // An arrow-PREFIXED deco (`length -> color -> color -> deco`, the shape
+    // every real module export uses) is wrappable the same way a bare one
+    // is — the wrapper just eta-expands over the leading arguments first.
+    if let Some((kind, lead_arity)) = deco_tail_of(&asc.ty) {
+        if lead_arity > 0 {
+            out.push(DecoExport {
+                name: rb.name.name.clone(),
+                kind,
+                lead_arity,
+                module_path: module_path.to_vec(),
+                arg_downgrades: Vec::new(),
+            });
+            return Ok(());
+        }
+    }
     match type_expr_bare_name(&asc.ty) {
         Some("deco") => {
             out.push(DecoExport {
                 name: rb.name.name.clone(),
                 kind: DecoKind::Deco,
+                lead_arity: 0,
+                module_path: module_path.to_vec(),
+                arg_downgrades: Vec::new(),
             });
             Ok(())
         }
@@ -755,6 +895,9 @@ fn classify_rec_binding_deco(
             out.push(DecoExport {
                 name: rb.name.name.clone(),
                 kind: DecoKind::DecoSet,
+                lead_arity: 0,
+                module_path: module_path.to_vec(),
+                arg_downgrades: Vec::new(),
             });
             Ok(())
         }
@@ -812,20 +955,126 @@ fn sig_item_value_ty(item: &cst::SigItem) -> Option<&TypeExpr> {
     }
 }
 
+/// The value name a sig item declares, for the `Val` forms whose type can
+/// carry a `deco` tail. Command items (`val \\cmd`/`val +cmd`, `direct`) are
+/// deliberately excluded: a command's binder is not an ordinary identifier a
+/// generated `let` could shadow.
+fn sig_item_value_name(item: &cst::SigItem) -> Option<&str> {
+    use cst::SigItem;
+    match item {
+        SigItem::Val { name, .. } => Some(name.name.as_str()),
+        _ => None,
+    }
+}
+
+/// The plain identifier a struct-level decl binds, if it binds exactly one.
+fn top_binding_bound_name(tb: &cst::TopBinding) -> Option<&str> {
+    match tb {
+        cst::TopBinding::Let(l) => Some(l.name.name.as_str()),
+        cst::TopBinding::LetRec { first, ands, .. } if ands.is_empty() => {
+            Some(first.name.name.as_str())
+        }
+        _ => None,
+    }
+}
+
 /// `Some(name)` iff `te` is *exactly* one bare `TypeAtom::Name(name)` with
 /// no `Fun` wrapper and no `TypeProd` continuation (`rest` empty) — the one
 /// shape X3b's wrap knows how to handle with no currying-prefix arithmetic.
+/// If `te` is a (possibly arrow-prefixed) `deco`/`deco-set`, return its kind
+/// and how many mandatory arguments precede the tail. `length -> color ->
+/// color -> deco` is `(Deco, 3)`; a bare `deco` is `(Deco, 0)`.
+///
+/// An OPTIONAL-argument arrow (`ty ?-> ..`) makes the export unwrappable and
+/// returns `None`: the wrapper forwards its parameters positionally, and an
+/// optional argument has no positional spelling to forward. Such an export
+/// falls through to the ordinary rejection path rather than being wrapped
+/// wrongly.
+fn deco_tail_of(te: &TypeExpr) -> Option<(DecoKind, usize)> {
+    let mut lead = 0usize;
+    let mut cur = te;
+    loop {
+        match cur {
+            TypeExpr::Fun { opts, cod, .. } => {
+                if !opts.is_empty() {
+                    return None;
+                }
+                lead += 1;
+                cur = cod;
+            }
+            _ => {
+                let kind = match type_expr_bare_name(cur)? {
+                    "deco" => DecoKind::Deco,
+                    "deco-set" => DecoKind::DecoSet,
+                    "paren" => DecoKind::Paren,
+                    _ => return None,
+                };
+                return Some((kind, lead));
+            }
+        }
+    }
+}
+
+/// If `te` TAKES one or more bare `deco`/`deco-set` arguments and its result
+/// mentions neither, return the per-argument downgrade plan. Anything subtler
+/// — a deco nested inside a product/application, or one in BOTH argument and
+/// result position — returns `None` and falls through to rejection, since the
+/// positional wrapper could not express it.
+fn deco_consumer_plan(te: &TypeExpr) -> Option<Vec<Option<DecoKind>>> {
+    let mut plan: Vec<Option<DecoKind>> = Vec::new();
+    let mut cur = te;
+    loop {
+        match cur {
+            TypeExpr::Fun { opts, dom, cod, .. } => {
+                if !opts.is_empty() {
+                    return None;
+                }
+                let dom_te = TypeExpr::Atom(dom.clone());
+                plan.push(match type_expr_bare_name(&dom_te) {
+                    Some("deco") => Some(DecoKind::Deco),
+                    Some("deco-set") => Some(DecoKind::DecoSet),
+                    _ => {
+                        if type_expr_mentions_deco(&dom_te).is_some() {
+                            return None;
+                        }
+                        None
+                    }
+                });
+                cur = cod;
+            }
+            _ => {
+                if type_expr_mentions_deco(cur).is_some() {
+                    return None;
+                }
+                return if plan.iter().any(Option::is_some) {
+                    Some(plan)
+                } else {
+                    None
+                };
+            }
+        }
+    }
+}
+
 fn type_expr_bare_name(te: &TypeExpr) -> Option<&str> {
     match te {
         TypeExpr::Atom(TypeProd {
-            first: TypeApp { head: TypeAtom::Name(n), rest: app_rest },
+            first:
+                TypeApp {
+                    head: TypeAtom::Name(n),
+                    rest: app_rest,
+                },
             rest,
         }) if rest.is_empty() && app_rest.is_empty() => Some(n.name.as_str()),
         _ => None,
     }
 }
 
-fn reject_if_mentions_deco(te: &TypeExpr, from: RustyfiVersion, to: RustyfiVersion) -> Result<(), BoundaryError> {
+fn reject_if_mentions_deco(
+    te: &TypeExpr,
+    from: RustyfiVersion,
+    to: RustyfiVersion,
+) -> Result<(), BoundaryError> {
     if let Some(name) = type_expr_mentions_deco(te) {
         return Err(BoundaryError::ForkedTypeExport {
             binding: String::new(),
@@ -849,7 +1098,9 @@ fn type_expr_mentions_deco(te: &TypeExpr) -> Option<String> {
             .or_else(|| type_prod_mentions_deco(dom))
             .or_else(|| type_expr_mentions_deco(cod)),
         TypeExpr::Atom(prod) => type_prod_mentions_deco(prod),
-        TypeExpr::OptRowFun { opt_dom, dom, cod, .. } => opt_dom
+        TypeExpr::OptRowFun {
+            opt_dom, dom, cod, ..
+        } => opt_dom
             .entries
             .iter()
             .find_map(|e| type_expr_mentions_deco(&e.ty.0))
@@ -859,7 +1110,8 @@ fn type_expr_mentions_deco(te: &TypeExpr) -> Option<String> {
 }
 
 fn type_prod_mentions_deco(tp: &TypeProd) -> Option<String> {
-    type_app_mentions_deco(&tp.first).or_else(|| tp.rest.iter().find_map(|st| type_app_mentions_deco(&st.ty)))
+    type_app_mentions_deco(&tp.first)
+        .or_else(|| tp.rest.iter().find_map(|st| type_app_mentions_deco(&st.ty)))
 }
 
 fn type_app_mentions_deco(ta: &TypeApp) -> Option<String> {
@@ -880,17 +1132,22 @@ fn type_atom_mentions_deco(atom: &TypeAtom) -> Option<String> {
                 .or_else(|| type_expr_mentions_deco(&a.ty.0))
         }),
         TypeAtom::Paren { inner, .. } => type_expr_mentions_deco(&inner.0),
-        TypeAtom::Record { fields, .. } => fields.iter().find_map(|f| type_expr_mentions_deco(&f.ty.0)),
+        TypeAtom::Record { fields, .. } => {
+            fields.iter().find_map(|f| type_expr_mentions_deco(&f.ty.0))
+        }
         TypeAtom::Var(_) => None,
         TypeAtom::Name(n) => deco_leaf_name(&n.name),
         // `Mod.t` — a qualified name; never itself a bare builtin fork name.
         TypeAtom::NameMod(_) => None,
-        TypeAtom::RecordOpen { inner, .. } => inner.fields.iter().find_map(|f| type_expr_mentions_deco(&f.ty.0)),
+        TypeAtom::RecordOpen { inner, .. } => inner
+            .fields
+            .iter()
+            .find_map(|f| type_expr_mentions_deco(&f.ty.0)),
     }
 }
 
 fn deco_leaf_name(name: &str) -> Option<String> {
-    if name == "deco" || name == "deco-set" {
+    if name == "deco" || name == "deco-set" || name == "paren" {
         Some(name.to_string())
     } else {
         None
@@ -918,36 +1175,233 @@ fn deco_leaf_name(name: &str) -> Option<String> {
 /// `panic!`s on a parse failure, since that would mean this function itself
 /// generated malformed syntax (an internal bug), never a symptom of the
 /// user's own dependency source.
+/// The wrapper source for one export, as a struct/top-level `let`.
+///
+/// `lead_arity` extra parameters are forwarded positionally before `deco`'s
+/// own four, so `simple-frame : length -> color -> color -> deco` becomes
+/// `let simple-frame xver-a0 xver-a1 xver-a2 xver-p xver-w xver-h xver-d =
+/// unite-graphics (simple-frame xver-a0 .. xver-d)`. Every generated
+/// identifier is `xver-`-prefixed so it cannot capture one of the export's
+/// own (unknown-to-us) parameter names.
+///
+/// `unit_thunk` distinguishes the two `deco-set` spellings. A TOP-LEVEL
+/// `deco-set` can only be written `let-rec name : deco-set | () = ..`
+/// (`elaborate.rs` rejects a non-function `let-rec` RHS), so its wrapper
+/// must apply the mandatory `()` first. A module-scoped one is an ordinary
+/// `let` bound to the bare 4-tuple, with no thunk to apply.
+pub(crate) const XVER_UNITE_HELPER: &str = "xver-unite-graphics";
+pub(crate) const XVER_AXIS_RATIO_HELPER: &str = "xver-math-axis-height-ratio";
+pub(crate) const XVER_DOWN_DECO: &str = "xver-downgrade-deco";
+pub(crate) const XVER_DOWN_DECOSET: &str = "xver-downgrade-decoset";
+
+/// A `V0_1`-authored binding of [`XVER_UNITE_HELPER`], to be spliced BEFORE a
+/// dependency whose module-scoped deco exports need wrapping.
+///
+/// An in-module wrapper cannot call `unite-graphics` itself. The whole module
+/// is a spliced `V0_0_6` binding, so `elaborate.rs` wraps its members in
+/// `Ast::VersionScope(V0_0_6, _)` — and under that scope `unite-graphics`, a
+/// `V0_1`-only primitive, is an unbound variable at run time (observed, not
+/// theorised). Top-level wrappers dodge this by being appended OUTSIDE the
+/// dependency's index range; an in-module one has nowhere else to go.
+///
+/// So the `V0_1` primitive is captured once, outside any version scope, into
+/// an ordinary user binding. Version scoping governs which `PrimDef` a
+/// primitive NAME folds to; it does not change how a plain variable resolves,
+/// so the scoped wrapper can call this helper and still get 0.1's
+/// `unite-graphics`. Eta-expanded rather than bound bare so it goes through
+/// the ordinary application path.
+pub(crate) fn unite_helper_prelude() -> Vec<cst::TopBinding> {
+    let src = format!(
+        "let {XVER_UNITE_HELPER} xver-gs = unite-graphics xver-gs\n\
+         let {XVER_AXIS_RATIO_HELPER} xver-c = get-math-axis-height-ratio xver-c\n\
+         let {XVER_DOWN_DECO} xver-f xver-p xver-w xver-h xver-d =\n\
+         \x20 [xver-f xver-p xver-w xver-h xver-d]\n\
+         let {XVER_DOWN_DECOSET} xver-s =\n\
+         \x20 match xver-s with\n\
+         \x20 | (xver-s0, xver-s1, xver-s2, xver-s3) ->\n\
+         \x20   ({XVER_DOWN_DECO} xver-s0, {XVER_DOWN_DECO} xver-s1,\n\
+         \x20    {XVER_DOWN_DECO} xver-s2, {XVER_DOWN_DECO} xver-s3)\n"
+    );
+    rustyfi_syntax::parse_file(&src)
+        .unwrap_or_else(|e| panic!("xver_adapt::unite_helper_prelude failed to parse: {e}"))
+        .prelude
+}
+
+/// Whether any of `exports` needs [`unite_helper_prelude`] spliced — i.e. is
+/// module-scoped, and so wrapped from INSIDE the dependency's version scope
+/// where a `V0_1`-only primitive cannot be named directly.
+pub(crate) fn needs_unite_helper(exports: &[DecoExport]) -> bool {
+    exports
+        .iter()
+        .any(|e| !e.module_path.is_empty() || e.kind == DecoKind::Consumer)
+}
+
+fn deco_wrapper_src(exp: &DecoExport, unit_thunk: bool) -> String {
+    // A top-level wrapper is spliced outside the dependency's version-scoped
+    // range and can name the primitive directly; an in-module one is inside
+    // it and must go through the pre-bound helper (see above).
+    let unite = if exp.module_path.is_empty() {
+        "unite-graphics"
+    } else {
+        XVER_UNITE_HELPER
+    };
+    let lead: Vec<String> = (0..exp.lead_arity).map(|i| format!("xver-a{i}")).collect();
+    let lead_params = if lead.is_empty() {
+        String::new()
+    } else {
+        format!("{} ", lead.join(" "))
+    };
+    let lead_args = lead_params.clone();
+    // `get-font-size`/`get-text-color` exist under BOTH versions, so a scoped
+    // wrapper may name them directly; the axis RATIO is V0_1-only and needs
+    // the same pre-bound-helper treatment as `unite-graphics`.
+    let axis_ratio = if exp.module_path.is_empty() {
+        "get-math-axis-height-ratio"
+    } else {
+        XVER_AXIS_RATIO_HELPER
+    };
+    match exp.kind {
+        // 0.1 hands the closure `(h, signed d, ctx)`; 0.0.6 wants
+        // `(h, signed d, axis, size, color)`. Both versions pass the SAME
+        // signed depth (`make_paren_run` negates before either call), so h and
+        // d forward untouched. The three extra arguments come out of the
+        // context: `axis = size *' ratio` reproduces `MathC::axis(size)`
+        // exactly (`primitives.rs`: `axis(s) = s * axis_height`), and `size` is
+        // the LOCAL script-scaled one because `make_paren_run` sets
+        // `c2.font_size = size` before applying — the detail whose absence
+        // would silently oversize every script-level delimiter.
+        // Contravariant: forward every argument, downgrading the deco-typed
+        // ones. `xver-downgrade-deco` wraps a 0.1 deco's single `graphics`
+        // result in a singleton list, which is exactly what the 0.0.6 callee's
+        // `as_list` expects — the inverse of the `unite-graphics` upgrade.
+        DecoKind::Consumer => {
+            let args: Vec<String> = exp
+                .arg_downgrades
+                .iter()
+                .enumerate()
+                .map(|(i, down)| match down {
+                    Some(DecoKind::DecoSet) => format!("({XVER_DOWN_DECOSET} xver-a{i})"),
+                    Some(_) => format!("({XVER_DOWN_DECO} xver-a{i})"),
+                    None => format!("xver-a{i}"),
+                })
+                .collect();
+            let params: Vec<String> = (0..exp.arg_downgrades.len())
+                .map(|i| format!("xver-a{i}"))
+                .collect();
+            format!(
+                "let {name} {} =\n\x20 {name} {}\n",
+                params.join(" "),
+                args.join(" "),
+                name = exp.name
+            )
+        }
+        DecoKind::Paren => format!(
+            "let {name} {lead_params}xver-h xver-d xver-ctx =\n\
+             \x20 {name} {lead_args}xver-h xver-d\n\
+             \x20   ((get-font-size xver-ctx) *' ({axis_ratio} xver-ctx))\n\
+             \x20   (get-font-size xver-ctx)\n\
+             \x20   (get-text-color xver-ctx)\n",
+            name = exp.name
+        ),
+        DecoKind::Deco => format!(
+            "let {name} {lead_params}xver-p xver-w xver-h xver-d =\n\
+             \x20 {unite} ({name} {lead_args}xver-p xver-w xver-h xver-d)\n",
+            name = exp.name
+        ),
+        DecoKind::DecoSet => {
+            let scrutinee = if unit_thunk {
+                format!("{} ()", exp.name)
+            } else {
+                exp.name.clone()
+            };
+            let mut out = format!(
+                "let {name} {lead_params}=\n\
+                 \x20 match {scrutinee} with\n\
+                 \x20 | (xver-d0, xver-d1, xver-d2, xver-d3) ->\n",
+                name = exp.name
+            );
+            let wrap = |i: usize| {
+                format!(
+                    "(fun xver-p xver-w xver-h xver-d -> \
+                     {unite} (xver-d{i} xver-p xver-w xver-h xver-d))"
+                )
+            };
+            out.push_str(&format!(
+                "   ({}, {}, {}, {})\n",
+                wrap(0),
+                wrap(1),
+                wrap(2),
+                wrap(3)
+            ));
+            out
+        }
+    }
+}
+
+/// Append each module-scoped [`DecoExport`]'s wrapper INSIDE its own module,
+/// as one more `StructDecl` after the export's original binding.
+///
+/// This is the half `deco_coercion_prelude` cannot do. A module member is
+/// reached as `Deco.simple-frame`, and there is no syntax for a top-level
+/// `let Deco.simple-frame = ..`, so the shadow has to live one scope deeper.
+/// `elaborate.rs`'s `walk_bindings` folds a module's `decls` sequentially
+/// through a `running` scope, so a later decl of the same name shadows the
+/// earlier one and the module's export surface picks up the wrapper —
+/// exactly the mechanism the top-level case already relies on.
+///
+/// The decls are built by parsing a synthetic `module .. = struct .. end`
+/// and lifting its `decls`, so the wrapper text goes through the real parser
+/// rather than being hand-constructed as CST.
+pub(crate) fn inject_module_deco_wrappers(prelude: &mut [cst::TopBinding], exports: &[DecoExport]) {
+    for tb in prelude.iter_mut() {
+        inject_into_top_binding(tb, &[], exports);
+    }
+}
+
+fn inject_into_top_binding(tb: &mut cst::TopBinding, path: &[String], exports: &[DecoExport]) {
+    let cst::TopBinding::Module { name, decls, .. } = tb else {
+        return;
+    };
+    let mut here = path.to_vec();
+    here.push(name.name.clone());
+    let mine: Vec<&DecoExport> = exports.iter().filter(|e| e.module_path == here).collect();
+    if !mine.is_empty() {
+        let mut src = String::from("module XverWrap = struct\n");
+        for exp in &mine {
+            src.push_str(&deco_wrapper_src(exp, false));
+        }
+        src.push_str("end\n");
+        let file = rustyfi_syntax::parse_file(&src).unwrap_or_else(|e| {
+            panic!(
+                "xver_adapt::inject_module_deco_wrappers: internally-generated X3b \
+                 wrapper source failed to parse (a bug in xver_adapt.rs, not user \
+                 input): {e}\n--- generated source ---\n{src}"
+            )
+        });
+        if let Some(cst::TopBinding::Module { decls: gen, .. }) = file.prelude.into_iter().next() {
+            decls.extend(gen);
+        }
+    }
+    for d in decls.iter_mut() {
+        inject_into_top_binding(&mut d.0, &here, exports);
+    }
+}
+
 pub(crate) fn deco_coercion_prelude(exports: &[DecoExport]) -> Vec<cst::TopBinding> {
     if exports.is_empty() {
         return Vec::new();
     }
     let mut src = String::new();
     for exp in exports {
-        match exp.kind {
-            DecoKind::Deco => {
-                src.push_str(&format!(
-                    "let {name} xver-p xver-w xver-h xver-d =\n\
-                     \x20 unite-graphics ({name} xver-p xver-w xver-h xver-d)\n",
-                    name = exp.name
-                ));
-            }
-            DecoKind::DecoSet => {
-                // `{name}` is `unit -> deco-set` (the `| ()` idiom
-                // `classify_rec_binding_deco` requires) — apply the mandatory
-                // unit thunk first, then destructure.
-                src.push_str(&format!(
-                    "let {name} =\n\
-                     \x20 match {name} () with\n\
-                     \x20 | (xver-d0, xver-d1, xver-d2, xver-d3) ->\n\
-                     \x20   ((fun xver-p xver-w xver-h xver-d -> unite-graphics (xver-d0 xver-p xver-w xver-h xver-d)),\n\
-                     \x20    (fun xver-p xver-w xver-h xver-d -> unite-graphics (xver-d1 xver-p xver-w xver-h xver-d)),\n\
-                     \x20    (fun xver-p xver-w xver-h xver-d -> unite-graphics (xver-d2 xver-p xver-w xver-h xver-d)),\n\
-                     \x20    (fun xver-p xver-w xver-h xver-d -> unite-graphics (xver-d3 xver-p xver-w xver-h xver-d)))\n",
-                    name = exp.name
-                ));
-            }
+        // Module-scoped exports are wrapped in place by
+        // `inject_module_deco_wrappers`; a top-level shadow cannot name them.
+        if !exp.module_path.is_empty() {
+            continue;
         }
+        src.push_str(&deco_wrapper_src(exp, true));
+    }
+    if src.is_empty() {
+        return Vec::new();
     }
     // Deliberately NO trailing dummy body: `File.body` is legitimately
     // `Option`-al (`cst.rs`'s doc comment — "Absent for a library file
@@ -1091,7 +1545,9 @@ pub(crate) fn reject_deco_exports_v01_sig(file: &cst_v1::FileV1) -> Result<(), B
 fn v1_sigexpr_mentions_deco(se: &cst_v1::ast::SigExpr) -> Option<String> {
     use cst_v1::ast::SigExpr;
     match se {
-        SigExpr::Functor { dom, cod, .. } => v1_sigexpr_mentions_deco(dom).or_else(|| v1_sigexpr_mentions_deco(cod)),
+        SigExpr::Functor { dom, cod, .. } => {
+            v1_sigexpr_mentions_deco(dom).or_else(|| v1_sigexpr_mentions_deco(cod))
+        }
         SigExpr::WithType { base, .. } => v1_sigbot_mentions_deco(base),
         SigExpr::Bot(bot) => v1_sigbot_mentions_deco(bot),
     }
@@ -1133,7 +1589,9 @@ fn v1_decl_mentions_deco(decl: &cst_v1::ast::Decl) -> Option<String> {
 fn v1_type_expr_mentions_deco(te: &cst_v1::ast::TypeExpr) -> Option<String> {
     use cst_v1::ast::TypeExpr;
     match te {
-        TypeExpr::OptRowFun { opt_dom, dom, cod, .. } => opt_dom
+        TypeExpr::OptRowFun {
+            opt_dom, dom, cod, ..
+        } => opt_dom
             .inner
             .entries
             .iter()
@@ -1148,7 +1606,11 @@ fn v1_type_expr_mentions_deco(te: &cst_v1::ast::TypeExpr) -> Option<String> {
 }
 
 fn v1_type_prod_mentions_deco(tp: &cst_v1::ast::TypeProd) -> Option<String> {
-    v1_type_app_mentions_deco(&tp.first).or_else(|| tp.rest.iter().find_map(|st| v1_type_app_mentions_deco(&st.ty)))
+    v1_type_app_mentions_deco(&tp.first).or_else(|| {
+        tp.rest
+            .iter()
+            .find_map(|st| v1_type_app_mentions_deco(&st.ty))
+    })
 }
 
 fn v1_type_app_mentions_deco(ta: &cst_v1::ast::TypeApp) -> Option<String> {
@@ -1163,12 +1625,11 @@ fn v1_type_app_mentions_deco(ta: &cst_v1::ast::TypeApp) -> Option<String> {
         // `M.t τ…` — a QUALIFIED ctor name; never itself a bare
         // `"deco"`/`"deco-set"` (those are unqualified builtins), only its
         // arguments can mention one.
-        TypeApp::AppliedLong { first, rest, .. } => {
-            v1_type_atom_mentions_deco(first).or_else(|| rest.iter().find_map(v1_type_atom_mentions_deco))
-        }
-        TypeApp::InlineCmdTy { args, .. } | TypeApp::BlockCmdTy { args, .. } | TypeApp::MathCmdTy { args, .. } => {
-            args.iter().find_map(v1_type_cmd_arg_mentions_deco)
-        }
+        TypeApp::AppliedLong { first, rest, .. } => v1_type_atom_mentions_deco(first)
+            .or_else(|| rest.iter().find_map(v1_type_atom_mentions_deco)),
+        TypeApp::InlineCmdTy { args, .. }
+        | TypeApp::BlockCmdTy { args, .. }
+        | TypeApp::MathCmdTy { args, .. } => args.iter().find_map(v1_type_cmd_arg_mentions_deco),
         TypeApp::Atom(atom) => v1_type_atom_mentions_deco(atom),
     }
 }
@@ -1176,7 +1637,11 @@ fn v1_type_app_mentions_deco(ta: &cst_v1::ast::TypeApp) -> Option<String> {
 fn v1_type_cmd_arg_mentions_deco(item: &cst_v1::ast::TypeCmdArgItemV1) -> Option<String> {
     item.opts
         .as_ref()
-        .and_then(|o| o.entries.iter().find_map(|e| v1_type_expr_mentions_deco(&e.ty.0)))
+        .and_then(|o| {
+            o.entries
+                .iter()
+                .find_map(|e| v1_type_expr_mentions_deco(&e.ty.0))
+        })
         .or_else(|| v1_type_expr_mentions_deco(&item.ty.0))
 }
 
@@ -1184,7 +1649,10 @@ fn v1_type_atom_mentions_deco(atom: &cst_v1::ast::TypeAtom) -> Option<String> {
     use cst_v1::ast::TypeAtom;
     match atom {
         TypeAtom::Paren { inner, .. } => v1_type_expr_mentions_deco(&inner.0),
-        TypeAtom::Record { inner, .. } => inner.fields.iter().find_map(|f| v1_type_expr_mentions_deco(&f.ty.0)),
+        TypeAtom::Record { inner, .. } => inner
+            .fields
+            .iter()
+            .find_map(|f| v1_type_expr_mentions_deco(&f.ty.0)),
         // A bound type variable — never a forked-name candidate.
         TypeAtom::Var(_) => None,
         // `M.t` — a qualified name; never itself a bare builtin fork name.
@@ -1192,7 +1660,6 @@ fn v1_type_atom_mentions_deco(atom: &cst_v1::ast::TypeAtom) -> Option<String> {
         TypeAtom::Name(n) => deco_leaf_name(&n.name),
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -1241,11 +1708,43 @@ mod tests {
 
     #[test]
     fn adapt_export_type_rejects_opaque_nominals() {
-        for name in ["math-text", "math-boxes", "pre-path", "path", "graphics", "image", "font"] {
+        // `pre-path`/`path`/`graphics`/`image` used to be listed here. They are
+        // not forked and never were: upstream 0.0.6's `base_type_hash_table`
+        // (`types.cppo.ml:295-298`) maps all four to the same base types 0.1
+        // uses, and this port's `t_prepath`/`t_path`/`t_graphics`/`t_image` and
+        // their `Value` reps take no version either. Only the port's
+        // `name_to_mono` disagreed, via a V0_1 gate — see the test below.
+        for name in ["math-text", "math-boxes", "font"] {
             let ty = PolyType::mono(MonoType::Variant(name.to_string(), vec![]));
             let err = adapt_export_type(&ty, v006(), v01()).unwrap_err();
             match err {
                 BoundaryError::ForkedTypeExport { ty_name, .. } => assert_eq!(ty_name, name),
+            }
+        }
+    }
+
+    #[test]
+    fn graphics_tier_base_types_are_not_forked_and_cross_in_both_directions() {
+        // The four graphics-tier base types resolve identically under both
+        // versions, so they must not appear in the fork set at all...
+        let forked = crate::typecheck::forked_type_names();
+        for name in ["pre-path", "path", "graphics", "image"] {
+            assert!(
+                !forked.contains(name),
+                "`{name}` must not be reported as version-forked: upstream 0.0.6 \
+                 registers it as a base type exactly as 0.1 does"
+            );
+            assert!(
+                !reject_type_names().contains(name),
+                "`{name}` must not be rejected"
+            );
+        }
+        // ...and an export mentioning one must cross unchanged, either way.
+        for (from, to) in [(v006(), v01()), (v01(), v006())] {
+            for name in ["pre-path", "path", "graphics", "image"] {
+                let ann = parse_ty(name);
+                adapt_export_annotation(&ann, from, to)
+                    .unwrap_or_else(|e| panic!("`{name}` must cross {from:?}->{to:?}: {e:?}"));
             }
         }
     }
@@ -1266,7 +1765,10 @@ mod tests {
         // A ordinary, non-forked user type name must pass through untouched
         // (S4's flip side: only the specific reject set is conservative,
         // not every nominal).
-        let ty = PolyType::mono(MonoType::Variant("option".to_string(), vec![MonoType::Base(BaseType::Int)]));
+        let ty = PolyType::mono(MonoType::Variant(
+            "option".to_string(),
+            vec![MonoType::Base(BaseType::Int)],
+        ));
         assert!(adapt_export_type(&ty, v006(), v01()).is_ok());
     }
 
@@ -1277,7 +1779,8 @@ mod tests {
     fn parse_ty(src: &str) -> TypeExpr {
         // Reuse a `type` declaration's RHS to get a real parsed TypeExpr —
         // simplest way to build one without hand-rolling the CST.
-        let file = rustyfi_syntax::parse_file(&format!("type xver-probe = {src}\n0\n")).expect("parse");
+        let file =
+            rustyfi_syntax::parse_file(&format!("type xver-probe = {src}\n0\n")).expect("parse");
         for tb in &file.prelude {
             if let cst::TopBinding::Type(td) = tb {
                 if let cst::TypeDeclBody::Synonym(ty) = &td.body {
@@ -1294,7 +1797,11 @@ mod tests {
         let out = adapt_export_annotation(&ann, v006(), v01()).expect("math must be accepted");
         match out {
             TypeExpr::Atom(TypeProd {
-                first: TypeApp { head: TypeAtom::Name(n), .. },
+                first:
+                    TypeApp {
+                        head: TypeAtom::Name(n),
+                        ..
+                    },
                 ..
             }) => assert_eq!(n.name, "math-text"),
             other => panic!("expected a bare relabeled Name, got {other:?}"),
@@ -1304,12 +1811,16 @@ mod tests {
     #[test]
     fn adapt_export_annotation_relabels_math_nested_in_function_type() {
         let ann = parse_ty("math -> math");
-        let out = adapt_export_annotation(&ann, v006(), v01()).expect("math -> math must be accepted");
+        let out =
+            adapt_export_annotation(&ann, v006(), v01()).expect("math -> math must be accepted");
         // Round-trip through Display/Debug is overkill; just confirm no
         // `Err` and that unparsing still contains `math-text` twice, not
         // bare `math`.
         let unparsed = format!("{out:?}");
-        assert!(!unparsed.contains("\"math\""), "no bare `math` should survive: {unparsed}");
+        assert!(
+            !unparsed.contains("\"math\""),
+            "no bare `math` should survive: {unparsed}"
+        );
     }
 
     #[test]
@@ -1351,7 +1862,11 @@ mod tests {
         let out = adapt_export_annotation(&ann, v01(), v006()).expect("math-text must be accepted");
         match out {
             TypeExpr::Atom(TypeProd {
-                first: TypeApp { head: TypeAtom::Name(n), .. },
+                first:
+                    TypeApp {
+                        head: TypeAtom::Name(n),
+                        ..
+                    },
                 ..
             }) => assert_eq!(n.name, "math"),
             other => panic!("expected a bare relabeled Name, got {other:?}"),
@@ -1361,10 +1876,15 @@ mod tests {
     #[test]
     fn adapt_export_annotation_reverse_relabels_math_boxes_to_math() {
         let ann = parse_ty("math-boxes");
-        let out = adapt_export_annotation(&ann, v01(), v006()).expect("math-boxes must be accepted");
+        let out =
+            adapt_export_annotation(&ann, v01(), v006()).expect("math-boxes must be accepted");
         match out {
             TypeExpr::Atom(TypeProd {
-                first: TypeApp { head: TypeAtom::Name(n), .. },
+                first:
+                    TypeApp {
+                        head: TypeAtom::Name(n),
+                        ..
+                    },
                 ..
             }) => assert_eq!(n.name, "math"),
             other => panic!("expected a bare relabeled Name, got {other:?}"),
@@ -1381,11 +1901,15 @@ mod tests {
     }
 
     #[test]
-    fn adapt_export_annotation_reverse_rejects_graphics() {
-        let ann = parse_ty("graphics");
-        let err = adapt_export_annotation(&ann, v01(), v006()).expect_err("graphics must reject");
+    fn adapt_export_annotation_reverse_rejects_a_genuinely_forked_name() {
+        // Was `graphics`, which is not forked (see
+        // `graphics_tier_base_types_are_not_forked_and_cross_in_both_directions`).
+        // `font` still is: 0.0.6's is an opaque nominal, 0.1's a `string`
+        // stand-in — different runtime reps, so it must not cross.
+        let ann = parse_ty("font");
+        let err = adapt_export_annotation(&ann, v01(), v006()).expect_err("font must reject");
         match err {
-            BoundaryError::ForkedTypeExport { ty_name, .. } => assert_eq!(ty_name, "graphics"),
+            BoundaryError::ForkedTypeExport { ty_name, .. } => assert_eq!(ty_name, "font"),
         }
     }
 
@@ -1394,10 +1918,15 @@ mod tests {
         // Non-regression: adding the (V0_1, V0_0_6) arm must not perturb the
         // EXISTING (V0_0_6, V0_1) "math"->"math-text" relabel.
         let ann = parse_ty("math");
-        let out = adapt_export_annotation(&ann, v006(), v01()).expect("math must still be accepted");
+        let out =
+            adapt_export_annotation(&ann, v006(), v01()).expect("math must still be accepted");
         match out {
             TypeExpr::Atom(TypeProd {
-                first: TypeApp { head: TypeAtom::Name(n), .. },
+                first:
+                    TypeApp {
+                        head: TypeAtom::Name(n),
+                        ..
+                    },
                 ..
             }) => assert_eq!(n.name, "math-text"),
             other => panic!("expected a bare relabeled Name, got {other:?}"),
@@ -1416,14 +1945,19 @@ mod tests {
     #[test]
     fn relabel_type_decls_rewrites_variant_ctor_payload() {
         let prelude = prelude_of("type xver-wrap = XverWrap of math\n0\n");
-        let out = relabel_type_decls(&prelude, v006(), v01()).expect("math-only prelude must relabel");
+        let out =
+            relabel_type_decls(&prelude, v006(), v01()).expect("math-only prelude must relabel");
         match &out[0] {
             cst::TopBinding::Type(td) => match &td.body {
                 cst::TypeDeclBody::Variant { first, .. } => {
                     let ty = &first.of_ty.as_ref().unwrap().ty;
                     match ty {
                         TypeExpr::Atom(TypeProd {
-                            first: TypeApp { head: TypeAtom::Name(n), .. },
+                            first:
+                                TypeApp {
+                                    head: TypeAtom::Name(n),
+                                    ..
+                                },
                             ..
                         }) => assert_eq!(n.name, "math-text"),
                         other => panic!("expected relabeled Name, got {other:?}"),
@@ -1437,10 +1971,10 @@ mod tests {
 
     #[test]
     fn relabel_type_decls_recurses_into_nested_module() {
-        let prelude = prelude_of(
-            "module M = struct\n  type inner-wrap = InnerWrap of math\nend\n0\n",
-        );
-        let out = relabel_type_decls(&prelude, v006(), v01()).expect("nested math-only prelude must relabel");
+        let prelude =
+            prelude_of("module M = struct\n  type inner-wrap = InnerWrap of math\nend\n0\n");
+        let out = relabel_type_decls(&prelude, v006(), v01())
+            .expect("nested math-only prelude must relabel");
         match &out[0] {
             cst::TopBinding::Module { decls, .. } => match decls[0].0.as_ref() {
                 cst::TopBinding::Type(td) => match &td.body {
@@ -1448,7 +1982,11 @@ mod tests {
                         let ty = &first.of_ty.as_ref().unwrap().ty;
                         match ty {
                             TypeExpr::Atom(TypeProd {
-                                first: TypeApp { head: TypeAtom::Name(n), .. },
+                                first:
+                                    TypeApp {
+                                        head: TypeAtom::Name(n),
+                                        ..
+                                    },
                                 ..
                             }) => assert_eq!(n.name, "math-text"),
                             other => panic!("expected relabeled Name, got {other:?}"),
@@ -1480,7 +2018,8 @@ mod tests {
     #[test]
     fn classify_deco_exports_accepts_bare_top_level_letrec() {
         let prelude = prelude_of("let-rec xver-my-deco : deco | (x, y) w h d = []\n0\n");
-        let exports = classify_deco_exports(&prelude, v006(), v01()).expect("bare `: deco` must be accepted");
+        let exports =
+            classify_deco_exports(&prelude, v006(), v01()).expect("bare `: deco` must be accepted");
         assert_eq!(exports.len(), 1);
         assert_eq!(exports[0].name, "xver-my-deco");
         assert_eq!(exports[0].kind, DecoKind::Deco);
@@ -1493,7 +2032,8 @@ mod tests {
         // `let-rec name : deco-set | = (tuple)` (zero params, no `()`) does
         // not even elaborate; see `classify_rec_binding_deco`'s doc comment.
         let prelude = prelude_of("let-rec xver-my-decoset : deco-set | () = (0, 0, 0, 0)\n0\n");
-        let exports = classify_deco_exports(&prelude, v006(), v01()).expect("`| ()` deco-set must be accepted");
+        let exports = classify_deco_exports(&prelude, v006(), v01())
+            .expect("`| ()` deco-set must be accepted");
         assert_eq!(exports.len(), 1);
         assert_eq!(exports[0].name, "xver-my-decoset");
         assert_eq!(exports[0].kind, DecoKind::DecoSet);
@@ -1517,32 +2057,75 @@ mod tests {
         // zero coercion, so it must not be classified as a `DecoExport` at
         // all (nothing to wrap).
         let prelude = prelude_of("type xver-deco-alias = deco\n0\n");
-        let exports = classify_deco_exports(&prelude, v006(), v01()).expect("a type synonym must be accepted");
+        let exports = classify_deco_exports(&prelude, v006(), v01())
+            .expect("a type synonym must be accepted");
         assert!(exports.is_empty());
     }
 
     #[test]
-    fn classify_deco_exports_rejects_curried_prefix() {
-        // `length -> color -> color -> deco` — out of X3b's scoped support
-        // (a leading Fun-arrow prefix before the `deco` leaf).
-        let prelude = prelude_of("let-rec xver-my-deco : length -> deco | t (x, y) w h d = []\n0\n");
-        let err = classify_deco_exports(&prelude, v006(), v01())
-            .expect_err("a curried-prefix deco export must still be rejected");
-        match err {
-            BoundaryError::ForkedTypeExport { ty_name, .. } => assert_eq!(ty_name, "deco"),
-        }
+    fn classify_deco_exports_accepts_curried_prefix() {
+        // `length -> deco` — the arrow-PREFIXED shape. Was out of X3b's
+        // original scope; the wrapper now eta-expands over the leading
+        // arguments, so it is classified with its lead arity instead.
+        let prelude =
+            prelude_of("let-rec xver-my-deco : length -> deco | t (x, y) w h d = []\n0\n");
+        let got = classify_deco_exports(&prelude, v006(), v01())
+            .expect("a curried-prefix deco export is now wrappable");
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].name, "xver-my-deco");
+        assert_eq!(got[0].lead_arity, 1);
+        assert!(got[0].module_path.is_empty());
     }
 
     #[test]
-    fn classify_deco_exports_rejects_module_sig_item() {
+    fn classify_deco_exports_accepts_module_sig_item() {
+        // The shape the whole 0.0.6 corpus actually uses: exports inside a
+        // `module .. : sig .. end`. Recorded with the enclosing module path,
+        // which is what routes it to `inject_module_deco_wrappers`.
         let prelude = prelude_of(
-            "module M : sig\n  val simple : deco\nend = struct\n  let simple (x, y) w h d = []\nend\n0\n",
+            "module M : sig\n  val simple : length -> deco\n  val plain : deco\nend = struct\n  \
+             let simple t (x, y) w h d = []\n  let plain (x, y) w h d = []\nend\n0\n",
         );
-        let err = classify_deco_exports(&prelude, v006(), v01())
-            .expect_err("a module-qualified deco export must still be rejected");
-        match err {
-            BoundaryError::ForkedTypeExport { ty_name, .. } => assert_eq!(ty_name, "deco"),
+        let got = classify_deco_exports(&prelude, v006(), v01())
+            .expect("a module-scoped deco export is now wrappable");
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[0].name, "simple");
+        assert_eq!(got[0].lead_arity, 1);
+        assert_eq!(got[0].module_path, vec!["M".to_string()]);
+        assert_eq!(got[1].name, "plain");
+        assert_eq!(got[1].lead_arity, 0);
+    }
+
+    #[test]
+    fn module_deco_wrapper_is_injected_inside_the_module() {
+        let mut prelude = prelude_of(
+            "module M : sig\n  val simple : length -> deco\nend = struct\n  \
+             let simple t (x, y) w h d = []\nend\n0\n",
+        );
+        let exports = classify_deco_exports(&prelude, v006(), v01()).unwrap();
+        let before = match &prelude[0] {
+            cst::TopBinding::Module { decls, .. } => decls.len(),
+            other => panic!("expected a module, got {other:?}"),
+        };
+        inject_module_deco_wrappers(&mut prelude, &exports);
+        match &prelude[0] {
+            cst::TopBinding::Module { decls, .. } => {
+                assert_eq!(
+                    decls.len(),
+                    before + 1,
+                    "the wrapper must be appended INSIDE the module"
+                );
+                // ...and it must shadow, i.e. bind the SAME name, LAST.
+                match &*decls[decls.len() - 1].0 {
+                    cst::TopBinding::Let(tl) => assert_eq!(tl.name.name, "simple"),
+                    other => panic!("expected a shadowing `let simple`, got {other:?}"),
+                }
+            }
+            other => panic!("expected a module, got {other:?}"),
         }
+        // A module-scoped export must NOT also get a top-level shadow: there
+        // is no `let M.simple` to write.
+        assert!(deco_coercion_prelude(&exports).is_empty());
     }
 
     #[test]
@@ -1551,10 +2134,16 @@ mod tests {
             DecoExport {
                 name: "xver-my-deco".to_string(),
                 kind: DecoKind::Deco,
+                lead_arity: 0,
+                module_path: Vec::new(),
+                arg_downgrades: Vec::new(),
             },
             DecoExport {
                 name: "xver-my-decoset".to_string(),
                 kind: DecoKind::DecoSet,
+                lead_arity: 0,
+                module_path: Vec::new(),
+                arg_downgrades: Vec::new(),
             },
         ];
         let out = deco_coercion_prelude(&exports);
@@ -1592,9 +2181,11 @@ mod tests {
         // (`cst_v1::Bind::Value` has no ascription syntax of its own) —
         // still rejected (no sound wrap exists, this function's doc
         // comment), now with a specific X4b diagnostic.
-        let file = v1_file("module M :> sig\n  val my-deco : deco\nend = struct\n  val my-deco = 0\nend\n");
-        let err =
-            reject_deco_exports_v01_sig(&file).expect_err("a module sig `val : deco` item must still be rejected");
+        let file = v1_file(
+            "module M :> sig\n  val my-deco : deco\nend = struct\n  val my-deco = 0\nend\n",
+        );
+        let err = reject_deco_exports_v01_sig(&file)
+            .expect_err("a module sig `val : deco` item must still be rejected");
         match err {
             BoundaryError::ForkedTypeExport { ty_name, .. } => assert_eq!(ty_name, "deco"),
         }
@@ -1614,7 +2205,8 @@ mod tests {
     fn reject_deco_exports_v01_sig_rejects_curried_sig_val() {
         let file =
             v1_file("module M :> sig\n  val my-deco : length -> deco\nend = struct\n  val my-deco t p w h d = 0\nend\n");
-        let err = reject_deco_exports_v01_sig(&file).expect_err("a curried sig `val` type must still be rejected");
+        let err = reject_deco_exports_v01_sig(&file)
+            .expect_err("a curried sig `val` type must still be rejected");
         match err {
             BoundaryError::ForkedTypeExport { ty_name, .. } => assert_eq!(ty_name, "deco"),
         }
@@ -1626,8 +2218,8 @@ mod tests {
             "module Outer :> sig\n  module Inner : sig val my-deco : deco end\nend = struct\n  \
              module Inner :> sig val my-deco : deco end = struct val my-deco = 0 end\nend\n",
         );
-        let err =
-            reject_deco_exports_v01_sig(&file).expect_err("a NESTED module's sig `val : deco` item must still reject");
+        let err = reject_deco_exports_v01_sig(&file)
+            .expect_err("a NESTED module's sig `val : deco` item must still reject");
         match err {
             BoundaryError::ForkedTypeExport { ty_name, .. } => assert_eq!(ty_name, "deco"),
         }
@@ -1656,7 +2248,10 @@ mod tests {
     #[test]
     fn reject_deco_exports_v01_sig_ok_for_document() {
         let file = v1_file("0\n");
-        assert!(reject_deco_exports_v01_sig(&file).is_ok(), "a document is never a dependency");
+        assert!(
+            reject_deco_exports_v01_sig(&file).is_ok(),
+            "a document is never a dependency"
+        );
     }
 
     #[test]
@@ -1666,8 +2261,8 @@ mod tests {
         // (a wholly separate function operating on a wholly separate CST
         // type — `cst_v1::FileV1`, not `cst::TopBinding`).
         let prelude = prelude_of("let-rec xver-my-deco : deco | (x, y) w h d = []\n0\n");
-        let exports =
-            classify_deco_exports(&prelude, v006(), v01()).expect("bare `: deco` must still be accepted forward");
+        let exports = classify_deco_exports(&prelude, v006(), v01())
+            .expect("bare `: deco` must still be accepted forward");
         assert_eq!(exports.len(), 1);
     }
 }

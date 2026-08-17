@@ -134,7 +134,8 @@ fn build_fixture_pdf() -> std::path::PathBuf {
             .unwrap()
             .as_nanos()
     ));
-    doc.save(&path).expect("saving the fixture PDF must succeed");
+    doc.save(&path)
+        .expect("saving the fixture PDF must succeed");
     path
 }
 
@@ -151,18 +152,18 @@ fn fixture_path() -> String {
 
 #[test]
 fn load_pdf_image_reads_the_media_box_into_intrinsic_dims() {
-    let ast = app2(
-        "load-pdf-image",
-        str_lit(&fixture_path()),
-        int_lit(1),
-    );
+    let ast = app2("load-pdf-image", str_lit(&fixture_path()), int_lit(1));
     let out = run(&ast);
     assert!(
         matches!(out.value, Value::Image(_)),
         "expected an image value, got {:?}",
         out.value
     );
-    assert_eq!(out.images.len(), 1, "load-pdf-image should push exactly one resource");
+    assert_eq!(
+        out.images.len(),
+        1,
+        "load-pdf-image should push exactly one resource"
+    );
     let res = &out.images[0];
     let pdf = res.pdf.as_ref().expect("resource must carry a pdf payload");
     assert_eq!(pdf.media_box, (0.0, 0.0, 100.0, 50.0));

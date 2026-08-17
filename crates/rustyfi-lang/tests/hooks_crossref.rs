@@ -6,7 +6,9 @@
 //! fixpoint round trip (compile → fire hooks → re-run) is covered
 //! separately by `rustyfi-cli`'s e2e `hook-page.saty` fixture.
 
-use rustyfi_backend::{FontKey, FontMetrics, HookId, HorzBox, Length, Page, PageGeometry, PlacedLine, PureHorzBox};
+use rustyfi_backend::{
+    FontKey, FontMetrics, HookId, HorzBox, Length, Page, PageGeometry, PlacedLine, PureHorzBox,
+};
 use rustyfi_lang::ast::Ast;
 use rustyfi_lang::crossref::Verdict;
 use rustyfi_lang::eval;
@@ -68,7 +70,11 @@ fn hook_page_break_pushes_a_closure_and_returns_a_hookid_box() {
         boxes,
         vec![HorzBox::Pure(PureHorzBox::HookPageBreak { id: HookId(0) })]
     );
-    assert_eq!(interp.hooks.len(), 1, "the closure must be pushed onto the hook table");
+    assert_eq!(
+        interp.hooks.len(),
+        1,
+        "the closure must be pushed onto the hook table"
+    );
 }
 
 #[test]
@@ -240,7 +246,7 @@ fn fire_hooks_numbers_pages_one_based_in_document_order() {
     interp.hooks.push(closure);
 
     let hook_free_page = Page {
-            body_lines: usize::MAX,
+        body_lines: usize::MAX,
         lines: vec![PlacedLine {
             x: Length::ZERO,
             baseline_y: Length::pt(50.0),
@@ -248,7 +254,7 @@ fn fire_hooks_numbers_pages_one_based_in_document_order() {
         }],
     };
     let hook_page = Page {
-            body_lines: usize::MAX,
+        body_lines: usize::MAX,
         lines: vec![PlacedLine {
             x: Length::ZERO,
             baseline_y: Length::pt(50.0),

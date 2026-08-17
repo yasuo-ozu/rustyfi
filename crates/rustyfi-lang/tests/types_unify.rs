@@ -2,7 +2,9 @@
 //! TypeContext, generalize, instantiate}` and `unify::unify`.
 
 use rustyfi_lang::prim_types::{self, arrow, list, product, reff, t_bool, t_int, t_string};
-use rustyfi_lang::types::{self, resolve_row, BaseType, CmdArgType, Kind, MonoType, Row, TypeContext};
+use rustyfi_lang::types::{
+    self, resolve_row, BaseType, CmdArgType, Kind, MonoType, Row, TypeContext,
+};
 use rustyfi_lang::unify::{unify, UnifyError};
 use std::collections::BTreeSet;
 
@@ -35,7 +37,10 @@ fn unify_links_a_variable_left_to_right() {
     let v = ctx.fresh_var();
     let var_ty = MonoType::Var(v.clone());
     unify(&var_ty, &t_int()).unwrap();
-    assert!(matches!(&*types::resolve(&var_ty), MonoType::Base(BaseType::Int)));
+    assert!(matches!(
+        &*types::resolve(&var_ty),
+        MonoType::Base(BaseType::Int)
+    ));
 }
 
 #[test]
@@ -44,7 +49,10 @@ fn unify_links_a_variable_right_to_left() {
     let v = ctx.fresh_var();
     let var_ty = MonoType::Var(v.clone());
     unify(&t_int(), &var_ty).unwrap();
-    assert!(matches!(&*types::resolve(&var_ty), MonoType::Base(BaseType::Int)));
+    assert!(matches!(
+        &*types::resolve(&var_ty),
+        MonoType::Base(BaseType::Int)
+    ));
 }
 
 #[test]
@@ -55,7 +63,10 @@ fn two_variables_unify_to_the_same_representative() {
     unify(&MonoType::Var(v1.clone()), &MonoType::Var(v2.clone())).unwrap();
     // Resolving either one and then unifying with a concrete type pins both.
     unify(&MonoType::Var(v1.clone()), &t_string()).unwrap();
-    assert!(matches!(&*types::resolve(&MonoType::Var(v2)), MonoType::Base(BaseType::String)));
+    assert!(matches!(
+        &*types::resolve(&MonoType::Var(v2)),
+        MonoType::Base(BaseType::String)
+    ));
 }
 
 // ============================================================================
@@ -87,7 +98,11 @@ fn occurs_check_looks_through_a_record_row() {
     let mut ctx = TypeContext::new();
     let v = ctx.fresh_var();
     let var_ty = MonoType::Var(v.clone());
-    let row = Row::Cons("a".to_string(), Box::new(var_ty.clone()), Box::new(Row::Empty));
+    let row = Row::Cons(
+        "a".to_string(),
+        Box::new(var_ty.clone()),
+        Box::new(Row::Empty),
+    );
     let self_referential = MonoType::Record(row);
     let err = unify(&var_ty, &self_referential).unwrap_err();
     assert!(matches!(err, UnifyError::OccursCheck));
@@ -105,8 +120,14 @@ fn func_types_unify_argument_and_result_wise() {
     let concrete = arrow(t_int(), t_bool());
     let generic = arrow(MonoType::Var(a.clone()), MonoType::Var(b.clone()));
     unify(&generic, &concrete).unwrap();
-    assert!(matches!(&*types::resolve(&MonoType::Var(a)), MonoType::Base(BaseType::Int)));
-    assert!(matches!(&*types::resolve(&MonoType::Var(b)), MonoType::Base(BaseType::Bool)));
+    assert!(matches!(
+        &*types::resolve(&MonoType::Var(a)),
+        MonoType::Base(BaseType::Int)
+    ));
+    assert!(matches!(
+        &*types::resolve(&MonoType::Var(b)),
+        MonoType::Base(BaseType::Bool)
+    ));
 }
 
 #[test]
@@ -121,7 +142,13 @@ fn product_types_of_different_arity_are_an_arity_mismatch() {
     let p1 = product(vec![t_int(), t_bool()]);
     let p2 = product(vec![t_int(), t_bool(), t_int()]);
     let err = unify(&p1, &p2).unwrap_err();
-    assert!(matches!(err, UnifyError::ArityMismatch { expected: 2, found: 3 }));
+    assert!(matches!(
+        err,
+        UnifyError::ArityMismatch {
+            expected: 2,
+            found: 3
+        }
+    ));
 }
 
 #[test]
@@ -129,7 +156,10 @@ fn list_types_unify_through_their_element_type() {
     let mut ctx = TypeContext::new();
     let v = ctx.fresh_var();
     unify(&list(MonoType::Var(v.clone())), &list(t_int())).unwrap();
-    assert!(matches!(&*types::resolve(&MonoType::Var(v)), MonoType::Base(BaseType::Int)));
+    assert!(matches!(
+        &*types::resolve(&MonoType::Var(v)),
+        MonoType::Base(BaseType::Int)
+    ));
 }
 
 #[test]
@@ -137,7 +167,10 @@ fn ref_types_unify_through_their_pointee_type() {
     let mut ctx = TypeContext::new();
     let v = ctx.fresh_var();
     unify(&reff(MonoType::Var(v.clone())), &reff(t_int())).unwrap();
-    assert!(matches!(&*types::resolve(&MonoType::Var(v)), MonoType::Base(BaseType::Int)));
+    assert!(matches!(
+        &*types::resolve(&MonoType::Var(v)),
+        MonoType::Base(BaseType::Int)
+    ));
 }
 
 // ============================================================================
@@ -201,9 +234,15 @@ fn open_row_var_subsumes_a_bigger_closed_row_leaving_it_fully_closed() {
     seen.sort_by(|a, b| a.0.cmp(&b.0));
     assert_eq!(seen.len(), 2);
     assert_eq!(seen[0].0, "a");
-    assert!(matches!(&*types::resolve(&seen[0].1), MonoType::Base(BaseType::Int)));
+    assert!(matches!(
+        &*types::resolve(&seen[0].1),
+        MonoType::Base(BaseType::Int)
+    ));
     assert_eq!(seen[1].0, "b");
-    assert!(matches!(&*types::resolve(&seen[1].1), MonoType::Base(BaseType::String)));
+    assert!(matches!(
+        &*types::resolve(&seen[1].1),
+        MonoType::Base(BaseType::String)
+    ));
 }
 
 #[test]
@@ -211,8 +250,11 @@ fn two_open_row_vars_unify_by_linking_and_union_their_kinds() {
     let mut ctx = TypeContext::new();
     let rv1 = ctx.fresh_row_var_with_kind(labels(&["a"]));
     let rv2 = ctx.fresh_row_var_with_kind(labels(&["b"]));
-    unify(&MonoType::Record(Row::Var(rv1.clone())), &MonoType::Record(Row::Var(rv2.clone())))
-        .unwrap();
+    unify(
+        &MonoType::Record(Row::Var(rv1.clone())),
+        &MonoType::Record(Row::Var(rv2.clone())),
+    )
+    .unwrap();
 
     // Whichever one ended up as the representative carries the union of
     // both required-label sets.
@@ -249,20 +291,44 @@ fn kind_bridging_type_variable_rejects_a_record_missing_the_required_label() {
 #[test]
 fn command_arg_types_unify_elementwise() {
     let c1 = MonoType::InlineCmd(vec![
-        CmdArgType { optional: false, opt_labels: vec![], ty: t_int() },
-        CmdArgType { optional: true, opt_labels: vec![], ty: t_string() },
+        CmdArgType {
+            optional: false,
+            opt_labels: vec![],
+            ty: t_int(),
+        },
+        CmdArgType {
+            optional: true,
+            opt_labels: vec![],
+            ty: t_string(),
+        },
     ]);
     let c2 = MonoType::InlineCmd(vec![
-        CmdArgType { optional: false, opt_labels: vec![], ty: t_int() },
-        CmdArgType { optional: true, opt_labels: vec![], ty: t_string() },
+        CmdArgType {
+            optional: false,
+            opt_labels: vec![],
+            ty: t_int(),
+        },
+        CmdArgType {
+            optional: true,
+            opt_labels: vec![],
+            ty: t_string(),
+        },
     ]);
     assert!(unify(&c1, &c2).is_ok());
 }
 
 #[test]
 fn command_arg_optionality_mismatch_is_an_error() {
-    let c1 = MonoType::InlineCmd(vec![CmdArgType { optional: false, opt_labels: vec![], ty: t_int() }]);
-    let c2 = MonoType::InlineCmd(vec![CmdArgType { optional: true, opt_labels: vec![], ty: t_int() }]);
+    let c1 = MonoType::InlineCmd(vec![CmdArgType {
+        optional: false,
+        opt_labels: vec![],
+        ty: t_int(),
+    }]);
+    let c2 = MonoType::InlineCmd(vec![CmdArgType {
+        optional: true,
+        opt_labels: vec![],
+        ty: t_int(),
+    }]);
     let err = unify(&c1, &c2).unwrap_err();
     assert!(matches!(err, UnifyError::OptionalMismatch { .. }));
 }
@@ -318,7 +384,8 @@ fn a_variable_from_an_outer_level_does_not_generalize() {
 
     // The outer variable is untouched by instantiation: both bodies still
     // share the very same `outer` cell.
-    let (MonoType::Var(o1), MonoType::Var(o2)) = (&*types::resolve(&dom1), &*types::resolve(&dom2)) else {
+    let (MonoType::Var(o1), MonoType::Var(o2)) = (&*types::resolve(&dom1), &*types::resolve(&dom2))
+    else {
         panic!("expected variables");
     };
     assert!(o1.same(&o2));
@@ -326,7 +393,8 @@ fn a_variable_from_an_outer_level_does_not_generalize() {
 
     // The inner (generalized) variable, on the other hand, is fresh each
     // instantiation.
-    let (MonoType::Var(i1), MonoType::Var(i2)) = (&*types::resolve(&cod1), &*types::resolve(&cod2)) else {
+    let (MonoType::Var(i1), MonoType::Var(i2)) = (&*types::resolve(&cod1), &*types::resolve(&cod2))
+    else {
         panic!("expected variables");
     };
     assert!(!i1.same(&i2));
@@ -351,7 +419,10 @@ fn display_prints_a_closed_record_type() {
 #[test]
 fn display_prints_products_and_postfix_variants() {
     assert_eq!(product(vec![t_int(), t_bool()]).to_string(), "int * bool");
-    assert_eq!(MonoType::Variant("option".to_string(), vec![t_int()]).to_string(), "int option");
+    assert_eq!(
+        MonoType::Variant("option".to_string(), vec![t_int()]).to_string(),
+        "int option"
+    );
 }
 
 // ============================================================================
@@ -671,8 +742,12 @@ fn poly_primitives_instantiate_independently() {
     let ty2 = types::instantiate(&scheme, 0);
     // Applying the first instantiation at `int` must not constrain the
     // second instantiation, which we then apply at `bool`.
-    let MonoType::Func(_, head1, _) = ty1 else { panic!("expected a function type") };
-    let MonoType::Func(_, head2, _) = ty2 else { panic!("expected a function type") };
+    let MonoType::Func(_, head1, _) = ty1 else {
+        panic!("expected a function type")
+    };
+    let MonoType::Func(_, head2, _) = ty2 else {
+        panic!("expected a function type")
+    };
     unify(&head1, &t_int()).unwrap();
     unify(&head2, &t_bool()).unwrap();
 }

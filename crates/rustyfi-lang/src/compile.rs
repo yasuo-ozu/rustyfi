@@ -323,8 +323,9 @@ impl<'b> Compiler<'b> {
         if self.is_bound(name) {
             return None;
         }
-        let Value::Prim { def, applied } =
-            self.globals_for(self.current_version).and_then(|g| g.lookup(name))?
+        let Value::Prim { def, applied } = self
+            .globals_for(self.current_version)
+            .and_then(|g| g.lookup(name))?
         else {
             return None;
         };
@@ -622,15 +623,13 @@ impl<'b> Compiler<'b> {
                 CompiledExpr::new(move |env, interp| {
                     let v = ce.run(env, interp)?;
                     match v {
-                        Value::Record(map) => {
-                            map.get(&label).cloned().ok_or_else(|| EvalError {
-                                span: Some(span),
-                                msg: format!(
-                                    "record has no field '{label}' (available fields: {})",
-                                    available_fields(&map)
-                                ),
-                            })
-                        }
+                        Value::Record(map) => map.get(&label).cloned().ok_or_else(|| EvalError {
+                            span: Some(span),
+                            msg: format!(
+                                "record has no field '{label}' (available fields: {})",
+                                available_fields(&map)
+                            ),
+                        }),
                         other => Err(EvalError {
                             span: Some(span),
                             msg: format!(
@@ -915,13 +914,7 @@ impl<'b> Compiler<'b> {
     /// a reference to `name` inside its own right-hand side still resolves to
     /// whatever `name` meant before this binding — matching the runtime, which
     /// evaluates `value` in the outer env and only then creates the frame.
-    fn spine_let(
-        &mut self,
-        name: &str,
-        value: &Ast,
-        rest: &Ast,
-        mutable: bool,
-    ) -> CompiledExpr {
+    fn spine_let(&mut self, name: &str, value: &Ast, rest: &Ast, mutable: bool) -> CompiledExpr {
         let cvalue = self.compile(value);
         let slot = self.alloc_global(name);
         let crest = self.compile_spine(rest);
@@ -1032,7 +1025,6 @@ struct CompiledArm {
     guard: Option<CompiledExpr>,
     body: CompiledExpr,
 }
-
 
 /// Unfold a left-nested application spine `((h a1) a2) … aN` into its head
 /// `h` and the argument list `[a1, a2, …, aN]` in left-to-right (source)
@@ -1476,7 +1468,10 @@ mod tests {
             Box::new(Ast::LetMutableIn(
                 "i".into(),
                 Box::new(Ast::Int(0)),
-                Box::new(Ast::Sequential(Box::new(while_loop), Box::new(deref("acc")))),
+                Box::new(Ast::Sequential(
+                    Box::new(while_loop),
+                    Box::new(deref("acc")),
+                )),
             )),
         );
         assert_deterministic(&prog); // 0+1+2+3+4 = 10

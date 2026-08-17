@@ -111,11 +111,9 @@ fn inline_text_quotes_until_read() {
 
 #[test]
 fn document_produces_pages_with_lines() {
-    let doc = compile_document_with_stdlib(
-        "document (| title = {T} |) '< +p { hello world } >",
-        &Mono,
-    )
-    .unwrap();
+    let doc =
+        compile_document_with_stdlib("document (| title = {T} |) '< +p { hello world } >", &Mono)
+            .unwrap();
     assert_eq!(doc.pages.len(), 1);
     let line = &doc.pages[0].lines[0];
     let words: Vec<&str> = line

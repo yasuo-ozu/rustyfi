@@ -448,7 +448,11 @@ pub fn t_font() -> MonoType {
 /// 0.0.6 primitive/inference site building a `Func` produces the empty-row
 /// shape by construction, byte-identical to before the row widening.
 pub fn arrow(dom: MonoType, cod: MonoType) -> MonoType {
-    MonoType::Func(Box::new(crate::types::Row::Empty), Box::new(dom), Box::new(cod))
+    MonoType::Func(
+        Box::new(crate::types::Row::Empty),
+        Box::new(dom),
+        Box::new(cod),
+    )
 }
 
 /// Right-folds [`arrow`] over `doms`, ending in `cod` — for chaining
@@ -485,14 +489,22 @@ pub fn inline_cmd(args: Vec<CmdArgType>) -> MonoType {
 /// V0_1 shape for a slot with no `?(…)` bundle at all — `opt_labels` empty
 /// either way).
 pub fn mandatory(ty: MonoType) -> CmdArgType {
-    CmdArgType { optional: false, opt_labels: Vec::new(), ty }
+    CmdArgType {
+        optional: false,
+        opt_labels: Vec::new(),
+        ty,
+    }
 }
 
 /// `optional` (`?`) command-argument entry (0.0.6 positional model only —
 /// `opt_labels` stays empty; V0_1 never sets `optional: true`, see
 /// [`labeled`]).
 pub fn optional(ty: MonoType) -> CmdArgType {
-    CmdArgType { optional: true, opt_labels: Vec::new(), ty }
+    CmdArgType {
+        optional: true,
+        opt_labels: Vec::new(),
+        ty,
+    }
 }
 
 /// A SATySFi 0.1 labeled command-argument entry (optional-arg-rows increment
@@ -502,7 +514,11 @@ pub fn optional(ty: MonoType) -> CmdArgType {
 /// `lower_type_atom`'s sig lowering). `optional` is always `false`: V0_1 has
 /// no whole-slot `ty?` positional-optional model at all.
 pub fn labeled(opt_labels: Vec<(String, MonoType)>, ty: MonoType) -> CmdArgType {
-    CmdArgType { optional: false, opt_labels, ty }
+    CmdArgType {
+        optional: false,
+        opt_labels,
+        ty,
+    }
 }
 
 /// A type scheme with no quantified variables (vminst.ml's `~%` wraps a
@@ -549,8 +565,12 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
         // ordinary (0.0.6-only-meaningful) arms further below. Runtime
         // availability is the `prims!` table's `v006` tag on the same six
         // names; this guard keeps the two mechanisms in agreement. ====
-        "get-axis-height" | "math-pull-in-scripts" | "math-color" | "math-char-class"
-        | "math-variant-char" | "text-in-math"
+        "get-axis-height"
+        | "math-pull-in-scripts"
+        | "math-color"
+        | "math-char-class"
+        | "math-variant-char"
+        | "text-in-math"
             if version.math_is_split() =>
         {
             return None
@@ -562,18 +582,16 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
         //
         // `read-math : context -> math-text -> math-boxes` (dev-0-1-0
         // vminst.ml:790-793) — REAL, see `primitives.rs`'s `prim_read_math`.
-        "read-math" if version.math_is_split() => poly0(arrows(
-            vec![t_context(), t_math_text()],
-            t_math_boxes(),
-        )),
+        "read-math" if version.math_is_split() => {
+            poly0(arrows(vec![t_context(), t_math_text()], t_math_boxes()))
+        }
         // `stringify-math : text-info -> math-text -> string` (vminst.ml:
         // 858) — STAND-IN body (out-of-scope text backend, same scoping
         // note as `primitives.rs`'s `prim_convert_string_for_math`);
         // registered so 0.1 packages typecheck.
-        "stringify-math" if version.math_is_split() => poly0(arrows(
-            vec![t_text_info(), t_math_text()],
-            t_string(),
-        )),
+        "stringify-math" if version.math_is_split() => {
+            poly0(arrows(vec![t_text_info(), t_math_text()], t_string()))
+        }
         // `set-math-char : int -> int -> math-class -> context -> context`
         // (vminst.ml:59) — REAL: inserts into `Context::math_class_map`.
         "set-math-char" if version.math_is_split() => poly0(arrows(
@@ -582,10 +600,9 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
         )),
         // `set-math-char-class : math-char-class -> context -> context`
         // (vminst.ml:445) — REAL: sets `Context::math_char_class`.
-        "set-math-char-class" if version.math_is_split() => poly0(arrows(
-            vec![t_math_char_class(), t_context()],
-            t_context(),
-        )),
+        "set-math-char-class" if version.math_is_split() => {
+            poly0(arrows(vec![t_math_char_class(), t_context()], t_context()))
+        }
         // `get-math-char-class : context -> math-char-class` (vminst.ml:459)
         // — REAL: inverse of `as_math_char_class`.
         "get-math-char-class" if version.math_is_split() => {
@@ -642,10 +659,9 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
         // `set-hyphenation-dictionary : hyphenation -> context -> context`
         // — STAND-IN no-op (see `primitives.rs`'s
         // `prim_set_hyphenation_dictionary`); closes scout gap G4.
-        "set-hyphenation-dictionary" if version == RustyfiVersion::V0_1 => poly0(arrows(
-            vec![t_hyphenation(), t_context()],
-            t_context(),
-        )),
+        "set-hyphenation-dictionary" if version == RustyfiVersion::V0_1 => {
+            poly0(arrows(vec![t_hyphenation(), t_context()], t_context()))
+        }
         // `set-unicode-char-database : unicode-char-database -> context ->
         // context` — STAND-IN no-op (see `primitives.rs`'s
         // `prim_set_unicode_char_database`); closes scout gap G4.
@@ -887,9 +903,15 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
 
         // ---- box combinators ----
         // vminst.ml:803 `HorzConcat`: `~% (tIB @-> tIB @-> tIB)`.
-        "++" => poly0(arrows(vec![t_inline_boxes(), t_inline_boxes()], t_inline_boxes())),
+        "++" => poly0(arrows(
+            vec![t_inline_boxes(), t_inline_boxes()],
+            t_inline_boxes(),
+        )),
         // vminst.ml:818 `VertConcat`: `~% (tBB @-> tBB @-> tBB)`.
-        "+++" => poly0(arrows(vec![t_block_boxes(), t_block_boxes()], t_block_boxes())),
+        "+++" => poly0(arrows(
+            vec![t_block_boxes(), t_block_boxes()],
+            t_block_boxes(),
+        )),
         // No vminst.ml entry — see `base_env`'s comment on `inline-nil`/
         // `block-nil` in primitives.rs (the empty-boxes value that v0.0.6
         // gets for free from `{}`/`<>` literal syntax).
@@ -920,10 +942,7 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
         // `load-image : string -> image`.
         "load-image" => poly0(arrow(t_string(), t_image())),
         // `use-image-by-width : image -> length -> inline-boxes`.
-        "use-image-by-width" => poly0(arrows(
-            vec![t_image(), t_length()],
-            t_inline_boxes(),
-        )),
+        "use-image-by-width" => poly0(arrows(vec![t_image(), t_length()], t_inline_boxes())),
         // `load-pdf-image : string -> int -> image` (v0.0.6 vminstdef.yaml:525;
         // docs/plans/design-load-pdf-image.md). Path + 1-based page number.
         "load-pdf-image" => poly0(arrows(vec![t_string(), t_int()], t_image())),
@@ -1012,10 +1031,7 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
         // `fill : color -> path -> graphics` — even-odd filled region.
         "fill" => poly0(arrows(vec![t_color(), t_path()], t_graphics())),
         // `stroke : length -> color -> path -> graphics` — width first.
-        "stroke" => poly0(arrows(
-            vec![t_length(), t_color(), t_path()],
-            t_graphics(),
-        )),
+        "stroke" => poly0(arrows(vec![t_length(), t_color(), t_path()], t_graphics())),
         // `inline-graphics : length -> length -> length -> (point ->
         // {list graphics / graphics}) -> inline-boxes` — a box of size (w,
         // h, d) carrying the callback's graphics, the minimal on-page sink
@@ -1078,10 +1094,7 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
             t_prepath(),
         )),
         // `close-with-bezier : point -> point -> pre-path -> path`.
-        "close-with-bezier" => poly0(arrows(
-            vec![t_point(), t_point(), t_prepath()],
-            t_path(),
-        )),
+        "close-with-bezier" => poly0(arrows(vec![t_point(), t_point(), t_prepath()], t_path())),
         // `shift-path : point -> path -> path`.
         "shift-path" => poly0(arrows(vec![t_point(), t_path()], t_path())),
         // `linear-transform-path : float -> float -> float -> float -> path
@@ -1124,10 +1137,9 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
         }
         // `clip-graphics-by-path : path -> graphics -> graphics` (dev-0-1-0
         // vminst.ml:3105) — v0.1-only (A13).
-        "clip-graphics-by-path" if version.graphics_is_collection() => poly0(arrows(
-            vec![t_path(), t_graphics()],
-            t_graphics(),
-        )),
+        "clip-graphics-by-path" if version.graphics_is_collection() => {
+            poly0(arrows(vec![t_path(), t_graphics()], t_graphics()))
+        }
         // `get-path-bbox : path -> point * point` (vminst.ml:696
         // `PathGetBoundingBox`).
         "get-path-bbox" => poly0(arrow(t_path(), product(vec![t_point(), t_point()]))),
@@ -1205,9 +1217,7 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
             t_block_boxes(),
         )),
         // vminstdef.yaml:1793 `~% (tS @-> tS @-> tU)`.
-        "register-cross-reference" => {
-            poly0(arrows(vec![t_string(), t_string()], t_unit()))
-        }
+        "register-cross-reference" => poly0(arrows(vec![t_string(), t_string()], t_unit())),
         // vminstdef.yaml:1808 `~% (tS @-> tOPT tS)`.
         "get-cross-reference" => poly0(arrow(t_string(), t_option(t_string()))),
         // vminst.ml:3043 `BackendProbeCrossReference`: `~% (tS @-> tOPT tS)`
@@ -1303,7 +1313,12 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
                 ))
             } else {
                 poly0(arrows(
-                    vec![t_math_class(), t_string(), t_math_kern_func(), t_math_kern_func()],
+                    vec![
+                        t_math_class(),
+                        t_string(),
+                        t_math_kern_func(),
+                        t_math_kern_func(),
+                    ],
                     t_math(),
                 ))
             }
@@ -1324,7 +1339,12 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
                 ))
             } else {
                 poly0(arrows(
-                    vec![t_math_class(), t_string(), t_math_kern_func(), t_math_kern_func()],
+                    vec![
+                        t_math_class(),
+                        t_string(),
+                        t_math_kern_func(),
+                        t_math_kern_func(),
+                    ],
                     t_math(),
                 ))
             }
@@ -1462,11 +1482,7 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
         "set-math-variant-char" => {
             if version.math_is_split() {
                 poly0(arrows(
-                    vec![
-                        t_int(),
-                        arrow(t_math_char_class(), t_int()),
-                        t_context(),
-                    ],
+                    vec![t_int(), arrow(t_math_char_class(), t_int()), t_context()],
                     t_context(),
                 ))
             } else {
@@ -1481,7 +1497,10 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
             if version.math_is_split() {
                 poly0(arrow(t_math_boxes(), t_option(t_math_class())))
             } else {
-                poly0(arrows(vec![t_context(), t_math()], t_option(t_math_class())))
+                poly0(arrows(
+                    vec![t_context(), t_math()],
+                    t_option(t_math_class()),
+                ))
             }
         }
         // v0.1 (vminst.ml:146): same fork as `get-left-math-class`.
@@ -1489,7 +1508,10 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
             if version.math_is_split() {
                 poly0(arrow(t_math_boxes(), t_option(t_math_class())))
             } else {
-                poly0(arrows(vec![t_context(), t_math()], t_option(t_math_class())))
+                poly0(arrows(
+                    vec![t_context(), t_math()],
+                    t_option(t_math_class()),
+                ))
             }
         }
         // vminst.ml:294 `BackendMathParen`:
@@ -1498,7 +1520,12 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
         "math-paren" => {
             if version.math_is_split() {
                 poly0(arrows(
-                    vec![t_context(), t_paren(version), t_paren(version), t_math_boxes()],
+                    vec![
+                        t_context(),
+                        t_paren(version),
+                        t_paren(version),
+                        t_math_boxes(),
+                    ],
                     t_math_boxes(),
                 ))
             } else {
@@ -1603,10 +1630,9 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
         // `embed-block-breakable`): `~% (tCTX @-> tBB @-> tIB)`. STAND-IN
         // body — no nested page-breakable block-in-inline box yet (roadmap
         // E; see `primitives.rs`'s `prim_embed_block_breakable`).
-        "embed-block-breakable" => poly0(arrows(
-            vec![t_context(), t_block_boxes()],
-            t_inline_boxes(),
-        )),
+        "embed-block-breakable" => {
+            poly0(arrows(vec![t_context(), t_block_boxes()], t_inline_boxes()))
+        }
         // `unite-path : path -> path -> path` (`gr.satyh`-adjacent path
         // combinator; `math.satyh`'s `\norm` unions two vertical bars into
         // one path). FAITHFUL: a real path union (concatenation of
@@ -1643,10 +1669,7 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
         // `int -> int -> context -> context`, params
         // `(left_hyphen_min, right_hyphen_min)`
         // (`docs/plans/design-hyphenation.md` §7).
-        "set-hyphen-min" => poly0(arrows(
-            vec![t_int(), t_int(), t_context()],
-            t_context(),
-        )),
+        "set-hyphen-min" => poly0(arrows(vec![t_int(), t_int(), t_context()], t_context())),
         // vminst.ml:1309 `PrimitiveSetSpaceRatio`:
         // `~% (tFL @-> tFL @-> tFL @-> tCTX @-> tCTX)`, params
         // `(natural, shrink, stretch)`. FAITHFUL store; consumption by the
@@ -1677,10 +1700,7 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
         // vminst.ml:2269 `PrimitiveSplitIntoLines`:
         // `~% (tS @-> tL (tPROD [tI; tS]))`. FAITHFUL — pure string op, see
         // `primitives.rs`'s `prim_split_into_lines`.
-        "split-into-lines" => poly0(arrow(
-            t_string(),
-            list(product(vec![t_int(), t_string()])),
-        )),
+        "split-into-lines" => poly0(arrow(t_string(), list(product(vec![t_int(), t_string()])))),
         // vminst.ml:1090 `PrimitiveBlockFrameBreakable`:
         // `~% (tCTX @-> tPADS @-> tDECOSET @-> (tCTX @-> tBB) @-> tBB)`.
         // STAND-IN: reduced-width + left-indent inner block, `deco-set`
@@ -1722,10 +1742,7 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
         // STAND-IN: single `FontKey` slot, script ignored — see
         // `primitives.rs`'s `prim_set_font` (real per-script wiring is
         // `docs/plans/text-rendering.md`'s Slice 1).
-        "set-font" => poly0(arrows(
-            vec![t_script(), t_font(), t_context()],
-            t_context(),
-        )),
+        "set-font" => poly0(arrows(vec![t_script(), t_font(), t_context()], t_context())),
         // `set-code-text-command : [string] inline-cmd -> context -> context`
         // (`stdja:116`; orphan #4 of `docs/plans/build-order-to-stdja.md`,
         // not in any vminst.ml table this port has transcribed — no
@@ -1851,7 +1868,9 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
         // Unicode string ops (dev-0-1-0 vminst.ml :2050/:2066/:2082) — REAL,
         // `primitives.rs`'s `prim_normalize_string_to_nfc`/`_nfd`/
         // `prim_split_grapheme_cluster`.
-        "normalize-string-to-nfc" | "normalize-string-to-nfd" if version == RustyfiVersion::V0_1 => {
+        "normalize-string-to-nfc" | "normalize-string-to-nfd"
+            if version == RustyfiVersion::V0_1 =>
+        {
             poly0(arrow(t_string(), t_string()))
         }
         "split-grapheme-cluster" if version == RustyfiVersion::V0_1 => {
@@ -1922,7 +1941,11 @@ impl VariantDecl {
     /// constructors or `args.len() != self.params`. On success, returns
     /// `(payload_type, result_type)`, where `payload_type` is `None` for a
     /// nullary constructor (like `None`).
-    pub fn instantiate_ctor(&self, ctor: &str, args: &[MonoType]) -> Option<(Option<MonoType>, MonoType)> {
+    pub fn instantiate_ctor(
+        &self,
+        ctor: &str,
+        args: &[MonoType],
+    ) -> Option<(Option<MonoType>, MonoType)> {
         if args.len() != self.params {
             return None;
         }
@@ -1969,7 +1992,10 @@ pub fn builtin_variants_with_version(version: RustyfiVersion) -> Vec<VariantDecl
         params: 1,
         ctors: vec![
             ("None".to_string(), None),
-            ("Some".to_string(), Some(MonoType::Var(option_param.clone()))),
+            (
+                "Some".to_string(),
+                Some(MonoType::Var(option_param.clone())),
+            ),
         ],
         param_vars: vec![option_param],
     };
@@ -1998,7 +2024,10 @@ pub fn builtin_variants_with_version(version: RustyfiVersion) -> Vec<VariantDecl
         params: 0,
         ctors: vec![
             ("Gray".to_string(), Some(t_float())),
-            ("RGB".to_string(), Some(product(vec![t_float(), t_float(), t_float()]))),
+            (
+                "RGB".to_string(),
+                Some(product(vec![t_float(), t_float(), t_float()])),
+            ),
             (
                 "CMYK".to_string(),
                 Some(product(vec![t_float(), t_float(), t_float(), t_float()])),

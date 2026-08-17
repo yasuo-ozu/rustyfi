@@ -8,8 +8,8 @@
 use rustyfi_backend::{FontKey, FontMetrics, HorzBox, ImageResource, Length, PureHorzBox};
 use rustyfi_lang::ast::Ast;
 use rustyfi_lang::eval;
-use rustyfi_lang::primitives;
 use rustyfi_lang::prim_types;
+use rustyfi_lang::primitives;
 use rustyfi_lang::value::Value;
 use rustyfi_syntax::Span;
 use std::path::Path;
@@ -94,7 +94,11 @@ fn load_image_decodes_the_fixture_and_records_its_pixel_dimensions() {
         "expected an image value, got {:?}",
         out.value
     );
-    assert_eq!(out.images.len(), 1, "load-image should push exactly one resource");
+    assert_eq!(
+        out.images.len(),
+        1,
+        "load-image should push exactly one resource"
+    );
     assert_eq!(out.images[0].px_w, 8);
     assert_eq!(out.images[0].px_h, 4);
     // 8x4 RGB8, no padding: 4 rows * 8 px * 3 bytes/px.

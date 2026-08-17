@@ -121,7 +121,10 @@ fn compile_v01(fixture: &Path, work: &Path, fmt: &str, out_ext: &str) -> PathBuf
         .args(["--target-version", "0.1"])
         .output()
         .expect("spawn rustyfi-rust");
-    assert_ok(&result, &format!("compile --format {fmt} --target-version 0.1"));
+    assert_ok(
+        &result,
+        &format!("compile --format {fmt} --target-version 0.1"),
+    );
     out
 }
 
@@ -157,8 +160,12 @@ fn format_html_reflow_writes_flowing_paragraphs_in_reading_order() {
     let work = tmpdir("basic");
     let out = compile(&phase2_fixture(), &work, "html-reflow", "html");
 
-    let html = std::fs::read_to_string(&out).expect("--format html-reflow must write the output file");
-    assert!(html.starts_with("<!doctype html>"), "missing doctype:\n{html}");
+    let html =
+        std::fs::read_to_string(&out).expect("--format html-reflow must write the output file");
+    assert!(
+        html.starts_with("<!doctype html>"),
+        "missing doctype:\n{html}"
+    );
 
     let para_count = html.matches("<p class=\"para\"").count();
     assert!(
@@ -182,17 +189,32 @@ fn format_html_reflow_writes_flowing_paragraphs_in_reading_order() {
     // but two `<span>`s in the markup.
     let text = rendered_text(&html);
     for word in ["Bracketed", "text", "via", "let-inline."] {
-        assert!(text.contains(word), "missing word {word:?} from the first paragraph:\n{html}");
+        assert!(
+            text.contains(word),
+            "missing word {word:?} from the first paragraph:\n{html}"
+        );
     }
     for word in ["Announced", "lightweight", "let-inline", "form."] {
-        assert!(text.contains(word), "missing word {word:?} from the second paragraph:\n{html}");
+        assert!(
+            text.contains(word),
+            "missing word {word:?} from the second paragraph:\n{html}"
+        );
     }
     for word in ["Countdown", "complete."] {
-        assert!(text.contains(word), "missing word {word:?} from the third paragraph:\n{html}");
+        assert!(
+            text.contains(word),
+            "missing word {word:?} from the third paragraph:\n{html}"
+        );
     }
-    let pos_bracket = text.find("Bracketed").expect("missing first paragraph's text");
-    let pos_announce = text.find("Announced").expect("missing second paragraph's text");
-    let pos_chosen = text.find("Countdown").expect("missing third paragraph's (match-computed) text");
+    let pos_bracket = text
+        .find("Bracketed")
+        .expect("missing first paragraph's text");
+    let pos_announce = text
+        .find("Announced")
+        .expect("missing second paragraph's text");
+    let pos_chosen = text
+        .find("Countdown")
+        .expect("missing third paragraph's (match-computed) text");
     assert!(
         pos_bracket < pos_announce && pos_announce < pos_chosen,
         "paragraphs are out of reading order:\n{html}"
@@ -205,7 +227,10 @@ fn format_html_reflow_writes_flowing_paragraphs_in_reading_order() {
         !html.contains("position:absolute") && !html.contains("position: absolute"),
         "html-reflow output must never use position:absolute:\n{html}"
     );
-    assert!(!html.contains("left:"), "html-reflow output must never use `left:`:\n{html}");
+    assert!(
+        !html.contains("left:"),
+        "html-reflow output must never use `left:`:\n{html}"
+    );
     for (idx, _) in html.match_indices("top:") {
         assert!(
             html[..idx].ends_with("margin-") || html[..idx].ends_with("border-"),
@@ -227,12 +252,24 @@ fn format_html_faithful_mode_is_unaffected_by_the_new_reflow_format() {
     let out = compile(&phase2_fixture(), &work, "html", "html");
 
     let html = std::fs::read_to_string(&out).expect("--format html must write the output file");
-    assert!(html.starts_with("<!doctype html>"), "missing doctype:\n{html}");
-    assert!(html.contains("<div class=\"page\""), "missing page div:\n{html}");
-    assert!(rendered_text(&html).contains("Bracketed"), "missing expected fixture text:\n{html}");
+    assert!(
+        html.starts_with("<!doctype html>"),
+        "missing doctype:\n{html}"
+    );
+    assert!(
+        html.contains("<div class=\"page\""),
+        "missing page div:\n{html}"
+    );
+    assert!(
+        rendered_text(&html).contains("Bracketed"),
+        "missing expected fixture text:\n{html}"
+    );
     // The faithful mode's own defining trait, unchanged: every run IS
     // absolutely positioned.
-    assert!(html.contains("position: absolute"), "faithful mode must still be absolutely positioned:\n{html}");
+    assert!(
+        html.contains("position: absolute"),
+        "faithful mode must still be absolutely positioned:\n{html}"
+    );
 
     std::fs::remove_dir_all(&work).ok();
 }
@@ -244,7 +281,10 @@ fn default_pdf_format_is_unaffected_by_the_new_reflow_format() {
     let out = compile(&phase2_fixture(), &work, "pdf", "pdf");
 
     let bytes = std::fs::read(&out).expect("--format pdf must write the output file");
-    assert!(bytes.starts_with(b"%PDF-"), "default --format must still produce a PDF");
+    assert!(
+        bytes.starts_with(b"%PDF-"),
+        "default --format must still produce a PDF"
+    );
 
     std::fs::remove_dir_all(&work).ok();
 }
@@ -266,22 +306,46 @@ fn format_html_reflow_renders_nested_lists_and_emphasis_for_itemize() {
     let work = tmpdir("itemize-reflow");
     let out = compile_v01(&itemize_fixture(), &work, "html-reflow", "html");
 
-    let html = std::fs::read_to_string(&out).expect("--format html-reflow must write the output file");
-    assert!(html.starts_with("<!doctype html>"), "missing doctype:\n{html}");
+    let html =
+        std::fs::read_to_string(&out).expect("--format html-reflow must write the output file");
+    assert!(
+        html.starts_with("<!doctype html>"),
+        "missing doctype:\n{html}"
+    );
 
     // `Itemize.listing?(break=true)`: one top-level `<li>` with one nested
     // child `<li>` inside its OWN nested `<ul>` — two `<ul>`s total.
-    assert_eq!(html.matches("<ul").count(), 2, "expected outer + one nested <ul>:\n{html}");
-    assert_eq!(html.matches("</ul>").count(), 2, "expected outer + one nested </ul>:\n{html}");
+    assert_eq!(
+        html.matches("<ul").count(),
+        2,
+        "expected outer + one nested <ul>:\n{html}"
+    );
+    assert_eq!(
+        html.matches("</ul>").count(),
+        2,
+        "expected outer + one nested </ul>:\n{html}"
+    );
 
     // `Itemize.enumerate`: one flat `<ol>` with two `<li>`s, no nesting.
-    assert_eq!(html.matches("<ol").count(), 1, "expected exactly one <ol>:\n{html}");
-    assert_eq!(html.matches("</ol>").count(), 1, "expected exactly one </ol>:\n{html}");
+    assert_eq!(
+        html.matches("<ol").count(),
+        1,
+        "expected exactly one <ol>:\n{html}"
+    );
+    assert_eq!(
+        html.matches("</ol>").count(),
+        1,
+        "expected exactly one </ol>:\n{html}"
+    );
 
     // Three `<li>`s total: the listing's top item, its nested child, and
     // (separately, twice for the enumerate — counted together here) the two
     // enumerate entries: 2 (listing) + 2 (enumerate) = 4.
-    assert_eq!(html.matches("<li").count(), 4, "expected 4 <li>s total:\n{html}");
+    assert_eq!(
+        html.matches("<li").count(),
+        4,
+        "expected 4 <li>s total:\n{html}"
+    );
 
     // Each `+p`/item's text is tokenized into one `InnerString` PER WORD
     // (same granularity `format_html_reflow_writes_flowing_paragraphs_in_
@@ -301,9 +365,18 @@ fn format_html_reflow_renders_nested_lists_and_emphasis_for_itemize() {
     );
 
     // `\V01Mini.emph{emphasized}` -> a real `<em>`, never `<strong>`.
-    assert!(html.contains("<em>") && html.contains("</em>"), "missing <em>:\n{html}");
-    assert!(!html.contains("<strong>"), "must not render <strong> for \\emph:\n{html}");
-    assert!(text.contains("emphasized"), "missing emphasized text:\n{html}");
+    assert!(
+        html.contains("<em>") && html.contains("</em>"),
+        "missing <em>:\n{html}"
+    );
+    assert!(
+        !html.contains("<strong>"),
+        "must not render <strong> for \\emph:\n{html}"
+    );
+    assert!(
+        text.contains("emphasized"),
+        "missing emphasized text:\n{html}"
+    );
 
     // The drawn bullet/number glyph run itself (`enumerate`'s arabic
     // numeral, `Itemize.listing`'s circle) must not leak in as its own
@@ -318,7 +391,10 @@ fn format_html_reflow_renders_nested_lists_and_emphasis_for_itemize() {
         !html.contains("position:absolute") && !html.contains("position: absolute"),
         "html-reflow output must never use position:absolute:\n{html}"
     );
-    assert!(!html.contains("left:"), "html-reflow output must never use `left:`:\n{html}");
+    assert!(
+        !html.contains("left:"),
+        "html-reflow output must never use `left:`:\n{html}"
+    );
 
     std::fs::remove_dir_all(&work).ok();
 }
@@ -338,8 +414,15 @@ fn itemize_fixture_still_produces_a_valid_pdf() {
     let out = compile_v01(&itemize_fixture(), &work, "pdf", "pdf");
 
     let bytes = std::fs::read(&out).expect("--format pdf must write the output file");
-    assert!(bytes.starts_with(b"%PDF-"), "itemize fixture must still produce a valid PDF");
-    assert!(bytes.len() > 200, "PDF unexpectedly tiny ({} bytes)", bytes.len());
+    assert!(
+        bytes.starts_with(b"%PDF-"),
+        "itemize fixture must still produce a valid PDF"
+    );
+    assert!(
+        bytes.len() > 200,
+        "PDF unexpectedly tiny ({} bytes)",
+        bytes.len()
+    );
 
     std::fs::remove_dir_all(&work).ok();
 }
@@ -354,15 +437,33 @@ fn itemize_fixture_faithful_html_is_still_absolutely_positioned() {
     let out = compile_v01(&itemize_fixture(), &work, "html", "html");
 
     let html = std::fs::read_to_string(&out).expect("--format html must write the output file");
-    assert!(html.starts_with("<!doctype html>"), "missing doctype:\n{html}");
-    assert!(html.contains("<div class=\"page\""), "missing page div:\n{html}");
-    assert!(html.contains("position: absolute"), "faithful mode must still be absolutely positioned:\n{html}");
+    assert!(
+        html.starts_with("<!doctype html>"),
+        "missing doctype:\n{html}"
+    );
+    assert!(
+        html.contains("<div class=\"page\""),
+        "missing page div:\n{html}"
+    );
+    assert!(
+        html.contains("position: absolute"),
+        "faithful mode must still be absolutely positioned:\n{html}"
+    );
     // The markers must not leak into faithful HTML as visible tags either
     // (chop_page never places them; both writers wildcard the box kind).
-    assert!(!html.contains("<ul"), "faithful HTML must never render <ul> (S4 is reflow-only):\n{html}");
-    assert!(!html.contains("<em>"), "faithful HTML must never render <em> (S4 is reflow-only):\n{html}");
+    assert!(
+        !html.contains("<ul"),
+        "faithful HTML must never render <ul> (S4 is reflow-only):\n{html}"
+    );
+    assert!(
+        !html.contains("<em>"),
+        "faithful HTML must never render <em> (S4 is reflow-only):\n{html}"
+    );
     for text in ["item", "nested", "entry"] {
-        assert!(html.contains(text), "missing expected fixture text {text:?}:\n{html}");
+        assert!(
+            html.contains(text),
+            "missing expected fixture text {text:?}:\n{html}"
+        );
     }
 
     std::fs::remove_dir_all(&work).ok();

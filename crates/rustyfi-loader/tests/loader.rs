@@ -117,7 +117,11 @@ fn diamond_dedups_shared_dependency_and_orders_it_first() {
 
     let program = load(&entry, &no_lib_root()).expect("load should succeed");
 
-    assert_eq!(program.files.len(), 4, "base must be deduplicated to one node");
+    assert_eq!(
+        program.files.len(),
+        4,
+        "base must be deduplicated to one node"
+    );
     let names = file_names(&program);
     assert_eq!(
         names.iter().filter(|n| n.as_str() == "base.satyh").count(),
@@ -167,7 +171,10 @@ fn require_resolves_against_lib_root_dist_v01_packages() {
     let lib_root = dir.path().join("lib");
     fs::create_dir_all(lib_root.join("dist-v01").join("packages")).unwrap();
     fs::write(
-        lib_root.join("dist-v01").join("packages").join("v01lib.satyh"),
+        lib_root
+            .join("dist-v01")
+            .join("packages")
+            .join("v01lib.satyh"),
         "module V01Lib = struct\n  val x = 1\nend\n",
     )
     .unwrap();
@@ -291,9 +298,7 @@ fn unresolved_import_lists_the_candidates_it_searched() {
     let err = load(&entry, &no_lib_root()).expect_err("missing import must fail");
 
     match err {
-        LoadError::UnresolvedImport {
-            name, searched, ..
-        } => {
+        LoadError::UnresolvedImport { name, searched, .. } => {
             assert_eq!(name, "missing");
             assert_eq!(searched.len(), 2);
             assert!(searched[0].to_string_lossy().ends_with("missing.satyh"));
@@ -315,7 +320,11 @@ fn import_resolves_relative_to_the_containing_file_not_the_entry_dir() {
 
     let program = load(&entry, &no_lib_root()).expect("load should succeed");
 
-    assert_eq!(program.files.len(), 3, "the decoy common.satyh must not be loaded");
+    assert_eq!(
+        program.files.len(),
+        3,
+        "the decoy common.satyh must not be loaded"
+    );
     let common_file = program
         .files
         .iter()
@@ -364,7 +373,10 @@ fn envelopes_use_of_local_chain() {
 
     assert_eq!(file_names(&program), vec!["local.satyh", "doc.saty"]);
     assert!(program.files[1].cst.is_document(), "entry is a document");
-    assert!(!program.files[0].cst.is_document(), "dependency is a library");
+    assert!(
+        !program.files[0].cst.is_document(),
+        "dependency is a library"
+    );
 }
 
 #[test]
@@ -413,7 +425,10 @@ fn envelopes_use_of_prefers_satyh_over_satyg() {
 #[test]
 fn envelopes_unresolved_use_of_lists_candidates() {
     let dir = TempDir::new("env-unresolved");
-    let entry = dir.write("doc.saty", "use open Missing of `./missing`\nlet x = 1 in x");
+    let entry = dir.write(
+        "doc.saty",
+        "use open Missing of `./missing`\nlet x = 1 in x",
+    );
 
     let err = load(&entry, &envelopes_v01()).expect_err("missing use…of must fail");
 
@@ -603,7 +618,12 @@ fn envelopes_v01_with_deps(deps_path: PathBuf) -> LoadOptions {
 
 /// Write a `rustyfi-envelope.yaml` (library) + its `src/*.satyh` files under
 /// `<root>/<pkg>/`, returning the absolute path to the envelope config file.
-fn write_library_envelope(dir: &TempDir, pkg: &str, main_module: &str, sources: &[(&str, &str)]) -> PathBuf {
+fn write_library_envelope(
+    dir: &TempDir,
+    pkg: &str,
+    main_module: &str,
+    sources: &[(&str, &str)],
+) -> PathBuf {
     let config = dir.write(
         &format!("{pkg}/rustyfi-envelope.yaml"),
         &format!(
@@ -619,10 +639,7 @@ fn write_library_envelope(dir: &TempDir, pkg: &str, main_module: &str, sources: 
 /// Render a `rustyfi-deps.yaml` string. `envelopes` = `(name, abs_config_path,
 /// deps_names, test_only)`; `top_deps` = `(name, used_as)` for the document's
 /// own `dependencies`.
-fn deps_yaml(
-    envelopes: &[(&str, &Path, &[&str], bool)],
-    top_deps: &[(&str, &str)],
-) -> String {
+fn deps_yaml(envelopes: &[(&str, &Path, &[&str], bool)], top_deps: &[(&str, &str)]) -> String {
     let mut s = String::from("envelopes:\n");
     for (name, path, deps, test_only) in envelopes {
         s.push_str(&format!("- name: \"{name}\"\n"));
@@ -743,7 +760,10 @@ fn envelopes_bare_use_unknown_module() {
         &dir,
         "pkg",
         "Foo",
-        &[("foo.satyh", "use Missing\nmodule Foo = struct\nval x = 1\nend")],
+        &[(
+            "foo.satyh",
+            "use Missing\nmodule Foo = struct\nval x = 1\nend",
+        )],
     );
     let deps = dir.write(
         "rustyfi-deps.yaml",
@@ -765,7 +785,10 @@ fn envelopes_use_of_inside_package_rejected() {
         &dir,
         "pkg",
         "Foo",
-        &[("foo.satyh", "use B of `./b`\nmodule Foo = struct\nval x = 1\nend")],
+        &[(
+            "foo.satyh",
+            "use B of `./b`\nmodule Foo = struct\nval x = 1\nend",
+        )],
     );
     let deps = dir.write(
         "rustyfi-deps.yaml",
@@ -855,7 +878,12 @@ fn envelopes_test_only_envelope_skipped() {
         &deps_yaml(
             &[
                 ("pkg", &config, &[], false),
-                ("testpkg", Path::new("/nonexistent/rustyfi-envelope.yaml"), &[], true),
+                (
+                    "testpkg",
+                    Path::new("/nonexistent/rustyfi-envelope.yaml"),
+                    &[],
+                    true,
+                ),
             ],
             &[("pkg", "Foo")],
         ),

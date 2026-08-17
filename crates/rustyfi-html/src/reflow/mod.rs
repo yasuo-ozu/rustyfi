@@ -90,7 +90,9 @@ mod structure;
 use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap};
 
-use rustyfi_backend::{AnnotAction, DecoId, DocExtras, FontKey, ImageResource, PageGeometry, VertBox};
+use rustyfi_backend::{
+    AnnotAction, DecoId, DocExtras, FontKey, ImageResource, PageGeometry, VertBox,
+};
 
 use rustyfi_pdf::TtfFontStore;
 
@@ -241,9 +243,7 @@ fn render_html_reflow_impl(
         // No captured pre-page-break flow (e.g. a hand-built `DocumentValue`
         // in a unit test that never populated `reflow_source`) — an empty
         // document body rather than a panic; still valid, well-formed HTML.
-        body.push_str(
-            "<p class=\"para reflow-empty\">(no reflow source captured)</p>\n",
-        );
+        body.push_str("<p class=\"para reflow-empty\">(no reflow source captured)</p>\n");
     }
     body.push_str("</div>\n");
 

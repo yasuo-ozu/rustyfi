@@ -100,7 +100,11 @@ fn cache_miss_then_hit_is_byte_identical() {
     assert!(!was_cached(&first), "first run must be a miss (rendered)");
     let bytes_first = std::fs::read(&out).expect("first run wrote a PDF");
     assert!(bytes_first.starts_with(b"%PDF-"), "not a PDF");
-    assert_eq!(cached_pdf_count(&cache_dir), 1, "miss must populate the cache");
+    assert_eq!(
+        cached_pdf_count(&cache_dir),
+        1,
+        "miss must populate the cache"
+    );
 
     let second = compile(&minimal_fixture(), &out, &cache_dir, &[]);
     assert_ok(&second, "second run");

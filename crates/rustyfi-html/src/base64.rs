@@ -8,8 +8,7 @@
 //! 3-bytes-in/4-chars-out encoder is a dozen lines, well under the bar for
 //! pulling in `base64`/similar.
 
-const ALPHABET: &[u8; 64] =
-    b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 /// Standard (padded, `+`/`/`) base64 — the variant every browser's
 /// `data:` URI parser expects.

@@ -7,10 +7,10 @@ use std::rc::Rc;
 
 use rustyfi_backend::{Context, FontKey, FontMetrics, HorzBox, Length, PureHorzBox};
 use rustyfi_lang::ast::{Ast, MatchArm, Pattern};
-use rustyfi_lang::quoted::IText;
 use rustyfi_lang::eval::{self, match_pattern, EvalError};
-use rustyfi_lang::value::{Env, Value};
 use rustyfi_lang::primitives;
+use rustyfi_lang::quoted::IText;
+use rustyfi_lang::value::{Env, Value};
 use rustyfi_syntax::Span;
 
 struct Mono;
@@ -363,7 +363,11 @@ fn non_exhaustive_match_errors() {
 
 #[test]
 fn tuple_construction_and_pattern_match() {
-    let ast = Ast::Tuple(vec![Ast::Int(1), Ast::Str("x".to_string()), Ast::Bool(true)]);
+    let ast = Ast::Tuple(vec![
+        Ast::Int(1),
+        Ast::Str("x".to_string()),
+        Ast::Bool(true),
+    ]);
     let Value::Tuple(items) = run(&ast).unwrap() else {
         panic!("expected tuple")
     };
@@ -526,12 +530,8 @@ fn length_prims() {
     };
     assert_eq!(l, Length::pt(3.0));
 
-    let Value::Length(l) = run(&app2(
-        "*'",
-        Ast::Length(Length::pt(2.0)),
-        Ast::Float(3.0),
-    ))
-    .unwrap() else {
+    let Value::Length(l) = run(&app2("*'", Ast::Length(Length::pt(2.0)), Ast::Float(3.0))).unwrap()
+    else {
         panic!("expected length")
     };
     assert_eq!(l, Length::pt(6.0));

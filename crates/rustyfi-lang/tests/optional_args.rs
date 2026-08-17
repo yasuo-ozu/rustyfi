@@ -97,7 +97,11 @@ fn inline_command_optional_arg_supplied_and_omitted_typecheck_and_evaluate() {
          let (w-no, _, _) = get-natural-metrics ib-no in
          if w-yes >' w-no then 1 else 0"
     );
-    assert_eq!(int(&src), 1, "supplied greeting should render wider than the omitted fallback");
+    assert_eq!(
+        int(&src),
+        1,
+        "supplied greeting should render wider than the omitted fallback"
+    );
 }
 
 #[test]

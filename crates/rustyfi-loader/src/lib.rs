@@ -258,12 +258,11 @@ fn resolve_legacy_header(
             })?
         }
         rustyfi_syntax::cst::Header::Require(tok) => {
-            v006::resolve::resolve_require(opts.lib_root.as_deref(), &tok.content).map_err(
-                |searched| LoadError::UnresolvedRequire {
+            v006::resolve::resolve_require(opts.lib_root.as_deref(), &tok.content, opts.version)
+                .map_err(|searched| LoadError::UnresolvedRequire {
                     name: tok.content.clone(),
                     searched,
-                },
-            )?
+                })?
         }
         // `@stage: persistent` / `@stage: 0` / `@stage: 1` — this port is
         // single-stage only, so the header carries no loader-visible
@@ -376,18 +375,22 @@ fn load_legacy(entry: &Path, opts: &LoadOptions) -> Result<LoadedProgram, LoadEr
             other => other,
         };
         let cst: LoadedCst = match file_version {
-            RustyfiVersion::V0_0_6 => LoadedCst::V0_0_6(
-                rustyfi_syntax::parse_file(&src).map_err(|source| LoadError::Parse {
-                    path: path.clone(),
-                    source,
-                })?,
-            ),
-            RustyfiVersion::V0_1 => LoadedCst::V0_1(
-                rustyfi_syntax::parse_file_v1(&src).map_err(|source| LoadError::Parse {
-                    path: path.clone(),
-                    source,
-                })?,
-            ),
+            RustyfiVersion::V0_0_6 => {
+                LoadedCst::V0_0_6(rustyfi_syntax::parse_file(&src).map_err(|source| {
+                    LoadError::Parse {
+                        path: path.clone(),
+                        source,
+                    }
+                })?)
+            }
+            RustyfiVersion::V0_1 => {
+                LoadedCst::V0_1(rustyfi_syntax::parse_file_v1(&src).map_err(|source| {
+                    LoadError::Parse {
+                        path: path.clone(),
+                        source,
+                    }
+                })?)
+            }
             // `RustyfiVersion` is `#[non_exhaustive]` — a catch-all is
             // required even though `load`'s `is_implemented()` guard above
             // already rejects every version this crate doesn't handle
@@ -446,9 +449,7 @@ fn load_legacy(entry: &Path, opts: &LoadOptions) -> Result<LoadedProgram, LoadEr
                     // Legacy-path behavior change in all of Ld3a — a
                     // previously-failing input fails better; no
                     // previously-succeeding input changes.
-                    HeaderV1::UsePackage { .. }
-                    | HeaderV1::UseOf { .. }
-                    | HeaderV1::Use { .. } => {
+                    HeaderV1::UsePackage { .. } | HeaderV1::UseOf { .. } | HeaderV1::Use { .. } => {
                         return Err(LoadError::EnvelopeHeaderUnderLegacy {
                             header: header.display_name(),
                             from: path.clone(),
@@ -502,10 +503,11 @@ fn load_legacy(entry: &Path, opts: &LoadOptions) -> Result<LoadedProgram, LoadEr
     // order must match the one the sources were written against — a file that
     // `@require:`s `option` before `fss/fss` must have `Option` in scope for
     // `fss`'s internals. See `graph::header_order_toposort`.
-    let order =
-        graph::header_order_toposort(&adjacency, entry_id).map_err(|chain_ids| LoadError::Cycle {
+    let order = graph::header_order_toposort(&adjacency, entry_id).map_err(|chain_ids| {
+        LoadError::Cycle {
             chain: graph::chain_to_paths(&chain_ids, &path_of),
-        })?;
+        }
+    })?;
 
     let files = order
         .into_iter()
@@ -543,9 +545,9 @@ pub(crate) fn canonicalize(path: &Path) -> Result<PathBuf, LoadError> {
 /// `V0_1` packages must keep the load's `opts.version`.
 fn is_dist_packages_target(path: &Path) -> bool {
     let comps: Vec<_> = path.components().collect();
-    comps.windows(2).any(|w| {
-        w[0].as_os_str() == "dist" && w[1].as_os_str() == "packages"
-    })
+    comps
+        .windows(2)
+        .any(|w| w[0].as_os_str() == "dist" && w[1].as_os_str() == "packages")
 }
 
 /// Whether `path` lives under a `dist-v01/packages/` directory — the 0.1
@@ -560,9 +562,9 @@ fn is_dist_packages_target(path: &Path) -> bool {
 /// every real path.
 fn is_dist_v01_packages_target(path: &Path) -> bool {
     let comps: Vec<_> = path.components().collect();
-    comps.windows(2).any(|w| {
-        w[0].as_os_str() == "dist-v01" && w[1].as_os_str() == "packages"
-    })
+    comps
+        .windows(2)
+        .any(|w| w[0].as_os_str() == "dist-v01" && w[1].as_os_str() == "packages")
 }
 
 pub(crate) fn alloc_id(

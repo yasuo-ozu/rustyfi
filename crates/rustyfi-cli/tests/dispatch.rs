@@ -52,7 +52,10 @@ fn argv0_rustyfi_is_compile_personality() {
         "rustyfi --help should describe the compiler:\n{stdout}"
     );
     // The compiler personality has no `satyrographos` subcommand.
-    assert!(!stdout.contains("satyrographos"), "compiler help leaked pkg-mgr:\n{stdout}");
+    assert!(
+        !stdout.contains("satyrographos"),
+        "compiler help leaked pkg-mgr:\n{stdout}"
+    );
 }
 
 #[cfg(unix)]
@@ -60,7 +63,10 @@ fn argv0_rustyfi_is_compile_personality() {
 fn argv0_satyrographos_is_package_manager() {
     let root = tmpdir("sg-personality");
     let out = run_as("satyrographos", &["list", "--dest", root.to_str().unwrap()]);
-    assert!(out.status.success(), "satyrographos list should succeed on empty root");
+    assert!(
+        out.status.success(),
+        "satyrographos list should succeed on empty root"
+    );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
         stdout.contains("(no packages installed)"),
@@ -122,7 +128,10 @@ fn multicall_install_creates_working_aliases() {
         .args(["multicall", "install", "--dir", dir.to_str().unwrap()])
         .output()
         .expect("spawn");
-    assert!(out.status.success(), "re-install of same aliases is idempotent");
+    assert!(
+        out.status.success(),
+        "re-install of same aliases is idempotent"
+    );
 }
 
 /// Phase-2 manifest mode (plan §5.3, §8): `satyrographos install` with no

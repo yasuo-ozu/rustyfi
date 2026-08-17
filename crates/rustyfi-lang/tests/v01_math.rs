@@ -399,7 +399,8 @@ fn eval_v01_raw_value(
     let mut prelude = Vec::new();
     for dep in deps {
         prelude.extend(
-            rustyfi_lang::v1::lower::lower_file_v1(as_v01(dep)).map_err(|e| format!("lib lower: {e}"))?,
+            rustyfi_lang::v1::lower::lower_file_v1(as_v01(dep))
+                .map_err(|e| format!("lib lower: {e}"))?,
         );
     }
     let entry_cst = as_v01(entry);
@@ -418,9 +419,13 @@ fn eval_v01_raw_value(
     };
     let env0 = primitives::base_env_with_version(RustyfiVersion::V0_1);
     let store = rustyfi_lang::symbol::SymbolStore::new();
-    let scope = rustyfi_lang::elaborate::Scope::new_with_version(&store, env0.names(), RustyfiVersion::V0_1);
-    let program =
-        rustyfi_lang::elaborate::elaborate_program(&file, &scope).map_err(|e| format!("elaborate: {e}"))?;
+    let scope = rustyfi_lang::elaborate::Scope::new_with_version(
+        &store,
+        env0.names(),
+        RustyfiVersion::V0_1,
+    );
+    let program = rustyfi_lang::elaborate::elaborate_program(&file, &scope)
+        .map_err(|e| format!("elaborate: {e}"))?;
     // No `:>` sealing in any fixture this helper serves, so the public
     // `typecheck_verbose_with_version` (ordinary inference, no sig-
     // subsumption pass) is sufficient — `v1::module_check::check_program`
@@ -429,7 +434,9 @@ fn eval_v01_raw_value(
         .map_err(|e| format!("typecheck: {e}"))?;
     let mut interp = rustyfi_lang::eval::Interp::new(metrics);
     interp.version = RustyfiVersion::V0_1;
-    interp.eval(&env0, &rustyfi_lang::ast::debrand(&program.body, &store)).map_err(|e| format!("eval: {e}"))
+    interp
+        .eval(&env0, &rustyfi_lang::ast::debrand(&program.body, &store))
+        .map_err(|e| format!("eval: {e}"))
 }
 
 // ============================================================================
@@ -456,10 +463,7 @@ end = struct
     (inline-graphics 3pt hgt dpt graphics, kerninfo)
 end
 ";
-    let files = vec![
-        lib_file_inline("m2-seal", lib),
-        entry_file_inline("1"),
-    ];
+    let files = vec![lib_file_inline("m2-seal", lib), entry_file_inline("1")];
     let mono = Mono;
     match rustyfi_lang::compile_document_v1(&files, &mono) {
         Ok(_) | Err(CompileError::NotADocument(_)) => {}
@@ -497,7 +501,11 @@ let open V01Mini in
 let ctx = get-initial-context 200pt (command \\math) in
 embed-math ctx (math-paren ctx M.paren-left M.paren-right (read-math ctx ${x}))
 ";
-    let files = vec![v01_mini_file(), lib_file_inline("m2-eval", lib), entry_file_inline(entry)];
+    let files = vec![
+        v01_mini_file(),
+        lib_file_inline("m2-eval", lib),
+        entry_file_inline(entry),
+    ];
     let mono = Mono;
     let v = eval_v01_raw_value(&files, &mono)
         .unwrap_or_else(|e| panic!("T-M2-eval: expected evaluation to succeed, got: {e}"));

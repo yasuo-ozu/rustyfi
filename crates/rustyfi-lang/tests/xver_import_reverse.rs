@@ -79,7 +79,9 @@ use rustyfi_loader::{LoadOptions, RustyfiVersion};
 /// this crate reproduces locally (no shared test-support library target
 /// exists here).
 fn repo(rel: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(rel)
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join(rel)
 }
 
 /// A small fixture tree under a unique temp directory (cleaned up on drop) —
@@ -162,7 +164,10 @@ fn load_v006(dir: &TempDir, entry_rel: &str) -> Vec<rustyfi_loader::LoadedFile> 
     let program = rustyfi_loader::load(&dir.path().join(entry_rel), &opts)
         .unwrap_or_else(|e| panic!("loading the reverse xver fixture should succeed: {e}"));
     assert!(
-        program.files.iter().any(|f| matches!(f.cst, rustyfi_loader::LoadedCst::V0_1(_))),
+        program
+            .files
+            .iter()
+            .any(|f| matches!(f.cst, rustyfi_loader::LoadedCst::V0_1(_))),
         "the required 0.1 package should have been detected as V0_1 (Q4-mirror rule)"
     );
     program.files
@@ -195,7 +200,11 @@ V01Mini.document (|title = `v01-reverse`|) '<
             )
         });
 
-    assert_eq!(doc.pages.len(), 1, "one A4 page (v01-mini's document uses 210mm x 297mm)");
+    assert_eq!(
+        doc.pages.len(),
+        1,
+        "one A4 page (v01-mini's document uses 210mm x 297mm)"
+    );
     assert!(
         !doc.pages[0].lines.is_empty(),
         "the +V01Mini.p paragraph must have been placed on the page"
@@ -298,25 +307,33 @@ in
 // export EXCEPT the proven-identical math-text/math-boxes family.
 // ============================================================================
 
+// `font`, not `graphics`: `graphics` turned out not to be forked at all
+// (upstream registers the same `GraphicsType` base type in both generations —
+// see `typecheck::name_to_mono`), so it now crosses in BOTH directions and can
+// no longer stand in for a rejected export here. `font` still forks: 0.0.6's is
+// an opaque nominal, 0.1's a `string` stand-in.
 const V01_FORKED_EXPORT_PKG_SRC: &str = "\
 module V01ForkedExport = struct
-  type my-graphics-alias = graphics
+  type my-font-alias = font
 end
 ";
 
 #[test]
 fn reverse_guard_rejects_forked_export() {
     let dir = TempDir::new("forked-negative");
-    dir.write("dist-v01/packages/v01-forked-export.satyh", V01_FORKED_EXPORT_PKG_SRC);
+    dir.write(
+        "dist-v01/packages/v01-forked-export.satyh",
+        V01_FORKED_EXPORT_PKG_SRC,
+    );
     dir.write("entry.saty", "@require: v01-forked-export\n\n0\n");
     let files = load_v006(&dir, "entry.saty");
 
     let mono = Mono;
     let err = rustyfi_lang::compile_document_v006_xver(&files, &mono)
-        .expect_err("a V0_1 dependency naming a forked TYPE (graphics) must be rejected");
+        .expect_err("a V0_1 dependency naming a forked TYPE (font) must be rejected");
     match err {
         CompileError::CrossVersionUnsupportedName { name, slice, .. } => {
-            assert_eq!(name, "graphics");
+            assert_eq!(name, "font");
             assert_eq!(slice, "X4a");
         }
         other => panic!("expected CrossVersionUnsupportedName, got: {other}"),
@@ -349,7 +366,10 @@ end
 fn reverse_math_export_relabels_and_renders() {
     let dir = TempDir::new("math-export-positive");
     dir.copy_real_v01_package("v01-mini.satyh");
-    dir.write("dist-v01/packages/v01-math-export.satyh", V01_MATH_EXPORT_PKG_SRC);
+    dir.write(
+        "dist-v01/packages/v01-math-export.satyh",
+        V01_MATH_EXPORT_PKG_SRC,
+    );
     let entry_src = "\
 @require: v01-mini
 @require: v01-math-export
@@ -407,7 +427,10 @@ end
 #[test]
 fn reverse_deco_export_via_sig_rejected() {
     let dir = TempDir::new("deco-export-rejected");
-    dir.write("dist-v01/packages/v01-deco-export.satyh", V01_DECO_EXPORT_PKG_SRC);
+    dir.write(
+        "dist-v01/packages/v01-deco-export.satyh",
+        V01_DECO_EXPORT_PKG_SRC,
+    );
     // The entry does not even need to USE `my-deco` — the rejection is
     // driven purely by the dependency's OWN sig text (`v1::xver_adapt::
     // reject_deco_exports_v01_sig`), independent of consumer usage.
@@ -452,9 +475,8 @@ end
     let files = load_v006(&dir, "entry.saty");
 
     let mono = Mono;
-    let err = rustyfi_lang::compile_document_v006_xver(&files, &mono).expect_err(
-        "a curried-prefix module-sig `deco` export must also be rejected",
-    );
+    let err = rustyfi_lang::compile_document_v006_xver(&files, &mono)
+        .expect_err("a curried-prefix module-sig `deco` export must also be rejected");
     match err {
         CompileError::CrossVersionUnsupportedName { name, slice, .. } => {
             assert_eq!(name, "deco");
@@ -463,4 +485,3 @@ end
         other => panic!("expected CrossVersionUnsupportedName, got: {other}"),
     }
 }
-

@@ -167,7 +167,10 @@ in
 ${\\foo}",
     );
     let v = compile_via_loader(&entry).expect("unqualified \\foo should compile and evaluate");
-    assert!(matches!(v, Value::MathText { .. }), "expected a math value, got {v:?}");
+    assert!(
+        matches!(v, Value::MathText { .. }),
+        "expected a math value, got {v:?}"
+    );
 }
 
 /// The same, but for a math command that takes a `math` argument (`\bar`),
@@ -183,7 +186,10 @@ in
 ${\\bar{\\foo}}",
     );
     let v = compile_via_loader(&entry).expect("unqualified \\bar{..} should compile and evaluate");
-    assert!(matches!(v, Value::MathText { .. }), "expected a math value, got {v:?}");
+    assert!(
+        matches!(v, Value::MathText { .. }),
+        "expected a math value, got {v:?}"
+    );
 }
 
 /// `bnf.satyh` never uses a bare `${..}` — it always forces evaluation
@@ -234,7 +240,8 @@ end
 in
 ${\\foo}",
     );
-    let err = compile_via_loader(&entry).expect_err("un-`direct`-ed \\foo must stay unqualified-invisible");
+    let err = compile_via_loader(&entry)
+        .expect_err("un-`direct`-ed \\foo must stay unqualified-invisible");
     assert!(
         err.contains("unbound math command"),
         "expected an unbound-math-command error, got: {err}"
@@ -267,5 +274,8 @@ in
 ${\\N.foo}",
     );
     let v = compile_via_loader(&entry).expect("qualified \\N.foo should compile and evaluate");
-    assert!(matches!(v, Value::MathText { .. }), "expected a math value, got {v:?}");
+    assert!(
+        matches!(v, Value::MathText { .. }),
+        "expected a math value, got {v:?}"
+    );
 }

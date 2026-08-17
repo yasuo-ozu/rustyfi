@@ -70,7 +70,10 @@ pub enum IText {
         args: Vec<CmdArg>,
     },
     /// `#expr;` — an embedded expression evaluating to inline-text.
-    Embed { expr: CompiledExpr, span: Span },
+    Embed {
+        expr: CompiledExpr,
+        span: Span,
+    },
     /// `${…}` embedded math.
     EmbedMath {
         elems: Rc<Vec<MathElem>>,
@@ -87,7 +90,10 @@ pub enum BText {
         cmd: CompiledExpr,
         args: Vec<CmdArg>,
     },
-    Embed { expr: CompiledExpr, span: Span },
+    Embed {
+        expr: CompiledExpr,
+        span: Span,
+    },
 }
 
 /// One quoted-math element (the compiled mirror of [`crate::ast::MathElem`]).
@@ -108,7 +114,10 @@ pub enum MathElem {
         span: Span,
         args: Vec<CmdArg>,
     },
-    Embed { expr: CompiledExpr, span: Span },
+    Embed {
+        expr: CompiledExpr,
+        span: Span,
+    },
 }
 
 impl IText {

@@ -32,7 +32,8 @@ fn elaborate_with_lib<'s>(
     let prelude = lower::lower_file_v1(&lib_file).unwrap_or_else(|e| panic!("lower_file_v1: {e}"));
 
     let doc_file = parse_file_v1(doc_src).unwrap_or_else(|e| panic!("doc parse failed: {e}"));
-    let body = lower::lower_document_v1(&doc_file).unwrap_or_else(|e| panic!("lower_document_v1: {e}"));
+    let body =
+        lower::lower_document_v1(&doc_file).unwrap_or_else(|e| panic!("lower_document_v1: {e}"));
     let eoi = match &doc_file {
         rustyfi_syntax::cst_v1::FileV1::Document { eoi, .. } => eoi.clone(),
         _ => unreachable!("doc_src must parse as a FileV1::Document"),
@@ -66,7 +67,11 @@ end
 fn qualified_access_resolves() {
     let store = rustyfi_lang::symbol::SymbolStore::new();
     let result = elaborate_with_lib(&store, LIB_SRC, "V01Mini.document 1");
-    assert!(result.is_ok(), "expected V01Mini.document to resolve, got {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "expected V01Mini.document to resolve, got {:?}",
+        result.err()
+    );
 }
 
 /// (b) THE key erasure-is-gone guard: bare `document` in the entry now
@@ -143,7 +148,11 @@ end
 fn qualified_val_rec_resolves() {
     let store = rustyfi_lang::symbol::SymbolStore::new();
     let result = elaborate_with_lib(&store, LIB_SRC_2B, "M.sum-list [1, 2, 3]");
-    assert!(result.is_ok(), "expected M.sum-list to resolve, got {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "expected M.sum-list to resolve, got {:?}",
+        result.err()
+    );
 }
 
 /// The bare (unqualified) name is unbound without `open` — same qualified-
@@ -162,7 +171,11 @@ fn bare_val_rec_is_unbound_without_open() {
 fn val_mutable_exports_qualified_alias() {
     let store = rustyfi_lang::symbol::SymbolStore::new();
     let result = elaborate_with_lib(&store, LIB_SRC_2B, "!M.c");
-    assert!(result.is_ok(), "expected !M.c to resolve, got {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "expected !M.c to resolve, got {:?}",
+        result.err()
+    );
 }
 
 /// A library `val (+++)` is usable infix after `let open M in` (binop *use*
@@ -183,8 +196,12 @@ fn val_op_named_binding_usable_infix_after_open() {
 #[test]
 fn type_binds_surface_with_qualified_names() {
     let store = rustyfi_lang::symbol::SymbolStore::new();
-    let program = elaborate_with_lib(&store, LIB_SRC_2B, "1").unwrap_or_else(|e| panic!("elaborate: {e}"));
-    assert!(program.type_decls.is_empty(), "`t` is a synonym, not a variant");
+    let program =
+        elaborate_with_lib(&store, LIB_SRC_2B, "1").unwrap_or_else(|e| panic!("elaborate: {e}"));
+    assert!(
+        program.type_decls.is_empty(),
+        "`t` is a synonym, not a variant"
+    );
     assert_eq!(program.synonym_decls.len(), 1);
     assert_eq!(program.synonym_decls[0].name, "M.t");
 }

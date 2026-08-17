@@ -106,6 +106,23 @@ fn find_regular_ttf() -> Option<PathBuf> {
 /// renders that number as digits in the body text — `pdftotext` must find
 /// "36" in the output, proving the 0.0.6 package's computation, not just
 /// its type, crossed the version boundary into the rendered PDF.
+/// A lib root exposing ONLY the 0.0.6 corpus, so a `V0_1` entry's `@require:`
+/// must fall back across the version boundary instead of finding a
+/// same-generation package. `dist` is symlinked rather than copied — the
+/// capstone's point is that it reads the REAL, unmodified corpus files.
+fn v006_only_lib_root() -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "rustyfi-xver-capstone-v006-root-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create the 0.0.6-only lib root");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(lib_root().join("dist"), dir.join("dist"))
+        .expect("symlink the real dist/ into the 0.0.6-only lib root");
+    dir
+}
+
 #[test]
 fn xver_capstone_renders_to_extractable_text() {
     let font = match find_regular_ttf() {
@@ -120,7 +137,7 @@ fn xver_capstone_renders_to_extractable_text() {
         let program = rustyfi_loader::load(
             &entry,
             &rustyfi_loader::LoadOptions {
-                lib_root: Some(lib_root()),
+                lib_root: Some(v006_only_lib_root()),
                 version: rustyfi_syntax::RustyfiVersion::V0_1,
                 ..Default::default()
             },
@@ -135,18 +152,31 @@ fn xver_capstone_renders_to_extractable_text() {
         // "everything V0_1" the capstone would still fail loudly at parse
         // (0.0.6 module syntax isn't valid 0.1), but pin the provenance
         // explicitly so a loader regression here fails with a clear message.
+        //
+        // This is why the load above uses a 0.0.6-ONLY lib root rather than
+        // the repo's: `@require:` now prefers the requesting file's own
+        // generation, and the bundled `dist-v01/packages/` has its own
+        // `list`/`option`, so against the full root a 0.1 entry would
+        // (correctly) get the 0.1 pair and this capstone would quietly stop
+        // crossing versions at all. Hiding `dist-v01` keeps it a real
+        // 0.1-consumes-0.0.6 proof, which is the only thing it exists to show.
         let saw_v006 = program.files[..program.files.len() - 1]
             .iter()
             .filter(|f| matches!(f.version, rustyfi_syntax::RustyfiVersion::V0_0_6))
             .count();
         assert_eq!(
-            saw_v006, 2,
+            saw_v006,
+            2,
             "list.satyg + option.satyg should both be V0_0_6-tagged deps: {:?}",
-            program.files.iter().map(|f| (&f.path, f.version)).collect::<Vec<_>>()
+            program
+                .files
+                .iter()
+                .map(|f| (&f.path, f.version))
+                .collect::<Vec<_>>()
         );
 
-        let store = rustyfi_pdf::TtfFontStore::load(&font, None, None)
-            .expect("load DejaVu regular face");
+        let store =
+            rustyfi_pdf::TtfFontStore::load(&font, None, None).expect("load DejaVu regular face");
         let doc = rustyfi_lang::compile_document_v1(&program.files, &store).expect(
             "the xver capstone must compile end-to-end: a real 0.0.6 list/option dependency \
              spliced into a 0.1 whole-program compile, through real elaborate/typecheck/eval",
@@ -165,8 +195,10 @@ fn xver_capstone_renders_to_extractable_text() {
             "expected an embedded TrueType font (FontFile2) in the capstone PDF"
         );
 
-        let tmp = std::env::temp_dir()
-            .join(format!("rustyfi-rust-e2e-xver-capstone-{}.pdf", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!(
+            "rustyfi-rust-e2e-xver-capstone-{}.pdf",
+            std::process::id()
+        ));
         std::fs::write(&tmp, &bytes).unwrap();
         let pdftotext = Command::new("pdftotext").arg(&tmp).arg("-").output();
         match pdftotext {

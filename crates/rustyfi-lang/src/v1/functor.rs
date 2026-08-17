@@ -136,14 +136,24 @@ pub(crate) fn subst_sig_expr_for_param(
 /// itself (threaded by the walker, extended at every `Bind::Module`);
 /// `Ok(None)` means "leave `mods` unchanged".
 pub(crate) trait HeadRewrite {
-    fn rewrite(&self, mods: &[String], path: &[String], span: Span) -> Result<Option<Vec<String>>, LowerError>;
+    fn rewrite(
+        &self,
+        mods: &[String],
+        path: &[String],
+        span: Span,
+    ) -> Result<Option<Vec<String>>, LowerError>;
 
     /// Command-name leaf sites (`\Mod.cmd`/`+Mod.cmd`/…, spec §2.1's
     /// deliberate non-rewrite): default = same rule as [`Self::rewrite`]
     /// (an absolutized command head is a landed, working shape, spec
     /// §4.2-2); [`ParamSubstRewrite`] overrides this to REJECT instead — no
     /// demand package's functor parameter carries a command member.
-    fn rewrite_command(&self, mods: &[String], path: &[String], span: Span) -> Result<Option<Vec<String>>, LowerError> {
+    fn rewrite_command(
+        &self,
+        mods: &[String],
+        path: &[String],
+        span: Span,
+    ) -> Result<Option<Vec<String>>, LowerError> {
         self.rewrite(mods, path, span)
     }
 
@@ -192,7 +202,12 @@ pub(crate) struct ParamSubstRewrite<'a> {
 }
 
 impl HeadRewrite for ParamSubstRewrite<'_> {
-    fn rewrite(&self, mods: &[String], _path: &[String], _span: Span) -> Result<Option<Vec<String>>, LowerError> {
+    fn rewrite(
+        &self,
+        mods: &[String],
+        _path: &[String],
+        _span: Span,
+    ) -> Result<Option<Vec<String>>, LowerError> {
         if mods.first().map(String::as_str) == Some(self.param) {
             let mut out = self.arg_path.to_vec();
             out.extend(mods[1..].iter().cloned());
@@ -202,7 +217,12 @@ impl HeadRewrite for ParamSubstRewrite<'_> {
         }
     }
 
-    fn rewrite_command(&self, mods: &[String], _path: &[String], span: Span) -> Result<Option<Vec<String>>, LowerError> {
+    fn rewrite_command(
+        &self,
+        mods: &[String],
+        _path: &[String],
+        span: Span,
+    ) -> Result<Option<Vec<String>>, LowerError> {
         if mods.first().map(String::as_str) == Some(self.param) {
             Err(LowerError {
                 construct: "a parameter-qualified command name inside a functor body",
@@ -222,8 +242,15 @@ impl HeadRewrite for ParamSubstRewrite<'_> {
 /// `SigBotV1::Path`) reduces to this one formula: consult `rw`, and splice
 /// its answer in place of `mods` (keeping any further segments beyond the
 /// rewritten head), or leave `mods` unchanged on `Ok(None)`.
-fn rewrite_mods(mods: &[String], rw: &dyn HeadRewrite, path: &[String], span: Span) -> Result<Vec<String>, LowerError> {
-    Ok(rw.rewrite(mods, path, span)?.unwrap_or_else(|| mods.to_vec()))
+fn rewrite_mods(
+    mods: &[String],
+    rw: &dyn HeadRewrite,
+    path: &[String],
+    span: Span,
+) -> Result<Vec<String>, LowerError> {
+    Ok(rw
+        .rewrite(mods, path, span)?
+        .unwrap_or_else(|| mods.to_vec()))
 }
 
 /// A bare single-segment reference slot (`let open Key in …`, `Key :> S`, or
@@ -247,7 +274,11 @@ fn rewrite_bare_name(
     match rw.rewrite(&mods, path, span)? {
         None => Ok(None),
         Some(v) if v.len() == 1 => Ok(Some(v.into_iter().next().unwrap())),
-        Some(_) => Err(LowerError { construct, hint, span }),
+        Some(_) => Err(LowerError {
+            construct,
+            hint,
+            span,
+        }),
     }
 }
 
@@ -262,20 +293,23 @@ fn rewrite_mod_chain(
             name: t.name.clone(),
             span: t.span,
         }),
-        ast_v1::ModChainV1::Single(t) => match rw.rewrite(std::slice::from_ref(&t.name), path, t.span)? {
-            None => ast_v1::ModChainV1::Single(t.clone()),
-            Some(v) if v.len() == 1 => {
-                ast_v1::ModChainV1::Single(CtorTok { name: v.into_iter().next().unwrap(), span: t.span })
-            }
-            Some(v) => {
-                let (last, init) = v.split_last().expect("a HeadRewrite answer is never empty");
-                ast_v1::ModChainV1::Long(LongUpperTok {
-                    mods: init.to_vec(),
-                    name: last.clone(),
+        ast_v1::ModChainV1::Single(t) => {
+            match rw.rewrite(std::slice::from_ref(&t.name), path, t.span)? {
+                None => ast_v1::ModChainV1::Single(t.clone()),
+                Some(v) if v.len() == 1 => ast_v1::ModChainV1::Single(CtorTok {
+                    name: v.into_iter().next().unwrap(),
                     span: t.span,
-                })
+                }),
+                Some(v) => {
+                    let (last, init) = v.split_last().expect("a HeadRewrite answer is never empty");
+                    ast_v1::ModChainV1::Long(LongUpperTok {
+                        mods: init.to_vec(),
+                        name: last.clone(),
+                        span: t.span,
+                    })
+                }
             }
-        },
+        }
     })
 }
 
@@ -305,50 +339,84 @@ pub(crate) fn rewrite_binds<'a>(
     binds.into_iter().map(|b| subst_bind(b, rw, path)).collect()
 }
 
-fn subst_bind(b: &cst_v1::Bind, rw: &dyn HeadRewrite, path: &[String]) -> Result<cst_v1::Bind, LowerError> {
+fn subst_bind(
+    b: &cst_v1::Bind,
+    rw: &dyn HeadRewrite,
+    path: &[String],
+) -> Result<cst_v1::Bind, LowerError> {
     Ok(match b {
-        cst_v1::Bind::Value { kw, name, params, eq, body } => cst_v1::Bind::Value {
+        cst_v1::Bind::Value {
+            kw,
+            name,
+            params,
+            eq,
+            body,
+        } => cst_v1::Bind::Value {
             kw: kw.clone(),
             name: name.clone(),
             params: subst_params(params, rw, path)?,
             eq: eq.clone(),
             body: subst_expr(body, rw, path)?,
         },
-        cst_v1::Bind::ValueInline { kw, inline_kw, ctx, cmd, params, eq, body } => {
-            cst_v1::Bind::ValueInline {
-                kw: kw.clone(),
-                inline_kw: inline_kw.clone(),
-                ctx: ctx.clone(),
-                cmd: subst_any_horz_cmd(cmd, rw, path)?,
-                params: subst_params(params, rw, path)?,
-                eq: eq.clone(),
-                body: subst_expr(body, rw, path)?,
-            }
-        }
-        cst_v1::Bind::ValueBlock { kw, block_kw, ctx, cmd, params, eq, body } => {
-            cst_v1::Bind::ValueBlock {
-                kw: kw.clone(),
-                block_kw: block_kw.clone(),
-                ctx: ctx.clone(),
-                cmd: subst_any_vert_cmd(cmd, rw, path)?,
-                params: subst_params(params, rw, path)?,
-                eq: eq.clone(),
-                body: subst_expr(body, rw, path)?,
-            }
-        }
-        cst_v1::Bind::ValueMath { kw, math_kw, ctx, cmd, params, scripts, eq, body } => {
-            cst_v1::Bind::ValueMath {
-                kw: kw.clone(),
-                math_kw: math_kw.clone(),
-                ctx: ctx.clone(),
-                cmd: subst_any_horz_cmd(cmd, rw, path)?,
-                params: subst_params(params, rw, path)?,
-                scripts: scripts.clone(),
-                eq: eq.clone(),
-                body: subst_expr(body, rw, path)?,
-            }
-        }
-        cst_v1::Bind::ValueRec { kw, rec_kw, first, ands } => cst_v1::Bind::ValueRec {
+        cst_v1::Bind::ValueInline {
+            kw,
+            inline_kw,
+            ctx,
+            cmd,
+            params,
+            eq,
+            body,
+        } => cst_v1::Bind::ValueInline {
+            kw: kw.clone(),
+            inline_kw: inline_kw.clone(),
+            ctx: ctx.clone(),
+            cmd: subst_any_horz_cmd(cmd, rw, path)?,
+            params: subst_params(params, rw, path)?,
+            eq: eq.clone(),
+            body: subst_expr(body, rw, path)?,
+        },
+        cst_v1::Bind::ValueBlock {
+            kw,
+            block_kw,
+            ctx,
+            cmd,
+            params,
+            eq,
+            body,
+        } => cst_v1::Bind::ValueBlock {
+            kw: kw.clone(),
+            block_kw: block_kw.clone(),
+            ctx: ctx.clone(),
+            cmd: subst_any_vert_cmd(cmd, rw, path)?,
+            params: subst_params(params, rw, path)?,
+            eq: eq.clone(),
+            body: subst_expr(body, rw, path)?,
+        },
+        cst_v1::Bind::ValueMath {
+            kw,
+            math_kw,
+            ctx,
+            cmd,
+            params,
+            scripts,
+            eq,
+            body,
+        } => cst_v1::Bind::ValueMath {
+            kw: kw.clone(),
+            math_kw: math_kw.clone(),
+            ctx: ctx.clone(),
+            cmd: subst_any_horz_cmd(cmd, rw, path)?,
+            params: subst_params(params, rw, path)?,
+            scripts: scripts.clone(),
+            eq: eq.clone(),
+            body: subst_expr(body, rw, path)?,
+        },
+        cst_v1::Bind::ValueRec {
+            kw,
+            rec_kw,
+            first,
+            ands,
+        } => cst_v1::Bind::ValueRec {
             kw: kw.clone(),
             rec_kw: rec_kw.clone(),
             first: subst_rec_clause(first, rw, path)?,
@@ -362,7 +430,13 @@ fn subst_bind(b: &cst_v1::Bind, rw: &dyn HeadRewrite, path: &[String]) -> Result
                 })
                 .collect::<Result<_, LowerError>>()?,
         },
-        cst_v1::Bind::ValueMutable { kw, mutable_kw, name, arrow, value } => cst_v1::Bind::ValueMutable {
+        cst_v1::Bind::ValueMutable {
+            kw,
+            mutable_kw,
+            name,
+            arrow,
+            value,
+        } => cst_v1::Bind::ValueMutable {
             kw: kw.clone(),
             mutable_kw: mutable_kw.clone(),
             name: name.clone(),
@@ -382,7 +456,13 @@ fn subst_bind(b: &cst_v1::Bind, rw: &dyn HeadRewrite, path: &[String]) -> Result
                 })
                 .collect::<Result<_, LowerError>>()?,
         },
-        cst_v1::Bind::Module { module_kw, name, sig_annot, eq, body } => {
+        cst_v1::Bind::Module {
+            module_kw,
+            name,
+            sig_annot,
+            eq,
+            body,
+        } => {
             // 2f-2a (spec §4.2): the walker threads `path`, extending it
             // here — the ONE place a nested module is introduced — so a
             // reference site inside `body` sees the correct (deeper)
@@ -436,7 +516,11 @@ fn subst_params(
     params.iter().map(|p| subst_param(p, rw, path)).collect()
 }
 
-fn subst_param(p: &ast_v1::Param, rw: &dyn HeadRewrite, path: &[String]) -> Result<ast_v1::Param, LowerError> {
+fn subst_param(
+    p: &ast_v1::Param,
+    rw: &dyn HeadRewrite,
+    path: &[String],
+) -> Result<ast_v1::Param, LowerError> {
     Ok(ast_v1::Param {
         // `OptParamsV1`'s entries are plain `label = var` binder pairs (no
         // `Expr`/`TypeExpr` inside) — no parameter-reference site exists
@@ -479,9 +563,20 @@ fn subst_rec_clause(
     })
 }
 
-fn subst_expr(e: &ast_v1::Expr, rw: &dyn HeadRewrite, path: &[String]) -> Result<ast_v1::Expr, LowerError> {
+fn subst_expr(
+    e: &ast_v1::Expr,
+    rw: &dyn HeadRewrite,
+    path: &[String],
+) -> Result<ast_v1::Expr, LowerError> {
     Ok(match e {
-        ast_v1::Expr::LetRecIn { let_kw, rec_kw, first, ands, in_kw, body } => ast_v1::Expr::LetRecIn {
+        ast_v1::Expr::LetRecIn {
+            let_kw,
+            rec_kw,
+            first,
+            ands,
+            in_kw,
+            body,
+        } => ast_v1::Expr::LetRecIn {
             let_kw: let_kw.clone(),
             rec_kw: rec_kw.clone(),
             first: subst_rec_clause(first, rw, path)?,
@@ -497,18 +592,32 @@ fn subst_expr(e: &ast_v1::Expr, rw: &dyn HeadRewrite, path: &[String]) -> Result
             in_kw: in_kw.clone(),
             body: Box::new(subst_expr(body, rw, path)?),
         },
-        ast_v1::Expr::LetMutableIn { let_kw, mutable_kw, name, arrow, init, in_kw, body } => {
-            ast_v1::Expr::LetMutableIn {
-                let_kw: let_kw.clone(),
-                mutable_kw: mutable_kw.clone(),
-                name: name.clone(),
-                arrow: arrow.clone(),
-                init: Box::new(subst_expr(init, rw, path)?),
-                in_kw: in_kw.clone(),
-                body: Box::new(subst_expr(body, rw, path)?),
-            }
-        }
-        ast_v1::Expr::LetIn { kw, name, params, eq, value, in_kw, body } => ast_v1::Expr::LetIn {
+        ast_v1::Expr::LetMutableIn {
+            let_kw,
+            mutable_kw,
+            name,
+            arrow,
+            init,
+            in_kw,
+            body,
+        } => ast_v1::Expr::LetMutableIn {
+            let_kw: let_kw.clone(),
+            mutable_kw: mutable_kw.clone(),
+            name: name.clone(),
+            arrow: arrow.clone(),
+            init: Box::new(subst_expr(init, rw, path)?),
+            in_kw: in_kw.clone(),
+            body: Box::new(subst_expr(body, rw, path)?),
+        },
+        ast_v1::Expr::LetIn {
+            kw,
+            name,
+            params,
+            eq,
+            value,
+            in_kw,
+            body,
+        } => ast_v1::Expr::LetIn {
             kw: kw.clone(),
             name: name.clone(),
             params: subst_params(params, rw, path)?,
@@ -517,7 +626,14 @@ fn subst_expr(e: &ast_v1::Expr, rw: &dyn HeadRewrite, path: &[String]) -> Result
             in_kw: in_kw.clone(),
             body: Box::new(subst_expr(body, rw, path)?),
         },
-        ast_v1::Expr::LetPatternIn { kw, pat, eq, value, in_kw, body } => ast_v1::Expr::LetPatternIn {
+        ast_v1::Expr::LetPatternIn {
+            kw,
+            pat,
+            eq,
+            value,
+            in_kw,
+            body,
+        } => ast_v1::Expr::LetPatternIn {
             kw: kw.clone(),
             pat: pat.clone(),
             eq: eq.clone(),
@@ -525,7 +641,13 @@ fn subst_expr(e: &ast_v1::Expr, rw: &dyn HeadRewrite, path: &[String]) -> Result
             in_kw: in_kw.clone(),
             body: Box::new(subst_expr(body, rw, path)?),
         },
-        ast_v1::Expr::OpenIn { let_kw, open_kw, name, in_kw, body } => {
+        ast_v1::Expr::OpenIn {
+            let_kw,
+            open_kw,
+            name,
+            in_kw,
+            body,
+        } => {
             let name = match rewrite_bare_name(
                 &name.name,
                 name.span,
@@ -536,7 +658,10 @@ fn subst_expr(e: &ast_v1::Expr, rw: &dyn HeadRewrite, path: &[String]) -> Result
                 "a single-module-segment slot cannot hold a multi-segment path — \
                  Sub-slice 2f-2",
             )? {
-                Some(new_name) => CtorTok { name: new_name, span: name.span },
+                Some(new_name) => CtorTok {
+                    name: new_name,
+                    span: name.span,
+                },
                 None => name.clone(),
             };
             ast_v1::Expr::OpenIn {
@@ -547,7 +672,14 @@ fn subst_expr(e: &ast_v1::Expr, rw: &dyn HeadRewrite, path: &[String]) -> Result
                 body: Box::new(subst_expr(body, rw, path)?),
             }
         }
-        ast_v1::Expr::If { kw, cond, then_kw, then_branch, else_kw, else_branch } => ast_v1::Expr::If {
+        ast_v1::Expr::If {
+            kw,
+            cond,
+            then_kw,
+            then_branch,
+            else_kw,
+            else_branch,
+        } => ast_v1::Expr::If {
             kw: kw.clone(),
             cond: Box::new(subst_expr(cond, rw, path)?),
             then_kw: then_kw.clone(),
@@ -555,31 +687,42 @@ fn subst_expr(e: &ast_v1::Expr, rw: &dyn HeadRewrite, path: &[String]) -> Result
             else_kw: else_kw.clone(),
             else_branch: Box::new(subst_expr(else_branch, rw, path)?),
         },
-        ast_v1::Expr::Fun { kw, params, arrow, body } => ast_v1::Expr::Fun {
+        ast_v1::Expr::Fun {
+            kw,
+            params,
+            arrow,
+            body,
+        } => ast_v1::Expr::Fun {
             kw: kw.clone(),
             params: subst_params(params, rw, path)?,
             arrow: arrow.clone(),
             body: Box::new(subst_expr(body, rw, path)?),
         },
-        ast_v1::Expr::Match { kw, scrutinee, with_kw, leading_bar, first, rest, end_kw } => {
-            ast_v1::Expr::Match {
-                kw: kw.clone(),
-                scrutinee: Box::new(subst_expr(scrutinee, rw, path)?),
-                with_kw: with_kw.clone(),
-                leading_bar: leading_bar.clone(),
-                first: subst_match_arm(first, rw, path)?,
-                rest: rest
-                    .iter()
-                    .map(|r| {
-                        Ok(ast_v1::BarArm {
-                            bar: r.bar.clone(),
-                            arm: subst_match_arm(&r.arm, rw, path)?,
-                        })
+        ast_v1::Expr::Match {
+            kw,
+            scrutinee,
+            with_kw,
+            leading_bar,
+            first,
+            rest,
+            end_kw,
+        } => ast_v1::Expr::Match {
+            kw: kw.clone(),
+            scrutinee: Box::new(subst_expr(scrutinee, rw, path)?),
+            with_kw: with_kw.clone(),
+            leading_bar: leading_bar.clone(),
+            first: subst_match_arm(first, rw, path)?,
+            rest: rest
+                .iter()
+                .map(|r| {
+                    Ok(ast_v1::BarArm {
+                        bar: r.bar.clone(),
+                        arm: subst_match_arm(&r.arm, rw, path)?,
                     })
-                    .collect::<Result<_, LowerError>>()?,
-                end_kw: end_kw.clone(),
-            }
-        }
+                })
+                .collect::<Result<_, LowerError>>()?,
+            end_kw: end_kw.clone(),
+        },
         ast_v1::Expr::Overwrite { name, arrow, value } => ast_v1::Expr::Overwrite {
             name: name.clone(),
             arrow: arrow.clone(),
@@ -601,7 +744,11 @@ fn subst_match_arm(
     })
 }
 
-fn subst_op_chain(c: &ast_v1::OpChain, rw: &dyn HeadRewrite, path: &[String]) -> Result<ast_v1::OpChain, LowerError> {
+fn subst_op_chain(
+    c: &ast_v1::OpChain,
+    rw: &dyn HeadRewrite,
+    path: &[String],
+) -> Result<ast_v1::OpChain, LowerError> {
     Ok(ast_v1::OpChain {
         head: subst_app_expr(&c.head, rw, path)?,
         tail: c
@@ -617,7 +764,11 @@ fn subst_op_chain(c: &ast_v1::OpChain, rw: &dyn HeadRewrite, path: &[String]) ->
     })
 }
 
-fn subst_app_expr(a: &ast_v1::AppExpr, rw: &dyn HeadRewrite, path: &[String]) -> Result<ast_v1::AppExpr, LowerError> {
+fn subst_app_expr(
+    a: &ast_v1::AppExpr,
+    rw: &dyn HeadRewrite,
+    path: &[String],
+) -> Result<ast_v1::AppExpr, LowerError> {
     Ok(ast_v1::AppExpr {
         minus: a.minus.clone(),
         excl: a.excl.clone(),
@@ -632,9 +783,18 @@ fn subst_app_expr(a: &ast_v1::AppExpr, rw: &dyn HeadRewrite, path: &[String]) ->
     })
 }
 
-fn subst_app_arg(x: &ast_v1::AppArg, rw: &dyn HeadRewrite, path: &[String]) -> Result<ast_v1::AppArg, LowerError> {
+fn subst_app_arg(
+    x: &ast_v1::AppArg,
+    rw: &dyn HeadRewrite,
+    path: &[String],
+) -> Result<ast_v1::AppArg, LowerError> {
     Ok(match x {
-        ast_v1::AppArg::Bundled { opts, excl, atom, accesses } => ast_v1::AppArg::Bundled {
+        ast_v1::AppArg::Bundled {
+            opts,
+            excl,
+            atom,
+            accesses,
+        } => ast_v1::AppArg::Bundled {
             opts: subst_opt_args(opts, rw, path)?,
             excl: excl.clone(),
             atom: subst_atomic(atom, rw, path)?,
@@ -644,7 +804,11 @@ fn subst_app_arg(x: &ast_v1::AppArg, rw: &dyn HeadRewrite, path: &[String]) -> R
             opts: subst_opt_args(opts, rw, path)?,
             ctor: ctor.clone(),
         },
-        ast_v1::AppArg::Atom { excl, atom, accesses } => ast_v1::AppArg::Atom {
+        ast_v1::AppArg::Atom {
+            excl,
+            atom,
+            accesses,
+        } => ast_v1::AppArg::Atom {
             excl: excl.clone(),
             atom: subst_atomic(atom, rw, path)?,
             accesses: accesses.clone(),
@@ -676,7 +840,11 @@ fn subst_opt_args(
     })
 }
 
-fn subst_atomic(a: &ast_v1::Atomic, rw: &dyn HeadRewrite, path: &[String]) -> Result<ast_v1::Atomic, LowerError> {
+fn subst_atomic(
+    a: &ast_v1::Atomic,
+    rw: &dyn HeadRewrite,
+    path: &[String],
+) -> Result<ast_v1::Atomic, LowerError> {
     Ok(match a {
         ast_v1::Atomic::Length(t) => ast_v1::Atomic::Length(t.clone()),
         ast_v1::Atomic::Float(t) => ast_v1::Atomic::Float(t.clone()),
@@ -696,7 +864,9 @@ fn subst_atomic(a: &ast_v1::Atomic, rw: &dyn HeadRewrite, path: &[String]) -> Re
             kw: kw.clone(),
             name: subst_any_horz_cmd(name, rw, path)?,
         },
-        ast_v1::Atomic::Unit { paren } => ast_v1::Atomic::Unit { paren: paren.clone() },
+        ast_v1::Atomic::Unit { paren } => ast_v1::Atomic::Unit {
+            paren: paren.clone(),
+        },
         ast_v1::Atomic::Paren { paren, inner } => ast_v1::Atomic::Paren {
             paren: paren.clone(),
             inner: Box::new(subst_paren_body(inner, rw, path)?),
@@ -741,7 +911,9 @@ fn subst_math_erased(
     rw: &dyn HeadRewrite,
     path: &[String],
 ) -> Result<cst_v1::MathErasedV1, LowerError> {
-    Ok(cst_v1::MathErasedV1(Box::new(subst_math_elem(&m.0, rw, path)?)))
+    Ok(cst_v1::MathErasedV1(Box::new(subst_math_elem(
+        &m.0, rw, path,
+    )?)))
 }
 
 fn subst_paren_body(
@@ -770,7 +942,11 @@ fn subst_record_body(
     path: &[String],
 ) -> Result<ast_v1::RecordBody, LowerError> {
     Ok(match b {
-        ast_v1::RecordBody::Update { base, with_kw, fields } => ast_v1::RecordBody::Update {
+        ast_v1::RecordBody::Update {
+            base,
+            with_kw,
+            fields,
+        } => ast_v1::RecordBody::Update {
             base: cst_v1::ExprErasedV1(Box::new(subst_expr(&base.0, rw, path)?)),
             with_kw: with_kw.clone(),
             fields: fields
@@ -888,32 +1064,62 @@ fn subst_cmd_tail(
     })
 }
 
-fn subst_any_horz_cmd(c: &AnyHorzCmdTok, rw: &dyn HeadRewrite, path: &[String]) -> Result<AnyHorzCmdTok, LowerError> {
+fn subst_any_horz_cmd(
+    c: &AnyHorzCmdTok,
+    rw: &dyn HeadRewrite,
+    path: &[String],
+) -> Result<AnyHorzCmdTok, LowerError> {
     Ok(match c {
         AnyHorzCmdTok::Plain(t) => AnyHorzCmdTok::Plain(t.clone()),
         AnyHorzCmdTok::Mod(t) => {
-            let mods = rw.rewrite_command(&t.mods, path, t.span)?.unwrap_or_else(|| t.mods.clone());
-            AnyHorzCmdTok::Mod(HorzCmdWithModTok { mods, name: t.name.clone(), span: t.span })
+            let mods = rw
+                .rewrite_command(&t.mods, path, t.span)?
+                .unwrap_or_else(|| t.mods.clone());
+            AnyHorzCmdTok::Mod(HorzCmdWithModTok {
+                mods,
+                name: t.name.clone(),
+                span: t.span,
+            })
         }
     })
 }
 
-fn subst_any_vert_cmd(c: &AnyVertCmdTok, rw: &dyn HeadRewrite, path: &[String]) -> Result<AnyVertCmdTok, LowerError> {
+fn subst_any_vert_cmd(
+    c: &AnyVertCmdTok,
+    rw: &dyn HeadRewrite,
+    path: &[String],
+) -> Result<AnyVertCmdTok, LowerError> {
     Ok(match c {
         AnyVertCmdTok::Plain(t) => AnyVertCmdTok::Plain(t.clone()),
         AnyVertCmdTok::Mod(t) => {
-            let mods = rw.rewrite_command(&t.mods, path, t.span)?.unwrap_or_else(|| t.mods.clone());
-            AnyVertCmdTok::Mod(VertCmdWithModTok { mods, name: t.name.clone(), span: t.span })
+            let mods = rw
+                .rewrite_command(&t.mods, path, t.span)?
+                .unwrap_or_else(|| t.mods.clone());
+            AnyVertCmdTok::Mod(VertCmdWithModTok {
+                mods,
+                name: t.name.clone(),
+                span: t.span,
+            })
         }
     })
 }
 
-fn subst_any_math_cmd(c: &AnyMathCmdTok, rw: &dyn HeadRewrite, path: &[String]) -> Result<AnyMathCmdTok, LowerError> {
+fn subst_any_math_cmd(
+    c: &AnyMathCmdTok,
+    rw: &dyn HeadRewrite,
+    path: &[String],
+) -> Result<AnyMathCmdTok, LowerError> {
     Ok(match c {
         AnyMathCmdTok::Plain(t) => AnyMathCmdTok::Plain(t.clone()),
         AnyMathCmdTok::Mod(t) => {
-            let mods = rw.rewrite_command(&t.mods, path, t.span)?.unwrap_or_else(|| t.mods.clone());
-            AnyMathCmdTok::Mod(MathCmdWithModTok { mods, name: t.name.clone(), span: t.span })
+            let mods = rw
+                .rewrite_command(&t.mods, path, t.span)?
+                .unwrap_or_else(|| t.mods.clone());
+            AnyMathCmdTok::Mod(MathCmdWithModTok {
+                mods,
+                name: t.name.clone(),
+                span: t.span,
+            })
         }
     })
 }
@@ -935,7 +1141,11 @@ fn subst_math_elem(
     })
 }
 
-fn subst_math_bot(m: &ast_v1::MathBot, rw: &dyn HeadRewrite, path: &[String]) -> Result<ast_v1::MathBot, LowerError> {
+fn subst_math_bot(
+    m: &ast_v1::MathBot,
+    rw: &dyn HeadRewrite,
+    path: &[String],
+) -> Result<ast_v1::MathBot, LowerError> {
     Ok(match m {
         ast_v1::MathBot::Cmd { name, args } => ast_v1::MathBot::Cmd {
             name: subst_any_math_cmd(name, rw, path)?,
@@ -993,11 +1203,17 @@ fn subst_math_group_arg(
                 .map(|e| subst_math_erased(e, rw, path))
                 .collect::<Result<_, LowerError>>()?,
         },
-        ast_v1::MathGroupArg::Bot(b) => ast_v1::MathGroupArg::Bot(Box::new(subst_math_bot(b, rw, path)?)),
+        ast_v1::MathGroupArg::Bot(b) => {
+            ast_v1::MathGroupArg::Bot(Box::new(subst_math_bot(b, rw, path)?))
+        }
     })
 }
 
-fn subst_math_arg(a: &ast_v1::MathArg, rw: &dyn HeadRewrite, path: &[String]) -> Result<ast_v1::MathArg, LowerError> {
+fn subst_math_arg(
+    a: &ast_v1::MathArg,
+    rw: &dyn HeadRewrite,
+    path: &[String],
+) -> Result<ast_v1::MathArg, LowerError> {
     Ok(match a {
         ast_v1::MathArg::Math { mgrp, elems } => ast_v1::MathArg::Math {
             mgrp: mgrp.clone(),
@@ -1046,7 +1262,12 @@ fn subst_type_expr(
     path: &[String],
 ) -> Result<ast_v1::TypeExpr, LowerError> {
     Ok(match t {
-        ast_v1::TypeExpr::OptRowFun { opt_dom, dom, arrow, cod } => ast_v1::TypeExpr::OptRowFun {
+        ast_v1::TypeExpr::OptRowFun {
+            opt_dom,
+            dom,
+            arrow,
+            cod,
+        } => ast_v1::TypeExpr::OptRowFun {
             opt_dom: subst_type_opt_dom(opt_dom, rw, path)?,
             dom: subst_type_prod(dom, rw, path)?,
             arrow: arrow.clone(),
@@ -1115,7 +1336,11 @@ fn subst_type_prod(
     })
 }
 
-fn subst_type_app(a: &ast_v1::TypeApp, rw: &dyn HeadRewrite, path: &[String]) -> Result<ast_v1::TypeApp, LowerError> {
+fn subst_type_app(
+    a: &ast_v1::TypeApp,
+    rw: &dyn HeadRewrite,
+    path: &[String],
+) -> Result<ast_v1::TypeApp, LowerError> {
     Ok(match a {
         ast_v1::TypeApp::InlineCmdTy { kw, list, args } => ast_v1::TypeApp::InlineCmdTy {
             kw: kw.clone(),
@@ -1205,7 +1430,11 @@ fn subst_type_cmd_opt_dom(
     })
 }
 
-fn subst_type_atom(t: &ast_v1::TypeAtom, rw: &dyn HeadRewrite, path: &[String]) -> Result<ast_v1::TypeAtom, LowerError> {
+fn subst_type_atom(
+    t: &ast_v1::TypeAtom,
+    rw: &dyn HeadRewrite,
+    path: &[String],
+) -> Result<ast_v1::TypeAtom, LowerError> {
     Ok(match t {
         ast_v1::TypeAtom::Paren { paren, inner } => ast_v1::TypeAtom::Paren {
             paren: paren.clone(),
@@ -1267,7 +1496,11 @@ fn subst_type_body(
     path: &[String],
 ) -> Result<cst_v1::TypeBodyV1, LowerError> {
     Ok(match b {
-        cst_v1::TypeBodyV1::Variant { leading_bar, first, rest } => cst_v1::TypeBodyV1::Variant {
+        cst_v1::TypeBodyV1::Variant {
+            leading_bar,
+            first,
+            rest,
+        } => cst_v1::TypeBodyV1::Variant {
             leading_bar: leading_bar.clone(),
             first: subst_variant_def(first, rw, path)?,
             rest: rest
@@ -1280,7 +1513,9 @@ fn subst_type_body(
                 })
                 .collect::<Result<_, LowerError>>()?,
         },
-        cst_v1::TypeBodyV1::Synonym(ty) => cst_v1::TypeBodyV1::Synonym(subst_type_expr(ty, rw, path)?),
+        cst_v1::TypeBodyV1::Synonym(ty) => {
+            cst_v1::TypeBodyV1::Synonym(subst_type_expr(ty, rw, path)?)
+        }
     })
 }
 
@@ -1326,7 +1561,11 @@ fn subst_type_binds(
 
 // ---- module / signature grammar (nested modules inside a functor body) ----
 
-fn subst_mod_expr(m: &ast_v1::ModExpr, rw: &dyn HeadRewrite, path: &[String]) -> Result<ast_v1::ModExpr, LowerError> {
+fn subst_mod_expr(
+    m: &ast_v1::ModExpr,
+    rw: &dyn HeadRewrite,
+    path: &[String],
+) -> Result<ast_v1::ModExpr, LowerError> {
     Ok(match m {
         // `ParamSubstRewrite` (2f-1): this walker is ONLY ever run over the
         // CONTENTS of an already-known functor body (`substitute_binds`'s
@@ -1344,9 +1583,16 @@ fn subst_mod_expr(m: &ast_v1::ModExpr, rw: &dyn HeadRewrite, path: &[String]) ->
         // fresh, from scratch, only at APPLICATION time (after parameter
         // substitution, at the instantiated site) — so it is left
         // completely untouched here, never descended into.
-        ast_v1::ModExpr::Functor { fun_kw, lp, param, colon, dom, rp, arrow, body }
-            if rw.reject_nested_functor_literals() =>
-        {
+        ast_v1::ModExpr::Functor {
+            fun_kw,
+            lp,
+            param,
+            colon,
+            dom,
+            rp,
+            arrow,
+            body,
+        } if rw.reject_nested_functor_literals() => {
             let _ = (lp, param, colon, dom, rp, arrow, body);
             return Err(LowerError {
                 construct: "a nested functor literal inside another functor's body",
@@ -1368,7 +1614,10 @@ fn subst_mod_expr(m: &ast_v1::ModExpr, rw: &dyn HeadRewrite, path: &[String]) ->
                  parameter is Sub-slice 2f-2",
             )?;
             let name = match new_name {
-                Some(n) => CtorTok { name: n, span: name.span },
+                Some(n) => CtorTok {
+                    name: n,
+                    span: name.span,
+                },
                 None => name.clone(),
             };
             ast_v1::ModExpr::Coerce {
@@ -1382,7 +1631,11 @@ fn subst_mod_expr(m: &ast_v1::ModExpr, rw: &dyn HeadRewrite, path: &[String]) ->
             arg: rewrite_mod_chain(arg, rw, path)?,
         },
         ast_v1::ModExpr::Var(chain) => ast_v1::ModExpr::Var(rewrite_mod_chain(chain, rw, path)?),
-        ast_v1::ModExpr::Struct { struct_kw, binds, end_kw } => ast_v1::ModExpr::Struct {
+        ast_v1::ModExpr::Struct {
+            struct_kw,
+            binds,
+            end_kw,
+        } => ast_v1::ModExpr::Struct {
             struct_kw: struct_kw.clone(),
             binds: binds
                 .iter()
@@ -1393,7 +1646,11 @@ fn subst_mod_expr(m: &ast_v1::ModExpr, rw: &dyn HeadRewrite, path: &[String]) ->
     })
 }
 
-fn subst_sig_expr(s: &ast_v1::SigExpr, rw: &dyn HeadRewrite, path: &[String]) -> Result<ast_v1::SigExpr, LowerError> {
+fn subst_sig_expr(
+    s: &ast_v1::SigExpr,
+    rw: &dyn HeadRewrite,
+    path: &[String],
+) -> Result<ast_v1::SigExpr, LowerError> {
     // Spec §4.2-4: signature bodies are deliberately NOT absolutized (no
     // demand sig references a sibling module relatively); `ParamSubstRewrite`
     // still needs to descend here (a parameter reference inside a nested
@@ -1402,7 +1659,15 @@ fn subst_sig_expr(s: &ast_v1::SigExpr, rw: &dyn HeadRewrite, path: &[String]) ->
         return Ok(s.clone());
     }
     Ok(match s {
-        ast_v1::SigExpr::Functor { lp, param: p2, colon, dom, rp, arrow, cod } => ast_v1::SigExpr::Functor {
+        ast_v1::SigExpr::Functor {
+            lp,
+            param: p2,
+            colon,
+            dom,
+            rp,
+            arrow,
+            cod,
+        } => ast_v1::SigExpr::Functor {
             lp: lp.clone(),
             param: p2.clone(),
             colon: colon.clone(),
@@ -1411,10 +1676,19 @@ fn subst_sig_expr(s: &ast_v1::SigExpr, rw: &dyn HeadRewrite, path: &[String]) ->
             arrow: arrow.clone(),
             cod: Box::new(subst_sig_expr(cod, rw, path)?),
         },
-        ast_v1::SigExpr::WithType { base, with_kw, path: type_path, type_kw, binds } => ast_v1::SigExpr::WithType {
+        ast_v1::SigExpr::WithType {
+            base,
+            with_kw,
+            path: type_path,
+            type_kw,
+            binds,
+        } => ast_v1::SigExpr::WithType {
             base: subst_sig_bot(base, rw, path)?,
             with_kw: with_kw.clone(),
-            path: type_path.as_ref().map(|c| rewrite_mod_chain(c, rw, path)).transpose()?,
+            path: type_path
+                .as_ref()
+                .map(|c| rewrite_mod_chain(c, rw, path))
+                .transpose()?,
             type_kw: type_kw.clone(),
             binds: cst_v1::TypeBindsErasedV1(Box::new(subst_type_binds(&binds.0, rw, path)?)),
         },
@@ -1422,7 +1696,11 @@ fn subst_sig_expr(s: &ast_v1::SigExpr, rw: &dyn HeadRewrite, path: &[String]) ->
     })
 }
 
-fn subst_sig_bot(b: &ast_v1::SigBotV1, rw: &dyn HeadRewrite, path: &[String]) -> Result<ast_v1::SigBotV1, LowerError> {
+fn subst_sig_bot(
+    b: &ast_v1::SigBotV1,
+    rw: &dyn HeadRewrite,
+    path: &[String],
+) -> Result<ast_v1::SigBotV1, LowerError> {
     Ok(match b {
         // Site 5 (module doc comment).
         ast_v1::SigBotV1::Path(t) => ast_v1::SigBotV1::Path(LongUpperTok {
@@ -1431,7 +1709,11 @@ fn subst_sig_bot(b: &ast_v1::SigBotV1, rw: &dyn HeadRewrite, path: &[String]) ->
             span: t.span,
         }),
         ast_v1::SigBotV1::Var(t) => ast_v1::SigBotV1::Var(t.clone()),
-        ast_v1::SigBotV1::Sig { sig_kw, decls, end_kw } => ast_v1::SigBotV1::Sig {
+        ast_v1::SigBotV1::Sig {
+            sig_kw,
+            decls,
+            end_kw,
+        } => ast_v1::SigBotV1::Sig {
             sig_kw: sig_kw.clone(),
             decls: decls
                 .iter()
@@ -1450,30 +1732,57 @@ fn subst_struct_decl_v1(
     Ok(cst_v1::StructDeclV1(Box::new(subst_decl(&d.0, rw, path)?)))
 }
 
-fn subst_decl(d: &ast_v1::Decl, rw: &dyn HeadRewrite, path: &[String]) -> Result<ast_v1::Decl, LowerError> {
+fn subst_decl(
+    d: &ast_v1::Decl,
+    rw: &dyn HeadRewrite,
+    path: &[String],
+) -> Result<ast_v1::Decl, LowerError> {
     Ok(match d {
-        ast_v1::Decl::Val { kw, name, quant, colon, ty } => ast_v1::Decl::Val {
+        ast_v1::Decl::Val {
+            kw,
+            name,
+            quant,
+            colon,
+            ty,
+        } => ast_v1::Decl::Val {
             kw: kw.clone(),
             name: name.clone(),
             quant: quant.clone(),
             colon: colon.clone(),
             ty: subst_type_expr(ty, rw, path)?,
         },
-        ast_v1::Decl::ValHorzCmd { kw, cmd, quant, colon, ty } => ast_v1::Decl::ValHorzCmd {
+        ast_v1::Decl::ValHorzCmd {
+            kw,
+            cmd,
+            quant,
+            colon,
+            ty,
+        } => ast_v1::Decl::ValHorzCmd {
             kw: kw.clone(),
             cmd: cmd.clone(),
             quant: quant.clone(),
             colon: colon.clone(),
             ty: subst_type_expr(ty, rw, path)?,
         },
-        ast_v1::Decl::ValVertCmd { kw, cmd, quant, colon, ty } => ast_v1::Decl::ValVertCmd {
+        ast_v1::Decl::ValVertCmd {
+            kw,
+            cmd,
+            quant,
+            colon,
+            ty,
+        } => ast_v1::Decl::ValVertCmd {
             kw: kw.clone(),
             cmd: cmd.clone(),
             quant: quant.clone(),
             colon: colon.clone(),
             ty: subst_type_expr(ty, rw, path)?,
         },
-        ast_v1::Decl::TypeOpaque { kw, name, cons, kind } => ast_v1::Decl::TypeOpaque {
+        ast_v1::Decl::TypeOpaque {
+            kw,
+            name,
+            cons,
+            kind,
+        } => ast_v1::Decl::TypeOpaque {
             kw: kw.clone(),
             name: name.clone(),
             cons: cons.clone(),
@@ -1483,7 +1792,12 @@ fn subst_decl(d: &ast_v1::Decl, rw: &dyn HeadRewrite, path: &[String]) -> Result
             kw: kw.clone(),
             binds: cst_v1::TypeBindsErasedV1(Box::new(subst_type_binds(&binds.0, rw, path)?)),
         },
-        ast_v1::Decl::Module { kw, name, colon, sig_ } => ast_v1::Decl::Module {
+        ast_v1::Decl::Module {
+            kw,
+            name,
+            colon,
+            sig_,
+        } => ast_v1::Decl::Module {
             kw: kw.clone(),
             name: name.clone(),
             colon: colon.clone(),
@@ -1546,7 +1860,9 @@ mod tests {
         let cst_v1::Bind::Value { body, .. } = &*substituted[0].0 else {
             panic!("expected `val cmp`")
         };
-        let ast_v1::Expr::Ops(chain) = body else { panic!("expected an op chain") };
+        let ast_v1::Expr::Ops(chain) = body else {
+            panic!("expected an op chain")
+        };
         let ast_v1::Atomic::VarWithMod(v) = &chain.head.head else {
             panic!("expected a qualified variable reference")
         };
@@ -1559,7 +1875,9 @@ mod tests {
         let cst_v1::TypeBodyV1::Synonym(ty) = &first.body else {
             panic!("expected a synonym body")
         };
-        let ast_v1::TypeExpr::Atom(prod) = ty else { panic!("expected an atom type") };
+        let ast_v1::TypeExpr::Atom(prod) = ty else {
+            panic!("expected an atom type")
+        };
         let ast_v1::TypeApp::Atom(ast_v1::TypeAtom::LongName(v)) = &prod.first else {
             panic!("expected a qualified type atom")
         };
@@ -1572,7 +1890,9 @@ mod tests {
         let cst_v1::TypeBodyV1::Synonym(ty) = &first.body else {
             panic!("expected a synonym body")
         };
-        let ast_v1::TypeExpr::Atom(prod) = ty else { panic!("expected an atom type") };
+        let ast_v1::TypeExpr::Atom(prod) = ty else {
+            panic!("expected an atom type")
+        };
         let ast_v1::TypeApp::AppliedLong { ctor, .. } = &prod.first else {
             panic!("expected a qualified type-application head")
         };
@@ -1582,11 +1902,17 @@ mod tests {
         let cst_v1::Bind::Value { body, .. } = &*substituted[3].0 else {
             panic!("expected `val same` (the control)")
         };
-        let ast_v1::Expr::Ops(chain) = body else { panic!("expected an op chain") };
+        let ast_v1::Expr::Ops(chain) = body else {
+            panic!("expected an op chain")
+        };
         let ast_v1::Atomic::VarWithMod(v) = &chain.head.head else {
             panic!("expected a qualified variable reference")
         };
-        assert_eq!(v.mods, vec!["Local".to_string()], "an unrelated qualified reference must stay untouched");
+        assert_eq!(
+            v.mods,
+            vec!["Local".to_string()],
+            "an unrelated qualified reference must stay untouched"
+        );
     }
 
     /// A parameter-qualified command name (`\Key.cmd`) inside a functor body

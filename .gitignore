@@ -21,6 +21,9 @@
 /result-*
 # Python bytecode from importing scripts/layout_fidelity.py as a module (the
 # harness is imported by ad-hoc analysis scripts as well as run directly).
+# Temp entry files `typecheck_known_gaps.rs` writes beside a fixture (it sweeps
+# them itself, but an abort skips the sweep).
+rustyfi-known-gap-*
 __pycache__/
 *.py[cod]
 # ---- editor / OS noise ------------------------------------------------------

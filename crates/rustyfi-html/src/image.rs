@@ -137,14 +137,25 @@ mod tests {
         // 8 (2*3=6, rounded up to a multiple of 4). The FIRST file row must
         // be the source's BOTTOM row (blue, white) in BGR order.
         let px0 = &bmp[54..57];
-        assert_eq!(px0, &[255, 0, 0], "first BMP row's first pixel should be blue (BGR)");
+        assert_eq!(
+            px0,
+            &[255, 0, 0],
+            "first BMP row's first pixel should be blue (BGR)"
+        );
         let px1 = &bmp[57..60];
-        assert_eq!(px1, &[255, 255, 255], "first BMP row's second pixel should be white (BGR)");
+        assert_eq!(
+            px1,
+            &[255, 255, 255],
+            "first BMP row's second pixel should be white (BGR)"
+        );
     }
 
     #[test]
     fn data_uri_has_the_expected_scheme_and_mime() {
         let uri = data_uri(&tiny_2x2());
-        assert!(uri.starts_with("data:image/bmp;base64,"), "unexpected URI: {uri}");
+        assert!(
+            uri.starts_with("data:image/bmp;base64,"),
+            "unexpected URI: {uri}"
+        );
     }
 }

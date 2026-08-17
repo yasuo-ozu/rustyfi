@@ -1,25 +1,30 @@
-//! The L3 differential golden harness (`…/tmp/l3-typecheck-refactor.md`
-//! §8.3): for every `.saty`/`.satyh`/`.satyg` fixture under
-//! `crates/*/tests/fixtures/` and every one of the 29 bundled packages
-//! under `lib-rustyfi/dist/packages/` (loader-merged the same way `stdja`
-//! loads today, via a synthetic `@require: <pkg>` entry), run
-//! parse -> elaborate -> `typecheck_verbose` and print one deterministic
-//! line per input: `OK <tag> <n-warnings> <warning debug strings…>` or
-//! `ERR <tag> <Display-of-TypeError-or-earlier-stage-error>`.
+//! Whole-corpus typecheck snapshot: for every `.saty`/`.satyh`/`.satyg`
+//! fixture under `crates/*/tests/fixtures/` and every bundled package under
+//! `lib-rustyfi/dist/packages/` (loader-merged the same way `stdja` loads, via
+//! a synthetic `@require: <pkg>` entry), run parse -> elaborate ->
+//! `typecheck_verbose` and record one deterministic line per input:
+//! `OK <tag> (<version>) <n-warnings> [<warnings>]`.
 //!
-//! `scripts/typecheck-golden.sh` runs this test (via `--ignored
-//! --nocapture`) once on the parent commit and once on the L3 commit and
-//! diffs the two outputs — the diff must be empty (byte-identical
-//! error/warning strings across the whole corpus). This is the "ordering
-//! tripwire" §5 of the spec describes: it catches a swapped
-//! `expected`/`found`, a dropped `?`, or an off-by-one arm move — anything
-//! that would change an error string or a warning list anywhere in the
-//! corpus, even where the individual unit-test suite's spot assertions
-//! wouldn't notice.
+//! The point is the STRINGS. A refactor that swaps an `expected`/`found`, drops
+//! a `?`, or moves a match arm by one changes an error or warning message
+//! somewhere in the corpus while every verdict stays the same — which spot
+//! assertions in the unit suite do not notice, and this does.
 //!
-//! `#[ignore]`d: this walks the whole corpus (dozens of files, several of
-//! them large stdlib packages) and is meant to be run explicitly by the
-//! golden script, not on every `cargo test --workspace`.
+//! Compared against `snapshots/typecheck_golden.txt`; re-pin with:
+//!
+//! ```text
+//! UPDATE_SNAPSHOTS=1 cargo test -p rustyfi-lang --test typecheck_golden
+//! ```
+//!
+//! Inputs that CANNOT typecheck live in `typecheck_known_gaps.rs`, asserted
+//! individually with the reason, so this snapshot holds no `ERR` line and means
+//! exactly "everything that should typecheck, does".
+//!
+//! This used to be an `#[ignore]`d harness driven by `scripts/typecheck-golden.sh`,
+//! which ran it against two git refs and diffed the outputs. The committed
+//! snapshot subsumes that for the case that matters — "did anything move?" —
+//! and runs on an ordinary `cargo test`, at the cost of the arbitrary
+//! ref-to-ref comparison the script could also do.
 
 use rustyfi_lang::{elaborate, primitives, typecheck, v1};
 use rustyfi_loader::{LoadOptions, LoadedCst, LoadedFile, LoadedProgram};
@@ -27,6 +32,34 @@ use rustyfi_syntax::RustyfiVersion;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+
+/// Inputs asserted in `typecheck_known_gaps.rs` instead of here. Keep the two
+/// in step: that file fails if any of these leaks back into the snapshot.
+const KNOWN_GAPS: &[&str] = &[
+    "crates/rustyfi-cli/tests/fixtures/envelopes/doc.saty",
+    "crates/rustyfi-cli/tests/fixtures/envelopes/v01-mini.satyh",
+    // Mixed-version too, for the same reason, since `@require:` now prefers
+    // the entry's own generation: as a 0.1 entry this resolves `list` to the
+    // 0.1 corpus, whose `List` has `fold` where the fixture (deliberately
+    // written against 0.0.6's) calls `fold-left`. It compiles through the real
+    // pipeline in `xver_capstone.rs`, against a 0.0.6-only lib root.
+    "crates/rustyfi-cli/tests/fixtures/xver-capstone.saty",
+    // These seven COMPILE AND RENDER through the real pipeline; they are
+    // excluded only because this harness merges every dependency's prelude
+    // itself and elaborates the result under ONE version, so a mixed-version
+    // program trips over a 0.1 dependency's labeled optional arguments while
+    // "compiled as 0.0.6". Teach the harness to merge per-version and they
+    // belong back in the snapshot.
+    "crates/rustyfi-cli/tests/fixtures/math-cramped.saty",
+    "crates/rustyfi-cli/tests/fixtures/multifile/helpers.satyh",
+    "crates/rustyfi-cli/tests/fixtures/v01-footnote-scheme.saty",
+    "crates/rustyfi-cli/tests/fixtures/v01-itemize.saty",
+    "crates/rustyfi-cli/tests/fixtures/v01-math-full.saty",
+    "crates/rustyfi-cli/tests/fixtures/v01-stdja-book.saty",
+    "crates/rustyfi-cli/tests/fixtures/v01-stdja-report.saty",
+    "crates/rustyfi-cli/tests/fixtures/v01-stdja.saty",
+    "crates/rustyfi-cli/tests/fixtures/xver-capstone-helper.satyh",
+];
 
 /// This repo's root, resolved relative to this crate's own manifest
 /// directory (`crates/rustyfi-lang`) — same convention as
@@ -274,6 +307,28 @@ fn one_line(tag: &str, entry: &Path) -> String {
     }
 }
 
+/// Make one rendered line machine-independent.
+///
+/// A few inputs fail in the LOADER, and a loader error's `Display` embeds the
+/// absolute path it was resolving. Left alone those lines carry whoever's
+/// checkout produced them, which is fine for the ref-to-ref diff the script
+/// does (both sides share a root and it cancels) but fatal for a COMMITTED
+/// golden file. Also normalize the temp path a package probe's synthetic entry
+/// lives at, which carries a pid and a counter.
+fn relativize(line: String) -> String {
+    let root = format!("{}/", repo_root().display());
+    let line = line.replace(&root, "");
+    let tmp = format!("{}/", std::env::temp_dir().display());
+    match line.find(&tmp) {
+        None => line,
+        Some(i) => {
+            let rest = &line[i + tmp.len()..];
+            let end = rest.find(|c: char| c.is_whitespace()).unwrap_or(rest.len());
+            format!("{}<tmp>/<probe-entry>{}", &line[..i], &rest[end..])
+        }
+    }
+}
+
 fn render(
     tag: &str,
     version_tag: &str,
@@ -293,9 +348,8 @@ fn render(
 }
 
 #[test]
-#[ignore = "golden differential harness — run explicitly via scripts/typecheck-golden.sh"]
 fn typecheck_golden() {
-    std::thread::Builder::new()
+    let lines: Vec<String> = std::thread::Builder::new()
         .stack_size(64 * 1024 * 1024)
         .spawn(|| {
             let mut lines = Vec::new();
@@ -306,6 +360,18 @@ fn typecheck_golden() {
                     .unwrap_or(&path)
                     .to_string_lossy()
                     .into_owned();
+                // Inputs that cannot typecheck are asserted individually, with
+                // the REASON, in `typecheck_known_gaps.rs` — a bare `ERR` line
+                // here pins a failure without saying whether it is intended,
+                // and renders whatever this harness's own prelude merge
+                // produces rather than what the compiler actually reports.
+                // What is left is exactly "everything that should typecheck,
+                // does", so this snapshot should hold no `ERR` line at all
+                // (`known_gaps_are_excluded_from_the_golden_snapshot` checks
+                // both halves of that split).
+                if KNOWN_GAPS.iter().any(|g| tag == *g) {
+                    continue;
+                }
                 lines.push(one_line(&tag, &path));
             }
 
@@ -316,12 +382,78 @@ fn typecheck_golden() {
                 lines.push(one_line(&tag, &doc.0));
             }
 
+            let mut lines: Vec<String> = lines.into_iter().map(relativize).collect();
             lines.sort();
-            for line in &lines {
-                println!("{line}");
-            }
+            lines
         })
         .expect("spawn big-stack thread")
         .join()
         .expect("golden harness thread panicked");
+
+    let actual = format!("{}\n", lines.join("\n"));
+    let path = repo_root().join("crates/rustyfi-lang/tests/snapshots/typecheck_golden.txt");
+
+    if std::env::var("UPDATE_SNAPSHOTS").as_deref() == Ok("1") {
+        fs::create_dir_all(path.parent().expect("snapshots dir")).expect("create snapshots dir");
+        fs::write(&path, &actual).expect("write the golden snapshot");
+        eprintln!(
+            "UPDATE_SNAPSHOTS=1: wrote {} lines to {}",
+            lines.len(),
+            path.display()
+        );
+        return;
+    }
+
+    let expected = fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!(
+            "{}: {e}\nrun with UPDATE_SNAPSHOTS=1 to create it",
+            path.display()
+        )
+    });
+    if actual == expected {
+        return;
+    }
+
+    // A line-level diff: the whole corpus in one blob is unreadable, and the
+    // point of this harness is to name the one input whose error or warning
+    // STRING moved.
+    let exp: Vec<&str> = expected.lines().collect();
+    let act: Vec<&str> = actual.lines().collect();
+    let mut report = String::new();
+    for tag in tags_of(&exp).union(&tags_of(&act)) {
+        let e = exp.iter().find(|l| tag_of(l) == *tag);
+        let a = act.iter().find(|l| tag_of(l) == *tag);
+        match (e, a) {
+            (Some(e), Some(a)) if e != a => {
+                report.push_str(&format!("  ~ {tag}\n    was: {e}\n    now: {a}\n"));
+            }
+            (Some(e), None) => report.push_str(&format!("  - {tag}\n    was: {e}\n")),
+            (None, Some(a)) => report.push_str(&format!("  + {tag}\n    now: {a}\n")),
+            _ => {}
+        }
+    }
+    panic!(
+        "typecheck output changed for {} input(s).\n\n{report}\nIf this is intended, \
+         re-pin with:\n  UPDATE_SNAPSHOTS=1 cargo test -p rustyfi-lang --test typecheck_golden\n\
+         A file that stops typechecking ENTIRELY belongs in typecheck_known_gaps.rs instead.",
+        report
+            .lines()
+            .filter(|l| l.starts_with("  ~ ") || l.starts_with("  - ") || l.starts_with("  + "))
+            .count(),
+    );
+}
+
+/// The input identity a line is about — everything up to the `(version)` or the
+/// `load:` marker. Diffs are matched on this so a changed message is reported
+/// as a modification rather than as one removal plus one addition.
+fn tag_of(line: &str) -> &str {
+    let rest = line
+        .strip_prefix("OK ")
+        .or_else(|| line.strip_prefix("ERR "))
+        .unwrap_or(line);
+    rest.split_whitespace().next().unwrap_or(rest)
+}
+
+fn tags_of<'a>(lines: &[&'a str]) -> std::collections::BTreeSet<&'a str> {
+    lines.iter().map(|l| tag_of(l)).collect()
 }

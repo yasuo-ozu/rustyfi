@@ -94,12 +94,12 @@ fn deps_with_v006_errors_naming_both_axes() {
         .output()
         .expect("failed to run the rustyfi-rust binary");
 
-    assert!(
-        !output.status.success(),
-        "0.0.6 + --deps must be rejected"
-    );
+    assert!(!output.status.success(), "0.0.6 + --deps must be rejected");
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("--deps"), "message must name --deps:\n{stderr}");
+    assert!(
+        stderr.contains("--deps"),
+        "message must name --deps:\n{stderr}"
+    );
     assert!(
         stderr.contains("0.1"),
         "message must name the required version 0.1:\n{stderr}"

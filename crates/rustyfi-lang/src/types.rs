@@ -168,7 +168,11 @@ pub enum Kind {
 /// The mutable union-find cell behind a type variable.
 #[derive(Debug)]
 pub enum TyVarLink {
-    Free { id: u64, level: u32, kind: Kind },
+    Free {
+        id: u64,
+        level: u32,
+        kind: Kind,
+    },
     /// This variable has been unified with a concrete type; `resolve`
     /// chases through this exactly like v0.0.6's `MonoLink`.
     Bound(MonoType),
@@ -554,8 +558,16 @@ impl PolyType {
     /// directly rather than via `generalize` (there is no enclosing
     /// inference level to generalize *from* at primitive-table
     /// construction time).
-    pub(crate) fn from_vars(vars: Vec<TyVarRef>, row_vars: Vec<RowVarRef>, body: MonoType) -> PolyType {
-        PolyType { vars, row_vars, body }
+    pub(crate) fn from_vars(
+        vars: Vec<TyVarRef>,
+        row_vars: Vec<RowVarRef>,
+        body: MonoType,
+    ) -> PolyType {
+        PolyType {
+            vars,
+            row_vars,
+            body,
+        }
     }
 
     /// The scheme's body, before instantiation — exposed for inspection
@@ -586,7 +598,10 @@ pub struct TypeContext {
 
 impl TypeContext {
     pub fn new() -> Self {
-        TypeContext { next_id: 0, level: 0 }
+        TypeContext {
+            next_id: 0,
+            level: 0,
+        }
     }
 
     fn next_id(&mut self) -> u64 {
@@ -770,7 +785,9 @@ pub(crate) fn substitute(
         MonoType::Record(row) => MonoType::Record(substitute_row(&row, var_map, row_map)),
         MonoType::Variant(name, args) => MonoType::Variant(
             name.clone(),
-            args.iter().map(|t| substitute(t, var_map, row_map)).collect(),
+            args.iter()
+                .map(|t| substitute(t, var_map, row_map))
+                .collect(),
         ),
         MonoType::InlineCmd(cs) => MonoType::InlineCmd(substitute_cmd_args(&cs, var_map, row_map)),
         MonoType::BlockCmd(cs) => MonoType::BlockCmd(substitute_cmd_args(&cs, var_map, row_map)),

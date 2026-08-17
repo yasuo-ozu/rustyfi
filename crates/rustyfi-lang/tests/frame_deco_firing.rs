@@ -8,7 +8,7 @@
 //! breakable` do at a higher level.
 
 use rustyfi_backend::{
-    Color, DecoId, FontKey, FontMetrics, GraphicsElem, Length, Page, PageGeometry, Paddings,
+    Color, DecoId, FontKey, FontMetrics, GraphicsElem, Length, Paddings, Page, PageGeometry,
     PlacedLine, PureHorzBox,
 };
 use rustyfi_lang::ast::Ast;
@@ -71,7 +71,10 @@ fn fill_deco() -> Ast {
         vec![apply_all(
             "line-to",
             vec![
-                Ast::Tuple(vec![Ast::Length(Length::pt(10.0)), Ast::Length(Length::pt(0.0))]),
+                Ast::Tuple(vec![
+                    Ast::Length(Length::pt(10.0)),
+                    Ast::Length(Length::pt(0.0)),
+                ]),
                 apply_all(
                     "start-path",
                     vec![Ast::Tuple(vec![
@@ -84,7 +87,10 @@ fn fill_deco() -> Ast {
     );
     let fill = apply_all(
         "fill",
-        vec![Ast::Ctor("Gray".to_string(), Some(Box::new(Ast::Float(0.0)))), path],
+        vec![
+            Ast::Ctor("Gray".to_string(), Some(Box::new(Ast::Float(0.0)))),
+            path,
+        ],
     );
     lambda4(Ast::List(vec![fill]))
 }
@@ -96,14 +102,26 @@ fn fill_deco() -> Ast {
 fn link_deco(uri: &str) -> Ast {
     let call = apply_all(
         "register-link-to-uri",
-        vec![str_lit(uri), var("pt"), var("w"), var("h"), var("d"), border_none()],
+        vec![
+            str_lit(uri),
+            var("pt"),
+            var("w"),
+            var("h"),
+            var("d"),
+            border_none(),
+        ],
     );
-    lambda4(Ast::Sequential(Box::new(call), Box::new(Ast::List(Vec::new()))))
+    lambda4(Ast::Sequential(
+        Box::new(call),
+        Box::new(Ast::List(Vec::new())),
+    ))
 }
 
 fn eval_to_value(interp: &mut eval::Interp, ast: &Ast) -> Value {
     let env = primitives::base_env();
-    interp.eval(&env, ast).expect("deco AST must evaluate to a closure")
+    interp
+        .eval(&env, ast)
+        .expect("deco AST must evaluate to a closure")
 }
 
 fn geometry() -> PageGeometry {
@@ -147,7 +165,7 @@ fn a_frame_with_a_fill_deco_puts_one_element_in_page_graphics() {
         contents: Vec::new(),
     };
     let page = Page {
-            body_lines: usize::MAX,
+        body_lines: usize::MAX,
         lines: vec![PlacedLine {
             x: Length::pt(50.0),
             baseline_y: Length::pt(100.0),
@@ -159,7 +177,10 @@ fn a_frame_with_a_fill_deco_puts_one_element_in_page_graphics() {
     rustyfi_lang::fire_hooks(&mut interp, &doc).expect("fire_hooks must succeed");
     assert_eq!(interp.page_graphics.len(), 1);
     assert_eq!(interp.page_graphics[0].len(), 1);
-    assert!(matches!(interp.page_graphics[0][0], GraphicsElem::Fill(Color::Gray(_), _)));
+    assert!(matches!(
+        interp.page_graphics[0][0],
+        GraphicsElem::Fill(Color::Gray(_), _)
+    ));
 }
 
 #[test]
@@ -177,7 +198,7 @@ fn a_frame_deco_calling_register_link_to_uri_lands_an_annot_with_the_frames_rect
         contents: Vec::new(),
     };
     let page = Page {
-            body_lines: usize::MAX,
+        body_lines: usize::MAX,
         lines: vec![PlacedLine {
             x: Length::pt(50.0),
             baseline_y: Length::pt(100.0),
@@ -195,7 +216,12 @@ fn a_frame_deco_calling_register_link_to_uri_lands_an_annot_with_the_frames_rect
     let y = Length::pt(200.0);
     assert_eq!(
         a.rect,
-        (x, y - Length::pt(2.0), x + Length::pt(30.0), y + Length::pt(10.0)),
+        (
+            x,
+            y - Length::pt(2.0),
+            x + Length::pt(30.0),
+            y + Length::pt(10.0)
+        ),
         "rect = (x, y - depth, x + width, y + height), from the deco's OWN curried args"
     );
 }
@@ -224,7 +250,7 @@ fn a_nested_frame_fires_with_its_parents_x_plus_its_own_dx() {
         contents: vec![(Length::pt(5.0), inner_frame)],
     };
     let page = Page {
-            body_lines: usize::MAX,
+        body_lines: usize::MAX,
         lines: vec![PlacedLine {
             x: Length::pt(100.0),
             baseline_y: Length::pt(50.0),
@@ -234,8 +260,16 @@ fn a_nested_frame_fires_with_its_parents_x_plus_its_own_dx() {
     let doc = doc_with_pages(vec![page]);
 
     rustyfi_lang::fire_hooks(&mut interp, &doc).expect("fire_hooks must succeed");
-    assert_eq!(interp.annotations.len(), 2, "outer fires before recursing into inner");
-    assert_eq!(interp.annotations[0].rect.0, Length::pt(100.0), "outer: x = line.x + 0");
+    assert_eq!(
+        interp.annotations.len(),
+        2,
+        "outer fires before recursing into inner"
+    );
+    assert_eq!(
+        interp.annotations[0].rect.0,
+        Length::pt(100.0),
+        "outer: x = line.x + 0"
+    );
     assert_eq!(
         interp.annotations[1].rect.0,
         Length::pt(105.0),
@@ -249,7 +283,9 @@ fn a_nested_frame_fires_with_its_parents_x_plus_its_own_dx() {
 
 fn block_page(lines: Vec<PlacedLine>) -> Page {
     Page {
-            body_lines: usize::MAX, lines }
+        body_lines: usize::MAX,
+        lines,
+    }
 }
 
 #[test]
@@ -258,7 +294,12 @@ fn a_start_line_end_fragment_fires_decos_once_with_the_padded_extent_and_zero_de
     let mut interp = eval::Interp::new(&mono);
     let deco_v = eval_to_value(&mut interp, &link_deco("frame"));
     interp.decos.push(DecoEntry::Block {
-        pads: Paddings { l: Length::ZERO, r: Length::ZERO, t: Length::pt(3.0), b: Length::pt(4.0) },
+        pads: Paddings {
+            l: Length::ZERO,
+            r: Length::ZERO,
+            t: Length::pt(3.0),
+            b: Length::pt(4.0),
+        },
         width: Length::pt(200.0),
         decoset: [deco_v, Value::Unit, Value::Unit, Value::Unit],
     });
@@ -281,19 +322,35 @@ fn a_start_line_end_fragment_fires_decos_once_with_the_padded_extent_and_zero_de
         PlacedLine {
             x: Length::pt(30.0),
             baseline_y: Length::pt(100.0),
-            contents: vec![(Length::ZERO, PureHorzBox::FrameMarker { id: DecoId(0), end: false })],
+            contents: vec![(
+                Length::ZERO,
+                PureHorzBox::FrameMarker {
+                    id: DecoId(0),
+                    end: false,
+                },
+            )],
         },
         real_line,
         PlacedLine {
             x: Length::pt(30.0),
             baseline_y: Length::pt(130.0),
-            contents: vec![(Length::ZERO, PureHorzBox::FrameMarker { id: DecoId(0), end: true })],
+            contents: vec![(
+                Length::ZERO,
+                PureHorzBox::FrameMarker {
+                    id: DecoId(0),
+                    end: true,
+                },
+            )],
         },
     ]);
     let doc = doc_with_pages(vec![page]);
 
     rustyfi_lang::fire_hooks(&mut interp, &doc).expect("fire_hooks must succeed");
-    assert_eq!(interp.annotations.len(), 1, "the fragment must fire decoS exactly once");
+    assert_eq!(
+        interp.annotations.len(),
+        1,
+        "the fragment must fire decoS exactly once"
+    );
     let a = &interp.annotations[0];
     assert_eq!(a.page, 0);
 
@@ -306,7 +363,12 @@ fn a_start_line_end_fragment_fires_decos_once_with_the_padded_extent_and_zero_de
     let y = paper_h - frame_bottom; // the bottom-left point's y
     assert_eq!(
         a.rect,
-        (x, y - Length::ZERO, x + Length::pt(200.0), y + Length::pt(17.0)),
+        (
+            x,
+            y - Length::ZERO,
+            x + Length::pt(200.0),
+            y + Length::pt(17.0)
+        ),
         "w = DecoEntry::Block::width (200), h = padded extent (17), d = 0"
     );
 }
@@ -317,7 +379,12 @@ fn a_start_with_no_matching_end_on_the_page_fires_nothing() {
     let mut interp = eval::Interp::new(&mono);
     let deco_v = eval_to_value(&mut interp, &link_deco("frame"));
     interp.decos.push(DecoEntry::Block {
-        pads: Paddings { l: Length::ZERO, r: Length::ZERO, t: Length::ZERO, b: Length::ZERO },
+        pads: Paddings {
+            l: Length::ZERO,
+            r: Length::ZERO,
+            t: Length::ZERO,
+            b: Length::ZERO,
+        },
         width: Length::pt(200.0),
         decoset: [deco_v, Value::Unit, Value::Unit, Value::Unit],
     });
@@ -325,7 +392,13 @@ fn a_start_with_no_matching_end_on_the_page_fires_nothing() {
     let page = block_page(vec![PlacedLine {
         x: Length::pt(30.0),
         baseline_y: Length::pt(100.0),
-        contents: vec![(Length::ZERO, PureHorzBox::FrameMarker { id: DecoId(0), end: false })],
+        contents: vec![(
+            Length::ZERO,
+            PureHorzBox::FrameMarker {
+                id: DecoId(0),
+                end: false,
+            },
+        )],
     }]);
     let doc = doc_with_pages(vec![page]);
 

@@ -55,13 +55,17 @@ fn loaded(lib_src: &str, doc_src: &str) -> Vec<LoadedFile> {
     vec![
         LoadedFile {
             path: std::path::PathBuf::from("lib.satyh"),
-            cst: LoadedCst::V0_1(parse_file_v1(lib_src).unwrap_or_else(|e| panic!("lib parse failed: {e}"))),
+            cst: LoadedCst::V0_1(
+                parse_file_v1(lib_src).unwrap_or_else(|e| panic!("lib parse failed: {e}")),
+            ),
             origin: Default::default(),
             version: RustyfiVersion::V0_1,
         },
         LoadedFile {
             path: std::path::PathBuf::from("doc.saty"),
-            cst: LoadedCst::V0_1(parse_file_v1(doc_src).unwrap_or_else(|e| panic!("doc parse failed: {e}"))),
+            cst: LoadedCst::V0_1(
+                parse_file_v1(doc_src).unwrap_or_else(|e| panic!("doc parse failed: {e}")),
+            ),
             origin: Default::default(),
             version: RustyfiVersion::V0_1,
         },
@@ -119,10 +123,14 @@ fn eval_v01(lib_src: &str, doc_src: &str) -> Result<Value, String> {
     let env = primitives::base_env_with_version(RustyfiVersion::V0_1);
     let store = rustyfi_lang::symbol::SymbolStore::new();
     let scope = elaborate::Scope::new(&store, env.names());
-    let elaborated = elaborate::elaborate_program(&file, &scope).map_err(|e| format!("elaborate: {e}"))?;
-    typecheck::typecheck_with_version(&elaborated, RustyfiVersion::V0_1).map_err(|e| format!("typecheck: {e}"))?;
+    let elaborated =
+        elaborate::elaborate_program(&file, &scope).map_err(|e| format!("elaborate: {e}"))?;
+    typecheck::typecheck_with_version(&elaborated, RustyfiVersion::V0_1)
+        .map_err(|e| format!("typecheck: {e}"))?;
     let mut interp = eval::Interp::new(&Mono);
-    interp.eval(&env, &rustyfi_lang::ast::debrand(&elaborated.body, &store)).map_err(|e| format!("eval: {e}"))
+    interp
+        .eval(&env, &rustyfi_lang::ast::debrand(&elaborated.body, &store))
+        .map_err(|e| format!("eval: {e}"))
 }
 
 fn as_int(v: Value) -> i64 {

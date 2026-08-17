@@ -161,9 +161,10 @@ impl CrossRefs {
         // an unverified dependency (see `seed_unvalidated`). Compute it before
         // the per-trial bookkeeping is cleared; only the FINAL trial's answer
         // matters, and each trial overwrites it.
-        self.seed_unvalidated = self.read_this_trial.keys().any(|k| {
-            self.seeded.contains(k) && !self.registered_this_trial.contains(k)
-        });
+        self.seed_unvalidated = self
+            .read_this_trial
+            .keys()
+            .any(|k| self.seeded.contains(k) && !self.registered_this_trial.contains(k));
         self.read_this_trial.clear();
         self.registered_this_trial.clear();
         if self.stale {
@@ -289,7 +290,10 @@ mod tests {
 
         assert_eq!(cr.get("p"), Some("1".to_string()));
         assert_eq!(cr.verdict(), Verdict::CanTerminate(Vec::new()));
-        assert!(cr.seed_unvalidated(), "read a seeded value nothing re-derived");
+        assert!(
+            cr.seed_unvalidated(),
+            "read a seeded value nothing re-derived"
+        );
     }
 
     #[test]

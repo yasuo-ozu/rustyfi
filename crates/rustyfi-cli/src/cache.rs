@@ -82,7 +82,10 @@ impl Cache {
     /// returned error, keeping caching invisible to the compile's result.
     pub fn put(&self, key: &str, pdf: &[u8], pages: usize, lines: usize) -> std::io::Result<()> {
         write_atomic(&self.pdf_path(key), pdf)?;
-        write_atomic(&self.meta_path(key), format!("{pages}\n{lines}\n").as_bytes())?;
+        write_atomic(
+            &self.meta_path(key),
+            format!("{pages}\n{lines}\n").as_bytes(),
+        )?;
         Ok(())
     }
 }
@@ -294,8 +297,26 @@ mod tests {
         let dir = scratch();
         let a = dir.join("a.saty");
         std::fs::write(&a, b"@require: foo\ndocument (||) '<>\n").unwrap();
-        let k1 = hash_inputs([a.as_path()].into_iter(), "0.1.0", RustyfiVersion::DEFAULT, &a, None, OutputFormat::Pdf, None).unwrap();
-        let k2 = hash_inputs([a.as_path()].into_iter(), "0.1.0", RustyfiVersion::DEFAULT, &a, None, OutputFormat::Pdf, None).unwrap();
+        let k1 = hash_inputs(
+            [a.as_path()].into_iter(),
+            "0.1.0",
+            RustyfiVersion::DEFAULT,
+            &a,
+            None,
+            OutputFormat::Pdf,
+            None,
+        )
+        .unwrap();
+        let k2 = hash_inputs(
+            [a.as_path()].into_iter(),
+            "0.1.0",
+            RustyfiVersion::DEFAULT,
+            &a,
+            None,
+            OutputFormat::Pdf,
+            None,
+        )
+        .unwrap();
         assert_eq!(k1, k2, "same inputs must hash identically");
         assert_eq!(k1.len(), 64, "sha-256 hex is 64 chars");
         std::fs::remove_dir_all(&dir).ok();
@@ -306,9 +327,27 @@ mod tests {
         let dir = scratch();
         let a = dir.join("a.saty");
         std::fs::write(&a, b"document (||) '<>\n").unwrap();
-        let before = hash_inputs([a.as_path()].into_iter(), "0.1.0", RustyfiVersion::DEFAULT, &a, None, OutputFormat::Pdf, None).unwrap();
+        let before = hash_inputs(
+            [a.as_path()].into_iter(),
+            "0.1.0",
+            RustyfiVersion::DEFAULT,
+            &a,
+            None,
+            OutputFormat::Pdf,
+            None,
+        )
+        .unwrap();
         std::fs::write(&a, b"document (||) '< >\n").unwrap();
-        let after = hash_inputs([a.as_path()].into_iter(), "0.1.0", RustyfiVersion::DEFAULT, &a, None, OutputFormat::Pdf, None).unwrap();
+        let after = hash_inputs(
+            [a.as_path()].into_iter(),
+            "0.1.0",
+            RustyfiVersion::DEFAULT,
+            &a,
+            None,
+            OutputFormat::Pdf,
+            None,
+        )
+        .unwrap();
         assert_ne!(before, after, "a one-byte edit must change the key");
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -318,8 +357,26 @@ mod tests {
         let dir = scratch();
         let a = dir.join("a.saty");
         std::fs::write(&a, b"document (||) '<>\n").unwrap();
-        let v1 = hash_inputs([a.as_path()].into_iter(), "0.1.0", RustyfiVersion::DEFAULT, &a, None, OutputFormat::Pdf, None).unwrap();
-        let v2 = hash_inputs([a.as_path()].into_iter(), "0.2.0", RustyfiVersion::DEFAULT, &a, None, OutputFormat::Pdf, None).unwrap();
+        let v1 = hash_inputs(
+            [a.as_path()].into_iter(),
+            "0.1.0",
+            RustyfiVersion::DEFAULT,
+            &a,
+            None,
+            OutputFormat::Pdf,
+            None,
+        )
+        .unwrap();
+        let v2 = hash_inputs(
+            [a.as_path()].into_iter(),
+            "0.2.0",
+            RustyfiVersion::DEFAULT,
+            &a,
+            None,
+            OutputFormat::Pdf,
+            None,
+        )
+        .unwrap();
         assert_ne!(v1, v2, "a compiler-version bump must invalidate the key");
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -331,7 +388,16 @@ mod tests {
         let b = dir.join("b.satyh");
         std::fs::write(&a, b"document (||) '<>\n").unwrap();
         std::fs::write(&b, b"let x = 1\n").unwrap();
-        let one = hash_inputs([a.as_path()].into_iter(), "0.1.0", RustyfiVersion::DEFAULT, &a, None, OutputFormat::Pdf, None).unwrap();
+        let one = hash_inputs(
+            [a.as_path()].into_iter(),
+            "0.1.0",
+            RustyfiVersion::DEFAULT,
+            &a,
+            None,
+            OutputFormat::Pdf,
+            None,
+        )
+        .unwrap();
         let two = hash_inputs(
             [b.as_path(), a.as_path()].into_iter(),
             "0.1.0",
@@ -365,9 +431,16 @@ mod tests {
 
         let store = rustyfi_pdf::TtfFontStore::load(&font_path, None, None).expect("load font");
 
-        let without_font =
-            hash_inputs([a.as_path()].into_iter(), "0.1.0", RustyfiVersion::DEFAULT, &a, None, OutputFormat::Pdf, None)
-                .unwrap();
+        let without_font = hash_inputs(
+            [a.as_path()].into_iter(),
+            "0.1.0",
+            RustyfiVersion::DEFAULT,
+            &a,
+            None,
+            OutputFormat::Pdf,
+            None,
+        )
+        .unwrap();
         let with_font = hash_inputs(
             [a.as_path()].into_iter(),
             "0.1.0",
@@ -396,9 +469,30 @@ mod tests {
         let dir = scratch();
         let a = dir.join("a.saty");
         std::fs::write(&a, b"document (||) '<>\n").unwrap();
-        let pdf = hash_inputs([a.as_path()].into_iter(), "0.1.0", RustyfiVersion::DEFAULT, &a, None, OutputFormat::Pdf, None).unwrap();
-        let html = hash_inputs([a.as_path()].into_iter(), "0.1.0", RustyfiVersion::DEFAULT, &a, None, OutputFormat::Html, None).unwrap();
-        assert_ne!(pdf, html, "--format pdf and --format html must hash to different keys");
+        let pdf = hash_inputs(
+            [a.as_path()].into_iter(),
+            "0.1.0",
+            RustyfiVersion::DEFAULT,
+            &a,
+            None,
+            OutputFormat::Pdf,
+            None,
+        )
+        .unwrap();
+        let html = hash_inputs(
+            [a.as_path()].into_iter(),
+            "0.1.0",
+            RustyfiVersion::DEFAULT,
+            &a,
+            None,
+            OutputFormat::Html,
+            None,
+        )
+        .unwrap();
+        assert_ne!(
+            pdf, html,
+            "--format pdf and --format html must hash to different keys"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -411,9 +505,16 @@ mod tests {
         let dir = scratch();
         let a = dir.join("a.saty");
         std::fs::write(&a, b"document (||) '<>\n").unwrap();
-        let no_lock =
-            hash_inputs([a.as_path()].into_iter(), "0.1.0", RustyfiVersion::DEFAULT, &a, None, OutputFormat::Pdf, None)
-                .unwrap();
+        let no_lock = hash_inputs(
+            [a.as_path()].into_iter(),
+            "0.1.0",
+            RustyfiVersion::DEFAULT,
+            &a,
+            None,
+            OutputFormat::Pdf,
+            None,
+        )
+        .unwrap();
         let lock_a = hash_inputs(
             [a.as_path()].into_iter(),
             "0.1.0",
@@ -434,8 +535,14 @@ mod tests {
             Some("digest-bbbb"),
         )
         .unwrap();
-        assert_ne!(no_lock, lock_a, "an absent lock vs. a present one must differ");
-        assert_ne!(lock_a, lock_b, "two different lock digests must hash to different keys");
+        assert_ne!(
+            no_lock, lock_a,
+            "an absent lock vs. a present one must differ"
+        );
+        assert_ne!(
+            lock_a, lock_b,
+            "two different lock digests must hash to different keys"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 

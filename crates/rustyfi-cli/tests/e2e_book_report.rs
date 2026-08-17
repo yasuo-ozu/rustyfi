@@ -99,8 +99,8 @@ fn v01_stdjabook_capstone_renders_to_extractable_text() {
              must load",
         );
 
-        let store = rustyfi_pdf::TtfFontStore::load(&font, None, None)
-            .expect("load DejaVu regular face");
+        let store =
+            rustyfi_pdf::TtfFontStore::load(&font, None, None).expect("load DejaVu regular face");
         let doc = rustyfi_lang::compile_document_v1(&program.files, &store).expect(
             "the std-ja-book capstone must compile end-to-end: sealed module + records-in-\
              type-position + optional-arg-rows increments 1/2/3a + FootnoteScheme.main, \
@@ -120,8 +120,10 @@ fn v01_stdjabook_capstone_renders_to_extractable_text() {
             "expected an embedded TrueType font (FontFile2) in the capstone PDF"
         );
 
-        let tmp = std::env::temp_dir()
-            .join(format!("rustyfi-rust-e2e-v01-stdja-book-{}.pdf", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!(
+            "rustyfi-rust-e2e-v01-stdja-book-{}.pdf",
+            std::process::id()
+        ));
         std::fs::write(&tmp, &bytes).unwrap();
         let pdftotext = Command::new("pdftotext").arg(&tmp).arg("-").output();
         match pdftotext {
@@ -131,11 +133,20 @@ fn v01_stdjabook_capstone_renders_to_extractable_text() {
                 // std-ja-book's own `+make-title` (real path/bezier
                 // graphics deco).
                 assert!(text.contains("SATySFi in Rust"), "missing title:\n{text}");
-                assert!(text.contains("The Vendoring Agents"), "missing author:\n{text}");
+                assert!(
+                    text.contains("The Vendoring Agents"),
+                    "missing author:\n{text}"
+                );
                 // `+section`'s auto-numbering, unbundled (increment 3a's
                 // None-defaulting path, live).
-                assert!(text.contains("1. Introduction"), "missing section 1 title:\n{text}");
-                assert!(text.contains("2. Conclusion"), "missing section 2 title:\n{text}");
+                assert!(
+                    text.contains("1. Introduction"),
+                    "missing section 1 title:\n{text}"
+                );
+                assert!(
+                    text.contains("2. Conclusion"),
+                    "missing section 2 title:\n{text}"
+                );
                 // Body text through `+StdJaBook.p`/`read-inline`.
                 for word in ["quick", "brown", "fox"] {
                     assert!(
@@ -205,8 +216,8 @@ fn v01_stdjareport_capstone_renders_to_extractable_text() {
              v01-stdja-report.saty must load",
         );
 
-        let store = rustyfi_pdf::TtfFontStore::load(&font, None, None)
-            .expect("load DejaVu regular face");
+        let store =
+            rustyfi_pdf::TtfFontStore::load(&font, None, None).expect("load DejaVu regular face");
         let doc = rustyfi_lang::compile_document_v1(&program.files, &store).expect(
             "the std-ja-report capstone must compile end-to-end: sealed module + \
              page-break-multicolumn + hook-page-break-block + Ref.increment + \
@@ -226,8 +237,10 @@ fn v01_stdjareport_capstone_renders_to_extractable_text() {
             "expected an embedded TrueType font (FontFile2) in the capstone PDF"
         );
 
-        let tmp = std::env::temp_dir()
-            .join(format!("rustyfi-rust-e2e-v01-stdja-report-{}.pdf", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!(
+            "rustyfi-rust-e2e-v01-stdja-report-{}.pdf",
+            std::process::id()
+        ));
         std::fs::write(&tmp, &bytes).unwrap();
         let pdftotext = Command::new("pdftotext").arg(&tmp).arg("-").output();
         match pdftotext {
@@ -235,14 +248,26 @@ fn v01_stdjareport_capstone_renders_to_extractable_text() {
                 let text = String::from_utf8_lossy(&out.stdout);
                 // The document record's title/author.
                 assert!(text.contains("SATySFi in Rust"), "missing title:\n{text}");
-                assert!(text.contains("The Vendoring Agents"), "missing author:\n{text}");
+                assert!(
+                    text.contains("The Vendoring Agents"),
+                    "missing author:\n{text}"
+                );
                 // `+chapter`'s auto-numbering (`chapter-scheme`'s
                 // `Ref.increment num-chapter`).
-                assert!(text.contains("1. Introduction"), "missing chapter 1 title:\n{text}");
-                assert!(text.contains("2. Conclusion"), "missing chapter 2 title:\n{text}");
+                assert!(
+                    text.contains("1. Introduction"),
+                    "missing chapter 1 title:\n{text}"
+                );
+                assert!(
+                    text.contains("2. Conclusion"),
+                    "missing chapter 2 title:\n{text}"
+                );
                 // `+section`'s auto-numbering nested inside chapter 1
                 // (`Ref.increment num-section`).
-                assert!(text.contains("1.1. Background"), "missing section 1.1 title:\n{text}");
+                assert!(
+                    text.contains("1.1. Background"),
+                    "missing section 1.1 title:\n{text}"
+                );
                 // Body text through `+StdJaReport.p`/`read-inline`.
                 for word in ["quick", "brown", "fox"] {
                     assert!(
@@ -253,7 +278,10 @@ fn v01_stdjareport_capstone_renders_to_extractable_text() {
                 }
                 // The theorem environments' auto-generated category labels
                 // (`theorem-scheme`'s `{#category; #it-num;}`).
-                assert!(text.contains("Definition"), "missing Definition label:\n{text}");
+                assert!(
+                    text.contains("Definition"),
+                    "missing Definition label:\n{text}"
+                );
                 assert!(text.contains("Theorem"), "missing Theorem label:\n{text}");
                 assert!(text.contains("Proof"), "missing Proof label:\n{text}");
                 // `\StdJaReport.footnote{…}` places FootnoteScheme's numbered

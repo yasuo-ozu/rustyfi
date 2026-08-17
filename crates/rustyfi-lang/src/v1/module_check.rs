@@ -156,14 +156,14 @@
 
 use crate::ast::branded::Ast;
 use crate::elaborate::{Program, UserSynonymDecl, UserTypeDecl};
-use crate::types::{self, MonoType, PolyType};
 use crate::typecheck::{self, BindingView, Checker, MatchWarning, TypeError};
+use crate::types::{self, MonoType, PolyType};
 use crate::unify::unify;
 use crate::v1::functor;
 use crate::v1::lower::{self, TypeNameEnv};
 use crate::v1::sig_subtype::{self, SigSubtypeError, SubsumeError};
 use crate::v1::static_env::{
-    DeclaredType, DeclaredVal, HiddenCtor, SealedFunctorSig, StaticEnv, StampMint, TypeOpacity,
+    DeclaredType, DeclaredVal, HiddenCtor, SealedFunctorSig, StampMint, StaticEnv, TypeOpacity,
 };
 use crate::v1::surface::{self, ModSurface, SurfaceEnv};
 use rustyfi_syntax::cst;
@@ -231,7 +231,12 @@ fn check_program_inner<'s, 'a>(
     let inst_store = build_instantiations(deps, &surfaces, &static_env)?;
 
     let (pending, links) = phase_a_prescan(
-        deps, &surfaces, &inst_store, &mut mint, &mut static_env, &mut immediate_hides,
+        deps,
+        &surfaces,
+        &inst_store,
+        &mut mint,
+        &mut static_env,
+        &mut immediate_hides,
     )?;
 
     // ---- phase B: session setup with the external-reference rewrite ----
@@ -324,8 +329,7 @@ fn check_program_inner<'s, 'a>(
                 if let Some((owner, revoked)) =
                     static_env.member_revoke_triggers.get(name_text).cloned()
                 {
-                    let revoked_syms: Vec<_> =
-                        revoked.iter().map(|r| store.intern(r)).collect();
+                    let revoked_syms: Vec<_> = revoked.iter().map(|r| store.intern(r)).collect();
                     env = env.without_all(&revoked_syms);
                     for r in &revoked {
                         static_env.hidden.insert(r.clone(), owner.clone());
@@ -390,7 +394,10 @@ fn catch_hidden<T>(r: Result<T, TypeError>, static_env: &StaticEnv) -> Result<T,
 /// Every other error passes through unchanged.
 fn rewrite_hidden_error(err: TypeError, static_env: &StaticEnv) -> TypeError {
     for (prefix, suffix) in [
-        ("internal error: unbound variable '", "' reached the typechecker"),
+        (
+            "internal error: unbound variable '",
+            "' reached the typechecker",
+        ),
         (
             "internal error: unbound inline command '",
             "' reached the typechecker",
@@ -400,7 +407,11 @@ fn rewrite_hidden_error(err: TypeError, static_env: &StaticEnv) -> TypeError {
             "' reached the typechecker",
         ),
     ] {
-        if let Some(name) = err.message.strip_prefix(prefix).and_then(|rest| rest.strip_suffix(suffix)) {
+        if let Some(name) = err
+            .message
+            .strip_prefix(prefix)
+            .and_then(|rest| rest.strip_suffix(suffix))
+        {
             if let Some(owner) = static_env.hidden.get(name) {
                 return TypeError {
                     span: err.span,
@@ -468,13 +479,20 @@ fn seal_mismatch_error(
 }
 
 fn simple_error(span: Option<Span>, message: String) -> TypeError {
-    TypeError { span, message, source: None }
+    TypeError {
+        span,
+        message,
+        source: None,
+    }
 }
 
 /// The bare local name off a qualified nominal (`"M.t"` → `"t"`) — used only
 /// for diagnostic text.
 fn local_name(qualified: &str) -> &str {
-    qualified.rsplit_once('.').map(|(_, t)| t).unwrap_or(qualified)
+    qualified
+        .rsplit_once('.')
+        .map(|(_, t)| t)
+        .unwrap_or(qualified)
 }
 
 /// 2d-2 spec §2.6: remove every maximal `#[0-9]+` run from a diagnostic
@@ -624,7 +642,15 @@ fn impl_view_type_table(
         ImplView::Surface(surf) => surf
             .types
             .iter()
-            .map(|(n, arity)| (n.clone(), ImplTypeInfo { arity: *arity, body: ImplTypeBody::Synonym }))
+            .map(|(n, arity)| {
+                (
+                    n.clone(),
+                    ImplTypeInfo {
+                        arity: *arity,
+                        body: ImplTypeBody::Synonym,
+                    },
+                )
+            })
             .collect(),
     }
 }
@@ -664,7 +690,10 @@ fn impl_view_mod_and_sig_names(view: &ImplView) -> (Vec<String>, Vec<String>) {
             }
             (mods, sigs)
         }
-        ImplView::Surface(surf) => (surf.mods.iter().map(|(n, _)| n.clone()).collect(), surf.sigs.clone()),
+        ImplView::Surface(surf) => (
+            surf.mods.iter().map(|(n, _)| n.clone()).collect(),
+            surf.sigs.clone(),
+        ),
     }
 }
 
@@ -699,7 +728,13 @@ fn locate_child_module<'a>(
     match view {
         ImplView::Struct(binds) => {
             for b in binds.iter().copied() {
-                if let cst_v1::Bind::Module { name, sig_annot, body, .. } = b {
+                if let cst_v1::Bind::Module {
+                    name,
+                    sig_annot,
+                    body,
+                    ..
+                } = b
+                {
                     if name.name != child_name {
                         continue;
                     }
@@ -713,7 +748,9 @@ fn locate_child_module<'a>(
                                 ChildModuleShape::UnsealedStruct(inner_binds)
                             }
                         }
-                        ast_v1::ModExpr::Var(_) | ast_v1::ModExpr::Coerce { .. } | ast_v1::ModExpr::App { .. } => {
+                        ast_v1::ModExpr::Var(_)
+                        | ast_v1::ModExpr::Coerce { .. }
+                        | ast_v1::ModExpr::App { .. } => {
                             match surfaces.modules.get(&child_path.join(".")) {
                                 Some(surf) => ChildModuleShape::ViaSurface(surf),
                                 None => ChildModuleShape::Unavailable,
@@ -743,7 +780,13 @@ fn phase_a_prescan<'a>(
     let mut pending = Vec::new();
     let mut links = Vec::new();
     for file in deps.iter().copied() {
-        let cst_v1::FileV1::Library { name, sig_annot, binds, .. } = file else {
+        let cst_v1::FileV1::Library {
+            name,
+            sig_annot,
+            binds,
+            ..
+        } = file
+        else {
             // A dependency is always a Library (the loader's
             // `DocumentAsDependency` check already rejects anything else
             // before this is ever reached, mirroring `v1/lower.rs::
@@ -771,7 +814,15 @@ fn phase_a_prescan<'a>(
             )?;
         }
         walk_nested_seals_a(
-            &bind_refs, &mod_path, &tyenv, surfaces, mint, env, immediate_hides, &mut pending, &mut links,
+            &bind_refs,
+            &mod_path,
+            &tyenv,
+            surfaces,
+            mint,
+            env,
+            immediate_hides,
+            &mut pending,
+            &mut links,
         )?;
     }
     // Sub-slice 2f-2b (spec §5.2-4): phase A0's per-application abstract
@@ -833,17 +884,25 @@ fn walk_nested_seals_a<'a>(
     links: &mut Vec<PendingLink<'a>>,
 ) -> Result<(), TypeError> {
     for b in binds.iter().copied() {
-        let cst_v1::Bind::Module { name, sig_annot, body, .. } = b else {
+        let cst_v1::Bind::Module {
+            name,
+            sig_annot,
+            body,
+            ..
+        } = b
+        else {
             continue;
         };
         let mut child_path = mod_path.to_vec();
         child_path.push(name.name.clone());
         match &*body.0 {
             ast_v1::ModExpr::Struct { binds: inner, .. } => {
-                let inner_binds: Vec<&cst_v1::Bind> = inner.iter().map(|sb| sb.0.as_ref()).collect();
+                let inner_binds: Vec<&cst_v1::Bind> =
+                    inner.iter().map(|sb| sb.0.as_ref()).collect();
                 let child_tyenv = tyenv.child(&child_path, inner_binds.iter().copied(), surfaces);
                 if let Some(sa) = sig_annot {
-                    let resolved = resolve_sig(&sa.sig_.0, &child_path.join("."), surfaces, &child_path)?;
+                    let resolved =
+                        resolve_sig(&sa.sig_.0, &child_path.join("."), surfaces, &child_path)?;
                     prescan_seal_types(
                         resolved.decls,
                         &resolved.refines,
@@ -860,17 +919,35 @@ fn walk_nested_seals_a<'a>(
                     )?;
                 }
                 walk_nested_seals_a(
-                    &inner_binds, &child_path, &child_tyenv, surfaces, mint, env, immediate_hides, pending, links,
+                    &inner_binds,
+                    &child_path,
+                    &child_tyenv,
+                    surfaces,
+                    mint,
+                    env,
+                    immediate_hides,
+                    pending,
+                    links,
                 )?;
             }
             ast_v1::ModExpr::Var(_) => {
                 if let Some(sa) = sig_annot {
                     narrow_alias_body(
-                        &sa.sig_.0, &child_path, tyenv, surfaces, mint, env, immediate_hides, pending, links,
+                        &sa.sig_.0,
+                        &child_path,
+                        tyenv,
+                        surfaces,
+                        mint,
+                        env,
+                        immediate_hides,
+                        pending,
+                        links,
                     )?;
                 }
             }
-            ast_v1::ModExpr::Coerce { sig_: inner_sig, .. } => {
+            ast_v1::ModExpr::Coerce {
+                sig_: inner_sig, ..
+            } => {
                 // The seal-chain rule: the `Coerce`'s OWN `sig_` is always
                 // the innermost layer (the real `PendingSeal`); an OUTER
                 // `sig_annot`, if present, is an additional link on top —
@@ -879,13 +956,25 @@ fn walk_nested_seals_a<'a>(
                 // link referencing a seal that was never registered would
                 // itself misreport as a width error.
                 let inner_applied = narrow_alias_body(
-                    inner_sig, &child_path, tyenv, surfaces, mint, env, immediate_hides, pending, links,
+                    inner_sig,
+                    &child_path,
+                    tyenv,
+                    surfaces,
+                    mint,
+                    env,
+                    immediate_hides,
+                    pending,
+                    links,
                 )?;
                 if inner_applied {
                     if let Some(sa) = sig_annot {
                         if sig_is_literal_inline(&sa.sig_.0) {
-                            let outer_resolved =
-                                resolve_sig(&sa.sig_.0, &child_path.join("."), surfaces, &child_path)?;
+                            let outer_resolved = resolve_sig(
+                                &sa.sig_.0,
+                                &child_path.join("."),
+                                surfaces,
+                                &child_path,
+                            )?;
                             reject_link_refines(&outer_resolved.refines, &child_path.join("."))?;
                             links.push(PendingLink {
                                 child_path: child_path.clone(),
@@ -1047,7 +1136,8 @@ struct InstantiatedApp {
     cod_decls: Vec<cst_v1::StructDeclV1>,
     body_binds: Vec<cst_v1::Bind>,
     tyenv: TypeNameEnv,
-    #[allow(dead_code)] // diagnostics-reserved; every current error site names the member/functor directly.
+    #[allow(dead_code)]
+    // diagnostics-reserved; every current error site names the member/functor directly.
     span: Span,
 }
 
@@ -1104,11 +1194,17 @@ fn prescan_seal_types<'a>(
 
     for d in decls.iter().copied() {
         match &*d.0 {
-            ast_v1::Decl::Val { .. } | ast_v1::Decl::ValHorzCmd { .. } | ast_v1::Decl::ValVertCmd { .. } => {}
+            ast_v1::Decl::Val { .. }
+            | ast_v1::Decl::ValHorzCmd { .. }
+            | ast_v1::Decl::ValVertCmd { .. } => {}
             ast_v1::Decl::TypeOpaque { kw, name, kind, .. } => {
                 declared_types.push(name.name.clone());
                 let Some(info) = impl_table.get(&name.name) else {
-                    return Err(width_type_missing_error(&module_name, &name.name, name.span));
+                    return Err(width_type_missing_error(
+                        &module_name,
+                        &name.name,
+                        name.span,
+                    ));
                 };
                 check_kind_all_o(kind)?;
                 let declared_arity = kind.rest.len();
@@ -1128,7 +1224,11 @@ fn prescan_seal_types<'a>(
                 // match semantics) skips the stamp mint entirely — push
                 // exactly what a literal transparent decl at this position
                 // would have queued instead.
-                if let Some((idx, refine)) = refines.iter().enumerate().find(|(_, r)| r.name == name.name) {
+                if let Some((idx, refine)) = refines
+                    .iter()
+                    .enumerate()
+                    .find(|(_, r)| r.name == name.name)
+                {
                     consumed_refine_idx.push(idx);
                     let refine_arity = refine.tyvars.len();
                     if refine_arity != declared_arity {
@@ -1142,7 +1242,11 @@ fn prescan_seal_types<'a>(
                     }
                     let ty = match refine.body {
                         cst_v1::TypeBodyV1::Variant { .. } => {
-                            return Err(refine_variant_body_error(&module_name, &name.name, refine.span));
+                            return Err(refine_variant_body_error(
+                                &module_name,
+                                &name.name,
+                                refine.span,
+                            ));
                         }
                         cst_v1::TypeBodyV1::Synonym(ty) => ty,
                     };
@@ -1184,7 +1288,9 @@ fn prescan_seal_types<'a>(
                     }
                 }
             }
-            ast_v1::Decl::Type { binds: type_binds, .. } => {
+            ast_v1::Decl::Type {
+                binds: type_binds, ..
+            } => {
                 for single in flatten_type_binds(type_binds) {
                     declared_types.push(single.name.name.clone());
                     let Some(info) = impl_table.get(&single.name.name) else {
@@ -1229,10 +1335,19 @@ fn prescan_seal_types<'a>(
                 }
             }
             ast_v1::Decl::Module { kw, name, sig_, .. } => match &**sig_ {
-                ast_v1::SigExpr::Functor { param, dom, cod, .. } => {
+                ast_v1::SigExpr::Functor {
+                    param, dom, cod, ..
+                } => {
                     let _ = param;
                     handle_functor_sig_member(
-                        kw.0, &name.name, dom, cod, mod_path, surfaces, env, &module_name,
+                        kw.0,
+                        &name.name,
+                        dom,
+                        cod,
+                        mod_path,
+                        surfaces,
+                        env,
+                        &module_name,
                     )?;
                     declared_functors.push(name.name.clone());
                 }
@@ -1257,7 +1372,15 @@ fn prescan_seal_types<'a>(
                 }
             },
             ast_v1::Decl::Signature { kw, name, sig_, .. } => {
-                handle_signature_decl(kw.0, &name.name, sig_, &impl_view, mod_path, surfaces, &module_name)?;
+                handle_signature_decl(
+                    kw.0,
+                    &name.name,
+                    sig_,
+                    &impl_view,
+                    mod_path,
+                    surfaces,
+                    &module_name,
+                )?;
                 declared_sigs.push(name.name.clone());
             }
             // Sub-slice 2e-2: `decls` always arrives pre-flattened
@@ -1303,7 +1426,8 @@ fn prescan_seal_types<'a>(
     for (tname, info) in &impl_table {
         if !declared_types.contains(tname) {
             let qualified = lower::qualify_type_key(mod_path, tname);
-            env.hidden_types.insert(qualified.clone(), module_name.clone());
+            env.hidden_types
+                .insert(qualified.clone(), module_name.clone());
             if let ImplTypeBody::Variant(ctors) = &info.body {
                 for c in ctors {
                     record_hide(&mut hide_list, env, &module_name, c, &qualified);
@@ -1317,7 +1441,8 @@ fn prescan_seal_types<'a>(
     let (_, sig_names) = impl_view_mod_and_sig_names(&impl_view);
     for sn in &sig_names {
         if !declared_sigs.contains(sn) {
-            env.hidden_sigs.insert(lower::qualify_type_key(mod_path, sn), module_name.clone());
+            env.hidden_sigs
+                .insert(lower::qualify_type_key(mod_path, sn), module_name.clone());
         }
     }
 
@@ -1328,7 +1453,8 @@ fn prescan_seal_types<'a>(
     for fpath in surfaces.functors.keys() {
         if let Some(rest) = fpath.strip_prefix(functor_prefix.as_str()) {
             if !rest.contains('.') && !declared_functors.iter().any(|f| f == rest) {
-                env.hidden_functors.insert(fpath.clone(), module_name.clone());
+                env.hidden_functors
+                    .insert(fpath.clone(), module_name.clone());
             }
         }
     }
@@ -1336,12 +1462,18 @@ fn prescan_seal_types<'a>(
     // Seal point (spec §3 phase A step 5), extended by 2d-3b §3.3-6:
     // parent-imposed hiding is deferred to the PARENT's own trigger.
     if let Some((trigger, _owner)) = &parent_trigger {
-        env.ctor_hide_triggers.entry(trigger.clone()).or_default().extend(hide_list);
+        env.ctor_hide_triggers
+            .entry(trigger.clone())
+            .or_default()
+            .extend(hide_list);
     } else if value_names.is_empty() {
         immediate_hides.extend(hide_list);
     } else {
         let trigger = lower::qualify_type_key(mod_path, value_names.last().unwrap());
-        env.ctor_hide_triggers.entry(trigger).or_default().extend(hide_list);
+        env.ctor_hide_triggers
+            .entry(trigger)
+            .or_default()
+            .extend(hide_list);
     }
 
     pending.push(PendingSeal {
@@ -1381,7 +1513,12 @@ fn handle_nested_module_decl<'a>(
     if !mod_names.iter().any(|m| m == child_name) {
         let (value_names, _) = impl_view_member_names(view, mod_path, surfaces);
         let is_value = value_names.iter().any(|v| v == child_name);
-        return Err(nested_module_width_error(parent_module_name, child_name, kw_span, is_value));
+        return Err(nested_module_width_error(
+            parent_module_name,
+            child_name,
+            kw_span,
+            is_value,
+        ));
     }
     let mut child_path = mod_path.to_vec();
     child_path.push(child_name.to_string());
@@ -1425,8 +1562,8 @@ fn handle_nested_module_decl<'a>(
             // a LITERAL `sig … end` for `S_N` gets a synthetic child seal
             // here — width is already verified above regardless.
             if sig_is_literal_inline(s_n) {
-                let child_tyenv =
-                    tyenv.child_from_names(&child_path, child_surf.types.iter().map(|(n, _)| n.clone()));
+                let child_tyenv = tyenv
+                    .child_from_names(&child_path, child_surf.types.iter().map(|(n, _)| n.clone()));
                 prescan_seal_types(
                     s_n_resolved.decls,
                     &s_n_resolved.refines,
@@ -1444,13 +1581,23 @@ fn handle_nested_module_decl<'a>(
             }
         }
         ChildModuleShape::Unavailable => {
-            return Err(nested_module_width_error(parent_module_name, child_name, kw_span, false));
+            return Err(nested_module_width_error(
+                parent_module_name,
+                child_name,
+                kw_span,
+                false,
+            ));
         }
     }
     Ok(())
 }
 
-fn nested_module_width_error(module_name: &str, child_name: &str, span: Span, is_value: bool) -> TypeError {
+fn nested_module_width_error(
+    module_name: &str,
+    child_name: &str,
+    span: Span,
+    is_value: bool,
+) -> TypeError {
     let message = if is_value {
         format!(
             "module `{module_name}` signature declares `module {child_name} : ..` but its \
@@ -1487,16 +1634,23 @@ fn handle_signature_decl<'a>(
             ),
         ));
     }
-    let outer_decls = resolve_sig_shallow(outer_sig, &format!("{module_name}.{child_name}"), surfaces, mod_path)?;
-    let struct_decls = surface::find_sig(surfaces, mod_path, child_name).map(|d| d.decls).ok_or_else(|| {
-        simple_error(
-            Some(kw_span),
-            format!(
-                "module `{module_name}`'s signature member `signature {child_name}` could not \
+    let outer_decls = resolve_sig_shallow(
+        outer_sig,
+        &format!("{module_name}.{child_name}"),
+        surfaces,
+        mod_path,
+    )?;
+    let struct_decls = surface::find_sig(surfaces, mod_path, child_name)
+        .map(|d| d.decls)
+        .ok_or_else(|| {
+            simple_error(
+                Some(kw_span),
+                format!(
+                    "module `{module_name}`'s signature member `signature {child_name}` could not \
                  be resolved against the struct's own definition"
-            ),
-        )
-    })?;
+                ),
+            )
+        })?;
     if !decls_eq_ignoring_span(outer_decls, struct_decls) {
         return Err(simple_error(
             Some(kw_span),
@@ -1540,8 +1694,11 @@ fn handle_functor_sig_member(
         ));
     };
     let declared_dom_decls = resolve_sig_shallow(dom, &functor_path, surfaces, mod_path)?;
-    let impl_dom_decls = resolve_sig_shallow(fdef.param_sig, &functor_path, surfaces, &fdef.def_path)?;
-    if !std::ptr::eq(declared_dom_decls, impl_dom_decls) && !decls_eq_ignoring_span(declared_dom_decls, impl_dom_decls) {
+    let impl_dom_decls =
+        resolve_sig_shallow(fdef.param_sig, &functor_path, surfaces, &fdef.def_path)?;
+    if !std::ptr::eq(declared_dom_decls, impl_dom_decls)
+        && !decls_eq_ignoring_span(declared_dom_decls, impl_dom_decls)
+    {
         return Err(simple_error(
             Some(kw_span),
             format!(
@@ -1551,7 +1708,8 @@ fn handle_functor_sig_member(
             ),
         ));
     }
-    sig_subtype::substitute_result_sig(cod, kw_span).map_err(|e| functor_codomain_error(module_name, child_name, e))?;
+    sig_subtype::substitute_result_sig(cod, kw_span)
+        .map_err(|e| functor_codomain_error(module_name, child_name, e))?;
     env.sealed_functors.insert(
         functor_path,
         SealedFunctorSig {
@@ -1585,7 +1743,11 @@ fn functor_codomain_error(module_name: &str, member: &str, err: SigSubtypeError)
 /// `None` when the subtree has zero value members (nothing ever commits, so
 /// the ordinary immediate-hiding path — `prescan_seal_types`'s own
 /// `value_names.is_empty()` fallback — already suffices).
-fn last_value_alias_in_subtree(view: &ImplView, mod_path: &[String], surfaces: &SurfaceEnv) -> Option<String> {
+fn last_value_alias_in_subtree(
+    view: &ImplView,
+    mod_path: &[String],
+    surfaces: &SurfaceEnv,
+) -> Option<String> {
     match view {
         ImplView::Struct(binds) => last_value_alias_in_struct_subtree(binds, mod_path, surfaces),
         ImplView::Surface(surf) => last_value_alias_in_surface_subtree(surf, mod_path),
@@ -1600,7 +1762,9 @@ fn last_value_alias_in_struct_subtree(
     let mut last: Option<String> = None;
     for b in binds.iter().copied() {
         match b {
-            cst_v1::Bind::Value { name, .. } => last = Some(lower::qualify_type_key(mod_path, &name.name)),
+            cst_v1::Bind::Value { name, .. } => {
+                last = Some(lower::qualify_type_key(mod_path, &name.name))
+            }
             cst_v1::Bind::ValueInline { cmd, .. } => {
                 last = Some(lower::qualify_type_key(mod_path, &any_horz_name(cmd)))
             }
@@ -1617,20 +1781,28 @@ fn last_value_alias_in_struct_subtree(
                     .unwrap_or_else(|| first.name.name.clone());
                 last = Some(lower::qualify_type_key(mod_path, &n));
             }
-            cst_v1::Bind::ValueMutable { name, .. } => last = Some(lower::qualify_type_key(mod_path, &name.name)),
+            cst_v1::Bind::ValueMutable { name, .. } => {
+                last = Some(lower::qualify_type_key(mod_path, &name.name))
+            }
             cst_v1::Bind::Module { name, body, .. } => {
                 let mut child_path = mod_path.to_vec();
                 child_path.push(name.name.clone());
                 match &*body.0 {
                     ast_v1::ModExpr::Struct { binds: inner, .. } => {
-                        let inner_refs: Vec<&cst_v1::Bind> = inner.iter().map(|sb| sb.0.as_ref()).collect();
-                        if let Some(v) = last_value_alias_in_struct_subtree(&inner_refs, &child_path, surfaces) {
+                        let inner_refs: Vec<&cst_v1::Bind> =
+                            inner.iter().map(|sb| sb.0.as_ref()).collect();
+                        if let Some(v) =
+                            last_value_alias_in_struct_subtree(&inner_refs, &child_path, surfaces)
+                        {
                             last = Some(v);
                         }
                     }
-                    ast_v1::ModExpr::Var(_) | ast_v1::ModExpr::Coerce { .. } | ast_v1::ModExpr::App { .. } => {
+                    ast_v1::ModExpr::Var(_)
+                    | ast_v1::ModExpr::Coerce { .. }
+                    | ast_v1::ModExpr::App { .. } => {
                         if let Some(surf) = surfaces.modules.get(&child_path.join(".")) {
-                            if let Some(v) = last_value_alias_in_surface_subtree(surf, &child_path) {
+                            if let Some(v) = last_value_alias_in_surface_subtree(surf, &child_path)
+                            {
                                 last = Some(v);
                             }
                         }
@@ -1640,7 +1812,9 @@ fn last_value_alias_in_struct_subtree(
             }
             cst_v1::Bind::Include { kw, body } => {
                 if let ast_v1::ModExpr::Var(_) = &*body.0 {
-                    if let Some(Some(target)) = surface::frozen_include_target(surfaces, mod_path, kw.0) {
+                    if let Some(Some(target)) =
+                        surface::frozen_include_target(surfaces, mod_path, kw.0)
+                    {
                         if let Some(target_surf) = surfaces.modules.get(target) {
                             if let Some(v) = target_surf.vals.last() {
                                 last = Some(lower::qualify_type_key(mod_path, v));
@@ -1663,7 +1837,9 @@ fn last_value_alias_in_surface_subtree(surf: &ModSurface, mod_path: &[String]) -
             return Some(v);
         }
     }
-    surf.vals.last().map(|v| lower::qualify_type_key(mod_path, v))
+    surf.vals
+        .last()
+        .map(|v| lower::qualify_type_key(mod_path, v))
 }
 
 /// Record one ctor-hide entry, updating both the deferred `hide_list` (fed
@@ -1737,11 +1913,18 @@ fn resolve_sig_visited<'a>(
     visited: &mut Vec<String>,
 ) -> Result<ResolvedSig<'a>, TypeError> {
     match sig {
-        ast_v1::SigExpr::Bot(bot) => resolve_sig_bot(bot, module_name, surfaces, site_path, visited),
+        ast_v1::SigExpr::Bot(bot) => {
+            resolve_sig_bot(bot, module_name, surfaces, site_path, visited)
+        }
         // `S with type t = τ` (§2.2/§2.3): resolve the base (a `SigBotV1` —
         // never itself a `with`, the grammar's own left-recursion note),
         // then APPEND this node's own refines.
-        ast_v1::SigExpr::WithType { base, path: None, binds, .. } => {
+        ast_v1::SigExpr::WithType {
+            base,
+            path: None,
+            binds,
+            ..
+        } => {
             let mut resolved = resolve_sig_bot(base, module_name, surfaces, site_path, visited)?;
             resolved.refines.extend(surface::collect_refines(binds));
             Ok(resolved)
@@ -1749,7 +1932,9 @@ fn resolve_sig_visited<'a>(
         // `S with M type t = τ` (a sub-module refinement): needs
         // `Decl::Module` members to be elaborated structures — 2d-3b's own
         // recursive-structure territory (§7, §9's handoff note).
-        ast_v1::SigExpr::WithType { path: Some(chain), .. } => Err(simple_error(
+        ast_v1::SigExpr::WithType {
+            path: Some(chain), ..
+        } => Err(simple_error(
             Some(mod_chain_span_v1(chain)),
             format!(
                 "module `{module_name}`'s signature: `with type` on a sub-module's type \
@@ -1778,9 +1963,14 @@ fn resolve_sig_bot<'a>(
     match bot {
         ast_v1::SigBotV1::Sig { decls, .. } => {
             let (out, refines) = splice_decls(decls, module_name, surfaces, site_path, visited)?;
-            Ok(ResolvedSig { decls: out, refines })
+            Ok(ResolvedSig {
+                decls: out,
+                refines,
+            })
         }
-        ast_v1::SigBotV1::Var(t) => resolve_named_sig(&t.name, t.span, module_name, surfaces, site_path, visited),
+        ast_v1::SigBotV1::Var(t) => {
+            resolve_named_sig(&t.name, t.span, module_name, surfaces, site_path, visited)
+        }
         ast_v1::SigBotV1::Path(t) => {
             let suffix = surface::sig_path_suffix(&t.mods, &t.name);
             resolve_named_sig(&suffix, t.span, module_name, surfaces, site_path, visited)
@@ -1801,8 +1991,8 @@ fn resolve_named_sig<'a>(
     site_path: &[String],
     visited: &mut Vec<String>,
 ) -> Result<ResolvedSig<'a>, TypeError> {
-    let (key, def) =
-        surface::find_sig_keyed(surfaces, site_path, name).ok_or_else(|| unknown_sig_error(name, span))?;
+    let (key, def) = surface::find_sig_keyed(surfaces, site_path, name)
+        .ok_or_else(|| unknown_sig_error(name, span))?;
     if visited.contains(&key) {
         return Err(simple_error(
             Some(span),
@@ -1813,7 +2003,10 @@ fn resolve_named_sig<'a>(
     let (out, mut refines) = splice_decls(def.decls, module_name, surfaces, site_path, visited)?;
     visited.pop();
     refines.extend(def.refines.iter().cloned());
-    Ok(ResolvedSig { decls: out, refines })
+    Ok(ResolvedSig {
+        decls: out,
+        refines,
+    })
 }
 
 /// §2.2's flattening: a non-`Include` decl passes through; a `Decl::Include
@@ -1853,25 +2046,41 @@ fn splice_decls<'a>(
 /// uniformly (a literal sig with two DIRECT `val x` decls now also rejects
 /// — the ONE previously-accepted-input behavior 2e-2 tightens, §8 risk 5;
 /// pinned by S4).
-fn check_sig_conflicts(decls: &[&cst_v1::StructDeclV1], module_name: &str) -> Result<(), TypeError> {
+fn check_sig_conflicts(
+    decls: &[&cst_v1::StructDeclV1],
+    module_name: &str,
+) -> Result<(), TypeError> {
     let mut vals: Vec<&str> = Vec::new();
     let mut types: Vec<&str> = Vec::new();
     let mut mods: Vec<&str> = Vec::new();
     let mut sigs: Vec<&str> = Vec::new();
     for d in decls {
         match &*d.0 {
-            ast_v1::Decl::Val { name, .. } => check_one_conflict(&mut vals, &name.name, name.span, module_name)?,
-            ast_v1::Decl::ValHorzCmd { cmd, .. } => check_one_conflict(&mut vals, &cmd.name, cmd.span, module_name)?,
-            ast_v1::Decl::ValVertCmd { cmd, .. } => check_one_conflict(&mut vals, &cmd.name, cmd.span, module_name)?,
+            ast_v1::Decl::Val { name, .. } => {
+                check_one_conflict(&mut vals, &name.name, name.span, module_name)?
+            }
+            ast_v1::Decl::ValHorzCmd { cmd, .. } => {
+                check_one_conflict(&mut vals, &cmd.name, cmd.span, module_name)?
+            }
+            ast_v1::Decl::ValVertCmd { cmd, .. } => {
+                check_one_conflict(&mut vals, &cmd.name, cmd.span, module_name)?
+            }
             ast_v1::Decl::TypeOpaque { name, .. } => {
                 check_one_conflict(&mut types, &name.name, name.span, module_name)?
             }
             ast_v1::Decl::Type { binds, .. } => {
                 for single in flatten_type_binds(binds) {
-                    check_one_conflict(&mut types, &single.name.name, single.name.span, module_name)?;
+                    check_one_conflict(
+                        &mut types,
+                        &single.name.name,
+                        single.name.span,
+                        module_name,
+                    )?;
                 }
             }
-            ast_v1::Decl::Module { name, .. } => check_one_conflict(&mut mods, &name.name, name.span, module_name)?,
+            ast_v1::Decl::Module { name, .. } => {
+                check_one_conflict(&mut mods, &name.name, name.span, module_name)?
+            }
             ast_v1::Decl::Signature { name, .. } => {
                 check_one_conflict(&mut sigs, &name.name, name.span, module_name)?
             }
@@ -1893,7 +2102,12 @@ fn check_sig_conflicts(decls: &[&cst_v1::StructDeclV1], module_name: &str) -> Re
     Ok(())
 }
 
-fn check_one_conflict<'a>(seen: &mut Vec<&'a str>, name: &'a str, span: Span, module_name: &str) -> Result<(), TypeError> {
+fn check_one_conflict<'a>(
+    seen: &mut Vec<&'a str>,
+    name: &'a str,
+    span: Span,
+    module_name: &str,
+) -> Result<(), TypeError> {
     if seen.contains(&name) {
         return Err(simple_error(
             Some(span),
@@ -2008,7 +2222,10 @@ fn reject_link_refines(refines: &[surface::Refine], owner: &str) -> Result<(), T
 /// through the ordinary elaborator (a less specific message, but
 /// `check_program` still rejects — this module's own "REJECTS, never
 /// wrong-accepts" posture, doc comment above).
-fn check_functor_applications<'a>(surfaces: &'a SurfaceEnv<'a>, env: &StaticEnv) -> Result<(), TypeError> {
+fn check_functor_applications<'a>(
+    surfaces: &'a SurfaceEnv<'a>,
+    env: &StaticEnv,
+) -> Result<(), TypeError> {
     for (_site_path, _span, resolution) in &surfaces.app_targets {
         let Some(res) = resolution else { continue };
         // Sub-slice 2f-2b §5.1 step 5: an application of a functor an
@@ -2023,8 +2240,12 @@ fn check_functor_applications<'a>(surfaces: &'a SurfaceEnv<'a>, env: &StaticEnv)
                 ),
             ));
         }
-        let Some(fdef) = surfaces.functors.get(&res.functor_path) else { continue };
-        let Some(arg_surf) = surfaces.modules.get(&res.arg_path) else { continue };
+        let Some(fdef) = surfaces.functors.get(&res.functor_path) else {
+            continue;
+        };
+        let Some(arg_surf) = surfaces.modules.get(&res.arg_path) else {
+            continue;
+        };
         let resolved = resolve_sig(fdef.param_sig, &res.functor_path, surfaces, &fdef.def_path)?;
         // Sub-slice 2e-2 §(b)-6's forced decision: functor parameter
         // signatures are checked NAME/ARITY-only (2f-1's own posture,
@@ -2094,7 +2315,14 @@ fn check_module_against_sig(
                 }
             }
             ast_v1::Decl::TypeOpaque { name, kind, .. } => {
-                check_functor_arg_type(arg_surf, &name.name, kind.rest.len(), name.span, functor_path, arg_path)?;
+                check_functor_arg_type(
+                    arg_surf,
+                    &name.name,
+                    kind.rest.len(),
+                    name.span,
+                    functor_path,
+                    arg_path,
+                )?;
             }
             ast_v1::Decl::Type { binds, .. } => {
                 for single in flatten_type_binds(binds) {
@@ -2109,10 +2337,18 @@ fn check_module_against_sig(
                 }
             }
             ast_v1::Decl::Module { kw, .. } => {
-                return Err(functor_sig_member_error(functor_path, "a nested module", kw.0));
+                return Err(functor_sig_member_error(
+                    functor_path,
+                    "a nested module",
+                    kw.0,
+                ));
             }
             ast_v1::Decl::Signature { kw, .. } => {
-                return Err(functor_sig_member_error(functor_path, "a named signature", kw.0));
+                return Err(functor_sig_member_error(
+                    functor_path,
+                    "a named signature",
+                    kw.0,
+                ));
             }
             ast_v1::Decl::Include { kw, .. } => {
                 return Err(functor_sig_member_error(functor_path, "an `include`", kw.0));
@@ -2141,11 +2377,21 @@ fn check_functor_arg_type(
             ),
             span,
         )),
-        None => Err(functor_arg_mismatch_error(functor_path, arg_path, &format!("type `{name}`"), span)),
+        None => Err(functor_arg_mismatch_error(
+            functor_path,
+            arg_path,
+            &format!("type `{name}`"),
+            span,
+        )),
     }
 }
 
-fn functor_arg_mismatch_error(functor_path: &str, arg_path: &str, what: &str, span: Span) -> TypeError {
+fn functor_arg_mismatch_error(
+    functor_path: &str,
+    arg_path: &str,
+    what: &str,
+    span: Span,
+) -> TypeError {
     simple_error(
         Some(span),
         format!(
@@ -2183,7 +2429,15 @@ fn discover_sealed_functors<'a>(
     env: &mut StaticEnv,
 ) -> Result<(), TypeError> {
     for file in deps.iter().copied() {
-        let cst_v1::FileV1::Library { name, sig_annot, binds, .. } = file else { continue };
+        let cst_v1::FileV1::Library {
+            name,
+            sig_annot,
+            binds,
+            ..
+        } = file
+        else {
+            continue;
+        };
         let mod_path = vec![name.name.clone()];
         if let Some(sa) = sig_annot {
             // Sub-slice 2e-2: best-effort (swallowed, never `?`) — this
@@ -2195,7 +2449,8 @@ fn discover_sealed_functors<'a>(
             // one) closes a gap the pre-2e-2 code never had to consider: a
             // functor sig-member reachable only through a spliced
             // `include` is now discovered too.
-            if let Ok(resolved) = resolve_sig(&sa.sig_.0, &mod_path.join("."), surfaces, &mod_path) {
+            if let Ok(resolved) = resolve_sig(&sa.sig_.0, &mod_path.join("."), surfaces, &mod_path)
+            {
                 discover_functor_members_in_decls(&resolved.decls, &mod_path, surfaces, env)?;
             }
         }
@@ -2212,11 +2467,19 @@ fn discover_sealed_functors_walk_binds<'a>(
     env: &mut StaticEnv,
 ) -> Result<(), TypeError> {
     for b in binds.iter().copied() {
-        if let cst_v1::Bind::Module { name, sig_annot, body, .. } = b {
+        if let cst_v1::Bind::Module {
+            name,
+            sig_annot,
+            body,
+            ..
+        } = b
+        {
             let mut child_path = mod_path.to_vec();
             child_path.push(name.name.clone());
             if let Some(sa) = sig_annot {
-                if let Ok(resolved) = resolve_sig(&sa.sig_.0, &child_path.join("."), surfaces, &child_path) {
+                if let Ok(resolved) =
+                    resolve_sig(&sa.sig_.0, &child_path.join("."), surfaces, &child_path)
+                {
                     discover_functor_members_in_decls(&resolved.decls, &child_path, surfaces, env)?;
                 }
             }
@@ -2240,13 +2503,29 @@ fn discover_functor_members_in_decls<'a>(
     for d in decls {
         if let ast_v1::Decl::Module { kw, name, sig_, .. } = &*d.0 {
             if let ast_v1::SigExpr::Functor { dom, cod, .. } = &**sig_ {
-                handle_functor_sig_member(kw.0, &name.name, dom, cod, mod_path, surfaces, env, &module_name)?;
+                handle_functor_sig_member(
+                    kw.0,
+                    &name.name,
+                    dom,
+                    cod,
+                    mod_path,
+                    surfaces,
+                    env,
+                    &module_name,
+                )?;
                 declared_functors.push(name.name.clone());
             } else {
                 let mut child_path = mod_path.to_vec();
                 child_path.push(name.name.clone());
-                if let Ok(inner_resolved) = resolve_sig(sig_, &child_path.join("."), surfaces, &child_path) {
-                    discover_functor_members_in_decls(&inner_resolved.decls, &child_path, surfaces, env)?;
+                if let Ok(inner_resolved) =
+                    resolve_sig(sig_, &child_path.join("."), surfaces, &child_path)
+                {
+                    discover_functor_members_in_decls(
+                        &inner_resolved.decls,
+                        &child_path,
+                        surfaces,
+                        env,
+                    )?;
                 }
             }
         }
@@ -2255,7 +2534,8 @@ fn discover_functor_members_in_decls<'a>(
     for fpath in surfaces.functors.keys() {
         if let Some(rest) = fpath.strip_prefix(prefix.as_str()) {
             if !rest.contains('.') && !declared_functors.iter().any(|f| f == rest) {
-                env.hidden_functors.insert(fpath.clone(), module_name.clone());
+                env.hidden_functors
+                    .insert(fpath.clone(), module_name.clone());
             }
         }
     }
@@ -2275,7 +2555,9 @@ fn build_instantiations<'a>(
 ) -> Result<Vec<InstantiatedApp>, TypeError> {
     let mut out = Vec::new();
     for file in deps.iter().copied() {
-        let cst_v1::FileV1::Library { name, binds, .. } = file else { continue };
+        let cst_v1::FileV1::Library { name, binds, .. } = file else {
+            continue;
+        };
         let mod_path = vec![name.name.clone()];
         let bind_refs: Vec<&cst_v1::Bind> = binds.iter().collect();
         collect_instantiations_in_binds(&bind_refs, &mod_path, surfaces, env, &mut out)?;
@@ -2303,18 +2585,25 @@ fn collect_instantiations_in_binds<'a>(
                                 if let Some(body_binds) = functor::functor_body_binds(fdef.body) {
                                     let arg_segs: Vec<String> =
                                         res.arg_path.split('.').map(str::to_string).collect();
-                                    let substituted_binds =
-                                        functor::substitute_binds(body_binds, &sealed.param, &arg_segs)
-                                            .map_err(|e| lower_error_to_type_error(&e))?;
+                                    let substituted_binds = functor::substitute_binds(
+                                        body_binds,
+                                        &sealed.param,
+                                        &arg_segs,
+                                    )
+                                    .map_err(|e| lower_error_to_type_error(&e))?;
                                     let cod_substituted = functor::subst_sig_expr_for_param(
                                         &sealed.cod,
                                         &sealed.param,
                                         &arg_segs,
                                     )
                                     .map_err(|e| lower_error_to_type_error(&e))?;
-                                    sig_subtype::substitute_result_sig(&cod_substituted, sealed.span).map_err(
-                                        |e| functor_codomain_error(&mod_path.join("."), &name.name, e),
-                                    )?;
+                                    sig_subtype::substitute_result_sig(
+                                        &cod_substituted,
+                                        sealed.span,
+                                    )
+                                    .map_err(|e| {
+                                        functor_codomain_error(&mod_path.join("."), &name.name, e)
+                                    })?;
                                     // Sub-slice 2e-2: `include` in a sealed
                                     // functor's codomain IS supported (the
                                     // decls are cloned out immediately, so
@@ -2348,8 +2637,11 @@ fn collect_instantiations_in_binds<'a>(
                                         cod_resolved.decls.into_iter().cloned().collect();
                                     let owned_body: Vec<cst_v1::Bind> =
                                         substituted_binds.into_iter().map(|sb| *sb.0).collect();
-                                    let child_tyenv =
-                                        TypeNameEnv::default().child(&child_path, owned_body.iter(), surfaces);
+                                    let child_tyenv = TypeNameEnv::default().child(
+                                        &child_path,
+                                        owned_body.iter(),
+                                        surfaces,
+                                    );
                                     out.push(InstantiatedApp {
                                         app_path: child_path.clone(),
                                         cod_decls,
@@ -2363,7 +2655,8 @@ fn collect_instantiations_in_binds<'a>(
                     }
                 }
                 ast_v1::ModExpr::Struct { binds: inner, .. } => {
-                    let inner_refs: Vec<&cst_v1::Bind> = inner.iter().map(|sb| sb.0.as_ref()).collect();
+                    let inner_refs: Vec<&cst_v1::Bind> =
+                        inner.iter().map(|sb| sb.0.as_ref()).collect();
                     collect_instantiations_in_binds(&inner_refs, &child_path, surfaces, env, out)?;
                 }
                 _ => {}
@@ -2406,31 +2699,78 @@ fn decls_eq_ignoring_span(a: &[cst_v1::StructDeclV1], b: &[cst_v1::StructDeclV1]
 
 fn decl_eq(a: &ast_v1::Decl, b: &ast_v1::Decl) -> bool {
     match (a, b) {
-        (ast_v1::Decl::Val { name: n1, quant: q1, ty: t1, .. }, ast_v1::Decl::Val { name: n2, quant: q2, ty: t2, .. }) => {
-            n1.name == n2.name && tyvar_list_eq(q1, q2) && type_expr_eq(t1, t2)
+        (
+            ast_v1::Decl::Val {
+                name: n1,
+                quant: q1,
+                ty: t1,
+                ..
+            },
+            ast_v1::Decl::Val {
+                name: n2,
+                quant: q2,
+                ty: t2,
+                ..
+            },
+        ) => n1.name == n2.name && tyvar_list_eq(q1, q2) && type_expr_eq(t1, t2),
+        (
+            ast_v1::Decl::ValHorzCmd {
+                cmd: c1,
+                quant: q1,
+                ty: t1,
+                ..
+            },
+            ast_v1::Decl::ValHorzCmd {
+                cmd: c2,
+                quant: q2,
+                ty: t2,
+                ..
+            },
+        ) => c1.name == c2.name && tyvar_list_eq(q1, q2) && type_expr_eq(t1, t2),
+        (
+            ast_v1::Decl::ValVertCmd {
+                cmd: c1,
+                quant: q1,
+                ty: t1,
+                ..
+            },
+            ast_v1::Decl::ValVertCmd {
+                cmd: c2,
+                quant: q2,
+                ty: t2,
+                ..
+            },
+        ) => c1.name == c2.name && tyvar_list_eq(q1, q2) && type_expr_eq(t1, t2),
+        (
+            ast_v1::Decl::TypeOpaque {
+                name: n1, kind: k1, ..
+            },
+            ast_v1::Decl::TypeOpaque {
+                name: n2, kind: k2, ..
+            },
+        ) => n1.name == n2.name && kind_eq(k1, k2),
+        (ast_v1::Decl::Type { binds: b1, .. }, ast_v1::Decl::Type { binds: b2, .. }) => {
+            type_binds_eq(&b1.0, &b2.0)
         }
         (
-            ast_v1::Decl::ValHorzCmd { cmd: c1, quant: q1, ty: t1, .. },
-            ast_v1::Decl::ValHorzCmd { cmd: c2, quant: q2, ty: t2, .. },
-        ) => c1.name == c2.name && tyvar_list_eq(q1, q2) && type_expr_eq(t1, t2),
-        (
-            ast_v1::Decl::ValVertCmd { cmd: c1, quant: q1, ty: t1, .. },
-            ast_v1::Decl::ValVertCmd { cmd: c2, quant: q2, ty: t2, .. },
-        ) => c1.name == c2.name && tyvar_list_eq(q1, q2) && type_expr_eq(t1, t2),
-        (
-            ast_v1::Decl::TypeOpaque { name: n1, kind: k1, .. },
-            ast_v1::Decl::TypeOpaque { name: n2, kind: k2, .. },
-        ) => n1.name == n2.name && kind_eq(k1, k2),
-        (ast_v1::Decl::Type { binds: b1, .. }, ast_v1::Decl::Type { binds: b2, .. }) => type_binds_eq(&b1.0, &b2.0),
-        (
-            ast_v1::Decl::Module { name: n1, sig_: s1, .. },
-            ast_v1::Decl::Module { name: n2, sig_: s2, .. },
+            ast_v1::Decl::Module {
+                name: n1, sig_: s1, ..
+            },
+            ast_v1::Decl::Module {
+                name: n2, sig_: s2, ..
+            },
         ) => n1.name == n2.name && sig_expr_eq(s1, s2),
         (
-            ast_v1::Decl::Signature { name: n1, sig_: s1, .. },
-            ast_v1::Decl::Signature { name: n2, sig_: s2, .. },
+            ast_v1::Decl::Signature {
+                name: n1, sig_: s1, ..
+            },
+            ast_v1::Decl::Signature {
+                name: n2, sig_: s2, ..
+            },
         ) => n1.name == n2.name && sig_expr_eq(s1, s2),
-        (ast_v1::Decl::Include { sig_: s1, .. }, ast_v1::Decl::Include { sig_: s2, .. }) => sig_expr_eq(s1, s2),
+        (ast_v1::Decl::Include { sig_: s1, .. }, ast_v1::Decl::Include { sig_: s2, .. }) => {
+            sig_expr_eq(s1, s2)
+        }
         _ => false,
     }
 }
@@ -2442,18 +2782,41 @@ fn tyvar_list_eq(a: &[TypeVarTok], b: &[TypeVarTok]) -> bool {
 fn kind_eq(a: &ast_v1::KindV1, b: &ast_v1::KindV1) -> bool {
     a.first.name == b.first.name
         && a.rest.len() == b.rest.len()
-        && a.rest.iter().zip(b.rest.iter()).all(|(x, y)| x.base.name == y.base.name)
+        && a.rest
+            .iter()
+            .zip(b.rest.iter())
+            .all(|(x, y)| x.base.name == y.base.name)
 }
 
 fn sig_expr_eq(a: &ast_v1::SigExpr, b: &ast_v1::SigExpr) -> bool {
     match (a, b) {
         (
-            ast_v1::SigExpr::Functor { param: p1, dom: d1, cod: c1, .. },
-            ast_v1::SigExpr::Functor { param: p2, dom: d2, cod: c2, .. },
+            ast_v1::SigExpr::Functor {
+                param: p1,
+                dom: d1,
+                cod: c1,
+                ..
+            },
+            ast_v1::SigExpr::Functor {
+                param: p2,
+                dom: d2,
+                cod: c2,
+                ..
+            },
         ) => p1.name == p2.name && sig_expr_eq(d1, d2) && sig_expr_eq(c1, c2),
         (
-            ast_v1::SigExpr::WithType { base: b1, path: p1, binds: t1, .. },
-            ast_v1::SigExpr::WithType { base: b2, path: p2, binds: t2, .. },
+            ast_v1::SigExpr::WithType {
+                base: b1,
+                path: p1,
+                binds: t1,
+                ..
+            },
+            ast_v1::SigExpr::WithType {
+                base: b2,
+                path: p2,
+                binds: t2,
+                ..
+            },
         ) => sig_bot_eq(b1, b2) && opt_mod_chain_eq(p1, p2) && type_binds_eq(&t1.0, &t2.0),
         (ast_v1::SigExpr::Bot(x), ast_v1::SigExpr::Bot(y)) => sig_bot_eq(x, y),
         _ => false,
@@ -2462,7 +2825,9 @@ fn sig_expr_eq(a: &ast_v1::SigExpr, b: &ast_v1::SigExpr) -> bool {
 
 fn sig_bot_eq(a: &ast_v1::SigBotV1, b: &ast_v1::SigBotV1) -> bool {
     match (a, b) {
-        (ast_v1::SigBotV1::Path(x), ast_v1::SigBotV1::Path(y)) => x.mods == y.mods && x.name == y.name,
+        (ast_v1::SigBotV1::Path(x), ast_v1::SigBotV1::Path(y)) => {
+            x.mods == y.mods && x.name == y.name
+        }
         (ast_v1::SigBotV1::Var(x), ast_v1::SigBotV1::Var(y)) => x.name == y.name,
         (ast_v1::SigBotV1::Sig { decls: x, .. }, ast_v1::SigBotV1::Sig { decls: y, .. }) => {
             decls_eq_ignoring_span(x, y)
@@ -2481,7 +2846,9 @@ fn opt_mod_chain_eq(a: &Option<ast_v1::ModChainV1>, b: &Option<ast_v1::ModChainV
 
 fn mod_chain_eq(a: &ast_v1::ModChainV1, b: &ast_v1::ModChainV1) -> bool {
     match (a, b) {
-        (ast_v1::ModChainV1::Long(x), ast_v1::ModChainV1::Long(y)) => x.mods == y.mods && x.name == y.name,
+        (ast_v1::ModChainV1::Long(x), ast_v1::ModChainV1::Long(y)) => {
+            x.mods == y.mods && x.name == y.name
+        }
         (ast_v1::ModChainV1::Single(x), ast_v1::ModChainV1::Single(y)) => x.name == y.name,
         _ => false,
     }
@@ -2490,22 +2857,38 @@ fn mod_chain_eq(a: &ast_v1::ModChainV1, b: &ast_v1::ModChainV1) -> bool {
 fn type_binds_eq(a: &cst_v1::TypeBindsV1, b: &cst_v1::TypeBindsV1) -> bool {
     type_bind_single_eq(&a.first, &b.first)
         && a.ands.len() == b.ands.len()
-        && a.ands.iter().zip(b.ands.iter()).all(|(x, y)| type_bind_single_eq(&x.bind, &y.bind))
+        && a.ands
+            .iter()
+            .zip(b.ands.iter())
+            .all(|(x, y)| type_bind_single_eq(&x.bind, &y.bind))
 }
 
 fn type_bind_single_eq(a: &cst_v1::TypeBindSingleV1, b: &cst_v1::TypeBindSingleV1) -> bool {
-    a.name.name == b.name.name && tyvar_list_eq(&a.tyvars, &b.tyvars) && type_body_eq(&a.body, &b.body)
+    a.name.name == b.name.name
+        && tyvar_list_eq(&a.tyvars, &b.tyvars)
+        && type_body_eq(&a.body, &b.body)
 }
 
 fn type_body_eq(a: &cst_v1::TypeBodyV1, b: &cst_v1::TypeBodyV1) -> bool {
     match (a, b) {
         (
-            cst_v1::TypeBodyV1::Variant { first: f1, rest: r1, .. },
-            cst_v1::TypeBodyV1::Variant { first: f2, rest: r2, .. },
+            cst_v1::TypeBodyV1::Variant {
+                first: f1,
+                rest: r1,
+                ..
+            },
+            cst_v1::TypeBodyV1::Variant {
+                first: f2,
+                rest: r2,
+                ..
+            },
         ) => {
             variant_def_eq(f1, f2)
                 && r1.len() == r2.len()
-                && r1.iter().zip(r2.iter()).all(|(x, y)| variant_def_eq(&x.def, &y.def))
+                && r1
+                    .iter()
+                    .zip(r2.iter())
+                    .all(|(x, y)| variant_def_eq(&x.def, &y.def))
         }
         (cst_v1::TypeBodyV1::Synonym(x), cst_v1::TypeBodyV1::Synonym(y)) => type_expr_eq(x, y),
         _ => false,
@@ -2523,13 +2906,28 @@ fn variant_def_eq(a: &cst_v1::VariantDefV1, b: &cst_v1::VariantDefV1) -> bool {
 
 fn type_expr_eq(a: &ast_v1::TypeExpr, b: &ast_v1::TypeExpr) -> bool {
     match (a, b) {
-        (ast_v1::TypeExpr::Fun { dom: d1, cod: c1, .. }, ast_v1::TypeExpr::Fun { dom: d2, cod: c2, .. }) => {
-            type_prod_eq(d1, d2) && type_expr_eq(c1, c2)
-        }
+        (
+            ast_v1::TypeExpr::Fun {
+                dom: d1, cod: c1, ..
+            },
+            ast_v1::TypeExpr::Fun {
+                dom: d2, cod: c2, ..
+            },
+        ) => type_prod_eq(d1, d2) && type_expr_eq(c1, c2),
         (ast_v1::TypeExpr::Atom(p1), ast_v1::TypeExpr::Atom(p2)) => type_prod_eq(p1, p2),
         (
-            ast_v1::TypeExpr::OptRowFun { opt_dom: o1, dom: d1, cod: c1, .. },
-            ast_v1::TypeExpr::OptRowFun { opt_dom: o2, dom: d2, cod: c2, .. },
+            ast_v1::TypeExpr::OptRowFun {
+                opt_dom: o1,
+                dom: d1,
+                cod: c1,
+                ..
+            },
+            ast_v1::TypeExpr::OptRowFun {
+                opt_dom: o2,
+                dom: d2,
+                cod: c2,
+                ..
+            },
         ) => type_opt_dom_eq(o1, o2) && type_prod_eq(d1, d2) && type_expr_eq(c1, c2),
         _ => false,
     }
@@ -2548,7 +2946,10 @@ fn type_opt_dom_eq(a: &ast_v1::TypeOptDomV1, b: &ast_v1::TypeOptDomV1) -> bool {
 fn type_prod_eq(a: &ast_v1::TypeProd, b: &ast_v1::TypeProd) -> bool {
     type_app_eq(&a.first, &b.first)
         && a.rest.len() == b.rest.len()
-        && a.rest.iter().zip(b.rest.iter()).all(|(x, y)| type_app_eq(&x.ty, &y.ty))
+        && a.rest
+            .iter()
+            .zip(b.rest.iter())
+            .all(|(x, y)| type_app_eq(&x.ty, &y.ty))
 }
 
 fn type_app_eq(a: &ast_v1::TypeApp, b: &ast_v1::TypeApp) -> bool {
@@ -2571,8 +2972,16 @@ fn type_app_eq(a: &ast_v1::TypeApp, b: &ast_v1::TypeApp) -> bool {
                 })
         }
         (
-            ast_v1::TypeApp::AppliedLong { ctor: c1, first: f1, rest: r1 },
-            ast_v1::TypeApp::AppliedLong { ctor: c2, first: f2, rest: r2 },
+            ast_v1::TypeApp::AppliedLong {
+                ctor: c1,
+                first: f1,
+                rest: r1,
+            },
+            ast_v1::TypeApp::AppliedLong {
+                ctor: c2,
+                first: f2,
+                rest: r2,
+            },
         ) => {
             c1.mods == c2.mods
                 && c1.name == c2.name
@@ -2581,8 +2990,16 @@ fn type_app_eq(a: &ast_v1::TypeApp, b: &ast_v1::TypeApp) -> bool {
                 && r1.iter().zip(r2.iter()).all(|(x, y)| type_atom_eq(x, y))
         }
         (
-            ast_v1::TypeApp::Applied { ctor: c1, first: f1, rest: r1 },
-            ast_v1::TypeApp::Applied { ctor: c2, first: f2, rest: r2 },
+            ast_v1::TypeApp::Applied {
+                ctor: c1,
+                first: f1,
+                rest: r1,
+            },
+            ast_v1::TypeApp::Applied {
+                ctor: c2,
+                first: f2,
+                rest: r2,
+            },
         ) => {
             c1.name == c2.name
                 && type_atom_eq(f1, f2)
@@ -2594,7 +3011,10 @@ fn type_app_eq(a: &ast_v1::TypeApp, b: &ast_v1::TypeApp) -> bool {
     }
 }
 
-fn opt_type_cmd_opt_dom_eq(a: &Option<ast_v1::TypeCmdOptDomV1>, b: &Option<ast_v1::TypeCmdOptDomV1>) -> bool {
+fn opt_type_cmd_opt_dom_eq(
+    a: &Option<ast_v1::TypeCmdOptDomV1>,
+    b: &Option<ast_v1::TypeCmdOptDomV1>,
+) -> bool {
     match (a, b) {
         (Some(x), Some(y)) => {
             x.entries.len() == y.entries.len()
@@ -2621,7 +3041,9 @@ fn type_atom_eq(a: &ast_v1::TypeAtom, b: &ast_v1::TypeAtom) -> bool {
                     .all(|(p, q)| p.name.name == q.name.name && type_expr_eq(&p.ty.0, &q.ty.0))
         }
         (ast_v1::TypeAtom::Var(x), ast_v1::TypeAtom::Var(y)) => x.name == y.name,
-        (ast_v1::TypeAtom::LongName(x), ast_v1::TypeAtom::LongName(y)) => x.mods == y.mods && x.name == y.name,
+        (ast_v1::TypeAtom::LongName(x), ast_v1::TypeAtom::LongName(y)) => {
+            x.mods == y.mods && x.name == y.name
+        }
         (ast_v1::TypeAtom::Name(x), ast_v1::TypeAtom::Name(y)) => x.name == y.name,
         _ => false,
     }
@@ -2646,9 +3068,15 @@ fn non_val_decl_error(module_name: &str, decl: &ast_v1::Decl) -> TypeError {
         ),
         // `prescan_seal_types` only ever calls this for `Include`; kept
         // total (no `unreachable!`) as a defensive fallback.
-        _ => (Span::default(), "this signature declaration is not enforced yet".to_string()),
+        _ => (
+            Span::default(),
+            "this signature declaration is not enforced yet".to_string(),
+        ),
     };
-    simple_error(Some(span), format!("module `{module_name}`'s signature: {what}"))
+    simple_error(
+        Some(span),
+        format!("module `{module_name}`'s signature: {what}"),
+    )
 }
 
 /// Sub-slice 2e-1 §2.1 step 5: include-aware — a `Bind::Include` with a
@@ -2685,7 +3113,10 @@ fn build_impl_type_table(
                             for (tname, arity) in &target_surf.types {
                                 table.insert(
                                     tname.clone(),
-                                    ImplTypeInfo { arity: *arity, body: ImplTypeBody::Synonym },
+                                    ImplTypeInfo {
+                                        arity: *arity,
+                                        body: ImplTypeBody::Synonym,
+                                    },
                                 );
                             }
                         }
@@ -2894,7 +3325,12 @@ fn rename_type_expr(
     env: &StaticEnv,
 ) -> Result<cst::ast::TypeExpr, TypeError> {
     Ok(match ty {
-        cst::ast::TypeExpr::Fun { opts, dom, arrow, cod } => cst::ast::TypeExpr::Fun {
+        cst::ast::TypeExpr::Fun {
+            opts,
+            dom,
+            arrow,
+            cod,
+        } => cst::ast::TypeExpr::Fun {
             opts: opts
                 .iter()
                 .map(|o| {
@@ -2914,7 +3350,12 @@ fn rename_type_expr(
         // are `label : ty` pairs, not type references), so this arm just
         // recurses into every `ty`/`dom`/`cod` sub-expression, exactly like
         // `Fun`'s `opts`/`dom`/`cod` above.
-        cst::ast::TypeExpr::OptRowFun { opt_dom, dom, arrow, cod } => cst::ast::TypeExpr::OptRowFun {
+        cst::ast::TypeExpr::OptRowFun {
+            opt_dom,
+            dom,
+            arrow,
+            cod,
+        } => cst::ast::TypeExpr::OptRowFun {
             opt_dom: cst::ast::CstTypeOptDom {
                 q: opt_dom.q.clone(),
                 paren: opt_dom.paren.clone(),
@@ -3017,7 +3458,9 @@ fn rename_type_atom(
                                 Ok(cst::ast::TypeCmdOptField {
                                     label: f.label.clone(),
                                     colon: f.colon.clone(),
-                                    ty: cst::TyErased(Box::new(rename_type_expr(&f.ty.0, ctx, env)?)),
+                                    ty: cst::TyErased(Box::new(rename_type_expr(
+                                        &f.ty.0, ctx, env,
+                                    )?)),
                                     comma: f.comma.clone(),
                                 })
                             })
@@ -3104,7 +3547,10 @@ fn rename_type_name(
     used_arity: usize,
 ) -> Result<VarTok, TypeError> {
     let Some((owner, local)) = name.rsplit_once('.') else {
-        return Ok(VarTok { name: name.to_string(), span });
+        return Ok(VarTok {
+            name: name.to_string(),
+            span,
+        });
     };
     let under = ctx.scope == owner || ctx.scope.starts_with(&format!("{owner}."));
     // `force_stamp_owner` only ever overrides the "stay concrete" shortcut
@@ -3115,8 +3561,10 @@ fn rename_type_name(
     // it must never accidentally route a non-abstract own reference into
     // the external/hidden-types dispatch below, where a same-owner
     // reference was never meant to land).
-    let is_abstract_here =
-        matches!(env.types.get(name).map(|d| &d.opacity), Some(TypeOpacity::Abstract { .. }));
+    let is_abstract_here = matches!(
+        env.types.get(name).map(|d| &d.opacity),
+        Some(TypeOpacity::Abstract { .. })
+    );
     let forced = ctx.force_stamp_owner == Some(owner) && is_abstract_here;
     if under && !forced {
         if ctx.enforce_self_containment {
@@ -3130,7 +3578,10 @@ fn rename_type_name(
                 ));
             }
         }
-        return Ok(VarTok { name: name.to_string(), span });
+        return Ok(VarTok {
+            name: name.to_string(),
+            span,
+        });
     }
     if let Some(hidden_owner) = env.hidden_types.get(name) {
         return Err(simple_error(
@@ -3153,10 +3604,16 @@ fn rename_type_name(
                     ),
                 ));
             }
-            return Ok(VarTok { name: stamped.clone(), span });
+            return Ok(VarTok {
+                name: stamped.clone(),
+                span,
+            });
         }
     }
-    Ok(VarTok { name: name.to_string(), span })
+    Ok(VarTok {
+        name: name.to_string(),
+        span,
+    })
 }
 
 // ============================================================================
@@ -3187,7 +3644,13 @@ fn phase_c_finish<'s>(
         let mut declared: Vec<String> = Vec::new();
         for d in &seal.sig_decls {
             match &*d.0 {
-                ast_v1::Decl::Val { kw, name, quant, ty, .. } => {
+                ast_v1::Decl::Val {
+                    kw,
+                    name,
+                    quant,
+                    ty,
+                    ..
+                } => {
                     process_seal_member(
                         kw.0,
                         &name.name,
@@ -3204,7 +3667,9 @@ fn phase_c_finish<'s>(
                     )?;
                     declared.push(name.name.clone());
                 }
-                ast_v1::Decl::ValHorzCmd { kw, cmd, quant, ty, .. } => {
+                ast_v1::Decl::ValHorzCmd {
+                    kw, cmd, quant, ty, ..
+                } => {
                     process_seal_member(
                         kw.0,
                         &cmd.name,
@@ -3221,7 +3686,9 @@ fn phase_c_finish<'s>(
                     )?;
                     declared.push(cmd.name.clone());
                 }
-                ast_v1::Decl::ValVertCmd { kw, cmd, quant, ty, .. } => {
+                ast_v1::Decl::ValVertCmd {
+                    kw, cmd, quant, ty, ..
+                } => {
                     process_seal_member(
                         kw.0,
                         &cmd.name,
@@ -3281,15 +3748,27 @@ fn phase_c_finish<'s>(
         let mut declared: Vec<String> = Vec::new();
         for d in &link.decls {
             match &*d.0 {
-                ast_v1::Decl::Val { kw, name, quant, ty, .. } => {
-                    process_link_member(kw.0, &name.name, name.span, quant, ty, link, ck, mint, env)?;
+                ast_v1::Decl::Val {
+                    kw,
+                    name,
+                    quant,
+                    ty,
+                    ..
+                } => {
+                    process_link_member(
+                        kw.0, &name.name, name.span, quant, ty, link, ck, mint, env,
+                    )?;
                     declared.push(name.name.clone());
                 }
-                ast_v1::Decl::ValHorzCmd { kw, cmd, quant, ty, .. } => {
+                ast_v1::Decl::ValHorzCmd {
+                    kw, cmd, quant, ty, ..
+                } => {
                     process_link_member(kw.0, &cmd.name, cmd.span, quant, ty, link, ck, mint, env)?;
                     declared.push(cmd.name.clone());
                 }
-                ast_v1::Decl::ValVertCmd { kw, cmd, quant, ty, .. } => {
+                ast_v1::Decl::ValVertCmd {
+                    kw, cmd, quant, ty, ..
+                } => {
                     process_link_member(kw.0, &cmd.name, cmd.span, quant, ty, link, ck, mint, env)?;
                     declared.push(cmd.name.clone());
                 }
@@ -3375,17 +3854,27 @@ fn process_link_member<'s>(
     let cst_ty = lower::lower_type_expr(ty, &link.tyenv).map_err(|e| {
         simple_error(
             Some(e.span),
-            format!("module `{}`'s signature: {} ({})", link.parent_name, e.construct, e.hint),
+            format!(
+                "module `{}`'s signature: {} ({})",
+                link.parent_name, e.construct, e.hint
+            ),
         )
     })?;
-    let ctx = RenameCtx { scope: &sub_module, force_stamp_owner: None, enforce_self_containment: false };
+    let ctx = RenameCtx {
+        scope: &sub_module,
+        force_stamp_owner: None,
+        enforce_self_containment: false,
+    };
     let outer_ty = rename_type_expr(&cst_ty, &ctx, env)?;
 
     let stamp = mint.next();
     let stamp_marker = format!("#{stamp}");
     let mut rigid_map: HashMap<String, MonoType> = HashMap::new();
     for tv in quant {
-        rigid_map.insert(tv.name.clone(), MonoType::Variant(format!("'{}{stamp_marker}", tv.name), Vec::new()));
+        rigid_map.insert(
+            tv.name.clone(),
+            MonoType::Variant(format!("'{}{stamp_marker}", tv.name), Vec::new()),
+        );
     }
     let outer_rigid_raw = typecheck::lower_type_expr(&outer_ty, &rigid_map, RustyfiVersion::V0_1);
     let outer_rigid = ck.expand_synonyms_in(&outer_rigid_raw)?;
@@ -3469,7 +3958,10 @@ fn check_transparent_type<'s>(
     let cst_ty = lower::lower_type_expr(pt.ty, &seal.tyenv).map_err(|e| {
         simple_error(
             Some(e.span),
-            format!("module `{}`'s signature: {} ({})", seal.module_name, e.construct, e.hint),
+            format!(
+                "module `{}`'s signature: {} ({})",
+                seal.module_name, e.construct, e.hint
+            ),
         )
     })?;
     let ctx = RenameCtx {
@@ -3481,7 +3973,11 @@ fn check_transparent_type<'s>(
     let declared_raw = typecheck::lower_type_expr(&renamed_ty, &rigid_map, RustyfiVersion::V0_1);
     let declared_body = ck.expand_synonyms_in(&declared_raw)?;
 
-    let impl_args: Vec<MonoType> = pt.quant.iter().map(|tv| rigid_map[&tv.name].clone()).collect();
+    let impl_args: Vec<MonoType> = pt
+        .quant
+        .iter()
+        .map(|tv| rigid_map[&tv.name].clone())
+        .collect();
     let impl_body = ck.expand_synonyms_in(&MonoType::Variant(pt.qualified.clone(), impl_args))?;
 
     unify(&declared_body, &impl_body).map_err(|e| TypeError {
@@ -3537,14 +4033,22 @@ fn process_seal_member<'s>(
 ) -> Result<(), TypeError> {
     if !value_names.iter().any(|v| v == member_name) {
         let is_type_or_module = other_names.iter().any(|o| o == member_name);
-        return Err(width_missing_error(&seal.module_name, member_name, member_span, is_type_or_module));
+        return Err(width_missing_error(
+            &seal.module_name,
+            member_name,
+            member_span,
+            is_type_or_module,
+        ));
     }
     check_tyvar_closure(ty, quant)?;
 
     let cst_ty = lower::lower_type_expr(ty, &seal.tyenv).map_err(|e| {
         simple_error(
             Some(e.span),
-            format!("module `{}`'s signature: {} ({})", seal.module_name, e.construct, e.hint),
+            format!(
+                "module `{}`'s signature: {} ({})",
+                seal.module_name, e.construct, e.hint
+            ),
         )
     })?;
 
@@ -3751,7 +4255,9 @@ fn collect_v1_type_vars(ty: &ast_v1::TypeExpr, out: &mut Vec<(String, Span)>) {
         // `cod` (the row-variable tail, if any, is a ROW var, a different
         // namespace this walker doesn't track — `check_tyvar_closure` below
         // only enforces closure over TYPE vars).
-        ast_v1::TypeExpr::OptRowFun { opt_dom, dom, cod, .. } => {
+        ast_v1::TypeExpr::OptRowFun {
+            opt_dom, dom, cod, ..
+        } => {
             for e in &opt_dom.inner.entries {
                 collect_v1_type_vars(&e.ty.0, out);
             }
@@ -3897,8 +4403,8 @@ mod tests {
         };
         let env0 = primitives::base_env_with_version(RustyfiVersion::V0_1);
         let scope = elaborate::Scope::new(store, env0.names());
-        let program =
-            elaborate::elaborate_program(&file, &scope).unwrap_or_else(|e| panic!("elaborate: {e}"));
+        let program = elaborate::elaborate_program(&file, &scope)
+            .unwrap_or_else(|e| panic!("elaborate: {e}"));
         (lib_file, program)
     }
 
@@ -3916,7 +4422,11 @@ mod tests {
         match (whole, per_binding) {
             (Ok(w1), Ok(w2)) => assert_eq!(w1, w2, "warnings differ for {doc_src:?}"),
             (Err(e1), Err(e2)) => {
-                assert_eq!(format!("{e1}"), format!("{e2}"), "error strings differ for {doc_src:?}")
+                assert_eq!(
+                    format!("{e1}"),
+                    format!("{e2}"),
+                    "error strings differ for {doc_src:?}"
+                )
             }
             (Ok(w), Err(e)) => panic!(
                 "{doc_src:?}: whole-program accepted (warnings={w:?}), check_program rejected: {e}"
@@ -3966,7 +4476,7 @@ mod tests {
             "let y = A 1 in match y with A n -> n | B -> 0 end",
         ] {
             let store = SymbolStore::new();
-        let (lib_file, program) = elaborate_with_lib(&store, lib_src, doc_src);
+            let (lib_file, program) = elaborate_with_lib(&store, lib_src, doc_src);
             let whole = typecheck::typecheck_verbose_with_version(&program, RustyfiVersion::V0_1);
             let per_binding = check_program(&[&lib_file], &program);
             match (whole, per_binding) {
@@ -3995,11 +4505,13 @@ mod tests {
     #[test]
     fn hidden_rewrite_matches_typecheck_unbound_var_format() {
         let mut static_env = StaticEnv::default();
-        static_env.hidden.insert("M.secret".to_string(), "M".to_string());
+        static_env
+            .hidden
+            .insert("M.secret".to_string(), "M".to_string());
         let err = TypeError {
             span: Some(Span::default()),
-            message:
-                "internal error: unbound variable 'M.secret' reached the typechecker".to_string(),
+            message: "internal error: unbound variable 'M.secret' reached the typechecker"
+                .to_string(),
             source: None,
         };
         let rewritten = rewrite_hidden_error(err, &static_env);
@@ -4022,7 +4534,10 @@ mod tests {
             source: None,
         };
         let rewritten = rewrite_hidden_error(err, &static_env);
-        assert_eq!(rewritten.message, "internal error: unbound variable 'q' reached the typechecker");
+        assert_eq!(
+            rewritten.message,
+            "internal error: unbound variable 'q' reached the typechecker"
+        );
     }
 
     /// Sub-slice 2d-2 U20 pin: a HIDDEN command member's use, both inline
@@ -4031,8 +4546,12 @@ mod tests {
     #[test]
     fn hidden_rewrite_matches_command_formats() {
         let mut static_env = StaticEnv::default();
-        static_env.hidden.insert("M.\\hidden".to_string(), "M".to_string());
-        static_env.hidden.insert("M.+hidden".to_string(), "M".to_string());
+        static_env
+            .hidden
+            .insert("M.\\hidden".to_string(), "M".to_string());
+        static_env
+            .hidden
+            .insert("M.+hidden".to_string(), "M".to_string());
         let inline_err = TypeError {
             span: None,
             message: "internal error: unbound inline command 'M.\\hidden' reached the typechecker"
@@ -4068,7 +4587,10 @@ mod tests {
         let mut static_env = StaticEnv::default();
         static_env.hidden_ctors.insert(
             "T".to_string(),
-            HiddenCtor { module: "M".to_string(), type_name: "M.t".to_string() },
+            HiddenCtor {
+                module: "M".to_string(),
+                type_name: "M.t".to_string(),
+            },
         );
         let expr_err = TypeError {
             span: None,
@@ -4077,8 +4599,12 @@ mod tests {
         };
         let rewritten = rewrite_hidden_error(expr_err, &static_env);
         assert!(
-            rewritten.message.contains("constructor `T` belongs to type `t`")
-                && rewritten.message.contains("module `M`'s signature seals abstract"),
+            rewritten
+                .message
+                .contains("constructor `T` belongs to type `t`")
+                && rewritten
+                    .message
+                    .contains("module `M`'s signature seals abstract"),
             "{}",
             rewritten.message
         );
@@ -4089,8 +4615,12 @@ mod tests {
         };
         let rewritten = rewrite_hidden_error(pat_err, &static_env);
         assert!(
-            rewritten.message.contains("constructor `T` belongs to type `t`")
-                && rewritten.message.contains("module `M`'s signature seals abstract"),
+            rewritten
+                .message
+                .contains("constructor `T` belongs to type `t`")
+                && rewritten
+                    .message
+                    .contains("module `M`'s signature seals abstract"),
             "{}",
             rewritten.message
         );
@@ -4103,7 +4633,11 @@ mod tests {
         assert_eq!(strip_stamps("M.t#3 vs int"), "M.t vs int");
         assert_eq!(strip_stamps("'a#12 -> 'a#12"), "'a -> 'a");
         assert_eq!(strip_stamps("no stamps here"), "no stamps here");
-        assert_eq!(strip_stamps("a # b"), "a # b", "a bare '#' with no digits is left alone");
+        assert_eq!(
+            strip_stamps("a # b"),
+            "a # b",
+            "a bare '#' with no digits is left alone"
+        );
     }
 
     // ========================================================================
@@ -4146,7 +4680,8 @@ end
     fn t_chk1_functor_param_sig_accept() {
         let store = SymbolStore::new();
         let (lib_file, program) = elaborate_with_lib(&store, FUNCTOR_LIB, "Lib.A.cmp2 1");
-        check_program(&[&lib_file], &program).expect("IntOrd satisfies Ord — check_program accepts");
+        check_program(&[&lib_file], &program)
+            .expect("IntOrd satisfies Ord — check_program accepts");
     }
 
     /// T-chk3 (spec §5, generativity): `Make IntOrd` and `Make FlagOrd` are
@@ -4163,7 +4698,8 @@ end
     #[test]
     fn t_chk3_functor_generativity_distinct_instantiations_do_not_cross_unify() {
         let store = SymbolStore::new();
-        let (lib_file, program) = elaborate_with_lib(&store, FUNCTOR_LIB, "Lib.A.cmp2 (Lib.FlagOrd.y ())");
+        let (lib_file, program) =
+            elaborate_with_lib(&store, FUNCTOR_LIB, "Lib.A.cmp2 (Lib.FlagOrd.y ())");
         let err = check_program(&[&lib_file], &program)
             .expect_err("A's `cmp2` requires an IntOrd-shaped argument, not FlagOrd's `Yes`");
         assert!(!err.message.is_empty());

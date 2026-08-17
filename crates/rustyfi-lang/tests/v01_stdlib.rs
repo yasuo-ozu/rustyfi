@@ -47,8 +47,7 @@ use rustyfi_syntax::RustyfiVersion;
 /// loader's `<lib_root>/<name>` fallback candidate, `v006/resolve.rs`,
 /// resolves `@require: color` etc. directly against it).
 fn lib_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../lib-rustyfi/dist-v01/packages")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../lib-rustyfi/dist-v01/packages")
 }
 
 /// A uniquely-named temp `.saty` entry file, cleaned up on drop — same
@@ -424,8 +423,8 @@ match CrossRef.probe `k` with
 | Some(s) -> s
 | None    -> `MISSING`
 end";
-    let v = compile_v01_via_loader("cross-ref-roundtrip", src)
-        .expect("cross-ref.satyg should compile");
+    let v =
+        compile_v01_via_loader("cross-ref-roundtrip", src).expect("cross-ref.satyg should compile");
     assert_eq!(as_str(v), "v");
 }
 
@@ -443,8 +442,7 @@ fn length_bare_max_is_unbound_without_qualification() {
 fn length_max_min_abs_compile_and_evaluate() {
     let src = "@require: length
 Length.max (Length.min 3pt 5pt) (Length.abs (0pt -' 9pt))";
-    let v = compile_v01_via_loader("length-max-min-abs", src)
-        .expect("length.satyh should compile");
+    let v = compile_v01_via_loader("length-max-min-abs", src).expect("length.satyh should compile");
     assert_eq!(as_length(v), Length::pt(9.0));
 }
 
@@ -492,8 +490,8 @@ fn option_bare_map_is_unbound_without_qualification() {
 fn option_map_bind_from_compile_and_evaluate() {
     let src = "@require: option
 Option.from 0 (Option.bind (Option.map (fun x -> x + 1) (Some 41)) (fun x -> Some (x + 1)))";
-    let v = compile_v01_via_loader("option-map-bind-from", src)
-        .expect("option.satyg should compile");
+    let v =
+        compile_v01_via_loader("option-map-bind-from", src).expect("option.satyg should compile");
     assert_eq!(as_int(v), 43);
 }
 
@@ -573,7 +571,10 @@ fn float_pi_is_the_expected_constant() {
 Float.pi";
     let v = compile_v01_via_loader("float-pi", src).expect("float.satyg should compile");
     let f = as_float(v);
-    assert!((f - std::f64::consts::PI).abs() < 1e-9, "expected pi, got {f}");
+    assert!(
+        (f - std::f64::consts::PI).abs() < 1e-9,
+        "expected pi, got {f}"
+    );
 }
 
 // ---- language-completeness sweep gap 1: `abs`/`max`/`min`, restored now
@@ -607,7 +608,11 @@ Float.max (Float.min 4. 9.) 2.";
 #[test]
 fn list_bare_fold_is_unbound_without_qualification() {
     run_with_big_stack(|| {
-        assert_bare_access_unbound("list-bare", "list", "fold (fun acc x -> acc + x) 0 [1, 2, 3]");
+        assert_bare_access_unbound(
+            "list-bare",
+            "list",
+            "fold (fun acc x -> acc + x) 0 [1, 2, 3]",
+        );
     });
 }
 
@@ -726,8 +731,8 @@ Point.get-y (Point.add (1pt, 2pt) (3pt, 4pt))";
 fn point_dividing_point_and_atan2_compile_and_evaluate() {
     let src = "@require: point
 Point.get-x (Point.dividing-point 0.5 (0pt, 0pt) (10pt, 0pt))";
-    let v = compile_v01_via_loader("point-dividing-point", src)
-        .expect("point.satyh should compile");
+    let v =
+        compile_v01_via_loader("point-dividing-point", src).expect("point.satyh should compile");
     assert_eq!(as_length(v), Length::pt(5.0));
 }
 
@@ -749,8 +754,8 @@ fn path_rectangle_bounding_box_is_its_own_corners() {
     run_with_big_stack(|| {
         let src = "@require: path
 Path.get-bounding-box (Path.rectangle (0pt, 0pt) (10pt, 20pt))";
-        let v = compile_v01_via_loader("path-rectangle-bbox", src)
-            .expect("path.satyh should compile");
+        let v =
+            compile_v01_via_loader("path-rectangle-bbox", src).expect("path.satyh should compile");
         let corners = as_tuple(v);
         assert_eq!(corners.len(), 2);
         let p0 = as_tuple(corners[0].clone());

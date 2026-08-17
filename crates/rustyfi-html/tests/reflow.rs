@@ -84,11 +84,20 @@ fn consecutive_lines_coalesce_and_skip_splits_into_two_paragraphs() {
     ];
     let html = render(&vboxes);
 
-    assert!(html.starts_with("<!doctype html>"), "missing doctype:\n{html}");
+    assert!(
+        html.starts_with("<!doctype html>"),
+        "missing doctype:\n{html}"
+    );
     let para_count = html.matches("<p class=\"para\"").count();
     assert_eq!(para_count, 2, "expected exactly two <p>s:\n{html}");
-    assert!(html.contains("Hello,"), "missing first line's text:\n{html}");
-    assert!(html.contains("world!"), "missing second line's text:\n{html}");
+    assert!(
+        html.contains("Hello,"),
+        "missing first line's text:\n{html}"
+    );
+    assert!(
+        html.contains("world!"),
+        "missing second line's text:\n{html}"
+    );
     assert!(
         html.contains("Second paragraph."),
         "missing the post-Skip paragraph's text:\n{html}"
@@ -110,8 +119,14 @@ fn frame_start_end_becomes_a_nested_div() {
     ];
     let html = render(&vboxes);
 
-    assert!(html.contains("<div class=\"frame\""), "missing frame div:\n{html}");
-    assert!(html.contains("inside the frame"), "missing frame content:\n{html}");
+    assert!(
+        html.contains("<div class=\"frame\""),
+        "missing frame div:\n{html}"
+    );
+    assert!(
+        html.contains("inside the frame"),
+        "missing frame content:\n{html}"
+    );
     // The frame's own paragraph must close BEFORE the frame div closes, so
     // nesting round-trips: <div class="frame">...<p ...>...</p>...</div>.
     let frame_open = html.find("<div class=\"frame\"").unwrap();
@@ -123,13 +138,17 @@ fn frame_start_end_becomes_a_nested_div() {
         html[para_close..].contains("</div>"),
         "frame div never closes after its paragraph:\n{html}"
     );
-    assert!(frame_open < para_open, "frame should open before its content:\n{html}");
+    assert!(
+        frame_open < para_open,
+        "frame should open before its content:\n{html}"
+    );
 }
 
 #[test]
 fn embedded_block_becomes_a_nested_div_recursively() {
     let inner_vboxes = vec![text_line("nested content")];
     let embed_box = PureHorzBox::EmbeddedBlock {
+        breakable: false,
         width: Length::pt(100.0),
         height: Length::pt(20.0),
         depth: Length::ZERO,
@@ -139,8 +158,14 @@ fn embedded_block_becomes_a_nested_div_recursively() {
     let vboxes = vec![line(embed_box)];
     let html = render(&vboxes);
 
-    assert!(html.contains("<div class=\"embed\""), "missing embed div:\n{html}");
-    assert!(html.contains("nested content"), "missing nested block's text:\n{html}");
+    assert!(
+        html.contains("<div class=\"embed\""),
+        "missing embed div:\n{html}"
+    );
+    assert!(
+        html.contains("nested content"),
+        "missing nested block's text:\n{html}"
+    );
 }
 
 #[test]
@@ -153,12 +178,18 @@ fn styled_run_carries_color_and_rising_as_css_not_position() {
     let vboxes = vec![line(bx)];
     let html = render(&vboxes);
 
-    assert!(html.contains("color:rgb(255,0,0)"), "missing color CSS:\n{html}");
+    assert!(
+        html.contains("color:rgb(255,0,0)"),
+        "missing color CSS:\n{html}"
+    );
     assert!(
         html.contains("vertical-align:3pt"),
         "missing rising-as-vertical-align CSS:\n{html}"
     );
-    assert!(html.contains("font-size:12pt"), "missing font-size CSS:\n{html}");
+    assert!(
+        html.contains("font-size:12pt"),
+        "missing font-size CSS:\n{html}"
+    );
 }
 
 #[test]
@@ -169,7 +200,10 @@ fn run_text_is_html_escaped() {
         html.contains("&lt;a &amp; &quot;b&quot;&gt;"),
         "text was not HTML-escaped:\n{html}"
     );
-    assert!(!html.contains("<a & \"b\">"), "raw unescaped text leaked:\n{html}");
+    assert!(
+        !html.contains("<a & \"b\">"),
+        "raw unescaped text leaked:\n{html}"
+    );
 }
 
 /// Slice 2 (`docs/plans/design-reflowable-html.md` §4 "Math"): a `Math` box
@@ -205,9 +239,18 @@ fn math_renders_as_an_inline_svg_with_glyph_text() {
         !html.contains("class=\"math-placeholder\""),
         "S1 placeholder leaked:\n{html}"
     );
-    assert!(html.contains("<svg"), "missing inline <svg> for math:\n{html}");
-    assert!(html.contains("<text"), "missing SVG <text> glyph element:\n{html}");
-    assert!(html.contains('x'), "missing the glyph's literal text:\n{html}");
+    assert!(
+        html.contains("<svg"),
+        "missing inline <svg> for math:\n{html}"
+    );
+    assert!(
+        html.contains("<text"),
+        "missing SVG <text> glyph element:\n{html}"
+    );
+    assert!(
+        html.contains('x'),
+        "missing the glyph's literal text:\n{html}"
+    );
 }
 
 /// A `Math` box's `rules` (fraction bar / radical) must ALSO render — via
@@ -231,8 +274,14 @@ fn math_rules_render_as_svg_paths() {
     };
     let vboxes = vec![line(math_box)];
     let html = render(&vboxes);
-    assert!(html.contains("<svg"), "missing inline <svg> for math rules:\n{html}");
-    assert!(html.contains("<path"), "missing SVG <path> for the fraction-bar rule:\n{html}");
+    assert!(
+        html.contains("<svg"),
+        "missing inline <svg> for math rules:\n{html}"
+    );
+    assert!(
+        html.contains("<path"),
+        "missing SVG <path> for the fraction-bar rule:\n{html}"
+    );
 }
 
 /// Slice 2 (§4 "Graphics — inline SVG, reuse `svg::emit_graphics`
@@ -251,6 +300,7 @@ fn graphics_renders_as_an_inline_svg() {
         }],
     };
     let gfx_box = PureHorzBox::Graphics {
+        origin_independent: false,
         width: Length::pt(10.0),
         height: Length::pt(10.0),
         depth: Length::ZERO,
@@ -262,9 +312,18 @@ fn graphics_renders_as_an_inline_svg() {
         !html.contains("class=\"gfx-placeholder\""),
         "S1 placeholder leaked:\n{html}"
     );
-    assert!(html.contains("<svg"), "missing inline <svg> for graphics:\n{html}");
-    assert!(html.contains("<path"), "missing SVG <path> for the fill:\n{html}");
-    assert!(html.contains("rgb(255,0,0)"), "missing the fill color:\n{html}");
+    assert!(
+        html.contains("<svg"),
+        "missing inline <svg> for graphics:\n{html}"
+    );
+    assert!(
+        html.contains("<path"),
+        "missing SVG <path> for the fill:\n{html}"
+    );
+    assert!(
+        html.contains("rgb(255,0,0)"),
+        "missing the fill color:\n{html}"
+    );
 }
 
 /// Slice 2 (§4 "Links/metadata"): a `PureHorzBox::Frame` whose `DecoId`
@@ -281,14 +340,20 @@ fn href_frame_renders_as_an_anchor_link() {
         contents: vec![(Length::ZERO, text_run("click me"))],
     };
     let vboxes = vec![line(link_frame)];
-    let links = vec![(DecoId(7), AnnotAction::Uri("https://example.com".to_string()))];
+    let links = vec![(
+        DecoId(7),
+        AnnotAction::Uri("https://example.com".to_string()),
+    )];
     let html = render_with_links(&vboxes, &links, &[]);
 
     assert!(
         html.contains("<a class=\"link\" href=\"https://example.com\">"),
         "missing <a href> for the link frame:\n{html}"
     );
-    assert!(html.contains("click me"), "missing the link's inline text:\n{html}");
+    assert!(
+        html.contains("click me"),
+        "missing the link's inline text:\n{html}"
+    );
     assert!(html.contains("</a>"), "missing the closing </a>:\n{html}");
 }
 
@@ -345,7 +410,10 @@ fn reflow_output_never_uses_absolute_positioning() {
         !html.contains("position:absolute") && !html.contains("position: absolute"),
         "reflow output must never use position:absolute:\n{html}"
     );
-    assert!(!html.contains("left:"), "reflow output must never use `left:`:\n{html}");
+    assert!(
+        !html.contains("left:"),
+        "reflow output must never use `left:`:\n{html}"
+    );
     // `top:` is only allowed as a suffix of a flow-safe longhand
     // (`margin-top:`, `border-top:` — used by the static `.clearpage`/
     // `.frame` stylesheet rules, `css.rs`), never as the bare positioned
@@ -360,16 +428,13 @@ fn reflow_output_never_uses_absolute_positioning() {
 
 #[test]
 fn missing_reflow_source_renders_a_placeholder_instead_of_panicking() {
-    let html = rustyfi_html::render_html_reflow(
-        None,
-        &geometry(),
-        &[],
-        &DocExtras::default(),
-        &[],
-        &[],
-    )
-    .expect("must not panic/error when reflow_source is None");
-    assert!(html.starts_with("<!doctype html>"), "missing doctype:\n{html}");
+    let html =
+        rustyfi_html::render_html_reflow(None, &geometry(), &[], &DocExtras::default(), &[], &[])
+            .expect("must not panic/error when reflow_source is None");
+    assert!(
+        html.starts_with("<!doctype html>"),
+        "missing doctype:\n{html}"
+    );
     assert!(
         html.contains("reflow-empty"),
         "missing the no-source placeholder:\n{html}"
@@ -415,11 +480,17 @@ fn outline_matched_frame_promotes_its_paragraph_to_a_heading() {
         !html.contains("<p class=\"para\">"),
         "the heading's own text must not ALSO render as a plain <p>:\n{html}"
     );
-    assert!(html.contains("Introduction"), "missing heading text:\n{html}");
+    assert!(
+        html.contains("Introduction"),
+        "missing heading text:\n{html}"
+    );
     assert!(html.contains("</h1>"), "missing closing </h1>:\n{html}");
     // The destination id= anchor (S2's Frame/dests wiring) must still be
     // present INSIDE the promoted heading, unaffected by S3's tag swap.
-    assert!(html.contains("id=\"sec1\""), "missing id anchor inside heading:\n{html}");
+    assert!(
+        html.contains("id=\"sec1\""),
+        "missing id anchor inside heading:\n{html}"
+    );
 }
 
 /// A `register-outline` entry at level 1 (`+subsection`'s convention)
@@ -460,9 +531,18 @@ fn outline_level_maps_to_the_matching_heading_tag_and_clamps_at_h6() {
 #[test]
 fn no_outline_means_no_nav_and_no_heading_promotion() {
     let html = render(&[text_line("just a paragraph")]);
-    assert!(!html.contains("<nav"), "unexpected <nav> with no outline:\n{html}");
-    assert!(!html.contains("<h1"), "unexpected heading with no outline:\n{html}");
-    assert!(html.contains("<p class=\"para\">"), "missing plain <p>:\n{html}");
+    assert!(
+        !html.contains("<nav"),
+        "unexpected <nav> with no outline:\n{html}"
+    );
+    assert!(
+        !html.contains("<h1"),
+        "unexpected heading with no outline:\n{html}"
+    );
+    assert!(
+        html.contains("<p class=\"para\">"),
+        "missing plain <p>:\n{html}"
+    );
 }
 
 /// `extras.outline` (even without any matching in-flow destination frame)
@@ -489,7 +569,10 @@ fn outline_renders_a_navigable_toc_nav() {
     };
     let html = render_with_extras(&[text_line("body")], &extras, &[], &[]);
 
-    assert!(html.contains("<nav class=\"toc\">"), "missing TOC nav:\n{html}");
+    assert!(
+        html.contains("<nav class=\"toc\">"),
+        "missing TOC nav:\n{html}"
+    );
     assert!(
         html.contains("<a href=\"#ch1\">Chapter One</a>"),
         "missing top-level TOC entry:\n{html}"
@@ -539,9 +622,20 @@ fn tabular_renders_as_a_real_table_with_rows_and_cells() {
         !html.contains("class=\"table-placeholder\""),
         "S1/S2 placeholder leaked:\n{html}"
     );
-    assert!(html.contains("<table class=\"tabular\">"), "missing <table>:\n{html}");
-    assert_eq!(html.matches("<tr>").count(), 2, "expected two rows:\n{html}");
-    assert_eq!(html.matches("<td>").count(), 4, "expected four cells:\n{html}");
+    assert!(
+        html.contains("<table class=\"tabular\">"),
+        "missing <table>:\n{html}"
+    );
+    assert_eq!(
+        html.matches("<tr>").count(),
+        2,
+        "expected two rows:\n{html}"
+    );
+    assert_eq!(
+        html.matches("<td>").count(),
+        4,
+        "expected four cells:\n{html}"
+    );
     for text in ["R0C0", "R0C1", "R1C0", "R1C1"] {
         assert!(html.contains(text), "missing cell text {text}:\n{html}");
     }
@@ -565,11 +659,30 @@ fn list_marks_become_a_ul_with_li() {
     ];
     let html = render(&vboxes);
 
-    assert_eq!(html.matches("<ul").count(), 1, "expected exactly one <ul>:\n{html}");
-    assert_eq!(html.matches("</ul>").count(), 1, "expected exactly one </ul>:\n{html}");
-    assert_eq!(html.matches("<li").count(), 1, "expected exactly one <li>:\n{html}");
-    assert_eq!(html.matches("</li>").count(), 1, "expected exactly one </li>:\n{html}");
-    assert!(!html.contains("<ol"), "unordered list must not render <ol>:\n{html}");
+    assert_eq!(
+        html.matches("<ul").count(),
+        1,
+        "expected exactly one <ul>:\n{html}"
+    );
+    assert_eq!(
+        html.matches("</ul>").count(),
+        1,
+        "expected exactly one </ul>:\n{html}"
+    );
+    assert_eq!(
+        html.matches("<li").count(),
+        1,
+        "expected exactly one <li>:\n{html}"
+    );
+    assert_eq!(
+        html.matches("</li>").count(),
+        1,
+        "expected exactly one </li>:\n{html}"
+    );
+    assert!(
+        !html.contains("<ol"),
+        "unordered list must not render <ol>:\n{html}"
+    );
     assert!(html.contains("one item"), "missing item text:\n{html}");
 }
 
@@ -594,9 +707,21 @@ fn nested_list_marks_nest_li() {
     ];
     let html = render(&vboxes);
 
-    assert_eq!(html.matches("<ul").count(), 2, "expected two <ul>s (outer + nested):\n{html}");
-    assert_eq!(html.matches("</ul>").count(), 2, "expected two </ul>s:\n{html}");
-    assert_eq!(html.matches("<li").count(), 2, "expected two <li>s:\n{html}");
+    assert_eq!(
+        html.matches("<ul").count(),
+        2,
+        "expected two <ul>s (outer + nested):\n{html}"
+    );
+    assert_eq!(
+        html.matches("</ul>").count(),
+        2,
+        "expected two </ul>s:\n{html}"
+    );
+    assert_eq!(
+        html.matches("<li").count(),
+        2,
+        "expected two <li>s:\n{html}"
+    );
     assert!(html.contains("parent"), "missing parent item text:\n{html}");
     assert!(html.contains("child"), "missing child item text:\n{html}");
 
@@ -606,7 +731,10 @@ fn nested_list_marks_nest_li() {
     let first_li = html.find("<li").expect("missing first <li>");
     let first_li_close = html[first_li..].find("</li>").expect("missing first </li>") + first_li;
     let parent_text = html.find("parent").expect("missing parent text");
-    let nested_ul = html[parent_text..].find("<ul").expect("missing nested <ul>") + parent_text;
+    let nested_ul = html[parent_text..]
+        .find("<ul")
+        .expect("missing nested <ul>")
+        + parent_text;
     assert!(
         nested_ul < first_li_close,
         "nested <ul> must open before the parent's </li> closes (real nesting, not flattening):\n{html}"
@@ -630,11 +758,29 @@ fn enumerate_marks_become_ol() {
     ];
     let html = render(&vboxes);
 
-    assert_eq!(html.matches("<ol").count(), 1, "expected exactly one <ol>:\n{html}");
-    assert_eq!(html.matches("</ol>").count(), 1, "expected exactly one </ol>:\n{html}");
-    assert_eq!(html.matches("<li").count(), 2, "expected two <li>s:\n{html}");
-    assert!(!html.contains("<ul"), "ordered list must not render <ul>:\n{html}");
-    assert!(html.contains("first") && html.contains("second"), "missing item text:\n{html}");
+    assert_eq!(
+        html.matches("<ol").count(),
+        1,
+        "expected exactly one <ol>:\n{html}"
+    );
+    assert_eq!(
+        html.matches("</ol>").count(),
+        1,
+        "expected exactly one </ol>:\n{html}"
+    );
+    assert_eq!(
+        html.matches("<li").count(),
+        2,
+        "expected two <li>s:\n{html}"
+    );
+    assert!(
+        !html.contains("<ul"),
+        "ordered list must not render <ul>:\n{html}"
+    );
+    assert!(
+        html.contains("first") && html.contains("second"),
+        "missing item text:\n{html}"
+    );
 }
 
 /// Design doc §6.3's `bullet_fence_is_suppressed` / R2's mitigation: content
@@ -648,9 +794,15 @@ fn bullet_fence_is_suppressed() {
         depth: Length::pt(2.0),
         leading: Length::pt(12.0),
         contents: vec![
-            (Length::ZERO, PureHorzBox::InlineMark(InlineMarkKind::BulletStart)),
+            (
+                Length::ZERO,
+                PureHorzBox::InlineMark(InlineMarkKind::BulletStart),
+            ),
             (Length::ZERO, text_run("BULLETGLYPH")),
-            (Length::ZERO, PureHorzBox::InlineMark(InlineMarkKind::BulletEnd)),
+            (
+                Length::ZERO,
+                PureHorzBox::InlineMark(InlineMarkKind::BulletEnd),
+            ),
             (Length::ZERO, text_run("realtext")),
         ],
     }];
@@ -680,14 +832,20 @@ fn emph_marks_wrap_em() {
                 PureHorzBox::InlineMark(InlineMarkKind::EmphStart { strong: false }),
             ),
             (Length::ZERO, text_run("emphasized")),
-            (Length::ZERO, PureHorzBox::InlineMark(InlineMarkKind::EmphEnd)),
+            (
+                Length::ZERO,
+                PureHorzBox::InlineMark(InlineMarkKind::EmphEnd),
+            ),
         ],
     }];
     let html = render(&vboxes);
 
     assert!(html.contains("<em>"), "missing <em>:\n{html}");
     assert!(html.contains("</em>"), "missing </em>:\n{html}");
-    assert!(!html.contains("<strong>"), "\\emph must not render <strong>:\n{html}");
+    assert!(
+        !html.contains("<strong>"),
+        "\\emph must not render <strong>:\n{html}"
+    );
     let open = html.find("<em>").unwrap();
     let close = html.find("</em>").unwrap();
     let text = html.find("emphasized").unwrap();
@@ -711,12 +869,18 @@ fn bold_marks_wrap_strong() {
                 PureHorzBox::InlineMark(InlineMarkKind::EmphStart { strong: true }),
             ),
             (Length::ZERO, text_run("bolded")),
-            (Length::ZERO, PureHorzBox::InlineMark(InlineMarkKind::EmphEnd)),
+            (
+                Length::ZERO,
+                PureHorzBox::InlineMark(InlineMarkKind::EmphEnd),
+            ),
         ],
     }];
     let html = render(&vboxes);
 
     assert!(html.contains("<strong>"), "missing <strong>:\n{html}");
     assert!(html.contains("</strong>"), "missing </strong>:\n{html}");
-    assert!(!html.contains("<em>"), "\\bold must not render <em>:\n{html}");
+    assert!(
+        !html.contains("<em>"),
+        "\\bold must not render <em>:\n{html}"
+    );
 }

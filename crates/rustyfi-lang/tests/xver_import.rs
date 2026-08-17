@@ -67,7 +67,9 @@ use rustyfi_loader::{LoadOptions, RustyfiVersion};
 /// `v01_*`/`xver_*` integration test in this crate reproduces locally (no
 /// shared test-support library target exists here).
 fn repo(rel: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(rel)
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join(rel)
 }
 
 /// A small fixture tree under a unique temp directory (cleaned up on drop) —
@@ -229,8 +231,14 @@ fn positive_case_list_and_option_render() {
             other => panic!("unexpected version tag {other} on {:?}", f.path),
         }
     }
-    assert_eq!(saw_v006, 2, "list.satyg + option.satyg should both be V0_0_6-tagged deps");
-    let entry_file = program.files.last().expect("loader always yields the entry last");
+    assert_eq!(
+        saw_v006, 2,
+        "list.satyg + option.satyg should both be V0_0_6-tagged deps"
+    );
+    let entry_file = program
+        .files
+        .last()
+        .expect("loader always yields the entry last");
     assert!(
         matches!(entry_file.version, RustyfiVersion::V0_1),
         "the entry must always stay V0_1"
@@ -307,7 +315,10 @@ fn load_xver_pagebreak_fixture(tag: &str, entry_tail: &str) -> Vec<rustyfi_loade
         panic!("loading the X2a page-break xver fixture ({tag}) should succeed: {e}")
     });
     assert!(
-        program.files.iter().any(|f| matches!(f.cst, rustyfi_loader::LoadedCst::V0_0_6(_))),
+        program
+            .files
+            .iter()
+            .any(|f| matches!(f.cst, rustyfi_loader::LoadedCst::V0_0_6(_))),
         "xver-pagebreak.satyg should have been detected as V0_0_6 (it's a @require: corpus target)"
     );
     // `dir` (and its temp files) would be removed on drop right here if kept
@@ -338,7 +349,11 @@ fn xver_page_break_internal_renders() {
 
     // `A4Paper` (V0_0_6's page ADT) — one page, and the `line-break`d body
     // was actually placed onto it (not silently dropped).
-    assert_eq!(doc.pages.len(), 1, "one A4 page from the V0_0_6 page-break call");
+    assert_eq!(
+        doc.pages.len(),
+        1,
+        "one A4 page from the V0_0_6 page-break call"
+    );
     assert!(
         !doc.pages[0].lines.is_empty(),
         "the line-break'd body must have been placed on the page make-doc built"
@@ -382,7 +397,11 @@ fn xver_forked_prim_coexist() {
     // The FINAL result is still `make-doc body` (the V0_0_6 A4 page) — the
     // probe's own document is computed (and discarded) purely to prove its
     // *typecheck+eval* succeeded alongside the dependency's internal call.
-    assert_eq!(doc.pages.len(), 1, "one A4 page from the V0_0_6 page-break call");
+    assert_eq!(
+        doc.pages.len(),
+        1,
+        "one A4 page from the V0_0_6 page-break call"
+    );
     assert!(
         !doc.pages[0].lines.is_empty(),
         "the line-break'd body must have been placed on the page make-doc built"
@@ -439,7 +458,10 @@ let make-doc body =
 #[test]
 fn xver_internal_forked_type_ascription_renders() {
     let dir = TempDir::new("internal-typed-ascription");
-    dir.write("dist/packages/xver-internal-typed.satyg", XVER_INTERNAL_TYPED_PKG_SRC);
+    dir.write(
+        "dist/packages/xver-internal-typed.satyg",
+        XVER_INTERNAL_TYPED_PKG_SRC,
+    );
     dir.write("xver-helper.satyh", XVER_HELPER_SRC);
     let entry_src = "\
 @require: xver-internal-typed
@@ -476,7 +498,11 @@ make-doc body
 
     // `A4Paper` (V0_0_6's page ADT, produced by the internal `get-page`) —
     // one page, and the `line-break`d body was actually placed onto it.
-    assert_eq!(doc.pages.len(), 1, "one A4 page from the internally-produced page-break call");
+    assert_eq!(
+        doc.pages.len(),
+        1,
+        "one A4 page from the internally-produced page-break call"
+    );
     assert!(
         !doc.pages[0].lines.is_empty(),
         "the line-break'd body must have been placed on the page make-doc built"
@@ -585,7 +611,10 @@ let xver-unwrap-math w =
 #[test]
 fn xver_export_math_relabels_and_renders() {
     let dir = TempDir::new("math-export-positive");
-    dir.write("dist/packages/xver-math-export.satyg", XVER_MATH_EXPORT_PKG_SRC);
+    dir.write(
+        "dist/packages/xver-math-export.satyg",
+        XVER_MATH_EXPORT_PKG_SRC,
+    );
     dir.write("xver-helper.satyh", XVER_HELPER_SRC);
     let entry_src = "\
 @require: xver-math-export
@@ -768,43 +797,86 @@ page-break (210mm, 297mm) content parts body
     );
 }
 
-/// X3b negative (soundness — the scoped classifier's own restriction):
-/// `deco` wrapped in a leading `Fun` argument (`length -> deco`, i.e. a
-/// module-style curried export) is OUTSIDE `classify_deco_exports`'s scope
-/// (`xver_adapt.rs`'s module doc comment: only a BARE `: deco`/`: deco-set`
-/// leaf on a top-level `let-rec` is soundly wrapped) — it must still be
-/// rejected, not silently mis-wrapped.
+/// X3b, extended: the shape the REAL 0.0.6 corpus uses — a `deco` export that
+/// is both ARROW-TAILED (`length -> deco`) and MODULE-SCOPED (inside `module
+/// .. : sig .. end`). `deco.satyh`, which every `std-ja` document reaches, is
+/// exactly this (`val simple-frame : length -> color -> color -> deco`), and
+/// both properties were originally outside X3b's scope.
+///
+/// The module case cannot reuse the top-level mechanism: a member is named
+/// `XverDeco.frame` and there is no `let XverDeco.frame` to write, so the
+/// wrapper is appended INSIDE the module's own decls
+/// (`xver_adapt::inject_module_deco_wrappers`) where sequential shadowing
+/// applies. As in the bare-export test above, the `GraphicsElem::Group` in the
+/// FIRED page graphics is the proof the coercion actually ran: 0.0.6's deco
+/// returns `graphics list`, and only `unite-graphics` builds a `Group`.
 #[test]
-fn xver_boundary_deco_export_curried_prefix_still_rejected() {
-    let dir = TempDir::new("deco-export-curried-negative");
+fn xver_boundary_deco_export_module_scoped_curried_coerces_and_renders() {
+    let dir = TempDir::new("deco-export-module-curried");
     dir.write(
-        "dist/packages/xver-deco-curried.satyg",
+        "dist/packages/xver-deco-mod.satyg",
         "@stage: persistent\n\n\
-         let-rec xver-frame-deco : length -> deco | t (x, y) w h d = []\n",
+         module XverDeco : sig\n\
+         \x20 val frame : length -> deco\n\
+         end = struct\n\
+         \x20 let frame t (x, y) w h d =\n\
+         \x20   [\n\
+         \x20     fill (Gray(0.0))\n\
+         \x20       (close-with-line\n\
+         \x20          (line-to (x +\' w, y +\' h)\n\
+         \x20             (line-to (x +\' w, y)\n\
+         \x20                (start-path (x, y)))))\n\
+         \x20   ]\n\
+         end\n",
     );
-    dir.write("entry.saty", "@require: xver-deco-curried\n\n0\n");
+    dir.write("xver-helper.satyh", XVER_HELPER_SRC);
+    dir.write(
+        "entry.saty",
+        "\
+@require: xver-deco-mod
+@import: xver-helper
+
+let ctx = get-initial-context 440pt (command \\XverHelper.math) in
+let framed =
+  inline-frame-outer (2pt, 2pt, 2pt, 2pt) (XverDeco.frame 1pt)
+    (read-inline ctx {Hello, module-scoped cross-version deco!})
+in
+let body = line-break true true ctx framed in
+let content pbinfo = (| text-origin = (72pt, 100pt), text-height = 640pt |) in
+let parts pbinfo =
+  (| header-origin = (72pt, 72pt),  header-content = block-nil,
+     footer-origin = (72pt, 800pt), footer-content = block-nil |)
+in
+page-break (210mm, 297mm) content parts body
+",
+    );
 
     let opts = LoadOptions {
         lib_root: Some(dir.path().to_path_buf()),
         version: RustyfiVersion::V0_1,
         ..Default::default()
     };
-    let program = rustyfi_loader::load(&dir.path().join("entry.saty"), &opts).unwrap_or_else(|e| {
-        panic!("loading the curried-deco negative fixture should succeed: {e}")
-    });
+    let program = rustyfi_loader::load(&dir.path().join("entry.saty"), &opts)
+        .unwrap_or_else(|e| panic!("loading the module-deco fixture should succeed: {e}"));
 
     let mono = Mono;
-    let err = rustyfi_lang::compile_document_v1(&program.files, &mono).expect_err(
-        "a `deco` export wrapped in a leading Fun argument is outside X3b's scoped support \
-         and must still be rejected",
+    let (doc, _trials) = rustyfi_lang::compile_document_v1_with_trials(&program.files, &mono)
+        .unwrap_or_else(|e| {
+            panic!(
+                "a module-scoped, arrow-tailed V0_0_6 `deco` export should be value-coerced \
+                 (graphics list -> graphics) and compile+render: {e}"
+            )
+        });
+
+    assert_eq!(doc.pages.len(), 1, "one A4 page");
+    assert!(
+        doc.extras.page_graphics[0]
+            .iter()
+            .any(|g| matches!(g, GraphicsElem::Group(_))),
+        "the fired deco's graphics must include a unite-graphics Group (proof the \
+         in-module wrapper ran), got: {:?}",
+        doc.extras.page_graphics[0]
     );
-    match err {
-        CompileError::CrossVersionUnsupportedName { name, slice, .. } => {
-            assert_eq!(name, "deco");
-            assert_eq!(slice, "X3b");
-        }
-        other => panic!("expected CrossVersionUnsupportedName, got: {other}"),
-    }
 }
 
 /// X3.6's `xver_boundary_mathboxes_not_aliased` (NEGATIVE/soundness, S2): a
@@ -818,7 +890,10 @@ fn xver_boundary_deco_export_curried_prefix_still_rejected() {
 #[test]
 fn xver_boundary_mathboxes_not_aliased() {
     let dir = TempDir::new("mathboxes-not-aliased");
-    dir.write("dist/packages/xver-math-export.satyg", XVER_MATH_EXPORT_PKG_SRC);
+    dir.write(
+        "dist/packages/xver-math-export.satyg",
+        XVER_MATH_EXPORT_PKG_SRC,
+    );
     let entry_src = "\
 @require: xver-math-export
 
@@ -848,8 +923,9 @@ let bad = embed-math ctx m in
     // still holds the real invariant: `compile_document_v1` must reject
     // this program somehow, and if it's a type error, the mismatch below is
     // the exact one X3a's soundness guarantees.
-    let program = rustyfi_loader::load(&dir.path().join("entry.saty"), &opts)
-        .unwrap_or_else(|e| panic!("loading the mathboxes-not-aliased fixture should succeed: {e}"));
+    let program = rustyfi_loader::load(&dir.path().join("entry.saty"), &opts).unwrap_or_else(|e| {
+        panic!("loading the mathboxes-not-aliased fixture should succeed: {e}")
+    });
 
     let mono = Mono;
     let err = rustyfi_lang::compile_document_v1(&program.files, &mono)
@@ -925,8 +1001,9 @@ page-break (210mm, 297mm) content parts body
         version: RustyfiVersion::V0_1,
         ..Default::default()
     };
-    let program = rustyfi_loader::load(&dir.path().join("entry.saty"), &opts)
-        .unwrap_or_else(|e| panic!("loading the deco-set export positive fixture should succeed: {e}"));
+    let program = rustyfi_loader::load(&dir.path().join("entry.saty"), &opts).unwrap_or_else(|e| {
+        panic!("loading the deco-set export positive fixture should succeed: {e}")
+    });
     assert!(
         program.files.iter().any(|f| matches!(f.cst, rustyfi_loader::LoadedCst::V0_0_6(_))),
         "xver-decoset-export.satyg should have been detected as V0_0_6 (it's a @require: corpus target)"

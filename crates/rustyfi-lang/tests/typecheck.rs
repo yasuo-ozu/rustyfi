@@ -502,9 +502,18 @@ fn inline_command_argument_type_mismatch_names_the_argument_position() {
          { \\only(4); }",
     );
     let msg = err.to_string();
-    assert!(msg.contains("argument 1"), "message should name the argument position: {msg}");
-    assert!(msg.contains("\\only"), "message should name the command: {msg}");
-    assert!(msg.contains("inline-text"), "message should mention `inline-text`: {msg}");
+    assert!(
+        msg.contains("argument 1"),
+        "message should name the argument position: {msg}"
+    );
+    assert!(
+        msg.contains("\\only"),
+        "message should name the command: {msg}"
+    );
+    assert!(
+        msg.contains("inline-text"),
+        "message should mention `inline-text`: {msg}"
+    );
     assert!(msg.contains("int"), "message should mention `int`: {msg}");
 }
 
@@ -526,8 +535,14 @@ fn emph_given_an_int_is_still_rejected_via_the_command_path() {
          { \\emph(4); }",
     );
     let msg = err.to_string();
-    assert!(msg.contains("argument 1"), "message should name the argument position: {msg}");
-    assert!(msg.contains("inline-text"), "message should mention `inline-text`: {msg}");
+    assert!(
+        msg.contains("argument 1"),
+        "message should name the argument position: {msg}"
+    );
+    assert!(
+        msg.contains("inline-text"),
+        "message should mention `inline-text`: {msg}"
+    );
     assert!(msg.contains("int"), "message should mention `int`: {msg}");
 }
 
@@ -539,8 +554,14 @@ fn block_command_argument_type_mismatch_is_rejected() {
          '< +only(4); >",
     );
     let msg = err.to_string();
-    assert!(msg.contains("argument 1"), "message should name the argument position: {msg}");
-    assert!(msg.contains("block-text"), "message should mention `block-text`: {msg}");
+    assert!(
+        msg.contains("argument 1"),
+        "message should name the argument position: {msg}"
+    );
+    assert!(
+        msg.contains("block-text"),
+        "message should mention `block-text`: {msg}"
+    );
     assert!(msg.contains("int"), "message should mention `int`: {msg}");
 }
 
@@ -648,7 +669,10 @@ fn use_image_by_width_rejects_a_non_image_first_argument() {
     // rejected, not silently accepted via some other type.
     let err = assert_type_error("use-image-by-width 3 40pt");
     let msg = err.to_string();
-    assert!(msg.contains("image"), "message should mention `image`: {msg}");
+    assert!(
+        msg.contains("image"),
+        "message should mention `image`: {msg}"
+    );
 }
 
 #[test]

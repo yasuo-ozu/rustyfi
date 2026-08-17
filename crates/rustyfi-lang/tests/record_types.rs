@@ -52,7 +52,11 @@ fn record_field_names(ty: &TypeExpr) -> Vec<String> {
         panic!("expected a bare TypeProd, got {ty:?}");
     };
     assert!(rest.is_empty(), "expected no `*` continuation, got {ty:?}");
-    let TypeApp { head: TypeAtom::Record { fields, .. }, .. } = first else {
+    let TypeApp {
+        head: TypeAtom::Record { fields, .. },
+        ..
+    } = first
+    else {
         panic!("expected TypeAtom::Record, got {first:?}");
     };
     fields.iter().map(|f| f.name.name.clone()).collect()
@@ -65,10 +69,9 @@ fn record_field_names(ty: &TypeExpr) -> Vec<String> {
 
 #[test]
 fn record_type_synonym_parses_with_expected_fields() {
-    let file = rustyfi_syntax::parse_file(
-        "type cell-record = (| left : bool; right : bool |)\nin 0",
-    )
-    .expect("parse failed");
+    let file =
+        rustyfi_syntax::parse_file("type cell-record = (| left : bool; right : bool |)\nin 0")
+            .expect("parse failed");
     let TopBinding::Type(decl) = &file.prelude[0] else {
         panic!("expected a `type` declaration, got {:?}", file.prelude[0]);
     };
@@ -93,7 +96,10 @@ fn record_type_in_sig_val_annotation_parses_with_expected_fields() {
     )
     .expect("parse failed");
     let TopBinding::Module { sig: Some(sig), .. } = &file.prelude[0] else {
-        panic!("expected `module .. : sig .. end`, got {:?}", file.prelude[0]);
+        panic!(
+            "expected `module .. : sig .. end`, got {:?}",
+            file.prelude[0]
+        );
     };
     let SigItem::Val { name, ty, .. } = &sig.items[0] else {
         panic!("expected SigItem::Val, got {:?}", sig.items[0]);

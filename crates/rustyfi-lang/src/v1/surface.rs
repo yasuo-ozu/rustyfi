@@ -249,7 +249,13 @@ fn any_vert_name(cmd: &AnyVertCmdTok) -> String {
 /// makes that ordering rule enforceable (a forward reference simply doesn't
 /// resolve, §7's `L3` row).
 pub(crate) fn build_file_surface<'a>(file: &'a cst_v1::FileV1, env: &mut SurfaceEnv<'a>) {
-    if let cst_v1::FileV1::Library { name, sig_annot, binds, .. } = file {
+    if let cst_v1::FileV1::Library {
+        name,
+        sig_annot,
+        binds,
+        ..
+    } = file
+    {
         let path = vec![name.name.clone()];
         let bind_refs: Vec<&cst_v1::Bind> = binds.iter().collect();
         let raw = build_binds(&bind_refs, &path, env, &Vec::new());
@@ -287,12 +293,19 @@ fn build_binds<'a>(
             }
             cst_v1::Bind::ValueMutable { name, .. } => surf.vals.push(name.name.clone()),
             cst_v1::Bind::Type { first, ands, .. } => {
-                surf.types.push((first.name.name.clone(), first.tyvars.len()));
+                surf.types
+                    .push((first.name.name.clone(), first.tyvars.len()));
                 for a in ands {
-                    surf.types.push((a.bind.name.name.clone(), a.bind.tyvars.len()));
+                    surf.types
+                        .push((a.bind.name.name.clone(), a.bind.tyvars.len()));
                 }
             }
-            cst_v1::Bind::Module { name, sig_annot: _, body, .. } if matches!(&*body.0, ast_v1::ModExpr::Functor { .. }) => {
+            cst_v1::Bind::Module {
+                name,
+                sig_annot: _,
+                body,
+                ..
+            } if matches!(&*body.0, ast_v1::ModExpr::Functor { .. }) => {
                 // Sub-slice 2f-1 §2.6: a functor DEFINITION contributes NO
                 // usable module at all — register the `FunctorDef` under
                 // `child_path` and `continue`, WITHOUT ever touching
@@ -302,7 +315,13 @@ fn build_binds<'a>(
                 // match below — precisely so the shared post-match
                 // `env.modules.insert`/`surf.mods.push` (every OTHER body
                 // shape's common tail) never fires for a functor name.
-                let ast_v1::ModExpr::Functor { param: fparam, dom, body: fbody, .. } = &*body.0 else {
+                let ast_v1::ModExpr::Functor {
+                    param: fparam,
+                    dom,
+                    body: fbody,
+                    ..
+                } = &*body.0
+                else {
                     unreachable!("guarded by the arm's own `matches!` pattern")
                 };
                 let mut child_path = path.to_vec();
@@ -317,7 +336,12 @@ fn build_binds<'a>(
                     },
                 );
             }
-            cst_v1::Bind::Module { name, sig_annot, body, .. } => {
+            cst_v1::Bind::Module {
+                name,
+                sig_annot,
+                body,
+                ..
+            } => {
                 let mut child_path = path.to_vec();
                 child_path.push(name.name.clone());
                 // Sub-slice 2e-1 gap fix: the alias/coerce target's own
@@ -347,21 +371,23 @@ fn build_binds<'a>(
                     // this exact shape, but it costs nothing extra once the
                     // stack exists).
                     ast_v1::ModExpr::Var(chain) => {
-                        let resolved = resolve_module(env, path, &subst_chain(&chain.render(), subst))
-                            .map(|(t, s)| (t, s.clone()));
+                        let resolved =
+                            resolve_module(env, path, &subst_chain(&chain.render(), subst))
+                                .map(|(t, s)| (t, s.clone()));
                         alias_target_path = resolved.as_ref().map(|(t, _)| t.clone());
                         env.alias_targets
                             .insert(child_path.join("."), alias_target_path.clone());
                         resolved.map(|(_, s)| s).unwrap_or_default()
                     }
-                    ast_v1::ModExpr::Coerce { name: target, sig_, .. } => {
+                    ast_v1::ModExpr::Coerce {
+                        name: target, sig_, ..
+                    } => {
                         let resolved = resolve_module(env, path, &subst_chain(&target.name, subst))
                             .map(|(t, s)| (t, s.clone()));
                         alias_target_path = resolved.as_ref().map(|(t, _)| t.clone());
                         env.alias_targets
                             .insert(child_path.join("."), alias_target_path.clone());
-                        let target_surf =
-                            resolved.map(|(_, s)| s).unwrap_or_default();
+                        let target_surf = resolved.map(|(_, s)| s).unwrap_or_default();
                         filter_surface(target_surf, sig_, env, &child_path)
                     }
                     // Sub-slice 2f-1 §2.6: a functor APPLICATION (`module M =
@@ -382,7 +408,9 @@ fn build_binds<'a>(
                     // intercepts every `Functor`-bodied `Bind::Module`
                     // before this (separate) match is ever reached.
                     ast_v1::ModExpr::Functor { .. } => {
-                        unreachable!("a functor-bodied Bind::Module is intercepted by the guarded arm above")
+                        unreachable!(
+                            "a functor-bodied Bind::Module is intercepted by the guarded arm above"
+                        )
                     }
                 };
                 let filtered = match sig_annot {
@@ -405,7 +433,14 @@ fn build_binds<'a>(
                 // generic "unknown signature name" error, §8 risk 8's
                 // "silent-unregistration wart" — closed here).
                 if let Some((decls, refines)) = resolve_sig_rhs(&sig_.0, env, path) {
-                    env.sigs.insert(key, SigDef { decls, refines, def_path: path.to_vec() });
+                    env.sigs.insert(
+                        key,
+                        SigDef {
+                            decls,
+                            refines,
+                            def_path: path.to_vec(),
+                        },
+                    );
                 }
                 surf.sigs.push(name.name.clone());
             }
@@ -433,7 +468,8 @@ fn build_binds<'a>(
                     let resolved = resolve_module(env, path, &subst_chain(&chain.render(), subst))
                         .map(|(t, s)| (t, s.clone()));
                     let target_path = resolved.as_ref().map(|(t, _)| t.clone());
-                    env.include_targets.push((path.join("."), kw.0, target_path));
+                    env.include_targets
+                        .push((path.join("."), kw.0, target_path));
                     if let Some((target_path, target_surf)) = resolved {
                         register_sig_reexports(env, path, &target_path, &target_surf);
                         surf.vals.extend(target_surf.vals);
@@ -495,9 +531,11 @@ fn build_app_result_surface<'a>(
     subst: &ParamSubst,
 ) -> ModSurface {
     let functor_resolved: Option<(String, FunctorDef<'a>)> =
-        resolve_functor(env, enclosing_path, &subst_chain(&func.render(), subst)).map(|(p, f)| (p, f.clone()));
+        resolve_functor(env, enclosing_path, &subst_chain(&func.render(), subst))
+            .map(|(p, f)| (p, f.clone()));
     let arg_resolved: Option<(String, ModSurface)> =
-        resolve_module(env, enclosing_path, &subst_chain(&arg.render(), subst)).map(|(p, s)| (p, s.clone()));
+        resolve_module(env, enclosing_path, &subst_chain(&arg.render(), subst))
+            .map(|(p, s)| (p, s.clone()));
     let app_span = mod_chain_span(func);
     let body_binds: Option<&[cst_v1::StructBindV1]> = functor_resolved
         .as_ref()
@@ -576,7 +614,9 @@ fn sig_bot_decls<'a>(
 ) -> Option<(&'a [cst_v1::StructDeclV1], Vec<Refine<'a>>)> {
     match bot {
         ast_v1::SigBotV1::Sig { decls, .. } => Some((decls.as_slice(), Vec::new())),
-        ast_v1::SigBotV1::Var(t) => find_sig(env, site_path, &t.name).map(|d| (d.decls, d.refines.clone())),
+        ast_v1::SigBotV1::Var(t) => {
+            find_sig(env, site_path, &t.name).map(|d| (d.decls, d.refines.clone()))
+        }
         ast_v1::SigBotV1::Path(t) => {
             let suffix = joined(&t.mods, &t.name);
             find_sig(env, site_path, &suffix).map(|d| (d.decls, d.refines.clone()))
@@ -602,7 +642,12 @@ fn resolve_sig_rhs<'a>(
 ) -> Option<(&'a [cst_v1::StructDeclV1], Vec<Refine<'a>>)> {
     match sig {
         ast_v1::SigExpr::Bot(bot) => sig_bot_decls(bot, env, site_path),
-        ast_v1::SigExpr::WithType { base, path: None, binds, .. } => {
+        ast_v1::SigExpr::WithType {
+            base,
+            path: None,
+            binds,
+            ..
+        } => {
             let (decls, mut refines) = sig_bot_decls(base, env, site_path)?;
             refines.extend(collect_refines(binds));
             Some((decls, refines))
@@ -772,8 +817,16 @@ fn filter_surface<'a>(
     }
     ModSurface {
         vals: raw.vals.into_iter().filter(|v| dv.contains(v)).collect(),
-        types: raw.types.into_iter().filter(|(n, _)| dt.contains(n)).collect(),
-        mods: raw.mods.into_iter().filter(|(n, _)| dm.contains(n)).collect(),
+        types: raw
+            .types
+            .into_iter()
+            .filter(|(n, _)| dt.contains(n))
+            .collect(),
+        mods: raw
+            .mods
+            .into_iter()
+            .filter(|(n, _)| dm.contains(n))
+            .collect(),
         sigs: raw.sigs.into_iter().filter(|n| ds.contains(n)).collect(),
     }
 }
@@ -1030,8 +1083,15 @@ mod tests {
         let mut env = SurfaceEnv::default();
         build_file_surface(&file, &mut env);
         let surf = env.modules.get("P").expect("P registered");
-        assert!(surf.vals.is_empty(), "an unresolved include splices nothing");
-        assert_eq!(env.include_targets.len(), 1, "the miss is FROZEN, not merely absent");
+        assert!(
+            surf.vals.is_empty(),
+            "an unresolved include splices nothing"
+        );
+        assert_eq!(
+            env.include_targets.len(),
+            1,
+            "the miss is FROZEN, not merely absent"
+        );
         let (path, kw_span, target) = &env.include_targets[0];
         assert_eq!(path, "P");
         assert_eq!(target, &None);
@@ -1120,8 +1180,14 @@ mod tests {
         );
         let mut env = SurfaceEnv::default();
         build_file_surface(&file, &mut env);
-        assert!(env.functors.contains_key("M.F"), "M.F must be a registered functor");
-        assert!(!env.modules.contains_key("M.F"), "a functor name is never a usable module");
+        assert!(
+            env.functors.contains_key("M.F"),
+            "M.F must be a registered functor"
+        );
+        assert!(
+            !env.modules.contains_key("M.F"),
+            "a functor name is never a usable module"
+        );
         let r = env.modules.get("M.R").expect("M.R registered");
         assert_eq!(r.vals, vec!["y".to_string()]);
     }
@@ -1139,12 +1205,22 @@ mod tests {
         // "register empty, the caller decides what a miss means" rule);
         // what's under test here is that the MISS itself is frozen, not a
         // silent re-resolution risk.
-        let r = env.modules.get("M.R").expect("M.R still registered, just empty");
+        let r = env
+            .modules
+            .get("M.R")
+            .expect("M.R still registered, just empty");
         assert!(r.vals.is_empty() && r.mods.is_empty());
-        assert_eq!(env.app_targets.len(), 1, "the miss is FROZEN, not merely absent");
+        assert_eq!(
+            env.app_targets.len(),
+            1,
+            "the miss is FROZEN, not merely absent"
+        );
         let (path, span, _) = &env.app_targets[0];
         assert_eq!(path, "M");
-        assert_eq!(frozen_app_target(&env, &["M".to_string()], *span), Some(&None));
+        assert_eq!(
+            frozen_app_target(&env, &["M".to_string()], *span),
+            Some(&None)
+        );
     }
 
     /// F-surf1 (Sub-slice 2f-2a spec §4.1/§4.3, formerly T-surf2 — this test
@@ -1179,13 +1255,19 @@ mod tests {
             .expect("the inner `F X` application (inside Outer's instantiated body) is frozen");
         assert_eq!(
             resolution,
-            &Some(AppResolution { functor_path: "M.F".to_string(), arg_path: "M.Base".to_string() }),
+            &Some(AppResolution {
+                functor_path: "M.F".to_string(),
+                arg_path: "M.Base".to_string()
+            }),
             "F X's argument X (Outer's own parameter) substitutes to Outer's application's \
              argument, M.Base"
         );
         assert_eq!(
             frozen_app_target(&env, &["M".to_string(), "Applied".to_string()], *span),
-            Some(&Some(AppResolution { functor_path: "M.F".to_string(), arg_path: "M.Base".to_string() }))
+            Some(&Some(AppResolution {
+                functor_path: "M.F".to_string(),
+                arg_path: "M.Base".to_string()
+            }))
         );
         let _ = path;
     }

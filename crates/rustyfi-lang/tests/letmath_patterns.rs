@@ -121,7 +121,10 @@ fn let_math_wildcard_and_literal_patterns() {
             let w_snd = as_length(it.next().unwrap());
             let w_pick0 = as_length(it.next().unwrap());
             let w_y = as_length(it.next().unwrap());
-            assert_eq!(w_snd, w_y, "wildcard-first tuple pattern should bind `m` to ${{y}}");
+            assert_eq!(
+                w_snd, w_y,
+                "wildcard-first tuple pattern should bind `m` to ${{y}}"
+            );
             assert_eq!(
                 w_pick0, w_y,
                 "literal-`0`-first tuple pattern should match and bind `m` to ${{y}}"
@@ -183,7 +186,8 @@ fn let_math_optional_marker_composes_with_pattern_param() {
 
 #[test]
 fn let_inline_tuple_pattern_param_both_forms() {
-    const PICK_CMD: &str = "let-inline ctx \\pick-ctx (a, b) = read-inline ctx (if a then { AAAA } else { B })
+    const PICK_CMD: &str =
+        "let-inline ctx \\pick-ctx (a, b) = read-inline ctx (if a then { AAAA } else { B })
 let-inline \\pick-light (a, b) = if a then { AAAA } else { B }
 let-inline ctx \\math m = inline-nil
 ";
@@ -326,8 +330,8 @@ fn expression_level_let_math_in_non_math_value_fails_typecheck() {
     let src = "let-math \\f = 3 in 0";
     match run(src) {
         Err(_) => {}
-        Ok(v) => panic!(
-            "expected a typecheck error (a math command's value must be `math`), got {v:?}"
-        ),
+        Ok(v) => {
+            panic!("expected a typecheck error (a math command's value must be `math`), got {v:?}")
+        }
     }
 }

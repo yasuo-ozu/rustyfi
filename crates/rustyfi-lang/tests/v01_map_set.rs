@@ -118,7 +118,10 @@ fn load_real_deps(tag: &str, requires: &str) -> Vec<LoadedFile> {
     };
     let mut program = rustyfi_loader::load(&doc.0, &opts)
         .unwrap_or_else(|e| panic!("[{tag}] real packages should load: {e}"));
-    program.files.pop().expect("loader always yields at least the throwaway entry");
+    program
+        .files
+        .pop()
+        .expect("loader always yields at least the throwaway entry");
     program.files
 }
 
@@ -238,8 +241,13 @@ document (| title = `map-harness` |) '<
   +p { #ib1; #ib2; }
 >
 ";
-    let doc = compile_with_harness("map-value", "@require: v01-mini\n@require: map", harness, entry)
-        .expect("map.satyg's Map.Make IntOrd should instantiate, compile, and evaluate");
+    let doc = compile_with_harness(
+        "map-value",
+        "@require: v01-mini\n@require: map",
+        harness,
+        entry,
+    )
+    .expect("map.satyg's Map.Make IntOrd should instantiate, compile, and evaluate");
     let words = first_line_words(&doc);
     assert_eq!(
         words,

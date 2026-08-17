@@ -118,13 +118,23 @@ fn gap5_minus_reclassified_as_bin_with_minus_sign_glyph() {
     let src = with_ctx("embed-math ctx ${a-b}");
     let v = run(&src).expect("${a-b} should compile and evaluate");
     let (width, glyphs) = math_box(v);
-    assert_eq!(glyphs.len(), 3, "expected 3 glyphs (a, -, b), got {glyphs:?}");
-    assert_eq!(glyphs[1].text, "\u{2212}", "middle glyph should be U+2212 MINUS SIGN");
+    assert_eq!(
+        glyphs.len(),
+        3,
+        "expected 3 glyphs (a, -, b), got {glyphs:?}"
+    );
+    assert_eq!(
+        glyphs[1].text, "\u{2212}",
+        "middle glyph should be U+2212 MINUS SIGN"
+    );
 
     let glyph_w = Length::pt(12.0) * 0.5;
     let bin_space = Length::pt(12.0) * 0.22;
     let expected = glyph_w + bin_space + glyph_w + bin_space + glyph_w;
-    assert_eq!(width, expected, "expected 3 glyphs + 2 Bin spaces, got {width:?}");
+    assert_eq!(
+        width, expected,
+        "expected 3 glyphs + 2 Bin spaces, got {width:?}"
+    );
 }
 
 /// `${a->b}`: `-` and `>` are consecutive symbol chars, lexed as ONE
@@ -137,8 +147,16 @@ fn gap5_multi_char_symbol_run_is_one_ord_atom_no_spacing() {
     let src = with_ctx("embed-math ctx ${a->b}");
     let v = run(&src).expect("${a->b} should compile and evaluate");
     let (width, glyphs) = math_box(v);
-    assert_eq!(glyphs.len(), 4, "expected 4 glyphs (a, -, >, b), got {glyphs:?}");
-    assert_eq!(width, Length::pt(24.0), "expected 4 * 6pt with no inter-atom spacing");
+    assert_eq!(
+        glyphs.len(),
+        4,
+        "expected 4 glyphs (a, -, >, b), got {glyphs:?}"
+    );
+    assert_eq!(
+        width,
+        Length::pt(24.0),
+        "expected 4 * 6pt with no inter-atom spacing"
+    );
 }
 
 /// `${a:b}`: `:` is reclassified `Rel` (was `Punct` under the old
@@ -155,7 +173,10 @@ fn gap5_colon_reclassified_as_rel() {
     let rel_space = Length::pt(12.0) * 0.28;
     let expected = glyph_w + rel_space + glyph_w + rel_space + glyph_w;
     assert_eq!(width, expected, "expected Rel spacing on both sides of ':'");
-    assert!(width > Length::pt(18.0), "must be strictly wider than the old Punct-spacing width");
+    assert!(
+        width > Length::pt(18.0),
+        "must be strictly wider than the old Punct-spacing width"
+    );
 }
 
 /// `${x}`'s default restyling is `MathCharClass::Italic`
@@ -192,8 +213,7 @@ fn gap5_change_char_class_to_roman_keeps_plain_ascii() {
 #[test]
 fn gap5_change_char_class_to_bold_italic() {
     let src = with_ctx("embed-math ctx (math-char-class MathBoldItalic ${x})");
-    let v =
-        run(&src).expect("math-char-class MathBoldItalic ${x} should compile and evaluate");
+    let v = run(&src).expect("math-char-class MathBoldItalic ${x} should compile and evaluate");
     let (_, glyphs) = math_box(v);
     assert_eq!(glyphs.len(), 1);
     assert_eq!(glyphs[0].text, "\u{1D499}");
@@ -209,7 +229,10 @@ fn gap5_ascii_only_font_falls_back_to_source_char() {
     let v = run_with(&src, &AsciiMono).expect("${x} should compile and evaluate under AsciiMono");
     let (_, glyphs) = math_box(v);
     assert_eq!(glyphs.len(), 1);
-    assert_eq!(glyphs[0].text, "x", "must fall back to the source char under an ASCII-only font");
+    assert_eq!(
+        glyphs[0].text, "x",
+        "must fall back to the source char under an ASCII-only font"
+    );
 }
 
 // ============================================================================
@@ -289,9 +312,16 @@ fn gap6_text_in_math_renders_through_read_inline() {
     let src = with_ctx("embed-math ctx (text-in-math MathOrd (fun c -> read-inline c {ab}))");
     let v = run(&src).expect("text-in-math should no longer error");
     let (width, glyphs) = math_box(v);
-    assert_eq!(width, Length::pt(12.0), "expected the embedded \"ab\" word's own 12pt width");
+    assert_eq!(
+        width,
+        Length::pt(12.0),
+        "expected the embedded \"ab\" word's own 12pt width"
+    );
     let joined: String = glyphs.iter().map(|g| g.text.as_str()).collect();
-    assert!(joined.contains("ab"), "expected a glyph whose text contains \"ab\", got {glyphs:?}");
+    assert!(
+        joined.contains("ab"),
+        "expected a glyph whose text contains \"ab\", got {glyphs:?}"
+    );
 }
 
 // ============================================================================

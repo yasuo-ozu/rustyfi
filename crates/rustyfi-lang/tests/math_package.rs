@@ -22,7 +22,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use rustyfi_backend::{FontKey, FontMetrics, GraphicsElem, HorzBox, Length, MathGlyph, PureHorzBox};
+use rustyfi_backend::{
+    FontKey, FontMetrics, GraphicsElem, HorzBox, Length, MathGlyph, PureHorzBox,
+};
 use rustyfi_lang::value::Value;
 use rustyfi_lang::{elaborate, eval, primitives, typecheck};
 use rustyfi_loader::{LoadOptions, LoadedProgram};
@@ -266,7 +268,11 @@ fn b3b2_paren_and_abs_draw_different_shapes_through_the_closures() {
         // Identity restored: only the inner `x` glyph remains; the
         // delimiters are DRAWN ink, not `(`/`)` glyphs (B3b(i) gave 3 glyphs,
         // 0 rules and made \abs identical to \paren).
-        assert_eq!(paren_g.len(), 1, "paren: inner glyph only, delimiters drawn");
+        assert_eq!(
+            paren_g.len(),
+            1,
+            "paren: inner glyph only, delimiters drawn"
+        );
         assert_eq!(abs_g.len(), 1, "abs: inner glyph only");
         assert!(!paren_r.is_empty(), "paren draws its delimiters");
         assert!(!abs_r.is_empty(), "abs draws its delimiters");
@@ -380,7 +386,11 @@ get-natural-metrics (read-inline ctx {${x}})";
     let v = compile_via_loader("gap1-override", src)
         .expect("set-math-command's installed \\m0 should run, not the dummy or any fallback");
     let w = natural_width(v);
-    assert_eq!(w, Length::pt(42.0), "expected \\m0's inline-skip 42pt, got {w:?}");
+    assert_eq!(
+        w,
+        Length::pt(42.0),
+        "expected \\m0's inline-skip 42pt, got {w:?}"
+    );
 }
 
 // Gap 1 fallback (`Context::initial` directly, no installed command ->
@@ -417,7 +427,10 @@ let w-bare = get-natural-metrics (embed-math ctx ${#m}) in
     let (w_sup, w_bare) = match v {
         Value::Tuple(vs) if vs.len() == 2 => {
             let mut it = vs.into_iter();
-            (natural_width(it.next().unwrap()), natural_width(it.next().unwrap()))
+            (
+                natural_width(it.next().unwrap()),
+                natural_width(it.next().unwrap()),
+            )
         }
         other => panic!("expected a 2-tuple, got {other:?}"),
     };
@@ -428,7 +441,11 @@ let w-bare = get-natural-metrics (embed-math ctx ${#m}) in
     );
     // Bare case: resolver got (None, None) -> two "N" chars, at the base
     // (non-script) size.
-    assert_eq!(w_bare, Length::pt(12.0), "expected two full-size 'N' glyphs, got {w_bare:?}");
+    assert_eq!(
+        w_bare,
+        Length::pt(12.0),
+        "expected two full-size 'N' glyphs, got {w_bare:?}"
+    );
     // Sup case: resolver got (None, Some(sup)) -> one "Y" at base size plus
     // "2" at script size — smaller than the bare two-full-size-char case.
     assert!(
@@ -570,12 +587,18 @@ let ctx = get-initial-context 200pt (command \\math) in
         let (roman, italic) = match v {
             Value::Tuple(vs) if vs.len() == 2 => {
                 let mut it = vs.into_iter();
-                (math_glyphs(it.next().unwrap()), math_glyphs(it.next().unwrap()))
+                (
+                    math_glyphs(it.next().unwrap()),
+                    math_glyphs(it.next().unwrap()),
+                )
             }
             other => panic!("expected a 2-tuple, got {other:?}"),
         };
         assert_eq!(roman.len(), 1);
-        assert_eq!(roman[0].text, "x", "\\mathrm{{x}} should keep the plain ascii 'x'");
+        assert_eq!(
+            roman[0].text, "x",
+            "\\mathrm{{x}} should keep the plain ascii 'x'"
+        );
         assert_eq!(italic.len(), 1);
         assert_eq!(
             italic[0].text, "\u{1D465}",

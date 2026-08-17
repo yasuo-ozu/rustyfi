@@ -82,7 +82,8 @@ fn compile_fixture() -> Vec<u8> {
         "the long paragraph must wrap: got {} lines",
         doc.pages[0].lines.len()
     );
-    rustyfi_pdf::render_pdf(&doc.geometry, &doc.pages, &doc.images).expect("PDF rendering must succeed")
+    rustyfi_pdf::render_pdf(&doc.geometry, &doc.pages, &doc.images)
+        .expect("PDF rendering must succeed")
 }
 
 #[test]
@@ -93,10 +94,7 @@ fn fixture_compiles_to_valid_pdf_with_expected_text() {
     let tmp = std::env::temp_dir().join(format!("rustyfi-rust-e2e-{}.pdf", std::process::id()));
     std::fs::write(&tmp, &bytes).unwrap();
 
-    let pdftotext = Command::new("pdftotext")
-        .arg(&tmp)
-        .arg("-")
-        .output();
+    let pdftotext = Command::new("pdftotext").arg(&tmp).arg("-").output();
 
     match pdftotext {
         Ok(out) if out.status.success() => {
@@ -143,7 +141,8 @@ fn compile_phase2_fixture() -> Vec<u8> {
         "expected at least one line per +p paragraph, got {}",
         doc.pages[0].lines.len()
     );
-    rustyfi_pdf::render_pdf(&doc.geometry, &doc.pages, &doc.images).expect("PDF rendering must succeed")
+    rustyfi_pdf::render_pdf(&doc.geometry, &doc.pages, &doc.images)
+        .expect("PDF rendering must succeed")
 }
 
 /// End-to-end coverage for the phase-2 elaborator (operator-precedence fold,
@@ -156,8 +155,10 @@ fn phase2_fixture_compiles_and_renders_expected_text() {
     let bytes = compile_phase2_fixture();
     assert!(bytes.starts_with(b"%PDF-"), "not a PDF header");
 
-    let tmp =
-        std::env::temp_dir().join(format!("rustyfi-rust-e2e-phase2-{}.pdf", std::process::id()));
+    let tmp = std::env::temp_dir().join(format!(
+        "rustyfi-rust-e2e-phase2-{}.pdf",
+        std::process::id()
+    ));
     std::fs::write(&tmp, &bytes).unwrap();
 
     let pdftotext = Command::new("pdftotext").arg(&tmp).arg("-").output();
@@ -183,7 +184,10 @@ fn phase2_fixture_compiles_and_renders_expected_text() {
         _ => {
             let hay = String::from_utf8_lossy(&bytes);
             for expected in ["(Bracketed)", "(Announced)", "(Countdown)", "(complete.)"] {
-                assert!(hay.contains(expected), "content stream missing {expected:?}");
+                assert!(
+                    hay.contains(expected),
+                    "content stream missing {expected:?}"
+                );
             }
         }
     }
@@ -202,7 +206,8 @@ fn compile_phase2b_fixture() -> Vec<u8> {
         "expected at least one line, got {}",
         doc.pages[0].lines.len()
     );
-    rustyfi_pdf::render_pdf(&doc.geometry, &doc.pages, &doc.images).expect("PDF rendering must succeed")
+    rustyfi_pdf::render_pdf(&doc.geometry, &doc.pages, &doc.images)
+        .expect("PDF rendering must succeed")
 }
 
 /// End-to-end coverage for the phase-2b elaborator additions (a module +
@@ -216,8 +221,10 @@ fn phase2b_fixture_compiles_and_renders_expected_text() {
     let bytes = compile_phase2b_fixture();
     assert!(bytes.starts_with(b"%PDF-"), "not a PDF header");
 
-    let tmp =
-        std::env::temp_dir().join(format!("rustyfi-rust-e2e-phase2b-{}.pdf", std::process::id()));
+    let tmp = std::env::temp_dir().join(format!(
+        "rustyfi-rust-e2e-phase2b-{}.pdf",
+        std::process::id()
+    ));
     std::fs::write(&tmp, &bytes).unwrap();
 
     let pdftotext = Command::new("pdftotext").arg(&tmp).arg("-").output();
@@ -239,7 +246,10 @@ fn phase2b_fixture_compiles_and_renders_expected_text() {
         _ => {
             let hay = String::from_utf8_lossy(&bytes);
             for expected in ["(Countdown)", "(complete.)"] {
-                assert!(hay.contains(expected), "content stream missing {expected:?}");
+                assert!(
+                    hay.contains(expected),
+                    "content stream missing {expected:?}"
+                );
             }
         }
     }
@@ -290,7 +300,8 @@ fn compile_graphics_fixture() -> Vec<u8> {
     let doc = rustyfi_lang::compile_document_cst(&merged, &metrics)
         .expect("graphics fixture must compile");
     assert_eq!(doc.pages.len(), 1);
-    rustyfi_pdf::render_pdf(&doc.geometry, &doc.pages, &doc.images).expect("PDF rendering must succeed")
+    rustyfi_pdf::render_pdf(&doc.geometry, &doc.pages, &doc.images)
+        .expect("PDF rendering must succeed")
 }
 
 /// End-to-end coverage for the Slice 1 graphics primitives
@@ -382,13 +393,19 @@ fn table_fixture_compiles_and_renders_cell_text_and_rules() {
     let hay = String::from_utf8_lossy(&bytes);
     // Cell text: each of the 2x2 grid's four letters is a `Tj` run.
     for letter in ["(A) Tj", "(B) Tj", "(C) Tj", "(D) Tj"] {
-        assert!(hay.contains(letter), "content stream missing cell text {letter:?}:\n{hay}");
+        assert!(
+            hay.contains(letter),
+            "content stream missing cell text {letter:?}:\n{hay}"
+        );
     }
     // Rule path ops (`m`/`l`), a stroke (`S`), a set line width (`w`), and a
     // gray color op (`g`/`G`) — the ruled grid drawn through the existing
     // `place_graphics`.
     for op in [" m\n", " l\n", "\nS\n", " w\n"] {
-        assert!(hay.contains(op), "content stream missing rule op {op:?}:\n{hay}");
+        assert!(
+            hay.contains(op),
+            "content stream missing rule op {op:?}:\n{hay}"
+        );
     }
     assert!(
         hay.contains("0 G") || hay.contains(" g\n"),
@@ -428,7 +445,10 @@ fn multifile_import_compiles_and_renders() {
         if out.status.success() {
             let text = String::from_utf8_lossy(&out.stdout);
             assert!(text.contains("Imported command works."), "missing: {text}");
-            assert!(text.contains("Twice twenty-one is 42 indeed."), "missing: {text}");
+            assert!(
+                text.contains("Twice twenty-one is 42 indeed."),
+                "missing: {text}"
+            );
         }
     }
     let _ = std::fs::remove_file(&tmp);
@@ -441,7 +461,8 @@ fn compile_math_fixture() -> Vec<u8> {
     let doc = rustyfi_lang::compile_document_cst(&merged, &metrics)
         .expect("math fixture must compile (docs/plans/math-engine.md §Slice 1)");
     assert_eq!(doc.pages.len(), 1);
-    rustyfi_pdf::render_pdf(&doc.geometry, &doc.pages, &doc.images).expect("PDF rendering must succeed")
+    rustyfi_pdf::render_pdf(&doc.geometry, &doc.pages, &doc.images)
+        .expect("PDF rendering must succeed")
 }
 
 /// The nearest preceding `Tf`-size / `Td`-y pair before `glyph_tj` (e.g.
@@ -515,9 +536,7 @@ fn math_fixture_renders_superscript_raised_and_scaled() {
 
 /// Compile the 2-trial hook-page fixture against an auxiliary cross-reference
 /// table, returning the PDF, the trial count, and the table the run produced.
-fn compile_hook_page_with_aux(
-    aux: &mut rustyfi_lang::crossref::AuxTable,
-) -> (Vec<u8>, u32) {
+fn compile_hook_page_with_aux(aux: &mut rustyfi_lang::crossref::AuxTable) -> (Vec<u8>, u32) {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hook-page.saty");
     let merged = load_and_merge(&fixture);
     let metrics = rustyfi_pdf::Base14Metrics;
@@ -539,10 +558,16 @@ fn an_auxiliary_table_resolves_the_fixture_in_one_trial_with_identical_output() 
     let mut aux = rustyfi_lang::crossref::AuxTable::new();
     let (cold, cold_trials) = compile_hook_page_with_aux(&mut aux);
     assert_eq!(cold_trials, 2, "cold, this fixture takes two trials");
-    assert!(!aux.is_empty(), "the run must leave a table to carry forward");
+    assert!(
+        !aux.is_empty(),
+        "the run must leave a table to carry forward"
+    );
 
     let (warm, warm_trials) = compile_hook_page_with_aux(&mut aux);
-    assert_eq!(warm_trials, 1, "seeded, the forward reference resolves at once");
+    assert_eq!(
+        warm_trials, 1,
+        "seeded, the forward reference resolves at once"
+    );
     assert_eq!(
         cold, warm,
         "an auxiliary table may change how fast the fixpoint converges, never \
@@ -559,10 +584,8 @@ fn a_wrong_auxiliary_table_still_converges_to_the_same_document() {
     let (cold, _) = compile_hook_page_with_aux(&mut aux);
 
     // Corrupt every value the previous run recorded.
-    let poisoned: rustyfi_lang::crossref::AuxTable = aux
-        .keys()
-        .map(|k| (k.clone(), "999".to_string()))
-        .collect();
+    let poisoned: rustyfi_lang::crossref::AuxTable =
+        aux.keys().map(|k| (k.clone(), "999".to_string())).collect();
     let mut poisoned = poisoned;
     let (out, _) = compile_hook_page_with_aux(&mut poisoned);
     assert_eq!(
@@ -601,8 +624,10 @@ fn hook_page_fixture_fires_the_hook_and_renders_the_final_page_number() {
         "the cross-ref fixpoint must take exactly 2 trials to converge"
     );
 
-    let tmp = std::env::temp_dir()
-        .join(format!("rustyfi-rust-e2e-hookpage-{}.pdf", std::process::id()));
+    let tmp = std::env::temp_dir().join(format!(
+        "rustyfi-rust-e2e-hookpage-{}.pdf",
+        std::process::id()
+    ));
     std::fs::write(&tmp, &bytes).unwrap();
 
     let pdftotext = Command::new("pdftotext").arg(&tmp).arg("-").output();
@@ -610,7 +635,8 @@ fn hook_page_fixture_fires_the_hook_and_renders_the_final_page_number() {
         Ok(out) if out.status.success() => {
             let text = String::from_utf8_lossy(&out.stdout);
             assert!(
-                text.replace(char::is_whitespace, "").contains("Pagenumber:1"),
+                text.replace(char::is_whitespace, "")
+                    .contains("Pagenumber:1"),
                 "pdftotext output missing the rendered page number:\n{text}"
             );
         }
@@ -629,8 +655,7 @@ fn compile_page_footer_fixture() -> std::rc::Rc<rustyfi_lang::value::DocumentVal
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/page-footer.saty");
     let merged = load_and_merge(&fixture);
     let metrics = rustyfi_pdf::Base14Metrics;
-    rustyfi_lang::compile_document_cst(&merged, &metrics)
-        .expect("page-footer fixture must compile")
+    rustyfi_lang::compile_document_cst(&merged, &metrics).expect("page-footer fixture must compile")
 }
 
 /// End-to-end coverage for the Slice 1 real `page-break`
@@ -708,8 +733,7 @@ fn compile_annot_hook_fixture() -> std::rc::Rc<rustyfi_lang::value::DocumentValu
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/annot-hook.saty");
     let merged = load_and_merge(&fixture);
     let metrics = rustyfi_pdf::Base14Metrics;
-    rustyfi_lang::compile_document_cst(&merged, &metrics)
-        .expect("annot-hook fixture must compile")
+    rustyfi_lang::compile_document_cst(&merged, &metrics).expect("annot-hook fixture must compile")
 }
 
 /// A raw `hook-page-break` closure registers a named destination
@@ -805,8 +829,7 @@ fn compile_footnote_fixture() -> std::rc::Rc<rustyfi_lang::value::DocumentValue>
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/footnote.saty");
     let merged = load_and_merge(&fixture);
     let metrics = rustyfi_pdf::Base14Metrics;
-    rustyfi_lang::compile_document_cst(&merged, &metrics)
-        .expect("footnote fixture must compile")
+    rustyfi_lang::compile_document_cst(&merged, &metrics).expect("footnote fixture must compile")
 }
 
 /// `add-footnote`'s block ends up on the SAME page as its referencing line,
@@ -845,8 +868,10 @@ fn footnote_fixture_places_the_footnote_body_below_the_reference_and_renders_its
         .expect("PDF rendering must succeed");
     assert!(bytes.starts_with(b"%PDF-"), "not a PDF header");
 
-    let tmp =
-        std::env::temp_dir().join(format!("rustyfi-rust-e2e-footnote-{}.pdf", std::process::id()));
+    let tmp = std::env::temp_dir().join(format!(
+        "rustyfi-rust-e2e-footnote-{}.pdf",
+        std::process::id()
+    ));
     std::fs::write(&tmp, &bytes).unwrap();
     let pdftotext = Command::new("pdftotext").arg(&tmp).arg("-").output();
 
@@ -893,8 +918,8 @@ fn footnote_fixture_places_the_footnote_body_below_the_reference_and_renders_its
 #[test]
 fn v01_footnote_scheme_body_renders_through_page_break() {
     run_with_big_stack(move || {
-        let entry = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/v01-footnote-scheme.saty");
+        let entry =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/v01-footnote-scheme.saty");
         let program = rustyfi_loader::load(
             &entry,
             &rustyfi_loader::LoadOptions {
@@ -974,8 +999,7 @@ fn compile_twocolumn_fixture() -> std::rc::Rc<rustyfi_lang::value::DocumentValue
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/twocolumn.saty");
     let merged = load_and_merge(&fixture);
     let metrics = rustyfi_pdf::Base14Metrics;
-    rustyfi_lang::compile_document_cst(&merged, &metrics)
-        .expect("twocolumn fixture must compile")
+    rustyfi_lang::compile_document_cst(&merged, &metrics).expect("twocolumn fixture must compile")
 }
 
 /// `page-break-two-column A4Paper 250pt …`: page 1 must carry lines at BOTH
@@ -995,10 +1019,7 @@ fn twocolumn_fixture_places_a_second_column_at_the_shifted_x_origin() {
         .lines
         .iter()
         .any(|l| (l.x.0 - text_origin_x).abs() < 0.01);
-    let has_col2 = page1
-        .lines
-        .iter()
-        .any(|l| (l.x.0 - shifted_x).abs() < 0.01);
+    let has_col2 = page1.lines.iter().any(|l| (l.x.0 - shifted_x).abs() < 0.01);
     assert!(
         has_col1,
         "page 1 should have lines at the first column's x = 72pt, got x values: {:?}",
@@ -1015,8 +1036,7 @@ fn compile_multicolumn_fixture() -> std::rc::Rc<rustyfi_lang::value::DocumentVal
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/multicolumn.saty");
     let merged = load_and_merge(&fixture);
     let metrics = rustyfi_pdf::Base14Metrics;
-    rustyfi_lang::compile_document_cst(&merged, &metrics)
-        .expect("multicolumn fixture must compile")
+    rustyfi_lang::compile_document_cst(&merged, &metrics).expect("multicolumn fixture must compile")
 }
 
 fn count_colmark_lines(page: &rustyfi_backend::Page) -> usize {
@@ -1117,8 +1137,8 @@ fn tier4_stdjabook_capstone_renders_to_extractable_text() {
     run_with_big_stack(move || {
         let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/tier4.saty");
         let merged = load_and_merge(&fixture);
-        let store = rustyfi_pdf::TtfFontStore::load(&font, None, None)
-            .expect("load DejaVu regular face");
+        let store =
+            rustyfi_pdf::TtfFontStore::load(&font, None, None).expect("load DejaVu regular face");
         let doc = rustyfi_lang::compile_document_cst(&merged, &store)
             .expect("tier4 stdjabook capstone must compile end-to-end");
         assert!(!doc.pages.is_empty(), "expected at least one page");
@@ -1182,7 +1202,10 @@ fn v01_slice1_document_renders_to_extractable_text() {
         )
         .expect("V0_1 must load once is_implemented() is flipped");
         assert_eq!(program.files.len(), 2, "v01-mini.satyh + v01-minimal.saty");
-        assert!(matches!(program.files[0].cst, rustyfi_loader::LoadedCst::V0_1(_)));
+        assert!(matches!(
+            program.files[0].cst,
+            rustyfi_loader::LoadedCst::V0_1(_)
+        ));
 
         let metrics = rustyfi_pdf::Base14Metrics;
         let doc = rustyfi_lang::compile_document_v1(&program.files, &metrics)
@@ -1195,14 +1218,18 @@ fn v01_slice1_document_renders_to_extractable_text() {
         // A4 via the v01 tuple page size: 210mm = 595.276pt.
         assert!((doc.geometry.paper_width.0 - 595.276).abs() < 0.01);
 
-        let tmp = std::env::temp_dir().join(format!("rustyfi-rust-e2e-v01-{}.pdf", std::process::id()));
+        let tmp =
+            std::env::temp_dir().join(format!("rustyfi-rust-e2e-v01-{}.pdf", std::process::id()));
         std::fs::write(&tmp, &bytes).unwrap();
         let pdftotext = Command::new("pdftotext").arg(&tmp).arg("-").output();
         match pdftotext {
             Ok(out) if out.status.success() => {
                 let text = String::from_utf8_lossy(&out.stdout);
                 // match…end evaluated: Some 41 -> 41 + 1.
-                assert!(text.contains("The answer is 42"), "missing match/…/end result:\n{text}");
+                assert!(
+                    text.contains("The answer is 42"),
+                    "missing match/…/end result:\n{text}"
+                );
                 // \emph through the val-inline binding.
                 assert!(text.contains("Emphasis"), "missing \\emph output:\n{text}");
                 // The v01-mini footer (pbinfo#page-number via arabic).
@@ -1243,7 +1270,11 @@ fn v01_sealed_document_renders_to_extractable_text() {
             },
         )
         .expect("v01-sealed.saty must load");
-        assert_eq!(program.files.len(), 3, "v01-mini.satyh + v01-sealed.satyh + v01-sealed.saty");
+        assert_eq!(
+            program.files.len(),
+            3,
+            "v01-mini.satyh + v01-sealed.satyh + v01-sealed.saty"
+        );
 
         let metrics = rustyfi_pdf::Base14Metrics;
         let doc = rustyfi_lang::compile_document_v1(&program.files, &metrics)
@@ -1254,8 +1285,10 @@ fn v01_sealed_document_renders_to_extractable_text() {
         let bytes = rustyfi_pdf::render_pdf(&doc.geometry, &doc.pages, &doc.images).unwrap();
         assert!(bytes.starts_with(b"%PDF-"));
 
-        let tmp =
-            std::env::temp_dir().join(format!("rustyfi-rust-e2e-v01-sealed-{}.pdf", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!(
+            "rustyfi-rust-e2e-v01-sealed-{}.pdf",
+            std::process::id()
+        ));
         std::fs::write(&tmp, &bytes).unwrap();
         let pdftotext = Command::new("pdftotext").arg(&tmp).arg("-").output();
         match pdftotext {
@@ -1263,10 +1296,16 @@ fn v01_sealed_document_renders_to_extractable_text() {
                 let text = String::from_utf8_lossy(&out.stdout);
                 // `V01Sealed.make 41` then `V01Sealed.get v + 1` — the
                 // opaque `t` round-tripped through a sealed val pair.
-                assert!(text.contains("The answer is 42"), "missing sealed val round-trip:\n{text}");
+                assert!(
+                    text.contains("The answer is 42"),
+                    "missing sealed val round-trip:\n{text}"
+                );
                 // `\V01Sealed.show(V01Sealed.make 7);` — the sealed
                 // COMMAND member, taking an opaque `t`-typed argument.
-                assert!(text.contains("Sealed says: 7"), "missing sealed command output:\n{text}");
+                assert!(
+                    text.contains("Sealed says: 7"),
+                    "missing sealed command output:\n{text}"
+                );
             }
             _ => eprintln!("skipping text assertion; pdftotext unavailable"),
         }
@@ -1309,15 +1348,23 @@ fn v01_math_document_renders_to_extractable_pdf() {
         let bytes = rustyfi_pdf::render_pdf(&doc.geometry, &doc.pages, &doc.images).unwrap();
         assert!(bytes.starts_with(b"%PDF-"));
 
-        let tmp =
-            std::env::temp_dir().join(format!("rustyfi-rust-e2e-v01-math-{}.pdf", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!(
+            "rustyfi-rust-e2e-v01-math-{}.pdf",
+            std::process::id()
+        ));
         std::fs::write(&tmp, &bytes).unwrap();
         let pdftotext = Command::new("pdftotext").arg(&tmp).arg("-").output();
         match pdftotext {
             Ok(out) if out.status.success() => {
                 let text = String::from_utf8_lossy(&out.stdout);
-                assert!(text.contains("Pythagoras"), "missing math paragraph 1:\n{text}");
-                assert!(text.contains("Fraction"), "missing math paragraph 2:\n{text}");
+                assert!(
+                    text.contains("Pythagoras"),
+                    "missing math paragraph 1:\n{text}"
+                );
+                assert!(
+                    text.contains("Fraction"),
+                    "missing math paragraph 2:\n{text}"
+                );
                 // The Pythagoras formula's plain-letter atoms (a, b, c) and
                 // digits (2) reach the page as ordinary glyph runs even
                 // though they sit inside `${…}` — pdftotext should still
@@ -1365,19 +1412,37 @@ fn v01_strings_document_renders_to_extractable_text_and_info_dict() {
         let doc = rustyfi_lang::compile_document_v1(&program.files, &metrics)
             .expect("the L5a scalar/string capstone must compile end-to-end");
         assert_eq!(doc.pages.len(), 1);
-        assert!(doc.pages[0].lines.len() >= 2, "two +p paragraphs (Bits, NFC)");
-        assert!(doc.extras.doc_info.is_some(), "register-document-information must have registered");
+        assert!(
+            doc.pages[0].lines.len() >= 2,
+            "two +p paragraphs (Bits, NFC)"
+        );
+        assert!(
+            doc.extras.doc_info.is_some(),
+            "register-document-information must have registered"
+        );
 
-        let bytes = rustyfi_pdf::render_pdf_with(&doc.geometry, &doc.pages, &doc.images, &doc.extras)
-            .expect("render_pdf_with must succeed");
+        let bytes =
+            rustyfi_pdf::render_pdf_with(&doc.geometry, &doc.pages, &doc.images, &doc.extras)
+                .expect("render_pdf_with must succeed");
         assert!(bytes.starts_with(b"%PDF-"));
         let hay = String::from_utf8_lossy(&bytes);
-        for needle in ["/Title", "/Author", "/Keywords", "/Creator (SATySFi)", "/Producer (SATySFi)"] {
-            assert!(hay.contains(needle), "missing {needle:?} in PDF bytes:\n{hay}");
+        for needle in [
+            "/Title",
+            "/Author",
+            "/Keywords",
+            "/Creator (SATySFi)",
+            "/Producer (SATySFi)",
+        ] {
+            assert!(
+                hay.contains(needle),
+                "missing {needle:?} in PDF bytes:\n{hay}"
+            );
         }
 
-        let tmp = std::env::temp_dir()
-            .join(format!("rustyfi-rust-e2e-v01-strings-{}.pdf", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!(
+            "rustyfi-rust-e2e-v01-strings-{}.pdf",
+            std::process::id()
+        ));
         std::fs::write(&tmp, &bytes).unwrap();
         let pdftotext = Command::new("pdftotext").arg(&tmp).arg("-").output();
         match pdftotext {
@@ -1389,7 +1454,10 @@ fn v01_strings_document_renders_to_extractable_text_and_info_dict() {
                 // ACUTE ACCENT (2 scalar values) into "é" (1 scalar value)
                 // — the ASCII-only witness `v01-strings.saty` uses (base14
                 // has no glyph for "é" itself).
-                assert!(text.contains("NFC length: 1"), "missing NFC composition witness:\n{text}");
+                assert!(
+                    text.contains("NFC length: 1"),
+                    "missing NFC composition witness:\n{text}"
+                );
             }
             _ => eprintln!("skipping text assertion; pdftotext unavailable"),
         }
@@ -1434,8 +1502,8 @@ fn v01_font_standin_renders_to_extractable_text() {
             "expected font-junicode.satyh + v01-mini.satyh + the entry"
         );
 
-        let store = rustyfi_pdf::TtfFontStore::load(&font, None, None)
-            .expect("load DejaVu regular face");
+        let store =
+            rustyfi_pdf::TtfFontStore::load(&font, None, None).expect("load DejaVu regular face");
         let doc = rustyfi_lang::compile_document_v1(&program.files, &store).expect(
             "the G7 font stand-in capstone must compile end-to-end (FontJunicode.normal : \
              font must seal, flow through set-font, and resolve via the name-heuristic to \
@@ -1455,8 +1523,10 @@ fn v01_font_standin_renders_to_extractable_text() {
             "expected an embedded TrueType font (FontFile2) in the capstone PDF"
         );
 
-        let tmp = std::env::temp_dir()
-            .join(format!("rustyfi-rust-e2e-v01-font-{}.pdf", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!(
+            "rustyfi-rust-e2e-v01-font-{}.pdf",
+            std::process::id()
+        ));
         std::fs::write(&tmp, &bytes).unwrap();
         let pdftotext = Command::new("pdftotext").arg(&tmp).arg("-").output();
         match pdftotext {
@@ -1501,7 +1571,9 @@ fn assert_v01_package_compiles(fixture_name: &str) {
 }
 
 fn assert_v01_package_compiles_inner(fixture_name: &str) {
-    let entry = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(fixture_name);
+    let entry = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(fixture_name);
     let program = rustyfi_loader::load(
         &entry,
         &rustyfi_loader::LoadOptions {
@@ -1514,20 +1586,35 @@ fn assert_v01_package_compiles_inner(fixture_name: &str) {
 
     struct NoFonts;
     impl rustyfi_backend::FontMetrics for NoFonts {
-        fn advance(&self, _f: rustyfi_backend::FontKey, _c: char, _size: rustyfi_backend::Length) -> Option<rustyfi_backend::Length> {
+        fn advance(
+            &self,
+            _f: rustyfi_backend::FontKey,
+            _c: char,
+            _size: rustyfi_backend::Length,
+        ) -> Option<rustyfi_backend::Length> {
             None
         }
-        fn ascender(&self, _f: rustyfi_backend::FontKey, size: rustyfi_backend::Length) -> rustyfi_backend::Length {
+        fn ascender(
+            &self,
+            _f: rustyfi_backend::FontKey,
+            size: rustyfi_backend::Length,
+        ) -> rustyfi_backend::Length {
             size
         }
-        fn descender(&self, _f: rustyfi_backend::FontKey, _size: rustyfi_backend::Length) -> rustyfi_backend::Length {
+        fn descender(
+            &self,
+            _f: rustyfi_backend::FontKey,
+            _size: rustyfi_backend::Length,
+        ) -> rustyfi_backend::Length {
             rustyfi_backend::Length::pt(0.0)
         }
     }
 
     match rustyfi_lang::compile_document_v1(&program.files, &NoFonts) {
         Ok(_) | Err(rustyfi_lang::CompileError::NotADocument(_)) => {}
-        Err(other) => panic!("{fixture_name} must compile end-to-end through the real pipeline, got: {other}"),
+        Err(other) => {
+            panic!("{fixture_name} must compile end-to-end through the real pipeline, got: {other}")
+        }
     }
 }
 
@@ -1577,8 +1664,8 @@ fn v01_math_full_package_renders_to_extractable_pdf() {
         )
         .expect("v01-mini.satyh + math.satyh + v01-math-full.saty must load");
 
-        let store = rustyfi_pdf::TtfFontStore::load(&font, None, None)
-            .expect("load DejaVu regular face");
+        let store =
+            rustyfi_pdf::TtfFontStore::load(&font, None, None).expect("load DejaVu regular face");
         let doc = rustyfi_lang::compile_document_v1(&program.files, &store).expect(
             "the sealed math.satyh's \\paren family + \\mathsf/\\mathtt must compile and \
              render end-to-end",
@@ -1594,15 +1681,20 @@ fn v01_math_full_package_renders_to_extractable_pdf() {
             .expect("render_pdf_ttf must succeed");
         assert!(bytes.starts_with(b"%PDF-"));
 
-        let tmp = std::env::temp_dir()
-            .join(format!("rustyfi-rust-e2e-v01-math-full-{}.pdf", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!(
+            "rustyfi-rust-e2e-v01-math-full-{}.pdf",
+            std::process::id()
+        ));
         std::fs::write(&tmp, &bytes).unwrap();
         let pdftotext = Command::new("pdftotext").arg(&tmp).arg("-").output();
         match pdftotext {
             Ok(out) if out.status.success() => {
                 let text = String::from_utf8_lossy(&out.stdout);
                 for needle in ["Paren:", "Sans-serif:", "Typewriter:", "Set:"] {
-                    assert!(text.contains(needle), "missing {needle:?} in extracted text:\n{text}");
+                    assert!(
+                        text.contains(needle),
+                        "missing {needle:?} in extracted text:\n{text}"
+                    );
                 }
             }
             _ => eprintln!("skipping text assertion; pdftotext unavailable"),
@@ -1635,13 +1727,26 @@ fn v01_math_package_hidden_helper_is_unreachable_past_the_seal() {
 
         struct NoFonts;
         impl rustyfi_backend::FontMetrics for NoFonts {
-            fn advance(&self, _f: rustyfi_backend::FontKey, _c: char, _size: rustyfi_backend::Length) -> Option<rustyfi_backend::Length> {
+            fn advance(
+                &self,
+                _f: rustyfi_backend::FontKey,
+                _c: char,
+                _size: rustyfi_backend::Length,
+            ) -> Option<rustyfi_backend::Length> {
                 None
             }
-            fn ascender(&self, _f: rustyfi_backend::FontKey, size: rustyfi_backend::Length) -> rustyfi_backend::Length {
+            fn ascender(
+                &self,
+                _f: rustyfi_backend::FontKey,
+                size: rustyfi_backend::Length,
+            ) -> rustyfi_backend::Length {
                 size
             }
-            fn descender(&self, _f: rustyfi_backend::FontKey, _size: rustyfi_backend::Length) -> rustyfi_backend::Length {
+            fn descender(
+                &self,
+                _f: rustyfi_backend::FontKey,
+                _size: rustyfi_backend::Length,
+            ) -> rustyfi_backend::Length {
                 rustyfi_backend::Length::pt(0.0)
             }
         }
@@ -1649,8 +1754,14 @@ fn v01_math_package_hidden_helper_is_unreachable_past_the_seal() {
         match rustyfi_lang::compile_document_v1(&program.files, &NoFonts) {
             Err(rustyfi_lang::CompileError::Type(e)) => {
                 let msg = e.to_string();
-                assert!(msg.contains("math-scheme"), "expected the hidden member named: {msg}");
-                assert!(msg.contains("Math"), "expected the sealing module named: {msg}");
+                assert!(
+                    msg.contains("math-scheme"),
+                    "expected the hidden member named: {msg}"
+                );
+                assert!(
+                    msg.contains("Math"),
+                    "expected the sealing module named: {msg}"
+                );
             }
             other => panic!(
                 "expected a Type error naming the hidden `math-scheme` member, got: {other:?}"
@@ -1696,8 +1807,8 @@ fn v01_stdja_capstone_renders_to_extractable_text() {
         )
         .expect("std-ja.satyh + its full transitive @require: graph + v01-stdja.saty must load");
 
-        let store = rustyfi_pdf::TtfFontStore::load(&font, None, None)
-            .expect("load DejaVu regular face");
+        let store =
+            rustyfi_pdf::TtfFontStore::load(&font, None, None).expect("load DejaVu regular face");
         let doc = rustyfi_lang::compile_document_v1(&program.files, &store).expect(
             "the std-ja capstone must compile end-to-end: sealed module + records-in-type-\
              position + optional-arg-rows increments 1/2/3a, through real elaborate/typecheck/\
@@ -1717,8 +1828,10 @@ fn v01_stdja_capstone_renders_to_extractable_text() {
             "expected an embedded TrueType font (FontFile2) in the capstone PDF"
         );
 
-        let tmp =
-            std::env::temp_dir().join(format!("rustyfi-rust-e2e-v01-stdja-{}.pdf", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!(
+            "rustyfi-rust-e2e-v01-stdja-{}.pdf",
+            std::process::id()
+        ));
         std::fs::write(&tmp, &bytes).unwrap();
         let pdftotext = Command::new("pdftotext").arg(&tmp).arg("-").output();
         match pdftotext {
@@ -1727,12 +1840,21 @@ fn v01_stdja_capstone_renders_to_extractable_text() {
                 // The document record's title/author, rendered by std-ja's
                 // own `+make-title` (real path/bezier graphics deco).
                 assert!(text.contains("SATySFi in Rust"), "missing title:\n{text}");
-                assert!(text.contains("The Vendoring Agents"), "missing author:\n{text}");
+                assert!(
+                    text.contains("The Vendoring Agents"),
+                    "missing author:\n{text}"
+                );
                 // `+section`'s auto-numbering (`section-scheme`'s
                 // `arabic (!num-section)`), unbundled (no `?(label=…)`
                 // passed — increment 3a's None-defaulting path, live).
-                assert!(text.contains("1. Introduction"), "missing section 1 title:\n{text}");
-                assert!(text.contains("2. Conclusion"), "missing section 2 title:\n{text}");
+                assert!(
+                    text.contains("1. Introduction"),
+                    "missing section 1 title:\n{text}"
+                );
+                assert!(
+                    text.contains("2. Conclusion"),
+                    "missing section 2 title:\n{text}"
+                );
                 // Body text through `+StdJa.p`/`read-inline`.
                 for word in ["quick", "brown", "fox"] {
                     assert!(

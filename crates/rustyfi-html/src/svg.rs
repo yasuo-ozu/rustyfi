@@ -93,7 +93,13 @@ pub(super) fn emit_graphics(
 /// [`emit_graphics`], so a nested container never gets its own `<svg>`
 /// wrapper — exactly `place_graphics`'s own `Group`/`Clip` arms, which
 /// recurse into itself, not `page_content`'s `q`/`cm` prologue).
-fn emit_elems(out: &mut String, elems: &[GraphicsElem], tx: f64, ty: f64, nested: NestedEmitter<'_>) {
+fn emit_elems(
+    out: &mut String,
+    elems: &[GraphicsElem],
+    tx: f64,
+    ty: f64,
+    nested: NestedEmitter<'_>,
+) {
     for elem in elems {
         match elem {
             // Even-odd fill, matching `place_graphics`'s `content.fill_even_odd()`
@@ -262,7 +268,10 @@ mod tests {
         // K=1 (all channels) -> black regardless of C/M/Y; K=0,C=M=Y=0 ->
         // white — the two unambiguous sanity checks for the naive formula.
         assert_eq!(css_color(Color::Cmyk(0.0, 0.0, 0.0, 1.0)), "rgb(0,0,0)");
-        assert_eq!(css_color(Color::Cmyk(0.0, 0.0, 0.0, 0.0)), "rgb(255,255,255)");
+        assert_eq!(
+            css_color(Color::Cmyk(0.0, 0.0, 0.0, 0.0)),
+            "rgb(255,255,255)"
+        );
         // Pure cyan (C=1, M=Y=K=0) drops the red channel only.
         assert_eq!(css_color(Color::Cmyk(1.0, 0.0, 0.0, 0.0)), "rgb(0,255,255)");
     }

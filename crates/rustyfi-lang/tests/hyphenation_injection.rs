@@ -21,10 +21,10 @@ use rustyfi_backend::{
     break_into_lines, Context, FontKey, FontMetrics, HorzBox, HyphenLang, Length, PureHorzBox,
     VertBox,
 };
-use rustyfi_lang::quoted::IText;
 use rustyfi_lang::eval::Interp;
 use rustyfi_lang::hyphenation::hyphenate_word;
 use rustyfi_lang::primitives;
+use rustyfi_lang::quoted::IText;
 use rustyfi_lang::value::Env;
 
 /// Every char is half an em wide (mirrors `rustyfi-backend/tests/
@@ -82,7 +82,11 @@ fn no_dictionary_installed_yields_a_single_unsplit_inner_string() {
     ctx.hyphen_dictionary = None;
     let boxes = boxes_for(&ctx);
     // boxes: [InnerString(WORD), OuterFil] — no Discretionary at all.
-    assert_eq!(boxes.len(), 2, "expected InnerString + trailing fil only: {boxes:?}");
+    assert_eq!(
+        boxes.len(),
+        2,
+        "expected InnerString + trailing fil only: {boxes:?}"
+    );
     match &boxes[0] {
         HorzBox::Pure(PureHorzBox::InnerString { text, .. }) => assert_eq!(text, WORD),
         other => panic!("expected a single InnerString, got {other:?}"),
@@ -96,7 +100,10 @@ fn dictionary_installed_splits_the_word_into_fragments_and_discretionaries() {
     let boxes = boxes_for(&ctx);
 
     let expected_breaks = hyphenate_word(HyphenLang::EnglishUS, WORD, 3, 2);
-    assert!(!expected_breaks.is_empty(), "expected {WORD:?} to actually hyphenate");
+    assert!(
+        !expected_breaks.is_empty(),
+        "expected {WORD:?} to actually hyphenate"
+    );
 
     let mut fragments = Vec::new();
     let mut disc_count = 0usize;
@@ -135,7 +142,8 @@ fn dictionary_installed_splits_the_word_into_fragments_and_discretionaries() {
     );
 }
 
-#[ignore = "encodes scale-100 hyphenation break decision; the faithful cost model (|r|^3*10000 + ratio limits, lineBreak.ml) changes the hyphenate-vs-overflow balance in a 40pt column. No corpus doc installs a hyphenation dictionary — rewrite for the faithful model."]#[test]
+#[ignore = "encodes scale-100 hyphenation break decision; the faithful cost model (|r|^3*10000 + ratio limits, lineBreak.ml) changes the hyphenate-vs-overflow balance in a 40pt column. No corpus doc installs a hyphenation dictionary — rewrite for the faithful model."]
+#[test]
 fn narrow_column_forces_a_mid_word_break_with_a_trailing_hyphen() {
     let mut ctx = Context::initial(Length::pt(40.0));
     ctx.hyphen_dictionary = Some(HyphenLang::EnglishUS);
@@ -213,7 +221,10 @@ fn a_huge_hyphen_penalty_disables_the_break_even_though_the_line_overflows() {
         .collect();
     // The break IS taken, so the first line ends with a printed hyphen — that
     // is the `pre_break` slot doing its job.
-    assert_eq!(joined, "hyphen-", "the taken break prints its hyphen on line 1");
+    assert_eq!(
+        joined, "hyphen-",
+        "the taken break prints its hyphen on line 1"
+    );
 }
 
 // ---- S3 (`docs/plans/design-hyphenation.md` §S3) ---------------------------
@@ -246,7 +257,12 @@ fn explicit_soft_hyphen_wins_over_dictionary_breaks_and_is_not_rendered() {
                 );
                 fragments.push(text.clone());
             }
-            HorzBox::Pure(PureHorzBox::Discretionary { pre_break, post_break, no_break, .. }) => {
+            HorzBox::Pure(PureHorzBox::Discretionary {
+                pre_break,
+                post_break,
+                no_break,
+                ..
+            }) => {
                 disc_count += 1;
                 assert!(post_break.is_empty());
                 assert!(no_break.is_empty());
@@ -260,7 +276,10 @@ fn explicit_soft_hyphen_wins_over_dictionary_breaks_and_is_not_rendered() {
             other => panic!("unexpected box kind: {other:?}"),
         }
     }
-    assert_eq!(disc_count, 1, "exactly one break, at the authored soft hyphen");
+    assert_eq!(
+        disc_count, 1,
+        "exactly one break, at the authored soft hyphen"
+    );
     assert_eq!(
         fragments,
         vec!["hy".to_string(), "phenation".to_string()],
@@ -289,17 +308,35 @@ fn soft_hyphen_with_no_dictionary_installed_is_untouched_by_this_slice() {
     // Discretionary — exactly what `uax14_boundaries`/`break_opportunities`
     // already did for any non-ASCII break-after character before this
     // slice touched anything gated on `hyphen_dictionary`.
-    assert_eq!(boxes.len(), 4, "InnerString + Discretionary + InnerString + fil: {boxes:?}");
+    assert_eq!(
+        boxes.len(),
+        4,
+        "InnerString + Discretionary + InnerString + fil: {boxes:?}"
+    );
     match &boxes[0] {
         HorzBox::Pure(PureHorzBox::InnerString { text, .. }) => {
-            assert_eq!(text, "hy\u{ad}", "leading fragment keeps the raw soft hyphen char")
+            assert_eq!(
+                text, "hy\u{ad}",
+                "leading fragment keeps the raw soft hyphen char"
+            )
         }
         other => panic!("expected an InnerString, got {other:?}"),
     }
     match &boxes[1] {
-        HorzBox::Pure(PureHorzBox::Discretionary { penalty, pre_break, post_break, no_break }) => {
-            assert_eq!(*penalty, 0, "UAX#14 Allowed break, not a hyphenation-penalty one");
-            assert!(pre_break.is_empty(), "no injected hyphen glyph on the untouched path");
+        HorzBox::Pure(PureHorzBox::Discretionary {
+            penalty,
+            pre_break,
+            post_break,
+            no_break,
+        }) => {
+            assert_eq!(
+                *penalty, 0,
+                "UAX#14 Allowed break, not a hyphenation-penalty one"
+            );
+            assert!(
+                pre_break.is_empty(),
+                "no injected hyphen glyph on the untouched path"
+            );
             assert!(post_break.is_empty());
             assert!(no_break.is_empty());
         }
@@ -333,7 +370,10 @@ fn hyphen_glyph_uses_the_run_own_font_not_a_hardcoded_default() {
                 }
             }
         }
-        assert!(!fonts.is_empty(), "expected at least one injected hyphen glyph");
+        assert!(
+            !fonts.is_empty(),
+            "expected at least one injected hyphen glyph"
+        );
         assert!(
             fonts.iter().all(|&f| f == font),
             "every hyphen glyph must carry this run's font {font:?}, got {fonts:?}"

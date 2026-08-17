@@ -47,8 +47,7 @@ use rustyfi_loader::{LoadOptions, LoadedCst, LoadedFile};
 use rustyfi_syntax::RustyfiVersion;
 
 fn lib_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../lib-rustyfi/dist-v01/packages")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../lib-rustyfi/dist-v01/packages")
 }
 
 struct TempDoc(PathBuf);

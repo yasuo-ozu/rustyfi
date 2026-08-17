@@ -18,8 +18,8 @@
 //! `module_check.rs` consult, and `module_check.rs`'s own doc comment for
 //! how `Decl::Module`/`Decl::Signature` extend the phase-A-through-D
 //! algorithm. `include`/`with type` (2e) and functors (2f) remain.
-pub mod lower;
 pub(crate) mod functor;
+pub mod lower;
 pub(crate) mod module_check;
 pub(crate) mod sig_subtype;
 pub(crate) mod static_env;

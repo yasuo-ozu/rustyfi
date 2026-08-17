@@ -157,9 +157,7 @@ fn register_link_to_uri_rejects_a_malformed_border_argument() {
 
 #[test]
 fn register_link_to_location_typechecks() {
-    assert_well_typed(
-        "register-link-to-location `chapter1` (0pt, 0pt) 10pt 10pt 10pt None",
-    );
+    assert_well_typed("register-link-to-location `chapter1` (0pt, 0pt) 10pt 10pt 10pt None");
 }
 
 /// The actual shape `annot.satyh:29-40`'s `\href` body reduces to (minus the
@@ -379,7 +377,12 @@ fn register_link_to_uri_during_a_page_break_records_an_annot_with_no_border() {
     assert_eq!(a.border, None);
     assert_eq!(
         a.rect,
-        (Length::pt(0.0), Length::pt(-10.0), Length::pt(10.0), Length::pt(10.0)),
+        (
+            Length::pt(0.0),
+            Length::pt(-10.0),
+            Length::pt(10.0),
+            Length::pt(10.0)
+        ),
         "rect = (x, y - depth, x + width, y + height)"
     );
     assert_eq!(

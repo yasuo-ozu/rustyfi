@@ -1602,9 +1602,24 @@ fn is_latin_cjk_boundary(a: Script, b: Script) -> bool {
 fn is_open_punct(c: char) -> bool {
     matches!(
         c,
-        '(' | '[' | '{' | '"' | '\''
-            | '（' | '「' | '『' | '【' | '〔' | '〈' | '《' | '［' | '｛'
-            | '〖' | '〘' | '〚' | '“' | '‘'
+        '(' | '['
+            | '{'
+            | '"'
+            | '\''
+            | '（'
+            | '「'
+            | '『'
+            | '【'
+            | '〔'
+            | '〈'
+            | '《'
+            | '［'
+            | '｛'
+            | '〖'
+            | '〘'
+            | '〚'
+            | '“'
+            | '‘'
     )
 }
 
@@ -1614,10 +1629,39 @@ fn is_open_punct(c: char) -> bool {
 fn is_close_punct(c: char) -> bool {
     matches!(
         c,
-        ')' | ']' | '}' | ',' | '.' | ';' | ':' | '!' | '?' | '"' | '\''
-            | '）' | '」' | '』' | '】' | '〕' | '〉' | '》' | '］' | '｝'
-            | '〗' | '〙' | '〛' | '”' | '’'
-            | '、' | '。' | '，' | '．' | '・' | '！' | '？' | '：' | '；'
+        ')' | ']'
+            | '}'
+            | ','
+            | '.'
+            | ';'
+            | ':'
+            | '!'
+            | '?'
+            | '"'
+            | '\''
+            | '）'
+            | '」'
+            | '』'
+            | '】'
+            | '〕'
+            | '〉'
+            | '》'
+            | '］'
+            | '｝'
+            | '〗'
+            | '〙'
+            | '〛'
+            | '”'
+            | '’'
+            | '、'
+            | '。'
+            | '，'
+            | '．'
+            | '・'
+            | '！'
+            | '？'
+            | '：'
+            | '；'
     )
 }
 
@@ -1986,9 +2030,7 @@ fn text_to_boxes(
         // can't rely on `word_script` alone). The glue is also an
         // `is_break_point`, matching upstream (the boundary is a legal break).
         if let (Some(prev), Some(pc)) = (prev_script, prev_char) {
-            if is_latin_cjk_boundary(prev, script)
-                && !interscript_glue_suppressed(pc, c)
-            {
+            if is_latin_cjk_boundary(prev, script) && !interscript_glue_suppressed(pc, c) {
                 if let Some(s) = word_script.take() {
                     if !word.is_empty() {
                         flush_word(&mut word, s, out)?;

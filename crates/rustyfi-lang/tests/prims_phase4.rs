@@ -191,7 +191,10 @@ fn block_concat_preserves_left_to_right_order() {
         Value::BlockBoxes(boxes) => {
             assert_eq!(
                 boxes,
-                vec![VertBox::Skip(Length::pt(3.0)), VertBox::Skip(Length::pt(4.0))]
+                vec![
+                    VertBox::Skip(Length::pt(3.0)),
+                    VertBox::Skip(Length::pt(4.0))
+                ]
             );
         }
         other => panic!("expected block-boxes, got {other:?}"),
@@ -285,9 +288,19 @@ fn inline_skip_width_is_accounted_for_by_line_breaking() {
                     let (x0, b0) = &contents[0];
                     let (x1, b1) = &contents[1];
                     assert_eq!(*x0, Length::pt(0.0));
-                    assert_eq!(*b0, PureHorzBox::FixedEmpty { width: Length::pt(50.0) });
+                    assert_eq!(
+                        *b0,
+                        PureHorzBox::FixedEmpty {
+                            width: Length::pt(50.0)
+                        }
+                    );
                     assert_eq!(*x1, Length::pt(50.0));
-                    assert_eq!(*b1, PureHorzBox::FixedEmpty { width: Length::pt(30.0) });
+                    assert_eq!(
+                        *b1,
+                        PureHorzBox::FixedEmpty {
+                            width: Length::pt(30.0)
+                        }
+                    );
                 }
                 other => panic!("expected a Line, got {other:?}"),
             }
@@ -364,10 +377,7 @@ fn run_err(ast: &Ast) -> eval::EvalError {
 
 fn assert_float_close(v: Value, expect: f64) {
     match v {
-        Value::Float(x) => assert!(
-            (x - expect).abs() < 1e-9,
-            "expected {expect}, got {x}"
-        ),
+        Value::Float(x) => assert!((x - expect).abs() < 1e-9, "expected {expect}, got {x}"),
         other => panic!("expected a float, got {other:?}"),
     }
 }
@@ -435,17 +445,26 @@ fn ceil_and_floor_return_floats_not_ints() {
 
 #[test]
 fn show_float_matches_ocaml_string_of_float_on_ordinary_values() {
-    assert_eq!(str_val(run(&app1(var("show-float"), Ast::Float(1.0)))), "1.");
+    assert_eq!(
+        str_val(run(&app1(var("show-float"), Ast::Float(1.0)))),
+        "1."
+    );
     assert_eq!(
         str_val(run(&app1(var("show-float"), Ast::Float(100.0)))),
         "100."
     );
-    assert_eq!(str_val(run(&app1(var("show-float"), Ast::Float(3.5)))), "3.5");
+    assert_eq!(
+        str_val(run(&app1(var("show-float"), Ast::Float(3.5)))),
+        "3.5"
+    );
     assert_eq!(
         str_val(run(&app1(var("show-float"), Ast::Float(-2.0)))),
         "-2."
     );
-    assert_eq!(str_val(run(&app1(var("show-float"), Ast::Float(0.0)))), "0.");
+    assert_eq!(
+        str_val(run(&app1(var("show-float"), Ast::Float(0.0)))),
+        "0."
+    );
 }
 
 #[test]
@@ -516,7 +535,10 @@ fn string_unexplode_rejects_an_invalid_code_point() {
 
 #[test]
 fn display_message_prints_and_returns_unit() {
-    let ast = app1(var("display-message"), Ast::Str("hello from a test".to_string()));
+    let ast = app1(
+        var("display-message"),
+        Ast::Str("hello from a test".to_string()),
+    );
     assert!(matches!(run(&ast), Value::Unit));
 }
 
@@ -579,4 +601,3 @@ fn every_slice1_primitive_has_a_registered_type() {
         );
     }
 }
-

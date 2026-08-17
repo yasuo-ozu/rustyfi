@@ -29,9 +29,7 @@ use crate::v01x::envelope::EnvelopeSource;
 /// [`LoadError::LegacyHeaderUnderEnvelopes`] (this port's divergence, same as
 /// `open_doc`). Returns the sources dependency-first (a cycle is
 /// [`LoadError::Cycle`], upstream `CyclicFileDependency`).
-pub(crate) fn sort_modules(
-    sources: Vec<EnvelopeSource>,
-) -> Result<Vec<EnvelopeSource>, LoadError> {
+pub(crate) fn sort_modules(sources: Vec<EnvelopeSource>) -> Result<Vec<EnvelopeSource>, LoadError> {
     // Intern module names → ids (id == index into `sources`).
     let mut id_of_module: HashMap<String, u32> = HashMap::new();
     let mut path_of: HashMap<u32, PathBuf> = HashMap::new();
@@ -158,14 +156,10 @@ pub(crate) fn sort_envelopes(deps: &DepsConfig) -> Result<Vec<&EnvelopeSpec>, Lo
         adjacency.insert(id, dep_ids);
     }
 
-    let order = graph::toposort(&adjacency).map_err(|chain_ids| {
-        LoadError::CyclicEnvelopeDependency {
-            chain: chain_ids
-                .iter()
-                .map(|id| name_of[id].clone())
-                .collect(),
-        }
-    })?;
+    let order =
+        graph::toposort(&adjacency).map_err(|chain_ids| LoadError::CyclicEnvelopeDependency {
+            chain: chain_ids.iter().map(|id| name_of[id].clone()).collect(),
+        })?;
 
     Ok(order.into_iter().map(|id| specs[id as usize]).collect())
 }
@@ -350,7 +344,10 @@ mod tests {
             explicit_test_dependencies: vec![],
         };
         match sort_envelopes(&cfg) {
-            Err(LoadError::DependencyOnUnknownEnvelope { depending, depended }) => {
+            Err(LoadError::DependencyOnUnknownEnvelope {
+                depending,
+                depended,
+            }) => {
                 assert_eq!(depending, "A");
                 assert_eq!(depended, "Nope");
             }

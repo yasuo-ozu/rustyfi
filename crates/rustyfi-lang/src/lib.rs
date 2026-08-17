@@ -490,13 +490,36 @@ pub fn compile_document_v1_with_aux(
                 // partial acceptance.
                 if let Some(name) = touched
                     .iter()
-                    .find(|n| !matches!(n.as_str(), "math" | "deco" | "deco-set"))
+                    .find(|n| !matches!(n.as_str(), "math" | "deco" | "deco-set" | "paren"))
                 {
                     return Err(CompileError::CrossVersionUnsupportedName {
                         name: name.clone(),
                         dep: dep.path.display().to_string(),
                         slice: "X3",
                     });
+                }
+                // A module-scoped deco wrapper lives INSIDE the spliced
+                // dependency, hence inside its `VersionScope(V0_0_6, _)`,
+                // where `unite-graphics` does not exist. Bind the V0_1
+                // primitive to a plain name FIRST, outside the range
+                // `v006_indices` is about to cover, so the scoped wrapper can
+                // reach it as an ordinary variable.
+                if touched.contains("deco")
+                    || touched.contains("deco-set")
+                    || touched.contains("paren")
+                {
+                    let probe = v1::xver_adapt::classify_deco_exports(
+                        &cst.prelude,
+                        RustyfiVersion::V0_0_6,
+                        RustyfiVersion::V0_1,
+                    );
+                    if probe
+                        .as_ref()
+                        .map(|e| v1::xver_adapt::needs_unite_helper(e))
+                        == Ok(true)
+                    {
+                        prelude.extend(v1::xver_adapt::unite_helper_prelude());
+                    }
                 }
                 let start = prelude.len();
                 if touched.is_empty() {
@@ -540,7 +563,10 @@ pub fn compile_document_v1_with_aux(
                 }
                 v006_indices.extend(start..prelude.len());
 
-                if touched.contains("deco") || touched.contains("deco-set") {
+                if touched.contains("deco")
+                    || touched.contains("deco-set")
+                    || touched.contains("paren")
+                {
                     let exports = v1::xver_adapt::classify_deco_exports(
                         &cst.prelude,
                         RustyfiVersion::V0_0_6,
@@ -571,6 +597,15 @@ pub fn compile_document_v1_with_aux(
                     // constant-folds primitives". Leaving it un-scoped is
                     // simply the structurally honest choice, not a
                     // soundness requirement.)
+                    // Two halves. A TOP-LEVEL export is shadowed by a new
+                    // top-level binding appended after the dependency
+                    // (`deco_coercion_prelude`). A MODULE-scoped one cannot
+                    // be — `let Deco.simple-frame` is not syntax — so its
+                    // wrapper is appended inside that module's own `decls`,
+                    // in the copy of the prelude just spliced above
+                    // (`inject_module_deco_wrappers`), where the same
+                    // sequential shadowing applies one scope deeper.
+                    v1::xver_adapt::inject_module_deco_wrappers(&mut prelude[start..], &exports);
                     prelude.extend(v1::xver_adapt::deco_coercion_prelude(&exports));
                 }
             }
@@ -599,7 +634,33 @@ pub fn compile_document_v1_with_aux(
     // `compile_document_cst_with_trials` for both halves of that contract.
     let body = {
         let store = symbol::SymbolStore::new();
-        let scope = elaborate::Scope::new_with_version(&store, env0.names(), RustyfiVersion::V0_1);
+        // A spliced `V0_0_6` dependency may name a `V0_0_6`-ONLY primitive
+        // (`text-in-math`, `get-axis-height`, `math-color`, …). Elaboration
+        // resolves names against ONE flat set built from the ambient version,
+        // and it runs BEFORE `Ast::VersionScope` can mean anything — the scope
+        // wraps an already-elaborated RHS — so such a name was simply
+        // "unbound variable" at elaborate time, no matter how correctly the
+        // later phases were version-scoped.
+        //
+        // So when (and ONLY when) a `V0_0_6` dependency was actually spliced,
+        // widen the elaboration name set to the UNION of both versions'
+        // primitives. This set answers one question — "is this a known global
+        // rather than a free variable?" — and version-correct resolution still
+        // happens downstream: `compile.rs`'s fold picks the `V0_0_6` `PrimDef`
+        // inside a `VersionScope(V0_0_6, _)`, and `typecheck.rs` picks that
+        // version's scheme. A pure `V0_1` program takes the `else` branch and
+        // is byte-identical, keeping its "unbound variable" diagnostics for
+        // `V0_0_6`-only names exactly as sharp as before.
+        let scope_names: Vec<String> = if v006_indices.is_empty() {
+            env0.names()
+        } else {
+            let mut n = env0.names();
+            n.extend(primitives::base_env_with_version(RustyfiVersion::V0_0_6).names());
+            n.sort();
+            n.dedup();
+            n
+        };
+        let scope = elaborate::Scope::new_with_version(&store, scope_names, RustyfiVersion::V0_1);
         // X2a: `v006_indices` is empty whenever no `V0_0_6` dependency was
         // spliced above (every pre-X2a caller, and every mixed load with only
         // `V0_1` deps) — `elaborate_program_with_versions` then emits no
@@ -2393,14 +2454,7 @@ fn fire_inline_frame(
         // appends one to a heading that the title deco then wraps in a frame —
         // and the top-level walk never sees it. See `fire_page_break_hook`.
         if let PureHorzBox::HookPageBreak { id } = child {
-            fire_page_break_hook(
-                interp,
-                doc,
-                (page + 1) as i64,
-                x + *dx,
-                baseline_y,
-                *id,
-            )?;
+            fire_page_break_hook(interp, doc, (page + 1) as i64, x + *dx, baseline_y, *id)?;
         }
         fire_inline_frame(interp, doc, page, x + *dx, baseline_y, child)?;
     }

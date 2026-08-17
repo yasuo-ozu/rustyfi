@@ -87,8 +87,7 @@ use rustyfi_loader::{LoadOptions, LoadedCst, LoadedFile};
 use rustyfi_syntax::RustyfiVersion;
 
 fn lib_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../lib-rustyfi/dist-v01/packages")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../lib-rustyfi/dist-v01/packages")
 }
 
 struct TempDoc(PathBuf);
@@ -302,7 +301,8 @@ fn graphics_empty_has_no_bbox() {
     run_with_big_stack(|| {
         let src = "@require: graphics
 get-graphics-bbox Graphics.empty";
-        let v = compile_v01_via_loader("graphics-empty-bbox", src).expect("graphics.satyh should compile");
+        let v = compile_v01_via_loader("graphics-empty-bbox", src)
+            .expect("graphics.satyh should compile");
         assert_eq!(as_bbox_option(v), None);
     });
 }
@@ -316,7 +316,8 @@ fn graphics_shift_translates_a_filled_rectangle_bbox() {
 let p = Path.rectangle (0pt, 0pt) (10pt, 10pt) in
 let gr = fill Color.black p in
 get-graphics-bbox (Graphics.shift (5pt, 5pt) gr)";
-        let v = compile_v01_via_loader("graphics-shift-bbox", src).expect("graphics.satyh should compile");
+        let v = compile_v01_via_loader("graphics-shift-bbox", src)
+            .expect("graphics.satyh should compile");
         assert_eq!(
             as_bbox_option(v),
             Some(((5.0, 5.0), (15.0, 15.0))),
@@ -345,7 +346,8 @@ fn deco_simple_frame_bbox_matches_the_frame_box() {
         let src = "@require: deco
 @require: color
 get-graphics-bbox (Deco.simple-frame 1pt Color.black Color.white (10pt, 20pt) 30pt 5pt 2pt)";
-        let v = compile_v01_via_loader("deco-simple-frame-bbox", src).expect("deco.satyh should compile");
+        let v = compile_v01_via_loader("deco-simple-frame-bbox", src)
+            .expect("deco.satyh should compile");
         // `simple-frame`'s path is `Path.rectangle (x, y -' d) (x +' w, y +' h)`:
         // (10, 20-2)-(10+30, 20+5) = (10,18)-(40,25).
         assert_eq!(as_bbox_option(v), Some(((10.0, 18.0), (40.0, 25.0))));
@@ -374,7 +376,8 @@ fn hdecoset_simple_frame_stroke_decos_bbox_matches_the_frame_box() {
 @require: color
 let (decoS, decoH, decoM, decoT) = HDecoSet.simple-frame-stroke 1pt Color.black in
 get-graphics-bbox (decoS (0pt, 0pt) 10pt 4pt 2pt)";
-        let v = compile_v01_via_loader("hdecoset-decos-bbox", src).expect("hdecoset.satyh should compile");
+        let v = compile_v01_via_loader("hdecoset-decos-bbox", src)
+            .expect("hdecoset.satyh should compile");
         assert_eq!(as_bbox_option(v), Some(((0.0, -2.0), (10.0, 4.0))));
     });
 }
@@ -417,13 +420,20 @@ fn vdecoset_paper_decos_bbox_is_a_union_including_the_shadow() {
 @require: color
 let (decoS, decoH, decoM, decoT) = VDecoSet.paper in
 get-graphics-bbox (decoS (0pt, 0pt) 10pt 4pt 2pt)";
-        let v = compile_v01_via_loader("vdecoset-paper-bbox", src).expect("vdecoset.satyh should compile");
+        let v = compile_v01_via_loader("vdecoset-paper-bbox", src)
+            .expect("vdecoset.satyh should compile");
         // Union of the shadow polygon (extends `xshift`=2pt/`yshift`=1pt past
         // the frame) and the 0.5pt-stroked frame rectangle itself — just prove
         // it is `Some` and strictly larger than the bare frame rectangle
         // (0,-2)-(10,4), rather than pinning every shadow vertex.
-        let (lo, hi) = v.clone().pipe(as_bbox_option).expect("paper's decoS must have a bbox");
-        assert!(hi.0 - lo.0 > 10.0, "expected the shadow to widen the bbox, got {lo:?}-{hi:?}");
+        let (lo, hi) = v
+            .clone()
+            .pipe(as_bbox_option)
+            .expect("paper's decoS must have a bbox");
+        assert!(
+            hi.0 - lo.0 > 10.0,
+            "expected the shadow to widen the bbox, got {lo:?}-{hi:?}"
+        );
     });
 }
 
@@ -452,7 +462,8 @@ fn inline_concat_sums_skip_widths_via_the_lambda_fallback_operator_section() {
     run_with_big_stack(|| {
         let src = "@require: inline
 Inline.get-natural-advance (Inline.concat [Inline.skip 3pt, Inline.skip 4pt, Inline.skip 5pt])";
-        let v = compile_v01_via_loader("inline-concat-advance", src).expect("inline.satyh should compile");
+        let v = compile_v01_via_loader("inline-concat-advance", src)
+            .expect("inline.satyh should compile");
         assert_eq!(as_length(v), Length::pt(12.0));
     });
 }
@@ -462,7 +473,8 @@ fn inline_kern_negates_its_length() {
     run_with_big_stack(|| {
         let src = "@require: inline
 Inline.get-natural-advance (Inline.kern 5pt)";
-        let v = compile_v01_via_loader("inline-kern-advance", src).expect("inline.satyh should compile");
+        let v = compile_v01_via_loader("inline-kern-advance", src)
+            .expect("inline.satyh should compile");
         assert_eq!(as_length(v), Length::pt(-5.0));
     });
 }
@@ -548,11 +560,7 @@ read-inline ctx {\\Logo.SATySFi;}";
 #[test]
 fn tabular_bare_tabular_command_is_unbound_without_qualification() {
     run_with_big_stack(|| {
-        assert_bare_access_unbound(
-            "tabular-bare",
-            "tabular",
-            "command \\tabular",
-        );
+        assert_bare_access_unbound("tabular-bare", "tabular", "command \\tabular");
     });
 }
 
@@ -705,15 +713,12 @@ let open V01Mini in
 let ctx = get-initial-context 100pt (command \\math) in
 let () = FootnoteScheme.initialize () in
 FootnoteScheme.main ctx (fun n -> read-inline ctx (embed-string (arabic n))) (fun n -> block-skip 1pt)";
-        let v = compile_v01_via_loader_with_metrics(
-            "footnote-scheme-main-command-math",
-            src,
-            &Mono,
-        )
-        .expect(
-            "FootnoteScheme.main applied to a `command \\math`-built context \
+        let v =
+            compile_v01_via_loader_with_metrics("footnote-scheme-main-command-math", src, &Mono)
+                .expect(
+                    "FootnoteScheme.main applied to a `command \\math`-built context \
              should typecheck and evaluate (G11: confirmed not a bug)",
-        );
+                );
         assert!(
             matches!(v, Value::InlineBoxes(_)),
             "expected inline-boxes, got {v:?}"

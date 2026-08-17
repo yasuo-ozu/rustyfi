@@ -40,7 +40,7 @@ fn text_run(text: &str) -> PureHorzBox {
 
 fn page_with_run(bx: PureHorzBox) -> Page {
     Page {
-            body_lines: usize::MAX,
+        body_lines: usize::MAX,
         lines: vec![PlacedLine {
             x: Length::pt(50.0),
             baseline_y: Length::pt(100.0),
@@ -50,8 +50,13 @@ fn page_with_run(bx: PureHorzBox) -> Page {
 }
 
 fn render(page: &Page) -> String {
-    rustyfi_html::render_html(&geometry(), std::slice::from_ref(page), &[], &DocExtras::default())
-        .expect("HTML rendering must succeed")
+    rustyfi_html::render_html(
+        &geometry(),
+        std::slice::from_ref(page),
+        &[],
+        &DocExtras::default(),
+    )
+    .expect("HTML rendering must succeed")
 }
 
 #[test]
@@ -59,18 +64,33 @@ fn text_run_renders_as_a_positioned_span_with_expected_text() {
     let page = page_with_run(text_run("Hello, world!"));
     let html = render(&page);
 
-    assert!(html.starts_with("<!doctype html>"), "missing doctype:\n{html}");
-    assert!(html.contains("<div class=\"page\""), "missing page div:\n{html}");
+    assert!(
+        html.starts_with("<!doctype html>"),
+        "missing doctype:\n{html}"
+    );
+    assert!(
+        html.contains("<div class=\"page\""),
+        "missing page div:\n{html}"
+    );
     assert!(html.contains("width:200pt"), "missing page width:\n{html}");
-    assert!(html.contains("height:300pt"), "missing page height:\n{html}");
+    assert!(
+        html.contains("height:300pt"),
+        "missing page height:\n{html}"
+    );
 
     // left = line.x + dx = 50 + 0; top = baseline_y - rising - height =
     // 100 - 0 - 9 = 91 (no y-flip — SATySFi's page-down y already matches
     // CSS `top`, see `render_html`'s doc comment).
     assert!(html.contains("left:50pt"), "missing left offset:\n{html}");
     assert!(html.contains("top:91pt"), "missing top offset:\n{html}");
-    assert!(html.contains("font-size:12pt"), "missing font-size:\n{html}");
-    assert!(html.contains("<span class=\"run\""), "missing run span:\n{html}");
+    assert!(
+        html.contains("font-size:12pt"),
+        "missing font-size:\n{html}"
+    );
+    assert!(
+        html.contains("<span class=\"run\""),
+        "missing run span:\n{html}"
+    );
     assert!(html.contains("Hello, world!"), "missing run text:\n{html}");
 }
 
@@ -84,7 +104,10 @@ fn run_text_is_html_escaped() {
     );
     // The raw, unescaped text must not appear anywhere (it would either
     // break the markup or silently disappear as a bogus tag).
-    assert!(!html.contains("<a & \"b\">"), "raw unescaped text leaked:\n{html}");
+    assert!(
+        !html.contains("<a & \"b\">"),
+        "raw unescaped text leaked:\n{html}"
+    );
 }
 
 #[test]
@@ -97,7 +120,10 @@ fn rising_shifts_the_run_up_the_page() {
     let html = render(&page);
     // top = baseline_y - rising - height = 100 - 3 - 9 = 88: a positive
     // rising moves the run UP the page, i.e. DECREASES the y-down `top`.
-    assert!(html.contains("top:88pt"), "rising did not shift the span up:\n{html}");
+    assert!(
+        html.contains("top:88pt"),
+        "rising did not shift the span up:\n{html}"
+    );
 }
 
 #[test]
@@ -105,7 +131,7 @@ fn glue_boxes_render_no_extra_span() {
     // `OuterEmpty`/`FixedEmpty` carry no visible content of their own —
     // only the one real `InnerString` run should produce a `<span>`.
     let page = Page {
-            body_lines: usize::MAX,
+        body_lines: usize::MAX,
         lines: vec![PlacedLine {
             x: Length::pt(50.0),
             baseline_y: Length::pt(100.0),
@@ -134,7 +160,10 @@ fn glue_boxes_render_no_extra_span() {
         1,
         "glue boxes must not emit their own span:\n{html}"
     );
-    assert!(html.contains("left:59pt"), "missing glue-adjusted left offset:\n{html}");
+    assert!(
+        html.contains("left:59pt"),
+        "missing glue-adjusted left offset:\n{html}"
+    );
 }
 
 #[test]
@@ -142,7 +171,7 @@ fn unhandled_box_variants_render_nothing() {
     // `Image`/`Graphics`/etc. are Slice 2/3 — Slice 1's wildcard arm must
     // skip them cleanly rather than panicking or emitting a stray span.
     let page = Page {
-            body_lines: usize::MAX,
+        body_lines: usize::MAX,
         lines: vec![PlacedLine {
             x: Length::ZERO,
             baseline_y: Length::pt(100.0),
@@ -150,8 +179,14 @@ fn unhandled_box_variants_render_nothing() {
         }],
     };
     let html = render(&page);
-    assert!(!html.contains("<span"), "OuterFil must not render a span:\n{html}");
-    assert!(html.contains("<div class=\"page\""), "page div must still render:\n{html}");
+    assert!(
+        !html.contains("<span"),
+        "OuterFil must not render a span:\n{html}"
+    );
+    assert!(
+        html.contains("<div class=\"page\""),
+        "page div must still render:\n{html}"
+    );
 }
 
 // ============================================================================
@@ -180,6 +215,7 @@ fn rectangle_path() -> Path {
 fn graphics_box() -> PureHorzBox {
     let path = rectangle_path();
     PureHorzBox::Graphics {
+        origin_independent: false,
         width: Length::pt(20.0),
         height: Length::pt(20.0),
         depth: Length::pt(0.0),
@@ -200,9 +236,15 @@ fn graphics_box_renders_svg_path_with_fill_and_stroke() {
     // + dx = 50; top = baseline_y - height = 100 - 20 = 80 (no y-flip at
     // this level — the per-box <g transform> below handles the y-up/y-down
     // reconciliation, see `svg.rs`'s module doc comment).
-    assert!(html.contains("left:50pt"), "missing svg left offset:\n{html}");
+    assert!(
+        html.contains("left:50pt"),
+        "missing svg left offset:\n{html}"
+    );
     assert!(html.contains("top:80pt"), "missing svg top offset:\n{html}");
-    assert!(html.contains("viewBox=\"0 0 20 20\""), "missing matching viewBox:\n{html}");
+    assert!(
+        html.contains("viewBox=\"0 0 20 20\""),
+        "missing matching viewBox:\n{html}"
+    );
     assert!(
         html.contains("<g transform=\"translate(0,20) scale(1,-1)\">"),
         "missing the y-flip <g>:\n{html}"
@@ -215,12 +257,24 @@ fn graphics_box_renders_svg_path_with_fill_and_stroke() {
         html.contains("d=\"M0 0 L20 0 L20 20 L0 20 Z\""),
         "missing rectangle path d attribute:\n{html}"
     );
-    assert!(html.contains("fill=\"rgb(255,0,0)\""), "missing red fill:\n{html}");
-    assert!(html.contains("fill-rule=\"evenodd\""), "missing even-odd fill rule:\n{html}");
+    assert!(
+        html.contains("fill=\"rgb(255,0,0)\""),
+        "missing red fill:\n{html}"
+    );
+    assert!(
+        html.contains("fill-rule=\"evenodd\""),
+        "missing even-odd fill rule:\n{html}"
+    );
 
     // The stroke path: black, 1pt wide, unfilled.
-    assert!(html.contains("stroke=\"rgb(0,0,0)\""), "missing black stroke:\n{html}");
-    assert!(html.contains("stroke-width=\"1\""), "missing stroke width:\n{html}");
+    assert!(
+        html.contains("stroke=\"rgb(0,0,0)\""),
+        "missing black stroke:\n{html}"
+    );
+    assert!(
+        html.contains("stroke-width=\"1\""),
+        "missing stroke width:\n{html}"
+    );
 }
 
 #[test]
@@ -230,6 +284,7 @@ fn cmyk_fill_converts_to_rgb() {
     // directly in `src/html/svg.rs`) — checked here end-to-end through
     // `render_html` too.
     let bx = PureHorzBox::Graphics {
+        origin_independent: false,
         width: Length::pt(20.0),
         height: Length::pt(20.0),
         depth: Length::pt(0.0),
@@ -259,9 +314,18 @@ fn frame_recurses_into_its_contents_on_the_frame_baseline() {
     // top = baseline_y(100) - the run's own ascent(9) = 91 — the SAME
     // baseline as the frame itself (a `Frame`'s contents never get a y
     // offset, only x, unlike `Tabular`'s cells below).
-    assert!(html.contains("left:53pt"), "missing frame-content left offset:\n{html}");
-    assert!(html.contains("top:91pt"), "missing frame-content top offset:\n{html}");
-    assert!(html.contains("framed"), "missing frame-content text:\n{html}");
+    assert!(
+        html.contains("left:53pt"),
+        "missing frame-content left offset:\n{html}"
+    );
+    assert!(
+        html.contains("top:91pt"),
+        "missing frame-content top offset:\n{html}"
+    );
+    assert!(
+        html.contains("framed"),
+        "missing frame-content text:\n{html}"
+    );
 }
 
 #[test]
@@ -288,8 +352,14 @@ fn tabular_recurses_into_cell_contents_and_renders_rules() {
     // `cell.baseline_y` is box-local y-UP (the `GraphicsElem` convention),
     // so it SUBTRACTS from the page-down anchor (the mirror image of the
     // PDF writer's `ty + cell.baseline_y` in its own y-up space).
-    assert!(html.contains("left:55pt"), "missing cell content left offset:\n{html}");
-    assert!(html.contains("top:81pt"), "missing cell content top offset:\n{html}");
+    assert!(
+        html.contains("left:55pt"),
+        "missing cell content left offset:\n{html}"
+    );
+    assert!(
+        html.contains("top:81pt"),
+        "missing cell content top offset:\n{html}"
+    );
     assert!(html.contains("cell"), "missing cell content text:\n{html}");
 
     // The grid rules render as their own <svg> path, anchored at the
@@ -310,6 +380,7 @@ fn embedded_block_stacks_lines_from_the_placed_anchor() {
         contents: vec![(Length::ZERO, text_run(text))],
     };
     let bx = PureHorzBox::EmbeddedBlock {
+        breakable: false,
         width: Length::pt(80.0),
         height: Length::pt(9.0),
         depth: Length::pt(26.0),
@@ -318,15 +389,25 @@ fn embedded_block_stacks_lines_from_the_placed_anchor() {
     };
     let html = render(&page_with_run(bx));
 
-    assert_eq!(html.matches("<span").count(), 2, "expected exactly two lines:\n{html}");
+    assert_eq!(
+        html.matches("<span").count(),
+        2,
+        "expected exactly two lines:\n{html}"
+    );
     assert!(html.contains("first"), "missing first line text:\n{html}");
     assert!(html.contains("second"), "missing second line text:\n{html}");
     // First line's baseline lands exactly at the box's own placed anchor
     // (100), so its top matches an ordinary top-level run: 100 - 9 = 91.
     // Second line falls one `leading` (15pt) further down the page: top =
     // (100 + 15) - 9 = 106.
-    assert!(html.contains("top:91pt"), "missing first line's top offset:\n{html}");
-    assert!(html.contains("top:106pt"), "missing second line's top offset:\n{html}");
+    assert!(
+        html.contains("top:91pt"),
+        "missing first line's top offset:\n{html}"
+    );
+    assert!(
+        html.contains("top:106pt"),
+        "missing second line's top offset:\n{html}"
+    );
 }
 
 // ============================================================================
@@ -409,7 +490,10 @@ fn ttf_render_emits_font_face_with_embedded_ttf_and_spans_reference_it() {
     )
     .expect("HTML rendering must succeed");
 
-    assert!(html.contains("@font-face"), "missing @font-face rule:\n{html}");
+    assert!(
+        html.contains("@font-face"),
+        "missing @font-face rule:\n{html}"
+    );
     assert!(
         html.contains("data:font/ttf;base64,"),
         "missing embedded TTF data URI:\n{html}"
@@ -419,8 +503,14 @@ fn ttf_render_emits_font_face_with_embedded_ttf_and_spans_reference_it() {
     // the run's <span> style names that EXACT family (not just "some"
     // font-family, or a mismatched one).
     let needle = "font-family: \"";
-    let start = html.find(needle).expect("missing font-family in @font-face") + needle.len();
-    let end = start + html[start..].find('"').expect("unterminated font-family value");
+    let start = html
+        .find(needle)
+        .expect("missing font-family in @font-face")
+        + needle.len();
+    let end = start
+        + html[start..]
+            .find('"')
+            .expect("unterminated font-family value");
     let family = &html[start..end];
     assert!(
         html.contains(&format!("font-family:\"{family}\"")),
@@ -436,14 +526,9 @@ fn ttf_render_emits_font_face_with_embedded_ttf_and_spans_reference_it() {
 fn ttf_render_with_no_runs_emits_no_font_face() {
     let path = need_font!();
     let store = TtfFontStore::load(&path, None, None).expect("load font");
-    let html = rustyfi_html::render_html_ttf_with(
-        &geometry(),
-        &[],
-        &store,
-        &[],
-        &DocExtras::default(),
-    )
-    .expect("HTML rendering must succeed");
+    let html =
+        rustyfi_html::render_html_ttf_with(&geometry(), &[], &store, &[], &DocExtras::default())
+            .expect("HTML rendering must succeed");
     assert!(
         !html.contains("@font-face"),
         "an empty document must not emit @font-face:\n{html}"
@@ -508,10 +593,19 @@ fn image_box_renders_as_an_img_data_uri() {
     // left = line.x + dx = 50; top = baseline_y - height = 100 - 20 = 80 —
     // an Image box is all height/zero depth, so its baseline is its bottom
     // edge (the same arithmetic `place_image`, `lib.rs:165`, relies on).
-    assert!(html.contains("left:50pt"), "missing image left offset:\n{html}");
-    assert!(html.contains("top:80pt"), "missing image top offset:\n{html}");
+    assert!(
+        html.contains("left:50pt"),
+        "missing image left offset:\n{html}"
+    );
+    assert!(
+        html.contains("top:80pt"),
+        "missing image top offset:\n{html}"
+    );
     assert!(html.contains("width:40pt"), "missing image width:\n{html}");
-    assert!(html.contains("height:20pt"), "missing image height:\n{html}");
+    assert!(
+        html.contains("height:20pt"),
+        "missing image height:\n{html}"
+    );
 }
 
 /// An `Image` box whose `ImageId` has no matching entry in the document's
@@ -525,7 +619,10 @@ fn image_with_out_of_range_id_renders_nothing() {
         image: ImageId(5),
     };
     let html = render(&page_with_run(bx)); // `render`'s helper always passes `images = &[]`
-    assert!(!html.contains("<img"), "out-of-range ImageId must render nothing:\n{html}");
+    assert!(
+        !html.contains("<img"),
+        "out-of-range ImageId must render nothing:\n{html}"
+    );
 }
 
 /// (c) A `Math` box's glyphs render as ordinary positioned `<span>`s
@@ -544,7 +641,9 @@ fn math_box_renders_glyph_spans_and_fraction_rule() {
     let font = FontKey(0);
 
     let make_glyph = |c: char, dx: f64, dy: f64| {
-        let advance = store.advance(font, c, size).expect("DejaVu must measure ASCII");
+        let advance = store
+            .advance(font, c, size)
+            .expect("DejaVu must measure ASCII");
         MathGlyph {
             info: HorzStringInfo {
                 font,
@@ -593,8 +692,14 @@ fn math_box_renders_glyph_spans_and_fraction_rule() {
         2,
         "expected exactly two glyph spans (numerator, denominator):\n{html}"
     );
-    assert!(html.contains(">1<"), "missing numerator glyph text:\n{html}");
-    assert!(html.contains(">x<"), "missing denominator glyph text:\n{html}");
+    assert!(
+        html.contains(">1<"),
+        "missing numerator glyph text:\n{html}"
+    );
+    assert!(
+        html.contains(">x<"),
+        "missing denominator glyph text:\n{html}"
+    );
     assert!(html.contains("<svg"), "missing fraction-bar <svg>:\n{html}");
     assert!(
         html.contains("@font-face"),
@@ -633,8 +738,14 @@ fn two_page_document_renders_two_page_divs() {
         2,
         "expected exactly two page divs:\n{html}"
     );
-    assert!(html.contains("page0"), "missing first page's run text:\n{html}");
-    assert!(html.contains("page1"), "missing second page's run text:\n{html}");
+    assert!(
+        html.contains("page0"),
+        "missing first page's run text:\n{html}"
+    );
+    assert!(
+        html.contains("page1"),
+        "missing second page's run text:\n{html}"
+    );
 }
 
 #[test]
@@ -699,13 +810,8 @@ fn page_graphics_underlay_renders_as_a_flipped_svg_underneath_the_text() {
     )]];
 
     let page = page_with_run(text_run("on top"));
-    let html = rustyfi_html::render_html(
-        &geometry(),
-        std::slice::from_ref(&page),
-        &[],
-        &extras,
-    )
-    .expect("HTML rendering must succeed");
+    let html = rustyfi_html::render_html(&geometry(), std::slice::from_ref(&page), &[], &extras)
+        .expect("HTML rendering must succeed");
 
     // The underlay <svg> covers the whole page (paper_w x paper_h from the
     // `geometry` fixture: 200pt x 300pt), anchored at the page's own
@@ -735,7 +841,10 @@ fn page_graphics_underlay_renders_as_a_flipped_svg_underneath_the_text() {
         html.contains("d=\"M0 0 L20 0 L20 20 L0 20 Z\""),
         "missing underlay rectangle path:\n{html}"
     );
-    assert!(html.contains("fill=\"rgb(0,255,0)\""), "missing green underlay fill:\n{html}");
+    assert!(
+        html.contains("fill=\"rgb(0,255,0)\""),
+        "missing green underlay fill:\n{html}"
+    );
 
     // Underneath: the underlay's <svg> markup must precede the page's own
     // text <span> in document order (painted first = drawn under, per CSS

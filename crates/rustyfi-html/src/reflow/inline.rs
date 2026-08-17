@@ -298,9 +298,16 @@ fn emit_graphics_box(
          width:{width}pt; height:{total_h}pt; vertical-align:{}pt;\">\n",
         -depth,
     );
-    crate::svg::emit_graphics(out, elems, width, height, depth, 0.0, height, &mut |out, cbx, _x, _y| {
-        emit_inline(out, cbx, ctx)
-    });
+    crate::svg::emit_graphics(
+        out,
+        elems,
+        width,
+        height,
+        depth,
+        0.0,
+        height,
+        &mut |out, cbx, _x, _y| emit_inline(out, cbx, ctx),
+    );
     out.push_str("</span>\n");
 }
 
@@ -366,9 +373,16 @@ fn emit_math_svg(
     }
     out.push_str("</svg>\n");
     if !rules.is_empty() {
-        crate::svg::emit_graphics(out, rules, width, height, depth, 0.0, height, &mut |out, cbx, _x, _y| {
-            emit_inline(out, cbx, ctx)
-        });
+        crate::svg::emit_graphics(
+            out,
+            rules,
+            width,
+            height,
+            depth,
+            0.0,
+            height,
+            &mut |out, cbx, _x, _y| emit_inline(out, cbx, ctx),
+        );
     }
     out.push_str("</span>\n");
 }

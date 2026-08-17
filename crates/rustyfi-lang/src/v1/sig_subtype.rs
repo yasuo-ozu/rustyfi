@@ -93,7 +93,9 @@ fn mono_mentions_stamp(ty: &MonoType, marker: &str) -> bool {
 fn row_mentions_stamp(row: &Row, marker: &str) -> bool {
     match &*resolve_row(row) {
         Row::Empty | Row::Var(_) => false,
-        Row::Cons(_, t, rest) => mono_mentions_stamp(&t, marker) || row_mentions_stamp(&rest, marker),
+        Row::Cons(_, t, rest) => {
+            mono_mentions_stamp(&t, marker) || row_mentions_stamp(&rest, marker)
+        }
     }
 }
 
@@ -140,7 +142,10 @@ pub(crate) enum SigSubtypeError {
 /// rather than recurse into upstream's undefined `failwith`; every other
 /// codomain shape (`Bot`/`WithType`) is fine at THIS guard (their own
 /// resolution/width checks happen elsewhere).
-pub(crate) fn substitute_result_sig(cod: &ast_v1::SigExpr, span: Span) -> Result<(), SigSubtypeError> {
+pub(crate) fn substitute_result_sig(
+    cod: &ast_v1::SigExpr,
+    span: Span,
+) -> Result<(), SigSubtypeError> {
     match cod {
         ast_v1::SigExpr::Functor { .. } => Err(SigSubtypeError::NestedFunctorSubstitution { span }),
         ast_v1::SigExpr::Bot(_) | ast_v1::SigExpr::WithType { .. } => Ok(()),
@@ -213,8 +218,7 @@ mod tests {
         let inferred = PolyType::mono(crate::prim_types::reff(crate::prim_types::list(
             MonoType::Var(shared),
         )));
-        let declared =
-            crate::prim_types::reff(crate::prim_types::list(rigid("a", "#5")));
+        let declared = crate::prim_types::reff(crate::prim_types::list(rigid("a", "#5")));
         let err = val_subsumes(&mut c, &inferred, &declared, "#5").unwrap_err();
         assert!(matches!(err, SubsumeError::EscapedSkolem), "{err:?}");
     }
@@ -276,7 +280,8 @@ mod tests {
         let cst_v1::FileV1::Library { sig_annot, .. } = &file else {
             panic!("expected a library")
         };
-        let ast_v1::SigExpr::Bot(ast_v1::SigBotV1::Sig { decls, .. }) = &*sig_annot.as_ref().unwrap().sig_.0
+        let ast_v1::SigExpr::Bot(ast_v1::SigBotV1::Sig { decls, .. }) =
+            &*sig_annot.as_ref().unwrap().sig_.0
         else {
             panic!("expected an inline `sig … end` umbrella")
         };
@@ -303,7 +308,10 @@ mod tests {
             panic!("expected a functor sig")
         };
         let err = substitute_result_sig(cod, Span::default()).unwrap_err();
-        assert!(matches!(err, SigSubtypeError::NestedFunctorSubstitution { .. }));
+        assert!(matches!(
+            err,
+            SigSubtypeError::NestedFunctorSubstitution { .. }
+        ));
     }
 
     /// The non-nested (ordinary) codomain shape is unaffected — the guard

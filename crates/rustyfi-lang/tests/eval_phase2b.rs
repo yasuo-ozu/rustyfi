@@ -9,9 +9,9 @@ use std::rc::Rc;
 
 use rustyfi_backend::{Context, FontKey, FontMetrics, HorzBox, Length, PureHorzBox};
 use rustyfi_lang::ast::{Ast, MathElem as AstMathElem};
-use rustyfi_lang::quoted::{IText, MathElem};
 use rustyfi_lang::eval::{self, EvalError};
 use rustyfi_lang::primitives;
+use rustyfi_lang::quoted::{IText, MathElem};
 use rustyfi_lang::value::{Env, Value};
 use rustyfi_syntax::Span;
 
@@ -132,8 +132,14 @@ fn access_field_missing_label_error_names_label_and_available_keys() {
     let ast = Ast::AccessField(Box::new(sample_record()), "z".to_string(), Span::default());
     let err = run(&ast).unwrap_err();
     let msg = err.to_string();
-    assert!(msg.contains('z'), "message should name the missing label: {msg}");
-    assert!(msg.contains('a') && msg.contains('b'), "message should list available fields: {msg}");
+    assert!(
+        msg.contains('z'),
+        "message should name the missing label: {msg}"
+    );
+    assert!(
+        msg.contains('a') && msg.contains('b'),
+        "message should list available fields: {msg}"
+    );
 }
 
 #[test]

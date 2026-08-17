@@ -8,7 +8,9 @@
 //! for how it still mints correctly-leveled fresh variables when it needs
 //! to extend an open row.
 
-use crate::types::{self, resolve, resolve_row, CmdArgType, Kind, MonoType, Row, RowVarRef, TyVarRef};
+use crate::types::{
+    self, resolve, resolve_row, CmdArgType, Kind, MonoType, Row, RowVarRef, TyVarRef,
+};
 use std::collections::BTreeSet;
 
 #[derive(Debug, thiserror::Error)]
@@ -35,7 +37,9 @@ pub enum UnifyError {
     /// rejected, never widened/narrowed. `expected`/`found` are each a
     /// formatted `?(l1 : τ1, …)` rendering of the two sides' label sets (or
     /// `?()` for an empty one) for a readable message.
-    #[error("command optional-argument label set mismatch: expected `{expected}`, found `{found}`")]
+    #[error(
+        "command optional-argument label set mismatch: expected `{expected}`, found `{found}`"
+    )]
     CmdLabelMismatch { expected: String, found: String },
 }
 
@@ -54,7 +58,10 @@ pub fn unify(a: &MonoType, b: &MonoType) -> Result<(), UnifyError> {
             if x == y {
                 Ok(())
             } else {
-                Err(UnifyError::Mismatch { expected: (*ra).clone(), found: (*rb).clone() })
+                Err(UnifyError::Mismatch {
+                    expected: (*ra).clone(),
+                    found: (*rb).clone(),
+                })
             }
         }
 
@@ -66,7 +73,10 @@ pub fn unify(a: &MonoType, b: &MonoType) -> Result<(), UnifyError> {
 
         (MonoType::Product(ts1), MonoType::Product(ts2)) => {
             if ts1.len() != ts2.len() {
-                return Err(UnifyError::ArityMismatch { expected: ts1.len(), found: ts2.len() });
+                return Err(UnifyError::ArityMismatch {
+                    expected: ts1.len(),
+                    found: ts2.len(),
+                });
             }
             for (x, y) in ts1.iter().zip(ts2) {
                 unify(x, y)?;
@@ -81,10 +91,16 @@ pub fn unify(a: &MonoType, b: &MonoType) -> Result<(), UnifyError> {
 
         (MonoType::Variant(n1, a1), MonoType::Variant(n2, a2)) => {
             if n1 != n2 {
-                return Err(UnifyError::Mismatch { expected: (*ra).clone(), found: (*rb).clone() });
+                return Err(UnifyError::Mismatch {
+                    expected: (*ra).clone(),
+                    found: (*rb).clone(),
+                });
             }
             if a1.len() != a2.len() {
-                return Err(UnifyError::ArityMismatch { expected: a1.len(), found: a2.len() });
+                return Err(UnifyError::ArityMismatch {
+                    expected: a1.len(),
+                    found: a2.len(),
+                });
             }
             for (x, y) in a1.iter().zip(a2) {
                 unify(x, y)?;
@@ -96,13 +112,19 @@ pub fn unify(a: &MonoType, b: &MonoType) -> Result<(), UnifyError> {
         | (MonoType::BlockCmd(c1), MonoType::BlockCmd(c2))
         | (MonoType::MathCmd(c1), MonoType::MathCmd(c2)) => unify_cmd_args(c1, c2),
 
-        _ => Err(UnifyError::Mismatch { expected: (*ra).clone(), found: (*rb).clone() }),
+        _ => Err(UnifyError::Mismatch {
+            expected: (*ra).clone(),
+            found: (*rb).clone(),
+        }),
     }
 }
 
 fn unify_cmd_args(a: &[CmdArgType], b: &[CmdArgType]) -> Result<(), UnifyError> {
     if a.len() != b.len() {
-        return Err(UnifyError::ArityMismatch { expected: a.len(), found: b.len() });
+        return Err(UnifyError::ArityMismatch {
+            expected: a.len(),
+            found: b.len(),
+        });
     }
     for (x, y) in a.iter().zip(b) {
         if x.optional != y.optional {
@@ -117,7 +139,10 @@ fn unify_cmd_args(a: &[CmdArgType], b: &[CmdArgType]) -> Result<(), UnifyError> 
         // (every 0.0.6-reachable `CmdArgType`), so this is byte-identical for
         // the frozen corpus.
         if x.opt_labels.len() != y.opt_labels.len()
-            || x.opt_labels.iter().zip(&y.opt_labels).any(|((lx, _), (ly, _))| lx != ly)
+            || x.opt_labels
+                .iter()
+                .zip(&y.opt_labels)
+                .any(|((lx, _), (ly, _))| lx != ly)
         {
             return Err(UnifyError::CmdLabelMismatch {
                 expected: fmt_opt_label_set(&x.opt_labels),
@@ -248,7 +273,10 @@ fn unify_row(a: &Row, b: &Row) -> Result<(), UnifyError> {
 
         (Row::Empty, Row::Var(v)) | (Row::Var(v), Row::Empty) => {
             if let Some(label) = v.kind().iter().next().cloned() {
-                return Err(UnifyError::MissingLabel { label, ty: MonoType::Record(Row::Empty) });
+                return Err(UnifyError::MissingLabel {
+                    label,
+                    ty: MonoType::Record(Row::Empty),
+                });
             }
             bind_row_var(&v, Row::Empty)
         }

@@ -154,7 +154,9 @@ use rustyfi_syntax::Span;
 /// A 0.1 construct Slice 1 deliberately does not lower yet. A real user
 /// error (not a panic): points at the construct and the roadmap.
 #[derive(Debug, Clone, thiserror::Error)]
-#[error("{span}: SATySFi 0.1 construct not supported yet in this port's Slice 1: {construct} ({hint})")]
+#[error(
+    "{span}: SATySFi 0.1 construct not supported yet in this port's Slice 1: {construct} ({hint})"
+)]
 pub struct LowerError {
     pub construct: &'static str,
     pub hint: &'static str,
@@ -190,7 +192,12 @@ struct AbsolutizeRewrite<'a, 's> {
 }
 
 impl functor::HeadRewrite for AbsolutizeRewrite<'_, '_> {
-    fn rewrite(&self, mods: &[String], path: &[String], _span: Span) -> Result<Option<Vec<String>>, LowerError> {
+    fn rewrite(
+        &self,
+        mods: &[String],
+        path: &[String],
+        _span: Span,
+    ) -> Result<Option<Vec<String>>, LowerError> {
         let Some(head) = mods.first() else {
             return Ok(None);
         };
@@ -273,7 +280,10 @@ pub(crate) fn qualify_type_key(mod_path: &[String], local: &str) -> String {
 
 impl TypeNameEnv {
     pub(crate) fn qualify(&self, bare: &str) -> String {
-        self.0.get(bare).cloned().unwrap_or_else(|| bare.to_string())
+        self.0
+            .get(bare)
+            .cloned()
+            .unwrap_or_else(|| bare.to_string())
     }
 
     /// Child env for one module body: parent mappings (outer types stay
@@ -386,7 +396,11 @@ impl TypeNameEnv {
     /// result's own type surface is already flattened by
     /// [`crate::v1::surface::build_binds`]'s own include-splicing, so no
     /// further include-awareness is needed here).
-    pub(crate) fn child_from_names(&self, mod_path: &[String], names: impl Iterator<Item = String>) -> Self {
+    pub(crate) fn child_from_names(
+        &self,
+        mod_path: &[String],
+        names: impl Iterator<Item = String>,
+    ) -> Self {
         let mut map = self.0.clone();
         for n in names {
             let q = qualify_type_key(mod_path, &n);
@@ -608,8 +622,12 @@ fn lower_bind_v1<'s>(
             eq,
             body,
             ..
-        } => Ok(vec![lower_value_math(kw, ctx, cmd, params, scripts, eq, body)?]),
-        cst_v1::Bind::ValueRec { kw, first, ands, .. } => Ok(vec![cst::TopBinding::LetRec {
+        } => Ok(vec![lower_value_math(
+            kw, ctx, cmd, params, scripts, eq, body,
+        )?]),
+        cst_v1::Bind::ValueRec {
+            kw, first, ands, ..
+        } => Ok(vec![cst::TopBinding::LetRec {
             kw: KwLetRec(kw.0),
             first: lower_rec_clause(first)?,
             ands: ands
@@ -649,7 +667,11 @@ fn lower_bind_v1<'s>(
             eq,
             body,
         } => match &*body.0 {
-            ast_v1::ModExpr::Struct { struct_kw, binds, end_kw } => {
+            ast_v1::ModExpr::Struct {
+                struct_kw,
+                binds,
+                end_kw,
+            } => {
                 // 2a's path, one eraser hop deeper: the struct-literal body
                 // lowers to a real TopBinding::Module regardless of the
                 // annotation (the seal rule, module doc comment) — as of
@@ -699,10 +721,14 @@ fn lower_bind_v1<'s>(
             ast_v1::ModExpr::App { func, arg: _ } => {
                 let app_span = mod_chain_span(func);
                 match surface::frozen_app_target(surfaces, mod_path, app_span) {
-                    Some(Some(surface::AppResolution { functor_path, arg_path })) => {
-                        let fdef = surfaces.functors.get(functor_path).expect(
-                            "a frozen app target always names a registered functor",
-                        );
+                    Some(Some(surface::AppResolution {
+                        functor_path,
+                        arg_path,
+                    })) => {
+                        let fdef = surfaces
+                            .functors
+                            .get(functor_path)
+                            .expect("a frozen app target always names a registered functor");
                         let body_binds = functor::functor_body_binds(fdef.body).expect(
                             "a frozen app target's functor body is always struct-shaped \
                              (a non-struct body never freezes a resolution)",
@@ -776,11 +802,11 @@ fn lower_bind_v1<'s>(
             ast_v1::ModExpr::Var(chain) => {
                 match surface::frozen_include_target(surfaces, mod_path, kw.0) {
                     Some(Some(target_path)) => {
-                        let target_surf = surfaces.modules.get(target_path).expect(
-                            "a frozen include target is always a registered module",
-                        );
-                        let decls =
-                            alias_member_decls(kw.0, mod_path, target_path, target_surf)?;
+                        let target_surf = surfaces
+                            .modules
+                            .get(target_path)
+                            .expect("a frozen include target is always a registered module");
+                        let decls = alias_member_decls(kw.0, mod_path, target_path, target_surf)?;
                         Ok(decls.into_iter().map(|sd| *sd.0).collect())
                     }
                     _ => Err(unsupported(
@@ -802,10 +828,14 @@ fn lower_bind_v1<'s>(
             ast_v1::ModExpr::App { func, arg: _ } => {
                 let app_span = mod_chain_span(func);
                 match surface::frozen_app_target(surfaces, mod_path, app_span) {
-                    Some(Some(surface::AppResolution { functor_path, arg_path })) => {
-                        let fdef = surfaces.functors.get(functor_path).expect(
-                            "a frozen app target always names a registered functor",
-                        );
+                    Some(Some(surface::AppResolution {
+                        functor_path,
+                        arg_path,
+                    })) => {
+                        let fdef = surfaces
+                            .functors
+                            .get(functor_path)
+                            .expect("a frozen app target always names a registered functor");
                         let body_binds = functor::functor_body_binds(fdef.body).expect(
                             "a frozen app target's functor body is always struct-shaped \
                              (a non-struct body never freezes a resolution)",
@@ -945,14 +975,16 @@ fn alias_member_decls(
             }),
             Vec::new(),
         );
-        out.push(cst::StructDecl(Box::new(cst::TopBinding::Let(cst::TopLet {
-            let_kw: KwLet(span),
-            name: cst::BindName::from(var_tok(x, span)),
-            ascription: None,
-            params: Vec::new(),
-            eq: DefEqTok(span),
-            value: target_ref,
-        }))));
+        out.push(cst::StructDecl(Box::new(cst::TopBinding::Let(
+            cst::TopLet {
+                let_kw: KwLet(span),
+                name: cst::BindName::from(var_tok(x, span)),
+                ascription: None,
+                params: Vec::new(),
+                eq: DefEqTok(span),
+                value: target_ref,
+            },
+        ))));
     }
     for (tname, arity) in &surface.types {
         let ctor = var_tok(&format!("{target_path}.{tname}"), span);
@@ -968,7 +1000,10 @@ fn alias_member_decls(
                 }),
             ),
             1 => {
-                let tv = TypeVarTok { name: "a".to_string(), span };
+                let tv = TypeVarTok {
+                    name: "a".to_string(),
+                    span,
+                };
                 (
                     vec![tv.clone()],
                     cst::ast::TypeExpr::Atom(cst::ast::TypeProd {
@@ -990,14 +1025,16 @@ fn alias_member_decls(
                 ));
             }
         };
-        out.push(cst::StructDecl(Box::new(cst::TopBinding::Type(cst::TypeDecl {
-            kw: KwType(span),
-            tyvars,
-            name: var_tok(&qualify_type_key(alias_path, tname), span),
-            eq: DefEqTok(span),
-            body: cst::TypeDeclBody::Synonym(ty),
-            ands: Vec::new(),
-        }))));
+        out.push(cst::StructDecl(Box::new(cst::TopBinding::Type(
+            cst::TypeDecl {
+                kw: KwType(span),
+                tyvars,
+                name: var_tok(&qualify_type_key(alias_path, tname), span),
+                eq: DefEqTok(span),
+                body: cst::TypeDeclBody::Synonym(ty),
+                ands: Vec::new(),
+            },
+        ))));
     }
     for (qname, child) in &surface.mods {
         let mut child_alias_path = alias_path.to_vec();
@@ -1006,7 +1043,10 @@ fn alias_member_decls(
         let child_decls = alias_member_decls(span, &child_alias_path, &child_target, child)?;
         out.push(cst::StructDecl(Box::new(cst::TopBinding::Module {
             kw: KwModule(span),
-            name: CtorTok { name: qname.clone(), span },
+            name: CtorTok {
+                name: qname.clone(),
+                span,
+            },
             sig: None,
             eq: DefEqTok(span),
             struct_kw: KwStruct(span),
@@ -1075,7 +1115,11 @@ fn lower_type_single(
         },
         eq: s.eq.clone(),
         body: match &s.body {
-            cst_v1::TypeBodyV1::Variant { leading_bar, first, rest } => cst::TypeDeclBody::Variant {
+            cst_v1::TypeBodyV1::Variant {
+                leading_bar,
+                first,
+                rest,
+            } => cst::TypeDeclBody::Variant {
                 leading_bar: leading_bar.clone(),
                 first: lower_variant_def(first, tyenv)?,
                 rest: rest
@@ -1088,7 +1132,9 @@ fn lower_type_single(
                     })
                     .collect::<Result<_, LowerError>>()?,
             },
-            cst_v1::TypeBodyV1::Synonym(ty) => cst::TypeDeclBody::Synonym(lower_type_expr(ty, tyenv)?),
+            cst_v1::TypeBodyV1::Synonym(ty) => {
+                cst::TypeDeclBody::Synonym(lower_type_expr(ty, tyenv)?)
+            }
         },
         // 0.1's `type … and …` chain is lowered to CONSECUTIVE 0.0.6
         // `TopBinding::Type`s (one per clause), so each carries no own `and`.
@@ -1096,7 +1142,10 @@ fn lower_type_single(
     }))
 }
 
-fn lower_variant_def(v: &cst_v1::VariantDefV1, tyenv: &TypeNameEnv) -> Result<cst::VariantDef, LowerError> {
+fn lower_variant_def(
+    v: &cst_v1::VariantDefV1,
+    tyenv: &TypeNameEnv,
+) -> Result<cst::VariantDef, LowerError> {
     Ok(cst::VariantDef {
         // Ctors stay UNQUALIFIED — §4's carve-out.
         ctor: v.ctor.clone(),
@@ -1136,7 +1185,12 @@ pub(crate) fn lower_type_expr(
         // (contrast the record-type row-tail below, which THIS increment
         // DOES complete — a bare record type has no `quant`-list obligation
         // to satisfy).
-        ast_v1::TypeExpr::OptRowFun { opt_dom, dom, arrow, cod } => {
+        ast_v1::TypeExpr::OptRowFun {
+            opt_dom,
+            dom,
+            arrow,
+            cod,
+        } => {
             if let Some(tail) = &opt_dom.inner.row_tail {
                 return Err(unsupported(
                     "a row-variable tail in an optional-argument type domain (`| ?'r`)",
@@ -1178,7 +1232,10 @@ pub(crate) fn lower_type_expr(
     })
 }
 
-fn lower_type_prod(p: &ast_v1::TypeProd, tyenv: &TypeNameEnv) -> Result<cst::ast::TypeProd, LowerError> {
+fn lower_type_prod(
+    p: &ast_v1::TypeProd,
+    tyenv: &TypeNameEnv,
+) -> Result<cst::ast::TypeProd, LowerError> {
     Ok(cst::ast::TypeProd {
         first: lower_type_app(&p.first, tyenv)?,
         rest: p
@@ -1202,42 +1259,39 @@ fn lower_type_prod(p: &ast_v1::TypeProd, tyenv: &TypeNameEnv) -> Result<cst::ast
 /// `TypeApp::Atom` — a command type is never itself "applied") and
 /// `AppliedLong` (the same prefix→postfix bridge as `Applied`, minus
 /// `tyenv.qualify`: a `LONG_LOWER` head is already absolute, spec §2.4).
-fn lower_type_app(a: &ast_v1::TypeApp, tyenv: &TypeNameEnv) -> Result<cst::ast::TypeApp, LowerError> {
+fn lower_type_app(
+    a: &ast_v1::TypeApp,
+    tyenv: &TypeNameEnv,
+) -> Result<cst::ast::TypeApp, LowerError> {
     match a {
-        ast_v1::TypeApp::InlineCmdTy { kw, list, args } => {
-            Ok(cst::ast::TypeApp {
-                head: cst::ast::TypeAtom::Cmd {
-                    list: list.clone(),
-                    args: lower_type_cmd_args(args, tyenv)?,
-                    kind: cst::ast::CmdTypeKind::Inline(HorzCmdTypeTok(kw.0)),
-                },
-                rest: Vec::new(),
-            })
-        }
-        ast_v1::TypeApp::BlockCmdTy { kw, list, args } => {
-            Ok(cst::ast::TypeApp {
-                head: cst::ast::TypeAtom::Cmd {
-                    list: list.clone(),
-                    args: lower_type_cmd_args(args, tyenv)?,
-                    kind: cst::ast::CmdTypeKind::Block(VertCmdTypeTok(kw.0)),
-                },
-                rest: Vec::new(),
-            })
-        }
+        ast_v1::TypeApp::InlineCmdTy { kw, list, args } => Ok(cst::ast::TypeApp {
+            head: cst::ast::TypeAtom::Cmd {
+                list: list.clone(),
+                args: lower_type_cmd_args(args, tyenv)?,
+                kind: cst::ast::CmdTypeKind::Inline(HorzCmdTypeTok(kw.0)),
+            },
+            rest: Vec::new(),
+        }),
+        ast_v1::TypeApp::BlockCmdTy { kw, list, args } => Ok(cst::ast::TypeApp {
+            head: cst::ast::TypeAtom::Cmd {
+                list: list.clone(),
+                args: lower_type_cmd_args(args, tyenv)?,
+                kind: cst::ast::CmdTypeKind::Block(VertCmdTypeTok(kw.0)),
+            },
+            rest: Vec::new(),
+        }),
         // `math […]` (math-package completion M1). `lower_type_atom`'s Cmd
         // arm in `typecheck.rs` already produces `MonoType::MathCmd` for
         // `CmdTypeKind::Math` and `unify.rs` already dispatches it — no
         // typecheck/unify change needed for the head itself.
-        ast_v1::TypeApp::MathCmdTy { kw, list, args } => {
-            Ok(cst::ast::TypeApp {
-                head: cst::ast::TypeAtom::Cmd {
-                    list: list.clone(),
-                    args: lower_type_cmd_args(args, tyenv)?,
-                    kind: cst::ast::CmdTypeKind::Math(MathCmdTypeTok(kw.0)),
-                },
-                rest: Vec::new(),
-            })
-        }
+        ast_v1::TypeApp::MathCmdTy { kw, list, args } => Ok(cst::ast::TypeApp {
+            head: cst::ast::TypeAtom::Cmd {
+                list: list.clone(),
+                args: lower_type_cmd_args(args, tyenv)?,
+                kind: cst::ast::CmdTypeKind::Math(MathCmdTypeTok(kw.0)),
+            },
+            rest: Vec::new(),
+        }),
         // `arg1 … argN M.ctor` — the 0.0.6 target is now an N-ary atom run
         // (`TypeApp { head, rest }`), so the full argument list lowers with no
         // arity ceiling. NO `tyenv.qualify` on a `LONG_LOWER` head: an `M.t`
@@ -1279,7 +1333,10 @@ fn lower_applied(
         name: ctor_name,
         span: ctor_span,
     }));
-    Ok(cst::ast::TypeApp { head, rest: out_rest })
+    Ok(cst::ast::TypeApp {
+        head,
+        rest: out_rest,
+    })
 }
 
 /// Each `[…]`-bracketed command-type slot lowers to one
@@ -1331,7 +1388,10 @@ fn lower_type_cmd_args(
         .collect()
 }
 
-fn lower_type_atom(a: &ast_v1::TypeAtom, tyenv: &TypeNameEnv) -> Result<cst::ast::TypeAtom, LowerError> {
+fn lower_type_atom(
+    a: &ast_v1::TypeAtom,
+    tyenv: &TypeNameEnv,
+) -> Result<cst::ast::TypeAtom, LowerError> {
     Ok(match a {
         ast_v1::TypeAtom::Paren { paren, inner } => cst::ast::TypeAtom::Paren {
             paren: paren.clone(),
@@ -1495,9 +1555,7 @@ fn lower_param_units(
 /// a bundle freely) AND `ValueMath` (`lower_value_math` rejects a bundle
 /// itself, BEFORE calling this — math command parameter bundles are
 /// optional-arg-rows increment 3b, `?(name=…)` on `val math ctx \derive`).
-fn lower_command_params(
-    params: &[cst_v1::Param],
-) -> Result<Vec<cst::ast::Param>, LowerError> {
+fn lower_command_params(params: &[cst_v1::Param]) -> Result<Vec<cst::ast::Param>, LowerError> {
     params
         .iter()
         .map(|p| match &p.opts {
@@ -1720,7 +1778,12 @@ fn lower_value_math(
 fn lower_expr(e: &ast_v1::Expr) -> Result<cst::ast::Expr, LowerError> {
     match e {
         ast_v1::Expr::LetRecIn {
-            let_kw, first, ands, in_kw, body, ..
+            let_kw,
+            first,
+            ands,
+            in_kw,
+            body,
+            ..
         } => Ok(cst::ast::Expr::LetRecIn {
             // Span-lossy on `rec` (synthetic tree, never unparsed).
             kw: KwLetRec(let_kw.0),
@@ -1961,7 +2024,9 @@ fn lower_atomic(a: &ast_v1::Atomic) -> Result<cst::ast::Atomic, LowerError> {
             kw: kw.clone(),
             name: name.clone(),
         }),
-        ast_v1::Atomic::Unit { paren } => Ok(cst::ast::Atomic::Unit { paren: paren.clone() }),
+        ast_v1::Atomic::Unit { paren } => Ok(cst::ast::Atomic::Unit {
+            paren: paren.clone(),
+        }),
         ast_v1::Atomic::Paren { paren, inner } => Ok(cst::ast::Atomic::Paren {
             paren: paren.clone(),
             inner: Box::new(lower_paren_body(inner)?),
@@ -1972,7 +2037,10 @@ fn lower_atomic(a: &ast_v1::Atomic) -> Result<cst::ast::Atomic, LowerError> {
         }),
         ast_v1::Atomic::List { list, items } => Ok(cst::ast::Atomic::List {
             list: list.clone(),
-            items: items.iter().map(lower_list_item).collect::<Result<_, _>>()?,
+            items: items
+                .iter()
+                .map(lower_list_item)
+                .collect::<Result<_, _>>()?,
         }),
         ast_v1::Atomic::InlineText { igrp, elems } => Ok(cst::ast::Atomic::InlineText {
             igrp: igrp.clone(),
@@ -2008,10 +2076,16 @@ fn lower_record_body(b: &ast_v1::RecordBody) -> Result<cst::ast::RecordBody, Low
         } => Ok(cst::ast::RecordBody::Update {
             base: erase_expr(lower_expr(base)?),
             with_kw: with_kw.clone(),
-            fields: fields.iter().map(lower_record_field).collect::<Result<_, _>>()?,
+            fields: fields
+                .iter()
+                .map(lower_record_field)
+                .collect::<Result<_, _>>()?,
         }),
         ast_v1::RecordBody::Fields(fields) => Ok(cst::ast::RecordBody::Fields(
-            fields.iter().map(lower_record_field).collect::<Result<_, _>>()?,
+            fields
+                .iter()
+                .map(lower_record_field)
+                .collect::<Result<_, _>>()?,
         )),
     }
 }
@@ -2031,7 +2105,11 @@ fn lower_record_field(f: &ast_v1::RecordField) -> Result<cst::ast::RecordField, 
 fn lower_paren_body(b: &ast_v1::ParenBody) -> Result<cst::ast::ParenBody, LowerError> {
     Ok(cst::ast::ParenBody {
         first: erase_expr(lower_expr(&b.first)?),
-        rest: b.rest.iter().map(lower_comma_expr).collect::<Result<_, _>>()?,
+        rest: b
+            .rest
+            .iter()
+            .map(lower_comma_expr)
+            .collect::<Result<_, _>>()?,
     })
 }
 
@@ -2230,9 +2308,7 @@ fn lower_math_group_arg(g: &ast_v1::MathGroupArg) -> Result<cst::ast::MathGroupA
             mgrp: mgrp.clone(),
             elems: lower_math_elems(elems)?,
         },
-        ast_v1::MathGroupArg::Bot(b) => {
-            cst::ast::MathGroupArg::Bot(Box::new(lower_math_bot(b)?))
-        }
+        ast_v1::MathGroupArg::Bot(b) => cst::ast::MathGroupArg::Bot(Box::new(lower_math_bot(b)?)),
     })
 }
 
@@ -2262,7 +2338,10 @@ fn lower_math_arg(a: &ast_v1::MathArg) -> Result<cst::ast::MathArg, LowerError> 
         },
         ast_v1::MathArg::ListEscape { list, items } => cst::ast::MathArgBody::ListEscape {
             list: list.clone(),
-            items: items.iter().map(lower_list_item).collect::<Result<_, _>>()?,
+            items: items
+                .iter()
+                .map(lower_list_item)
+                .collect::<Result<_, _>>()?,
         },
         ast_v1::MathArg::RecordEscape { rec, body } => cst::ast::MathArgBody::RecordEscape {
             rec: rec.clone(),
@@ -2290,7 +2369,11 @@ fn lower_as_clause(a: &ast_v1::AsClause) -> cst::ast::AsClause {
 fn lower_pat_cons(c: &ast_v1::PatCons) -> Result<cst::ast::PatCons, LowerError> {
     Ok(cst::ast::PatCons {
         head: lower_pat_bot(&c.head)?,
-        tail: c.tail.iter().map(lower_cons_seg).collect::<Result<_, _>>()?,
+        tail: c
+            .tail
+            .iter()
+            .map(lower_cons_seg)
+            .collect::<Result<_, _>>()?,
     })
 }
 
@@ -2314,7 +2397,9 @@ fn lower_pat_bot(p: &ast_v1::PatBot) -> Result<cst::ast::PatBot, LowerError> {
         ast_v1::PatBot::Str(t) => Ok(cst::ast::PatBot::Str(t.clone())),
         ast_v1::PatBot::Wild(t) => Ok(cst::ast::PatBot::Wild(t.clone())),
         ast_v1::PatBot::Var(t) => Ok(cst::ast::PatBot::Var(t.clone())),
-        ast_v1::PatBot::Unit { paren } => Ok(cst::ast::PatBot::Unit { paren: paren.clone() }),
+        ast_v1::PatBot::Unit { paren } => Ok(cst::ast::PatBot::Unit {
+            paren: paren.clone(),
+        }),
         ast_v1::PatBot::Paren { paren, inner } => Ok(cst::ast::PatBot::Paren {
             paren: paren.clone(),
             inner: Box::new(lower_pattern_paren_body(inner)?),
@@ -2486,7 +2571,11 @@ mod tests {
         let cst::TopBinding::Module { decls, .. } = &lowered[0] else {
             panic!("expected a TopBinding::Module");
         };
-        assert_eq!(decls.len(), 2, "an `and`-chain lowers to N consecutive Type decls");
+        assert_eq!(
+            decls.len(),
+            2,
+            "an `and`-chain lowers to N consecutive Type decls"
+        );
         let cst::TopBinding::Type(t_decl) = &*decls[0].0 else {
             panic!("expected decls[0] to be a Type decl");
         };
@@ -2501,10 +2590,17 @@ mod tests {
         let cst::ast::TypeExpr::Atom(prod) = ty else {
             panic!("expected a bare TypeProd (no arrow)");
         };
-        let cst::ast::TypeApp { head: cst::ast::TypeAtom::Name(n), .. } = &prod.first else {
+        let cst::ast::TypeApp {
+            head: cst::ast::TypeAtom::Name(n),
+            ..
+        } = &prod.first
+        else {
             panic!("expected a bare type name atom");
         };
-        assert_eq!(n.name, "M.t", "u's synonym body must reference the QUALIFIED t");
+        assert_eq!(
+            n.name, "M.t",
+            "u's synonym body must reference the QUALIFIED t"
+        );
     }
 
     /// §6.2 / §4: nested-module pre-qualification — `module M = struct type
@@ -2546,10 +2642,17 @@ mod tests {
         let cst::ast::TypeExpr::Atom(prod) = ty else {
             panic!("expected a bare TypeProd");
         };
-        let cst::ast::TypeApp { head: cst::ast::TypeAtom::Name(n), .. } = &prod.first else {
+        let cst::ast::TypeApp {
+            head: cst::ast::TypeAtom::Name(n),
+            ..
+        } = &prod.first
+        else {
             panic!("expected a bare type name atom");
         };
-        assert_eq!(n.name, "M.t", "the outer M.t must stay visible/qualified inside N");
+        assert_eq!(
+            n.name, "M.t",
+            "the outer M.t must stay visible/qualified inside N"
+        );
     }
 
     /// §3.4/§6.2: the prefix→postfix `TypeApp` bridge — `type t = option
@@ -2578,7 +2681,11 @@ mod tests {
             "{:?}",
             prod.first.rest[0]
         );
-        assert!(matches!(&prod.first.head, cst::ast::TypeAtom::Name(n) if n.name == "int"), "{:?}", prod.first.head);
+        assert!(
+            matches!(&prod.first.head, cst::ast::TypeAtom::Name(n) if n.name == "int"),
+            "{:?}",
+            prod.first.head
+        );
     }
 
     /// §3.4/§6.2/§8: an applied type constructor with arity ≥ 2 (`pair int
@@ -2598,7 +2705,11 @@ mod tests {
             panic!("expected a bare synonym TypeProd");
         };
         // args = [int, int], ctor = pair → head = int, rest = [int, pair].
-        assert!(matches!(&prod.first.head, cst::ast::TypeAtom::Name(n) if n.name == "int"), "{:?}", prod.first.head);
+        assert!(
+            matches!(&prod.first.head, cst::ast::TypeAtom::Name(n) if n.name == "int"),
+            "{:?}",
+            prod.first.head
+        );
         assert_eq!(prod.first.rest.len(), 2, "{:?}", prod.first.rest);
         assert!(matches!(&prod.first.rest[0], cst::ast::TypeAtom::Name(n) if n.name == "int"));
         assert!(matches!(&prod.first.rest[1], cst::ast::TypeAtom::Name(n) if n.name == "pair"));
@@ -2646,7 +2757,11 @@ mod tests {
         let cst::ast::TypeExpr::Atom(prod) = ty else {
             panic!("expected a bare TypeProd");
         };
-        let cst::ast::TypeApp { head: cst::ast::TypeAtom::Record { fields, .. }, .. } = &prod.first else {
+        let cst::ast::TypeApp {
+            head: cst::ast::TypeAtom::Record { fields, .. },
+            ..
+        } = &prod.first
+        else {
             panic!("expected TypeAtom::Record, got {:?}", prod.first);
         };
         assert_eq!(fields.len(), 2);
@@ -2693,7 +2808,11 @@ mod tests {
         let cst::ast::TypeExpr::Atom(prod) = ty else {
             panic!("expected a bare TypeProd");
         };
-        let cst::ast::TypeApp { head: cst::ast::TypeAtom::Record { fields, .. }, .. } = &prod.first else {
+        let cst::ast::TypeApp {
+            head: cst::ast::TypeAtom::Record { fields, .. },
+            ..
+        } = &prod.first
+        else {
             panic!("expected TypeAtom::Record, got {:?}", prod.first);
         };
         assert_eq!(fields.len(), 1);
@@ -2701,10 +2820,17 @@ mod tests {
         let cst::ast::TypeExpr::Atom(field_prod) = &*fields[0].ty.0 else {
             panic!("expected a bare TypeProd for the field type");
         };
-        let cst::ast::TypeApp { head: cst::ast::TypeAtom::Name(n), .. } = &field_prod.first else {
+        let cst::ast::TypeApp {
+            head: cst::ast::TypeAtom::Name(n),
+            ..
+        } = &field_prod.first
+        else {
             panic!("expected a bare type name atom, got {:?}", field_prod.first);
         };
-        assert_eq!(n.name, "M.config", "the field's bare `config` must qualify to M.config");
+        assert_eq!(
+            n.name, "M.config",
+            "the field's bare `config` must qualify to M.config"
+        );
     }
 
     /// SATySFi 0.1 dropped the fused `?:`/`?*` optional sigils entirely
@@ -2724,7 +2850,10 @@ mod tests {
     fn empty_opt_arg_bundle_is_a_lower_error() {
         let file = parse_v1("f ?() x");
         let err = lower_document_v1(&file).unwrap_err();
-        assert!(err.to_string().contains("optional-argument bundle"), "{err}");
+        assert!(
+            err.to_string().contains("optional-argument bundle"),
+            "{err}"
+        );
     }
 
     /// math-split spec §3.1: `${…}` now lowers STRUCTURALLY — the
@@ -2804,8 +2933,15 @@ mod tests {
              end",
         );
         let lowered = lower_file_v1(&file).unwrap_or_else(|e| panic!("lower_file_v1: {e}"));
-        assert_eq!(lowered.len(), 1, "one TopBinding::Module, not spliced binds");
-        let cst::TopBinding::Module { name, sig, decls, .. } = &lowered[0] else {
+        assert_eq!(
+            lowered.len(),
+            1,
+            "one TopBinding::Module, not spliced binds"
+        );
+        let cst::TopBinding::Module {
+            name, sig, decls, ..
+        } = &lowered[0]
+        else {
             panic!("expected a TopBinding::Module, got {:?}", lowered[0]);
         };
         assert_eq!(name.name, "V01Mini");
@@ -2863,16 +2999,26 @@ mod tests {
         let unsealed_lowered = lower_file_v1(&unsealed).unwrap_or_else(|e| panic!("unsealed: {e}"));
         assert_eq!(sealed_lowered.len(), 1);
         assert_eq!(unsealed_lowered.len(), 1);
-        let cst::TopBinding::Module { sig: sealed_sig, decls: sealed_decls, .. } = &sealed_lowered[0]
+        let cst::TopBinding::Module {
+            sig: sealed_sig,
+            decls: sealed_decls,
+            ..
+        } = &sealed_lowered[0]
         else {
             panic!("expected a TopBinding::Module");
         };
-        let cst::TopBinding::Module { sig: unsealed_sig, decls: unsealed_decls, .. } =
-            &unsealed_lowered[0]
+        let cst::TopBinding::Module {
+            sig: unsealed_sig,
+            decls: unsealed_decls,
+            ..
+        } = &unsealed_lowered[0]
         else {
             panic!("expected a TopBinding::Module");
         };
-        assert!(sealed_sig.is_none(), "the seal must lower to NO cst::SigAnnot at all");
+        assert!(
+            sealed_sig.is_none(),
+            "the seal must lower to NO cst::SigAnnot at all"
+        );
         assert!(unsealed_sig.is_none());
         assert_eq!(sealed_decls.len(), unsealed_decls.len());
         assert!(matches!(&*sealed_decls[0].0, cst::TopBinding::Let(_)));
@@ -2893,7 +3039,10 @@ mod tests {
         let unsealed = parse_v1("module M = struct\ninclude struct val x = 1 end\nend");
         let sealed_err = lower_file_v1(&sealed).unwrap_err();
         let unsealed_err = lower_file_v1(&unsealed).unwrap_err();
-        assert!(sealed_err.to_string().contains("inline `struct"), "{sealed_err}");
+        assert!(
+            sealed_err.to_string().contains("inline `struct"),
+            "{sealed_err}"
+        );
         assert_eq!(sealed_err.construct, unsealed_err.construct);
         assert_eq!(sealed_err.hint, unsealed_err.hint);
     }
@@ -2920,16 +3069,28 @@ mod tests {
         );
         let sealed_lowered = lower_file_v1(&sealed).unwrap_or_else(|e| panic!("sealed: {e}"));
         let unsealed_lowered = lower_file_v1(&unsealed).unwrap_or_else(|e| panic!("unsealed: {e}"));
-        let cst::TopBinding::Module { decls: sealed_decls, .. } = &sealed_lowered[0] else {
+        let cst::TopBinding::Module {
+            decls: sealed_decls,
+            ..
+        } = &sealed_lowered[0]
+        else {
             panic!("expected a TopBinding::Module");
         };
-        let cst::TopBinding::Module { decls: unsealed_decls, .. } = &unsealed_lowered[0] else {
+        let cst::TopBinding::Module {
+            decls: unsealed_decls,
+            ..
+        } = &unsealed_lowered[0]
+        else {
             panic!("expected a TopBinding::Module");
         };
         assert_eq!(sealed_decls.len(), 1);
         assert_eq!(unsealed_decls.len(), 1);
-        let cst::TopBinding::Module { name: sealed_name, sig: sealed_sig, decls: sealed_inner, .. } =
-            &*sealed_decls[0].0
+        let cst::TopBinding::Module {
+            name: sealed_name,
+            sig: sealed_sig,
+            decls: sealed_inner,
+            ..
+        } = &*sealed_decls[0].0
         else {
             panic!("expected decls[0] to be a nested TopBinding::Module");
         };
@@ -2944,7 +3105,10 @@ mod tests {
         };
         assert_eq!(sealed_name.name, "N");
         assert_eq!(unsealed_name.name, "N");
-        assert!(sealed_sig.is_none(), "the seal must lower to NO cst::SigAnnot at all");
+        assert!(
+            sealed_sig.is_none(),
+            "the seal must lower to NO cst::SigAnnot at all"
+        );
         assert!(unsealed_sig.is_none());
         assert_eq!(sealed_inner.len(), unsealed_inner.len());
     }
@@ -2975,7 +3139,12 @@ mod tests {
         let cst::TopBinding::Module { decls, .. } = &lowered[0] else {
             panic!("expected a TopBinding::Module");
         };
-        let cst::TopBinding::Module { name, decls: alias_decls, .. } = &*decls[1].0 else {
+        let cst::TopBinding::Module {
+            name,
+            decls: alias_decls,
+            ..
+        } = &*decls[1].0
+        else {
             panic!("expected decls[1] to be the Alias module");
         };
         assert_eq!(name.name, "Alias");
@@ -3032,11 +3201,15 @@ mod tests {
              module F = fun (X : sig val x : int end) -> struct val y = X.x end\n\
              end",
         );
-        let bindings = lower_file_v1(&file).expect("a functor definition now lowers, emitting no member");
+        let bindings =
+            lower_file_v1(&file).expect("a functor definition now lowers, emitting no member");
         let cst::TopBinding::Module { decls, .. } = &bindings[0] else {
             panic!("expected M's TopBinding::Module")
         };
-        assert!(decls.is_empty(), "a functor literal contributes no decls: {decls:?}");
+        assert!(
+            decls.is_empty(),
+            "a functor literal contributes no decls: {decls:?}"
+        );
     }
 
     /// Sub-slice 2d-3 §2.1 (superseding the old 2d-1-era placeholder pin,
@@ -3065,7 +3238,12 @@ mod tests {
             let cst::TopBinding::Module { decls, .. } = &lowered[0] else {
                 panic!("expected a TopBinding::Module");
             };
-            let cst::TopBinding::Module { name, decls: alias_decls, .. } = &*decls[1].0 else {
+            let cst::TopBinding::Module {
+                name,
+                decls: alias_decls,
+                ..
+            } = &*decls[1].0
+            else {
                 panic!("expected decls[1] to be the Alias module");
             };
             assert_eq!(name.name, "Alias");
@@ -3258,7 +3436,11 @@ mod tests {
         let cst::ast::CmdTail::Args { first, rest, .. } = lowered else {
             panic!("expected CmdTail::Args");
         };
-        assert_eq!(rest.len(), 1, "\\cmd{{a}}{{b}} has exactly one trailing arg");
+        assert_eq!(
+            rest.len(),
+            1,
+            "\\cmd{{a}}{{b}} has exactly one trailing arg"
+        );
         assert!(matches!(
             &*first.0,
             cst::ast::AppArg::Atom {

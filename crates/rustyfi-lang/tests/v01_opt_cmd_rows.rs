@@ -30,8 +30,8 @@
 use rustyfi_backend::{FontKey, FontMetrics, Length};
 use rustyfi_lang::CompileError;
 use rustyfi_loader::{LoadedCst, LoadedFile};
-use rustyfi_syntax::{parse_file, parse_file_v1};
 use rustyfi_syntax::RustyfiVersion;
+use rustyfi_syntax::{parse_file, parse_file_v1};
 
 /// Never actually exercised (every fixture below either fails type-checking
 /// or fails at the `NotADocument` stage before glyph metrics matter, OR — for
@@ -60,13 +60,17 @@ fn run(lib_src: &str, doc_src: &str) -> Result<(), CompileError> {
     let files = vec![
         LoadedFile {
             path: std::path::PathBuf::from("lib.satyh"),
-            cst: LoadedCst::V0_1(parse_file_v1(lib_src).unwrap_or_else(|e| panic!("lib parse failed: {e}"))),
+            cst: LoadedCst::V0_1(
+                parse_file_v1(lib_src).unwrap_or_else(|e| panic!("lib parse failed: {e}")),
+            ),
             origin: Default::default(),
             version: RustyfiVersion::V0_1,
         },
         LoadedFile {
             path: std::path::PathBuf::from("doc.saty"),
-            cst: LoadedCst::V0_1(parse_file_v1(doc_src).unwrap_or_else(|e| panic!("doc parse failed: {e}"))),
+            cst: LoadedCst::V0_1(
+                parse_file_v1(doc_src).unwrap_or_else(|e| panic!("doc parse failed: {e}")),
+            ),
             origin: Default::default(),
             version: RustyfiVersion::V0_1,
         },
@@ -254,7 +258,8 @@ fn t9_empty_param_bundle_on_command_is_lower_error() {
     let err = rustyfi_lang::v1::lower::lower_file_v1(&file)
         .expect_err("an empty `?()` command-parameter bundle must be a lower error");
     assert!(
-        err.to_string().contains("optional-parameter bundle") || err.to_string().contains("optional"),
+        err.to_string().contains("optional-parameter bundle")
+            || err.to_string().contains("optional"),
         "got: {err}"
     );
 }
@@ -617,6 +622,8 @@ let ctx = get-initial-context 400pt (command \\M.mathstub) in
 read-inline ctx {\\M.needcolor{x}}";
     match run(INC3B_BETA_OBS_LIB, doc_omitted) {
         Err(CompileError::Eval(_)) => {}
-        other => panic!("expected a run-time abort (Eval error) on the None branch, got: {other:?}"),
+        other => {
+            panic!("expected a run-time abort (Eval error) on the None branch, got: {other:?}")
+        }
     }
 }

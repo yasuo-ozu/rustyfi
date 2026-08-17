@@ -261,72 +261,62 @@ fn satyrographos_command() -> Command {
         .about("SATySFi package manager (this port's Satyrographos analog).")
         .subcommand_required(true)
         .arg_required_else_help(true)
-        .subcommand(
-            registry_flag(root_flags(
-                Command::new("install")
-                    .about(
-                        "Install a package from a directory, .tar.gz, or registry name; \
+        .subcommand(registry_flag(root_flags(
+            Command::new("install")
+                .about(
+                    "Install a package from a directory, .tar.gz, or registry name; \
                          with no PATH, reconcile the project's Satyrfile.toml.",
-                    )
-                    .arg(
-                        Arg::new("path")
-                            .help(
-                                "Source directory or .tar.gz, or a registry NAME[@VERSION] \
+                )
+                .arg(
+                    Arg::new("path")
+                        .help(
+                            "Source directory or .tar.gz, or a registry NAME[@VERSION] \
                                  (used when it does not name a path on disk). Omit to \
                                  reconcile the nearest Satyrfile.toml (manifest mode).",
-                            )
-                            .value_parser(value_parser!(String)),
-                    )
-                    .arg(
-                        Arg::new("library")
-                            .short('l')
-                            .long("library")
-                            .value_name("NAME")
-                            .help("Restrict to the named library (repeatable).")
-                            .action(ArgAction::Append),
-                    )
-                    .arg(
-                        Arg::new("force")
-                            .long("force")
-                            .help("Overwrite an existing receipted install.")
-                            .action(ArgAction::SetTrue),
-                    ),
-            )),
-        )
-        .subcommand(
-            root_flags(
-                Command::new("uninstall")
-                    .about("Remove a receipted package.")
-                    .arg(Arg::new("name").required(true).help("Package name.")),
-            ),
-        )
+                        )
+                        .value_parser(value_parser!(String)),
+                )
+                .arg(
+                    Arg::new("library")
+                        .short('l')
+                        .long("library")
+                        .value_name("NAME")
+                        .help("Restrict to the named library (repeatable).")
+                        .action(ArgAction::Append),
+                )
+                .arg(
+                    Arg::new("force")
+                        .long("force")
+                        .help("Overwrite an existing receipted install.")
+                        .action(ArgAction::SetTrue),
+                ),
+        )))
+        .subcommand(root_flags(
+            Command::new("uninstall")
+                .about("Remove a receipted package.")
+                .arg(Arg::new("name").required(true).help("Package name.")),
+        ))
         .subcommand(root_flags(
             Command::new("list").about("List installed packages."),
         ))
-        .subcommand(
-            root_flags(
-                Command::new("status")
-                    .about("Report installed-file presence (exit 1 if any missing).")
-                    .arg(Arg::new("name").help("Package name (optional).")),
-            ),
-        )
-        // Phase 3 (plan §5.4/§8): registry search + index update.
-        .subcommand(
-            registry_flag(
-                Command::new("search")
-                    .about("Search the registry index (substring match on name/description).")
-                    .arg(
-                        Arg::new("term")
-                            .required(true)
-                            .help("Substring to match against package names/descriptions."),
-                    ),
-            ),
-        )
-        .subcommand(registry_flag(
-            Command::new("update").about(
-                "Re-fetch the registry index and report available upgrades vs Satyrfile.lock.",
-            ),
+        .subcommand(root_flags(
+            Command::new("status")
+                .about("Report installed-file presence (exit 1 if any missing).")
+                .arg(Arg::new("name").help("Package name (optional).")),
         ))
+        // Phase 3 (plan §5.4/§8): registry search + index update.
+        .subcommand(registry_flag(
+            Command::new("search")
+                .about("Search the registry index (substring match on name/description).")
+                .arg(
+                    Arg::new("term")
+                        .required(true)
+                        .help("Substring to match against package names/descriptions."),
+                ),
+        ))
+        .subcommand(registry_flag(Command::new("update").about(
+            "Re-fetch the registry index and report available upgrades vs Satyrfile.lock.",
+        )))
 }
 
 /// The hidden `multicall install --dir DIR` alias helper (plan §4.5).

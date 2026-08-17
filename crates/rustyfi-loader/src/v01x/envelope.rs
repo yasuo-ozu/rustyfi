@@ -278,12 +278,11 @@ pub(crate) fn read(config_path: &Path) -> Result<ReadEnvelope, LoadError> {
                     path: path.clone(),
                     source,
                 })?;
-                let file = rustyfi_syntax::parse_file_v1(&src).map_err(|source| {
-                    LoadError::Parse {
+                let file =
+                    rustyfi_syntax::parse_file_v1(&src).map_err(|source| LoadError::Parse {
                         path: path.clone(),
                         source,
-                    }
-                })?;
+                    })?;
                 let module_name = match &file {
                     FileV1::Library { name, .. } => name.name.clone(),
                     // A document file among an envelope's sources is an error
@@ -389,9 +388,7 @@ fn convert_font_file_description(
             let specs = list
                 .into_iter()
                 .enumerate()
-                .map(|(i, s)| {
-                    convert_font_spec(s, &format!("{ctx}.opentype_collection.[{i}]"))
-                })
+                .map(|(i, s)| convert_font_spec(s, &format!("{ctx}.opentype_collection.[{i}]")))
                 .collect::<Result<Vec<_>, _>>()?;
             FontFileContents::OpentypeCollection(specs)
         }
@@ -472,9 +469,7 @@ fn is_relative_path(s: &str) -> bool {
 fn is_lowercased_identifier(s: &str) -> bool {
     let mut chars = s.chars();
     match chars.next() {
-        Some(c0) if c0.is_ascii_lowercase() => {
-            chars.all(|c| c == '-' || c.is_ascii_alphanumeric())
-        }
+        Some(c0) if c0.is_ascii_lowercase() => chars.all(|c| c == '-' || c.is_ascii_alphanumeric()),
         _ => false,
     }
 }
@@ -484,9 +479,7 @@ fn is_lowercased_identifier(s: &str) -> bool {
 fn is_uppercased_identifier(s: &str) -> bool {
     let mut chars = s.chars();
     match chars.next() {
-        Some(c0) if c0.is_ascii_uppercase() => {
-            chars.all(|c| c == '-' || c.is_ascii_alphanumeric())
-        }
+        Some(c0) if c0.is_ascii_uppercase() => chars.all(|c| c == '-' || c.is_ascii_alphanumeric()),
         _ => false,
     }
 }
@@ -500,7 +493,10 @@ fn cut_module_names(s: &str) -> (Vec<String>, String) {
     // `split` on any string (including "") always yields at least one
     // element, mirroring `String.split_on_char`'s non-empty-list guarantee.
     let name = parts.pop().expect("split always yields >=1 element");
-    (parts.into_iter().map(String::from).collect(), name.to_string())
+    (
+        parts.into_iter().map(String::from).collect(),
+        name.to_string(),
+    )
 }
 
 /// `commonUtil.ml:26-31` (`parse_long_command`): strip the `prefix` char,
@@ -796,8 +792,7 @@ font:
     /// Reading a missing file surfaces the read-failure variant.
     #[test]
     fn envelope_file_missing_is_not_found() {
-        let path =
-            std::env::temp_dir().join("rustyfi-loader-envelope-test-does-not-exist.yaml");
+        let path = std::env::temp_dir().join("rustyfi-loader-envelope-test-does-not-exist.yaml");
         let err = load_config(&path).expect_err("missing file must error");
         assert!(matches!(err, LoadError::EnvelopeConfigNotFound { .. }));
     }

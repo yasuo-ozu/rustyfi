@@ -39,8 +39,7 @@ use rustyfi_loader::{LoadOptions, LoadedCst, LoadedFile};
 use rustyfi_syntax::RustyfiVersion;
 
 fn lib_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../lib-rustyfi/dist-v01/packages")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../lib-rustyfi/dist-v01/packages")
 }
 
 struct TempDoc(PathBuf);
@@ -313,8 +312,9 @@ let open V01Mini in
 let ctx = get-initial-context 400pt (command \\math) in
 let mlst = [${x}, ${y}] in
 Inline.get-natural-advance (embed-math ctx (read-math ctx ${\\Proof.derive!(mlst){z}}))";
-        let v = compile_v01_via_loader_with_metrics("proof-derive", src, &Mono)
-            .expect("proof.satyh (+ its transitive graphics/inline/length/list/path) should compile");
+        let v = compile_v01_via_loader_with_metrics("proof-derive", src, &Mono).expect(
+            "proof.satyh (+ its transitive graphics/inline/length/list/path) should compile",
+        );
         let len = as_length(v);
         assert!(
             len.0 > 0.0,

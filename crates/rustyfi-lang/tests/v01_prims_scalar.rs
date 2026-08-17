@@ -680,7 +680,10 @@ fn set_hyphenation_dictionary_is_real_but_set_unicode_char_database_is_still_a_n
         "set-unicode-char-database",
         vec![Value::Unit, Value::Context(Box::new(ctx0.clone()))],
     ));
-    assert_eq!(ctx2, ctx0, "set-unicode-char-database must return ctx unchanged");
+    assert_eq!(
+        ctx2, ctx0,
+        "set-unicode-char-database must return ctx unchanged"
+    );
 }
 
 #[test]

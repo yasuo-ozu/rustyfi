@@ -163,7 +163,10 @@ fn cmd_compile(m: &ArgMatches) -> anyhow::Result<()> {
     )
     .map_err(|e| anyhow::anyhow!("{e}"))?;
     if timing {
-        eprintln!("TIMING load(lex+parse)   {:>8.1}ms", t_load.elapsed().as_secs_f64() * 1e3);
+        eprintln!(
+            "TIMING load(lex+parse)   {:>8.1}ms",
+            t_load.elapsed().as_secs_f64() * 1e3
+        );
     }
 
     // Text-rendering plan, Slice 1: resolve font configuration (flags >
@@ -288,13 +291,9 @@ fn cmd_compile(m: &ArgMatches) -> anyhow::Result<()> {
                 .iter()
                 .any(|f| matches!(f.cst, rustyfi_loader::LoadedCst::V0_1(_)));
             if has_v01_dep {
-                rustyfi_lang::compile_document_v006_xver_with_aux(
-                    &program.files,
-                    metrics,
-                    &mut aux,
-                )
-                .map_err(|e| anyhow::anyhow!("{}: {e}", input.display()))?
-                .0
+                rustyfi_lang::compile_document_v006_xver_with_aux(&program.files, metrics, &mut aux)
+                    .map_err(|e| anyhow::anyhow!("{}: {e}", input.display()))?
+                    .0
             } else {
                 let merged = merge_program(program);
                 rustyfi_lang::compile_document_cst_with_aux(&merged, metrics, &mut aux)
@@ -348,10 +347,8 @@ fn cmd_compile(m: &ArgMatches) -> anyhow::Result<()> {
                 &doc.extras,
             )?
             .into_bytes(),
-            None => {
-                rustyfi_html::render_html(&doc.geometry, &doc.pages, &doc.images, &doc.extras)?
-                    .into_bytes()
-            }
+            None => rustyfi_html::render_html(&doc.geometry, &doc.pages, &doc.images, &doc.extras)?
+                .into_bytes(),
         },
         // Reflowable/semantic HTML output (`docs/plans/design-reflowable-html.md`
         // §5 "CLI"): a THIRD, independent serialization of the SAME compiled
@@ -388,7 +385,10 @@ fn cmd_compile(m: &ArgMatches) -> anyhow::Result<()> {
         },
     };
     if timing {
-        eprintln!("TIMING render(pdf)        {:>8.1}ms", t_render.elapsed().as_secs_f64() * 1e3);
+        eprintln!(
+            "TIMING render(pdf)        {:>8.1}ms",
+            t_render.elapsed().as_secs_f64() * 1e3
+        );
     }
     std::fs::write(&output, &bytes)
         .with_context(|| format!("cannot write {}", output.display()))?;
@@ -651,18 +651,36 @@ fn sg_exit_code(err: &sg::Error) -> i32 {
         // index — including the phase-7c solver's own "no version fits"
         // outcomes ([`Unsatisfiable`]/[`VersionConflict`]), which are the
         // solver-graph analogue of a plain [`VersionNotFound`].
-        AlreadyInstalled { .. } | NotInstalled { .. } | PackageNotFound { .. }
-        | VersionNotFound { .. } | Unsatisfiable { .. } | VersionConflict { .. } => 4,
+        AlreadyInstalled { .. }
+        | NotInstalled { .. }
+        | PackageNotFound { .. }
+        | VersionNotFound { .. }
+        | Unsatisfiable { .. }
+        | VersionConflict { .. } => 4,
         // Library-selection / filter usage errors (plan §4.1).
         LibraryFilter { .. } | AmbiguousLibrary { .. } => 2,
         // Filesystem / archive / manifest / Satyristes / lockfile / registry-
         // fetch / integrity failures.
-        Io { .. } | Manifest { .. } | Receipt { .. } | UnmanagedCollision { .. }
-        | PathTraversal { .. } | UnknownSource { .. } | EmptySource { .. } | Archive(_)
-        | MissingDst { .. } | Satyristes { .. } | AmbiguousSource { .. }
-        | Satyrfile { .. } | Lockfile { .. } | UnsupportedSource { .. }
-        | GitFailed { .. } | RegistryIndex { .. } | ChecksumMismatch { .. }
-        | HttpDisabled { .. } | HttpFailed { .. } | InvalidVersion { .. }
+        Io { .. }
+        | Manifest { .. }
+        | Receipt { .. }
+        | UnmanagedCollision { .. }
+        | PathTraversal { .. }
+        | UnknownSource { .. }
+        | EmptySource { .. }
+        | Archive(_)
+        | MissingDst { .. }
+        | Satyristes { .. }
+        | AmbiguousSource { .. }
+        | Satyrfile { .. }
+        | Lockfile { .. }
+        | UnsupportedSource { .. }
+        | GitFailed { .. }
+        | RegistryIndex { .. }
+        | ChecksumMismatch { .. }
+        | HttpDisabled { .. }
+        | HttpFailed { .. }
+        | InvalidVersion { .. }
         | Offline { .. } => 5,
     }
 }
@@ -833,7 +851,9 @@ fn cmd_install_manifest(m: &ArgMatches) -> Result<(), sg::Error> {
 }
 
 fn cmd_uninstall(m: &ArgMatches) -> Result<(), sg::Error> {
-    let name = m.get_one::<String>("name").expect("NAME is required by clap");
+    let name = m
+        .get_one::<String>("name")
+        .expect("NAME is required by clap");
     sg::uninstall(name, &root_options(m))?;
     println!("uninstalled {name}");
     Ok(())
@@ -854,7 +874,9 @@ fn cmd_list(m: &ArgMatches) -> Result<(), sg::Error> {
 /// `search <term>` (plan §8): list matching registry packages, one
 /// `name version — description` line each, sorted by name.
 fn cmd_search(m: &ArgMatches) -> Result<(), sg::Error> {
-    let term = m.get_one::<String>("term").expect("TERM is required by clap");
+    let term = m
+        .get_one::<String>("term")
+        .expect("TERM is required by clap");
     let hits = sg::search(term, &registry_options(m), None)?;
     if hits.is_empty() {
         println!("(no matching packages)");
@@ -953,7 +975,9 @@ fn run_multicall(m: &ArgMatches) -> i32 {
 fn multicall_install(m: &ArgMatches) -> anyhow::Result<()> {
     use anyhow::Context as _;
 
-    let dir = m.get_one::<PathBuf>("dir").expect("--dir is required by clap");
+    let dir = m
+        .get_one::<PathBuf>("dir")
+        .expect("--dir is required by clap");
     let exe = std::env::current_exe().context("cannot locate the current executable")?;
 
     std::fs::create_dir_all(dir).with_context(|| format!("cannot create {}", dir.display()))?;

@@ -71,7 +71,8 @@ fn eval_v01_with_lib(lib_src: &str, doc_src: &str) -> Result<Value, String> {
     }
 
     let doc_file = parse_file_v1(doc_src).map_err(|e| format!("parse: {e}"))?;
-    let body = lower::lower_document_v1(&doc_file).map_err(|e| format!("lower_document_v1: {e}"))?;
+    let body =
+        lower::lower_document_v1(&doc_file).map_err(|e| format!("lower_document_v1: {e}"))?;
     let eoi = match &doc_file {
         rustyfi_syntax::cst_v1::FileV1::Document { eoi, .. } => eoi.clone(),
         _ => return Err("entry must parse as a V0_1 document".to_string()),
@@ -117,20 +118,40 @@ fn as_int(v: Value) -> i64 {
 
 #[test]
 fn float_greater_than_and_less_than() {
-    assert!(as_bool(eval_v01("3.0 >. 2.0").expect("should compile and evaluate")));
-    assert!(!as_bool(eval_v01("2.0 >. 3.0").expect("should compile and evaluate")));
-    assert!(as_bool(eval_v01("2.0 <. 3.0").expect("should compile and evaluate")));
-    assert!(!as_bool(eval_v01("3.0 <. 2.0").expect("should compile and evaluate")));
+    assert!(as_bool(
+        eval_v01("3.0 >. 2.0").expect("should compile and evaluate")
+    ));
+    assert!(!as_bool(
+        eval_v01("2.0 >. 3.0").expect("should compile and evaluate")
+    ));
+    assert!(as_bool(
+        eval_v01("2.0 <. 3.0").expect("should compile and evaluate")
+    ));
+    assert!(!as_bool(
+        eval_v01("3.0 <. 2.0").expect("should compile and evaluate")
+    ));
 }
 
 #[test]
 fn float_greater_or_equal_and_less_or_equal() {
-    assert!(as_bool(eval_v01("3.0 >=. 3.0").expect("should compile and evaluate")));
-    assert!(as_bool(eval_v01("3.0 >=. 2.0").expect("should compile and evaluate")));
-    assert!(!as_bool(eval_v01("2.0 >=. 3.0").expect("should compile and evaluate")));
-    assert!(as_bool(eval_v01("2.0 <=. 2.0").expect("should compile and evaluate")));
-    assert!(as_bool(eval_v01("2.0 <=. 3.0").expect("should compile and evaluate")));
-    assert!(!as_bool(eval_v01("3.0 <=. 2.0").expect("should compile and evaluate")));
+    assert!(as_bool(
+        eval_v01("3.0 >=. 3.0").expect("should compile and evaluate")
+    ));
+    assert!(as_bool(
+        eval_v01("3.0 >=. 2.0").expect("should compile and evaluate")
+    ));
+    assert!(!as_bool(
+        eval_v01("2.0 >=. 3.0").expect("should compile and evaluate")
+    ));
+    assert!(as_bool(
+        eval_v01("2.0 <=. 2.0").expect("should compile and evaluate")
+    ));
+    assert!(as_bool(
+        eval_v01("2.0 <=. 3.0").expect("should compile and evaluate")
+    ));
+    assert!(!as_bool(
+        eval_v01("3.0 <=. 2.0").expect("should compile and evaluate")
+    ));
 }
 
 #[test]
@@ -183,7 +204,8 @@ fn fun_tuple_destructuring_parameter_mixed_with_a_plain_variable() {
     // The `list.satyg` `mapi-adjacent`-shaped case: a tuple-destructuring
     // accumulator parameter followed by a plain-variable parameter, in one
     // `fun`.
-    let v = eval_v01("(fun (i, acc) x -> i + acc + x) (1, 2) 3").expect("should compile and evaluate");
+    let v =
+        eval_v01("(fun (i, acc) x -> i + acc + x) (1, 2) 3").expect("should compile and evaluate");
     assert_eq!(as_int(v), 6);
 }
 
@@ -224,7 +246,6 @@ fn qualified_command_reference_typechecks_and_evaluates() {
     // paragraph width) — reaching here at all is the proof.
     let _ = v;
 }
-
 
 // ============================================================================
 // G9 (vendoring wave 2, `inline.satyh`'s banner): `typecheck.rs`'s

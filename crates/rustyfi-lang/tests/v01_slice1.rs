@@ -20,7 +20,9 @@ use rustyfi_syntax::RustyfiVersion;
 /// This repo's root, resolved relative to this crate's own manifest
 /// directory (`crates/rustyfi-lang/../..`).
 fn repo(rel: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(rel)
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join(rel)
 }
 
 /// A real (if crude) `FontMetrics` — the fixtures render actual ASCII text
@@ -78,13 +80,15 @@ fn v01_document_compiles_and_matches_0_0_6_twin_geometry() {
     // ---- the V0_1 path, gate-bypassed (LoadedFile/LoadedCst are public) ----
     let lib_src = std::fs::read_to_string(repo("lib-rustyfi/dist-v01/packages/v01-mini.satyh"))
         .expect("read v01-mini.satyh");
-    let entry_src = std::fs::read_to_string(repo("crates/rustyfi-cli/tests/fixtures/v01-minimal.saty"))
-        .expect("read v01-minimal.saty");
+    let entry_src =
+        std::fs::read_to_string(repo("crates/rustyfi-cli/tests/fixtures/v01-minimal.saty"))
+            .expect("read v01-minimal.saty");
     let files = vec![
         LoadedFile {
             path: repo("lib-rustyfi/dist-v01/packages/v01-mini.satyh"),
             cst: LoadedCst::V0_1(
-                rustyfi_syntax::parse_file_v1(&lib_src).unwrap_or_else(|e| panic!("v01-mini.satyh: {e}")),
+                rustyfi_syntax::parse_file_v1(&lib_src)
+                    .unwrap_or_else(|e| panic!("v01-mini.satyh: {e}")),
             ),
             origin: Default::default(),
             version: RustyfiVersion::V0_1,
@@ -92,7 +96,8 @@ fn v01_document_compiles_and_matches_0_0_6_twin_geometry() {
         LoadedFile {
             path: repo("crates/rustyfi-cli/tests/fixtures/v01-minimal.saty"),
             cst: LoadedCst::V0_1(
-                rustyfi_syntax::parse_file_v1(&entry_src).unwrap_or_else(|e| panic!("v01-minimal.saty: {e}")),
+                rustyfi_syntax::parse_file_v1(&entry_src)
+                    .unwrap_or_else(|e| panic!("v01-minimal.saty: {e}")),
             ),
             origin: Default::default(),
             version: RustyfiVersion::V0_1,
@@ -101,7 +106,10 @@ fn v01_document_compiles_and_matches_0_0_6_twin_geometry() {
     let mono = Mono;
     let (doc_v1, trials) = rustyfi_lang::compile_document_v1_with_trials(&files, &mono)
         .unwrap_or_else(|e| panic!("compile_document_v1_with_trials: {e}"));
-    assert_eq!(trials, 1, "no cross-references in this fixture — one trial suffices");
+    assert_eq!(
+        trials, 1,
+        "no cross-references in this fixture — one trial suffices"
+    );
     assert_eq!(doc_v1.pages.len(), 1);
     assert!(
         doc_v1.pages[0].lines.len() >= 4,
@@ -137,7 +145,10 @@ fn v01_document_compiles_and_matches_0_0_6_twin_geometry() {
 /// proving test cares about, and strictly stronger than a syntactic
 /// Ast-equality check would have been.
 fn assert_geometry_equivalent(a: &DocumentValue, b: &DocumentValue) {
-    assert_eq!(a.geometry, b.geometry, "page geometry must match exactly (both are A4)");
+    assert_eq!(
+        a.geometry, b.geometry,
+        "page geometry must match exactly (both are A4)"
+    );
     assert_eq!(a.pages.len(), b.pages.len(), "page count must match");
     for (i, (pa, pb)) in a.pages.iter().zip(b.pages.iter()).enumerate() {
         assert_eq!(

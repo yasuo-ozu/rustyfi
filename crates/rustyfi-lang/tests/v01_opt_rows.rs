@@ -28,7 +28,8 @@ impl FontMetrics for NoFonts {
 /// V0_1 scope) -> typecheck -> eval pipeline against V0_1's base environment.
 fn eval_v01(src: &str) -> Result<Value, String> {
     let doc_file = parse_file_v1(src).map_err(|e| format!("parse: {e}"))?;
-    let body = lower::lower_document_v1(&doc_file).map_err(|e| format!("lower_document_v1: {e}"))?;
+    let body =
+        lower::lower_document_v1(&doc_file).map_err(|e| format!("lower_document_v1: {e}"))?;
     let eoi = match &doc_file {
         rustyfi_syntax::cst_v1::FileV1::Document { eoi, .. } => eoi.clone(),
         _ => return Err("entry must parse as a V0_1 document".to_string()),
@@ -128,7 +129,10 @@ let apply-plain g y = g y in
 #[test]
 fn t3_record_row_poly() {
     let src = "let getx r = r#x in (getx (| x = 1, y = 2 |)) + (getx (| x = 3, z = 4 |))";
-    assert_eq!(as_int(eval_v01(src).expect("T3 should compile and evaluate")), 4);
+    assert_eq!(
+        as_int(eval_v01(src).expect("T3 should compile and evaluate")),
+        4
+    );
 }
 
 // ============================================================================
@@ -139,7 +143,10 @@ fn t3_record_row_poly() {
 fn t5_unknown_label_rejected() {
     let err = eval_v01("let f ?(a = x) n = n in f ?(b = 1) 2")
         .expect_err("supplying an undeclared optional label `b` must not typecheck");
-    assert!(err.starts_with("typecheck:"), "expected a typecheck error, got: {err}");
+    assert!(
+        err.starts_with("typecheck:"),
+        "expected a typecheck error, got: {err}"
+    );
 }
 
 // ============================================================================
@@ -150,11 +157,17 @@ fn t5_unknown_label_rejected() {
 fn t6_duplicate_label_rejected() {
     let app_err = eval_v01("let f ?(a = x) n = n in f ?(a = 1, a = 2) 0")
         .expect_err("a duplicate label in one `?(…)` application bundle must be rejected");
-    assert!(app_err.contains("duplicate optional label"), "got: {app_err}");
+    assert!(
+        app_err.contains("duplicate optional label"),
+        "got: {app_err}"
+    );
 
     let param_err = eval_v01("let g = fun ?(a = x, a = y) n -> n in g 0")
         .expect_err("a duplicate label in one `?(…)` binder list must be rejected");
-    assert!(param_err.contains("duplicate optional label"), "got: {param_err}");
+    assert!(
+        param_err.contains("duplicate optional label"),
+        "got: {param_err}"
+    );
 }
 
 // ============================================================================
@@ -293,6 +306,7 @@ fn t_opt_row_fun_type_domain_declares_cleanly_under_v01() {
     let scope = elaborate::Scope::new(&store, env.names());
     let elaborated = elaborate::elaborate_program(&file, &scope)
         .unwrap_or_else(|e| panic!("elaborate failed: {e}"));
-    typecheck::typecheck_with_version(&elaborated, RustyfiVersion::V0_1)
-        .unwrap_or_else(|e| panic!("expected the `?(bias:int) int -> int` synonym to typecheck under V0_1: {e}"));
+    typecheck::typecheck_with_version(&elaborated, RustyfiVersion::V0_1).unwrap_or_else(|e| {
+        panic!("expected the `?(bias:int) int -> int` synonym to typecheck under V0_1: {e}")
+    });
 }

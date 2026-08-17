@@ -276,7 +276,10 @@ pub enum IText<I = String> {
     },
     /// `#expr;` — an embedded expression evaluating to inline-text, spliced
     /// in place (`UTInputHorzContent`).
-    Embed { expr: Ast<I>, span: Span },
+    Embed {
+        expr: Ast<I>,
+        span: Span,
+    },
     /// `${…}` embedded math (`UTInputHorzEmbeddedMath`). `read_inline`'s
     /// `EmbedMath` arm (`primitives.rs`) applies the context's installed
     /// `[math] inline-cmd` (`Context::math_command`, Gap 1 —
@@ -367,9 +370,7 @@ impl<I> Ast<I> {
             Ast::MathText(elems) => {
                 Ast::MathText(Rc::new(elems.iter().map(|e| e.map_idents(f)).collect()))
             }
-            Ast::LetMutableIn(n, i, b) => {
-                Ast::LetMutableIn(f(n), Box::new(go(i)), Box::new(go(b)))
-            }
+            Ast::LetMutableIn(n, i, b) => Ast::LetMutableIn(f(n), Box::new(go(i)), Box::new(go(b))),
             Ast::Overwrite(n, sp, v) => Ast::Overwrite(f(n), *sp, Box::new(go(v))),
             Ast::WhileDo(c, b) => Ast::WhileDo(Box::new(go(c)), Box::new(go(b))),
             Ast::Sequential(a, b) => Ast::Sequential(Box::new(go(a)), Box::new(go(b))),

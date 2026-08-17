@@ -271,9 +271,7 @@ fn render_html_impl(
     out.push_str(&format!(
         "@page {{ size: {paper_w}pt {paper_h}pt; margin: 0; }}\n"
     ));
-    out.push_str(
-        ".page:not(:last-child) { page-break-after: always; break-after: page; }\n",
-    );
+    out.push_str(".page:not(:last-child) { page-break-after: always; break-after: page; }\n");
     // Slice 3: one `@font-face` per physical font file the document
     // referenced (empty when `font_store` is `None`, or when a store was
     // given but nothing was ever emitted through it — e.g. an empty
@@ -312,10 +310,7 @@ fn render_html_impl(
 fn emit_box(out: &mut String, bx: &PureHorzBox, tx: f64, ty: f64, ctx: &Ctx) {
     match bx {
         PureHorzBox::InnerString {
-            info,
-            text,
-            height,
-            ..
+            info, text, height, ..
         } => {
             // `info.rising` raises the run (a positive rising moves it UP
             // the page, i.e. DECREASES the y-down `ty` — the mirror image

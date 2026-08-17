@@ -62,13 +62,17 @@ fn run(lib_src: &str, doc_src: &str) -> Result<(), CompileError> {
     let files = vec![
         LoadedFile {
             path: std::path::PathBuf::from("lib.satyh"),
-            cst: LoadedCst::V0_1(parse_file_v1(lib_src).unwrap_or_else(|e| panic!("lib parse failed: {e}"))),
+            cst: LoadedCst::V0_1(
+                parse_file_v1(lib_src).unwrap_or_else(|e| panic!("lib parse failed: {e}")),
+            ),
             origin: Default::default(),
             version: RustyfiVersion::V0_1,
         },
         LoadedFile {
             path: std::path::PathBuf::from("doc.saty"),
-            cst: LoadedCst::V0_1(parse_file_v1(doc_src).unwrap_or_else(|e| panic!("doc parse failed: {e}"))),
+            cst: LoadedCst::V0_1(
+                parse_file_v1(doc_src).unwrap_or_else(|e| panic!("doc parse failed: {e}")),
+            ),
             origin: Default::default(),
             version: RustyfiVersion::V0_1,
         },
@@ -105,14 +109,18 @@ fn run_multi(lib_srcs: &[&str], doc_src: &str) -> Result<(), CompileError> {
         .enumerate()
         .map(|(i, src)| LoadedFile {
             path: std::path::PathBuf::from(format!("lib{i}.satyh")),
-            cst: LoadedCst::V0_1(parse_file_v1(src).unwrap_or_else(|e| panic!("lib parse failed: {e}"))),
+            cst: LoadedCst::V0_1(
+                parse_file_v1(src).unwrap_or_else(|e| panic!("lib parse failed: {e}")),
+            ),
             origin: Default::default(),
             version: RustyfiVersion::V0_1,
         })
         .collect();
     files.push(LoadedFile {
         path: std::path::PathBuf::from("doc.saty"),
-        cst: LoadedCst::V0_1(parse_file_v1(doc_src).unwrap_or_else(|e| panic!("doc parse failed: {e}"))),
+        cst: LoadedCst::V0_1(
+            parse_file_v1(doc_src).unwrap_or_else(|e| panic!("doc parse failed: {e}")),
+        ),
         origin: Default::default(),
         version: RustyfiVersion::V0_1,
     });
@@ -268,7 +276,10 @@ fn t8_mutable_member_heterogeneous_use_rejects() {
 fn t10_depth_mismatch_message() {
     let lib = "module M :> sig val x : int end = struct val x = `abc` end";
     let msg = assert_type_error(lib, "1");
-    assert!(msg.contains("module `M` does not match its signature"), "{msg}");
+    assert!(
+        msg.contains("module `M` does not match its signature"),
+        "{msg}"
+    );
     assert!(msg.contains('x'), "{msg}");
     assert!(msg.contains("int"), "{msg}");
     assert!(msg.contains("string"), "{msg}");
@@ -336,7 +347,10 @@ fn t12_declared_more_general_rejects() {
 fn t13_escaped_skolem_message() {
     let lib = "module M :> sig val r 'a : ref (list 'a) end = struct val mutable r <- [] end";
     let msg = assert_type_error(lib, "1");
-    assert!(msg.contains("less polymorphic than its signature declares"), "{msg}");
+    assert!(
+        msg.contains("less polymorphic than its signature declares"),
+        "{msg}"
+    );
 }
 
 /// T14 unbound quant tyvar: `val f : 'a -> 'a` with NO quantifier list.
@@ -366,13 +380,19 @@ fn t15_placeholder_decls_name_their_sub_slice() {
     // error fires (S6's shape), not a placeholder.
     let cases: &[(&str, &str)] = &[
         ("module N : sig end", "never defines `N`"),
-        ("signature S = sig end", "never defines a signature named `S`"),
+        (
+            "signature S = sig end",
+            "never defines a signature named `S`",
+        ),
         ("include S", "unknown signature name"),
     ];
     for (decl, expect) in cases {
         let lib = format!("module M :> sig {decl} end = struct val x = 1 end");
         let msg = assert_type_error(&lib, "1");
-        assert!(msg.contains(expect), "decl {decl:?}: expected {expect:?} in {msg:?}");
+        assert!(
+            msg.contains(expect),
+            "decl {decl:?}: expected {expect:?} in {msg:?}"
+        );
     }
 }
 
@@ -388,8 +408,14 @@ fn t15_placeholder_decls_name_their_sub_slice() {
 #[test]
 fn t16_non_struct_sig_forms_name_their_sub_slice() {
     let cases: &[(&str, &str)] = &[
-        ("module M :> S = struct val x = 1 end", "unknown signature name"),
-        ("module M :> A.B.S = struct val x = 1 end", "unknown signature name"),
+        (
+            "module M :> S = struct val x = 1 end",
+            "unknown signature name",
+        ),
+        (
+            "module M :> A.B.S = struct val x = 1 end",
+            "unknown signature name",
+        ),
         (
             "module M :> sig end with type t = int = struct val x = 1 end",
             "refines a type the signature never declares",
@@ -398,11 +424,17 @@ fn t16_non_struct_sig_forms_name_their_sub_slice() {
         // ASCRIPTION directly on a module bind stays unsupported — no
         // demand; a functor sig is only enforced as a `Decl::Module` sig
         // MEMBER, which 2f-2b DOES enforce).
-        ("module M :> (X : S) -> S2 = struct val x = 1 end", "not supported"),
+        (
+            "module M :> (X : S) -> S2 = struct val x = 1 end",
+            "not supported",
+        ),
     ];
     for (lib, expect) in cases {
         let msg = assert_type_error(lib, "1");
-        assert!(msg.contains(expect), "lib {lib:?}: expected {expect:?} in {msg:?}");
+        assert!(
+            msg.contains(expect),
+            "lib {lib:?}: expected {expect:?} in {msg:?}"
+        );
     }
 }
 
@@ -626,7 +658,10 @@ end
     // `inline […]` OR `math […]`, since math commands share the `\` sigil
     // too).
     let msg = assert_type_error(lib_wrong_kind, "1");
-    assert!(msg.contains("needs an `inline [...]` or `math [...]` command type"), "{msg}");
+    assert!(
+        msg.contains("needs an `inline [...]` or `math [...]` command type"),
+        "{msg}"
+    );
 
     let lib_plain_type = "\
 module M :> sig
@@ -660,7 +695,10 @@ end
 fn u9_ctor_hiding() {
     let msg = assert_type_error(WORKED_EXAMPLE, "T 1");
     assert!(msg.contains("constructor `T` belongs to type `t`"), "{msg}");
-    assert!(msg.contains("module `M`'s signature seals abstract"), "{msg}");
+    assert!(
+        msg.contains("module `M`'s signature seals abstract"),
+        "{msg}"
+    );
 
     let msg = assert_type_error(WORKED_EXAMPLE, "match M.make 1 with T n -> n end");
     assert!(msg.contains("constructor `T` belongs to type `t`"), "{msg}");
@@ -795,7 +833,10 @@ end = struct
 end
 ";
     let msg = assert_type_error(lib, "1");
-    assert!(msg.contains("mentions its type `u` without declaring it"), "{msg}");
+    assert!(
+        msg.contains("mentions its type `u` without declaring it"),
+        "{msg}"
+    );
 }
 
 /// U15 zero-value-member module: `module M :> sig type t :: o end = struct
@@ -812,7 +853,10 @@ end
 ";
     let msg = assert_type_error(lib, "T");
     assert!(msg.contains("constructor `T` belongs to type `t`"), "{msg}");
-    assert!(msg.contains("module `M`'s signature seals abstract"), "{msg}");
+    assert!(
+        msg.contains("module `M`'s signature seals abstract"),
+        "{msg}"
+    );
 }
 
 /// U19 placeholder decls: `module N : sig end` / `signature S = sig end` /
@@ -828,14 +872,20 @@ fn u19_placeholder_decls_still_error() {
     // real now — `S` is undefined, so "unknown signature name" fires.
     let cases: &[(&str, &str)] = &[
         ("module N : sig end", "never defines `N`"),
-        ("signature S = sig end", "never defines a signature named `S`"),
+        (
+            "signature S = sig end",
+            "never defines a signature named `S`",
+        ),
         ("include S", "unknown signature name"),
         ("type t = | A", "not supported"),
     ];
     for (decl, expect) in cases {
         let lib = format!("module M :> sig {decl} end = struct type t = | A  val x = 1 end");
         let msg = assert_type_error(&lib, "1");
-        assert!(msg.contains(expect), "decl {decl:?}: expected {expect:?} in {msg:?}");
+        assert!(
+            msg.contains(expect),
+            "decl {decl:?}: expected {expect:?} in {msg:?}"
+        );
     }
 }
 
@@ -1095,7 +1145,10 @@ end
     assert_accepts(lib, "Lib.P.extra + 1");
     // I7 re-abstraction: Base's concrete `t` does not subsume P's stamp.
     let msg = assert_type_error(lib, "Lib.P.get (Lib.Base.mk 1)");
-    assert!(!msg.is_empty(), "expected a generativity mismatch, got empty message");
+    assert!(
+        !msg.is_empty(),
+        "expected a generativity mismatch, got empty message"
+    );
     // I14: Base's own ctor T is untouched by P's seal.
     assert_accepts(lib, "Lib.Base.get (Lib.Base.mk 1)");
     let doc = "match Lib.Base.mk 1 with | T n -> n end";
@@ -1196,7 +1249,10 @@ end
     assert_accepts(lib, "Lib.P.mk 1 + 1");
     // `Base.mk` itself is untouched (still bool-valued).
     let msg = assert_type_error(lib, "Lib.Base.mk 1 + 1");
-    assert!(!msg.is_empty(), "expected a type mismatch (bool + int), got empty message");
+    assert!(
+        !msg.is_empty(),
+        "expected a type mismatch (bool + int), got empty message"
+    );
 }
 
 /// I6 type re-export: a downstream synonym over the includer's re-exported
@@ -1308,7 +1364,10 @@ fn i10_include_shares_the_targets_mutable_cell() {
     let lib_p = "module P = struct include Base end";
     // V0_1 dropped 0.0.6's `before` sequencing keyword; use `let _ = e1 in e2`
     // (G10 confirmed wildcard expr-`let` params) to sequence the write-then-read.
-    assert_accepts_multi(&[lib_base, lib_p], "let open P in (let _ = (r <- 5) in !Base.r)");
+    assert_accepts_multi(
+        &[lib_base, lib_p],
+        "let open P in (let _ = (r <- 5) in !Base.r)",
+    );
 }
 
 /// I13 stdlib shape (spec example 3, the demand pin): `include Basic`
@@ -1335,7 +1394,10 @@ module Lib = struct
   end
 end
 ";
-    assert_accepts(lib, "match Lib.Std.Int.compare 1 2 with | Less -> 0 | Equal -> 1 | Greater -> 2 end");
+    assert_accepts(
+        lib,
+        "match Lib.Std.Int.compare 1 2 with | Less -> 0 | Equal -> 1 | Greater -> 2 end",
+    );
 }
 
 // ============================================================================
@@ -1772,7 +1834,10 @@ module Lib = struct
 end
 ";
     let msg = assert_type_error(lib, "1");
-    assert!(msg.contains("conflicting declarations for `equal`"), "{msg}");
+    assert!(
+        msg.contains("conflicting declarations for `equal`"),
+        "{msg}"
+    );
 
     let lib_direct = "module M :> sig val x : int  val x : bool end = struct val x = 1 end";
     let msg2 = assert_type_error(lib_direct, "1");
@@ -1846,7 +1911,10 @@ end
 fn w3_with_type_refines_undeclared_type_rejects() {
     let lib = "module M :> sig val x : int end with type u = int = struct val x = 1 end";
     let msg = assert_type_error(lib, "1");
-    assert!(msg.contains("refines a type the signature never declares"), "{msg}");
+    assert!(
+        msg.contains("refines a type the signature never declares"),
+        "{msg}"
+    );
 }
 
 /// W4 transparent restrict: the base sig already declares `type t = bool`
@@ -2087,5 +2155,8 @@ module Lib = struct
 end
 ";
     let msg = assert_type_error(lib, "1");
-    assert!(msg.contains("with type") && msg.contains("not enforced"), "{msg}");
+    assert!(
+        msg.contains("with type") && msg.contains("not enforced"),
+        "{msg}"
+    );
 }

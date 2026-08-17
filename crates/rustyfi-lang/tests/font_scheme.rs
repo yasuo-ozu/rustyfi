@@ -4,9 +4,9 @@
 //! (like `tests/text_info.rs`'s "eval half"), sidestepping the parser.
 
 use rustyfi_backend::{Context, FontKey, FontMetrics, Length, PureHorzBox, Script};
-use rustyfi_lang::quoted::IText;
 use rustyfi_lang::eval::Interp;
 use rustyfi_lang::primitives;
+use rustyfi_lang::quoted::IText;
 use rustyfi_lang::value::{BaseEnv, Env, Value};
 
 /// Every glyph is half an em wide; `resolve_font_abbrev` names two registry
@@ -69,9 +69,13 @@ fn set_font_kana_changes_only_scheme_kana() {
 
     let after = set_font(&mut interp, &env, "Kana", "mykana", 0.88, 0.0, ctx);
 
-    assert_eq!(after.font, before_font, "set-font Kana must not move ctx.font");
     assert_eq!(
-        after.font_scheme[Script::Latin as usize], before_latin,
+        after.font, before_font,
+        "set-font Kana must not move ctx.font"
+    );
+    assert_eq!(
+        after.font_scheme[Script::Latin as usize],
+        before_latin,
         "set-font Kana must not touch the Latin slot"
     );
     let kana = after.font_scheme[Script::Kana as usize];
@@ -105,7 +109,10 @@ fn set_font_unknown_abbrev_falls_back_to_heuristic() {
 
     let after = set_font(&mut interp, &env, "OtherScript", "myboldish", 1.0, 0.0, ctx);
     // "myboldish" contains "bold" -> heuristic resolves to FONT_BOLD (key 1).
-    assert_eq!(after.font_scheme[Script::OtherScript as usize].font, FontKey(1));
+    assert_eq!(
+        after.font_scheme[Script::OtherScript as usize].font,
+        FontKey(1)
+    );
 }
 
 #[test]
@@ -134,7 +141,10 @@ fn mixed_script_paragraph_produces_two_font_keys_and_scaled_size() {
         };
         if info.font == FontKey(0) {
             saw_latin = true;
-            assert_eq!(info.size, ctx.font_size, "Latin run keeps ctx.font_size (ratio 1.0)");
+            assert_eq!(
+                info.size, ctx.font_size,
+                "Latin run keeps ctx.font_size (ratio 1.0)"
+            );
         } else if info.font == FontKey(7) {
             saw_kana = true;
             assert_eq!(
@@ -144,7 +154,10 @@ fn mixed_script_paragraph_produces_two_font_keys_and_scaled_size() {
             );
         }
     }
-    assert!(saw_latin, "expected a Latin-script InnerString (FontKey(0))");
+    assert!(
+        saw_latin,
+        "expected a Latin-script InnerString (FontKey(0))"
+    );
     assert!(saw_kana, "expected a Kana-script InnerString (FontKey(7))");
 }
 
@@ -171,7 +184,11 @@ fn manual_rising_is_added_to_inner_string_rising() {
             _ => None,
         })
         .expect("expected an InnerString");
-    assert_eq!(base_rising, Length::ZERO, "default manual_rising leaves rising at ZERO");
+    assert_eq!(
+        base_rising,
+        Length::ZERO,
+        "default manual_rising leaves rising at ZERO"
+    );
 
     // With a manual rise installed, the run's rising picks it up exactly.
     let mut risen_ctx = Context::initial(Length::pt(400.0));
@@ -187,5 +204,9 @@ fn manual_rising_is_added_to_inner_string_rising() {
             _ => None,
         })
         .expect("expected an InnerString");
-    assert_eq!(risen, Length::pt(3.0), "set-manual-rising must reach HorzStringInfo.rising");
+    assert_eq!(
+        risen,
+        Length::pt(3.0),
+        "set-manual-rising must reach HorzStringInfo.rising"
+    );
 }

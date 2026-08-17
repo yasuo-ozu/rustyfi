@@ -4,9 +4,18 @@ A native Rust clone of [SATySFi](https://github.com/gfngfn/SATySFi) (reference:
 upstream **v0.0.6**), using the [syan2](../syan2) parser framework for the
 grammar.
 
-## Status: milestone 1 — thin end-to-end slice
+## Status: milestone 1 + phase 2 (a+b)
 
-A small `.saty` document compiles to a real PDF with wrapped, justified text:
+A `.saty` document compiles to a real PDF with wrapped, justified text —
+including binary operators (full v0.0.6 precedence ladder), `if`/`match`
+with patterns and guards, local `let`/`let-rec`(+`and`), tuples, variant
+constructors, user-defined commands via `let-inline`/`let-block`,
+`let-mutable`/`<-`/`while`/`before`/`!`, record field access and functional
+update, itemize (`*` bullets → `Item` constructor trees), math syntax
+(parsed and quoted; typesetting is phase 7), modules (`module`/`struct`/
+`open`, untyped name-mangling), `#var;` text embeds, and **multi-file
+loading** — `@import:`/`@require:` resolve, dedupe, and topologically order
+libraries via the `satysfi-loader` crate (safegraph-backed):
 
 ```console
 $ cargo run -p satysfi-cli -- crates/satysfi-cli/tests/fixtures/minimal.saty -o out.pdf
@@ -43,8 +52,9 @@ crates/
   satysfi-syntax/    Span, Token, mode-stack lexer, ParseStream, grammar (CST)
   satysfi-backend/   Length, boxes/glue, Context, FontMetrics seam, line/page break
   satysfi-lang/      Ast, elaborate (typecheck seam), Value, evaluator, primitives
+  satysfi-loader/    @require/@import resolution, dependency graph, load order
   satysfi-pdf/       pdf-writer backend + base-14 metrics
-  satysfi-cli/       satysfi-rust <in.saty> -o <out.pdf>
+  satysfi-cli/       satysfi-rust <in.saty> -o <out.pdf> [--lib-root <dir>]
 ```
 
 Requires a checkout of `syan2` at `../syan2` (path dependency).
@@ -52,8 +62,11 @@ Requires a checkout of `syan2` at `../syan2` (path dependency).
 ## Roadmap
 
 1. ✅ Thin end-to-end slice
-2. Full surface language (binops, if/match/patterns, let-rec, modules parse,
-   `@require:`/`@import:` multi-file loading)
+2. ◕ Full surface language — done through phase 2b (binops, if/match,
+   let-rec, tuples, ctors, commands, mutables, fields, items, math syntax,
+   modules, multi-file loading); remaining: command macros (`\cmd@`),
+   optional args at runtime (parse-and-reject today), `(| e with |)` inside
+   signatures, `Mod.(…)`, tabular `|` separators, stages
 3. Real typechecker (HM + rows + command types, behind the elaborate seam)
 4. Full primitive inventory + loading the real `dist/` stdlib
 5. Real fonts (ttf-parser + subsetter, CID/Type0) and Unicode line breaking

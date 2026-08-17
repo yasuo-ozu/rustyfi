@@ -6,6 +6,7 @@ members = [
     "crates/satysfi-lang",
     "crates/satysfi-pdf",
     "crates/satysfi-cli",
+    "crates/satysfi-loader",
 ]
 
 [workspace.package]
@@ -20,7 +21,9 @@ satysfi-syntax = { path = "crates/satysfi-syntax" }
 satysfi-backend = { path = "crates/satysfi-backend" }
 satysfi-lang = { path = "crates/satysfi-lang" }
 satysfi-pdf = { path = "crates/satysfi-pdf" }
+satysfi-loader = { path = "crates/satysfi-loader" }
 thiserror = "2"
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 pdf-writer = "0.13"
+safegraph = "0.1"

@@ -14,6 +14,7 @@ path = "src/main.rs"
 satysfi-syntax.workspace = true
 satysfi-backend.workspace = true
 satysfi-lang.workspace = true
+satysfi-loader.workspace = true
 satysfi-pdf.workspace = true
 clap.workspace = true
 anyhow.workspace = true

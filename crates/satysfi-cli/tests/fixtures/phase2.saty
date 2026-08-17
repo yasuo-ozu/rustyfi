@@ -1,0 +1,27 @@
+% phase-2 fixture: let-rec, match, let-inline (both the context-taking and
+% the lightweight ctx-less forms), an inline-text `#var;` embed, and +p.
+@require: stdjabook
+
+let-rec count-down n =
+  if n == 0 then true else count-down (n - 1)
+
+let finished = count-down 5
+
+let-inline ctx \bracket it = read-inline ctx it
+
+let-inline \announce it = it
+
+let chosen =
+  match finished with
+  | true -> { Countdown complete. }
+  | false -> { Countdown incomplete. }
+
+in
+document (|
+  title = {Phase Two};
+  author = {yasuo};
+|) '<
+  +p { \bracket{ Bracketed text via let-inline. } }
+  +p { \announce{ Announced text via the lightweight let-inline form. } }
+  +p { #chosen; }
+>

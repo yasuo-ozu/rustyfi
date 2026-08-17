@@ -1,0 +1,6 @@
+% a library file: bindings only, no document expression
+let greeting-word = `Salutations`
+
+let-inline ctx \shout it = read-inline ctx it
+
+let twice n = n * 2

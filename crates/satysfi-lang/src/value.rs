@@ -1,6 +1,6 @@
 //! Runtime values (a milestone-1 subset of `syntactic_value`).
 
-use crate::ast::{Ast, BText, IText};
+use crate::ast::{Ast, BText, IText, MathElem};
 use crate::primitives::PrimDef;
 use satysfi_backend::{Context, HorzBox, Length, Page, PageGeometry, VertBox};
 use std::cell::RefCell;
@@ -16,6 +16,10 @@ pub enum Value {
     Length(Length),
     Str(String),
     List(Vec<Value>),
+    Tuple(Vec<Value>),
+    /// A variant constructor value, optionally carrying a payload
+    /// (`None` / `Some 3`).
+    Ctor(String, Option<Box<Value>>),
     Record(BTreeMap<String, Value>),
     Context(Box<Context>),
     /// Quoted inline text with its captured environment
@@ -23,6 +27,14 @@ pub enum Value {
     InlineText { elems: Rc<Vec<IText>>, env: Env },
     /// Quoted block text with its captured environment.
     BlockText { elems: Rc<Vec<BText>>, env: Env },
+    /// Quoted math text with its captured environment (mirrors
+    /// `InlineText`/`BlockText`); typesetting is deferred to phase 7, so this
+    /// is carried opaquely for now.
+    MathText { elems: Rc<Vec<MathElem>>, env: Env },
+    /// A mutable cell (`let-mutable`'s binding; v0.0.6's `Location`/store
+    /// entry). This port uses a directly-shared `RefCell` instead of an
+    /// indirection through a separate store table.
+    Ref(Rc<RefCell<Value>>),
     /// `inline-boxes` (the `Horz` base constant).
     InlineBoxes(Vec<HorzBox>),
     /// `block-boxes` (the `Vert` base constant).
@@ -51,10 +63,14 @@ impl Value {
             Value::Length(_) => "length",
             Value::Str(_) => "string",
             Value::List(_) => "list",
+            Value::Tuple(_) => "tuple",
+            Value::Ctor(_, _) => "variant",
             Value::Record(_) => "record",
             Value::Context(_) => "context",
             Value::InlineText { .. } => "inline-text",
             Value::BlockText { .. } => "block-text",
+            Value::MathText { .. } => "math",
+            Value::Ref(_) => "mutable",
             Value::InlineBoxes(_) => "inline-boxes",
             Value::BlockBoxes(_) => "block-boxes",
             Value::Document(_) => "document",

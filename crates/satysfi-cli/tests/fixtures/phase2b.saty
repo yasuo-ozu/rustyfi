@@ -1,0 +1,29 @@
+% phase-2b fixture: a module + module-qualified reference, `#label` field
+% access, and a `let-mutable`/`while`/`before`-driven countdown that decides
+% which of two inline texts to show, plus +p.
+%
+% Note: the milestone-2b stdlib has no "turn a runtime string into inline
+% text" primitive yet (only literal, source-quoted `{ .. }` text becomes
+% inline content, via `read-inline`) — so the countdown counter drives a
+% *branch* (which literal inline text gets shown) rather than being spliced
+% in digit-by-digit as text.
+@require: stdjabook
+
+module Helper = struct
+  let greet x = x
+end
+
+let info = (| word = { Countdown } |) in
+let greeted = Helper.greet info#word in
+
+let-mutable count <- 3 in
+let final-count = (while !count > 0 do (count <- !count - 1)) before !count in
+let finished = (final-count == 0) in
+let chosen = if finished then { complete. } else { incomplete. } in
+
+document (|
+  title = {Phase Two B};
+  author = {yasuo};
+|) '<
+  +p { #greeted; #chosen; }
+>

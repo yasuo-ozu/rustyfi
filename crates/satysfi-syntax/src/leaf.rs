@@ -118,6 +118,68 @@ unit_tokens! {
     EndActiveTok => EndActive, "';'";
     /// end of input
     EoiTok => Eoi, "end of input";
+    /// `match`
+    KwMatch => Match, "'match'";
+    /// `with`
+    KwWith => With, "'with'";
+    /// `when`
+    KwWhen => When, "'when'";
+    /// `as`
+    KwAs => As, "'as'";
+    /// `type`
+    KwType => Type, "'type'";
+    /// `of`
+    KwOf => Of, "'of'";
+    /// `|` (match-arm / variant separator)
+    BarTok => Bar, "'|'";
+    /// `_`
+    WildcardTok => Wildcard, "'_'";
+    /// `::`
+    ConsTok => Cons, "'::'";
+    /// `:`
+    ColonTok => Colon, "':'";
+    /// `-` (unary minus, `nxun`'s `EXACT_MINUS`)
+    ExactMinusTok => ExactMinus, "'-'";
+    /// `let-mutable`
+    KwLetMutable => LetMutable, "'let-mutable'";
+    /// `while`
+    KwWhile => While, "'while'";
+    /// `do`
+    KwDo => Do, "'do'";
+    /// `before`
+    KwBefore => Before, "'before'";
+    /// `<-`
+    OverwriteEqTok => OverwriteEq, "'<-'";
+    /// `#` field access (program mode)
+    AccessTok => Access, "'#'";
+    /// `module`
+    KwModule => Module, "'module'";
+    /// `struct`
+    KwStruct => Struct, "'struct'";
+    /// `sig`
+    KwSig => Sig, "'sig'";
+    /// `end`
+    KwEnd => End, "'end'";
+    /// `open`
+    KwOpen => Open, "'open'";
+    /// `val`
+    KwVal => Val, "'val'";
+    /// `direct`
+    KwDirect => Direct, "'direct'";
+    /// `?:`
+    OptionalTok => Optional, "'?:'";
+    /// `?*`
+    OmissionTok => Omission, "'?*'";
+    /// `^` (math superscript)
+    SuperscriptTok => Superscript, "'^'";
+    /// `_` (math subscript)
+    SubscriptTok => Subscript, "'_'";
+    /// `|` (inline-text / math separator, distinct from the match-arm `Bar`)
+    SepTok => Sep, "'|' separator";
+    /// `${` opening math
+    BMathGrpTok => BMathGrp, "'${'";
+    /// `}` closing math
+    EMathGrpTok => EMathGrp, "'}'";
 }
 
 /// Payload-carrying leaves: match one token variant and keep its data.
@@ -195,6 +257,45 @@ payload_tokens! {
     HeaderRequireTok(content: String) => HeaderRequire, "'@require:'";
     /// An `@import:` header.
     HeaderImportTok(content: String) => HeaderImport, "'@import:'";
+    /// `#var` (or `#Mod.var`) in inline text, before the mode switches to active.
+    VarInHorzTok(mods: Vec<String>, name: String) => VarInHorz, "a variable reference in inline text";
+    /// `#var` (or `#Mod.var`) in block text, before the mode switches to active.
+    VarInVertTok(mods: Vec<String>, name: String) => VarInVert, "a variable reference in block text";
+    /// A type variable, e.g. `'a`.
+    TypeVarTok(name: String) => TypeVar, "a type variable";
+    /// `!`/`!!`/... — the `UNOP_EXCLAM` family (dereference and friends).
+    UnopExclamTok(text: String) => UnopExclam, "a '!' operator";
+    /// A math-mode character (`mathbot`'s `MATHCHAR`).
+    MathCharTok(text: String) => MathChar, "a math character";
+    /// A math command name (`\cmd`), sigil included.
+    MathCmdTok(name: String) => MathCmd, "a math command";
+    /// `#var` (or `#Mod.var`) in math mode.
+    VarInMathTok(mods: Vec<String>, name: String) => VarInMath, "a variable reference in math";
+    /// A run of `'` marks (`a'''`).
+    PrimesTok(count: usize) => Primes, "a primes mark";
+    /// A module-qualified variable, e.g. `Mod.x`.
+    VarWithModTok(mods: Vec<String>, name: String) => VarWithMod, "a qualified variable name";
+    /// A module-qualified inline command, e.g. `\Mod.cmd`.
+    HorzCmdWithModTok(mods: Vec<String>, name: String) => HorzCmdWithMod, "a qualified inline command";
+    /// A module-qualified block command, e.g. `+Mod.cmd`.
+    VertCmdWithModTok(mods: Vec<String>, name: String) => VertCmdWithMod, "a qualified block command";
+}
+
+/// Either sigil-only (`\cmd`) or module-qualified (`\Mod.cmd`) inline command
+/// name — `hcmd` in `parser.mly`. Not itself recursive, so (unlike
+/// [`crate::cst::ast::InlineElem`]) it can be a plain top-level derive.
+#[derive(Parse, Unparse, Debug, Clone, PartialEq)]
+pub enum AnyHorzCmdTok {
+    Plain(HorzCmdTok),
+    Mod(HorzCmdWithModTok),
+}
+
+/// Either sigil-only (`+cmd`) or module-qualified (`+Mod.cmd`) block command
+/// name — `vcmd` in `parser.mly`.
+#[derive(Parse, Unparse, Debug, Clone, PartialEq)]
+pub enum AnyVertCmdTok {
+    Plain(VertCmdTok),
+    Mod(VertCmdWithModTok),
 }
 
 /// A length constant such as `12pt` (two payload fields, hand-written).
@@ -306,6 +407,98 @@ impl Spanned for LiteralTok {
     }
 }
 
+/// A binary-operator token: the `binop` family of `nxlor`..`nxrtimes` plus the
+/// `mod`/`::` operators that also act as binops (`parser.mly`'s `binop`
+/// nonterminal, minus `UNOP_EXCLAM`/`BEFORE`/`LNOT`, which are not simple
+/// infix operators in this grammar's flattened operator-chain shape).
+/// Deliberately excludes `Token::Bar` (match-arm separator) and
+/// `Token::ExactAmp` (the `&`-prefixed "next" unary operator) — see
+/// `cst.rs`'s note on `Bar` handling.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BinOpTok {
+    pub tok: Token,
+    pub span: Span,
+}
+
+impl Parse<Atom> for BinOpTok {
+    type Error = ParseError;
+
+    fn parse(stream: impl IntoParseStream<Atom = Atom>) -> Result<Self, Self::Error> {
+        let mut stream = stream.into_parse_stream();
+        match stream.next() {
+            Some(Atom { slot, span })
+                if matches!(
+                    slot,
+                    Token::BinopPlus(_)
+                        | Token::BinopMinus(_)
+                        | Token::BinopTimes(_)
+                        | Token::BinopDivides(_)
+                        | Token::BinopEq(_)
+                        | Token::BinopLt(_)
+                        | Token::BinopGt(_)
+                        | Token::BinopAmp(_)
+                        | Token::BinopBar(_)
+                        | Token::BinopHat(_)
+                        | Token::ExactMinus
+                        | Token::ExactTimes
+                        | Token::Mod
+                        | Token::Cons
+                ) =>
+            {
+                Ok(BinOpTok { tok: slot, span })
+            }
+            Some(atom) => {
+                let span = atom.span;
+                stream.push(atom);
+                Err(ParseError::new(span, "expected a binary operator"))
+            }
+            None => Err(ParseError::new(
+                Span::default(),
+                "expected a binary operator, found end of input",
+            )),
+        }
+    }
+}
+
+impl Unparse<Atom> for BinOpTok {
+    fn unparse<S: Emitter<Atom>>(&self, sink: &mut S) -> Result<(), S::Error> {
+        sink.write_one(Atom {
+            slot: self.tok.clone(),
+            span: self.span,
+        })
+    }
+}
+
+impl Spanned for BinOpTok {
+    type Span = Span;
+    fn span(&self) -> Span {
+        self.span
+    }
+}
+
+impl BinOpTok {
+    /// The operator's source text, e.g. `"+"`, `"mod"`, `"::"`.
+    pub fn op_text(&self) -> String {
+        match &self.tok {
+            Token::BinopPlus(s)
+            | Token::BinopMinus(s)
+            | Token::BinopTimes(s)
+            | Token::BinopDivides(s)
+            | Token::BinopEq(s)
+            | Token::BinopLt(s)
+            | Token::BinopGt(s)
+            | Token::BinopAmp(s)
+            | Token::BinopBar(s)
+            | Token::BinopHat(s) => s.clone(),
+            Token::ExactMinus => "-".to_string(),
+            Token::ExactTimes => "*".to_string(),
+            Token::Mod => "mod".to_string(),
+            Token::Cons => "::".to_string(),
+            _ => unreachable!("BinOpTok only ever holds one of the matched variants"),
+        }
+    }
+}
+
 // ---- delimiter groups ---------------------------------------------------------
 
 /// Local delimiter-group structs (the foreign `Group<T, O, C>` can't receive a
@@ -397,4 +590,6 @@ define_groups! {
     InlineGroup: BHorzGrpTok, EHorzGrpTok;
     /// `'< … >` / `< … >` block text.
     BlockGroup: BVertGrpTok, EVertGrpTok;
+    /// `${ … }` / `{ … }` math (the latter when already inside math mode).
+    MathGroup: BMathGrpTok, EMathGrpTok;
 }

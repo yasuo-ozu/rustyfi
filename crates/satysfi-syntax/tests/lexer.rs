@@ -30,6 +30,17 @@ fn program_basics() {
 }
 
 #[test]
+fn field_access_token() {
+    // `#` in program mode lexes as a bare `Access` token (not merged with
+    // the following name).
+    assert_eq!(toks("x#y"), vec![var("x"), Access, var("y"), Eoi]);
+    assert_eq!(
+        toks("x#y#z"),
+        vec![var("x"), Access, var("y"), Access, var("z"), Eoi]
+    );
+}
+
+#[test]
 fn numbers_and_lengths() {
     assert_eq!(
         toks("3 3.5 .5 -3pt 3pt 3.5cm -.5in 0x1F"),

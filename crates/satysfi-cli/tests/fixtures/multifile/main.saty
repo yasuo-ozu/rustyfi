@@ -1,0 +1,8 @@
+@import: helpers
+
+let count-str = embed-string (arabic (twice 21))
+in
+document (| title = {Multifile} |) '<
+  +p { \shout{Imported command works.} }
+  +p { Twice twenty-one is #count-str; indeed. }
+>

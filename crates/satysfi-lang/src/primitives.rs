@@ -10,7 +10,7 @@ use crate::ast::{BText, IText};
 use crate::eval::{eval_error, EvalError, Interp};
 use crate::value::{DocumentValue, Env, Value};
 use satysfi_backend::{
-    break_into_lines, break_pages, Context, FontKey, HorzBox, HorzStringInfo, PageGeometry,
+    break_into_lines, break_pages, Context, FontKey, HorzBox, HorzStringInfo, Length, PageGeometry,
     PureHorzBox, VertBox,
 };
 use std::rc::Rc;
@@ -43,11 +43,92 @@ macro_rules! prims {
 prims! {
     "read-inline" (2) => prim_read_inline;
     "read-block" (2) => prim_read_block;
-    "line-break" (2) => prim_line_break;
+    // v0.0.6 (vminst.ml `BackendLineBreaking`): `bool -> bool -> context ->
+    // inline-boxes -> block-boxes` — the two leading bools select whether
+    // the paragraph's top/bottom edge is breakable across a page boundary.
+    "line-break" (4) => prim_line_break;
     "page-break" (2) => prim_page_break;
     "document" (2) => prim_document;
     "+p" (2) => prim_cmd_p;
     "\\emph" (2) => prim_cmd_emph;
+
+    // ---- int arithmetic (vminst.ml: Plus/Minus/Times/Divides/Mod) --------
+    "+" (2) => prim_int_add;
+    "-" (2) => prim_int_sub;
+    "*" (2) => prim_int_mul;
+    "/" (2) => prim_int_div;
+    "mod" (2) => prim_int_mod;
+
+    // ---- int comparisons (vminst.ml: EqualTo/GreaterThan/LessThan; the
+    // "<>"/">="/"<=" trio comes from primitives.cppo.ml's `general_table`,
+    // defined there as `LogicalNot (EqualTo ..)` / `LogicalNot (LessThan ..)`
+    // / `LogicalNot (GreaterThan ..)`, typed `int -> int -> bool`) ----------
+    "==" (2) => prim_int_eq;
+    "<>" (2) => prim_int_ne;
+    "<" (2) => prim_int_lt;
+    ">" (2) => prim_int_gt;
+    "<=" (2) => prim_int_le;
+    ">=" (2) => prim_int_ge;
+
+    // ---- bool (vminst.ml: LogicalAnd/LogicalOr/LogicalNot) ----------------
+    // NOTE: registered here as strict 2-arg primitives (both arguments are
+    // evaluated before the call, since primitive application is call-by-
+    // value). Real SATySFi short-circuits "&&"/"||" via elaboration
+    // (build-in `if`); that desugaring lives in the (out-of-scope) elaborator.
+    "&&" (2) => prim_bool_and;
+    "||" (2) => prim_bool_or;
+    "not" (1) => prim_bool_not;
+
+    // ---- float (vminst.ml: FloatPlus/FloatMinus/FloatTimes/FloatDivides,
+    // PrimitiveFloat, PrimitiveRound) ---------------------------------------
+    "+." (2) => prim_float_add;
+    "-." (2) => prim_float_sub;
+    "*." (2) => prim_float_mul;
+    "/." (2) => prim_float_div;
+    "float" (1) => prim_float_of_int;
+    "round" (1) => prim_round;
+
+    // ---- length arithmetic (vminst.ml: LengthPlus/LengthMinus/LengthTimes/
+    // LengthDivides/LengthLessThan/LengthGreaterThan) -----------------------
+    "+'" (2) => prim_length_add;
+    "-'" (2) => prim_length_sub;
+    "*'" (2) => prim_length_scale;
+    "/'" (2) => prim_length_div;
+    "<'" (2) => prim_length_lt;
+    ">'" (2) => prim_length_gt;
+
+    // ---- string (vminst.ml: Concat, PrimitiveArabic, PrimitiveSame) -------
+    "^" (2) => prim_string_concat;
+    "arabic" (1) => prim_arabic;
+    "string-same" (2) => prim_string_same;
+
+    // ---- list cons ---------------------------------------------------------
+    // v0.0.6 makes `::` syntax (`UTListCons`/`ListCons` in vminst.ml), not a
+    // primitive. This port's elaborator flattens *every* binary operator
+    // (see `elaborate.rs`'s operator-precedence fold) uniformly into
+    // `Apply(Apply(Var(op_text), lhs), rhs)`, so `::` needs an env-bound
+    // primitive of its own to resolve the same way as `+`/`^`/etc.
+    "::" (2) => prim_list_cons;
+
+    // ---- mutable-cell dereference (evaluator.cppo.ml `Dereference`) -------
+    // v0.0.6 does not evaluate `!` as an ordinary primitive body: it's bound
+    // in primitives.cppo.ml as `( "!", ptyderef, lambda1 (fun v1 ->
+    // Dereference(v1)) )`, i.e. applying "!" *constructs* a `Dereference`
+    // AST node that a later interpreter pass then reduces. This port has no
+    // such two-step "construct-then-reduce" split for built-ins, so "!" is
+    // registered as an ordinary strict primitive that performs the
+    // dereference directly — a structural deviation, not a semantic one.
+    "!" (1) => prim_deref;
+
+    // ---- string, continued (vminst.ml: PrimitiveStringLength/StringSub/
+    // StringExplode; low-priority additions verified against vminst.ml) ----
+    "string-length" (1) => prim_string_length;
+    "string-sub" (3) => prim_string_sub;
+    "string-explode" (1) => prim_string_explode;
+
+    // ---- text embedding (vminst.ml:1707 PrimitiveEmbed: string -> inline-
+    // text; the interp body wraps the string as a one-element quoted text) --
+    "embed-string" (1) => prim_embed_string;
 }
 
 /// The base environment `document` programs start in.
@@ -109,6 +190,41 @@ fn as_block_boxes(v: Value) -> Result<Vec<VertBox>, EvalError> {
     }
 }
 
+fn as_int(v: Value) -> Result<i64, EvalError> {
+    match v {
+        Value::Int(n) => Ok(n),
+        other => eval_error(format!("expected int, got {}", other.type_name())),
+    }
+}
+
+fn as_float(v: Value) -> Result<f64, EvalError> {
+    match v {
+        Value::Float(x) => Ok(x),
+        other => eval_error(format!("expected float, got {}", other.type_name())),
+    }
+}
+
+fn as_bool(v: Value) -> Result<bool, EvalError> {
+    match v {
+        Value::Bool(b) => Ok(b),
+        other => eval_error(format!("expected bool, got {}", other.type_name())),
+    }
+}
+
+fn as_str(v: Value) -> Result<String, EvalError> {
+    match v {
+        Value::Str(s) => Ok(s),
+        other => eval_error(format!("expected string, got {}", other.type_name())),
+    }
+}
+
+fn as_length(v: Value) -> Result<Length, EvalError> {
+    match v {
+        Value::Length(l) => Ok(l),
+        other => eval_error(format!("expected length, got {}", other.type_name())),
+    }
+}
+
 // ---- text conversion ----------------------------------------------------------
 
 /// Convert quoted inline text to boxes under `ctx` (the core of
@@ -136,6 +252,32 @@ pub fn read_inline(
                 }
                 out.extend(as_inline_boxes(v)?);
             }
+            IText::Embed { expr, span } => {
+                let v = interp.eval(env, expr)?;
+                match v {
+                    Value::InlineText {
+                        elems: sub_elems,
+                        env: cap_env,
+                    } => {
+                        out.extend(read_inline(interp, ctx, &sub_elems, &cap_env)?);
+                    }
+                    other => {
+                        return Err(EvalError {
+                            span: Some(*span),
+                            msg: format!(
+                                "expected inline-text in '#…;' embed, got {}",
+                                other.type_name()
+                            ),
+                        });
+                    }
+                }
+            }
+            IText::EmbedMath { span, .. } => {
+                return Err(EvalError {
+                    span: Some(*span),
+                    msg: "math typesetting is not implemented yet (phase 7)".into(),
+                });
+            }
         }
     }
     Ok(out)
@@ -149,17 +291,41 @@ pub fn read_block(
     env: &Env,
 ) -> Result<Vec<VertBox>, EvalError> {
     let mut out = Vec::new();
-    for BText::Cmd { name, span, args } in elems {
-        let cmd = env.lookup(name).ok_or_else(|| EvalError {
-            span: Some(*span),
-            msg: format!("unbound block command '{name}' at run time"),
-        })?;
-        let mut v = interp.apply(cmd, Value::Context(Box::new(ctx.clone())))?;
-        for arg in args {
-            let arg_v = interp.eval(env, arg)?;
-            v = interp.apply(v, arg_v)?;
+    for elem in elems {
+        match elem {
+            BText::Cmd { name, span, args } => {
+                let cmd = env.lookup(name).ok_or_else(|| EvalError {
+                    span: Some(*span),
+                    msg: format!("unbound block command '{name}' at run time"),
+                })?;
+                let mut v = interp.apply(cmd, Value::Context(Box::new(ctx.clone())))?;
+                for arg in args {
+                    let arg_v = interp.eval(env, arg)?;
+                    v = interp.apply(v, arg_v)?;
+                }
+                out.extend(as_block_boxes(v)?);
+            }
+            BText::Embed { expr, span } => {
+                let v = interp.eval(env, expr)?;
+                match v {
+                    Value::BlockText {
+                        elems: sub_elems,
+                        env: cap_env,
+                    } => {
+                        out.extend(read_block(interp, ctx, &sub_elems, &cap_env)?);
+                    }
+                    other => {
+                        return Err(EvalError {
+                            span: Some(*span),
+                            msg: format!(
+                                "expected block-text in '#…;' embed, got {}",
+                                other.type_name()
+                            ),
+                        });
+                    }
+                }
+            }
         }
-        out.extend(as_block_boxes(v)?);
     }
     Ok(out)
 }
@@ -238,11 +404,17 @@ fn prim_read_block(interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, E
     Ok(Value::BlockBoxes(read_block(interp, &ctx, &elems, &env)?))
 }
 
-/// NOTE: the real v0.0.6 `line-break` takes two leading breakability bools;
-/// milestone 1 registers the simplified `context -> inline-boxes` form.
+/// `line-break : bool -> bool -> context -> inline-boxes -> block-boxes`
+/// (vminst.ml `BackendLineBreaking`). The two leading bools tell the real
+/// line breaker whether the paragraph's top/bottom edge may break across a
+/// page; milestone-1's `break_into_lines` does not yet model breakability
+/// at all, so both are accepted (to keep the arity/signature faithful to
+/// v0.0.6) and ignored for now.
 fn prim_line_break(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
     let ib = as_inline_boxes(args.pop().unwrap())?;
     let ctx = as_context(args.pop().unwrap())?;
+    let _is_breakable_bottom = as_bool(args.pop().unwrap())?;
+    let _is_breakable_top = as_bool(args.pop().unwrap())?;
     Ok(Value::BlockBoxes(break_into_lines(&ctx, ib)))
 }
 
@@ -297,4 +469,277 @@ fn prim_cmd_emph(interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, Eva
     Ok(Value::InlineBoxes(read_inline(
         interp, &emph_ctx, &elems, &env,
     )?))
+}
+
+// ---- int arithmetic -------------------------------------------------------
+
+fn prim_int_add(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+    let b = as_int(args.pop().unwrap())?;
+    let a = as_int(args.pop().unwrap())?;
+    Ok(Value::Int(a + b))
+}
+
+fn prim_int_sub(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+    let b = as_int(args.pop().unwrap())?;
+    let a = as_int(args.pop().unwrap())?;
+    Ok(Value::Int(a - b))
+}
+
+fn prim_int_mul(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+    let b = as_int(args.pop().unwrap())?;
+    let a = as_int(args.pop().unwrap())?;
+    Ok(Value::Int(a * b))
+}
+
+/// OCaml catches `Division_by_zero` and reports `"division by zero"`.
+fn prim_int_div(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+    let b = as_int(args.pop().unwrap())?;
+    let a = as_int(args.pop().unwrap())?;
+    if b == 0 {
+        return eval_error("division by zero");
+    }
+    Ok(Value::Int(a / b))
+}
+
+/// Same division-by-zero behavior as `/` (see `Mod` in vminst.ml).
+fn prim_int_mod(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+    let b = as_int(args.pop().unwrap())?;
+    let a = as_int(args.pop().unwrap())?;
+    if b == 0 {
+        return eval_error("division by zero");
+    }
+    Ok(Value::Int(a % b))
+}
+
+// ---- int comparisons -------------------------------------------------------
+
+fn prim_int_eq(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+    let b = as_int(args.pop().unwrap())?;
+    let a = as_int(args.pop().unwrap())?;
+    Ok(Value::Bool(a == b))
+}
+
+fn prim_int_ne(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+    let b = as_int(args.pop().unwrap())?;
+    let a = as_int(args.pop().unwrap())?;
+    Ok(Value::Bool(a != b))
+}
+
+fn prim_int_lt(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+    let b = as_int(args.pop().unwrap())?;
+    let a = as_int(args.pop().unwrap())?;
+    Ok(Value::Bool(a < b))
+}
+
+fn prim_int_gt(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+    let b = as_int(args.pop().unwrap())?;
+    let a = as_int(args.pop().unwrap())?;
+    Ok(Value::Bool(a > b))
+}
+
+fn prim_int_le(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+    let b = as_int(args.pop().unwrap())?;
+    let a = as_int(args.pop().unwrap())?;
+    Ok(Value::Bool(a <= b))
+}
+
+fn prim_int_ge(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+    let b = as_int(args.pop().unwrap())?;
+    let a = as_int(args.pop().unwrap())?;
+    Ok(Value::Bool(a >= b))
+}
+
+// ---- bool -------------------------------------------------------------------
+
+/// Strict (both arguments already evaluated by the caller before this native
+/// runs): real SATySFi source-level `&&`/`||` short-circuit via elaboration
+/// into `if`, which is out of scope here.
+fn prim_bool_and(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+    let b = as_bool(args.pop().unwrap())?;
+    let a = as_bool(args.pop().unwrap())?;
+    Ok(Value::Bool(a && b))
+}
+
+fn prim_bool_or(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+    let b = as_bool(args.pop().unwrap())?;
+    let a = as_bool(args.pop().unwrap())?;
+    Ok(Value::Bool(a || b))
+}
+
+fn prim_bool_not(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+    let a = as_bool(args.pop().unwrap())?;
+    Ok(Value::Bool(!a))
+}
+
+// ---- float --------------------------------------------------------------------
+
+fn prim_float_add(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+    let b = as_float(args.pop().unwrap())?;
+    let a = as_float(args.pop().unwrap())?;
+    Ok(Value::Float(a + b))
+}
+
+fn prim_float_sub(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+    let b = as_float(args.pop().unwrap())?;
+    let a = as_float(args.pop().unwrap())?;
+    Ok(Value::Float(a - b))
+}
+
+fn prim_float_mul(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+    let b = as_float(args.pop().unwrap())?;
+    let a = as_float(args.pop().unwrap())?;
+    Ok(Value::Float(a * b))
+}
+
+fn prim_float_div(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+    let b = as_float(args.pop().unwrap())?;
+    let a = as_float(args.pop().unwrap())?;
+    Ok(Value::Float(a / b))
+}
+
+fn prim_float_of_int(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+    let n = as_int(args.pop().unwrap())?;
+    Ok(Value::Float(n as f64))
+}
+
+/// `PrimitiveRound` in vminst.ml is, despite the name, `int_of_float`
+/// (truncation toward zero), not rounding to nearest.
+fn prim_round(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+    let x = as_float(args.pop().unwrap())?;
+    Ok(Value::Int(x as i64))
+}
+
+// ---- length ---------------------------------------------------------------------
+
+fn prim_length_add(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+    let b = as_length(args.pop().unwrap())?;
+    let a = as_length(args.pop().unwrap())?;
+    Ok(Value::Length(a + b))
+}
+
+fn prim_length_sub(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+    let b = as_length(args.pop().unwrap())?;
+    let a = as_length(args.pop().unwrap())?;
+    Ok(Value::Length(a - b))
+}
+
+fn prim_length_scale(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+    let b = as_float(args.pop().unwrap())?;
+    let a = as_length(args.pop().unwrap())?;
+    Ok(Value::Length(a * b))
+}
+
+fn prim_length_div(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+    let b = as_length(args.pop().unwrap())?;
+    let a = as_length(args.pop().unwrap())?;
+    Ok(Value::Float(a / b))
+}
+
+fn prim_length_lt(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+    let b = as_length(args.pop().unwrap())?;
+    let a = as_length(args.pop().unwrap())?;
+    Ok(Value::Bool(a < b))
+}
+
+/// `LengthGreaterThan` in vminst.ml is implemented as `len2 <% len1`, i.e.
+/// `a >' b` iff `b <' a` — the same ordering, just flipped operands.
+fn prim_length_gt(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+    let b = as_length(args.pop().unwrap())?;
+    let a = as_length(args.pop().unwrap())?;
+    Ok(Value::Bool(b < a))
+}
+
+// ---- string -----------------------------------------------------------------------
+
+fn prim_string_concat(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+    let b = as_str(args.pop().unwrap())?;
+    let a = as_str(args.pop().unwrap())?;
+    Ok(Value::Str(a + &b))
+}
+
+fn prim_arabic(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+    let n = as_int(args.pop().unwrap())?;
+    Ok(Value::Str(n.to_string()))
+}
+
+fn prim_string_same(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+    let b = as_str(args.pop().unwrap())?;
+    let a = as_str(args.pop().unwrap())?;
+    Ok(Value::Bool(a == b))
+}
+
+// ---- list -----------------------------------------------------------------
+
+/// `x :: xs` — prepend `x` onto the list `xs`.
+fn prim_list_cons(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+    let tail = args.pop().unwrap();
+    let head = args.pop().unwrap();
+    let mut list = match tail {
+        Value::List(v) => v,
+        other => return eval_error(format!("expected list, got {}", other.type_name())),
+    };
+    list.insert(0, head);
+    Ok(Value::List(list))
+}
+
+// ---- mutable-cell dereference ----------------------------------------------
+
+/// `!` — read the current contents of a mutable cell (see the `prims!`
+/// registration above for how this differs structurally, not semantically,
+/// from v0.0.6's `Dereference`/`Location` handling).
+fn prim_deref(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+    let v = args.pop().unwrap();
+    match v {
+        Value::Ref(cell) => Ok(cell.borrow().clone()),
+        other => eval_error(format!(
+            "expected a mutable cell for '!', got {}",
+            other.type_name()
+        )),
+    }
+}
+
+// ---- string, continued -----------------------------------------------------
+
+/// `string-length : string -> int` (vminst.ml `PrimitiveStringLength`) —
+/// counts Unicode scalar values (`BatUTF8.length`), not UTF-8 bytes.
+fn prim_string_length(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+    let s = as_str(args.pop().unwrap())?;
+    Ok(Value::Int(s.chars().count() as i64))
+}
+
+/// `string-sub : string -> int -> int -> string` (vminst.ml
+/// `PrimitiveStringSub`) — a substring addressed by Unicode-scalar-value
+/// offset/width (`BatUTF8.sub`), not byte offset. Upstream raises a dynamic
+/// error ("illegal index for string-sub") on an out-of-range index; we do
+/// the same.
+fn prim_string_sub(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+    let wid = as_int(args.pop().unwrap())?;
+    let pos = as_int(args.pop().unwrap())?;
+    let s = as_str(args.pop().unwrap())?;
+    if wid < 0 || pos < 0 {
+        return eval_error("illegal index for string-sub");
+    }
+    let chars: Vec<char> = s.chars().collect();
+    let pos = pos as usize;
+    let wid = wid as usize;
+    match pos.checked_add(wid) {
+        Some(end) if end <= chars.len() => Ok(Value::Str(chars[pos..end].iter().collect())),
+        _ => eval_error("illegal index for string-sub"),
+    }
+}
+
+/// `string-explode : string -> int list` (vminst.ml
+/// `PrimitiveStringExplode`) — the string's Unicode scalar values (code
+/// points) in order, not its bytes.
+fn prim_string_explode(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+    let s = as_str(args.pop().unwrap())?;
+    Ok(Value::List(s.chars().map(|c| Value::Int(c as i64)).collect()))
+}
+
+fn prim_embed_string(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+    let s = as_str(args.pop().unwrap())?;
+    Ok(Value::InlineText {
+        elems: Rc::new(vec![IText::Text(s)]),
+        env: Env::root(),
+    })
 }

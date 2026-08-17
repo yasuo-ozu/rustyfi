@@ -1,0 +1,12 @@
+[package]
+name = "satysfi-loader"
+description = "Multi-file loading layer (@require:/@import: resolution and dependency ordering) for SATySFi documents"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+satysfi-syntax.workspace = true
+safegraph.workspace = true
+thiserror.workspace = true

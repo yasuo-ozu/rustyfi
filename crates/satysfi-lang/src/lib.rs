@@ -29,9 +29,19 @@ pub fn compile_document(
     metrics: &dyn FontMetrics,
 ) -> Result<std::rc::Rc<DocumentValue>, CompileError> {
     let file = satysfi_syntax::parse_file(src)?;
+    compile_document_cst(&file, metrics)
+}
+
+/// Compile an already-parsed (possibly loader-merged) file. The multi-file
+/// loader concatenates library preludes into one synthetic `cst::File` and
+/// enters here.
+pub fn compile_document_cst(
+    file: &satysfi_syntax::cst::File,
+    metrics: &dyn FontMetrics,
+) -> Result<std::rc::Rc<DocumentValue>, CompileError> {
     let env = primitives::base_env();
     let scope = elaborate::Scope::new(env.names());
-    let ast = elaborate::elaborate(&file, &scope)?;
+    let ast = elaborate::elaborate(file, &scope)?;
     let mut interp = eval::Interp::new(metrics);
     match interp.eval(&env, &ast)? {
         Value::Document(doc) => Ok(doc),

@@ -19,6 +19,7 @@ use clap::ArgMatches;
 
 mod cache;
 mod dispatch;
+mod format;
 
 fn main() {
     let code = run();
@@ -75,10 +76,19 @@ fn cmd_compile(m: &ArgMatches) -> anyhow::Result<()> {
         .get_one::<PathBuf>("input")
         .expect("input is required by clap")
         .clone();
+    // HTML output backend, Slice 1 (docs/plans/design-html-output.md §CLI
+    // surface): `--format` has a clap `.default_value("pdf")`, so this
+    // `get_one` is always `Some`; `str::parse` mirrors how `--target-version`
+    // is parsed below (`format.rs`'s doc comment).
+    let format: format::OutputFormat = m
+        .get_one::<String>("format")
+        .expect("--format has a clap default")
+        .parse()
+        .map_err(|e: String| anyhow::anyhow!(e))?;
     let output = m
         .get_one::<PathBuf>("output")
         .cloned()
-        .unwrap_or_else(|| input.with_extension("pdf"));
+        .unwrap_or_else(|| input.with_extension(format.extension()));
     let lib_root = m
         .get_one::<PathBuf>("lib_root")
         .cloned()
@@ -124,6 +134,7 @@ fn cmd_compile(m: &ArgMatches) -> anyhow::Result<()> {
             version,
             &input,
             font_store.as_ref(),
+            format,
         )
     });
     if let (Some(cache), Some(key)) = (&cache, &cache_key) {
@@ -166,15 +177,45 @@ fn cmd_compile(m: &ArgMatches) -> anyhow::Result<()> {
         }
     };
 
-    let bytes = match &font_store {
-        Some(store) => satysfi_pdf::render_pdf_ttf_with(
-            &doc.geometry,
-            &doc.pages,
-            store,
-            &doc.images,
-            &doc.extras,
-        )?,
-        None => satysfi_pdf::render_pdf_with(&doc.geometry, &doc.pages, &doc.images, &doc.extras)?,
+    // HTML output backend, Slice 1 (docs/plans/design-html-output.md §CLI
+    // surface, point 2): everything above (load, version resolution, font
+    // store, cache lookup, compile) is shared; only this terminal
+    // render+write step differs, branching on `--format`. `Html` reuses the
+    // exact same `doc.geometry`/`doc.pages`/`doc.images`/`doc.extras` inputs
+    // the PDF arm does — `render_html` is argument-for-argument with
+    // `render_pdf_with` (`satysfi_pdf::html`'s doc comment).
+    let bytes: Vec<u8> = match format {
+        format::OutputFormat::Pdf => match &font_store {
+            Some(store) => satysfi_pdf::render_pdf_ttf_with(
+                &doc.geometry,
+                &doc.pages,
+                store,
+                &doc.images,
+                &doc.extras,
+            )?,
+            None => {
+                satysfi_pdf::render_pdf_with(&doc.geometry, &doc.pages, &doc.images, &doc.extras)?
+            }
+        },
+        // HTML output backend, Slice 3 (`docs/plans/design-html-output.md`
+        // §Slice 3): mirrors the PDF arm immediately above — a configured
+        // `font_store` renders through `render_html_ttf_with` (real
+        // `@font-face`-embedded fonts, metric-faithful with the layout),
+        // `None` keeps Slice 1/2's base-14 `render_html` path exactly.
+        format::OutputFormat::Html => match &font_store {
+            Some(store) => satysfi_pdf::render_html_ttf_with(
+                &doc.geometry,
+                &doc.pages,
+                store,
+                &doc.images,
+                &doc.extras,
+            )?
+            .into_bytes(),
+            None => {
+                satysfi_pdf::render_html(&doc.geometry, &doc.pages, &doc.images, &doc.extras)?
+                    .into_bytes()
+            }
+        },
     };
     std::fs::write(&output, &bytes)
         .with_context(|| format!("cannot write {}", output.display()))?;

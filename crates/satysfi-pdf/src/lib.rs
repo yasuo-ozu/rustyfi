@@ -6,11 +6,13 @@
 pub mod base14;
 pub mod cid;
 pub mod fonts;
+pub mod html;
 pub mod ttf;
 
 pub use base14::Base14Metrics;
 pub use cid::{render_pdf_ttf, render_pdf_ttf_with};
 pub use fonts::{FontConfigError, FontFlags, FontRegistry, FontSource};
+pub use html::{render_html, render_html_ttf_with, HtmlError};
 pub use ttf::{FontError, TtfFontStore};
 
 use std::collections::{BTreeMap, BTreeSet};

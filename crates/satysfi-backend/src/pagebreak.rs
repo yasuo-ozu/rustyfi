@@ -278,9 +278,17 @@ fn stack_height(vboxes: &[VertBox]) -> Length {
 /// Extract every footnote block reachable from one line's contents, in
 /// inline order — the port of `PageInfo.embed_page_info`'s footnote pass
 /// (pageInfo.ml:13-52): recurses into a `Discretionary`'s rendered
-/// `no_break` slot, `Tabular` cells, and `EmbeddedBlock` lines, but NOT
-/// into a `Footnote`'s own block ("Ignores footnote designation in
-/// footnote", pageBreak.ml:133).
+/// `no_break` slot, `Tabular` cells, `EmbeddedBlock` lines, and (matching
+/// upstream's `ImHorzFrame` arm, pageInfo.ml:27-30, which recurses into
+/// `imhbs` before wrapping the result back up as `EvHorzFrame`) a `Frame`'s
+/// own `contents` — a document class's `FootnoteScheme.main` wraps its
+/// `add-footnote` call in `Inline.no-break` (`inline.satyh`'s `no-break =
+/// inline-frame-outer (0pt,0pt,0pt,0pt) Deco.empty`), which lowers to
+/// exactly a `PureHorzBox::Frame`, so without this arm the footnote marker
+/// is unreachable and its body silently never renders (the marker itself
+/// still renders — line breaking never involves this pass). NOT into a
+/// `Footnote`'s own block ("Ignores footnote designation in footnote",
+/// pageBreak.ml:133).
 fn collect_footnotes(contents: &[(Length, PureHorzBox)], out: &mut Vec<VertBox>) {
     for (_, bx) in contents {
         collect_footnotes_in_box(bx, out);
@@ -307,6 +315,11 @@ fn collect_footnotes_in_box(bx: &PureHorzBox, out: &mut Vec<VertBox>) {
                 if let VertBox::Line { contents, .. } = vb {
                     collect_footnotes(contents, out);
                 }
+            }
+        }
+        PureHorzBox::Frame { contents, .. } => {
+            for (_, cbx) in contents {
+                collect_footnotes_in_box(cbx, out);
             }
         }
         _ => {}

@@ -1128,13 +1128,27 @@ pub mod ast {
     }
 
     /// A command's arguments — identical shape to
-    /// [`crate::cst::ast::CmdTail`] (no 0.1 delta).
+    /// [`crate::cst::ast::CmdTail`] — **0.1 delta:** an optional LEADING
+    /// `?(l = e, …)` bundle (optional-arg-rows increment 3b-β). A command
+    /// applied with an optional on its FIRST argument (`\cmd ?(l = e){arg}`,
+    /// `+sec ?(label = t){title}<body>` — the ONLY shape the capstone census
+    /// finds) can't ride inside `args` (an `expr_app` application chain whose
+    /// *head* must be a bare `Atomic`, never a `?`-headed bundle — the head
+    /// slot has no place for a leading bundle), so it is peeled off here as
+    /// `lead_opts` and re-attached to the first argument at lowering
+    /// (`v1::lower::lower_cmd_tail`). A bundle on a LATER argument
+    /// (`\cmd{a} ?(l = e){b}`) still rides inside `args` as an ordinary
+    /// [`AppArg::Bundled`] (inc1). `?(`-headed, token-disjoint from every
+    /// `args` head shape, so a bundle-less tail parses `lead_opts: None`
+    /// exactly as before.
     #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
     pub enum CmdTail {
         /// `;` — no arguments.
         Semi(EndActiveTok),
-        /// The argument chain.
+        /// The argument chain, optionally prefixed by a leading `?(l = e, …)`
+        /// bundle on the first argument.
         Args {
+            lead_opts: Option<OptArgsV1>,
             args: super::ExprErasedV1,
             semi: Option<EndActiveTok>,
         },

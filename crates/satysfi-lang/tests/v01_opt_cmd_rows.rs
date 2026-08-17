@@ -19,16 +19,19 @@
 //! every declared optional label to `None` without an `EvalError` — no
 //! FontMetrics-based box-content introspection needed.
 //!
-//! No `math […]` command-type head, no `val math` parameter bundles, and no
-//! command-APPLICATION `?(l=e){…}` bundles anywhere below — all three are
-//! optional-arg-rows increment 3b (see the spec's §B/§13); the capstone
-//! census found zero application-site bundles, so every command call below
-//! is deliberately unbundled.
+//! The `T1`–`T9`/`t_m1_*` tests below are increment-3a + math-package-M1
+//! shaped: inline/block command param bundles + type rows, and BARE
+//! `math […]` sig rows. The `inc3b_*` tests at the END of this file exercise
+//! optional-arg-rows increment 3b: `val math` PARAMETER bundles (3b-α,
+//! `math_command_scheme_v01`'s row harvest + the ctx/sub/sup tail-trio peel)
+//! and command-APPLICATION `?(l = e)` bundles at a call site (3b-β, the
+//! option flowing through elaborate/typecheck/eval).
 
 use satysfi_backend::{FontKey, FontMetrics, Length};
 use satysfi_lang::CompileError;
 use satysfi_loader::{LoadedCst, LoadedFile};
 use satysfi_syntax::{parse_file, parse_file_v1};
+use satysfi_syntax::SatysfiVersion;
 
 /// Never actually exercised (every fixture below either fails type-checking
 /// or fails at the `NotADocument` stage before glyph metrics matter, OR — for
@@ -58,10 +61,14 @@ fn run(lib_src: &str, doc_src: &str) -> Result<(), CompileError> {
         LoadedFile {
             path: std::path::PathBuf::from("lib.satyh"),
             cst: LoadedCst::V0_1(parse_file_v1(lib_src).unwrap_or_else(|e| panic!("lib parse failed: {e}"))),
+            origin: Default::default(),
+            version: SatysfiVersion::V0_1,
         },
         LoadedFile {
             path: std::path::PathBuf::from("doc.saty"),
             cst: LoadedCst::V0_1(parse_file_v1(doc_src).unwrap_or_else(|e| panic!("doc parse failed: {e}"))),
+            origin: Default::default(),
+            version: SatysfiVersion::V0_1,
         },
     ];
     let mono = Mono;
@@ -289,7 +296,7 @@ end
 /// demand in `math.satyh`) — T-M1-seal below exercises the full seal path
 /// with the BARE `math […]` rows `math.satyh` actually uses.
 #[test]
-fn t9_math_command_type_head_is_still_a_parse_error() {
+fn t9_math_command_type_head_with_labeled_row_parses() {
     let src = "module M :> sig\n\
                val \\derive : math [?(name:math-text) list math-text, math-text]\n\
                end = struct val x = 1 end";
@@ -388,4 +395,227 @@ end = struct
 end
 ";
     assert_accepts(lib, "1");
+}
+
+// ============================================================================
+// INCREMENT 3b-α — `val math` command PARAMETER bundles.
+//
+// `math_command_scheme_v01` now harvests each LEADING slot's `?(l:τ,…)` row
+// (via `peel_func_chain_rows` + the shared `harvest_slot`), while the
+// synthesized ctx/sub/sup trio (the LAST three domains — opposite order vs
+// inline/block, where ctx is FIRST) is peeled off the TAIL and guarded to
+// carry no labels. An off-by-one in that peel would silently turn `sub`'s
+// `option math-text` into a labeled slot or eat the last user param — these
+// tests pin it.
+// ============================================================================
+
+/// inc3b-α-1 (THE seal gate): a sealed `math [?(deco:int) math-text]` sig
+/// matches a `val math ctx \sq ?(deco = d) base = …` impl bundle — pins the
+/// leading-slot row harvest, the ctx/sub/sup tail-trio peel, and the closed
+/// label-map equal-domain unify on the seal path. `deco`'s value type is
+/// pinned to `int` by the `match d`.
+#[test]
+fn inc3b_alpha_math_param_bundle_seals() {
+    let lib = "\
+module M :> sig
+  val \\sq : math [?(deco:int) math-text]
+end = struct
+  val math ctx \\sq ?(deco = d) base =
+    let _ = match d with None -> 0 | Some v -> v end in
+    read-math ctx base
+end
+";
+    assert_accepts(lib, "1");
+}
+
+/// inc3b-α-2: the same command declared AND actually INVOKED through
+/// `read-math` (so the whole pipeline — scheme harvest, elaborate's
+/// `curry_cmd_params_v1` `LambdaOpt`, and eval's `apply_with_opts`
+/// None-defaulting for the omitted `deco` — runs end-to-end). The math-mode
+/// application grammar has no `?(…)` bundle form, so the call is necessarily
+/// unbundled and `deco` must default to `None` at run time.
+#[test]
+fn inc3b_alpha_math_param_bundle_unbundled_call_evaluates() {
+    let lib = "\
+module M = struct
+val inline ctx \\mathstub m = read-inline ctx {}
+val math ctx \\sq ?(deco = d) base =
+  let _ = match d with None -> 0 | Some v -> v end in
+  read-math ctx base
+end
+";
+    let doc = "\
+let ctx = get-initial-context 400pt (command \\M.mathstub) in
+read-math ctx ${\\M.sq{a}}";
+    assert_accepts(lib, doc);
+}
+
+/// inc3b-α-3: a seal whose declared label SET differs from the impl's bundle
+/// is rejected (closed-map equal-domain invariance) — both directions:
+/// (i) the impl binds `deco` but the sig declares none, (ii) the sig declares
+/// `deco` but the impl binds none.
+#[test]
+fn inc3b_alpha_math_param_bundle_label_set_mismatch_rejected() {
+    let impl_has_extra = "\
+module M :> sig
+  val \\sq : math [math-text]
+end = struct
+  val math ctx \\sq ?(deco = d) base =
+    let _ = match d with None -> 0 | Some v -> v end in
+    read-math ctx base
+end
+";
+    assert!(!assert_type_error(impl_has_extra, "1").is_empty());
+
+    let sig_has_extra = "\
+module M :> sig
+  val \\sq : math [?(deco:int) math-text]
+end = struct
+  val math ctx \\sq base = read-math ctx base
+end
+";
+    assert!(!assert_type_error(sig_has_extra, "1").is_empty());
+}
+
+/// inc3b-α-4 (the tail-trio off-by-one pin): a `?(k = kopt)` bundle and an
+/// explicit `with sub sup` scripts trio COEXIST. `sub`/`sup` are real user
+/// binders here (not the hidden `%sub`/`%sup`), yet they must NOT surface as
+/// labeled slots — sealed against a `math [?(k:int) math-text]` row (exactly
+/// ONE leading slot, carrying only `k`).
+#[test]
+fn inc3b_alpha_math_bundle_and_scripts_trio_coexist() {
+    let lib = "\
+module M :> sig
+  val \\lim : math [?(k:int) math-text]
+end = struct
+  val math ctx \\lim ?(k = kopt) base with sub sup =
+    let _ = match kopt with None -> 0 | Some v -> v end in
+    let _ = sub in
+    let _ = sup in
+    read-math ctx base
+end
+";
+    assert_accepts(lib, "1");
+}
+
+// ============================================================================
+// INCREMENT 3b-β — command APPLICATION `?(l = e)` bundles at a call site.
+//
+// A command applied with `?(label = e)` args (vs 3a/3b-α which are the
+// declaration side): the bundle rides on the per-arg `CmdArg.opts`
+// (elaborate's `cmd_arg_to_ast`), is checked against that slot's closed
+// `opt_labels` map (typecheck's `check_cmd_args`, upstream
+// `UnexpectedOptionalLabel` for a stray label), and folds through
+// `apply_with_opts` at run time so the label binds `Some e`.
+// ============================================================================
+
+const INC3B_BETA_LIB: &str = "\
+module M = struct
+val inline ctx \\mathstub m = read-inline ctx {}
+val inline ctx \\emphwith ?(color = c) inner =
+  let _ = match c with None -> 0 | Some v -> v end in
+  read-inline ctx inner
+val block ctx +sec ?(label = l) title inner =
+  let _ = match l with None -> 0 | Some v -> v end in
+  read-block ctx inner
+end
+";
+
+/// inc3b-β-1: an inline command APPLIED with `?(color = 3)` at the call site
+/// — the option flows through elaborate (`CmdArg.opts`), typecheck
+/// (`color : int` unifies against the declared `?(color:int)` slot), and
+/// eval (`apply_with_opts` binds `color = Some 3`) end-to-end.
+#[test]
+fn inc3b_beta_inline_app_bundle_supplied_flows_to_eval() {
+    let doc = "\
+let ctx = get-initial-context 400pt (command \\M.mathstub) in
+read-inline ctx {\\M.emphwith ?(color = 3){hi}}";
+    assert_accepts(INC3B_BETA_LIB, doc);
+}
+
+/// inc3b-β-2: the SAME command applied WITHOUT the bundle still evaluates,
+/// `color` defaulting to `None` (`apply_with_opts` over the empty supplied
+/// map) — proving supplied and omitted are both handled by the one path.
+#[test]
+fn inc3b_beta_inline_app_bundle_omitted_defaults_none() {
+    let doc = "\
+let ctx = get-initial-context 400pt (command \\M.mathstub) in
+read-inline ctx {\\M.emphwith{hi}}";
+    assert_accepts(INC3B_BETA_LIB, doc);
+}
+
+/// inc3b-β-3: a supplied label the command does NOT declare is a type error
+/// (upstream `UnexpectedOptionalLabel`, `typechecker.ml:900-901`) — the
+/// closed-map merge in `check_cmd_args`.
+#[test]
+fn inc3b_beta_inline_app_unknown_label_rejected() {
+    let doc = "\
+let ctx = get-initial-context 400pt (command \\M.mathstub) in
+read-inline ctx {\\M.emphwith ?(bogus = 3){hi}}";
+    let msg = assert_type_error(INC3B_BETA_LIB, doc);
+    assert!(
+        msg.contains("bogus") || msg.contains("optional label"),
+        "expected an unexpected-optional-label message, got: {msg}"
+    );
+}
+
+/// inc3b-β-4: a supplied bundle with a WRONG value type for a DECLARED label
+/// is a type error (the per-label `unify` in `check_cmd_args`) — here
+/// `color` is declared `int` but supplied a string literal.
+#[test]
+fn inc3b_beta_inline_app_bundle_wrong_value_type_rejected() {
+    let doc = "\
+let ctx = get-initial-context 400pt (command \\M.mathstub) in
+read-inline ctx {\\M.emphwith ?(color = `x`){hi}}";
+    let msg = assert_type_error(INC3B_BETA_LIB, doc);
+    assert!(!msg.is_empty(), "expected a non-empty type-error message");
+}
+
+/// inc3b-β-5: a BLOCK command applied with `?(label = 7)` at the call site —
+/// the block twin of β-1 (the `BText::Cmd` per-arg-opts path in
+/// `primitives::read_block`).
+#[test]
+fn inc3b_beta_block_app_bundle_supplied_flows_to_eval() {
+    let doc = "\
+let ctx = get-initial-context 400pt (command \\M.mathstub) in
+read-block ctx '< +M.sec ?(label = 7){Title}< > >";
+    assert_accepts(INC3B_BETA_LIB, doc);
+}
+
+/// inc3b-β-6 (the OBSERVATIONAL differential — proves the supplied value
+/// truly arrives as `Some v` and the omitted one as `None` AT RUN TIME, not
+/// merely that both typecheck): a command whose body `abort-with-message`s
+/// on the `None` branch. Supplying `?(color = 3)` takes the `Some` branch
+/// (accepts); omitting it takes the `None` branch (a run-time abort —
+/// `CompileError::Eval`, distinct from a type error). This pins
+/// `apply_with_opts` binding `color = Some 3` vs `None` end-to-end.
+const INC3B_BETA_OBS_LIB: &str = "\
+module M = struct
+val inline ctx \\mathstub m = read-inline ctx {}
+val inline ctx \\needcolor ?(color = c) inner =
+  match c with
+  | Some v -> let _ = v in read-inline ctx inner
+  | None -> abort-with-message `no color supplied`
+  end
+end
+";
+
+#[test]
+fn inc3b_beta_app_bundle_value_observably_reaches_eval() {
+    // Supplied -> `Some 3` -> the non-aborting branch -> accepts.
+    let doc_supplied = "\
+let ctx = get-initial-context 400pt (command \\M.mathstub) in
+read-inline ctx {\\M.needcolor ?(color = 3){x}}";
+    assert_accepts(INC3B_BETA_OBS_LIB, doc_supplied);
+
+    // Omitted -> `None` -> the aborting branch -> a run-time (Eval) error,
+    // NOT a type error: proof the omitted label really defaulted to `None`
+    // at eval (had it leaked as `Some`, this would have accepted).
+    let doc_omitted = "\
+let ctx = get-initial-context 400pt (command \\M.mathstub) in
+read-inline ctx {\\M.needcolor{x}}";
+    match run(INC3B_BETA_OBS_LIB, doc_omitted) {
+        Err(CompileError::Eval(_)) => {}
+        other => panic!("expected a run-time abort (Eval error) on the None branch, got: {other:?}"),
+    }
 }

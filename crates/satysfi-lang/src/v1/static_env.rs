@@ -14,6 +14,7 @@
 //! scope guard, do not widen these further until that sub-slice lands.
 
 use crate::types::{MonoType, PolyType};
+use satysfi_syntax::cst_v1::ast as ast_v1;
 use satysfi_syntax::span::Span;
 use std::collections::HashMap;
 
@@ -159,6 +160,61 @@ pub(crate) struct StaticEnv {
     /// (`module_check::check_program`'s `immediate_hides`, never routed
     /// through this map).
     pub(crate) ctor_hide_triggers: HashMap<String, Vec<(String, String)>>,
+    /// Sub-slice 2d-3b (`…/tmp/slice2d3b-2f2-sigmembers.md` §3.4): a
+    /// PARENT seal's deferred member revocation — a nested `Decl::Module`
+    /// member whose sub-signature omits values the child itself exports.
+    /// Trigger alias (the qualified name of the PARENT's subtree-last value
+    /// member, `last_value_alias_in_subtree`) → (the revoking parent's
+    /// module name, for diagnostics; the list of qualified member names to
+    /// remove from the `TypeEnv`/mark [`StaticEnv::hidden`]). Fires in phase
+    /// D, mirroring [`StaticEnv::ctor_hide_triggers`]'s deferred-trigger
+    /// shape, via `TypeEnv::without_all` (`typecheck.rs`).
+    pub(crate) member_revoke_triggers: HashMap<String, (String, Vec<String>)>,
+    /// Sub-slice 2d-3b §3.5: a struct's own `signature S = ..` bind hidden
+    /// by a parent seal that never declares `signature S`: qualified name
+    /// (`"M.S"`) → owning module path. Consulted by `resolve_sig_decls`'s
+    /// miss diagnostics for the precise "not exported by its signature"
+    /// wording (mirrors [`StaticEnv::hidden`]/[`StaticEnv::hidden_types`]).
+    pub(crate) hidden_sigs: HashMap<String, String>,
+    /// Sub-slice 2f-2b (spec §5.1): functor members constrained by an
+    /// enclosing seal — the functor's own qualified path (`"Map.Make"`) →
+    /// its DECLARED interface. Applications of this functor are checked
+    /// against `dom` and their results sealed with `cod[param := arg]`
+    /// (`module_check.rs`'s phase-A0 instantiation store). Owned (cloned
+    /// out of the `deps`-borrowed `cst_v1` tree at registration time) rather
+    /// than lifetime-tied, so `StaticEnv` itself stays a single, non-generic
+    /// type — the simpler of the spec's two implementation choices (§5.1
+    /// step 3's parenthetical).
+    pub(crate) sealed_functors: HashMap<String, SealedFunctorSig>,
+    /// Sub-slice 2f-2b §5.1 step 5: a struct functor an umbrella seal omits
+    /// — full functor path → owning module path. An application of a
+    /// hidden functor is a precise "not exported by its signature" error
+    /// (`check_functor_applications`), mirroring [`StaticEnv::hidden`].
+    pub(crate) hidden_functors: HashMap<String, String>,
+}
+
+/// One functor member's declared interface, registered by a `Decl::Module {
+/// Make : (Key : S_dom) -> S_cod }` sig member (Sub-slice 2f-2b spec §5.1).
+#[derive(Clone, Debug)]
+pub(crate) struct SealedFunctorSig {
+    /// The declared parameter's bare name (`"Key"`).
+    pub(crate) param: String,
+    /// The declared domain signature `S_dom` — identity-checked against the
+    /// implementation's own parameter signature at REGISTRATION time
+    /// (`module_check.rs::handle_functor_sig_member`); not re-read
+    /// afterward (every per-application domain check reuses the impl's own
+    /// `FunctorDef::param_sig`, guaranteed identical by that same check).
+    #[allow(dead_code)]
+    pub(crate) dom: ast_v1::SigExpr,
+    /// The declared codomain signature `S_cod` — substituted per application
+    /// (`subst_sig_expr(cod, param, arg_path)`, `v1/functor.rs`) before
+    /// being used to seal that application's result (§5.2).
+    pub(crate) cod: ast_v1::SigExpr,
+    /// Where names inside `dom`/`cod` resolve outward from (the sig
+    /// member's own enclosing module path, e.g. `["Map"]`).
+    pub(crate) def_site: Vec<String>,
+    /// The `Decl::Module`'s own keyword span (diagnostics).
+    pub(crate) span: Span,
 }
 
 /// Globally unique `#n` suffixes. `#` is not a lexable identifier char in

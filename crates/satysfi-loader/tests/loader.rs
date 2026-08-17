@@ -6,7 +6,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use satysfi_loader::{load, LoadError, LoadMode, LoadOptions, LoadedProgram, SatysfiVersion};
+use satysfi_loader::{
+    load, FileOrigin, LoadError, LoadMode, LoadOptions, LoadedProgram, SatysfiVersion,
+};
 
 struct TempDir(PathBuf);
 
@@ -434,25 +436,41 @@ fn envelopes_rejects_v006() {
 }
 
 #[test]
-fn envelopes_deps_flag_unsupported_names_ld3b() {
-    let dir = TempDir::new("env-deps");
+fn envelopes_deps_file_missing() {
+    let dir = TempDir::new("env-deps-missing");
     let entry = dir.write("doc.saty", "let x = 1 in x");
     let opts = LoadOptions {
         version: SatysfiVersion::V0_1,
         mode: LoadMode::Envelopes {
-            deps: Some(PathBuf::from("/some/satysfi-deps.yaml")),
+            deps: Some(dir.path().join("does-not-exist.yaml")),
         },
         ..Default::default()
     };
 
-    let err = load(&entry, &opts).expect_err("a deps config must be rejected in Ld3a");
+    let err = load(&entry, &opts).expect_err("a missing deps file must error");
+    assert!(
+        matches!(err, LoadError::DepsConfigNotFound { .. }),
+        "got {err:?}"
+    );
+}
 
-    match err {
-        LoadError::DepsConfigUnsupported { path } => {
-            assert_eq!(path, PathBuf::from("/some/satysfi-deps.yaml"));
-        }
-        other => panic!("expected LoadError::DepsConfigUnsupported, got {other:?}"),
-    }
+#[test]
+fn envelopes_deps_file_invalid() {
+    let dir = TempDir::new("env-deps-invalid");
+    let entry = dir.write("doc.saty", "let x = 1 in x");
+    // Missing the required `test_dependencies` key.
+    let deps = dir.write("satysfi-deps.yaml", "envelopes: []\ndependencies: []\n");
+    let opts = LoadOptions {
+        version: SatysfiVersion::V0_1,
+        mode: LoadMode::Envelopes { deps: Some(deps) },
+        ..Default::default()
+    };
+
+    let err = load(&entry, &opts).expect_err("an invalid deps file must error");
+    assert!(
+        matches!(err, LoadError::DepsConfigDecode { .. }),
+        "got {err:?}"
+    );
 }
 
 #[test]
@@ -495,4 +513,315 @@ fn envelopes_rejects_require_headers() {
 #[test]
 fn default_mode_is_legacy() {
     assert_eq!(LoadOptions::default().mode, LoadMode::Legacy);
+}
+
+// ---- Ld3b-2: the deps-config (`--deps`) resolution path -----------------
+
+/// Options with `deps: Some(path)`.
+fn envelopes_v01_with_deps(deps_path: PathBuf) -> LoadOptions {
+    LoadOptions {
+        version: SatysfiVersion::V0_1,
+        mode: LoadMode::Envelopes {
+            deps: Some(deps_path),
+        },
+        ..Default::default()
+    }
+}
+
+/// Write a `satysfi-envelope.yaml` (library) + its `src/*.satyh` files under
+/// `<root>/<pkg>/`, returning the absolute path to the envelope config file.
+fn write_library_envelope(dir: &TempDir, pkg: &str, main_module: &str, sources: &[(&str, &str)]) -> PathBuf {
+    let config = dir.write(
+        &format!("{pkg}/satysfi-envelope.yaml"),
+        &format!(
+            "library:\n  main_module: {main_module}\n  source_directories:\n  - ./src\n  test_directories: []\n"
+        ),
+    );
+    for (name, src) in sources {
+        dir.write(&format!("{pkg}/src/{name}"), src);
+    }
+    config
+}
+
+/// Render a `satysfi-deps.yaml` string. `envelopes` = `(name, abs_config_path,
+/// deps_names, test_only)`; `top_deps` = `(name, used_as)` for the document's
+/// own `dependencies`.
+fn deps_yaml(
+    envelopes: &[(&str, &Path, &[&str], bool)],
+    top_deps: &[(&str, &str)],
+) -> String {
+    let mut s = String::from("envelopes:\n");
+    for (name, path, deps, test_only) in envelopes {
+        s.push_str(&format!("- name: \"{name}\"\n"));
+        s.push_str(&format!("  path: \"{}\"\n", path.display()));
+        if deps.is_empty() {
+            s.push_str("  dependencies: []\n");
+        } else {
+            s.push_str("  dependencies:\n");
+            for d in *deps {
+                s.push_str(&format!("  - name: \"{d}\"\n    used_as: \"Dep\"\n"));
+            }
+        }
+        s.push_str(&format!("  test_only: {test_only}\n"));
+    }
+    if top_deps.is_empty() {
+        s.push_str("dependencies: []\n");
+    } else {
+        s.push_str("dependencies:\n");
+        for (name, used_as) in top_deps {
+            s.push_str(&format!("- name: \"{name}\"\n  used_as: \"{used_as}\"\n"));
+        }
+    }
+    s.push_str("test_dependencies: []\n");
+    s
+}
+
+#[test]
+fn envelopes_use_package_loads_envelope_modules() {
+    let dir = TempDir::new("env-usepkg-ok");
+    let config = write_library_envelope(
+        &dir,
+        "pkg",
+        "Foo",
+        &[("foo.satyh", "module Foo = struct\nval x = 1\nend")],
+    );
+    let deps = dir.write(
+        "satysfi-deps.yaml",
+        &deps_yaml(&[("pkg", &config, &[], false)], &[("pkg", "Foo")]),
+    );
+    let entry = dir.write("doc.saty", "use package Foo\nlet x = 1 in x");
+
+    let program = load(&entry, &envelopes_v01_with_deps(deps)).expect("use package load succeeds");
+
+    assert_eq!(file_names(&program), vec!["foo.satyh", "doc.saty"]);
+    assert_eq!(
+        program.files[0].origin,
+        FileOrigin::Envelope {
+            envelope: "pkg".to_string(),
+            module: "Foo".to_string(),
+        }
+    );
+    assert_eq!(program.files[1].origin, FileOrigin::Local);
+    assert!(program.files[1].cst.is_document(), "entry is the document");
+}
+
+#[test]
+fn envelopes_bare_use_orders_modules_within_envelope() {
+    let dir = TempDir::new("env-bareuse-order");
+    // C uses B, B uses A — file names deliberately NOT in dependency order.
+    let config = write_library_envelope(
+        &dir,
+        "pkg",
+        "A",
+        &[
+            ("z_c.satyh", "use B\nmodule C = struct\nval c = 1\nend"),
+            ("y_b.satyh", "use A\nmodule B = struct\nval b = 1\nend"),
+            ("x_a.satyh", "module A = struct\nval a = 1\nend"),
+        ],
+    );
+    let deps = dir.write(
+        "satysfi-deps.yaml",
+        &deps_yaml(&[("pkg", &config, &[], false)], &[("pkg", "A")]),
+    );
+    let entry = dir.write("doc.saty", "use package A\nlet x = 1 in x");
+
+    let program = load(&entry, &envelopes_v01_with_deps(deps)).expect("bare-use envelope loads");
+
+    let modules: Vec<String> = program.files[..3]
+        .iter()
+        .map(|f| match &f.origin {
+            FileOrigin::Envelope { module, .. } => module.clone(),
+            FileOrigin::Local => panic!("expected envelope origin"),
+        })
+        .collect();
+    assert_eq!(modules, vec!["A", "B", "C"], "closed dependency order");
+    assert_eq!(file_names(&program).last().unwrap(), "doc.saty");
+}
+
+#[test]
+fn envelopes_module_name_conflict_detected() {
+    let dir = TempDir::new("env-modconflict");
+    let config = write_library_envelope(
+        &dir,
+        "pkg",
+        "Foo",
+        &[
+            ("a.satyh", "module Foo = struct\nval x = 1\nend"),
+            ("b.satyh", "module Foo = struct\nval y = 2\nend"),
+        ],
+    );
+    let deps = dir.write(
+        "satysfi-deps.yaml",
+        &deps_yaml(&[("pkg", &config, &[], false)], &[("pkg", "Foo")]),
+    );
+    let entry = dir.write("doc.saty", "use package Foo\nlet x = 1 in x");
+
+    let err = load(&entry, &envelopes_v01_with_deps(deps)).expect_err("duplicate module errors");
+    assert!(
+        matches!(err, LoadError::FileModuleNameConflict { .. }),
+        "got {err:?}"
+    );
+}
+
+#[test]
+fn envelopes_bare_use_unknown_module() {
+    let dir = TempDir::new("env-unknownmod");
+    let config = write_library_envelope(
+        &dir,
+        "pkg",
+        "Foo",
+        &[("foo.satyh", "use Missing\nmodule Foo = struct\nval x = 1\nend")],
+    );
+    let deps = dir.write(
+        "satysfi-deps.yaml",
+        &deps_yaml(&[("pkg", &config, &[], false)], &[("pkg", "Foo")]),
+    );
+    let entry = dir.write("doc.saty", "use package Foo\nlet x = 1 in x");
+
+    let err = load(&entry, &envelopes_v01_with_deps(deps)).expect_err("unknown module errors");
+    match err {
+        LoadError::FileModuleNotFound { module, .. } => assert_eq!(module, "Missing"),
+        other => panic!("expected FileModuleNotFound, got {other:?}"),
+    }
+}
+
+#[test]
+fn envelopes_use_of_inside_package_rejected() {
+    let dir = TempDir::new("env-useof-inside");
+    let config = write_library_envelope(
+        &dir,
+        "pkg",
+        "Foo",
+        &[("foo.satyh", "use B of `./b`\nmodule Foo = struct\nval x = 1\nend")],
+    );
+    let deps = dir.write(
+        "satysfi-deps.yaml",
+        &deps_yaml(&[("pkg", &config, &[], false)], &[("pkg", "Foo")]),
+    );
+    let entry = dir.write("doc.saty", "use package Foo\nlet x = 1 in x");
+
+    let err = load(&entry, &envelopes_v01_with_deps(deps)).expect_err("use…of inside pkg errors");
+    assert!(
+        matches!(err, LoadError::UseOfInsidePackage { .. }),
+        "got {err:?}"
+    );
+}
+
+#[test]
+fn envelopes_envelope_graph_toposorted() {
+    let dir = TempDir::new("env-envtopo");
+    // Envelope B depends on A; listed B-first in the config → A files first.
+    let config_a = write_library_envelope(
+        &dir,
+        "pkg-a",
+        "A",
+        &[("a.satyh", "module A = struct\nval a = 1\nend")],
+    );
+    let config_b = write_library_envelope(
+        &dir,
+        "pkg-b",
+        "B",
+        &[("b.satyh", "module B = struct\nval b = 2\nend")],
+    );
+    let deps = dir.write(
+        "satysfi-deps.yaml",
+        &deps_yaml(
+            &[
+                ("envB", &config_b, &["envA"], false),
+                ("envA", &config_a, &[], false),
+            ],
+            &[("envA", "A")],
+        ),
+    );
+    let entry = dir.write("doc.saty", "use package A\nlet x = 1 in x");
+
+    let program = load(&entry, &envelopes_v01_with_deps(deps)).expect("envelope graph loads");
+    let names = file_names(&program);
+    let a_pos = names.iter().position(|n| n == "a.satyh").unwrap();
+    let b_pos = names.iter().position(|n| n == "b.satyh").unwrap();
+    assert!(a_pos < b_pos, "envelope A before B: {names:?}");
+}
+
+#[test]
+fn envelopes_use_package_unknown_alias() {
+    let dir = TempDir::new("env-unknownalias");
+    let config = write_library_envelope(
+        &dir,
+        "pkg",
+        "Foo",
+        &[("foo.satyh", "module Foo = struct\nval x = 1\nend")],
+    );
+    // The doc says `use package Bar`, but only `Foo` is an alias.
+    let deps = dir.write(
+        "satysfi-deps.yaml",
+        &deps_yaml(&[("pkg", &config, &[], false)], &[("pkg", "Foo")]),
+    );
+    let entry = dir.write("doc.saty", "use package Bar\nlet x = 1 in x");
+
+    let err = load(&entry, &envelopes_v01_with_deps(deps)).expect_err("unknown alias errors");
+    match err {
+        LoadError::UnknownPackageDependency { module, .. } => assert_eq!(module, "Bar"),
+        other => panic!("expected UnknownPackageDependency, got {other:?}"),
+    }
+}
+
+#[test]
+fn envelopes_test_only_envelope_skipped() {
+    let dir = TempDir::new("env-testonly");
+    let config = write_library_envelope(
+        &dir,
+        "pkg",
+        "Foo",
+        &[("foo.satyh", "module Foo = struct\nval x = 1\nend")],
+    );
+    // A test-only envelope whose config file DOES NOT EXIST — it must never be
+    // read (upstream skips before reading, closedEnvelopeDependencyResolver.ml
+    // :38-40).
+    let deps = dir.write(
+        "satysfi-deps.yaml",
+        &deps_yaml(
+            &[
+                ("pkg", &config, &[], false),
+                ("testpkg", Path::new("/nonexistent/satysfi-envelope.yaml"), &[], true),
+            ],
+            &[("pkg", "Foo")],
+        ),
+    );
+    let entry = dir.write("doc.saty", "use package Foo\nlet x = 1 in x");
+
+    let program =
+        load(&entry, &envelopes_v01_with_deps(deps)).expect("test-only envelope is skipped");
+    assert_eq!(file_names(&program), vec!["foo.satyh", "doc.saty"]);
+}
+
+#[test]
+fn envelopes_font_envelope_contributes_no_files() {
+    let dir = TempDir::new("env-font");
+    // A font envelope: no sources parsed, but it still occupies a vertex, and
+    // a library envelope depending on it loads fine.
+    let font_config = dir.write(
+        "font/satysfi-envelope.yaml",
+        "font:\n  main_module: FontFoo\n  files:\n  - path: ./foo.otf\n    opentype_single:\n      name: foo\n      math: false\n",
+    );
+    let lib_config = write_library_envelope(
+        &dir,
+        "pkg",
+        "Foo",
+        &[("foo.satyh", "module Foo = struct\nval x = 1\nend")],
+    );
+    let deps = dir.write(
+        "satysfi-deps.yaml",
+        &deps_yaml(
+            &[
+                ("font", &font_config, &[], false),
+                ("pkg", &lib_config, &["font"], false),
+            ],
+            &[("pkg", "Foo")],
+        ),
+    );
+    let entry = dir.write("doc.saty", "use package Foo\nlet x = 1 in x");
+
+    let program = load(&entry, &envelopes_v01_with_deps(deps)).expect("font envelope loads");
+    // Only the library file (+ entry) appear; the font contributes nothing.
+    assert_eq!(file_names(&program), vec!["foo.satyh", "doc.saty"]);
 }

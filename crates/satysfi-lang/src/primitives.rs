@@ -14,7 +14,7 @@
 use crate::ast::{BText, IText, MathElem};
 use crate::eval::{available_fields, eval_error, DecoEntry, EvalError, Interp};
 use crate::value::{DocumentValue, Env, TextInfo, Value};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use satysfi_backend::{
     break_into_lines, break_opportunities, chop_page, default_math_variant_char, fit_cell,
     graphics_bbox, linear_transform_graphics, linear_transform_path, measure_block,
@@ -715,6 +715,32 @@ pub fn base_env_with_version(version: SatysfiVersion) -> Env {
     env
 }
 
+/// Every builtin VALUE name that is version-forked — bound to a genuinely
+/// different primitive (or not bound at all) depending on `SatysfiVersion` —
+/// used by the cross-version-import forked-name guard (X1,
+/// `docs/plans/design-cross-version-import.md` §5): a 0.0.6 dependency
+/// spliced into a 0.1 program (`lib.rs`'s `compile_document_v1_with_trials`)
+/// is rejected if it references any of these unqualified, because the
+/// merged program's single `base_env_with_version(V0_1)` can only bind ONE
+/// closure per name (§3.2's R1) — a 0.0.6 body expecting `page-break`'s
+/// `page`-ADT arity would silently get the V0_1 arity instead.
+///
+/// Filters `PRIM_DEFS` for any row whose `version` is NOT `VersionSpan::Both`
+/// (a `V0_0_6Only`/`V0_1Only` row is exactly a name bound under one version
+/// and not the other, OR one half of a same-name v006/v01 PAIR — either way
+/// the name resolves differently, or not at all, across the boundary) plus
+/// `"here"`, the one V0_1-only bare constant that lives OUTSIDE `PRIM_DEFS`
+/// (defined directly above, `:712-714` — not a `prims!` row, so the
+/// `VersionSpan` filter above never sees it).
+pub fn forked_prim_names() -> BTreeSet<String> {
+    PRIM_DEFS
+        .iter()
+        .filter(|d| d.version != VersionSpan::Both)
+        .map(|d| d.name.to_string())
+        .chain(std::iter::once("here".to_string()))
+        .collect()
+}
+
 // ---- argument extractors ------------------------------------------------------
 
 fn as_context(v: Value) -> Result<Context, EvalError> {
@@ -1165,8 +1191,12 @@ pub fn read_inline(
                 })?;
                 let mut v = interp.apply(cmd, Value::Context(Box::new(ctx.clone())))?;
                 for arg in args {
-                    let arg_v = interp.eval_arg(env, arg)?;
-                    v = interp.apply(v, arg_v)?;
+                    let mut opt_vals = Vec::with_capacity(arg.opts.len());
+                    for (label, e) in &arg.opts {
+                        opt_vals.push((label.clone(), interp.eval_arg(env, e)?));
+                    }
+                    let arg_v = interp.eval_arg(env, &arg.arg)?;
+                    v = interp.apply_with_opts(v, opt_vals, arg_v)?;
                 }
                 out.extend(as_inline_boxes(v)?);
             }
@@ -1256,8 +1286,12 @@ pub fn read_block(
                 })?;
                 let mut v = interp.apply(cmd, Value::Context(Box::new(ctx.clone())))?;
                 for arg in args {
-                    let arg_v = interp.eval_arg(env, arg)?;
-                    v = interp.apply(v, arg_v)?;
+                    let mut opt_vals = Vec::with_capacity(arg.opts.len());
+                    for (label, e) in &arg.opts {
+                        opt_vals.push((label.clone(), interp.eval_arg(env, e)?));
+                    }
+                    let arg_v = interp.eval_arg(env, &arg.arg)?;
+                    v = interp.apply_with_opts(v, opt_vals, arg_v)?;
                 }
                 out.extend(as_block_boxes(v)?);
             }
@@ -4296,8 +4330,16 @@ fn reflect_math_elem(
             })?;
             let mut v = cmd;
             for arg in args {
-                let arg_v = interp.eval_arg(env, arg)?;
-                v = interp.apply(v, arg_v)?;
+                // `arg.opts` is always empty here — the math-mode application
+                // grammar has no `?(l=e)` bundle form (see `MathElem::Cmd`'s
+                // doc comment, `ast.rs`) — but fold through `apply_with_opts`
+                // uniformly with `read_inline`/`read_block` regardless.
+                let mut opt_vals = Vec::with_capacity(arg.opts.len());
+                for (label, e) in &arg.opts {
+                    opt_vals.push((label.clone(), interp.eval_arg(env, e)?));
+                }
+                let arg_v = interp.eval_arg(env, &arg.arg)?;
+                v = interp.apply_with_opts(v, opt_vals, arg_v)?;
             }
             let m = as_math(interp, v)?;
             out.extend(m.iter().cloned());
@@ -4523,8 +4565,15 @@ fn reflect_scripted_v01(
         })?;
         let mut v = cmd;
         for arg in args {
-            let arg_v = interp.eval_arg(env, arg)?;
-            v = interp.apply(v, arg_v)?;
+            // `arg.opts` is always empty here too (see the bare-`Cmd` arm
+            // above, `reflect_math_elem`) — folded through `apply_with_opts`
+            // uniformly regardless.
+            let mut opt_vals = Vec::with_capacity(arg.opts.len());
+            for (label, e) in &arg.opts {
+                opt_vals.push((label.clone(), interp.eval_arg(env, e)?));
+            }
+            let arg_v = interp.eval_arg(env, &arg.arg)?;
+            v = interp.apply_with_opts(v, opt_vals, arg_v)?;
         }
         v = interp.apply(v, Value::Context(Box::new(ctx.clone())))?;
         v = interp.apply(v, option_math_text_value(sub, env))?;

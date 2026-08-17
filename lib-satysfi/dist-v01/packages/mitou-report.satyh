@@ -1,0 +1,643 @@
+% mitou-report.satyh — SATySFi 0.1 `mitou-report` document class
+% `MitouReport`, vendored for Legacy packaging. Source:
+%   upstream-satysfi@b836d512:lib-satysfi/packages/mitou-report.satyh
+%   (470 lines) — UNLIKE every other document class this port has vendored
+%   so far (std-ja/std-ja-book/std-ja-report/md-ja), this file is NOT a
+%   0.1-dialect sibling sitting next to a `mitou-report.0.0.1/src/` envelope
+%   upstream — it lives directly under `packages/` in pre-envelope 0.0
+%   syntax, and its `@require: pervasives`/`gr`/`math`/`color` targets
+%   PRE-refactor flat module names that no longer exist ANYWHERE in the
+%   b836d512 tree (upstream's Aug 2024 stdlib refactor — `0390f623` "refine
+%   `Gr` into `Graphics`", `6f54d3ed` "break `Pervasives` into `Inline`,
+%   `Block`, `Arith`, and `Ref`", `794fb942` "separate `Basic` from
+%   `Pervasives`" — postdates mitou-report's last content edit, `68990bfd`
+%   "fix mitou-report numbering bug", 2024-02-26, by 6 months). So this is a
+%   genuine 0.0→0.1 CONVERSION (dialect + stdlib-API rebasing), not a
+%   transliteration of an already-0.1-shaped sibling. Conversion deltas:
+%   - SYNTAX (0.0 -> 0.1 dialect, matching every other vendored class's
+%     established shape — see `std-ja-book.satyh`'s banner for the same
+%     list applied there):
+%     * `module MitouReport : sig … end = struct … end` (0.0 non-sealing
+%       ascription) -> `module MitouReport :> sig … end = struct … end`
+%       (0.1 sealed ascription).
+%     * `direct \cmd : [ty?; ty; ty] inline-cmd` / `[…] block-cmd` sig rows
+%       -> `val \cmd : inline […]` / `val +cmd : block […]`; an optional
+%       arg's trailing `ty?` in the 0.0 bracket list becomes a LEADING named
+%       `?(label : ty)` row before the mandatory (now comma-, not
+%       semicolon-, separated) types.
+%     * The row-polymorphic `document : 'a -> block-text -> document
+%       constraint 'a :: (| project : inline-text; … |)` (0.0's ad-hoc
+%       "accepts any record with at least these fields" idiom — no 0.1
+%       vendored class in this tree uses `constraint` at all) -> a plain
+%       concrete record argument type `(| project : inline-text, year :
+%       int, creators : list inline-text, manager : inline-text, jouzai-
+%       number : int |)`, exactly `md-ja.satyh`'s/`std-ja.satyh`'s idiom
+%       (`creators`'s element list is written PREFIX, `list inline-text`,
+%       not 0.0.6's postfix `inline-text list` — 0.1's canonical/only
+%       parametric-type-application order everywhere in this tree,
+%       `list.satyg`'s/`proof.satyh`'s/`md-ja.satyh`'s own `list 'a`/`list
+%       math-text`/`list block-text` sig rows; the postfix spelling
+%       type-mismatches against it). Same accepted field set, same
+%       semantics (mitou-report's `document` never relied on extra
+%       unlisted fields — the record literal at every call site names
+%       exactly these 5 fields), just no longer artificially
+%       open-ended.
+%     * Struct-body member keywords: `let` -> `val`; `let-mutable X <- v`
+%       (top-level struct member) -> `val mutable X <- v`; `let-mutable X
+%       <- v in …` (nested in an expression) -> `let mutable X <- v in …`;
+%       `let-rec` (top-level struct member) -> `val rec`; `let-inline ctx
+%       \cmd … = …` -> `val inline ctx \cmd … = …`; `let-block ctx +cmd … =
+%       …` -> `val block ctx +cmd … = …`. A command's `?:name` (0.0
+%       positional-optional binder) -> `?(label = name)` (0.1 named-row
+%       binder), matching the sig's `?(label : string)`.
+%     * `match … with | … end` now requires the closing `end` keyword (0.0
+%       let it dangle before the enclosing `in`/`)`); every `match` in this
+%       file gained one.
+%     * Record literals/types: field separator `;` -> `,` throughout (both
+%       the sig's row types and every `(| … |)` value literal in `document`
+%       — `text-origin`/`text-height`/`header-origin`/…).
+%     * List literal `[a; b; c]` -> `[a, b, c]` (`cst_v1.rs`'s
+%       `Atomic::List`/`Atomic::Record` doc comment: both are now `,`-
+%       separated, `optterm_list(COMMA, …)`, not 0.0.6's `;`-separated
+%       forms) — the two `NormalCell` row literals in `+make-title`'s
+%       tabular-table construction.
+%     * `fun (pn, bb) -> …` (tuple-destructuring) / `fun pbinfo _ -> …`
+%       (wildcard) lambda parameters: NO REWRITE NEEDED — `cst_v1.rs`'s
+%       `Expr::Fun.params` was widened from `Vec<VarTok>` to `Vec<PatBot>`
+%       (the "gaps 2+3" V0_1 language-completeness sweep, already landed at
+%       this worktree's HEAD) specifically to accept exactly this upstream
+%       shape; verified end to end by
+%       `crates/satysfi-lang/tests/v01_lang_completeness.rs`.
+%   - STDLIB API (0.0's flat/ambient names -> 0.1's modularized names, the
+%     genuinely NEW category of delta this file needs that no sibling class
+%     needed, since mitou-report predates the refactor that produced the
+%     modules below):
+%     * `command \math` -> `command \Math.math` (`@require: math` added;
+%       `\math` moved from ambient into `module Math :> sig … end`,
+%       `math.satyh:57`).
+%     * `get-natural-width ib` -> `Inline.get-natural-advance ib`
+%       (`@require: inline` added; this is a straight RENAME, not a new
+%       function — `inline.satyh`'s `get-natural-advance` is defined
+%       exactly as old `get-natural-width` was, `let (wid, _, _) =
+%       get-natural-metrics ib in wid` — see `inline.satyh:87`). Same
+%       signature, same call sites (`make-dots-line`'s dot-leader-width
+%       measurement), identical to the delta `std-ja-book.satyh`'s own
+%       `make-dots-line` already documents/exercises.
+%     * `form-paragraph` -> `Block.form-paragraph` (`@require: block`
+%       added; moved from ambient `Pervasives` into `module Block :> sig …
+%       end`, `block.satyh:24`), used by `+p`/`+pn`.
+%     * `List.fold-left` -> `List.fold`; `List.fold-left-adjacent` ->
+%       `List.fold-adjacent` (`@require: list`; the Aug-2024 `List`
+%       refinement, `923a0356`, renamed both — same signatures, same
+%       argument order, straight renames). `List.reverse` is unchanged.
+%     * `\figure`'s local `block-frame-breakable` deco callback `d (_, _)
+%       _ _ _ = []` (upstream's 0.0-era `deco = point -> length -> length
+%       -> length -> graphics list` shape) -> `d (_, _) _ _ _ = Graphics
+%       .empty` (`@require: graphics`; this is NOT a stdlib-API rename
+%       like the three above — it is a genuine 0.1 RETYPE upstream itself
+%       made, `deco.satyh`'s own banner: "both members already return a
+%       SINGLE `graphics` value (the v0.1 `deco = point -> length ->
+%       length -> length -> graphics` shape, L5b/G3's H3-H6 retype)". An
+%       empty-list return no longer type-checks against the retyped
+%       `deco`; `Graphics.empty` is the drop-in 0.1 replacement,
+%       byte-identical in effect (still "draw nothing") to `deco.satyh`'s
+%       own `val empty _ _ _ _ = Graphics.empty`. The SAME per-version
+%       callback-result fork also applies to `tabular`'s ruling callback
+%       (`prim_types.rs`'s `t_graphics_output(version)`, "R2 same per-
+%       version callback-result fork as `inline-graphics`") — `+make-
+%       title`'s `tabular tbl (fun _ _ -> [])` -> `tabular tbl (fun _ _ ->
+%       Graphics.empty)`, same fix, same reason.
+%     * `let page = A4Paper in` -> `let page = PaperSize.a4 in`
+%       (`@require: paper-size`): 0.1 has no `page` ADT at all —
+%       `A4Paper`/etc. are simply GONE (`paper-size.satyh`'s own banner:
+%       "0.1 has no `page` ADT (A4Paper is gone; L7), so a \"paper size\"
+%       is just this tuple, consumed directly by `page-break (w, h) …`"
+%       — a `length * length` pair) — `page-break`'s first argument is
+%       now that tuple directly. `typecheck.rs`'s own comment confirms
+%       this is deliberate, faithful behavior: "a `V0_1` program that
+%       writes `A4Paper` gets the SAME \"unbound constructor\" error
+%       upstream's own 0.1 compiler would give it … the ADT is genuinely
+%       gone, not merely discouraged."
+%   - Everything else mitou-report calls (`set-font`, `set-text-color`,
+%     `get-text-color`, `get-text-width`, `get-font-size`, `line-break`,
+%     `read-inline`, `read-block`, `get-initial-context`, `set-font-size`,
+%     `set-leading`, `set-dominant-wide-script`/`-narrow-script`,
+%     `set-language`, `set-hyphen-penalty`, `set-paragraph-margin`,
+%     `get-cross-reference`, `register-cross-reference`, `embed-string`,
+%     `arabic`, `round`, `hook-page-break`, `embed-block-top`,
+%     `block-frame-breakable`, `block-skip`, `clear-page`, `page-break`,
+%     `tabular`/`NormalCell`/`EmptyCell`, `inline-fil`/`-skip`/`-nil`,
+%     `block-nil`, `CMYK`, `Kana`/`HanIdeographic`/`Latin`/
+%     `Japanese`/`English`) is a GLOBAL primitive/ctor resolved through
+%     `base_env` regardless of `@require:` — the established "bare
+%     primitive" story every other vendored class's banner documents (see
+%     `std-ja-book.satyh`'s banner for the same catalogue). `tabular` in
+%     particular is NOT the `tabular`/`table`/`tabularx` PACKAGE (this file
+%     needs none of those, nor `bnf`/`cd`/`picture`/`progsynt`/`standalone`
+%     — a prior scouting pass's flag that mitou depends on those 0.0-only
+%     packages does not hold for the actual `mitou-report.satyh`/`mitou-
+%     detail.satyh` source: neither file references any of them, by direct
+%     grep of every module-qualified identifier in both files) — it is the
+%     kernel `tabular : cell list list -> (int -> int -> deco) -> inline-
+%     boxes` VM primitive (`primitives.rs`'s `prim_tabular`), always
+%     ambient.
+%   - DROPPED: upstream's trailing top-level `let document = MitouReport
+%     .document % ad-hoc` (a bare re-export OUTSIDE the module, upstream's
+%     own single-file pre-package-system convenience, already marked
+%     "ad-hoc" in its own comment). No 0.1 vendored package file in this
+%     tree has a binding outside its one `module … :> sig … end = struct …
+%     end` — the established shape is exactly one module per file, consumed
+%     qualified (`MitouReport.document`, matching `StdJaReport.document`'s
+%     calling convention in its own fixture `.saty`). Not a behavior change
+%     for any qualified caller; only an unqualified top-level `document`
+%     alias is no longer offered by this file.
+%   - PRESERVED VERBATIM (upstream quirks, not bugs to fix — this port's
+%     "no bug fixes" transliteration discipline, e.g. `list.satyg`'s own
+%     `find` comment): `section-heading`'s `wid`/`color` locals are bound
+%     but never used in the returned expression (dead bindings, harmless).
+%   - Companion file `mitou-detail.satyh` (this same package's sibling
+%     upstream class, `MitouDetail`) carries an analogous, independently
+%     documented set of deltas in its own banner, plus one MORE upstream
+%     quirk: its sig declares `+section-no-number` but the struct instead
+%     ALSO defines an unexported, never-declared `+subsectin-no-number`
+%     (missing an "o" — not `+subsection-no-number`) — a dead, harmless
+%     upstream typo, preserved as-is (it simply never appears in the sig,
+%     so it is not part of `MitouDetail`'s public interface).
+
+@require: list
+@require: inline
+@require: block
+@require: math
+@require: graphics
+@require: paper-size
+
+module MitouReport :> sig
+
+  val document :
+    (|
+      project       : inline-text,
+      year          : int,
+      creators      : list inline-text,
+      manager       : inline-text,
+      jouzai-number : int,
+    |) -> block-text -> document
+
+  val font-latin-roman  : string * float * float
+  val font-latin-italic : string * float * float
+  val font-latin-sans   : string * float * float
+  val font-latin-mono   : string * float * float
+  val font-cjk-mincho   : string * float * float
+  val font-cjk-gothic   : string * float * float
+  val set-latin-font : (string * float * float) -> context -> context
+  val set-cjk-font   : (string * float * float) -> context -> context
+  val \ref : inline [string]
+  val \ref-page : inline [string]
+  val \figure : inline [?(label : string) inline-text, block-text]
+  val +p : block [inline-text]
+  val +pn : block [inline-text]
+  val +section : block [?(label : string) inline-text, block-text]
+  val +subsection : block [?(label : string) inline-text, block-text]
+  val \emph : inline [inline-text]
+
+end = struct
+
+  type toc-element =
+    | TOCElementSection    of string * inline-text
+    | TOCElementSubsection of string * inline-text
+
+
+  val generate-fresh-label =
+    let mutable count <- 0 in
+      (fun () -> (
+        let () = count <- !count + 1 in
+          `generated:` ^ (arabic (!count))
+      ))
+
+
+  val inline ctx \ref key =
+    let opt = get-cross-reference (key ^ `:num`) in
+    let it =
+      match opt with
+      | None    -> {?}
+      | Some(s) -> embed-string s
+      end
+    in
+      read-inline ctx it
+
+
+  val inline ctx \ref-page key =
+    let opt = get-cross-reference (key ^ `:page`) in
+    let it =
+      match opt with
+      | None    -> {?}
+      | Some(s) -> embed-string s
+      end
+    in
+      read-inline ctx it
+
+
+  val font-size-normal  = 12pt
+  val font-size-title   = 32pt
+  val font-size-author  = 16pt
+  val font-size-section = 18pt
+  val font-size-subsection = 16pt
+
+  val section-top-margin = 12pt
+  val section-bottom-margin = 12pt
+  val subsection-top-margin = 10pt
+  val subsection-bottom-margin = 10pt
+
+  val font-ratio-latin = 1.
+  val font-ratio-cjk = 0.88
+
+%  val font-latin-roman  = (`ArnoPro`   , font-ratio-latin, 0.)
+%  val font-latin-italic = (`ArnoPro-it`, font-ratio-latin, 0.)
+  val font-latin-roman  = (`Junicode`   , font-ratio-latin, 0.)
+  val font-latin-italic = (`Junicode-it`, font-ratio-latin, 0.)
+  val font-latin-sans   = (`lmsans`    , font-ratio-latin, 0.)
+  val font-latin-mono   = (`lmmono`    , font-ratio-latin, 0.)
+  val font-cjk-mincho   = (`ipaexm`    , font-ratio-cjk  , 0.)
+  val font-cjk-gothic   = (`ipaexg`    , font-ratio-cjk  , 0.)
+
+
+  val set-latin-font font ctx =
+    ctx |> set-font Latin font
+
+
+  val set-cjk-font font ctx =
+    ctx |> set-font HanIdeographic font
+        |> set-font Kana           font
+
+
+  val get-standard-context wid =
+    get-initial-context wid (command \Math.math)
+      |> set-font-size 12.5pt
+      |> set-leading 20pt
+      |> set-dominant-wide-script Kana
+      |> set-language Kana Japanese
+      |> set-language HanIdeographic Japanese
+      |> set-dominant-narrow-script Latin
+      |> set-language Latin English
+      |> set-font Kana           font-cjk-mincho
+      |> set-font HanIdeographic font-cjk-mincho
+      |> set-font Latin          font-latin-roman
+      |> set-math-font `lmodern`
+      |> set-hyphen-penalty 100
+
+
+  val mutable ref-float-boxes <- []
+
+
+  val height-of-float-boxes pageno =
+%    let () = display-message `get height` in
+    (!ref-float-boxes) |> List.fold (fun h (pn, bb) -> (
+      if pn < pageno then h +' (get-natural-length bb) else h
+    )) 0pt
+
+
+  val mutable ref-figure <- 0
+
+
+  val inline ctx \figure ?(label = labelopt) caption inner =
+    let () = ref-figure <- !ref-figure + 1 in
+    let s-num = arabic (!ref-figure) in
+    let () =
+      match labelopt with
+      | Some(label) -> register-cross-reference (label ^ `:num`) s-num
+      | None        -> ()
+      end
+    in
+    let it-num = embed-string s-num in
+    let bb-inner =
+      let d (_, _) _ _ _ = Graphics.empty in
+      block-frame-breakable ctx (2pt, 2pt, 2pt, 2pt) (d, d, d, d) (fun ctx -> (
+        read-block ctx inner
+          +++ line-break true true ctx (inline-fil ++ read-inline ctx {図#it-num; #caption;} ++ inline-fil)
+      ))
+    in
+      hook-page-break (fun pbinfo _ -> (
+%        let () = display-message (`register` ^ (arabic pbinfo#page-number)) in
+        ref-float-boxes <- (pbinfo#page-number, bb-inner) :: !ref-float-boxes
+      ))
+
+
+  val single-line ctx =
+    line-break false false ctx
+
+
+  val single-centering-line ctx ib =
+    single-line ctx (inline-fil ++ ib ++ inline-fil)
+
+
+  val block ctx +make-title year project creatorlst pm =
+    let bb-upper =
+      let it-year = embed-string (arabic year) in
+      let ctx-upper = ctx |> set-font-size 20pt in
+      let bb1 = single-centering-line ctx-upper (read-inline ctx-upper {#it-year;年度未踏IT人材・育成事業}) in
+      let bb2 = single-centering-line ctx-upper (read-inline ctx-upper project) in
+      let bb3 = single-centering-line ctx-upper (read-inline ctx-upper {成果報告書}) in
+        bb1 +++ bb2 +++ bb3
+    in
+    let ctx-lower = ctx |> set-font-size 18pt in
+    let bb-lower =
+      let pads = (0pt, 0pt, 4pt, 4pt) in
+      let text-cell it = NormalCell(pads, read-inline ctx-lower it) in
+      let acc =
+        creatorlst |> List.fold-adjacent (fun acc creator prevopt _ -> (
+          let (cell1, cell2) =
+            match prevopt with
+            | None    -> (text-cell {クリエータ}, text-cell {：})
+            | Some(_) -> (EmptyCell, EmptyCell)
+            end
+          in
+          [ cell1, cell2, text-cell creator ] :: acc
+        )) []
+      in
+      let tbl = ([ text-cell {担当PM}, text-cell {：}, text-cell pm ] :: acc) |> List.reverse in
+        single-centering-line ctx-lower (tabular tbl (fun _ _ -> Graphics.empty))
+    in
+    let bb-date =
+      let it-next-year = embed-string (arabic (year + 1)) in
+        single-centering-line ctx-lower (read-inline ctx-lower {#it-next-year;年2月28日})
+    in
+      block-skip 100pt +++ bb-upper +++ block-skip 100pt +++ bb-lower +++ block-skip 100pt +++ bb-date
+
+
+  val make-section-title ctx =
+    ctx |> set-font-size font-size-section
+        |> set-font Latin font-latin-sans
+        |> set-cjk-font font-cjk-gothic
+
+
+  val make-subsection-title ctx =
+    ctx |> set-font-size font-size-subsection
+        |> set-font Latin font-latin-sans
+        |> set-cjk-font font-cjk-gothic
+
+
+  val mutable toc-acc-ref <- []
+
+
+  val get-cross-reference-number label =
+    match get-cross-reference (label ^ `:num`) with
+    | None    -> `?`
+    | Some(s) -> s
+    end
+
+
+  val get-cross-reference-page label =
+    match get-cross-reference (label ^ `:page`) with
+    | None    -> `?`
+    | Some(s) -> s
+    end
+
+
+  val section-heading ctx ib-heading =
+    let wid = get-text-width ctx in
+    let color = get-text-color ctx in
+      line-break true false (ctx |> set-paragraph-margin section-top-margin section-bottom-margin)
+        ib-heading
+
+
+  val rec repeat-inline n ib =
+    if n <= 0 then inline-nil else
+      ib ++ (repeat-inline (n - 1) ib)
+
+
+  val make-dots-line ctx w =
+    let ib = read-inline ctx {.} ++ inline-skip 1pt in
+    let wdot = Inline.get-natural-advance ib in
+    let n = round (w /' wdot) in
+      inline-fil ++ (repeat-inline n ib)
+
+
+  val mutable no-page-number-max-ref <- None
+
+
+  val document record inner =
+    % -- constants --
+    let project = record#project in
+    let year = record#year in
+    let creatorlst = record#creators in
+    let pm = record#manager in
+    let page = PaperSize.a4 in
+    let txtorg = (100pt, 100pt) in
+    let txtwid = 390pt in
+    let txthgt = 630pt in
+    let hdrorg = (40pt, 40pt) in
+    let ftrorg = (40pt, 780pt) in
+    let hdrwid = 520pt in
+    let ftrwid = 520pt in
+    let thickness = 0.5pt in
+
+    let ctx-doc = get-standard-context txtwid in
+
+    % -- title --
+    let bb-title =
+      read-block ctx-doc '<+make-title(year)(project)(creatorlst)(pm);> +++ clear-page
+    in
+
+    % -- main --
+    let bb-main = read-block ctx-doc inner in
+
+    % -- table of contents --
+    let toc-subsection-indent = 20pt in
+    let bb-toc =
+      let ib-toc-title =
+        inline-fil ++ read-inline (make-section-title ctx-doc) {目次} ++ inline-fil
+      in
+      let bb-toc-main =
+        (!toc-acc-ref) |> List.reverse |> List.fold (fun bbacc tocelem -> (
+          match tocelem with
+          | TOCElementSection(label, title) ->
+              let it-num = embed-string (get-cross-reference-number label) in
+              let it-page = embed-string (get-cross-reference-page label) in
+              let ib-title = read-inline ctx-doc {#it-num;. #title;} ++ inline-skip 3pt in
+              let ib-page = inline-skip 3pt ++ read-inline ctx-doc it-page in
+              let ib-middle =
+                let w = (get-text-width ctx-doc) -' (Inline.get-natural-advance ib-title) -' (Inline.get-natural-advance ib-page) in
+                  if w <' 0pt then inline-fil else
+                    make-dots-line ctx-doc w
+              in
+                bbacc +++ line-break true true ctx-doc
+                  (ib-title ++ ib-middle ++ ib-page)
+
+          | TOCElementSubsection(label, title) ->
+              let it-num = embed-string (get-cross-reference-number label) in
+              let it-page = embed-string (get-cross-reference-page label) in
+              let ib-title =
+                inline-skip toc-subsection-indent
+                  ++ read-inline ctx-doc {#it-num;. #title;}
+                    ++ inline-skip 3pt
+              in
+              let ib-page = inline-skip 3pt ++ read-inline ctx-doc it-page in
+              let ib-middle =
+                let w = (get-text-width ctx-doc) -' (Inline.get-natural-advance ib-title) -' (Inline.get-natural-advance ib-page) in
+                  if w <' 0pt then inline-fil else
+                    make-dots-line ctx-doc w
+              in
+              let ib-hook =
+                hook-page-break (fun pbinfo _ -> (no-page-number-max-ref <- Some(pbinfo#page-number)))
+              in
+                bbacc +++ line-break true true ctx-doc
+                  (ib-title ++ ib-middle ++ ib-page ++ ib-hook)
+          end
+
+        )) block-nil
+      in
+        (section-heading ctx-doc ib-toc-title) +++ bb-toc-main +++ clear-page
+    in
+
+    % -- page settings --
+    let pagecontf pbinfo =
+      let hgtfb = height-of-float-boxes pbinfo#page-number in
+      let (txtorgx, txtorgy) = txtorg in
+      (|
+        text-origin = (txtorgx, txtorgy +' hgtfb),
+        text-height = txthgt -' hgtfb,
+      |)
+    in
+    let pagepartsf pbinfo =
+      let pageno = pbinfo#page-number in
+      let header =
+        let ctx =
+          get-standard-context hdrwid
+            |> set-paragraph-margin 0pt 0pt
+        in
+        if pageno == 1 then
+          let it-jouzai-number = embed-string (arabic record#jouzai-number) in
+          let it-year = embed-string (arabic year) in
+            line-break false false ctx (inline-fil ++ read-inline ctx {#it-year;情財第#it-jouzai-number;号})
+        else
+  %       let () = display-message `insert` in
+          let (bb-float-boxes, acc) =
+            (!ref-float-boxes) |> List.fold (fun (bbacc, acc) elem -> (
+              let (pn, bb) = elem in
+                if pn < pageno then
+                  let bbs =
+                    line-break true true (ctx |> set-paragraph-margin 0pt 12pt)
+                      (inline-fil ++ embed-block-top ctx txtwid (fun _ -> bb) ++ inline-fil)
+                        % 'ctx' is a dummy context
+                  in
+                    (bbacc +++ bbs, acc)
+                else
+                  (bbacc, elem :: acc)
+            )) (block-nil, [])
+          in
+          let () = ref-float-boxes <- acc in
+          bb-float-boxes
+      in
+      let footer =
+        match !no-page-number-max-ref with
+        | None ->
+            block-nil
+
+        | Some(nopagenomax) ->
+          if pageno <= nopagenomax then block-nil else
+            let ctx = get-standard-context ftrwid in
+            let it-pageno = embed-string (arabic (pageno - nopagenomax)) in
+              line-break true true ctx
+                (inline-fil ++ (read-inline ctx {— #it-pageno; —}) ++ inline-fil)
+        end
+      in
+        (|
+          header-origin  = hdrorg,
+          header-content = header,
+          footer-origin  = ftrorg,
+          footer-content = footer,
+        |)
+    in
+      page-break page pagecontf pagepartsf (bb-title +++ bb-toc +++ bb-main)
+
+
+  val mutable num-section <- 0
+  val mutable num-subsection <- 0
+
+
+  val quad-indent ctx =
+    inline-skip (get-font-size ctx *' font-ratio-cjk)
+
+
+  val block ctx +p inner =
+    let ib-inner = read-inline ctx inner in
+      Block.form-paragraph ctx (quad-indent ctx ++ ib-inner ++ inline-fil)
+
+
+  val block ctx +pn inner =
+    let ib-inner = read-inline ctx inner in
+      Block.form-paragraph ctx (ib-inner ++ inline-fil)
+
+
+  val page-number-string pbinfo =
+    match !no-page-number-max-ref with
+    | None              -> ` `
+    | Some(nopagenomax) -> arabic (pbinfo#page-number - nopagenomax)
+    end
+
+
+  val section-scheme ctx label title inner =
+    let ctx-title = make-section-title ctx in
+    let () = num-section <- !num-section + 1 in
+    let () = num-subsection <- 0 in
+    let s-num = arabic (!num-section) in
+    let () = register-cross-reference (label ^ `:num`) s-num in
+    let () = toc-acc-ref <- (TOCElementSection(label, title)) :: !toc-acc-ref in
+    let ib-num =
+      read-inline ctx-title (embed-string (s-num ^ `.`))
+        ++ hook-page-break (fun pbinfo _ ->
+          register-cross-reference (label ^ `:page`) (page-number-string pbinfo))
+    in
+    let ib-title = read-inline ctx-title title in
+    let bb-title = section-heading ctx (ib-num ++ (inline-skip 10pt) ++ ib-title ++ (inline-fil)) in
+    let bb-inner = read-block ctx inner in
+      bb-title +++ bb-inner
+
+
+  val subsection-scheme ctx label title inner =
+    let () = num-subsection <- !num-subsection + 1 in
+    let s-num = arabic (!num-section) ^ `.` ^ arabic (!num-subsection) in
+    let () = register-cross-reference (label ^ `:num`) s-num in
+    let () = toc-acc-ref <- (TOCElementSubsection(label, title)) :: !toc-acc-ref in
+    let ctx-title = make-subsection-title ctx in
+    let ib-num =
+      read-inline ctx-title (embed-string (s-num ^ `.`))
+        ++ hook-page-break (fun pbinfo _ -> register-cross-reference (label ^ `:page`) (page-number-string pbinfo))
+    in
+    let ib-title = read-inline ctx-title title in
+    let bb-title =
+      line-break true false (ctx |> set-paragraph-margin subsection-top-margin subsection-bottom-margin)
+        (ib-num ++ (inline-skip 10pt) ++ ib-title ++ (inline-fil))
+    in
+    let bb-inner = read-block ctx inner in
+      bb-title +++ bb-inner
+
+
+  val block ctx +section ?(label = labelopt) title inner =
+    let label =
+      match labelopt with
+      | None        -> generate-fresh-label ()
+      | Some(label) -> label
+      end
+    in
+      section-scheme ctx label title inner
+
+
+  val block ctx +subsection ?(label = labelopt) title inner =
+    let label =
+      match labelopt with
+      | None        -> generate-fresh-label ()
+      | Some(label) -> label
+      end
+    in
+      subsection-scheme ctx label title inner
+
+
+  val inline ctx \emph inner =
+    let ctx-emph =
+      ctx |> set-font Latin font-latin-italic
+          |> set-cjk-font font-cjk-gothic
+          |> set-text-color (CMYK(1., 0., 0., 0.))
+    in
+      read-inline ctx-emph inner
+
+end

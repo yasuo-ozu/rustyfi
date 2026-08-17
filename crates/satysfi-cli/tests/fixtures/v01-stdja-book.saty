@@ -1,0 +1,34 @@
+% Wave-4 batch A capstone: the real upstream SATySFi 0.1 `std-ja-book`
+% document class (dist-v01/packages/std-ja-book.satyh — a near-clone
+% sibling of the already-proven std-ja capstone, plus a footnote
+% facility), driving the FULL pipeline: V0_1 lex -> cst_v1 parse -> loader
+% (`@require:` transitive resolution across annot/math/code/footnote-
+% scheme/hyph-english/unidata/the 4 font stand-ins/the stdlib leaf
+% packages) -> v1 lowering -> shared elaborate/typecheck(V0_1)/sealing ->
+% eval -> line break -> page break -> PDF. Latin-only, math-free,
+% show-toc left at its `false` default and \figure never called (both
+% would pull in CJK glyphs — `目次`/`図` literals baked into the class
+% itself — that the single-DejaVu-face G7 font stand-in cannot render),
+% exactly mirroring `v01-stdja.saty`'s own Latin-only-body discipline.
+@require: std-ja-book
+
+StdJaBook.document (|
+  title  = {SATySFi in Rust: The Book Capstone},
+  author = {The Vendoring Agents},
+|) '<
+  +StdJaBook.p {
+    This is a real upstream SATySFi 0.1 document class, std-ja-book,
+    rendered end to end through the Rust port.
+  }
+  +StdJaBook.section{Introduction}<
+    +StdJaBook.p {
+      This section proves that the book class's title-page deco and
+      section rules compile and render through the real pipeline.
+    }
+  >
+  +StdJaBook.section{Conclusion}<
+    +StdJaBook.p {
+      The quick brown fox jumps over the lazy dog.\StdJaBook.footnote{A trailing footnote, proving FootnoteScheme.main renders through page-break.}
+    }
+  >
+>

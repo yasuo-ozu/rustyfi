@@ -1,0 +1,18 @@
+Copied verbatim from the vendored upstream checkout
+(/home/yasuo/ghq/github.com/gfngfn/SATySFi), commit
+saphe-split @ b836d512689248d18970674021ecaca409e0d897 (per the Ld3b spec's
+pin, /home/yasuo/.claude/jobs/a7244c0b/tmp/axis-b-ld3b.md §0):
+
+  annot.satysfi-envelope.yaml            <- lib-satysfi/packages/annot/annot.0.0.1/satysfi-envelope.yaml.expected
+  md-ja.satysfi-envelope.yaml            <- lib-satysfi/packages/md-ja/md-ja.0.0.1/satysfi-envelope.yaml.expected
+  font-latin-modern.satysfi-envelope.yaml <- lib-satysfi/packages/font-latin-modern/font-latin-modern.0.0.1/satysfi-envelope.yaml.expected
+
+The other 16 upstream `satysfi-envelope.yaml.expected` files (code,
+font-ipa-ex, font-junicode, font-latin-modern-math, footnote-scheme,
+hyph-english, itemize, math, proof, std-ja, std-ja-book, std-ja-report,
+stdlib, tabular, testing, unidata) are NOT copied here; they are exercised
+by the env-gated sweep test in `envelope.rs`
+(`envelope_sweep_all_19_upstream_fixtures_decode`), which reads them
+directly out of the vendored checkout via `git show` when
+`SATYSFI_UPSTREAM_GIT` is set, so the full 19-file format gate exists
+without duplicating the whole `lib-satysfi/packages` tree into this repo.

@@ -371,6 +371,29 @@ impl TypeNameEnv {
         }
         TypeNameEnv(map)
     }
+
+    /// Sub-slice 2d-3b (`…/tmp/slice2d3b-2f2-sigmembers.md` §3.3): the
+    /// [`Self::child`] twin for a synthetic seal over an
+    /// `ImplView::Surface` (an alias/coerce/application-result body, or a
+    /// `Decl::Module` member recursed via a target's own already-computed
+    /// [`ModSurface`]) — no real `cst_v1::Bind`s are available to scan (the
+    /// target's own types live elsewhere in the tree, or came from an
+    /// OWNED, substituted functor-codomain instantiation), but the target's
+    /// OWN type NAMES are already known (`ModSurface::types`) and qualify
+    /// EXACTLY like a real `Bind::Type` at this path would
+    /// (`qualify_type_key(mod_path, name)` — the formula is name-only, not
+    /// mechanism-dependent). Does not thread `include`s (an alias/app
+    /// result's own type surface is already flattened by
+    /// [`crate::v1::surface::build_binds`]'s own include-splicing, so no
+    /// further include-awareness is needed here).
+    pub(crate) fn child_from_names(&self, mod_path: &[String], names: impl Iterator<Item = String>) -> Self {
+        let mut map = self.0.clone();
+        for n in names {
+            let q = qualify_type_key(mod_path, &n);
+            map.insert(n, q);
+        }
+        TypeNameEnv(map)
+    }
 }
 
 /// Lower one dependency library (`module Name = struct binds end`) to a
@@ -1636,20 +1659,13 @@ fn lower_value_math(
     eq: &DefEqTok,
     body: &ast_v1::Expr,
 ) -> Result<cst::TopBinding, LowerError> {
-    // Reject a `?(l = x, …)` bundle on a `val math` parameter BEFORE it ever
-    // reaches `lower_command_params` (which — optional-arg-rows increment
-    // 3a — freely accepts one for `ValueInline`/`ValueBlock`): math command
-    // parameter bundles (`val math ctx \derive ?(name = …) …`) are optional-
-    // arg-rows increment 3b (needs `math_command_scheme_v01`'s own row
-    // harvest, not yet wired — `typecheck.rs`'s doc comment on that fn).
-    if let Some(p) = params.iter().find(|p| p.opts.is_some()) {
-        return Err(unsupported(
-            "a `?(l = e)` labeled optional on a `val math` command parameter",
-            "math command parameter bundles need `math_command_scheme_v01`'s \
-             own optional-label harvest — roadmap increment 3b",
-            p.opts.as_ref().unwrap().q.0,
-        ));
-    }
+    // A `?(l = x, …)` bundle on a `val math` parameter (`val math ctx \derive
+    // ?(name = …) …`) is optional-arg-rows increment 3b-α: `lower_command_params`
+    // (shared with `ValueInline`/`ValueBlock` since increment 3a) already
+    // accepts it freely, `curry_cmd_params_v1` already emits `Ast::LambdaOpt`
+    // for it (elaborate.rs), and `math_command_scheme_v01` (typecheck.rs) now
+    // harvests the resulting `Row` into the command's closed label map, same
+    // as `command_scheme`'s V0_1 branch. No rejection needed here.
     let body = lower_expr(body)?;
     let span = eq.0;
     let (sub_name, sup_name, wrapped_body) = match scripts {
@@ -2067,7 +2083,11 @@ fn lower_block_elem(e: &ast_v1::BlockElem) -> Result<cst::ast::BlockElem, LowerE
 fn lower_cmd_tail(t: &ast_v1::CmdTail) -> Result<cst::ast::CmdTail, LowerError> {
     match t {
         ast_v1::CmdTail::Semi(s) => Ok(cst::ast::CmdTail::Semi(s.clone())),
-        ast_v1::CmdTail::Args { args, semi } => {
+        ast_v1::CmdTail::Args {
+            lead_opts,
+            args,
+            semi,
+        } => {
             let ast_v1::Expr::Ops(chain) = &*args.0 else {
                 return Err(unsupported(
                     "command arguments that are not a plain application chain",
@@ -2085,10 +2105,24 @@ fn lower_cmd_tail(t: &ast_v1::CmdTail) -> Result<cst::ast::CmdTail, LowerError> 
                 ));
             }
             let a = &chain.head;
-            let first = cst::AppArgErased(Box::new(cst::ast::AppArg::Atom {
-                excl: a.excl.clone(),
-                atom: lower_atomic(&a.head)?,
-                accesses: a.head_accesses.iter().map(lower_access_seg).collect(),
+            // optional-arg-rows increment 3b-β: a LEADING `?(l = e, …)` bundle
+            // (peeled off in the grammar because the app-chain head can't be
+            // `?`-headed — see `cst_v1::CmdTail`) re-attaches to the first
+            // argument here, producing a `cst::ast::AppArg::Bundled` exactly
+            // as an inc1 mid-chain bundle would. An empty `?()` is a
+            // `LowerError` via `lower_opt_args`.
+            let first = cst::AppArgErased(Box::new(match lead_opts {
+                Some(opts) => cst::ast::AppArg::Bundled {
+                    opts: lower_opt_args(opts)?,
+                    excl: a.excl.clone(),
+                    atom: lower_atomic(&a.head)?,
+                    accesses: a.head_accesses.iter().map(lower_access_seg).collect(),
+                },
+                None => cst::ast::AppArg::Atom {
+                    excl: a.excl.clone(),
+                    atom: lower_atomic(&a.head)?,
+                    accesses: a.head_accesses.iter().map(lower_access_seg).collect(),
+                },
             }));
             let rest = a
                 .args

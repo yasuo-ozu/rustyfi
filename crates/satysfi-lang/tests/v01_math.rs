@@ -48,6 +48,8 @@ fn v01_mini_file() -> LoadedFile {
         cst: LoadedCst::V0_1(
             satysfi_syntax::parse_file_v1(&src).unwrap_or_else(|e| panic!("v01-mini.satyh: {e}")),
         ),
+        origin: Default::default(),
+        version: SatysfiVersion::V0_1,
     }
 }
 
@@ -59,6 +61,8 @@ fn entry_file_from_disk(rel: &str) -> LoadedFile {
         cst: LoadedCst::V0_1(
             satysfi_syntax::parse_file_v1(&src).unwrap_or_else(|e| panic!("{rel}: {e}")),
         ),
+        origin: Default::default(),
+        version: SatysfiVersion::V0_1,
     }
 }
 
@@ -70,6 +74,8 @@ fn entry_file_inline(src: &str) -> LoadedFile {
         cst: LoadedCst::V0_1(
             satysfi_syntax::parse_file_v1(src).unwrap_or_else(|e| panic!("inline entry: {e}")),
         ),
+        origin: Default::default(),
+        version: SatysfiVersion::V0_1,
     }
 }
 
@@ -83,6 +89,8 @@ fn lib_file_inline(name: &str, src: &str) -> LoadedFile {
         cst: LoadedCst::V0_1(
             satysfi_syntax::parse_file_v1(src).unwrap_or_else(|e| panic!("inline lib {name}: {e}")),
         ),
+        origin: Default::default(),
+        version: SatysfiVersion::V0_1,
     }
 }
 

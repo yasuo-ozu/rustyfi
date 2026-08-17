@@ -20,6 +20,8 @@ use satysfi_loader::LoadedProgram;
 use satysfi_syntax::SatysfiVersion;
 use sha2::{Digest, Sha256};
 
+use crate::format::OutputFormat;
+
 /// A resolved, ready-to-use cache directory. Obtain one with [`Cache::open`];
 /// a `None` there means caching is disabled (either `--no-cache`, or the
 /// directory could not be created) and the caller compiles uncached.
@@ -90,9 +92,12 @@ impl Cache {
 /// uncached rather than risk a wrong key).
 ///
 /// The SHA-256 stream is domain-separated and covers exactly what determines
-/// the rendered PDF:
+/// the rendered output:
 ///
-/// 1. a format tag — bump `v1` to invalidate every entry on a layout change;
+/// 1. a format tag — bumped to `v2` (from `v1`) by the HTML output backend's
+///    Slice 1 (`docs/plans/design-html-output.md` §CLI surface, "Cache key"),
+///    which also folds in field 7 below; bump again to invalidate every
+///    entry on a further layout/cache-shape change;
 /// 2. the compiler version (`CARGO_PKG_VERSION`), so an upgrade re-renders;
 /// 3. the target language version;
 /// 4. the entry file's basename — defensive: cheap, and future-proofs against
@@ -114,6 +119,11 @@ impl Cache {
 ///    paths, so an in-place font-file edit (same path, new content) also
 ///    invalidates, matching this function's "only content matters" stance
 ///    for the resolved input files above.
+/// 7. (HTML output backend, Slice 1) `format.cache_tag()` — without this, a
+///    `--format pdf` compile and a `--format html` compile of the identical
+///    document/version/font would collide on the same key, so a hit from one
+///    format would write the OTHER format's bytes to the requested output
+///    (wrong extension, unparseable content).
 ///
 /// The loader does not retain raw file bytes, so each file is re-read from its
 /// canonical path here. Length-prefixing makes the concatenation unambiguous
@@ -125,6 +135,7 @@ pub fn compute_key(
     target: SatysfiVersion,
     entry: &Path,
     font_store: Option<&satysfi_pdf::TtfFontStore>,
+    format: OutputFormat,
 ) -> Option<String> {
     hash_inputs(
         program.files.iter().map(|f| f.path.as_path()),
@@ -132,6 +143,7 @@ pub fn compute_key(
         target,
         entry,
         font_store,
+        format,
     )
 }
 
@@ -144,9 +156,10 @@ fn hash_inputs<'a>(
     target: SatysfiVersion,
     entry: &Path,
     font_store: Option<&satysfi_pdf::TtfFontStore>,
+    format: OutputFormat,
 ) -> Option<String> {
     let mut h = Sha256::new();
-    h.update(b"satysfi-rust-compile-cache\x00v1\x00");
+    h.update(b"satysfi-rust-compile-cache\x00v2\x00");
     h.update(compiler_version.as_bytes());
     h.update(b"\x00");
     h.update(target.to_string().as_bytes());
@@ -175,6 +188,8 @@ fn hash_inputs<'a>(
         }
         None => h.update(b"\x00"),
     }
+    h.update(b"\x00format\x00");
+    h.update(format.cache_tag().as_bytes());
     Some(hex(&h.finalize()))
 }
 
@@ -259,8 +274,8 @@ mod tests {
         let dir = scratch();
         let a = dir.join("a.saty");
         std::fs::write(&a, b"@require: foo\ndocument (||) '<>\n").unwrap();
-        let k1 = hash_inputs([a.as_path()].into_iter(), "0.1.0", SatysfiVersion::DEFAULT, &a, None).unwrap();
-        let k2 = hash_inputs([a.as_path()].into_iter(), "0.1.0", SatysfiVersion::DEFAULT, &a, None).unwrap();
+        let k1 = hash_inputs([a.as_path()].into_iter(), "0.1.0", SatysfiVersion::DEFAULT, &a, None, OutputFormat::Pdf).unwrap();
+        let k2 = hash_inputs([a.as_path()].into_iter(), "0.1.0", SatysfiVersion::DEFAULT, &a, None, OutputFormat::Pdf).unwrap();
         assert_eq!(k1, k2, "same inputs must hash identically");
         assert_eq!(k1.len(), 64, "sha-256 hex is 64 chars");
         std::fs::remove_dir_all(&dir).ok();
@@ -271,9 +286,9 @@ mod tests {
         let dir = scratch();
         let a = dir.join("a.saty");
         std::fs::write(&a, b"document (||) '<>\n").unwrap();
-        let before = hash_inputs([a.as_path()].into_iter(), "0.1.0", SatysfiVersion::DEFAULT, &a, None).unwrap();
+        let before = hash_inputs([a.as_path()].into_iter(), "0.1.0", SatysfiVersion::DEFAULT, &a, None, OutputFormat::Pdf).unwrap();
         std::fs::write(&a, b"document (||) '< >\n").unwrap();
-        let after = hash_inputs([a.as_path()].into_iter(), "0.1.0", SatysfiVersion::DEFAULT, &a, None).unwrap();
+        let after = hash_inputs([a.as_path()].into_iter(), "0.1.0", SatysfiVersion::DEFAULT, &a, None, OutputFormat::Pdf).unwrap();
         assert_ne!(before, after, "a one-byte edit must change the key");
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -283,8 +298,8 @@ mod tests {
         let dir = scratch();
         let a = dir.join("a.saty");
         std::fs::write(&a, b"document (||) '<>\n").unwrap();
-        let v1 = hash_inputs([a.as_path()].into_iter(), "0.1.0", SatysfiVersion::DEFAULT, &a, None).unwrap();
-        let v2 = hash_inputs([a.as_path()].into_iter(), "0.2.0", SatysfiVersion::DEFAULT, &a, None).unwrap();
+        let v1 = hash_inputs([a.as_path()].into_iter(), "0.1.0", SatysfiVersion::DEFAULT, &a, None, OutputFormat::Pdf).unwrap();
+        let v2 = hash_inputs([a.as_path()].into_iter(), "0.2.0", SatysfiVersion::DEFAULT, &a, None, OutputFormat::Pdf).unwrap();
         assert_ne!(v1, v2, "a compiler-version bump must invalidate the key");
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -296,13 +311,14 @@ mod tests {
         let b = dir.join("b.satyh");
         std::fs::write(&a, b"document (||) '<>\n").unwrap();
         std::fs::write(&b, b"let x = 1\n").unwrap();
-        let one = hash_inputs([a.as_path()].into_iter(), "0.1.0", SatysfiVersion::DEFAULT, &a, None).unwrap();
+        let one = hash_inputs([a.as_path()].into_iter(), "0.1.0", SatysfiVersion::DEFAULT, &a, None, OutputFormat::Pdf).unwrap();
         let two = hash_inputs(
             [b.as_path(), a.as_path()].into_iter(),
             "0.1.0",
             SatysfiVersion::DEFAULT,
             &a,
             None,
+            OutputFormat::Pdf,
         )
         .unwrap();
         assert_ne!(one, two, "adding a resolved dependency must change the key");
@@ -329,7 +345,7 @@ mod tests {
         let store = satysfi_pdf::TtfFontStore::load(&font_path, None, None).expect("load font");
 
         let without_font =
-            hash_inputs([a.as_path()].into_iter(), "0.1.0", SatysfiVersion::DEFAULT, &a, None)
+            hash_inputs([a.as_path()].into_iter(), "0.1.0", SatysfiVersion::DEFAULT, &a, None, OutputFormat::Pdf)
                 .unwrap();
         let with_font = hash_inputs(
             [a.as_path()].into_iter(),
@@ -337,12 +353,30 @@ mod tests {
             SatysfiVersion::DEFAULT,
             &a,
             Some(&store),
+            OutputFormat::Pdf,
         )
         .unwrap();
         assert_ne!(
             without_font, with_font,
             "configuring a font must change the cache key vs. the base-14 path"
         );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// HTML output backend, Slice 1 (docs/plans/design-html-output.md §CLI
+    /// surface, "Cache key"): a PDF compile and an HTML compile of the exact
+    /// same document/version/font must hash to DIFFERENT keys — otherwise a
+    /// `--format html` run could hit a key a prior `--format pdf` run
+    /// populated (or vice versa) and write the wrong-format bytes to the
+    /// requested output.
+    #[test]
+    fn key_changes_with_output_format() {
+        let dir = scratch();
+        let a = dir.join("a.saty");
+        std::fs::write(&a, b"document (||) '<>\n").unwrap();
+        let pdf = hash_inputs([a.as_path()].into_iter(), "0.1.0", SatysfiVersion::DEFAULT, &a, None, OutputFormat::Pdf).unwrap();
+        let html = hash_inputs([a.as_path()].into_iter(), "0.1.0", SatysfiVersion::DEFAULT, &a, None, OutputFormat::Html).unwrap();
+        assert_ne!(pdf, html, "--format pdf and --format html must hash to different keys");
         std::fs::remove_dir_all(&dir).ok();
     }
 

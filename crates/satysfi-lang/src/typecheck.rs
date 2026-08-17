@@ -19,7 +19,7 @@
 //! rejecting them would regress fixtures and tests this milestone still
 //! needs to pass untyped.
 
-use crate::ast::{Ast, BText, IText, MathElem, Pattern};
+use crate::ast::{Ast, BText, CmdArg, IText, MathElem, Pattern};
 use crate::elaborate::{Program, UserSynonymDecl, UserTypeDecl};
 pub use crate::exhaustive::MatchWarning;
 use crate::prim_types::{
@@ -540,6 +540,197 @@ fn name_to_mono(name: &str, version: SatysfiVersion) -> MonoType {
         "paren" if version == SatysfiVersion::V0_1 => t_paren(version),
         other => MonoType::Variant(other.to_string(), Vec::new()),
     }
+}
+
+// ============================================================================
+// X1 forked-name guard (design-cross-version-import.md §5): builtin TYPE
+// names that resolve differently — or not at all — between `V0_0_6` and
+// `V0_1`. Companion to `primitives::forked_prim_names` (VALUE names, driven
+// off the `VersionSpan`-tagged `PRIM_DEFS` table); builtin TYPE forks have no
+// such table — they live as inline version guards in
+// `primitive_type_with_version` (`prim_types.rs`) and `name_to_mono` (just
+// above) — so `forked_type_names` derives the set by literally diffing their
+// output per name, rather than filtering a table.
+// ============================================================================
+
+/// Structural (alpha-equivalence) comparison of two [`MonoType`]s, used by
+/// [`forked_type_names`]'s diff below. Plain `MonoType`/`PolyType` derive no
+/// `PartialEq` (this slice's hard constraint keeps `types.rs`/`unify.rs`
+/// untouched — `design-cross-version-import.md`'s task brief), and even if
+/// they did, a naive field compare would be WRONG here: every polymorphic
+/// primitive's scheme mints brand-new [`TyVarRef`](crate::types::TyVarRef)s
+/// from a process-wide counter (`types.rs`'s `FRESH_ID`) on each call, so two
+/// calls to the very SAME (unforked) primitive under two DIFFERENT versions
+/// already carry different fresh-variable identities and would falsely
+/// "differ" under any identity-sensitive comparison. This instead walks both
+/// types in lockstep, building a positional bijection between the two sides'
+/// variables (keyed by `ptr_key()`, `types.rs`'s own union-find identity) —
+/// two types are equal iff they have the same shape up to a CONSISTENT
+/// renaming of variables, exactly "the same type" should mean here.
+fn mono_type_alpha_eq(a: &MonoType, b: &MonoType) -> bool {
+    let mut vmap = HashMap::new();
+    let mut vmap_rev = HashMap::new();
+    let mut rmap = HashMap::new();
+    let mut rmap_rev = HashMap::new();
+    mono_alpha_eq(a, b, &mut vmap, &mut vmap_rev, &mut rmap, &mut rmap_rev)
+}
+
+fn mono_alpha_eq(
+    a: &MonoType,
+    b: &MonoType,
+    vmap: &mut HashMap<usize, usize>,
+    vmap_rev: &mut HashMap<usize, usize>,
+    rmap: &mut HashMap<usize, usize>,
+    rmap_rev: &mut HashMap<usize, usize>,
+) -> bool {
+    match (resolve(a), resolve(b)) {
+        (MonoType::Var(va), MonoType::Var(vb)) => {
+            bijective_pair(va.ptr_key(), vb.ptr_key(), vmap, vmap_rev)
+        }
+        (MonoType::Base(ba), MonoType::Base(bb)) => ba == bb,
+        (MonoType::Func(ra, da, ca), MonoType::Func(rb, db, cb)) => {
+            row_alpha_eq(&ra, &rb, vmap, vmap_rev, rmap, rmap_rev)
+                && mono_alpha_eq(&da, &db, vmap, vmap_rev, rmap, rmap_rev)
+                && mono_alpha_eq(&ca, &cb, vmap, vmap_rev, rmap, rmap_rev)
+        }
+        (MonoType::Product(ta), MonoType::Product(tb)) => {
+            ta.len() == tb.len()
+                && ta
+                    .iter()
+                    .zip(tb.iter())
+                    .all(|(x, y)| mono_alpha_eq(x, y, vmap, vmap_rev, rmap, rmap_rev))
+        }
+        (MonoType::List(ta), MonoType::List(tb)) | (MonoType::Ref(ta), MonoType::Ref(tb)) => {
+            mono_alpha_eq(&ta, &tb, vmap, vmap_rev, rmap, rmap_rev)
+        }
+        (MonoType::Record(ra), MonoType::Record(rb)) => {
+            row_alpha_eq(&ra, &rb, vmap, vmap_rev, rmap, rmap_rev)
+        }
+        (MonoType::Variant(na, aa), MonoType::Variant(nb, ab)) => {
+            na == nb
+                && aa.len() == ab.len()
+                && aa
+                    .iter()
+                    .zip(ab.iter())
+                    .all(|(x, y)| mono_alpha_eq(x, y, vmap, vmap_rev, rmap, rmap_rev))
+        }
+        (MonoType::InlineCmd(ca), MonoType::InlineCmd(cb))
+        | (MonoType::BlockCmd(ca), MonoType::BlockCmd(cb))
+        | (MonoType::MathCmd(ca), MonoType::MathCmd(cb)) => {
+            cmd_args_alpha_eq(&ca, &cb, vmap, vmap_rev, rmap, rmap_rev)
+        }
+        _ => false,
+    }
+}
+
+fn row_alpha_eq(
+    a: &Row,
+    b: &Row,
+    vmap: &mut HashMap<usize, usize>,
+    vmap_rev: &mut HashMap<usize, usize>,
+    rmap: &mut HashMap<usize, usize>,
+    rmap_rev: &mut HashMap<usize, usize>,
+) -> bool {
+    match (resolve_row(a), resolve_row(b)) {
+        (Row::Empty, Row::Empty) => true,
+        (Row::Var(va), Row::Var(vb)) => {
+            bijective_pair(va.ptr_key(), vb.ptr_key(), rmap, rmap_rev)
+        }
+        (Row::Cons(la, ta, ra), Row::Cons(lb, tb, rb)) => {
+            la == lb
+                && mono_alpha_eq(&ta, &tb, vmap, vmap_rev, rmap, rmap_rev)
+                && row_alpha_eq(&ra, &rb, vmap, vmap_rev, rmap, rmap_rev)
+        }
+        _ => false,
+    }
+}
+
+fn cmd_args_alpha_eq(
+    a: &[CmdArgType],
+    b: &[CmdArgType],
+    vmap: &mut HashMap<usize, usize>,
+    vmap_rev: &mut HashMap<usize, usize>,
+    rmap: &mut HashMap<usize, usize>,
+    rmap_rev: &mut HashMap<usize, usize>,
+) -> bool {
+    a.len() == b.len()
+        && a.iter().zip(b.iter()).all(|(ca, cb)| {
+            ca.optional == cb.optional
+                && ca.opt_labels.len() == cb.opt_labels.len()
+                && ca
+                    .opt_labels
+                    .iter()
+                    .zip(cb.opt_labels.iter())
+                    .all(|((la, tya), (lb, tyb))| {
+                        la == lb && mono_alpha_eq(tya, tyb, vmap, vmap_rev, rmap, rmap_rev)
+                    })
+                && mono_alpha_eq(&ca.ty, &cb.ty, vmap, vmap_rev, rmap, rmap_rev)
+        })
+}
+
+/// Record (or check) that pointer-key `ka` (side A) and `kb` (side B)
+/// correspond under the bijection being built; `false` if either side is
+/// already mapped to something else (a genuine structural mismatch).
+fn bijective_pair(
+    ka: usize,
+    kb: usize,
+    map: &mut HashMap<usize, usize>,
+    map_rev: &mut HashMap<usize, usize>,
+) -> bool {
+    match (map.get(&ka).copied(), map_rev.get(&kb).copied()) {
+        (Some(mapped_b), Some(mapped_a)) => mapped_b == kb && mapped_a == ka,
+        (None, None) => {
+            map.insert(ka, kb);
+            map_rev.insert(kb, ka);
+            true
+        }
+        _ => false,
+    }
+}
+
+/// Every builtin TYPE name whose shape (`primitive_type_with_version`'s
+/// scheme, when it names a PRIMITIVE, and/or `name_to_mono`'s `MonoType`,
+/// when it names a builtin TYPE) differs between `V0_0_6` and `V0_1` — the
+/// type-position companion to `primitives::forked_prim_names`, used by the
+/// same X1 forked-name guard (`lib.rs`'s `compile_document_v1_with_trials`).
+/// Checked names: every value-primitive name (`PRIMITIVE_NAMES` — some of
+/// these, e.g. `page-break`, are ALSO version-forked as values, so appearing
+/// in both sets is harmless and expected), plus the builtin TYPE names
+/// `name_to_mono` version-gates explicitly (`math`/`math-text`/`math-boxes`,
+/// and the V0_1-only graphics/paren tier).
+pub fn forked_type_names() -> BTreeSet<String> {
+    PRIMITIVE_NAMES
+        .iter()
+        .copied()
+        .chain([
+            "math",
+            "math-text",
+            "math-boxes",
+            "pre-path",
+            "path",
+            "graphics",
+            "image",
+            "deco",
+            "deco-set",
+            "font",
+            "paren",
+        ])
+        .filter(|&n| {
+            let pt_a = prim_types::primitive_type_with_version(n, SatysfiVersion::V0_0_6);
+            let pt_b = prim_types::primitive_type_with_version(n, SatysfiVersion::V0_1);
+            let pt_diff = match (&pt_a, &pt_b) {
+                (None, None) => false,
+                (Some(a), Some(b)) => !mono_type_alpha_eq(a.body(), b.body()),
+                _ => true,
+            };
+            let nm_diff = !mono_type_alpha_eq(
+                &name_to_mono(n, SatysfiVersion::V0_0_6),
+                &name_to_mono(n, SatysfiVersion::V0_1),
+            );
+            pt_diff || nm_diff
+        })
+        .map(str::to_string)
+        .collect()
 }
 
 fn lower_type_atom(
@@ -1519,25 +1710,7 @@ impl Checker {
             )?;
             slots
                 .into_iter()
-                .map(|(row, dom)| {
-                    let mut opt_labels: Vec<(String, MonoType)> = Vec::new();
-                    let mut cur = resolve_row(&row);
-                    loop {
-                        match cur {
-                            Row::Empty => break,
-                            // An under-constrained (free) row var defaults to
-                            // no labels — the common case for a positional
-                            // slot with no `?(…)` bundle at all.
-                            Row::Var(_) => break,
-                            Row::Cons(label, lty, rest) => {
-                                opt_labels.push((label, *lty));
-                                cur = resolve_row(&rest);
-                            }
-                        }
-                    }
-                    opt_labels.sort_by(|a, b| a.0.cmp(&b.0));
-                    labeled(opt_labels, dom)
-                })
+                .map(|(row, dom)| harvest_slot(row, dom))
                 .collect()
         } else {
             let (mut doms, result) = peel_func_chain(tv);
@@ -1634,17 +1807,29 @@ impl Checker {
     /// domains; the LAST three are peeled off as `(d_ctx, d_sub, d_sup)`
     /// (`context`, `option math-text`, `option math-text`), the bare result
     /// must be `math-boxes`, and the REMAINING leading domains become the
-    /// command's ordinary `CmdArgType` params — same shape/heuristic as
-    /// `math_command_scheme`, just with the ctx/sub/sup trio peeled off the
-    /// tail first.
+    /// command's ordinary `CmdArgType` params.
+    ///
+    /// optional-arg-rows increment 3b-α: like `command_scheme`'s V0_1 branch,
+    /// a leading user parameter may be a `?(l = x, …)` bundle
+    /// (`curry_cmd_params_v1` already emits `Ast::LambdaOpt` for it — no
+    /// elaborate edit needed), so this uses the row-carrying
+    /// `peel_func_chain_rows` + `harvest_slot` (shared with
+    /// `command_scheme`) instead of the plain `peel_func_chain` + `_ option`
+    /// heuristic. The synthesized ctx/sub/sup trailing trio can never
+    /// legally carry a bundle (`lower_value_math` always wraps them in plain
+    /// `fun`s, which infer `Row::Empty`) — guarded defensively, mirroring
+    /// `command_scheme`'s ctx-row guard (spec risk: an off-by-one here would
+    /// silently turn `sub`/`sup` into a labeled slot or eat the last user
+    /// param, since the trio is at the TAIL of the domain chain — opposite
+    /// of inline/block, where ctx is FIRST).
     fn math_command_scheme_v01(
         &mut self,
         name: &str,
         tv: MonoType,
         span: Option<Span>,
     ) -> Result<PolyType, TypeError> {
-        let (mut doms, result) = peel_func_chain(tv);
-        if doms.len() < 3 {
+        let (mut slots, result) = peel_func_chain_rows(tv);
+        if slots.len() < 3 {
             return Err(TypeError::simple(
                 span,
                 format!(
@@ -1654,9 +1839,20 @@ impl Checker {
                 ),
             ));
         }
-        let d_sup = doms.pop().unwrap();
-        let d_sub = doms.pop().unwrap();
-        let d_ctx = doms.pop().unwrap();
+        let (row_sup, d_sup) = slots.pop().unwrap();
+        let (row_sub, d_sub) = slots.pop().unwrap();
+        let (row_ctx, d_ctx) = slots.pop().unwrap();
+        for (which, row) in [("context", &row_ctx), ("'sub'", &row_sub), ("'sup'", &row_sup)] {
+            if !matches!(resolve_row(row), Row::Empty) {
+                return Err(TypeError::simple(
+                    span,
+                    format!(
+                        "the {which} argument of 'val math' command '{name}' cannot \
+                         carry a labeled optional bundle"
+                    ),
+                ));
+            }
+        }
         self.unify_ctx(
             &t_context(),
             &d_ctx,
@@ -1684,36 +1880,44 @@ impl Checker {
                  usually via `read-math`"
             ),
         )?;
-        let params: Vec<CmdArgType> = doms
+        let params: Vec<CmdArgType> = slots
             .into_iter()
-            .map(|d| match resolve(&d) {
-                MonoType::Variant(vname, mut vargs) if vname == "option" && vargs.len() == 1 => {
-                    optional(vargs.pop().unwrap())
-                }
-                _ => mandatory(d),
-            })
+            .map(|(row, dom)| harvest_slot(row, dom))
             .collect();
         Ok(generalize(self.ctx.level(), &MonoType::MathCmd(params)))
     }
 
-    /// Shared by `check_itext`'s `IText::Cmd` and `check_btext`'s
-    /// `BText::Cmd`: check a command application's argument count (exact —
-    /// every optional param either carries an explicit `?:`/`?*` marker at
-    /// the call site, or is `None`-padded by elaboration when the call
-    /// leaves a leading optional slot unmarked entirely — see
-    /// `elaborate.rs`'s `cmd_args`/`leading_optional_count` — so its slot
-    /// is never actually *absent* from `args`) and each argument's type against `params`
-    /// (already resolved to a concrete `MonoType::InlineCmd`/`BlockCmd`'s
-    /// payload by the caller). An `optional` param's `args[i]` is always a
-    /// `Some(..)`/`None` value (`app_arg_to_ast`'s desugaring), so it's
-    /// checked against `option(param.ty)`, not `param.ty` directly.
+    /// Shared by `check_itext`'s `IText::Cmd`, `check_btext`'s `BText::Cmd`,
+    /// and `check_math_elem`'s `MathElem::Cmd`: check a command application's
+    /// argument count (exact — every optional param either carries an
+    /// explicit `?:`/`?*` marker at the call site, or is `None`-padded by
+    /// elaboration when the call leaves a leading optional slot unmarked
+    /// entirely — see `elaborate.rs`'s `cmd_args`/`leading_optional_count` —
+    /// so its slot is never actually *absent* from `args`) and each
+    /// argument's type against `params` (already resolved to a concrete
+    /// `MonoType::InlineCmd`/`BlockCmd`/`MathCmd`'s payload by the caller).
+    /// An `optional` param's `args[i].arg` is always a `Some(..)`/`None`
+    /// value (`app_arg_to_ast`'s desugaring), so it's checked against
+    /// `option(param.ty)`, not `param.ty` directly.
+    ///
+    /// optional-arg-rows increment 3b-β: each `args[i]` additionally carries
+    /// a (possibly empty) supplied `?(l = e, …)` bundle
+    /// (`args[i].opts`) — every label must be declared in that slot's own
+    /// closed `param.opt_labels` map (upstream `LabelMap.mergeM`'s
+    /// supplied∧¬declared case, `UnexpectedOptionalLabel`,
+    /// `typechecker.ml:900-901`); found ⇒ unify the supplied value against
+    /// the declared label type; a declared label this call omits simply
+    /// defaults to `None` at runtime (`apply_with_opts`) — nothing to check
+    /// here for it. `opts` is `[]` for every 0.0.6-reachable call and for
+    /// increment 3a's unbundled calls, so this loop is a no-op there
+    /// (frozen-corpus byte-identical).
     fn check_cmd_args(
         &mut self,
         env: &TypeEnv,
         name: &str,
         span: Span,
         params: &[CmdArgType],
-        args: &[Ast],
+        args: &[CmdArg],
     ) -> Result<(), TypeError> {
         if params.len() != args.len() {
             return Err(TypeError::simple(
@@ -1727,7 +1931,30 @@ impl Checker {
             ));
         }
         for (i, (param, arg)) in params.iter().zip(args.iter()).enumerate() {
-            let targ = self.infer(env, arg)?;
+            for (label, val) in &arg.opts {
+                match param.opt_labels.iter().find(|(l, _)| l == label) {
+                    Some((_, lty)) => {
+                        let tval = self.infer(env, val)?;
+                        self.unify_ctx(
+                            lty,
+                            &tval,
+                            ast_span(val).or(Some(span)),
+                            &format!("optional argument `{label}` of '{name}'"),
+                        )?;
+                    }
+                    None => {
+                        return Err(TypeError::simple(
+                            ast_span(val).or(Some(span)),
+                            format!(
+                                "command '{name}' has no optional label `{label}` \
+                                 on argument {}",
+                                i + 1
+                            ),
+                        ));
+                    }
+                }
+            }
+            let targ = self.infer(env, &arg.arg)?;
             let expected = if param.optional {
                 t_option(param.ty.clone())
             } else {
@@ -1736,7 +1963,7 @@ impl Checker {
             self.unify_ctx(
                 &expected,
                 &targ,
-                ast_span(arg).or(Some(span)),
+                ast_span(&arg.arg).or(Some(span)),
                 &format!("argument {} of '{name}'", i + 1),
             )?;
         }
@@ -2655,6 +2882,34 @@ fn peel_func_chain_rows(ty: MonoType) -> (Vec<(Row, MonoType)>, MonoType) {
             other => return (slots, other),
         }
     }
+}
+
+/// Turn one V0_1 command parameter's [`Row`] (the row `Ast::LambdaOpt`'s
+/// inference leaves on the `Func` arrow whose *domain* is that parameter —
+/// see [`peel_func_chain_rows`]) into a closed-label-map [`CmdArgType`]: walk
+/// the (resolved) row's `Cons` chain into a `Vec<(String, MonoType)>`, sorted
+/// by label so `unify_cmd_args`'s equal-domain zip is order-insensitive
+/// (optional-arg-rows increment 3a spec, risk 3). A leftover `Row::Var` (an
+/// under-constrained/free row — the ordinary case for a slot with no `?(…)`
+/// bundle at all) defaults to no labels, same as `Row::Empty`. Shared by
+/// `Checker::command_scheme`'s V0_1 branch (increment 3a) and
+/// `Checker::math_command_scheme_v01` (increment 3b-α) so both harvest
+/// identically.
+fn harvest_slot(row: Row, dom: MonoType) -> CmdArgType {
+    let mut opt_labels: Vec<(String, MonoType)> = Vec::new();
+    let mut cur = resolve_row(&row);
+    loop {
+        match cur {
+            Row::Empty => break,
+            Row::Var(_) => break,
+            Row::Cons(label, lty, rest) => {
+                opt_labels.push((label, *lty));
+                cur = resolve_row(&rest);
+            }
+        }
+    }
+    opt_labels.sort_by(|a, b| a.0.cmp(&b.0));
+    labeled(opt_labels, dom)
 }
 
 /// A best-effort span for an `Ast` node: only `Var`/`Overwrite`/

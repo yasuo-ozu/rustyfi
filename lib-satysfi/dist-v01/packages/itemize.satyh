@@ -1,0 +1,179 @@
+% itemize.satyh — SATySFi 0.1 `itemize` package's `Itemize`, vendored for
+% Legacy packaging wave-4 Batch B (md-ja's dependency). Source: saphe-
+%   split@b836d512:lib-satysfi/packages/itemize/itemize.0.0.1/src/
+%   itemize.satyh (124 lines) — transliteration deltas:
+%   - T1: `use package open Stdlib` dropped; `@require: block`,
+%     `@require: hdecoset`, `@require: inline`, `@require: list`,
+%     `@require: option`, `@require: path` added (the only Stdlib
+%     modules this file references QUALIFIED: `Block.form-paragraph`,
+%     `HDecoSet.empty`, `Inline.get-natural-advance`, `List.fold`/
+%     `map-with-ends`/`is-empty`/`map-indexed`, `Option.from`, `Path.
+%     circle`). Every other member it
+%     calls bare (`embed-block-top`, `read-inline`, `set-paragraph-
+%     margin`, `get-text-width`, `block-frame-breakable`, `arabic`,
+%     `embed-string`, `embed-block-breakable`, `block-skip`, `inline-
+%     fil`/`inline-skip`/`inline-graphics`, `fill`, `get-text-color`,
+%     `float`, `Item(_, _)`) is a GLOBAL primitive/ctor resolved through
+%     `base_env` regardless of `@require:` — the same "bare primitive"
+%     story `context.satyh`'s/`math.satyh`'s banners document (and, for
+%     `Item`/`itemize`, `primitives.rs`'s own `set-text-color`/`get-
+%     text-color` doc comments already anticipate this file by name:
+%     "`itemize.satyh`'s `make-bullet` feeds this straight into `fill`").
+%   - T4/G1: upstream's two-line top of the struct —
+%       `val (+++>) = List.fold (+++)`
+%       `val concat-blocks = (+++>) block-nil`
+%     — is TWO instances of the "operator-as-first-class-value" gap this
+%     port's v1 grammar lacks (`inline.satyh`'s/`int.satyg`'s/`string.
+%     satyg`'s banners: no `Atomic::OpRef` in the V0_1 grammar, only in
+%     0.0.6): `(+++)` references the block-concat infix `+++` as a bare
+%     value (fold's combiner), and `(+++>) block-nil` references the
+%     freshly-named `+++>` operator as a bare value (partial application).
+%     Both are collapsed here into ONE plain named helper —
+%       `val concat-blocks bbs = bbs |> List.fold (fun a b -> a +++ b) block-nil`
+%     — with the `+++` op-value replaced by the `inline.satyh`-style
+%     lambda fallback `fun a b -> a +++ b`, and the two upstream infix
+%     uses `bb-parent +++> bbs-children` (in `listing-item`/`listing-
+%     item-breakable`) rewritten to `concat-blocks (bb-parent ::
+%     bbs-children)`. Behaviorally identical: `bb-parent +++> bbs` =
+%     `List.fold (+++) bb-parent bbs`, and since `block-nil` is the `+++`
+%     identity, `List.fold (+++) block-nil (bb-parent :: bbs)` folds to
+%     the same value. (The `+++>` operator NAME itself never survives; a
+%     `val (+++>) params = …` infix bind IS landed — Sub-slice 2b, see
+%     `v01-mini.satyh`'s banner — but the point-free `val (+++>) = …`
+%     spelling that USES an op-value on its RHS is not, so the helper
+%     form is the smallest faithful cut.)
+%   No other deltas: `listing-item`/`listing-item-breakable`/`enumerate-
+%   item` (bullet/index rendering, breakable vs. non-breakable listing
+%   variants, `Item(parent, children)` deconstruction) are byte-identical
+%   to upstream below the banner. No `#[test-only]`/`#[test]` blocks
+%   exist in the real upstream source at this pinned commit — nothing to
+%   strip.
+
+@require: block
+@require: hdecoset
+@require: inline
+@require: list
+@require: option
+@require: path
+
+module Itemize :> sig
+  val +listing : block [?(break : bool) itemize]
+  val \listing : inline [?(break : bool) itemize]
+  val +enumerate : block [itemize]
+  val \enumerate : inline [itemize]
+end = struct
+
+  val concat-blocks bbs = bbs |> List.fold (fun a b -> a +++ b) block-nil
+
+
+  val item-indent = 16pt
+  val item-gap = 10pt
+  val item-gap-outer = 6pt
+
+
+  val bullet-graphics color (x, y) =
+    let cx = x +' 4pt in
+    let cy = y +' 4pt in
+    let r = 2pt in
+    fill color (Path.circle (cx, cy) r)
+
+
+  val make-bullet ctx =
+    let color = get-text-color ctx in
+    inline-graphics 8pt 8pt 0pt (bullet-graphics color) ++ inline-skip 8pt
+
+
+  val rec listing-item ctx depth is-first is-last (Item(parent, children)) =
+        let ib-bullet = make-bullet ctx in
+        let bullet-width = Inline.get-natural-advance ib-bullet in
+        let parent-indent = item-indent *' (float depth) in
+        let ib-parent =
+          embed-block-top ctx ((get-text-width ctx) -' parent-indent -' bullet-width) (fun ctx ->
+            Block.form-paragraph (ctx |> set-paragraph-margin item-gap item-gap)
+              (read-inline ctx parent ++ inline-fil)
+          )
+        in
+        let bb-parent =
+          Block.form-paragraph (ctx |> set-paragraph-margin item-gap item-gap)
+            ((inline-skip parent-indent) ++ ib-bullet ++ ib-parent)
+        in
+        let bbs-children = List.map-with-ends (listing-item ctx (depth + 1)) children in
+        concat-blocks (bb-parent :: bbs-children)
+
+
+  val rec listing-item-breakable ctx depth is-first is-last (Item(parent, children)) =
+        let ib-bullet = make-bullet ctx in
+        let bullet-width = Inline.get-natural-advance ib-bullet in
+        let parent-indent = item-indent *' (float depth) in
+        let pads = (parent-indent +' bullet-width, 0pt, 0pt, 0pt) in
+        let decos = HDecoSet.empty in
+        let bb-parent =
+          let ctx-frame =
+            let len-top = if is-first then item-gap-outer +' item-gap else item-gap in
+            let len-bottom = if is-last || List.is-empty children then item-gap-outer +' item-gap else item-gap in
+            ctx |> set-paragraph-margin len-top len-bottom
+          in
+          block-frame-breakable ctx-frame pads decos (fun ctx ->
+            Block.form-paragraph ctx
+              (inline-skip (0pt -' bullet-width) ++ ib-bullet ++ read-inline ctx parent ++ inline-fil)
+          )
+        in
+        let bbs-children = List.map-with-ends (listing-item-breakable ctx (depth + 1)) children in
+        concat-blocks (bb-parent :: bbs-children)
+
+
+  val listing break ctx (Item(_, items)) =
+    if break then
+      let bbs = List.map-with-ends (listing-item-breakable ctx 0) items in
+      concat-blocks bbs
+    else
+      let bbs = List.map-with-ends (listing-item ctx 0) items in
+      concat-blocks bbs
+
+
+  val block ctx +listing ?(break = breakopt) item =
+    let break = Option.from false breakopt in
+    listing break ctx item
+
+
+  val inline ctx \listing ?(break = breakopt) item =
+    let break = Option.from false breakopt in
+      inline-fil ++ embed-block-breakable ctx (listing break ctx item)
+        ++ omit-skip-after
+
+
+  val rec enumerate-item index ctx depth (Item(parent, _)) =
+        let color = get-text-color ctx in
+        let parent-indent = item-indent *' (float depth) in
+        let ib-index =
+          let it-num = (embed-string (arabic index)) in
+            read-inline ctx {(#it-num;)\ }
+        in
+        let index-width = Inline.get-natural-advance ib-index in
+        let ib-parent =
+          embed-block-top ctx ((get-text-width ctx) -' parent-indent -' index-width) (fun ctx ->
+            Block.form-paragraph (ctx |> set-paragraph-margin item-gap item-gap)
+              (read-inline ctx parent ++ inline-fil)
+          )
+        in
+          Block.form-paragraph (ctx |> set-paragraph-margin item-gap item-gap)
+            ((inline-skip parent-indent) ++ ib-index ++ ib-parent)
+
+
+  val enumerate ctx (Item(_, itmzlst)) =
+    let bblst = List.map-indexed (fun i -> enumerate-item (i + 1) ctx 0) itmzlst in
+    concat-blocks bblst
+
+
+  val block ctx +enumerate item =
+    enumerate ctx item
+
+
+  val inline ctx \enumerate item =
+    let bb = enumerate ctx item in
+    inline-fil ++
+      embed-block-breakable ctx
+        (block-skip item-gap-outer +++ bb +++ block-skip item-gap-outer)
+      ++ omit-skip-after
+
+end

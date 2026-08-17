@@ -1,0 +1,49 @@
+% Wave-4 batch A capstone: the real upstream SATySFi 0.1 `std-ja-report`
+% document class (dist-v01/packages/std-ja-report.satyh — the report
+% sibling of std-ja-book, adding chapters/theorem environments and
+% `page-break-multicolumn`/`hook-page-break-block` instead of a
+% title-page+TOC), driving the FULL pipeline: V0_1 lex -> cst_v1 parse ->
+% loader (`@require:` transitive resolution across annot/math/code/
+% footnote-scheme/hyph-english/unidata/the 4 font stand-ins/the stdlib
+% leaf packages/ref) -> v1 lowering -> shared elaborate/typecheck(V0_1)/
+% sealing -> eval -> line break -> page break (this is the FIRST fixture
+% to exercise `page-break-multicolumn`'s V0_1 arm end to end — previously
+% only type-table-registered, see `primitives.rs`'s
+% `prim_page_break_multicolumn_v01` doc comment) -> PDF. Latin-only,
+% math-free, \figure never called (its baked-in `図` literal needs CJK
+% glyph coverage the single-DejaVu-face G7 font stand-in cannot provide),
+% mirroring `v01-stdja.saty`'s/`v01-stdja-book.saty`'s Latin-only-body
+% discipline.
+@require: std-ja-report
+
+StdJaReport.document (|
+  title  = {SATySFi in Rust: The Report Capstone},
+  author = {The Vendoring Agents},
+|) '<
+  +StdJaReport.chapter{Introduction}<
+    +StdJaReport.p {
+      This is a real upstream SATySFi 0.1 document class, std-ja-report,
+      rendered end to end through the Rust port.
+    }
+    +StdJaReport.section{Background}<
+      +StdJaReport.p {
+        The quick brown fox jumps over the lazy dog.
+      }
+      +StdJaReport.definition ?(word = {Widget}){
+        A widget is a thing that this document defines for the purpose of
+        \StdJaReport.emph{testing} theorem environments.
+      }
+      +StdJaReport.theorem{
+        Every widget \StdJaReport.dfn{fits} inside its own paragraph.
+      }
+      +StdJaReport.proof{
+        This follows directly from the definition above.
+      }
+    >
+  >
+  +StdJaReport.chapter{Conclusion}<
+    +StdJaReport.p {
+      This concludes the report capstone document.\StdJaReport.footnote{A trailing footnote, proving FootnoteScheme.main renders through the multicolumn page-break path.}
+    }
+  >
+>

@@ -1,0 +1,45 @@
+% Regression fixture (rendering-gap fix, `pagebreak.rs`'s
+% `collect_footnotes_in_box`): proves `FootnoteScheme.main`'s footnote
+% BODY — not just its numbered superscript MARKER — reaches the rendered
+% PDF through a bare `page-break`, exercising the exact box shape that
+% was broken without pulling in a whole document class.
+%
+% `footnote-scheme.satyh`'s `main-scheme` wraps `add-footnote (bb-before
+% +++ bb) ++ ib-num ++ hook-page-break (...)` in `Inline.no-break`
+% (`inline.satyh`'s `no-break ib = inline-frame-outer (0pt,0pt,0pt,0pt)
+% Deco.empty ib`), which lowers to a `PureHorzBox::Frame` — before the
+% fix, `collect_footnotes_in_box` had no arm for `Frame` (its `_ => {}`
+% wildcard swallowed it), so the `Footnote` marker nested inside that
+% frame was unreachable from `chop_page`'s footnote-collection pass and
+% its body silently never rendered, even though the (unwrapped) marker
+% itself always did. Direct `add-footnote` (no `Inline.no-break` wrapper,
+% `footnote.saty`) never hit this, which is why it stayed green throughout.
+
+@require: footnote-scheme
+@require: math
+
+let () = FootnoteScheme.initialize () in
+
+let ctx = get-initial-context 400pt (command \Math.math) in
+
+let ib-num = (fun num -> read-inline ctx (embed-string (`*` ^ (arabic num)))) in
+
+let bb-body =
+  (fun num ->
+    line-break true true ctx
+      (read-inline ctx {Distinctive footnote body via FootnoteScheme.main.} ++ inline-fil))
+in
+
+let content pbinfo = (| text-origin = (72pt, 72pt), text-height = 600pt |) in
+
+let parts pbinfo =
+  (| header-origin = (0pt, 0pt), header-content = block-nil,
+     footer-origin = (0pt, 0pt), footer-content = block-nil |)
+in
+
+let body =
+  line-break true true ctx
+    (read-inline ctx {Reference line with a scheme footnote marker.}
+     ++ FootnoteScheme.main ctx ib-num bb-body)
+in
+page-break (210mm, 297mm) content parts body

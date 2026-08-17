@@ -98,6 +98,23 @@ pub(crate) fn substitute_binds(
         .collect()
 }
 
+/// Sub-slice 2f-2b (`…/tmp/slice2d3b-2f2-sigmembers.md` §5.2-2): the
+/// codomain-substitution twin of [`substitute_binds`] — `cod[param :=
+/// arg_path]`, reusing the SAME [`ParamSubstRewrite`] this whole module's
+/// walker already drives for body substitution (one head-splice
+/// implementation, module doc comment's risk-6 guard). `module_check.rs`'s
+/// per-application abstract-result sealing calls this to compute the
+/// DECLARED codomain at the application site before sealing the
+/// instantiated result against it.
+pub(crate) fn subst_sig_expr_for_param(
+    cod: &ast_v1::SigExpr,
+    param: &str,
+    arg_path: &[String],
+) -> Result<ast_v1::SigExpr, LowerError> {
+    let rw = ParamSubstRewrite { param, arg_path };
+    subst_sig_expr(cod, &rw, &[])
+}
+
 /// Sub-slice 2f-2a (`…/tmp/slice2d3b-2f2-sigmembers.md` §4.2): the reusable
 /// head-splice rule this whole module's walker consults at every leaf/module-
 /// path site, generalizing what was a hard-coded `(param, arg_path)` pair in
@@ -855,7 +872,15 @@ fn subst_cmd_tail(
 ) -> Result<ast_v1::CmdTail, LowerError> {
     Ok(match t {
         ast_v1::CmdTail::Semi(s) => ast_v1::CmdTail::Semi(s.clone()),
-        ast_v1::CmdTail::Args { args, semi } => ast_v1::CmdTail::Args {
+        ast_v1::CmdTail::Args {
+            lead_opts,
+            args,
+            semi,
+        } => ast_v1::CmdTail::Args {
+            lead_opts: lead_opts
+                .as_ref()
+                .map(|o| subst_opt_args(o, rw, path))
+                .transpose()?,
             args: cst_v1::ExprErasedV1(Box::new(subst_expr(&args.0, rw, path)?)),
             semi: semi.clone(),
         },

@@ -86,12 +86,16 @@ fn v01_document_compiles_and_matches_0_0_6_twin_geometry() {
             cst: LoadedCst::V0_1(
                 satysfi_syntax::parse_file_v1(&lib_src).unwrap_or_else(|e| panic!("v01-mini.satyh: {e}")),
             ),
+            origin: Default::default(),
+            version: SatysfiVersion::V0_1,
         },
         LoadedFile {
             path: repo("crates/satysfi-cli/tests/fixtures/v01-minimal.saty"),
             cst: LoadedCst::V0_1(
                 satysfi_syntax::parse_file_v1(&entry_src).unwrap_or_else(|e| panic!("v01-minimal.saty: {e}")),
             ),
+            origin: Default::default(),
+            version: SatysfiVersion::V0_1,
         },
     ];
     let mono = Mono;

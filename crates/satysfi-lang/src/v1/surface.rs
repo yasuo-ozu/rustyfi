@@ -27,7 +27,7 @@
 
 use crate::v1::lower::qualify_type_key;
 use satysfi_syntax::cst_v1::{self, ast as ast_v1};
-use satysfi_syntax::leaf::{AnyHorzCmdTok, AnyVertCmdTok};
+use satysfi_syntax::leaf::{AnyHorzCmdTok, AnyVertCmdTok, TypeVarTok};
 use satysfi_syntax::span::Span;
 use std::collections::{HashMap, HashSet};
 
@@ -58,14 +58,46 @@ pub(crate) struct ModSurface {
 /// `sig … end` decl list (§2.2's eager registration — a `Var`/`Path`-shaped
 /// right-hand side is itself resolved at registration time, so every
 /// `SigDef` bottoms out at a real decl list, borrowed straight from the
-/// parsed `cst_v1` tree the caller's `deps` slice outlives).
+/// parsed `cst_v1` tree the caller's `deps` slice outlives). `decls` is
+/// deliberately NOT flattened through any `Decl::Include` it may itself
+/// contain — expansion is per-USE (`v1/module_check.rs::resolve_sig`'s own
+/// job, and this module's `sig_decl_views` for the filter side), exactly
+/// like Example 2 of the sig-include spec ("`Big`'s registration stores its
+/// literal decls — the include NOT yet expanded").
 #[derive(Clone, Debug)]
 pub(crate) struct SigDef<'a> {
     pub(crate) decls: &'a [cst_v1::StructDeclV1],
+    /// Sub-slice 2e-2 §2.3 named-sig storage: `with type` refinements this
+    /// signature's OWN right-hand side carries (`signature S2 = S with type
+    /// t = τ`) — `find_sig`'s consumers ([`crate::v1::module_check::
+    /// resolve_sig`]) inherit these alongside `decls`, so a refinement
+    /// composes across `signature` bind boundaries (W6). Empty for every
+    /// plain (non-`with type`-bodied) `signature` bind.
+    pub(crate) refines: Vec<Refine<'a>>,
     /// The module path the `signature` bind appeared at — diagnostics only
     /// (not read by anything in this module today).
     #[allow(dead_code)]
     pub(crate) def_path: Vec<String>,
+}
+
+/// Sub-slice 2e-2 (`…/tmp/slice2e-include-withtype.md` §2.2/§2.3): one
+/// `with type t 'a… = τ` refinement, collected off a [`ast_v1::SigExpr::
+/// WithType`] node's `binds` chain (or a named signature's OWN stored
+/// refinement, inherited through [`SigDef::refines`]). Deliberately
+/// UNVALIDATED here (`body` is kept whole — `Variant` or `Synonym`): whether
+/// a variant-bodied refinement is illegal (it is — §7's "cannot introduce
+/// constructors" row) is the CONSUMER's decision
+/// ([`crate::v1::module_check`]'s `prescan_seal_types` `TypeOpaque`
+/// interception), so the SAME check applies uniformly whether a refine
+/// arrives via an inline `with type` or is inherited through a named
+/// `signature S2 = S with type …` bind — this module never invents
+/// user-facing text (module doc comment's standing posture).
+#[derive(Clone, Debug)]
+pub(crate) struct Refine<'a> {
+    pub(crate) name: String,
+    pub(crate) tyvars: &'a [TypeVarTok],
+    pub(crate) body: &'a cst_v1::TypeBodyV1,
+    pub(crate) span: Span,
 }
 
 /// Sub-slice 2f-1 (`…/tmp/slice2f-functors.md` §2.6): one `module Make =
@@ -365,8 +397,15 @@ fn build_binds<'a>(
             }
             cst_v1::Bind::Signature { name, sig_, .. } => {
                 let key = qualify_type_key(path, &name.name);
-                if let Some(decls) = sig_decls(&sig_.0, env, path) {
-                    env.sigs.insert(key, SigDef { decls, def_path: path.to_vec() });
+                // Sub-slice 2e-2 §2.3 named-sig storage: `resolve_sig_rhs`
+                // additionally resolves a `WithType`-bodied RHS (`signature
+                // S2 = S with type t = τ`) — pre-2e-2 this arm's `sig_decls`
+                // call returned `None` for `WithType`, so `S2` silently
+                // never registered at all (a later `:> S2` missed with the
+                // generic "unknown signature name" error, §8 risk 8's
+                // "silent-unregistration wart" — closed here).
+                if let Some((decls, refines)) = resolve_sig_rhs(&sig_.0, env, path) {
+                    env.sigs.insert(key, SigDef { decls, refines, def_path: path.to_vec() });
                 }
                 surf.sigs.push(name.name.clone());
             }
@@ -514,31 +553,6 @@ pub(crate) fn frozen_app_target<'a, 'b>(
         .map(|(_, _, t)| t)
 }
 
-/// Resolve a `sig … end` body from a [`ast_v1::SigExpr`] — either the literal
-/// shape, or (§2.2) a `Var`/`Path` name resolved outward from `site_path`
-/// against `env.sigs`. `None` for anything this filter can't interpret
-/// (`with type`, a functor signature) or an unresolved name — the caller
-/// decides what that means (a hard "unknown signature" error at an
-/// ascription site in `module_check.rs`; "filter nothing" for the seal
-/// filter, [`filter_surface`]).
-fn sig_decls<'a>(
-    sig: &'a ast_v1::SigExpr,
-    env: &SurfaceEnv<'a>,
-    site_path: &[String],
-) -> Option<&'a [cst_v1::StructDeclV1]> {
-    match sig {
-        ast_v1::SigExpr::Bot(ast_v1::SigBotV1::Sig { decls, .. }) => Some(decls.as_slice()),
-        ast_v1::SigExpr::Bot(ast_v1::SigBotV1::Var(t)) => {
-            find_sig(env, site_path, &t.name).map(|d| d.decls)
-        }
-        ast_v1::SigExpr::Bot(ast_v1::SigBotV1::Path(t)) => {
-            let suffix = joined(&t.mods, &t.name);
-            find_sig(env, site_path, &suffix).map(|d| d.decls)
-        }
-        ast_v1::SigExpr::WithType { .. } | ast_v1::SigExpr::Functor { .. } => None,
-    }
-}
-
 fn joined(mods: &[String], name: &str) -> String {
     if mods.is_empty() {
         name.to_string()
@@ -547,19 +561,176 @@ fn joined(mods: &[String], name: &str) -> String {
     }
 }
 
+/// Resolve a [`ast_v1::SigBotV1`] to its (single-level — a `Var`/`Path` is
+/// resolved outward exactly ONCE, `Decl::Include` NOT flattened, matching
+/// [`SigDef::decls`]'s own deferred-expansion posture) decl list plus any
+/// `refines` the resolved definition itself carries. Shared by
+/// [`resolve_sig_rhs`] (the named-sig registration side, §2.3) and
+/// [`sig_bot_decl_views`] delegates to its OWN (Include-flattening) sibling
+/// instead — this shallow helper is for the two call sites that need a
+/// single dereference, not a full splice.
+fn sig_bot_decls<'a>(
+    bot: &'a ast_v1::SigBotV1,
+    env: &SurfaceEnv<'a>,
+    site_path: &[String],
+) -> Option<(&'a [cst_v1::StructDeclV1], Vec<Refine<'a>>)> {
+    match bot {
+        ast_v1::SigBotV1::Sig { decls, .. } => Some((decls.as_slice(), Vec::new())),
+        ast_v1::SigBotV1::Var(t) => find_sig(env, site_path, &t.name).map(|d| (d.decls, d.refines.clone())),
+        ast_v1::SigBotV1::Path(t) => {
+            let suffix = joined(&t.mods, &t.name);
+            find_sig(env, site_path, &suffix).map(|d| (d.decls, d.refines.clone()))
+        }
+    }
+}
+
+/// Sub-slice 2e-2 §2.3 named-sig storage: what `signature S2 = <rhs>`
+/// registers (`build_binds`'s `Bind::Signature` arm) — the RHS's own
+/// (unflattened) decl list, plus any `with type` refinements the RHS itself
+/// carries: its OWN `binds` chain (via [`collect_refines`]) when the RHS is
+/// a bare `WithType` node, PLUS — when the RHS's base names ANOTHER
+/// registered signature — that signature's OWN stored `refines` (so a
+/// refinement chain composes across `signature` bind boundaries, W6). A
+/// `with ⟨path⟩ type` RHS (`path: Some(_)`) is left UNREGISTERED (`None`) —
+/// this module never invents the precise 2d-3b error text; a later use sees
+/// the generic "unknown signature name" miss instead (safe, just less
+/// precise — §8 risk 8's accepted trade-off for a zero-demand corner).
+fn resolve_sig_rhs<'a>(
+    sig: &'a ast_v1::SigExpr,
+    env: &SurfaceEnv<'a>,
+    site_path: &[String],
+) -> Option<(&'a [cst_v1::StructDeclV1], Vec<Refine<'a>>)> {
+    match sig {
+        ast_v1::SigExpr::Bot(bot) => sig_bot_decls(bot, env, site_path),
+        ast_v1::SigExpr::WithType { base, path: None, binds, .. } => {
+            let (decls, mut refines) = sig_bot_decls(base, env, site_path)?;
+            refines.extend(collect_refines(binds));
+            Some((decls, refines))
+        }
+        ast_v1::SigExpr::WithType { path: Some(_), .. } => None,
+        ast_v1::SigExpr::Functor { .. } => None,
+    }
+}
+
+/// Sub-slice 2e-2 §2.2/§2.3: `with type t 'a… = τ and u… = σ` → one
+/// [`Refine`] per chain link, DEFERRED (§2.3's rationale — the body is kept
+/// whole, `Variant` or `Synonym`, so the SAME validation applies uniformly
+/// whether a refine arrives via an inline [`ast_v1::SigExpr::WithType`] or
+/// is INHERITED through a named `signature S2 = S with type …` bind).
+/// `pub(crate)`: shared by `v1/module_check.rs::resolve_sig`'s own inline
+/// `WithType` arm.
+pub(crate) fn collect_refines(binds: &cst_v1::TypeBindsErasedV1) -> Vec<Refine<'_>> {
+    let inner = &binds.0;
+    let mut out = vec![refine_from_single(&inner.first)];
+    for a in &inner.ands {
+        out.push(refine_from_single(&a.bind));
+    }
+    out
+}
+
+fn refine_from_single(single: &cst_v1::TypeBindSingleV1) -> Refine<'_> {
+    Refine {
+        name: single.name.name.clone(),
+        tyvars: &single.tyvars,
+        body: &single.body,
+        span: single.name.span,
+    }
+}
+
+/// Sub-slice 2e-2 §2.2's `surface.rs` twin: the Vec-returning splice that
+/// recursively flattens `Decl::Include` (with a resolved-table-key cycle
+/// guard) — used by [`filter_surface`] so the seal filter works THROUGH an
+/// included signature's declarations instead of bailing to "filter
+/// nothing". `WithType` resolves to its base's decls here too (§2.2's
+/// closing note: "a refinement never changes the exported NAME set").
+/// `None` on a miss/unfilterable shape/cycle — the same safe "filter
+/// nothing" posture the pre-2e-2 bail already had (this module never
+/// invents user-facing text; the REAL error, if any, fires independently in
+/// `v1/module_check.rs::resolve_sig`).
+fn sig_decl_views<'a>(
+    sig: &'a ast_v1::SigExpr,
+    env: &SurfaceEnv<'a>,
+    site_path: &[String],
+) -> Option<Vec<&'a cst_v1::StructDeclV1>> {
+    let mut visited = Vec::new();
+    sig_decl_views_visited(sig, env, site_path, &mut visited)
+}
+
+fn sig_decl_views_visited<'a>(
+    sig: &'a ast_v1::SigExpr,
+    env: &SurfaceEnv<'a>,
+    site_path: &[String],
+    visited: &mut Vec<String>,
+) -> Option<Vec<&'a cst_v1::StructDeclV1>> {
+    match sig {
+        ast_v1::SigExpr::Bot(bot) => sig_bot_decl_views(bot, env, site_path, visited),
+        ast_v1::SigExpr::WithType { base, .. } => sig_bot_decl_views(base, env, site_path, visited),
+        ast_v1::SigExpr::Functor { .. } => None,
+    }
+}
+
+fn sig_bot_decl_views<'a>(
+    bot: &'a ast_v1::SigBotV1,
+    env: &SurfaceEnv<'a>,
+    site_path: &[String],
+    visited: &mut Vec<String>,
+) -> Option<Vec<&'a cst_v1::StructDeclV1>> {
+    match bot {
+        ast_v1::SigBotV1::Sig { decls, .. } => splice_decl_views(decls, env, site_path, visited),
+        ast_v1::SigBotV1::Var(t) => named_sig_decl_views(&t.name, env, site_path, visited),
+        ast_v1::SigBotV1::Path(t) => {
+            let suffix = joined(&t.mods, &t.name);
+            named_sig_decl_views(&suffix, env, site_path, visited)
+        }
+    }
+}
+
+fn named_sig_decl_views<'a>(
+    name: &str,
+    env: &SurfaceEnv<'a>,
+    site_path: &[String],
+    visited: &mut Vec<String>,
+) -> Option<Vec<&'a cst_v1::StructDeclV1>> {
+    let (key, def) = find_sig_keyed(env, site_path, name)?;
+    if visited.contains(&key) {
+        return None;
+    }
+    visited.push(key);
+    let out = splice_decl_views(def.decls, env, site_path, visited);
+    visited.pop();
+    out
+}
+
+fn splice_decl_views<'a>(
+    decls: &'a [cst_v1::StructDeclV1],
+    env: &SurfaceEnv<'a>,
+    site_path: &[String],
+    visited: &mut Vec<String>,
+) -> Option<Vec<&'a cst_v1::StructDeclV1>> {
+    let mut out = Vec::new();
+    for d in decls {
+        if let ast_v1::Decl::Include { sig_, .. } = &*d.0 {
+            out.extend(sig_decl_views_visited(sig_, env, site_path, visited)?);
+        } else {
+            out.push(d);
+        }
+    }
+    Some(out)
+}
+
 /// The seal filter (§2.1): `raw`'s vals/types/mods/sigs, intersected with
 /// whatever `sig` actually declares (name-only — width/depth mistakes are
-/// `module_check`'s to report). `sig` resolved via [`sig_decls`]; a miss or
-/// an unfilterable shape (`with type`, a functor sig, or an `include` decl
-/// inside the sig — none of which this pass can enumerate names for)
-/// returns `raw` UNCHANGED (full width) — safe, per the module doc comment.
+/// `module_check`'s to report). `sig` resolved via [`sig_decl_views`]
+/// (Sub-slice 2e-2: now flattens `include` too); a miss or an unfilterable
+/// shape (a functor sig, or a cycle) returns `raw` UNCHANGED (full width) —
+/// safe, per the module doc comment.
 fn filter_surface<'a>(
     raw: ModSurface,
     sig: &'a ast_v1::SigExpr,
     env: &SurfaceEnv<'a>,
     site_path: &[String],
 ) -> ModSurface {
-    let Some(decls) = sig_decls(sig, env, site_path) else {
+    let Some(decls) = sig_decl_views(sig, env, site_path) else {
         return raw;
     };
     let mut dv: HashSet<String> = HashSet::new();
@@ -592,10 +763,11 @@ fn filter_surface<'a>(
             ast_v1::Decl::Signature { name, .. } => {
                 ds.insert(name.name.clone());
             }
-            // `include` inside a `sig .. end`: this pass can't enumerate the
-            // spliced names (2e) — bail out to "filter nothing" wholesale,
-            // same safety argument as the shapes `sig_decls` already skips.
-            ast_v1::Decl::Include { .. } => return raw,
+            // Sub-slice 2e-2: `sig_decl_views` already flattened every
+            // `Decl::Include` above — unreachable in practice; kept as a
+            // defensive no-op (never a silent narrowing) rather than a
+            // `_` wildcard, so a future `Decl` arm still breaks the build.
+            ast_v1::Decl::Include { .. } => {}
         }
     }
     ModSurface {
@@ -713,9 +885,23 @@ pub(crate) fn find_sig<'a, 'b>(
     site_path: &[String],
     suffix: &str,
 ) -> Option<&'b SigDef<'a>> {
+    find_sig_keyed(env, site_path, suffix).map(|(_, d)| d)
+}
+
+/// The [`find_sig`] twin that ALSO returns the matched candidate's fully
+/// qualified TABLE KEY — needed by `v1/module_check.rs::resolve_named_sig`'s
+/// cycle guard (Sub-slice 2e-2 §2.2: a re-entry must key on the RESOLVED
+/// name, not the written suffix, or two differently-pathed same-suffix sigs
+/// would false-positive, §8 risk 7) — `pub(crate)` for that one external
+/// caller, mirroring [`find_sig`]'s own visibility.
+pub(crate) fn find_sig_keyed<'a, 'b>(
+    env: &'b SurfaceEnv<'a>,
+    site_path: &[String],
+    suffix: &str,
+) -> Option<(String, &'b SigDef<'a>)> {
     for candidate in outward_candidates(site_path, suffix) {
         if let Some(d) = env.sigs.get(&candidate) {
-            return Some(d);
+            return Some((candidate, d));
         }
     }
     None

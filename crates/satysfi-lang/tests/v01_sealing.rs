@@ -33,6 +33,7 @@ use satysfi_backend::{FontKey, FontMetrics, Length};
 use satysfi_lang::CompileError;
 use satysfi_loader::{LoadedCst, LoadedFile};
 use satysfi_syntax::parse_file_v1;
+use satysfi_syntax::SatysfiVersion;
 
 /// A real (if crude) `FontMetrics` stub — never actually exercised (every
 /// fixture below either fails type-checking or fails at the `NotADocument`
@@ -62,10 +63,14 @@ fn run(lib_src: &str, doc_src: &str) -> Result<(), CompileError> {
         LoadedFile {
             path: std::path::PathBuf::from("lib.satyh"),
             cst: LoadedCst::V0_1(parse_file_v1(lib_src).unwrap_or_else(|e| panic!("lib parse failed: {e}"))),
+            origin: Default::default(),
+            version: SatysfiVersion::V0_1,
         },
         LoadedFile {
             path: std::path::PathBuf::from("doc.saty"),
             cst: LoadedCst::V0_1(parse_file_v1(doc_src).unwrap_or_else(|e| panic!("doc parse failed: {e}"))),
+            origin: Default::default(),
+            version: SatysfiVersion::V0_1,
         },
     ];
     let mono = Mono;
@@ -101,11 +106,15 @@ fn run_multi(lib_srcs: &[&str], doc_src: &str) -> Result<(), CompileError> {
         .map(|(i, src)| LoadedFile {
             path: std::path::PathBuf::from(format!("lib{i}.satyh")),
             cst: LoadedCst::V0_1(parse_file_v1(src).unwrap_or_else(|e| panic!("lib parse failed: {e}"))),
+            origin: Default::default(),
+            version: SatysfiVersion::V0_1,
         })
         .collect();
     files.push(LoadedFile {
         path: std::path::PathBuf::from("doc.saty"),
         cst: LoadedCst::V0_1(parse_file_v1(doc_src).unwrap_or_else(|e| panic!("doc parse failed: {e}"))),
+        origin: Default::default(),
+        version: SatysfiVersion::V0_1,
     });
     let mono = Mono;
     satysfi_lang::compile_document_v1(&files, &mono).map(|_| ())
@@ -348,10 +357,17 @@ fn t14_unbound_quant_tyvar_message() {
 /// U-numbered test group below instead.
 #[test]
 fn t15_placeholder_decls_name_their_sub_slice() {
+    // Sub-slice 2d-3b retires rows 1-2 (`Decl::Module`/`Decl::Signature`
+    // members are now recursively matched, not placeholder-rejected) —
+    // neither `N` nor `S` is ever defined by the struct body below, so both
+    // now get a REAL width error naming the missing member. Sub-slice 2e-2
+    // retires row 3: `include S` decls now FLATTEN for real (`resolve_sig`)
+    // — `S` is undefined here, so the precise "unknown signature name"
+    // error fires (S6's shape), not a placeholder.
     let cases: &[(&str, &str)] = &[
-        ("module N : sig end", "2d-3"),
-        ("signature S = sig end", "2d-3"),
-        ("include S", "2e"),
+        ("module N : sig end", "never defines `N`"),
+        ("signature S = sig end", "never defines a signature named `S`"),
+        ("include S", "unknown signature name"),
     ];
     for (decl, expect) in cases {
         let lib = format!("module M :> sig {decl} end = struct val x = 1 end");
@@ -363,15 +379,26 @@ fn t15_placeholder_decls_name_their_sub_slice() {
 /// T16 non-struct sig forms. Sub-slice 2d-3 retires the two named-signature
 /// placeholders: `:> S` / `:> A.B.S` now RESOLVE through the signature table
 /// (`v1/surface.rs`), so an UNDEFINED name is a precise "unknown signature
-/// name" error (not a "not enforced yet" placeholder). `with type` (2e) and
-/// functor signatures (2f) stay their sub-slice placeholders.
+/// name" error (not a "not enforced yet" placeholder). Sub-slice 2e-2
+/// retires the `with type` row: `sig end with type t = int` now resolves
+/// for real — the base sig `sig end` never declares `t`, so it hits the
+/// precise "refines a type the signature never declares" error (W3's
+/// shape), not a placeholder. Functor signatures (2f) stay their
+/// sub-slice placeholder.
 #[test]
 fn t16_non_struct_sig_forms_name_their_sub_slice() {
     let cases: &[(&str, &str)] = &[
         ("module M :> S = struct val x = 1 end", "unknown signature name"),
         ("module M :> A.B.S = struct val x = 1 end", "unknown signature name"),
-        ("module M :> sig end with type t = int = struct val x = 1 end", "2e"),
-        ("module M :> (X : S) -> S2 = struct val x = 1 end", "2f"),
+        (
+            "module M :> sig end with type t = int = struct val x = 1 end",
+            "refines a type the signature never declares",
+        ),
+        // Sub-slice 2f-2b reworded this permanently (a functor-signature
+        // ASCRIPTION directly on a module bind stays unsupported — no
+        // demand; a functor sig is only enforced as a `Decl::Module` sig
+        // MEMBER, which 2f-2b DOES enforce).
+        ("module M :> (X : S) -> S2 = struct val x = 1 end", "not supported"),
     ];
     for (lib, expect) in cases {
         let msg = assert_type_error(lib, "1");
@@ -794,11 +821,16 @@ end
 /// placeholder.
 #[test]
 fn u19_placeholder_decls_still_error() {
+    // Sub-slice 2d-3b retires rows 1-2 (real width errors now); the sig-side
+    // variant-redeclaration row (4) is permanently unsupported (renamed
+    // away from "Sub-slice 2d-3" wording, §10) rather than a sub-slice
+    // placeholder. Sub-slice 2e-2 retires row 3: `include S` FLATTENS for
+    // real now — `S` is undefined, so "unknown signature name" fires.
     let cases: &[(&str, &str)] = &[
-        ("module N : sig end", "2d-3"),
-        ("signature S = sig end", "2d-3"),
-        ("include S", "2e"),
-        ("type t = | A", "2d-3"),
+        ("module N : sig end", "never defines `N`"),
+        ("signature S = sig end", "never defines a signature named `S`"),
+        ("include S", "unknown signature name"),
+        ("type t = | A", "not supported"),
     ];
     for (decl, expect) in cases {
         let lib = format!("module M :> sig {decl} end = struct type t = | A  val x = 1 end");
@@ -1304,4 +1336,756 @@ module Lib = struct
 end
 ";
     assert_accepts(lib, "match Lib.Std.Int.compare 1 2 with | Less -> 0 | Equal -> 1 | Greater -> 2 end");
+}
+
+// ============================================================================
+// Sub-slice 2d-3b (`…/tmp/slice2d3b-2f2-sigmembers.md` §3/§7/§8): nested-
+// module sig MEMBERS, `Decl::Signature` identity, `member_revoke`, and
+// alias-body seal narrowing.
+// ============================================================================
+
+/// D1/D2/D3's shared fixture (spec §7's worked example): `M`'s own seal
+/// imposes `module N : sig val y : int end` over a sub-module `N` that is
+/// ITSELF sealed more widely (`val y`+`val z`) — the `PendingLink` shape.
+fn d123_lib() -> &'static str {
+    "\
+module M :> sig
+  module N : sig val y : int end
+  val w : int
+end = struct
+  module N :> sig val y : int  val z : int end = struct
+    val y = 1  val z = 2  val secret = 3
+  end
+  val w = M.N.z
+end
+"
+}
+
+/// D1: the layer check accepts (`N`'s own sealed `y : int` ⊑ `M`'s declared
+/// `y : int`) and a document use of the still-visible members type-checks —
+/// `M.N.y` (through the link) and `M.w` (M's own declared member, whose OWN
+/// body `M.N.z` type-checked fine while `z` was still committed, BEFORE the
+/// parent-imposed revoke trigger fires).
+#[test]
+fn d1_nested_module_sig_member_accepts_through_the_link() {
+    assert_accepts(d123_lib(), "M.N.y + M.w");
+}
+
+/// D2: the SAME fixture — `M.N.z` is exported by `N`'s own seal but omitted
+/// by `M`'s imposed `S_N`, so it is REVOKED once `M`'s subtree-last value
+/// alias (`M.w`) commits; a document (which runs strictly AFTER the whole
+/// library) using `M.N.z` is rejected with the precise "not exported"
+/// wording, never the raw unbound-variable internal-error format.
+#[test]
+fn d2_member_revoke_hides_the_omitted_member_after_the_parent_trigger_commits() {
+    let msg = assert_type_error(d123_lib(), "M.N.z");
+    assert!(
+        msg.contains("exists in module `M`") && msg.contains("not exported by its signature"),
+        "{msg}"
+    );
+}
+
+/// D3 (the correctness-core tripwire, spec §11 risk 1): `M`'s sig declares
+/// `N.id` MORE POLYMORPHIC (`'a -> 'a`) than `N`'s OWN seal committed
+/// (`int -> int`, narrower than the RAW impl's genuinely-polymorphic `val id
+/// x = x`) — rejected because the layer check compares INNER (the
+/// COMMITTED, already-narrowed scheme) against OUTER, never the raw impl
+/// directly; checking the raw impl directly would have WRONGLY ACCEPTED
+/// this (`'a -> 'a` does subsume `'a -> 'a`), so this pins that the link
+/// mechanism never takes that unsound shortcut.
+#[test]
+fn d3_link_layer_checks_the_childs_own_committed_scheme_not_the_raw_impl() {
+    let lib = "\
+module M :> sig
+  module N : sig val id 'a : 'a -> 'a end
+  val w : int
+end = struct
+  module N :> sig val id : int -> int end = struct
+    val id x = x
+  end
+  val w = 1
+end
+";
+    let msg = assert_type_error(lib, "1");
+    assert!(
+        msg.contains("does not match its signature") && msg.contains("sub-module `M.N`"),
+        "{msg}"
+    );
+}
+
+/// D3b width: the sig declares `module P : sig end` but the struct never
+/// defines `P` at all, and (second case) defines `P` as a plain VALUE
+/// instead of a module — both precise width errors, not a panic.
+#[test]
+fn d3b_nested_module_width_errors_both_wordings() {
+    // Module names are `CtorTok` (uppercase-headed) and value names are
+    // `VarTok`/`BindName` (lowercase-headed) — lexically DISJOINT in this
+    // grammar, so a value can never collide with a `Decl::Module`'s
+    // uppercase member name; only the "never defines at all" width wording
+    // is reachable from real source (the "defines it as a value, not a
+    // module" wording stays a defensive, sound fallback — never actually
+    // hit, since no source can construct that shape).
+    let missing = assert_type_error(
+        "module M :> sig module P : sig end end = struct val x = 1 end",
+        "1",
+    );
+    assert!(missing.contains("never defines `P`"), "{missing}");
+}
+
+/// D4: an UNSEALED child recursed via a SYNTHETIC (parent-imposed) seal —
+/// the declared member escapes, and an omitted member is revoked at the
+/// PARENT's own trigger rather than hidden immediately: a SIBLING use
+/// (`val w = M.N.z`, inside the SAME lib, BEFORE the trigger fires) still
+/// accepts — the parent-imposed-deferral pin (spec §3.3-6/§11 risk 2).
+#[test]
+fn d4_unsealed_child_defers_hiding_to_the_parent_trigger() {
+    let lib = "\
+module M :> sig
+  module N : sig val y : int end
+  val w : int
+end = struct
+  module N = struct val y = 1  val z = 2 end
+  val w = M.N.z
+end
+";
+    assert_accepts(lib, "M.N.y + M.w");
+    let msg = assert_type_error(lib, "M.N.z");
+    assert!(
+        msg.contains("exists in module `M`") && msg.contains("not exported by its signature"),
+        "{msg}"
+    );
+}
+
+/// D5: alias-body seal narrowing is now enforced — `module M :> sig val mk
+/// : int -> int end = Base` REJECTS when `Base`'s `mk` does not match, and
+/// hides an un-declared member of `Base` (the alias copies through the
+/// same seal machinery a struct literal gets); the double spelling `module
+/// M :> S1 = Base :> S2` chains innermost-first (`S2` is the real seal,
+/// `S1` an outer link).
+#[test]
+fn d5_alias_body_seal_narrowing_is_enforced() {
+    // `module M :> S = N` can only occur NESTED (a `Bind::Module`) — the
+    // top-level `FileV1::Library` shape is always `module Name = struct …
+    // end` — so every case below wraps the aliasing module `M` in an outer
+    // `Wrap`, cross-file-resolving `Base` via `v1/surface.rs`'s outward
+    // search (the same mechanism `i9`/`i9b` already exercise).
+    let base = "module Base = struct val mk x = x + 1  val extra = 9 end";
+
+    // Mismatch: `mk` is declared `int -> int -> int` (wrong arity/shape).
+    let mismatch_lib = "module Wrap = struct\n\
+                         module M :> sig val mk : int -> int -> int end = Base\n\
+                         end";
+    let msg = assert_type_error_multi(&[base, mismatch_lib], "1");
+    assert!(msg.contains("does not match its signature"), "{msg}");
+
+    // Accept + hide: `mk` matches, `extra` is un-declared and hidden.
+    let accept_lib = "module Wrap = struct\n\
+                       module M :> sig val mk : int -> int end = Base\n\
+                       end";
+    assert_accepts_multi(&[base, accept_lib], "Wrap.M.mk 1");
+    let hidden_msg = assert_type_error_multi(&[base, accept_lib], "Wrap.M.extra");
+    assert!(
+        hidden_msg.contains("exists in module `Wrap.M`") && hidden_msg.contains("not exported"),
+        "{hidden_msg}"
+    );
+
+    // The double-spelling chain: `module M :> S1 = Base :> S2` — `S2` (on
+    // the `Coerce`) is the real seal, `S1` (the outer `sig_annot`) an
+    // additional link; `extra` is declared by `S2` but omitted by `S1`, so
+    // it is hidden through the LINK's own revoke, not the inner seal's.
+    let chain_accept_lib = "module Wrap = struct\n\
+                             module M :> sig val mk : int -> int  val extra : int end \
+                             = Base :> sig val mk : int -> int  val extra : int end\n\
+                             end";
+    assert_accepts_multi(&[base, chain_accept_lib], "Wrap.M.mk 1 + Wrap.M.extra");
+
+    let chain_hide_lib = "module Wrap = struct\n\
+                           module M :> sig val mk : int -> int end \
+                           = Base :> sig val mk : int -> int  val extra : int end\n\
+                           end";
+    let chain_hidden = assert_type_error_multi(&[base, chain_hide_lib], "Wrap.M.extra");
+    assert!(chain_hidden.contains("not exported"), "{chain_hidden}");
+}
+
+/// D7: `Decl::Signature` members — verbatim re-declaration (code.satyh's
+/// shape) accepts; a differing body is the identity-comparator error; an
+/// omitted struct signature is rejected too (narrower width).
+#[test]
+fn d7_decl_signature_verbatim_accepts_differing_rejects() {
+    let verbatim = "\
+module M :> sig
+  signature Settings = sig val font-size : int end
+  module Make : Settings
+end = struct
+  signature Settings = sig val font-size : int end
+  module Make = struct val font-size = 10 end
+end
+";
+    assert_accepts(verbatim, "M.Make.font-size");
+
+    let differing = "\
+module M :> sig
+  signature Settings = sig val font-size : int end
+end = struct
+  signature Settings = sig val font-weight : int end
+end
+";
+    let msg = assert_type_error(differing, "1");
+    assert!(
+        msg.contains("does not match its signature") && msg.contains("Settings"),
+        "{msg}"
+    );
+}
+
+// ============================================================================
+// Sub-slice 2f-2b (`…/tmp/slice2d3b-2f2-sigmembers.md` §5/§8): functor sig-
+// MEMBERS inside a `:> sig … end` umbrella.
+// ============================================================================
+
+/// The map.satyg-shaped umbrella fixture: `Map :> sig module Make : (Key :
+/// Ord) -> sig … end end`, with an internal helper the codomain never
+/// declares.
+fn umbrella_lib() -> &'static str {
+    "\
+module Lib = struct
+  signature Ord = sig
+    type t :: o
+    val compare : t -> t -> int
+  end
+  module IntOrd = struct
+    type t = int
+    val compare x y = x - y
+  end
+  module FlagOrd = struct
+    type t = | Yes | No
+    val compare x y = 0
+  end
+  module Map :> sig
+    module Make : (Key : Ord) -> sig
+      type t :: o
+      val empty : t
+      val add : Key.t -> t -> t
+    end
+  end = struct
+    module Make = fun (Key : Ord) -> struct
+      % A synonym body (never a fresh variant) — every instantiation of
+      % this SAME functor shares no constructor names, sidestepping this
+      % port's flat/global ctor namespace (a documented, pre-existing
+      % 0.0.6-inherited limitation unrelated to sealing — see
+      % `build_impl_type_table`'s own doc comment) so the fixture's
+      % abstract-fingerprint pin isolates 2f-2b's OWN mechanism.
+      type t = list Key.t
+      val empty = []
+      val add k m = k :: m
+      val helper x = x
+    end
+  end
+  module M1 = Map.Make IntOrd
+  module M2 = Map.Make IntOrd
+  module M3 = Map.Make FlagOrd
+end
+"
+}
+
+/// U1: the umbrella accepts and a consumer application works through the
+/// declared (sealed) interface.
+#[test]
+fn u1_functor_umbrella_accepts_and_applications_work() {
+    assert_accepts(umbrella_lib(), "Lib.M1.add 1 Lib.M1.empty");
+}
+
+/// F-gen: the abstract fingerprint — SAME-instantiation use accepts,
+/// CROSS-instantiation use (mixing `M1`'s and `M2`'s results, two SEPARATE
+/// applications of the identical functor to the identical argument) is
+/// REJECTED at the abstract level (fresh stamps per application —
+/// generative, spec §0.4's caveat); internal helpers (`helper`) are hidden
+/// with the sealing wording, not a raw unbound-variable message.
+#[test]
+fn f_gen_abstract_fingerprint_rejects_cross_instantiation_use() {
+    let msg = assert_type_error(umbrella_lib(), "Lib.M1.add 1 Lib.M2.empty");
+    assert!(!msg.is_empty(), "{msg}");
+    let hidden_msg = assert_type_error(umbrella_lib(), "Lib.M1.helper 1");
+    assert!(
+        hidden_msg.contains("exists in module `Lib.M1`") && hidden_msg.contains("not exported"),
+        "{hidden_msg}"
+    );
+}
+
+/// U2: a hidden-functor application is rejected — the umbrella's `Map`
+/// exports ONLY `Make`; a hypothetical direct access to a functor the
+/// umbrella never declares (simulated here by sealing `Map` OVER a wider
+/// struct that ALSO defines a second, undeclared functor `Other`) is
+/// rejected with the "not exported" wording.
+#[test]
+fn u2_hidden_functor_application_is_rejected() {
+    let lib = "\
+module Lib = struct
+  signature Ord = sig
+    type t :: o
+    val compare : t -> t -> int
+  end
+  module IntOrd = struct
+    type t = int
+    val compare x y = x - y
+  end
+  module Map :> sig
+    module Make : (Key : Ord) -> sig type t :: o  val empty : t end
+  end = struct
+    module Make = fun (Key : Ord) -> struct type t = | E  val empty = E end
+    module Other = fun (Key : Ord) -> struct type t = | E  val empty = E end
+  end
+  module Bad = Map.Other IntOrd
+end
+";
+    let msg = assert_type_error(lib, "1");
+    assert!(msg.contains("not exported by its signature"), "{msg}");
+}
+
+/// U4: `NestedFunctorSubstitution` reachable from real source — a curried
+/// functor sig MEMBER (`module F : (X:S) -> (Y:S2) -> S3`) is the typed
+/// rejection, not a panic; `t16`'s functor-ascription row (a DIRECT
+/// ascription, not a member) is the separate, still-unsupported shape.
+#[test]
+fn u4_curried_functor_sig_member_is_the_nested_functor_substitution_rejection() {
+    let lib = "\
+module M :> sig
+  signature S = sig end
+  module F : (X : S) -> (Y : S) -> S
+end = struct
+  signature S = sig end
+  module F = fun (X : S) -> struct end
+end
+";
+    let msg = assert_type_error(lib, "1");
+    assert!(
+        msg.contains("higher-order") && msg.contains("nested-functor substitution"),
+        "{msg}"
+    );
+}
+
+// ============================================================================
+// Sub-slice 2e-2 (`…/tmp/slice2e-include-withtype.md` §5): sig-`include`
+// (`Decl::Include`) + `with type` (`SigExpr::WithType`) — the S-/W-numbered
+// test group (spec §5's naming, this file's `assert_accepts`/
+// `assert_type_error` shapes throughout).
+// ============================================================================
+
+/// S1 sig-include accepts + hides an undeclared member: `Big` splices
+/// `Eq`'s `type t :: o`/`val equal` in, adds `val hash`; `A :> Big` defines
+/// all three PLUS an undeclared `secret` — the module itself type-checks,
+/// and `secret` is hidden with the standard "not exported" wording.
+#[test]
+fn s1_sig_include_accepts_and_hides_undeclared_member() {
+    let lib = "\
+module Lib = struct
+  signature Eq = sig
+    type t :: o
+    val equal : t -> t -> bool
+  end
+  signature Big = sig
+    include Eq
+    val hash : t -> int
+  end
+  module A :> Big = struct
+    type t = int
+    val equal x y = x == y
+    val hash x = x
+    val secret = 99
+  end
+end
+";
+    assert_accepts(lib, "1");
+    let msg = assert_type_error(lib, "Lib.A.secret");
+    assert!(msg.contains("not exported"), "{msg}");
+}
+
+/// S2 include of a literal + a dep-file-qualified path: `include sig val x
+/// : int end` inline, and `include Other.S` naming a signature defined in
+/// an earlier module.
+#[test]
+fn s2_sig_include_literal_and_path() {
+    let lib = "\
+module Lib = struct
+  module Other = struct
+    signature S = sig val z : int end
+  end
+  module A :> sig include sig val x : int end end = struct val x = 1 end
+  module B :> sig include Other.S end = struct val z = 1 end
+end
+";
+    assert_accepts(lib, "Lib.A.x + Lib.B.z");
+}
+
+/// S3 spliced-opaque generativity: two modules independently sealed `:>
+/// Big` (an included `type t :: o`, unrefined) each mint their OWN fresh
+/// stamp for `t` — mixing values across the two instantiations rejects,
+/// same-instantiation use accepts (the per-site-stamps-through-a-splice
+/// fingerprint).
+#[test]
+fn s3_spliced_opaque_generativity_per_site_stamps() {
+    let lib = "\
+module Lib = struct
+  signature Eq = sig
+    type t :: o
+    val mk : int -> t
+  end
+  signature Big = sig
+    include Eq
+    val hash : t -> int
+  end
+  module A :> Big = struct
+    type t = int
+    val mk n = n
+    val hash x = x
+  end
+  module B :> Big = struct
+    type t = int
+    val mk n = n
+    val hash x = x
+  end
+end
+";
+    let msg = assert_type_error(lib, "Lib.A.hash (Lib.B.mk 1)");
+    assert!(!msg.is_empty(), "{msg}");
+    assert_accepts(lib, "Lib.A.hash (Lib.A.mk 1)");
+}
+
+/// S4 conflict: an `include`-spliced `val equal` colliding with a directly
+/// declared `val equal` in the same sig is a hard `ConflictInSignature`-
+/// shaped error; the tightening this ALSO applies to a literal sig with two
+/// DIRECT `val x` decls (pre-2e-2: silently last-wins) is pinned too.
+#[test]
+fn s4_sig_include_conflict_rejects() {
+    let lib = "\
+module Lib = struct
+  signature Eq = sig
+    type t :: o
+    val equal : t -> t -> bool
+  end
+  module A :> sig
+    include Eq
+    val equal : int -> int -> bool
+  end = struct
+    type t = int
+    val equal x y = x == y
+  end
+end
+";
+    let msg = assert_type_error(lib, "1");
+    assert!(msg.contains("conflicting declarations for `equal`"), "{msg}");
+
+    let lib_direct = "module M :> sig val x : int  val x : bool end = struct val x = 1 end";
+    let msg2 = assert_type_error(lib_direct, "1");
+    assert!(msg2.contains("conflicting declarations for `x`"), "{msg2}");
+}
+
+/// S5 cycle: `signature S = sig include S end`, used at an ascription,
+/// "includes itself" — never a stack overflow/panic.
+#[test]
+fn s5_sig_include_self_cycle_rejects() {
+    let lib = "\
+module Lib = struct
+  signature S = sig include S end
+  module A :> S = struct end
+end
+";
+    let msg = assert_type_error(lib, "1");
+    assert!(msg.contains("includes itself"), "{msg}");
+}
+
+/// S6 unknown: `sig include Nope end` → "unknown signature name `Nope`"
+/// (the shape `t15`/`u19`'s re-pinned rows exercise end-to-end).
+#[test]
+fn s6_sig_include_unknown_name_rejects() {
+    let lib = "module M :> sig include Nope end = struct val x = 1 end";
+    let msg = assert_type_error(lib, "1");
+    assert!(msg.contains("unknown signature name `Nope`"), "{msg}");
+}
+
+/// W1 refinement accepts + the transparency fingerprint: `sig type t :: o
+/// val mk : int -> t val get : t -> int end with type t = int` — BOTH
+/// directions flow concrete ints through the doc side (`t` is really
+/// transparent, not just parsed-and-ignored).
+#[test]
+fn w1_with_type_refinement_accepts_and_is_transparent() {
+    let lib = "\
+module A :> sig
+  type t :: o
+  val mk : int -> t
+  val get : t -> int
+end with type t = int = struct
+  type t = int
+  val mk n = n
+  val get x = x
+end
+";
+    assert_accepts(lib, "A.get 5 + A.mk 1");
+}
+
+/// W2 impl mismatch: `with type t = int` over an implementation whose OWN
+/// `type t = bool` — the transparent-equality error fires, reached via
+/// refinement instead of a literal `type t = τ` sig decl.
+#[test]
+fn w2_with_type_impl_mismatch_rejects() {
+    let lib = "\
+module A :> sig
+  type t :: o
+  val mk : int -> t
+end with type t = int = struct
+  type t = bool
+  val mk n = n > 0
+end
+";
+    let msg = assert_type_error(lib, "1");
+    assert!(msg.contains("does not match its signature"), "{msg}");
+}
+
+/// W3 undefined: `with type u = int` over a sig that never declares `u` —
+/// "refines a type the signature never declares".
+#[test]
+fn w3_with_type_refines_undeclared_type_rejects() {
+    let lib = "module M :> sig val x : int end with type u = int = struct val x = 1 end";
+    let msg = assert_type_error(lib, "1");
+    assert!(msg.contains("refines a type the signature never declares"), "{msg}");
+}
+
+/// W4 transparent restrict: the base sig already declares `type t = bool`
+/// TRANSPARENTLY — `with type t = int` cannot restrict it (upstream
+/// `CannotRestrictTransparentType`).
+#[test]
+fn w4_with_type_over_already_transparent_type_rejects() {
+    let lib = "\
+module M :> sig
+  type t = bool
+  val x : t
+end with type t = int = struct
+  type t = bool
+  val x = true
+end
+";
+    let msg = assert_type_error(lib, "1");
+    assert!(msg.contains("already declares it transparently"), "{msg}");
+}
+
+/// W5 arity both ways: `type t :: o -> o` refined by an arity-0 `with type
+/// t = int` rejects (the refine-arity error); `type t :: o -> o` refined by
+/// `with type t 'a = list 'a` over a matching `type t 'a = list 'a` impl
+/// accepts.
+#[test]
+fn w5_with_type_arity_checks_both_directions() {
+    let lib_bad = "\
+module M :> sig
+  type t :: o -> o
+end with type t = int = struct
+  type t 'a = list 'a
+end
+";
+    let msg = assert_type_error(lib_bad, "1");
+    assert!(msg.contains("arity"), "{msg}");
+
+    let lib_ok = "\
+module M :> sig
+  type t :: o -> o
+  val wrap 'a : 'a -> t 'a
+end with type t 'a = list 'a = struct
+  type t 'a = list 'a
+  val wrap x = [x]
+end
+";
+    assert_accepts(lib_ok, "M.wrap 1");
+}
+
+/// W6 named-sig storage + chained refinement: `signature S2 = S with type
+/// t = int` composes across the `signature` bind boundary (`B :> S2`
+/// accepts, `B.mk 1 + 1` typechecks — a plain-int flow); refining `S2`
+/// AGAIN at a use site (`S2 with type t = bool`) hits the ordered-first-
+/// match `CannotRestrictTransparentType` rule.
+#[test]
+fn w6_named_sig_with_type_storage_and_chained_refine_rejects() {
+    let lib = "\
+module Lib = struct
+  signature S = sig
+    type t :: o
+    val mk : int -> t
+  end
+  signature S2 = S with type t = int
+  module B :> S2 = struct
+    type t = int
+    val mk n = n
+  end
+end
+";
+    assert_accepts(lib, "Lib.B.mk 1 + 1");
+
+    let lib_chain = "\
+module Lib = struct
+  signature S = sig
+    type t :: o
+    val mk : int -> t
+  end
+  signature S2 = S with type t = int
+  module C :> S2 with type t = bool = struct
+    type t = int
+    val mk n = n
+  end
+end
+";
+    let msg = assert_type_error(lib_chain, "1");
+    assert!(msg.contains("already declares it transparently"), "{msg}");
+}
+
+/// W7 mixed generativity: `A :> S` (unrefined, fresh stamp), `C`/`D :> S
+/// with type t = int` (both refined to concrete `int`) — `C`/`D` mix with
+/// each other and with plain ints; `A` mixes with neither (upstream's
+/// `quant.remove(tyid)` semantics — refining removes the member from the
+/// quantifier, reproduced here by simply never minting a stamp).
+#[test]
+fn w7_with_type_mixed_generativity() {
+    let lib = "\
+module Lib = struct
+  signature S = sig
+    type t :: o
+    val mk : int -> t
+  end
+  module A :> S = struct
+    type t = int
+    val mk n = n
+  end
+  module C :> S with type t = int = struct
+    type t = int
+    val mk n = n
+  end
+  module D :> S with type t = int = struct
+    type t = int
+    val mk n = n
+  end
+end
+";
+    assert_accepts(lib, "Lib.C.mk 1 + Lib.D.mk 2");
+    assert_accepts(lib, "Lib.C.mk 1 + 1");
+    let msg = assert_type_error(lib, "Lib.A.mk 1 + Lib.C.mk 2");
+    assert!(!msg.is_empty(), "{msg}");
+}
+
+/// W8 out-of-scope rows: a variant-bodied refinement (`with type t = | A`)
+/// cannot introduce constructors; `with Sub type t = int` (the sub-module
+/// refinement form) names its 2d-3b deferral precisely.
+#[test]
+fn w8_with_type_out_of_scope_rows() {
+    let lib_variant = "module M :> sig type t :: o end with type t = | A = struct type t = | A end";
+    let msg = assert_type_error(lib_variant, "1");
+    assert!(msg.contains("cannot introduce constructors"), "{msg}");
+
+    let lib_path = "\
+module M :> sig
+  module Sub : sig type t :: o end
+end with Sub type t = int = struct
+  module Sub = struct type t = int end
+end
+";
+    let msg2 = assert_type_error(lib_path, "1");
+    assert!(msg2.contains("Sub-slice 2d-3b"), "{msg2}");
+}
+
+/// W9 refinement through a splice: example 2 verbatim — `Big` includes `Eq`
+/// (contributing the abstract `t`), `A :> Big with type t = int` refines
+/// the INCLUDE-DEFINED `t`; both `hash` (declared OUTSIDE the include) and
+/// `equal` (declared INSIDE it) see the same transparent `t` — the splice
+/// makes that composition just work.
+#[test]
+fn w9_with_type_refinement_through_a_splice() {
+    let lib = "\
+module Lib = struct
+  signature Eq = sig
+    type t :: o
+    val equal : t -> t -> bool
+  end
+  signature Big = sig
+    include Eq
+    val hash : t -> int
+  end
+  module A :> Big with type t = int = struct
+    type t = int
+    val equal x y = x == y
+    val hash x = x
+  end
+end
+";
+    assert_accepts(lib, "Lib.A.hash 5 + 1");
+    assert_accepts(lib, "Lib.A.equal 1 2");
+}
+
+// ============================================================================
+// Sub-slice 2e-2 refresh §(e): the two tests forced by the 2f-1 interaction
+// — a functor parameter signature may now use `include` (flattened for
+// real, at the functor-application width/arity check); `with type` there
+// stays an EXPLICIT reject (2f-1's own "name/arity only" posture), never
+// silence.
+// ============================================================================
+
+/// (i) A functor parameter signature using `include` flattens for real:
+/// the width check against the argument surface sees `Base`'s spliced `x`,
+/// so a conforming argument accepts and a non-conforming one rejects with
+/// the ordinary functor-argument-mismatch wording.
+#[test]
+fn functor_param_sig_include_flattens_for_width_check() {
+    let lib_ok = "\
+module Lib = struct
+  signature Base = sig
+    val x : int
+  end
+  signature Param = sig
+    include Base
+  end
+  module F = fun (X : Param) -> struct val y = X.x end
+  module Arg = struct val x = 1 end
+  module Applied = F Arg
+end
+";
+    assert_accepts(lib_ok, "Lib.Applied.y");
+
+    // The functor BODY deliberately never references the missing member
+    // (`X.y`, from the sig's OWN direct decl) — only the INCLUDE-supplied
+    // `X.x` — so LOWERING alone can't catch `Bad`'s missing `y`
+    // (elaboration only complains about names it actually substitutes and
+    // uses); this isolates `check_functor_applications`'s OWN width check
+    // seeing THROUGH the splice (mirrors `t_chk2`'s own shape,
+    // `v1::module_check`'s unit tests).
+    let lib_bad = "\
+module Lib = struct
+  signature Base = sig
+    val x : int
+  end
+  signature Param = sig
+    include Base
+    val y : int
+  end
+  module F = fun (X : Param) -> struct val out = X.x end
+  module Bad = struct val x = 1 end
+  module Applied = F Bad
+end
+";
+    let msg = assert_type_error(lib_bad, "1");
+    assert!(msg.contains("does not match functor"), "{msg}");
+}
+
+/// (ii) `fun (X : S with type t = int) -> …`: a `with type` on a functor
+/// PARAMETER signature is name-invisible (refining never changes the name
+/// set), so 2f-1's name/arity-only check can't enforce it — an explicit
+/// reject fires instead of silently ignoring the refinement.
+#[test]
+fn functor_param_sig_with_type_is_an_explicit_reject_not_silence() {
+    let lib = "\
+module Lib = struct
+  signature S = sig
+    type t :: o
+    val mk : int -> t
+  end
+  module F = fun (X : S with type t = int) -> struct val y = X.mk 1 end
+  module Arg = struct type t = int  val mk n = n end
+  module Applied = F Arg
+end
+";
+    let msg = assert_type_error(lib, "1");
+    assert!(msg.contains("with type") && msg.contains("not enforced"), "{msg}");
 }

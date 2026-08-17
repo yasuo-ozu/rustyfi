@@ -1172,6 +1172,20 @@ impl Lexer {
                 }
                 '?' => {
                     self.bump();
+                    // SATySFi 0.1 (optional-arg-rows increment 3b-β): a command
+                    // APPLIED in an active area (`\cmd ?(l = e){…}` /
+                    // `+cmd ?(l = e)<…>`) carries a `?(l = e, …)` labeled-
+                    // optional bundle — the `?` is `OptionalType` and the
+                    // `(…)` group lexes via the `(` arm on the next scan,
+                    // exactly like program-mode application (`lex_program`'s
+                    // `?` arm). The fused `?:`/`?*` sigils no longer exist
+                    // under V0_1. Under V0_0_6 this stays byte-identical
+                    // (`?:`/`?*` handled, a bare `?` is still an error) —
+                    // pinned by `lex_with_version_differential.rs`.
+                    if self.version == SatysfiVersion::V0_1 {
+                        self.emit(start, Token::OptionalType);
+                        return Ok(());
+                    }
                     match self.peek() {
                         Some(':') => {
                             self.bump();

@@ -7,7 +7,7 @@
 //! This function's signature is the seam where the phase-3 typechecker
 //! (typechecker.ml / unification.ml port) slots in.
 
-use crate::ast::{Ast, BText, IText, MatchArm, MathElem, Pattern};
+use crate::ast::{Ast, BText, CmdArg, IText, MatchArm, MathElem, Pattern};
 use satysfi_backend::Length;
 use satysfi_syntax::cst::{self, ast as c};
 use satysfi_syntax::leaf::{AnyHorzCmdTok, AnyMathCmdTok, AnyVertCmdTok, UnopExclamTok, VarTok};
@@ -2252,12 +2252,18 @@ fn block_elems(elems: &[c::BlockElem], scope: &Scope) -> Result<Vec<BText>, Elab
 /// Flatten a command tail back into its argument list. `CmdTail::Args` is a
 /// flat, non-empty `AppArg` sequence (`cst.rs`'s own dedicated grammar, not a
 /// reuse of the general application chain — see that type's doc comment), so
-/// this is just `app_arg_to_ast` per element; a supplied/omitted optional
+/// this is just `cmd_arg_to_ast` per element; a supplied/omitted optional
 /// (`?:`/`?*`) desugars to `Some`/`None` exactly like a plain function's
 /// optional application (`app_arg_to_ast`'s doc comment) — the one place this
 /// port's optional-arg call-site model is shared between commands and plain
-/// functions.
-fn cmd_args(tail: &c::CmdTail, scope: &Scope, leading: usize) -> Result<Vec<Ast>, ElabError> {
+/// functions. A `?(l = e, …)`-bundled element (optional-arg-rows increment
+/// 3b-β) carries its labels on the returned [`CmdArg`]'s `opts` instead of
+/// desugaring to `Some`/`None` — the 0.0.6 leading-padding loop below only
+/// ever matches `Optional`/`Omission` (the `?:`/`?*` marker), never
+/// `Bundled`/`BundledCtor`, and a V0_1 command's `leading` is always `0`
+/// (`leading_optional_count` only counts `Param::Optional`) — so the two
+/// mechanisms never interact.
+fn cmd_args(tail: &c::CmdTail, scope: &Scope, leading: usize) -> Result<Vec<CmdArg>, ElabError> {
     let args: Vec<&c::AppArg> = match tail {
         c::CmdTail::Semi(_) => Vec::new(),
         c::CmdTail::Args { first, rest, .. } => {
@@ -2275,19 +2281,55 @@ fn cmd_args(tail: &c::CmdTail, scope: &Scope, leading: usize) -> Result<Vec<Ast>
     while supplied < leading {
         match args_iter.peek() {
             Some(c::AppArg::Optional { .. }) | Some(c::AppArg::Omission(_)) => {
-                out.push(app_arg_to_ast(args_iter.next().unwrap(), scope)?);
+                out.push(CmdArg {
+                    opts: Vec::new(),
+                    arg: app_arg_to_ast(args_iter.next().unwrap(), scope)?,
+                });
                 supplied += 1;
             }
             _ => break,
         }
     }
     for _ in supplied..leading {
-        out.push(Ast::Ctor("None".to_string(), None));
+        out.push(CmdArg {
+            opts: Vec::new(),
+            arg: Ast::Ctor("None".to_string(), None),
+        });
     }
     for a in args_iter {
-        out.push(app_arg_to_ast(a, scope)?);
+        out.push(cmd_arg_to_ast(a, scope)?);
     }
     Ok(out)
+}
+
+/// One command-application argument, the `?(l = e, …)`-bundle-aware twin of
+/// `app_arg_to_ast` (optional-arg-rows increment 3b-β): a `Bundled`/
+/// `BundledCtor` arg becomes a [`CmdArg`] whose `opts` carries the labeled
+/// optionals — elaborated via `elaborate_opt_args`, exactly like a plain
+/// function application's `f ?(l = e) x` (`apply_one_arg`'s `Ast::ApplyOpt`
+/// arm); every other `AppArg` shape becomes a `CmdArg` with empty `opts` (the
+/// unbundled call — the ONLY shape any pre-3b-β producer, and every
+/// 0.0.6-reachable call, ever emits).
+fn cmd_arg_to_ast(arg: &c::AppArg, scope: &Scope) -> Result<CmdArg, ElabError> {
+    match arg {
+        c::AppArg::Bundled {
+            opts,
+            excl,
+            atom,
+            accesses,
+        } => Ok(CmdArg {
+            opts: elaborate_opt_args(opts, scope)?,
+            arg: atomic_head_with_excl(atom, accesses, excl.as_ref(), scope)?,
+        }),
+        c::AppArg::BundledCtor { opts, ctor } => Ok(CmdArg {
+            opts: elaborate_opt_args(opts, scope)?,
+            arg: Ast::Ctor(ctor.name.clone(), None),
+        }),
+        _ => Ok(CmdArg {
+            opts: Vec::new(),
+            arg: app_arg_to_ast(arg, scope)?,
+        }),
+    }
 }
 
 // ---- itemize ---------------------------------------------------------------
@@ -2480,10 +2522,17 @@ fn math_bot(b: &c::MathBot, scope: &Scope) -> Result<MathElem, ElabError> {
             for a in args_iter {
                 arg_asts.push(math_arg_to_ast(a, scope)?);
             }
+            // `CmdArg`-shaped for uniformity with `IText::Cmd`/`BText::Cmd`
+            // (optional-arg-rows increment 3b-β; see `MathElem::Cmd`'s doc
+            // comment) — `opts` is always empty: the math-mode application
+            // grammar (`c::MathArg`) has no `?(l=e)` bundle form at all.
             Ok(MathElem::Cmd {
                 name: scope.resolve(&key),
                 span,
-                args: arg_asts,
+                args: arg_asts
+                    .into_iter()
+                    .map(|arg| CmdArg { opts: Vec::new(), arg })
+                    .collect(),
             })
         }
         c::MathBot::Chars(tok) => Ok(MathElem::Chars(tok.text.clone())),

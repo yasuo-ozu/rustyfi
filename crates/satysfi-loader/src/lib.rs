@@ -51,11 +51,10 @@ pub enum LoadMode {
         /// `--deps` flag on `satysfi build`, `saphe-split:bin/satysfi.ml`,
         /// `flag_deps`). `None` = no package dependencies available: any `use
         /// package` header is a [`LoadError::PackageDependencyUnresolved`].
-        /// `Some(_)` is **not implemented in Ld3a** — it returns
-        /// [`LoadError::DepsConfigUnsupported`] naming Ld3b — but the field
-        /// exists from day one so Ld3b need not re-break every `match` on this
-        /// enum, and so the CLI can wire `--deps` through immediately with an
-        /// honest error.
+        /// `Some(path)` (Ld3b-2) is decoded, its envelopes are read + topo-
+        /// sorted, and each `use package M` header is validated against the
+        /// config's `used_as` aliases; the envelope source files are prepended
+        /// to the loaded program (dependency-first, before any local file).
         deps: Option<PathBuf>,
     },
 }
@@ -140,6 +139,29 @@ impl LoadedCst {
     }
 }
 
+/// Where a loaded file came from — metadata for diagnostics and for the
+/// future `used_as` → module binding (Ld3c). Nothing in `satysfi-lang` reads
+/// it yet; it is additive metadata on [`LoadedFile`], so a 0.0.6 (or any
+/// Legacy) load is byte-for-byte behavior-preserving.
+///
+/// Only two variants: a Legacy-mode file and an Envelopes-mode *local*
+/// (`use … of`) file / the entry document are both just "a plain local file"
+/// ([`FileOrigin::Local`], the [`Default`]); a distinct `Legacy` variant
+/// would be a distinction without a consumer (revisit if Ld3c needs the
+/// split). [`FileOrigin::Envelope`] tags a source file that came out of a
+/// deps-config envelope (`satysfi-envelope.yaml`).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum FileOrigin {
+    /// A Legacy-mode file, an Envelopes-mode local (`use … of`) dependency,
+    /// or the entry document. The [`Default`], so hand-built [`LoadedFile`]
+    /// literals stay a one-line `origin: FileOrigin::default()`.
+    #[default]
+    Local,
+    /// A source file of a deps-config envelope: `envelope` is the envelope's
+    /// (deps-config) name, `module` the declared module name of this file.
+    Envelope { envelope: String, module: String },
+}
+
 /// One parsed file in a loaded program.
 #[derive(Debug)]
 pub struct LoadedFile {
@@ -150,13 +172,36 @@ pub struct LoadedFile {
     /// support; every consumer must now match on the variant. See
     /// `LoadedCst`'s doc comment.
     pub cst: LoadedCst,
+    /// Where this file came from ([`FileOrigin::Local`] for Legacy files and
+    /// Envelopes-mode locals; [`FileOrigin::Envelope`] for deps-config
+    /// envelope sources). Additive metadata — no consumer reads it yet.
+    pub origin: FileOrigin,
+    /// The `SatysfiVersion` grammar this SPECIFIC file was parsed under —
+    /// always matches `cst`'s variant (`V0_0_6` <-> `LoadedCst::V0_0_6`,
+    /// `V0_1` <-> `LoadedCst::V0_1`). Cross-version import (X1,
+    /// `docs/plans/design-cross-version-import.md`): under `LoadMode::
+    /// Envelopes` and under a `LoadOptions { version: V0_0_6, .. }` Legacy
+    /// load, every file in one `LoadedProgram` shares one version (the
+    /// load's `opts.version`), exactly as before this field existed. Only a
+    /// `LoadOptions { version: V0_1, mode: Legacy, .. }` load can produce a
+    /// MIXED-version `files` list: `load_legacy`'s worklist (see its doc
+    /// comment) per-file-detects a `V0_0_6` dependency via the Q4 rule
+    /// (`design-cross-version-import.md` §5) so a `V0_1` document can
+    /// `@require:` a frozen `V0_0_6` package. Additive — every pre-X1
+    /// `LoadedFile { .. }` call site now must also name this field, but no
+    /// EXISTING (single-version) load's `cst`/`origin`/`path` values change.
+    pub version: SatysfiVersion,
 }
 
 /// A fully loaded, dependency-resolved program.
 #[derive(Debug)]
 pub struct LoadedProgram {
     /// Dependency-first order: every file appears after all the files it
-    /// `@require:`s / `@import:`s. The entry document is last.
+    /// depends on. Under Legacy mode that is the `@require:`/`@import:`
+    /// order; under Envelopes mode the ordering contract is: all deps-config
+    /// envelope sources first (dependency-first among themselves, each
+    /// envelope's modules closed-sorted), then the local `use … of` files
+    /// (dependency-first), then the entry document last.
     pub files: Vec<LoadedFile>,
 }
 
@@ -242,6 +287,17 @@ fn load_legacy(entry: &Path, opts: &LoadOptions) -> Result<LoadedProgram, LoadEr
     let mut id_of: HashMap<PathBuf, u32> = HashMap::new();
     let mut path_of: HashMap<u32, PathBuf> = HashMap::new();
     let mut cst_of: HashMap<u32, LoadedCst> = HashMap::new();
+    // X1 (design-cross-version-import.md §5, Q4): the per-file version each
+    // graph node was actually parsed under — see `LoadedFile::version`'s doc
+    // comment. Populated in lockstep with `cst_of` below; `V0_0_6` loads
+    // insert `V0_0_6` for every node (unchanged behavior).
+    let mut version_of: HashMap<u32, SatysfiVersion> = HashMap::new();
+    // X1 Q4: node ids reached via at least one `@require:` header edge (as
+    // opposed to only `@import:` edges) — the "resolves under `lib_root`'s
+    // package tree" half of the per-file detection rule. Populated as
+    // dependency edges are discovered, below; irrelevant (never consulted)
+    // for a `V0_0_6` load.
+    let mut require_targets: HashSet<u32> = HashSet::new();
     let mut adjacency: HashMap<u32, Vec<u32>> = HashMap::new();
     let mut processed: HashSet<u32> = HashSet::new();
 
@@ -259,7 +315,36 @@ fn load_legacy(entry: &Path, opts: &LoadOptions) -> Result<LoadedProgram, LoadEr
             path: path.clone(),
             source,
         })?;
-        let cst: LoadedCst = match opts.version {
+        // X1 Q4 (design-cross-version-import.md §5, "decision of record for
+        // X1"): under a `V0_1` load, every NON-entry file gets its own
+        // per-file version — `sniff_version` first (a `use`/`val`-shaped
+        // file sniffs `Some(V0_1)` even inside the frozen corpus), else
+        // `V0_0_6` if this id was reached via at least one `@require:` edge
+        // (the corpus IS `dist/packages/`, §4), else `opts.version`
+        // (`@import:`-relative siblings of the entry, and the entry itself,
+        // stay `V0_1`). A `V0_0_6` load is untouched: `file_version` is
+        // always `opts.version` there, exactly the old unconditional match.
+        let file_version = match opts.version {
+            SatysfiVersion::V0_1 if id != entry_id => satysfi_syntax::sniff_version(&src)
+                .unwrap_or(
+                    // A non-sniffable `@require:` target defaults to V0_0_6
+                    // ONLY when it is physically under the frozen 0.0.6 corpus
+                    // `dist/packages/` (§4). This must EXCLUDE `dist-v01/
+                    // packages/` — those are V0_1 packages and the substring
+                    // `/dist/packages/` does not match `/dist-v01/packages/`.
+                    // Everything else (dist-v01 requires, @import: siblings)
+                    // stays `opts.version` = V0_1.
+                    if require_targets.contains(&id)
+                        && path.to_string_lossy().contains("/dist/packages/")
+                    {
+                        SatysfiVersion::V0_0_6
+                    } else {
+                        SatysfiVersion::V0_1
+                    },
+                ),
+            other => other,
+        };
+        let cst: LoadedCst = match file_version {
             SatysfiVersion::V0_0_6 => LoadedCst::V0_0_6(
                 satysfi_syntax::parse_file(&src).map_err(|source| LoadError::Parse {
                     path: path.clone(),
@@ -283,6 +368,7 @@ fn load_legacy(entry: &Path, opts: &LoadOptions) -> Result<LoadedProgram, LoadEr
                  parse dispatch has no arm for it"
             ),
         };
+        version_of.insert(id, file_version);
 
         if id == entry_id {
             if !cst.is_document() {
@@ -299,12 +385,15 @@ fn load_legacy(entry: &Path, opts: &LoadOptions) -> Result<LoadedProgram, LoadEr
 
         // Collect this file's resolved dependency paths (per grammar
         // generation), then allocate ids for them uniformly below — so the
-        // id/worklist bookkeeping is written exactly once.
-        let mut resolved_deps: Vec<PathBuf> = Vec::new();
+        // id/worklist bookkeeping is written exactly once. The `bool` is
+        // whether the header that resolved this path was `@require:` (X1 Q4:
+        // feeds `require_targets`, below) as opposed to `@import:`.
+        let mut resolved_deps: Vec<(PathBuf, bool)> = Vec::new();
         if let Some(headers) = cst.headers_v006() {
             for header in headers {
+                let is_require = matches!(header, satysfi_syntax::cst::Header::Require(_));
                 if let Some(resolved) = resolve_legacy_header(header, &dir, &path, opts)? {
-                    resolved_deps.push(resolved);
+                    resolved_deps.push((resolved, is_require));
                 }
             }
         } else if let Some(headers) = cst.headers_v1() {
@@ -315,8 +404,9 @@ fn load_legacy(entry: &Path, opts: &LoadOptions) -> Result<LoadedProgram, LoadEr
                     // file resolves exactly like a 0.0.6 one (unchanged from
                     // Ld2).
                     HeaderV1::Legacy(h) => {
+                        let is_require = matches!(h, satysfi_syntax::cst::Header::Require(_));
                         if let Some(resolved) = resolve_legacy_header(h, &dir, &path, opts)? {
-                            resolved_deps.push(resolved);
+                            resolved_deps.push((resolved, is_require));
                         }
                     }
                     // A `use`-family header under Legacy mode: previously a
@@ -338,9 +428,25 @@ fn load_legacy(entry: &Path, opts: &LoadOptions) -> Result<LoadedProgram, LoadEr
         }
 
         let mut deps = Vec::new();
-        for resolved in resolved_deps {
+        for (resolved, is_require) in resolved_deps {
             let dep_canon = canonicalize(&resolved)?;
+            // X1 Q4 (design-cross-version-import.md §5): "a `@require:`-
+            // resolved target … that RESOLVES UNDER `lib-satysfi/dist/
+            // packages/`" — the FROZEN 0.0.6 corpus path specifically, NOT
+            // every `@require:` edge. This is the load-bearing narrowing: a
+            // `V0_1` package `@require:`d out of `dist-v01/packages/` (the
+            // 0.1 corpus — reached via `resolve_require`'s `lib_root/name`
+            // fallback, so its canonical path is NOT under a `dist/packages`
+            // segment) must stay `V0_1`, or it would be mis-parsed with the
+            // 0.0.6 grammar. Only a target physically under a `dist/packages`
+            // directory is the frozen 0.0.6 corpus and eligible for the Q4
+            // provenance downgrade (a genuinely-0.1 package dropped there
+            // still wins via its own `Some(V0_1)` sniff, per the rule).
+            let is_corpus_target = is_require && is_dist_packages_target(&dep_canon);
             let dep_id = alloc_id(dep_canon, &mut next_id, &mut id_of, &mut path_of);
+            if is_corpus_target {
+                require_targets.insert(dep_id);
+            }
             deps.push(dep_id);
             worklist.push(dep_id);
         }
@@ -360,6 +466,11 @@ fn load_legacy(entry: &Path, opts: &LoadOptions) -> Result<LoadedProgram, LoadEr
             cst: cst_of
                 .remove(&id)
                 .expect("every graph node id was parsed before toposort"),
+            // Legacy-mode files are all plain local files.
+            origin: FileOrigin::Local,
+            version: version_of
+                .remove(&id)
+                .expect("every graph node id was version-tagged before toposort"),
         })
         .collect();
 
@@ -370,6 +481,22 @@ pub(crate) fn canonicalize(path: &Path) -> Result<PathBuf, LoadError> {
     std::fs::canonicalize(path).map_err(|source| LoadError::Io {
         path: path.to_path_buf(),
         source,
+    })
+}
+
+/// Whether `path` lives under a `dist/packages/` directory — the frozen
+/// 0.0.6 corpus layout (`docs/plans/design-cross-version-import.md` §4/Q4),
+/// the `@require:`-provenance signal the X1 per-file version detector uses to
+/// downgrade a sniff-`None` corpus dependency to `V0_0_6`. Matches ANY two
+/// consecutive components `dist` then `packages` anywhere in the path, so it
+/// recognizes both this port's own `lib-satysfi/dist/packages/` and a
+/// Satyrographos-style `<root>/dist/packages/` install — but deliberately
+/// NOT the 0.1 corpus `dist-v01/packages/` (`dist-v01` != `dist`), whose
+/// `V0_1` packages must keep the load's `opts.version`.
+fn is_dist_packages_target(path: &Path) -> bool {
+    let comps: Vec<_> = path.components().collect();
+    comps.windows(2).any(|w| {
+        w[0].as_os_str() == "dist" && w[1].as_os_str() == "packages"
     })
 }
 

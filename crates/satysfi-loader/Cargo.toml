@@ -10,3 +10,14 @@ authors.workspace = true
 satysfi-syntax.workspace = true
 safegraph.workspace = true
 thiserror.workspace = true
+serde.workspace = true
+# Decode-only, scoped to this crate (Ld3b spec §4): both `satysfi-deps.yaml`
+# and `satysfi-envelope.yaml` are small, trusted, saphe-written/hand-written
+# YAML documents. `serde_yaml` is archived upstream but libyaml-derived like
+# the OCaml `Yaml` package this format's own decoder (`yamlDecoder.ml`) is
+# built on, already resolvable from the local registry cache, and
+# battle-tested. If a future cargo-deny/audit gate ever trips on its
+# unmaintained advisory, `serde_norway` is a drop-in replacement (same API).
+# NOTE for the future `satysfi-saphe` crate (plan Sa1): it exchanges these
+# same two file formats and MUST use this same YAML crate.
+serde_yaml = "0.9"

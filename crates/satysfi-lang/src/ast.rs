@@ -79,6 +79,24 @@ pub enum Ast {
     },
 }
 
+/// One command-application argument (SATySFi 0.1 optional-arg-rows increment
+/// 3b-β): `arg` is the ordinary positional argument value (exactly what
+/// `Vec<Ast>` used to carry directly), `opts` is this argument's supplied
+/// `?(l = e, …)` labeled-optional bundle — upstream's `UTCommandArg of
+/// (label * expr) list * expr` (`types.cppo.ml:583-584`). Every producer
+/// this port has BEFORE increment 3b (all of 0.0.6, and every V0_1 command
+/// call with no bundle — the only kind increment 3a's demand census found)
+/// emits `opts: vec![]`, so this is additive: an empty bundle behaves
+/// exactly like the old bare `Ast` did. At runtime, a non-empty `opts` folds
+/// through `eval::Interp::apply_with_opts` (like `Ast::ApplyOpt` does for a
+/// plain-value application) instead of a plain `apply`; each label the
+/// command declares but this call omits still defaults to `None` there.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CmdArg {
+    pub opts: Vec<(String, Ast)>,
+    pub arg: Ast,
+}
+
 /// One quoted math element (structure mirrors the `mathmain`/`mathtop`/
 /// `mathbot` rules; only carried, not typeset, until phase 7).
 #[derive(Clone, Debug, PartialEq)]
@@ -93,11 +111,17 @@ pub enum MathElem {
     Sup(Box<MathElem>, Vec<MathElem>),
     /// `base '`+ (primes count as a superscript)
     Primes(Box<MathElem>, usize),
-    /// `\cmd args…` in math mode; sigil included.
+    /// `\cmd args…` in math mode; sigil included. `args` is [`CmdArg`]-shaped
+    /// for uniformity with `IText::Cmd`/`BText::Cmd` (`check_cmd_args`/the
+    /// runtime command fold are shared across all three); the math-mode
+    /// application grammar (`cst::ast::MathArg`) has no `?(l=e)` bundle form
+    /// at all (math command *arguments* are always bracket groups — `{…}` /
+    /// `!{…}` / `!<…>` / `!(…)`, upstream `narg`), so every `CmdArg` here
+    /// has `opts: vec![]` by construction — see `elaborate::math_bot`.
     Cmd {
         name: String,
         span: Span,
-        args: Vec<Ast>,
+        args: Vec<CmdArg>,
     },
     /// `#x` in math mode.
     Embed { expr: Ast, span: Span },
@@ -137,7 +161,7 @@ pub enum IText {
         /// Sigil included (`\emph`), matching the environment entry.
         name: String,
         span: Span,
-        args: Vec<Ast>,
+        args: Vec<CmdArg>,
     },
     /// `#expr;` — an embedded expression evaluating to inline-text, spliced
     /// in place (`UTInputHorzContent`).
@@ -163,7 +187,7 @@ pub enum BText {
         /// Sigil included (`+p`).
         name: String,
         span: Span,
-        args: Vec<Ast>,
+        args: Vec<CmdArg>,
     },
     /// `#expr;` — an embedded expression evaluating to block-text
     /// (`UTInputVertContent`).

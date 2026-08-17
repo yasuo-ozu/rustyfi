@@ -31,6 +31,7 @@
 
 use crate::types::{instantiate, resolve, resolve_row, MonoType, PolyType, Row, TypeContext};
 use crate::unify::{unify, UnifyError};
+use satysfi_syntax::cst_v1::ast as ast_v1;
 use satysfi_syntax::span::Span;
 
 /// Why `inferred` failed to subsume `declared_rigid`.
@@ -113,46 +114,36 @@ fn row_mentions_stamp(row: &Row, marker: &str) -> bool {
 /// not a single `unify` call, so its error shape will grow independently in
 /// 2f-2 (domain contravariance, codomain covariance, arity mismatches, …).
 #[derive(Debug)]
-#[allow(dead_code)] // unreachable from any 2f-1 source shape; live + unit-tested (T-sub1).
 pub(crate) enum SigSubtypeError {
     /// Upstream `signatureSubtyping.ml`'s `substitute_concrete` `ConcFunctor`
     /// arm (`dev-0-1-0:116`'s `failwith "TODO: substitute_concrete,
     /// closure"`; the heavier `substitute_closure` on `saphe-split`,
     /// flagged "TODO: remove this … Bochao–Ohori style static
-    /// interpretation"). Reached only when an abstract-type substitution
-    /// must pass THROUGH a functor signature that is itself nested inside
-    /// another (a HIGHER-ORDER functor) — this port's first-order 2f-1/2f-2
-    /// slice never constructs such a signature (no demand package is
-    /// higher-order, §0.6), so this is a DEFINED rejection for the one shape
-    /// upstream leaves undefined, never a panic/`failwith`.
+    /// interpretation"). Reached when a functor sig-member's declared
+    /// CODOMAIN is itself a functor signature (`(Y:S2)->S3`, a curried/
+    /// higher-order functor member) — this port's first-order 2f-2 slice
+    /// never constructs such a signature (no demand package is higher-order,
+    /// §0.6), so this is a DEFINED rejection for the one shape upstream
+    /// leaves undefined, never a panic/`failwith`.
     NestedFunctorSubstitution { span: Span },
 }
 
-/// A functor's codomain signature shape, as seen by
-/// [`substitute_result_sig`]'s one-line guard: either an ORDINARY signature
-/// (2f-2's real substitution payload — deliberately left as an opaque
-/// placeholder here, since 2f-1 never constructs one), or a signature that
-/// is ITSELF a functor signature (`(Y:S2)->S3`) — the higher-order shape the
-/// guard refuses to recurse into.
-#[allow(dead_code)] // unreachable from any 2f-1 source shape; live + unit-tested (T-sub1).
-pub(crate) enum CodomainShape<'a> {
-    Ordinary(&'a ()),
-    Functor,
-}
-
-/// The one substitution site 2f-2's codomain-abstraction machinery will
-/// drive (§2.5/§9's `substitute_result_sig` handoff): given the functor
-/// application's codomain shape, refuse with
-/// [`SigSubtypeError::NestedFunctorSubstitution`] when it is itself a
-/// functor signature (higher-order) rather than recurse into upstream's
-/// undefined `failwith`. A one-line guard, live and unit-tested (T-sub1)
-/// from 2f-1 even though no 2f-1 source can reach it (2f-1 never seals a
-/// functor's result at all — §1's cut).
-#[allow(dead_code)] // unreachable from any 2f-1 source shape; live + unit-tested (T-sub1).
-pub(crate) fn substitute_result_sig(codomain: CodomainShape, span: Span) -> Result<(), SigSubtypeError> {
-    match codomain {
-        CodomainShape::Functor => Err(SigSubtypeError::NestedFunctorSubstitution { span }),
-        CodomainShape::Ordinary(_) => Ok(()),
+/// Sub-slice 2f-2b (`…/tmp/slice2d3b-2f2-sigmembers.md` §5.1 step 4): the
+/// codomain-shape guard, now REACHABLE from real source — driven both at
+/// functor sig-member REGISTRATION time (`module_check.rs`'s
+/// `Decl::Module`-functor arm) and at APPLICATION-substitution time (the
+/// per-application abstract-result sealing, §5.2-2). `cod` is the functor
+/// member's declared codomain (already substituted `[param := arg]` at the
+/// application site, or un-substituted at registration time — the shape
+/// guard is substitution-invariant). A `SigExpr::Functor` codomain (curried/
+/// higher-order) refuses with [`SigSubtypeError::NestedFunctorSubstitution`]
+/// rather than recurse into upstream's undefined `failwith`; every other
+/// codomain shape (`Bot`/`WithType`) is fine at THIS guard (their own
+/// resolution/width checks happen elsewhere).
+pub(crate) fn substitute_result_sig(cod: &ast_v1::SigExpr, span: Span) -> Result<(), SigSubtypeError> {
+    match cod {
+        ast_v1::SigExpr::Functor { .. } => Err(SigSubtypeError::NestedFunctorSubstitution { span }),
+        ast_v1::SigExpr::Bot(_) | ast_v1::SigExpr::WithType { .. } => Ok(()),
     }
 }
 
@@ -275,15 +266,43 @@ mod tests {
         assert!(val_subsumes(&mut c, &inferred, &declared, "#2").is_ok());
     }
 
-    /// T-sub1 (spec §5/§6): `SigSubtypeError::NestedFunctorSubstitution` is
-    /// defined and LIVE — constructing the nested-functor-codomain shape
-    /// directly and driving it through `substitute_result_sig` yields the
-    /// typed rejection, even though 2f-1 has no source shape that reaches
-    /// this call.
+    /// Parse a library's `:> sig … end` umbrella and return its first
+    /// `Decl::Module`'s declared type — used by both tests below to reach a
+    /// real, parsed `SigExpr::Functor` codomain without needing this module
+    /// to hand-construct the (span-heavy) AST directly.
+    fn first_decl_module_sig(src: &str) -> ast_v1::SigExpr {
+        use satysfi_syntax::{cst_v1, parse_file_v1};
+        let file = parse_file_v1(src).unwrap_or_else(|e| panic!("parse failed: {e}"));
+        let cst_v1::FileV1::Library { sig_annot, .. } = &file else {
+            panic!("expected a library")
+        };
+        let ast_v1::SigExpr::Bot(ast_v1::SigBotV1::Sig { decls, .. }) = &*sig_annot.as_ref().unwrap().sig_.0
+        else {
+            panic!("expected an inline `sig … end` umbrella")
+        };
+        let ast_v1::Decl::Module { sig_, .. } = &*decls[0].0 else {
+            panic!("expected the umbrella's first decl to be a `Decl::Module`")
+        };
+        (**sig_).clone()
+    }
+
+    /// T-sub1 (spec §5/§6), now reachable from 2f-2b source: a curried
+    /// functor-sig MEMBER (`module F : (X : S) -> (Y : S2) -> S3`) parsed
+    /// off a real umbrella, driven through `substitute_result_sig`, yields
+    /// the typed rejection.
     #[test]
     fn nested_functor_substitution_is_defined_and_live() {
-        let span = Span::default();
-        let err = substitute_result_sig(CodomainShape::Functor, span).unwrap_err();
+        let sig = first_decl_module_sig(
+            "module M :> sig\n\
+             module F : (X : S) -> (Y : S2) -> S3\n\
+             end = struct\n\
+             module F = fun (X : S) -> struct end\n\
+             end",
+        );
+        let ast_v1::SigExpr::Functor { cod, .. } = &sig else {
+            panic!("expected a functor sig")
+        };
+        let err = substitute_result_sig(cod, Span::default()).unwrap_err();
         assert!(matches!(err, SigSubtypeError::NestedFunctorSubstitution { .. }));
     }
 
@@ -291,7 +310,16 @@ mod tests {
     /// only fires on the higher-order shape.
     #[test]
     fn ordinary_codomain_is_not_rejected() {
-        let span = Span::default();
-        assert!(substitute_result_sig(CodomainShape::Ordinary(&()), span).is_ok());
+        let sig = first_decl_module_sig(
+            "module M :> sig\n\
+             module F : (X : S) -> S2\n\
+             end = struct\n\
+             module F = fun (X : S) -> struct end\n\
+             end",
+        );
+        let ast_v1::SigExpr::Functor { cod, .. } = &sig else {
+            panic!("expected a functor sig")
+        };
+        assert!(substitute_result_sig(cod, Span::default()).is_ok());
     }
 }

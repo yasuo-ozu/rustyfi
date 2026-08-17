@@ -171,7 +171,19 @@ fn merge_program_v01(
         .expect("loader always yields at least the entry file");
     let mut prelude = Vec::new();
     for dep in deps {
-        prelude.extend(v1::lower::lower_file_v1(as_v01(dep))?);
+        // X1 (design-cross-version-import.md §5): mirror production's
+        // `compile_document_v1_with_trials` dep loop, which is now a
+        // MIXED-version list. A V0_1 dep is lowered as before; a V0_0_6 dep (a
+        // 0.0.6-corpus `@require:` target reached under a V0_1 entry) splices
+        // its `cst::File.prelude` bindings directly. Production also runs the
+        // forked-name guard on that path, but this typecheck-differential
+        // harness only needs to not panic + emit a stable line, so it splices
+        // unconditionally. (The V0_0_6-first branch in `one_line` — the 0.0.6
+        // golden lines — never reaches here and is untouched by X1.)
+        match &dep.cst {
+            LoadedCst::V0_1(cst) => prelude.extend(v1::lower::lower_file_v1(cst)?),
+            LoadedCst::V0_0_6(cst) => prelude.extend(cst.prelude.iter().cloned()),
+        }
     }
     let entry_cst = as_v01(entry);
     let body = v1::lower::lower_document_v1(entry_cst)?;

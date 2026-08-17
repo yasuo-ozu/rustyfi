@@ -79,21 +79,11 @@ pub enum LoadError {
     )]
     InvalidModeVersion { version: SatysfiVersion },
 
-    /// Envelopes mode, Ld3a: a `satysfi-deps.yaml` was supplied but its
-    /// consumption (envelope graph resolution) is not implemented yet.
-    /// Follow-up: Ld3b.
-    #[error(
-        "{path}: satysfi-deps.yaml consumption is not implemented yet (Ld3b); \
-         only `use … of` local dependencies are supported so far"
-    )]
-    DepsConfigUnsupported { path: PathBuf },
-
     /// `use package Mod` with no deps config to resolve `Mod` against
-    /// (upstream's used_as map is empty). Follow-up: Ld3b.
+    /// (upstream's used_as map is empty).
     #[error(
         "{from}: cannot resolve `use package {module}` — no pre-resolved \
-         dependency graph; pass --deps <satysfi-deps.yaml> (package resolution \
-         lands in Ld3b)"
+         dependency graph; pass --deps <satysfi-deps.yaml>"
     )]
     PackageDependencyUnresolved { module: String, from: PathBuf },
 
@@ -135,6 +125,108 @@ pub enum LoadError {
          mode resolves `use package` / `use … of` headers only"
     )]
     LegacyHeaderUnderEnvelopes { header: String, from: PathBuf },
+
+    /// Ld3b-1: the `--deps` file (`satysfi-deps.yaml`) could not be read.
+    /// Upstream `DepsConfigNotFound`, `depsConfig.ml:40-45`. Nothing calls
+    /// [`crate::v01x::deps::load`] yet (that wiring is Ld3b-2); this variant
+    /// exists so the decoder's own unit tests can exercise the real error
+    /// path.
+    #[error("{path}: cannot read satysfi-deps.yaml: {source}")]
+    DepsConfigNotFound {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    /// Ld3b-1: `satysfi-deps.yaml` failed to decode or validate — either a
+    /// YAML/shape error from `serde_yaml` or one of the two non-structural
+    /// checks (`path` must be absolute; `used_as` must be an uppercased
+    /// identifier). Upstream `DepsConfigError` wrapping `YamlError`
+    /// (`depsConfig.ml:46-47`, `yamlDecoder.ml`); `message` carries a
+    /// dotted-path context string in the same spirit as upstream's
+    /// `show_yaml_context` (wording is this port's own, per Ld3b spec §3.4).
+    #[error("{path}: invalid satysfi-deps.yaml: {message}")]
+    DepsConfigDecode { path: PathBuf, message: String },
+
+    /// Ld3b-1: a `satysfi-envelope.yaml` could not be read. Upstream
+    /// `EnvelopeConfigNotFound`, `envelopeConfig.ml:142-147`.
+    #[error("{path}: cannot read satysfi-envelope.yaml: {source}")]
+    EnvelopeConfigNotFound {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    /// Ld3b-1: a `satysfi-envelope.yaml` failed to decode or validate.
+    /// Upstream `EnvelopeConfigError`. Covers the `library`/`font` branch
+    /// check, `opentype_single`/`opentype_collection` branch check, relative
+    /// `path`, lowercased font `name`, and the 18 `markdown_conversion`
+    /// command/identifier shapes.
+    #[error("{path}: invalid satysfi-envelope.yaml: {message}")]
+    EnvelopeConfigDecode { path: PathBuf, message: String },
+
+    /// Ld3b-2: a `source_directories` entry of an envelope could not be
+    /// listed. Upstream `CannotReadDirectory`, `envelopeReader.ml:15-16`.
+    #[error("{path}: cannot list envelope source directory: {source}")]
+    CannotReadDirectory {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    /// Ld3b-2: two deps-config envelopes share a name. Upstream
+    /// `EnvelopeNameConflict`, `closedEnvelopeDependencyResolver.ml:50-51`.
+    #[error("satysfi-deps.yaml: two envelopes are named `{name}`")]
+    EnvelopeNameConflict { name: String },
+
+    /// Ld3b-2: an envelope depends on a name absent from the deps config's
+    /// envelope set. Upstream `DependencyOnUnknownEnvelope`,
+    /// `closedEnvelopeDependencyResolver.ml:71-76`.
+    #[error("envelope `{depending}` depends on unknown envelope `{depended}`")]
+    DependencyOnUnknownEnvelope { depending: String, depended: String },
+
+    /// Ld3b-2: a cycle in the envelope dependency graph. Upstream
+    /// `CyclicEnvelopeDependency`; `chain` is names (not paths), the first
+    /// element repeated last, matching [`Cycle`]'s shape.
+    #[error("envelope dependency cycle: {}", .chain.join(" -> "))]
+    CyclicEnvelopeDependency { chain: Vec<String> },
+
+    /// Ld3b-2: two source files in one envelope declare the same module
+    /// name. Upstream `FileModuleNameConflict`,
+    /// `closedFileDependencyResolver.ml:20-22`.
+    #[error(
+        "envelope module `{module}` is declared by both {} and {}",
+        .prev.display(),
+        .path.display()
+    )]
+    FileModuleNameConflict {
+        module: String,
+        prev: PathBuf,
+        path: PathBuf,
+    },
+
+    /// Ld3b-2: a bare `use M` inside an envelope names no sibling module.
+    /// Upstream `FileModuleNotFound`, `closedFileDependencyResolver.ml:37-41`.
+    #[error("{from}: `use {module}` names no module in this envelope")]
+    FileModuleNotFound { module: String, from: PathBuf },
+
+    /// Ld3b-2: a `use … of` header inside an envelope source tree. Upstream
+    /// `CannotUseHeaderUseOf`, `closedFileDependencyResolver.ml:51-52`.
+    #[error(
+        "{from}: `use {module} of …` is not allowed inside a package; package \
+         files address siblings by bare `use <Module>`"
+    )]
+    UseOfInsidePackage { module: String, from: PathBuf },
+
+    /// Ld3b-2: a `use package M` header whose head matches no `used_as` alias
+    /// in the supplied deps config. Upstream `UnknownPackageDependency`
+    /// (typecheck-side there, load-side here — this port's loader is the only
+    /// header consumer; see Ld3b spec §6 step 5).
+    #[error(
+        "{from}: `use package {module}` does not match any dependency alias \
+         (`used_as`) in the supplied satysfi-deps.yaml"
+    )]
+    UnknownPackageDependency { module: String, from: PathBuf },
 }
 
 fn format_versions(versions: &[SatysfiVersion]) -> String {

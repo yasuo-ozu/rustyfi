@@ -18,7 +18,7 @@ pub mod value;
 use crossref::{CrossRefs, Verdict};
 use satysfi_backend::{placed_line_extent, DecoId, FontMetrics, GraphicsElem, Length, PureHorzBox};
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 use value::{DocumentValue, Value};
 
@@ -36,6 +36,26 @@ pub enum CompileError {
     NotADocument(&'static str),
     #[error(transparent)]
     Lower(#[from] v1::lower::LowerError),
+    /// Cross-version import (X1, `docs/plans/design-cross-version-import.md`
+    /// §5): a `V0_0_6` dependency spliced into a `V0_1` program referenced
+    /// `name`, a builtin primitive/type that is version-forked (bound, or
+    /// shaped, differently between `V0_0_6` and `V0_1` —
+    /// `primitives::forked_prim_names`/`typecheck::forked_type_names`). The
+    /// merged program's single `base_env_with_version(V0_1)` can only bind
+    /// ONE closure per name (§3.2's R1), so silently accepting this would
+    /// mis-resolve `name` to the WRONG version's primitive; `slice` names
+    /// the milestone (`"X1"`) so a later slice's error text can update in
+    /// lockstep with what it actually fixes.
+    #[error(
+        "cross-version import ({slice}): dependency {dep} references `{name}`, a \
+         version-forked builtin — {slice} only supports the version-neutral subset \
+         of the 0.0.6 corpus (see docs/plans/design-cross-version-import.md)"
+    )]
+    CrossVersionUnsupportedName {
+        name: String,
+        dep: String,
+        slice: &'static str,
+    },
 }
 
 /// Compile a `.saty` source string down to a typeset document:
@@ -177,29 +197,71 @@ pub fn compile_document_v1_with_trials(
     let (entry, deps) = files
         .split_last()
         .expect("loader always yields at least the entry file");
+    // Only ever called on the entry: under `compile_document_v1`, the entry
+    // is ALWAYS `V0_1` (the loader's own contract — `load_legacy`'s Q4 rule
+    // only ever downgrades a DEPENDENCY to `V0_0_6`, never the entry; see
+    // `LoadedFile::version`'s doc comment). A `V0_0_6` dependency is instead
+    // routed through the cross-version splice arm below (X1,
+    // `docs/plans/design-cross-version-import.md` §5) — it never reaches
+    // this helper.
     fn as_v01(f: &satysfi_loader::LoadedFile) -> &satysfi_syntax::cst_v1::FileV1 {
         match &f.cst {
             satysfi_loader::LoadedCst::V0_1(cst) => cst,
             satysfi_loader::LoadedCst::V0_0_6(_) => unreachable!(
-                "compile_document_v1 called on a V0_0_6-parsed file — the \
-                 caller's version dispatch (cmd_compile) and the loader's \
-                 single-version parse (load()) both prevent this"
+                "as_v01 called on a V0_0_6-parsed file — the entry is always \
+                 V0_1 under compile_document_v1, and every V0_0_6 dependency \
+                 is routed through the X1 cross-version splice arm instead"
             ),
         }
     }
-    let dep_csts: Vec<&satysfi_syntax::cst_v1::FileV1> = deps.iter().map(as_v01).collect();
     // Sub-slice 2d-3 (`…/tmp/slice2d3-module-sig-decls.md` §2.1): one
-    // `SurfaceEnv` threaded across every dependency in load order, so a
+    // `SurfaceEnv` threaded across every V0_1 dependency in load order, so a
     // module alias/named-signature reference in a LATER-loaded library can
     // resolve an EARLIER one (`module M = OtherLib`, `:> OtherLib.S`).
     // `build_file_surface` runs (pure `cst_v1` walk, no lowering needed)
     // BEFORE each dep is lowered, so that dep's own internal aliases/named
     // signatures resolve too (`v1/surface.rs`'s doc comment).
+    //
+    // X1 (design-cross-version-import.md §5): `deps` is now a MIXED-version
+    // list (`LoadedFile::version`). A `V0_1` dep is lowered exactly as
+    // before; a `V0_0_6` dep contributes its `cst::File.prelude` bindings
+    // DIRECTLY (they are already `cst::TopBinding`s — §1.1's "no syntactic
+    // bridge needed"), positioned dependency-first (loader order, unchanged)
+    // — but ONLY after the forked-name guard proves it references no
+    // version-forked builtin (§3.2's R1: the single `base_env_with_version
+    // (V0_1)` below cannot serve two different arities of the same
+    // primitive name, so an unguarded splice would silently mis-resolve
+    // one). `dep_csts` collects the V0_1 subset only — `check_program`
+    // (below) has no `cst_v1` vocabulary for a `V0_0_6` file (§2.5/R3).
     let mut surfaces = v1::surface::SurfaceEnv::default();
     let mut prelude = Vec::new();
-    for dep in &dep_csts {
-        v1::surface::build_file_surface(dep, &mut surfaces);
-        prelude.extend(v1::lower::lower_file_v1_with_surfaces(dep, &surfaces)?);
+    let mut dep_csts: Vec<&satysfi_syntax::cst_v1::FileV1> = Vec::new();
+    for dep in deps {
+        match &dep.cst {
+            satysfi_loader::LoadedCst::V0_1(cst) => {
+                v1::surface::build_file_surface(cst, &mut surfaces);
+                prelude.extend(v1::lower::lower_file_v1_with_surfaces(cst, &surfaces)?);
+                dep_csts.push(cst);
+            }
+            satysfi_loader::LoadedCst::V0_0_6(cst) => {
+                let free = collect_free_globals(&cst.prelude);
+                let forked_v = primitives::forked_prim_names();
+                let forked_t = typecheck::forked_type_names();
+                if let Some(name) = free
+                    .values
+                    .intersection(&forked_v)
+                    .next()
+                    .or_else(|| free.types.intersection(&forked_t).next())
+                {
+                    return Err(CompileError::CrossVersionUnsupportedName {
+                        name: name.clone(),
+                        dep: dep.path.display().to_string(),
+                        slice: "X1",
+                    });
+                }
+                prelude.extend(cst.prelude.iter().cloned());
+            }
+        }
     }
     let entry_cst = as_v01(entry);
     let body = v1::lower::lower_document_v1(entry_cst)?;
@@ -223,6 +285,778 @@ pub fn compile_document_v1_with_trials(
     v1::module_check::check_program(&dep_csts, &program)?;
     let compiled = compile::compile_program(&program.body, &env0);
     eval_document_trials(&compiled, metrics, SatysfiVersion::V0_1)
+}
+
+// ============================================================================
+// X1 forked-name guard (design-cross-version-import.md §5): before splicing
+// a V0_0_6 dependency's `prelude` into a V0_1 program (above), walk it for
+// the free (unqualified, unshadowed) primitive/type names it references and
+// hard-reject any that is version-forked. This is what keeps X1 *sound*
+// rather than silently wrong (§3.2's R1) — see `compile_document_v1_with_
+// trials`'s dep loop for the actual check against `primitives::
+// forked_prim_names`/`typecheck::forked_type_names`.
+//
+// Greenfield: there is no generic CST visitor in this crate (the closest
+// precedent is `typecheck.rs`'s `walk_atom`/`walk_expr` quartet, which walks
+// only `ast::TypeExpr` for tyvars); this is modeled on it, but covers the
+// FULL `cst::TopBinding`/`ast::Expr`/`ast::Pattern`/`ast::TypeExpr` grammar.
+// ============================================================================
+
+/// The free, unqualified global names a spliced V0_0_6 dependency's
+/// `prelude` references, split by namespace (values/commands vs. types)
+/// because they are checked against DIFFERENT forked-name sets. See
+/// `collect_free_globals`'s doc comment for the walk itself.
+#[derive(Default, Debug)]
+struct FreeGlobals {
+    /// Value-position occurrences that could resolve to `base_env`:
+    /// `Atomic::Var`/`Ctor`/`OpRef`/`Command`, the `Plain` arm of an
+    /// `AnyHorz`/`Vert`/`MathCmdTok` reference, and an unqualified
+    /// `…Elem::Embed`/`MathBot::Embed`.
+    values: BTreeSet<String>,
+    /// Type-position occurrences: `TypeAtom::Name` and the `ctor` of
+    /// `TypeApp::Applied`.
+    types: BTreeSet<String>,
+}
+
+/// The binder scope threaded through `collect_free_globals`'s walk: two
+/// independent namespaces (values/commands vs. types), each a plain stack of
+/// names — pushing a name shadows an outer/global name of the SAME
+/// namespace for the extent of whatever construct introduced it (`mark`/
+/// `truncate_to` bound that extent, mirroring a lexical block's entry/exit).
+///
+/// **Soundness note.** This is a rejection GUARD, so over-approximation is
+/// the safe direction: failing to push a genuine local binder just makes a
+/// local look "free" (over-reporting — at worst an over-*rejection*, never
+/// silently accepting something unsound). The one thing the walk must never
+/// do is drop a binder scope *too early* / push something that ISN'T really
+/// bound at that point, which would hide a genuine reference to a
+/// version-forked global (see `Expr::OpenIn`'s arm below, which deliberately
+/// binds NOTHING for an `open Mod in …` rather than guess at Mod's members).
+#[derive(Default)]
+struct XverScope {
+    values: Vec<String>,
+    types: Vec<String>,
+}
+
+impl XverScope {
+    fn mark(&self) -> (usize, usize) {
+        (self.values.len(), self.types.len())
+    }
+
+    fn truncate_to(&mut self, mark: (usize, usize)) {
+        self.values.truncate(mark.0);
+        self.types.truncate(mark.1);
+    }
+
+    fn push_value(&mut self, name: &str) {
+        self.values.push(name.to_string());
+    }
+
+    fn push_type(&mut self, name: &str) {
+        self.types.push(name.to_string());
+    }
+
+    fn has_value(&self, name: &str) -> bool {
+        self.values.iter().any(|v| v == name)
+    }
+
+    fn has_type(&self, name: &str) -> bool {
+        self.types.iter().any(|v| v == name)
+    }
+}
+
+fn emit_value(scope: &XverScope, out: &mut FreeGlobals, name: &str) {
+    if !scope.has_value(name) {
+        out.values.insert(name.to_string());
+    }
+}
+
+fn emit_type(scope: &XverScope, out: &mut FreeGlobals, name: &str) {
+    if !scope.has_type(name) {
+        out.types.insert(name.to_string());
+    }
+}
+
+/// Enumerate the *free, unqualified* global names a spliced V0_0_6
+/// dependency references — `TopBinding`/`ast::Expr`/`ast::Pattern`/
+/// `ast::TypeExpr`, each threading a binder scope stack so a locally-bound
+/// name shadows a primitive of the same name (per `XverScope`'s doc
+/// comment). A module-qualified reference (`Atomic::VarWithMod`,
+/// `\Mod.cmd`/`+Mod.cmd`/`#Mod.var`) is deliberately SKIPPED: a primitive or
+/// builtin type is only ever reachable by a BARE name, so a qualified
+/// reference resolves inside a module and can never collide with a forked
+/// primitive (0.0.6 has no qualified *type*-name form at all, so every type
+/// reference is in scope for this check).
+fn collect_free_globals(prelude: &[satysfi_syntax::cst::TopBinding]) -> FreeGlobals {
+    let mut out = FreeGlobals::default();
+    let mut scope = XverScope::default();
+    for tb in prelude {
+        walk_top_binding(tb, &mut scope, &mut out);
+    }
+    out
+}
+
+fn walk_top_binding(tb: &satysfi_syntax::cst::TopBinding, scope: &mut XverScope, out: &mut FreeGlobals) {
+    use satysfi_syntax::cst::TopBinding;
+    match tb {
+        // Recursive: every clause's own name is bound BEFORE any clause body
+        // is walked (and stays bound for every sibling `and` clause too).
+        TopBinding::LetRec { first, ands, .. } => {
+            scope.push_value(&first.name.name);
+            for and in ands {
+                scope.push_value(&and.binding.name.name);
+            }
+            walk_rec_binding_body(first, scope, out);
+            for and in ands {
+                walk_rec_binding_body(&and.binding, scope, out);
+            }
+        }
+        TopBinding::Let(tl) => {
+            let mark = scope.mark();
+            for p in &tl.params {
+                walk_param_binder(p, scope, out);
+            }
+            walk_expr(&tl.value, scope, out);
+            scope.truncate_to(mark);
+            scope.push_value(&tl.name.name);
+        }
+        TopBinding::LetInline { ctx, cmd, params, value, .. } => {
+            let mark = scope.mark();
+            if let Some(c) = ctx {
+                scope.push_value(&c.name);
+            }
+            for p in params {
+                walk_param_binder(p, scope, out);
+            }
+            walk_expr(value, scope, out);
+            scope.truncate_to(mark);
+            scope.push_value(&cmd.name);
+        }
+        TopBinding::LetBlock { ctx, cmd, params, value, .. } => {
+            let mark = scope.mark();
+            if let Some(c) = ctx {
+                scope.push_value(&c.name);
+            }
+            for p in params {
+                walk_param_binder(p, scope, out);
+            }
+            walk_expr(value, scope, out);
+            scope.truncate_to(mark);
+            scope.push_value(&cmd.name);
+        }
+        TopBinding::LetMath { cmd, params, value, .. } => {
+            let mark = scope.mark();
+            for p in params {
+                walk_param_binder(p, scope, out);
+            }
+            walk_expr(value, scope, out);
+            scope.truncate_to(mark);
+            scope.push_value(&cmd.name);
+        }
+        TopBinding::Type(td) => {
+            walk_type_decl(td, scope, out);
+            scope.push_type(&td.name.name);
+        }
+        TopBinding::LetMutable { name, value, .. } => {
+            walk_expr(value, scope, out);
+            scope.push_value(&name.name);
+        }
+        TopBinding::Module { sig, decls, .. } => {
+            if let Some(sig) = sig {
+                walk_sig_annot(sig, scope, out);
+            }
+            // A nested module's own decls get a scope extent of their own —
+            // its LOCAL bindings must not leak to a sibling top binding
+            // outside the module.
+            let mark = scope.mark();
+            for d in decls {
+                walk_top_binding(&d.0, scope, out);
+            }
+            scope.truncate_to(mark);
+            // The module's own NAME (a `CtorTok`, uppercase-initial) is a
+            // third namespace this guard doesn't track — it can never
+            // collide with a lowercase primitive/type name.
+        }
+        // `open Mod` unqualified-imports Mod's members — unknowable
+        // statically here (no elaboration has run yet), so this
+        // conservatively binds NOTHING new: see `XverScope`'s doc comment
+        // for why that is the safe direction (may over-reject, never hides
+        // a real forked-name reference).
+        TopBinding::Open { .. } => {}
+    }
+}
+
+/// Walk one `RecBinding`'s own params/value/`extra` clauses (shared by
+/// `TopBinding::LetRec` and `Expr::LetRecIn`) — every clause's parameters are
+/// scoped to that clause alone.
+fn walk_rec_binding_body(
+    rb: &satysfi_syntax::cst::ast::RecBinding,
+    scope: &mut XverScope,
+    out: &mut FreeGlobals,
+) {
+    if let Some(asc) = &rb.ascription {
+        walk_type_expr(&asc.ty, scope, out);
+    }
+    let mark = scope.mark();
+    for p in &rb.params {
+        walk_patbot_binder(p, scope, out);
+    }
+    walk_expr(&rb.value.0, scope, out);
+    scope.truncate_to(mark);
+    for clause in &rb.extra {
+        let mark = scope.mark();
+        for p in &clause.params {
+            walk_patbot_binder(p, scope, out);
+        }
+        walk_expr(&clause.value.0, scope, out);
+        scope.truncate_to(mark);
+    }
+}
+
+fn walk_param_binder(p: &satysfi_syntax::cst::ast::Param, scope: &mut XverScope, out: &mut FreeGlobals) {
+    use satysfi_syntax::cst::ast::Param;
+    match p {
+        Param::Optional { name, .. } => scope.push_value(&name.name),
+        Param::Pat(pb) => walk_patbot_binder(pb, scope, out),
+        Param::Bundled { opts, body } => {
+            for e in &opts.entries {
+                scope.push_value(&e.var.name);
+            }
+            walk_patbot_binder(body, scope, out);
+        }
+    }
+}
+
+/// Walk a full `patas` (a pattern plus its optional `as name` binding) in
+/// BINDER mode: every `Var`/`AsClause.name` is pushed (never emitted); every
+/// `Ctor`/`CtorApplied.ctor` is a REFERENCE — emitted for completeness (the
+/// corpus's constructors are neutral, but this keeps the walk total).
+fn walk_pattern_binder(pat: &satysfi_syntax::cst::ast::Pattern, scope: &mut XverScope, out: &mut FreeGlobals) {
+    walk_patcons_binder(&pat.head, scope, out);
+    if let Some(ac) = &pat.as_clause {
+        scope.push_value(&ac.name.name);
+    }
+}
+
+fn walk_patcons_binder(pc: &satysfi_syntax::cst::ast::PatCons, scope: &mut XverScope, out: &mut FreeGlobals) {
+    walk_patbot_binder(&pc.head, scope, out);
+    for seg in &pc.tail {
+        walk_patbot_binder(&seg.tail, scope, out);
+    }
+}
+
+fn walk_patbot_binder(pb: &satysfi_syntax::cst::ast::PatBot, scope: &mut XverScope, out: &mut FreeGlobals) {
+    use satysfi_syntax::cst::ast::PatBot;
+    match pb {
+        PatBot::CtorApplied { ctor, arg } => {
+            emit_value(scope, out, &ctor.name);
+            walk_patbot_binder(arg, scope, out);
+        }
+        PatBot::Ctor(ctor) => emit_value(scope, out, &ctor.name),
+        PatBot::Int(_) | PatBot::True(_) | PatBot::False(_) | PatBot::Str(_) | PatBot::Wild(_) => {}
+        PatBot::Var(v) => scope.push_value(&v.name),
+        PatBot::Unit { .. } => {}
+        PatBot::Paren { inner, .. } => {
+            walk_pattern_binder(&inner.first.0, scope, out);
+            for cp in &inner.rest {
+                walk_pattern_binder(&cp.value.0, scope, out);
+            }
+        }
+        PatBot::List { items, .. } => {
+            for it in items {
+                walk_pattern_binder(&it.value.0, scope, out);
+            }
+        }
+    }
+}
+
+fn walk_type_decl(td: &satysfi_syntax::cst::TypeDecl, scope: &mut XverScope, out: &mut FreeGlobals) {
+    use satysfi_syntax::cst::TypeDeclBody;
+    match &td.body {
+        TypeDeclBody::Variant { first, rest, .. } => {
+            walk_variant_def(first, scope, out);
+            for bv in rest {
+                walk_variant_def(&bv.def, scope, out);
+            }
+        }
+        TypeDeclBody::Synonym(ty) => walk_type_expr(ty, scope, out),
+    }
+}
+
+fn walk_variant_def(vd: &satysfi_syntax::cst::VariantDef, scope: &mut XverScope, out: &mut FreeGlobals) {
+    // `vd.ctor` DECLARES a new constructor — not a reference, nothing to
+    // emit for it.
+    if let Some(of_ty) = &vd.of_ty {
+        walk_type_expr(&of_ty.ty, scope, out);
+    }
+}
+
+fn walk_sig_annot(sig: &satysfi_syntax::cst::SigAnnot, scope: &mut XverScope, out: &mut FreeGlobals) {
+    use satysfi_syntax::cst::SigItem;
+    for item in &sig.items {
+        match item {
+            SigItem::ValHorzCmd { ty, .. }
+            | SigItem::ValVertCmd { ty, .. }
+            | SigItem::Val { ty, .. }
+            | SigItem::DirectHorzCmd { ty, .. }
+            | SigItem::DirectVertCmd { ty, .. } => walk_type_expr(ty, scope, out),
+            SigItem::Type { .. } => {}
+        }
+    }
+}
+
+fn walk_expr(e: &satysfi_syntax::cst::ast::Expr, scope: &mut XverScope, out: &mut FreeGlobals) {
+    use satysfi_syntax::cst::ast::Expr;
+    match e {
+        Expr::LetRecIn { first, ands, body, .. } => {
+            let mark = scope.mark();
+            scope.push_value(&first.name.name);
+            for and in ands {
+                scope.push_value(&and.binding.name.name);
+            }
+            walk_rec_binding_body(first, scope, out);
+            for and in ands {
+                walk_rec_binding_body(&and.binding, scope, out);
+            }
+            walk_expr(body, scope, out);
+            scope.truncate_to(mark);
+        }
+        Expr::LetIn { name, params, value, body, .. } => {
+            let mark = scope.mark();
+            for p in params {
+                walk_param_binder(p, scope, out);
+            }
+            walk_expr(value, scope, out);
+            scope.truncate_to(mark);
+            let mark = scope.mark();
+            scope.push_value(&name.name);
+            walk_expr(body, scope, out);
+            scope.truncate_to(mark);
+        }
+        Expr::LetPatternIn { pat, value, body, .. } => {
+            walk_expr(value, scope, out);
+            let mark = scope.mark();
+            walk_pattern_binder(&pat.0, scope, out);
+            walk_expr(body, scope, out);
+            scope.truncate_to(mark);
+        }
+        Expr::If { cond, then_branch, else_branch, .. } => {
+            walk_expr(cond, scope, out);
+            walk_expr(then_branch, scope, out);
+            walk_expr(else_branch, scope, out);
+        }
+        Expr::Fun { params, body, .. } => {
+            let mark = scope.mark();
+            for p in params {
+                walk_patbot_binder(p, scope, out);
+            }
+            walk_expr(body, scope, out);
+            scope.truncate_to(mark);
+        }
+        Expr::FunRows { opts, param, body, .. } => {
+            let mark = scope.mark();
+            for e in &opts.entries {
+                scope.push_value(&e.var.name);
+            }
+            walk_patbot_binder(param, scope, out);
+            walk_expr(body, scope, out);
+            scope.truncate_to(mark);
+        }
+        Expr::Match { scrutinee, first, rest, .. } => {
+            walk_expr(scrutinee, scope, out);
+            walk_match_arm(first, scope, out);
+            for ba in rest {
+                walk_match_arm(&ba.arm, scope, out);
+            }
+        }
+        Expr::LetMutableIn { name, init, body, .. } => {
+            walk_expr(init, scope, out);
+            let mark = scope.mark();
+            scope.push_value(&name.name);
+            walk_expr(body, scope, out);
+            scope.truncate_to(mark);
+        }
+        Expr::LetMathIn { cmd, params, value, body, .. } => {
+            let mark = scope.mark();
+            for p in params {
+                walk_param_binder(p, scope, out);
+            }
+            walk_expr(value, scope, out);
+            scope.truncate_to(mark);
+            let mark = scope.mark();
+            scope.push_value(&cmd.name);
+            walk_expr(body, scope, out);
+            scope.truncate_to(mark);
+        }
+        // `open Mod in body` — see `TopBinding::Open`'s arm for why this
+        // binds nothing new.
+        Expr::OpenIn { body, .. } => walk_expr(body, scope, out),
+        Expr::WhileDo { cond, body, .. } => {
+            walk_expr(cond, scope, out);
+            walk_expr(body, scope, out);
+        }
+        Expr::Overwrite { name, value, .. } => {
+            emit_value(scope, out, &name.name);
+            walk_expr(&value.0, scope, out);
+        }
+        Expr::Ops(chain) => walk_opchain(chain, scope, out),
+    }
+}
+
+fn walk_match_arm(arm: &satysfi_syntax::cst::ast::MatchArm, scope: &mut XverScope, out: &mut FreeGlobals) {
+    let mark = scope.mark();
+    walk_pattern_binder(&arm.pat.0, scope, out);
+    if let Some(g) = &arm.guard {
+        walk_expr(&g.cond.0, scope, out);
+    }
+    walk_expr(&arm.body.0, scope, out);
+    scope.truncate_to(mark);
+}
+
+fn walk_opchain(oc: &satysfi_syntax::cst::ast::OpChain, scope: &mut XverScope, out: &mut FreeGlobals) {
+    walk_appexpr(&oc.head, scope, out);
+    for r in &oc.tail {
+        walk_appexpr(&r.rhs, scope, out);
+    }
+    if let Some(bt) = &oc.before {
+        walk_expr(&bt.body.0, scope, out);
+    }
+}
+
+fn walk_appexpr(ae: &satysfi_syntax::cst::ast::AppExpr, scope: &mut XverScope, out: &mut FreeGlobals) {
+    walk_atomic(&ae.head, scope, out);
+    // `head_accesses`: `#label` record-field accesses — field labels, not
+    // globals, skip.
+    for arg in &ae.args {
+        walk_apparg(arg, scope, out);
+    }
+}
+
+fn walk_apparg(a: &satysfi_syntax::cst::ast::AppArg, scope: &mut XverScope, out: &mut FreeGlobals) {
+    use satysfi_syntax::cst::ast::AppArg;
+    match a {
+        AppArg::Optional { value, .. } => walk_atomic(value, scope, out),
+        AppArg::Omission(_) => {}
+        AppArg::Atom { atom, .. } => walk_atomic(atom, scope, out),
+        AppArg::Ctor(c) => emit_value(scope, out, &c.name),
+        AppArg::Bundled { opts, atom, .. } => {
+            for e in &opts.entries {
+                walk_expr(&e.value.0, scope, out);
+            }
+            walk_atomic(atom, scope, out);
+        }
+        AppArg::BundledCtor { opts, ctor } => {
+            for e in &opts.entries {
+                walk_expr(&e.value.0, scope, out);
+            }
+            emit_value(scope, out, &ctor.name);
+        }
+    }
+}
+
+fn walk_atomic(a: &satysfi_syntax::cst::ast::Atomic, scope: &mut XverScope, out: &mut FreeGlobals) {
+    use satysfi_syntax::cst::ast::Atomic;
+    match a {
+        Atomic::Length(_)
+        | Atomic::Float(_)
+        | Atomic::Int(_)
+        | Atomic::Literal(_)
+        | Atomic::True(_)
+        | Atomic::False(_) => {}
+        Atomic::Ctor(c) => emit_value(scope, out, &c.name),
+        Atomic::Var(v) => emit_value(scope, out, &v.name),
+        // Qualified — resolves inside the module, never against `base_env`.
+        Atomic::VarWithMod(_) => {}
+        Atomic::OpRef(op) => emit_value(scope, out, &op.name),
+        Atomic::Command { name, .. } => walk_any_horz_cmd_ref(name, scope, out),
+        Atomic::Unit { .. } => {}
+        Atomic::Paren { inner, .. } => walk_paren_body(inner, scope, out),
+        Atomic::OpenModule { body, .. } => walk_paren_body(body, scope, out),
+        Atomic::Record { body, .. } => walk_record_body(body, scope, out),
+        Atomic::List { items, .. } => {
+            for it in items {
+                walk_expr(&it.value.0, scope, out);
+            }
+        }
+        Atomic::InlineText { elems, .. } => {
+            for el in elems {
+                walk_inline_elem(el, scope, out);
+            }
+        }
+        Atomic::BlockText { elems, .. } => {
+            for el in elems {
+                walk_block_elem(el, scope, out);
+            }
+        }
+        Atomic::MathText { elems, .. } => {
+            for el in elems {
+                walk_math_elem(&el.0, scope, out);
+            }
+        }
+    }
+}
+
+fn walk_any_horz_cmd_ref(n: &satysfi_syntax::leaf::AnyHorzCmdTok, scope: &XverScope, out: &mut FreeGlobals) {
+    use satysfi_syntax::leaf::AnyHorzCmdTok;
+    match n {
+        AnyHorzCmdTok::Plain(t) => emit_value(scope, out, &t.name),
+        AnyHorzCmdTok::Mod(_) => {} // qualified — skip
+    }
+}
+
+fn walk_any_vert_cmd_ref(n: &satysfi_syntax::leaf::AnyVertCmdTok, scope: &XverScope, out: &mut FreeGlobals) {
+    use satysfi_syntax::leaf::AnyVertCmdTok;
+    match n {
+        AnyVertCmdTok::Plain(t) => emit_value(scope, out, &t.name),
+        AnyVertCmdTok::Mod(_) => {} // qualified — skip
+    }
+}
+
+fn walk_any_math_cmd_ref(n: &satysfi_syntax::leaf::AnyMathCmdTok, scope: &XverScope, out: &mut FreeGlobals) {
+    use satysfi_syntax::leaf::AnyMathCmdTok;
+    match n {
+        AnyMathCmdTok::Plain(t) => emit_value(scope, out, &t.name),
+        AnyMathCmdTok::Mod(_) => {} // qualified — skip
+    }
+}
+
+fn walk_paren_body(pb: &satysfi_syntax::cst::ast::ParenBody, scope: &mut XverScope, out: &mut FreeGlobals) {
+    walk_expr(&pb.first.0, scope, out);
+    for ce in &pb.rest {
+        walk_expr(&ce.value.0, scope, out);
+    }
+}
+
+fn walk_record_body(rb: &satysfi_syntax::cst::ast::RecordBody, scope: &mut XverScope, out: &mut FreeGlobals) {
+    use satysfi_syntax::cst::ast::RecordBody;
+    match rb {
+        RecordBody::Update { base, fields, .. } => {
+            walk_expr(&base.0, scope, out);
+            for f in fields {
+                walk_expr(&f.value.0, scope, out);
+            }
+        }
+        RecordBody::Fields(fields) => {
+            for f in fields {
+                walk_expr(&f.value.0, scope, out);
+            }
+        }
+    }
+}
+
+fn walk_inline_elem(el: &satysfi_syntax::cst::ast::InlineElem, scope: &mut XverScope, out: &mut FreeGlobals) {
+    use satysfi_syntax::cst::ast::InlineElem;
+    match el {
+        InlineElem::Char(_) | InlineElem::Space(_) | InlineElem::Break(_) => {}
+        InlineElem::Embed { var, .. } => {
+            if var.mods.is_empty() {
+                emit_value(scope, out, &var.name);
+            }
+        }
+        InlineElem::EmbedMath { elems, .. } => {
+            for m in elems {
+                walk_math_elem(&m.0, scope, out);
+            }
+        }
+        InlineElem::Cmd { name, tail } => {
+            walk_any_horz_cmd_ref(name, scope, out);
+            walk_cmd_tail(tail, scope, out);
+        }
+        InlineElem::ItemBullet(_) | InlineElem::Sep(_) => {}
+    }
+}
+
+fn walk_block_elem(el: &satysfi_syntax::cst::ast::BlockElem, scope: &mut XverScope, out: &mut FreeGlobals) {
+    use satysfi_syntax::cst::ast::BlockElem;
+    match el {
+        BlockElem::Embed { var, .. } => {
+            if var.mods.is_empty() {
+                emit_value(scope, out, &var.name);
+            }
+        }
+        BlockElem::Cmd { name, tail } => {
+            walk_any_vert_cmd_ref(name, scope, out);
+            walk_cmd_tail(tail, scope, out);
+        }
+    }
+}
+
+fn walk_cmd_tail(t: &satysfi_syntax::cst::ast::CmdTail, scope: &mut XverScope, out: &mut FreeGlobals) {
+    use satysfi_syntax::cst::ast::CmdTail;
+    match t {
+        CmdTail::Semi(_) => {}
+        CmdTail::Args { first, rest, .. } => {
+            walk_apparg(&first.0, scope, out);
+            for a in rest {
+                walk_apparg(&a.0, scope, out);
+            }
+        }
+    }
+}
+
+fn walk_math_elem(m: &satysfi_syntax::cst::ast::MathElemCst, scope: &mut XverScope, out: &mut FreeGlobals) {
+    walk_math_bot(&m.base, scope, out);
+    for s in &m.scripts {
+        walk_math_script(s, scope, out);
+    }
+}
+
+fn walk_math_script(s: &satysfi_syntax::cst::ast::MathScript, scope: &mut XverScope, out: &mut FreeGlobals) {
+    use satysfi_syntax::cst::ast::MathScript;
+    match s {
+        MathScript::Super { group, .. } | MathScript::Sub { group, .. } => {
+            walk_math_group_arg(group, scope, out)
+        }
+        MathScript::Primes(_) => {}
+    }
+}
+
+fn walk_math_group_arg(
+    g: &satysfi_syntax::cst::ast::MathGroupArg,
+    scope: &mut XverScope,
+    out: &mut FreeGlobals,
+) {
+    use satysfi_syntax::cst::ast::MathGroupArg;
+    match g {
+        MathGroupArg::Group { elems, .. } => {
+            for m in elems {
+                walk_math_elem(&m.0, scope, out);
+            }
+        }
+        MathGroupArg::Bot(b) => walk_math_bot(b, scope, out),
+    }
+}
+
+fn walk_math_bot(b: &satysfi_syntax::cst::ast::MathBot, scope: &mut XverScope, out: &mut FreeGlobals) {
+    use satysfi_syntax::cst::ast::MathBot;
+    match b {
+        MathBot::Cmd { name, args } => {
+            walk_any_math_cmd_ref(name, scope, out);
+            for a in args {
+                walk_math_arg(a, scope, out);
+            }
+        }
+        MathBot::Chars(_) => {}
+        MathBot::Embed(v) => {
+            if v.mods.is_empty() {
+                emit_value(scope, out, &v.name);
+            }
+        }
+        MathBot::Sep(_) => {}
+        MathBot::Group { elems, .. } => {
+            for m in elems {
+                walk_math_elem(&m.0, scope, out);
+            }
+        }
+    }
+}
+
+fn walk_math_arg(a: &satysfi_syntax::cst::ast::MathArg, scope: &mut XverScope, out: &mut FreeGlobals) {
+    use satysfi_syntax::cst::ast::MathArg;
+    match a {
+        MathArg::Optional { body, .. } => walk_math_arg_body(body, scope, out),
+        MathArg::Omission(_) => {}
+        MathArg::Plain(body) => walk_math_arg_body(body, scope, out),
+    }
+}
+
+fn walk_math_arg_body(
+    b: &satysfi_syntax::cst::ast::MathArgBody,
+    scope: &mut XverScope,
+    out: &mut FreeGlobals,
+) {
+    use satysfi_syntax::cst::ast::MathArgBody;
+    match b {
+        MathArgBody::Math { elems, .. } => {
+            for m in elems {
+                walk_math_elem(&m.0, scope, out);
+            }
+        }
+        MathArgBody::Inline { elems, .. } => {
+            for el in elems {
+                walk_inline_elem(el, scope, out);
+            }
+        }
+        MathArgBody::Block { elems, .. } => {
+            for el in elems {
+                walk_block_elem(el, scope, out);
+            }
+        }
+        MathArgBody::ParenEscape { inner, .. } => walk_paren_body(inner, scope, out),
+        MathArgBody::ListEscape { items, .. } => {
+            for it in items {
+                walk_expr(&it.value.0, scope, out);
+            }
+        }
+        MathArgBody::RecordEscape { body, .. } => walk_record_body(body, scope, out),
+    }
+}
+
+fn walk_type_expr(te: &satysfi_syntax::cst::ast::TypeExpr, scope: &mut XverScope, out: &mut FreeGlobals) {
+    use satysfi_syntax::cst::ast::TypeExpr;
+    match te {
+        TypeExpr::Fun { opts, dom, cod, .. } => {
+            for o in opts {
+                walk_type_prod(&o.ty, scope, out);
+            }
+            walk_type_prod(dom, scope, out);
+            walk_type_expr(cod, scope, out);
+        }
+        TypeExpr::Atom(prod) => walk_type_prod(prod, scope, out),
+        TypeExpr::OptRowFun { opt_dom, dom, cod, .. } => {
+            for e in &opt_dom.entries {
+                walk_type_expr(&e.ty.0, scope, out);
+            }
+            walk_type_prod(dom, scope, out);
+            walk_type_expr(cod, scope, out);
+        }
+    }
+}
+
+fn walk_type_prod(tp: &satysfi_syntax::cst::ast::TypeProd, scope: &mut XverScope, out: &mut FreeGlobals) {
+    walk_type_app(&tp.first, scope, out);
+    for st in &tp.rest {
+        walk_type_app(&st.ty, scope, out);
+    }
+}
+
+fn walk_type_app(ta: &satysfi_syntax::cst::ast::TypeApp, scope: &mut XverScope, out: &mut FreeGlobals) {
+    use satysfi_syntax::cst::ast::TypeApp;
+    match ta {
+        TypeApp::Applied { arg, ctor } => {
+            walk_type_atom(arg, scope, out);
+            emit_type(scope, out, &ctor.name);
+        }
+        TypeApp::Atom(atom) => walk_type_atom(atom, scope, out),
+    }
+}
+
+fn walk_type_atom(atom: &satysfi_syntax::cst::ast::TypeAtom, scope: &mut XverScope, out: &mut FreeGlobals) {
+    use satysfi_syntax::cst::ast::TypeAtom;
+    match atom {
+        TypeAtom::Cmd { args, .. } => {
+            for a in args {
+                for l in &a.opt_labels {
+                    walk_type_expr(&l.ty.0, scope, out);
+                }
+                walk_type_expr(&a.ty.0, scope, out);
+            }
+        }
+        TypeAtom::Paren { inner, .. } => walk_type_expr(&inner.0, scope, out),
+        TypeAtom::Record { fields, .. } => {
+            for f in fields {
+                walk_type_expr(&f.ty.0, scope, out);
+            }
+        }
+        // A bound type variable — never a forked-name candidate.
+        TypeAtom::Var(_) => {}
+        TypeAtom::Name(n) => emit_type(scope, out, &n.name),
+        TypeAtom::RecordOpen { inner, .. } => {
+            for f in &inner.fields {
+                walk_type_expr(&f.ty.0, scope, out);
+            }
+        }
+    }
 }
 
 /// One `block-frame-breakable` frame currently between its `FrameStart`/

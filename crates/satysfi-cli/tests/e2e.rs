@@ -802,6 +802,91 @@ fn footnote_fixture_places_the_footnote_body_below_the_reference_and_renders_its
     let _ = std::fs::remove_file(&tmp);
 }
 
+/// Rendering-gap regression: `FootnoteScheme.main` (`footnote-scheme.satyh`,
+/// SATySFi 0.1) wraps its `add-footnote` call in `Inline.no-break`
+/// (`inline.satyh`'s `no-break ib = inline-frame-outer (0pt,0pt,0pt,0pt)
+/// Deco.empty ib`), which lowers to a `PureHorzBox::Frame` — unlike the bare
+/// `add-footnote` the fixture above exercises, which is never wrapped.
+/// `collect_footnotes_in_box` (`pagebreak.rs`) previously had no arm for
+/// `Frame` (its `_ => {}` wildcard swallowed it), so the `Footnote` marker
+/// nested inside that frame was unreachable from `chop_page`'s footnote-
+/// collection pass: the marker itself still rendered (line breaking never
+/// goes through this pass), but the body was silently dropped. This fixture
+/// (`v01-footnote-scheme.saty`) goes through `FootnoteScheme.main` directly
+/// — no whole document class needed — over a bare `page-break`, proving both
+/// the marker AND the body now reach the rendered PDF.
+#[test]
+fn v01_footnote_scheme_body_renders_through_page_break() {
+    run_with_big_stack(move || {
+        let entry = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/v01-footnote-scheme.saty");
+        let program = satysfi_loader::load(
+            &entry,
+            &satysfi_loader::LoadOptions {
+                lib_root: Some(lib_root().join("dist-v01").join("packages")),
+                version: satysfi_syntax::SatysfiVersion::V0_1,
+                ..Default::default()
+            },
+        )
+        .expect("footnote-scheme.satyh + v01-footnote-scheme.saty must load");
+
+        let metrics = satysfi_pdf::Base14Metrics;
+        let doc = satysfi_lang::compile_document_v1(&program.files, &metrics)
+            .expect("the FootnoteScheme.main regression fixture must compile end-to-end");
+        assert_eq!(doc.pages.len(), 1, "expected a single page");
+        assert!(
+            doc.pages[0].lines.len() >= 2,
+            "expected at least the reference line and the bottom-placed footnote line"
+        );
+
+        let bytes = satysfi_pdf::render_pdf(&doc.geometry, &doc.pages, &doc.images)
+            .expect("PDF rendering must succeed");
+        assert!(bytes.starts_with(b"%PDF-"), "not a PDF header");
+
+        let tmp = std::env::temp_dir().join(format!(
+            "satysfi-rust-e2e-v01-footnote-scheme-{}.pdf",
+            std::process::id()
+        ));
+        std::fs::write(&tmp, &bytes).unwrap();
+        let pdftotext = Command::new("pdftotext").arg(&tmp).arg("-").output();
+        match pdftotext {
+            Ok(out) if out.status.success() => {
+                let text = String::from_utf8_lossy(&out.stdout);
+                assert!(
+                    text.contains("Reference line with a scheme footnote marker."),
+                    "pdftotext output missing the reference line:\n{text}"
+                );
+                // The marker was never the broken part, but check it anyway
+                // — a regression here would mean the fixture itself changed
+                // shape, not just the body-collection fix.
+                assert!(
+                    text.contains("*1"),
+                    "missing footnote superscript marker:\n{text}"
+                );
+                // THE regression assertion: the body text, reached only
+                // through the `Inline.no-break`-wrapped `Frame` box.
+                assert!(
+                    text.contains("Distinctive footnote body via FootnoteScheme.main."),
+                    "pdftotext output missing the FootnoteScheme body text — the \
+                     `PureHorzBox::Frame` traversal regression this fixture guards \
+                     against:\n{text}"
+                );
+            }
+            _ => {
+                let hay = String::from_utf8_lossy(&bytes);
+                for expected in ["(Reference)", "(Distinctive)", "(footnote)"] {
+                    assert!(
+                        hay.contains(expected),
+                        "content stream missing {expected:?} — the FootnoteScheme body \
+                         text must reach the rendered PDF:\n{hay}"
+                    );
+                }
+            }
+        }
+        let _ = std::fs::remove_file(&tmp);
+    });
+}
+
 // ============================================================================
 // Group B (docs/plans/document-page-model.md §A, item #8): real multi-
 // column `page-break-two-column` / `page-break-multicolumn`. F2 proves a

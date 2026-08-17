@@ -7,24 +7,33 @@
 //! `satysfi_lang::compile_document_v1` consumes the output unchanged). The
 //! other two header families are typed errors here, matching upstream:
 //!
-//! - `use package Mod` (upstream records an envelope edge) — Ld3a has no
-//!   envelope graph (`deps: None`), so it is
-//!   [`LoadError::PackageDependencyUnresolved`]; Ld3b replaces this arm with a
-//!   `used_as`-map lookup.
+//! - `use package Mod` (upstream records an envelope edge) — with `deps:
+//!   None` there is no `used_as` map, so it is
+//!   [`LoadError::PackageDependencyUnresolved`]; with `deps: Some(_)` (Ld3b-2)
+//!   the head is looked up in the config's `used_as` map (miss →
+//!   [`LoadError::UnknownPackageDependency`]) and, on a hit, records nothing
+//!   (the envelope's files are already prepended to the program).
 //! - bare `use Mod` (upstream `CannotUseHeaderUse`) —
 //!   [`LoadError::BareUseOutsidePackage`], a *permanent* error at document
 //!   level.
 //! - `@require:`/`@import:` (upstream's lexer never lexes `@`) —
 //!   [`LoadError::LegacyHeaderUnderEnvelopes`], this port's documented
 //!   divergence (Ld3a spec §4.1: the error moves from lex-time to load-time).
+//!
+//! Ld3b-2 adds the deps-config phase (upstream `build_document`,
+//! `main.ml:285-316`): decode → envelope topo-sort → read + closed-sort each
+//! envelope → prepend its modules → local walk → validated `use package`.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use satysfi_syntax::cst_v1::{FileV1, HeaderV1};
+use satysfi_syntax::SatysfiVersion;
 
+use crate::v01x::{closed, deps as deps_mod, envelope};
 use crate::{
-    alloc_id, canonicalize, graph, LoadError, LoadOptions, LoadedCst, LoadedFile, LoadedProgram,
+    alloc_id, canonicalize, graph, FileOrigin, LoadError, LoadOptions, LoadedCst, LoadedFile,
+    LoadedProgram,
 };
 
 /// Candidate extensions for `` use … of `rel` ``, PDF mode — upstream
@@ -34,20 +43,53 @@ use crate::{
 /// `.satyh-<mode>` extensions land for one but not the other).
 const CANDIDATE_EXTS: [&str; 2] = [".satyh", ".satyg"];
 
-/// Envelopes-mode load of a document whose dependencies are all
-/// `` use … of `path` `` local files. `deps` is the `--deps <satysfi-deps.yaml>`
-/// path (Ld3a: any `Some(_)` errors with a named Ld3b follow-up).
+/// Envelopes-mode load: a `--deps <satysfi-deps.yaml>` envelope graph (when
+/// `deps` is `Some`) prepended before the document's local `` use … of `path` ``
+/// files. Mirrors upstream's `build_document` load pipeline
+/// (`main.ml:285-316`): decode the deps config, topo-sort its envelopes,
+/// read + closed-sort each envelope's modules into a dependency-first prefix,
+/// then walk the entry document and its local files, validating `use package`
+/// headers against the config's `used_as` aliases.
 pub(crate) fn load(
     entry: &Path,
     deps: Option<&Path>,
     _opts: &LoadOptions,
 ) -> Result<LoadedProgram, LoadError> {
-    // Deps gate (Ld3a stub): a supplied deps config is not consumed yet — the
-    // documented cut line to Ld3b. A named, testable error, not a `todo!()`.
-    if let Some(path) = deps {
-        return Err(LoadError::DepsConfigUnsupported {
-            path: path.to_path_buf(),
-        });
+    // 1. Decode the deps config (upstream `main.ml:287`). 2. Its `used_as`
+    //    map (`main.ml:288` / `make_used_as_map`), keyed by the consumer's
+    //    alias, valued by the envelope name (later duplicate wins).
+    let deps_config = deps.map(deps_mod::load).transpose()?;
+    let used_as_map = deps_config
+        .as_ref()
+        .map(|c| deps_mod::make_used_as_map(&c.explicit_dependencies));
+
+    // 3. Envelope phase (only with a deps config): topo-sort the envelopes,
+    //    then read + closed-sort each in dependency-first order, prepending
+    //    its module sources to `prefix`. Envelope files are NOT local-walk
+    //    worklist nodes — their per-envelope order comes from the closed
+    //    resolver, their global order from the envelope resolver. (This port
+    //    keeps the two worlds' paths separate, exactly as upstream does in
+    //    practice — a local `use … of` reaching into an envelope tree would
+    //    load a second copy, but no realistic input does that.)
+    let mut prefix: Vec<LoadedFile> = Vec::new();
+    if let Some(config) = &deps_config {
+        for spec in closed::sort_envelopes(config)? {
+            let read = envelope::read(&spec.path)?;
+            let sorted = closed::sort_modules(read.sources)?;
+            for source in sorted {
+                prefix.push(LoadedFile {
+                    path: source.path,
+                    cst: LoadedCst::V0_1(source.file),
+                    origin: FileOrigin::Envelope {
+                        envelope: spec.name.clone(),
+                        module: source.module_name,
+                    },
+                    // Envelopes mode is `V0_1`-only (`load`'s guard) — every
+                    // file it produces is `V0_1`, unconditionally.
+                    version: SatysfiVersion::V0_1,
+                });
+            }
+        }
     }
 
     let entry_canon = canonicalize(entry)?;
@@ -120,14 +162,30 @@ pub(crate) fn load(
                     })?;
                     resolved_deps.push(resolved);
                 }
-                // `use package Mod` — no deps config (Ld3a), so there is no
-                // used_as map to validate against: any package dependency is
-                // unresolvable. Ld3b replaces this with the used_as lookup.
+                // `use package Mod` — with a deps config, validate the head
+                // against the `used_as` map and record nothing (the envelope's
+                // files are already in `prefix`; upstream records no file
+                // edge either, `openFileDependencyResolver.ml:90-91,116-117`).
+                // Without one, there is no map to validate against, so any
+                // package dependency is unresolvable.
                 HeaderV1::UsePackage { path: modpath, .. } => {
-                    return Err(LoadError::PackageDependencyUnresolved {
-                        module: modpath.head_name(),
-                        from: path.clone(),
-                    });
+                    let head = modpath.head_name();
+                    match &used_as_map {
+                        Some(map) => {
+                            if !map.contains_key(&head) {
+                                return Err(LoadError::UnknownPackageDependency {
+                                    module: head,
+                                    from: path.clone(),
+                                });
+                            }
+                        }
+                        None => {
+                            return Err(LoadError::PackageDependencyUnresolved {
+                                module: head,
+                                from: path.clone(),
+                            });
+                        }
+                    }
                 }
                 // bare `use Mod` — upstream `CannotUseHeaderUse`; permanent.
                 HeaderV1::Use { path: modpath, .. } => {
@@ -163,15 +221,21 @@ pub(crate) fn load(
         chain: graph::chain_to_paths(&chain_ids, &path_of),
     })?;
 
-    let files = order
-        .into_iter()
-        .map(|id| LoadedFile {
-            path: path_of[&id].clone(),
-            cst: cst_of
-                .remove(&id)
-                .expect("every graph node id was parsed before toposort"),
-        })
-        .collect();
+    // Assemble: envelope sources (already dependency-first) first, then the
+    // local files dependency-first with the entry document last — upstream's
+    // `libs_dep ++ libs_local` then the document (`main.ml:323`). Local files
+    // and the entry are `FileOrigin::Local`.
+    let mut files = prefix;
+    files.extend(order.into_iter().map(|id| LoadedFile {
+        path: path_of[&id].clone(),
+        cst: cst_of
+            .remove(&id)
+            .expect("every graph node id was parsed before toposort"),
+        origin: FileOrigin::Local,
+        // Envelopes mode is `V0_1`-only (`load`'s guard) — every file it
+        // produces is `V0_1`, unconditionally.
+        version: SatysfiVersion::V0_1,
+    }));
 
     Ok(LoadedProgram { files })
 }

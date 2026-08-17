@@ -81,6 +81,19 @@ fn compile_command(name: &'static str) -> Command {
                 ),
         )
         .arg(
+            Arg::new("format")
+                .long("format")
+                .value_name("FORMAT")
+                .help(
+                    "Output format: pdf (default) or html. HTML is a faithful, \
+                     non-reflowing serialization of the same laid-out pages the \
+                     PDF writer renders (docs/plans/design-html-output.md) — a \
+                     preview/visual-diff aid, not reflowable web output.",
+                )
+                .value_parser(["pdf", "html"])
+                .default_value("pdf"),
+        )
+        .arg(
             Arg::new("deps")
                 .long("deps")
                 .value_name("FILE")

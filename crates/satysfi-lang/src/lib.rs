@@ -188,9 +188,18 @@ pub fn compile_document_v1_with_trials(
         }
     }
     let dep_csts: Vec<&satysfi_syntax::cst_v1::FileV1> = deps.iter().map(as_v01).collect();
+    // Sub-slice 2d-3 (`…/tmp/slice2d3-module-sig-decls.md` §2.1): one
+    // `SurfaceEnv` threaded across every dependency in load order, so a
+    // module alias/named-signature reference in a LATER-loaded library can
+    // resolve an EARLIER one (`module M = OtherLib`, `:> OtherLib.S`).
+    // `build_file_surface` runs (pure `cst_v1` walk, no lowering needed)
+    // BEFORE each dep is lowered, so that dep's own internal aliases/named
+    // signatures resolve too (`v1/surface.rs`'s doc comment).
+    let mut surfaces = v1::surface::SurfaceEnv::default();
     let mut prelude = Vec::new();
     for dep in &dep_csts {
-        prelude.extend(v1::lower::lower_file_v1(dep)?);
+        v1::surface::build_file_surface(dep, &mut surfaces);
+        prelude.extend(v1::lower::lower_file_v1_with_surfaces(dep, &surfaces)?);
     }
     let entry_cst = as_v01(entry);
     let body = v1::lower::lower_document_v1(entry_cst)?;

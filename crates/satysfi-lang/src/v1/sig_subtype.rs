@@ -31,6 +31,7 @@
 
 use crate::types::{instantiate, resolve, resolve_row, MonoType, PolyType, Row, TypeContext};
 use crate::unify::{unify, UnifyError};
+use satysfi_syntax::span::Span;
 
 /// Why `inferred` failed to subsume `declared_rigid`.
 #[derive(Debug)]
@@ -92,6 +93,66 @@ fn row_mentions_stamp(row: &Row, marker: &str) -> bool {
     match resolve_row(row) {
         Row::Empty | Row::Var(_) => false,
         Row::Cons(_, t, rest) => mono_mentions_stamp(&t, marker) || row_mentions_stamp(&rest, marker),
+    }
+}
+
+// ============================================================================
+// Sub-slice 2f (`…/tmp/slice2f-functors.md` §2.5): functor SIGNATURE
+// subtyping errors — a structurally distinct concern from ordinary VALUE
+// subsumption ([`SubsumeError`], above), reached only once 2f-2 wires up
+// functor sig-members (`Decl::Module { Make : (K:S)->… }` in a `:> sig`) and
+// the codomain-abstraction substitution. Defined now, at 2f-1, so the one
+// shape upstream leaves undefined has a TYPED rejection from day one, even
+// though no 2f-1 source can ever reach it (§1's cut: 2f-1 ships unsealed
+// functor values only).
+// ============================================================================
+
+/// Errors from functor signature subtyping. A separate enum from
+/// [`SubsumeError`] (per the spec's recommendation, §2.5): functor-sig
+/// subtyping is a recursive structural match over domain/codomain pairs,
+/// not a single `unify` call, so its error shape will grow independently in
+/// 2f-2 (domain contravariance, codomain covariance, arity mismatches, …).
+#[derive(Debug)]
+#[allow(dead_code)] // unreachable from any 2f-1 source shape; live + unit-tested (T-sub1).
+pub(crate) enum SigSubtypeError {
+    /// Upstream `signatureSubtyping.ml`'s `substitute_concrete` `ConcFunctor`
+    /// arm (`dev-0-1-0:116`'s `failwith "TODO: substitute_concrete,
+    /// closure"`; the heavier `substitute_closure` on `saphe-split`,
+    /// flagged "TODO: remove this … Bochao–Ohori style static
+    /// interpretation"). Reached only when an abstract-type substitution
+    /// must pass THROUGH a functor signature that is itself nested inside
+    /// another (a HIGHER-ORDER functor) — this port's first-order 2f-1/2f-2
+    /// slice never constructs such a signature (no demand package is
+    /// higher-order, §0.6), so this is a DEFINED rejection for the one shape
+    /// upstream leaves undefined, never a panic/`failwith`.
+    NestedFunctorSubstitution { span: Span },
+}
+
+/// A functor's codomain signature shape, as seen by
+/// [`substitute_result_sig`]'s one-line guard: either an ORDINARY signature
+/// (2f-2's real substitution payload — deliberately left as an opaque
+/// placeholder here, since 2f-1 never constructs one), or a signature that
+/// is ITSELF a functor signature (`(Y:S2)->S3`) — the higher-order shape the
+/// guard refuses to recurse into.
+#[allow(dead_code)] // unreachable from any 2f-1 source shape; live + unit-tested (T-sub1).
+pub(crate) enum CodomainShape<'a> {
+    Ordinary(&'a ()),
+    Functor,
+}
+
+/// The one substitution site 2f-2's codomain-abstraction machinery will
+/// drive (§2.5/§9's `substitute_result_sig` handoff): given the functor
+/// application's codomain shape, refuse with
+/// [`SigSubtypeError::NestedFunctorSubstitution`] when it is itself a
+/// functor signature (higher-order) rather than recurse into upstream's
+/// undefined `failwith`. A one-line guard, live and unit-tested (T-sub1)
+/// from 2f-1 even though no 2f-1 source can reach it (2f-1 never seals a
+/// functor's result at all — §1's cut).
+#[allow(dead_code)] // unreachable from any 2f-1 source shape; live + unit-tested (T-sub1).
+pub(crate) fn substitute_result_sig(codomain: CodomainShape, span: Span) -> Result<(), SigSubtypeError> {
+    match codomain {
+        CodomainShape::Functor => Err(SigSubtypeError::NestedFunctorSubstitution { span }),
+        CodomainShape::Ordinary(_) => Ok(()),
     }
 }
 
@@ -212,5 +273,25 @@ mod tests {
         // baked into the inferred scheme's nominal ("#1") — subsumption
         // must still succeed (structural/nominal match) with no escape.
         assert!(val_subsumes(&mut c, &inferred, &declared, "#2").is_ok());
+    }
+
+    /// T-sub1 (spec §5/§6): `SigSubtypeError::NestedFunctorSubstitution` is
+    /// defined and LIVE — constructing the nested-functor-codomain shape
+    /// directly and driving it through `substitute_result_sig` yields the
+    /// typed rejection, even though 2f-1 has no source shape that reaches
+    /// this call.
+    #[test]
+    fn nested_functor_substitution_is_defined_and_live() {
+        let span = Span::default();
+        let err = substitute_result_sig(CodomainShape::Functor, span).unwrap_err();
+        assert!(matches!(err, SigSubtypeError::NestedFunctorSubstitution { .. }));
+    }
+
+    /// The non-nested (ordinary) codomain shape is unaffected — the guard
+    /// only fires on the higher-order shape.
+    #[test]
+    fn ordinary_codomain_is_not_rejected() {
+        let span = Span::default();
+        assert!(substitute_result_sig(CodomainShape::Ordinary(&()), span).is_ok());
     }
 }

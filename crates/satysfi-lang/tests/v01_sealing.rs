@@ -360,13 +360,16 @@ fn t15_placeholder_decls_name_their_sub_slice() {
     }
 }
 
-/// T16 non-struct sig forms: every shape other than a bare `sig .. end`
-/// literal is a precise placeholder, naming the sub-slice that owns it.
+/// T16 non-struct sig forms. Sub-slice 2d-3 retires the two named-signature
+/// placeholders: `:> S` / `:> A.B.S` now RESOLVE through the signature table
+/// (`v1/surface.rs`), so an UNDEFINED name is a precise "unknown signature
+/// name" error (not a "not enforced yet" placeholder). `with type` (2e) and
+/// functor signatures (2f) stay their sub-slice placeholders.
 #[test]
 fn t16_non_struct_sig_forms_name_their_sub_slice() {
     let cases: &[(&str, &str)] = &[
-        ("module M :> S = struct val x = 1 end", "2d-3"),
-        ("module M :> A.B.S = struct val x = 1 end", "2d-3"),
+        ("module M :> S = struct val x = 1 end", "unknown signature name"),
+        ("module M :> A.B.S = struct val x = 1 end", "unknown signature name"),
         ("module M :> sig end with type t = int = struct val x = 1 end", "2e"),
         ("module M :> (X : S) -> S2 = struct val x = 1 end", "2f"),
     ];
@@ -882,4 +885,423 @@ end = struct
 end
 ";
     assert_type_error(lib, "M.f 1");
+}
+
+// ============================================================================
+// Sub-slice 2d-3 (`…/tmp/slice2d3-module-sig-decls.md` §5): named signatures
+// at ascription sites + module-alias re-export. (`Decl::Module`/
+// `Decl::Signature` MEMBERS of a signature, revocation, and sealed-alias
+// NARROWING are deferred — see `v1/module_check.rs`'s module doc; those
+// still emit their precise placeholder/"unknown" errors, never panic.)
+// ============================================================================
+
+/// N5 named sig at an ascription: `signature S = sig … end` in a library,
+/// then `module A :> S = struct … end`. Declared `x` is committed; the
+/// undeclared `y` is hidden.
+#[test]
+fn n5_named_signature_accept_and_hide() {
+    let lib = "\
+module Lib = struct
+  signature S = sig val x : int end
+  module A :> S = struct val x = 1 val y = 2 end
+end
+";
+    assert_accepts(lib, "Lib.A.x");
+}
+
+/// N5b: a hidden member reached through the named-sig seal errors precisely
+/// (the seal really narrowed the surface — not parse-and-ignore).
+#[test]
+fn n5b_named_signature_hides_undeclared_member() {
+    let lib = "\
+module Lib = struct
+  signature S = sig val x : int end
+  module A :> S = struct val x = 1 val y = 2 end
+end
+";
+    let msg = assert_type_error(lib, "Lib.A.y");
+    assert!(
+        msg.contains("not exported") || msg.contains("unbound"),
+        "expected a hidden-member error, got: {msg}"
+    );
+}
+
+/// N5c: an ascription against an UNDEFINED signature name is a precise
+/// "unknown signature name" error.
+#[test]
+fn n5c_unknown_signature_name_rejects() {
+    let lib = "\
+module Lib = struct
+  module A :> Nope = struct val x = 1 end
+end
+";
+    let msg = assert_type_error(lib, "1");
+    assert!(msg.contains("unknown signature name"), "got: {msg}");
+}
+
+/// N7 GENERATIVITY FINGERPRINT (spec §5): the same named signature `Store`
+/// used at TWO ascription sites mints DISTINCT opaque `t` stamps, so a value
+/// made by `A.mk` cannot be consumed by `B`'s view of the abstract type.
+/// This is the one test distinguishing per-site stamping from
+/// "elaborate-once" (which would wrongly share one stamp).
+#[test]
+fn n7_named_signature_generativity_fingerprint() {
+    let lib = "\
+module Lib = struct
+  signature Store = sig
+    type t :: o
+    val mk : int -> t
+    val get : t -> int
+  end
+  module A :> Store = struct  type t = int  val mk n = n  val get x = x  end
+  module B :> Store = struct  type t = int  val mk n = n  val get x = x  end
+end
+";
+    // Same-module round-trip accepts (A's own abstract t).
+    assert_accepts(lib, "Lib.A.get (Lib.A.mk 1)");
+    // Cross-module use rejects: A.t#i and B.t#j are distinct abstract types.
+    let msg = assert_type_error(lib, "Lib.A.get (Lib.B.mk 1)");
+    assert!(!msg.is_empty(), "expected a generativity mismatch");
+}
+
+/// N8 self-containment through a NAMED signature: U13's exact scenario, but
+/// the sig is `signature S = …` used at an ascription. The resolved decls
+/// feed the identical prescan pipeline, so 2d-2's own-type rule applies
+/// unchanged — a `val` mentioning an impl-defined but sig-undeclared type
+/// `u` (the sig having opted into type control by declaring `t`) is the
+/// same "mentions its type … without declaring it" error.
+#[test]
+fn n8_named_signature_self_containment() {
+    let lib = "\
+module Lib = struct
+  signature S = sig
+    type t :: o
+    val mk : int -> t
+    val f : u -> u
+  end
+  module A :> S = struct
+    type t = | T of int
+    type u = int
+    val mk n = T n
+    val f x = x
+  end
+end
+";
+    let msg = assert_type_error(lib, "1");
+    assert!(msg.contains("without declaring it"), "got: {msg}");
+}
+
+/// L1 alias re-export: `module Alias = Base` re-exports Base's public
+/// surface under `Alias.*` — values usable at the target's own types, and
+/// an alias member interchangeable with the target's (an alias is NOT
+/// generative, upstream `UTModVar` returns the same signature).
+#[test]
+fn l1_module_alias_reexports_members() {
+    let lib = "\
+module Lib = struct
+  module Base = struct
+    val mk n = n + 1
+    val get x = x
+  end
+  module Alias = Base
+end
+";
+    assert_accepts(lib, "Lib.Alias.get (Lib.Alias.mk 3)");
+    // Mixed alias/target use accepts too (same types, non-generative).
+    assert_accepts(lib, "Lib.Alias.get (Lib.Base.mk 3)");
+}
+
+/// L1b path alias: `module C = A.B` re-exports a nested target's members.
+#[test]
+fn l1b_path_alias_reexports_nested_members() {
+    let lib = "\
+module Lib = struct
+  module A = struct
+    module B = struct val x = 7 end
+  end
+  module C = A.B
+end
+";
+    assert_accepts(lib, "Lib.C.x + 1");
+}
+
+// ============================================================================
+// Sub-slice 2e-1: struct-include (`include M`) — spec §5's I-numbered group.
+// ============================================================================
+
+/// I4 + I7 + I14: the spec's worked example 1 — `include Base` inside a
+/// SEALED includer `P`. Combines three fingerprints in one fixture:
+/// - I7 re-abstraction: `P.get (P.mk 1)` accepts (P's own fresh stamp,
+///   round-trip), `P.get (Base.mk 1)` REJECTS (P's `t` is a NEW abstract
+///   stamp minted at P's own ascription — the include copy re-abstracts,
+///   it does not inherit Base's concrete `t`).
+/// - I14 ctor visibility: `Base`'s constructor `T` is NEVER hidden by `P`'s
+///   seal — it still belongs to (and is exported by) `Base` — so `T 1`
+///   keeps constructing OUTSIDE `P` even though `P.t` is sealed abstract.
+#[test]
+fn i4_i7_i14_sealed_includer_re_abstracts_but_never_hides_the_targets_ctor() {
+    let lib = "\
+module Lib = struct
+  module Base = struct
+    type t = | T of int
+    val mk n = T n
+    val get x = match x with | T n -> n end
+  end
+  module P :> sig
+    type t :: o
+    val mk : int -> t
+    val get : t -> int
+    val extra : int
+  end = struct
+    include Base
+    val extra = get (mk 3)
+  end
+end
+";
+    // I7 round-trip through P's own fresh stamp.
+    assert_accepts(lib, "Lib.P.get (Lib.P.mk 1)");
+    assert_accepts(lib, "Lib.P.extra + 1");
+    // I7 re-abstraction: Base's concrete `t` does not subsume P's stamp.
+    let msg = assert_type_error(lib, "Lib.P.get (Lib.Base.mk 1)");
+    assert!(!msg.is_empty(), "expected a generativity mismatch, got empty message");
+    // I14: Base's own ctor T is untouched by P's seal.
+    assert_accepts(lib, "Lib.Base.get (Lib.Base.mk 1)");
+    let doc = "match Lib.Base.mk 1 with | T n -> n end";
+    assert_accepts(lib, doc);
+}
+
+/// I5: a sig omitting an INCLUDED member hides it (the standard
+/// not-exported rewrite, owner = the includer `P`, not `Base`); a sig
+/// declaring a member neither defined nor included is the standard width
+/// error.
+#[test]
+fn i5_sealed_includer_hides_undeclared_included_members() {
+    let lib_hide = "\
+module Lib = struct
+  module Base = struct
+    val mk n = n
+    val get x = x
+  end
+  module P :> sig
+    val mk : int -> int
+  end = struct
+    include Base
+  end
+end
+";
+    // `get` was included but never declared by P's own sig: hidden, owner P.
+    let msg = assert_type_error(lib_hide, "Lib.P.get 1");
+    assert!(msg.contains("exists in module `Lib.P`"), "got: {msg}");
+    assert!(msg.contains("not exported"), "got: {msg}");
+
+    let lib_width = "\
+module Lib = struct
+  module Base = struct
+    val mk n = n
+  end
+  module P :> sig
+    val mk : int -> int
+    val never-defined : int
+  end = struct
+    include Base
+  end
+end
+";
+    let msg = assert_type_error(lib_width, "1");
+    assert!(msg.contains("never-defined"), "got: {msg}");
+    assert!(msg.contains("never defines"), "got: {msg}");
+}
+
+/// I5's tripwire (spec §8 risk 2): the sealed includer's LAST value member
+/// arrives VIA the include (not a direct bind) — the ctor-hide/revocation
+/// trigger key ("the last value member in source order") must count the
+/// SPLICED member, not the last direct bind before it. If
+/// `struct_member_names_spliced` ever regressed to ignoring `Bind::Include`
+/// (like the retired `struct_member_names`), the trigger would key on
+/// `pre` instead of `mk` — this fixture at least proves the splice-position
+/// code path runs to completion and gives the right verdict, structurally
+/// exercising the exact "include is the final bind" shape.
+#[test]
+fn i5_tripwire_last_value_member_arrives_via_include() {
+    let lib = "\
+module Lib = struct
+  module Base = struct
+    val mk n = n
+  end
+  module P :> sig
+    val pre : int
+    val mk : int -> int
+  end = struct
+    val pre = 1
+    include Base
+  end
+end
+";
+    assert_accepts(lib, "Lib.P.mk (Lib.P.pre) + 1");
+}
+
+/// I2 include-then-shadow (a documented deviation from upstream, which
+/// REJECTS this as `ConflictInSignature`): a LATER direct bind of the same
+/// name shadows the included copy — the qualified alias `P.mk` ends up
+/// meaning the LAST binding in source order, exactly like the port's
+/// pre-existing behavior for two direct `val mk` binds in one struct.
+/// Distinguished at the TYPE level (`Base.mk` returns `bool`, the shadowing
+/// bind returns `int`) so the test can tell which one actually won.
+#[test]
+fn i2_include_then_shadow_the_later_direct_bind_wins() {
+    let lib = "\
+module Lib = struct
+  module Base = struct
+    val mk n = true
+  end
+  module P = struct
+    include Base
+    val mk n = n + 100
+  end
+end
+";
+    // The shadowing `val mk` (int -> int) is what `P.mk` means now.
+    assert_accepts(lib, "Lib.P.mk 1 + 1");
+    // `Base.mk` itself is untouched (still bool-valued).
+    let msg = assert_type_error(lib, "Lib.Base.mk 1 + 1");
+    assert!(!msg.is_empty(), "expected a type mismatch (bool + int), got empty message");
+}
+
+/// I6 type re-export: a downstream synonym over the includer's re-exported
+/// type unifies with the TARGET's own values (the copy is a synonym chain
+/// `P.t = Base.t`, transparently expanding).
+#[test]
+fn i6_included_type_re_export_unifies_with_the_targets_values() {
+    let lib = "\
+module Lib = struct
+  module Base = struct
+    type t = int
+    val mk n = n
+  end
+  module P = struct
+    include Base
+  end
+end
+";
+    assert_accepts(lib, "Lib.P.mk 1 + Lib.Base.mk 2");
+}
+
+/// I8 nested module through include: `Base.Inner.x` is reachable as
+/// `P.Inner.x` after `include Base` (recursive member-copy through nested
+/// modules).
+#[test]
+fn i8_nested_module_reexports_through_include() {
+    let lib = "\
+module Lib = struct
+  module Base = struct
+    module Inner = struct
+      val x = 42
+    end
+  end
+  module P = struct
+    include Base
+  end
+end
+";
+    assert_accepts(lib, "Lib.P.Inner.x + 1");
+}
+
+/// I9 sig-member re-export: `include Basic` (which itself defines a named
+/// signature `Ord`) makes `P.Ord` resolvable at a LATER ascription site —
+/// the spec's example 3 shape.
+#[test]
+fn i9_include_reexports_the_targets_named_signature() {
+    let lib = "\
+module Lib = struct
+  module Basic = struct
+    type ordering = | Less | Equal | Greater
+    signature Ord = sig
+      type t :: o
+      val compare : t -> t -> ordering
+    end
+  end
+  module Std = struct
+    include Basic
+    module Int = struct
+      type t = int
+      val compare m n =
+        if m < n then Less else if m == n then Equal else Greater
+    end
+  end
+  module M :> Std.Ord = Std.Int
+end
+";
+    assert_accepts(lib, "Lib.M.compare 1 2");
+}
+
+/// I9b: the SAME re-export through an ALIAS instead of an include — the
+/// found 2d-3 gap fix (`Alias.S` never resolved before 2e-1's
+/// `register_sig_reexports`).
+#[test]
+fn i9b_alias_reexports_the_targets_named_signature() {
+    let lib = "\
+module Lib = struct
+  module Basic = struct
+    signature Ord = sig
+      type t :: o
+      val compare : t -> t -> int
+    end
+  end
+  module A2 = Basic
+  module Int = struct
+    type t = int
+    val compare m n = m - n
+  end
+  module M :> A2.Ord = Int
+end
+";
+    assert_accepts(lib, "Lib.M.compare 1 2");
+}
+
+/// I10 mutable sharing: `include Base` shares Base's mutable CELL (not a
+/// copy of its current value) — a write through `P`'s alias is observed
+/// through `Base`'s own name.
+#[test]
+fn i10_include_shares_the_targets_mutable_cell() {
+    // Two dependency files (cross-file include, §2.1 step 1's "the
+    // cross-file case rides the existing outward fallback") so the
+    // document can `let open P in` — `let open` only accepts a BARE
+    // `CtorTok` (`cst_v1.rs`'s `OpenIn`), so a NESTED `P` (one wrapped
+    // inside an outer `Lib`) could not be opened directly from the
+    // document at all; making `P` its own top-level library sidesteps
+    // that unrelated grammar limit while still proving the point: a
+    // write through `P`'s alias is observed through `Base`'s own name —
+    // ONE shared cell, not a copy of a value.
+    let lib_base = "module Base = struct val mutable r <- 0 end";
+    let lib_p = "module P = struct include Base end";
+    // V0_1 dropped 0.0.6's `before` sequencing keyword; use `let _ = e1 in e2`
+    // (G10 confirmed wildcard expr-`let` params) to sequence the write-then-read.
+    assert_accepts_multi(&[lib_base, lib_p], "let open P in (let _ = (r <- 5) in !Base.r)");
+}
+
+/// I13 stdlib shape (spec example 3, the demand pin): `include Basic`
+/// splices a variant + a named signature; the ctors stay globally usable
+/// (flat namespace, nothing hidden — Std is unsealed here).
+#[test]
+fn i13_stdlib_shape_include_basic_then_a_nested_impl_module() {
+    let lib = "\
+module Lib = struct
+  module Basic = struct
+    type ordering = | Less | Equal | Greater
+    signature Ord = sig
+      type t :: o
+      val compare : t -> t -> ordering
+    end
+  end
+  module Std = struct
+    include Basic
+    module Int = struct
+      type t = int
+      val compare m n =
+        if m < n then Less else if m == n then Equal else Greater
+    end
+  end
+end
+";
+    assert_accepts(lib, "match Lib.Std.Int.compare 1 2 with | Less -> 0 | Equal -> 1 | Greater -> 2 end");
 }

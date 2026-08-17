@@ -424,6 +424,23 @@ impl TypeEnv {
         }
         e
     }
+
+    /// Remove a set of bindings (Sub-slice 2d-3, `…/tmp/
+    /// slice2d3-module-sig-decls.md` §2.3-6): a parent seal revoking a
+    /// nested module's outer-hidden members at the parent's seal point —
+    /// see `v1/module_check.rs`'s `member_revoke_triggers`. Persistent-
+    /// clone, like `with`/`with_all`; zero 0.0.6-path callers (V0_1-only).
+    /// `#[allow(dead_code)]`: the accessor is the spec's §4-F deliverable;
+    /// its sole consumer, the `Decl::Module` revocation mechanism, is the
+    /// one 2d-3 piece deferred (see `v1/module_check.rs`'s module doc).
+    #[allow(dead_code)]
+    pub(crate) fn without_all(&self, names: &[String]) -> TypeEnv {
+        let mut e = self.clone();
+        for n in names {
+            e.vars.remove(n);
+        }
+        e
+    }
 }
 
 // ============================================================================

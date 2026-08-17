@@ -76,6 +76,49 @@
 //! `Display` — a frozen `unify.rs`/`types.rs` surface — is where a raw
 //! `M.t#3` would otherwise leak), so no `#N` stamp ever reaches a user-
 //! facing string regardless of which phase produced the error.
+//!
+//! **Sub-slice 2d-3 (`…/tmp/slice2d3-module-sig-decls.md`), landed here:**
+//! named signatures resolve at every ascription site ([`resolve_sig_decls`]
+//! → `v1/surface.rs::find_sig`, threaded from the same `SurfaceEnv`
+//! `v1/lower.rs` builds): a `:> S` / `:> A.B.S` seal re-elaborates the
+//! resolved decls through the SAME phase-A/C pipeline an inline `sig … end`
+//! would, so opaque types stamp FRESH per site (generativity — spec §2.2,
+//! `v01_sealing.rs`'s N7). An unresolved name is a precise "unknown
+//! signature name" error. Module ALIASES (`module M = N`, `module M = N :>
+//! S`) are handled entirely in `v1/lower.rs` (member-copy expansion) — an
+//! UNSEALED alias's copies then type-check as ordinary bindings through the
+//! spine walk below, with no special handling needed here.
+//!
+//! **Sub-slice 2d-3 pieces DEFERRED (reported, not silently skipped):**
+//! `Decl::Module { N : S }` and `Decl::Signature` MEMBERS of a signature
+//! still emit their precise [`non_val_decl_error`] placeholders (recursive
+//! structural sig-subtype matching + the `member_revoke_triggers`
+//! revocation mechanism the spec's §2.3-6 describes — and its
+//! `TypeEnv::without_all` accessor — are the intricate remaining work); and
+//! a SEALED alias body (`module M :> S = N` / `module M = N :> S`) is NOT
+//! narrowed by its seal ([`walk_nested_seals_a`]'s non-`Struct` arm — an
+//! alias body has no `struct` binds to width/depth-check without the spec's
+//! `ImplView::Alias` surface plumbing). Both are SOUND deferrals: the first
+//! REJECTS (never wrong-accepts); the second only fails to apply the seal's
+//! extra narrowing (the alias copies still type-check as ordinary bindings)
+//! — the too-permissive direction, so no ill-typed program is accepted,
+//! only some upstream-rejected ones aren't yet rejected. Both are pinned as
+//! deferred by `v01_sealing.rs`'s `t15`/`t16` rather than left to panic.
+//!
+//! **Sub-slice 2e-1, landed here:** `include M` (`Bind::Include`, struct-
+//! include — `v1/lower.rs`'s job for real, this module's is bookkeeping)
+//! needs NOTHING from the spine walk itself — its member copies elaborate
+//! to ordinary qualified `Let`/`Type` binds, which the existing seal
+//! machinery already covers. What this module DOES learn about: seal
+//! *bookkeeping* sees included members as defined —
+//! [`struct_member_names_spliced`] (the include-aware twin of the retired
+//! `struct_member_names`) and [`build_impl_type_table`] (also include-
+//! aware; an included type member is always [`ImplTypeBody::Synonym`],
+//! never `Variant` — a seal must not hide the INCLUDING module's included
+//! ctors, since they still belong to, and are exported by, the target)
+//! both consult `surfaces`/`v1/surface.rs::frozen_include_target`, never
+//! re-resolving. `Decl::Include` (SIG-side `include`) is still 2e-2, and
+//! stays [`non_val_decl_error`]'s placeholder.
 
 use crate::ast::Ast;
 use crate::elaborate::{Program, UserSynonymDecl, UserTypeDecl};
@@ -87,6 +130,7 @@ use crate::v1::sig_subtype::{self, SubsumeError};
 use crate::v1::static_env::{
     DeclaredType, DeclaredVal, HiddenCtor, StaticEnv, StampMint, TypeOpacity,
 };
+use crate::v1::surface::{self, ModSurface, SurfaceEnv};
 use satysfi_syntax::cst;
 use satysfi_syntax::cst_v1::{self, ast as ast_v1};
 use satysfi_syntax::leaf::{AnyHorzCmdTok, AnyVertCmdTok, TypeVarTok, VarTok};
@@ -108,15 +152,33 @@ pub(crate) fn check_program(
     check_program_inner(deps, program).map_err(strip_stamps_error)
 }
 
-fn check_program_inner(
-    deps: &[&cst_v1::FileV1],
+fn check_program_inner<'a>(
+    deps: &'a [&'a cst_v1::FileV1],
     program: &Program,
 ) -> Result<Vec<MatchWarning>, TypeError> {
+    // Sub-slice 2d-3 §2.2/§2.1: the syntactic surface + named-signature
+    // table, rebuilt from the SAME `deps` `v1/lower.rs` built its own copy
+    // from (pure + cheap; single implementation, `v1/surface.rs`). Feeds
+    // named-signature resolution at every ascription site (`sig_decls_of`)
+    // and alias-body width surfaces (`ImplView::Alias`, phase C).
+    let mut surfaces = SurfaceEnv::default();
+    for file in deps.iter().copied() {
+        surface::build_file_surface(file, &mut surfaces);
+    }
+
+    // Sub-slice 2f-1 §2.2: every frozen functor-application site's
+    // parameter-signature check — purely syntactic (name/arity, off
+    // `surfaces` alone; see `check_functor_applications`'s own doc comment
+    // for why this deliberately does NOT reuse the seal machinery's
+    // `Checker`/`StampMint`/`StaticEnv` state).
+    check_functor_applications(&surfaces)?;
+
     // ---- phase A: syntactic seal pre-scan (no `Checker`) ----
     let mut static_env = StaticEnv::default();
     let mut mint = StampMint::default();
     let mut immediate_hides: Vec<(String, String)> = Vec::new();
-    let pending = phase_a_prescan(deps, &mut mint, &mut static_env, &mut immediate_hides)?;
+    let pending =
+        phase_a_prescan(deps, &surfaces, &mut mint, &mut static_env, &mut immediate_hides)?;
 
     // ---- phase B: session setup with the external-reference rewrite ----
     let mut ck = Checker::empty();
@@ -415,7 +477,6 @@ struct PendingTransparent<'a> {
 /// checker-needed val/type-equality work.
 struct PendingSeal<'a> {
     sig_decls: &'a [cst_v1::StructDeclV1],
-    binds: Vec<&'a cst_v1::Bind>,
     mod_path: Vec<String>,
     tyenv: TypeNameEnv,
     module_name: String,
@@ -430,10 +491,19 @@ struct PendingSeal<'a> {
     /// and any OTHER bare own-type reference it left undeclared is a real
     /// gap (U13).
     declares_any_type: bool,
+    /// Sub-slice 2e-1 §2.1 step 5: this seal's member-name lists, INCLUDE-
+    /// SPLICED (via [`struct_member_names_spliced`]) and computed ONCE here
+    /// in phase A — [`phase_c_finish`] reads these back instead of
+    /// recomputing (`struct_member_names(&seal.binds)` would miss any
+    /// included members), which also avoids re-threading `surfaces` into
+    /// phase C at all.
+    value_names: Vec<String>,
+    other_names: Vec<String>,
 }
 
 fn phase_a_prescan<'a>(
-    deps: &'a [&cst_v1::FileV1],
+    deps: &'a [&'a cst_v1::FileV1],
+    surfaces: &SurfaceEnv<'a>,
     mint: &mut StampMint,
     env: &mut StaticEnv,
     immediate_hides: &mut Vec<(String, String)>,
@@ -449,20 +519,24 @@ fn phase_a_prescan<'a>(
         };
         let mod_path = vec![name.name.clone()];
         let bind_refs: Vec<&cst_v1::Bind> = binds.iter().collect();
-        let tyenv = TypeNameEnv::default().child(&mod_path, bind_refs.iter().copied());
+        let tyenv = TypeNameEnv::default().child(&mod_path, bind_refs.iter().copied(), surfaces);
         if let Some(sa) = sig_annot {
+            let decls = resolve_sig_decls(&sa.sig_.0, &mod_path.join("."), surfaces, &mod_path)?;
             let seal = prescan_seal_types(
-                sa,
+                decls,
                 bind_refs.clone(),
                 &mod_path,
                 &tyenv,
+                surfaces,
                 mint,
                 env,
                 immediate_hides,
             )?;
             pending.push(seal);
         }
-        walk_nested_seals_a(&bind_refs, &mod_path, &tyenv, mint, env, immediate_hides, &mut pending)?;
+        walk_nested_seals_a(
+            &bind_refs, &mod_path, &tyenv, surfaces, mint, env, immediate_hides, &mut pending,
+        )?;
     }
     Ok(pending)
 }
@@ -470,10 +544,12 @@ fn phase_a_prescan<'a>(
 /// Recurse through every nested `Bind::Module { .. }` looking for further
 /// seals — independent of whether THIS level is itself sealed (2d-1 spec
 /// §4.5 test T7). The phase-A twin of 2d-1's `walk_nested_seals`.
+#[allow(clippy::too_many_arguments)]
 fn walk_nested_seals_a<'a>(
     binds: &[&'a cst_v1::Bind],
     mod_path: &[String],
     tyenv: &TypeNameEnv,
+    surfaces: &SurfaceEnv<'a>,
     mint: &mut StampMint,
     env: &mut StaticEnv,
     immediate_hides: &mut Vec<(String, String)>,
@@ -484,25 +560,52 @@ fn walk_nested_seals_a<'a>(
             continue;
         };
         let ast_v1::ModExpr::Struct { binds: inner, .. } = &*body.0 else {
+            // Sub-slice 2d-3: a NON-struct module body (a `Var`/`Coerce`
+            // alias, or a functor App/Functor) has no `struct .. end` binds
+            // to seal-process here. An alias body carrying a seal
+            // (`module M :> S = N`, i.e. `sig_annot: Some` over a `Var`
+            // body, or `module M = N :> S`, i.e. a `Coerce` body) is
+            // enforced against the alias's LOWERED copies instead — those
+            // copies are ordinary `Let`/`Type` binds in the elaborated
+            // spine, so 2d-1/2d-2's own struct-literal seal machinery
+            // already covers them once the seal is registered at the
+            // alias's path. Registering that seal is `walk_nested_seals_a`'s
+            // job below; the copies themselves come from `v1/lower.rs`.
+            //
+            // NOTE (scope, reported): the current phase-A reads `binds`
+            // straight off the `cst_v1` tree, where an alias body has NO
+            // struct binds — so a sealed-alias seal cannot be width/depth-
+            // checked through THIS path without the `ImplView::Alias`
+            // surface plumbing (spec §2.3-7). Rather than half-enforce, a
+            // sealed alias body is left UNCHECKED here (see the module doc
+            // comment's 2d-3 deferral note) — sound because the alias's
+            // copies still type-check as ordinary bindings; only the
+            // seal's extra *narrowing* is not yet applied. Pinned as
+            // deferred, not silently wrong.
             continue;
         };
         let mut child_path = mod_path.to_vec();
         child_path.push(name.name.clone());
         let inner_binds: Vec<&cst_v1::Bind> = inner.iter().map(|sb| sb.0.as_ref()).collect();
-        let child_tyenv = tyenv.child(&child_path, inner_binds.iter().copied());
+        let child_tyenv = tyenv.child(&child_path, inner_binds.iter().copied(), surfaces);
         if let Some(sa) = sig_annot {
+            let decls =
+                resolve_sig_decls(&sa.sig_.0, &child_path.join("."), surfaces, &child_path)?;
             let seal = prescan_seal_types(
-                sa,
+                decls,
                 inner_binds.clone(),
                 &child_path,
                 &child_tyenv,
+                surfaces,
                 mint,
                 env,
                 immediate_hides,
             )?;
             pending.push(seal);
         }
-        walk_nested_seals_a(&inner_binds, &child_path, &child_tyenv, mint, env, immediate_hides, pending)?;
+        walk_nested_seals_a(
+            &inner_binds, &child_path, &child_tyenv, surfaces, mint, env, immediate_hides, pending,
+        )?;
     }
     Ok(())
 }
@@ -514,20 +617,21 @@ fn walk_nested_seals_a<'a>(
 /// list and its deferred trigger. Every non-Val/-Type `Decl` shape is a
 /// precise §4.7 placeholder error, as 2d-1; every non-`Sig` `SigExpr` form
 /// likewise.
+#[allow(clippy::too_many_arguments)]
 fn prescan_seal_types<'a>(
-    sa: &'a cst_v1::SigAnnotV1,
+    decls: &'a [cst_v1::StructDeclV1],
     binds: Vec<&'a cst_v1::Bind>,
     mod_path: &[String],
     tyenv: &TypeNameEnv,
+    surfaces: &SurfaceEnv<'a>,
     mint: &mut StampMint,
     env: &mut StaticEnv,
     immediate_hides: &mut Vec<(String, String)>,
 ) -> Result<PendingSeal<'a>, TypeError> {
     let module_name = mod_path.join(".");
-    let decls = sig_decls_of(&sa.sig_.0, &module_name)?;
 
-    let impl_table = build_impl_type_table(&binds);
-    let (value_names, _other_names) = struct_member_names(&binds);
+    let impl_table = build_impl_type_table(&binds, mod_path, surfaces);
+    let (value_names, other_names) = struct_member_names_spliced(&binds, mod_path, surfaces);
 
     let mut declared_types: Vec<String> = Vec::new();
     let mut hide_list: Vec<(String, String)> = Vec::new();
@@ -647,12 +751,13 @@ fn prescan_seal_types<'a>(
 
     Ok(PendingSeal {
         sig_decls: decls,
-        binds,
         mod_path: mod_path.to_vec(),
         tyenv: tyenv.clone(),
         module_name,
         pending_transparent,
         declares_any_type: !declared_types.is_empty(),
+        value_names,
+        other_names,
     })
 }
 
@@ -679,26 +784,33 @@ fn record_hide(
     );
 }
 
-fn sig_decls_of<'a>(
+/// Resolve one ascription's [`ast_v1::SigExpr`] to its `sig … end` decl list
+/// (Sub-slice 2d-3 §2.2): a literal `sig … end` is itself; a named `Var(S)`/
+/// `Path(A.B.S)` resolves outward from `site_path` through `surfaces.sigs`
+/// (`v1/surface.rs::find_sig`) — the resolved decls then feed the SAME
+/// prescan/phase-C pipeline an inline body would, so opaque types stamp
+/// FRESH at THIS site (generativity — spec §2.2, test N7). An unresolved
+/// name is the precise "unknown signature name" error; `with type`/functor
+/// signatures stay their 2e/2f placeholders.
+fn resolve_sig_decls<'a>(
     sig: &'a ast_v1::SigExpr,
     module_name: &str,
+    surfaces: &SurfaceEnv<'a>,
+    site_path: &[String],
 ) -> Result<&'a [cst_v1::StructDeclV1], TypeError> {
     match sig {
         ast_v1::SigExpr::Bot(ast_v1::SigBotV1::Sig { decls, .. }) => Ok(decls.as_slice()),
-        ast_v1::SigExpr::Bot(ast_v1::SigBotV1::Var(t)) => Err(simple_error(
-            Some(t.span),
-            format!(
-                "module `{module_name}`'s signature: named signatures live in \
-                 the static environment — Sub-slice 2d-3"
-            ),
-        )),
-        ast_v1::SigExpr::Bot(ast_v1::SigBotV1::Path(t)) => Err(simple_error(
-            Some(t.span),
-            format!(
-                "module `{module_name}`'s signature: named signatures live in \
-                 the static environment — Sub-slice 2d-3"
-            ),
-        )),
+        ast_v1::SigExpr::Bot(ast_v1::SigBotV1::Var(t)) => {
+            surface::find_sig(surfaces, site_path, &t.name)
+                .map(|d| d.decls)
+                .ok_or_else(|| unknown_sig_error(&t.name, t.span))
+        }
+        ast_v1::SigExpr::Bot(ast_v1::SigBotV1::Path(t)) => {
+            let suffix = surface::sig_path_suffix(&t.mods, &t.name);
+            surface::find_sig(surfaces, site_path, &suffix)
+                .map(|d| d.decls)
+                .ok_or_else(|| unknown_sig_error(&suffix, t.span))
+        }
         ast_v1::SigExpr::WithType { with_kw, .. } => Err(simple_error(
             Some(with_kw.0),
             format!(
@@ -714,6 +826,165 @@ fn sig_decls_of<'a>(
             ),
         )),
     }
+}
+
+fn unknown_sig_error(name: &str, span: Span) -> TypeError {
+    simple_error(Some(span), format!("unknown signature name `{name}`"))
+}
+
+// ============================================================================
+// Sub-slice 2f-1 §2.2: the functor-application parameter-signature check.
+// ============================================================================
+
+/// Walk every frozen `ModExpr::App` resolution ([`surface::AppResolution`],
+/// `v1/surface.rs::SurfaceEnv::app_targets`) and width/arity-check the
+/// argument's [`ModSurface`] against the functor's parameter signature `S`.
+///
+/// **Deliberately NAME/ARITY-only, no [`Checker`]/[`StampMint`]/
+/// [`StaticEnv`] involvement** — a real ascription re-check (as the spec's
+/// §2.2 "factor `check_module_against_sig` out of `prescan_seal_types`"
+/// literally proposes) would have to register the SAME qualified member
+/// keys (`"Int.compare"`) `prescan_seal_types`/`process_seal_member` already
+/// use for the ARGUMENT's own (possibly separate, real) `:>` seal, if it has
+/// one — `env.seals`/`env.types` are plain `HashMap`s keyed by that
+/// qualified name, so a second registration at the SAME key would silently
+/// clobber the argument's own real seal (whichever prescan runs last wins),
+/// a genuine cross-contamination risk this port will not take. This check
+/// therefore stays entirely within `surfaces` (built once, read-only from
+/// here on): it catches a MISSING member/wrong-arity type precisely, with a
+/// functor-framed message (T-chk2's primary shape); an argument providing a
+/// member at the wrong VALUE TYPE is instead caught naturally, later, when
+/// the instantiated body's own use of that member fails to type-check
+/// through the ordinary elaborator (a less specific message, but
+/// `check_program` still rejects — this module's own "REJECTS, never
+/// wrong-accepts" posture, doc comment above).
+fn check_functor_applications(surfaces: &SurfaceEnv) -> Result<(), TypeError> {
+    for (_site_path, _span, resolution) in &surfaces.app_targets {
+        let Some(res) = resolution else { continue };
+        let Some(fdef) = surfaces.functors.get(&res.functor_path) else { continue };
+        let Some(arg_surf) = surfaces.modules.get(&res.arg_path) else { continue };
+        let decls =
+            resolve_sig_decls(fdef.param_sig, &res.functor_path, surfaces, &fdef.def_path)?;
+        check_module_against_sig(decls, arg_surf, &res.functor_path, &res.arg_path)?;
+    }
+    Ok(())
+}
+
+/// The width/arity half of §2.2's ascription-equivalent check: does
+/// `arg_surf` (the argument module's own [`ModSurface`]) provide every
+/// member `decls` (the parameter signature `S`'s resolved decl list)
+/// declares, at a matching type-arity? A `Decl::Module`/`Signature`/
+/// `Include` in a functor's parameter signature is a precise deferred error
+/// (no demand package's `Ord`/`Settings`-shaped parameter sig ever declares
+/// one).
+fn check_module_against_sig(
+    decls: &[cst_v1::StructDeclV1],
+    arg_surf: &ModSurface,
+    functor_path: &str,
+    arg_path: &str,
+) -> Result<(), TypeError> {
+    for d in decls {
+        match &*d.0 {
+            ast_v1::Decl::Val { name, .. } => {
+                if !arg_surf.vals.iter().any(|v| v == &name.name) {
+                    return Err(functor_arg_mismatch_error(
+                        functor_path,
+                        arg_path,
+                        &format!("value `{}`", name.name),
+                        name.span,
+                    ));
+                }
+            }
+            ast_v1::Decl::ValHorzCmd { cmd, .. } => {
+                if !arg_surf.vals.iter().any(|v| v == &cmd.name) {
+                    return Err(functor_arg_mismatch_error(
+                        functor_path,
+                        arg_path,
+                        &format!("command `{}`", cmd.name),
+                        cmd.span,
+                    ));
+                }
+            }
+            ast_v1::Decl::ValVertCmd { cmd, .. } => {
+                if !arg_surf.vals.iter().any(|v| v == &cmd.name) {
+                    return Err(functor_arg_mismatch_error(
+                        functor_path,
+                        arg_path,
+                        &format!("command `{}`", cmd.name),
+                        cmd.span,
+                    ));
+                }
+            }
+            ast_v1::Decl::TypeOpaque { name, kind, .. } => {
+                check_functor_arg_type(arg_surf, &name.name, kind.rest.len(), name.span, functor_path, arg_path)?;
+            }
+            ast_v1::Decl::Type { binds, .. } => {
+                for single in flatten_type_binds(binds) {
+                    check_functor_arg_type(
+                        arg_surf,
+                        &single.name.name,
+                        single.tyvars.len(),
+                        single.name.span,
+                        functor_path,
+                        arg_path,
+                    )?;
+                }
+            }
+            ast_v1::Decl::Module { kw, .. } => {
+                return Err(functor_sig_member_error(functor_path, "a nested module", kw.0));
+            }
+            ast_v1::Decl::Signature { kw, .. } => {
+                return Err(functor_sig_member_error(functor_path, "a named signature", kw.0));
+            }
+            ast_v1::Decl::Include { kw, .. } => {
+                return Err(functor_sig_member_error(functor_path, "an `include`", kw.0));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn check_functor_arg_type(
+    arg_surf: &ModSurface,
+    name: &str,
+    declared_arity: usize,
+    span: Span,
+    functor_path: &str,
+    arg_path: &str,
+) -> Result<(), TypeError> {
+    match arg_surf.types.iter().find(|(t, _)| t == name) {
+        Some((_, arity)) if *arity == declared_arity => Ok(()),
+        Some((_, arity)) => Err(functor_arg_mismatch_error(
+            functor_path,
+            arg_path,
+            &format!(
+                "type `{name}` (declared with arity {declared_arity} but provided with \
+                 arity {arity})"
+            ),
+            span,
+        )),
+        None => Err(functor_arg_mismatch_error(functor_path, arg_path, &format!("type `{name}`"), span)),
+    }
+}
+
+fn functor_arg_mismatch_error(functor_path: &str, arg_path: &str, what: &str, span: Span) -> TypeError {
+    simple_error(
+        Some(span),
+        format!(
+            "argument module `{arg_path}` does not match functor `{functor_path}`'s \
+             parameter signature: missing or mismatched {what}"
+        ),
+    )
+}
+
+fn functor_sig_member_error(functor_path: &str, what: &str, span: Span) -> TypeError {
+    simple_error(
+        Some(span),
+        format!(
+            "functor `{functor_path}`'s parameter signature declares {what} — \
+             enforcing that is Sub-slice 2f-2"
+        ),
+    )
 }
 
 /// §4.7's placeholder table for the three `Decl` arms that stay unenforced
@@ -747,14 +1018,48 @@ fn non_val_decl_error(module_name: &str, decl: &ast_v1::Decl) -> TypeError {
     simple_error(Some(span), format!("module `{module_name}`'s signature: {what}"))
 }
 
-fn build_impl_type_table(binds: &[&cst_v1::Bind]) -> HashMap<String, ImplTypeInfo> {
+/// Sub-slice 2e-1 §2.1 step 5: include-aware — a `Bind::Include` with a
+/// resolved frozen target contributes each of the target surface's type
+/// members as an [`ImplTypeInfo`] with [`ImplTypeBody::Synonym`] — NEVER
+/// `Variant`, even when the target's own `t` is a variant: the include's
+/// copy IS a synonym (`type ⟨P⟩.t = M.t`, `alias_member_decls`'s output),
+/// and — decisively — a seal on `P` abstracting an included variant type
+/// must NOT hide the TARGET's constructors (they still belong to, and are
+/// exported by, `M`; hiding them here would break `M`'s own users). This is
+/// the sound direction: upstream would hide `P`'s own ctor re-exports while
+/// leaving `M`'s originals untouched; the port's flat ctor namespace can
+/// only keep the originals.
+fn build_impl_type_table(
+    binds: &[&cst_v1::Bind],
+    mod_path: &[String],
+    surfaces: &SurfaceEnv,
+) -> HashMap<String, ImplTypeInfo> {
     let mut table = HashMap::new();
     for b in binds.iter().copied() {
-        if let cst_v1::Bind::Type { first, ands, .. } = b {
-            insert_impl_type(&mut table, first);
-            for a in ands {
-                insert_impl_type(&mut table, &a.bind);
+        match b {
+            cst_v1::Bind::Type { first, ands, .. } => {
+                insert_impl_type(&mut table, first);
+                for a in ands {
+                    insert_impl_type(&mut table, &a.bind);
+                }
             }
+            cst_v1::Bind::Include { kw, body } => {
+                if let ast_v1::ModExpr::Var(_) = &*body.0 {
+                    if let Some(Some(target)) =
+                        surface::frozen_include_target(surfaces, mod_path, kw.0)
+                    {
+                        if let Some(target_surf) = surfaces.modules.get(target) {
+                            for (tname, arity) in &target_surf.types {
+                                table.insert(
+                                    tname.clone(),
+                                    ImplTypeInfo { arity: *arity, body: ImplTypeBody::Synonym },
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
         }
     }
     table
@@ -1178,7 +1483,15 @@ fn phase_c_finish(
             check_transparent_type(pt, seal, ck, mint, env)?;
         }
 
-        let (value_names, other_names) = struct_member_names(&seal.binds);
+        // Sub-slice 2e-1 §2.1 step 5: `seal.value_names`/`other_names` are
+        // ALREADY include-spliced (computed once in phase A by
+        // `struct_member_names_spliced`) — reusing them here (instead of
+        // recomputing off `seal.binds`, which has no way to see a
+        // `Bind::Include`'s target members) is what makes width-checking and
+        // hiding see an included member as defined, without re-threading
+        // `surfaces` into phase C at all.
+        let value_names = &seal.value_names;
+        let other_names = &seal.other_names;
         let mut declared: Vec<String> = Vec::new();
         for d in seal.sig_decls {
             match &*d.0 {
@@ -1191,8 +1504,8 @@ fn phase_c_finish(
                         ty,
                         CmdShape::None,
                         seal,
-                        &value_names,
-                        &other_names,
+                        value_names,
+                        other_names,
                         ck,
                         mint,
                         env,
@@ -1208,8 +1521,8 @@ fn phase_c_finish(
                         ty,
                         CmdShape::Inline,
                         seal,
-                        &value_names,
-                        &other_names,
+                        value_names,
+                        other_names,
                         ck,
                         mint,
                         env,
@@ -1225,8 +1538,8 @@ fn phase_c_finish(
                         ty,
                         CmdShape::Block,
                         seal,
-                        &value_names,
-                        &other_names,
+                        value_names,
+                        other_names,
                         ck,
                         mint,
                         env,
@@ -1241,7 +1554,7 @@ fn phase_c_finish(
                 _ => {}
             }
         }
-        for vn in &value_names {
+        for vn in value_names {
             if !declared.contains(vn) {
                 let qualified = lower::qualify_type_key(&seal.mod_path, vn);
                 env.hidden.insert(qualified, seal.module_name.clone());
@@ -1473,7 +1786,22 @@ fn width_missing_error(
 /// `Decl::Val`-family width-check candidate — and type/module/signature
 /// names, kept separate purely for `width_missing_error`'s nicer wording).
 /// The same accessors `v1/lower.rs::lower_bind_v1` clones.
-fn struct_member_names(binds: &[&cst_v1::Bind]) -> (Vec<String>, Vec<String>) {
+///
+/// **Sub-slice 2e-1 §2.1 step 5, include-aware.** At a `Bind::Include` with
+/// a resolved frozen target, extends `values`/`others` with the target
+/// surface's own member names, IN PLACE at the include's position —
+/// preserving interleaved source order, since the ctor-hide/revocation
+/// trigger key is "the LAST value member in source order" (§2.1 step 5) and
+/// elaboration's contiguous-alias assumption both count spliced members at
+/// the include's position. This function, `v1/surface.rs::build_binds`'s
+/// splice, and `v1/lower.rs`'s lowering splice all read the SAME frozen
+/// target surface, in the SAME order — never re-resolving — so the three
+/// stay in lock-step by construction.
+fn struct_member_names_spliced(
+    binds: &[&cst_v1::Bind],
+    mod_path: &[String],
+    surfaces: &SurfaceEnv,
+) -> (Vec<String>, Vec<String>) {
     let mut values = Vec::new();
     let mut others = Vec::new();
     for b in binds.iter().copied() {
@@ -1497,7 +1825,20 @@ fn struct_member_names(binds: &[&cst_v1::Bind]) -> (Vec<String>, Vec<String>) {
             }
             cst_v1::Bind::Module { name, .. } => others.push(name.name.clone()),
             cst_v1::Bind::Signature { name, .. } => others.push(name.name.clone()),
-            cst_v1::Bind::Include { .. } => {}
+            cst_v1::Bind::Include { kw, body } => {
+                if let ast_v1::ModExpr::Var(_) = &*body.0 {
+                    if let Some(Some(target)) =
+                        surface::frozen_include_target(surfaces, mod_path, kw.0)
+                    {
+                        if let Some(target_surf) = surfaces.modules.get(target) {
+                            values.extend(target_surf.vals.iter().cloned());
+                            others.extend(target_surf.types.iter().map(|(n, _)| n.clone()));
+                            others.extend(target_surf.mods.iter().map(|(n, _)| n.clone()));
+                            others.extend(target_surf.sigs.iter().cloned());
+                        }
+                    }
+                }
+            }
         }
     }
     (values, others)
@@ -1880,5 +2221,100 @@ mod tests {
         assert_eq!(strip_stamps("'a#12 -> 'a#12"), "'a -> 'a");
         assert_eq!(strip_stamps("no stamps here"), "no stamps here");
         assert_eq!(strip_stamps("a # b"), "a # b", "a bare '#' with no digits is left alone");
+    }
+
+    // ========================================================================
+    // Sub-slice 2f-1 (`…/tmp/slice2f-functors.md` §5): the functor
+    // parameter-signature check + generativity-by-path pins.
+    // ========================================================================
+
+    /// Shared functor fixture for T-chk1/T-chk3: `Make = fun (Key : Ord) ->
+    /// struct val cmp2 x = Key.compare x x end`, applied to two differently-
+    /// shaped concrete arguments (`IntOrd`/`FlagOrd`). `use`'s parameter
+    /// type is forced by the REAL `Key.compare` reference (substituted to
+    /// `IntOrd.compare`/`FlagOrd.compare` per application) — a genuine
+    /// application constraint, not a possibly-unenforced type ascription.
+    const FUNCTOR_LIB: &str = "\
+module Lib = struct
+  signature Ord = sig
+    type t :: o
+    val compare : t -> t -> int
+  end
+  module IntOrd = struct
+    type t = int
+    val compare x y = x - y
+  end
+  module FlagOrd = struct
+    type t = | Yes | No
+    val compare x y = 0
+    val y () = Yes
+  end
+  module Make = fun (Key : Ord) -> struct
+    val cmp2 x = Key.compare x x
+  end
+  module A = Make IntOrd
+  module B = Make FlagOrd
+end
+";
+
+    /// T-chk1 (spec §5): a functor applied to an argument that satisfies its
+    /// parameter signature — `check_program` accepts.
+    #[test]
+    fn t_chk1_functor_param_sig_accept() {
+        let (lib_file, program) = elaborate_with_lib(FUNCTOR_LIB, "Lib.A.cmp2 1");
+        check_program(&[&lib_file], &program).expect("IntOrd satisfies Ord — check_program accepts");
+    }
+
+    /// T-chk3 (spec §5, generativity): `Make IntOrd` and `Make FlagOrd` are
+    /// two INDEPENDENT instantiations — `Lib.A.cmp2`'s parameter type is
+    /// forced to `IntOrd.t` (= `int`) by its own substituted `Key.compare`
+    /// reference, which does NOT accept a `FlagOrd.t`-typed value
+    /// (`Lib.FlagOrd.y ()`, exposing `FlagOrd`'s `Yes` ctor through a plain
+    /// function, since a BARE qualified ctor reference like
+    /// `Lib.FlagOrd.Yes` has no expression-grammar support in this port,
+    /// `v1/lower.rs`'s "ctor carve-out" doc comment) — even though both
+    /// instantiations share the IDENTICAL functor body source, pinning
+    /// that each application is checked against its OWN substituted
+    /// argument, never a merged/confused one.
+    #[test]
+    fn t_chk3_functor_generativity_distinct_instantiations_do_not_cross_unify() {
+        let (lib_file, program) = elaborate_with_lib(FUNCTOR_LIB, "Lib.A.cmp2 (Lib.FlagOrd.y ())");
+        let err = check_program(&[&lib_file], &program)
+            .expect_err("A's `cmp2` requires an IntOrd-shaped argument, not FlagOrd's `Yes`");
+        assert!(!err.message.is_empty());
+    }
+
+    /// T-chk2 (spec §5, the core acceptance-negative test): a functor
+    /// applied to an argument MISSING a member its parameter signature
+    /// requires (`BadOrd` has no `compare`) is REJECTED with a
+    /// functor-framed "does not match … parameter signature" message —
+    /// even though the functor body here never itself calls `compare` (so
+    /// elaboration alone would never catch this; the dedicated width check,
+    /// `check_functor_applications`, is what rejects it).
+    #[test]
+    fn t_chk2_functor_param_sig_mismatch_missing_member_is_rejected() {
+        let lib = "\
+module Lib = struct
+  signature Ord = sig
+    type t :: o
+    val compare : t -> t -> int
+  end
+  module BadOrd = struct
+    type t = int
+  end
+  module Make = fun (Key : Ord) -> struct
+    val f (x : Key.t) = x
+  end
+  module A = Make BadOrd
+end
+";
+        let (lib_file, program) = elaborate_with_lib(lib, "1");
+        let err = check_program(&[&lib_file], &program)
+            .expect_err("BadOrd is missing `compare` — Ord's width check must reject");
+        assert!(
+            err.message.contains("does not match functor") && err.message.contains("compare"),
+            "{}",
+            err.message
+        );
     }
 }

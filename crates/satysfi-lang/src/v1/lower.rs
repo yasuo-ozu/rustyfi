@@ -95,16 +95,39 @@
 //! is entirely `v1/module_check.rs`'s job, reading the same annotation back
 //! off the original `cst_v1` tree (`v1/static_env.rs` + `v1/sig_subtype.rs`
 //! + `v1/module_check.rs`). Everything else reaching lowering still yields
-//! a precise [`LowerError`] naming its owning sub-slice: module
-//! aliases/paths and non-struct-literal `:>` coercion are 2d-3/2f (a `:>`
-//! whose LEFT side isn't a `struct … end` literal, or whose right side
-//! resolves to a bare module value, needs the static module environment
-//! this port doesn't build until then), functors are 2f, `signature`/
-//! `include` binds are 2d-3/2e. `Decl`/`SigExpr` never reach lowering on
+//! a precise [`LowerError`] naming its owning sub-slice: non-struct-literal
+//! `:>` coercion of a non-bare-name left side is 2f (a `:>` whose LEFT side
+//! isn't a `struct … end` literal or a bare module name needs the static
+//! module environment this port doesn't build until then), functors are 2f.
+//! Module aliases/paths (`module M = N`, `module M = N :> S`) landed for
+//! real in Sub-slice 2d-3 (member-copy expansion, [`lower_module_alias`]);
+//! `include M` (struct-include, `Bind::Include`'s `Var`-bodied case) landed
+//! for real in Sub-slice 2e-1, reusing the SAME member-copy generator
+//! ([`alias_member_decls`]) spliced unwrapped instead of alias-wrapped —
+//! see the "Sub-slice 2e-1" heading below. `signature`/sig-side `include`
+//! (`Decl::Include`) are 2e-2. `Decl`/`SigExpr` never reach lowering on
 //! their own — they occur only under a `sig_annot`/`Signature` position,
 //! and (for binds) this module still never walks them structurally (no
 //! `lower_decl`/`lower_sig_expr` exist here); `v1/module_check.rs` is the
 //! one place that does, working directly from `cst_v1`.
+//!
+//! **Sub-slice 2e-1: `include M` (struct-include).** `Bind::Include`'s
+//! `Var`-bodied case (`lower_bind_v1`'s `Include` arm) splices copies of
+//! ALL of the target module's exported members DIRECTLY into the includer's
+//! own decls — [`alias_member_decls`] called with `alias_path` = the
+//! includer's OWN path (not a fresh sub-path), its output unwrapped from
+//! `StructDecl` boxes rather than wrapped in one synthetic
+//! `TopBinding::Module` (contrast [`lower_module_alias`], which wraps).
+//! Resolution is frozen at surface-build time
+//! (`v1/surface.rs::SurfaceEnv::include_targets`, the `alias_targets`
+//! twin) — an unresolved/forward-referencing/self-including target is a
+//! precise `LowerError`, never a panic. `App`/`Functor` bodies reuse the
+//! EXISTING 2f functor error wordings verbatim (now reachable through
+//! `include`, e.g. `include Make Int`); `Struct`/`Coerce` bodies are new
+//! 2e-scoped "not this increment" errors (§7 of the sub-slice 2e spec).
+//! [`TypeNameEnv::child`] also learns about `include`: a later bare type
+//! reference in the SAME body resolves through the included copy exactly
+//! as if `type t = M.t` had been written directly.
 //!
 //! **The seal rule (load-bearing ordering).** `module M :> S = struct …
 //! end` lowers its struct BODY FIRST (through 2a's `lower_module_bind`,
@@ -121,6 +144,8 @@
 //! — pinned by `sig_annot_body_still_lowers_first` (§5.3 test 2 of the
 //! sub-slice 2c spec).
 
+use crate::v1::functor;
+use crate::v1::surface::{self, ModSurface, SurfaceEnv};
 use satysfi_syntax::cst;
 use satysfi_syntax::cst_v1::{self, ast as ast_v1};
 use satysfi_syntax::leaf::*;
@@ -141,6 +166,68 @@ fn unsupported(construct: &'static str, hint: &'static str, span: Span) -> Lower
         construct,
         hint,
         span,
+    }
+}
+
+/// Sub-slice 2f-2a (`…/tmp/slice2d3b-2f2-sigmembers.md` §4.2): the lowering-
+/// time RELATIVE-SIBLING absolutization rule — a [`functor::HeadRewrite`]
+/// impl sharing `v1/functor.rs`'s clone+rewrite walker with 2f-1's functor-
+/// parameter substitution (the module doc comment's risk-6 "one head-splice"
+/// guard). Where [`functor::ParamSubstRewrite`] splices a parameter's
+/// argument path, this rewrite resolves a nested-sibling module head
+/// (`Impl.add`/`Console.scheme`, set.satyg's/code.satyh's shape) to its
+/// ABSOLUTE qualified path via an OUTWARD search against `surfaces` — the
+/// same search [`surface::resolve_module`] already performs for module-level
+/// `Var`/`Coerce`/`App` bodies (which is why THOSE sites never needed this
+/// fix: they already resolve outward at the surface-build pass). A head that
+/// already names itself (a top-level dependency, or an already-absolute
+/// path) resolves to the SAME bare segment and is left unchanged; a head
+/// that resolves to nothing (unknown, or simply not a module reference at
+/// all — a local value/type name, a bound variable, …) is ALSO left
+/// unchanged — never invent, matching `v1/surface.rs`'s own posture.
+struct AbsolutizeRewrite<'a, 's> {
+    surfaces: &'a SurfaceEnv<'s>,
+}
+
+impl functor::HeadRewrite for AbsolutizeRewrite<'_, '_> {
+    fn rewrite(&self, mods: &[String], path: &[String], _span: Span) -> Result<Option<Vec<String>>, LowerError> {
+        let Some(head) = mods.first() else {
+            return Ok(None);
+        };
+        let Some((resolved, _)) = surface::resolve_module(self.surfaces, path, head) else {
+            return Ok(None);
+        };
+        if resolved == *head {
+            // Already exactly what was written (a top-level dependency
+            // name, or an already-absolute reference) — no splice needed.
+            return Ok(None);
+        }
+        let mut out: Vec<String> = resolved.split('.').map(str::to_string).collect();
+        out.extend(mods[1..].iter().cloned());
+        Ok(Some(out))
+    }
+
+    // Spec §4.2 point 4/5: a bare single-segment slot (`let open Foo in …`,
+    // `Foo :> S`) cannot grammatically hold a multi-segment absolutized
+    // path, and no demand needs it rewritten at all — those sites already
+    // resolve correctly via `surface.rs`'s own outward search (module-level
+    // aliases/coercions are resolved there, never re-walked textually
+    // here); signature bodies are deliberately never absolutized.
+    fn rewrite_bare_names(&self) -> bool {
+        false
+    }
+
+    fn walk_signatures(&self) -> bool {
+        false
+    }
+
+    // Spec §4.2 point 3: a `ModExpr::Functor` node encountered while
+    // absolutizing ORDINARY binds is an everyday sibling-level functor
+    // DEFINITION (never itself lowered directly — only an application's
+    // substituted body is absolutized, fresh, at the instantiated site) —
+    // not a curried/nested one; leave it untouched rather than reject it.
+    fn reject_nested_functor_literals(&self) -> bool {
+        false
     }
 }
 
@@ -198,24 +285,88 @@ impl TypeNameEnv {
     /// `mod_path` is the FULL path at which `binds` lives (i.e. already
     /// includes this module's own name — the caller, [`lower_module_bind`],
     /// computes it before calling this).
-    pub(crate) fn child<'a>(
+    /// Sub-slice 2e-1 §2.1 step 4: gains `surfaces` so an `include M` bind's
+    /// spliced TYPE members join the map too — a later `val f (x : t) = …`
+    /// in the SAME body must read bare `t` as the included copy
+    /// (`⟨mod_path⟩.t`), exactly as if `type t = M.t` had been written
+    /// directly. Consults the SAME frozen `include_targets` answer
+    /// `v1/surface.rs::build_binds` recorded (never re-resolving) — see
+    /// [`surface::frozen_include_target`]'s doc comment. Insertion order
+    /// along the bind walk still preserves shadowing (a later `type t`
+    /// overwrites an included `t`'s mapping, and vice versa, since `binds`
+    /// is walked in source order below).
+    pub(crate) fn child<'a, 's>(
         &self,
         mod_path: &[String],
         binds: impl Iterator<Item = &'a cst_v1::Bind>,
+        surfaces: &SurfaceEnv<'s>,
     ) -> Self {
         let mut map = self.0.clone();
         for b in binds {
-            if let cst_v1::Bind::Type { first, ands, .. } = b {
-                map.insert(
-                    first.name.name.clone(),
-                    qualify_type_key(mod_path, &first.name.name),
-                );
-                for a in ands {
+            match b {
+                cst_v1::Bind::Type { first, ands, .. } => {
                     map.insert(
-                        a.bind.name.name.clone(),
-                        qualify_type_key(mod_path, &a.bind.name.name),
+                        first.name.name.clone(),
+                        qualify_type_key(mod_path, &first.name.name),
                     );
+                    for a in ands {
+                        map.insert(
+                            a.bind.name.name.clone(),
+                            qualify_type_key(mod_path, &a.bind.name.name),
+                        );
+                    }
                 }
+                cst_v1::Bind::Include { kw, body } => match &*body.0 {
+                    ast_v1::ModExpr::Var(_) => {
+                        if let Some(Some(target)) =
+                            surface::frozen_include_target(surfaces, mod_path, kw.0)
+                        {
+                            if let Some(target_surf) = surfaces.modules.get(target) {
+                                for (t, _) in &target_surf.types {
+                                    map.insert(t.clone(), qualify_type_key(mod_path, t));
+                                }
+                            }
+                        }
+                    }
+                    // Sub-slice 2f-1 §2.3: `include Make Arg`'s substituted
+                    // body's own `type` names join the map too — the
+                    // instantiated body's DECLARED type names are exactly
+                    // the functor body's OWN (unsubstituted — substitution
+                    // only ever touches REFERENCES, never declared names,
+                    // module doc comment's §2.1 note), so this reads
+                    // straight off the functor body's binds, not off a
+                    // separately-registered target surface (there isn't
+                    // one for a fresh instantiation).
+                    ast_v1::ModExpr::App { func, arg: _ } => {
+                        let app_span = mod_chain_span(func);
+                        if let Some(Some(surface::AppResolution { functor_path, .. })) =
+                            surface::frozen_app_target(surfaces, mod_path, app_span)
+                        {
+                            if let Some(fdef) = surfaces.functors.get(functor_path) {
+                                if let Some(body_binds) = functor::functor_body_binds(fdef.body) {
+                                    for b in body_binds.iter().map(|sb| sb.0.as_ref()) {
+                                        if let cst_v1::Bind::Type { first, ands, .. } = b {
+                                            map.insert(
+                                                first.name.name.clone(),
+                                                qualify_type_key(mod_path, &first.name.name),
+                                            );
+                                            for a in ands {
+                                                map.insert(
+                                                    a.bind.name.name.clone(),
+                                                    qualify_type_key(mod_path, &a.bind.name.name),
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    ast_v1::ModExpr::Struct { .. }
+                    | ast_v1::ModExpr::Coerce { .. }
+                    | ast_v1::ModExpr::Functor { .. } => {}
+                },
+                _ => {}
             }
         }
         TypeNameEnv(map)
@@ -228,6 +379,34 @@ impl TypeNameEnv {
 /// caller bug (the loader's `DocumentAsDependency` check already rejects it
 /// before this is ever reached): a `LowerError`, not a panic.
 pub fn lower_file_v1(file: &cst_v1::FileV1) -> Result<Vec<cst::TopBinding>, LowerError> {
+    // Back-compat single-file wrapper (every existing caller outside
+    // `lib.rs`'s dep loop — the crate's own unit tests, and every OTHER
+    // integration test file that has no cross-file alias/named-signature
+    // need): build a throwaway `SurfaceEnv` from THIS file alone. A
+    // single-file `SurfaceEnv` still resolves every alias/named-signature
+    // reference *within* the same library (§2.5's ordering rule is a
+    // within-file/bind-order rule first) — only a reference reaching an
+    // EARLIER, SEPARATELY-LOADED dependency file needs the threaded
+    // `lower_file_v1_with_surfaces` sibling below, which `lib.rs`'s real
+    // pipeline uses instead.
+    let mut surfaces = SurfaceEnv::default();
+    surface::build_file_surface(file, &mut surfaces);
+    lower_file_v1_with_surfaces(file, &surfaces)
+}
+
+/// Sub-slice 2d-3 (spec §2.1's "Where the env lives"): the threaded sibling
+/// `lib.rs`'s dep loop uses — `surfaces` must already contain every EARLIER
+/// dependency file's surface (built via [`surface::build_file_surface`] in
+/// load order) AND, after [`surface::build_file_surface`] has ALSO been
+/// called on `file` itself, `file`'s own surface (so this file's own
+/// internal aliases/named-signature references resolve too — see that
+/// function's doc comment on why `build_file_surface` runs BEFORE lowering,
+/// not interleaved with it: it's a pure syntactic walk with no dependency on
+/// anything lowering produces).
+pub(crate) fn lower_file_v1_with_surfaces<'a>(
+    file: &'a cst_v1::FileV1,
+    surfaces: &SurfaceEnv<'a>,
+) -> Result<Vec<cst::TopBinding>, LowerError> {
     match file {
         cst_v1::FileV1::Library {
             module_kw,
@@ -253,6 +432,7 @@ pub fn lower_file_v1(file: &cst_v1::FileV1) -> Result<Vec<cst::TopBinding>, Lowe
                 end_kw,
                 &[],
                 &TypeNameEnv::default(),
+                surfaces,
             )?;
             Ok(vec![module])
         }
@@ -277,22 +457,32 @@ pub fn lower_file_v1(file: &cst_v1::FileV1) -> Result<Vec<cst::TopBinding>, Lowe
 /// 2b's pre-qualification, §4) and lowering each bind against the extended
 /// env/path — `flat_map`, preserving source order, since a `Type` `and`-
 /// chain now lowers to N consecutive `TopBinding`s (§3.0).
-fn lower_module_bind<'a>(
+fn lower_module_bind<'a, 's>(
     module_kw: &KwModule,
     name: &CtorTok,
     eq: &DefEqTok,
     struct_kw: &KwStruct,
-    binds: impl IntoIterator<Item = &'a cst_v1::Bind> + Clone,
+    binds: impl IntoIterator<Item = &'a cst_v1::Bind>,
     end_kw: &KwEnd,
     mod_path: &[String],
     tyenv: &TypeNameEnv,
+    surfaces: &SurfaceEnv<'s>,
 ) -> Result<cst::TopBinding, LowerError> {
     let mut child_path = mod_path.to_vec();
     child_path.push(name.name.clone());
-    let child_tyenv = tyenv.child(&child_path, binds.clone().into_iter());
+    // Sub-slice 2f-2a (spec §4.2 step 3): absolutize relative-sibling module
+    // heads BEFORE lowering — an owned clone, consumed immediately below.
+    // Applies uniformly to plain modules, alias targets' synthesized trees
+    // (no-op — copies are already absolute), and instantiated functor bodies
+    // (the `Bind::Module`/`Bind::Include` App arms below run parameter
+    // substitution FIRST, then call this function on the substituted binds —
+    // parameter heads are gone before absolutization, so the two rewrites
+    // cannot interfere, module doc comment's risk-6 guard).
+    let absolutized = functor::rewrite_binds(binds, &AbsolutizeRewrite { surfaces }, &child_path)?;
+    let child_tyenv = tyenv.child(&child_path, absolutized.iter(), surfaces);
     let mut decls = Vec::new();
-    for b in binds {
-        for tb in lower_bind_v1(b, &child_path, &child_tyenv)? {
+    for b in &absolutized {
+        for tb in lower_bind_v1(b, &child_path, &child_tyenv, surfaces)? {
             decls.push(cst::StructDecl(Box::new(tb)));
         }
     }
@@ -330,10 +520,11 @@ pub fn lower_document_v1(file: &cst_v1::FileV1) -> Result<cst::ast::Expr, LowerE
 /// (§4). Returns a `Vec` (not a single `TopBinding`) since Sub-slice 2b's
 /// `Type` arm's `and`-chain lowers to N consecutive `TopBinding::Type`s
 /// (§3.0) — 1-element for every other arm.
-fn lower_bind_v1(
+fn lower_bind_v1<'s>(
     b: &cst_v1::Bind,
     mod_path: &[String],
     tyenv: &TypeNameEnv,
+    surfaces: &SurfaceEnv<'s>,
 ) -> Result<Vec<cst::TopBinding>, LowerError> {
     match b {
         cst_v1::Bind::Value {
@@ -450,50 +641,192 @@ fn lower_bind_v1(
                     end_kw,
                     mod_path,
                     tyenv,
+                    surfaces,
                 )?;
                 Ok(vec![module])
             }
-            ast_v1::ModExpr::Var(chain) => Err(unsupported(
-                "a module alias/path binding (`module M = N`)",
-                "module aliases need Sub-slice 2d-3's static module \
-                 environment (name -> members); until then spell the \
-                 module out as a struct literal",
+            // Sub-slice 2d-3 §2.1: `module M = N` / `module M = A.B.C` —
+            // member-copy alias expansion (`lower_module_alias`). The
+            // annotation (if any, `module M :> S = N`) is dropped here —
+            // same seal rule as the struct-literal case above — and
+            // enforced by `v1/module_check.rs`'s `ImplView::Alias`.
+            ast_v1::ModExpr::Var(chain) => Ok(vec![lower_module_alias(
+                module_kw,
+                name,
+                eq,
+                mod_path,
+                surfaces,
+                &chain.render(),
                 mod_chain_span(chain),
-            )),
-            ast_v1::ModExpr::App { func, .. } => Err(unsupported(
-                "a functor application (`module M = F X`)",
-                "functors are Sub-slice 2f (elaboration-time \
-                 instantiation)",
-                mod_chain_span(func),
-            )),
+            )?]),
+            // Sub-slice 2f-1 §2.3 (extended by 2f-2a, spec §4.1): `module M =
+            // Make Arg` — instantiate the functor generatively at `M`'s own
+            // path, then WRAP the substituted body in one synthetic
+            // `TopBinding::Module` (the `lower_module_alias`/
+            // `alias_member_decls` wrap precedent, §2.3's "reuse 2d-3's
+            // wrap"). `Arg` may itself be an ENCLOSING functor's own
+            // parameter (`set.satyg`'s `Map.Make Elem` shape) — `v1/
+            // surface.rs`'s `ParamSubst` stack already resolves that case
+            // when the enclosing functor is applied, so `frozen_app_target`
+            // returning anything other than `Some(Some(_))` now means a
+            // genuinely unknown functor/argument name (or a non-struct
+            // functor body) — a precise `LowerError`, never a panic (the
+            // `frozen_include_target` posture).
+            ast_v1::ModExpr::App { func, arg: _ } => {
+                let app_span = mod_chain_span(func);
+                match surface::frozen_app_target(surfaces, mod_path, app_span) {
+                    Some(Some(surface::AppResolution { functor_path, arg_path })) => {
+                        let fdef = surfaces.functors.get(functor_path).expect(
+                            "a frozen app target always names a registered functor",
+                        );
+                        let body_binds = functor::functor_body_binds(fdef.body).expect(
+                            "a frozen app target's functor body is always struct-shaped \
+                             (a non-struct body never freezes a resolution)",
+                        );
+                        let arg_segs: Vec<String> =
+                            arg_path.split('.').map(str::to_string).collect();
+                        let substituted =
+                            functor::substitute_binds(body_binds, &fdef.param, &arg_segs)?;
+                        let span = name.span;
+                        let module = lower_module_bind(
+                            module_kw,
+                            name,
+                            eq,
+                            &KwStruct(span),
+                            substituted.iter().map(|sb| sb.0.as_ref()),
+                            &KwEnd(span),
+                            mod_path,
+                            tyenv,
+                            surfaces,
+                        )?;
+                        Ok(vec![module])
+                    }
+                    _ => Err(unsupported(
+                        "a functor application whose functor or argument is unknown",
+                        "an application must name an earlier, concrete module already \
+                         in scope (or an enclosing functor's own parameter, once that \
+                         functor is itself applied)",
+                        mod_chain_span(func),
+                    )),
+                }
+            }
+            // Sub-slice 2f-1 §2.3: `module M = fun (X:S) -> body` — a
+            // functor DEFINITION emits ZERO runtime bindings (it is not a
+            // value — exactly `Bind::Signature`'s posture, `:583` below).
+            // The `FunctorDef` itself was already registered by
+            // `v1/surface.rs::build_binds` — nothing left to do here.
+            ast_v1::ModExpr::Functor { .. } => Ok(Vec::new()),
+            // `module M = N :> S` — Sub-slice 2d-3 §2.1: lowers EXACTLY
+            // like `Var` (the full surface of `N` copied, not `S`-filtered
+            // — the seal HIDES undeclared members via the established
+            // non-commit path, byte-matching the struct-literal behavior);
+            // `sig_` is dropped here and enforced by `v1/module_check.rs`.
+            ast_v1::ModExpr::Coerce { name: target, .. } => Ok(vec![lower_module_alias(
+                module_kw,
+                name,
+                eq,
+                mod_path,
+                surfaces,
+                &target.name,
+                target.span,
+            )?]),
+        },
+        // Sub-slice 2d-3 §2.2: a signature has no runtime/expression-spine
+        // content at all — only `v1/surface.rs`'s `SurfaceEnv`/
+        // `v1/module_check.rs`'s static environment record it.
+        cst_v1::Bind::Signature { .. } => Ok(Vec::new()),
+        // Sub-slice 2e-1 §2.1 step 3: `include M` splices copies of ALL of
+        // `M`'s exported members directly into THIS body — the alias
+        // member-copy generator (`alias_member_decls`) called with
+        // `alias_path` = `mod_path` (the INCLUDER's OWN path, not a fresh
+        // sub-path — the 2d-3 §9 handoff's "empty prefix"), unwrapped from
+        // its `StructDecl` boxes into this arm's `Vec<TopBinding>` so the
+        // copies splice inline (contrast `lower_module_alias`, which wraps
+        // its copies in ONE synthetic `TopBinding::Module`). Only a `Var`
+        // body resolves (an earlier module already in scope); every other
+        // shape is a precise §7 error — `App`/`Functor` reuse the EXISTING
+        // 2f functor wordings verbatim (now reachable through `include`,
+        // e.g. `include Make Int`), `Struct`/`Coerce` are new 2e-scoped
+        // "not this increment" errors.
+        cst_v1::Bind::Include { kw, body } => match &*body.0 {
+            ast_v1::ModExpr::Var(chain) => {
+                match surface::frozen_include_target(surfaces, mod_path, kw.0) {
+                    Some(Some(target_path)) => {
+                        let target_surf = surfaces.modules.get(target_path).expect(
+                            "a frozen include target is always a registered module",
+                        );
+                        let decls =
+                            alias_member_decls(kw.0, mod_path, target_path, target_surf)?;
+                        Ok(decls.into_iter().map(|sd| *sd.0).collect())
+                    }
+                    _ => Err(unsupported(
+                        "an `include M` binding naming an unknown module",
+                        "an include must name an earlier module already in scope",
+                        mod_chain_span(chain),
+                    )),
+                }
+            }
+            // Sub-slice 2f-1 §2.3: `include Make Arg` (map.satyg's `include
+            // Make Int` shape) — instantiate the functor generatively at
+            // THIS includer's OWN path, then splice the substituted body's
+            // lowered binds UNWRAPPED (the `Var` arm's unwrap-`StructDecl`-
+            // boxes pattern above, contrast the `Bind::Module` App arm's
+            // wrap). Each substituted bind is lowered via `lower_bind_v1`
+            // directly (not `lower_module_bind`) since there is no fresh
+            // sub-path to wrap into — exactly how the `Var` arm's copies
+            // splice flat.
+            ast_v1::ModExpr::App { func, arg: _ } => {
+                let app_span = mod_chain_span(func);
+                match surface::frozen_app_target(surfaces, mod_path, app_span) {
+                    Some(Some(surface::AppResolution { functor_path, arg_path })) => {
+                        let fdef = surfaces.functors.get(functor_path).expect(
+                            "a frozen app target always names a registered functor",
+                        );
+                        let body_binds = functor::functor_body_binds(fdef.body).expect(
+                            "a frozen app target's functor body is always struct-shaped \
+                             (a non-struct body never freezes a resolution)",
+                        );
+                        let arg_segs: Vec<String> =
+                            arg_path.split('.').map(str::to_string).collect();
+                        let substituted =
+                            functor::substitute_binds(body_binds, &fdef.param, &arg_segs)?;
+                        let mut out = Vec::new();
+                        for b in substituted.iter().map(|sb| sb.0.as_ref()) {
+                            out.extend(lower_bind_v1(b, mod_path, tyenv, surfaces)?);
+                        }
+                        Ok(out)
+                    }
+                    _ => Err(unsupported(
+                        "an `include` of a functor application whose functor or argument \
+                         is unknown",
+                        "an include must name an earlier, concrete module already in \
+                         scope (or an enclosing functor's own parameter, once that \
+                         functor is itself applied)",
+                        mod_chain_span(func),
+                    )),
+                }
+            }
+            // A functor LITERAL cannot itself be `include`d (there is no
+            // module value to splice — upstream-faithfully; you cannot
+            // `include` a functor either) — stays a precise error.
             ast_v1::ModExpr::Functor { fun_kw, .. } => Err(unsupported(
-                "a functor literal (`fun (X : S) -> ...`)",
-                "functors are Sub-slice 2f (elaboration-time \
-                 instantiation)",
+                "an `include` of a functor literal (`fun (X : S) -> ...`)",
+                "a functor is not a module value — apply it first \
+                 (`include Make Arg`), or name the application \
+                 (`module M = Make Arg  include M`)",
                 fun_kw.0,
             )),
-            ast_v1::ModExpr::Coerce { coerce, .. } => Err(unsupported(
-                "a module coercion (`M :> S`)",
-                "sealing a NAME (not a struct literal) needs Sub-slice \
-                 2d-3's static module environment — a `:>` directly on a \
-                 `struct .. end` literal is Sub-slice 2d-1 and already \
-                 enforced",
-                coerce.0,
+            ast_v1::ModExpr::Struct { struct_kw, .. } => Err(unsupported(
+                "an `include` of an inline `struct … end` literal",
+                "name the module first: `module N = struct … end  include N`",
+                struct_kw.0,
+            )),
+            ast_v1::ModExpr::Coerce { name: target, .. } => Err(unsupported(
+                "an `include` of a coerced module",
+                "seal a named module first, then include it",
+                target.span,
             )),
         },
-        cst_v1::Bind::Signature { kw, .. } => Err(unsupported(
-            "a `signature S = ...` binding",
-            "signature names live in Sub-slice 2d-3's static environment \
-             (consumed by 2d-3 ascription and 2e `include`) — parsed but \
-             not yet enforced",
-            kw.0,
-        )),
-        cst_v1::Bind::Include { kw, .. } => Err(unsupported(
-            "an `include M` binding",
-            "include splices a module's bindings at elaboration time and \
-             needs Sub-slice 2d-3's static environment — Sub-slice 2e",
-            kw.0,
-        )),
     }
 }
 
@@ -504,6 +837,158 @@ fn mod_chain_span(c: &ast_v1::ModChainV1) -> Span {
         ast_v1::ModChainV1::Long(t) => t.span,
         ast_v1::ModChainV1::Single(t) => t.span,
     }
+}
+
+// ---- Sub-slice 2d-3 §2.1: module aliases (`module M = N`, `module M = N
+// :> S`) — lowering-time member-copy expansion from `v1/surface.rs`'s
+// syntactic `SurfaceEnv`. ---------------------------------------------------
+
+/// `module M = N` / `module M = A.B.C` (`ModExpr::Var`) and `module M = N
+/// :> S` (`ModExpr::Coerce`, `chain_rendered`/`chain_span` naming just the
+/// bare target `N` — coercion applies to a bare name only, upstream-
+/// faithfully): resolve the target outward from `mod_path` against
+/// `surfaces`, then emit ONE synthetic `cst::TopBinding::Module` whose decls
+/// are member-copies of the target's (already seal-filtered, if sealed)
+/// surface, in the target's own source order (§2.1). An unresolved target —
+/// unknown name, or a forward reference to a module not yet registered —
+/// is a precise `LowerError` (§7's `L3` row), not a panic.
+fn lower_module_alias(
+    module_kw: &KwModule,
+    name: &CtorTok,
+    eq: &DefEqTok,
+    mod_path: &[String],
+    surfaces: &SurfaceEnv,
+    _chain_rendered: &str,
+    chain_span: Span,
+) -> Result<cst::TopBinding, LowerError> {
+    let span = name.span;
+    let mut alias_path = mod_path.to_vec();
+    alias_path.push(name.name.clone());
+    // Consult the FROZEN, in-source-order resolution `v1/surface.rs`
+    // recorded when it walked this alias bind (§2.5): a forward reference
+    // (target defined LATER in the same body) was `None` there and stays a
+    // `LowerError` here, even though `surfaces.modules` now contains the
+    // later target. `frozen_alias_target` returning `None` at all would
+    // mean the surface builder never saw this alias — impossible on the
+    // real pipeline (it always runs first), so treat it as unresolved too.
+    let target_path = match surface::frozen_alias_target(surfaces, &alias_path) {
+        Some(Some(t)) => t.clone(),
+        _ => {
+            return Err(unsupported(
+                "a module alias/path binding (`module M = N`) naming an unknown module",
+                "a module alias must name an earlier module already in scope",
+                chain_span,
+            ));
+        }
+    };
+    let surface = surfaces
+        .modules
+        .get(&target_path)
+        .expect("a frozen alias target is always a registered module");
+    let decls = alias_member_decls(span, &alias_path, &target_path, surface)?;
+    Ok(cst::TopBinding::Module {
+        kw: module_kw.clone(),
+        name: name.clone(),
+        sig: None,
+        eq: eq.clone(),
+        struct_kw: KwStruct(span),
+        decls,
+        end_kw: KwEnd(span),
+    })
+}
+
+/// The member-copy list itself (§2.1's "Alias expansion"), recursing into
+/// `surface.mods` for each nested module re-export. Every fabricated node
+/// reuses `span` throughout (never re-unparsed — the same "fabricate
+/// `cst::ast` nodes directly" precedent as `val math`'s synthesis helpers,
+/// `var_tok`/`apply_chain`/`fun1` above) and every reference is the
+/// target's FULL ABSOLUTE path (`target_path`, e.g. `"Lib.N"`) — §0.4 fact
+/// 2's exact-join lookup is exactly what makes an absolute reference the
+/// only kind that can ever resolve at the elaborator layer.
+fn alias_member_decls(
+    span: Span,
+    alias_path: &[String],
+    target_path: &str,
+    surface: &ModSurface,
+) -> Result<Vec<cst::StructDecl>, LowerError> {
+    let mut out = Vec::with_capacity(surface.vals.len() + surface.types.len() + surface.mods.len());
+    for x in &surface.vals {
+        let target_ref = apply_chain(
+            cst::ast::Atomic::VarWithMod(VarWithModTok {
+                mods: vec![target_path.to_string()],
+                name: x.clone(),
+                span,
+            }),
+            Vec::new(),
+        );
+        out.push(cst::StructDecl(Box::new(cst::TopBinding::Let(cst::TopLet {
+            let_kw: KwLet(span),
+            name: cst::BindName::from(var_tok(x, span)),
+            params: Vec::new(),
+            eq: DefEqTok(span),
+            value: target_ref,
+        }))));
+    }
+    for (tname, arity) in &surface.types {
+        let ctor = var_tok(&format!("{target_path}.{tname}"), span);
+        let (tyvars, ty) = match *arity {
+            0 => (
+                Vec::new(),
+                cst::ast::TypeExpr::Atom(cst::ast::TypeProd {
+                    first: cst::ast::TypeApp::Atom(cst::ast::TypeAtom::Name(ctor)),
+                    rest: Vec::new(),
+                }),
+            ),
+            1 => {
+                let tv = TypeVarTok { name: "a".to_string(), span };
+                (
+                    vec![tv.clone()],
+                    cst::ast::TypeExpr::Atom(cst::ast::TypeProd {
+                        first: cst::ast::TypeApp::Applied {
+                            arg: cst::ast::TypeAtom::Var(tv),
+                            ctor,
+                        },
+                        rest: Vec::new(),
+                    }),
+                )
+            }
+            _ => {
+                return Err(unsupported(
+                    "an alias copy of a type member with arity >= 2",
+                    "the 0.0.6 cst target (`TypeApp`) is single-argument \
+                     (cst.rs:1297-1312) — widen it only when a real \
+                     package needs arity >= 2",
+                    span,
+                ));
+            }
+        };
+        out.push(cst::StructDecl(Box::new(cst::TopBinding::Type(cst::TypeDecl {
+            kw: KwType(span),
+            tyvars,
+            name: var_tok(&qualify_type_key(alias_path, tname), span),
+            eq: DefEqTok(span),
+            body: cst::TypeDeclBody::Synonym(ty),
+        }))));
+    }
+    for (qname, child) in &surface.mods {
+        let mut child_alias_path = alias_path.to_vec();
+        child_alias_path.push(qname.clone());
+        let child_target = format!("{target_path}.{qname}");
+        let child_decls = alias_member_decls(span, &child_alias_path, &child_target, child)?;
+        out.push(cst::StructDecl(Box::new(cst::TopBinding::Module {
+            kw: KwModule(span),
+            name: CtorTok { name: qname.clone(), span },
+            sig: None,
+            eq: DefEqTok(span),
+            struct_kw: KwStruct(span),
+            decls: child_decls,
+            end_kw: KwEnd(span),
+        })));
+    }
+    // Signature members: zero runtime/type-spine residue (§2.1) — the
+    // surface env re-exports the name (`M.S` resolves to the same
+    // `SigDef`); nothing to emit here.
+    Ok(out)
 }
 
 /// The shared clause bridge for `val rec`/`let rec` — the `RecBinding`
@@ -2396,10 +2881,65 @@ mod tests {
         assert_eq!(sealed_inner.len(), unsealed_inner.len());
     }
 
-    /// §5.3 test 4: a module alias/path binding.
+    /// Sub-slice 2d-3 §2.1/§7 (superseding the old 2d-1-era placeholder
+    /// pin, §5.3 test 4): a module alias/path binding naming an UNKNOWN
+    /// target is still a precise `LowerError` — `N` is never defined
+    /// anywhere in this file, so `lower_module_alias` can't resolve it.
     #[test]
-    fn module_alias_is_a_lower_error() {
+    fn module_alias_with_unknown_target_is_a_lower_error() {
         let file = parse_v1("module M = struct\nmodule P = N\nend");
+        let err = lower_file_v1(&file).unwrap_err();
+        assert!(err.to_string().contains("module alias"), "{err}");
+    }
+
+    /// Sub-slice 2d-3 §2.1: a module alias to an EARLIER, real sibling
+    /// module lowers for real — one `Let` per exported value member,
+    /// referencing the target's absolute qualified name.
+    #[test]
+    fn module_alias_to_a_real_target_lowers_member_copies() {
+        let file = parse_v1(
+            "module M = struct\n\
+             module Base = struct val x = 1 val f y = y end\n\
+             module Alias = Base\n\
+             end",
+        );
+        let lowered = lower_file_v1(&file).unwrap_or_else(|e| panic!("lower_file_v1: {e}"));
+        let cst::TopBinding::Module { decls, .. } = &lowered[0] else {
+            panic!("expected a TopBinding::Module");
+        };
+        let cst::TopBinding::Module { name, decls: alias_decls, .. } = &*decls[1].0 else {
+            panic!("expected decls[1] to be the Alias module");
+        };
+        assert_eq!(name.name, "Alias");
+        assert_eq!(alias_decls.len(), 2, "one copy per exported value member");
+        for (decl, expected_name) in alias_decls.iter().zip(["x", "f"]) {
+            let cst::TopBinding::Let(top_let) = &*decl.0 else {
+                panic!("expected a TopBinding::Let copy");
+            };
+            assert_eq!(top_let.name.name, expected_name);
+            let cst::ast::Expr::Ops(chain) = &top_let.value else {
+                panic!("expected an application-chain expression");
+            };
+            let cst::ast::Atomic::VarWithMod(tok) = &chain.head.head else {
+                panic!("expected a VarWithMod reference to the target");
+            };
+            assert_eq!(tok.mods, vec!["M.Base".to_string()]);
+            assert_eq!(tok.name, expected_name);
+        }
+    }
+
+    /// Sub-slice 2d-3 §2.1: a FORWARD reference (`module M = Later` before
+    /// `Later` is itself defined) is the same "unknown module" error as a
+    /// genuinely nonexistent name — an alias may only target an EARLIER
+    /// module (§2.5's ordering rule).
+    #[test]
+    fn module_alias_forward_reference_is_a_lower_error() {
+        let file = parse_v1(
+            "module M = struct\n\
+             module Early = Later\n\
+             module Later = struct val x = 1 end\n\
+             end",
+        );
         let err = lower_file_v1(&file).unwrap_err();
         assert!(err.to_string().contains("module alias"), "{err}");
     }
@@ -2412,45 +2952,219 @@ mod tests {
         assert!(err.to_string().contains("functor application"), "{err}");
     }
 
-    /// §5.3 test 6: a functor literal.
+    /// Sub-slice 2f-1 (superseding §5.3 test 6's old 2c-era placeholder pin):
+    /// a functor DEFINITION (`module F = fun (X:S) -> ...`) now emits ZERO
+    /// runtime bindings — a functor is not a value (exactly `Bind::Signature`'s
+    /// posture) — rather than the old placeholder `LowerError`. `M`'s own
+    /// `TopBinding::Module` still lowers, just with no `F` member inside it.
     #[test]
-    fn functor_literal_is_a_lower_error() {
+    fn functor_literal_emits_zero_runtime_bindings() {
         let file = parse_v1(
             "module M = struct\n\
              module F = fun (X : sig val x : int end) -> struct val y = X.x end\n\
              end",
         );
-        let err = lower_file_v1(&file).unwrap_err();
-        assert!(err.to_string().contains("functor literal"), "{err}");
+        let bindings = lower_file_v1(&file).expect("a functor definition now lowers, emitting no member");
+        let cst::TopBinding::Module { decls, .. } = &bindings[0] else {
+            panic!("expected M's TopBinding::Module")
+        };
+        assert!(decls.is_empty(), "a functor literal contributes no decls: {decls:?}");
     }
 
-    /// §5.3 test 7: a bare module coercion `N :> S` (no annotation, no
-    /// struct literal).
+    /// Sub-slice 2d-3 §2.1 (superseding the old 2d-1-era placeholder pin,
+    /// §5.3 test 7): a bare module coercion `N :> S` naming an UNKNOWN `N`
+    /// is still a precise `LowerError` — the same "unknown module" wording
+    /// a bare `Var` alias produces (`lower_module_alias` is shared).
     #[test]
-    fn module_coercion_is_a_lower_error() {
+    fn module_coercion_with_unknown_target_is_a_lower_error() {
         let file = parse_v1("module M = struct\nmodule P = N :> S\nend");
         let err = lower_file_v1(&file).unwrap_err();
-        assert!(err.to_string().contains("coercion"), "{err}");
+        assert!(err.to_string().contains("module alias"), "{err}");
     }
 
-    /// §5.3 test 8: a `signature S = ...` bind.
+    /// Sub-slice 2d-3 §2.1: `module M = N :> S` lowers the SAME member-copy
+    /// shape as `module M = N` (the seal-rule pin, alias flavor) — the
+    /// `:> S` annotation is dropped by lowering and enforced entirely by
+    /// `v1/module_check.rs`. (Compared structurally, not by full-AST
+    /// equality: the longer `:> sig …` source text legitimately shifts
+    /// every byte span, so spans differ even though the shape is identical
+    /// — the same span-insensitivity every other alias-shape test here
+    /// relies on by asserting on fields rather than whole nodes.)
     #[test]
-    fn signature_bind_is_a_lower_error() {
-        let file = parse_v1("module M = struct\nsignature S = sig end\nend");
-        let err = lower_file_v1(&file).unwrap_err();
-        let msg = err.to_string();
-        assert!(msg.contains("signature"), "{msg}");
-        assert!(msg.contains("2d"), "{msg}");
+    fn module_coercion_lowers_the_same_copies_as_its_uncoerced_twin() {
+        fn alias_copy_names(src: &str) -> (Vec<String>, Vec<Vec<String>>) {
+            let lowered = lower_file_v1(&parse_v1(src)).unwrap_or_else(|e| panic!("{e}"));
+            let cst::TopBinding::Module { decls, .. } = &lowered[0] else {
+                panic!("expected a TopBinding::Module");
+            };
+            let cst::TopBinding::Module { name, decls: alias_decls, .. } = &*decls[1].0 else {
+                panic!("expected decls[1] to be the Alias module");
+            };
+            assert_eq!(name.name, "Alias");
+            let mut names = Vec::new();
+            let mut refs = Vec::new();
+            for d in alias_decls {
+                let cst::TopBinding::Let(top_let) = &*d.0 else {
+                    panic!("expected a Let copy");
+                };
+                names.push(top_let.name.name.clone());
+                let cst::ast::Expr::Ops(chain) = &top_let.value else {
+                    panic!("expected an application chain");
+                };
+                let cst::ast::Atomic::VarWithMod(tok) = &chain.head.head else {
+                    panic!("expected a VarWithMod reference");
+                };
+                refs.push(tok.mods.clone());
+            }
+            (names, refs)
+        }
+        let bare = alias_copy_names(
+            "module M = struct\n\
+             module Base = struct val x = 1 end\n\
+             module Alias = Base\n\
+             end",
+        );
+        let coerced = alias_copy_names(
+            "module M = struct\n\
+             module Base = struct val x = 1 end\n\
+             module Alias = Base :> sig val x : int end\n\
+             end",
+        );
+        assert_eq!(bare, coerced);
+        assert_eq!(bare.0, vec!["x".to_string()]);
+        assert_eq!(bare.1, vec![vec!["M.Base".to_string()]]);
     }
 
-    /// §5.3 test 9: an `include M` bind.
+    /// Sub-slice 2d-3 §2.2 (superseding the old 2d-1-era placeholder pin,
+    /// §5.3 test 8): a `signature S = ...` bind lowers to NOTHING — zero
+    /// runtime/type-spine residue.
     #[test]
-    fn include_bind_is_a_lower_error() {
+    fn signature_bind_lowers_to_nothing() {
+        let file = parse_v1("module M = struct\nsignature S = sig end\nval x = 1\nend");
+        let lowered = lower_file_v1(&file).unwrap_or_else(|e| panic!("lower_file_v1: {e}"));
+        let cst::TopBinding::Module { decls, .. } = &lowered[0] else {
+            panic!("expected a TopBinding::Module");
+        };
+        assert_eq!(decls.len(), 1, "the signature bind contributes zero decls");
+        assert!(matches!(&*decls[0].0, cst::TopBinding::Let(_)));
+    }
+
+    /// Sub-slice 2e-1 §7 (superseding the old 2e-placeholder pin, §5.3 test
+    /// 9): `include N` naming an UNKNOWN module is a precise `LowerError` —
+    /// `N` is never defined anywhere in this file.
+    #[test]
+    fn include_of_an_unknown_module_is_a_lower_error() {
         let file = parse_v1("module M = struct\ninclude N\nend");
         let err = lower_file_v1(&file).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("include"), "{msg}");
-        assert!(msg.contains("2e"), "{msg}");
+        assert!(msg.contains("unknown module"), "{msg}");
+    }
+
+    /// Sub-slice 2e-1 §2.1: `include M` naming an EARLIER real sibling
+    /// module splices copies of ALL its exported members DIRECTLY into the
+    /// includer's own decls — no synthetic wrapper module (contrast the
+    /// alias arm's `module_alias_to_a_real_target_lowers_member_copies`).
+    #[test]
+    fn include_of_a_real_target_splices_member_copies_unwrapped() {
+        let file = parse_v1(
+            "module M = struct\n\
+             module Base = struct val x = 1 val f y = y end\n\
+             include Base\n\
+             end",
+        );
+        let lowered = lower_file_v1(&file).unwrap_or_else(|e| panic!("lower_file_v1: {e}"));
+        let cst::TopBinding::Module { decls, .. } = &lowered[0] else {
+            panic!("expected a TopBinding::Module");
+        };
+        // decls[0] = the `Base` module; decls[1..] = the SPLICED copies
+        // (unwrapped — no synthetic `TopBinding::Module` wrapping them).
+        assert_eq!(decls.len(), 3, "Base + 2 spliced copies, unwrapped");
+        for (decl, expected_name) in decls[1..].iter().zip(["x", "f"]) {
+            let cst::TopBinding::Let(top_let) = &*decl.0 else {
+                panic!("expected a TopBinding::Let copy, got {:?}", decl.0);
+            };
+            assert_eq!(top_let.name.name, expected_name);
+            let cst::ast::Expr::Ops(chain) = &top_let.value else {
+                panic!("expected an application-chain expression");
+            };
+            let cst::ast::Atomic::VarWithMod(tok) = &chain.head.head else {
+                panic!("expected a VarWithMod reference to the target");
+            };
+            assert_eq!(tok.mods, vec!["M.Base".to_string()]);
+            assert_eq!(tok.name, expected_name);
+        }
+    }
+
+    /// Sub-slice 2e-1 §2.1 step 1: a FORWARD reference (`include Later`
+    /// before `Later` is itself defined) is the same "unknown module" error
+    /// as a genuinely nonexistent name (the `alias_targets`-style frozen
+    /// resolution twin, `include_targets`).
+    #[test]
+    fn include_forward_reference_is_a_lower_error() {
+        let file = parse_v1(
+            "module M = struct\n\
+             include Later\n\
+             module Later = struct val x = 1 end\n\
+             end",
+        );
+        let err = lower_file_v1(&file).unwrap_err();
+        assert!(err.to_string().contains("unknown module"), "{err}");
+    }
+
+    /// Sub-slice 2e-1 §7: `include F X` (a functor application) reuses the
+    /// EXISTING 2f functor `LowerError` wording verbatim — the `map.satyg
+    /// :344` `include Make Int` shape.
+    #[test]
+    fn include_of_a_functor_application_is_the_2f_functor_error() {
+        // Sub-slice 2f-2a reworded this error (spec §6's file-by-file plan):
+        // `F` here is a plain STRUCT, not a functor, so `include F X` still
+        // freezes an unresolved (`None`) app target — "unknown" replaces
+        // the old "Sub-slice 2f-2" wording now that a parameter-argument
+        // application (once its enclosing functor is applied) is no longer
+        // automatically out of scope.
+        let file = parse_v1("module M = struct\nmodule F = struct end\ninclude F X\nend");
+        let err = lower_file_v1(&file).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("functor application"), "{msg}");
+        assert!(msg.contains("unknown"), "{msg}");
+    }
+
+    /// Sub-slice 2e-1 §7: `include struct … end` (an inline struct literal)
+    /// is its own precise out-of-scope error — zero upstream-stdlib demand.
+    #[test]
+    fn include_of_an_inline_struct_literal_is_a_lower_error() {
+        let file = parse_v1("module M = struct\ninclude struct val x = 1 end\nend");
+        let err = lower_file_v1(&file).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("struct"), "{msg}");
+        assert!(msg.contains("name the module first"), "{msg}");
+    }
+
+    /// Sub-slice 2e-1 §7: `include M :> S` (a coerced module body) is its
+    /// own precise out-of-scope error.
+    #[test]
+    fn include_of_a_coerced_module_is_a_lower_error() {
+        let file = parse_v1(
+            "module M = struct\n\
+             module Base = struct val x = 1 end\n\
+             include Base :> sig val x : int end\n\
+             end",
+        );
+        let err = lower_file_v1(&file).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("coerced module"), "{msg}");
+    }
+
+    /// Sub-slice 2e-1 §2.1 step 1: self-include (`module P = struct include
+    /// P end`) is the same "unknown module" error — `P` only registers in
+    /// `env.modules` AFTER its own body walk finishes, so it is never its
+    /// own earlier module.
+    #[test]
+    fn self_include_is_a_lower_error() {
+        let file = parse_v1("module P = struct\ninclude P\nend");
+        let err = lower_file_v1(&file).unwrap_err();
+        assert!(err.to_string().contains("unknown module"), "{err}");
     }
 
     /// The CmdTail bridge (§3.3): `\cmd{a}{b}` parses under `cst_v1` as one

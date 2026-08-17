@@ -10,7 +10,17 @@
 //! deferred constructor hiding, `inline […]`/`block […]` sealed command
 //! decls, and `LONG_LOWER` (`M.t`) qualified type names — see
 //! `module_check`'s own doc comment for the phase-A-through-D algorithm.
+//! Sub-slice 2d-3 (`…/tmp/slice2d3-module-sig-decls.md`) completes the
+//! non-functor module system: `Decl::Module`/`Decl::Signature` members in a
+//! signature, named signatures (`signature S = ..`), and module aliases
+//! (`module M = N`, `module M = N :> S`) — see `surface.rs`'s doc comment
+//! for the syntactic surface/signature table both `lower.rs` and
+//! `module_check.rs` consult, and `module_check.rs`'s own doc comment for
+//! how `Decl::Module`/`Decl::Signature` extend the phase-A-through-D
+//! algorithm. `include`/`with type` (2e) and functors (2f) remain.
 pub mod lower;
+pub(crate) mod functor;
 pub(crate) mod module_check;
 pub(crate) mod sig_subtype;
 pub(crate) mod static_env;
+pub(crate) mod surface;

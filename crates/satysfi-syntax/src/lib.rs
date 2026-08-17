@@ -13,7 +13,6 @@ pub mod version;
 
 pub use cst::{parse_file, ParseFileError};
 pub use lexer::{lex, LexError};
-pub use stream::TokenStream;
 pub use span::{Loc, Span};
 pub use token::{Atom, Token};
 pub use version::{sniff_version, ParseVersionError, SatysfiVersion};

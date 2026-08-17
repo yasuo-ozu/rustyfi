@@ -3,8 +3,8 @@
 
 use satysfi_syntax::cst::{self, parse_file};
 use satysfi_syntax::token::{Atom, Token};
-use satysfi_syntax::{lex, TokenStream};
-use syan::parse::{Parse, Unparse};
+use satysfi_syntax::lex;
+use syan::parse::Unparse;
 
 fn assert_roundtrip(src: &str) {
     let file = parse_file(src).unwrap_or_else(|e| panic!("parse failed on {src:?}: {e}"));
@@ -136,15 +136,15 @@ fn parse_errors_have_positions() {
 }
 
 #[test]
-fn high_water_mark_is_useful() {
-    let atoms = lex("let x = 1\nlet y = ()()bogus\nin x").unwrap();
-    let mut ts = TokenStream::new(atoms);
-    let res: Result<cst::File, _> = Parse::parse(&mut ts);
-    // Parse may or may not fail here depending on grammar generosity; if it
-    // fails the span must point past line 1.
-    if res.is_err() {
-        assert!(ts.high_water_span().start.line >= 2);
-    }
+fn deep_parse_error_span_reaches_past_first_line() {
+    // A genuine failure on line 2 (a stray `)` where an expression is
+    // expected). syan's `ParseError` now carries the failure span directly,
+    // replacing the old high-water mark. Because our `Span::migrate` is a
+    // *union* (min-start .. max-end), the reported span *starts* on line 1 (the
+    // first attempted token); the signal that the parser progressed past line 1
+    // is the span *end*, which lands on line 2.
+    let err = parse_file("let x = 1\nlet y = )").unwrap_err();
+    assert!(err.span.end.line >= 2);
 }
 
 // ---- phase 2a: operators, if/match/let-rec, patterns, tuples, ctors, ----

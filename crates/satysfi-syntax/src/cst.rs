@@ -23,7 +23,6 @@
 
 use crate::leaf::*;
 use crate::span::Span;
-use crate::stream::TokenStream;
 use newer_type::implement;
 use syan::parse::{Parse, Unparse};
 
@@ -994,7 +993,12 @@ pub mod ast {
     }
 }
 
-/// A parse failure with the source position the parser got furthest to.
+/// A parse failure with the source position recovered from the failing parse.
+///
+/// The span is whatever syan's span-carrying [`ParseError`](syan::error::ParseError)
+/// reports for the failure (recovered via `span_of::<Span>`); with our
+/// [`Span::migrate`](crate::span::Span) being a union it covers the attempted
+/// region rather than pinpointing a single token.
 #[derive(Debug, thiserror::Error)]
 #[error("{span}: parse error: {message}")]
 pub struct ParseFileError {
@@ -1008,9 +1012,10 @@ pub fn parse_file(src: &str) -> Result<File, ParseFileError> {
         span: e.span,
         message: e.msg,
     })?;
-    let mut stream = TokenStream::new(atoms);
-    <File as Parse<_>>::parse(&mut stream).map_err(|e| ParseFileError {
-        span: stream.high_water_span(),
+    // `Vec<Atom>` is directly a parse source (syan's `IntoParseStream for Vec`),
+    // and the failure span comes from the error itself rather than a high-water mark.
+    <File as Parse<_>>::parse(atoms).map_err(|e| ParseFileError {
+        span: e.span_of::<Span>().unwrap_or_default(),
         message: render_parse_error(&e),
     })
 }

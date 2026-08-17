@@ -17,7 +17,7 @@ license = "LGPL-3.0"
 authors = ["Yasuo Ozu <yasuo@ozu.email>"]
 
 [workspace.dependencies]
-syan = { path = "../syan2/core" }
+syan = { path = "../syan2-ergo/core" }
 satysfi-syntax = { path = "crates/satysfi-syntax" }
 satysfi-backend = { path = "crates/satysfi-backend" }
 satysfi-lang = { path = "crates/satysfi-lang" }

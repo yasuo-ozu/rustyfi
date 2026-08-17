@@ -1,6 +1,4 @@
 /target
-# the standalone design POC builds into its own target/
-/docs/plans/dup-checkpoint-poc/target/
 /scripts/layout_fidelity_corpus/*/*.port.pdf
 /scripts/layout_fidelity_corpus/*/*.satysfi.pdf
 
@@ -9,12 +7,7 @@
 # scripts/download-fonts.sh directly. They are large, and their licences
 # (IPA, OFL, GUST, DejaVu) are satisfied by the script copying each licence text
 # alongside the font it covers rather than by vendoring the binaries here.
-#
-# Both directories also carry their own `*` + `!.gitignore`, which is what has
-# been doing the work; these entries state the rule where a reader looks for it,
-# and match the contents rather than the directory so the marker file survives.
 /lib-rustyfi/dist/fonts/*
-!/lib-rustyfi/dist/fonts/.gitignore
 
 # SATySFi cross-reference cache written next to a built .saty.
 *.satysfi-aux

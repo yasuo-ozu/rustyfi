@@ -103,33 +103,69 @@ pub struct UserTypeDecl {
     pub ctors: Vec<(String, Option<c::TypeExpr>)>,
 }
 
-fn lower_type_decl(decl: &cst::TypeDecl) -> UserTypeDecl {
-    let params = decl.tyvars.iter().map(|v| v.name.clone()).collect();
-    let mut ctors = Vec::with_capacity(1 + decl.rest.len());
-    ctors.push((
-        decl.first.ctor.name.clone(),
-        decl.first.of_ty.as_ref().map(|o| o.ty.clone()),
-    ));
-    for bv in &decl.rest {
-        ctors.push((
-            bv.def.ctor.name.clone(),
-            bv.def.of_ty.as_ref().map(|o| o.ty.clone()),
-        ));
-    }
-    UserTypeDecl {
-        name: decl.name.name.clone(),
-        params,
-        ctors,
+/// A user type *synonym* declaration (`type point = length * length`),
+/// surfaced in parallel with [`UserTypeDecl`] — see that struct's doc
+/// comment; the body is kept as a raw CST `TypeExpr` for the same reason.
+/// `typecheck::build_synonym_decl` is where it is actually lowered to a
+/// `MonoType` template, and `typecheck::expand_synonyms` is where a
+/// reference to `name` elsewhere is transparently replaced by it.
+#[derive(Clone, Debug)]
+pub struct UserSynonymDecl {
+    pub name: String,
+    /// Type-parameter names, in declaration order. Only the zero-param case
+    /// is reachable through a *use* of the synonym today — see
+    /// `cst::ast::TypeAtom`'s doc comment (no applied-type-constructor
+    /// syntax exists to instantiate one) — but parsing/storing params keeps
+    /// this declaration-side path symmetric with `UserTypeDecl`.
+    pub params: Vec<String>,
+    pub body: c::TypeExpr,
+}
+
+/// One lowered `type` declaration: either shape [`lower_type_decl`] can
+/// produce, for `walk_bindings` to sort into `Program`'s two decl lists.
+enum LoweredTypeDecl {
+    Variant(UserTypeDecl),
+    Synonym(UserSynonymDecl),
+}
+
+fn lower_type_decl(decl: &cst::TypeDecl) -> LoweredTypeDecl {
+    let params: Vec<String> = decl.tyvars.iter().map(|v| v.name.clone()).collect();
+    match &decl.body {
+        cst::TypeDeclBody::Variant { first, rest, .. } => {
+            let mut ctors = Vec::with_capacity(1 + rest.len());
+            ctors.push((
+                first.ctor.name.clone(),
+                first.of_ty.as_ref().map(|o| o.ty.clone()),
+            ));
+            for bv in rest {
+                ctors.push((
+                    bv.def.ctor.name.clone(),
+                    bv.def.of_ty.as_ref().map(|o| o.ty.clone()),
+                ));
+            }
+            LoweredTypeDecl::Variant(UserTypeDecl {
+                name: decl.name.name.clone(),
+                params,
+                ctors,
+            })
+        }
+        cst::TypeDeclBody::Synonym(ty) => LoweredTypeDecl::Synonym(UserSynonymDecl {
+            name: decl.name.name.clone(),
+            params,
+            body: ty.clone(),
+        }),
     }
 }
 
 /// The result of elaborating a whole file: every `type` declaration it
 /// surfaced (in source order — a later declaration may reference an earlier
 /// one, or itself, since variant types are nominal; see
-/// `typecheck::build_variant_decl`) plus the elaborated document body.
+/// `typecheck::build_variant_decl`), every type *synonym* it surfaced (see
+/// `typecheck::build_synonym_decl`), plus the elaborated document body.
 #[derive(Clone, Debug)]
 pub struct Program {
     pub type_decls: Vec<UserTypeDecl>,
+    pub synonym_decls: Vec<UserSynonymDecl>,
     pub body: Ast,
 }
 
@@ -154,7 +190,14 @@ pub fn elaborate_program(file: &cst::File, prelude_scope: &Scope) -> Result<Prog
     };
     let items: Vec<&cst::TopBinding> = file.prelude.iter().collect();
     let mut type_decls = Vec::new();
-    let (bindings, exported) = walk_bindings(&items, prelude_scope, &[], &mut type_decls)?;
+    let mut synonym_decls = Vec::new();
+    let (bindings, exported) = walk_bindings(
+        &items,
+        prelude_scope,
+        &[],
+        &mut type_decls,
+        &mut synonym_decls,
+    )?;
     let mut final_scope = prelude_scope.clone();
     for name in &exported {
         final_scope.insert(name);
@@ -162,6 +205,7 @@ pub fn elaborate_program(file: &cst::File, prelude_scope: &Scope) -> Result<Prog
     let body_ast = expr(body, &final_scope)?;
     Ok(Program {
         type_decls,
+        synonym_decls,
         body: nest(bindings, body_ast),
     })
 }
@@ -198,6 +242,22 @@ fn qualify_key(mod_path: &[String], local: &str) -> String {
     }
 }
 
+/// If `item` is a `direct \cmd : ty` / `direct +cmd : ty` signature item
+/// (`cst::SigItem::DirectHorzCmd`/`DirectVertCmd` — math commands share the
+/// `\` sigil with inline ones, see `command_scheme`'s doc comment in
+/// `typecheck.rs`, so there is no separate math case here), its bare command
+/// name (sigil included — `"\cmd"`/`"+cmd"`, the same key format
+/// `push_named_binding` binds locally) and the name token's span, for
+/// `typechecker-completion.md` §4's enclosing-scope exposure. `None` for
+/// every other `SigItem` (`val`/`type`), which stay module-qualified only.
+fn direct_cmd_name(item: &cst::SigItem) -> Option<(String, Span)> {
+    match item {
+        cst::SigItem::DirectHorzCmd { name, .. } => Some((name.name.clone(), name.span)),
+        cst::SigItem::DirectVertCmd { name, .. } => Some((name.name.clone(), name.span)),
+        _ => None,
+    }
+}
+
 /// One step of the top-level/struct-decl fold, deferred (see [`nest`]) so
 /// that folding in a `module`'s declarations doesn't require building the
 /// "rest of the program" before the module's own bindings are known.
@@ -205,6 +265,9 @@ enum Binding {
     Let(String, Ast),
     LetRec(Vec<(String, Rc<Ast>)>),
     LetMutable(String, Ast),
+    /// A `let-math` binding (`docs/plans/math-engine.md` §G) — nests as
+    /// `Ast::LetMathIn`, not `Ast::LetIn` (see that variant's doc comment).
+    LetMath(String, Ast),
 }
 
 /// Wrap `tail` in every collected `Binding`, innermost (last-pushed) first —
@@ -219,6 +282,7 @@ fn nest(bindings: Vec<Binding>, tail: Ast) -> Ast {
             Binding::Let(name, val) => Ast::LetIn(name, Box::new(val), Box::new(ast)),
             Binding::LetRec(bs) => Ast::LetRecIn(bs, Box::new(ast)),
             Binding::LetMutable(name, val) => Ast::LetMutableIn(name, Box::new(val), Box::new(ast)),
+            Binding::LetMath(name, val) => Ast::LetMathIn(name, Box::new(val), Box::new(ast)),
         };
     }
     ast
@@ -284,6 +348,7 @@ fn walk_bindings(
     scope: &Scope,
     mod_path: &[String],
     type_decls: &mut Vec<UserTypeDecl>,
+    synonym_decls: &mut Vec<UserSynonymDecl>,
 ) -> Result<(Vec<Binding>, Vec<String>), ElabError> {
     let mut bindings: Vec<Binding> = Vec::new();
     let mut running = scope.clone();
@@ -291,14 +356,15 @@ fn walk_bindings(
     for top in items {
         match top {
             cst::TopBinding::Let(top_let) => {
-                let mut inner = running.clone();
-                for p in &top_let.params {
-                    inner = inner.with(&p.name);
-                }
-                let mut value = expr(&top_let.value, &inner)?;
-                for p in top_let.params.iter().rev() {
-                    value = Ast::Lambda(p.name.clone(), Rc::new(value));
-                }
+                // Same curry-with-patterns desugaring as a `let-rec` clause
+                // (`rec_clause_value`), just with no multi-clause `extra` —
+                // top-level non-recursive `let` has no `|`-clause sugar.
+                // Its all-var-param fast path reproduces the old direct
+                // `Lambda`-chain behavior exactly; the general path handles
+                // `gr.satyh`-style tuple-destructuring params.
+                let top_let_params = params_to_patbots(&top_let.params);
+                let value =
+                    rec_clause_value(&top_let_params, &top_let.value, &[], &running)?;
                 push_named_binding(
                     mod_path,
                     top_let.name.name.clone(),
@@ -348,14 +414,31 @@ fn walk_bindings(
                     &mut exported,
                 );
             }
+            cst::TopBinding::LetMath {
+                cmd, params, value, ..
+            } => {
+                let value_ast = elaborate_let_math(params, value, &running)?;
+                push_named_binding(
+                    mod_path,
+                    cmd.name.clone(),
+                    value_ast,
+                    Binding::LetMath,
+                    &mut bindings,
+                    &mut running,
+                    &mut exported,
+                );
+            }
             // `type` declarations have no runtime effect in this untyped
             // elaborator: constructors are bare `Ctor` atoms and are never
-            // scope-checked, so no scope entry (qualified or not) is needed.
-            // They are still surfaced (unqualified — variant types are
-            // nominal by name only, see `UserTypeDecl`) for the typechecker.
-            cst::TopBinding::Type(decl) => {
-                type_decls.push(lower_type_decl(decl));
-            }
+            // scope-checked, and a synonym is never itself a runtime value,
+            // so no scope entry (qualified or not) is needed for either
+            // shape. They are still surfaced (unqualified — variant types
+            // are nominal by name only, see `UserTypeDecl`; synonyms the
+            // same way, see `UserSynonymDecl`) for the typechecker.
+            cst::TopBinding::Type(decl) => match lower_type_decl(decl) {
+                LoweredTypeDecl::Variant(v) => type_decls.push(v),
+                LoweredTypeDecl::Synonym(s) => synonym_decls.push(s),
+            },
             cst::TopBinding::LetMutable { name, value, .. } => {
                 let value_ast = expr(value, &running)?;
                 push_named_binding(
@@ -368,20 +451,63 @@ fn walk_bindings(
                     &mut exported,
                 );
             }
-            cst::TopBinding::Module { name, decls, .. } => {
-                // Signature annotations (`sig .. end`) are accepted and
-                // ignored: this elaborator does no type checking, so there
-                // is nothing yet to check them against (enforcement is
-                // phase 3's job).
+            cst::TopBinding::Module { name, sig, decls, .. } => {
+                // Signature annotations (`sig .. end`) are otherwise
+                // accepted and ignored: this elaborator does no type
+                // checking, so `val`/`type` items have nothing yet to check
+                // against (full reconciliation is
+                // `typechecker-completion.md` §3, deferred). `direct` items
+                // (§4) ARE handled here, though: each exposes its command
+                // UNQUALIFIED at the enclosing scope, aliasing the module's
+                // own qualified binding — the same `Ast::Var`-alias trick
+                // `export_alias`/`Open` already use below, which
+                // `typecheck.rs`'s `command_scheme` already threads command
+                // types through transparently (an alias site is
+                // indistinguishable from `open`'s), so no typecheck.rs
+                // change is needed to give the exposed name its command
+                // type.
                 let mut child_path = mod_path.to_vec();
                 child_path.push(name.name.clone());
                 let inner_items: Vec<&cst::TopBinding> =
                     decls.iter().map(|d| d.0.as_ref()).collect();
-                let (inner_bindings, inner_exported) =
-                    walk_bindings(&inner_items, &running, &child_path, type_decls)?;
+                let (inner_bindings, inner_exported) = walk_bindings(
+                    &inner_items,
+                    &running,
+                    &child_path,
+                    type_decls,
+                    synonym_decls,
+                )?;
                 bindings.extend(inner_bindings);
                 for q in &inner_exported {
                     running.insert(q);
+                }
+                if let Some(sig_annot) = sig {
+                    for item in &sig_annot.items {
+                        if let Some((local, span)) = direct_cmd_name(item) {
+                            let qual = qualify_key(&child_path, &local);
+                            // Cheap positive-obligation check (a `direct`-only
+                            // slice of §3's fuller sig-preservation, which
+                            // stays deferred for `val`/`type` items): the
+                            // struct must actually define what it declares
+                            // `direct`, or the alias below would dangle.
+                            if !inner_exported.contains(&qual) {
+                                return err(
+                                    span,
+                                    format!(
+                                        "module `{}` signature declares `direct {local} : ..` \
+                                         but its `struct .. end` body never defines `{local}`",
+                                        name.name
+                                    ),
+                                );
+                            }
+                            bindings.push(Binding::Let(
+                                local.clone(),
+                                Ast::Var(qual, Span::default()),
+                            ));
+                            running.insert(&local);
+                            exported.push(local);
+                        }
+                    }
                 }
                 exported.extend(inner_exported);
             }
@@ -418,7 +544,7 @@ fn walk_bindings(
 ///   using `reader` = `"read-inline"` or `"read-block"`.
 fn elaborate_let_inline(
     ctx: Option<&VarTok>,
-    params: &[VarTok],
+    params: &[cst::CmdParam],
     value: &c::Expr,
     scope: &Scope,
     reader: &str,
@@ -427,11 +553,11 @@ fn elaborate_let_inline(
         Some(ctxvar) => {
             let mut inner = scope.with(&ctxvar.name);
             for p in params {
-                inner = inner.with(&p.name);
+                inner = inner.with(&p.name.name);
             }
             let mut value_ast = expr(value, &inner)?;
             for p in params.iter().rev() {
-                value_ast = Ast::Lambda(p.name.clone(), Rc::new(value_ast));
+                value_ast = Ast::Lambda(p.name.name.clone(), Rc::new(value_ast));
             }
             Ok(Ast::Lambda(ctxvar.name.clone(), Rc::new(value_ast)))
         }
@@ -440,7 +566,7 @@ fn elaborate_let_inline(
             let dummy = Span::default();
             let mut inner = scope.with(IMPLICIT_CTX);
             for p in params {
-                inner = inner.with(&p.name);
+                inner = inner.with(&p.name.name);
             }
             let value_ast = expr(value, &inner)?;
             let read_fn = scoped_var(reader, dummy, &inner)?;
@@ -450,11 +576,34 @@ fn elaborate_let_inline(
                 Box::new(value_ast),
             );
             for p in params.iter().rev() {
-                curried = Ast::Lambda(p.name.clone(), Rc::new(curried));
+                curried = Ast::Lambda(p.name.name.clone(), Rc::new(curried));
             }
             Ok(Ast::Lambda(IMPLICIT_CTX.to_string(), Rc::new(curried)))
         }
     }
+}
+
+/// `let-math \cmd param* = expr` (`docs/plans/math-engine.md` §G; upstream
+/// `nxmathdec`, `parser.mly:586-591`): curry `params` straight into a
+/// `Lambda` chain around `value`, with **no** implicit/explicit context
+/// variable at all (contrast `elaborate_let_inline`, which always threads
+/// one) — a math command's own type (`math-cmd`) carries no context
+/// argument. A zero-param binding (e.g. `let-math \to = rel \`→\``) elaborates
+/// to `value` directly, un-wrapped.
+fn elaborate_let_math(
+    params: &[cst::CmdParam],
+    value: &c::Expr,
+    scope: &Scope,
+) -> Result<Ast, ElabError> {
+    let mut inner = scope.clone();
+    for p in params {
+        inner = inner.with(&p.name.name);
+    }
+    let mut value_ast = expr(value, &inner)?;
+    for p in params.iter().rev() {
+        value_ast = Ast::Lambda(p.name.name.clone(), Rc::new(value_ast));
+    }
+    Ok(value_ast)
 }
 
 /// Elaborate one `let-rec` clause group (shared by the local `Expr::LetRecIn`
@@ -479,17 +628,141 @@ fn rec_bindings(
     }
     let mut bindings = Vec::with_capacity(all.len());
     for rb in all {
-        let mut inner = rec_scope.clone();
-        for p in &rb.params {
-            inner = inner.with(&p.name);
-        }
-        let mut value_ast = expr(&rb.value, &inner)?;
-        for p in rb.params.iter().rev() {
-            value_ast = Ast::Lambda(p.name.clone(), Rc::new(value_ast));
-        }
+        let value_ast = rec_clause_value(&rb.params, &rb.value, &rb.extra, &rec_scope)?;
         bindings.push((rb.name.name.clone(), Rc::new(value_ast)));
     }
     Ok((bindings, rec_scope))
+}
+
+/// Elaborate the (possibly multi-clause) value of one `let-rec` binding
+/// (`RecBinding`/`RecClause`: `name [|] patbot* = value (| patbot* =
+/// value)*`). Faithfully, a multi-clause function definition desugars into
+/// one curried function of `n` fresh parameters (`n` = every clause's shared
+/// arity — an `IllegalArgumentLength`-style error if they disagree) that
+/// matches a tuple of them against each clause's patterns in turn, first
+/// clause first (`option.satyg`'s `let-rec map | f (None) = None | f
+/// (Some(v)) = Some(f v)` is exactly this: 2 clauses, arity 2). At arity 1
+/// the "tuple" is just the single fresh parameter itself, no `Ast::Tuple`
+/// wrapper (matches `list.satyg`'s single-parameter-pattern clauses, e.g.
+/// `let-rec append lst1 lst2 = ..` mixed with genuinely-refutable single
+/// clauses elsewhere).
+///
+/// The single-clause, all-variable-parameter case (`let-rec f x y = ..`, no
+/// `|` at all — overwhelmingly the common shape) is special-cased to the
+/// original direct `Lambda` chain: behaviorally identical to the general
+/// path (variable patterns always match and simply bind), it just skips
+/// building a throwaway `Match`/fresh-variable indirection for what nearly
+/// every binding actually looks like.
+fn rec_clause_value(
+    params0: &[c::PatBot],
+    value0: &c::Expr,
+    extra: &[c::RecClause],
+    scope: &Scope,
+) -> Result<Ast, ElabError> {
+    let arity = params0.len();
+    for cl in extra {
+        if cl.params.len() != arity {
+            return err(
+                cl.bar.0,
+                format!(
+                    "every clause of a multi-clause 'let-rec' binding must bind the \
+                     same number of parameters (expected {arity}, got {})",
+                    cl.params.len()
+                ),
+            );
+        }
+    }
+
+    if extra.is_empty() && params0.iter().all(is_var_patbot) {
+        let mut inner = scope.clone();
+        for p in params0 {
+            inner = inner.with(patbot_var_name(p));
+        }
+        let mut value_ast = expr(value0, &inner)?;
+        for p in params0.iter().rev() {
+            value_ast = Ast::Lambda(patbot_var_name(p).to_string(), Rc::new(value_ast));
+        }
+        return Ok(value_ast);
+    }
+
+    let fresh: Vec<String> = (0..arity).map(|i| format!("%rec_arg{i}")).collect();
+    let mut arms = Vec::with_capacity(1 + extra.len());
+    arms.push(rec_clause_arm(params0, value0, scope)?);
+    for cl in extra {
+        arms.push(rec_clause_arm(&cl.params, &cl.value, scope)?);
+    }
+    let dummy = Span::default();
+    let scrutinee = if arity == 1 {
+        Ast::Var(fresh[0].clone(), dummy)
+    } else {
+        Ast::Tuple(fresh.iter().map(|f| Ast::Var(f.clone(), dummy)).collect())
+    };
+    let mut body = Ast::Match(Box::new(scrutinee), arms);
+    for f in fresh.iter().rev() {
+        body = Ast::Lambda(f.clone(), Rc::new(body));
+    }
+    Ok(body)
+}
+
+/// Widen a plain (non-`let-rec`) `let`'s `Param` down to a `PatBot`, so
+/// `TopLet`/`Expr::LetIn` can share `rec_clause_value`'s pattern-currying
+/// machinery with `let-rec` unchanged: the def-site optional marker
+/// (`Param::Optional`, `?:name`) carries no elaboration-time semantics of
+/// its own in this port (see `cst.rs`'s `Param` doc comment) — it is simply
+/// a plain variable binder, `PatBot::Var`.
+fn param_to_patbot(p: &c::Param) -> c::PatBot {
+    match p {
+        c::Param::Optional { name, .. } => c::PatBot::Var(name.clone()),
+        c::Param::Pat(pat) => pat.clone(),
+    }
+}
+
+fn params_to_patbots(params: &[c::Param]) -> Vec<c::PatBot> {
+    params.iter().map(param_to_patbot).collect()
+}
+
+fn is_var_patbot(p: &c::PatBot) -> bool {
+    matches!(p, c::PatBot::Var(_))
+}
+
+/// Panics if `p` isn't `PatBot::Var` — callers must check [`is_var_patbot`] first.
+fn patbot_var_name(p: &c::PatBot) -> &str {
+    match p {
+        c::PatBot::Var(v) => &v.name,
+        _ => unreachable!("patbot_var_name called on a non-Var PatBot"),
+    }
+}
+
+/// One `patbot* = value` clause of a multi-clause `let-rec`, lowered to a
+/// [`MatchArm`] over the clause's parameter patterns (see
+/// [`rec_clause_value`]'s doc comment for the arity-1-vs-N pattern shape) —
+/// the body sees every name the patterns bind, exactly like an ordinary
+/// `match` arm ([`match_arm`], below).
+fn rec_clause_arm(
+    params: &[c::PatBot],
+    value: &c::Expr,
+    scope: &Scope,
+) -> Result<MatchArm, ElabError> {
+    let pats: Vec<Pattern> = params.iter().map(patbot).collect::<Result<_, _>>()?;
+    let mut names = Vec::new();
+    for p in &pats {
+        collect_pattern_names(p, &mut names);
+    }
+    let mut inner = scope.clone();
+    for n in &names {
+        inner = inner.with(n);
+    }
+    let body = expr(value, &inner)?;
+    let pat = if pats.len() == 1 {
+        pats.into_iter().next().unwrap()
+    } else {
+        Pattern::Tuple(pats)
+    };
+    Ok(MatchArm {
+        pat,
+        guard: None,
+        body,
+    })
 }
 
 fn expr(e: &c::Expr, scope: &Scope) -> Result<Ast, ElabError> {
@@ -508,20 +781,49 @@ fn expr(e: &c::Expr, scope: &Scope) -> Result<Ast, ElabError> {
             body,
             ..
         } => {
-            let mut inner = scope.clone();
-            for p in params {
-                inner = inner.with(&p.name);
-            }
-            let mut value_ast = expr(value, &inner)?;
-            for p in params.iter().rev() {
-                value_ast = Ast::Lambda(p.name.clone(), Rc::new(value_ast));
-            }
+            // `params` is now a full `param*` (`cst::ast::Expr::LetIn`'s doc
+            // comment — widened for `hdecoset.satyh`/`vdecoset.satyh`'s `let
+            // deco _ _ _ _ = [] in ..`, and further widened to `Param` for
+            // `stdja.satyh`'s `let document record ?:configopt inner = ..`),
+            // so this reuses the same single-clause pattern-currying path
+            // `let-rec`/`Fun` already share, non-recursively (`scope`, not a
+            // scope extended with `name` itself) — `params_to_patbots` first
+            // widens any `?:name` marker to a plain `PatBot::Var`.
+            let let_in_params = params_to_patbots(params);
+            let value_ast = rec_clause_value(&let_in_params, value, &[], scope)?;
             let body_scope = scope.with(&name.name);
             let body_ast = expr(body, &body_scope)?;
             Ok(Ast::LetIn(
                 name.name.clone(),
                 Box::new(value_ast),
                 Box::new(body_ast),
+            ))
+        }
+        // `let pat = value in body` (`nxnonrecdec`'s general-pattern case —
+        // see `cst::ast::Expr::LetPatternIn`'s doc comment for why this is a
+        // separate variant from `LetIn` above). Lowered to the same
+        // single-arm-`match` machinery a `match` expression's own arms use
+        // (`pattern`/`collect_pattern_names`, below): `value` is elaborated
+        // under the OUTER scope (a destructuring let's right-hand side never
+        // sees its own bound names, same as `LetIn`), then matched against
+        // `pat`, whose bound names are in scope for `body`.
+        c::Expr::LetPatternIn { pat, value, body, .. } => {
+            let value_ast = expr(value, scope)?;
+            let lowered_pat = pattern(pat)?;
+            let mut names = Vec::new();
+            collect_pattern_names(&lowered_pat, &mut names);
+            let mut inner = scope.clone();
+            for n in &names {
+                inner = inner.with(n);
+            }
+            let body_ast = expr(body, &inner)?;
+            Ok(Ast::Match(
+                Box::new(value_ast),
+                vec![MatchArm {
+                    pat: lowered_pat,
+                    guard: None,
+                    body: body_ast,
+                }],
             ))
         }
         c::Expr::If {
@@ -534,19 +836,22 @@ fn expr(e: &c::Expr, scope: &Scope) -> Result<Ast, ElabError> {
             Box::new(expr(then_branch, scope)?),
             Box::new(expr(else_branch, scope)?),
         )),
+        // `fun patbot+ -> body` (`nxlambda`'s `LAMBDA argpats ARROW nxlor`,
+        // `argpats = list(patbot)` — see `cst::ast::Expr::Fun`'s doc
+        // comment). Delegates to `rec_clause_value` (below), the SAME
+        // arity-preserving pattern-currying `let-rec` already needs for its
+        // own `patbot*` clause parameters (`fun`'s `extra` clause list is
+        // simply empty — a lambda has no `|`-alternation): the common
+        // all-plain-variable case still becomes a direct `Lambda` chain,
+        // with no `Match`/fresh-variable indirection, and only a genuine
+        // destructuring parameter (e.g. the bundled `list.satyg`'s
+        // `mapi-adjacent`: `fun (i, acc) x leftopt rightopt -> ..`) pays for
+        // the general path.
         c::Expr::Fun { kw, params, body, .. } => {
             if params.is_empty() {
                 return err(kw.0, "'fun' needs at least one parameter");
             }
-            let mut inner = scope.clone();
-            for p in params {
-                inner = inner.with(&p.name);
-            }
-            let mut ast = expr(body, &inner)?;
-            for p in params.iter().rev() {
-                ast = Ast::Lambda(p.name.clone(), Rc::new(ast));
-            }
-            Ok(ast)
+            rec_clause_value(params, body, &[], scope)
         }
         c::Expr::Match {
             scrutinee,
@@ -581,19 +886,7 @@ fn expr(e: &c::Expr, scope: &Scope) -> Result<Ast, ElabError> {
         // there is no further sequence of sibling top bindings to thread a
         // scope through here.
         c::Expr::OpenIn { name, body, .. } => {
-            let prefix = format!("{}.", name.name);
-            let matches = scope.names_with_prefix(&prefix);
-            let mut inner = scope.clone();
-            for q in &matches {
-                inner = inner.with(&q[prefix.len()..]);
-            }
-            let body_ast = expr(body, &inner)?;
-            let mut ast = body_ast;
-            for q in matches.into_iter().rev() {
-                let suffix = q[prefix.len()..].to_string();
-                ast = Ast::LetIn(suffix, Box::new(Ast::Var(q, name.span)), Box::new(ast));
-            }
-            Ok(ast)
+            open_module(&name.name, name.span, scope, |s| expr(body, s))
         }
         // `while cond do body` (`nxwhl`).
         c::Expr::WhileDo { cond, body, .. } => Ok(Ast::WhileDo(
@@ -693,7 +986,14 @@ fn op_chain(chain: &c::OpChain, scope: &Scope) -> Result<Ast, ElabError> {
         let mut ops: VecDeque<(String, Span, Token)> = VecDeque::with_capacity(chain.tail.len());
         for rhs in &chain.tail {
             let text = rhs.op.op_text();
-            if !scope.contains(&text) {
+            // `|>` (frontend-completion.md §Slice1-A / stdlib-port.md Blocker
+            // B) is handled entirely by `climb`'s special case below — it is
+            // deliberately NOT a `scope`-bound name (no runtime primitive, no
+            // `prim_types` entry: `a |> f` lowers straight to `Apply(f, a)`,
+            // ordinary application the inferencer/evaluator already handle),
+            // so it must skip the "unbound operator" gate every other
+            // operator token goes through.
+            if text != "|>" && !scope.contains(&text) {
                 return err(rhs.op.span, format!("unbound operator '{text}'"));
             }
             ops.push_back((text, rhs.op.span, rhs.op.tok.clone()));
@@ -714,7 +1014,16 @@ fn op_chain(chain: &c::OpChain, scope: &Scope) -> Result<Ast, ElabError> {
 /// `atom (op atom)*` sequence (`atoms.len() == ops.len() + 1`). Every binop
 /// elaborates uniformly to `Apply(Apply(Var(op_text), lhs), rhs)` — SATySFi
 /// binops (including `::`, see the `primitives.rs` note) are just env-bound
-/// primitives, no special-cased AST node needed.
+/// primitives, no special-cased AST node needed — **except `|>`**, which is
+/// reverse application (`a |> f` ≡ `f a`, upstream `primitives.cppo.ml:552`)
+/// special-cased directly to `Apply(rhs, lhs)` rather than
+/// `Apply(Apply(Var("|>"), lhs), rhs)`: no primitive named `"|>"` is ever
+/// registered (see `op_chain`'s matching skip of the scope-contains gate),
+/// since applying a user-supplied closure isn't something any current
+/// primitive body does. `|>` sits at level 1 (loosest, left-associative,
+/// see `op_prec`), so `a |> f |> g` folds as `(a |> f) |> g` = `g (f a)`,
+/// matching the bundled `list.satyg`'s pipe-heavy style (`reverse`,
+/// `map-adjacent`, `map-with-ends`).
 fn climb(
     atoms: &mut VecDeque<Ast>,
     ops: &mut VecDeque<(String, Span, Token)>,
@@ -734,10 +1043,14 @@ fn climb(
             Assoc::Right => prec,
         };
         let rhs = climb(atoms, ops, next_min);
-        lhs = Ast::Apply(
-            Box::new(Ast::Apply(Box::new(Ast::Var(text, span)), Box::new(lhs))),
-            Box::new(rhs),
-        );
+        lhs = if text == "|>" {
+            Ast::Apply(Box::new(rhs), Box::new(lhs))
+        } else {
+            Ast::Apply(
+                Box::new(Ast::Apply(Box::new(Ast::Var(text, span)), Box::new(lhs))),
+                Box::new(rhs),
+            )
+        };
     }
     lhs
 }
@@ -829,16 +1142,28 @@ fn atomic_head_with_excl(
     Ok(ast)
 }
 
+/// Desugar one application-chain argument. `?: value`/`?*` (`AppArg::Optional`/
+/// `Omission` — v0.0.6's `UTApplyOptional`/`UTApplyOmission`) desugar
+/// *untyped*, straight to the same `option` constructors a program could
+/// spell by hand: a supplied `?:(e)` becomes `Some(e)`, an omitted `?*`
+/// becomes `None`. This is the one runtime model shared by every optional-arg
+/// call site this milestone supports — a plain function's `f ?:(e)`/`f ?*`
+/// *and* a command's leading `narg`s (`cst.rs`'s `CmdTail::Args`, whose
+/// elements are ALSO `AppArg`s) both go through this same function — so
+/// `Some`/`None` are the one encoding a `?->`-typed function's `option`-
+/// wrapped domain (`typecheck.rs`'s `lower_type_expr`) must unify against.
+/// No type-directed insertion is needed here: every optional slot this
+/// grammar can produce carries an explicit `?:`/`?*` marker at the call site
+/// (there is no "just omit the argument entirely, no marker at all" form —
+/// see `docs/plans/frontend-completion.md` Sub-area 2), so elaboration alone
+/// (no typechecker involvement) fully resolves it.
 fn app_arg_to_ast(arg: &c::AppArg, scope: &Scope) -> Result<Ast, ElabError> {
     match arg {
-        c::AppArg::Optional { q, .. } => err(
-            q.0,
-            "optional arguments are not supported yet (phase 3)",
-        ),
-        c::AppArg::Omission(tok) => err(
-            tok.0,
-            "omitted arguments are not supported yet (phase 3)",
-        ),
+        c::AppArg::Optional { value, .. } => {
+            let inner = atomic(value, scope)?;
+            Ok(Ast::Ctor("Some".to_string(), Some(Box::new(inner))))
+        }
+        c::AppArg::Omission(_) => Ok(Ast::Ctor("None".to_string(), None)),
         c::AppArg::Atom {
             excl,
             atom,
@@ -846,6 +1171,37 @@ fn app_arg_to_ast(arg: &c::AppArg, scope: &Scope) -> Result<Ast, ElabError> {
         } => atomic_head_with_excl(atom, accesses, excl.as_ref(), scope),
         c::AppArg::Ctor(ctor) => Ok(Ast::Ctor(ctor.name.clone(), None)),
     }
+}
+
+/// Shared machinery for `open Name in body` (`Expr::OpenIn`) and `Name.(body)`
+/// (`Atomic::OpenModule`, `nxbot`'s `OPENMODULE nxlet RPAREN` production —
+/// `Mod.(e)` ≡ `open Mod in e`): bring every `"Name."`-prefixed name
+/// currently in scope into unqualified scope, elaborate `body` under that
+/// extended scope (via the supplied closure — generic because `Expr::OpenIn`'s
+/// body is a plain `Expr` but `Atomic::OpenModule`'s is a `ParenBody`, so
+/// `Mod.(e, e, …)` can produce a tuple exactly like `Atomic::Paren`), then
+/// wrap the result in one `LetIn` alias per matched name (`x = Name.x`) —
+/// there is no separate "module scope" at the `Ast` level, so the aliasing
+/// must be visible there too.
+fn open_module(
+    module_name: &str,
+    name_span: Span,
+    scope: &Scope,
+    body: impl FnOnce(&Scope) -> Result<Ast, ElabError>,
+) -> Result<Ast, ElabError> {
+    let prefix = format!("{module_name}.");
+    let matches = scope.names_with_prefix(&prefix);
+    let mut inner = scope.clone();
+    for q in &matches {
+        inner = inner.with(&q[prefix.len()..]);
+    }
+    let body_ast = body(&inner)?;
+    let mut ast = body_ast;
+    for q in matches.into_iter().rev() {
+        let suffix = q[prefix.len()..].to_string();
+        ast = Ast::LetIn(suffix, Box::new(Ast::Var(q, name_span)), Box::new(ast));
+    }
+    Ok(ast)
 }
 
 fn atomic(a: &c::Atomic, scope: &Scope) -> Result<Ast, ElabError> {
@@ -867,8 +1223,21 @@ fn atomic(a: &c::Atomic, scope: &Scope) -> Result<Ast, ElabError> {
         c::Atomic::VarWithMod(tok) => {
             scoped_var(&qualify_key(&tok.mods, &tok.name), tok.span, scope)
         }
+        // `(command \cmd)` — a first-class reference to an inline command's
+        // own binding (`class-signature-lang-gaps.md` gap 1). No new
+        // binding machinery: the command's own `let-inline` binding is the
+        // referent, so this is just its `Var` under the same sigil'd key
+        // `InlineElem::Cmd` resolves — reusing `scoped_var` also gives the
+        // usual "unbound command" diagnostic for free.
+        c::Atomic::Command { name, .. } => {
+            let (key, span) = horz_cmd_key(name);
+            scoped_var(&key, span, scope)
+        }
         c::Atomic::Unit { .. } => Ok(Ast::Unit),
         c::Atomic::Paren { inner, .. } => paren_body(inner, scope),
+        c::Atomic::OpenModule { grp, body } => {
+            open_module(&grp.open.name, grp.open.span, scope, |s| paren_body(body, s))
+        }
         c::Atomic::Record { body, .. } => record_body_to_ast(body, scope),
         c::Atomic::List { items, .. } => {
             let mut out = Vec::with_capacity(items.len());
@@ -1170,60 +1539,23 @@ fn block_elems(elems: &[c::BlockElem], scope: &Scope) -> Result<Vec<BText>, Elab
     Ok(out)
 }
 
-/// Flatten a command tail back into its argument list. `CmdTail::Args`
-/// stores the whole tail as one `Expr` (reusing the application-chain
-/// grammar rather than a dedicated argument list — see `cst.rs`'s doc
-/// comment on `CmdTail`); the lexer's active-mode rules restrict it to a
-/// plain (no binops, no unary minus, no `before`, no `let`/`if`/`fun`/
-/// `match`/`let-mutable`/`open`/`while`/`<-`) `AppExpr` chain whose head and
-/// arguments *are* the command's arguments, so that is the only shape
-/// accepted here.
+/// Flatten a command tail back into its argument list. `CmdTail::Args` is a
+/// flat, non-empty `AppArg` sequence (`cst.rs`'s own dedicated grammar, not a
+/// reuse of the general application chain — see that type's doc comment), so
+/// this is just `app_arg_to_ast` per element; a supplied/omitted optional
+/// (`?:`/`?*`) desugars to `Some`/`None` exactly like a plain function's
+/// optional application (`app_arg_to_ast`'s doc comment) — the one place this
+/// port's optional-arg call-site model is shared between commands and plain
+/// functions.
 fn cmd_args(tail: &c::CmdTail, scope: &Scope) -> Result<Vec<Ast>, ElabError> {
     match tail {
         c::CmdTail::Semi(_) => Ok(Vec::new()),
-        c::CmdTail::Args { args, .. } => cmd_arg_chain(args, scope),
-    }
-}
-
-fn cmd_arg_chain(e: &c::Expr, scope: &Scope) -> Result<Vec<Ast>, ElabError> {
-    match e {
-        c::Expr::Ops(chain) if !chain.tail.is_empty() => err(
-            chain.tail[0].op.span,
-            "unexpected binary operator in a command's argument list",
-        ),
-        c::Expr::Ops(chain) if chain.head.minus.is_some() => err(
-            chain.head.minus.as_ref().unwrap().0,
-            "unexpected '-' in a command's argument list",
-        ),
-        c::Expr::Ops(chain) if chain.before.is_some() => err(
-            chain.before.as_ref().unwrap().kw.0,
-            "unexpected 'before' in a command's argument list",
-        ),
-        c::Expr::Ops(chain) => {
-            let head_val = atomic_head_with_excl(
-                &chain.head.head,
-                &chain.head.head_accesses,
-                chain.head.excl.as_ref(),
-                scope,
-            )?;
-            let mut out = vec![head_val];
-            for a in &chain.head.args {
+        c::CmdTail::Args { first, rest, .. } => {
+            let mut out = vec![app_arg_to_ast(first, scope)?];
+            for a in rest {
                 out.push(app_arg_to_ast(a, scope)?);
             }
             Ok(out)
-        }
-        c::Expr::LetRecIn { kw, .. } => err(kw.0, "unexpected 'let-rec' as a command argument"),
-        c::Expr::LetIn { kw, .. } => err(kw.0, "unexpected 'let' as a command argument"),
-        c::Expr::If { kw, .. } => err(kw.0, "unexpected 'if' as a command argument"),
-        c::Expr::Fun { kw, .. } => err(kw.0, "unexpected 'fun' as a command argument"),
-        c::Expr::Match { kw, .. } => err(kw.0, "unexpected 'match' as a command argument"),
-        c::Expr::LetMutableIn { kw, .. } => {
-            err(kw.0, "unexpected 'let-mutable' as a command argument")
-        }
-        c::Expr::OpenIn { kw, .. } => err(kw.0, "unexpected 'open' as a command argument"),
-        c::Expr::WhileDo { kw, .. } => err(kw.0, "unexpected 'while' as a command argument"),
-        c::Expr::Overwrite { name, .. } => {
-            err(name.span, "unexpected '<-' as a command argument")
         }
     }
 }

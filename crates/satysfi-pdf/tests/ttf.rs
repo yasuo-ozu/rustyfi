@@ -140,7 +140,7 @@ fn render_pdf_ttf_produces_a_pdf_with_embedded_font() {
         lines: vec![ascii_line],
     };
 
-    let pdf_bytes = render_pdf_ttf(&geometry, &[page], &store).expect("render");
+    let pdf_bytes = render_pdf_ttf(&geometry, &[page], &store, &[]).expect("render");
 
     assert!(
         pdf_bytes.starts_with(b"%PDF-"),
@@ -184,7 +184,7 @@ fn to_unicode_roundtrips_through_pdftotext() {
         lines: vec![line1, line2],
     };
 
-    let pdf_bytes = render_pdf_ttf(&geometry, &[page], &store).expect("render");
+    let pdf_bytes = render_pdf_ttf(&geometry, &[page], &store, &[]).expect("render");
 
     let Ok(which) = Command::new("which").arg("pdftotext").output() else {
         eprintln!("skipping pdftotext check: `which` not available");

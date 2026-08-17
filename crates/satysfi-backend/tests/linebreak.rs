@@ -351,27 +351,161 @@ fn kp_is_deterministic() {
     assert_eq!(v1, v2);
 }
 
-#[test]
-fn page_break_overflows_to_next_page() {
-    let geom = PageGeometry {
-        paper_width: Length::pt(100.0),
-        paper_height: Length::pt(100.0),
-        text_origin: (Length::pt(10.0), Length::pt(10.0)),
-        text_width: Length::pt(80.0),
-        text_height: Length::pt(45.0),
-    };
-    let line = VertBox::Line {
-        height: Length::pt(9.0),
-        depth: Length::pt(3.0),
+// -- Slice 1: the page-model split — `chop_page` / `place_block_at`
+// (docs/plans/document-page-model.md) --------------------------------------
+
+fn leaded_line(height_pt: f64, depth_pt: f64, leading_pt: f64) -> VertBox {
+    VertBox::Line {
+        height: Length::pt(height_pt),
+        depth: Length::pt(depth_pt),
+        leading: Length::pt(leading_pt),
         contents: vec![],
+    }
+}
+
+#[test]
+fn chop_page_splits_across_two_pages_by_height() {
+    let line = leaded_line(9.0, 3.0, 18.0);
+    let mut remaining = vec![line.clone(), line.clone(), line];
+    // origin y=10, height=45 -> y_limit=55: baselines at 19, 37, then 55+3>55 -> stop.
+    let placed = chop_page(
+        (Length::pt(10.0), Length::pt(10.0)),
+        Length::pt(45.0),
+        &mut remaining,
+    );
+    assert_eq!(placed.len(), 2);
+    assert_eq!(
+        remaining.len(),
+        1,
+        "the 3rd line must roll over, unconsumed"
+    );
+    assert_eq!(placed[0].baseline_y, Length::pt(19.0));
+    assert_eq!(placed[1].baseline_y, Length::pt(37.0));
+
+    // A fresh `chop_page` call (a new page's origin) picks the leftover line
+    // back up as that page's own first line.
+    let placed2 = chop_page(
+        (Length::pt(10.0), Length::pt(10.0)),
+        Length::pt(45.0),
+        &mut remaining,
+    );
+    assert_eq!(placed2.len(), 1);
+    assert!(remaining.is_empty());
+    assert_eq!(placed2[0].baseline_y, Length::pt(19.0));
+}
+
+/// Termination guard (the plan's Risks: "Progress / termination"): a
+/// degenerate content scheme with `text-height <= 0` must still place >=1
+/// line per non-empty page, or the lang-side per-page loop never ends.
+#[test]
+fn chop_page_still_makes_progress_at_zero_height() {
+    let line = leaded_line(9.0, 3.0, 18.0);
+    let mut remaining = vec![line.clone(), line];
+    let placed = chop_page((Length::ZERO, Length::ZERO), Length::ZERO, &mut remaining);
+    assert_eq!(
+        placed.len(),
+        1,
+        "a degenerate height must still place >=1 line"
+    );
+    assert_eq!(remaining.len(), 1);
+}
+
+#[test]
+fn place_block_at_lays_n_lines_at_a_fixed_origin_descending() {
+    let line = leaded_line(9.0, 3.0, 18.0);
+    let placed = place_block_at(
+        (Length::pt(40.0), Length::pt(72.0)),
+        vec![line.clone(), line.clone(), line],
+    );
+    assert_eq!(placed.len(), 3);
+    assert!(placed.iter().all(|p| p.x == Length::pt(40.0)));
+    assert_eq!(placed[0].baseline_y, Length::pt(81.0)); // 72 + 9
+    assert_eq!(
+        placed[1].baseline_y,
+        placed[0].baseline_y + Length::pt(18.0)
+    );
+    assert_eq!(
+        placed[2].baseline_y,
+        placed[1].baseline_y + Length::pt(18.0)
+    );
+}
+
+// -- Slice 1: raster images (docs/plans/math-images.md) --------------------
+
+fn image_box(width_pt: f64, height_pt: f64) -> HorzBox {
+    HorzBox::Pure(PureHorzBox::Image {
+        width: Length::pt(width_pt),
+        height: Length::pt(height_pt),
+        image: ImageId(0),
+    })
+}
+
+#[test]
+fn image_box_reports_its_own_width_and_is_never_glue() {
+    let HorzBox::Pure(pure) = image_box(20.0, 10.0);
+    assert_eq!(pure.natural_width(), Length::pt(20.0));
+    assert!(!pure.is_glue(), "an image must never be a line-break point");
+}
+
+#[test]
+fn image_box_sets_line_height_from_itself_and_contributes_no_depth() {
+    let c = ctx(100.0);
+    let boxes = vec![image_box(20.0, 10.0), fil()];
+    let v = break_into_lines(&c, boxes);
+    assert_eq!(v.len(), 1);
+    let VertBox::Line {
+        height,
+        depth,
+        contents,
+        ..
+    } = &v[0]
+    else {
+        panic!("expected a single line")
     };
-    // Leading 18pt, limit y=55: baselines at 19, 37, then 55+3 > 55 → next page.
-    let pages = break_pages(&geom, Length::pt(18.0), vec![line.clone(), line.clone(), line]);
-    assert_eq!(pages.len(), 2);
-    assert_eq!(pages[0].lines.len(), 2);
-    assert_eq!(pages[1].lines.len(), 1);
-    assert_eq!(pages[0].lines[0].baseline_y, Length::pt(19.0));
-    assert_eq!(pages[1].lines[0].baseline_y, Length::pt(19.0));
+    // Sole content box: 10pt tall, no depth (baseline-aligned) — unlike a
+    // text run, which would additionally contribute a descender (depth)
+    // from `FontMetrics`.
+    assert_eq!(*height, Length::pt(10.0));
+    assert_eq!(*depth, Length::ZERO);
+    let (x, bx) = &contents[0];
+    assert_eq!(*x, Length::ZERO);
+    assert_eq!(
+        *bx,
+        PureHorzBox::Image {
+            width: Length::pt(20.0),
+            height: Length::pt(10.0),
+            image: ImageId(0),
+        }
+    );
+}
+
+#[test]
+fn image_never_becomes_a_line_break_point() {
+    // "aaaa" + image + "bbbb", with NO glue anywhere between them, squeezed
+    // into a target width far narrower than their combined natural width.
+    // With nothing to break at, `break_into_lines` must keep all three on a
+    // single (overfull) line rather than ever splitting next to the image.
+    let m = Mono;
+    let c = ctx(10.0);
+    let boxes = vec![
+        word(&m, &c, "aaaa"),
+        image_box(40.0, 8.0),
+        word(&m, &c, "bbbb"),
+        fil(),
+    ];
+    let v = break_into_lines(&c, boxes);
+    assert_eq!(
+        v.len(),
+        1,
+        "no glue exists around the image, so there is nowhere to break"
+    );
+    let VertBox::Line { contents, .. } = &v[0] else {
+        panic!("expected a single line")
+    };
+    let has_image = contents
+        .iter()
+        .any(|(_, b)| matches!(b, PureHorzBox::Image { .. }));
+    assert!(has_image, "the image must still be present on the line");
 }
 
 #[test]
@@ -425,12 +559,101 @@ fn graphics_box_contributes_height_and_depth_to_its_line() {
             height,
             depth,
             contents,
+            ..
         } => {
             assert_eq!(*height, Length::pt(20.0));
             assert_eq!(*depth, Length::pt(2.0));
             assert_eq!(contents.len(), 1);
             assert_eq!(contents[0].0, Length::ZERO);
             assert_eq!(contents[0].1.natural_width(), Length::pt(20.0));
+        }
+        VertBox::Skip(_) => panic!("expected a Line, got a Skip"),
+    }
+}
+
+// ============================================================================
+// Slice 1 math box (docs/plans/math-engine.md §Slice 1): a
+// `PureHorzBox::Math` carries its own outer width/height/depth (computed
+// once by `read_math`, satysfi-lang) so the line breaker never re-enters the
+// math engine — it just measures like `Graphics` (real height *and* depth),
+// and is never a legal line-break point.
+// ============================================================================
+
+fn math_box(width: f64, height: f64, depth: f64) -> PureHorzBox {
+    PureHorzBox::Math {
+        width: Length::pt(width),
+        height: Length::pt(height),
+        depth: Length::pt(depth),
+        glyphs: vec![],
+    }
+}
+
+#[test]
+fn math_box_natural_width_and_is_not_glue() {
+    let mbox = math_box(30.0, 12.0, 3.0);
+    assert_eq!(mbox.natural_width(), Length::pt(30.0));
+    assert!(!mbox.is_glue());
+    assert!(!mbox.is_break_point());
+}
+
+#[test]
+fn math_box_contributes_height_and_depth_to_its_line() {
+    let c = ctx(100.0);
+    let line = vec![HorzBox::Pure(math_box(30.0, 12.0, 3.0))];
+    let lines = break_into_lines(&c, line);
+    assert_eq!(lines.len(), 1);
+    match &lines[0] {
+        VertBox::Line {
+            height,
+            depth,
+            contents,
+            ..
+        } => {
+            assert_eq!(*height, Length::pt(12.0));
+            assert_eq!(*depth, Length::pt(3.0));
+            assert_eq!(contents.len(), 1);
+            assert_eq!(contents[0].0, Length::ZERO);
+            assert_eq!(contents[0].1.natural_width(), Length::pt(30.0));
+        }
+        VertBox::Skip(_) => panic!("expected a Line, got a Skip"),
+    }
+}
+
+// ============================================================================
+// Slice 1: page-break hooks (docs/plans/hooks-annotations-crossref.md) — a
+// `PureHorzBox::HookPageBreak` is a zero-width/height/depth marker, never a
+// legal line-break point; `break_pages`/the PDF writers place it like any
+// other content but render nothing for it (the lang-side `fire_hooks`
+// post-pass is the only thing that ever reads its `HookId`).
+// ============================================================================
+
+fn hook_box(id: usize) -> PureHorzBox {
+    PureHorzBox::HookPageBreak { id: HookId(id) }
+}
+
+#[test]
+fn hook_box_measures_zero_and_is_never_glue_or_a_break_point() {
+    let hbox = hook_box(0);
+    assert_eq!(hbox.natural_width(), Length::ZERO);
+    assert!(!hbox.is_glue());
+    assert!(!hbox.is_break_point());
+}
+
+#[test]
+fn hook_box_contributes_nothing_to_its_line_but_is_still_placed() {
+    let c = ctx(100.0);
+    // A hook alone (plus a fil so the line isn't empty-underfull-of-nothing)
+    // must still lay out as an ordinary (if degenerate) line, with the hook
+    // box itself present in `contents` at offset zero so a lang-side
+    // post-pass can find it.
+    let line = vec![HorzBox::Pure(hook_box(0)), fil()];
+    let lines = break_into_lines(&c, line);
+    assert_eq!(lines.len(), 1);
+    match &lines[0] {
+        VertBox::Line { contents, .. } => {
+            assert_eq!(contents.len(), 2);
+            assert_eq!(contents[0].0, Length::ZERO);
+            assert_eq!(contents[0].1, hook_box(0));
         }
         VertBox::Skip(_) => panic!("expected a Line, got a Skip"),
     }

@@ -215,6 +215,57 @@ impl Spanned for LiteralTok {
     }
 }
 
+/// A standalone `*` (`EXACT_TIMES` in `parser.mly`) in *type*-expression
+/// position — the product-type separator (`type point = length * length`,
+/// `cst.rs`'s `TypeProd`). Hand-written (not `#[leaf(...)]`-generated on
+/// `Token::ExactTimes` in `token.rs`) because `Token::ExactTimes` already
+/// doubles as one of `BinOpTok`'s matched variants for the *expression*-level
+/// `*`; this leaf lets `TypeProd` consume the same token without pulling in
+/// the rest of the binop set, mirroring `LengthTok`'s boilerplate.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ExactTimesTok {
+    pub span: Span,
+}
+
+impl Parse<Atom> for ExactTimesTok {
+    type Error = ParseError;
+
+    fn parse(stream: impl IntoParseStream<Atom = Atom>) -> Result<Self, Self::Error> {
+        let mut stream = stream.into_parse_stream();
+        match stream.next() {
+            Some(Atom {
+                slot: Token::ExactTimes,
+                span,
+            }) => Ok(ExactTimesTok { span }),
+            Some(atom) => {
+                let span = atom.span;
+                stream.push(atom);
+                Err(ParseError::new(span, "expected '*'"))
+            }
+            None => Err(ParseError::new(
+                Span::default(),
+                "expected '*', found end of input",
+            )),
+        }
+    }
+}
+
+impl Unparse<Atom> for ExactTimesTok {
+    fn unparse<S: Emitter<Atom>>(&self, sink: &mut S) -> Result<(), S::Error> {
+        sink.write_one(Atom {
+            slot: Token::ExactTimes,
+            span: self.span,
+        })
+    }
+}
+
+impl Spanned for ExactTimesTok {
+    type Span = Span;
+    fn span(&self) -> Span {
+        self.span
+    }
+}
+
 /// A binary-operator token: the `binop` family of `nxlor`..`nxrtimes` plus the
 /// `mod`/`::` operators that also act as binops (`parser.mly`'s `binop`
 /// nonterminal, minus `UNOP_EXCLAM`/`BEFORE`/`LNOT`, which are not simple
@@ -307,6 +358,61 @@ impl BinOpTok {
     }
 }
 
+/// `@stage: persistent` / `@stage: 0` / `@stage: 1` header token
+/// (`cst.rs`'s `Header::Stage`). Hand-written like [`BinOpTok`] above: the
+/// three spellings are separate unit `Token` variants with no shared
+/// payload for a `#[leaf(...)]` derive to key off, so this matches any of
+/// them and keeps whichever one matched (needed for a lossless round-trip —
+/// `Unparse` replays exactly the token that was read).
+#[derive(Clone, Debug, PartialEq)]
+pub struct HeaderStageTok {
+    pub tok: Token,
+    pub span: Span,
+}
+
+impl Parse<Atom> for HeaderStageTok {
+    type Error = ParseError;
+
+    fn parse(stream: impl IntoParseStream<Atom = Atom>) -> Result<Self, Self::Error> {
+        let mut stream = stream.into_parse_stream();
+        match stream.next() {
+            Some(Atom { slot, span })
+                if matches!(
+                    slot,
+                    Token::HeaderStage0 | Token::HeaderStage1 | Token::HeaderPersistent0
+                ) =>
+            {
+                Ok(HeaderStageTok { tok: slot, span })
+            }
+            Some(atom) => {
+                let span = atom.span;
+                stream.push(atom);
+                Err(ParseError::new(span, "expected '@stage:'"))
+            }
+            None => Err(ParseError::new(
+                Span::default(),
+                "expected '@stage:', found end of input",
+            )),
+        }
+    }
+}
+
+impl Unparse<Atom> for HeaderStageTok {
+    fn unparse<S: Emitter<Atom>>(&self, sink: &mut S) -> Result<(), S::Error> {
+        sink.write_one(Atom {
+            slot: self.tok.clone(),
+            span: self.span,
+        })
+    }
+}
+
+impl Spanned for HeaderStageTok {
+    type Span = Span;
+    fn span(&self) -> Span {
+        self.span
+    }
+}
+
 // ---- delimiter groups ---------------------------------------------------------
 
 // Atom-generic groups: `syan::nested::group::Group<T, Open, Close>` supplies
@@ -331,6 +437,11 @@ pub type InlineGroup<T> = syan::nested::group::Group<T, BHorzGrpTok, EHorzGrpTok
 pub type BlockGroup<T> = syan::nested::group::Group<T, BVertGrpTok, EVertGrpTok>;
 /// `${ … }` / `{ … }` math (the latter when already inside math mode).
 pub type MathGroup<T> = syan::nested::group::Group<T, BMathGrpTok, EMathGrpTok>;
+/// `Mod.( … )` — the open-module-scope expression (`cst.rs`'s
+/// `Atomic::OpenModule`). The open delimiter (`OpenModuleTok`, carrying the
+/// module name) is `Mod.(`; the close is a plain `)` (`RParenTok`, exactly
+/// like [`ParenGroup`]'s).
+pub type OpenModuleGroup<T> = syan::nested::group::Group<T, OpenModuleTok, RParenTok>;
 
 // ---- PartialEq bridge for the generated leaves --------------------------------
 
@@ -372,11 +483,13 @@ leaf_eq! {
         WildcardTok, ConsTok, ColonTok, ExactMinusTok, KwLetMutable, KwWhile, KwDo,
         KwBefore, OverwriteEqTok, AccessTok, KwModule, KwStruct, KwSig, KwEnd,
         KwOpen, KwVal, KwDirect, OptionalTok, OmissionTok, SuperscriptTok,
-        SubscriptTok, SepTok, BMathGrpTok, EMathGrpTok;
+        SubscriptTok, SepTok, BMathGrpTok, EMathGrpTok, HorzCmdTypeTok,
+        VertCmdTypeTok, MathCmdTypeTok, OptionalTypeTok, OptionalArrowTok,
+        ConstraintTok, CommandTok;
     with_fields:
         VarTok { name }, CtorTok { name }, IntTok { value }, FloatTok { value },
         HorzCmdTok { name }, VertCmdTok { name }, CharTok { text }, ItemTok { depth },
         HeaderRequireTok { content }, HeaderImportTok { content }, TypeVarTok { name },
         UnopExclamTok { text }, MathCharTok { text }, MathCmdTok { name },
-        PrimesTok { count }
+        PrimesTok { count }, OpenModuleTok { name }
 }

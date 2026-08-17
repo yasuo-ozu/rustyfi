@@ -5,8 +5,8 @@
 //! construct — see `cst.rs`'s doc comment on `OpChain::before`), `#label`
 //! field access, `(| .. with .. |)` record update, itemize-tree
 //! reconstruction, quoted math values, (untyped) modules/`open`, the
-//! backtick-literal space/indentation omission, and the polite
-//! not-yet-supported errors for optional/omitted arguments.
+//! backtick-literal space/indentation omission, and the untyped `Some`/`None`
+//! desugaring of supplied/omitted optional arguments (`?:`/`?*`).
 
 use satysfi_backend::{FontKey, FontMetrics, Length};
 use satysfi_lang::ast::{Ast, IText};
@@ -254,22 +254,24 @@ fn single_line_literal_is_unaffected_by_omit_spaces() {
     }
 }
 
-// ---- optional / omitted arguments (not supported yet) -----------------------
+// ---- optional / omitted arguments --------------------------------------------
 
 #[test]
-fn optional_argument_errors_politely() {
-    // `not` itself lexes as the reserved `LNOT` keyword (`Token::Not`), not
-    // a plain variable — first-class `not` isn't reachable through this
-    // surface grammar yet (see `cst.rs`'s doc comment on `AppExpr`), so a
-    // different registered primitive name is used here instead.
-    let err = eval_str("float ?: true").unwrap_err();
-    let msg = err.to_string().to_lowercase();
-    assert!(msg.contains("optional"), "unhelpful error: {msg}");
+fn optional_application_desugars_to_some() {
+    // `f ?:(e)` (`AppArg::Optional`) desugars, untyped, straight to
+    // `Apply(f, Some(e))` — the call-site model `frontend-completion.md`
+    // Sub-area 2 specifies (see `elaborate.rs`'s `app_arg_to_ast`).
+    assert_eq!(
+        int("(fun x -> match x with | Some n -> n | None -> 0) ?:(5)"),
+        5
+    );
 }
 
 #[test]
-fn omission_argument_errors_politely() {
-    let err = eval_str("float ?*").unwrap_err();
-    let msg = err.to_string().to_lowercase();
-    assert!(msg.contains("omit"), "unhelpful error: {msg}");
+fn omission_application_desugars_to_none() {
+    // `f ?*` (`AppArg::Omission`) desugars to `Apply(f, None)`.
+    assert_eq!(
+        int("(fun x -> match x with | Some n -> n | None -> 0) ?*"),
+        0
+    );
 }

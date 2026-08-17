@@ -10,3 +10,13 @@ authors.workspace = true
 satysfi-syntax.workspace = true
 satysfi-backend.workspace = true
 thiserror.workspace = true
+# Raster image decoding for `load-image` (docs/plans/math-images.md §Slice 1).
+image.workspace = true
+
+[dev-dependencies]
+# Test-only: tests/stdlib_tier0.rs drives the real multi-file loader (lib_root
+# = this repo's lib-satysfi/) to prove `@require: list`/`option` compile
+# end-to-end, mirroring the CLI's load -> merge -> elaborate -> typecheck ->
+# eval pipeline (satysfi-cli's main.rs) without introducing a cyclic
+# workspace dependency (satysfi-loader only depends on satysfi-syntax).
+satysfi-loader.workspace = true

@@ -89,7 +89,10 @@ fn is_mathsymbol(c: char) -> bool {
 fn keyword(s: &str) -> Option<Token> {
     use Token::*;
     Some(match s {
-        "not" => Not,
+        // `not` is deliberately NOT reserved here — see `token.rs`'s
+        // `Token::Mod` doc comment: it lexes as an ordinary `Var`/`VarTok`,
+        // the same as any other primitive name, so `not expr` parses
+        // through the existing `AppExpr` application-chain machinery.
         "mod" => Mod,
         "if" => If,
         "then" => Then,

@@ -1,0 +1,30 @@
+% Slice 1 fixture (docs/plans/document-page-model.md): the real 4-arg
+% `page-break` called directly (not through stdja-mini's `document`), with
+% a content scheme narrow enough (640pt of a 842pt-tall A4Paper) that a
+% 40-paragraph body overflows onto a second page, and a footer closure
+% rendering `pbinfo#page-number` via `arabic` — page 1's footer glyph is
+% "1", page 2's is "2" (each grep-assertable in that page's own content
+% stream, `e2e.rs`). Proves the per-page loop re-`interp.apply`s the parts
+% closure with an *incremented* page number, not the same one twice.
+
+@require: stdja-mini
+
+let ctx = get-initial-context 440pt (command \math)
+
+let content pbinfo = (| text-origin = (72pt, 100pt); text-height = 640pt |)
+
+let parts pbinfo =
+  (| header-origin = (72pt, 72pt);  header-content = block-nil;
+     footer-origin = (72pt, 800pt); footer-content =
+       line-break true true ctx
+         (inline-fil ++ (read-inline ctx (embed-string (arabic (pbinfo#page-number)))) ++ inline-fil) |)
+
+let-rec repeat n f =
+  if n <= 0 then block-nil
+  else (f n) +++ (repeat (n - 1) f)
+
+let paragraph n =
+  read-block ctx '< +p { This line helps overflow the page. } >
+
+in
+page-break A4Paper content parts (repeat 40 paragraph)

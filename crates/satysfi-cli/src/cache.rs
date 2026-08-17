@@ -104,6 +104,16 @@ impl Cache {
 ///    hashed — only content matters for rendering — but the set of files and
 ///    their order come straight from the loader's resolution, so a changed
 ///    `@require:`/`@import:` graph changes the key.
+/// 6. (text-rendering plan, Slice 1) the resolved font identity: `None` when
+///    compiling through the base-14 path, or each backing font file's bytes
+///    (length-prefixed, in `TtfFontStore` slot order) when a real
+///    `TtfFontStore` is in play. Folding this in is required, not cosmetic —
+///    without it, switching `--font-dir` (or toggling fonts on/off) would
+///    hit a stale entry cached under a different font (or none) but the same
+///    document bytes, silently serving the wrong PDF. Bytes rather than
+///    paths, so an in-place font-file edit (same path, new content) also
+///    invalidates, matching this function's "only content matters" stance
+///    for the resolved input files above.
 ///
 /// The loader does not retain raw file bytes, so each file is re-read from its
 /// canonical path here. Length-prefixing makes the concatenation unambiguous
@@ -114,12 +124,14 @@ pub fn compute_key(
     compiler_version: &str,
     target: SatysfiVersion,
     entry: &Path,
+    font_store: Option<&satysfi_pdf::TtfFontStore>,
 ) -> Option<String> {
     hash_inputs(
         program.files.iter().map(|f| f.path.as_path()),
         compiler_version,
         target,
         entry,
+        font_store,
     )
 }
 
@@ -131,6 +143,7 @@ fn hash_inputs<'a>(
     compiler_version: &str,
     target: SatysfiVersion,
     entry: &Path,
+    font_store: Option<&satysfi_pdf::TtfFontStore>,
 ) -> Option<String> {
     let mut h = Sha256::new();
     h.update(b"satysfi-rust-compile-cache\x00v1\x00");
@@ -148,6 +161,19 @@ fn hash_inputs<'a>(
         let bytes = std::fs::read(path).ok()?;
         h.update((bytes.len() as u64).to_le_bytes());
         h.update(&bytes);
+    }
+    h.update(b"\x00fonts\x00");
+    match font_store {
+        Some(store) => {
+            h.update(b"\x01");
+            h.update((store.num_files() as u64).to_le_bytes());
+            for i in 0..store.num_files() {
+                let bytes = store.file_bytes(i);
+                h.update((bytes.len() as u64).to_le_bytes());
+                h.update(bytes);
+            }
+        }
+        None => h.update(b"\x00"),
     }
     Some(hex(&h.finalize()))
 }
@@ -233,8 +259,8 @@ mod tests {
         let dir = scratch();
         let a = dir.join("a.saty");
         std::fs::write(&a, b"@require: foo\ndocument (||) '<>\n").unwrap();
-        let k1 = hash_inputs([a.as_path()].into_iter(), "0.1.0", SatysfiVersion::DEFAULT, &a).unwrap();
-        let k2 = hash_inputs([a.as_path()].into_iter(), "0.1.0", SatysfiVersion::DEFAULT, &a).unwrap();
+        let k1 = hash_inputs([a.as_path()].into_iter(), "0.1.0", SatysfiVersion::DEFAULT, &a, None).unwrap();
+        let k2 = hash_inputs([a.as_path()].into_iter(), "0.1.0", SatysfiVersion::DEFAULT, &a, None).unwrap();
         assert_eq!(k1, k2, "same inputs must hash identically");
         assert_eq!(k1.len(), 64, "sha-256 hex is 64 chars");
         std::fs::remove_dir_all(&dir).ok();
@@ -245,9 +271,9 @@ mod tests {
         let dir = scratch();
         let a = dir.join("a.saty");
         std::fs::write(&a, b"document (||) '<>\n").unwrap();
-        let before = hash_inputs([a.as_path()].into_iter(), "0.1.0", SatysfiVersion::DEFAULT, &a).unwrap();
+        let before = hash_inputs([a.as_path()].into_iter(), "0.1.0", SatysfiVersion::DEFAULT, &a, None).unwrap();
         std::fs::write(&a, b"document (||) '< >\n").unwrap();
-        let after = hash_inputs([a.as_path()].into_iter(), "0.1.0", SatysfiVersion::DEFAULT, &a).unwrap();
+        let after = hash_inputs([a.as_path()].into_iter(), "0.1.0", SatysfiVersion::DEFAULT, &a, None).unwrap();
         assert_ne!(before, after, "a one-byte edit must change the key");
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -257,8 +283,8 @@ mod tests {
         let dir = scratch();
         let a = dir.join("a.saty");
         std::fs::write(&a, b"document (||) '<>\n").unwrap();
-        let v1 = hash_inputs([a.as_path()].into_iter(), "0.1.0", SatysfiVersion::DEFAULT, &a).unwrap();
-        let v2 = hash_inputs([a.as_path()].into_iter(), "0.2.0", SatysfiVersion::DEFAULT, &a).unwrap();
+        let v1 = hash_inputs([a.as_path()].into_iter(), "0.1.0", SatysfiVersion::DEFAULT, &a, None).unwrap();
+        let v2 = hash_inputs([a.as_path()].into_iter(), "0.2.0", SatysfiVersion::DEFAULT, &a, None).unwrap();
         assert_ne!(v1, v2, "a compiler-version bump must invalidate the key");
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -270,16 +296,81 @@ mod tests {
         let b = dir.join("b.satyh");
         std::fs::write(&a, b"document (||) '<>\n").unwrap();
         std::fs::write(&b, b"let x = 1\n").unwrap();
-        let one = hash_inputs([a.as_path()].into_iter(), "0.1.0", SatysfiVersion::DEFAULT, &a).unwrap();
+        let one = hash_inputs([a.as_path()].into_iter(), "0.1.0", SatysfiVersion::DEFAULT, &a, None).unwrap();
         let two = hash_inputs(
             [b.as_path(), a.as_path()].into_iter(),
             "0.1.0",
             SatysfiVersion::DEFAULT,
             &a,
+            None,
         )
         .unwrap();
         assert_ne!(one, two, "adding a resolved dependency must change the key");
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Text-rendering plan, Slice 1: a `None` font store (base-14 path) must
+    /// hash differently from a `Some` store (the TTF path), for the same
+    /// document/version/entry — otherwise turning font support on would
+    /// silently reuse a cached base-14 PDF. Uses a real system font when one
+    /// is discoverable (skips gracefully otherwise, matching
+    /// `crates/satysfi-pdf/tests/ttf.rs`'s convention), since building a
+    /// `TtfFontStore` validates the font file by actually parsing it.
+    #[test]
+    fn key_changes_when_a_font_store_is_configured() {
+        let Some(font_path) = find_test_font() else {
+            eprintln!("skipping: no DejaVuSans-like TrueType font found on this system");
+            return;
+        };
+        let dir = scratch();
+        let a = dir.join("a.saty");
+        std::fs::write(&a, b"document (||) '<>\n").unwrap();
+
+        let store = satysfi_pdf::TtfFontStore::load(&font_path, None, None).expect("load font");
+
+        let without_font =
+            hash_inputs([a.as_path()].into_iter(), "0.1.0", SatysfiVersion::DEFAULT, &a, None)
+                .unwrap();
+        let with_font = hash_inputs(
+            [a.as_path()].into_iter(),
+            "0.1.0",
+            SatysfiVersion::DEFAULT,
+            &a,
+            Some(&store),
+        )
+        .unwrap();
+        assert_ne!(
+            without_font, with_font,
+            "configuring a font must change the cache key vs. the base-14 path"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Locate a real TrueType file for the font-identity test above, exactly
+    /// like `crates/satysfi-pdf/tests/ttf.rs`'s `find_regular_font`.
+    fn find_test_font() -> Option<PathBuf> {
+        if let Ok(output) = std::process::Command::new("fc-match")
+            .args(["--format=%{file}", "DejaVuSans"])
+            .output()
+        {
+            if output.status.success() {
+                let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !path.is_empty() && Path::new(&path).is_file() {
+                    return Some(PathBuf::from(path));
+                }
+            }
+        }
+        for candidate in [
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+            "/run/current-system/sw/share/fonts/truetype/DejaVuSans.ttf",
+            "/run/current-system/sw/share/X11/fonts/DejaVuSans.ttf",
+        ] {
+            if Path::new(candidate).is_file() {
+                return Some(PathBuf::from(candidate));
+            }
+        }
+        None
     }
 
     #[test]

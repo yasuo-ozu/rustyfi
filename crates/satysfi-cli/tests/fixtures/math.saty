@@ -1,0 +1,14 @@
+% Slice 1 math fixture (docs/plans/math-engine.md): `${...}` inline math is
+% core syntax (lexer + CST + elaboration already existed and permissively
+% type-checked), so this is a plain `stdja-mini` fixture with no
+% `@require: math` — the math package isn't loaded yet (§G), and Slice 1
+% renders the elaborator-lowered `MathElem` tree directly via `read_math`.
+
+@require: stdja-mini
+
+document (|
+  title = {Math};
+  author = {yasuo};
+|) '<
+  +p { here is ${x^2} and ${a+b}. }
+>

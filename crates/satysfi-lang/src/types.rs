@@ -26,11 +26,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Primitive types with no internal structure — the subset of v0.0.6's
 /// `base_type` (`types.cppo.ml:255`) that this milestone's primitives need.
-/// (`EnvType`/`ImageType`/`RegExpType`/`TextInfoType`/`InputPosType` are not
-/// yet used by anything in `primitives.rs` and are left out; add them here
-/// when a primitive needs them. `PrePathType`/`PathType`/`GraphicsType` were
-/// in that same "not yet used" list until the Slice-1 graphics primitives
-/// — see `docs/plans/graphics-subsystem.md` — needed them.)
+/// (`EnvType`/`RegExpType`/`TextInfoType`/`InputPosType` are not yet used by
+/// anything in `primitives.rs` and are left out; add them here when a
+/// primitive needs them. `ImageType` was added for `load-image`/
+/// `use-image-by-width` (`docs/plans/math-images.md` §Slice 1), and
+/// `PrePathType`/`PathType`/`GraphicsType` for the Slice-1 graphics
+/// primitives — see `docs/plans/graphics-subsystem.md`.)
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum BaseType {
     Unit,
@@ -45,6 +46,9 @@ pub enum BaseType {
     BlockText,
     /// `math` (v0.0.6: `MathType`) — quoted math text.
     MathText,
+    /// `image` (v0.0.6: `ImageType`) — a decoded raster image resource
+    /// (`load-image`'s result; `docs/plans/math-images.md` §Slice 1).
+    Image,
     /// `inline-boxes` (v0.0.6: `BoxRowType`).
     InlineBoxes,
     /// `block-boxes` (v0.0.6: `BoxColType`).
@@ -72,6 +76,7 @@ impl BaseType {
             BaseType::InlineText => "inline-text",
             BaseType::BlockText => "block-text",
             BaseType::MathText => "math",
+            BaseType::Image => "image",
             BaseType::InlineBoxes => "inline-boxes",
             BaseType::BlockBoxes => "block-boxes",
             BaseType::Context => "context",

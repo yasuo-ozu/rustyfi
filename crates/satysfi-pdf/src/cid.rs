@@ -16,11 +16,14 @@ use std::collections::BTreeMap;
 use pdf_writer::types::{CidFontType, FontFlags};
 use pdf_writer::{Content, Finish, Name, Pdf, Rect, Ref, Str};
 use pdf_writer::types::{SystemInfo, UnicodeCmap};
-use satysfi_backend::{FontKey, Page, PageGeometry, PureHorzBox};
+use satysfi_backend::{FontKey, ImageResource, Page, PageGeometry, PureHorzBox};
 use ttf_parser::{Face, GlyphId};
 
 use crate::ttf::TtfFontStore;
-use crate::{place_graphics, PdfError, FONT_RES_NAMES};
+use crate::{
+    image_res_name, place_embedded_block, place_graphics, place_image, place_math, used_images,
+    write_image_xobjects, PdfError, FONT_RES_NAMES,
+};
 
 /// Which glyphs of one physical font file are referenced anywhere in the
 /// document, and the (first-seen) source character for each — enough to
@@ -33,16 +36,20 @@ struct FontUsage {
 }
 
 /// Serialize typeset pages into a PDF that embeds real TrueType fonts as
-/// CID-keyed (Type0/CIDFontType2) fonts, Identity-H encoded.
+/// CID-keyed (Type0/CIDFontType2) fonts, Identity-H encoded. `images` is the
+/// document-wide image table (`DocumentValue::images`; Slice 1, raster
+/// images) — pass `&[]` for a text-only document.
 pub fn render_pdf_ttf(
     geometry: &PageGeometry,
     pages: &[Page],
     store: &TtfFontStore,
+    images: &[ImageResource],
 ) -> Result<Vec<u8>, PdfError> {
     let paper_h = geometry.paper_height.0 as f32;
 
-    // Pass 1: build each page's content stream (Identity-H glyph-id runs),
-    // recording which glyphs of which physical font file were used.
+    // Pass 1: build each page's content stream (Identity-H glyph-id runs
+    // plus `Do`-invoked images), recording which glyphs of which physical
+    // font file were used.
     let mut usage: BTreeMap<usize, FontUsage> = BTreeMap::new();
     let mut page_contents = Vec::with_capacity(pages.len());
     for page in pages {
@@ -67,6 +74,12 @@ pub fn render_pdf_ttf(
     for &file_idx in usage.keys() {
         type0_ids.insert(file_idx, next_ref(&mut alloc));
     }
+
+    // One Image XObject per image actually placed on a page — shared with
+    // `render_pdf` (base-14, `lib.rs`); see that module's doc comment on
+    // this section.
+    let used = used_images(pages);
+    let img_refs = write_image_xobjects(&mut pdf, || next_ref(&mut alloc), images, &used);
 
     let page_ids: Vec<Ref> = pages.iter().map(|_| next_ref(&mut alloc)).collect();
     let content_ids: Vec<Ref> = pages.iter().map(|_| next_ref(&mut alloc)).collect();
@@ -109,6 +122,16 @@ pub fn render_pdf_ttf(
             }
         }
         fonts.finish();
+        // Registered on every page uniformly, the same simplification the
+        // per-`FontKey` loop above already makes — see `render_pdf`'s
+        // (`lib.rs`) matching comment.
+        if !img_refs.is_empty() {
+            let mut x_objects = resources.x_objects();
+            for (&id, &r) in &img_refs {
+                x_objects.pair(Name(image_res_name(id).as_bytes()), r);
+            }
+            x_objects.finish();
+        }
         resources.finish();
         p.finish();
     }
@@ -117,11 +140,12 @@ pub fn render_pdf_ttf(
 }
 
 /// Build one page's content stream. Structurally identical to `base14`'s
-/// (`BT … Tf … Td … Tj … ET` per run, y flipped to PDF's upward axis), except
-/// each `Tj` operand is a run of 2-byte big-endian glyph IDs (Identity-H)
-/// rather than WinAnsi bytes — the backend's x-offsets are authoritative, so
-/// no kerning/shaping is applied here beyond what `FontMetrics` already
-/// measured.
+/// (`BT … Tf … Td … Tj … ET` per text run, `q … cm /ImN Do Q` per image, y
+/// flipped to PDF's upward axis), except each `Tj` operand is a run of
+/// 2-byte big-endian glyph IDs (Identity-H) rather than WinAnsi bytes — the
+/// backend's x-offsets are authoritative, so no kerning/shaping is applied
+/// here beyond what `FontMetrics` already measured. Image placement
+/// (`place_image`, `crate::lib`) is identical between the two writers.
 fn page_content(
     page: &Page,
     paper_h: f32,
@@ -132,33 +156,90 @@ fn page_content(
     for line in &page.lines {
         let y = paper_h - line.baseline_y.0 as f32;
         for (dx, bx) in &line.contents {
-            match bx {
-                PureHorzBox::InnerString { info, text, .. } => {
-                    let file_idx = store.file_index(info.font);
-                    let face = store.face_by_file(file_idx).ok_or_else(|| {
-                        PdfError::NoGlyph(text.chars().next().unwrap_or('\u{FFFD}'))
-                    })?;
-                    let file_usage = usage.entry(file_idx).or_default();
-                    let encoded = encode_glyph_run(&face, text, file_usage)?;
-
-                    let font_idx = (info.font.0 as usize).min(FONT_RES_NAMES.len() - 1);
-                    content.begin_text();
-                    content.set_font(
-                        Name(FONT_RES_NAMES[font_idx].as_bytes()),
-                        info.size.0 as f32,
-                    );
-                    content.next_line((line.x + *dx).0 as f32, y);
-                    content.show(Str(&encoded));
-                    content.end_text();
-                }
-                PureHorzBox::Graphics { elems, .. } => {
-                    place_graphics(&mut content, elems, (line.x + *dx).0 as f32, y);
-                }
-                _ => {}
-            }
+            emit_box(&mut content, bx, (line.x + *dx).0 as f32, y, store, usage)?;
         }
     }
     Ok(content.finish().into_vec())
+}
+
+/// Emit one already-placed `PureHorzBox` at absolute PDF-space coordinates
+/// `(tx, ty)` — the CID-writer twin of `crate::emit_box` (base-14, `lib.rs`),
+/// factored out for the same reason (docs/plans/table-subsystem.md §4):
+/// reentrant, so a `Tabular` box's cells emit through the same path a
+/// top-level line uses, recursively. Text emission is the one thing that
+/// differs between the two writers (an `encode_glyph_run` Identity-H run
+/// with per-file `usage` tracking here, vs. base-14's WinAnsi `Tj`), so this
+/// threads `store`/`usage` where `crate::emit_box` doesn't need to.
+fn emit_box(
+    content: &mut Content,
+    bx: &PureHorzBox,
+    tx: f32,
+    ty: f32,
+    store: &TtfFontStore,
+    usage: &mut BTreeMap<usize, FontUsage>,
+) -> Result<(), PdfError> {
+    match bx {
+        PureHorzBox::InnerString { info, text, .. } => {
+            let file_idx = store.file_index(info.font);
+            let face = store
+                .face_by_file(file_idx)
+                .ok_or_else(|| PdfError::NoGlyph(text.chars().next().unwrap_or('\u{FFFD}')))?;
+            let file_usage = usage.entry(file_idx).or_default();
+            let encoded = encode_glyph_run(&face, text, file_usage)?;
+
+            let font_idx = (info.font.0 as usize).min(FONT_RES_NAMES.len() - 1);
+            content.begin_text();
+            content.set_font(
+                Name(FONT_RES_NAMES[font_idx].as_bytes()),
+                info.size.0 as f32,
+            );
+            content.next_line(tx, ty);
+            content.show(Str(&encoded));
+            content.end_text();
+        }
+        PureHorzBox::Image {
+            width,
+            height,
+            image,
+        } => {
+            place_image(content, image.0, tx, ty, width.0 as f32, height.0 as f32);
+        }
+        PureHorzBox::Graphics { elems, .. } => {
+            place_graphics(content, elems, tx, ty);
+        }
+        PureHorzBox::Math { glyphs, .. } => {
+            place_math(content, glyphs, tx, ty, |info, text| {
+                let file_idx = store.file_index(info.font);
+                let face = store.face_by_file(file_idx).ok_or_else(|| {
+                    PdfError::NoGlyph(text.chars().next().unwrap_or('\u{FFFD}'))
+                })?;
+                let file_usage = usage.entry(file_idx).or_default();
+                encode_glyph_run(&face, text, file_usage)
+            })?;
+        }
+        PureHorzBox::Tabular(tab) => {
+            for cell in &tab.cells {
+                for (cdx, cbx) in &cell.contents {
+                    emit_box(
+                        content,
+                        cbx,
+                        tx + (cell.x + *cdx).0 as f32,
+                        ty + cell.baseline_y.0 as f32,
+                        store,
+                        usage,
+                    )?;
+                }
+            }
+            place_graphics(content, &tab.rules, tx, ty);
+        }
+        PureHorzBox::EmbeddedBlock { block, .. } => {
+            place_embedded_block(block, tx, ty, |cbx, x, y| {
+                emit_box(content, cbx, x, y, store, usage)
+            })?;
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 /// Map `text` to a run of 2-byte big-endian glyph IDs, recording each glyph

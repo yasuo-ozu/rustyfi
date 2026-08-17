@@ -27,3 +27,9 @@ satysfi-satyrographos.workspace = true
 clap.workspace = true
 anyhow.workspace = true
 sha2.workspace = true
+
+[dev-dependencies]
+# Test-only: tests/fonts.rs writes a temporary fonts.satysfi-hash /
+# default-font.satysfi-hash pair and uses serde_json to serialize the paths
+# correctly (rather than hand-formatting JSON strings).
+serde_json = "1"

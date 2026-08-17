@@ -17,19 +17,23 @@
 %    `(| title = ..; author = ..|)` — see the fixtures under
 %    crates/satysfi-cli/tests/fixtures/).
 %
-%  - The page text width is hardcoded to 160mm, matching
-%    `PageGeometry::default()`'s own A4-with-25mm-margins text width
-%    (satysfi-backend's `context.rs`) — `page-break` (called below) always
-%    uses that same default geometry internally regardless of what
-%    context it's given (see primitives.rs's `prim_page_break`), so there
-%    is no live page-size parameter to thread this through instead.
+%  - The page text width is hardcoded to 440pt (docs/plans/document-
+%    page-model.md §Slice 1's own goal-fixture width), on an `A4Paper`
+%    (595x842pt) page. `document` now calls the REAL 4-arg `page-break`
+%    (`page -> (pbinfo -> page-content-scheme) -> (pbinfo -> page-parts)
+%    -> block-boxes -> document`): a per-page content scheme sets the text
+%    area, and a per-page footer renders `pbinfo#page-number` via `arabic`
+%    (a footer-bearing document was previously nowhere in this shim; it
+%    rides in "for free" on every `@require: stdja-mini` fixture now).
+%    There is still no title block / TOC / section numbering — those need
+%    optional args + the math engine + cross-refs (owned elsewhere; see
+%    the plan's roadmap item D).
 %
-%  - `get-initial-context`'s second argument (upstream: the default
-%    math-mode command) has no way to be constructed in this port's
-%    surface grammar yet (no math commands, no first-class command
-%    values) — its registered primitive type was relaxed from `[math]
-%    inline-cmd` to `unit` for exactly this reason (see prim_types.rs's
-%    comment on `"get-initial-context"`); `()` is passed here.
+%  - `get-initial-context`'s second argument is now the REAL `[math]
+%    inline-cmd` (`docs/plans/math-engine.md` §G, restored in
+%    prim_types.rs): a local `\math` stub (never actually invoked, since
+%    this mini-package has no math mode) is defined below purely so
+%    `(command \math)` can be passed here.
 %
 %  - `\emph`/`\bold` switch faces via `set-font-key`, a LOCAL
 %    (non-upstream) primitive (primitives.rs) that sets the context's
@@ -37,9 +41,18 @@
 %    (keys 2 and 1 respectively), standing in for upstream's much richer
 %    `set-font : script -> (string * float * float) -> context -> context`.
 
+let-inline ctx \math m = inline-nil
+
 let document record bt =
-  let ctx = get-initial-context 160mm () in
-  page-break ctx (read-block ctx bt)
+  let ctx = get-initial-context 440pt (command \math) in
+  let content pbinfo = (| text-origin = (72pt, 100pt); text-height = 640pt |) in
+  let parts pbinfo =
+    (| header-origin = (72pt, 72pt);  header-content = block-nil;
+       footer-origin = (72pt, 800pt); footer-content =
+         line-break true true ctx
+           (inline-fil ++ (read-inline ctx (embed-string (arabic (pbinfo#page-number)))) ++ inline-fil) |)
+  in
+  page-break A4Paper content parts (read-block ctx bt)
 
 let-block ctx +p it =
   line-break true true ctx (read-inline ctx it ++ inline-fil)

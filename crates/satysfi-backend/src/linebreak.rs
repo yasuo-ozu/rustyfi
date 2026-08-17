@@ -1,16 +1,18 @@
 //! Paragraph breaking. Phase 6: Knuth–Plass optimal line breaking over glue
-//! breakpoints. The input model (a flat `Vec<HorzBox>` of strings and glue)
-//! matches what lineBreak.ml consumes, so this function is a drop-in
-//! replacement for the milestone-1 greedy breaker; callers (satysfi-lang,
-//! satysfi-pdf) are unaffected.
+//! and discretionary breakpoints. The input model (a flat `Vec<HorzBox>` of
+//! strings, glue and discretionaries) matches what lineBreak.ml consumes,
+//! so this function is a drop-in replacement for the milestone-1 greedy
+//! breaker; callers (satysfi-lang, satysfi-pdf) are unaffected.
 //!
 //! Deviations from lineBreak.ml (v0.0.6), noted where they matter:
 //! - v0.0.6 builds a DAG over `DiscretionaryID`s (hyphenation points) and
 //!   finds a shortest path through it (see `LineBreakGraph`, `update_graph`
-//!   in lineBreak.ml). We have no discretionaries/hyphenation yet, so
-//!   breakpoints are just glue (`OuterEmpty`/`OuterFil`) boxes, and we run
-//!   the classic Knuth–Plass dynamic program directly over them instead of
-//!   materializing a graph.
+//!   in lineBreak.ml). We run the classic Knuth–Plass dynamic program
+//!   directly over `is_break_point` candidates (glue or `Discretionary`)
+//!   instead of materializing a graph; a forced break (penalty `<=
+//!   FORCED_BREAK_PENALTY`, e.g. UAX#14 `Mandatory`) is modeled as a `floor`
+//!   that ratchets forward so no later line can span back over it, rather
+//!   than as a distinct graph node kind.
 //! - v0.0.6 drops `LBTooShort` edges entirely (a breakpoint pair that can't
 //!   stretch enough is simply unreachable that way) and only tolerates
 //!   `LBTooLong` a bounded number of times with a fixed `badness_for_too_long
@@ -21,9 +23,43 @@
 //!   of excluding it.
 
 use crate::context::Context;
-use crate::hbox::{HorzBox, PureHorzBox};
+use crate::hbox::{HorzBox, PureHorzBox, FORCED_BREAK_PENALTY};
 use crate::length::Length;
 use crate::vbox::VertBox;
+
+/// A UAX#14 break opportunity's kind, reduced to the two outcomes the
+/// paragraph breaker needs (v0.0.6's ~40-rule engine over `LineBreak.txt`
+/// classes, `ref:src/chardecoder/lineBreakDataMap.ml`, collapses the same
+/// way into `append_break_opportunity`'s direct/mandatory distinction).
+/// Wraps `unicode_linebreak::BreakOpportunity` so callers depend on this
+/// crate's vocabulary rather than the segmenter crate directly.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BreakKind {
+    /// A break is legal but optional (an ordinary word/punctuation
+    /// boundary) — a `Discretionary` candidate.
+    Allowed,
+    /// A break is required (e.g. a literal newline) — the paragraph
+    /// breaker must end a line here (see `FORCED_BREAK_PENALTY`).
+    Mandatory,
+}
+
+/// Unicode line-breaking (UAX#14) opportunities in `text`, as
+/// `(byte_offset, kind)` pairs in ascending order (`unicode-linebreak`'s
+/// `linebreaks`, a compiled pair table — no unidata files to ship). Does
+/// *not* do v0.0.6's script/East-Asian-width segmentation or JLreq
+/// tailoring (`ref:src/chardecoder/scriptDataMap.ml`); see
+/// `docs/plans/text-rendering.md` §3 for the evaluated alternatives.
+pub fn break_opportunities(text: &str) -> Vec<(usize, BreakKind)> {
+    unicode_linebreak::linebreaks(text)
+        .map(|(i, opp)| {
+            let kind = match opp {
+                unicode_linebreak::BreakOpportunity::Mandatory => BreakKind::Mandatory,
+                unicode_linebreak::BreakOpportunity::Allowed => BreakKind::Allowed,
+            };
+            (i, kind)
+        })
+        .collect()
+}
 
 /// Badness cap. lineBreak.ml computes `badness = |ratio^3| * 10000`
 /// (lineBreak.ml:985-986, `calculate_badness`) and separately hardcodes
@@ -36,12 +72,11 @@ use crate::vbox::VertBox;
 const BADNESS_INF: f64 = 10_000.0;
 
 /// Classic Knuth–Plass default line penalty. Not a lineBreak.ml constant:
-/// v0.0.6 has no flat per-line penalty in this position — its edge weights
-/// are `badness + pnltybreak`, where `pnltybreak` comes from a
-/// `HorzDiscretionary`'s own penalty (lineBreak.ml:1012), which does not
-/// exist for us since we have no discretionaries. We adopt TeX's classic
-/// default line penalty instead, folded into `demerits = (LINE_PENALTY +
-/// badness)^2`.
+/// v0.0.6's edge weight is `badness + pnltybreak`, where `pnltybreak` comes
+/// from a `HorzDiscretionary`'s own penalty (lineBreak.ml:1012) — the same
+/// role our `Discretionary::penalty` plays via `demerits`. We adopt TeX's
+/// classic default line penalty as the flat part, folded into `demerits =
+/// (LINE_PENALTY + badness)^2 [+/- penalty^2]`.
 const LINE_PENALTY: f64 = 10.0;
 
 /// A candidate line's shape, used both to score it (badness/demerits) and
@@ -72,7 +107,16 @@ fn measure(line: &[PureHorzBox]) -> LineMetrics {
             }
             PureHorzBox::OuterFil => has_fil = true,
             PureHorzBox::FixedEmpty { width } => natural += *width,
+            PureHorzBox::Image { width, .. } => natural += *width,
+            // Zero-width and empty-slotted for §3; contributes nothing to
+            // a line it doesn't end (see `hbox.rs::natural_width`).
+            PureHorzBox::Discretionary { .. } => {}
             PureHorzBox::Graphics { width, .. } => natural += *width,
+            PureHorzBox::Math { width, .. } => natural += *width,
+            // Zero-width marker; fired lang-side after placement.
+            PureHorzBox::HookPageBreak { .. } => {}
+            PureHorzBox::Tabular(tab) => natural += tab.width,
+            PureHorzBox::EmbeddedBlock { width, .. } => natural += *width,
         }
     }
     LineMetrics {
@@ -81,6 +125,117 @@ fn measure(line: &[PureHorzBox]) -> LineMetrics {
         shrink,
         has_fil,
     }
+}
+
+/// `get-natural-metrics` (vminst.ml:2020 `PrimitiveGetNaturalMetrics`;
+/// lineBreak.ml's `get_natural_metrics`): `boxes`' width/height/depth as if
+/// laid out on a single unbroken line. A `Discretionary` contributes its
+/// `no_break` slot (the same choice `get_leftmost_script`/
+/// `get_rightmost_script` make in lineBreak.ml — that's what actually
+/// renders when the break isn't taken). Unlike lineBreak.ml, whose depth is
+/// signed (more negative = deeper, combined via `min`) and gets negated
+/// before this primitive returns it, this port's `PureHorzBox` depths are
+/// already non-negative "how far below the baseline" magnitudes (see
+/// hbox.rs), so `depth` is combined via `.max` directly with no sign flip.
+pub fn natural_metrics(boxes: &[HorzBox]) -> (Length, Length, Length) {
+    fn go<'a>(
+        pure: impl IntoIterator<Item = &'a PureHorzBox>,
+        width: &mut Length,
+        height: &mut Length,
+        depth: &mut Length,
+    ) {
+        for bx in pure {
+            match bx {
+                PureHorzBox::InnerString {
+                    width: w,
+                    height: h,
+                    depth: d,
+                    ..
+                } => {
+                    *width += *w;
+                    *height = (*height).max(*h);
+                    *depth = (*depth).max(*d);
+                }
+                PureHorzBox::OuterEmpty { natural, .. } => *width += *natural,
+                PureHorzBox::OuterFil => {}
+                PureHorzBox::FixedEmpty { width: w } => *width += *w,
+                PureHorzBox::Image { width: w, height: h, .. } => {
+                    *width += *w;
+                    *height = (*height).max(*h);
+                }
+                PureHorzBox::Discretionary { no_break, .. } => go(no_break, width, height, depth),
+                PureHorzBox::Graphics {
+                    width: w,
+                    height: h,
+                    depth: d,
+                    ..
+                } => {
+                    *width += *w;
+                    *height = (*height).max(*h);
+                    *depth = (*depth).max(*d);
+                }
+                PureHorzBox::Math {
+                    width: w,
+                    height: h,
+                    depth: d,
+                    ..
+                } => {
+                    *width += *w;
+                    *height = (*height).max(*h);
+                    *depth = (*depth).max(*d);
+                }
+                PureHorzBox::HookPageBreak { .. } => {}
+                PureHorzBox::Tabular(tab) => {
+                    *width += tab.width;
+                    *height = (*height).max(tab.height);
+                    *depth = (*depth).max(tab.depth);
+                }
+                PureHorzBox::EmbeddedBlock {
+                    width: w,
+                    height: h,
+                    depth: d,
+                    ..
+                } => {
+                    *width += *w;
+                    *height = (*height).max(*h);
+                    *depth = (*depth).max(*d);
+                }
+            }
+        }
+    }
+    let mut width = Length::ZERO;
+    let mut height = Length::ZERO;
+    let mut depth = Length::ZERO;
+    go(
+        boxes.iter().map(|HorzBox::Pure(p)| p),
+        &mut width,
+        &mut height,
+        &mut depth,
+    );
+    (width, height, depth)
+}
+
+/// `embed-block-breakable`/`embed-block-top`'s box-sizing helper
+/// (docs/plans/context-box-prims.md §3) — the block analog of
+/// `natural_metrics` above, but summed rather than maxed (a block's lines
+/// stack vertically, they don't compete for one shared baseline the way
+/// concurrent inline boxes on a line do). Each `Line` contributes its own
+/// `height`/`depth` to the running totals; each `Skip` adds its length to
+/// `height` only (there is nothing below a bare skip to call "depth").
+/// E.g. `measure_block(&[Line{h,d}, Skip(s)]) == (h+s, d)`.
+pub fn measure_block(block: &[VertBox]) -> (Length, Length) {
+    let mut height = Length::ZERO;
+    let mut depth = Length::ZERO;
+    for vb in block {
+        match vb {
+            VertBox::Line { height: h, depth: d, .. } => {
+                height += *h;
+                depth += *d;
+            }
+            VertBox::Skip(s) => height += *s,
+        }
+    }
+    (height, depth)
 }
 
 /// Adjustment-ratio badness for one candidate line. The ratio itself is
@@ -108,27 +263,73 @@ fn badness(width: Length, metrics: &LineMetrics) -> f64 {
         if metrics.has_fil {
             return 0.0;
         }
-        if !metrics.stretch.is_positive() {
-            return BADNESS_INF;
+        if metrics.stretch.is_positive() {
+            let ratio = slack / metrics.stretch;
+            (100.0 * ratio.abs().powi(3)).min(BADNESS_INF)
+        } else {
+            no_stretch_badness(slack, width)
         }
-        let ratio = slack / metrics.stretch;
-        (100.0 * ratio.abs().powi(3)).min(BADNESS_INF)
     } else {
         // Overfull: needs to shrink.
-        if !metrics.shrink.is_positive() {
-            return BADNESS_INF;
+        if metrics.shrink.is_positive() {
+            let ratio = slack / metrics.shrink;
+            (100.0 * ratio.abs().powi(3)).min(BADNESS_INF)
+        } else {
+            no_stretch_badness(slack, width)
         }
-        let ratio = slack / metrics.shrink;
-        (100.0 * ratio.abs().powi(3)).min(BADNESS_INF)
     }
 }
 
-fn demerits(b: f64) -> f64 {
-    (LINE_PENALTY + b) * (LINE_PENALTY + b)
+/// Badness for a line with *no* elastic capacity at all to absorb its
+/// shortfall/overflow — e.g. a run of zero-width discretionaries with no
+/// glue, exactly what unspaced CJK looks like (`is_break_point`'s doc). Two
+/// failure modes to avoid here, pulling in opposite directions:
+/// - A flat "infinitely bad" (as when some stretch/shrink exists but is
+///   exhausted) ties every such line at the same cost regardless of how
+///   under/overfull it actually is, so the DP's fewer-lines tiebreak
+///   perversely prefers cramming more onto one wildly overfull line over
+///   correctly splitting it — wrong for CJK (see
+///   `narrow_measure_wraps_cjk_at_ideograph_discretionaries`,
+///   tests/linebreak_uax14.rs).
+/// - Scoring it *too* cheaply (the same `100 * ratio^3` scale as a line
+///   that does have stretch/shrink) makes an isolated unbreakable word cost
+///   little enough that the DP prefers many single-word lines over the
+///   correctly-combined, real-glue-justified ones — wrong for Latin (see
+///   `wraps_at_glue` et al., tests/linebreak.rs).
+/// There's nothing to form a ratio against but the target width itself, so
+/// use that, but scaled 100x steeper (`BADNESS_INF * ratio^3`, vs. plain
+/// elastic badness's `100 * ratio^3`) before capping at the same
+/// `BADNESS_INF` ceiling: a `ratio` this small is a much bigger share of
+/// "everything you have" when nothing is elastic at all, so it should cost
+/// disproportionately more than the same ratio against real stretch/shrink.
+fn no_stretch_badness(slack: Length, width: Length) -> f64 {
+    let ratio = slack / width.max(Length::pt(1.0));
+    (BADNESS_INF * ratio.abs().powi(3)).min(BADNESS_INF)
+}
+
+/// Fold a break's own penalty into its line's demerits, TeX's classic
+/// formula (TeXbook ch.14): a positive penalty discourages breaking there
+/// (`+ p^2`), a negative one encourages it (`- p^2`), and `<=
+/// FORCED_BREAK_PENALTY` is scored plainly since the DP's `floor` already
+/// guarantees the break is taken regardless of cost. Glue's implicit
+/// penalty is always 0, so this is exactly today's formula whenever no
+/// discretionary is involved.
+fn demerits(b: f64, penalty: i32) -> f64 {
+    let base = (LINE_PENALTY + b) * (LINE_PENALTY + b);
+    if penalty <= FORCED_BREAK_PENALTY {
+        base
+    } else {
+        let p = penalty as f64;
+        if penalty > 0 {
+            base + p * p
+        } else {
+            (base - p * p).max(0.0)
+        }
+    }
 }
 
 /// Break a paragraph's boxes into justified lines using Knuth–Plass
-/// dynamic programming over glue breakpoints.
+/// dynamic programming over glue and discretionary breakpoints.
 pub fn break_into_lines(ctx: &Context, boxes: Vec<HorzBox>) -> Vec<VertBox> {
     let pure: Vec<PureHorzBox> = boxes.into_iter().map(|HorzBox::Pure(p)| p).collect();
     let width = ctx.paragraph_width;
@@ -138,19 +339,24 @@ pub fn break_into_lines(ctx: &Context, boxes: Vec<HorzBox>) -> Vec<VertBox> {
         return Vec::new();
     }
 
-    // Legal breakpoints: a glue box immediately following a non-glue box
-    // (never at the very start of a line — "leading glue after a break is
-    // dropped", matching the previous greedy's behavior). For each such
-    // glue at index `g`, a line ending there spans up to (excluding) `g`,
-    // and the next line starts at `g + 1` (the glue itself is discarded).
-    // The end of the paragraph is always a forced final breakpoint too.
+    // Legal breakpoints: a glue-or-discretionary box (`is_break_point`)
+    // immediately following a box that isn't one (never at the very start
+    // of a line — "leading glue after a break is dropped", matching the
+    // previous greedy's behavior). For each such box at index `g`, a line
+    // ending there spans up to (excluding) `g`, and the next line starts
+    // at `g + 1` (the box itself is discarded, same as glue always was).
+    // A run of several adjacent break candidates collapses to just its
+    // first: the trim helpers below eat whatever of the run leaks into a
+    // line's edges either way, so this loses no representable line, only
+    // redundant DP states. The end of the paragraph is always a forced
+    // final breakpoint too.
     //
     // `nodes[k] = (line_end_excl, next_line_start)`; node 0 is the
     // virtual start of the paragraph.
     let mut starts: Vec<usize> = vec![0];
     let mut ends: Vec<usize> = Vec::new();
     for g in 1..n {
-        if pure[g].is_glue() && !pure[g - 1].is_glue() {
+        if pure[g].is_break_point() && !pure[g - 1].is_break_point() {
             ends.push(g);
             starts.push(g + 1);
         }
@@ -165,8 +371,22 @@ pub fn break_into_lines(ctx: &Context, boxes: Vec<HorzBox>) -> Vec<VertBox> {
     let mut back: Vec<usize> = vec![usize::MAX; m + 1];
     dp[0] = (0.0, 0);
 
+    // Ratchets forward past a forced break (a discretionary scoring
+    // `is_forced_break`, e.g. a UAX#14 `Mandatory` newline): once `j`
+    // passes one, no later line may span back over it, which is exactly
+    // "the breaker must end a line here" for a DP over every candidate
+    // line rather than a graph search. `dp[floor]` is always finite when
+    // this ratchets (it only ever advances to a `j` just computed above),
+    // so no later `dp[j]` can get stuck at infinity.
+    let mut floor: usize = 0;
+
     for j in 1..=m {
         let raw_end = ends[j - 1];
+        let penalty = if raw_end < n {
+            pure[raw_end].break_penalty()
+        } else {
+            0
+        };
         // Width short-circuit: once a candidate line is wildly overfull
         // for every remaining start (natural width only grows as `i`
         // decreases further back... actually grows as we consider
@@ -175,7 +395,7 @@ pub fn break_into_lines(ctx: &Context, boxes: Vec<HorzBox>) -> Vec<VertBox> {
         // so the break condition below is safe: once a line is far past
         // any hope of representable badness (well beyond the shrink
         // limit) trying an even earlier `i` only makes it worse.
-        for i in (0..j).rev() {
+        for i in (floor..j).rev() {
             if dp[i].0.is_infinite() {
                 continue;
             }
@@ -186,7 +406,7 @@ pub fn break_into_lines(ctx: &Context, boxes: Vec<HorzBox>) -> Vec<VertBox> {
             }
             let metrics = measure(line_content(&pure, start, raw_end));
             let b = badness(width, &metrics);
-            let d = demerits(b);
+            let d = demerits(b, penalty);
             let cand_cost = dp[i].0 + d;
             let cand_lines = dp[i].1 + 1;
             if cand_cost < dp[j].0 - EPS
@@ -203,6 +423,9 @@ pub fn break_into_lines(ctx: &Context, boxes: Vec<HorzBox>) -> Vec<VertBox> {
             if i + 1 != j && metrics.natural.0 > width.0 * 4.0 + 1.0 {
                 break;
             }
+        }
+        if raw_end < n && pure[raw_end].is_forced_break() {
+            floor = j;
         }
     }
 
@@ -228,28 +451,31 @@ pub fn break_into_lines(ctx: &Context, boxes: Vec<HorzBox>) -> Vec<VertBox> {
         .collect()
 }
 
-/// Trailing glue never justifies anything and is dropped from a line,
-/// except a trailing `OuterFil` (which is how a paragraph's final
-/// stretch is represented, and must stay so the last line can absorb
-/// slack without being force-justified).
+/// Trailing glue-or-discretionary never justifies anything and is dropped
+/// from a line, except a trailing `OuterFil` (which is how a paragraph's
+/// final stretch is represented, and must stay so the last line can absorb
+/// slack without being force-justified). Only the *last* line's raw range
+/// can have one of these at its tail in the first place — see the
+/// breakpoint-collapsing comment in `break_into_lines`.
 fn trim_trailing_glue(line: &[PureHorzBox]) -> &[PureHorzBox] {
     let mut end = line.len();
     while end > 0 {
         match &line[end - 1] {
-            PureHorzBox::OuterEmpty { .. } => end -= 1,
+            PureHorzBox::OuterEmpty { .. } | PureHorzBox::Discretionary { .. } => end -= 1,
             _ => break,
         }
     }
     &line[..end]
 }
 
-/// A break never leaves glue at the very start of the next line either
-/// (the old greedy dropped any glue seen while `current` was still
-/// empty); drop it here so a pathological run of consecutive glue boxes
-/// doesn't get counted as this line's content.
+/// A break never leaves glue or an unchosen discretionary at the very
+/// start of the next line either (the old greedy dropped any glue seen
+/// while `current` was still empty); drop it here so a pathological run of
+/// consecutive break-point boxes doesn't get counted as this line's
+/// content.
 fn trim_leading_glue(line: &[PureHorzBox]) -> &[PureHorzBox] {
     let mut start = 0;
-    while start < line.len() && line[start].is_glue() {
+    while start < line.len() && line[start].is_break_point() {
         start += 1;
     }
     &line[start..]
@@ -268,6 +494,47 @@ fn line_content(pure: &[PureHorzBox], start: usize, raw_end: usize) -> &[PureHor
 /// overfull, since shrink represents real interword compressibility, not
 /// justification.
 fn layout_line(ctx: &Context, line: Vec<PureHorzBox>, width: Length, is_last: bool) -> VertBox {
+    let (contents, mut height, mut depth) = justify_line(line, width, is_last);
+    // An all-glue line still needs sane metrics.
+    if height == Length::ZERO && depth == Length::ZERO {
+        height = ctx.font_size * 0.75;
+        depth = ctx.font_size * 0.25;
+    }
+    VertBox::Line {
+        height,
+        depth,
+        leading: ctx.leading,
+        contents,
+    }
+}
+
+/// `LineBreak.fit hblstwithpads wid` (tabular.ml:270/287,
+/// docs/plans/table-subsystem.md §1) — fit `content` (already
+/// padding-wrapped by the caller, `tabular::solidify_tabular`) to exactly
+/// `width`, distributing slack into glue/`inline-fil` exactly as
+/// `justify_line` does for an ordinary paragraph line (so `inline-fil ++ …
+/// ++ inline-fil` centers a cell). Unlike `layout_line`, this takes no
+/// `Context`: a table cell has no font-size fallback to lean on (the grid
+/// solver never threads one, matching upstream's `BackendTabular`), so
+/// height/depth come from `natural_metrics` instead of the all-glue
+/// fallback. Always justifies as an interior (non-final) line — a cell's
+/// content is never "ragged" the way a paragraph's last line is.
+pub fn fit_cell(content: Vec<HorzBox>, width: Length) -> (Vec<(Length, PureHorzBox)>, Length, Length) {
+    let (_, height, depth) = natural_metrics(&content);
+    let pure: Vec<PureHorzBox> = content.into_iter().map(|HorzBox::Pure(p)| p).collect();
+    let (contents, _, _) = justify_line(pure, width, false);
+    (contents, height, depth)
+}
+
+/// The shared position-assignment core of `layout_line`/`fit_cell`: returns
+/// each box's `x` offset alongside the line's own height/depth (computed
+/// the same way `layout_line` always has — callers needing a `Context`-based
+/// all-glue fallback apply it on top, see `layout_line` above).
+fn justify_line(
+    line: Vec<PureHorzBox>,
+    width: Length,
+    is_last: bool,
+) -> (Vec<(Length, PureHorzBox)>, Length, Length) {
     let natural: Length = line
         .iter()
         .map(|b| b.natural_width())
@@ -343,7 +610,61 @@ fn layout_line(ctx: &Context, line: Vec<PureHorzBox>, width: Length, is_last: bo
                 }
             }
             PureHorzBox::FixedEmpty { width } => *width,
+            PureHorzBox::Image { width, height: h, .. } => {
+                height = height.max(*h);
+                // An image sits entirely on the baseline: it contributes to
+                // the line's height but never its depth. `depth` only ever
+                // grows via `.max` and starts at `ZERO`, so this is a no-op
+                // today — kept explicit (matching the plan) so the "images
+                // have zero depth" decision reads as deliberate rather than
+                // an omission if `depth` ever gains a different starting
+                // point.
+                depth = depth.max(Length::ZERO);
+                *width
+            }
+            // Not chosen as this line's break (it would have been excluded
+            // from `line` entirely otherwise, see `line_content`), so it
+            // renders as `no_break` — empty for §3, hence zero-width.
+            PureHorzBox::Discretionary { .. } => Length::ZERO,
             PureHorzBox::Graphics {
+                width,
+                height: h,
+                depth: d,
+                ..
+            } => {
+                height = height.max(*h);
+                depth = depth.max(*d);
+                *width
+            }
+            // Unlike `Image` (all height, zero depth), a math run grows
+            // *both* line dimensions: a superscript raises `height`, a
+            // subscript deepens `depth` (docs/plans/math-engine.md §Slice 1).
+            PureHorzBox::Math {
+                width,
+                height: h,
+                depth: d,
+                ..
+            } => {
+                height = height.max(*h);
+                depth = depth.max(*d);
+                *width
+            }
+            // Zero-width, zero-height, zero-depth marker (`is_glue ==
+            // false`, like `Image`/`FixedEmpty`); fired lang-side, after
+            // placement, by `fire_hooks`.
+            PureHorzBox::HookPageBreak { .. } => Length::ZERO,
+            // Like `Graphics` (§4 of docs/plans/table-subsystem.md): a
+            // tabular box can be tall, so it drives the line's height/depth
+            // exactly the same way.
+            PureHorzBox::Tabular(tab) => {
+                height = height.max(tab.height);
+                depth = depth.max(tab.depth);
+                tab.width
+            }
+            // `embed-block-top`/`embed-block-breakable`'s carried block
+            // (docs/plans/context-box-prims.md §Slice 1 rows 7-8): same
+            // height/depth-driving shape as `Graphics`/`Tabular` above.
+            PureHorzBox::EmbeddedBlock {
                 width,
                 height: h,
                 depth: d,
@@ -358,15 +679,5 @@ fn layout_line(ctx: &Context, line: Vec<PureHorzBox>, width: Length, is_last: bo
         x += advance;
     }
 
-    // An all-glue line still needs sane metrics.
-    if height == Length::ZERO && depth == Length::ZERO {
-        height = ctx.font_size * 0.75;
-        depth = ctx.font_size * 0.25;
-    }
-
-    VertBox::Line {
-        height,
-        depth,
-        contents,
-    }
+    (contents, height, depth)
 }

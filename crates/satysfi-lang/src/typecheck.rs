@@ -20,20 +20,22 @@
 //! needs to pass untyped.
 
 use crate::ast::{Ast, BText, IText, MathElem, Pattern};
-use crate::elaborate::{Program, UserTypeDecl};
+use crate::elaborate::{Program, UserSynonymDecl, UserTypeDecl};
+pub use crate::exhaustive::MatchWarning;
 use crate::prim_types::{
-    self, arrow, builtin_variants, list, mandatory, product, reff, t_block_boxes,
+    self, arrow, builtin_variants, list, mandatory, optional, product, reff, t_block_boxes,
     t_block_text, t_bool, t_context, t_document, t_float, t_inline_boxes, t_inline_text, t_int,
-    t_length, t_string, t_unit, VariantDecl,
+    t_length, t_math_text, t_option, t_string, t_unit, VariantDecl,
 };
 use crate::types::{
-    self, generalize, instantiate, resolve, BaseType, CmdArgType, MonoType, PolyType, Row,
+    self, generalize, instantiate, resolve, BaseType, CmdArgType, Kind, MonoType, PolyType, Row,
     TypeContext,
 };
 use crate::unify::{unify, UnifyError};
-use satysfi_syntax::cst::ast::{TypeAtom, TypeExpr};
+use satysfi_syntax::cst::ast::{CmdTypeKind, TypeApp, TypeAtom, TypeExpr, TypeProd};
+use satysfi_syntax::cst::{RecordKind, SigConstraint, SigItem};
 use satysfi_syntax::span::Span;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::fmt;
 use std::rc::Rc;
 
@@ -166,6 +168,29 @@ pub const PRIMITIVE_NAMES: &[&str] = &[
     // ---- phase 4, part 2 addition (see primitives.rs's `prims!` table
     // comment on `"set-font-key"`) ----
     "set-font-key",
+    // ---- frontend-completion.md §Slice 1.A: the ~18 pure primitives ----
+    // (`|>` excluded — see primitives.rs's `prims!` table comment; it has
+    // no primitive of its own, so it never belongs in this list).
+    "sin",
+    "asin",
+    "cos",
+    "acos",
+    "tan",
+    "atan",
+    "atan2",
+    "log",
+    "exp",
+    "ceil",
+    "floor",
+    "show-float",
+    "string-byte-length",
+    "string-sub-bytes",
+    "string-unexplode",
+    "display-message",
+    "abort-with-message",
+    // ---- Slice 1 additions (raster images; docs/plans/math-images.md) ----
+    "load-image",
+    "use-image-by-width",
     // ---- Slice 1 graphics primitives (docs/plans/graphics-subsystem.md) ----
     "start-path",
     "line-to",
@@ -174,6 +199,85 @@ pub const PRIMITIVE_NAMES: &[&str] = &[
     "fill",
     "stroke",
     "inline-graphics",
+    // ---- docs/plans/table-subsystem.md §Slice 1 ----
+    "tabular",
+    // ---- gr.satyh roadmap prims (docs/plans/graphics-subsystem.md §Full
+    // roadmap A/B/C/D) ----
+    "bezier-to",
+    "close-with-bezier",
+    "shift-path",
+    "linear-transform-path",
+    "shift-graphics",
+    "linear-transform-graphics",
+    "get-graphics-bbox",
+    "dashed-stroke",
+    "draw-text",
+    // ---- pervasives.satyh unblockers (docs/plans/stdlib-port.md) ----
+    "get-natural-metrics",
+    "inline-frame-outer",
+    "set-manual-rising",
+    "script-guard",
+    "discretionary",
+    // ---- Tier-2 decoration/graphics packages (docs/plans/stdlib-port.md) ----
+    "get-axis-height",
+    // ---- docs/plans/hooks-annotations-crossref.md §Slice 1 ----
+    "hook-page-break",
+    "register-cross-reference",
+    "get-cross-reference",
+    // ---- docs/plans/hooks-annotations-crossref.md §B/§D (annot.satyh) ----
+    "get-leftmost-script",
+    "get-rightmost-script",
+    "inline-frame-breakable",
+    "register-destination",
+    "register-link-to-uri",
+    "register-link-to-location",
+    // ---- docs/plans/math-engine.md §A + §G ----
+    "math-char",
+    "math-big-char",
+    "math-char-with-kern",
+    "math-big-char-with-kern",
+    "math-concat",
+    "math-group",
+    "math-sup",
+    "math-sub",
+    "math-frac",
+    "math-radical",
+    "math-lower",
+    "math-upper",
+    "math-pull-in-scripts",
+    "math-color",
+    "math-char-class",
+    "math-variant-char",
+    "math-paren",
+    "math-paren-with-middle",
+    "text-in-math",
+    "convert-string-for-math",
+    "embed-math",
+    "set-math-command",
+    "set-math-font",
+    "space-between-maths",
+    "raise-inline",
+    "embed-block-breakable",
+    "unite-path",
+    "set-min-gap-of-lines",
+    "omit-skip-after",
+    // ---- docs/plans/context-box-prims.md §Slice 1 (rows 1-10) ----
+    "set-text-color",
+    "get-text-color",
+    "set-hyphen-penalty",
+    "set-space-ratio",
+    "split-into-lines",
+    "block-frame-breakable",
+    "embed-block-top",
+    "set-font",
+    "set-code-text-command",
+    "get-natural-length",
+    // ---- `docs/plans/build-order-to-stdja.md` step 8/9 orphans ----
+    "set-dominant-wide-script",
+    "set-dominant-narrow-script",
+    "set-language",
+    "register-outline",
+    "extract-string",
 ];
 
 fn base_type_env() -> TypeEnv {
@@ -211,12 +315,24 @@ impl TypeEnv {
 }
 
 // ============================================================================
-// Lowering CST `TypeExpr` (a `type` declaration's ctor payload syntax) to
-// `MonoType`. The grammar (`satysfi_syntax::cst::ast::TypeExpr`/`TypeAtom`)
-// is deliberately minimal — only function arrows, parens, type variables,
-// and bare names; no products, no `list`/`ref` postfix, no applied type
-// constructors (see that module's doc comment) — so this lowering is total
-// (never fails) and needs no arity checking of its own.
+// Lowering CST `TypeExpr` (a `type` declaration's ctor payload syntax, a
+// synonym's own body, and a `sig .. end`'s `val` annotations — the last
+// parsed but not yet consulted, see `elaborate.rs`'s module doc comment) to
+// `MonoType`. The grammar
+// (`satysfi_syntax::cst::ast::TypeExpr`/`TypeProd`/`TypeApp`/`TypeAtom`)
+// supports function arrows, parens, type variables, bare names, 2+-way
+// product types (`*`), and a SINGLE-argument postfix type-constructor
+// application (`'a option`, `'a list`) — no record/list-literal/command
+// types or N-ary applied constructors (see that module's doc comment) — so
+// this lowering is total (never fails) and needs no arity checking of its
+// own. `list`/`ref` are recognized specially (they map to this port's
+// dedicated `MonoType::List`/`MonoType::Ref` formers, not a nominal
+// `Variant`, mirroring `prim_types::list`/`reff`); every other applied name
+// (e.g. `option`) becomes a one-argument `MonoType::Variant`. A *synonym*
+// reference is left exactly as `name_to_mono` produces it (indistinguishable
+// from an unresolved variant name); transparently replacing it with the
+// synonym's body — where the cyclic-synonym rejection lives — is
+// `expand_synonyms`'s job, below.
 // ============================================================================
 
 /// Map a `type` declaration's bare type name to a `MonoType`. Every base
@@ -224,10 +340,11 @@ impl TypeEnv {
 /// anything else becomes a nominal, zero-argument `Variant` reference — the
 /// only shape a bare name in this minimal grammar could sensibly mean (no
 /// applied-constructor syntax exists to give it arguments), which is exactly
-/// what makes mutually-recursive user variant types (`type t = .. of t`) and
-/// forward references (a later declaration's name used by an earlier one)
-/// "just work": the name is resolved nominally, not by looking anything up
-/// at lowering time.
+/// what makes mutually-recursive user variant types (`type t = .. of t`),
+/// forward references (a later declaration's name used by an earlier one),
+/// and type *synonyms* (a synonym reference is resolved the same nominal
+/// way — see `expand_synonyms`) "just work": the name is resolved nominally,
+/// not by looking anything up at lowering time.
 fn name_to_mono(name: &str) -> MonoType {
     match name {
         "unit" => t_unit(),
@@ -249,7 +366,43 @@ fn name_to_mono(name: &str) -> MonoType {
 
 fn lower_type_atom(atom: &TypeAtom, tyvars: &HashMap<String, MonoType>) -> MonoType {
     match atom {
+        // `[ty; ty?; ..] inline-cmd`/`block-cmd`/`math-cmd` — the direct
+        // wire-up to the existing `CmdArgType.optional` field
+        // (`docs/plans/class-signature-lang-gaps.md` gap 2, step 1): each
+        // bracketed element lowers to one `CmdArgType`, `optional` set
+        // exactly when the element carried a trailing `?`.
+        TypeAtom::Cmd { args, kind, .. } => {
+            let cmd_args: Vec<CmdArgType> = args
+                .iter()
+                .map(|a| {
+                    let ty = lower_type_expr(&a.ty, tyvars);
+                    if a.opt.is_some() {
+                        optional(ty)
+                    } else {
+                        mandatory(ty)
+                    }
+                })
+                .collect();
+            match kind {
+                CmdTypeKind::Inline(_) => MonoType::InlineCmd(cmd_args),
+                CmdTypeKind::Block(_) => MonoType::BlockCmd(cmd_args),
+                CmdTypeKind::Math(_) => MonoType::MathCmd(cmd_args),
+            }
+        }
         TypeAtom::Paren { inner, .. } => lower_type_expr(inner, tyvars),
+        // `(| l1 : ty1; l2 : ty2; … |)` — a CLOSED record type: fold the
+        // fields into a `Row::Cons` chain (in source order) ending in
+        // `Row::Empty`, matching `MonoType::Record`'s row representation
+        // (`types.rs`'s module doc comment) — distinct from `RecordKind`'s
+        // label-only `Kind::Record` bound (`lower_record_kind`, below),
+        // which drops field types entirely; a type-position record keeps
+        // them, since it's a concrete type, not a lower-bound obligation.
+        TypeAtom::Record { fields, .. } => {
+            let row = fields.iter().rev().fold(Row::Empty, |rest, f| {
+                Row::Cons(f.name.name.clone(), Box::new(lower_type_expr(&f.ty, tyvars)), Box::new(rest))
+            });
+            MonoType::Record(row)
+        }
         TypeAtom::Var(tv) => match tyvars.get(&tv.name) {
             Some(v) => v.clone(),
             // PERMISSIVE: a type variable not among the declaration's own
@@ -265,21 +418,196 @@ fn lower_type_atom(atom: &TypeAtom, tyvars: &HashMap<String, MonoType>) -> MonoT
     }
 }
 
+/// `txprod`: a [`TypeProd`] is either a single [`TypeApp`] (returned as-is)
+/// or a genuine `*`-separated product (`MonoType::Product`, always 2+ items
+/// by construction — see [`prim_types::product`]).
+fn lower_type_prod(prod: &TypeProd, tyvars: &HashMap<String, MonoType>) -> MonoType {
+    if prod.rest.is_empty() {
+        lower_type_app(&prod.first, tyvars)
+    } else {
+        let mut items = Vec::with_capacity(1 + prod.rest.len());
+        items.push(lower_type_app(&prod.first, tyvars));
+        for st in &prod.rest {
+            items.push(lower_type_app(&st.ty, tyvars));
+        }
+        product(items)
+    }
+}
+
+/// `txapppre`/`txapp` (restricted to a single argument — see [`TypeApp`]'s
+/// doc comment): either a bare atom, or one atom applied to a single postfix
+/// type-constructor name (`'a option`, `('a list) list`).
+fn lower_type_app(app: &TypeApp, tyvars: &HashMap<String, MonoType>) -> MonoType {
+    match app {
+        TypeApp::Atom(atom) => lower_type_atom(atom, tyvars),
+        TypeApp::Applied { arg, ctor } => {
+            let arg_ty = lower_type_atom(arg, tyvars);
+            match ctor.name.as_str() {
+                "list" => list(arg_ty),
+                "ref" => reff(arg_ty),
+                other => MonoType::Variant(other.to_string(), vec![arg_ty]),
+            }
+        }
+    }
+}
+
+/// `dom -> cod`, with `?->`'s optional-argument prefix (`opts`) folded in as
+/// leading `option`-wrapped mandatory domains — the Slice-1 stand-in
+/// `docs/plans/class-signature-lang-gaps.md`'s R2 calls out: `config ?->
+/// block-text -> document` lowers to `Func(option(config), Func(block-text,
+/// document))`, exactly the shape `frontend-completion.md` Sub-area 2's
+/// call-site model produces (`Some`/`None` applied to a plain, `option`-typed
+/// domain — see `elaborate.rs`'s `app_arg_to_ast`) — the "one consistent
+/// optional-arg model" the two plans share. Not upstream's real
+/// `option_row`/arity-changing encoding (that's the full-roadmap R2 item);
+/// this only needs the two encodings to *unify*, which a plain `option`
+/// domain already does.
 fn lower_type_expr(ty: &TypeExpr, tyvars: &HashMap<String, MonoType>) -> MonoType {
     match ty {
-        TypeExpr::Fun { dom, cod, .. } => arrow(
-            lower_type_atom(dom, tyvars),
-            lower_type_expr(cod, tyvars),
-        ),
-        TypeExpr::Atom(atom) => lower_type_atom(atom, tyvars),
+        TypeExpr::Fun {
+            opts, dom, cod, ..
+        } => {
+            let result = arrow(lower_type_prod(dom, tyvars), lower_type_expr(cod, tyvars));
+            opts.iter().rev().fold(result, |acc, opt| {
+                arrow(t_option(lower_type_prod(&opt.ty, tyvars)), acc)
+            })
+        }
+        TypeExpr::Atom(prod) => lower_type_prod(prod, tyvars),
     }
+}
+
+// ============================================================================
+// Signature items (`docs/plans/class-signature-lang-gaps.md` gap 3): the
+// `constraint 'a :: (| l1; l2; … |)` per-item suffix.
+// ============================================================================
+
+/// Every distinct type-variable name occurring in `ty`, in first-occurrence
+/// order. Unlike a `type` declaration, a [`SigItem`] has no upfront `tyvars`
+/// list (`val document : 'a -> …` names `'a` inline, mid-type), so building
+/// its lowering's `tyvars` map requires walking the type first — every
+/// occurrence of the same name must resolve to the *same* fresh variable,
+/// which is also the one a matching `constraint` suffix (naming that same
+/// `'a`) attaches its `Kind::Record` bound to.
+///
+/// `#[allow(dead_code)]`: only exercised by this module's own tests today —
+/// no sig-enforcement pass calls [`lower_sig_item`] yet
+/// (`typechecker-completion.md` §3, still roadmap).
+#[allow(dead_code)]
+fn collect_type_vars(ty: &TypeExpr, out: &mut Vec<String>) {
+    fn push(name: &str, out: &mut Vec<String>) {
+        if !out.iter().any(|n| n == name) {
+            out.push(name.to_string());
+        }
+    }
+    fn walk_atom(atom: &TypeAtom, out: &mut Vec<String>) {
+        match atom {
+            TypeAtom::Cmd { args, .. } => {
+                for a in args {
+                    walk_expr(&a.ty, out);
+                }
+            }
+            TypeAtom::Paren { inner, .. } => walk_expr(inner, out),
+            TypeAtom::Record { fields, .. } => {
+                for f in fields {
+                    walk_expr(&f.ty, out);
+                }
+            }
+            TypeAtom::Var(tv) => push(&tv.name, out),
+            TypeAtom::Name(_) => {}
+        }
+    }
+    fn walk_app(app: &TypeApp, out: &mut Vec<String>) {
+        match app {
+            TypeApp::Atom(atom) => walk_atom(atom, out),
+            TypeApp::Applied { arg, .. } => walk_atom(arg, out),
+        }
+    }
+    fn walk_prod(prod: &TypeProd, out: &mut Vec<String>) {
+        walk_app(&prod.first, out);
+        for st in &prod.rest {
+            walk_app(&st.ty, out);
+        }
+    }
+    fn walk_expr(ty: &TypeExpr, out: &mut Vec<String>) {
+        match ty {
+            TypeExpr::Fun { opts, dom, cod, .. } => {
+                for opt in opts {
+                    walk_prod(&opt.ty, out);
+                }
+                walk_prod(dom, out);
+                walk_expr(cod, out);
+            }
+            TypeExpr::Atom(prod) => walk_prod(prod, out),
+        }
+    }
+    walk_expr(ty, out);
+}
+
+/// Lower a [`RecordKind`]'s field list to its label set, dropping field
+/// *types* — `Kind::Record` (`types.rs`) stores labels only, so
+/// `constraint 'a :: (| title : inline-text; … |)` checks label
+/// *presence*, not the field's declared type. A documented Slice-1
+/// limitation (`class-signature-lang-gaps.md` R3), not a grammar gap: the
+/// impl's row still gets its own field types from ordinary usage, so this
+/// is unlikely to admit a wrong program in practice.
+#[allow(dead_code)]
+fn lower_record_kind(rk: &RecordKind) -> BTreeSet<String> {
+    rk.fields.iter().map(|f| f.name.name.clone()).collect()
+}
+
+/// Lower one value/direct [`SigItem`] to its name and [`MonoType`],
+/// attaching each `constraint 'a :: (| … |)` suffix as a `Kind::Record`
+/// bound on `'a`'s freshly-minted variable — "this variable must be a
+/// record containing at least these labels", built on the existing
+/// Rémy-style row machinery. Returns `None` for a bare `SigItem::Type`
+/// item (a type *name* declaration, not a value with a `MonoType` of its
+/// own).
+///
+/// **The obligation check itself rides on existing code, for free.** Once
+/// this variable is ever unified against a concrete `MonoType::Record`
+/// (which is exactly what enforcing the signature against a real `struct`
+/// implementation — `typechecker-completion.md` §3, not yet built — would
+/// do), `unify::bind_var`'s `Kind::Record` branch already rejects a row
+/// missing any declared label via `row_require_label`. Slice 1 only wires
+/// the constraint *into* that existing machinery; no sig-enforcement pass
+/// exists yet to *drive* the unification (see this module's
+/// `sig_constraint_tests` for a direct demonstration against `unify`
+/// itself).
+#[allow(dead_code)]
+pub(crate) fn lower_sig_item(item: &SigItem, ctx: &mut TypeContext) -> Option<(String, MonoType)> {
+    let (name, ty, constraints): (&str, &TypeExpr, &[SigConstraint]) = match item {
+        SigItem::ValHorzCmd { name, ty, constraints, .. } => (&name.name, ty, constraints),
+        SigItem::ValVertCmd { name, ty, constraints, .. } => (&name.name, ty, constraints),
+        SigItem::Val { name, ty, constraints, .. } => (&name.name, ty, constraints),
+        SigItem::DirectHorzCmd { name, ty, constraints, .. } => (&name.name, ty, constraints),
+        SigItem::DirectVertCmd { name, ty, constraints, .. } => (&name.name, ty, constraints),
+        SigItem::Type { .. } => return None,
+    };
+    let mut names = Vec::new();
+    collect_type_vars(ty, &mut names);
+    let mut tyvars = HashMap::new();
+    for n in names {
+        let found = constraints.iter().find(|c| c.tyvar.name == n);
+        let v = match found {
+            Some(c) => ctx.fresh_var_with_kind(Kind::Record(lower_record_kind(&c.kind))),
+            None => ctx.fresh_var_with_kind(Kind::Universal),
+        };
+        tyvars.insert(n, MonoType::Var(v));
+    }
+    Some((name.to_string(), lower_type_expr(ty, &tyvars)))
 }
 
 /// Lower one [`UserTypeDecl`] (surfaced by `elaborate::elaborate_program`)
 /// into a [`VariantDecl`], the same shape `prim_types::builtin_variants`
 /// produces for `option`/`itemize` — see that struct's doc comment for how
-/// `param_vars` and `instantiate_ctor` fit together.
-fn build_variant_decl(decl: &UserTypeDecl) -> VariantDecl {
+/// `param_vars` and `instantiate_ctor` fit together. Each ctor's payload is
+/// passed through [`expand_synonyms`] so a payload that names a synonym
+/// (`type wrap = | W of point`) is stored already-transparent — `unify`
+/// never has to know synonyms exist.
+fn build_variant_decl(
+    decl: &UserTypeDecl,
+    synonyms: &HashMap<String, SynonymDecl>,
+) -> Result<VariantDecl, TypeError> {
     let param_vars: Vec<types::TyVarRef> =
         decl.params.iter().map(|_| types::new_ty_var(0)).collect();
     let tyvar_map: HashMap<String, MonoType> = decl
@@ -288,17 +616,225 @@ fn build_variant_decl(decl: &UserTypeDecl) -> VariantDecl {
         .cloned()
         .zip(param_vars.iter().cloned().map(MonoType::Var))
         .collect();
-    let ctors = decl
-        .ctors
-        .iter()
-        .map(|(name, ty)| (name.clone(), ty.as_ref().map(|t| lower_type_expr(t, &tyvar_map))))
-        .collect();
-    VariantDecl {
+    let mut ctors = Vec::with_capacity(decl.ctors.len());
+    for (name, ty) in &decl.ctors {
+        let payload = match ty {
+            None => None,
+            Some(t) => Some(expand_synonyms(&lower_type_expr(t, &tyvar_map), synonyms)?),
+        };
+        ctors.push((name.clone(), payload));
+    }
+    Ok(VariantDecl {
         name: decl.name.clone(),
         params: decl.params.len(),
         ctors,
         param_vars,
+    })
+}
+
+// ============================================================================
+// Type synonyms (`type point = length * length`): registration, plus the
+// transparent expansion that keeps a synonym's name from ever reaching
+// `unify` — mirrors upstream's `SynonymType`/`add_synonym`
+// (`typechecker.ml`), just against this port's `MonoType`/`substitute`
+// machinery instead of a substitution-on-the-fly unifier case.
+// ============================================================================
+
+/// A user type-synonym declaration, lowered from [`UserSynonymDecl`] — the
+/// transparent-expansion counterpart of [`VariantDecl`] (`prim_types.rs`).
+/// Unlike a variant, a synonym never gets a runtime tag or a
+/// `Checker::ctors` entry; the only thing that ever looks at one is
+/// [`expand_synonyms`].
+struct SynonymDecl {
+    /// The declaration's own type-parameter placeholders — the same
+    /// technique as `VariantDecl::param_vars` (matched by pointer identity
+    /// via `types::substitute`). Realistically always empty: this grammar
+    /// has no applied-type-constructor syntax to *reference* a synonym with
+    /// arguments (`TypeAtom`'s doc comment), so a real reference site always
+    /// supplies zero args — kept general anyway, so a nonzero-param synonym
+    /// fails with a clear arity error rather than silently misbehaving if
+    /// that ever changes.
+    param_vars: Vec<types::TyVarRef>,
+    /// The synonym's body, lowered exactly once via `lower_type_expr`. Any
+    /// *other* synonym name it mentions is still an opaque
+    /// `MonoType::Variant(name, [])` at this point (`lower_type_expr` has no
+    /// notion of the synonym table) — [`expand_synonyms`] resolves those
+    /// lazily, on demand, at each reference site.
+    body: MonoType,
+}
+
+fn build_synonym_decl(decl: &UserSynonymDecl) -> SynonymDecl {
+    let param_vars: Vec<types::TyVarRef> =
+        decl.params.iter().map(|_| types::new_ty_var(0)).collect();
+    let tyvar_map: HashMap<String, MonoType> = decl
+        .params
+        .iter()
+        .cloned()
+        .zip(param_vars.iter().cloned().map(MonoType::Var))
+        .collect();
+    SynonymDecl {
+        param_vars,
+        body: lower_type_expr(&decl.body, &tyvar_map),
     }
+}
+
+/// Collect the name of every *synonym* (i.e. present in `synonyms`) directly
+/// mentioned inside `ty`, ignoring argument count — used only to build the
+/// "synonym references synonym" graph for [`check_synonym_cycles`], where
+/// arity is irrelevant (a cycle is a cycle no matter how many arguments each
+/// step is nominally applied to).
+fn synonym_refs(ty: &MonoType, synonyms: &HashMap<String, SynonymDecl>, out: &mut Vec<String>) {
+    match ty {
+        MonoType::Var(_) | MonoType::Base(_) => {}
+        MonoType::Func(dom, cod) => {
+            synonym_refs(dom, synonyms, out);
+            synonym_refs(cod, synonyms, out);
+        }
+        MonoType::Product(ts) => ts.iter().for_each(|t| synonym_refs(t, synonyms, out)),
+        MonoType::List(t) | MonoType::Ref(t) => synonym_refs(t, synonyms, out),
+        MonoType::Record(row) => synonym_refs_row(row, synonyms, out),
+        MonoType::Variant(name, args) => {
+            if synonyms.contains_key(name) {
+                out.push(name.clone());
+            }
+            args.iter().for_each(|t| synonym_refs(t, synonyms, out));
+        }
+        MonoType::InlineCmd(cs) | MonoType::BlockCmd(cs) | MonoType::MathCmd(cs) => {
+            cs.iter().for_each(|c| synonym_refs(&c.ty, synonyms, out));
+        }
+    }
+}
+
+fn synonym_refs_row(row: &Row, synonyms: &HashMap<String, SynonymDecl>, out: &mut Vec<String>) {
+    match row {
+        Row::Empty | Row::Var(_) => {}
+        Row::Cons(_, t, rest) => {
+            synonym_refs(t, synonyms, out);
+            synonym_refs_row(rest, synonyms, out);
+        }
+    }
+}
+
+/// Reject a cyclic synonym (`type a = b` / `type b = a`, or a directly
+/// self-referential `type a = a * a`) with a clear error instead of letting
+/// [`expand_synonyms`] recurse forever. Run unconditionally over every
+/// registered synonym at [`Checker::new`] time, so a cyclic pair is caught
+/// even if nothing in the program actually references it.
+fn check_synonym_cycles(synonyms: &HashMap<String, SynonymDecl>) -> Result<(), TypeError> {
+    for start in synonyms.keys() {
+        let mut stack = vec![start.clone()];
+        check_synonym_cycles_from(start, synonyms, &mut stack)?;
+    }
+    Ok(())
+}
+
+fn check_synonym_cycles_from(
+    name: &str,
+    synonyms: &HashMap<String, SynonymDecl>,
+    stack: &mut Vec<String>,
+) -> Result<(), TypeError> {
+    let mut refs = Vec::new();
+    synonym_refs(&synonyms[name].body, synonyms, &mut refs);
+    for r in refs {
+        if stack.contains(&r) {
+            let mut cycle = stack.clone();
+            cycle.push(r);
+            return Err(TypeError::simple(
+                None,
+                format!("cyclic type synonym: {}", cycle.join(" -> ")),
+            ));
+        }
+        stack.push(r.clone());
+        check_synonym_cycles_from(&r, synonyms, stack)?;
+        stack.pop();
+    }
+    Ok(())
+}
+
+/// Recursively and transparently expand every synonym reference inside
+/// `ty`, so `unify` never sees a synonym's name — only real base/product/
+/// function/variant types. `synonyms` was already validated acyclic by
+/// [`check_synonym_cycles`] (at `Checker::new` time), so the recursion here
+/// is guaranteed to terminate; arity (a reference's argument count against
+/// the synonym's own parameter count) is checked here, the one place that
+/// actually has concrete arguments to check it against.
+fn expand_synonyms(
+    ty: &MonoType,
+    synonyms: &HashMap<String, SynonymDecl>,
+) -> Result<MonoType, TypeError> {
+    match ty {
+        MonoType::Var(_) | MonoType::Base(_) => Ok(ty.clone()),
+        MonoType::Func(dom, cod) => Ok(MonoType::Func(
+            Box::new(expand_synonyms(dom, synonyms)?),
+            Box::new(expand_synonyms(cod, synonyms)?),
+        )),
+        MonoType::Product(ts) => Ok(MonoType::Product(
+            ts.iter()
+                .map(|t| expand_synonyms(t, synonyms))
+                .collect::<Result<_, _>>()?,
+        )),
+        MonoType::List(t) => Ok(MonoType::List(Box::new(expand_synonyms(t, synonyms)?))),
+        MonoType::Ref(t) => Ok(MonoType::Ref(Box::new(expand_synonyms(t, synonyms)?))),
+        MonoType::Record(row) => Ok(MonoType::Record(expand_synonyms_row(row, synonyms)?)),
+        MonoType::Variant(name, args) => {
+            let args: Vec<MonoType> = args
+                .iter()
+                .map(|t| expand_synonyms(t, synonyms))
+                .collect::<Result<_, _>>()?;
+            let Some(syn) = synonyms.get(name) else {
+                return Ok(MonoType::Variant(name.clone(), args));
+            };
+            if args.len() != syn.param_vars.len() {
+                return Err(TypeError::simple(
+                    None,
+                    format!(
+                        "type synonym '{name}' expects {} argument{}, got {}",
+                        syn.param_vars.len(),
+                        if syn.param_vars.len() == 1 { "" } else { "s" },
+                        args.len()
+                    ),
+                ));
+            }
+            let mut var_map: HashMap<usize, MonoType> = HashMap::new();
+            for (pv, arg) in syn.param_vars.iter().zip(args.iter()) {
+                var_map.insert(types::ptr_key(pv), arg.clone());
+            }
+            let substituted = types::substitute(&syn.body, &var_map, &HashMap::new());
+            expand_synonyms(&substituted, synonyms)
+        }
+        MonoType::InlineCmd(cs) => Ok(MonoType::InlineCmd(expand_synonyms_cmd_args(cs, synonyms)?)),
+        MonoType::BlockCmd(cs) => Ok(MonoType::BlockCmd(expand_synonyms_cmd_args(cs, synonyms)?)),
+        MonoType::MathCmd(cs) => Ok(MonoType::MathCmd(expand_synonyms_cmd_args(cs, synonyms)?)),
+    }
+}
+
+fn expand_synonyms_row(
+    row: &Row,
+    synonyms: &HashMap<String, SynonymDecl>,
+) -> Result<Row, TypeError> {
+    match row {
+        Row::Empty => Ok(Row::Empty),
+        Row::Var(v) => Ok(Row::Var(v.clone())),
+        Row::Cons(label, t, rest) => Ok(Row::Cons(
+            label.clone(),
+            Box::new(expand_synonyms(t, synonyms)?),
+            Box::new(expand_synonyms_row(rest, synonyms)?),
+        )),
+    }
+}
+
+fn expand_synonyms_cmd_args(
+    cs: &[CmdArgType],
+    synonyms: &HashMap<String, SynonymDecl>,
+) -> Result<Vec<CmdArgType>, TypeError> {
+    cs.iter()
+        .map(|c| {
+            Ok(CmdArgType {
+                optional: c.optional,
+                ty: expand_synonyms(&c.ty, synonyms)?,
+            })
+        })
+        .collect()
 }
 
 // ============================================================================
@@ -311,27 +847,50 @@ struct Checker {
     /// Later declarations shadow earlier ones of the same ctor name, mirroring
     /// ordinary name shadowing elsewhere in this port.
     ctors: HashMap<String, Rc<VariantDecl>>,
+    /// The same declarations, keyed by *type* name instead — needed by the
+    /// exhaustiveness pass (`exhaustive::check_match`) to enumerate a
+    /// variant's full constructor set given the scrutinee's resolved
+    /// `MonoType::Variant(name, _)`.
+    variants: HashMap<String, Rc<VariantDecl>>,
+    /// Non-fatal diagnostics accumulated by the exhaustiveness/redundancy
+    /// pass (see `typecheck_verbose`); v0.0.6's `exhchecker.ml` warns and
+    /// continues rather than rejecting the program.
+    warnings: Vec<MatchWarning>,
 }
 
 impl Checker {
-    fn new(program: &Program) -> Checker {
+    fn new(program: &Program) -> Result<Checker, TypeError> {
+        // Synonyms are registered (and checked for cycles) before any
+        // variant decl is lowered, since a variant's ctor payload may name a
+        // synonym (`build_variant_decl` expands through `synonyms`).
+        let mut synonyms: HashMap<String, SynonymDecl> = HashMap::new();
+        for usd in &program.synonym_decls {
+            synonyms.insert(usd.name.clone(), build_synonym_decl(usd));
+        }
+        check_synonym_cycles(&synonyms)?;
+
         let mut ctors = HashMap::new();
+        let mut variants = HashMap::new();
         for decl in builtin_variants() {
             let decl = Rc::new(decl);
+            variants.insert(decl.name.clone(), decl.clone());
             for (cname, _) in &decl.ctors {
                 ctors.insert(cname.clone(), decl.clone());
             }
         }
         for utd in &program.type_decls {
-            let decl = Rc::new(build_variant_decl(utd));
+            let decl = Rc::new(build_variant_decl(utd, &synonyms)?);
+            variants.insert(decl.name.clone(), decl.clone());
             for (cname, _) in &decl.ctors {
                 ctors.insert(cname.clone(), decl.clone());
             }
         }
-        Checker {
+        Ok(Checker {
             ctx: TypeContext::new(),
             ctors,
-        }
+            variants,
+            warnings: Vec::new(),
+        })
     }
 
     fn fresh(&mut self) -> MonoType {
@@ -410,6 +969,18 @@ impl Checker {
                     ),
                 ));
             }
+            // A qualified-name alias (`M.\cmd` re-export, or an `open`) of a
+            // GENUINE `let-math` binding: math commands share the `\` sigil
+            // with inline commands (`docs/plans/math-engine.md` §G — there
+            // is no separate math-command token), so an alias site only
+            // ever reaches this generic `Ast::LetIn` path (never
+            // `Ast::LetMathIn`, which is produced only at a math command's
+            // OWN definition site — see that variant's doc comment). Pass a
+            // already-`MathCmd`-typed alias through unchanged, exactly like
+            // the `InlineCmd`/`BlockCmd` arms above do for their own kind.
+            MonoType::MathCmd(_) if is_inline => {
+                return Ok(generalize(self.ctx.level(), &tv));
+            }
             _ => {}
         }
 
@@ -437,7 +1008,26 @@ impl Checker {
             span,
             &format!("the result of '{name}'"),
         )?;
-        let params: Vec<CmdArgType> = doms.into_iter().map(mandatory).collect();
+        // Optional command params, this milestone's simplification
+        // (`docs/plans/frontend-completion.md` Sub-area 2 / `command_scheme`'s
+        // doc comment): there is no def-site `?:param` marker (this grammar
+        // has none), so a param is treated as optional exactly when its
+        // *inferred* domain resolves to `_ option` — i.e. the body actually
+        // uses it as an `option` (`match p with Some .. | None -> ..`, etc.).
+        // `CmdArgType.ty` then stores the option's INNER type (peeled), so it
+        // matches the `[ty?; ..]` signature-lowering shape 1:1
+        // (`lower_type_atom`'s `TypeAtom::Cmd` arm) — `check_cmd_args` re-wraps
+        // it in `option(..)` per call, since call-site args always arrive
+        // pre-wrapped as `Some`/`None` (`elaborate.rs`'s `app_arg_to_ast`).
+        let params: Vec<CmdArgType> = doms
+            .into_iter()
+            .map(|d| match resolve(&d) {
+                MonoType::Variant(vname, mut vargs) if vname == "option" && vargs.len() == 1 => {
+                    optional(vargs.pop().unwrap())
+                }
+                _ => mandatory(d),
+            })
+            .collect();
         let cmd_ty = if is_inline {
             MonoType::InlineCmd(params)
         } else {
@@ -446,12 +1036,49 @@ impl Checker {
         Ok(generalize(self.ctx.level(), &cmd_ty))
     }
 
+    /// `Ast::LetMathIn`'s scheme-building rule (`docs/plans/math-engine.md`
+    /// §G) — the math-command analog of `command_scheme` above, but
+    /// simpler: a math command has **no** implicit context argument (see
+    /// `elaborate.rs`'s `elaborate_let_math`), so every domain of `tv`'s
+    /// function-chain becomes a `CmdArgType` (the same optional-param
+    /// heuristic as `command_scheme`), and the bare result — not a peeled
+    /// first argument — must be `math`. A zero-arity binding (`tv` not a
+    /// `Func` at all, e.g. `let-math \to = rel \`→\``) falls out naturally:
+    /// `peel_func_chain` returns no domains and `tv` itself as the result.
+    fn math_command_scheme(
+        &mut self,
+        name: &str,
+        tv: MonoType,
+        span: Option<Span>,
+    ) -> Result<PolyType, TypeError> {
+        let (doms, result) = peel_func_chain(tv);
+        self.unify_ctx(
+            &t_math_text(),
+            &result,
+            span,
+            &format!("the result of math command '{name}'"),
+        )?;
+        let params: Vec<CmdArgType> = doms
+            .into_iter()
+            .map(|d| match resolve(&d) {
+                MonoType::Variant(vname, mut vargs) if vname == "option" && vargs.len() == 1 => {
+                    optional(vargs.pop().unwrap())
+                }
+                _ => mandatory(d),
+            })
+            .collect();
+        Ok(generalize(self.ctx.level(), &MonoType::MathCmd(params)))
+    }
+
     /// Shared by `check_itext`'s `IText::Cmd` and `check_btext`'s
     /// `BText::Cmd`: check a command application's argument count (exact —
-    /// no optional arguments exist among today's commands, see this
-    /// function's callers) and each argument's type against `params`
+    /// every optional param must carry an explicit `?:`/`?*` marker at the
+    /// call site, so its slot is never actually *absent* from `args`; see
+    /// `elaborate.rs`'s `cmd_args`) and each argument's type against `params`
     /// (already resolved to a concrete `MonoType::InlineCmd`/`BlockCmd`'s
-    /// payload by the caller).
+    /// payload by the caller). An `optional` param's `args[i]` is always a
+    /// `Some(..)`/`None` value (`app_arg_to_ast`'s desugaring), so it's
+    /// checked against `option(param.ty)`, not `param.ty` directly.
     fn check_cmd_args(
         &mut self,
         env: &TypeEnv,
@@ -473,8 +1100,13 @@ impl Checker {
         }
         for (i, (param, arg)) in params.iter().zip(args.iter()).enumerate() {
             let targ = self.infer(env, arg)?;
+            let expected = if param.optional {
+                t_option(param.ty.clone())
+            } else {
+                param.ty.clone()
+            };
             self.unify_ctx(
-                &param.ty,
+                &expected,
                 &targ,
                 ast_span(arg).or(Some(span)),
                 &format!("argument {} of '{name}'", i + 1),
@@ -545,6 +1177,22 @@ impl Checker {
                 self.infer(&inner, body)
             }
 
+            // `let-math \cmd param* = expr in body` (`docs/plans/math-
+            // engine.md` §G) — structurally identical to the `Ast::LetIn`
+            // command-binding rule above, but for a binding that is ALREADY
+            // known (by construction, via the dedicated Ast variant — see
+            // its doc comment) to be a math command, so there is no sigil
+            // to dispatch on and no "which kind of `\`-binding is this"
+            // ambiguity to resolve.
+            Ast::LetMathIn(name, value, body) => {
+                self.ctx.enter_level();
+                let tv = self.infer(env, value)?;
+                self.ctx.leave_level();
+                let scheme = self.math_command_scheme(name, tv, ast_span(value))?;
+                let inner = env.with(name.clone(), scheme);
+                self.infer(&inner, body)
+            }
+
             Ast::LetRecIn(bindings, body) => {
                 self.ctx.enter_level();
                 let mut rec_env = env.clone();
@@ -598,6 +1246,18 @@ impl Checker {
                         }
                     }
                 }
+                // Exhaustiveness/redundancy (typechecker-completion plan,
+                // §Slice 1): non-fatal, so it runs only after every arm has
+                // typechecked, against `tscrut` as resolved as inference will
+                // ever make it. See `exhaustive::check_match`'s doc comment.
+                let resolved_scrut = resolve(&tscrut);
+                let new_warnings = crate::exhaustive::check_match(
+                    &resolved_scrut,
+                    ast_span(scrutinee),
+                    arms,
+                    &self.variants,
+                );
+                self.warnings.extend(new_warnings);
                 // `Match`'s `arms` is always non-empty (`c::Expr::Match`
                 // requires a `first` arm plus zero or more `rest`), so
                 // `result` is always `Some` in practice; the fallback fresh
@@ -1021,14 +1681,18 @@ impl Checker {
         }
     }
 
-    /// PERMISSIVE (phase 7 owns real math typesetting): every quoted math
-    /// element is walked purely to type-check whatever program-mode
-    /// expressions it embeds (`Embed`, and each `Cmd` argument), each
-    /// against its own fresh, unconstrained type — nothing here asserts
-    /// what a math command's own signature should be (there is no
-    /// `MathCmd`-typed primitive registered anywhere yet in
-    /// `prim_types.rs` to check against), matching `read-inline`'s runtime
-    /// behavior of simply erroring out on any embedded math today.
+    /// Walk one quoted math element. `Chars`/`Group`/`Sub`/`Sup`/`Primes`
+    /// carry no program-mode content of their own (nothing to check beyond
+    /// recursing). `Cmd`/`Embed` are where math meets the ordinary
+    /// expression language (`docs/plans/math-engine.md` §G): a `Cmd`'s
+    /// `name` must resolve to a genuine `MathCmd` type (checked exactly
+    /// like `check_itext`'s `IText::Cmd`, via `check_cmd_args` — math
+    /// commands never carry an optional `?:` argument, but `check_cmd_args`
+    /// handles that generically anyway), and an `Embed`'s (`#expr`) type
+    /// must unify with `math` (a math command parameter, or another
+    /// program-mode value that itself produces math — `Value::Math`/
+    /// `Value::MathText` are the two runtime shapes this unifies against,
+    /// see `value.rs`).
     fn check_math_elem(&mut self, env: &TypeEnv, m: &MathElem) -> Result<(), TypeError> {
         match m {
             MathElem::Chars(_) => Ok(()),
@@ -1046,14 +1710,34 @@ impl Checker {
                 Ok(())
             }
             MathElem::Primes(base, _) => self.check_math_elem(env, base),
-            MathElem::Cmd { args, .. } => {
-                for a in args {
-                    self.infer(env, a)?;
+            MathElem::Cmd { name, span, args } => {
+                let tcmd = match env.get(name) {
+                    Some(poly) => instantiate(poly, self.ctx.level()),
+                    None => {
+                        return Err(TypeError::simple(
+                            Some(*span),
+                            format!(
+                                "internal error: unbound math command '{name}' reached the typechecker"
+                            ),
+                        ))
+                    }
+                };
+                match resolve(&tcmd) {
+                    MonoType::MathCmd(params) => {
+                        self.check_cmd_args(env, name, *span, &params, args)
+                    }
+                    other => Err(TypeError::simple(
+                        Some(*span),
+                        format!(
+                            "internal error: math command '{name}' does not have a \
+                             math-cmd type (found `{other}`)"
+                        ),
+                    )),
                 }
-                Ok(())
             }
-            MathElem::Embed { expr, .. } => {
-                self.infer(env, expr)?;
+            MathElem::Embed { expr, span } => {
+                let te = self.infer(env, expr)?;
+                self.unify_ctx(&t_math_text(), &te, Some(*span), "a math '#…' embed")?;
                 Ok(())
             }
         }
@@ -1105,7 +1789,7 @@ fn peel_func_chain(ty: MonoType) -> (Vec<MonoType>, MonoType) {
 /// `AccessField` carry one directly (see `ast.rs`'s module doc comment);
 /// everything else falls back to `None`; the resulting `TypeError` then just
 /// prints without a location prefix.
-fn ast_span(ast: &Ast) -> Option<Span> {
+pub(crate) fn ast_span(ast: &Ast) -> Option<Span> {
     match ast {
         Ast::Var(_, span) => Some(*span),
         Ast::Overwrite(_, span, _) => Some(*span),
@@ -1114,12 +1798,181 @@ fn ast_span(ast: &Ast) -> Option<Span> {
     }
 }
 
-/// Type-check a whole elaborated [`Program`]. Validation only: on success
-/// the caller proceeds to evaluate `program.body` exactly as before (the
-/// evaluator is untouched by this phase).
-pub fn typecheck(program: &Program) -> Result<(), TypeError> {
-    let mut checker = Checker::new(program);
+/// Type-check a whole elaborated [`Program`], additionally returning every
+/// non-fatal [`MatchWarning`] the exhaustiveness/redundancy pass collected
+/// (typechecker-completion plan, §Slice 1) — v0.0.6's `exhchecker.ml` warns
+/// on a non-exhaustive or redundant `match` rather than rejecting the
+/// program, so these never turn a would-have-passed program into a
+/// `TypeError`.
+pub fn typecheck_verbose(program: &Program) -> Result<Vec<MatchWarning>, TypeError> {
+    let mut checker = Checker::new(program)?;
     let env = base_type_env();
     checker.infer(&env, &program.body)?;
-    Ok(())
+    Ok(checker.warnings)
+}
+
+/// Type-check a whole elaborated [`Program`]. Validation only: on success
+/// the caller proceeds to evaluate `program.body` exactly as before (the
+/// evaluator is untouched by this phase). A thin wrapper over
+/// [`typecheck_verbose`] that discards its warnings — every existing caller
+/// (`lib.rs`'s `compile_document_cst`, `compile.rs`, and every test that
+/// predates §Slice 1) is therefore unaffected by the new pass.
+pub fn typecheck(program: &Program) -> Result<(), TypeError> {
+    typecheck_verbose(program).map(|_warnings| ())
+}
+
+// ============================================================================
+// `docs/plans/class-signature-lang-gaps.md` Slice 1 acceptance: the real
+// `stdja.satyh` `sig … end` block (gaps 1/3 — command values are covered by
+// `crates/satysfi-lang/tests/typecheck.rs`'s end-to-end fixtures; this module
+// covers the `SigItem`/`constraint` lowering directly, since `lower_sig_item`
+// is a crate-private entry point no sig-enforcement pass calls yet).
+// ============================================================================
+#[cfg(test)]
+mod sig_constraint_tests {
+    use super::*;
+    use satysfi_syntax::cst::{SigAnnot, TopBinding};
+
+    fn parse_module_sig(src: &str) -> SigAnnot {
+        let file = satysfi_syntax::parse_file(src).expect("parse failed");
+        for b in &file.prelude {
+            if let TopBinding::Module { sig: Some(sig), .. } = b {
+                return sig.clone();
+            }
+        }
+        panic!("no `module .. : sig .. end` found in {src:?}");
+    }
+
+    #[test]
+    fn constraint_suffix_lowers_to_a_kind_record_bound_on_its_tyvar() {
+        let sig = parse_module_sig(
+            "module M : sig\n\
+             val document : 'a -> config ?-> block-text -> document\n\
+             constraint 'a :: (| title : inline-text; author : inline-text |)\n\
+             end = struct\n\
+             let document x c bt = bt\n\
+             end",
+        );
+        let mut ctx = TypeContext::new();
+        let mut saw_record_kind = false;
+        for item in &sig.items {
+            let (name, ty) = lower_sig_item(item, &mut ctx).expect("a value item");
+            assert_eq!(name, "document");
+            // Walk the lowered `Func` chain: `'a`'s fresh variable is the
+            // very first domain (`Func(Var('a), Func(option(config),
+            // Func(block-text, document)))` — see `lower_type_expr`'s doc
+            // comment for the `?->` shape).
+            if let MonoType::Func(dom, _) = &ty {
+                if let MonoType::Var(v) = &**dom {
+                    if let Kind::Record(labels) = v.kind() {
+                        saw_record_kind = true;
+                        let expected: BTreeSet<String> =
+                            ["title", "author"].iter().map(|s| s.to_string()).collect();
+                        assert_eq!(labels, expected);
+                    }
+                }
+            }
+        }
+        assert!(
+            saw_record_kind,
+            "expected 'a's fresh variable to carry a Kind::Record bound"
+        );
+    }
+
+    #[test]
+    fn kind_record_bound_accepts_a_row_with_every_required_label() {
+        // Direct demonstration that the constraint's lowered `Kind::Record`
+        // bound rides on *existing* `unify`/`bind_var` machinery for free —
+        // no sig-enforcement pass exists yet to drive this against a real
+        // `struct` implementation (`class-signature-lang-gaps.md` R3), but
+        // the positive-presence check itself already works once something
+        // does.
+        let mut ctx = TypeContext::new();
+        let labels: BTreeSet<String> =
+            ["title", "author"].iter().map(|s| s.to_string()).collect();
+        let v = ctx.fresh_var_with_kind(Kind::Record(labels));
+        let constrained = MonoType::Var(v);
+        let full = MonoType::Record(Row::Cons(
+            "title".to_string(),
+            Box::new(t_inline_text()),
+            Box::new(Row::Cons(
+                "author".to_string(),
+                Box::new(t_inline_text()),
+                Box::new(Row::Empty),
+            )),
+        ));
+        unify(&constrained, &full).expect("row has both required labels");
+    }
+
+    #[test]
+    fn kind_record_bound_rejects_a_row_missing_a_required_label() {
+        let mut ctx = TypeContext::new();
+        let labels: BTreeSet<String> =
+            ["title", "author"].iter().map(|s| s.to_string()).collect();
+        let v = ctx.fresh_var_with_kind(Kind::Record(labels));
+        let constrained = MonoType::Var(v);
+        let missing_author = MonoType::Record(Row::Cons(
+            "title".to_string(),
+            Box::new(t_inline_text()),
+            Box::new(Row::Empty),
+        ));
+        let err = unify(&constrained, &missing_author)
+            .expect_err("row is missing the required 'author' label");
+        assert!(format!("{err:?}").contains("author"), "error should name the missing label: {err:?}");
+    }
+
+    #[test]
+    fn real_stdja_sig_block_lowers_every_item_to_a_monotype() {
+        // Mirrors the whole `sig … end` block of the real upstream
+        // `stdja.satyh:24-51` (v0.0.6 checkout) — command values, command
+        // types, `?->`, and the `constraint` suffix all together. Proves
+        // Slice 1's acceptance gate: every item parses and lowers without
+        // error (an empty `struct end` body is enough — sig enforcement
+        // against a real implementation is `typechecker-completion.md`
+        // §3's job, not Slice 1's).
+        let sig = parse_module_sig(
+            "module StdJa : sig\n\
+             val default-config : config\n\
+             val document : 'a -> config ?-> block-text -> document\n\
+             constraint 'a :: (|\n\
+             title : inline-text;\n\
+             author : inline-text;\n\
+             show-toc : bool;\n\
+             show-title : bool;\n\
+             |)\n\
+             val font-latin-roman : string * float * float\n\
+             direct \\ref : [string] inline-cmd\n\
+             direct \\ref-page : [string] inline-cmd\n\
+             direct \\figure : [inline-text; block-text] inline-cmd\n\
+             direct +p : [inline-text] block-cmd\n\
+             direct +pn : [inline-text] block-cmd\n\
+             direct +section : [string?; string?; inline-text; block-text] block-cmd\n\
+             direct +subsection : [string?; string?; inline-text; block-text] block-cmd\n\
+             direct \\emph : [inline-text] inline-cmd\n\
+             end = struct\n\
+             end",
+        );
+        let mut ctx = TypeContext::new();
+        let mut names = Vec::new();
+        for item in &sig.items {
+            let (name, _ty) = lower_sig_item(item, &mut ctx).expect("a value item");
+            names.push(name);
+        }
+        assert_eq!(
+            names,
+            vec![
+                "default-config",
+                "document",
+                "font-latin-roman",
+                "\\ref",
+                "\\ref-page",
+                "\\figure",
+                "+p",
+                "+pn",
+                "+section",
+                "+subsection",
+                "\\emph",
+            ]
+        );
+    }
 }

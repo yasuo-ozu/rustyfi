@@ -2,8 +2,9 @@
 //! evaluator.cppo.ml; the bytecode VM is intentionally not ported).
 
 use crate::ast::{Ast, Pattern};
+use crate::crossref::CrossRefs;
 use crate::value::{Env, Value};
-use satysfi_backend::FontMetrics;
+use satysfi_backend::{FontMetrics, ImageResource};
 use satysfi_syntax::Span;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -31,9 +32,36 @@ pub(crate) fn available_fields(map: &std::collections::BTreeMap<String, Value>) 
 }
 
 /// Evaluation state: the font-metrics seam (and later: cross references,
-/// image tables, mutable stores).
+/// mutable stores).
 pub struct Interp<'a> {
     pub metrics: &'a dyn FontMetrics,
+    /// The document-wide image table (`docs/plans/math-images.md` §Slice
+    /// 1): `load-image` (`primitives::prim_load_image`) decodes eagerly and
+    /// pushes here, returning the new entry's index as `Value::Image`;
+    /// `use-image-by-width` (`primitives::prim_use_image_by_width`) looks
+    /// the resource back up by that index. `page-break`
+    /// (`primitives::prim_page_break`) clones this out into
+    /// `DocumentValue::images` when it packages the final document, so the
+    /// PDF writer sees every image ever decoded while evaluating (a superset
+    /// of what actually ends up placed on a page — the writer itself filters
+    /// down to the ones a placed line actually references).
+    pub images: Vec<ImageResource>,
+    /// The document-wide page-break-hook closure table
+    /// (`docs/plans/hooks-annotations-crossref.md` §Slice 1): `hook-page-break`
+    /// pushes its closure argument here and returns a `HookId` index (via
+    /// `PureHorzBox::HookPageBreak`) — the same `ImageId`-style seam as
+    /// `images` above, but for a deferred *computation* rather than a
+    /// resource. Reset every trial (see `crossrefs`, which is the one
+    /// exception), read back by `fire_hooks` once `break_pages` has placed
+    /// every hook and its final geometry is known.
+    pub hooks: Vec<Value>,
+    /// The cross-reference table, shared with the compile driver
+    /// (`lib.rs::compile_document_cst`) across every trial of the fixpoint
+    /// loop — unlike `hooks`/`images`, this must *not* reset per trial, so
+    /// the driver constructs one `Rc<RefCell<CrossRefs>>` and clones the
+    /// handle into each trial's fresh `Interp`. Defaults to a fresh empty
+    /// table so existing single-run call sites/unit tests compile unchanged.
+    pub crossrefs: Rc<RefCell<CrossRefs>>,
     /// Memoized compilations of command-argument / embed `Ast`s reached
     /// through `read_inline`/`read_block` (see [`Interp::eval_arg`]). Keyed by
     /// the argument node's address: these nodes live inside the program's
@@ -47,6 +75,9 @@ impl<'a> Interp<'a> {
     pub fn new(metrics: &'a dyn FontMetrics) -> Self {
         Interp {
             metrics,
+            images: Vec::new(),
+            hooks: Vec::new(),
+            crossrefs: Rc::new(RefCell::new(CrossRefs::new())),
             arg_cache: std::collections::HashMap::new(),
         }
     }
@@ -93,6 +124,15 @@ impl<'a> Interp<'a> {
                 env: env.clone(),
             }),
             Ast::LetIn(name, value, rest) => {
+                let v = self.eval(env, value)?;
+                let inner = env.child();
+                inner.define(name.clone(), v);
+                self.eval(&inner, rest)
+            }
+            // `let-math` binds identically to `LetIn` at run time (see
+            // `ast.rs`'s doc comment — the distinct variant is purely a
+            // typecheck-time signal).
+            Ast::LetMathIn(name, value, rest) => {
                 let v = self.eval(env, value)?;
                 let inner = env.child();
                 inner.define(name.clone(), v);

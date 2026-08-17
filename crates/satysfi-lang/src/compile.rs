@@ -227,6 +227,18 @@ impl<'b> Compiler<'b> {
                     crest.run(&inner, interp)
                 })
             }
+            // Same run-time shape as `LetIn` (see `ast.rs`'s doc comment).
+            Ast::LetMathIn(name, value, rest) => {
+                let cvalue = self.compile(value);
+                let name = name.clone();
+                let crest = self.in_frame([name.clone()], |c| c.compile(rest));
+                CompiledExpr::new(move |env, interp| {
+                    let v = cvalue.run(env, interp)?;
+                    let inner = env.child();
+                    inner.define(name.clone(), v);
+                    crest.run(&inner, interp)
+                })
+            }
             Ast::LetRecIn(bindings, body) => {
                 let names: Vec<String> = bindings.iter().map(|(n, _)| n.clone()).collect();
                 let (cbindings, cbody) = self.in_frame(names.clone(), |c| {

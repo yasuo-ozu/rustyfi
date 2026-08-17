@@ -1,0 +1,53 @@
+% Slice 1 table fixture (docs/plans/table-subsystem.md): a self-contained,
+% positional `\tabular` (mirroring `tabular.satyh`'s shape) exercises the new
+% `cell` type, the `tabular` primitive, and the composite-box PDF writer arm
+% (`emit_box`): a 2x2 ruled grid, cell text and grid rules on one page.
+%
+% Deliberately NOT `@require: tabular`/`table`: those packages' record/
+% optional-argument command front-ends hit the runtime-optional/record-
+% command elaboration gap (roadmap G) — this fixture is the self-contained,
+% positional-argument subset Slice 1 targets instead.
+
+@require: stdja-mini
+@require: list
+
+let-inline ctx \tabular cellssf rulef =
+  let pads = (5pt, 5pt, 2pt, 2pt) in
+  let cellf it = NormalCell (pads, inline-fil ++ read-inline ctx it ++ inline-fil) in
+  let multif n m it = MultiCell (n, m, pads, inline-fil ++ read-inline ctx it ++ inline-fil) in
+  let empty = EmptyCell in
+    tabular (cellssf cellf multif empty) rulef
+
+let vline clr x ya yb =
+  stroke 1pt clr (terminate-path (line-to (x, yb) (start-path (x, ya))))
+
+let hline clr y xa xb =
+  stroke 1pt clr (terminate-path (line-to (xb, y) (start-path (xa, y))))
+
+% `table.satyh`/`tabular.satyh`'s real rule callback (a vertical stroke per
+% `x` in `xs`, a horizontal one per `y` in `ys`), via `List.map`; the two
+% extremes (`xF`/`xL`, `yF`/`yL`) come from the grid-line lists themselves —
+% `xs`'s head is always the box-local `0pt` and `ys`'s head is always the
+% box's total height (`tabular::main`'s `xs`/`ys`, docs/plans/
+% table-subsystem.md §1) — so no separate geometry is threaded in.
+let hd-last fallback lst =
+  match lst with
+  | [] -> (fallback, fallback)
+  | x0 :: rest -> (x0, List.fold-left (fun _ x -> x) x0 rest)
+
+let rule xs ys =
+  let (xF, xL) = hd-last 0pt xs in
+  let (yF, yL) = hd-last 0pt ys in
+  List.append
+    (List.map (fun x -> vline (Gray 0.) x yF yL) xs)
+    (List.map (fun y -> hline (Gray 0.) y xF xL) ys)
+
+in
+document (|
+  title = {Table};
+  author = {yasuo};
+|) '<
+  +p {
+    \tabular(fun c m e -> [[c{A}; c{B}]; [c{C}; c{D}]])(rule);
+  }
+>

@@ -178,8 +178,12 @@ fn math_text_quotes_without_evaluating() {
     }
 }
 
+/// `docs/plans/math-engine.md` §Slice 1: `read_inline`'s `EmbedMath` arm no
+/// longer errors — it walks the `MathElem` tree into a `PureHorzBox::Math`
+/// (see `math_slice1.rs` for the box's own glyph-shift/-scale assertions;
+/// this just checks the seam from `IText::EmbedMath` through `read_inline`).
 #[test]
-fn itext_embed_math_still_errors_politely_through_read_inline() {
+fn itext_embed_math_renders_through_read_inline() {
     let elems = vec![IText::EmbedMath {
         elems: Rc::new(vec![MathElem::Chars("x".to_string())]),
         span: Span::default(),
@@ -188,8 +192,16 @@ fn itext_embed_math_still_errors_politely_through_read_inline() {
     let mono = Mono;
     let mut interp = eval::Interp::new(&mono);
     let ctx = Context::initial(Length::pt(400.0));
-    let err = primitives::read_inline(&mut interp, &ctx, &elems, &env).unwrap_err();
-    assert!(err.to_string().contains("phase 7"));
+    let boxes = primitives::read_inline(&mut interp, &ctx, &elems, &env)
+        .expect("EmbedMath must render, not error, as of Slice 1");
+    assert_eq!(boxes.len(), 1);
+    match &boxes[0] {
+        HorzBox::Pure(PureHorzBox::Math { glyphs, .. }) => {
+            assert_eq!(glyphs.len(), 1);
+            assert_eq!(glyphs[0].text, "x");
+        }
+        other => panic!("expected a single Math box, got {other:?}"),
+    }
 }
 
 // ---- "!" dereference primitive -----------------------------------------------------

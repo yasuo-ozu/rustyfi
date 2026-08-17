@@ -62,7 +62,7 @@ fn graphics_box_renders_path_operators_into_the_content_stream() {
         text_height: Length::pt(260.0),
     };
     let page = page_with_graphics_box();
-    let bytes = satysfi_pdf::render_pdf(&geometry, std::slice::from_ref(&page))
+    let bytes = satysfi_pdf::render_pdf(&geometry, std::slice::from_ref(&page), &[])
         .expect("PDF rendering must succeed");
     assert!(bytes.starts_with(b"%PDF-"), "not a PDF header");
 

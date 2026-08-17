@@ -37,3 +37,11 @@ safegraph = "0.1"
 ttf-parser = "0.25"
 newer-type = "0.3"
 newer-type-std = "0.3"
+# Raster image decoding for `load-image` (docs/plans/math-images.md §Slice
+# 1). Slice 1 only needs PNG (the checked-in test fixture) and JPEG (cheap,
+# pure-Rust, and the format v0.0.6 special-cases for `DCTDecode`
+# passthrough — not implemented yet, but decoding it to flat RGB8 like any
+# other format costs nothing extra); the rest of `image`'s default formats
+# (avif/bmp/dds/exr/ff/gif/hdr/ico/pnm/qoi/tga/tiff/webp) and its `rayon`
+# feature are left off to keep the dependency footprint minimal.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }

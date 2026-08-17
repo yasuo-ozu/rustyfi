@@ -3,7 +3,10 @@
 use crate::ast::{Ast, BText, IText, MathElem};
 use crate::compile::CompiledExpr;
 use crate::primitives::PrimDef;
-use satysfi_backend::{Context, HorzBox, Length, Page, PageGeometry, VertBox};
+use satysfi_backend::{
+    Color, Context, HorzBox, ImageId, ImageResource, Length, MathKind, Page, PageGeometry,
+    VertBox,
+};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
@@ -37,6 +40,20 @@ pub enum Value {
     /// `InlineText`/`BlockText`); typesetting is deferred to phase 7, so this
     /// is carried opaquely for now.
     MathText { elems: Rc<Vec<MathElem>>, env: Env },
+    /// The faithful `math` value (`docs/plans/math-engine.md` §A item 1) —
+    /// what every `math-*` primitive (`math-char`, `math-concat`,
+    /// `math-sup`, …) builds and consumes, as opposed to `MathText`'s
+    /// elaborator-fused literal form. A `math` value is always a *sequence*
+    /// of atoms (mirroring upstream `MathValue of math list`,
+    /// `types.cppo.ml:888` — each `Math` here is one already-classed atom,
+    /// not a further list), so `math-concat` is a plain `Vec` append and
+    /// `math-group`/`math-sup`/… each wrap the whole inner `Vec` as ONE new
+    /// atom. Both this and `MathText` type as `"math"` (`BaseType::
+    /// MathText`) — a `${…}` literal and a `math-*`-primitive-built value
+    /// are interchangeable wherever a `math`-typed argument is expected
+    /// (see `primitives.rs`'s `as_math`, which accepts either, reflecting a
+    /// `MathText`'s `MathElem` tree into `Math` nodes on the fly).
+    Math(Rc<Vec<Math>>),
     /// A mutable cell (`let-mutable`'s binding; v0.0.6's `Location`/store
     /// entry). This port uses a directly-shared `RefCell` instead of an
     /// indirection through a separate store table.
@@ -45,6 +62,13 @@ pub enum Value {
     InlineBoxes(Vec<HorzBox>),
     /// `block-boxes` (the `Vert` base constant).
     BlockBoxes(Vec<VertBox>),
+    /// `image` (`load-image`'s result; `docs/plans/math-images.md` §Slice
+    /// 1): an index into the document-wide image table built up on
+    /// `eval::Interp` (`Interp::images`) as the document evaluates, then
+    /// moved into `DocumentValue::images` once `page-break` packages the
+    /// final document. Carrying just the index (not the decoded bytes)
+    /// keeps this value cheap to clone, same as `Value::Ref`'s `Rc`.
+    Image(ImageId),
     Document(Rc<DocumentValue>),
     Closure {
         param: String,
@@ -96,9 +120,11 @@ impl Value {
             Value::InlineText { .. } => "inline-text",
             Value::BlockText { .. } => "block-text",
             Value::MathText { .. } => "math",
+            Value::Math(_) => "math",
             Value::Ref(_) => "mutable",
             Value::InlineBoxes(_) => "inline-boxes",
             Value::BlockBoxes(_) => "block-boxes",
+            Value::Image(_) => "image",
             Value::Document(_) => "document",
             Value::Closure { .. } => "function",
             Value::CompiledClosure { .. } => "function",
@@ -110,11 +136,136 @@ impl Value {
     }
 }
 
+/// One atom of a faithful `math` value (`Value::Math`'s element type) —
+/// trimmed mirror of upstream `math` (`types.cppo.ml:1024`,
+/// `docs/plans/math-engine.md` §A item 1). Every closure-typed field
+/// upstream carries (kern functions, a paren pair's sizing closures,
+/// `math-pull-in-scripts`' resolver, `text-in-math`'s embedded-box
+/// callback) is stored here OPAQUELY as a plain `Value` — constructing one
+/// of these variants (a `math-*` primitive's whole runtime job) never
+/// *calls* such a closure, exactly like upstream, where a `math` value is
+/// inert data until the real layout engine (roadmap B/D) walks it.
+#[derive(Clone, Debug)]
+pub enum Math {
+    /// One base atom — a char run, a styled char, or embedded text. See
+    /// [`MathElement`].
+    Pure(MathElement),
+    /// `math-group`: override the left/right math-class of a sub-`math`
+    /// (`\mathbin`, `\mathrel`, …) — the two classes can differ (unlike
+    /// every other variant here, which presents one class on both sides),
+    /// which is exactly why upstream gives it its own node rather than
+    /// folding it into `ChangeContext`.
+    Group(MathKind, MathKind, Vec<Math>),
+    /// `math-sup`: `base ^ script`.
+    Sup(Vec<Math>, Vec<Math>),
+    /// `math-sub`: `base _ script`.
+    Sub(Vec<Math>, Vec<Math>),
+    /// `math-color`.
+    ChangeColor(Color, Vec<Math>),
+    /// `math-char-class` (`\mathrm`/`\mathbf`/…) — the ctor name of the
+    /// `math-char-class` variant (`"MathRoman"`, `"MathBoldItalic"`, …;
+    /// `docs/plans/math-engine.md` §F — restyling itself is roadmap, this
+    /// just carries which style was requested).
+    ChangeCharClass(String, Vec<Math>),
+    /// `math-frac`: numerator, denominator.
+    Fraction(Vec<Math>, Vec<Math>),
+    /// `math-radical`: `\sqrt[degree]{radicand}` — `None` degree is the
+    /// common `\sqrt` case (`math-radical None radicand`); upstream's own
+    /// `MathRadicalWithDegree` is `failwith`-unimplemented too
+    /// (`math.ml:886`), so a `Some` degree here is carried faithfully but
+    /// never rendered specially (matches upstream by parity).
+    Radical(Option<Vec<Math>>, Vec<Math>),
+    /// `math-paren`: left/right paren-sizing closures (each a `paren =
+    /// length -> length -> length -> length -> color -> inline-boxes *
+    /// (length -> length)`, carried opaquely) plus the bracketed content.
+    Paren(Box<Value>, Box<Value>, Vec<Math>),
+    /// `math-paren-with-middle`: left/right/middle paren closures plus the
+    /// `\setsep`-style list of bracketed sub-`math`s.
+    ParenWithMiddle(Box<Value>, Box<Value>, Box<Value>, Vec<Vec<Math>>),
+    /// `math-upper`: base with an over-script (`\overline`-adjacent, big-
+    /// operator upper limit).
+    UpperLimit(Vec<Math>, Vec<Math>),
+    /// `math-lower`: base with an under-script (big-operator lower limit).
+    LowerLimit(Vec<Math>, Vec<Math>),
+    /// `math-pull-in-scripts`: a big operator's own left/right class plus
+    /// the `(math option -> math option -> math)` resolver closure that
+    /// routes an eventual `^`/`_` into limits instead of corner scripts
+    /// (`\sum^n_i`-style). The closure is carried opaquely, same as
+    /// `Paren`'s; only actually invoked by the real layout engine.
+    PullInScripts(MathKind, MathKind, Box<Value>),
+}
+
+/// The base-atom payload of [`Math::Pure`] — mirrors upstream
+/// `math_element_main` (`types.cppo.ml:1009`), flattened (the math-class
+/// lives directly on each variant here, rather than in a separate wrapping
+/// `MathElement(kind, math_char_main)` layer) since nothing else needs the
+/// undecorated `math_char_main` on its own.
+#[derive(Clone, Debug)]
+pub enum MathElement {
+    /// `math-char` / `math-big-char`: a run of math characters, one atom.
+    /// `big` selects the large-operator size class (`\sum`/`\int`-style;
+    /// roadmap D — Slice 1's layout does not yet upscale it).
+    Char { class: MathKind, big: bool, chars: String },
+    /// `math-char-with-kern` / `math-big-char-with-kern`: like `Char`, plus
+    /// opaque left/right kern-function closures (each `length -> length ->
+    /// length`, fontsize/y-position -> kern amount; `\int`'s italic-correction
+    /// kern is the motivating case). Not yet consulted by layout (roadmap B).
+    CharWithKern {
+        class: MathKind,
+        big: bool,
+        chars: String,
+        kern_l: Box<Value>,
+        kern_r: Box<Value>,
+    },
+    /// `text-in-math` (`\text`, `\cases`): an embedded `context ->
+    /// inline-boxes` closure, carried opaquely — the box it eventually
+    /// produces isn't yet nestable into a math run's glyph model (roadmap
+    /// E), so this is stored faithfully but not rendered.
+    EmbeddedText { class: MathKind, body: Box<Value> },
+    /// `math-variant-char` (`primitives.cppo.ml`'s `MathVariantCharDirect`)
+    /// — one atom with a per-style codepoint set (Greek letters, `math.
+    /// satyh`'s `greek-lowercase`/`greek-uppercase`). `big` mirrors `Char`'s
+    /// (unused upstream for variant chars in practice, kept for shape
+    /// parity).
+    VariantChar {
+        class: MathKind,
+        big: bool,
+        style: Box<MathVariantStyle>,
+    },
+}
+
+/// `math-variant-char`'s 9-field per-style codepoint record
+/// (`docs/plans/math-engine.md` §F; `math.satyh`'s `greek-lowercase`/
+/// `greek-uppercase` build one per Greek letter). Field order/names mirror
+/// the record literal math.satyh constructs (`italic`, `bold-italic`,
+/// `roman`, `bold-roman`, `script`, `bold-script`, `fraktur`,
+/// `bold-fraktur`, `double-struck`).
+#[derive(Clone, Debug)]
+pub struct MathVariantStyle {
+    pub italic: String,
+    pub bold_italic: String,
+    pub roman: String,
+    pub bold_roman: String,
+    pub script: String,
+    pub bold_script: String,
+    pub fraktur: String,
+    pub bold_fraktur: String,
+    pub double_struck: String,
+}
+
 /// The final result of evaluating a document.
 #[derive(Clone, Debug)]
 pub struct DocumentValue {
     pub geometry: PageGeometry,
     pub pages: Vec<Page>,
+    /// Every image `load-image` decoded while evaluating this document,
+    /// indexed by `ImageId` (`PureHorzBox::Image::image` / `Value::Image`
+    /// point in here). Moved out of `eval::Interp::images` by `page-break`
+    /// (`primitives::prim_page_break`) when it packages the final document;
+    /// threaded to `satysfi_pdf::render_pdf`/`render_pdf_ttf` so the PDF
+    /// writer can emit one Image XObject per image actually used.
+    /// `docs/plans/math-images.md` §Slice 1.
+    pub images: Vec<ImageResource>,
 }
 
 /// A lexical environment: a frame chain (`environment` in the OCaml).

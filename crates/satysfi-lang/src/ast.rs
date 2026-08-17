@@ -21,6 +21,14 @@ pub enum Ast {
     /// Mutually recursive bindings (`let-rec … and …`); every body must be a
     /// `Lambda`, all names are in scope in all bodies.
     LetRecIn(Vec<(String, Rc<Ast>)>, Box<Ast>),
+    /// `let-math \cmd param* = expr in body` (`docs/plans/math-engine.md`
+    /// §G) — a math-command binding. Evaluates identically to `LetIn` (a
+    /// plain named binding; see `eval.rs`); the DISTINCT variant exists
+    /// purely so the typechecker can tell it apart from an ordinary
+    /// `\`-sigiled `LetIn` (a `let-inline` binding or a qualified-name
+    /// alias of one) without re-deriving that from the shared `\` sigil —
+    /// see `typecheck.rs`'s `Checker::math_command_scheme`.
+    LetMathIn(String, Box<Ast>, Box<Ast>),
     IfThenElse(Box<Ast>, Box<Ast>, Box<Ast>),
     Match(Box<Ast>, Vec<MatchArm>),
     Tuple(Vec<Ast>),
@@ -112,8 +120,11 @@ pub enum IText {
     /// `#expr;` — an embedded expression evaluating to inline-text, spliced
     /// in place (`UTInputHorzContent`).
     Embed { expr: Ast, span: Span },
-    /// `${…}` embedded math (`UTInputHorzEmbeddedMath`); errors at read time
-    /// until phase 7.
+    /// `${…}` embedded math (`UTInputHorzEmbeddedMath`); `read_inline`
+    /// (`primitives.rs`'s `read_math`) walks this into a `PureHorzBox::Math`
+    /// as of `docs/plans/math-engine.md` §Slice 1 (fixed-constant
+    /// super/subscript shift/scale, no MATH table yet). `MathElem::Cmd`/
+    /// `Embed` still error cleanly — the math package itself is roadmap A.
     EmbedMath {
         elems: Rc<Vec<MathElem>>,
         span: Span,

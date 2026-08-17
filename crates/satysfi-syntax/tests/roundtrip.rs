@@ -24,6 +24,16 @@ fn minimal_expression_file() {
 }
 
 #[test]
+fn stage_headers() {
+    // `Header::Stage` — accepted and round-tripped like `@require:`/
+    // `@import:` (see `cst.rs`'s doc comment: treated as an inert no-op).
+    assert_roundtrip("@stage: persistent\nlet x = 1 in x");
+    assert_roundtrip("@stage: 0\nlet x = 1 in x");
+    assert_roundtrip("@stage: 1\nlet x = 1 in x");
+    assert_roundtrip("@require: list\n@stage: persistent\nlet x = 1 in x");
+}
+
+#[test]
 fn headers_and_prelude() {
     assert_roundtrip("@require: stdjabook\nlet x = 1 in x");
     assert_roundtrip("let f a b = a in f 1 2");
@@ -38,6 +48,11 @@ fn records_lists_functions() {
     assert_roundtrip("[]");
     assert_roundtrip("fun x -> x");
     assert_roundtrip("let apply = fun f x -> f x in apply");
+    // `fun`'s parameters are full `patbot`s upstream (`parser.mly`'s
+    // `argpats = list(patbot)`), not merely variables — a tuple-
+    // destructuring parameter (used by the bundled `list.satyg`'s
+    // `mapi-adjacent`) must parse and round-trip like any other `patbot`.
+    assert_roundtrip("fun (a, b) x -> a");
     assert_roundtrip("()");
 }
 
@@ -85,14 +100,12 @@ fn cmd_args_are_application_chains() {
     let cst::ast::InlineElem::Cmd { tail, .. } = &elems[0] else {
         panic!("expected command");
     };
-    let cst::ast::CmdTail::Args { args, semi } = tail else {
+    let cst::ast::CmdTail::Args { first, rest, semi } = tail else {
         panic!("expected args tail");
     };
     assert!(semi.is_some());
-    let cst::ast::Expr::Ops(arg_chain) = &**args else {
-        panic!("expected application chain");
-    };
-    assert_eq!(arg_chain.head.args.len(), 1, "head + one more argument");
+    assert!(matches!(&**first, cst::ast::AppArg::Atom { .. }));
+    assert_eq!(rest.len(), 1, "head + one more argument");
 }
 
 #[test]
@@ -173,6 +186,34 @@ fn let_and_let_rec_local() {
 }
 
 #[test]
+fn destructuring_let() {
+    // `Expr::LetPatternIn` — a plain, non-recursive `let` whose target is a
+    // general pattern rather than a bare variable (`list.satyg`'s
+    // `mapi-adjacent` uses this: `let (_, acc) = .. in reverse acc`).
+    assert_roundtrip("let (a, b) = (1, 2) in a");
+    assert_roundtrip("let (_, acc) = (1, 2) in acc");
+    assert_roundtrip("let Some (x) = y in x");
+}
+
+#[test]
+fn multi_clause_pattern_let_rec() {
+    // SATySFi's multi-clause pattern-matching function-definition sugar
+    // (`option.satyg`/`list.satyg` use this pervasively, e.g. `let-rec map |
+    // f [] = [] | f (x :: xs) = (f x) :: map f xs`).
+    assert_roundtrip("let-rec map | f (None) = None | f (Some(v)) = Some(f v) in map");
+    assert_roundtrip(
+        "let-rec map\n\
+         | f []        = []\n\
+         | f (x :: xs) = (f x) :: map f xs\n\
+         in map",
+    );
+    assert_roundtrip("let-rec filter | _ [] = [] | p (x :: xs) = filter p xs in filter");
+    // A single clause with a non-variable pattern (no `|` continuation at
+    // all) also exercises the general (match-based) desugaring path.
+    assert_roundtrip("let-rec first (x :: xs) = x in first");
+}
+
+#[test]
 fn match_expressions() {
     assert_roundtrip("match x with | 0 -> `a` | n when n -> `b` | _ -> `c`");
     assert_roundtrip("match l with | [] -> 0 | x :: rest -> x");
@@ -237,6 +278,35 @@ fn type_declaration_shapes() {
 }
 
 #[test]
+fn applied_and_product_types_in_signatures() {
+    // Postfix type-constructor application (`'a option`, `'a list`) and
+    // product types (`'a * 'b`) inside a `module .. : sig .. end` — the
+    // shapes `option.satyg`/`list.satyg`'s signatures need (`TypeApp`/
+    // `TypeProd`, `cst.rs`).
+    assert_roundtrip(
+        "module M : sig\n\
+         val f : ('a -> 'b) -> 'a option -> 'b option\n\
+         end = struct\n\
+         let f g x = g x\n\
+         end",
+    );
+    assert_roundtrip(
+        "module M : sig\n\
+         val g : ('a -> 'a -> bool) -> 'a -> ('a * 'b) list -> 'b option\n\
+         end = struct\n\
+         let g eq a l = None\n\
+         end",
+    );
+    assert_roundtrip(
+        "module M : sig\n\
+         val h : ('a list) list -> 'a list\n\
+         end = struct\n\
+         let h l = []\n\
+         end",
+    );
+}
+
+#[test]
 fn match_binds_greedily() {
     // A nested match absorbs the following arms (same resolution as the
     // OCaml grammar).
@@ -288,6 +358,44 @@ fn optional_application_args() {
 }
 
 #[test]
+fn command_call_with_leading_optional_args() {
+    // `\ref?:(x){text}` / `\ref?*{text}` — an optional/omitted `narg`
+    // *before* the mandatory group arg (`CmdTail::Args`'s `first`/`rest`,
+    // each an `AppArg`, so unlike the general application chain's `AppExpr`
+    // — whose head must be a plain atom — a command's *first* argument may
+    // itself be `?:`/`?*`).
+    assert_roundtrip("{ \\ref?:(x){text} }");
+    assert_roundtrip("{ \\ref?*{text} }");
+    assert_roundtrip("{ \\ref?:(x)?:(y){text} }");
+}
+
+#[test]
+fn optional_argument_type_grammar() {
+    // `?->` (optional-argument function arrow) and `ty?` (optional
+    // command-argument type) — `docs/plans/class-signature-lang-gaps.md`'s
+    // gap 2.
+    assert_roundtrip(
+        "module M : sig\n\
+         val f : 'a -> config ?-> block-text -> document\n\
+         end = struct\n\
+         let f x c bt = bt\n\
+         end",
+    );
+    assert_roundtrip(
+        "module M : sig\n\
+         direct +section : [string?; string?; inline-text; block-text] block-cmd\n\
+         end = struct\n\
+         end",
+    );
+    assert_roundtrip(
+        "module M : sig\n\
+         val g : [int; string?] math-cmd\n\
+         end = struct\n\
+         end",
+    );
+}
+
+#[test]
 fn itemize_markers() {
     let file = parse_file("{ * a ** b }").unwrap();
     let Some(cst::ast::Expr::Ops(chain)) = file.body else {
@@ -327,6 +435,23 @@ fn modules_and_open() {
 }
 
 #[test]
+fn open_module_expression() {
+    // `Mod.(e)` ≡ `open Mod in e` (`Atomic::OpenModule`).
+    assert_roundtrip(
+        "module M = struct\n\
+         let x = 3\n\
+         end\n\
+         M.(x + 1)",
+    );
+    assert_roundtrip(
+        "module M = struct\n\
+         let x = 3\n\
+         end\n\
+         M.(x, x)",
+    );
+}
+
+#[test]
 fn library_file_has_no_body() {
     let file = parse_file("let x = 1").unwrap();
     assert!(file.in_kw.is_none());
@@ -335,4 +460,76 @@ fn library_file_has_no_body() {
     // Ordinary (non-library) forms still work unchanged.
     assert_roundtrip("let x = 1 in x");
     assert_roundtrip("3");
+}
+
+#[test]
+fn command_value() {
+    // `(command \cmd)` — `docs/plans/class-signature-lang-gaps.md` gap 1:
+    // a first-class reference to an inline command's own binding.
+    assert_roundtrip("let-inline \\m ctx = ctx in (command \\m)");
+    assert_roundtrip("get-initial-context 100pt (command \\m)");
+}
+
+#[test]
+fn sig_constraint_suffix() {
+    // `constraint 'a :: (| l1 : ty1; … |)` as a per-item suffix on a
+    // `SigItem` (`docs/plans/class-signature-lang-gaps.md` gap 3;
+    // `parser.mly:526-530` — a per-item suffix, not a standalone item).
+    assert_roundtrip(
+        "module M : sig\n\
+         val document : 'a -> config ?-> block-text -> document\n\
+         constraint 'a :: (| title : inline-text; author : inline-text |)\n\
+         end = struct\n\
+         let document x c bt = bt\n\
+         end",
+    );
+    // Multi-field record kind, matching the real `stdja.satyh:29-34` shape.
+    assert_roundtrip(
+        "module M : sig\n\
+         val document : 'a -> config ?-> block-text -> document\n\
+         constraint 'a :: (|\n\
+         title : inline-text;\n\
+         author : inline-text;\n\
+         show-toc : bool;\n\
+         show-title : bool;\n\
+         |)\n\
+         end = struct\n\
+         let document x c bt = bt\n\
+         end",
+    );
+}
+
+#[test]
+fn stdja_sig_block_parses() {
+    // The whole `sig … end` block of the real upstream `stdja.satyh:24-51`
+    // (command values, command types, `?->`, and the `constraint` suffix
+    // all together) — `docs/plans/class-signature-lang-gaps.md` Slice 1's
+    // acceptance gate. Trimmed to the constructs this port models (no
+    // tuple-of-`string*float*float` font vals needed for the gate, but
+    // included anyway since `TypeProd` already supports them).
+    assert_roundtrip(
+        "module StdJa : sig\n\
+         val default-config : config\n\
+         val document : 'a -> config ?-> block-text -> document\n\
+         constraint 'a :: (|\n\
+         title : inline-text;\n\
+         author : inline-text;\n\
+         show-toc : bool;\n\
+         show-title : bool;\n\
+         |)\n\
+         val font-latin-roman : string * float * float\n\
+         direct \\ref : [string] inline-cmd\n\
+         direct \\ref-page : [string] inline-cmd\n\
+         direct \\figure : [inline-text; block-text] inline-cmd\n\
+         direct +p : [inline-text] block-cmd\n\
+         direct +pn : [inline-text] block-cmd\n\
+         direct +section : [string?; string?; inline-text; block-text] block-cmd\n\
+         direct +subsection : [string?; string?; inline-text; block-text] block-cmd\n\
+         direct \\emph : [inline-text] inline-cmd\n\
+         end = struct\n\
+         let default-config = default-config\n\
+         let document x c bt = bt\n\
+         let font-latin-roman = (`f`, 1., 0.)\n\
+         end",
+    );
 }

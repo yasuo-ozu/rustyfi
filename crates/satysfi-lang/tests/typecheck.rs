@@ -141,6 +141,40 @@ fn user_variant_payload_type_mismatch_is_rejected() {
 }
 
 // ============================================================================
+// `color` built-in variant (frontend-completion.md §Slice1-B): `Gray of
+// float | RGB of (float*float*float) | CMYK of (float*float*float*float)` —
+// no base type, no primitive, ordinary `Ast::Ctor`/`Value::Ctor` plumbing.
+// ============================================================================
+
+#[test]
+fn color_variant_ctors_typecheck() {
+    assert_well_typed("let c = Gray 0.5 in c");
+    assert_well_typed("let c = RGB (0.5, 0.5, 0.5) in c");
+    assert_well_typed("let c = CMYK (0.1, 0.2, 0.3, 0.4) in c");
+}
+
+#[test]
+fn color_variant_ctors_are_pattern_matchable() {
+    assert_well_typed(
+        "match Gray 0.5 with
+         | Gray(x)      -> x
+         | RGB(r, g, b) -> r
+         | CMYK(c, m, y, k) -> c",
+    );
+}
+
+#[test]
+fn color_variant_payload_type_mismatch_is_rejected() {
+    assert_type_error("RGB (true, 0.5, 0.5)");
+}
+
+#[test]
+fn color_variant_wrong_ctor_arity_is_rejected() {
+    // `Gray` takes exactly one `float` payload, not a 3-tuple.
+    assert_type_error("Gray (0.1, 0.2, 0.3)");
+}
+
+// ============================================================================
 // Match: arm-type joining and guards.
 // ============================================================================
 
@@ -327,7 +361,7 @@ fn primitive_names_are_cross_checked_against_primitives_source() {
     let src = include_str!("../src/primitives.rs");
     assert_eq!(
         typecheck::PRIMITIVE_NAMES.len(),
-        61,
+        149,
         "keep this in sync with primitives.rs's prims! table and \
          types_unify.rs's every_registered_primitive_has_a_type test"
     );
@@ -550,6 +584,25 @@ fn module_qualified_inline_command_reference_has_a_command_type() {
 }
 
 // ============================================================================
+// Slice 1: raster images (docs/plans/math-images.md). These only exercise
+// typechecking — `load-image` is never actually evaluated here, so no real
+// file needs to exist on disk (a runtime round trip against a real decoded
+// PNG lives in `crates/satysfi-lang/tests/images.rs`).
+// ============================================================================
+
+#[test]
+fn image_primitives_typecheck_end_to_end() {
+    // `load-image : string -> image`, `use-image-by-width : image -> length
+    // -> inline-boxes` — chained together and used where `inline-boxes` is
+    // expected (a command argument), exactly like `use-image-by-width
+    // (load-image \`fig.png\`) 40pt` would appear in real source.
+    assert_well_typed(
+        "let-inline ctx \\fig it = use-image-by-width (load-image `fig.png`) 40pt
+         in
+         { \\fig{ ignored } }",
+    );
+}
+
 // Slice 1 graphics primitives (docs/plans/graphics-subsystem.md §2/§5): no
 // `@require`, no type synonyms (`point` isn't parsed as a synonym yet — see
 // the plan's §5) — just the seven new prims' own signatures, exercised by
@@ -571,6 +624,26 @@ fn graphics_path_fill_stroke_typecheck() {
 }
 
 #[test]
+fn use_image_by_width_rejects_a_non_image_first_argument() {
+    // `image` is a real, distinct base type — passing an `int` where
+    // `use-image-by-width` expects the `image` `load-image` returns must be
+    // rejected, not silently accepted via some other type.
+    let err = assert_type_error("use-image-by-width 3 40pt");
+    let msg = err.to_string();
+    assert!(msg.contains("image"), "message should mention `image`: {msg}");
+}
+
+#[test]
+fn use_image_by_width_rejects_a_non_length_second_argument() {
+    assert_type_error("use-image-by-width (load-image `fig.png`) `not-a-length`");
+}
+
+#[test]
+fn load_image_rejects_a_non_string_argument() {
+    assert_type_error("load-image 3");
+}
+
+#[test]
 fn terminate_path_is_also_a_valid_path_source() {
     assert_well_typed("terminate-path (start-path (0pt, 0pt))");
 }
@@ -587,4 +660,242 @@ fn inline_graphics_callback_typechecks() {
 #[test]
 fn fill_rejects_a_non_color_first_argument() {
     assert_type_error("fill 1 (terminate-path (start-path (0pt, 0pt)))");
+}
+
+// ============================================================================
+// Slice 1: `tabular` + the `cell` variant
+// (docs/plans/table-subsystem.md §Slice 1/§5) — a self-contained
+// `\tabular`-shaped `let-inline` command, mirroring `tabular.satyh`'s real
+// `\tabular` (positional cell builders, no record/option front-end — that's
+// roadmap G) exercises `NormalCell`/`MultiCell`/`EmptyCell` inferring
+// `cell`, `cellssf cellf multif empty` inferring `(cell list) list`, and
+// `tabular … rulef` unifying `rulef` against `length list -> length list ->
+// graphics list`.
+// ============================================================================
+
+const TABULAR_CMD: &str = "let-inline ctx \\tabular cellssf rulef =
+       let pads = (5pt, 5pt, 2pt, 2pt) in
+       let cellf it = NormalCell (pads, inline-fil ++ read-inline ctx it ++ inline-fil) in
+       let multif n m it = MultiCell (n, m, pads, inline-fil ++ read-inline ctx it ++ inline-fil) in
+       let empty = EmptyCell in
+         tabular (cellssf cellf multif empty) rulef";
+
+#[test]
+fn tabular_command_shape_typechecks_end_to_end() {
+    // The trailing `;` closes the lexer's "active area" opened by `\tabular`
+    // once its last argument is a program-mode `(...)` value rather than a
+    // `{...}`/`<...>` text group (`cst.rs`'s `CmdTail::Args`'s doc comment);
+    // it is required here for exactly the same reason `\tabular(...)(...)`
+    // needs it in `table.satyh`/`tabular.satyh`'s real front-ends.
+    assert_well_typed(&format!(
+        "{TABULAR_CMD}
+         in
+         {{ \\tabular(fun c m e -> [[c{{A}}; c{{B}}]; [e; c{{D}}]])(fun xs ys -> []); }}"
+    ));
+}
+
+#[test]
+fn tabular_rejects_a_rule_callback_with_the_wrong_result_type() {
+    // The rule callback must return `graphics list`, not `inline-boxes`.
+    let err = assert_type_error(&format!(
+        "{TABULAR_CMD}
+         in
+         {{ \\tabular(fun c m e -> [[c{{A}}]])(fun xs ys -> inline-nil); }}"
+    ));
+    let _ = err;
+}
+
+#[test]
+fn multi_cell_ctor_infers_the_cell_type() {
+    assert_well_typed(
+        "let pads = (0pt, 0pt, 0pt, 0pt) in
+         match MultiCell (1, 2, pads, inline-nil) with
+         | NormalCell(p, ib) -> p
+         | EmptyCell -> pads
+         | MultiCell(nr, nc, p, ib) -> p",
+    );
+}
+
+// ============================================================================
+// Slice 1 hooks + cross-references
+// (docs/plans/hooks-annotations-crossref.md §Slice 1) — `hook-page-break`'s
+// closure argument receives a `page-break-info` closed record row (`{|
+// page-number : int |}`) with no nominal type needed, and
+// `register-cross-reference`/`get-cross-reference` round-trip through the
+// `string option` the built-in `option` variant provides.
+// ============================================================================
+
+#[test]
+fn hook_page_break_closure_typechecks_against_the_pbinfo_record_row() {
+    // `#page-number` structurally unifies the lambda's `pbinfo` parameter
+    // against the closed row `hook-page-break` expects — no `tPBINFO`
+    // nominal type needed (the plan's §5 point).
+    assert_well_typed(
+        "hook-page-break (fun pbinfo pt -> register-cross-reference `p` (arabic pbinfo#page-number))",
+    );
+}
+
+#[test]
+fn hook_page_break_rejects_a_closure_missing_the_page_number_field() {
+    // A closure that never uses `#page-number` still has to accept an
+    // argument shaped like a `page-break-info`; passing one that's used
+    // some other way entirely (here, as a `string`) must be rejected.
+    let err = assert_type_error(r#"hook-page-break (fun pbinfo pt -> string-length pbinfo)"#);
+    let _ = err; // any type error is acceptable; message content isn't pinned.
+}
+
+#[test]
+fn register_then_get_cross_reference_round_trip_typechecks() {
+    assert_well_typed(
+        "register-cross-reference `k` `v` before
+         (match get-cross-reference `k` with
+          | None -> `absent`
+          | Some(s) -> s)",
+    );
+}
+
+#[test]
+fn register_cross_reference_rejects_a_non_string_argument() {
+    assert_type_error("register-cross-reference `k` 3");
+}
+
+#[test]
+fn get_cross_reference_rejects_a_non_string_argument() {
+    assert_type_error("get-cross-reference 3");
+}
+
+// ============================================================================
+// Slice 1: the real 4-arg `page-break`
+// (docs/plans/document-page-model.md §Slice 1) — `page-content-scheme`
+// (`{| text-origin : point; text-height : length |}`) and `page-parts`
+// (`{| header-origin; header-content; footer-origin; footer-content |}`)
+// are structural closed rows, same as `pbinfo` itself: no nominal scheme
+// type needed, just two ordinary `fun pbinfo -> record` closures.
+// ============================================================================
+
+#[test]
+fn page_break_typechecks_over_two_content_and_parts_scheme_closures() {
+    assert_well_typed(
+        "let content pbinfo = (| text-origin = (0pt, 0pt); text-height = 100pt |) in
+         let parts pbinfo =
+           (| header-origin = (0pt, 0pt); header-content = block-nil;
+              footer-origin = (0pt, 0pt); footer-content = block-nil |)
+         in
+         page-break A4Paper content parts block-nil",
+    );
+}
+
+#[test]
+fn page_break_rejects_a_content_scheme_missing_text_height() {
+    let err = assert_type_error(
+        "let content pbinfo = (| text-origin = (0pt, 0pt) |) in
+         let parts pbinfo =
+           (| header-origin = (0pt, 0pt); header-content = block-nil;
+              footer-origin = (0pt, 0pt); footer-content = block-nil |)
+         in
+         page-break A4Paper content parts block-nil",
+    );
+    let _ = err; // any type error is acceptable; message content isn't pinned.
+}
+
+#[test]
+fn page_break_rejects_a_non_page_first_argument() {
+    assert_type_error(
+        "let content pbinfo = (| text-origin = (0pt, 0pt); text-height = 100pt |) in
+         let parts pbinfo =
+           (| header-origin = (0pt, 0pt); header-content = block-nil;
+              footer-origin = (0pt, 0pt); footer-content = block-nil |)
+         in
+         page-break 3 content parts block-nil",
+    );
+}
+
+#[test]
+fn user_defined_paper_takes_a_length_pair() {
+    assert_well_typed(
+        "let content pbinfo = (| text-origin = (0pt, 0pt); text-height = 100pt |) in
+         let parts pbinfo =
+           (| header-origin = (0pt, 0pt); header-content = block-nil;
+              footer-origin = (0pt, 0pt); footer-content = block-nil |)
+         in
+         page-break (UserDefinedPaper(210mm, 297mm)) content parts block-nil",
+    );
+}
+
+// ============================================================================
+// `docs/plans/class-signature-lang-gaps.md` gap 1: first-class command
+// values `(command \cmd)` — elaborates to a plain `Var` referencing the
+// command's own `let-inline` binding, so it infers exactly that binding's
+// `InlineCmd` scheme (`Checker::command_scheme`).
+// ============================================================================
+
+#[test]
+fn command_value_typechecks_and_unifies_with_another_of_the_same_shape() {
+    // Two independently-defined, shape-identical inline commands: their
+    // `(command \cmd)` values must unify (both `InlineCmd([inline-text])`),
+    // proving `(command \cmd)` really does carry the command's own
+    // `MonoType`, not some untyped/opaque placeholder.
+    assert_well_typed(
+        "let-inline ctx \\m it = read-inline ctx it
+         let-inline ctx \\n it = read-inline ctx it
+         in
+         if true then (command \\m) else (command \\n)",
+    );
+}
+
+#[test]
+fn command_value_of_mismatched_arity_is_rejected() {
+    // `\m` is `[inline-text] inline-cmd`, `\pair` is `[inline-text;
+    // inline-text] inline-cmd` — pinning that `(command \cmd)`'s type is
+    // the *specific* `InlineCmd` argument list, not some generic stand-in
+    // that would let any two commands unify.
+    assert_type_error(
+        "let-inline ctx \\m it = read-inline ctx it
+         let-inline ctx \\pair a b = read-inline ctx a
+         in
+         if true then (command \\m) else (command \\pair)",
+    );
+}
+
+#[test]
+fn command_value_of_an_undefined_command_is_rejected() {
+    // `scoped_var`'s ordinary scope check fires for `Atomic::Command` too
+    // (elaboration-time, before typechecking ever runs).
+    let file = satysfi_syntax::parse_file("(command \\nonexistent)").unwrap();
+    let env = primitives::base_env();
+    let scope = elaborate::Scope::new(env.names());
+    let err = elaborate::elaborate_program(&file, &scope)
+        .expect_err("an undefined command reference should be rejected");
+    assert!(
+        err.to_string().contains("\\nonexistent"),
+        "error should name the unbound command: {err}"
+    );
+}
+
+#[test]
+fn get_standard_context_construct_typechecks_with_stand_in_bindings() {
+    // Mirrors `stdja.satyh:115-121`'s `get-standard-context`:
+    //   let get-standard-context wid =
+    //     get-initial-context wid (command \math)
+    //       |> set-code-text-command (command \code)
+    //       |> ...
+    // using *locally*-defined stand-ins for `\math`/`\code`/
+    // `get-initial-context`/`set-code-text-command` (restoring the real
+    // `get-initial-context` primitive's `[math] inline-cmd` type lives in
+    // `prim_types.rs`, out of this wave's file boundary — a sibling agent
+    // owns that file concurrently; see `class-signature-lang-gaps.md`'s
+    // Slice 1 note on this exact risk). This still proves the *construct*
+    // end-to-end: `(command \cmd)` flowing into a `[…] inline-cmd`-typed
+    // parameter and back out through a pipe chain.
+    assert_well_typed(
+        "let-inline ctx \\math m = inline-nil
+         let-inline ctx \\code s = inline-nil
+         let stub-get-initial-context wid m = wid
+         let stub-set-code-text-command cmd c = c
+         let get-standard-context wid =
+           stub-get-initial-context wid (command \\math)
+             |> stub-set-code-text-command (command \\code)
+         in
+         get-standard-context 400pt",
+    );
 }

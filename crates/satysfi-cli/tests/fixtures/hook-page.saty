@@ -1,0 +1,24 @@
+% Slice 1 fixture (docs/plans/hooks-annotations-crossref.md): a
+% `hook-page-break` closure registers the current (final) page number as a
+% cross-reference, and a `get-cross-reference` read-back renders it as text.
+% On trial 1 the table gets `p = "1"` and is flagged `changed`, forcing
+% trial 2; on trial 2 `get-cross-reference` returns `Some("1")`, rendered by
+% `embed-string`. Exercises both the callback seam (`HookId` + `fire_hooks`)
+% and the cross-reference fixpoint in one fixture.
+
+@require: stdja-mini
+
+let-inline ctx \hookpage =
+  (hook-page-break (fun pbinfo _ -> (
+     register-cross-reference `p` (arabic (pbinfo#page-number)))))
+    ++ (match get-cross-reference `p` with
+        | None -> inline-nil
+        | Some(s) -> read-inline ctx (embed-string s))
+
+in
+document (|
+  title = {Hook Page};
+  author = {yasuo};
+|) '<
+  +p { Page number: \hookpage; }
+>

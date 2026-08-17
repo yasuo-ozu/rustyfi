@@ -419,6 +419,29 @@ fn every_registered_primitive_has_a_type() {
         "block-skip",
         // ---- phase 4, part 2 addition ----
         "set-font-key",
+        // ---- frontend-completion.md §Slice 1.A: the ~18 pure primitives ----
+        // (`|>` excluded: no primitive of its own — see `elaborate.rs`'s
+        // `climb` and this crate's `prims!` table comment.)
+        "sin",
+        "asin",
+        "cos",
+        "acos",
+        "tan",
+        "atan",
+        "atan2",
+        "log",
+        "exp",
+        "ceil",
+        "floor",
+        "show-float",
+        "string-byte-length",
+        "string-sub-bytes",
+        "string-unexplode",
+        "display-message",
+        "abort-with-message",
+        // ---- Slice 1 additions (raster images; docs/plans/math-images.md) ----
+        "load-image",
+        "use-image-by-width",
         // ---- Slice 1 graphics primitives (docs/plans/graphics-subsystem.md) ----
         "start-path",
         "line-to",
@@ -427,8 +450,87 @@ fn every_registered_primitive_has_a_type() {
         "fill",
         "stroke",
         "inline-graphics",
+        // ---- docs/plans/table-subsystem.md §Slice 1 ----
+        "tabular",
+        // ---- gr.satyh roadmap prims (docs/plans/graphics-subsystem.md
+        // §Full roadmap A/B/C/D) ----
+        "bezier-to",
+        "close-with-bezier",
+        "shift-path",
+        "linear-transform-path",
+        "shift-graphics",
+        "linear-transform-graphics",
+        "get-graphics-bbox",
+        "dashed-stroke",
+        "draw-text",
+        // ---- pervasives.satyh unblockers (docs/plans/stdlib-port.md) ----
+        "get-natural-metrics",
+        "inline-frame-outer",
+        "set-manual-rising",
+        "script-guard",
+        "discretionary",
+        // ---- Tier-2 decoration/graphics packages (docs/plans/stdlib-port.md) ----
+        "get-axis-height",
+        // ---- docs/plans/hooks-annotations-crossref.md §Slice 1 ----
+        "hook-page-break",
+        "register-cross-reference",
+        "get-cross-reference",
+        // ---- docs/plans/math-engine.md §A + §G ----
+        "math-char",
+        "math-big-char",
+        "math-char-with-kern",
+        "math-big-char-with-kern",
+        "math-concat",
+        "math-group",
+        "math-sup",
+        "math-sub",
+        "math-frac",
+        "math-radical",
+        "math-lower",
+        "math-upper",
+        "math-pull-in-scripts",
+        "math-color",
+        "math-char-class",
+        "math-variant-char",
+        "math-paren",
+        "math-paren-with-middle",
+        "text-in-math",
+        "convert-string-for-math",
+        "embed-math",
+        "set-math-command",
+        "set-math-font",
+        "space-between-maths",
+        "raise-inline",
+        "embed-block-breakable",
+        "unite-path",
+        "set-min-gap-of-lines",
+        "omit-skip-after",
+        // ---- docs/plans/context-box-prims.md §Slice 1 (rows 1-10) ----
+        "set-text-color",
+        "get-text-color",
+        "set-hyphen-penalty",
+        "set-space-ratio",
+        "split-into-lines",
+        "block-frame-breakable",
+        "embed-block-top",
+        "set-font",
+        "set-code-text-command",
+        "get-natural-length",
+        // ---- docs/plans/hooks-annotations-crossref.md §B/§D (annot.satyh) ----
+        "get-leftmost-script",
+        "get-rightmost-script",
+        "inline-frame-breakable",
+        "register-destination",
+        "register-link-to-uri",
+        "register-link-to-location",
+        // ---- docs/plans/build-order-to-stdja.md step 8/9 orphans ----
+        "set-dominant-wide-script",
+        "set-dominant-narrow-script",
+        "set-language",
+        "register-outline",
+        "extract-string",
     ];
-    assert_eq!(NAMES.len(), 61, "keep this list in sync with primitives.rs's prims! table");
+    assert_eq!(NAMES.len(), 149, "keep this list in sync with primitives.rs's prims! table");
     for name in NAMES {
         assert!(
             prim_types::primitive_type(name).is_some(),

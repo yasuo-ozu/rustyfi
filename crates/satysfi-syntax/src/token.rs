@@ -32,6 +32,7 @@ pub enum Token {
     Constructor(String),
     #[leaf(name = "TypeVarTok", expect = "a type variable", field = "name")]
     TypeVar(String),
+    #[leaf(name = "OpenModuleTok", expect = "'Mod.('", field = "name")]
     OpenModule(String), // `Mod.(`
     #[leaf(name = "IntTok", expect = "an integer constant", field = "value")]
     IntConst(i64),
@@ -47,7 +48,23 @@ pub enum Token {
     },
 
     // ---- keywords ----
-    Not,
+    //
+    // NOTE: `not` used to have its own reserved `Not` keyword token here,
+    // with no grammar rule anywhere ever consuming it (`AppExpr`'s doc
+    // comment used to list `not` among the unimplemented unary forms) —
+    // meaning the surface grammar could never actually reference the
+    // registered `"not"` primitive (`primitives.rs`), even though it
+    // type-checked and evaluated fine when built by hand
+    // (`eval_phase2.rs`'s `not`-applying test constructs the `Ast` directly,
+    // skipping the parser). Tier-2 decoration/graphics packages
+    // (`picture.satyh`'s `not (x1r >' x2r)`/`not reversed`,
+    // docs/plans/stdlib-port.md) are the first bundled source to actually
+    // call `not` from real syntax, which is what surfaced this: removing
+    // the special-case keyword mapping (`lexer.rs`'s `keyword`) lets `not`
+    // lex as an ordinary `Var`/`VarTok`, exactly like any other primitive
+    // name (`arabic`, `floor`, ...) — an ordinary application `not expr`
+    // (or `not (expr)`) then just works through the existing `AppExpr`
+    // machinery, no new grammar rule needed.
     Mod,
     #[leaf(name = "KwIf", expect = "'if'")]
     If,
@@ -101,6 +118,7 @@ pub enum Token {
     End,
     #[leaf(name = "KwDirect", expect = "'direct'")]
     Direct,
+    #[leaf(name = "ConstraintTok", expect = "'constraint'")]
     Constraint,
     #[leaf(name = "KwLetHorz", expect = "'let-inline'")]
     LetHorz, // `let-inline`
@@ -110,9 +128,13 @@ pub enum Token {
     LetMath, // `let-math`
     Controls,
     Cycle,
+    #[leaf(name = "HorzCmdTypeTok", expect = "'inline-cmd'")]
     HorzCmdType, // `inline-cmd`
+    #[leaf(name = "VertCmdTypeTok", expect = "'block-cmd'")]
     VertCmdType, // `block-cmd`
+    #[leaf(name = "MathCmdTypeTok", expect = "'math-cmd'")]
     MathCmdType, // `math-cmd`
+    #[leaf(name = "CommandTok", expect = "'command'")]
     Command,
     #[leaf(name = "KwOpen", expect = "'open'")]
     Open,
@@ -168,6 +190,7 @@ pub enum Token {
     ExactMinus,
     #[leaf(name = "DefEqTok", expect = "'='")]
     DefEq, // `=`
+    #[leaf(name = "ExactTimesTok", expect = "'*'")]
     ExactTimes, // `*`
     ExactAmp,   // `&`
     ExactTilde, // `~`
@@ -185,7 +208,9 @@ pub enum Token {
     BinopHat(String),
     #[leaf(name = "UnopExclamTok", expect = "a '!' operator", field = "text")]
     UnopExclam(String),
-    OptionalType,  // `?`
+    #[leaf(name = "OptionalTypeTok", expect = "'?'")]
+    OptionalType, // `?`
+    #[leaf(name = "OptionalArrowTok", expect = "'?->'")]
     OptionalArrow, // `?->`
     #[leaf(name = "OptionalTok", expect = "'?:'")]
     Optional, // `?:`
@@ -253,7 +278,6 @@ impl std::fmt::Display for Token {
             FloatConst(x) => write!(f, "{x}"),
             LengthConst(x, u) => write!(f, "{x}{u}"),
             Literal { body, .. } => write!(f, "`{body}`"),
-            Not => write!(f, "not"),
             Mod => write!(f, "mod"),
             If => write!(f, "if"),
             Then => write!(f, "then"),

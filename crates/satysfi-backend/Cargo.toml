@@ -9,3 +9,6 @@ authors.workspace = true
 [dependencies]
 newer-type.workspace = true
 newer-type-std.workspace = true
+# UAX#14 line breaking: a compiled Unicode pair table, no unidata files to
+# ship (docs/plans/text-rendering.md §3).
+unicode-linebreak = "0.1"

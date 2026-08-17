@@ -3,7 +3,7 @@
 //! both axes off the `use` header), and the rejected 0.0.6+Envelopes
 //! combination surfacing the axis-naming CLI error.
 //!
-//! Both drive the *built* `rustyfi-rust` binary as a subprocess (the
+//! Both drive the *built* `rustyfi` binary as a subprocess (the
 //! `CARGO_BIN_EXE_*` env var cargo provides to this crate's integration
 //! tests), so they exercise `resolve_version_and_mode` + the loader dispatch
 //! for real.
@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn bin() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_rustyfi-rust"))
+    PathBuf::from(env!("CARGO_BIN_EXE_rustyfi"))
 }
 
 fn out_pdf(tag: &str) -> PathBuf {
@@ -44,7 +44,7 @@ fn envelopes_use_of_document_compiles_to_pdf() {
         .arg(&out)
         .arg("--no-cache")
         .output()
-        .expect("failed to run the rustyfi-rust binary");
+        .expect("failed to run the rustyfi binary");
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
@@ -92,7 +92,7 @@ fn deps_with_v006_errors_naming_both_axes() {
         .arg("0.0.6")
         .arg("--no-cache")
         .output()
-        .expect("failed to run the rustyfi-rust binary");
+        .expect("failed to run the rustyfi binary");
 
     assert!(!output.status.success(), "0.0.6 + --deps must be rejected");
     let stderr = String::from_utf8_lossy(&output.stderr);

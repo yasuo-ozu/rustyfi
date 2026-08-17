@@ -18,7 +18,7 @@
 //!   scripts/layout_fidelity.py --doc easytable # one construct
 //!
 //! This wrapper just drives that script against the FRESHLY BUILT binary
-//! (`CARGO_BIN_EXE_rustyfi-rust`) so `cargo test` picks up the current code, and
+//! (`CARGO_BIN_EXE_rustyfi`) so `cargo test` picks up the current code, and
 //! fails if any document's layout regresses past `scripts/layout_fidelity_
 //! baseline.json`. It is `#[ignore]`d (like `typecheck_corpus` /
 //! `pdf_image_diff`) because it needs poppler, python3, and the corpus
@@ -73,7 +73,7 @@ fn layout_matches_upstream_satysfi_within_baseline() {
     }
 
     // Drive the freshly built binary so the test reflects the current code.
-    let bin = env!("CARGO_BIN_EXE_rustyfi-rust");
+    let bin = env!("CARGO_BIN_EXE_rustyfi");
 
     let mut cmd = Command::new("python3");
     cmd.arg(&script).arg("--bin").arg(bin).arg("--keep-going");

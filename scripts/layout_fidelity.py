@@ -201,7 +201,7 @@ def find_pdftotext() -> str | None:
 
 
 def default_bin() -> Path:
-    return REPO / "target" / "debug" / "rustyfi-rust"
+    return REPO / "target" / "debug" / "rustyfi"
 
 
 def prereqs_ok(bin_path: Path) -> list[str]:
@@ -585,7 +585,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--doc", action="append", default=[], help="only this doc (repeatable)")
     ap.add_argument("--update", action="store_true", help="rewrite the baseline from current results")
-    ap.add_argument("--bin", type=Path, default=default_bin(), help="path to the rustyfi-rust binary")
+    ap.add_argument("--bin", type=Path, default=default_bin(), help="path to the rustyfi binary")
     ap.add_argument("--keep-going", action="store_true", help="report all docs even if one fails")
     ap.add_argument("--timeout", type=int, default=600, help="per-doc build timeout (s)")
     ap.add_argument(

@@ -2,9 +2,8 @@
 //! (busybox-/rustup-style) binary that behaves as three tools, dispatched on
 //! its `argv[0]` basename and on its first subcommand:
 //!
-//! - `rustyfi-rust` — the compiler (default) plus the `satyrographos` and
+//! - `rustyfi` — the compiler (default) plus the `satyrographos` and
 //!   `multicall` subcommand trees;
-//! - `rustyfi` — the compiler only;
 //! - `satyrographos` — the package manager only.
 //!
 //! Package-management logic lives in the clap-free `rustyfi-satyrographos`
@@ -72,15 +71,13 @@ fn run() -> i32 {
     let matches = dispatch::build_cli().get_matches();
 
     // `multicall(true)` turns argv[0]'s basename into the top-level
-    // subcommand: `rustyfi-rust` | `rustyfi` | `satyrographos`.
+    // subcommand: `rustyfi` | `satyrographos`.
     match matches.subcommand() {
-        Some(("rustyfi-rust", m)) => match m.subcommand() {
+        Some(("rustyfi", m)) => match m.subcommand() {
             Some(("satyrographos", sm)) => run_satyrographos(sm),
             Some(("multicall", sm)) => run_multicall(sm),
             _ => run_compile(m),
         },
-        // The `rustyfi` personality is compile-only (no nested subcommands).
-        Some(("rustyfi", m)) => run_compile(m),
         // Bare `satyrographos` personality.
         Some(("satyrographos", sm)) => run_satyrographos(sm),
         // Unreachable: clap requires one of the personalities.
@@ -470,7 +467,7 @@ fn resolve_font_store(
 /// nor `$RUSTYFI_LIB_ROOT` is given): starting at `input`'s own directory,
 /// walk upward through its ancestors looking for a `lib-rustyfi/`
 /// subdirectory, returning the first one found. This is the simplest rule
-/// that makes `rustyfi-rust some/nested/doc.saty` "just work" from anywhere
+/// that makes `rustyfi some/nested/doc.saty` "just work" from anywhere
 /// inside a checkout that has one top-level `lib-rustyfi/` (this repo
 /// included), with no flag or environment variable needed, while still
 /// resolving relative to the *document*, not the current working directory
@@ -955,7 +952,7 @@ fn cmd_status(m: &ArgMatches) -> i32 {
 }
 
 // ---------------------------------------------------------------------------
-// `rustyfi-rust multicall install --dir DIR` (plan §4.5).
+// `rustyfi multicall install --dir DIR` (plan §4.5).
 // ---------------------------------------------------------------------------
 
 fn run_multicall(m: &ArgMatches) -> i32 {

@@ -1,8 +1,8 @@
-//! Compile-cache behaviour, driven through the *built* `rustyfi-rust` binary
+//! Compile-cache behaviour, driven through the *built* `rustyfi` binary
 //! (plan: content-addressed cache so an unchanged recompile is near-instant).
 //!
 //! Every test points `--cache-dir` at its own unique temp directory, so the
-//! cache never touches the developer's real `~/.cache/rustyfi-rust` and no two
+//! cache never touches the developer's real `~/.cache/rustyfi` and no two
 //! tests can interfere. (Key correctness — a SHA-256 over the resolved input
 //! bytes — already rules out false hits between distinct documents; the
 //! per-test dir is belt-and-braces plus a clean slate for the miss/hit
@@ -12,10 +12,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-/// The built `rustyfi-rust` binary (cargo hands this to the integration tests
+/// The built `rustyfi` binary (cargo hands this to the integration tests
 /// of the crate that defines the `[[bin]]`).
 fn bin() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_rustyfi-rust"))
+    PathBuf::from(env!("CARGO_BIN_EXE_rustyfi"))
 }
 
 /// This repo's `lib-rustyfi/`, resolved from the crate manifest dir exactly as
@@ -56,7 +56,7 @@ fn compile(input: &Path, output: &Path, cache_dir: &Path, extra: &[&str]) -> Out
         .args(["--cache-dir".as_ref(), cache_dir.as_os_str()])
         .args(extra)
         .output()
-        .expect("spawn rustyfi-rust")
+        .expect("spawn rustyfi")
 }
 
 /// Whether a compile run reported a cache hit (the `(cached)` marker on the

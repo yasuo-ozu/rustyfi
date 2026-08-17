@@ -63,7 +63,7 @@ use crate::version::{Constraint, Version};
 pub const REGISTRY_ENV: &str = "RUSTYFI_REGISTRY";
 
 /// Environment override for the git-index cache directory (used by tests to
-/// stay hermetic; production defaults to `$XDG_CACHE_HOME/rustyfi-rust/
+/// stay hermetic; production defaults to `$XDG_CACHE_HOME/rustyfi/
 /// registry/`).
 pub const CACHE_ENV: &str = "RUSTYFI_REGISTRY_CACHE";
 
@@ -77,7 +77,7 @@ pub const OFFLINE_ENV: &str = "RUSTYFI_OFFLINE";
 /// ([`CACHE_ENV`]) and the archive cache ([`crate::cache::ARCHIVE_CACHE_ENV`])
 /// under its own leaf, so a `{ git = … }` `Satyrfile.toml` package source
 /// never collides with an index clone or a tarball blob. Production default is
-/// `$XDG_CACHE_HOME/rustyfi-rust/git-sources/`.
+/// `$XDG_CACHE_HOME/rustyfi/git-sources/`.
 pub const GIT_SOURCE_CACHE_ENV: &str = "RUSTYFI_GIT_SOURCE_CACHE";
 
 /// How to reach and cache a registry index (plan §5.4 step 1).
@@ -86,18 +86,18 @@ pub struct RegistryOptions {
     /// The `--registry URL` flag, if given (highest precedence).
     pub url: Option<String>,
     /// The git-index cache directory; falls back to `$RUSTYFI_REGISTRY_CACHE`
-    /// then `$XDG_CACHE_HOME/rustyfi-rust/registry/`.
+    /// then `$XDG_CACHE_HOME/rustyfi/registry/`.
     pub cache_dir: Option<PathBuf>,
     /// Re-fetch a git index even if it is already cloned in the cache
     /// (`satyrographos update` sets this; plain `install` reuses the cache).
     pub refresh: bool,
     /// The content-addressed archive cache directory (phase 7d S2, design
     /// §2.5/§3); falls back to `$RUSTYFI_ARCHIVE_CACHE` then
-    /// `$XDG_CACHE_HOME/rustyfi-rust/archives/` (see [`crate::cache`]).
+    /// `$XDG_CACHE_HOME/rustyfi/archives/` (see [`crate::cache`]).
     pub archive_cache_dir: Option<PathBuf>,
     /// The git package-source clone cache directory (phase 7d S3, design §3
     /// S3, [`acquire_git_source`]); falls back to `$RUSTYFI_GIT_SOURCE_CACHE`
-    /// then `$XDG_CACHE_HOME/rustyfi-rust/git-sources/`.
+    /// then `$XDG_CACHE_HOME/rustyfi/git-sources/`.
     pub git_source_cache_dir: Option<PathBuf>,
     /// Forbid network requests (`--offline`); see [`RegistryOptions::is_offline`].
     pub offline: bool,
@@ -176,7 +176,7 @@ impl RegistryOptions {
                 return PathBuf::from(dir);
             }
         }
-        util::xdg_cache_base().join("rustyfi-rust").join("registry")
+        util::xdg_cache_base().join("rustyfi").join("registry")
     }
 
     /// The cache directory for git package-source clones (phase 7d S3).
@@ -189,7 +189,7 @@ impl RegistryOptions {
                 return PathBuf::from(dir);
             }
         }
-        util::xdg_cache_base().join("rustyfi-rust").join("git-sources")
+        util::xdg_cache_base().join("rustyfi").join("git-sources")
     }
 }
 

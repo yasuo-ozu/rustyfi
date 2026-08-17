@@ -1,5 +1,5 @@
 //! Phase-3 registry CLI tests (plan §5.4/§8/§9) — **no network**. Drive the
-//! *built* `rustyfi-rust` binary under its `satyrographos` personality against
+//! *built* `rustyfi` binary under its `satyrographos` personality against
 //! a plain-directory `file://` index (built in a tempdir), covering:
 //!
 //! - `install <name> --registry file://…` (registry form: the arg names no
@@ -19,7 +19,7 @@ use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 fn bin() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_rustyfi-rust"))
+    PathBuf::from(env!("CARGO_BIN_EXE_rustyfi"))
 }
 
 fn tmpdir(tag: &str) -> PathBuf {

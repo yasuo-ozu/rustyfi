@@ -3,16 +3,16 @@
 //! `Command`s but not with the derive macro. The tree:
 //!
 //! ```text
-//! rustyfi-rust                (multicall root)
-//! ├── rustyfi-rust  <compile args> [satyrographos …] [multicall …]
+//! rustyfi                (multicall root)
+//! ├── rustyfi  <compile args> [satyrographos …] [multicall …]
 //! ├── rustyfi       <compile args>
 //! └── satyrographos <install|uninstall|list|status>
 //! ```
 //!
 //! `multicall(true)` selects the top-level subcommand from `argv[0]`'s
-//! basename, so the same binary is `rustyfi-rust`, `rustyfi`, or
+//! basename, so the same binary is `rustyfi` or
 //! `satyrographos` depending on the name it is invoked under (see plan §4.5's
-//! alias-install helper). Under `rustyfi-rust` the compile args and the
+//! alias-install helper). Under `rustyfi` the compile args and the
 //! `satyrographos`/`multicall` subcommand trees coexist via
 //! `args_conflicts_with_subcommands` + `subcommand_negates_reqs`, so the
 //! required positional `input` is only demanded when no subcommand is used.
@@ -23,20 +23,22 @@ use clap::{value_parser, Arg, ArgAction, ArgGroup, Command};
 
 /// Build the full multicall dispatch tree.
 pub fn build_cli() -> Command {
-    Command::new("rustyfi-rust")
+    Command::new("rustyfi")
         .multicall(true)
         .subcommand_required(true)
         .arg_required_else_help(true)
-        // `rustyfi-rust` personality: compiler + nested package manager.
+        // `rustyfi` personality: compiler + nested package manager. There used
+        // to be a second, compile-only `rustyfi` personality beside the full
+        // `rustyfi-rust` one; with the binary renamed they are the same name,
+        // so they are the same personality — `rustyfi` now carries the compile
+        // args AND the subcommand trees.
         .subcommand(
-            compile_command("rustyfi-rust")
+            compile_command("rustyfi")
                 .subcommand(satyrographos_command())
                 .subcommand(multicall_command())
                 .args_conflicts_with_subcommands(true)
                 .subcommand_negates_reqs(true),
         )
-        // `rustyfi` personality: compiler only.
-        .subcommand(compile_command("rustyfi"))
         // `satyrographos` personality: package manager only.
         .subcommand(satyrographos_command())
 }
@@ -156,7 +158,7 @@ fn compile_command(name: &'static str) -> Command {
                 .value_name("DIR")
                 .help(
                     "Override the compile-cache directory (default: \
-                     $XDG_CACHE_HOME/rustyfi-rust, then ~/.cache/rustyfi-rust, \
+                     $XDG_CACHE_HOME/rustyfi, then ~/.cache/rustyfi, \
                      then a temp-dir fallback).",
                 )
                 .value_parser(value_parser!(PathBuf)),

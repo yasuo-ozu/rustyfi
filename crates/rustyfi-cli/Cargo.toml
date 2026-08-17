@@ -7,7 +7,7 @@ license.workspace = true
 authors.workspace = true
 
 [[bin]]
-name = "rustyfi-rust"
+name = "rustyfi"
 path = "src/main.rs"
 
 [features]

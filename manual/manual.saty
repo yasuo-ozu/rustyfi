@@ -1,4 +1,4 @@
-% The rustyfi-rust manual, typeset BY rustyfi-rust.
+% The rustyfi manual, typeset BY rustyfi.
 %
 % This document is deliberately dogfood: it is written against the port's own
 % bundled packages (`lib-rustyfi/dist/packages/`) and built by the port's own
@@ -6,7 +6,7 @@
 % and `set-code-text-command`, `itemize`'s `+listing`, cross-references — is a
 % feature the port has to keep working in order to render its own documentation.
 %
-% Build:  rustyfi-rust manual/manual.saty -o manual/manual.pdf
+% Build:  rustyfi manual/manual.saty -o manual/manual.pdf
 
 @require: stdja
 @require: code
@@ -28,14 +28,14 @@ let document record content = StdJa.document record '<%
 in
 
 document (|
-  title = {rustyfi-rust};
+  title = {rustyfi};
   author = {A native Rust port of SATySFi};
   show-title = true;
   show-toc = true;
 |) '<
   +section{What this is}<
     +p{
-      `rustyfi-rust` compiles a SATySFi document (`.saty`) to PDF. It is a
+      `rustyfi` compiles a SATySFi document (`.saty`) to PDF. It is a
       native Rust port of SATySFi, tracking upstream v0.0.6, with partial
       support for the 0.1 language (`--target-version 0.1`).
     }
@@ -54,8 +54,8 @@ document (|
       `.pdf` extension.
     }
     +code(`
-$ rustyfi-rust document.saty
-$ rustyfi-rust document.saty -o out/document.pdf
+$ rustyfi document.saty
+$ rustyfi document.saty -o out/document.pdf
     `);
     +subsection{Finding packages and fonts}<
       +p{
@@ -117,9 +117,9 @@ $ rustyfi-rust document.saty -o out/document.pdf
       either a `rustyfi-package.toml` or an upstream-format `Satyristes`.
     }
     +code(`
-$ rustyfi-rust satyrographos install ./my-package
-$ rustyfi-rust satyrographos list
-$ rustyfi-rust satyrographos status
+$ rustyfi satyrographos install ./my-package
+$ rustyfi satyrographos list
+$ rustyfi satyrographos status
     `);
     +p{
       A `Satyristes` is read for its `(library ...)` blocks: `(name ...)`,
@@ -138,7 +138,7 @@ $ rustyfi-rust satyrographos status
     }
     +code(`
 $ python3 scripts/layout_fidelity.py \
-      --bin "$(pwd)/target/release/rustyfi-rust"
+      --bin "$(pwd)/target/release/rustyfi"
     `);
     +p{
       Comparison is by word bounding box, not by bytes: the port bundles the

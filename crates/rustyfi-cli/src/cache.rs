@@ -42,9 +42,9 @@ impl Cache {
     /// Resolve — and create — the cache directory. Precedence:
     ///
     /// 1. the `--cache-dir DIR` override, used verbatim;
-    /// 2. `$XDG_CACHE_HOME/rustyfi-rust`;
-    /// 3. `$HOME/.cache/rustyfi-rust`;
-    /// 4. a `rustyfi-rust-cache` directory under the system temp dir.
+    /// 2. `$XDG_CACHE_HOME/rustyfi`;
+    /// 3. `$HOME/.cache/rustyfi`;
+    /// 4. a `rustyfi-cache` directory under the system temp dir.
     ///
     /// Returns `None` (caching silently disabled) if the directory cannot be
     /// created, so a read-only or missing cache home never fails a compile.
@@ -174,7 +174,7 @@ fn hash_inputs<'a>(
     deps_lock: Option<&str>,
 ) -> Option<String> {
     let mut h = Sha256::new();
-    h.update(b"rustyfi-rust-compile-cache\x00v2\x00");
+    h.update(b"rustyfi-compile-cache\x00v2\x00");
     h.update(compiler_version.as_bytes());
     h.update(b"\x00");
     h.update(target.to_string().as_bytes());
@@ -223,16 +223,16 @@ fn resolve_dir(override_dir: Option<PathBuf>) -> PathBuf {
         return dir;
     }
     if let Some(xdg) = non_empty_env("XDG_CACHE_HOME") {
-        return PathBuf::from(xdg).join("rustyfi-rust");
+        return PathBuf::from(xdg).join("rustyfi");
     }
     if let Some(home) = non_empty_env("HOME") {
-        return PathBuf::from(home).join(".cache").join("rustyfi-rust");
+        return PathBuf::from(home).join(".cache").join("rustyfi");
     }
-    std::env::temp_dir().join("rustyfi-rust-cache")
+    std::env::temp_dir().join("rustyfi-cache")
 }
 
 /// `$VAR` if it is set and non-empty, else `None` (an empty `XDG_CACHE_HOME`
-/// must not resolve to a bare `/rustyfi-rust`).
+/// must not resolve to a bare `/rustyfi`).
 fn non_empty_env(var: &str) -> Option<std::ffi::OsString> {
     std::env::var_os(var).filter(|v| !v.is_empty())
 }

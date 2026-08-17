@@ -179,7 +179,7 @@ fn load_pdf_image_reads_the_media_box_into_intrinsic_dims() {
 fn load_pdf_image_reports_a_clean_error_for_a_missing_file() {
     let ast = app2(
         "load-pdf-image",
-        str_lit("/nonexistent/path/does-not-exist-rustyfi-rust.pdf"),
+        str_lit("/nonexistent/path/does-not-exist-rustyfi.pdf"),
         int_lit(1),
     );
     let env = primitives::base_env();

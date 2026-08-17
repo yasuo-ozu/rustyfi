@@ -32,7 +32,7 @@ REPO        := $(CURDIR)/..
 CARGO       ?= cargo
 CARGO_FLAGS ?= --release
 RUN         := $(CARGO) run $(CARGO_FLAGS) --manifest-path=$(REPO)/Cargo.toml \
-                   --bin rustyfi-rust --
+                   --bin rustyfi --
 LIB       := $(REPO)/lib-rustyfi
 XPATH_SRC := $(REPO)/scripts/layout_fidelity_corpus/xpath
 FONTS     := $(LIB)/dist/hash/fonts.rustyfi-hash

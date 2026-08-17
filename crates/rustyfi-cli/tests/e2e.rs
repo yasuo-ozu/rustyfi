@@ -127,7 +127,7 @@ fn fixture_compiles_to_valid_pdf_with_expected_text() {
     let bytes = compile_fixture();
     assert!(bytes.starts_with(b"%PDF-"), "not a PDF header");
 
-    let tmp = std::env::temp_dir().join(format!("rustyfi-rust-e2e-{}.pdf", std::process::id()));
+    let tmp = std::env::temp_dir().join(format!("rustyfi-e2e-{}.pdf", std::process::id()));
     std::fs::write(&tmp, &bytes).unwrap();
 
     let pdftotext = Command::new("pdftotext").arg(&tmp).arg("-").output();
@@ -193,7 +193,7 @@ fn phase2_fixture_compiles_and_renders_expected_text() {
     assert!(bytes.starts_with(b"%PDF-"), "not a PDF header");
 
     let tmp = std::env::temp_dir().join(format!(
-        "rustyfi-rust-e2e-phase2-{}.pdf",
+        "rustyfi-e2e-phase2-{}.pdf",
         std::process::id()
     ));
     std::fs::write(&tmp, &bytes).unwrap();
@@ -259,7 +259,7 @@ fn phase2b_fixture_compiles_and_renders_expected_text() {
     assert!(bytes.starts_with(b"%PDF-"), "not a PDF header");
 
     let tmp = std::env::temp_dir().join(format!(
-        "rustyfi-rust-e2e-phase2b-{}.pdf",
+        "rustyfi-e2e-phase2b-{}.pdf",
         std::process::id()
     ));
     std::fs::write(&tmp, &bytes).unwrap();
@@ -308,7 +308,7 @@ fn phase2b_fixture_compiles_and_renders_expected_text() {
 #[test]
 fn non_winansi_text_errors_politely() {
     let tmp = std::env::temp_dir().join(format!(
-        "rustyfi-rust-e2e-nonwinansi-{}.saty",
+        "rustyfi-e2e-nonwinansi-{}.saty",
         std::process::id()
     ));
     std::fs::write(
@@ -476,7 +476,7 @@ fn multifile_import_compiles_and_renders() {
     let doc = rustyfi_lang::compile_document_cst(&merged, &metrics).unwrap();
     let bytes = rustyfi_pdf::render_pdf(&doc.geometry, &doc.pages, &doc.images).unwrap();
 
-    let tmp = std::env::temp_dir().join(format!("rustyfi-rust-e2e-mf-{}.pdf", std::process::id()));
+    let tmp = std::env::temp_dir().join(format!("rustyfi-e2e-mf-{}.pdf", std::process::id()));
     std::fs::write(&tmp, &bytes).unwrap();
     if let Ok(out) = Command::new("pdftotext").arg(&tmp).arg("-").output() {
         if out.status.success() {
@@ -662,7 +662,7 @@ fn hook_page_fixture_fires_the_hook_and_renders_the_final_page_number() {
     );
 
     let tmp = std::env::temp_dir().join(format!(
-        "rustyfi-rust-e2e-hookpage-{}.pdf",
+        "rustyfi-e2e-hookpage-{}.pdf",
         std::process::id()
     ));
     std::fs::write(&tmp, &bytes).unwrap();
@@ -906,7 +906,7 @@ fn footnote_fixture_places_the_footnote_body_below_the_reference_and_renders_its
     assert!(bytes.starts_with(b"%PDF-"), "not a PDF header");
 
     let tmp = std::env::temp_dir().join(format!(
-        "rustyfi-rust-e2e-footnote-{}.pdf",
+        "rustyfi-e2e-footnote-{}.pdf",
         std::process::id()
     ));
     std::fs::write(&tmp, &bytes).unwrap();
@@ -981,7 +981,7 @@ fn v01_footnote_scheme_body_renders_through_page_break() {
         assert!(bytes.starts_with(b"%PDF-"), "not a PDF header");
 
         let tmp = std::env::temp_dir().join(format!(
-            "rustyfi-rust-e2e-v01-footnote-scheme-{}.pdf",
+            "rustyfi-e2e-v01-footnote-scheme-{}.pdf",
             std::process::id()
         ));
         std::fs::write(&tmp, &bytes).unwrap();
@@ -1193,7 +1193,7 @@ fn tier4_stdjabook_capstone_renders_to_extractable_text() {
         );
 
         let tmp =
-            std::env::temp_dir().join(format!("rustyfi-rust-e2e-tier4-{}.pdf", std::process::id()));
+            std::env::temp_dir().join(format!("rustyfi-e2e-tier4-{}.pdf", std::process::id()));
         std::fs::write(&tmp, &bytes).unwrap();
         let pdftotext = Command::new("pdftotext").arg(&tmp).arg("-").output();
         match pdftotext {
@@ -1256,7 +1256,7 @@ fn v01_slice1_document_renders_to_extractable_text() {
         assert!((doc.geometry.paper_width.0 - 595.276).abs() < 0.01);
 
         let tmp =
-            std::env::temp_dir().join(format!("rustyfi-rust-e2e-v01-{}.pdf", std::process::id()));
+            std::env::temp_dir().join(format!("rustyfi-e2e-v01-{}.pdf", std::process::id()));
         std::fs::write(&tmp, &bytes).unwrap();
         let pdftotext = Command::new("pdftotext").arg(&tmp).arg("-").output();
         match pdftotext {
@@ -1323,7 +1323,7 @@ fn v01_sealed_document_renders_to_extractable_text() {
         assert!(bytes.starts_with(b"%PDF-"));
 
         let tmp = std::env::temp_dir().join(format!(
-            "rustyfi-rust-e2e-v01-sealed-{}.pdf",
+            "rustyfi-e2e-v01-sealed-{}.pdf",
             std::process::id()
         ));
         std::fs::write(&tmp, &bytes).unwrap();
@@ -1386,7 +1386,7 @@ fn v01_math_document_renders_to_extractable_pdf() {
         assert!(bytes.starts_with(b"%PDF-"));
 
         let tmp = std::env::temp_dir().join(format!(
-            "rustyfi-rust-e2e-v01-math-{}.pdf",
+            "rustyfi-e2e-v01-math-{}.pdf",
             std::process::id()
         ));
         std::fs::write(&tmp, &bytes).unwrap();
@@ -1477,7 +1477,7 @@ fn v01_strings_document_renders_to_extractable_text_and_info_dict() {
         }
 
         let tmp = std::env::temp_dir().join(format!(
-            "rustyfi-rust-e2e-v01-strings-{}.pdf",
+            "rustyfi-e2e-v01-strings-{}.pdf",
             std::process::id()
         ));
         std::fs::write(&tmp, &bytes).unwrap();
@@ -1561,7 +1561,7 @@ fn v01_font_standin_renders_to_extractable_text() {
         );
 
         let tmp = std::env::temp_dir().join(format!(
-            "rustyfi-rust-e2e-v01-font-{}.pdf",
+            "rustyfi-e2e-v01-font-{}.pdf",
             std::process::id()
         ));
         std::fs::write(&tmp, &bytes).unwrap();
@@ -1719,7 +1719,7 @@ fn v01_math_full_package_renders_to_extractable_pdf() {
         assert!(bytes.starts_with(b"%PDF-"));
 
         let tmp = std::env::temp_dir().join(format!(
-            "rustyfi-rust-e2e-v01-math-full-{}.pdf",
+            "rustyfi-e2e-v01-math-full-{}.pdf",
             std::process::id()
         ));
         std::fs::write(&tmp, &bytes).unwrap();
@@ -1866,7 +1866,7 @@ fn v01_stdja_capstone_renders_to_extractable_text() {
         );
 
         let tmp = std::env::temp_dir().join(format!(
-            "rustyfi-rust-e2e-v01-stdja-{}.pdf",
+            "rustyfi-e2e-v01-stdja-{}.pdf",
             std::process::id()
         ));
         std::fs::write(&tmp, &bytes).unwrap();

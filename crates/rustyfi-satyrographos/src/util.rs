@@ -51,7 +51,7 @@ pub(crate) fn file_name(path: &Path) -> String {
 /// a bare `.cache`) — shared by [`crate::registry::RegistryOptions`]'s
 /// git-index cache and [`crate::cache`]'s content-addressed archive cache
 /// (phase 7d S2), so both fall back to sibling directories under the same
-/// `<base>/rustyfi-rust/` root rather than each hand-rolling the XDG lookup.
+/// `<base>/rustyfi/` root rather than each hand-rolling the XDG lookup.
 pub(crate) fn xdg_cache_base() -> PathBuf {
     std::env::var_os("XDG_CACHE_HOME")
         .map(PathBuf::from)

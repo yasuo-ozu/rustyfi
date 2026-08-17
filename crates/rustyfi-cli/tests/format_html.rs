@@ -1,4 +1,4 @@
-//! `--format html` end-to-end, driven through the *built* `rustyfi-rust`
+//! `--format html` end-to-end, driven through the *built* `rustyfi`
 //! binary (`docs/plans/design-html-output.md` §Verification, "Slice-1 e2e"),
 //! mirroring `tests/cache.rs`'s process-spawn harness style.
 
@@ -7,7 +7,7 @@ use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 fn bin() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_rustyfi-rust"))
+    PathBuf::from(env!("CARGO_BIN_EXE_rustyfi"))
 }
 
 /// This repo's `lib-rustyfi/`, resolved from the crate manifest dir exactly
@@ -63,7 +63,7 @@ fn format_html_writes_a_page_div_and_a_word_span() {
         .args(["--cache-dir".as_ref(), work.join("cache").as_os_str()])
         .args(["--format", "html"])
         .output()
-        .expect("spawn rustyfi-rust");
+        .expect("spawn rustyfi");
     assert_ok(&result, "compile --format html");
 
     let html = std::fs::read_to_string(&out).expect("--format html must write the output file");
@@ -126,7 +126,7 @@ fn default_format_is_still_pdf() {
         .args(["--lib-root".as_ref(), repo_lib_root().as_os_str()])
         .args(["--cache-dir".as_ref(), work.join("cache").as_os_str()])
         .output()
-        .expect("spawn rustyfi-rust");
+        .expect("spawn rustyfi");
     assert_ok(&result, "compile with no --format");
 
     let bytes = std::fs::read(&out).expect("default format must write the output file");

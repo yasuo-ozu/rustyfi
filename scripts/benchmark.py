@@ -76,7 +76,7 @@ def default_bin() -> Path:
     says nothing about the port's actual performance; comparing it against an
     optimised OCaml binary would not be a measurement, it would be a libel.
     """
-    return REPO / "target" / "release" / "rustyfi-rust"
+    return REPO / "target" / "release" / "rustyfi"
 
 
 def find_gnu_time() -> str | None:
@@ -267,7 +267,7 @@ def main() -> int:
     )
     ap.add_argument("--doc", action="append", default=[], help="only this doc (repeatable)")
     ap.add_argument("--runs", type=int, default=3, help="measured runs per configuration")
-    ap.add_argument("--bin", type=Path, default=default_bin(), help="the rustyfi-rust binary")
+    ap.add_argument("--bin", type=Path, default=default_bin(), help="the rustyfi binary")
     ap.add_argument("--satysfi", default=None, help="the original SATySFi binary (default: PATH)")
     ap.add_argument("--no-satysfi", action="store_true", help="port-only; skip upstream entirely")
     ap.add_argument("--timeout", type=int, default=900, help="per-run timeout (s)")
@@ -283,7 +283,7 @@ def main() -> int:
     if not args.bin.exists():
         print(
             f"port binary not built at {args.bin}\n"
-            f"  cargo build --release --bin rustyfi-rust",
+            f"  cargo build --release --bin rustyfi",
             file=sys.stderr,
         )
         return 2
@@ -315,7 +315,7 @@ def main() -> int:
         if bytecomp:
             configs.append(("satysfi-bytecomp", "sfi"))
 
-    print(f"# rustyfi-rust vs SATySFi — {time.strftime('%Y-%m-%d %H:%M')}")
+    print(f"# rustyfi vs SATySFi — {time.strftime('%Y-%m-%d %H:%M')}")
     print()
     print(f"- host: {platform.platform()}, {os.cpu_count()} cpus, "
           f"load {', '.join(f'{x:.2f}' for x in os.getloadavg())}")

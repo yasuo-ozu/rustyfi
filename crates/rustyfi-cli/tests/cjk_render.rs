@@ -318,7 +318,7 @@ fn cjk_sentence_renders_real_glyphs_end_to_end() {
         eprintln!("skipping pdftotext round-trip: pdftotext not on PATH");
         return;
     }
-    let tmp = std::env::temp_dir().join(format!("rustyfi-rust-cjk-{}.pdf", std::process::id()));
+    let tmp = std::env::temp_dir().join(format!("rustyfi-cjk-{}.pdf", std::process::id()));
     std::fs::write(&tmp, &bytes).unwrap();
     let out = Command::new("pdftotext")
         .arg(&tmp)

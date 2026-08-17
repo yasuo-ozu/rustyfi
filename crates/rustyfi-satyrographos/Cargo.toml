@@ -1,6 +1,6 @@
 [package]
 name = "rustyfi-satyrographos"
-description = "Satyrographos-style package-manager logic for the rustyfi-rust port: manifest parsing, receipts, and atomic install/uninstall transactions (clap-free library)"
+description = "Satyrographos-style package-manager logic for the rustyfi port: manifest parsing, receipts, and atomic install/uninstall transactions (clap-free library)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

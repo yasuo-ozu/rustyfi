@@ -109,7 +109,7 @@ fn load_image_decodes_the_fixture_and_records_its_pixel_dimensions() {
 fn load_image_reports_a_clean_error_for_a_missing_file() {
     let ast = app1(
         var("load-image"),
-        str_lit("/nonexistent/path/does-not-exist-rustyfi-rust.png"),
+        str_lit("/nonexistent/path/does-not-exist-rustyfi.png"),
     );
     let env = primitives::base_env();
     let mono = Mono;

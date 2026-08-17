@@ -18,7 +18,7 @@
 //! 1. [`RegistryOptions::archive_cache_dir`] (highest precedence — set by a
 //!    caller/test directly), else
 //! 2. `$RUSTYFI_ARCHIVE_CACHE`, else
-//! 3. `$XDG_CACHE_HOME/rustyfi-rust/archives/` (else `$HOME/.cache/…`, else
+//! 3. `$XDG_CACHE_HOME/rustyfi/archives/` (else `$HOME/.cache/…`, else
 //!    `.cache/…`).
 //!
 //! ## Fetch flow ([`get_or_fetch`])
@@ -58,7 +58,7 @@ pub fn cache_root(opts: &RegistryOptions) -> PathBuf {
             return PathBuf::from(dir);
         }
     }
-    util::xdg_cache_base().join("rustyfi-rust").join("archives")
+    util::xdg_cache_base().join("rustyfi").join("archives")
 }
 
 /// The on-disk path a `sha256`-keyed archive would live at under `opts`'s

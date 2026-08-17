@@ -5,12 +5,12 @@
 ;; This port PARSES AND IGNORES `(libraryDoc ...)` — its Satyristes reader only
 ;; consumes `(library ...)` — so the block below is carried for fidelity with
 ;; upstream tooling, and the `(library ...)` beside it is what
-;; `rustyfi-rust satyrographos install ./manual` actually acts on.
+;; `rustyfi satyrographos install ./manual` actually acts on.
 ;;
 ;; Build the PDF first; the install copies it, it does not run the typesetter:
 ;;
-;;   rustyfi-rust manual/manual.saty -o manual/manual.pdf
-;;   rustyfi-rust satyrographos install ./manual
+;;   rustyfi manual/manual.saty -o manual/manual.pdf
+;;   rustyfi satyrographos install ./manual
 ;;
 ;; `logo.saty` sits here for the same reason `manual.saty` does, and both are
 ;; built by the Makefile beside them, which assembles the lib-root the logo
@@ -36,7 +36,7 @@
   (name "rustyfi-manual-doc")
   (version "0.1.0")
   (build
-    ((rustyfi-rust "manual.saty" "-o" "manual.pdf")))
+    ((rustyfi "manual.saty" "-o" "manual.pdf")))
   (sources
     ((doc "rustyfi-manual.pdf" "manual.pdf")))
   (dependencies
@@ -46,7 +46,7 @@
   (name "rustyfi-logo-doc")
   (version "0.1.0")
   (build
-    ((rustyfi-rust "logo.saty" "-o" "logo.pdf")))
+    ((rustyfi "logo.saty" "-o" "logo.pdf")))
   (sources
     ((doc "rustyfi-logo.pdf" "logo.pdf")))
   (dependencies

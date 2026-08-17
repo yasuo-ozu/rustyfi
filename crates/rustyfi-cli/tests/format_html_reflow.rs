@@ -1,5 +1,5 @@
 //! `--format html-reflow` end-to-end, driven through the *built*
-//! `rustyfi-rust` binary (`docs/plans/design-reflowable-html.md` §5 "CLI"),
+//! `rustyfi` binary (`docs/plans/design-reflowable-html.md` §5 "CLI"),
 //! mirroring `tests/format_html.rs`'s process-spawn harness style for the
 //! faithful `--format html`.
 //!
@@ -15,7 +15,7 @@ use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 fn bin() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_rustyfi-rust"))
+    PathBuf::from(env!("CARGO_BIN_EXE_rustyfi"))
 }
 
 fn repo_lib_root() -> PathBuf {
@@ -98,7 +98,7 @@ fn compile(fixture: &Path, work: &Path, fmt: &str, out_ext: &str) -> PathBuf {
         .args(["--cache-dir".as_ref(), work.join("cache").as_os_str()])
         .args(["--format", fmt])
         .output()
-        .expect("spawn rustyfi-rust");
+        .expect("spawn rustyfi");
     assert_ok(&result, &format!("compile --format {fmt}"));
     out
 }
@@ -120,7 +120,7 @@ fn compile_v01(fixture: &Path, work: &Path, fmt: &str, out_ext: &str) -> PathBuf
         .args(["--format", fmt])
         .args(["--target-version", "0.1"])
         .output()
-        .expect("spawn rustyfi-rust");
+        .expect("spawn rustyfi");
     assert_ok(
         &result,
         &format!("compile --format {fmt} --target-version 0.1"),

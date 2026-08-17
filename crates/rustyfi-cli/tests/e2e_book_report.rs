@@ -121,7 +121,7 @@ fn v01_stdjabook_capstone_renders_to_extractable_text() {
         );
 
         let tmp = std::env::temp_dir().join(format!(
-            "rustyfi-rust-e2e-v01-stdja-book-{}.pdf",
+            "rustyfi-e2e-v01-stdja-book-{}.pdf",
             std::process::id()
         ));
         std::fs::write(&tmp, &bytes).unwrap();
@@ -238,7 +238,7 @@ fn v01_stdjareport_capstone_renders_to_extractable_text() {
         );
 
         let tmp = std::env::temp_dir().join(format!(
-            "rustyfi-rust-e2e-v01-stdja-report-{}.pdf",
+            "rustyfi-e2e-v01-stdja-report-{}.pdf",
             std::process::id()
         ));
         std::fs::write(&tmp, &bytes).unwrap();

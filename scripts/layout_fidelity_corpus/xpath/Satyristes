@@ -1,5 +1,5 @@
 ;; Satyrographos manifest for the vendored `satysfi-xpath` sources, so the
-;; package can be INSTALLED into a lib-root (`rustyfi-rust satyrographos
+;; package can be INSTALLED into a lib-root (`rustyfi satyrographos
 ;; install .`) instead of being reached by a relative `@import:` into this
 ;; corpus tree. `(packageDir "xpath")` publishes `xpath/*.satyh` as
 ;; `dist/packages/xpath/`, which is what makes `@require: xpath/xpath` resolve.

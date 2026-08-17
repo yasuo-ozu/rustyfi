@@ -196,7 +196,7 @@ fn xver_capstone_renders_to_extractable_text() {
         );
 
         let tmp = std::env::temp_dir().join(format!(
-            "rustyfi-rust-e2e-xver-capstone-{}.pdf",
+            "rustyfi-e2e-xver-capstone-{}.pdf",
             std::process::id()
         ));
         std::fs::write(&tmp, &bytes).unwrap();

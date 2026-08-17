@@ -46,7 +46,7 @@ What works:
   CID/Type0 embedding with ToUnicode (`TtfFontStore`/`render_pdf_ttf`) for
   real fonts (CLI selection pending).
 - **Chimera CLI**: one multicall binary dispatching on argv[0] —
-  `rustyfi-rust` (compile + subcommands), `rustyfi` (compile), and
+  `rustyfi` (compile + subcommands), `rustyfi` (compile), and
   `satyrographos` (package manager, plan phases 1–4 all implemented:
   `install`/`uninstall`/`list`/`status`/`search`/`update`; local paths,
   tar.gz archives, upstream `Satyristes` packages via a built-in
@@ -87,7 +87,7 @@ crates/
   rustyfi-loader/    @require/@import resolution, dependency graph, load order
   rustyfi-pdf/       pdf-writer backend + base-14 metrics
   rustyfi-satyrographos/  package manager: manifest/receipts/atomic install
-  rustyfi-cli/       chimera binary: rustyfi-rust / rustyfi / satyrographos
+  rustyfi-cli/       chimera binary: rustyfi / rustyfi / satyrographos
 ```
 
 The `syan` parser framework is VENDORED as a git submodule at `vendor/syan2`
@@ -133,7 +133,7 @@ same vendored corpus `scripts/layout_fidelity.py` uses for layout fidelity, so
 the two can be read together:
 
 ```console
-$ cargo build --release --bin rustyfi-rust
+$ cargo build --release --bin rustyfi
 $ scripts/benchmark.py --runs 3 --json bench.json
 ```
 

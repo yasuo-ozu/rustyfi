@@ -177,7 +177,7 @@ fn root_opts(root: &Path) -> RootOptions {
 /// The archive cache (`crate::cache`) is content-addressed by sha256 ALONE
 /// (`<cache_root>/<sha256>.tar.gz`, independent of package name/url), and when
 /// `RegistryOptions::archive_cache_dir` is `None` it falls back to a single
-/// machine-global root (`$XDG_CACHE_HOME/rustyfi-rust/archives`, else
+/// machine-global root (`$XDG_CACHE_HOME/rustyfi/archives`, else
 /// `$HOME/.cache/…`). Every `http(s)://` fetch goes through that cache, so two
 /// installs of a byte-identical fixture tarball — as several of these tests
 /// build (`great-package` / `"let great = 1\n"` ⇒ same bytes ⇒ same sha ⇒ same

@@ -1,4 +1,4 @@
-//! Satyrographos-style package management for the `rustyfi-rust` port.
+//! Satyrographos-style package management for the `rustyfi` port.
 //!
 //! This crate is the clap-free library half of the chimera CLI (see the
 //! plan document `docs/chimera-satyrographos-plan.md`): given an options

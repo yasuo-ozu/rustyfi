@@ -8,10 +8,10 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-/// The built `rustyfi-rust` binary (cargo provides this env var to the
+/// The built `rustyfi` binary (cargo provides this env var to the
 /// integration tests of the crate that defines the `[[bin]]`).
 fn bin() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_rustyfi-rust"))
+    PathBuf::from(env!("CARGO_BIN_EXE_rustyfi"))
 }
 
 fn tmpdir(tag: &str) -> PathBuf {
@@ -43,7 +43,7 @@ fn run_as(arg0: &str, args: &[&str]) -> std::process::Output {
 
 #[cfg(unix)]
 #[test]
-fn argv0_rustyfi_is_compile_personality() {
+fn argv0_rustyfi_is_compiler_and_package_manager() {
     let out = run_as("rustyfi", &["--help"]);
     assert!(out.status.success(), "rustyfi --help should succeed");
     let stdout = String::from_utf8_lossy(&out.stdout);
@@ -51,10 +51,13 @@ fn argv0_rustyfi_is_compile_personality() {
         stdout.contains("Compile a SATySFi"),
         "rustyfi --help should describe the compiler:\n{stdout}"
     );
-    // The compiler personality has no `satyrographos` subcommand.
+    // Renaming the binary merged the two personalities. There used to be a
+    // compile-only `rustyfi` beside a full `rustyfi-rust`, and this test
+    // asserted the compiler help did NOT mention the package manager; with one
+    // name there is one personality, and it carries both.
     assert!(
-        !stdout.contains("satyrographos"),
-        "compiler help leaked pkg-mgr:\n{stdout}"
+        stdout.contains("satyrographos"),
+        "rustyfi --help should offer the package manager:\n{stdout}"
     );
 }
 
@@ -76,12 +79,12 @@ fn argv0_satyrographos_is_package_manager() {
 
 #[cfg(unix)]
 #[test]
-fn rustyfi_rust_satyrographos_subcommand_form() {
+fn satyrographos_subcommand_form() {
     // The same package-manager entry point, reached as the nested subcommand
-    // under the `rustyfi-rust` personality.
+    // under the `rustyfi` personality.
     let root = tmpdir("sg-subcommand");
     let out = run_as(
-        "rustyfi-rust",
+        "rustyfi",
         &["satyrographos", "list", "--dest", root.to_str().unwrap()],
     );
     assert!(out.status.success());
@@ -90,8 +93,8 @@ fn rustyfi_rust_satyrographos_subcommand_form() {
 
 #[cfg(unix)]
 #[test]
-fn bare_rustyfi_rust_without_input_is_usage_error() {
-    let out = run_as("rustyfi-rust", &[]);
+fn bare_rustyfi_without_input_is_usage_error() {
+    let out = run_as("rustyfi", &[]);
     assert!(!out.status.success(), "bare invocation must fail");
     assert_eq!(out.status.code(), Some(2), "clap usage error is exit 2");
 }

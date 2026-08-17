@@ -1,5 +1,5 @@
 //! Text-rendering plan, Slice 1: CLI font wiring tests. Drives the *built*
-//! `rustyfi-rust` binary (like `tests/cache.rs`/`tests/dispatch.rs`), not the
+//! `rustyfi` binary (like `tests/cache.rs`/`tests/dispatch.rs`), not the
 //! library directly, because the thing under test is the CLI-level wiring
 //! itself — `--font-dir` discovery, the `cmd_compile` branch between
 //! `render_pdf_ttf` and the base-14 `render_pdf`, and the compile-cache fold
@@ -15,10 +15,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-/// The built `rustyfi-rust` binary (cargo provides this env var to the
+/// The built `rustyfi` binary (cargo provides this env var to the
 /// integration tests of the crate that defines the `[[bin]]`).
 fn bin() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_rustyfi-rust"))
+    PathBuf::from(env!("CARGO_BIN_EXE_rustyfi"))
 }
 
 /// This repo's `lib-rustyfi/`, resolved from the crate manifest dir exactly
@@ -216,7 +216,7 @@ fn real_font_fixture_renders_through_ttf_path_and_roundtrips() {
         .args(["--font-dir".as_ref(), font_root.as_os_str()])
         .args(["--no-cache"])
         .output()
-        .expect("spawn rustyfi-rust");
+        .expect("spawn rustyfi");
     assert_ok(&output, "real-font compile");
 
     let pdf_bytes = std::fs::read(&out).expect("read output pdf");
@@ -286,7 +286,7 @@ fn no_font_config_matches_base14_byte_for_byte() {
         .args(["--lib-root".as_ref(), font_free_root.as_os_str()])
         .args(["--no-cache"])
         .output()
-        .expect("spawn rustyfi-rust");
+        .expect("spawn rustyfi");
     assert_ok(&output, "no-font-config compile");
     let via_cli = std::fs::read(&out).expect("read cli output");
     assert!(via_cli.starts_with(b"%PDF-"));
@@ -356,7 +356,7 @@ fn changing_font_config_invalidates_the_compile_cache() {
         .args(["--lib-root".as_ref(), font_free_root.as_os_str()])
         .args(["--cache-dir".as_ref(), cache_dir.as_os_str()])
         .output()
-        .expect("spawn rustyfi-rust (first)");
+        .expect("spawn rustyfi (first)");
     assert_ok(&first, "first (base-14) run");
     assert!(!was_cached(&first), "first run must be a miss");
     let base14_bytes = std::fs::read(&out).expect("read first output");
@@ -372,7 +372,7 @@ fn changing_font_config_invalidates_the_compile_cache() {
         .args(["--cache-dir".as_ref(), cache_dir.as_os_str()])
         .args(["--font-dir".as_ref(), font_root.as_os_str()])
         .output()
-        .expect("spawn rustyfi-rust (second)");
+        .expect("spawn rustyfi (second)");
     assert_ok(&second, "second (font-configured) run");
     assert!(
         !was_cached(&second),
@@ -392,7 +392,7 @@ fn changing_font_config_invalidates_the_compile_cache() {
         .args(["--cache-dir".as_ref(), cache_dir.as_os_str()])
         .args(["--font-dir".as_ref(), font_root.as_os_str()])
         .output()
-        .expect("spawn rustyfi-rust (third)");
+        .expect("spawn rustyfi (third)");
     assert_ok(&third, "third (font-configured, warm) run");
     assert!(
         was_cached(&third),
@@ -424,7 +424,7 @@ fn font_flag_is_a_config_less_one_off() {
         .args(["--font".as_ref(), font_path.as_os_str()])
         .args(["--no-cache"])
         .output()
-        .expect("spawn rustyfi-rust");
+        .expect("spawn rustyfi");
     assert_ok(&output, "--font one-off compile");
 
     let pdf_bytes = std::fs::read(&out).expect("read output");
@@ -455,7 +455,7 @@ fn font_bold_without_font_is_a_usage_error() {
         .args(["--lib-root".as_ref(), lib_root().as_os_str()])
         .args(["--font-bold".as_ref(), std::ffi::OsStr::new("whatever.ttf")])
         .output()
-        .expect("spawn rustyfi-rust");
+        .expect("spawn rustyfi");
     assert!(!output.status.success());
     assert_eq!(output.status.code(), Some(2), "clap usage error is exit 2");
     std::fs::remove_dir_all(&work).ok();

@@ -361,7 +361,9 @@ dependencies = [
 
 [[package]]
 name = "decycle"
-version = "0.5.0"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ebb9b12a96377519443cee9d24ba4581d0908d42916e71e98e59dcb87b85275b"
 dependencies = [
  "decycle-impl",
  "decycle-macro",
@@ -369,12 +371,13 @@ dependencies = [
 
 [[package]]
 name = "decycle-impl"
-version = "0.5.0"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c71dc5eab0636057a15230d68334858f50800ca653d43865f11edc5064b03e73"
 dependencies = [
  "proc-macro-error",
  "proc-macro2",
- "quote",
- "safegraph",
+ "safegraph 0.2.0",
  "syn 2.0.118",
  "template-quote",
  "type-leak 0.7.0",
@@ -382,7 +385,9 @@ dependencies = [
 
 [[package]]
 name = "decycle-macro"
-version = "0.5.0"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbd18574ae786a0d6a660eacad4f4794d5649de47610fa61378dbc6fbbd5c3f4"
 dependencies = [
  "decycle-impl",
  "proc-macro-error",
@@ -1600,7 +1605,7 @@ name = "rustyfi-loader"
 version = "0.1.0"
 dependencies = [
  "rustyfi-syntax",
- "safegraph",
+ "safegraph 0.1.0",
  "serde",
  "serde_yaml",
  "thiserror",
@@ -1659,8 +1664,19 @@ checksum = "56044873444060fab8782ef28e0af17f3d60787c5b9b5007ddac142a6e5172cd"
 dependencies = [
  "num-traits",
  "rustversion",
- "safegraph-macros",
+ "safegraph-macros 0.1.0",
  "sprs",
+]
+
+[[package]]
+name = "safegraph"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5de6e48937dd0a22b63d4ca01f0b9036953c6d85a849b218b5e239e9ab78fc4f"
+dependencies = [
+ "num-traits",
+ "safegraph-macros 0.2.0",
+ "unicode-width",
 ]
 
 [[package]]
@@ -1668,6 +1684,18 @@ name = "safegraph-macros"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7da5d196d2d04a84817f1f5c9c8cd7e4a8cacf007d07797d82616d04affcdf20"
+dependencies = [
+ "proc-macro-error",
+ "proc-macro2",
+ "syn 2.0.118",
+ "template-quote",
+]
+
+[[package]]
+name = "safegraph-macros"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "16f7518b896670ea416590d056cf4a67b0b80804d00afc60d6351672fa7a321f"
 dependencies = [
  "proc-macro-error",
  "proc-macro2",
@@ -1877,12 +1905,12 @@ dependencies = [
 name = "syan-macro"
 version = "0.1.0"
 dependencies = [
+ "decycle",
  "derive-syn-parse 0.2.0",
  "itertools 0.14.0",
  "proc-macro-error",
  "proc-macro2",
  "quote",
- "safegraph",
  "syn 2.0.118",
  "template-quote",
  "type-leak 0.2.0",
@@ -2191,7 +2219,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "04c9c88b0002a966db4aa7e14eb108d0bffd3dc73de687c6da954817c5938e6e"
 dependencies = [
  "proc-macro2",
- "safegraph",
+ "safegraph 0.1.0",
  "syn 2.0.118",
  "template-quote",
 ]
@@ -2252,6 +2280,12 @@ name = "unicode-segmentation"
 version = "1.13.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c6f5d3c3b1bf09027a88a6bc961fc00497d651009560b5463668dc81b0fa87a8"
+
+[[package]]
+name = "unicode-width"
+version = "0.1.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7dd6e30e90baa6f72411720665d41d89b9a3d039dc45b8faea1ddd07f617f6af"
 
 [[package]]
 name = "unsafe-libyaml"

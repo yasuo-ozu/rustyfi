@@ -2,6 +2,7 @@
 //! struct/enum parse plus a token-level unparse round-trip.
 
 use rustyfi_syntax::leaf::*;
+use rustyfi_syntax::stream::AtomStream;
 use rustyfi_syntax::token::Atom;
 use rustyfi_syntax::{lex, Span};
 use syan::parse::{Parse, Unparse};
@@ -24,11 +25,12 @@ enum Atomic {
     Paren(ParenGroup<Box<IntTok>>),
 }
 
-// `Vec<Atom>` is itself a parse source now (syan's `IntoParseStream for Vec`).
-fn atoms(src: &str) -> Vec<Atom> {
+// syan has no `IntoParseStream for Vec<_>`, so the token vector is wrapped in
+// the crate's own `AtomStream` (which also carries the failure high-water mark).
+fn atoms(src: &str) -> AtomStream {
     let mut v = lex(src).unwrap();
     v.pop(); // drop Eoi for these fragment tests
-    v
+    AtomStream::new(v)
 }
 
 #[test]
@@ -54,7 +56,7 @@ fn derived_enum_backtracks() {
 fn unparse_round_trips_tokens() {
     let mut orig = lex("let answer = 42").unwrap();
     orig.pop();
-    let stmt: LetStmt = Parse::parse(orig.clone()).unwrap();
+    let stmt: LetStmt = Parse::parse(AtomStream::new(orig.clone())).unwrap();
     let mut out = Vec::<Atom>::new();
     stmt.unparse(&mut (&mut out)).unwrap();
     let orig_toks: Vec<_> = orig.into_iter().map(|a| a.slot).collect();
@@ -65,12 +67,12 @@ fn unparse_round_trips_tokens() {
 #[test]
 fn parse_error_carries_failure_span() {
     // `let answer 42` — the parser reaches the missing `=`.
-    let res: Result<LetStmt, _> = Parse::parse(lex("let answer 42").unwrap());
-    let err = res.unwrap_err();
-    // syan's span-carrying `ParseError` yields the failure span directly
-    // (replacing the old high-water mark). The input is single-line, so the
-    // recovered span sits on line 1.
-    let span = err.span_of::<Span>().expect("parse error carries a span");
+    let mut stream = AtomStream::new(lex("let answer 42").unwrap());
+    let res: Result<LetStmt, _> = Parse::parse(&mut stream);
+    res.unwrap_err();
+    // syan's `ParseError` carries no span, so the failure position is the
+    // stream's high-water mark. The input is single-line, so it sits on line 1.
+    let span: Span = stream.furthest();
     assert_eq!(span.start.line, 1);
 }
 

@@ -999,7 +999,7 @@ pub mod ast {
         /// the transliterated `v01-mini.satyh`'s `(command \math)`.
         Command { kw: CommandTok, name: AnyHorzCmdTok },
         /// `()`
-        Unit { paren: ParenGroup<()> },
+        Unit { paren: UnitParen },
         /// `( expr )` or `( expr, expr, … )` (the latter elaborates to a
         /// tuple).
         Paren {
@@ -1208,7 +1208,7 @@ pub mod ast {
         Wild(WildcardTok),
         Var(VarTok),
         /// `()`
-        Unit { paren: ParenGroup<()> },
+        Unit { paren: UnitParen },
         /// `( pat )` or `( pat, pat, … )` (the latter elaborates to a tuple
         /// pattern; already `,`-separated in 0.0.6, unchanged).
         Paren {
@@ -1399,17 +1399,22 @@ pub mod ast {
     #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
     pub enum TypeApp {
         /// `inline [τ, …]` (Sub-slice 2d-2) — see the enum doc comment.
+        //
+        // NOTE the group fields are `ilist`/`blist`/`mlist`, not three `list`s:
+        // syan names a group substruct after (group-field name, ENUM name) with
+        // no variant component, so same-named groups in one enum collide
+        // (E0428 + E0119).
         InlineCmdTy {
             kw: KwInline,
-            list: ListGroup<()>,
-            #[group(self.list)]
+            ilist: ListGroup<()>,
+            #[group(self.ilist)]
             args: Vec<TypeCmdArgItemV1>,
         },
         /// `block [τ, …]` (Sub-slice 2d-2) — see the enum doc comment.
         BlockCmdTy {
             kw: KwBlock,
-            list: ListGroup<()>,
-            #[group(self.list)]
+            blist: ListGroup<()>,
+            #[group(self.blist)]
             args: Vec<TypeCmdArgItemV1>,
         },
         /// `math [τ, …]` (math-package completion M1; upstream
@@ -1424,8 +1429,8 @@ pub mod ast {
         /// (inc3a) work in `math […]` rows with zero extra grammar.
         MathCmdTy {
             kw: KwMath,
-            list: ListGroup<()>,
-            #[group(self.list)]
+            mlist: ListGroup<()>,
+            #[group(self.mlist)]
             args: Vec<TypeCmdArgItemV1>,
         },
         /// `M.t τ…` (Sub-slice 2d-2) — see the enum doc comment. Mirrors
@@ -1895,8 +1900,9 @@ pub fn parse_file_v1(src: &str) -> Result<FileV1, crate::cst::ParseFileError> {
             span: e.span,
             message: e.msg,
         })?;
-    <FileV1 as Parse<_>>::parse(atoms).map_err(|e| crate::cst::ParseFileError {
-        span: e.span_of::<Span>().unwrap_or_default(),
+    let mut stream = crate::stream::AtomStream::new(atoms);
+    <FileV1 as Parse<_>>::parse(&mut stream).map_err(|e| crate::cst::ParseFileError {
+        span: stream.furthest(),
         message: render_parse_error(&e),
     })
 }

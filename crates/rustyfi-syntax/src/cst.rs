@@ -1049,7 +1049,7 @@ pub mod ast {
         /// alternative then (see `class-signature-lang-gaps.md` R1).
         Command { kw: CommandTok, name: AnyHorzCmdTok },
         /// `()`
-        Unit { paren: ParenGroup<()> },
+        Unit { paren: UnitParen },
         /// `( expr )` or `( expr, expr, … )` (the latter elaborates to a
         /// tuple).
         Paren {
@@ -1323,7 +1323,7 @@ pub mod ast {
         Wild(WildcardTok),
         Var(VarTok),
         /// `()`
-        Unit { paren: ParenGroup<()> },
+        Unit { paren: UnitParen },
         /// `( pat )` or `( pat, pat, … )` (the latter elaborates to a tuple
         /// pattern).
         Paren {
@@ -1576,9 +1576,13 @@ pub mod ast {
         /// produce this variant — no elaborate/typecheck-time version gate
         /// is needed here (contrast [`TypeExpr::OptRowFun`], which IS
         /// reachable from 0.0.6 lexing and so DOES need one).
+        // NOTE the group field is `orec`, not `rec`: syan names a group
+        // substruct after (group-field name, ENUM name) with no variant
+        // component, so a second `rec` group in `TypeAtom` collides with
+        // `Record`'s (E0428 + E0119, and the survivor has the wrong fields).
         RecordOpen {
-            rec: RecordGroup<()>,
-            #[group(self.rec)]
+            orec: RecordGroup<()>,
+            #[group(self.orec)]
             inner: CstRecordOpenInner,
         },
     }
@@ -1826,10 +1830,11 @@ pub fn parse_file(src: &str) -> Result<File, ParseFileError> {
         span: e.span,
         message: e.msg,
     })?;
-    // `Vec<Atom>` is directly a parse source (syan's `IntoParseStream for Vec`),
-    // and the failure span comes from the error itself rather than a high-water mark.
-    <File as Parse<_>>::parse(atoms).map_err(|e| ParseFileError {
-        span: e.span_of::<Span>().unwrap_or_default(),
+    // syan's `ParseError` carries no span, so the failure position is the
+    // stream's high-water mark (see `stream::AtomStream`).
+    let mut stream = crate::stream::AtomStream::new(atoms);
+    <File as Parse<_>>::parse(&mut stream).map_err(|e| ParseFileError {
+        span: stream.furthest(),
         message: render_parse_error(&e),
     })
 }

@@ -1264,7 +1264,7 @@ fn lower_type_app(
     tyenv: &TypeNameEnv,
 ) -> Result<cst::ast::TypeApp, LowerError> {
     match a {
-        ast_v1::TypeApp::InlineCmdTy { kw, list, args } => Ok(cst::ast::TypeApp {
+        ast_v1::TypeApp::InlineCmdTy { kw, ilist: list, args } => Ok(cst::ast::TypeApp {
             head: cst::ast::TypeAtom::Cmd {
                 list: list.clone(),
                 args: lower_type_cmd_args(args, tyenv)?,
@@ -1272,7 +1272,7 @@ fn lower_type_app(
             },
             rest: Vec::new(),
         }),
-        ast_v1::TypeApp::BlockCmdTy { kw, list, args } => Ok(cst::ast::TypeApp {
+        ast_v1::TypeApp::BlockCmdTy { kw, blist: list, args } => Ok(cst::ast::TypeApp {
             head: cst::ast::TypeAtom::Cmd {
                 list: list.clone(),
                 args: lower_type_cmd_args(args, tyenv)?,
@@ -1284,7 +1284,7 @@ fn lower_type_app(
         // arm in `typecheck.rs` already produces `MonoType::MathCmd` for
         // `CmdTypeKind::Math` and `unify.rs` already dispatches it — no
         // typecheck/unify change needed for the head itself.
-        ast_v1::TypeApp::MathCmdTy { kw, list, args } => Ok(cst::ast::TypeApp {
+        ast_v1::TypeApp::MathCmdTy { kw, mlist: list, args } => Ok(cst::ast::TypeApp {
             head: cst::ast::TypeAtom::Cmd {
                 list: list.clone(),
                 args: lower_type_cmd_args(args, tyenv)?,
@@ -1428,7 +1428,7 @@ fn lower_type_atom(
         ast_v1::TypeAtom::Record { rec, inner } => {
             let tail = inner.row_tail.as_ref().expect("guarded by the arm above");
             cst::ast::TypeAtom::RecordOpen {
-                rec: rec.clone(),
+                orec: rec.clone(),
                 inner: cst::ast::CstRecordOpenInner {
                     fields: inner
                         .fields

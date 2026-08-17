@@ -3502,8 +3502,8 @@ fn rename_type_atom(
         // tail names no TYPE (it's a row variable, a different namespace
         // entirely — `rename_type_name` never sees it), so only the field
         // types need renaming; `bar`/`var` pass through unchanged.
-        cst::ast::TypeAtom::RecordOpen { rec, inner } => cst::ast::TypeAtom::RecordOpen {
-            rec: rec.clone(),
+        cst::ast::TypeAtom::RecordOpen { orec, inner } => cst::ast::TypeAtom::RecordOpen {
+            orec: orec.clone(),
             inner: cst::ast::CstRecordOpenInner {
                 fields: inner
                     .fields

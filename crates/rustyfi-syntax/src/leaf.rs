@@ -629,6 +629,40 @@ pub type MathGroup<T> = syan::nested::group::Group<T, BMathGrpTok, EMathGrpTok>;
 /// like [`ParenGroup`]'s).
 pub type OpenModuleGroup<T> = syan::nested::group::Group<T, OpenModuleTok, RParenTok>;
 
+/// `Unparse` for an EMPTY group used as an ordinary field rather than as the
+/// target of a `#[group(self.x)]` — `PatBot::Unit { paren: ParenGroup<()> }`
+/// and its three siblings, which spell `()` with nothing inside.
+///
+/// syan core has a generic `Parse` for `Group<T, O, C>` but no generic
+/// `Unparse`: the only `Unparse for Group<..>` impls there are the
+/// `proc_macro2` ones, where a delimited group is a single `TokenTree` rather
+/// than three atoms. A `#[group(..)]` holder never needs it (it is emitted
+/// through `GroupUnparse::unparse_group`), so the gap only shows up for a
+/// holder standing alone as a field, where `#[derive(Unparse)]` synthesizes an
+/// ordinary `FieldTy: Unparse<Atom>` predicate.
+///
+/// Orphan-legal because `Atom` is ours, and disjoint from the `proc_macro2`
+/// impls, which are at `Atom = TokenTree`. Delimiters emit in source order —
+/// the same three-atom sequencing syan's generic `Parse` and `GroupUnparse`
+/// use, so `parse . unparse` still round-trips.
+/// A local node rather than an `impl Unparse<Atom> for ParenGroup<()>`: `Atom`
+/// is `syan::span::WithSpan<Token, Span>`, an alias for a FOREIGN type, so
+/// nothing in that impl would be local and the orphan rule rejects it (E0117).
+/// The fields keep `Group`'s `open`/`close` names, and the derived `Parse` is
+/// the same two-token sequence `Group`'s generic `Parse` produced.
+#[derive(Parse, Unparse, Debug, Clone, PartialEq)]
+pub struct UnitParen {
+    pub open: LParenTok,
+    pub close: RParenTok,
+}
+
+impl Spanned for UnitParen {
+    type Span = Span;
+    fn span(&self) -> Span {
+        self.open.span().unite(self.close.span())
+    }
+}
+
 // ---- PartialEq bridge for the generated leaves --------------------------------
 
 // `#[derive(TokenLeaves)]` emits only `Clone` + `Debug` per leaf, but the

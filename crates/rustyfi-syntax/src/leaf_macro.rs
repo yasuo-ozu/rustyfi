@@ -38,7 +38,7 @@ macro_rules! token_leaves {
     // ---- unit variant: `Let` -> `struct KwLet(pub Span)` --------------------
     (@one $atom:ty, $span:ty, $read:expr,
      ($variant:ident => $leaf:ident, $expect:literal)) => {
-        #[derive(Clone, Debug, PartialEq)]
+        #[derive(Clone, Debug)]
         pub struct $leaf(pub $span);
 
         impl ::syan::parse::parse::Parse<$atom> for $leaf {
@@ -108,7 +108,7 @@ macro_rules! token_leaves {
     // ---- single-field variant: `Var(String)` -> `struct VarTok { name, span }`
     (@one $atom:ty, $span:ty, $read:expr,
      ($variant:ident($fty:ty) => $leaf:ident, $expect:literal, field = $field:ident)) => {
-        #[derive(Clone, Debug, PartialEq)]
+        #[derive(Clone, Debug)]
         pub struct $leaf {
             pub $field: $fty,
             pub span: $span,

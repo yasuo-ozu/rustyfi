@@ -1,5 +1,4 @@
 use crate::span::Span;
-use syan::TokenLeaves;
 
 /// One SATySFi token. Variant names and payloads mirror the token declarations
 /// of the v0.0.6 `parser.mly` (`LETNONREC` = `Let`, `LAMBDA` = `Fun`, ...).
@@ -12,27 +11,20 @@ use syan::TokenLeaves;
 /// old `unit_tokens!`/`payload_tokens!` macros produced. Multi-field and
 /// multi-variant-matching leaves (`LengthTok`, `LiteralTok`, `BinOpTok`,
 /// `VarInHorzTok`, ...) stay hand-written in [`crate::leaf`].
-#[derive(Clone, Debug, PartialEq, TokenLeaves)]
-#[token_leaf(atom = "Atom", span = "|a| a.span")]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Token {
     // ---- headers ----
-    #[leaf(name = "HeaderRequireTok", expect = "'@require:'", field = "content")]
     HeaderRequire(String),
-    #[leaf(name = "HeaderImportTok", expect = "'@import:'", field = "content")]
     HeaderImport(String),
     HeaderStage0,
     HeaderStage1,
     HeaderPersistent0,
 
     // ---- identifiers & constants (program mode) ----
-    #[leaf(name = "VarTok", expect = "a variable name", field = "name")]
     Var(String),
     VarWithMod(Vec<String>, String),
-    #[leaf(name = "CtorTok", expect = "a constructor name", field = "name")]
     Constructor(String),
-    #[leaf(name = "TypeVarTok", expect = "a type variable", field = "name")]
     TypeVar(String),
-    #[leaf(name = "OpenModuleTok", expect = "'Mod.('", field = "name")]
     OpenModule(String), // `Mod.(`
     /// `M.N.P` — a dotted module path ending in an UPPER segment
     /// (upstream `LONG_UPPER`, `lexer_v1.mll:357-363`). SATySFi 0.1-only:
@@ -42,9 +34,7 @@ pub enum Token {
     /// upstream's `(modidents, modident0)` pair carries the same split
     /// (`parser_v1.mly:407-413` reassembles the chain from it).
     LongUpper(Vec<String>, String),
-    #[leaf(name = "IntTok", expect = "an integer constant", field = "value")]
     IntConst(i64),
-    #[leaf(name = "FloatTok", expect = "a float constant", field = "value")]
     FloatConst(f64),
     LengthConst(f64, String),
     /// Backtick string literal. `omit_pre`/`omit_post` mirror the OCaml
@@ -74,178 +64,109 @@ pub enum Token {
     // (or `not (expr)`) then just works through the existing `AppExpr`
     // machinery, no new grammar rule needed.
     Mod,
-    #[leaf(name = "KwIf", expect = "'if'")]
     If,
-    #[leaf(name = "KwThen", expect = "'then'")]
     Then,
-    #[leaf(name = "KwElse", expect = "'else'")]
     Else,
-    #[leaf(name = "KwLet", expect = "'let'")]
     Let, // `let` (LETNONREC)
-    #[leaf(name = "KwLetRec", expect = "'let-rec'")]
     LetRec, // `let-rec`
-    #[leaf(name = "KwAnd", expect = "'and'")]
     LetAnd, // `and`
-    #[leaf(name = "KwIn", expect = "'in'")]
     In,
-    #[leaf(name = "KwFun", expect = "'fun'")]
     Fun, // `fun` (LAMBDA)
-    #[leaf(name = "KwTrue", expect = "'true'")]
     True,
-    #[leaf(name = "KwFalse", expect = "'false'")]
     False,
-    #[leaf(name = "KwBefore", expect = "'before'")]
     Before,
-    #[leaf(name = "KwWhile", expect = "'while'")]
     While,
-    #[leaf(name = "KwDo", expect = "'do'")]
     Do,
-    #[leaf(name = "KwLetMutable", expect = "'let-mutable'")]
     LetMutable, // `let-mutable`
-    #[leaf(name = "KwMatch", expect = "'match'")]
     Match,
-    #[leaf(name = "KwWith", expect = "'with'")]
     With,
-    #[leaf(name = "KwWhen", expect = "'when'")]
     When,
-    #[leaf(name = "KwAs", expect = "'as'")]
     As,
-    #[leaf(name = "KwType", expect = "'type'")]
     Type,
-    #[leaf(name = "KwOf", expect = "'of'")]
     Of,
-    #[leaf(name = "KwModule", expect = "'module'")]
     Module,
-    #[leaf(name = "KwStruct", expect = "'struct'")]
     Struct,
-    #[leaf(name = "KwSig", expect = "'sig'")]
     Sig,
-    #[leaf(name = "KwVal", expect = "'val'")]
     Val,
-    #[leaf(name = "KwEnd", expect = "'end'")]
     End,
-    #[leaf(name = "KwDirect", expect = "'direct'")]
     Direct,
-    #[leaf(name = "ConstraintTok", expect = "'constraint'")]
     Constraint,
-    #[leaf(name = "KwLetHorz", expect = "'let-inline'")]
     LetHorz, // `let-inline`
-    #[leaf(name = "KwLetVert", expect = "'let-block'")]
     LetVert, // `let-block`
-    #[leaf(name = "KwLetMath", expect = "'let-math'")]
     LetMath, // `let-math`
     Controls,
     Cycle,
-    #[leaf(name = "HorzCmdTypeTok", expect = "'inline-cmd'")]
     HorzCmdType, // `inline-cmd`
-    #[leaf(name = "VertCmdTypeTok", expect = "'block-cmd'")]
     VertCmdType, // `block-cmd`
-    #[leaf(name = "MathCmdTypeTok", expect = "'math-cmd'")]
     MathCmdType, // `math-cmd`
-    #[leaf(name = "CommandTok", expect = "'command'")]
     Command,
-    #[leaf(name = "KwOpen", expect = "'open'")]
     Open,
     /// `rec` — SATySFi 0.1-only keyword (`val rec`/`let rec`); under 0.0.6
     /// this word stays a plain identifier (see `lexer.rs`'s version-gated
     /// keyword table).
-    #[leaf(name = "KwRec", expect = "'rec'")]
     Rec,
     /// `inline` — SATySFi 0.1-only keyword (`val inline \cmd = ...`).
-    #[leaf(name = "KwInline", expect = "'inline'")]
     Inline,
     /// `block` — SATySFi 0.1-only keyword (`val block +cmd = ...`).
-    #[leaf(name = "KwBlock", expect = "'block'")]
     Block,
     /// `mutable` — SATySFi 0.1-only keyword (`val mutable x <- e`/`let
     /// mutable x <- e in ..`); under 0.0.6 this word stays a plain
     /// identifier (see `lexer.rs`'s version-gated keyword table).
-    #[leaf(name = "KwMutable", expect = "'mutable'")]
     Mutable,
     /// `signature` — SATySFi 0.1-only keyword (`signature S = sig … end`,
     /// upstream `lexer_v1.mll:348`); a plain identifier under 0.0.6.
-    #[leaf(name = "KwSignature", expect = "'signature'")]
     Signature,
     /// `include` — SATySFi 0.1-only keyword (`include M` binds /
     /// `include S` decls, `lexer_v1.mll:335`); a plain identifier under
     /// 0.0.6.
-    #[leaf(name = "KwInclude", expect = "'include'")]
     Include,
     /// `use` — SATySFi 0.1-only keyword (Envelopes packaging headers `use
     /// package …` / `use … of `<path>``, `saphe-split:parser.mly:371-380 @
     /// b836d512`); a plain identifier under 0.0.6 (no 0.0.6 grammar reserves
     /// it — see `lexer.rs`'s version-gated keyword table).
-    #[leaf(name = "KwUse", expect = "'use'")]
     Use,
     /// `package` — SATySFi 0.1-only keyword (`use package …`); a plain
     /// identifier under 0.0.6.
-    #[leaf(name = "KwPackage", expect = "'package'")]
     Package,
     /// `math` — SATySFi 0.1-only keyword (`val math <ctx> \cmd … = …`,
     /// `parser_v1.mly:452-453` dispatch, MATH reserved at :240); a plain
     /// identifier under 0.0.6 (0.0.6 has no `math` keyword — the word
     /// survives only as the surface name of `BaseType::MathText`,
     /// `math-split` spec §1.1).
-    #[leaf(name = "KwMath", expect = "'math'")]
     Math,
 
     // ---- grouping delimiters ----
-    #[leaf(name = "LParenTok", expect = "'('")]
     LParen,
-    #[leaf(name = "RParenTok", expect = "')'")]
     RParen,
-    #[leaf(name = "BRecordTok", expect = "'(|'")]
     BRecord, // `(|`
-    #[leaf(name = "ERecordTok", expect = "'|)'")]
     ERecord, // `|)`
-    #[leaf(name = "BListTok", expect = "'['")]
     BList, // `[`
-    #[leaf(name = "EListTok", expect = "']'")]
     EList, // `]`
-    #[leaf(name = "BHorzGrpTok", expect = "'{'")]
     BHorzGrp, // `{` opening inline text
-    #[leaf(name = "EHorzGrpTok", expect = "'}'")]
     EHorzGrp, // `}` closing inline text
-    #[leaf(name = "BVertGrpTok", expect = "'<'")]
     BVertGrp, // `'<` / `<` opening block text
-    #[leaf(name = "EVertGrpTok", expect = "'>'")]
     EVertGrp, // `>` closing block text
-    #[leaf(name = "BMathGrpTok", expect = "'${'")]
     BMathGrp, // `${` / `{` opening math
-    #[leaf(name = "EMathGrpTok", expect = "'}'")]
     EMathGrp, // `}` closing math
     BPath, // `<[`
     EPath, // `]>`
 
     // ---- punctuation & operators (program mode) ----
-    #[leaf(name = "ListPunctTok", expect = "';'")]
     ListPunct, // `;`
-    #[leaf(name = "AccessTok", expect = "'#'")]
     Access, // `#`
-    #[leaf(name = "ArrowTok", expect = "'->'")]
     Arrow, // `->`
-    #[leaf(name = "OverwriteEqTok", expect = "'<-'")]
     OverwriteEq, // `<-`
-    #[leaf(name = "BarTok", expect = "'|'")]
     Bar, // `|`
-    #[leaf(name = "WildcardTok", expect = "'_'")]
     Wildcard, // `_`
-    #[leaf(name = "ColonTok", expect = "':'")]
     Colon,
-    #[leaf(name = "CommaTok", expect = "','")]
     Comma,
-    #[leaf(name = "ConsTok", expect = "'::'")]
     Cons, // `::`
     /// `:>` — signature coercion/ascription (COERCE, `lexer_v1.mll:280`).
     /// SATySFi 0.1-only: under 0.0.6 the same two characters lex as
     /// `Colon` + `BinopGt(">")`, unchanged.
-    #[leaf(name = "CoerceTok", expect = "':>'")]
     Coerce,
-    #[leaf(name = "ExactMinusTok", expect = "'-'")]
     ExactMinus,
-    #[leaf(name = "DefEqTok", expect = "'='")]
     DefEq, // `=`
-    #[leaf(name = "ExactTimesTok", expect = "'*'")]
     ExactTimes, // `*`
     ExactAmp,   // `&`
     ExactTilde, // `~`
@@ -261,15 +182,10 @@ pub enum Token {
     BinopAmp(String),
     BinopBar(String),
     BinopHat(String),
-    #[leaf(name = "UnopExclamTok", expect = "a '!' operator", field = "text")]
     UnopExclam(String),
-    #[leaf(name = "OptionalTypeTok", expect = "'?'")]
     OptionalType, // `?`
-    #[leaf(name = "OptionalArrowTok", expect = "'?->'")]
     OptionalArrow, // `?->`
-    #[leaf(name = "OptionalTok", expect = "'?:'")]
     Optional, // `?:`
-    #[leaf(name = "OmissionTok", expect = "'?*'")]
     Omission, // `?*`
     /// `?'r` — a SATySFi 0.1 row variable (upstream `ROWVAR`,
     /// `lexer_v1.mll:310-311`; "optional-arg-rows increment 2"). `RowVarTok`
@@ -278,19 +194,15 @@ pub enum Token {
     /// mints this under `RustyfiVersion::V0_1`; under `V0_0_6`, `?'r` stays
     /// two tokens (`OptionalType` then `TypeVar`), byte-identical to before
     /// this addition.
-    #[leaf(name = "RowVarTok", expect = "a row variable (\"?'r\")", field = "name")]
     RowVar(String), // `?'r`
 
     // ---- commands (payload includes the `\`/`+` sigil) ----
-    #[leaf(name = "HorzCmdTok", expect = "an inline command", field = "name")]
     HorzCmd(String),
     HorzCmdWithMod(Vec<String>, String),
     HorzMacro(String),
-    #[leaf(name = "VertCmdTok", expect = "a block command", field = "name")]
     VertCmd(String),
     VertCmdWithMod(Vec<String>, String),
     VertMacro(String),
-    #[leaf(name = "MathCmdTok", expect = "a math command", field = "name")]
     MathCmd(String),
     MathCmdWithMod(Vec<String>, String),
 
@@ -298,7 +210,6 @@ pub enum Token {
     VarInHorz(Vec<String>, String),
     VarInVert(Vec<String>, String),
     VarInMath(Vec<String>, String),
-    #[leaf(name = "CharTok", expect = "inline text", field = "text")]
     Char(String),
     /// A backtick literal written INSIDE inline text (`` `…` ``). Distinct from
     /// `Char` because upstream keeps it distinct: it reaches the evaluator as
@@ -307,30 +218,19 @@ pub enum Token {
     /// class sets code spans in a monospace face. Lexing it to a plain `Char`
     /// run — as this port used to — erases that distinction irrecoverably, so
     /// the literal inherits whatever face surrounds it (italic, inside `\emph`).
-    #[leaf(name = "CodeTextTok", expect = "an inline code literal", field = "text")]
     CodeText(String),
-    #[leaf(name = "SpaceTok", expect = "a space")]
     Space,
-    #[leaf(name = "BreakTok", expect = "a line break")]
     Break,
-    #[leaf(name = "ItemTok", expect = "an itemize bullet", field = "depth")]
     Item(usize), // `*`+ with depth
-    #[leaf(name = "SepTok", expect = "'|' separator")]
     Sep, // `|`
-    #[leaf(name = "EndActiveTok", expect = "';'")]
     EndActive, // `;` closing an active area
 
     // ---- math-mode content ----
-    #[leaf(name = "MathCharTok", expect = "a math character", field = "text")]
     MathChar(String),
-    #[leaf(name = "SuperscriptTok", expect = "'^'")]
     Superscript, // `^`
-    #[leaf(name = "SubscriptTok", expect = "'_'")]
     Subscript, // `_`
-    #[leaf(name = "PrimesTok", expect = "a primes mark", field = "count")]
     Primes(usize),
 
-    #[leaf(name = "EoiTok", expect = "end of input")]
     Eoi,
 }
 
@@ -469,3 +369,108 @@ impl std::fmt::Display for Token {
 
 /// A token together with its source span: the atom type fed to the syan parser.
 pub type Atom = syan::span::WithSpan<Token, Span>;
+
+// Leaf structs + `Parse`/`Unparse`/`Spanned`, one per annotated variant.
+// Replaces syan's `#[derive(TokenLeaves)]`, which exists only on that crate's
+// api-ergonomics line and is absent from main; see `leaf_macro.rs`.
+token_leaves! {
+    atom = Atom, span = Span, read_span = |a| a.span;
+    (HeaderRequire(String) => HeaderRequireTok, "'@require:'", field = content);
+    (HeaderImport(String) => HeaderImportTok, "'@import:'", field = content);
+    (Var(String) => VarTok, "a variable name", field = name);
+    (Constructor(String) => CtorTok, "a constructor name", field = name);
+    (TypeVar(String) => TypeVarTok, "a type variable", field = name);
+    (OpenModule(String) => OpenModuleTok, "'Mod.('", field = name);
+    (IntConst(i64) => IntTok, "an integer constant", field = value);
+    (FloatConst(f64) => FloatTok, "a float constant", field = value);
+    (If => KwIf, "'if'");
+    (Then => KwThen, "'then'");
+    (Else => KwElse, "'else'");
+    (Let => KwLet, "'let'");
+    (LetRec => KwLetRec, "'let-rec'");
+    (LetAnd => KwAnd, "'and'");
+    (In => KwIn, "'in'");
+    (Fun => KwFun, "'fun'");
+    (True => KwTrue, "'true'");
+    (False => KwFalse, "'false'");
+    (Before => KwBefore, "'before'");
+    (While => KwWhile, "'while'");
+    (Do => KwDo, "'do'");
+    (LetMutable => KwLetMutable, "'let-mutable'");
+    (Match => KwMatch, "'match'");
+    (With => KwWith, "'with'");
+    (When => KwWhen, "'when'");
+    (As => KwAs, "'as'");
+    (Type => KwType, "'type'");
+    (Of => KwOf, "'of'");
+    (Module => KwModule, "'module'");
+    (Struct => KwStruct, "'struct'");
+    (Sig => KwSig, "'sig'");
+    (Val => KwVal, "'val'");
+    (End => KwEnd, "'end'");
+    (Direct => KwDirect, "'direct'");
+    (Constraint => ConstraintTok, "'constraint'");
+    (LetHorz => KwLetHorz, "'let-inline'");
+    (LetVert => KwLetVert, "'let-block'");
+    (LetMath => KwLetMath, "'let-math'");
+    (HorzCmdType => HorzCmdTypeTok, "'inline-cmd'");
+    (VertCmdType => VertCmdTypeTok, "'block-cmd'");
+    (MathCmdType => MathCmdTypeTok, "'math-cmd'");
+    (Command => CommandTok, "'command'");
+    (Open => KwOpen, "'open'");
+    (Rec => KwRec, "'rec'");
+    (Inline => KwInline, "'inline'");
+    (Block => KwBlock, "'block'");
+    (Mutable => KwMutable, "'mutable'");
+    (Signature => KwSignature, "'signature'");
+    (Include => KwInclude, "'include'");
+    (Use => KwUse, "'use'");
+    (Package => KwPackage, "'package'");
+    (Math => KwMath, "'math'");
+    (LParen => LParenTok, "'('");
+    (RParen => RParenTok, "')'");
+    (BRecord => BRecordTok, "'(|'");
+    (ERecord => ERecordTok, "'|)'");
+    (BList => BListTok, "'['");
+    (EList => EListTok, "']'");
+    (BHorzGrp => BHorzGrpTok, "'{'");
+    (EHorzGrp => EHorzGrpTok, "'}'");
+    (BVertGrp => BVertGrpTok, "'<'");
+    (EVertGrp => EVertGrpTok, "'>'");
+    (BMathGrp => BMathGrpTok, "'${'");
+    (EMathGrp => EMathGrpTok, "'}'");
+    (ListPunct => ListPunctTok, "';'");
+    (Access => AccessTok, "'#'");
+    (Arrow => ArrowTok, "'->'");
+    (OverwriteEq => OverwriteEqTok, "'<-'");
+    (Bar => BarTok, "'|'");
+    (Wildcard => WildcardTok, "'_'");
+    (Colon => ColonTok, "':'");
+    (Comma => CommaTok, "','");
+    (Cons => ConsTok, "'::'");
+    (Coerce => CoerceTok, "':>'");
+    (ExactMinus => ExactMinusTok, "'-'");
+    (DefEq => DefEqTok, "'='");
+    (ExactTimes => ExactTimesTok, "'*'");
+    (UnopExclam(String) => UnopExclamTok, "a '!' operator", field = text);
+    (OptionalType => OptionalTypeTok, "'?'");
+    (OptionalArrow => OptionalArrowTok, "'?->'");
+    (Optional => OptionalTok, "'?:'");
+    (Omission => OmissionTok, "'?*'");
+    (RowVar(String) => RowVarTok, "a row variable (\"?'r\")", field = name);
+    (HorzCmd(String) => HorzCmdTok, "an inline command", field = name);
+    (VertCmd(String) => VertCmdTok, "a block command", field = name);
+    (MathCmd(String) => MathCmdTok, "a math command", field = name);
+    (Char(String) => CharTok, "inline text", field = text);
+    (CodeText(String) => CodeTextTok, "an inline code literal", field = text);
+    (Space => SpaceTok, "a space");
+    (Break => BreakTok, "a line break");
+    (Item(usize) => ItemTok, "an itemize bullet", field = depth);
+    (Sep => SepTok, "'|' separator");
+    (EndActive => EndActiveTok, "';'");
+    (MathChar(String) => MathCharTok, "a math character", field = text);
+    (Superscript => SuperscriptTok, "'^'");
+    (Subscript => SubscriptTok, "'_'");
+    (Primes(usize) => PrimesTok, "a primes mark", field = count);
+    (Eoi => EoiTok, "end of input");
+}

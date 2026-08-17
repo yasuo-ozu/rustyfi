@@ -1342,25 +1342,25 @@ fn subst_type_app(
     path: &[String],
 ) -> Result<ast_v1::TypeApp, LowerError> {
     Ok(match a {
-        ast_v1::TypeApp::InlineCmdTy { kw, list, args } => ast_v1::TypeApp::InlineCmdTy {
+        ast_v1::TypeApp::InlineCmdTy { kw, ilist: list, args } => ast_v1::TypeApp::InlineCmdTy {
             kw: kw.clone(),
-            list: list.clone(),
+            ilist: list.clone(),
             args: args
                 .iter()
                 .map(|x| subst_type_cmd_arg_item(x, rw, path))
                 .collect::<Result<_, LowerError>>()?,
         },
-        ast_v1::TypeApp::BlockCmdTy { kw, list, args } => ast_v1::TypeApp::BlockCmdTy {
+        ast_v1::TypeApp::BlockCmdTy { kw, blist: list, args } => ast_v1::TypeApp::BlockCmdTy {
             kw: kw.clone(),
-            list: list.clone(),
+            blist: list.clone(),
             args: args
                 .iter()
                 .map(|x| subst_type_cmd_arg_item(x, rw, path))
                 .collect::<Result<_, LowerError>>()?,
         },
-        ast_v1::TypeApp::MathCmdTy { kw, list, args } => ast_v1::TypeApp::MathCmdTy {
+        ast_v1::TypeApp::MathCmdTy { kw, mlist: list, args } => ast_v1::TypeApp::MathCmdTy {
             kw: kw.clone(),
-            list: list.clone(),
+            mlist: list.clone(),
             args: args
                 .iter()
                 .map(|x| subst_type_cmd_arg_item(x, rw, path))

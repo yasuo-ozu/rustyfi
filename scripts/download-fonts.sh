@@ -70,13 +70,24 @@
 # Never commits font binaries: `lib-rustyfi/dist/fonts/*.ttf` is
 # `.gitignore`d (see that directory's `.gitignore`); this script (and the
 # hash files it writes under `lib-rustyfi/dist/hash/`) is the only checked-in
-# artifact.
+# artifact. Nor does it write anything else into the working tree — the
+# download cache is under `$TMPDIR` (see `CACHE` below).
 
 set -ue
 
 MESSAGE_PREFIX="[download-fonts.sh]"
 cd "$(dirname "$0")/.."   # repo root
-CACHE="scripts/.fontcache"
+# The archive cache lives in the system temp dir, not in the working tree: it
+# is ~175 MB of pinned upstream zips, none of it source, and a copy sitting in
+# `scripts/` shows up in every `du`, backup and grep for the rest of time.
+#
+# A STABLE path, deliberately, not `mktemp -d`: the whole point of the cache is
+# that a re-run verifies sha1s instead of re-downloading ~150 MB, and a fresh
+# directory per run would throw that away. The cost is that a machine which
+# clears its temp dir on reboot re-downloads once; the archives are pinned, so
+# that is slow rather than risky. `RUSTYFI_FONTCACHE` overrides it — set that to
+# a persistent path on a metered connection.
+CACHE="${RUSTYFI_FONTCACHE:-${TMPDIR:-/tmp}/rustyfi-fontcache}"
 FONTS_DIR="lib-rustyfi/dist/fonts"
 HASH_DIR="lib-rustyfi/dist/hash"
 mkdir -p "$CACHE" "$FONTS_DIR" "$HASH_DIR"

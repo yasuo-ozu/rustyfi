@@ -2567,12 +2567,13 @@ fn fire_block_frame_fragment(
     incl_top_pad: bool,
     incl_bot_pad: bool,
 ) -> Result<Vec<GraphicsElem>, eval::EvalError> {
-    let (pads, width, deco) = match &interp.decos[frame.id.0] {
+    let (pads, width, deco, deco_version) = match &interp.decos[frame.id.0] {
         eval::DecoEntry::Block {
             pads,
             width,
             decoset,
-        } => (*pads, *width, decoset[deco_idx].clone()),
+            version,
+        } => (*pads, *width, decoset[deco_idx].clone(), *version),
         eval::DecoEntry::Inline { .. } => {
             return eval::eval_error("BUG: inline deco behind a block-frame marker")
         }
@@ -2592,6 +2593,7 @@ fn fire_block_frame_fragment(
     interp.current_deco_id = Some(frame.id);
     let gr = primitives::apply_deco(
         interp,
+        deco_version,
         deco,
         pt,
         width,
@@ -2775,8 +2777,8 @@ fn fire_inline_frame(
     else {
         return Ok(());
     };
-    let deco_v = match &interp.decos[deco.0] {
-        eval::DecoEntry::Inline { deco } => deco.clone(),
+    let (deco_v, deco_version) = match &interp.decos[deco.0] {
+        eval::DecoEntry::Inline { deco, version } => (deco.clone(), *version),
         eval::DecoEntry::Block { .. } => {
             return eval::eval_error("BUG: block deco behind an inline frame")
         }
@@ -2786,7 +2788,7 @@ fn fire_inline_frame(
     // `annot.satyh`'s `\href` fires `register-link-to-uri` from exactly
     // this closure.
     interp.current_deco_id = Some(*deco);
-    let gr = primitives::apply_deco(interp, deco_v, pt, *width, *height, *depth)?;
+    let gr = primitives::apply_deco(interp, deco_version, deco_v, pt, *width, *height, *depth)?;
     interp.current_deco_id = None;
     interp.page_graphics[page].extend(gr);
     for (dx, child) in contents {

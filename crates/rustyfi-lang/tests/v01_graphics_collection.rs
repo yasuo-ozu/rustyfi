@@ -513,7 +513,15 @@ fn deco_callback_result_coerces_per_version_when_fired() {
     let deco01 = interp01
         .eval(&env01, &lambda4(fill_ast()))
         .expect("deco AST must evaluate");
-    interp01.decos.push(DecoEntry::Inline { deco: deco01 });
+    // The generation travels with the ENTRY, not with `interp.version`: a
+    // deco fires from a post-page-break pass, which in a cross-version
+    // program is outside the authoring dependency's scope entirely. See
+    // `DecoEntry`'s doc comment. (`interp.version` is still set above, so
+    // this fixture also pins that the two are read independently.)
+    interp01.decos.push(DecoEntry::Inline {
+        deco: deco01,
+        version: RustyfiVersion::V0_1,
+    });
     let doc01 = doc_with_pages(vec![frame_page()]);
     rustyfi_lang::fire_hooks(&mut interp01, &doc01).expect("fire_hooks must succeed under V0_1");
     assert_eq!(interp01.page_graphics[0].len(), 1);
@@ -528,7 +536,10 @@ fn deco_callback_result_coerces_per_version_when_fired() {
     let deco006 = interp006
         .eval(&env006, &lambda4(Ast::List(vec![fill_ast()])))
         .expect("deco AST must evaluate");
-    interp006.decos.push(DecoEntry::Inline { deco: deco006 });
+    interp006.decos.push(DecoEntry::Inline {
+        deco: deco006,
+        version: RustyfiVersion::V0_0,
+    });
     let doc006 = doc_with_pages(vec![frame_page()]);
     rustyfi_lang::fire_hooks(&mut interp006, &doc006)
         .expect("fire_hooks must succeed under V0_0");
@@ -546,9 +557,10 @@ fn deco_callback_result_coerces_per_version_when_fired() {
     let deco01_list = interp01b
         .eval(&env01, &lambda4(Ast::List(vec![fill_ast()])))
         .expect("deco AST must evaluate");
-    interp01b
-        .decos
-        .push(DecoEntry::Inline { deco: deco01_list });
+    interp01b.decos.push(DecoEntry::Inline {
+        deco: deco01_list,
+        version: RustyfiVersion::V0_1,
+    });
     let doc01b = doc_with_pages(vec![frame_page()]);
     let err = rustyfi_lang::fire_hooks(&mut interp01b, &doc01b).unwrap_err();
     assert!(err.msg.contains("graphics"), "got: {}", err.msg);

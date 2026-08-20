@@ -324,6 +324,30 @@ fn load_legacy(entry: &Path, opts: &LoadOptions) -> Result<LoadedProgram, LoadEr
     // load (that load uses `require_targets`/`is_dist_packages_target`
     // instead).
     let mut require_v01_targets: HashSet<u32> = HashSet::new();
+    // The version of the file that first reached this id over an `@import:`
+    // edge. An `@import:` is a SAME-PACKAGE, path-relative include — it can
+    // never name another package, let alone another generation — so an
+    // `@import:`ed file belongs to whatever generation its importer was
+    // written in, and inherits its version. Only `@require:` crosses a
+    // package (and therefore possibly a generation) boundary; that edge keeps
+    // the physical-provenance rule (`require_targets` /
+    // `require_v01_targets`) below, which is checked FIRST.
+    //
+    // Without this, every intra-package `@import:` of a real published 0.0.6
+    // package (`azmath/azmath.satyh`'s `@import: parens`, `base/bool.satyg`'s
+    // `@import: ord`, `easytable`, `arrows`, `derive`, `lipsum`, `railway`,
+    // `enumitem`, `fss`, …) fell through to `opts.version` under a `V0_1`
+    // load and was parsed with the 0.1 grammar — a parse error on the
+    // package's own `module M : sig` head, which is exactly the shape a
+    // 0.0.6 package is written in. Only files reached by `@require:` were
+    // ever downgraded, and multi-file packages are the norm, not the
+    // exception, in the published corpus.
+    //
+    // First writer wins (`or_insert`): a file `@import:`ed by two importers
+    // of DIFFERENT generations would be ambiguous anyway, and the worklist is
+    // deterministic. The entry's own `@import:`ed siblings still take the
+    // entry's version, since the entry is processed first.
+    let mut import_parent_version: HashMap<u32, RustyfiVersion> = HashMap::new();
     let mut adjacency: HashMap<u32, Vec<u32>> = HashMap::new();
     let mut processed: HashSet<u32> = HashSet::new();
 
@@ -365,7 +389,16 @@ fn load_legacy(entry: &Path, opts: &LoadOptions) -> Result<LoadedProgram, LoadEr
                     {
                         RustyfiVersion::V0_0
                     } else {
-                        RustyfiVersion::V0_1
+                        // …else inherit the version of whoever `@import:`ed
+                        // it (a same-package sibling of a spliced 0.0.6
+                        // package is itself 0.0.6), falling back to the
+                        // load's own version for the entry's siblings and
+                        // anything reached no other way. See
+                        // `import_parent_version`'s declaration.
+                        import_parent_version
+                            .get(&id)
+                            .copied()
+                            .unwrap_or(RustyfiVersion::V0_1)
                     },
                 ),
             // X4a Q4-mirror (design-cross-version-import.md §X4.3 item 2): a
@@ -389,7 +422,15 @@ fn load_legacy(entry: &Path, opts: &LoadOptions) -> Result<LoadedProgram, LoadEr
                 .unwrap_or(if require_v01_targets.contains(&id) {
                     RustyfiVersion::V0_1
                 } else {
-                    RustyfiVersion::V0_0
+                    // The mirror of the `V0_1` arm's `@import:` inheritance:
+                    // a 0.1 package spliced into a 0.0.6-rooted load may
+                    // `@import:` its own siblings too, and they are 0.1.
+                    // Defaults to `V0_0` exactly as before for everything
+                    // reached only from 0.0.6 files.
+                    import_parent_version
+                        .get(&id)
+                        .copied()
+                        .unwrap_or(RustyfiVersion::V0_0)
                 }),
             other => other,
         };
@@ -507,6 +548,13 @@ fn load_legacy(entry: &Path, opts: &LoadOptions) -> Result<LoadedProgram, LoadEr
             }
             if is_v01_corpus_target {
                 require_v01_targets.insert(dep_id);
+            }
+            // An `@import:` edge carries THIS file's version to its target —
+            // see `import_parent_version`'s declaration. Recorded before the
+            // target is pushed, so it is always in place by the time the
+            // target is popped and version-tagged.
+            if !is_require {
+                import_parent_version.entry(dep_id).or_insert(file_version);
             }
             deps.push(dep_id);
             worklist.push(dep_id);

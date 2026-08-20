@@ -18,19 +18,33 @@ use std::rc::Rc;
 
 /// See [`Interp::decos`].
 ///
-/// X2b audit note (`Ast::VersionScope`'s eval arm, below): a deco `Value`
-/// pushed here carries no record of which `interp.version` was active when
-/// the closure was captured. Its consumers (`primitives::apply_deco`, called
-/// only from `lib.rs`'s post-page-break hook-firing pass) read
-/// `interp.version` at FIRE time instead — correct for a pure single-version
-/// program (the flag never changes), but a known residual gap for a
-/// cross-version splice, since fire time is always outside any
-/// `VersionScope`'s save/restore window. See the `Ast::VersionScope` eval
-/// arm's doc comment for the full analysis.
+/// Each entry records the `interp.version` that was active when the deco
+/// closure was CAPTURED ([`DecoEntry::version`]). This used to be the X2b
+/// audit's known residual gap: the entry carried no version, and its
+/// consumer (`primitives::apply_deco`, called only from `lib.rs`'s
+/// post-page-break hook-firing pass) read `interp.version` at FIRE time
+/// instead. Fire time is always outside every `VersionScope`'s save/restore
+/// window, so in a cross-version program the flag there is the ENTRY's
+/// generation, never the deco author's.
+///
+/// The corpus makes that concrete: `uline`, `enumitem` and `figbox` are
+/// ordinary 0.0.6 packages that call `inline-frame-*`/`block-frame-*`
+/// themselves, with their own 0.0.6 `graphics list` decos. Nothing about
+/// them is an export-boundary `deco` (X3b's business); they just register a
+/// deco while `interp.version` is `V0_0` and have it fired while it is
+/// `V0_1`, so `coerce_graphics_result` demanded a single `graphics` and got
+/// a list — "expected graphics, got list", at eval time, from inside a
+/// package the user never wrote. Capturing the version at push time is
+/// exactly the promise the splice already makes for every other forked
+/// primitive (`Ast::VersionScope`'s eval arm), just extended to the one
+/// consumer that runs after the window closes.
 #[derive(Clone, Debug)]
 pub enum DecoEntry {
     Inline {
         deco: Value,
+        /// The generation whose `deco` calling convention this closure obeys
+        /// — see this enum's doc comment.
+        version: RustyfiVersion,
     },
     Block {
         pads: rustyfi_backend::Paddings,
@@ -38,7 +52,21 @@ pub enum DecoEntry {
         width: rustyfi_backend::Length,
         /// `(decoS, decoH, decoM, decoT)` — evalUtil.ml:169 `get_decoset`.
         decoset: [Value; 4],
+        /// The generation whose `deco` calling convention these closures
+        /// obey — see this enum's doc comment.
+        version: RustyfiVersion,
     },
+}
+
+impl DecoEntry {
+    /// The generation this entry's deco closure(s) were captured under — the
+    /// one `primitives::apply_deco` must decode their result with, rather
+    /// than whatever `interp.version` happens to be at fire time.
+    pub fn version(&self) -> RustyfiVersion {
+        match self {
+            DecoEntry::Inline { version, .. } | DecoEntry::Block { version, .. } => *version,
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -154,7 +182,13 @@ pub struct Interp<'a> {
     /// Deferred `inline-graphics-outer` callbacks (`length -> point ->
     /// graphics list`), indexed by `GraphicsFnId` — the `hooks` pattern.
     /// Reset per trial like `hooks`/`images`.
-    pub outer_graphics: Vec<Value>,
+    /// Each entry is the deferred callback PLUS the generation it was
+    /// registered under, for the same reason [`DecoEntry`] carries one: the
+    /// callback's RESULT shape (`graphics list` vs one `graphics`) is a
+    /// property of the code that wrote it, and
+    /// `primitives::resolve_outer_graphics_in_contents` runs long after,
+    /// from a line-breaking post-pass with no version context of its own.
+    pub outer_graphics: Vec<(Value, RustyfiVersion)>,
     /// The target language version this evaluation run is checking against
     /// (math-split spec §3.4) — consulted only by `read_inline`'s
     /// `IText::EmbedMath` FALLBACK arm (no installed math command; unit-test

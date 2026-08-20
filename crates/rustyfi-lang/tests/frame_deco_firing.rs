@@ -14,7 +14,7 @@ use rustyfi_lang::ast::Ast;
 use rustyfi_lang::eval::{self, DecoEntry};
 use rustyfi_lang::primitives;
 use rustyfi_lang::value::{DocumentValue, Value};
-use rustyfi_syntax::Span;
+use rustyfi_syntax::{RustyfiVersion, Span};
 use std::rc::Rc;
 
 struct Mono;
@@ -154,7 +154,7 @@ fn a_frame_with_a_fill_deco_puts_one_element_in_page_graphics() {
     let mono = Mono;
     let mut interp = eval::Interp::new(&mono);
     let deco_v = eval_to_value(&mut interp, &fill_deco());
-    interp.decos.push(DecoEntry::Inline { deco: deco_v });
+    interp.decos.push(DecoEntry::Inline { deco: deco_v, version: RustyfiVersion::V0_0 });
 
     let frame = PureHorzBox::Frame {
         width: Length::pt(30.0),
@@ -187,7 +187,7 @@ fn a_frame_deco_calling_register_link_to_uri_lands_an_annot_with_the_frames_rect
     let mono = Mono;
     let mut interp = eval::Interp::new(&mono);
     let deco_v = eval_to_value(&mut interp, &link_deco("https://example.com/"));
-    interp.decos.push(DecoEntry::Inline { deco: deco_v });
+    interp.decos.push(DecoEntry::Inline { deco: deco_v, version: RustyfiVersion::V0_0 });
 
     let frame = PureHorzBox::Frame {
         width: Length::pt(30.0),
@@ -230,9 +230,9 @@ fn a_nested_frame_fires_with_its_parents_x_plus_its_own_dx() {
     let mono = Mono;
     let mut interp = eval::Interp::new(&mono);
     let outer_deco = eval_to_value(&mut interp, &link_deco("outer"));
-    interp.decos.push(DecoEntry::Inline { deco: outer_deco });
+    interp.decos.push(DecoEntry::Inline { deco: outer_deco, version: RustyfiVersion::V0_0 });
     let inner_deco = eval_to_value(&mut interp, &link_deco("inner"));
-    interp.decos.push(DecoEntry::Inline { deco: inner_deco });
+    interp.decos.push(DecoEntry::Inline { deco: inner_deco, version: RustyfiVersion::V0_0 });
 
     let inner_frame = PureHorzBox::Frame {
         width: Length::pt(20.0),
@@ -301,6 +301,7 @@ fn a_start_line_end_fragment_fires_decos_once_with_the_padded_extent_and_zero_de
         },
         width: Length::pt(200.0),
         decoset: [deco_v, Value::Unit, Value::Unit, Value::Unit],
+        version: RustyfiVersion::V0_0,
     });
 
     let real_line = PlacedLine {
@@ -386,6 +387,7 @@ fn a_start_with_no_matching_end_on_the_page_fires_nothing() {
         },
         width: Length::pt(200.0),
         decoset: [deco_v, Value::Unit, Value::Unit, Value::Unit],
+        version: RustyfiVersion::V0_0,
     });
 
     let page = block_page(vec![PlacedLine {

@@ -1375,3 +1375,311 @@ page-break (210mm, 297mm) content parts body
         doc.extras.page_graphics[0]
     );
 }
+
+// ============================================================================
+// Corpus audit: two shapes every SYNTHETIC fixture above happens not to have,
+// which is why neither bug was visible here. Every hand-written 0.0.6 package
+// in this file is a SINGLE file and none of them declares a `let-math` — both
+// are the norm in the real published Satyrographos corpus.
+// ============================================================================
+
+/// A 0.0.6 package's OWN `@import:`ed sibling is 0.0.6 too.
+///
+/// `@import:` is a same-package, path-relative include — it cannot name
+/// another package, let alone another generation. The per-file version rule
+/// only ever downgraded `@require:` targets, though, so under a `V0_1` load
+/// every intra-package `@import:` fell through to `opts.version` and was
+/// parsed with the 0.1 grammar. Multi-file packages are the NORM in the
+/// published corpus (`azmath`, `base`, `easytable`, `arrows`, `derive`,
+/// `lipsum`, `railway`, `enumitem`, `fss`, `code-printer`, `algorithm`, …),
+/// so this took out most of it, with a parse error on the imported file's own
+/// `module M : sig` head.
+///
+/// The imported sibling here is written in syntax the 0.1 grammar cannot
+/// parse (`module M : sig .. end = struct .. end`, plus a `let-rec` clause
+/// with a `|` head), so a `V0_1` mis-tag is a hard load failure rather than a
+/// silent difference.
+#[test]
+fn a_v006_package_s_own_import_sibling_is_also_v006() {
+    let dir = TempDir::new("import-sibling-version");
+    dir.write(
+        "dist/packages/xver-multi/part.satyh",
+        "module XverPart : sig\n\
+         \x20 val twice : int -> int\n\
+         end = struct\n\
+         \x20 let-rec twice\n\
+         \x20 | n = n * 2\n\
+         end\n",
+    );
+    dir.write(
+        "dist/packages/xver-multi/xver-multi.satyh",
+        "@import: part\n\nlet xver-multi-four = XverPart.twice 2\n",
+    );
+    dir.write(
+        "entry.saty",
+        "@require: xver-multi/xver-multi\n\nxver-multi-four\n",
+    );
+
+    let opts = LoadOptions {
+        lib_root: Some(dir.path().to_path_buf()),
+        version: RustyfiVersion::V0_1,
+        ..Default::default()
+    };
+    let program = rustyfi_loader::load(&dir.path().join("entry.saty"), &opts).unwrap_or_else(|e| {
+        panic!(
+            "a 0.0.6 package's own `@import:`ed sibling must be parsed as 0.0.6, \
+             not with the 0.1 grammar: {e}"
+        )
+    });
+
+    // Both package files V0_0-tagged (and V0_0-parsed); only the entry V0_1.
+    let v006: Vec<_> = program
+        .files
+        .iter()
+        .filter(|f| matches!(f.version, RustyfiVersion::V0_0))
+        .collect();
+    assert_eq!(
+        v006.len(),
+        2,
+        "both `xver-multi.satyh` (a @require: target) and its `@import:`ed \
+         `part.satyh` must be V0_0; got: {:?}",
+        program
+            .files
+            .iter()
+            .map(|f| (f.path.file_name(), f.version))
+            .collect::<Vec<_>>()
+    );
+    for f in v006 {
+        assert!(
+            matches!(f.cst, rustyfi_loader::LoadedCst::V0_0(_)),
+            "a V0_0-tagged file must carry a V0_0-parsed cst: {:?}",
+            f.path
+        );
+    }
+    assert!(
+        matches!(
+            program.files.last().expect("entry is last").version,
+            RustyfiVersion::V0_1
+        ),
+        "the entry must stay V0_1"
+    );
+}
+
+/// A spliced 0.0.6 package's `let-math` is scheme-checked by 0.0.6's RULE.
+///
+/// A merged cross-version program has one `Checker::version`, hard-coded to
+/// `V0_1`, and the `Ast::LetMathIn` scheme rule used to fork on it — so every
+/// `let-math` inside a crossed 0.0.6 package was read as a 0.1 `val math` and
+/// refused for not having the three synthesized trailing `ctx`/`sub`/`sup`
+/// lambdas 0.1's lowering adds. The corpus's own `math.satyh` is a `let-math`
+/// file and published packages `@require:` it constantly, so a great many of
+/// them failed on a math-split diagnostic about a file the user never wrote.
+/// `Checker::binding_version` asks the BINDING (its
+/// `Ast::VersionScope(V0_0, _)` wrapper) instead of the session.
+///
+/// `\xver-lm` is zero-arity, the shape that isolates the rule cleanly: 0.0.6
+/// peels no domains and only wants the result to be math-text, while 0.1's
+/// rule needs at least three domains and rejects outright.
+#[test]
+fn a_v006_dependency_s_let_math_uses_the_v006_scheme_rule() {
+    let dir = TempDir::new("let-math-scheme");
+    dir.write(
+        "dist/packages/xver-letmath.satyh",
+        "let-math \\xver-lm = ${1}\n",
+    );
+    dir.write("xver-helper.satyh", XVER_HELPER_SRC);
+    dir.write(
+        "entry.saty",
+        "@require: xver-letmath\n\
+         @import: xver-helper\n\
+         \n\
+         let ctx = get-initial-context 440pt (command \\XverHelper.math) in\n\
+         let body = line-break true true ctx (read-inline ctx {ok}) in\n\
+         let content pbinfo = (| text-origin = (72pt, 100pt), text-height = 640pt |) in\n\
+         let parts pbinfo =\n\
+           (| header-origin = (72pt, 72pt),  header-content = block-nil,\n\
+              footer-origin = (72pt, 800pt), footer-content = block-nil |)\n\
+         in\n\
+         page-break (210mm, 297mm) content parts body\n",
+    );
+
+    let opts = LoadOptions {
+        lib_root: Some(dir.path().to_path_buf()),
+        version: RustyfiVersion::V0_1,
+        ..Default::default()
+    };
+    let program = rustyfi_loader::load(&dir.path().join("entry.saty"), &opts)
+        .unwrap_or_else(|e| panic!("loading the let-math xver fixture should succeed: {e}"));
+
+    let mono = Mono;
+    let (doc, _trials) = rustyfi_lang::compile_document_v1_with_trials(&program.files, &mono)
+        .unwrap_or_else(|e| {
+            panic!(
+                "a spliced 0.0.6 dependency's `let-math` must be scheme-checked by \
+                 0.0.6's rule, not 0.1's `val math` rule: {e}"
+            )
+        });
+    assert_eq!(doc.pages.len(), 1, "one A4 page");
+}
+
+/// A 0.0.6 package's own INTERNAL graphics callbacks keep 0.0.6's result
+/// shape — `graphics list`, not one `graphics` collection.
+///
+/// This is the third corpus-audit shape, and the one furthest from anything
+/// the fixtures above test. `xver_boundary_deco_export_coerces_and_renders`
+/// is about a `deco` that CROSSES: it appears in the package's export type,
+/// X3b classifies it, and a `unite-graphics` wrapper is generated. Here
+/// nothing crosses at all. The package's exports are
+/// `context -> inline-text -> inline-boxes` and `unit -> inline-boxes` —
+/// version-neutral types with no forked name anywhere — and the 0.0.6 deco
+/// / graphics callbacks are strictly internal, handed straight to
+/// `inline-frame-outer` and `inline-graphics` by the package itself.
+///
+/// That used to fail at EVAL time with "expected graphics, got list", from
+/// inside a package the user never wrote, because the callback-result decode
+/// (`coerce_graphics_result`) asked `interp.version` — one whole-program
+/// field naming the ENTRY's generation. The six H1/H2/R2/H3-H6 primitives
+/// are now registered per version (`primitives::version_forked_prims!`), so
+/// `compile.rs`'s `Ast::VersionScope` fold picks the row matching the code
+/// that WROTE the call, and the two deferred consumers carry the capture
+/// generation with them (`DecoEntry::version`, `Interp::outer_graphics`).
+///
+/// It is the plain-`uline`/`enumitem`/`figbox` shape: a 0.0.6 package that
+/// draws its own decorations. Nothing exotic, and none of the bridge's
+/// export machinery involved.
+#[test]
+fn a_v006_dependency_s_internal_graphics_callbacks_keep_v006_shape() {
+    let dir = TempDir::new("internal-graphics-callbacks");
+    dir.write(
+        "dist/packages/xver-internal-gr.satyg",
+        "@stage: persistent\n\n\
+         let xver-underline ctx it =\n\
+         \x20 let deco (x, y) w h d =\n\
+         \x20   [ fill (Gray(0.0))\n\
+         \x20       (close-with-line\n\
+         \x20          (line-to (x +' w, y -' 1pt) (start-path (x, y -' 1pt)))) ]\n\
+         \x20 in\n\
+         \x20 inline-frame-outer (0pt, 0pt, 0pt, 0pt) deco (read-inline ctx it)\n\
+         \n\
+         let xver-swatch () =\n\
+         \x20 inline-graphics 20pt 10pt 0pt (fun (x, y) ->\n\
+         \x20   [ fill (Gray(0.5))\n\
+         \x20       (close-with-line\n\
+         \x20          (line-to (x +' 20pt, y +' 10pt)\n\
+         \x20             (line-to (x +' 20pt, y) (start-path (x, y))))) ])\n",
+    );
+    dir.write("xver-helper.satyh", XVER_HELPER_SRC);
+    dir.write(
+        "entry.saty",
+        "@require: xver-internal-gr\n\
+         @import: xver-helper\n\
+         \n\
+         let ctx = get-initial-context 440pt (command \\XverHelper.math) in\n\
+         let framed = xver-underline ctx {underlined by a 0.0.6 package} in\n\
+         let body = line-break true true ctx (framed ++ (xver-swatch ())) in\n\
+         let content pbinfo = (| text-origin = (72pt, 100pt), text-height = 640pt |) in\n\
+         let parts pbinfo =\n\
+           (| header-origin = (72pt, 72pt),  header-content = block-nil,\n\
+              footer-origin = (72pt, 800pt), footer-content = block-nil |)\n\
+         in\n\
+         page-break (210mm, 297mm) content parts body\n",
+    );
+
+    let opts = LoadOptions {
+        lib_root: Some(dir.path().to_path_buf()),
+        version: RustyfiVersion::V0_1,
+        ..Default::default()
+    };
+    let program = rustyfi_loader::load(&dir.path().join("entry.saty"), &opts)
+        .unwrap_or_else(|e| panic!("loading the internal-graphics fixture should succeed: {e}"));
+    assert!(
+        program
+            .files
+            .iter()
+            .any(|f| matches!(f.cst, rustyfi_loader::LoadedCst::V0_0(_))),
+        "xver-internal-gr.satyg should have been detected as V0_0"
+    );
+
+    let mono = Mono;
+    let (doc, _trials) = rustyfi_lang::compile_document_v1_with_trials(&program.files, &mono)
+        .unwrap_or_else(|e| {
+            panic!(
+                "a 0.0.6 dependency's own `inline-frame-outer`/`inline-graphics` \
+                 callbacks must be decoded with 0.0.6's `graphics list` shape: {e}"
+            )
+        });
+
+    assert_eq!(doc.pages.len(), 1, "one A4 page");
+    // The deco actually FIRED, and its list decoded element-by-element —
+    // a bare `Fill`, NOT the `Group` an X3b `unite-graphics` wrap would
+    // leave. Nothing crossed the export boundary here, so nothing should
+    // have been wrapped.
+    assert!(
+        doc.extras.page_graphics[0]
+            .iter()
+            .any(|g| matches!(g, GraphicsElem::Fill(..))),
+        "the 0.0.6 deco's own graphics must have fired, got: {:?}",
+        doc.extras.page_graphics[0]
+    );
+}
+
+/// An EXPRESSION-level `let-math .. in ..` inside a spliced 0.0.6 dependency
+/// also gets 0.0.6's scheme rule.
+///
+/// The companion to `a_v006_dependency_s_let_math_uses_the_v006_scheme_rule`,
+/// and the reason `Checker::binding_version` needs an ambient fallback rather
+/// than a wrapper peel alone. `elaborate::maybe_v006_scope` wraps a
+/// TOP-LEVEL binding's RHS; a nested `let-math \c = e in body`
+/// (`elaborate.rs`'s `Expr::LetMathIn` arm) is a node inside some other
+/// binding's already-wrapped RHS and carries no `Ast::VersionScope` of its
+/// own, so the peel finds nothing and the session's hard-coded `V0_1` used
+/// to answer.
+///
+/// `siunitx` writes exactly this — `let-math \C = ord \`C\` in
+/// ${\math-sup{}{\circ}\C}`, one line inside `\celsius` — and failed on it
+/// with a math-split complaint about `'\C'`, a command name that appears
+/// nowhere in the user's document.
+#[test]
+fn an_expression_level_let_math_in_a_v006_dependency_uses_the_v006_rule() {
+    let dir = TempDir::new("nested-let-math");
+    dir.write(
+        "dist/packages/xver-nested-letmath.satyg",
+        "@stage: persistent\n\n\
+         let-math \\xver-outer =\n\
+         \x20 let-math \\xver-inner = ${1} in\n\
+         \x20 ${\\xver-inner}\n",
+    );
+    dir.write("xver-helper.satyh", XVER_HELPER_SRC);
+    dir.write(
+        "entry.saty",
+        "@require: xver-nested-letmath\n\
+         @import: xver-helper\n\
+         \n\
+         let ctx = get-initial-context 440pt (command \\XverHelper.math) in\n\
+         let body = line-break true true ctx (read-inline ctx {ok}) in\n\
+         let content pbinfo = (| text-origin = (72pt, 100pt), text-height = 640pt |) in\n\
+         let parts pbinfo =\n\
+           (| header-origin = (72pt, 72pt),  header-content = block-nil,\n\
+              footer-origin = (72pt, 800pt), footer-content = block-nil |)\n\
+         in\n\
+         page-break (210mm, 297mm) content parts body\n",
+    );
+
+    let opts = LoadOptions {
+        lib_root: Some(dir.path().to_path_buf()),
+        version: RustyfiVersion::V0_1,
+        ..Default::default()
+    };
+    let program = rustyfi_loader::load(&dir.path().join("entry.saty"), &opts)
+        .unwrap_or_else(|e| panic!("loading the nested let-math fixture should succeed: {e}"));
+
+    let mono = Mono;
+    let (doc, _trials) = rustyfi_lang::compile_document_v1_with_trials(&program.files, &mono)
+        .unwrap_or_else(|e| {
+            panic!(
+                "an expression-level `let-math` inside a spliced 0.0.6 dependency must \
+                 be scheme-checked by 0.0.6's rule: {e}"
+            )
+        });
+    assert_eq!(doc.pages.len(), 1, "one A4 page");
+}

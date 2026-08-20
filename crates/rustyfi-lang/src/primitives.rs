@@ -107,6 +107,52 @@ macro_rules! prims {
     (@span v01) => { VersionSpan::V0_1Only };
 }
 
+/// Generate the `_v006`/`_v01` `PrimDef`-shaped pair for a primitive body
+/// that needs to know the generation of the code that CALLED it.
+///
+/// The graphics-callback family (prim-retype-sweep.md's H1/H2/R2 result
+/// retypes and the deco family behind them) is the whole reason this exists:
+/// those bodies decide whether a callback returns `graphics list` (0.0.6) or
+/// one `graphics` collection (0.1), and they used to ask `interp.version` —
+/// a single whole-program field, set once by `lib.rs`'s
+/// `eval_document_trials`. That is right for a single-version program and
+/// wrong for a cross-version one, where a spliced 0.0.6 package calls these
+/// primitives with its OWN convention while the field says `V0_1`.
+///
+/// Registering the body twice fixes it exactly, and for free: `compile.rs`'s
+/// `Ast::VersionScope` arm folds a primitive reference against the innermost
+/// enclosing scope's version (the same mechanism `page-break` already relies
+/// on), so a call inside a 0.0.6 dependency picks the `_v006` row and one in
+/// the 0.1 entry picks `_v01`. Nothing is threaded through the interpreter
+/// at all — the answer is baked in at compile time, where it is known.
+///
+/// The two rows share ONE type-table entry per version
+/// (`prim_types::primitive_type_with_version`), which already forks these
+/// names; only the runtime decode was missing its half.
+macro_rules! version_forked_prims {
+    ($($v006:ident, $v01:ident => $body:path;)*) => {$(
+        fn $v006(interp: &mut Interp, args: Vec<Value>) -> Result<Value, EvalError> {
+            $body(interp, RustyfiVersion::V0_0, args)
+        }
+        fn $v01(interp: &mut Interp, args: Vec<Value>) -> Result<Value, EvalError> {
+            $body(interp, RustyfiVersion::V0_1, args)
+        }
+    )*};
+}
+
+version_forked_prims! {
+    prim_inline_graphics_v006, prim_inline_graphics_v01 => prim_inline_graphics;
+    prim_inline_graphics_outer_v006, prim_inline_graphics_outer_v01
+        => prim_inline_graphics_outer;
+    prim_tabular_v006, prim_tabular_v01 => prim_tabular;
+    prim_inline_frame_outer_v006, prim_inline_frame_outer_v01 => prim_inline_frame_outer;
+    prim_inline_frame_inner_v006, prim_inline_frame_inner_v01 => prim_inline_frame_inner;
+    prim_inline_frame_breakable_v006, prim_inline_frame_breakable_v01
+        => prim_inline_frame_breakable;
+    prim_block_frame_breakable_v006, prim_block_frame_breakable_v01
+        => prim_block_frame_breakable;
+}
+
 prims! {
     "read-inline" (2) => prim_read_inline;
     "read-block" (2) => prim_read_block;
@@ -402,14 +448,22 @@ prims! {
     "close-with-line" (1) => prim_close_with_line;
     "fill" (2) => prim_fill;
     "stroke" (3) => prim_stroke;
-    "inline-graphics" (4) => prim_inline_graphics;
+    // H1/H2/R2 (prim-retype-sweep.md §1.3): these three take a
+    // graphics-producing CALLBACK whose result shape forks (`graphics list`
+    // vs one `graphics` collection), so each is registered per version —
+    // see `version_forked_prims!`'s doc comment for why an `interp.version`
+    // read was wrong in a cross-version program.
+    v006 "inline-graphics" (4) => prim_inline_graphics_v006;
+    v01  "inline-graphics" (4) => prim_inline_graphics_v01;
     // `tabular : (cell list) list -> (length list -> length list ->
     // graphics list) -> inline-boxes` (vminst.ml:539);
-    "tabular" (2) => prim_tabular;
+    v006 "tabular" (2) => prim_tabular_v006;
+    v01  "tabular" (2) => prim_tabular_v01;
     // `inline-graphics-outer : length -> length -> (length -> point ->
     // graphics list) -> inline-boxes` (vminst.ml:1891
     // `BackendInlineGraphicsOuter`) — roadmap C2.
-    "inline-graphics-outer" (3) => prim_inline_graphics_outer;
+    v006 "inline-graphics-outer" (3) => prim_inline_graphics_outer_v006;
+    v01  "inline-graphics-outer" (3) => prim_inline_graphics_outer_v01;
     // ---- gr.satyh roadmap prims (roadmap A/B/C/D) — see that plan + tools/gencode/vminst.ml for exact
     // signatures: `bezier-to` :742, `close-with-bezier` :787, `shift-path`
     // :663, `linear-transform-path` :678, `shift-graphics` :2451,
@@ -450,10 +504,15 @@ prims! {
     // `inline-frame-outer` :1787, `set-manual-rising` :1661,
     // `script-guard` :1908, `discretionary` :1969.
     "get-natural-metrics" (1) => prim_get_natural_metrics;
-    "inline-frame-outer" (3) => prim_inline_frame_outer;
+    // H3-H6: a `deco`'s result shape forks the same way, and the closure is
+    // fired LONG after (a post-page-break pass), so the generation must be
+    // captured here — see `version_forked_prims!`/`DecoEntry`.
+    v006 "inline-frame-outer" (3) => prim_inline_frame_outer_v006;
+    v01  "inline-frame-outer" (3) => prim_inline_frame_outer_v01;
     // vminst.ml:1807 `BackendInnerFrame`: same `tPADS @-> tDECO @-> tIB @->
     // tIB` as `inline-frame-outer`.
-    "inline-frame-inner" (3) => prim_inline_frame_inner;
+    v006 "inline-frame-inner" (3) => prim_inline_frame_inner_v006;
+    v01  "inline-frame-inner" (3) => prim_inline_frame_inner_v01;
     "set-manual-rising" (2) => prim_set_manual_rising;
     "script-guard" (2) => prim_script_guard;
     "discretionary" (4) => prim_discretionary;
@@ -477,7 +536,8 @@ prims! {
     // needs to type-check) ====
     "get-leftmost-script" (1) => prim_get_leftmost_script;
     "get-rightmost-script" (1) => prim_get_rightmost_script;
-    "inline-frame-breakable" (3) => prim_inline_frame_breakable;
+    v006 "inline-frame-breakable" (3) => prim_inline_frame_breakable_v006;
+    v01  "inline-frame-breakable" (3) => prim_inline_frame_breakable_v01;
     "register-destination" (2) => prim_register_destination;
     "register-link-to-uri" (6) => prim_register_link_to_uri;
     "register-link-to-location" (6) => prim_register_link_to_location;
@@ -597,7 +657,8 @@ prims! {
     "set-space-ratio" (4) => prim_set_space_ratio;
     "set-space-ratio-between-scripts" (6) => prim_set_space_ratio_between_scripts;
     "split-into-lines" (1) => prim_split_into_lines;
-    "block-frame-breakable" (4) => prim_block_frame_breakable;
+    v006 "block-frame-breakable" (4) => prim_block_frame_breakable_v006;
+    v01  "block-frame-breakable" (4) => prim_block_frame_breakable_v01;
     "embed-block-top" (3) => prim_embed_block_top;
     // `set-font` forks in its SECOND argument's head only: 0.0.6's
     // `string * float * float` vs saphe-split's `font * float * float`.
@@ -4512,7 +4573,11 @@ fn prim_stroke(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, Eval
 /// enforced by this signature. See for the full discussion; faithfully
 /// deferring this is the same architecture roadmap phase E (decoration
 /// hooks) needs.
-fn prim_inline_graphics(interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+fn prim_inline_graphics(
+    interp: &mut Interp,
+    version: RustyfiVersion,
+    mut args: Vec<Value>,
+) -> Result<Value, EvalError> {
     let gfun = args.pop().unwrap();
     let d = as_length(args.pop().unwrap())?;
     let h = as_length(args.pop().unwrap())?;
@@ -4522,7 +4587,7 @@ fn prim_inline_graphics(interp: &mut Interp, mut args: Vec<Value>) -> Result<Val
     // H1 (prim-retype-sweep.md §1.3/§3.4): the callback's result type is
     // `list graphics` under v0.0.6, one `graphics` collection under v0.1 —
     // see `coerce_graphics_result`'s doc comment.
-    let elems = coerce_graphics_result(interp, list_v)?;
+    let elems = coerce_graphics_result_for(version, list_v)?;
     // Detect a PAGE-ABSOLUTE callback: run it again at a far-off probe point
     // and compare. If the output is byte-identical the callback ignored its
     // placed-point argument (`fun _ -> …`, e.g. slydifi's frame background /
@@ -4538,7 +4603,7 @@ fn prim_inline_graphics(interp: &mut Interp, mut args: Vec<Value>) -> Result<Val
     let origin_independent = {
         let probe = make_point_value((Length::pt(4096.0), Length::pt(2731.0)));
         match interp.apply(gfun, probe) {
-            Ok(v) => coerce_graphics_result(interp, v)
+            Ok(v) => coerce_graphics_result_for(version, v)
                 .map(|e2| e2 == elems)
                 .unwrap_or(false),
             Err(_) => false,
@@ -4567,12 +4632,13 @@ fn prim_inline_graphics(interp: &mut Interp, mut args: Vec<Value>) -> Result<Val
 /// placed point); the width argument is faithful.
 fn prim_inline_graphics_outer(
     interp: &mut Interp,
+    version: RustyfiVersion,
     mut args: Vec<Value>,
 ) -> Result<Value, EvalError> {
     let gfun = args.pop().unwrap();
     let d = as_length(args.pop().unwrap())?;
     let h = as_length(args.pop().unwrap())?;
-    interp.outer_graphics.push(gfun);
+    interp.outer_graphics.push((gfun, version));
     let fn_id = GraphicsFnId(interp.outer_graphics.len() - 1);
     Ok(Value::InlineBoxes(vec![HorzBox::Pure(
         PureHorzBox::GraphicsOuter {
@@ -4602,8 +4668,8 @@ fn resolve_outer_graphics_in_contents(
         } = bx
         {
             let (w, h, d) = (*width, *height, *depth);
-            let gfun = match interp.outer_graphics.get(fn_id.0) {
-                Some(f) => f.clone(),
+            let (gfun, gver) = match interp.outer_graphics.get(fn_id.0) {
+                Some((f, v)) => (f.clone(), *v),
                 None => {
                     return eval_error(format!(
                         "inline-graphics-outer: dangling callback index {}",
@@ -4617,7 +4683,12 @@ fn resolve_outer_graphics_in_contents(
             // coercion as `prim_inline_graphics` above — shared by both
             // `inline-graphics-outer` itself and its use inside `tabular`
             // cells (`prim_tabular` calls this same function per cell).
-            let elems = coerce_graphics_result(interp, listv)?;
+            // The generation is the one the callback was REGISTERED under,
+            // carried alongside it in `Interp::outer_graphics`: this pass is
+            // a deferred one (`line-break`/`tabular`/`draw-text`), so
+            // `interp.version` here is the entry document's, not the
+            // callback author's.
+            let elems = coerce_graphics_result_for(gver, listv)?;
             *bx = PureHorzBox::Graphics {
                 width: w,
                 height: h,
@@ -4643,7 +4714,11 @@ fn resolve_outer_graphics_in_contents(
 /// writer's per-box `cm` translate (shared with `place_graphics`, see
 /// `rustyfi-pdf`) shifts the resulting rule paths into position. No
 /// shift-covariance caveat (contrast `prim_inline_graphics` above).
-fn prim_tabular(interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+fn prim_tabular(
+    interp: &mut Interp,
+    version: RustyfiVersion,
+    mut args: Vec<Value>,
+) -> Result<Value, EvalError> {
     let rulesf = args.pop().unwrap();
     let rows = as_cell_grid(args.pop().unwrap())?;
     let mut solved = rustyfi_backend::tabular::main(rows);
@@ -4656,8 +4731,10 @@ fn prim_tabular(interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, Eval
     let partial = interp.apply(rulesf, xs)?;
     let gval = interp.apply(partial, ys)?;
     // R2 (prim-retype-sweep.md §1.2/§3.4): the rules callback returns
-    // `list graphics` under v0.0.6, one `graphics` collection under v0.1.
-    let rules = coerce_graphics_result(interp, gval)?;
+    // `list graphics` under v0.0.6, one `graphics` collection under v0.1 —
+    // per the CALLER's generation (`version`), which is the one whose
+    // `tabular` type this call was checked against.
+    let rules = coerce_graphics_result_for(version, gval)?;
 
     Ok(Value::InlineBoxes(vec![HorzBox::Pure(
         PureHorzBox::Tabular(TabularBox {
@@ -4908,6 +4985,7 @@ fn prim_get_natural_metrics(
 /// calls it.
 fn make_inline_frame(
     interp: &mut Interp,
+    version: RustyfiVersion,
     (pad_l, pad_r, pad_t, pad_b): (Length, Length, Length, Length),
     deco: Value,
     inner: Vec<HorzBox>,
@@ -4916,7 +4994,11 @@ fn make_inline_frame(
     let (contents, height, depth) = fit_cell(inner, w);
     let contents = contents.into_iter().map(|(x, b)| (x + pad_l, b)).collect();
     let id = DecoId(interp.decos.len());
-    interp.decos.push(DecoEntry::Inline { deco });
+    // `version` is the CALLING code's generation, threaded in by the
+    // per-version prim rows below — fire time is a post-page-break pass with
+    // no version context of its own, so this is the only moment the answer
+    // is available. See `DecoEntry`'s doc comment.
+    interp.decos.push(DecoEntry::Inline { deco, version });
     Value::InlineBoxes(vec![HorzBox::Pure(PureHorzBox::Frame {
         width: pad_l + w + pad_r,
         height: height + pad_t,
@@ -4933,22 +5015,30 @@ fn make_inline_frame(
 /// (`PHGOuterFrame` vs `PHGInnerFrame`), which this atomic box model
 /// collapses — both this and [`prim_inline_frame_inner`] build the exact
 /// same box.
-fn prim_inline_frame_outer(interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+fn prim_inline_frame_outer(
+    interp: &mut Interp,
+    version: RustyfiVersion,
+    mut args: Vec<Value>,
+) -> Result<Value, EvalError> {
     let inner = as_inline_boxes(args.pop().unwrap())?;
     let deco = args.pop().unwrap();
     let pads = as_paddings(args.pop().unwrap())?;
-    Ok(make_inline_frame(interp, pads, deco, inner))
+    Ok(make_inline_frame(interp, version, pads, deco, inner))
 }
 
 /// `inline-frame-inner : paddings -> deco -> inline-boxes -> inline-boxes`
 /// (vminst.ml:1807 `BackendInnerFrame`) — same construction as
 /// [`prim_inline_frame_outer`]; see that function's doc comment for the
 /// outer/inner distinction this atomic model collapses.
-fn prim_inline_frame_inner(interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+fn prim_inline_frame_inner(
+    interp: &mut Interp,
+    version: RustyfiVersion,
+    mut args: Vec<Value>,
+) -> Result<Value, EvalError> {
     let inner = as_inline_boxes(args.pop().unwrap())?;
     let deco = args.pop().unwrap();
     let pads = as_paddings(args.pop().unwrap())?;
-    Ok(make_inline_frame(interp, pads, deco, inner))
+    Ok(make_inline_frame(interp, version, pads, deco, inner))
 }
 
 /// `set-manual-rising : length -> context -> context` (vminst.ml:1661
@@ -5160,13 +5250,14 @@ fn prim_get_rightmost_script(
 /// `decoH`/`decoM`/`decoT` per fragment).
 fn prim_inline_frame_breakable(
     interp: &mut Interp,
+    version: RustyfiVersion,
     mut args: Vec<Value>,
 ) -> Result<Value, EvalError> {
     let inner = as_inline_boxes(args.pop().unwrap())?;
     let decoset = as_decoset(args.pop().unwrap())?;
     let pads = as_paddings(args.pop().unwrap())?;
     let [deco_s, _h, _m, _t] = decoset;
-    Ok(make_inline_frame(interp, pads, deco_s, inner))
+    Ok(make_inline_frame(interp, version, pads, deco_s, inner))
 }
 
 /// `deco-set` = `Value::Tuple` of 4 closures (`(decoS, decoH, decoM,
@@ -5196,12 +5287,24 @@ fn as_decoset(v: Value) -> Result<[Value; 4], EvalError> {
 /// already rejected; don't mask it with tolerant decoding. Shared by every
 /// H1-H6 coercion site (`prim_inline_graphics`, `inline-graphics-outer`/
 /// `tabular`'s `resolve_outer_graphics_in_contents`, `tabular`'s own rules
-/// callback, and `apply_deco` below) — the deco family's coercion happens
-/// here, at deferred-fire time, far from any prim body, which is why these
-/// rows stay untagged (`Both`) rather than forking `_v006`/`_v01` bodies
-/// (prim-retype-sweep.md §3.4).
-fn coerce_graphics_result(interp: &Interp, v: Value) -> Result<Vec<GraphicsElem>, EvalError> {
-    if interp.version.graphics_is_collection() {
+/// callback, and `apply_deco` below).
+///
+/// `version` is EXPLICIT rather than read off `interp.version`, and that is
+/// the whole point. `interp.version` is one whole-program field, set once by
+/// `lib.rs`'s `eval_document_trials`; in a cross-version program it names
+/// the ENTRY document's generation, while the callback being decoded here
+/// may have been written by a spliced 0.0.6 dependency. Every caller gets
+/// the right answer from a place that genuinely knows it: the six
+/// H1/H2/R2/H3-H6 prim bodies are registered per version
+/// (`version_forked_prims!`, folded at compile time by
+/// `compile.rs`'s `Ast::VersionScope` arm), and the two DEFERRED consumers
+/// read the generation captured when the closure was interned
+/// (`DecoEntry::version`, `Interp::outer_graphics`'s second component).
+fn coerce_graphics_result_for(
+    version: RustyfiVersion,
+    v: Value,
+) -> Result<Vec<GraphicsElem>, EvalError> {
+    if version.graphics_is_collection() {
         Ok(vec![as_graphics(v)?])
     } else {
         as_list(v)?.into_iter().map(as_graphics).collect()
@@ -5215,8 +5318,15 @@ fn coerce_graphics_result(interp: &Interp, v: Value) -> Result<Vec<GraphicsElem>
 /// H3-H6 (prim-retype-sweep.md §1.3): the deco closure's result is `list
 /// graphics` under v0.0.6, one `graphics` collection under v0.1 — see
 /// `coerce_graphics_result`'s doc comment.
+///
+/// `version` is the generation the closure was CAPTURED under
+/// (`DecoEntry::version`), not `interp.version`: this runs from `lib.rs`'s
+/// post-page-break firing pass, which is outside every `VersionScope`
+/// window, so `interp.version` there is the entry document's generation. In
+/// a single-version program the two are the same value.
 pub(crate) fn apply_deco(
     interp: &mut Interp,
+    version: RustyfiVersion,
     deco: Value,
     pt: Point,
     w: Length,
@@ -5227,7 +5337,7 @@ pub(crate) fn apply_deco(
     let v = interp.apply(v, Value::Length(w))?;
     let v = interp.apply(v, Value::Length(h))?;
     let v = interp.apply(v, Value::Length(d))?;
-    coerce_graphics_result(interp, v)
+    coerce_graphics_result_for(version, v)
 }
 
 /// `(length * color) option` — `register-link-to-uri`/`-to-location`'s
@@ -8680,6 +8790,7 @@ fn indent_left(block: Vec<VertBox>, pad_l: Length) -> Vec<VertBox> {
 /// follow-up, see `fire_hooks`'s doc comment).
 fn prim_block_frame_breakable(
     interp: &mut Interp,
+    version: RustyfiVersion,
     mut args: Vec<Value>,
 ) -> Result<Value, EvalError> {
     let k = args.pop().unwrap();
@@ -8696,6 +8807,8 @@ fn prim_block_frame_breakable(
         },
         width: ctx.paragraph_width,
         decoset,
+        // See `make_inline_frame`'s identical capture.
+        version,
     });
     let inner_ctx = Context {
         paragraph_width: ctx.paragraph_width - pad_l - pad_r,

@@ -1795,6 +1795,17 @@ pub(crate) struct Checker<'s> {
     /// variants`) is `V0_0` — behavior-neutral for every existing
     /// 0.0.6-only test that never installs builtins at all.
     version: RustyfiVersion,
+    /// The generation of the code currently being inferred, when that is
+    /// NOT [`Checker::version`] — set (save/restore) by the
+    /// `Ast::VersionScope` infer arm, `None` outside every such scope.
+    ///
+    /// Deliberately a SEPARATE field rather than a temporary overwrite of
+    /// `version`: that one drives `name_to_mono`, row polymorphism, the
+    /// builtin variant set and more, all of which the whole-program merge
+    /// wants pinned to `V0_1` (`v1::module_check::check_program_inner`).
+    /// The only consumer is [`Checker::binding_version`] — see there for
+    /// what needs it and why a wrapper peel alone is not enough.
+    scoped_version: Option<RustyfiVersion>,
     /// The module path of the member body currently being inferred (pushed by
     /// the `Ast::ModuleScope` arm; empty at top level). A BARE constructor
     /// reference is looked up under `<path>.Ctor` (innermost prefix first)
@@ -1856,6 +1867,7 @@ impl<'s> Checker<'s> {
             synonyms: HashMap::new(),
             warnings: Vec::new(),
             version: RustyfiVersion::V0_0,
+            scoped_version: None,
             ctor_scope: Vec::new(),
             // A document is stage 1; a library overrides this from its
             // `@stage:` header before checking begins.
@@ -2445,12 +2457,20 @@ impl<'s> Checker<'s> {
                 self.ctx.leave_level();
                 // math-split spec §4.4: V0_0's `let-math` and V0_1's
                 // `val math` both lower to the SAME `Ast::LetMathIn`
-                // (spec §4.3) — only the SCHEME RULE forks, on
-                // `self.version`, since a `val math` binding's lowering
-                // always synthesizes exactly three trailing ctx/sub/sup
-                // lambdas that `math_command_scheme`'s v0.0.6 rule knows
-                // nothing about.
-                let scheme = if self.version.math_is_split() {
+                // (spec §4.3) — only the SCHEME RULE forks, since a `val
+                // math` binding's lowering always synthesizes exactly three
+                // trailing ctx/sub/sup lambdas that `math_command_scheme`'s
+                // v0.0.6 rule knows nothing about.
+                //
+                // It forks on the BINDING's generation, not the session's
+                // (`binding_version`, not `self.version`): in a merged
+                // cross-version program the session is always `V0_1` while a
+                // spliced 0.0.6 package's `let-math` RHS carries its own
+                // `Ast::VersionScope(V0_0, _)`. On every single-version
+                // program the two agree by construction (no `VersionScope`
+                // node exists there at all), so this is exactly the old
+                // dispatch.
+                let scheme = if self.binding_version(value).math_is_split() {
                     self.math_command_scheme_v01(self.text(name), tv, ast_span(value))?
                 } else {
                     self.math_command_scheme(self.text(name), tv, ast_span(value))?
@@ -2666,6 +2686,57 @@ impl<'s> Checker<'s> {
             }
         }
         declared(value).unwrap_or(self.stage)
+    }
+
+    /// The GENERATION one binding was authored in — the version analogue of
+    /// [`Checker::binding_stage`], and needed for exactly the same reason.
+    ///
+    /// A merged cross-version program has ONE `Checker::version`, hard-coded
+    /// to `V0_1` (`v1::module_check::check_program_inner`), while each
+    /// spliced 0.0.6 dependency's bindings carry their own
+    /// `Ast::VersionScope(V0_0, _)` on the RHS (`elaborate::
+    /// maybe_v006_scope`). Any scheme rule that FORKS on the version must
+    /// therefore ask the binding, not the session — otherwise a 0.0.6
+    /// package's binding is read under 0.1's rule.
+    ///
+    /// The concrete miss this exists for: `let-math`. `math_command_scheme`
+    /// (0.0.6) and `math_command_scheme_v01` are two different rules for the
+    /// same `Ast::LetMathIn`, and 0.1's demands three synthesized trailing
+    /// `ctx`/`sub`/`sup` lambdas that a 0.0.6 `let-math \frac = math-frac`
+    /// does not have. Dispatching on `self.version` refused EVERY `let-math`
+    /// in a crossed 0.0.6 package — including the bundled corpus's own
+    /// `math.satyh`, which the published packages `@require:` constantly
+    /// (`texlogo`, `latexcmds`, `siunitx`, … all reach it transitively), so
+    /// the diagnostic a user actually saw was a math-split spec complaint
+    /// about a file they never wrote.
+    ///
+    /// The wrapper peel is `binding_stage`'s, minus the arm that terminates
+    /// it: `elaborate::walk_bindings` puts `VersionScope` INSIDE
+    /// `StageScope` (`already_staged`'s doc comment), so a staged spliced
+    /// binding is `StageScope(_, VersionScope(_, ..))` and this must look
+    /// through `StageScope` as well as `ModuleScope`.
+    ///
+    /// The peel alone is not enough, hence the `scoped_version` fallback.
+    /// `maybe_v006_scope` wraps a TOP-LEVEL binding's RHS; an
+    /// EXPRESSION-level `let-math \c = e in body` (`elaborate.rs`'s
+    /// `Expr::LetMathIn` arm) is a node INSIDE some other binding's already-
+    /// wrapped RHS and carries no wrapper of its own. `siunitx` writes
+    /// exactly that — `let-math \C = ord \`C\` in ${\math-sup{}{\circ}\C}`
+    /// — so the ambient generation, recorded by the `Ast::VersionScope`
+    /// infer arm as it descends, is what answers for it. Outside every
+    /// scope (i.e. always, on a single-version program) this is `None` and
+    /// the session's own version answers, exactly as before.
+    pub(crate) fn binding_version(&self, value: &Ast<'s>) -> RustyfiVersion {
+        fn declared<'s>(a: &Ast<'s>) -> Option<RustyfiVersion> {
+            match a {
+                Ast::VersionScope(v, _) => Some(*v),
+                Ast::StageScope(_, b) | Ast::ModuleScope(_, b) => declared(b),
+                _ => None,
+            }
+        }
+        declared(value)
+            .or(self.scoped_version)
+            .unwrap_or(self.version)
     }
 
     /// [`Checker::binding_stage`] for a `let-rec` GROUP. Every clause of one
@@ -3074,7 +3145,15 @@ impl<'s> Checker<'s> {
             Ast::VersionScope(version, body) => {
                 self.install_additional_builtin_variants(*version);
                 let scoped = version_scoped_type_env(self.store, env, *version);
-                self.infer(&scoped, body)
+                // Also make the generation available to any version-forking
+                // rule reached INSIDE the body — an expression-level
+                // `let-math .. in ..` is the one that needs it, since its
+                // own `Ast::LetMathIn` carries no wrapper of its own. See
+                // `Checker::binding_version`.
+                let saved = self.scoped_version.replace(*version);
+                let r = self.infer(&scoped, body);
+                self.scoped_version = saved;
+                r
             }
             // A module member's body: resolve its bare constructor references
             // against `path`'s constructors first. `path` is the full absolute

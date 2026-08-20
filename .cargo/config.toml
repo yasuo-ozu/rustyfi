@@ -1,0 +1,27 @@
+# Workspace-wide cargo configuration.
+
+[env]
+# THE TEST SUITE NEEDS A BIGGER STACK THAN LIBTEST'S DEFAULT.
+#
+# Elaboration and typechecking recurse over the *merged* program: a document
+# plus every package it `@require:`s, spliced into one nested-let chain. A real
+# prelude (`pervasives`, `stdja`, the 0.1 `std-ja` tree) is thousands of
+# bindings deep, so the recursion depth follows the size of the library, not the
+# size of the test. libtest spawns each test on a thread sized by RUST_MIN_STACK
+# — 2 MiB by default — and a test that compiles anything real sits close enough
+# to that ceiling that whether it survives depends on the compiler's inlining
+# decisions. That is exactly how it failed: green on the author's rustc,
+# `fatal runtime error: stack overflow` on CI's, in `stdlib_tier0`, aborting the
+# whole binary (SIGABRT) and taking the rest of the suite's binaries with it.
+#
+# Setting it here fixes every test binary at once, including ones not yet
+# written, which the alternative does not: individual tests spawning their own
+# 64 MiB thread (`run_with_big_stack` in `stdlib_tier0.rs` and friends). Those
+# stay as they are — they are load-bearing for anyone running a test binary
+# DIRECTLY, where cargo is not in the loop to apply this file.
+#
+# `force = true` on purpose: this is a correctness floor for the suite, not a
+# preference, and a stale RUST_MIN_STACK in someone's shell should not be able
+# to reintroduce a crash that looks like a code bug. Stack is virtual and
+# committed lazily, so the ceiling costs address space, not memory.
+RUST_MIN_STACK = { value = "67108864", force = true }

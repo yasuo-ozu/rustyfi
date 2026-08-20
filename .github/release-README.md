@@ -55,4 +55,4 @@ $ shasum -a 256 -c rustyfi-@TAG@-@TARGET@.tar.gz.sha256
 ```
 
 Licensed LGPL-3.0. Sources and issue tracker:
-<https://github.com/yasuo-ozu/satysfi-rust>
+<https://github.com/yasuo-ozu/rustyfi>

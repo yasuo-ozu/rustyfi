@@ -76,8 +76,13 @@ jobs:
       # A cross-built archive that cannot start is worth catching here rather
       # than in someone's download. Native runners per target, so this always
       # runs the artifact that ships.
+      #
+      # Both branches go through `format()`: `${{ }}` does NOT nest inside a
+      # string literal within an expression, so the Windows arm written as
+      # 'target\${{ matrix.target }}\release\rustyfi.exe' would run that text
+      # verbatim, with the placeholder unexpanded, and fail.
       - name: Smoke test
-        run: ${{ matrix.target == 'x86_64-pc-windows-msvc' && 'target\${{ matrix.target }}\release\rustyfi.exe --version' || format('./target/{0}/release/rustyfi --version', matrix.target) }}
+        run: ${{ matrix.target == 'x86_64-pc-windows-msvc' && format('target\{0}\release\rustyfi.exe --version', matrix.target) || format('./target/{0}/release/rustyfi --version', matrix.target) }}
 
       # THE BUNDLED PACKAGES ARE NOT OPTIONAL. `rustyfi doc.saty` resolves
       # `@require: stdja` against a lib-root, so a bare binary cannot typeset

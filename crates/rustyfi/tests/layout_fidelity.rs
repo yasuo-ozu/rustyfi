@@ -77,13 +77,36 @@ fn layout_matches_upstream_satysfi_within_baseline() {
 
     let mut cmd = Command::new("python3");
     cmd.arg(&script).arg("--bin").arg(bin).arg("--keep-going");
-    // If the ORIGINAL SATySFi is on PATH (e.g. inside `nix develop`, see
-    // flake.nix), generate the reference PDFs with it so the comparison is
-    // against freshly-produced official output. Otherwise the committed
-    // vendored reference PDFs are used — they are the same official
-    // SATySFi 0.0.11 output (the baseline was recorded via --gen-refs and the
-    // two agree to <0.01 text_match), so the baseline holds either way.
-    if tool_present("satysfi") {
+    // THE VENDORED REFERENCE PDFs ARE THE DEFAULT, DELIBERATELY.
+    //
+    // This test measures the PORT against a fixed point. The vendored PDFs are
+    // that fixed point: `scripts/layout_fidelity_baseline.json` records the
+    // metrics of this port compared to THOSE FILES, so anything that moves the
+    // reference moves every threshold with it.
+    //
+    // `--gen-refs` re-renders the references with the original SATySFi, which
+    // resolves its stdlib AND ITS FONTS from its own default config path — not
+    // from anything this repo pins. Two machines with different SATySFi
+    // installations therefore produce different references, and the comparison
+    // silently becomes "port vs whatever this box has". That is exactly how it
+    // failed in CI: inside `nix develop` the flake's `satysfi` was on PATH, this
+    // gate fired on its mere presence, and enumitem was reported as a
+    // regression (text_match 0.8516 against a 0.8891 baseline, width_p95 1.79pt
+    // against 0.74pt) while the port's own output was byte-for-byte what the
+    // baseline was recorded from — its word count, 2225, matched exactly; it
+    // was upstream's that had moved, 2285 -> 2289.
+    //
+    // So regenerating is now opt-in, for the one job it is actually for:
+    // deliberately refreshing the references, which must be followed by
+    // `scripts/layout_fidelity.py --update` to re-record the baseline against
+    // them. Never let it turn on by itself.
+    if std::env::var_os("RUSTYFI_GEN_REFS").is_some() {
+        assert!(
+            tool_present("satysfi"),
+            "RUSTYFI_GEN_REFS is set but the original `satysfi` is not on PATH \
+             (try `nix develop`); refusing to silently fall back to the vendored \
+             references, since the point of the flag is to replace them"
+        );
         cmd.arg("--gen-refs");
     }
 

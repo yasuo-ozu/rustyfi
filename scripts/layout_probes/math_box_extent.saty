@@ -1,0 +1,35 @@
+% Probe: the OTHER consumers of a math sub-run's ink extent, once
+% `math_script_drop.saty`'s script shift is right.
+%
+% `MathGlyph.height`/`.depth` do not only feed `sub_shift_clamped` /
+% `sup_shift_clamped`. The same aggregate (`glyphs_extent` /
+% `inner_ink_extent`) also sizes a fraction's numerator/denominator raise
+% (`math.ml:574-594`), picks a stretchy delimiter's `MathVariants` record
+% (`make_paren`, `math.ml:644`, fed `hC`/`dC` — the inner content's ink), and
+% then feeds the script clamps AGAIN one level out when the paren itself
+% carries a superscript (`h_base` = the paren's own height, so `math.ml:527`'s
+% `h_base - SuperscriptBaselineDropMax` candidate can win where a bare letter
+% base's never would).
+%
+% So a wrong ink extent shows up here even when the plain `m_J` script shift
+% is correct, and the reverse: this probe must stay flat when
+% `math_script_drop.saty` is flat. Rows:
+%   1. plain CJK             — the control, must agree exactly
+%   2. bare fraction         — numerator/denominator raise off ink extent
+%   3. paren'd fraction      — delimiter variant choice off the same extent
+%   4. paren + superscript   — the paren's OWN height back into the clamp
+@require: stdjabook
+@require: math
+
+document (|
+  title = {math box extent probe};
+  author = {};
+  show-title = false;
+  show-toc = false;
+|) '<
+  +p{あいうえお。}
+  +p{かきくけこ${\frac{1}{1-v}}さしすせそ。}
+  +p{たちつてと${\paren{\frac{1}{1-v}}}なにぬねの。}
+  +p{はひふへほ${\paren{\frac{1}{1-v}}^{2}}まみむめも。}
+  +p{やゆよ。}
+>

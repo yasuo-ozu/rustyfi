@@ -182,6 +182,22 @@ fn math_glyphs(v: Value) -> Vec<MathGlyph> {
     }
 }
 
+/// The base ink HEIGHT and script ink DEPTH `sup_shift_clamped` clamps
+/// against, read off the laid-out run itself.
+///
+/// These deliberately do NOT come from `store.ascender`/`store.descender`:
+/// upstream measures a math glyph from its OWN bounding box
+/// (`FontFormat.get_math_glyph_metrics`, fontFormat.ml:2257-2264 —
+/// `hgt = truncate_negative ymax`, `dpt = truncate_positive ymin`), and the
+/// font-level ascender/descender is exactly the substitution that used to put
+/// this port's scripts 1.7-2.1pt off (`scripts/layout_probes/
+/// math_script_drop.saty`). Reading them back off `MathGlyph` keeps this
+/// test's recompute independent of the CLAMP — which is what it is about —
+/// without re-deriving the extent convention here as well.
+fn base_and_script_extents(glyphs: &[MathGlyph]) -> (Length, Length) {
+    (glyphs[0].height, glyphs[1].depth)
+}
+
 /// Independently recompute `sup_shift_clamped`'s clamp (`math.ml:524-533`)
 /// using the correct cramped/uncramped branch — mirrors
 /// `tests/math_table.rs`'s "headline" test's recompute style.
@@ -241,9 +257,7 @@ fn cramped_superscript_in_radicand_uses_the_cramped_constant() {
         "expected base 'x' + script '2', got {top_glyphs:?}"
     );
 
-    let h_base = store.ascender(FontKey(0), size);
-    let script_size = size * mc.script_scale_down;
-    let d_sup = store.descender(FontKey(0), script_size);
+    let (h_base, d_sup) = base_and_script_extents(&top_glyphs);
     let top_expected = expected_sup_shift(&mc, false, size, h_base, d_sup);
     assert_eq!(
         top_glyphs[1].dy, top_expected,
@@ -313,9 +327,7 @@ fn cramped_superscript_in_fraction_denominator_uses_the_cramped_constant() {
         "expected base 'y' + script '2', got {top_glyphs:?}"
     );
 
-    let h_base = store.ascender(FontKey(0), size);
-    let script_size = size * mc.script_scale_down;
-    let d_sup = store.descender(FontKey(0), script_size);
+    let (h_base, d_sup) = base_and_script_extents(&top_glyphs);
     let top_expected = expected_sup_shift(&mc, false, size, h_base, d_sup);
     assert_eq!(
         top_glyphs[1].dy, top_expected,

@@ -1767,6 +1767,81 @@ fn jl_class(c: char) -> Option<JlClass> {
     }
 }
 
+/// `ideographic_single`'s kern (`convertText.ml:267-283`) as a signed
+/// `(leading, trailing)` pair of ratios, to be scaled by the character's
+/// CORRECTED font size (`get_corrected_font_size`, `convertText.ml:77-79`, which
+/// is what `halfwidth_kern`/`quarterwidth_kern` at `:110-118` use).
+///
+/// The name of upstream's function is the whole point: "converts single CJK
+/// character, **not depending on adjacent characters**". The kern rides with the
+/// GLYPH, unconditionally, as an `LBPure` outside any discretionary — it is how
+/// upstream renders `。`/`、`/`）` at their full em advance and then takes the
+/// trailing half back, and `（` its leading half.
+///
+/// The port only ever modelled it folded into `cjk_pair_space`, which runs
+/// between two CJK characters. At a CJK-punctuation/Latin boundary there is no
+/// such pair, so the kern was simply absent and the port set 0.5em too wide —
+/// 5.28pt at stdja's 12pt/0.88, measured on all four punctuation shapes by
+/// `scripts/layout_probes/interscript.saty`. `pdftotext` then split
+/// `型。cfmt` into two tokens where upstream, whose `c` lands *inside* the
+/// kuten's advance box, emits one.
+/// `JlClass::MiddleDot` is deliberately absent, and this is the one place the
+/// port's JLreq table is knowingly wider than upstream's reach: **no codepoint
+/// upstream is ever classified `JLMD`.** `line_break_class_overriding_list`
+/// (`lineBreakDataMap.ml:57-103`) is the only source of the JL classes and it
+/// names none, so `・` U+30FB, `：` U+FF1A and `；` U+FF1B keep their
+/// `LineBreak.txt` class `NS` (`:1478`, `:2580`) and `ideographic_single`'s
+/// `JLMD` arm — with `quarterwidth_kern` — is dead code. Emitting the quarter
+/// kern here made `漢字・ india` 2.64pt NARROWER than upstream instead of the
+/// 1.08pt it was already off by (that residual is a different bug: `NS` is not
+/// in `is_ideographic_class`, `charBasis.ml:127-130`, so upstream does NOT
+/// delete the source space after `・` and sets a real 0.33em interword space
+/// where the port deletes it and inserts inter-script glue).
+fn ideographic_kern(c: char) -> (f64, f64) {
+    match jl_class(c) {
+        Some(JlClass::Close) | Some(JlClass::FullStop) | Some(JlClass::Comma) => (0.0, -0.5),
+        Some(JlClass::Open) => (-0.5, 0.0),
+        Some(JlClass::MiddleDot) | None => (0.0, 0.0),
+    }
+}
+
+/// `get_corrected_font_size ctx (script of c)` (`convertText.ml:77-79`) — the
+/// font size `c` is actually rendered at, i.e. `font_size` times the script
+/// font's ratio (0.88 for stdja's Kana/Han). `ideographic_single`'s kerns are
+/// a ratio of THIS, not of the raw `font_size` the inter-script glue uses
+/// (`convertText.ml:225` takes the raw `ctx.font_size`).
+fn corrected_font_size(ctx: &Context, c: char) -> Length {
+    ctx.font_size * script_font(ctx, char_script(c)).ratio
+}
+
+/// The kern boxes upstream emits at a Latin↔CJK boundary in addition to the
+/// inter-script glue: the LEFT character's trailing kern goes before the glue,
+/// the RIGHT character's leading kern after it (`ideographic_single`'s own
+/// `[lphbraw; hwkern]` / `[hwkern; lphbraw]` ordering). Both are rigid, so they
+/// ride as `FixedEmpty` and never become break points — matching upstream,
+/// where the kern is `LBPure` and only the glue is wrapped in a discretionary.
+fn interscript_boxes(ctx: &Context, l: char, r: char) -> Vec<PureHorzBox> {
+    let mut out = Vec::with_capacity(3);
+    let trailing = ideographic_kern(l).1;
+    if trailing != 0.0 {
+        out.push(PureHorzBox::FixedEmpty {
+            width: corrected_font_size(ctx, l) * trailing,
+        });
+    }
+    out.push(PureHorzBox::OuterEmpty {
+        natural: ctx.font_size * 0.24,
+        shrinkable: ctx.font_size * 0.08,
+        stretchable: ctx.font_size * 0.16,
+    });
+    let leading = ideographic_kern(r).0;
+    if leading != 0.0 {
+        out.push(PureHorzBox::FixedEmpty {
+            width: corrected_font_size(ctx, r) * leading,
+        });
+    }
+    out
+}
+
 /// The glue SATySFi puts between two directly adjacent CJK characters, as
 /// `(natural, shrink, stretch)` ratios of `font_size` — `space_between_chunks`
 /// (`convertText.ml:220`) with `ideographic_single`'s compensating kerns
@@ -1854,11 +1929,7 @@ fn insert_box_interscript_glue(boxes: Vec<HorzBox>, ctx: &Context) -> Vec<HorzBo
             if is_latin_cjk_boundary(char_script(pc), char_script(cc))
                 && !interscript_glue_suppressed(pc, cc)
             {
-                out.push(HorzBox::Pure(PureHorzBox::OuterEmpty {
-                    natural: ctx.font_size * 0.24,
-                    shrinkable: ctx.font_size * 0.08,
-                    stretchable: ctx.font_size * 0.16,
-                }));
+                out.extend(interscript_boxes(ctx, pc, cc).into_iter().map(HorzBox::Pure));
             }
         }
         out.push(b);
@@ -2085,11 +2156,7 @@ fn text_to_boxes(
                         flush_word(&mut word, s, out)?;
                     }
                 }
-                out.push(HorzBox::Pure(PureHorzBox::OuterEmpty {
-                    natural: ctx.font_size * 0.24,
-                    shrinkable: ctx.font_size * 0.08,
-                    stretchable: ctx.font_size * 0.16,
-                }));
+                out.extend(interscript_boxes(ctx, pc, c).into_iter().map(HorzBox::Pure));
             }
         }
         if let Some(cur) = word_script {

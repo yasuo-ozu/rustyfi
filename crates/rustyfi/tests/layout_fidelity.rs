@@ -2,12 +2,18 @@
 //!
 //! The vendored corpus ships a reference PDF built by the *original*
 //! OCaml SATySFi. This test rebuilds the same sources with the port and
-//! compares the two PDFs' LAYOUT (word bounding boxes, via poppler
-//! `pdftotext -bbox`) across every complex construct the corpus exercises —
-//! tables, nested lists, figures/floats, math + framed boxes, and vector
-//! graphics. Because the port bundles the same fonts SATySFi uses, glyph
+//! compares the two PDFs' LAYOUT across every complex construct the corpus
+//! exercises — tables, nested lists, figures/floats, math + framed boxes, and
+//! vector graphics. Because the port bundles the same fonts SATySFi uses, glyph
 //! metrics are identical, so any divergence is the layout ENGINE's (line
 //! breaking, spacing, pagination, box placement).
+//!
+//! GEOMETRY is read from each PDF's own content stream (page/line placement)
+//! and TEXT from poppler `pdftotext`, compared as characters. Neither half uses
+//! a `pdftotext` glyph BOX or word SPLIT, because both of those move on things
+//! that are not the layout — a font descriptor the two writers disagree about,
+//! and how far justification opened an inter-word gap. `scripts/
+//! layout_fidelity.py`'s docstring carries the measurements.
 //!
 //! The heavy lifting lives in `scripts/layout_fidelity.py` (lib-root assembly,
 //! per-doc build, poppler extraction, metric computation, baseline compare) —

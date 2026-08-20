@@ -295,21 +295,30 @@ The `.satysfi-aux` file is upstream's format, so the two engines can share one.
 ## How close is it?
 
 Every document in the vendored corpus is rebuilt and compared against the PDF
-the original SATySFi produced, word box by word box
-(`scripts/layout_fidelity.py`):
+the original SATySFi produced (`scripts/layout_fidelity.py`). Lines are counted
+from each PDF's own content stream and content is compared character by
+character, because both of the obvious `pdftotext` measurements — clustering
+glyph boxes into lines, and counting words — move on things that are not the
+layout at all; the script's docstring has the details and the evidence.
 
-| doc | pages (port / SATySFi) | words in the same place | exercises |
-|---|---|---|---|
-| latexcmds | 12 / 12 | 89.6 % | math, framed and coloured boxes |
-| xpath | 11 / 11 | 96.7 % | paths, béziers, diagrams |
-| enumitem | 27 / 27 | 88.9 % | deeply nested, customized lists |
-| easytable | 19 / 19 | 87.2 % | tables, rules, spans |
-| figbox | 21 / 21 | 88.7 % | figures, floats, captions |
-| slydifi | 30 / 30 | 85.1 % | slides, overlays, themes |
+| doc | pages | lines (port / SATySFi) | characters missing / extra | exercises |
+|---|---|---|---|---|
+| latexcmds | 12 / 12 | 341 / 343 | 9 / 16 of 7 972 | math, framed and coloured boxes |
+| xpath | 11 / 11 | 292 / 290 | 0 / 11 of 8 292 | paths, béziers, diagrams |
+| enumitem | 27 / 27 | 882 / 883 | 13 / 22 of 18 460 | deeply nested, customized lists |
+| easytable | 19 / 19 | 565 / 565 | 56 / 0 of 15 992 | tables, rules, spans |
+| figbox | 21 / 21 | 590 / 590 | 0 / 6 of 14 207 | figures, floats, captions |
+| slydifi | 30 / 30 | 392 / 393 | 7 / 0 of 8 625 | slides, overlays, themes |
 
-Every document now paginates exactly as upstream does. Glyph metrics agree to
-within 0.75 pt at the 95th percentile, so what is left is the line breaker's own
-judgement.
+Every document paginates exactly as upstream does, sets its text on the same
+number of baselines to within two, and typesets at least 99.6 % of upstream's
+characters — `easytable`'s 56, the worst case, is a handful of cells in one
+multi-row table. Glyph metrics agree to within 0.75 pt at the 95th percentile.
+
+("extra" is the other direction, and is usually the port doing better: an
+upstream math superscript often carries no usable `ToUnicode`, so `𝐸=𝑚𝑐²`'s
+exponent extracts as nothing from the reference and as `2` from the port —
+that is all six of figbox's.)
 
 It is also faster. Minimum CPU time over three interleaved runs against SATySFi
 0.0.11 (`--bytecomp` is upstream's bytecode compiler, the fair comparison for

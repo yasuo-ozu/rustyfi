@@ -35,13 +35,24 @@
 //!
 //!   Adopting upstream's exact formula here was TRIED AND MEASURED, not
 //!   assumed: it regresses 6 of the 7 layout-fidelity corpus documents
-//!   (`scripts/layout_fidelity.py`), and in the predicted direction — the port
-//!   already sets fewer lines than SATySFi on easytable (556 vs 592) and
-//!   enumitem (869 vs 885), and quantizing widens both (554, 868) because
-//!   `LINE_PENALTY` becomes the only thing separating partitions whose lines
-//!   are all inside the free band. figbox's page gap does not close. Do not
-//!   re-derive this from lineBreak.ml alone; the cost model and the graph
-//!   structure are a package, and we only have the one.
+//!   (`scripts/layout_fidelity.py`), and quantizing moves easytable and
+//!   enumitem's line counts DOWN, because `LINE_PENALTY` becomes the only
+//!   thing separating partitions whose lines are all inside the free band.
+//!   figbox's page gap does not close. Do not re-derive this from
+//!   lineBreak.ml alone; the cost model and the graph structure are a
+//!   package, and we only have the one.
+//!
+//!   The RATIONALE this note used to give for that direction was wrong, and
+//!   is worth knowing before trusting any line-count argument. It said "the
+//!   port already sets fewer lines than SATySFi on easytable (556 vs 592) and
+//!   enumitem (869 vs 885)" — figures from the harness's old line metric,
+//!   which clustered `pdftotext` GLYPH BOXES, whose tops and bottoms come
+//!   from the font descriptor, which the two writers do not emit alike.
+//!   Counted from the PDF content stream the two engines set 565 vs 565 and
+//!   882 vs 883: easytable was never short at all. The experiment's OUTCOME
+//!   stands (it was a whole-harness comparison), but "we are already short,
+//!   so do not go shorter" is not the reason, and re-running it should
+//!   re-derive the reason from the current metric.
 
 use crate::context::Context;
 use crate::hbox::{HorzBox, PureHorzBox, FORCED_BREAK_PENALTY};

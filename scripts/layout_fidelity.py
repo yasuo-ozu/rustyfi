@@ -4,11 +4,17 @@
 For each corpus document that ships an upstream-built reference PDF (produced by
 the original OCaml SATySFi and vendored under `scripts/layout_fidelity_corpus/`), this
 builds the SAME source with the Rust port and compares the two PDFs' *layout* —
-not their bytes. Comparison is via poppler's `pdftotext -bbox`, which emits every
-word's bounding box; the port bundles the SAME fonts SATySFi uses (IPAex / Latin
+not their bytes. The port bundles the SAME fonts SATySFi uses (IPAex / Latin
 Modern / Junicode / DejaVu-Math), so glyph metrics are identical and any layout
 divergence reflects the ENGINE (line breaking, inter-box spacing, page breaking,
 box placement) — exactly what we want to measure.
+
+Each comparison reads each PDF twice, and which half answers which question is
+the whole design. GEOMETRY (`lines`) comes from the PDF CONTENT STREAM's
+text-positioning operators, via `vspace_probe/baselines.py`. TEXT comes from
+poppler `pdftotext -bbox`, which is what decodes `ToUnicode`, but is compared as
+CHARACTERS, never as words. Both halves deliberately avoid a `pdftotext` glyph
+BOX and a `pdftotext` word SPLIT — read on.
 
 Each document is a showcase of one complex typesetting construct, so the set
 below covers every complex part of the corpus that the port can currently build:

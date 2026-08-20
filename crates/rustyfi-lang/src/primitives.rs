@@ -2709,12 +2709,7 @@ fn push_char_glyph(
 /// Falls back to `ascender`/`descender` when the provider exposes no per-glyph
 /// bbox (base-14 metrics, test stubs), keeping every no-MATH-table fixture
 /// byte-identical.
-fn math_glyph_vextent(
-    interp: &Interp,
-    font: FontKey,
-    c: char,
-    size: Length,
-) -> (Length, Length) {
+fn math_glyph_vextent(interp: &Interp, font: FontKey, c: char, size: Length) -> (Length, Length) {
     match interp.metrics.glyph_vextent(font, c, size) {
         Some((h, d)) => (h.max(Length::ZERO), d.max(Length::ZERO)),
         None => (

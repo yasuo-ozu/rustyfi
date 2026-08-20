@@ -484,3 +484,35 @@ fn make_malicious_tar_gz(out: &Path) {
     builder.append(&header, &data[..]).unwrap();
     builder.into_inner().unwrap().finish().unwrap();
 }
+
+#[test]
+fn list_reports_where_each_package_landed() {
+    let tmp = TempDir::new("list-path");
+    let root = tmp.path().join("root");
+    tmp.write("pkg/packages/mylib.satyh", "let mylib = 1\n");
+    tmp.write(
+        "pkg/Satyristes",
+        "(version 0.0.2)\n(library (name \"mylib\") (version \"1\") (sources ((packageDir \"packages\"))))\n",
+    );
+    sg::install(
+        &tmp.path().join("pkg"),
+        &sg::InstallOptions {
+            dest: Some(root.clone()),
+            ..Default::default()
+        },
+    )
+    .expect("install");
+
+    let listed = sg::list(&sg::RootOptions {
+        dest: Some(root.clone()),
+        ..Default::default()
+    })
+    .expect("list");
+    assert_eq!(listed.len(), 1);
+    assert_eq!(
+        listed[0].path,
+        root.join("dist/packages/mylib"),
+        "the summary should say where the files are"
+    );
+    assert!(listed[0].path.is_dir(), "and that path should exist");
+}

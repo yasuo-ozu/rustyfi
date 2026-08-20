@@ -88,12 +88,12 @@ pub fn cache_path(opts: &RegistryOptions, sha256: &str) -> PathBuf {
 /// ([`registry::try_candidates`]).
 pub(crate) fn get_or_fetch(
     urls: &[String],
-    sha256: &str,
+    checksum: &registry::Checksum,
     dest: &Path,
     opts: &RegistryOptions,
 ) -> Result<(), Error> {
-    let cached = cache_path(opts, sha256);
-    if cached.is_file() && registry::verify_sha256(&cached, sha256).is_ok() {
+    let cached = cache_path(opts, checksum.key());
+    if cached.is_file() && checksum.verify(&cached).is_ok() {
         std::fs::copy(&cached, dest).map_err(|e| Error::io(&cached, e))?;
         return Ok(());
     }
@@ -121,7 +121,7 @@ pub(crate) fn get_or_fetch(
         let _guard = TmpGuard(tmp.clone());
 
         registry::raw_http_fetch(url, &tmp)?;
-        registry::verify_sha256(&tmp, sha256)?; // mismatch: TmpGuard cleans `tmp`, cache stays unpopulated; try the next candidate.
+        checksum.verify(&tmp)?; // mismatch: TmpGuard cleans `tmp`, cache stays unpopulated; try the next candidate.
 
         // Atomically populate the cache (rename, not copy, so a reader never
         // observes a half-written cache entry), then copy the verified bytes

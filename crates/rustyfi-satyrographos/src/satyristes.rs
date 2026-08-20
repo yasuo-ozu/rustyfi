@@ -254,6 +254,7 @@ pub struct DocTarget {
 struct Library {
     name: String,
     lang: Lang,
+    opam: Option<String>,
     version: String,
     sources: Vec<FileDecl>,
     dependencies: BTreeMap<String, String>,
@@ -394,6 +395,34 @@ fn parse_registry(items: &[Sexp]) -> RegistryConfig {
         }
     }
     cfg
+}
+
+/// The `.opam` files the `(library ...)` blocks claim as their own.
+///
+/// A package directory may hold several — `satysfi-fonts-theano` ships one for
+/// the fonts and one for its documentation — and only the libraries' own
+/// matter here. The doc one's `build:` is OPAM calling Satyrographos to
+/// install the built PDF, which this port does from the manifest itself.
+///
+/// Reads the manifest WITHOUT planning, because planning walks the source
+/// files, and for a font package those do not exist until the opam build has
+/// run. This is what breaks that circle.
+pub fn library_opam_files(source_root: &Path) -> Vec<PathBuf> {
+    let path = source_root.join(SATYRISTES_NAME);
+    let Ok(text) = util::read_to_string(&path) else {
+        return Vec::new();
+    };
+    let Ok(forms) = parse(&text) else {
+        return Vec::new();
+    };
+    let Ok((libs, _docs)) = split_forms(&forms) else {
+        return Vec::new();
+    };
+    libs.into_iter()
+        .filter_map(|l| l.opam)
+        .map(|f| source_root.join(f))
+        .filter(|p| p.is_file())
+        .collect()
 }
 
 /// The nearest `Satyristes` at or above `start`, if any — how a project
@@ -547,6 +576,7 @@ fn parse_library(items: &[Sexp]) -> Result<Library, String> {
     let mut name = None;
     let mut version = None;
     let mut lang = Lang::default();
+    let mut opam = None;
     let mut sources = Vec::new();
     let mut dependencies = BTreeMap::new();
     for item in items {
@@ -575,7 +605,8 @@ fn parse_library(items: &[Sexp]) -> Result<Library, String> {
             "sources" => sources = parse_sources(&list[1..])?,
             "dependencies" => dependencies = parse_dependencies(&list[1..]),
             "lang" => lang = parse_lang(list)?,
-            "opam" | "compatibility" | "libraryDoc" => ignore_note(field),
+            "opam" => opam = list.get(1).and_then(scalar).map(str::to_string),
+            "compatibility" | "libraryDoc" => ignore_note(field),
             other => return Err(format!("unknown `library` field `{other}`")),
         }
     }
@@ -583,6 +614,7 @@ fn parse_library(items: &[Sexp]) -> Result<Library, String> {
         name: name.ok_or("`library` is missing a `(name ...)`")?,
         version: version.ok_or("`library` is missing a `(version ...)`")?,
         lang,
+        opam,
         sources,
         dependencies,
     })

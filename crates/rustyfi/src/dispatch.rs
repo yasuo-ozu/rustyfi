@@ -33,14 +33,15 @@ pub fn build_cli() -> Command {
         // so they are the same personality — `rustyfi` now carries the compile
         // args AND the subcommand trees.
         .subcommand(
-            compile_command("rustyfi")
-                .subcommand(satyrographos_command())
+            package_subcommands(compile_command("rustyfi"))
                 .subcommand(multicall_command())
                 .subcommand(man_command())
                 .args_conflicts_with_subcommands(true)
                 .subcommand_negates_reqs(true),
         )
-        // `satyrographos` personality: package manager only.
+        // `satyrographos` personality: the same package commands under the
+        // name real Satyrographos users type. The compiler personality carries
+        // them directly now, so this is an alias, not a separate tree.
         .subcommand(satyrographos_command())
 }
 
@@ -263,114 +264,139 @@ fn root_flags(cmd: Command) -> Command {
 }
 
 /// The `satyrographos` subcommand tree (plan §4.1-4.4).
-fn satyrographos_command() -> Command {
-    Command::new("satyrographos")
-        .about("SATySFi package manager (this port's Satyrographos analog).")
-        .subcommand_required(true)
-        .arg_required_else_help(true)
-        .subcommand(registry_flag(root_flags(
-            Command::new("install")
-                .about(
-                    "Install a package from a directory, .tar.gz, or registry name; \
-                         with no PATH, reconcile the project's Satyristes.",
-                )
-                .arg(
-                    Arg::new("path")
-                        .help(
-                            "Source directory or .tar.gz, or a registry NAME[@VERSION] \
-                                 (used when it does not name a path on disk). Omit to \
-                                 reconcile the nearest Satyristes (manifest mode).",
-                        )
-                        .value_parser(value_parser!(String)),
-                )
-                .arg(
-                    Arg::new("lang")
-                        .long("lang")
-                        .value_name("VERSION")
-                        .value_parser(["0.0", "0.1"])
-                        .help("Restrict to blocks written for this SATySFi generation."),
-                )
-                .arg(
-                    Arg::new("library")
-                        .short('l')
-                        .long("library")
-                        .value_name("NAME")
-                        .help("Restrict to the named library (repeatable).")
-                        .action(ArgAction::Append),
-                )
-                .arg(
-                    Arg::new("force")
-                        .long("force")
-                        .help("Overwrite an existing receipted install.")
-                        .action(ArgAction::SetTrue),
-                ),
-        )))
-        .subcommand(root_flags(
-            Command::new("uninstall")
-                .about("Remove a receipted package.")
-                .arg(Arg::new("name").required(true).help("Package name.")),
-        ))
-        // No root flags: building a doc runs the typesetter in the source
-        // directory and installs nothing, so there is no root involved.
-        .subcommand(
-            Command::new("build")
-                .about("Build a `(libraryDoc ...)` target by running its own build commands.")
-                .arg(
-                    Arg::new("path")
-                        .value_name("PATH")
-                        .help("Directory holding the Satyristes (default: the current one).")
-                        .value_parser(value_parser!(PathBuf)),
-                )
-                .arg(
-                    Arg::new("lang")
-                        .long("lang")
-                        .value_name("VERSION")
-                        .value_parser(["0.0", "0.1"])
-                        .help("Restrict to doc targets for this SATySFi generation."),
-                )
-                .arg(
-                    Arg::new("doc")
-                        .long("doc")
-                        .value_name("NAME")
-                        .action(ArgAction::Append)
-                        .help("Restrict to the named doc target (repeatable)."),
-                )
-                .arg(
-                    Arg::new("lib_root")
-                        .long("lib-root")
-                        .value_name("DIR")
-                        .help("Library root for the build commands ($RUSTYFI_LIB_ROOT).")
-                        .value_parser(value_parser!(PathBuf)),
-                )
-                .arg(
-                    Arg::new("quiet")
-                        .long("quiet")
-                        .short('q')
-                        .action(ArgAction::SetTrue)
-                        .help("Do not echo each command before running it."),
-                ),
+/// `build [PATH]` — run a `(libraryDoc ...)`'s own build commands. No root
+/// flags: it runs a program and installs nothing.
+fn build_command() -> Command {
+    Command::new("build")
+        .about("Build a `(libraryDoc ...)` target by running its own build commands.")
+        .arg(
+            Arg::new("path")
+                .value_name("PATH")
+                .help("Directory holding the Satyristes (default: the current one).")
+                .value_parser(value_parser!(PathBuf)),
         )
-        .subcommand(root_flags(
-            Command::new("list").about("List installed packages."),
-        ))
-        .subcommand(root_flags(
-            Command::new("status")
-                .about("Report installed-file presence (exit 1 if any missing).")
-                .arg(Arg::new("name").help("Package name (optional).")),
-        ))
-        // Phase 3 (plan §5.4/§8): registry search + index update.
-        .subcommand(registry_flag(
-            Command::new("search")
-                .about("Search the registry index (substring match on name/description).")
-                .arg(
-                    Arg::new("term")
-                        .required(true)
-                        .help("Substring to match against package names/descriptions."),
-                ),
-        ))
-        .subcommand(registry_flag(Command::new("update").about(
-            "Re-fetch the registry index and report available upgrades vs Satyristes.lock.",
-        )))
+        .arg(
+            Arg::new("lang")
+                .long("lang")
+                .value_name("VERSION")
+                .value_parser(["0.0", "0.1"])
+                .help("Restrict to doc targets for this SATySFi generation."),
+        )
+        .arg(
+            Arg::new("doc")
+                .long("doc")
+                .value_name("NAME")
+                .action(ArgAction::Append)
+                .help("Restrict to the named doc target (repeatable)."),
+        )
+        .arg(
+            Arg::new("lib_root")
+                .long("lib-root")
+                .value_name("DIR")
+                .help("Library root for the build commands ($RUSTYFI_LIB_ROOT).")
+                .value_parser(value_parser!(PathBuf)),
+        )
+        .arg(
+            Arg::new("quiet")
+                .long("quiet")
+                .short('q')
+                .action(ArgAction::SetTrue)
+                .help("Do not echo each command before running it."),
+        )
+}
+
+/// The package-manager commands, attached to whichever command they are given
+/// — the compiler personality carries them at top level, and the
+/// `satyrographos` personality carries the same set under its own name.
+fn package_subcommands(cmd: Command) -> Command {
+    // `global(true)`: accepted on EVERY subcommand, not just the ones that
+    // read it — "which config file" is a property of the run, and a flag
+    // refused depending on which subcommand precedes it is a worse surprise
+    // than one accepted and unused.
+    //
+    // It must come after the subcommand (`list --config F`, not `--config F
+    // list`): the compiler personality takes a positional document and sets
+    // `args_conflicts_with_subcommands`, so an argument given before the
+    // subcommand puts clap in compile mode.
+    cmd.arg(
+        Arg::new("config")
+            .long("config")
+            .value_name("FILE")
+            .global(true)
+            .help("Read this config file instead of the discovered one.")
+            .value_parser(value_parser!(PathBuf)),
+    )
+    .subcommand(root_flags(registry_flag(
+        Command::new("install")
+            .about(
+                "Install a package from a directory, .tar.gz, or registry name; with no PATH, \
+                 reconcile the project's Satyristes.",
+            )
+            .arg(
+                Arg::new("path")
+                    .value_name("PATH")
+                    .help("Package source: a directory, a .tar.gz, or a registry NAME[@VERSION].")
+                    .value_parser(value_parser!(String)),
+            )
+            .arg(
+                Arg::new("lang")
+                    .long("lang")
+                    .value_name("VERSION")
+                    .value_parser(["0.0", "0.1"])
+                    .help("Restrict to blocks written for this SATySFi generation."),
+            )
+            .arg(
+                Arg::new("library")
+                    .short('l')
+                    .long("library")
+                    .value_name("NAME")
+                    .help("Restrict to the named library (repeatable).")
+                    .action(ArgAction::Append),
+            )
+            .arg(
+                Arg::new("force")
+                    .long("force")
+                    .action(ArgAction::SetTrue)
+                    .help("Overwrite an existing receipted install."),
+            ),
+    )))
+    .subcommand(root_flags(
+        Command::new("uninstall")
+            .about("Remove a receipted package.")
+            .arg(Arg::new("name").required(true).help("Package name.")),
+    ))
+    .subcommand(build_command())
+    .subcommand(root_flags(
+        Command::new("list").about("List installed packages."),
+    ))
+    .subcommand(root_flags(
+        Command::new("status")
+            .about("Report installed-file presence (exit 1 if any missing).")
+            .arg(Arg::new("name").help("Only this package (default: all).")),
+    ))
+    .subcommand(registry_flag(
+        Command::new("search")
+            .about("Search the package repository for a keyword (name and description).")
+            .arg(
+                Arg::new("term")
+                    .value_name("KEYWORD")
+                    .required(true)
+                    .help("Keyword to look for, matched against name and description."),
+            ),
+    ))
+    .subcommand(root_flags(registry_flag(Command::new("update").about(
+        "Re-fetch the registry index and report available upgrades vs Satyristes.lock.",
+    ))))
+}
+
+/// The `satyrographos` personality: the same commands, under that name.
+fn satyrographos_command() -> Command {
+    package_subcommands(
+        Command::new("satyrographos")
+            .about("SATySFi package manager (this port's Satyrographos analog).")
+            .subcommand_required(true)
+            .arg_required_else_help(true),
+    )
 }
 
 /// The hidden `multicall install --dir DIR` alias helper (plan §4.5).

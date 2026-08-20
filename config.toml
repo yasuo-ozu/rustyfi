@@ -1,0 +1,32 @@
+# rustyfi's shipped defaults.
+#
+# This file travels with the program: the release archive installs it as
+# `<prefix>/share/rustyfi/config.toml`, and the binary finds it relative to
+# itself (`<exe>/../share/rustyfi`), so an unpacked archive carries its own
+# defaults wherever it sits.
+#
+# It is the LAST word, not the first. A config in `$XDG_CONFIG_HOME/rustyfi`
+# or `~/.config/rustyfi` shadows it entirely, and for the registry specifically
+# a project's own `(registry (url …))` in its `Satyristes`, `$RUSTYFI_REGISTRY`
+# and `--registry` all take precedence. Edit this one to set a default for
+# everybody using this install; edit yours to set a default for you.
+
+# The package repository `rustyfi search` and `rustyfi install NAME` consult
+# when nothing else names one: Satyrographos' own, so the packages SATySFi
+# users already publish are the ones this port offers.
+#
+# It is an OPAM repository — `packages/<name>/<name>.<version>/opam` — which
+# this port reads directly: a library name resolves through the conventional
+# `satysfi-` prefix (`xpath` -> `satysfi-xpath`), the source comes from the
+# opam's own `url { src: … checksum: … }`, and the sha512 those entries carry
+# is verified before anything is unpacked.
+# Several repositories may be listed with `[[registry]]` instead: `search`
+# covers them all (labelling each hit), and `install NAME` tries them in order,
+# taking the first that has the package.
+[registry]
+url = "https://github.com/na4zagin3/satyrographos-repo"
+kind = "git"                        # "git" | "sparse" | "auto"
+
+# The author's prebuilt mirror, whose archives are committed rather than built
+# from source:
+# mirrors = ["https://github.com/yasuo-ozu/satyrographos-repo-bin"]

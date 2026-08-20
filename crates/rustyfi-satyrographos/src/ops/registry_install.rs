@@ -37,6 +37,9 @@ pub struct Resolved {
     pub version: String,
     pub url: String,
     pub sha256: String,
+    /// The sha512, when the index declared that instead (an OPAM repository
+    /// publishes md5 and sha512, no sha256).
+    pub sha512: Option<String>,
 }
 
 /// Resolve `name`[`@version`] through the registry index, returning the
@@ -55,6 +58,7 @@ pub fn resolve(
         version,
         url: entry.tarball_url.clone(),
         sha256: entry.sha256.clone(),
+        sha512: entry.sha512.clone(),
     })
 }
 
@@ -98,8 +102,9 @@ pub fn install_resolved(
 
     // Step 3: fetch (via the archive cache when the url is a network url,
     // phase 7d S2), then verify BEFORE touching dist/ — a mismatch aborts here.
-    registry::fetch_tarball(&resolved.url, &resolved.sha256, &tarball, reg_opts)?;
-    registry::verify_sha256(&tarball, &resolved.sha256)?;
+    let checksum = registry::Checksum::new(&resolved.sha256, resolved.sha512.as_deref());
+    registry::fetch_tarball(&resolved.url, &checksum, &tarball, reg_opts)?;
+    checksum.verify(&tarball)?;
 
     // Step 4: reuse the phase-1 materializer, recording a registry receipt.
     let source = Source {

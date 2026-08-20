@@ -116,9 +116,27 @@ pub fn discover_all(start: &Path) -> Vec<PathBuf> {
     found
 }
 
+/// The prefix this executable is installed under: `<prefix>/bin/rustyfi`
+/// yields `<prefix>`.
+///
+/// This is what makes an unpacked archive self-contained wherever it lands —
+/// `/opt/rustyfi`, a home directory, a build tree — without exporting
+/// anything. `current_exe` resolves symlinks, so a link in `~/bin` pointing
+/// into the install still finds the install.
+pub fn exe_prefix() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    exe.parent()?.parent().map(Path::to_path_buf)
+}
+
 /// The user-wide root, then the system-wide ones, in search order.
 pub fn prefix_roots() -> Vec<PathBuf> {
     let mut roots = Vec::new();
+    // This binary's own `<prefix>/lib/rustyfi` first: a program shipped with
+    // its packages should use THOSE, not another copy that happens to be
+    // installed for the user.
+    if let Some(prefix) = exe_prefix() {
+        roots.push(prefix.join(PREFIX_SUFFIX));
+    }
     // `$HOME` on unix, `%USERPROFILE%` on Windows, where the same archive
     // unpacks to the same relative layout.
     if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
@@ -235,6 +253,12 @@ mod tests {
     use std::fs;
     use std::sync::atomic::{AtomicU64, Ordering};
 
+    /// The working directory is process-wide, so the two tests that must
+    /// STAND somewhere to exercise relative resolution cannot run at the same
+    /// time — without this they race, and the failure looks like a discovery
+    /// bug rather than a test one.
+    static CWD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     fn tmp(tag: &str) -> PathBuf {
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         let p = std::env::temp_dir().join(format!(
@@ -319,6 +343,7 @@ mod tests {
         fs::create_dir_all(root.join(DEV_DIR)).unwrap();
         let deep = root.join("a/b");
         fs::create_dir_all(&deep).unwrap();
+        let _guard = CWD.lock().unwrap_or_else(|e| e.into_inner());
         let here = std::env::current_dir().unwrap();
         std::env::set_current_dir(&deep).unwrap();
         let found = discover_all(Path::new(""));
@@ -337,6 +362,7 @@ mod tests {
         let other = base.join("other/doc");
         fs::create_dir_all(root.join(DEV_DIR)).unwrap();
         fs::create_dir_all(&other).unwrap();
+        let _guard = CWD.lock().unwrap_or_else(|e| e.into_inner());
         let here = std::env::current_dir().unwrap();
         std::env::set_current_dir(&root).unwrap();
         let found = discover_all(Path::new("../other/./doc"));

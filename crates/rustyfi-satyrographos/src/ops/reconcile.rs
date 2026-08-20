@@ -115,6 +115,11 @@ pub fn install_manifest_reg(
     for lib in &manifest.libraries {
         let locked = old_lock.get(&lib.name);
         let install_opts = |force: bool| InstallOptions {
+            // A reconciled entry names its library, so the manifest decides.
+            prefer_library: Some(lib.name.clone()),
+            // A reconciled dependency inherits the run's own network policy.
+            offline: reg_opts.is_offline(),
+            verbose: true,
             // A reconciled dependency takes whatever its own manifest declares.
             lang: None,
             lib_root: opts.lib_root.clone(),
@@ -325,6 +330,7 @@ fn install_registry_closure(
             version: version.to_string(),
             url: entry.tarball_url.clone(),
             sha256: entry.sha256.clone(),
+            sha512: entry.sha512.clone(),
         };
         // A direct entry's own alias is used as the lock/receipt key when one
         // names this package id; otherwise (transitive-only) the package id
@@ -369,6 +375,9 @@ fn resolved_from_lock(l: &LockEntry) -> Resolved {
         version: l.source.version.clone().unwrap_or_default(),
         url: l.url.clone().expect("registry lock entry always carries a url"),
         sha256: l.sha256.clone(),
+        // A lock pins one digest; it is the sha256 field, whichever algorithm
+        // resolved it, because that is what the lockfile has always recorded.
+        sha512: None,
     }
 }
 
@@ -400,6 +409,9 @@ fn materialize_registry_pin(
     }
     let force = receipts::exists(root, label);
     let install_opts = InstallOptions {
+        prefer_library: Some(label.to_string()),
+        offline: reg_opts.is_offline(),
+        verbose: true,
         lang: None,
         lib_root: opts.lib_root.clone(),
         dest: opts.dest.clone(),

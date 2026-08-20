@@ -109,17 +109,20 @@ jobs:
       #   lib/rustyfi/dist/fonts/             the faces + licences  (artifact)
       #   lib/rustyfi/dist/hash/              font name -> file     (artifact)
       #   lib/rustyfi/dist-v01/packages/      0.1 packages
+      #   share/rustyfi/config.toml           shipped defaults (<exe>/../share)
       #   share/man/man1/rustyfi.1
       #   share/doc/rustyfi/README.md, LICENSE
       - name: Stage archive
         run: |
           mkdir -p "stage/$DIR/bin" "stage/$DIR/lib/rustyfi" \
-                   "stage/$DIR/share/doc/rustyfi" "stage/$DIR/share/man/man1"
+                   "stage/$DIR/share/rustyfi" "stage/$DIR/share/doc/rustyfi" \
+                   "stage/$DIR/share/man/man1"
           cp "target/${{ matrix.target }}/release/rustyfi${{ matrix.exe }}" "stage/$DIR/bin/"
           cp -r lib-rustyfi/dist lib-rustyfi/dist-v01 "stage/$DIR/lib/rustyfi/"
           "target/${{ matrix.target }}/release/rustyfi${{ matrix.exe }}" man \
               > "stage/$DIR/share/man/man1/rustyfi.1"
           test -s "stage/$DIR/share/man/man1/rustyfi.1"
+          cp config.toml "stage/$DIR/share/rustyfi/"
           cp README.md LICENSE "stage/$DIR/share/doc/rustyfi/"
           find "stage/$DIR" -name .gitignore -delete
 

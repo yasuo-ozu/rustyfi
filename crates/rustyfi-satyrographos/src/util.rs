@@ -132,6 +132,20 @@ pub fn sha256_file(path: &Path) -> Result<String, Error> {
     Ok(sha256_hex(&bytes))
 }
 
+/// Lowercase-hex SHA-512 of a file.
+///
+/// Satyrographos' index publishes `md5` and `sha512` for its archives and no
+/// `sha256`, so verifying what it actually ships means speaking sha512 too.
+/// md5 is deliberately not accepted: a checksum that no longer resists
+/// collisions is not a check.
+pub fn sha512_file(path: &Path) -> Result<String, Error> {
+    use sha2::{Digest, Sha512};
+    let bytes = std::fs::read(path).map_err(|e| Error::io(path, e))?;
+    let mut hasher = Sha512::new();
+    hasher.update(&bytes);
+    Ok(hasher.finalize().iter().map(|b| format!("{b:02x}")).collect())
+}
+
 /// A deterministic content digest of the source at `path` (plan §5.3's
 /// content-addressed lockfile hash). A regular file hashes to its own
 /// [`sha256_file`]; a directory hashes to a Merkle-style digest over its

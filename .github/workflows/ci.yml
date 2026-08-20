@@ -85,6 +85,79 @@ jobs:
       - name: Layout-fidelity test (vs the vendored SATySFi references)
         run: cargo test -p rustyfi --test layout_fidelity -- --ignored --nocapture
 
+  packages:
+    name: "real packages (font / class / normal)"
+    # Installs three real Satyrographos packages and builds a document with
+    # one. This is the only job that reaches the network for anything but a
+    # checkout: `satysfi-fonts-theano` declares an `extra-source` — an upstream
+    # font zip and its sha256 — that `install` fetches, verifies and unzips,
+    # which is the whole point of the `.opam` support.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+      - name: Build the CLI
+        run: cargo build --bin rustyfi
+
+      # The packages, from the repositories Satyrographos' own index points at.
+      - name: Checkout satysfi-fonts-theano
+        uses: actions/checkout@v4
+        with:
+          repository: na4zagin3/SATySFi-fonts-theano
+          path: pkgs/fonts-theano
+      - name: Checkout slydifi
+        uses: actions/checkout@v4
+        with:
+          repository: monaqa/slydifi
+          path: pkgs/slydifi
+      - name: Checkout satysfi-xpath
+        uses: actions/checkout@v4
+        with:
+          repository: yasuo-ozu/satysfi-xpath
+          path: pkgs/xpath
+
+      # A font package: nothing to copy until its `.opam` has run.
+      - name: Install a font package
+        run: |
+          ./target/debug/rustyfi install ./pkgs/fonts-theano --dest ./root
+          test -f root/dist/fonts/fonts-theano/TheanoDidot-Regular.otf
+          test -f root/dist/hash/fonts.satysfi-hash
+
+      # A class package.
+      - name: Install a class package
+        run: |
+          ./target/debug/rustyfi install ./pkgs/slydifi --dest ./root
+          test -d root/dist/packages/class-slydifi
+
+      # An ordinary package. It declares two libraries, so it names one.
+      - name: Install a normal package
+        run: |
+          ./target/debug/rustyfi install ./pkgs/xpath --dest ./root --library xpath
+          test -d root/dist/packages/xpath
+
+      - name: List what landed
+        run: ./target/debug/rustyfi list --dest ./root
+
+      # The document is Japanese, so it needs the real faces; without them the
+      # build fails on the first CJK glyph.
+      - name: Download fonts (scripts/download-fonts.sh)
+        run: sh scripts/download-fonts.sh
+
+      # And build a real document against them: the port's own bundled stdlib
+      # and fonts, plus the package just installed. The PDF is REMOVED first —
+      # xpath commits its built documentation, so a stale file would make this
+      # pass without building anything.
+      - name: Build a document with an installed package
+        run: |
+          cp -r lib-rustyfi/dist/. root/dist/
+          rm -f pkgs/xpath/doc/xpath-doc.pdf
+          RUSTYFI_LIB_ROOT="$PWD/root" ./target/debug/rustyfi build ./pkgs/xpath --doc xpath-doc
+          test -s pkgs/xpath/doc/xpath-doc.pdf
+
   corpus:
     name: corpus regression (real-world packages)
     runs-on: ubuntu-latest

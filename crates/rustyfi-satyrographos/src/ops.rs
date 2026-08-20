@@ -2,6 +2,7 @@
 //! orchestration over `roots`/`archive`/`manifest`/`stage`/`receipts`.
 
 pub mod build;
+pub mod prepare;
 pub mod install;
 pub mod list;
 pub mod reconcile;

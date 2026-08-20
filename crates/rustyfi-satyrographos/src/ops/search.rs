@@ -27,7 +27,12 @@ pub fn search(
 
     let mut hits = Vec::new();
     for name in registry::all_package_names(&reg)? {
-        let idx = registry::lookup(&reg, &name)?;
+        // An index holds entries this port cannot install — an OPAM `conf-*`
+        // package has no source archive at all — and one of them must not
+        // sink the whole search.
+        let Ok(idx) = registry::lookup(&reg, &name) else {
+            continue;
+        };
         let desc = idx.description.clone();
         let name_matches = name.to_lowercase().contains(&needle);
         let desc_matches = desc

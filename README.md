@@ -69,7 +69,8 @@ they are discovered, nearest first:
 
 1. `lib-rustyfi/` above your document — a checked-out source tree
 2. `.rustyfi/` beside a `Satyristes` — a project-local install
-3. `~/.local/lib/rustyfi`, then `/usr/local/lib/rustyfi` and `/usr/lib/rustyfi`
+3. `<exe>/../lib/rustyfi` — the install this binary belongs to
+4. `~/.local/lib/rustyfi`, then `/usr/local/lib/rustyfi` and `/usr/lib/rustyfi`
 
 All of them are searched in that order, so a package a project installed for
 itself layers over the system one rather than hiding it — and a clone needs no
@@ -82,16 +83,38 @@ the 0.1 tree (`std-ja`, `inline`, `block`, `map`, `set`, …) under `dist-v01/`.
 To install someone else's package, the same binary is a Satyrographos analog:
 
 ```console
-$ rustyfi satyrographos install ./satysfi-xpath   # a local path, a .tar.gz, or a registry
-$ rustyfi satyrographos list
+$ rustyfi search diagrams          # look through the package repository
+$ rustyfi install ./satysfi-xpath  # a local path, a .tar.gz, or a registry name
+$ rustyfi list
 ```
+
+The default repository can live in your own config, so `search` and `install`
+work outside any project:
+
+```toml
+# ~/.config/rustyfi/config.toml
+[[registry]]
+url = "https://github.com/na4zagin3/satyrographos-repo"
+
+[[registry]]
+url = "https://example.org/another-index"
+```
+
+`search` covers every repository listed and labels each hit; `install NAME`
+tries them in order and takes the first that has the package.
+
+Archives ship their own `share/rustyfi/config.toml`, which the binary finds
+relative to itself (`<exe>/../share/rustyfi`) — as it finds its packages at
+`<exe>/../lib/rustyfi` — so an unpacked archive is self-contained wherever it
+sits. Precedence, lowest last: `--registry`, `$RUSTYFI_REGISTRY`, the project's
+own `(registry (url …))` in `Satyristes`, your config, the shipped one.
 
 It reads upstream `Satyristes` manifests, keeps a project lockfile, and verifies
 registry downloads by sha256. A manifest's `(libraryDoc …)` targets — documents
 built *from* a library — are built by running their own declared commands:
 
 ```console
-$ rustyfi satyrographos build            # or --doc NAME, when several are declared
+$ rustyfi build                    # or --doc NAME, when several are declared
 ```
 
 ## HTML output

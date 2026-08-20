@@ -39,6 +39,14 @@ pub enum Error {
         code: Option<i32>,
     },
 
+    /// An `.opam` `build:` command exited non-zero, so the files the package
+    /// declares may not exist; nothing was installed.
+    #[error("opam build failed: `{command}` exited with {}", match code { Some(c) => c.to_string(), None => "a signal".to_string() })]
+    OpamBuild {
+        command: String,
+        code: Option<i32>,
+    },
+
     /// `build` was asked for a doc target and the manifest declares none.
     #[error("this Satyristes declares no `(libraryDoc ...)` to build")]
     NoDocTarget,
@@ -145,6 +153,14 @@ pub enum Error {
          select exactly one with -l/--library NAME"
     )]
     AmbiguousLibrary { names: String },
+
+    /// A `config.toml` failed to parse.
+    #[error("{path}: invalid config: {source}")]
+    Config {
+        path: PathBuf,
+        #[source]
+        source: toml::de::Error,
+    },
 
     /// A project manifest (`Satyristes`, read for its dependency sources)
     /// failed to parse.

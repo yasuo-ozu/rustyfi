@@ -51,13 +51,12 @@ fn argv0_rustyfi_is_compiler_and_package_manager() {
         stdout.contains("Compile a SATySFi"),
         "rustyfi --help should describe the compiler:\n{stdout}"
     );
-    // Renaming the binary merged the two personalities. There used to be a
-    // compile-only `rustyfi` beside a full `rustyfi-rust`, and this test
-    // asserted the compiler help did NOT mention the package manager; with one
-    // name there is one personality, and it carries both.
+    // One personality carrying both roles. The package commands used to hide
+    // under a `satyrographos` subcommand; they are top-level now, so the
+    // compiler's own help lists them.
     assert!(
-        stdout.contains("satyrographos"),
-        "rustyfi --help should offer the package manager:\n{stdout}"
+        stdout.contains("install") && stdout.contains("search"),
+        "rustyfi --help should offer the package commands:\n{stdout}"
     );
 }
 
@@ -79,16 +78,23 @@ fn argv0_satyrographos_is_package_manager() {
 
 #[cfg(unix)]
 #[test]
-fn satyrographos_subcommand_form() {
-    // The same package-manager entry point, reached as the nested subcommand
-    // under the `rustyfi` personality.
+fn package_commands_are_top_level() {
+    // The package-manager entry points, reached directly — no `satyrographos`
+    // subcommand in between.
     let root = tmpdir("sg-subcommand");
+    let out = run_as("rustyfi", &["list", "--dest", root.to_str().unwrap()]);
+    assert!(out.status.success());
+    assert!(String::from_utf8_lossy(&out.stdout).contains("(no packages installed)"));
+
+    // And the old nesting is gone rather than silently accepted.
     let out = run_as(
         "rustyfi",
         &["satyrographos", "list", "--dest", root.to_str().unwrap()],
     );
-    assert!(out.status.success());
-    assert!(String::from_utf8_lossy(&out.stdout).contains("(no packages installed)"));
+    assert!(
+        !out.status.success(),
+        "`rustyfi satyrographos …` should no longer parse"
+    );
 }
 
 #[cfg(unix)]

@@ -82,7 +82,9 @@ fn run() -> i32 {
     // subcommand: `rustyfi` | `satyrographos`.
     match matches.subcommand() {
         Some(("rustyfi", m)) => match m.subcommand() {
-            Some(("satyrographos", sm)) => run_satyrographos(sm),
+            // The package commands sit at top level now; `satyrographos …`
+            // remains as the personality invoked by that argv[0].
+            Some((name, sm)) if is_package_command(name) => run_package(name, sm),
             Some(("multicall", sm)) => run_multicall(sm),
             Some(("man", _)) => match man::render(&mut std::io::stdout().lock()) {
                 Ok(()) => 0,
@@ -681,11 +683,12 @@ fn sg_exit_code(err: &sg::Error) -> i32 {
         NoDocTarget => 3,
         // A doc's own build command failed: its exit status is the story, and
         // the typesetter has already said why on stderr.
-        DocBuild { .. } => 1,
+        DocBuild { .. } | OpamBuild { .. } => 1,
         // Filesystem / archive / manifest / Satyristes / lockfile / registry-
         // fetch / integrity failures.
         Io { .. }
         | Manifest { .. }
+        | Config { .. }
         | Receipt { .. }
         | UnmanagedCollision { .. }
         | PathTraversal { .. }
@@ -723,21 +726,42 @@ fn finish<E: std::fmt::Display>(result: Result<(), E>, code: impl FnOnce(&E) -> 
     }
 }
 
-fn run_satyrographos(m: &ArgMatches) -> i32 {
-    let result = match m.subcommand() {
-        Some(("install", sm)) => cmd_install(sm),
-        Some(("uninstall", sm)) => cmd_uninstall(sm),
-        Some(("build", sm)) => cmd_build(sm),
-        Some(("list", sm)) => cmd_list(sm),
-        Some(("status", sm)) => return cmd_status(sm),
-        Some(("search", sm)) => cmd_search(sm),
-        Some(("update", sm)) => cmd_update(sm),
-        _ => {
-            eprintln!("error: no satyrographos subcommand given");
+/// Whether `name` is one of the package-manager commands, which the compiler
+/// personality and the `satyrographos` personality both carry.
+fn is_package_command(name: &str) -> bool {
+    matches!(
+        name,
+        "install" | "uninstall" | "build" | "list" | "status" | "search" | "update"
+    )
+}
+
+/// Run one package-manager command, whichever personality it arrived through.
+fn run_package(name: &str, sm: &ArgMatches) -> i32 {
+    let result = match name {
+        "install" => cmd_install(sm),
+        "uninstall" => cmd_uninstall(sm),
+        "build" => cmd_build(sm),
+        "list" => cmd_list(sm),
+        // `status` reports through its own exit code rather than an error.
+        "status" => return cmd_status(sm),
+        "search" => cmd_search(sm),
+        "update" => cmd_update(sm),
+        other => {
+            eprintln!("error: unknown command `{other}`");
             return 2;
         }
     };
     finish(result, sg_exit_code)
+}
+
+fn run_satyrographos(m: &ArgMatches) -> i32 {
+    match m.subcommand() {
+        Some((name, sm)) => run_package(name, sm),
+        None => {
+            eprintln!("error: no satyrographos subcommand given");
+            2
+        }
+    }
 }
 
 /// `satyrographos build [PATH] [--doc NAME]` — run a `(libraryDoc ...)`'s own
@@ -780,12 +804,52 @@ fn root_options(m: &ArgMatches) -> sg::RootOptions {
 /// come from `$RUSTYFI_REGISTRY_CACHE` and each command's own semantics;
 /// `update` sets `refresh` itself. `offline` also honors `$RUSTYFI_OFFLINE`
 /// (via `RegistryOptions::is_offline`) even when `--offline` is not passed.
-fn registry_options(m: &ArgMatches) -> sg::RegistryOptions {
-    sg::RegistryOptions {
+fn registry_options(m: &ArgMatches) -> Result<sg::RegistryOptions, sg::Error> {
+    // The flag wins; below it the crate consults `$RUSTYFI_REGISTRY`, and
+    // below that this fallback — the project's own `(registry …)`, then the
+    // user's `config.toml`. Mirrors/kind come from whichever of those two
+    // supplied the url, so a config-declared sparse index stays sparse.
+    let fallback = registry_fallback(m)?;
+    Ok(sg::RegistryOptions {
         url: m.get_one::<String>("registry").cloned(),
         offline: m.get_flag("offline"),
+        mirrors: fallback
+            .as_ref()
+            .map(|f| f.mirrors.clone())
+            .unwrap_or_default(),
+        kind: fallback.as_ref().and_then(|f| f.kind),
         ..Default::default()
+    })
+}
+
+/// The project's `(registry …)`, else the user's `config.toml` — the two
+/// declared sources of a default repository, in that order.
+fn registry_fallbacks(m: &ArgMatches) -> Result<Vec<sg::RegistryConfig>, sg::Error> {
+    // A project that names a repository names THE repository: its manifest is
+    // about this project, so it replaces the personal list rather than being
+    // prepended to it.
+    if let Some(cfg) = std::env::current_dir()
+        .ok()
+        .and_then(|cwd| sg::find_upward(&cwd))
+        .and_then(|manifest| sg::satyristes::read_project(&manifest).ok())
+        .and_then(|project| project.registry)
+    {
+        return Ok(vec![cfg]);
     }
+    // `--config FILE` replaces the DISCOVERED config, not the layers above it:
+    // it says which file to read, where `--registry` says which URL to use. A
+    // file named on the command line that cannot be read is an error — unlike
+    // a discovered one, whose absence is ordinary.
+    let config = match m.get_one::<PathBuf>("config") {
+        Some(path) => sg::config::read(path)?,
+        None => sg::config::load()?,
+    };
+    Ok(config.registries().to_vec())
+}
+
+/// The first configured repository — what the single-registry paths use.
+fn registry_fallback(m: &ArgMatches) -> Result<Option<sg::RegistryConfig>, sg::Error> {
+    Ok(registry_fallbacks(m)?.into_iter().next())
 }
 
 /// The nearest `Satyristes`, searched upward from the current directory
@@ -809,6 +873,9 @@ fn cmd_install(m: &ArgMatches) -> Result<(), sg::Error> {
     let opts = sg::InstallOptions {
         lib_root,
         dest,
+        prefer_library: None,
+        offline: m.get_flag("offline"),
+        verbose: true,
         libraries,
         lang: m
             .get_one::<String>("lang")
@@ -822,16 +889,44 @@ fn cmd_install(m: &ArgMatches) -> Result<(), sg::Error> {
         sg::install(Path::new(arg), &opts)?
     } else {
         let (name, version) = split_name_version(arg);
-        let reg_opts = registry_options(m);
+        let reg_opts = registry_options(m)?;
         // Registry-URL precedence (plan §5.4 / this port's [registry] section):
         // --registry flag > $RUSTYFI_REGISTRY > the nearest Satyristes's
+        // (registry …) > the user's config.toml
         // [registry] url. The first two live in `reg_opts`; supply the third as
         // the fallback so a project with a declared registry needs no flag.
-        let fallback = nearest_registry_url();
-        let (report, resolved) =
-            sg::install_registry(name, version, &opts, &reg_opts, fallback.as_deref())?;
-        eprintln!("fetched {name} {} from registry", resolved.version);
-        report
+        // Each configured repository in turn: the first that HAS the package
+        // wins, and a package missing from one is not an error until every
+        // one has been asked.
+        // The user named a package; if its manifest declares a library of
+        // that name, that is the one they meant.
+        let opts = sg::InstallOptions {
+            prefer_library: Some(name.to_string()),
+            ..opts
+        };
+        let repos = registry_fallbacks(m)?;
+        let urls: Vec<Option<String>> = if reg_opts.url.is_some() || repos.is_empty() {
+            vec![None]
+        } else {
+            repos.iter().map(|r| r.url.clone()).collect()
+        };
+        let mut last: Option<sg::Error> = None;
+        let mut done = None;
+        for url in urls {
+            match sg::install_registry(name, version, &opts, &reg_opts, url.as_deref()) {
+                Ok((report, resolved)) => {
+                    let from = url.unwrap_or_else(|| "the registry".to_string());
+                    eprintln!("fetched {name} {} from {from}", resolved.version);
+                    done = Some(report);
+                    break;
+                }
+                Err(e) => last = Some(e),
+            }
+        }
+        match done {
+            Some(report) => report,
+            None => return Err(last.unwrap_or(sg::Error::NoRegistry)),
+        }
     };
     println!(
         "installed {} {} ({} path(s)):",
@@ -856,17 +951,7 @@ fn split_name_version(arg: &str) -> (&str, Option<&str>) {
     }
 }
 
-/// The `(registry (url …))` of the nearest `Satyristes` (searched upward from
-/// the working directory), or `None` if there is none / it declares no url.
-/// Used as the lowest-precedence registry-URL fallback for a direct
-/// `install NAME[@VERSION]` (parse failures are silently ignored — a broken
-/// manifest simply provides no fallback).
-fn nearest_registry_url() -> Option<String> {
-    let cwd = std::env::current_dir().ok()?;
-    let manifest = sg::find_upward(&cwd)?;
-    let project = sg::satyristes::read_project(&manifest).ok()?;
-    project.registry_url().map(str::to_owned)
-}
+
 
 /// Manifest mode: locate `Satyristes` by upward search from the current
 /// directory, reconcile the dependencies that name a source against
@@ -888,7 +973,7 @@ fn cmd_install_manifest(m: &ArgMatches) -> Result<(), sg::Error> {
     }
     let opts = sg::RootOptions { lib_root, dest };
 
-    let report = sg::install_manifest_reg(&manifest, &opts, &registry_options(m))?;
+    let report = sg::install_manifest_reg(&manifest, &opts, &registry_options(m)?)?;
     println!("reconciled {}", manifest.display());
     for ir in &report.installed {
         println!("  installed {} {}", ir.name, ir.version);
@@ -921,11 +1006,12 @@ fn cmd_list(m: &ArgMatches) -> Result<(), sg::Error> {
     } else {
         for pkg in &packages {
             println!(
-                "{} {} (lang {}, {} files)",
+                "{} {} (lang {}, {} files)\n  {}",
                 pkg.name,
                 pkg.version,
                 pkg.lang.as_str(),
-                pkg.file_count
+                pkg.file_count,
+                pkg.path.display()
             );
         }
     }
@@ -934,20 +1020,62 @@ fn cmd_list(m: &ArgMatches) -> Result<(), sg::Error> {
 
 /// `search <term>` (plan §8): list matching registry packages, one
 /// `name version — description` line each, sorted by name.
+/// How many repositories a search round covers.
+fn urls_len(repos: &[sg::RegistryConfig], opts: &sg::RegistryOptions) -> usize {
+    if opts.url.is_some() || repos.is_empty() {
+        1
+    } else {
+        repos.len()
+    }
+}
+
 fn cmd_search(m: &ArgMatches) -> Result<(), sg::Error> {
     let term = m
         .get_one::<String>("term")
         .expect("TERM is required by clap");
-    let hits = sg::search(term, &registry_options(m), None)?;
-    if hits.is_empty() {
-        println!("(no matching packages)");
-        return Ok(());
-    }
-    for hit in &hits {
-        match &hit.description {
-            Some(desc) => println!("{} {} — {desc}", hit.name, hit.version),
-            None => println!("{} {}", hit.name, hit.version),
+    // Every configured repository, in order. `--registry`/`$RUSTYFI_REGISTRY`
+    // pin one, in which case there is exactly one round.
+    let opts = registry_options(m)?;
+    let repos = registry_fallbacks(m)?;
+    let urls: Vec<Option<String>> = if opts.url.is_some() || repos.is_empty() {
+        vec![None]
+    } else {
+        repos.iter().map(|r| r.url.clone()).collect()
+    };
+
+    let mut any = false;
+    let mut failures: Vec<(String, sg::Error)> = Vec::new();
+    for url in urls {
+        let label = url.clone().unwrap_or_default();
+        match sg::search(term, &opts, url.as_deref()) {
+            Ok(hits) => {
+                for hit in &hits {
+                    any = true;
+                    let where_ = if repos.len() > 1 {
+                        format!("  [{label}]")
+                    } else {
+                        String::new()
+                    };
+                    match &hit.description {
+                        Some(desc) => println!("{} {} — {desc}{where_}", hit.name, hit.version),
+                        None => println!("{} {}{where_}", hit.name, hit.version),
+                    }
+                }
+            }
+            // One unreachable repository must not hide the others' results;
+            // report it once the reachable ones have been searched.
+            Err(e) => failures.push((label, e)),
         }
+    }
+    for (label, e) in &failures {
+        eprintln!("warning: registry `{label}` could not be searched: {e}");
+    }
+    if !any {
+        if failures.len() == urls_len(&repos, &opts) {
+            // Nothing was searched successfully at all.
+            return Err(failures.into_iter().next().map(|(_, e)| e).unwrap_or(sg::Error::NoRegistry));
+        }
+        println!("(no matching packages)");
     }
     Ok(())
 }
@@ -956,7 +1084,7 @@ fn cmd_search(m: &ArgMatches) -> Result<(), sg::Error> {
 /// upgrades against the nearest `Satyristes.lock` (does not apply them).
 fn cmd_update(m: &ArgMatches) -> Result<(), sg::Error> {
     let manifest = find_manifest().ok_or(sg::Error::ManifestNotFound)?;
-    let report = sg::update(&manifest, &registry_options(m))?;
+    let report = sg::update(&manifest, &registry_options(m)?)?;
 
     if let Some(commit) = &report.commit {
         println!("index at {commit}");

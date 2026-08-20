@@ -488,7 +488,13 @@ pub struct PackageIndex {
 #[derive(Debug, Clone, Deserialize)]
 pub struct VersionEntry {
     pub tarball_url: String,
+    /// The sha256 an index entry declares. Empty when the index publishes only
+    /// a [`Self::sha512`] — an OPAM repository does.
+    #[serde(default)]
     pub sha256: String,
+    /// A sha512, when that is what the index declares.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sha512: Option<String>,
     /// This version's own declared dependencies (`name -> constraint text`,
     /// e.g. `"^1.2.0"`, `"1.2.0"`, or `"*"` — `version::Constraint::parse`
     /// syntax), feeding the phase-7c solver's transitive walk
@@ -525,6 +531,19 @@ impl Registry {
 pub fn lookup(reg: &Registry, name: &str) -> Result<PackageIndex, Error> {
     if let Some(path) = reg.local_package_path(name) {
         if !path.is_file() {
+            // Satyrographos' own index is an OPAM repository — one DIRECTORY
+            // per package, holding `<name>.<version>/opam` — rather than this
+            // port's flat `packages/<name>.toml`. Read that shape too, so the
+            // packages SATySFi users already publish are reachable.
+            if let Some(idx) = opam_index::lookup(&path, name)? {
+                return Ok(idx);
+            }
+            // Satyrographos publishes library `xpath` as opam package
+            // `satysfi-xpath`, so a user naming the library still finds it.
+            let prefixed = path.with_file_name(format!("satysfi-{name}.toml"));
+            if let Some(idx) = opam_index::lookup(&prefixed, &format!("satysfi-{name}"))? {
+                return Ok(idx);
+            }
             return Err(Error::PackageNotFound {
                 name: name.to_string(),
             });
@@ -680,10 +699,136 @@ pub fn all_package_names(reg: &Registry) -> Result<Vec<String>, Error> {
             if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
                 names.push(stem.to_string());
             }
+        } else if path.is_dir() && opam_index::is_package_dir(&path) {
+            if let Some(n) = path.file_name().and_then(|s| s.to_str()) {
+                names.push(n.to_string());
+            }
         }
     }
     names.sort();
+    names.dedup();
     Ok(names)
+}
+
+/// Reading an OPAM repository as a package index.
+///
+/// Satyrographos publishes through OPAM, so its index is
+/// `packages/<name>/<name>.<version>/opam` — a directory per package, a
+/// directory per version, and the package's source in the opam's own `url {
+/// src: … checksum: … }` block. This maps that onto [`PackageIndex`] so the
+/// rest of the installer does not need to know which shape it came from.
+///
+/// Dependencies are deliberately NOT translated: opam names them as opam
+/// packages (`satysfi-fonts-theano`) while this port keys everything by
+/// library name (`fonts-theano`), and guessing that mapping would resolve the
+/// wrong package. Such an entry is treated as a leaf.
+pub(crate) mod opam_index {
+    use std::collections::BTreeMap;
+    use std::path::Path;
+
+    use super::{PackageIndex, VersionEntry};
+    use crate::error::Error;
+    use crate::util;
+
+    /// Whether `dir` looks like an OPAM package directory: it holds at least
+    /// one `<name>.<version>/opam`.
+    pub(crate) fn is_package_dir(dir: &Path) -> bool {
+        util::read_dir_paths(dir)
+            .map(|paths| paths.iter().any(|p| p.join("opam").is_file()))
+            .unwrap_or(false)
+    }
+
+    /// Build an index for `name` from `<packages>/<name>/`. `Ok(None)` when
+    /// that directory is not an OPAM package directory.
+    pub(crate) fn lookup(toml_path: &Path, name: &str) -> Result<Option<PackageIndex>, Error> {
+        // `local_package_path` gave us `packages/<name>.toml`; the directory
+        // beside it is `packages/<name>`.
+        let dir = toml_path.with_extension("");
+        if !dir.is_dir() || !is_package_dir(&dir) {
+            return Ok(None);
+        }
+
+        let mut versions = BTreeMap::new();
+        let mut description = None;
+        for version_dir in util::read_dir_paths(&dir)? {
+            let opam_file = version_dir.join("opam");
+            if !opam_file.is_file() {
+                continue;
+            }
+            let Some(dir_name) = version_dir.file_name().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            // `<name>.<version>` — everything after the first dot is the
+            // version, which for these packages looks like
+            // `2.0+satysfi0.0.3+satyrographos0.0.2`.
+            let version = dir_name
+                .strip_prefix(&format!("{name}."))
+                .unwrap_or(dir_name)
+                .to_string();
+
+            let text = util::read_to_string(&opam_file)?;
+            if description.is_none() {
+                description = field(&text, "synopsis:");
+            }
+            let Some((tarball_url, sha256, sha512)) = source_of(&text) else {
+                // A version with no fetchable source is not installable; skip
+                // it rather than offering something that cannot be resolved.
+                continue;
+            };
+            versions.insert(
+                version,
+                VersionEntry {
+                    tarball_url,
+                    sha256: sha256.unwrap_or_default(),
+                    sha512,
+                    dependencies: BTreeMap::new(),
+                },
+            );
+        }
+        if versions.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(PackageIndex {
+            description,
+            versions,
+        }))
+    }
+
+    /// The `url { src: "…" checksum: [ "sha256=…" ] }` block's archive and
+    /// sha256. A version whose checksum this crate cannot verify is not
+    /// offered: an unverifiable download that looks verified is worse than an
+    /// absent one.
+    fn source_of(text: &str) -> Option<(String, Option<String>, Option<String>)> {
+        let at = text.find("url {").or_else(|| text.find("url{"))?;
+        let rest = &text[at..];
+        let end = rest.find('}')? ;
+        let block = &rest[..end];
+        let url = field_string(block, "src:").or_else(|| field_string(block, "archive:"))?;
+        let digest = |prefix: &str| {
+            block
+                .split('"')
+                .find(|s| s.starts_with(prefix))
+                .map(|s| s.trim_start_matches(prefix).to_string())
+        };
+        // sha256 if the entry has one; otherwise sha512, which is what
+        // Satyrographos' index actually publishes. md5 is ignored.
+        Some((url, digest("sha256="), digest("sha512=")))
+    }
+
+    /// A `field: "value"` string at the top level of an opam file.
+    fn field(text: &str, field: &str) -> Option<String> {
+        text.lines()
+            .find(|l| l.starts_with(field))
+            .and_then(|l| field_string(l, field))
+    }
+
+    fn field_string(text: &str, field: &str) -> Option<String> {
+        let at = text.find(field)? + field.len();
+        let rest = &text[at..];
+        let start = rest.find('"')? + 1;
+        let end = rest[start..].find('"')? + start;
+        Some(rest[start..end].to_string())
+    }
 }
 
 /// Adapts a live, already-[`acquire`]d [`Registry`] index to the solver's
@@ -737,13 +882,18 @@ impl<'a> DepSource for RegistryDepSource<'a> {
 ///   zero network; a miss fetches over HTTP (or, with `opts.is_offline()`
 ///   set, fails with [`Error::Offline`] instead of fetching). Without the
 ///   `http` cargo feature, any fetch attempt is [`Error::HttpDisabled`].
-pub fn fetch_tarball(url: &str, sha256: &str, dest: &Path, opts: &RegistryOptions) -> Result<(), Error> {
+pub fn fetch_tarball(
+    url: &str,
+    checksum: &Checksum,
+    dest: &Path,
+    opts: &RegistryOptions,
+) -> Result<(), Error> {
     if let Some(local) = local_path_from_url(url) {
         std::fs::copy(&local, dest).map_err(|e| Error::io(&local, e))?;
         return Ok(());
     }
     let candidates = candidate_urls(url, &opts.mirrors);
-    crate::cache::get_or_fetch(&candidates, sha256, dest, opts)
+    crate::cache::get_or_fetch(&candidates, checksum, dest, opts)
 }
 
 /// The raw network transport for a `http(s)://` URL, with no cache lookup —
@@ -811,6 +961,64 @@ pub(crate) fn try_candidates<T>(
 /// Verify that the file at `path` hashes to `expected` (lowercase-hex SHA-256,
 /// compared case-insensitively). [`Error::ChecksumMismatch`] otherwise — the
 /// caller aborts before touching `dist/` (plan §5.4 step 3).
+/// What an index entry says a download must hash to.
+///
+/// An OPAM repository publishes md5 and sha512; this port's own index
+/// publishes sha256. Carrying both through the fetch means the CACHE KEY and
+/// the VERIFICATION always speak the same algorithm — keying by an empty
+/// sha256 while verifying a sha512 would collide every unverified download
+/// onto one cache entry.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Checksum {
+    pub sha256: String,
+    pub sha512: Option<String>,
+}
+
+impl Checksum {
+    pub fn new(sha256: &str, sha512: Option<&str>) -> Self {
+        Checksum {
+            sha256: sha256.to_string(),
+            sha512: sha512.map(str::to_string),
+        }
+    }
+
+    /// The digest to key a cache entry by: sha256 when declared, else sha512.
+    pub fn key(&self) -> &str {
+        if !self.sha256.trim().is_empty() {
+            self.sha256.trim()
+        } else {
+            self.sha512.as_deref().map(str::trim).unwrap_or("")
+        }
+    }
+
+    pub fn verify(&self, path: &Path) -> Result<String, Error> {
+        verify_entry(path, &self.sha256, self.sha512.as_deref())
+    }
+}
+
+/// Verify `path` against whichever digest the index declared: sha256 when it
+/// has one, else sha512. A version with neither is refused — an unverified
+/// download that looks verified is the outcome to avoid.
+pub fn verify_entry(path: &Path, sha256: &str, sha512: Option<&str>) -> Result<String, Error> {
+    if !sha256.trim().is_empty() {
+        return verify_sha256(path, sha256);
+    }
+    let Some(expected) = sha512.map(str::trim).filter(|s| !s.is_empty()) else {
+        return Err(Error::ChecksumMismatch {
+            expected: "a sha256 or sha512 in the index entry".to_string(),
+            actual: "no checksum declared".to_string(),
+        });
+    };
+    let actual = util::sha512_file(path)?;
+    if !actual.eq_ignore_ascii_case(expected) {
+        return Err(Error::ChecksumMismatch {
+            expected: expected.to_lowercase(),
+            actual,
+        });
+    }
+    Ok(actual)
+}
+
 pub fn verify_sha256(path: &Path, expected: &str) -> Result<String, Error> {
     let actual = util::sha256_file(path)?;
     if !actual.eq_ignore_ascii_case(expected.trim()) {
@@ -853,7 +1061,7 @@ pub fn local_path_from_url(url: &str) -> Option<PathBuf> {
 // Feature-gated HTTP transport (plan §8).
 // ---------------------------------------------------------------------------
 
-mod http {
+pub(crate) mod http {
     use super::*;
 
     /// Overrides the connect/read timeout in seconds (design §2.6); production

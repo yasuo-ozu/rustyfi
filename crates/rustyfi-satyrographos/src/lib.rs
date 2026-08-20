@@ -71,9 +71,11 @@
 
 mod archive;
 pub mod cache;
+pub mod config;
 pub mod error;
 pub mod lockfile;
 pub mod manifest;
+pub mod opam;
 pub mod ops;
 pub mod receipts;
 pub mod registry;
@@ -85,6 +87,7 @@ mod stage;
 mod util;
 pub mod version;
 
+pub use config::{Config, Registries};
 pub use error::Error;
 pub use manifest::Lang;
 

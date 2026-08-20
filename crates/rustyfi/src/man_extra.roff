@@ -1,3 +1,12 @@
+.SS Configuration
+.TP
+.IR $XDG_CONFIG_HOME/rustyfi/config.toml ", " ~/.config/rustyfi/config.toml
+Your own settings; `$RUSTYFI_CONFIG_DIR` overrides where this is looked for.
+.TP
+.I <prefix>/share/rustyfi/config.toml
+The defaults shipped with the install, found as
+.IR <executable>/../share/rustyfi .
+Consulted last, so a config you wrote always wins.
 .SH ENVIRONMENT
 .TP
 .B RUSTYFI_LIB_ROOT
@@ -36,6 +45,11 @@ A checked-out source tree \(em development.
 A project-local root, recognised only where a
 .I Satyristes
 sits beside it.
+.TP
+.I <prefix>/lib/rustyfi
+The install this binary belongs to, found as
+.IR <executable>/../lib/rustyfi ,
+so an unpacked archive works wherever it sits.
 .TP
 .IR ~/.local/lib/rustyfi ", " /usr/local/lib/rustyfi ", " /usr/lib/rustyfi
 User-wide, then system-wide \(em where a release archive unpacks to.

@@ -14,6 +14,17 @@ use crate::{archive, manifest, stage};
 /// Options for [`install`] (plan §7.2).
 #[derive(Debug, Default, Clone)]
 pub struct InstallOptions {
+    /// The library to prefer when the manifest declares several and no
+    /// `--library` filter was given: asking for package `xpath` and being told
+    /// it declares `xpath` and `xpath-gr` is friction the user cannot act on
+    /// without reading the manifest. A name that matches nothing is ignored,
+    /// so this never turns a working install into a failing one.
+    pub prefer_library: Option<String>,
+    /// Refuse to fetch an `.opam` `extra-source` that is not already present.
+    pub offline: bool,
+    /// Echo each fetch and build command an `.opam` asks for. They run a
+    /// program and reach the network, so by default the user sees them.
+    pub verbose: bool,
     /// Restrict to blocks written for this generation. `None` accepts either,
     /// which is only unambiguous when the name occurs once.
     pub lang: Option<manifest::Lang>,
@@ -36,6 +47,8 @@ impl RootSelection for InstallOptions {
 /// What [`install`] materialised.
 #[derive(Debug)]
 pub struct InstallReport {
+    /// What the package's `.opam` preparation fetched and ran, if anything.
+    pub prepared: crate::ops::prepare::PrepareReport,
     pub name: String,
     pub version: String,
     /// Distinct top-level destination subtrees (relative to the library
@@ -62,6 +75,13 @@ pub(crate) fn install_inner(
     let root = opts.resolve_managed_root()?;
 
     let prepared = archive::prepare(source, &root)?;
+
+    // A package may not carry the files it declares: a font package ships an
+    // `extra-source` and a `build:` line that produces them, and its
+    // `Satyristes` names paths that only exist afterwards. Run that first, so
+    // planning sees the finished tree.
+    let prep = crate::ops::prepare::prepare(&prepared.source_root, opts.offline, opts.verbose)?;
+
     let plans = manifest::discover(&prepared.source_root)?;
 
     // `-l`/`--library` filter / library selection (plan §4.1). A single
@@ -69,7 +89,12 @@ pub(crate) fn install_inner(
     // a `Satyristes` (phase 4) may declare several `(library ...)` blocks, in
     // which case `--library` must narrow the selection to exactly one (one
     // library is materialised per install).
-    let plan = select_plan(plans, opts.libraries.as_deref(), opts.lang)?;
+    let plan = select_plan(
+        plans,
+        opts.libraries.as_deref(),
+        opts.lang,
+        opts.prefer_library.as_deref(),
+    )?;
 
     // Collision policy (plan §6).
     let old_receipt = if receipts::exists_for(&root, &plan.name, plan.lang) {
@@ -127,6 +152,9 @@ pub(crate) fn install_inner(
     receipts::write(&root, &receipt)?;
 
     Ok(InstallReport {
+
+
+        prepared: prep,
         name: plan.name,
         version: plan.version,
         files: top_level_paths(&new_dsts),
@@ -144,6 +172,7 @@ fn select_plan(
     plans: Vec<manifest::PackagePlan>,
     libraries: Option<&[String]>,
     lang: Option<manifest::Lang>,
+    prefer: Option<&str>,
 ) -> Result<manifest::PackagePlan, Error> {
     // A name is no longer unique: one manifest may declare the same library
     // for both generations, so the pair (name, lang) is what identifies it.
@@ -160,6 +189,14 @@ fn select_plan(
     };
     if let Some(lang) = lang {
         selected.retain(|p| p.lang == lang);
+    }
+    // Only when it would otherwise be ambiguous, and only if it matches.
+    if selected.len() > 1 {
+        if let Some(prefer) = prefer {
+            if selected.iter().any(|p| p.name == prefer) {
+                selected.retain(|p| p.name == prefer);
+            }
+        }
     }
     match selected.len() {
         1 => Ok(selected.pop().unwrap()),

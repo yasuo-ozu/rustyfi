@@ -1881,3 +1881,74 @@ page-break (210mm, 297mm) content parts body
         "both delimiters must have been placed"
     );
 }
+
+/// Slice X3d: a 0.1 document CALLING a 0.0.6-defined math command.
+///
+/// `@require:`-ing such a package always worked; invoking one did not, because
+/// the two generations' math-command calling conventions differ and the
+/// difference is invisible to the type system (`math` relabels to `math-text`
+/// and the whole program type-checks):
+///
+///   0.0.6  `\cmd a1 .. an` -> `math`, and the reflector attaches `_`/`^`
+///          STRUCTURALLY afterwards — the command never sees a context, a
+///          subscript or a superscript;
+///   0.1    `\cmd a1 .. an ctx sub sup` -> `math-boxes`, with `sub`/`sup :
+///          math-text option`, so a command can typeset its own scripts.
+///
+/// `${\kilo\gram}` against `siunitx` therefore died with `cannot apply a value
+/// of type math as a function`, from a document naming no 0.0.6 file.
+///
+/// The fixture covers all three shapes that matter: a zero-argument command, a
+/// one-argument one, and a SCRIPTED occurrence — the last is the one that
+/// proves the adapter attaches `^` the 0.1 way (`attach_scripts`) rather than
+/// dropping it, since the 0.0.6 command has no slot to receive it in.
+#[test]
+fn a_zero_one_document_can_call_a_v006_math_command() {
+    let dir = TempDir::new("x3d-v006-math-command");
+    dir.write(
+        "dist/packages/xver-x3d-math.satyg",
+        "@stage: persistent\n\n\
+         let-math \\xver-kilo = math-char MathPrefix `k`\n\
+         let-math \\xver-ord m = math-group MathOrd MathOrd m\n",
+    );
+    dir.write("xver-helper.satyh", XVER_HELPER_SRC);
+    dir.write(
+        "entry.saty",
+        "\
+@require: xver-x3d-math
+@import: xver-helper
+
+let ctx = get-initial-context 440pt (command \\XverHelper.math) in
+let m = embed-math ctx (read-math ctx ${\\xver-kilo\\xver-ord{x}^{2}}) in
+let body = line-break true true ctx m in
+let content pbinfo = (| text-origin = (72pt, 100pt), text-height = 640pt |) in
+let parts pbinfo =
+  (| header-origin = (72pt, 72pt),  header-content = block-nil,
+     footer-origin = (72pt, 800pt), footer-content = block-nil |)
+in
+page-break (210mm, 297mm) content parts body
+",
+    );
+
+    let opts = LoadOptions {
+        lib_root: Some(dir.path().to_path_buf()),
+        version: RustyfiVersion::V0_1,
+        ..Default::default()
+    };
+    let program = rustyfi_loader::load(&dir.path().join("entry.saty"), &opts)
+        .unwrap_or_else(|e| panic!("loading the X3d math-command fixture should succeed: {e}"));
+
+    let mono = Mono;
+    let (doc, _trials) = rustyfi_lang::compile_document_v1_with_trials(&program.files, &mono)
+        .unwrap_or_else(|e| {
+            panic!(
+                "a 0.1 document must be able to CALL a 0.0.6-defined math command \
+                 (zero-argument, one-argument, and scripted): {e}"
+            )
+        });
+    assert_eq!(doc.pages.len(), 1, "one A4 page");
+    assert!(
+        !doc.pages[0].lines.is_empty(),
+        "the math run must have been placed"
+    );
+}

@@ -77,7 +77,7 @@
   },
   "siunitx": {
     "control": true,
-    "cross": false
+    "cross": true
   },
   "texlogo": {
     "control": true,

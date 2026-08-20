@@ -1843,50 +1843,61 @@ fn interscript_boxes(ctx: &Context, l: char, r: char) -> Vec<PureHorzBox> {
 }
 
 /// The glue SATySFi puts between two directly adjacent CJK characters, as
-/// `(natural, shrink, stretch)` ratios of `font_size` — `space_between_chunks`
+/// absolute `(natural, shrink, stretch)` — `space_between_chunks`
 /// (`convertText.ml:220`) with `ideographic_single`'s compensating kerns
 /// (`convertText.ml:266`) folded in.
 ///
 /// Upstream renders CJK punctuation at its full em and then kerns it back:
-/// `。`/`、`/`）` carry a trailing −0.5em kern, `（` a leading one, `・` −0.25em
-/// on both sides. `pure_space_between_classes` (`convertText.ml:194`) then adds
-/// a half-width space back — natural 0.5em, stretch 0.25em, and shrink 0.25em
-/// unless the pair is "hard" (after a full stop). Net natural width is
-/// therefore unchanged for ordinary text, but each punctuation mark contributes
-/// **0.25em of stretch** — ten times the 0.025em `adjacent_stretch` between two
-/// ordinary characters, and the bulk of the elasticity a Japanese line
-/// justifies with. Two punctuation marks in a row (`」、`, `」。`) get NO space
-/// back, so the pair sets 0.5em tighter than its glyphs.
-fn cjk_pair_space(a: char, b: char, adjacent_stretch: f64) -> (f64, f64, f64) {
+/// `。`/`、`/`）` carry a trailing −0.5em kern, `（` a leading one.
+/// `pure_space_between_classes` (`convertText.ml:194`) then adds a half-width
+/// space back — natural 0.5em, stretch 0.25em, and shrink 0.25em unless the pair
+/// is "hard" (after a full stop). Net natural width is therefore unchanged for
+/// ordinary text, but each punctuation mark contributes **0.25em of stretch** —
+/// ten times the 0.025em `adjacent_stretch` between two ordinary characters, and
+/// the bulk of the elasticity a Japanese line justifies with. Two punctuation
+/// marks in a row (`」、`, `」。`) get NO space back, so the pair sets 0.5em
+/// tighter than its glyphs.
+///
+/// **Which em.** Upstream's kerns and class spaces are ratios of the
+/// CORRECTED font size (`halfwidth_kern`/`pure_space_between_classes` both go
+/// through `get_corrected_font_size`, `convertText.ml:77-79,110-118,195-202`) —
+/// `font_size` times the script font's ratio, 0.88 for stdja's Kana/Han. Only
+/// `adjacent_space` (`:101-106`) and the inter-script glue (`:225`) take the raw
+/// `font_size`. The port used the raw size for all of them: the natural widths
+/// cancelled either way, but every punctuation mark carried 0.25 x 12pt = 3.0pt
+/// of give where upstream gives it 0.25 x 10.56pt = 2.64pt — 14% too elastic,
+/// on the one glue that supplies most of a Japanese line's elasticity.
+/// `hwsoft1`/`hwsoft2`/`hwsoftM` are kept distinct for the same reason, even
+/// though a single-context port makes all three equal whenever the two
+/// characters' scripts share a ratio (they do under stdja).
+fn cjk_pair_space(ctx: &Context, a: char, b: char) -> (Length, Length, Length) {
     use JlClass::*;
     let (ca, cb) = (jl_class(a), jl_class(b));
-    // Kerns from `ideographic_single`, as a NEGATIVE ratio of font_size.
-    let kern = match ca {
-        Some(Close) | Some(FullStop) | Some(Comma) => -0.5,
-        Some(MiddleDot) => -0.25,
-        _ => 0.0,
-    } + match cb {
-        Some(Open) => -0.5,
-        Some(MiddleDot) => -0.25,
-        _ => 0.0,
-    };
+    let (size1, size2) = (corrected_font_size(ctx, a), corrected_font_size(ctx, b));
+    let size_m = if size1 > size2 { size1 } else { size2 };
+    // `ideographic_single`'s kerns, each scaled by ITS OWN character's size.
+    let kern = size1 * ideographic_kern(a).1 + size2 * ideographic_kern(b).0;
     // `pure_space_between_classes`, in its own match order.
-    let hwsoft = (0.5, 0.25, 0.25);
-    let hwhard = (0.5, 0.0, 0.25);
+    let hwsoft = |s: Length| (s * 0.5, s * 0.25, s * 0.25);
+    let hwhard = |s: Length| (s * 0.5, Length::ZERO, s * 0.25);
     let cls = match (ca, cb) {
-        (Some(Close), Some(Open)) | (Some(Comma), Some(Open)) => Some(hwsoft),
-        (Some(FullStop), Some(Open)) => Some(hwhard),
-        (_, Some(Open)) => Some(hwsoft),
+        (Some(Close), Some(Open)) | (Some(Comma), Some(Open)) => Some(hwsoft(size_m)),
+        (Some(FullStop), Some(Open)) => Some(hwhard(size_m)),
+        (_, Some(Open)) => Some(hwsoft(size2)),
         (Some(Close), Some(Comma)) | (Some(Close), Some(FullStop)) => None,
-        (Some(Close), _) | (Some(Comma), _) => Some(hwsoft),
-        (Some(FullStop), _) => Some(hwhard),
+        (Some(Close), _) | (Some(Comma), _) => Some(hwsoft(size1)),
+        (Some(FullStop), _) => Some(hwhard(size1)),
         _ => None,
     };
     match cls {
         Some((n, sh, st)) => (kern + n, sh, st),
         // No class space: `adjacent_space` (natural 0, shrink 0, stretch
-        // `adjacent_stretch`), plus whatever kern the pair carries.
-        None => (kern, 0.0, adjacent_stretch),
+        // `adjacent_stretch` of the RAW font size), plus the pair's kern.
+        None => (
+            kern,
+            Length::ZERO,
+            ctx.font_size * ctx.adjacent_stretch,
+        ),
     }
 }
 
@@ -2240,20 +2251,17 @@ fn text_to_boxes(
                 let next_char = text[after..].chars().next();
                 let next_is_cjk = next_char.is_some_and(|nc| is_cjk(char_script(nc)));
                 let no_break = if is_cjk(script) && next_is_cjk {
-                    let (n, sh, st) =
-                        cjk_pair_space(c, next_char.expect("checked"), ctx.adjacent_stretch);
+                    let (n, sh, st) = cjk_pair_space(ctx, c, next_char.expect("checked"));
                     let mut boxes = Vec::new();
                     // The kern part is RIGID and must never be a break point,
                     // so it rides as a `FixedEmpty` rather than as glue.
-                    if n != 0.0 {
-                        boxes.push(PureHorzBox::FixedEmpty {
-                            width: ctx.font_size * n,
-                        });
+                    if n != Length::ZERO {
+                        boxes.push(PureHorzBox::FixedEmpty { width: n });
                     }
                     boxes.push(PureHorzBox::OuterEmpty {
                         natural: Length::ZERO,
-                        shrinkable: ctx.font_size * sh,
-                        stretchable: ctx.font_size * st,
+                        shrinkable: sh,
+                        stretchable: st,
                     });
                     boxes
                 } else {

@@ -8810,6 +8810,22 @@ fn indent_left(block: Vec<VertBox>, pad_l: Length) -> Vec<VertBox> {
 /// `decoS` once the frame's whole single-page fragment is placed (§D's first
 /// cut: multi-page fragments/`decoH`/`decoM`/`decoT` are a documented
 /// follow-up, see `fire_hooks`'s doc comment).
+/// Drop the margin boxes at either END of a `block-frame-breakable`'s body —
+/// the first inner block's top margin and the last inner block's bottom
+/// margin, which upstream's `normalize` never produces for a frame's contents
+/// (`pageBreak.ml:664` and `:582-585`; see the call site). Margins in the
+/// MIDDLE of the body are untouched: those are real inter-block gaps, squashed
+/// there exactly as they are outside a frame.
+fn strip_outer_margins(body: &mut Vec<VertBox>) {
+    let is_margin = |vb: &VertBox| matches!(vb, VertBox::Skip(_) | VertBox::ParagTop(_));
+    if body.first().is_some_and(is_margin) {
+        body.remove(0);
+    }
+    if body.last().is_some_and(is_margin) {
+        body.pop();
+    }
+}
+
 fn prim_block_frame_breakable(
     interp: &mut Interp,
     version: RustyfiVersion,
@@ -8837,13 +8853,36 @@ fn prim_block_frame_breakable(
         ..ctx
     };
     let inner = as_block_boxes(interp.apply(k, Value::Context(Box::new(inner_ctx)))?)?;
-    let indented = indent_left(inner, pad_l);
-    let mut out = Vec::with_capacity(indented.len() + 4);
+    let mut indented = indent_left(inner, pad_l);
+    // THE FRAME CARRIES THE MARGINS, ITS BODY DOES NOT. Upstream normalizes a
+    // frame's contents STANDALONE — `aux None TopMarginProhibited Alist.empty
+    // vblstsub` (`pageBreak.ml:664`) — so the first inner block's `margin_top`
+    // is never appended, and the last inner block's `margin_bottom` goes
+    // through `squash_margins _ []`, whose empty-list arm (`:582-585`) emits
+    // no skip at all. What surrounds the frame instead is the frame's OWN
+    // `margins`, taken from the OUTER context (`vminstdef.yaml`'s
+    // `BackendVertFrame`: `margin_top = ctx.paragraph_top`, `margin_bottom =
+    // ctx.paragraph_bottom`), which `squash_margins` max-collapses against the
+    // neighbouring blocks' margins exactly as `chop_page` collapses adjacent
+    // `Skip`s.
+    //
+    // The distinction is not cosmetic: the body's `ParagTop` carries
+    // `min_first_line_ascender` folded in (`prim_line_break`,
+    // `lineBreak.ml:855-857`), and the frame's margin does NOT. Keeping the
+    // body's made the advance INTO a frame a constant — `max(0, 9pt - hgt)`
+    // cancels the first line's own height — where upstream's tracks the ink:
+    // measured on `scripts/layout_probes/code_line_height.saty` against real
+    // SATySFi 0.0.11, `+code(`ooo`)` / `lll` / `ggg` advance 29.114 / 31.166 /
+    // 29.138pt upstream and a flat 32.835pt here.
+    strip_outer_margins(&mut indented);
+    let mut out = Vec::with_capacity(indented.len() + 6);
+    out.push(VertBox::Skip(ctx.paragraph_top));
     out.push(VertBox::FrameStart(id));
     out.push(VertBox::FramePad(pad_t));
     out.extend(indented);
     out.push(VertBox::FramePad(pad_b));
     out.push(VertBox::FrameEnd(id));
+    out.push(VertBox::Skip(ctx.paragraph_bottom));
     Ok(Value::BlockBoxes(out))
 }
 

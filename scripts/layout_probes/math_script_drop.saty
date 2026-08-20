@@ -1,0 +1,33 @@
+% Probe: how far below the baseline an inline-math SUBSCRIPT sits, and what
+% that does to the line advance.
+%
+% This is what is left of the enumitem manual's back-half divergence once the
+% pagination fixes are in. On its page 17 (a run of `+item{${m_{J*}...}}`
+% lines) the port advances 23.30-24.50pt per item where upstream advances
+% 21.49-21.74pt, and inside each item the subscript row sits +4.728pt below its
+% own base row where upstream puts it +2.964pt — read out of the CONTENT
+% STREAM with `scripts/vspace_probe/baselines.py`, not from `pdftotext -bbox`
+% (the two writers' math descriptors differ).
+%
+% ~12 such lines accumulate ~25pt over one page, which is why the port's
+% page 17 ends one `+code` block earlier than upstream's. The pagination is
+% not what is wrong there; the math box's depth is.
+%
+% Rows 1-3 vary one thing each so the two effects can be separated:
+%   1. plain CJK        — the control, must agree exactly
+%   2. subscript only   — the script drop
+%   3. sub + superscript — whether the height moves too
+@require: stdjabook
+@require: math
+
+document (|
+  title = {math script drop probe};
+  author = {};
+  show-title = false;
+  show-toc = false;
+|) '<
+  +p{あいうえお。}
+  +p{かきくけこ${m_{J}}さしすせそ。}
+  +p{たちつてと${m_{J}^{*}}なにぬねの。}
+  +p{はひふへほ。}
+>

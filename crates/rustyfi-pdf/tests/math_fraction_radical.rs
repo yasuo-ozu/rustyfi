@@ -293,10 +293,15 @@ fn radical_overbar_and_sign_fills_with_math_font() {
     let mc = store
         .math_constants(FontKey(0))
         .expect("MATH font should expose MathConstants");
-    // The radicand is a single char at dy=0, so its own ascender/descender
-    // ARE `h_cont`/`d_cont` (`glyphs_extent`'s definition).
-    let h_cont = store.ascender(FontKey(0), size);
-    let d_cont = store.descender(FontKey(0), size);
+    // The radicand is a single char at dy=0, so its own per-GLYPH INK extents
+    // ARE `h_cont`/`d_cont` (`inner_ink_extent`'s definition). Deliberately
+    // read back off the glyph rather than recomputed from the font-wide
+    // ascender/descender: upstream measures a math glyph from its own bbox
+    // (`get_math_glyph_metrics`, fontFormat.ml:2257-2264) and the font-wide
+    // pair is precisely the substitution that used to mis-place every script
+    // (`scripts/layout_probes/math_script_drop.saty`).
+    let h_cont = glyphs[0].height;
+    let d_cont = glyphs[0].depth;
     let h_bar = h_cont + size * mc.radical_vertical_gap;
     let t_bar = size * mc.radical_rule_thickness;
     let l_extra = size * mc.radical_extra_ascender;

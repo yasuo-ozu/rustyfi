@@ -218,6 +218,33 @@ fn with_ctx(body: &str) -> String {
     )
 }
 
+/// `sup_dy` plus the two ink extents `sup_shift_clamped` clamps against:
+/// the base's height and the script's depth. Reading them back off the
+/// laid-out glyphs is deliberate — they are per-GLYPH ink boxes (upstream's
+/// `FontFormat.get_math_glyph_metrics`, fontFormat.ml:2257-2264), not the
+/// font-wide ascender/descender, and re-deriving them here would just pin a
+/// second copy of that convention instead of the clamp under test.
+fn sup_dy_and_extents(v: Value) -> (Length, Length, Length) {
+    match v {
+        Value::InlineBoxes(boxes) => {
+            assert_eq!(boxes.len(), 1, "expected exactly one box, got {boxes:?}");
+            match boxes.into_iter().next().unwrap() {
+                HorzBox::Pure(PureHorzBox::Math { glyphs, .. }) => {
+                    assert_eq!(
+                        glyphs.len(),
+                        2,
+                        "expected 2 glyphs (base 'x', script '2'), got {glyphs:?}"
+                    );
+                    assert_eq!(glyphs[1].text, "2");
+                    (glyphs[1].dy, glyphs[0].height, glyphs[1].depth)
+                }
+                other => panic!("expected a PureHorzBox::Math, got {other:?}"),
+            }
+        }
+        other => panic!("expected inline-boxes, got {other:?}"),
+    }
+}
+
 /// Extract the superscript glyph's `dy` from `${x^2}`'s laid-out
 /// `PureHorzBox::Math` — the SECOND glyph (`x` is the base, `2` the raised
 /// script; the faithful `layout_math_atom::Sup` arm this exercises never
@@ -264,26 +291,26 @@ fn headline_math_font_superscript_shift_differs_from_flat_heuristic() {
 
     // Real MATH font: independently recompute math.ml:524-533's clamped
     // `superscript_baseline_height` by hand, from the SAME quantities
-    // `MathC::sup_shift_clamped`/`push_char_glyph` read (the font's own
-    // `MathConstants` plus its font-WIDE ascender/descender — this port
-    // measures every glyph's height/depth from those, not a per-glyph ink
-    // bbox, so `h_base`/`d_sup` below are exactly what the base 'x' and
-    // script '2' glyphs carry).
+    // `MathC::sup_shift_clamped` reads — the font's own `MathConstants` plus
+    // the base's and script's per-GLYPH ink extents (upstream's
+    // `get_math_glyph_metrics`, fontFormat.ml:2257-2264: `hgt = ymax`,
+    // `dpt = ymin`, each truncated towards the baseline). NOT the font-wide
+    // ascender/descender, which is what `push_char_glyph` used to hand the
+    // clamp and which put every script 1.7-2.1pt off
+    // (`scripts/layout_probes/math_script_drop.saty`).
     let mc = store
         .math_constants(FontKey(0))
         .expect("MATH font should expose MathConstants");
     let script_size = size * mc.script_scale_down;
-    let h_base = store.ascender(FontKey(0), size);
-    let d_sup = store.descender(FontKey(0), script_size);
-    let cand1 = size * mc.superscript_shift_up;
-    let cand2 = h_base - size * mc.superscript_baseline_drop_max;
-    let cand3 = size * mc.superscript_bottom_min + d_sup;
-    let expected = cand1.max(cand2).max(cand3);
 
     let math_src = with_ctx("embed-math ctx ${x^2}");
     let v = run_math(&math_src, &store)
         .expect("${x^2} should compile and evaluate under a real MATH font");
-    let math_dy = sup_dy(v);
+    let (math_dy, h_base, d_sup) = sup_dy_and_extents(v);
+    let cand1 = size * mc.superscript_shift_up;
+    let cand2 = h_base - size * mc.superscript_baseline_drop_max;
+    let cand3 = size * mc.superscript_bottom_min + d_sup;
+    let expected = cand1.max(cand2).max(cand3);
 
     assert_ne!(
         math_dy, base14_dy,

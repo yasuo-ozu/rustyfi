@@ -1,13 +1,19 @@
-//! The two `.opam` fields a SATySFi package needs before it can be installed:
-//! `extra-source` and `build:`.
+//! The `.opam` fields a SATySFi package needs before it can be installed:
+//! `extra-source`, `build:`, and `depends:`.
 //!
-//! Font packages are the reason. `satysfi-fonts-theano` ships no fonts — it
-//! ships an `extra-source` naming an upstream zip and a checksum, and a
-//! `build:` line that unpacks it; only then do the paths its `Satyristes`
-//! declares exist. Reading the whole opam language is not the goal, and this
-//! deliberately does not: it scans for those two fields and ignores the rest,
-//! because everything else in the file is for OPAM, which this port does not
-//! have.
+//! Font packages are the reason for the first two. `satysfi-fonts-theano`
+//! ships no fonts — it ships an `extra-source` naming an upstream zip and a
+//! checksum, and a `build:` line that unpacks it; only then do the paths its
+//! `Satyristes` declares exist. Reading the whole opam language is not the
+//! goal, and this deliberately does not: it scans for these fields and
+//! ignores the rest, because everything else in the file is for OPAM, which
+//! this port does not have.
+//!
+//! `depends:` is parsed too (name plus raw constraint text — see
+//! [`Dependency`]) and RECORDED on [`Opam`], but deliberately not translated
+//! into [`crate::version::Constraint`] or fed to the solver: see
+//! [`Dependency`]'s own doc for why, and `registry::opam_index`'s module doc
+//! for the sibling registry-index reader's story.
 //!
 //! ```text
 //! extra-source "theano-2.0.otf.zip" {
@@ -17,6 +23,9 @@
 //!     "sha512=4463…"
 //!   ]
 //! }
+//! depends: [
+//!   "satysfi" {>= "0.0.3" & < "0.0.4"}
+//! ]
 //! build: [
 //!   ["unzip" "-o" "theano-2.0.otf.zip" "*.otf" "-d" "theano"]
 //! ]
@@ -40,12 +49,38 @@ pub struct ExtraSource {
     pub sha256: Option<String>,
 }
 
+/// One `depends:` entry: an opam package name plus its raw constraint/filter
+/// clause, exactly as written, if it has one.
+///
+/// The clause is kept as opam's own text (`>= "0.0.3" & < "0.0.4"`, `= "1.0.0"`,
+/// a `{ os = "linux" }` build filter, …) rather than translated into
+/// [`crate::version::Constraint`]. Opam's grammar has comparison ranges,
+/// boolean `&`/`|` conjunction, and non-version filters; this crate's
+/// constraint model is only an exact pin, a caret range, or "any"
+/// ([`crate::version::Constraint`]) — there is no faithful mapping from one to
+/// the other, and a *guessed* one would be worse than an admittedly-unparsed
+/// one, because a wrong constraint that happens to parse looks trustworthy.
+/// Likewise the name is opam's own package id (`"satysfi"`, `"ocaml"`,
+/// `"satysfi-base"`, …), not resolved against this port's library-name
+/// registry lookup — see `registry::opam_index`'s module doc for why that step
+/// is also not taken here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Dependency {
+    pub name: String,
+    pub constraint: Option<String>,
+}
+
 /// What an `.opam` file says a package needs before installing.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Opam {
     pub extra_sources: Vec<ExtraSource>,
     /// `build:` command lines, in order.
     pub build: Vec<Vec<String>>,
+    /// `depends:` entries, in order (see [`Dependency`]). Parsed and
+    /// recorded for inspection; not consulted by [`Opam::is_empty`] (nothing
+    /// about *preparing* a package — fetching `extra-source`s, running
+    /// `build:` — depends on them) and not fed to the solver.
+    pub depends: Vec<Dependency>,
 }
 
 impl Opam {
@@ -68,7 +103,7 @@ pub fn opam_files(dir: &Path) -> Vec<PathBuf> {
     found
 }
 
-/// Read `path`, keeping only `extra-source` and `build:`.
+/// Read `path`, keeping only `extra-source`, `build:`, and `depends:`.
 pub fn read(path: &Path) -> Result<Opam, Error> {
     Ok(parse(&util::read_to_string(path)?))
 }
@@ -80,11 +115,12 @@ pub fn read_dir(dir: &Path) -> Result<Opam, Error> {
         let one = read(&file)?;
         all.extra_sources.extend(one.extra_sources);
         all.build.extend(one.build);
+        all.depends.extend(one.depends);
     }
     Ok(all)
 }
 
-/// Scan the two fields out of an opam file's text.
+/// Scan the three fields out of an opam file's text.
 pub fn parse(text: &str) -> Opam {
     let mut opam = Opam::default();
     let bytes: Vec<char> = text.chars().collect();
@@ -106,9 +142,62 @@ pub fn parse(text: &str) -> Opam {
                 continue;
             }
         }
+        // `depends:` — same start-of-line rule.
+        if starts_at(&bytes, i, "depends:") && at_field_start(&bytes, i) {
+            if let Some((deps, next)) = parse_depends(&bytes, i + "depends:".len()) {
+                opam.depends.extend(deps);
+                i = next;
+                continue;
+            }
+        }
         i += 1;
     }
     opam
+}
+
+/// `[ "name" {constraint} "name2" ... ]` — one dependency name per quoted
+/// string, each optionally followed by a brace-delimited constraint/filter
+/// clause kept as raw text (see [`Dependency`]).
+fn parse_depends(chars: &[char], from: usize) -> Option<(Vec<Dependency>, usize)> {
+    let open = chars[from..]
+        .iter()
+        .position(|c| !c.is_whitespace())
+        .map(|off| from + off)?;
+    if chars[open] != '[' {
+        return None;
+    }
+    let close = matching(chars, open, '[', ']')?;
+    let inner: Vec<char> = chars[open + 1..close].to_vec();
+
+    let mut deps = Vec::new();
+    let mut i = 0;
+    while i < inner.len() {
+        if inner[i] == '"' {
+            let (name, after_name) = next_string(&inner, i)?;
+            let mut j = after_name;
+            while j < inner.len() && inner[j].is_whitespace() {
+                j += 1;
+            }
+            if j < inner.len() && inner[j] == '{' {
+                let end = matching(&inner, j, '{', '}')?;
+                let constraint: String = inner[j + 1..end].iter().collect::<String>().trim().to_string();
+                deps.push(Dependency {
+                    name,
+                    constraint: Some(constraint),
+                });
+                i = end + 1;
+            } else {
+                deps.push(Dependency {
+                    name,
+                    constraint: None,
+                });
+                i = after_name;
+            }
+        } else {
+            i += 1;
+        }
+    }
+    Some((deps, close + 1))
 }
 
 fn starts_at(chars: &[char], i: usize, word: &str) -> bool {
@@ -299,5 +388,56 @@ install: [
     #[test]
     fn a_file_with_neither_field_is_empty() {
         assert!(parse("opam-version: \"2.0\"\nname: \"x\"\n").is_empty());
+    }
+
+    #[test]
+    fn reads_the_depends_name_and_raw_constraint() {
+        let opam = parse(THEANO);
+        assert_eq!(
+            opam.depends,
+            vec![Dependency {
+                name: "satysfi".to_string(),
+                constraint: Some(">= \"0.0.3\" & < \"0.0.4\"".to_string()),
+            }]
+        );
+    }
+
+    #[test]
+    fn depends_is_not_counted_by_is_empty() {
+        // Nothing about preparing a package (fetching extra-sources, running
+        // build:) depends on `depends:`, so a file with only that field is
+        // still "nothing to prepare".
+        let opam = parse("depends: [\n  \"satysfi\" {>= \"0.0.3\"}\n]\n");
+        assert_eq!(opam.depends.len(), 1);
+        assert!(opam.is_empty());
+    }
+
+    #[test]
+    fn a_dependency_with_no_constraint_clause_is_recorded_with_none() {
+        let opam = parse("depends: [\n  \"ocaml\"\n  \"dune\" {build}\n]\n");
+        assert_eq!(
+            opam.depends,
+            vec![
+                Dependency { name: "ocaml".to_string(), constraint: None },
+                Dependency { name: "dune".to_string(), constraint: Some("build".to_string()) },
+            ]
+        );
+    }
+
+    #[test]
+    fn several_dependencies_read_in_order() {
+        let opam = parse(
+            "depends: [\n  \"satysfi-base\" {>= \"1.0.0\"}\n  \"satysfi-fonts-lmodern\"\n]\n",
+        );
+        assert_eq!(opam.depends.len(), 2);
+        assert_eq!(opam.depends[0].name, "satysfi-base");
+        assert_eq!(opam.depends[1].name, "satysfi-fonts-lmodern");
+        assert_eq!(opam.depends[1].constraint, None);
+    }
+
+    #[test]
+    fn a_depends_word_in_prose_is_not_a_field() {
+        let opam = parse("description: \"this depends: on nothing\"\n");
+        assert!(opam.depends.is_empty());
     }
 }

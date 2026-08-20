@@ -166,12 +166,33 @@ pub(crate) fn install_inner(
         opts.prefer_library.as_deref(),
     )?;
 
+    let receipt_source = source_override.unwrap_or_else(|| {
+        Source::plain(prepared.kind, prepared.value.to_string_lossy().into_owned())
+    });
+    let mut report = install_plan(&root, plan, opts, receipt_source)?;
+    report.prepared = prep;
+    Ok(report)
+}
+
+/// Stage, collision-check, atomically materialise, and receipt one
+/// already-selected [`manifest::PackagePlan`] under `root` (already
+/// resolved). Factored out of [`install_inner`] so a plan built OUTSIDE the
+/// normal directory-discovery path — [`crate::ops::build::build`]'s
+/// doc-target install is the first such caller — can reuse the exact same
+/// atomic-swap/receipt machinery a directory/archive install uses.
+/// `receipt_source` is what the written receipt's `[source]` table records.
+pub(crate) fn install_plan(
+    root: &Path,
+    plan: manifest::PackagePlan,
+    opts: &InstallOptions,
+    receipt_source: Source,
+) -> Result<InstallReport, Error> {
     // Collision policy (plan §6).
-    let old_receipt = if receipts::exists_for(&root, &plan.name, plan.lang) {
+    let old_receipt = if receipts::exists_for(root, &plan.name, plan.lang) {
         if !opts.force {
             return Err(Error::AlreadyInstalled { name: plan.name });
         }
-        Some(receipts::read_for(&root, &plan.name, plan.lang)?)
+        Some(receipts::read_for(root, &plan.name, plan.lang)?)
     } else {
         // No receipt for this name: refuse to clobber any pre-existing
         // (unmanaged) file at a destination path. A shared destination is
@@ -179,7 +200,7 @@ pub(crate) fn install_inner(
         // case, since the standard library ships one, and this install adds its
         // entries to it rather than taking it over.
         for pf in plan.files.iter().filter(|pf| !pf.merge) {
-            let live = stage::safe_join(&root, &pf.dst)?;
+            let live = stage::safe_join(root, &pf.dst)?;
             if live.exists() {
                 return Err(Error::UnmanagedCollision { path: live });
             }
@@ -188,11 +209,11 @@ pub(crate) fn install_inner(
     };
 
     // Stage every file (path-traversal-checked) and hash it.
-    let staging = stage::StagingArea::new(&root, &plan.name)?;
+    let staging = stage::StagingArea::new(root, &plan.name)?;
     let mut file_entries = Vec::with_capacity(plan.files.len());
     for pf in &plan.files {
         if pf.merge {
-            let merged = merge_shared(&root, pf, old_receipt.as_ref())?;
+            let merged = merge_shared(root, pf, old_receipt.as_ref())?;
             staging.stage_contents(&pf.dst, &merged.text)?;
             // No `sha256`: the next font package to install merges into this
             // same file and changes it, so a hash recorded here would describe
@@ -232,14 +253,14 @@ pub(crate) fn install_inner(
         .unwrap_or_default();
 
     // Atomic swap into place.
-    stage::materialize(&root, staging.path(), &new_dsts, &old_dsts)?;
+    stage::materialize(root, staging.path(), &new_dsts, &old_dsts)?;
 
     // A shared file the previous install contributed to and this one no longer
     // ships: its keys still have to go, and the file itself has to stay.
     if let Some(old) = &old_receipt {
         for entry in old.files.iter().filter(|f| f.keys.is_some()) {
             if !new_dsts.contains(&entry.dst) {
-                withdraw_keys(&root, entry)?;
+                withdraw_keys(root, entry)?;
             }
         }
     }
@@ -252,17 +273,13 @@ pub(crate) fn install_inner(
         name: plan.name.clone(),
         package_version: plan.version.clone(),
         installed_at: util::now_rfc3339(),
-        source: source_override.unwrap_or_else(|| {
-            Source::plain(prepared.kind, prepared.value.to_string_lossy().into_owned())
-        }),
+        source: receipt_source,
         files: file_entries,
     };
-    receipts::write(&root, &receipt)?;
+    receipts::write(root, &receipt)?;
 
     Ok(InstallReport {
-
-
-        prepared: prep,
+        prepared: crate::ops::prepare::PrepareReport::default(),
         name: plan.name,
         version: plan.version,
         files: top_level_paths(&new_dsts),

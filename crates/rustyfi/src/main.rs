@@ -796,6 +796,10 @@ fn cmd_build(m: &ArgMatches) -> Result<(), sg::Error> {
         .get_one::<PathBuf>("path")
         .cloned()
         .unwrap_or_else(|| PathBuf::from("."));
+    // `--install` materialises the built products into the resolved root
+    // (dist/doc/<name>/<dst>); with no `--install`, `build` runs the commands
+    // and reports which products exist, exactly as before.
+    let install = m.get_flag("install").then(|| root_options(m));
     let opts = sg::BuildOptions {
         lang: m.get_one::<String>("lang").and_then(|s| sg::Lang::parse(s)),
         docs: m
@@ -805,11 +809,15 @@ fn cmd_build(m: &ArgMatches) -> Result<(), sg::Error> {
         typesetter: std::env::current_exe().ok(),
         verbose: !m.get_flag("quiet"),
         lib_root: m.get_one::<PathBuf>("lib_root").cloned(),
+        install,
     };
     for report in sg::build(&source, &opts)? {
         println!("built {} ({} command(s))", report.name, report.commands.len());
         for (product, present) in &report.products {
             println!("  {} {}", if *present { "->" } else { "!!" }, product);
+        }
+        for path in &report.installed {
+            println!("  installed {}", path.display());
         }
     }
     Ok(())
@@ -1030,7 +1038,10 @@ fn cmd_install_manifest(m: &ArgMatches) -> Result<(), sg::Error> {
     }
     let opts = sg::RootOptions { lib_root, dest };
 
-    let report = sg::install_manifest_reg(&manifest, &opts, &registry_options(m)?)?;
+    // Every configured repository, in order (task: reconcile used to consult
+    // only the first) — same source `cmd_search`/`install_one` already use.
+    let repos = registry_fallbacks(m)?;
+    let report = sg::install_manifest_reg_multi(&manifest, &opts, &registry_options(m)?, &repos)?;
     println!("reconciled {}", manifest.display());
     for ir in &report.installed {
         println!("  installed {} {}", ir.name, ir.version);
@@ -1040,6 +1051,11 @@ fn cmd_install_manifest(m: &ArgMatches) -> Result<(), sg::Error> {
     }
     for name in &report.removed {
         println!("  dropped {name} (left installed; not pruned)");
+    }
+    // One unreachable repository must not hide the others' results; report it
+    // once reconciliation has otherwise finished (mirrors `cmd_search`).
+    for (url, e) in &report.unreachable_registries {
+        eprintln!("warning: registry `{url}` could not be reached: {e}");
     }
     if report.installed.is_empty() && report.skipped.is_empty() {
         println!("  (no libraries declared)");
@@ -1118,9 +1134,19 @@ fn cmd_search(m: &ArgMatches) -> Result<(), sg::Error> {
                     } else {
                         String::new()
                     };
+                    // `hit.name` is always what `install NAME` accepts; the
+                    // registry's own raw id (e.g. an opam package id) is
+                    // shown alongside in parens when it differs, since it is
+                    // still useful to see which package actually backs a
+                    // hit — see `ops::search`'s module doc.
+                    let raw = hit
+                        .registry_name
+                        .as_deref()
+                        .map(|r| format!(" ({r})"))
+                        .unwrap_or_default();
                     match &hit.description {
-                        Some(desc) => println!("{} {} — {desc}{where_}", hit.name, hit.version),
-                        None => println!("{} {}{where_}", hit.name, hit.version),
+                        Some(desc) => println!("{}{raw} {} — {desc}{where_}", hit.name, hit.version),
+                        None => println!("{}{raw} {}{where_}", hit.name, hit.version),
                     }
                 }
             }
@@ -1146,7 +1172,10 @@ fn cmd_search(m: &ArgMatches) -> Result<(), sg::Error> {
 /// upgrades against the nearest `Satyristes.lock` (does not apply them).
 fn cmd_update(m: &ArgMatches) -> Result<(), sg::Error> {
     let manifest = find_manifest().ok_or(sg::Error::ManifestNotFound)?;
-    let report = sg::update(&manifest, &registry_options(m)?)?;
+    // Every configured repository, in order (task: `update` used to consult
+    // only the first) — same source `cmd_search`/`install_one` already use.
+    let repos = registry_fallbacks(m)?;
+    let report = sg::update_multi(&manifest, &registry_options(m)?, &repos)?;
 
     if let Some(commit) = &report.commit {
         println!("index at {commit}");
@@ -1157,6 +1186,11 @@ fn cmd_update(m: &ArgMatches) -> Result<(), sg::Error> {
         for up in &report.upgrades {
             println!("{}: {} -> {} available", up.name, up.current, up.latest);
         }
+    }
+    // One unreachable repository must not hide the others' results (mirrors
+    // `cmd_search`).
+    for (url, e) in &report.unreachable {
+        eprintln!("warning: registry `{url}` could not be refreshed: {e}");
     }
     Ok(())
 }

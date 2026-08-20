@@ -82,8 +82,27 @@ fn search_skips_entries_it_cannot_install() {
     opam_index(&dir);
     let hits = sg::search(&["xpath"], &opts(&dir), None).expect("search");
     assert_eq!(hits.len(), 1, "{hits:?}");
-    assert_eq!(hits[0].name, "satysfi-xpath");
+    // `name` is what `install` accepts, not the registry's raw opam id — see
+    // `search_result_name_is_what_install_accepts` below for the round-trip.
+    assert_eq!(hits[0].name, "xpath");
+    assert_eq!(hits[0].registry_name.as_deref(), Some("satysfi-xpath"));
     assert_eq!(hits[0].description.as_deref(), Some("XPath-like path combinators"));
+}
+
+#[test]
+fn search_result_name_is_what_install_accepts() {
+    // Copying a `search` hit's `name` straight into `install` must actually
+    // work: `search` used to print the registry's raw opam id
+    // (`satysfi-xpath`), which `install` also happens to accept, but is not
+    // the name a user reaches for anywhere else (`@require:`, a `Satyristes`
+    // dependency entry) — the two commands must agree on ONE name.
+    let dir = tmp("roundtrip");
+    opam_index(&dir);
+    let hits = sg::search(&["xpath"], &opts(&dir), None).expect("search");
+    assert_eq!(hits.len(), 1);
+    let resolved = sg::ops::registry_install::resolve(&hits[0].name, None, &opts(&dir), None)
+        .unwrap_or_else(|e| panic!("`install {}` should resolve: {e}", hits[0].name));
+    assert_eq!(resolved.version, "0.3.0");
 }
 
 #[test]

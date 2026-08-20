@@ -48,6 +48,65 @@ fn runs_the_build_commands_and_reports_the_product() {
 }
 
 #[test]
+fn install_true_materialises_the_product_under_dist_doc() {
+    // `BuildOptions::install` closes the "a libraryDoc's product has nowhere
+    // to go" gap: with it set, the same product `products` already confirmed
+    // exists is ALSO staged into the resolved root, at `dist/doc/<name>/
+    // <dst>` — the same per-library-namespace convention `md` uses.
+    let dir = project(
+        "install",
+        r#"(libraryDoc (name "d") (version "1")
+             (build ((cp "in.txt" "out.txt")))
+             (sources ((doc "installed.txt" "out.txt"))))"#,
+    );
+    let root = dir.join("root");
+    let opts = sg::BuildOptions {
+        install: Some(sg::RootOptions { dest: Some(root.clone()), ..Default::default() }),
+        ..Default::default()
+    };
+    let reports = sg::build(&dir, &opts).expect("build+install");
+    assert_eq!(reports[0].installed, vec![PathBuf::from("dist/doc/d")]);
+    let installed = root.join("dist/doc/d/installed.txt");
+    assert!(installed.is_file(), "product was not installed");
+    assert_eq!(fs::read_to_string(installed).unwrap(), "hello");
+}
+
+#[test]
+fn rebuilding_with_install_replaces_the_previous_output() {
+    // There is no `--force` for `build`: a doc target is a build artifact, so
+    // rebuilding it and reinstalling over the previous run must just work,
+    // not fail with "already installed".
+    let dir = project(
+        "reinstall",
+        r#"(libraryDoc (name "d") (version "1")
+             (build ((cp "in.txt" "out.txt")))
+             (sources ((doc "installed.txt" "out.txt"))))"#,
+    );
+    let root = dir.join("root");
+    let opts = sg::BuildOptions {
+        install: Some(sg::RootOptions { dest: Some(root.clone()), ..Default::default() }),
+        ..Default::default()
+    };
+    sg::build(&dir, &opts).expect("first build");
+    sg::build(&dir, &opts).expect("second build replaces the first");
+    assert!(root.join("dist/doc/d/installed.txt").is_file());
+}
+
+#[test]
+fn no_install_option_installs_nothing() {
+    // Default behaviour (`install: None`) is byte-for-byte unchanged: build
+    // runs the commands and reports the products, and stages nothing.
+    let dir = project(
+        "noinstall",
+        r#"(libraryDoc (name "d") (version "1")
+             (build ((cp "in.txt" "out.txt")))
+             (sources ((doc "installed.txt" "out.txt"))))"#,
+    );
+    let reports = sg::build(&dir, &sg::BuildOptions::default()).expect("build");
+    assert!(reports[0].installed.is_empty());
+}
+
+#[test]
 fn a_failing_command_stops_the_build_and_says_which() {
     let dir = project(
         "fail",

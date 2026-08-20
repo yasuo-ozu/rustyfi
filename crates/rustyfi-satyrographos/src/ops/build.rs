@@ -13,6 +13,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::error::Error;
+use crate::ops::install::{self, InstallOptions};
+use crate::ops::uninstall::RootOptions;
+use crate::receipts::Source;
+use crate::roots::RootSelection;
 use crate::satyristes::{self, DocTarget};
 
 /// Which doc(s) to build, and what to build them with.
@@ -35,6 +39,19 @@ pub struct BuildOptions {
     /// documented, where there is usually no root at all. Without this the
     /// caller has to export the variable by hand.
     pub lib_root: Option<PathBuf>,
+    /// When set, install each built doc's declared
+    /// `(sources ((doc "dst" "src") ...))` products into this root after a
+    /// successful build — `dist/doc/<name>/<dst>` (`FileKind::Doc`), the same
+    /// destination convention any other manifest's own `doc` sources get
+    /// (task: a `(libraryDoc ...)`'s products used to have nowhere to go).
+    /// `None` (the default) leaves `build` exactly as before: it runs the
+    /// commands and reports which products exist, and installs nothing. A
+    /// product the build declares but did not actually write is skipped
+    /// rather than failing the install — `products` already surfaces that as
+    /// a manifest bug. Re-running a build always replaces its own previous
+    /// install (there is no separate `--force`: a doc target is a build
+    /// artifact, and rebuilding it is expected to be idempotent).
+    pub install: Option<RootOptions>,
 }
 
 /// What a build ran, and what it says it produced.
@@ -47,6 +64,10 @@ pub struct BuildReport {
     /// paired with whether it is actually there afterwards. A build that exits
     /// 0 without writing its product is a manifest bug worth surfacing.
     pub products: Vec<(String, bool)>,
+    /// The top-level destinations [`BuildOptions::install`] materialised
+    /// (relative to the resolved root), empty when `install` was `None` or no
+    /// declared product actually existed to install.
+    pub installed: Vec<PathBuf>,
 }
 
 /// Run the selected doc target's build commands, in `source_root`.
@@ -97,13 +118,55 @@ pub fn build(source_root: &Path, opts: &BuildOptions) -> Result<Vec<BuildReport>
             .iter()
             .map(|(_dst, src)| (src.clone(), source_root.join(src).is_file()))
             .collect();
+
+        let installed = match &opts.install {
+            Some(root_opts) => install_doc_products(source_root, &doc, root_opts)?,
+            None => Vec::new(),
+        };
+
         reports.push(BuildReport {
             name: doc.name,
             commands: doc.build,
             products,
+            installed,
         });
     }
     Ok(reports)
+}
+
+/// [`BuildOptions::install`]'s step: install whichever of `doc`'s declared
+/// products actually exist on disk into `root_opts`' resolved root, via the
+/// same [`crate::ops::install::install_plan`] machinery a directory/archive
+/// install uses. Returns the top-level destinations materialised (empty when
+/// nothing declared actually exists yet).
+fn install_doc_products(
+    source_root: &Path,
+    doc: &DocTarget,
+    root_opts: &RootOptions,
+) -> Result<Vec<PathBuf>, Error> {
+    let present: Vec<(String, String)> = doc
+        .sources
+        .iter()
+        .filter(|(_dst, src)| source_root.join(src).is_file())
+        .cloned()
+        .collect();
+    if present.is_empty() {
+        return Ok(Vec::new());
+    }
+    let plan = satyristes::doc_target_plan(source_root, &doc.name, &doc.version, doc.lang, &present)?;
+    let root = root_opts.resolve_managed_root()?;
+    let install_opts = InstallOptions {
+        lib_root: root_opts.lib_root.clone(),
+        dest: root_opts.dest.clone(),
+        // A doc target is a build artifact: rebuilding it and reinstalling
+        // over the previous run is the whole point, so this never refuses on
+        // an existing receipt the way a plain `install` does.
+        force: true,
+        ..Default::default()
+    };
+    let source = Source::plain("build", source_root.display().to_string());
+    let report = install::install_plan(&root, plan, &install_opts, source)?;
+    Ok(report.files)
 }
 
 /// The root to hand a build command when the caller named none.

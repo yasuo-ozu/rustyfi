@@ -96,7 +96,7 @@ pub use manifest::Lang;
 pub use ops::build::{build, BuildOptions, BuildReport};
 pub use ops::install::{install, install_url, is_url, InstallOptions, InstallReport};
 pub use ops::list::{list, PackageSummary};
-pub use ops::reconcile::{install_manifest, install_manifest_reg, ManifestReport};
+pub use ops::reconcile::{install_manifest, install_manifest_reg, install_manifest_reg_multi, ManifestReport};
 pub use ops::status::{status, PackageStatus, StatusReport};
 pub use ops::uninstall::{uninstall, RootOptions};
 
@@ -109,8 +109,8 @@ pub use source::{LibraryEntry, RegistryConfig, RegistryKind, SourceSpec};
 // entry points and the new `search`/`update` operations.
 pub use ops::registry_install::{install_registry, Resolved};
 pub use ops::search::{search, SearchHit};
-pub use ops::update::{update, Upgrade, UpdateReport};
-pub use registry::{RegistryDepSource, RegistryOptions};
+pub use ops::update::{update, update_multi, Upgrade, UpdateReport};
+pub use registry::{AcquiredRepo, MultiRegistryDepSource, RegistryDepSource, RegistryOptions};
 
 // Phase-7c solver (plan §7c / design-saphe-solver.md): the version/constraint
 // value types and the backtracking dependency resolver.

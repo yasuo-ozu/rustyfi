@@ -718,10 +718,26 @@ pub fn all_package_names(reg: &Registry) -> Result<Vec<String>, Error> {
 /// src: … checksum: … }` block. This maps that onto [`PackageIndex`] so the
 /// rest of the installer does not need to know which shape it came from.
 ///
-/// Dependencies are deliberately NOT translated: opam names them as opam
-/// packages (`satysfi-fonts-theano`) while this port keys everything by
-/// library name (`fonts-theano`), and guessing that mapping would resolve the
-/// wrong package. Such an entry is treated as a leaf.
+/// `depends:` is deliberately NOT translated into [`VersionEntry::dependencies`]
+/// (such an entry stays a leaf to the solver), for two independent reasons,
+/// either one enough on its own:
+///
+/// - **Names.** Opam names a dependency by its opam package id
+///   (`satysfi-fonts-theano`, but also plain build tooling like `ocaml` or
+///   `dune`, or a version pin on `satysfi` itself — not a library at all)
+///   while this port's solver keys packages by library name
+///   (`fonts-theano`); guessing that mapping — or silently trying to resolve
+///   `ocaml`/`dune`/`satysfi` as installable packages — would resolve the
+///   wrong thing, or resolve nothing and turn an already-working leaf install
+///   into a hard failure.
+/// - **Constraints.** Opam's version-constraint grammar (ranges, `&`/`|`
+///   conjunction, non-version filters) has no faithful translation into this
+///   crate's [`Constraint`] (an exact pin, a caret range, or "any"); see
+///   [`crate::opam::Dependency`]'s doc.
+///
+/// [`crate::opam`] parses and RECORDS `depends:` (name + raw constraint text)
+/// for a package's own `.opam` — used by [`crate::ops::prepare`] — so the
+/// data is not lost, just not wired into the solver here.
 pub(crate) mod opam_index {
     use std::collections::BTreeMap;
     use std::path::Path;
@@ -854,6 +870,128 @@ impl<'a> DepSource for RegistryDepSource<'a> {
 
     fn deps(&self, name: &str, v: &Version) -> Result<Vec<(String, Constraint)>, Error> {
         let idx = lookup(self.reg, name)?;
+        let entry = entry_for(&idx, v).ok_or_else(|| Error::VersionNotFound {
+            name: name.to_string(),
+            version: v.to_string(),
+        })?;
+        entry
+            .dependencies
+            .iter()
+            .map(|(dep_name, req)| Ok((dep_name.clone(), Constraint::parse(req)?)))
+            .collect()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Several repositories at once (task: `update`/reconcile consulting every
+// configured registry, not just the first — the same coverage `search` and
+// `install NAME` already have).
+// ---------------------------------------------------------------------------
+
+/// One repository, acquired, paired with the URL it was acquired from (for
+/// labeling/error messages) — [`acquire_all`]'s success list.
+pub struct AcquiredRepo {
+    pub url: String,
+    pub registry: Registry,
+}
+
+/// Acquire every configured repository in `repos`, in the order they are
+/// written, mirroring `search`'s per-repository failure handling: one
+/// unreachable repository must not hide the others (a warning-worthy failure,
+/// not a fatal one, as long as at least one repository is reachable).
+///
+/// When `reg_opts.url` already pins one explicit registry — `--registry` /
+/// `$RUSTYFI_REGISTRY`, resolved through `single_fallback` — or `repos` is
+/// empty, this acquires exactly that ONE registry (the pre-existing
+/// single-registry behaviour, byte for byte): a caller who named a specific
+/// registry did not ask for every configured one to be searched too.
+///
+/// Returns the registries that were successfully acquired (each labeled with
+/// its URL) alongside every failure encountered (`(url, error)`, empty when
+/// everything acquired cleanly). [`Error::NoRegistry`] (or the first failure)
+/// only when NOTHING could be acquired at all.
+pub fn acquire_all(
+    repos: &[crate::source::RegistryConfig],
+    reg_opts: &RegistryOptions,
+    single_fallback: Option<&str>,
+) -> Result<(Vec<AcquiredRepo>, Vec<(String, Error)>), Error> {
+    if repos.is_empty() || reg_opts.url.is_some() {
+        let url = reg_opts.resolve_url(single_fallback)?;
+        let reg = acquire(&url, reg_opts)?;
+        return Ok((vec![AcquiredRepo { url, registry: reg }], Vec::new()));
+    }
+
+    let mut ok = Vec::new();
+    let mut failed = Vec::new();
+    for repo in repos {
+        let Some(url) = repo.url.clone() else { continue };
+        // Each repository may declare its own mirrors/kind (design §2.1/§3.2);
+        // an explicit `--registry`-flag-level override already short-circuited
+        // above, so here only `reg_opts`' cache/offline/token settings carry
+        // over, mirroring `mirrors`/`kind` the same way `resolve_mirrors` does
+        // for the single-registry path.
+        let per_repo_opts = RegistryOptions {
+            url: None,
+            mirrors: reg_opts.resolve_mirrors(&repo.mirrors),
+            kind: reg_opts.kind.or(repo.kind),
+            ..reg_opts.clone()
+        };
+        match acquire(&url, &per_repo_opts) {
+            Ok(reg) => ok.push(AcquiredRepo { url, registry: reg }),
+            Err(e) => failed.push((url, e)),
+        }
+    }
+    if ok.is_empty() {
+        return Err(failed
+            .into_iter()
+            .next()
+            .map(|(_, e)| e)
+            .unwrap_or(Error::NoRegistry));
+    }
+    Ok((ok, failed))
+}
+
+/// Adapts SEVERAL already-[`acquire`]d registries to the solver's
+/// [`DepSource`] trait at once: each lookup tries every registry in order and
+/// uses the first that HAS the package — the same "first repository that has
+/// it wins" rule `install NAME` already applies across repositories
+/// (`crates/rustyfi/src/main.rs`'s `install_one`), now also available to a
+/// solve that spans every configured repository (`update`, reconcile's
+/// registry closure).
+pub struct MultiRegistryDepSource<'a> {
+    regs: &'a [AcquiredRepo],
+}
+
+impl<'a> MultiRegistryDepSource<'a> {
+    pub fn new(regs: &'a [AcquiredRepo]) -> Self {
+        MultiRegistryDepSource { regs }
+    }
+
+    /// The first registry (in order) whose index has `name`, and which one
+    /// that was — so a caller can record which repository a resolved package
+    /// actually came from.
+    pub fn lookup_first(&self, name: &str) -> Result<(&'a AcquiredRepo, PackageIndex), Error> {
+        let mut last_err: Option<Error> = None;
+        for repo in self.regs {
+            match lookup(&repo.registry, name) {
+                Ok(idx) => return Ok((repo, idx)),
+                Err(e) => last_err = Some(e),
+            }
+        }
+        Err(last_err.unwrap_or_else(|| Error::PackageNotFound {
+            name: name.to_string(),
+        }))
+    }
+}
+
+impl<'a> DepSource for MultiRegistryDepSource<'a> {
+    fn versions(&self, name: &str) -> Result<Vec<Version>, Error> {
+        let (_, idx) = self.lookup_first(name)?;
+        Ok(available_versions(&idx))
+    }
+
+    fn deps(&self, name: &str, v: &Version) -> Result<Vec<(String, Constraint)>, Error> {
+        let (_, idx) = self.lookup_first(name)?;
         let entry = entry_for(&idx, v).ok_or_else(|| Error::VersionNotFound {
             name: name.to_string(),
             version: v.to_string(),

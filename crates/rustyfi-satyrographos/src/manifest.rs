@@ -13,6 +13,7 @@
 //! | `font` | `dist/fonts/<name>/<dst>` |
 //! | `hash` | `dist/hash/<dst>` — **flat, no per-library namespace** |
 //! | `md` | `dist/md/<name>/<dst>` |
+//! | `doc` | `dist/doc/<name>/<dst>` |
 //! | `file` | `dist/<dst>` — arbitrary, root-relative |
 
 use std::collections::BTreeMap;
@@ -118,6 +119,10 @@ pub enum FileKind {
     Font,
     Hash,
     Md,
+    /// A document product — a `(libraryDoc ...)`'s built PDF/etc, or a
+    /// library's own pre-built doc file. Lands at `dist/doc/<name>/<dst>`,
+    /// the same per-library-namespace convention `Md` uses.
+    Doc,
     File,
 }
 
@@ -214,6 +219,10 @@ pub(crate) fn plan_from_manifest(source_root: &Path, manifest: Manifest) -> Resu
             FileKind::Md => {
                 let dst = require_dst(decl, "md")?;
                 push_file(&src_abs, &format!("{dist}/md/{name}/{dst}"), &mut files)?
+            }
+            FileKind::Doc => {
+                let dst = require_dst(decl, "doc")?;
+                push_file(&src_abs, &format!("{dist}/doc/{name}/{dst}"), &mut files)?
             }
             FileKind::Hash => {
                 // Flat, no per-library namespace (plan §5.5) — and shared, so

@@ -36,34 +36,36 @@
 //!   `v1::xver_adapt::relabel_or_reject_name`'s new `(V0_1, V0_0)` arm
 //!   implements.
 //!
-//! Slice X4b (extended beyond its own math-only sketch by the task brief
-//! this increment implements) — a NEGATIVE FINDING, not a new crossing
-//! capability: a `V0_1` dependency's `deco`/`deco-set` VALUE export (via a
-//! module `sig`, the ONE textual site 0.1's grammar can express such an
-//! ascription at all — an ordinary unsealed `val` has no ascription syntax
-//! whatsoever) turns out to be UNCOERCIBLE given this port's hard
-//! constraints: every 0.1 module signature annotation is the `:>` form, and
-//! `v1::module_check`'s (untouched) phase-D spine walk conformance-checks
-//! EVERY such annotation, name-keyed, unconditionally — so any splice-time
-//! coercion that makes the crossing value's real shape differ from the
-//! module's own declared `deco`/`deco-set` scheme (the ENTIRE POINT of a
-//! list<->single coercion) trips that same enforcement again, wherever the
-//! coercion is spliced (verified empirically — see `v1::xver_adapt`'s own
-//! "X4b" doc comment for the full derivation). So X4b adds exactly one
-//! thing: a CLEAR, EARLY rejection
-//! (`v1::xver_adapt::reject_deco_exports_v01_sig`) instead of a confusing
-//! downstream `module_check`/ordinary-`TypeError` failure.
+//! Slice X4b (`docs/plans/design-cross-version-import.md` §X4.5, extended
+//! beyond its own math-only sketch) — the reverse `deco`: a `V0_1`
+//! dependency's `deco`/`deco-set` VALUE export (via a module `sig`, the ONE
+//! textual site 0.1's grammar can express such an ascription at all — an
+//! ordinary unsealed `val` has no ascription syntax whatsoever) now CROSSES,
+//! value-coerced by wrapping the single `graphics` a 0.1 deco returns in the
+//! SINGLETON LIST a 0.0.6 consumer expects — the literal inverse of X3b's
+//! `unite-graphics` wrap. The one obstacle (every 0.1 module signature
+//! annotation is the `:>` form, and `v1::module_check`'s phase-D spine walk
+//! conformance-checks EVERY such annotation name-keyed, so a coercion shadow
+//! trips it a second time) is resolved by an EXPLICIT, caller-supplied
+//! exemption — `check_program_with_xver_shadows`, which exempts only the
+//! SECOND-and-later binding of a name `lib.rs` has itself just rebound,
+//! leaving the exporting module's own conformance check fully in force. See
+//! `v1::xver_adapt`'s own "X4b" doc comment for the full derivation.
 //!
-//! - [`reverse_deco_export_via_sig_rejected`] (X4b): a small inline `V0_1`
-//!   fixture — a module `V01DecoExport :> sig val my-deco : deco end =
-//!   struct .. end` — `@require:`d by a `V0_0` entry, is rejected with
-//!   `CompileError::CrossVersionUnsupportedName { slice: "X4b", .. }` at
-//!   compile time, never reaching eval (whether or not the entry even
-//!   references `my-deco`).
-//! - [`reverse_deco_export_curried_sig_still_rejected`] (X4b, same
-//!   diagnostic): a `deco` export whose module SIG `val` type is curried
-//!   (`length -> deco`) is ALSO rejected — the same clear diagnostic
-//!   applies regardless of shape, since no shape is coercible here.
+//! - [`reverse_deco_export_via_sig_coerces_and_renders`] (X4b headline): a
+//!   module `V01DecoExport :> sig val my-deco : deco end = struct .. end`
+//!   `@require:`d by a `V0_0` entry, whose 0.0.6-authored `let-inline` hands
+//!   it to `inline-frame-outer` — renders, with the deco actually fired.
+//! - [`reverse_deco_export_curried_sig_coerces_and_renders`] — the same for
+//!   an arrow-tailed export (`length -> deco`).
+//! - [`reverse_decoset_export_via_sig_coerces_and_renders`] — the 4-tuple
+//!   sibling, through `inline-frame-breakable`.
+//! - [`reverse_deco_export_optional_arg_sig_still_rejected`] and
+//!   [`reverse_deco_export_nested_module_sig_still_rejected`] — the two
+//!   DELIBERATE rejections that survive: an optional-argument arrow (no
+//!   positional spelling for the generated wrapper to forward) and a `deco`
+//!   behind a nested `module` sig decl (whose seal key composition this
+//!   direction stays conservative about).
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -397,19 +399,21 @@ V01Mini.document (|title = `v01-math-reverse`|) '<
 }
 
 // ============================================================================
-// X4b: a `V0_1` dependency's `deco` export (module-SIG-typed — the only
-// textual site 0.1's grammar can express a bare `deco` ascription at all)
-// CANNOT be soundly value-coerced given this port's hard constraints (see
-// this file's module doc comment, and `v1::xver_adapt`'s own "X4b" doc
-// comment for the full derivation) — it is rejected with a clear, early
-// diagnostic instead of a confusing downstream `module_check`/ordinary-
-// `TypeError` failure.
+// X4b: a `V0_1` dependency's `deco`/`deco-set` export (module-SIG-typed —
+// the only textual site 0.1's grammar can express such an ascription at
+// all) CROSSES into a 0.0.6 document, value-coerced by wrapping the single
+// `graphics` a 0.1 deco returns in the SINGLETON LIST a 0.0.6 consumer
+// expects — the exact inverse of X3b's `unite-graphics` wrap. See
+// `v1::xver_adapt`'s own "X4b" section for the derivation, including why the
+// coercion shadow needs an explicit `check_program_with_xver_shadows`
+// exemption from a SECOND `:>` seal check.
 // ============================================================================
 
-// A module typed via its own `sig`: its `val my-deco : deco` item is the
-// ONE surface site 0.1's grammar can express a bare `deco` ascription at
-// all (an ordinary unsealed `val` binding carries no ascription syntax at
-// all — `cst_v1::Bind::Value`'s own doc comment).
+/// A module typed via its own `sig`: its `val my-deco : deco` item is the
+/// ONE surface site 0.1's grammar can express a bare `deco` ascription at
+/// all (an ordinary unsealed `val` binding carries no ascription syntax at
+/// all — `cst_v1::Bind::Value`'s own doc comment). Its body returns a SINGLE
+/// `graphics` (0.1 semantics), which is exactly what must be downgraded.
 const V01_DECO_EXPORT_PKG_SRC: &str = "\
 module V01DecoExport :> sig
   val my-deco : deco
@@ -423,42 +427,77 @@ end = struct
 end
 ";
 
+/// The 0.0.6-authored consumer: a `let-inline` command that hands the
+/// crossed deco to `inline-frame-outer` — a REAL consumer
+/// (`primitives::apply_deco`, fired by `lib.rs`'s `fire_inline_frame` at
+/// render time under `interp.version == V0_0`, not a stand-in). Two things
+/// would break without the X4b coercion, and both are compile/eval failures
+/// rather than silent mis-renders: `inline-frame-outer` inside the entry's
+/// `Ast::VersionScope(V0_0, _)` carries `t_deco(V0_0)` (a `graphics list`
+/// result), so an unwrapped 0.1 deco fails to unify; and even past that,
+/// `apply_deco`'s `coerce_graphics_result` would `as_list` a bare
+/// `Value::Graphics`.
+fn deco_consumer_entry(pkg: &str, deco_expr: &str) -> String {
+    format!(
+        "\
+@require: v01-mini
+@require: {pkg}
+
+let-inline ctx \\framed it =
+  inline-frame-outer (2pt, 2pt, 2pt, 2pt) ({deco_expr}) (read-inline ctx it)
+in
+V01Mini.document (|title = `v01-deco-reverse`|) '<
+  +V01Mini.p{{ \\framed{{Hello, reverse cross-version deco}} }}
+>
+"
+    )
+}
+
 #[test]
-fn reverse_deco_export_via_sig_rejected() {
-    let dir = TempDir::new("deco-export-rejected");
+fn reverse_deco_export_via_sig_coerces_and_renders() {
+    let dir = TempDir::new("deco-export-coerces");
+    dir.copy_real_v01_package("v01-mini.satyh");
     dir.write(
         "dist-v01/packages/v01-deco-export.satyh",
         V01_DECO_EXPORT_PKG_SRC,
     );
-    // The entry does not even need to USE `my-deco` — the rejection is
-    // driven purely by the dependency's OWN sig text (`v1::xver_adapt::
-    // reject_deco_exports_v01_sig`), independent of consumer usage.
-    dir.write("entry.saty", "@require: v01-deco-export\n\n0\n");
+    dir.write(
+        "entry.saty",
+        &deco_consumer_entry("v01-deco-export", "V01DecoExport.my-deco"),
+    );
     let files = load_v006(&dir, "entry.saty");
 
     let mono = Mono;
-    let err = rustyfi_lang::compile_document_v006_xver(&files, &mono).expect_err(
-        "a V0_1 dependency exporting a module-sig-typed `: deco` value must be rejected — no \
-         sound coercion exists given `v1::module_check`'s unconditional, name-keyed sig \
-         conformance enforcement (see `v1::xver_adapt`'s own X4b doc comment)",
+    let (doc, _trials) = rustyfi_lang::compile_document_v006_xver_with_trials(&files, &mono)
+        .unwrap_or_else(|e| {
+            panic!(
+                "a V0_1 dependency exporting a module-sig-typed `: deco` value should be \
+                 value-coerced (single graphics -> graphics list) and compile+render \
+                 under X4b: {e}"
+            )
+        });
+
+    assert_eq!(doc.pages.len(), 1, "one A4 page");
+    assert!(
+        !doc.pages[0].lines.is_empty(),
+        "the framed inline content must have been placed"
     );
-    match err {
-        CompileError::CrossVersionUnsupportedName { name, slice, .. } => {
-            assert_eq!(name, "deco");
-            assert_eq!(slice, "X4b");
-        }
-        other => panic!("expected CrossVersionUnsupportedName, got: {other}"),
-    }
+    assert!(
+        !doc.extras.page_graphics[0].is_empty(),
+        "the crossed deco must have FIRED — reaching this assertion at all already \
+         proves the downgrade ran, since `coerce_graphics_result` under V0_0 would \
+         have failed on an unwrapped single `graphics`"
+    );
 }
 
-/// X4b, same diagnostic regardless of shape: a module SIG `val` item typed
-/// `length -> deco` (a curried prefix before the `deco` leaf) is ALSO
-/// rejected — there is no shape of module-sig `deco` export this direction
-/// can coerce, so the curried case hits the identical rejection path as
-/// the bare case above.
+/// The shape a real 0.1 package would use: an ARROW-TAILED `deco` export
+/// (`length -> deco`), applied by the consumer before it reaches
+/// `inline-frame-outer`. The generated wrapper eta-expands over the leading
+/// argument first, then over `deco`'s own four.
 #[test]
-fn reverse_deco_export_curried_sig_still_rejected() {
-    let dir = TempDir::new("deco-export-curried-negative");
+fn reverse_deco_export_curried_sig_coerces_and_renders() {
+    let dir = TempDir::new("deco-export-curried-coerces");
+    dir.copy_real_v01_package("v01-mini.satyh");
     dir.write(
         "dist-v01/packages/v01-deco-curried.satyh",
         "\
@@ -470,12 +509,138 @@ end = struct
 end
 ",
     );
-    dir.write("entry.saty", "@require: v01-deco-curried\n\n0\n");
+    dir.write(
+        "entry.saty",
+        &deco_consumer_entry("v01-deco-curried", "V01DecoCurried.my-deco 1pt"),
+    );
+    let files = load_v006(&dir, "entry.saty");
+
+    let mono = Mono;
+    let (doc, _trials) = rustyfi_lang::compile_document_v006_xver_with_trials(&files, &mono)
+        .unwrap_or_else(|e| {
+            panic!("an arrow-tailed V0_1 `deco` export should cross under X4b: {e}")
+        });
+    assert_eq!(doc.pages.len(), 1, "one A4 page");
+    assert!(
+        !doc.extras.page_graphics[0].is_empty(),
+        "the crossed, curried deco must have fired"
+    );
+}
+
+/// The 4-tuple sibling: a `deco-set` export, consumed through
+/// `inline-frame-breakable` (whose FIRST component is the only one a
+/// non-broken single-line frame fires). Each component is downgraded
+/// independently.
+#[test]
+fn reverse_decoset_export_via_sig_coerces_and_renders() {
+    let dir = TempDir::new("decoset-export-coerces");
+    dir.copy_real_v01_package("v01-mini.satyh");
+    dir.write(
+        "dist-v01/packages/v01-decoset-export.satyh",
+        "\
+module V01DecoSetExport :> sig
+  val my-decoset : deco-set
+end = struct
+  val one (x, y) w h d =
+    fill (Gray(0.0))
+      (close-with-line
+         (line-to (x +' w, y +' h)
+            (line-to (x +' w, y)
+               (start-path (x, y)))))
+  val my-decoset = (one, one, one, one)
+end
+",
+    );
+    dir.write(
+        "entry.saty",
+        "\
+@require: v01-mini
+@require: v01-decoset-export
+
+let-inline ctx \\framed it =
+  inline-frame-breakable (2pt, 2pt, 2pt, 2pt) V01DecoSetExport.my-decoset
+    (read-inline ctx it)
+in
+V01Mini.document (|title = `v01-decoset-reverse`|) '<
+  +V01Mini.p{ \\framed{Hello, reverse cross-version deco-set} }
+>
+",
+    );
+    let files = load_v006(&dir, "entry.saty");
+
+    let mono = Mono;
+    let (doc, _trials) = rustyfi_lang::compile_document_v006_xver_with_trials(&files, &mono)
+        .unwrap_or_else(|e| panic!("a V0_1 `deco-set` export should cross under X4b: {e}"));
+    assert_eq!(doc.pages.len(), 1, "one A4 page");
+    assert!(
+        !doc.extras.page_graphics[0].is_empty(),
+        "the crossed deco-set's fired component must have produced graphics"
+    );
+}
+
+/// X4b's DELIBERATE rejection, preserved: an OPTIONAL-argument arrow in the
+/// export's type. The generated wrapper forwards its parameters
+/// POSITIONALLY, and an optional argument has no positional spelling — so
+/// eta-expanding one would silently drop it. Rejected loudly instead.
+#[test]
+fn reverse_deco_export_optional_arg_sig_still_rejected() {
+    let dir = TempDir::new("deco-export-optional-negative");
+    dir.write(
+        "dist-v01/packages/v01-deco-opt.satyh",
+        "\
+module V01DecoOpt :> sig
+  val my-deco : ?(thickness : length) length -> deco
+end = struct
+  val my-deco t (x, y) w h d =
+    fill (Gray(0.0)) (close-with-line (line-to (x +' w, y +' h) (start-path (x, y))))
+end
+",
+    );
+    dir.write("entry.saty", "@require: v01-deco-opt\n\n0\n");
+    let files = load_v006(&dir, "entry.saty");
+
+    let mono = Mono;
+    let err = rustyfi_lang::compile_document_v006_xver(&files, &mono).expect_err(
+        "an optional-argument arrow in a `deco` export must reject — the generated \
+         wrapper forwards positionally and an optional argument has no positional spelling",
+    );
+    match err {
+        CompileError::CrossVersionUnsupportedName { name, slice, .. } => {
+            assert_eq!(name, "deco");
+            assert_eq!(slice, "X4b");
+        }
+        other => panic!("expected CrossVersionUnsupportedName, got: {other}"),
+    }
+}
+
+/// X4b's other deliberate narrowing: a `deco` reached through a NESTED
+/// `module` decl in the signature. The shadow has to name the member under
+/// exactly the qualified key `v1::module_check` seals it by, and a nested
+/// member's seal goes through `walk_nested_seals_a`'s own path composition —
+/// so the reverse direction classifies only the TOP-LEVEL sig's own `val`
+/// items and rejects the rest.
+#[test]
+fn reverse_deco_export_nested_module_sig_still_rejected() {
+    let dir = TempDir::new("deco-export-nested-negative");
+    dir.write(
+        "dist-v01/packages/v01-deco-nested.satyh",
+        "\
+module V01DecoNested :> sig
+  module Inner : sig val my-deco : deco end
+end = struct
+  module Inner :> sig val my-deco : deco end = struct
+    val my-deco (x, y) w h d =
+      fill (Gray(0.0)) (close-with-line (line-to (x +' w, y +' h) (start-path (x, y))))
+  end
+end
+",
+    );
+    dir.write("entry.saty", "@require: v01-deco-nested\n\n0\n");
     let files = load_v006(&dir, "entry.saty");
 
     let mono = Mono;
     let err = rustyfi_lang::compile_document_v006_xver(&files, &mono)
-        .expect_err("a curried-prefix module-sig `deco` export must also be rejected");
+        .expect_err("a NESTED module's sig `deco` export must still be rejected");
     match err {
         CompileError::CrossVersionUnsupportedName { name, slice, .. } => {
             assert_eq!(name, "deco");

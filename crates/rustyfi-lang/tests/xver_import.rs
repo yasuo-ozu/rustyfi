@@ -1114,3 +1114,159 @@ page-break (210mm, 297mm) content parts body
         doc.extras.page_graphics[0]
     );
 }
+
+/// X3b, nested-module increment: a `deco` export that sits one module
+/// DEEPER than `xver_boundary_deco_export_module_scoped_curried_coerces_and_
+/// renders`'s — `module XverOuter = struct module XverInner : sig val frame
+/// : length -> deco end = struct .. end end`, reached as
+/// `XverOuter.XverInner.frame`.
+///
+/// This used to be a hard rejection: `classify_deco_exports`'s module arm
+/// walked its own `decls` with a reject-only helper
+/// (`reject_if_nested_value_mentions_deco`), so a `deco` one level down
+/// failed the whole dependency. It now RECURSES — the classifier is the same
+/// one the top level uses, just under a longer `DecoExport::module_path`,
+/// which `inject_module_deco_wrappers` already knew how to match. The
+/// `GraphicsElem::Group` in the FIRED page graphics is the coercion proof, as
+/// in the shallower fixtures: 0.0.6's deco returns `graphics list`, and only
+/// `unite-graphics` builds a `Group`.
+#[test]
+fn xver_boundary_deco_export_nested_module_coerces_and_renders() {
+    let dir = TempDir::new("deco-export-nested-module");
+    dir.write(
+        "dist/packages/xver-deco-nested.satyg",
+        "@stage: persistent\n\n\
+         module XverOuter = struct\n\
+         \x20 module XverInner : sig\n\
+         \x20   val frame : length -> deco\n\
+         \x20 end = struct\n\
+         \x20   let frame t (x, y) w h d =\n\
+         \x20     [\n\
+         \x20       fill (Gray(0.0))\n\
+         \x20         (close-with-line\n\
+         \x20            (line-to (x +\' w, y +\' h)\n\
+         \x20               (line-to (x +\' w, y)\n\
+         \x20                  (start-path (x, y)))))\n\
+         \x20     ]\n\
+         \x20 end\n\
+         end\n",
+    );
+    dir.write("xver-helper.satyh", XVER_HELPER_SRC);
+    dir.write(
+        "entry.saty",
+        "\
+@require: xver-deco-nested
+@import: xver-helper
+
+let ctx = get-initial-context 440pt (command \\XverHelper.math) in
+let framed =
+  inline-frame-outer (2pt, 2pt, 2pt, 2pt) (XverOuter.XverInner.frame 1pt)
+    (read-inline ctx {Hello, nested-module cross-version deco!})
+in
+let body = line-break true true ctx framed in
+let content pbinfo = (| text-origin = (72pt, 100pt), text-height = 640pt |) in
+let parts pbinfo =
+  (| header-origin = (72pt, 72pt),  header-content = block-nil,
+     footer-origin = (72pt, 800pt), footer-content = block-nil |)
+in
+page-break (210mm, 297mm) content parts body
+",
+    );
+
+    let opts = LoadOptions {
+        lib_root: Some(dir.path().to_path_buf()),
+        version: RustyfiVersion::V0_1,
+        ..Default::default()
+    };
+    let program = rustyfi_loader::load(&dir.path().join("entry.saty"), &opts)
+        .unwrap_or_else(|e| panic!("loading the nested-module deco fixture should succeed: {e}"));
+
+    let mono = Mono;
+    let (doc, _trials) = rustyfi_lang::compile_document_v1_with_trials(&program.files, &mono)
+        .unwrap_or_else(|e| {
+            panic!(
+                "a deco export nested TWO modules deep should be classified and value-\
+                 coerced, not rejected: {e}"
+            )
+        });
+
+    assert_eq!(doc.pages.len(), 1, "one A4 page");
+    assert!(
+        doc.extras.page_graphics[0]
+            .iter()
+            .any(|g| matches!(g, GraphicsElem::Group(_))),
+        "the fired deco's graphics must include a unite-graphics Group (proof the \
+         nested in-module wrapper ran), got: {:?}",
+        doc.extras.page_graphics[0]
+    );
+}
+
+/// X3b, the other half of the nested-module increment: a `deco` export
+/// carried by a struct member's OWN `let-rec .. : deco` ascription inside a
+/// module with NO `sig` at all. `classify_deco_exports` used to see this
+/// only through the reject-only `decls` walk; it now classifies it exactly
+/// as a sig-declared member, under the enclosing module's path.
+#[test]
+fn xver_boundary_deco_export_sigless_module_ascription_coerces_and_renders() {
+    let dir = TempDir::new("deco-export-sigless-module");
+    dir.write(
+        "dist/packages/xver-deco-sigless.satyg",
+        "@stage: persistent\n\n\
+         module XverSigless = struct\n\
+         \x20 let-rec frame : length -> deco | t (x, y) w h d =\n\
+         \x20   [\n\
+         \x20     fill (Gray(0.0))\n\
+         \x20       (close-with-line\n\
+         \x20          (line-to (x +\' w, y +\' h)\n\
+         \x20             (line-to (x +\' w, y)\n\
+         \x20                (start-path (x, y)))))\n\
+         \x20   ]\n\
+         end\n",
+    );
+    dir.write("xver-helper.satyh", XVER_HELPER_SRC);
+    dir.write(
+        "entry.saty",
+        "\
+@require: xver-deco-sigless
+@import: xver-helper
+
+let ctx = get-initial-context 440pt (command \\XverHelper.math) in
+let framed =
+  inline-frame-outer (2pt, 2pt, 2pt, 2pt) (XverSigless.frame 1pt)
+    (read-inline ctx {Hello, sig-less module cross-version deco!})
+in
+let body = line-break true true ctx framed in
+let content pbinfo = (| text-origin = (72pt, 100pt), text-height = 640pt |) in
+let parts pbinfo =
+  (| header-origin = (72pt, 72pt),  header-content = block-nil,
+     footer-origin = (72pt, 800pt), footer-content = block-nil |)
+in
+page-break (210mm, 297mm) content parts body
+",
+    );
+
+    let opts = LoadOptions {
+        lib_root: Some(dir.path().to_path_buf()),
+        version: RustyfiVersion::V0_1,
+        ..Default::default()
+    };
+    let program = rustyfi_loader::load(&dir.path().join("entry.saty"), &opts)
+        .unwrap_or_else(|e| panic!("loading the sig-less module deco fixture should succeed: {e}"));
+
+    let mono = Mono;
+    let (doc, _trials) = rustyfi_lang::compile_document_v1_with_trials(&program.files, &mono)
+        .unwrap_or_else(|e| {
+            panic!(
+                "a `let-rec .. : deco` inside a sig-less module should be classified and \
+                 value-coerced, not rejected: {e}"
+            )
+        });
+
+    assert!(
+        doc.extras.page_graphics[0]
+            .iter()
+            .any(|g| matches!(g, GraphicsElem::Group(_))),
+        "the fired deco's graphics must include a unite-graphics Group, got: {:?}",
+        doc.extras.page_graphics[0]
+    );
+}

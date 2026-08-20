@@ -184,12 +184,47 @@ pub(crate) fn check_program<'s>(
     deps: &[&cst_v1::FileV1],
     program: &Program<'s>,
 ) -> Result<Vec<MatchWarning>, TypeError> {
-    check_program_inner(deps, program).map_err(strip_stamps_error)
+    check_program_with_xver_shadows(deps, program, &std::collections::HashSet::new())
+}
+
+/// [`check_program`] plus Slice X4b's cross-version coercion exemption.
+///
+/// `xver_shadows` names the qualified members (`"M.frame"`) that `lib.rs`'s
+/// reverse splice arm has REBOUND, after the exporting module closed, to a
+/// version-adapted view of the module's own export
+/// (`v1::xver_adapt::deco_downgrade_prelude` — a 0.1 `deco` re-wrapped so a
+/// 0.0.6-authored consumer's `graphics list` call sites accept it). Such a
+/// rebinding is a SECOND `Ast::LetIn` under a name the phase-D walk below
+/// has a `seals` entry for, and the whole point of it is to have a
+/// DIFFERENT shape from the sealed one — so it must not be re-checked
+/// against the exporter's signature.
+///
+/// The exemption is deliberately minimal and cannot silence a genuine
+/// violation:
+///
+/// - it applies only to the SECOND-and-later `Ast::LetIn` of a listed name.
+///   The FIRST one — the exporting module's own `export_alias` — is
+///   conformance-checked exactly as before, so the module still has to match
+///   its own `:>` signature;
+/// - the exempted binding is not left unchecked, only unsealed: it still
+///   goes through `infer_binding` and commits its own INFERRED scheme, so
+///   the generated coercion's body is fully HM-checked against the sealed
+///   original it wraps;
+/// - the set is empty for every caller but the reverse cross-version arm —
+///   [`check_program`] itself passes an empty one — so no pure-0.1 and no
+///   forward cross-version compile changes behaviour at all.
+pub(crate) fn check_program_with_xver_shadows<'s>(
+    deps: &[&cst_v1::FileV1],
+    program: &Program<'s>,
+    xver_shadows: &std::collections::HashSet<String>,
+) -> Result<Vec<MatchWarning>, TypeError> {
+    check_program_inner(deps, program, xver_shadows).map_err(strip_stamps_error)
 }
 
 fn check_program_inner<'s, 'a>(
     deps: &'a [&'a cst_v1::FileV1],
     program: &Program<'s>,
+    xver_shadows: &std::collections::HashSet<String>,
 ) -> Result<Vec<MatchWarning>, TypeError> {
     // Sub-slice 2d-3 §2.2/§2.1: the syntactic surface + named-signature
     // table, rebuilt from the SAME `deps` `v1/lower.rs` built its own copy
@@ -280,6 +315,10 @@ fn check_program_inner<'s, 'a>(
     let store = program.store;
     let mut env = typecheck::base_type_env_with_version(store, RustyfiVersion::V0_1);
     let mut ast: &Ast<'s> = &program.body;
+    // Slice X4b: which `xver_shadows` names have already had their ORIGINAL
+    // (module-own) alias sealed, so a later rebinding of the same name is the
+    // cross-version coercion shadow — see `check_program_with_xver_shadows`.
+    let mut xver_sealed_once: std::collections::HashSet<String> = std::collections::HashSet::new();
     loop {
         ast = match ast {
             Ast::LetIn(name, value, body) => {
@@ -288,7 +327,13 @@ fn check_program_inner<'s, 'a>(
                     &static_env,
                 )?;
                 let name_text = store.resolve(*name);
+                let is_xver_shadow = xver_sealed_once.contains(name_text);
                 env = match static_env.seals.get(name_text) {
+                    // Slice X4b: the cross-version coercion REBINDING of an
+                    // already-sealed member — commit its own inferred scheme
+                    // (the version-adapted view), do NOT re-check it against
+                    // the exporter's signature.
+                    Some(_) if is_xver_shadow => env.with_all(schemes),
                     // the alias binding of a SEALED member: subsumption-
                     // check, then commit the DECLARED scheme (§4.2 steps
                     // 4-5 — sealing).
@@ -301,6 +346,9 @@ fn check_program_inner<'s, 'a>(
                             &decl.stamp_marker,
                         )
                         .map_err(|e| seal_mismatch_error(name_text, decl, inferred, e))?;
+                        if xver_shadows.contains(name_text) {
+                            xver_sealed_once.insert(name_text.to_string());
+                        }
                         env.with(*name, decl.scheme.clone())
                     }
                     // the alias binding of a HIDDEN member: commit NOTHING.

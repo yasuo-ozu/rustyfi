@@ -40,6 +40,7 @@ fn a_present_file_matching_its_checksum_is_not_refetched() {
     let opam = Opam {
         extra_sources: vec![source("archive.zip", Some(PAYLOAD_SHA))],
         build: vec![],
+        ..Default::default()
     };
     // Offline: any fetch would fail, so success proves none was attempted.
     let report = sg::ops::prepare::prepare_with(&dir, &opam, true, false).expect("reused");
@@ -54,6 +55,7 @@ fn a_present_file_with_the_wrong_checksum_is_refetched_not_accepted() {
     let opam = Opam {
         extra_sources: vec![source("archive.zip", Some(PAYLOAD_SHA))],
         build: vec![],
+        ..Default::default()
     };
     // Offline turns the decision into an observable error: it wanted to fetch.
     let err = sg::ops::prepare::prepare_with(&dir, &opam, true, false)
@@ -68,6 +70,7 @@ fn build_commands_run_in_the_package_directory() {
     let opam = Opam {
         extra_sources: vec![],
         build: vec![vec!["cp".into(), "in.txt".into(), "out.txt".into()]],
+        ..Default::default()
     };
     let report = sg::ops::prepare::prepare_with(&dir, &opam, true, false).expect("build");
     assert!(dir.join("out.txt").is_file(), "ran in the package directory");
@@ -83,6 +86,7 @@ fn a_failing_build_command_stops_and_says_which() {
             vec!["cp".into(), "missing".into(), "out.txt".into()],
             vec!["cp".into(), "missing".into(), "second.txt".into()],
         ],
+        ..Default::default()
     };
     let err = sg::ops::prepare::prepare_with(&dir, &opam, true, false).expect_err("should fail");
     assert!(matches!(err, sg::Error::OpamBuild { .. }), "{err}");
@@ -100,6 +104,7 @@ fn a_delegation_to_satyrographos_is_recorded_not_run() {
             vec!["satyrographos".into(), "opam".into(), "install".into()],
             vec!["opam".into(), "install".into()],
         ],
+        ..Default::default()
     };
     let report = sg::ops::prepare::prepare_with(&dir, &opam, true, false).expect("no-op");
     assert_eq!(report.delegated.len(), 2);
@@ -114,6 +119,7 @@ fn a_source_without_a_checksum_is_reported_as_unverified() {
     let opam = Opam {
         extra_sources: vec![source("archive.zip", None)],
         build: vec![],
+        ..Default::default()
     };
     let err = sg::ops::prepare::prepare_with(&dir, &opam, true, false).expect_err("would fetch");
     assert!(matches!(err, sg::Error::Offline { .. }), "{err}");

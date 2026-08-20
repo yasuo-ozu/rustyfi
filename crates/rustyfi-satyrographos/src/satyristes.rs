@@ -33,6 +33,8 @@
 //! | `(font "dst" "src")` | `Font` |
 //! | `(hash "dst" "src")` | `Hash` (lands flat in `dist/hash/<dst>`) |
 //! | `(md "dst" "src")` | `Md` |
+//! | `(doc "dst" "src")` | `Doc` (also how a `(libraryDoc ...)` block's own
+//!   `(sources ...)` are read — see [`doc_target_plan`]) |
 //! | `(file "dst" "src")` | `File` |
 
 use std::collections::BTreeMap;
@@ -298,6 +300,46 @@ pub fn doc_targets(source_root: &Path) -> Result<Vec<DocTarget>, Error> {
     split_forms(&forms)
         .map(|(_, docs)| docs)
         .map_err(|message| Error::Satyristes { path, message })
+}
+
+/// Turn a `(libraryDoc ...)`'s declared products into an installable
+/// [`PackagePlan`], using the same `FileKind::Doc` → `dist/doc/<name>/<dst>`
+/// destination convention a `(library ...)`'s own `doc` sources get.
+///
+/// This does not run any build command or check that a source file exists —
+/// [`crate::ops::build::build`] does that first; `sources` is expected to be
+/// already filtered to the pairs whose `src` is actually present on disk (a
+/// declared-but-unwritten product is a manifest bug `build`'s own report
+/// already surfaces, not something to fail an install over). `source_root` is
+/// the directory holding the `Satyristes` — `src` is relative to it, per
+/// [`DocTarget::sources`]'s own doc comment.
+pub fn doc_target_plan(
+    source_root: &Path,
+    name: &str,
+    version: &str,
+    lang: Lang,
+    sources: &[(String, String)],
+) -> Result<PackagePlan, Error> {
+    let files: Vec<FileDecl> = sources
+        .iter()
+        .map(|(dst, src)| FileDecl {
+            kind: FileKind::Doc,
+            src: src.clone(),
+            dst: Some(dst.clone()),
+        })
+        .collect();
+    let manifest = Manifest {
+        package: PackageMeta {
+            name: name.to_string(),
+            version: version.to_string(),
+            rustyfi_version_compat: String::new(),
+            description: None,
+            lang,
+        },
+        files,
+        dependencies: BTreeMap::new(),
+    };
+    manifest::plan_from_manifest(source_root, manifest)
 }
 
 /// The `(library ...)` blocks alone. Only the unit tests want this view;
@@ -660,6 +702,7 @@ fn parse_source_decl(sexp: &Sexp) -> Result<FileDecl, String> {
         "font" => two_args(FileKind::Font, kind, &args)?,
         "hash" => two_args(FileKind::Hash, kind, &args)?,
         "md" => two_args(FileKind::Md, kind, &args)?,
+        "doc" => two_args(FileKind::Doc, kind, &args)?,
         "file" => two_args(FileKind::File, kind, &args)?,
         other => return Err(format!("unknown source kind `{other}`")),
     };
@@ -956,6 +999,54 @@ mod tests {
         assert_eq!(package_dir.src, "packages");
         // opam ignored; one dependency, wildcard constraint.
         assert_eq!(lib.dependencies.get("fonts-theano").map(String::as_str), Some("*"));
+    }
+
+    #[test]
+    fn a_library_may_declare_a_doc_source_directly() {
+        // `(doc "dst" "src")` used to parse fine as a source declaration and
+        // then be rejected as an "unknown source kind" — there was no
+        // `FileKind` for it. It now maps to `FileKind::Doc`, the same
+        // dst/src shape `md`/`font`/`file` already use.
+        let text = r#"(library (name "p") (version "1")
+            (sources ((packageDir "packages") (doc "manual.pdf" "docs/manual.pdf"))))"#;
+        let libs = libraries_from(&parse(text).unwrap()).unwrap();
+        assert_eq!(libs[0].sources.len(), 2);
+        let doc = &libs[0].sources[1];
+        assert_eq!(doc.kind, FileKind::Doc);
+        assert_eq!(doc.dst.as_deref(), Some("manual.pdf"));
+        assert_eq!(doc.src, "docs/manual.pdf");
+    }
+
+    #[test]
+    fn doc_target_plan_installs_under_dist_doc() {
+        // A `(libraryDoc ...)`'s own declared products, once built, land at
+        // `dist/doc/<name>/<dst>` — the same per-library namespace `md` uses
+        // — via the exact `manifest::plan_from_manifest` destination logic
+        // every other source kind goes through.
+        let dir = std::env::temp_dir().join(format!(
+            "rustyfi-doctargetplan-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("out.pdf"), b"pdf bytes").unwrap();
+
+        let plan = doc_target_plan(
+            &dir,
+            "p-doc",
+            "1.0",
+            Lang::V0_0,
+            &[("manual.pdf".to_string(), "out.pdf".to_string())],
+        )
+        .expect("plan");
+        assert_eq!(plan.name, "p-doc");
+        assert_eq!(plan.files.len(), 1);
+        assert_eq!(plan.files[0].dst, "dist/doc/p-doc/manual.pdf");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

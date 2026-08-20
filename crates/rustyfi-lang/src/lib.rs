@@ -821,6 +821,9 @@ pub fn compile_document_v006_xver_with_aux(
     // generation and not the other.
     let mut stages: std::collections::HashMap<usize, types::Stage> =
         std::collections::HashMap::new();
+    // Slice X4b: the qualified member keys (`"M.frame"`) this arm rebinds to
+    // a version-adapted view, exempted from a SECOND `:>` seal check below.
+    let mut xver_shadows: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     for (i, dep) in files.iter().enumerate() {
         if i == entry_idx {
@@ -888,51 +891,45 @@ pub fn compile_document_v006_xver_with_aux(
             // dependency splices VERBATIM (never relabeled) — both the safe
             // AND the correct choice here.
             //
-            // X4b ("Slice X4" §X4.5, extended beyond its own math-only sketch
-            // by the task brief this increment implements): `deco`/`deco-set`
-            // were INTENDED to also cross (the reverse mirror of X3b's
-            // `unite-graphics` wrap, coercing the OPPOSITE way — a crossing
-            // `V0_1` deco returns a single `graphics`; every REAL
-            // `V0_0`-authored consumer call site expects a `graphics list`
-            // back, so the wrap would need to be a SINGLETON LIST, `[name p w
-            // h d]`). **This turned out to be UNSOUND to wire up given this
-            // port's hard constraints, and is INTENTIONALLY left rejected** —
-            // see `v1::xver_adapt::reject_deco_exports_v01_sig`'s own doc
-            // comment for the full derivation. Summary: 0.1's ONLY textual
-            // site that can even NAME a `deco`/`deco-set` export's type at all
-            // is a `module M :> sig val name : deco .. end = struct .. end`
-            // (0.1 has no bare top-level ascription syntax —
-            // `cst_v1::Bind::Value`'s own doc comment), and EVERY such `:>`
-            // annotation is unconditionally conformance-enforced by (HARD-
-            // CONSTRAINT-untouched) `v1::module_check`'s phase-D spine walk —
-            // keyed PURELY by the exported name, checked against
-            // `static_env.seals` for EVERY `Ast::LetIn` node sharing that
-            // name, regardless of where in the merged program it appears. Any
-            // splice-time coercion that makes the crossing VALUE's real shape
-            // (`graphics list`) differ from what the module's OWN declared
-            // `deco` scheme says (`graphics`) — which is the ENTIRE POINT of
-            // this coercion — trips that SAME enforcement a second time on the
-            // coercion's own shadowing binding, wherever it is spliced
-            // (verified empirically: appending inside the module's own `decls`
-            // produces `module_check`'s "does not match its signature" error;
-            // a later top-level binding under the same qualified string key
-            // hits the identical name-keyed check in `module_check.rs`'s
-            // phase-D walk). There is no way to introduce a second,
-            // differently- shaped binding under the sealed name without either
-            // changing `module_check.rs` (forbidden) or accepting an unsound
-            // type- error-suppressing hack. So this arm keeps the ORIGINAL X4a
-            // reject-everything-but-{math-text,math-boxes} posture — a
-            // `deco`/`deco-set` VALUE export via a module `sig` still rejects,
-            // now via a DEDICATED, clear diagnostic
-            // (`reject_deco_exports_v01_sig`, PRE-lowering — the sig is
-            // otherwise invisible post-lowering, `v1/lower.rs`'s own "sig_
-            // annot is then simply DROPPED" note) rather than the confusing
-            // downstream `module_check` type error a silent splice would
-            // previously have produced. A BARE `type foo = deco` synonym (no
-            // value attached, safe with zero coercion — same reasoning as the
-            // forward direction's `type xver-deco- alias = deco`) is
-            // UNAFFECTED: it is not a sig item at all, so
-            // `reject_deco_exports_v01_sig` never sees it, and it splices
+            // X4b (`docs/plans/design-cross-version-import.md`'s "Slice X4"
+            // §X4.5, extended beyond its own math-only sketch): `deco`/
+            // `deco-set` CROSS in this direction too — the reverse mirror of
+            // X3b's `unite-graphics` wrap, coercing the OPPOSITE way. A
+            // crossing `V0_1` deco returns a single `graphics`; every REAL
+            // `V0_0`-authored consumer call site (and every `V0_0`-scoped
+            // `inline-frame-outer`/`inline-frame-breakable` TYPE) expects a
+            // `graphics list`, so the wrap is a SINGLETON LIST, `[name p w h
+            // d]`. See `v1::xver_adapt`'s own "X4b" section for the full
+            // derivation; the mechanics here are three steps:
+            //
+            //   1. `classify_deco_exports_v01_sig` reads the dependency's
+            //      PRE-lowering `cst_v1` sig (the ONE textual site 0.1's
+            //      grammar can name a `deco` export's type at all — an
+            //      ordinary `val` carries no ascription syntax, and lowering
+            //      DROPS `sig_annot` entirely, so this scan must happen
+            //      here and not off `lowered`). Anything it cannot express
+            //      as a POSITIONAL eta-expansion — a `paren`, an
+            //      optional-argument arrow, a `deco` buried in a compound or
+            //      behind a nested `module` decl — still REJECTS, with the
+            //      same clear `slice: "X4b"` diagnostic as before.
+            //   2. `deco_downgrade_prelude` splices the coercion shadows
+            //      immediately AFTER the dependency: a top-level rebinding of
+            //      each export's own qualified key (`M.frame`) whose body
+            //      re-applies the original positionally and wraps the result
+            //      in a singleton list. Deliberately NOT added to
+            //      `v006_indices` — this is `V0_1`-authored glue, exactly
+            //      like the forward arm's `deco_coercion_prelude`.
+            //   3. those qualified keys are collected into `xver_shadows` and
+            //      handed to `check_program_with_xver_shadows` below, which
+            //      exempts the SECOND `Ast::LetIn` of each from the `:>`
+            //      seal re-check (the module's own alias is still checked;
+            //      see that function's doc comment for why that exemption
+            //      cannot hide a real violation).
+            //
+            // A BARE `type foo = deco` synonym (no value attached, safe with
+            // zero coercion — same reasoning as the forward direction's
+            // `type xver-deco-alias = deco`) is UNAFFECTED: it is not a sig
+            // `val` item at all, so this scan never sees it, and it splices
             // verbatim exactly like any other unconstrained mention.
             rustyfi_loader::LoadedCst::V0_1(cst) => {
                 v1::surface::build_file_surface(cst, &mut surfaces);
@@ -956,21 +953,26 @@ pub fn compile_document_v006_xver_with_aux(
                 // deco` synonym — no value attached; this arm's own doc
                 // comment above): a REAL sig-declared VALUE export is
                 // invisible to this POST-lowering scan (sig is dropped) and
-                // is instead caught by the PRE-lowering check just below,
+                // is instead classified by the PRE-lowering scan just below,
                 // independently of `touched`.
-                v1::xver_adapt::reject_deco_exports_v01_sig(cst).map_err(|be| {
-                    CompileError::CrossVersionUnsupportedName {
-                        name: match &be {
-                            v1::xver_adapt::BoundaryError::ForkedTypeExport { ty_name, .. } => {
-                                ty_name.clone()
-                            }
-                        },
-                        dep: dep.path.display().to_string(),
-                        slice: "X4b",
-                    }
-                })?;
+                let deco_exports =
+                    v1::xver_adapt::classify_deco_exports_v01_sig(cst).map_err(|be| {
+                        CompileError::CrossVersionUnsupportedName {
+                            name: match &be {
+                                v1::xver_adapt::BoundaryError::ForkedTypeExport {
+                                    ty_name, ..
+                                } => ty_name.clone(),
+                            },
+                            dep: dep.path.display().to_string(),
+                            slice: "X4b",
+                        }
+                    })?;
 
                 prelude.extend(lowered);
+                prelude.extend(v1::xver_adapt::deco_downgrade_prelude(&deco_exports));
+                for exp in &deco_exports {
+                    xver_shadows.insert(v1::xver_adapt::deco_export_qualified_name(exp));
+                }
                 dep_csts.push(cst);
             }
         }
@@ -1010,12 +1012,19 @@ pub fn compile_document_v006_xver_with_aux(
         Some(RustyfiVersion::V0_0),
     )?;
     // Newly REACHABLE from a 0.0.6-rooted compile (previously had exactly
-    // one caller) — unmodified: `dep_csts` here is the foreign 0.1
-    // dependencies' OWN `cst_v1` trees, so a `:>`-sealed export (e.g.
-    // `V01Sealed.t`) is enforced against the WHOLE merged spine exactly as
-    // it would be for a pure-0.1 consumer (§X4.1 point 2 — the Q2/sealing
-    // resolution: no new enforcement machinery needed).
-    v1::module_check::check_program(&dep_csts, &program)?;
+    // one caller): `dep_csts` here is the foreign 0.1 dependencies' OWN
+    // `cst_v1` trees, so a `:>`-sealed export (e.g. `V01Sealed.t`) is
+    // enforced against the WHOLE merged spine exactly as it would be for a
+    // pure-0.1 consumer (§X4.1 point 2 — the Q2/sealing resolution).
+    //
+    // `xver_shadows` (Slice X4b) is the ONE thing this arm asks the checker
+    // to treat differently, and only for names it has itself just rebound:
+    // the exporting module's own alias is still conformance-checked, and
+    // only the coercion shadow that FOLLOWS it is exempted from a second
+    // check against a signature it deliberately does not match. Empty
+    // whenever no 0.1 `deco` export crossed, which makes every other
+    // reverse-direction compile byte-identical to the pre-X4b path.
+    v1::module_check::check_program_with_xver_shadows(&dep_csts, &program, &xver_shadows)?;
     let env0_v006 = primitives::base_env_with_version(RustyfiVersion::V0_0);
     // `v006_indices` is NEVER empty here (the entry's own bindings are
     // always indexed into it above), so this always takes the `_xver` fold

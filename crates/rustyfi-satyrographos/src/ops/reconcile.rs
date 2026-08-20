@@ -30,11 +30,11 @@ use crate::lockfile::{self, LockEntry, Lockfile};
 use crate::ops::install::{self, InstallOptions, InstallReport};
 use crate::ops::registry_install::{self, Resolved};
 use crate::ops::uninstall::RootOptions;
-use crate::registry::{self, RegistryDepSource, RegistryOptions};
+use crate::registry::{self, MultiRegistryDepSource, RegistryOptions};
 use crate::roots::RootSelection;
-use crate::source::SourceKind;
 use crate::satyristes;
 use crate::solve;
+use crate::source::{RegistryConfig, SourceKind};
 use crate::version::Constraint;
 use crate::{receipts, stage, util};
 
@@ -48,6 +48,13 @@ pub struct ManifestReport {
     /// Entry names present in the old lockfile but no longer in the manifest;
     /// left installed (not pruned), only reported (see module docs).
     pub removed: Vec<String>,
+    /// Configured repositories that could not be reached while re-solving the
+    /// registry closure (url, error) — a warning, not a failure, as long as
+    /// at least one repository was reachable (mirrors `cmd_search`'s "one
+    /// unreachable repository must not hide the others"). Always empty unless
+    /// [`install_manifest_reg_multi`]'s registry sub-graph actually needed to
+    /// re-consult the index (the reused-pin fast path never touches it).
+    pub unreachable_registries: Vec<(String, Error)>,
 }
 
 /// Reconcile against the sibling lockfile/receipts with no *explicit*
@@ -76,6 +83,22 @@ pub fn install_manifest_reg(
     manifest_path: &Path,
     opts: &RootOptions,
     reg_opts: &RegistryOptions,
+) -> Result<ManifestReport, Error> {
+    install_manifest_reg_multi(manifest_path, opts, reg_opts, &[])
+}
+
+/// As [`install_manifest_reg`], but consulting every repository in `repos`,
+/// in order, when `reg_opts` does not already pin one explicit
+/// `--registry`/`$RUSTYFI_REGISTRY` URL (task: multiple `[[registry]]`
+/// repositories are configurable, the same as `search`/`install NAME` already
+/// consult, but reconcile used to talk to only the first). Only the "re-solve
+/// the whole registry sub-graph fresh" path in `install_registry_closure`
+/// ever consults `repos` — the reused-pin fast path is index-free either way.
+pub fn install_manifest_reg_multi(
+    manifest_path: &Path,
+    opts: &RootOptions,
+    reg_opts: &RegistryOptions,
+    repos: &[RegistryConfig],
 ) -> Result<ManifestReport, Error> {
     let manifest = satyristes::read_project(manifest_path)?;
     let manifest_dir = manifest_path
@@ -213,7 +236,9 @@ pub fn install_manifest_reg(
     }
 
     if !reg_directs.is_empty() {
-        install_registry_closure(&reg_directs, &manifest, &old_lock, &root, opts, reg_opts, &mut report, &mut new_entries)?;
+        install_registry_closure(
+            &reg_directs, &manifest, &old_lock, &root, opts, reg_opts, repos, &mut report, &mut new_entries,
+        )?;
     }
 
     // Entries dropped from the manifest are left installed, only reported —
@@ -270,6 +295,7 @@ fn install_registry_closure(
     root: &Path,
     opts: &RootOptions,
     reg_opts: &RegistryOptions,
+    repos: &[RegistryConfig],
     report: &mut ManifestReport,
     new_entries: &mut Vec<LockEntry>,
 ) -> Result<(), Error> {
@@ -312,16 +338,20 @@ fn install_registry_closure(
     }
 
     // At least one direct root is new or changed: re-solve the whole
-    // registry sub-graph fresh (design §5.1 step 2).
-    let url = reg_opts.resolve_url(manifest.registry_url())?;
-    let reg = registry::acquire(&url, reg_opts)?;
+    // registry sub-graph fresh (design §5.1 step 2), against every
+    // configured repository — one unreachable repository is recorded in
+    // `report.unreachable_registries` rather than aborting, as long as at
+    // least one is reachable (mirrors `cmd_search`).
+    let fallback = manifest.registry_url();
+    let (acquired, unreachable) = registry::acquire_all(repos, reg_opts, fallback)?;
+    report.unreachable_registries.extend(unreachable);
     let solve_root: Vec<(String, Constraint)> =
         reg_directs.iter().map(|d| (d.pkg.clone(), d.constraint.clone())).collect();
-    let src = RegistryDepSource::new(&reg);
+    let src = MultiRegistryDepSource::new(&acquired);
     let solution = solve::solve(&solve_root, &src)?;
 
     for (pkg, version) in &solution.packages {
-        let idx = registry::lookup(&reg, pkg)?;
+        let (_, idx) = src.lookup_first(pkg)?;
         let entry = registry::entry_for(&idx, version).ok_or_else(|| Error::VersionNotFound {
             name: pkg.clone(),
             version: version.to_string(),

@@ -703,6 +703,134 @@ fn update_caps_the_upgrade_at_the_highest_mutually_compatible_version() {
 }
 
 // ---------------------------------------------------------------------------
+// Several configured repositories: `update`/reconcile consult ALL of them, in
+// order, not just the first — the same coverage `search`/`install NAME`
+// already had (task's gap #1).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn reconcile_and_update_multi_consult_every_configured_repository() {
+    // `great-package` lives ONLY in the SECOND configured repository; the
+    // first is reachable but simply does not carry it. The single-registry
+    // `install_manifest_reg`/`update` (consulting only the first, or a bare
+    // `--registry` URL) has no way to resolve this at all; the `_multi`
+    // entry points must.
+    let tmp = TempDir::new("update-multi");
+    let (t10, sha10) = make_tarball(&tmp, "great-package", "1.0.0", "let g = 1\n");
+    let (t11, sha11) = make_tarball(&tmp, "great-package", "1.1.0", "let g = 2\n");
+    let (other_tb, other_sha) = make_tarball(&tmp, "other-package", "1.0.0", "let o = 1\n");
+
+    let repo1 = write_index(
+        &tmp,
+        "repo1",
+        "other-package",
+        None,
+        &[Ver { version: "1.0.0", tarball: &other_tb, real_sha: &other_sha, bad_sha: None }],
+    );
+    let repo2 = write_index(
+        &tmp,
+        "repo2",
+        "great-package",
+        Some("A great SATySFi package"),
+        &[Ver { version: "1.0.0", tarball: &t10, real_sha: &sha10, bad_sha: None }],
+    );
+
+    // No `(registry ...)` form here on purpose: this manifest names no
+    // repository of its own, so the only way it resolves at all is through
+    // the `repos` list every caller passes down.
+    let manifest = tmp.write(
+        "proj/Satyristes",
+        "(version 0.0.2)\n\
+         (library (name \"proj\") (version \"0.1.0\") (sources ((packageDir \"src\")))\n\
+           (dependencies ((great-package ((registry \"great-package\") (version \"1.0.0\"))))))\n",
+    );
+    let root = tmp.path().join("root");
+    let repos = vec![
+        sg::RegistryConfig { url: Some(file_url(&repo1)), ..Default::default() },
+        sg::RegistryConfig { url: Some(file_url(&repo2)), ..Default::default() },
+    ];
+
+    sg::install_manifest_reg_multi(&manifest, &root_opts(&root), &RegistryOptions::default(), &repos)
+        .expect("reconcile finds great-package through the second repository");
+    assert!(root.join("dist/packages/great-package/great-package.satyh").is_file());
+
+    // Publish 1.1.0 into the second repository only.
+    write_index(
+        &tmp,
+        "repo2",
+        "great-package",
+        Some("A great SATySFi package"),
+        &[
+            Ver { version: "1.0.0", tarball: &t10, real_sha: &sha10, bad_sha: None },
+            Ver { version: "1.1.0", tarball: &t11, real_sha: &sha11, bad_sha: None },
+        ],
+    );
+
+    let rep = sg::update_multi(&manifest, &RegistryOptions::default(), &repos).expect("update ok");
+    assert!(rep.unreachable.is_empty(), "both repos are reachable: {:?}", rep.unreachable);
+    assert_eq!(rep.upgrades.len(), 1, "{:?}", rep.upgrades);
+    assert_eq!(rep.upgrades[0].name, "great-package");
+    assert_eq!(rep.upgrades[0].latest, "1.1.0");
+}
+
+#[test]
+fn update_multi_reports_one_unreachable_repository_without_failing() {
+    // The first configured repository does not exist at all (fully offline: a
+    // `git clone` against a nonexistent local path fails immediately, no
+    // network involved); the second is the real index. One unreachable
+    // repository must not hide what the reachable one still reports —
+    // mirrors `cmd_search`'s own behaviour.
+    let tmp = TempDir::new("update-multi-unreachable");
+    let (t10, sha10) = make_tarball(&tmp, "great-package", "1.0.0", "let g = 1\n");
+    let (t11, sha11) = make_tarball(&tmp, "great-package", "1.1.0", "let g = 2\n");
+    let repo2 = write_index(
+        &tmp,
+        "repo2",
+        "great-package",
+        Some("A great SATySFi package"),
+        &[Ver { version: "1.0.0", tarball: &t10, real_sha: &sha10, bad_sha: None }],
+    );
+    let bogus = tmp.path().join("no-such-repo");
+
+    let manifest = tmp.write(
+        "proj/Satyristes",
+        "(version 0.0.2)\n\
+         (library (name \"proj\") (version \"0.1.0\") (sources ((packageDir \"src\")))\n\
+           (dependencies ((great-package ((registry \"great-package\") (version \"1.0.0\"))))))\n",
+    );
+    let root = tmp.path().join("root");
+    let repos = vec![
+        sg::RegistryConfig { url: Some(file_url(&bogus)), ..Default::default() },
+        sg::RegistryConfig { url: Some(file_url(&repo2)), ..Default::default() },
+    ];
+    let reg_opts = RegistryOptions {
+        cache_dir: Some(tmp.path().join("cache")),
+        ..Default::default()
+    };
+
+    let report = sg::install_manifest_reg_multi(&manifest, &root_opts(&root), &reg_opts, &repos)
+        .expect("the second, reachable repository is enough to reconcile");
+    assert_eq!(report.unreachable_registries.len(), 1, "{:?}", report.unreachable_registries);
+
+    write_index(
+        &tmp,
+        "repo2",
+        "great-package",
+        Some("A great SATySFi package"),
+        &[
+            Ver { version: "1.0.0", tarball: &t10, real_sha: &sha10, bad_sha: None },
+            Ver { version: "1.1.0", tarball: &t11, real_sha: &sha11, bad_sha: None },
+        ],
+    );
+
+    let rep = sg::update_multi(&manifest, &reg_opts, &repos).expect("update still succeeds");
+    assert_eq!(rep.unreachable.len(), 1, "{:?}", rep.unreachable);
+    assert!(rep.unreachable[0].0.contains("no-such-repo"), "{:?}", rep.unreachable[0].0);
+    assert_eq!(rep.upgrades.len(), 1, "{:?}", rep.upgrades);
+    assert_eq!(rep.upgrades[0].latest, "1.1.0");
+}
+
+// ---------------------------------------------------------------------------
 // Error paths.
 // ---------------------------------------------------------------------------
 

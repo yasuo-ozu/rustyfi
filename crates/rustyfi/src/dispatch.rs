@@ -265,8 +265,9 @@ fn root_flags(cmd: Command) -> Command {
 }
 
 /// The `satyrographos` subcommand tree (plan §4.1-4.4).
-/// `build [PATH]` — run a `(libraryDoc ...)`'s own build commands. No root
-/// flags: it runs a program and installs nothing.
+/// `build [PATH]` — run a `(libraryDoc ...)`'s own build commands, and, with
+/// `--install`, materialise its declared products into the resolved root
+/// (`dist/doc/<name>/<dst>`) the same way any other package installs.
 fn build_command() -> Command {
     Command::new("build")
         .about("Build a `(libraryDoc ...)` target by running its own build commands.")
@@ -294,8 +295,30 @@ fn build_command() -> Command {
             Arg::new("lib_root")
                 .long("lib-root")
                 .value_name("DIR")
-                .help("Library root for the build commands ($RUSTYFI_LIB_ROOT).")
+                .help(
+                    "Library root for the build commands ($RUSTYFI_LIB_ROOT), and — \
+                     with --install — where its products are installed.",
+                )
                 .value_parser(value_parser!(PathBuf)),
+        )
+        .arg(
+            Arg::new("dest")
+                .long("dest")
+                .value_name("DIR")
+                .help("Raw root override for --install, used verbatim, bypassing discovery.")
+                .value_parser(value_parser!(PathBuf)),
+        )
+        .group(ArgGroup::new("root").args(["lib_root", "dest"]))
+        .arg(
+            Arg::new("install")
+                .long("install")
+                .action(ArgAction::SetTrue)
+                .help(
+                    "After a successful build, also install each doc's declared \
+                     `(sources ((doc \"dst\" \"src\") ...))` products \
+                     (dist/doc/<name>/<dst>), replacing any previous install of \
+                     the same doc target.",
+                ),
         )
         .arg(
             Arg::new("quiet")

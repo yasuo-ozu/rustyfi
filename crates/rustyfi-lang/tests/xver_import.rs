@@ -1683,3 +1683,272 @@ fn an_expression_level_let_math_in_a_v006_dependency_uses_the_v006_rule() {
         });
     assert_eq!(doc.pages.len(), 1, "one A4 page");
 }
+
+/// Slice X3c: a 0.0.6 package that consumes ANOTHER 0.0.6 package's crossed
+/// `deco` must still read it at 0.0.6's `graphics list` shape.
+///
+/// X3b installs the 0.1-shaped view by SHADOWING the export's own name, and
+/// the merged prelude is one flat `Ast::LetIn` chain — `Ast::VersionScope(V0_0,
+/// _)` wraps a binding's RHS, never the continuation after it — so that shadow
+/// used to be visible to everything that followed, including a 0.0.6-authored
+/// consumer whose own `inline-frame-outer` is typed `t_deco(V0_0)` inside its
+/// version scope. The result was ``expected `graphics list`, found `graphics` ``
+/// from a document that named neither package.
+///
+/// No hand-written fixture could see this: every one of them is a SINGLE
+/// package consumed by the 0.1 entry, and the entry is exactly the consumer
+/// the unconditional shadow was right for. It takes two packages in one
+/// document, which is the norm in the published corpus.
+///
+/// The entry below uses BOTH views in the same program — `XverX3cUse.framed`
+/// (the 0.0.6 consumer, list-shaped) and `XverX3cSrc.frame` directly (0.1's
+/// single-`graphics` shape, through 0.1's own `inline-frame-outer`) — so a
+/// successful compile is itself the coexistence proof: either view alone would
+/// be a type error at the other call site.
+#[test]
+fn a_v006_consumer_of_another_package_s_crossed_deco_keeps_the_list_shape() {
+    let dir = TempDir::new("x3c-deco-two-packages");
+    dir.write(
+        "dist/packages/xver-x3c-src.satyg",
+        "@stage: persistent\n\n\
+         module XverX3cSrc : sig\n\
+         \x20 val frame : deco\n\
+         end = struct\n\
+         \x20 let frame (x, y) w h d =\n\
+         \x20   [\n\
+         \x20     fill (Gray(0.0))\n\
+         \x20       (close-with-line\n\
+         \x20          (line-to (x +\' w, y +\' h)\n\
+         \x20             (line-to (x +\' w, y)\n\
+         \x20                (start-path (x, y)))))\n\
+         \x20   ]\n\
+         end\n",
+    );
+    dir.write(
+        "dist/packages/xver-x3c-use.satyg",
+        "@stage: persistent\n\n\
+         @require: xver-x3c-src\n\n\
+         module XverX3cUse : sig\n\
+         \x20 val framed : context -> inline-text -> inline-boxes\n\
+         end = struct\n\
+         \x20 let framed ctx it =\n\
+         \x20   inline-frame-outer (2pt, 2pt, 2pt, 2pt) XverX3cSrc.frame\n\
+         \x20     (read-inline ctx it)\n\
+         end\n",
+    );
+    dir.write("xver-helper.satyh", XVER_HELPER_SRC);
+    dir.write(
+        "entry.saty",
+        "\
+@require: xver-x3c-use
+@import: xver-helper
+
+let ctx = get-initial-context 440pt (command \\XverHelper.math) in
+let from-v006 = XverX3cUse.framed ctx {through a 0.0.6 consumer} in
+let from-v01 =
+  inline-frame-outer (2pt, 2pt, 2pt, 2pt) XverX3cSrc.frame
+    (read-inline ctx {through the 0.1 entry})
+in
+let body = line-break true true ctx (from-v006 ++ from-v01) in
+let content pbinfo = (| text-origin = (72pt, 100pt), text-height = 640pt |) in
+let parts pbinfo =
+  (| header-origin = (72pt, 72pt),  header-content = block-nil,
+     footer-origin = (72pt, 800pt), footer-content = block-nil |)
+in
+page-break (210mm, 297mm) content parts body
+",
+    );
+
+    let opts = LoadOptions {
+        lib_root: Some(dir.path().to_path_buf()),
+        version: RustyfiVersion::V0_1,
+        ..Default::default()
+    };
+    let program = rustyfi_loader::load(&dir.path().join("entry.saty"), &opts)
+        .unwrap_or_else(|e| panic!("loading the two-package X3c deco fixture should succeed: {e}"));
+
+    let mono = Mono;
+    let (doc, _trials) = rustyfi_lang::compile_document_v1_with_trials(&program.files, &mono)
+        .unwrap_or_else(|e| {
+            panic!(
+                "a 0.0.6 consumer must read another 0.0.6 package's crossed `deco` at \
+                 0.0.6's `graphics list` shape while the 0.1 entry reads the SAME export \
+                 at 0.1's single-`graphics` shape: {e}"
+            )
+        });
+
+    assert_eq!(doc.pages.len(), 1, "one A4 page");
+    // Only the 0.1-shaped view goes through `unite-graphics`, so the `Group`
+    // is the entry's; the 0.0.6 consumer's decoration is its own bare list.
+    assert!(
+        doc.extras.page_graphics[0]
+            .iter()
+            .any(|g| matches!(g, GraphicsElem::Group(_))),
+        "the 0.1 entry's fired deco must include a unite-graphics Group, got: {:?}",
+        doc.extras.page_graphics[0]
+    );
+}
+
+/// Slice X3c, the shape that motivated it: `math.satyh` declares `val
+/// paren-right : paren` and `latexcmds` — a SECOND 0.0.6 package — applies it
+/// with 0.0.6's five arguments (`hgt dpt hgtaxis fontsize color`). X3b's
+/// wrapper had already replaced it with 0.1's three-argument (`hgt dpt ctx`)
+/// projection for everyone, so the call failed with an unlocated ``type
+/// mismatch: expected `length`, found `context` ``.
+///
+/// Unlike `deco`, `paren` has no inverse to coerce back with — 0.1 recovers
+/// the axis from the math font's MATH table and no primitive in either
+/// generation can set it (`xver_adapt::forked_note`'s `"paren"` arm) — so
+/// scheduling the ORIGINAL back into view is the only thing that can work
+/// here, not a second wrapper in the other direction.
+///
+/// As above, the entry exercises both views at once: five arguments from the
+/// 0.0.6 consumer, three from the 0.1 entry, on the same export.
+#[test]
+fn a_v006_consumer_of_another_package_s_crossed_paren_keeps_five_arguments() {
+    let dir = TempDir::new("x3c-paren-two-packages");
+    dir.write(
+        "dist/packages/xver-x3c-paren.satyg",
+        "@stage: persistent\n\n\
+         module XverX3cParen : sig\n\
+         \x20 val delim : paren\n\
+         end = struct\n\
+         \x20 let delim hgt dpt hgtaxis fontsize color =\n\
+         \x20   let gr (x, y) =\n\
+         \x20     [ fill color (close-with-line\n\
+         \x20         (line-to (x +\' fontsize, y +\' hgt)\n\
+         \x20            (line-to (x +\' fontsize, y) (start-path (x, y))))) ]\n\
+         \x20   in\n\
+         \x20   (inline-graphics fontsize hgt dpt gr, (fun _ -> 0pt))\n\
+         end\n",
+    );
+    dir.write(
+        "dist/packages/xver-x3c-paren-use.satyg",
+        "@stage: persistent\n\n\
+         @require: xver-x3c-paren\n\n\
+         module XverX3cParenUse : sig\n\
+         \x20 val five : inline-boxes\n\
+         end = struct\n\
+         \x20 let five =\n\
+         \x20   let (ib, _) = XverX3cParen.delim 6pt 2pt 3pt 12pt (Gray(0.0)) in\n\
+         \x20   ib\n\
+         end\n",
+    );
+    dir.write("xver-helper.satyh", XVER_HELPER_SRC);
+    dir.write(
+        "entry.saty",
+        "\
+@require: xver-x3c-paren-use
+@import: xver-helper
+
+let ctx = get-initial-context 440pt (command \\XverHelper.math) in
+let three =
+  let (ib, _) = XverX3cParen.delim 6pt 2pt ctx in
+  ib
+in
+let body = line-break true true ctx (XverX3cParenUse.five ++ three) in
+let content pbinfo = (| text-origin = (72pt, 100pt), text-height = 640pt |) in
+let parts pbinfo =
+  (| header-origin = (72pt, 72pt),  header-content = block-nil,
+     footer-origin = (72pt, 800pt), footer-content = block-nil |)
+in
+page-break (210mm, 297mm) content parts body
+",
+    );
+
+    let opts = LoadOptions {
+        lib_root: Some(dir.path().to_path_buf()),
+        version: RustyfiVersion::V0_1,
+        ..Default::default()
+    };
+    let program = rustyfi_loader::load(&dir.path().join("entry.saty"), &opts)
+        .unwrap_or_else(|e| {
+            panic!("loading the two-package X3c paren fixture should succeed: {e}")
+        });
+
+    let mono = Mono;
+    let (doc, _trials) = rustyfi_lang::compile_document_v1_with_trials(&program.files, &mono)
+        .unwrap_or_else(|e| {
+            panic!(
+                "a 0.0.6 consumer must apply another 0.0.6 package's crossed `paren` with \
+                 0.0.6's FIVE arguments while the 0.1 entry applies the SAME export with \
+                 0.1's three: {e}"
+            )
+        });
+    assert_eq!(doc.pages.len(), 1, "one A4 page");
+    assert!(
+        !doc.pages[0].lines.is_empty(),
+        "both delimiters must have been placed"
+    );
+}
+
+/// Slice X3d: a 0.1 document CALLING a 0.0.6-defined math command.
+///
+/// `@require:`-ing such a package always worked; invoking one did not, because
+/// the two generations' math-command calling conventions differ and the
+/// difference is invisible to the type system (`math` relabels to `math-text`
+/// and the whole program type-checks):
+///
+///   0.0.6  `\cmd a1 .. an` -> `math`, and the reflector attaches `_`/`^`
+///          STRUCTURALLY afterwards — the command never sees a context, a
+///          subscript or a superscript;
+///   0.1    `\cmd a1 .. an ctx sub sup` -> `math-boxes`, with `sub`/`sup :
+///          math-text option`, so a command can typeset its own scripts.
+///
+/// `${\kilo\gram}` against `siunitx` therefore died with `cannot apply a value
+/// of type math as a function`, from a document naming no 0.0.6 file.
+///
+/// The fixture covers all three shapes that matter: a zero-argument command, a
+/// one-argument one, and a SCRIPTED occurrence — the last is the one that
+/// proves the adapter attaches `^` the 0.1 way (`attach_scripts`) rather than
+/// dropping it, since the 0.0.6 command has no slot to receive it in.
+#[test]
+fn a_zero_one_document_can_call_a_v006_math_command() {
+    let dir = TempDir::new("x3d-v006-math-command");
+    dir.write(
+        "dist/packages/xver-x3d-math.satyg",
+        "@stage: persistent\n\n\
+         let-math \\xver-kilo = math-char MathPrefix `k`\n\
+         let-math \\xver-ord m = math-group MathOrd MathOrd m\n",
+    );
+    dir.write("xver-helper.satyh", XVER_HELPER_SRC);
+    dir.write(
+        "entry.saty",
+        "\
+@require: xver-x3d-math
+@import: xver-helper
+
+let ctx = get-initial-context 440pt (command \\XverHelper.math) in
+let m = embed-math ctx (read-math ctx ${\\xver-kilo\\xver-ord{x}^{2}}) in
+let body = line-break true true ctx m in
+let content pbinfo = (| text-origin = (72pt, 100pt), text-height = 640pt |) in
+let parts pbinfo =
+  (| header-origin = (72pt, 72pt),  header-content = block-nil,
+     footer-origin = (72pt, 800pt), footer-content = block-nil |)
+in
+page-break (210mm, 297mm) content parts body
+",
+    );
+
+    let opts = LoadOptions {
+        lib_root: Some(dir.path().to_path_buf()),
+        version: RustyfiVersion::V0_1,
+        ..Default::default()
+    };
+    let program = rustyfi_loader::load(&dir.path().join("entry.saty"), &opts)
+        .unwrap_or_else(|e| panic!("loading the X3d math-command fixture should succeed: {e}"));
+
+    let mono = Mono;
+    let (doc, _trials) = rustyfi_lang::compile_document_v1_with_trials(&program.files, &mono)
+        .unwrap_or_else(|e| {
+            panic!(
+                "a 0.1 document must be able to CALL a 0.0.6-defined math command \
+                 (zero-argument, one-argument, and scripted): {e}"
+            )
+        });
+    assert_eq!(doc.pages.len(), 1, "one A4 page");
+    assert!(
+        !doc.pages[0].lines.is_empty(),
+        "the math run must have been placed"
+    );
+}

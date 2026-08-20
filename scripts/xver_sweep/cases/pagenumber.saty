@@ -1,0 +1,9 @@
+@require: pagenumber/pagenumber
+@import: h
+
+let s = PageNumber.get-page-string 1 in
+let s-text = embed-string s in
+let open H in
+document (| title = `pagenumber` |) '<
+  +p { page string #s-text;. }
+>

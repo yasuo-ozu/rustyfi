@@ -5910,6 +5910,52 @@ fn reflect_scripted_v01(
             let arg_v = arg.arg.run(env, interp)?;
             v = interp.apply_with_opts(v, opt_vals, arg_v)?;
         }
+        // Slice X3d — a 0.0.6-authored math command reached from a 0.1
+        // document. The two generations INVOKE a math command differently, and
+        // the difference is not in the type (`math` relabels to `math-text`
+        // and the whole program type-checks) but in the calling convention:
+        //
+        //   0.0.6  \cmd a1 .. an                    -> math
+        //          scripts are attached STRUCTURALLY by the reflector
+        //          (`reflect_math_elem`'s `Sub`/`Sup` arms); the command
+        //          never sees a context, a subscript or a superscript.
+        //   0.1    \cmd a1 .. an ctx sub sup        -> math-boxes
+        //          with `sub`/`sup : math-text option`, so a command can
+        //          typeset its own scripts (`\sum` moving them under/over).
+        //
+        // So the 0.1 convention applies THREE arguments a 0.0.6 command never
+        // declared, and `${\kilo\gram}` against `siunitx` died with `cannot
+        // apply a value of type math as a function` — from a document that
+        // named no 0.0.6 file.
+        //
+        // The discrimination below is DYNAMIC, and total: after its declared
+        // arguments a 0.1 math command is by construction still a function
+        // (its type ends `.. -> context -> ..`, `prim_types::t_math_cmd`), so a
+        // math VALUE here can only have come from a command that never wanted
+        // the context — i.e. a 0.0.6 one. A static alternative would have to
+        // key on the command's authoring generation, which is not recoverable
+        // at this point: `Ast::VersionScope` governs which `PrimDef` the body
+        // FOLDS to, and nothing about the resulting closure records where it
+        // came from.
+        //
+        // Adapting is then exact rather than a concession. `as_math` runs
+        // 0.0.6's own reflection (so a returned `${..}` literal's nested
+        // commands stay 0.0.6 commands), and its payload — `Rc<Vec<Math>>` —
+        // is byte-for-byte what `Value::MathBoxes` carries, so the crossing
+        // needs no conversion at all. The scripts the command did not take are
+        // then attached exactly the way 0.1 attaches them to any other
+        // non-command base (`attach_scripts`), which is the same structural
+        // `Math::Sub`/`Math::Sup` shape 0.0.6's reflector would have built.
+        // What a 0.0.6 command cannot do is RESTYLE its own scripts — it never
+        // could, in 0.0.6 either.
+        if matches!(v, Value::Math(_) | Value::MathText { .. }) {
+            let base_v = as_math(interp, v)?.as_ref().clone();
+            let sub_opt = sub.map(|s| (Rc::new(s.to_vec()), env.clone()));
+            let sup_opt = sup.map(|s| (Rc::new(s.to_vec()), env.clone()));
+            let attached = attach_scripts(interp, ctx, base_v, sub_opt, sup_opt)?;
+            out.extend(attached);
+            return Ok(());
+        }
         v = interp.apply(v, Value::Context(Box::new(ctx.clone())))?;
         v = interp.apply(v, option_math_text_value(sub, env))?;
         v = interp.apply(v, option_math_text_value(sup, env))?;

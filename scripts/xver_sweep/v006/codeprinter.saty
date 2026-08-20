@@ -1,0 +1,6 @@
+@require: stdjabook
+@require: code-printer/code-printer
+
+document (| title = {t}; author = {a}; show-title = false; show-toc = false |) '<
+  +code-printer(`let x = 1`);
+>

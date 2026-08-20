@@ -1,0 +1,8 @@
+@require: stdjabook
+@require: quotation/quotation
+
+document (| title = {t}; author = {a}; show-title = false; show-toc = false |) '<
+  +quotation<
+    +p { quoted text from a 0.0.6 package. }
+  >
+>

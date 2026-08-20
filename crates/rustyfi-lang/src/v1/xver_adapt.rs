@@ -959,9 +959,66 @@ impl DecoExport {
     /// [`deco_wrapper_src`] (`head_optional_shape` reads a shape only off a
     /// bare `Var`/`VarWithMod` head).
     fn opt_src_alias(&self) -> String {
+        format!("xver-opt-src-{}", self.dash_key())
+    }
+
+    /// The export's own fully-qualified key — `"M.frame"` for a module
+    /// member, the bare `"frame"` for a top-level one. This is the name a
+    /// consumer of EITHER generation writes, and the one X3c's schedule
+    /// rebinds to whichever view that consumer should see.
+    ///
+    /// Deliberately NOT [`deco_export_qualified_name`], which is X4b's and
+    /// assumes a non-empty `module_path` (it would spell a top-level export
+    /// `".frame"`); the forward direction classifies top-level exports too.
+    fn qualified_key(&self) -> String {
+        if self.module_path.is_empty() {
+            self.name.clone()
+        } else {
+            format!("{}.{}", self.module_path.join("."), self.name)
+        }
+    }
+
+    /// `qualified_key` with `.` swapped for `-`, so it can be embedded in a
+    /// surface identifier (a `.` cannot appear in one, a `-` can).
+    fn dash_key(&self) -> String {
         let mut key: Vec<&str> = self.module_path.iter().map(String::as_str).collect();
         key.push(&self.name);
-        format!("xver-opt-src-{}", key.join("-"))
+        key.join("-")
+    }
+
+    /// The name X3c binds the export's UNWRAPPED (0.0.6-shaped) original
+    /// under, in the SAME scope the export itself lives in — a sibling
+    /// `StructDecl` for a module member, a sibling top-level binding for a
+    /// top-level export. Emitted BEFORE the wrapper, while the original is
+    /// still the innermost binding of its own name.
+    ///
+    /// It has to live in that scope rather than at top level because a module
+    /// member's original is not reachable from outside once the wrapper has
+    /// shadowed it — and a 0.0.6 `sig .. end` seals nothing (`elaborate.rs`'s
+    /// `TopBinding::Module` arm accepts `val` items and ignores them; only
+    /// `direct` items bind anything), so an extra member is visible to every
+    /// later consumer as `M.xver-fwd-orig-frame` with its own inferred type.
+    fn orig_capture_name(&self) -> String {
+        format!("xver-fwd-orig-{}", self.name)
+    }
+
+    /// [`orig_capture_name`](Self::orig_capture_name) qualified the same way
+    /// the export itself is — the expression an X3c `Restore` rebinds the
+    /// export's key to.
+    fn orig_capture_key(&self) -> String {
+        if self.module_path.is_empty() {
+            self.orig_capture_name()
+        } else {
+            format!("{}.{}", self.module_path.join("."), self.orig_capture_name())
+        }
+    }
+
+    /// The private TOP-LEVEL name X3c's `Capture` step binds the WRAPPED
+    /// (0.1-shaped) view under, so a later `Install` can put it back without
+    /// regenerating the wrapper. A pure function of the export's own key, so
+    /// the separate `Capture`/`Install` calls agree on it.
+    fn view_capture_name(&self) -> String {
+        format!("xver-fwd-view-{}", self.dash_key())
     }
 }
 
@@ -1645,6 +1702,16 @@ fn inject_into_top_binding(tb: &mut cst::TopBinding, path: &[String], exports: &
     if !mine.is_empty() {
         let mut src = String::from("module XverWrap = struct\n");
         for exp in &mine {
+            // X3c: keep the UNWRAPPED original reachable under a private
+            // sibling name before the wrapper shadows it — see
+            // `DecoExport::orig_capture_name` for why it must live in this
+            // scope, and `deco_upgrade_prelude`'s **Placement** section for
+            // what reads it.
+            src.push_str(&format!(
+                "let {} = {}\n",
+                exp.orig_capture_name(),
+                exp.name
+            ));
             src.push_str(&deco_wrapper_src(exp));
         }
         src.push_str("end\n");
@@ -1675,6 +1742,15 @@ pub(crate) fn deco_coercion_prelude(exports: &[DecoExport]) -> Vec<cst::TopBindi
         if !exp.module_path.is_empty() {
             continue;
         }
+        // X3c: the unwrapped original, kept reachable under a private name
+        // before the wrapper shadows it (see `inject_module_deco_wrappers`
+        // for the module-scoped twin, and `deco_upgrade_prelude` for what
+        // reads it).
+        src.push_str(&format!(
+            "let {} = {}\n",
+            exp.orig_capture_name(),
+            exp.name
+        ));
         src.push_str(&deco_wrapper_src(exp));
     }
     if src.is_empty() {
@@ -1697,6 +1773,183 @@ pub(crate) fn deco_coercion_prelude(exports: &[DecoExport]) -> Vec<cst::TopBindi
         )
     });
     file.prelude
+}
+
+// ============================================================================
+// X3c — WHICH consumers see X3b's adapted view.
+//
+// X3b installs the 0.1-shaped view of a crossed `deco`/`deco-set`/`paren`
+// export by SHADOWING the export's own name: a later `StructDecl` inside the
+// exporting module (`inject_module_deco_wrappers`), or a later top-level
+// binding (`deco_coercion_prelude`). Both are permanent — the merged prelude
+// is one flat `Ast::LetIn` chain and `Ast::VersionScope(V0_0, _)` wraps a
+// binding's RHS, never the continuation after it, so a shadow is visible to
+// EVERYTHING that follows regardless of which generation authored it.
+//
+// That is right for the 0.1 entry and wrong for a later 0.0.6-AUTHORED
+// dependency, which is elaborated in `Ast::VersionScope(V0_0, _)` and means
+// 0.0.6's shape by every name it writes. Multi-package 0.0.6 corpora hit it
+// constantly, because a package that exports a `deco`/`paren` is exactly the
+// kind of package other packages build on:
+//
+//   - `math.satyh` declares `val paren-right : paren` and `latexcmds` applies
+//     it with 0.0.6's five arguments — `type mismatch: expected `length`,
+//     found `context``, unlocated, from a document that named neither file;
+//   - the same for `deco`: an exporter's `graphics list` result is united into
+//     one `graphics`, and the next 0.0.6 package's `inline-frame-outer` (typed
+//     `t_deco(V0_0)` inside its own version scope) refuses it with `expected
+//     `graphics list`, found `graphics``.
+//
+// It is the exact mirror of the defect X4b's placement schedule fixed in the
+// other direction, and it takes the exact mirror of that fix: the adapted view
+// becomes POSITION-INDEXED rather than permanent. What makes a
+// position-indexed view sufficient is unchanged from X4b — each block
+// `lib.rs`'s forward loop splices is homogeneous (a `V0_0` dependency's whole
+// `prelude` goes into `v006_indices`, a `V0_1` dependency's whole `lowered`
+// stays out of it), the entry is 0.1-authored and last, and the loader orders
+// dependencies topologically so a consumer always follows what it
+// `@require:`s.
+//
+// The three steps are [`UpgradeStep`]; both transitions are lazy, so a program
+// whose 0.0.6 dependencies never consume each other's crossed exports (every
+// pre-X3c fixture, and the single-dependency case) emits NOTHING and is
+// byte-identical to before.
+// ============================================================================
+
+/// Which of X3c's three placement bindings [`deco_upgrade_prelude`] should
+/// generate. The forward twin of [`DowngradeStep`], and deliberately its
+/// mirror image: there the 0.1 view is the resting state and the 0.0.6 one is
+/// installed at a transition, here the 0.1 view is what X3b has already
+/// installed and the 0.0.6 one is what a transition has to put BACK.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UpgradeStep {
+    /// `let xver-fwd-view-M-frame = M.frame` — capture X3b's WRAPPED view
+    /// under a private name, so a later [`Install`](UpgradeStep::Install) can
+    /// put it back without regenerating the wrapper. Binds a private name
+    /// only, so it is invisible to consumers of either generation. Emitted
+    /// once per export, at the first transition into 0.0.6-authored code —
+    /// which is the last position at which naming the export's own key still
+    /// yields the wrapped view.
+    Capture,
+    /// `let M.frame = M.xver-fwd-orig-frame` — put the UNWRAPPED, 0.0.6-shaped
+    /// original back. Emitted on entering a 0.0.6-authored block. The
+    /// right-hand side is the in-place capture X3b's two injectors emit next
+    /// to the original itself (`DecoExport::orig_capture_name`).
+    Restore,
+    /// `let M.frame = xver-fwd-view-M-frame` — re-install the 0.1-shaped view
+    /// from [`Capture`](UpgradeStep::Capture). Emitted on entering a
+    /// 0.1-authored block (a foreign 0.1 dependency, or the entry) once the
+    /// 0.0.6 view has been restored.
+    Install,
+}
+
+/// Build the `V0_1`-authored placement bindings for `exports` — see
+/// [`UpgradeStep`] for which of the three this call emits, and this section's
+/// banner for why the view has to move at all.
+///
+/// [`Restore`](UpgradeStep::Restore) and [`Install`](UpgradeStep::Install)
+/// both REBIND the export's own key, which for a module member is the dotted
+/// `M.frame`. No surface syntax spells a top-level `let M.frame = ..`, but
+/// `elaborate.rs`'s `push_named_binding` takes the binder name as an opaque
+/// `String`, so — exactly as [`deco_downgrade_prelude`] does in the other
+/// direction — the binding is parsed for its SHAPE under a private name whose
+/// `BindName` is then replaced by the qualified key.
+///
+/// **Why `Restore`'s right-hand side is a MEMBER and `Install`'s is not.**
+/// `Install` puts back a value that exists at top level the moment X3b's
+/// wrapper has run, so a top-level capture reaches it. `Restore` puts back the
+/// value the wrapper SHADOWED, which at top level no longer has a name at all
+/// — hence the in-place `xver-fwd-orig-` sibling X3b's injectors now emit next
+/// to the original. That sibling is reachable from outside because a 0.0.6
+/// `module M : sig .. end = struct .. end` SEALS NOTHING in this port:
+/// `elaborate.rs`'s `TopBinding::Module` arm accepts `val` items and ignores
+/// them (only `direct` items bind anything), and `v1::module_check`'s
+/// `static_env.seals` is built from the 0.1 `cst_v1` dependencies alone. So
+/// the extra member neither changes the module's declared surface nor trips a
+/// conformance check.
+///
+/// **Optional shapes.** A 0.0.6 export may carry `?:`-marked leading
+/// parameters, and `elaborate.rs`'s `Scope::optional_shape` follows a bare
+/// `let x = y` alias (`alias_optional_shape`). That is what these three want:
+/// every binding here is a bare `Var`/`VarWithMod` alias, so the restored
+/// original keeps the 0.0.6 shape its marker-less call sites need and the
+/// re-installed wrapper keeps the shape it declared. (The wrapper's OWN
+/// shape-less source alias is a separate, parenthesised binding —
+/// [`DecoExport::opt_src_alias`].)
+pub(crate) fn deco_upgrade_prelude(
+    exports: &[DecoExport],
+    step: UpgradeStep,
+) -> Vec<cst::TopBinding> {
+    if exports.is_empty() {
+        return Vec::new();
+    }
+    let mut src = String::new();
+    let mut shadow_names: Vec<(String, String)> = Vec::new();
+    for exp in exports {
+        let qualified = exp.qualified_key();
+        let view = exp.view_capture_name();
+        match step {
+            UpgradeStep::Capture => {
+                src.push_str(&format!("let {view} = {qualified}\n"));
+            }
+            UpgradeStep::Restore => {
+                let shadow = format!("xver-fwd-shadow-{}", exp.dash_key());
+                src.push_str(&format!("let {shadow} = {}\n", exp.orig_capture_key()));
+                shadow_names.push((shadow, qualified));
+            }
+            UpgradeStep::Install => {
+                let shadow = format!("xver-fwd-shadow-{}", exp.dash_key());
+                src.push_str(&format!("let {shadow} = {view}\n"));
+                shadow_names.push((shadow, qualified));
+            }
+        }
+    }
+    // Parsed as a bare `prelude* EOI` library file, for the same reason
+    // `deco_coercion_prelude` is — see its comment about a trailing dummy body
+    // being swallowed by the preceding application chain.
+    let file = rustyfi_syntax::parse_file(&src).unwrap_or_else(|e| {
+        panic!(
+            "xver_adapt::deco_upgrade_prelude: internally-generated X3c placement \
+             source failed to parse (a bug in xver_adapt.rs, not user input): {e}\n\
+             --- generated source ---\n{src}"
+        )
+    });
+    let mut prelude = file.prelude;
+    rebind_shadows_to_qualified(&mut prelude, &shadow_names, "deco_upgrade_prelude");
+    prelude
+}
+
+/// Replace each generated `let {shadow} = ..`'s binder with the dotted
+/// qualified key it stands for. Shared by [`deco_upgrade_prelude`] (X3c) and
+/// [`deco_downgrade_prelude`] (X4b): both need a top-level binding of a name
+/// no surface syntax can spell, and both get it the same way — parse under a
+/// private name, then swap the `BindName`, which `elaborate.rs`'s
+/// `push_named_binding` treats as an opaque `String`.
+fn rebind_shadows_to_qualified(
+    prelude: &mut [cst::TopBinding],
+    shadow_names: &[(String, String)],
+    who: &str,
+) {
+    for (shadow, qualified) in shadow_names {
+        let mut found = false;
+        for tb in prelude.iter_mut() {
+            if let cst::TopBinding::Let(tl) = tb {
+                if tl.name.name == *shadow {
+                    tl.name = cst::BindName::from(rustyfi_syntax::leaf::VarTok {
+                        name: qualified.clone(),
+                        span: tl.name.span,
+                    });
+                    found = true;
+                    break;
+                }
+            }
+        }
+        assert!(
+            found,
+            "xver_adapt::{who}: generated shadow `{shadow}` vanished from its own \
+             parse (a bug in xver_adapt.rs)"
+        );
+    }
 }
 
 // ============================================================================
@@ -2662,26 +2915,7 @@ pub(crate) fn deco_downgrade_prelude(
         )
     });
     let mut prelude = file.prelude;
-    for (shadow, qualified) in shadow_names {
-        let mut found = false;
-        for tb in prelude.iter_mut() {
-            if let cst::TopBinding::Let(tl) = tb {
-                if tl.name.name == shadow {
-                    tl.name = cst::BindName::from(rustyfi_syntax::leaf::VarTok {
-                        name: qualified.clone(),
-                        span: tl.name.span,
-                    });
-                    found = true;
-                    break;
-                }
-            }
-        }
-        assert!(
-            found,
-            "xver_adapt::deco_downgrade_prelude: generated shadow `{shadow}` \
-             vanished from its own parse (a bug in xver_adapt.rs)"
-        );
-    }
+    rebind_shadows_to_qualified(&mut prelude, &shadow_names, "deco_downgrade_prelude");
     prelude
 }
 
@@ -3423,10 +3657,19 @@ mod tests {
             cst::TopBinding::Module { decls, .. } => {
                 assert_eq!(
                     decls.len(),
-                    before + 1,
-                    "the wrapper must be appended INSIDE the module"
+                    before + 2,
+                    "the X3c capture AND the wrapper must be appended INSIDE the module"
                 );
-                // ...and it must shadow, i.e. bind the SAME name, LAST.
+                // The capture of the UNWRAPPED original comes FIRST, while the
+                // original is still the innermost binding of its own name
+                // (X3c — `DecoExport::orig_capture_name`).
+                match &*decls[decls.len() - 2].0 {
+                    cst::TopBinding::Let(tl) => {
+                        assert_eq!(tl.name.name, "xver-fwd-orig-simple")
+                    }
+                    other => panic!("expected the X3c original capture, got {other:?}"),
+                }
+                // ...and the wrapper must shadow, i.e. bind the SAME name, LAST.
                 match &*decls[decls.len() - 1].0 {
                     cst::TopBinding::Let(tl) => assert_eq!(tl.name.name, "simple"),
                     other => panic!("expected a shadowing `let simple`, got {other:?}"),
@@ -3462,16 +3705,25 @@ mod tests {
             },
         ];
         let out = deco_coercion_prelude(&exports);
-        // One synthetic `TopBinding::Let` per export, in order.
-        assert_eq!(out.len(), 2);
-        match &out[0] {
-            cst::TopBinding::Let(tl) => assert_eq!(tl.name.name, "xver-my-deco"),
-            other => panic!("expected a Let binding for the deco wrapper, got {other:?}"),
-        }
-        match &out[1] {
-            cst::TopBinding::Let(tl) => assert_eq!(tl.name.name, "xver-my-decoset"),
-            other => panic!("expected a Let binding for the deco-set wrapper, got {other:?}"),
-        }
+        // TWO synthetic `TopBinding::Let`s per export, in order: X3c's capture
+        // of the unwrapped original, then the shadowing wrapper.
+        assert_eq!(out.len(), 4);
+        let names: Vec<&str> = out
+            .iter()
+            .map(|tb| match tb {
+                cst::TopBinding::Let(tl) => tl.name.name.as_str(),
+                other => panic!("expected a Let binding, got {other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            names,
+            vec![
+                "xver-fwd-orig-xver-my-deco",
+                "xver-my-deco",
+                "xver-fwd-orig-xver-my-decoset",
+                "xver-my-decoset",
+            ]
+        );
     }
 
     #[test]

@@ -1,0 +1,8 @@
+@require: stdjabook
+@require: easytable/easytable
+
+let fmt = [EasyTable.align-left; EasyTable.align-right] in
+let rules = [EasyTable.toprule; EasyTable.bottomrule] in
+document (| title = {t}; author = {a}; show-title = false; show-toc = false |) '<
+  +p { a table follows. }
+>

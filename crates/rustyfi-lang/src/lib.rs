@@ -150,6 +150,69 @@ fn note_stage(
     }
 }
 
+/// Splice compiler-generated cross-version glue at the END of `prelude` and
+/// tag it with `stage`, the DECLARED stage of the dependency whose bindings
+/// the glue names.
+///
+/// The stage is load-bearing, not bookkeeping. `Stage::can_reference` is not
+/// symmetric: a `@stage: persistent` binding may not read a default-stage one.
+/// Every generated wrapper/shadow here re-applies a dependency's own export by
+/// name, so splicing it at the default stage silently makes it unreadable from
+/// the very consumers X3b/X3c exist to serve — the failure surfaces as
+/// `invalid occurrence of variable .. as to stage`, which reads like a user
+/// error in a document that mentions neither binding. `unite_helper_prelude`
+/// already carries an explicit `Persistent0` for the same reason; this is that
+/// argument generalized, since a fixed stage would be wrong for a
+/// `@stage: 0`/default dependency the way the default is wrong for a
+/// persistent one.
+fn splice_staged(
+    prelude: &mut Vec<rustyfi_syntax::cst::TopBinding>,
+    stages: &mut std::collections::HashMap<usize, types::Stage>,
+    stage: Option<types::Stage>,
+    bindings: Vec<rustyfi_syntax::cst::TopBinding>,
+) {
+    let start = prelude.len();
+    prelude.extend(bindings);
+    if let Some(st) = stage {
+        stages.extend((start..prelude.len()).map(|i| (i, st)));
+    }
+}
+
+/// One [`v1::xver_adapt::deco_upgrade_prelude`] call per DISTINCT declared
+/// stage among `exports` (Slice X3c), each spliced at that stage.
+///
+/// Grouping rather than one flat call is what keeps [`splice_staged`]'s
+/// argument true when a program crosses exports from dependencies that
+/// declared DIFFERENT `@stage:` headers: the glue for each is emitted in its
+/// own contiguous, correctly-tagged run. With one stage (every real program so
+/// far) it is exactly one call, in `exports` order.
+fn splice_upgrade_glue(
+    prelude: &mut Vec<rustyfi_syntax::cst::TopBinding>,
+    stages: &mut std::collections::HashMap<usize, types::Stage>,
+    exports: &[(v1::xver_adapt::DecoExport, Option<types::Stage>)],
+    step: v1::xver_adapt::UpgradeStep,
+) {
+    let mut order: Vec<Option<types::Stage>> = Vec::new();
+    for (_, st) in exports {
+        if !order.contains(st) {
+            order.push(*st);
+        }
+    }
+    for st in order {
+        let group: Vec<v1::xver_adapt::DecoExport> = exports
+            .iter()
+            .filter(|(_, s)| *s == st)
+            .map(|(e, _)| e.clone())
+            .collect();
+        splice_staged(
+            prelude,
+            stages,
+            st,
+            v1::xver_adapt::deco_upgrade_prelude(&group, step),
+        );
+    }
+}
+
 /// [`compile_document_cst_with_aux`] told which merged prelude entries came
 /// from a file that declared a non-default `@stage:`.
 ///
@@ -433,14 +496,92 @@ pub fn compile_document_v1_with_aux(
     // generation and not the other.
     let mut stages: std::collections::HashMap<usize, types::Stage> =
         std::collections::HashMap::new();
+    // Slice X3c placement: every `deco`/`deco-set`/`paren` export X3b has
+    // adapted so far, and whether the 0.0.6-shaped (UNWRAPPED) view of them is
+    // the one currently installed at this point in the merged prelude.
+    //
+    // X3b installs the 0.1-shaped view by shadowing the export's own name, and
+    // that shadow is permanent: the prelude is one flat `Ast::LetIn` chain and
+    // `Ast::VersionScope(V0_0, _)` wraps a binding's RHS, not the continuation
+    // after it. A LATER 0.0.6-AUTHORED dependency consuming the same export
+    // therefore read it at 0.1's shape and failed to typecheck — `math.satyh`'s
+    // `val paren-right : paren` against `latexcmds`' five-argument call, and
+    // the `graphics list`/`graphics` mismatch for `deco`. The view is now
+    // SCHEDULED instead, exactly as X4b schedules the reverse one: captured
+    // once under a private name while the wrapped view is in force, the
+    // ORIGINAL restored on entering a 0.0.6-authored block, the wrapped view
+    // re-installed on entering a 0.1-authored one (the entry always is, and is
+    // always last). See `xver_adapt`'s "X3c" banner for the full derivation.
+    //
+    // Both transitions are lazy, so a program whose 0.0.6 dependencies never
+    // consume each other's crossed exports emits NOTHING extra.
+    // `deco_view_captured` counts how many of `deco_exports` already have a
+    // private `Capture` of their WRAPPED view in the prelude — the schedule
+    // grows as later dependencies cross more exports, and an `Install` may
+    // only name a view that has been captured.
+    //
+    // Each export is carried with the DECLARED STAGE of the dependency that
+    // exported it, because the glue NAMES that dependency's own binding and
+    // `Stage::can_reference` is not symmetric: a `@stage: persistent`
+    // dependency may not read a default-stage binding, so a `Restore` of
+    // `M.frame` spliced at the default stage would make the very consumer
+    // this slice exists for fail with a STAGE error instead of a type one.
+    // Same reasoning as `unite_helper_prelude`'s explicit `Persistent0`, one
+    // step further: the right stage is the dependency's, not a fixed one.
+    let mut deco_exports: Vec<(v1::xver_adapt::DecoExport, Option<types::Stage>)> = Vec::new();
+    let mut v006_view_installed = false;
+    let mut deco_view_captured: usize = 0;
     for dep in deps {
         match &dep.cst {
             rustyfi_loader::LoadedCst::V0_1(cst) => {
+                // Transition back INTO 0.1-authored code: this dependency
+                // reads any crossed export at the adapted 0.1 shape, which is
+                // what X3b's wrapper is for.
+                if v006_view_installed {
+                    splice_upgrade_glue(
+                        &mut prelude,
+                        &mut stages,
+                        &deco_exports[..deco_view_captured],
+                        v1::xver_adapt::UpgradeStep::Install,
+                    );
+                    v006_view_installed = false;
+                }
                 v1::surface::build_file_surface(cst, &mut surfaces);
                 prelude.extend(v1::lower::lower_file_v1_with_surfaces(cst, &surfaces)?);
                 dep_csts.push(cst);
             }
             rustyfi_loader::LoadedCst::V0_0(cst) => {
+                // Slice X3c — transition INTO 0.0.6-authored code: this
+                // dependency means 0.0.6's shape by every name it writes, so
+                // any export X3b has already adapted must read as its
+                // UNWRAPPED original here. Deliberately emitted BEFORE `start`
+                // is taken below, so this 0.1-authored glue never lands in
+                // `v006_indices`/`stages`.
+                //
+                // The `Capture` rides along with the FIRST such transition
+                // rather than being emitted per-dependency: this is the last
+                // position at which naming the export's own key still yields
+                // X3b's wrapped view, and emitting it lazily is what keeps a
+                // program with no 0.0.6-to-0.0.6 consumption byte-identical to
+                // the pre-X3c splice.
+                if !v006_view_installed || deco_view_captured < deco_exports.len() {
+                    if deco_view_captured < deco_exports.len() {
+                        splice_upgrade_glue(
+                            &mut prelude,
+                            &mut stages,
+                            &deco_exports[deco_view_captured..],
+                            v1::xver_adapt::UpgradeStep::Capture,
+                        );
+                        deco_view_captured = deco_exports.len();
+                    }
+                    splice_upgrade_glue(
+                        &mut prelude,
+                        &mut stages,
+                        &deco_exports,
+                        v1::xver_adapt::UpgradeStep::Restore,
+                    );
+                    v006_view_installed = !deco_exports.is_empty();
+                }
                 // X2a: the value half of X1's forked-name guard
                 // (`free.values` against `forked_prim_names`) is REMOVED —
                 // its whole reason to exist (a single `base_env_with_version
@@ -687,10 +828,43 @@ pub fn compile_document_v1_with_aux(
                     // (`inject_module_deco_wrappers`), where the same
                     // sequential shadowing applies one scope deeper.
                     v1::xver_adapt::inject_module_deco_wrappers(&mut prelude[start..], &exports);
-                    prelude.extend(v1::xver_adapt::deco_coercion_prelude(&exports));
+                    // At the DEPENDENCY's own stage, not the default one: this
+                    // top-level wrapper re-applies the dependency's export by
+                    // name, and a `@stage: persistent` dependency's binding is
+                    // unreadable from a default-stage one (`splice_staged`).
+                    // The in-module wrappers above need no such care — they
+                    // are spliced INSIDE `prelude[start..]`, already covered by
+                    // this dependency's own `note_stage` range.
+                    let dep_stage =
+                        declared_stage(cst).filter(|s| *s != types::Stage::default());
+                    splice_staged(
+                        &mut prelude,
+                        &mut stages,
+                        dep_stage,
+                        v1::xver_adapt::deco_coercion_prelude(&exports),
+                    );
+                    // Slice X3c: from here on this export has TWO views in the
+                    // program — the wrapper just spliced, and the unwrapped
+                    // original the two injectors above kept reachable under
+                    // `xver-fwd-orig-`. Record it so the transitions can pick
+                    // the right one for whatever block comes next.
+                    deco_exports.extend(exports.into_iter().map(|e| (e, dep_stage)));
                 }
             }
         }
+    }
+    // The last (and, for every single-generation dependency set, the ONLY)
+    // transition back into 0.1-authored code: the entry itself, which is
+    // always `V0_1` here and reads every crossed export at X3b's adapted
+    // shape. Emitted only if some intervening 0.0.6 dependency restored the
+    // originals; with no such dependency the whole schedule stays silent.
+    if v006_view_installed {
+        splice_upgrade_glue(
+            &mut prelude,
+            &mut stages,
+            &deco_exports[..deco_view_captured],
+            v1::xver_adapt::UpgradeStep::Install,
+        );
     }
     let entry_cst = as_v01(entry);
     let body = v1::lower::lower_document_v1(entry_cst)?;

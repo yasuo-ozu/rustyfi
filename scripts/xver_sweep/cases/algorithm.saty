@@ -1,0 +1,9 @@
+@require: algorithm/algorithm
+@import: h
+
+let open H in
+document (| title = `algorithm` |) '<
+  +algorithmic<
+    +p { a step }
+  >
+>

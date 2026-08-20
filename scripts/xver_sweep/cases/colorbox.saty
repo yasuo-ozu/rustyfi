@@ -1,0 +1,10 @@
+@require: colorbox/colorbox
+@import: h
+
+let opts = [Colorbox.colback Color.white, Colorbox.arc 3pt] in
+let open H in
+document (| title = `colorbox` |) '<
+  +Colorbox.colorbox(opts)<
+    +p { inside a 0.0.6 colorbox. }
+  >
+>

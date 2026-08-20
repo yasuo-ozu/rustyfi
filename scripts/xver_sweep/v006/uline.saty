@@ -1,0 +1,7 @@
+@require: stdjabook
+@require: uline/uline
+
+let ds = Uline.make-uline 0.5pt Color.black in
+document (| title = {t}; author = {a}; show-title = false; show-toc = false |) '<
+  +p { underlined via a 0.0.6 deco-set: \uline{hello}. }
+>

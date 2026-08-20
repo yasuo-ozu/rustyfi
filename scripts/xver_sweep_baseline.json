@@ -1,0 +1,90 @@
+{
+  "algorithm": {
+    "control": true,
+    "cross": false
+  },
+  "arrows": {
+    "control": false,
+    "cross": false
+  },
+  "azmath": {
+    "control": false,
+    "cross": false
+  },
+  "base": {
+    "control": true,
+    "cross": true
+  },
+  "chemfml": {
+    "control": true,
+    "cross": true
+  },
+  "codeprinter": {
+    "control": false,
+    "cross": false
+  },
+  "colorbox": {
+    "control": true,
+    "cross": true
+  },
+  "derive": {
+    "control": true,
+    "cross": true
+  },
+  "easytable": {
+    "control": true,
+    "cross": true
+  },
+  "enumitem": {
+    "control": true,
+    "cross": true
+  },
+  "figbox": {
+    "control": true,
+    "cross": true
+  },
+  "latexcmds": {
+    "control": true,
+    "cross": true
+  },
+  "lipsum": {
+    "control": true,
+    "cross": true
+  },
+  "mathpkg": {
+    "control": true,
+    "cross": true
+  },
+  "matrixcd": {
+    "control": true,
+    "cross": true
+  },
+  "pagenumber": {
+    "control": true,
+    "cross": true
+  },
+  "quotation": {
+    "control": false,
+    "cross": false
+  },
+  "railway": {
+    "control": true,
+    "cross": true
+  },
+  "ruby": {
+    "control": false,
+    "cross": false
+  },
+  "siunitx": {
+    "control": true,
+    "cross": true
+  },
+  "texlogo": {
+    "control": true,
+    "cross": true
+  },
+  "uline": {
+    "control": true,
+    "cross": true
+  }
+}

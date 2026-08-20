@@ -1,0 +1,9 @@
+@require: easytable/easytable
+@import: h
+
+let fmt = [EasyTable.align-left, EasyTable.align-right] in
+let rules = [EasyTable.toprule, EasyTable.bottomrule] in
+let open H in
+document (| title = `easytable` |) '<
+  +p { a table follows. }
+>

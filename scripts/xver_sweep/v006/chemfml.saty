@@ -1,0 +1,6 @@
+@require: stdjabook
+@require: chemfml/chemfml
+
+document (| title = {t}; author = {a}; show-title = false; show-toc = false |) '<
+  +p { water is \chem(`H2O`);. }
+>

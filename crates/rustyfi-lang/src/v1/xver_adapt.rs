@@ -275,7 +275,7 @@ fn check_mono_type(
             }
             Ok(())
         }
-        MonoType::List(t) | MonoType::Ref(t) => check_mono_type(t, from, to),
+        MonoType::List(t) | MonoType::Ref(t) | MonoType::Code(t) => check_mono_type(t, from, to),
         MonoType::Record(row) => check_row(row, from, to),
         MonoType::Variant(name, args) => {
             reject_if_forked(name, from, to)?;

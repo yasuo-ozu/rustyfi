@@ -31,7 +31,7 @@ use crate::prim_types::{
 use crate::symbol::{Symbol, SymbolStore};
 use crate::types::{
     self, generalize, instantiate, resolve, resolve_row, BaseType, CmdArgType, Kind, MonoType,
-    PolyType, Row, TypeContext,
+    PolyType, Row, Stage, TypeContext,
 };
 use crate::unify::{unify, UnifyError};
 use rustyfi_syntax::cst::ast::{CmdTypeKind, TypeApp, TypeAtom, TypeExpr, TypeProd};
@@ -797,7 +797,9 @@ fn mono_alpha_eq(
                     .zip(tb.iter())
                     .all(|(x, y)| mono_alpha_eq(x, y, vmap, vmap_rev, rmap, rmap_rev))
         }
-        (MonoType::List(ta), MonoType::List(tb)) | (MonoType::Ref(ta), MonoType::Ref(tb)) => {
+        (MonoType::List(ta), MonoType::List(tb))
+        | (MonoType::Ref(ta), MonoType::Ref(tb))
+        | (MonoType::Code(ta), MonoType::Code(tb)) => {
             mono_alpha_eq(&ta, &tb, vmap, vmap_rev, rmap, rmap_rev)
         }
         (MonoType::Record(ra), MonoType::Record(rb)) => {
@@ -1526,7 +1528,7 @@ fn synonym_refs(ty: &MonoType, synonyms: &HashMap<String, SynonymDecl>, out: &mu
             synonym_refs(cod, synonyms, out);
         }
         MonoType::Product(ts) => ts.iter().for_each(|t| synonym_refs(t, synonyms, out)),
-        MonoType::List(t) | MonoType::Ref(t) => synonym_refs(t, synonyms, out),
+        MonoType::List(t) | MonoType::Ref(t) | MonoType::Code(t) => synonym_refs(t, synonyms, out),
         MonoType::Record(row) => synonym_refs_row(row, synonyms, out),
         MonoType::Variant(name, args) => {
             if synonyms.contains_key(name) {
@@ -1611,6 +1613,7 @@ fn expand_synonyms(
         )),
         MonoType::List(t) => Ok(MonoType::List(Box::new(expand_synonyms(t, synonyms)?))),
         MonoType::Ref(t) => Ok(MonoType::Ref(Box::new(expand_synonyms(t, synonyms)?))),
+        MonoType::Code(t) => Ok(MonoType::Code(Box::new(expand_synonyms(t, synonyms)?))),
         MonoType::Record(row) => Ok(MonoType::Record(expand_synonyms_row(row, synonyms)?)),
         MonoType::Variant(name, args) => {
             let args: Vec<MonoType> = args
@@ -1726,6 +1729,12 @@ pub(crate) struct Checker<'s> {
     /// before the bare fallback — so two modules' same-named constructors
     /// (`Term.Paren` vs `Type.Paren`) no longer collide. See [`Ast::ModuleScope`].
     ctor_scope: Vec<String>,
+    /// The stage this expression is being read at. Starts at whatever the
+    /// file declared (`@stage:`, default [`Stage::Stage1`]) and is shifted by
+    /// `&`/`~`: a quote reads its body one stage LATER, a splice one stage
+    /// EARLIER. Only `Next`/`Prev` consult it, so every unstaged program
+    /// checks exactly as before.
+    stage: Stage,
 }
 
 /// One elaborated top-level-shaped binding, viewed by reference — the
@@ -1776,6 +1785,9 @@ impl<'s> Checker<'s> {
             warnings: Vec::new(),
             version: RustyfiVersion::V0_0,
             ctor_scope: Vec::new(),
+            // A document is stage 1; a library overrides this from its
+            // `@stage:` header before checking begins.
+            stage: Stage::default(),
         }
     }
 
@@ -2548,8 +2560,60 @@ impl<'s> Checker<'s> {
         Ok(MonoType::Func(Box::new(row), Box::new(tp), Box::new(tb)))
     }
 
+    /// `infer`, reading `ast` at a different stage and restoring afterwards --
+    /// the type-side twin of the `ctor_scope` push/pop below it.
+    fn infer_at(
+        &mut self,
+        stage: Stage,
+        env: &TypeEnv<'s>,
+        ast: &Ast<'s>,
+    ) -> Result<MonoType, TypeError> {
+        let saved = std::mem::replace(&mut self.stage, stage);
+        let result = self.infer(env, ast);
+        self.stage = saved;
+        result
+    }
+
     fn infer(&mut self, env: &TypeEnv<'s>, ast: &Ast<'s>) -> Result<MonoType, TypeError> {
         match ast {
+            // A binding spliced in from a file whose `@stage:` was not the
+            // default: read it at that stage, so its quotes are legal.
+            Ast::StageScope(stage, body) => self.infer_at(*stage, env, body),
+            // `&e` — quote. Legal only at stage 0; its body is read one
+            // stage later, and the result is that body's type wrapped in
+            // `code` (upstream `typechecker.ml`'s `UTNext` arm).
+            Ast::Next(inner) => {
+                if self.stage != Stage::Stage0 {
+                    return Err(TypeError::simple(
+                        None,
+                        format!(
+                            "`&` (next-stage quote) is only valid at stage 0, but this is {}",
+                            self.stage.as_str()
+                        ),
+                    ));
+                }
+                let ty = self.infer_at(Stage::Stage1, env, inner)?;
+                Ok(MonoType::Code(Box::new(ty)))
+            }
+            // `~e` — splice. Legal only at stage 1; its body is read one stage
+            // earlier and must produce `code b`, which this expression then
+            // stands for (upstream's `UTPrev` arm).
+            Ast::Prev(inner) => {
+                if self.stage != Stage::Stage1 {
+                    return Err(TypeError::simple(
+                        None,
+                        format!(
+                            "`~` (previous-stage splice) is only valid at stage 1, but this is {}",
+                            self.stage.as_str()
+                        ),
+                    ));
+                }
+                let ty = self.infer_at(Stage::Stage0, env, inner)?;
+                let beta = MonoType::Var(self.ctx.fresh_var());
+                unify(&ty, &MonoType::Code(Box::new(beta.clone())))
+                    .map_err(|e| TypeError::from_unify(None, "a `~` splice", e))?;
+                Ok(beta)
+            }
             Ast::Unit => Ok(t_unit()),
             Ast::Bool(_) => Ok(t_bool()),
             Ast::Int(_) => Ok(t_int()),

@@ -39,11 +39,16 @@
 //! module's doc comment for the placeholder set and the seal rule. Real
 //! signature checking is Sub-slice 2d (2e for `include`, 2f for functors).
 //!
-//! **Deliberately NOT built yet** (post-2c deferrals): staged `val ~x`/`val
-//! persistent ~x` and macro binds/decls (phase 5, no `KwPersistent` token
-//! yet); `?(l = e)` optional parameter bundles and `( pat : typ )` ascribed
-//! params; type-level records/row vars; row quantifiers (`rowquant`, no
-//! `ROWVAR` token). `val math` (the math-text/math-boxes split) DOES parse
+//! **Deliberately NOT built yet** (post-2c deferrals): macro binds/decls
+//! (phase 5); `?(l = e)` optional parameter bundles and `( pat : typ )`
+//! ascribed params; type-level records/row vars; row quantifiers
+//! (`rowquant`, no `ROWVAR` token). Staging DOES parse now — the operand
+//! prefixes `&e`/`~e` ([`ast::StagePrefix`], `parser_v1.mly:870-873`) and the
+//! per-binding qualifier of `val ~x`/`val persistent ~x` ([`BindStageV1`],
+//! `:417-421` and the decl form `:600-603`), with `persistent` a 0.1-only
+//! keyword token.
+//!
+//! `val math` (the math-text/math-boxes split) DOES parse
 //! now — see [`Bind::ValueMath`] (math-split spec, L6). Sub-slice 2d-2 lands
 //! the other two post-2c grammar gaps: `inline […]`/`block […]` command
 //! types (`parser_v1.mly:730-735`; `math […]` stays deferred to the
@@ -259,10 +264,21 @@ pub use ast::{AscribedInnerV1, OptParamEntryV1, OptParamsV1, Param, ParamBody};
 /// ordered-choice-safety argument).
 #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
 pub enum Bind {
-    /// `VAL bind_value_nonrec` (`parser_v1.mly:416,442,459-465`): `val
-    /// <name> <param>* = <expr>`.
+    /// `VAL PERSISTENT? EXACT_TILDE? bind_value_nonrec`
+    /// (`parser_v1.mly:416-421,442,459-465`): `val <stage>? <name> <param>*
+    /// = <expr>`, where `<stage>` is `~` (stage 0) or `persistent ~` (the
+    /// persistent stage) and its absence means stage 1, the document stage.
+    ///
+    /// The prefix is an `Option<BindStageV1>` tried before `name`; on an
+    /// unstaged `val x = …` it fails at the first token, collapses to `None`
+    /// and steals nothing, so every existing fixture parses unchanged. It
+    /// also keeps this arm ordered-choice-safe against the keyword-headed
+    /// `Value*` arms below: `val ~rec …` still fails here (at `name`, which
+    /// cannot match the `rec` keyword) and falls through, exactly as `val
+    /// rec …` does.
     Value {
         kw: KwVal,
+        stage: Option<BindStageV1>,
         name: BindName,
         params: Vec<Param>,
         eq: DefEqTok,
@@ -372,6 +388,20 @@ pub enum Bind {
     /// `INCLUDE modexpr` (`:438-439`) — a bind-include includes a MODULE
     /// (contrast [`ast::Decl::Include`], which includes a signature).
     Include { kw: KwInclude, body: ModExprErasedV1 },
+}
+
+/// The stage qualifier of a `val` bind or `val` decl: `~` alone is stage 0,
+/// `persistent ~` is the persistent stage (`parser_v1.mly:417-421` for binds,
+/// `:600-603` for decls). No prefix at all is stage 1 — the document stage,
+/// where an ordinary `val` lives — which is why the field holding this is an
+/// `Option`.
+///
+/// This is 0.1's replacement for 0.0.6's whole-file `@stage:` header: the
+/// same three stages, chosen per binding instead of per file.
+#[derive(Parse, Unparse, Debug, Clone, PartialEq)]
+pub struct BindStageV1 {
+    pub persistent: Option<KwPersistent>,
+    pub tilde: ExactTildeTok,
 }
 
 /// `scripts_param` (`parser_v1.mly:532-534`): `WITH sub=LOWER sup=LOWER` —
@@ -899,10 +929,35 @@ pub mod ast {
     #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
     pub struct AppExpr {
         pub minus: Option<ExactMinusTok>,
+        pub stage: Option<StagePrefix>,
         pub excl: Option<UnopExclamTok>,
         pub head: Atomic,
         pub head_accesses: Vec<AccessSeg>,
         pub args: Vec<AppArg>,
+    }
+
+    /// A staging prefix on a 0.1 operand: `&e` builds code for the next
+    /// stage, `~e` splices the result of a previous-stage computation
+    /// (`expr_un`, `parser_v1.mly:870-873`, `UTNext`/`UTPrev` — the same two
+    /// productions 0.0.6 has, unchanged).
+    ///
+    /// A fork of [`crate::cst::ast::StagePrefix`], not a re-export: it lives
+    /// inside 0.0.6's `#[recurse]` module, and this module's whole discipline
+    /// is that touching `cst_v1.rs` never touches `cst.rs` (module doc
+    /// comment). The two are token-identical, so `rustyfi-lang`'s
+    /// `v1::lower` maps one to the other by moving tokens.
+    ///
+    /// Upstream puts these on `expr_un`, one level BELOW `expr_app`, so
+    /// `&f x` is `(&f) x` and never `&(f x)`. This grammar flattens
+    /// `expr_un`/`expr_app` into one node, so the prefix is an optional field
+    /// on the *head* ([`AppExpr`]) and on each *argument* ([`AppArg`])
+    /// independently — which reproduces exactly that reading.
+    #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
+    pub enum StagePrefix {
+        /// `&e` — quote: the value is `e`'s code, to run one stage later.
+        Next(ExactAmpTok),
+        /// `~e` — splice: run `e` now and drop its code in here.
+        Prev(ExactTildeTok),
     }
 
     /// One `#label` field-access segment (`expr_bot ACCESS`,
@@ -934,6 +989,7 @@ pub mod ast {
         /// argument is a bare constructor.
         BundledCtor { opts: OptArgsV1, ctor: CtorTok },
         Atom {
+            stage: Option<StagePrefix>,
             excl: Option<UnopExclamTok>,
             atom: Atomic,
             accesses: Vec<AccessSeg>,
@@ -1780,16 +1836,19 @@ pub mod ast {
     /// roots: `ty: TypeExpr` (the same satellite→root shape as
     /// `RecClauseV1.params: Vec<PatBot>`) and `sig_: Box<SigExpr>`.
     ///
-    /// Deferred arms (parse errors): staged `val ~x`/`val persistent ~x`
-    /// (`:600-603`, phase 5 — `persistent` has no keyword token yet), macro
-    /// decls `val \m : macro-type` (`:608-611`, phase 5), row quantifiers
-    /// (`rowquant`, `:631-633` — no `ROWVAR` token until phase 4).
+    /// Deferred arms (parse errors): macro decls `val \m : macro-type`
+    /// (`:608-611`, phase 5), row quantifiers (`rowquant`, `:631-633` — no
+    /// `ROWVAR` token until phase 4).
     #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
     pub enum Decl {
-        /// `VAL bound_identifier quant COLON typ` (`:598-599`; `quant`'s
-        /// tyvar list `:623-630` — `val map 'a 'b : ('a -> 'b) -> …`).
+        /// `VAL PERSISTENT? EXACT_TILDE? bound_identifier quant COLON typ`
+        /// (`:598-603`; `quant`'s tyvar list `:623-630` — `val map 'a 'b :
+        /// ('a -> 'b) -> …`). The stage prefix is the decl-side twin of
+        /// [`super::Bind::Value`]'s own `stage` field, with the same
+        /// ordered-choice argument (see that arm's doc comment).
         Val {
             kw: KwVal,
+            stage: Option<super::BindStageV1>,
             name: super::BindName,
             quant: Vec<TypeVarTok>,
             colon: ColonTok,

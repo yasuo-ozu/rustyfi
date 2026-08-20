@@ -2701,18 +2701,29 @@ fn decl_eq(a: &ast_v1::Decl, b: &ast_v1::Decl) -> bool {
     match (a, b) {
         (
             ast_v1::Decl::Val {
+                stage: s1,
                 name: n1,
                 quant: q1,
                 ty: t1,
                 ..
             },
             ast_v1::Decl::Val {
+                stage: s2,
                 name: n2,
                 quant: q2,
                 ty: t2,
                 ..
             },
-        ) => n1.name == n2.name && tyvar_list_eq(q1, q2) && type_expr_eq(t1, t2),
+        ) => {
+            // `val ~x : t` and `val x : t` declare DIFFERENT members (one is
+            // written at stage 0, the other at the document stage), so a
+            // comparator that ignored the stage would call two unequal
+            // signatures equal.
+            decl_stage_eq(s1.as_ref(), s2.as_ref())
+                && n1.name == n2.name
+                && tyvar_list_eq(q1, q2)
+                && type_expr_eq(t1, t2)
+        }
         (
             ast_v1::Decl::ValHorzCmd {
                 cmd: c1,
@@ -2771,6 +2782,18 @@ fn decl_eq(a: &ast_v1::Decl, b: &ast_v1::Decl) -> bool {
         (ast_v1::Decl::Include { sig_: s1, .. }, ast_v1::Decl::Include { sig_: s2, .. }) => {
             sig_expr_eq(s1, s2)
         }
+        _ => false,
+    }
+}
+
+/// Do two `val` decls declare the same stage? Absent is stage 1, `~` is
+/// stage 0, `persistent ~` is the persistent stage
+/// (`parser_v1.mly:600-603`) — three distinct values out of an
+/// `Option<BindStageV1>`, which is why this is not a plain `==`.
+fn decl_stage_eq(a: Option<&cst_v1::BindStageV1>, b: Option<&cst_v1::BindStageV1>) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(x), Some(y)) => x.persistent.is_some() == y.persistent.is_some(),
         _ => false,
     }
 }

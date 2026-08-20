@@ -133,6 +133,12 @@ pub enum Token {
     /// survives only as the surface name of `BaseType::MathText`,
     /// `math-split` spec §1.1).
     Math,
+    /// `persistent` — SATySFi 0.1-only keyword, the stage qualifier of a
+    /// `val persistent ~x = e` binding (`parser_v1.mly:420-421`, decl form
+    /// `:602-603`; reserved at `:241`, lexed at `lexer_v1.mll:345`). A plain
+    /// identifier under 0.0.6, which spells the same idea per FILE with a
+    /// `@stage:` header rather than per binding.
+    Persistent,
 
     // ---- grouping delimiters ----
     LParen,
@@ -297,6 +303,7 @@ impl std::fmt::Display for Token {
             Use => write!(f, "use"),
             Package => write!(f, "package"),
             Math => write!(f, "math"),
+            Persistent => write!(f, "persistent"),
             LParen => write!(f, "("),
             RParen => write!(f, ")"),
             BRecord => write!(f, "(|"),
@@ -426,6 +433,7 @@ token_leaves! {
     (Use => KwUse, "'use'");
     (Package => KwPackage, "'package'");
     (Math => KwMath, "'math'");
+    (Persistent => KwPersistent, "'persistent'");
     (LParen => LParenTok, "'('");
     (RParen => RParenTok, "')'");
     (BRecord => BRecordTok, "'(|'");
@@ -451,6 +459,8 @@ token_leaves! {
     (ExactMinus => ExactMinusTok, "'-'");
     (DefEq => DefEqTok, "'='");
     (ExactTimes => ExactTimesTok, "'*'");
+    (ExactAmp => ExactAmpTok, "'&'");
+    (ExactTilde => ExactTildeTok, "'~'");
     (UnopExclam(String) => UnopExclamTok, "a '!' operator", field = text);
     (OptionalType => OptionalTypeTok, "'?'");
     (OptionalArrow => OptionalArrowTok, "'?->'");

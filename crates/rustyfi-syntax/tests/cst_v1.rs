@@ -1155,14 +1155,9 @@ fn bare_colon_module_annotation_is_a_parse_error() {
     assert!(parse_file_v1("module M : sig end = struct val x = 1 end").is_err());
 }
 
-/// §5.1 item 12 (phase 5 — staged decls have no `Decl` arm yet).
-#[test]
-fn staged_val_decl_is_a_parse_error() {
-    assert!(parse_file_v1(
-        "module M = struct\nsignature S = sig val ~x : int end\nend"
-    )
-    .is_err());
-}
+// (§5.1 item 12, "a staged `val` decl is a parse error", is retired: staged
+// decls now have their own `Decl::Val.stage` field — see
+// `signature_staged_value_decls` below.)
 
 /// §5.1 item 13 (phase 5 — macro decls lex as `HorzMacro`/`VertMacro`, not
 /// `HorzCmdTok`/`VertCmdTok`, so no `Decl` arm accepts them).
@@ -1550,4 +1545,91 @@ fn math_command_type_head_without_bracket_is_still_a_parse_error() {
          end"
     )
     .is_err());
+}
+
+// ---- staging: `&`/`~` operands and per-binding stages ----------------------
+
+/// `&e`/`~e` (`expr_un`, `parser_v1.mly:870-873`) are the same two
+/// productions 0.0.6 has; 0.1's grammar had no slot for either token, so each
+/// of these was a parse error before. The round-trip is the point: the prefix
+/// has to survive unparsing as a distinct token, not be swallowed into the
+/// atom.
+#[test]
+fn document_staging_operand_prefixes() {
+    assert_roundtrip_v1("&(1 + 1)");
+    assert_roundtrip_v1("~(&(1 + 1))");
+    // On an ARGUMENT, not just the head -- upstream's prefixes sit on
+    // `expr_un`, one level below `expr_app`, so `f ~(&1)` is `f` applied to a
+    // spliced quote and never `~(f (&1))`.
+    assert_roundtrip_v1("f ~(&1) 2");
+}
+
+/// `val ~x = e` and `val persistent ~x = e` (`parser_v1.mly:417-421`) — 0.1's
+/// per-binding replacement for 0.0.6's whole-file `@stage:` header.
+#[test]
+fn library_staged_value_binds() {
+    let src = "module M = struct\n\
+               val a = 1\n\
+               val ~b = 2\n\
+               val persistent ~c = 3\n\
+               end";
+    assert_roundtrip_v1(src);
+
+    let file = parse_file_v1(src).unwrap();
+    let cst_v1::FileV1::Library { binds, .. } = file else {
+        panic!("expected a library file");
+    };
+    assert_eq!(binds.len(), 3);
+    let stage_of = |i: usize| match &binds[i] {
+        cst_v1::Bind::Value { stage, .. } => stage.as_ref().map(|s| s.persistent.is_some()),
+        other => panic!("expected binds[{i}] to be a value bind, got {other:?}"),
+    };
+    assert_eq!(stage_of(0), None, "no prefix at all is stage 1");
+    assert_eq!(stage_of(1), Some(false), "a bare `~` is stage 0");
+    assert_eq!(
+        stage_of(2),
+        Some(true),
+        "`persistent ~` is the persistent stage"
+    );
+}
+
+/// The decl twin, inside `sig … end` (`parser_v1.mly:600-603`).
+#[test]
+fn signature_staged_value_decls() {
+    let src = "module M = struct\n\
+               signature S = sig\n\
+               val a : int\n\
+               val ~b : int\n\
+               val persistent ~c : int\n\
+               end\n\
+               end";
+    assert_roundtrip_v1(src);
+
+    let file = parse_file_v1(src).unwrap();
+    let cst_v1::FileV1::Library { binds, .. } = file else {
+        panic!("expected a library file");
+    };
+    let cst_v1::Bind::Signature { sig_, .. } = &binds[0] else {
+        panic!("expected a signature bind");
+    };
+    let cst_v1::ast::SigExpr::Bot(cst_v1::ast::SigBotV1::Sig { decls, .. }) = &*sig_.0 else {
+        panic!("expected a `sig … end` body");
+    };
+    assert_eq!(decls.len(), 3);
+    let stage_of = |i: usize| match &*decls[i].0 {
+        cst_v1::ast::Decl::Val { stage, .. } => stage.as_ref().map(|s| s.persistent.is_some()),
+        other => panic!("expected decls[{i}] to be a val decl, got {other:?}"),
+    };
+    assert_eq!(stage_of(0), None);
+    assert_eq!(stage_of(1), Some(false));
+    assert_eq!(stage_of(2), Some(true));
+}
+
+/// `persistent` is version-gated (`lexer.rs`'s V0_1-only keyword table): a
+/// 0.0.6 program may still use the word as an ordinary identifier, because
+/// 0.0.6 has no per-binding stage syntax for it to introduce.
+#[test]
+fn persistent_is_a_plain_identifier_under_v0_0() {
+    rustyfi_syntax::cst::parse_file("let persistent = 1 in persistent")
+        .expect("`persistent` must stay an identifier under 0.0.6");
 }

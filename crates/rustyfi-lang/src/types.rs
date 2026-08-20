@@ -351,6 +351,48 @@ pub(crate) fn new_row_var(level: u32) -> RowVarRef {
 // Monomorphic types
 // ============================================================================
 
+/// Which stage an expression is being read at (upstream's `stage`,
+/// `types.cppo.ml:400-403`).
+///
+/// SATySFi is a two-stage language: a document is typeset at **stage 1**, and
+/// **stage 0** is the earlier stage that can compute *code* to be run at stage
+/// 1. `&e` quotes (stage 0 -> a `code` value), `~e` splices (stage 1 -> runs
+/// `e` at stage 0 and drops its code in). **Persistent** bindings are the only
+/// ones nameable from both.
+///
+/// A 0.0.6 file declares its stage in its `@stage:` header and every binding in
+/// it takes that stage; a document is always stage 1.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Stage {
+    /// `@stage: persistent` — usable from either stage.
+    Persistent0,
+    /// `@stage: 0` — the program stage, run before typesetting.
+    Stage0,
+    /// `@stage: 1` — the document stage, and what a document must be.
+    #[default]
+    Stage1,
+}
+
+impl Stage {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Stage::Persistent0 => "persistent stage",
+            Stage::Stage0 => "stage 0",
+            Stage::Stage1 => "stage 1",
+        }
+    }
+
+    /// Parse a `@stage:` header's value.
+    pub fn parse(s: &str) -> Option<Stage> {
+        match s.trim() {
+            "persistent" => Some(Stage::Persistent0),
+            "0" => Some(Stage::Stage0),
+            "1" => Some(Stage::Stage1),
+            _ => None,
+        }
+    }
+}
+
 /// A monomorphic type. Mirrors v0.0.6's `mono_type` (the `type_main`
 /// variant instantiated at `mono_type_variable_info ref`), minus
 /// `SynonymType`/`CodeType` (no type synonyms or multi-stage code in this
@@ -393,6 +435,11 @@ pub enum MonoType {
     /// an adequate (and much simpler) stand-in for v0.0.6's globally-fresh
     /// `TypeID.t`.
     Variant(String, Vec<MonoType>),
+    /// `code ty` — the type of a quoted (`&e`) fragment awaiting the next
+    /// stage. Upstream's `CodeType` (`types.cppo.ml:324`). Structurally it
+    /// behaves exactly like [`MonoType::Ref`]: one covariant argument,
+    /// unified pointwise.
+    Code(Box<MonoType>),
     /// `[...] inline-cmd` (v0.0.6: `HorzCommandType`).
     InlineCmd(Vec<CmdArgType>),
     /// `[...] block-cmd` (v0.0.6: `VertCommandType`).
@@ -694,7 +741,9 @@ fn collect_generalizable(
                 collect_generalizable(level, t, vars, row_vars);
             }
         }
-        MonoType::List(t) | MonoType::Ref(t) => collect_generalizable(level, &t, vars, row_vars),
+        MonoType::List(t) | MonoType::Ref(t) | MonoType::Code(t) => {
+            collect_generalizable(level, &t, vars, row_vars)
+        }
         MonoType::Record(row) => collect_generalizable_row(level, &row, vars, row_vars),
         MonoType::Variant(_, args) => {
             for t in args {
@@ -781,6 +830,7 @@ pub(crate) fn substitute(
         }
         MonoType::List(t) => MonoType::List(Box::new(substitute(&t, var_map, row_map))),
         MonoType::Ref(t) => MonoType::Ref(Box::new(substitute(&t, var_map, row_map))),
+        MonoType::Code(t) => MonoType::Code(Box::new(substitute(&t, var_map, row_map))),
         MonoType::Record(row) => MonoType::Record(substitute_row(&row, var_map, row_map)),
         MonoType::Variant(name, args) => MonoType::Variant(
             name.clone(),
@@ -892,6 +942,7 @@ fn is_atomic(ty: &MonoType) -> bool {
         | MonoType::Product(_)
         | MonoType::List(_)
         | MonoType::Ref(_)
+        | MonoType::Code(_)
         | MonoType::InlineCmd(_)
         | MonoType::BlockCmd(_)
         | MonoType::MathCmd(_) => false,
@@ -950,6 +1001,7 @@ fn fmt_mono(ty: &MonoType, f: &mut fmt::Formatter<'_>, namer: &mut VarNamer) -> 
         }
         MonoType::List(t) => fmt_postfix(t, "list", f, namer),
         MonoType::Ref(t) => fmt_postfix(t, "ref", f, namer),
+        MonoType::Code(t) => fmt_postfix(t, "code", f, namer),
         MonoType::Record(row) => fmt_row(row, f, namer),
         MonoType::Variant(name, args) => match args.as_slice() {
             [] => write!(f, "{name}"),

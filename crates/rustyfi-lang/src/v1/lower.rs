@@ -566,6 +566,7 @@ fn lower_bind_v1<'s>(
     match b {
         cst_v1::Bind::Value {
             kw,
+            stage,
             name,
             params,
             eq,
@@ -574,6 +575,12 @@ fn lower_bind_v1<'s>(
             let (ps, value) = lower_param_units(params, lower_expr(body)?)?;
             Ok(vec![cst::TopBinding::Let(cst::TopLet {
                 let_kw: KwLet(kw.0),
+                // `val ~x` / `val persistent ~x` — the stage travels ON the
+                // binding, which is what lets it survive being nested inside
+                // `module … = struct … end` (`elaborate.rs`'s index-keyed
+                // `ItemOrigins::stages` cannot name a binding in there, and
+                // every 0.1 `val` is in there).
+                stage: stage.as_ref().map(lower_bind_stage),
                 name: name.clone(),
                 ascription: None,
                 params: ps,
@@ -977,6 +984,9 @@ fn alias_member_decls(
         out.push(cst::StructDecl(Box::new(cst::TopBinding::Let(
             cst::TopLet {
                 let_kw: KwLet(span),
+                // A synthesized alias re-export is written at the default
+                // stage, whatever the aliased member declared.
+                stage: None,
                 name: cst::BindName::from(var_tok(x, span)),
                 ascription: None,
                 params: Vec::new(),
@@ -1668,6 +1678,7 @@ fn apply_chain(head: cst::ast::Atomic, args: Vec<cst::ast::Atomic>) -> cst::ast:
     let app_args = args
         .into_iter()
         .map(|atom| cst::ast::AppArg::Atom {
+            stage: None,
             excl: None,
             atom,
             accesses: Vec::new(),
@@ -1676,6 +1687,7 @@ fn apply_chain(head: cst::ast::Atomic, args: Vec<cst::ast::Atomic>) -> cst::ast:
     cst::ast::Expr::Ops(cst::ast::OpChain {
         head: cst::ast::AppExpr {
             minus: None,
+            stage: None,
             excl: None,
             head,
             head_accesses: Vec::new(),
@@ -1948,9 +1960,32 @@ fn lower_op_rhs(r: &ast_v1::OpRhs) -> Result<cst::ast::OpRhs, LowerError> {
     })
 }
 
+/// `~` / `persistent ~` (`cst_v1::BindStageV1` -> `cst::TopStage`) — a
+/// `val`'s own stage qualifier. Token-identical types on both sides
+/// (`cst::TopStage` exists ONLY to receive this), so, like
+/// [`lower_stage_prefix`], this moves tokens.
+fn lower_bind_stage(s: &cst_v1::BindStageV1) -> cst::TopStage {
+    cst::TopStage {
+        persistent: s.persistent.clone(),
+        tilde: s.tilde.clone(),
+    }
+}
+
+/// `&`/`~` (`cst_v1::ast::StagePrefix` -> `cst::ast::StagePrefix`). 0.1 has
+/// staging BOTH per binding (`val ~x = e`) and per operand (`&e`/`~e`,
+/// `parser_v1.mly:870-873`) — the two productions are character-identical to
+/// 0.0.6's, so this moves tokens and nothing else.
+fn lower_stage_prefix(s: &ast_v1::StagePrefix) -> cst::ast::StagePrefix {
+    match s {
+        ast_v1::StagePrefix::Next(t) => cst::ast::StagePrefix::Next(t.clone()),
+        ast_v1::StagePrefix::Prev(t) => cst::ast::StagePrefix::Prev(t.clone()),
+    }
+}
+
 fn lower_app_expr(e: &ast_v1::AppExpr) -> Result<cst::ast::AppExpr, LowerError> {
     Ok(cst::ast::AppExpr {
         minus: e.minus.clone(),
+        stage: e.stage.as_ref().map(lower_stage_prefix),
         excl: e.excl.clone(),
         head: lower_atomic(&e.head)?,
         head_accesses: e.head_accesses.iter().map(lower_access_seg).collect(),
@@ -1985,10 +2020,12 @@ fn lower_app_arg(a: &ast_v1::AppArg) -> Result<cst::ast::AppArg, LowerError> {
             ctor: ctor.clone(),
         }),
         ast_v1::AppArg::Atom {
+            stage,
             excl,
             atom,
             accesses,
         } => Ok(cst::ast::AppArg::Atom {
+            stage: stage.as_ref().map(lower_stage_prefix),
             excl: excl.clone(),
             atom: lower_atomic(atom)?,
             accesses: accesses.iter().map(lower_access_seg).collect(),
@@ -2197,13 +2234,31 @@ fn lower_cmd_tail(t: &ast_v1::CmdTail) -> Result<cst::ast::CmdTail, LowerError> 
             // as an inc1 mid-chain bundle would. An empty `?()` is a
             // `LowerError` via `lower_opt_args`.
             let first = cst::AppArgErased(Box::new(match lead_opts {
-                Some(opts) => cst::ast::AppArg::Bundled {
-                    opts: lower_opt_args(opts)?,
-                    excl: a.excl.clone(),
-                    atom: lower_atomic(&a.head)?,
-                    accesses: a.head_accesses.iter().map(lower_access_seg).collect(),
-                },
+                Some(opts) => {
+                    // `cst::ast::AppArg::Bundled` has no `stage` slot (0.0.6
+                    // has no labeled-optional bundles at all, so the two
+                    // features never met there). Refuse rather than drop the
+                    // prefix on the floor and silently run the argument at the
+                    // wrong stage.
+                    if a.stage.is_some() {
+                        return Err(unsupported(
+                            "a staging prefix on a command argument that also \
+                             carries a `?(l = e, …)` bundle",
+                            "the lowered 0.0.6 node has no stage slot on a \
+                             bundled argument; write the `&`/`~` inside the \
+                             parenthesized argument instead",
+                            Span::default(),
+                        ));
+                    }
+                    cst::ast::AppArg::Bundled {
+                        opts: lower_opt_args(opts)?,
+                        excl: a.excl.clone(),
+                        atom: lower_atomic(&a.head)?,
+                        accesses: a.head_accesses.iter().map(lower_access_seg).collect(),
+                    }
+                }
                 None => cst::ast::AppArg::Atom {
+                    stage: a.stage.as_ref().map(lower_stage_prefix),
                     excl: a.excl.clone(),
                     atom: lower_atomic(&a.head)?,
                     accesses: a.head_accesses.iter().map(lower_access_seg).collect(),
@@ -3432,6 +3487,7 @@ mod tests {
         assert!(matches!(
             &*first.0,
             cst::ast::AppArg::Atom {
+                stage: None,
                 atom: cst::ast::Atomic::InlineText { .. },
                 ..
             }
@@ -3439,6 +3495,7 @@ mod tests {
         assert!(matches!(
             &*rest[0].0,
             cst::ast::AppArg::Atom {
+                stage: None,
                 atom: cst::ast::Atomic::InlineText { .. },
                 ..
             }

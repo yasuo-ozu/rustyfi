@@ -86,6 +86,7 @@ pub fn unify(a: &MonoType, b: &MonoType) -> Result<(), UnifyError> {
 
         (MonoType::List(x), MonoType::List(y)) => unify(x, y),
         (MonoType::Ref(x), MonoType::Ref(y)) => unify(x, y),
+        (MonoType::Code(x), MonoType::Code(y)) => unify(x, y),
 
         (MonoType::Record(r1), MonoType::Record(r2)) => unify_row(r1, r2),
 
@@ -366,7 +367,7 @@ fn occurs_var(tv: &TyVarRef, ty: &MonoType) -> bool {
             occurs_var_in_row(tv, &row) || occurs_var(tv, &a) || occurs_var(tv, &b)
         }
         MonoType::Product(ts) => ts.iter().any(|t| occurs_var(tv, t)),
-        MonoType::List(t) | MonoType::Ref(t) => occurs_var(tv, &t),
+        MonoType::List(t) | MonoType::Ref(t) | MonoType::Code(t) => occurs_var(tv, &t),
         MonoType::Record(row) => occurs_var_in_row(tv, &row),
         MonoType::Variant(_, args) => args.iter().any(|t| occurs_var(tv, t)),
         MonoType::InlineCmd(cs) | MonoType::BlockCmd(cs) | MonoType::MathCmd(cs) => {
@@ -393,7 +394,7 @@ fn occurs_rowvar_in_type(rv: &RowVarRef, ty: &MonoType) -> bool {
                 || occurs_rowvar_in_type(rv, &b)
         }
         MonoType::Product(ts) => ts.iter().any(|t| occurs_rowvar_in_type(rv, t)),
-        MonoType::List(t) | MonoType::Ref(t) => occurs_rowvar_in_type(rv, &t),
+        MonoType::List(t) | MonoType::Ref(t) | MonoType::Code(t) => occurs_rowvar_in_type(rv, &t),
         MonoType::Record(row) => occurs_rowvar_in_row(rv, &row),
         MonoType::Variant(_, args) => args.iter().any(|t| occurs_rowvar_in_type(rv, t)),
         MonoType::InlineCmd(cs) | MonoType::BlockCmd(cs) | MonoType::MathCmd(cs) => {

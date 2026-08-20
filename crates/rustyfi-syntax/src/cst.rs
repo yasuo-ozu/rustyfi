@@ -168,6 +168,19 @@ mod bind_name_tests {
 #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
 pub struct TopLet {
     pub let_kw: KwLet,
+    /// The stage this ONE binding is written at, when it is not the default
+    /// (see [`TopStage`]). 0.0.6 source never sets it — 0.0.6 declares a
+    /// stage per FILE, with a `@stage:` header — so it parses as `None` for
+    /// every 0.0.6 program; it exists because SATySFi **0.1** declares the
+    /// stage per BINDING (`val ~x = e`, `parser_v1.mly:417-421`) and
+    /// `v1/lower.rs` lowers 0.1 binds into this very node. Carrying the
+    /// stage ON the binding (rather than in a side table keyed by prelude
+    /// index, which is how the 0.0.6 `@stage:` header reaches
+    /// `elaborate.rs`) is what lets it survive the loader's prelude merge,
+    /// module nesting and cross-version splicing unharmed: an index-keyed
+    /// map cannot name a binding *inside* a `module … = struct … end`, and
+    /// every 0.1 `val` is inside one.
+    pub stage: Option<TopStage>,
     pub name: BindName,
     /// Optional `: ty` type ascription (`let f : ty x = e`, `let x : ty = e`),
     /// upstream's `patbotwithann` — parse-and-ignore, exactly like
@@ -178,6 +191,27 @@ pub struct TopLet {
     pub params: Vec<ast::Param>,
     pub eq: DefEqTok,
     pub value: ast::Expr,
+}
+
+/// A binding's own stage qualifier: `~` (stage 0) or `persistent ~`
+/// (persistent stage), the prefix SATySFi 0.1 writes between `val` and the
+/// bound name (`parser_v1.mly:417-421`, `UTBindValue(Stage0 |
+/// Persistent0, _)`; the absent prefix is `Stage1`, the document stage).
+///
+/// Spelled with tokens rather than a `rustyfi_lang::types::Stage` because
+/// this crate is the syntax layer and knows nothing of the type layer;
+/// `elaborate.rs` maps the pair to a `Stage` (`top_let_stage`).
+///
+/// `persistent` is a 0.1-only keyword (`lexer.rs`'s version-gated table), so
+/// under 0.0.6 the `Some(_)` shape is unreachable through the `persistent`
+/// spelling and reachable only as a bare `let ~x = e` — syntax upstream
+/// 0.0.6 does not have. Accepting it there is deliberate latitude of the
+/// same kind [`ast::AppExpr`] already takes (`&!x`), not a claim that 0.0.6
+/// grew per-binding stages.
+#[derive(Parse, Unparse, Debug, Clone, PartialEq)]
+pub struct TopStage {
+    pub persistent: Option<KwPersistent>,
+    pub tilde: ExactTildeTok,
 }
 
 /// One top-level declaration (`nxtoplevel`/`nxstruct`'s per-declaration
@@ -914,17 +948,35 @@ pub mod ast {
     /// the same technique as `PatCons`'s `::`), and an application-chain
     /// tail (`nxapp nxunsub` / `nxapp CONSTRUCTOR` / `nxapp OPTIONAL
     /// nxunsub` / `nxapp OMISSION`, left-folded during elaboration). `not`
-    /// and `EXACT_AMP`/`EXACT_TILDE` (`&`/`~`-prefixed forms) are not
-    /// implemented yet. First-class command references (`command \cmd`,
+    /// is not implemented yet; `EXACT_AMP`/`EXACT_TILDE` (`&`/`~`) are the
+    /// staging prefixes, carried in `stage` (see [`StagePrefix`]). First-class command references (`command \cmd`,
     /// upstream's `nxapp: COMMAND hcmd`) are modeled one level down, as
     /// [`Atomic::Command`] — see its doc comment for the rationale.
     #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
     pub struct AppExpr {
         pub minus: Option<ExactMinusTok>,
+        pub stage: Option<StagePrefix>,
         pub excl: Option<UnopExclamTok>,
         pub head: Atomic,
         pub head_accesses: Vec<AccessSeg>,
         pub args: Vec<AppArg>,
+    }
+
+    /// A staging prefix on a `nxunsub` operand: `&e` builds code for the next
+    /// stage, `~e` splices the result of a previous-stage computation
+    /// (`parser.mly:796-797`, `UTNext`/`UTPrev`).
+    ///
+    /// Upstream spells these as alternatives of `nxunsub`, alongside the `!`
+    /// deref; this grammar flattens that level, so like `minus`/`excl` they
+    /// become an optional prefix field. The looser shape accepts a few
+    /// combinations upstream's grammar does not (`&!x`), which is the same
+    /// latitude `AppExpr` already takes for `-!x`.
+    #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
+    pub enum StagePrefix {
+        /// `&e` — quote: the value is `e`'s code, to run one stage later.
+        Next(ExactAmpTok),
+        /// `~e` — splice: run `e` now and drop its code in here.
+        Prev(ExactTildeTok),
     }
 
     /// One `#label` field-access segment (`nxbot ACCESS var`).
@@ -948,6 +1000,7 @@ pub mod ast {
         /// `?*` (`nxapp OMISSION`).
         Omission(OmissionTok),
         Atom {
+            stage: Option<StagePrefix>,
             excl: Option<UnopExclamTok>,
             atom: Atomic,
             accesses: Vec<AccessSeg>,

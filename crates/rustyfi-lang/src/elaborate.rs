@@ -532,7 +532,19 @@ pub fn elaborate_program<'s>(
     file: &cst::File,
     prelude_scope: &Scope<'s>,
 ) -> Result<Program<'s>, ElabError> {
-    elaborate_program_with_versions(file, prelude_scope, &HashSet::new(), None)
+    elaborate_program_with_versions(file, prelude_scope, &HashSet::new(), &HashMap::new(), None)
+}
+
+/// [`elaborate_program`] for a loader-merged file, saying which prelude
+/// entries came from a file whose `@stage:` header was not the default. Each
+/// gets its RHS wrapped in [`Ast::StageScope`] so the typechecker reads it at
+/// that stage -- a `@stage: 0` library may quote (`&e`), a document may not.
+pub fn elaborate_program_with_stages<'s>(
+    file: &cst::File,
+    prelude_scope: &Scope<'s>,
+    stages: &HashMap<usize, crate::types::Stage>,
+) -> Result<Program<'s>, ElabError> {
+    elaborate_program_with_versions(file, prelude_scope, &HashSet::new(), stages, None)
 }
 
 /// Like [`elaborate_program`], but additionally marking a subset of
@@ -565,6 +577,7 @@ pub fn elaborate_program_with_versions<'s>(
     file: &cst::File,
     prelude_scope: &Scope<'s>,
     v006_indices: &HashSet<usize>,
+    stages: &HashMap<usize, crate::types::Stage>,
     wrap_body_version: Option<RustyfiVersion>,
 ) -> Result<Program<'s>, ElabError> {
     let Some(body) = &file.body else {
@@ -582,7 +595,10 @@ pub fn elaborate_program_with_versions<'s>(
         &[],
         &mut type_decls,
         &mut synonym_decls,
-        v006_indices,
+        &ItemOrigins {
+            v006: v006_indices,
+            stages,
+        },
         &HashMap::new(),
     )?;
     // `final_scope` (mod_path `[]`) already IS `prelude_scope` plus every
@@ -608,6 +624,39 @@ pub fn elaborate_program_with_versions<'s>(
 /// one-line helper every `walk_bindings` binding-construction arm below
 /// calls right after building its (fully elaborated) RHS. See
 /// [`elaborate_program_with_versions`]'s doc comment.
+/// Wrap a binding's value in the stage its FILE declared, when that is not
+/// the default. Mirrors [`maybe_v006_scope`] below: both carry a per-file
+/// property across the loader's prelude merge.
+/// Where each TOP-LEVEL entry of a merged prelude came from.
+///
+/// The loader concatenates every library's prelude into one file, which drops
+/// two per-file properties the bindings still need: which generation authored
+/// them (`v006`, Slice X2a) and which `@stage:` their file declared
+/// (`stages`). Both are keyed by the entry's index at THIS level, and both are
+/// empty for a single-file compile.
+pub struct ItemOrigins<'a> {
+    pub v006: &'a HashSet<usize>,
+    pub stages: &'a HashMap<usize, crate::types::Stage>,
+}
+
+fn maybe_stage_scope<'s>(value: Ast<'s>, this_stage: Option<crate::types::Stage>) -> Ast<'s> {
+    match this_stage {
+        Some(st) => Ast::StageScope(st, Box::new(value)),
+        None => value,
+    }
+}
+
+/// The stage ONE binding declared on itself (`cst::TopStage`), if any — the
+/// per-binding half of the same question `ItemOrigins::stages` answers per
+/// FILE. SATySFi 0.1 writes it as `val ~x = e` / `val persistent ~x = e`
+/// (`v1/lower.rs` puts it here); 0.0.6 source never sets it.
+fn top_let_stage(stage: Option<&cst::TopStage>) -> Option<crate::types::Stage> {
+    stage.map(|s| match s.persistent {
+        Some(_) => crate::types::Stage::Persistent0,
+        None => crate::types::Stage::Stage0,
+    })
+}
+
 fn maybe_v006_scope<'s>(value: Ast<'s>, this_v006: bool) -> Ast<'s> {
     if this_v006 {
         Ast::VersionScope(RustyfiVersion::V0_0, Box::new(value))
@@ -882,7 +931,12 @@ fn alias_optional_shape<'s>(value: &c::Expr, scope: &Scope<'s>) -> Vec<bool> {
         return Vec::new();
     }
     let a = &chain.head;
-    if a.minus.is_some() || a.excl.is_some() || !a.head_accesses.is_empty() || !a.args.is_empty() {
+    if a.minus.is_some()
+        || a.excl.is_some()
+        || a.stage.is_some()
+        || !a.head_accesses.is_empty()
+        || !a.args.is_empty()
+    {
         return Vec::new();
     }
     head_optional_shape(&a.head, scope).to_vec()
@@ -920,7 +974,7 @@ fn walk_bindings<'s>(
     mod_path: &[String],
     type_decls: &mut Vec<UserTypeDecl>,
     synonym_decls: &mut Vec<UserSynonymDecl>,
-    v006_indices: &HashSet<usize>,
+    origins: &ItemOrigins<'_>,
     tymap: &HashMap<String, String>,
 ) -> Result<(Vec<Binding<'s>>, Vec<String>, Scope<'s>), ElabError> {
     let mut bindings: Vec<Binding<'s>> = Vec::new();
@@ -948,7 +1002,9 @@ fn walk_bindings<'s>(
         // `Module` arm below) part of a spliced V0_0 dependency? Always
         // `false` for `elaborate_program`'s empty `v006_indices` (the
         // pure-0.0.6 / pure-0.1 paths), so this is a dead branch there.
-        let this_v006 = v006_indices.contains(&item_idx);
+        let this_v006 = origins.v006.contains(&item_idx);
+        // The stage the file this item came from declared, if not the default.
+        let this_stage = origins.stages.get(&item_idx).copied();
         match top {
             cst::TopBinding::Let(top_let) => {
                 // Same curry-with-patterns desugaring as a `let-rec` clause
@@ -959,7 +1015,13 @@ fn walk_bindings<'s>(
                 // `gr.satyh`-style tuple-destructuring params.
                 let top_let_params = params_to_patbots(&top_let.params);
                 let value = rec_clause_value(&top_let_params, &top_let.value, &[], &running)?;
-                let value = maybe_v006_scope(value, this_v006);
+                // A stage the BINDING declared on itself (0.1's `val ~x`)
+                // wins over the one its FILE declared (0.0.6's `@stage:`) —
+                // they cannot both be set, since no file is authored in both
+                // generations, so the `or` is really a merge of two disjoint
+                // sources rather than a precedence rule.
+                let this_stage = top_let_stage(top_let.stage.as_ref()).or(this_stage);
+                let value = maybe_stage_scope(maybe_v006_scope(value, this_v006), this_stage);
                 // A parameter-less binding may be a plain value alias
                 // (`let document = StdJa.document`) — inherit the aliased
                 // name's optional shape so a marker-less call auto-omits its
@@ -1196,13 +1258,23 @@ fn walk_bindings<'s>(
                 } else {
                     HashSet::new()
                 };
+                // Same reasoning for the stage: a nested module's items are
+                // indexed against `inner_items`, so the enclosing item's stage
+                // (if any) applies to all of them.
+                let inner_stages: HashMap<usize, crate::types::Stage> = match this_stage {
+                    Some(st) => (0..inner_items.len()).map(|i| (i, st)).collect(),
+                    None => HashMap::new(),
+                };
                 let (inner_bindings, inner_exported, inner_running) = walk_bindings(
                     &inner_items,
                     &running,
                     &child_path,
                     type_decls,
                     synonym_decls,
-                    &inner_v006,
+                    &ItemOrigins {
+                        v006: &inner_v006,
+                        stages: &inner_stages,
+                    },
                     &level_tymap,
                 )?;
                 // A module's own bare (unqualified) member names never leak
@@ -2229,7 +2301,7 @@ fn app_expr<'s>(a: &c::AppExpr, scope: &Scope<'s>) -> Result<Ast<'s>, ElabError>
     // application and apply the `not` primitive to it. A bare `not` (no args)
     // or a `not` sitting in argument position keeps resolving to the `not`
     // primitive as an ordinary value, exactly as before.
-    if a.minus.is_none() && a.excl.is_none() && a.head_accesses.is_empty() && !a.args.is_empty() {
+    if a.minus.is_none() && a.excl.is_none() && a.stage.is_none() && a.head_accesses.is_empty() && !a.args.is_empty() {
         if let c::Atomic::Var(v) = &a.head {
             if v.name == "not" && scope.contains("not") && scope.resolve_text("not") == "not" {
                 let not_fn = scoped_var("not", v.span, scope)?;
@@ -2241,7 +2313,7 @@ fn app_expr<'s>(a: &c::AppExpr, scope: &Scope<'s>) -> Result<Ast<'s>, ElabError>
             }
         }
     }
-    let ast = if a.excl.is_none() && a.head_accesses.is_empty() {
+    let ast = if a.excl.is_none() && a.stage.is_none() && a.head_accesses.is_empty() {
         if let c::Atomic::Ctor(ctor) = &a.head {
             // A constructor head: the first argument (if any) is its payload
             // (`Some 1`); any further arguments Apply-fold on top of the
@@ -2285,7 +2357,8 @@ fn app_expr<'s>(a: &c::AppExpr, scope: &Scope<'s>) -> Result<Ast<'s>, ElabError>
 }
 
 fn app_chain_generic<'s>(a: &c::AppExpr, scope: &Scope<'s>) -> Result<Ast<'s>, ElabError> {
-    let mut ast = atomic_head_with_excl(&a.head, &a.head_accesses, a.excl.as_ref(), scope)?;
+    let mut ast =
+        atomic_head_with_excl(&a.head, &a.head_accesses, a.excl.as_ref(), a.stage.as_ref(), scope)?;
     // Marker-less optional-argument defaulting (`Scope`'s doc comment /
     // Sub-area 2): if the head is a bare name (no `!`/`#access`) known to
     // have `?:`-optional parameters ANYWHERE in its declared `Param` list
@@ -2369,7 +2442,7 @@ fn apply_one_arg<'s>(
             accesses,
         } => {
             let opt_args = elaborate_opt_args(opts, scope)?;
-            let arg_ast = atomic_head_with_excl(atom, accesses, excl.as_ref(), scope)?;
+            let arg_ast = atomic_head_with_excl(atom, accesses, excl.as_ref(), None, scope)?;
             Ok(Ast::ApplyOpt {
                 func: Box::new(func),
                 opts: opt_args,
@@ -2455,6 +2528,7 @@ fn atomic_head_with_excl<'s>(
     head: &c::Atomic,
     accesses: &[c::AccessSeg],
     excl: Option<&UnopExclamTok>,
+    stage: Option<&c::StagePrefix>,
     scope: &Scope<'s>,
 ) -> Result<Ast<'s>, ElabError> {
     let mut ast = atomic(head, scope)?;
@@ -2465,7 +2539,11 @@ fn atomic_head_with_excl<'s>(
         let deref_fn = scoped_var(&e.text, e.span, scope)?;
         ast = Ast::Apply(Box::new(deref_fn), Box::new(ast));
     }
-    Ok(ast)
+    Ok(match stage {
+        Some(c::StagePrefix::Next(_)) => Ast::Next(Box::new(ast)),
+        Some(c::StagePrefix::Prev(_)) => Ast::Prev(Box::new(ast)),
+        None => ast,
+    })
 }
 
 /// Desugar one application-chain argument. `?: value`/`?*` (`AppArg::Optional`/
@@ -2490,10 +2568,11 @@ fn app_arg_to_ast<'s>(arg: &c::AppArg, scope: &Scope<'s>) -> Result<Ast<'s>, Ela
         }
         c::AppArg::Omission(_) => Ok(Ast::Ctor("None".to_string(), None)),
         c::AppArg::Atom {
+            stage,
             excl,
             atom,
             accesses,
-        } => atomic_head_with_excl(atom, accesses, excl.as_ref(), scope),
+        } => atomic_head_with_excl(atom, accesses, excl.as_ref(), stage.as_ref(), scope),
         c::AppArg::Ctor(ctor) => Ok(Ast::Ctor(ctor.name.clone(), None)),
         // A `?(l = e, …)` bundle is not a plain argument value — the chain
         // builder (`apply_one_arg`) routes it to `Ast::ApplyOpt` before it
@@ -3046,7 +3125,7 @@ fn cmd_arg_to_ast<'s>(arg: &c::AppArg, scope: &Scope<'s>) -> Result<CmdArg<'s>, 
             accesses,
         } => Ok(CmdArg {
             opts: elaborate_opt_args(opts, scope)?,
-            arg: atomic_head_with_excl(atom, accesses, excl.as_ref(), scope)?,
+            arg: atomic_head_with_excl(atom, accesses, excl.as_ref(), None, scope)?,
         }),
         c::AppArg::BundledCtor { opts, ctor } => Ok(CmdArg {
             opts: elaborate_opt_args(opts, scope)?,

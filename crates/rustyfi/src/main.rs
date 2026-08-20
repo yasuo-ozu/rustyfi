@@ -321,8 +321,8 @@ fn cmd_compile(m: &ArgMatches) -> anyhow::Result<()> {
                     .map_err(|e| anyhow::anyhow!("{}: {e}", input.display()))?
                     .0
             } else {
-                let merged = merge_program(program);
-                rustyfi_lang::compile_document_cst_with_aux(&merged, metrics, &mut aux)
+                let (merged, stages) = merge_program(program);
+                rustyfi_lang::compile_document_cst_with_stages(&merged, metrics, &mut aux, &stages)
                     .map_err(|e| anyhow::anyhow!("{}: {e}", input.display()))?
                     .0
             }
@@ -624,7 +624,12 @@ fn resolve_version_and_mode(
 /// (The v0.0.6 analog type-checks each library into a shared environment in
 /// dependency order; untyped elaboration gets the same scoping by prelude
 /// concatenation.)
-fn merge_program(program: rustyfi_loader::LoadedProgram) -> rustyfi_syntax::cst::File {
+fn merge_program(
+    program: rustyfi_loader::LoadedProgram,
+) -> (
+    rustyfi_syntax::cst::File,
+    std::collections::HashMap<usize, rustyfi_lang::types::Stage>,
+) {
     // `merge_program` is the V0_0-only path; V0_1 goes through
     // `compile_document_v1` once it exists. `LoadedCst::V0_1` is genuinely
     // unreachable today: `is_implemented()` still gates `V0_1` out at
@@ -642,18 +647,34 @@ fn merge_program(program: rustyfi_loader::LoadedProgram) -> rustyfi_syntax::cst:
     let entry = files.pop().expect("loader always yields the entry last");
     let entry_cst = as_v006(entry.cst);
     let mut prelude = Vec::new();
+    // Concatenation drops each file's headers, so the one header that is a
+    // property of its BINDINGS rather than of the file as a document --
+    // `@stage:` -- is recorded here against the slots they land in. The entry
+    // document is stage 1 by definition and contributes nothing.
+    let mut stages = std::collections::HashMap::new();
     for lib in files {
-        prelude.extend(as_v006(lib.cst).prelude);
+        let cst = as_v006(lib.cst);
+        let stage = rustyfi_lang::declared_stage(&cst);
+        let start = prelude.len();
+        prelude.extend(cst.prelude);
+        if let Some(stage) = stage.filter(|s| *s != rustyfi_lang::types::Stage::default()) {
+            stages.extend((start..prelude.len()).map(|i| (i, stage)));
+        }
     }
     prelude.extend(entry_cst.prelude);
-    rustyfi_syntax::cst::File {
-        headers: Vec::new(),
-        prelude,
-        in_kw: entry_cst.in_kw,
-        body: entry_cst.body,
-        eoi: entry_cst.eoi,
-    }
+    (
+        rustyfi_syntax::cst::File {
+            headers: Vec::new(),
+            prelude,
+            in_kw: entry_cst.in_kw,
+            body: entry_cst.body,
+            eoi: entry_cst.eoi,
+        },
+        stages,
+    )
 }
+
+
 
 // ---------------------------------------------------------------------------
 // Package-manager mode (satyrographos <cmd>).

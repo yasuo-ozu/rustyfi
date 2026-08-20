@@ -181,6 +181,24 @@ pub enum Ast<I = String> {
     /// module member's RHS only (never the spine `LetIn`/`LetRecIn` node),
     /// exactly like `VersionScope`.
     ModuleScope(Vec<String>, Box<Ast<I>>),
+    /// `&e` — quote. Evaluated at stage 0, it does NOT run `e`: it
+    /// partially evaluates it into residual code and yields that code as a
+    /// value (`Value::Code`), typed `code ty`. Upstream's `UTNext`/`Next`
+    /// (`parser.mly:796`, `evaluator.cppo.ml`'s `interpret_1`).
+    /// Marks `body` as coming from a file that declared a stage other than
+    /// the default (`@stage: 0` / `@stage: persistent`), so the typechecker
+    /// reads it at that stage and its `&` quotes are legal there.
+    ///
+    /// The stage analogue of [`Ast::VersionScope`], and for the same reason:
+    /// the loader concatenates every library's prelude into ONE file, so a
+    /// per-file property has to travel with the bindings it came from or be
+    /// lost at the merge.
+    StageScope(crate::types::Stage, Box<Ast<I>>),
+    Next(Box<Ast<I>>),
+    /// `~e` — splice. Legal inside a quote (stage 1): `e` is evaluated NOW,
+    /// at stage 0, and the code it yields is spliced in where the `~e` stood.
+    /// Upstream's `UTPrev`/`Prev` (`parser.mly:797`).
+    Prev(Box<Ast<I>>),
 }
 
 /// One command-application argument (SATySFi 0.1 optional-arg-rows increment
@@ -389,6 +407,9 @@ impl<I> Ast<I> {
             },
             Ast::VersionScope(v, b) => Ast::VersionScope(*v, Box::new(go(b))),
             Ast::ModuleScope(path, b) => Ast::ModuleScope(path.clone(), Box::new(go(b))),
+            Ast::StageScope(st, b) => Ast::StageScope(*st, Box::new(go(b))),
+            Ast::Next(e) => Ast::Next(Box::new(go(e))),
+            Ast::Prev(e) => Ast::Prev(Box::new(go(e))),
         }
     }
 }

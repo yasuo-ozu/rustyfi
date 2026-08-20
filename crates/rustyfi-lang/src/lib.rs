@@ -109,6 +109,53 @@ pub fn compile_document_cst_with_aux(
     metrics: &dyn FontMetrics,
     aux: &mut crossref::AuxTable,
 ) -> Result<(std::rc::Rc<DocumentValue>, u32), CompileError> {
+    compile_document_cst_with_stages(file, metrics, aux, &std::collections::HashMap::new())
+}
+
+/// The stage a file's `@stage:` header declares, if any.
+///
+/// The loader merges every library's prelude into one file and drops the
+/// headers, so each caller that merges has to read this off first and record
+/// which entries it covers -- see [`compile_document_cst_with_stages`].
+pub fn declared_stage(file: &rustyfi_syntax::cst::File) -> Option<types::Stage> {
+    use rustyfi_syntax::token::Token;
+    file.headers.iter().find_map(|h| match h {
+        rustyfi_syntax::cst::Header::Stage(st) => match st.tok {
+            Token::HeaderPersistent0 => Some(types::Stage::Persistent0),
+            Token::HeaderStage0 => Some(types::Stage::Stage0),
+            Token::HeaderStage1 => Some(types::Stage::Stage1),
+            _ => None,
+        },
+        _ => None,
+    })
+}
+
+/// Record `file`'s declared stage against the prelude slots `start..end` its
+/// bindings just landed in, when that stage is not the default.
+fn note_stage(
+    stages: &mut std::collections::HashMap<usize, types::Stage>,
+    file: &rustyfi_syntax::cst::File,
+    start: usize,
+    end: usize,
+) {
+    if let Some(stage) = declared_stage(file).filter(|s| *s != types::Stage::default()) {
+        stages.extend((start..end).map(|i| (i, stage)));
+    }
+}
+
+/// [`compile_document_cst_with_aux`] told which merged prelude entries came
+/// from a file that declared a non-default `@stage:`.
+///
+/// The loader concatenates every library's prelude into one file, which loses
+/// the per-file header; this hands that back, so a `@stage: 0` library is
+/// typechecked at stage 0 (where `&e` is legal) while the document around it
+/// stays at stage 1 (where it is not).
+pub fn compile_document_cst_with_stages(
+    file: &rustyfi_syntax::cst::File,
+    metrics: &dyn FontMetrics,
+    aux: &mut crossref::AuxTable,
+    stages: &std::collections::HashMap<usize, types::Stage>,
+) -> Result<(std::rc::Rc<DocumentValue>, u32), CompileError> {
     let timing = std::env::var_os("RUSTYFI_TIMING").is_some();
     let t = std::time::Instant::now();
     let env0 = primitives::base_env();
@@ -125,7 +172,7 @@ pub fn compile_document_cst_with_aux(
     let body = {
         let store = symbol::SymbolStore::new();
         let scope = elaborate::Scope::new(&store, env0.names());
-        let program = elaborate::elaborate_program(file, &scope)?;
+        let program = elaborate::elaborate_program_with_stages(file, &scope, stages)?;
         if timing {
             eprintln!(
                 "TIMING   elaborate        {:>8.1}ms",
@@ -373,6 +420,12 @@ pub fn compile_document_v1_with_aux(
     let mut prelude = Vec::new();
     let mut dep_csts: Vec<&rustyfi_syntax::cst_v1::FileV1> = Vec::new();
     let mut v006_indices: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    // A spliced 0.0.6 dependency brings its `@stage:` with it, exactly as it
+    // would on the 0.0-rooted path -- a `@stage: 0` library must be readable
+    // from a 0.1 document too, or the same library compiles from one
+    // generation and not the other.
+    let mut stages: std::collections::HashMap<usize, types::Stage> =
+        std::collections::HashMap::new();
     for dep in deps {
         match &dep.cst {
             rustyfi_loader::LoadedCst::V0_1(cst) => {
@@ -559,6 +612,7 @@ pub fn compile_document_v1_with_aux(
                     prelude.extend(cst.prelude.iter().cloned());
                 }
                 v006_indices.extend(start..prelude.len());
+                note_stage(&mut stages, cst, start, prelude.len());
 
                 if touched.contains("deco")
                     || touched.contains("deco-set")
@@ -666,7 +720,13 @@ pub fn compile_document_v1_with_aux(
         // `compile_program` calls would have produced (the GOLDEN/v01-capstone
         // non-regression gate).
         let program =
-            elaborate::elaborate_program_with_versions(&file, &scope, &v006_indices, None)?;
+            elaborate::elaborate_program_with_versions(
+                &file,
+                &scope,
+                &v006_indices,
+                &stages,
+                None,
+            )?;
         v1::module_check::check_program(&dep_csts, &program)?;
         ast::debrand(&program.body, &store)
     };
@@ -755,6 +815,12 @@ pub fn compile_document_v006_xver_with_aux(
     let mut prelude = Vec::new();
     let mut dep_csts: Vec<&rustyfi_syntax::cst_v1::FileV1> = Vec::new();
     let mut v006_indices: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    // A spliced 0.0.6 dependency brings its `@stage:` with it, exactly as it
+    // would on the 0.0-rooted path -- a `@stage: 0` library must be readable
+    // from a 0.1 document too, or the same library compiles from one
+    // generation and not the other.
+    let mut stages: std::collections::HashMap<usize, types::Stage> =
+        std::collections::HashMap::new();
 
     for (i, dep) in files.iter().enumerate() {
         if i == entry_idx {
@@ -770,6 +836,7 @@ pub fn compile_document_v006_xver_with_aux(
                 let start = prelude.len();
                 prelude.extend(cst.prelude.iter().cloned());
                 v006_indices.extend(start..prelude.len());
+                note_stage(&mut stages, cst, start, prelude.len());
             }
             // Foreign 0.1 dependency: lower (exactly like a native V0_1 dep
             // in `compile_document_v1_with_trials`) and splice UNWRAPPED
@@ -939,6 +1006,7 @@ pub fn compile_document_v006_xver_with_aux(
         &file,
         &scope,
         &v006_indices,
+        &stages,
         Some(RustyfiVersion::V0_0),
     )?;
     // Newly REACHABLE from a 0.0.6-rooted compile (previously had exactly

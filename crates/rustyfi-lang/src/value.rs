@@ -116,6 +116,20 @@ pub enum Value {
         body: CompiledExpr,
         env: Env,
     },
+    /// `&e` — a quoted expression awaiting the next stage, with the
+    /// environment it was quoted in. Typed `code ty` ([`MonoType::Code`]).
+    ///
+    /// The same shape as [`Value::CompiledClosure`] minus a parameter, and for
+    /// the same reason: this evaluator compiles to slot-indexed closures, so a
+    /// fragment cannot be carried as a re-compilable syntax tree the way
+    /// upstream's `code_value` is -- its variable references are already bound
+    /// to the frames of the scope it was written in. Carrying the compiled
+    /// body with its environment keeps those references meaning what they
+    /// said, which is what `~` then forces.
+    Code {
+        body: CompiledExpr,
+        env: Env,
+    },
     /// A (possibly partially applied) native primitive.
     Prim {
         def: &'static PrimDef,
@@ -164,6 +178,7 @@ impl Value {
             Value::Image(_) => "image",
             Value::Document(_) => "document",
             Value::CompiledClosure { .. } => "function",
+            Value::Code { .. } => "code",
             Value::Prim { .. } => "function",
             Value::PrePath(_) => "pre-path",
             Value::Path(_) => "path",

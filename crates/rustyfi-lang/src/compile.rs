@@ -733,6 +733,47 @@ impl<'b> Compiler<'b> {
             // Ctor-scoping marker — transparent to compilation (typecheck runs
             // on the uncompiled body; see `Ast::ModuleScope`).
             Ast::ModuleScope(_, body) => self.compile(body),
+
+            // Stages are a typing-time discipline; evaluation of the body is
+            // unaffected by which stage it was written at.
+            Ast::StageScope(_, body) => self.compile(body),
+
+            // `&e` -- quote. The body is compiled here, in the scope it was
+            // written in, and NOT run: the value is that compiled body paired
+            // with the environment reaching it, which is what makes the
+            // fragment mean the same thing wherever it is later spliced.
+            Ast::Next(inner) => {
+                let body = self.compile(inner);
+                CompiledExpr::new(move |env, _| {
+                    Ok(Value::Code {
+                        body: body.clone(),
+                        env: env.clone(),
+                    })
+                })
+            }
+
+            // `~e` -- splice: run `e` to get a code value, then run that code
+            // in the environment it was quoted in.
+            //
+            // Deviation from upstream worth stating: upstream runs every
+            // splice during a separate preprocessing pass, before any
+            // stage-1 code runs, so all splices happen first and in file
+            // order. Here a splice runs where it stands. The VALUE is the
+            // same for the pure code-building that staging is used for; the
+            // difference is observable only through side effects ordered
+            // between a splice and its surrounding stage-1 code.
+            Ast::Prev(inner) => {
+                let inner = self.compile(inner);
+                CompiledExpr::new(move |env, interp| {
+                    match inner.run(env, interp)? {
+                        Value::Code { body, env: quoted_env } => body.run(&quoted_env, interp),
+                        other => eval_error(format!(
+                            "`~` expects a code value (from `&`), got {}",
+                            other.type_name()
+                        )),
+                    }
+                })
+            }
         }
     }
 

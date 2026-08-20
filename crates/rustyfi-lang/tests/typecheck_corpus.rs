@@ -220,7 +220,13 @@ fn typecheck_entry(entry: &Path) -> Result<(RustyfiVersion, Vec<String>), String
             };
             let scope = elaborate::Scope::new_with_version(&store, names, RustyfiVersion::V0_1);
             let program =
-                elaborate::elaborate_program_with_versions(&file, &scope, &v006_indices, None)
+                elaborate::elaborate_program_with_versions(
+                    &file,
+                    &scope,
+                    &v006_indices,
+                    &std::collections::HashMap::new(),
+                    None,
+                )
                     .map_err(|e| format!("elaborate: {e}"))?;
             let warns = typecheck::typecheck_verbose_with_version(&program, RustyfiVersion::V0_1)
                 .map_err(|e| format!("{e}"))?;

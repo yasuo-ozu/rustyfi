@@ -188,6 +188,7 @@ impl Lexer {
                 "use" => Some(Use),
                 "package" => Some(Package),
                 "math" => Some(Math),
+                "persistent" => Some(Persistent),
                 _ => None,
             };
         }

@@ -347,12 +347,14 @@ fn subst_bind(
     Ok(match b {
         cst_v1::Bind::Value {
             kw,
+            stage,
             name,
             params,
             eq,
             body,
         } => cst_v1::Bind::Value {
             kw: kw.clone(),
+            stage: stage.clone(),
             name: name.clone(),
             params: subst_params(params, rw, path)?,
             eq: eq.clone(),
@@ -771,6 +773,7 @@ fn subst_app_expr(
 ) -> Result<ast_v1::AppExpr, LowerError> {
     Ok(ast_v1::AppExpr {
         minus: a.minus.clone(),
+        stage: a.stage.clone(),
         excl: a.excl.clone(),
         head: subst_atomic(&a.head, rw, path)?,
         // `AccessSeg.label` is a record-field name, never module-qualified.
@@ -805,10 +808,12 @@ fn subst_app_arg(
             ctor: ctor.clone(),
         },
         ast_v1::AppArg::Atom {
+            stage,
             excl,
             atom,
             accesses,
         } => ast_v1::AppArg::Atom {
+            stage: stage.clone(),
             excl: excl.clone(),
             atom: subst_atomic(atom, rw, path)?,
             accesses: accesses.clone(),
@@ -1740,12 +1745,14 @@ fn subst_decl(
     Ok(match d {
         ast_v1::Decl::Val {
             kw,
+            stage,
             name,
             quant,
             colon,
             ty,
         } => ast_v1::Decl::Val {
             kw: kw.clone(),
+            stage: stage.clone(),
             name: name.clone(),
             quant: quant.clone(),
             colon: colon.clone(),

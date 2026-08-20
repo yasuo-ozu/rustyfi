@@ -79,7 +79,7 @@ fn mono_mentions_stamp(ty: &MonoType, marker: &str) -> bool {
                 || mono_mentions_stamp(&b, marker)
         }
         MonoType::Product(ts) => ts.iter().any(|t| mono_mentions_stamp(t, marker)),
-        MonoType::List(t) | MonoType::Ref(t) => mono_mentions_stamp(&t, marker),
+        MonoType::List(t) | MonoType::Ref(t) | MonoType::Code(t) => mono_mentions_stamp(&t, marker),
         MonoType::Record(row) => row_mentions_stamp(&row, marker),
         MonoType::Variant(name, args) => {
             name.ends_with(marker) || args.iter().any(|t| mono_mentions_stamp(t, marker))

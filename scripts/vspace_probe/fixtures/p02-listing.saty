@@ -1,0 +1,54 @@
+% Probe 02 — enumitem's `+listing` / `+enumerate`, wrapped in pure-CJK anchor
+% paragraphs so the block's whole vertical footprint (anchor baseline to anchor
+% baseline) is measurable across engines without touching a latin box.
+@require: stdjabook
+@import: ../../layout_fidelity_corpus/enumitem/src/enumitem
+
+open EnumitemAlias
+
+let-block ctx +ctx ctxflst bt =
+  read-block (ctxflst |> List.fold-left (fun ctx ctxf -> ctxf ctx) ctx) bt
+
+let document record bt = StdJaBook.document record '<%
+  +ctx[fun ctx -> (
+    let fsize = get-font-size ctx in
+    ctx |> set-paragraph-margin fsize fsize
+        |> set-leading (fsize *' 1.6)
+  )](bt);
+>%
+
+in
+
+document (|
+  title = {あ};
+  author = {あ};
+  date = {あ};
+  show-title = false;
+  show-toc = false;
+|) '<
+  +p{あああああ。}
+  +listing{
+    * かかかかか。
+    * ききききき。
+  }
+  +p{いいいいい。}
+  +listing{
+    * くくくくく。
+      ** けけけけけ。
+      ** こここここ。
+    * さささささ。
+  }
+  +p{ううううう。}
+  +enumerate{
+    * たたたたた。
+    * ちちちちち。
+  }
+  +p{えええええ。}
+  +enumerate{
+    * つつつつつ。
+      ** てててててて。
+      ** とととととと。
+    * なななななな。
+  }
+  +p{おおおおお。}
+>

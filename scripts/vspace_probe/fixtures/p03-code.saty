@@ -1,0 +1,45 @@
+% Probe 03 — `+code` blocks (the `code` package), between pure-CJK anchors.
+% The code lines themselves are latin (lmmono) so their reported boxes are NOT
+% comparable across engines; the ANCHORS are, and anchor-to-anchor distance is
+% the block's true total footprint.
+@require: stdjabook
+@require: code
+
+let-block ctx +ctx ctxflst bt =
+  read-block (ctxflst |> List.fold-left (fun ctx ctxf -> ctxf ctx) ctx) bt
+
+let document record bt = StdJaBook.document record '<%
+  +ctx[fun ctx -> (
+    let fsize = get-font-size ctx in
+    ctx |> set-paragraph-margin fsize fsize
+        |> set-leading (fsize *' 1.6)
+  )](bt);
+>%
+
+in
+
+document (|
+  title = {あ};
+  author = {あ};
+  date = {あ};
+  show-title = false;
+  show-toc = false;
+|) '<
+  +p{あああああ。}
+  +code(```
+  one
+  ```);
+  +p{いいいいい。}
+  +code(```
+  one
+  two
+  ```);
+  +p{ううううう。}
+  +code(```
+  one
+  two
+  three
+  four
+  ```);
+  +p{えええええ。}
+>

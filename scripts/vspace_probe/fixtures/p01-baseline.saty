@@ -1,0 +1,35 @@
+% Probe 01 — the reference frame for every other probe.
+%
+% Same class + same context tweaks as the enumitem corpus document
+% (`set-paragraph-margin 12pt 12pt`, `set-leading 19.2pt`), then nothing but
+% pure-CJK single-line paragraphs. Every measurable row is therefore CJK-only,
+% whose PDF font descriptors AGREE between the two engines (19.36 vs 19.34) —
+% so both the text-area top and the paragraph-to-paragraph advance are directly
+% comparable across engines. Latin rows are NOT (see CLAUDE.md's trap).
+@require: stdjabook
+
+let-block ctx +ctx ctxflst bt =
+  read-block (ctxflst |> List.fold-left (fun ctx ctxf -> ctxf ctx) ctx) bt
+
+let document record bt = StdJaBook.document record '<%
+  +ctx[fun ctx -> (
+    let fsize = get-font-size ctx in
+    ctx |> set-paragraph-margin fsize fsize
+        |> set-leading (fsize *' 1.6)
+  )](bt);
+>%
+
+in
+
+document (|
+  title = {あ};
+  author = {あ};
+  date = {あ};
+  show-title = false;
+  show-toc = false;
+|) '<
+  +p{あああああ。}
+  +p{いいいいい。}
+  +p{ううううう。}
+  +p{えええええ。}
+>

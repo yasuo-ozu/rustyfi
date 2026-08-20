@@ -1,0 +1,57 @@
+% Probe 06 — THE DEFICIT.
+%
+% One `block-frame-breakable` whose body is long enough to span a page break,
+% with a deliberately odd top padding (13pt) and bottom padding (3pt) so the
+% number that shows up cannot be confused with anything else.
+%
+% Upstream re-enters its frame arm for the CONTINUATION fragment with
+% `midway = Midway` and adds `pads.paddingT` to the running column height every
+% time (`pageBreak.ml:323` `hgttotal_before = hgttotal +% pads.paddingT`), and
+% keeps the FULL `pads` for the `Midway` fragment (`:352-360`, whose own
+% comment records that zeroing them "may be better" — i.e. it deliberately does
+% not). So page 2's first body line sits `paddingT` below the text-area top.
+%
+% Every row here is pure CJK, so the reported boxes are comparable between the
+% engines and the page-top baseline can be read off directly.
+@require: stdjabook
+@require: color
+@require: gr
+
+let-block ctx +bigframe bt =
+  let deco (x, y) w h d = [ fill (Gray 0.85) (Gr.rectangle (x, y -' d) (x +' w, y +' h)) ] in
+  block-frame-breakable ctx (7pt, 7pt, 13pt, 3pt) (deco, deco, deco, deco)
+    (fun ctx -> read-block ctx bt)
+
+let-block ctx +ctx ctxflst bt =
+  read-block (ctxflst |> List.fold-left (fun ctx ctxf -> ctxf ctx) ctx) bt
+
+let document record bt = StdJaBook.document record '<%
+  +ctx[fun ctx -> (
+    let fsize = get-font-size ctx in
+    ctx |> set-paragraph-margin fsize fsize
+        |> set-leading (fsize *' 1.6)
+  )](bt);
+>%
+
+let-inline \fill =
+  {あいうえおかきくけこさしすせそたちつてとなにぬねのはひふへほまみむめもやゆよらりるれろわをん。
+   あいうえおかきくけこさしすせそたちつてとなにぬねのはひふへほまみむめもやゆよらりるれろわをん。
+   あいうえおかきくけこさしすせそたちつてとなにぬねのはひふへほまみむめもやゆよらりるれろわをん。
+   あいうえおかきくけこさしすせそたちつてとなにぬねのはひふへほまみむめもやゆよらりるれろわをん。
+   あいうえおかきくけこさしすせそたちつてとなにぬねのはひふへほまみむめもやゆよらりるれろわをん。
+   あいうえおかきくけこさしすせそたちつてとなにぬねのはひふへほまみむめもやゆよらりるれろわをん。}
+
+in
+
+document (|
+  title = {あ};
+  author = {あ};
+  date = {あ};
+  show-title = false;
+  show-toc = false;
+|) '<
+  +bigframe<
+    +p{\fill;\fill;\fill;\fill;\fill;\fill;\fill;\fill;}
+  >
+  +p{おわり。}
+>

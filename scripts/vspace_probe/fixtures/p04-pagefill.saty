@@ -1,0 +1,35 @@
+% Probe 04 — where does a page STOP? One long pure-CJK paragraph, so every
+% line is 19.2pt of leading and every measurable row is CJK. The last baseline
+% on page 0 and the first on page 1 pin the text area's bottom and top edges.
+@require: stdjabook
+
+let-block ctx +ctx ctxflst bt =
+  read-block (ctxflst |> List.fold-left (fun ctx ctxf -> ctxf ctx) ctx) bt
+
+let document record bt = StdJaBook.document record '<%
+  +ctx[fun ctx -> (
+    let fsize = get-font-size ctx in
+    ctx |> set-paragraph-margin fsize fsize
+        |> set-leading (fsize *' 1.6)
+  )](bt);
+>%
+
+let-inline \fill =
+  {あいうえおかきくけこさしすせそたちつてとなにぬねのはひふへほまみむめもやゆよらりるれろわをん。
+   あいうえおかきくけこさしすせそたちつてとなにぬねのはひふへほまみむめもやゆよらりるれろわをん。
+   あいうえおかきくけこさしすせそたちつてとなにぬねのはひふへほまみむめもやゆよらりるれろわをん。
+   あいうえおかきくけこさしすせそたちつてとなにぬねのはひふへほまみむめもやゆよらりるれろわをん。
+   あいうえおかきくけこさしすせそたちつてとなにぬねのはひふへほまみむめもやゆよらりるれろわをん。
+   あいうえおかきくけこさしすせそたちつてとなにぬねのはひふへほまみむめもやゆよらりるれろわをん。}
+
+in
+
+document (|
+  title = {あ};
+  author = {あ};
+  date = {あ};
+  show-title = false;
+  show-toc = false;
+|) '<
+  +p{\fill;\fill;\fill;\fill;\fill;\fill;\fill;\fill;}
+>

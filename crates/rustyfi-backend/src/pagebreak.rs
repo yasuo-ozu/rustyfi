@@ -10,11 +10,14 @@ use crate::hbox::PureHorzBox;
 use crate::length::Length;
 use crate::vbox::VertBox;
 
-/// SATySFi's `min_first_line_ascender` (default, `primitives.ml:546`): a
+/// SATySFi's `min_first_line_ascender` (default, `primitives.cppo.ml:516`): a
 /// paragraph's top margin is padded so its first line has at least this much
-/// ascender slot above the baseline (`lineBreak.ml:857`). Applied to every
-/// inter-block advance.
-const MIN_FIRST_ASCENDER: Length = Length::pt(9.0);
+/// ascender slot above the baseline —
+/// `margin_top = paragraph_margin_top + max(0, 9pt - hgt)`,
+/// `lineBreak.ml:855-857`. The fold happens where upstream does it, in
+/// `line-break` (`primitives.rs`'s `prim_line_break`), BEFORE the margin
+/// collapse, so a larger preceding bottom margin absorbs the pad.
+pub const MIN_FIRST_ASCENDER: Length = Length::pt(9.0);
 
 /// One typeset line placed on a page, in page coordinates (y grows downward
 /// from the paper top; the PDF writer flips it).
@@ -168,9 +171,6 @@ pub fn chop_page(
     // Additive frame padding (`FramePad`) — stacks ON TOP of `pending_skip`
     // rather than max-collapsing with it (SATySFi frame padding is additive).
     let mut pending_pad = Length::ZERO;
-    // Whether the pending margin includes a paragraph TOP (`ParagTop`), which
-    // is the only kind SATySFi pads up to `min_first_line_ascender`.
-    let mut pending_parag = false;
     let mut placed_real_line = false;
     // Distinct from `placed_real_line`: true once ANY line box has been placed,
     // including a zero-extent one (a slydifi frame's `bb-gr` background line).
@@ -180,6 +180,30 @@ pub fn chop_page(
     // real height so an overflowing frame BODY isn't forced to roll off a page
     // whose only prior line was the zero-extent background (keeps slides atomic).
     let mut placed_any_line = false;
+    // Top pads of the `block-frame-breakable` frames open across this page's
+    // boundaries, so the continuation page can RE-APPLY them (the splice after
+    // the loop). Split in two, because a frame can straddle any number of pages
+    // while its `FrameStart` marker was consumed on some earlier one:
+    //
+    // * `carried_pads` — frames already open when this page began. Their count
+    //   is `unmatched_frame_ends` (a `FrameEnd` in this list whose `FrameStart`
+    //   is not), and the previous page spliced exactly that many `FramePad`s at
+    //   the front, outermost first — so they can be read straight off, with no
+    //   state carried between `chop_page` calls.
+    // * `open_pads` — the `FramePad(pad_t)` that `prim_block_frame_breakable`
+    //   emits immediately after each `FrameStart` consumed on THIS page.
+    //
+    // Frames are well nested, so a `FrameEnd` always closes the innermost entry
+    // (`open_pads` last, else `carried_pads` last).
+    let mut carried_pads: Vec<Length> = vboxes
+        .iter()
+        .take(unmatched_frame_ends(vboxes))
+        .filter_map(|vb| match vb {
+            VertBox::FramePad(l) => Some(*l),
+            _ => None,
+        })
+        .collect();
+    let mut open_pads: Vec<Option<Length>> = Vec::new();
     let mut idx = 0;
 
     while idx < vboxes.len() {
@@ -198,16 +222,25 @@ pub fn chop_page(
                 idx += 1;
             }
             VertBox::ParagTop(l) => {
-                // Same max-collapse as `Skip`, but flags the boundary as a
-                // paragraph top so the following line gets the
-                // `min_first_line_ascender` pad (SATySFi pads `margin_top` only).
+                // Same max-collapse as `Skip`. The `min_first_line_ascender`
+                // pad is already INSIDE this value — `prim_line_break` folds it
+                // in where upstream does (`lineBreak.ml:855-857`), before the
+                // collapse — so nothing extra happens here; the variant stays
+                // distinct only because the HTML reflow walker reads it.
                 pending_skip = pending_skip.max(*l);
-                pending_parag = true;
                 idx += 1;
             }
             VertBox::FramePad(l) => {
                 // Additive: frame padding stacks on top of the margin.
                 pending_pad += *l;
+                // Remember it as the innermost open frame's TOP pad: the first
+                // `FramePad` after a `FrameStart` is that frame's `pad_t` (the
+                // second is its `pad_b`, by which time the slot is filled).
+                // Carried frames' pads were read off the front of `vboxes`
+                // above, so nothing to do for them here.
+                if let Some(slot @ None) = open_pads.last_mut() {
+                    *slot = Some(*l);
+                }
                 idx += 1;
             }
             VertBox::ClearPage => {
@@ -228,6 +261,7 @@ pub fn chop_page(
             }
             VertBox::FrameStart(id) => {
                 let pos = prev_baseline.unwrap_or(y0);
+                open_pads.push(None);
                 lines.push(PlacedLine {
                     x: x0,
                     baseline_y: pos,
@@ -240,6 +274,12 @@ pub fn chop_page(
             }
             VertBox::FrameEnd(id) => {
                 let pos = prev_baseline.unwrap_or(y0);
+                // Closes the innermost frame still open (well-nested by
+                // construction): one opened on this page if there is one, else
+                // the innermost one carried in from an earlier page.
+                if open_pads.pop().is_none() {
+                    carried_pads.pop();
+                }
                 lines.push(PlacedLine {
                     x: x0,
                     baseline_y: pos,
@@ -323,18 +363,21 @@ pub fn chop_page(
                     // gap BELOW the leading (e.g. an itemize item-gap of 10 →
                     // 22pt, not 28). Applying the leading floor to block gaps was
                     // the bug that over-spaced every list/table by ~6pt/row.
-                    // SATySFi pads the paragraph's top margin up to
-                    // `min_first_line_ascender` (default 9pt, primitives.ml:546):
-                    // `margin_top = paragraph_margin_top + max(0, 9pt - hgt)`
-                    // (lineBreak.ml:857). Folded into the advance this is
-                    // `prev_depth + margin + max(hgt, 9pt)` — a short first line
-                    // (body ascender ≈8.5pt, or a tiny caption/rule line) still
-                    // gets at least a 9pt ascender slot above its baseline. The
-                    // matching `min_last_descender` field is dead in 0.0.11 (it
-                    // is assigned but never read), so only the TOP is padded.
+                    // NO `min_first_line_ascender` floor is applied HERE.
+                    // Upstream folds that pad into the paragraph's own
+                    // `margin_top` in `line-break`
+                    // (`margin_top = paragraph_margin_top + max(0, 9pt - hgt)`,
+                    // `lineBreak.ml:855-857`) and only THEN max-collapses it
+                    // against the previous block's bottom margin
+                    // (`pageBreak.ml`'s `squash_margins`, `:596-601`), so a
+                    // larger predecessor ABSORBS the pad. `prim_line_break`
+                    // does the same, which is why the arm below is a plain
+                    // `prev_depth + collapsed_margin + height`: clamping the
+                    // height to 9pt here, AFTER the collapse, would re-apply a
+                    // pad the collapse had already swallowed — 5pt too much at
+                    // every stdjabook section heading.
                     Some(b) if pending_skip + pending_pad > Length::ZERO => {
-                        let asc = if pending_parag { (*h).max(MIN_FIRST_ASCENDER) } else { *h };
-                        b + prev_depth + pending_skip + pending_pad + asc
+                        b + prev_depth + pending_skip + pending_pad + *h
                     }
                     Some(b) => b + leading.max(prev_depth + *h),
                 };
@@ -356,7 +399,6 @@ pub fn chop_page(
                 }
                 pending_skip = Length::ZERO;
                 pending_pad = Length::ZERO;
-                pending_parag = false;
                 prev_baseline = Some(baseline);
                 prev_depth = *depth;
                 placed_any_line = true;
@@ -379,6 +421,34 @@ pub fn chop_page(
     }
     vboxes.drain(0..idx);
 
+    // A `block-frame-breakable` still open when the page ends gets its
+    // `paddingT` AGAIN at the top of the continuation page. Upstream's chopper
+    // re-enters its frame arm for the `Midway` fragment and unconditionally
+    // adds the pad to the running column height (`pageBreak.ml:322`,
+    // `hgttotal_before = hgttotal +% pads.paddingT`), keeping the FULL `pads`
+    // for a midway fragment rather than zeroing them (`:352-357`, whose own
+    // "design consideration" comment records that zeroing "may be better" —
+    // i.e. it deliberately does not); `handlePdf.ml:325-330` then lays every
+    // fragment's contents out at `ypos -% pads.paddingT` and spans the deco
+    // rect from `ypos`. Dropping it seated every continuation page's first line
+    // flush against the text-area top: measured against SATySFi 0.0.11, the
+    // enumitem manual lost 5pt on each page continuing a `+code` block (its
+    // frame's `paddingT`) and 10pt on each page continuing the document's own
+    // `+block-frame` — 13 of its 27 pages.
+    //
+    // Splicing the pads back at the FRONT of the remainder (outermost first) is
+    // what makes this stateless: the next `chop_page` recognises them by
+    // counting the frames its input leaves unclosed.
+    if !vboxes.is_empty() {
+        let reopened: Vec<VertBox> = carried_pads
+            .iter()
+            .copied()
+            .chain(open_pads.into_iter().flatten())
+            .map(VertBox::FramePad)
+            .collect();
+        vboxes.splice(0..0, reopened);
+    }
+
     // Bottom-align this column's footnotes in its content area:
     // origin = (x0, y0 + height - stack_height) — the port of
     // `get_footnote_origin_position` (handlePdf.ml:400-403) +
@@ -388,6 +458,29 @@ pub fn chop_page(
         lines.extend(place_block_at((x0, y0 + height - fh), footnotes));
     }
     lines
+}
+
+/// How many `block-frame-breakable` frames are ALREADY OPEN at the head of
+/// `vboxes` — i.e. how many `FrameEnd` markers it contains whose matching
+/// `FrameStart` it does not, because that `FrameStart` was consumed by an
+/// earlier page. Markers are well nested by construction
+/// (`prim_block_frame_breakable` always emits a matched pair around its own
+/// contents), so a running depth that never goes below its own minimum counts
+/// them exactly.
+fn unmatched_frame_ends(vboxes: &[VertBox]) -> usize {
+    let mut depth: i32 = 0;
+    let mut deepest: i32 = 0;
+    for vb in vboxes {
+        match vb {
+            VertBox::FrameStart(_) => depth += 1,
+            VertBox::FrameEnd(_) => {
+                depth -= 1;
+                deepest = deepest.min(depth);
+            }
+            _ => {}
+        }
+    }
+    (-deepest) as usize
 }
 
 /// The vertical extent `place_block_at(_, vboxes)` will occupy below its

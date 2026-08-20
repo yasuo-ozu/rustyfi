@@ -1,0 +1,39 @@
+% Probe: how much body a page holds, and where the last line of a page sits.
+%
+% Nothing but numbered CJK one-line paragraphs, so the only thing under test is
+% the page geometry (content-area top and bottom) and the overflow rule that
+% decides which line is the last one to fit. Any difference in lines-per-page
+% here is a difference in the pager, not in any construct.
+%
+% The document class is `stdjareport` at figbox's own context settings
+% (12pt / 12pt margins / leading 1.6em), so the grid matches that corpus doc.
+@require: stdjareport
+
+let-block ctx +ctx ctxflst bt =
+  read-block (ctxflst |> List.fold-left (fun ctx ctxf -> ctxf ctx) ctx) bt
+
+in
+
+StdJaReport.document (|
+  title = {page fill probe};
+  author = {};
+  show-title = false;
+  show-toc = false;
+|) '<
+  +ctx[
+    set-font-size 12pt;
+    set-paragraph-margin 12pt 12pt;
+    set-leading (12pt *' 1.6);
+  ]<
+    +p{零一。} +p{零二。} +p{零三。} +p{零四。} +p{零五。}
+    +p{零六。} +p{零七。} +p{零八。} +p{零九。} +p{一〇。}
+    +p{一一。} +p{一二。} +p{一三。} +p{一四。} +p{一五。}
+    +p{一六。} +p{一七。} +p{一八。} +p{一九。} +p{二〇。}
+    +p{二一。} +p{二二。} +p{二三。} +p{二四。} +p{二五。}
+    +p{二六。} +p{二七。} +p{二八。} +p{二九。} +p{三〇。}
+    +p{三一。} +p{三二。} +p{三三。} +p{三四。} +p{三五。}
+    +p{三六。} +p{三七。} +p{三八。} +p{三九。} +p{四〇。}
+    +p{四一。} +p{四二。} +p{四三。} +p{四四。} +p{四五。}
+    +p{四六。} +p{四七。} +p{四八。} +p{四九。} +p{五〇。}
+  >
+>

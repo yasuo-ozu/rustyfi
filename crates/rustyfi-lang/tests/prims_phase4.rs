@@ -167,14 +167,14 @@ fn set_paragraph_margin_sets_top_and_bottom_independently() {
 /// `rustyfi-backend/tests/pagebreak.rs`'s
 /// `inter_block_advance_is_prev_depth_plus_margin_plus_height`.
 ///
-/// KNOWN GAP, deliberately not landed: `line-break` currently pushes the RAW
-/// `ctx.paragraph_top` and `chop_page` clamps the line height to 9pt after the
+/// This was `#[ignore]`d for a while: `line-break` used to push the RAW
+/// `ctx.paragraph_top` and `chop_page` clamped the line height to 9pt after the
 /// collapse instead. The two differ only when the previous block's bottom
-/// margin wins, but correcting it regresses the enumitem corpus document —
-/// the full argument, and the two-line change that closes it, are in the
-/// "KNOWN GAP" header of `rustyfi-backend/tests/pagebreak.rs`.
+/// margin wins, and correcting it regressed the enumitem corpus document until
+/// the space DEFICIT that was masking the surplus (a breakable frame's
+/// `paddingT`, dropped on continuation pages) was found. See the header of
+/// `rustyfi-backend/tests/pagebreak.rs`'s inter-block-advance section.
 #[test]
-#[ignore = "known gap: see rustyfi-backend/tests/pagebreak.rs's KNOWN GAP header"]
 fn line_break_folds_the_min_first_ascender_pad_into_the_paragraph_top_margin() {
     // A paragraph of pure `inline-skip`s: zero height, so the pad is the full
     // 9pt and the arithmetic is metric-independent.

@@ -1,0 +1,24 @@
+% Probe: the vertical extent a `+code` block occupies, and where its contents
+% sit inside it.
+%
+% Body text is CJK on purpose: the two engines' font descriptors agree for the
+% japanese face (19.36 vs 19.34) and disagree for the latin one, so a CJK
+% baseline is comparable ACROSS engines and a latin one is not. The code
+% content itself is latin (lmmono) and is only ever compared engine-internally,
+% against the frame rectangle the same engine drew.
+@require: stdjabook
+@require: code
+
+document (|
+  title = {code probe};
+  author = {};
+  show-title = false;
+  show-toc = false;
+|) '<
+  +p{あいうえお。}
+  +code(`one`);
+  +p{かきくけこ。}
+  +code(`two
+three`);
+  +p{さしすせそ。}
+>

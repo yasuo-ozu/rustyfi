@@ -2383,8 +2383,9 @@ struct OpenFrame {
 ///   closes on one page, else `decoH` on its first (opening) page, `decoM` on
 ///   each fully-contained middle page, and `decoT` on its closing page — the
 ///   `pageBreak.ml` fragment split. Each fragment's rect spans only that
-///   page's content extent; the top pad is applied only to the head/single
-///   fragment and the bottom pad only to the tail/single fragment. This is
+///   page's content extent, plus the frame's TOP pad (which `chop_page`
+///   re-applies on every continuation page, `pageBreak.ml:322`) and, on the
+///   tail/single fragment, the bottom pad. This is
 ///   what lets `figbox`'s `+fig-on-right`/`+fig-on-left` (which draw their
 ///   image in `decoH`) render on figures whose surrounding text wraps across a
 ///   page break.
@@ -2453,8 +2454,17 @@ pub fn fire_hooks(interp: &mut eval::Interp, doc: &DocumentValue) -> Result<(), 
                         // the single-fragment `decoS` (both pads).
                         if let Some(pos) = open.iter().rposition(|f| f.id == *id) {
                             let frame = open.remove(pos);
-                            let (deco_idx, incl_top) =
-                                if frame.carried { (3, false) } else { (0, true) };
+                            // EVERY fragment carries the top pad, not just the
+                            // first: `chop_page` re-applies a still-open
+                            // frame's `paddingT` at the top of each
+                            // continuation page (upstream `pageBreak.ml:322`),
+                            // so the pad is real space on this page too and the
+                            // rect has to cover it — upstream's
+                            // `handlePdf.ml:325-330` spans the rect from the
+                            // fragment's `ypos`, above the `-% paddingT` shift
+                            // it lays the contents out at.
+                            let deco_idx = if frame.carried { 3 } else { 0 };
+                            let incl_top = true;
                             let gr = fire_block_frame_fragment(
                                 interp, doc, &frame, deco_idx, incl_top, true,
                             )?;
@@ -2528,8 +2538,10 @@ pub fn fire_hooks(interp: &mut eval::Interp, doc: &DocumentValue) -> Result<(), 
             if frame.top.is_none() && frame.bottom.is_none() {
                 continue;
             }
-            let (deco_idx, incl_top) = if frame.carried { (2, false) } else { (1, true) };
-            let gr = fire_block_frame_fragment(interp, doc, frame, deco_idx, incl_top, false)?;
+            // Top pad on every fragment — see the `FrameMarker { end: true }`
+            // arm above for why a carried fragment has one too.
+            let deco_idx = if frame.carried { 2 } else { 1 };
+            let gr = fire_block_frame_fragment(interp, doc, frame, deco_idx, true, false)?;
             page_end_fires.push((frame.open_seq, gr));
             fired_seqs.push(frame.open_seq);
         }

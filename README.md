@@ -300,15 +300,16 @@ the original SATySFi produced, word box by word box
 
 | doc | pages (port / SATySFi) | words in the same place | exercises |
 |---|---|---|---|
-| latexcmds | 12 / 12 | 89.5 % | math, framed and coloured boxes |
+| latexcmds | 12 / 12 | 89.6 % | math, framed and coloured boxes |
 | xpath | 11 / 11 | 96.7 % | paths, béziers, diagrams |
 | enumitem | 27 / 27 | 88.9 % | deeply nested, customized lists |
-| easytable | 19 / 19 | 86.8 % | tables, rules, spans |
-| figbox | 20 / **21** | 88.1 % | figures, floats, captions |
+| easytable | 19 / 19 | 87.2 % | tables, rules, spans |
+| figbox | 21 / 21 | 88.7 % | figures, floats, captions |
 | slydifi | 30 / 30 | 85.1 % | slides, overlays, themes |
 
-Glyph metrics agree to within 0.75 pt at the 95th percentile, so what is left is
-the line breaker's own judgement — and one missing page in `figbox`.
+Every document now paginates exactly as upstream does. Glyph metrics agree to
+within 0.75 pt at the 95th percentile, so what is left is the line breaker's own
+judgement.
 
 It is also faster. Minimum CPU time over three interleaved runs against SATySFi
 0.0.11 (`--bytecomp` is upstream's bytecode compiler, the fair comparison for
@@ -329,7 +330,12 @@ upstream's default (non-bytecode) interpreter it is still 3.1× faster.
 
 ## Known gaps
 
-- `figbox` comes out one page short of upstream — a line-packing difference.
+- A `block-frame-breakable` that is CUT by a page break loses its top padding on
+  the continuation page: upstream re-enters the frame box on the new page and
+  charges `paddingT` again (`pageBreak.ml:323`), whereas here the frame's
+  `FrameStart`/pad markers were consumed by the page that opened it. Worth about
+  10 pt for a `+block-frame`, and only for frames that actually straddle a
+  break — no corpus document's pagination turns on it.
 - Fonts are named by file or hash entry, not by package: a document asking for
   `fonts-junicode:Junicode-Bold` falls back to a name heuristic.
 - Cross-version `deco` crosses both ways now, including through optional

@@ -25,7 +25,7 @@ use rustyfi_backend::{
     MathConstants, MathCorner, MathGlyph, MathKind, MathScriptLevel, NamedDest, ObjRepr,
     OutlineEntry, Paddings, Page, PageGeometry, PaperSize, Path, PathSeg, PdfPageResource, Point,
     PrePath, PureHorzBox, Script, ScriptFont, Subpath, TabularBox, VertBox, VertVariantPolicy,
-    FORCED_BREAK_PENALTY,
+    FORCED_BREAK_PENALTY, MIN_FIRST_ASCENDER,
 };
 use rustyfi_syntax::RustyfiVersion;
 use std::collections::{BTreeMap, BTreeSet};
@@ -3056,7 +3056,29 @@ fn prim_line_break(interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, E
     // own `n == 0` early return) — don't manufacture a margin around nothing.
     let mut out = Vec::with_capacity(lines.len() + 2);
     if !lines.is_empty() {
-        out.push(VertBox::ParagTop(ctx.paragraph_top));
+        // `min_first_line_ascender` (9pt, `primitives.cppo.ml:516`) is folded
+        // into the paragraph's OWN top margin, exactly as `lineBreak.ml:855-857`
+        // does — `margin_top = paragraph_margin_top + max(0, 9pt - hgt)` over
+        // the FIRST formed line's height. That padded value is what
+        // `pageBreak.ml`'s `squash_margins` (`:596-601`) then max-collapses
+        // against the previous block's bottom margin, so a larger predecessor
+        // ABSORBS the pad instead of stacking it on top. Applying the floor
+        // downstream to the line HEIGHT, after the collapse, is a different
+        // function: it over-spaced every block whose predecessor had the larger
+        // bottom margin — 5pt at every stdjabook section heading, whose 4pt
+        // rule lines are shorter than the floor.
+        //
+        // The BOTTOM margin takes no pad: `min_last_descender` is assigned at
+        // `lineBreak.ml:1144` and never read.
+        let first_height = lines
+            .iter()
+            .find_map(|vb| match vb {
+                VertBox::Line { height, .. } => Some(*height),
+                _ => None,
+            })
+            .unwrap_or(Length::ZERO);
+        let pad = (MIN_FIRST_ASCENDER - first_height).max(Length::ZERO);
+        out.push(VertBox::ParagTop(ctx.paragraph_top + pad));
         out.extend(lines);
         out.push(VertBox::Skip(ctx.paragraph_bottom));
     }

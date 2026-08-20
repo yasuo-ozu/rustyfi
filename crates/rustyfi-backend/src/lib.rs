@@ -37,6 +37,8 @@ pub use linebreak::{
 pub use math::{
     default_math_class_map, default_math_variant_char, MathCharClass, MathGlyph, MathKind,
 };
-pub use pagebreak::{chop_page, place_block_at, placed_line_extent, Page, PlacedLine};
+pub use pagebreak::{
+    chop_page, place_block_at, placed_line_extent, Page, PlacedLine, MIN_FIRST_ASCENDER,
+};
 pub use tabular::{Cell, Paddings, TabularBox, TabularCellBox};
 pub use vbox::{ListMarkKind, VertBox};

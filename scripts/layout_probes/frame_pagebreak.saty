@@ -1,0 +1,37 @@
+% Probe: where a page breaks INSIDE a `block-frame-breakable`.
+%
+% Upstream reserves the open frame's bottom padding while it is deciding
+% (`pageBreak.ml:325` `skip_after_break = pads.paddingB +% prev.skip_after_break`,
+% consulted by `calculate_badness_of_page_break` through `hgtB`), because
+% breaking here still has to draw that padding under the last line. A pager that
+% only asks "does this line's own extent fit?" therefore fits one more line than
+% upstream whenever the shortfall is under `paddingB`.
+%
+% `paddingB` is a deliberate 30pt — more than a line — so the difference cannot
+% be confused with a sub-point metric wobble. Body is CJK so the two engines'
+% font descriptors agree.
+@require: stdjareport
+@require: vdecoset
+@require: color
+
+let-block ctx +frame bt =
+  let decoset = VDecoSet.simple-frame 0.5pt Color.black Color.white in
+  block-frame-breakable ctx (5pt, 5pt, 10pt, 30pt) decoset (fun ctx -> read-block ctx bt)
+
+in
+
+StdJaReport.document (|
+  title = {frame page-break probe};
+  author = {};
+  show-title = false;
+  show-toc = false;
+|) '<
+  +p{零一。} +p{零二。} +p{零三。} +p{零四。} +p{零五。}
+  +p{零六。} +p{零七。} +p{零八。} +p{零九。} +p{一〇。}
+  +p{一一。} +p{一二。} +p{一三。} +p{一四。} +p{一五。}
+  +frame<
+    +p{枠一。} +p{枠二。} +p{枠三。} +p{枠四。} +p{枠五。}
+    +p{枠六。} +p{枠七。} +p{枠八。} +p{枠九。} +p{枠十。}
+  >
+  +p{後一。} +p{後二。}
+>

@@ -299,24 +299,106 @@ fn page_top_discards_margins_but_keeps_frame_padding() {
     );
 }
 
+/// …and a frame still OPEN when the page ends gets that `paddingT` AGAIN at
+/// the top of the continuation page. Upstream re-enters its frame arm for the
+/// `Midway` fragment and adds the pad unconditionally (`pageBreak.ml:322`,
+/// `hgttotal_before = hgttotal +% pads.paddingT`), keeping the full `pads`
+/// rather than zeroing them (`:352-357`); `handlePdf.ml:325-330` lays every
+/// fragment out at `ypos -% paddingT`.
+///
+/// Measured against real SATySFi 0.0.11 on `scripts/vspace_probe/fixtures/
+/// p06-frame-across-page.saty` (one frame, 13pt top pad, body spanning a page
+/// break): the continuation page's first baseline was 99.31 against upstream's
+/// 112.31 — exactly 13.00pt too high — and is now 112.31.
+#[test]
+fn a_frame_open_across_a_page_break_re_pads_the_continuation_page() {
+    use rustyfi_backend::DecoId;
+    let id = DecoId(0);
+    // Frame with a 10pt top pad whose three lines cannot all fit one page.
+    let mut vboxes = vec![
+        VertBox::FrameStart(id),
+        VertBox::FramePad(Length::pt(10.0)),
+        plain_line(8.0, 2.0, 20.0),
+        plain_line(8.0, 2.0, 20.0),
+        plain_line(8.0, 2.0, 20.0),
+        VertBox::FramePad(Length::pt(4.0)),
+        VertBox::FrameEnd(id),
+    ];
+    let origin = (Length::ZERO, Length::pt(100.0));
+    // 40pt of column: pad(10) + height(8) = 118 for the first line, +20 leading
+    // for the second = 138, which still fits `y0 + 40 = 140` with depth 2; the
+    // third would not.
+    let page1 = chop_page(origin, Length::pt(40.0), &mut vboxes);
+    let body: Vec<&PlacedLine> = page1.iter().filter(|l| l.contents.is_empty()).collect();
+    assert_eq!(body.len(), 2, "two of the frame's three lines fit");
+    assert_eq!(body[0].baseline_y, Length::pt(118.0));
+
+    // The remainder now leads with the re-applied pad, so the continuation's
+    // first line sits at `y0 + paddingT + height` — NOT flush at `y0 + height`.
+    assert_eq!(vboxes.first(), Some(&VertBox::FramePad(Length::pt(10.0))));
+    let page2 = chop_page(origin, Length::pt(400.0), &mut vboxes);
+    let body2: Vec<&PlacedLine> = page2.iter().filter(|l| l.contents.is_empty()).collect();
+    assert_eq!(
+        body2[0].baseline_y,
+        Length::pt(118.0),
+        "a continuation fragment re-applies the frame's own paddingT"
+    );
+}
+
+/// The same, one page further on: a frame spanning THREE pages re-pads each
+/// continuation. `chop_page` is stateless, so it has to recognise the pad it
+/// spliced in itself — it does, by counting the frames its input leaves
+/// unclosed (`unmatched_frame_ends`), which is what keeps this working past
+/// the first continuation.
+#[test]
+fn a_frame_spanning_three_pages_re_pads_every_continuation() {
+    use rustyfi_backend::DecoId;
+    let id = DecoId(0);
+    let mut vboxes = vec![VertBox::FrameStart(id), VertBox::FramePad(Length::pt(10.0))];
+    for _ in 0..6 {
+        vboxes.push(plain_line(8.0, 2.0, 20.0));
+    }
+    vboxes.push(VertBox::FramePad(Length::pt(4.0)));
+    vboxes.push(VertBox::FrameEnd(id));
+
+    let origin = (Length::ZERO, Length::pt(100.0));
+    for page in 0..3 {
+        let lines = chop_page(origin, Length::pt(40.0), &mut vboxes);
+        // Body lines carry no contents here; the frame's own Start/End markers
+        // do (a zero-width `FrameMarker`), so they are what gets filtered out.
+        let first = lines
+            .iter()
+            .find(|l| l.contents.is_empty())
+            .expect("each page places lines");
+        assert_eq!(
+            first.baseline_y,
+            Length::pt(118.0),
+            "page {page} of a 3-page frame must start below the re-applied pad"
+        );
+    }
+}
+
 // ============================================================================
-// KNOWN GAP — the inter-block advance's `min_first_line_ascender` clamp.
+// The inter-block advance's `min_first_line_ascender` handling. CLOSED — these
+// two were `#[ignore]`d for a while, and the reason is worth keeping.
 //
-// Both tests below encode the FAITHFUL upstream rule and both currently FAIL.
-// The fix is small and is proven correct in isolation (see each test's own
-// notes), but landing it regresses the enumitem corpus document past
-// `scripts/layout_fidelity_baseline.json`'s tolerance — text_match 0.8891 ->
-// 0.8608, and whole-document median |dy| against upstream 8.8pt -> 59.4pt —
-// because a SEPARATE, still-unlocated space DEFICIT elsewhere in that document
-// is currently masked by this very over-spacing (~5pt per stdjabook section
-// heading, whose 4pt rule lines are shorter than the 9pt ascender floor).
-// Removing the surplus makes the port run further ahead of upstream's
-// pagination, and the divergence compounds over 27 pages. Find and fix that
-// deficit first, then drop both `#[ignore]`s together — the change is:
+// They encode the faithful upstream rule (the pad belongs in the paragraph's
+// own `margin_top`, BEFORE the collapse), which was written and measured long
+// before it could land: removing the ~5pt-per-stdjabook-section-heading surplus
+// made the port run FURTHER AHEAD of upstream's pagination, dropping enumitem's
+// text_match 0.8891 -> 0.8608, because a separate space DEFICIT in that
+// document was being masked by exactly this over-spacing.
 //
-//   * `prim_line_break` (rustyfi-lang) pushes
-//     `ParagTop(paragraph_top + max(0, 9pt - first_line_height))`, and
-//   * `chop_page`'s inter-block arm drops its `max(h, 9pt)` clamp.
+// That deficit is now found and fixed: `chop_page` was dropping a
+// `block-frame-breakable`'s `paddingT` on every CONTINUATION page (upstream
+// re-applies it per fragment, `pageBreak.ml:322`), which cost the enumitem
+// manual 5pt on each page continuing a `+code` block and 10pt on each page
+// continuing its own `+block-frame` — 13 of 27 pages. With both changes in,
+// enumitem is back to 0.8865 and slydifi (0.8511 -> 0.8748), easytable
+// (0.8683 -> 0.8751) and figbox (0.8805 -> 0.8940, and page-count PARITY at
+// last) all improve. The moral: a fidelity fix that regresses one document is
+// worth pinning rather than reverting — the regression is evidence, and here
+// it pointed straight at the compensating bug.
 // ============================================================================
 
 /// SATySFi's page accumulator adds, per box, exactly `hgt + (-dpt)` for a
@@ -341,8 +423,6 @@ fn page_top_discards_margins_but_keeps_frame_padding() {
 /// advanced 29.0pt — `9 - 2.7466 = 6.253pt` too much, exactly the surplus this
 /// test pins.
 #[test]
-#[ignore = "known gap: faithful, but removing the surplus regresses the \
-            enumitem corpus doc — see this section's header comment"]
 fn inter_block_advance_is_prev_depth_plus_margin_plus_height() {
     // Two blocks, as `line-break` emits them. The second block's `ParagTop`
     // ALREADY carries the `min_first_line_ascender` pad folded in
@@ -374,7 +454,6 @@ fn inter_block_advance_is_prev_depth_plus_margin_plus_height() {
 /// pad really does show up in the gap — `max(2, 8) = 8` — and the old and the
 /// new rule agree, which is why the surplus above went unnoticed.
 #[test]
-#[ignore = "known gap: paired with the test above — see this section's header"]
 fn inter_block_advance_keeps_the_pad_when_the_padded_top_margin_wins() {
     let mut vboxes = vec![
         VertBox::ParagTop(Length::pt(2.0)),

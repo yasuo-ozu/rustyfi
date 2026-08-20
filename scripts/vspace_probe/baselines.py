@@ -9,14 +9,27 @@ places a run at an exact baseline in PDF user space, identically for both
 writers.
 
 This walks each page's (possibly Flate-compressed) content stream with a tiny
-tokenizer, tracks the text matrix, and prints one row per distinct baseline:
+tokenizer, tracks the text matrix AND the graphics-state CTM, and prints one row
+per distinct baseline:
 
     y_from_top   dy_from_previous   x_of_first_run   fonts   text-ish
 
 `y_from_top` = page_height - baseline_y, so it reads the same way as
 `pdftotext -bbox` output (increasing downward).
 
-Usage: baselines.py FILE.pdf [--page N]... [--min-dy 0.01]
+The CTM is not optional: the two writers position text through DIFFERENT
+operators. Upstream SATySFi emits `q 1 0 0 1 0 0 cm BT <Tm> Ts TJ ET Q` per run
+— an identity `cm`, everything in `Tm` — while this port emits `BT <Td> Tj ET`
+and wraps table cells and inline graphics in a translating `q .. cm .. Q`. Read
+the text matrix alone and every run inside such a wrapper lands at the page
+origin: easytable's port render reports 513 baselines that way against its real
+565, and upstream (which never translates) reports 565 either way. That is a
+52-baseline phantom deficit created purely by reading the stream wrong.
+
+Usage: baselines.py FILE.pdf [--page N]... [--tol 0.05]
+
+`page_baselines()` is the reusable entry point (used by
+`scripts/layout_fidelity.py`'s `lines` metric).
 """
 
 from __future__ import annotations
@@ -122,17 +135,116 @@ def page_objects(data: bytes, objs: dict[int, bytes]) -> list[tuple[float, list[
     return out
 
 
-TOKEN = re.compile(rb"(\([^)]*\)|<[0-9A-Fa-f\s]*>|/[^\s/\[\]<>()]+|\[|\]|[-+]?[\d.]+|[A-Za-z'\"*]+)")
+def page_resources(objs: dict[int, bytes]) -> list[bytes | None]:
+    """Each page's raw /Resources value (a `<< .. >>` blob or an `N 0 R`), in
+    document order — what `runs_of` needs to follow a `Do` into a Form XObject."""
+    return [dict_value(objs[num], b"Resources") for num in page_order(objs)]
 
 
-def runs_of(content: bytes) -> list[tuple[float, float, str]]:
-    """[(x, y, font)] for every text-showing operator, in stream order."""
+def deref(objs: dict[int, bytes], blob: bytes | None) -> bytes:
+    """Follow an `N 0 R` indirect reference; anything else is already the value."""
+    if blob is None:
+        return b""
+    m = re.fullmatch(rb"\s*(\d+)\s+\d+\s+R\s*", blob)
+    return objs.get(int(m.group(1)), b"") if m else blob
+
+
+def dict_value(body: bytes, key: bytes) -> bytes | None:
+    """The raw value of `/key` in a dictionary blob: a balanced `<< .. >>`, an
+    `N 0 R`, an array, a name, or a number. Enough of a parser to walk
+    /Resources -> /XObject -> a form's stream; not a PDF library."""
+    m = re.search(rb"/" + key + rb"\b", body)
+    if not m:
+        return None
+    i = m.end()
+    while i < len(body) and body[i : i + 1].isspace():
+        i += 1
+    if body[i : i + 2] == b"<<":
+        depth, j = 0, i
+        while j < len(body):
+            if body[j : j + 2] == b"<<":
+                depth += 1
+                j += 2
+            elif body[j : j + 2] == b">>":
+                depth -= 1
+                j += 2
+                if depth == 0:
+                    return body[i:j]
+            else:
+                j += 1
+        return body[i:]
+    m2 = re.match(rb"\d+\s+\d+\s+R|/[^\s/\[\]<>()]+|\[[^\]]*\]|[-+]?[\d.]+", body[i:])
+    return m2.group(0) if m2 else None
+
+
+def xobjects(objs: dict[int, bytes], resources: bytes | None) -> dict[str, int]:
+    """{name -> object number} for the /XObject entries a stream can `Do`."""
+    xo = dict_value(deref(objs, resources), b"XObject")
+    if xo is None:
+        return {}
+    return {
+        name.decode("latin1"): int(num)
+        for name, num in re.findall(rb"/([^\s/\[\]<>()]+)\s+(\d+)\s+\d+\s+R", deref(objs, xo))
+    }
+
+
+# A literal string must be consumed AS ONE TOKEN even when it contains escaped
+# or balanced parentheses, or the rest of its bytes leak out as operators. The
+# port really does emit them: `\(` / `\)` appear 166 times in latexcmds' stream,
+# and the naive `\([^)]*\)` ended a token at the first escaped `)`, leaving a
+# stray `'` (the show-next-line operator) to be read as a text-showing op —
+# which is why that render reported 5195 runs against its 5193 `BT`s.
+TOKEN = re.compile(
+    rb"(\((?:\\.|[^\\()]|\((?:\\.|[^\\()])*\))*\)"
+    rb"|<[0-9A-Fa-f\s]*>|/[^\s/\[\]<>()]+|\[|\]|[-+]?[\d.]+|[A-Za-z'\"*]+)",
+    re.S,
+)
+
+IDENTITY = (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
+
+
+def matmul(a: list[float], b: list[float]) -> list[float]:
+    """`a` then `b` — the 3x2 affine product PDF's `cm`/`Tm` compose with."""
+    return [
+        a[0] * b[0] + a[1] * b[2],
+        a[0] * b[1] + a[1] * b[3],
+        a[2] * b[0] + a[3] * b[2],
+        a[2] * b[1] + a[3] * b[3],
+        a[4] * b[0] + a[5] * b[2] + b[4],
+        a[4] * b[1] + a[5] * b[3] + b[5],
+    ]
+
+
+def runs_of(
+    content: bytes,
+    objs: dict[int, bytes] | None = None,
+    resources: bytes | None = None,
+    base_ctm: list[float] | None = None,
+    _seen: frozenset[int] = frozenset(),
+) -> list[tuple[float, float, str]]:
+    """[(x, y, font)] for every text-showing operator, in stream order, in
+    DEVICE space — i.e. Tm composed with the graphics-state CTM, so a run
+    inside a translating `q .. cm .. Q` reports where it actually lands.
+
+    Pass `objs` and the stream's `resources` to also FOLLOW `Do` into Form
+    XObjects. Without that, text inside a form is silently invisible — and
+    forms are where a good deal of it lives: figbox's embedded example pages
+    hold text in 23 of them in each engine, and gakushin's whole 学振 form
+    template is nothing but nested forms (its page-level text is 18 baselines
+    against 66 once the forms are walked). This is the walker-skips-a-nested-
+    container bug shape, in a measuring tool: the missing content just looks
+    like whitespace.
+    """
     toks = [m.group(1) for m in TOKEN.finditer(content)]
     out: list[tuple[float, float, str]] = []
     stack: list[bytes] = []
-    tm = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+    tm = list(IDENTITY)
     tlm = list(tm)
+    ctm = list(base_ctm) if base_ctm else list(IDENTITY)
+    gstack: list[list[float]] = []
+    leading = 0.0
     font = "?"
+    forms = xobjects(objs, resources) if objs is not None else {}
 
     def num(b: bytes) -> float:
         try:
@@ -140,14 +252,31 @@ def runs_of(content: bytes) -> list[tuple[float, float, str]]:
         except ValueError:
             return 0.0
 
+    def newline(dx: float, dy: float) -> list[float]:
+        return matmul([1.0, 0.0, 0.0, 1.0, dx, dy], tlm)
+
     for t in toks:
-        if t in (b"Tj", b"TJ", b"'", b'"'):
-            out.append((tm[4], tm[5], font))
+        if t in (b"Tj", b"TJ"):
+            m = matmul(tm, ctm)
+            out.append((m[4], m[5], font))
+            stack.clear()
+            continue
+        if t in (b"'", b'"'):
+            # Both move to the next line FIRST, then show.
+            tlm = newline(0.0, -leading)
+            tm = list(tlm)
+            m = matmul(tm, ctm)
+            out.append((m[4], m[5], font))
             stack.clear()
             continue
         if t == b"Tf":
             if len(stack) >= 2 and stack[-2].startswith(b"/"):
                 font = stack[-2].decode("latin1")
+            stack.clear()
+            continue
+        if t == b"TL":
+            if stack:
+                leading = num(stack[-1])
             stack.clear()
             continue
         if t == b"Tm":
@@ -159,23 +288,90 @@ def runs_of(content: bytes) -> list[tuple[float, float, str]]:
         if t in (b"Td", b"TD"):
             if len(stack) >= 2:
                 dx, dy = num(stack[-2]), num(stack[-1])
-                tlm = [tlm[0], tlm[1], tlm[2], tlm[3], tlm[4] + dx, tlm[5] + dy]
+                if t == b"TD":
+                    leading = -dy
+                tlm = newline(dx, dy)
                 tm = list(tlm)
             stack.clear()
             continue
         if t == b"T*":
-            tlm = [tlm[0], tlm[1], tlm[2], tlm[3], tlm[4], tlm[5]]
+            tlm = newline(0.0, -leading)
             tm = list(tlm)
             stack.clear()
             continue
+        if t == b"cm":
+            if len(stack) >= 6:
+                ctm = matmul([num(x) for x in stack[-6:]], ctm)
+            stack.clear()
+            continue
+        if t == b"q":
+            gstack.append(list(ctm))
+            stack.clear()
+            continue
+        if t == b"Q":
+            if gstack:
+                ctm = gstack.pop()
+            stack.clear()
+            continue
+        if t == b"Do":
+            name = stack[-1][1:].decode("latin1") if stack and stack[-1].startswith(b"/") else ""
+            objnum = forms.get(name)
+            if objs is not None and objnum is not None and objnum not in _seen and len(_seen) < 8:
+                body = objs[objnum]
+                if re.search(rb"/Subtype\s*/Form\b", body):
+                    mat = dict_value(body, b"Matrix")
+                    nums = [float(x) for x in re.findall(rb"[-+]?[\d.]+", mat or b"")]
+                    form_ctm = matmul(nums, ctm) if len(nums) == 6 else list(ctm)
+                    out.extend(
+                        runs_of(
+                            stream_bytes(body) or b"",
+                            objs,
+                            dict_value(body, b"Resources"),
+                            form_ctm,
+                            _seen | {objnum},
+                        )
+                    )
+            stack.clear()
+            continue
         if t in (b"BT",):
-            tm = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+            tm = list(IDENTITY)
             tlm = list(tm)
             stack.clear()
             continue
         stack.append(t)
         if len(stack) > 8:
             del stack[0]
+    return out
+
+
+def page_baselines(pdf: Path, tol: float = 0.05) -> list[list[float]]:
+    """Per page, the sorted distinct text BASELINES as y-from-top.
+
+    This is the reusable form of what the CLI prints. Runs whose baselines
+    agree to within `tol` are one row: within a single writer, every run of one
+    typeset line is emitted at the identical `y` (to the 3 decimals PDF numbers
+    carry), so `tol` only has to absorb that rounding — see
+    `scripts/layout_fidelity.py`'s `line_count` for the measured evidence that
+    the port-vs-upstream delta is flat from 0.02 all the way to 0.5.
+
+    `tol=0.0` returns the RAW distinct baselines (exact duplicates collapsed
+    only), which a caller can then cluster at any tolerance it likes without
+    re-reading the file — what `layout_fidelity.py --tol-sweep` does.
+    """
+    data = pdf.read_bytes()
+    objs = parse_objects(data)
+    res = page_resources(objs)
+    out: list[list[float]] = []
+    for pi, (h, cs) in enumerate(page_objects(data, objs)):
+        content = b"".join(stream_bytes(objs.get(n, b"")) or b"" for n in cs)
+        rows: list[float] = []
+        runs = runs_of(content, objs, res[pi] if pi < len(res) else None)
+        for _, y, _ in sorted(runs, key=lambda r: h - r[1]):
+            yt = h - y
+            if rows and yt - rows[-1] <= tol:
+                continue
+            rows.append(yt)
+        out.append(rows)
     return out
 
 
@@ -189,22 +385,25 @@ def main() -> int:
     data = args.pdf.read_bytes()
     objs = parse_objects(data)
     pages = page_objects(data, objs)
+    res = page_resources(objs)
     want = args.page or list(range(len(pages)))
     for pi in want:
         if pi >= len(pages):
             continue
         h, cs = pages[pi]
         content = b"".join(stream_bytes(objs.get(n, b"")) or b"" for n in cs)
-        rs = runs_of(content)
+        rs = runs_of(content, objs, res[pi] if pi < len(res) else None)
+        # Cluster in BASELINE order, not stream order: with the CTM followed and
+        # forms walked, the stream visits a page's lines out of order often
+        # enough that clustering as they arrive would split one line in two.
         rows: list[tuple[float, float, list[str]]] = []
-        for x, y, f in rs:
+        for x, y, f in sorted(rs, key=lambda r: h - r[1]):
             yt = h - y
-            if rows and abs(rows[-1][0] - yt) <= args.tol:
+            if rows and yt - rows[-1][0] <= args.tol:
                 if f not in rows[-1][2]:
                     rows[-1][2].append(f)
                 continue
             rows.append((yt, x, [f]))
-        rows.sort(key=lambda r: r[0])
         print(f"=== page {pi} (h={h}) — {len(rows)} baselines ===")
         prev = None
         for yt, x, fs in rows:

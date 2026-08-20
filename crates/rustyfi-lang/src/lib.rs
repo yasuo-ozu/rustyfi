@@ -876,11 +876,19 @@ pub fn compile_document_v006_xver_with_aux(
         }
         match &dep.cst {
             // Native 0.0.6 co-dependency (e.g. the entry ALSO `@require:`s
-            // an ordinary 0.0.6 package `list.satyg`-style): splice + wrap,
-            // NO guard — same unrestricted-0.0.6-primitive-use posture as
-            // `compile_document_cst_with_trials`'s own pure 0.0.6 path
-            // (§X4.3 item 4).
+            // an ordinary 0.0.6 package `list.satyg`-style): splice + wrap.
+            // Its VALUE half keeps the unrestricted-0.0.6-primitive-use
+            // posture (§X4.3 item 4) — every binding here is
+            // `Ast::VersionScope(V0_0, _)`-wrapped, so a forked primitive
+            // resolves against 0.0.6's own `PrimDef`.
+            //
+            // Its TYPE-DECLARATION half is NOT unrestricted, and used to be
+            // unchecked: Slice X4c (`guard_v006_type_text`, and the banner
+            // comment above it) refuses/relabels the 0.0.6-authored `type`
+            // text that a merged program's hard-coded-`V0_1` `Checker` would
+            // otherwise re-read with the wrong vocabulary.
             rustyfi_loader::LoadedCst::V0_0(cst) => {
+                let adapted = guard_v006_type_text(&cst.prelude, &dep.path)?;
                 // Transition INTO 0.0.6-authored code: this dependency reads
                 // any crossed `deco` export at 0.0.6's `graphics list` shape.
                 // Deliberately BEFORE `start` is taken, so the generated glue
@@ -893,7 +901,7 @@ pub fn compile_document_v006_xver_with_aux(
                     v006_view_installed = true;
                 }
                 let start = prelude.len();
-                prelude.extend(cst.prelude.iter().cloned());
+                prelude.extend(adapted);
                 v006_indices.extend(start..prelude.len());
                 note_stage(&mut stages, cst, start, prelude.len());
             }
@@ -1076,9 +1084,14 @@ pub fn compile_document_v006_xver_with_aux(
 
     // Entry's OWN top-level lets: splice + wrap, same as a native 0.0.6 dep
     // (§X4.3 item 4 — this is the "one new source of V0_0-tagged items"
-    // X4a adds beyond X2.2: not just dependencies, but the entry itself).
+    // X4a adds beyond X2.2: not just dependencies, but the entry itself) —
+    // and, Slice X4c, through the same 0.0.6-authored type-text guard, for
+    // the same reason: the entry's `type` declarations are hoisted into
+    // `Program::type_decls` alongside everyone else's and read under the one
+    // hard-coded `V0_1` `Checker`, with no `Ast::VersionScope` in reach.
+    let entry_adapted = guard_v006_type_text(&entry_cst.prelude, &entry.path)?;
     let entry_start = prelude.len();
-    prelude.extend(entry_cst.prelude.iter().cloned());
+    prelude.extend(entry_adapted);
     v006_indices.extend(entry_start..prelude.len());
 
     let file = rustyfi_syntax::cst::File {
@@ -1531,6 +1544,151 @@ fn walk_patbot_binder(
             }
         }
     }
+}
+
+// ============================================================================
+// Slice X4c — the REVERSE arm's guard on **0.0.6-authored** type text
+// (`compile_document_v006_xver_with_aux`'s `LoadedCst::V0_0` branch and the
+// entry's own prelude).
+//
+// **The misreading.** It is not the mirror of the forward arm's; it is the
+// SAME one, reached from the other side. A merged cross-version program has
+// exactly one `Checker`, and its `version` is hard-coded to `V0_1`
+// (`v1::module_check::check_program_inner`'s `ck.set_version`), on BOTH arms —
+// `elaborate` hoists every `type` declaration out of the `Ast` spine into
+// `Program::type_decls`/`synonym_decls`, so a type declaration is never inside
+// an `Ast::VersionScope` and there is no place left for a per-file version to
+// act. Forward, the 0.0.6-authored text that gets re-read under 0.1's
+// vocabulary is a spliced dependency's; reverse, it is the ENTRY's own prelude
+// plus every native 0.0.6 co-dependency — i.e. potentially the whole 0.0.6
+// corpus. The reading is identical, the file set is not.
+//
+// That settles the `math` question the forward arm answers with a relabel: the
+// reverse needs the **same** relabel, `math` -> `math-text`
+// (`xver_adapt::relabel_type_decls(_, V0_0, V0_1)`), NOT the mirror
+// `math-text` -> `math`. There is nothing to mirror, because the target
+// vocabulary is `V0_1` in both directions. (The mirror arm exists in
+// `relabel_or_reject_name` and is deliberately NOT wired to the reverse arm's
+// `LoadedCst::V0_1` branch, for the same reason: a foreign 0.1 dependency's
+// text is ALREADY in the ambient vocabulary. See that function's doc comment.)
+//
+// **Why this scan is narrower than `collect_free_globals`.** The forward arm
+// over-approximates on purpose: it also collects from a `let-rec`'s `: ty`
+// ascription and from a `module .. : sig .. end`'s `val` items. Both are
+// parsed and then entirely ignored by `elaborate.rs` (`v1::xver_adapt`'s
+// module doc comment, "Where the type text that actually matters lives"), so
+// neither can be misread by a `Checker` that never sees it — over-rejecting
+// there costs a 0.1 document one 0.0.6 package it could have had. Reversed,
+// the same over-approximation is not a conservative choice but a wrong one:
+// the bundled 0.0.6 corpus writes forked names in exactly those decorative
+// positions all the time (`vdecoset.satyh`'s `val paper : deco-set`,
+// `math.satyh`'s `direct \frac : [math; math] math-cmd`), and rejecting on
+// them would refuse ordinary 0.0.6 documents for text no phase reads. So this
+// walk collects from `TopBinding::Type` bodies alone, recursing through
+// `TopBinding::Module`'s nested `decls` — exactly the site set
+// `xver_adapt::relabel_type_decls` rewrites, and exactly the text that reaches
+// `declare_variant`/`declare_synonym`.
+//
+// **What is refused.** `reject_type_names_from_v006()` — the producer-keyed
+// set, the same one the forward arm's `V0_0` branch uses, so `code` refuses
+// here too and a foreign 0.1 dependency's `code` (the reverse arm's OTHER
+// branch, which keeps the shared `reject_type_names()`) still does not. The
+// whitelist is `{"math"}` and nothing else: unlike the forward arm, this
+// branch has no `classify_deco_exports`/`deco_coercion_prelude` pairing to
+// make a `deco`/`deco-set`/`paren` mention safe, and the 0.1 reading of those
+// names is the wrong one for a 0.0.6-authored consumer anyway (0.0.6's `deco`
+// returns `graphics list`, `name_to_mono("deco", V0_1)` types it as returning
+// a single `graphics`). `page` is the sharp one, exactly as X3.1 says: its
+// bare name lowers to the same nominal `Variant("page",[])` under both
+// versions, so a mismatch is not a type error at all — it is a 9-ctor
+// `Value::Ctor` meeting a `length * length` `Value::Product`.
+// ============================================================================
+
+/// The free type names a 0.0.6-authored `prelude`'s `type` DECLARATIONS
+/// mention — the whole of that prelude's text a merged cross-version
+/// program's single hard-coded-`V0_1` `Checker` actually reads (see this
+/// module's "Slice X4c" banner above for why the decorative
+/// ascription/`sig` sites are deliberately NOT collected here, though
+/// `collect_free_globals` does collect them for the forward arm).
+fn collect_type_decl_globals(
+    prelude: &[rustyfi_syntax::cst::TopBinding],
+) -> std::collections::BTreeSet<String> {
+    let mut out = FreeGlobals::default();
+    let mut scope = XverScope::default();
+    for tb in prelude {
+        walk_type_decls_only(tb, &mut scope, &mut out);
+    }
+    out.types
+}
+
+fn walk_type_decls_only(
+    tb: &rustyfi_syntax::cst::TopBinding,
+    scope: &mut XverScope,
+    out: &mut FreeGlobals,
+) {
+    use rustyfi_syntax::cst::TopBinding;
+    match tb {
+        TopBinding::Type(td) => {
+            walk_type_decl(td, scope, out);
+            scope.push_type(&td.name.name);
+        }
+        // A nested `type` declaration is hoisted into the SAME
+        // `Program::type_decls` as a top-level one (`elaborate::
+        // walk_bindings` threads one `type_decls` sink through every level),
+        // so it is read under the same hard-coded `V0_1` `Checker` and must
+        // be scanned too. Its locally-declared names stay local, matching
+        // `walk_top_binding`'s own `Module` arm.
+        TopBinding::Module { decls, .. } => {
+            let mark = scope.mark();
+            for d in decls {
+                walk_type_decls_only(&d.0, scope, out);
+            }
+            scope.truncate_to(mark);
+        }
+        _ => {}
+    }
+}
+
+/// Slice X4c: check one 0.0.6-authored `prelude` on the REVERSE arm and
+/// return the bindings to splice — relabeled (`math` -> `math-text`) when
+/// that is all it touches, cloned verbatim when it touches nothing, and a
+/// `CompileError::CrossVersionUnsupportedName` naming the offending type
+/// otherwise. `path` is the file the text was authored in (the 0.0.6 entry,
+/// or a native 0.0.6 co-dependency); `slice: "X4c"` is what says which
+/// DIRECTION refused, since `"X3"` is the forward arm's tag for the same
+/// producer-keyed set.
+fn guard_v006_type_text(
+    prelude: &[rustyfi_syntax::cst::TopBinding],
+    path: &std::path::Path,
+) -> Result<Vec<rustyfi_syntax::cst::TopBinding>, CompileError> {
+    use rustyfi_syntax::RustyfiVersion;
+    let reject_t = v1::xver_adapt::reject_type_names_from_v006();
+    let touched: BTreeSet<String> = collect_type_decl_globals(prelude)
+        .intersection(&reject_t)
+        .cloned()
+        .collect();
+    // `math` is the whole whitelist here — see the banner above.
+    if let Some(name) = touched.iter().find(|n| n.as_str() != "math") {
+        return Err(CompileError::CrossVersionUnsupportedName {
+            name: name.clone(),
+            dep: path.display().to_string(),
+            slice: "X4c",
+        });
+    }
+    if touched.is_empty() {
+        // Byte-identical to the pre-X4c `prelude.extend(cst.prelude.iter()
+        // .cloned())` fast path every non-`math` 0.0.6 file takes.
+        return Ok(prelude.to_vec());
+    }
+    v1::xver_adapt::relabel_type_decls(prelude, RustyfiVersion::V0_0, RustyfiVersion::V0_1).map_err(
+        |be| CompileError::CrossVersionUnsupportedName {
+            name: match &be {
+                v1::xver_adapt::BoundaryError::ForkedTypeExport { ty_name, .. } => ty_name.clone(),
+            },
+            dep: path.display().to_string(),
+            slice: "X4c",
+        },
+    )
 }
 
 fn walk_type_decl(

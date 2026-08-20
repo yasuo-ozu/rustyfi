@@ -21,6 +21,27 @@
 //!   produce one line, never a panic or a stuck search), every candidate
 //!   line stays representable: we cap its badness at `BADNESS_TOO_LONG`
 //!   instead of excluding it.
+//! - v0.0.6's badness is QUANTIZED and ours is continuous. `calculate_badness`
+//!   is `(abs (int_of_float (pure_ratio ** 3.))) * 10000` (lineBreak.ml:986):
+//!   `int_of_float` truncates toward zero BEFORE the scale, so every
+//!   permissible line with `|ratio| < 1` costs exactly 0 — and since
+//!   `ratio_shrink_limit` is `-1`, that means EVERY permissible overfull line
+//!   is free. Upstream is therefore indifferent across a wide band of line
+//!   shapes and lets the graph decide: `LBTooShort` deletes the edge outright,
+//!   and among the surviving all-zero paths `shortest_path`'s relaxation order
+//!   picks one. We have neither half of that (a DP over every candidate line
+//!   has no edges to delete), so `10000 * |ratio|³` is what keeps our breaker
+//!   from packing to the feasibility limit.
+//!
+//!   Adopting upstream's exact formula here was TRIED AND MEASURED, not
+//!   assumed: it regresses 6 of the 7 layout-fidelity corpus documents
+//!   (`scripts/layout_fidelity.py`), and in the predicted direction — the port
+//!   already sets fewer lines than SATySFi on easytable (556 vs 592) and
+//!   enumitem (869 vs 885), and quantizing widens both (554, 868) because
+//!   `LINE_PENALTY` becomes the only thing separating partitions whose lines
+//!   are all inside the free band. figbox's page gap does not close. Do not
+//!   re-derive this from lineBreak.ml alone; the cost model and the graph
+//!   structure are a package, and we only have the one.
 
 use crate::context::Context;
 use crate::hbox::{HorzBox, PureHorzBox, FORCED_BREAK_PENALTY};
@@ -402,6 +423,22 @@ fn badness(width: Length, metrics: &LineMetrics) -> f64 {
         }
         if metrics.stretch.is_positive() {
             let ratio = slack / metrics.stretch;
+            // `<=`, i.e. the limit ITSELF is attainable. Upstream's test is
+            // `ratio_raw >= ratio_stretch_limit -> LBTooShort`
+            // (lineBreak.ml:534), so upstream drops the boundary ratio; the
+            // shrink side below is the mirror image (upstream `<=
+            // ratio_shrink_limit`, lineBreak.ml:545, vs our `<`). Both bounds
+            // are inclusive here, deliberately and symmetrically.
+            //
+            // This is a genuine one-value deviation, kept on evidence rather
+            // than by accident. Real font metrics never land a ratio on 2.0
+            // exactly, so it moves no line in any corpus document; what it does
+            // move is synthetic round-number fixtures, where excluding the
+            // boundary turns an ordinary justified two-word line into a dropped
+            // one and leaves a single overfull line as the only representable
+            // partition (`interior_lines_justify`,
+            // `kp_last_line_with_fil_keeps_natural_spacing` both sit exactly on
+            // it). `wraps_at_glue` documents the boundary case end to end.
             if ratio <= RATIO_STRETCH_LIMIT {
                 // Within the stretch limit: SATySFi `calculate_badness`
                 // (lineBreak.ml:986), `|ratio|³·10000`.

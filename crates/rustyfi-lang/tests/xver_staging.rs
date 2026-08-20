@@ -28,6 +28,19 @@
 //!    the refused set for a 0.0.6 producer — see `a_zero_zero_six_package_
 //!    that_writes_the_code_type_is_refused` and its control.
 //!
+//! 1c. **Which ARM reads that 0.0.6-authored text?** Both. Slice X4c's group
+//!    below pins the reverse one. `elaborate` hoists every `type` declaration
+//!    out of the `Ast` spine into `Program::type_decls`, where no
+//!    `Ast::VersionScope` can reach it and one hard-coded-`V0_1` `Checker`
+//!    registers it — so a 0.0.6 ENTRY's own declarations, and a native 0.0.6
+//!    co-dependency's, are re-read with 0.1's vocabulary exactly as a spliced
+//!    0.0.6 dependency's are on the forward arm. `math` therefore takes the
+//!    SAME relabel in both directions (there is no mirror to take: the target
+//!    vocabulary is `V0_1` either way), and `code`/`page`/`math-text` refuse
+//!    with `slice: "X4c"`. The scan is narrower than the forward arm's,
+//!    deliberately — `a_zero_zero_six_signature_and_ascription_are_still_not_
+//!    guarded` says why.
+//!
 //! 2. **Is a quoted body version-correct wherever it is forced?** Yes, and the
 //!    mechanism is that `Ast::Next`'s compile arm compiles the body EAGERLY,
 //!    at the quote's own site, so every free primitive in it constant-folds
@@ -154,6 +167,24 @@ fn reverse(dep_v01: &str, doc_v006: &str) -> Result<String, CompileError> {
 /// say" controls.
 fn v006_alone(doc_v006: &str) -> Result<String, CompileError> {
     let files = vec![v006_file("doc.saty", doc_v006)];
+    tail_type(rustyfi_lang::compile_document_v006_xver(&files, &NoFonts))
+}
+
+/// REVERSE with a NATIVE 0.0.6 co-dependency alongside the foreign 0.1 one —
+/// the other file class the reverse arm splices `Ast::VersionScope(V0_0,
+/// _)`-wrapped (`lib.rs`'s `LoadedCst::V0_0` branch, as against the entry's
+/// own prelude). Ordered co-dependency-first, as the loader's topological
+/// order would deliver it.
+fn reverse_with_v006_codep(
+    dep_v01: &str,
+    codep_v006: &str,
+    doc_v006: &str,
+) -> Result<String, CompileError> {
+    let files = vec![
+        v01_file("xdep.satyh", dep_v01),
+        v006_file("xcodep.satyg", codep_v006),
+        v006_file("doc.saty", doc_v006),
+    ];
     tail_type(rustyfi_lang::compile_document_v006_xver(&files, &NoFonts))
 }
 
@@ -343,30 +374,169 @@ fn a_zero_one_dependency_may_still_write_the_code_type() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// Q1c (Slice X4c): the REVERSE arm guards 0.0.6-authored type text too
+// ---------------------------------------------------------------------------
+//
+// The residual this group replaces (`the_reverse_arm_does_not_guard_zero_zero_
+// six_type_text_at_all`) asserted that `int code`, `int math` and `page` alike
+// spliced through the reverse arm unchecked. They no longer do.
+//
+// The misreading is NOT the mirror of the forward arm's — it is the SAME one,
+// reached from the other side. `elaborate` hoists every `type` declaration out
+// of the `Ast` spine into `Program::type_decls`/`synonym_decls`, so no
+// declaration is ever inside an `Ast::VersionScope`, and the one `Checker` that
+// registers them all has `version` hard-coded to `V0_1` on BOTH arms
+// (`v1::module_check::check_program_inner`). Forward, the 0.0.6-authored text
+// re-read under 0.1's vocabulary is a spliced dependency's; reverse, it is the
+// ENTRY's own prelude and every native 0.0.6 co-dependency. Same reading,
+// different files.
+//
+// So `math` needs the SAME relabel here, not the mirror one — see
+// `a_zero_zero_six_entry_that_writes_math_is_relabeled_not_refused` — and
+// everything else in `xver_adapt::reject_type_names_from_v006()` refuses,
+// tagged `slice: "X4c"`. The scan is deliberately narrower than the forward
+// arm's `collect_free_globals`: see `a_zero_zero_six_signature_and_ascription_
+// are_still_not_guarded` for why widening it would refuse ordinary documents.
+
+/// The 0.1 dependency every fixture in this group pairs with. Its only job is
+/// to make the compile take the reverse arm at all — a pure 0.0.6 load never
+/// reaches `compile_document_v006_xver`.
+const XVER_LIB: &str = "module XM = struct\n  val xz = 1\nend\n";
+
 #[test]
-fn the_reverse_arm_does_not_guard_zero_zero_six_type_text_at_all() {
-    // The exact edge of the refusal above, pinned as a RESIDUAL rather than a
-    // property: the reverse arm splices 0.0.6-authored text (the entry's own
-    // prelude, and any native 0.0.6 co-dependency) with NO boundary guard —
-    // `compile_document_v006_xver_with_aux`'s `LoadedCst::V0_0` branch calls
-    // neither `collect_free_globals` nor `relabel_type_decls`, deliberately
-    // ("§X4.3 item 4"'s unrestricted-0.0.6 posture). So a 0.0.6 ENTRY's `type`
-    // declaration is read under the merged program's hard-coded `V0_1`
-    // vocabulary with nothing checking it.
-    //
-    // Asserting `code` ALONGSIDE `math` and `page` is the point. All three
-    // cross unchecked here, so this is one pre-existing gap in the reverse
-    // arm's handling of 0.0.6 type text — the same gap `relabel_type_decls`
-    // closes for `math` in the FORWARD arm — and not a `code`-shaped hole left
-    // open by the refusal above. Whoever closes it should delete this test.
-    let lib = "module XM = struct\n  val xz = 1\nend\n";
-    for leaf in ["int code", "int math", "page"] {
-        assert_eq!(
-            reverse(lib, &format!("type xh = | XC of {leaf}\nlet xq = 1\nin XM.xz")).unwrap(),
-            "int",
-            "`{leaf}` in a 0.0.6 ENTRY is expected to splice unguarded today"
-        );
+fn a_zero_zero_six_entry_that_writes_the_code_type_is_refused() {
+    // The reverse twin of `a_zero_zero_six_package_that_writes_the_code_type_
+    // is_refused`, and the reason the producer-keyed
+    // `reject_type_names_from_v006()` (not the shared `reject_type_names()`)
+    // is what this arm consults: `code`'s fork is a property of the text's
+    // AUTHOR, not of the crossing. `the_two_readings_of_a_written_code_really_
+    // differ` above is the control for both directions at once — it compares
+    // the readings, not the arms.
+    let err = reverse(
+        XVER_LIB,
+        "type xh = | XC of int code\nlet xq = 1\nin XM.xz",
+    )
+    .unwrap_err();
+    match err {
+        CompileError::CrossVersionUnsupportedName { name, slice, .. } => {
+            assert_eq!(name, "code");
+            assert_eq!(slice, "X4c");
+        }
+        other => panic!("expected a cross-version refusal naming `code`, got {other}"),
     }
+}
+
+#[test]
+fn a_zero_zero_six_entry_that_writes_page_is_refused() {
+    // The sharp one. `page`'s bare name lowers to the SAME nominal
+    // `Variant("page", [])` under both versions (`typecheck::name_to_mono` has
+    // no `page` arm at all), so `forked_type_names()`'s per-name diff cannot
+    // see it and the typechecker cannot either — a `page` mismatch is not a
+    // type error, it is 0.0.6's 9-constructor `Value::Ctor` meeting 0.1's
+    // `length * length` `Value::Product` at runtime. That is exactly why
+    // `xver_adapt::reject_type_names()` adds it by hand, and why this arm has
+    // to consult that set rather than trust unification to catch anything.
+    let err = reverse(XVER_LIB, "type xh = | XC of page\nlet xq = 1\nin XM.xz").unwrap_err();
+    match err {
+        CompileError::CrossVersionUnsupportedName { name, slice, dep } => {
+            assert_eq!(name, "page");
+            assert_eq!(slice, "X4c");
+            assert_eq!(dep, "doc.saty", "the diagnostic must name the 0.0.6 file");
+        }
+        other => panic!("expected a cross-version refusal naming `page`, got {other}"),
+    }
+}
+
+#[test]
+fn a_zero_zero_six_entry_that_writes_math_text_is_refused() {
+    // The other half of the `math` story, and what keeps the relabel below
+    // from being a blanket "math-ish names are fine". 0.0.6 has no `math-text`
+    // spelling, so in 0.0.6-authored text it is an unrelated OPAQUE user
+    // nominal; under the merged program's `V0_1` vocabulary the same word is
+    // the real `Base(MathText)`. Nothing can relabel that back into an opaque
+    // nominal, so it refuses — as `forked_note` says of it verbatim.
+    let err = reverse(XVER_LIB, "type xh = | XC of math-text\nlet xq = 1\nin XM.xz").unwrap_err();
+    match err {
+        CompileError::CrossVersionUnsupportedName { name, slice, .. } => {
+            assert_eq!(name, "math-text");
+            assert_eq!(slice, "X4c");
+        }
+        other => panic!("expected a cross-version refusal naming `math-text`, got {other}"),
+    }
+}
+
+#[test]
+fn a_zero_zero_six_entry_that_writes_math_is_relabeled_not_refused() {
+    // The name that crosses, and the test that says WHICH relabel the reverse
+    // arm needs. `math` is 0.0.6's undifferentiated math type and lowers to
+    // `Base(MathText)` there; under the merged program's hard-coded `V0_1`
+    // vocabulary the same word is unrecognized and falls to the nominal
+    // `Variant("math", [])`. So the declaration below must be rewritten to
+    // `math-text` — the FORWARD arm's relabel, `relabel_type_decls(_, V0_0,
+    // V0_1)`, applied unchanged — and NOT the mirror `math-text` -> `math`
+    // that `relabel_or_reject_name`'s `(V0_1, V0_0)` arm implements. There is
+    // nothing to mirror: the target vocabulary is `V0_1` on both arms.
+    //
+    // `${x}` is what makes this discriminate. It is a real `math` value
+    // (`Base(MathText)`), so `XC` accepts it only if the ctor payload was
+    // relabeled; unrelabeled, the payload is an unbound nominal and the
+    // application is a unification failure. Before X4c this errored.
+    assert_eq!(
+        reverse(
+            XVER_LIB,
+            "type xh = | XC of math\nlet xq = XC ${x}\nin XM.xz",
+        )
+        .unwrap(),
+        "int"
+    );
+}
+
+#[test]
+fn a_native_zero_zero_six_co_dependency_is_guarded_too() {
+    // The entry is not the only 0.0.6-authored file on this arm: a 0.0.6 entry
+    // may `@require:` ordinary 0.0.6 packages alongside its 0.1 one, and their
+    // `type` declarations land in the same `Program::type_decls` under the same
+    // `V0_1` `Checker`. `lib.rs`'s `LoadedCst::V0_0` branch runs the identical
+    // guard, and the diagnostic names the CO-DEPENDENCY, not the entry.
+    let err = reverse_with_v006_codep(
+        XVER_LIB,
+        "type xh = | XC of page\nlet xq = 1\n",
+        "XM.xz",
+    )
+    .unwrap_err();
+    match err {
+        CompileError::CrossVersionUnsupportedName { name, slice, dep } => {
+            assert_eq!(name, "page");
+            assert_eq!(slice, "X4c");
+            assert_eq!(dep, "xcodep.satyg");
+        }
+        other => panic!("expected a cross-version refusal naming `page`, got {other}"),
+    }
+}
+
+#[test]
+fn a_zero_zero_six_signature_and_ascription_are_still_not_guarded() {
+    // The precision statement, and the reason this arm does NOT reuse the
+    // forward arm's `collect_free_globals`.
+    //
+    // Two 0.0.6 surface forms carry a `TypeExpr` besides a `type` declaration:
+    // a `module .. : sig .. end`'s `val` items and a `let-rec`'s `: ty`
+    // ascription. `elaborate.rs` parses and then entirely IGNORES both (only a
+    // `direct` sig item does anything, and only its NAME), so neither ever
+    // reaches a `Checker` and neither can be misread. Collecting from them —
+    // which the forward arm does deliberately, as cheap conservatism about one
+    // spliced dependency — would here refuse ordinary 0.0.6 documents for text
+    // no phase reads: the bundled corpus writes forked names in exactly those
+    // positions (`vdecoset.satyh`'s `val paper : deco-set`, `math.satyh`'s
+    // `direct \frac : [math; math] math-cmd`, `progsynt.satyh`'s `val to-math
+    // : int?-> t -> math`).
+    //
+    // So both spellings below still cross, with `page` — a name the same file
+    // would be refused for writing in a `type` declaration — sitting in each.
+    let entry = "module XN : sig\n  val xf : page\nend = struct\n  let xf = 1\nend\n\
+                 let-rec xr : page -> int\n  | _ = 1\nin XM.xz";
+    assert_eq!(reverse(XVER_LIB, entry).unwrap(), "int");
 }
 
 // ---------------------------------------------------------------------------

@@ -141,33 +141,63 @@ fn single_short_line() {
     assert_eq!(lines_of(&v), vec!["hi there"]);
 }
 
-/// STILL FAILING, but not for the reason the old `#[ignore]` claimed.
+/// A break at glue happens when — and only when — the shorter line is
+/// REPRESENTABLE. Same five 24pt words and same 6pt (+3 / -1.5) spaces both
+/// times; only the column moves, by one point, across `ratio_stretch_limit`.
 ///
-/// It expects `["aaaa aaaa", "aaaa aaaa", "aaaa"]` and gets
-/// `["aaaa aaaa aaaa", "aaaa aaaa"]` — three 24pt words plus two spaces on a
-/// 60pt measure, which does not fit at natural width and cannot shrink to fit.
+/// This test spent a long time `#[ignore]`d asserting `["aaaa aaaa", "aaaa
+/// aaaa", "aaaa"]` at a 60pt column, on the intuition that two words "fit" and
+/// a third must therefore wrap. Upstream SATySFi does not do that, and the
+/// reason is exact rather than a matter of cost: two words plus one space is
+/// 54pt natural carrying 3pt of stretch, so filling a 60pt column needs
+/// adjustment ratio `(60 - 54) / 3 = 2.0` EXACTLY, and `calculate_ratios`
+/// classifies `ratio_raw >= ratio_stretch_limit` (= 2.0) as `LBTooShort`
+/// (`lineBreak.ml:507`, `:534`) — a class for which `update_graph` adds NO
+/// EDGE AT ALL (`lineBreak.ml:1014-1015`). A one-word line is `LBTooShort`
+/// too (zero stretch, nonzero shortfall, `lineBreak.ml:528-531`). So the only
+/// path upstream's graph has from `beginning` to `final` is via the single
+/// `LBTooLong` edge a source node is permitted before it is dropped outright
+/// (`is_already_too_long` / `RemovalSet`, `lineBreak.ml:1017-1027`): three
+/// words on line 1, the remaining two plus the `inline-fil` on line 2.
 ///
-/// The other three snapshots in this file carried the same "rewrite for the
-/// faithful cost model" excuse and PASS the moment they are run, so that excuse
-/// was wrong for them and is not evidence for this one either. Investigate the
-/// packing decision before touching the expectation.
-#[ignore = "fails: packs three 24pt words onto a 60pt measure — see the doc comment"]
+/// This port lands on the same two lines by a different route. Its limits are
+/// INCLUSIVE (`badness` compares `<=`, see the note there), so ratio 2.0 is
+/// scored rather than deleted — but scored at `10000 * 2³ = 80_000`, which
+/// makes `[2, 2, 1]` cost 160_030 against `[3, 2]`'s 140_020. Either way the
+/// wrap loses; the port merely charges for the partition upstream refuses to
+/// build at all.
+///
+/// Shrink the column by 1pt and the same two-word line has ratio `5/3 < 2`,
+/// which is `LBPermissible`; the three-line break becomes a real path and the
+/// cheaper one in both engines. That is the control below: this breaker DOES
+/// wrap at glue, and 60pt is exactly where the `ratio_stretch_limit` cliff
+/// falls for these metrics — not a packing bug.
 #[test]
 fn wraps_at_glue() {
     let m = Mono;
-    // 60pt wide: each word "aaaa" is 24pt, space 6pt → two words + space =
-    // 54pt fits, third word forces a break.
-    let c = ctx(60.0);
-    let mut boxes = Vec::new();
-    for i in 0..5 {
-        if i > 0 {
-            boxes.push(space(&c));
+    let build = |c: &Context| {
+        let mut boxes = Vec::new();
+        for i in 0..5 {
+            if i > 0 {
+                boxes.push(space(c));
+            }
+            boxes.push(word(&m, c, "aaaa"));
         }
-        boxes.push(word(&m, &c, "aaaa"));
-    }
-    boxes.push(fil());
-    let v = break_into_lines(&c, boxes);
+        boxes.push(fil());
+        boxes
+    };
+
+    // 59pt: the two-word line stretches at ratio 5/3, inside the limit, so the
+    // wrap is representable — and preferred.
+    let c = ctx(59.0);
+    let v = break_into_lines(&c, build(&c));
     assert_eq!(lines_of(&v), vec!["aaaa aaaa", "aaaa aaaa", "aaaa"]);
+
+    // 60pt: ratio is exactly 2.0, `LBTooShort`, so that partition does not
+    // exist for upstream and is `BADNESS_DROPPED` here. One overfull line wins.
+    let c = ctx(60.0);
+    let v = break_into_lines(&c, build(&c));
+    assert_eq!(lines_of(&v), vec!["aaaa aaaa aaaa", "aaaa aaaa"]);
 }
 
 #[test]

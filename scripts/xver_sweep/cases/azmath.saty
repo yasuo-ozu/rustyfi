@@ -1,0 +1,7 @@
+@require: azmath/azmath
+@import: h
+
+let open H in
+document (| title = `azmath` |) '<
+  +p { azmath required. }
+>

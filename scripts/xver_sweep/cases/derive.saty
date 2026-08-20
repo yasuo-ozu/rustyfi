@@ -1,0 +1,8 @@
+@require: derive/derive
+@import: h
+
+let ast = DeriveDSL.derive ${A} in
+let open H in
+document (| title = `derive` |) '<
+  +p { a derivation ast was built. }
+>

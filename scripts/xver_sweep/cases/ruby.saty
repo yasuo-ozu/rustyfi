@@ -1,0 +1,8 @@
+@require: ruby/ruby
+@import: h
+
+let ib ctx = Ruby.ruby ctx [] [`kanji`] [{KANJI}] in
+let open H in
+document (| title = `ruby` |) '<
+  +p { \ruby([`kanji`])({KANJI}); }
+>

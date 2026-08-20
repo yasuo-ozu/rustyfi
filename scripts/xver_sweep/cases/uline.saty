@@ -1,0 +1,8 @@
+@require: uline/uline
+@import: h
+
+let ds = Uline.make-uline 0.5pt Color.black in
+let open H in
+document (| title = `uline` |) '<
+  +p { underlined via a 0.0.6 deco-set: \uline{hello}. }
+>

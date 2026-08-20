@@ -1,0 +1,10 @@
+@require: enumitem/enumitem
+@import: h
+
+let open H in
+document (| title = `enumitem` |) '<
+  +itemize(EnumitemAlias.dot-arabic)<
+    +item{first}<>
+    +item{second}<>
+  >
+>

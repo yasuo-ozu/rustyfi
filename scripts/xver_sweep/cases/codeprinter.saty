@@ -1,0 +1,7 @@
+@require: code-printer/code-printer
+@import: h
+
+let open H in
+document (| title = `code-printer` |) '<
+  +code-printer(`let x = 1`);
+>

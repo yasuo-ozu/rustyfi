@@ -142,6 +142,25 @@ pub enum Value {
     /// `graphics` — one resolved drawing element (`fill`/`stroke`'s result);
     /// a `graphics list` is just `Value::List` of these, same as upstream.
     Graphics(rustyfi_backend::GraphicsElem),
+    /// `font` (**V0_1 only**; upstream `saphe-split`'s `BCFontKey of
+    /// FontKey.t`) — an OPAQUE handle on one loaded face, already resolved
+    /// through the metrics provider's font store at the point the value was
+    /// minted. Upstream mints one per `files[]` entry of a FONT ENVELOPE
+    /// (`envelopeChecker.ml`'s `check_font_envelope`, whose synthesized
+    /// binding evaluates the internal `LoadSingleFont{path}` /
+    /// `LoadCollectionFont{path;index}` node to `BCFontKey`); this port's
+    /// bundled 0.1 font envelopes are `.satyh` stand-ins, so they mint
+    /// theirs through the LOCAL `load-single-font` primitive instead — see
+    /// `primitives.rs`'s `prim_load_single_font`.
+    ///
+    /// Deliberately carries NO abbrev/name/path: it is a store INDEX, the
+    /// same thing upstream's `FontKey.t` is, and nothing in the language can
+    /// map it back. That opacity is load-bearing for the cross-version
+    /// boundary (`v1::xver_adapt::forked_note`'s `"font"` arm): 0.0.6's
+    /// font-consuming primitives want an ABBREV naming a row of
+    /// `dist/hash/fonts.satysfi-hash`, and no such name is recoverable from
+    /// a key.
+    Font(rustyfi_backend::FontKey),
     /// `text-info` (context-box-prims.md §G sliver).
     TextInfo(TextInfo),
     /// `hyphenation` (`load-hyphenation-dictionary`'s result; S1) — the
@@ -183,6 +202,7 @@ impl Value {
             Value::PrePath(_) => "pre-path",
             Value::Path(_) => "path",
             Value::Graphics(_) => "graphics",
+            Value::Font(_) => "font",
             Value::TextInfo(_) => "text-info",
             Value::Hyphenation(_) => "hyphenation",
         }

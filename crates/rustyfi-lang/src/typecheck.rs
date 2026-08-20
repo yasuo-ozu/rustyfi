@@ -25,8 +25,8 @@ pub use crate::exhaustive::MatchWarning;
 use crate::prim_types::{
     self, arrow, builtin_variants_with_version, labeled, list, mandatory, optional, product, reff,
     t_block_boxes, t_block_text, t_bool, t_context, t_deco, t_decoset, t_document, t_float,
-    t_graphics, t_image, t_inline_boxes, t_inline_text, t_int, t_length, t_math_boxes, t_math_text,
-    t_option, t_paren, t_path, t_prepath, t_string, t_unit, VariantDecl,
+    t_font_key, t_graphics, t_image, t_inline_boxes, t_inline_text, t_int, t_length, t_math_boxes,
+    t_math_text, t_option, t_paren, t_path, t_prepath, t_string, t_unit, VariantDecl,
 };
 use crate::symbol::{Symbol, SymbolStore};
 use crate::types::{
@@ -179,6 +179,12 @@ pub const PRIMITIVE_NAMES: &[&str] = &[
     "inline-mark",
     // ---- phase 4, part 2 addition (see primitives.rs's `prims!` table comment on `"set-font-key"`) ----
     "set-font-key",
+    // ---- the 0.1 `font` build-out: the LOCAL stand-in for upstream's
+    // internal `LoadSingleFont` node (see `primitives.rs`'s
+    // `prim_load_single_font`). V0_1-only, so
+    // `primitive_type_with_version` returns `None` for it under V0_0 and
+    // the seeding loops skip it there. ----
+    "load-single-font",
     // ---- frontend-completion.md §Slice 1.A: the ~18 pure primitives ----
     // (`|>` excluded — see primitives.rs's `prims!` table comment; it has
     // no primitive of its own, so it never belongs in this list).
@@ -754,16 +760,26 @@ fn name_to_mono(name: &str, version: RustyfiVersion) -> MonoType {
         "image" => t_image(),
         "deco" if version == RustyfiVersion::V0_1 => t_deco(version),
         "deco-set" if version == RustyfiVersion::V0_1 => t_decoset(version),
-        // `font` decision (roadmap §3): upstream 0.1's `font` is an atomic
-        // base type, but this port's `set-font`/`set-math-font` and the
-        // font stand-in packages all traffic in the 0.0.6
-        // `(abbrev, size_ratio, rising_ratio)` string-keyed triple
-        // (`t_font()`, below) — `font * float * float` in a sig is exactly
-        // that triple's shape once `font` itself is `string`. Mapping
-        // `font` to `t_string()` under V0_1 makes those sigs line up with
-        // zero prim retypes; a faithful `BaseType::Font` is deferred to
-        // real 0.1 envelope font loading (Axis B, per the roadmap).
-        "font" if version == RustyfiVersion::V0_1 => t_string(),
+        // `font` — a REAL base type under V0_1 since the font build-out;
+        // this used to be `t_string()`, a stand-in that made `font * float
+        // * float` in a 0.1 sig accidentally coincide with 0.0.6's `string
+        // * float * float`. Upstream `saphe-split` registers `("font",
+        // FontType)` in `types.cppo.ml`'s `base_type_hash_table:175` and
+        // spells it `tFONTKEY` (`primitives.cppo.ml:45`); its values are
+        // `BCFontKey of FontKey.t`, opaque handles a FONT ENVELOPE mints
+        // (`envelopeChecker.ml`'s `check_font_envelope`). `t_font_key()`
+        // is that type; `Value::Font(FontKey)` is that value.
+        //
+        // Under `V0_0` the name deliberately keeps falling through to the
+        // nominal `Variant("font", [])` default, because upstream 0.0.6 has
+        // no `font` type to be faithful TO: its `base_type_hash_table`
+        // (`v0.0.6 types.cppo.ml:280-303`) has no such row and its bundled
+        // `lib-satysfi/dist/packages/*.satyh` declare no `type font`. A
+        // 0.0.6 program that writes `font` in type position means an
+        // unrelated opaque user nominal. That is why `font` stays in
+        // `forked_type_names()` below, and why it does not cross —
+        // `v1::xver_adapt::forked_note` states the fork.
+        "font" if version == RustyfiVersion::V0_1 => t_font_key(),
         // math-package completion M2: upstream's sig writes `val paren-left
         // : paren` (+18 more `paren`-typed rows) and `val angle-left :
         // length -> paren`. Structural, like `deco`/`deco-set` just above —

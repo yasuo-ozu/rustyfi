@@ -52,10 +52,17 @@ pub enum CompileError {
     /// mis-resolve `name` to the WRONG version's primitive; `slice` names
     /// the milestone (`"X1"`) so a later slice's error text can update in
     /// lockstep with what it actually fixes.
+    /// The trailing `— {}` is [`v1::xver_adapt::forked_note`], keyed on
+    /// `name`: WHY this particular name cannot cross. Without it every
+    /// refusal read "only supports the version-neutral subset", which
+    /// describes a missing feature — true for some members of the set and
+    /// flatly wrong for others (`page`, `font`), where the two generations
+    /// disagree about what the runtime value IS and no amount of bridge
+    /// work changes that. The note says which kind this is.
     #[error(
         "cross-version import ({slice}): dependency {dep} references `{name}`, a \
-         version-forked builtin — {slice} only supports the version-neutral subset \
-         of the 0.0.6 corpus"
+         version-forked builtin — {}",
+        v1::xver_adapt::forked_note(.name)
     )]
     CrossVersionUnsupportedName {
         name: String,

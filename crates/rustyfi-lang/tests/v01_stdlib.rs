@@ -892,13 +892,86 @@ document (| title = `hyph-unidata` |) '<
 }
 
 // ============================================================================
-// G7 (`…/tmp/g6-g7-standins.md` §5.4): the 4 pure `.satyh` font stand-in
+// G7 (`…/tmp/g6-g7-standins.md` §5.4): the 4 `.satyh` font envelope stand-in
 // packages — `font-junicode`/`font-latin-modern`/`font-latin-modern-math`/
-// `font-ipa-ex` — ZERO Rust edits. Proves G8's `font` -> `t_string()` arm
-// (`typecheck.rs:499`) through real sealing subsumption: each package's
-// sig spells `font`, the body a backtick abbrev STRING, and
-// `set-font`/`set-math-font` accept the sealed members downstream.
+// `font-ipa-ex`. Each package's sig spells `font`; since the 0.1 `font`
+// build-out that is upstream saphe-split's real `BaseType(FontType)` (an
+// OPAQUE handle, `typecheck::name_to_mono`'s `"font"` arm -> `t_font_key`),
+// not the old `t_string()` stand-in — so these prove three things through
+// real sealing subsumption: the members type as `font`, they EVALUATE to
+// `Value::Font(FontKey)` handles rather than strings, and
+// `set-font`/`set-math-font` accept them downstream in the two shapes
+// upstream gives those primitives (`font * float * float` and a bare
+// `font`).
 // ============================================================================
+
+/// A `FontMetrics` whose `resolve_font_abbrev` gives every abbrev the
+/// bundled 0.1 font stand-ins name its OWN `FontKey`. The default providers
+/// here (`NoFonts`/`Mono`) take the trait's default `resolve_font_abbrev`,
+/// which returns `None` for everything and so collapses all seven onto the
+/// 3-face name heuristic — fine for rendering, useless for proving that a
+/// given package member carries the handle for a given face. This one keeps
+/// them distinguishable, which is what makes the assertions below able to
+/// see the abbrev actually reach resolution.
+struct NamedFaces;
+
+impl NamedFaces {
+    /// The nine abbrevs the four bundled stand-ins name, in a fixed order
+    /// that doubles as their `FontKey` numbering.
+    const ABBREVS: &'static [&'static str] = &[
+        "Junicode",
+        "Junicode-b",
+        "Junicode-it",
+        "Junicode-bi",
+        "lmmono",
+        "lmsans",
+        "lmodern",
+        "ipaexm",
+        "ipaexg",
+    ];
+
+    fn key_of(abbrev: &str) -> FontKey {
+        FontKey(
+            Self::ABBREVS
+                .iter()
+                .position(|a| *a == abbrev)
+                .unwrap_or_else(|| panic!("NamedFaces has no key for `{abbrev}`"))
+                as u16,
+        )
+    }
+}
+
+impl FontMetrics for NamedFaces {
+    fn advance(&self, _f: FontKey, c: char, size: Length) -> Option<Length> {
+        if c.is_ascii() {
+            Some(size * 0.5)
+        } else {
+            None
+        }
+    }
+    fn ascender(&self, _f: FontKey, size: Length) -> Length {
+        size * 0.75
+    }
+    fn descender(&self, _f: FontKey, size: Length) -> Length {
+        size * 0.25
+    }
+    fn resolve_font_abbrev(&self, abbrev: &str) -> Option<FontKey> {
+        Self::ABBREVS
+            .iter()
+            .position(|a| *a == abbrev)
+            .map(|i| FontKey(i as u16))
+    }
+}
+
+/// The `font` handle a member evaluated to. Deliberately NOT `as_str`: the
+/// whole point of the build-out is that a `font` is no longer a string, so
+/// a test that could still read one back would be pinning the stand-in.
+fn as_font(v: Value) -> FontKey {
+    match v {
+        Value::Font(key) => key,
+        other => panic!("expected an opaque `font` handle, got {other:?}"),
+    }
+}
 
 #[test]
 fn font_junicode_bare_normal_is_unbound_without_qualification() {
@@ -929,8 +1002,9 @@ document (| title = `f` |) '<
         let v = compile_v01_via_loader_with_metrics("font-packages-seal-resolve", src, &Mono)
             .expect(
                 "font-junicode.satyh + font-latin-modern-math.satyh + v01-mini.satyh should \
-                 compile (FontJunicode.normal : font must seal as string and flow through \
-                 set-font, and set-math-font must accept the bare font member)",
+                 compile (FontJunicode.normal : font must seal as the opaque handle and flow \
+                 through set-font's `font * float * float`, and set-math-font must accept the \
+                 bare font member — saphe-split's `tFONTWR` and `tFONTKEY` respectively)",
             );
         match v {
             Value::Document(_) => {}
@@ -939,9 +1013,9 @@ document (| title = `f` |) '<
     });
 }
 
-/// Negative probe (spec §5.4): `FontJunicode.normal` is really `string`
-/// (G8), not a nominal `length`-like type — using it where a `length` is
-/// expected must fail to typecheck.
+/// Negative probe (spec §5.4): `FontJunicode.normal` is a type of its own,
+/// not a `length` — using it where a `length` is expected must fail to
+/// typecheck.
 #[test]
 fn font_junicode_normal_is_not_a_length() {
     run_with_big_stack(|| {
@@ -959,6 +1033,75 @@ FontJunicode.normal +' 1pt";
     });
 }
 
+/// The build-out's central negative: 0.1's `font` is NOT `string`. This is
+/// the assertion that would have passed under the old `"font" =>
+/// t_string()` stand-in and must fail now — `string-length` is the cheapest
+/// witness that the two types are no longer interchangeable, and its
+/// mirror below is the same probe in the other direction (a `string` where
+/// a `font` is wanted).
+#[test]
+fn font_is_not_string_in_either_direction() {
+    run_with_big_stack(|| {
+        let font_as_string = "@require: font-junicode
+string-length FontJunicode.normal";
+        let err = compile_v01_via_loader("font-not-string-a", font_as_string)
+            .err()
+            .unwrap_or_else(|| {
+                panic!(
+                    "`string-length FontJunicode.normal` must not typecheck — 0.1's `font` is \
+                     saphe-split's opaque `BaseType(FontType)`, not `string`"
+                )
+            });
+        assert!(
+            err.contains("typecheck"),
+            "expected a typecheck error: {err}"
+        );
+
+        // …and a bare abbrev is not a `font`: `set-math-font` takes
+        // `tFONTKEY` in 0.1, so the 0.0.6 spelling must be refused.
+        let string_as_font = "@require: v01-mini
+let open V01Mini in
+set-math-font `lmodern` (get-initial-context 440pt (command \\math))";
+        let err = compile_v01_via_loader("font-not-string-b", string_as_font)
+            .err()
+            .unwrap_or_else(|| {
+                panic!(
+                    "`set-math-font `lmodern`` must not typecheck under 0.1 — that is the \
+                     0.0.6 signature (`tS @-> tCTX @-> tCTX`)"
+                )
+            });
+        assert!(
+            err.contains("typecheck"),
+            "expected a typecheck error: {err}"
+        );
+    });
+}
+
+/// The other half: `set-math-font` under **0.0.6** still takes the abbrev
+/// string, unchanged. Guards the corpus — every bundled 0.0.6 package calls
+/// it that way.
+#[test]
+fn v006_set_math_font_still_takes_the_abbrev_string() {
+    let ty = rustyfi_lang::prim_types::primitive_type_with_version(
+        "set-math-font",
+        rustyfi_syntax::RustyfiVersion::V0_0,
+    )
+    .expect("set-math-font is registered under V0_0");
+    assert_eq!(
+        format!("{}", rustyfi_lang::types::instantiate(&ty, 0)),
+        "string -> (context -> context)"
+    );
+    let ty01 = rustyfi_lang::prim_types::primitive_type_with_version(
+        "set-math-font",
+        rustyfi_syntax::RustyfiVersion::V0_1,
+    )
+    .expect("set-math-font is registered under V0_1");
+    assert_eq!(
+        format!("{}", rustyfi_lang::types::instantiate(&ty01, 0)),
+        "font -> (context -> context)"
+    );
+}
+
 // ---- per-package compile tests for the remaining two G7 stand-ins
 // (`font-latin-modern`/`font-ipa-ex`), mirroring the other vendored
 // packages' bare-access + value-resolves pair. ----
@@ -972,11 +1115,11 @@ fn font_latin_modern_bare_sans_is_unbound_without_qualification() {
 fn font_latin_modern_members_are_the_expected_006_corpus_abbrevs() {
     let src = "@require: font-latin-modern
 (FontLatinModern.mono, FontLatinModern.sans)";
-    let v = compile_v01_via_loader("font-latin-modern-abbrevs", src)
+    let v = compile_v01_via_loader_with_metrics("font-latin-modern-abbrevs", src, &NamedFaces)
         .expect("font-latin-modern.satyh should compile");
     let vs = as_tuple(v);
-    assert_eq!(as_str(vs[0].clone()), "lmmono");
-    assert_eq!(as_str(vs[1].clone()), "lmsans");
+    assert_eq!(as_font(vs[0].clone()), NamedFaces::key_of("lmmono"));
+    assert_eq!(as_font(vs[1].clone()), NamedFaces::key_of("lmsans"));
 }
 
 #[test]
@@ -988,31 +1131,31 @@ fn font_ipa_ex_bare_mincho_is_unbound_without_qualification() {
 fn font_ipa_ex_members_are_the_expected_006_corpus_abbrevs() {
     let src = "@require: font-ipa-ex
 (FontIpaEx.mincho, FontIpaEx.gothic)";
-    let v = compile_v01_via_loader("font-ipa-ex-abbrevs", src)
+    let v = compile_v01_via_loader_with_metrics("font-ipa-ex-abbrevs", src, &NamedFaces)
         .expect("font-ipa-ex.satyh should compile");
     let vs = as_tuple(v);
-    assert_eq!(as_str(vs[0].clone()), "ipaexm");
-    assert_eq!(as_str(vs[1].clone()), "ipaexg");
+    assert_eq!(as_font(vs[0].clone()), NamedFaces::key_of("ipaexm"));
+    assert_eq!(as_font(vs[1].clone()), NamedFaces::key_of("ipaexg"));
 }
 
 #[test]
 fn font_junicode_members_are_the_expected_006_corpus_abbrevs() {
     let src = "@require: font-junicode
 (FontJunicode.normal, FontJunicode.bold, FontJunicode.italic, FontJunicode.bold-italic)";
-    let v = compile_v01_via_loader("font-junicode-abbrevs", src)
+    let v = compile_v01_via_loader_with_metrics("font-junicode-abbrevs", src, &NamedFaces)
         .expect("font-junicode.satyh should compile");
     let vs = as_tuple(v);
-    assert_eq!(as_str(vs[0].clone()), "Junicode");
-    assert_eq!(as_str(vs[1].clone()), "Junicode-b");
-    assert_eq!(as_str(vs[2].clone()), "Junicode-it");
-    assert_eq!(as_str(vs[3].clone()), "Junicode-bi");
+    assert_eq!(as_font(vs[0].clone()), NamedFaces::key_of("Junicode"));
+    assert_eq!(as_font(vs[1].clone()), NamedFaces::key_of("Junicode-b"));
+    assert_eq!(as_font(vs[2].clone()), NamedFaces::key_of("Junicode-it"));
+    assert_eq!(as_font(vs[3].clone()), NamedFaces::key_of("Junicode-bi"));
 }
 
 #[test]
 fn font_latin_modern_math_main_is_the_expected_006_corpus_abbrev() {
     let src = "@require: font-latin-modern-math
 FontLatinModernMath.main";
-    let v = compile_v01_via_loader("font-lmm-abbrev", src)
+    let v = compile_v01_via_loader_with_metrics("font-lmm-abbrev", src, &NamedFaces)
         .expect("font-latin-modern-math.satyh should compile");
-    assert_eq!(as_str(v), "lmodern");
+    assert_eq!(as_font(v), NamedFaces::key_of("lmodern"));
 }

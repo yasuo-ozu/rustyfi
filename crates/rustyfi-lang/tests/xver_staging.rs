@@ -639,3 +639,132 @@ fn a_quote_is_still_refused_at_the_document_stage_of_a_crossed_dependency() {
         "expected a staging error, got {err}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// The 0.1 `font` build-out, at the cross-version boundary.
+//
+// `font` is now a REAL type on the 0.1 side — upstream saphe-split's
+// `BaseType(FontType)`, an opaque handle whose only values are
+// `Value::Font(FontKey)` (`BCFontKey of FontKey.t` upstream), minted by a
+// font ENVELOPE from a font FILE. It used to be aliased to `string`, and
+// under that alias the question "can `font` cross?" could not even be asked
+// honestly: a 0.1 `font * float * float` and a 0.0.6 `string * float * float`
+// were the SAME type, so the boundary was accepting a coincidence.
+//
+// With the real type in place the answer is: `font` crosses in NEITHER
+// direction, and for a reason that is not "nobody wrote the bridge". The
+// three tests below are that answer's three parts — the two directional
+// refusals, and the control showing why the thing a 0.0.6 package actually
+// exports as a font cannot be coerced either.
+//
+// These use this file's explicit `LoadedFile` harness rather than a lib-root
+// fixture on purpose: same-generation `@require:` resolution would otherwise
+// satisfy the dependency from the requester's own corpus and the test would
+// quietly stop crossing while still passing.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_zero_zero_six_dependency_naming_font_is_refused_forward() {
+    // FORWARD (0.0.6 dependency -> 0.1 document). 0.0.6 has no `font` type
+    // AT ALL: upstream `v0.0.6 src/frontend/types.cppo.ml:280-303`'s
+    // `base_type_hash_table` has no such row, and no bundled
+    // `lib-satysfi/dist/packages/*.satyh` declares `type font`. So this
+    // dependency's `font` is an opaque USER nominal that happens to share a
+    // spelling with 0.1's face handle — the `math-text` situation exactly,
+    // and refused for the same reason: no 0.0.6 value is ever a 0.1 `font`.
+    let err = forward("type xfont-alias = font\nlet xz = 1\n", "0").unwrap_err();
+    match &err {
+        CompileError::CrossVersionUnsupportedName { name, slice, .. } => {
+            assert_eq!(name, "font");
+            assert_eq!(*slice, "X3");
+        }
+        other => panic!("expected a cross-version refusal naming `font`, got {other}"),
+    }
+    // …and the DIAGNOSTIC says which kind of refusal this is. A reader who
+    // sees only "this slice supports the version-neutral subset" goes looking
+    // for the unwritten bridge; there isn't one to write.
+    let msg = err.to_string();
+    assert!(
+        msg.contains("REPRESENTATION FORK, not a missing feature"),
+        "the refusal must name itself a representation fork: {msg}"
+    );
+    assert!(
+        msg.contains("OPAQUE HANDLE") && msg.contains("string * float * float"),
+        "the refusal must write out BOTH representations: {msg}"
+    );
+}
+
+#[test]
+fn a_zero_one_dependency_naming_font_is_refused_in_reverse() {
+    // REVERSE (0.1 dependency -> 0.0.6 document), the direction `deco` DOES
+    // cross (X4b). `font` cannot follow it: the crossing value is a
+    // `FontKey` INDEX into the 0.1 font store, and every 0.0.6 font-consuming
+    // primitive wants an ABBREV naming a row of
+    // `dist/hash/fonts.satysfi-hash`. There is no key -> abbrev direction to
+    // build a wrapper out of — upstream's store is populated from font FILE
+    // paths, and this port's `FontMetrics::resolve_font_abbrev` is likewise
+    // one-way (several abbrevs may resolve onto one key).
+    let err = reverse("module XM = struct\n  type xfont-alias = font\nend\n", "0").unwrap_err();
+    match &err {
+        CompileError::CrossVersionUnsupportedName { name, slice, .. } => {
+            assert_eq!(name, "font");
+            // X4a, not X3: the tag is what says which arm refused.
+            assert_eq!(*slice, "X4a");
+        }
+        other => panic!("expected a cross-version refusal naming `font`, got {other}"),
+    }
+    assert!(
+        err.to_string()
+            .contains("REPRESENTATION FORK, not a missing feature"),
+        "the reverse refusal carries the same note: {err}"
+    );
+}
+
+#[test]
+fn the_zero_zero_six_font_triple_crosses_but_is_not_a_zero_one_font() {
+    // The control that makes the two refusals above mean something, and the
+    // reason no `deco`-style value coercion is possible here.
+    //
+    // What a 0.0.6 package actually exports as "a font" is not typed `font`
+    // at all — it is the bare product `string * float * float` (upstream
+    // `v0.0.6 primitives.cppo.ml:69`'s `tFONT`), e.g. `stdja.satyh`'s
+    // `font-latin-roman`. That type text names no forked type, so it is not
+    // refused and crosses AS ITSELF:
+    assert_eq!(
+        forward("let xfont = (`Junicode`, 1., 0.)\n", "xfont").unwrap(),
+        "tuple"
+    );
+
+    // …but on the 0.1 side `set-font` takes saphe-split's `tFONTWR = font *
+    // float * float`, so the crossed triple does not fit. This is a
+    // TYPECHECK failure at the consumer, not a boundary refusal — the
+    // boundary never saw a reason to intervene.
+    let err = forward("let xfont = (`Junicode`, 1., 0.)\n", "set-font Latin xfont").unwrap_err();
+    assert!(
+        !matches!(err, CompileError::CrossVersionUnsupportedName { .. }),
+        "nothing was refused at the boundary here — the triple names no forked type: {err}"
+    );
+    assert!(
+        err.to_string()
+            .contains("type mismatch: expected `font`, found `string`"),
+        "expected the consumer's own unification to reject the abbrev head, got {err}"
+    );
+
+    // And that is exactly why a `deco`-style wrapper cannot be generated for
+    // it: `string * float * float` is an ORDINARY product. Nothing in the
+    // type distinguishes the 0.0.6 font triple above from any other string
+    // triple, so a coercion inserted on this shape would rewrite unrelated
+    // exports. `deco` is coercible precisely because its type text NAMES
+    // `deco`; this one names nothing.
+    assert_eq!(
+        forward("let xpair = (`a`, 1., 0.)\n", "xpair").unwrap(),
+        "tuple"
+    );
+
+    // The positive control: written natively at the 0.1 site, with a real
+    // handle in head position, the same application typechecks.
+    assert_eq!(
+        v01_alone("set-font Latin (load-single-font `Junicode`, 1., 0.)").unwrap(),
+        "function"
+    );
+}

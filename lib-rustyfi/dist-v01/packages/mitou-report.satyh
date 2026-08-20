@@ -170,6 +170,15 @@
 @require: math
 @require: graphics
 @require: paper-size
+% The 0.1 `font` build-out: `font` is a real opaque base type here (upstream
+% saphe-split's `BaseType(FontType)`), not the 0.0.6 abbrev `string`, so the
+% faces come from the font-envelope stand-ins the same way `std-ja.satyh`
+% takes them — see `mitou-detail.satyh`'s twin note for why this migration
+% is the port's rather than a transcription of upstream's own.
+@require: font-junicode
+@require: font-latin-modern
+@require: font-latin-modern-math
+@require: font-ipa-ex
 
 module MitouReport :> sig
 
@@ -182,14 +191,14 @@ module MitouReport :> sig
       jouzai-number : int,
     |) -> block-text -> document
 
-  val font-latin-roman  : string * float * float
-  val font-latin-italic : string * float * float
-  val font-latin-sans   : string * float * float
-  val font-latin-mono   : string * float * float
-  val font-cjk-mincho   : string * float * float
-  val font-cjk-gothic   : string * float * float
-  val set-latin-font : (string * float * float) -> context -> context
-  val set-cjk-font   : (string * float * float) -> context -> context
+  val font-latin-roman  : font * float * float
+  val font-latin-italic : font * float * float
+  val font-latin-sans   : font * float * float
+  val font-latin-mono   : font * float * float
+  val font-cjk-mincho   : font * float * float
+  val font-cjk-gothic   : font * float * float
+  val set-latin-font : (font * float * float) -> context -> context
+  val set-cjk-font   : (font * float * float) -> context -> context
   val \ref : inline [string]
   val \ref-page : inline [string]
   val \figure : inline [?(label : string) inline-text, block-text]
@@ -252,12 +261,12 @@ end = struct
 
 %  val font-latin-roman  = (`ArnoPro`   , font-ratio-latin, 0.)
 %  val font-latin-italic = (`ArnoPro-it`, font-ratio-latin, 0.)
-  val font-latin-roman  = (`Junicode`   , font-ratio-latin, 0.)
-  val font-latin-italic = (`Junicode-it`, font-ratio-latin, 0.)
-  val font-latin-sans   = (`lmsans`    , font-ratio-latin, 0.)
-  val font-latin-mono   = (`lmmono`    , font-ratio-latin, 0.)
-  val font-cjk-mincho   = (`ipaexm`    , font-ratio-cjk  , 0.)
-  val font-cjk-gothic   = (`ipaexg`    , font-ratio-cjk  , 0.)
+  val font-latin-roman  = (FontJunicode.normal , font-ratio-latin, 0.)
+  val font-latin-italic = (FontJunicode.italic , font-ratio-latin, 0.)
+  val font-latin-sans   = (FontLatinModern.sans, font-ratio-latin, 0.)
+  val font-latin-mono   = (FontLatinModern.mono, font-ratio-latin, 0.)
+  val font-cjk-mincho   = (FontIpaEx.mincho    , font-ratio-cjk  , 0.)
+  val font-cjk-gothic   = (FontIpaEx.gothic    , font-ratio-cjk  , 0.)
 
 
   val set-latin-font font ctx =
@@ -281,7 +290,7 @@ end = struct
       |> set-font Kana           font-cjk-mincho
       |> set-font HanIdeographic font-cjk-mincho
       |> set-font Latin          font-latin-roman
-      |> set-math-font `lmodern`
+      |> set-math-font FontLatinModernMath.main
       |> set-hyphen-penalty 100
 
 

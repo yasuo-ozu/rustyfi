@@ -540,7 +540,14 @@ prims! {
     v006 "embed-math" (2) => prim_embed_math_v006;
     v01  "embed-math" (2) => prim_embed_math_v01;
     "set-math-command" (2) => prim_set_math_command;
-    "set-math-font" (2) => prim_set_math_font;
+    // `set-math-font` forks in its argument, not its effect: 0.0.6 takes the
+    // math face's ABBREV (`string`), saphe-split takes the opaque `font`
+    // handle (`tFONTKEY`). Both end at the same `Context::math_font`.
+    v006 "set-math-font" (2) => prim_set_math_font_v006;
+    v01  "set-math-font" (2) => prim_set_math_font_v01;
+    // LOCAL, non-upstream, V0_1-only — the port's spelling for upstream's
+    // internal `LoadSingleFont{path}` node; see `prim_load_single_font`.
+    v01  "load-single-font" (1) => prim_load_single_font;
     v006 "space-between-maths" (3) => prim_space_between_maths_v006;
     v01  "space-between-maths" (3) => prim_space_between_maths_v01;
     // ==== math-split spec §2.2: NEW in 0.1 — `math-text`/`math-boxes` split
@@ -592,7 +599,10 @@ prims! {
     "split-into-lines" (1) => prim_split_into_lines;
     "block-frame-breakable" (4) => prim_block_frame_breakable;
     "embed-block-top" (3) => prim_embed_block_top;
-    "set-font" (3) => prim_set_font;
+    // `set-font` forks in its SECOND argument's head only: 0.0.6's
+    // `string * float * float` vs saphe-split's `font * float * float`.
+    v006 "set-font" (3) => prim_set_font_v006;
+    v01  "set-font" (3) => prim_set_font_v01;
     "set-code-text-command" (2) => prim_set_code_text_command;
     "get-natural-length" (1) => prim_get_natural_length;
 
@@ -6838,13 +6848,13 @@ fn resolve_font_abbrev(abbrev: &str) -> FontKey {
     }
 }
 
-/// `set-math-font : string -> context -> context` (vminst.ml:1495) —
-/// `abbrev` resolves through the font metrics provider's registry first
-/// (D1a, same upgrade as `set-font`), falling back to the milestone-1
-/// 3-face name heuristic. A math OTF configured under any abbrev (not just
-/// the CLI regular face) can now be selected. Per-abbrev math-file
-/// selection beyond that = MATH-table slice (already landed).
-fn prim_set_math_font(interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+/// `set-math-font : string -> context -> context` (0.0.6
+/// `vminstdef.yaml:1364`) — `abbrev` resolves through the font metrics
+/// provider's registry first (D1a, same upgrade as `set-font`), falling back
+/// to the milestone-1 3-face name heuristic. A math OTF configured under any
+/// abbrev (not just the CLI regular face) can now be selected. Per-abbrev
+/// math-file selection beyond that = MATH-table slice (already landed).
+fn prim_set_math_font_v006(interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
     let ctx = as_context(args.pop().unwrap())?;
     let abbrev = as_str(args.pop().unwrap())?;
     let math_font = interp
@@ -6852,6 +6862,49 @@ fn prim_set_math_font(interp: &mut Interp, mut args: Vec<Value>) -> Result<Value
         .resolve_font_abbrev(&abbrev)
         .unwrap_or_else(|| resolve_font_abbrev(&abbrev));
     Ok(Value::Context(Box::new(Context { math_font, ..ctx })))
+}
+
+/// `set-math-font : font -> context -> context` (saphe-split
+/// `tools/gencode/vminst.ml:1462`, whose body is
+/// `ctx with math_font_key = Some(mathkey)`) — the 0.1 arm takes the opaque
+/// handle, so there is no abbrev left to resolve. The bundled 0.1 corpus
+/// already calls it that way (`std-ja.satyh`'s `set-math-font
+/// FontLatinModernMath.main`).
+fn prim_set_math_font_v01(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+    let ctx = as_context(args.pop().unwrap())?;
+    let math_font = as_font_key(args.pop().unwrap())?;
+    Ok(Value::Context(Box::new(Context { math_font, ..ctx })))
+}
+
+/// `load-single-font : string -> font` — LOCAL, non-upstream, V0_1-only.
+///
+/// Upstream has no surface name for this: `envelopeChecker.ml`'s
+/// `check_font_envelope` synthesizes one binding per `files[]` row of a font
+/// ENVELOPE, typed `BaseType(FontType)`, whose right-hand side is the
+/// internal `LoadSingleFont{ path; used_as_math_font }` node — and
+/// `evaluator.cppo.ml:427-434` evaluates that to `BaseConstant(BCFontKey
+/// (FontInfo.add_single path))`. This port's bundled 0.1 font envelopes are
+/// ordinary `.satyh` stand-ins (`dist-v01/packages/font-*.satyh`) rather
+/// than envelopes the loader synthesizes bindings from, so they need a
+/// spelling for the same step; this is it. Same LOCAL-primitive precedent as
+/// `set-font-key`.
+///
+/// The argument stands in for upstream's font-file PATH: it is the port's
+/// font-store key, resolved here through exactly the ladder `set-font` used
+/// to run per call — the metrics provider's registry
+/// (`FontMetrics::resolve_font_abbrev`, a real `TtfFontStore` built from
+/// `fonts.satysfi-hash`), falling back to the 3-face name heuristic. Doing
+/// it HERE rather than at `set-font` time is what makes the resulting `font`
+/// a genuine handle: resolution is a pure function of the abbrev and the
+/// provider (`&self`, no interior mutation), so moving it earlier is
+/// observationally identical.
+fn prim_load_single_font(interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+    let abbrev = as_str(args.pop().unwrap())?;
+    let key = interp
+        .metrics
+        .resolve_font_abbrev(&abbrev)
+        .unwrap_or_else(|| resolve_font_abbrev(&abbrev));
+    Ok(Value::Font(key))
 }
 
 /// `space-between-maths : context -> math -> math -> inline-boxes option`
@@ -8443,6 +8496,32 @@ fn as_font(v: Value) -> Result<(String, f64, f64), EvalError> {
     }
 }
 
+/// [`as_font`]'s V0_1 twin — saphe-split's `tFONTWR = font * float * float`,
+/// whose head is the opaque handle rather than an abbrev.
+fn as_font_with_ratio(v: Value) -> Result<(FontKey, f64, f64), EvalError> {
+    match v {
+        Value::Tuple(vs) if vs.len() == 3 => {
+            let mut it = vs.into_iter();
+            let key = as_font_key(it.next().unwrap())?;
+            let size_ratio = as_float(it.next().unwrap())?;
+            let rising_ratio = as_float(it.next().unwrap())?;
+            Ok((key, size_ratio, rising_ratio))
+        }
+        other => eval_error(format!(
+            "expected a font (font * float * float), got {}",
+            other.type_name()
+        )),
+    }
+}
+
+/// The opaque V0_1 `font` handle (upstream's `BCFontKey of FontKey.t`).
+fn as_font_key(v: Value) -> Result<FontKey, EvalError> {
+    match v {
+        Value::Font(key) => Ok(key),
+        other => eval_error(format!("expected a font, got {}", other.type_name())),
+    }
+}
+
 /// `set-text-color : color -> context -> context` (vminst.ml:1603) —
 /// FAITHFUL store (`Context::text_color`, the `set-font-size` shape); glyph-
 /// color *rendering* (emitting `rg`/`g` before `Tj` in both PDF writers) is
@@ -8811,8 +8890,8 @@ fn prim_add_footnote(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value
     )]))
 }
 
-/// `set-font : script -> font -> context -> context` (vminst.ml:1463) —
-/// D1b: real per-script wiring. `abbrev` resolves through the font metrics
+/// `set-font : script -> string * float * float -> context -> context`
+/// (0.0.6 `vminstdef.yaml:1335`, `tFONT` head) — D1b: real per-script wiring. `abbrev` resolves through the font metrics
 /// provider's registry first (`FontMetrics::resolve_font_abbrev` — a real
 /// `TtfFontStore` built from `fonts.satysfi-hash`, D1a), falling back to
 /// the milestone-1 3-face name heuristic (`resolve_font_abbrev` free fn)
@@ -8826,7 +8905,7 @@ fn prim_add_footnote(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value
 /// the two stay in sync, but `set-font` on any OTHER script only touches
 /// `font_scheme`, leaving `ctx.font` (and hence `set-font-key`/`\bold`/
 /// `\emph`, which only ever read `ctx.font`) untouched.
-fn prim_set_font(interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+fn prim_set_font_v006(interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
     let mut ctx = as_context(args.pop().unwrap())?;
     let (abbrev, size_ratio, rising_ratio) = as_font(args.pop().unwrap())?;
     let script = as_script(args.pop().unwrap())?;
@@ -8834,15 +8913,35 @@ fn prim_set_font(interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, Eva
         .metrics
         .resolve_font_abbrev(&abbrev)
         .unwrap_or_else(|| resolve_font_abbrev(&abbrev));
+    install_script_font(&mut ctx, script, font, size_ratio, rising_ratio);
+    Ok(Value::Context(Box::new(ctx)))
+}
+
+/// `set-font : script -> font * float * float -> context -> context`
+/// (saphe-split `tools/gencode/vminst.ml:1433`, `tFONTWR` head). Identical
+/// to [`prim_set_font_v006`] except that the triple's head is ALREADY a
+/// resolved handle — 0.1 has no abbrev at this point and nothing to resolve;
+/// `load-single-font` did that when the font envelope's member was minted.
+fn prim_set_font_v01(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+    let mut ctx = as_context(args.pop().unwrap())?;
+    let (font, size_ratio, rising_ratio) = as_font_with_ratio(args.pop().unwrap())?;
+    let script = as_script(args.pop().unwrap())?;
+    install_script_font(&mut ctx, script, font, size_ratio, rising_ratio);
+    Ok(Value::Context(Box::new(ctx)))
+}
+
+/// The half of `set-font` that is NOT version-forked — the `Context` write
+/// both arms end at, kept in one place so the 0.0.6 behaviour cannot drift
+/// when the 0.1 one changes. See `prim_set_font_v006`'s "Resolution rule".
+fn install_script_font(ctx: &mut Context, script: Script, font: FontKey, ratio: f64, rising: f64) {
     ctx.font_scheme[script as usize] = ScriptFont {
         font,
-        ratio: size_ratio,
-        rising: rising_ratio,
+        ratio,
+        rising,
     };
     if script == Script::Latin {
         ctx.font = font;
     }
-    Ok(Value::Context(Box::new(ctx)))
 }
 
 /// `set-code-text-command : [string] inline-cmd -> context -> context`

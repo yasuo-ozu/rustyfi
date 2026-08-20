@@ -362,7 +362,7 @@ fn primitive_names_are_cross_checked_against_primitives_source() {
     let src = include_str!("../src/primitives.rs");
     assert_eq!(
         typecheck::PRIMITIVE_NAMES.len(),
-        208,
+        209,
         "real-world-compat round 6 added 3: regexp-of-string, string-match, \
          split-on-regexp (satysfi-base char.satyg / figbox). keep this in sync \
          with primitives.rs's prims! table and \
@@ -380,7 +380,8 @@ fn primitive_names_are_cross_checked_against_primitives_source() {
          set-hyphenation-dictionary, set-unicode-char-database, here; G9 \
          added 1: inline-frame-inner — the primitive was already registered \
          in primitives.rs/prim_types.rs, only this list omitted it; \
-         reflow S4 lists added 2: list-mark, inline-mark)"
+         reflow S4 lists added 2: list-mark, inline-mark; the 0.1 `font` \
+         build-out added 1: load-single-font, V0_1-only)"
     );
     for name in typecheck::PRIMITIVE_NAMES {
         // Escape backslashes the way they'd actually appear in Rust source

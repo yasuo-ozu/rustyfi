@@ -5,13 +5,17 @@
 %   … — ENVELOPE-ONLY upstream (no .satyh); saphe synthesizes
 % `FontLatinModernMath.main : font` (the only `math: true` font among the
 % four G7 stand-ins) from rustyfi-envelope.yaml `files[].opentype_single.
-% name`. PORT STAND-IN: the `font` value is the abbrev STRING (G8: `font` ≡
-% `string` under V0_1, `typecheck.rs:499`); `set-math-font` accepts it bare
-% (not a `font * float * float` triple) and resolves it the same way
-% `set-font`'s name-heuristic does. No `@require:`.
+% name`. PORT STAND-IN: an ordinary `.satyh` module whose member calls the
+% LOCAL `load-single-font` primitive in place of upstream's synthesized
+% `LoadSingleFont{ path; used_as_math_font = true }` node — the value IS a
+% real `font` handle (`Value::Font(FontKey)`), keyed by this port's
+% font-store abbrev rather than by a font FILE path. That is exactly what
+% 0.1's `set-math-font : font -> context -> context` takes bare (NOT a
+% `font * float * float` triple; that is `set-font`'s argument). No
+% `@require:`.
 
 module FontLatinModernMath :> sig
   val main : font
 end = struct
-  val main = `lmodern`
+  val main = load-single-font `lmodern`
 end

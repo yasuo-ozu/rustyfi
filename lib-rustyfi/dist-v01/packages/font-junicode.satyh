@@ -3,12 +3,17 @@
 % saphe-split@b836d512:lib-rustyfi/packages/font-junicode/… — this package
 % is ENVELOPE-ONLY upstream (no .satyh); saphe synthesizes
 % `FontJunicode.{normal,bold,italic,bold-italic} : font` from
-% rustyfi-envelope.yaml `files[].opentype_single.name`. PORT STAND-IN: each
-% `font` value is the abbrev STRING (G8: `font` ≡ `string` under V0_1,
-% `typecheck.rs:499`); the backend resolves it via `set-font`'s name-
-% heuristic / a bare `TtfFontStore::load` single-face store, so every
-% abbrev collapses to the one loaded face. No `@require:`. Real 0.1
-% envelope font loading (Axis B) supersedes this later.
+% rustyfi-envelope.yaml `files[].opentype_single.name`, binding each to the
+% internal `LoadSingleFont{path}` node. PORT STAND-IN: only the SHAPE of
+% that synthesis is stood in for — this is an ordinary `.satyh` module the
+% loader already resolves, whose members call the LOCAL `load-single-font`
+% primitive (`prim_types.rs`/`primitives.rs`) in that node's place. The
+% values ARE real `font` handles (`Value::Font(FontKey)`, upstream's
+% `BCFontKey of FontKey.t`); what is stood in for is the KEY — this port's
+% font-store abbrev rather than a font FILE path — so with a bare
+% single-face `TtfFontStore` every abbrev collapses to the one loaded face.
+% No `@require:`. Real 0.1 envelope font loading (Axis B) supersedes this
+% later.
 
 module FontJunicode :> sig
   val normal : font
@@ -16,8 +21,8 @@ module FontJunicode :> sig
   val italic : font
   val bold-italic : font
 end = struct
-  val normal = `Junicode`
-  val bold = `Junicode-b`
-  val italic = `Junicode-it`
-  val bold-italic = `Junicode-bi`
+  val normal = load-single-font `Junicode`
+  val bold = load-single-font `Junicode-b`
+  val italic = load-single-font `Junicode-it`
+  val bold-italic = load-single-font `Junicode-bi`
 end

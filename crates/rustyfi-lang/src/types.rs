@@ -69,6 +69,28 @@ pub enum BaseType {
     Path,
     /// `graphics` (v0.0.6: `GraphicsType`).
     Graphics,
+    /// `font` (**V0_1 only**; upstream `saphe-split`
+    /// `types.cppo.ml`'s `FontType`, registered in that generation's
+    /// `base_type_hash_table` as `("font", FontType)` and spelled `tFONTKEY`
+    /// in `primitives.cppo.ml:45`) — an OPAQUE handle on one loaded face.
+    /// Its value is [`Value::Font`](crate::value::Value::Font), a
+    /// `rustyfi_backend::FontKey` index into the metrics provider's font
+    /// store, matching upstream's `BCFontKey of FontKey.t`.
+    ///
+    /// **0.0.6 has no such type at all** — verified against upstream
+    /// `v0.0.6 src/frontend/types.cppo.ml:280-303`, whose
+    /// `base_type_hash_table` has no `"font"` row, and against
+    /// `lib-satysfi/dist/packages/*.satyh`, which declare no `type font`
+    /// either. What 0.0.6 calls "a font" is the bare product
+    /// `string * float * float` (`primitives.cppo.ml:69`'s `tFONT = tPROD
+    /// [tS; tFL; tFL]`), whose head is an ABBREV naming a row of
+    /// `dist/hash/fonts.satysfi-hash`. So under `V0_0` the NAME `font`
+    /// falls through `name_to_mono` to the opaque user-nominal
+    /// `Variant("font", [])` — an unrelated type that happens to share a
+    /// spelling. That disagreement is exactly what keeps `font` inside
+    /// `typecheck::forked_type_names()`, and it is a REPRESENTATION fork,
+    /// not a missing feature: see `v1::xver_adapt::forked_note`.
+    Font,
     /// `text-info` (v0.0.6: `TextInfoType`) — the text-mode context
     /// (`deepen-indent`/`get-initial-text-info`/`break`; sliver — see
     /// primitives.rs for the scoping note: the text/html backends
@@ -98,6 +120,7 @@ impl BaseType {
             BaseType::PrePath => "pre-path",
             BaseType::Path => "path",
             BaseType::Graphics => "graphics",
+            BaseType::Font => "font",
             BaseType::TextInfo => "text-info",
         }
     }

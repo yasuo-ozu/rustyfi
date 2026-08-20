@@ -205,7 +205,14 @@ pub fn reject_type_names_from_v006() -> std::collections::BTreeSet<String> {
 
 /// A human hint for why `name` (a member of [`reject_type_names`]) can't be
 /// relabeled across the boundary — X3.1's classification table.
-fn forked_note(name: &str) -> &'static str {
+///
+/// `pub(crate)` so `CompileError::CrossVersionUnsupportedName`'s `Display`
+/// can append it (`lib.rs`). Without that the user-visible text for every
+/// refusal was the same sentence — "a version-forked builtin, this slice
+/// only supports the version-neutral subset" — which reads as "not
+/// implemented yet" even for the names that are refused because the two
+/// generations genuinely disagree about what the value IS.
+pub(crate) fn forked_note(name: &str) -> &'static str {
     match name {
         "page" => {
             "0.0.6's page is a 9-ctor ADT (Value::Ctor); 0.1's is a length*length \
@@ -231,9 +238,45 @@ fn forked_note(name: &str) -> &'static str {
              spelling to forward) or a `deco` leaf buried inside a compound type"
         }
         "paren" => {
-            "0.0.6's paren closure takes explicit fontsize/axis/color arguments; \
-             0.1's pulls them from `context` — different arity, needs a wrapper \
-             (deferred to X3b)"
+            "0.0.6's paren is `length -> length -> length -> length -> color -> \
+             (inline-boxes * (length -> length))` — (height, signed depth, axis, \
+             fontsize, colour); 0.1's is `length -> length -> context -> \
+             (inline-boxes * (length -> length))`, pulling the last three out of the \
+             context instead. FORWARD that is a PROJECTION and X3b generates it: \
+             `size = get-font-size ctx`, `axis = size *' \
+             get-math-axis-height-ratio ctx`, `colour = get-text-color ctx`. \
+             REVERSE there is no inverse to generate. The 0.0.6 call site \
+             (`primitives::make_paren_run`) has only those five scalars and no \
+             context at all, so a wrapper would have to invent one — and even \
+             granting `set-font-size`/`set-text-color`, the caller's explicit AXIS \
+             has no channel: 0.1 recovers the axis from the math font's MATH-table \
+             height ratio, which no primitive in EITHER generation can set. A \
+             reverse wrapper would therefore silently draw against the invented \
+             context's axis rather than the caller's. This occurrence is either \
+             that direction or outside the forward wrapper's support (an \
+             OPEN optional row, or a `paren` leaf buried inside a compound type)"
+        }
+        // The build-out's own entry. This is the one place the port states,
+        // in the user-visible error, that `font` is refused because the two
+        // generations disagree about what a font VALUE is — not because
+        // nobody has written the bridge yet.
+        "font" => {
+            "a REPRESENTATION FORK, not a missing feature. 0.1's `font` is an OPAQUE \
+             HANDLE on one already-loaded face — upstream saphe-split registers \
+             (\"font\", FontType) in types.cppo.ml's base_type_hash_table, spells it \
+             tFONTKEY, and its only values are BCFontKey of FontKey.t, minted by a \
+             font ENVELOPE from a font FILE path (envelopeChecker.ml's \
+             check_font_envelope). 0.0.6 has NO `font` type at all: no such row in \
+             its own base_type_hash_table and no `type font` in its bundled \
+             packages, so the same word in 0.0.6 text is an unrelated opaque user \
+             nominal. What 0.0.6 calls a font is the bare product `string * float * \
+             float` (tFONT) whose head is an ABBREV naming a row of \
+             dist/hash/fonts.satysfi-hash — a different naming universe, and it \
+             names no forked type, so it already crosses as the string triple it is. \
+             Neither direction has a total map: forward there is no 0.0.6 value that \
+             is a face handle, and an untagged `string * float * float` cannot be \
+             recognized as a font to coerce; reverse a handle is a store index with \
+             no abbrev to recover from it"
         }
         "code" => {
             "0.0.6 has no `code` type spelling at all (its manual-type decoder knows \
@@ -243,7 +286,13 @@ fn forked_note(name: &str) -> &'static str {
              INFERRED `code` export (a `@stage: 0` binding's `&e`) is unaffected and \
              crosses fine; only WRITTEN `code` type text does not"
         }
-        "pre-path" | "path" | "graphics" | "image" | "font" => {
+        // Unreachable through `reject_type_names()` today: all four were
+        // un-gated in `name_to_mono` once it turned out upstream registers
+        // the same base type in BOTH generations, so the automatic
+        // `forked_type_names()` diff no longer reports them. Kept because
+        // `forked_note` is also reachable from the standalone
+        // `adapt_export_type` walk, which takes any name.
+        "pre-path" | "path" | "graphics" | "image" => {
             "0.0.6 has no such primitive; this name is an opaque user-nominal \
              stand-in there, with no shared representation against 0.1's real \
              primitive type"
@@ -3509,8 +3558,16 @@ mod tests {
         let file = v1_file(
             "module M :> sig\n  val my-paren : paren\nend = struct\n  val my-paren = 0\nend\n",
         );
+        // NOT because 0.1's `paren` is a stand-in — `prim_types::t_paren`
+        // matches saphe-split's `tPAREN` exactly, as the V0_0 arm matches
+        // `v0.0.6 primitives.cppo.ml:86`. It rejects because the forward
+        // wrapper is a PROJECTION of the 0.1 context onto 0.0.6's three
+        // explicit scalars, and that has no inverse: the reverse call site has
+        // no context to hand and the caller's explicit AXIS reaches 0.1 only
+        // through the math font's MATH-table ratio, which nothing can set. See
+        // `forked_note`'s `"paren"` arm.
         let err = classify_v1(&file)
-            .expect_err("0.1's `paren` is a stand-in — it must still reject in this direction");
+            .expect_err("a 0.1 `paren` export must still reject in the reverse direction");
         match err {
             BoundaryError::ForkedTypeExport { ty_name, .. } => assert_eq!(ty_name, "paren"),
         }

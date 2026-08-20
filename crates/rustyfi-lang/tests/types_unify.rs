@@ -716,6 +716,11 @@ fn every_v01_only_primitive_has_a_type_under_v0_1_and_none_under_v0_0() {
         "set-hyphenation-dictionary",
         "set-unicode-char-database",
         "here",
+        // ---- the 0.1 `font` build-out: the LOCAL stand-in for upstream's
+        // internal `LoadSingleFont` node, the only way a 0.1 program mints
+        // the opaque `font` handle here. V0_1-only for the same reason the
+        // TYPE is: 0.0.6 has no `font` type to mint.
+        "load-single-font",
     ];
     for name in V01_ONLY_NAMES {
         assert!(

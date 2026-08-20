@@ -89,6 +89,17 @@
 @require: math
 @require: graphics
 @require: paper-size
+% The 0.1 `font` build-out: `font` is a real opaque base type here (upstream
+% saphe-split's `BaseType(FontType)`), not the 0.0.6 abbrev `string`, so the
+% faces come from the font-envelope stand-ins the same way `std-ja.satyh`
+% takes them — the file this one's own header already calls a "pre-envelope
+% 0.0-syntax leftover" upstream (`lib-satysfi/packages/mitou-detail.satyh`
+% on `saphe-split` still spells `string * float * float`; it was never
+% migrated there, so this migration is the port's, matching what the same
+% branch DID do for the `std-ja` family).
+@require: font-latin-modern
+@require: font-latin-modern-math
+@require: font-ipa-ex
 
 module MitouDetail :> sig
 
@@ -98,12 +109,12 @@ module MitouDetail :> sig
       subtitle : inline-text,
     |) -> block-text -> document
 
-  val font-latin-sans   : string * float * float
-  val font-latin-mono   : string * float * float
-  val font-cjk-normal   : string * float * float
-  val font-cjk-bold     : string * float * float
-  val set-latin-font : (string * float * float) -> context -> context
-  val set-cjk-font   : (string * float * float) -> context -> context
+  val font-latin-sans   : font * float * float
+  val font-latin-mono   : font * float * float
+  val font-cjk-normal   : font * float * float
+  val font-cjk-bold     : font * float * float
+  val set-latin-font : (font * float * float) -> context -> context
+  val set-cjk-font   : (font * float * float) -> context -> context
   val \ref : inline [string]
   val \ref-page : inline [string]
   val \figure : inline [?(label : string) inline-text, block-text]
@@ -161,12 +172,12 @@ end = struct
   val section-top-gap = 0pt
   val section-bottom-gap = 0pt
 
-  val font-latin-sans   = (`lmsans`, font-ratio-latin, 0.)
-  val font-latin-mono   = (`lmmono`, font-ratio-latin, 0.)
+  val font-latin-sans   = (FontLatinModern.sans, font-ratio-latin, 0.)
+  val font-latin-mono   = (FontLatinModern.mono, font-ratio-latin, 0.)
 %  val font-cjk-normal   = (`HiraKakuProN-W2`, font-ratio-cjk, 0.)
 %  val font-cjk-bold     = (`HiraKakuProN-W5`, font-ratio-cjk, 0.)
-  val font-cjk-normal   = (`ipaexm`, font-ratio-cjk, 0.)
-  val font-cjk-bold     = (`ipaexg`, font-ratio-cjk, 0.)
+  val font-cjk-normal   = (FontIpaEx.mincho, font-ratio-cjk, 0.)
+  val font-cjk-bold     = (FontIpaEx.gothic, font-ratio-cjk, 0.)
 
 
   val set-latin-font font ctx =
@@ -190,7 +201,7 @@ end = struct
       |> set-font Kana           font-cjk-normal
       |> set-font HanIdeographic font-cjk-normal
       |> set-font Latin          font-latin-sans
-      |> set-math-font `lmodern`
+      |> set-math-font FontLatinModernMath.main
       |> set-hyphen-penalty 100
 
 

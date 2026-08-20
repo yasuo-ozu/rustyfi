@@ -315,8 +315,14 @@ in
 // `font`, not `graphics`: `graphics` turned out not to be forked at all
 // (upstream registers the same `GraphicsType` base type in both generations —
 // see `typecheck::name_to_mono`), so it now crosses in BOTH directions and can
-// no longer stand in for a rejected export here. `font` still forks: 0.0.6's is
-// an opaque nominal, 0.1's a `string` stand-in.
+// no longer stand in for a rejected export here. `font` still forks, and since
+// the 0.1 `font` build-out it forks for a REAL reason rather than because 0.1's
+// was a `string` stand-in: 0.1's is saphe-split's opaque `BaseType(FontType)`
+// face handle (`Value::Font(FontKey)`), 0.0.6's is an unrelated opaque user
+// nominal — 0.0.6 registers no `font` type at all. `xver_staging.rs`'s
+// "0.1 `font` build-out" group is where that refusal is stated in full, in
+// both directions and with the control showing why the 0.0.6 font TRIPLE
+// cannot be coerced either.
 const V01_FORKED_EXPORT_PKG_SRC: &str = "\
 module V01ForkedExport = struct
   type my-font-alias = font

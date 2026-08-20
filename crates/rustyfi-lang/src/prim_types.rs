@@ -431,11 +431,37 @@ pub fn t_deco(version: RustyfiVersion) -> MonoType {
 pub fn t_decoset(version: RustyfiVersion) -> MonoType {
     product(vec![t_deco(version); 4])
 }
-/// `font = string * float * float` (vminst.ml's `tFONT`) — an
-/// `(abbrev, size_ratio, rising_ratio)` triple; `set-font`'s second
-/// argument.
-pub fn t_font() -> MonoType {
-    product(vec![t_string(), t_float(), t_float()])
+/// `font` — the V0_1-only OPAQUE face handle (upstream `saphe-split`
+/// `primitives.cppo.ml:45`'s `tFONTKEY = (~! "font", BaseType(FontType))`).
+/// Value: [`Value::Font`](crate::value::Value::Font), a resolved
+/// `rustyfi_backend::FontKey`, exactly upstream's `BCFontKey of FontKey.t`.
+///
+/// There is deliberately no `V0_0` counterpart: upstream 0.0.6 registers no
+/// `font` base type and declares no `type font` in its bundled library, so
+/// under `V0_0` the name falls through to the nominal `Variant("font", [])`
+/// — see [`BaseType::Font`](crate::types::BaseType::Font) for the citations.
+pub fn t_font_key() -> MonoType {
+    MonoType::Base(BaseType::Font)
+}
+
+/// `font-with-ratio`, i.e. what `set-font`'s second argument actually is,
+/// **version-forked at the head component**:
+///
+/// - `V0_0` — `string * float * float`, upstream `v0.0.6
+///   primitives.cppo.ml:69`'s `tFONT = tPROD [tS; tFL; tFL]`. The head is a
+///   font ABBREV naming a row of `dist/hash/fonts.satysfi-hash`.
+/// - `V0_1` — `font * float * float`, upstream `saphe-split
+///   primitives.cppo.ml:74`'s `tFONTWR = tPROD [tFONTKEY; tFL; tFL]`. The
+///   head is the opaque [`t_font_key`] handle; the 0.0.6 name is GONE from
+///   the surface, and no primitive converts between the two.
+///
+/// The trailing `(size_ratio, rising_ratio)` pair is identical in both.
+pub fn t_font_with_ratio(version: RustyfiVersion) -> MonoType {
+    let head = match version {
+        RustyfiVersion::V0_1 => t_font_key(),
+        _ => t_string(),
+    };
+    product(vec![head, t_float(), t_float()])
 }
 
 /// `dom -> cod` (vminst.ml's `@->`) — a function taking no labeled optional
@@ -1586,10 +1612,37 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
             inline_cmd(vec![mandatory(t_math())]),
             arrow(t_context(), t_context()),
         )),
-        // vminst.ml:1495 `PrimitiveSetMathFont`: `~% (tS @-> tCTX @-> tCTX)`.
-        // Phase B — STAND-IN body (no `MathFontStore` yet; not called by
-        // `math.satyh` itself, registered for signature parity).
-        "set-math-font" => poly0(arrow(t_string(), arrow(t_context(), t_context()))),
+        // `PrimitiveSetMathFont`, version-forked in its FIRST argument:
+        // 0.0.6 `vminstdef.yaml:1364` `~% (tS @-> tCTX @-> tCTX)` takes the
+        // math font's ABBREV; saphe-split `tools/gencode/vminst.ml:1462`
+        // `tFONTKEY @-> tCTX @-> tCTX` takes the opaque [`t_font_key`]
+        // handle (its body writes `ctx.math_font_key = Some(mathkey)`).
+        // The bundled 0.1 corpus already spells the 0.1 form — e.g.
+        // `dist-v01/packages/std-ja.satyh`'s `set-math-font
+        // FontLatinModernMath.main`.
+        "set-math-font" => {
+            let dom = match version {
+                RustyfiVersion::V0_1 => t_font_key(),
+                _ => t_string(),
+            };
+            poly0(arrow(dom, arrow(t_context(), t_context())))
+        }
+        // LOCAL, non-upstream, V0_1-only: `load-single-font : string ->
+        // font`, the port's stand-in for upstream's internal
+        // `LoadSingleFont{path}` node. Upstream never gives this a surface
+        // name — `envelopeChecker.ml`'s `check_font_envelope` synthesizes
+        // one binding per `files[]` row of a FONT ENVELOPE and evaluates
+        // that node directly. This port's bundled 0.1 font envelopes
+        // (`dist-v01/packages/font-*.satyh`) are ordinary `.satyh`
+        // stand-ins rather than envelopes the loader synthesizes from, so
+        // they need a spelling for "mint the handle for this face". Its
+        // argument is the port's font-store key (the metrics provider's
+        // abbrev), standing in for upstream's font-file path; see
+        // `primitives.rs`'s `prim_load_single_font`. Same LOCAL-primitive
+        // precedent as `set-font-key` (`primitives.rs`'s `prims!` table).
+        "load-single-font" if version == RustyfiVersion::V0_1 => {
+            poly0(arrow(t_string(), t_font_key()))
+        }
         // vminst.ml:173 `BackendSpaceBetweenMaths`:
         // `~% (tCTX @-> tMATH @-> tMATH @-> tOPT tIB)`. Phase E — STAND-IN
         // body (the full `space_between_math_kinds` table is phase A.4,
@@ -1725,10 +1778,15 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
         // see primitives.rs's prim_add_footnote (footnote float
         // accumulator).
         "add-footnote" => poly0(arrow(t_block_boxes(), t_inline_boxes())),
-        // vminst.ml:1463 `PrimitiveSetFont`: `~% (tSCR @-> tFONT @-> tCTX @-> tCTX)`.
-        // STAND-IN: single `FontKey` slot, script ignored — see `primitives.rs`'s
-        // `prim_set_font` (real per-script wiring is Slice 1).
-        "set-font" => poly0(arrows(vec![t_script(), t_font(), t_context()], t_context())),
+        // `PrimitiveSetFont`, version-forked in its SECOND argument only:
+        // 0.0.6 `vminstdef.yaml:1335` `~% (tSCR @-> tFONT @-> tCTX @-> tCTX)`
+        // with `tFONT = string * float * float`; saphe-split
+        // `tools/gencode/vminst.ml:1433` `tSCR @-> tFONTWR @-> tCTX @-> tCTX`
+        // with `tFONTWR = font * float * float`. See [`t_font_with_ratio`].
+        "set-font" => poly0(arrows(
+            vec![t_script(), t_font_with_ratio(version), t_context()],
+            t_context(),
+        )),
         // `set-code-text-command : [string] inline-cmd -> context -> context`
         // (`stdja:116`; orphan #4 of, not in any vminst.ml table this port
         // has transcribed — no upstream line cited). STAND-IN: `(command

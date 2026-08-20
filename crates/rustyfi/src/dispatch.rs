@@ -70,7 +70,8 @@ fn compile_command(name: &'static str) -> Command {
                 .help(
                     "Library root for `@require:` resolution (packages under \
                      <lib-root>/dist/packages/). Falls back to $RUSTYFI_LIB_ROOT, \
-                     then to the nearest lib-rustyfi/ found upward from the input.",
+                     then to every root found from the document's directory, nearest first: \
+                     a `lib-rustyfi/` above it, a `.rustyfi/` beside a Satyristes, ~/.local/lib/rustyfi, /usr/local/lib/rustyfi, /usr/lib/rustyfi.",
                 )
                 .value_parser(value_parser!(PathBuf)),
         )
@@ -244,7 +245,11 @@ fn root_flags(cmd: Command) -> Command {
         Arg::new("lib_root")
             .long("lib-root")
             .value_name("DIR")
-            .help("Library root (same discovery chain as compile mode).")
+            .help(
+                "Library root. Falls back to $RUSTYFI_LIB_ROOT, then to the \
+                 first root found from the working directory (the same chain \
+                 compile mode runs from the document's directory).",
+            )
             .value_parser(value_parser!(PathBuf)),
     )
     .arg(

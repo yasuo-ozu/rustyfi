@@ -2,10 +2,16 @@
   <img src="https://raw.githubusercontent.com/yasuo-ozu/rustyfi/main/manual/logo.png" width="160" alt="rustyfi logo: a gear with the word rustyfi engraved between braces">
 </p>
 
-# rustyfi [![CI]][ci-workflow]
+# rustyfi [![CI]][ci-workflow] [![Release]][releases] [![SATySFi]][upstream] [![License]][license]
 
 [CI]: https://github.com/yasuo-ozu/rustyfi/actions/workflows/ci.yml/badge.svg
 [ci-workflow]: https://github.com/yasuo-ozu/rustyfi/actions/workflows/ci.yml
+[Release]: https://img.shields.io/github/v/release/yasuo-ozu/rustyfi?label=release&color=blue
+[releases]: https://github.com/yasuo-ozu/rustyfi/releases
+[SATySFi]: https://img.shields.io/badge/SATySFi-0.0%20%C2%B7%200.1-orange
+[upstream]: https://github.com/gfngfn/SATySFi
+[License]: https://img.shields.io/badge/license-MIT-blue.svg
+[license]: #license
 
 **[SATySFi](https://github.com/gfngfn/SATySFi), reimplemented in Rust.** One
 binary takes a `.saty` document and writes a PDF — same language, same packages,
@@ -17,11 +23,25 @@ other.
 
 ## Install
 
+Take an archive for your platform from the [releases page][releases] and unpack
+it into a prefix — `~/.local` for yourself, `/usr/local` for everyone:
+
 ```console
-$ cargo install --git https://github.com/yasuo-ozu/rustyfi rustyfi
+$ shasum -a 256 -c rustyfi-<tag>-x86_64-unknown-linux-gnu.tar.gz.sha256
+$ tar -xzf rustyfi-<tag>-x86_64-unknown-linux-gnu.tar.gz --strip-components=1 -C ~/.local
+$ rustyfi --version
 ```
 
-Or from a clone, which is also how you get the bundled packages and fonts:
+That is the whole install. The binary lands in `bin/`, its packages and fonts in
+`lib/rustyfi/`, the man page in `share/man/man1/` — and `rustyfi` searches
+`~/.local/lib/rustyfi` and `/usr/local/lib/rustyfi` on its own, so nothing needs
+configuring and Japanese renders out of the box. Unpacked anywhere else, point
+`$RUSTYFI_LIB_ROOT` at the `lib/rustyfi` inside it.
+
+Archives are built for Linux (x86_64, aarch64), macOS (Intel and Apple silicon)
+and Windows (x86_64, a `.zip` with the same `bin/ lib/ share/` layout).
+
+### From source
 
 ```console
 $ git clone https://github.com/yasuo-ozu/rustyfi && cd rustyfi
@@ -29,8 +49,9 @@ $ cargo build --release --bin rustyfi
 $ sh scripts/download-fonts.sh      # IPAex, Junicode, Latin Modern — pinned, ~175 MB
 ```
 
-The fonts are fetched rather than committed, each under its own licence. Without
-them you still get PDFs, in the base-14 fonts, and Japanese will not render.
+A clone fetches its own fonts: they are not committed, each carrying its own
+licence. Without them you still get PDFs, in the base-14 fonts, and Japanese
+will not render.
 
 ## Compile a document
 
@@ -55,10 +76,17 @@ hash (`--no-cache` opts out).
 
 ## Packages
 
-`@require:` resolves against a **lib root** — the first of `--lib-root`,
-`$RUSTYFI_LIB_ROOT`, or the nearest `lib-rustyfi/` directory above your document.
-A clone therefore needs no configuration at all. Packages live in
-`<lib-root>/dist/packages/`.
+`@require:` resolves against **lib roots** (`<root>/dist/packages/`). Name one
+with `--lib-root` or `$RUSTYFI_LIB_ROOT` and it is used alone; name none and
+they are discovered, nearest first:
+
+1. `lib-rustyfi/` above your document — a checked-out source tree
+2. `.rustyfi/` beside a `Satyristes` — a project-local install
+3. `~/.local/lib/rustyfi`, then `/usr/local/lib/rustyfi` and `/usr/lib/rustyfi`
+
+All of them are searched in that order, so a package a project installed for
+itself layers over the system one rather than hiding it — and a clone needs no
+configuration at all.
 
 Roughly 30 upstream packages ship with it, including `stdja`, `stdjabook`,
 `stdjareport`, `itemize`, `code`, `math`, `tabular`, `annot` and `proof`, plus
@@ -183,6 +211,9 @@ regression and the layout-fidelity comparison above.
 
 ## License
 
-LGPL-3.0, as upstream SATySFi. The fonts `scripts/download-fonts.sh` fetches
-keep their own licences (IPA Font License v1.0, SIL OFL 1.1, GUST Font License,
-DejaVu), copied next to each font.
+MIT — see [LICENSE](LICENSE).
+
+Two sets of files bundled here are not covered by it and keep their own terms.
+The fonts `scripts/download-fonts.sh` fetches carry the IPA Font License v1.0,
+SIL OFL 1.1, the GUST Font License and DejaVu's, each copied next to the font it
+covers. The SATySFi packages under `lib-rustyfi/` are upstream's, LGPL-3.0.

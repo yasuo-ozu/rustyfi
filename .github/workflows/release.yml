@@ -110,12 +110,7 @@ jobs:
       #   lib/rustyfi/dist/hash/              font name -> file     (artifact)
       #   lib/rustyfi/dist-v01/packages/      0.1 packages
       #   share/man/man1/rustyfi.1
-      #   share/doc/rustyfi/README.md
-      #
-      # `lib/rustyfi` is one complete lib root — both corpora `@require:`
-      # resolves against, and where the font registry reads
-      # `dist/hash/*.rustyfi-hash` — so one `--lib-root`/`$RUSTYFI_LIB_ROOT`
-      # covers packages and fonts together.
+      #   share/doc/rustyfi/README.md, LICENSE
       - name: Stage archive
         run: |
           mkdir -p "stage/$DIR/bin" "stage/$DIR/lib/rustyfi" \
@@ -125,7 +120,7 @@ jobs:
           "target/${{ matrix.target }}/release/rustyfi${{ matrix.exe }}" man \
               > "stage/$DIR/share/man/man1/rustyfi.1"
           test -s "stage/$DIR/share/man/man1/rustyfi.1"
-          cp README.md "stage/$DIR/share/doc/rustyfi/"
+          cp README.md LICENSE "stage/$DIR/share/doc/rustyfi/"
           find "stage/$DIR" -name .gitignore -delete
 
       - name: Add the bundled fonts

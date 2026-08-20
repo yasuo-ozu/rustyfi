@@ -74,6 +74,14 @@ pub struct LoadOptions {
     /// `None` means there is no package root configured, so any `@require:`
     /// header fails to resolve.
     pub lib_root: Option<PathBuf>,
+    /// The REST of the library-root search path, searched in order after
+    /// [`Self::lib_root`] — a project-local root does not hide the wider ones,
+    /// so a document can `@require:` one package a project installed for
+    /// itself and the next from the development tree or the system install.
+    ///
+    /// Empty by default, which is exactly the old single-root behaviour, so
+    /// every call site that names only `lib_root` is unaffected.
+    pub fallback_roots: Vec<PathBuf>,
     /// The SATySFi language version the input is expected to conform to.
     /// Defaults to [`RustyfiVersion::DEFAULT`] (0.0.6, the only version this
     /// loader implements). [`load`] rejects any version for which
@@ -85,6 +93,19 @@ pub struct LoadOptions {
     /// Envelopes backend (which resolves `use … of` relative paths and, in
     /// Ld3b, a `rustyfi-deps.yaml` envelope graph — never `lib_root`).
     pub mode: LoadMode,
+}
+
+impl LoadOptions {
+    /// The library-root search path in order: [`Self::lib_root`], then
+    /// [`Self::fallback_roots`]. Empty when no root is configured at all, in
+    /// which case every `@require:` fails to resolve.
+    pub fn roots(&self) -> Vec<&Path> {
+        self.lib_root
+            .as_deref()
+            .into_iter()
+            .chain(self.fallback_roots.iter().map(|p| p.as_path()))
+            .collect()
+    }
 }
 
 /// A parsed file's CST, tagged by which grammar generation produced it.
@@ -256,7 +277,7 @@ fn resolve_legacy_header(
             })?
         }
         rustyfi_syntax::cst::Header::Require(tok) => {
-            v006::resolve::resolve_require(opts.lib_root.as_deref(), &tok.content, opts.version)
+            v006::resolve::resolve_require(&opts.roots(), &tok.content, opts.version)
                 .map_err(|searched| LoadError::UnresolvedRequire {
                     name: tok.content.clone(),
                     searched,

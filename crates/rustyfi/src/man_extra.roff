@@ -19,6 +19,28 @@ Make the package manager fail cleanly instead of reaching the network.
 .B RUSTYFI_REGISTRY_TOKEN
 Bearer token for registry tarball downloads over HTTP.
 .SH FILES
+When no root is named, ALL of these are searched, in this order, from the
+document's own directory (or, for
+.BR satyrographos ,
+the working directory) upward and then outward \(em so a project-local root
+adds to the wider ones rather than replacing them. Naming a root with
+.B \-\-lib\-root
+or
+.B $RUSTYFI_LIB_ROOT
+searches that one alone.
+.TP
+.I <dir>/lib\-rustyfi/
+A checked-out source tree \(em development.
+.TP
+.I <dir>/.rustyfi/
+A project-local root, recognised only where a
+.I Satyristes
+sits beside it.
+.TP
+.IR ~/.local/lib/rustyfi ", " /usr/local/lib/rustyfi ", " /usr/lib/rustyfi
+User-wide, then system-wide \(em where a release archive unpacks to.
+.PP
+Inside whichever root is chosen:
 .TP
 .I <lib\-root>/dist/packages/
 SATySFi 0.0 packages.
@@ -64,6 +86,8 @@ The project README and manual, and upstream SATySFi:
 .UR https://github.com/gfngfn/SATySFi
 .UE .
 .SH LICENSE
-LGPL-3.0. The bundled fonts keep their own licences, which travel beside them
-in
-.IR <lib\-root>/dist/fonts/ .
+MIT. The bundled fonts keep their own licences, which travel beside them in
+.IR <lib\-root>/dist/fonts/ ,
+and the SATySFi packages under
+.I <lib\-root>
+are upstream's, under the LGPL-3.0.

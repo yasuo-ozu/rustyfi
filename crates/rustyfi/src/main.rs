@@ -139,11 +139,23 @@ fn cmd_compile(m: &ArgMatches) -> anyhow::Result<()> {
         .get_one::<PathBuf>("output")
         .cloned()
         .unwrap_or_else(|| input.with_extension(format.extension()));
-    let lib_root = m
+    // A NAMED root is exactly that one root: `--lib-root`/`$RUSTYFI_LIB_ROOT`
+    // says where to look, and adding discovered roots behind it would make a
+    // build depend on what happens to be installed on the machine. Discovery
+    // instead supplies the WHOLE chain when nothing is named, so a
+    // project-local `.rustyfi/` layers over the development tree and the
+    // system install rather than replacing them.
+    let named = m
         .get_one::<PathBuf>("lib_root")
         .cloned()
-        .or_else(|| std::env::var_os("RUSTYFI_LIB_ROOT").map(PathBuf::from))
-        .or_else(|| discover_lib_root(&input));
+        .or_else(|| std::env::var_os("RUSTYFI_LIB_ROOT").map(PathBuf::from));
+    let (lib_root, fallback_roots) = match named {
+        Some(root) => (Some(root), Vec::new()),
+        None => {
+            let mut chain = discover_lib_roots(&input).into_iter();
+            (chain.next(), chain.collect())
+        }
+    };
 
     let target_version = m.get_one::<String>("target_version").map(String::as_str);
     let deps_flag = m.get_one::<PathBuf>("deps").map(PathBuf::as_path);
@@ -169,6 +181,7 @@ fn cmd_compile(m: &ArgMatches) -> anyhow::Result<()> {
         &input,
         &rustyfi_loader::LoadOptions {
             lib_root: lib_root.clone(),
+            fallback_roots: fallback_roots.clone(),
             version,
             mode,
         },
@@ -476,26 +489,21 @@ fn resolve_font_store(
     Ok(Some(store))
 }
 
-/// The CLI's default `--lib-root` rule (used only when neither `--lib-root`
-/// nor `$RUSTYFI_LIB_ROOT` is given): starting at `input`'s own directory,
-/// walk upward through its ancestors looking for a `lib-rustyfi/`
-/// subdirectory, returning the first one found. This is the simplest rule
-/// that makes `rustyfi some/nested/doc.saty` "just work" from anywhere
-/// inside a checkout that has one top-level `lib-rustyfi/` (this repo
-/// included), with no flag or environment variable needed, while still
-/// resolving relative to the *document*, not the current working directory
-/// (so it behaves the same regardless of where the command is run from).
-fn discover_lib_root(input: &std::path::Path) -> Option<PathBuf> {
-    let mut dir = input.parent()?.to_path_buf();
-    loop {
-        let candidate = dir.join("lib-rustyfi");
-        if candidate.is_dir() {
-            return Some(candidate);
-        }
-        if !dir.pop() {
-            return None;
-        }
-    }
+/// The CLI's default `--lib-root` rule, used only when neither `--lib-root`
+/// nor `$RUSTYFI_LIB_ROOT` is given: [`sg::roots::discover_all`], the same search
+/// the package manager runs, so a document compiles against exactly the root
+/// an install would have written to — a development `lib-rustyfi/`, then a
+/// project-local `.rustyfi/` beside its `Satyristes`, then the user and
+/// system prefixes.
+///
+/// It starts at the DOCUMENT's own directory rather than the working
+/// directory, so `rustyfi some/nested/doc.saty` behaves the same regardless of
+/// where the command was run from.
+fn discover_lib_roots(input: &std::path::Path) -> Vec<PathBuf> {
+    input
+        .parent()
+        .map(sg::roots::discover_all)
+        .unwrap_or_default()
 }
 
 /// Phase-7c saphe solver, C3: find the nearest `Satyrfile.toml` at or above

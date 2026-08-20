@@ -77,13 +77,29 @@ pub(crate) fn resolve_import(dir: &Path, name: &str) -> Result<PathBuf, Vec<Path
 /// If `lib_root` is `None`, there is nowhere to search: returns `Err(vec![])`
 /// immediately (surfaced by `UnresolvedRequire` as "no candidates").
 pub(crate) fn resolve_require(
-    lib_root: Option<&Path>,
+    roots: &[&Path],
     name: &str,
     version: RustyfiVersion,
 ) -> Result<PathBuf, Vec<PathBuf>> {
-    let Some(root) = lib_root else {
-        return Err(Vec::new());
-    };
+    // Every root in turn, nearest first: a project-local root that carries one
+    // package must not hide the development tree or the system install that
+    // carry the rest. Within a root the candidate order below is unchanged, so
+    // a single-root load resolves exactly what it always did.
+    let mut searched = Vec::new();
+    for root in roots {
+        match resolve_require_in(root, name, version) {
+            Ok(found) => return Ok(found),
+            Err(tried) => searched.extend(tried),
+        }
+    }
+    Err(searched)
+}
+
+fn resolve_require_in(
+    root: &Path,
+    name: &str,
+    version: RustyfiVersion,
+) -> Result<PathBuf, Vec<PathBuf>> {
     let dist_packages = root.join("dist").join("packages");
     let dist_v01_packages = root.join("dist-v01").join("packages");
     // Search the load's OWN generation first. Both corpora are bundled side by

@@ -21,11 +21,13 @@ pub enum Error {
         source: std::io::Error,
     },
 
-    /// Neither `--lib-root`/`--dest` was given nor `$RUSTYFI_LIB_ROOT` set,
-    /// so there is no root to install into or read from (exit `3`).
+    /// No root was named, none was in the environment, and discovery found
+    /// none either, so there is nothing to install into or read from
+    /// (exit `3`).
     #[error(
-        "could not resolve a library root: pass `--lib-root DIR` or `--dest DIR`, \
-         or set $RUSTYFI_LIB_ROOT"
+        "could not resolve a library root: no lib-rustyfi/ or .rustyfi/ was found \
+         from here, and none is installed under ~/.local or /usr[/local]. Pass \
+         `--lib-root DIR` or `--dest DIR`, or set $RUSTYFI_LIB_ROOT"
     )]
     RootResolution,
 

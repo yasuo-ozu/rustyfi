@@ -2648,6 +2648,7 @@ fn push_char_glyph(
     // document. This only ever changes behavior for a glyph that would otherwise
     // be a hard error, so covered-glyph documents stay byte-identical.
     let advance = interp.metrics.advance(font, c, size).unwrap_or(size * 0.5);
+    let (height, depth) = math_glyph_vextent(interp, font, c, size);
     out.push(MathGlyph {
         info: HorzStringInfo {
             font,
@@ -2660,11 +2661,49 @@ fn push_char_glyph(
         dx: *x,
         dy: Length::ZERO,
         width: advance,
-        height: interp.metrics.ascender(font, size),
-        depth: interp.metrics.descender(font, size),
+        height,
+        depth,
     });
     *x += advance;
     Ok(())
+}
+
+/// One math glyph's vertical ink extent, the way upstream measures it:
+/// `FontFormat.get_math_glyph_metrics` (`fontFormat.ml:2257-2264`) takes the
+/// glyph's OWN bounding box and truncates each side towards the baseline —
+/// `hgt = truncate_negative ymax` (so a wholly-subscripted glyph reports
+/// height 0, never a negative height) and `dpt = truncate_positive ymin` (so a
+/// glyph entirely above the baseline, `*` at ymin=+320, reports depth 0).
+///
+/// This is NOT the font-level ascender/descender, which is what this used to
+/// return and which is the whole of the inline-math script-shift divergence:
+/// `MathC::sub_shift_clamped`/`sup_shift_clamped` clamp against these extents
+/// (`math.ml:527-552`), so feeding them latinmodern-math's hhea ascender
+/// (806/1000 em) and descender (194/1000 em) instead of `m`'s real ink box
+/// (ymax 442, ymin 0) made the `superscript_baseline_drop_max` /
+/// `subscript_baseline_drop_min` candidate win every time. At 12pt that is
+/// `9.672 - 3.0 = 6.672pt` of superscript rise where upstream's own clamp
+/// picks `SuperscriptShiftUp = 4.356pt` (plus a gap correction, 4.525pt), and
+/// `2.328 + 2.4 = 4.728pt` of subscript drop where upstream picks
+/// `SubscriptShiftDown = 2.964pt` — measured by `scripts/layout_probes/
+/// math_script_drop.saty`.
+///
+/// Falls back to `ascender`/`descender` when the provider exposes no per-glyph
+/// bbox (base-14 metrics, test stubs), keeping every no-MATH-table fixture
+/// byte-identical.
+fn math_glyph_vextent(
+    interp: &Interp,
+    font: FontKey,
+    c: char,
+    size: Length,
+) -> (Length, Length) {
+    match interp.metrics.glyph_vextent(font, c, size) {
+        Some((h, d)) => (h.max(Length::ZERO), d.max(Length::ZERO)),
+        None => (
+            interp.metrics.ascender(font, size),
+            interp.metrics.descender(font, size),
+        ),
+    }
 }
 
 /// `push_char_glyph`'s big-operator sibling (§B3a): try the v0.0.6 `BigOp`

@@ -1,0 +1,37 @@
+% Probe: horizontal spacing at every CJK/Latin script boundary, and the
+% unconditional half-width kern `ideographic_single` (upstream
+% `convertText.ml:267-283`) attaches to fullwidth punctuation.
+%
+% Each paragraph is ONE boundary shape, short enough to stay on one line so
+% `pdftotext` reports the words in a predictable order. Read the numbers as
+% ADVANCES within a single engine (xMin of the latin word minus xMin of the
+% CJK run before it): the CJK face is the same file in both engines, so that
+% quantity is comparable across them, while an absolute latin xMin is not.
+%
+%   A  ideograph  -> latin        (no punctuation anywhere)
+%   B  kuten `。` -> latin        (JLFS, trailing hwkern upstream)
+%   C  touten `、` -> latin       (JLCM, trailing hwkern upstream)
+%   D  close `）` -> latin        (JLCP, trailing hwkern upstream)
+%   E  latin -> open `（`         (JLOP, LEADING hwkern upstream)
+%   F  latin -> close `）`        (suppressed: is_close_punctuation lbc2)
+%   G  open `（` -> latin         (suppressed: is_open_punctuation lbc1)
+%   H  latin -> ideograph         (plain, no punctuation)
+%   I  nakaten `・` -> latin      (JLMD, quarter kern both sides)
+@require: stdjabook
+
+document (|
+  title = {interscript probe};
+  author = {};
+  show-title = false;
+  show-toc = false;
+|) '<
+  +p{漢字 alpha 漢字}
+  +p{漢字。 bravo 漢字}
+  +p{漢字、 charlie 漢字}
+  +p{漢字） delta 漢字}
+  +p{echo （漢字}
+  +p{foxtrot ）漢字}
+  +p{漢字（ golf 漢字}
+  +p{hotel 漢字}
+  +p{漢字・ india 漢字}
+>

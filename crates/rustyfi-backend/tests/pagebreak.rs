@@ -256,3 +256,137 @@ fn list_mark_is_a_pure_skip_that_produces_no_placed_line() {
         "ListMark markers must not shift the real line's placement"
     );
 }
+
+// ============================================================================
+// Page-top glue suppression discards MARGINS but not FRAME PADDING.
+// ============================================================================
+
+/// A margin (`Skip`/`ParagTop`) before the first line of a page is glue and is
+/// dropped; a `block-frame-breakable`'s `FramePad` is interior CONTENT of the
+/// frame and is not. Upstream adds `pads.paddingT` to the running column
+/// height inside its frame arm (`pageBreak.ml:323` `hgttotal +%
+/// pads.paddingT`), a path `squash_margins` — which only ever sees a frame's
+/// MARGINS — never touches.
+///
+/// Measured: stdjabook's `+make-title` is a `block-frame-breakable ctx (20pt,
+/// 20pt, 10pt, 10pt)` and always opens page 1, so dropping its `paddingT` put
+/// the enumitem manual's title (and every block below it on that page) exactly
+/// 10pt above real SATySFi 0.0.11's. With the pad kept, the title's first word
+/// lands within 0.001pt of upstream's.
+#[test]
+fn page_top_discards_margins_but_keeps_frame_padding() {
+    // Margin-only prefix: dropped, so the line sits at `y0 + height`.
+    let mut margin_only = vec![
+        VertBox::ParagTop(Length::pt(18.0)),
+        plain_line(10.0, 2.0, 18.0),
+    ];
+    let origin = (Length::ZERO, Length::pt(100.0));
+    let lines = chop_page(origin, Length::pt(400.0), &mut margin_only);
+    assert_eq!(lines[0].baseline_y, Length::pt(110.0));
+
+    // Same prefix plus a frame's 10pt top padding: the pad is kept, so the
+    // line sits at `y0 + paddingT + height`.
+    let mut with_pad = vec![
+        VertBox::ParagTop(Length::pt(18.0)),
+        VertBox::FramePad(Length::pt(10.0)),
+        plain_line(10.0, 2.0, 18.0),
+    ];
+    let lines = chop_page(origin, Length::pt(400.0), &mut with_pad);
+    assert_eq!(
+        lines[0].baseline_y,
+        Length::pt(120.0),
+        "a frame's paddingT is frame content, not page-top glue"
+    );
+}
+
+// ============================================================================
+// KNOWN GAP — the inter-block advance's `min_first_line_ascender` clamp.
+//
+// Both tests below encode the FAITHFUL upstream rule and both currently FAIL.
+// The fix is small and is proven correct in isolation (see each test's own
+// notes), but landing it regresses the enumitem corpus document past
+// `scripts/layout_fidelity_baseline.json`'s tolerance — text_match 0.8891 ->
+// 0.8608, and whole-document median |dy| against upstream 8.8pt -> 59.4pt —
+// because a SEPARATE, still-unlocated space DEFICIT elsewhere in that document
+// is currently masked by this very over-spacing (~5pt per stdjabook section
+// heading, whose 4pt rule lines are shorter than the 9pt ascender floor).
+// Removing the surplus makes the port run further ahead of upstream's
+// pagination, and the divergence compounds over 27 pages. Find and fix that
+// deficit first, then drop both `#[ignore]`s together — the change is:
+//
+//   * `prim_line_break` (rustyfi-lang) pushes
+//     `ParagTop(paragraph_top + max(0, 9pt - first_line_height))`, and
+//   * `chop_page`'s inter-block arm drops its `max(h, 9pt)` clamp.
+// ============================================================================
+
+/// SATySFi's page accumulator adds, per box, exactly `hgt + (-dpt)` for a
+/// line and `vskip` for a skip (`pageBreak.ml:132-137`, `:201-203`), so the
+/// baseline-to-baseline advance across a block boundary is EXACTLY
+/// `prev_depth + collapsed_margin + height`. No floor of any kind is applied
+/// here — in particular not `min_first_line_ascender`.
+///
+/// `min_first_line_ascender` (9pt, `primitives.cppo.ml:516`) is real, but it
+/// applies ONE LAYER UP and to a DIFFERENT quantity: `lineBreak.ml:855-857`
+/// folds it into the paragraph's own `margin_top`
+/// (`paragraph_margin_top + max(0, min_first_ascender - hgt)`), and only THEN
+/// does `pageBreak.ml`'s `squash_margins` (`:596-601`) max-collapse that
+/// padded top against the previous block's bottom margin. Padding the HEIGHT
+/// here instead — i.e. AFTER the collapse — is a different function whenever
+/// the previous block's bottom margin wins that collapse: the pad then rides
+/// ON TOP of a margin that upstream had already absorbed it into.
+///
+/// Measured against real SATySFi 0.0.11 on a two-block probe
+/// (`set-paragraph-margin 2pt 20pt`, then `set-paragraph-margin 2pt 2pt` over
+/// a 4pt line whose height is 2.7466pt): upstream advances 22.747pt, this port
+/// advanced 29.0pt — `9 - 2.7466 = 6.253pt` too much, exactly the surplus this
+/// test pins.
+#[test]
+#[ignore = "known gap: faithful, but removing the surplus regresses the \
+            enumitem corpus doc — see this section's header comment"]
+fn inter_block_advance_is_prev_depth_plus_margin_plus_height() {
+    // Two blocks, as `line-break` emits them. The second block's `ParagTop`
+    // ALREADY carries the `min_first_line_ascender` pad folded in
+    // (2pt margin + max(0, 9 - 3) = 8pt) — which is what `lineBreak.ml` hands
+    // to `squash_margins`.
+    let mut vboxes = vec![
+        VertBox::ParagTop(Length::pt(2.0)),
+        plain_line(10.0, 1.0, 18.0),
+        VertBox::Skip(Length::pt(20.0)),
+        VertBox::ParagTop(Length::pt(8.0)),
+        plain_line(3.0, 1.0, 18.0),
+        VertBox::Skip(Length::pt(2.0)),
+    ];
+    let lines = chop_page((Length::ZERO, Length::ZERO), Length::pt(400.0), &mut vboxes);
+    assert_eq!(lines.len(), 2);
+    // max(20, 8) = 20 -> advance = prev_depth(1) + 20 + height(3) = 24.
+    // The pre-fix code computed 1 + 20 + max(3, 9) = 30.
+    assert_eq!(
+        lines[1].baseline_y - lines[0].baseline_y,
+        Length::pt(24.0),
+        "inter-block advance must be prev_depth + collapsed_margin + height, \
+         with the ascender pad already inside the margin — not re-applied to \
+         the height after the collapse"
+    );
+}
+
+/// The companion case, where the padded top margin WINS the collapse: the
+/// same short line, but after a block whose bottom margin is small. Here the
+/// pad really does show up in the gap — `max(2, 8) = 8` — and the old and the
+/// new rule agree, which is why the surplus above went unnoticed.
+#[test]
+#[ignore = "known gap: paired with the test above — see this section's header"]
+fn inter_block_advance_keeps_the_pad_when_the_padded_top_margin_wins() {
+    let mut vboxes = vec![
+        VertBox::ParagTop(Length::pt(2.0)),
+        plain_line(10.0, 1.0, 18.0),
+        VertBox::Skip(Length::pt(2.0)),
+        VertBox::ParagTop(Length::pt(8.0)),
+        plain_line(3.0, 1.0, 18.0),
+        VertBox::Skip(Length::pt(2.0)),
+    ];
+    let lines = chop_page((Length::ZERO, Length::ZERO), Length::pt(400.0), &mut vboxes);
+    assert_eq!(lines.len(), 2);
+    // max(2, 8) = 8 -> advance = 1 + 8 + 3 = 12: the short line still gets its
+    // 9pt ascender slot above the previous line's depth.
+    assert_eq!(lines[1].baseline_y - lines[0].baseline_y, Length::pt(12.0));
+}

@@ -151,6 +151,70 @@ fn set_paragraph_margin_sets_top_and_bottom_independently() {
     }
 }
 
+/// `line-break` must fold `min_first_line_ascender` (9pt,
+/// `primitives.cppo.ml:516`) into the paragraph's OWN top margin, exactly as
+/// `lineBreak.ml:855-857` does:
+///
+///     margin_top = paragraph_margin_top + max(0, min_first_ascender - hgt)
+///
+/// where `hgt` is the FIRST formed line's height. That padded value is what
+/// upstream then max-collapses against the previous block's bottom margin
+/// (`pageBreak.ml`'s `squash_margins`, `:596-601`), so the pad is ABSORBED by
+/// a larger preceding bottom margin instead of stacking on top of it. Doing
+/// the padding downstream, in `chop_page`, against the line HEIGHT after the
+/// collapse is a different function — it over-spaces every block whose
+/// predecessor has the larger bottom margin. See
+/// `rustyfi-backend/tests/pagebreak.rs`'s
+/// `inter_block_advance_is_prev_depth_plus_margin_plus_height`.
+///
+/// KNOWN GAP, deliberately not landed: `line-break` currently pushes the RAW
+/// `ctx.paragraph_top` and `chop_page` clamps the line height to 9pt after the
+/// collapse instead. The two differ only when the previous block's bottom
+/// margin wins, but correcting it regresses the enumitem corpus document —
+/// the full argument, and the two-line change that closes it, are in the
+/// "KNOWN GAP" header of `rustyfi-backend/tests/pagebreak.rs`.
+#[test]
+#[ignore = "known gap: see rustyfi-backend/tests/pagebreak.rs's KNOWN GAP header"]
+fn line_break_folds_the_min_first_ascender_pad_into_the_paragraph_top_margin() {
+    // A paragraph of pure `inline-skip`s: zero height, so the pad is the full
+    // 9pt and the arithmetic is metric-independent.
+    let ctx = app3(
+        "set-paragraph-margin",
+        len(2.0),
+        len(3.0),
+        initial_ctx(1000.0),
+    );
+    let ast = app1(
+        app3("line-break", Ast::Bool(false), Ast::Bool(false), ctx),
+        app1(var("inline-skip"), len(50.0)),
+    );
+
+    match run(&ast) {
+        Value::BlockBoxes(boxes) => {
+            let height = boxes
+                .iter()
+                .find_map(|vb| match vb {
+                    VertBox::Line { height, .. } => Some(*height),
+                    _ => None,
+                })
+                .expect("line-break must form one line");
+            assert_eq!(height, Length::ZERO, "an inline-skip line has no height");
+            assert_eq!(
+                boxes.first(),
+                Some(&VertBox::ParagTop(Length::pt(11.0))),
+                "paragraph_top(2pt) + max(0, 9pt - height(0pt)) = 11pt"
+            );
+            assert_eq!(
+                boxes.last(),
+                Some(&VertBox::Skip(Length::pt(3.0))),
+                "the BOTTOM margin takes no pad (`min_last_descender` is dead \
+                 in upstream: assigned at lineBreak.ml:1144, never read)"
+            );
+        }
+        other => panic!("expected block-boxes, got {other:?}"),
+    }
+}
+
 // ============================================================================
 // Box combinators
 // ============================================================================

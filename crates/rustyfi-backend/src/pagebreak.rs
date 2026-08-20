@@ -284,8 +284,23 @@ pub fn chop_page(
                 // `block-frame-breakable`'s `FrameStart` immediately
                 // followed by its `pad_t` skip) is covered by this same
                 // branch too — `prev_baseline` is still `None`.
+                //
+                // FRAME PADDING IS NOT GLUE, so it SURVIVES the page top. A
+                // `block-frame-breakable`'s `paddingT` is interior content of
+                // the frame: upstream adds it to the running column height in
+                // the frame arm of the chopper (`pageBreak.ml:323`
+                // `hgttotal +% pads.paddingT`) and never routes it through
+                // `squash_margins`, which only ever sees the frame's MARGINS.
+                // Discarding it here seated the first line of a page-opening
+                // frame at the frame's own top edge: stdjabook's `+make-title`
+                // (`block-frame-breakable ctx (20pt, 20pt, 10pt, 10pt)`) put
+                // its title 10pt — exactly `paddingT` — above upstream's, and
+                // with it every following block on that page. `measure_block`
+                // already counted the pad at the top
+                // (`pending_skip + pending_pad + height`), so this also makes
+                // the extent it RESERVES match the extent actually drawn.
                 let baseline = match prev_baseline {
-                    None => y0 + *h,
+                    None => y0 + pending_pad + *h,
                     // When the pending margin EXCEEDS the leading it is a
                     // positioning skip (e.g. slydifi's ~125pt bg-graphic
                     // offset that seats a frame body at its true top), not an

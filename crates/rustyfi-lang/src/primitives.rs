@@ -1676,17 +1676,25 @@ fn is_open_punct(c: char) -> bool {
 /// Upstream `is_close_punctuation` (`charBasis.ml:139`: `CL | CP | QU | NS |
 /// JLCP | JLNS | JLCM | JLFS`) — closing brackets, quotes, and the kuten/touten
 /// family. Consulted for the RIGHT edge of a script boundary only.
+///
+/// Two families the port used to list are NOT in that set, and their absence is
+/// upstream's own, not an oversight:
+/// - `!` `?` `！` `？` are line-break class `EX` (`LineBreak.txt:2566,2582` for
+///   the fullwidth pair), which appears in no arm of `is_close_punctuation`;
+/// - `,` `.` `;` `:` are `IS`, likewise absent.
+///
+/// Their FULLWIDTH cousins are a different matter and stay: `，`/`．` are
+/// overridden to `JLCM`/`JLFS` (`lineBreakDataMap.ml:95-96`) and `：`/`；` are
+/// `NS` (`LineBreak.txt:2580`).
+///
+/// Listing the six suppressed the 0.24em inter-script glue — and, since that
+/// glue is the boundary's only break candidate, the break opportunity with it —
+/// before every sentence-final mark that is not a kuten.
 fn is_close_punct(c: char) -> bool {
     matches!(
         c,
         ')' | ']'
             | '}'
-            | ','
-            | '.'
-            | ';'
-            | ':'
-            | '!'
-            | '?'
             | '"'
             | '\''
             | '）'
@@ -1708,8 +1716,6 @@ fn is_close_punct(c: char) -> bool {
             | '，'
             | '．'
             | '・'
-            | '！'
-            | '？'
             | '：'
             | '；'
     )

@@ -39,8 +39,8 @@ fn minimal_fixture() -> PathBuf {
 /// A `--lib-root`-shaped directory with NO `dist/hash/` — i.e. genuinely
 /// "nothing configured" — regardless of whether `scripts/download-fonts.sh`
 /// has already been run against the real `lib_root()` (which then
-/// legitimately DOES carry a `dist/hash/fonts.rustyfi-hash` /
-/// `default-font.rustyfi-hash`, for `crates/rustyfi/tests/cjk_render.rs`
+/// legitimately DOES carry a `dist/hash/fonts.satysfi-hash` /
+/// `default-font.satysfi-hash`, for `crates/rustyfi/tests/cjk_render.rs`
 /// and the CJK end-to-end proof). Only `dist/packages` is symlinked in (all
 /// the loader needs to resolve `@require: stdja-mini`), so this stays a
 /// thin proxy rather than a real copy of the whole package tree.
@@ -141,8 +141,8 @@ fn font_supports_fixture_glyphs(font_path: &Path) -> bool {
     store.advance(FontKey(0), 'é', size).is_some() && store.advance(FontKey(0), '→', size).is_some()
 }
 
-/// Write a temporary font root: `<root>/dist/hash/fonts.rustyfi-hash` +
-/// `default-font.rustyfi-hash`, both in this port's plain-JSON schema (see
+/// Write a temporary font root: `<root>/dist/hash/fonts.satysfi-hash` +
+/// `default-font.satysfi-hash`, both in this port's plain-JSON schema (see
 /// `rustyfi_pdf::fonts`'s module docs), naming `font_path` as the sole
 /// (regular) face. Returns `root`, suitable for `--font-dir`.
 fn write_font_config(work: &Path, font_path: &Path) -> PathBuf {
@@ -154,14 +154,14 @@ fn write_font_config(work: &Path, font_path: &Path) -> PathBuf {
         "testface": { "src": font_path.to_str().expect("font path is valid UTF-8") }
     });
     std::fs::write(
-        hash_dir.join("fonts.rustyfi-hash"),
+        hash_dir.join("fonts.satysfi-hash"),
         serde_json::to_vec_pretty(&fonts_hash).unwrap(),
     )
     .unwrap();
 
     let default_font_hash = serde_json::json!({ "regular": "testface" });
     std::fs::write(
-        hash_dir.join("default-font.rustyfi-hash"),
+        hash_dir.join("default-font.satysfi-hash"),
         serde_json::to_vec_pretty(&default_font_hash).unwrap(),
     )
     .unwrap();
@@ -403,7 +403,7 @@ fn changing_font_config_invalidates_the_compile_cache() {
 }
 
 /// `--font` (a config-less one-off) takes precedence over `--font-dir` and
-/// needs no `fonts.rustyfi-hash` at all — the CLI-flags path through
+/// needs no `fonts.satysfi-hash` at all — the CLI-flags path through
 /// `rustyfi_pdf::fonts::FontRegistry::discover`.
 #[test]
 fn font_flag_is_a_config_less_one_off() {

@@ -35,7 +35,7 @@ RUN         := $(CARGO) run $(CARGO_FLAGS) --manifest-path=$(REPO)/Cargo.toml \
                    --bin rustyfi --
 LIB       := $(REPO)/lib-rustyfi
 XPATH_SRC := $(REPO)/scripts/layout_fidelity_corpus/xpath
-FONTS     := $(LIB)/dist/hash/fonts.rustyfi-hash
+FONTS     := $(LIB)/dist/hash/fonts.satysfi-hash
 # Scratch lives under cargo's `target/`, which is already ignored and already
 # the place a reader expects to find generated state — one build directory for
 # the repository, not one per tool. The rendered PDFs and PNG are NOT here: they

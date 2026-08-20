@@ -127,6 +127,11 @@ pub enum FileKind {
 pub struct PlannedFile {
     pub src: PathBuf,
     pub dst: String,
+    /// Merge into whatever is already at `dst` instead of replacing it — true
+    /// for `*.satysfi-hash`, which every font package contributes entries to
+    /// (see [`crate::hashfile`]). For everything else the destination belongs
+    /// to one package and a copy is right.
+    pub merge: bool,
 }
 
 /// A flat, ready-to-stage install plan derived from a source tree.
@@ -211,9 +216,11 @@ pub(crate) fn plan_from_manifest(source_root: &Path, manifest: Manifest) -> Resu
                 push_file(&src_abs, &format!("{dist}/md/{name}/{dst}"), &mut files)?
             }
             FileKind::Hash => {
-                // Flat, no per-library namespace (plan §5.5).
+                // Flat, no per-library namespace (plan §5.5) — and shared, so
+                // merged rather than copied: `fonts.satysfi-hash` holds every
+                // font package's entries at once.
                 let dst = require_dst(decl, "hash")?;
-                push_file(&src_abs, &format!("{dist}/hash/{dst}"), &mut files)?
+                push_merge_file(&src_abs, &format!("{dist}/hash/{dst}"), &mut files)?
             }
             FileKind::File => {
                 // Arbitrary, root-relative under dist/.
@@ -274,6 +281,15 @@ fn require_dst<'a>(decl: &'a FileDecl, kind: &'static str) -> Result<&'a str, Er
 /// Push a single source file → dst, verifying the source exists and is a
 /// regular file.
 fn push_file(src: &Path, dst: &str, out: &mut Vec<PlannedFile>) -> Result<(), Error> {
+    push_one(src, dst, false, out)
+}
+
+/// As [`push_file`], for a destination several packages share.
+fn push_merge_file(src: &Path, dst: &str, out: &mut Vec<PlannedFile>) -> Result<(), Error> {
+    push_one(src, dst, true, out)
+}
+
+fn push_one(src: &Path, dst: &str, merge: bool, out: &mut Vec<PlannedFile>) -> Result<(), Error> {
     if !src.is_file() {
         return Err(Error::io(
             src,
@@ -283,6 +299,7 @@ fn push_file(src: &Path, dst: &str, out: &mut Vec<PlannedFile>) -> Result<(), Er
     out.push(PlannedFile {
         src: src.to_path_buf(),
         dst: dst.to_string(),
+        merge,
     });
     Ok(())
 }
@@ -310,6 +327,7 @@ fn collect_dir(dir: &Path, dst_prefix: &str, out: &mut Vec<PlannedFile>) -> Resu
                 out.push(PlannedFile {
                     src: p,
                     dst: format!("{dst_prefix}/{child_rel}"),
+                    merge: false,
                 });
             }
         }

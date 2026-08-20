@@ -95,6 +95,22 @@ pub enum Error {
     )]
     UnmanagedCollision { path: PathBuf },
 
+    /// A `*.satysfi-hash` this install has to merge with could not be read as
+    /// one. Refused rather than overwritten: the file holds other packages'
+    /// font entries, and replacing what cannot be parsed would lose them.
+    #[error("cannot read `{}` as a satysfi-hash file: {message}", .path.display())]
+    HashFile { path: PathBuf, message: String },
+
+    /// Two packages claim the same key in a shared `*.satysfi-hash` — the same
+    /// font abbrev pointing at two different files. Which one wins is not this
+    /// crate's to decide silently.
+    #[error(
+        "`{}` already defines {keys}; installing would change which file that name resolves to \
+         (uninstall the package that provides it, or rename)",
+        .path.display()
+    )]
+    HashKeyConflict { path: PathBuf, keys: String },
+
     /// An archive entry's path escaped the extraction/staging root
     /// ("zip-slip"); refused before anything was written (exit `5`, plan
     /// §6/§10).

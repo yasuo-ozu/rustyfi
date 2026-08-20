@@ -239,14 +239,14 @@ pub trait FontMetrics {
     }
 
     /// The configured default `(font, ratio, rising)` for `script`, from
-    /// `default-font.rustyfi-hash`'s `scripts` block (D1a). `None` means "no
+    /// `default-font.satysfi-hash`'s `scripts` block (D1a). `None` means "no
     /// scheme configured for this script" — the caller then falls back to
     /// `(ctx.font, 1.0, 0.0)`, i.e. today's single-font behavior.
     fn default_script_font(&self, _script: Script) -> Option<(FontKey, f64, f64)> {
         None
     }
 
-    /// The configured default math font, from `default-font.rustyfi-hash`'s
+    /// The configured default math font, from `default-font.satysfi-hash`'s
     /// optional `"math"` abbrev (Slice B). `None` means "no math default
     /// configured" — the caller (`get-initial-context`) then leaves
     /// `Context::math_font` at its `Context::initial` seed (`FontKey(0)`, the

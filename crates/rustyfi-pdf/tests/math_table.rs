@@ -33,7 +33,7 @@ fn find_math_font() -> Option<PathBuf> {
     // the REAL Latin Modern Math at
     // `lib-rustyfi/dist/fonts/latinmodern-math.otf` (fetched by
     // `scripts/download-fonts.sh`, same as ipaexm/Junicode) and wires it as
-    // `default-font.rustyfi-hash`'s `"math"` default. Check it FIRST so this
+    // `default-font.satysfi-hash`'s `"math"` default. Check it FIRST so this
     // test no longer depends on a host-wide font install once that script
     // has been run. Every assertion in this file recomputes its expected
     // value from whatever font is actually loaded (`store.math_constants`

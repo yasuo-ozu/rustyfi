@@ -76,6 +76,14 @@ pub struct FileEntry {
     /// Lowercase-hex SHA-256 (optional in phase 1, plan §5.2).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sha256: Option<String>,
+    /// For a *shared* destination — a `*.satysfi-hash` that several packages
+    /// contribute to — the keys THIS package put in. Uninstall removes these
+    /// and leaves the rest of the file standing; without them the only options
+    /// would be deleting other packages' fonts or leaking this one's.
+    ///
+    /// `None` is the ordinary case: the package owns the whole file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keys: Option<Vec<String>>,
 }
 
 /// Path of the receipt for `name` under `root`.

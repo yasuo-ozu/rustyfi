@@ -144,7 +144,7 @@ pub struct Context {
     /// (which only ever touches `font`) is unaffected. Seeded to `{ font:
     /// FontKey(0), ratio: 1.0, rising: 0.0 }` for all four scripts —
     /// identical to today's single-font behavior until a `set-font` call or
-    /// a configured `default-font.rustyfi-hash` `scripts` block overlays it.
+    /// a configured `default-font.satysfi-hash` `scripts` block overlays it.
     pub font_scheme: [ScriptFont; 4],
     /// `set-text-color`/`get-text-color` (row 1-2; v0.0.6
     /// `context_main.text_color`). FAITHFUL storage — round-trips exactly

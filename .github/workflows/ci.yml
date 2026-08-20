@@ -120,12 +120,33 @@ jobs:
           repository: yasuo-ozu/satysfi-xpath
           path: pkgs/xpath
 
+      # The faces the standard library needs, then the standard library itself,
+      # INTO THE ROOT THE PACKAGES INSTALL INTO — the order matters. Every font
+      # package merges its entries into the one shared
+      # `dist/hash/fonts.satysfi-hash`, so seeding the root afterwards would
+      # overwrite what they contributed.
+      - name: Seed the root with the bundled standard library
+        run: |
+          sh scripts/download-fonts.sh
+          mkdir -p root/dist
+          cp -r lib-rustyfi/dist/. root/dist/
+          # The port vendors its own copy of xpath. This job's point is to
+          # install the real package, so the vendored one gets out of the way —
+          # otherwise the install refuses (an unmanaged file is there) or, worse,
+          # the document below builds against the vendored copy and the install
+          # is never exercised at all.
+          rm -rf root/dist/packages/xpath root/dist/packages/xpath-gr
+
       # A font package: nothing to copy until its `.opam` has run.
       - name: Install a font package
         run: |
           ./target/debug/rustyfi install ./pkgs/fonts-theano --dest ./root
           test -f root/dist/fonts/fonts-theano/TheanoDidot-Regular.otf
-          test -f root/dist/hash/fonts.satysfi-hash
+          # Upstream's Yojson `fonts.satysfi-hash`, which the port reads: an
+          # installed face has to be nameable, not merely present — and merged
+          # in beside the standard library's own entries, not over them.
+          grep -q "fonts-theano:TheanoDidot" root/dist/hash/fonts.satysfi-hash
+          grep -q "ipaexm" root/dist/hash/fonts.satysfi-hash
 
       # A class package.
       - name: Install a class package
@@ -142,21 +163,36 @@ jobs:
       - name: List what landed
         run: ./target/debug/rustyfi list --dest ./root
 
-      # The document is Japanese, so it needs the real faces; without them the
-      # build fails on the first CJK glyph.
-      - name: Download fonts (scripts/download-fonts.sh)
-        run: sh scripts/download-fonts.sh
-
-      # And build a real document against them: the port's own bundled stdlib
-      # and fonts, plus the package just installed. The PDF is REMOVED first —
+      # Build a real document: the bundled stdlib and fonts seeded above, plus
+      # the package just installed. The PDF is REMOVED first —
       # xpath commits its built documentation, so a stale file would make this
       # pass without building anything.
       - name: Build a document with an installed package
         run: |
-          cp -r lib-rustyfi/dist/. root/dist/
           rm -f pkgs/xpath/doc/xpath-doc.pdf
           RUSTYFI_LIB_ROOT="$PWD/root" ./target/debug/rustyfi build ./pkgs/xpath --doc xpath-doc
           test -s pkgs/xpath/doc/xpath-doc.pdf
+
+      # Typeset in a face the font package installed, named through the
+      # SHARED `fonts.satysfi-hash`: the copy above put the standard library's
+      # entries in the same file the package contributed to, and both names have
+      # to resolve out of it.
+      - name: Typeset in an installed font
+        run: |
+          sudo apt-get install -y --no-install-recommends poppler-utils
+          cat > theano.saty <<'SATY'
+          @require: stdja
+          let-inline ctx \theano it =
+            read-inline (ctx |> set-font Latin (`fonts-theano:TheanoDidot`, 1.0, 0.0)) it
+          in
+          document (| title = {t}; author = {a}; show-title = false; show-toc = false; |) '<
+            +p { \theano{Latin in Theano} and 日本語 in IPAex. }
+          >
+          SATY
+          RUSTYFI_LIB_ROOT="$PWD/root" ./target/debug/rustyfi theano.saty -o theano.pdf
+          # The package's face AND the standard library's, in one document.
+          pdffonts theano.pdf | grep -qi "kryukov"
+          pdffonts theano.pdf | grep -qi "information-technology"
 
   corpus:
     name: corpus regression (real-world packages)

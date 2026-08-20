@@ -77,7 +77,7 @@ pub enum LoadError {
     /// is read.
     #[error(
         "SATySFi {version} has no `use` headers; `Envelopes` mode requires 0.1 \
-         (drop --deps, or pass --target-version 0.1)"
+         (drop --deps, or pass --lang 0.1)"
     )]
     InvalidModeVersion { version: RustyfiVersion },
 

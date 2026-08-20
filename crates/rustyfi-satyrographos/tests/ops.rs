@@ -291,7 +291,7 @@ const README_GREAT_PACKAGE: &str = r#"
   ;; Files
   (sources
     ((fontDir "fonts")
-     (hash "fonts.rustyfi-hash" "hash/fonts.rustyfi-hash")
+     (hash "fonts.satysfi-hash" "hash/fonts.satysfi-hash")
      (packageDir "packages")))
   ;; OPAM package file
   (opam "rustyfi-great-package.opam")
@@ -315,7 +315,7 @@ fn write_readme_great_package(tmp: &TempDir) {
     tmp.write("src/Satyristes", README_GREAT_PACKAGE);
     tmp.write("src/packages/great-package.satyh", "let gp = 1\n");
     tmp.write("src/fonts/interesting-font.ttf", "ttf-bytes\n");
-    tmp.write("src/hash/fonts.rustyfi-hash", "{\"fonts\": {}}\n");
+    tmp.write("src/hash/fonts.satysfi-hash", "{\"fonts\": {}}\n");
 }
 
 #[test]
@@ -334,13 +334,13 @@ fn satyristes_readme_example_installs_per_kind_destinations() {
     // fontDir -> recursively into dist/fonts/<name>/.
     assert!(root.join("dist/fonts/great-package/interesting-font.ttf").is_file());
     // hash -> FLAT dist/hash/<dst>, no per-library namespace (§5.5 asymmetry).
-    assert!(root.join("dist/hash/fonts.rustyfi-hash").is_file());
-    assert!(!root.join("dist/hash/great-package/fonts.rustyfi-hash").exists());
+    assert!(root.join("dist/hash/fonts.satysfi-hash").is_file());
+    assert!(!root.join("dist/hash/great-package/fonts.satysfi-hash").exists());
 
     // dependencies recorded (fonts-theano, wildcard); opam/libraryDoc ignored.
     let receipt = root.join(".satyrographos/receipts/great-package.toml");
     let text = fs::read_to_string(&receipt).unwrap();
-    assert!(text.contains("dist/hash/fonts.rustyfi-hash"), "{text}");
+    assert!(text.contains("dist/hash/fonts.satysfi-hash"), "{text}");
     assert!(text.contains("dist/packages/great-package/great-package.satyh"), "{text}");
 }
 
@@ -446,7 +446,7 @@ fn satyristes_tar_gz_round_trip() {
 
     let report = sg::install(&archive, &dest_opts(&root)).expect("targz satyristes install");
     assert_eq!(report.name, "great-package");
-    assert!(root.join("dist/hash/fonts.rustyfi-hash").is_file());
+    assert!(root.join("dist/hash/fonts.satysfi-hash").is_file());
 }
 
 // ---------------------------------------------------------------------------

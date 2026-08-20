@@ -10,20 +10,23 @@
 //! to `compile_document_cst`, so swapping in a [`TtfFontStore`] here is the
 //! entire change on the typesetting side.
 //!
-//! # Why not upstream's `fonts.rustyfi-hash`?
+//! # Compatibility with SATySFi's own `fonts.satysfi-hash`
 //!
-//! SATySFi v0.0.6 keys font selection through two files under
-//! `<runtime>/dist/hash/`: `fonts.rustyfi-hash` maps a font *abbrev* to a
-//! font file, and `default-font.rustyfi-hash` maps a *script* to `{
-//! font-name = abbrev; ratio; rising }`. The latter is already plain JSON,
-//! but the former uses Yojson's non-standard `<Variant: {...}>` syntax
-//! (e.g. `<Single: {"src": "..."}>`), which no standard JSON parser
-//! (`serde_json` included) accepts. Rather than hand-roll a Yojson reader
-//! for one milestone slice, this port defines its own plain-JSON schema at
-//! the same filenames — so the directory layout (`dist/hash/*.rustyfi-hash`)
-//! stays familiar to anyone who has seen upstream's runtime tree — and
-//! documents the reshaping here instead of silently diverging. See the
-//! plan's Risks section ("`.rustyfi-hash` is not standard JSON").
+//! SATySFi keys font selection through two files under
+//! `<runtime>/dist/hash/`: `fonts.satysfi-hash` maps a font *abbrev* to a
+//! font file, and `default-font.satysfi-hash` maps a *script* to `{
+//! font-name = abbrev; ratio; rising }`. The filenames are upstream's, and so
+//! is the directory layout — a font package installs into this tree, so
+//! reading anything else would mean packages install faces no document can
+//! name.
+//!
+//! `default-font` is plain JSON. `fonts` is Yojson: each entry is wrapped in a
+//! variant, `<Single: {"src": "…"}>` as upstream writes it or
+//! `<"Collection":{"src-dist":"…","index":1}>` as an installed package does,
+//! which no JSON parser accepts. [`yojson_to_json`] strips those wrappers —
+//! the tag says nothing the fields do not — after which the schema below
+//! parses with `serde_json`. Both path spellings are accepted: `src` relative
+//! to the font root, and upstream's `src-dist` relative to `dist/`.
 //!
 //! `serde`/`serde_json` were chosen over a tiny hand-rolled parser because
 //! the schema below is a plain, statically-shaped JSON object (no variant
@@ -32,7 +35,7 @@
 //! here would just be reimplementing JSON string/number/object escaping for
 //! no benefit.
 //!
-//! # `fonts.rustyfi-hash` (this port's schema)
+//! # `fonts.satysfi-hash`
 //!
 //! A JSON object mapping an arbitrary *abbrev* name to a font source:
 //!
@@ -43,7 +46,7 @@
 //! ```
 //!
 //! `src` is a path to a font file: resolved relative to the *font root*
-//! (the directory under which `dist/hash/fonts.rustyfi-hash` was found)
+//! (the directory under which `dist/hash/fonts.satysfi-hash` was found)
 //! when relative, or used as-is when absolute. `index`, present only for a
 //! TrueType Collection (`.ttc`) member, mirrors v0.0.6's
 //! `FontAccess.Collection` — but only `index: 0` can actually be *loaded*
@@ -54,9 +57,9 @@
 //! [`FontRegistry::build_store`] time — never silently loading the wrong
 //! face.
 //!
-//! # `default-font.rustyfi-hash` (port-specific; not upstream's schema)
+//! # `default-font.satysfi-hash` (port-specific; not upstream's schema)
 //!
-//! Upstream's `default-font.rustyfi-hash` maps *script* to a font selection
+//! Upstream's `default-font.satysfi-hash` maps *script* to a font selection
 //! (with `ratio`/`rising` scaling knobs) — that needs script segmentation
 //! this milestone does not have yet (see the plan's "Full roadmap" §3/§4).
 //! Slice 1 only needs to seed the three faces the base-14 provider already
@@ -104,7 +107,7 @@ use rustyfi_backend::FontKey;
 
 use crate::ttf::{FontError, TtfFontStore};
 
-/// One font source, as resolved from `fonts.rustyfi-hash` (`src` already
+/// One font source, as resolved from `fonts.satysfi-hash` (`src` already
 /// joined against the font root) or synthesized from a `--font`/
 /// `--font-bold`/`--font-oblique` CLI flag.
 ///
@@ -147,12 +150,12 @@ pub struct FontRegistry {
     /// same file a second time) to `TtfFontStore::load`.
     default_faces: [String; 3],
     /// Per-script default `(abbrev, ratio, rising)`, indexed by
-    /// `Script`'s discriminant (D1a) — from `default-font.rustyfi-hash`'s
+    /// `Script`'s discriminant (D1a) — from `default-font.satysfi-hash`'s
     /// optional `scripts` block. `None` per-slot when that script wasn't
     /// named (or the whole block is absent, or the registry came from
     /// `--font`/CLI flags, which have no `scripts` concept at all).
     script_fonts: [Option<(String, f64, f64)>; 4],
-    /// The abbrev named by `default-font.rustyfi-hash`'s optional `"math"`
+    /// The abbrev named by `default-font.satysfi-hash`'s optional `"math"`
     /// key (Slice B) — the font `get-initial-context` seeds
     /// `Context::math_font` with. `None` when absent (or the registry came
     /// from `--font`/CLI flags, which have no `"math"` concept), in which
@@ -163,7 +166,7 @@ pub struct FontRegistry {
 
 /// Config-less one-off face selection (`--font`/`--font-bold`/
 /// `--font-oblique`): the highest-precedence source in
-/// [`FontRegistry::discover`], bypassing `fonts.rustyfi-hash` entirely.
+/// [`FontRegistry::discover`], bypassing `fonts.satysfi-hash` entirely.
 #[derive(Debug, Clone, Default)]
 pub struct FontFlags {
     pub regular: Option<PathBuf>,
@@ -199,7 +202,7 @@ pub enum FontConfigError {
     },
     #[error(
         "{path}: default-face {face:?} names abbrev {abbrev:?}, which is not \
-         defined in fonts.rustyfi-hash"
+         defined in fonts.satysfi-hash"
     )]
     UnknownAbbrev {
         path: PathBuf,
@@ -218,16 +221,99 @@ pub enum FontConfigError {
     Font(#[from] FontError),
 }
 
-/// Raw shape of one entry in `fonts.rustyfi-hash` (see module docs). `index`
+/// Rewrite Yojson variant syntax into the JSON `serde_json` accepts.
+///
+/// SATySFi's own `fonts.satysfi-hash` wraps each entry in a variant —
+/// `<Single: {"src": "…"}>` as upstream writes it, `<"Collection":{"src-dist":
+/// "…","index":1}>` as a package installer does — which no JSON parser takes.
+/// The tag carries no information the fields do not (`index` is what
+/// distinguishes a collection member), so the wrapper is simply removed,
+/// leaving the object behind.
+///
+/// Anything inside a string literal is left alone: a font path may legitimately
+/// contain `<` or `>`.
+fn yojson_to_json(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.char_indices().peekable();
+    let mut in_string = false;
+    let mut escaped = false;
+    let mut depth: usize = 0;
+
+    while let Some((i, c)) = chars.next() {
+        if in_string {
+            out.push(c);
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match c {
+            '"' => {
+                in_string = true;
+                out.push(c);
+            }
+            '<' => {
+                // `<Tag:` or `<"Tag":` — skip up to and including the colon,
+                // and remember to drop the matching `>`.
+                let rest = &text[i + 1..];
+                match rest.find(':') {
+                    Some(colon)
+                        if rest[..colon]
+                            .chars()
+                            .all(|t| t.is_alphanumeric() || t == '"' || t == '_' || t == '-' || t.is_whitespace()) =>
+                    {
+                        for _ in 0..=colon {
+                            chars.next();
+                        }
+                        depth += 1;
+                    }
+                    // Not a variant tag; keep the character as it stands.
+                    _ => out.push(c),
+                }
+            }
+            '>' if depth > 0 => depth -= 1,
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// Raw shape of one entry in `fonts.satysfi-hash` (see module docs). `index`
 /// present ⇒ a `.ttc` member.
 #[derive(Debug, Deserialize)]
 struct RawFontEntry {
-    src: PathBuf,
+    /// A path relative to the FONT ROOT (or absolute) — this port's spelling,
+    /// and the one upstream files written by hand tend to use.
+    #[serde(default)]
+    src: Option<PathBuf>,
+    /// Upstream's other spelling: relative to `dist/fonts/`, which is where a
+    /// font package installs its faces. `(font "X.otf" …)` in a `Satyristes`
+    /// lands at `dist/fonts/<package>/X.otf`, and the hash file names it
+    /// `<package>/X.otf` — so this base is `dist/fonts`, not `dist`.
+    #[serde(default, rename = "src-dist")]
+    src_dist: Option<PathBuf>,
     #[serde(default)]
     index: Option<u32>,
 }
 
-/// Raw shape of `default-font.rustyfi-hash` (port-specific; see module
+impl RawFontEntry {
+    /// The font file, resolved against `root`. `Path::join` discards `root`
+    /// when the value is absolute, so both cases fall out of one call.
+    fn resolve(&self, root: &std::path::Path) -> Option<PathBuf> {
+        if let Some(src) = &self.src {
+            return Some(root.join(src));
+        }
+        self.src_dist
+            .as_ref()
+            .map(|rel| root.join("dist").join("fonts").join(rel))
+    }
+}
+
+/// Raw shape of `default-font.satysfi-hash` (port-specific; see module
 /// docs). Only `regular` is required. `scripts` (D1a) is the optional
 /// per-script default scheme mirroring upstream `setDefaultFont.ml`'s
 /// shape — absent entirely ⇒ every script defaults to `(FontKey(0), 1.0,
@@ -261,7 +347,7 @@ struct RawScriptFont {
     rising: f64,
 }
 
-/// The four script slots `default-font.rustyfi-hash`'s `scripts` block may
+/// The four script slots `default-font.satysfi-hash`'s `scripts` block may
 /// name, each optional (an absent script keeps the `(FontKey(0), 1.0, 0.0)`
 /// default). Field names mirror upstream's own script identifiers
 /// (`han-ideographic`/`kana`/`latin`/`other-script`).
@@ -300,7 +386,7 @@ fn load_or_dedup(
 }
 
 /// Synthetic abbrev names for the config-less `--font`/`--font-bold`/
-/// `--font-oblique` flags (never emitted by `fonts.rustyfi-hash` parsing,
+/// `--font-oblique` flags (never emitted by `fonts.satysfi-hash` parsing,
 /// so they cannot collide with a real config's abbrevs).
 const CLI_REGULAR: &str = "<--font>";
 const CLI_BOLD: &str = "<--font-bold>";
@@ -317,16 +403,16 @@ impl FontRegistry {
     ///    `--font-dir` flag and `$RUSTYFI_FONT_DIR` into this one
     ///    parameter, mirroring how it resolves `--lib-root`).
     /// 3. `lib_root` — reused as the font root when neither of the above is
-    ///    given, so a project that keeps `dist/hash/fonts.rustyfi-hash`
+    ///    given, so a project that keeps `dist/hash/fonts.satysfi-hash`
     ///    alongside `dist/packages/` needs no extra flag.
     ///
     /// Returns `Ok(None)` when nothing is configured at all: no flags, and
-    /// no `dist/hash/fonts.rustyfi-hash` under whichever root ends up being
+    /// no `dist/hash/fonts.satysfi-hash` under whichever root ends up being
     /// examined (or no root to examine, i.e. both `font_dir` and `lib_root`
     /// are `None`). The caller then keeps today's base-14 path verbatim.
     ///
-    /// Once a `fonts.rustyfi-hash` *is* found, any further problem (bad
-    /// JSON, a missing `default-font.rustyfi-hash`, a default-face abbrev
+    /// Once a `fonts.satysfi-hash` *is* found, any further problem (bad
+    /// JSON, a missing `default-font.satysfi-hash`, a default-face abbrev
     /// absent from the abbrev map) is `Err`, not `Ok(None)` — a config that
     /// exists but is broken should be reported, not silently swapped for
     /// base-14 (see the module docs).
@@ -344,7 +430,7 @@ impl FontRegistry {
         };
 
         let hash_dir = root.join("dist").join("hash");
-        let fonts_path = hash_dir.join("fonts.rustyfi-hash");
+        let fonts_path = hash_dir.join("fonts.satysfi-hash");
         let fonts_bytes = match std::fs::read(&fonts_path) {
             Ok(bytes) => bytes,
             Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -355,27 +441,30 @@ impl FontRegistry {
                 })
             }
         };
+        // Upstream writes Yojson, so the bytes may not be JSON yet.
+        let fonts_text = String::from_utf8_lossy(&fonts_bytes);
         let raw: BTreeMap<String, RawFontEntry> =
-            serde_json::from_slice(&fonts_bytes).map_err(|source| FontConfigError::Json {
-                path: fonts_path.clone(),
-                source,
+            serde_json::from_str(&yojson_to_json(&fonts_text)).map_err(|source| {
+                FontConfigError::Json {
+                    path: fonts_path.clone(),
+                    source,
+                }
             })?;
         let faces: BTreeMap<String, FontSource> = raw
             .into_iter()
-            .map(|(abbrev, entry)| {
-                // `Path::join` discards `root` entirely when `entry.src` is
-                // itself absolute, so this handles both relative and
-                // absolute `src` values correctly in one call.
-                let resolved = root.join(&entry.src);
+            .filter_map(|(abbrev, entry)| {
+                // An entry naming no file at all is skipped rather than
+                // resolved to the root directory itself.
+                let resolved = entry.resolve(root)?;
                 let source = match entry.index {
                     Some(index) => FontSource::Collection(resolved, index),
                     None => FontSource::Single(resolved),
                 };
-                (abbrev, source)
+                Some((abbrev, source))
             })
             .collect();
 
-        let default_path = hash_dir.join("default-font.rustyfi-hash");
+        let default_path = hash_dir.join("default-font.satysfi-hash");
         let default_bytes = std::fs::read(&default_path).map_err(|source| FontConfigError::Io {
             path: default_path.clone(),
             source,
@@ -451,7 +540,7 @@ impl FontRegistry {
     }
 
     /// Synthesize a registry directly from `--font`/`--font-bold`/
-    /// `--font-oblique`, with no `fonts.rustyfi-hash` involved at all.
+    /// `--font-oblique`, with no `fonts.satysfi-hash` involved at all.
     fn from_flags(flags: &FontFlags) -> Result<FontRegistry, FontConfigError> {
         let Some(regular) = &flags.regular else {
             return Err(FontConfigError::RegularRequired);
@@ -649,9 +738,9 @@ mod tests {
     fn write_hash_dir(root: &Path, fonts_json: &str, default_json: Option<&str>) {
         let hash_dir = root.join("dist/hash");
         std::fs::create_dir_all(&hash_dir).unwrap();
-        std::fs::write(hash_dir.join("fonts.rustyfi-hash"), fonts_json).unwrap();
+        std::fs::write(hash_dir.join("fonts.satysfi-hash"), fonts_json).unwrap();
         if let Some(default_json) = default_json {
-            std::fs::write(hash_dir.join("default-font.rustyfi-hash"), default_json).unwrap();
+            std::fs::write(hash_dir.join("default-font.satysfi-hash"), default_json).unwrap();
         }
     }
 
@@ -713,7 +802,7 @@ mod tests {
             FontRegistry::discover(Some(&dir), None, &flags)
                 .unwrap()
                 .is_none(),
-            "an existing root with no dist/hash/fonts.rustyfi-hash is 'nothing configured'"
+            "an existing root with no dist/hash/fonts.satysfi-hash is 'nothing configured'"
         );
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -1104,5 +1193,61 @@ mod tests {
         let err = FontRegistry::discover(Some(&dir), None, &FontFlags::default()).unwrap_err();
         assert!(matches!(err, FontConfigError::UnknownAbbrev { .. }), "{err}");
         std::fs::remove_dir_all(&dir).ok();
+    }
+}
+
+#[cfg(test)]
+mod satysfi_compat_tests {
+    use super::*;
+
+    /// Both spellings seen in the wild: upstream's own unquoted tag with a
+    /// root-relative `src`, and a package installer's quoted tag with a
+    /// `dist/`-relative `src-dist`.
+    const UPSTREAM: &str = r#"{
+  "fonts-noto-emoji:NotoEmoji-Regular" : <Single: {"src": "dist/fonts/fonts-noto-emoji/NotoEmoji-Regular.ttf"}>,
+  "fonts-theano:TheanoDidot":<"Single":{"src-dist":"fonts-theano/TheanoDidot-Regular.otf"}>,
+  "somettc":<"Collection":{"src-dist":"x/foo.ttc","index":0}>
+}"#;
+
+    #[test]
+    fn upstream_variants_become_plain_json() {
+        let json = yojson_to_json(UPSTREAM);
+        assert!(!json.contains('<') && !json.contains('>'), "{json}");
+        let raw: BTreeMap<String, RawFontEntry> =
+            serde_json::from_str(&json).expect("should parse once the variants are gone");
+        assert_eq!(raw.len(), 3);
+        assert_eq!(
+            raw["fonts-theano:TheanoDidot"].src_dist.as_deref(),
+            Some(std::path::Path::new("fonts-theano/TheanoDidot-Regular.otf"))
+        );
+        assert_eq!(raw["somettc"].index, Some(0));
+    }
+
+    #[test]
+    fn src_and_src_dist_resolve_from_different_bases() {
+        let root = std::path::Path::new("/root");
+        let by_src = RawFontEntry {
+            src: Some("dist/fonts/a.ttf".into()),
+            src_dist: None,
+            index: None,
+        };
+        let by_dist = RawFontEntry {
+            src: None,
+            src_dist: Some("fonts-theano/b.otf".into()),
+            index: None,
+        };
+        assert_eq!(by_src.resolve(root).unwrap(), root.join("dist/fonts/a.ttf"));
+        assert_eq!(
+            by_dist.resolve(root).unwrap(),
+            root.join("dist/fonts/fonts-theano/b.otf"),
+            "`src-dist` is relative to dist/fonts/ — where a package installs"
+        );
+    }
+
+    #[test]
+    fn an_angle_bracket_inside_a_string_survives() {
+        // A path may contain `<`; only variant wrappers are removed.
+        let json = yojson_to_json(r#"{"a":<Single: {"src":"we<ird>.ttf"}>}"#);
+        assert_eq!(json, r#"{"a": {"src":"we<ird>.ttf"}}"#);
     }
 }

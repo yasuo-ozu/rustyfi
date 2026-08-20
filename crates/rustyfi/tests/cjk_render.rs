@@ -17,7 +17,7 @@
 //! Proves, none of which the base-14/Latin-only path can prove:
 //!  (a) `get-initial-context` (called by stdja-mini's plain `document`,
 //!      with NO `set-font` anywhere in the fixture) picks up the CJK
-//!      `default-font.rustyfi-hash` `scripts` block automatically, routing
+//!      `default-font.satysfi-hash` `scripts` block automatically, routing
 //!      `HanIdeographic`/`Kana` script text to the `ipaexm` `FontKey`;
 //!  (b) the rendered PDF actually embeds the font (`FontFile2`);
 //!  (c) the CJK codepoints reach REAL glyphs — the CID-keyed content
@@ -86,7 +86,7 @@ fn load_and_merge(entry: &Path) -> rustyfi_syntax::cst::File {
 /// The Japanese sentence the fixture's body renders: hiragana ("の", "で",
 /// "す"), katakana ("テ", "ス", "ト"), and kanji ("日", "本", "語", "文") —
 /// `char_script`'s `HanIdeographic`/`Kana` buckets, both of which
-/// `download-fonts.sh`'s `default-font.rustyfi-hash` `scripts` block points
+/// `download-fonts.sh`'s `default-font.satysfi-hash` `scripts` block points
 /// at `ipaexm`.
 const SENTENCE: &str = "日本語のテスト文です";
 
@@ -225,16 +225,16 @@ fn cjk_sentence_renders_real_glyphs_end_to_end() {
     }
 
     // Real production font-config path: `FontRegistry::discover` finds
-    // `lib-rustyfi/dist/hash/*.rustyfi-hash` (written by
+    // `lib-rustyfi/dist/hash/*.satysfi-hash` (written by
     // `download-fonts.sh`), whose `scripts` block points
     // `han-ideographic`/`kana` at `ipaexm`.
     let registry = FontRegistry::discover(Some(&lib_root()), None, &FontFlags::default())
         .expect("font config discovery must succeed")
         .unwrap_or_else(|| {
             panic!(
-                "lib-rustyfi/dist/hash/fonts.rustyfi-hash must be present after \
+                "lib-rustyfi/dist/hash/fonts.satysfi-hash must be present after \
                  download-fonts.sh (checked {})",
-                lib_root().join("dist/hash/fonts.rustyfi-hash").display()
+                lib_root().join("dist/hash/fonts.satysfi-hash").display()
             )
         });
     let store = registry.build_store().expect("build_store must succeed");
@@ -267,12 +267,12 @@ fn cjk_sentence_renders_real_glyphs_end_to_end() {
     assert_eq!(
         store.script_default(0), // HanIdeographic
         Some((cjk_key, 0.88, 0.0)),
-        "han-ideographic script must resolve to ipaexm per default-font.rustyfi-hash"
+        "han-ideographic script must resolve to ipaexm per default-font.satysfi-hash"
     );
     assert_eq!(
         store.script_default(1), // Kana
         Some((cjk_key, 0.88, 0.0)),
-        "kana script must resolve to ipaexm per default-font.rustyfi-hash"
+        "kana script must resolve to ipaexm per default-font.satysfi-hash"
     );
 
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/cjk.saty");

@@ -63,12 +63,12 @@ pub struct TtfFontStore {
     /// heuristic (`resolve_font_abbrev` free fn, rustyfi-lang).
     abbrevs: BTreeMap<String, FontKey>,
     /// The configured default `(font, ratio, rising)` per `Script`
-    /// (`context::Script` as `usize`), from `default-font.rustyfi-hash`'s
+    /// (`context::Script` as `usize`), from `default-font.satysfi-hash`'s
     /// optional `scripts` block (D1a). `None` per-slot (the default) means
     /// "no script scheme configured" — callers overlay `(ctx.font, 1.0,
     /// 0.0)` themselves, keeping today's single-font behavior.
     script_defaults: [Option<(FontKey, f64, f64)>; 4],
-    /// The `FontKey` allocated for `default-font.rustyfi-hash`'s optional
+    /// The `FontKey` allocated for `default-font.satysfi-hash`'s optional
     /// `"math"` abbrev (Slice B). `None` for a bare `TtfFontStore::load` or
     /// a registry with no `"math"` entry — `get-initial-context` then leaves
     /// `Context::math_font` at its `Context::initial` seed.
@@ -179,7 +179,7 @@ impl TtfFontStore {
 
     /// The configured default `(font, ratio, rising)` for `script` (as its
     /// `usize` discriminant — `context::Script`), from
-    /// `default-font.rustyfi-hash`'s `scripts` block, or `None` when no
+    /// `default-font.satysfi-hash`'s `scripts` block, or `None` when no
     /// scheme was configured for that script (the caller then falls back to
     /// `(ctx.font, 1.0, 0.0)`).
     pub fn script_default(&self, script: usize) -> Option<(FontKey, f64, f64)> {

@@ -52,7 +52,7 @@ pub(crate) fn resolve_import(dir: &Path, name: &str) -> Result<PathBuf, Vec<Path
 /// Resolve `@require: name` against the package/library root.
 ///
 /// v0.0.6's `Config.resolve_package` searches a configurable list of library
-/// directories; we approximate that with four fixed candidates under
+/// directories; we approximate that with five fixed candidates under
 /// `lib_root`, in order:
 ///   1. `<lib_root>/dist/packages/<name>` (the standard SATySFi package
 ///      layout used by `rustyfi-dist`/opam installs, and this port's own
@@ -63,16 +63,21 @@ pub(crate) fn resolve_import(dir: &Path, name: &str) -> Result<PathBuf, Vec<Path
 ///      layout real Satyrographos produces and this port's manifest-driven
 ///      installer materialises — see the chimera plan §3). Purely additive:
 ///      candidates 1 and 2 are unchanged.
-///   4. `<lib_root>/dist-v01/packages/<name>` (Slice X4a,
-/// item 1 — the 0.1
-///      corpus, mirroring candidate 1 with no nested-layout analogue yet).
-///      This is what lets a `V0_0`-rooted load's `@require:` reach a 0.1
-///      package under `lib-rustyfi/dist-v01/packages/` from the SAME
-///      `lib_root` a 0.0.6 document also `@require:`s the 0.0.6 corpus
-///      from. Purely additive — appended LAST, so it only ever adds NEW
-///      successful resolutions; it never changes which candidate wins for
-///      any name that candidates 1-3 already resolve (a pure-0.0.6 load with
-///      no `dist-v01/packages/<name>` target is completely unaffected).
+///   4. `<lib_root>/dist-v01/packages/<name>` (Slice X4a, item 1 — the 0.1
+///      corpus, mirroring candidate 1). This is what lets a `V0_0`-rooted
+///      load's `@require:` reach a 0.1 package under
+///      `lib-rustyfi/dist-v01/packages/` from the SAME `lib_root` a 0.0.6
+///      document also `@require:`s the 0.0.6 corpus from. Purely additive —
+///      appended LAST for a 0.0.6 load, so it only ever adds NEW successful
+///      resolutions; it never changes which candidate wins for any name that
+///      candidates 1-3 already resolve (a pure-0.0.6 load with no
+///      `dist-v01/packages/<name>` target is completely unaffected).
+///   5. `<lib_root>/dist-v01/packages/<name>/<name>` — candidate 3's analogue
+///      for the 0.1 corpus. `install --lang 0.1` of a package whose manifest
+///      declares `(packageDir ...)`, which is what real Satyrographos packages
+///      declare, materialises exactly this nested layout; without this
+///      candidate such a package installs successfully and is then
+///      unreachable from any `@require:`.
 ///
 /// If `lib_root` is `None`, there is nowhere to search: returns `Err(vec![])`
 /// immediately (surfaced by `UnresolvedRequire` as "no candidates").
@@ -118,7 +123,8 @@ fn resolve_require_in(
     // order is exactly what it always was.
     let bases: Vec<PathBuf> = if version == RustyfiVersion::V0_1 {
         vec![
-            dist_v01_packages,
+            dist_v01_packages.clone(),
+            dist_v01_packages.join(name),
             dist_packages.clone(),
             root.to_path_buf(),
             dist_packages.join(name),
@@ -128,7 +134,8 @@ fn resolve_require_in(
             dist_packages.clone(),
             root.to_path_buf(),
             dist_packages.join(name),
-            dist_v01_packages,
+            dist_v01_packages.clone(),
+            dist_v01_packages.join(name),
         ]
     };
     let mut candidates = Vec::new();

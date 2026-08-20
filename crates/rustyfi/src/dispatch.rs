@@ -47,7 +47,7 @@ pub fn build_cli() -> Command {
 
 /// The compile-mode argument set — the pre-chimera derive `Args`, restated as
 /// builder `Arg`s so behavior is preserved byte-for-byte (positional input,
-/// `-o/--output`, `--lib-root`, `--target-version`).
+/// `-o/--output`, `--lib-root`, `--lang`).
 fn compile_command(name: &'static str) -> Command {
     Command::new(name)
         .version(env!("CARGO_PKG_VERSION"))
@@ -77,12 +77,13 @@ fn compile_command(name: &'static str) -> Command {
                 .value_parser(value_parser!(PathBuf)),
         )
         .arg(
-            Arg::new("target_version")
-                .long("target-version")
+            Arg::new("lang")
+                .long("lang")
                 .value_name("VERSION")
                 .help(
-                    "Target SATySFi language version: 0.0 (default) or 0.1. \
-                     When omitted, a 0.1-style `use` header is auto-detected.",
+                    "SATySFi language generation: 0.0 (default) or 0.1. \
+                     When omitted, a 0.1-style `use` header is auto-detected. \
+                     Same spelling as `install --lang`.",
                 ),
         )
         .arg(
@@ -108,7 +109,7 @@ fn compile_command(name: &'static str) -> Command {
                 .help(
                     "Pin Envelopes packaging mode (Axis B) and consume a \
                      pre-resolved rustyfi-deps.yaml at FILE. Requires \
-                     --target-version 0.1. Ld3a: local `use … of` dependencies \
+                     --lang 0.1. Ld3a: local `use … of` dependencies \
                      resolve; supplying a deps FILE errors (its consumption is \
                      Ld3b). Without this flag, a `use` header still auto-pins \
                      Envelopes mode.",
@@ -170,8 +171,8 @@ fn compile_command(name: &'static str) -> Command {
                 .long("font-dir")
                 .value_name("DIR")
                 .help(
-                    "Font root for dist/hash/fonts.rustyfi-hash (+ \
-                     default-font.rustyfi-hash) discovery — same layout \
+                    "Font root for dist/hash/fonts.satysfi-hash (+ \
+                     default-font.satysfi-hash) discovery — same layout \
                      convention as --lib-root's dist/packages/. Falls back to \
                      $RUSTYFI_FONT_DIR, then to --lib-root itself. With no font \
                      configured anywhere, text is set in the built-in base-14 \
@@ -186,7 +187,7 @@ fn compile_command(name: &'static str) -> Command {
                 .value_name("FILE")
                 .help(
                     "Use this TrueType/OpenType file as the regular face \
-                     directly, bypassing fonts.rustyfi-hash discovery (a \
+                     directly, bypassing fonts.satysfi-hash discovery (a \
                      config-less one-off). Takes precedence over --font-dir \
                      and $RUSTYFI_FONT_DIR.",
                 )

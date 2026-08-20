@@ -10,7 +10,7 @@
 //! Rather than let each of those future divergence points grow its own
 //! ad-hoc flag, the target version is threaded through the pipeline *now*
 //! (see [`crate`]'s consumers: `rustyfi-loader`'s `LoadOptions` and
-//! `rustyfi`'s `--target-version` flag) as a single [`RustyfiVersion`]
+//! `rustyfi`'s `--lang` flag) as a single [`RustyfiVersion`]
 //! value, and each divergence point is expressed as a method on it. A future
 //! 0.1 implementation flips those methods (and adds new match arms) in one
 //! place instead of scattering `if opt_a && opt_b` checks across the crate

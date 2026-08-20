@@ -28,7 +28,7 @@ fn out_pdf(tag: &str) -> PathBuf {
 
 /// A `use … of`-only 0.1 document (`tests/fixtures/envelopes/doc.saty`, which
 /// depends on `./v01-mini` via a local `use` header) compiles end-to-end to a
-/// PDF with only `--target-version 0.1` — the sniffer sees the `use` header
+/// PDF with only `--lang 0.1` — the sniffer sees the `use` header
 /// and pins `LoadMode::Envelopes` itself (the plan's detection-ladder step-3
 /// promise). The acceptance capstone for Ld3a.
 #[test]
@@ -38,7 +38,7 @@ fn envelopes_use_of_document_compiles_to_pdf() {
 
     let output = Command::new(bin())
         .arg(&fixture)
-        .arg("--target-version")
+        .arg("--lang")
         .arg("0.1")
         .arg("-o")
         .arg(&out)
@@ -64,7 +64,7 @@ fn envelopes_use_of_document_compiles_to_pdf() {
     let _ = std::fs::remove_file(&out);
 }
 
-/// `--deps` (Axis B = Envelopes) with `--target-version 0.0.6` (Axis A =
+/// `--deps` (Axis B = Envelopes) with `--lang 0.0` (Axis A =
 /// 0.0.6) is the one combination with no upstream analogue. The CLI rejects
 /// it early with a message naming the flag that pinned each axis (the loader's
 /// `InvalidModeVersion` is only the backstop).
@@ -88,7 +88,7 @@ fn deps_with_v006_errors_naming_both_axes() {
         .arg(&input)
         .arg("--deps")
         .arg(&deps)
-        .arg("--target-version")
+        .arg("--lang")
         .arg("0.0")
         .arg("--no-cache")
         .output()

@@ -1,7 +1,7 @@
 #!/bin/sh
 # Fetch the real CJK+Latin faces stdja/mdja actually name (item #1), and
 # write this port's
-# `dist/hash/{fonts,default-font}.rustyfi-hash` (plain-JSON schema —
+# `dist/hash/{fonts,default-font}.satysfi-hash` (plain-JSON schema —
 # rustyfi-pdf's `fonts.rs` module doc — NOT upstream's Yojson variant
 # syntax). Mirrors upstream SATySFi's own `download-fonts.sh` (cache dir +
 # sha1-pinned downloads), targeting this repo's `lib-rustyfi/dist/fonts/`.
@@ -22,7 +22,7 @@
 #     `CIDFontType0`/`FontFile3` (CFF) path (`cid.rs`'s `write_font_cff`,
 #     commit `526e1f3`, subsetting added in `962addc`) AND readable by
 #     `ttf.rs`'s MATH parser. Registered as the `"lmmath"` abbrev and wired as
-#     `default-font.rustyfi-hash`'s `"math"` default — this is upstream
+#     `default-font.satysfi-hash`'s `"math"` default — this is upstream
 #     SATySFi's own default math font, so this is the upstream-correct
 #     choice (Slice B originally wired DejaVu Math TeX Gyre here as a
 #     `glyf`-outline stand-in, from before the
@@ -59,7 +59,7 @@
 #
 # Still NOT fetched: `lmroman`/`lmroman-b`/`lmroman-it` (Latin Modern Roman)
 # — nothing in stdja's own `set-font` calls names them (`Junicode` is the
-# port's Latin default instead — see the written `default-font.rustyfi-hash`
+# port's Latin default instead — see the written `default-font.satysfi-hash`
 # below); add a block mirroring the lmsans/lmmono one below if a document
 # ever needs them. `lmodern` is registered as an alias for the bundled LM
 # Math font (see below) so `set-math-font \`lmodern\`` resolves — it now
@@ -495,7 +495,7 @@ else
   LMMATH_SRC=""
 fi
 
-# ---- Write dist/hash/*.rustyfi-hash (this port's plain-JSON schema) ------
+# ---- Write dist/hash/*.satysfi-hash (this port's plain-JSON schema) ------
 {
   printf '{\n'
   printf '  "ipaexm":     { "src": "dist/fonts/ipaexm.ttf" },\n'
@@ -518,7 +518,7 @@ fi
     printf ',\n  "dejavu-math":{ "src": "dist/fonts/DejaVuMathTeXGyre.ttf" }'
   fi
   printf '\n}\n'
-} > "$HASH_DIR/fonts.rustyfi-hash"
+} > "$HASH_DIR/fonts.satysfi-hash"
 
 {
   printf '{\n'
@@ -539,7 +539,7 @@ fi
   printf '    "other-script":    { "font-name": "Junicode", "ratio": 1.0,  "rising": 0.0 }\n'
   printf '  }\n'
   printf '}\n'
-} > "$HASH_DIR/default-font.rustyfi-hash"
+} > "$HASH_DIR/default-font.satysfi-hash"
 
-show_message "wrote $HASH_DIR/fonts.rustyfi-hash and default-font.rustyfi-hash"
+show_message "wrote $HASH_DIR/fonts.satysfi-hash and default-font.satysfi-hash"
 show_message "end"

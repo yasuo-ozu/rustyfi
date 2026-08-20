@@ -203,6 +203,35 @@ fn require_resolves_against_lib_root_dist_v01_packages() {
     );
 }
 
+/// The NESTED 0.1 layout — `dist-v01/packages/<name>/<name>.satyh` — which is
+/// what `install --lang 0.1` materialises for any manifest declaring
+/// `(packageDir ...)`, i.e. what real Satyrographos packages declare. Without
+/// this candidate such a package installs successfully and is then unreachable
+/// from every `@require:`, which reads as a loader bug and is really a missing
+/// search path.
+#[test]
+fn require_resolves_the_nested_per_package_dist_v01_layout() {
+    let dir = TempDir::new("require-v01-nested");
+    let lib_root = dir.path().join("lib");
+    let nested = lib_root.join("dist-v01").join("packages").join("greet");
+    fs::create_dir_all(&nested).unwrap();
+    fs::write(
+        nested.join("greet.satyh"),
+        "module Greet = struct\n  val x = 1\nend\n",
+    )
+    .unwrap();
+    let entry = dir.write("doc.saty", "@require: greet\nlet x = 1 in x");
+
+    let opts = LoadOptions {
+        lib_root: Some(lib_root),
+        version: RustyfiVersion::V0_1,
+        ..Default::default()
+    };
+    let program = load(&entry, &opts).expect("an installed 0.1 package must be reachable");
+
+    assert_eq!(file_names(&program), vec!["greet.satyh", "doc.saty"]);
+}
+
 /// A pure-0.0.6 load with NO `dist-v01/packages/` target must be completely
 /// unaffected by the X4a Q4-mirror rule — every node stays `V0_0`, exactly
 /// as `require_resolves_against_lib_root_dist_packages` above already pins,

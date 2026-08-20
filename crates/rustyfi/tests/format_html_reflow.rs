@@ -101,7 +101,7 @@ fn compile(fixture: &Path, work: &Path, fmt: &str, out_ext: &str) -> PathBuf {
 }
 
 /// Same as [`compile`], but pins Axis A to 0.1 explicitly
-/// (`--target-version 0.1`) — `itemize_fixture` only has `@require:`
+/// (`--lang 0.1`) — `itemize_fixture` only has `@require:`
 /// headers (transparent to the sniffer, `sniff_headers`'s own doc comment:
 /// "pins neither axis"), no `use`-shaped header, so the CLI's version
 /// sniffer would otherwise default to 0.0.6 (`resolve_version_and_mode`'s
@@ -115,12 +115,12 @@ fn compile_v01(fixture: &Path, work: &Path, fmt: &str, out_ext: &str) -> PathBuf
         .args(["--lib-root".as_ref(), repo_lib_root_v01_only().as_os_str()])
         .args(["--cache-dir".as_ref(), work.join("cache").as_os_str()])
         .args(["--format", fmt])
-        .args(["--target-version", "0.1"])
+        .args(["--lang", "0.1"])
         .output()
         .expect("spawn rustyfi");
     assert_ok(
         &result,
-        &format!("compile --format {fmt} --target-version 0.1"),
+        &format!("compile --format {fmt} --lang 0.1"),
     );
     out
 }

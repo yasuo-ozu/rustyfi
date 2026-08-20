@@ -3611,7 +3611,7 @@ fn prim_get_initial_context(interp: &mut Interp, mut args: Vec<Value>) -> Result
     let width = as_length(args.pop().unwrap())?;
     let mut ctx = Context::initial(width);
     ctx.math_command = Some(interp.register_math_command(cmd));
-    // D1a/D1b: overlay the configured `default-font.rustyfi-hash` `scripts`
+    // D1a/D1b: overlay the configured `default-font.satysfi-hash` `scripts`
     // block, if any, so a bare document with a configured font root renders
     // CJK/etc. with zero `set-font` calls (`interp.metrics.
     // default_script_font` is `None` for every script on a provider with no
@@ -3638,7 +3638,7 @@ fn prim_get_initial_context(interp: &mut Interp, mut args: Vec<Value>) -> Result
             }
         }
     }
-    // Slice B: overlay the configured `default-font.rustyfi-hash` `"math"`
+    // Slice B: overlay the configured `default-font.satysfi-hash` `"math"`
     // abbrev, if any, so a document with a bundled MATH-table font renders
     // real cramped/uncramped math metrics with zero `set-math-font` calls
     // (`interp.metrics. default_math_font` is `None` for every provider with
@@ -8814,7 +8814,7 @@ fn prim_add_footnote(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value
 /// `set-font : script -> font -> context -> context` (vminst.ml:1463) —
 /// D1b: real per-script wiring. `abbrev` resolves through the font metrics
 /// provider's registry first (`FontMetrics::resolve_font_abbrev` — a real
-/// `TtfFontStore` built from `fonts.rustyfi-hash`, D1a), falling back to
+/// `TtfFontStore` built from `fonts.satysfi-hash`, D1a), falling back to
 /// the milestone-1 3-face name heuristic (`resolve_font_abbrev` free fn)
 /// when the provider has no registry entry for it (every pre-D1 provider,
 /// or an abbrev the config doesn't name) — never an error, matching this

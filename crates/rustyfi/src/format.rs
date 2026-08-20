@@ -1,7 +1,7 @@
 //! `--format` output-format selector (surface).
 //!
 //! Deliberately NOT a clap `ValueEnum`: this crate uses *builder*-style clap
-//! throughout (`dispatch::compile_command`), and `--target-version` sets the
+//! throughout (`dispatch::compile_command`), and `--lang` sets the
 //! precedent (`dispatch.rs:75-82`, parsed at `main.rs:296-299`) — a plain
 //! `Arg` with `.value_parser([...])` for clap-level validation, parsed to a
 //! real Rust type at the use site via `str::parse`. `--format` follows the

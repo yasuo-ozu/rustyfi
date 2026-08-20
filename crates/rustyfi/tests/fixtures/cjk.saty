@@ -3,7 +3,7 @@
 % (Kana script), set through stdja-mini's plain `document`/`+p`. No
 % `set-font` call anywhere in this file: `document` calls
 % `get-initial-context`, which overlays the configured
-% `default-font.rustyfi-hash` `scripts` block onto `Context::font_scheme`
+% `default-font.satysfi-hash` `scripts` block onto `Context::font_scheme`
 % automatically (primitives.rs's `prim_get_initial_context`) — so when the
 % font root's `scripts` block points `han-ideographic`/`kana` at `ipaexm`
 % (exactly what `scripts/download-fonts.sh` writes), this sentence renders

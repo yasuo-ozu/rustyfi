@@ -37,7 +37,7 @@ document (|
     +p{
       `rustyfi` compiles a SATySFi document (`.saty`) to PDF. It is a
       native Rust port of SATySFi, tracking upstream v0.0.6, with partial
-      support for the 0.1 language (`--target-version 0.1`).
+      support for the 0.1 language (`--lang 0.1`).
     }
     +p{
       It is not a wrapper around the original: the lexer, parser, elaborator,

@@ -928,7 +928,7 @@ mod tests {
   ;; Files
   (sources
     ((fontDir "fonts")
-     (hash "fonts.rustyfi-hash" "hash/fonts.rustyfi-hash")
+     (hash "fonts.satysfi-hash" "hash/fonts.satysfi-hash")
      (packageDir "packages")))
   ;; OPAM package file
   (opam "rustyfi-great-package.opam")
@@ -949,8 +949,8 @@ mod tests {
         assert_eq!(font_dir.dst, None);
         let hash = &lib.sources[1];
         assert_eq!(hash.kind, FileKind::Hash);
-        assert_eq!(hash.dst.as_deref(), Some("fonts.rustyfi-hash"));
-        assert_eq!(hash.src, "hash/fonts.rustyfi-hash");
+        assert_eq!(hash.dst.as_deref(), Some("fonts.satysfi-hash"));
+        assert_eq!(hash.src, "hash/fonts.satysfi-hash");
         let package_dir = &lib.sources[2];
         assert_eq!(package_dir.kind, FileKind::PackageDir);
         assert_eq!(package_dir.src, "packages");

@@ -104,8 +104,11 @@ pub(crate) fn install_inner(
         Some(receipts::read_for(&root, &plan.name, plan.lang)?)
     } else {
         // No receipt for this name: refuse to clobber any pre-existing
-        // (unmanaged) file at a destination path.
-        for pf in &plan.files {
+        // (unmanaged) file at a destination path. A shared destination is
+        // exempt — a `fonts.satysfi-hash` already being there is the normal
+        // case, since the standard library ships one, and this install adds its
+        // entries to it rather than taking it over.
+        for pf in plan.files.iter().filter(|pf| !pf.merge) {
             let live = stage::safe_join(&root, &pf.dst)?;
             if live.exists() {
                 return Err(Error::UnmanagedCollision { path: live });
@@ -118,23 +121,58 @@ pub(crate) fn install_inner(
     let staging = stage::StagingArea::new(&root, &plan.name)?;
     let mut file_entries = Vec::with_capacity(plan.files.len());
     for pf in &plan.files {
+        if pf.merge {
+            let merged = merge_shared(&root, pf, old_receipt.as_ref())?;
+            staging.stage_contents(&pf.dst, &merged.text)?;
+            // No `sha256`: the next font package to install merges into this
+            // same file and changes it, so a hash recorded here would describe
+            // a state that is not meant to hold. `keys` is what this package
+            // owns, and the only thing worth recording about a shared file.
+            file_entries.push(FileEntry {
+                dst: pf.dst.clone(),
+                sha256: None,
+                keys: Some(merged.keys),
+            });
+            continue;
+        }
         staging.stage(&pf.dst, &pf.src)?;
         let staged_path = stage::safe_join(staging.path(), &pf.dst)?;
         let sha = util::sha256_file(&staged_path)?;
         file_entries.push(FileEntry {
             dst: pf.dst.clone(),
             sha256: Some(sha),
+            keys: None,
         });
     }
 
     let new_dsts: Vec<String> = file_entries.iter().map(|f| f.dst.clone()).collect();
+    // Only files this package OWNS may be orphaned. A shared hash file is
+    // rewritten from the merge above, which already dropped this package's
+    // previous keys; orphaning it would take the other packages' entries with
+    // it.
     let old_dsts: Vec<String> = old_receipt
         .as_ref()
-        .map(|r| r.files.iter().map(|f| f.dst.clone()).collect())
+        .map(|r| {
+            r.files
+                .iter()
+                .filter(|f| f.keys.is_none())
+                .map(|f| f.dst.clone())
+                .collect()
+        })
         .unwrap_or_default();
 
     // Atomic swap into place.
     stage::materialize(&root, staging.path(), &new_dsts, &old_dsts)?;
+
+    // A shared file the previous install contributed to and this one no longer
+    // ships: its keys still have to go, and the file itself has to stay.
+    if let Some(old) = &old_receipt {
+        for entry in old.files.iter().filter(|f| f.keys.is_some()) {
+            if !new_dsts.contains(&entry.dst) {
+                withdraw_keys(&root, entry)?;
+            }
+        }
+    }
 
     // Record the receipt (after materialisation, so a crash never leaves a
     // receipt pointing at files that were not placed).
@@ -159,6 +197,84 @@ pub(crate) fn install_inner(
         version: plan.version,
         files: top_level_paths(&new_dsts),
     })
+}
+
+/// A merged shared file: the text to stage, and the keys this package owns in
+/// it (recorded in the receipt, so uninstall can take exactly those back out).
+struct Merged {
+    text: String,
+    keys: Vec<String>,
+}
+
+/// Merge the package's own `*.satysfi-hash` into what is already at `pf.dst`.
+///
+/// The result is the live file plus this package's entries — so the standard
+/// library's fonts and every other font package's survive an install, which a
+/// copy would not allow.
+fn merge_shared(
+    root: &Path,
+    pf: &manifest::PlannedFile,
+    old: Option<&Receipt>,
+) -> Result<Merged, Error> {
+    let read = |path: &Path| -> Result<crate::hashfile::HashFile, Error> {
+        let text = util::read_to_string(path)?;
+        crate::hashfile::HashFile::parse(&text).map_err(|e| Error::HashFile {
+            path: path.to_path_buf(),
+            message: e.message,
+        })
+    };
+
+    let mine = read(&pf.src)?;
+    let keys: Vec<String> = mine.keys().map(str::to_string).collect();
+
+    let live_path = stage::safe_join(root, &pf.dst)?;
+    let mut merged = if live_path.is_file() {
+        read(&live_path)?
+    } else {
+        crate::hashfile::HashFile::default()
+    };
+
+    // A `--force` reinstall: this package's previous keys come out first, so
+    // re-adding them is not a conflict with itself.
+    if let Some(prev) = old.and_then(|r| r.files.iter().find(|f| f.dst == pf.dst)) {
+        if let Some(prev_keys) = &prev.keys {
+            merged.remove_keys(prev_keys);
+        }
+    }
+
+    merged.merge_in(&mine).map_err(|clashes| Error::HashKeyConflict {
+        path: live_path,
+        keys: clashes.join(", "),
+    })?;
+
+    Ok(Merged {
+        text: merged.to_text(),
+        keys,
+    })
+}
+
+/// Take one package's keys back out of a shared file, leaving the others. The
+/// file goes only when nothing is left in it.
+pub(crate) fn withdraw_keys(root: &Path, entry: &FileEntry) -> Result<(), Error> {
+    let Some(keys) = &entry.keys else {
+        return Ok(());
+    };
+    let path = stage::safe_join(root, &entry.dst)?;
+    if !path.is_file() {
+        return Ok(());
+    }
+    let text = util::read_to_string(&path)?;
+    let mut file = crate::hashfile::HashFile::parse(&text).map_err(|e| Error::HashFile {
+        path: path.clone(),
+        message: e.message,
+    })?;
+    file.remove_keys(keys);
+    if file.is_empty() {
+        util::remove_file_if_exists(&path)?;
+    } else {
+        util::write_atomic(&path, file.to_text().as_bytes())?;
+    }
+    Ok(())
 }
 
 /// Pick the single library to install from the discovered plan(s), honouring

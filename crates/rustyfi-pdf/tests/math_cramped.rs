@@ -15,7 +15,7 @@
 //!
 //! **Slice B update**: the repo now bundles a math font (via
 //! `scripts/download-fonts.sh`) and wires it as
-//! `default-font.rustyfi-hash`'s `"math"` default, so `${...}` math renders
+//! `default-font.satysfi-hash`'s `"math"` default, so `${...}` math renders
 //! with real MATH-table metrics BY DEFAULT — not just under `set-math-font`.
 //! **Re-baselined**: the bundled default is now the REAL upstream Latin
 //! Modern Math (`lib-rustyfi/dist/fonts/latinmodern-math.otf`, upstream
@@ -70,7 +70,7 @@ fn find_math_font() -> Option<PathBuf> {
     // the REAL Latin Modern Math at
     // `lib-rustyfi/dist/fonts/latinmodern-math.otf` (fetched by
     // `scripts/download-fonts.sh`, same as ipaexm/Junicode) and wires it as
-    // `default-font.rustyfi-hash`'s `"math"` default. Check it FIRST so this
+    // `default-font.satysfi-hash`'s `"math"` default. Check it FIRST so this
     // test no longer depends on a host-wide font install once that script
     // has been run — this is what makes the cramped/uncramped divergence
     // PROVEN BY THIS FILE observable by default in this repo, not just on

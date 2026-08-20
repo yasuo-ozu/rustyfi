@@ -17,7 +17,7 @@
 //! crate; this file only parses arguments, resolves `lib_root`/`dest`, and
 //! calls in. The compile path (`cmd_compile`) is byte-for-byte the old
 //! `main`: positional input, `--output`, `--lib-root` with upward
-//! `lib-rustyfi/` discovery, and `--target-version` with header sniffing.
+//! `lib-rustyfi/` discovery, and `--lang` with header sniffing.
 
 use std::path::{Path, PathBuf};
 
@@ -130,7 +130,7 @@ fn cmd_compile(m: &ArgMatches) -> anyhow::Result<()> {
         .clone();
     // HTML output backend, Slice 1 (surface): `--format` has a clap
     // `.default_value("pdf")`, so this `get_one` is always `Some`;
-    // `str::parse` mirrors how `--target-version` is parsed below
+    // `str::parse` mirrors how `--lang` is parsed below
     // (`format.rs`'s doc comment).
     let format: format::OutputFormat = m
         .get_one::<String>("format")
@@ -159,9 +159,9 @@ fn cmd_compile(m: &ArgMatches) -> anyhow::Result<()> {
         }
     };
 
-    let target_version = m.get_one::<String>("target_version").map(String::as_str);
+    let lang = m.get_one::<String>("lang").map(String::as_str);
     let deps_flag = m.get_one::<PathBuf>("deps").map(PathBuf::as_path);
-    let (version, mode) = resolve_version_and_mode(target_version, deps_flag, &input)?;
+    let (version, mode) = resolve_version_and_mode(lang, deps_flag, &input)?;
     // Phase-7c saphe solver, C3: whether this compile is package-manager
     // driven (Envelopes/manifest mode) — decides below whether a sibling
     // `Satyristes.lock`'s digest folds into the cache key. Captured before
@@ -452,7 +452,7 @@ fn cmd_compile(m: &ArgMatches) -> anyhow::Result<()> {
 /// `--lib-root` > `$RUSTYFI_LIB_ROOT` > upward discovery:
 ///
 /// 1. `--font` (+ optional `--font-bold`/`--font-oblique`, enforced by clap
-///    to require `--font`) — a config-less one-off, no `fonts.rustyfi-hash`
+///    to require `--font`) — a config-less one-off, no `fonts.satysfi-hash`
 ///    involved.
 /// 2. `--font-dir <DIR>`.
 /// 3. `$RUSTYFI_FONT_DIR`.
@@ -461,7 +461,7 @@ fn cmd_compile(m: &ArgMatches) -> anyhow::Result<()> {
 ///
 /// A missing configuration at whichever root ends up being examined (or no
 /// root at all) is "nothing configured" (`Ok(None)`); once a
-/// `fonts.rustyfi-hash` *is* found, any further problem — malformed JSON, an
+/// `fonts.satysfi-hash` *is* found, any further problem — malformed JSON, an
 /// unknown default-face abbrev, a font file that fails to load — is a real
 /// error, surfaced to the user via the normal compile-error path rather than
 /// silently substituting base-14 for what looks like a real, if broken,
@@ -528,7 +528,7 @@ fn discover_deps_lock_digest(input: &std::path::Path) -> Option<String> {
 
 /// Resolve BOTH axes of the load — the language version (Axis A) and the
 /// packaging mode (Axis B, `rustyfi_loader::LoadMode`) — from the
-/// `--target-version` flag, the `--deps` flag, and best-effort header
+/// `--lang` flag, the `--deps` flag, and best-effort header
 /// detection (`rustyfi_syntax::sniff_headers`). This is the plan's detection
 /// ladder (§1.4) in its Ld3a-minimal form.
 ///
@@ -556,7 +556,7 @@ fn resolve_version_and_mode(
     let flag = flag
         .map(str::parse::<RustyfiVersion>)
         .transpose()
-        .map_err(|e| anyhow::anyhow!("--target-version: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("--lang: {e}"))?;
     // Sniffing is advisory only: if the file is unreadable, let the loader
     // report the I/O error on its own terms.
     let sniff = std::fs::read_to_string(input)
@@ -568,7 +568,7 @@ fn resolve_version_and_mode(
     let version = match (flag, sniff.version) {
         (Some(v), Some(s)) if s != v => {
             eprintln!(
-                "warning: {} looks like a SATySFi {s} document, but --target-version {v} \
+                "warning: {} looks like a SATySFi {s} document, but --lang {v} \
                  was given; proceeding as {v}",
                 input.display()
             );
@@ -577,8 +577,8 @@ fn resolve_version_and_mode(
         (Some(v), _) => v,
         (None, Some(s)) if !s.is_implemented() => {
             return Err(anyhow::anyhow!(
-                "{}: SATySFi {s} documents are not supported yet; supported: 0.0.6, 0.1 \
-                 (detected a 0.1-style `use` header; pass `--target-version 0.0.6` to \
+                "{}: SATySFi {s} documents are not supported yet; supported: 0.0, 0.1 \
+                 (detected a 0.1-style `use` header; pass `--lang 0.0` to \
                  force 0.0.6 interpretation)",
                 input.display()
             ));
@@ -610,7 +610,7 @@ fn resolve_version_and_mode(
         };
         return Err(anyhow::anyhow!(
             "{}: {axis_b} selects Envelopes packaging mode, which requires SATySFi 0.1, \
-             but the language version resolved to {version}; pass --target-version 0.1, \
+             but the language version resolved to {version}; pass --lang 0.1, \
              or drop --deps / the `use` header",
             input.display()
         ));
@@ -707,6 +707,8 @@ fn sg_exit_code(err: &sg::Error) -> i32 {
         | HttpDisabled { .. }
         | HttpFailed { .. }
         | InvalidVersion { .. }
+        | HashFile { .. }
+        | HashKeyConflict { .. }
         | Offline { .. } => 5,
     }
 }

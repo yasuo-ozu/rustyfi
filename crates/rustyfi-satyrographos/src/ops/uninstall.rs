@@ -40,7 +40,14 @@ pub fn uninstall(name: &str, opts: &RootOptions) -> Result<(), Error> {
     let mut dirs_to_prune: Vec<PathBuf> = Vec::new();
     for file in &receipt.files {
         let path = stage::safe_join(&root, &file.dst)?;
-        util::remove_file_if_exists(&path)?;
+        if file.keys.is_some() {
+            // A shared `*.satysfi-hash`: take out this package's font entries
+            // and leave the other packages' standing. Deleting the file would
+            // uninstall every font in the root.
+            crate::ops::install::withdraw_keys(&root, file)?;
+        } else {
+            util::remove_file_if_exists(&path)?;
+        }
         if let Some(parent) = path.parent() {
             dirs_to_prune.push(parent.to_path_buf());
         }

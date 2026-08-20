@@ -49,6 +49,17 @@ impl StagingArea {
         std::fs::copy(src, &target).map_err(|e| Error::io(src, e))?;
         Ok(())
     }
+
+    /// Stage `contents` at `dst` — for a file this crate *computes* rather than
+    /// copies, which is the merged `*.satysfi-hash`.
+    pub fn stage_contents(&self, dst: &str, contents: &str) -> Result<(), Error> {
+        let target = safe_join(&self.root, dst)?;
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| Error::io(parent, e))?;
+        }
+        std::fs::write(&target, contents).map_err(|e| Error::io(&target, e))?;
+        Ok(())
+    }
 }
 
 impl Drop for StagingArea {

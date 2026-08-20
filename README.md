@@ -135,9 +135,9 @@ absolute positions and the real fonts embedded — a preview and visual-diff aid
 | `-o <path>` | output path (default: the input with a `.pdf` extension) |
 | `--format <fmt>` | `pdf` (default), `html`, `html-reflow` |
 | `--lib-root <dir>` | where `@require:` looks for packages |
-| `--target-version <v>` | `0.0` (default) or `0.1`; a `use` header auto-selects `0.1` |
+| `--lang <v>` | `0.0` (default) or `0.1`; a `use` header auto-selects `0.1` |
 | `--font <file>` | use a TrueType/OpenType file as the regular face |
-| `--font-dir <dir>` | font root holding `dist/hash/fonts.rustyfi-hash` |
+| `--font-dir <dir>` | font root holding `dist/hash/fonts.satysfi-hash` |
 | `--no-cache` | bypass the compile cache |
 | `--no-aux` | do not read or write the `.satysfi-aux` cross-reference file |
 | `--timing` | per-phase timing to stderr (load / typecheck / eval / render) |

@@ -76,11 +76,18 @@ pub(crate) fn remove_file_if_exists(path: &Path) -> Result<(), Error> {
 /// by receipts and the lockfile). The caller ensures `path`'s parent exists.
 pub(crate) fn write_toml_atomic<T: Serialize>(path: &Path, value: &T) -> Result<(), Error> {
     let text = toml::to_string_pretty(value).expect("value serialises to TOML");
+    write_atomic(path, text.as_bytes())
+}
+
+/// Write `bytes` to `path` through the same temp-then-rename discipline — what
+/// a shared `*.satysfi-hash` rewrite needs, since the typesetter may be reading
+/// the file while a package is being installed.
+pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), Error> {
     let tmp = match path.file_name().and_then(|n| n.to_str()) {
         Some(name) => path.with_file_name(format!(".{name}.tmp")),
         None => path.with_extension("tmp"),
     };
-    std::fs::write(&tmp, text).map_err(|e| Error::io(&tmp, e))?;
+    std::fs::write(&tmp, bytes).map_err(|e| Error::io(&tmp, e))?;
     std::fs::rename(&tmp, path).map_err(|e| Error::io(path, e))?;
     Ok(())
 }

@@ -44,7 +44,7 @@ to be to survive being put in a corner at 32 px.
 The logotype is set upright, in the face the port registers as `lmodern`.
 
 That name is worth checking rather than trusting: in
-`lib-rustyfi/dist/hash/fonts.rustyfi-hash`, `lmodern` points at
+`lib-rustyfi/dist/hash/fonts.satysfi-hash`, `lmodern` points at
 `latinmodern-math.otf` — the same file `lmmath` points at. Upstream's
 `lmroman10-regular.otf` is not in this port's roster at all, so what the mark is
 actually set in is Latin Modern Math's upright text alphabet. It is the right

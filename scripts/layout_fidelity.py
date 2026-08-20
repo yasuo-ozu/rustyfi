@@ -394,6 +394,29 @@ def all_words(pages: list[Page]) -> list[Word]:
 
 
 def line_count(pages: list[Page]) -> int:
+    """Words clustered by yMin within `LINE_Y_TOL`.
+
+    MEASUREMENT TRAP — this is the documented font-descriptor trap (see the
+    module docstring and `layout_probe.py`) reaching `line_count`, and it has
+    already misdirected one investigation. The two engines report a different
+    yMin for the SAME word on the SAME baseline, so a mixed CJK/latin line can
+    cluster as one line in one engine and two in the other with the layout
+    identical. On easytable p17, upstream's `(alias:` reports +3.49 from the
+    word beside it and the port's +0.63 — same baseline, one extra "line".
+
+    Sweeping the tolerance separates artifact from layout, because a real gap
+    is tolerance-stable and an artifact collapses (port minus upstream):
+
+        tol       1.0    2.0    3.0    4.0    6.0    8.0
+        easytable -180   -180    -36    -10    -10     +2
+        enumitem  -247   -247    -16    -11     -4      0
+        xpath      -54    -54     -9     -8     -7     -1
+
+    So the "36 lines short" easytable has looked for a while is ~10 at worst
+    and 0 within noise; the genuine residual is the line-packing floor recorded
+    in the port's own notes, not a 6% content deficit. Read a `lines` delta of
+    a few percent as noise unless a tolerance sweep says otherwise.
+    """
     total = 0
     for p in pages:
         ys = sorted(w.y0 for w in p.words)

@@ -150,6 +150,69 @@ fn note_stage(
     }
 }
 
+/// Splice compiler-generated cross-version glue at the END of `prelude` and
+/// tag it with `stage`, the DECLARED stage of the dependency whose bindings
+/// the glue names.
+///
+/// The stage is load-bearing, not bookkeeping. `Stage::can_reference` is not
+/// symmetric: a `@stage: persistent` binding may not read a default-stage one.
+/// Every generated wrapper/shadow here re-applies a dependency's own export by
+/// name, so splicing it at the default stage silently makes it unreadable from
+/// the very consumers X3b/X3c exist to serve — the failure surfaces as
+/// `invalid occurrence of variable .. as to stage`, which reads like a user
+/// error in a document that mentions neither binding. `unite_helper_prelude`
+/// already carries an explicit `Persistent0` for the same reason; this is that
+/// argument generalized, since a fixed stage would be wrong for a
+/// `@stage: 0`/default dependency the way the default is wrong for a
+/// persistent one.
+fn splice_staged(
+    prelude: &mut Vec<rustyfi_syntax::cst::TopBinding>,
+    stages: &mut std::collections::HashMap<usize, types::Stage>,
+    stage: Option<types::Stage>,
+    bindings: Vec<rustyfi_syntax::cst::TopBinding>,
+) {
+    let start = prelude.len();
+    prelude.extend(bindings);
+    if let Some(st) = stage {
+        stages.extend((start..prelude.len()).map(|i| (i, st)));
+    }
+}
+
+/// One [`v1::xver_adapt::deco_upgrade_prelude`] call per DISTINCT declared
+/// stage among `exports` (Slice X3c), each spliced at that stage.
+///
+/// Grouping rather than one flat call is what keeps [`splice_staged`]'s
+/// argument true when a program crosses exports from dependencies that
+/// declared DIFFERENT `@stage:` headers: the glue for each is emitted in its
+/// own contiguous, correctly-tagged run. With one stage (every real program so
+/// far) it is exactly one call, in `exports` order.
+fn splice_upgrade_glue(
+    prelude: &mut Vec<rustyfi_syntax::cst::TopBinding>,
+    stages: &mut std::collections::HashMap<usize, types::Stage>,
+    exports: &[(v1::xver_adapt::DecoExport, Option<types::Stage>)],
+    step: v1::xver_adapt::UpgradeStep,
+) {
+    let mut order: Vec<Option<types::Stage>> = Vec::new();
+    for (_, st) in exports {
+        if !order.contains(st) {
+            order.push(*st);
+        }
+    }
+    for st in order {
+        let group: Vec<v1::xver_adapt::DecoExport> = exports
+            .iter()
+            .filter(|(_, s)| *s == st)
+            .map(|(e, _)| e.clone())
+            .collect();
+        splice_staged(
+            prelude,
+            stages,
+            st,
+            v1::xver_adapt::deco_upgrade_prelude(&group, step),
+        );
+    }
+}
+
 /// [`compile_document_cst_with_aux`] told which merged prelude entries came
 /// from a file that declared a non-default `@stage:`.
 ///
@@ -456,7 +519,16 @@ pub fn compile_document_v1_with_aux(
     // private `Capture` of their WRAPPED view in the prelude — the schedule
     // grows as later dependencies cross more exports, and an `Install` may
     // only name a view that has been captured.
-    let mut deco_exports: Vec<v1::xver_adapt::DecoExport> = Vec::new();
+    //
+    // Each export is carried with the DECLARED STAGE of the dependency that
+    // exported it, because the glue NAMES that dependency's own binding and
+    // `Stage::can_reference` is not symmetric: a `@stage: persistent`
+    // dependency may not read a default-stage binding, so a `Restore` of
+    // `M.frame` spliced at the default stage would make the very consumer
+    // this slice exists for fail with a STAGE error instead of a type one.
+    // Same reasoning as `unite_helper_prelude`'s explicit `Persistent0`, one
+    // step further: the right stage is the dependency's, not a fixed one.
+    let mut deco_exports: Vec<(v1::xver_adapt::DecoExport, Option<types::Stage>)> = Vec::new();
     let mut v006_view_installed = false;
     let mut deco_view_captured: usize = 0;
     for dep in deps {
@@ -466,10 +538,12 @@ pub fn compile_document_v1_with_aux(
                 // reads any crossed export at the adapted 0.1 shape, which is
                 // what X3b's wrapper is for.
                 if v006_view_installed {
-                    prelude.extend(v1::xver_adapt::deco_upgrade_prelude(
+                    splice_upgrade_glue(
+                        &mut prelude,
+                        &mut stages,
                         &deco_exports[..deco_view_captured],
                         v1::xver_adapt::UpgradeStep::Install,
-                    ));
+                    );
                     v006_view_installed = false;
                 }
                 v1::surface::build_file_surface(cst, &mut surfaces);
@@ -492,16 +566,20 @@ pub fn compile_document_v1_with_aux(
                 // the pre-X3c splice.
                 if !v006_view_installed || deco_view_captured < deco_exports.len() {
                     if deco_view_captured < deco_exports.len() {
-                        prelude.extend(v1::xver_adapt::deco_upgrade_prelude(
+                        splice_upgrade_glue(
+                            &mut prelude,
+                            &mut stages,
                             &deco_exports[deco_view_captured..],
                             v1::xver_adapt::UpgradeStep::Capture,
-                        ));
+                        );
                         deco_view_captured = deco_exports.len();
                     }
-                    prelude.extend(v1::xver_adapt::deco_upgrade_prelude(
+                    splice_upgrade_glue(
+                        &mut prelude,
+                        &mut stages,
                         &deco_exports,
                         v1::xver_adapt::UpgradeStep::Restore,
-                    ));
+                    );
                     v006_view_installed = !deco_exports.is_empty();
                 }
                 // X2a: the value half of X1's forked-name guard
@@ -750,13 +828,27 @@ pub fn compile_document_v1_with_aux(
                     // (`inject_module_deco_wrappers`), where the same
                     // sequential shadowing applies one scope deeper.
                     v1::xver_adapt::inject_module_deco_wrappers(&mut prelude[start..], &exports);
-                    prelude.extend(v1::xver_adapt::deco_coercion_prelude(&exports));
+                    // At the DEPENDENCY's own stage, not the default one: this
+                    // top-level wrapper re-applies the dependency's export by
+                    // name, and a `@stage: persistent` dependency's binding is
+                    // unreadable from a default-stage one (`splice_staged`).
+                    // The in-module wrappers above need no such care — they
+                    // are spliced INSIDE `prelude[start..]`, already covered by
+                    // this dependency's own `note_stage` range.
+                    let dep_stage =
+                        declared_stage(cst).filter(|s| *s != types::Stage::default());
+                    splice_staged(
+                        &mut prelude,
+                        &mut stages,
+                        dep_stage,
+                        v1::xver_adapt::deco_coercion_prelude(&exports),
+                    );
                     // Slice X3c: from here on this export has TWO views in the
                     // program — the wrapper just spliced, and the unwrapped
                     // original the two injectors above kept reachable under
                     // `xver-fwd-orig-`. Record it so the transitions can pick
                     // the right one for whatever block comes next.
-                    deco_exports.extend(exports);
+                    deco_exports.extend(exports.into_iter().map(|e| (e, dep_stage)));
                 }
             }
         }
@@ -767,10 +859,12 @@ pub fn compile_document_v1_with_aux(
     // shape. Emitted only if some intervening 0.0.6 dependency restored the
     // originals; with no such dependency the whole schedule stays silent.
     if v006_view_installed {
-        prelude.extend(v1::xver_adapt::deco_upgrade_prelude(
+        splice_upgrade_glue(
+            &mut prelude,
+            &mut stages,
             &deco_exports[..deco_view_captured],
             v1::xver_adapt::UpgradeStep::Install,
-        ));
+        );
     }
     let entry_cst = as_v01(entry);
     let body = v1::lower::lower_document_v1(entry_cst)?;

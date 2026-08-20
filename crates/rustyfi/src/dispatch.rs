@@ -36,6 +36,7 @@ pub fn build_cli() -> Command {
             compile_command("rustyfi")
                 .subcommand(satyrographos_command())
                 .subcommand(multicall_command())
+                .subcommand(man_command())
                 .args_conflicts_with_subcommands(true)
                 .subcommand_negates_reqs(true),
         )
@@ -321,6 +322,15 @@ fn satyrographos_command() -> Command {
 }
 
 /// The hidden `multicall install --dir DIR` alias helper (plan §4.5).
+/// `rustyfi man` — write this program's man page, in roff, to stdout. Hidden
+/// because it is a packaging step (the release archive pipes it into
+/// `share/man/man1/rustyfi.1`), not something a user needs in `--help`.
+fn man_command() -> Command {
+    Command::new("man")
+        .about("Write the man page (roff) to stdout.")
+        .hide(true)
+}
+
 fn multicall_command() -> Command {
     Command::new("multicall")
         .about("Install `rustyfi`/`satyrographos` aliases of this binary.")

@@ -37,6 +37,9 @@ flate2 = "1"
 sha2 = "0.10"
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
+# Renders the man page from the same `clap::Command` the CLI parses with,
+# so the page cannot describe a different program than the one installed.
+clap_mangen = "0.2"
 pdf-writer = "0.13"
 safegraph = "0.1"
 ttf-parser = "0.25"

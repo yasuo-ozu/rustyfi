@@ -26,6 +26,7 @@ use clap::ArgMatches;
 mod cache;
 mod dispatch;
 mod format;
+mod man;
 
 /// Read an auxiliary cross-reference table, or an empty one if the file is
 /// absent, unreadable, or not the flat `{"key": "value"}` object upstream
@@ -83,6 +84,13 @@ fn run() -> i32 {
         Some(("rustyfi", m)) => match m.subcommand() {
             Some(("satyrographos", sm)) => run_satyrographos(sm),
             Some(("multicall", sm)) => run_multicall(sm),
+            Some(("man", _)) => match man::render(&mut std::io::stdout().lock()) {
+                Ok(()) => 0,
+                Err(e) => {
+                    eprintln!("error: writing the man page: {e}");
+                    1
+                }
+            },
             _ => run_compile(m),
         },
         // Bare `satyrographos` personality.

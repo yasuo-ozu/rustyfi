@@ -1,0 +1,69 @@
+.SH ENVIRONMENT
+.TP
+.B RUSTYFI_LIB_ROOT
+Library root, when
+.B \-\-lib\-root
+is not given.
+.TP
+.B RUSTYFI_FONT_DIR
+Font root, when
+.B \-\-font\-dir
+is not given.
+.TP
+.B XDG_CACHE_HOME
+Base of the compile-cache directory.
+.TP
+.B RUSTYFI_OFFLINE
+Make the package manager fail cleanly instead of reaching the network.
+.TP
+.B RUSTYFI_REGISTRY_TOKEN
+Bearer token for registry tarball downloads over HTTP.
+.SH FILES
+.TP
+.I <lib\-root>/dist/packages/
+SATySFi 0.0 packages.
+.TP
+.I <lib\-root>/dist\-v01/packages/
+SATySFi 0.1 packages.
+.TP
+.I <lib\-root>/dist/fonts/
+Bundled font files, each with its licence beside it.
+.TP
+.I <lib\-root>/dist/hash/fonts.rustyfi\-hash
+Maps a font name used by a document to the file that provides it;
+.I default\-font.rustyfi\-hash
+names the regular, bold, oblique and math defaults.
+.TP
+.I <doc>.satysfi\-aux
+Cross-reference table, in the same JSON format upstream SATySFi writes, so the
+two interoperate.
+.SH EXIT STATUS
+.B 0
+on success, non-zero if the document fails to load, typecheck, evaluate or
+render, or if a package operation fails.
+.SH EXAMPLES
+Compile a document with the packages and fonts from an unpacked release:
+.PP
+.RS 4
+.EX
+$ export RUSTYFI_LIB_ROOT=/opt/rustyfi/lib/rustyfi
+$ rustyfi doc.saty \-o doc.pdf
+.EE
+.RE
+.PP
+Preview the same layout in a browser, and see where the time goes:
+.PP
+.RS 4
+.EX
+$ rustyfi doc.saty \-\-format html
+$ rustyfi doc.saty \-\-timing
+.EE
+.RE
+.SH SEE ALSO
+The project README and manual, and upstream SATySFi:
+.UR https://github.com/gfngfn/SATySFi
+.UE .
+.SH LICENSE
+LGPL-3.0. The bundled fonts keep their own licences, which travel beside them
+in
+.IR <lib\-root>/dist/fonts/ .

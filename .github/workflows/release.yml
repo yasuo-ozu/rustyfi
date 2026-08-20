@@ -1,9 +1,5 @@
 name: Release
 
-# Fires when a release is PUBLISHED, not when a tag is pushed: a draft release
-# can be prepared, edited and published deliberately, and only then do binaries
-# get built and attached. `workflow_dispatch` is the escape hatch for
-# re-running a build against an existing tag without re-publishing.
 on:
   release:
     types: [published]
@@ -20,42 +16,77 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  TAG: ${{ github.event.release.tag_name || inputs.tag }}
+
+defaults:
+  run:
+    shell: bash -Eeuo pipefail {0}
 
 jobs:
+  fonts:
+    runs-on: ubuntu-latest
+    env:
+      RUSTYFI_FONTCACHE: ${{ github.workspace }}/.fontcache
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - name: Cache the pinned downloads
+        uses: actions/cache@v4
+        with:
+          path: .fontcache
+          key: fonts-${{ hashFiles('scripts/download-fonts.sh') }}
+
+      - name: Fetch the pinned faces
+        run: sh scripts/download-fonts.sh
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: fonts
+          path: |
+            lib-rustyfi/dist/fonts
+            lib-rustyfi/dist/hash
+          retention-days: 1
+
   build:
     name: ${{ matrix.target }}
+    needs: fonts
     runs-on: ${{ matrix.os }}
+    env:
+      DIR: rustyfi-${{ github.event.release.tag_name || inputs.tag }}-${{ matrix.target }}
     strategy:
-      # One platform failing must not strand the others: a release with four of
-      # five archives attached is recoverable by re-running the one job, whereas
-      # fail-fast would cancel builds that were about to succeed.
       fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             archive: tar.gz
+            exe: ""
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             archive: tar.gz
-          # `macos-15-intel` is the x86_64 macOS runner: macos-14 and later are
-          # arm64 by default, so this is the only way to get an Intel build
-          # without cross-compiling.
+            exe: ""
           - os: macos-15-intel
             target: x86_64-apple-darwin
             archive: tar.gz
+            exe: ""
           - os: macos-latest
             target: aarch64-apple-darwin
             archive: tar.gz
+            exe: ""
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             archive: zip
+            exe: .exe
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.release.tag_name || inputs.tag }}
+          ref: ${{ env.TAG }}
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -67,82 +98,63 @@ jobs:
         with:
           key: release-${{ matrix.target }}
 
-      # Only the binary. The rest of the workspace is libraries it already
-      # links, and building `--workspace` here would compile the test-only
-      # dependencies for no benefit.
       - name: Build
         run: cargo build --release --locked --bin rustyfi --target ${{ matrix.target }}
 
-      # A cross-built archive that cannot start is worth catching here rather
-      # than in someone's download. Native runners per target, so this always
-      # runs the artifact that ships.
-      #
-      # Both branches go through `format()`: `${{ }}` does NOT nest inside a
-      # string literal within an expression, so the Windows arm written as
-      # 'target\${{ matrix.target }}\release\rustyfi.exe' would run that text
-      # verbatim, with the placeholder unexpanded, and fail.
       - name: Smoke test
-        run: ${{ matrix.target == 'x86_64-pc-windows-msvc' && format('target\{0}\release\rustyfi.exe --version', matrix.target) || format('./target/{0}/release/rustyfi --version', matrix.target) }}
+        run: ./target/${{ matrix.target }}/release/rustyfi${{ matrix.exe }} --version
 
-      # THE BUNDLED PACKAGES ARE NOT OPTIONAL. `rustyfi doc.saty` resolves
-      # `@require: stdja` against a lib-root, so a bare binary cannot typeset
-      # anything that uses the standard library. The 30 `.satyh`/`.satyg`
-      # packages are committed (260 KB) and ship with it.
+      #   bin/rustyfi[.exe]
+      #   lib/rustyfi/dist/packages/          0.0 packages
+      #   lib/rustyfi/dist/fonts/             the faces + licences  (artifact)
+      #   lib/rustyfi/dist/hash/              font name -> file     (artifact)
+      #   lib/rustyfi/dist-v01/packages/      0.1 packages
+      #   share/man/man1/rustyfi.1
+      #   share/doc/rustyfi/README.md
       #
-      # THE FONTS ARE NOT BUNDLED, deliberately. They are fetched by
-      # `scripts/download-fonts.sh` (sha1-pinned, each licence text copied
-      # beside the font it covers), and that script needs `fc-match` for one of
-      # them, which does not exist on the Windows runner — an archive whose
-      # contents differ by platform is worse than one that is honestly
-      # incomplete. Without them the port falls back to the base-14 PDF fonts
-      # and CJK will not render; RELEASE.md in the archive says so.
-      - name: Stage archive (unix)
-        if: runner.os != 'Windows'
-        shell: bash
+      # `lib/rustyfi` is one complete lib root — both corpora `@require:`
+      # resolves against, and where the font registry reads
+      # `dist/hash/*.rustyfi-hash` — so one `--lib-root`/`$RUSTYFI_LIB_ROOT`
+      # covers packages and fonts together.
+      - name: Stage archive
         run: |
-          set -euo pipefail
-          TAG="${{ github.event.release.tag_name || inputs.tag }}"
-          DIR="rustyfi-${TAG}-${{ matrix.target }}"
-          mkdir -p "stage/$DIR"
-          cp "target/${{ matrix.target }}/release/rustyfi" "stage/$DIR/"
-          mkdir -p "stage/$DIR/lib-rustyfi/dist"
-          cp -r lib-rustyfi/dist/packages "stage/$DIR/lib-rustyfi/dist/"
-          cp README.md "stage/$DIR/"
-          sed -e "s|@TAG@|${TAG}|g" -e "s|@TARGET@|${{ matrix.target }}|g" \
-              .github/release-README.md > "stage/$DIR/RELEASE.md"
-          tar -C stage -czf "${DIR}.tar.gz" "$DIR"
-          shasum -a 256 "${DIR}.tar.gz" > "${DIR}.tar.gz.sha256"
+          mkdir -p "stage/$DIR/bin" "stage/$DIR/lib/rustyfi" \
+                   "stage/$DIR/share/doc/rustyfi" "stage/$DIR/share/man/man1"
+          cp "target/${{ matrix.target }}/release/rustyfi${{ matrix.exe }}" "stage/$DIR/bin/"
+          cp -r lib-rustyfi/dist lib-rustyfi/dist-v01 "stage/$DIR/lib/rustyfi/"
+          "target/${{ matrix.target }}/release/rustyfi${{ matrix.exe }}" man \
+              > "stage/$DIR/share/man/man1/rustyfi.1"
+          test -s "stage/$DIR/share/man/man1/rustyfi.1"
+          cp README.md "stage/$DIR/share/doc/rustyfi/"
+          find "stage/$DIR" -name .gitignore -delete
 
-      - name: Stage archive (windows)
-        if: runner.os == 'Windows'
+      - name: Add the bundled fonts
+        uses: actions/download-artifact@v4
+        with:
+          name: fonts
+          path: stage/${{ env.DIR }}/lib/rustyfi/dist
+
+      - name: Pack (tar.gz)
+        if: matrix.archive == 'tar.gz'
+        run: |
+          tar -C stage -czf "$DIR.${{ matrix.archive }}" "$DIR"
+          shasum -a 256 "$DIR.${{ matrix.archive }}" > "$DIR.${{ matrix.archive }}.sha256"
+
+      - name: Pack (zip)
+        if: matrix.archive == 'zip'
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $tag = "${{ github.event.release.tag_name || inputs.tag }}"
-          $dir = "rustyfi-$tag-${{ matrix.target }}"
-          New-Item -ItemType Directory -Force -Path "stage/$dir" | Out-Null
-          Copy-Item "target/${{ matrix.target }}/release/rustyfi.exe" "stage/$dir/"
-          New-Item -ItemType Directory -Force -Path "stage/$dir/lib-rustyfi/dist" | Out-Null
-          Copy-Item -Recurse "lib-rustyfi/dist/packages" "stage/$dir/lib-rustyfi/dist/"
-          Copy-Item "README.md" "stage/$dir/"
-          (Get-Content .github/release-README.md) `
-            -replace '@TAG@', $tag -replace '@TARGET@', '${{ matrix.target }}' |
-            Set-Content "stage/$dir/RELEASE.md"
-          Compress-Archive -Path "stage/$dir" -DestinationPath "$dir.zip"
-          (Get-FileHash "$dir.zip" -Algorithm SHA256).Hash.ToLower() + "  $dir.zip" |
-            Set-Content "$dir.zip.sha256"
+          Compress-Archive -Path "stage/${env:DIR}" -DestinationPath "${env:DIR}.${{ matrix.archive }}"
+          (Get-FileHash "${env:DIR}.${{ matrix.archive }}" -Algorithm SHA256).Hash.ToLower() +
+            "  ${env:DIR}.${{ matrix.archive }}" | Set-Content "${env:DIR}.${{ matrix.archive }}.sha256"
 
-      # `gh` is preinstalled on every GitHub runner, so this needs no
-      # third-party action and no token beyond the workflow's own.
       # `--clobber` makes a re-run idempotent instead of a duplicate-asset error.
       - name: Upload to the release
-        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          set -euo pipefail
-          TAG="${{ github.event.release.tag_name || inputs.tag }}"
           gh release upload "$TAG" \
-            rustyfi-${TAG}-${{ matrix.target }}.${{ matrix.archive }} \
-            rustyfi-${TAG}-${{ matrix.target }}.${{ matrix.archive }}.sha256 \
+            "$DIR.${{ matrix.archive }}" \
+            "$DIR.${{ matrix.archive }}.sha256" \
             --repo "${{ github.repository }}" --clobber

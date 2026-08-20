@@ -2516,6 +2516,24 @@ fn glyphs_extent(glyphs: &[MathGlyph]) -> (Length, Length) {
 /// bar/radical sign, needs its own bbox folded in rather than being silently
 /// undercounted). §B3b(i) reuses this to size a stretchy delimiter to its
 /// enclosed run's REAL ink (glyphs + any drawn rules), not just its glyphs.
+///
+/// This — NOT bare `glyphs_extent` — is what every `layout_math_value` arm
+/// must use for a sub-run's `h_base`/`d_base`/`d_sup`/`h_sub`/`d_numer`/…,
+/// because it is upstream's `convert_to_low` return value: each arm's
+/// `(_, h, d, _, _)` is the whole sub-run's `h_whole`/`d_whole`, and a
+/// `MathParen`'s is `max(hC, hL, hR)` / `min(dC, dL, dR)` over the
+/// DELIMITER boxes too (`math.ml:908-909`). A `math.satyh` delimiter is
+/// `inline-graphics` ink, so it lands in `rules` and in nothing else: with
+/// `glyphs_extent` a `\paren{…}` base reported only its CONTENT's height,
+/// which is smaller than the delimiter it just sized, and
+/// `sup_shift_clamped`'s `h_base - SuperscriptBaselineDropMax` candidate
+/// therefore lost when upstream's wins. `${\paren{\frac{1}{1-v}}^{2}}` at
+/// 12pt: `h_base` 16.116pt (content) vs upstream's 17.316pt (`hgtaxis +
+/// halflen`, the paren's own declared box), i.e. a 1.2pt-too-low superscript
+/// — `scripts/layout_probes/math_box_extent.saty` row 4. The bbox of
+/// `math.satyh`'s `paren-left`/`angle-left`/… path is exactly that declared
+/// box (its extreme points ARE `ycenter ± halflen`), so folding the rule in
+/// reproduces upstream's number rather than approximating it.
 fn inner_ink_extent(glyphs: &[MathGlyph], rules: &[GraphicsElem]) -> (Length, Length) {
     let (mut height, mut depth) = glyphs_extent(glyphs);
     for r in rules {
@@ -7811,9 +7829,9 @@ fn layout_math_atom(
                     layout_math_list(interp, &sub_ctx, &sub_script, script_size)?;
                 let (sup_glyphs, sup_rules, sup_width, _, _) =
                     layout_math_list(interp, ctx, script, script_size)?;
-                let (h_base, d_base) = glyphs_extent(&glyphs);
-                let (_, d_sup) = glyphs_extent(&sup_glyphs);
-                let (h_sub, _) = glyphs_extent(&sub_glyphs);
+                let (h_base, d_base) = inner_ink_extent(&glyphs, &rules);
+                let (_, d_sup) = inner_ink_extent(&sup_glyphs, &sup_rules);
+                let (h_sub, _) = inner_ink_extent(&sub_glyphs, &sub_rules);
                 let sup_shift_raw = mc.sup_shift_clamped(ctx.font_size, h_base, d_sup);
                 let sub_shift_raw = mc.sub_shift_clamped(ctx.font_size, d_base, h_sub);
                 let (sup_shift, sub_shift) = mc.correct_script_gap(
@@ -7884,8 +7902,8 @@ fn layout_math_atom(
             let script_size = size * mc.script_scale();
             let (script_glyphs, script_rules, script_width, _, _) =
                 layout_math_list(interp, ctx, script, script_size)?;
-            let (h_base, _) = glyphs_extent(&glyphs);
-            let (_, d_sup) = glyphs_extent(&script_glyphs);
+            let (h_base, _) = inner_ink_extent(&glyphs, &rules);
+            let (_, d_sup) = inner_ink_extent(&script_glyphs, &script_rules);
             let sup_shift = mc.sup_shift_clamped(ctx.font_size, h_base, d_sup);
             // §B3b-2 Edit A: a paren base has no italic correction / glyph
             // corner kern to sample (`superscript_kern`'s own last-glyph
@@ -7949,8 +7967,8 @@ fn layout_math_atom(
             };
             let (script_glyphs, script_rules, script_width, _, _) =
                 layout_math_list(interp, &sub_ctx, script, script_size)?;
-            let (_, d_base) = glyphs_extent(&glyphs);
-            let (h_sub, _) = glyphs_extent(&script_glyphs);
+            let (_, d_base) = inner_ink_extent(&glyphs, &rules);
+            let (h_sub, _) = inner_ink_extent(&script_glyphs, &script_rules);
             let sub_shift = mc.sub_shift_clamped(ctx.font_size, d_base, h_sub);
             // §B3b-2 Edit B: no non-paren subscript kern existed before this
             // slice (`kern = Length::ZERO` implicitly) — a paren base's
@@ -8015,8 +8033,8 @@ fn layout_math_atom(
             // (`math.ml:1140-1155`'s symmetric padding).
             let num_dx = (w - num_w) * 0.5;
             let den_dx = (w - den_w) * 0.5;
-            let (_, d_numer) = glyphs_extent(&num_glyphs);
-            let (h_denom, _) = glyphs_extent(&den_glyphs);
+            let (_, d_numer) = inner_ink_extent(&num_glyphs, &num_rules);
+            let (h_denom, _) = inner_ink_extent(&den_glyphs, &den_rules);
             let mc = MathC::of(interp, ctx);
             let numer_shift = mc.frac_numer_shift(size, d_numer);
             let denom_shift = mc.frac_denom_shift(size, h_denom);
@@ -8075,7 +8093,7 @@ fn layout_math_atom(
             };
             let (inner_glyphs, inner_rules, inner_w, ..) =
                 layout_math_list(interp, &radicand_ctx, inner, size)?;
-            let (h_cont, d_cont) = glyphs_extent(&inner_glyphs);
+            let (h_cont, d_cont) = inner_ink_extent(&inner_glyphs, &inner_rules);
             let mc = MathC::of(interp, ctx);
             let (h_bar, t_bar, l_extra) = mc.radical_bar_metrics(size, h_cont);
             // `_nonnegdpt` (the sign's own, slightly deeper, ink extent —
@@ -8251,8 +8269,8 @@ fn layout_math_atom(
             let script_size = size * mc.script_scale();
             let (script_glyphs, script_rules, script_width, _, _) =
                 layout_math_list(interp, ctx, upper, script_size)?;
-            let (h_base, _) = glyphs_extent(&glyphs);
-            let (_, d_up) = glyphs_extent(&script_glyphs);
+            let (h_base, _) = inner_ink_extent(&glyphs, &rules);
+            let (_, d_up) = inner_ink_extent(&script_glyphs, &script_rules);
             let up_shift = mc.upper_limit_shift(ctx.font_size, h_base, d_up);
             // A LIMIT is CENTERED over its base, not set beside it
             // (`math.ml:1219-1231`: upstream pads the narrower of the two with
@@ -8279,8 +8297,8 @@ fn layout_math_atom(
             let script_size = size * mc.script_scale();
             let (script_glyphs, script_rules, script_width, _, _) =
                 layout_math_list(interp, ctx, lower, script_size)?;
-            let (_, d_base) = glyphs_extent(&glyphs);
-            let (h_low, _) = glyphs_extent(&script_glyphs);
+            let (_, d_base) = inner_ink_extent(&glyphs, &rules);
+            let (h_low, _) = inner_ink_extent(&script_glyphs, &script_rules);
             let low_shift = mc.lower_limit_shift(ctx.font_size, d_base, h_low);
             // Centered under the base — see the `UpperLimit` arm above.
             let (base_dx, script_dx) = center_offsets(base_width, script_width);

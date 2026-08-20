@@ -531,8 +531,18 @@ pub fn compile_document_v1_with_aux(
                 // rejected, tagged `"X3"` (the type half's check moved: it
                 // now runs `v1::xver_adapt`'s classification instead of a
                 // bare set-membership test).
+                // `reject_type_names_from_v006`, not the shared
+                // `reject_type_names`: this dependency's text is 0.0.6-
+                // AUTHORED, and `code` forks only in that reading (0.0.6 has
+                // no `code` spelling, so `τ code` is an opaque nominal there,
+                // while the merged program's hard-coded `V0_1` `Checker` reads
+                // the same text as the real staged type). The reverse arm
+                // keeps the shared set — a foreign 0.1 dependency's `code` is
+                // already in the ambient vocabulary. See that function's doc
+                // comment; an INFERRED `code` export writes no type text and
+                // is unaffected either way.
                 let free = collect_free_globals(&cst.prelude);
-                let reject_t = v1::xver_adapt::reject_type_names();
+                let reject_t = v1::xver_adapt::reject_type_names_from_v006();
                 let touched: std::collections::BTreeSet<String> =
                     free.types.intersection(&reject_t).cloned().collect();
                 // Anything outside X3a/X3b's combined whitelist (`math`,
@@ -837,6 +847,28 @@ pub fn compile_document_v006_xver_with_aux(
     // Slice X4b: the qualified member keys (`"M.frame"`) this arm rebinds to
     // a version-adapted view, exempted from a SECOND `:>` seal check below.
     let mut xver_shadows: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // Slice X4b placement: every `deco`/`deco-set` export crossed so far, and
+    // whether the 0.0.6-shaped VIEW of them is the one currently installed at
+    // this point in the merged prelude.
+    //
+    // The prelude is one flat `Ast::LetIn` chain and `Ast::VersionScope(V0_0,
+    // _)` wraps a binding's RHS, not the continuation after it, so a rebinding
+    // of `M.frame` is visible to EVERYTHING that follows regardless of which
+    // generation authored it. What makes a position-indexed view sufficient is
+    // that each block spliced below is homogeneous — a `V0_0` dependency's
+    // whole `prelude` goes into `v006_indices`, a `V0_1` dependency's whole
+    // `lowered` stays out of it, the entry (always 0.0.6-authored) is last —
+    // and that the loader orders dependencies topologically, so a consumer's
+    // block always follows what it `@require:`s. So the coerced view is
+    // installed lazily on entering a 0.0.6-authored block and put back on
+    // entering a 0.1-authored one; see `xver_adapt::deco_downgrade_prelude`'s
+    // **Placement** section for the full derivation.
+    //
+    // Both transitions are lazy, so the common case (every 0.1 dependency,
+    // then the 0.0.6 entry — every bundled package) emits exactly one install
+    // and no restore at all.
+    let mut deco_exports: Vec<v1::xver_adapt::DecoExport> = Vec::new();
+    let mut v006_view_installed = false;
 
     for (i, dep) in files.iter().enumerate() {
         if i == entry_idx {
@@ -849,6 +881,17 @@ pub fn compile_document_v006_xver_with_aux(
             // `compile_document_cst_with_trials`'s own pure 0.0.6 path
             // (§X4.3 item 4).
             rustyfi_loader::LoadedCst::V0_0(cst) => {
+                // Transition INTO 0.0.6-authored code: this dependency reads
+                // any crossed `deco` export at 0.0.6's `graphics list` shape.
+                // Deliberately BEFORE `start` is taken, so the generated glue
+                // (0.1-authored) never lands in `v006_indices`/`stages`.
+                if !v006_view_installed && !deco_exports.is_empty() {
+                    prelude.extend(v1::xver_adapt::deco_downgrade_prelude(
+                        &deco_exports,
+                        v1::xver_adapt::DowngradeStep::Install,
+                    ));
+                    v006_view_installed = true;
+                }
                 let start = prelude.len();
                 prelude.extend(cst.prelude.iter().cloned());
                 v006_indices.extend(start..prelude.len());
@@ -920,18 +963,28 @@ pub fn compile_document_v006_xver_with_aux(
             //      grammar can name a `deco` export's type at all — an
             //      ordinary `val` carries no ascription syntax, and lowering
             //      DROPS `sig_annot` entirely, so this scan must happen
-            //      here and not off `lowered`). Anything it cannot express
-            //      as a POSITIONAL eta-expansion — a `paren`, an
-            //      optional-argument arrow, a `deco` buried in a compound or
-            //      behind a nested `module` decl — still REJECTS, with the
-            //      same clear `slice: "X4b"` diagnostic as before.
-            //   2. `deco_downgrade_prelude` splices the coercion shadows
-            //      immediately AFTER the dependency: a top-level rebinding of
+            //      here and not off `lowered`). It descends through nested
+            //      `module`/`include` decls and dereferences named signature
+            //      references against `surfaces` — which is exactly why
+            //      `build_file_surface` above must run FIRST, so this
+            //      dependency's own `signature S = ..` binds are already
+            //      registered. Anything it still cannot express — a `paren`,
+            //      a `deco` buried in a compound, an OPEN optional row, or a
+            //      `deco` behind a functor signature member (whose members
+            //      have no member path at all until some later file APPLIES
+            //      it) — REJECTS, with the same clear `slice: "X4b"`
+            //      diagnostic as before.
+            //   2. `deco_downgrade_prelude` generates the coercion glue: a
+            //      private `Capture` of the 0.1 original immediately after the
+            //      dependency, then an `Install` — a top-level rebinding of
             //      each export's own qualified key (`M.frame`) whose body
-            //      re-applies the original positionally and wraps the result
-            //      in a singleton list. Deliberately NOT added to
-            //      `v006_indices` — this is `V0_1`-authored glue, exactly
-            //      like the forward arm's `deco_coercion_prelude`.
+            //      re-applies the captured original positionally and wraps the
+            //      result in a singleton list — deferred to the next
+            //      0.0.6-authored block, and a `Restore` on the way back into
+            //      a 0.1-authored one (see `deco_exports`/`v006_view_installed`
+            //      above). None of it is added to `v006_indices` — this is
+            //      `V0_1`-authored glue, exactly like the forward arm's
+            //      `deco_coercion_prelude`.
             //   3. those qualified keys are collected into `xver_shadows` and
             //      handed to `check_program_with_xver_shadows` below, which
             //      exempts the SECOND `Ast::LetIn` of each from the `:>`
@@ -945,6 +998,16 @@ pub fn compile_document_v006_xver_with_aux(
             // `val` item at all, so this scan never sees it, and it splices
             // verbatim exactly like any other unconstrained mention.
             rustyfi_loader::LoadedCst::V0_1(cst) => {
+                // Transition back INTO 0.1-authored code: this dependency
+                // reads any crossed `deco` export at 0.1's own single-
+                // `graphics` shape, which is the whole point of the schedule.
+                if v006_view_installed {
+                    prelude.extend(v1::xver_adapt::deco_downgrade_prelude(
+                        &deco_exports,
+                        v1::xver_adapt::DowngradeStep::Restore,
+                    ));
+                    v006_view_installed = false;
+                }
                 v1::surface::build_file_surface(cst, &mut surfaces);
                 let lowered = v1::lower::lower_file_v1_with_surfaces(cst, &surfaces)?;
 
@@ -968,27 +1031,47 @@ pub fn compile_document_v006_xver_with_aux(
                 // invisible to this POST-lowering scan (sig is dropped) and
                 // is instead classified by the PRE-lowering scan just below,
                 // independently of `touched`.
-                let deco_exports =
-                    v1::xver_adapt::classify_deco_exports_v01_sig(cst).map_err(|be| {
-                        CompileError::CrossVersionUnsupportedName {
-                            name: match &be {
-                                v1::xver_adapt::BoundaryError::ForkedTypeExport {
-                                    ty_name, ..
-                                } => ty_name.clone(),
-                            },
-                            dep: dep.path.display().to_string(),
-                            slice: "X4b",
+                let dep_deco_exports = v1::xver_adapt::classify_deco_exports_v01_sig(
+                    cst, &surfaces,
+                )
+                .map_err(|be| CompileError::CrossVersionUnsupportedName {
+                    name: match &be {
+                        v1::xver_adapt::BoundaryError::ForkedTypeExport { ty_name, .. } => {
+                            ty_name.clone()
                         }
-                    })?;
+                    },
+                    dep: dep.path.display().to_string(),
+                    slice: "X4b",
+                })?;
 
                 prelude.extend(lowered);
-                prelude.extend(v1::xver_adapt::deco_downgrade_prelude(&deco_exports));
-                for exp in &deco_exports {
+                // The private capture goes here and only here: `M.frame` is
+                // bound by `lowered` just above, and the 0.1 view is in force
+                // at this point (the `Restore` above guarantees it), so this
+                // is the one position where naming `M.frame` yields the
+                // uncoerced original every later `Install` has to wrap.
+                prelude.extend(v1::xver_adapt::deco_downgrade_prelude(
+                    &dep_deco_exports,
+                    v1::xver_adapt::DowngradeStep::Capture,
+                ));
+                for exp in &dep_deco_exports {
                     xver_shadows.insert(v1::xver_adapt::deco_export_qualified_name(exp));
                 }
+                deco_exports.extend(dep_deco_exports);
                 dep_csts.push(cst);
             }
         }
+    }
+
+    // The last (and, for every bundled package, the ONLY) transition into
+    // 0.0.6-authored code: the entry's own prelude AND its document tail are
+    // both wrapped in `Ast::VersionScope(V0_0, _)` below, so both read a
+    // crossed `deco` export at 0.0.6's `graphics list` shape.
+    if !v006_view_installed && !deco_exports.is_empty() {
+        prelude.extend(v1::xver_adapt::deco_downgrade_prelude(
+            &deco_exports,
+            v1::xver_adapt::DowngradeStep::Install,
+        ));
     }
 
     // Entry's OWN top-level lets: splice + wrap, same as a native 0.0.6 dep

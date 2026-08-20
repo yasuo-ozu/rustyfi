@@ -304,6 +304,41 @@ fn a_document_stage_val_is_not_nameable_from_inside_a_splice() {
     );
 }
 
+/// The `(Stage1, Persistent0)` cell is the ONE cell `dev-0-1-0` compiles to a
+/// distinct node — `Persistent(rng, evid)` rather than `ContentOf(rng, evid)`
+/// (`typechecker.ml:346-347`; 0.0.6 emits it for all three persistent rows,
+/// `typechecker.ml:670-671`). `staging.rs`'s own `(Stage1, Persistent0)` block
+/// says at length what that node is FOR and why this port's closure-valued
+/// quote is its equivalent; this is the 0.1 twin, because the cell is reached
+/// through a different surface here (`val persistent ~p`, per binding) and
+/// because 0.1 is the generation that RESTRICTED the node to this cell —
+/// `interpret_0` reports a bug if it ever sees one (`evaluator.cppo.ml:404-405`).
+#[test]
+fn a_persistent_val_named_from_inside_a_quote_evaluates_to_its_value() {
+    // `val ~c = &(p)`: the quote is at stage 0, its body at stage 1, and `p` is
+    // persistent — exactly the cell. The document then splices it.
+    let v = compile_v01(
+        "module M = struct val persistent ~p = 10  val ~c = &(p) end",
+        "~M.c",
+    )
+    .unwrap();
+    assert_eq!(as_int(v), 10);
+}
+
+#[test]
+fn a_quoted_persistent_val_is_not_captured_at_the_splice_site() {
+    // The hygiene half: upstream's `CdPersistent` carries the `EvalVarID`, so
+    // no same-named binding at the splice site can intercept it. Here the port
+    // must answer 10, not 99 — the quote resolved `p` in the scope it was
+    // written in and carried that environment with it.
+    let v = compile_v01(
+        "module M = struct val persistent ~p = 10  val ~c = &(p) end",
+        "let p = 99 in ~M.c",
+    )
+    .unwrap();
+    assert_eq!(as_int(v), 10);
+}
+
 #[test]
 fn an_unstaged_zero_one_program_is_unaffected() {
     // The `Option<BindStageV1>`/`Option<StagePrefix>` fields are tried before
@@ -433,6 +468,88 @@ fn the_code_type_takes_exactly_one_argument() {
     assert_sealed_type_error(
         "module M :> sig val ~c : code end = struct val ~c = &(1) end",
         "0",
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The stage as part of `:>` conformance
+//
+// A signature declares a member's STAGE as well as its type, and the two are
+// checked separately: `sig val ~c : int end = struct val c = 1 end` has
+// matching types throughout and still promises something the struct does not
+// provide. Upstream checks the stage first and the type second
+// (`dev-0-1-0 signatureSubtyping.ml:279-298`); so does this.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_signature_stage_is_enforced_against_the_implementation() {
+    // The headline case, and the one that used to slip through: `int` and
+    // `int` unify, so a conformance check that compared only types accepted
+    // this. It is caught now BECAUSE the stages differ, not incidentally
+    // because the types happened to.
+    let err = assert_sealed_type_error(
+        "module M :> sig val ~c : int end = struct val c = 1 end",
+        "0",
+    );
+    assert!(
+        err.contains("stage 1") && err.contains("stage 0"),
+        "the error must name both stages, got {err}"
+    );
+}
+
+#[test]
+fn a_matching_stage_pair_is_accepted() {
+    // The other direction, without which the test above is satisfied by
+    // refusing every staged member: the same signature, now honestly
+    // implemented.
+    assert_sealed_accepts(
+        "module M :> sig val ~c : int end = struct val ~c = 1 end",
+        "0",
+    );
+}
+
+#[test]
+fn a_stage_zero_implementation_does_not_satisfy_a_plain_val() {
+    // The mirror of the headline case. A plain `val c : int` is a stage-1
+    // declaration, so a stage-0 binding under-delivers exactly as a stage-1
+    // one does against `val ~c`.
+    let err = assert_sealed_type_error(
+        "module M :> sig val c : int end = struct val ~c = 1 end",
+        "0",
+    );
+    assert!(
+        err.contains("stage 0") && err.contains("stage 1"),
+        "the error must name both stages, got {err}"
+    );
+}
+
+#[test]
+fn a_persistent_implementation_satisfies_any_declared_stage() {
+    // Stage conformance is a SUBSUMPTION, not an equality: a persistent
+    // binding is nameable from every stage, so it delivers whatever a
+    // signature asks for (upstream's `(Persistent0, _)` rows). Getting this
+    // wrong would make `persistent` unusable in a sealed module — the only
+    // place a real 0.1 library writes it.
+    for sig in ["val ~c : int", "val persistent ~c : int", "val c : int"] {
+        assert_sealed_accepts(
+            &format!("module M :> sig {sig} end = struct val persistent ~c = 1 end"),
+            "0",
+        );
+    }
+}
+
+#[test]
+fn a_stage_zero_implementation_does_not_satisfy_a_persistent_declaration() {
+    // The one asymmetry worth pinning: `persistent` in a signature promises
+    // the document stage may name the member, which a stage-0 binding cannot
+    // honour. So the subsumption above does not run backwards.
+    let err = assert_sealed_type_error(
+        "module M :> sig val persistent ~c : int end = struct val ~c = 1 end",
+        "0",
+    );
+    assert!(
+        err.contains("stage 0") && err.contains("persistent stage"),
+        "the error must name both stages, got {err}"
     );
 }
 

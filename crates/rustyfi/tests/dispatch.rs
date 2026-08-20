@@ -367,6 +367,85 @@ fn leading_global_flag_help_is_subcommand_specific() {
     assert_eq!(with_leading_flag.stdout, direct.stdout);
 }
 
+/// The value-aware fix's own case: a flag VALUE that happens to collide with
+/// a subcommand name (`--lib-root search install PATH`, `search` being
+/// `--lib-root`'s value, not a subcommand) must not be mistaken for the
+/// split point — the pre-pass must skip over it and hoist at the REAL
+/// subcommand (`install`) instead. Proven end-to-end: a lib-root directory
+/// literally named `search` ends up holding the installed package, which can
+/// only happen if `search` was consumed as `--lib-root`'s value and `install`
+/// dispatched with `PATH` as its package source.
+#[cfg(unix)]
+#[test]
+fn leading_flag_value_matching_a_subcommand_name_is_not_the_split_point() {
+    use std::os::unix::process::CommandExt as _;
+
+    let work = tmpdir("value-aware-hoist");
+    std::fs::create_dir_all(work.join("pkgsrc/packages")).unwrap();
+    std::fs::write(
+        work.join("pkgsrc/rustyfi-package.toml"),
+        "[package]\n\
+         name = \"mylib\"\n\
+         version = \"1.0.0\"\n\
+         rustyfi-version-compat = \">=0.0.6, <0.1\"\n\
+         \n\
+         [[files]]\n\
+         kind = \"package-dir\"\n\
+         src = \"packages\"\n",
+    )
+    .unwrap();
+    std::fs::write(work.join("pkgsrc/packages/mylib.satyh"), "let mylib = 1\n").unwrap();
+
+    // `search` is BOTH a real subcommand name and, here, a relative lib-root
+    // directory name — the exact collision the fix closes.
+    let out = Command::new(bin())
+        .arg0("rustyfi")
+        .current_dir(&work)
+        .args(["--lib-root", "search", "install", "pkgsrc"])
+        .output()
+        .expect("spawn");
+    assert!(
+        out.status.success(),
+        "install should dispatch, with `search` consumed as --lib-root's value:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        work.join("search/dist/packages/mylib/mylib.satyh").is_file(),
+        "package should land under the `search` lib-root, proving `search` was \
+         --lib-root's VALUE and `install` was the dispatched subcommand"
+    );
+
+    let _ = std::fs::remove_dir_all(&work);
+}
+
+/// The `--flag=value` spelling must reach a subcommand exactly like the
+/// space-separated form already proven by
+/// `leading_global_flag_reaches_a_subcommand`.
+#[cfg(unix)]
+#[test]
+fn leading_global_flag_equals_spelling_reaches_a_subcommand() {
+    let work = tmpdir("leading-global-equals");
+    let config = work.join("config.toml");
+    std::fs::write(&config, "").unwrap();
+    let root = tmpdir("leading-global-equals-root");
+
+    let out = run_as(
+        "rustyfi",
+        &[
+            &format!("--config={}", config.to_str().unwrap()),
+            "list",
+            "--dest",
+            root.to_str().unwrap(),
+        ],
+    );
+    assert!(
+        out.status.success(),
+        "leading --config=F before `list` should parse and dispatch:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(String::from_utf8_lossy(&out.stdout).contains("(no packages installed)"));
+}
+
 /// End-to-end phase-1 contract: install a tiny package into a temp root
 /// (through the library API the CLI calls into), then load a document that
 /// `@require:`s it against that same root — proving the installer's nested

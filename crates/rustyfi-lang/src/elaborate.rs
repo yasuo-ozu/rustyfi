@@ -642,6 +642,16 @@ pub struct ItemOrigins<'a> {
 /// `typecheck::Checker::binding_stage`, which looks for the same node through
 /// the same two wrappers — the two must agree or a binding could be wrapped
 /// twice with different stages.
+///
+/// Of the two, only the `ModuleScope` arm is load-bearing today. Every arm of
+/// [`walk_bindings`] applies [`maybe_v006_scope`] to a binding's RHS BEFORE
+/// this runs, and [`stage_wrap_item`] wraps outside whatever it finds, so a
+/// doubly-scoped binding is always `StageScope(_, VersionScope(_, ..))` and
+/// never the reverse — the `VersionScope` arm can only fire on a nesting no
+/// caller currently builds. Verified by deleting it: nothing in the suite
+/// fails. Kept as the cheap half of the agreement contract above (the
+/// `let-rec` arm already builds its own `StageScope` around a `VersionScope`,
+/// so the opposite order is one arm reordering away), not because it runs.
 fn already_staged(value: &Ast<'_>) -> bool {
     match value {
         Ast::StageScope(..) => true,

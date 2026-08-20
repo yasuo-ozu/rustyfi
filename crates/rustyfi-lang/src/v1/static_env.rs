@@ -13,13 +13,13 @@
 //! ahead of 2d-2, which is their first writer — per the spec's §6 item 10
 //! scope guard, do not widen these further until that sub-slice lands.
 
-use crate::types::{MonoType, PolyType};
+use crate::types::{MonoType, PolyType, Stage};
 use rustyfi_syntax::cst_v1::ast as ast_v1;
 use rustyfi_syntax::span::Span;
 use std::collections::HashMap;
 
 /// A member's declared value entry (upstream `value_entry`,
-/// staticEnv.ml:82-86, minus stage). `scheme` is what sealing COMMITS;
+/// staticEnv.ml:82-86). `scheme` is what sealing COMMITS;
 /// `rigid` is the skolemized body the subsumption check ([`crate::v1::
 /// sig_subtype::val_subsumes`]) unifies against (§3.4 — both are lowered
 /// from the same source `TypeExpr`, so they are alpha-equivalent by
@@ -40,6 +40,18 @@ pub(crate) struct DeclaredVal {
     pub(crate) rigid: MonoType,
     /// The decl's `val` keyword span (diagnostics).
     pub(crate) span: Span,
+    /// The stage the SIGNATURE declares this member at — `val ~x` is
+    /// [`Stage::Stage0`], `val persistent ~x` is [`Stage::Persistent0`], a
+    /// plain `val x` is [`Stage::Stage1`] (upstream `value_entry.val_stage`,
+    /// `dev-0-1-0 staticEnv.ml`; the decoder is `moduleTypechecker.ml:505-523`).
+    /// Checked against the stage of the binding that IMPLEMENTS the member by
+    /// `module_check`'s phase-D spine walk, and — when a PARENT signature
+    /// re-declares this member of a nested child — against that parent's
+    /// declared stage by `module_check::process_link_member`. Both are the
+    /// port's stand-in for upstream's `signatureSubtyping.ml:279-298` stage
+    /// arm. Command decls (`val \cmd`, `val +cmd`) have no stage slot in the
+    /// grammar at all (`parser_v1.mly:604-607`), so they record `Stage1`.
+    pub(crate) stage: Stage,
     /// This decl's own `"#N"` stamp suffix (shared by every rigid tyvar
     /// `rigid` mentions — one [`StampMint`] draw per `Decl::Val`, not per
     /// tyvar; see `module_check.rs`'s seal-table walk). Not part of the

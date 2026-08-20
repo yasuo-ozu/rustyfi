@@ -407,13 +407,41 @@ impl Stage {
     /// So: a `persistent` binding is nameable from everywhere, every other
     /// binding only from its own stage. The two generations agree on the
     /// accept/reject split and differ only in which *node* an accepted
-    /// persistent occurrence compiles to — 0.0.6 emits `Persistent` for all
-    /// three uses (`typechecker.ml:667-681`), `dev-0-1-0` only for the
-    /// `Stage1` use (`typechecker.ml:340-353`). That distinction exists to
-    /// carry a persistent name through upstream's stage-1 PREPROCESS pass
-    /// (`CdPersistent` unlifts back to a plain `ContentOf`, `types.cppo.ml:
-    /// 1506`); this port has no such pass, evaluates every stage in one
-    /// environment, and so needs only the verdict.
+    /// persistent occurrence compiles to — 0.0.6 emits `Persistent(rng, evid)`
+    /// for all three uses (`typechecker.ml:667-681`), `dev-0-1-0` only for the
+    /// `Stage1` use (`typechecker.ml:340-353`), against `ContentOf(rng, evid)`
+    /// everywhere else.
+    ///
+    /// **What that node does upstream, and why this port needs no counterpart.**
+    /// It is capture-avoidance bookkeeping for a FIRST-ORDER code value, not a
+    /// semantic distinction:
+    ///
+    /// * upstream's stage-1 pass (`interpret_1`, `evaluator.cppo.ml:429` in
+    ///   0.0.6 / `:609` on `dev-0-1-0`) does not evaluate — it BUILDS a
+    ///   `code_value`, minting a fresh `CodeSymbol` for every binder it walks
+    ///   under and resolving an ordinary `ContentOf` through `find_symbol`;
+    /// * a persistent binding is not one of those binders: it was already
+    ///   evaluated at stage 0 (`interpret_bindings_0`'s `Persistent0 | Stage0`
+    ///   arm, `dev-0-1-0 evaluator.cppo.ml:1177-1195`) and lives in the VALUE
+    ///   environment, so `find_symbol` would miss it and upstream would
+    ///   `report_bug_ast "symbol not found"`;
+    /// * hence `CdPersistent(rng, evid)`, carried through verbatim and mapped
+    ///   straight back to `ContentOf(rng, evid)` by `unlift_code`
+    ///   (`types.cppo.ml:1506` in 0.0.6, `:1340` on `dev-0-1-0`) — an ordinary
+    ///   environment lookup, by the SAME `EvalVarID` the typechecker resolved,
+    ///   once the generated code finally runs. (`bytecomp` does not implement
+    ///   it at all on `dev-0-1-0`: `ir.cppo.ml:565` is `failwith "TODO"`.)
+    ///
+    /// This port has no such pass and no renaming: a quote is a CLOSURE
+    /// (`compile.rs`'s `Ast::Next` — the compiled body paired with the
+    /// environment reaching it), and every free name in it was already resolved
+    /// against the scope the quote was WRITTEN in, a top-level binding to its
+    /// own `Globals` slot. That slot is this port's `EvalVarID`: it fixes the
+    /// reference to the BINDING rather than the name, which is the one property
+    /// `CdPersistent` exists to preserve. So the verdict below is the whole of
+    /// what is needed — pinned end to end, as values, by `tests/staging.rs`'s
+    /// "`(Stage1, Persistent0)` cell, as a VALUE" block and its 0.1 twins in
+    /// `tests/staging_v1.rs`.
     pub fn can_reference(self, bound: Stage) -> bool {
         matches!(
             (self, bound),

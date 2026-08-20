@@ -7,6 +7,40 @@ Your own settings; `$RUSTYFI_CONFIG_DIR` overrides where this is looked for.
 The defaults shipped with the install, found as
 .IR <executable>/../share/rustyfi .
 Consulted last, so a config you wrote always wins.
+.SH STAGING
+A program runs in two stages. Stage 1 is the document stage, which produces the
+PDF and is where a
+.I .saty
+file's own code lives; stage 0 runs before it and builds stage-1 code.
+.B &e
+quotes: it does not run
+.IR e ,
+it yields a value standing for it.
+.B ~e
+splices, running
+.I e
+one stage earlier and inserting the resulting code value at that point. The two
+are inverses. A quote is legal only at stage 0, a splice only at stage 1, and a
+stage-0 binding cannot be named from stage 1: only
+.B persistent
+crosses.
+.PP
+SATySFi 0.0 declares one stage per file, with a
+.BI @stage: " persistent|0|1"
+header; 0.1 declares it per binding, as
+.B val ~x
+(stage 0) or
+.B val persistent ~x
+(persistent), a plain
+.B val x
+being stage 1. The type a quote produces is written
+.BI code " <type>"
+in 0.1, which 0.0 has no spelling for.
+.PP
+One deviation from upstream: upstream resolves every splice in a preprocessing
+pass before any stage-1 code runs, whereas here a splice runs where it stands.
+The value is the same for pure code-building; the two differ only for side
+effects interleaved with stage-1 code.
 .SH ENVIRONMENT
 .TP
 .B RUSTYFI_LIB_ROOT

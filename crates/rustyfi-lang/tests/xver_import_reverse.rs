@@ -60,12 +60,16 @@
 //!   an arrow-tailed export (`length -> deco`).
 //! - [`reverse_decoset_export_via_sig_coerces_and_renders`] — the 4-tuple
 //!   sibling, through `inline-frame-breakable`.
+//! - [`reverse_deco_export_nested_module_sig_coerces_and_renders`] — a `deco`
+//!   declared inside a NESTED `module M : sig .. end` decl, crossed under the
+//!   composed qualified key (`Outer.Inner.my-deco`) that `module_check`'s own
+//!   `walk_nested_seals_a` seals it by.
 //! - [`reverse_deco_export_optional_arg_sig_still_rejected`] and
-//!   [`reverse_deco_export_nested_module_sig_still_rejected`] — the two
+//!   [`reverse_deco_export_nested_signature_decl_still_rejected`] — the two
 //!   DELIBERATE rejections that survive: an optional-argument arrow (no
 //!   positional spelling for the generated wrapper to forward) and a `deco`
-//!   behind a nested `module` sig decl (whose seal key composition this
-//!   direction stays conservative about).
+//!   behind a nested decl whose signature is not a literal `sig .. end`
+//!   (a named-signature reference this scan does not chase).
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -578,31 +582,119 @@ V01Mini.document (|title = `v01-decoset-reverse`|) '<
     );
 }
 
-/// X4b's DELIBERATE rejection, preserved: an OPTIONAL-argument arrow in the
-/// export's type. The generated wrapper forwards its parameters
-/// POSITIONALLY, and an optional argument has no positional spelling — so
-/// eta-expanding one would silently drop it. Rejected loudly instead.
+/// An OPTIONAL-argument arrow in the export's type — a LABELLED optional row,
+/// which is the only kind 0.1 has. It used to reject outright; it now crosses
+/// with the export's optional interface intact.
+///
+/// The shadow cannot FORWARD the label, because 0.1's two halves disagree
+/// about who owns the `option`: `Ast::LambdaOpt` binds the receiving binder at
+/// `length option` while `Ast::ApplyOpt`'s `?(thickness = e)` takes the raw
+/// `length` and wraps it in `Some` itself. So it CASE-SPLITS instead —
+/// `Some(v)` re-supplies as `?(thickness = v)`, `None` omits the label
+/// entirely and lets `eval.rs`'s `push_opt_slots` restore the `None`. Both
+/// arms are exercised below:
+///
+/// - `V01DecoOpt.my-deco 1pt` — the 0.0.6-authored consumer's plain call.
+///   Plain `Ast::Apply` carries an OPEN optional row under `V0_1`, which is
+///   what lets a call with no optional syntax at all typecheck against a
+///   callee that declares one.
+/// - `V01DecoOpt.my-deco ?(thickness = 4pt) 1pt` — supplying it. `?(l = e)`
+///   is reachable from a 0.0.6-lexed file (under `V0_0` a bare `?` still
+///   lexes as `OptionalType`, and only the FUSED `?:`/`?*` sigils are
+///   0.0.6-specific), and the cross-version pipeline elaborates the whole
+///   merged program under an ambient `V0_1` scope, so the bundle is not
+///   version-gated away.
+///
+/// The two calls make the deco draw at different insets, so the assertion
+/// that both fired is also an assertion that the label actually reached the
+/// 0.1 closure rather than being quietly dropped.
 #[test]
-fn reverse_deco_export_optional_arg_sig_still_rejected() {
-    let dir = TempDir::new("deco-export-optional-negative");
+fn reverse_deco_export_optional_arg_sig_coerces_and_renders() {
+    let dir = TempDir::new("deco-export-optional-coerces");
+    dir.copy_real_v01_package("v01-mini.satyh");
     dir.write(
         "dist-v01/packages/v01-deco-opt.satyh",
         "\
 module V01DecoOpt :> sig
   val my-deco : ?(thickness : length) length -> deco
 end = struct
-  val my-deco t (x, y) w h d =
+  val my-deco ?(thickness = topt) t (x, y) w h d =
+    let i =
+      match topt with
+      | None    -> 0pt
+      | Some(v) -> v
+      end
+    in
+    fill (Gray(0.0))
+      (close-with-line
+         (line-to (x +' w, y +' h -' i)
+            (line-to (x +' w, y)
+               (start-path (x +' i, y)))))
+end
+",
+    );
+    dir.write(
+        "entry.saty",
+        "\
+@require: v01-mini
+@require: v01-deco-opt
+
+let-inline ctx \\framed it =
+  (inline-frame-outer (2pt, 2pt, 2pt, 2pt) (V01DecoOpt.my-deco 1pt)
+     (read-inline ctx it))
+    ++ (inline-frame-outer (2pt, 2pt, 2pt, 2pt)
+          (V01DecoOpt.my-deco ?(thickness = 4pt) 1pt)
+          (read-inline ctx it))
+in
+V01Mini.document (|title = `v01-deco-opt-reverse`|) '<
+  +V01Mini.p{ \\framed{Hi} }
+>
+",
+    );
+    let files = load_v006(&dir, "entry.saty");
+
+    let mono = Mono;
+    let (doc, _trials) = rustyfi_lang::compile_document_v006_xver_with_trials(&files, &mono)
+        .unwrap_or_else(|e| {
+            panic!(
+                "a LABELLED-optional-argument arrow in a V0_1 `deco` export should cross \
+                 under X4b, by case-splitting on the label rather than forwarding it: {e}"
+            )
+        });
+    assert_eq!(doc.pages.len(), 1, "one A4 page");
+    assert_eq!(
+        doc.extras.page_graphics[0].len(),
+        2,
+        "both the label-omitting and the label-supplying call must have fired the \
+         coerced deco, got: {:?}",
+        doc.extras.page_graphics[0]
+    );
+}
+
+/// The optional-argument narrowing that survives in this direction: a
+/// ROW-VARIABLE tail (`?(l : τ | ?'r)`) leaves the label set OPEN, so there is
+/// no finite case split to generate and the export still rejects.
+#[test]
+fn reverse_deco_export_open_optional_row_still_rejected() {
+    let dir = TempDir::new("deco-export-optrow-negative");
+    dir.write(
+        "dist-v01/packages/v01-deco-optrow.satyh",
+        "\
+module V01DecoOptRow :> sig
+  val my-deco : ?(thickness : length | ?'r) length -> deco
+end = struct
+  val my-deco ?(thickness = topt) t (x, y) w h d =
     fill (Gray(0.0)) (close-with-line (line-to (x +' w, y +' h) (start-path (x, y))))
 end
 ",
     );
-    dir.write("entry.saty", "@require: v01-deco-opt\n\n0\n");
+    dir.write("entry.saty", "@require: v01-deco-optrow\n\n0\n");
     let files = load_v006(&dir, "entry.saty");
 
     let mono = Mono;
     let err = rustyfi_lang::compile_document_v006_xver(&files, &mono).expect_err(
-        "an optional-argument arrow in a `deco` export must reject — the generated \
-         wrapper forwards positionally and an optional argument has no positional spelling",
+        "an OPEN optional row in a `deco` export must reject — the shadow's case split \
+         has to enumerate the labels, and a row variable admits any number of them",
     );
     match err {
         CompileError::CrossVersionUnsupportedName { name, slice, .. } => {
@@ -613,15 +705,20 @@ end
     }
 }
 
-/// X4b's other deliberate narrowing: a `deco` reached through a NESTED
-/// `module` decl in the signature. The shadow has to name the member under
-/// exactly the qualified key `v1::module_check` seals it by, and a nested
-/// member's seal goes through `walk_nested_seals_a`'s own path composition —
-/// so the reverse direction classifies only the TOP-LEVEL sig's own `val`
-/// items and rejects the rest.
+/// A `deco` reached through a NESTED `module` decl in the signature now
+/// CROSSES (it used to be X4b's other deliberate narrowing). The shadow has to
+/// name the member under exactly the qualified key `v1::module_check` seals it
+/// by, and a nested member's seal goes through `walk_nested_seals_a`'s own path
+/// composition — which is simply "push each nested module's name onto its
+/// parent's path", the same composition
+/// `elaborate::push_named_binding`/`qualify_key` use for the export alias, so
+/// `classify_deco_exports_v01_sig` reproduces it by recursing into `Decl::
+/// Module` under a lengthened `module_path`. The consumer below names the
+/// member the way the seal key spells it, `V01DecoNested.Inner.my-deco`.
 #[test]
-fn reverse_deco_export_nested_module_sig_still_rejected() {
-    let dir = TempDir::new("deco-export-nested-negative");
+fn reverse_deco_export_nested_module_sig_coerces_and_renders() {
+    let dir = TempDir::new("deco-export-nested-coerces");
+    dir.copy_real_v01_package("v01-mini.satyh");
     dir.write(
         "dist-v01/packages/v01-deco-nested.satyh",
         "\
@@ -630,17 +727,260 @@ module V01DecoNested :> sig
 end = struct
   module Inner :> sig val my-deco : deco end = struct
     val my-deco (x, y) w h d =
+      fill (Gray(0.0))
+        (close-with-line
+           (line-to (x +' w, y +' h)
+              (line-to (x +' w, y)
+                 (start-path (x, y)))))
+  end
+end
+",
+    );
+    dir.write(
+        "entry.saty",
+        &deco_consumer_entry("v01-deco-nested", "V01DecoNested.Inner.my-deco"),
+    );
+    let files = load_v006(&dir, "entry.saty");
+
+    let mono = Mono;
+    let (doc, _trials) = rustyfi_lang::compile_document_v006_xver_with_trials(&files, &mono)
+        .unwrap_or_else(|e| {
+            panic!("a NESTED module's sig `deco` export should cross under X4b: {e}")
+        });
+    assert_eq!(doc.pages.len(), 1, "one A4 page");
+    assert!(
+        !doc.extras.page_graphics[0].is_empty(),
+        "the crossed nested-module deco must have fired"
+    );
+}
+
+/// A `deco` behind a nested `module` decl whose signature is a NAMED reference
+/// rather than a literal `sig .. end` now crosses too. This is the shape that
+/// used to reject: the scan declined to chase an unresolved signature name, so
+/// a `deco` reachable only through one refused the whole dependency.
+///
+/// It resolves through the very table `v1::module_check::resolve_sig` consults
+/// — `surface::find_sig_keyed`, searched OUTWARD from the same `site_path`
+/// (`module_check`'s top-level seal and its `handle_nested_module_decl` both
+/// pass the module's own path, which is exactly the classifier's
+/// `module_path`). So the member still lands under the composed key
+/// `V01DecoNamedSig.Inner.my-deco`, which is the `env.seals` key, the
+/// `Ast::LetIn` binder name, and the string the consumer below writes.
+///
+/// Note the `signature S = ..` decl in the same signature: it declares a
+/// SIGNATURE, never a value, so on its own it neither crosses nor rejects
+/// (that used to be this test's whole subject). What it does do is register
+/// the definition `module Inner : S` then dereferences — which is why
+/// `lib.rs`'s reverse arm calls `surface::build_file_surface` BEFORE the
+/// classifier.
+#[test]
+fn reverse_deco_export_nested_named_signature_coerces_and_renders() {
+    let dir = TempDir::new("deco-export-named-sig-coerces");
+    dir.copy_real_v01_package("v01-mini.satyh");
+    dir.write(
+        "dist-v01/packages/v01-deco-named-sig.satyh",
+        "\
+module V01DecoNamedSig :> sig
+  signature S = sig val my-deco : deco end
+  module Inner : S
+end = struct
+  signature S = sig val my-deco : deco end
+  module Inner :> S = struct
+    val my-deco (x, y) w h d =
+      fill (Gray(0.0))
+        (close-with-line
+           (line-to (x +' w, y +' h)
+              (line-to (x +' w, y)
+                 (start-path (x, y)))))
+  end
+end
+",
+    );
+    dir.write(
+        "entry.saty",
+        &deco_consumer_entry("v01-deco-named-sig", "V01DecoNamedSig.Inner.my-deco"),
+    );
+    let files = load_v006(&dir, "entry.saty");
+
+    let mono = Mono;
+    let (doc, _trials) = rustyfi_lang::compile_document_v006_xver_with_trials(&files, &mono)
+        .unwrap_or_else(|e| {
+            panic!(
+                "a `deco` behind a nested module decl typed by a NAMED signature should cross \
+                 under X4b: {e}"
+            )
+        });
+    assert_eq!(doc.pages.len(), 1, "one A4 page");
+    assert!(
+        !doc.extras.page_graphics[0].is_empty(),
+        "the crossed named-signature deco must have fired"
+    );
+}
+
+/// The `include` sibling: `include S` splices S's decls into the ENCLOSING
+/// signature in place (`module_check::splice_decls`), so the member's path is
+/// the includer's own — `V01DecoInclude.my-deco`, NOT `V01DecoInclude.S.my-
+/// deco`. The classifier recurses at the unchanged `module_path` to match.
+#[test]
+fn reverse_deco_export_through_sig_include_coerces_and_renders() {
+    let dir = TempDir::new("deco-export-include-coerces");
+    dir.copy_real_v01_package("v01-mini.satyh");
+    dir.write(
+        "dist-v01/packages/v01-deco-include.satyh",
+        "\
+module V01DecoInclude :> sig
+  signature S = sig val my-deco : deco end
+  include S
+end = struct
+  signature S = sig val my-deco : deco end
+  val my-deco (x, y) w h d =
+    fill (Gray(0.0))
+      (close-with-line
+         (line-to (x +' w, y +' h)
+            (line-to (x +' w, y)
+               (start-path (x, y)))))
+end
+",
+    );
+    dir.write(
+        "entry.saty",
+        &deco_consumer_entry("v01-deco-include", "V01DecoInclude.my-deco"),
+    );
+    let files = load_v006(&dir, "entry.saty");
+
+    let mono = Mono;
+    let (doc, _trials) = rustyfi_lang::compile_document_v006_xver_with_trials(&files, &mono)
+        .unwrap_or_else(|e| panic!("an `include`d `deco` export should cross under X4b: {e}"));
+    assert_eq!(doc.pages.len(), 1, "one A4 page");
+    assert!(
+        !doc.extras.page_graphics[0].is_empty(),
+        "the crossed included deco must have fired"
+    );
+}
+
+/// A member declared at a type SYNONYM of `deco` (`type frame = deco  val
+/// my-deco : length -> frame`). The scan reads a `val`'s SPELLED type, so
+/// before it expanded the signature's own transparent type declarations this
+/// tail read as the bare name `frame`, matched no forked builtin, and the
+/// export silently declined to cross — surfacing later as an ordinary
+/// `TypeError` at this entry's `inline-frame-outer` call rather than as a
+/// boundary diagnostic. `V01Syns` expands it in place, so this reads exactly
+/// as the spelled-out `length -> deco` does.
+#[test]
+fn reverse_deco_export_via_type_synonym_coerces_and_renders() {
+    let dir = TempDir::new("deco-export-synonym-coerces");
+    dir.copy_real_v01_package("v01-mini.satyh");
+    dir.write(
+        "dist-v01/packages/v01-deco-synonym.satyh",
+        "\
+module V01DecoSynonym :> sig
+  type frame = deco
+  val my-deco : length -> frame
+end = struct
+  type frame = deco
+  val my-deco t (x, y) w h d =
+    fill (Gray(0.0)) (close-with-line (line-to (x +' w, y +' h) (start-path (x, y))))
+end
+",
+    );
+    dir.write(
+        "entry.saty",
+        &deco_consumer_entry("v01-deco-synonym", "V01DecoSynonym.my-deco 1pt"),
+    );
+    let files = load_v006(&dir, "entry.saty");
+
+    let mono = Mono;
+    let (doc, _trials) = rustyfi_lang::compile_document_v006_xver_with_trials(&files, &mono)
+        .unwrap_or_else(|e| {
+            panic!("a `deco` declared at a type SYNONYM should cross under X4b: {e}")
+        });
+    assert_eq!(doc.pages.len(), 1, "one A4 page");
+    assert!(
+        !doc.extras.page_graphics[0].is_empty(),
+        "the crossed synonym-declared deco must have fired"
+    );
+}
+
+/// The same member, made a `deco` by a SUB-MODULE refinement
+/// (`sig module Inner : sig type t :: o  val my-deco : t end end with Inner
+/// type t = deco`). `v1::module_check::resolve_sig` used to reject that form
+/// outright, so no decl list existed even in principle and the scan could not
+/// see through it; the refinement now descends into the named member (one
+/// chain segment consumed per layer) in BOTH the seal checker and this scan,
+/// so `Inner.t` really is transparent-`deco` here and the export crosses.
+#[test]
+fn reverse_deco_export_via_with_submodule_type_refinement_coerces_and_renders() {
+    let dir = TempDir::new("deco-export-with-submodule-type-coerces");
+    dir.copy_real_v01_package("v01-mini.satyh");
+    dir.write(
+        "dist-v01/packages/v01-deco-refined.satyh",
+        "\
+module V01DecoRefined :> sig
+  module Inner : sig
+    type t :: o
+    val my-deco : t
+  end
+end with Inner type t = deco = struct
+  module Inner = struct
+    type t = deco
+    val my-deco (x, y) w h d =
       fill (Gray(0.0)) (close-with-line (line-to (x +' w, y +' h) (start-path (x, y))))
   end
 end
 ",
     );
-    dir.write("entry.saty", "@require: v01-deco-nested\n\n0\n");
+    dir.write(
+        "entry.saty",
+        &deco_consumer_entry("v01-deco-refined", "V01DecoRefined.Inner.my-deco"),
+    );
+    let files = load_v006(&dir, "entry.saty");
+
+    let mono = Mono;
+    let (doc, _trials) = rustyfi_lang::compile_document_v006_xver_with_trials(&files, &mono)
+        .unwrap_or_else(|e| {
+            panic!(
+                "a `deco` a `with M type` refinement makes transparent should cross under \
+                 X4b: {e}"
+            )
+        });
+    assert_eq!(doc.pages.len(), 1, "one A4 page");
+    assert!(
+        !doc.extras.page_graphics[0].is_empty(),
+        "the crossed, refinement-declared deco must have fired"
+    );
+}
+
+/// The narrowing that genuinely survives: a `deco` behind a FUNCTOR signature
+/// member. A functor is not a module — there is no `V01DecoFunctor.Make.my-
+/// deco` for a shadow to rebind, and 0.0.6 has no syntax that could apply one.
+/// Its members exist only at an APPLICATION's own path, computed by
+/// `v1::functor` in whatever file writes `module Inst = V01DecoFunctor.Make
+/// Arg` — a file this scan has no access to, and possibly one the splice loop
+/// has not read yet. So the path a shadow would have to name is not a function
+/// of THIS file's signature at all, and the dependency rejects rather than
+/// crossing silently.
+#[test]
+fn reverse_deco_export_behind_functor_sig_member_still_rejected() {
+    let dir = TempDir::new("deco-export-functor-negative");
+    dir.write(
+        "dist-v01/packages/v01-deco-functor.satyh",
+        "\
+module V01DecoFunctor :> sig
+  module Make : (X : sig val n : int end) -> sig val my-deco : deco end
+end = struct
+  module Make = fun (X : sig val n : int end) -> struct
+    val my-deco (x, y) w h d =
+      fill (Gray(0.0)) (close-with-line (line-to (x +' w, y +' h) (start-path (x, y))))
+  end
+end
+",
+    );
+    dir.write("entry.saty", "@require: v01-deco-functor\n\n0\n");
     let files = load_v006(&dir, "entry.saty");
 
     let mono = Mono;
     let err = rustyfi_lang::compile_document_v006_xver(&files, &mono)
-        .expect_err("a NESTED module's sig `deco` export must still be rejected");
+        .expect_err("a `deco` behind a functor signature member must still be rejected");
     match err {
         CompileError::CrossVersionUnsupportedName { name, slice, .. } => {
             assert_eq!(name, "deco");
@@ -648,4 +988,151 @@ end
         }
         other => panic!("expected CrossVersionUnsupportedName, got: {other}"),
     }
+}
+
+// ============================================================================
+// X4b placement: WHICH consumers see the coerced view.
+// ============================================================================
+
+/// A LATER *0.1* dependency consuming the same `deco` export the coercion
+/// shadow rebinds.
+///
+/// `V01DecoRelay` is 0.1-authored, so it wants `V01DecoExport.my-deco` at 0.1's
+/// own `deco` (a single `graphics`) — but its `@require:` puts it AFTER the
+/// exporting dependency in the merged prelude, which is exactly where the
+/// coercion shadow used to be spliced unconditionally. It therefore saw the
+/// 0.0.6-shaped (`graphics list`) view and failed its own `:>` conformance
+/// check.
+///
+/// The shadows are now installed LAZILY — at each transition INTO a
+/// 0.0.6-authored block — and the originals restored at each transition back
+/// into a 0.1-authored one, so each generation reads the export at the shape
+/// its own `deco` means. The entry below is 0.0.6-authored and consumes the
+/// RELAY's export, which crosses through its own shadow.
+#[test]
+fn reverse_deco_export_consumed_by_a_later_v01_dep_keeps_the_v01_view() {
+    let dir = TempDir::new("deco-export-later-v01-consumer");
+    dir.copy_real_v01_package("v01-mini.satyh");
+    dir.write(
+        "dist-v01/packages/v01-deco-export.satyh",
+        V01_DECO_EXPORT_PKG_SRC,
+    );
+    dir.write(
+        "dist-v01/packages/v01-deco-relay.satyh",
+        "\
+@require: v01-deco-export
+
+module V01DecoRelay :> sig
+  val re-deco : deco
+end = struct
+  val re-deco = V01DecoExport.my-deco
+end
+",
+    );
+    dir.write(
+        "entry.saty",
+        &deco_consumer_entry("v01-deco-relay", "V01DecoRelay.re-deco"),
+    );
+    let files = load_v006(&dir, "entry.saty");
+
+    let mono = Mono;
+    let (doc, _trials) = rustyfi_lang::compile_document_v006_xver_with_trials(&files, &mono)
+        .unwrap_or_else(|e| {
+            panic!(
+                "a LATER 0.1 dependency consuming the same `deco` export must still see 0.1's \
+                 own single-`graphics` shape, not the 0.0.6 coercion shadow: {e}"
+            )
+        });
+    assert_eq!(doc.pages.len(), 1, "one A4 page");
+    assert!(
+        !doc.extras.page_graphics[0].is_empty(),
+        "the relayed deco must have fired, coerced once for the 0.0.6 entry"
+    );
+}
+
+/// The INTERLEAVED case — the one that needs both halves of the schedule. Load
+/// order here is
+///
+/// ```text
+///   v01-mini (0.1) | v01-deco-export (0.1) | v006-deco-user (0.0.6)
+///                  | v01-deco-relay (0.1)  | entry (0.0.6)
+/// ```
+///
+/// so the SAME export (`V01DecoExport.my-deco`) is read at 0.0.6's `graphics
+/// list` shape by the middle 0.0.6 dependency, then at 0.1's single-`graphics`
+/// shape by the 0.1 dependency after it, then at 0.0.6's shape again by the
+/// entry. That is one `Install`, one `Restore`, and a second `Install` — the
+/// only fixture in this file where the lazy transitions do not collapse to a
+/// single install.
+///
+/// Both consumers below actually FIRE their deco, so the two page-graphics
+/// entries are the assertion that each got a value its own generation's
+/// `apply_deco` could use, not merely one that typechecked.
+#[test]
+fn reverse_deco_export_interleaved_v006_and_v01_consumers_each_get_their_own_view() {
+    let dir = TempDir::new("deco-export-interleaved");
+    dir.copy_real_v01_package("v01-mini.satyh");
+    dir.write(
+        "dist-v01/packages/v01-deco-export.satyh",
+        V01_DECO_EXPORT_PKG_SRC,
+    );
+    // A NATIVE 0.0.6 co-dependency consuming the crossed export: its binding is
+    // spliced inside `Ast::VersionScope(V0_0, _)`, so `inline-frame-outer`
+    // there carries `t_deco(V0_0)` and only the coerced (list-shaped) view
+    // unifies.
+    dir.write(
+        "dist/packages/v006-deco-user.satyh",
+        "\
+@require: v01-deco-export
+
+let-inline ctx \\v006-framed it =
+  inline-frame-outer (2pt, 2pt, 2pt, 2pt) V01DecoExport.my-deco (read-inline ctx it)
+",
+    );
+    // ... and a 0.1 dependency AFTER it consuming the very same export, whose
+    // own `:>` signature declares 0.1's `deco` (a single `graphics`).
+    dir.write(
+        "dist-v01/packages/v01-deco-relay.satyh",
+        "\
+@require: v01-deco-export
+
+module V01DecoRelay :> sig
+  val re-deco : deco
+end = struct
+  val re-deco = V01DecoExport.my-deco
+end
+",
+    );
+    dir.write(
+        "entry.saty",
+        "\
+@require: v01-mini
+@require: v006-deco-user
+@require: v01-deco-relay
+
+let-inline ctx \\framed it =
+  inline-frame-outer (2pt, 2pt, 2pt, 2pt) V01DecoRelay.re-deco (read-inline ctx it)
+in
+V01Mini.document (|title = `v01-deco-interleaved`|) '<
+  +V01Mini.p{ \\v006-framed{A} \\framed{B} }
+>
+",
+    );
+    let files = load_v006(&dir, "entry.saty");
+
+    let mono = Mono;
+    let (doc, _trials) = rustyfi_lang::compile_document_v006_xver_with_trials(&files, &mono)
+        .unwrap_or_else(|e| {
+            panic!(
+                "interleaved 0.0.6 and 0.1 consumers of the SAME crossed `deco` export must \
+                 each read it at their own generation's shape: {e}"
+            )
+        });
+    assert_eq!(doc.pages.len(), 1, "one A4 page");
+    assert_eq!(
+        doc.extras.page_graphics[0].len(),
+        2,
+        "both the 0.0.6 dependency's frame and the 0.1 relay's must have fired, got: {:?}",
+        doc.extras.page_graphics[0]
+    );
 }

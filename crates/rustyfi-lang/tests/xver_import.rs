@@ -961,6 +961,111 @@ page-break (210mm, 297mm) content parts body
     );
 }
 
+/// An OPTIONAL-argument arrow in the `deco` export's type (`length ?-> length
+/// -> deco`) — the shape a real 0.0.6 package is most likely to declare, and
+/// the one X3b used to reject outright.
+///
+/// It crosses by POSITIONAL forwarding, which is exact rather than a
+/// concession: this port lowers each `ty ?->` domain to a mandatory `option ty
+/// ->` domain (`typecheck::lower_type_expr`) and desugars a call site's
+/// `?:e`/`?*` to the plain `Some e`/`None` constructors
+/// (`elaborate::app_arg_to_ast`), so a 0.0.6 optional argument IS an
+/// `option`-typed positional slot and forwarding one by value loses nothing.
+///
+/// The 0.1 CONSUMER's side has one genuine asymmetry, which the entry below
+/// pins with both of its spellings. 0.1's lexer does not have 0.0.6's fused
+/// `?:`/`?*` sigils at all (`lexer.rs`'s program-mode `?` arm emits
+/// `OptionalType` unconditionally under `V0_1`), so a 0.1 consumer cannot
+/// write the marker:
+///
+/// - `XverDecoOpt.frame 1pt p w h d` — the ordinary, MARKER-LESS call, which
+///   auto-omits the slot. This works only because the generated wrapper
+///   reproduces the `?:` marker on its own parameter: `Scope::optional_shape`
+///   is keyed by the binding, and a plain-parameter shadow would record no
+///   shape, so `1pt` would bind to the optional slot instead of being pushed
+///   past it.
+/// - `(XverDecoOpt.frame) (Some(6pt)) 1pt p w h d` — SUPPLYING the argument.
+///   `elaborate.rs`'s `head_optional_shape` reads a shape only off a bare
+///   `Var`/`VarWithMod` head, so parenthesising the head turns off marker-less
+///   defaulting and every argument goes positionally, `option`-typed slot
+///   included. Ugly, but it is a real spelling, and it is the ONLY one 0.1
+///   grammar leaves for a 0.0.6-shaped (unlabelled) optional.
+#[test]
+fn xver_boundary_deco_export_optional_arg_coerces_and_renders() {
+    let dir = TempDir::new("deco-export-optional-arg");
+    dir.write(
+        "dist/packages/xver-deco-opt.satyg",
+        "@stage: persistent\n\n\
+         module XverDecoOpt : sig\n\
+         \x20 val frame : length ?-> length -> deco\n\
+         end = struct\n\
+         \x20 let frame ?:inset t (x, y) w h d =\n\
+         \x20   let i = match inset with | None -> 0pt | Some(v) -> v in\n\
+         \x20   [\n\
+         \x20     fill (Gray(0.0))\n\
+         \x20       (close-with-line\n\
+         \x20          (line-to (x +\' w, y +\' h -\' i)\n\
+         \x20             (line-to (x +\' w, y)\n\
+         \x20                (start-path (x +\' i, y)))))\n\
+         \x20   ]\n\
+         end\n",
+    );
+    dir.write("xver-helper.satyh", XVER_HELPER_SRC);
+    dir.write(
+        "entry.saty",
+        "\
+@require: xver-deco-opt
+@import: xver-helper
+
+let ctx = get-initial-context 440pt (command \\XverHelper.math) in
+let framed d =
+  inline-frame-outer (2pt, 2pt, 2pt, 2pt) d
+    (read-inline ctx {Hello, optional-argument cross-version deco!})
+in
+let body =
+  line-break true true ctx
+    (framed (XverDecoOpt.frame 1pt)
+       ++ framed ((XverDecoOpt.frame) (Some(6pt)) 1pt))
+in
+let content pbinfo = (| text-origin = (72pt, 100pt), text-height = 640pt |) in
+let parts pbinfo =
+  (| header-origin = (72pt, 72pt),  header-content = block-nil,
+     footer-origin = (72pt, 800pt), footer-content = block-nil |)
+in
+page-break (210mm, 297mm) content parts body
+",
+    );
+
+    let opts = LoadOptions {
+        lib_root: Some(dir.path().to_path_buf()),
+        version: RustyfiVersion::V0_1,
+        ..Default::default()
+    };
+    let program = rustyfi_loader::load(&dir.path().join("entry.saty"), &opts)
+        .unwrap_or_else(|e| panic!("loading the optional-arg deco fixture should succeed: {e}"));
+
+    let mono = Mono;
+    let (doc, _trials) = rustyfi_lang::compile_document_v1_with_trials(&program.files, &mono)
+        .unwrap_or_else(|e| {
+            panic!(
+                "an OPTIONAL-argument arrow in a V0_0 `deco` export should cross by \
+                 positional forwarding: {e}"
+            )
+        });
+
+    assert_eq!(doc.pages.len(), 1, "one A4 page");
+    assert_eq!(
+        doc.extras.page_graphics[0]
+            .iter()
+            .filter(|g| matches!(g, GraphicsElem::Group(_)))
+            .count(),
+        2,
+        "both call spellings (marker-less omit, parenthesised-head supply) must have \
+         fired the coerced deco, got: {:?}",
+        doc.extras.page_graphics[0]
+    );
+}
+
 /// X3.6's `xver_boundary_mathboxes_not_aliased` (NEGATIVE/soundness, S2): a
 /// `V0_0` export whose crossed value is `math` (relabeled to
 /// `math-text`) must NOT satisfy a `V0_1` `math-boxes` site — `math-boxes`

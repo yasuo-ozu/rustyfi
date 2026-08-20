@@ -160,6 +160,111 @@ relabelled to `math-text` for you, and `deco`/`deco-set`/`paren` cross through
 generated wrappers. The reverse direction is partial — see
 [Known gaps](#known-gaps).
 
+## Staging
+
+A program runs in two stages. **Stage 1** is the document stage: it produces the
+PDF, and it is where a `.saty` file's own code lives. **Stage 0** runs before any
+of that, and its job is to build stage-1 code rather than to typeset anything.
+
+Two prefixes move between them, and they are inverses. `&e` **quotes**: it does
+not run `e`, it yields a value standing for it. `~e` **splices**: it runs `e` one
+stage earlier and inserts the code value that comes back into the program at
+that point. `~(&e)` is `e`. A quote is legal only at stage 0 and a splice only at
+stage 1, which is why the macro below needs a stage of its own to live at.
+
+```satysfi
+% macros.satyh
+@stage: 0
+
+let twice c = &( ~c ^ ~c )
+```
+
+```satysfi
+% doc.saty
+@require: stdja-mini
+@import: macros
+
+let s = ~(twice &(`ab`)) in
+document (|
+  title = {Staging};
+  author = {yasuo};
+|) '<
+  +p(embed-string s);
+>
+```
+
+```console
+$ rustyfi doc.saty
+  output written on doc.pdf (1 page(s), 2 line(s)).
+```
+
+The page reads `abab`. `twice` ran before the document did and leaves no trace in
+it; what the document evaluates is `` `ab` ^ `ab` ``.
+
+A file says which stage it is written at differently in each generation:
+
+- **0.0.6** — one header for the whole file: `@stage: 0`, `@stage: 1` (the
+  default, so documents need no header) or `@stage: persistent`. `persistent` is
+  its own stage, nameable from both of the others; upstream's `list.satyg` and
+  `option.satyg` are written at it, which is what lets a document call `List.map`
+  at all.
+- **0.1** — no header, one qualifier per binding: `val ~x = e` is stage 0, `val
+  persistent ~x = e` is persistent, a plain `val x = e` is stage 1. It goes in
+  front of every binding shape — `val ~rec`, `val ~mutable`, `val ~inline`, `val
+  ~block`, `val ~math`.
+
+```satysfi
+% macros.satyh — the same macro, 0.1
+module Macro :> sig
+  val ~twice : code string -> code string
+end = struct
+  val ~twice c = &( ~c ^ ~c )
+end
+```
+
+The document splices it the same way, writing ``~(Macro.twice &(`ab`))``:
+
+```console
+$ rustyfi --lang 0.1 doc.saty
+  output written on doc.pdf (1 page(s), 2 line(s)).
+```
+
+`code τ` is the type `&` produces, and it is a **0.1 spelling only** — 0.0.6 has
+none, deliberately: upstream's 0.0.6 type decoder knows `list` and `ref` and
+nothing else, so `int code` there is an undefined type name and stays one here. A
+0.1 signature declares its member's stage as well as its type, and the `struct`
+has to provide both.
+
+Staging crosses the generation boundary, too: a `@stage: 0` 0.0.6 library's
+macro is usable from a 0.1 document, and the other way round, with each side
+keeping its own stage rules. A quote keeps the generation it was **written**
+in, whichever generation forces it — a `&` inside a 0.0.6 package still means
+0.0.6's primitives when a 0.1 document splices it, so a macro cannot change
+meaning by being imported. The one thing refused is a 0.0.6 package that writes
+`code` in a `type` declaration: since 0.0.6 has no such spelling, that text
+would quietly become 0.1's real `code` type on the way in, so it errors instead
+of changing meaning.
+
+The rule that catches people out: **a stage-0 binding cannot be named from stage
+1.** Only `persistent` crosses. So the reference has to sit inside a splice —
+`~(twice …)`, never `twice …`:
+
+```console
+$ rustyfi doc.saty
+Error: doc.saty: line 4, characters 8-13: invalid occurrence of variable 'twice' as to stage: it is bound at stage 0, but this is stage 1
+```
+
+The same rule applies *inside* a quote, which is the surprising half: a quote's
+body is one stage later, so a stage-0 parameter is out of scope there. `let twice
+c = &( c ^ c )` is refused for naming `c`; `&( ~c ^ ~c )` is what you meant,
+because `~c` reads `c` back at stage 0.
+
+One deviation from upstream. Upstream resolves every splice in a preprocessing
+pass, before any stage-1 code runs, so all splices happen first and in file
+order; here a splice runs where it stands. For the pure code-building staging is
+for, the value is identical — the two differ only for side effects interleaved
+between a splice and the stage-1 code around it.
+
 ## HTML output
 
 ```console
@@ -227,12 +332,14 @@ upstream's default (non-bytecode) interpreter it is still 3.1× faster.
 - `figbox` comes out one page short of upstream — a line-packing difference.
 - Fonts are named by file or hash entry, not by package: a document asking for
   `fonts-junicode:Junicode-Bold` falls back to a name heuristic.
-- Cross-version `deco` crosses both ways now, but not through an
-  optional-argument arrow, and the reverse direction not through a nested
-  module signature.
-- `font` and 0.1's `paren` are stand-in types, and neither generation has
-  surface syntax for the `code` type, so a signature cannot name a staged
-  member.
+- Cross-version `deco` crosses both ways now, including through optional
+  arguments and nested module signatures — but not through an *open* optional
+  row (nothing names the labels to forward) or a functor signature member.
+- `font` and 0.1's `paren` are stand-in types, so neither crosses generations.
+- A 0.0.6 package that WRITES `code` in a `type` declaration is refused rather
+  than crossing: 0.0.6 has no `code` spelling, so that text would silently
+  acquire 0.1's meaning on the way in. Ordinary staged exports — the inferred
+  kind, from `&e` — are unaffected and cross both ways.
 
 ## The manual
 
@@ -267,7 +374,7 @@ scripts/                  fidelity and benchmark harnesses, font fetcher
 
 The grammar is derived, not hand-written, using the
 [`syan`](https://crates.io/crates/syan) parser framework: the CST types *are*
-the grammar. `cargo test --workspace` runs 1587 tests; CI adds the corpus
+the grammar. `cargo test --workspace` runs 1745 tests; CI adds the corpus
 regression and the layout-fidelity comparison above.
 
 ## License

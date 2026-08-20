@@ -343,6 +343,16 @@ fn check_program_inner<'s, 'a>(
                     // check, then commit the DECLARED scheme (§4.2 steps
                     // 4-5 — sealing).
                     Some(decl) => {
+                        // The STAGE half of conformance, checked before the
+                        // type half exactly as upstream orders it
+                        // (`signatureSubtyping.ml:286-298`): `sig val ~c :
+                        // int end = struct val c = 1 end` has matching types
+                        // and still promises a member the struct does not
+                        // provide. Type-first would report nothing at all
+                        // here, which is the gap this closes.
+                        if !stage_conforms(bind_stage, decl.stage) {
+                            return Err(stage_mismatch_error(name_text, decl, bind_stage));
+                        }
                         let (_, inferred) = &schemes[0];
                         sig_subtype::val_subsumes(
                             ck.ctx_mut(),
@@ -529,6 +539,29 @@ fn seal_mismatch_error(
             source: None,
         },
     }
+}
+
+/// The stage twin of [`seal_mismatch_error`]: the sealed member `qualified`
+/// (e.g. `"M.c"`) is written at one stage and its signature declares another.
+/// Both are named, and both are named the way the rest of the staging
+/// diagnostics name a stage ([`types::Stage::as_str`]), so the reader can see
+/// which `~` to add or drop.
+fn stage_mismatch_error(
+    qualified: &str,
+    decl: &DeclaredVal,
+    implemented: types::Stage,
+) -> TypeError {
+    let module_name = qualified.rsplit_once('.').map(|(m, _)| m).unwrap_or("");
+    simple_error(
+        Some(decl.span),
+        format!(
+            "module `{module_name}` does not match its signature: value `{}` is bound at \
+             {} but its signature declares it at {}",
+            decl.name,
+            implemented.as_str(),
+            decl.stage.as_str(),
+        ),
+    )
 }
 
 fn simple_error(span: Option<Span>, message: String) -> TypeError {
@@ -1280,7 +1313,7 @@ fn prescan_seal_types<'a>(
                 if let Some((idx, refine)) = refines
                     .iter()
                     .enumerate()
-                    .find(|(_, r)| r.name == name.name)
+                    .find(|(_, r)| r.path.is_empty() && r.name == name.name)
                 {
                     consumed_refine_idx.push(idx);
                     let refine_arity = refine.tyvars.len();
@@ -1392,6 +1425,23 @@ fn prescan_seal_types<'a>(
                     param, dom, cod, ..
                 } => {
                     let _ = param;
+                    // `S with Make type t = τ` on a FUNCTOR member: a functor
+                    // has no type members at any path of its own — its
+                    // codomain's types exist only at an APPLICATION's path —
+                    // so there is nothing here to refine.
+                    if let Some(r) = refines.iter().find(|r| r.path.first() == Some(&name.name)) {
+                        return Err(simple_error(
+                            Some(r.span),
+                            format!(
+                                "module `{module_name}`'s signature: `with {} type {}` refines a \
+                                 type through `{}`, which the signature declares as a FUNCTOR — a \
+                                 functor's types exist only at an application's own path",
+                                r.path.join("."),
+                                r.name,
+                                name.name
+                            ),
+                        ));
+                    }
                     handle_functor_sig_member(
                         kw.0,
                         &name.name,
@@ -1406,6 +1456,22 @@ fn prescan_seal_types<'a>(
                 }
                 other_sig => {
                     let owned_trigger = subtree_trigger.clone().map(|t| (t, module_name.clone()));
+                    // Sub-slice 2e-2 §2.3, extended: every `S with N type t =
+                    // τ` refinement addressed to THIS member descends into it
+                    // with one segment consumed, so the child layer sees an
+                    // ordinary refinement of its own decls (and reports its
+                    // own precise error if it declares no such type).
+                    let child_refines: Vec<surface::Refine<'a>> = refines
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, r)| r.path.first() == Some(&name.name))
+                        .map(|(idx, r)| {
+                            consumed_refine_idx.push(idx);
+                            let mut r = r.clone();
+                            r.path.remove(0);
+                            r
+                        })
+                        .collect();
                     handle_nested_module_decl(
                         kw.0,
                         &name.name,
@@ -1419,6 +1485,7 @@ fn prescan_seal_types<'a>(
                         immediate_hides,
                         &module_name,
                         &owned_trigger,
+                        &child_refines,
                         pending,
                         links,
                     )?;
@@ -1453,6 +1520,20 @@ fn prescan_seal_types<'a>(
     for (idx, refine) in refines.iter().enumerate() {
         if consumed_refine_idx.contains(&idx) {
             continue;
+        }
+        // A PATHED refine no `Decl::Module` member claimed: the signature
+        // declares no sub-module of that name at all (a functor member of
+        // that name has already errored, above, with its own derivation).
+        if let Some(head) = refine.path.first() {
+            return Err(simple_error(
+                Some(refine.span),
+                format!(
+                    "module `{module_name}`'s signature: `with {} type {}` refines a type \
+                     through `{head}`, which the signature never declares as a module",
+                    refine.path.join("."),
+                    refine.name
+                ),
+            ));
         }
         if declared_types.contains(&refine.name) {
             return Err(simple_error(
@@ -1545,6 +1626,13 @@ fn prescan_seal_types<'a>(
 
 /// Sub-slice 2d-3b §3.3: recursive matching for a non-functor
 /// `Decl::Module { N : S_N }` member.
+///
+/// `parent_refines` are the enclosing signature's `S with N ⟨…⟩ type t = τ`
+/// refinements addressed to THIS member, already stripped of the `N` segment
+/// — they compose with (and are applied after) the member's own declared
+/// `S_N with type …`, so `sig module N : S with type t = int end` and `sig
+/// module N : S end with N type t = int` reach `prescan_seal_types` in the
+/// same shape.
 #[allow(clippy::too_many_arguments)]
 fn handle_nested_module_decl<'a>(
     kw_span: Span,
@@ -1559,6 +1647,7 @@ fn handle_nested_module_decl<'a>(
     immediate_hides: &mut Vec<(String, String)>,
     parent_module_name: &str,
     subtree_trigger: &Option<(String, String)>,
+    parent_refines: &[surface::Refine<'a>],
     pending: &mut Vec<PendingSeal<'a>>,
     links: &mut Vec<PendingLink<'a>>,
 ) -> Result<(), TypeError> {
@@ -1578,7 +1667,8 @@ fn handle_nested_module_decl<'a>(
     // Sub-slice 2e-2 §9's handoff note: routing this through the SAME
     // `resolve_sig` funnel means `module N : S_incl` (a nested sig member
     // whose own declared signature includes/refines) just works.
-    let s_n_resolved = resolve_sig(s_n, &child_path.join("."), surfaces, &child_path)?;
+    let mut s_n_resolved = resolve_sig(s_n, &child_path.join("."), surfaces, &child_path)?;
+    s_n_resolved.refines.extend(parent_refines.iter().cloned());
     match locate_child_module(view, child_name, &child_path, surfaces) {
         ChildModuleShape::UnsealedStruct(inner_binds) => {
             let child_tyenv = tyenv.child(&child_path, inner_binds.iter().copied(), surfaces);
@@ -1972,28 +2062,24 @@ fn resolve_sig_visited<'a>(
         // `S with type t = τ` (§2.2/§2.3): resolve the base (a `SigBotV1` —
         // never itself a `with`, the grammar's own left-recursion note),
         // then APPEND this node's own refines.
+        //
+        // `S with M type t = τ` (a SUB-MODULE refinement) resolves exactly
+        // the same way — the chain rides along as the collected
+        // [`surface::Refine::path`], and `prescan_seal_types` routes it into
+        // the `Decl::Module` member of that name, where it lands as an
+        // ordinary empty-path refinement of the child layer's own `type t ::
+        // o`. Until 2d-3b landed, a signature could not have `Decl::Module`
+        // members at all, so this arm was a flat reject naming that slice;
+        // there is nothing left for it to wait on.
         ast_v1::SigExpr::WithType {
-            base,
-            path: None,
-            binds,
-            ..
+            base, path, binds, ..
         } => {
             let mut resolved = resolve_sig_bot(base, module_name, surfaces, site_path, visited)?;
-            resolved.refines.extend(surface::collect_refines(binds));
+            resolved
+                .refines
+                .extend(surface::collect_refines(binds, surface::mod_chain_segments(path)));
             Ok(resolved)
         }
-        // `S with M type t = τ` (a sub-module refinement): needs
-        // `Decl::Module` members to be elaborated structures — 2d-3b's own
-        // recursive-structure territory (§7, §9's handoff note).
-        ast_v1::SigExpr::WithType {
-            path: Some(chain), ..
-        } => Err(simple_error(
-            Some(mod_chain_span_v1(chain)),
-            format!(
-                "module `{module_name}`'s signature: `with type` on a sub-module's type \
-                 needs module members in signatures — Sub-slice 2d-3b"
-            ),
-        )),
         ast_v1::SigExpr::Functor { lp, .. } => Err(simple_error(
             Some(lp.0),
             format!(
@@ -2839,16 +2925,47 @@ fn decl_eq(a: &ast_v1::Decl, b: &ast_v1::Decl) -> bool {
     }
 }
 
-/// Do two `val` decls declare the same stage? Absent is stage 1, `~` is
+/// Which stage a `val` decl's qualifier declares. Absent is stage 1, `~` is
 /// stage 0, `persistent ~` is the persistent stage
 /// (`parser_v1.mly:600-603`) — three distinct values out of an
-/// `Option<BindStageV1>`, which is why this is not a plain `==`.
-fn decl_stage_eq(a: Option<&cst_v1::BindStageV1>, b: Option<&cst_v1::BindStageV1>) -> bool {
-    match (a, b) {
-        (None, None) => true,
-        (Some(x), Some(y)) => x.persistent.is_some() == y.persistent.is_some(),
-        _ => false,
+/// `Option<BindStageV1>`, which is why the comparators below go through this
+/// rather than deriving `PartialEq` on the token.
+fn decl_stage(s: Option<&cst_v1::BindStageV1>) -> types::Stage {
+    match s {
+        None => types::Stage::Stage1,
+        Some(st) if st.persistent.is_some() => types::Stage::Persistent0,
+        Some(_) => types::Stage::Stage0,
     }
+}
+
+/// Do two `val` decls declare the same stage? (Signature-vs-signature; a
+/// signature against an IMPLEMENTATION is [`stage_conforms`], which is a
+/// subsumption rather than an equality.)
+fn decl_stage_eq(a: Option<&cst_v1::BindStageV1>, b: Option<&cst_v1::BindStageV1>) -> bool {
+    decl_stage(a) == decl_stage(b)
+}
+
+/// May a binding written at `implemented` satisfy a signature declaring
+/// `declared`? Upstream's `signatureSubtyping.ml:286-298`, verbatim: a
+/// `persistent` binding is reachable from every stage and so satisfies any
+/// declaration, and the other two stages must match exactly. Notably NOT
+/// reflexive-by-widening in the other direction — a stage-0 binding does not
+/// satisfy a `persistent` declaration, because what the signature promises
+/// (nameable from stage 1 too) is more than the binding can do.
+///
+/// Both stage checks in this file go through here, because upstream runs both
+/// through the same rows: the sealed-binding check (`check_program`'s spine
+/// walk) and the layer check a PARENT signature performs when it re-declares a
+/// nested child's member ([`process_link_member`]). In the latter the
+/// "implemented" side is the child's own DECLARED stage — upstream's
+/// `subtype_concrete_with_concrete` matches exactly this on `(stage1, stage2)`
+/// with `ssig1` the inner signature.
+fn stage_conforms(implemented: types::Stage, declared: types::Stage) -> bool {
+    use types::Stage::*;
+    matches!(
+        (implemented, declared),
+        (Persistent0, _) | (Stage0, Stage0) | (Stage1, Stage1)
+    )
 }
 
 fn tyvar_list_eq(a: &[TypeVarTok], b: &[TypeVarTok]) -> bool {
@@ -3722,6 +3839,7 @@ fn phase_c_finish<'s>(
             match &*d.0 {
                 ast_v1::Decl::Val {
                     kw,
+                    stage,
                     name,
                     quant,
                     ty,
@@ -3731,6 +3849,7 @@ fn phase_c_finish<'s>(
                         kw.0,
                         &name.name,
                         name.span,
+                        decl_stage(stage.as_ref()),
                         quant,
                         ty,
                         CmdShape::None,
@@ -3750,6 +3869,10 @@ fn phase_c_finish<'s>(
                         kw.0,
                         &cmd.name,
                         cmd.span,
+                        // No stage slot on a command decl (`parser_v1.mly:
+                        // 604-607` takes no `bind_stage`), so a command
+                        // member is declared at the document stage.
+                        types::Stage::Stage1,
                         quant,
                         ty,
                         CmdShape::Inline,
@@ -3769,6 +3892,7 @@ fn phase_c_finish<'s>(
                         kw.0,
                         &cmd.name,
                         cmd.span,
+                        types::Stage::Stage1,
                         quant,
                         ty,
                         CmdShape::Block,
@@ -3827,25 +3951,59 @@ fn phase_c_finish<'s>(
                 ast_v1::Decl::Val {
                     kw,
                     name,
+                    stage,
                     quant,
                     ty,
                     ..
                 } => {
                     process_link_member(
-                        kw.0, &name.name, name.span, quant, ty, link, ck, mint, env,
+                        kw.0,
+                        &name.name,
+                        name.span,
+                        decl_stage(stage.as_ref()),
+                        quant,
+                        ty,
+                        link,
+                        ck,
+                        mint,
+                        env,
                     )?;
                     declared.push(name.name.clone());
                 }
                 ast_v1::Decl::ValHorzCmd {
                     kw, cmd, quant, ty, ..
                 } => {
-                    process_link_member(kw.0, &cmd.name, cmd.span, quant, ty, link, ck, mint, env)?;
+                    process_link_member(
+                        kw.0,
+                        &cmd.name,
+                        cmd.span,
+                        // No stage slot on a command decl (`parser_v1.mly:
+                        // 604-607`), exactly as in `process_seal_member`.
+                        types::Stage::Stage1,
+                        quant,
+                        ty,
+                        link,
+                        ck,
+                        mint,
+                        env,
+                    )?;
                     declared.push(cmd.name.clone());
                 }
                 ast_v1::Decl::ValVertCmd {
                     kw, cmd, quant, ty, ..
                 } => {
-                    process_link_member(kw.0, &cmd.name, cmd.span, quant, ty, link, ck, mint, env)?;
+                    process_link_member(
+                        kw.0,
+                        &cmd.name,
+                        cmd.span,
+                        types::Stage::Stage1,
+                        quant,
+                        ty,
+                        link,
+                        ck,
+                        mint,
+                        env,
+                    )?;
                     declared.push(cmd.name.clone());
                 }
                 _ => {}
@@ -3903,10 +4061,12 @@ fn phase_c_finish<'s>(
 /// ones — the spine still enforces the child's OWN seal against the real
 /// inference; soundness: inferred ⊑ inner (spine) ∧ inner ⊑ outer (link) ⟹
 /// inferred ⊑ outer, what escapes through the parent).
+#[allow(clippy::too_many_arguments)]
 fn process_link_member<'s>(
     _kw_span: Span,
     member_name: &str,
     member_span: Span,
+    outer_stage: types::Stage,
     quant: &[TypeVarTok],
     ty: &ast_v1::TypeExpr,
     link: &PendingLink,
@@ -3926,6 +4086,32 @@ fn process_link_member<'s>(
             ),
         ));
     };
+
+    // The STAGE half of the layer check, and the same relation the
+    // implementation-vs-signature half uses — upstream runs BOTH through one
+    // fold: `subtype_concrete_with_concrete`'s `ConcStructure/ConcStructure`
+    // case matches `(stage1, stage2)` (inner against outer) and only calls
+    // `subtype_poly_type` on an accepting row, reporting
+    // `NotASubtypeAboutValueStage` otherwise (`dev-0-1-0
+    // signatureSubtyping.ml:279-298`). Here `inner.stage` is the CHILD's own
+    // declared stage — cloned along with the rest of its `DeclaredVal`, so
+    // without this the parent's `val ~y` and the child's `val y` never met and
+    // the disagreement was silently accepted (the types unify).
+    //
+    // The stage is NOT overwritten the way the scheme is below. `inner.stage`
+    // is a check input only (the spine compares the BINDING against it,
+    // `check_program`'s sealed arm), and leaving it alone keeps the same
+    // soundness argument the scheme's doc comment makes: bound ⊑ inner (spine)
+    // ∧ inner ⊑ outer (here) ⟹ bound ⊑ outer, since `stage_conforms` is
+    // transitive.
+    if !stage_conforms(inner.stage, outer_stage) {
+        return Err(link_stage_mismatch_error(
+            link,
+            member_name,
+            &inner,
+            outer_stage,
+        ));
+    }
 
     let cst_ty = lower::lower_type_expr(ty, &link.tyenv).map_err(|e| {
         simple_error(
@@ -3973,6 +4159,32 @@ fn process_link_member<'s>(
         entry.scheme = outer_scheme;
     }
     Ok(())
+}
+
+/// The stage twin of [`link_mismatch_error`] — and the link twin of
+/// [`stage_mismatch_error`], deliberately the same shape as both: a sub-module
+/// member is sealed at one stage and the PARENT's signature re-declares it at
+/// another. Both stages are named, spelled the way every other staging
+/// diagnostic spells one ([`types::Stage::as_str`]), so the reader can see
+/// which `~` to add or drop and on which of the two signatures.
+fn link_stage_mismatch_error(
+    link: &PendingLink,
+    member: &str,
+    inner: &DeclaredVal,
+    outer_stage: types::Stage,
+) -> TypeError {
+    let sub_module = link.child_path.join(".");
+    simple_error(
+        Some(inner.span),
+        format!(
+            "module `{}` does not match its signature: sub-module `{sub_module}`'s value \
+             `{member}` is sealed at {} but `{}`'s signature declares it at {}",
+            link.parent_name,
+            inner.stage.as_str(),
+            link.parent_name,
+            outer_stage.as_str(),
+        ),
+    )
 }
 
 fn link_mismatch_error(
@@ -4097,6 +4309,7 @@ fn process_seal_member<'s>(
     kw_span: Span,
     member_name: &str,
     member_span: Span,
+    stage: types::Stage,
     quant: &[TypeVarTok],
     ty: &ast_v1::TypeExpr,
     shape: CmdShape,
@@ -4213,6 +4426,7 @@ fn process_seal_member<'s>(
             rigid: rigid_body,
             span: kw_span,
             stamp_marker,
+            stage,
         },
     );
     Ok(())

@@ -49,6 +49,14 @@
 //! and parses that instead. This is deliberately a pre-pass, not a clap
 //! setting, because no clap setting expresses the distinction above.
 //!
+//! The tail walk is value-aware (`find_subcommand_split`): a flag that TAKES
+//! a value has its value skipped rather than considered as a candidate split
+//! point, so `rustyfi --lib-root search install foo` is not split at
+//! `search` (`--lib-root`'s value) — it hoists at `install`, the real
+//! subcommand. The set of value-taking flags is read off the actual `Command`
+//! tree (`value_taking_flag_spellings`, via `get_num_args`/`ArgAction`), not
+//! hand-maintained, so a flag added later stays covered automatically.
+//!
 //! A second, narrower case: the first parse can also SUCCEED with the wrong
 //! meaning instead of failing outright, when nothing follows the swallowed
 //! word to expose the mistake — `rustyfi --config F install` (no PATH) parses
@@ -68,17 +76,25 @@
 //! change the outcome of anything else that parses correctly today — compile
 //! mode on a real document is untouched, byte for byte.
 //!
-//! Documented edge case: the hoist looks for the FIRST tail token that is
-//! literally a subcommand name, so a flag *value* that happens to collide
-//! with a subcommand name (`--lib-root search install foo`, meaning
-//! `--lib-root=search`, subcommand `install`) can pick the wrong split. Since
-//! the rewrite is only trusted when it goes on to parse cleanly (or resolves
-//! to a MORE specific `--help`/`--version`), the worst case is that the
-//! user's ORIGINAL error is reported unchanged — never a silently wrong
-//! compile or install. A literal `--` in the tail before any candidate word
-//! disables hoisting entirely, since at that point the user has explicitly
-//! said "nothing after this is a flag".
+//! A literal `--` in the tail before any candidate word disables hoisting
+//! entirely, since at that point the user has explicitly said "nothing after
+//! this is a flag".
+//!
+//! Remaining edge case: the value-taking set is a union across the WHOLE
+//! command tree (every personality, every subcommand), because the walk runs
+//! before we know which subcommand — and therefore which node's arg set —
+//! actually applies. Today no flag spelling is declared value-taking in one
+//! place and boolean in another, so this union is exact; if a future flag
+//! ever reused a spelling with different arity across subcommands, the walk
+//! would apply whichever arity it saw ANYWHERE in the tree, everywhere. A
+//! flag not in the tree at all (a typo) isn't recognized as value-taking
+//! either, so its value could still be mistaken for a split. Both are the
+//! same bounded failure mode as before: the rewrite is only trusted when it
+//! goes on to parse cleanly (or resolves to a MORE specific
+//! `--help`/`--version`), so the worst case is that the user's ORIGINAL error
+//! is reported unchanged — never a silently wrong compile or install.
 
+use std::collections::HashSet;
 use std::ffi::OsString;
 use std::path::PathBuf;
 
@@ -186,12 +202,10 @@ fn hoistable_subcommand_names() -> Vec<String> {
 /// or a literal `--` appears first (see the module doc's edge-case note).
 fn hoist_leading_subcommand(argv: &[OsString]) -> Option<Vec<OsString>> {
     let names = hoistable_subcommand_names();
+    let value_flags = value_taking_flag_spellings();
 
     let rest = argv.get(1..)?;
-    let stop = rest.iter().position(|a| a == "--").unwrap_or(rest.len());
-    let split = rest[..stop]
-        .iter()
-        .position(|a| a.to_str().is_some_and(|s| names.iter().any(|n| n == s)))?;
+    let split = find_subcommand_split(rest, &names, &value_flags)?;
     if split == 0 {
         // Already `SUBCOMMAND ...`; there is nothing before it to hoist, and
         // if this shape still fails to parse, reordering cannot help.
@@ -204,6 +218,81 @@ fn hoist_leading_subcommand(argv: &[OsString]) -> Option<Vec<OsString>> {
     out.extend_from_slice(&rest[..split]);
     out.extend_from_slice(&rest[split + 1..]);
     Some(out)
+}
+
+/// Walk `rest` (argv minus the multicall selector) left to right for the
+/// first token that is exactly one of `names`, treating a value-taking
+/// flag's value as opaque — never itself a candidate, and never even
+/// inspected for being `--` — so a flag value that happens to collide with a
+/// subcommand name (`--lib-root search install foo`, `search` being
+/// `--lib-root`'s value) is never mistaken for the split. `--flag value` is
+/// two tokens, so the value token after a bare `--flag`/`-f` is skipped;
+/// `--flag=value` is already one token, so nothing extra is skipped. A
+/// literal `--` reached before any candidate stops the walk with no split
+/// (see the module doc's edge-case note).
+fn find_subcommand_split(
+    rest: &[OsString],
+    names: &[String],
+    value_flags: &HashSet<String>,
+) -> Option<usize> {
+    let mut i = 0;
+    while i < rest.len() {
+        let Some(tok) = rest[i].to_str() else {
+            i += 1;
+            continue;
+        };
+        if tok == "--" {
+            return None;
+        }
+        if tok.starts_with('-') {
+            if !tok.contains('=') && value_flags.contains(tok) {
+                i += 2; // this flag AND its separate value token
+            } else {
+                i += 1;
+            }
+            continue;
+        }
+        if names.iter().any(|n| n == tok) {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
+}
+
+/// The flag spellings (`--long`, `-s`) that consume the FOLLOWING argv token
+/// as their value, read off every `Arg` in the whole command tree (both
+/// personalities, every subcommand, recursively) rather than hand-maintained
+/// — a flag added anywhere stays covered automatically. `Command::build`
+/// performs the normalization clap otherwise defers until a real parse
+/// (filling in each arg's default `num_args` from its `ArgAction`), which
+/// introspection needs done up front.
+fn value_taking_flag_spellings() -> HashSet<String> {
+    let mut cli = build_cli();
+    cli.build();
+    let mut out = HashSet::new();
+    collect_value_taking_flags(&cli, &mut out);
+    out
+}
+
+fn collect_value_taking_flags(cmd: &Command, out: &mut HashSet<String>) {
+    for arg in cmd.get_arguments() {
+        if arg.is_positional() {
+            continue;
+        }
+        if !arg.get_num_args().is_some_and(|r| r.takes_values()) {
+            continue;
+        }
+        if let Some(long) = arg.get_long() {
+            out.insert(format!("--{long}"));
+        }
+        if let Some(short) = arg.get_short() {
+            out.insert(format!("-{short}"));
+        }
+    }
+    for sub in cmd.get_subcommands() {
+        collect_value_taking_flags(sub, out);
+    }
 }
 
 /// Build the full multicall dispatch tree.

@@ -2631,6 +2631,16 @@ impl<'s> Checker<'s> {
     /// peeling through `ModuleScope`/`VersionScope` is because those wrappers
     /// are applied INSIDE `push_named_binding`/the `LetRec` arm, i.e. after
     /// the stage wrap, for a module member.
+    ///
+    /// Only the `ModuleScope` half of that peel actually fires. `elaborate.rs`
+    /// applies `maybe_v006_scope` to a binding's RHS and `stage_wrap_item`
+    /// outside it, so a cross-version staged binding is always
+    /// `StageScope(_, VersionScope(_, ..))` — the `VersionScope` arm is
+    /// reached only if some future arm builds the opposite nesting. Deleting
+    /// it breaks no test; deleting the `ModuleScope` arm breaks
+    /// `xver_staging.rs`'s `the_file_stage_and_the_version_scope_compose_on_a_
+    /// module_member`. Kept because `elaborate::already_staged` peels the same
+    /// two and the two must not disagree.
     pub(crate) fn binding_stage(&self, value: &Ast<'s>) -> Stage {
         fn declared<'s>(a: &Ast<'s>) -> Option<Stage> {
             match a {

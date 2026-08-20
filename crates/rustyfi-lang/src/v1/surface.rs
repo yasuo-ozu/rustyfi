@@ -95,6 +95,13 @@ pub(crate) struct SigDef<'a> {
 #[derive(Clone, Debug)]
 pub(crate) struct Refine<'a> {
     pub(crate) name: String,
+    /// The `S with ⟨M.N⟩ type t = τ` form's module chain, outermost first —
+    /// EMPTY for the plain `S with type t = τ`, which refines a type of the
+    /// signature's own layer. A non-empty path is consumed one segment at a
+    /// time as [`crate::v1::module_check`]'s `prescan_seal_types` descends
+    /// into the named `Decl::Module` member, so what the child layer sees is
+    /// again an empty-path refinement of its own `type t :: o`.
+    pub(crate) path: Vec<String>,
     pub(crate) tyvars: &'a [TypeVarTok],
     pub(crate) body: &'a cst_v1::TypeBodyV1,
     pub(crate) span: Span,
@@ -631,10 +638,10 @@ fn sig_bot_decls<'a>(
 /// a bare `WithType` node, PLUS — when the RHS's base names ANOTHER
 /// registered signature — that signature's OWN stored `refines` (so a
 /// refinement chain composes across `signature` bind boundaries, W6). A
-/// `with ⟨path⟩ type` RHS (`path: Some(_)`) is left UNREGISTERED (`None`) —
-/// this module never invents the precise 2d-3b error text; a later use sees
-/// the generic "unknown signature name" miss instead (safe, just less
-/// precise — §8 risk 8's accepted trade-off for a zero-demand corner).
+/// `with ⟨path⟩ type` RHS registers exactly the same way, its chain kept as
+/// the collected [`Refine::path`] (the consumer —
+/// `module_check::prescan_seal_types` — routes it into the named nested
+/// member; before that routing existed this arm was left UNREGISTERED).
 fn resolve_sig_rhs<'a>(
     sig: &'a ast_v1::SigExpr,
     env: &SurfaceEnv<'a>,
@@ -643,17 +650,27 @@ fn resolve_sig_rhs<'a>(
     match sig {
         ast_v1::SigExpr::Bot(bot) => sig_bot_decls(bot, env, site_path),
         ast_v1::SigExpr::WithType {
-            base,
-            path: None,
-            binds,
-            ..
+            base, path, binds, ..
         } => {
             let (decls, mut refines) = sig_bot_decls(base, env, site_path)?;
-            refines.extend(collect_refines(binds));
+            refines.extend(collect_refines(binds, mod_chain_segments(path)));
             Some((decls, refines))
         }
-        ast_v1::SigExpr::WithType { path: Some(_), .. } => None,
         ast_v1::SigExpr::Functor { .. } => None,
+    }
+}
+
+/// A `with M.N type ..` refinement's module chain as path segments — empty
+/// for the plain `with type ..` form (see [`Refine::path`]).
+pub(crate) fn mod_chain_segments(path: &Option<ast_v1::ModChainV1>) -> Vec<String> {
+    match path {
+        None => Vec::new(),
+        Some(ast_v1::ModChainV1::Single(t)) => vec![t.name.clone()],
+        Some(ast_v1::ModChainV1::Long(t)) => {
+            let mut segs = t.mods.clone();
+            segs.push(t.name.clone());
+            segs
+        }
     }
 }
 
@@ -664,18 +681,25 @@ fn resolve_sig_rhs<'a>(
 /// is INHERITED through a named `signature S2 = S with type …` bind).
 /// `pub(crate)`: shared by `v1/module_check.rs::resolve_sig`'s own inline
 /// `WithType` arm.
-pub(crate) fn collect_refines(binds: &cst_v1::TypeBindsErasedV1) -> Vec<Refine<'_>> {
+/// `path` is the refinement's own module chain — `[]` for `with type t = τ`,
+/// `["M"]` for `S with M type t = τ` — carried on every [`Refine`] the chain
+/// produces (`with M type t = τ and u = σ` refines two of `M`'s types).
+pub(crate) fn collect_refines(
+    binds: &cst_v1::TypeBindsErasedV1,
+    path: Vec<String>,
+) -> Vec<Refine<'_>> {
     let inner = &binds.0;
-    let mut out = vec![refine_from_single(&inner.first)];
+    let mut out = vec![refine_from_single(&inner.first, path.clone())];
     for a in &inner.ands {
-        out.push(refine_from_single(&a.bind));
+        out.push(refine_from_single(&a.bind, path.clone()));
     }
     out
 }
 
-fn refine_from_single(single: &cst_v1::TypeBindSingleV1) -> Refine<'_> {
+fn refine_from_single(single: &cst_v1::TypeBindSingleV1, path: Vec<String>) -> Refine<'_> {
     Refine {
         name: single.name.name.clone(),
+        path,
         tyvars: &single.tyvars,
         body: &single.body,
         span: single.name.span,

@@ -1475,6 +1475,111 @@ end
     );
 }
 
+/// D3s: the link layer compares the declared STAGE as well as the declared
+/// type — the parent-vs-child half of the stage conformance
+/// `staging_v1.rs` pins for the sig-vs-implementation half.
+///
+/// Upstream checks the two in the same fold: `subtype_concrete_with_concrete`'s
+/// `ConcStructure/ConcStructure` case matches `(stage1, stage2)` — inner
+/// against outer — before ever calling `subtype_poly_type`, and reports
+/// `NotASubtypeAboutValueStage` on the fallthrough
+/// (`dev-0-1-0 signatureSubtyping.ml:279-298`). The accepting rows are exactly
+/// `stage_conforms`: a persistent inner member satisfies any outer
+/// declaration, the other two must match.
+///
+/// Reaching this needs a NESTED sealed module (`d123_lib`'s shape): only there
+/// do two signatures meet each other, rather than a signature meeting a
+/// binding. `int` and `int` unify in every case below, so a link layer that
+/// compares only types accepts all four — which is what it used to do.
+#[test]
+fn d3s_link_layer_checks_the_declared_stage_not_only_the_type() {
+    // The parent promises the document stage may not name `N.y` without a
+    // splice (`val ~y`); `N`'s own seal exports it at the document stage. The
+    // two disagree, and the disagreement is invisible to the type check.
+    let lib = "\
+module M :> sig
+  module N : sig val ~y : int end
+  val w : int
+end = struct
+  module N :> sig val y : int end = struct
+    val y = 1
+  end
+  val w = 1
+end
+";
+    let msg = assert_type_error(lib, "1");
+    assert!(
+        msg.contains("stage 1") && msg.contains("stage 0") && msg.contains("sub-module `M.N`"),
+        "the error must name both stages and the sub-module, got {msg}"
+    );
+}
+
+#[test]
+fn d3s_a_matching_stage_through_the_link_is_accepted() {
+    // Without this the test above is satisfied by refusing every staged member
+    // behind a link. Same fixture, now honest on both layers.
+    let lib = "\
+module M :> sig
+  module N : sig val ~y : int end
+  val w : int
+end = struct
+  module N :> sig val ~y : int end = struct
+    val ~y = 1
+  end
+  val w = 1
+end
+";
+    assert_accepts(lib, "1");
+}
+
+#[test]
+fn d3s_a_persistent_child_member_satisfies_any_parent_declaration() {
+    // Upstream's three `(Persistent0, _)` rows, through the link: a persistent
+    // member is nameable from every stage, so it delivers whatever the parent's
+    // signature narrows it to. This is the row a real 0.1 library actually
+    // needs — `persistent` is what a nested utility module exports.
+    for parent in ["val y : int", "val ~y : int", "val persistent ~y : int"] {
+        let lib = format!(
+            "\
+module M :> sig
+  module N : sig {parent} end
+  val w : int
+end = struct
+  module N :> sig val persistent ~y : int end = struct
+    val persistent ~y = 1
+  end
+  val w = 1
+end
+"
+        );
+        assert_accepts(&lib, "1");
+    }
+}
+
+#[test]
+fn d3s_the_stage_subsumption_does_not_run_backwards_through_the_link() {
+    // The asymmetry: `persistent` in the PARENT's signature promises the
+    // document stage may name `M.N.y` directly, which a child sealed at stage 0
+    // cannot honour. Pinning it separately is what stops the rule above from
+    // being implemented as "any stage pair involving persistent is fine".
+    let lib = "\
+module M :> sig
+  module N : sig val persistent ~y : int end
+  val w : int
+end = struct
+  module N :> sig val ~y : int end = struct
+    val ~y = 1
+  end
+  val w = 1
+end
+";
+    let msg = assert_type_error(lib, "1");
+    assert!(
+        msg.contains("stage 0") && msg.contains("persistent stage"),
+        "the error must name both stages, got {msg}"
+    );
+}
+
 /// D3b width: the sig declares `module P : sig end` but the struct never
 /// defines `P` at all, and (second case) defines `P` as a plain VALUE
 /// instead of a module — both precise width errors, not a panic.
@@ -2036,23 +2141,116 @@ end
 }
 
 /// W8 out-of-scope rows: a variant-bodied refinement (`with type t = | A`)
-/// cannot introduce constructors; `with Sub type t = int` (the sub-module
-/// refinement form) names its 2d-3b deferral precisely.
+/// cannot introduce constructors.
 #[test]
 fn w8_with_type_out_of_scope_rows() {
     let lib_variant = "module M :> sig type t :: o end with type t = | A = struct type t = | A end";
     let msg = assert_type_error(lib_variant, "1");
     assert!(msg.contains("cannot introduce constructors"), "{msg}");
+}
 
-    let lib_path = "\
+/// W8b `S with M type t = τ` — the SUB-MODULE refinement form. It used to
+/// reject outright, naming Sub-slice 2d-3b: at the time, a signature could
+/// not have `Decl::Module` members at all, so there was no child layer to
+/// route the refinement into. 2d-3b landed, and this is that routing: the
+/// chain rides on [`surface::Refine::path`], `prescan_seal_types` hands it to
+/// the `Decl::Module` member of that name with one segment consumed, and the
+/// child layer applies it to its own `type t :: o` exactly as an
+/// unqualified `with type` would — no stamp minted, `M.Sub.t` transparent.
+///
+/// The proof is TRANSPARENCY, not mere acceptance: an unrefined sibling
+/// (`Opaque`) must keep its stamp and refuse to mix with `int`.
+#[test]
+fn w8b_with_submodule_type_refines_the_nested_member() {
+    let lib = "\
+module M :> sig
+  module Sub : sig
+    type t :: o
+    val mk : int -> t
+  end
+end with Sub type t = int = struct
+  module Sub = struct
+    type t = int
+    val mk n = n
+  end
+end
+";
+    assert_accepts(lib, "M.Sub.mk 1 + 1");
+
+    let lib_opaque = "\
+module M :> sig
+  module Sub : sig
+    type t :: o
+    val mk : int -> t
+  end
+end = struct
+  module Sub = struct
+    type t = int
+    val mk n = n
+  end
+end
+";
+    let msg = assert_type_error(lib_opaque, "M.Sub.mk 1 + 1");
+    assert!(!msg.is_empty(), "{msg}");
+}
+
+/// W8c the same form, spelled through a NAMED signature
+/// (`signature S2 = S with Sub type t = int`) — the refinement is stored on
+/// the `SigDef` and inherited at every use site, the same composition W6
+/// pins for the unqualified form.
+#[test]
+fn w8c_with_submodule_type_composes_through_a_named_signature() {
+    let lib = "\
+module Lib = struct
+  signature S = sig
+    module Sub : sig
+      type t :: o
+      val mk : int -> t
+    end
+  end
+  signature S2 = S with Sub type t = int
+  module M :> S2 = struct
+    module Sub = struct
+      type t = int
+      val mk n = n
+    end
+  end
+end
+";
+    assert_accepts(lib, "Lib.M.Sub.mk 1 + 1");
+}
+
+/// W8d the two shapes `S with M type t = τ` still refuses, each for a reason
+/// derived from what a refinement IS — a narrowing of a type member that
+/// exists at a path:
+///
+/// - a chain segment naming no `module` member of the signature at all;
+/// - a chain segment naming a FUNCTOR member: a functor has no types at a
+///   path of its own, only at an application's.
+#[test]
+fn w8d_with_submodule_type_refuses_a_path_that_names_no_module() {
+    let lib_missing = "\
 module M :> sig
   module Sub : sig type t :: o end
-end with Sub type t = int = struct
+end with Nope type t = int = struct
   module Sub = struct type t = int end
 end
 ";
-    let msg2 = assert_type_error(lib_path, "1");
-    assert!(msg2.contains("Sub-slice 2d-3b"), "{msg2}");
+    let msg = assert_type_error(lib_missing, "1");
+    assert!(
+        msg.contains("never declares it as a module") || msg.contains("never declares as a module"),
+        "{msg}"
+    );
+
+    let lib_functor = "\
+module M :> sig
+  module Make : (X : sig val n : int end) -> sig type t :: o end
+end with Make type t = int = struct
+  module Make = fun (X : sig val n : int end) -> struct type t = int end
+end
+";
+    let msg2 = assert_type_error(lib_functor, "1");
+    assert!(msg2.contains("FUNCTOR"), "{msg2}");
 }
 
 /// W9 refinement through a splice: example 2 verbatim — `Big` includes `Eq`

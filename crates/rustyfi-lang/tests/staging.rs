@@ -43,6 +43,25 @@ fn typecheck_str(src: &str, stages: &HashMap<usize, Stage>) -> Result<(), String
         .map_err(|e| format!("{e}"))
 }
 
+/// Typecheck AND evaluate, with per-entry stages — the two halves above run
+/// separately (`eval_str` deliberately skips the typechecker so it can hold a
+/// code value at stage 1), which is exactly wrong for the question "does an
+/// occurrence the stage matrix ACCEPTS also compute the right value?". Nothing
+/// but the whole pipeline can answer that.
+fn run_str(src: &str, stages: &HashMap<usize, Stage>) -> Result<Value, String> {
+    let file = rustyfi_syntax::parse_file(src).map_err(|e| format!("parse: {e}"))?;
+    let env = primitives::base_env();
+    let store = rustyfi_lang::symbol::SymbolStore::new();
+    let scope = elaborate::Scope::new(&store, env.names());
+    let program = elaborate::elaborate_program_with_stages(&file, &scope, stages)
+        .map_err(|e| format!("elaborate: {e}"))?;
+    typecheck::typecheck_verbose(&program).map_err(|e| format!("typecheck: {e}"))?;
+    let mut interp = eval::Interp::new(&NoMetrics);
+    interp
+        .eval(&env, &rustyfi_lang::ast::debrand(&program.body, &store))
+        .map_err(|e| format!("eval: {e}"))
+}
+
 struct NoMetrics;
 
 impl rustyfi_backend::FontMetrics for NoMetrics {
@@ -425,6 +444,108 @@ fn a_staged_binding_may_name_its_own_siblings_through_the_aliases_it_mints() {
         &stages,
     )
     .expect("a persistent module's members may name each other and be named from the document");
+}
+
+// ---------------------------------------------------------------------------
+// The `(Stage1, Persistent0)` cell, as a VALUE
+//
+// Upstream does not merely PERMIT that cell: it compiles it to a distinct node
+// (`Persistent(rng, evid)`, `typechecker.ml:670-671` in 0.0.6, `:346-347` on
+// `dev-0-1-0`) instead of the `ContentOf(rng, evid)` every other accepted cell
+// gets. That node exists for one reason, and it is an artefact of upstream's
+// code REPRESENTATION rather than of the semantics:
+//
+//   * upstream's stage-1 pass (`interpret_1`, `evaluator.cppo.ml:429` in 0.0.6,
+//     `:609` on `dev-0-1-0`) does not evaluate — it BUILDS a first-order
+//     `code_value`, alpha-renaming every binder it walks under into a fresh
+//     `CodeSymbol` and resolving an ordinary `ContentOf` through `find_symbol`;
+//   * a persistent binding is not one of those binders. It was evaluated at
+//     stage 0 (`interpret_bindings_0`'s `Persistent0 | Stage0` arm,
+//     `dev-0-1-0 evaluator.cppo.ml:1177-1195`) and lives in the VALUE
+//     environment, so `find_symbol` would miss it and upstream would
+//     `report_bug_ast "symbol not found"`;
+//   * so it is carried through verbatim as `CdPersistent(rng, evid)`
+//     (`interpret_1`'s own arm) and `unlift_code` maps it straight back to
+//     `ContentOf(rng, evid)` (`types.cppo.ml:1506` in 0.0.6, `:1340` on
+//     `dev-0-1-0`) — an ordinary environment lookup, by the SAME `EvalVarID`
+//     the typechecker resolved, once the generated code finally runs.
+//
+// So `Persistent` is capture-avoidance bookkeeping for a first-order code
+// representation, plus the escape hatch that lets a persistent name survive a
+// pass whose whole job is to replace names. This port has neither: a quote is a
+// CLOSURE (`compile.rs`'s `Ast::Next` — the compiled body paired with the
+// environment reaching it), every free name in it was already resolved to a
+// static slot in the scope the quote was WRITTEN in, and there is no renaming
+// pass to survive. The equivalent of `Persistent` here is that closure, and the
+// two tests below are what pin it: together they say the accepted cell computes
+// the persistent binding's value, and computes it from the quote's scope rather
+// than the splice's.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_persistent_binding_named_from_inside_a_quote_evaluates_to_its_value() {
+    // The cell, end to end. `&(p)` is read at stage 1 (a quote reads its body
+    // one stage later), and `p` is persistent — upstream's `(Stage1,
+    // Persistent0)` row, the ONLY one that mints a `Persistent` node on
+    // `dev-0-1-0`. The occurrence tests above prove the port accepts it; this
+    // proves the acceptance is worth something, which is the half a
+    // permission-only implementation gets wrong silently.
+    let mut stages = HashMap::new();
+    stages.insert(0usize, Stage::Persistent0);
+    stages.insert(1usize, Stage::Stage0);
+    let v = run_str("let p = 10\nlet c = &(p) in ~c", &stages)
+        .expect("a quote may name a persistent binding");
+    assert!(matches!(v, Value::Int(10)), "expected 10, got {v:?}");
+}
+
+#[test]
+fn a_quoted_persistent_reference_is_not_captured_at_the_splice_site() {
+    // The property upstream buys with the `EvalVarID` inside `CdPersistent`,
+    // stated as a value: the reference is to the BINDING, not to the name, so a
+    // same-named binding in scope where the code is spliced cannot intercept
+    // it. Here `~c` is forced under a `p` of 99, once as another top-level
+    // (spine) binding and once as a local, and both answers must still be the
+    // persistent 10.
+    //
+    // The port's stand-in for the `EvalVarID` is the compile-time slot: a
+    // top-level binding gets its OWN `Globals` slot (`compile.rs`'s
+    // `alloc_global`) and the quote body's occurrence is compiled against the
+    // slot in scope where the quote was WRITTEN. Give the shadowing binding the
+    // same slot instead — the "obvious" name-keyed spine table, which is a
+    // shape this codebase has genuinely shipped elsewhere — and both cases
+    // below return 99.
+    let mut stages = HashMap::new();
+    stages.insert(0usize, Stage::Persistent0);
+    stages.insert(1usize, Stage::Stage0);
+    for src in [
+        "let p = 10\nlet c = &(p)\nlet p = 99 in ~c",
+        "let p = 10\nlet c = &(p) in let p = 99 in ~c",
+    ] {
+        let v = run_str(src, &stages).expect("a quote may name a persistent binding");
+        assert!(
+            matches!(v, Value::Int(10)),
+            "the quote's `p` is the persistent binding, not the splice site's: {src} -> {v:?}"
+        );
+    }
+}
+
+#[test]
+fn a_quoted_persistent_reference_survives_being_carried_out_of_scope() {
+    // The sharper shape of the same property, and the one upstream's
+    // architecture makes non-obvious: the code value is built at stage 0 inside
+    // a function, returned, and spliced somewhere the persistent name is
+    // shadowed by an unrelated binding of a DIFFERENT TYPE. A name-based
+    // resolution would not merely give the wrong number here, it would fail to
+    // typecheck or return a string.
+    let mut stages = HashMap::new();
+    stages.insert(0usize, Stage::Persistent0);
+    stages.insert(1usize, Stage::Stage0);
+    let v = run_str(
+        "let p = 10\nlet c = (let hide = 1 in &(p * 2)) in let p = `no` in ~c",
+        &stages,
+    )
+    .expect("a quote may name a persistent binding");
+    assert!(matches!(v, Value::Int(20)), "expected 20, got {v:?}");
 }
 
 // ---------------------------------------------------------------------------

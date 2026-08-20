@@ -77,6 +77,7 @@ use rustyfi_syntax::cst_v1;
 use rustyfi_syntax::RustyfiVersion;
 
 use crate::types::{CmdArgType, MonoType, PolyType, Row};
+use crate::v1::surface::{self, SurfaceEnv};
 
 /// The verdict for one crossing binding's boundary type (design doc X3.2).
 #[derive(Debug, Clone, PartialEq)]
@@ -142,6 +143,66 @@ pub fn reject_type_names() -> std::collections::BTreeSet<String> {
     set
 }
 
+/// [`reject_type_names`] for a producer whose text was written as **0.0.6**,
+/// i.e. the forward arm's spliced `V0_0` dependency: the shared set plus
+/// `code`.
+///
+/// `code` is the third name whose fork the automatic
+/// [`crate::typecheck::forked_type_names`] diff structurally cannot see, and
+/// it is invisible for a third distinct reason:
+///
+/// - `math`/`deco`/… fork inside `name_to_mono`, so the diff finds them;
+/// - `page` forks only in its VALUE representation (`Value::Ctor` vs
+///   `Value::Product`) while its NAME lowers identically, so
+///   [`reject_type_names`] adds it by hand;
+/// - `code` forks one level ABOVE `name_to_mono`. It is not a bare type atom
+///   at all — it is the constructor of a one-argument type APPLICATION, and
+///   the gate lives in `typecheck::lower_type_app`'s `"code" if single
+///   .is_some() && version.has_code_type_syntax()` arm. Under `V0_1` `int
+///   code` is the real [`MonoType::Code`](crate::types::MonoType::Code);
+///   under `V0_0` it stays the opaque nominal `Variant("code", [int])`,
+///   because 0.0.6's manual-type decoder knows only `list` and `ref`
+///   (upstream `v0.0.6 src/frontend/typeenv.ml:527-530`, against
+///   `dev-0-1-0 src/frontend/manualTypeDecoder.ml:31-36` which adds `code`).
+///   `name_to_mono` only ever lowers a bare atom, so no per-NAME diff of it
+///   can ever report `code`.
+///
+/// Why that matters here and only here: a merged cross-version program has
+/// ONE `Checker.version`, hard-coded to `V0_1`
+/// (`v1::module_check::check_program_inner`), and a `TopBinding::Type`
+/// declaration's body is registered under it — never inside an
+/// `Ast::VersionScope` (this module's doc comment). So a 0.0.6 dependency
+/// that WRITES `code` in a type declaration has that text re-read with 0.1's
+/// vocabulary on the way in, and the dependency means something different
+/// inside a 0.1 program than it does standalone — in both directions of harm:
+/// a `XC (&(1))` upstream 0.0.6 refuses starts being accepted, and a package
+/// that declares its own `type 'a code` starts failing to unify against it.
+/// Refusing (loudly, `CompileError::CrossVersionUnsupportedName`) is the S1/S4
+/// posture every other unbridgeable name here gets. Relabeling the leaf to a
+/// private nominal would be the strictly-more-permissive upgrade if this ever
+/// costs a real package; no bundled 0.0.6 package writes `code` in type
+/// position today.
+///
+/// **Deliberately not in [`reject_type_names`] itself**, which both arms
+/// share. This fork is a property of the PRODUCER's generation, not of the
+/// crossing: a foreign **0.1** dependency's `code` is already written in the
+/// merged program's own (hard-coded `V0_1`) vocabulary, reads correctly with
+/// zero adaptation, and rejecting it would be a pure regression — pinned by
+/// `xver_staging.rs`'s `a_zero_one_dependency_may_still_write_the_code_type`.
+///
+/// An INFERRED `code` export — the only kind a 0.0.6 package can otherwise
+/// have, since `code τ` has no 0.0.6 spelling — writes no such text and is
+/// untouched by this, correctly: `Value::Code { body, env }` is one struct
+/// with no version field, and a quoted body's primitives freeze to the
+/// generation it was written in at compile time (`compile.rs`'s `Ast::Next`
+/// arm folds against `Compiler::current_version`), so the value crosses with
+/// its meaning intact. See `xver_staging.rs` for both halves.
+pub fn reject_type_names_from_v006() -> std::collections::BTreeSet<String> {
+    let mut set = reject_type_names();
+    set.insert("code".to_string());
+    set
+}
+
 /// A human hint for why `name` (a member of [`reject_type_names`]) can't be
 /// relabeled across the boundary — X3.1's classification table.
 fn forked_note(name: &str) -> &'static str {
@@ -173,6 +234,14 @@ fn forked_note(name: &str) -> &'static str {
             "0.0.6's paren closure takes explicit fontsize/axis/color arguments; \
              0.1's pulls them from `context` — different arity, needs a wrapper \
              (deferred to X3b)"
+        }
+        "code" => {
+            "0.0.6 has no `code` type spelling at all (its manual-type decoder knows \
+             only `list` and `ref`), so `τ code` there is an opaque user nominal — \
+             but a merged program reads every type declaration under one hard-coded \
+             V0_1 Checker, where the same text means the real staged type. An \
+             INFERRED `code` export (a `@stage: 0` binding's `&e`) is unaffected and \
+             crosses fine; only WRITTEN `code` type text does not"
         }
         "pre-path" | "path" | "graphics" | "image" | "font" => {
             "0.0.6 has no such primitive; this name is an opaque user-nominal \
@@ -706,9 +775,55 @@ pub(crate) enum DecoKind {
     Consumer,
 }
 
+/// How one LEAD argument position of a [`DecoExport`] spells its optional
+/// arguments, if any. The two generations model optionals so differently that
+/// the generated wrapper has to reproduce each one in its own terms — see
+/// [`deco_wrapper_src`] (0.0.6 → 0.1) and [`deco_downgrade_prelude`]
+/// (0.1 → 0.0.6).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum LeadOpt {
+    /// One plain mandatory argument, no optionals — every position of every
+    /// export that predates optional-argument support.
+    Mandatory,
+    /// **0.0.6**, `ty ?->`: this position IS the optional slot. 0.0.6's
+    /// optional arguments are POSITIONAL in this port — `lower_type_expr`
+    /// turns each `ty ?->` domain into a mandatory `option ty ->` domain, and
+    /// `elaborate.rs`'s `app_arg_to_ast` desugars a call site's `?:e`/`?*` to
+    /// the plain `Some e`/`None` constructors — so a positional
+    /// eta-expansion forwards one by VALUE with nothing lost.
+    ///
+    /// The one thing the wrapper must still reproduce is the `?:` MARKER on
+    /// its own parameter: `elaborate.rs`'s `param_optional_shape` records it
+    /// into [`Scope::optional_shape`], which is what lets a marker-less call
+    /// site (`frame p w h d`, no `?*`) auto-omit the slot. A wrapper with
+    /// plain parameters would shadow the export with one that has no recorded
+    /// shape, silently breaking every marker-less call.
+    V006Optional,
+    /// **0.1**, `?(l : τ, …) dom ->`: this position takes one mandatory
+    /// argument PLUS a LABELLED optional row (`MonoType::Func`'s [`Row`]),
+    /// named here in declared order. Labelled optionals are not positional
+    /// and cannot be forwarded by value: `Ast::LambdaOpt` binds the callee's
+    /// binder at `τ option` while `Ast::ApplyOpt`'s `?(l = e)` takes the
+    /// RAW `τ` and wraps it in `Some` itself, so there is no spelling that
+    /// hands an already-`option` value to a labelled slot. The wrapper
+    /// therefore CASE-SPLITS on each label's `option` and re-supplies exactly
+    /// the labels that were present — see [`deco_downgrade_prelude`].
+    V01Labels(Vec<String>),
+}
+
+/// The most optional LABELS (summed over every lead position) a 0.1 export
+/// may declare and still cross. The reverse wrapper's case split is
+/// exponential in this count (each label is independently present or absent
+/// at the call that reaches it), so it is bounded rather than unbounded; four
+/// labels is sixteen generated application sites, already far past anything
+/// the bundled corpora declare on a single `deco`.
+const V01_MAX_OPT_LABELS: usize = 4;
+
 /// One binding a cross-version splice can soundly value-coerce: some number
-/// of MANDATORY leading arguments followed by a `deco`/`deco-set`/`paren`
-/// tail — see this section's doc comment for the exact scope.
+/// of leading arguments (mandatory, or optional in whichever of the two
+/// generations' spellings — see [`LeadOpt`]) followed by a
+/// `deco`/`deco-set`/`paren` tail — see this section's doc comment for the
+/// exact scope.
 ///
 /// **Shared by both directions.** X3b classifies a `V0_0` dependency's
 /// exports for a `V0_1` consumer (`classify_deco_exports`, off the 0.0.6
@@ -728,6 +843,12 @@ pub(crate) struct DecoExport {
     /// parameters, then over `deco`'s own four. `0` is the bare `: deco`
     /// case X3b originally supported.
     pub lead_arity: usize,
+    /// One [`LeadOpt`] per lead position (so `lead_opts.len() == lead_arity`
+    /// whenever it is non-empty). EMPTY is the shorthand for "every position
+    /// is [`LeadOpt::Mandatory`]" — read it through [`DecoExport::lead_opt`],
+    /// never by direct indexing — which leaves every construction site with
+    /// no optionals to describe exactly as it was.
+    pub lead_opts: Vec<LeadOpt>,
     /// The enclosing `module .. = struct .. end` chain, outermost first;
     /// empty for a top-level binding. A module-scoped export CANNOT be
     /// wrapped by a top-level shadowing binding — `let Deco.simple-frame`
@@ -752,6 +873,47 @@ pub(crate) struct DecoExport {
     /// leading arguments are applied instead). Meaningless — and always
     /// `false` — for the other three kinds.
     pub unit_thunk: bool,
+}
+
+impl DecoExport {
+    /// Lead position `i`'s optional spelling, defaulting to
+    /// [`LeadOpt::Mandatory`] for an export whose `lead_opts` is the empty
+    /// shorthand (see that field's doc comment).
+    fn lead_opt(&self, i: usize) -> &LeadOpt {
+        const MANDATORY: LeadOpt = LeadOpt::Mandatory;
+        self.lead_opts.get(i).unwrap_or(&MANDATORY)
+    }
+
+    /// Whether ANY lead position carries optional arguments — i.e. whether
+    /// the generated wrapper needs the optional-aware shape at all. `false`
+    /// keeps every generator below on the byte-identical pre-optional path.
+    fn has_optionals(&self) -> bool {
+        self.lead_opts
+            .iter()
+            .any(|o| !matches!(o, LeadOpt::Mandatory))
+    }
+
+    /// The private name a wrapper binds the export's UNSHADOWED original
+    /// under, when it cannot simply name the export itself.
+    ///
+    /// The forward wrapper normally re-applies the export by its own name and
+    /// relies on ordinary shadowing. That stops working the moment the export
+    /// has 0.0.6-style optionals: the ORIGINAL binding may carry a
+    /// [`Scope::optional_shape`] entry (a `let frame ?:t p w h d = ..`
+    /// implementing a sig's `length ?-> deco`), and `elaborate.rs`'s
+    /// `app_chain_generic` then reads that shape at the wrapper's OWN call to
+    /// it and synthesizes a `None` for the slot instead of consuming the
+    /// wrapper's forwarded parameter — shifting every later argument by one.
+    /// Binding the original to a fresh name first dodges that, but only if
+    /// the alias does not INHERIT the shape, which `alias_optional_shape`
+    /// makes it do for a bare `let x = y`; hence the parenthesised RHS in
+    /// [`deco_wrapper_src`] (`head_optional_shape` reads a shape only off a
+    /// bare `Var`/`VarWithMod` head).
+    fn opt_src_alias(&self) -> String {
+        let mut key: Vec<&str> = self.module_path.iter().map(String::as_str).collect();
+        key.push(&self.name);
+        format!("xver-opt-src-{}", key.join("-"))
+    }
 }
 
 /// Scan a spliced `V0_0` dependency's `prelude` for every `deco`/
@@ -830,23 +992,25 @@ fn classify_top_binding_deco(
                             deco_tail_of(ty),
                             deco_consumer_plan(ty),
                         ) {
-                            (Some(n), Some((kind, lead_arity)), _) => {
+                            (Some(n), Some((kind, lead_arity, lead_opts)), _) => {
                                 wrapped.insert(n.to_string());
                                 out.push(DecoExport {
                                     name: n.to_string(),
                                     kind,
                                     lead_arity,
+                                    lead_opts,
                                     module_path: inner.clone(),
                                     arg_downgrades: Vec::new(),
                                     unit_thunk: false,
                                 });
                             }
-                            (Some(n), None, Some(plan)) => {
+                            (Some(n), None, Some((plan, lead_opts))) => {
                                 wrapped.insert(n.to_string());
                                 out.push(DecoExport {
                                     name: n.to_string(),
                                     kind: DecoKind::Consumer,
                                     lead_arity: plan.len(),
+                                    lead_opts,
                                     module_path: inner.clone(),
                                     arg_downgrades: plan,
                                     unit_thunk: false,
@@ -901,12 +1065,13 @@ fn classify_rec_binding_deco(
     // An arrow-PREFIXED deco (`length -> color -> color -> deco`, the shape
     // every real module export uses) is wrappable the same way a bare one
     // is — the wrapper just eta-expands over the leading arguments first.
-    if let Some((kind, lead_arity)) = deco_tail_of(&asc.ty) {
+    if let Some((kind, lead_arity, lead_opts)) = deco_tail_of(&asc.ty) {
         if lead_arity > 0 {
             out.push(DecoExport {
                 name: rb.name.name.clone(),
                 kind,
                 lead_arity,
+                lead_opts,
                 module_path: module_path.to_vec(),
                 arg_downgrades: Vec::new(),
                 unit_thunk: false,
@@ -920,6 +1085,7 @@ fn classify_rec_binding_deco(
                 name: rb.name.name.clone(),
                 kind: DecoKind::Deco,
                 lead_arity: 0,
+                lead_opts: Vec::new(),
                 module_path: module_path.to_vec(),
                 arg_downgrades: Vec::new(),
                 unit_thunk: false,
@@ -944,6 +1110,7 @@ fn classify_rec_binding_deco(
                 name: rb.name.name.clone(),
                 kind: DecoKind::DecoSet,
                 lead_arity: 0,
+                lead_opts: Vec::new(),
                 module_path: module_path.to_vec(),
                 arg_downgrades: Vec::new(),
                 unit_thunk: true,
@@ -981,27 +1148,37 @@ fn sig_item_value_name(item: &cst::SigItem) -> Option<&str> {
 /// `Some(name)` iff `te` is *exactly* one bare `TypeAtom::Name(name)` with
 /// no `Fun` wrapper and no `TypeProd` continuation (`rest` empty) — the one
 /// shape X3b's wrap knows how to handle with no currying-prefix arithmetic.
-/// If `te` is a (possibly arrow-prefixed) `deco`/`deco-set`, return its kind
-/// and how many mandatory arguments precede the tail. `length -> color ->
-/// color -> deco` is `(Deco, 3)`; a bare `deco` is `(Deco, 0)`.
+/// If `te` is a (possibly arrow-prefixed) `deco`/`deco-set`, return its kind,
+/// how many arguments precede the tail, and each of those positions'
+/// optional-argument spelling. `length -> color -> color -> deco` is `(Deco,
+/// 3, [Mandatory; 3])`; a bare `deco` is `(Deco, 0, [])`.
 ///
-/// An OPTIONAL-argument arrow (`ty ?-> ..`) makes the export unwrappable and
-/// returns `None`: the wrapper forwards its parameters positionally, and an
-/// optional argument has no positional spelling to forward. Such an export
-/// falls through to the ordinary rejection path rather than being wrapped
-/// wrongly.
-fn deco_tail_of(te: &TypeExpr) -> Option<(DecoKind, usize)> {
-    let mut lead = 0usize;
+/// An OPTIONAL-argument arrow (`ty ?-> ..`) is NOT a rejection here: 0.0.6's
+/// optionals are positional in this port (`lower_type_expr` gives each `ty
+/// ?->` domain the mandatory type `option ty ->`), so `config ?-> length ->
+/// deco` contributes TWO lead positions — `[V006Optional, Mandatory]` — and
+/// the wrapper forwards both by value. See [`LeadOpt::V006Optional`] for the
+/// one thing that still has to be reproduced (the `?:` marker).
+///
+/// 0.1's LABELLED-optional arrow (`?(l : τ) dom -> ..`,
+/// `TypeExpr::OptRowFun`) DOES return `None`. It cannot appear in genuine
+/// 0.0.6 source at all — `typecheck::check_type_expr_v0_1_only` rejects the
+/// node under `V0_0` with a version error — so a dependency this classifier
+/// sees carrying one is 0.1-shaped text in a 0.0.6 file, not something this
+/// direction's positional wrapper should be guessing at.
+fn deco_tail_of(te: &TypeExpr) -> Option<(DecoKind, usize, Vec<LeadOpt>)> {
+    let mut lead_opts: Vec<LeadOpt> = Vec::new();
     let mut cur = te;
     loop {
         match cur {
             TypeExpr::Fun { opts, cod, .. } => {
-                if !opts.is_empty() {
-                    return None;
+                for _ in opts {
+                    lead_opts.push(LeadOpt::V006Optional);
                 }
-                lead += 1;
+                lead_opts.push(LeadOpt::Mandatory);
                 cur = cod;
             }
+            TypeExpr::OptRowFun { .. } => return None,
             _ => {
                 let kind = match type_expr_bare_name(cur)? {
                     "deco" => DecoKind::Deco,
@@ -1009,25 +1186,35 @@ fn deco_tail_of(te: &TypeExpr) -> Option<(DecoKind, usize)> {
                     "paren" => DecoKind::Paren,
                     _ => return None,
                 };
-                return Some((kind, lead));
+                return Some((kind, lead_opts.len(), lead_opts));
             }
         }
     }
 }
 
 /// If `te` TAKES one or more bare `deco`/`deco-set` arguments and its result
-/// mentions neither, return the per-argument downgrade plan. Anything subtler
-/// — a deco nested inside a product/application, or one in BOTH argument and
-/// result position — returns `None` and falls through to rejection, since the
-/// positional wrapper could not express it.
-fn deco_consumer_plan(te: &TypeExpr) -> Option<Vec<Option<DecoKind>>> {
+/// mentions neither, return the per-argument downgrade plan plus each
+/// position's optional-argument spelling. Anything subtler — a deco nested
+/// inside a product/application, one in BOTH argument and result position, or
+/// one behind a `ty ?->` (whose domain is `option deco`, a compound the
+/// singleton-list downgrade is not defined on) — returns `None` and falls
+/// through to rejection.
+fn deco_consumer_plan(te: &TypeExpr) -> Option<(Vec<Option<DecoKind>>, Vec<LeadOpt>)> {
     let mut plan: Vec<Option<DecoKind>> = Vec::new();
+    let mut lead_opts: Vec<LeadOpt> = Vec::new();
     let mut cur = te;
     loop {
         match cur {
             TypeExpr::Fun { opts, dom, cod, .. } => {
-                if !opts.is_empty() {
-                    return None;
+                for o in opts {
+                    // `ty ?->` is its own positional `option ty` slot, and it
+                    // passes straight through — but only if it is not itself
+                    // deco-shaped, which no `option`-wrapped downgrade covers.
+                    if type_prod_mentions_deco(&o.ty).is_some() {
+                        return None;
+                    }
+                    plan.push(None);
+                    lead_opts.push(LeadOpt::V006Optional);
                 }
                 let dom_te = TypeExpr::Atom(dom.clone());
                 plan.push(match type_expr_bare_name(&dom_te) {
@@ -1040,14 +1227,16 @@ fn deco_consumer_plan(te: &TypeExpr) -> Option<Vec<Option<DecoKind>>> {
                         None
                     }
                 });
+                lead_opts.push(LeadOpt::Mandatory);
                 cur = cod;
             }
+            TypeExpr::OptRowFun { .. } => return None,
             _ => {
                 if type_expr_mentions_deco(cur).is_some() {
                     return None;
                 }
                 return if plan.iter().any(Option::is_some) {
-                    Some(plan)
+                    Some((plan, lead_opts))
                 } else {
                     None
                 };
@@ -1243,12 +1432,44 @@ fn deco_wrapper_src(exp: &DecoExport) -> String {
         XVER_UNITE_HELPER
     };
     let lead: Vec<String> = (0..exp.lead_arity).map(|i| format!("xver-a{i}")).collect();
-    let lead_params = if lead.is_empty() {
+    // The ARGUMENT spelling is always positional — a 0.0.6 optional argument
+    // IS an `option`-typed positional slot in this port, so forwarding one by
+    // value is exact (`LeadOpt::V006Optional`). Only the PARAMETER spelling
+    // differs: a `?:` marker is reproduced so the wrapper records the same
+    // `Scope::optional_shape` the export declared, keeping marker-less call
+    // sites working.
+    let lead_args = if lead.is_empty() {
         String::new()
     } else {
         format!("{} ", lead.join(" "))
     };
-    let lead_args = lead_params.clone();
+    let lead_params = if lead.is_empty() {
+        String::new()
+    } else {
+        let marked: Vec<String> = (0..exp.lead_arity)
+            .map(|i| match exp.lead_opt(i) {
+                LeadOpt::V006Optional => format!("?:xver-a{i}"),
+                _ => format!("xver-a{i}"),
+            })
+            .collect();
+        format!("{} ", marked.join(" "))
+    };
+    // With no optionals the wrapper re-applies the export by its own name and
+    // relies on ordinary shadowing (byte-identical to every pre-optional
+    // wrapper). With optionals it must go through a private, shape-less alias
+    // instead — see `DecoExport::opt_src_alias` for the marker-less-defaulting
+    // trap that forces it, and note the PARENTHESISED right-hand side, which
+    // is what stops `elaborate.rs`'s `alias_optional_shape` from copying the
+    // original's shape straight back onto the alias.
+    let alias = exp.opt_src_alias();
+    let (orig, alias_binding) = if exp.has_optionals() {
+        (
+            alias.as_str(),
+            format!("let {alias} = ({})\n", exp.name),
+        )
+    } else {
+        (exp.name.as_str(), String::new())
+    };
     // `get-font-size`/`get-text-color` exist under BOTH versions, so a scoped
     // wrapper may name them directly; the axis RATIO is V0_1-only and needs
     // the same pre-bound-helper treatment as `unite-graphics`.
@@ -1283,26 +1504,29 @@ fn deco_wrapper_src(exp: &DecoExport) -> String {
                 })
                 .collect();
             let params: Vec<String> = (0..exp.arg_downgrades.len())
-                .map(|i| format!("xver-a{i}"))
+                .map(|i| match exp.lead_opt(i) {
+                    LeadOpt::V006Optional => format!("?:xver-a{i}"),
+                    _ => format!("xver-a{i}"),
+                })
                 .collect();
             format!(
-                "let {name} {} =\n\x20 {name} {}\n",
+                "{alias_binding}let {name} {} =\n\x20 {orig} {}\n",
                 params.join(" "),
                 args.join(" "),
                 name = exp.name
             )
         }
         DecoKind::Paren => format!(
-            "let {name} {lead_params}xver-h xver-d xver-ctx =\n\
-             \x20 {name} {lead_args}xver-h xver-d\n\
+            "{alias_binding}let {name} {lead_params}xver-h xver-d xver-ctx =\n\
+             \x20 {orig} {lead_args}xver-h xver-d\n\
              \x20   ((get-font-size xver-ctx) *' ({axis_ratio} xver-ctx))\n\
              \x20   (get-font-size xver-ctx)\n\
              \x20   (get-text-color xver-ctx)\n",
             name = exp.name
         ),
         DecoKind::Deco => format!(
-            "let {name} {lead_params}xver-p xver-w xver-h xver-d =\n\
-             \x20 {unite} ({name} {lead_args}xver-p xver-w xver-h xver-d)\n",
+            "{alias_binding}let {name} {lead_params}xver-p xver-w xver-h xver-d =\n\
+             \x20 {unite} ({orig} {lead_args}xver-p xver-w xver-h xver-d)\n",
             name = exp.name
         ),
         DecoKind::DecoSet => {
@@ -1312,14 +1536,14 @@ fn deco_wrapper_src(exp: &DecoExport) -> String {
             // arrow-tailed `deco-set` — the same leading arguments the
             // wrapper itself just took.
             let scrutinee = if exp.unit_thunk {
-                format!("{} ()", exp.name)
+                format!("{orig} ()")
             } else if lead.is_empty() {
-                exp.name.clone()
+                orig.to_string()
             } else {
-                format!("{} {}", exp.name, lead.join(" "))
+                format!("{orig} {}", lead.join(" "))
             };
             let mut out = format!(
-                "let {name} {lead_params}=\n\
+                "{alias_binding}let {name} {lead_params}=\n\
                  \x20 match {scrutinee} with\n\
                  \x20 | (xver-d0, xver-d1, xver-d2, xver-d3) ->\n",
                 name = exp.name
@@ -1483,14 +1707,25 @@ pub(crate) fn deco_coercion_prelude(exports: &[DecoExport]) -> Vec<cst::TopBindi
 // that derived binding against the exporter's own signature is a false
 // positive of the name-keyed heuristic.
 //
-// **Placement, and its one accepted cost.** Each dependency's shadows are
-// spliced IMMEDIATELY after that dependency, so every 0.0.6-authored
-// consumer that follows — a native 0.0.6 co-dependency as well as the entry
-// — sees the adapted binding. A LATER *0.1* dependency consuming the same
-// export would see the adapted (list-shaped) one too and fail to typecheck.
-// That is a loud, ordinary `TypeError`, and it is strictly better than the
-// status quo it replaces (the whole dependency was rejected outright), so it
-// is accepted rather than worked around.
+// **Placement — which consumers see the adapted view.** The merged prelude is
+// ONE flat `Ast::LetIn` chain, and `Ast::VersionScope(V0_0, _)` is not a
+// lexical scope for names (it wraps one binding's RHS, never the continuation
+// after it), so a rebinding of `M.frame` is visible to everything that
+// follows, whichever generation authored it. Splicing the shadow
+// unconditionally right after its dependency therefore also handed the
+// list-shaped view to a LATER *0.1* dependency consuming the same export,
+// which then failed its own `:>` conformance check.
+//
+// The view is now SCHEDULED instead: captured once under a private name while
+// the 0.1 view is in force, INSTALLED lazily on entering a 0.0.6-authored
+// block, RESTORED on entering a 0.1-authored one. What makes a
+// position-indexed view sufficient is that each block `lib.rs`'s reverse loop
+// splices is homogeneous (wholly in `v006_indices` or wholly out of it), the
+// entry is 0.0.6-authored and last, and the loader orders dependencies
+// topologically so a consumer always follows what it `@require:`s. See
+// [`DowngradeStep`]/[`deco_downgrade_prelude`]'s **Placement** section for the
+// full derivation; both transitions are lazy, so a program with no
+// interleaving emits exactly one install and no restore at all.
 //
 // A bare `type foo = deco` synonym (no value attached — safe with zero
 // coercion, the same reasoning as the forward direction's `type
@@ -1511,28 +1746,79 @@ pub(crate) fn deco_coercion_prelude(exports: &[DecoExport]) -> Vec<cst::TopBindi
 /// ordinary POST-lowering `collect_free_globals` scan (`lib.rs`) can never
 /// see it.
 ///
-/// Each returned [`DecoExport`] carries the exporting module's name as its
-/// single-element `module_path`, so the generated shadow can name the
-/// member the way a consumer does (`M.name`).
+/// Each returned [`DecoExport`] carries the exporting module chain as its
+/// `module_path` — the top-level module's own name, plus one segment per
+/// nested `Decl::Module` the scan descended through — so the generated shadow
+/// can name the member the way a consumer does (`M.name`, `M.Inner.name`).
 ///
 /// `Ok(vec![])` for a `FileV1::Document` (never a dependency), a `Library`
-/// with no `sig_annot` at all, or one whose signature this port's
-/// unresolved-reference-avoidance (`v1_sigbot_mentions_deco`'s own doc
-/// comment) does not chase (a named signature reference) — a forked type
-/// hiding behind one of those is NOT a soundness gap (X4.8/S2): HM still
-/// infers the crossing value's REAL shape at every use site regardless of
-/// what this textual scan saw, so the worst case is an ordinary `TypeError`
-/// far from its cause, never silent corruption.
+/// with no `sig_annot` at all, or one whose signature this scan cannot resolve
+/// to a concrete decl list at all (see the "what still does not resolve" list
+/// below) — a forked type hiding behind one of those is NOT a soundness gap
+/// (X4.8/S2): HM still infers the crossing value's REAL shape at every use
+/// site regardless of what this textual scan saw, so the worst case is an
+/// ordinary `TypeError` far from its cause, never silent corruption.
 ///
-/// Deliberately NARROWER than the forward direction in one respect: only the
-/// TOP-LEVEL sig's own `Decl::Val` items are classified. A `deco` reached
-/// through a NESTED `module`/`signature`/`include` decl still rejects — the
-/// generated shadow has to name the member under exactly the qualified key
-/// `v1::module_check` seals it by, and a nested member's seal goes through
-/// `walk_nested_seals_a`'s own path composition, which no bundled 0.1
-/// package exercises for a deco. Rejecting is the conservative half.
-pub(crate) fn classify_deco_exports_v01_sig(
-    file: &cst_v1::FileV1,
+/// A `deco` reached through a NESTED `module M : ..` decl DOES cross (the
+/// forward direction's nested-module increment, mirrored here): the generated
+/// shadow has to name the member under exactly the qualified key
+/// `v1::module_check` seals it by, and that key is
+/// `lower::qualify_type_key(mod_path, member)` — the SAME `mod_path`
+/// `walk_nested_seals_a` composes by pushing each nested `Bind::Module`'s own
+/// name onto its parent's (`module_check.rs`'s `child_path`), and the same
+/// one `elaborate::push_named_binding` binds the member's export alias under.
+/// So the recursion below simply pushes each nested `Decl::Module`'s name onto
+/// `module_path` and classifies its sig's decls under it —
+/// [`deco_export_qualified_name`] then spells `Outer.Inner.frame`, which is
+/// exactly the `env.seals` key, the `Ast::LetIn` binder name, and the string a
+/// 0.0.6 consumer's `Outer.Inner.frame` reference resolves through.
+///
+/// **NON-literal nested signatures resolve too.** The nested decl's signature
+/// no longer has to be a literal `sig .. end`: [`v01_resolve_sig_decls`]
+/// dereferences a named reference (`module M : S`, `module M : A.B.S`) and a
+/// `with type` refinement through the very table `v1::module_check`'s own
+/// `resolve_sig` consults — `surface::find_sig_keyed`, keyed and searched
+/// OUTWARD from the same `site_path` (`module_check.rs`'s top-level seal and
+/// its `handle_nested_module_decl` both pass the module's own path, which is
+/// exactly this scan's `module_path`). `include` resolves too, and splices at
+/// the ENCLOSING path rather than a lengthened one, mirroring
+/// `module_check::splice_decls`. `signature S = ..` is SKIPPED rather than
+/// rejected: a signature member declares no value at any path
+/// (`handle_signature_decl` only identity-checks it against the struct's own
+/// `signature` bind), so nothing a 0.0.6 consumer can name hides behind one —
+/// but the definition it registers is exactly what a sibling `module M : S`
+/// then resolves through.
+///
+/// **What still does not resolve, and why it is genuine.** Three shapes stay
+/// unresolvable AT THIS POINT IN THE PIPELINE, and each keeps its precise
+/// textual rejection ([`v1_reject_if_mentions_deco`], so a `deco` reachable
+/// from one rejects rather than silently splicing):
+///
+/// - a FUNCTOR signature member (`module Make : (X : S1) -> S2`). A functor is
+///   not a module: there is no member path `Outer.Make.frame` for a shadow to
+///   rebind, and 0.0.6 has no syntax that could apply one. Its members become
+///   reachable only through an APPLICATION (`module Inst = Outer.Make Arg`),
+///   which `v1::functor` re-lowers at the APPLICATION's own path — in a
+///   different file, possibly one this loop has not read yet. The path the
+///   shadow would have to name is therefore not a function of this file's
+///   signature at all;
+/// - `S with M type t = τ` (a SUB-MODULE refinement). `module_check::
+///   resolve_sig` rejects it outright as Sub-slice 2d-3b territory, so there
+///   is no resolved decl list to scan even in principle;
+/// - a named reference that does not resolve (unknown signature name, or an
+///   `include`/`module` cycle through names). Both are hard, precise errors
+///   from `module_check::resolve_sig` a moment later; this scan simply
+///   declines to guess.
+///
+/// One PRE-EXISTING false negative is inherited rather than introduced: a
+/// member declared at a type SYNONYM of `deco` (`sig type t = deco  val f : t
+/// end`, or the same thing spelled `S with type t = deco`) reads as the bare
+/// name `t`, not `deco`, so it neither classifies nor rejects. That is the
+/// same X4.8/S2 shape as an unannotated export — an ordinary `TypeError` at
+/// the consumer's call site, never silent corruption.
+pub(crate) fn classify_deco_exports_v01_sig<'a>(
+    file: &'a cst_v1::FileV1,
+    surfaces: &SurfaceEnv<'a>,
 ) -> Result<Vec<DecoExport>, BoundaryError> {
     let cst_v1::FileV1::Library {
         name,
@@ -1543,38 +1829,420 @@ pub(crate) fn classify_deco_exports_v01_sig(
         return Ok(Vec::new());
     };
     let module_path = vec![name.name.clone()];
-    let cst_v1::ast::SigExpr::Bot(cst_v1::ast::SigBotV1::Sig { decls, .. }) = &*sig_annot.sig_.0
-    else {
-        // A functor / `with type` / named-signature reference: not chased
-        // (this function's doc comment) — but still guarded, so a `deco`
-        // reachable from one rejects rather than silently splicing.
-        return v1_reject_if_mentions_deco(&sig_annot.sig_.0).map(|()| Vec::new());
-    };
     let mut out = Vec::new();
+    let mut visited: Vec<String> = Vec::new();
+    classify_v01_sig_expr(
+        &sig_annot.sig_.0,
+        &module_path,
+        surfaces,
+        &mut visited,
+        &V01Syns::default(),
+        &[],
+        &mut out,
+    )?;
+    Ok(out)
+}
+
+/// One signature EXPRESSION's value exports at `module_path` — resolve it to a
+/// decl list first ([`v01_resolve_sig_decls`]), then classify that list.
+///
+/// `visited` is the named-signature cycle guard, keyed (like `module_check::
+/// resolve_named_sig`'s own) by the RESOLVED table key rather than the written
+/// suffix, so two differently-pathed same-suffix signatures do not
+/// false-positive. A re-entry yields NO exports rather than an error: an
+/// `include`/`module` cycle through names is `module_check::resolve_sig`'s own
+/// precise diagnostic a moment later, and this scan never invents user-facing
+/// text for it.
+/// `inherited_refines` are an ENCLOSING layer's `with ⟨chain⟩ type`
+/// refinements addressed to this signature (already stripped of the segments
+/// that named the way here) — the same routing `module_check::
+/// prescan_seal_types` performs, so what makes a member's type transparent
+/// there makes it visible here.
+fn classify_v01_sig_expr<'a>(
+    se: &'a cst_v1::ast::SigExpr,
+    module_path: &[String],
+    surfaces: &SurfaceEnv<'a>,
+    visited: &mut Vec<String>,
+    syns: &V01Syns<'a>,
+    inherited_refines: &[surface::Refine<'a>],
+    out: &mut Vec<DecoExport>,
+) -> Result<(), BoundaryError> {
+    let Some(mut resolved) = v01_resolve_sig_decls(se, module_path, surfaces) else {
+        // Genuinely unresolvable here (see [`classify_deco_exports_v01_sig`]'s
+        // doc comment for the per-shape derivation) — guard textually, so a
+        // `deco` reachable from one rejects rather than silently splicing.
+        return v1_reject_if_mentions_deco(se, syns);
+    };
+    resolved.refines.extend(inherited_refines.iter().cloned());
+    // This layer's OWN transparent type declarations (and any `with type`
+    // refinement that made an opaque one transparent) extend the enclosing
+    // signature's synonyms before a single `val` is classified — see
+    // [`V01Syns`].
+    let inner = syns.extended(resolved.decls, &resolved.refines, module_path, surfaces);
+    let Some(k) = resolved.key else {
+        // A LITERAL `sig .. end`: nesting is finite, no guard needed (the same
+        // argument `module_check`'s own cycle guard rests on).
+        return classify_v01_sig_decls(
+            resolved.decls,
+            module_path,
+            surfaces,
+            visited,
+            &inner,
+            &resolved.refines,
+            out,
+        );
+    };
+    if visited.contains(&k) {
+        return Ok(());
+    }
+    visited.push(k);
+    let r = classify_v01_sig_decls(
+        resolved.decls,
+        module_path,
+        surfaces,
+        visited,
+        &inner,
+        &resolved.refines,
+        out,
+    );
+    visited.pop();
+    r
+}
+
+/// One `sig .. end` body's decls, at the module path `module_path` — recursive
+/// through `Decl::Module` (see [`classify_deco_exports_v01_sig`]'s doc comment
+/// for why the composed path is exactly the seal key) and through
+/// `Decl::Include` (at the SAME path, mirroring `module_check::splice_decls`).
+fn classify_v01_sig_decls<'a>(
+    decls: &'a [cst_v1::StructDeclV1],
+    module_path: &[String],
+    surfaces: &SurfaceEnv<'a>,
+    visited: &mut Vec<String>,
+    syns: &V01Syns<'a>,
+    refines: &[surface::Refine<'a>],
+    out: &mut Vec<DecoExport>,
+) -> Result<(), BoundaryError> {
     for d in decls {
         match &*d.0 {
-            cst_v1::ast::Decl::Val { name, ty, .. } => match v1_deco_tail_of(ty) {
-                Some((kind, lead_arity)) if kind != DecoKind::Paren => out.push(DecoExport {
-                    name: name.name.clone(),
-                    kind,
-                    lead_arity,
-                    module_path: module_path.clone(),
-                    arg_downgrades: Vec::new(),
-                    unit_thunk: false,
-                }),
-                // A `paren` export, or a `deco` this positional wrapper
-                // cannot express (optional-argument arrow, or a leaf buried
-                // in a compound): reject, loudly and specifically.
-                _ => v1_reject_if_mentions_deco_ty(ty)?,
+            cst_v1::ast::Decl::Val { name, ty, .. } => match v1_deco_tail_of(ty, syns) {
+                Some((kind, lead_arity, lead_opts)) if kind != DecoKind::Paren => {
+                    out.push(DecoExport {
+                        name: name.name.clone(),
+                        kind,
+                        lead_arity,
+                        lead_opts,
+                        module_path: module_path.to_vec(),
+                        arg_downgrades: Vec::new(),
+                        unit_thunk: false,
+                    })
+                }
+                // A `paren` export, or a `deco` this wrapper cannot express (a
+                // leaf buried in a compound, or an optional-argument row this
+                // direction's bounded case split will not enumerate — a row
+                // VARIABLE tail, or more than `V01_MAX_OPT_LABELS` labels):
+                // reject, loudly and specifically.
+                _ => v1_reject_if_mentions_deco_ty(ty, syns)?,
             },
+            cst_v1::ast::Decl::Module { name, sig_, .. } => {
+                let mut inner = module_path.to_vec();
+                inner.push(name.name.clone());
+                // A `with N ⟨…⟩ type t = τ` refinement addressed to THIS
+                // member descends into it with one segment consumed —
+                // `prescan_seal_types`' own routing, reproduced.
+                let child_refines: Vec<surface::Refine<'a>> = refines
+                    .iter()
+                    .filter(|r| r.path.first() == Some(&name.name))
+                    .map(|r| {
+                        let mut r = r.clone();
+                        r.path.remove(0);
+                        r
+                    })
+                    .collect();
+                classify_v01_sig_expr(
+                    sig_,
+                    &inner,
+                    surfaces,
+                    visited,
+                    syns,
+                    &child_refines,
+                    out,
+                )?;
+            }
+            // `include S` splices S's OWN decls into the enclosing signature
+            // in place, at the enclosing path — `module_check::splice_decls`,
+            // so this layer's refinements apply to what it splices in.
+            cst_v1::ast::Decl::Include { sig_, .. } => {
+                classify_v01_sig_expr(sig_, module_path, surfaces, visited, syns, refines, out)?;
+            }
+            // `signature S = ..` declares a SIGNATURE, not a value: no member
+            // of it is reachable at any path (`handle_signature_decl` only
+            // identity-checks it against the struct's own `signature` bind, and
+            // 0.0.6 has no signature syntax at all), so there is nothing here
+            // to cross and nothing to refuse. `surface::build_file_surface`
+            // has already registered the definition itself, which is what a
+            // sibling `module M : S` resolves through.
+            cst_v1::ast::Decl::Signature { .. } => {}
             other => {
-                if let Some(n) = v1_decl_mentions_deco(other) {
+                if let Some(n) = v1_decl_mentions_deco(other, syns) {
                     return Err(v1_boundary_error(&n));
                 }
             }
         }
     }
-    Ok(out)
+    Ok(())
+}
+
+/// Resolve one signature expression to the decl list it denotes, plus the
+/// `surfaces.sigs` table key it came from (`None` for a literal `sig .. end`,
+/// which needs no cycle guard). `None` for the three genuinely unresolvable
+/// shapes enumerated in [`classify_deco_exports_v01_sig`]'s doc comment.
+///
+/// Deliberately the SAME lookup `v1::module_check`'s `resolve_sig_bot`
+/// performs — `surface::find_sig_keyed`, searched outward from `site_path` —
+/// so a member found here sits at exactly the path `module_check` seals it
+/// under, and the SAME `with type` refinement composition (an inline node's
+/// own `binds`, plus a named signature's stored [`surface::SigDef::refines`])
+/// — a refinement never changes a `val` decl's SPELLED type, but it DOES turn
+/// an opaque `type t :: o` into the transparent synonym a `val` decl's
+/// spelling may then name ([`V01Syns`]). What it deliberately does NOT
+/// reproduce is `resolve_sig`'s eager `Decl::Include` flattening (this scan
+/// recurses through `Decl::Include` in place instead, which is the same
+/// traversal).
+struct V01ResolvedSig<'a> {
+    decls: &'a [cst_v1::StructDeclV1],
+    /// The `surfaces.sigs` table key this came from — `None` for a literal
+    /// `sig .. end`, which needs no cycle guard.
+    key: Option<String>,
+    refines: Vec<surface::Refine<'a>>,
+}
+
+fn v01_resolve_sig_decls<'a>(
+    se: &'a cst_v1::ast::SigExpr,
+    site_path: &[String],
+    surfaces: &SurfaceEnv<'a>,
+) -> Option<V01ResolvedSig<'a>> {
+    use cst_v1::ast::SigExpr;
+    match se {
+        SigExpr::Bot(bot) => v01_resolve_sig_bot(bot, site_path, surfaces),
+        SigExpr::WithType {
+            base, path, binds, ..
+        } => {
+            let mut resolved = v01_resolve_sig_bot(base, site_path, surfaces)?;
+            resolved
+                .refines
+                .extend(surface::collect_refines(binds, mod_chain_segments(path)));
+            Some(resolved)
+        }
+        // A functor SIGNATURE — not a module signature; see the doc comment.
+        SigExpr::Functor { .. } => None,
+    }
+}
+
+fn v01_resolve_sig_bot<'a>(
+    bot: &'a cst_v1::ast::SigBotV1,
+    site_path: &[String],
+    surfaces: &SurfaceEnv<'a>,
+) -> Option<V01ResolvedSig<'a>> {
+    use cst_v1::ast::SigBotV1;
+    match bot {
+        SigBotV1::Sig { decls, .. } => Some(V01ResolvedSig {
+            decls: decls.as_slice(),
+            key: None,
+            refines: Vec::new(),
+        }),
+        SigBotV1::Var(t) => {
+            surface::find_sig_keyed(surfaces, site_path, &t.name).map(|(key, def)| V01ResolvedSig {
+                decls: def.decls,
+                key: Some(key),
+                refines: def.refines.clone(),
+            })
+        }
+        SigBotV1::Path(t) => {
+            let suffix = surface::sig_path_suffix(&t.mods, &t.name);
+            surface::find_sig_keyed(surfaces, site_path, &suffix).map(|(key, def)| V01ResolvedSig {
+                decls: def.decls,
+                key: Some(key),
+                refines: def.refines.clone(),
+            })
+        }
+    }
+}
+
+/// The transparent type SYNONYMS a signature layer's `val` decls may name —
+/// the whole of what makes
+///
+/// ```text
+/// module M :> sig  type t = deco  val frame : length -> t  end = struct .. end
+/// ```
+///
+/// cross. The scan reads a `val`'s SPELLED type, so without this the tail
+/// reads as the bare name `t`, matches no forked builtin, and the export
+/// silently declines to cross (surfacing much later as an ordinary
+/// `TypeError` at a 0.0.6 consumer's call site rather than as this module's
+/// own boundary diagnostic).
+///
+/// One entry per type name DECLARED by the signature layer being scanned, or
+/// by any enclosing one (a nested `sig` sees its parent's type declarations,
+/// and an `include`d signature's declarations splice into the includer's own
+/// scope — so the map is threaded down, extended, never reset):
+///
+/// - `Some(body)` — a TRANSPARENT `type t = τ` with NO parameters, whose body
+///   is kept whole and expanded IN PLACE at the tail
+///   ([`v1_deco_tail_of`])/at a leaf ([`V01Syns::mentions_deco`]). Keeping the
+///   body (rather than a pre-resolved verdict) is what makes an arrow-bodied
+///   synonym — `type frame = length -> deco` — contribute its own lead
+///   positions to the generated wrapper, exactly as if it had been spelled
+///   out;
+/// - `None` — a name this layer declares but that names no expandable
+///   synonym: an OPAQUE `type t :: o`, a PARAMETERISED `type t 'a = ..` (a
+///   bare `t` reference to which is ill-typed anyway), or a variant body.
+///   Recorded rather than omitted so that it SHADOWS an enclosing layer's
+///   entry — and so that a locally-declared name never falls through to the
+///   builtin lookup below it.
+///
+/// A `with type t = τ` refinement (inline, or inherited from a named
+/// signature's own stored refinements) is absorbed AFTER the decls, since its
+/// whole job is to overwrite the `None` an opaque `type t :: o` just wrote.
+///
+/// Lookup is MAP-FIRST, builtin-second: a signature that declares its own
+/// `type deco` shadows the builtin of that name for the layers below it, and
+/// this scan must not then generate a coercion wrapper for a value that is
+/// not a `deco` at all.
+#[derive(Default, Clone)]
+struct V01Syns<'a> {
+    map: std::collections::HashMap<String, Option<&'a cst_v1::ast::TypeExpr>>,
+}
+
+/// What a bare type NAME denotes, as far as this scan can tell.
+enum V01SynLookup<'a> {
+    /// A transparent, zero-parameter synonym — expand its body in place.
+    Body(&'a cst_v1::ast::TypeExpr),
+    /// Declared by some enclosing signature layer, but not expandable (see
+    /// [`V01Syns`]'s `None` case). Whatever it is, it is NOT the builtin of
+    /// the same name.
+    Opaque,
+    /// Named by no signature layer in scope — a builtin (or an outright
+    /// unknown, which is downstream's error, not this scan's).
+    Undeclared,
+}
+
+impl<'a> V01Syns<'a> {
+    fn lookup(&self, name: &str) -> V01SynLookup<'a> {
+        match self.map.get(name) {
+            Some(Some(body)) => V01SynLookup::Body(body),
+            Some(None) => V01SynLookup::Opaque,
+            None => V01SynLookup::Undeclared,
+        }
+    }
+
+    /// This env extended with one signature layer's own type declarations
+    /// (recursing through `include`, whose decls splice into the enclosing
+    /// scope) and then its `with type` refinements.
+    fn extended(
+        &self,
+        decls: &'a [cst_v1::StructDeclV1],
+        refines: &[surface::Refine<'a>],
+        site_path: &[String],
+        surfaces: &SurfaceEnv<'a>,
+    ) -> V01Syns<'a> {
+        let mut out = self.clone();
+        let mut visited: Vec<String> = Vec::new();
+        out.absorb_decls(decls, site_path, surfaces, &mut visited);
+        out.absorb_refines(refines);
+        out
+    }
+
+    fn absorb_decls(
+        &mut self,
+        decls: &'a [cst_v1::StructDeclV1],
+        site_path: &[String],
+        surfaces: &SurfaceEnv<'a>,
+        visited: &mut Vec<String>,
+    ) {
+        for d in decls {
+            match &*d.0 {
+                cst_v1::ast::Decl::Type { binds, .. } => {
+                    for single in v01_flatten_type_binds(binds) {
+                        self.map
+                            .insert(single.name.name.clone(), v01_synonym_body(single));
+                    }
+                }
+                cst_v1::ast::Decl::TypeOpaque { name, .. } => {
+                    self.map.insert(name.name.clone(), None);
+                }
+                cst_v1::ast::Decl::Include { sig_, .. } => {
+                    let Some(resolved) = v01_resolve_sig_decls(sig_, site_path, surfaces) else {
+                        continue;
+                    };
+                    if let Some(k) = &resolved.key {
+                        if visited.contains(k) {
+                            continue;
+                        }
+                        visited.push(k.clone());
+                        self.absorb_decls(resolved.decls, site_path, surfaces, visited);
+                        self.absorb_refines(&resolved.refines);
+                        visited.pop();
+                    } else {
+                        self.absorb_decls(resolved.decls, site_path, surfaces, visited);
+                        self.absorb_refines(&resolved.refines);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// A refinement that made an opaque declaration transparent overwrites
+    /// the `None` that declaration just wrote. Only a refinement whose own
+    /// `path` is EMPTY applies at this layer — `S with M type t = τ` refines
+    /// the nested member `M`'s `t`, and reaches it as an empty-path
+    /// refinement one layer down (`classify_v01_sig_decls`'s `Decl::Module`
+    /// arm re-resolves `M`'s own signature, refinements and all).
+    fn absorb_refines(&mut self, refines: &[surface::Refine<'a>]) {
+        for r in refines {
+            if !r.path.is_empty() {
+                continue;
+            }
+            let body = match (r.tyvars.is_empty(), r.body) {
+                (true, cst_v1::TypeBodyV1::Synonym(ty)) => Some(ty),
+                _ => None,
+            };
+            self.map.insert(r.name.clone(), body);
+        }
+    }
+}
+
+/// A `type t = τ` bind's expandable body: `Some` only for a zero-parameter
+/// SYNONYM (see [`V01Syns`]'s `None` case for why the rest are not).
+fn v01_synonym_body(single: &cst_v1::TypeBindSingleV1) -> Option<&cst_v1::ast::TypeExpr> {
+    match (single.tyvars.is_empty(), &single.body) {
+        (true, cst_v1::TypeBodyV1::Synonym(ty)) => Some(ty),
+        _ => None,
+    }
+}
+
+/// `module_check::flatten_type_binds`' local twin (that one is private to its
+/// own module, and this scan runs a whole phase earlier).
+fn v01_flatten_type_binds(binds: &cst_v1::TypeBindsErasedV1) -> Vec<&cst_v1::TypeBindSingleV1> {
+    let mut out = vec![&binds.0.first];
+    for a in &binds.0.ands {
+        out.push(&a.bind);
+    }
+    out
+}
+
+/// A `with M.N type ..` refinement's module chain, as path segments (empty
+/// for the plain `with type ..` form).
+fn mod_chain_segments(path: &Option<cst_v1::ast::ModChainV1>) -> Vec<String> {
+    match path {
+        None => Vec::new(),
+        Some(cst_v1::ast::ModChainV1::Single(t)) => vec![t.name.clone()],
+        Some(cst_v1::ast::ModChainV1::Long(t)) => {
+            let mut segs = t.mods.clone();
+            segs.push(t.name.clone());
+            segs
+        }
+    }
 }
 
 fn v1_boundary_error(name: &str) -> BoundaryError {
@@ -1587,48 +2255,107 @@ fn v1_boundary_error(name: &str) -> BoundaryError {
     }
 }
 
-fn v1_reject_if_mentions_deco(se: &cst_v1::ast::SigExpr) -> Result<(), BoundaryError> {
-    match v1_sigexpr_mentions_deco(se) {
+fn v1_reject_if_mentions_deco(
+    se: &cst_v1::ast::SigExpr,
+    syns: &V01Syns<'_>,
+) -> Result<(), BoundaryError> {
+    match v1_sigexpr_mentions_deco(se, syns) {
         Some(n) => Err(v1_boundary_error(&n)),
         None => Ok(()),
     }
 }
 
-fn v1_reject_if_mentions_deco_ty(ty: &cst_v1::ast::TypeExpr) -> Result<(), BoundaryError> {
-    match v1_type_expr_mentions_deco(ty) {
+fn v1_reject_if_mentions_deco_ty(
+    ty: &cst_v1::ast::TypeExpr,
+    syns: &V01Syns<'_>,
+) -> Result<(), BoundaryError> {
+    match v1_type_expr_mentions_deco(ty, syns) {
         Some(n) => Err(v1_boundary_error(&n)),
         None => Ok(()),
     }
 }
 
 /// The 0.1-grammar twin of [`deco_tail_of`]: if `te` is a (possibly
-/// arrow-prefixed) `deco`/`deco-set`/`paren`, return its kind and how many
-/// MANDATORY arguments precede the tail.
-///
-/// A [`cst_v1::ast::TypeExpr::OptRowFun`] (0.1's `?(l = ty) -> ..` optional-
-/// argument arrow) returns `None`, exactly as the 0.0.6 twin's non-empty
-/// `opts` case does, and for the same reason: the generated wrapper forwards
-/// its parameters positionally and an optional argument has no positional
+/// arrow-prefixed) `deco`/`deco-set`/`paren`, return its kind, how many
+/// arguments precede the tail, and each of those positions' optional-argument
 /// spelling.
-fn v1_deco_tail_of(te: &cst_v1::ast::TypeExpr) -> Option<(DecoKind, usize)> {
+///
+/// A [`cst_v1::ast::TypeExpr::OptRowFun`] (0.1's `?(l : τ, …) dom -> ..`
+/// LABELLED-optional arrow) contributes ONE lead position carrying
+/// [`LeadOpt::V01Labels`] — the shadow case-splits on each label's `option`
+/// rather than forwarding it (see [`deco_downgrade_prelude`]). Two shapes
+/// still return `None`, and so still reject:
+///
+/// - a ROW-VARIABLE tail (`?(l : τ | ?'r) ->`): the label set is open, so
+///   there is no finite case split to generate. (`v1/lower.rs` rejects the
+///   tail with its own `LowerError` slightly later anyway — signature-level
+///   row quantification is not implemented — but this scan runs PRE-lowering
+///   and must not fall through to a wrapper it cannot write.)
+/// - more than [`V01_MAX_OPT_LABELS`] labels in total: the case split is
+///   exponential in the label count, and is bounded rather than unbounded.
+///
+/// A tail (or a whole type) spelled as a signature-declared type SYNONYM is
+/// EXPANDED in place through `syns` ([`V01Syns`]) before any of the above is
+/// decided, so `type t = deco  val f : length -> t` reads exactly as `val f :
+/// length -> deco` does — including an arrow-bodied synonym, whose own lead
+/// positions append to the ones already collected. A synonym cycle (`type t =
+/// u  type u = t`, which a later phase rejects on its own terms) terminates
+/// at the first repeat and declines, rather than looping.
+fn v1_deco_tail_of<'a>(
+    te: &'a cst_v1::ast::TypeExpr,
+    syns: &V01Syns<'a>,
+) -> Option<(DecoKind, usize, Vec<LeadOpt>)> {
     use cst_v1::ast::TypeExpr;
-    let mut lead = 0usize;
+    let mut lead_opts: Vec<LeadOpt> = Vec::new();
+    let mut labels = 0usize;
+    let mut expanded: Vec<&str> = Vec::new();
     let mut cur = te;
     loop {
         match cur {
-            TypeExpr::OptRowFun { .. } => return None,
+            TypeExpr::OptRowFun { opt_dom, cod, .. } => {
+                if opt_dom.inner.row_tail.is_some() {
+                    return None;
+                }
+                let here: Vec<String> = opt_dom
+                    .inner
+                    .entries
+                    .iter()
+                    .map(|e| e.label.name.clone())
+                    .collect();
+                labels += here.len();
+                if labels > V01_MAX_OPT_LABELS {
+                    return None;
+                }
+                lead_opts.push(LeadOpt::V01Labels(here));
+                cur = cod;
+            }
             TypeExpr::Fun { cod, .. } => {
-                lead += 1;
+                lead_opts.push(LeadOpt::Mandatory);
                 cur = cod;
             }
             _ => {
-                let kind = match v1_type_expr_bare_name(cur)? {
+                let name = v1_type_expr_bare_name(cur)?;
+                match syns.lookup(name) {
+                    V01SynLookup::Body(body) => {
+                        if expanded.contains(&name) {
+                            return None;
+                        }
+                        expanded.push(name);
+                        cur = body;
+                        continue;
+                    }
+                    // Declared, but naming no expandable synonym — whatever
+                    // it is, it is NOT the builtin of the same name.
+                    V01SynLookup::Opaque => return None,
+                    V01SynLookup::Undeclared => {}
+                }
+                let kind = match name {
                     "deco" => DecoKind::Deco,
                     "deco-set" => DecoKind::DecoSet,
                     "paren" => DecoKind::Paren,
                     _ => return None,
                 };
-                return Some((kind, lead));
+                return Some((kind, lead_opts.len(), lead_opts));
             }
         }
     }
@@ -1651,10 +2378,36 @@ fn v1_type_expr_bare_name(te: &cst_v1::ast::TypeExpr) -> Option<&str> {
     }
 }
 
-/// Build the `V0_1`-authored downgrade shadows for `exports`: one pair of
-/// top-level bindings per export, the second of which REBINDS the export's
-/// own fully-qualified name (`M.frame`) to a coerced view whose result is
-/// the `graphics list` a `V0_0`-authored consumer expects.
+/// Which of X4b's three placement bindings [`deco_downgrade_prelude`] should
+/// generate for a set of exports. The merged prelude is a single flat
+/// `Ast::LetIn` chain, so "which view of `M.frame` is in force" is a function
+/// of POSITION in that chain; these three steps are how `lib.rs`'s reverse arm
+/// drives that position-indexed view (see [`deco_downgrade_prelude`]'s
+/// **Placement** section for the schedule and its derivation).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DowngradeStep {
+    /// `let xver-rev-orig-M-frame = M.frame` — capture the 0.1 original under
+    /// a private name. Emitted ONCE per export, immediately after the
+    /// dependency that defines it, while the 0.1 view is still the installed
+    /// one. Binds a private name only: it never rebinds `M.frame`, so it is
+    /// invisible to every consumer of either generation.
+    Capture,
+    /// `let M.frame = fun .. -> [xver-rev-orig-M-frame ..]` — install the
+    /// 0.0.6-shaped view. Emitted at each transition INTO a 0.0.6-authored
+    /// block (a native `V0_0` dependency, or the entry).
+    Install,
+    /// `let M.frame = xver-rev-orig-M-frame` — put the 0.1 view back. Emitted
+    /// at each transition back into a 0.1-authored block, so a LATER 0.1
+    /// dependency consuming the same export reads it at the shape its own
+    /// `deco` means.
+    Restore,
+}
+
+/// Build the `V0_1`-authored downgrade bindings for `exports` — see
+/// [`DowngradeStep`] for which of the three this call emits. The load-bearing
+/// one is [`DowngradeStep::Install`]: it REBINDS the export's own
+/// fully-qualified name (`M.frame`) to a coerced view whose result is the
+/// `graphics list` a `V0_0`-authored consumer expects.
 ///
 /// Unlike the forward direction, the shadow CANNOT be appended inside the
 /// exporting module's own `decls`: `elaborate.rs` emits one `Ast::LetIn`
@@ -1674,13 +2427,82 @@ fn v1_type_expr_bare_name(te: &cst_v1::ast::TypeExpr) -> Option<&str> {
 /// `VarWithMod` arm via `qualify_key`), and `open M in ..`/`M.(..)` re-binds
 /// the bare name to `Scope::resolve("M.frame")` — both land on whichever
 /// binding of that key is innermost at that point, i.e. the shadow.
-pub(crate) fn deco_downgrade_prelude(exports: &[DecoExport]) -> Vec<cst::TopBinding> {
+///
+/// **Optional arguments ([`LeadOpt::V01Labels`]).** A 0.1 export may declare
+/// LABELLED optionals (`?(thickness : length) length -> deco`), and the
+/// shadow must present the same labelled interface or the export's optionals
+/// vanish. It cannot do that by forwarding them, because 0.1's two halves
+/// disagree about who owns the `option`:
+///
+/// - `Ast::LambdaOpt` (`typecheck.rs`'s `infer_lambda_opt`) binds the
+///   receiving binder at `τ option` and leaves `Row::Cons(l, τ, …)` on the
+///   arrow;
+/// - `Ast::ApplyOpt` (`infer_apply_opt`) takes the RAW `τ` at `?(l = e)` and
+///   `eval.rs`'s `push_opt_slots` wraps it in `Some` itself, filling every
+///   label the call omits with `None`.
+///
+/// So `?(l = x)` where `x : τ option` is a type error, and there is no other
+/// spelling — no surface form hands an already-`option` value to a labelled
+/// slot. What the shadow CAN do is decide, per label, which of the two
+/// spellings to use: `Some v` re-supplies it as `?(l = v)`, `None` omits the
+/// label entirely and lets `push_opt_slots` restore the `None`. That is a
+/// `match` per label, hence a case split with one application site per subset
+/// of labels — bounded by [`V01_MAX_OPT_LABELS`]. The omitting branch relies
+/// on plain `Ast::Apply` carrying an OPEN row var under `V0_1`
+/// (`typecheck.rs`'s `Ast::Apply` arm), which absorbs the callee's whole
+/// declared optional row; that is also what lets a 0.0.6-authored consumer
+/// call the shadow with no optional syntax of its own.
+///
+/// **Placement — which consumers see the coerced view.** The merged prelude is
+/// one flat `Ast::LetIn` chain, and `Ast::VersionScope(V0_0, _)` is NOT a
+/// lexical scope for names (it wraps ONE binding's RHS, never the continuation
+/// after it — `ast.rs`'s own doc comment), so a rebinding of `M.frame` is
+/// visible to *everything* that follows it, whichever generation authored it.
+/// Splicing the shadow unconditionally right after its dependency therefore
+/// handed the 0.0.6-shaped view to a LATER 0.1 dependency too, which then
+/// failed its own `:>` conformance check.
+///
+/// What makes a position-indexed view sufficient is that each splice unit is
+/// homogeneous and correctly ordered: `lib.rs`'s reverse loop contributes one
+/// CONTIGUOUS block per dependency, wholly 0.0.6-authored (a native `V0_0`
+/// dependency's `prelude`, every index of it in `v006_indices`) or wholly
+/// 0.1-authored (a foreign `V0_1` dependency's `lowered`, no index of it in
+/// `v006_indices`), with the entry — always 0.0.6-authored — last; and the
+/// loader orders dependencies topologically, so a consumer's block always
+/// follows what it `@require:`s. So "which generation is reading `M.frame`
+/// right now" is constant within a block and known at splice time, and the
+/// schedule is exactly:
+///
+/// - [`Capture`](DowngradeStep::Capture) once, right after the defining
+///   dependency (the 0.1 view is in force there — see the `Restore` below);
+/// - [`Install`](DowngradeStep::Install) for EVERY export crossed so far, on
+///   entering a 0.0.6-authored block, if the 0.0.6 view is not already
+///   installed;
+/// - [`Restore`](DowngradeStep::Restore) for every export crossed so far, on
+///   entering a 0.1-authored block, if it is.
+///
+/// Both transitions are lazy, so a program with no interleaving (every 0.1
+/// dependency, then the 0.0.6 entry — the common case, and every bundled
+/// package) emits exactly one `Install` and no `Restore` at all: the same
+/// bindings as the pre-schedule code, just positioned at the transition
+/// instead of at each dependency.
+///
+/// `Install`/`Restore` both rebind a name `v1::module_check` has a `seals`
+/// entry for, which is what `check_program_with_xver_shadows`'s exemption
+/// covers — it exempts the SECOND-and-later `Ast::LetIn` of a listed name, so
+/// a re-`Install` after a `Restore` is exempted for the same reason the first
+/// one was, and the exporting module's OWN alias (the first) stays fully
+/// conformance-checked.
+pub(crate) fn deco_downgrade_prelude(
+    exports: &[DecoExport],
+    step: DowngradeStep,
+) -> Vec<cst::TopBinding> {
     if exports.is_empty() {
         return Vec::new();
     }
     let mut src = String::new();
     let mut shadow_names: Vec<(String, String)> = Vec::new();
-    for (i, exp) in exports.iter().enumerate() {
+    for exp in exports.iter() {
         // `classify_deco_exports_v01_sig` never emits these two in this
         // direction (`paren` rejects; `Consumer` is a forward-only
         // contravariant case), so there is nothing to generate.
@@ -1689,34 +2511,71 @@ pub(crate) fn deco_downgrade_prelude(exports: &[DecoExport]) -> Vec<cst::TopBind
         }
         let qualified = deco_export_qualified_name(exp);
         // Mangled from the qualified key (a `.` cannot appear in a surface
-        // identifier, a `-` can), so two dependencies exporting a same-named
-        // member never generate colliding private names — `{i}` disambiguates
-        // only within this one call, and these bindings all land in ONE flat
-        // merged prelude.
+        // identifier, a `-` can): the private names are a pure function of the
+        // export's own qualified key, so [`DowngradeStep::Capture`]'s binding
+        // and every later `Install`/`Restore` that reads it agree on the name
+        // across the SEPARATE calls the placement schedule makes.
         let mangled = qualified.replace('.', "-");
-        let orig = format!("xver-rev-orig-{i}-{mangled}");
-        let shadow = format!("xver-rev-shadow-{i}-{mangled}");
+        let orig = format!("xver-rev-orig-{mangled}");
+        let shadow = format!("xver-rev-shadow-{mangled}");
+        // The still-unshadowed original, captured under a private name. The
+        // shadow's own body must NOT name `M.frame` — that is the key it is
+        // about to rebind, and this indirection is what makes the rebinding
+        // a plain (non-recursive) coercion rather than a self-reference. It is
+        // ALSO what lets the 0.1 view be put back later: `Restore` simply
+        // rebinds the key to this capture.
+        if step == DowngradeStep::Capture {
+            src.push_str(&format!("let {orig} = {qualified}\n"));
+            continue;
+        }
+        if step == DowngradeStep::Restore {
+            src.push_str(&format!("let {shadow} = {orig}\n"));
+            shadow_names.push((shadow, qualified));
+            continue;
+        }
         let lead: Vec<String> = (0..exp.lead_arity).map(|k| format!("xver-a{k}")).collect();
         let lead_params = if lead.is_empty() {
             String::new()
         } else {
             format!("{} ", lead.join(" "))
         };
-        // The still-unshadowed original, captured under a private name. The
-        // shadow's own body must NOT name `M.frame` — that is the key it is
-        // about to rebind, and this indirection is what makes the rebinding
-        // a plain (non-recursive) coercion rather than a self-reference.
-        src.push_str(&format!("let {orig} = {qualified}\n"));
+        // With labelled optionals the shadow needs `fun ?(l = x) p -> ..`
+        // lambdas and a per-label case split (see this function's doc
+        // comment); without them it keeps the plain parameter-list shape every
+        // pre-optional shadow had, byte for byte.
+        let lambdas = v01_shadow_lambdas(exp);
+        let case_split = |tail: &str| {
+            let slots = v01_opt_slots(exp);
+            let mut chosen = vec![false; slots.len()];
+            v01_opt_case_split(&slots, 0, &mut chosen, &|chosen| {
+                format!("{orig} {}{tail}", v01_shadow_args(exp, &slots, chosen))
+            })
+        };
         match exp.kind {
+            DecoKind::Deco if exp.has_optionals() => src.push_str(&format!(
+                "let {shadow} = {lambdas}fun xver-p xver-w xver-h xver-d ->\n\
+                 \x20 [{}]\n",
+                case_split("xver-p xver-w xver-h xver-d")
+            )),
             DecoKind::Deco => src.push_str(&format!(
                 "let {shadow} {lead_params}xver-p xver-w xver-h xver-d =\n\
                  \x20 [{orig} {lead_params}xver-p xver-w xver-h xver-d]\n",
             )),
             DecoKind::DecoSet => {
-                let scrutinee = if lead.is_empty() {
+                let scrutinee = if exp.has_optionals() {
+                    case_split("")
+                } else if lead.is_empty() {
                     orig.clone()
                 } else {
                     format!("{orig} {}", lead.join(" "))
+                };
+                // `let {shadow} p0 p1 =` when every position is mandatory
+                // (unchanged); `let {shadow} = fun ?(l = o) p0 -> ..` once a
+                // labelled optional row has to be re-declared.
+                let binder = if exp.has_optionals() {
+                    format!("let {shadow} = {lambdas}")
+                } else {
+                    format!("let {shadow} {lead_params}= ")
                 };
                 let wrap = |k: usize| {
                     format!(
@@ -1725,10 +2584,11 @@ pub(crate) fn deco_downgrade_prelude(exports: &[DecoExport]) -> Vec<cst::TopBind
                     )
                 };
                 src.push_str(&format!(
-                    "let {shadow} {lead_params}=\n\
+                    "{}\n\
                      \x20 match {scrutinee} with\n\
                      \x20 | (xver-d0, xver-d1, xver-d2, xver-d3) ->\n\
                      \x20   ({}, {}, {}, {})\n",
+                    binder.trim_end(),
                     wrap(0),
                     wrap(1),
                     wrap(2),
@@ -1739,7 +2599,7 @@ pub(crate) fn deco_downgrade_prelude(exports: &[DecoExport]) -> Vec<cst::TopBind
         }
         shadow_names.push((shadow, qualified));
     }
-    if shadow_names.is_empty() {
+    if src.is_empty() {
         return Vec::new();
     }
     // Parsed as a bare `prelude* EOI` library file, for the same reason
@@ -1776,6 +2636,92 @@ pub(crate) fn deco_downgrade_prelude(exports: &[DecoExport]) -> Vec<cst::TopBind
     prelude
 }
 
+/// Every optional LABEL a 0.1 export declares, flattened to `(position,
+/// index-within-position, label)`. The generated shadow binds each one's
+/// `option` as `xver-o{position}-{index}` and, in the branch that re-supplies
+/// it, its unwrapped payload as `xver-v{position}-{index}`.
+fn v01_opt_slots(exp: &DecoExport) -> Vec<(usize, usize, String)> {
+    let mut out = Vec::new();
+    for i in 0..exp.lead_arity {
+        if let LeadOpt::V01Labels(labels) = exp.lead_opt(i) {
+            for (k, l) in labels.iter().enumerate() {
+                out.push((i, k, l.clone()));
+            }
+        }
+    }
+    out
+}
+
+/// The shadow's parameter lambdas, one `fun .. ->` per lead position:
+/// `fun ?(l = xver-o0-0) xver-a0 -> ` for a position with a labelled optional
+/// row (`Expr::FunRows`, which elaborates to `Ast::LambdaOpt` and so puts the
+/// same `Row::Cons(l, τ, …)` back on the shadow's own arrow), `fun xver-a0 ->
+/// ` for a mandatory one. Empty when the export takes no leading arguments.
+fn v01_shadow_lambdas(exp: &DecoExport) -> String {
+    let mut out = String::new();
+    for i in 0..exp.lead_arity {
+        match exp.lead_opt(i) {
+            LeadOpt::V01Labels(labels) => {
+                let binders: Vec<String> = labels
+                    .iter()
+                    .enumerate()
+                    .map(|(k, l)| format!("{l} = xver-o{i}-{k}"))
+                    .collect();
+                out.push_str(&format!("fun ?({}) xver-a{i} -> ", binders.join(", ")));
+            }
+            _ => out.push_str(&format!("fun xver-a{i} -> ")),
+        }
+    }
+    out
+}
+
+/// The argument list of ONE leaf of the shadow's case split: every lead
+/// position in order, each preceded by a `?(l = xver-v..)` bundle naming
+/// exactly the labels `chosen` marks present at that position. A position
+/// whose labels are all absent is spelled bare, so `Ast::Apply`'s open row
+/// absorbs the callee's declared row and `push_opt_slots` restores the `None`s.
+fn v01_shadow_args(exp: &DecoExport, slots: &[(usize, usize, String)], chosen: &[bool]) -> String {
+    let mut out = String::new();
+    for i in 0..exp.lead_arity {
+        let here: Vec<String> = slots
+            .iter()
+            .zip(chosen)
+            .filter(|((p, _, _), take)| *p == i && **take)
+            .map(|((p, k, l), _)| format!("{l} = xver-v{p}-{k}"))
+            .collect();
+        if !here.is_empty() {
+            out.push_str(&format!("?({}) ", here.join(", ")));
+        }
+        out.push_str(&format!("xver-a{i} "));
+    }
+    out
+}
+
+/// Expand `slots[idx..]` into nested `match .. with | None -> .. | Some(..) ->
+/// ..` arms, calling `apply` at each of the `2^slots.len()` leaves with the
+/// present/absent decision for every slot. Every generated `match` is
+/// parenthesised, so nesting one inside an arm (and inside the list literal or
+/// `match` scrutinee the caller wraps the whole thing in) is unambiguous.
+fn v01_opt_case_split(
+    slots: &[(usize, usize, String)],
+    idx: usize,
+    chosen: &mut Vec<bool>,
+    apply: &dyn Fn(&[bool]) -> String,
+) -> String {
+    if idx == slots.len() {
+        return apply(chosen);
+    }
+    let (p, k, _) = &slots[idx];
+    chosen[idx] = false;
+    let absent = v01_opt_case_split(slots, idx + 1, chosen, apply);
+    chosen[idx] = true;
+    let present = v01_opt_case_split(slots, idx + 1, chosen, apply);
+    chosen[idx] = false;
+    format!(
+        "(match xver-o{p}-{k} with | None -> {absent} | Some(xver-v{p}-{k}) -> {present})"
+    )
+}
+
 /// The qualified key [`deco_downgrade_prelude`] rebinds for `exp` — the same
 /// string `v1::module_check` keys its `static_env.seals` entry by, and the
 /// one `lib.rs` hands to `check_program_with_xver_shadows` as an exemption.
@@ -1788,43 +2734,49 @@ pub(crate) fn deco_export_qualified_name(exp: &DecoExport) -> String {
 /// inline `sig .. end` body's `val`/`val \cmd`/`val +cmd` items (recursing
 /// into any nested `module`/`signature`/`include` declaration too), or a
 /// `with type` refinement's base. A named-signature reference
-/// (`SigBotV1::Path`/`Var`) is NOT chased further — see
-/// [`classify_deco_exports_v01_sig`]'s own doc comment for why that is
-/// still sound (a false negative here is an ordinary `TypeError`, never
-/// unsoundness).
-fn v1_sigexpr_mentions_deco(se: &cst_v1::ast::SigExpr) -> Option<String> {
+/// (`SigBotV1::Path`/`Var`) is NOT chased further HERE — this is the
+/// LAST-RESORT guard [`classify_v01_sig_expr`] falls back to once
+/// [`v01_resolve_sig_decls`] has already declined to resolve the expression
+/// at all (a functor signature, a `with M type` sub-module refinement, or a
+/// name with no entry in `surfaces.sigs`); in the first two of those the
+/// nested names it does reach are exactly the ones worth guarding, and in
+/// the third there is nothing to chase. See
+/// [`classify_deco_exports_v01_sig`]'s own doc comment for why a false
+/// negative here is still sound (an ordinary `TypeError`, never unsoundness).
+fn v1_sigexpr_mentions_deco(se: &cst_v1::ast::SigExpr, syns: &V01Syns<'_>) -> Option<String> {
     use cst_v1::ast::SigExpr;
     match se {
-        SigExpr::Functor { dom, cod, .. } => {
-            v1_sigexpr_mentions_deco(dom).or_else(|| v1_sigexpr_mentions_deco(cod))
-        }
-        SigExpr::WithType { base, .. } => v1_sigbot_mentions_deco(base),
-        SigExpr::Bot(bot) => v1_sigbot_mentions_deco(bot),
+        SigExpr::Functor { dom, cod, .. } => v1_sigexpr_mentions_deco(dom, syns)
+            .or_else(|| v1_sigexpr_mentions_deco(cod, syns)),
+        SigExpr::WithType { base, .. } => v1_sigbot_mentions_deco(base, syns),
+        SigExpr::Bot(bot) => v1_sigbot_mentions_deco(bot, syns),
     }
 }
 
-fn v1_sigbot_mentions_deco(bot: &cst_v1::ast::SigBotV1) -> Option<String> {
+fn v1_sigbot_mentions_deco(bot: &cst_v1::ast::SigBotV1, syns: &V01Syns<'_>) -> Option<String> {
     use cst_v1::ast::SigBotV1;
     match bot {
         // An unresolved named-signature reference — not chased (this
         // section's doc comment).
         SigBotV1::Path(_) | SigBotV1::Var(_) => None,
-        SigBotV1::Sig { decls, .. } => decls.iter().find_map(|d| v1_decl_mentions_deco(&d.0)),
+        SigBotV1::Sig { decls, .. } => decls
+            .iter()
+            .find_map(|d| v1_decl_mentions_deco(&d.0, syns)),
     }
 }
 
-fn v1_decl_mentions_deco(decl: &cst_v1::ast::Decl) -> Option<String> {
+fn v1_decl_mentions_deco(decl: &cst_v1::ast::Decl, syns: &V01Syns<'_>) -> Option<String> {
     use cst_v1::ast::Decl;
     match decl {
         Decl::Val { ty, .. } | Decl::ValHorzCmd { ty, .. } | Decl::ValVertCmd { ty, .. } => {
-            v1_type_expr_mentions_deco(ty)
+            v1_type_expr_mentions_deco(ty, syns)
         }
         // A `type`/opaque-`type` sig item merely NAMES `deco`/`deco-set`
         // with no attached VALUE — safe, no coercion needed at all (this
         // section's doc comment's "bare `type foo = deco` synonym" case).
         Decl::TypeOpaque { .. } | Decl::Type { .. } => None,
         Decl::Module { sig_, .. } | Decl::Signature { sig_, .. } | Decl::Include { sig_, .. } => {
-            v1_sigexpr_mentions_deco(sig_)
+            v1_sigexpr_mentions_deco(sig_, syns)
         }
     }
 }
@@ -1836,7 +2788,7 @@ fn v1_decl_mentions_deco(decl: &cst_v1::ast::Decl) -> Option<String> {
 /// [..]`/`block [..]`/`math [..]` command-type forms). `Some(name)` for
 /// the first `"deco"`/`"deco-set"` leaf found anywhere in `te`, `None` if
 /// there is none.
-fn v1_type_expr_mentions_deco(te: &cst_v1::ast::TypeExpr) -> Option<String> {
+fn v1_type_expr_mentions_deco(te: &cst_v1::ast::TypeExpr, syns: &V01Syns<'_>) -> Option<String> {
     use cst_v1::ast::TypeExpr;
     match te {
         TypeExpr::OptRowFun {
@@ -1845,70 +2797,130 @@ fn v1_type_expr_mentions_deco(te: &cst_v1::ast::TypeExpr) -> Option<String> {
             .inner
             .entries
             .iter()
-            .find_map(|e| v1_type_expr_mentions_deco(&e.ty.0))
-            .or_else(|| v1_type_prod_mentions_deco(dom))
-            .or_else(|| v1_type_expr_mentions_deco(cod)),
-        TypeExpr::Fun { dom, cod, .. } => {
-            v1_type_prod_mentions_deco(dom).or_else(|| v1_type_expr_mentions_deco(cod))
-        }
-        TypeExpr::Atom(prod) => v1_type_prod_mentions_deco(prod),
+            .find_map(|e| v1_type_expr_mentions_deco(&e.ty.0, syns))
+            .or_else(|| v1_type_prod_mentions_deco(dom, syns))
+            .or_else(|| v1_type_expr_mentions_deco(cod, syns)),
+        TypeExpr::Fun { dom, cod, .. } => v1_type_prod_mentions_deco(dom, syns)
+            .or_else(|| v1_type_expr_mentions_deco(cod, syns)),
+        TypeExpr::Atom(prod) => v1_type_prod_mentions_deco(prod, syns),
     }
 }
 
-fn v1_type_prod_mentions_deco(tp: &cst_v1::ast::TypeProd) -> Option<String> {
-    v1_type_app_mentions_deco(&tp.first).or_else(|| {
+fn v1_type_prod_mentions_deco(tp: &cst_v1::ast::TypeProd, syns: &V01Syns<'_>) -> Option<String> {
+    v1_type_app_mentions_deco(&tp.first, syns).or_else(|| {
         tp.rest
             .iter()
-            .find_map(|st| v1_type_app_mentions_deco(&st.ty))
+            .find_map(|st| v1_type_app_mentions_deco(&st.ty, syns))
     })
 }
 
-fn v1_type_app_mentions_deco(ta: &cst_v1::ast::TypeApp) -> Option<String> {
+fn v1_type_app_mentions_deco(ta: &cst_v1::ast::TypeApp, syns: &V01Syns<'_>) -> Option<String> {
     use cst_v1::ast::TypeApp;
     match ta {
         // Prefix application (`list int`, 0.1-only shape): the CTOR itself
         // is the bare-name position here (unlike the universal postfix
         // grammar) — check it, plus every argument atom.
-        TypeApp::Applied { ctor, first, rest } => deco_leaf_name(&ctor.name)
-            .or_else(|| v1_type_atom_mentions_deco(first))
-            .or_else(|| rest.iter().find_map(v1_type_atom_mentions_deco)),
+        TypeApp::Applied { ctor, first, rest } => v1_leaf_name_through_syns(&ctor.name, syns)
+            .or_else(|| v1_type_atom_mentions_deco(first, syns))
+            .or_else(|| {
+                rest.iter()
+                    .find_map(|a| v1_type_atom_mentions_deco(a, syns))
+            }),
         // `M.t τ…` — a QUALIFIED ctor name; never itself a bare
         // `"deco"`/`"deco-set"` (those are unqualified builtins), only its
         // arguments can mention one.
-        TypeApp::AppliedLong { first, rest, .. } => v1_type_atom_mentions_deco(first)
-            .or_else(|| rest.iter().find_map(v1_type_atom_mentions_deco)),
+        TypeApp::AppliedLong { first, rest, .. } => v1_type_atom_mentions_deco(first, syns)
+            .or_else(|| {
+                rest.iter()
+                    .find_map(|a| v1_type_atom_mentions_deco(a, syns))
+            }),
         TypeApp::InlineCmdTy { args, .. }
         | TypeApp::BlockCmdTy { args, .. }
-        | TypeApp::MathCmdTy { args, .. } => args.iter().find_map(v1_type_cmd_arg_mentions_deco),
-        TypeApp::Atom(atom) => v1_type_atom_mentions_deco(atom),
+        | TypeApp::MathCmdTy { args, .. } => args
+            .iter()
+            .find_map(|a| v1_type_cmd_arg_mentions_deco(a, syns)),
+        TypeApp::Atom(atom) => v1_type_atom_mentions_deco(atom, syns),
     }
 }
 
-fn v1_type_cmd_arg_mentions_deco(item: &cst_v1::ast::TypeCmdArgItemV1) -> Option<String> {
+fn v1_type_cmd_arg_mentions_deco(
+    item: &cst_v1::ast::TypeCmdArgItemV1,
+    syns: &V01Syns<'_>,
+) -> Option<String> {
     item.opts
         .as_ref()
         .and_then(|o| {
             o.entries
                 .iter()
-                .find_map(|e| v1_type_expr_mentions_deco(&e.ty.0))
+                .find_map(|e| v1_type_expr_mentions_deco(&e.ty.0, syns))
         })
-        .or_else(|| v1_type_expr_mentions_deco(&item.ty.0))
+        .or_else(|| v1_type_expr_mentions_deco(&item.ty.0, syns))
 }
 
-fn v1_type_atom_mentions_deco(atom: &cst_v1::ast::TypeAtom) -> Option<String> {
+fn v1_type_atom_mentions_deco(atom: &cst_v1::ast::TypeAtom, syns: &V01Syns<'_>) -> Option<String> {
     use cst_v1::ast::TypeAtom;
     match atom {
-        TypeAtom::Paren { inner, .. } => v1_type_expr_mentions_deco(&inner.0),
+        TypeAtom::Paren { inner, .. } => v1_type_expr_mentions_deco(&inner.0, syns),
         TypeAtom::Record { inner, .. } => inner
             .fields
             .iter()
-            .find_map(|f| v1_type_expr_mentions_deco(&f.ty.0)),
+            .find_map(|f| v1_type_expr_mentions_deco(&f.ty.0, syns)),
         // A bound type variable — never a forked-name candidate.
         TypeAtom::Var(_) => None,
         // `M.t` — a qualified name; never itself a bare builtin fork name.
         TypeAtom::LongName(_) => None,
-        TypeAtom::Name(n) => deco_leaf_name(&n.name),
+        TypeAtom::Name(n) => v1_leaf_name_through_syns(&n.name, syns),
     }
+}
+
+/// [`deco_leaf_name`] THROUGH the signature's own type synonyms: a name a
+/// signature layer in scope declares transparently is expanded (recursively,
+/// cycle-guarded) and the expansion searched instead, so a `deco` reachable
+/// only via a synonym — `type t = deco  val g : t list` — is refused as
+/// loudly as a directly-spelled one, rather than quietly declining to cross.
+/// A name declared NON-transparently (opaque, parameterised) is not a forked
+/// builtin at all; a name declared nowhere falls through to the builtin test.
+fn v1_leaf_name_through_syns(name: &str, syns: &V01Syns<'_>) -> Option<String> {
+    v1_leaf_name_through_syns_guarded(name, syns, &mut Vec::new())
+}
+
+fn v1_leaf_name_through_syns_guarded(
+    name: &str,
+    syns: &V01Syns<'_>,
+    expanded: &mut Vec<String>,
+) -> Option<String> {
+    match syns.lookup(name) {
+        V01SynLookup::Body(body) => {
+            if expanded.iter().any(|e| e == name) {
+                return None;
+            }
+            expanded.push(name.to_string());
+            // The body is searched with the SAME guard list, so a cycle
+            // through any number of intermediate synonyms terminates.
+            let out = v1_type_expr_mentions_deco_guarded(body, syns, expanded);
+            expanded.pop();
+            out
+        }
+        V01SynLookup::Opaque => None,
+        V01SynLookup::Undeclared => deco_leaf_name(name),
+    }
+}
+
+/// [`v1_type_expr_mentions_deco`] with an explicit synonym-expansion guard —
+/// only reachable from [`v1_leaf_name_through_syns_guarded`], which is the
+/// only place a cycle can arise. A synonym body is a plain type expression,
+/// so this reuses the ordinary walk by temporarily hiding the names already
+/// being expanded.
+fn v1_type_expr_mentions_deco_guarded(
+    te: &cst_v1::ast::TypeExpr,
+    syns: &V01Syns<'_>,
+    expanded: &mut Vec<String>,
+) -> Option<String> {
+    let mut hidden = syns.clone();
+    for name in expanded.iter() {
+        hidden.map.insert(name.clone(), None);
+    }
+    v1_type_expr_mentions_deco(te, &hidden)
 }
 
 #[cfg(test)]
@@ -2385,6 +3397,7 @@ mod tests {
                 name: "xver-my-deco".to_string(),
                 kind: DecoKind::Deco,
                 lead_arity: 0,
+                lead_opts: Vec::new(),
                 module_path: Vec::new(),
                 arg_downgrades: Vec::new(),
                 unit_thunk: false,
@@ -2393,6 +3406,7 @@ mod tests {
                 name: "xver-my-decoset".to_string(),
                 kind: DecoKind::DecoSet,
                 lead_arity: 0,
+                lead_opts: Vec::new(),
                 module_path: Vec::new(),
                 arg_downgrades: Vec::new(),
                 unit_thunk: true,
@@ -2427,6 +3441,16 @@ mod tests {
         cst_v1::parse_file_v1(src).expect("parse v1 fixture")
     }
 
+    /// [`classify_deco_exports_v01_sig`] against `file`'s OWN surface — the
+    /// same `build_file_surface`-then-classify order `lib.rs`'s reverse splice
+    /// arm uses, so a `signature S = ..` bind in the fixture is already
+    /// registered by the time a `module M : S` decl has to resolve it.
+    fn classify_v1(file: &cst_v1::FileV1) -> Result<Vec<DecoExport>, BoundaryError> {
+        let mut surfaces = SurfaceEnv::default();
+        surface::build_file_surface(file, &mut surfaces);
+        classify_deco_exports_v01_sig(file, &surfaces)
+    }
+
     #[test]
     fn classify_v01_sig_accepts_bare_sig_val_deco() {
         // The ONE shape 0.1's grammar can express a bare `deco` ascription
@@ -2435,7 +3459,7 @@ mod tests {
         let file = v1_file(
             "module M :> sig\n  val my-deco : deco\nend = struct\n  val my-deco = 0\nend\n",
         );
-        let exports = classify_deco_exports_v01_sig(&file).expect("a bare `: deco` sig item");
+        let exports = classify_v1(&file).expect("a bare `: deco` sig item");
         assert_eq!(exports.len(), 1);
         assert_eq!(exports[0].name, "my-deco");
         assert_eq!(exports[0].kind, DecoKind::Deco);
@@ -2447,7 +3471,7 @@ mod tests {
     #[test]
     fn classify_v01_sig_accepts_bare_sig_val_decoset() {
         let file = v1_file("module M :> sig\n  val my-decoset : deco-set\nend = struct\n  val my-decoset = 0\nend\n");
-        let exports = classify_deco_exports_v01_sig(&file).expect("a bare `: deco-set` sig item");
+        let exports = classify_v1(&file).expect("a bare `: deco-set` sig item");
         assert_eq!(exports.len(), 1);
         assert_eq!(exports[0].kind, DecoKind::DecoSet);
         assert!(
@@ -2460,27 +3484,24 @@ mod tests {
     fn classify_v01_sig_accepts_curried_sig_val() {
         let file =
             v1_file("module M :> sig\n  val my-deco : length -> color -> deco\nend = struct\n  val my-deco t c p w h d = 0\nend\n");
-        let exports = classify_deco_exports_v01_sig(&file).expect("an arrow-tailed `deco` export");
+        let exports = classify_v1(&file).expect("an arrow-tailed `deco` export");
         assert_eq!(exports.len(), 1);
         assert_eq!(exports[0].kind, DecoKind::Deco);
         assert_eq!(exports[0].lead_arity, 2);
     }
 
     #[test]
-    fn classify_v01_sig_rejects_optional_argument_arrow() {
-        // The deliberate rejection X4b keeps: the generated wrapper forwards
-        // its parameters POSITIONALLY, and an optional argument has no
-        // positional spelling — so an `?(l = ty) -> .. -> deco` export must
-        // reject rather than be wrapped wrongly.
+    fn classify_v01_sig_accepts_an_optional_argument_arrow() {
+        // Was a rejection for the same reason as the nested-module case above
+        // (positional-only forwarding); the wrapper now carries labelled
+        // optionals across, so a `?(l : ty) .. -> deco` export classifies.
         let file = v1_file(
             "module M :> sig\n  val my-deco : ?(thickness : length) length -> deco\nend \
              = struct\n  val my-deco = 0\nend\n",
         );
-        let err = classify_deco_exports_v01_sig(&file)
-            .expect_err("an optional-argument arrow must reject, never be positionally wrapped");
-        match err {
-            BoundaryError::ForkedTypeExport { ty_name, .. } => assert_eq!(ty_name, "deco"),
-        }
+        let exports = classify_v1(&file).expect("a labelled-optional arrow is forwardable now");
+        assert_eq!(exports.len(), 1);
+        assert_eq!(exports[0].name, "my-deco");
     }
 
     #[test]
@@ -2488,7 +3509,7 @@ mod tests {
         let file = v1_file(
             "module M :> sig\n  val my-paren : paren\nend = struct\n  val my-paren = 0\nend\n",
         );
-        let err = classify_deco_exports_v01_sig(&file)
+        let err = classify_v1(&file)
             .expect_err("0.1's `paren` is a stand-in — it must still reject in this direction");
         match err {
             BoundaryError::ForkedTypeExport { ty_name, .. } => assert_eq!(ty_name, "paren"),
@@ -2496,19 +3517,146 @@ mod tests {
     }
 
     #[test]
-    fn classify_v01_sig_rejects_nested_module() {
-        // Deliberately conservative: a nested member's seal key goes through
-        // `walk_nested_seals_a`'s own path composition, so the reverse
-        // direction only classifies the TOP-LEVEL sig's own `val` items.
+    fn classify_v01_sig_crosses_nested_module_under_composed_key() {
+        // A nested member's seal key goes through `walk_nested_seals_a`'s path
+        // composition — "push the child module's name onto the parent's" — so
+        // the classifier reproduces exactly that, and the shadow's qualified
+        // name is the composed `Outer.Inner.my-deco`.
         let file = v1_file(
             "module Outer :> sig\n  module Inner : sig val my-deco : deco end\nend = struct\n  \
              module Inner :> sig val my-deco : deco end = struct val my-deco = 0 end\nend\n",
         );
-        let err = classify_deco_exports_v01_sig(&file)
-            .expect_err("a NESTED module's sig `val : deco` item must still reject");
+        let exports =
+            classify_v1(&file).expect("a NESTED module's sig `val : deco` item must cross");
+        assert_eq!(exports.len(), 1);
+        assert_eq!(exports[0].kind, DecoKind::Deco);
+        assert_eq!(
+            deco_export_qualified_name(&exports[0]),
+            "Outer.Inner.my-deco"
+        );
+    }
+
+    #[test]
+    fn classify_v01_sig_ignores_a_signature_member_that_binds_no_value() {
+        // A `signature S = ..` MEMBER declares a signature, not a value:
+        // `handle_signature_decl` only identity-checks it against the struct's
+        // own `signature` bind, so no member of it is reachable at any path a
+        // 0.0.6 consumer could name (0.0.6 has no signature syntax at all).
+        // Nothing to cross — and therefore nothing to refuse either.
+        let file = v1_file(
+            "module Outer :> sig\n  signature S = sig val my-deco : deco end\nend = struct\n  \
+             signature S = sig val my-deco : deco end\nend\n",
+        );
+        assert!(classify_v1(&file)
+            .expect("a signature member binds no value — nothing to coerce")
+            .is_empty());
+    }
+
+    #[test]
+    fn classify_v01_sig_crosses_a_nested_module_typed_by_a_named_signature() {
+        // The Task-1 headline: the nested decl's signature is a NAME, not a
+        // literal `sig .. end`. `surface::find_sig_keyed` dereferences it —
+        // outward from the same `site_path` `module_check::resolve_sig` uses —
+        // so the member lands under the composed key `Outer.Inner.my-deco`,
+        // exactly as the literal spelling does.
+        let file = v1_file(
+            "module Outer :> sig\n  signature S = sig val my-deco : deco end\n  \
+             module Inner : S\nend = struct\n  \
+             signature S = sig val my-deco : deco end\n  \
+             module Inner :> S = struct val my-deco = 0 end\nend\n",
+        );
+        let exports =
+            classify_v1(&file).expect("a nested module typed by a NAMED signature must now cross");
+        assert_eq!(exports.len(), 1);
+        assert_eq!(exports[0].kind, DecoKind::Deco);
+        assert_eq!(
+            deco_export_qualified_name(&exports[0]),
+            "Outer.Inner.my-deco"
+        );
+    }
+
+    #[test]
+    fn classify_v01_sig_crosses_through_an_include_at_the_enclosing_path() {
+        // `include S` splices S's decls into the ENCLOSING signature in place
+        // (`module_check::splice_decls`), so the member's path is the
+        // includer's own — `Outer.my-deco`, NOT `Outer.S.my-deco`.
+        let file = v1_file(
+            "module Outer :> sig\n  signature S = sig val my-deco : deco end\n  include S\nend \
+             = struct\n  signature S = sig val my-deco : deco end\n  val my-deco = 0\nend\n",
+        );
+        let exports = classify_v1(&file).expect("an `include`d `deco` export must cross");
+        assert_eq!(exports.len(), 1);
+        assert_eq!(deco_export_qualified_name(&exports[0]), "Outer.my-deco");
+    }
+
+    #[test]
+    fn classify_v01_sig_crosses_through_a_with_type_refinement() {
+        // A `with type` refinement narrows a TYPE member; every `val` decl's
+        // SPELLED type is the base's, unchanged, so the scan reads through to
+        // the base's decl list.
+        let file = v1_file(
+            "module Outer :> sig\n  \
+             signature S = sig type t :: o  val my-deco : deco end\n  \
+             module Inner : S with type t = int\nend = struct\n  \
+             signature S = sig type t :: o  val my-deco : deco end\n  \
+             module Inner :> S with type t = int = struct\n    \
+             type t = int\n    val my-deco = 0\n  end\nend\n",
+        );
+        let exports = classify_v1(&file)
+            .expect("a `with type`-refined nested signature must resolve to its base");
+        assert_eq!(exports.len(), 1);
+        assert_eq!(
+            deco_export_qualified_name(&exports[0]),
+            "Outer.Inner.my-deco"
+        );
+    }
+
+    #[test]
+    fn classify_v01_sig_rejects_a_deco_behind_a_functor_signature_member() {
+        // The narrowing that genuinely survives: a functor is not a module, so
+        // there is no `Outer.Make.my-deco` for a shadow to rebind; its members
+        // exist only at an APPLICATION's path, in a file this scan cannot see.
+        let file = v1_file(
+            "module Outer :> sig\n  \
+             module Make : (X : sig val n : int end) -> sig val my-deco : deco end\nend \
+             = struct\n  \
+             module Make = fun (X : sig val n : int end) -> struct val my-deco = 0 end\nend\n",
+        );
+        let err = classify_v1(&file)
+            .expect_err("a `deco` behind a functor signature member must still reject");
         match err {
             BoundaryError::ForkedTypeExport { ty_name, .. } => assert_eq!(ty_name, "deco"),
         }
+    }
+
+    #[test]
+    fn classify_v01_sig_unknown_signature_name_neither_crosses_nor_panics() {
+        // An unresolvable NAME: `module_check::resolve_sig` turns this into a
+        // precise "unknown signature name" error a moment later, so this scan
+        // declines to guess rather than inventing text of its own — and, with
+        // nothing textually reachable, has no `deco` to refuse either.
+        let file = v1_file(
+            "module Outer :> sig\n  module Inner : Nope\nend = struct\n  \
+             module Inner = struct val my-deco = 0 end\nend\n",
+        );
+        assert!(classify_v1(&file)
+            .expect("an unresolved name is downstream's error, not this scan's")
+            .is_empty());
+    }
+
+    #[test]
+    fn classify_v01_sig_self_including_signature_terminates() {
+        // The cycle guard: `signature S = sig include S end` would otherwise
+        // recur forever. Keyed by the RESOLVED table key, like
+        // `module_check::resolve_named_sig`'s own guard.
+        let file = v1_file(
+            "module Outer :> sig\n  signature S = sig include S end\n  module Inner : S\nend \
+             = struct\n  signature S = sig include S end\n  \
+             module Inner = struct val my-deco = 0 end\nend\n",
+        );
+        assert!(classify_v1(&file)
+            .expect("an include cycle is downstream's precise error, not a hang")
+            .is_empty());
     }
 
     #[test]
@@ -2519,16 +3667,175 @@ mod tests {
         let file = v1_file(
             "module M :> sig\n  type xver-deco-alias = deco\nend = struct\n  type xver-deco-alias = deco\nend\n",
         );
-        assert!(classify_deco_exports_v01_sig(&file)
+        assert!(classify_v1(&file)
             .expect("a type-only mention is safe")
             .is_empty());
+    }
+
+    #[test]
+    fn classify_v01_sig_crosses_a_member_declared_at_a_type_synonym() {
+        // The scan reads a `val`'s SPELLED type, and `t` is not a builtin —
+        // so without expanding the signature's OWN `type t = deco` this
+        // export silently declined to cross (surfacing much later as an
+        // ordinary `TypeError` at a 0.0.6 consumer's call site).
+        let file = v1_file(
+            "module M :> sig\n  type t = deco\n  val frame : length -> t\nend = struct\n  \
+             type t = deco\n  val frame w p x y z = 0\nend\n",
+        );
+        let exports = classify_v1(&file).expect("a synonym OF `deco` is a deco export");
+        assert_eq!(exports.len(), 1);
+        assert_eq!(exports[0].name, "frame");
+        assert_eq!(exports[0].kind, DecoKind::Deco);
+        assert_eq!(exports[0].lead_arity, 1);
+        assert_eq!(deco_export_qualified_name(&exports[0]), "M.frame");
+    }
+
+    #[test]
+    fn classify_v01_sig_expands_a_synonym_chain_and_an_arrow_bodied_one() {
+        // A chain (`u` -> `t` -> `deco`) resolves, and an ARROW-BODIED
+        // synonym contributes its own lead positions — the wrapper has to
+        // eta-expand over exactly as many arguments as the spelled-out form
+        // would give it.
+        let file = v1_file(
+            "module M :> sig\n  type t = deco\n  type u = t\n  type framer = length -> u\n  \
+             val frame : color -> framer\nend = struct\n  val frame c w p x y z = 0\nend\n",
+        );
+        let exports = classify_v1(&file).expect("a synonym CHAIN is still a deco export");
+        assert_eq!(exports.len(), 1);
+        assert_eq!(exports[0].kind, DecoKind::Deco);
+        assert_eq!(
+            exports[0].lead_arity, 2,
+            "one lead position from the `val`'s own arrow, one from the synonym's body"
+        );
+    }
+
+    #[test]
+    fn classify_v01_sig_crosses_a_synonym_declared_in_an_included_signature() {
+        // `include S` splices S's decls into the enclosing signature in
+        // place, so a synonym S declares is in scope for the includer's own
+        // `val` decls — the same scope `module_check::splice_decls` gives it.
+        let file = v1_file(
+            "module Outer :> sig\n  signature S = sig type t = deco end\n  include S\n  \
+             val frame : t\nend = struct\n  signature S = sig type t = deco end\n  \
+             type t = deco\n  val frame = 0\nend\n",
+        );
+        let exports = classify_v1(&file).expect("an `include`d synonym is in scope");
+        assert_eq!(exports.len(), 1);
+        assert_eq!(deco_export_qualified_name(&exports[0]), "Outer.frame");
+    }
+
+    #[test]
+    fn classify_v01_sig_crosses_a_nested_members_use_of_an_enclosing_synonym() {
+        // A nested `sig` sees its parent's type declarations, so the map is
+        // threaded down rather than reset at each layer.
+        let file = v1_file(
+            "module Outer :> sig\n  type t = deco\n  module Inner : sig val frame : t end\nend \
+             = struct\n  type t = deco\n  module Inner :> sig val frame : t end \
+             = struct val frame = 0 end\nend\n",
+        );
+        let exports = classify_v1(&file).expect("an enclosing layer's synonym is in scope");
+        assert_eq!(exports.len(), 1);
+        assert_eq!(deco_export_qualified_name(&exports[0]), "Outer.Inner.frame");
+    }
+
+    #[test]
+    fn classify_v01_sig_opaque_type_is_not_a_deco_and_does_not_cross() {
+        // The distinction that matters: an OPAQUE `type t :: o` names no
+        // forked type at all, so it must NOT start being coerced — nor
+        // rejected. (And it is not the builtin of the same name either: a
+        // signature-declared `type deco :: o` shadows it.)
+        let file = v1_file(
+            "module M :> sig\n  type t :: o\n  val frame : length -> t\nend = struct\n  \
+             type t = int\n  val frame w = 0\nend\n",
+        );
+        assert!(classify_v1(&file)
+            .expect("an opaque type is not a deco")
+            .is_empty());
+
+        let shadowed = v1_file(
+            "module M :> sig\n  type deco :: o\n  val frame : deco\nend = struct\n  \
+             type deco = int\n  val frame = 0\nend\n",
+        );
+        assert!(
+            classify_v1(&shadowed)
+                .expect("a locally-declared `deco` is not the builtin one")
+                .is_empty(),
+            "map-first lookup: a signature's own `type deco` shadows the builtin, so no \
+             coercion wrapper may be generated for a value that is not a `deco` at all"
+        );
+    }
+
+    #[test]
+    fn classify_v01_sig_rejects_a_synonym_of_deco_buried_in_a_compound() {
+        // The deliberate rejection survives synonym expansion: a `deco` the
+        // positional wrapper cannot express is refused just as loudly when
+        // it is spelled through a synonym.
+        let file = v1_file(
+            "module M :> sig\n  type t = deco\n  val frames : t list\nend = struct\n  \
+             val frames = 0\nend\n",
+        );
+        let err = classify_v1(&file).expect_err("a buried deco must reject, synonym or not");
+        match err {
+            BoundaryError::ForkedTypeExport { ty_name, .. } => assert_eq!(ty_name, "deco"),
+        }
+    }
+
+    #[test]
+    fn classify_v01_sig_synonym_cycle_terminates() {
+        // `type t = u  type u = t` is a later phase's error; this scan must
+        // decline rather than loop.
+        let file = v1_file(
+            "module M :> sig\n  type t = u\n  type u = t\n  val frame : t\nend = struct\n  \
+             val frame = 0\nend\n",
+        );
+        assert!(classify_v1(&file)
+            .expect("a synonym cycle is downstream's error, not a hang")
+            .is_empty());
+    }
+
+    #[test]
+    fn classify_v01_sig_crosses_a_with_type_refined_deco() {
+        // The other spelling of the same false negative: the base declares
+        // `type t :: o` opaquely and the USE SITE refines it to `deco`, so
+        // the member really is a `deco` at this signature.
+        let file = v1_file(
+            "module Outer :> sig\n  \
+             signature S = sig type t :: o  val frame : t end\n  \
+             module Inner : S with type t = deco\nend = struct\n  \
+             signature S = sig type t :: o  val frame : t end\n  \
+             module Inner :> S with type t = deco = struct\n    \
+             type t = deco\n    val frame = 0\n  end\nend\n",
+        );
+        let exports = classify_v1(&file).expect("a `with type`-refined `deco` member crosses");
+        assert_eq!(exports.len(), 1);
+        assert_eq!(deco_export_qualified_name(&exports[0]), "Outer.Inner.frame");
+    }
+
+    #[test]
+    fn classify_v01_sig_crosses_a_with_submodule_type_refined_deco() {
+        // Task 2's half, from this scan's side: `S with M type t = deco`
+        // used to have no decl list even in principle (`module_check::
+        // resolve_sig` rejected the form outright), so the scan declined.
+        // The refinement now descends into the named member, where it makes
+        // that member's own `t` transparent — and the export crosses.
+        let file = v1_file(
+            "module Outer :> sig\n  \
+             module Inner : sig type t :: o  val frame : t end\n\
+             end with Inner type t = deco = struct\n  \
+             module Inner :> sig type t :: o  val frame : t end \
+             = struct type t = deco  val frame = 0 end\nend\n",
+        );
+        let exports =
+            classify_v1(&file).expect("a `with M type`-refined `deco` member must cross");
+        assert_eq!(exports.len(), 1);
+        assert_eq!(deco_export_qualified_name(&exports[0]), "Outer.Inner.frame");
     }
 
     #[test]
     fn classify_v01_sig_empty_for_no_sig() {
         let file = v1_file("module M = struct\n  val my-deco p w h d = 0\nend\n");
         assert!(
-            classify_deco_exports_v01_sig(&file)
+            classify_v1(&file)
                 .expect("no sig, nothing to see")
                 .is_empty(),
             "an UNSEALED module (no sig_annot at all) has no textual site for this scan to read"
@@ -2538,37 +3845,75 @@ mod tests {
     #[test]
     fn classify_v01_sig_empty_for_document() {
         let file = v1_file("0\n");
-        assert!(classify_deco_exports_v01_sig(&file)
+        assert!(classify_v1(&file)
             .expect("a document is never a dependency")
             .is_empty());
     }
 
-    #[test]
-    fn deco_downgrade_prelude_rebinds_the_qualified_key() {
+    fn one_deco_export() -> Vec<DecoExport> {
         let file = v1_file(
             "module M :> sig\n  val my-deco : length -> deco\nend = struct\n  val my-deco t p w h d = 0\nend\n",
         );
-        let exports = classify_deco_exports_v01_sig(&file).expect("classify");
-        let out = deco_downgrade_prelude(&exports);
-        // Two bindings per export: the private capture of the original, then
-        // the shadow bound under the export's own DOTTED qualified key (no
-        // surface syntax spells that — see `deco_downgrade_prelude`).
-        assert_eq!(out.len(), 2);
-        match &out[0] {
-            cst::TopBinding::Let(tl) => {
-                assert_eq!(tl.name.name, "xver-rev-orig-0-M-my-deco")
-            }
-            other => panic!("expected the private original capture, got {other:?}"),
-        }
-        match &out[1] {
-            cst::TopBinding::Let(tl) => assert_eq!(tl.name.name, "M.my-deco"),
-            other => panic!("expected the qualified-key shadow, got {other:?}"),
+        classify_v1(&file).expect("classify")
+    }
+
+    fn binding_name(tb: &cst::TopBinding) -> &str {
+        match tb {
+            cst::TopBinding::Let(tl) => tl.name.name.as_str(),
+            other => panic!("expected a Let binding, got {other:?}"),
         }
     }
 
     #[test]
+    fn deco_downgrade_capture_binds_only_a_private_name() {
+        // The capture must NOT rebind `M.my-deco`: it is spliced while the 0.1
+        // view is still the installed one, and rebinding there would hand the
+        // coerced shape to the very 0.1 code the schedule protects.
+        let out = deco_downgrade_prelude(&one_deco_export(), DowngradeStep::Capture);
+        assert_eq!(out.len(), 1);
+        assert_eq!(binding_name(&out[0]), "xver-rev-orig-M-my-deco");
+    }
+
+    #[test]
+    fn deco_downgrade_install_rebinds_the_qualified_key() {
+        // The shadow is bound under the export's own DOTTED qualified key —
+        // no surface syntax spells that; see `deco_downgrade_prelude`.
+        let out = deco_downgrade_prelude(&one_deco_export(), DowngradeStep::Install);
+        assert_eq!(out.len(), 1);
+        assert_eq!(binding_name(&out[0]), "M.my-deco");
+    }
+
+    #[test]
+    fn deco_downgrade_restore_rebinds_the_qualified_key_to_the_capture() {
+        // The restore rebinds the same dotted key straight back to the private
+        // capture, so a 0.1 dependency after a 0.0.6 one reads the export at
+        // exactly the scheme the exporting module sealed.
+        let out = deco_downgrade_prelude(&one_deco_export(), DowngradeStep::Restore);
+        assert_eq!(out.len(), 1);
+        assert_eq!(binding_name(&out[0]), "M.my-deco");
+        let src = format!("{:?}", out[0]);
+        assert!(
+            src.contains("xver-rev-orig-M-my-deco"),
+            "the restore's body must name the private capture, got: {src}"
+        );
+    }
+
+    #[test]
+    fn deco_downgrade_private_name_is_a_function_of_the_qualified_key_alone() {
+        // Load-bearing for the placement schedule: `Capture` and every later
+        // `Install`/`Restore` are SEPARATE calls, so they can only agree on the
+        // private name if it depends on nothing call-local.
+        let exports = one_deco_export();
+        let capture = deco_downgrade_prelude(&exports, DowngradeStep::Capture);
+        let restore = deco_downgrade_prelude(&exports, DowngradeStep::Restore);
+        assert!(format!("{:?}", restore[0]).contains(binding_name(&capture[0])));
+    }
+
+    #[test]
     fn deco_downgrade_prelude_empty_is_empty() {
-        assert!(deco_downgrade_prelude(&[]).is_empty());
+        assert!(deco_downgrade_prelude(&[], DowngradeStep::Capture).is_empty());
+        assert!(deco_downgrade_prelude(&[], DowngradeStep::Install).is_empty());
+        assert!(deco_downgrade_prelude(&[], DowngradeStep::Restore).is_empty());
     }
 
     #[test]
@@ -2640,17 +3985,25 @@ mod tests {
     }
 
     #[test]
-    fn classify_deco_in_nested_module_still_rejects_optional_argument_arrow() {
-        // The deliberate rejection survives the recursion: nesting does not
-        // make an optional-argument arrow positionally forwardable.
+    fn classify_deco_in_nested_module_accepts_an_optional_argument_arrow() {
+        // This used to assert a REJECTION: the generated wrapper forwarded its
+        // parameters positionally, and an optional argument has no positional
+        // spelling. The wrapper now forwards optionals too, so the rejection
+        // is gone and what matters is that the recursion into a module still
+        // classifies the export -- and records WHICH leading parameters are
+        // optional, since forwarding them depends on knowing that.
         let prelude = prelude_of(
             "module XverMod = struct\n  \
              let-rec frame : length ?-> length -> deco | t (x, y) w h d = []\nend\n0\n",
         );
-        let err = classify_deco_exports(&prelude, v006(), v01())
-            .expect_err("an optional-argument arrow must still reject inside a module");
-        match err {
-            BoundaryError::ForkedTypeExport { ty_name, .. } => assert_eq!(ty_name, "deco"),
-        }
+        let exports = classify_deco_exports(&prelude, v006(), v01())
+            .expect("an optional-argument arrow is forwardable now");
+        assert_eq!(exports.len(), 1);
+        assert_eq!(exports[0].module_path, vec!["XverMod".to_string()]);
+        assert!(
+            exports[0].lead_opts.contains(&LeadOpt::V006Optional),
+            "the optional slot must be recorded, not flattened into a positional one: {:?}",
+            exports[0].lead_opts
+        );
     }
 }

@@ -83,8 +83,10 @@ the 0.1 tree (`std-ja`, `inline`, `block`, `map`, `set`, …) under `dist-v01/`.
 To install someone else's package, the same binary is a Satyrographos analog:
 
 ```console
-$ rustyfi search diagrams          # look through the package repository
+$ rustyfi search font theano       # keywords narrow: every one must match
 $ rustyfi install ./satysfi-xpath  # a local path, a .tar.gz, or a registry name
+$ rustyfi install xpath easytable  # install/uninstall take several at once
+$ rustyfi install https://example.org/pkg.tar.gz#sha256=…   # or a URL
 $ rustyfi list
 ```
 
@@ -116,6 +118,47 @@ built *from* a library — are built by running their own declared commands:
 ```console
 $ rustyfi build                    # or --doc NAME, when several are declared
 ```
+
+## Language versions
+
+SATySFi comes in two incompatible generations and this handles both. `0.0`
+(0.0.6) is the default; `--lang 0.1` selects the newer one, and a 0.1-style
+`use` header selects it on its own:
+
+```console
+$ rustyfi doc.saty              # 0.0.6
+$ rustyfi --lang 0.1 doc.saty   # 0.1
+```
+
+Packages carry a generation too. A `Satyristes` says which one each library is
+written for, and one manifest may declare the same name for both; `--lang` picks
+among what it declares, and is only needed to disambiguate.
+
+```lisp
+(library (name "greet") (version "1.0") (lang 0.1)
+  (sources ((packageDir "src"))))
+```
+
+```console
+$ rustyfi install ./greet --lang 0.1
+installed greet 1.0 (1 path(s)):
+  dist-v01/packages/greet
+```
+
+0.1 packages live in `<root>/dist-v01/packages/`, 0.0 ones in
+`<root>/dist/packages/`, and both can be installed side by side under one name.
+`@require:` prefers your document's own generation and falls back to the other —
+which matters, because names like `itemize`, `list` and `code` exist in both
+corpora with genuinely different APIs, and you get the one written for the
+language you are compiling.
+
+That fallback is also what lets a **0.1 document `@require:` a 0.0.6 package**,
+which works end to end. The limit is types whose runtime representation forks
+between generations: `page`, `font`, `math-text` and `math-boxes` are refused
+with an error naming the type rather than quietly mis-rendered, `math` is
+relabelled to `math-text` for you, and `deco`/`deco-set`/`paren` cross through
+generated wrappers. The reverse direction is partial — see
+[Known gaps](#known-gaps).
 
 ## HTML output
 

@@ -61,6 +61,76 @@ pub fn install(source: &Path, opts: &InstallOptions) -> Result<InstallReport, Er
     install_inner(source, opts, None)
 }
 
+/// Install from an `http(s)://` URL naming a `.tar.gz`: fetch it, then install
+/// it exactly as a local archive, and record the URL in the receipt so `list`
+/// and `status` say where the package actually came from rather than naming a
+/// temporary file that no longer exists.
+///
+/// **A bare URL is unverified.** A registry install checks the index's
+/// checksum and an `.opam` `extra-source` checks its `sha256=`; a URL typed on
+/// a command line carries no such claim, and this must not be mistaken for the
+/// same guarantee. Pass `sha256` to demand one — the caller is expected to say
+/// out loud when it cannot.
+pub fn install_url(
+    url: &str,
+    sha256: Option<&str>,
+    opts: &InstallOptions,
+) -> Result<InstallReport, Error> {
+    if opts.offline {
+        return Err(Error::Offline {
+            url: url.to_string(),
+        });
+    }
+    let dir = std::env::temp_dir().join(format!("rustyfi-url-{}", crate::stage::unique_suffix()));
+    std::fs::create_dir_all(&dir).map_err(|e| Error::io(&dir, e))?;
+    let archive = dir.join(url_file_name(url));
+
+    let result = (|| {
+        crate::registry::http::get_to_file(url, &archive)?;
+        if let Some(want) = sha256 {
+            let got = util::sha256_file(&archive)?;
+            if !got.eq_ignore_ascii_case(want) {
+                return Err(Error::ChecksumMismatch {
+                    expected: want.to_string(),
+                    actual: got,
+                });
+            }
+        }
+        let mut source = Source::plain("url", url);
+        source.sha256 = sha256.map(str::to_string);
+        install_inner(&archive, opts, Some(source))
+    })();
+
+    // The download is scratch either way: a failure must not leave a half-
+    // fetched archive behind, and a success has already extracted it.
+    let _ = std::fs::remove_dir_all(&dir);
+    result
+}
+
+/// Whether `arg` names a remote archive rather than a path or a registry name.
+pub fn is_url(arg: &str) -> bool {
+    arg.starts_with("http://") || arg.starts_with("https://")
+}
+
+/// The file name to save a URL's download under. Only the extension really
+/// matters — [`crate::archive::prepare`] dispatches on it — so a URL whose last
+/// segment does not look like a tarball (a redirect endpoint, `.../download`,
+/// a trailing slash) still gets a name that says what this crate is willing to
+/// unpack, and unpacking fails honestly if it turns out to be something else.
+fn url_file_name(url: &str) -> String {
+    let path = url
+        .split(['?', '#'])
+        .next()
+        .unwrap_or(url)
+        .trim_end_matches('/');
+    let last = path.rsplit('/').next().unwrap_or("");
+    if last.ends_with(".tar.gz") || last.ends_with(".tgz") {
+        last.to_string()
+    } else {
+        "package.tar.gz".to_string()
+    }
+}
+
 /// The install pipeline, shared by the phase-1 `path`/`archive` primitive and
 /// the phase-3 registry source. `source_override`, when `Some`, replaces the
 /// receipt's `[source]` table (the registry form records the package name,
@@ -345,4 +415,48 @@ fn top_level_paths(dsts: &[String]) -> Vec<PathBuf> {
     tops.sort();
     tops.dedup();
     tops
+}
+
+#[cfg(test)]
+mod url_tests {
+    use super::*;
+
+    #[test]
+    fn a_url_is_told_apart_from_a_path_and_a_registry_name() {
+        assert!(is_url("https://example.org/p.tar.gz"));
+        assert!(is_url("http://example.org/p.tar.gz"));
+        // A registry name and a local path must not be mistaken for one.
+        assert!(!is_url("xpath"));
+        assert!(!is_url("./satysfi-xpath"));
+        assert!(!is_url("/srv/pkgs/xpath.tar.gz"));
+    }
+
+    #[test]
+    fn the_download_keeps_a_tarball_name_and_invents_one_otherwise() {
+        assert_eq!(url_file_name("https://x/y/pkg-1.0.tar.gz"), "pkg-1.0.tar.gz");
+        assert_eq!(url_file_name("https://x/y/pkg.tgz"), "pkg.tgz");
+        // Query and fragment are not part of the name.
+        assert_eq!(url_file_name("https://x/y/pkg.tar.gz?token=1"), "pkg.tar.gz");
+        assert_eq!(
+            url_file_name("https://x/y/pkg.tar.gz#sha256=ab"),
+            "pkg.tar.gz"
+        );
+        // A download endpoint that names no file still gets an extension this
+        // crate can dispatch on, so unpacking fails honestly rather than on a
+        // missing suffix.
+        assert_eq!(url_file_name("https://x/api/download"), "package.tar.gz");
+        assert_eq!(url_file_name("https://x/y/"), "package.tar.gz");
+    }
+
+    #[test]
+    fn offline_refuses_before_reaching_the_network() {
+        let opts = InstallOptions {
+            offline: true,
+            dest: Some(std::env::temp_dir().join("rustyfi-url-offline-never-created")),
+            ..Default::default()
+        };
+        let err = install_url("https://example.invalid/p.tar.gz", None, &opts)
+            .expect_err("offline must refuse a URL install");
+        assert!(matches!(err, Error::Offline { .. }), "got {err}");
+    }
 }

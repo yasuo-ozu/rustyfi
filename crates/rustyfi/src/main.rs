@@ -865,9 +865,19 @@ fn find_manifest() -> Option<PathBuf> {
 
 fn cmd_install(m: &ArgMatches) -> Result<(), sg::Error> {
     // No PATH → phase-2 manifest mode (reconcile the nearest Satyristes).
-    let Some(arg) = m.get_one::<String>("path") else {
+    let Some(args) = m.get_many::<String>("path") else {
         return cmd_install_manifest(m);
     };
+    // In order, stopping at the first failure. Each success has already
+    // printed what it placed, so a partial run says exactly how far it got --
+    // and the sources are independent, so nothing has to be undone.
+    for arg in args {
+        install_one(arg, m)?;
+    }
+    Ok(())
+}
+
+fn install_one(arg: &str, m: &ArgMatches) -> Result<(), sg::Error> {
     let libraries: Option<Vec<String>> = m
         .get_many::<String>("library")
         .map(|vals| vals.cloned().collect());
@@ -887,7 +897,17 @@ fn cmd_install(m: &ArgMatches) -> Result<(), sg::Error> {
 
     // Registry form (plan §5.4): the argument is a registry NAME[@VERSION] when
     // it does not name a path on disk. A path on disk is a phase-1 install.
-    let report = if Path::new(arg).exists() {
+    let report = if sg::is_url(arg) {
+        let (url, sha256) = split_url_checksum(arg);
+        if sha256.is_none() {
+            // Everything else this command installs is checked against
+            // something: the registry index's checksum, an `.opam`'s
+            // `sha256=`, or bytes already on disk. A URL is the one form with
+            // no such claim, and it must not be mistaken for one.
+            eprintln!("warning: nothing verifies {url} (append `#sha256=...` to require a digest)");
+        }
+        sg::install_url(url, sha256, &opts)?
+    } else if Path::new(arg).exists() {
         sg::install(Path::new(arg), &opts)?
     } else {
         let (name, version) = split_name_version(arg);
@@ -942,6 +962,20 @@ fn cmd_install(m: &ArgMatches) -> Result<(), sg::Error> {
     Ok(())
 }
 
+/// Split a URL argument's optional `#sha256=<hex>` fragment off the URL.
+///
+/// The digest rides on the argument rather than living in a flag because
+/// `install` takes several sources at once: one `--sha256` could not say which
+/// URL it belonged to, and a flag that silently applies to "the first one" is
+/// worse than no flag.
+fn split_url_checksum(arg: &str) -> (&str, Option<&str>) {
+    match arg.split_once("#sha256=") {
+        Some((url, digest)) if !digest.is_empty() => (url, Some(digest)),
+        Some((url, _)) => (url, None),
+        None => (arg, None),
+    }
+}
+
 /// Split a registry `NAME[@VERSION]` argument into `(name, Some(version))` or
 /// `(name, None)`. A trailing `@` with no version (`"foo@"`) yields
 /// `("foo", None)`, never a name with a stray `@`.
@@ -993,11 +1027,14 @@ fn cmd_install_manifest(m: &ArgMatches) -> Result<(), sg::Error> {
 }
 
 fn cmd_uninstall(m: &ArgMatches) -> Result<(), sg::Error> {
-    let name = m
-        .get_one::<String>("name")
+    let names = m
+        .get_many::<String>("name")
         .expect("NAME is required by clap");
-    sg::uninstall(name, &root_options(m))?;
-    println!("uninstalled {name}");
+    let opts = root_options(m);
+    for name in names {
+        sg::uninstall(name, &opts)?;
+        println!("uninstalled {name}");
+    }
     Ok(())
 }
 
@@ -1020,7 +1057,7 @@ fn cmd_list(m: &ArgMatches) -> Result<(), sg::Error> {
     Ok(())
 }
 
-/// `search <term>` (plan §8): list matching registry packages, one
+/// `search <keyword>...` (plan §8): list matching registry packages, one
 /// `name version — description` line each, sorted by name.
 /// How many repositories a search round covers.
 fn urls_len(repos: &[sg::RegistryConfig], opts: &sg::RegistryOptions) -> usize {
@@ -1032,9 +1069,11 @@ fn urls_len(repos: &[sg::RegistryConfig], opts: &sg::RegistryOptions) -> usize {
 }
 
 fn cmd_search(m: &ArgMatches) -> Result<(), sg::Error> {
-    let term = m
-        .get_one::<String>("term")
-        .expect("TERM is required by clap");
+    let terms: Vec<&str> = m
+        .get_many::<String>("term")
+        .expect("KEYWORD is required by clap")
+        .map(String::as_str)
+        .collect();
     // Every configured repository, in order. `--registry`/`$RUSTYFI_REGISTRY`
     // pin one, in which case there is exactly one round.
     let opts = registry_options(m)?;
@@ -1049,7 +1088,7 @@ fn cmd_search(m: &ArgMatches) -> Result<(), sg::Error> {
     let mut failures: Vec<(String, sg::Error)> = Vec::new();
     for url in urls {
         let label = url.clone().unwrap_or_default();
-        match sg::search(term, &opts, url.as_deref()) {
+        match sg::search(&terms, &opts, url.as_deref()) {
             Ok(hits) => {
                 for hit in &hits {
                     any = true;
@@ -1222,5 +1261,37 @@ fn link_or_copy(from: &Path, to: &Path) -> std::io::Result<()> {
     match std::fs::hard_link(from, to) {
         Ok(()) => Ok(()),
         Err(_) => std::fs::copy(from, to).map(|_| ()),
+    }
+}
+
+#[cfg(test)]
+mod arg_tests {
+    use super::*;
+
+    #[test]
+    fn a_url_carries_its_own_checksum() {
+        let (url, sha) = split_url_checksum("https://x/p.tar.gz#sha256=abc123");
+        assert_eq!(url, "https://x/p.tar.gz");
+        assert_eq!(sha, Some("abc123"));
+    }
+
+    #[test]
+    fn a_url_without_one_keeps_its_whole_self() {
+        assert_eq!(
+            split_url_checksum("https://x/p.tar.gz"),
+            ("https://x/p.tar.gz", None)
+        );
+        // An empty digest is no digest -- and must not leave a stray `#` on
+        // the URL that gets fetched.
+        assert_eq!(
+            split_url_checksum("https://x/p.tar.gz#sha256="),
+            ("https://x/p.tar.gz", None)
+        );
+    }
+
+    #[test]
+    fn a_registry_name_with_a_version_is_unaffected() {
+        assert_eq!(split_name_version("xpath@0.3.0"), ("xpath", Some("0.3.0")));
+        assert_eq!(split_name_version("xpath"), ("xpath", None));
     }
 }

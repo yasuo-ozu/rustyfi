@@ -561,19 +561,19 @@ fn search_matches_name_and_description() {
     };
 
     // Match on name.
-    let hits = sg::search("great", &reg, None).unwrap();
+    let hits = sg::search(&["great"], &reg, None).unwrap();
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0].name, "great-package");
     assert_eq!(hits[0].version, "1.0.0");
     assert_eq!(hits[0].description.as_deref(), Some("A great SATySFi package"));
 
     // Match on description ("didot" only appears in the font entry's text).
-    let hits = sg::search("didot", &reg, None).unwrap();
+    let hits = sg::search(&["didot"], &reg, None).unwrap();
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0].name, "fonts-theano");
 
     // Empty term lists everything, sorted by name.
-    let hits = sg::search("", &reg, None).unwrap();
+    let hits = sg::search(&[], &reg, None).unwrap();
     let names: Vec<_> = hits.iter().map(|h| h.name.as_str()).collect();
     assert_eq!(names, ["fonts-theano", "great-package"]);
 }

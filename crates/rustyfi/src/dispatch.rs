@@ -330,13 +330,19 @@ fn package_subcommands(cmd: Command) -> Command {
     .subcommand(root_flags(registry_flag(
         Command::new("install")
             .about(
-                "Install a package from a directory, .tar.gz, or registry name; with no PATH, \
-                 reconcile the project's Satyristes.",
+                "Install packages from directories, .tar.gz files, URLs, or registry names; \
+                 with no PATH, reconcile the project's Satyristes.",
             )
             .arg(
                 Arg::new("path")
                     .value_name("PATH")
-                    .help("Package source: a directory, a .tar.gz, or a registry NAME[@VERSION].")
+                    .num_args(1..)
+                    .action(ArgAction::Append)
+                    .help(
+                        "Package sources, installed in order: a directory, a .tar.gz, \
+                         an http(s) URL of one (optionally #sha256=HEX), or a registry \
+                         NAME[@VERSION] (repeatable).",
+                    )
                     .value_parser(value_parser!(String)),
             )
             .arg(
@@ -364,7 +370,13 @@ fn package_subcommands(cmd: Command) -> Command {
     .subcommand(root_flags(
         Command::new("uninstall")
             .about("Remove a receipted package.")
-            .arg(Arg::new("name").required(true).help("Package name.")),
+            .arg(
+                Arg::new("name")
+                    .required(true)
+                    .num_args(1..)
+                    .action(ArgAction::Append)
+                    .help("Package names, removed in order (repeatable)."),
+            ),
     ))
     .subcommand(build_command())
     .subcommand(root_flags(
@@ -377,12 +389,17 @@ fn package_subcommands(cmd: Command) -> Command {
     ))
     .subcommand(registry_flag(
         Command::new("search")
-            .about("Search the package repository for a keyword (name and description).")
+            .about("Search the package repository for keywords (name and description).")
             .arg(
                 Arg::new("term")
                     .value_name("KEYWORD")
                     .required(true)
-                    .help("Keyword to look for, matched against name and description."),
+                    .num_args(1..)
+                    .action(ArgAction::Append)
+                    .help(
+                        "Keywords to look for, matched against name and description. \
+                         Several NARROW the search: every keyword must match.",
+                    ),
             ),
     ))
     .subcommand(root_flags(registry_flag(Command::new("update").about(

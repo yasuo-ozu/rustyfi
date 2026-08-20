@@ -80,7 +80,7 @@ fn search_skips_entries_it_cannot_install() {
     // `conf-yarn` has no source; one such entry must not sink the search.
     let dir = tmp("search");
     opam_index(&dir);
-    let hits = sg::search("xpath", &opts(&dir), None).expect("search");
+    let hits = sg::search(&["xpath"], &opts(&dir), None).expect("search");
     assert_eq!(hits.len(), 1, "{hits:?}");
     assert_eq!(hits[0].name, "satysfi-xpath");
     assert_eq!(hits[0].description.as_deref(), Some("XPath-like path combinators"));

@@ -563,6 +563,90 @@ fn negative_case_forked_type_on_boundary_is_still_rejected() {
     }
 }
 
+/// The SAME forked type, spelled as a top-level value ascription rather than
+/// a `type` declaration. Both are export-position text a consumer can see, so
+/// both must reject; the walk used to visit `LetRec`'s ascription and not
+/// plain `Let`'s, so `let x : page = ..` crossed the boundary silently while
+/// `type a = page` was refused -- a guard whose whole purpose is preventing a
+/// silent mis-render, decided by which way the package happened to spell it.
+///
+/// `page` is the sharpest case: 0.0.6 represents it as a 9-ctor ADT
+/// (`Value::Ctor`), 0.1 as a `length * length` tuple (`Value::Product`), so a
+/// value that slips through has no shared runtime representation at all.
+#[test]
+fn negative_case_forked_type_in_a_value_ascription_is_rejected() {
+    let dir = TempDir::new("negative-ascription");
+    dir.write(
+        "dist/packages/xver-forked-ann.satyg",
+        "@stage: persistent
+
+let xver-page : page = A4Paper
+",
+    );
+    dir.write("entry.saty", "@require: xver-forked-ann
+
+0
+");
+
+    let opts = LoadOptions {
+        lib_root: Some(dir.path().to_path_buf()),
+        version: RustyfiVersion::V0_1,
+        ..Default::default()
+    };
+    let program = rustyfi_loader::load(&dir.path().join("entry.saty"), &opts)
+        .unwrap_or_else(|e| panic!("loading the fixture should succeed: {e}"));
+
+    let mono = Mono;
+    let err = rustyfi_lang::compile_document_v1(&program.files, &mono)
+        .expect_err("a value ascribed with a version-forked type must be rejected");
+    match err {
+        CompileError::CrossVersionUnsupportedName { name, slice, .. } => {
+            assert_eq!(name, "page");
+            assert_eq!(slice, "X3");
+        }
+        other => panic!("expected CrossVersionUnsupportedName, got: {other}"),
+    }
+}
+
+/// The other half of that fix: walking ascriptions must not start rejecting
+/// the version-NEUTRAL ones. A `let x : int = ..` names nothing forked and has
+/// to keep crossing, or tightening the guard would break every 0.0.6 package
+/// that annotates an ordinary export.
+#[test]
+fn a_version_neutral_value_ascription_still_crosses() {
+    let dir = TempDir::new("neutral-ascription");
+    dir.write(
+        "dist/packages/xver-neutral-ann.satyg",
+        "@stage: persistent
+
+let xver-count : int = 42
+",
+    );
+    dir.write("entry.saty", "@require: xver-neutral-ann
+
+0
+");
+
+    let opts = LoadOptions {
+        lib_root: Some(dir.path().to_path_buf()),
+        version: RustyfiVersion::V0_1,
+        ..Default::default()
+    };
+    let program = rustyfi_loader::load(&dir.path().join("entry.saty"), &opts)
+        .unwrap_or_else(|e| panic!("loading the fixture should succeed: {e}"));
+
+    // The entry is a bare `0`, so the compile still fails -- but on being a
+    // non-document, which is only reachable AFTER the boundary check has
+    // passed the dependency. What matters is which error comes back.
+    let mono = Mono;
+    match rustyfi_lang::compile_document_v1(&program.files, &mono) {
+        Err(CompileError::CrossVersionUnsupportedName { name, .. }) => {
+            panic!("a version-neutral ascription must not be rejected, but `{name}` was")
+        }
+        _ => {}
+    }
+}
+
 // ============================================================================
 // X3a ("Slice X3 — forked-type export adapter", X3.6's test plan): `math` is
 // the sole (a)-class forked type — representationally identical to `V0_1`'s

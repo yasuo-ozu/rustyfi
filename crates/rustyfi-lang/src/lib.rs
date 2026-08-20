@@ -1133,6 +1133,17 @@ fn walk_top_binding(
             }
         }
         TopBinding::Let(tl) => {
+            // TOP-LEVEL, so this binding's own `: ty` ascription is
+            // export-position text, exactly as `LetRec`'s is (`boundary =
+            // true` there). Missing it let `let x : page = ...` cross the
+            // version boundary silently while `type alias = page` was
+            // rejected -- the same forked name, caught or not depending on
+            // which way the package happened to spell it. The elaborator
+            // itself parses-and-ignores ascriptions, which is why nothing
+            // else had reason to walk this field.
+            if let Some(asc) = &tl.ascription {
+                walk_type_expr(&asc.ty, scope, out);
+            }
             let mark = scope.mark();
             for p in &tl.params {
                 walk_param_binder(p, scope, out);

@@ -94,7 +94,7 @@ pub use manifest::Lang;
 
 // Flat re-exports of the public API named in the plan's §7.2.
 pub use ops::build::{build, BuildOptions, BuildReport};
-pub use ops::install::{install, InstallOptions, InstallReport};
+pub use ops::install::{install, install_url, is_url, InstallOptions, InstallReport};
 pub use ops::list::{list, PackageSummary};
 pub use ops::reconcile::{install_manifest, install_manifest_reg, ManifestReport};
 pub use ops::status::{status, PackageStatus, StatusReport};

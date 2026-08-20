@@ -420,14 +420,13 @@ fn write_box(out: &mut String, indent: usize, dx: Length, bx: &PureHorzBox) {
                 write_vbox(out, indent + 1, vb);
             }
         }
-        // `docs/plans/design-reflow-s4-lists.md` §4.1: an inert reflow
-        // marker (zero width/height/depth, contributes nothing to
-        // geometry — see `linebreak.rs`'s/`hbox.rs`'s `InlineMark` arms).
-        // No current fixture emits one (none call `\emph`/`\bold`/
-        // `\listing`/`\enumerate` under this harness's base-14 setup), but
-        // the snapshot format still names the kind explicitly rather than
-        // silently going invisible, matching this function's own exhaustive
-        // discipline (its doc comment above).
+        // an inert reflow marker (zero width/height/depth, contributes
+        // nothing to geometry — see `linebreak.rs`'s/`hbox.rs`'s
+        // `InlineMark` arms). No current fixture emits one (none call
+        // `\emph`/`\bold`/ `\listing`/`\enumerate` under this harness's
+        // base-14 setup), but the snapshot format still names the kind
+        // explicitly rather than silently going invisible, matching this
+        // function's own exhaustive discipline (its doc comment above).
         PureHorzBox::InlineMark(kind) => {
             let _ = writeln!(out, "{pad}dx={} InlineMark kind={kind:?}", fmt_len(dx));
         }
@@ -472,10 +471,9 @@ fn write_vbox(out: &mut String, indent: usize, vb: &VertBox) {
         VertBox::FrameEnd(id) => {
             let _ = writeln!(out, "{pad}VFrameEnd id={}", id.0);
         }
-        // `docs/plans/design-reflow-s4-lists.md` §4.1: same inert-marker
-        // treatment as `PureHorzBox::InlineMark` above — zero height,
-        // contributes nothing to geometry (`measure_block`'s `ListMark`
-        // arm).
+        // same inert-marker treatment as `PureHorzBox::InlineMark` above
+        // — zero height, contributes nothing to geometry
+        // (`measure_block`'s `ListMark` arm).
         VertBox::ListMark(kind) => {
             let _ = writeln!(out, "{pad}VListMark kind={kind:?}");
         }

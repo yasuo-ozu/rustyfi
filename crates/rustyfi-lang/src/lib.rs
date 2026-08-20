@@ -42,10 +42,10 @@ pub enum CompileError {
     NotADocument(&'static str),
     #[error(transparent)]
     Lower(#[from] v1::lower::LowerError),
-    /// Cross-version import (X1, `docs/plans/design-cross-version-import.md`
-    /// §5): a `V0_0` dependency spliced into a `V0_1` program referenced
-    /// `name`, a builtin primitive/type that is version-forked (bound, or
-    /// shaped, differently between `V0_0` and `V0_1` —
+    /// Cross-version import (X1): a `V0_0` dependency spliced into a `V0_1`
+    /// program referenced `name`, a builtin primitive/type that is
+    /// version-forked (bound, or shaped, differently between `V0_0` and
+    /// `V0_1` —
     /// `primitives::forked_prim_names`/`typecheck::forked_type_names`). The
     /// merged program's single `base_env_with_version(V0_1)` can only bind
     /// ONE closure per name (§3.2's R1), so silently accepting this would
@@ -55,7 +55,7 @@ pub enum CompileError {
     #[error(
         "cross-version import ({slice}): dependency {dep} references `{name}`, a \
          version-forked builtin — {slice} only supports the version-neutral subset \
-         of the 0.0.6 corpus (see docs/plans/design-cross-version-import.md)"
+         of the 0.0.6 corpus"
     )]
     CrossVersionUnsupportedName {
         name: String,
@@ -89,10 +89,9 @@ pub fn compile_document_cst(
 }
 
 /// Same as [`compile_document_cst`], but also returns how many fixpoint
-/// trials it took (docs/plans/hooks-annotations-crossref.md §Cross-references
-/// & the fixpoint) — exposed for tests that must confirm the fixpoint
-/// actually iterated, not just that it produced the right answer on a lucky
-/// first pass.
+/// trials it took (& the fixpoint) — exposed for tests that must confirm the
+/// fixpoint actually iterated, not just that it produced the right answer on
+/// a lucky first pass.
 pub fn compile_document_cst_with_trials(
     file: &rustyfi_syntax::cst::File,
     metrics: &dyn FontMetrics,
@@ -211,8 +210,7 @@ fn eval_trials_seeded(
     seed: crossref::AuxTable,
 ) -> Result<(std::rc::Rc<DocumentValue>, u32, crossref::AuxTable, bool), CompileError> {
     // The cross-reference table persists across trials — it *is* the
-    // fixpoint state (docs/plans/hooks-annotations-crossref.md's Risks:
-    // "what resets per trial vs what persists").
+    // fixpoint state (Risks: "what resets per trial vs what persists").
     let timing = std::env::var_os("RUSTYFI_TIMING").is_some();
     let crossrefs = Rc::new(RefCell::new(CrossRefs::seeded(seed)));
     let mut trials = 0u32;
@@ -271,9 +269,9 @@ fn eval_trials_seeded(
                     page_graphics: std::mem::take(&mut interp.page_graphics),
                     doc_info: interp.doc_info.take(),
                 };
-                // S2 (docs/plans/design-reflowable-html.md §4): the
-                // DecoId-keyed link/destination side-channel, same timing
-                // as `extras` above (only known once `fire_hooks` has run).
+                // S2: the DecoId-keyed link/destination side-channel, same
+                // timing as `extras` above (only known once `fire_hooks`
+                // has run).
                 final_doc.reflow_links = std::mem::take(&mut interp.link_decos);
                 final_doc.reflow_dests = std::mem::take(&mut interp.dest_decos);
                 let refs = crossrefs.borrow();
@@ -336,9 +334,8 @@ pub fn compile_document_v1_with_aux(
     // is ALWAYS `V0_1` (the loader's own contract — `load_legacy`'s Q4 rule
     // only ever downgrades a DEPENDENCY to `V0_0`, never the entry; see
     // `LoadedFile::version`'s doc comment). A `V0_0` dependency is instead
-    // routed through the cross-version splice arm below (X1,
-    // `docs/plans/design-cross-version-import.md` §5) — it never reaches
-    // this helper.
+    // routed through the cross-version splice arm below (X1) — it never
+    // reaches this helper.
     fn as_v01(f: &rustyfi_loader::LoadedFile) -> &rustyfi_syntax::cst_v1::FileV1 {
         match &f.cst {
             rustyfi_loader::LoadedCst::V0_1(cst) => cst,
@@ -685,9 +682,8 @@ pub fn compile_document_v1_with_aux(
 /// Compile a loader-resolved SATySFi 0.0.6 program (`LoadOptions { version:
 /// V0_0, .. }`) whose entry (or one of its native 0.0.6 co-dependencies)
 /// `@require:`s at least one **foreign 0.1** package — Slice X4a
-/// (`docs/plans/design-cross-version-import.md` §"Slice X4 — reverse
-/// direction", specifically §X4.2's recommended "Option B" mechanism and
-/// §X4.3's file-by-file inventory, item 4).
+/// (specifically §X4.2's recommended "Option B" mechanism and §X4.3's
+/// file-by-file inventory, item 4).
 ///
 /// This is the REVERSE of [`compile_document_v1_with_trials`]'s whole
 /// direction, but reuses its exact polarity rather than flipping it: the
@@ -825,52 +821,50 @@ pub fn compile_document_v006_xver_with_aux(
             // dependency splices VERBATIM (never relabeled) — both the safe
             // AND the correct choice here.
             //
-            // X4b (`docs/plans/design-cross-version-import.md`'s "Slice X4"
-            // §X4.5, extended beyond its own math-only sketch by the task
-            // brief this increment implements): `deco`/`deco-set` were
-            // INTENDED to also cross (the reverse mirror of X3b's
+            // X4b ("Slice X4" §X4.5, extended beyond its own math-only sketch
+            // by the task brief this increment implements): `deco`/`deco-set`
+            // were INTENDED to also cross (the reverse mirror of X3b's
             // `unite-graphics` wrap, coercing the OPPOSITE way — a crossing
             // `V0_1` deco returns a single `graphics`; every REAL
-            // `V0_0`-authored consumer call site expects a `graphics
-            // list` back, so the wrap would need to be a SINGLETON LIST,
-            // `[name p w h d]`). **This turned out to be UNSOUND to wire up
-            // given this port's hard constraints, and is INTENTIONALLY left
-            // rejected** — see `v1::xver_adapt::reject_deco_exports_v01_sig`'s
-            // own doc comment for the full derivation. Summary: 0.1's ONLY
-            // textual site that can even NAME a `deco`/`deco-set` export's
-            // type at all is a `module M :> sig val name : deco .. end =
-            // struct .. end` (0.1 has no bare top-level ascription syntax —
+            // `V0_0`-authored consumer call site expects a `graphics list`
+            // back, so the wrap would need to be a SINGLETON LIST, `[name p w
+            // h d]`). **This turned out to be UNSOUND to wire up given this
+            // port's hard constraints, and is INTENTIONALLY left rejected** —
+            // see `v1::xver_adapt::reject_deco_exports_v01_sig`'s own doc
+            // comment for the full derivation. Summary: 0.1's ONLY textual
+            // site that can even NAME a `deco`/`deco-set` export's type at all
+            // is a `module M :> sig val name : deco .. end = struct .. end`
+            // (0.1 has no bare top-level ascription syntax —
             // `cst_v1::Bind::Value`'s own doc comment), and EVERY such `:>`
             // annotation is unconditionally conformance-enforced by (HARD-
-            // CONSTRAINT-untouched) `v1::module_check`'s phase-D spine walk
-            // — keyed PURELY by the exported name, checked against
+            // CONSTRAINT-untouched) `v1::module_check`'s phase-D spine walk —
+            // keyed PURELY by the exported name, checked against
             // `static_env.seals` for EVERY `Ast::LetIn` node sharing that
-            // name, regardless of where in the merged program it appears.
-            // Any splice-time coercion that makes the crossing VALUE's real
-            // shape (`graphics list`) differ from what the module's OWN
-            // declared `deco` scheme says (`graphics`) — which is the
-            // ENTIRE POINT of this coercion — trips that SAME enforcement
-            // a second time on the coercion's own shadowing binding,
-            // wherever it is spliced (verified empirically: appending
-            // inside the module's own `decls` produces `module_check`'s
-            // "does not match its signature" error; a later top-level
-            // binding under the same qualified string key hits the
-            // identical name-keyed check in `module_check.rs`'s phase-D
-            // walk). There is no way to introduce a second, differently-
-            // shaped binding under the sealed name without either changing
-            // `module_check.rs` (forbidden) or accepting an unsound type-
-            // error-suppressing hack. So this arm keeps the ORIGINAL X4a
+            // name, regardless of where in the merged program it appears. Any
+            // splice-time coercion that makes the crossing VALUE's real shape
+            // (`graphics list`) differ from what the module's OWN declared
+            // `deco` scheme says (`graphics`) — which is the ENTIRE POINT of
+            // this coercion — trips that SAME enforcement a second time on the
+            // coercion's own shadowing binding, wherever it is spliced
+            // (verified empirically: appending inside the module's own `decls`
+            // produces `module_check`'s "does not match its signature" error;
+            // a later top-level binding under the same qualified string key
+            // hits the identical name-keyed check in `module_check.rs`'s
+            // phase-D walk). There is no way to introduce a second,
+            // differently- shaped binding under the sealed name without either
+            // changing `module_check.rs` (forbidden) or accepting an unsound
+            // type- error-suppressing hack. So this arm keeps the ORIGINAL X4a
             // reject-everything-but-{math-text,math-boxes} posture — a
-            // `deco`/`deco-set` VALUE export via a module `sig` still
-            // rejects, now via a DEDICATED, clear diagnostic
+            // `deco`/`deco-set` VALUE export via a module `sig` still rejects,
+            // now via a DEDICATED, clear diagnostic
             // (`reject_deco_exports_v01_sig`, PRE-lowering — the sig is
             // otherwise invisible post-lowering, `v1/lower.rs`'s own "sig_
-            // annot is then simply DROPPED" note) rather than the
-            // confusing downstream `module_check` type error a silent
-            // splice would previously have produced. A BARE `type foo =
-            // deco` synonym (no value attached, safe with zero coercion —
-            // same reasoning as the forward direction's `type xver-deco-
-            // alias = deco`) is UNAFFECTED: it is not a sig item at all, so
+            // annot is then simply DROPPED" note) rather than the confusing
+            // downstream `module_check` type error a silent splice would
+            // previously have produced. A BARE `type foo = deco` synonym (no
+            // value attached, safe with zero coercion — same reasoning as the
+            // forward direction's `type xver-deco- alias = deco`) is
+            // UNAFFECTED: it is not a sig item at all, so
             // `reject_deco_exports_v01_sig` never sees it, and it splices
             // verbatim exactly like any other unconstrained mention.
             rustyfi_loader::LoadedCst::V0_1(cst) => {
@@ -1238,9 +1232,8 @@ fn walk_top_binding(
 /// `TopBinding::LetRec` and `Expr::LetRecIn`) — every clause's parameters are
 /// scoped to that clause alone.
 ///
-/// `boundary` (X2b, `docs/plans/design-cross-version-import.md` §"Slice X2 —
-/// per-group primitive environment", X2.3/X2.4's guard-narrowing): whether
-/// THIS `RecBinding` is itself a TOP-LEVEL, consumer-observable export
+/// `boundary` (X2b,, X2.3/X2.4's guard-narrowing): whether THIS `RecBinding`
+/// is itself a TOP-LEVEL, consumer-observable export
 /// (`TopBinding::LetRec`/its `and` siblings — `true`) or a purely LOCAL
 /// binding nested inside some other binding's expression body
 /// (`Expr::LetRecIn` — `false`). Only when `boundary` is true does the
@@ -2022,8 +2015,7 @@ struct OpenFrame {
 /// `EvHorzFrame`/`EvVertFrame` (decos), relocated to the one place that
 /// legally holds `&mut Interp` — the backend produced the geometry (POD
 /// `HookId`/`DecoId` tokens riding inside placed boxes, per `hbox.rs`); this
-/// reads them back and re-enters the evaluator.
-/// docs/plans/hooks-annotations-crossref.md §The callback architecture, §D.
+/// reads them back and re-enters the evaluator. callback architecture, §D.
 ///
 /// Sets `interp.current_page` to `Some(i)` for the duration of page `i`'s
 /// walk (§0.5's "during page break" window: `register-destination`/
@@ -2245,10 +2237,9 @@ fn fire_block_frame_fragment(
         bottom
     };
     let pt = (frame.x, doc.geometry.paper_height - frame_bottom);
-    // S2 (docs/plans/design-reflowable-html.md §4): record which DecoId is
-    // firing so a `register-destination` call inside the deco (annot.satyh's
-    // `register-location-frame`) can tag itself with it — see
-    // `Interp::current_deco_id`'s doc comment.
+    // S2: record which DecoId is firing so a `register-destination` call
+    // inside the deco (annot.satyh's `register-location-frame`) can tag
+    // itself with it — see `Interp::current_deco_id`'s doc comment.
     interp.current_deco_id = Some(frame.id);
     let gr = primitives::apply_deco(
         interp,
@@ -2442,9 +2433,9 @@ fn fire_inline_frame(
         }
     };
     let pt = (x, doc.geometry.paper_height - baseline_y);
-    // S2 (docs/plans/design-reflowable-html.md §4): see the block-frame
-    // call site's identical comment — `annot.satyh`'s `\href` fires
-    // `register-link-to-uri` from exactly this closure.
+    // S2: see the block-frame call site's identical comment —
+    // `annot.satyh`'s `\href` fires `register-link-to-uri` from exactly
+    // this closure.
     interp.current_deco_id = Some(*deco);
     let gr = primitives::apply_deco(interp, deco_v, pt, *width, *height, *depth)?;
     interp.current_deco_id = None;

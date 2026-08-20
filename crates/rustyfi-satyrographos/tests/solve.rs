@@ -2,12 +2,11 @@
 //! `DepSource` — no filesystem, no registry. Cases mirror the shapes
 //! upstream's `saphe-split:test/saphe/packageConstraintSolverTest.ml`
 //! exercises (that file is not vendored into this port; these are
-//! equivalent constructions per the shapes named in
-//! `docs/plans/design-saphe-solver.md` §6): a linear chain, a diamond that
-//! shares a common compatible version, a diamond that forces the solver to
-//! backtrack off its first (higher, conflicting) candidate, a genuine
-//! compat-bucket conflict, a reference to an unknown package, and a
-//! highest-version preference check.
+//! equivalent constructions per the shapes named in): a linear chain, a
+//! diamond that shares a common compatible version, a diamond that forces
+//! the solver to backtrack off its first (higher, conflicting) candidate,
+//! a genuine compat-bucket conflict, a reference to an unknown package,
+//! and a highest-version preference check.
 
 use std::collections::HashMap;
 

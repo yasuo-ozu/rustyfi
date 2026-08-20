@@ -52,17 +52,16 @@ pub enum Token {
     // comment used to list `not` among the unimplemented unary forms) —
     // meaning the surface grammar could never actually reference the
     // registered `"not"` primitive (`primitives.rs`), even though it
-    // type-checked and evaluated fine when built by hand
-    // (`eval_phase2.rs`'s `not`-applying test constructs the `Ast` directly,
-    // skipping the parser). Tier-2 decoration/graphics packages
-    // (`picture.satyh`'s `not (x1r >' x2r)`/`not reversed`,
-    // docs/plans/stdlib-port.md) are the first bundled source to actually
-    // call `not` from real syntax, which is what surfaced this: removing
-    // the special-case keyword mapping (`lexer.rs`'s `keyword`) lets `not`
-    // lex as an ordinary `Var`/`VarTok`, exactly like any other primitive
-    // name (`arabic`, `floor`, ...) — an ordinary application `not expr`
-    // (or `not (expr)`) then just works through the existing `AppExpr`
-    // machinery, no new grammar rule needed.
+    // type-checked and evaluated fine when built by hand (`eval_phase2.rs`'s
+    // `not`-applying test constructs the `Ast` directly, skipping the
+    // parser). Tier-2 decoration/graphics packages (`picture.satyh`'s `not
+    // (x1r >' x2r)`/`not reversed`) are the first bundled source to actually
+    // call `not` from real syntax, which is what surfaced this: removing the
+    // special-case keyword mapping (`lexer.rs`'s `keyword`) lets `not` lex
+    // as an ordinary `Var`/`VarTok`, exactly like any other primitive name
+    // (`arabic`, `floor`, ...) — an ordinary application `not expr` (or `not
+    // (expr)`) then just works through the existing `AppExpr` machinery, no
+    // new grammar rule needed.
     Mod,
     If,
     Then,

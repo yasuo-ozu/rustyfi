@@ -11,7 +11,7 @@
 %     `let-block`;
 %   - `,`-separated records;
 %   - `page-break (210mm, 297mm) …` — 0.1 has no `page` ADT (A4Paper is
-%     gone; L7, docs/plans/rustyfi-0-1-0-support.md), so the paper size is
+% gone; L7), so the paper size is
 %     a plain length pair. 210mm x 297mm IS A4.
 %   - type / val rec …and… / val mutable / val ( binop ) binds — Sub-slice 2b
 

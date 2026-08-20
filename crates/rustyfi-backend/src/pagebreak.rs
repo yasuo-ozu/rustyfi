@@ -1,7 +1,7 @@
-//! Page breaking. `docs/plans/document-page-model.md` Slice 1: a single
-//! **stateless** per-page chopper (`chop_page`) plus a fixed-origin
-//! placement helper (`place_block_at`), replacing the old whole-document
-//! `break_pages` — the per-page loop now lives lang-side
+//! Page breaking. Slice 1: a single **stateless** per-page chopper
+//! (`chop_page`) plus a fixed-origin placement helper
+//! (`place_block_at`), replacing the old whole-document `break_pages` —
+//! the per-page loop now lives lang-side
 //! (`rustyfi-lang/src/primitives.rs`'s `prim_page_break`), the one place
 //! that legally holds `&mut Interp` to apply the two scheme closures per
 //! page (see that plan's "who drives it" section).
@@ -47,12 +47,11 @@ pub struct Page {
 /// The line's own `(height-above-baseline, depth-below-baseline)` as-placed,
 /// or `None` if `line` carries no real content (only zero-width markers —
 /// `HookPageBreak`/`FrameMarker`, or nothing but glue). Used by
-/// `fire_hooks`'s block-fragment extent accumulation (§D,
-/// docs/plans/hooks-annotations-crossref.md) to derive a frame fragment's
-/// rect from the real lines between its `FrameStart`/`FrameEnd` markers,
-/// since `PlacedLine` itself doesn't carry the height/depth `chop_page`
-/// used when placing it — recomputed here from each box's own dimensions,
-/// the same per-box shape `linebreak.rs`'s `justify_line` uses.
+/// `fire_hooks`'s block-fragment extent accumulation (§D) to derive a frame
+/// fragment's rect from the real lines between its `FrameStart`/`FrameEnd`
+/// markers, since `PlacedLine` itself doesn't carry the height/depth
+/// `chop_page` used when placing it — recomputed here from each box's own
+/// dimensions, the same per-box shape `linebreak.rs`'s `justify_line` uses.
 pub fn placed_line_extent(line: &PlacedLine) -> Option<(Length, Length)> {
     fn go(bx: &PureHorzBox, height: &mut Length, depth: &mut Length, has_real: &mut bool) {
         match bx {
@@ -87,9 +86,8 @@ pub fn placed_line_extent(line: &PlacedLine) -> Option<(Length, Length)> {
                     go(p, height, depth, has_real);
                 }
             }
-            // `docs/plans/design-reflow-s4-lists.md` §4.3: inert, zero
-            // contribution — same treatment as `HookPageBreak`/`FrameMarker`
-            // above.
+            // inert, zero contribution — same treatment as
+            // `HookPageBreak`/`FrameMarker` above.
             PureHorzBox::InlineMark(_) => {}
         }
     }
@@ -114,8 +112,7 @@ pub fn placed_line_extent(line: &PlacedLine) -> Option<(Length, Length)> {
 /// since a `HookPageBreak` marker can occupy a `PlacedLine` slot without
 /// being real content) — so a degenerate scheme (`height <= 0`, or a line
 /// taller than the area) still makes forward progress and the lang-side
-/// loop is bounded by the vbox count (docs/plans/document-page-model.md's
-/// Risks: "Progress / termination").
+/// loop is bounded by the vbox count (Risks: "Progress / termination").
 ///
 /// `VertBox::ClearPage` (`clear-page`) ends the page immediately once at
 /// least one real line has been placed (mirrors `pageBreak.ml`'s
@@ -253,15 +250,15 @@ pub fn chop_page(
                 });
                 idx += 1;
             }
-            // `docs/plans/design-reflow-s4-lists.md` §4.3 (the byte-identity
-            // argument): a PURE skip — unlike `FrameStart`/`FrameEnd` above,
-            // this marker has no downstream (PDF/faithful-HTML) consumer at
-            // all, so it doesn't even get a placeholder `PlacedLine`; it
-            // simply never reaches placement. It already rode into
-            // `reflow_source` (cloned by `page_break_core` BEFORE this
-            // function runs, `primitives.rs`'s `page_break_core` doc
-            // comment) — that clone is the only place `VertBox::ListMark`
-            // survives to be read, by the reflow HTML walker.
+            // (the byte-identity argument): a PURE skip — unlike
+            // `FrameStart`/`FrameEnd` above, this marker has no downstream
+            // (PDF/faithful-HTML) consumer at all, so it doesn't even get a
+            // placeholder `PlacedLine`; it simply never reaches placement.
+            // It already rode into `reflow_source` (cloned by
+            // `page_break_core` BEFORE this function runs, `primitives.rs`'s
+            // `page_break_core` doc comment) — that clone is the only place
+            // `VertBox::ListMark` survives to be read, by the reflow HTML
+            // walker.
             VertBox::ListMark(_) => {
                 idx += 1;
             }
@@ -271,19 +268,18 @@ pub fn chop_page(
                 leading,
                 contents,
             } => {
-                // `docs/plans/design-silent-fields.md` FIX 3's page-top glue
-                // suppression: any `VertBox::Skip` accumulated before the
-                // FIRST real line of this page/column (`prev_baseline ==
-                // None`) is discarded, not added to `y0` — mirroring
-                // upstream's page-top glue discard (glue at the very top of
-                // a page/column doesn't accumulate; the OCaml page breaker
-                // drops leading glue the same way TeX drops glue/kerns at
-                // the top of a page). This is what keeps a paragraph's
-                // `paragraph_top` margin from adding a spurious gap above
-                // the first paragraph of a page — without it, wiring
-                // `paragraph_top` in would shift every page's content down
-                // by 18pt. `HookPageBreak`/`FrameStart`/`FrameEnd` markers
-                // above don't consume `pending_skip` and don't set
+                // FIX 3's page-top glue suppression: any `VertBox::Skip`
+                // accumulated before the FIRST real line of this page/column
+                // (`prev_baseline == None`) is discarded, not added to `y0`
+                // — mirroring upstream's page-top glue discard (glue at the
+                // very top of a page/column doesn't accumulate; the OCaml
+                // page breaker drops leading glue the same way TeX drops
+                // glue/kerns at the top of a page). This is what keeps a
+                // paragraph's `paragraph_top` margin from adding a spurious
+                // gap above the first paragraph of a page — without it,
+                // wiring `paragraph_top` in would shift every page's content
+                // down by 18pt. `HookPageBreak`/`FrameStart`/`FrameEnd`
+                // markers above don't consume `pending_skip` and don't set
                 // `placed_real_line`, so a marker-then-skip prefix (e.g. a
                 // `block-frame-breakable`'s `FrameStart` immediately
                 // followed by its `pad_t` skip) is covered by this same
@@ -542,11 +538,11 @@ pub fn place_block_at(origin: (Length, Length), vboxes: Vec<VertBox>) -> Vec<Pla
                     contents: vec![(Length::ZERO, PureHorzBox::FrameMarker { id, end: true })],
                 });
             }
-            // Same pure skip as `chop_page`'s matching arm (`docs/plans/
-            // design-reflow-s4-lists.md` §4.3) — headers/footers/footnote
-            // columns don't page-break, so a list marker here (should one
-            // ever appear — no bundled stdlib emits one outside the main
-            // flow) simply contributes nothing.
+            // Same pure skip as `chop_page`'s matching arm —
+            // headers/footers/footnote columns don't page-break, so a
+            // list marker here (should one ever appear — no bundled
+            // stdlib emits one outside the main flow) simply contributes
+            // nothing.
             VertBox::ListMark(_) => {}
             VertBox::Line {
                 height,
@@ -554,16 +550,15 @@ pub fn place_block_at(origin: (Length, Length), vboxes: Vec<VertBox>) -> Vec<Pla
                 leading,
                 contents,
             } => {
-                // Same page/column-top leading-glue suppression as
-                // `chop_page` (`docs/plans/design-silent-fields.md` FIX 3):
-                // a solidified block (header/footer/footnote column) placed
-                // at a fixed origin discards any leading `VertBox::Skip`
+                // Same page/column-top leading-glue suppression as `chop_page`
+                // (FIX 3): a solidified block (header/footer/footnote column)
+                // placed at a fixed origin discards any leading `VertBox::Skip`
                 // before its first real line, so a footer whose content is
-                // built via `line-break` (default `paragraph_top` = 18pt,
-                // e.g. `stdja-mini`'s page-number footer) stays anchored at
-                // its `footer-origin` rather than dropping 18pt below it.
-                // The advance folds the paragraph margin into the max AND
-                // clears the previous line's depth, so a deep inline box (a
+                // built via `line-break` (default `paragraph_top` = 18pt, e.g.
+                // `stdja-mini`'s page-number footer) stays anchored at its
+                // `footer-origin` rather than dropping 18pt below it. The
+                // advance folds the paragraph margin into the max AND clears
+                // the previous line's depth, so a deep inline box (a
                 // `+fig-center` figure) is not overlapped by the next line.
                 // Faithful inter-block advance (see `chop_page`): natural
                 // content height plus the collapsed margin, no leading floor —

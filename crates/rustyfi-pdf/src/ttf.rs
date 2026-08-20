@@ -49,12 +49,12 @@ pub struct TtfFontStore {
     files: Vec<Vec<u8>>,
     /// `FontKey(0)=regular, 1=bold, 2=oblique, 3.. = registry abbrevs` ->
     /// index into `files`. Missing bold/oblique share the regular slot
-    /// (index 0). WAS a fixed `[usize; 3]`; grown to `Vec` (D1a,
-    /// docs/plans/text-rendering.md §1) so `FontRegistry::build_store` can
-    /// allocate one slot per configured abbrev beyond the three seeded
-    /// defaults, with `slots[0..3]` staying regular/bold/oblique exactly as
-    /// before — a 3-slot store (every call site that only ever used
-    /// `TtfFontStore::load`) is byte-identical to pre-D1a behavior.
+    /// (index 0). WAS a fixed `[usize; 3]`; grown to `Vec` (D1a) so
+    /// `FontRegistry::build_store` can allocate one slot per configured
+    /// abbrev beyond the three seeded defaults, with `slots[0..3]` staying
+    /// regular/bold/oblique exactly as before — a 3-slot store (every call
+    /// site that only ever used `TtfFontStore::load`) is byte-identical to
+    /// pre-D1a behavior.
     slots: Vec<usize>,
     /// Registry abbrev ("ipaexm", "Junicode-b", ...) -> the `FontKey`
     /// allocated for it by `FontRegistry::build_store`. Empty for a bare
@@ -69,10 +69,9 @@ pub struct TtfFontStore {
     /// 0.0)` themselves, keeping today's single-font behavior.
     script_defaults: [Option<(FontKey, f64, f64)>; 4],
     /// The `FontKey` allocated for `default-font.rustyfi-hash`'s optional
-    /// `"math"` abbrev (`docs/plans/design-math-cramped.md` §4 Slice B).
-    /// `None` for a bare `TtfFontStore::load` or a registry with no `"math"`
-    /// entry — `get-initial-context` then leaves `Context::math_font` at its
-    /// `Context::initial` seed.
+    /// `"math"` abbrev (Slice B). `None` for a bare `TtfFontStore::load` or
+    /// a registry with no `"math"` entry — `get-initial-context` then leaves
+    /// `Context::math_font` at its `Context::initial` seed.
     math_default: Option<FontKey>,
 }
 
@@ -188,8 +187,7 @@ impl TtfFontStore {
     }
 
     /// The `FontKey` allocated for the configured `"math"` default abbrev
-    /// (`docs/plans/design-math-cramped.md` §4 Slice B), or `None` when
-    /// nothing was configured.
+    /// (Slice B), or `None` when nothing was configured.
     pub fn math_font_default(&self) -> Option<FontKey> {
         self.math_default
     }
@@ -253,7 +251,7 @@ impl FontMetrics for TtfFontStore {
         Some((height, depth))
     }
 
-    // ---- OpenType MATH table (docs/plans/math-engine.md §B1/§B3) ---------
+    // ---- OpenType MATH table ---------
     //
     // Every accessor below was checked against the installed ttf-parser
     // 0.25.1 `tables::math` module (`~/.cargo/registry/.../ttf-parser-0.25.1/
@@ -482,8 +480,7 @@ impl FontMetrics for TtfFontStore {
         Some(out)
     }
 
-    // ---- D1a: registry-abbrev resolution (docs/plans/text-rendering.md
-    // §1a) ---------------------------------------------------------------
+    // ---- D1a: registry-abbrev resolution (§1a) ---------------------------------------------------------------
 
     fn resolve_font_abbrev(&self, abbrev: &str) -> Option<FontKey> {
         self.abbrev_key(abbrev)

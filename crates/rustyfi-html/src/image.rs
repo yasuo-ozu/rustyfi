@@ -1,18 +1,18 @@
-//! HTML output backend, Slice 3 (`docs/plans/design-html-output.md` §Slice
-//! 3: "Image"). `PureHorzBox::Image` -> an `<img>` data URI. The design
-//! doc's per-primitive table calls for "encode RGB8 samples to PNG", but
-//! this crate deliberately carries no PNG/image-codec dependency anywhere
-//! (the PDF writer's own `write_image_xobjects`, `lib.rs`, writes the same
-//! `ImageResource` samples completely uncompressed too — see that
-//! function's doc comment). Rather than adding a dependency (off limits
-//! this slice, same constraint as base64), this hand-rolls the simplest
-//! container format a browser decodes natively straight from raw RGB8: an
-//! **uncompressed 24-bit `BI_RGB` Windows BMP** (`image/bmp` — supported by
-//! every mainstream browser as an `<img>`/`data:` source, no palette, no
-//! compression, a fixed 54-byte header). This is exactly as lossless as the
-//! PNG the design doc describes (no compression either way) and an order of
-//! magnitude simpler to hand-roll correctly than a PNG encoder (which needs
-//! a CRC32 + zlib/DEFLATE stream even at its most minimal).
+//! HTML output backend, Slice 3 (: "Image"). `PureHorzBox::Image` -> an
+//! `<img>` data URI. The design doc's per-primitive table calls for "encode
+//! RGB8 samples to PNG", but this crate deliberately carries no
+//! PNG/image-codec dependency anywhere (the PDF writer's own
+//! `write_image_xobjects`, `lib.rs`, writes the same `ImageResource`
+//! samples completely uncompressed too — see that function's doc comment).
+//! Rather than adding a dependency (off limits this slice, same constraint
+//! as base64), this hand-rolls the simplest container format a browser
+//! decodes natively straight from raw RGB8: an **uncompressed 24-bit
+//! `BI_RGB` Windows BMP** (`image/bmp` — supported by every mainstream
+//! browser as an `<img>`/`data:` source, no palette, no compression, a
+//! fixed 54-byte header). This is exactly as lossless as the PNG the design
+//! doc describes (no compression either way) and an order of magnitude
+//! simpler to hand-roll correctly than a PNG encoder (which needs a CRC32 +
+//! zlib/DEFLATE stream even at its most minimal).
 
 use rustyfi_backend::ImageResource;
 

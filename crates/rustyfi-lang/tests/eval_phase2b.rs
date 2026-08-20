@@ -187,10 +187,10 @@ fn math_text_quotes_without_evaluating() {
     }
 }
 
-/// `docs/plans/math-engine.md` §Slice 1: `read_inline`'s `EmbedMath` arm no
-/// longer errors — it walks the `MathElem` tree into a `PureHorzBox::Math`
-/// (see `math_slice1.rs` for the box's own glyph-shift/-scale assertions;
-/// this just checks the seam from `IText::EmbedMath` through `read_inline`).
+/// `read_inline`'s `EmbedMath` arm no longer errors — it walks the
+/// `MathElem` tree into a `PureHorzBox::Math` (see `math_slice1.rs` for the
+/// box's own glyph-shift/-scale assertions; this just checks the seam from
+/// `IText::EmbedMath` through `read_inline`).
 #[test]
 fn itext_embed_math_renders_through_read_inline() {
     let elems = vec![IText::EmbedMath {

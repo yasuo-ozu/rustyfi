@@ -1,6 +1,6 @@
 % footnote-scheme.satyh — SATySFi 0.1 `footnote-scheme` package's
-% `FootnoteScheme`, vendored for Legacy packaging
-% (docs/plans/rustyfi-0-1-0-support.md §2 P2 / §4 phase 6). Source:
+% `FootnoteScheme`, vendored for Legacy packaging (P2 / §4 phase
+% 6). Source:
 %   saphe-split@b836d512:lib-rustyfi/packages/footnote-scheme/
 %   footnote-scheme.0.0.1/src/footnote-scheme.satyh — transliteration
 %   deltas:

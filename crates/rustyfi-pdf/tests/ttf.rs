@@ -149,10 +149,10 @@ fn render_pdf_ttf_produces_a_pdf_with_embedded_font() {
         "output should start with a PDF header"
     );
 
-    // D5 (docs/plans/text-rendering.md §2): the embedded `FontFile2` is now
-    // SUBSET to the ~10 glyphs "Hello World" actually uses, so the whole PDF
-    // is much SMALLER than the source face (inverted from the pre-D5
-    // whole-file-embed assertion this test used to make).
+    // D5: the embedded `FontFile2` is now SUBSET to the ~10 glyphs "Hello
+    // World" actually uses, so the whole PDF is much SMALLER than the source
+    // face (inverted from the pre-D5 whole-file-embed assertion this test
+    // used to make).
     let font_len = std::fs::metadata(&path).expect("stat font file").len() as usize;
     assert!(
         pdf_bytes.len() < font_len,
@@ -211,9 +211,8 @@ fn subsetting_is_reproducible_across_reruns() {
 /// A CFF-outline OpenType face (no `glyf` table at all — this host's
 /// `NotoSansTagalog-Regular.otf`, a TeX Gyre `.otf`, or any single-face
 /// non-collection `.otf` fontconfig turns up) now takes the
-/// `CIDFontType0`/`FontFile3` embed path
-/// (docs/plans/design-cff-embedding.md) rather than the invalid pre-design
-/// `CIDFontType2`/`FontFile2` whole-file embed.
+/// `CIDFontType0`/`FontFile3` embed path rather than the invalid
+/// pre-design `CIDFontType2`/`FontFile2` whole-file embed.
 fn find_cff_otf() -> Option<PathBuf> {
     let output = Command::new("fc-list").output().ok()?;
     if !output.status.success() {
@@ -244,17 +243,17 @@ fn find_cff_otf() -> Option<PathBuf> {
     None
 }
 
-/// S1+S2 (docs/plans/design-cff-embedding.md §6.2, §6.3): a CFF-outline
-/// OpenType face must embed as `CIDFontType0`/`/FontFile3 /Subtype
-/// /OpenType`, with no `/CIDToGIDMap` at all (illegal for `CIDFontType0`) —
-/// true whether the writer subsets it (S2) or falls back to a whole-OTF
-/// embed (S1, when `subsetter::subset` declines this exact usage set, e.g. a
-/// seac composite/CFF2 face). The size relationship below is derived from an
-/// INDEPENDENT `subsetter::subset` call against the same single-glyph usage
-/// set the writer itself would build, rather than hardcoding "always bigger"
-/// (true only under S1) or "always smaller" (true only when S2's subsetting
-/// succeeds) — see `subsetter_can_subset_cff_and_the_writer_now_uses_it`
-/// below for the underlying primitive this cross-checks.
+/// S1+S2 (§6.3): a CFF-outline OpenType face must embed as
+/// `CIDFontType0`/`/FontFile3 /Subtype /OpenType`, with no `/CIDToGIDMap` at
+/// all (illegal for `CIDFontType0`) — true whether the writer subsets it
+/// (S2) or falls back to a whole-OTF embed (S1, when `subsetter::subset`
+/// declines this exact usage set, e.g. a seac composite/CFF2 face). The size
+/// relationship below is derived from an INDEPENDENT `subsetter::subset`
+/// call against the same single-glyph usage set the writer itself would
+/// build, rather than hardcoding "always bigger" (true only under S1) or
+/// "always smaller" (true only when S2's subsetting succeeds) — see
+/// `subsetter_can_subset_cff_and_the_writer_now_uses_it` below for the
+/// underlying primitive this cross-checks.
 #[test]
 fn cff_face_embeds_as_fontfile3_cidfonttype0() {
     let Some(path) = find_cff_otf() else {
@@ -357,16 +356,16 @@ fn cff_face_embeds_as_fontfile3_cidfonttype0() {
     );
 }
 
-/// S2 (docs/plans/design-cff-embedding.md §6.3): the pinned `subsetter`
-/// crate subsets CFF fonts cleanly on its own — normalising its output to
-/// CID-keyed with `CID == new_gid` — and `write_font_cff` now uses exactly
-/// this (`cid.rs`'s module doc / `write_font_cff`'s doc comment describe the
-/// two-pass content-remap this required). This test is decoupled from
-/// `render_pdf_ttf`/`write_font_cff` entirely — it calls `subsetter::subset`
-/// directly against the discovered CFF file — so it stays meaningful
-/// regardless of which embed path the writer takes for a given face/usage
-/// (S1's whole-OTF fallback still exists for the seac-composite/CFF2 faces
-/// `subsetter` legitimately declines, exercised by the `Err` arm below).
+/// S2: the pinned `subsetter` crate subsets CFF fonts cleanly on its own —
+/// normalising its output to CID-keyed with `CID == new_gid` — and
+/// `write_font_cff` now uses exactly this (`cid.rs`'s module doc /
+/// `write_font_cff`'s doc comment describe the two-pass content-remap this
+/// required). This test is decoupled from `render_pdf_ttf`/`write_font_cff`
+/// entirely — it calls `subsetter::subset` directly against the discovered
+/// CFF file — so it stays meaningful regardless of which embed path the
+/// writer takes for a given face/usage (S1's whole-OTF fallback still exists
+/// for the seac-composite/CFF2 faces `subsetter` legitimately declines,
+/// exercised by the `Err` arm below).
 #[test]
 fn subsetter_can_subset_cff_and_the_writer_now_uses_it() {
     let Some(path) = find_cff_otf() else {
@@ -500,23 +499,23 @@ fn contains(haystack: &[u8], needle: &[u8]) -> bool {
 }
 
 /// The bundled `lmsans` face (real Latin Modern Sans, `scripts/download-fonts.sh`
-/// — replaces the old Noto glyf stand-in now that CFF embedding exists,
-/// docs/plans/design-cff-embedding.md) is itself a CFF-outline OpenType face,
-/// so it must take the same `CIDFontType0`/`/FontFile3` path as the
-/// fontconfig-discovered CFF faces above — this is the concrete, named
-/// abbrev a `set-font` call actually resolves to, not just "some CFF found on
-/// the host". Skips gracefully if `scripts/download-fonts.sh` hasn't been run
-/// in this checkout (the font is gitignored, not committed).
+/// — replaces the old Noto glyf stand-in now that CFF embedding exists) is itself
+/// a CFF-outline OpenType face, so it must take the same
+/// `CIDFontType0`/`/FontFile3` path as the fontconfig-discovered CFF faces above
+/// — this is the concrete, named abbrev a `set-font` call actually resolves to,
+/// not just "some CFF found on the host". Skips gracefully if
+/// `scripts/download-fonts.sh` hasn't been run in this checkout (the font is
+/// gitignored, not committed).
 ///
-/// Also the S2 SIZE-WIN check (docs/plans/design-cff-embedding.md §8): the
-/// probe text "Latin Modern Sans" uses only a small fraction of lmsans's
-/// full glyph repertoire (Latin Modern ships hundreds of glyphs — accents,
-/// ligatures, extended Latin, etc.), a genuine "multi-glyph-but-not-all-
-/// glyphs" document, so a real subset embed must be substantially SMALLER
-/// than the whole source OTF — unlike `cff_face_embeds_as_fontfile3_cidfonttype0`'s
-/// single-glyph probe (which can't rule out subsetting having declined this
-/// particular face), this is deterministic and host-independent (a bundled,
-/// checked-in-by-download font, not fontconfig's arbitrary pick).
+/// Also the S2 SIZE-WIN check: the probe text "Latin Modern Sans" uses only a small
+/// fraction of lmsans's full glyph repertoire (Latin Modern ships hundreds of
+/// glyphs — accents, ligatures, extended Latin, etc.), a genuine
+/// "multi-glyph-but-not-all- glyphs" document, so a real subset embed must be
+/// substantially SMALLER than the whole source OTF — unlike
+/// `cff_face_embeds_as_fontfile3_cidfonttype0`'s single-glyph probe (which can't
+/// rule out subsetting having declined this particular face), this is deterministic
+/// and host-independent (a bundled, checked-in-by-download font, not fontconfig's
+/// arbitrary pick).
 #[test]
 fn lmsans_bundled_font_embeds_as_fontfile3_cidfonttype0() {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))

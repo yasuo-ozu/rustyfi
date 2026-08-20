@@ -48,7 +48,7 @@
 %   `Item(parent, children)` deconstruction) are byte-identical to upstream.
 %   No `#[test-only]`/`#[test]` blocks exist in the real upstream source at
 %   this pinned commit — nothing to strip.
-%   - S4 (`docs/plans/design-reflow-s4-lists.md`): `listing`/`listing-item`/
+% - S4: `listing`/`listing-item`/
 %     `listing-item-breakable`/`enumerate`/`enumerate-item` now additionally
 %     wrap their output in `list-mark`/`inline-mark` calls (list/item
 %     boundaries, ordered-vs-unordered, a fence around the drawn bullet/
@@ -89,13 +89,13 @@ end = struct
     fill color (Path.circle (cx, cy) r)
 
 
-  % S4 (`docs/plans/design-reflow-s4-lists.md` §4.1): fence the drawn bullet
-  % circle with `inline-mark` (tag 3 = `BulletStart`, 4 = `BulletEnd`) so the
-  % reflow HTML walker can drop it cleanly (the real `<ul>`/`<ol>` marker
-  % replaces it) — the trailing `inline-skip 8pt` gap is left unfenced (it's
-  % pure spacing, not the bullet glyph itself). Both markers are zero-width
-  % (`Inline.get-natural-advance ib-bullet` below is unaffected — PDF/
-  % faithful-HTML output is byte-identical).
+  % S4: fence the drawn bullet circle with `inline-mark` (tag 3 =
+  % `BulletStart`, 4 = `BulletEnd`) so the reflow HTML walker can drop it
+  % cleanly (the real `<ul>`/`<ol>` marker replaces it) — the trailing
+  % `inline-skip 8pt` gap is left unfenced (it's pure spacing, not the bullet
+  % glyph itself). Both markers are zero-width (`Inline.get-natural-advance
+  % ib-bullet` below is unaffected — PDF/ faithful-HTML output is
+  % byte-identical).
   val make-bullet ctx =
     let color = get-text-color ctx in
     (inline-mark 3) ++ inline-graphics 8pt 8pt 0pt (bullet-graphics color) ++ (inline-mark 4)

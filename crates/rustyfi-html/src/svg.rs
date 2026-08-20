@@ -1,10 +1,9 @@
-//! HTML output backend, Slice 2 (`docs/plans/design-html-output.md` §Slice
-//! 2: "graphics (inline SVG)"). The `place_graphics`/`emit_path` analogue
-//! (`rustyfi-pdf/src/lib.rs:708,803`) for the HTML writer: turns a
-//! `PureHorzBox::Graphics`/`TabularBox::rules` element list into one inline
-//! `<svg>…</svg>` (one per graphics-bearing box, per the design doc's
-//! per-primitive table), a private submodule of the `rustyfi-html` crate (not `pub`,
-//! not crate-wide — see that module's doc comment on why this whole feature
+//! HTML output backend, Slice 2 (: "graphics (inline SVG)"). The
+//! `place_graphics`/`emit_path` analogue (`rustyfi-pdf/src/lib.rs:708,803`) for the
+//! HTML writer: turns a `PureHorzBox::Graphics`/`TabularBox::rules` element list
+//! into one inline `<svg>…</svg>` (one per graphics-bearing box, per the design
+//! doc's per-primitive table), a private submodule of the `rustyfi-html` crate (not
+//! `pub`, not crate-wide — see that module's doc comment on why this whole feature
 //! lives inside `rustyfi-pdf` rather than a new crate).
 //!
 //! **Coordinate system, reconciled once here.** `GraphicsElem`'s `Path`

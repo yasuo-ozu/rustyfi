@@ -1,4 +1,4 @@
-//! The real `@require: math` gate (`docs/plans/math-engine.md` §A + §G):
+//! The real `@require: math` gate (+ §G):
 //! `lib-rustyfi/dist/packages/math.satyh` (ported byte-for-byte from
 //! upstream) must PARSE, ELABORATE, TYPECHECK, and EVALUATE through the
 //! production multi-file loader — the same "compiles" bar
@@ -511,10 +511,9 @@ get-natural-metrics (embed-math ctx ${x_1^2})";
 }
 
 // ============================================================================
-// Gap 3 (`docs/plans/math-mode-language-gaps.md`) — `|`-separated math
-// lists (`${| a | b |}`, a `math list` LITERAL, not a matrix) consumed by
-// `Math`'s own verbatim-ported `+align`, over the generic `tabular`
-// primitive.
+// Gap 3 — `|`-separated math lists (`${| a | b |}`, a `math list`
+// LITERAL, not a matrix) consumed by `Math`'s own verbatim-ported
+// `+align`, over the generic `tabular` primitive.
 // ============================================================================
 
 /// Gap 3 package smoke: `Math.+align : [(math list) list] block-cmd` applied
@@ -542,9 +541,9 @@ read-block ctx '<+align[${| a | b |}; ${| c | d |}];>";
 }
 
 // ============================================================================
-// Gap 5/6 (`docs/plans/math-mode-language-gaps.md`) — bundled `math.satyh`
-// consumers: `\mathrm`/`\text` are real production commands built on
-// `math-char-class`/`text-in-math`, not synthetic stubs.
+// Gap 5/6 — bundled `math.satyh` consumers: `\mathrm`/`\text` are real
+// production commands built on `math-char-class`/`text-in-math`, not
+// synthetic stubs.
 // ============================================================================
 
 /// Gap 6 package smoke: `math.satyh`'s own `\text` (`let-math \text it =

@@ -2,11 +2,11 @@
 //!
 //! This was the tree-walking evaluator (the naive-interpreter shape of
 //! evaluator.cppo.ml; the bytecode VM was intentionally not ported). Phases 3
-//! and 4 of `docs/plans/design-symbol-debruijn-slots.md` retired the
-//! tree-walk itself — expression evaluation lives entirely in
-//! [`crate::compile`] now — leaving here what is genuinely runtime: the
-//! [`Interp`] state every primitive threads (images, hooks, cross-references,
-//! decorations, …), function application, and pattern matching.
+//! and 4 of retired the tree-walk itself — expression evaluation lives
+//! entirely in [`crate::compile`] now — leaving here what is genuinely
+//! runtime: the [`Interp`] state every primitive threads (images, hooks,
+//! cross-references, decorations, …), function application, and pattern
+//! matching.
 
 use crate::ast::{Ast, Pattern};
 use crate::crossref::CrossRefs;
@@ -67,9 +67,9 @@ pub(crate) fn available_fields(map: &std::collections::BTreeMap<String, Value>) 
 /// mutable stores).
 pub struct Interp<'a> {
     pub metrics: &'a dyn FontMetrics,
-    /// The document-wide image table (`docs/plans/math-images.md` §Slice
-    /// 1): `load-image` (`primitives::prim_load_image`) decodes eagerly and
-    /// pushes here, returning the new entry's index as `Value::Image`;
+    /// The document-wide image table: `load-image`
+    /// (`primitives::prim_load_image`) decodes eagerly and pushes here,
+    /// returning the new entry's index as `Value::Image`;
     /// `use-image-by-width` (`primitives::prim_use_image_by_width`) looks
     /// the resource back up by that index. `page-break`
     /// (`primitives::prim_page_break`) clones this out into
@@ -78,14 +78,13 @@ pub struct Interp<'a> {
     /// of what actually ends up placed on a page — the writer itself filters
     /// down to the ones a placed line actually references).
     pub images: Vec<ImageResource>,
-    /// The document-wide page-break-hook closure table
-    /// (`docs/plans/hooks-annotations-crossref.md` §Slice 1): `hook-page-break`
+    /// The document-wide page-break-hook closure table: `hook-page-break`
     /// pushes its closure argument here and returns a `HookId` index (via
     /// `PureHorzBox::HookPageBreak`) — the same `ImageId`-style seam as
-    /// `images` above, but for a deferred *computation* rather than a
-    /// resource. Reset every trial (see `crossrefs`, which is the one
-    /// exception), read back by `fire_hooks` once `break_pages` has placed
-    /// every hook and its final geometry is known.
+    /// `images` above, but for a deferred *computation* rather than a resource.
+    /// Reset every trial (see `crossrefs`, which is the one exception), read
+    /// back by `fire_hooks` once `break_pages` has placed every hook and its
+    /// final geometry is known.
     pub hooks: Vec<Value>,
     /// Installed-math-command table (`get-initial-context`/
     /// `set-math-command` push here; `Context::math_command` holds the
@@ -100,11 +99,11 @@ pub struct Interp<'a> {
     /// handle into each trial's fresh `Interp`. Defaults to a fresh empty
     /// table so existing single-run call sites/unit tests compile unchanged.
     pub crossrefs: Rc<RefCell<CrossRefs>>,
-    /// §B/§C accumulators (docs/plans/hooks-annotations-crossref.md):
-    /// link annotations / named destinations / outline entries, plus the
-    /// per-page deco-graphics overlays (§D). All reset per trial (fresh
-    /// `Interp`); the FINAL trial's contents are moved into
-    /// `DocumentValue::extras` by `compile_document_cst_with_trials`.
+    /// §B/§C accumulators: link annotations / named destinations /
+    /// outline entries, plus the per-page deco-graphics overlays (§D).
+    /// All reset per trial (fresh `Interp`); the FINAL trial's contents
+    /// are moved into `DocumentValue::extras` by
+    /// `compile_document_cst_with_trials`.
     pub annotations: Vec<rustyfi_backend::Annot>,
     pub destinations: Vec<rustyfi_backend::NamedDest>,
     pub outline: Vec<rustyfi_backend::OutlineEntry>,
@@ -119,12 +118,12 @@ pub struct Interp<'a> {
     /// the port of upstream's `State.during_page_break` + "current page"
     /// (`annotation.ml:15`, `namedDest.ml`'s `notify_pagebreak`).
     pub current_page: Option<usize>,
-    /// S2 (`docs/plans/design-reflowable-html.md` §4 "Links/metadata"): the
-    /// `DecoId` of the deco closure currently being fired by `fire_hooks`'
-    /// two `apply_deco` call sites (`lib.rs`), `None` outside any such
-    /// window (e.g. inside a plain `hook-page-break` closure). This is the
-    /// STRUCTURAL link between a placed `Annot`/`NamedDest` (page-absolute,
-    /// known only post-page-break) and the `PureHorzBox::Frame`/
+    /// S2 ("Links/metadata"): the `DecoId` of the deco closure currently
+    /// being fired by `fire_hooks`' two `apply_deco` call sites (`lib.rs`),
+    /// `None` outside any such window (e.g. inside a plain
+    /// `hook-page-break` closure). This is the STRUCTURAL link between a
+    /// placed `Annot`/`NamedDest` (page-absolute, known only
+    /// post-page-break) and the `PureHorzBox::Frame`/
     /// `VertBox::FrameStart`/`FrameEnd` marker that produced it in the
     /// PRE-page-break `DocumentValue::reflow_source` — both carry the SAME
     /// `DecoId`, so `register_link`/`prim_register_destination` recording
@@ -195,10 +194,10 @@ impl<'a> Interp<'a> {
     ///
     /// This used to be the reference **tree-walking** interpreter, kept beside
     /// [`crate::compile`]'s closure compiler so the two could be cross-checked.
-    /// Phase 3 of `docs/plans/design-symbol-debruijn-slots.md` retired it:
-    /// quoted text is now compiled eagerly into [`crate::quoted`]'s name-free
-    /// form, so a tree-walker can no longer build a `Value::InlineText` at all
-    /// without invoking the compiler — there is exactly one evaluator now.
+    /// Phase 3 of retired it: quoted text is now compiled eagerly into
+    /// [`crate::quoted`]'s name-free form, so a tree-walker can no longer build
+    /// a `Value::InlineText` at all without invoking the compiler — there is
+    /// exactly one evaluator now.
     ///
     /// Kept as this thin shim because ~25 integration tests drive the
     /// evaluator through it. It is precisely what those tests' compiled

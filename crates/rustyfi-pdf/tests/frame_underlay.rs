@@ -1,9 +1,9 @@
-//! §D underlay ordering (docs/plans/hooks-annotations-crossref.md): a
-//! page's `DocExtras::page_graphics` overlay must draw BEFORE the page's own
-//! text — `page_content`'s prologue, `rustyfi-pdf/src/lib.rs` — so a frame's
-//! background fill/border sits behind the text it decorates, exactly what
-//! upstream's per-page op ordering (deco ops emitted ahead of the page's
-//! text ops in `handlePdf.ml`) produces.
+//! §D underlay ordering: a page's `DocExtras::page_graphics` overlay must
+//! draw BEFORE the page's own text — `page_content`'s prologue,
+//! `rustyfi-pdf/src/lib.rs` — so a frame's background fill/border sits
+//! behind the text it decorates, exactly what upstream's per-page op
+//! ordering (deco ops emitted ahead of the page's text ops in
+//! `handlePdf.ml`) produces.
 
 use rustyfi_backend::{
     Closing, Color, DocExtras, FontKey, GraphicsElem, HorzStringInfo, Length, Page, PageGeometry,

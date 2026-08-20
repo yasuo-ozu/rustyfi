@@ -1,8 +1,8 @@
 //! End-to-end proof that CJK glyph rendering works through the real
-//! pipeline (docs/plans/text-rendering.md, Group D closure): a genuine
-//! Japanese sentence (kanji + hiragana + katakana), compiled through the
-//! real loader/elaborator/typechecker/evaluator/line-breaker/page-breaker,
-//! then rendered via the CID-keyed PDF writer (`render_pdf_ttf`) under a
+//! pipeline (Group D closure): a genuine Japanese sentence (kanji +
+//! hiragana + katakana), compiled through the real
+//! loader/elaborator/typechecker/evaluator/line-breaker/page-breaker, then
+//! rendered via the CID-keyed PDF writer (`render_pdf_ttf`) under a
 //! `TtfFontStore` built from the real IPAex font
 //! (`lib-rustyfi/dist/fonts/ipaexm.ttf`, fetched by
 //! `scripts/download-fonts.sh`) — an IPA-licensed, `glyf`-outline TrueType
@@ -224,9 +224,9 @@ fn cjk_sentence_renders_real_glyphs_end_to_end() {
         return;
     }
 
-    // Real production font-config path (docs/plans/text-rendering.md §1a):
-    // `FontRegistry::discover` finds `lib-rustyfi/dist/hash/*.rustyfi-hash`
-    // (written by `download-fonts.sh`), whose `scripts` block points
+    // Real production font-config path: `FontRegistry::discover` finds
+    // `lib-rustyfi/dist/hash/*.rustyfi-hash` (written by
+    // `download-fonts.sh`), whose `scripts` block points
     // `han-ideographic`/`kana` at `ipaexm`.
     let registry = FontRegistry::discover(Some(&lib_root()), None, &FontFlags::default())
         .expect("font config discovery must succeed")

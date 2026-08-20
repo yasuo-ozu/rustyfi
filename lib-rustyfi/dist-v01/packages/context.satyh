@@ -1,6 +1,6 @@
 % context.satyh — SATySFi 0.1 stdlib `Context`, vendored for Legacy
-% packaging (docs/plans/rustyfi-0-1-0-support.md §2 P2 / §4 phase 6).
-% Source: saphe-split@b836d512:lib-rustyfi/packages/stdlib/stdlib.0.0.1/
+% packaging (P2 / §4 phase 6). Source:
+% saphe-split@b836d512:lib-rustyfi/packages/stdlib/stdlib.0.0.1/
 %   src/context.satyh — transliteration deltas:
 %   - T6 PARTIAL VENDOR: 5 of the 28 upstream members (and their sig lines)
 %     are dropped — this port has no backing primitive for any of them yet

@@ -1,11 +1,10 @@
-% Group A fixture (docs/plans/hooks-annotations-crossref.md §B/§C): a raw
-% `hook-page-break` closure registers a named destination and a URI link
-% annotation on the page it fires on; a top-level `register-outline` call
-% registers a 2-entry outline, one item keyed to the same destination name.
-% Exercises /Annots + /Dests + /Outlines end-to-end without needing the
-% frame/deco machinery (§D) `annot.satyh`'s \href uses — see `href.saty` for
-% that path. Sequencing mirrors `annot.satyh:17`'s `let () = ... in ...`
-% style.
+% Group A fixture: a raw `hook-page-break` closure registers a named
+% destination and a URI link annotation on the page it fires on; a top-level
+% `register-outline` call registers a 2-entry outline, one item keyed to the
+% same destination name. Exercises /Annots + /Dests + /Outlines end-to-end
+% without needing the frame/deco machinery (§D) `annot.satyh`'s \href uses —
+% see `href.saty` for that path. Sequencing mirrors `annot.satyh:17`'s `let
+% () = ... in ...` style.
 
 @require: stdja-mini
 

@@ -98,7 +98,7 @@ impl Cache {
 /// the rendered output:
 ///
 /// 1. a format tag — bumped to `v2` (from `v1`) by the HTML output backend's
-///    Slice 1 (`docs/plans/design-html-output.md` §CLI surface, "Cache key"),
+/// Slice 1 (surface, "Cache key"),
 ///    which also folds in field 7 below; bump again to invalidate every
 ///    entry on a further layout/cache-shape change;
 /// 2. the compiler version (`CARGO_PKG_VERSION`), so an upgrade re-renders;
@@ -127,7 +127,7 @@ impl Cache {
 ///    document/version/font would collide on the same key, so a hit from one
 ///    format would write the OTHER format's bytes to the requested output
 ///    (wrong extension, unparseable content).
-/// 8. (phase-7c saphe solver, C3 — `docs/plans/design-saphe-solver.md` §5.3)
+/// 8. (phase-7c saphe solver, C3 —)
 ///    `deps_lock` — the resolved `Satyrfile.lock`'s
 ///    [`rustyfi_satyrographos::Lockfile::digest`], when the compile is
 ///    driven by a solved package-manager lock (Envelopes/manifest mode);
@@ -458,12 +458,11 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// HTML output backend, Slice 1 (docs/plans/design-html-output.md §CLI
-    /// surface, "Cache key"): a PDF compile and an HTML compile of the exact
-    /// same document/version/font must hash to DIFFERENT keys — otherwise a
-    /// `--format html` run could hit a key a prior `--format pdf` run
-    /// populated (or vice versa) and write the wrong-format bytes to the
-    /// requested output.
+    /// HTML output backend, Slice 1 (surface, "Cache key"): a PDF compile
+    /// and an HTML compile of the exact same document/version/font must hash
+    /// to DIFFERENT keys — otherwise a `--format html` run could hit a key a
+    /// prior `--format pdf` run populated (or vice versa) and write the
+    /// wrong-format bytes to the requested output.
     #[test]
     fn key_changes_with_output_format() {
         let dir = scratch();

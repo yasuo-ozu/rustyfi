@@ -1,7 +1,6 @@
 //! `--format html-reflow` end-to-end, driven through the *built*
-//! `rustyfi` binary (`docs/plans/design-reflowable-html.md` §5 "CLI"),
-//! mirroring `tests/format_html.rs`'s process-spawn harness style for the
-//! faithful `--format html`.
+//! `rustyfi` binary ("CLI"), mirroring `tests/format_html.rs`'s
+//! process-spawn harness style for the faithful `--format html`.
 //!
 //! Also the additivity guard (design doc §8): the SAME fixture compiled with
 //! `--format html` (faithful) and the default `--format pdf` must still
@@ -36,9 +35,8 @@ fn repo_lib_root() -> PathBuf {
 /// Pointing `--lib-root` straight at `dist-v01/packages/` makes candidate 2
 /// (`<lib_root>/<name>`) resolve every `itemize`/`v01-mini` dependency
 /// directly, never touching the 0.0.6 corpus at all. Not an S4 fix (this
-/// resolver gap predates and is orthogonal to this slice — see
-/// `docs/plans/design-reflow-s4-lists.md`, which does not touch the
-/// loader), just how this ONE fixture avoids tripping over it.
+/// resolver gap predates and is orthogonal to this slice, which does not
+/// touch the loader), just how this ONE fixture avoids tripping over it.
 fn repo_lib_root_v01_only() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../lib-rustyfi/dist-v01/packages")
 }
@@ -51,14 +49,13 @@ fn phase2_fixture() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/phase2.saty")
 }
 
-/// S4 (`docs/plans/design-reflow-s4-lists.md`): a real 0.1 document
-/// `@require:`ing `itemize` (a nested `Itemize.listing?(break=true)` +
-/// `Itemize.enumerate`) and `v01-mini`'s `\V01Mini.emph` — exercises BOTH
-/// S4 levers (list markers, emphasis markers) through the real loader, the
-/// SAME fixture used both for the reflow structural assertions below and
-/// for the byte-identity guards (this is the fixture that actually proves
-/// the markers are inert, unlike `phase2_fixture` which never touches
-/// either modified code path).
+/// S4: a real 0.1 document `@require:`ing `itemize` (a nested
+/// `Itemize.listing?(break=true)` + `Itemize.enumerate`) and `v01-mini`'s
+/// `\V01Mini.emph` — exercises BOTH S4 levers (list markers, emphasis
+/// markers) through the real loader, the SAME fixture used both for the
+/// reflow structural assertions below and for the byte-identity guards
+/// (this is the fixture that actually proves the markers are inert, unlike
+/// `phase2_fixture` which never touches either modified code path).
 fn itemize_fixture() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/v01-itemize.saty")
 }
@@ -290,9 +287,9 @@ fn default_pdf_format_is_unaffected_by_the_new_reflow_format() {
 }
 
 // ============================================================================
-// S4 (`docs/plans/design-reflow-s4-lists.md`): semantic lists + emphasis,
-// driven end to end through the real loader (`itemize_fixture`) — nested
-// `Itemize.listing?(break=true)`, `Itemize.enumerate`, and `\V01Mini.emph`.
+// S4: semantic lists + emphasis, driven end to end through the real loader
+// (`itemize_fixture`) — nested `Itemize.listing?(break=true)`,
+// `Itemize.enumerate`, and `\V01Mini.emph`.
 // ============================================================================
 
 /// `--format html-reflow` on a document that actually uses `itemize` must

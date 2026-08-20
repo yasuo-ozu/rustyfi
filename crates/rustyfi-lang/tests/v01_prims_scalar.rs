@@ -521,7 +521,7 @@ fn bare_constants_bound_under_v01() {
 // `set-unicode-char-database` are still ACCEPT-AND-RETURN stand-ins (never
 // a `stringify-math`-style hard error), `here` resolves to the empty
 // string, and `load-hyphenation-dictionary`/`set-hyphenation-dictionary`
-// are now REAL (`docs/plans/design-hyphenation.md` S1) — no longer no-ops.
+// are now REAL (S1) — no longer no-ops.
 // ============================================================================
 
 fn as_context(v: Value) -> Context {
@@ -573,9 +573,9 @@ fn load_hyphenation_dictionary_also_accepts_the_real_stdlib_path_form() {
 
 #[test]
 fn load_hyphenation_dictionary_parses_british_names_into_english_gb_tag() {
-    // en-GB (`docs/plans/design-hyphenation.md` §S3's en-GB option): all
-    // three accepted spellings must resolve to the same tag as
-    // "english"/"en-US" does to `HyphenLang::EnglishUS` above.
+    // en-GB (en-GB option): all three accepted spellings must resolve to
+    // the same tag as "english"/"en-US" does to `HyphenLang::EnglishUS`
+    // above.
     let mono = Mono;
     for name in ["british", "en-GB", "british-english"] {
         let mut interp = Interp::new(&mono);
@@ -650,9 +650,8 @@ fn set_hyphenation_dictionary_is_real_but_set_unicode_char_database_is_still_a_n
         "Context::initial must default to English, matching upstream"
     );
 
-    // `set-hyphenation-dictionary` (S1, `docs/plans/design-hyphenation.md`)
-    // is now REAL: it writes `Context::hyphen_dictionary`, no longer a
-    // no-op.
+    // `set-hyphenation-dictionary` (S1) is now REAL: it writes
+    // `Context::hyphen_dictionary`, no longer a no-op.
     let ctx1 = as_context(call(
         &mut interp,
         &env,

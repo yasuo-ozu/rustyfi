@@ -173,12 +173,11 @@ pub const PRIMITIVE_NAMES: &[&str] = &[
     "inline-skip",
     "inline-glue",
     "block-skip",
-    // ---- docs/plans/design-reflow-s4-lists.md §4.1: the reflow marker-box
+    // ---- the reflow marker-box
     // constructors (`primitives.rs`'s `prims!` table, `Both` versions) ----
     "list-mark",
     "inline-mark",
-    // ---- phase 4, part 2 addition (see primitives.rs's `prims!` table
-    // comment on `"set-font-key"`) ----
+    // ---- phase 4, part 2 addition (see primitives.rs's `prims!` table comment on `"set-font-key"`) ----
     "set-font-key",
     // ---- frontend-completion.md §Slice 1.A: the ~18 pure primitives ----
     // (`|>` excluded — see primitives.rs's `prims!` table comment; it has
@@ -200,11 +199,11 @@ pub const PRIMITIVE_NAMES: &[&str] = &[
     "string-unexplode",
     "display-message",
     "abort-with-message",
-    // ---- Slice 1 additions (raster images; docs/plans/math-images.md) ----
+    // ---- Slice 1 additions (raster images) ----
     "load-image",
     "load-pdf-image",
     "use-image-by-width",
-    // ---- Slice 1 graphics primitives (docs/plans/graphics-subsystem.md) ----
+    // ---- Slice 1 graphics primitives ----
     "start-path",
     "line-to",
     "terminate-path",
@@ -212,12 +211,11 @@ pub const PRIMITIVE_NAMES: &[&str] = &[
     "fill",
     "stroke",
     "inline-graphics",
-    // ---- docs/plans/table-subsystem.md §Slice 1 ----
+    // ---- tables, Slice 1 ----
     "tabular",
-    // ---- roadmap C2 (docs/plans/graphics-subsystem.md §D) ----
+    // ---- roadmap C2 ----
     "inline-graphics-outer",
-    // ---- gr.satyh roadmap prims (docs/plans/graphics-subsystem.md §Full
-    // roadmap A/B/C/D) ----
+    // ---- gr.satyh roadmap prims (roadmap A/B/C/D) ----
     "bezier-to",
     "close-with-bezier",
     "shift-path",
@@ -228,7 +226,7 @@ pub const PRIMITIVE_NAMES: &[&str] = &[
     "get-path-bbox",
     "dashed-stroke",
     "draw-text",
-    // ---- pervasives.satyh unblockers (docs/plans/stdlib-port.md) ----
+    // ---- pervasives.satyh unblockers ----
     "get-natural-metrics",
     "inline-frame-outer",
     // vminst.ml:1807 `BackendInnerFrame` — same signature as
@@ -239,23 +237,23 @@ pub const PRIMITIVE_NAMES: &[&str] = &[
     "set-manual-rising",
     "script-guard",
     "discretionary",
-    // ---- Tier-2 decoration/graphics packages (docs/plans/stdlib-port.md) ----
+    // ---- Tier-2 decoration/graphics packages ----
     "get-axis-height",
-    // ---- docs/plans/hooks-annotations-crossref.md §Slice 1 ----
+    // ---- hooks / annotations / cross-references, Slice 1 ----
     "hook-page-break",
     "hook-page-break-block",
     "register-cross-reference",
     "get-cross-reference",
     // ---- group E1: hooks-annotations-crossref.md §A closer ----
     "probe-cross-reference",
-    // ---- docs/plans/hooks-annotations-crossref.md §B/§D (annot.satyh) ----
+    // ---- (annot.satyh) ----
     "get-leftmost-script",
     "get-rightmost-script",
     "inline-frame-breakable",
     "register-destination",
     "register-link-to-uri",
     "register-link-to-location",
-    // ---- docs/plans/math-engine.md §A + §G ----
+    // ---- + §G ----
     "math-char",
     "math-big-char",
     "math-char-with-kern",
@@ -272,7 +270,7 @@ pub const PRIMITIVE_NAMES: &[&str] = &[
     "math-color",
     "math-char-class",
     "math-variant-char",
-    // ---- gap 7 (`docs/plans/math-mode-language-gaps.md`) ----
+    // ---- gap 7 ----
     "set-math-variant-char",
     "get-left-math-class",
     "get-right-math-class",
@@ -289,7 +287,7 @@ pub const PRIMITIVE_NAMES: &[&str] = &[
     "unite-path",
     "set-min-gap-of-lines",
     "omit-skip-after",
-    // ---- docs/plans/context-box-prims.md §Slice 1 (rows 1-10) ----
+    // ---- (rows 1-10) ----
     "set-text-color",
     "get-text-color",
     "set-hyphen-penalty",
@@ -302,15 +300,14 @@ pub const PRIMITIVE_NAMES: &[&str] = &[
     "set-font",
     "set-code-text-command",
     "get-natural-length",
-    // ---- `docs/plans/build-order-to-stdja.md` step 8/9 orphans ----
+    // ---- step 8/9 orphans ----
     "set-dominant-wide-script",
     "set-dominant-narrow-script",
     "set-language",
     "set-every-word-break",
     "register-outline",
     "extract-string",
-    // ---- group E2: dominant-script/language getters (context-box-prims.md
-    // §C landed) ----
+    // ---- group E2: dominant-script/language getters (context-box-prims.md §C landed) ----
     "get-dominant-wide-script",
     "get-dominant-narrow-script",
     "get-language",
@@ -324,8 +321,7 @@ pub const PRIMITIVE_NAMES: &[&str] = &[
     "add-footnote",
     // ---- page-level prims blocking mitou-report/stdjareport ----
     "clear-page",
-    // ---- math-split spec §2.2: added in 0.1 (`math-text`/`math-boxes`
-    // split + `read-math`) ----
+    // ---- math-split spec §2.2: added in 0.1 (`math-text`/`math-boxes` split + `read-math`) ----
     "read-math",
     "stringify-math",
     "set-math-char",
@@ -408,20 +404,19 @@ pub(crate) fn base_type_env_with_version<'s>(
     env
 }
 
-/// Slice X2a/X2b (`docs/plans/design-cross-version-import.md` §"Slice X2 —
-/// per-group primitive environment"): the `Ast::VersionScope(version, _)`
-/// typecheck arm's env swap. `TypeEnv` is a flat, persistent-clone name ->
-/// scheme map (no separate "local scope stack" the way `compile.rs`'s
-/// `Compiler` has) — so, mirroring the fold's `is_local`-first discipline as
-/// closely as this shape allows, this clones `env` and OVERWRITES every
-/// `PRIMITIVE_NAMES` entry with `version`'s primitive type, leaving every
-/// other (non-primitive-named — i.e. user/local) binding untouched. This
-/// makes a version-forked primitive's INTERNAL use inside the returned env
-/// (e.g. a spliced 0.0.6 dependency constructing a `page` ADT to hand to
-/// `page-break`) check against `version`'s shapes (X2.4's "internal
-/// forked-type use — handled by X2"), while any binder introduced AFTER this
-/// call (an ordinary `Ast::LetIn`'s `env.with_all`, reached while inferring
-/// `body`) still shadows normally, exactly as before.
+/// Slice X2a/X2b: the `Ast::VersionScope(version, _)` typecheck arm's env
+/// swap. `TypeEnv` is a flat, persistent-clone name -> scheme map (no
+/// separate "local scope stack" the way `compile.rs`'s `Compiler` has) — so,
+/// mirroring the fold's `is_local`-first discipline as closely as this shape
+/// allows, this clones `env` and OVERWRITES every `PRIMITIVE_NAMES` entry
+/// with `version`'s primitive type, leaving every other (non-primitive-named
+/// — i.e. user/local) binding untouched. This makes a version-forked
+/// primitive's INTERNAL use inside the returned env (e.g. a spliced 0.0.6
+/// dependency constructing a `page` ADT to hand to `page-break`) check
+/// against `version`'s shapes (X2.4's "internal forked-type use — handled by
+/// X2"), while any binder introduced AFTER this call (an ordinary
+/// `Ast::LetIn`'s `env.with_all`, reached while inferring `body`) still
+/// shadows normally, exactly as before.
 ///
 /// X2b fix (was: "known narrow gap, documented, not fixed" in X2a): a
 /// primitive name legitimately shadowed by a *user* binding introduced
@@ -497,11 +492,11 @@ pub(crate) struct TypeEnv<'s> {
     // built.
     base: std::rc::Rc<HashMap<Symbol<'s>, std::rc::Rc<PolyType>>>,
     overlay: HashMap<Symbol<'s>, std::rc::Rc<PolyType>>,
-    /// Slice X2b (`docs/plans/design-cross-version-import.md` §"Slice X2"): the
-    /// set of names bound by a REAL program binding (`with`/`with_all`, not the
-    /// `with_primitive` primitive-seeding loops). `version_scoped_type_env`
-    /// consults it (via [`TypeEnv::is_shadowed`]) to tell an untouched builtin
-    /// scheme apart from a user shadow. Same base/overlay split as `vars`.
+    /// Slice X2b: the set of names bound by a REAL program binding
+    /// (`with`/`with_all`, not the `with_primitive` primitive-seeding loops).
+    /// `version_scoped_type_env` consults it (via [`TypeEnv::is_shadowed`]) to
+    /// tell an untouched builtin scheme apart from a user shadow. Same
+    /// base/overlay split as `vars`.
     base_shadowed: std::rc::Rc<std::collections::HashSet<Symbol<'s>>>,
     overlay_shadowed: std::collections::HashSet<Symbol<'s>>,
 }
@@ -665,10 +660,10 @@ fn name_to_mono(name: &str, version: RustyfiVersion) -> MonoType {
         "context" => t_context(),
         "document" => t_document(),
         "text-info" => MonoType::Base(BaseType::TextInfo),
-        // G8 (`docs/plans/…/doc-class-capstone-road.md` §3): the graphics-
-        // tier base/synonym types upstream's `types.cppo.ml` base_type_map
-        // registers (`pre-path`/`path`/`graphics`/`image`, plus the builtin
-        // synonyms `deco`/`deco-set` `primitives.cppo.ml:275-276`, plus the
+        // G8: the graphics- tier base/synonym types upstream's
+        // `types.cppo.ml` base_type_map registers
+        // (`pre-path`/`path`/`graphics`/`image`, plus the builtin synonyms
+        // `deco`/`deco-set` `primitives.cppo.ml:275-276`, plus the
         // pragmatic `font` stand-in — see below).
         //
         // `pre-path`/`path`/`graphics`/`image` resolve the SAME WAY under
@@ -949,10 +944,9 @@ fn lower_type_atom(
 ) -> MonoType {
     match atom {
         // `[ty; ty?; ..] inline-cmd`/`block-cmd`/`math-cmd` — the direct
-        // wire-up to the existing `CmdArgType.optional` field
-        // (`docs/plans/class-signature-lang-gaps.md` gap 2, step 1): each
-        // bracketed element lowers to one `CmdArgType`, `optional` set
-        // exactly when the element carried a trailing `?`.
+        // wire-up to the existing `CmdArgType.optional` field (gap 2,
+        // step 1): each bracketed element lowers to one `CmdArgType`,
+        // `optional` set exactly when the element carried a trailing `?`.
         TypeAtom::Cmd { args, kind, .. } => {
             let cmd_args: Vec<CmdArgType> = args
                 .iter()
@@ -1137,20 +1131,18 @@ fn lower_type_app(
 }
 
 /// `dom -> cod`, with `?->`'s optional-argument prefix (`opts`) folded in as
-/// leading `option`-wrapped mandatory domains — the Slice-1 stand-in
-/// `docs/plans/class-signature-lang-gaps.md`'s R2 calls out: `config ?->
-/// block-text -> document` lowers to `Func(option(config), Func(block-text,
-/// document))`, exactly the shape `frontend-completion.md` Sub-area 2's
-/// call-site model produces (`Some`/`None` applied to a plain, `option`-typed
-/// domain — see `elaborate.rs`'s `app_arg_to_ast`) — the "one consistent
-/// optional-arg model" the two plans share. Not upstream's real
+/// leading `option`-wrapped mandatory domains — the Slice-1 stand-in R2 calls
+/// out: `config ?-> block-text -> document` lowers to `Func(option(config),
+/// Func(block-text, document))`, exactly the shape `frontend-completion.md`
+/// Sub-area 2's call-site model produces (`Some`/`None` applied to a plain,
+/// `option`-typed domain — see `elaborate.rs`'s `app_arg_to_ast`) — the "one
+/// consistent optional-arg model" the two plans share. Not upstream's real
 /// `option_row`/arity-changing encoding (that's the full-roadmap R2 item);
 /// this only needs the two encodings to *unify*, which a plain `option`
-/// domain already does.
-/// `pub(crate)`: Sub-slice 2d-1's `v1/module_check.rs` reuses this exact
-/// lowering for a sig `val`'s declared type, twice per decl (§3.4's
-/// skolemize-by-lowering — a flexible-var map for the committed scheme, a
-/// rigid-stamp map for the subsumption check) — see this module's
+/// domain already does. `pub(crate)`: Sub-slice 2d-1's `v1/module_check.rs`
+/// reuses this exact lowering for a sig `val`'s declared type, twice per decl
+/// (§3.4's skolemize-by-lowering — a flexible-var map for the committed
+/// scheme, a rigid-stamp map for the subsumption check) — see this module's
 /// crate-report doc comment and the spec's §2.3 API table. Visibility-only
 /// change; behavior is untouched (2d-1's golden-diff invariant, §4.3-F).
 pub(crate) fn lower_type_expr(
@@ -1262,8 +1254,8 @@ fn find_opt_row_fun_in_atom(a: &TypeAtom) -> Option<Span> {
 }
 
 // ============================================================================
-// Signature items (`docs/plans/class-signature-lang-gaps.md` gap 3): the
-// `constraint 'a :: (| l1; l2; … |)` per-item suffix.
+// Signature items (gap 3): the `constraint 'a :: (| l1; l2; … |)`
+// per-item suffix.
 // ============================================================================
 
 /// Every distinct type-variable name occurring in `ty`, in first-occurrence
@@ -1990,14 +1982,13 @@ impl<'s> Checker<'s> {
             }
             // A qualified-name alias (`M.\cmd` re-export, or an `open`) of a
             // GENUINE `let-math` binding: math commands share the `\` sigil
-            // with inline commands (`docs/plans/math-engine.md` §G — there
-            // is no separate math-command token), so an alias site only
-            // ever reaches this generic `Ast::LetIn` path (never
-            // `Ast::LetMathIn`, which is produced only at a math command's
-            // OWN definition site — top-level `let-math` via `walk_bindings`,
-            // or the expression-level `let-math .. in ..` form,
-            // `elaborate.rs`'s `Expr::LetMathIn` arm — never at an alias
-            // site; see that variant's doc comment). Pass a already-
+            // with inline commands (there is no separate math-command token),
+            // so an alias site only ever reaches this generic `Ast::LetIn`
+            // path (never `Ast::LetMathIn`, which is produced only at a math
+            // command's OWN definition site — top-level `let-math` via
+            // `walk_bindings`, or the expression-level `let-math .. in ..`
+            // form, `elaborate.rs`'s `Expr::LetMathIn` arm — never at an
+            // alias site; see that variant's doc comment). Pass a already-
             // `MathCmd`-typed alias through unchanged, exactly like the
             // `InlineCmd`/`BlockCmd` arms above do for their own kind.
             MonoType::MathCmd(_) if is_inline => {
@@ -2081,14 +2072,13 @@ impl<'s> Checker<'s> {
                 span,
                 &format!("the result of '{name}'"),
             )?;
-            // Optional command params, this milestone's simplification
-            // (`docs/plans/frontend-completion.md` Sub-area 2 / `command_scheme`'s
-            // doc comment): there is no def-site `?:param` marker (this grammar
-            // has none), so a param is treated as optional exactly when its
-            // *inferred* domain resolves to `_ option` — i.e. the body actually
-            // uses it as an `option` (`match p with Some .. | None -> ..`, etc.).
-            // `CmdArgType.ty` then stores the option's INNER type (peeled), so it
-            // matches the `[ty?; ..]` signature-lowering shape 1:1
+            // Optional command params, this milestone's simplification (Sub-area 2
+            // / `command_scheme`'s doc comment): there is no def-site `?:param`
+            // marker (this grammar has none), so a param is treated as optional
+            // exactly when its *inferred* domain resolves to `_ option` — i.e. the
+            // body actually uses it as an `option` (`match p with Some .. | None ->
+            // ..`, etc.). `CmdArgType.ty` then stores the option's INNER type
+            // (peeled), so it matches the `[ty?; ..]` signature-lowering shape 1:1
             // (`lower_type_atom`'s `TypeAtom::Cmd` arm) — `check_cmd_args` re-wraps
             // it in `option(..)` per call, since call-site args always arrive
             // pre-wrapped as `Some`/`None` (`elaborate.rs`'s `app_arg_to_ast`).
@@ -2111,14 +2101,14 @@ impl<'s> Checker<'s> {
         Ok(generalize(self.ctx.level(), &cmd_ty))
     }
 
-    /// `Ast::LetMathIn`'s scheme-building rule (`docs/plans/math-engine.md`
-    /// §G) — the math-command analog of `command_scheme` above, but
-    /// simpler: a math command has **no** implicit context argument (see
-    /// `elaborate.rs`'s `elaborate_let_math`), so every domain of `tv`'s
-    /// function-chain becomes a `CmdArgType` (the same optional-param
-    /// heuristic as `command_scheme`), and the bare result — not a peeled
-    /// first argument — must be `math`. A zero-arity binding (`tv` not a
-    /// `Func` at all, e.g. `let-math \to = rel \`→\``) falls out naturally:
+    /// `Ast::LetMathIn`'s scheme-building rule — the math-command analog of
+    /// `command_scheme` above, but simpler: a math command has **no**
+    /// implicit context argument (see `elaborate.rs`'s
+    /// `elaborate_let_math`), so every domain of `tv`'s function-chain
+    /// becomes a `CmdArgType` (the same optional-param heuristic as
+    /// `command_scheme`), and the bare result — not a peeled first argument
+    /// — must be `math`. A zero-arity binding (`tv` not a `Func` at all,
+    /// e.g. `let-math \to = rel \`→\``) falls out naturally:
     /// `peel_func_chain` returns no domains and `tv` itself as the result.
     fn math_command_scheme(
         &mut self,
@@ -2359,12 +2349,12 @@ impl<'s> Checker<'s> {
                 Ok(vec![(name, scheme)])
             }
 
-            // `let-math \cmd param* = expr in body` (`docs/plans/math-
-            // engine.md` §G) — structurally identical to the `Let` command-
-            // binding rule above, but for a binding that is ALREADY known
-            // (by construction, via the dedicated Ast variant) to be a math
-            // command, so there is no sigil to dispatch on and no "which
-            // kind of `\`-binding is this" ambiguity to resolve.
+            // `let-math \cmd param* = expr in body` — structurally
+            // identical to the `Let` command- binding rule above, but for a
+            // binding that is ALREADY known (by construction, via the
+            // dedicated Ast variant) to be a math command, so there is no
+            // sigil to dispatch on and no "which kind of `\`-binding is
+            // this" ambiguity to resolve.
             BindingView::LetMath { name, value } => {
                 self.ctx.enter_level();
                 let tv = self.infer(env, value)?;
@@ -2636,13 +2626,12 @@ impl<'s> Checker<'s> {
                 self.infer(&inner, body)
             }
 
-            // `let-math \cmd param* = expr in body` (`docs/plans/math-
-            // engine.md` §G) — structurally identical to the `Ast::LetIn`
-            // command-binding rule above, but for a binding that is ALREADY
-            // known (by construction, via the dedicated Ast variant — see
-            // its doc comment) to be a math command, so there is no sigil
-            // to dispatch on and no "which kind of `\`-binding is this"
-            // ambiguity to resolve.
+            // `let-math \cmd param* = expr in body` — structurally
+            // identical to the `Ast::LetIn` command-binding rule above, but
+            // for a binding that is ALREADY known (by construction, via the
+            // dedicated Ast variant — see its doc comment) to be a math
+            // command, so there is no sigil to dispatch on and no "which
+            // kind of `\`-binding is this" ambiguity to resolve.
             Ast::LetMathIn(name, value, body) => {
                 let schemes =
                     self.infer_binding(env, BindingView::LetMath { name: *name, value })?;
@@ -2860,14 +2849,13 @@ impl<'s> Checker<'s> {
                 Ok(tbase)
             }
 
-            // Slice X2a (`docs/plans/design-cross-version-import.md`
-            // §"Slice X2 — per-group primitive environment"): swap the
-            // active primitive-type env to `version`'s for `body` — see
-            // `version_scoped_type_env`'s doc comment — and make sure
-            // `version`'s builtin ADTs (e.g. `page`, `V0_0`-only) are
-            // registered in the (otherwise whole-program-tagged) ctor table
-            // — see `install_additional_builtin_variants`'s doc comment.
-            // Never reached on a pure single-version program (no
+            // Slice X2a: swap the active primitive-type env to `version`'s
+            // for `body` — see `version_scoped_type_env`'s doc comment —
+            // and make sure `version`'s builtin ADTs (e.g. `page`,
+            // `V0_0`-only) are registered in the (otherwise
+            // whole-program-tagged) ctor table — see
+            // `install_additional_builtin_variants`'s doc comment. Never
+            // reached on a pure single-version program (no
             // `Ast::VersionScope` node is ever produced there).
             Ast::VersionScope(version, body) => {
                 self.install_additional_builtin_variants(*version);
@@ -3164,16 +3152,14 @@ impl<'s> Checker<'s> {
     /// Walk one quoted math element. `Chars`/`Group`/`Sub`/`Sup`/`Primes`
     /// carry no program-mode content of their own (nothing to check beyond
     /// recursing). `Cmd`/`Embed` are where math meets the ordinary
-    /// expression language (`docs/plans/math-engine.md` §G): a `Cmd`'s
-    /// `name` must resolve to a genuine `MathCmd` type (checked exactly
-    /// like `check_itext`'s `IText::Cmd`, via `check_cmd_args` — a math
-    /// command's optional `?:`/`?*`-marked or marker-less-padded arguments
-    /// are handled by `check_cmd_args` the same generic way), and an
-    /// `Embed`'s (`#expr`) type
-    /// must unify with `math` (a math command parameter, or another
-    /// program-mode value that itself produces math — `Value::Math`/
-    /// `Value::MathText` are the two runtime shapes this unifies against,
-    /// see `value.rs`).
+    /// expression language: a `Cmd`'s `name` must resolve to a genuine
+    /// `MathCmd` type (checked exactly like `check_itext`'s `IText::Cmd`,
+    /// via `check_cmd_args` — a math command's optional `?:`/`?*`-marked
+    /// or marker-less-padded arguments are handled by `check_cmd_args` the
+    /// same generic way), and an `Embed`'s (`#expr`) type must unify with
+    /// `math` (a math command parameter, or another program-mode value
+    /// that itself produces math — `Value::Math`/ `Value::MathText` are
+    /// the two runtime shapes this unifies against, see `value.rs`).
     fn check_math_elem(&mut self, env: &TypeEnv<'s>, m: &MathElem<'s>) -> Result<(), TypeError> {
         match m {
             MathElem::Chars(_) => Ok(()),
@@ -3606,8 +3592,7 @@ mod l3_per_binding_tests {
 }
 
 // ============================================================================
-// Slice X2b (`docs/plans/design-cross-version-import.md` §"Slice X2 —
-// per-group primitive environment", the shadowing-fix follow-up to X2a):
+// Slice X2b (the shadowing-fix follow-up to X2a):
 // `version_scoped_type_env`'s `Ast::VersionScope` overwrite must not
 // re-stomp a `PRIMITIVE_NAMES` entry the user already shadowed BEFORE the
 // `VersionScope` is reached. A `#[cfg(test)]` unit module (mirroring
@@ -3719,11 +3704,11 @@ mod x2b_shadow_tests {
 }
 
 // ============================================================================
-// `docs/plans/class-signature-lang-gaps.md` Slice 1 acceptance: the real
-// `stdja.satyh` `sig … end` block (gaps 1/3 — command values are covered by
-// `crates/rustyfi-lang/tests/typecheck.rs`'s end-to-end fixtures; this module
-// covers the `SigItem`/`constraint` lowering directly, since `lower_sig_item`
-// is a crate-private entry point no sig-enforcement pass calls yet).
+// Slice 1 acceptance: the real `stdja.satyh` `sig … end` block (gaps 1/3 —
+// command values are covered by `crates/rustyfi-lang/tests/typecheck.rs`'s
+// end-to-end fixtures; this module covers the `SigItem`/`constraint` lowering
+// directly, since `lower_sig_item` is a crate-private entry point no
+// sig-enforcement pass calls yet).
 // ============================================================================
 #[cfg(test)]
 mod sig_constraint_tests {

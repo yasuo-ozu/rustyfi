@@ -7,11 +7,11 @@ use crate::length::Length;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct FontKey(pub u16);
 
-/// OpenType MATH `MathConstants` table (`docs/plans/math-engine.md` §B),
-/// each field stored as a RATIO of the font size (design-units ÷
-/// `units_per_em`, or percent ÷ 100 for the two scale-downs) so lang-side
-/// callers just multiply by `ctx.font_size`/the current script size.
-/// Mirrors upstream `FontFormat.math_constants` (fontFormat.ml:2292-2323).
+/// OpenType MATH `MathConstants` table, each field stored as a RATIO of
+/// the font size (design-units ÷ `units_per_em`, or percent ÷ 100 for the
+/// two scale-downs) so lang-side callers just multiply by
+/// `ctx.font_size`/the current script size. Mirrors upstream
+/// `FontFormat.math_constants` (fontFormat.ml:2292-2323).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MathConstants {
     pub axis_height: f64,
@@ -19,7 +19,7 @@ pub struct MathConstants {
     pub superscript_shift_up: f64,
     /// `superscript_shift_up_cramped` — OpenType `SuperscriptShiftUpCramped`,
     /// the lowered shift-up used when the enclosing sub-formula is "cramped"
-    /// (TeXbook Appendix G rule 18a; `docs/plans/design-math-cramped.md`).
+    /// (TeXbook Appendix G rule 18a).
     pub superscript_shift_up_cramped: f64,
     pub superscript_baseline_drop_max: f64,
     pub subscript_top_max: f64,
@@ -62,15 +62,15 @@ pub enum MathCorner {
 }
 
 /// Classify one character into the four-way script bucket a font scheme is
-/// indexed by (D1b, `docs/plans/text-rendering.md` §1/§Slice 2). Deviation
-/// from the spec's originally-proposed standalone `CharScript` enum: this
-/// port already has `context::Script` (Group E, `set-dominant-*-script`)
-/// with the exact same four constructors in the exact same order
-/// (`HanIdeographic=0, Kana=1, Latin=2, OtherScript=3`) — introducing a
-/// second, structurally-identical enum just to keep "per-char classifier"
-/// and "context-stored dominant script" conceptually separate would add a
-/// conversion at every call site for no behavioral gain, so this reuses
-/// `Script` directly as the per-char classification result too.
+/// indexed by (D1b, 2). Deviation from the spec's originally-proposed
+/// standalone `CharScript` enum: this port already has `context::Script`
+/// (Group E, `set-dominant-*-script`) with the exact same four
+/// constructors in the exact same order (`HanIdeographic=0, Kana=1,
+/// Latin=2, OtherScript=3`) — introducing a second, structurally-identical
+/// enum just to keep "per-char classifier" and "context-stored dominant
+/// script" conceptually separate would add a conversion at every call site
+/// for no behavioral gain, so this reuses `Script` directly as the
+/// per-char classification result too.
 ///
 /// Upstream classifies via `Scripts.txt` + East-Asian-width
 /// (`scriptDataMap.ml:74-167`, itself labelled "temporary" by its own
@@ -157,10 +157,10 @@ pub trait FontMetrics {
 
     /// The font's OpenType MATH `MathConstants` table, or `None` when the
     /// font has no MATH table (every base-14/non-math provider). Lang-side
-    /// math layout (`docs/plans/math-engine.md` §B1's `MathC` resolver)
-    /// falls back to the pre-MATH-table fixed constants whenever this is
-    /// `None`, so a provider that never overrides it (like `Base14Metrics`)
-    /// keeps today's fixtures byte-identical.
+    /// math layout (`MathC` resolver) falls back to the pre-MATH-table
+    /// fixed constants whenever this is `None`, so a provider that never
+    /// overrides it (like `Base14Metrics`) keeps today's fixtures
+    /// byte-identical.
     fn math_constants(&self, _font: FontKey) -> Option<MathConstants> {
         None
     }
@@ -187,13 +187,13 @@ pub trait FontMetrics {
     }
 
     /// A vertically-grown MATH variant of `c` at `size`, selected per
-    /// `policy` (OpenType MATH `MathVariants`, `docs/plans/math-engine.md`
-    /// §B3 — big operators/stretchy delimiters). `None` when the font has no
-    /// MATH table, no vertical construction for `c`, or the construction has
-    /// no prepared variant records (assembly-only — out of §B3 scope);
-    /// every caller must treat `None` as "use the base glyph unchanged"
-    /// (`push_char_glyph`), so a provider that never overrides this (every
-    /// base-14 provider) leaves every pre-B3 fixture byte-identical.
+    /// `policy` (OpenType MATH `MathVariants`, — big operators/stretchy
+    /// delimiters). `None` when the font has no MATH table, no vertical
+    /// construction for `c`, or the construction has no prepared variant
+    /// records (assembly-only — out of §B3 scope); every caller must treat
+    /// `None` as "use the base glyph unchanged" (`push_char_glyph`), so a
+    /// provider that never overrides this (every base-14 provider) leaves
+    /// every pre-B3 fixture byte-identical.
     fn math_vertical_variant(
         &self,
         _font: FontKey,
@@ -205,17 +205,16 @@ pub trait FontMetrics {
     }
 
     /// Build a vertically-stretched delimiter/big-op from the OpenType MATH
-    /// `GlyphAssembly` of `c` (`docs/plans/math-engine.md` §B — the
-    /// stretch-beyond-the-largest-discrete-variant path). Returns the placed
-    /// parts as `(gid, dy, advance)`, bottom-to-top, where `dy` is the
-    /// **y-up, box-local** vertical offset of the part's own baseline (the
-    /// bottom part sits at `dy = 0`, each subsequent part is raised by the
-    /// previous part's advance minus their connector overlap), and `advance`
-    /// is the part glyph's design-unit `full_advance` scaled to `size` (the
-    /// vertical extent it contributes). The parts stack with overlaps
-    /// `>= min_connector_overlap`, repeating `extender` parts as many times as
-    /// needed to reach `target`. `None` when the font has no MATH table, no
-    /// vertical construction for `c`, or that construction has no
+    /// `GlyphAssembly` of `c` (the stretch-beyond-the-largest-discrete-variant
+    /// path). Returns the placed parts as `(gid, dy, advance)`, bottom-to-top,
+    /// where `dy` is the **y-up, box-local** vertical offset of the part's own
+    /// baseline (the bottom part sits at `dy = 0`, each subsequent part is
+    /// raised by the previous part's advance minus their connector overlap),
+    /// and `advance` is the part glyph's design-unit `full_advance` scaled to
+    /// `size` (the vertical extent it contributes). The parts stack with
+    /// overlaps `>= min_connector_overlap`, repeating `extender` parts as many
+    /// times as needed to reach `target`. `None` when the font has no MATH
+    /// table, no vertical construction for `c`, or that construction has no
     /// `GlyphAssembly` — every caller must treat `None` as "fall back to the
     /// largest discrete variant" (`push_delimiter_glyph`), so a provider that
     /// never overrides this (every base-14 provider) is unaffected.
@@ -248,13 +247,12 @@ pub trait FontMetrics {
     }
 
     /// The configured default math font, from `default-font.rustyfi-hash`'s
-    /// optional `"math"` abbrev (`docs/plans/design-math-cramped.md` §4 Slice
-    /// B). `None` means "no math default configured" — the caller
-    /// (`get-initial-context`) then leaves `Context::math_font` at its
-    /// `Context::initial` seed (`FontKey(0)`, the regular text face), i.e.
-    /// today's behavior. Every pre-Slice-B provider (`Base14Metrics`, a bare
-    /// `TtfFontStore::load`, a registry with no `"math"` entry) returns
-    /// `None` here, so this is purely additive.
+    /// optional `"math"` abbrev (Slice B). `None` means "no math default
+    /// configured" — the caller (`get-initial-context`) then leaves
+    /// `Context::math_font` at its `Context::initial` seed (`FontKey(0)`, the
+    /// regular text face), i.e. today's behavior. Every pre-Slice-B provider
+    /// (`Base14Metrics`, a bare `TtfFontStore::load`, a registry with no
+    /// `"math"` entry) returns `None` here, so this is purely additive.
     fn default_math_font(&self) -> Option<FontKey> {
         None
     }

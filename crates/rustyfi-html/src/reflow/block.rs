@@ -1,10 +1,9 @@
-//! The block-level `Vec<VertBox>` walker (`docs/plans/design-reflowable-html.md`
-//! §3 "Block level"). Unlike the faithful backend's `Page`/`PlacedLine` walk
-//! (already-placed, absolutely positioned), this walks the FLAT pre-page-break
-//! list with a single linear pass, using a small amount of local state (a
-//! "current paragraph" text accumulator and a "pending top margin" carried
-//! from the last `Skip`) instead of a `Page`'s already-resolved geometry —
-//! there is no x/y here at all, only document order.
+//! The block-level `Vec<VertBox>` walker ("Block level"). Unlike the faithful
+//! backend's `Page`/`PlacedLine` walk (already-placed, absolutely positioned),
+//! this walks the FLAT pre-page-break list with a single linear pass, using a
+//! small amount of local state (a "current paragraph" text accumulator and a
+//! "pending top margin" carried from the last `Skip`) instead of a `Page`'s
+//! already-resolved geometry — there is no x/y here at all, only document order.
 //!
 //! | `VertBox` | emitted as |
 //! |--|--|
@@ -13,7 +12,7 @@
 //! | `FrameStart`/`FrameEnd` | a real nested `<div class="frame">` (push/pop) |
 //! | `ClearPage` | a soft `<hr class="clearpage">` separator (pagination is meaningless once reflowed) |
 //! | `HookPageBreak` | dropped (no reflow meaning) |
-//! | `ListMark(ListStart{ordered})`/`ListEnd`/`ItemStart`/`ItemEnd` | S4 (`docs/plans/design-reflow-s4-lists.md`): real nested `<ul>`/`<ol>`/`<li>` (push/pop, tracked by `list_stack` below) |
+//! | `ListMark(ListStart{ordered})`/`ListEnd`/`ItemStart`/`ItemEnd` | S4: real nested `<ul>`/`<ol>`/`<li>` (push/pop, tracked by `list_stack` below) |
 //!
 //! `PureHorzBox::EmbeddedBlock` (an INLINE box that carries a whole nested
 //! `Vec<VertBox>`) is handled HERE, not in `inline.rs`, because splicing it
@@ -37,14 +36,13 @@ use super::{inline, structure, Ctx};
 struct Para {
     text: String,
     open: bool,
-    /// S3 (`docs/plans/design-reflowable-html.md` §6 "S3" — see
-    /// `structure.rs`'s doc comment): set once, the first time
-    /// `structure::find_heading_level` matches a box on this paragraph's
-    /// line(s), by an outline-registered destination `Frame`. When `Some`,
-    /// `flush_para` emits `<h{level+1}>` instead of `<p class="para">`.
-    /// Never reset mid-paragraph (a paragraph's first matching `Frame`
-    /// decides its tag; further boxes on the same line(s) cannot un-decide
-    /// it), only on the next `flush_para`.
+    /// S3 ("S3" — see `structure.rs`'s doc comment): set once, the first
+    /// time `structure::find_heading_level` matches a box on this
+    /// paragraph's line(s), by an outline-registered destination `Frame`.
+    /// When `Some`, `flush_para` emits `<h{level+1}>` instead of `<p
+    /// class="para">`. Never reset mid-paragraph (a paragraph's first
+    /// matching `Frame` decides its tag; further boxes on the same line(s)
+    /// cannot un-decide it), only on the next `flush_para`.
     heading_level: Option<i64>,
 }
 
@@ -66,15 +64,15 @@ impl Para {
 pub(crate) fn walk_vboxes(out: &mut String, vboxes: &[VertBox], ctx: &Ctx) {
     let mut para = Para::new();
     let mut pending_margin: f64 = 0.0;
-    // S4 (`docs/plans/design-reflow-s4-lists.md` §4.2): `ordered` per
-    // currently-open `<ul>`/`<ol>`, pushed by `ListStart`/popped by
-    // `ListEnd` — `ListEnd` itself carries no payload (design doc §4.1: not
-    // stored redundantly, nesting/kind both fall out of the marker stream's
-    // own structure), so this is what lets a `ListEnd` close the right tag.
-    // Nesting is automatic: a `ListStart` reached while an `<li>` is open
-    // (i.e. between that `<li>`'s `ItemStart`/`ItemEnd`) just emits its
-    // `<ul>`/`<ol>` inline in `out`, right where document order puts it —
-    // no separate "current parent" bookkeeping needed.
+    // S4: `ordered` per currently-open `<ul>`/`<ol>`, pushed by
+    // `ListStart`/popped by `ListEnd` — `ListEnd` itself carries no payload
+    // (design doc §4.1: not stored redundantly, nesting/kind both fall out
+    // of the marker stream's own structure), so this is what lets a
+    // `ListEnd` close the right tag. Nesting is automatic: a `ListStart`
+    // reached while an `<li>` is open (i.e. between that `<li>`'s
+    // `ItemStart`/`ItemEnd`) just emits its `<ul>`/`<ol>` inline in `out`,
+    // right where document order puts it — no separate "current parent"
+    // bookkeeping needed.
     let mut list_stack: Vec<bool> = Vec::new();
 
     for vb in vboxes {
@@ -167,11 +165,11 @@ pub(crate) fn walk_vboxes(out: &mut String, vboxes: &[VertBox], ctx: &Ctx) {
                 flush_para(out, &mut para, &mut pending_margin);
                 out.push_str("</div>\n");
             }
-            // S4 (`docs/plans/design-reflow-s4-lists.md` §4.2 "Block
-            // level"): real nested `<ul>`/`<ol>`/`<li>`, the whole point of
-            // this slice. Every arm flushes the open paragraph first, same
-            // as `FrameStart`/`FrameEnd`/`ClearPage` above — a marker is
-            // always a block-level boundary, never mid-paragraph content.
+            // S4 ("Block level"): real nested `<ul>`/`<ol>`/`<li>`, the
+            // whole point of this slice. Every arm flushes the open
+            // paragraph first, same as `FrameStart`/`FrameEnd`/`ClearPage`
+            // above — a marker is always a block-level boundary, never
+            // mid-paragraph content.
             VertBox::ListMark(kind) => {
                 flush_para(out, &mut para, &mut pending_margin);
                 let margin = take_margin(&mut pending_margin);
@@ -202,15 +200,15 @@ pub(crate) fn walk_vboxes(out: &mut String, vboxes: &[VertBox], ctx: &Ctx) {
     flush_para(out, &mut para, &mut pending_margin);
 }
 
-/// Close the current paragraph (if any content was gathered), writing
-/// `<p class="para"{margin}>{trimmed text}</p>` to `out` — or, when S3's
-/// `Para::heading_level` matched (`docs/plans/design-reflowable-html.md`
-/// §6 "S3"), `<h{level+1} class="heading" data-outline-level="{level}"
-/// {margin}>{trimmed text}</h{level+1}>` instead: same accumulated inline
-/// content, same margin bookkeeping, just a promoted tag. A no-op when
-/// nothing has been accumulated (e.g. two consecutive `Skip`s, or a `Skip`
-/// before any real content) — mirrors `render_html_impl`'s own "nothing to
-/// emit" guards elsewhere in this crate.
+/// Close the current paragraph (if any content was gathered), writing `<p
+/// class="para"{margin}>{trimmed text}</p>` to `out` — or, when S3's
+/// `Para::heading_level` matched ("S3"), `<h{level+1} class="heading"
+/// data-outline-level="{level}" {margin}>{trimmed text}</h{level+1}>`
+/// instead: same accumulated inline content, same margin bookkeeping, just
+/// a promoted tag. A no-op when nothing has been accumulated (e.g. two
+/// consecutive `Skip`s, or a `Skip` before any real content) — mirrors
+/// `render_html_impl`'s own "nothing to emit" guards elsewhere in this
+/// crate.
 fn flush_para(out: &mut String, para: &mut Para, pending_margin: &mut f64) {
     if para.open {
         let margin = take_margin(pending_margin);

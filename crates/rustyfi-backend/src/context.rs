@@ -39,18 +39,17 @@ pub enum Language {
 }
 
 /// The set of Knuth–Liang hyphenation dictionaries a `Context` may have
-/// installed (`docs/plans/design-hyphenation.md` D3). Deliberately a small
-/// `Copy` tag with **no dependency on the `hyphenation` crate** — `Context`
-/// (this crate, `rustyfi-backend`) is cloned constantly, so it cannot own a
-/// `hyphenation::Standard` dictionary (~89 KiB, not cheaply clonable). The
-/// actual dictionaries live in a process-global load-once cache in
-/// `rustyfi-lang` (`crates/rustyfi-lang/src/hyphenation.rs`), keyed by this
-/// tag.
+/// installed (D3). Deliberately a small `Copy` tag with **no dependency on
+/// the `hyphenation` crate** — `Context` (this crate, `rustyfi-backend`) is
+/// cloned constantly, so it cannot own a `hyphenation::Standard` dictionary
+/// (~89 KiB, not cheaply clonable). The actual dictionaries live in a
+/// process-global load-once cache in `rustyfi-lang`
+/// (`crates/rustyfi-lang/src/hyphenation.rs`), keyed by this tag.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum HyphenLang {
     EnglishUS,
-    /// British English (`docs/plans/design-hyphenation.md` §S3's en-GB
-    /// option). Maps to `hyphenation::Language::EnglishGB`.
+    /// British English (en-GB option). Maps to
+    /// `hyphenation::Language::EnglishGB`.
     EnglishGB,
 }
 
@@ -67,12 +66,12 @@ pub enum MathScriptLevel {
     ScriptScript,
 }
 
-/// One script's font selection within a `Context::font_scheme` (D1b,
-/// `docs/plans/text-rendering.md` §1): upstream `font_with_ratio`
-/// (`horzBox.ml`) folded into a plain struct. `ratio` scales `ctx.font_size`
-/// for this script's glyphs (e.g. a CJK face set at 0.88 of the Latin size,
-/// stdja's `ipaexm` convention); `rising` is a further fraction-of-size
-/// baseline raise (`fontInfo.ml`'s `get_font_with_ratio`).
+/// One script's font selection within a `Context::font_scheme` (D1b):
+/// upstream `font_with_ratio` (`horzBox.ml`) folded into a plain struct.
+/// `ratio` scales `ctx.font_size` for this script's glyphs (e.g. a CJK face
+/// set at 0.88 of the Latin size, stdja's `ipaexm` convention); `rising` is
+/// a further fraction-of-size baseline raise (`fontInfo.ml`'s
+/// `get_font_with_ratio`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ScriptFont {
     pub font: FontKey,
@@ -100,11 +99,11 @@ pub struct Context {
     /// Extra vertical skip inserted above a paragraph
     /// (`set-paragraph-margin`'s first argument; v0.0.6
     /// `context_main.paragraph_top`, horzBox.ml:227). Wired into
-    /// `prim_line_break` (`docs/plans/design-silent-fields.md` FIX 3) as a
-    /// leading `VertBox::Skip` around the formed lines. A skip at the very
-    /// top of a page/column is discarded by `chop_page` (mirrors upstream's
-    /// page-top glue suppression), so this does not add space above the
-    /// first paragraph of a page even though the field itself is unchanged.
+    /// `prim_line_break` (FIX 3) as a leading `VertBox::Skip` around the
+    /// formed lines. A skip at the very top of a page/column is discarded
+    /// by `chop_page` (mirrors upstream's page-top glue suppression), so
+    /// this does not add space above the first paragraph of a page even
+    /// though the field itself is unchanged.
     pub paragraph_top: Length,
     /// Extra vertical skip inserted below a paragraph
     /// (`set-paragraph-margin`'s second argument; v0.0.6
@@ -147,28 +146,27 @@ pub struct Context {
     /// identical to today's single-font behavior until a `set-font` call or
     /// a configured `default-font.rustyfi-hash` `scripts` block overlays it.
     pub font_scheme: [ScriptFont; 4],
-    /// `set-text-color`/`get-text-color` (docs/plans/context-box-prims.md
-    /// §Slice 1 row 1-2; v0.0.6 `context_main.text_color`). FAITHFUL storage
-    /// — round-trips exactly (`itemize.satyh`'s bullet `fill` color depends
-    /// on it) — but not yet *consumed* by either PDF writer's glyph
-    /// emission, which still always draws in black.
+    /// `set-text-color`/`get-text-color` (row 1-2; v0.0.6
+    /// `context_main.text_color`). FAITHFUL storage — round-trips exactly
+    /// (`itemize.satyh`'s bullet `fill` color depends on it) — but not yet
+    /// *consumed* by either PDF writer's glyph emission, which still always
+    /// draws in black.
     pub text_color: Color,
     /// `set-hyphen-penalty` (row 3; v0.0.6 `context_main.hyphen_badness`).
-    /// Consumed by `rustyfi-lang`'s `flush_word` injection
-    /// (`docs/plans/design-hyphenation.md` §4/D6) as each injected
-    /// `Discretionary`'s `penalty`, but only when `hyphen_dictionary` is
-    /// `Some(_)` — with no dictionary installed this field is stored
-    /// faithfully and has no layout effect, same as before.
+    /// Consumed by `rustyfi-lang`'s `flush_word` injection as each
+    /// injected `Discretionary`'s `penalty`, but only when
+    /// `hyphen_dictionary` is `Some(_)` — with no dictionary installed
+    /// this field is stored faithfully and has no layout effect, same as
+    /// before.
     pub hyphen_badness: i64,
     /// The installed hyphenation dictionary
     /// (`set-hyphenation-dictionary`/`load-hyphenation-dictionary`; v0.0.6
     /// `context_main.hyphen_dictionary`). `None` (the `Context::initial`
     /// default) is a **documented deviation** from upstream's
     /// default-English: hyphenation is opt-in per document/class here, so
-    /// that no existing fixture's layout changes
-    /// (`docs/plans/design-hyphenation.md` D4/§6, the byte-identity gate).
-    /// `flush_word` (`rustyfi-lang`) runs the hyphenation branch **iff**
-    /// this is `Some(tag)` and the run's script is `Latin` (D5).
+    /// that no existing fixture's layout changes (D4/§6, the byte-identity
+    /// gate). `flush_word` (`rustyfi-lang`) runs the hyphenation branch
+    /// **iff** this is `Some(tag)` and the run's script is `Latin` (D5).
     pub hyphen_dictionary: Option<HyphenLang>,
     /// Minimum number of chars that must precede an accepted hyphenation
     /// break (`set-hyphen-min`'s first argument; v0.0.6
@@ -180,11 +178,10 @@ pub struct Context {
     pub right_hyphen_min: i64,
     /// `set-space-ratio`'s three fields (row 4; v0.0.6
     /// `context_main.space_natural`/`space_shrink`/`space_stretch`). Wired
-    /// into `text_to_boxes`'s interword-glue construction
-    /// (`docs/plans/design-silent-fields.md` FIX 2): natural width =
-    /// `font_size * space_natural`, shrink = `font_size * space_shrink`,
-    /// stretch = `font_size * space_stretch` — each a ratio of `font_size`
-    /// directly, not of the natural width.
+    /// into `text_to_boxes`'s interword-glue construction (FIX 2): natural
+    /// width = `font_size * space_natural`, shrink = `font_size *
+    /// space_shrink`, stretch = `font_size * space_stretch` — each a ratio
+    /// of `font_size` directly, not of the natural width.
     pub space_natural: f64,
     pub space_shrink: f64,
     pub space_stretch: f64,
@@ -215,11 +212,11 @@ pub struct Context {
     /// as `math_command`; the closure lives in `Interp::math_commands`.
     pub code_text_command: Option<MathCmdId>,
     /// `\mathrm`/`\bm`/… restyling target (v0.0.6 `context_main.
-    /// math_char_class`, `docs/plans/math-engine.md` §F): which Mathematical-
-    /// Alphanumeric style block a plain `${…}` letter resolves to. Set by
-    /// `Math::ChangeCharClass`'s layout arm (`primitives.rs`), consulted by
-    /// `resolve_variant_char`. Defaults to `Italic` — v0.0.6's own default
-    /// (plain math letters are italic unless restyled).
+    /// math_char_class`): which Mathematical- Alphanumeric style block a
+    /// plain `${…}` letter resolves to. Set by `Math::ChangeCharClass`'s
+    /// layout arm (`primitives.rs`), consulted by `resolve_variant_char`.
+    /// Defaults to `Italic` — v0.0.6's own default (plain math letters are
+    /// italic unless restyled).
     pub math_char_class: MathCharClass,
     /// Upstream `default_math_class_map` (`primitives.cppo.ml:465-480`):
     /// whole-TOKEN entries (`=`, `-`, `,`, …) consulted BEFORE the per-char
@@ -228,12 +225,12 @@ pub struct Context {
     /// overrides it; cloning a `Context` (routine — every `..ctx` spread)
     /// stays a cheap refcount bump.
     pub math_class_map: Arc<BTreeMap<String, (String, MathKind)>>,
-    /// `set-math-variant-char`'s runtime override table (gap 7,
-    /// `docs/plans/math-engine.md` §F): `(source char, style) -> replacement
-    /// char`, consulted BEFORE `default_math_variant_char`'s built-in
-    /// Mathematical-Alphanumeric remap. Empty by default. `Arc` for the same
-    /// cheap-clone reason as `math_class_map`; `set-math-variant-char`
-    /// copy-on-writes it via `Arc::make_mut`.
+    /// `set-math-variant-char`'s runtime override table (gap 7): `(source
+    /// char, style) -> replacement char`, consulted BEFORE
+    /// `default_math_variant_char`'s built-in Mathematical-Alphanumeric
+    /// remap. Empty by default. `Arc` for the same cheap-clone reason as
+    /// `math_class_map`; `set-math-variant-char` copy-on-writes it via
+    /// `Arc::make_mut`.
     pub math_variant_char_map: Arc<BTreeMap<(char, MathCharClass), char>>,
     /// V0_1-only: how many script-nesting levels deep this reading context
     /// sits (`math-split` spec §3.3's `enter_script`, port of `dev-0-1-0
@@ -242,10 +239,9 @@ pub struct Context {
     pub math_script_level: MathScriptLevel,
     /// Whether the current math sub-formula is laid out "cramped" (TeXbook
     /// Appendix G): set on the recursive layout `Context` for a radical's
-    /// radicand, a fraction's denominator, and any subscript
-    /// (`docs/plans/design-math-cramped.md` §2.2). Orthogonal to
-    /// `math_script_level` and, unlike it, read by BOTH V0_0 and V0_1
-    /// (the bit rides the shared layout-recursion clone, not a version-gated
+    /// radicand, a fraction's denominator, and any subscript. Orthogonal to
+    /// `math_script_level` and, unlike it, read by BOTH V0_0 and V0_1 (the
+    /// bit rides the shared layout-recursion clone, not a version-gated
     /// primitive). Only consumed by `sup_shift_clamped`'s superscript
     /// shift-up formula — see the design doc §2.3 for why that is the sole
     /// positioning formula cramped changes in this port's feature set.
@@ -341,8 +337,7 @@ impl Default for PageGeometry {
 }
 
 impl PageGeometry {
-    /// Build a geometry from `page`'s paper dimensions
-    /// (docs/plans/document-page-model.md §"`page` -> dimensions"). Only
+    /// Build a geometry from `page`'s paper dimensions. Only
     /// `paper_width`/`paper_height` are read by the PDF writer; the
     /// `text_*` fields are vestigial here — each page's real text area
     /// lives in its `PlacedLine` coordinates, set per page by the

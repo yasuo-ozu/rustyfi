@@ -181,12 +181,12 @@ fn compile_document_with_stdlib(
     compile_document_cst(&merged, metrics)
 }
 
-/// Collects every text run on page 0, body first. Since
-/// `docs/plans/document-page-model.md` Slice 1 rewrote `stdja-mini`'s
-/// `document` to call the real 4-arg `page-break`, every one-page fixture
-/// now also carries a footer rendering `arabic pbinfo#page-number` — placed
-/// (via `place_block_at`) *after* the body's lines, so it always shows up
-/// as this vec's trailing `"1"` element on a single-page document.
+/// Collects every text run on page 0, body first. Since Slice 1 rewrote
+/// `stdja-mini`'s `document` to call the real 4-arg `page-break`, every
+/// one-page fixture now also carries a footer rendering `arabic
+/// pbinfo#page-number` — placed (via `place_block_at`) *after* the body's
+/// lines, so it always shows up as this vec's trailing `"1"` element on a
+/// single-page document.
 fn document_words(src: &str) -> Vec<String> {
     let doc = compile_document_with_stdlib(src, &Mono).unwrap();
     doc.pages[0]

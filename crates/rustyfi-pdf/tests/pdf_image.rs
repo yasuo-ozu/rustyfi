@@ -1,14 +1,13 @@
-//! `load-pdf-image` PDF writer coverage (docs/plans/design-load-pdf-image.md
-//! §3): a page whose only content is a `PureHorzBox::Image` box carrying a
-//! `pdf: Some(PdfPageResource { .. })` payload must render as a `/Subtype
-//! /Form` XObject (not the raster `/Subtype /Image` path — that stays
-//! covered, byte-for-byte, by `image.rs`), remapping its imported
-//! `/Resources` object graph and scaling it onto the box with the §3.3 CTM
-//! formula. Mirrors `graphics.rs`/`frame_box.rs`'s hand-built-`Page` style
-//! (no `rustyfi-lang` parse/eval needed to exercise the writer in
-//! isolation); `crates/rustyfi-lang/tests/pdf_images.rs` covers the
-//! `load-pdf-image` PRIMITIVE (parsing, MediaBox extraction, error paths)
-//! separately.
+//! `load-pdf-image` PDF writer coverage: a page whose only content is a
+//! `PureHorzBox::Image` box carrying a `pdf: Some(PdfPageResource { .. })`
+//! payload must render as a `/Subtype /Form` XObject (not the raster
+//! `/Subtype /Image` path — that stays covered, byte-for-byte, by
+//! `image.rs`), remapping its imported `/Resources` object graph and scaling
+//! it onto the box with the §3.3 CTM formula. Mirrors
+//! `graphics.rs`/`frame_box.rs`'s hand-built-`Page` style (no `rustyfi-lang`
+//! parse/eval needed to exercise the writer in isolation);
+//! `crates/rustyfi-lang/tests/pdf_images.rs` covers the `load-pdf-image`
+//! PRIMITIVE (parsing, MediaBox extraction, error paths) separately.
 //!
 //! Numeric assertions (the placement `cm` scale/translate, `/BBox`,
 //! `/Matrix`, the copied `/ExtGState` object) are checked by re-parsing the

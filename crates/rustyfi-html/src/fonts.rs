@@ -1,15 +1,15 @@
-//! HTML output backend, Slice 3 (`docs/plans/design-html-output.md` §Slice
-//! 3: "real fonts + math", THE font-metric-fidelity fix). Emits one
-//! `@font-face` rule per physical font FILE the document actually
-//! referenced, embedding that file's raw bytes as a base64
-//! `data:font/ttf;base64,...` URI — so the browser lays text out in the
-//! SAME face whose metrics the layout engine measured with, closing the
-//! design doc's §Risks "font-metric fidelity" gap. Mirrors the CID PDF
-//! writer's own per-FILE dedup (`cid.rs`'s `FontUsage`/`usage: BTreeMap
-//! <usize, FontUsage>`, keyed by [`rustyfi_pdf::TtfFontStore::file_index`]
-//! rather than by `FontKey`, since bold/oblique with no configured face
-//! fall back to sharing the regular file — one `@font-face` per FILE, not
-//! per `FontKey` slot, avoids embedding the same bytes twice).
+//! HTML output backend, Slice 3 (: "real fonts + math", THE
+//! font-metric-fidelity fix). Emits one `@font-face` rule per physical
+//! font FILE the document actually referenced, embedding that file's raw
+//! bytes as a base64 `data:font/ttf;base64,...` URI — so the browser lays
+//! text out in the SAME face whose metrics the layout engine measured
+//! with, closing the design doc's §Risks "font-metric fidelity" gap.
+//! Mirrors the CID PDF writer's own per-FILE dedup (`cid.rs`'s
+//! `FontUsage`/`usage: BTreeMap <usize, FontUsage>`, keyed by
+//! [`rustyfi_pdf::TtfFontStore::file_index`] rather than by `FontKey`,
+//! since bold/oblique with no configured face fall back to sharing the
+//! regular file — one `@font-face` per FILE, not per `FontKey` slot,
+//! avoids embedding the same bytes twice).
 
 use std::collections::BTreeSet;
 use std::fmt::Write as _;

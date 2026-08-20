@@ -1,5 +1,4 @@
-//! `--format` output-format selector
-//! (`docs/plans/design-html-output.md` §CLI surface).
+//! `--format` output-format selector (surface).
 //!
 //! Deliberately NOT a clap `ValueEnum`: this crate uses *builder*-style clap
 //! throughout (`dispatch::compile_command`), and `--target-version` sets the
@@ -12,11 +11,11 @@
 /// `--format` keeps every existing invocation's behavior byte-identical to
 /// before this flag existed.
 ///
-/// `HtmlReflow` (`docs/plans/design-reflowable-html.md` §5 "CLI"): a THIRD,
-/// independent format alongside `Pdf`/`Html` — the reflowable/semantic HTML
-/// twin (`rustyfi_html::render_html_reflow`), not a variant of `Html`. Adding
-/// it changes no existing match arm's behavior (every prior exhaustive
-/// `match format { ... }` gains one new arm; `Pdf`/`Html` are untouched).
+/// `HtmlReflow` ("CLI"): a THIRD, independent format alongside `Pdf`/`Html` —
+/// the reflowable/semantic HTML twin (`rustyfi_html::render_html_reflow`),
+/// not a variant of `Html`. Adding it changes no existing match arm's
+/// behavior (every prior exhaustive `match format { ... }` gains one new arm;
+/// `Pdf`/`Html` are untouched).
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
 pub enum OutputFormat {
     #[default]

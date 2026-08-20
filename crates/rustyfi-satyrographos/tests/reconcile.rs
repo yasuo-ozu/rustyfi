@@ -286,10 +286,9 @@ fn empty_source_table_is_rejected() {
 }
 
 // ---------------------------------------------------------------------------
-// Saphe 7d slice S3: `{ git = … }` package sources
-// (`docs/plans/design-saphe-7d-network.md` §3 S3) — a local git repo fixture
-// only, never real network (same discipline as `tests/registry.rs`'s bare-git
-// index fixture).
+// Saphe 7d slice S3: `{ git = … }` package sources (S3) — a local git repo
+// fixture only, never real network (same discipline as `tests/registry.rs`'s
+// bare-git index fixture).
 // ---------------------------------------------------------------------------
 
 fn git(args: &[&str], cwd: Option<&Path>) {

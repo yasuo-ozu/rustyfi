@@ -1,7 +1,6 @@
 % std-ja-report.satyh — SATySFi 0.1 `std-ja-report` document class
-% `StdJaReport`, vendored for Legacy packaging
-% (docs/plans/rustyfi-0-1-0-support.md §2 P2 / §4 phase 6 — wave-4 batch
-% A). Source:
+% `StdJaReport`, vendored for Legacy packaging (P2 / §4 phase 6 — wave-4
+% batch A). Source:
 %   saphe-split@b836d512:lib-rustyfi/packages/std-ja-report/
 %   std-ja-report.0.0.1/src/std-ja-report.satyh (580 lines) — a sibling of
 %   `std-ja-book.satyh`, adding chapters/theorem-environments/multicolumn

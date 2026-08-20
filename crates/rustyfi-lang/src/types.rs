@@ -29,10 +29,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// `base_type` (`types.cppo.ml:255`) that this milestone's primitives need.
 /// (`EnvType`/`RegExpType`/`InputPosType` are not yet used by anything in
 /// `primitives.rs` and are left out; add them here when a primitive needs
-/// them. `ImageType` was added for `load-image`/`use-image-by-width`
-/// (`docs/plans/math-images.md` §Slice 1), and `PrePathType`/`PathType`/
-/// `GraphicsType` for the Slice-1 graphics primitives — see
-/// `docs/plans/graphics-subsystem.md`.)
+/// them. `ImageType` was added for `load-image`/`use-image-by-width`, and
+/// `PrePathType`/`PathType`/ `GraphicsType` for the Slice-1 graphics
+/// primitives.)
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum BaseType {
     Unit,
@@ -56,7 +55,7 @@ pub enum BaseType {
     /// both halves) and no value ever types as this under V0_0.
     MathBoxes,
     /// `image` (v0.0.6: `ImageType`) — a decoded raster image resource
-    /// (`load-image`'s result; `docs/plans/math-images.md` §Slice 1).
+    /// (`load-image`'s result).
     Image,
     /// `inline-boxes` (v0.0.6: `BoxRowType`).
     InlineBoxes,
@@ -71,9 +70,9 @@ pub enum BaseType {
     /// `graphics` (v0.0.6: `GraphicsType`).
     Graphics,
     /// `text-info` (v0.0.6: `TextInfoType`) — the text-mode context
-    /// (`deepen-indent`/`get-initial-text-info`/`break`; docs/plans/
-    /// context-box-prims.md §G sliver — see primitives.rs for the scoping
-    /// note: the text/html backends themselves are out of scope).
+    /// (`deepen-indent`/`get-initial-text-info`/`break`; sliver — see
+    /// primitives.rs for the scoping note: the text/html backends
+    /// themselves are out of scope).
     TextInfo,
 }
 

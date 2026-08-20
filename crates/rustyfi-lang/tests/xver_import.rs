@@ -1,5 +1,5 @@
-//! Slices X1 + X2a (`docs/plans/design-cross-version-import.md`): a `V0_1`
-//! document `@require:`-ing a `V0_0` package end-to-end.
+//! Slices X1 + X2a: a `V0_1` document `@require:`-ing a `V0_0` package
+//! end-to-end.
 //!
 //! Driven through the REAL loader (`rustyfi_loader::load`, `LoadOptions {
 //! version: V0_1, .. }`) so the per-file detection rule (`load_legacy`'s Q4
@@ -44,7 +44,7 @@
 //!   under X2a (see `xver_page_break_internal_renders` above), so this test
 //!   is repurposed to the type-half shape the guard still covers.
 //! - [`xver_internal_forked_type_ascription_renders`] (X2b headline,
-//!   `docs/plans/design-cross-version-import.md`'s "Slice X2" §X2.3/X2.4):
+//! "Slice X2" §X2.3/X2.4):
 //!   the guard's TYPE half is narrowed to the export boundary only — a
 //!   `V0_0` package whose exported command (still the NEUTRAL
 //!   `block-boxes -> document`) uses an INTERNAL, explicitly `page`-typed
@@ -329,11 +329,9 @@ fn load_xver_pagebreak_fixture(tag: &str, entry_tail: &str) -> Vec<rustyfi_loade
     program.files
 }
 
-/// X2a headline (`docs/plans/design-cross-version-import.md`
-/// §"Slice X2 — per-group primitive environment", X2.6's
-/// `xver_page_break_internal_renders`): the case X1 hard-rejected
-/// (`negative_case_forked_primitive_is_rejected` used to pin exactly this
-/// shape) now renders end-to-end.
+/// X2a headline (X2.6's `xver_page_break_internal_renders`): the case X1
+/// hard-rejected (`negative_case_forked_primitive_is_rejected` used to
+/// pin exactly this shape) now renders end-to-end.
 #[test]
 fn xver_page_break_internal_renders() {
     let files = load_xver_pagebreak_fixture("headline", "make-doc body");
@@ -566,13 +564,13 @@ fn negative_case_forked_type_on_boundary_is_still_rejected() {
 }
 
 // ============================================================================
-// X3a (`docs/plans/design-cross-version-import.md`'s "Slice X3 — forked-type
-// export adapter", X3.6's test plan): `math` is the sole (a)-class forked
-// type — representationally identical to `V0_1`'s `math-text` (same shared
-// `Value::MathText`/`Value::Math`, `types.rs`'s `BaseType::MathText`) — so a
-// `V0_0` export naming it now RELABELS instead of rejecting. Everything
-// else forked (`page`, and every opaque nominal — `deco` included, X3a
-// defers a real value adapter to X3b) still hard-rejects.
+// X3a ("Slice X3 — forked-type export adapter", X3.6's test plan): `math` is
+// the sole (a)-class forked type — representationally identical to `V0_1`'s
+// `math-text` (same shared `Value::MathText`/`Value::Math`, `types.rs`'s
+// `BaseType::MathText`) — so a `V0_0` export naming it now RELABELS instead
+// of rejecting. Everything else forked (`page`, and every opaque nominal —
+// `deco` included, X3a defers a real value adapter to X3b) still
+// hard-rejects.
 // ============================================================================
 
 /// The `V0_0` package: a `type .. = .. of math` variant (the ONE surface

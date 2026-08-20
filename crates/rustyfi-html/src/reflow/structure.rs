@@ -1,8 +1,8 @@
-//! Above-flat structure recovery (`docs/plans/design-reflowable-html.md`
-//! §6 "S3" / §2 "the one real lever: `extras.outline`" / §3's `Tabular` row).
-//! Everything here is additive to Slices 1/2's flat paragraph-and-frame
-//! sequence; nothing in this module changes behavior when its inputs are
-//! absent (an empty `extras.outline`, no `Tabular` box in the flow).
+//! Above-flat structure recovery ("S3" / §2 "the one real lever:
+//! `extras.outline`" / §3's `Tabular` row). Everything here is additive to
+//! Slices 1/2's flat paragraph-and-frame sequence; nothing in this module
+//! changes behavior when its inputs are absent (an empty `extras.outline`, no
+//! `Tabular` box in the flow).
 //!
 //! ## Headings — best-effort, but a STRUCTURAL match, not a heuristic
 //!
@@ -47,12 +47,12 @@
 //! the box tree alone would mean inventing structure the box tree does not
 //! expose, exactly the line this module's heading logic refuses to cross.
 //!
-//! `docs/plans/design-reflow-s4-lists.md` resolves this with a NEW,
-//! genuinely additive lever this module does NOT implement: dedicated inert
-//! marker boxes (`VertBox::ListMark`/`PureHorzBox::InlineMark`) emitted
-//! POSITIONALLY by a modified `lib-rustyfi/dist-v01/packages/itemize.satyh`
-//! (list/item boundaries, ordered-vs-unordered, bullet fencing) — the direct
-//! analogue of `FrameStart`/`FrameEnd` above, not a side-channel record (a
+//! resolves this with a NEW, genuinely additive lever this module does NOT
+//! implement: dedicated inert marker boxes
+//! (`VertBox::ListMark`/`PureHorzBox::InlineMark`) emitted POSITIONALLY by a
+//! modified `lib-rustyfi/dist-v01/packages/itemize.satyh` (list/item
+//! boundaries, ordered-vs-unordered, bullet fencing) — the direct analogue
+//! of `FrameStart`/`FrameEnd` above, not a side-channel record (a
 //! side-channel fails here for the same reason a `DecoId`-keyed table can't
 //! disambiguate "this is a list item frame" from a `+figure`'s frame — see
 //! the design doc §3's rejection of that option). See `block.rs`'s

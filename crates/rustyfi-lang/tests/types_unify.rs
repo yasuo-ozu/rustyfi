@@ -493,7 +493,7 @@ fn every_registered_primitive_has_a_type() {
         "inline-skip",
         "inline-glue",
         "block-skip",
-        // ---- docs/plans/design-reflow-s4-lists.md §4.1: the reflow
+        // ---- the reflow
         // marker-box constructors ----
         "list-mark",
         "inline-mark",
@@ -519,11 +519,11 @@ fn every_registered_primitive_has_a_type() {
         "string-unexplode",
         "display-message",
         "abort-with-message",
-        // ---- Slice 1 additions (raster images; docs/plans/math-images.md) ----
+        // ---- Slice 1 additions (raster images) ----
         "load-image",
         "load-pdf-image",
         "use-image-by-width",
-        // ---- Slice 1 graphics primitives (docs/plans/graphics-subsystem.md) ----
+        // ---- Slice 1 graphics primitives ----
         "start-path",
         "line-to",
         "terminate-path",
@@ -531,12 +531,11 @@ fn every_registered_primitive_has_a_type() {
         "fill",
         "stroke",
         "inline-graphics",
-        // ---- docs/plans/table-subsystem.md §Slice 1 ----
+        // ---- tables, Slice 1 ----
         "tabular",
-        // ---- roadmap C2 (docs/plans/graphics-subsystem.md §D) ----
+        // ---- roadmap C2 ----
         "inline-graphics-outer",
-        // ---- gr.satyh roadmap prims (docs/plans/graphics-subsystem.md
-        // §Full roadmap A/B/C/D) ----
+        // ---- gr.satyh roadmap prims (§Full roadmap A/B/C/D) ----
         "bezier-to",
         "close-with-bezier",
         "shift-path",
@@ -547,22 +546,22 @@ fn every_registered_primitive_has_a_type() {
         "get-path-bbox",
         "dashed-stroke",
         "draw-text",
-        // ---- pervasives.satyh unblockers (docs/plans/stdlib-port.md) ----
+        // ---- pervasives.satyh unblockers ----
         "get-natural-metrics",
         "inline-frame-outer",
         "set-manual-rising",
         "script-guard",
         "discretionary",
-        // ---- Tier-2 decoration/graphics packages (docs/plans/stdlib-port.md) ----
+        // ---- Tier-2 decoration/graphics packages ----
         "get-axis-height",
-        // ---- docs/plans/hooks-annotations-crossref.md §Slice 1 ----
+        // ---- hooks / annotations / cross-references, Slice 1 ----
         "hook-page-break",
         "hook-page-break-block",
         "register-cross-reference",
         "get-cross-reference",
         // ---- group E1: hooks-annotations-crossref.md §A closer ----
         "probe-cross-reference",
-        // ---- docs/plans/math-engine.md §A + §G ----
+        // ---- + §G ----
         "math-char",
         "math-big-char",
         "math-char-with-kern",
@@ -595,7 +594,7 @@ fn every_registered_primitive_has_a_type() {
         "unite-path",
         "set-min-gap-of-lines",
         "omit-skip-after",
-        // ---- docs/plans/context-box-prims.md §Slice 1 (rows 1-10) ----
+        // ---- (rows 1-10) ----
         "set-text-color",
         "get-text-color",
         "set-hyphen-penalty",
@@ -608,22 +607,21 @@ fn every_registered_primitive_has_a_type() {
         "set-font",
         "set-code-text-command",
         "get-natural-length",
-        // ---- docs/plans/hooks-annotations-crossref.md §B/§D (annot.satyh) ----
+        // ---- (annot.satyh) ----
         "get-leftmost-script",
         "get-rightmost-script",
         "inline-frame-breakable",
         "register-destination",
         "register-link-to-uri",
         "register-link-to-location",
-        // ---- docs/plans/build-order-to-stdja.md step 8/9 orphans ----
+        // ---- step 8/9 orphans ----
         "set-dominant-wide-script",
         "set-dominant-narrow-script",
         "set-language",
         "set-every-word-break",
         "register-outline",
         "extract-string",
-        // ---- group E2: dominant-script/language getters (context-box-
-        // prims.md §C landed) ----
+        // ---- group E2: dominant-script/language getters (context-box- prims.md §C landed) ----
         "get-dominant-wide-script",
         "get-dominant-narrow-script",
         "get-language",
@@ -642,7 +640,7 @@ fn every_registered_primitive_has_a_type() {
         NAMES.len(),
         177,
         "keep this list in sync with primitives.rs's prims! table \
-         (docs/plans/design-reflow-s4-lists.md §4.1 added 2: list-mark, inline-mark; \
+         (reflow S4 lists added 2: list-mark, inline-mark; \
          layout-fidelity slydifi added 2: set-space-ratio-between-scripts, and \
          set-hyphen-min which had a prim+type but was missing from the name lists)"
     );

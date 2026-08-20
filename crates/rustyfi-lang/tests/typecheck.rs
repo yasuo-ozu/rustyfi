@@ -380,8 +380,7 @@ fn primitive_names_are_cross_checked_against_primitives_source() {
          set-hyphenation-dictionary, set-unicode-char-database, here; G9 \
          added 1: inline-frame-inner — the primitive was already registered \
          in primitives.rs/prim_types.rs, only this list omitted it; \
-         docs/plans/design-reflow-s4-lists.md §4.1 added 2: list-mark, \
-         inline-mark)"
+         reflow S4 lists added 2: list-mark, inline-mark)"
     );
     for name in typecheck::PRIMITIVE_NAMES {
         // Escape backslashes the way they'd actually appear in Rust source
@@ -623,10 +622,10 @@ fn module_qualified_inline_command_reference_has_a_command_type() {
 }
 
 // ============================================================================
-// Slice 1: raster images (docs/plans/math-images.md). These only exercise
-// typechecking — `load-image` is never actually evaluated here, so no real
-// file needs to exist on disk (a runtime round trip against a real decoded
-// PNG lives in `crates/rustyfi-lang/tests/images.rs`).
+// Slice 1: raster images. These only exercise typechecking — `load-image`
+// is never actually evaluated here, so no real file needs to exist on disk
+// (a runtime round trip against a real decoded PNG lives in
+// `crates/rustyfi-lang/tests/images.rs`).
 // ============================================================================
 
 #[test]
@@ -642,11 +641,10 @@ fn image_primitives_typecheck_end_to_end() {
     );
 }
 
-// Slice 1 graphics primitives (docs/plans/graphics-subsystem.md §2/§5): no
-// `@require`, no type synonyms (`point` isn't parsed as a synonym yet — see
-// the plan's §5) — just the seven new prims' own signatures, exercised by
-// inference alone, exactly the "minimal self-contained module" the plan's
-// acceptance criterion asks for.
+// Slice 1 graphics primitives: no `@require`, no type synonyms (`point`
+// isn't parsed as a synonym yet — see the plan's §5) — just the seven new
+// prims' own signatures, exercised by inference alone, exactly the "minimal
+// self-contained module" the plan's acceptance criterion asks for.
 // ============================================================================
 
 #[test]
@@ -705,8 +703,7 @@ fn fill_rejects_a_non_color_first_argument() {
 }
 
 // ============================================================================
-// Slice 1: `tabular` + the `cell` variant
-// (docs/plans/table-subsystem.md §Slice 1/§5) — a self-contained
+// Slice 1: `tabular` + the `cell` variant — a self-contained
 // `\tabular`-shaped `let-inline` command, mirroring `tabular.satyh`'s real
 // `\tabular` (positional cell builders, no record/option front-end — that's
 // roadmap G) exercises `NormalCell`/`MultiCell`/`EmptyCell` inferring
@@ -759,10 +756,9 @@ fn multi_cell_ctor_infers_the_cell_type() {
 }
 
 // ============================================================================
-// Slice 1 hooks + cross-references
-// (docs/plans/hooks-annotations-crossref.md §Slice 1) — `hook-page-break`'s
-// closure argument receives a `page-break-info` closed record row (`{|
-// page-number : int |}`) with no nominal type needed, and
+// Slice 1 hooks + cross-references — `hook-page-break`'s closure argument
+// receives a `page-break-info` closed record row (`{| page-number : int
+// |}`) with no nominal type needed, and
 // `register-cross-reference`/`get-cross-reference` round-trip through the
 // `string option` the built-in `option` variant provides.
 // ============================================================================
@@ -807,11 +803,10 @@ fn get_cross_reference_rejects_a_non_string_argument() {
 }
 
 // ============================================================================
-// Slice 1: the real 4-arg `page-break`
-// (docs/plans/document-page-model.md §Slice 1) — `page-content-scheme`
-// (`{| text-origin : point; text-height : length |}`) and `page-parts`
-// (`{| header-origin; header-content; footer-origin; footer-content |}`)
-// are structural closed rows, same as `pbinfo` itself: no nominal scheme
+// Slice 1: the real 4-arg `page-break` — `page-content-scheme` (`{|
+// text-origin : point; text-height : length |}`) and `page-parts` (`{|
+// header-origin; header-content; footer-origin; footer-content |}`) are
+// structural closed rows, same as `pbinfo` itself: no nominal scheme
 // type needed, just two ordinary `fun pbinfo -> record` closures.
 // ============================================================================
 
@@ -865,10 +860,10 @@ fn user_defined_paper_takes_a_length_pair() {
 }
 
 // ============================================================================
-// `docs/plans/class-signature-lang-gaps.md` gap 1: first-class command
-// values `(command \cmd)` — elaborates to a plain `Var` referencing the
-// command's own `let-inline` binding, so it infers exactly that binding's
-// `InlineCmd` scheme (`Checker::command_scheme`).
+// gap 1: first-class command values `(command \cmd)` — elaborates to a
+// plain `Var` referencing the command's own `let-inline` binding, so it
+// infers exactly that binding's `InlineCmd` scheme
+// (`Checker::command_scheme`).
 // ============================================================================
 
 #[test]

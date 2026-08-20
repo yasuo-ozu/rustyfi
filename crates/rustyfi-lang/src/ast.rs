@@ -7,7 +7,7 @@
 //! Every node type here is generic over `I`, the representation of a
 //! **lexical identifier** — precisely those names that become keys in the
 //! runtime environment ([`crate::value::Env`]). Two instantiations exist
-//! (`docs/plans/design-symbol-debruijn-slots.md` Phase 1):
+//! (Phase 1):
 //!
 //! * `Ast<Symbol<'s>>` — the *compile-side* tree, produced by
 //!   [`crate::elaborate`] and consumed by [`crate::typecheck`]. Identifiers
@@ -76,13 +76,13 @@ pub enum Ast<I = String> {
     /// Mutually recursive bindings (`let-rec … and …`); every body must be a
     /// `Lambda`, all names are in scope in all bodies.
     LetRecIn(Vec<(I, Rc<Ast<I>>)>, Box<Ast<I>>),
-    /// `let-math \cmd param* = expr in body` (`docs/plans/math-engine.md`
-    /// §G) — a math-command binding. Evaluates identically to `LetIn` (a
-    /// plain named binding; see `eval.rs`); the DISTINCT variant exists
-    /// purely so the typechecker can tell it apart from an ordinary
-    /// `\`-sigiled `LetIn` (a `let-inline` binding or a qualified-name
-    /// alias of one) without re-deriving that from the shared `\` sigil —
-    /// see `typecheck.rs`'s `Checker::math_command_scheme`.
+    /// `let-math \cmd param* = expr in body` — a math-command binding.
+    /// Evaluates identically to `LetIn` (a plain named binding; see
+    /// `eval.rs`); the DISTINCT variant exists purely so the typechecker
+    /// can tell it apart from an ordinary `\`-sigiled `LetIn` (a
+    /// `let-inline` binding or a qualified-name alias of one) without
+    /// re-deriving that from the shared `\` sigil — see `typecheck.rs`'s
+    /// `Checker::math_command_scheme`.
     LetMathIn(I, Box<Ast<I>>, Box<Ast<I>>),
     IfThenElse(Box<Ast<I>>, Box<Ast<I>>, Box<Ast<I>>),
     Match(Box<Ast<I>>, Vec<MatchArm<I>>),
@@ -140,16 +140,14 @@ pub enum Ast<I = String> {
         body: Rc<Ast<I>>,
     },
     /// A version tag around one spliced cross-version dependency binding's
-    /// RHS (Slice X2a, `docs/plans/design-cross-version-import.md`
-    /// §"Slice X2 — per-group primitive environment", Option C).
-    /// `elaborate.rs`'s cross-version splice wraps each binding contributed
-    /// by a `LoadedCst::V0_0` dependency (`lib.rs`'s
-    /// `compile_document_v1_with_trials` splice arm) in
-    /// `VersionScope(V0_0, rhs)`, at RHS granularity (never the
-    /// surrounding `LetIn`/`LetRecIn` node, and never the continuation that
-    /// follows it — see `elaborate::elaborate_program_with_versions`'s doc
-    /// comment). Three consumers read the tag, all pushing/popping a cursor
-    /// around recursing into `body`:
+    /// RHS (Slice X2a,, Option C). `elaborate.rs`'s cross-version splice
+    /// wraps each binding contributed by a `LoadedCst::V0_0` dependency
+    /// (`lib.rs`'s `compile_document_v1_with_trials` splice arm) in
+    /// `VersionScope(V0_0, rhs)`, at RHS granularity (never the surrounding
+    /// `LetIn`/`LetRecIn` node, and never the continuation that follows it
+    /// — see `elaborate::elaborate_program_with_versions`'s doc comment).
+    /// Three consumers read the tag, all pushing/popping a cursor around
+    /// recursing into `body`:
     /// - `compile.rs`'s `Compiler::current_version` — which base
     ///   environment (`V0_1`'s or `V0_0`'s) an unshadowed `Ast::Var`
     ///   constant-folds against, so a version-forked primitive
@@ -505,10 +503,10 @@ impl<I> MathElem<I> {
     }
 }
 
-/// **The compile membrane** (`docs/plans/design-symbol-debruijn-slots.md`
-/// §1): resolve every interned `Symbol` in a branded, elaborated tree back to
-/// its text, producing the lifetime-free `Ast<String>` that
-/// [`crate::compile`] lowers and the whole runtime works on.
+/// **The compile membrane**: resolve every interned `Symbol` in a branded,
+/// elaborated tree back to its text, producing the lifetime-free
+/// `Ast<String>` that [`crate::compile`] lowers and the whole runtime works
+/// on.
 ///
 /// This is where the identifier brand is discharged. Nothing downstream —
 /// the compiler, `CompiledExpr` (whose boxed closure is implicitly

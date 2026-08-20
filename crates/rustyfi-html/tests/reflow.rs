@@ -1,10 +1,10 @@
 //! Integration tests for the reflowable/semantic HTML writer
-//! (`render_html_reflow`, `docs/plans/design-reflowable-html.md` Slice 1):
-//! hand-built `Vec<VertBox>` fixtures (mirroring `tests/html.rs`'s synthetic
-//! box-construction style for the faithful writer) exercising paragraph
-//! grouping/splitting, frame/embedded-block nesting, inline run styling, and
-//! the "no absolute positioning" invariant that is the defining difference
-//! from the faithful mode.
+//! (`render_html_reflow`, Slice 1): hand-built `Vec<VertBox>` fixtures
+//! (mirroring `tests/html.rs`'s synthetic box-construction style for the
+//! faithful writer) exercising paragraph grouping/splitting,
+//! frame/embedded-block nesting, inline run styling, and the "no absolute
+//! positioning" invariant that is the defining difference from the faithful
+//! mode.
 
 use rustyfi_backend::{
     AnnotAction, Closing, Color, DecoId, DocExtras, FontKey, GraphicsElem, HorzStringInfo,
@@ -62,8 +62,8 @@ fn render_with_links(
     render_with_extras(vboxes, &DocExtras::default(), links, dests)
 }
 
-/// S3 (`docs/plans/design-reflowable-html.md` §6 "S3"): full-signature
-/// helper exercising `extras.outline` alongside `links`/`dests`.
+/// S3 ("S3"): full-signature helper exercising `extras.outline`
+/// alongside `links`/`dests`.
 fn render_with_extras(
     vboxes: &[VertBox],
     extras: &DocExtras,
@@ -206,10 +206,9 @@ fn run_text_is_html_escaped() {
     );
 }
 
-/// Slice 2 (`docs/plans/design-reflowable-html.md` §4 "Math"): a `Math` box
-/// (glyphs only, no `rules`) must render as a real inline `<svg>` — not the
-/// Slice 1 `math-placeholder` `<span>` — with the glyph's literal text
-/// inside an SVG `<text>` element.
+/// Slice 2 ("Math"): a `Math` box (glyphs only, no `rules`) must render as
+/// a real inline `<svg>` — not the Slice 1 `math-placeholder` `<span>` —
+/// with the glyph's literal text inside an SVG `<text>` element.
 #[test]
 fn math_renders_as_an_inline_svg_with_glyph_text() {
     let math_box = PureHorzBox::Math {
@@ -442,8 +441,8 @@ fn missing_reflow_source_renders_a_placeholder_instead_of_panicking() {
 }
 
 // ---------------------------------------------------------------------
-// Slice 3 (`docs/plans/design-reflowable-html.md` §6 "S3"): outline-driven
-// headings + navigable TOC, and real `<table>` from `Tabular`.
+// Slice 3 ("S3"): outline-driven headings + navigable TOC, and real
+// `<table>` from `Tabular`.
 // ---------------------------------------------------------------------
 
 /// A `Frame` whose `DecoId` resolves (via `dests`) to a destination name
@@ -642,7 +641,7 @@ fn tabular_renders_as_a_real_table_with_rows_and_cells() {
 }
 
 // ============================================================================
-// S4 (`docs/plans/design-reflow-s4-lists.md`): semantic lists + emphasis.
+// S4: semantic lists + emphasis.
 // ============================================================================
 
 /// `VertBox::ListMark(ListStart{ordered:false})`/`ItemStart`/`ItemEnd`/

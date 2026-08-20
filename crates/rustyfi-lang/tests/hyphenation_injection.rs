@@ -1,7 +1,6 @@
-//! S2 golden fixture (`docs/plans/design-hyphenation.md` §5 S2): drives
-//! `primitives::read_inline` (`text_to_boxes`'s `flush_word` hyphenation
-//! injection, §4) together with `rustyfi_backend::break_into_lines`,
-//! proving end to end:
+//! S2 golden fixture (S2): drives `primitives::read_inline`
+//! (`text_to_boxes`'s `flush_word` hyphenation injection, §4) together
+//! with `rustyfi_backend::break_into_lines`, proving end to end:
 //!
 //! 1. With no dictionary installed (`Context::initial`'s default), a
 //!    hyphenatable word still produces exactly one `InnerString` — the
@@ -186,12 +185,11 @@ fn narrow_column_forces_a_mid_word_break_with_a_trailing_hyphen() {
 
 #[test]
 fn a_huge_hyphen_penalty_disables_the_break_even_though_the_line_overflows() {
-    // The `set-hyphen-penalty 100000` disable idiom
-    // (`docs/plans/design-hyphenation.md` D6) does NOT extend to the case where
-    // the hyphenated line is itself overfull, because upstream's graph rule
-    // outranks any penalty: `hyphen-` is 42pt on this 40pt measure, so it is
-    // already `LBTooLong`, and a source node contributes only its FIRST
-    // too-long edge before being dropped (`lineBreak.ml:1017-1027`). The
+    // The `set-hyphen-penalty 100000` disable idiom (D6) does NOT extend to the
+    // case where the hyphenated line is itself overfull, because upstream's
+    // graph rule outranks any penalty: `hyphen-` is 42pt on this 40pt measure,
+    // so it is already `LBTooLong`, and a source node contributes only its
+    // FIRST too-long edge before being dropped (`lineBreak.ml:1017-1027`). The
     // whole-word line is that node's SECOND too-long option, so it is never
     // offered — no penalty can bring back an edge the graph never had.
     //
@@ -226,7 +224,7 @@ fn a_huge_hyphen_penalty_disables_the_break_even_though_the_line_overflows() {
     );
 }
 
-// ---- S3 (`docs/plans/design-hyphenation.md` §S3) ---------------------------
+// ---- S3 ---------------------------
 
 /// Item 1 (soft-hyphen priority): with a dictionary installed, an explicit
 /// U+00AD embedded in the input word must win over dictionary-derived

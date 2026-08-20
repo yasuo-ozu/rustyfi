@@ -1,18 +1,16 @@
-//! The reflow document's base stylesheet (`docs/plans/design-reflowable-html.md`
-//! §6 Slice 1: "Base document CSS (max-width column, line-height, font
-//! stack, dark/light neutral)"). Everything here is FLOW layout — no
-//! `position: absolute`/`top`/`left` anywhere (the defining difference from
-//! `crate::render_html`'s faithful `.page`/`.run` rules, which position
-//! every run at its exact placed coordinate).
+//! The reflow document's base stylesheet (Slice 1: "Base document CSS (max-width
+//! column, line-height, font stack, dark/light neutral)"). Everything here is
+//! FLOW layout — no `position: absolute`/`top`/`left` anywhere (the defining
+//! difference from `crate::render_html`'s faithful `.page`/`.run` rules, which
+//! position every run at its exact placed coordinate).
 //!
-//! S4 (`docs/plans/design-reflow-s4-lists.md` §6.2) adds `ul.list`/`ol.list`
-//! spacing rules for the real `<ul>`/`<ol>`/`<li>` `block.rs`'s
-//! `VertBox::ListMark` arm now emits — bullet/number glyphs and basic
-//! indentation are otherwise the browser's own UA stylesheet default for
-//! `<ul>`/`<ol>`/`<li>`, so no additional list-style rule is needed;
-//! `<em>`/`<strong>` (S4's other new tag pair) likewise need no CSS of their
-//! own — the browser default (italic/bold) is exactly the semantic they
-//! name.
+//! S4 adds `ul.list`/`ol.list` spacing rules for the real
+//! `<ul>`/`<ol>`/`<li>` `block.rs`'s `VertBox::ListMark` arm now emits —
+//! bullet/number glyphs and basic indentation are otherwise the browser's
+//! own UA stylesheet default for `<ul>`/`<ol>`/`<li>`, so no additional
+//! list-style rule is needed; `<em>`/`<strong>` (S4's other new tag pair)
+//! likewise need no CSS of their own — the browser default (italic/bold) is
+//! exactly the semantic they name.
 
 use rustyfi_backend::PageGeometry;
 

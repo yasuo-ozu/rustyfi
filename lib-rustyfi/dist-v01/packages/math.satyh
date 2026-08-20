@@ -1,6 +1,6 @@
 % math.satyh — SATySFi 0.1 `math` package's `Math`, vendored for Legacy
-% packaging (docs/plans/rustyfi-0-1-0-support.md §2 P2 / §4 phase 6 —
-% doc-class-capstone-road.md CP7 item 2). Source: saphe-split@b836d512:
+% packaging (P2 / §4 phase 6 — doc-class-capstone-road.md CP7 item 2).
+% Source: saphe-split@b836d512:
 %   lib-rustyfi/packages/math/math.0.0.1/src/math.satyh (1605 lines) —
 %   transliteration delta:
 %   - T1: `use package open Stdlib` dropped; `@require: graphics`,

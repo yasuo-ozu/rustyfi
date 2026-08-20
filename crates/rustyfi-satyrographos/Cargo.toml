@@ -7,8 +7,8 @@ license.workspace = true
 authors.workspace = true
 
 [features]
-# Default-on (saphe phase 7d slice S1, docs/plans/design-saphe-7d-network.md
-# §2.1/§4): the crate is dev-tooling, so `http(s)://` registry tarballs fetch
+# Default-on (saphe phase 7d slice S1): the crate is dev-tooling, so
+# `http(s)://` registry tarballs fetch
 # for real out of the box. `file://` and plain-path tarballs always work
 # regardless of this feature. Pass `--no-default-features` to build a
 # pure-offline embedder with no HTTP client compiled in at all (falls back to

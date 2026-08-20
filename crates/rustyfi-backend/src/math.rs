@@ -1,7 +1,7 @@
-//! Math value / box model — Slice 1 of `docs/plans/math-engine.md`. Trimmed
-//! analog of `math.ml`'s `math_kind` (`horzBox.ml:134`) and `low_math_atom`
-//! (`math.ml:9`), holding only what a fixed-constant super/subscript layout
-//! needs (no MATH-table metrics — see the plan's roadmap §B).
+//! Math value / box model — Slice 1 of. Trimmed analog of `math.ml`'s
+//! `math_kind` (`horzBox.ml:134`) and `low_math_atom` (`math.ml:9`),
+//! holding only what a fixed-constant super/subscript layout needs (no
+//! MATH-table metrics — see the plan's roadmap §B).
 
 use crate::hbox::HorzStringInfo;
 use crate::length::Length;
@@ -52,9 +52,8 @@ pub struct MathGlyph {
 
 /// v0.0.6 `math_char_class` (`primitives.cppo.ml`'s `MathItalic`/…): which
 /// Mathematical-Alphanumeric style block a plain `${…}` letter resolves to
-/// (`\mathrm`/`\mathbf`/… — `math.satyh`'s `\math-style`, `docs/plans/
-/// math-engine.md` §F). `Ord`/`Hash` so it can key
-/// `Context::math_variant_char_map`'s override table.
+/// (`\mathrm`/`\mathbf`/… — `math.satyh`'s `\math-style`). `Ord`/`Hash` so
+/// it can key `Context::math_variant_char_map`'s override table.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum MathCharClass {
     Italic,

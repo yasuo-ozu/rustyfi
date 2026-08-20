@@ -1,13 +1,12 @@
-//! Slice 1 / Tier 0 stdlib port proof (`docs/plans/stdlib-port.md` §Slice 1):
-//! `@require: list` (hence, transitively, `@require: option`) — and
-//! `@require: option` alone — must PARSE, ELABORATE, TYPECHECK, and EVALUATE
-//! through the real multi-file loader with this repo's `lib-rustyfi/` as
-//! `lib_root`. This mirrors `rustyfi`'s own production pipeline
-//! (`main.rs`'s `cmd_compile`: `rustyfi_loader::load` -> merge preludes ->
-//! `compile_document_cst`) rather than a bespoke single-file harness, so it
-//! genuinely exercises `@require:` resolution (including the NESTED
-//! `list.satyg -> @require: option` edge) through the production loader
-//! crate — not just a hand-rolled shortcut.
+//! Slice 1 / Tier 0 stdlib port proof: `@require: list` (hence, transitively,
+//! `@require: option`) — and `@require: option` alone — must PARSE,
+//! ELABORATE, TYPECHECK, and EVALUATE through the real multi-file loader with
+//! this repo's `lib-rustyfi/` as `lib_root`. This mirrors `rustyfi`'s own
+//! production pipeline (`main.rs`'s `cmd_compile`: `rustyfi_loader::load` ->
+//! merge preludes -> `compile_document_cst`) rather than a bespoke
+//! single-file harness, so it genuinely exercises `@require:` resolution
+//! (including the NESTED `list.satyg -> @require: option` edge) through the
+//! production loader crate — not just a hand-rolled shortcut.
 //!
 //! `option.satyg`/`list.satyg` under `lib-rustyfi/dist/packages/` are copied
 //! byte-for-byte from upstream (the plan's "copy-verbatim" policy) — this
@@ -139,8 +138,8 @@ impl FontMetrics for Mono {
 /// Load `src` (a document `@require:`ing packages resolved against
 /// `lib_root()`) through the real loader, merge, elaborate, typecheck, and
 /// evaluate — returning the final `Value`. This is the full Slice-1
-/// "compiles" bar (`docs/plans/stdlib-port.md`'s Verification table:
-/// `Parses` / `Typechecks` / `Compiles`), not merely a parse or a typecheck.
+/// "compiles" bar (Verification table: `Parses` / `Typechecks` /
+/// `Compiles`), not merely a parse or a typecheck.
 fn compile_via_loader(tag: &str, src: &str) -> Result<Value, String> {
     compile_via_loader_with_metrics(tag, src, &NoFonts)
 }
@@ -410,10 +409,10 @@ g + c";
 }
 
 // ============================================================================
-// `@require: pervasives` (docs/plans/stdlib-port.md) — the critical-path
-// stdlib package nearly every other bundled package `@require:`s. Ported
-// verbatim to `lib-rustyfi/dist/packages/pervasives.satyh`. These tests
-// prove it PARSES + TYPECHECKS + EVALUATES through the real loader, and
+// `@require: pervasives` — the critical-path stdlib package nearly every
+// other bundled package `@require:`s. Ported verbatim to
+// `lib-rustyfi/dist/packages/pervasives.satyh`. These tests prove it
+// PARSES + TYPECHECKS + EVALUATES through the real loader, and
 // specifically exercise the 5 primitives it needed that this port didn't
 // already have (`get-natural-metrics`, `inline-frame-outer`,
 // `set-manual-rising`, `script-guard`, `discretionary` — see
@@ -550,9 +549,8 @@ Geom.div-perp (0pt, 0pt) (1pt, 0pt) 0.5 10pt";
 // ============================================================================
 // `@require: gr` (`lib-rustyfi/dist/packages/gr.satyh`, ported verbatim;
 // `@require: pervasives`/`geom`/`list`) — the graphics hub package, and the
-// point of the whole graphics-roadmap prim additions
-// (`docs/plans/graphics-subsystem.md` §Full roadmap A/B/C/D): `bezier-to`,
-// `close-with-bezier`, `shift-path`, `linear-transform-path`,
+// point of the whole graphics-roadmap prim additions (roadmap A/B/C/D):
+// `bezier-to`, `close-with-bezier`, `shift-path`, `linear-transform-path`,
 // `shift-graphics`, `linear-transform-graphics`, `get-graphics-bbox`,
 // `dashed-stroke`, and `draw-text` (all FAITHFUL — `draw-text` as of roadmap
 // C1, see `GraphicsElem::Text`'s doc comment). These tests prove the triple
@@ -860,7 +858,7 @@ get-path-bbox (Gr.circle (50pt, 50pt) 10pt)";
 }
 
 // ============================================================================
-// Tier-2 decoration/graphics packages (docs/plans/stdlib-port.md):
+// Tier-2 decoration/graphics packages:
 // `deco`/`hdecoset`/`vdecoset`/`picture` — all copied verbatim except
 // `picture.satyh`'s one unparseable sig line (bracket command-type syntax;
 // see that file's own comment). `cd.satyh` is NOT ported (needs optional
@@ -982,13 +980,12 @@ Picture.draw-line 1pt (Gray(0.))
 }
 
 // ============================================================================
-// `tabular` (docs/plans/table-subsystem.md) — newly unblocked by the
-// `tabular` primitive/`cell` type landing: `tabular.satyh`'s own module
-// wrapper is entirely commented out upstream (dead code, `%`-prefixed), so
-// it just defines a bare `\tabular` inline command directly, positionally
-// (`lstf cellf multif empty`, then `rulef`) — no record/optional-arg
-// surface syntax at all. Renders real cell text, hence `Mono` (not
-// `NoFonts`).
+// `tabular` — newly unblocked by the `tabular` primitive/`cell` type
+// landing: `tabular.satyh`'s own module wrapper is entirely commented out
+// upstream (dead code, `%`-prefixed), so it just defines a bare `\tabular`
+// inline command directly, positionally (`lstf cellf multif empty`, then
+// `rulef`) — no record/optional-arg surface syntax at all. Renders real
+// cell text, hence `Mono` (not `NoFonts`).
 //
 // `tabularx.satyh`/`table.satyh` were previously blocked by the same
 // record-types-in-`TypeExpr` gap (see prior revision of this comment); now
@@ -1104,10 +1101,10 @@ read-inline (get-initial-context 400pt (command \\math))
     });
 }
 
-// `code` (docs/plans/context-box-prims.md) — unblocked by the
-// context-box-prims batch (`set-text-color`, `split-into-lines`,
-// `block-frame-breakable`, `set-code-text-command`, `get-natural-length`).
-// stdja.satyh `@require`s this directly, so it's the priority package.
+// `code` — unblocked by the context-box-prims batch (`set-text-color`,
+// `split-into-lines`, `block-frame-breakable`, `set-code-text-command`,
+// `get-natural-length`). stdja.satyh `@require`s this directly, so it's
+// the priority package.
 
 #[test]
 fn require_code_module_scheme_compiles_and_evaluates() {
@@ -1168,11 +1165,10 @@ read-inline (get-initial-context 400pt (command \\math))
 // `Mono` (above) rejects non-ASCII, but the footer stdja.satyh always
 // builds (`— #pageno; —`, an em dash) is non-ASCII, so this test uses its
 // own `Wide` stub that answers every character — this milestone still has
-// no real CJK/Latin font metrics (`docs/plans/text-rendering.md`), so CJK
-// text is never actually exercised here (`show-toc = false` avoids the
-// `目次` table-of-contents heading; the body is plain Latin), but the em
-// dash alone would otherwise trip the same "not in WinAnsi" guard `Mono`
-// exists to exercise elsewhere.
+// no real CJK/Latin font metrics, so CJK text is never actually exercised
+// here (`show-toc = false` avoids the `目次` table-of-contents heading; the
+// body is plain Latin), but the em dash alone would otherwise trip the
+// same "not in WinAnsi" guard `Mono` exists to exercise elsewhere.
 // ============================================================================
 
 struct Wide;
@@ -1229,13 +1225,13 @@ document (|
 // `hooks_crossref.rs`) already exists. `FootnoteScheme.main` is exercised
 // directly (its `sig` exposes only plain `val`s, no `direct` command) with
 // trivial `ibf`/`bbf` callbacks. `add-footnote` is now FAITHFUL (wraps the
-// block in a zero-metric `PureHorzBox::Footnote` marker,
-// docs/plans/document-page-model.md §C); `get-natural-metrics` measures the
-// marker's OWN zero width/height/depth (it never re-enters the wrapped
-// block), so the asserted metrics are unaffected by that change — this
-// still only proves the module compiles/evaluates end to end, not that the
-// footnote text lands on the page (that needs a real `chop_page` run,
-// covered by `crates/rustyfi/tests/e2e.rs`'s footnote fixture).
+// block in a zero-metric `PureHorzBox::Footnote` marker);
+// `get-natural-metrics` measures the marker's OWN zero width/height/depth
+// (it never re-enters the wrapped block), so the asserted metrics are
+// unaffected by that change — this still only proves the module
+// compiles/evaluates end to end, not that the footnote text lands on the
+// page (that needs a real `chop_page` run, covered by
+// `crates/rustyfi/tests/e2e.rs`'s footnote fixture).
 // ============================================================================
 
 #[test]
@@ -1287,15 +1283,15 @@ in
     });
 }
 
-/// Gap 4 (`docs/plans/math-mode-language-gaps.md`) flagship: `\derive :
-/// [math?; bool?; math list; math] math-cmd` called BARE (no `?:`/`?*`
-/// marker at all) with only its two mandatory arguments — `\derive`'s
-/// `?:nameopt ?:bopt` leading params register `optional_arity("\derive")
-/// == 2`, so `math_bot`'s `Cmd` arm auto-pads `[None, None, <math list>,
-/// <math>]` before applying (Gap 3's `math_block_ast` turns `{|A|}` into
-/// the `math list` literal `[MathText([A])]`). `math-concat` forces
-/// `as_math` -> `reflect_math_elem`, which actually APPLIES `\derive`'s
-/// closure to those four arguments and runs `derive` all the way to its
+/// Gap 4 flagship: `\derive : [math?; bool?; math list; math] math-cmd`
+/// called BARE (no `?:`/`?*` marker at all) with only its two mandatory
+/// arguments — `\derive`'s `?:nameopt ?:bopt` leading params register
+/// `optional_arity("\derive") == 2`, so `math_bot`'s `Cmd` arm auto-pads
+/// `[None, None, <math list>, <math>]` before applying (Gap 3's
+/// `math_block_ast` turns `{|A|}` into the `math list` literal
+/// `[MathText([A])]`). `math-concat` forces `as_math` ->
+/// `reflect_math_elem`, which actually APPLIES `\derive`'s closure to
+/// those four arguments and runs `derive` all the way to its
 /// `text-in-math` result value — real evaluation, not just a parse/
 /// typecheck smoke test. `derive`'s body is itself `text-in-math` (Gap 6,
 /// out of scope): laying THAT out would hard-error, so this only forces

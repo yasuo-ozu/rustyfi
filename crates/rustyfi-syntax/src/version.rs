@@ -45,15 +45,15 @@ pub enum RustyfiVersion {
     V0_0,
     /// SATySFi 0.1.x: the `dev-0-1-0` language generation — an ML-style
     /// module system (F-ing Modules-based), row-polymorphic records and
-    /// optional-argument encodings, and a reworked surface grammar —
-    /// shared near-identically by `saphe-split` (confirmed by direct diff;
-    /// see `docs/plans/rustyfi-0-1-0-support.md` §1.1). This says nothing
-    /// about *packaging*: `V0_1` documents may resolve dependencies via
-    /// either today's `@require:`/`@import:` headers (`dev-0-1-0`'s own
-    /// model, and this port's `LoadMode::Legacy` — Slice 1's target) or the
-    /// `use`/manifest/lockfile model (`saphe-split`'s `LoadMode::Envelopes`,
-    /// a later milestone) — see `rustyfi_loader::LoadMode`. **Not yet fully
-    /// implemented** by this port; see [`RustyfiVersion::is_implemented`].
+    /// optional-argument encodings, and a reworked surface grammar — shared
+    /// near-identically by `saphe-split` (confirmed by direct diff). This
+    /// says nothing about *packaging*: `V0_1` documents may resolve
+    /// dependencies via either today's `@require:`/`@import:` headers
+    /// (`dev-0-1-0`'s own model, and this port's `LoadMode::Legacy` — Slice
+    /// 1's target) or the `use`/manifest/lockfile model (`saphe-split`'s
+    /// `LoadMode::Envelopes`, a later milestone) — see
+    /// `rustyfi_loader::LoadMode`. **Not yet fully implemented** by this
+    /// port; see [`RustyfiVersion::is_implemented`].
     V0_1,
 }
 
@@ -61,12 +61,11 @@ impl RustyfiVersion {
     /// The version this port targets when none is specified.
     pub const DEFAULT: Self = Self::V0_0;
 
-    /// Whether this version has an ML-style module system (`module M =
-    /// struct ... end` bindings that erase to stamped-flat names, `val`
-    /// bindings inside them, later: signatures/functors). `false` for
-    /// `V0_0` (which has only its own non-parameterized, single-level
-    /// `module`/`sig` surface — see `docs/plans/class-signature-lang-gaps.md`
-    /// — not a real module *system*); `true` for `V0_1`.
+    /// Whether this version has an ML-style module system (`module M = struct
+    /// ... end` bindings that erase to stamped-flat names, `val` bindings
+    /// inside them, later: signatures/functors). `false` for `V0_0` (which
+    /// has only its own non-parameterized, single-level `module`/`sig`
+    /// surface — not a real module *system*); `true` for `V0_1`.
     pub fn has_module_system(&self) -> bool {
         matches!(self, Self::V0_1)
     }
@@ -102,17 +101,17 @@ impl RustyfiVersion {
     /// graphics-producing callback returns ONE `graphics` value) as opposed
     /// to `V0_0`'s single drawing element (a callback returns `list
     /// graphics`). `false` for `V0_0`; `true` for `V0_1`. Backs the L5b
-    /// graphics-collection sweep (`docs/plans/…/prim-retype-sweep.md` §3.1):
-    /// every fork in the shared `place_graphics`/`coerce_graphics_result`
-    /// machinery keys on this one method, so the env and type-env agree by
-    /// construction (mirrors `math_is_split`'s role for the math slice).
+    /// graphics-collection sweep: every fork in the shared
+    /// `place_graphics`/`coerce_graphics_result` machinery keys on this one
+    /// method, so the env and type-env agree by construction (mirrors
+    /// `math_is_split`'s role for the math slice).
     pub fn graphics_is_collection(&self) -> bool {
         matches!(self, Self::V0_1)
     }
 
     /// Whether this port actually implements this version end-to-end
     /// (lexer through PDF rendering). Both generations, Slice 1 scope for
-    /// `V0_1` — see `docs/plans/rustyfi-0-1-0-support.md` §3.
+    /// `V0_1`
     pub fn is_implemented(&self) -> bool {
         matches!(self, Self::V0_0 | Self::V0_1)
     }
@@ -204,9 +203,8 @@ pub fn sniff_version(src: &str) -> Option<RustyfiVersion> {
 
 /// What [`sniff_headers`] learned from the header block. `version` is exactly
 /// [`sniff_version`]'s result (Axis A); `envelope_headers` is the Axis-B
-/// signal the plan's detection ladder step 3 needs
-/// (`docs/plans/rustyfi-0-1-0-support.md` §1.4: "a `use`-shaped header … pins
-/// Axis B = `LoadMode::Envelopes`"). A `use`-shaped header sets BOTH.
+/// signal the plan's detection ladder step 3 needs (: "a `use`-shaped header
+/// … pins Axis B = `LoadMode::Envelopes`"). A `use`-shaped header sets BOTH.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct HeaderSniff {
     /// The detected target version, if any (`None` = ambiguous/no signal).

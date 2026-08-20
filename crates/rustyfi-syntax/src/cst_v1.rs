@@ -1,8 +1,7 @@
 //! The Slice-1 SATySFi **0.1.0** (`dev-0-1-0`) surface grammar — a *fork* of
 //! [`crate::cst`], not a version-gate of it (gating one shared `cst.rs` would
 //! mean hand-writing `Parse` for nearly every node, destroying the derive
-//! idiom and risking 0.0.6 on every 0.1 edit; see
-//! `docs/plans/rustyfi-0-1-0-support.md` §1.5). [`crate::cst`] stays frozen:
+//! idiom and risking 0.0.6 on every 0.1 edit). [`crate::cst`] stays frozen:
 //! this module imports only its token-`Atom`-generic, non-recursive helpers
 //! ([`crate::cst::Header`], [`crate::cst::ParseFileError`]) and re-declares
 //! everything else — including its own `*ErasedV1` eraser leaves and its own
@@ -86,8 +85,7 @@ use newer_type::implement;
 use syan::parse::{Parse, Unparse};
 
 /// `@require:` / `@import:` header element — byte-identical between 0.0.6
-/// and `dev-0-1-0` (this port's own confirmation; see
-/// `docs/plans/rustyfi-0-1-0-support.md` §1.1), so 0.1 simply reuses
+/// and `dev-0-1-0` (this port's own confirmation), so 0.1 simply reuses
 /// [`crate::cst`]'s definition rather than re-declaring an identical enum.
 /// 0.1 has no `@stage:` header at all (the shared lexer's `V0_1` path
 /// rejects it outright — see `lexer.rs`'s `lex_header`), so
@@ -95,15 +93,14 @@ use syan::parse::{Parse, Unparse};
 pub use crate::cst::Header;
 
 /// A 0.1 header element — the UNION of BOTH packaging generations' header
-/// forms (Axis B; see the Ld3a spec §4.1 and
-/// `docs/plans/rustyfi-0-1-0-support.md` §1.2). `Legacy` is `dev-0-1-0`'s
-/// `@require:`/`@import:` (byte-identical to 0.0.6's, reusing
-/// [`Header`] — the previous type of `FileV1::*::headers` wholesale); the
-/// three `Use*` forms are `saphe-split`'s `headerelem`
-/// (`parser.mly:371-380 @ b836d512`). Which family is *legal* is a
-/// `LoadMode` question the loader answers ([`rustyfi_loader`]), not a grammar
-/// question — this ONE `V0_1` grammar accepts both so the mode error can be
-/// raised at load time with a better message than a lex error would give.
+/// forms (Axis B; see the Ld3a spec §4.1 and). `Legacy` is `dev-0-1-0`'s
+/// `@require:`/`@import:` (byte-identical to 0.0.6's, reusing [`Header`] —
+/// the previous type of `FileV1::*::headers` wholesale); the three `Use*`
+/// forms are `saphe-split`'s `headerelem` (`parser.mly:371-380 @ b836d512`).
+/// Which family is *legal* is a `LoadMode` question the loader answers
+/// ([`rustyfi_loader`]), not a grammar question — this ONE `V0_1` grammar
+/// accepts both so the mode error can be raised at load time with a better
+/// message than a lex error would give.
 ///
 /// Variant order is parse priority (syan ordered-alternatives, most-specific
 /// first): `UsePackage` (the `package` keyword disambiguates) precedes the

@@ -1,12 +1,12 @@
-//! `load-pdf-image` (docs/plans/design-load-pdf-image.md) runtime round
-//! trip, mirroring `tests/images.rs`'s style exactly (Ast apply chains
-//! driven through `eval::Interp`, no parser involved): a real, tiny PDF is
-//! generated on the fly with `lopdf` (this crate's own PDF-reader
-//! dependency, also perfectly usable as a writer for a test fixture) and
-//! `load-pdf-image`d, then `use-image-by-width` is checked against the
-//! source page's `/MediaBox` aspect ratio — the PDF-page analogue of
-//! `images.rs`'s raster-image tests. Error-path coverage (missing file, bad
-//! page number) lives here too (design doc §4's error table).
+//! `load-pdf-image` runtime round trip, mirroring `tests/images.rs`'s style
+//! exactly (Ast apply chains driven through `eval::Interp`, no parser
+//! involved): a real, tiny PDF is generated on the fly with `lopdf` (this
+//! crate's own PDF-reader dependency, also perfectly usable as a writer for
+//! a test fixture) and `load-pdf-image`d, then `use-image-by-width` is
+//! checked against the source page's `/MediaBox` aspect ratio — the
+//! PDF-page analogue of `images.rs`'s raster-image tests. Error-path
+//! coverage (missing file, bad page number) lives here too (design doc §4's
+//! error table).
 
 use rustyfi_backend::{FontKey, FontMetrics, HorzBox, ImageResource, Length, PureHorzBox};
 use rustyfi_lang::ast::Ast;

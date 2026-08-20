@@ -1,7 +1,6 @@
-//! Slice X3a (`docs/plans/design-cross-version-import.md`, "Slice X3 —
-//! forked-type export adapter (detailed design)", specifically the X3a
-//! sub-slice, X3.1-X3.3): the boundary TYPE adapter for a `V0_0`
-//! dependency spliced into a `V0_1` program.
+//! Slice X3a ("Slice X3 — forked-type export adapter (detailed
+//! design)", specifically the X3a sub-slice, X3.1-X3.3): the boundary
+//! TYPE adapter for a `V0_0` dependency spliced into a `V0_1` program.
 //!
 //! X2a already narrows the *value* half of X1's forked-name guard away (a
 //! spliced binding's RHS runs inside `Ast::VersionScope(V0_0, _)`, so an
@@ -433,10 +432,9 @@ fn relabel_type_atom(
 }
 
 /// The one leaf-level policy decision (X3.1), generalized by DIRECTION for
-/// Slice X4a (`docs/plans/design-cross-version-import.md` §X4.3 item 5 —
-/// this function's `from`/`to` parameters were already threaded through
-/// every caller; only the branching itself was hardcoded to the one forward
-/// case before X4a).
+/// Slice X4a (item 5 — this function's `from`/`to` parameters were already
+/// threaded through every caller; only the branching itself was hardcoded
+/// to the one forward case before X4a).
 ///
 /// **Where each direction is actually WIRED (load-bearing asymmetry).** The
 /// FORWARD `(V0_0, V0_1)` arm below IS reached from `lib.rs`'s splice arm,

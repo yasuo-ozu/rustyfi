@@ -295,9 +295,8 @@ fn hook_page_break_block_fires_through_chop_page_and_fire_hooks() {
 // ============================================================================
 // `page-break-multicolumn` (stdjareport.satyh's `document`) — FAITHFUL: a
 // `[]` shift list is a genuine ONE-column layout whose hooks still fire
-// (`page_break_core`; docs/plans/document-page-model.md §A). Real
-// multi-column geometry (2+ shifts) is covered by
-// `crates/rustyfi-lang/tests/multicolumn.rs`.
+// (`page_break_core`). Real multi-column geometry (2+ shifts) is covered
+// by `crates/rustyfi-lang/tests/multicolumn.rs`.
 // ============================================================================
 
 #[test]
@@ -335,8 +334,8 @@ fn page_break_multicolumn_with_an_empty_shift_list_is_one_column_and_evaluates()
 }
 
 // ============================================================================
-// L7 (docs/plans/rustyfi-0-1-0-support.md §3) — the `page-break` retype:
-// version-tagged primitive table proof-of-concept. Proves `VersionSpan`/
+// L7 — the `page-break` retype: version-tagged primitive table
+// proof-of-concept. Proves `VersionSpan`/
 // `RustyfiVersion::has_page_adt()` gating is wired end to end through
 // `PrimDef`, the type table, and `builtin_variants`.
 // ============================================================================

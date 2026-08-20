@@ -14,10 +14,10 @@
 //! # or: source = { registry = "great-package", version = "1.0.0" } (phase 3)
 //! ```
 //!
-//! All three source kinds are materialisable: `{ path = … }` since phase 2,
-//! `{ registry = … }` since phase 3, and `{ git = … }` since saphe 7d slice S3
-//! (`docs/plans/design-saphe-7d-network.md`). A `source = { … }` table naming
-//! none of `path`/`git`/`registry` is [`Error::UnsupportedSource`].
+//! All three source kinds are materialisable: `{ path = … }` since phase 2, `{
+//! registry = … }` since phase 3, and `{ git = … }` since saphe 7d slice S3. A
+//! `source = { … }` table naming none of `path`/`git`/`registry` is
+//! [`Error::UnsupportedSource`].
 
 use std::path::{Path, PathBuf};
 
@@ -49,8 +49,7 @@ impl Satyrfile {
         self.registry.as_ref().and_then(|r| r.url.as_deref())
     }
 
-    /// The project's declared mirror base URLs (design
-    /// `docs/plans/design-saphe-mirrors-sparse.md` §2.1), empty when no
+    /// The project's declared mirror base URLs (design), empty when no
     /// `[registry] mirrors` is declared.
     pub fn registry_mirrors(&self) -> &[String] {
         self.registry

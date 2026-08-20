@@ -1,6 +1,6 @@
 % code.satyh — SATySFi 0.1 `code` package, FUNCTOR-FREE PORT STAND-IN
-% (docs/plans/…/doc-class-capstone-road.md §3 CP7 item 3 / §4-G).
-% Source: saphe-split@b836d512:lib-rustyfi/packages/code/code.0.0.1/src/
+% (CP7 item 3 / §4-G). Source:
+% saphe-split@b836d512:lib-rustyfi/packages/code/code.0.0.1/src/
 %   code.satyh (151 lines) — upstream `Code` is a FUNCTOR (`module Make =
 %   fun(X : Settings) -> struct … end`, named signatures `Settings`/
 %   `Interface`, functor application `Default = Make DefaultSettings`,

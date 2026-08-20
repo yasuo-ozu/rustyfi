@@ -1,7 +1,7 @@
-//! `PureHorzBox` → inline HTML (`docs/plans/design-reflowable-html.md` §3
-//! "Inline level"), appending into an already-open paragraph's (or inline
-//! frame's) text buffer — never absolutely positioned, never carrying an
-//! x/y of its own; the browser lays every span out in normal inline flow.
+//! `PureHorzBox` → inline HTML ("Inline level"), appending into an
+//! already-open paragraph's (or inline frame's) text buffer — never
+//! absolutely positioned, never carrying an x/y of its own; the browser
+//! lays every span out in normal inline flow.
 //!
 //! Slice 1 renders `InnerString` (styled + escaped text), the three glue
 //! variants (collapsed to a plain space — the browser re-breaks, so the
@@ -30,13 +30,13 @@
 //! is block-level and needs to flush the surrounding paragraph first; this
 //! arm is only the fallback for a `Tabular` nested inside inline content).
 //!
-//! Slice 4 (`docs/plans/design-reflow-s4-lists.md` §4.2 "Inline level")
-//! handles the new `InlineMark` box: `EmphStart`/`EmphEnd` open/close a real
-//! `<em>`/`<strong>` (via `Ctx::emph_stack`, since `EmphEnd` alone doesn't
-//! say which tag to close — see that field's doc comment), and
-//! `BulletStart`/`BulletEnd` fence a drawn bullet/number glyph run so it
-//! renders NOTHING (`Ctx::bullet_suppress`) — the real marker comes from the
-//! `<ul>`/`<ol>` `block.rs` now emits instead.
+//! Slice 4 ("Inline level") handles the new `InlineMark` box:
+//! `EmphStart`/`EmphEnd` open/close a real `<em>`/`<strong>` (via
+//! `Ctx::emph_stack`, since `EmphEnd` alone doesn't say which tag to close —
+//! see that field's doc comment), and `BulletStart`/`BulletEnd` fence a
+//! drawn bullet/number glyph run so it renders NOTHING
+//! (`Ctx::bullet_suppress`) — the real marker comes from the `<ul>`/`<ol>`
+//! `block.rs` now emits instead.
 
 use std::fmt::Write as _;
 
@@ -51,13 +51,12 @@ use super::Ctx;
 /// (`block.rs`'s) job.
 pub(crate) fn emit_inline(out: &mut String, bx: &PureHorzBox, ctx: &Ctx) {
     match bx {
-        // S4 (`docs/plans/design-reflow-s4-lists.md` §4.2): handled FIRST,
-        // unconditionally of `ctx.bullet_suppress` below — a `BulletEnd`
-        // reached WHILE suppressed must still clear the counter, and an
-        // `EmphStart`/`EmphEnd` reached while suppressed (should not happen
-        // — `itemize.satyh` never nests emphasis inside its own bullet
-        // fence — but stays correct regardless) must still keep the tag
-        // stack balanced.
+        // S4: handled FIRST, unconditionally of `ctx.bullet_suppress` below
+        // — a `BulletEnd` reached WHILE suppressed must still clear the
+        // counter, and an `EmphStart`/`EmphEnd` reached while suppressed
+        // (should not happen — `itemize.satyh` never nests emphasis inside
+        // its own bullet fence — but stays correct regardless) must still
+        // keep the tag stack balanced.
         PureHorzBox::InlineMark(kind) => match kind {
             InlineMarkKind::EmphStart { strong } => {
                 ctx.emph_stack.borrow_mut().push(*strong);
@@ -198,15 +197,14 @@ pub(crate) fn emit_inline(out: &mut String, bx: &PureHorzBox, ctx: &Ctx) {
                 "<span class=\"image-placeholder\" title=\"image rendering deferred to a later reflow slice\"></span>",
             );
         }
-        // S3 (`docs/plans/design-reflowable-html.md` §6 "S3",
-        // `structure.rs`'s "Tables — genuinely recoverable"): a real
-        // `<table>`. `block.rs`'s own `VertBox::Line` walk already special-
-        // cases the common top-level case (flushing the open paragraph
-        // first, since a `<table>` is block-level); THIS arm is the fallback
-        // for a `Tabular` nested inside inline content this module recurses
-        // into on its own (a `Frame`'s `contents`, or a table cell that
-        // itself contains a nested `Tabular`) — no surrounding paragraph to
-        // flush here, so no `extra_attrs` margin.
+        // S3 ("S3", `structure.rs`'s "Tables — genuinely recoverable"): a
+        // real `<table>`. `block.rs`'s own `VertBox::Line` walk already
+        // special- cases the common top-level case (flushing the open
+        // paragraph first, since a `<table>` is block-level); THIS arm is
+        // the fallback for a `Tabular` nested inside inline content this
+        // module recurses into on its own (a `Frame`'s `contents`, or a
+        // table cell that itself contains a nested `Tabular`) — no
+        // surrounding paragraph to flush here, so no `extra_attrs` margin.
         PureHorzBox::Tabular(tab) => super::structure::render_table(out, tab, "", ctx),
         PureHorzBox::Footnote { .. } => {
             out.push_str(

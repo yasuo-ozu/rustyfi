@@ -1,6 +1,6 @@
 % annot.satyh — SATySFi 0.1 `annot` package's `Annot`, vendored for Legacy
-% packaging (docs/plans/rustyfi-0-1-0-support.md §2 P2 / §4 phase 6 —
-% doc-class-capstone-road.md CP7 item 1). Source: saphe-split@b836d512:
+% packaging (P2 / §4 phase 6 — doc-class-capstone-road.md CP7 item 1).
+% Source: saphe-split@b836d512:
 %   lib-rustyfi/packages/annot/annot.0.0.1/src/annot.satyh (54 lines) —
 %   transliteration deltas:
 %   - T1: `use package open Stdlib` dropped; `@require: deco` added (the

@@ -1,6 +1,6 @@
 % logo.satyh — SATySFi 0.1 stdlib `Logo`, vendored for Legacy packaging
-% (docs/plans/rustyfi-0-1-0-support.md §2 P2 / §4 phase 6).
-% Source: saphe-split@b836d512:lib-rustyfi/packages/stdlib/stdlib.0.0.1/
+% (P2 / §4 phase 6). Source:
+% saphe-split@b836d512:lib-rustyfi/packages/stdlib/stdlib.0.0.1/
 %   src/logo.satyh — transliteration deltas:
 %   - T1: `use open Inline` dropped; `@require: inline` added.
 %   - T2-generalized: `use open Inline` erasure — unlike `Basic` (whose

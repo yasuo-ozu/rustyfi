@@ -1,12 +1,12 @@
-//! Saphe phase 7d slice S1 (`docs/plans/design-saphe-7d-network.md` §5): the
-//! real `http` feature transport under test with a **mocked local server** —
-//! no real internet. A hand-rolled `TcpListener` loopback server (no new
-//! dev-dependency, matching the crate's dependency-minimal ethos, design §5)
-//! stands in for a registry's tarball host; the **index stays a plain local
-//! directory** (design §2.2: git-clone/plain-dir acquisition is unchanged for
-//! 7d, only the tarball fetch is new-network), with `tarball_url` entries
-//! pointing at `http://127.0.0.1:<port>/…`. This exercises the real `ureq` +
-//! rustls client configured in `registry.rs`'s `http` module, not a fake.
+//! Saphe phase 7d slice S1: the real `http` feature transport under test with
+//! a **mocked local server** — no real internet. A hand-rolled `TcpListener`
+//! loopback server (no new dev-dependency, matching the crate's
+//! dependency-minimal ethos, design §5) stands in for a registry's tarball
+//! host; the **index stays a plain local directory** (design §2.2:
+//! git-clone/plain-dir acquisition is unchanged for 7d, only the tarball
+//! fetch is new-network), with `tarball_url` entries pointing at
+//! `http://127.0.0.1:<port>/…`. This exercises the real `ureq` + rustls
+//! client configured in `registry.rs`'s `http` module, not a fake.
 //!
 //! Coverage (design §5 S1 cases):
 //! - happy path: fetch → verify → materialise, receipt records the `http://`
@@ -870,13 +870,12 @@ fn s2_corrupted_cache_entry_is_refetched_and_offline_errors() {
 }
 
 // ===========================================================================
-// Saphe mirrors + sparse index design
-// (`docs/plans/design-saphe-mirrors-sparse.md`) Slice M: registry mirror-list
-// fallback (design §2). Two independent loopback servers stand in for a
-// primary registry host and a mirror host; `RegistryOptions::mirrors` is a
-// **bare origin** (design §2.1: a mirror is a host/prefix substitution
-// applied to the primary URL's own path — [`MockServer::base_url`]), rewritten
-// against the index's `tarball_url` by `registry::rewrite_to_mirror`.
+// Saphe mirrors + sparse index design Slice M: registry mirror-list fallback
+// (design §2). Two independent loopback servers stand in for a primary
+// registry host and a mirror host; `RegistryOptions::mirrors` is a **bare
+// origin** (design §2.1: a mirror is a host/prefix substitution applied to the
+// primary URL's own path — [`MockServer::base_url`]), rewritten against the
+// index's `tarball_url` by `registry::rewrite_to_mirror`.
 // ===========================================================================
 
 /// Registry options pointed at a `file://` plain-dir index, an isolated

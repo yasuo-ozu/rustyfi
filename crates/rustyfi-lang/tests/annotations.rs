@@ -1,5 +1,5 @@
-//! `docs/plans/hooks-annotations-crossref.md` §B/§D: the prim surface
-//! `annot.satyh` needs (`get-leftmost-script`/`get-rightmost-script`,
+//! the prim surface `annot.satyh` needs
+//! (`get-leftmost-script`/`get-rightmost-script`,
 //! `inline-frame-breakable`, `register-destination`,
 //! `register-link-to-uri`, `register-link-to-location`) — build-order step
 //! 9, stdja's last unported `@require`. Two halves, mirroring
@@ -12,7 +12,7 @@
 //!   `primitives::base_env()`, mirroring `tests/prims_phase4.rs`'s style) —
 //!   `inline-frame-breakable` builds a real atomic `PureHorzBox::Frame` and
 //!   interns its decoset's `decoS`; the register-* prims are FAITHFUL as of
-//!   roadmap Group A (docs/plans/hooks-annotations-crossref.md §B): they
+//! roadmap Group A: they
 //!   error outside `fire_hooks`' `current_page` window (§0.5) and record a
 //!   real `Annot`/`NamedDest` inside it — see `primitives.rs`'s
 //!   `prim_register_destination`/`register_link` doc comments.

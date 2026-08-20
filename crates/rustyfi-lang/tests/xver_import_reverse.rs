@@ -1,7 +1,6 @@
-//! Slice X4a (`docs/plans/design-cross-version-import.md`'s "Slice X4 —
-//! reverse direction", specifically the X4a sub-slice): a `V0_0` document
-//! `@require:`-ing a `V0_1` package end-to-end — the REVERSE of
-//! `xver_import.rs`'s whole direction.
+//! Slice X4a ("Slice X4 — reverse direction", specifically the X4a
+//! sub-slice): a `V0_0` document `@require:`-ing a `V0_1` package
+//! end-to-end — the REVERSE of `xver_import.rs`'s whole direction.
 //!
 //! Driven through the REAL loader (`rustyfi_loader::load`, `LoadOptions {
 //! version: V0_0, .. }`) so the Q4-mirror per-file detection rule
@@ -37,23 +36,23 @@
 //!   `v1::xver_adapt::relabel_or_reject_name`'s new `(V0_1, V0_0)` arm
 //!   implements.
 //!
-//! Slice X4b (`docs/plans/design-cross-version-import.md` §X4.5, extended
-//! beyond its own math-only sketch by the task brief this increment
-//! implements) — a NEGATIVE FINDING, not a new crossing capability: a `V0_1`
-//! dependency's `deco`/`deco-set` VALUE export (via a module `sig`, the ONE
-//! textual site 0.1's grammar can express such an ascription at all — an
-//! ordinary unsealed `val` has no ascription syntax whatsoever) turns out to
-//! be UNCOERCIBLE given this port's hard constraints: every 0.1 module
-//! signature annotation is the `:>` form, and `v1::module_check`'s
-//! (untouched) phase-D spine walk conformance-checks EVERY such annotation,
-//! name-keyed, unconditionally — so any splice-time coercion that makes the
-//! crossing value's real shape differ from the module's own declared
-//! `deco`/`deco-set` scheme (the ENTIRE POINT of a list<->single coercion)
-//! trips that same enforcement again, wherever the coercion is spliced
-//! (verified empirically — see `v1::xver_adapt`'s own "X4b" doc comment for
-//! the full derivation). So X4b adds exactly one thing: a CLEAR, EARLY
-//! rejection (`v1::xver_adapt::reject_deco_exports_v01_sig`) instead of a
-//! confusing downstream `module_check`/ordinary-`TypeError` failure.
+//! Slice X4b (extended beyond its own math-only sketch by the task brief
+//! this increment implements) — a NEGATIVE FINDING, not a new crossing
+//! capability: a `V0_1` dependency's `deco`/`deco-set` VALUE export (via a
+//! module `sig`, the ONE textual site 0.1's grammar can express such an
+//! ascription at all — an ordinary unsealed `val` has no ascription syntax
+//! whatsoever) turns out to be UNCOERCIBLE given this port's hard
+//! constraints: every 0.1 module signature annotation is the `:>` form, and
+//! `v1::module_check`'s (untouched) phase-D spine walk conformance-checks
+//! EVERY such annotation, name-keyed, unconditionally — so any splice-time
+//! coercion that makes the crossing value's real shape differ from the
+//! module's own declared `deco`/`deco-set` scheme (the ENTIRE POINT of a
+//! list<->single coercion) trips that same enforcement again, wherever the
+//! coercion is spliced (verified empirically — see `v1::xver_adapt`'s own
+//! "X4b" doc comment for the full derivation). So X4b adds exactly one
+//! thing: a CLEAR, EARLY rejection
+//! (`v1::xver_adapt::reject_deco_exports_v01_sig`) instead of a confusing
+//! downstream `module_check`/ordinary-`TypeError` failure.
 //!
 //! - [`reverse_deco_export_via_sig_rejected`] (X4b): a small inline `V0_1`
 //!   fixture — a module `V01DecoExport :> sig val my-deco : deco end =

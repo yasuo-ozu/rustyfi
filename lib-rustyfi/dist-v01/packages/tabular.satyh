@@ -1,6 +1,6 @@
 % tabular.satyh — SATySFi 0.1 `tabular` package's `Tabular`, vendored for
-% Legacy packaging (docs/plans/rustyfi-0-1-0-support.md §2 P2 / §4
-% phase 6). Source: saphe-split@b836d512:lib-rustyfi/packages/tabular/
+% Legacy packaging (P2 / §4 phase 6). Source:
+% saphe-split@b836d512:lib-rustyfi/packages/tabular/
 %   tabular.0.0.1/src/tabular.satyh — transliteration deltas: NONE
 %   (upstream has no `use` lines; byte-identical below this banner,
 %   modulo the commented-out upstream draft rules-callback body, kept

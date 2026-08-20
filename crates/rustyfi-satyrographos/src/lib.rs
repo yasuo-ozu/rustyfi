@@ -1,8 +1,8 @@
 //! Satyrographos-style package management for the `rustyfi` port.
 //!
 //! This crate is the clap-free library half of the chimera CLI (see the
-//! plan document `docs/chimera-satyrographos-plan.md`): given an options
-//! struct and a source path, it materialises SATySFi packages under
+//! plan document): given an options struct and a source path, it
+//! materialises SATySFi packages under
 //! `<lib_root>/dist/{packages,fonts,hash,md}/` (mirroring real
 //! Satyrographos' layout) and records per-package receipts under
 //! `<lib_root>/.satyrographos/receipts/`, so the thin `rustyfi` shell
@@ -50,7 +50,7 @@
 //!   upgrade reporting (plan §8).
 //! - The HTTP transport (`registry`'s `http` module) is behind the `http`
 //!   cargo feature, default-on for this crate (saphe phase 7d slice S1,
-//!   `docs/plans/design-saphe-7d-network.md`); `--no-default-features`
+//! ); `--no-default-features`
 //!   builds a pure-offline embedder with no HTTP client compiled in.
 //! - `cache` (phase 7d slice S2) — a persistent, content-addressed
 //!   (sha256-keyed) archive cache in front of the HTTP fetch, plus

@@ -1,4 +1,4 @@
-//! Group D, D1b (`docs/plans/text-rendering.md` §1b): per-script font scheme
+//! Group D, D1b: per-script font scheme
 //! + `set-font` real wiring + script-segmented `text_to_boxes`. Drives
 //! `set-font`/`primitives::read_inline` directly through `Interp::apply`
 //! (like `tests/text_info.rs`'s "eval half"), sidestepping the parser.

@@ -1,6 +1,6 @@
 #!/bin/sh
-# Fetch the real CJK+Latin faces stdja/mdja actually name (item #1,
-# docs/plans/text-rendering.md §1c), and write this port's
+# Fetch the real CJK+Latin faces stdja/mdja actually name (item #1), and
+# write this port's
 # `dist/hash/{fonts,default-font}.rustyfi-hash` (plain-JSON schema —
 # rustyfi-pdf's `fonts.rs` module doc — NOT upstream's Yojson variant
 # syntax). Mirrors upstream SATySFi's own `download-fonts.sh` (cache dir +
@@ -24,8 +24,8 @@
 #     `ttf.rs`'s MATH parser. Registered as the `"lmmath"` abbrev and wired as
 #     `default-font.rustyfi-hash`'s `"math"` default — this is upstream
 #     SATySFi's own default math font, so this is the upstream-correct
-#     choice (`docs/plans/design-math-cramped.md` §4 Slice B originally wired
-#     DejaVu Math TeX Gyre here as a `glyf`-outline stand-in, from before the
+#     choice (Slice B originally wired DejaVu Math TeX Gyre here as a
+#     `glyf`-outline stand-in, from before the
 #     CFF embedding path existed; now that CFF embedding + subsetting both
 #     land, LM Math replaces it as the default).
 #
@@ -51,9 +51,8 @@
 #     see `LICENSE-GUST-FontLicense.txt`, written below). These are
 #     CFF-outline (`OTTO`) OpenType fonts, embeddable via this port's
 #     `CIDFontType0`/`FontFile3` (CFF) path added in commit `526e1f3`
-#     (`cid.rs`'s `write_font_cff`, docs/plans/design-cff-embedding.md §6.2
-#     "S1" — whole-OTF embed, no subsetting yet). Registered as the
-#     `lmsans`/`lmmono` abbrevs (docs/plans/design-named-fonts.md Slice 1/3),
+#     (`cid.rs`'s `write_font_cff`, "S1" — whole-OTF embed, no subsetting
+#     yet). Registered as the `lmsans`/`lmmono` abbrevs (Slice 1/3),
 #     replacing the earlier Noto Sans/Noto Sans Mono `glyf` stand-in
 #     (commit `0ef39ef`) that was needed only because `FontFile2`/glyf-only
 #     embedding couldn't carry a CFF face at the time.
@@ -410,8 +409,8 @@ fi
     printf ',\n  "lmmath":     { "src": "%s" }' "$LMMATH_SRC"
     # `lmodern` is the abbrev stdja/std-ja actually name (`set-math-font
     # \`lmodern\``, `FontLatinModernMath.main`) — alias it to the real LM
-    # Math face now that it is bundled (Slice 0, docs/plans/design-named-
-    # fonts.md §7); previously aliased to the DejaVu Math stand-in.
+    # Math face now that it is bundled (Slice 0); previously aliased to the
+    # DejaVu Math stand-in.
     printf ',\n  "lmodern":    { "src": "%s" }' "$LMMATH_SRC"
   fi
   if [ -n "$MATH_SRC" ]; then

@@ -1,10 +1,9 @@
-//! End-to-end acceptance coverage for Gap 3 (`docs/plans/math-mode-
-//! language-gaps.md`): `|`-separated math lists `${| a | b |}`. Upstream
-//! desugars a LEADING `|` in-grammar to an ordinary list literal of `math`
-//! values (`mathblock`, parser.mly:1059-1066) — this is a `math list`
-//! LITERAL, not a matrix/grid. Pure-pipeline `run`/`int` helpers copied from
-//! `optional_args.rs` (per that file's own copy-not-share convention, since
-//! test harness files are intentionally standalone).
+//! End-to-end acceptance coverage for Gap 3: `|`-separated math lists `${| a
+//! | b |}`. Upstream desugars a LEADING `|` in-grammar to an ordinary list
+//! literal of `math` values (`mathblock`, parser.mly:1059-1066) — this is a
+//! `math list` LITERAL, not a matrix/grid. Pure-pipeline `run`/`int` helpers
+//! copied from `optional_args.rs` (per that file's own copy-not-share
+//! convention, since test harness files are intentionally standalone).
 
 use rustyfi_backend::{FontKey, FontMetrics, Length};
 use rustyfi_lang::value::Value;

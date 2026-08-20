@@ -525,8 +525,7 @@ fn command_call_with_leading_optional_args() {
 #[test]
 fn optional_argument_type_grammar() {
     // `?->` (optional-argument function arrow) and `ty?` (optional
-    // command-argument type) — `docs/plans/class-signature-lang-gaps.md`'s
-    // gap 2.
+    // command-argument type) — gap 2.
     assert_roundtrip(
         "module M : sig\n\
          val f : 'a -> config ?-> block-text -> document\n\
@@ -585,10 +584,10 @@ fn math_command_names_plain_and_qualified() {
 
 #[test]
 fn math_lists() {
-    // Gap 3 (`docs/plans/math-mode-language-gaps.md`): a leading `|` puts
-    // the math area in list mode (`mathblock`, parser.mly:1059-1066).
-    // `Token::Sep` already round-tripped before Gap 3 landed (elaboration,
-    // not parsing, used to reject these) — this just documents the shape.
+    // Gap 3: a leading `|` puts the math area in list mode (`mathblock`,
+    // parser.mly:1059-1066). `Token::Sep` already round-tripped before Gap
+    // 3 landed (elaboration, not parsing, used to reject these) — this
+    // just documents the shape.
     assert_roundtrip("${| a | b |}");
     assert_roundtrip("${|}");
     assert_roundtrip("${||}");
@@ -619,10 +618,10 @@ fn math_round_trips() {
 
 #[test]
 fn math_optional_args_round_trip() {
-    // Gap 4 (`docs/plans/math-mode-language-gaps.md`): `matharg`'s `?:`-
-    // supplied (`MathArg::Optional`), `?*`-omitted (`MathArg::Omission`), and
-    // plain (`MathArg::Plain`) shapes, the latter two exercising the
-    // `!`-escape body forms too (`MathArgBody`'s `ParenEscape`).
+    // Gap 4: `matharg`'s `?:`- supplied (`MathArg::Optional`), `?*`-omitted
+    // (`MathArg::Omission`), and plain (`MathArg::Plain`) shapes, the latter
+    // two exercising the `!`-escape body forms too (`MathArgBody`'s
+    // `ParenEscape`).
     assert_roundtrip("${\\cmd?:{x}{y}}");
     assert_roundtrip("${\\cmd?*{y}}");
     assert_roundtrip("${\\cmd?:!(3){y}}");
@@ -724,8 +723,8 @@ fn library_file_has_no_body() {
 
 #[test]
 fn command_value() {
-    // `(command \cmd)` — `docs/plans/class-signature-lang-gaps.md` gap 1:
-    // a first-class reference to an inline command's own binding.
+    // `(command \cmd)` — gap 1: a first-class reference to an inline
+    // command's own binding.
     assert_roundtrip("let-inline \\m ctx = ctx in (command \\m)");
     assert_roundtrip("get-initial-context 100pt (command \\m)");
 }
@@ -733,8 +732,8 @@ fn command_value() {
 #[test]
 fn sig_constraint_suffix() {
     // `constraint 'a :: (| l1 : ty1; … |)` as a per-item suffix on a
-    // `SigItem` (`docs/plans/class-signature-lang-gaps.md` gap 3;
-    // `parser.mly:526-530` — a per-item suffix, not a standalone item).
+    // `SigItem` (gap 3; `parser.mly:526-530` — a per-item suffix, not a
+    // standalone item).
     assert_roundtrip(
         "module M : sig\n\
          val document : 'a -> config ?-> block-text -> document\n\
@@ -763,10 +762,10 @@ fn sig_constraint_suffix() {
 fn stdja_sig_block_parses() {
     // The whole `sig … end` block of the real upstream `stdja.satyh:24-51`
     // (command values, command types, `?->`, and the `constraint` suffix
-    // all together) — `docs/plans/class-signature-lang-gaps.md` Slice 1's
-    // acceptance gate. Trimmed to the constructs this port models (no
-    // tuple-of-`string*float*float` font vals needed for the gate, but
-    // included anyway since `TypeProd` already supports them).
+    // all together) — Slice 1's acceptance gate. Trimmed to the constructs
+    // this port models (no tuple-of-`string*float*float` font vals needed
+    // for the gate, but included anyway since `TypeProd` already supports
+    // them).
     assert_roundtrip(
         "module StdJa : sig\n\
          val default-config : config\n\

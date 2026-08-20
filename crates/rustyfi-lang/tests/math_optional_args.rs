@@ -1,9 +1,9 @@
-//! End-to-end acceptance coverage for Gap 4 (`docs/plans/math-mode-
-//! language-gaps.md`): optional/omitted math-command args (`\cmd?:{…}`/
-//! `?*`) and auto-`None` padding for a marker-less bare math-command call.
-//! Pure-pipeline `run`/`int` helpers copied from `optional_args.rs`/
-//! `math_lists.rs` (per those files' own copy-not-share convention, since
-//! test harness files are intentionally standalone).
+//! End-to-end acceptance coverage for Gap 4: optional/omitted math-command
+//! args (`\cmd?:{…}`/ `?*`) and auto-`None` padding for a marker-less bare
+//! math-command call. Pure-pipeline `run`/`int` helpers copied from
+//! `optional_args.rs`/ `math_lists.rs` (per those files' own
+//! copy-not-share convention, since test harness files are intentionally
+//! standalone).
 
 use rustyfi_backend::{FontKey, FontMetrics, Length};
 use rustyfi_lang::value::Value;

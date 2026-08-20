@@ -159,8 +159,7 @@ fn require_resolves_against_lib_root_dist_packages() {
 }
 
 // ============================================================================
-// Slice X4a (docs/plans/design-cross-version-import.md §"Slice X4 — reverse
-// direction"): a V0_0-rooted load's `@require:` reaches the 0.1 corpus
+// Slice X4a: a V0_0-rooted load's `@require:` reaches the 0.1 corpus
 // `dist-v01/packages/`, and the resolved target is tagged V0_1 (the Q4-mirror
 // rule) even though its `module …` head gives `sniff_version` no signal.
 // ============================================================================

@@ -59,12 +59,12 @@ pub fn t_block_text() -> MonoType {
 pub fn t_math_text() -> MonoType {
     MonoType::Base(BaseType::MathText)
 }
-/// `math` — v0.0.6-only alias of [`t_math_text`], named to match
-/// `docs/plans/math-engine.md`'s own `t_math()` naming (both name the same
-/// `BaseType::MathText`; kept as a thin alias rather than renaming the
-/// original, which `IText`/`Ast::MathText`'s existing call sites already
-/// use). V0_1 code should read `t_math_text()` at its call sites instead —
-/// this alias exists only for 0.0.6 signatures already written against it.
+/// `math` — v0.0.6-only alias of [`t_math_text`], named to match own
+/// `t_math()` naming (both name the same `BaseType::MathText`; kept as a
+/// thin alias rather than renaming the original, which
+/// `IText`/`Ast::MathText`'s existing call sites already use). V0_1 code
+/// should read `t_math_text()` at its call sites instead — this alias
+/// exists only for 0.0.6 signatures already written against it.
 pub fn t_math() -> MonoType {
     t_math_text()
 }
@@ -80,29 +80,29 @@ pub fn t_math_boxes() -> MonoType {
 pub fn t_math_script_fn() -> MonoType {
     arrow(t_context(), t_math_boxes())
 }
-/// `math-class` (`docs/plans/math-engine.md` §A item 2;
-/// `primitives.cppo.ml:162-170`'s `MathOrd | MathBin | MathRel | MathOp |
-/// MathPunct | MathOpen | MathClose | MathPrefix | MathInner`) — a built-in
-/// **variant** (same shape as `t_color()`/`t_script()` above), registered by
-/// [`builtin_variants`]. `math-char`/`math-group`/… all take this as an
-/// argument. **Distinct** from `t_math_char_class()` below (phase F's
-/// `MathItalic`/… styling variant) — do not conflate the two.
+/// `math-class` (item 2; `primitives.cppo.ml:162-170`'s `MathOrd | MathBin |
+/// MathRel | MathOp | MathPunct | MathOpen | MathClose | MathPrefix |
+/// MathInner`) — a built-in **variant** (same shape as
+/// `t_color()`/`t_script()` above), registered by [`builtin_variants`].
+/// `math-char`/`math-group`/… all take this as an argument. **Distinct**
+/// from `t_math_char_class()` below (phase F's `MathItalic`/… styling
+/// variant) — do not conflate the two.
 pub fn t_math_class() -> MonoType {
     MonoType::Variant("math-class".to_string(), Vec::new())
 }
-/// `math-char-class` (`docs/plans/math-engine.md` §F; `horzBox.ml:147`'s
-/// `MathItalic | MathBoldItalic | MathRoman | MathBoldRoman | MathScript |
-/// MathBoldScript | MathFraktur | MathBoldFraktur | MathDoubleStruck`) — a
-/// built-in variant, registered by [`builtin_variants`]. Needed for
-/// `math.satyh`'s `sig` (`\math-style : [math-char-class; math] math-cmd`)
-/// and its `\mathrm`/`\mathbf`/`\mathcal`/… definitions to type-check —
-/// gap 5 (`docs/plans/math-mode-language-gaps.md`) resolves the actual
-/// Unicode-math-block restyling this variant names (`rustyfi_backend::
-/// MathCharClass`/`resolve_variant_char`) once evaluation reaches a value
-/// of this type. This TYPE itself (`math-char-class`, nominal, no
-/// parameters) is version-blind; its CONSTRUCTOR SET is not — see
-/// [`builtin_variants_with_version`]'s `math_char_class_decl` (math-package
-/// completion M3: V0_1 registers 14 ctors, V0_0 exactly the 9 above).
+/// `math-char-class` (`horzBox.ml:147`'s `MathItalic | MathBoldItalic |
+/// MathRoman | MathBoldRoman | MathScript | MathBoldScript | MathFraktur |
+/// MathBoldFraktur | MathDoubleStruck`) — a built-in variant, registered by
+/// [`builtin_variants`]. Needed for `math.satyh`'s `sig` (`\math-style :
+/// [math-char-class; math] math-cmd`) and its
+/// `\mathrm`/`\mathbf`/`\mathcal`/… definitions to type-check — gap 5
+/// resolves the actual Unicode-math-block restyling this variant names
+/// (`rustyfi_backend:: MathCharClass`/`resolve_variant_char`) once
+/// evaluation reaches a value of this type. This TYPE itself
+/// (`math-char-class`, nominal, no parameters) is version-blind; its
+/// CONSTRUCTOR SET is not — see [`builtin_variants_with_version`]'s
+/// `math_char_class_decl` (math-package completion M3: V0_1 registers 14
+/// ctors, V0_0 exactly the 9 above).
 pub fn t_math_char_class() -> MonoType {
     MonoType::Variant("math-char-class".to_string(), Vec::new())
 }
@@ -154,12 +154,11 @@ pub fn t_paren(version: RustyfiVersion) -> MonoType {
 pub fn t_math_kern_func() -> MonoType {
     arrows(vec![t_length(), t_length()], t_length())
 }
-/// `math-variant-char`'s 9-field per-style codepoint record
-/// (`docs/plans/math-engine.md` §F; `value.rs`'s `MathVariantStyle`) — a
-/// closed record row, structural like `t_pbinfo()`/`t_page_content_scheme()`
-/// above. Field order doesn't matter (records are structural), only the
-/// label set; matches `math.satyh`'s `greek-lowercase`/`greek-uppercase`
-/// record literals field-for-field.
+/// `math-variant-char`'s 9-field per-style codepoint record (`value.rs`'s
+/// `MathVariantStyle`) — a closed record row, structural like
+/// `t_pbinfo()`/`t_page_content_scheme()` above. Field order doesn't matter
+/// (records are structural), only the label set; matches `math.satyh`'s
+/// `greek-lowercase`/`greek-uppercase` record literals field-for-field.
 pub fn t_math_variant_style() -> MonoType {
     const LABELS: [&str; 9] = [
         "italic",
@@ -179,7 +178,6 @@ pub fn t_math_variant_style() -> MonoType {
     MonoType::Record(row)
 }
 /// `image` (vminst.ml's `tIMG`) — `load-image`'s result;
-/// `docs/plans/math-images.md` §Slice 1.
 pub fn t_image() -> MonoType {
     MonoType::Base(BaseType::Image)
 }
@@ -248,9 +246,8 @@ pub fn t_point() -> MonoType {
 /// page-number : int |}` a `hook-page-break` closure's first argument
 /// receives. The port has first-class row-typed records
 /// (`types::MonoType::Record`) and `#field` access, so this type-checks
-/// structurally with no nominal `tPBINFO` variant needed
-/// (`docs/plans/hooks-annotations-crossref.md` §Slice 1 point 5). Runtime:
-/// `Value::Record` with the single `"page-number"` key, built by
+/// structurally with no nominal `tPBINFO` variant needed (point 5).
+/// Runtime: `Value::Record` with the single `"page-number"` key, built by
 /// `fire_hooks` (`lib.rs`).
 pub fn t_pbinfo() -> MonoType {
     MonoType::Record(types::Row::Cons(
@@ -296,15 +293,14 @@ pub fn t_page() -> MonoType {
     MonoType::Variant("page".to_string(), Vec::new())
 }
 /// `page-break`/`page-break-multicolumn`/`page-break-two-column`'s
-/// first-argument type, forked per L7 (docs/plans/rustyfi-0-1-0-support.md
-/// §3): `t_page()` (the v0.0.6 9-ctor ADT) under `has_page_adt()`, a plain
-/// `length * length` tuple otherwise. `RustyfiVersion::has_page_adt()` is
-/// the single source of truth for which shape a given version's
-/// `page-break*` family admits — `builtin_variants` below gates the ADT's
-/// own *registration* on the exact same method, so the two can never
-/// disagree (a `V0_1` program can never see a type that calls `t_page()`
-/// while `page`'s `VariantDecl` is absent from its `builtin_variants`
-/// result).
+/// first-argument type, forked per L7: `t_page()` (the v0.0.6 9-ctor ADT)
+/// under `has_page_adt()`, a plain `length * length` tuple otherwise.
+/// `RustyfiVersion::has_page_adt()` is the single source of truth for
+/// which shape a given version's `page-break*` family admits —
+/// `builtin_variants` below gates the ADT's own *registration* on the
+/// exact same method, so the two can never disagree (a `V0_1` program can
+/// never see a type that calls `t_page()` while `page`'s `VariantDecl` is
+/// absent from its `builtin_variants` result).
 pub fn t_page_or_geometry(version: RustyfiVersion) -> MonoType {
     if version.has_page_adt() {
         t_page()
@@ -315,8 +311,7 @@ pub fn t_page_or_geometry(version: RustyfiVersion) -> MonoType {
 /// `page-content-scheme` (vminst.ml's `tPAGECONT`) — the closed record row
 /// `{| text-origin : point; text-height : length |}` a `page-break`
 /// content-scheme closure returns, applied once per page with that page's
-/// `pbinfo` (`docs/plans/document-page-model.md` §"The scheme model").
-/// Structural, like `t_pbinfo` above — no nominal type needed.
+/// `pbinfo`. Structural, like `t_pbinfo` above — no nominal type needed.
 pub fn t_page_content_scheme() -> MonoType {
     MonoType::Record(types::Row::Cons(
         "text-origin".to_string(),
@@ -387,7 +382,7 @@ pub fn t_paddings() -> MonoType {
 /// inline-boxes) | EmptyCell | MultiCell of (int * int * paddings *
 /// inline-boxes)`) — a built-in **variant** (same shape as `t_color()`
 /// above), registered by [`builtin_variants`]. `tabular`'s first argument is
-/// `(cell list) list`; docs/plans/table-subsystem.md §Slice 1.
+/// `(cell list) list`;
 pub fn t_cell() -> MonoType {
     MonoType::Variant("cell".to_string(), Vec::new())
 }
@@ -401,10 +396,10 @@ pub fn t_dash() -> MonoType {
 /// `tIGR`, `inline-graphics-outer`'s `tIGRO`, `tabular`'s `tRULESF`,
 /// `t_deco`'s own result): `list graphics` (`tL tGR`) under `V0_0`, one
 /// `graphics` collection (`tGR`) under `V0_1` — the hidden alias-redefinition
-/// retype `docs/plans/…/prim-retype-sweep.md` §1.3 surfaces (H1-H6, R2).
-/// Runtime counterpart: `coerce_graphics_result` (`primitives.rs`), keyed on
-/// the same `RustyfiVersion::graphics_is_collection()` capability so the env
-/// and type-env agree by construction.
+/// retype surfaces (H1-H6, R2). Runtime counterpart: `coerce_graphics_result`
+/// (`primitives.rs`), keyed on the same
+/// `RustyfiVersion::graphics_is_collection()` capability so the env and
+/// type-env agree by construction.
 pub fn t_graphics_output(version: RustyfiVersion) -> MonoType {
     if version.graphics_is_collection() {
         t_graphics()
@@ -432,13 +427,13 @@ pub fn t_deco(version: RustyfiVersion) -> MonoType {
 /// body (`primitives.rs`'s `prim_block_frame_breakable`) pops and drops it
 /// entirely (like `t_deco()`'s own callers above), but it is typed
 /// faithfully here so callers still type-check exactly as they would
-/// upstream. docs/plans/context-box-prims.md §4.
+/// upstream.
 pub fn t_decoset(version: RustyfiVersion) -> MonoType {
     product(vec![t_deco(version); 4])
 }
 /// `font = string * float * float` (vminst.ml's `tFONT`) — an
 /// `(abbrev, size_ratio, rising_ratio)` triple; `set-font`'s second
-/// argument. docs/plans/context-box-prims.md §6.
+/// argument.
 pub fn t_font() -> MonoType {
     product(vec![t_string(), t_float(), t_float()])
 }
@@ -693,9 +688,8 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
         // `page-break : page -> (pbinfo -> page-content-scheme) -> (pbinfo
         // -> page-parts) -> block-boxes -> document` (vminst.ml:1024,
         // `BackendPageBreaking`: `~% (tPG @-> tPAGECONTF @-> tPAGEPARTSF @->
-        // tBB @-> tDOC)`) — the real 4-arg primitive
-        // (docs/plans/document-page-model.md Slice 1), up from the old
-        // LOCAL 2-arg `context -> block-boxes -> document`.
+        // tBB @-> tDOC)`) — the real 4-arg primitive (Slice 1), up from the
+        // old LOCAL 2-arg `context -> block-boxes -> document`.
         "page-break" => poly0(arrows(
             vec![
                 t_page_or_geometry(version),
@@ -878,17 +872,17 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
         )),
         // vminst.ml:1648 `PrimitiveGetTextWidth`: `~% (tCTX @-> tLN)`.
         "get-text-width" => poly0(arrow(t_context(), t_length())),
-        // vminst.ml:1247 `PrimitiveGetInitialContext`:
-        // `~% (tLN @-> tICMD tMATH @-> tCTX)` — faithfully, a `[math]
-        // inline-cmd` (our `MonoType::InlineCmd` with exactly one mandatory
-        // `math` argument), NOT `MathCmd` (that's `MathCommandType`, the
-        // different v0.0.6 type used for math-mode commands like `\sqrt`).
-        // RESTORED (`docs/plans/math-engine.md` §G): `(command \math)`
-        // (`class-signature-lang-gaps.md` gap 1) constructs the first-class
-        // command reference this needs; every call site now passes
-        // `(command \math)` (or a local stub command) instead of `()`.
-        // FAITHFUL: `prim_get_initial_context` (primitives.rs) interns the
-        // command via `Interp::register_math_command` and installs it as
+        // vminst.ml:1247 `PrimitiveGetInitialContext`: `~% (tLN @-> tICMD
+        // tMATH @-> tCTX)` — faithfully, a `[math] inline-cmd` (our
+        // `MonoType::InlineCmd` with exactly one mandatory `math`
+        // argument), NOT `MathCmd` (that's `MathCommandType`, the different
+        // v0.0.6 type used for math-mode commands like `\sqrt`). RESTORED:
+        // `(command \math)` (`class-signature-lang-gaps.md` gap 1)
+        // constructs the first-class command reference this needs; every
+        // call site now passes `(command \math)` (or a local stub command)
+        // instead of `()`. FAITHFUL: `prim_get_initial_context`
+        // (primitives.rs) interns the command via
+        // `Interp::register_math_command` and installs it as
         // `Context::math_command`, consulted by `read_inline`'s `EmbedMath`
         // arm for bare `${…}` in prose.
         "get-initial-context" => poly0(arrow(
@@ -896,8 +890,7 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
             arrow(inline_cmd(vec![mandatory(t_math_text())]), t_context()),
         )),
 
-        // ---- context ops, continued (phase 4, part 2 — a LOCAL,
-        // non-upstream primitive; see primitives.rs's `prims!` table
+        // ---- context ops, continued (phase 4, part 2 — a LOCAL, non-upstream primitive; see primitives.rs's `prims!` table
         // comment on `"set-font-key"` for why it exists) --------------------
         "set-font-key" => poly0(arrow(t_int(), arrow(t_context(), t_context()))),
 
@@ -928,7 +921,7 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
         // vminst.ml:1171 `BackendVertSkip`: `~% (tLN @-> tBB)`.
         "block-skip" => poly0(arrow(t_length(), t_block_boxes())),
 
-        // ---- docs/plans/design-reflow-s4-lists.md §4.1: the reflow
+        // ---- the reflow
         // marker-box constructors — no vminst.ml entry (NEW, not a port);
         // see `primitives.rs`'s `prim_list_mark`/`prim_inline_mark` doc
         // comments for the `int` tag encoding. Both produce an INERT marker
@@ -937,14 +930,13 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
         "list-mark" => poly0(arrow(t_int(), t_block_boxes())),
         "inline-mark" => poly0(arrow(t_int(), t_inline_boxes())),
 
-        // ---- images (Slice 1: raster images; docs/plans/math-images.md,
-        // mirroring v0.0.6 vminstdef.yaml:540/:554) ----
+        // ---- images (Slice 1: raster images;, mirroring v0.0.6 vminstdef.yaml:540/:554) ----
         // `load-image : string -> image`.
         "load-image" => poly0(arrow(t_string(), t_image())),
         // `use-image-by-width : image -> length -> inline-boxes`.
         "use-image-by-width" => poly0(arrows(vec![t_image(), t_length()], t_inline_boxes())),
-        // `load-pdf-image : string -> int -> image` (v0.0.6 vminstdef.yaml:525;
-        // docs/plans/design-load-pdf-image.md). Path + 1-based page number.
+        // `load-pdf-image : string -> int -> image` (v0.0.6
+        // vminstdef.yaml:525). Path + 1-based page number.
         "load-pdf-image" => poly0(arrows(vec![t_string(), t_int()], t_image())),
 
         // ---- inline-fil ----
@@ -1012,8 +1004,7 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
         // string -> a`, so this one arm serves both versions unchanged.
         "abort-with-message" => poly1(|a| arrow(t_string(), a)),
 
-        // ==== Slice 1 graphics primitives (docs/plans/graphics-subsystem.md
-        // §2) — paths, fill/stroke, and the `inline-graphics` on-page sink.
+        // ==== Slice 1 graphics primitives (§2) — paths, fill/stroke, and the `inline-graphics` on-page sink.
         // Argument order transcribed from `tools/gencode/vminst.ml`:
         // `start-path` :713, `line-to` :727, `terminate-path` :759,
         // `close-with-line` :773, `fill` :2398, `stroke` :2381,
@@ -1050,13 +1041,13 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
             t_inline_boxes(),
         )),
 
-        // `tabular : (cell list) list -> (length list -> length list ->
-        // {list graphics / graphics}) -> inline-boxes` (v0.0.6 vminst.ml:539,
+        // `tabular : (cell list) list -> (length list -> length list -> {list
+        // graphics / graphics}) -> inline-boxes` (v0.0.6 vminst.ml:539,
         // `tRULESF = (tL tLN) @-> (tL tLN) @-> (tL tGR)` at
         // primitives.cppo.ml:141; dev-0-1-0 inlines the same shape with a
         // bare `tGR` result, vminst.ml:487-489) — the ruled-grid primitive;
-        // docs/plans/table-subsystem.md §Slice 1. R2 (prim-retype-sweep.md
-        // §1.2): same per-version callback-result fork as `inline-graphics`.
+        // R2 (prim-retype-sweep.md §1.2): same per-version callback-result
+        // fork as `inline-graphics`.
         "tabular" => poly0(arrows(
             vec![
                 list(list(t_cell())),
@@ -1081,8 +1072,7 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
             t_inline_boxes(),
         )),
 
-        // ==== gr.satyh roadmap prims (docs/plans/graphics-subsystem.md
-        // §Full roadmap A/B/C/D) — signatures from `tools/gencode/vminst.ml`:
+        // ==== gr.satyh roadmap prims (§Full roadmap A/B/C/D) — signatures from `tools/gencode/vminst.ml`:
         // `bezier-to` :742, `close-with-bezier` :787, `shift-path` :663,
         // `linear-transform-path` :678, `shift-graphics` :2451,
         // `linear-transform-graphics` :2432, `get-graphics-bbox` :2466,
@@ -1153,7 +1143,7 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
         // `primitives.rs`'s `prim_draw_text`).
         "draw-text" => poly0(arrows(vec![t_point(), t_inline_boxes()], t_graphics())),
 
-        // ==== pervasives.satyh unblockers (docs/plans/stdlib-port.md) ====
+        // ==== pervasives.satyh unblockers ====
         //
         // vminst.ml:2020 `PrimitiveGetNaturalMetrics`:
         // `~% (tIB @-> tPROD [tLN; tLN; tLN])`.
@@ -1200,7 +1190,7 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
         // comment.
         "get-axis-height" => poly0(arrow(t_context(), t_length())),
 
-        // ==== docs/plans/hooks-annotations-crossref.md §Slice 1 ====
+        // ==== hooks / annotations / cross-references, Slice 1 ====
         //
         // vminstdef.yaml:576 `~% ((tPBINFO @-> tPT @-> tU) @-> tIB)`.
         "hook-page-break" => poly0(arrow(
@@ -1224,7 +1214,7 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
         // — `get-cross-reference` without the recorded miss. FAITHFUL.
         "probe-cross-reference" => poly0(arrow(t_string(), t_option(t_string()))),
 
-        // ==== docs/plans/hooks-annotations-crossref.md §B/§D: annot.satyh's
+        // ==== annot.satyh's
         // prim surface. STAND-IN bodies — see primitives.rs's
         // `prim_get_leftmost_script`/`prim_inline_frame_breakable`/
         // `prim_register_destination` doc comments. ====
@@ -1264,7 +1254,7 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
             t_unit(),
         )),
 
-        // ==== docs/plans/math-engine.md §A + §G: the faithful `Value::Math`
+        // ==== + §G: the faithful `Value::Math`
         // primitive layer `math.satyh` is built out of. Signatures
         // transcribed from `tools/gencode/vminst.ml` (cited per entry); the
         // "Phase" column of the plan's primitive-inventory table follows —
@@ -1470,15 +1460,14 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
             vec![t_math_class(), t_math_variant_style()],
             t_math(),
         )),
-        // gap 7 (`docs/plans/math-mode-language-gaps.md`) — no bundled
-        // `.satyh` consumer, but v0.0.6-shaped: `math-char-class -> int ->
-        // int -> context -> context` (`set-math-variant-char`); `context ->
-        // math -> math-class option` (the boundary-class introspection
-        // pair).
-        // v0.1 (vminst.ml:36): `int -> (mccls -> int) -> ctx -> ctx` — the
-        // v01 body applies the selector once per each of the 9
-        // `MathCharClass` values and inserts into `math_variant_char_map`
-        // (eager materialization of upstream's stored selector).
+        // gap 7 — no bundled `.satyh` consumer, but v0.0.6-shaped:
+        // `math-char-class -> int -> int -> context -> context`
+        // (`set-math-variant-char`); `context -> math -> math-class option`
+        // (the boundary-class introspection pair). v0.1 (vminst.ml:36):
+        // `int -> (mccls -> int) -> ctx -> ctx` — the v01 body applies the
+        // selector once per each of the 9 `MathCharClass` values and
+        // inserts into `math_variant_char_map` (eager materialization of
+        // upstream's stored selector).
         "set-math-variant-char" => {
             if version.math_is_split() {
                 poly0(arrows(
@@ -1647,7 +1636,7 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
         // `prim_set_min_gap_of_lines`).
         "set-min-gap-of-lines" => poly0(arrow(t_length(), arrow(t_context(), t_context()))),
 
-        // ==== docs/plans/context-box-prims.md §Slice 1 (rows 1-10): the
+        // ==== (rows 1-10): the
         // context-setter + box-combinator prims `code.satyh`/`itemize.satyh`
         // need. Signatures transcribed from `tools/gencode/vminst.ml` (cited
         // per entry). ====
@@ -1662,18 +1651,16 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
         // `primitives.rs`'s `prim_get_text_color`/`make_color_value`.
         "get-text-color" => poly0(arrow(t_context(), t_color())),
         // vminst.ml:1692 `PrimitiveSetHyphenPenalty`: `~% (tI @-> tCTX @-> tCTX)`.
-        // FAITHFUL store; consumed by `flush_word`'s hyphenation injection
-        // when a dictionary is installed (`docs/plans/design-hyphenation.md`).
+        // FAITHFUL store; consumed by `flush_word`'s hyphenation injection when a
+        // dictionary is installed.
         "set-hyphen-penalty" => poly0(arrow(t_int(), arrow(t_context(), t_context()))),
         // vminstdef.yaml:1163-1177 `PrimitiveSetHyphenMin`:
         // `int -> int -> context -> context`, params
-        // `(left_hyphen_min, right_hyphen_min)`
-        // (`docs/plans/design-hyphenation.md` §7).
+        // `(left_hyphen_min, right_hyphen_min)`.
         "set-hyphen-min" => poly0(arrows(vec![t_int(), t_int(), t_context()], t_context())),
-        // vminst.ml:1309 `PrimitiveSetSpaceRatio`:
-        // `~% (tFL @-> tFL @-> tFL @-> tCTX @-> tCTX)`, params
-        // `(natural, shrink, stretch)`. FAITHFUL store; consumption by the
-        // line breaker is a `docs/plans/text-rendering.md` follow-on.
+        // vminst.ml:1309 `PrimitiveSetSpaceRatio`: `~% (tFL @-> tFL @->
+        // tFL @-> tCTX @-> tCTX)`, params `(natural, shrink, stretch)`.
+        // FAITHFUL store; consumption by the line breaker is a follow-on.
         "set-space-ratio" => poly0(arrows(
             vec![t_float(), t_float(), t_float(), t_context()],
             t_context(),
@@ -1736,26 +1723,24 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
         "line-stack-bottom" => poly0(arrow(list(t_inline_boxes()), t_inline_boxes())),
         // vminst.ml:1130 PrimitiveAddFootnote: ~% (tBB @-> tIB). FAITHFUL —
         // see primitives.rs's prim_add_footnote (footnote float
-        // accumulator, docs/plans/document-page-model.md §C).
+        // accumulator).
         "add-footnote" => poly0(arrow(t_block_boxes(), t_inline_boxes())),
         // vminst.ml:1463 `PrimitiveSetFont`: `~% (tSCR @-> tFONT @-> tCTX @-> tCTX)`.
-        // STAND-IN: single `FontKey` slot, script ignored — see
-        // `primitives.rs`'s `prim_set_font` (real per-script wiring is
-        // `docs/plans/text-rendering.md`'s Slice 1).
+        // STAND-IN: single `FontKey` slot, script ignored — see `primitives.rs`'s
+        // `prim_set_font` (real per-script wiring is Slice 1).
         "set-font" => poly0(arrows(vec![t_script(), t_font(), t_context()], t_context())),
         // `set-code-text-command : [string] inline-cmd -> context -> context`
-        // (`stdja:116`; orphan #4 of `docs/plans/build-order-to-stdja.md`,
-        // not in any vminst.ml table this port has transcribed — no
-        // upstream line cited). STAND-IN: `(command \cmd)` (`docs/plans/
-        // class-signature-lang-gaps.md` gap 1, already landed) means real
-        // programs CAN construct a `[string] inline-cmd` value to pass here
-        // now — but `Context` (rustyfi-backend) still can't hold an
-        // arbitrary lang-side `Value` without an illegal reverse crate
-        // dependency, and the one legal indirection this codebase uses for
-        // that (`Interp::hooks`'s ID-table seam) lives in `eval.rs`, outside
-        // this slice's file boundary — so, like `set-math-command`/
-        // `set-math-font` above, the command is accepted and dropped (see
-        // `primitives.rs`'s `prim_set_code_text_command`).
+        // (`stdja:116`; orphan #4 of, not in any vminst.ml table this port
+        // has transcribed — no upstream line cited). STAND-IN: `(command
+        // \cmd)` (gap 1, already landed) means real programs CAN construct a
+        // `[string] inline-cmd` value to pass here now — but `Context`
+        // (rustyfi-backend) still can't hold an arbitrary lang-side `Value`
+        // without an illegal reverse crate dependency, and the one legal
+        // indirection this codebase uses for that (`Interp::hooks`'s ID-table
+        // seam) lives in `eval.rs`, outside this slice's file boundary — so,
+        // like `set-math-command`/ `set-math-font` above, the command is
+        // accepted and dropped (see `primitives.rs`'s
+        // `prim_set_code_text_command`).
         "set-code-text-command" => poly0(arrow(
             inline_cmd(vec![mandatory(t_string())]),
             arrow(t_context(), t_context()),
@@ -1766,7 +1751,7 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
         // `primitives.rs`'s `prim_get_natural_length`.
         "get-natural-length" => poly0(arrow(t_block_boxes(), t_length())),
 
-        // ==== `docs/plans/build-order-to-stdja.md` step 8/9 orphans: the
+        // ==== step 8/9 orphans: the
         // remaining stdja.satyh primitives with no prior slice.
         // `set-dominant-wide-script`/`set-dominant-narrow-script`/
         // `set-language` (rows 15/17/18) are now FAITHFUL stores
@@ -1817,8 +1802,7 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
         // `primitives.rs`'s `prim_extract_string`).
         "extract-string" => poly0(arrow(t_inline_boxes(), t_string())),
 
-        // ==== docs/plans/context-box-prims.md §G (text-mode-context
-        // sliver): the three PURE text-info prims. The text/html backends
+        // ==== (text-mode-context sliver): the three PURE text-info prims. The text/html backends
         // (`stringify-inline`/`stringify-block`, `.satyh-text` loading) are
         // deliberately out of scope for this PDF port — see
         // `primitives.rs`'s section comment. ====
@@ -2070,11 +2054,11 @@ pub fn builtin_variants_with_version(version: RustyfiVersion) -> Vec<VariantDecl
         param_vars: Vec::new(),
     };
 
-    // `page` (docs/plans/document-page-model.md §Slice 1) — nullary variant,
-    // the exact constructor set at `primitives.cppo.ml:204-212`: 8 nullary
-    // paper-size constants plus `UserDefinedPaper` carrying a `(length *
-    // length)` payload. `page-break`'s first argument; `as_page`
-    // (`primitives.rs`) maps each ctor to a backend `PaperSize`.
+    // `page` — nullary variant, the exact constructor set at
+    // `primitives.cppo.ml:204-212`: 8 nullary paper-size constants plus
+    // `UserDefinedPaper` carrying a `(length * length)` payload.
+    // `page-break`'s first argument; `as_page` (`primitives.rs`) maps each
+    // ctor to a backend `PaperSize`.
     //
     // L7 (rustyfi-0-1-0-support.md §3): GONE in v0.1 upstream (no
     // replacement ADT — paper sizes are a plain `length * length` tuple
@@ -2100,12 +2084,12 @@ pub fn builtin_variants_with_version(version: RustyfiVersion) -> Vec<VariantDecl
         param_vars: Vec::new(),
     };
 
-    // `cell` (docs/plans/table-subsystem.md §Slice 1) — nullary variant,
-    // transcribed from `primitives.cppo.ml:214-217`: `NormalCell of
-    // (paddings * inline-boxes) | EmptyCell | MultiCell of (int * int *
-    // paddings * inline-boxes)`. `EmptyCell`'s payload is `None` (this
-    // port's nullary-constructor spelling, see this fn's doc comment),
-    // matching upstream's `Poly(tU)` "no real payload" case.
+    // `cell` — nullary variant, transcribed from
+    // `primitives.cppo.ml:214-217`: `NormalCell of (paddings *
+    // inline-boxes) | EmptyCell | MultiCell of (int * int * paddings *
+    // inline-boxes)`. `EmptyCell`'s payload is `None` (this port's
+    // nullary-constructor spelling, see this fn's doc comment), matching
+    // upstream's `Poly(tU)` "no real payload" case.
     let cell_decl = VariantDecl {
         name: "cell".to_string(),
         params: 0,
@@ -2128,9 +2112,9 @@ pub fn builtin_variants_with_version(version: RustyfiVersion) -> Vec<VariantDecl
         param_vars: Vec::new(),
     };
 
-    // `math-class` (docs/plans/math-engine.md §A item 2) — nullary variant,
-    // transcribed from `primitives.cppo.ml:162-170`. **Distinct** from
-    // `math-char-class` below (phase F's styling variant) — do not conflate.
+    // `math-class` (item 2) — nullary variant, transcribed from
+    // `primitives.cppo.ml:162-170`. **Distinct** from `math-char-class`
+    // below (phase F's styling variant) — do not conflate.
     let math_class_decl = VariantDecl {
         name: "math-class".to_string(),
         params: 0,
@@ -2148,13 +2132,12 @@ pub fn builtin_variants_with_version(version: RustyfiVersion) -> Vec<VariantDecl
         param_vars: Vec::new(),
     };
 
-    // `math-char-class` (docs/plans/math-engine.md §F) — nullary variant.
-    // Constructor set is version-dependent (math-package completion M3):
-    // `v0.0.6` upstream has exactly these 9
-    // (`v0.0.6:src/backend/horzBox.ml:147-158`'s exact set, literally
-    // "TEMPORARY; should add more"); dev-0-1-0 widens `math_char_class`
-    // 9 → 14 (`b836d512:src/backend/horzBox.ml:98-113`), adding
-    // `MathSansSerif`/`MathBoldSansSerif`/`MathItalicSansSerif`/
+    // `math-char-class` — nullary variant. Constructor set is
+    // version-dependent (math-package completion M3): `v0.0.6` upstream has
+    // exactly these 9 (`v0.0.6:src/backend/horzBox.ml:147-158`'s exact set,
+    // literally "TEMPORARY; should add more"); dev-0-1-0 widens
+    // `math_char_class` 9 → 14 (`b836d512:src/backend/horzBox.ml:98-113`),
+    // adding `MathSansSerif`/`MathBoldSansSerif`/`MathItalicSansSerif`/
     // `MathBoldItalicSansSerif`/`MathTypewriter`. Needed for `math.satyh`'s
     // `\mathrm`/`\mathbf`/`\mathcal`/`\mathfrak`/`\mathbb`/`\bm`/`\mathsf`/
     // `\mathtt` to type-check (each applies `math-char-class` to one of

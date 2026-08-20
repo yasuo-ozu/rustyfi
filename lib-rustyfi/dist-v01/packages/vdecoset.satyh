@@ -1,6 +1,6 @@
 % vdecoset.satyh — SATySFi 0.1 stdlib `VDecoSet`, vendored for Legacy
-% packaging (docs/plans/rustyfi-0-1-0-support.md §2 P2 / §4 phase 6).
-% Source: saphe-split@b836d512:lib-rustyfi/packages/stdlib/stdlib.0.0.1/
+% packaging (P2 / §4 phase 6). Source:
+% saphe-split@b836d512:lib-rustyfi/packages/stdlib/stdlib.0.0.1/
 %   src/vdecoset.satyh — transliteration deltas:
 %   - T1: `use Color` / `use Graphics` / `use Path` dropped; `@require:
 %     color`, `@require: graphics`, `@require: path` added.

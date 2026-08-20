@@ -10,11 +10,11 @@ authors.workspace = true
 rustyfi-syntax.workspace = true
 rustyfi-backend.workspace = true
 thiserror.workspace = true
-# Raster image decoding for `load-image` (docs/plans/math-images.md §Slice 1).
+# Raster image decoding for `load-image`.
 image.workspace = true
-# PDF object-model reader for `load-pdf-image` (docs/plans/design-load-pdf-image.md).
+# PDF object-model reader for `load-pdf-image`.
 lopdf.workspace = true
-# Knuth-Liang hyphenation (D4, docs/plans/text-rendering.md §3): en-US
+# Knuth-Liang hyphenation (D4): en-US
 # patterns only, embedded at compile time (no dictionary files to ship at
 # runtime) — the same Liang/TeX pattern data upstream's
 # `dist/hyph/english.rustyfi-hyph` carries.

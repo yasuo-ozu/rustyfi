@@ -5,15 +5,15 @@
 //! writes Identity-H glyph-index content streams against real embedded font
 //! files instead of WinAnsi bytes against the built-in base-14 fonts.
 //!
-//! D5 (docs/plans/text-rendering.md §2) subsets a `glyf`-outline face's
-//! `FontFile2` down to the glyphs the document actually used, via a
-//! translating `/CIDToGIDMap` stream — see `write_font`'s doc comment for
-//! the design (raw original gid stays the CID; only the embedded font's OWN
-//! internal glyph ids get renumbered by the subsetter).
+//! D5 subsets a `glyf`-outline face's `FontFile2` down to the glyphs the
+//! document actually used, via a translating `/CIDToGIDMap` stream — see
+//! `write_font`'s doc comment for the design (raw original gid stays the
+//! CID; only the embedded font's OWN internal glyph ids get renumbered by
+//! the subsetter).
 //!
-//! docs/plans/design-cff-embedding.md adds a second path for CFF/OpenType-CFF
-//! outlines (`CIDFontType0`/`/FontFile3`), previously out of scope (a CFF
-//! face's `FontFile2` embed is invalid PDF).
+//! adds a second path for CFF/OpenType-CFF outlines
+//! (`CIDFontType0`/`/FontFile3`), previously out of scope (a CFF face's
+//! `FontFile2` embed is invalid PDF).
 //!
 //! **S2 (real CFF subsetting via `subsetter`) is implemented.** Unlike the
 //! glyf path, `CIDFontType0` has no `/CIDToGIDMap` to absorb subset
@@ -63,15 +63,15 @@ use crate::{
     write_form_xobjects, write_image_xobjects, write_named_dests, write_outline, PdfError,
 };
 
-/// The PDF resource name for physical font file `file_idx` (D1a,
-/// docs/plans/text-rendering.md §1a) — one name per *file* actually
-/// embedded, replacing the old fixed `FONT_RES_NAMES: [&str; 3]` table that
-/// could only name `FontKey(0/1/2)` and not a registry slot beyond that.
-/// Both the page `/Resources /Font` dictionary and every `Tf` operand this
-/// writer emits go through this single naming function, so they always
-/// agree. For a document using only the default regular face, `file_idx` is
-/// always `0` and this is `"F0"` — the same resource name the pre-D1a fixed
-/// table produced, so that path stays byte-identical.
+/// The PDF resource name for physical font file `file_idx` (D1a) — one name
+/// per *file* actually embedded, replacing the old fixed `FONT_RES_NAMES:
+/// [&str; 3]` table that could only name `FontKey(0/1/2)` and not a
+/// registry slot beyond that. Both the page `/Resources /Font` dictionary
+/// and every `Tf` operand this writer emits go through this single naming
+/// function, so they always agree. For a document using only the default
+/// regular face, `file_idx` is always `0` and this is `"F0"` — the same
+/// resource name the pre-D1a fixed table produced, so that path stays
+/// byte-identical.
 pub(crate) fn font_res_name(file_idx: usize) -> String {
     format!("F{file_idx}")
 }
@@ -118,9 +118,8 @@ pub fn render_pdf_ttf_with(
     // the document) — every run emits the ORIGINAL face gid as the CID here
     // (no `cid_remaps` entries yet), and the resulting content bytes are
     // discarded. This has to happen before any CFF file can be subset,
-    // because the subset's glyph set (and hence its `GlyphRemapper`, S2,
-    // docs/plans/design-cff-embedding.md §6.3) depends on which glyphs the
-    // WHOLE document uses, not just one page.
+    // because the subset's glyph set (and hence its `GlyphRemapper`, S2)
+    // depends on which glyphs the WHOLE document uses, not just one page.
     let mut usage: BTreeMap<usize, FontUsage> = BTreeMap::new();
     for (i, page) in pages.iter().enumerate() {
         let overlay = extras.page_graphics.get(i).map(|v| v.as_slice()).unwrap_or(&[]);
@@ -194,9 +193,9 @@ pub fn render_pdf_ttf_with(
     // this section.
     let used = used_images(pages, &extras.page_graphics);
     let img_refs = write_image_xobjects(&mut pdf, || next_ref(&mut alloc), images, &used);
-    // One Form XObject per imported PDF page (`load-pdf-image`,
-    // docs/plans/design-load-pdf-image.md §3) — shared with `render_pdf`
-    // (base-14, `lib.rs`); see that module's doc comment.
+    // One Form XObject per imported PDF page (`load-pdf-image`) — shared
+    // with `render_pdf` (base-14, `lib.rs`); see that module's doc
+    // comment.
     let form_refs = write_form_xobjects(&mut pdf, || next_ref(&mut alloc), images, &used);
 
     let page_ids: Vec<Ref> = pages.iter().map(|_| next_ref(&mut alloc)).collect();
@@ -305,11 +304,11 @@ pub fn render_pdf_ttf_with(
 /// `page_content` — see that function's doc comment for the byte-identity
 /// guard on an empty overlay.
 ///
-/// `cid_remaps` (S2, docs/plans/design-cff-embedding.md §6.3): per-file
-/// `GlyphRemapper`s for CFF files that have already been subset — see
-/// `render_pdf_ttf_with`'s doc comment for the two-pass reason this exists.
-/// A `glyf` file (or a CFF file with no entry, e.g. subsetting declined it)
-/// keeps emitting the original gid, unaffected.
+/// `cid_remaps` (S2): per-file `GlyphRemapper`s for CFF files that have
+/// already been subset — see `render_pdf_ttf_with`'s doc comment for the
+/// two-pass reason this exists. A `glyf` file (or a CFF file with no entry,
+/// e.g. subsetting declined it) keeps emitting the original gid,
+/// unaffected.
 fn page_content(
     page: &Page,
     paper_h: f32,
@@ -336,12 +335,12 @@ fn page_content(
 
 /// Emit one already-placed `PureHorzBox` at absolute PDF-space coordinates
 /// `(tx, ty)` — the CID-writer twin of `crate::emit_box` (base-14, `lib.rs`),
-/// factored out for the same reason (docs/plans/table-subsystem.md §4):
-/// reentrant, so a `Tabular` box's cells emit through the same path a
-/// top-level line uses, recursively. Text emission is the one thing that
-/// differs between the two writers (an `encode_glyph_run` Identity-H run
-/// with per-file `usage` tracking here, vs. base-14's WinAnsi `Tj`), so this
-/// threads `store`/`usage` where `crate::emit_box` doesn't need to.
+/// factored out for the same reason: reentrant, so a `Tabular` box's cells
+/// emit through the same path a top-level line uses, recursively. Text
+/// emission is the one thing that differs between the two writers (an
+/// `encode_glyph_run` Identity-H run with per-file `usage` tracking here, vs.
+/// base-14's WinAnsi `Tj`), so this threads `store`/`usage` where
+/// `crate::emit_box` doesn't need to.
 fn emit_box(
     content: &mut Content,
     bx: &PureHorzBox,
@@ -384,8 +383,8 @@ fn emit_box(
             height,
             image,
         } => {
-            // load-pdf-image (docs/plans/design-load-pdf-image.md §3.3): see
-            // `crate::emit_box`'s (base-14, `lib.rs`) matching arm.
+            // load-pdf-image: see `crate::emit_box`'s (base-14, `lib.rs`)
+            // matching arm.
             match images.get(image.0).and_then(|im| im.pdf.as_ref()) {
                 Some(pdf_res) => place_form(
                     content,
@@ -421,10 +420,9 @@ fn emit_box(
                     // necessarily cmap-reachable from `g.text`, so emit it
                     // directly (Identity-H: content bytes ARE gids) rather
                     // than re-deriving a gid through `glyph_index`. `usage`
-                    // still records the ORIGINAL gid (S2,
-                    // docs/plans/design-cff-embedding.md §6.3); only the
-                    // emitted CONTENT bytes are remapped, when this file has
-                    // a subsetted CFF `GlyphRemapper`.
+                    // still records the ORIGINAL gid (S2); only the emitted
+                    // CONTENT bytes are remapped, when this file has a
+                    // subsetted CFF `GlyphRemapper`.
                     Some(gid) => {
                         file_usage
                             .glyphs
@@ -488,13 +486,13 @@ fn emit_box(
 /// (and the first character that produced it) in `usage` for the `/W` array
 /// and `ToUnicode` CMap built later — `usage` is always keyed by the
 /// ORIGINAL face gid, for every font format (glyph metrics/cmap lookups are
-/// naturally in that space). `remap`, when `Some` (S2,
-/// docs/plans/design-cff-embedding.md §6.3 — only ever populated for a CFF
-/// file whose `subsetter::subset` attempt succeeded), is applied to the
-/// EMITTED CONTENT BYTES only: `remap.get(gid).unwrap_or(gid)` becomes the
-/// CID written into the `Tj` operand, since a subsetted `CIDFontType0` font
-/// has no `/CIDToGIDMap` to absorb the renumbering the way the glyf path's
-/// does. `write_font_cff` re-keys `/W`/ToUnicode to match at write time.
+/// naturally in that space). `remap`, when `Some` (S2, — only ever
+/// populated for a CFF file whose `subsetter::subset` attempt succeeded),
+/// is applied to the EMITTED CONTENT BYTES only:
+/// `remap.get(gid).unwrap_or(gid)` becomes the CID written into the `Tj`
+/// operand, since a subsetted `CIDFontType0` font has no `/CIDToGIDMap` to
+/// absorb the renumbering the way the glyf path's does. `write_font_cff`
+/// re-keys `/W`/ToUnicode to match at write time.
 fn encode_glyph_run(
     face: &Face<'_>,
     text: &str,
@@ -533,16 +531,15 @@ fn encode_glyph_run(
 /// CID space; documented, not a fidelity gap.
 ///
 /// A `glyf`-less face (CFF/OpenType-CFF) is dispatched to `write_font_cff`
-/// instead — see that function's doc comment
-/// (docs/plans/design-cff-embedding.md) for its own (structurally
+/// instead — see that function's doc comment for its own (structurally
 /// different) subsetting/fallback story; `cff_subset`, when `Some`, is that
 /// file's already-computed S2 subset bytes + `GlyphRemapper`
 /// (`render_pdf_ttf_with` builds it before content generation — see that
 /// function's doc comment), passed straight through so `write_font_cff`
 /// doesn't redo the subsetting work. For a `glyf` face, a subsetting
 /// failure degrades gracefully to the pre-D5 whole-file embed with
-/// `CIDToGIDMap=Identity` — subsetting is a size optimization, never a
-/// hard requirement for a correct PDF.
+/// `CIDToGIDMap=Identity` — subsetting is a size optimization, never a hard
+/// requirement for a correct PDF.
 fn write_font(
     pdf: &mut Pdf,
     alloc: &mut i32,
@@ -573,12 +570,12 @@ fn write_font(
         .face_by_file(file_idx)
         .expect("file_idx came from a successfully-loaded TtfFontStore");
 
-    // CFF/OpenType-CFF outlines (docs/plans/design-cff-embedding.md) take a
-    // structurally different embed path — `CIDFontType0`/`/FontFile3`, no
-    // `/CIDToGIDMap` — so they're dispatched to `write_font_cff` right after
-    // ref allocation, before any of the glyf-specific logic below runs. The
-    // glyf branch that follows this `if` is left textually unchanged so the
-    // existing (entirely `glyf`) fixture corpus stays byte-identical.
+    // CFF/OpenType-CFF outlines take a structurally different embed path —
+    // `CIDFontType0`/`/FontFile3`, no `/CIDToGIDMap` — so they're dispatched
+    // to `write_font_cff` right after ref allocation, before any of the
+    // glyf-specific logic below runs. The glyf branch that follows this `if`
+    // is left textually unchanged so the existing (entirely `glyf`) fixture
+    // corpus stays byte-identical.
     let tables = face.tables();
     if tables.glyf.is_none() && tables.cff.is_some() {
         return write_font_cff(
@@ -621,8 +618,7 @@ fn write_font(
         None => base_font_name(&face, file_idx),
     };
 
-    // --- ToUnicode CMap (required: this is what keeps text extraction
-    // working for an Identity-H-encoded, glyph-indexed content stream). ---
+    // --- ToUnicode CMap (required: this is what keeps text extraction working for an Identity-H-encoded, glyph-indexed content stream). ---
     let mut cmap = UnicodeCmap::new(
         Name(b"Custom-UCS"),
         SystemInfo {
@@ -757,7 +753,7 @@ fn write_font(
 /// Write the Type0 font, its CIDFontType0 descendant, FontDescriptor,
 /// FontFile3 and ToUnicode CMap for one physical CFF-outline font file —
 /// the `CIDFontType0`/`FontFile3` sibling of `write_font`'s
-/// `CIDFontType2`/`FontFile2` path (docs/plans/design-cff-embedding.md).
+/// `CIDFontType2`/`FontFile2` path.
 ///
 /// **S2 — real subsetting, gated by `subset`.** `CIDFontType0` has no
 /// `/CIDToGIDMap`, so unlike `write_font`'s glyf path (where the CID is

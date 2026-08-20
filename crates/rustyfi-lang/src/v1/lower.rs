@@ -1,5 +1,5 @@
 //! Structural CST-to-CST transcription: `cst_v1::ast` -> `cst::ast`
-//! (`docs/plans/rustyfi-0-1-0-support.md` §3, the finale spec's §1-§3).
+//! (the finale spec's §1-§3).
 //!
 //! **Strategy (§1 of the finale spec).** Rather than widening
 //! `elaborate.rs`'s ~30 expression-lowering helpers to also walk
@@ -893,8 +893,7 @@ fn mod_chain_span(c: &ast_v1::ModChainV1) -> Span {
     }
 }
 
-// ---- Sub-slice 2d-3 §2.1: module aliases (`module M = N`, `module M = N
-// :> S`) — lowering-time member-copy expansion from `v1/surface.rs`'s
+// ---- Sub-slice 2d-3 §2.1: module aliases (`module M = N`, `module M = N :> S`) — lowering-time member-copy expansion from `v1/surface.rs`'s
 // syntactic `SurfaceEnv`. ---------------------------------------------------
 
 /// `module M = N` / `module M = A.B.C` (`ModExpr::Var`) and `module M = N

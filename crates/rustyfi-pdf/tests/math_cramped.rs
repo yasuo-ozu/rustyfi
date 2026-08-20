@@ -1,10 +1,10 @@
-//! `docs/plans/design-math-cramped.md` Slice A2: proof that the cramped-style
-//! superscript shift-up formula (`sup_shift_clamped`, `crates/rustyfi-lang/
-//! src/primitives.rs`) is correctly wired end to end — a superscript nested
-//! in a radicand (`Math::Radical`) or a fraction denominator
-//! (`Math::Fraction`) is laid out using the font's `SuperscriptShiftUpCramped`
-//! constant, while the SAME superscript at top level uses
-//! `SuperscriptShiftUp` (TeXbook Appendix G rule 18a).
+//! Slice A2: proof that the cramped-style superscript shift-up formula
+//! (`sup_shift_clamped`, `crates/rustyfi-lang/ src/primitives.rs`) is
+//! correctly wired end to end — a superscript nested in a radicand
+//! (`Math::Radical`) or a fraction denominator (`Math::Fraction`) is laid out
+//! using the font's `SuperscriptShiftUpCramped` constant, while the SAME
+//! superscript at top level uses `SuperscriptShiftUp` (TeXbook Appendix G rule
+//! 18a).
 //!
 //! Only observable at all under a real OpenType MATH font: every checked-in
 //! fixture font (base-14/ipaexm/Junicode) has no MATH table, and the
@@ -13,8 +13,8 @@
 //! test mirrors `tests/math_table.rs`'s font discovery/skip discipline and
 //! `tests/math_fraction_radical.rs`'s raw-primitive pipeline harness.
 //!
-//! **Slice B update** (`docs/plans/design-math-cramped.md` §4): the repo now
-//! bundles a math font (via `scripts/download-fonts.sh`) and wires it as
+//! **Slice B update**: the repo now bundles a math font (via
+//! `scripts/download-fonts.sh`) and wires it as
 //! `default-font.rustyfi-hash`'s `"math"` default, so `${...}` math renders
 //! with real MATH-table metrics BY DEFAULT — not just under `set-math-font`.
 //! **Re-baselined**: the bundled default is now the REAL upstream Latin
@@ -65,9 +65,9 @@ use rustyfi_pdf::TtfFontStore;
 // ----------------------------------------------------------------------
 
 fn find_math_font() -> Option<PathBuf> {
-    // Slice B (`docs/plans/design-math-cramped.md` §4), re-baselined for the
-    // upstream-correct default (see `scripts/download-fonts.sh`'s header
-    // comment): the repo now bundles the REAL Latin Modern Math at
+    // Slice B, re-baselined for the upstream-correct default (see
+    // `scripts/download-fonts.sh`'s header comment): the repo now bundles
+    // the REAL Latin Modern Math at
     // `lib-rustyfi/dist/fonts/latinmodern-math.otf` (fetched by
     // `scripts/download-fonts.sh`, same as ipaexm/Junicode) and wires it as
     // `default-font.rustyfi-hash`'s `"math"` default. Check it FIRST so this

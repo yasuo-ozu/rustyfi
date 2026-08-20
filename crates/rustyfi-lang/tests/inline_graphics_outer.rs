@@ -1,12 +1,12 @@
-//! `inline-graphics-outer` (roadmap C2, `docs/plans/graphics-subsystem.md`
-//! §D): a fil-stretchy graphics box whose callback needs the RESOLVED width,
-//! unknown until line layout. Driven as a raw `Ast`-apply chain (the same
-//! style `hooks_crossref.rs`/`page_prims.rs` use for tests that need to
-//! inspect the returned `Value`/backend structures directly, not just a
-//! typechecked source string) — no parser, no `|>` (unsupported by this
-//! port's frontend), just `start-path`/`line-to`/`close-with-line`/`fill`
-//! application chains building a `0..w`-wide rectangle so the resolved
-//! width is directly checkable against the fill path's own bbox.
+//! `inline-graphics-outer` (roadmap C2): a fil-stretchy graphics box whose
+//! callback needs the RESOLVED width, unknown until line layout. Driven as a
+//! raw `Ast`-apply chain (the same style `hooks_crossref.rs`/`page_prims.rs`
+//! use for tests that need to inspect the returned `Value`/backend
+//! structures directly, not just a typechecked source string) — no parser,
+//! no `|>` (unsupported by this port's frontend), just
+//! `start-path`/`line-to`/`close-with-line`/`fill` application chains
+//! building a `0..w`-wide rectangle so the resolved width is directly
+//! checkable against the fill path's own bbox.
 
 use rustyfi_backend::{path_bbox, Context, FontKey, FontMetrics, Length, PureHorzBox};
 use rustyfi_lang::ast::Ast;

@@ -1,10 +1,10 @@
 //! `cst_v1` round-trip and negative tests — the S5 slice's own test plan
-//! items 2 and 3 (`docs/plans/rustyfi-0-1-0-support.md` cst_v1 design spec
-//! §7): parse+unparse a hand-written 0.1-syntax snippet and assert every
-//! `FileV1`/`Bind`/`Expr` node round-trips losslessly (`Parse` ∘ `Unparse`
-//! = id at the token level), plus assert that SATySFi-0.1-invalid input is
-//! rejected. Lowering/e2e tests (spec items 4-6) are out of scope for this
-//! slice — `rustyfi-syntax` only produces `FileV1`/`parse_file_v1`.
+//! items 2 and 3 (cst_v1 design spec §7): parse+unparse a hand-written
+//! 0.1-syntax snippet and assert every `FileV1`/`Bind`/`Expr` node
+//! round-trips losslessly (`Parse` ∘ `Unparse` = id at the token level),
+//! plus assert that SATySFi-0.1-invalid input is rejected. Lowering/e2e
+//! tests (spec items 4-6) are out of scope for this slice —
+//! `rustyfi-syntax` only produces `FileV1`/`parse_file_v1`.
 
 use rustyfi_syntax::cst_v1::{self, parse_file_v1};
 use rustyfi_syntax::lexer::lex_with_version;

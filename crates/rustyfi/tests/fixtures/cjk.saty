@@ -1,8 +1,8 @@
-% CJK glyph-rendering proof fixture (docs/plans/text-rendering.md, Group D
-% closure): a real Japanese sentence mixing kanji (HanIdeographic script)
-% and hiragana/katakana (Kana script), set through stdja-mini's plain
-% `document`/`+p`. No `set-font` call anywhere in this file: `document`
-% calls `get-initial-context`, which overlays the configured
+% CJK glyph-rendering proof fixture (Group D closure): a real Japanese
+% sentence mixing kanji (HanIdeographic script) and hiragana/katakana
+% (Kana script), set through stdja-mini's plain `document`/`+p`. No
+% `set-font` call anywhere in this file: `document` calls
+% `get-initial-context`, which overlays the configured
 % `default-font.rustyfi-hash` `scripts` block onto `Context::font_scheme`
 % automatically (primitives.rs's `prim_get_initial_context`) — so when the
 % font root's `scripts` block points `han-ideographic`/`kana` at `ipaexm`

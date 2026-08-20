@@ -5,7 +5,7 @@
 //! real, totally-ordered value type, and adds the upstream-faithful
 //! constraint syntax the solver recurses on: **caret-only** requirements
 //! (`^X.Y.Z`), matching `saphe-split:src-util/semanticVersion.ml` /
-//! `packageConstraintSolver.ml` (see `docs/plans/design-saphe-solver.md` §3).
+//! `packageConstraintSolver.ml`.
 //!
 //! No `semver` crate: the surface here is deliberately small (parse, order,
 //! caret-match, compat-bucket) and self-contained, so the crate keeps its

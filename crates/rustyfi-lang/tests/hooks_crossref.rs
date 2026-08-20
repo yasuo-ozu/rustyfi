@@ -1,4 +1,4 @@
-//! Slice 1 (docs/plans/hooks-annotations-crossref.md) unit coverage: the
+//! Slice 1 unit coverage: the
 //! `hook-page-break`/`register-cross-reference`/`get-cross-reference`
 //! primitives, and the `fire_hooks` seam itself invoked directly against a
 //! hand-built `DocumentValue` — the same `Ast`-apply-chain style

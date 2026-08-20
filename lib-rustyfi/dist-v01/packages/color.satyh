@@ -1,6 +1,6 @@
 % color.satyh — SATySFi 0.1 stdlib `Color`, vendored for Legacy packaging
-% (docs/plans/rustyfi-0-1-0-support.md §2 P2 / §4 phase 6).
-% Source: saphe-split@b836d512:lib-rustyfi/packages/stdlib/stdlib.0.0.1/
+% (P2 / §4 phase 6). Source:
+% saphe-split@b836d512:lib-rustyfi/packages/stdlib/stdlib.0.0.1/
 %   src/color.satyh — transliteration deltas: NONE (first upstream 0.1
 %   file vendored byte-identically below this banner). Headers: upstream
 %   has no `use` lines; Legacy needs no `@require:`.

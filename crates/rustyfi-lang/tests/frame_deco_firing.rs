@@ -1,11 +1,10 @@
-//! `docs/plans/hooks-annotations-crossref.md` §D: `fire_hooks`' inline-frame
-//! (`fire_inline_frame`) and block-frame-fragment firing, driven directly
-//! against hand-built `DocumentValue`s (mirroring `tests/hooks_crossref.rs`'s
-//! style) — no parser, no `page-break` involved. Each deco closure is a
-//! small hand-built `Ast::Lambda` chain (curried `pt -> w -> h -> d -> …`)
-//! evaluated once to a `Value::Closure` and interned directly into
-//! `interp.decos`, exactly what `make_inline_frame`/`prim_block_frame_
-//! breakable` do at a higher level.
+//! `fire_hooks`' inline-frame (`fire_inline_frame`) and block-frame-fragment
+//! firing, driven directly against hand-built `DocumentValue`s (mirroring
+//! `tests/hooks_crossref.rs`'s style) — no parser, no `page-break` involved.
+//! Each deco closure is a small hand-built `Ast::Lambda` chain (curried `pt
+//! -> w -> h -> d -> …`) evaluated once to a `Value::Closure` and interned
+//! directly into `interp.decos`, exactly what
+//! `make_inline_frame`/`prim_block_frame_ breakable` do at a higher level.
 
 use rustyfi_backend::{
     Color, DecoId, FontKey, FontMetrics, GraphicsElem, Length, Paddings, Page, PageGeometry,

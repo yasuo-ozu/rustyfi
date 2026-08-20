@@ -89,9 +89,8 @@ fn compile_command(name: &'static str) -> Command {
                 .help(
                     "Output format: pdf (default), html, or html-reflow. HTML is a \
                      faithful, non-reflowing serialization of the same laid-out \
-                     pages the PDF writer renders (docs/plans/design-html-output.md) \
-                     — a preview/visual-diff aid, not reflowable web output. \
-                     html-reflow (docs/plans/design-reflowable-html.md) is a \
+                     pages the PDF writer renders — a preview/visual-diff \
+                     aid, not reflowable web output. html-reflow is a \
                      SEPARATE, semantic/reflowable serialization — real flowing \
                      paragraphs and CSS layout, no fixed positions — a readable \
                      approximation, not layout-faithful.",

@@ -189,7 +189,7 @@ fn line_stack_bottom_stacks_each_element_as_one_line_at_the_widest_natural_width
 // `add-footnote` (footnote-scheme.satyh) — `block-boxes -> inline-boxes`.
 // FAITHFUL: wraps the block in a zero-metric `PureHorzBox::Footnote`
 // marker that `chop_page` (rustyfi-backend) later extracts and bottom-
-// places (docs/plans/document-page-model.md §C).
+// places.
 // ============================================================================
 
 #[test]

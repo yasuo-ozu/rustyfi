@@ -76,7 +76,7 @@ impl std::fmt::Debug for CompiledExpr {
 }
 
 /// The flat table of TOP-LEVEL ("spine") binding values — Phase 2 of
-/// `docs/plans/design-symbol-debruijn-slots.md` (§6).
+/// (§6).
 ///
 /// The loader concatenates every library prelude into one synthetic file, and
 /// `elaborate::nest` folds every top-level binding into a nested
@@ -164,8 +164,7 @@ struct Compiler<'b> {
     /// binds — [`Compiler::new`] always parks it here and leaves
     /// `globals_v006`/`current_version` at their defaults, so `globals_for`
     /// always resolves back to this same field and the fold is unchanged
-    /// from before Slice X2a (`docs/plans/design-cross-version-import.md`
-    /// §"Slice X2 — per-group primitive environment").
+    /// from before Slice X2a.
     globals_v01: Option<&'b BaseEnv>,
     /// The `V0_0`-slot base environment — `Some` only for a cross-version
     /// splice compile ([`Compiler::new_xver`]), used exclusively while
@@ -711,21 +710,20 @@ impl<'b> Compiler<'b> {
                     ))
                 })
             }
-            // Slice X2a (`docs/plans/design-cross-version-import.md`
-            // §"Slice X2 — per-group primitive environment", Option C): push
-            // the tag, compile `body` (recursively — every nested
-            // `Ast::Var`/saturated-prim fold reached from here, INCLUDING
-            // inside a nested `Ast::Lambda`'s body, since `compile` recurses
-            // eagerly at COMPILE time, not lazily at apply time — sees
-            // `current_version == v`), pop. This is the whole mechanism: a
-            // version-forked primitive name folds to `v`'s `PrimDef` here,
-            // and nowhere else does version-sensitive resolution happen
-            // (X2.0). `is_local` (checked first, in every `Var`/
-            // `try_saturated_prim` arm above) still shadows this — a local
-            // binding of the same name is untouched regardless of the
-            // cursor. Never reached on a pure single-version compile: no
-            // `Ast::VersionScope` node is ever produced there
-            // (`elaborate_program_with_versions`'s empty `v006_indices`).
+            // Slice X2a (Option C): push the tag, compile `body`
+            // (recursively — every nested `Ast::Var`/saturated-prim fold
+            // reached from here, INCLUDING inside a nested `Ast::Lambda`'s
+            // body, since `compile` recurses eagerly at COMPILE time, not
+            // lazily at apply time — sees `current_version == v`), pop. This
+            // is the whole mechanism: a version-forked primitive name folds
+            // to `v`'s `PrimDef` here, and nowhere else does
+            // version-sensitive resolution happen (X2.0). `is_local`
+            // (checked first, in every `Var`/ `try_saturated_prim` arm
+            // above) still shadows this — a local binding of the same name
+            // is untouched regardless of the cursor. Never reached on a pure
+            // single-version compile: no `Ast::VersionScope` node is ever
+            // produced there (`elaborate_program_with_versions`'s empty
+            // `v006_indices`).
             Ast::VersionScope(v, body) => {
                 let prev = std::mem::replace(&mut self.current_version, *v);
                 let c = self.compile(body);
@@ -1105,8 +1103,7 @@ mod tests {
     //!
     //! These used to be a DIFFERENTIAL harness: each program was run through
     //! both this module's compiler and a reference tree-walking interpreter,
-    //! and the two results compared. Phase 3 of
-    //! `docs/plans/design-symbol-debruijn-slots.md` retired the tree-walker
+    //! and the two results compared. Phase 3 of retired the tree-walker
     //! (quoted text is compiled eagerly now, so a tree-walker cannot build a
     //! `Value::InlineText` without invoking the compiler), which removed one
     //! side of the comparison. Rather than leave a tautology behind, the same

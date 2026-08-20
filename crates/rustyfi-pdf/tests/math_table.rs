@@ -1,5 +1,5 @@
-//! `docs/plans/math-engine.md` §B1 (OpenType MATH-table metrics: constants +
-//! scripts + axis + italic-kern) — proof that:
+//! (OpenType MATH-table metrics: constants + scripts + axis + italic-kern) —
+//! proof that:
 //!  1. `TtfFontStore` actually reads a real MATH font's `MathConstants`/
 //!     italic-correction table (ttf-parser 0.25.1's `tables::math`).
 //!  2. `Base14Metrics` overrides NONE of the new `FontMetrics` methods (they
@@ -28,9 +28,9 @@ use rustyfi_pdf::{Base14Metrics, TtfFontStore};
 /// Locate a real MATH-capable OpenType font, preferring the bundled Latin
 /// Modern Math (CFF), same discovery order/guard as `tests/math_font.rs`.
 fn find_math_font() -> Option<PathBuf> {
-    // Slice B (`docs/plans/design-math-cramped.md` §4), re-baselined for the
-    // upstream-correct default (see `scripts/download-fonts.sh`'s header
-    // comment): the repo now bundles the REAL Latin Modern Math at
+    // Slice B, re-baselined for the upstream-correct default (see
+    // `scripts/download-fonts.sh`'s header comment): the repo now bundles
+    // the REAL Latin Modern Math at
     // `lib-rustyfi/dist/fonts/latinmodern-math.otf` (fetched by
     // `scripts/download-fonts.sh`, same as ipaexm/Junicode) and wires it as
     // `default-font.rustyfi-hash`'s `"math"` default. Check it FIRST so this

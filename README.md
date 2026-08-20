@@ -1,202 +1,188 @@
-# rustyfi-rust-converted
+<p align="center">
+  <img src="https://raw.githubusercontent.com/yasuo-ozu/rustyfi/main/manual/logo.png" width="160" alt="rustyfi logo: a gear with the word rustyfi engraved between braces">
+</p>
 
-A native Rust clone of [SATySFi](https://github.com/gfngfn/SATySFi) (reference:
-upstream **v0.0.6**), using the [syan](https://crates.io/crates/syan) parser
-framework for the grammar.
+# rustyfi [![CI]][ci-workflow]
 
-## Status: phases 1–4 core done; slices of 5/6; chimera CLI
+[CI]: https://github.com/yasuo-ozu/rustyfi/actions/workflows/ci.yml/badge.svg
+[ci-workflow]: https://github.com/yasuo-ozu/rustyfi/actions/workflows/ci.yml
 
-A `.saty` document compiles to a real PDF with wrapped, justified text —
-including binary operators (full v0.0.6 precedence ladder), `if`/`match`
-with patterns and guards, local `let`/`let-rec`(+`and`), tuples, variant
-constructors, user-defined commands via `let-inline`/`let-block`,
-`let-mutable`/`<-`/`while`/`before`/`!`, record field access and functional
-update, itemize (`*` bullets → `Item` constructor trees), math syntax
-(parsed and quoted; typesetting is phase 7), modules (`module`/`struct`/
-`open`, untyped name-mangling), `#var;` text embeds, and **multi-file
-loading** — `@import:`/`@require:` resolve, dedupe, and topologically order
-libraries via the `rustyfi-loader` crate (safegraph-backed):
+**[SATySFi](https://github.com/gfngfn/SATySFi), reimplemented in Rust.** One
+binary takes a `.saty` document and writes a PDF — same language, same packages,
+same output, no OCaml toolchain to install.
+
+It speaks both dialects: **0.0** (upstream v0.0.6) and **0.1**
+(`dev-0-1-0`/`saphe-split`), and a document in one may use packages from the
+other.
+
+## Install
 
 ```console
-$ cargo run -p rustyfi -- crates/rustyfi/tests/fixtures/minimal.saty -o target/out.pdf
+$ cargo install --git https://github.com/yasuo-ozu/rustyfi rustyfi
 ```
 
-What works:
+Or from a clone, which is also how you get the bundled packages and fonts:
 
-- **Lexer** (`rustyfi-syntax`): full case-for-case port of the v0.0.6
-  `lexer.mll` — five mode states (program / vertical / horizontal / active /
-  math) with the same stack discipline, eagerly lexing the whole file.
-- **Parser**: syan2 derives over custom `WithSpan<Token, Span>` atoms; a
-  `#[recurse]` grammar module for the Expr ↔ text SCC. Milestone-1 subset:
-  headers, top-level `let`, `fun`, application, records, lists, string/int/
-  float/length literals, inline text with `\cmd` and block text with `+cmd`.
-  Token-level `Unparse` round-trip is tested.
-- **Elaboration + typechecking** (`rustyfi-lang`): CST → `Ast` with scope
-  resolution, then mandatory HM type inference (let-polymorphism at Rémy
-  levels, row-polymorphic records, user variants, value restriction, real
-  `InlineCmd`/`BlockCmd` command types checked at application sites).
-- **Evaluator**: tree-walker with closures; the vminst-named `PrimDef`
-  registry (~60 primitives). `document`/`+p`/`\emph` are **not natives** —
-  they come from the in-repo `lib-rustyfi/dist/packages/stdja-mini.satyh`
-  package, written in SATySFi and loaded through `@require:`.
-- **Backend** (`rustyfi-backend`): `Length`, horzBox-vocabulary box/glue
-  model, Knuth–Plass optimal line breaking (glue-breakpoint DP with
-  badness/demerits per lineBreak.ml), single-column page breaking.
-- **PDF** (`rustyfi-pdf`): base-14 Helvetica by default; TrueType metrics +
-  CID/Type0 embedding with ToUnicode (`TtfFontStore`/`render_pdf_ttf`) for
-  real fonts (CLI selection pending).
-- **Chimera CLI**: one multicall binary dispatching on argv[0] —
-  `rustyfi` (compile + the subcommand trees) and
-  `satyrographos` (package manager, plan phases 1–4 all implemented:
-  `install`/`uninstall`/`list`/`status`/`search`/`update`; local paths,
-  tar.gz archives, upstream `Satyristes` packages via a built-in
-  S-expression reader, project `Satyrfile.toml` + lockfile with
-  reconcile-driven installs, and sha256-verified remote registries —
-  git or plain-dir indexes, HTTP behind an off-by-default feature;
-  see docs/chimera-satyrographos-plan.md). `--target-version` selects
-  the SATySFi language version (0.0 implemented; 0.1 recognized and
-  rejected honestly).
+```console
+$ git clone https://github.com/yasuo-ozu/rustyfi && cd rustyfi
+$ cargo build --release --bin rustyfi
+$ sh scripts/download-fonts.sh      # IPAex, Junicode, Latin Modern — pinned, ~175 MB
+```
 
-## Manual
+The fonts are fetched rather than committed, each under its own licence. Without
+them you still get PDFs, in the base-14 fonts, and Japanese will not render.
 
-The port's own manual is written against the port's bundled packages and
-typeset **by the port**, so everything it exercises — the `stdja` class,
-`code`'s `+code` blocks, `itemize`, cross-references — is a feature the port
-has to keep working in order to render its own documentation.
+## Compile a document
 
-- [manual.pdf](https://raw.githubusercontent.com/yasuo-ozu/satysfi-rust/main/manual/manual.pdf)
-  — built artifact
-- [`manual/manual.saty`](https://raw.githubusercontent.com/yasuo-ozu/satysfi-rust/main/manual/manual.saty)
-  — its source
-- [`manual/logo.saty`](https://raw.githubusercontent.com/yasuo-ozu/satysfi-rust/main/manual/logo.saty)
-  — the project mark, drawn entirely in `satysfi-xpath`; notes in
-  [`manual/logo.md`](manual/logo.md), rendered to `manual/logo.pdf` and
-  [`manual/logo.png`](https://raw.githubusercontent.com/yasuo-ozu/satysfi-rust/main/manual/logo.png)
+```satysfi
+@require: stdja-mini
+
+document (|
+  title = {Milestone One};
+  author = {yasuo};
+|) '<
+  +p { Hello, world! This is \emph{SATySFi-in-Rust}. }
+>
+```
+
+```console
+$ rustyfi doc.saty
+  output written on doc.pdf (1 page(s), 2 line(s)).
+```
+
+Recompiling an unchanged document is near-instant: results are cached by content
+hash (`--no-cache` opts out).
+
+## Packages
+
+`@require:` resolves against a **lib root** — the first of `--lib-root`,
+`$RUSTYFI_LIB_ROOT`, or the nearest `lib-rustyfi/` directory above your document.
+A clone therefore needs no configuration at all. Packages live in
+`<lib-root>/dist/packages/`.
+
+Roughly 30 upstream packages ship with it, including `stdja`, `stdjabook`,
+`stdjareport`, `itemize`, `code`, `math`, `tabular`, `annot` and `proof`, plus
+the 0.1 tree (`std-ja`, `inline`, `block`, `map`, `set`, …) under `dist-v01/`.
+
+To install someone else's package, the same binary is a Satyrographos analog:
+
+```console
+$ rustyfi satyrographos install ./satysfi-xpath   # a local path, a .tar.gz, or a registry
+$ rustyfi satyrographos list
+```
+
+It reads upstream `Satyristes` manifests, keeps a project lockfile, and verifies
+registry downloads by sha256.
+
+## HTML output
+
+```console
+$ rustyfi doc.saty --format html         # every glyph where the PDF puts it
+$ rustyfi doc.saty --format html-reflow  # real flowing paragraphs, CSS layout
+```
+
+`html` is the same laid-out page the PDF writer renders, serialized with
+absolute positions and the real fonts embedded — a preview and visual-diff aid.
+`html-reflow` is the opposite trade: semantic, reflowable, not layout-faithful.
+
+## Useful options
+
+| flag | what it does |
+|---|---|
+| `-o <path>` | output path (default: the input with a `.pdf` extension) |
+| `--format <fmt>` | `pdf` (default), `html`, `html-reflow` |
+| `--lib-root <dir>` | where `@require:` looks for packages |
+| `--target-version <v>` | `0.0` (default) or `0.1`; a `use` header auto-selects `0.1` |
+| `--font <file>` | use a TrueType/OpenType file as the regular face |
+| `--font-dir <dir>` | font root holding `dist/hash/fonts.rustyfi-hash` |
+| `--no-cache` | bypass the compile cache |
+| `--no-aux` | do not read or write the `.satysfi-aux` cross-reference file |
+| `--timing` | per-phase timing to stderr (load / typecheck / eval / render) |
+
+The `.satysfi-aux` file is upstream's format, so the two engines can share one.
+
+## How close is it?
+
+Every document in the vendored corpus is rebuilt and compared against the PDF
+the original SATySFi produced, word box by word box
+(`scripts/layout_fidelity.py`):
+
+| doc | pages (port / SATySFi) | words in the same place | exercises |
+|---|---|---|---|
+| latexcmds | 12 / 12 | 89.5 % | math, framed and coloured boxes |
+| xpath | 11 / 11 | 96.7 % | paths, béziers, diagrams |
+| enumitem | 27 / 27 | 88.9 % | deeply nested, customized lists |
+| easytable | 19 / 19 | 86.8 % | tables, rules, spans |
+| figbox | 20 / **21** | 88.1 % | figures, floats, captions |
+| slydifi | 30 / 30 | 85.1 % | slides, overlays, themes |
+
+Glyph metrics agree to within 0.75 pt at the 95th percentile, so what is left is
+the line breaker's own judgement — and one missing page in `figbox`.
+
+It is also faster. Minimum CPU time over three interleaved runs against SATySFi
+0.0.11 (`--bytecomp` is upstream's bytecode compiler, the fair comparison for
+the evaluator; `scripts/benchmark.py` reproduces it):
+
+| doc | SATySFi | SATySFi `--bytecomp` | rustyfi | cached |
+|---|---|---|---|---|
+| latexcmds | 1.38 s | 1.34 s | **0.48 s** | 0.32 s |
+| xpath | 12.66 s | 3.33 s | 4.04 s | 0.38 s |
+| enumitem | 3.18 s | 3.12 s | **1.27 s** | 0.42 s |
+| easytable | 3.63 s | 3.56 s | **1.61 s** | 0.46 s |
+| figbox | 3.26 s | 3.07 s | **1.86 s** | 0.51 s |
+| slydifi | 2.26 s | 1.75 s | **1.21 s** | 0.44 s |
+
+`xpath` is the one loss, and it is the one document dominated by user-level
+arithmetic rather than layout: it measures interpreter against VM. Against
+upstream's default (non-bytecode) interpreter it is still 3.1× faster.
+
+## Known gaps
+
+- `figbox` comes out one page short of upstream — a line-packing difference.
+- Fonts are named by file or hash entry, not by package: a document asking for
+  `fonts-junicode:Junicode-Bold` falls back to a name heuristic.
+- Cross-version `deco` crosses one way (a 0.0 package's deco used from a 0.1
+  document), not yet the reverse.
+- `font` and 0.1's `paren` are stand-in types.
+
+## The manual
+
+The manual is written in SATySFi and typeset by the port itself, so every
+feature it uses is one that has to keep working.
+
+- [manual.pdf](https://raw.githubusercontent.com/yasuo-ozu/rustyfi/main/manual/manual.pdf)
+  · [source](https://raw.githubusercontent.com/yasuo-ozu/rustyfi/main/manual/manual.saty)
+- [`manual/logo.saty`](https://github.com/yasuo-ozu/rustyfi/blob/main/manual/logo.saty)
+  — the logo above is not an image file but a document, drawn entirely with
+  `satysfi-xpath` ([notes](https://github.com/yasuo-ozu/rustyfi/blob/main/manual/logo.md))
 
 ```console
 $ make -C manual        # manual.pdf, logo.pdf, logo.png
 ```
 
-## Layout
+## Development
 
-```
+```text
 crates/
-  rustyfi-syntax/    Span, Token, mode-stack lexer, ParseStream, grammar (CST)
-  rustyfi-backend/   Length, boxes/glue, Context, FontMetrics seam, line/page break
-  rustyfi-lang/      Ast, elaborate (typecheck seam), Value, evaluator, primitives
-  rustyfi-loader/    @require/@import resolution, dependency graph, load order
-  rustyfi-pdf/       pdf-writer backend + base-14 metrics
-  rustyfi-satyrographos/  package manager: manifest/receipts/atomic install
-  rustyfi/           chimera binary: rustyfi / satyrographos
+  rustyfi-syntax/         mode-stack lexer and grammar (CST) for both dialects
+  rustyfi-lang/           elaboration, typechecker, evaluator, primitives
+  rustyfi-backend/        boxes and glue, line and page breaking, math
+  rustyfi-loader/         @require/@import resolution and load order
+  rustyfi-pdf/            PDF writer, font embedding
+  rustyfi-html/           the two HTML backends
+  rustyfi-satyrographos/  package manager
+  rustyfi/                the binary
+lib-rustyfi/              bundled packages: dist/ (0.0) and dist-v01/ (0.1)
+scripts/                  fidelity and benchmark harnesses, font fetcher
 ```
 
-The grammar is built on the [`syan`](https://crates.io/crates/syan) parser
-framework, an ordinary crates.io dependency (`syan = "0.2.0"`). It spent a
-while as a vendored submodule, because the parser fixes this port needed were
-unreleased; 0.2.0 carries them, so a plain `cargo build` on a plain clone is
-all that is required — no submodule init, no sibling checkout.
+The grammar is derived, not hand-written, using the
+[`syan`](https://crates.io/crates/syan) parser framework: the CST types *are*
+the grammar. `cargo test --workspace` runs 1587 tests; CI adds the corpus
+regression and the layout-fidelity comparison above.
 
-## Testing & CI
+## License
 
-`cargo test --workspace` runs the unit/integration suite (1587 tests).
-
-**Corpus regression** — `crates/rustyfi-syntax/tests/corpus.rs` runs the
-lexer and parser over the author's real-world SATySFi packages
-(`github.com/yasuo-ozu/rustyfi-*`) and guards against regressions. Because
-this port is a **v0.0.x subset without stdlib loading**, real packages do not
-compile end-to-end — most do not even fully parse yet — so the harness does
-not assert "must compile". It enforces what is meaningful for a growing
-front-end: (1) the frontend must **never panic** on real input, (2) a
-**lex-coverage floor** (our `lexer.mll` port handles ~89% of real files; the
-rest are the unsupported `@`-positioned string literal), and (3) a **parse
-ratchet** (the count that fully parses is tracked and only ratchets up as the
-grammar grows). It is driven by `$RUSTYFI_CORPUS_DIR` (a `:`-separated list of
-repo roots) and **skips** when that is unset, so a plain `cargo test` without
-the corpus checked out stays green:
-
-```console
-$ RUSTYFI_CORPUS_DIR=../rustyfi-class-jlreq:../rustyfi-latexcmds:../rustyfi-xpath \
-    cargo test -p rustyfi-syntax --test corpus -- --nocapture
-```
-
-**GitHub Actions** (`.github/workflows/ci.yml`) runs the suite plus the corpus
-job (cloning the `rustyfi-*` packages). It is a plain checkout — `syan` comes
-from crates.io, so there is no sibling repository to place and no ref to keep
-in sync.
-
-## Performance
-
-Measured by `scripts/benchmark.py` against the ORIGINAL OCaml SATySFi over the
-same vendored corpus `scripts/layout_fidelity.py` uses for layout fidelity, so
-the two can be read together:
-
-```console
-$ cargo build --release --bin rustyfi
-$ scripts/benchmark.py --runs 3 --json bench.json
-```
-
-Minimum CPU time of 3 interleaved runs, SATySFi 0.0.11 vs this port
-(2026-08-10; 20-core Linux box at load 1.84; `--bytecomp` is upstream's
-bytecode compiler, the fair comparison point for the evaluator):
-
-| doc | upstream | upstream `--bytecomp` | port cold | port cached | cold ÷ bytecomp |
-|---|---|---|---|---|---|
-| latexcmds | 1.38 s | 1.34 s | 0.48 s | 0.32 s | **0.36×** |
-| xpath | 12.66 s | 3.33 s | 4.04 s | 0.38 s | **1.21×** |
-| enumitem | 3.18 s | 3.12 s | 1.27 s | 0.42 s | **0.41×** |
-| easytable | 3.63 s | 3.56 s | 1.61 s | 0.46 s | **0.45×** |
-| figbox | 3.26 s | 3.07 s | 1.86 s | 0.51 s | **0.61×** |
-| slydifi | 2.26 s | 1.75 s | 1.21 s | 0.44 s | **0.69×** |
-| gakushin | — | — | 0.53 s | 0.31 s | — |
-
-Peak RSS (same runs): the port uses 57–84 MB against upstream's 84–125 MB on
-every document **except figbox**, where it uses 190 MB against 109 MB and emits
-a 3.2× larger PDF — both point at the image pipeline holding decoded data
-resident. Page counts match upstream everywhere except figbox (20 vs 21).
-
-Reading the table honestly:
-
-- **`xpath` is the one loss**, at 1.21× upstream's bytecode compiler. It is also
-  where `--bytecomp` helps upstream most (12.66 s → 3.33 s), and those are the
-  same fact: that document is dominated by user-level path arithmetic rather
-  than by layout, so it measures evaluator against evaluator, and a closure-tree
-  interpreter loses to a real VM. Against upstream's *default* interpreter the
-  port is still 3.1× faster.
-- **`port cached` has no upstream counterpart.** SATySFi has no
-  content-addressed compile cache, so that column measures a facility upstream
-  does not have, not a fairer version of the same work.
-- **`gakushin` cannot be built by upstream at all**: it pulls in `fss`, which
-  names its faces in Satyrographos package syntax (`fonts-junicode:Junicode-Bold`),
-  and the vendored corpus carries package *sources*, not font packages. The port
-  only survives it by falling back to a name heuristic — anything containing
-  `bold` gets the bold face — so it renders in the CLI's three default faces
-  rather than in Junicode. That is why the doc is checked in self-snapshot mode.
-- Both engines are measured **cold on cross-references** (upstream's
-  `.satysfi-aux` is deleted before each of its runs, the port runs `--no-aux`),
-  and every configuration gets a warm-up run, so no column is charged for
-  first-touch page-cache cost that another column avoids.
-
-## Roadmap
-
-1. ✅ Thin end-to-end slice
-2. ◕ Full surface language — done through phase 2b (binops, if/match,
-   let-rec, tuples, ctors, commands, mutables, fields, items, math syntax,
-   modules, multi-file loading); remaining: command macros (`\cmd@`),
-   optional args at runtime (parse-and-reject today), `(| e with |)` inside
-   signatures, `Mod.(…)`, tabular `|` separators, stages
-3. ◕ Real typechecker — HM inference (Rémy levels, let-polymorphism, value
-   restriction), row-polymorphic records, user variants, command-argument
-   checking inside quoted text; a mandatory pipeline stage. Remaining:
-   module signature enforcement, math command types, exhaustiveness, stages
-4. ◕ Stdlib loading proven — `document`/`+p`/`\emph` live in the in-repo
-   `stdja-mini` package (SATySFi source, typechecked, loaded via
-   `@require:`); remaining: the broader vminst inventory (~200
-   instructions) and compiling the real upstream `dist/` classes
-5. ◔ Real fonts — TrueType metrics + CID/Type0 embedding with ToUnicode
-   done (`TtfFontStore`/`render_pdf_ttf`; CLI still defaults to base-14);
-   remaining: CLI font selection, subsetting, shaping/kerning, CFF,
-   Unicode line-break classes
-6. ◔ Paragraph/page model — Knuth–Plass line breaking done (drop-in DP,
-   badness/demerits per lineBreak.ml); remaining: discretionaries/
-   hyphenation, full page model, graphics
-7. Math mode; 8. images/annotations/cross-refs; 9. polish/perf
+LGPL-3.0, as upstream SATySFi. The fonts `scripts/download-fonts.sh` fetches
+keep their own licences (IPA Font License v1.0, SIL OFL 1.1, GUST Font License,
+DejaVu), copied next to each font.

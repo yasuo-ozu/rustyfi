@@ -1,6 +1,6 @@
 % basic.satyg — SATySFi 0.1 stdlib `Basic`, vendored for Legacy packaging
-% (docs/plans/rustyfi-0-1-0-support.md §2 P2 / §4 phase 6).
-% Source: saphe-split@b836d512:lib-rustyfi/packages/stdlib/stdlib.0.0.1/
+% (P2 / §4 phase 6). Source:
+% saphe-split@b836d512:lib-rustyfi/packages/stdlib/stdlib.0.0.1/
 %   src/basic.satyg — transliteration deltas:
 %   - Wave 4 Batch C RESTORATION: `signature Ord = sig type t :: o val
 %     compare : t -> t -> ordering end`, restored verbatim (additive only —

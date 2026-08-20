@@ -16,14 +16,13 @@
 //!   positional transpose (by column index) replaces upstream's recursive
 //!   `chop_column`/`transpose_tabular` — same result, simpler in Rust.
 //!
-//! **Malformed grids degrade, they don't panic** (docs/plans/
-//! table-subsystem.md Risks: "Span bookkeeping"): where upstream asserts
-//! false on a cell that should have been an `EmptyCell` continuing a
-//! pending span (or a span declared with `numrow`/`numcol` < 1), this port
-//! drops the bogus pending state / clamps to 1 and keeps going, so a table
-//! author's off-by-one never aborts the whole document.
+//! **Malformed grids degrade, they don't panic** (Risks: "Span
+//! bookkeeping"): where upstream asserts false on a cell that should have
+//! been an `EmptyCell` continuing a pending span (or a span declared with
+//! `numrow`/`numcol` < 1), this port drops the bogus pending state /
+//! clamps to 1 and keeps going, so a table author's off-by-one never
+//! aborts the whole document.
 //!
-//! docs/plans/table-subsystem.md §Slice 1.
 
 use crate::graphics::GraphicsElem;
 use crate::hbox::{HorzBox, PureHorzBox};

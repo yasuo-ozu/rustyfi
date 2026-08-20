@@ -1,11 +1,11 @@
 //! Interned identifiers: [`SymbolStore`] (an append-only unique-string
 //! registry) and [`Symbol`] (a `Copy`, `u32`-sized handle into one).
 //!
-//! Phase 0 of `docs/plans/design-symbol-debruijn-slots.md`. This module is
-//! deliberately self-contained: nothing in the pipeline uses it yet. Phase 1
-//! brands the *compile side* (`Ast` → elaborate → typecheck) with
-//! `Symbol<'s>`; the runtime side never sees one, because names are resolved
-//! away at the compile membrane (`compile.rs`).
+//! Phase 0 of. This module is deliberately self-contained: nothing in the
+//! pipeline uses it yet. Phase 1 brands the *compile side* (`Ast` →
+//! elaborate → typecheck) with `Symbol<'s>`; the runtime side never sees
+//! one, because names are resolved away at the compile membrane
+//! (`compile.rs`).
 //!
 //! # Why a lifetime brand
 //!

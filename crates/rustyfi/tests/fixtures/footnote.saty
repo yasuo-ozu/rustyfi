@@ -1,11 +1,11 @@
-% F1 fixture (docs/plans/document-page-model.md §C): a DIRECT `add-footnote`
-% call, with no `footnote-scheme.satyh` dependency — this proves the
-% `chop_page` float accumulator itself, not the cross-reference fixpoint
-% `footnote-scheme.satyh` layers on top. A single reference line embeds a
-% zero-metric footnote marker whose block carries distinctive text;
-% `chop_page` must extract it at line-commit time, reserve its stacked
-% height at the column bottom, and bottom-place it on the SAME page as the
-% referencing line (upstream `pageBreak.ml:131-142` + `handlePdf.ml:400-403`).
+% F1 fixture: a DIRECT `add-footnote` call, with no `footnote-scheme.satyh`
+% dependency — this proves the `chop_page` float accumulator itself, not the
+% cross-reference fixpoint `footnote-scheme.satyh` layers on top. A single
+% reference line embeds a zero-metric footnote marker whose block carries
+% distinctive text; `chop_page` must extract it at line-commit time, reserve
+% its stacked height at the column bottom, and bottom-place it on the SAME
+% page as the referencing line (upstream `pageBreak.ml:131-142` +
+% `handlePdf.ml:400-403`).
 
 @require: stdja-mini
 

@@ -226,11 +226,11 @@ fn real_font_fixture_renders_through_ttf_path_and_roundtrips() {
         &pdf_bytes[..pdf_bytes.len().min(16)]
     );
 
-    // D5 (docs/plans/text-rendering.md §2): the embedded `FontFile2` is now
-    // SUBSET to the glyphs `realfont.saty`'s body actually uses, so the
-    // whole output PDF is much SMALLER than the source font file (inverted
-    // from the pre-D5 whole-file-embed assertion this test used to make —
-    // see `rustyfi-pdf/tests/ttf.rs`'s matching update).
+    // D5: the embedded `FontFile2` is now SUBSET to the glyphs
+    // `realfont.saty`'s body actually uses, so the whole output PDF is much
+    // SMALLER than the source font file (inverted from the pre-D5
+    // whole-file-embed assertion this test used to make — see
+    // `rustyfi-pdf/tests/ttf.rs`'s matching update).
     let font_bytes = std::fs::read(&font_path).expect("read font file");
     assert!(
         pdf_bytes.len() < font_bytes.len(),

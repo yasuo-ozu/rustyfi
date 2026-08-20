@@ -1,14 +1,13 @@
-//! Reflowable/semantic HTML output mode (`docs/plans/design-reflowable-html.md`,
-//! Slice 1: "reflowing paragraphs + inline text + CSS"). Alongside the
-//! existing FAITHFUL twin ([`crate::render_html`]/[`crate::render_html_ttf_with`],
-//! which serializes the same post-page-break placed-box model the PDF writer
-//! consumes, one absolutely-positioned `<span>` per glyph run), this mode
-//! branches at the pre-page-break flat `Vec<VertBox>`
-//! (`DocumentValue::reflow_source` in `rustyfi-lang`, the design doc's
-//! "Option B") and emits REAL flowing HTML: `<p>` paragraphs the browser
-//! re-breaks, nested `<div>` frames, styled inline `<span>`s — no
-//! `position`/`top`/`left` anywhere in this module's own output (the
-//! defining difference from the faithful twin).
+//! Reflowable/semantic HTML output mode (Slice 1: "reflowing paragraphs + inline
+//! text + CSS"). Alongside the existing FAITHFUL twin
+//! ([`crate::render_html`]/[`crate::render_html_ttf_with`], which serializes the
+//! same post-page-break placed-box model the PDF writer consumes, one
+//! absolutely-positioned `<span>` per glyph run), this mode branches at the
+//! pre-page-break flat `Vec<VertBox>` (`DocumentValue::reflow_source` in
+//! `rustyfi-lang`, the design doc's "Option B") and emits REAL flowing HTML: `<p>`
+//! paragraphs the browser re-breaks, nested `<div>` frames, styled inline
+//! `<span>`s — no `position`/`top`/`left` anywhere in this module's own output
+//! (the defining difference from the faithful twin).
 //!
 //! **Slice 1 scope** (see the design doc §6): paragraphs (`Line`-runs
 //! coalesced by `Skip`/frame boundaries), inline text (`InnerString`,
@@ -46,13 +45,13 @@
 //!   reliably recoverable from the box tree, unlike outline/tabular. (S4,
 //!   below, resolves this with a new lever.)
 //!
-//! **Slice 4 scope** (`docs/plans/design-reflow-s4-lists.md`): the box tree
-//! genuinely has no recoverable list/emphasis structure (S3's verdict
-//! above), so S4 adds a NEW lever — inert marker boxes
-//! (`VertBox::ListMark`/`PureHorzBox::InlineMark`) emitted positionally by a
-//! modified `itemize.satyh` (list/item boundaries, ordered-vs-unordered) and
-//! by the repo-controlled `\emph`/`\bold` (`v01-mini.satyh`, `std-ja.satyh`)
-//! — rather than trying to infer structure from the existing flat stream.
+//! **Slice 4 scope**: the box tree genuinely has no recoverable
+//! list/emphasis structure (S3's verdict above), so S4 adds a NEW lever —
+//! inert marker boxes (`VertBox::ListMark`/`PureHorzBox::InlineMark`)
+//! emitted positionally by a modified `itemize.satyh` (list/item boundaries,
+//! ordered-vs-unordered) and by the repo-controlled `\emph`/`\bold`
+//! (`v01-mini.satyh`, `std-ja.satyh`) — rather than trying to infer
+//! structure from the existing flat stream.
 //! - `block.rs`'s `walk_vboxes` gains a `VertBox::ListMark` arm: a small
 //!   stack of open `<ul>`/`<ol>` tags makes nesting fall out automatically
 //!   from how the markers are nested in the box stream (no depth payload
@@ -106,14 +105,14 @@ use crate::HtmlError;
 pub(crate) struct Ctx<'a> {
     pub(crate) fonts: Option<&'a TtfFontStore>,
     pub(crate) used_fonts: RefCell<BTreeSet<usize>>,
-    /// S2 (`docs/plans/design-reflowable-html.md` §4 "Links/metadata"):
-    /// `DecoId -> action` for every `register-link-to-uri`/`-to-location`
-    /// call the compile driver observed firing (`DocumentValue::
-    /// reflow_links`) — built once per render from the flat slice passed in,
-    /// so `inline::emit_inline`'s `Frame` arm can look up "is THIS Frame's
-    /// deco a link" in O(1) by the exact same `DecoId` the Frame box itself
-    /// carries (a structural match, not a geometry guess — see that field's
-    /// doc comment on `rustyfi_lang::value::DocumentValue`).
+    /// S2 ("Links/metadata"): `DecoId -> action` for every
+    /// `register-link-to-uri`/`-to-location` call the compile driver
+    /// observed firing (`DocumentValue:: reflow_links`) — built once per
+    /// render from the flat slice passed in, so `inline::emit_inline`'s
+    /// `Frame` arm can look up "is THIS Frame's deco a link" in O(1) by the
+    /// exact same `DecoId` the Frame box itself carries (a structural match,
+    /// not a geometry guess — see that field's doc comment on
+    /// `rustyfi_lang::value::DocumentValue`).
     pub(crate) links: HashMap<DecoId, &'a AnnotAction>,
     /// Same idea as `links`, for `register-destination`
     /// (`DocumentValue::reflow_dests`) — `DecoId -> the named-destination
@@ -129,13 +128,13 @@ pub(crate) struct Ctx<'a> {
     /// keeps `Ctx`'s lifetime parameter tied only to the `links`/`dests`
     /// slices it already had, avoiding a second lifetime bound on `extras`.
     pub(crate) outline_by_dest: HashMap<String, i64>,
-    /// S4 (`docs/plans/design-reflow-s4-lists.md` §4.2 "Inline level"): the
-    /// stack of currently-open `<em>`/`<strong>` spans, keyed by their
-    /// `InlineMarkKind::EmphStart::strong` bit — `EmphEnd` carries no
-    /// payload of its own, so the matching open tag has to be remembered
-    /// somewhere; `RefCell` (not a threaded `&mut`) mirrors `used_fonts`
-    /// above, keeping `inline::emit_inline`'s `&Ctx`-only signature (no
-    /// caller needs to change to thread a stack through).
+    /// S4 ("Inline level"): the stack of currently-open `<em>`/`<strong>`
+    /// spans, keyed by their `InlineMarkKind::EmphStart::strong` bit —
+    /// `EmphEnd` carries no payload of its own, so the matching open tag
+    /// has to be remembered somewhere; `RefCell` (not a threaded `&mut`)
+    /// mirrors `used_fonts` above, keeping `inline::emit_inline`'s
+    /// `&Ctx`-only signature (no caller needs to change to thread a stack
+    /// through).
     pub(crate) emph_stack: RefCell<Vec<bool>>,
     /// S4 (design doc §4.1 "BulletStart/End fence"): a nesting counter
     /// (not a bare flag — `BulletStart`/`BulletEnd` pairs are never nested

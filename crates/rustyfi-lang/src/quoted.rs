@@ -3,7 +3,7 @@
 //! [`crate::value::Value`]'s `InlineText`/`BlockText`/`MathText` variants
 //! carry.
 //!
-//! Phase 3 of `docs/plans/design-symbol-debruijn-slots.md` (§4, "THE CRUX").
+//! Phase 3 of (§4, "THE CRUX").
 //!
 //! # Why these exist
 //!

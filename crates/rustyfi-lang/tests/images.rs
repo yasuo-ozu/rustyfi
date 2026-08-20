@@ -1,9 +1,9 @@
-//! Slice 1 (raster images; `docs/plans/math-images.md`) runtime round trip:
-//! `load-image` decodes a real, tiny checked-in PNG fixture and
-//! `use-image-by-width` scales it into a `PureHorzBox::Image`, driven
-//! through `eval::Interp` the same way `prims_phase4.rs` exercises other
-//! primitives (`Ast` apply chains built by hand, no parser involved). A
-//! typecheck-only (no file I/O) round trip lives in `tests/typecheck.rs`.
+//! Slice 1 (raster images) runtime round trip: `load-image` decodes a real,
+//! tiny checked-in PNG fixture and `use-image-by-width` scales it into a
+//! `PureHorzBox::Image`, driven through `eval::Interp` the same way
+//! `prims_phase4.rs` exercises other primitives (`Ast` apply chains built
+//! by hand, no parser involved). A typecheck-only (no file I/O) round trip
+//! lives in `tests/typecheck.rs`.
 
 use rustyfi_backend::{FontKey, FontMetrics, HorzBox, ImageResource, Length, PureHorzBox};
 use rustyfi_lang::ast::Ast;

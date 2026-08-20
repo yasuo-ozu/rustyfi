@@ -1,6 +1,6 @@
-//! `--format html` end-to-end, driven through the *built* `rustyfi`
-//! binary (`docs/plans/design-html-output.md` §Verification, "Slice-1 e2e"),
-//! mirroring `tests/cache.rs`'s process-spawn harness style.
+//! `--format html` end-to-end, driven through the *built* `rustyfi` binary
+//! ("Slice-1 e2e"), mirroring `tests/cache.rs`'s process-spawn harness
+//! style.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};

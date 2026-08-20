@@ -1,8 +1,8 @@
-//! Integration test for the Slice 1 graphics writer (`place_graphics`,
-//! `docs/plans/graphics-subsystem.md` §4): a page whose only content is a
-//! `PureHorzBox::Graphics` box (fill + stroke of a rectangle) renders to a
-//! PDF whose uncompressed content stream contains the expected path
-//! operators, with the box translated to its placed, y-flipped anchor.
+//! Integration test for the Slice 1 graphics writer (`place_graphics`): a
+//! page whose only content is a `PureHorzBox::Graphics` box (fill + stroke
+//! of a rectangle) renders to a PDF whose uncompressed content stream
+//! contains the expected path operators, with the box translated to its
+//! placed, y-flipped anchor.
 
 use rustyfi_backend::{
     Closing, Color, GraphicsElem, Length, Page, PageGeometry, Path, PathSeg, PlacedLine,

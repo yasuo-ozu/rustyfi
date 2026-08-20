@@ -1,6 +1,6 @@
 % option.satyg — SATySFi 0.1 stdlib `Option`, vendored for Legacy packaging
-% (docs/plans/rustyfi-0-1-0-support.md §2 P2 / §4 phase 6).
-% Source: saphe-split@b836d512:lib-rustyfi/packages/stdlib/stdlib.0.0.1/
+% (P2 / §4 phase 6). Source:
+% saphe-split@b836d512:lib-rustyfi/packages/stdlib/stdlib.0.0.1/
 %   src/option.satyg — transliteration deltas:
 %   - T1: `use open Basic` dropped; `@require: basic` added.
 %   - T2: bare `ordering` (inside the `compare`/`equal` callback types) ->

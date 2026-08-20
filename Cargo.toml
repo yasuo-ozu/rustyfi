@@ -42,16 +42,14 @@ safegraph = "0.1"
 ttf-parser = "0.25"
 newer-type = "0.3"
 newer-type-std = "0.3"
-# Raster image decoding for `load-image` (docs/plans/math-images.md §Slice
-# 1). Slice 1 only needs PNG (the checked-in test fixture) and JPEG (cheap,
+# Raster image decoding for `load-image`. Slice 1 only needs PNG (the checked-in test fixture) and JPEG (cheap,
 # pure-Rust, and the format v0.0.6 special-cases for `DCTDecode`
 # passthrough — not implemented yet, but decoding it to flat RGB8 like any
 # other format costs nothing extra); the rest of `image`'s default formats
 # (avif/bmp/dds/exr/ff/gif/hdr/ico/pnm/qoi/tga/tiff/webp) and its `rayon`
 # feature are left off to keep the dependency footprint minimal.
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
-# PDF object-model reader for `load-pdf-image` (docs/plans/design-load-pdf-image.md
-# S0): parses a foreign PDF's page tree/content stream/resources so a page can be
+# PDF object-model reader for `load-pdf-image` (S0): parses a foreign PDF's page tree/content stream/resources so a page can be
 # re-embedded as a Form XObject. Pure Rust, no C toolchain. Consumed by
 # rustyfi-lang (parse side) and rustyfi-pdf (re-emit side); rustyfi-backend stays
 # lopdf-free (neutral ImportedObjects/ObjRepr types only).

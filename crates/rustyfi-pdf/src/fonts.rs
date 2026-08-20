@@ -74,14 +74,14 @@
 //! than this module loading the regular face's bytes a second time under a
 //! different slot.
 //!
-//! An optional `"math"` key (`docs/plans/design-math-cramped.md` §4 Slice B)
-//! names the abbrev `get-initial-context` seeds `Context::math_font` with,
-//! e.g. `{ "regular": "Junicode", "math": "lmmath" }` — `scripts/
-//! download-fonts.sh` wires this to the bundled Latin Modern Math
-//! (`lmmath`, upstream SATySFi's own default math font), falling back to
-//! `dejavu-math` only if LM Math is unavailable. Absent ⇒ no math default is
-//! configured, and `math_font` stays at `Context::initial`'s own seed
-//! (`FontKey(0)`, the regular text face) — unchanged pre-Slice-B behavior.
+//! An optional `"math"` key (Slice B) names the abbrev `get-initial-context`
+//! seeds `Context::math_font` with, e.g. `{ "regular": "Junicode", "math":
+//! "lmmath" }` — `scripts/ download-fonts.sh` wires this to the bundled
+//! Latin Modern Math (`lmmath`, upstream SATySFi's own default math font),
+//! falling back to `dejavu-math` only if LM Math is unavailable. Absent ⇒ no
+//! math default is configured, and `math_font` stays at `Context::initial`'s
+//! own seed (`FontKey(0)`, the regular text face) — unchanged pre-Slice-B
+//! behavior.
 //!
 //! # Discovery and error handling
 //!
@@ -153,11 +153,11 @@ pub struct FontRegistry {
     /// `--font`/CLI flags, which have no `scripts` concept at all).
     script_fonts: [Option<(String, f64, f64)>; 4],
     /// The abbrev named by `default-font.rustyfi-hash`'s optional `"math"`
-    /// key (`docs/plans/design-math-cramped.md` §4 Slice B) — the font
-    /// `get-initial-context` seeds `Context::math_font` with. `None` when
-    /// absent (or the registry came from `--font`/CLI flags, which have no
-    /// `"math"` concept), in which case `math_font` stays at
-    /// `Context::initial`'s own seed (`FontKey(0)`, the regular text face).
+    /// key (Slice B) — the font `get-initial-context` seeds
+    /// `Context::math_font` with. `None` when absent (or the registry came
+    /// from `--font`/CLI flags, which have no `"math"` concept), in which
+    /// case `math_font` stays at `Context::initial`'s own seed
+    /// (`FontKey(0)`, the regular text face).
     math_font: Option<String>,
 }
 
@@ -228,11 +228,11 @@ struct RawFontEntry {
 }
 
 /// Raw shape of `default-font.rustyfi-hash` (port-specific; see module
-/// docs). Only `regular` is required. `scripts` (D1a,
-/// docs/plans/text-rendering.md §1a) is the optional per-script default
-/// scheme mirroring upstream `setDefaultFont.ml`'s shape — absent entirely
-/// ⇒ every script defaults to `(FontKey(0), 1.0, 0.0)`, i.e. today's
-/// single-font behavior (`TtfFontStore::script_default` returns `None`).
+/// docs). Only `regular` is required. `scripts` (D1a) is the optional
+/// per-script default scheme mirroring upstream `setDefaultFont.ml`'s
+/// shape — absent entirely ⇒ every script defaults to `(FontKey(0), 1.0,
+/// 0.0)`, i.e. today's single-font behavior
+/// (`TtfFontStore::script_default` returns `None`).
 #[derive(Debug, Deserialize)]
 struct RawDefaultFace {
     regular: String,
@@ -242,11 +242,11 @@ struct RawDefaultFace {
     oblique: Option<String>,
     #[serde(default)]
     scripts: Option<RawScripts>,
-    /// `docs/plans/design-math-cramped.md` §4 Slice B: the abbrev
-    /// `get-initial-context` seeds `Context::math_font` with. Optional —
-    /// absent means no math default is configured (unchanged pre-Slice-B
-    /// behavior: `Context::math_font` stays at `Context::initial`'s
-    /// `FontKey(0)` seed).
+    /// Slice B: the abbrev `get-initial-context` seeds
+    /// `Context::math_font` with. Optional — absent means no math
+    /// default is configured (unchanged pre-Slice-B behavior:
+    /// `Context::math_font` stays at `Context::initial`'s `FontKey(0)`
+    /// seed).
     #[serde(default)]
     math: Option<String>,
 }
@@ -481,12 +481,12 @@ impl FontRegistry {
     }
 
     /// Resolve every configured abbrev and build an N-slot [`TtfFontStore`]
-    /// (D1a, docs/plans/text-rendering.md §1a): the three seeded default
-    /// faces occupy `FontKey(0/1/2)` exactly as before (byte-identical to
-    /// the pre-D1a 3-slot build for a config with no other abbrevs), and
-    /// every OTHER abbrev in [`Self::faces`] gets its own slot beyond that,
-    /// deduped against every file already loaded (by canonical path) so two
-    /// abbrevs naming the same physical font file share one embedded copy.
+    /// (D1a): the three seeded default faces occupy `FontKey(0/1/2)`
+    /// exactly as before (byte-identical to the pre-D1a 3-slot build for a
+    /// config with no other abbrevs), and every OTHER abbrev in
+    /// [`Self::faces`] gets its own slot beyond that, deduped against every
+    /// file already loaded (by canonical path) so two abbrevs naming the
+    /// same physical font file share one embedded copy.
     ///
     /// **Eager, not lazy.** Upstream (`fontInfo.ml:24-132`) loads a face the
     /// first time a script/abbrev actually needs it. `TtfFontStore` cannot
@@ -942,7 +942,7 @@ mod tests {
     }
 
     // ---- D1a: N-slot store, abbrev roundtrip, file dedup, `scripts` block
-    // (docs/plans/text-rendering.md §1a) --------------------------------
+    // --------------------------------
 
     /// A second real TrueType file, distinct from `find_regular_font`'s
     /// (DejaVu Sans Mono vs. DejaVu Sans) — needed to prove a genuinely

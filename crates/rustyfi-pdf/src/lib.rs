@@ -1,7 +1,7 @@
-//! PDF output backend: base-14 Type1 fonts, uncompressed content streams
-//! (the milestone-1 replacement for handlePdf.ml on top of `pdf-writer`),
-//! plus (phase 5) ttf-parser-backed metrics and CID-keyed TrueType embedding,
-//! and (Slice 1, `docs/plans/math-images.md`) raster Image XObjects.
+//! PDF output backend: base-14 Type1 fonts, uncompressed content streams (the
+//! milestone-1 replacement for handlePdf.ml on top of `pdf-writer`), plus
+//! (phase 5) ttf-parser-backed metrics and CID-keyed TrueType embedding, and
+//! (Slice 1) raster Image XObjects.
 
 pub mod base14;
 pub mod cid;
@@ -37,13 +37,12 @@ pub enum PdfError {
 const FONT_RES_NAMES: [&str; 3] = ["F0", "F1", "F2"];
 
 // ============================================================================
-// Shared Image XObject support (Slice 1: raster images,
-// `docs/plans/math-images.md`). `render_pdf` (base-14, below) and
-// `render_pdf_ttf` (CID-keyed TrueType, `cid.rs`) are otherwise entirely
-// separate writers, but an `Image` box is rendered *identically* by both —
-// only text rendering differs between them — so that one path lives here,
-// once, and `cid.rs` imports it (`use crate::{..}`), the same way it already
-// shares `FONT_RES_NAMES` with this module.
+// Shared Image XObject support (Slice 1: raster images). `render_pdf`
+// (base-14, below) and `render_pdf_ttf` (CID-keyed TrueType, `cid.rs`) are
+// otherwise entirely separate writers, but an `Image` box is rendered
+// *identically* by both — only text rendering differs between them — so that
+// one path lives here, once, and `cid.rs` imports it (`use crate::{..}`),
+// the same way it already shares `FONT_RES_NAMES` with this module.
 // ============================================================================
 
 /// Every `ImageId` (as its raw `usize` index into a `DocumentValue::images`-
@@ -219,9 +218,8 @@ fn write_image_xobjects(
 }
 
 // ============================================================================
-// Imported PDF pages as Form XObjects (`load-pdf-image`,
-// docs/plans/design-load-pdf-image.md §3). Shared by both writers exactly
-// like the raster Image XObject support above.
+// Imported PDF pages as Form XObjects (`load-pdf-image`). Shared by both
+// writers exactly like the raster Image XObject support above.
 // ============================================================================
 
 /// The PDF resource name for form-embedded PDF-page id `id` (e.g. `Fm3`) —
@@ -407,13 +405,12 @@ fn place_form(
 }
 
 /// Emit one laid-out `PureHorzBox::Math` run's glyphs as a `BT / Tf / Td /
-/// Tj / ET` group per glyph — the whole point of the `Math` box
-/// (`docs/plans/math-engine.md` §Slice 1) being that each glyph already
-/// carries its own font/size (`glyph.info`) and offset (`glyph.dx`/`dy`)
-/// relative to the box's placed anchor `(anchor_x, anchor_y)`, the same
-/// already-flipped `(line.x + dx, paper_h - baseline_y)` a text run's `Td`
-/// uses. `glyph.dy > 0` raises it (a superscript) since PDF y is up — no
-/// second flip here, only an add.
+/// Tj / ET` group per glyph — the whole point of the `Math` box being that
+/// each glyph already carries its own font/size (`glyph.info`) and offset
+/// (`glyph.dx`/`dy`) relative to the box's placed anchor `(anchor_x,
+/// anchor_y)`, the same already-flipped `(line.x + dx, paper_h -
+/// baseline_y)` a text run's `Td` uses. `glyph.dy > 0` raises it (a
+/// superscript) since PDF y is up — no second flip here, only an add.
 ///
 /// `encode` turns one glyph into engine-specific `Tj` bytes: WinAnsi over
 /// `glyph.text` for `render_pdf` (below), a glyph-id run for
@@ -456,11 +453,10 @@ pub(crate) fn place_math(
 }
 
 /// Stack an `EmbeddedBlock`'s already-broken `block` lines from its placed
-/// anchor `(tx, ty)` (`docs/plans/context-box-prims.md` §3) — shared by both
-/// writers the same way `place_graphics`/`place_math` are, with the *text*
-/// emission (the one thing that differs between them) threaded through as
-/// the `emit_line` callback (exactly `emit_box`'s own `Tabular` recursion,
-/// one level up).
+/// anchor `(tx, ty)` — shared by both writers the same way
+/// `place_graphics`/`place_math` are, with the *text* emission (the one
+/// thing that differs between them) threaded through as the `emit_line`
+/// callback (exactly `emit_box`'s own `Tabular` recursion, one level up).
 ///
 /// **Top-aligned stand-in.** `place_block_at` (rustyfi-backend; also used
 /// for page headers/footers) lays `block` out from a fixed `(0, 0)`
@@ -732,10 +728,9 @@ pub fn render_pdf_with(
     let page_tree_id = next_ref();
     let font_ids: Vec<Ref> = (0..3).map(|_| next_ref()).collect();
 
-    // One Image XObject per image actually placed on a page (Slice 1:
-    // raster images, docs/plans/math-images.md), plus one Form XObject per
-    // imported PDF page (`load-pdf-image`, docs/plans/design-load-pdf-image.md
-    // §3) — same `used` set, same `next_ref` allocator, disjoint `Im`/`Fm`
+    // One Image XObject per image actually placed on a page (Slice 1: raster
+    // images), plus one Form XObject per imported PDF page (`load-pdf-image`)
+    // — same `used` set, same `next_ref` allocator, disjoint `Im`/`Fm`
     // resource names.
     let used = used_images(pages, &extras.page_graphics);
     let img_refs = write_image_xobjects(&mut pdf, &mut next_ref, images, &used);
@@ -860,11 +855,11 @@ fn page_content(
 /// Emit one already-placed `PureHorzBox` at absolute PDF-space coordinates
 /// `(tx, ty)` — `tx` the box's left edge, `ty` its baseline, both already in
 /// PDF's y-**up** space (the page-level flip, `y = paper_h - baseline_y`,
-/// already happened in the caller's `ty`). Factored out of `page_content`
-/// (docs/plans/table-subsystem.md §4) so it is **reentrant**: a `Tabular`
-/// box's cells hold their own already-laid-out `PureHorzBox` runs, and this
-/// is the same path a top-level line uses to emit them, recursively (so a
-/// nested table inside a cell just works).
+/// already happened in the caller's `ty`). Factored out of `page_content` so
+/// it is **reentrant**: a `Tabular` box's cells hold their own
+/// already-laid-out `PureHorzBox` runs, and this is the same path a
+/// top-level line uses to emit them, recursively (so a nested table inside a
+/// cell just works).
 ///
 /// **The three y-frames, reconciled in one expression.** Page layout is
 /// y-down (flipped into `ty` by the caller, once); a `Tabular` box's own
@@ -909,11 +904,11 @@ fn emit_box(
             height,
             image,
         } => {
-            // `load-pdf-image` (docs/plans/design-load-pdf-image.md §3.3):
-            // an imported PDF page is placed as a Form XObject (its own
-            // MediaBox-to-box CTM), not an Image XObject — everything else
-            // about the box (width/height already resolved by
-            // `use-image-by-width`) is identical between the two kinds.
+            // `load-pdf-image`: an imported PDF page is placed as a Form
+            // XObject (its own MediaBox-to-box CTM), not an Image XObject
+            // — everything else about the box (width/height already
+            // resolved by `use-image-by-width`) is identical between the
+            // two kinds.
             match images.get(image.0).and_then(|im| im.pdf.as_ref()) {
                 Some(pdf_res) => place_form(
                     content,
@@ -945,12 +940,12 @@ fn emit_box(
                 FONT_RES_NAMES[(k.0 as usize).min(FONT_RES_NAMES.len() - 1)].to_string()
             };
             place_math(content, glyphs, tx, ty, &name_for, |g| winansi(&g.text))?;
-            // §B2 (`docs/plans/math-engine.md`): the fraction bar/radical
-            // sign+overbar are `Fill`s, not glyphs — placed through the SAME
-            // `place_graphics` an `inline-graphics`/`Tabular` box uses, at
-            // the SAME already-flipped anchor `place_math` just used for the
-            // glyphs (see `place_graphics`'s own doc comment on why no
-            // second y-flip belongs here).
+            // §B2: the fraction bar/radical sign+overbar are `Fill`s, not
+            // glyphs — placed through the SAME `place_graphics` an
+            // `inline-graphics`/`Tabular` box uses, at the SAME
+            // already-flipped anchor `place_math` just used for the glyphs
+            // (see `place_graphics`'s own doc comment on why no second
+            // y-flip belongs here).
             place_graphics(content, rules, tx, ty, &mut |c, bx, x, y| {
                 emit_box(c, bx, x, y, images)
             })?;

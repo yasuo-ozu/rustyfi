@@ -1,7 +1,7 @@
-//! §D writer coverage (docs/plans/hooks-annotations-crossref.md): `emit_box`'s
-//! new `PureHorzBox::Frame` recursion (contents rendered on the frame's own
-//! baseline, x-shifted by each content's own offset) and `used_images`'s
-//! recursive box scan finding an `Image` nested inside a `Frame`.
+//! §D writer coverage: `emit_box`'s new `PureHorzBox::Frame` recursion
+//! (contents rendered on the frame's own baseline, x-shifted by each content's
+//! own offset) and `used_images`'s recursive box scan finding an `Image`
+//! nested inside a `Frame`.
 
 use rustyfi_backend::{
     Color, DecoId, FontKey, HorzStringInfo, ImageId, ImageResource, Length, Page, PageGeometry,

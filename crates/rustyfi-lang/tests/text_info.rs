@@ -1,4 +1,4 @@
-//! group E3 (`docs/plans/context-box-prims.md` §G sliver): `text-info` — the
+//! group E3 (sliver): `text-info` — the
 //! `get-initial-text-info`/`deepen-indent`/`break` pure prims. Harness copied
 //! from `context_box.rs` (typecheck half via `parse_file` ->
 //! `elaborate_program` -> `typecheck`; eval half via direct `Ast` apply

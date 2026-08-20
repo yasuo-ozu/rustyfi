@@ -1,10 +1,9 @@
-//! Integration test for the composite `Tabular` box's PDF writer arm
-//! (docs/plans/table-subsystem.md §4, the "biggest risk"): a page whose
-//! only content is a `PureHorzBox::Tabular` (one text cell + one rule)
-//! renders both the cell's `Tj` text run and the rule's path operators into
-//! the same content stream, in the same coordinate frame — the reentrant
-//! `emit_box` reconciling page y-down / box y-up / cell-baseline-y-up in one
-//! `ty + cell.baseline_y` expression.
+//! Integration test for the composite `Tabular` box's PDF writer arm (the
+//! "biggest risk"): a page whose only content is a `PureHorzBox::Tabular`
+//! (one text cell + one rule) renders both the cell's `Tj` text run and the
+//! rule's path operators into the same content stream, in the same
+//! coordinate frame — the reentrant `emit_box` reconciling page y-down / box
+//! y-up / cell-baseline-y-up in one `ty + cell.baseline_y` expression.
 
 use rustyfi_backend::{
     Closing, Color, FontKey, GraphicsElem, HorzStringInfo, Length, Page, PageGeometry, Path,

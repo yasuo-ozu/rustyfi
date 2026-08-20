@@ -47,31 +47,29 @@ fn err<T>(span: Span, msg: impl Into<String>) -> Result<T, ElabError> {
 /// `Param::Optional` (`?:name`) entries ANYWHERE in the list (`cst.rs`'s
 /// `Param` doc comment — `TopLet`/`Expr::LetIn` and the three command-binding
 /// forms all admit that marker) — one `bool` per declared parameter position,
-/// `true` where that position is a `Param::Optional`. E.g. `let to-math
-/// ?:iopt e = ..` records `[true, false]`; `stdja.satyh`'s `let document
-/// record ?:configopt inner = ..` (the optional is the *second*, not the
-/// first, parameter) records `[false, true, false]`. This is the
-/// "marker-less optional-argument defaulting" gap
-/// (`docs/plans/frontend-completion.md` Sub-area 2 / `class-signature-lang-
+/// `true` where that position is a `Param::Optional`. E.g. `let to-math ?:iopt
+/// e = ..` records `[true, false]`; `stdja.satyh`'s `let document record
+/// ?:configopt inner = ..` (the optional is the *second*, not the first,
+/// parameter) records `[false, true, false]`. This is the "marker-less
+/// optional-argument defaulting" gap (Sub-area 2 / `class-signature-lang-
 /// gaps.md`): a bare call site (`to-math e1`, no `?:`/`?*` at all) must still
 /// supply `None` for `iopt` and match `e1` against `e` — and, symmetrically,
-/// `document record body` must supply `None` for `configopt` and match
-/// `body` against `inner`, NOT against `configopt`'s `option config` domain
-/// (the bug this full per-position shape fixes — a scalar *leading-count-
-/// only* encoding can't tell "the optional is at position 1" from "there is
-/// no optional at all" once position 0 is mandatory) — see
-/// `app_chain_generic`'s use of [`Scope::optional_shape`]. The same map also
-/// covers command bindings (`let-inline`/`let-block`/`let-math` — `cst.rs`'s
-/// `Param`, shaped by the same `param_optional_shape`): `walk_bindings`'s
+/// `document record body` must supply `None` for `configopt` and match `body`
+/// against `inner`, NOT against `configopt`'s `option config` domain (the bug
+/// this full per-position shape fixes — a scalar *leading-count- only*
+/// encoding can't tell "the optional is at position 1" from "there is no
+/// optional at all" once position 0 is mandatory) — see `app_chain_generic`'s
+/// use of [`Scope::optional_shape`]. The same map also covers command bindings
+/// (`let-inline`/`let-block`/`let-math` — `cst.rs`'s `Param`, shaped by the
+/// same `param_optional_shape`): `walk_bindings`'s
 /// `LetInline`/`LetBlock`/`LetMath` arms record each command's full param
 /// shape the same way; [`Scope::optional_arity`] (a derived *leading-run*
-/// count, `take_while` over the shape) still feeds the command-argument
-/// paths (`cmd_args`, `math_bot`'s `Cmd` arm), which stay leading-only /
-/// unchanged. Absent from the map means "no known optionals" — the
-/// overwhelmingly common case, and every existing name's default, so
-/// ordinary application is unaffected.
-/// Overlay size at which a [`Scope`]'s name set folds down into a fresh shared
-/// base — the same persistent split, and the same reason, as
+/// count, `take_while` over the shape) still feeds the command-argument paths
+/// (`cmd_args`, `math_bot`'s `Cmd` arm), which stay leading-only / unchanged.
+/// Absent from the map means "no known optionals" — the overwhelmingly common
+/// case, and every existing name's default, so ordinary application is
+/// unaffected. Overlay size at which a [`Scope`]'s name set folds down into a
+/// fresh shared base — the same persistent split, and the same reason, as
 /// `typecheck::OVERLAY_CAP`.
 const NAMES_OVERLAY_CAP: usize = 64;
 
@@ -539,15 +537,13 @@ pub fn elaborate_program<'s>(
 
 /// Like [`elaborate_program`], but additionally marking a subset of
 /// `file.prelude`'s TOP-LEVEL entries (by index) as originating from a
-/// spliced `V0_0` dependency (Slice X2a,
-/// `docs/plans/design-cross-version-import.md` §"Slice X2 — per-group
-/// primitive environment", Option C). Every `Binding` this splices in from
-/// one of those entries — and, recursively, every binding inside a `module ..
-/// = struct .. end` at such an index — has its elaborated RHS wrapped in
-/// [`Ast::VersionScope`]`(V0_0, _)`, so `compile.rs`/`eval.rs`/
-/// `typecheck.rs` resolve THAT subtree's version-forked primitives (and
-/// runtime-version reads) against `V0_0` instead of the merged program's
-/// ambient `V0_1`.
+/// spliced `V0_0` dependency (Slice X2a,, Option C). Every `Binding` this
+/// splices in from one of those entries — and, recursively, every binding
+/// inside a `module .. = struct .. end` at such an index — has its elaborated
+/// RHS wrapped in [`Ast::VersionScope`]`(V0_0, _)`, so
+/// `compile.rs`/`eval.rs`/ `typecheck.rs` resolve THAT subtree's
+/// version-forked primitives (and runtime-version reads) against `V0_0`
+/// instead of the merged program's ambient `V0_1`.
 ///
 /// `v006_indices` is empty for every existing caller (`elaborate_program`
 /// above delegates here with `&HashSet::new()`), which makes `this_v006`
@@ -555,14 +551,13 @@ pub fn elaborate_program<'s>(
 /// node — the pure-0.0.6 and pure-0.1 paths are therefore byte-identical to
 /// before this slice (same code, an always-false extra branch).
 ///
-/// `wrap_body_version` (Slice X4a, `docs/plans/design-cross-version-import.md`
-/// §X4.3 item 3): when `Some(v)`, the file's own document TAIL expression
-/// (`file.body`, elaborated into `body_ast` below) is additionally wrapped in
-/// `Ast::VersionScope(v, _)` — the ONE new capability X4 needs beyond X2.2's
-/// indexed-`prelude`-item wrapping, because a `V0_0` ENTRY's tail expression
-/// (e.g. a bare `page-break doc` with no intermediate `let`) is itself
-/// `V0_0`-authored code that may reference forked primitives directly, not
-/// just its `prelude` bindings. `None` for every pre-X4a caller
+/// `wrap_body_version` (Slice X4a, item 3): when `Some(v)`, the file's own
+/// document TAIL expression (`file.body`, elaborated into `body_ast` below) is
+/// additionally wrapped in `Ast::VersionScope(v, _)` — the ONE new capability
+/// X4 needs beyond X2.2's indexed-`prelude`-item wrapping, because a `V0_0`
+/// ENTRY's tail expression (e.g. a bare `page-break doc` with no intermediate
+/// `let`) is itself `V0_0`-authored code that may reference forked primitives
+/// directly, not just its `prelude` bindings. `None` for every pre-X4a caller
 /// (`elaborate_program` above, and `compile_document_v1_with_trials`'s
 /// existing call site) — byte-identical, since `match None { .. }` never
 /// constructs the extra node.
@@ -676,8 +671,8 @@ enum Binding<'s> {
     Let(String, Ast<'s>),
     LetRec(Vec<(String, Rc<Ast<'s>>)>),
     LetMutable(String, Ast<'s>),
-    /// A `let-math` binding (`docs/plans/math-engine.md` §G) — nests as
-    /// `Ast::LetMathIn`, not `Ast::LetIn` (see that variant's doc comment).
+    /// A `let-math` binding — nests as `Ast::LetMathIn`, not `Ast::LetIn`
+    /// (see that variant's doc comment).
     LetMath(String, Ast<'s>),
 }
 
@@ -1433,16 +1428,16 @@ fn elaborate_let_inline<'s>(
     }
 }
 
-/// `let-math \cmd param* = expr` (`docs/plans/math-engine.md` §G; upstream
-/// `nxmathdec`, `parser.mly:586-591`): curry `params` (upstream's `arg`,
-/// `cst.rs`'s `Param` doc comment) via `curry_cmd_params`, with **no**
-/// implicit/explicit context variable at all (contrast `elaborate_let_inline`,
-/// which always threads one) — a math command's own type (`math-cmd`)
-/// carries no context argument. A zero-param binding (e.g. `let-math \to =
-/// rel \`→\``) elaborates to `value` directly, un-wrapped. Shared by
-/// `TopBinding::LetMath` (via `walk_bindings`) and the expression-level
-/// `Expr::LetMathIn` (`parser.mly:688`, upstream's only command binding with
-/// a local `in`-bodied form — see that variant's doc comment).
+/// `let-math \cmd param* = expr` (upstream `nxmathdec`, `parser.mly:586-591`):
+/// curry `params` (upstream's `arg`, `cst.rs`'s `Param` doc comment) via
+/// `curry_cmd_params`, with **no** implicit/explicit context variable at all
+/// (contrast `elaborate_let_inline`, which always threads one) — a math
+/// command's own type (`math-cmd`) carries no context argument. A zero-param
+/// binding (e.g. `let-math \to = rel \`→\``) elaborates to `value` directly,
+/// un-wrapped. Shared by `TopBinding::LetMath` (via `walk_bindings`) and the
+/// expression-level `Expr::LetMathIn` (`parser.mly:688`, upstream's only
+/// command binding with a local `in`-bodied form — see that variant's doc
+/// comment).
 fn elaborate_let_math<'s>(
     params: &[c::Param],
     value: &c::Expr,
@@ -2292,12 +2287,12 @@ fn app_expr<'s>(a: &c::AppExpr, scope: &Scope<'s>) -> Result<Ast<'s>, ElabError>
 fn app_chain_generic<'s>(a: &c::AppExpr, scope: &Scope<'s>) -> Result<Ast<'s>, ElabError> {
     let mut ast = atomic_head_with_excl(&a.head, &a.head_accesses, a.excl.as_ref(), scope)?;
     // Marker-less optional-argument defaulting (`Scope`'s doc comment /
-    // `docs/plans/frontend-completion.md` Sub-area 2): if the head is a bare
-    // name (no `!`/`#access`) known to have `?:`-optional parameters
-    // ANYWHERE in its declared `Param` list (not just leading — see
-    // `Scope::optional_shape`'s doc comment for `stdja.satyh`'s `document
-    // record ?:configopt inner`, whose optional is the *second* parameter),
-    // walk `a.args` position by position against that declared shape:
+    // Sub-area 2): if the head is a bare name (no `!`/`#access`) known to
+    // have `?:`-optional parameters ANYWHERE in its declared `Param` list
+    // (not just leading — see `Scope::optional_shape`'s doc comment for
+    // `stdja.satyh`'s `document record ?:configopt inner`, whose optional is
+    // the *second* parameter), walk `a.args` position by position against
+    // that declared shape:
     //
     //  - at a declared OPTIONAL position, an explicit `?:e`/`?*` marker is
     //    consumed as before (an EXPLICIT call site, e.g. `document r ?:(c)
@@ -2475,19 +2470,18 @@ fn atomic_head_with_excl<'s>(
 
 /// Desugar one application-chain argument. `?: value`/`?*` (`AppArg::Optional`/
 /// `Omission` — v0.0.6's `UTApplyOptional`/`UTApplyOmission`) desugar
-/// *untyped*, straight to the same `option` constructors a program could
-/// spell by hand: a supplied `?:(e)` becomes `Some(e)`, an omitted `?*`
-/// becomes `None`. This is the one runtime model shared by every optional-arg
-/// call site this milestone supports — a plain function's `f ?:(e)`/`f ?*`
-/// *and* a command's leading `narg`s (`cst.rs`'s `CmdTail::Args`, whose
-/// elements are ALSO `AppArg`s) both go through this same function — so
-/// `Some`/`None` are the one encoding a `?->`-typed function's `option`-
-/// wrapped domain (`typecheck.rs`'s `lower_type_expr`) must unify against.
-/// No type-directed insertion is needed here: every optional slot this
-/// grammar can produce carries an explicit `?:`/`?*` marker at the call site
-/// (there is no "just omit the argument entirely, no marker at all" form —
-/// see `docs/plans/frontend-completion.md` Sub-area 2), so elaboration alone
-/// (no typechecker involvement) fully resolves it.
+/// *untyped*, straight to the same `option` constructors a program could spell
+/// by hand: a supplied `?:(e)` becomes `Some(e)`, an omitted `?*` becomes
+/// `None`. This is the one runtime model shared by every optional-arg call site
+/// this milestone supports — a plain function's `f ?:(e)`/`f ?*` *and* a
+/// command's leading `narg`s (`cst.rs`'s `CmdTail::Args`, whose elements are
+/// ALSO `AppArg`s) both go through this same function — so `Some`/`None` are
+/// the one encoding a `?->`-typed function's `option`- wrapped domain
+/// (`typecheck.rs`'s `lower_type_expr`) must unify against. No type-directed
+/// insertion is needed here: every optional slot this grammar can produce
+/// carries an explicit `?:`/`?*` marker at the call site (there is no "just
+/// omit the argument entirely, no marker at all" form Sub-area 2), so
+/// elaboration alone (no typechecker involvement) fully resolves it.
 fn app_arg_to_ast<'s>(arg: &c::AppArg, scope: &Scope<'s>) -> Result<Ast<'s>, ElabError> {
     match arg {
         c::AppArg::Optional { value, .. } => {

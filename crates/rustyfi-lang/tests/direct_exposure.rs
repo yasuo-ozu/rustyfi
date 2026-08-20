@@ -1,9 +1,9 @@
-//! `direct` command exposure (`docs/plans/typechecker-completion.md` §4):
-//! a `module M : sig direct \cmd : ty ... end = struct ... end` must expose
-//! `\cmd`/`+cmd` UNQUALIFIED at the enclosing scope, aliasing the module's
-//! own qualified binding (`elaborate.rs`'s `direct_cmd_name` +
-//! `TopBinding::Module` arm) — while non-`direct` sig items (`val`/`type`)
-//! stay module-qualified only, exactly as before this change.
+//! `direct` command exposure: a `module M : sig direct \cmd : ty ... end =
+//! struct ... end` must expose `\cmd`/`+cmd` UNQUALIFIED at the enclosing
+//! scope, aliasing the module's own qualified binding (`elaborate.rs`'s
+//! `direct_cmd_name` + `TopBinding::Module` arm) — while non-`direct` sig
+//! items (`val`/`type`) stay module-qualified only, exactly as before this
+//! change.
 //!
 //! End-to-end: real source text through `parse_file` -> `elaborate_program`
 //! -> `typecheck` (type-checks) and, separately, `parse_file` ->

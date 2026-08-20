@@ -1,9 +1,8 @@
-//! HTML output backend (`docs/plans/design-html-output.md`). This
-//! serializes the SAME post-page-break `Page`/`PlacedLine` model the PDF
-//! writer (`lib.rs`) consumes — the design doc's "Option A": a faithful,
-//! non-reflowing, "PDF-in-a-div" twin of the PDF output (preview /
-//! visual-diffing use case, not reflowable web publishing — see the design
-//! doc's §Decision).
+//! HTML output backend. This serializes the SAME post-page-break
+//! `Page`/`PlacedLine` model the PDF writer (`lib.rs`) consumes — the
+//! design doc's "Option A": a faithful, non-reflowing, "PDF-in-a-div" twin
+//! of the PDF output (preview / visual-diffing use case, not reflowable
+//! web publishing — see the design doc's §Decision).
 //!
 //! **Slice 1** (§Slice 1, "text + block layout of a single-page document"):
 //! `InnerString` runs as positioned `<span>`s, plus the `<div class="page">`
@@ -295,18 +294,17 @@ fn render_html_impl(
 /// Slice 1 handled only `InnerString` (a positioned `<span>`, via
 /// [`emit_run`]) and `OuterEmpty`/`FixedEmpty` (inter-word glue/skips —
 /// already fully accounted for by the caller's `dx` offsets, so they render
-/// nothing extra). Slice 2 (`docs/plans/design-html-output.md` §Slice 2)
-/// added `Graphics` (inline SVG, via [`svg::emit_graphics`]) and the three
-/// composite recursions the PDF writer's own `emit_box` has
-/// (`Tabular`/`EmbeddedBlock`/`Frame`, `lib.rs:646-671`) so nested content
-/// inside them renders too. Slice 3 adds `Image` (an `<img>` data URI, via
-/// [`image::data_uri`]) and `Math` (per-glyph `<span>`s through the same
-/// [`emit_run`] path, plus `rules` through [`svg::emit_graphics`] — see the
-/// design doc's math row: the semantic tree is already flattened by
-/// `read_math` by the time a box exists, so this needs no math-specific
-/// rendering beyond reusing the text/SVG paths). The remaining zero-width
-/// markers still hit the wildcard arm — exactly `emit_box`'s own `_ => {}`
-/// (`lib.rs:672`).
+/// nothing extra). Slice 2 added `Graphics` (inline SVG, via
+/// [`svg::emit_graphics`]) and the three composite recursions the PDF
+/// writer's own `emit_box` has (`Tabular`/`EmbeddedBlock`/`Frame`,
+/// `lib.rs:646-671`) so nested content inside them renders too. Slice 3
+/// adds `Image` (an `<img>` data URI, via [`image::data_uri`]) and `Math`
+/// (per-glyph `<span>`s through the same [`emit_run`] path, plus `rules`
+/// through [`svg::emit_graphics`] — see the design doc's math row: the
+/// semantic tree is already flattened by `read_math` by the time a box
+/// exists, so this needs no math-specific rendering beyond reusing the
+/// text/SVG paths). The remaining zero-width markers still hit the wildcard
+/// arm — exactly `emit_box`'s own `_ => {}` (`lib.rs:672`).
 fn emit_box(out: &mut String, bx: &PureHorzBox, tx: f64, ty: f64, ctx: &Ctx) {
     match bx {
         PureHorzBox::InnerString {
@@ -328,17 +326,16 @@ fn emit_box(out: &mut String, bx: &PureHorzBox, tx: f64, ty: f64, ctx: &Ctx) {
             // line (the same reasoning as the PDF writer, which also emits
             // nothing for these two, `lib.rs:670`'s wildcard).
         }
-        // §Slice 3 (`docs/plans/design-html-output.md` §Slice 3's `Image`
-        // sub-step): an `<img>` sized/positioned exactly like the PDF
-        // writer's `place_image` (`lib.rs:165`) — `ty` is the box's
-        // BASELINE, and an `Image` box is all height/zero depth (it sits
-        // entirely above the baseline, `linebreak.rs`'s `layout_line`), so
-        // the baseline IS the image's bottom edge and `top = ty - height`
-        // is its top edge, the same "baseline minus ascent" arithmetic
-        // every other box here uses. Silently skips an out-of-range
-        // `ImageId` (mirrors `write_image_xobjects`'s own graceful skip,
-        // `lib.rs:136-142` — should not happen, but a page missing one
-        // image beats a panic).
+        // §Slice 3 (`Image` sub-step): an `<img>` sized/positioned exactly
+        // like the PDF writer's `place_image` (`lib.rs:165`) — `ty` is the
+        // box's BASELINE, and an `Image` box is all height/zero depth (it
+        // sits entirely above the baseline, `linebreak.rs`'s
+        // `layout_line`), so the baseline IS the image's bottom edge and
+        // `top = ty - height` is its top edge, the same "baseline minus
+        // ascent" arithmetic every other box here uses. Silently skips an
+        // out-of-range `ImageId` (mirrors `write_image_xobjects`'s own
+        // graceful skip, `lib.rs:136-142` — should not happen, but a page
+        // missing one image beats a panic).
         PureHorzBox::Image {
             width,
             height,
@@ -349,12 +346,11 @@ fn emit_box(out: &mut String, bx: &PureHorzBox, tx: f64, ty: f64, ctx: &Ctx) {
                 let w = width.0;
                 let h = height.0;
                 if res.pdf.is_some() {
-                    // `load-pdf-image` (docs/plans/design-load-pdf-image.md
-                    // §3.4): a raster `<img>`/BMP data URI has no samples to
-                    // encode for an imported PDF page (`res.samples` is
-                    // empty). A faithful HTML rendering would need to
-                    // rasterize the page — out of scope here — so this
-                    // emits a bordered placeholder box at the box's
+                    // `load-pdf-image`: a raster `<img>`/BMP data URI has no
+                    // samples to encode for an imported PDF page
+                    // (`res.samples` is empty). A faithful HTML rendering
+                    // would need to rasterize the page — out of scope here —
+                    // so this emits a bordered placeholder box at the box's
                     // resolved dimensions instead of silently producing a
                     // degenerate 0x0 image.
                     let _ = write!(
@@ -396,24 +392,23 @@ fn emit_box(out: &mut String, bx: &PureHorzBox, tx: f64, ty: f64, ctx: &Ctx) {
                 &mut |out, cbx, x, y| emit_box(out, cbx, x, y, ctx),
             );
         }
-        // §Slice 3 (`docs/plans/design-html-output.md` §Slice 3's `Math`
-        // row): each already-positioned `MathGlyph` is rendered through the
-        // SAME run path as `InnerString` (a `<span>`, via `emit_run`) —
-        // `glyph.dx`/`dy` are box-local offsets from this box's own placed
-        // anchor `(tx, ty)`, y-**up** (mirroring `place_math`'s `anchor_y +
-        // glyph.dy` in PDF's y-up space, `lib.rs:187-208`), so both `dy` and
-        // `info.rising` SUBTRACT from the page-down `ty` here — the same
-        // sign flip `InnerString`'s own `rising` handling uses above.
-        // `glyph.gid` (a raw MATH-table variant glyph id, not necessarily
-        // reachable from `glyph.text` via cmap — §B3) has no HTML/CSS
-        // analogue (there is no way to address a bare glyph id from
-        // markup), so this renders `glyph.text` regardless — a documented,
-        // Option-A-inherent approximation for that one construction
-        // (stretchy delimiters/big operators), not a regression for the
-        // overwhelmingly common cmap-reachable glyph case. `rules` (the
-        // fraction bar/radical) are `GraphicsElem`s in the SAME box-local
-        // convention as `Tabular.rules`, so they route through the
-        // identical `(tx, ty)` anchor via `svg::emit_graphics`.
+        // §Slice 3 (`Math` row): each already-positioned `MathGlyph` is
+        // rendered through the SAME run path as `InnerString` (a `<span>`,
+        // via `emit_run`) — `glyph.dx`/`dy` are box-local offsets from this
+        // box's own placed anchor `(tx, ty)`, y-**up** (mirroring
+        // `place_math`'s `anchor_y + glyph.dy` in PDF's y-up space,
+        // `lib.rs:187-208`), so both `dy` and `info.rising` SUBTRACT from
+        // the page-down `ty` here — the same sign flip `InnerString`'s own
+        // `rising` handling uses above. `glyph.gid` (a raw MATH-table
+        // variant glyph id, not necessarily reachable from `glyph.text` via
+        // cmap — §B3) has no HTML/CSS analogue (there is no way to address a
+        // bare glyph id from markup), so this renders `glyph.text`
+        // regardless — a documented, Option-A-inherent approximation for
+        // that one construction (stretchy delimiters/big operators), not a
+        // regression for the overwhelmingly common cmap-reachable glyph
+        // case. `rules` (the fraction bar/radical) are `GraphicsElem`s in
+        // the SAME box-local convention as `Tabular.rules`, so they route
+        // through the identical `(tx, ty)` anchor via `svg::emit_graphics`.
         PureHorzBox::Math {
             width,
             height,

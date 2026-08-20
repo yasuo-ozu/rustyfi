@@ -1,10 +1,9 @@
 //! Gap 5 (char-class value model) / Gap 6 (text-in-math degrade) / Gap 7
 //! (`set-math-variant-char`/`get-left-math-class`/`get-right-math-class`)
-//! acceptance coverage (`docs/plans/math-mode-language-gaps.md`). Pure-
-//! pipeline `run`/helper shapes copied from `math_optional_args.rs` (per
-//! that file's own copy-not-share convention for standalone test harnesses)
-//! — no `@require:`, no loader, `rustyfi_syntax::parse_file` straight
-//! through elaborate/typecheck/eval.
+//! acceptance coverage. Pure- pipeline `run`/helper shapes copied from
+//! `math_optional_args.rs` (per that file's own copy-not-share convention
+//! for standalone test harnesses) — no `@require:`, no loader,
+//! `rustyfi_syntax::parse_file` straight through elaborate/typecheck/eval.
 
 use rustyfi_backend::{FontKey, FontMetrics, HorzBox, Length, MathGlyph, PureHorzBox};
 use rustyfi_lang::value::Value;
@@ -106,7 +105,7 @@ fn with_ctx(body: &str) -> String {
 
 // ============================================================================
 // Gap 5 — whole-token class-map reclassification + spacing
-// (`docs/plans/math-mode-language-gaps.md` row 5).
+// (row 5).
 // ============================================================================
 
 /// `${a-b}`: `-` is its own MATHCHAR token, reclassified `Bin` (and
@@ -237,7 +236,7 @@ fn gap5_ascii_only_font_falls_back_to_source_char() {
 
 // ============================================================================
 // Gap 7 — `set-math-variant-char` / `get-left-math-class` /
-// `get-right-math-class` (`docs/plans/math-mode-language-gaps.md` row 7).
+// `get-right-math-class` (row 7).
 // ============================================================================
 
 /// `set-math-variant-char MathItalic 0x78 0x79 ctx` installs a runtime
@@ -298,8 +297,7 @@ fn gap7_get_left_math_class_on_empty_math_is_none() {
 }
 
 // ============================================================================
-// Gap 6 — text-in-math degrade (`docs/plans/math-mode-language-gaps.md`
-// row 6).
+// Gap 6 — text-in-math degrade (row 6).
 // ============================================================================
 
 /// `text-in-math MathOrd (fun c -> read-inline c {ab})`, embedded via

@@ -1,5 +1,4 @@
-//! Real multi-column `page-break` (docs/plans/document-page-model.md §A,
-//! item #8 of `docs/plans/build-order-to-stdja.md`): `page_break_core`'s
+//! Real multi-column `page-break` (item #8 of): `page_break_core`'s
 //! shared per-page loop — `columnhookf` firing at the start of EVERY
 //! column, `columnendhookf` firing exactly once per page (before
 //! `pagepartsf`), and the page-number-limit guard. Mirrors

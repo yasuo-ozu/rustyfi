@@ -1,12 +1,12 @@
-//! Slice 1 (raster images; `docs/plans/math-images.md`) end-to-end test:
-//! compile a real `.saty`-shaped document that `load-image`s the checked-in
-//! `dot.png` fixture and `use-image-by-width`s it into a paragraph, then
-//! render the result with this crate's own `render_pdf` and inspect the PDF
-//! bytes. Mirrors `rustyfi-lang/tests/eval.rs`'s `compile_document_with_stdlib`
-//! helper (the multi-file loader isn't pulled in for a single-file test);
-//! `document`/`+p` are ordinary `stdja-mini` stdlib bindings, not
-//! primitives, so that package's prelude is concatenated ahead of the
-//! fixture source the same way `rustyfi`'s `merge_program` does.
+//! Slice 1 (raster images) end-to-end test: compile a real `.saty`-shaped
+//! document that `load-image`s the checked-in `dot.png` fixture and
+//! `use-image-by-width`s it into a paragraph, then render the result with this
+//! crate's own `render_pdf` and inspect the PDF bytes. Mirrors
+//! `rustyfi-lang/tests/eval.rs`'s `compile_document_with_stdlib` helper (the
+//! multi-file loader isn't pulled in for a single-file test); `document`/`+p`
+//! are ordinary `stdja-mini` stdlib bindings, not primitives, so that package's
+//! prelude is concatenated ahead of the fixture source the same way `rustyfi`'s
+//! `merge_program` does.
 
 use std::path::Path;
 use std::rc::Rc;

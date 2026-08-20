@@ -1,8 +1,8 @@
-//! Integration test for the Slice 1 HTML writer (`render_html`,
-//! `docs/plans/design-html-output.md` §Slice 1): a page whose only content
-//! is an `InnerString` run serializes to a `<div class="page">` containing
-//! an absolutely-positioned `<span>` at the run's placed `(x, y)`, mirroring
-//! `tests/graphics.rs`'s content-stream substring style for the PDF writer.
+//! Integration test for the Slice 1 HTML writer (`render_html`): a page
+//! whose only content is an `InnerString` run serializes to a `<div
+//! class="page">` containing an absolutely-positioned `<span>` at the run's
+//! placed `(x, y)`, mirroring `tests/graphics.rs`'s content-stream substring
+//! style for the PDF writer.
 
 use rustyfi_backend::{
     Closing, Color, DecoId, DocExtras, FontKey, GraphicsElem, HorzStringInfo, ImageId,
@@ -190,12 +190,11 @@ fn unhandled_box_variants_render_nothing() {
 }
 
 // ============================================================================
-// Slice 2 (`docs/plans/design-html-output.md` §Slice 2: "graphics (inline
-// SVG)"): `Graphics` -> `<svg>`, plus the `Tabular`/`EmbeddedBlock`/`Frame`
-// composite recursions. The graphics fixture mirrors
-// `crates/rustyfi-pdf/tests/graphics.rs`'s `rectangle_path`/
-// `page_with_graphics_box` (same 20pt square, fill + stroke) so the two
-// backends are tested against the exact same shape.
+// Slice 2 (: "graphics (inline SVG)"): `Graphics` -> `<svg>`, plus the
+// `Tabular`/`EmbeddedBlock`/`Frame` composite recursions. The graphics
+// fixture mirrors `crates/rustyfi-pdf/tests/graphics.rs`'s
+// `rectangle_path`/ `page_with_graphics_box` (same 20pt square, fill +
+// stroke) so the two backends are tested against the exact same shape.
 // ============================================================================
 
 fn rectangle_path() -> Path {
@@ -411,12 +410,11 @@ fn embedded_block_stacks_lines_from_the_placed_anchor() {
 }
 
 // ============================================================================
-// Slice 3 (`docs/plans/design-html-output.md` §Slice 3: "real fonts +
-// math"): `@font-face` data-URI embedding, `Image` -> `<img>` data URIs, and
-// `Math` glyph spans. The font/math tests need a real TrueType face on disk
-// — located via fontconfig, falling back to a few common distro/nix paths,
-// and SKIPPED gracefully (mirroring `tests/ttf.rs`'s own
-// `find_regular_font`/`need_font!`, duplicated here per this workspace's
+// Slice 3 (: "real fonts + math"): `@font-face` data-URI embedding, `Image`
+// -> `<img>` data URIs, and `Math` glyph spans. The font/math tests need a
+// real TrueType face on disk — located via fontconfig, falling back to a few
+// common distro/nix paths, and SKIPPED gracefully (mirroring `tests/ttf.rs`'s
+// own `find_regular_font`/`need_font!`, duplicated here per this workspace's
 // per-crate-test-file convention, e.g. `tests/image.rs`'s fixture-duplication
 // comment) when none is found — rather than failing the build on a machine
 // with no DejaVu installed.
@@ -708,12 +706,11 @@ fn math_box_renders_glyph_spans_and_fraction_rule() {
 }
 
 // ============================================================================
-// Slice 4 (`docs/plans/design-html-output.md` §Slice 4: "multi-page + print
-// pagination"): a `>= 2`-page document renders one `<div class="page">` per
-// `Page` plus the print `@page`/`page-break-after` CSS, and
-// `DocExtras::page_graphics` (the per-page deco-graphics underlay, absolute
-// PDF y-up page coordinates) renders as a page-anchored `<svg>` flipped into
-// HTML's y-down page space.
+// Slice 4 (: "multi-page + print pagination"): a `>= 2`-page document
+// renders one `<div class="page">` per `Page` plus the print
+// `@page`/`page-break-after` CSS, and `DocExtras::page_graphics` (the
+// per-page deco-graphics underlay, absolute PDF y-up page coordinates)
+// renders as a page-anchored `<svg>` flipped into HTML's y-down page space.
 // ============================================================================
 
 /// Build a small multi-page fixture directly (no `.saty` compile needed,

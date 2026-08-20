@@ -1,11 +1,11 @@
-//! `docs/plans/math-engine.md` §B2 (fractions + radicals via a graphics-
-//! rules channel): proof that `Math::Fraction`/`Math::Radical` produce a
-//! REAL bar/radical-sign `Fill` at the correct box-local (y-**up**)
-//! position — replacing the old ASCII `"num / den"` / U+221A stand-ins —
-//! under BOTH a real OpenType MATH font (`MathC`'s real-formula branch) and
-//! `Base14Metrics` (`MathC`'s no-MATH-table fallback branch, the
-//! zero-regression floor: no bundled fixture reaches these arms, so this is
-//! the ONLY place base-14 fraction/radical layout is exercised at all).
+//! (fractions + radicals via a graphics- rules channel): proof that
+//! `Math::Fraction`/`Math::Radical` produce a REAL bar/radical-sign `Fill`
+//! at the correct box-local (y-**up**) position — replacing the old ASCII
+//! `"num / den"` / U+221A stand-ins — under BOTH a real OpenType MATH font
+//! (`MathC`'s real-formula branch) and `Base14Metrics` (`MathC`'s
+//! no-MATH-table fallback branch, the zero-regression floor: no bundled
+//! fixture reaches these arms, so this is the ONLY place base-14
+//! fraction/radical layout is exercised at all).
 //!
 //! Font discovery mirrors `tests/math_table.rs`/`tests/math_font.rs`:
 //! fontconfig first, then a handful of common distro/nix paths, then a
@@ -28,9 +28,9 @@ use rustyfi_pdf::{render_pdf, render_pdf_ttf, Base14Metrics, TtfFontStore};
 // ----------------------------------------------------------------------
 
 fn find_math_font() -> Option<PathBuf> {
-    // Slice B (`docs/plans/design-math-cramped.md` §4), re-baselined for the
-    // upstream-correct default (see `scripts/download-fonts.sh`'s header
-    // comment): the repo now bundles the REAL Latin Modern Math at
+    // Slice B, re-baselined for the upstream-correct default (see
+    // `scripts/download-fonts.sh`'s header comment): the repo now bundles
+    // the REAL Latin Modern Math at
     // `lib-rustyfi/dist/fonts/latinmodern-math.otf` (fetched by
     // `scripts/download-fonts.sh`, same as ipaexm/Junicode) and wires it as
     // `default-font.rustyfi-hash`'s `"math"` default. Check it FIRST so this

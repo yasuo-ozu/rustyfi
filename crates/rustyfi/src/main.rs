@@ -1,3 +1,10 @@
+// The crate's front page IS the README: one description of what this program
+// is, kept in one file, so the two cannot drift. Everything below it is the
+// implementation note for this file specifically.
+#![doc = include_str!("../../../README.md")]
+//!
+//! # Implementation notes
+//!
 //! The chimera CLI (plan §1/§4/§7.3): a single multicall
 //! (busybox-/rustup-style) binary that behaves as three tools, dispatched on
 //! its `argv[0]` basename and on its first subcommand:
@@ -111,10 +118,10 @@ fn cmd_compile(m: &ArgMatches) -> anyhow::Result<()> {
         .get_one::<PathBuf>("input")
         .expect("input is required by clap")
         .clone();
-    // HTML output backend, Slice 1 (docs/plans/design-html-output.md §CLI
-    // surface): `--format` has a clap `.default_value("pdf")`, so this
-    // `get_one` is always `Some`; `str::parse` mirrors how `--target-version`
-    // is parsed below (`format.rs`'s doc comment).
+    // HTML output backend, Slice 1 (surface): `--format` has a clap
+    // `.default_value("pdf")`, so this `get_one` is always `Some`;
+    // `str::parse` mirrors how `--target-version` is parsed below
+    // (`format.rs`'s doc comment).
     let format: format::OutputFormat = m
         .get_one::<String>("format")
         .expect("--format has a clap default")
@@ -172,15 +179,15 @@ fn cmd_compile(m: &ArgMatches) -> anyhow::Result<()> {
     // remaining step below is byte-for-byte the pre-Slice-1 base-14 path.
     let font_store = resolve_font_store(m, lib_root.as_deref())?;
 
-    // Phase-7c saphe solver, C3 (`docs/plans/design-saphe-solver.md` §5.3):
-    // when this compile is package-manager driven (Envelopes/manifest mode),
-    // best-effort locate the project's `Satyrfile.toml`/`Satyrfile.lock`
-    // (upward search from the input, exactly like `--lib-root` discovery)
-    // and fold the lock's digest into the cache key below, so a `saphe
-    // update`/reconcile that changes a locked package's version invalidates
-    // the cache even when the entry document's own bytes did not change. A
-    // project with no `Satyrfile.toml`/lock (or a Legacy-mode compile) simply
-    // folds in `None`, unchanged from before this fold existed.
+    // Phase-7c saphe solver, C3: when this compile is package-manager driven
+    // (Envelopes/manifest mode), best-effort locate the project's
+    // `Satyrfile.toml`/`Satyrfile.lock` (upward search from the input,
+    // exactly like `--lib-root` discovery) and fold the lock's digest into
+    // the cache key below, so a `saphe update`/reconcile that changes a
+    // locked package's version invalidates the cache even when the entry
+    // document's own bytes did not change. A project with no
+    // `Satyrfile.toml`/lock (or a Legacy-mode compile) simply folds in
+    // `None`, unchanged from before this fold existed.
     let deps_lock_digest: Option<String> = is_envelopes_mode
         .then(|| discover_deps_lock_digest(&input))
         .flatten();
@@ -273,16 +280,15 @@ fn cmd_compile(m: &ArgMatches) -> anyhow::Result<()> {
                 .0
         }
         _ => {
-            // Slice X4a (docs/plans/design-cross-version-import.md §"Slice
-            // X4 — reverse direction"): a V0_0-rooted load whose
-            // dependency graph contains at least one foreign V0_1 node (a
-            // `@require:` of a `dist-v01/packages/` package, per the
-            // loader's Q4-mirror rule) routes through the new
-            // `compile_document_v006_xver` entry point instead of the
-            // pure-0.0.6 `merge_program`/`compile_document_cst` path — ONLY
-            // when such a dependency is actually present, so a pure-0.0.6
-            // load (the overwhelming majority — every existing fixture)
-            // takes the exact old path, byte-identical.
+            // Slice X4a: a V0_0-rooted load whose dependency graph contains
+            // at least one foreign V0_1 node (a `@require:` of a
+            // `dist-v01/packages/` package, per the loader's Q4-mirror
+            // rule) routes through the new `compile_document_v006_xver`
+            // entry point instead of the pure-0.0.6
+            // `merge_program`/`compile_document_cst` path — ONLY when such
+            // a dependency is actually present, so a pure-0.0.6 load (the
+            // overwhelming majority — every existing fixture) takes the
+            // exact old path, byte-identical.
             let has_v01_dep = program
                 .files
                 .iter()
@@ -300,12 +306,12 @@ fn cmd_compile(m: &ArgMatches) -> anyhow::Result<()> {
         }
     };
 
-    // HTML output backend, Slice 1 (docs/plans/design-html-output.md §CLI
-    // surface, point 2): everything above (load, version resolution, font
-    // store, cache lookup, compile) is shared; only this terminal
-    // render+write step differs, branching on `--format`. `Html` reuses the
-    // exact same `doc.geometry`/`doc.pages`/`doc.images`/`doc.extras` inputs
-    // the PDF arm does — `render_html` is argument-for-argument with
+    // HTML output backend, Slice 1 (surface, point 2): everything above
+    // (load, version resolution, font store, cache lookup, compile) is
+    // shared; only this terminal render+write step differs, branching on
+    // `--format`. `Html` reuses the exact same
+    // `doc.geometry`/`doc.pages`/`doc.images`/`doc.extras` inputs the PDF
+    // arm does — `render_html` is argument-for-argument with
     // `render_pdf_with` (`rustyfi_html`'s crate doc comment). Since survey
     // #6 the HTML backend lives in its own `rustyfi-html` crate (a peer of
     // `rustyfi-pdf`), not inside `rustyfi-pdf` itself.
@@ -330,11 +336,11 @@ fn cmd_compile(m: &ArgMatches) -> anyhow::Result<()> {
                 rustyfi_pdf::render_pdf_with(&doc.geometry, &doc.pages, &doc.images, &doc.extras)?
             }
         },
-        // HTML output backend, Slice 3 (`docs/plans/design-html-output.md`
-        // §Slice 3): mirrors the PDF arm immediately above — a configured
-        // `font_store` renders through `render_html_ttf_with` (real
-        // `@font-face`-embedded fonts, metric-faithful with the layout),
-        // `None` keeps Slice 1/2's base-14 `render_html` path exactly.
+        // HTML output backend, Slice 3: mirrors the PDF arm immediately
+        // above — a configured `font_store` renders through
+        // `render_html_ttf_with` (real `@font-face`-embedded fonts,
+        // metric-faithful with the layout), `None` keeps Slice 1/2's
+        // base-14 `render_html` path exactly.
         format::OutputFormat::Html => match &font_store {
             Some(store) => rustyfi_html::render_html_ttf_with(
                 &doc.geometry,
@@ -347,18 +353,17 @@ fn cmd_compile(m: &ArgMatches) -> anyhow::Result<()> {
             None => rustyfi_html::render_html(&doc.geometry, &doc.pages, &doc.images, &doc.extras)?
                 .into_bytes(),
         },
-        // Reflowable/semantic HTML output (`docs/plans/design-reflowable-html.md`
-        // §5 "CLI"): a THIRD, independent serialization of the SAME compiled
-        // `doc` above — `doc.reflow_source` (the pre-page-break flat
-        // `Vec<VertBox>`, `DocumentValue`'s newest field, populated
-        // unconditionally by every `compile_document_*` path through the
-        // shared `page_break_core`) feeds the new reflow backend instead of
-        // `doc.pages`. S2 (§4 "Links/metadata") additionally threads
+        // Reflowable/semantic HTML output ("CLI"): a THIRD, independent
+        // serialization of the SAME compiled `doc` above — `doc.reflow_source`
+        // (the pre-page-break flat `Vec<VertBox>`, `DocumentValue`'s newest
+        // field, populated unconditionally by every `compile_document_*` path
+        // through the shared `page_break_core`) feeds the new reflow backend
+        // instead of `doc.pages`. S2 (§4 "Links/metadata") additionally threads
         // `doc.reflow_links`/`reflow_dests` — the `DecoId`-keyed link/
         // destination side-channel `eval_document_trials` fills alongside
-        // `extras`, once `fire_hooks` has run — so `\href`s become real
-        // `<a href>`s. Mirrors the `Html` arm immediately above for the
-        // font-store branch.
+        // `extras`, once `fire_hooks` has run — so `\href`s become real `<a
+        // href>`s. Mirrors the `Html` arm immediately above for the font-store
+        // branch.
         format::OutputFormat::HtmlReflow => match &font_store {
             Some(store) => rustyfi_html::render_html_reflow_ttf_with(
                 doc.reflow_source.as_deref(),

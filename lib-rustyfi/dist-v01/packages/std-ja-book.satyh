@@ -1,6 +1,5 @@
 % std-ja-book.satyh — SATySFi 0.1 `std-ja-book` document class `StdJaBook`,
-% vendored for Legacy packaging (docs/plans/rustyfi-0-1-0-support.md §2 P2
-% / §4 phase 6 — wave-4 batch A). Source:
+% vendored for Legacy packaging (P2 / §4 phase 6 — wave-4 batch A). Source:
 %   saphe-split@b836d512:lib-rustyfi/packages/std-ja-book/std-ja-book.0.0.1/
 %   src/std-ja-book.satyh (613 lines) — a near-clone of the already-vendored
 %   `std-ja.satyh` capstone (same `@require:` closure, same "bare

@@ -1,12 +1,11 @@
-//! HTML output backend, Slice 3 (`docs/plans/design-html-output.md` §Slice
-//! 3: "real fonts + math"). A hand-rolled standard (RFC 4648 §4) base64
-//! encoder — used by [`super::fonts`] (the embedded `@font-face` TTF bytes)
-//! and [`super::image`] (the `<img>` data URI). Deliberately NOT a crate
-//! dependency: the project constraint for this slice is "no new dependency,
-//! no manifest edit" (see `html.rs`'s module doc on why this whole feature
-//! lives inside `rustyfi-pdf` rather than a new crate), and a padded
-//! 3-bytes-in/4-chars-out encoder is a dozen lines, well under the bar for
-//! pulling in `base64`/similar.
+//! HTML output backend, Slice 3 (: "real fonts + math"). A hand-rolled
+//! standard (RFC 4648 §4) base64 encoder — used by [`super::fonts`] (the
+//! embedded `@font-face` TTF bytes) and [`super::image`] (the `<img>` data
+//! URI). Deliberately NOT a crate dependency: the project constraint for
+//! this slice is "no new dependency, no manifest edit" (see `html.rs`'s
+//! module doc on why this whole feature lives inside `rustyfi-pdf` rather
+//! than a new crate), and a padded 3-bytes-in/4-chars-out encoder is a
+//! dozen lines, well under the bar for pulling in `base64`/similar.
 
 const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 

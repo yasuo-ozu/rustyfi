@@ -1,6 +1,6 @@
 % std-ja.satyh — SATySFi 0.1 `std-ja` document class `StdJa`, vendored for
-% Legacy packaging (docs/plans/rustyfi-0-1-0-support.md §2 P2 / §4
-% phase 6 — doc-class-capstone-road.md CP7 item 5, THE CAPSTONE). Source:
+% Legacy packaging (P2 / §4 phase 6 — doc-class-capstone-road.md CP7 item
+% 5, THE CAPSTONE). Source:
 %   saphe-split@b836d512:lib-rustyfi/packages/std-ja/std-ja.0.0.1/src/
 %   std-ja.satyh (510 lines) — transliteration deltas:
 %   - T1: `use package open Stdlib` / `use package Math` / `use package
@@ -573,11 +573,10 @@ end = struct
     in
     subsection-scheme ctx label title outline-title-opt inner
 
-  % S4 (`docs/plans/design-reflow-s4-lists.md` §5): wrap the body in
-  % `inline-mark` (INERT reflow markers — zero-width, stripped before PDF/
-  % faithful-HTML placement, §4.3) so `--format html-reflow` can render a
-  % real `<em>` — an opt-in, per-command wrap (this file is repo-controlled),
-  % not a heuristic.
+  % S4: wrap the body in `inline-mark` (INERT reflow markers — zero-width,
+  % stripped before PDF/ faithful-HTML placement, §4.3) so `--format
+  % html-reflow` can render a real `<em>` — an opt-in, per-command wrap (this
+  % file is repo-controlled), not a heuristic.
   val inline ctx \emph inner =
     let ctx-emph =
       ctx |> set-font Latin font-latin-italic

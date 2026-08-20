@@ -1,7 +1,7 @@
-//! Slice 1 lowering unit tests (docs/plans/math-engine.md): `read_math`
-//! walks an elaborated `MathElem` tree straight to a `PureHorzBox::Math`
-//! (fixed superscript shift/scale, a minimal Bin/Rel spacer, no MATH table)
-//! — no parser or elaborator involved, mirroring `prims_phase4.rs`'s style.
+//! Slice 1 lowering unit tests: `read_math` walks an elaborated `MathElem`
+//! tree straight to a `PureHorzBox::Math` (fixed superscript shift/scale, a
+//! minimal Bin/Rel spacer, no MATH table) — no parser or elaborator
+//! involved, mirroring `prims_phase4.rs`'s style.
 
 use rustyfi_backend::{Context, FontKey, FontMetrics, Length, MathGlyph, PureHorzBox};
 use rustyfi_lang::eval::Interp;

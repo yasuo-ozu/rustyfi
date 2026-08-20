@@ -84,7 +84,7 @@ enum Why {
     /// from `math-char-class` to `paren` for the same kind of reason.
     ///
     /// This is CLAUDE.md Design TODO 1 ("Cross-version importation"); the
-    /// slices are specced in `docs/plans/design-cross-version-import.md`.
+    /// slices are specced in.
     ///
     /// Worth knowing: the golden harness reported something ELSE for these —
     /// `unbound variable 'text-in-math'` and `unbound variable 'List.fold'` —

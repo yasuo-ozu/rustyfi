@@ -1,9 +1,8 @@
-//! End-to-end acceptance coverage for runtime optional args (build-order
-//! step 3 — see `docs/plans/frontend-completion.md` Sub-area 2 and the
-//! `?->`/`string?` type-grammar parts of
-//! `docs/plans/class-signature-lang-gaps.md`): real SATySFi source text run
-//! through the full pipeline — `parse_file` -> `elaborate::elaborate_program`
-//! -> `typecheck::typecheck` -> `eval::Interp` — proving:
+//! End-to-end acceptance coverage for runtime optional args (build-order step
+//! 3 Sub-area 2 and the `?->`/`string?` type-grammar parts of): real SATySFi
+//! source text run through the full pipeline — `parse_file` ->
+//! `elaborate::elaborate_program` -> `typecheck::typecheck` -> `eval::Interp`
+//! — proving:
 //!
 //! 1. an inline command with an optional argument, called both `?:`-supplied
 //!    and `?*`-omitted, type-checks and evaluates to observably different
@@ -63,7 +62,7 @@ fn int(src: &str) -> i64 {
 // ============================================================================
 // 1. An inline command with an optional argument: `?:` supplied vs `?*`
 //    omitted, both parsed via `CmdTail::Args`'s leading-`AppArg` grammar.
-//    `name`'s def-site `?:` marker (Gap 4, `docs/plans/math-mode-language-
+// `name`'s def-site `?:` marker (Gap 4,
 //    gaps.md`) additionally registers `\greet`'s leading-optional-arity as
 //    1 (`leading_optional_count`), enabling the marker-less bare-call
 //    padding test below — it changes nothing for the explicit `?:`/`?*`
@@ -118,12 +117,11 @@ fn inline_command_with_only_an_omission_marker_still_evaluates() {
     assert_eq!(int(&src), 1);
 }
 
-/// Gap 4 (`docs/plans/math-mode-language-gaps.md`): a command call that
-/// leaves its leading `?:`-marked optional slot completely unmarked —
-/// `{ \greet; }`, `CmdTail::Semi` with zero `AppArg`s at all — must
-/// auto-pad a `None` for it (`cmd_args`'s `leading` param, fed by
-/// `\greet`'s registered `optional_arity` of 1) and render IDENTICALLY to
-/// the explicit `?*`-omission call above.
+/// Gap 4: a command call that leaves its leading `?:`-marked optional
+/// slot completely unmarked — `{ \greet; }`, `CmdTail::Semi` with zero
+/// `AppArg`s at all — must auto-pad a `None` for it (`cmd_args`'s
+/// `leading` param, fed by `\greet`'s registered `optional_arity` of 1)
+/// and render IDENTICALLY to the explicit `?*`-omission call above.
 #[test]
 fn inline_command_marker_less_bare_call_pads_the_same_as_explicit_omission() {
     // `==`/`>'` aren't polymorphic over `length` in this language, so the

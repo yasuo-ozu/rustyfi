@@ -17,8 +17,8 @@
 %    `(| title = ..; author = ..|)` — see the fixtures under
 %    crates/rustyfi/tests/fixtures/).
 %
-%  - The page text width is hardcoded to 440pt (docs/plans/document-
-%    page-model.md §Slice 1's own goal-fixture width), on an `A4Paper`
+%  - The page text width is hardcoded to 440pt (the page-model Slice 1
+%    goal-fixture width), on an `A4Paper`
 %    (595x842pt) page. `document` now calls the REAL 4-arg `page-break`
 %    (`page -> (pbinfo -> page-content-scheme) -> (pbinfo -> page-parts)
 %    -> block-boxes -> document`): a per-page content scheme sets the text
@@ -30,7 +30,7 @@
 %    the plan's roadmap item D).
 %
 %  - `get-initial-context`'s second argument is now the REAL `[math]
-%    inline-cmd` (`docs/plans/math-engine.md` §G, restored in
+% inline-cmd` (restored in
 %    prim_types.rs) and is FAITHFULLY installed as `Context::math_command`
 %    (Gap 1, `class-signature-lang-gaps.md`): `read_inline`'s `EmbedMath`
 %    arm applies it to every bare `${…}` in prose. `\math` below is that

@@ -1,5 +1,5 @@
-//! `docs/plans/context-box-prims.md` §Slice 1: the 10 context-setter/
-//! box-combinator prims `code.satyh`/`itemize.satyh` need. Two halves:
+//! the 10 context-setter/ box-combinator prims
+//! `code.satyh`/`itemize.satyh` need. Two halves:
 //! - **Typecheck** (real source text through `parse_file` ->
 //!   `elaborate::elaborate_program` -> `typecheck::typecheck`, mirroring
 //!   `tests/typecheck.rs`'s own `typecheck_str` helper) — pins each new
@@ -129,10 +129,10 @@ fn set_font_typechecks() {
 
 #[test]
 fn set_code_text_command_typechecks_with_a_first_class_command_value() {
-    // `(command \code)` (docs/plans/class-signature-lang-gaps.md gap 1)
-    // constructs the `[string] inline-cmd` value `set-code-text-command`
-    // expects — `\code`'s param is inferred `string` because its body
-    // funnels it through `embed-string : string -> inline-text`.
+    // `(command \code)` (gap 1) constructs the `[string] inline-cmd`
+    // value `set-code-text-command` expects — `\code`'s param is
+    // inferred `string` because its body funnels it through
+    // `embed-string : string -> inline-text`.
     assert_well_typed(
         "let-inline ctx \\code s = read-inline ctx (embed-string s)
          let-inline ctx \\math m = inline-nil

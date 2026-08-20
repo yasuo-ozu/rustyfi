@@ -1,11 +1,10 @@
 //! The drawing data model — paths, colors, and `graphics` elements. The
 //! analog of upstream's `GraphicBase`/`PrePath`/`GraphicD`, trimmed to what
-//! this port's backend actually draws (see `docs/plans/graphics-subsystem.md`
-//! §1). Everything here is already-resolved coordinates/data — no lang-side
-//! closures or deferred computation crosses into this module (see
-//! `PureHorzBox::Graphics`, `hbox.rs`, and the `inline-graphics` primitive,
-//! `rustyfi-lang/src/primitives.rs`, for how a lang `graphics list` becomes
-//! one of these).
+//! this port's backend actually draws. Everything here is already-resolved
+//! coordinates/data — no lang-side closures or deferred computation crosses
+//! into this module (see `PureHorzBox::Graphics`, `hbox.rs`, and the
+//! `inline-graphics` primitive, `rustyfi-lang/src/primitives.rs`, for how a
+//! lang `graphics list` becomes one of these).
 
 use crate::hbox::PureHorzBox;
 use crate::length::Length;
@@ -85,12 +84,11 @@ pub struct PrePath {
 }
 
 /// One `graphics` element (`GraphicD.element`). Roadmap A/B/D (bezier path
-/// ops, shift/linear-transform, dashed strokes — see
-/// `docs/plans/graphics-subsystem.md`) are pure coordinate maps over
-/// `Fill`/`Stroke`/`DashedStroke`'s existing `Path`, so they need no new
-/// variant here (see `shift_graphics`/`linear_transform_graphics` below);
-/// `place_graphics` (rustyfi-pdf) still matches this exhaustively without a
-/// wildcard arm.
+/// ops, shift/linear-transform, dashed strokes) are pure coordinate maps
+/// over `Fill`/`Stroke`/`DashedStroke`'s existing `Path`, so they need no
+/// new variant here (see `shift_graphics`/`linear_transform_graphics`
+/// below); `place_graphics` (rustyfi-pdf) still matches this exhaustively
+/// without a wildcard arm.
 #[derive(Clone, Debug, PartialEq)]
 pub enum GraphicsElem {
     /// Filled region, even-odd rule (matches upstream's `op_f'`; see
@@ -134,10 +132,10 @@ pub enum GraphicsElem {
         transform: Option<(f64, f64, f64, f64)>,
     },
     /// 0.1 collection node (`GraphicD.concat`, dev-0-1-0 `graphicD.ml:23`):
-    /// `unite-graphics`' payload (`docs/plans/…/prim-retype-sweep.md` §3.2).
-    /// Never constructed by any 0.0.6 path — no 0.0.6-visible primitive
-    /// builds one, so it is unreachable from 0.0.6 rendering by construction
-    /// (§4.3's golden-PDF byte-compare is the tripwire that proves it).
+    /// `unite-graphics`' payload. Never constructed by any 0.0.6 path — no
+    /// 0.0.6-visible primitive builds one, so it is unreachable from 0.0.6
+    /// rendering by construction (§4.3's golden-PDF byte-compare is the
+    /// tripwire that proves it).
     Group(Vec<GraphicsElem>),
     /// 0.1 clip node (`GraphicD.make_clip`, `graphicD.ml:97-98`): render
     /// `contents` clipped to `clip` (even-odd, `Op_W'` — `graphicD.ml:331`).
@@ -150,12 +148,11 @@ pub enum GraphicsElem {
 // ============================================================================
 // ---- Roadmap A/B: pure coordinate transforms -----------------------------
 // `shift-path`/`shift-graphics`/`linear-transform-path`/
-// `linear-transform-graphics` (`docs/plans/graphics-subsystem.md` §Full
-// roadmap A/B) are all EAGER point remaps — no PDF-writer change, no lazy
-// `LinearTrans`-wrapper element: every point in a `Path`/`GraphicsElem` is
-// rewritten up front, exactly mirroring `graphicBase.ml`'s `shift_path`/
-// `linear_transform_path` (`(x, y) -> (x*a + y*b, x*c + y*d)` for the 2x2
-// matrix `((a, b), (c, d))`).
+// `linear-transform-graphics` (roadmap A/B) are all EAGER point remaps —
+// no PDF-writer change, no lazy `LinearTrans`-wrapper element: every point
+// in a `Path`/`GraphicsElem` is rewritten up front, exactly mirroring
+// `graphicBase.ml`'s `shift_path`/ `linear_transform_path` (`(x, y) ->
+// (x*a + y*b, x*c + y*d)` for the 2x2 matrix `((a, b), (c, d))`).
 // ============================================================================
 
 /// `shift_path v pt` (`graphicBase.ml`'s `(+@%)`).
@@ -406,15 +403,14 @@ fn union_bbox((amin, amax): (Point, Point), (bmin, bmax): (Point, Point)) -> (Po
 }
 
 /// `get-graphics-bbox : graphics -> point * point` (v0.0.6 vminst.ml:2466) /
-/// `graphics -> option (point * point)` (dev-0-1-0 vminst.ml:2301,
-/// `docs/plans/…/prim-retype-sweep.md` §3.2 — the L8b "version-blind fix")
-/// — `graphicD.ml`'s `get_bbox`/`get_element_bbox`, ignoring stroke
-/// thickness (matching upstream's own documented simplification); `Text`'s
-/// bbox is the run's stored `natural_metrics` at its anchor (see that
-/// variant's doc comment). `Clip(paths, _)` returns the CLIP PATHS' own
-/// bbox, ignoring `contents` (upstream `graphicD.ml:50-52` — deliberate:
-/// the clip boundary, not what's inside it, bounds the visible ink).
-/// `Group` union-folds its children (`graphicD.ml:61-74`'s fold);
+/// `graphics -> option (point * point)` (dev-0-1-0 vminst.ml:2301, — the L8b
+/// "version-blind fix") — `graphicD.ml`'s `get_bbox`/`get_element_bbox`,
+/// ignoring stroke thickness (matching upstream's own documented
+/// simplification); `Text`'s bbox is the run's stored `natural_metrics` at
+/// its anchor (see that variant's doc comment). `Clip(paths, _)` returns the
+/// CLIP PATHS' own bbox, ignoring `contents` (upstream `graphicD.ml:50-52` —
+/// deliberate: the clip boundary, not what's inside it, bounds the visible
+/// ink). `Group` union-folds its children (`graphicD.ml:61-74`'s fold);
 /// `None` for an empty `Group` (no ink at all) or an empty top-level list —
 /// the caller-visible witness of "nothing here" that v0.0.6 could never
 /// produce (no 0.0.6 constructor yields `Group`/`Clip`).

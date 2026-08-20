@@ -1,12 +1,11 @@
-//! End-to-end acceptance coverage for Gap 8 (`docs/plans/math-mode-language-
-//! gaps.md`): pattern (not just plain-variable) parameters for
-//! `let-math`/`let-inline`/`let-block` bindings (`cst::ast::Param`, reused
-//! from `TopLet`/`Expr::LetIn` — `curry_cmd_params` in `elaborate.rs`), and
-//! the expression-level `let-math \cmd param* = value in body` form
-//! (`Expr::LetMathIn`, upstream's only command binding with a local `in`
-//! form, `parser.mly:688`). Pure-pipeline `run`/`Mono`/width harness copied
-//! from `math_optional_args.rs` (per this crate's tests' own
-//! copy-not-share convention).
+//! End-to-end acceptance coverage for Gap 8: pattern (not just
+//! plain-variable) parameters for `let-math`/`let-inline`/`let-block`
+//! bindings (`cst::ast::Param`, reused from `TopLet`/`Expr::LetIn` —
+//! `curry_cmd_params` in `elaborate.rs`), and the expression-level `let-math
+//! \cmd param* = value in body` form (`Expr::LetMathIn`, upstream's only
+//! command binding with a local `in` form, `parser.mly:688`). Pure-pipeline
+//! `run`/`Mono`/width harness copied from `math_optional_args.rs` (per this
+//! crate's tests' own copy-not-share convention).
 
 use rustyfi_backend::{FontKey, FontMetrics, Length};
 use rustyfi_lang::value::Value;

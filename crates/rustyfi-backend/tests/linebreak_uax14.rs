@@ -1,5 +1,5 @@
 //! UAX#14 segmenter (`break_opportunities`) and the discretionary-break DP
-//! it feeds (docs/plans/text-rendering.md §3 + its step-0 upgrade).
+//! it feeds (+ its step-0 upgrade).
 
 use rustyfi_backend::*;
 

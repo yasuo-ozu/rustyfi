@@ -30,10 +30,9 @@ pub use error::LoadError;
 pub use rustyfi_syntax::RustyfiVersion;
 
 /// How multi-file dependencies are declared and resolved — Axis B of
-/// `docs/plans/rustyfi-0-1-0-support.md` §1.2. Orthogonal to
-/// [`RustyfiVersion`] (Axis A, the grammar generation), except that the one
-/// combination with no upstream analogue — `V0_0` + `Envelopes` — is
-/// rejected by [`load`] up front (plan §1.3's table).
+/// Orthogonal to [`RustyfiVersion`] (Axis A, the grammar generation),
+/// except that the one combination with no upstream analogue — `V0_0` +
+/// `Envelopes` — is rejected by [`load`] up front (plan §1.3's table).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum LoadMode {
     /// `@require:`/`@import:` header search against [`LoadOptions::lib_root`] —
@@ -177,9 +176,8 @@ pub struct LoadedFile {
     /// envelope sources). Additive metadata — no consumer reads it yet.
     pub origin: FileOrigin,
     /// The `RustyfiVersion` grammar this SPECIFIC file was parsed under —
-    /// always matches `cst`'s variant (`V0_0` <-> `LoadedCst::V0_0`,
-    /// `V0_1` <-> `LoadedCst::V0_1`). Cross-version import (X1,
-    /// `docs/plans/design-cross-version-import.md`): under `LoadMode::
+    /// always matches `cst`'s variant (`V0_0` <-> `LoadedCst::V0_0`, `V0_1`
+    /// <-> `LoadedCst::V0_1`). Cross-version import (X1): under `LoadMode::
     /// Envelopes` and under a `LoadOptions { version: V0_0, .. }` Legacy
     /// load, every file in one `LoadedProgram` shares one version (the
     /// load's `opts.version`), exactly as before this field existed. Only a
@@ -534,15 +532,15 @@ pub(crate) fn canonicalize(path: &Path) -> Result<PathBuf, LoadError> {
     })
 }
 
-/// Whether `path` lives under a `dist/packages/` directory — the frozen
-/// 0.0.6 corpus layout (`docs/plans/design-cross-version-import.md` §4/Q4),
-/// the `@require:`-provenance signal the X1 per-file version detector uses to
-/// downgrade a sniff-`None` corpus dependency to `V0_0`. Matches ANY two
-/// consecutive components `dist` then `packages` anywhere in the path, so it
-/// recognizes both this port's own `lib-rustyfi/dist/packages/` and a
-/// Satyrographos-style `<root>/dist/packages/` install — but deliberately
-/// NOT the 0.1 corpus `dist-v01/packages/` (`dist-v01` != `dist`), whose
-/// `V0_1` packages must keep the load's `opts.version`.
+/// Whether `path` lives under a `dist/packages/` directory — the frozen 0.0.6
+/// corpus layout, the `@require:`-provenance signal the X1 per-file version
+/// detector uses to downgrade a sniff-`None` corpus dependency to `V0_0`.
+/// Matches ANY two consecutive components `dist` then `packages` anywhere in
+/// the path, so it recognizes both this port's own
+/// `lib-rustyfi/dist/packages/` and a Satyrographos-style
+/// `<root>/dist/packages/` install — but deliberately NOT the 0.1 corpus
+/// `dist-v01/packages/` (`dist-v01` != `dist`), whose `V0_1` packages must
+/// keep the load's `opts.version`.
 fn is_dist_packages_target(path: &Path) -> bool {
     let comps: Vec<_> = path.components().collect();
     comps
@@ -551,15 +549,14 @@ fn is_dist_packages_target(path: &Path) -> bool {
 }
 
 /// Whether `path` lives under a `dist-v01/packages/` directory — the 0.1
-/// corpus layout (Slice X4a, `docs/plans/design-cross-version-import.md`
-/// §X4.3 item 2), the MIRROR of [`is_dist_packages_target`] used by the
-/// symmetric per-file version detector to default a sniff-`None` 0.1-corpus
-/// dependency (e.g. a `module … :> sig …`-headed package like
-/// `v01-sealed.satyh`) to `V0_1` under a `V0_0`-rooted load. Matches ANY
-/// two consecutive components `dist-v01` then `packages` — deliberately NOT
-/// `dist` then `packages` (the inverse of `is_dist_packages_target`'s own
-/// care to exclude `dist-v01`), so the two helpers are mutually exclusive on
-/// every real path.
+/// corpus layout (Slice X4a, item 2), the MIRROR of
+/// [`is_dist_packages_target`] used by the symmetric per-file version
+/// detector to default a sniff-`None` 0.1-corpus dependency (e.g. a `module
+/// … :> sig …`-headed package like `v01-sealed.satyh`) to `V0_1` under a
+/// `V0_0`-rooted load. Matches ANY two consecutive components `dist-v01`
+/// then `packages` — deliberately NOT `dist` then `packages` (the inverse of
+/// `is_dist_packages_target`'s own care to exclude `dist-v01`), so the two
+/// helpers are mutually exclusive on every real path.
 fn is_dist_v01_packages_target(path: &Path) -> bool {
     let comps: Vec<_> = path.components().collect();
     comps

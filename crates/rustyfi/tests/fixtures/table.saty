@@ -1,7 +1,7 @@
-% Slice 1 table fixture (docs/plans/table-subsystem.md): a self-contained,
-% positional `\tabular` (mirroring `tabular.satyh`'s shape) exercises the new
-% `cell` type, the `tabular` primitive, and the composite-box PDF writer arm
-% (`emit_box`): a 2x2 ruled grid, cell text and grid rules on one page.
+% Slice 1 table fixture: a self-contained, positional `\tabular` (mirroring
+% `tabular.satyh`'s shape) exercises the new `cell` type, the `tabular`
+% primitive, and the composite-box PDF writer arm (`emit_box`): a 2x2 ruled
+% grid, cell text and grid rules on one page.
 %
 % Deliberately NOT `@require: tabular`/`table`: those packages' record/
 % optional-argument command front-ends hit the runtime-optional/record-
@@ -28,8 +28,8 @@ let hline clr y xa xb =
 % `x` in `xs`, a horizontal one per `y` in `ys`), via `List.map`; the two
 % extremes (`xF`/`xL`, `yF`/`yL`) come from the grid-line lists themselves —
 % `xs`'s head is always the box-local `0pt` and `ys`'s head is always the
-% box's total height (`tabular::main`'s `xs`/`ys`, docs/plans/
-% table-subsystem.md §1) — so no separate geometry is threaded in.
+% box's total height (`tabular::main`'s `xs`/`ys`) — so no separate geometry
+% is threaded in.
 let hd-last fallback lst =
   match lst with
   | [] -> (fallback, fallback)

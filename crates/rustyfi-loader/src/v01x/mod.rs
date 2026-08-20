@@ -1,10 +1,9 @@
 //! saphe-split / "Envelopes" resolution backend (`LoadMode::Envelopes`):
 //! `use package` / `use … of` headers resolved against local files and
 //! (Ld3b) a pre-solved `rustyfi-deps.yaml` envelope graph. Parallels `v006/`
-//! (the Legacy backend) exactly as `docs/plans/rustyfi-0-1-0-support.md`
-//! §1.5's crate map lays out. Transcribed from `saphe-split @ b836d512`,
-//! `src/frontend/openFileDependencyResolver.ml` (`open_doc`) — see the Ld3a
-//! spec §0 for the full citation table.
+//! (the Legacy backend) exactly as crate map lays out. Transcribed from
+//! `saphe-split @ b836d512`, `src/frontend/openFileDependencyResolver.ml`
+//! (`open_doc`) — see the Ld3a spec §0 for the full citation table.
 //!
 //! Ld3a shipped only `open_doc` (the open/document resolver: `use … of`
 //! local resolution + typed errors for `use package` / bare `use`).

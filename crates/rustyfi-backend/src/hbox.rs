@@ -32,7 +32,7 @@ pub struct HorzStringInfo {
 /// carries the decoded bytes directly, so cloning a box (routine during line
 /// breaking) never copies image data.
 ///
-/// docs/plans/math-images.md §Slice 1: raster images.
+/// raster images.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ImageId(pub usize);
 
@@ -41,16 +41,16 @@ pub struct ImageId(pub usize);
 /// at a *computation* instead of a resource. `break_pages` places the box
 /// this token lives in like any other content and never learns what the hook
 /// computes; a lang-side post-pass (`fire_hooks`) reads the token back once
-/// geometry is final. See docs/plans/hooks-annotations-crossref.md.
+/// geometry is final. See
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct HookId(pub usize);
 
 /// An opaque index into a lang-side table of deferred *decoration* closures
-/// (`Interp::decos`) — `HookId`'s twin for §D frames
-/// (docs/plans/hooks-annotations-crossref.md §D: the resolved struct layout).
-/// The backend carries it through line breaking and never learns what the
-/// deco draws; `fire_hooks` (rustyfi-lang) fires it with the frame's placed
-/// `(x, y, w, h, d)` and accumulates the returned graphics onto the page.
+/// (`Interp::decos`) — `HookId`'s twin for §D frames (: the resolved struct
+/// layout). The backend carries it through line breaking and never learns
+/// what the deco draws; `fire_hooks` (rustyfi-lang) fires it with the frame's
+/// placed `(x, y, w, h, d)` and accumulates the returned graphics onto the
+/// page.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct DecoId(pub usize);
 
@@ -68,14 +68,14 @@ pub struct GraphicsFnId(pub usize);
 /// `use-image-by-width` aspect-ratio computation) plus enough sample data to
 /// emit a PDF Image XObject directly.
 ///
-/// **Slice 1 simplification** (see `docs/plans/math-images.md`'s Risks
-/// section): every source format is flattened to 8-bit `DeviceRGB` and any
-/// alpha channel is dropped — `samples`/`px_w`/`px_h` are always populated
-/// this way (the HTML backend's `<img>` data URI and the PDF writer's
-/// non-JPEG path both rely on that). Transparency (`/SMask`) is still
-/// roadmap. A JPEG `DCTDecode` passthrough (JPEG DCTDecode passthrough
-/// slice, see `write_image_xobjects` in `rustyfi-pdf`) is no longer
-/// roadmap: `jpeg_dct` additionally carries the source's original,
+/// **Slice 1 simplification** (Risks section): every source format is
+/// flattened to 8-bit `DeviceRGB` and any alpha channel is dropped —
+/// `samples`/`px_w`/`px_h` are always populated this way (the HTML
+/// backend's `<img>` data URI and the PDF writer's non-JPEG path both rely
+/// on that). Transparency (`/SMask`) is still roadmap. A JPEG `DCTDecode`
+/// passthrough (JPEG DCTDecode passthrough slice, see
+/// `write_image_xobjects` in `rustyfi-pdf`) is no longer roadmap:
+/// `jpeg_dct` additionally carries the source's original,
 /// still-DCT-encoded bytes when `load-image` recognized it as a baseline
 /// JPEG, so the PDF writer can embed those bytes directly instead of
 /// re-encoding the flattened RGB8 samples.
@@ -97,21 +97,20 @@ pub struct ImageResource {
     /// CMYK/YCCK).
     pub jpeg_dct: Option<JpegDct>,
     /// `Some` when this resource is an imported page of an external PDF
-    /// (`load-pdf-image`, docs/plans/design-load-pdf-image.md) rather than a
-    /// decoded raster image. `samples`/`px_w`/`px_h` are left at their
-    /// default/empty values in that case — every raster consumer keeps
-    /// reading those fields unchanged; PDF-page consumers branch on this
-    /// field instead. Additive: every pre-existing `ImageResource { .. }`
-    /// construction site gets `pdf: None`.
+    /// (`load-pdf-image`) rather than a decoded raster image.
+    /// `samples`/`px_w`/`px_h` are left at their default/empty values in
+    /// that case — every raster consumer keeps reading those fields
+    /// unchanged; PDF-page consumers branch on this field instead. Additive:
+    /// every pre-existing `ImageResource { .. }` construction site gets
+    /// `pdf: None`.
     pub pdf: Option<PdfPageResource>,
 }
 
 /// An embedded page of an external PDF (`load-pdf-image`), carrying just
 /// enough of the source page's object graph to re-emit it as a PDF **Form
-/// XObject** (docs/plans/design-load-pdf-image.md §2-3). Parsed by
-/// `rustyfi-lang` (via `lopdf`) and consumed by `rustyfi-pdf`'s writer; this
-/// struct itself is `lopdf`-free plain data so `rustyfi-backend` need not
-/// depend on `lopdf`.
+/// XObject**. Parsed by `rustyfi-lang` (via `lopdf`) and consumed by
+/// `rustyfi-pdf`'s writer; this struct itself is `lopdf`-free plain data so
+/// `rustyfi-backend` need not depend on `lopdf`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PdfPageResource {
     /// The source page's `/MediaBox`, `(x0, y0, x1, y1)` in raw PDF points
@@ -140,11 +139,10 @@ pub struct PdfPageResource {
 pub struct ImportedObjects(pub Vec<(u32, ObjRepr)>);
 
 /// A minimal sum type mirroring the PDF object grammar, just enough to
-/// re-emit an imported object verbatim (`docs/plans/design-load-pdf-image.md`
-/// §2). `Ref(u32)` refers to another entry's local id in the same
-/// `ImportedObjects` table (or, in principle, to an object outside the
-/// imported subtree — the writer should treat an unresolved `Ref` as a bug
-/// in the importer, not attempt to fetch it).
+/// re-emit an imported object verbatim. `Ref(u32)` refers to another entry's
+/// local id in the same `ImportedObjects` table (or, in principle, to an
+/// object outside the imported subtree — the writer should treat an
+/// unresolved `Ref` as a bug in the importer, not attempt to fetch it).
 #[derive(Clone, Debug, PartialEq)]
 pub enum ObjRepr {
     Null,
@@ -275,12 +273,11 @@ impl ImageResource {
     }
 
     /// The image's intrinsic dimensions for aspect-ratio math
-    /// (`use-image-by-width`, docs/plans/design-load-pdf-image.md §4): pixel
-    /// extents for a raster resource, MediaBox point extents for an
-    /// imported PDF page. Both ratios are dimensionless (px/px or pt/pt), so
-    /// callers can apply the exact same `height = width * ih/iw` formula
-    /// regardless of kind — only the placement CTM (rustyfi-pdf) needs to
-    /// know which units these actually are.
+    /// (`use-image-by-width`): pixel extents for a raster resource, MediaBox
+    /// point extents for an imported PDF page. Both ratios are dimensionless
+    /// (px/px or pt/pt), so callers can apply the exact same `height = width
+    /// * ih/iw` formula regardless of kind — only the placement CTM
+    /// (rustyfi-pdf) needs to know which units these actually are.
     pub fn intrinsic_dims_pt(&self) -> (f64, f64) {
         if let Some(pdf) = &self.pdf {
             let (x0, y0, x1, y1) = pdf.media_box;
@@ -321,7 +318,6 @@ pub enum PureHorzBox {
     /// the decoded bytes up in the document's image table. Like
     /// `FixedEmpty`, this is never a legal line-break point (`is_glue`).
     ///
-    /// docs/plans/math-images.md §Slice 1.
     Image {
         width: Length,
         height: Length,
@@ -380,29 +376,28 @@ pub enum PureHorzBox {
         width: Length,
         fn_id: GraphicsFnId,
     },
-    /// A laid-out inline math run (`${…}`; docs/plans/math-engine.md §Slice
-    /// 1): one box carrying its own pre-shifted sub-glyphs, each with a
-    /// vertical offset relative to this box's baseline (`MathGlyph::dy`) —
-    /// the line model has only a horizontal `dx` per box and a single
-    /// `baseline_y` per line, so a superscript can't be a separate box (see
-    /// the plan's "structural difference" note). `width`/`height`/`depth` are
-    /// the run's outer metrics (computed by `read_math`), so the line
-    /// breaker never re-enters the math engine. Never a legal line-break
-    /// point (see `is_glue`) — a math run is laid out and flowed atomically.
+    /// A laid-out inline math run (`${…}`): one box carrying its own
+    /// pre-shifted sub-glyphs, each with a vertical offset relative to this
+    /// box's baseline (`MathGlyph::dy`) — the line model has only a
+    /// horizontal `dx` per box and a single `baseline_y` per line, so a
+    /// superscript can't be a separate box (see the plan's "structural
+    /// difference" note). `width`/`height`/`depth` are the run's outer
+    /// metrics (computed by `read_math`), so the line breaker never re-enters
+    /// the math engine. Never a legal line-break point (see `is_glue`) — a
+    /// math run is laid out and flowed atomically.
     ///
-    /// `rules` (§B2, `docs/plans/math-engine.md`): filled paths the run
-    /// needs alongside its glyphs — the fraction bar and radical sign/overbar
-    /// are `Fill`s, not glyphs, since neither is drawable through a font's
-    /// `Tj` at all. Box-local, y-**up** coordinates relative to this box's
-    /// own baseline-left origin — exactly `PureHorzBox::Graphics::elems`'
-    /// convention (see that variant's doc comment), NOT `MathGlyph::dy`'s
-    /// sign (which happens to agree: up is positive either way, just via a
-    /// different type). `natural_width` is unaffected (rules never extend the
-    /// run's own advance — a bar/radical-sign always sits within `glyphs`'
-    /// already-measured span). Empty for the Slice-1 `read_math` path (its
-    /// `MathElem` tree has no `Fraction`/`Radical` production at all) and for
-    /// every atom the faithful `layout_math_atom` path doesn't specially
-    /// handle.
+    /// `rules` (§B2): filled paths the run needs alongside its glyphs — the
+    /// fraction bar and radical sign/overbar are `Fill`s, not glyphs, since
+    /// neither is drawable through a font's `Tj` at all. Box-local, y-**up**
+    /// coordinates relative to this box's own baseline-left origin — exactly
+    /// `PureHorzBox::Graphics::elems`' convention (see that variant's doc
+    /// comment), NOT `MathGlyph::dy`'s sign (which happens to agree: up is
+    /// positive either way, just via a different type). `natural_width` is
+    /// unaffected (rules never extend the run's own advance — a
+    /// bar/radical-sign always sits within `glyphs`' already-measured span).
+    /// Empty for the Slice-1 `read_math` path (its `MathElem` tree has no
+    /// `Fraction`/`Radical` production at all) and for every atom the
+    /// faithful `layout_math_atom` path doesn't specially handle.
     Math {
         width: Length,
         height: Length,
@@ -417,23 +412,21 @@ pub enum PureHorzBox {
     /// (`fire_hooks`) fires the stored closure once placement is final.
     /// Renders nothing (see the PDF writers' wildcard arm).
     ///
-    /// docs/plans/hooks-annotations-crossref.md §Slice 1.
     HookPageBreak { id: HookId },
     /// A ruled grid box (`tabular`; v0.0.6's `PHGFixedTabular`) — the first
     /// composite box: it carries other already-laid-out inline boxes (each
     /// cell's own `Vec<(Length, PureHorzBox)>` run, `tabular::TabularCellBox`)
-    /// plus the resolved rule graphics from the user's callback. See
-    /// docs/plans/table-subsystem.md §4 for how the PDF writers recurse into
-    /// it (`emit_box`) and reconcile its three coordinate frames.
+    /// plus the resolved rule graphics from the user's callback. See for how
+    /// the PDF writers recurse into it (`emit_box`) and reconcile its three
+    /// coordinate frames.
     Tabular(TabularBox),
-    /// An inline box carrying a whole block (`embed-block-top`;
-    /// `docs/plans/context-box-prims.md` §Slice 1 rows 7-8; upstream's
-    /// `PHGEmbeddedVert`/`HorzEmbeddedVertBreakable`). `block` is already
-    /// broken into `VertBox` lines; the writer stacks them from the box's
-    /// placed origin by reentering the same per-`PureHorzBox` emission a
-    /// top-level line uses (the `Tabular` cells' recursion, above, is the
-    /// same pattern one level up). FIRST CUT is ATOMIC — it does not split
-    /// across a page boundary (see that plan's §Risks).
+    /// An inline box carrying a whole block (`embed-block-top`; rows 7-8;
+    /// upstream's `PHGEmbeddedVert`/`HorzEmbeddedVertBreakable`). `block`
+    /// is already broken into `VertBox` lines; the writer stacks them from
+    /// the box's placed origin by reentering the same per-`PureHorzBox`
+    /// emission a top-level line uses (the `Tabular` cells' recursion,
+    /// above, is the same pattern one level up). FIRST CUT is ATOMIC — it
+    /// does not split across a page boundary (see that plan's §Risks).
     EmbeddedBlock {
         width: Length,
         height: Length,
@@ -494,15 +487,15 @@ pub enum PureHorzBox {
     /// line's contents must treat this variant as inert or it will
     /// double-count the body.
     Footnote { block: Vec<VertBox> },
-    /// `docs/plans/design-reflow-s4-lists.md` §4.1: an INERT reflow marker
-    /// for emphasis runs (`\emph`/`\bold` in the repo-controlled stdlibs
-    /// that opt in, §5) and list-bullet fencing, emitted by the
-    /// `inline-mark` primitive. Zero width/height/depth, exactly like
-    /// `FrameMarker` above (renders nothing — see the PDF/faithful-HTML
-    /// writers' wildcard arms, and `natural_width`/`is_glue` below) — it
-    /// contributes zero advance wherever it rides inside a placed line's
-    /// `contents`, so PDF/faithful HTML are byte-identical whether or not a
-    /// document's stdlib emits these. Read only by the reflow HTML walker
+    /// an INERT reflow marker for emphasis runs (`\emph`/`\bold` in the
+    /// repo-controlled stdlibs that opt in, §5) and list-bullet fencing,
+    /// emitted by the `inline-mark` primitive. Zero width/height/depth,
+    /// exactly like `FrameMarker` above (renders nothing — see the
+    /// PDF/faithful-HTML writers' wildcard arms, and
+    /// `natural_width`/`is_glue` below) — it contributes zero advance
+    /// wherever it rides inside a placed line's `contents`, so PDF/faithful
+    /// HTML are byte-identical whether or not a document's stdlib emits
+    /// these. Read only by the reflow HTML walker
     /// (`crates/rustyfi-html/src/reflow/inline.rs`'s `emit_inline`), which
     /// uses `EmphStart`/`EmphEnd` to wrap `<em>`/`<strong>` and
     /// `BulletStart`/`BulletEnd` to suppress the drawn bullet/number glyph
@@ -510,12 +503,12 @@ pub enum PureHorzBox {
     InlineMark(InlineMarkKind),
 }
 
-/// The marker kind a `PureHorzBox::InlineMark` carries (`docs/plans/
-/// design-reflow-s4-lists.md` §4.1). `strong` on `EmphStart` is a naming
-/// choice made AT THE WRAP SITE (which stdlib command calls `inline-mark`
-/// with which tag) — not recovered from the box tree, honest per §5: we map
-/// `\emph` -> `EmphStart { strong: false }` (`<em>`), `\bold`/`\strong` ->
-/// `EmphStart { strong: true }` (`<strong>`).
+/// The marker kind a `PureHorzBox::InlineMark` carries. `strong` on
+/// `EmphStart` is a naming choice made AT THE WRAP SITE (which stdlib
+/// command calls `inline-mark` with which tag) — not recovered from the box
+/// tree, honest per §5: we map `\emph` -> `EmphStart { strong: false }`
+/// (`<em>`), `\bold`/`\strong` -> `EmphStart { strong: true }`
+/// (`<strong>`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InlineMarkKind {
     /// Opens `<em>` (`strong = false`) or `<strong>` (`strong = true`).

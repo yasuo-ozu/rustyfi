@@ -374,7 +374,7 @@ fn kp_is_deterministic() {
 }
 
 // -- Slice 1: the page-model split — `chop_page` / `place_block_at`
-// (docs/plans/document-page-model.md) --------------------------------------
+// --------------------------------------
 
 fn leaded_line(height_pt: f64, depth_pt: f64, leading_pt: f64) -> VertBox {
     VertBox::Line {
@@ -432,11 +432,11 @@ fn chop_page_still_makes_progress_at_zero_height() {
     assert_eq!(remaining.len(), 1);
 }
 
-/// §C1 (docs/plans/hooks-annotations-crossref.md): `chop_page` over
-/// `[FrameStart, Line, FrameEnd]` places 3 `PlacedLine`s — the two markers
-/// zero-width/contentless, the real line's own geometry unaffected by their
-/// presence — and a marker-only page still terminates (same guarantee
-/// `HookPageBreak` already has, `pagebreak.rs`'s `placed_real_line`).
+/// §C1: `chop_page` over `[FrameStart, Line, FrameEnd]` places 3
+/// `PlacedLine`s — the two markers zero-width/contentless, the real line's
+/// own geometry unaffected by their presence — and a marker-only page still
+/// terminates (same guarantee `HookPageBreak` already has, `pagebreak.rs`'s
+/// `placed_real_line`).
 #[test]
 fn chop_page_places_frame_markers_as_zero_width_lines_around_an_unaffected_real_line() {
     let line = leaded_line(9.0, 3.0, 18.0);
@@ -470,9 +470,9 @@ fn chop_page_places_frame_markers_as_zero_width_lines_around_an_unaffected_real_
 }
 
 // ============================================================================
-// Slice 1 graphics box (docs/plans/graphics-subsystem.md §3): a
-// `PureHorzBox::Graphics` measures like `Image` did for width, but — unlike
-// `Image` — carries a real depth, and is never a legal line-break point.
+// Slice 1 graphics box: a `PureHorzBox::Graphics` measures like `Image` did
+// for width, but — unlike `Image` — carries a real depth, and is never a
+// legal line-break point.
 // ============================================================================
 
 fn graphics_box(width: f64, height: f64, depth: f64) -> PureHorzBox {
@@ -516,11 +516,11 @@ fn graphics_box_contributes_height_and_depth_to_its_line() {
 }
 
 // ============================================================================
-// Slice 1 math box (docs/plans/math-engine.md §Slice 1): a
-// `PureHorzBox::Math` carries its own outer width/height/depth (computed
-// once by `read_math`, rustyfi-lang) so the line breaker never re-enters the
-// math engine — it just measures like `Graphics` (real height *and* depth),
-// and is never a legal line-break point.
+// Slice 1 math box: a `PureHorzBox::Math` carries its own outer
+// width/height/depth (computed once by `read_math`, rustyfi-lang) so the
+// line breaker never re-enters the math engine — it just measures like
+// `Graphics` (real height *and* depth), and is never a legal line-break
+// point.
 // ============================================================================
 
 fn math_box(width: f64, height: f64, depth: f64) -> PureHorzBox {
@@ -565,11 +565,10 @@ fn math_box_contributes_height_and_depth_to_its_line() {
 }
 
 // ============================================================================
-// §D inline frame (docs/plans/hooks-annotations-crossref.md): a
-// `PureHorzBox::Frame`'s outer width/height/depth (padding already folded
-// in by `make_inline_frame`) drive line metrics exactly like `Graphics`/
-// `Math` above, and it's never a legal line-break point (the atomic model:
-// contents are pre-fit, the frame never splits).
+// §D inline frame: a `PureHorzBox::Frame`'s outer width/height/depth
+// (padding already folded in by `make_inline_frame`) drive line metrics
+// exactly like `Graphics`/ `Math` above, and it's never a legal line-break
+// point (the atomic model: contents are pre-fit, the frame never splits).
 // ============================================================================
 
 fn frame_box(width: f64, height: f64, depth: f64) -> PureHorzBox {
@@ -618,11 +617,11 @@ fn frame_box_grows_line_height_and_depth_by_its_own_padded_metrics() {
 }
 
 // ============================================================================
-// Slice 1: page-break hooks (docs/plans/hooks-annotations-crossref.md) — a
-// `PureHorzBox::HookPageBreak` is a zero-width/height/depth marker, never a
-// legal line-break point; `break_pages`/the PDF writers place it like any
-// other content but render nothing for it (the lang-side `fire_hooks`
-// post-pass is the only thing that ever reads its `HookId`).
+// Slice 1: page-break hooks — a `PureHorzBox::HookPageBreak` is a
+// zero-width/height/depth marker, never a legal line-break point;
+// `break_pages`/the PDF writers place it like any other content but render
+// nothing for it (the lang-side `fire_hooks` post-pass is the only thing
+// that ever reads its `HookId`).
 // ============================================================================
 
 fn hook_box(id: usize) -> PureHorzBox {

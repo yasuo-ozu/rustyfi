@@ -1,10 +1,10 @@
-//! `chop_page`'s footnote accumulator (`add-footnote`;
-//! docs/plans/document-page-model.md §C): extraction at line-commit,
-//! bottom-reservation, and bottom-placement — tested directly against the
-//! backend function, mirroring `crates/rustyfi-lang/tests/page_prims.rs`'s
-//! style of driving `chop_page` with hand-built `VertBox`/`PureHorzBox`
-//! trees (no lang/eval machinery needed for these; the footnote job is
-//! entirely inside `chop_page`).
+//! `chop_page`'s footnote accumulator (`add-footnote`): extraction at
+//! line-commit, bottom-reservation, and bottom-placement — tested directly
+//! against the backend function, mirroring
+//! `crates/rustyfi-lang/tests/page_prims.rs`'s style of driving
+//! `chop_page` with hand-built `VertBox`/`PureHorzBox` trees (no lang/eval
+//! machinery needed for these; the footnote job is entirely inside
+//! `chop_page`).
 
 use rustyfi_backend::{chop_page, Length, ListMarkKind, PlacedLine, PureHorzBox, VertBox};
 
@@ -222,15 +222,15 @@ fn footnotes_place_per_column_at_their_shifted_x_origin() {
     assert!(vboxes.is_empty());
 }
 
-/// `docs/plans/design-reflow-s4-lists.md` §4.3 (the byte-identity
-/// argument): a `VertBox::ListMark` is a PURE skip in `chop_page` — unlike
-/// `FrameStart`/`FrameEnd`, it produces NO `PlacedLine` at all (not even a
-/// zero-height marker one), is drained from `vboxes` just like every other
-/// consumed box, and contributes nothing to where the surrounding real
-/// lines land. This is the mechanical half of the "PDF/faithful HTML never
-/// see these markers" proof — `page_break_core` (rustyfi-lang) clones
-/// `reflow_source` BEFORE this function runs, so the marker survives there
-/// while still vanishing here.
+/// (the byte-identity argument): a `VertBox::ListMark` is a PURE skip in
+/// `chop_page` — unlike `FrameStart`/`FrameEnd`, it produces NO
+/// `PlacedLine` at all (not even a zero-height marker one), is drained
+/// from `vboxes` just like every other consumed box, and contributes
+/// nothing to where the surrounding real lines land. This is the
+/// mechanical half of the "PDF/faithful HTML never see these markers"
+/// proof — `page_break_core` (rustyfi-lang) clones `reflow_source` BEFORE
+/// this function runs, so the marker survives there while still vanishing
+/// here.
 #[test]
 fn list_mark_is_a_pure_skip_that_produces_no_placed_line() {
     let mut vboxes = vec![

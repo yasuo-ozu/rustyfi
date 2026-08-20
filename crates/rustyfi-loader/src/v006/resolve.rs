@@ -64,7 +64,7 @@ pub(crate) fn resolve_import(dir: &Path, name: &str) -> Result<PathBuf, Vec<Path
 ///      installer materialises — see the chimera plan §3). Purely additive:
 ///      candidates 1 and 2 are unchanged.
 ///   4. `<lib_root>/dist-v01/packages/<name>` (Slice X4a,
-///      `docs/plans/design-cross-version-import.md` §X4.3 item 1 — the 0.1
+/// item 1 — the 0.1
 ///      corpus, mirroring candidate 1 with no nested-layout analogue yet).
 ///      This is what lets a `V0_0`-rooted load's `@require:` reach a 0.1
 ///      package under `lib-rustyfi/dist-v01/packages/` from the SAME

@@ -1,7 +1,7 @@
-//! `docs/plans/math-engine.md` §B3 (MATH-table `MathVariants` — big-operator
-//! vertical variants + stretchy delimiters): tests for
-//! `TtfFontStore::math_vertical_variant` (`VertVariantPolicy::BigOp`/
-//! `AtLeast`), `push_big_char_glyph`/`push_delimiter_glyph`
+//! (MATH-table `MathVariants` — big-operator vertical variants + stretchy
+//! delimiters): tests for `TtfFontStore::math_vertical_variant`
+//! (`VertVariantPolicy::BigOp`/ `AtLeast`),
+//! `push_big_char_glyph`/`push_delimiter_glyph`
 //! (`rustyfi-lang/src/primitives.rs`), and the `MathGlyph.gid` raw-gid
 //! channel through the real CID pipeline (`render_pdf_ttf`).
 //!
@@ -698,22 +698,22 @@ fn approx(a: Length, b: Length, tol: f64) -> bool {
 }
 
 // ----------------------------------------------------------------------
-// S2 gid-remap-robust CID prediction (docs/plans/design-cff-embedding.md
-// §6.3): a CFF-outline math font (this file's "Noto Sans Math" case) now
-// takes the writer's `write_font_cff` S2 path, which emits `subsetter`'s
-// REMAPPED gid (CID == new gid) as the content-stream CID rather than the
-// raw face gid `ttf-parser`/`face.glyph_index` returns — the CFF sibling of
-// D5's long-standing glyf-file subsetting, except CFF has no
-// `/CIDToGIDMap` to hide the renumbering behind (`cid.rs`'s module doc).
-// Below, `original_gids_used`/`expected_cid` independently replicate
-// EXACTLY the two calls `render_pdf_ttf_with`/`write_font_cff` themselves
-// make (`subsetter::GlyphRemapper::new_from_glyphs_sorted` +
+// S2 gid-remap-robust CID prediction: a CFF-outline math font (this file's
+// "Noto Sans Math" case) now takes the writer's `write_font_cff` S2 path,
+// which emits `subsetter`'s REMAPPED gid (CID == new gid) as the
+// content-stream CID rather than the raw face gid
+// `ttf-parser`/`face.glyph_index` returns — the CFF sibling of D5's
+// long-standing glyf-file subsetting, except CFF has no `/CIDToGIDMap` to
+// hide the renumbering behind (`cid.rs`'s module doc). Below,
+// `original_gids_used`/`expected_cid` independently replicate EXACTLY the
+// two calls `render_pdf_ttf_with`/`write_font_cff` themselves make
+// (`subsetter::GlyphRemapper::new_from_glyphs_sorted` +
 // `subsetter::subset`) against the SAME full per-font usage set a test's
-// page actually contains, so the tests below assert against a value
-// DERIVED from the real subsetter API — never a hardcoded/re-pinned CID
-// number, which would silently rot the next time this host's fontconfig
-// resolves a different "Noto Sans Math" build (different `usage` -> a
-// different remapping).
+// page actually contains, so the tests below assert against a value DERIVED
+// from the real subsetter API — never a hardcoded/re-pinned CID number,
+// which would silently rot the next time this host's fontconfig resolves a
+// different "Noto Sans Math" build (different `usage` -> a different
+// remapping).
 
 /// The ORIGINAL face gid every `MathGlyph` in `glyphs` resolves to — a raw
 /// MATH-table variant (`gid: Some(_)`) is used directly, otherwise (`gid:
@@ -849,10 +849,9 @@ fn big_char_sum_variant_grows_and_emits_variant_gid() {
          (non-variant) glyph's own ink height+depth ({base_ink_extent}) by more than 20%"
     );
 
-    // -- e2e through the real CID pipeline: the content stream's Tj operand
-    // for this run is the exact 2-byte-BE CID the writer assigns the variant
-    // gid, not the base gid. For a CFF font (S2,
-    // docs/plans/design-cff-embedding.md §6.3), that CID is `subsetter`'s
+    // e2e through the real CID pipeline: the content stream's Tj operand for
+    // this run is the exact 2-byte-BE CID the writer assigns the variant
+    // gid, not the base gid. For a CFF font (S2), that CID is `subsetter`'s
     // REMAPPED gid, not the raw face gid — `expected_cid` (this file's
     // module-level helper) derives it via the real subsetter API against
     // this page's actual usage set (a single glyph: the variant itself),
@@ -1068,12 +1067,12 @@ fn paren_stretches_around_tall_inner_and_short_inner_stays_record0() {
         );
     }
 
-    // -- e2e through the real CID pipeline: the content stream contains the
-    // '(' variant gid's Tj operand. For a CFF font (S2,
-    // docs/plans/design-cff-embedding.md §6.3) the CID actually emitted is
-    // `subsetter`'s REMAPPED gid, not the raw face gid — `expected_cid`
-    // derives it via the real subsetter API against this page's actual
-    // 3-glyph usage set ('(', ∑-variant, ')'), not a hardcoded number.
+    // e2e through the real CID pipeline: the content stream contains the
+    // '(' variant gid's Tj operand. For a CFF font (S2) the CID actually
+    // emitted is `subsetter`'s REMAPPED gid, not the raw face gid —
+    // `expected_cid` derives it via the real subsetter API against this
+    // page's actual 3-glyph usage set ('(', ∑-variant, ')'), not a
+    // hardcoded number.
     let geometry = PageGeometry::default();
     let e2e_box = math_box(run_math(&tall_src, &store).unwrap());
     let (_, _, _, e2e_glyphs) = as_math_parts(e2e_box.clone());
@@ -1189,8 +1188,7 @@ fn very_tall_paren_is_built_from_assembly_parts() {
     // isolated stream that render_pdf_ttf only populates with gids it
     // actually emitted, proving the part became a real emitted glyph. The
     // CMap's source CID is keyed by whatever the writer actually emitted for
-    // that glyph, which for a CFF font (S2,
-    // docs/plans/design-cff-embedding.md §6.3) is `subsetter`'s REMAPPED gid
+    // that glyph, which for a CFF font (S2) is `subsetter`'s REMAPPED gid
     // rather than the raw face gid — `expected_cid` (this file's
     // module-level helper) derives that CID via the real subsetter API
     // against this page's own full usage set (`glyphs`, above), instead of

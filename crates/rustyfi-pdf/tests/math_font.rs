@@ -1,5 +1,5 @@
 //! Empirical proof that a dedicated math font (`set-math-font` /
-//! `Context::math_font`, see `docs/plans/...` and `primitives.rs`'s
+//! `Context::math_font` and `primitives.rs`'s
 //! `math_glyph_font`/`math_char_available`) makes styled Mathematical-
 //! Alphanumeric glyphs (gap 5's `resolve_variant_char` remap targets) render
 //! end-to-end through the REAL CID pipeline — not just under the permissive
@@ -41,9 +41,9 @@ const DBL_D: char = '\u{1D53B}';
 /// generic font when the family isn't installed), then fall back to a few
 /// common distro/nix paths, then skip gracefully.
 fn find_math_font() -> Option<PathBuf> {
-    // Slice B (`docs/plans/design-math-cramped.md` §4), re-baselined for the
-    // upstream-correct default (see `scripts/download-fonts.sh`'s header
-    // comment): the repo now bundles the REAL Latin Modern Math at
+    // Slice B, re-baselined for the upstream-correct default (see
+    // `scripts/download-fonts.sh`'s header comment): the repo now bundles
+    // the REAL Latin Modern Math at
     // `lib-rustyfi/dist/fonts/latinmodern-math.otf` (fetched by
     // `scripts/download-fonts.sh`, same as ipaexm/Junicode) and wires it as
     // `default-font.rustyfi-hash`'s `"math"` default. Check it FIRST so this

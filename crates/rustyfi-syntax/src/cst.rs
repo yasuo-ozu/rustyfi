@@ -58,8 +58,8 @@ pub enum Header {
     /// second stage for `persistent`/`1` to actually select — every stage
     /// header is interpreted as ordinary stage-0 code. Sound for any file
     /// that (like the bundled `option.satyg`/`list.satyg`) contains no
-    /// staging brackets; see `docs/plans/stdlib-port.md`'s Risks section for
-    /// the general (unimplemented) staging case.
+    /// staging brackets Risks section for the general (unimplemented)
+    /// staging case.
     Stage(HeaderStageTok),
 }
 
@@ -131,7 +131,7 @@ impl From<VarTok> for BindName {
     /// "frozen" contract on this file (`cst_v1.rs`'s module doc) is about
     /// the 0.0.6 grammar/behavior, which an inherent conversion cannot
     /// affect, same spirit as the plan's blessed visibility-only edits
-    /// (`docs/plans/rustyfi-0-1-0-support.md` §3 Acceptance (b)).
+    /// (Acceptance (b)).
     fn from(v: VarTok) -> BindName {
         BindName {
             name: v.name.clone(),
@@ -624,9 +624,9 @@ pub mod ast {
         /// `patbot*`, matching `parser.mly`'s `nxnonrecdec` (and this port's
         /// own `TopLet`/`Fun`/`RecBinding`, which already use `PatBot` here
         /// too): e.g. `hdecoset.satyh`'s `let deco _ _ _ _ = [] in ..`
-        /// (docs/plans/stdlib-port.md's Tier-2 decoration/graphics wave).
-        /// Lowered by the same `elaborate::rec_clause_value` single-clause
-        /// path `Fun`'s doc comment describes.
+        /// (Tier-2 decoration/graphics wave). Lowered by the same
+        /// `elaborate::rec_clause_value` single-clause path `Fun`'s doc
+        /// comment describes.
         LetIn {
             kw: KwLet,
             name: super::BindName,

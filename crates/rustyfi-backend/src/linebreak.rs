@@ -47,8 +47,8 @@ pub enum BreakKind {
 /// `(byte_offset, kind)` pairs in ascending order (`unicode-linebreak`'s
 /// `linebreaks`, a compiled pair table — no unidata files to ship). Does
 /// *not* do v0.0.6's script/East-Asian-width segmentation or JLreq
-/// tailoring (`ref:src/chardecoder/scriptDataMap.ml`); see
-/// `docs/plans/text-rendering.md` §3 for the evaluated alternatives.
+/// tailoring (`ref:src/chardecoder/scriptDataMap.ml`) for the evaluated
+/// alternatives.
 pub fn break_opportunities(text: &str) -> Vec<(usize, BreakKind)> {
     unicode_linebreak::linebreaks(text)
         .map(|(i, opp)| {
@@ -160,8 +160,8 @@ impl LineMetrics {
             PureHorzBox::FrameMarker { .. } => {}
             // Zero-width marker; fired to the page bottom by `chop_page`.
             PureHorzBox::Footnote { .. } => {}
-            // `docs/plans/design-reflow-s4-lists.md` §4.3: inert, zero
-            // contribution — read only by the reflow HTML walker.
+            // inert, zero contribution — read only by the reflow HTML
+            // walker.
             PureHorzBox::InlineMark(_) => {}
         }
     }
@@ -188,9 +188,8 @@ fn measure(line: &[PureHorzBox]) -> LineMetrics {
 /// Nothing about the result changes: this visits exactly the boxes
 /// `line_content` would emit, in exactly that order, so every floating-point
 /// addition happens in the same order and the metrics are bit-identical — which
-/// is what lets it touch the line breaker (the component
-/// `docs/plans/design-layout-fidelity.md` treats as delicately balanced)
-/// without moving a single break.
+/// is what lets it touch the line breaker (the component treats as delicately
+/// balanced) without moving a single break.
 ///
 /// `line_content` itself stays: the chosen lines really do need their boxes.
 fn measure_range(pure: &[PureHorzBox], start: usize, raw_end: usize) -> LineMetrics {
@@ -328,8 +327,7 @@ pub fn natural_metrics(boxes: &[HorzBox]) -> (Length, Length, Length) {
                 }
                 PureHorzBox::FrameMarker { .. } => {}
                 PureHorzBox::Footnote { .. } => {}
-                // `docs/plans/design-reflow-s4-lists.md` §4.3: inert, zero
-                // contribution.
+                // inert, zero contribution.
                 PureHorzBox::InlineMark(_) => {}
             }
         }
@@ -346,14 +344,14 @@ pub fn natural_metrics(boxes: &[HorzBox]) -> (Length, Length, Length) {
     (width, height, depth)
 }
 
-/// `embed-block-breakable`/`embed-block-top`'s box-sizing helper
-/// (docs/plans/context-box-prims.md §3) — the block analog of
-/// `natural_metrics` above, but summed rather than maxed (a block's lines
-/// stack vertically, they don't compete for one shared baseline the way
-/// concurrent inline boxes on a line do). Each `Line` contributes its own
-/// `height`/`depth` to the running totals; each `Skip` adds its length to
-/// `height` only (there is nothing below a bare skip to call "depth").
-/// E.g. `measure_block(&[Line{h,d}, Skip(s)]) == (h+s, d)`.
+/// `embed-block-breakable`/`embed-block-top`'s box-sizing helper — the
+/// block analog of `natural_metrics` above, but summed rather than maxed
+/// (a block's lines stack vertically, they don't compete for one shared
+/// baseline the way concurrent inline boxes on a line do). Each `Line`
+/// contributes its own `height`/`depth` to the running totals; each
+/// `Skip` adds its length to `height` only (there is nothing below a bare
+/// skip to call "depth"). E.g. `measure_block(&[Line{h,d}, Skip(s)]) ==
+/// (h+s, d)`.
 pub fn measure_block(block: &[VertBox]) -> (Length, Length) {
     let mut height = Length::ZERO;
     let mut depth = Length::ZERO;
@@ -946,10 +944,9 @@ fn layout_line(ctx: &Context, line: Vec<PureHorzBox>, width: Length, is_last: bo
     }
 }
 
-/// `LineBreak.fit hblstwithpads wid` (tabular.ml:270/287,
-/// docs/plans/table-subsystem.md §1) — fit `content` (already
-/// padding-wrapped by the caller, `tabular::solidify_tabular`) to exactly
-/// `width`, distributing slack into glue/`inline-fil` exactly as
+/// `LineBreak.fit hblstwithpads wid` (tabular.ml:270/287) — fit `content`
+/// (already padding-wrapped by the caller, `tabular::solidify_tabular`) to
+/// exactly `width`, distributing slack into glue/`inline-fil` exactly as
 /// `justify_line` does for an ordinary paragraph line (so `inline-fil ++ …
 /// ++ inline-fil` centers a cell). Unlike `layout_line`, this takes no
 /// `Context`: a table cell has no font-size fallback to lean on (the grid
@@ -1097,7 +1094,7 @@ fn justify_line(
             }
             // Unlike `Image` (all height, zero depth), a math run grows
             // *both* line dimensions: a superscript raises `height`, a
-            // subscript deepens `depth` (docs/plans/math-engine.md §Slice 1).
+            // subscript deepens `depth`.
             PureHorzBox::Math {
                 width,
                 height: h,
@@ -1112,17 +1109,16 @@ fn justify_line(
             // false`, like `Image`/`FixedEmpty`); fired lang-side, after
             // placement, by `fire_hooks`.
             PureHorzBox::HookPageBreak { .. } => Length::ZERO,
-            // Like `Graphics` (§4 of docs/plans/table-subsystem.md): a
-            // tabular box can be tall, so it drives the line's height/depth
-            // exactly the same way.
+            // Like `Graphics` (§4 of): a tabular box can be tall, so it
+            // drives the line's height/depth exactly the same way.
             PureHorzBox::Tabular(tab) => {
                 height = height.max(tab.height);
                 depth = depth.max(tab.depth);
                 tab.width
             }
             // `embed-block-top`/`embed-block-breakable`'s carried block
-            // (docs/plans/context-box-prims.md §Slice 1 rows 7-8): same
-            // height/depth-driving shape as `Graphics`/`Tabular` above.
+            // (rows 7-8): same height/depth-driving shape as
+            // `Graphics`/`Tabular` above.
             PureHorzBox::EmbeddedBlock {
                 width,
                 height: h,
@@ -1152,9 +1148,8 @@ fn justify_line(
             // Zero-width/height/depth marker (`is_glue == false`); extracted
             // and bottom-placed by `chop_page` at page-commit time.
             PureHorzBox::Footnote { .. } => Length::ZERO,
-            // Zero-width/height/depth marker (`is_glue == false`);
-            // `docs/plans/design-reflow-s4-lists.md` §4.3 — read only by the
-            // reflow HTML walker.
+            // Zero-width/height/depth marker (`is_glue == false`); — read
+            // only by the reflow HTML walker.
             PureHorzBox::InlineMark(_) => Length::ZERO,
         };
         contents.push((x, bx));

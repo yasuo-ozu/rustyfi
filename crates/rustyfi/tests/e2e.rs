@@ -341,20 +341,20 @@ fn compile_graphics_fixture() -> Vec<u8> {
         .expect("PDF rendering must succeed")
 }
 
-/// End-to-end coverage for the Slice 1 graphics primitives
-/// (`docs/plans/graphics-subsystem.md`): `start-path`/`line-to`/
-/// `close-with-line` build a 20pt-square `path`, `fill`/`stroke` turn it
-/// into `graphics`, and a local `\graphics` command (`inline-graphics`)
-/// places it on the page. Checked by scanning the uncompressed content
-/// stream for the path operators the rectangle must produce — the box's
-/// local path coordinates are exact regardless of where real line/page
-/// layout ends up placing the box (`place_graphics` translates the whole
-/// box via one `cm`, never per-coordinate). Also covers roadmap C1
-/// (`draw-text`, real glyph emission): the same callback draws a real
-/// `read-inline`d text run above the rectangle, and the content stream
-/// must additionally carry that run's `Td`/`Tj` — end-to-end proof
-/// `place_graphics`'s `NestedEmitter` reaches `render_pdf`'s own text path
-/// through the full compile pipeline, not just a hand-built `Page`.
+/// End-to-end coverage for the Slice 1 graphics primitives:
+/// `start-path`/`line-to`/ `close-with-line` build a 20pt-square `path`,
+/// `fill`/`stroke` turn it into `graphics`, and a local `\graphics`
+/// command (`inline-graphics`) places it on the page. Checked by scanning
+/// the uncompressed content stream for the path operators the rectangle
+/// must produce — the box's local path coordinates are exact regardless of
+/// where real line/page layout ends up placing the box (`place_graphics`
+/// translates the whole box via one `cm`, never per-coordinate). Also
+/// covers roadmap C1 (`draw-text`, real glyph emission): the same callback
+/// draws a real `read-inline`d text run above the rectangle, and the
+/// content stream must additionally carry that run's `Td`/`Tj` —
+/// end-to-end proof `place_graphics`'s `NestedEmitter` reaches
+/// `render_pdf`'s own text path through the full compile pipeline, not
+/// just a hand-built `Page`.
 #[test]
 fn graphics_fixture_compiles_and_renders_path_operators() {
     let bytes = compile_graphics_fixture();
@@ -416,12 +416,11 @@ fn compile_table_fixture() -> Vec<u8> {
         .expect("big-stack thread panicked (see assertion above)")
 }
 
-/// End-to-end coverage for the Slice 1 table subsystem
-/// (`docs/plans/table-subsystem.md`): a self-contained, positional
-/// `\tabular` (the new `cell` type + `tabular` primitive) renders a 2x2
-/// ruled grid — both the four cells' text and the grid rules must land in
-/// the same content stream, through the composite-box `emit_box` writer arm
-/// (§4 of the plan, the subsystem's biggest risk).
+/// End-to-end coverage for the Slice 1 table subsystem: a self-contained,
+/// positional `\tabular` (the new `cell` type + `tabular` primitive)
+/// renders a 2x2 ruled grid — both the four cells' text and the grid rules
+/// must land in the same content stream, through the composite-box
+/// `emit_box` writer arm (§4 of the plan, the subsystem's biggest risk).
 #[test]
 fn table_fixture_compiles_and_renders_cell_text_and_rules() {
     let bytes = compile_table_fixture();
@@ -496,7 +495,7 @@ fn compile_math_fixture() -> Vec<u8> {
     let merged = load_and_merge(&fixture);
     let metrics = rustyfi_pdf::Base14Metrics;
     let doc = rustyfi_lang::compile_document_cst(&merged, &metrics)
-        .expect("math fixture must compile (docs/plans/math-engine.md §Slice 1)");
+        .expect("math fixture must compile (math engine, Slice 1)");
     assert_eq!(doc.pages.len(), 1);
     rustyfi_pdf::render_pdf(&doc.geometry, &doc.pages, &doc.images)
         .expect("PDF rendering must succeed")
@@ -533,12 +532,12 @@ fn glyph_size_and_y(hay: &str, glyph_tj: &str) -> (f32, f32) {
     (size, y)
 }
 
-/// End-to-end coverage for the Slice 1 math engine
-/// (`docs/plans/math-engine.md`): `${x^2}` and `${a+b}` are core `${…}`
-/// syntax (no `@require: math` — the math package isn't loaded yet, §G).
-/// Checked directly against the uncompressed content stream (not
-/// `pdftotext`, which discards size/position) since the acceptance is the
-/// *offset and scale* of the superscript, not just which characters appear.
+/// End-to-end coverage for the Slice 1 math engine: `${x^2}` and `${a+b}`
+/// are core `${…}` syntax (no `@require: math` — the math package isn't
+/// loaded yet, §G). Checked directly against the uncompressed content
+/// stream (not `pdftotext`, which discards size/position) since the
+/// acceptance is the *offset and scale* of the superscript, not just which
+/// characters appear.
 #[test]
 fn math_fixture_renders_superscript_raised_and_scaled() {
     let bytes = compile_math_fixture();
@@ -644,14 +643,14 @@ fn compile_hook_page_fixture() -> (Vec<u8>, u32) {
 }
 
 /// End-to-end coverage for the Slice 1 page-break-hook + cross-reference
-/// callback foundation (docs/plans/hooks-annotations-crossref.md): a
-/// `hook-page-break` closure registers the page's own (final) page number
-/// as a cross-reference; a `get-cross-reference` read-back on a later trial
-/// renders it as text. Trial 1 registers a fresh key (`changed`), forcing
-/// trial 2, where the read-back resolves and `embed-string` renders it.
-/// Asserting `trials == 2` is the load-bearing check the plan calls for: a
-/// one-pass fluke would also emit "1" if the read happened to pre-resolve,
-/// but would prove nothing about the callback seam actually firing.
+/// callback foundation: a `hook-page-break` closure registers the page's
+/// own (final) page number as a cross-reference; a `get-cross-reference`
+/// read-back on a later trial renders it as text. Trial 1 registers a fresh
+/// key (`changed`), forcing trial 2, where the read-back resolves and
+/// `embed-string` renders it. Asserting `trials == 2` is the load-bearing
+/// check the plan calls for: a one-pass fluke would also emit "1" if the
+/// read happened to pre-resolve, but would prove nothing about the callback
+/// seam actually firing.
 #[test]
 fn hook_page_fixture_fires_the_hook_and_renders_the_final_page_number() {
     let (bytes, trials) = compile_hook_page_fixture();
@@ -695,21 +694,20 @@ fn compile_page_footer_fixture() -> std::rc::Rc<rustyfi_lang::value::DocumentVal
     rustyfi_lang::compile_document_cst(&merged, &metrics).expect("page-footer fixture must compile")
 }
 
-/// End-to-end coverage for the Slice 1 real `page-break`
-/// (docs/plans/document-page-model.md): a 40-paragraph body overflows a
-/// 640pt content scheme onto multiple A4Paper pages, and a footer closure
-/// renders `pbinfo#page-number` per page. Rendering each page on its own
-/// (a 1-page slice of `doc.pages`) makes each page's footer glyph
-/// unambiguous in its content stream — the load-bearing assertion that the
-/// per-page loop re-`interp.apply`s the parts closure with an
-/// *incremented* page number, not the same one twice.
+/// End-to-end coverage for the Slice 1 real `page-break`: a 40-paragraph
+/// body overflows a 640pt content scheme onto multiple A4Paper pages, and
+/// a footer closure renders `pbinfo#page-number` per page. Rendering each
+/// page on its own (a 1-page slice of `doc.pages`) makes each page's
+/// footer glyph unambiguous in its content stream — the load-bearing
+/// assertion that the per-page loop re-`interp.apply`s the parts closure
+/// with an *incremented* page number, not the same one twice.
 ///
-/// Page count re-baselined 2 -> 4 by `docs/plans/design-silent-fields.md`
-/// FIX 3: each of the 40 paragraphs now carries its `paragraph_top`/
-/// `paragraph_bottom` margins (18pt + 18pt default), so the same body
-/// occupies proportionally more vertical space and spills onto four pages.
-/// The per-page footer-number assertions (page[0] -> "(1)", page[1] ->
-/// "(2)") are unaffected — only the total-page count changed.
+/// Page count re-baselined 2 -> 4 by FIX 3: each of the 40 paragraphs now
+/// carries its `paragraph_top`/ `paragraph_bottom` margins (18pt + 18pt
+/// default), so the same body occupies proportionally more vertical space
+/// and spills onto four pages. The per-page footer-number assertions
+/// (page[0] -> "(1)", page[1] -> "(2)") are unaffected — only the
+/// total-page count changed.
 #[test]
 fn page_footer_fixture_overflows_to_multiple_pages_with_incrementing_footer_numbers() {
     let doc = compile_page_footer_fixture();
@@ -759,11 +757,10 @@ fn page_footer_fixture_overflows_to_multiple_pages_with_incrementing_footer_numb
 }
 
 // ============================================================================
-// Group A: /Annots + /Dests + /Outlines emission (docs/plans/
-// hooks-annotations-crossref.md §B/§C) — `annot-hook.saty` reaches them via
-// a raw `hook-page-break` closure (no §D frame/deco firing needed);
-// `href_fixture_*` below exercises the §D path (`inline-frame-breakable`)
-// through the real `annot.satyh` `\href`.
+// Group A: /Annots + /Dests + /Outlines emission — `annot-hook.saty`
+// reaches them via a raw `hook-page-break` closure (no §D frame/deco firing
+// needed); `href_fixture_*` below exercises the §D path
+// (`inline-frame-breakable`) through the real `annot.satyh` `\href`.
 // ============================================================================
 
 fn compile_annot_hook_fixture() -> std::rc::Rc<rustyfi_lang::value::DocumentValue> {
@@ -856,10 +853,10 @@ fn href_fixture_emits_a_real_link_annotation_with_a_nonzero_width_rect() {
 }
 
 // ============================================================================
-// Group B (docs/plans/document-page-model.md §C, item #5): the real
-// `add-footnote` float accumulator. F1 below is the data-loss regression —
-// it FAILS at HEAD (before this group's `chop_page` accumulator) because
-// the footnote body text is silently dropped by the old STAND-IN.
+// Group B (item #5): the real `add-footnote` float accumulator. F1 below
+// is the data-loss regression — it FAILS at HEAD (before this group's
+// `chop_page` accumulator) because the footnote body text is silently
+// dropped by the old STAND-IN.
 // ============================================================================
 
 fn compile_footnote_fixture() -> std::rc::Rc<rustyfi_lang::value::DocumentValue> {
@@ -1025,11 +1022,11 @@ fn v01_footnote_scheme_body_renders_through_page_break() {
 }
 
 // ============================================================================
-// Group B (docs/plans/document-page-model.md §A, item #8): real multi-
-// column `page-break-two-column` / `page-break-multicolumn`. F2 proves a
-// genuine SECOND column at a shifted x-origin (not the old single-column
-// stand-in); F3 proves `columnhookf` fires once per COLUMN (not once per
-// page) by counting its marker line per page.
+// Group B (item #8): real multi- column `page-break-two-column` /
+// `page-break-multicolumn`. F2 proves a genuine SECOND column at a
+// shifted x-origin (not the old single-column stand-in); F3 proves
+// `columnhookf` fires once per COLUMN (not once per page) by counting
+// its marker line per page.
 // ============================================================================
 
 fn compile_twocolumn_fixture() -> std::rc::Rc<rustyfi_lang::value::DocumentValue> {
@@ -1215,13 +1212,13 @@ fn tier4_stdjabook_capstone_renders_to_extractable_text() {
     });
 }
 
-/// Slice 1 capstone (docs/plans/rustyfi-0-1-0-support.md §3): a real
-/// SATySFi 0.1 document — `val`-bound module library, comma records,
-/// match…end, tuple page size — through the FULL spine (V0_1 lex -> cst_v1
-/// parse -> loader -> v1 lowering -> shared elaborate/typecheck(V0_1)/eval
-/// -> page break -> PDF) to pdftotext-extractable text. Base-14 only (the
-/// fixture is all-WinAnsi, no capstone font dependency, so this never
-/// skips like the tier4 capstone above can).
+/// Slice 1 capstone: a real SATySFi 0.1 document — `val`-bound module
+/// library, comma records, match…end, tuple page size — through the FULL
+/// spine (V0_1 lex -> cst_v1 parse -> loader -> v1 lowering -> shared
+/// elaborate/typecheck(V0_1)/eval -> page break -> PDF) to
+/// pdftotext-extractable text. Base-14 only (the fixture is all-WinAnsi,
+/// no capstone font dependency, so this never skips like the tier4
+/// capstone above can).
 #[test]
 fn v01_slice1_document_renders_to_extractable_text() {
     run_with_big_stack(move || {

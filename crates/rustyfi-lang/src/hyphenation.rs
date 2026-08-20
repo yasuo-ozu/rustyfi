@@ -1,5 +1,4 @@
-//! Knuth–Liang hyphenation engine
-//! (`docs/plans/design-hyphenation.md` §3).
+//! Knuth–Liang hyphenation engine.
 //!
 //! Confines the `hyphenation` crate dependency to this module: `Context`
 //! (in `rustyfi-backend`) only stores a lightweight `HyphenLang` tag (D3) —
@@ -36,14 +35,13 @@ pub fn language_of(tag: HyphenLang) -> Language {
 /// per-language `embed_en-gb` — that would be required to embed en-GB via
 /// the crate's own mechanism). Pulling in all 82 languages just for en-GB
 /// was rejected as unnecessary bloat and needless exposure to `embed_all`'s
-/// bundled non-permissive `.ext` files (`docs/plans/design-hyphenation.md`
-/// §8 already flags this exact tradeoff and names "shipping a `.bincode`
-/// and using `from_path`" as the alternative — this is that alternative,
-/// via `include_bytes!` + `from_reader` instead of a runtime path so the
-/// dictionary still needs no disk I/O, matching `embed_en-us`'s own
-/// no-filesystem property). This keeps `crates/rustyfi-lang/Cargo.toml`'s
-/// `hyphenation` feature list, and therefore the root `Cargo.lock`,
-/// completely untouched by en-GB support.
+/// bundled non-permissive `.ext` files (already flags this exact tradeoff
+/// and names "shipping a `.bincode` and using `from_path`" as the
+/// alternative — this is that alternative, via `include_bytes!` +
+/// `from_reader` instead of a runtime path so the dictionary still needs no
+/// disk I/O, matching `embed_en-us`'s own no-filesystem property). This
+/// keeps `crates/rustyfi-lang/Cargo.toml`'s `hyphenation` feature list, and
+/// therefore the root `Cargo.lock`, completely untouched by en-GB support.
 const EN_GB_STANDARD_BINCODE: &[u8] = include_bytes!("hyph-data/en-gb.standard.bincode");
 
 fn cache() -> &'static Mutex<HashMap<HyphenLang, Arc<Standard>>> {
@@ -85,7 +83,7 @@ fn dict(tag: HyphenLang) -> Option<Arc<Standard>> {
 /// filtered out by the min-fragment constraints — in every such case the
 /// caller (`primitives::text_to_boxes`'s `flush_word`) emits the word
 /// exactly as it would with no dictionary installed, which is what keeps
-/// the byte-identity gate provable (`docs/plans/design-hyphenation.md` §6).
+/// the byte-identity gate provable.
 pub fn hyphenate_word(
     tag: HyphenLang,
     word: &str,
@@ -121,9 +119,8 @@ pub fn hyphenate_word(
 
 /// Explicit soft hyphens (U+00AD) embedded in `word`, split out into (a) the
 /// word with every one of them removed and (b) the char-index break points
-/// into that *cleaned* word where each one sat — S3 (`docs/plans/design-
-/// hyphenation.md` §S3): "Honor input soft hyphen (U+00AD) priority (crate
-/// already does; add a test)".
+/// into that *cleaned* word where each one sat — S3: "Honor input soft
+/// hyphen (U+00AD) priority (crate already does; add a test)".
 ///
 /// The `hyphenation` crate's own `Standard::hyphenate` already special-cases
 /// this (`hyphenator.rs`'s `soft_hyphen_indices`/priority comment: "Soft

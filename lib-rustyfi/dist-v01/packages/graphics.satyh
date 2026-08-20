@@ -1,6 +1,6 @@
 % graphics.satyh — SATySFi 0.1 stdlib `Graphics`, vendored for Legacy
-% packaging (docs/plans/rustyfi-0-1-0-support.md §2 P2 / §4 phase 6).
-% Source: saphe-split@b836d512:lib-rustyfi/packages/stdlib/stdlib.0.0.1/
+% packaging (P2 / §4 phase 6). Source:
+% saphe-split@b836d512:lib-rustyfi/packages/stdlib/stdlib.0.0.1/
 %   src/graphics.satyh — transliteration deltas:
 %   - T1: `use open Basic` / `use Float` / `use Point` / `use Path` /
 %     `use List` / `use Length` dropped; `@require: basic`, `@require:

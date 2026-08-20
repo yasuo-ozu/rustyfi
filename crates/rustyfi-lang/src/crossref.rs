@@ -3,7 +3,7 @@
 //! **not** reset per trial — it *is* the fixpoint state that persists while
 //! everything else (hooks, images, mutable store) resets each trial.
 //!
-//! docs/plans/hooks-annotations-crossref.md §Cross-references & the fixpoint.
+//! & the fixpoint.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 

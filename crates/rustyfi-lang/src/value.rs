@@ -55,19 +55,19 @@ pub enum Value {
         elems: Rc<Vec<MathElem>>,
         env: Env,
     },
-    /// The faithful `math` value (`docs/plans/math-engine.md` §A item 1) —
-    /// what every `math-*` primitive (`math-char`, `math-concat`,
-    /// `math-sup`, …) builds and consumes, as opposed to `MathText`'s
-    /// elaborator-fused literal form. A `math` value is always a *sequence*
-    /// of atoms (mirroring upstream `MathValue of math list`,
-    /// `types.cppo.ml:888` — each `Math` here is one already-classed atom,
-    /// not a further list), so `math-concat` is a plain `Vec` append and
-    /// `math-group`/`math-sup`/… each wrap the whole inner `Vec` as ONE new
-    /// atom. Both this and `MathText` type as `"math"` (`BaseType::
-    /// MathText`) — a `${…}` literal and a `math-*`-primitive-built value
-    /// are interchangeable wherever a `math`-typed argument is expected
-    /// (see `primitives.rs`'s `as_math`, which accepts either, reflecting a
-    /// `MathText`'s `MathElem` tree into `Math` nodes on the fly).
+    /// The faithful `math` value (item 1) — what every `math-*` primitive
+    /// (`math-char`, `math-concat`, `math-sup`, …) builds and consumes, as
+    /// opposed to `MathText`'s elaborator-fused literal form. A `math`
+    /// value is always a *sequence* of atoms (mirroring upstream `MathValue
+    /// of math list`, `types.cppo.ml:888` — each `Math` here is one
+    /// already-classed atom, not a further list), so `math-concat` is a
+    /// plain `Vec` append and `math-group`/`math-sup`/… each wrap the whole
+    /// inner `Vec` as ONE new atom. Both this and `MathText` type as
+    /// `"math"` (`BaseType:: MathText`) — a `${…}` literal and a
+    /// `math-*`-primitive-built value are interchangeable wherever a
+    /// `math`-typed argument is expected (see `primitives.rs`'s `as_math`,
+    /// which accepts either, reflecting a `MathText`'s `MathElem` tree into
+    /// `Math` nodes on the fly).
     Math(Rc<Vec<Math>>),
     /// `math-boxes` (V0_1 only; `BaseType::MathBoxes`) — the evaluated math
     /// tree `read-math` produces, wrapping the SAME `Math` atom tree
@@ -86,12 +86,12 @@ pub enum Value {
     InlineBoxes(Vec<HorzBox>),
     /// `block-boxes` (the `Vert` base constant).
     BlockBoxes(Vec<VertBox>),
-    /// `image` (`load-image`'s result; `docs/plans/math-images.md` §Slice
-    /// 1): an index into the document-wide image table built up on
-    /// `eval::Interp` (`Interp::images`) as the document evaluates, then
-    /// moved into `DocumentValue::images` once `page-break` packages the
-    /// final document. Carrying just the index (not the decoded bytes)
-    /// keeps this value cheap to clone, same as `Value::Ref`'s `Rc`.
+    /// `image` (`load-image`'s result): an index into the document-wide
+    /// image table built up on `eval::Interp` (`Interp::images`) as the
+    /// document evaluates, then moved into `DocumentValue::images` once
+    /// `page-break` packages the final document. Carrying just the index
+    /// (not the decoded bytes) keeps this value cheap to clone, same as
+    /// `Value::Ref`'s `Rc`.
     Image(ImageId),
     Document(Rc<DocumentValue>),
     /// A closure. Its body is an already-compiled [`CompiledExpr`], run
@@ -99,10 +99,10 @@ pub enum Value {
     ///
     /// The name is historical: this used to sit beside an AST-bodied
     /// `Value::Closure` that the reference tree-walking interpreter produced.
-    /// Phase 3 of `docs/plans/design-symbol-debruijn-slots.md` retired that
-    /// evaluator (quoted text is now compiled eagerly, so a tree-walker cannot
-    /// build a `Value::InlineText` without invoking the compiler anyway), and
-    /// with it the only producer of the AST-bodied variant.
+    /// Phase 3 of retired that evaluator (quoted text is now compiled eagerly,
+    /// so a tree-walker cannot build a `Value::InlineText` without invoking
+    /// the compiler anyway), and with it the only producer of the AST-bodied
+    /// variant.
     CompiledClosure {
         /// SATySFi 0.1 labeled optional LABELS, in binder order; empty for
         /// every 0.0.6-built closure. Each receives an `option`-typed value at
@@ -121,8 +121,7 @@ pub enum Value {
         def: &'static PrimDef,
         applied: Vec<Value>,
     },
-    /// `pre-path` (Slice 1 graphics; `start-path`/`line-to`'s result — see
-    /// `docs/plans/graphics-subsystem.md` §1).
+    /// `pre-path` (Slice 1 graphics; `start-path`/`line-to`'s result).
     PrePath(rustyfi_backend::PrePath),
     /// `path` (`terminate-path`/`close-with-line`'s result).
     Path(rustyfi_backend::Path),
@@ -131,11 +130,11 @@ pub enum Value {
     Graphics(rustyfi_backend::GraphicsElem),
     /// `text-info` (context-box-prims.md §G sliver).
     TextInfo(TextInfo),
-    /// `hyphenation` (`load-hyphenation-dictionary`'s result;
-    /// `docs/plans/design-hyphenation.md` S1) — the tag `set-hyphenation-
-    /// dictionary` writes into `Context::hyphen_dictionary`. Was always
-    /// `Value::Unit` (a discarded no-op token) before this slice; now
-    /// actually carries which dictionary was requested.
+    /// `hyphenation` (`load-hyphenation-dictionary`'s result; S1) — the
+    /// tag `set-hyphenation- dictionary` writes into
+    /// `Context::hyphen_dictionary`. Was always `Value::Unit` (a
+    /// discarded no-op token) before this slice; now actually carries
+    /// which dictionary was requested.
     Hyphenation(HyphenLang),
 }
 
@@ -176,14 +175,14 @@ impl Value {
 }
 
 /// One atom of a faithful `math` value (`Value::Math`'s element type) —
-/// trimmed mirror of upstream `math` (`types.cppo.ml:1024`,
-/// `docs/plans/math-engine.md` §A item 1). Every closure-typed field
-/// upstream carries (kern functions, a paren pair's sizing closures,
-/// `math-pull-in-scripts`' resolver, `text-in-math`'s embedded-box
-/// callback) is stored here OPAQUELY as a plain `Value` — constructing one
-/// of these variants (a `math-*` primitive's whole runtime job) never
-/// *calls* such a closure, exactly like upstream, where a `math` value is
-/// inert data until the real layout engine (roadmap B/D) walks it.
+/// trimmed mirror of upstream `math` (`types.cppo.ml:1024`, item 1). Every
+/// closure-typed field upstream carries (kern functions, a paren pair's
+/// sizing closures, `math-pull-in-scripts`' resolver, `text-in-math`'s
+/// embedded-box callback) is stored here OPAQUELY as a plain `Value` —
+/// constructing one of these variants (a `math-*` primitive's whole
+/// runtime job) never *calls* such a closure, exactly like upstream, where
+/// a `math` value is inert data until the real layout engine (roadmap B/D)
+/// walks it.
 #[derive(Clone, Debug)]
 pub enum Math {
     /// One base atom — a char run, a styled char, or embedded text. See
@@ -203,11 +202,10 @@ pub enum Math {
     ChangeColor(Color, Vec<Math>),
     /// `math-char-class` (`\mathrm`/`\mathbf`/…) — the resolved
     /// [`MathCharClass`] a `math-char-class` primitive call named (`\mathrm`
-    /// -> `MathRoman` -> `MathCharClass::Roman`, …; `docs/plans/
-    /// math-engine.md` §F). Its layout arm (`primitives.rs`) sets
-    /// `Context::math_char_class` to this while laying out the inner list,
-    /// which is what makes `VariantCharPending`'s per-char remap style-
-    /// sensitive.
+    /// -> `MathRoman` -> `MathCharClass::Roman`, …). Its layout arm
+    /// (`primitives.rs`) sets `Context::math_char_class` to this while
+    /// laying out the inner list, which is what makes `VariantCharPending`'s
+    /// per-char remap style- sensitive.
     ChangeCharClass(MathCharClass, Vec<Math>),
     /// `math-frac`: numerator, denominator.
     Fraction(Vec<Math>, Vec<Math>),
@@ -305,9 +303,9 @@ pub enum MathElement {
     /// time under a `context`); this is eager, already-materialized data,
     /// matching upstream's `embed_inline_to_math` (which has no context to
     /// re-apply a closure under). Layout: the same deliberately-cheap
-    /// stand-in rendering path `EmbeddedText` gets today (roadmap E,
-    /// `docs/plans/math-engine.md`) — `math_glyphs_of_inline_boxes` over
-    /// `boxes` directly, no closure application.
+    /// stand-in rendering path `EmbeddedText` gets today (roadmap E) —
+    /// `math_glyphs_of_inline_boxes` over `boxes` directly, no closure
+    /// application.
     EmbeddedBoxes {
         class: MathKind,
         boxes: Vec<HorzBox>,
@@ -315,11 +313,10 @@ pub enum MathElement {
 }
 
 /// `math-variant-char`'s 9-field per-style codepoint record
-/// (`docs/plans/math-engine.md` §F; `math.satyh`'s `greek-lowercase`/
-/// `greek-uppercase` build one per Greek letter). Field order/names mirror
-/// the record literal math.satyh constructs (`italic`, `bold-italic`,
-/// `roman`, `bold-roman`, `script`, `bold-script`, `fraktur`,
-/// `bold-fraktur`, `double-struck`).
+/// (`math.satyh`'s `greek-lowercase`/ `greek-uppercase` build one per
+/// Greek letter). Field order/names mirror the record literal math.satyh
+/// constructs (`italic`, `bold-italic`, `roman`, `bold-roman`, `script`,
+/// `bold-script`, `fraktur`, `bold-fraktur`, `double-struck`).
 #[derive(Clone, Debug)]
 pub struct MathVariantStyle {
     pub italic: String,
@@ -355,7 +352,6 @@ pub struct DocumentValue {
     /// (`primitives::prim_page_break`) when it packages the final document;
     /// threaded to `rustyfi_pdf::render_pdf`/`render_pdf_ttf` so the PDF
     /// writer can emit one Image XObject per image actually used.
-    /// `docs/plans/math-images.md` §Slice 1.
     pub images: Vec<ImageResource>,
     /// §B/§C/§D extras (annotations / destinations / outline / per-page deco
     /// overlays), attached by the compile driver AFTER the final trial's
@@ -363,8 +359,7 @@ pub struct DocumentValue {
     /// only after placement), so it packages `DocExtras::default()` and
     /// `compile_document_cst_with_trials` overwrites it on the winning trial.
     pub extras: DocExtras,
-    /// Reflowable/semantic HTML side-channel
-    /// (`docs/plans/design-reflowable-html.md` §2 "Option B"): a clone of the
+    /// Reflowable/semantic HTML side-channel ("Option B"): a clone of the
     /// flat `Vec<VertBox>` as it existed just BEFORE `page_break_core`
     /// (`primitives.rs`) handed it to `chop_page` — the document's natural
     /// linear flow, with paragraph boundaries (`Skip`), frame nesting
@@ -388,18 +383,17 @@ pub struct DocumentValue {
     /// (the reflowable backend) does — so its presence changes no byte of
     /// their output.
     pub reflow_source: Option<Vec<VertBox>>,
-    /// S2 links (`docs/plans/design-reflowable-html.md` §4 "Links/metadata"):
-    /// one `(DecoId, action)` per `register-link-to-uri`/`-to-location` call
-    /// made from inside a firing deco closure — see
-    /// `eval::Interp::link_decos`'s doc comment for why this, not
-    /// `extras.annotations` (page-absolute, no `DecoId`), is what the
-    /// reflow backend needs to find which `PureHorzBox::Frame` in
+    /// S2 links ("Links/metadata"): one `(DecoId, action)` per
+    /// `register-link-to-uri`/`-to-location` call made from inside a firing
+    /// deco closure — see `eval::Interp::link_decos`'s doc comment for why
+    /// this, not `extras.annotations` (page-absolute, no `DecoId`), is what
+    /// the reflow backend needs to find which `PureHorzBox::Frame` in
     /// `reflow_source` a link belongs to. Filled in by `eval_document_trials`
-    /// alongside `extras`, AFTER `fire_hooks` (hooks/decos haven't fired
-    /// yet when `page_break_core` packages the initial `DocumentValue`).
-    /// Empty (not absent) by default — same "purely additive, cheap when
-    /// unused" policy as `reflow_source`; neither `rustyfi_pdf` nor the
-    /// faithful `rustyfi_html::render_html`/`render_html_ttf_with` reads it.
+    /// alongside `extras`, AFTER `fire_hooks` (hooks/decos haven't fired yet
+    /// when `page_break_core` packages the initial `DocumentValue`). Empty
+    /// (not absent) by default — same "purely additive, cheap when unused"
+    /// policy as `reflow_source`; neither `rustyfi_pdf` nor the faithful
+    /// `rustyfi_html::render_html`/`render_html_ttf_with` reads it.
     pub reflow_links: Vec<(DecoId, AnnotAction)>,
     /// Same idea as `reflow_links`, for `register-destination`
     /// (`annot.satyh`'s `register-location-frame` idiom): `(DecoId, name)`.
@@ -477,15 +471,14 @@ type FxMap = HashMap<Rc<str>, Value, FxBuild>;
 /// references against, and whose [`BaseEnv::names`] seed the elaborator's
 /// scope.
 ///
-/// This is deliberately NOT the runtime environment. Before Phase 4 of
-/// `docs/plans/design-symbol-debruijn-slots.md` one `Env` served both roles,
-/// with the base environment sitting at the root of the runtime frame chain.
-/// Nothing resolves a name at run time any more — top-level bindings go
-/// through the compiler's `Globals` table, locals through slot indices, and
-/// unshadowed base names are constant-folded at compile time — so the runtime
-/// chain no longer reaches here at all, and the two can be what they actually
-/// are: a name map used while compiling, and a stack of positional frames used
-/// while running.
+/// This is deliberately NOT the runtime environment. Before Phase 4 of one
+/// `Env` served both roles, with the base environment sitting at the root of
+/// the runtime frame chain. Nothing resolves a name at run time any more —
+/// top-level bindings go through the compiler's `Globals` table, locals
+/// through slot indices, and unshadowed base names are constant-folded at
+/// compile time — so the runtime chain no longer reaches here at all, and the
+/// two can be what they actually are: a name map used while compiling, and a
+/// stack of positional frames used while running.
 #[derive(Clone, Debug, Default)]
 pub struct BaseEnv {
     vars: FxMap,

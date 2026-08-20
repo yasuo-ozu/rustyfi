@@ -18,6 +18,10 @@ pub const SCHEMA_VERSION: u32 = 1;
 /// A single installed-package receipt.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Receipt {
+    /// Which corpus this install went into. Absent in receipts written before
+    /// `lang` existed, which were all 0.0.
+    #[serde(default)]
+    pub lang: crate::manifest::Lang,
     pub schema_version: u32,
     pub name: String,
     pub package_version: String,
@@ -75,18 +79,61 @@ pub struct FileEntry {
 }
 
 /// Path of the receipt for `name` under `root`.
-pub fn path(root: &Path, name: &str) -> PathBuf {
-    roots::receipts_dir(root).join(format!("{name}.toml"))
+///
+/// One manifest may install the same library for both generations, so a name
+/// alone no longer identifies an install. 0.0 keeps the historical
+/// `<name>.toml` — every receipt written before `lang` existed is a 0.0 one —
+/// and 0.1 gets its own `<name>@0.1.toml` beside it.
+pub fn path_for(root: &Path, name: &str, lang: crate::manifest::Lang) -> PathBuf {
+    let file = match lang {
+        crate::manifest::Lang::V0_0 => format!("{name}.toml"),
+        other => format!("{name}@{}.toml", other.as_str()),
+    };
+    roots::receipts_dir(root).join(file)
 }
 
-/// Whether a receipt for `name` exists under `root`.
+/// Path of the 0.0 receipt for `name` — the common case.
+pub fn path(root: &Path, name: &str) -> PathBuf {
+    path_for(root, name, crate::manifest::Lang::default())
+}
+
+/// Whether a receipt exists for one (name, generation) pair — what an install
+/// must ask, since the same name may be installed for both generations
+/// independently.
+pub fn exists_for(root: &Path, name: &str, lang: crate::manifest::Lang) -> bool {
+    path_for(root, name, lang).is_file()
+}
+
+/// Read the receipt for one (name, generation) pair.
+pub fn read_for(root: &Path, name: &str, lang: crate::manifest::Lang) -> Result<Receipt, Error> {
+    let p = path_for(root, name, lang);
+    if !p.is_file() {
+        return Err(Error::NotInstalled {
+            name: name.to_string(),
+            receipt: p,
+        });
+    }
+    read_file(&p)
+}
+
+/// Whether a receipt for `name` exists under `root`, in either generation.
 pub fn exists(root: &Path, name: &str) -> bool {
-    path(root, name).is_file()
+    [crate::manifest::Lang::V0_0, crate::manifest::Lang::V0_1]
+        .into_iter()
+        .any(|lang| path_for(root, name, lang).is_file())
 }
 
 /// Read and parse the receipt for `name`. Returns [`Error::NotInstalled`] if
 /// absent.
 pub fn read(root: &Path, name: &str) -> Result<Receipt, Error> {
+    // Either generation, 0.0 first — an unqualified name means "the one that
+    // is installed", and only a manifest declaring both makes that ambiguous.
+    for lang in [crate::manifest::Lang::V0_0, crate::manifest::Lang::V0_1] {
+        let p = path_for(root, name, lang);
+        if p.is_file() {
+            return read_file(&p);
+        }
+    }
     let p = path(root, name);
     if !p.is_file() {
         return Err(Error::NotInstalled {
@@ -111,13 +158,18 @@ fn read_file(p: &Path) -> Result<Receipt, Error> {
 pub fn write(root: &Path, receipt: &Receipt) -> Result<(), Error> {
     let dir = roots::receipts_dir(root);
     std::fs::create_dir_all(&dir).map_err(|e| Error::io(&dir, e))?;
-    util::write_toml_atomic(&path(root, &receipt.name), receipt)
+    util::write_toml_atomic(&path_for(root, &receipt.name, receipt.lang), receipt)
 }
 
 /// Remove the receipt for `name` (best-effort: a missing file is not an
 /// error, so uninstall stays idempotent once the files are gone).
 pub fn remove(root: &Path, name: &str) -> Result<(), Error> {
-    util::remove_file_if_exists(&path(root, name))
+    remove_for(root, name, crate::manifest::Lang::default())
+}
+
+/// Remove the receipt for one (name, generation) pair.
+pub fn remove_for(root: &Path, name: &str, lang: crate::manifest::Lang) -> Result<(), Error> {
+    util::remove_file_if_exists(&path_for(root, name, lang))
 }
 
 /// All receipts under `root`, sorted by package name. An absent

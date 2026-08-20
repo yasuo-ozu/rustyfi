@@ -18,7 +18,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::error::Error;
 use crate::util;
@@ -47,6 +47,9 @@ pub struct PackageMeta {
     pub rustyfi_version_compat: String,
     #[serde(default)]
     pub description: Option<String>,
+    /// The SATySFi generation this package is written for. Absent means 0.0.
+    #[serde(default)]
+    pub lang: Lang,
 }
 
 /// One `[[files]]` declaration.
@@ -60,6 +63,49 @@ pub struct FileDecl {
     /// whole subtree).
     #[serde(default)]
     pub dst: Option<String>,
+}
+
+/// Which SATySFi language generation a library or doc target is written for.
+///
+/// The port bundles both corpora side by side and the loader keeps them apart
+/// by DIRECTORY — `dist/packages/` is 0.0, `dist-v01/packages/` is 0.1 — so a
+/// package's generation decides where it installs, not just what it says about
+/// itself. Declared as `(lang 0.0)` / `(lang 0.1)`; absent means 0.0, which is
+/// what every manifest written before this existed meant.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
+pub enum Lang {
+    #[default]
+    #[serde(rename = "0.0")]
+    V0_0,
+    #[serde(rename = "0.1")]
+    V0_1,
+}
+
+impl Lang {
+    /// The corpus directory this generation installs into.
+    pub fn dist_dir(self) -> &'static str {
+        match self {
+            Lang::V0_0 => "dist",
+            Lang::V0_1 => "dist-v01",
+        }
+    }
+
+    /// As written in a manifest.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Lang::V0_0 => "0.0",
+            Lang::V0_1 => "0.1",
+        }
+    }
+
+    /// Parse `0.0`/`0.1` as a manifest writes them.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim() {
+            "0.0" => Some(Lang::V0_0),
+            "0.1" => Some(Lang::V0_1),
+            _ => None,
+        }
+    }
 }
 
 /// A source-declaration kind (plan §5.1/§5.5).
@@ -87,6 +133,8 @@ pub struct PlannedFile {
 #[derive(Debug)]
 pub struct PackagePlan {
     pub name: String,
+    /// Which corpus this plan installs into.
+    pub lang: Lang,
     pub version: String,
     pub description: Option<String>,
     /// Recorded only; never resolved through phase 3 (plan §10).
@@ -136,42 +184,47 @@ pub fn discover(source_root: &Path) -> Result<Vec<PackagePlan>, Error> {
 
 pub(crate) fn plan_from_manifest(source_root: &Path, manifest: Manifest) -> Result<PackagePlan, Error> {
     let name = manifest.package.name;
+    // 0.1 packages live in their own corpus directory; everything below is the
+    // same layout under a different root.
+    let lang = manifest.package.lang;
+    let dist = lang.dist_dir();
     let mut files = Vec::new();
     for decl in &manifest.files {
         let src_abs = safe_source_join(source_root, &decl.src)?;
         match decl.kind {
             FileKind::PackageDir => {
-                collect_dir(&src_abs, &format!("dist/packages/{name}"), &mut files)?
+                collect_dir(&src_abs, &format!("{dist}/packages/{name}"), &mut files)?
             }
             FileKind::FontDir => {
-                collect_dir(&src_abs, &format!("dist/fonts/{name}"), &mut files)?
+                collect_dir(&src_abs, &format!("{dist}/fonts/{name}"), &mut files)?
             }
             FileKind::Package => {
                 let dst = require_dst(decl, "package")?;
-                push_file(&src_abs, &format!("dist/packages/{name}/{dst}"), &mut files)?
+                push_file(&src_abs, &format!("{dist}/packages/{name}/{dst}"), &mut files)?
             }
             FileKind::Font => {
                 let dst = require_dst(decl, "font")?;
-                push_file(&src_abs, &format!("dist/fonts/{name}/{dst}"), &mut files)?
+                push_file(&src_abs, &format!("{dist}/fonts/{name}/{dst}"), &mut files)?
             }
             FileKind::Md => {
                 let dst = require_dst(decl, "md")?;
-                push_file(&src_abs, &format!("dist/md/{name}/{dst}"), &mut files)?
+                push_file(&src_abs, &format!("{dist}/md/{name}/{dst}"), &mut files)?
             }
             FileKind::Hash => {
                 // Flat, no per-library namespace (plan §5.5).
                 let dst = require_dst(decl, "hash")?;
-                push_file(&src_abs, &format!("dist/hash/{dst}"), &mut files)?
+                push_file(&src_abs, &format!("{dist}/hash/{dst}"), &mut files)?
             }
             FileKind::File => {
                 // Arbitrary, root-relative under dist/.
                 let dst = require_dst(decl, "file")?;
-                push_file(&src_abs, &format!("dist/{dst}"), &mut files)?
+                push_file(&src_abs, &format!("{dist}/{dst}"), &mut files)?
             }
         }
     }
     Ok(PackagePlan {
         name,
+        lang,
         version: manifest.package.version,
         description: manifest.package.description,
         dependencies: manifest.dependencies,
@@ -202,6 +255,8 @@ fn plan_from_fallback(source_root: &Path) -> Result<PackagePlan, Error> {
     files.sort_by(|a, b| a.dst.cmp(&b.dst));
     Ok(PackagePlan {
         name,
+        // The no-manifest fallback has nothing to declare a generation with.
+        lang: Lang::default(),
         version: "0.0.0".to_string(),
         description: None,
         dependencies: BTreeMap::new(),

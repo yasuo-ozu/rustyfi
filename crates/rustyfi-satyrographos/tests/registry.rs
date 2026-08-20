@@ -12,7 +12,7 @@
 //!   `dist/` and records a `registry` receipt with the resolved version/sha256;
 //! - **sha256 mismatch**: a corrupted index digest aborts the install and
 //!   leaves `dist/` and the receipts directory completely untouched (step 3);
-//! - reconcile of a `{ registry = … }` Satyrfile source locks the resolved
+//! - reconcile of a `(registry …)` dependency source locks the resolved
 //!   `(version, url, sha256)` and re-materialises reproducibly *without*
 //!   re-consulting the index (the index dir is deleted before the 2nd run);
 //! - `search` substring matching and `update` upgrade reporting (§8).
@@ -400,7 +400,7 @@ fn bare_git_registry_install_happy_path() {
 }
 
 // ---------------------------------------------------------------------------
-// Reconcile a registry Satyrfile source → lockfile pins (version, url, sha256)
+// Reconcile a registry dependency source → lockfile pins (version, url, sha256)
 // and is reproducible without re-consulting the index.
 // ---------------------------------------------------------------------------
 
@@ -421,14 +421,15 @@ fn reconcile_registry_locks_and_is_reproducible_without_index() {
         }],
     );
 
-    // A Satyrfile whose only dependency is a registry source, with the index
-    // URL declared in a [registry] section (the fallback when no flag/env set).
+    // A Satyristes whose only dependency is a registry source, with the index
+    // URL declared in a top-level (registry ...) form (the fallback when no flag/env set).
     let manifest = tmp.write(
-        "proj/Satyrfile.toml",
+        "proj/Satyristes",
         &format!(
-            "[registry]\nurl = \"{}\"\n\n\
-             [[library]]\nname = \"great-package\"\n\
-             source = {{ registry = \"great-package\", version = \"1.0.0\" }}\n",
+            "(version 0.0.2)\n\
+             (registry (url \"{}\"))\n\
+             (library (name \"proj\") (version \"0.1.0\") (sources ((packageDir \"src\")))\n\
+               (dependencies ((great-package ((registry \"great-package\") (version \"1.0.0\"))))))\n",
             file_url(&index)
         ),
     );
@@ -443,7 +444,7 @@ fn reconcile_registry_locks_and_is_reproducible_without_index() {
         .is_file());
 
     // The lockfile pins the resolved version, url, and sha256.
-    let lock = fs::read_to_string(tmp.path().join("proj/Satyrfile.lock")).unwrap();
+    let lock = fs::read_to_string(tmp.path().join("proj/Satyristes.lock")).unwrap();
     assert!(lock.contains("version = \"1.0.0\""), "{lock}");
     assert!(lock.contains(&file_url(&tarball)), "lock pins the url:\n{lock}");
     assert!(lock.contains(&sha), "lock pins the sha256:\n{lock}");
@@ -482,11 +483,12 @@ fn reconcile_registry_resolves_transitive_dependency_into_the_closure() {
     // The manifest names only `great-package` directly; `base-package` is
     // pulled in purely as a transitive dependency of it.
     let manifest = tmp.write(
-        "proj/Satyrfile.toml",
+        "proj/Satyristes",
         &format!(
-            "[registry]\nurl = \"{}\"\n\n\
-             [[library]]\nname = \"great-package\"\n\
-             source = {{ registry = \"great-package\", version = \"1.0.0\" }}\n",
+            "(version 0.0.2)\n\
+             (registry (url \"{}\"))\n\
+             (library (name \"proj\") (version \"0.1.0\") (sources ((packageDir \"src\")))\n\
+               (dependencies ((great-package ((registry \"great-package\") (version \"1.0.0\"))))))\n",
             file_url(&index)
         ),
     );
@@ -507,7 +509,7 @@ fn reconcile_registry_resolves_transitive_dependency_into_the_closure() {
         .join("dist/packages/base-package/base-package.satyh")
         .is_file(), "transitive dependency materialised too");
 
-    let lock = fs::read_to_string(tmp.path().join("proj/Satyrfile.lock")).unwrap();
+    let lock = fs::read_to_string(tmp.path().join("proj/Satyristes.lock")).unwrap();
     assert!(lock.contains("name = \"great-package\""), "{lock}");
     assert!(
         lock.contains("name = \"base-package\""),
@@ -595,11 +597,12 @@ fn update_reports_available_upgrade() {
         &[Ver { version: "1.0.0", tarball: &t10, real_sha: &sha10, bad_sha: None }],
     );
     let manifest = tmp.write(
-        "proj/Satyrfile.toml",
+        "proj/Satyristes",
         &format!(
-            "[registry]\nurl = \"{}\"\n\n\
-             [[library]]\nname = \"great-package\"\n\
-             source = {{ registry = \"great-package\", version = \"1.0.0\" }}\n",
+            "(version 0.0.2)\n\
+             (registry (url \"{}\"))\n\
+             (library (name \"proj\") (version \"0.1.0\") (sources ((packageDir \"src\")))\n\
+               (dependencies ((great-package ((registry \"great-package\") (version \"1.0.0\"))))))\n",
             file_url(&index)
         ),
     );
@@ -656,13 +659,14 @@ fn update_caps_the_upgrade_at_the_highest_mutually_compatible_version() {
     let index = tmp.path().join("index");
 
     let manifest = tmp.write(
-        "proj/Satyrfile.toml",
+        "proj/Satyristes",
         &format!(
-            "[registry]\nurl = \"{}\"\n\n\
-             [[library]]\nname = \"great-package\"\n\
-             source = {{ registry = \"great-package\", version = \"1.0.0\" }}\n\n\
-             [[library]]\nname = \"capper\"\n\
-             source = {{ registry = \"capper\", version = \"1.0.0\" }}\n",
+            "(version 0.0.2)\n\
+             (registry (url \"{}\"))\n\
+             (library (name \"proj\") (version \"0.1.0\") (sources ((packageDir \"src\")))\n\
+               (dependencies\n\
+                 ((great-package ((registry \"great-package\") (version \"1.0.0\")))\n\
+                  (capper ((registry \"capper\") (version \"1.0.0\"))))))\n",
             file_url(&index)
         ),
     );

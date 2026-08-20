@@ -138,8 +138,8 @@ fn multicall_install_creates_working_aliases() {
 }
 
 /// Phase-2 manifest mode (plan §5.3, §8): `satyrographos install` with no
-/// PATH locates `Satyrfile.toml` by upward search from the process's working
-/// directory, reconciles it, and writes `Satyrfile.lock`. A second run with
+/// PATH locates `Satyristes` by upward search from the process's working
+/// directory, reconciles it, and writes `Satyristes.lock`. A second run with
 /// nothing changed reports every entry as `unchanged`.
 #[cfg(unix)]
 #[test]
@@ -164,12 +164,15 @@ fn manifest_mode_install_reconciles_and_writes_lock() {
     .unwrap();
     std::fs::write(pkg.join("packages/mylib.satyh"), "let mylib = 1\n").unwrap();
 
-    // The project directory with a Satyrfile.toml (the process cwd for the run).
+    // The project directory with its Satyristes (the process cwd for the run).
     let proj = work.join("proj");
     std::fs::create_dir_all(&proj).unwrap();
     std::fs::write(
-        proj.join("Satyrfile.toml"),
-        "[[library]]\nname = \"mylib\"\nsource = { path = \"../vendor/mylib\" }\n",
+        proj.join("Satyristes"),
+        "(version 0.0.2)\n\
+         (library (name \"proj\") (version \"0.1.0\")\n\
+           (sources ((packageDir \"src\")))\n\
+           (dependencies ((mylib ((path \"../vendor/mylib\"))))))\n",
     )
     .unwrap();
 
@@ -186,7 +189,7 @@ fn manifest_mode_install_reconciles_and_writes_lock() {
     let out = run("first");
     assert!(out.status.success(), "manifest install should succeed");
     assert!(root.join("dist/packages/mylib/mylib.satyh").is_file());
-    assert!(proj.join("Satyrfile.lock").is_file(), "lockfile written");
+    assert!(proj.join("Satyristes.lock").is_file(), "lockfile written");
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("installed mylib"), "{stdout}");
 
@@ -199,11 +202,11 @@ fn manifest_mode_install_reconciles_and_writes_lock() {
     let _ = std::fs::remove_dir_all(&work);
 }
 
-/// Manifest mode with no discoverable `Satyrfile.toml` exits `3` (nothing to
+/// Manifest mode with no discoverable `Satyristes` exits `3` (nothing to
 /// operate on).
 #[cfg(unix)]
 #[test]
-fn manifest_mode_without_satyrfile_exits_3() {
+fn manifest_mode_without_a_manifest_exits_3() {
     use std::os::unix::process::CommandExt as _;
     let empty = tmpdir("no-satyrfile");
     let root = tmpdir("no-satyrfile-root");
@@ -214,7 +217,7 @@ fn manifest_mode_without_satyrfile_exits_3() {
         .output()
         .expect("spawn");
     assert!(!out.status.success());
-    assert_eq!(out.status.code(), Some(3), "no Satyrfile → exit 3");
+    assert_eq!(out.status.code(), Some(3), "no Satyristes → exit 3");
 }
 
 /// End-to-end phase-1 contract: install a tiny package into a temp root

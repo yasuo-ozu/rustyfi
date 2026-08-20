@@ -54,7 +54,7 @@ pub fn uninstall(name: &str, opts: &RootOptions) -> Result<(), Error> {
         prune_empty_upward(&root, &dir)?;
     }
 
-    receipts::remove(&root, name)?;
+    receipts::remove_for(&root, name, receipt.lang)?;
     Ok(())
 }
 

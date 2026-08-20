@@ -1,5 +1,5 @@
 //! Manifest-mode install (plan §5.3, §8 phase 2): the no-`PATH`
-//! `satyrographos install`. Read `Satyrfile.toml` + `Satyrfile.lock`, diff
+//! `satyrographos install`. Read `Satyristes` + `Satyristes.lock`, diff
 //! each entry's freshly-computed source hash against the lock (and against the
 //! installed receipt), and re-materialise **only** the entries that actually
 //! changed — leaving unchanged entries' files bit-for-bit untouched (so their
@@ -32,7 +32,8 @@ use crate::ops::registry_install::{self, Resolved};
 use crate::ops::uninstall::RootOptions;
 use crate::registry::{self, RegistryDepSource, RegistryOptions};
 use crate::roots::RootSelection;
-use crate::satyrfile::{self, SourceKind};
+use crate::source::SourceKind;
+use crate::satyristes;
 use crate::solve;
 use crate::version::Constraint;
 use crate::{receipts, stage, util};
@@ -65,8 +66,8 @@ pub fn install_manifest(
     install_manifest_reg(manifest_path, opts, &RegistryOptions::default())
 }
 
-/// Reconcile `manifest_path`'s `Satyrfile.toml` against its sibling
-/// `Satyrfile.lock` and the receipts in the resolved root, materialising only
+/// Reconcile `manifest_path`'s `Satyristes` against its sibling
+/// `Satyristes.lock` and the receipts in the resolved root, materialising only
 /// changed/missing/new entries and rewriting the lockfile to mirror the
 /// manifest (plan §5.3/§5.4). `reg_opts` supplies the registry URL/cache for
 /// `{ registry = … }` sources and the clone cache/`--offline` for `{ git = …
@@ -76,7 +77,7 @@ pub fn install_manifest_reg(
     opts: &RootOptions,
     reg_opts: &RegistryOptions,
 ) -> Result<ManifestReport, Error> {
-    let manifest = satyrfile::read(manifest_path)?;
+    let manifest = satyristes::read_project(manifest_path)?;
     let manifest_dir = manifest_path
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
@@ -87,7 +88,7 @@ pub fn install_manifest_reg(
     // design §2.1/§3.2) into `reg_opts` when the caller did not already set
     // them explicitly (same explicit-wins-over-manifest precedence as
     // `resolve_url`/`resolve_mirrors`) — a project can declare mirrors or a
-    // sparse index kind in `Satyrfile.toml` and every registry-sourced entry
+    // sparse index kind in `Satyristes` and every registry-sourced entry
     // below (both the direct install and the transitive solver closure) picks
     // it up with no extra flag.
     let effective_reg_opts = RegistryOptions {
@@ -114,6 +115,8 @@ pub fn install_manifest_reg(
     for lib in &manifest.libraries {
         let locked = old_lock.get(&lib.name);
         let install_opts = |force: bool| InstallOptions {
+            // A reconciled dependency takes whatever its own manifest declares.
+            lang: None,
             lib_root: opts.lib_root.clone(),
             dest: opts.dest.clone(),
             libraries: None,
@@ -191,7 +194,7 @@ pub fn install_manifest_reg(
                 report.installed.push(ir);
                 new_entries.push(LockEntry {
                     name: lib.name.clone(),
-                    source: satyrfile::SourceSpec {
+                    source: crate::source::SourceSpec {
                         git: Some(git.to_string()),
                         rev: Some(checkout.resolved_rev.clone()),
                         ..Default::default()
@@ -257,7 +260,7 @@ struct RegDirect {
 #[allow(clippy::too_many_arguments)]
 fn install_registry_closure(
     reg_directs: &[RegDirect],
-    manifest: &satyrfile::Satyrfile,
+    manifest: &satyristes::Project,
     old_lock: &Lockfile,
     root: &Path,
     opts: &RootOptions,
@@ -397,6 +400,7 @@ fn materialize_registry_pin(
     }
     let force = receipts::exists(root, label);
     let install_opts = InstallOptions {
+        lang: None,
         lib_root: opts.lib_root.clone(),
         dest: opts.dest.clone(),
         libraries: None,
@@ -413,7 +417,7 @@ fn materialize_registry_pin(
 fn registry_lock_entry(name: &str, pkg: &str, resolved: &Resolved) -> LockEntry {
     LockEntry {
         name: name.to_string(),
-        source: crate::satyrfile::SourceSpec {
+        source: crate::source::SourceSpec {
             registry: Some(pkg.to_string()),
             version: Some(resolved.version.clone()),
             ..Default::default()
@@ -424,7 +428,7 @@ fn registry_lock_entry(name: &str, pkg: &str, resolved: &Resolved) -> LockEntry 
     }
 }
 
-/// Resolve a manifest `path` source relative to the `Satyrfile.toml`'s own
+/// Resolve a manifest `path` source relative to the `Satyristes`'s own
 /// directory (an absolute source path is used verbatim).
 fn resolve_source_path(manifest_dir: &Path, rel: &str) -> PathBuf {
     let p = Path::new(rel);

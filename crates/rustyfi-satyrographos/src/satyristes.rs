@@ -21,7 +21,7 @@
 //! version), `(opam …)`, `(libraryDoc …)`, `(compatibility …)` are
 //! parsed-and-ignored; anything else is a hard error naming the form.
 //!
-//! Inside `(library …)`: `(name "…")`, `(version "…")`,
+//! Inside `(library …)`: `(name "…")`, `(version "…")`, `(lang 0.0|0.1)`,
 //! `(sources ((KIND …) …))`, `(dependencies ((name ()) …))`; `(opam …)`,
 //! `(compatibility …)`, `(libraryDoc …)` ignored; anything else errors.
 //!
@@ -36,10 +36,11 @@
 //! | `(file "dst" "src")` | `File` |
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::error::Error;
-use crate::manifest::{self, FileDecl, FileKind, Manifest, PackageMeta, PackagePlan};
+use crate::manifest::{self, FileDecl, FileKind, Lang, Manifest, PackageMeta, PackagePlan};
+use crate::source::{LibraryEntry, RegistryConfig, RegistryKind, SourceSpec};
 use crate::util;
 
 /// The upstream build-file name (plan §2/§5.5).
@@ -223,10 +224,36 @@ fn parse(input: &str) -> Result<Vec<Sexp>, ParseError> {
 // Interpretation: S-expressions -> library declarations -> PackagePlan.
 // ---------------------------------------------------------------------------
 
+/// A `(libraryDoc ...)` block: a document built FROM a library rather than a
+/// library itself. Unlike `(library ...)` it carries `(build ...)` command
+/// lines, which is the whole point — the products are made by running a
+/// typesetter, not copied.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DocTarget {
+    /// The doc's own name, e.g. `rustyfi-manual-doc`.
+    pub name: String,
+    pub version: String,
+    /// Each `(build (CMD ARG ...))` line, in declaration order. The first
+    /// token is the program; `rustyfi` and `satysfi` mean "the typesetter",
+    /// resolved by the caller.
+    pub build: Vec<Vec<String>>,
+    /// `(sources ((doc "dst" "src") ...))` — what the build produces. `src` is
+    /// relative to the MANIFEST, not to [`Self::working_directory`].
+    pub sources: Vec<(String, String)>,
+    /// Which SATySFi generation this doc is written for, `(lang 0.0|0.1)`.
+    pub lang: Lang,
+    /// `(workingDirectory "dir")` — where the build commands run, relative to
+    /// the manifest. Upstream manifests keep a doc's sources in `doc/` and
+    /// build there, so the command line names `great-package.saty` while the
+    /// product is declared as `doc/great-package.pdf`.
+    pub working_directory: Option<String>,
+}
+
 /// One `(library ...)` block, before file-existence resolution.
 #[derive(Debug)]
 struct Library {
     name: String,
+    lang: Lang,
     version: String,
     sources: Vec<FileDecl>,
     dependencies: BTreeMap<String, String>,
@@ -259,8 +286,137 @@ fn ignore_note(kind: &str) {
     }
 }
 
-/// Read every `(library ...)` block from a parsed Satyristes.
+/// Every `(libraryDoc ...)` block, in declaration order.
+pub fn doc_targets(source_root: &Path) -> Result<Vec<DocTarget>, Error> {
+    let path = source_root.join(SATYRISTES_NAME);
+    let text = util::read_to_string(&path)?;
+    let forms = parse(&text).map_err(|pe| Error::Satyristes {
+        path: path.clone(),
+        message: pe.to_string(),
+    })?;
+    split_forms(&forms)
+        .map(|(_, docs)| docs)
+        .map_err(|message| Error::Satyristes { path, message })
+}
+
+/// The `(library ...)` blocks alone. Only the unit tests want this view;
+/// `read` needs the docs too, so it calls [`split_forms`] directly.
+#[cfg(test)]
 fn libraries_from(forms: &[Sexp]) -> Result<Vec<Library>, String> {
+    Ok(split_forms(forms)?.0)
+}
+
+/// A `Satyristes` read as a PROJECT manifest: the dependencies that name a
+/// source, plus the registry the project prefers.
+///
+/// The same file serves both roles. `(library ...)` describes what this
+/// directory PUBLISHES; the dependency payloads describe what it CONSUMES, and
+/// this view is the consuming half — the role `Satyristes` used to play.
+#[derive(Debug, Default)]
+pub struct Project {
+    /// Every dependency that named a source, in declaration order.
+    pub libraries: Vec<LibraryEntry>,
+    /// The top-level `(registry ...)` form, if present.
+    pub registry: Option<RegistryConfig>,
+}
+
+impl Project {
+    pub fn registry_url(&self) -> Option<&str> {
+        self.registry.as_ref().and_then(|r| r.url.as_deref())
+    }
+
+    pub fn registry_mirrors(&self) -> &[String] {
+        self.registry.as_ref().map(|r| r.mirrors.as_slice()).unwrap_or(&[])
+    }
+
+    pub fn registry_kind(&self) -> Option<RegistryKind> {
+        self.registry.as_ref().and_then(|r| r.kind)
+    }
+}
+
+/// Read `path` as a project manifest.
+pub fn read_project(path: &Path) -> Result<Project, Error> {
+    let text = util::read_to_string(path)?;
+    let forms = parse(&text).map_err(|pe| Error::Satyristes {
+        path: path.to_path_buf(),
+        message: pe.to_string(),
+    })?;
+    let mut project = Project::default();
+    for form in &forms {
+        let Sexp::List(list) = form else { continue };
+        match head(list) {
+            Some("registry") => project.registry = Some(parse_registry(&list[1..])),
+            Some("library") => {
+                for item in &list[1..] {
+                    let Sexp::List(field) = item else { continue };
+                    if head(field) == Some("dependencies") {
+                        for (name, source) in parse_dependency_entries(&field[1..]) {
+                            match source {
+                                Ok(Some(source)) => {
+                                    project.libraries.push(LibraryEntry { name, source })
+                                }
+                                Ok(None) => {}
+                                Err(kind) => return Err(Error::UnsupportedSource { kind }),
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(project)
+}
+
+/// `(registry (url "…") (kind git|sparse|auto) (mirrors ("…" "…")))` — the
+/// project-level registry, previously `Satyristes`'s `[registry]` table.
+fn parse_registry(items: &[Sexp]) -> RegistryConfig {
+    let mut cfg = RegistryConfig::default();
+    for item in items {
+        let Sexp::List(kv) = item else { continue };
+        match head(kv) {
+            Some("url") => cfg.url = kv.get(1).and_then(scalar).map(str::to_string),
+            Some("kind") => {
+                cfg.kind = match kv.get(1).and_then(scalar) {
+                    Some("git") => Some(RegistryKind::Git),
+                    Some("sparse") => Some(RegistryKind::Sparse),
+                    Some("auto") => Some(RegistryKind::Auto),
+                    _ => None,
+                }
+            }
+            Some("mirrors") => {
+                if let Some(Sexp::List(urls)) = kv.get(1) {
+                    cfg.mirrors = urls.iter().filter_map(scalar).map(str::to_string).collect();
+                }
+            }
+            Some(other) => ignore_note(other),
+            None => {}
+        }
+    }
+    cfg
+}
+
+/// The nearest `Satyristes` at or above `start`, if any — how a project
+/// manifest is located when none is named.
+pub fn find_upward(start: &Path) -> Option<PathBuf> {
+    let start = start
+        .canonicalize()
+        .or_else(|_| std::path::absolute(start))
+        .unwrap_or_else(|_| start.to_path_buf());
+    let mut dir = Some(start.as_path());
+    while let Some(d) = dir {
+        let candidate = d.join(SATYRISTES_NAME);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+        dir = d.parent();
+    }
+    None
+}
+
+/// One pass over the top-level forms, sorting them into libraries and docs.
+fn split_forms(forms: &[Sexp]) -> Result<(Vec<Library>, Vec<DocTarget>), String> {
+    let mut docs = Vec::new();
     let mut libs = Vec::new();
     for form in forms {
         let list = match form {
@@ -270,18 +426,127 @@ fn libraries_from(forms: &[Sexp]) -> Result<Vec<Library>, String> {
         let kind = head(list).ok_or("top-level form must start with a symbol")?;
         match kind {
             "library" => libs.push(parse_library(&list[1..])?),
+            "libraryDoc" => docs.push(parse_library_doc(&list[1..])?),
             // Parsed and ignored (plan §5.5). `version` here is the
             // *Satyristes format* version, distinct from a library's own.
-            "version" | "opam" | "libraryDoc" | "compatibility" => ignore_note(kind),
+            "version" | "opam" | "compatibility" => ignore_note(kind),
             other => return Err(format!("unknown top-level form `{other}`")),
         }
     }
-    Ok(libs)
+    Ok((libs, docs))
+}
+
+/// `(libraryDoc (name ...) (version ...) (build ((cmd arg ...) ...))
+///              (sources ((doc "dst" "src") ...)) (dependencies ...))`.
+/// `dependencies` is accepted and ignored: nothing here installs, so there is
+/// nothing to order.
+fn parse_library_doc(items: &[Sexp]) -> Result<DocTarget, String> {
+    let mut name = None;
+    let mut version = None;
+    let mut build = Vec::new();
+    let mut sources = Vec::new();
+    let mut working_directory = None;
+    let mut lang = Lang::default();
+    for item in items {
+        let list = match item {
+            Sexp::List(l) if !l.is_empty() => l,
+            _ => return Err("`libraryDoc` field must be a non-empty list".to_string()),
+        };
+        match head(list).ok_or("`libraryDoc` field must start with a symbol")? {
+            "name" => {
+                name = Some(
+                    list.get(1)
+                        .and_then(scalar)
+                        .ok_or("`(name ...)` needs a string value")?
+                        .to_string(),
+                )
+            }
+            "version" => {
+                version = Some(
+                    list.get(1)
+                        .and_then(scalar)
+                        .ok_or("`(version ...)` needs a string value")?
+                        .to_string(),
+                )
+            }
+            "build" => {
+                let lines = match list.get(1) {
+                    Some(Sexp::List(l)) => l,
+                    _ => return Err("`(build ...)` needs a list of command lines".to_string()),
+                };
+                for line in lines {
+                    let Sexp::List(words) = line else {
+                        return Err("each `build` entry must be a command line list".to_string());
+                    };
+                    let cmd: Option<Vec<String>> =
+                        words.iter().map(|w| scalar(w).map(str::to_string)).collect();
+                    let cmd = cmd.ok_or("a `build` command line must be all scalars")?;
+                    if cmd.is_empty() {
+                        return Err("a `build` command line must name a program".to_string());
+                    }
+                    build.push(cmd);
+                }
+            }
+            "sources" => {
+                let decls = match list.get(1) {
+                    Some(Sexp::List(l)) => l,
+                    _ => return Err("`(sources ...)` needs a list".to_string()),
+                };
+                for decl in decls {
+                    let Sexp::List(d) = decl else {
+                        return Err("each `sources` entry must be a list".to_string());
+                    };
+                    match head(d) {
+                        Some("doc") => {
+                            let dst = d.get(1).and_then(scalar).ok_or("`(doc ...)` needs a dst")?;
+                            let src = d.get(2).and_then(scalar).ok_or("`(doc ...)` needs a src")?;
+                            sources.push((dst.to_string(), src.to_string()));
+                        }
+                        // A doc may also ship non-`doc` files; nothing here
+                        // installs them, so they are read past rather than
+                        // rejected.
+                        _ => ignore_note("libraryDoc source"),
+                    }
+                }
+            }
+            "lang" => lang = parse_lang(list)?,
+            "workingDirectory" => {
+                working_directory = Some(
+                    list.get(1)
+                        .and_then(scalar)
+                        .ok_or("`(workingDirectory ...)` needs a string value")?
+                        .to_string(),
+                )
+            }
+            // Anything else is read past rather than rejected. These manifests
+            // are written for upstream Satyrographos, which has fields this
+            // port does not model; refusing them would make an unrelated
+            // `install` fail on a doc block it never even looks at.
+            other => ignore_note(other),
+        }
+    }
+    Ok(DocTarget {
+        name: name.ok_or("`libraryDoc` needs a `(name ...)`")?,
+        version: version.unwrap_or_default(),
+        build,
+        sources,
+        working_directory,
+        lang,
+    })
+}
+
+/// `(lang 0.0)` / `(lang "0.1")` — which SATySFi generation the block is
+/// written for. A block that says nothing is 0.0, which is what every manifest
+/// written before this existed meant.
+fn parse_lang(list: &[Sexp]) -> Result<Lang, String> {
+    let value = list.get(1).and_then(scalar).ok_or("`(lang ...)` needs a value")?;
+    Lang::parse(value).ok_or_else(|| format!("unknown `lang` value `{value}` (expected 0.0 or 0.1)"))
 }
 
 fn parse_library(items: &[Sexp]) -> Result<Library, String> {
     let mut name = None;
     let mut version = None;
+    let mut lang = Lang::default();
     let mut sources = Vec::new();
     let mut dependencies = BTreeMap::new();
     for item in items {
@@ -309,6 +574,7 @@ fn parse_library(items: &[Sexp]) -> Result<Library, String> {
             }
             "sources" => sources = parse_sources(&list[1..])?,
             "dependencies" => dependencies = parse_dependencies(&list[1..]),
+            "lang" => lang = parse_lang(list)?,
             "opam" | "compatibility" | "libraryDoc" => ignore_note(field),
             other => return Err(format!("unknown `library` field `{other}`")),
         }
@@ -316,6 +582,7 @@ fn parse_library(items: &[Sexp]) -> Result<Library, String> {
     Ok(Library {
         name: name.ok_or("`library` is missing a `(name ...)`")?,
         version: version.ok_or("`library` is missing a `(version ...)`")?,
+        lang,
         sources,
         dependencies,
     })
@@ -396,7 +663,30 @@ fn two_args(
 /// (real constraints live in the sibling `.opam`, no analog here), so every
 /// dependency is recorded with the wildcard `"*"` constraint (plan §5.5).
 fn parse_dependencies(args: &[Sexp]) -> BTreeMap<String, String> {
-    let mut deps = BTreeMap::new();
+    parse_dependency_entries(args)
+        .into_iter()
+        .map(|(name, _)| (name, "*".to_string()))
+        .collect()
+}
+
+/// `(dependencies ((name (SOURCE ...)) ...))` — each entry's name plus, when
+/// the payload names one, where to get it.
+///
+/// Upstream's payload is a version-constraint list, and an empty `()` still
+/// means exactly what it always did: a declared dependency with no source,
+/// which nothing can materialise. A payload naming a source is this port's
+/// extension, and it is what makes `Satyristes` a PROJECT manifest — upstream
+/// gets sources from OPAM, which this port does not have.
+///
+/// ```text
+/// (dependencies
+///   ((xpath   ((path "../vendor/xpath")))
+///    (theano  ((registry "fonts-theano") (version "1.0.0")))
+///    (grafite ((git "https://…") (rev "abc1234")))
+///    (base    ())))
+/// ```
+fn parse_dependency_entries(args: &[Sexp]) -> Vec<(String, Result<Option<SourceSpec>, String>)> {
+    let mut deps = Vec::new();
     for arg in args {
         let entries = match arg {
             Sexp::List(children) if matches!(children.first(), Some(Sexp::List(_))) => {
@@ -407,12 +697,48 @@ fn parse_dependencies(args: &[Sexp]) -> BTreeMap<String, String> {
         for entry in entries {
             if let Sexp::List(pair) = entry {
                 if let Some(name) = pair.first().and_then(scalar) {
-                    deps.insert(name.to_string(), "*".to_string());
+                    deps.push((name.to_string(), source_from(&pair[1..])));
                 }
             }
         }
     }
     deps
+}
+
+/// A source out of a dependency's payload, if it names one.
+fn source_from(payload: &[Sexp]) -> Result<Option<SourceSpec>, String> {
+    let forms = match payload.first() {
+        Some(Sexp::List(l)) if matches!(l.first(), Some(Sexp::List(_))) => l.as_slice(),
+        Some(Sexp::List(_)) => payload,
+        _ => return Ok(None),
+    };
+    let mut spec = SourceSpec::default();
+    let mut unknown: Option<String> = None;
+    for form in forms {
+        let Sexp::List(kv) = form else { continue };
+        let (Some(key), Some(value)) = (head(kv), kv.get(1).and_then(scalar)) else {
+            continue;
+        };
+        match key {
+            "path" => spec.path = Some(value.to_string()),
+            "git" => spec.git = Some(value.to_string()),
+            "rev" => spec.rev = Some(value.to_string()),
+            "registry" => spec.registry = Some(value.to_string()),
+            "version" => spec.version = Some(value.to_string()),
+            other => unknown.get_or_insert_with(|| other.to_string()).clone_from(&other.to_string()),
+        }
+    }
+    if spec != SourceSpec::default() {
+        return Ok(Some(spec));
+    }
+    // `()` is upstream's "declared, no constraints" — a dependency with no
+    // source, which nothing materialises. A payload that names something we do
+    // not recognise is a different thing: a typo or an unsupported kind, and
+    // silently treating it as "no source" would drop the dependency.
+    match unknown {
+        Some(kind) => Err(kind),
+        None => Ok(None),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -430,15 +756,26 @@ pub fn read(source_root: &Path) -> Result<Vec<PackagePlan>, Error> {
         path: path.clone(),
         message: pe.to_string(),
     })?;
-    let libs = libraries_from(&forms).map_err(|message| Error::Satyristes {
+    let (libs, docs) = split_forms(&forms).map_err(|message| Error::Satyristes {
         path: path.clone(),
         message,
     })?;
     if libs.is_empty() {
-        return Err(Error::Satyristes {
-            path,
-            message: "no `(library ...)` block found".to_string(),
-        });
+        // A doc-only manifest is legitimate — it just has nothing to INSTALL,
+        // so say where its targets are handled instead of only what is absent.
+        let message = if docs.is_empty() {
+            "no `(library ...)` block found".to_string()
+        } else {
+            format!(
+                "no `(library ...)` block found; this manifest declares only doc \
+                 target(s) (`{}`), which `satyrographos build` runs",
+                docs.iter()
+                    .map(|d| d.name.clone())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        };
+        return Err(Error::Satyristes { path, message });
     }
     let mut plans = Vec::with_capacity(libs.len());
     for lib in libs {
@@ -450,6 +787,7 @@ pub fn read(source_root: &Path) -> Result<Vec<PackagePlan>, Error> {
                 // on it (plan §5.1/§10).
                 rustyfi_version_compat: String::new(),
                 description: None,
+                lang: lib.lang,
             },
             files: lib.sources,
             dependencies: lib.dependencies,

@@ -162,7 +162,7 @@ fn cmd_compile(m: &ArgMatches) -> anyhow::Result<()> {
     let (version, mode) = resolve_version_and_mode(target_version, deps_flag, &input)?;
     // Phase-7c saphe solver, C3: whether this compile is package-manager
     // driven (Envelopes/manifest mode) — decides below whether a sibling
-    // `Satyrfile.lock`'s digest folds into the cache key. Captured before
+    // `Satyristes.lock`'s digest folds into the cache key. Captured before
     // `mode` is moved into `LoadOptions`.
     let is_envelopes_mode = matches!(mode, rustyfi_loader::LoadMode::Envelopes { .. });
 
@@ -202,12 +202,12 @@ fn cmd_compile(m: &ArgMatches) -> anyhow::Result<()> {
 
     // Phase-7c saphe solver, C3: when this compile is package-manager driven
     // (Envelopes/manifest mode), best-effort locate the project's
-    // `Satyrfile.toml`/`Satyrfile.lock` (upward search from the input,
+    // `Satyristes`/`Satyristes.lock` (upward search from the input,
     // exactly like `--lib-root` discovery) and fold the lock's digest into
     // the cache key below, so a `saphe update`/reconcile that changes a
     // locked package's version invalidates the cache even when the entry
     // document's own bytes did not change. A project with no
-    // `Satyrfile.toml`/lock (or a Legacy-mode compile) simply folds in
+    // `Satyristes`/lock (or a Legacy-mode compile) simply folds in
     // `None`, unchanged from before this fold existed.
     let deps_lock_digest: Option<String> = is_envelopes_mode
         .then(|| discover_deps_lock_digest(&input))
@@ -506,16 +506,16 @@ fn discover_lib_roots(input: &std::path::Path) -> Vec<PathBuf> {
         .unwrap_or_default()
 }
 
-/// Phase-7c saphe solver, C3: find the nearest `Satyrfile.toml` at or above
+/// Phase-7c saphe solver, C3: find the nearest `Satyristes` at or above
 /// `input`'s directory (same upward-search shape as [`discover_lib_root`])
-/// and, if its sibling `Satyrfile.lock` exists and has at least one locked
+/// and, if its sibling `Satyristes.lock` exists and has at least one locked
 /// entry, return `Some(digest)`. `None` covers every "nothing to fold in"
-/// case uniformly — no `Satyrfile.toml` found, no lockfile yet, or an empty
+/// case uniformly — no `Satyristes` found, no lockfile yet, or an empty
 /// one — so the cache key is byte-for-byte unchanged from before this fold
 /// for any project that has not adopted the package manager.
 fn discover_deps_lock_digest(input: &std::path::Path) -> Option<String> {
     let dir = input.parent()?;
-    let manifest_path = rustyfi_satyrographos::satyrfile::find_upward(dir)?;
+    let manifest_path = rustyfi_satyrographos::find_upward(dir)?;
     let lock_path = rustyfi_satyrographos::lockfile::lock_path_for(&manifest_path);
     let lock = rustyfi_satyrographos::lockfile::read(&lock_path).ok()?;
     if lock.libraries.is_empty() {
@@ -663,8 +663,8 @@ use rustyfi_satyrographos as sg;
 fn sg_exit_code(err: &sg::Error) -> i32 {
     use sg::Error::*;
     match err {
-        // Nothing to operate on (no root, no Satyrfile, or no registry config).
-        RootResolution | SatyrfileNotFound | NoRegistry => 3,
+        // Nothing to operate on (no root, no Satyristes, or no registry config).
+        RootResolution | ManifestNotFound | NoRegistry => 3,
         // Not-found: a missing receipt, or a package/version absent from the
         // index — including the phase-7c solver's own "no version fits"
         // outcomes ([`Unsatisfiable`]/[`VersionConflict`]), which are the
@@ -675,8 +675,13 @@ fn sg_exit_code(err: &sg::Error) -> i32 {
         | VersionNotFound { .. }
         | Unsatisfiable { .. }
         | VersionConflict { .. } => 4,
-        // Library-selection / filter usage errors (plan §4.1).
-        LibraryFilter { .. } | AmbiguousLibrary { .. } => 2,
+        // Library/doc-selection / filter usage errors (plan §4.1).
+        LibraryFilter { .. } | AmbiguousLibrary { .. } | AmbiguousDoc { .. } | DocFilter { .. } => 2,
+        // Nothing to build here.
+        NoDocTarget => 3,
+        // A doc's own build command failed: its exit status is the story, and
+        // the typesetter has already said why on stderr.
+        DocBuild { .. } => 1,
         // Filesystem / archive / manifest / Satyristes / lockfile / registry-
         // fetch / integrity failures.
         Io { .. }
@@ -690,7 +695,7 @@ fn sg_exit_code(err: &sg::Error) -> i32 {
         | MissingDst { .. }
         | Satyristes { .. }
         | AmbiguousSource { .. }
-        | Satyrfile { .. }
+        | ProjectManifest { .. }
         | Lockfile { .. }
         | UnsupportedSource { .. }
         | GitFailed { .. }
@@ -722,6 +727,7 @@ fn run_satyrographos(m: &ArgMatches) -> i32 {
     let result = match m.subcommand() {
         Some(("install", sm)) => cmd_install(sm),
         Some(("uninstall", sm)) => cmd_uninstall(sm),
+        Some(("build", sm)) => cmd_build(sm),
         Some(("list", sm)) => cmd_list(sm),
         Some(("status", sm)) => return cmd_status(sm),
         Some(("search", sm)) => cmd_search(sm),
@@ -732,6 +738,34 @@ fn run_satyrographos(m: &ArgMatches) -> i32 {
         }
     };
     finish(result, sg_exit_code)
+}
+
+/// `satyrographos build [PATH] [--doc NAME]` — run a `(libraryDoc ...)`'s own
+/// build commands. The typesetter is THIS executable, so an unpacked archive
+/// builds its docs with the binary beside them rather than whatever `rustyfi`
+/// a `PATH` lookup happens to find.
+fn cmd_build(m: &ArgMatches) -> Result<(), sg::Error> {
+    let source = m
+        .get_one::<PathBuf>("path")
+        .cloned()
+        .unwrap_or_else(|| PathBuf::from("."));
+    let opts = sg::BuildOptions {
+        lang: m.get_one::<String>("lang").and_then(|s| sg::Lang::parse(s)),
+        docs: m
+            .get_many::<String>("doc")
+            .map(|v| v.cloned().collect())
+            .unwrap_or_default(),
+        typesetter: std::env::current_exe().ok(),
+        verbose: !m.get_flag("quiet"),
+        lib_root: m.get_one::<PathBuf>("lib_root").cloned(),
+    };
+    for report in sg::build(&source, &opts)? {
+        println!("built {} ({} command(s))", report.name, report.commands.len());
+        for (product, present) in &report.products {
+            println!("  {} {}", if *present { "->" } else { "!!" }, product);
+        }
+    }
+    Ok(())
 }
 
 fn root_options(m: &ArgMatches) -> sg::RootOptions {
@@ -754,9 +788,9 @@ fn registry_options(m: &ArgMatches) -> sg::RegistryOptions {
     }
 }
 
-/// The nearest `Satyrfile.toml`, searched upward from the current directory
+/// The nearest `Satyristes`, searched upward from the current directory
 /// (plan §5.3), or `None` if there is none. Callers map the `None` case to the
-/// exit-`3` [`sg::Error::SatyrfileNotFound`]. Shared by manifest-mode `install`
+/// exit-`3` [`sg::Error::ManifestNotFound`]. Shared by manifest-mode `install`
 /// and by `update`.
 fn find_manifest() -> Option<PathBuf> {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -764,7 +798,7 @@ fn find_manifest() -> Option<PathBuf> {
 }
 
 fn cmd_install(m: &ArgMatches) -> Result<(), sg::Error> {
-    // No PATH → phase-2 manifest mode (reconcile the nearest Satyrfile.toml).
+    // No PATH → phase-2 manifest mode (reconcile the nearest Satyristes).
     let Some(arg) = m.get_one::<String>("path") else {
         return cmd_install_manifest(m);
     };
@@ -776,6 +810,9 @@ fn cmd_install(m: &ArgMatches) -> Result<(), sg::Error> {
         lib_root,
         dest,
         libraries,
+        lang: m
+            .get_one::<String>("lang")
+            .and_then(|s| sg::Lang::parse(s)),
         force: m.get_flag("force"),
     };
 
@@ -787,7 +824,7 @@ fn cmd_install(m: &ArgMatches) -> Result<(), sg::Error> {
         let (name, version) = split_name_version(arg);
         let reg_opts = registry_options(m);
         // Registry-URL precedence (plan §5.4 / this port's [registry] section):
-        // --registry flag > $RUSTYFI_REGISTRY > the nearest Satyrfile's
+        // --registry flag > $RUSTYFI_REGISTRY > the nearest Satyristes's
         // [registry] url. The first two live in `reg_opts`; supply the third as
         // the fallback so a project with a declared registry needs no flag.
         let fallback = nearest_registry_url();
@@ -819,7 +856,7 @@ fn split_name_version(arg: &str) -> (&str, Option<&str>) {
     }
 }
 
-/// The `[registry] url` of the nearest `Satyrfile.toml` (searched upward from
+/// The `(registry (url …))` of the nearest `Satyristes` (searched upward from
 /// the working directory), or `None` if there is none / it declares no url.
 /// Used as the lowest-precedence registry-URL fallback for a direct
 /// `install NAME[@VERSION]` (parse failures are silently ignored — a broken
@@ -827,18 +864,18 @@ fn split_name_version(arg: &str) -> (&str, Option<&str>) {
 fn nearest_registry_url() -> Option<String> {
     let cwd = std::env::current_dir().ok()?;
     let manifest = sg::find_upward(&cwd)?;
-    let satyrfile = sg::satyrfile::read(&manifest).ok()?;
-    satyrfile.registry_url().map(str::to_owned)
+    let project = sg::satyristes::read_project(&manifest).ok()?;
+    project.registry_url().map(str::to_owned)
 }
 
-/// Phase-2 manifest mode (plan §5.3, §8): locate `Satyrfile.toml` by upward
-/// search from the current directory, reconcile it against `Satyrfile.lock`
-/// and the installed receipts, and re-materialise only the changed/missing
-/// entries. When no `--lib-root`/`--dest`/`$RUSTYFI_LIB_ROOT` is given, default
-/// the root to a `lib-rustyfi/` sibling of the manifest if one exists (§3:
-/// "Satyrfile.toml — sibling to lib-rustyfi/").
+/// Manifest mode: locate `Satyristes` by upward search from the current
+/// directory, reconcile the dependencies that name a source against
+/// `Satyristes.lock` and the installed receipts, and re-materialise only the
+/// changed/missing entries. When no `--lib-root`/`--dest`/`$RUSTYFI_LIB_ROOT`
+/// is given, default the root to a `lib-rustyfi/` sibling of the manifest if
+/// one exists.
 fn cmd_install_manifest(m: &ArgMatches) -> Result<(), sg::Error> {
-    let manifest = find_manifest().ok_or(sg::Error::SatyrfileNotFound)?;
+    let manifest = find_manifest().ok_or(sg::Error::ManifestNotFound)?;
 
     let sg::RootOptions { mut lib_root, dest } = root_options(m);
     if lib_root.is_none() && dest.is_none() && std::env::var_os("RUSTYFI_LIB_ROOT").is_none() {
@@ -883,7 +920,13 @@ fn cmd_list(m: &ArgMatches) -> Result<(), sg::Error> {
         println!("(no packages installed)");
     } else {
         for pkg in &packages {
-            println!("{} {} ({} files)", pkg.name, pkg.version, pkg.file_count);
+            println!(
+                "{} {} (lang {}, {} files)",
+                pkg.name,
+                pkg.version,
+                pkg.lang.as_str(),
+                pkg.file_count
+            );
         }
     }
     Ok(())
@@ -910,9 +953,9 @@ fn cmd_search(m: &ArgMatches) -> Result<(), sg::Error> {
 }
 
 /// `update` (plan §8, §5.4 step 1): re-fetch the index and report available
-/// upgrades against the nearest `Satyrfile.lock` (does not apply them).
+/// upgrades against the nearest `Satyristes.lock` (does not apply them).
 fn cmd_update(m: &ArgMatches) -> Result<(), sg::Error> {
-    let manifest = find_manifest().ok_or(sg::Error::SatyrfileNotFound)?;
+    let manifest = find_manifest().ok_or(sg::Error::ManifestNotFound)?;
     let report = sg::update(&manifest, &registry_options(m))?;
 
     if let Some(commit) = &report.commit {

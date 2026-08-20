@@ -33,7 +33,7 @@
 //! - **Verify** the tarball's SHA-256 against the index entry ([`verify_sha256`])
 //!   — the caller does this *before* touching `dist/` (plan §5.4 step 3).
 //! - **Acquire a git package source** ([`acquire_git_source`], saphe 7d slice
-//!   S3): a `Satyrfile.toml` `{ git = …, rev = … }` entry — distinct from a
+//!   S3): a `Satyristes` `{ git = …, rev = … }` entry — distinct from a
 //!   registry index — clones the repo (pinned to `rev` when given) into its
 //!   own cache leaf; the checkout is then handed to `ops::reconcile` as a
 //!   plain directory, the same materialisation path a `{ path = … }` source
@@ -58,7 +58,7 @@ use crate::util;
 use crate::version::{Constraint, Version};
 
 /// The environment variable consulted for the registry URL when no
-/// `--registry` flag and no `Satyrfile.toml` `[registry]` url is given
+/// `--registry` flag and no `Satyristes` `[registry]` url is given
 /// (plan §5.4 step 1).
 pub const REGISTRY_ENV: &str = "RUSTYFI_REGISTRY";
 
@@ -75,7 +75,7 @@ pub const OFFLINE_ENV: &str = "RUSTYFI_OFFLINE";
 /// Environment override for the git package-source clone cache directory
 /// (saphe 7d slice S3, design §3 S3): a sibling of the git-index cache
 /// ([`CACHE_ENV`]) and the archive cache ([`crate::cache::ARCHIVE_CACHE_ENV`])
-/// under its own leaf, so a `{ git = … }` `Satyrfile.toml` package source
+/// under its own leaf, so a `{ git = … }` `Satyristes` package source
 /// never collides with an index clone or a tarball blob. Production default is
 /// `$XDG_CACHE_HOME/rustyfi/git-sources/`.
 pub const GIT_SOURCE_CACHE_ENV: &str = "RUSTYFI_GIT_SOURCE_CACHE";
@@ -108,13 +108,13 @@ pub struct RegistryOptions {
     /// substitution** applied to the primary URL's path+query (see
     /// [`rewrite_to_mirror`]), verified against the *same* sha256 for a
     /// tarball. Empty by default — an explicit flag/env value (were one
-    /// added) would take precedence over a `Satyrfile.toml` `[registry]
+    /// added) would take precedence over a `Satyristes` `[registry]
     /// mirrors` fallback; see [`RegistryOptions::resolve_mirrors`].
     pub mirrors: Vec<String>,
     /// The index transport (mirrors/sparse design §3.2). `None` = today's
     /// local-dir/git dispatch by URL shape ([`satyrfile::RegistryKind::Auto`]);
     /// only `Some(Sparse)` selects the per-package HTTP index path.
-    pub kind: Option<crate::satyrfile::RegistryKind>,
+    pub kind: Option<crate::source::RegistryKind>,
 }
 
 impl RegistryOptions {
@@ -133,7 +133,7 @@ impl RegistryOptions {
     }
 
     /// Resolve the registry URL, preferring the explicit `--registry` flag,
-    /// then `$RUSTYFI_REGISTRY`, then the `fallback` (a `Satyrfile.toml`
+    /// then `$RUSTYFI_REGISTRY`, then the `fallback` (a `Satyristes`
     /// `[registry] url`, if any). No built-in default is shipped (the hosting
     /// repo is undecided, plan §10), so an unresolved URL is
     /// [`Error::NoRegistry`].
@@ -154,7 +154,7 @@ impl RegistryOptions {
 
     /// Resolve the mirror candidate list (mirrors design §2.1), preferring an
     /// explicit `self.mirrors` (e.g. a future `--registry-mirror` flag) over
-    /// `fallback` (a `Satyrfile.toml` `[registry] mirrors`) — the same
+    /// `fallback` (a `Satyristes` `[registry] mirrors`) — the same
     /// explicit-wins-over-manifest precedence [`resolve_url`] uses for the
     /// registry URL itself. `fallback` is used verbatim (not merged) when
     /// `self.mirrors` is empty.
@@ -237,7 +237,7 @@ enum RegistryBackend {
 /// - `Sparse`: `url` is a sparse-index base — no clone at all; `lookup` fetches
 ///   `packages/<name>.toml` over HTTP on demand (§3.3).
 pub fn acquire(url: &str, opts: &RegistryOptions) -> Result<Registry, Error> {
-    use crate::satyrfile::RegistryKind;
+    use crate::source::RegistryKind;
     match opts.kind.unwrap_or(RegistryKind::Auto) {
         RegistryKind::Sparse => Ok(Registry {
             backend: RegistryBackend::Sparse {
@@ -369,7 +369,7 @@ fn cache_key(url: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Git package sources (saphe 7d slice S3, design §3 S3): a `Satyrfile.toml`
+// Git package sources (saphe 7d slice S3, design §3 S3): a `Satyristes`
 // `[[library]] source = { git = "…", rev = "…" }` entry — a package fetched
 // directly from a git repo, as opposed to a `{ registry = … }` entry (a
 // package looked up in a registry index, which may itself be git-hosted;
@@ -389,7 +389,7 @@ pub struct GitSource {
     /// as a plain directory; no archive/verify step applies to a git source).
     pub root: PathBuf,
     /// The commit sha HEAD points at after checkout: what `reconcile` pins as
-    /// `Satyrfile.lock`'s `rev`, so a later reconcile is reproducible without
+    /// `Satyristes.lock`'s `rev`, so a later reconcile is reproducible without
     /// re-resolving a moving branch/tag name (design §3 S3: "record the git
     /// url + resolved rev").
     pub resolved_rev: String,

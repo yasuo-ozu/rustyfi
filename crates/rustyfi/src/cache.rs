@@ -128,7 +128,7 @@ impl Cache {
 ///    format would write the OTHER format's bytes to the requested output
 ///    (wrong extension, unparseable content).
 /// 8. (phase-7c saphe solver, C3 —)
-///    `deps_lock` — the resolved `Satyrfile.lock`'s
+///    `deps_lock` — the resolved `Satyristes.lock`'s
 ///    [`rustyfi_satyrographos::Lockfile::digest`], when the compile is
 ///    driven by a solved package-manager lock (Envelopes/manifest mode);
 ///    `None` when no lock is in play. Without this, a `saphe update` that

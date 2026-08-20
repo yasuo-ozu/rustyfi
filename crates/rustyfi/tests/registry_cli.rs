@@ -5,7 +5,7 @@
 //! - `install <name> --registry file://…` (registry form: the arg names no
 //!   path on disk, so it is a registry package) → golden stdout + `dist/`;
 //! - `search <term> --registry file://…` → golden stdout;
-//! - `update` → golden upgrade report against a reconciled `Satyrfile.lock`;
+//! - `update` → golden upgrade report against a reconciled `Satyristes.lock`;
 //! - a corrupted index digest → exit `5`, nothing under `dist/`.
 //!
 //! All of this runs with the default (feature-off) binary, so the whole test
@@ -213,11 +213,13 @@ fn cli_update_golden_output() {
     let proj = work.join("proj");
     std::fs::create_dir_all(&proj).unwrap();
     std::fs::write(
-        proj.join("Satyrfile.toml"),
+        proj.join("Satyristes"),
         format!(
-            "[registry]\nurl = \"{}\"\n\n\
-             [[library]]\nname = \"great-package\"\n\
-             source = {{ registry = \"great-package\", version = \"1.0.0\" }}\n",
+            "(version 0.0.2)\n\
+             (registry (url \"{}\"))\n\
+             (library (name \"proj\") (version \"0.1.0\")\n\
+               (sources ((packageDir \"src\")))\n\
+               (dependencies ((great-package ((registry \"great-package\") (version \"1.0.0\"))))))\n",
             file_url(&index)
         ),
     )
@@ -239,7 +241,7 @@ fn cli_update_golden_output() {
         "{stdout}"
     );
     // The lock is unchanged (still 1.0.0) — update only reports.
-    let lock = std::fs::read_to_string(proj.join("Satyrfile.lock")).unwrap();
+    let lock = std::fs::read_to_string(proj.join("Satyristes.lock")).unwrap();
     assert!(lock.contains("version = \"1.0.0\""), "{lock}");
     assert!(
         !lock.contains("1.1.0"),

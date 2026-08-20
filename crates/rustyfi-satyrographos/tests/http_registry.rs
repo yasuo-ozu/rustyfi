@@ -1036,25 +1036,23 @@ fn sparse_index_toml(version: &str, tarball_url: &str, sha256: &str, deps: &[(&s
     toml.into_bytes()
 }
 
-/// A `Satyrfile.toml` declaring a sparse `[registry]` (`url`/`kind`, plus
-/// `mirrors` when non-empty) and one `{ registry = … }` `[[library]]` entry.
+/// A `Satyristes` declaring a sparse `(registry ...)` (`url`/`kind`, plus
+/// `mirrors` when non-empty) and one registry-sourced dependency.
 fn write_sparse_manifest(tmp: &TempDir, base_url: &str, mirrors: &[String], pkg: &str, version: &str) -> PathBuf {
-    let mirrors_line = if mirrors.is_empty() {
+    let mirrors_form = if mirrors.is_empty() {
         String::new()
     } else {
         let quoted: Vec<String> = mirrors.iter().map(|m| format!("\"{m}\"")).collect();
-        format!("mirrors = [{}]\n", quoted.join(", "))
+        format!(" (mirrors ({}))", quoted.join(" "))
     };
     tmp.write(
-        "proj/Satyrfile.toml",
+        "proj/Satyristes",
         &format!(
-            "[registry]\n\
-             url = \"{base_url}\"\n\
-             kind = \"sparse\"\n\
-             {mirrors_line}\n\
-             [[library]]\n\
-             name = \"{pkg}\"\n\
-             source = {{ registry = \"{pkg}\", version = \"{version}\" }}\n"
+            "(version 0.0.2)\n\
+             (registry (url \"{base_url}\") (kind sparse){mirrors_form})\n\
+             (library (name \"proj\") (version \"0.1.0\")\n\
+               (sources ((packageDir \"src\")))\n\
+               (dependencies (({pkg} ((registry \"{pkg}\") (version \"{version}\"))))))\n"
         ),
     )
 }

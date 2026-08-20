@@ -1,5 +1,5 @@
 //! Phase-2 manifest/lockfile reconcile tests (plan §5.3, §9 phase 2): a
-//! `Satyrfile.toml` with two `{ path = … }` entries, driven through the
+//! `Satyristes` with two `{ path = … }` entries, driven through the
 //! library `install_manifest` API against a `--dest` root. Same `TempDir`
 //! pattern as `tests/ops.rs` / `rustyfi-loader/tests/loader.rs` — no extra
 //! dev-dependencies.
@@ -82,16 +82,23 @@ fn write_pkg(tmp: &TempDir, name: &str, version: &str, body: &str) {
     tmp.write(&format!("vendor/{name}/packages/{name}.satyh"), body);
 }
 
-/// A two-entry `Satyrfile.toml` at `<tmp>/proj/Satyrfile.toml`, sources under
-/// `../vendor/<name>` (relative to the manifest's own directory).
+/// A project `Satyristes` at `<tmp>/proj/Satyristes` whose dependencies name
+/// `../vendor/<name>` sources (relative to the manifest's own directory).
 fn write_satyrfile(tmp: &TempDir, entries: &[&str]) -> PathBuf {
-    let mut text = String::new();
-    for name in entries {
-        text.push_str(&format!(
-            "[[library]]\nname = \"{name}\"\nsource = {{ path = \"../vendor/{name}\" }}\n\n"
-        ));
-    }
-    tmp.write("proj/Satyrfile.toml", &text)
+    let deps: String = entries
+        .iter()
+        .map(|name| format!("({name} ((path \"../vendor/{name}\")))"))
+        .collect::<Vec<_>>()
+        .join("\n     ");
+    tmp.write(
+        "proj/Satyristes",
+        &format!(
+            "(version 0.0.2)\n\
+             (library (name \"proj\") (version \"0.1.0\")\n\
+               (sources ((packageDir \"src\")))\n\
+               (dependencies\n     ({deps})))\n"
+        ),
+    )
 }
 
 fn root_opts(root: &Path) -> RootOptions {
@@ -126,7 +133,7 @@ fn first_reconcile_installs_all_and_writes_lockfile() {
 
     // The lockfile was written next to the manifest, listing both entries with
     // a resolved sha256.
-    let lock = tmp.path().join("proj/Satyrfile.lock");
+    let lock = tmp.path().join("proj/Satyristes.lock");
     assert!(lock.is_file(), "lockfile written");
     let text = fs::read_to_string(&lock).unwrap();
     assert!(text.contains("name = \"alpha\""), "{text}");
@@ -197,7 +204,7 @@ fn changed_source_rematerializes_only_that_entry() {
     assert_eq!(mtime(&f_beta), before_beta, "beta untouched");
 
     // The lockfile hash for alpha changed to match the new source.
-    let text = fs::read_to_string(tmp.path().join("proj/Satyrfile.lock")).unwrap();
+    let text = fs::read_to_string(tmp.path().join("proj/Satyristes.lock")).unwrap();
     assert!(text.contains("name = \"alpha\""), "{text}");
 }
 
@@ -207,7 +214,7 @@ fn removed_entry_is_left_installed_and_dropped_from_lock() {
     write_pkg(&tmp, "alpha", "1.0.0", "let alpha = 1\n");
     write_pkg(&tmp, "beta", "2.0.0", "let beta = 2\n");
     write_satyrfile(&tmp, &["alpha", "beta"]);
-    let manifest = tmp.path().join("proj/Satyrfile.toml");
+    let manifest = tmp.path().join("proj/Satyristes");
     let root = tmp.path().join("root");
 
     sg::install_manifest(&manifest, &root_opts(&root)).expect("first reconcile");
@@ -225,7 +232,7 @@ fn removed_entry_is_left_installed_and_dropped_from_lock() {
     assert!(root.join(".satyrographos/receipts/beta.toml").is_file());
 
     // But the lockfile no longer lists beta (mirrors the manifest 1:1).
-    let text = fs::read_to_string(tmp.path().join("proj/Satyrfile.lock")).unwrap();
+    let text = fs::read_to_string(tmp.path().join("proj/Satyristes.lock")).unwrap();
     assert!(text.contains("name = \"alpha\""), "{text}");
     assert!(!text.contains("name = \"beta\""), "beta dropped from lock: {text}");
 }
@@ -277,8 +284,10 @@ fn empty_source_table_is_rejected() {
     // `UnsupportedSource` case (satyrfile.rs `SourceSpec::kind`).
     let tmp = TempDir::new("empty-source");
     let manifest = tmp.write(
-        "proj/Satyrfile.toml",
-        "[[library]]\nname = \"nowhere\"\nsource = {}\n",
+        "proj/Satyristes",
+        "(version 0.0.2)\n\
+         (library (name \"proj\") (version \"0.1.0\") (sources ((packageDir \"src\")))\n\
+           (dependencies ((nowhere ((unsupported \"x\"))))))\n",
     );
     let root = tmp.path().join("root");
     let err = sg::install_manifest(&manifest, &root_opts(&root)).unwrap_err();
@@ -399,15 +408,18 @@ fn make_git_pkg_repo(
     (repo, first_sha, head_sha)
 }
 
-/// A single-entry `Satyrfile.toml` with a `{ git = …, rev = … }` source
+/// A single-entry `Satyristes` with a `{ git = …, rev = … }` source
 /// (`rev` omitted when `None`).
 fn write_git_satyrfile(tmp: &TempDir, name: &str, repo_url: &str, rev: Option<&str>) -> PathBuf {
-    let mut text = format!("[[library]]\nname = \"{name}\"\nsource = {{ git = \"{repo_url}\"");
-    if let Some(r) = rev {
-        text.push_str(&format!(", rev = \"{r}\""));
-    }
-    text.push_str(" }\n");
-    tmp.write("proj/Satyrfile.toml", &text)
+    let rev_form = rev.map(|r| format!(" (rev \"{r}\")")).unwrap_or_default();
+    tmp.write(
+        "proj/Satyristes",
+        &format!(
+            "(version 0.0.2)\n\
+             (library (name \"proj\") (version \"0.1.0\") (sources ((packageDir \"src\")))\n\
+               (dependencies (({name} ((git \"{repo_url}\"){rev_form})))))\n"
+        ),
+    )
 }
 
 fn reg_opts_with_git_cache(tmp: &TempDir, offline: bool) -> RegistryOptions {
@@ -440,7 +452,7 @@ fn git_package_source_clones_and_installs_default_branch() {
 
     // The lockfile pins the git url + the resolved HEAD commit sha (design
     // §3 S3: "record the git url + resolved rev").
-    let lock_text = fs::read_to_string(tmp.path().join("proj/Satyrfile.lock")).unwrap();
+    let lock_text = fs::read_to_string(tmp.path().join("proj/Satyristes.lock")).unwrap();
     assert!(
         lock_text.contains(&format!("git = \"{}\"", file_url(&repo))),
         "{lock_text}"
@@ -472,7 +484,7 @@ fn git_package_source_pins_to_specific_rev_not_the_tip() {
         "pinned to the first commit, not the branch tip"
     );
 
-    let lock_text = fs::read_to_string(tmp.path().join("proj/Satyrfile.lock")).unwrap();
+    let lock_text = fs::read_to_string(tmp.path().join("proj/Satyristes.lock")).unwrap();
     assert!(lock_text.contains(&format!("rev = \"{first}\"")), "{lock_text}");
 }
 

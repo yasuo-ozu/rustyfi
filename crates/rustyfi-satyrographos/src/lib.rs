@@ -26,7 +26,7 @@
 //!
 //! ## Phase 2 scope (also implemented here)
 //!
-//! - The project-level `Satyrfile.toml` manifest + `Satyrfile.lock`
+//! - The project-level `Satyristes` manifest + `Satyristes.lock`
 //!   lockfile (`satyrfile`/`lockfile`, plan §5.3).
 //! - `ops::reconcile::install_manifest` — the no-`PATH` `satyrographos
 //!   install`: diff each manifest entry's source hash against the lockfile
@@ -43,22 +43,22 @@
 //!   download the tarball, verify its SHA-256 *before* touching `dist/`, then
 //!   feed it through the phase-1 install pipeline with a `registry` receipt
 //!   source (plan §5.4 steps 1-4).
-//! - `{ registry = … }` sources in `Satyrfile.toml` now reconcile, locking the
-//!   resolved `(version, url, sha256)` into `Satyrfile.lock` for reproducible
+//! - `{ registry = … }` sources in `Satyristes` now reconcile, locking the
+//!   resolved `(version, url, sha256)` into `Satyristes.lock` for reproducible
 //!   re-installs without re-consulting the index.
 //! - `ops::{search, update}` — index substring search and lockfile-vs-index
 //!   upgrade reporting (plan §8).
 //! - The HTTP transport (`registry`'s `http` module) is behind the `http`
-//!   cargo feature, default-on for this crate (saphe phase 7d slice S1,
-//! ); `--no-default-features`
-//!   builds a pure-offline embedder with no HTTP client compiled in.
+//!   cargo feature, default-on for this crate (saphe phase 7d slice S1);
+//!   `--no-default-features` builds a pure-offline embedder with no HTTP
+//!   client compiled in.
 //! - `cache` (phase 7d slice S2) — a persistent, content-addressed
 //!   (sha256-keyed) archive cache in front of the HTTP fetch, plus
 //!   `RegistryOptions::is_offline` (`--offline` / `$RUSTYFI_OFFLINE`): a
 //!   pin whose archive is already cached materialises with zero network,
 //!   and offline mode turns any would-be network request into a clean
 //!   [`error::Error::Offline`] instead of a silent fetch.
-//! - `{ git = … }` sources in `Satyrfile.toml` (phase 7d slice S3): cloned via
+//! - `{ git = … }` sources in `Satyristes` (phase 7d slice S3): cloned via
 //!   the `git` CLI (`registry::acquire_git_source`), pinned to `rev` when
 //!   given, into their own cache leaf honouring `--offline`/`$RUSTYFI_OFFLINE`
 //!   the same way a registry archive does; the checkout is then materialised
@@ -79,15 +79,17 @@ pub mod receipts;
 pub mod registry;
 pub mod roots;
 pub mod satyristes;
-pub mod satyrfile;
+pub mod source;
 pub mod solve;
 mod stage;
 mod util;
 pub mod version;
 
 pub use error::Error;
+pub use manifest::Lang;
 
 // Flat re-exports of the public API named in the plan's §7.2.
+pub use ops::build::{build, BuildOptions, BuildReport};
 pub use ops::install::{install, InstallOptions, InstallReport};
 pub use ops::list::{list, PackageSummary};
 pub use ops::reconcile::{install_manifest, install_manifest_reg, ManifestReport};
@@ -96,7 +98,8 @@ pub use ops::uninstall::{uninstall, RootOptions};
 
 // Phase-2 manifest/lockfile schema types (plan §5.3).
 pub use lockfile::{LockEntry, Lockfile};
-pub use satyrfile::{find_upward, LibraryEntry, RegistryConfig, RegistryKind, Satyrfile, SourceSpec};
+pub use satyristes::{find_upward, Project};
+pub use source::{LibraryEntry, RegistryConfig, RegistryKind, SourceSpec};
 
 // Phase-3 registry (plan §5.4): index client + the fetch/verify/materialize
 // entry points and the new `search`/`update` operations.

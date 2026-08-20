@@ -75,17 +75,27 @@ pub fn discover_all(start: &Path) -> Vec<PathBuf> {
         }
     };
 
-    // Absolute first, or the walk stops immediately: `parent()` of a relative
-    // `doc.saty` is `""`, whose own parent is `None`, so a document named
-    // without a directory would only ever see the working directory itself.
-    // `absolute("")` is an error rather than the working directory, which is
-    // exactly the case that arises here, so spell it as `.` first.
-    let start = std::path::absolute(if start.as_os_str().is_empty() {
+    // NORMALISE first, or the walk is nonsense. Two traps, both real:
+    //
+    // - `parent()` of a relative `doc.saty` is `""`, whose own parent is
+    //   `None`, so a document named without a directory would see only the
+    //   working directory. `absolute("")` errors rather than returning the
+    //   working directory, so spell it `.`.
+    // - `absolute()` merely prefixes the working directory; it does NOT
+    //   resolve `..`. Walking `repo/../other/doc` upward therefore passes
+    //   through `repo/..`, then `repo` — finding a root in the very directory
+    //   the path was leading AWAY from. `canonicalize` resolves the traversal
+    //   (and symlinks); it needs the path to exist, which a start directory
+    //   does, and falls back to `absolute` when it does not.
+    let start = if start.as_os_str().is_empty() {
         Path::new(".")
     } else {
         start
-    })
-    .unwrap_or_else(|_| start.to_path_buf());
+    };
+    let start = start
+        .canonicalize()
+        .or_else(|_| std::path::absolute(start))
+        .unwrap_or_else(|_| start.to_path_buf());
     let mut dir = Some(start.as_path());
     while let Some(d) = dir {
         let dev = d.join(DEV_DIR);
@@ -315,6 +325,26 @@ mod tests {
         std::env::set_current_dir(here).unwrap();
         assert_eq!(found.len(), 1, "expected the tree above, got {found:?}");
         assert!(found[0].ends_with(DEV_DIR));
+    }
+
+    #[test]
+    fn a_path_through_dotdot_does_not_re_enter_the_directory_it_left() {
+        // `absolute()` only prefixes the working directory, so walking
+        // `root/../other` upward would pass through `root` itself and find its
+        // tree — a root the path was pointing AWAY from.
+        let base = tmp("dotdot");
+        let root = base.join("root");
+        let other = base.join("other/doc");
+        fs::create_dir_all(root.join(DEV_DIR)).unwrap();
+        fs::create_dir_all(&other).unwrap();
+        let here = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&root).unwrap();
+        let found = discover_all(Path::new("../other/./doc"));
+        std::env::set_current_dir(here).unwrap();
+        assert!(
+            found.is_empty(),
+            "should not see the tree it walked away from: {found:?}"
+        );
     }
 
     #[test]

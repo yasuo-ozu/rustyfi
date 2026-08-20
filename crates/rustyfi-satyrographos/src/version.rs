@@ -125,7 +125,7 @@ impl Ord for Version {
 
 /// A dependency-version requirement. `Caret` is the upstream-faithful default
 /// (the *only* syntax `saphe-split` accepts); `Exact` and `Any` are kept so
-/// the pre-existing `Satyrfile.toml` exact pin (`"1.2.3"`) and the
+/// the pre-existing `Satyristes` exact pin (`"1.2.3"`) and the
 /// `Satyristes` wildcard (`"*"`) map onto the same type without a format
 /// change to either front end (design §3.1).
 #[derive(Debug, Clone, PartialEq, Eq)]

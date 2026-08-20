@@ -12,7 +12,7 @@
 //! freshly-refreshed index, so a package whose latest published version would
 //! violate some other locked package's declared dependency is correctly
 //! reported at the highest version that still fits the *whole* graph, not the
-//! index's bare maximum. `Satyrfile.toml`'s own `source.version` pin is
+//! index's bare maximum. `Satyristes`'s own `source.version` pin is
 //! deliberately **not** fed into the solve here (it is an exact-or-absent
 //! install pin, matching `registry::select_version`'s pre-solver "exact if
 //! given, else highest" contract — feeding it in as a root constraint would
@@ -27,7 +27,8 @@ use std::path::Path;
 use crate::error::Error;
 use crate::lockfile::{self, LockEntry};
 use crate::registry::{self, RegistryDepSource, RegistryOptions};
-use crate::satyrfile::{self, SourceKind};
+use crate::source::SourceKind;
+use crate::satyristes;
 use crate::solve;
 use crate::version::Constraint;
 
@@ -53,12 +54,12 @@ pub struct UpdateReport {
 /// Re-fetch the index for `manifest_path`'s project and diff every locked
 /// registry entry (direct and transitive) against the highest version the
 /// solver finds when it re-solves the whole registry sub-graph fresh.
-/// `manifest_path` locates both the `Satyrfile.toml` (for its `[registry]`
-/// url fallback) and the sibling `Satyrfile.lock` (for the currently-locked
+/// `manifest_path` locates both the `Satyristes` (for its `[registry]`
+/// url fallback) and the sibling `Satyristes.lock` (for the currently-locked
 /// versions and package identities).
 pub fn update(manifest_path: &Path, reg_opts: &RegistryOptions) -> Result<UpdateReport, Error> {
     // The manifest's own `[registry]` url is the fallback when no flag/env is set.
-    let manifest = satyrfile::read(manifest_path)?;
+    let manifest = satyristes::read_project(manifest_path)?;
     let fallback = manifest.registry_url();
     let url = reg_opts.resolve_url(fallback)?;
 

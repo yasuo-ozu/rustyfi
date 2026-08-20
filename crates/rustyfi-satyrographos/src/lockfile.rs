@@ -1,5 +1,5 @@
-//! `Satyrfile.lock` — the phase-2 lockfile (plan §5.3): mirrors
-//! `Satyrfile.toml` 1:1, but with every entry's `source` pinned to a
+//! `Satyristes.lock` — the phase-2 lockfile (plan §5.3): mirrors
+//! `Satyristes` 1:1, but with every entry's `source` pinned to a
 //! concrete, content-addressed form (`sha256` of the resolved source tree)
 //! plus a `resolved_at` timestamp. `reconcile.rs` diffs a fresh source hash
 //! against the recorded one to decide whether an entry's files need
@@ -11,13 +11,14 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::error::Error;
-use crate::satyrfile::{SourceSpec, MANIFEST_NAME};
+use crate::satyristes::SATYRISTES_NAME as MANIFEST_NAME;
+use crate::source::SourceSpec;
 use crate::util;
 
-/// The lockfile filename (a sibling of `Satyrfile.toml`).
-pub const LOCK_NAME: &str = "Satyrfile.lock";
+/// The lockfile filename (a sibling of `Satyristes`).
+pub const LOCK_NAME: &str = "Satyristes.lock";
 
-/// A parsed `Satyrfile.lock`.
+/// A parsed `Satyristes.lock`.
 #[derive(Debug, Default, Clone, Deserialize, Serialize)]
 pub struct Lockfile {
     #[serde(default, rename = "library")]
@@ -104,11 +105,11 @@ impl Lockfile {
     }
 }
 
-/// The lockfile path sibling to a `Satyrfile.toml` at `manifest_path`.
+/// The lockfile path sibling to a `Satyristes` at `manifest_path`.
 pub fn lock_path_for(manifest_path: &Path) -> PathBuf {
     match manifest_path.parent() {
         Some(dir) if !dir.as_os_str().is_empty() => dir.join(LOCK_NAME),
-        // A bare `Satyrfile.toml` with no directory component.
+        // A bare `Satyristes` with no directory component.
         _ => {
             debug_assert_eq!(
                 manifest_path.file_name().and_then(|n| n.to_str()),

@@ -32,15 +32,6 @@ $ tar -xzf rustyfi-<tag>-x86_64-unknown-linux-gnu.tar.gz --strip-components=1 -C
 $ rustyfi --version
 ```
 
-That is the whole install. The binary lands in `bin/`, its packages and fonts in
-`lib/rustyfi/`, the man page in `share/man/man1/` — and `rustyfi` searches
-`~/.local/lib/rustyfi` and `/usr/local/lib/rustyfi` on its own, so nothing needs
-configuring and Japanese renders out of the box. Unpacked anywhere else, point
-`$RUSTYFI_LIB_ROOT` at the `lib/rustyfi` inside it.
-
-Archives are built for Linux (x86_64, aarch64), macOS (Intel and Apple silicon)
-and Windows (x86_64, a `.zip` with the same `bin/ lib/ share/` layout).
-
 ### From source
 
 ```console
@@ -48,10 +39,6 @@ $ git clone https://github.com/yasuo-ozu/rustyfi && cd rustyfi
 $ cargo build --release --bin rustyfi
 $ sh scripts/download-fonts.sh      # IPAex, Junicode, Latin Modern — pinned, ~175 MB
 ```
-
-A clone fetches its own fonts: they are not committed, each carrying its own
-licence. Without them you still get PDFs, in the base-14 fonts, and Japanese
-will not render.
 
 ## Compile a document
 
@@ -100,7 +87,12 @@ $ rustyfi satyrographos list
 ```
 
 It reads upstream `Satyristes` manifests, keeps a project lockfile, and verifies
-registry downloads by sha256.
+registry downloads by sha256. A manifest's `(libraryDoc …)` targets — documents
+built *from* a library — are built by running their own declared commands:
+
+```console
+$ rustyfi satyrographos build            # or --doc NAME, when several are declared
+```
 
 ## HTML output
 

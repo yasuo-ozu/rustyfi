@@ -10,6 +10,9 @@ use crate::roots::RootSelection;
 #[derive(Debug, Clone)]
 pub struct PackageSummary {
     pub name: String,
+    /// Which corpus it is installed into — the same name may appear twice,
+    /// once per generation.
+    pub lang: crate::manifest::Lang,
     pub version: String,
     pub file_count: usize,
 }
@@ -21,6 +24,7 @@ pub fn list(opts: &RootOptions) -> Result<Vec<PackageSummary>, Error> {
     Ok(receipts
         .into_iter()
         .map(|r| PackageSummary {
+            lang: r.lang,
             name: r.name,
             version: r.package_version,
             file_count: r.files.len(),

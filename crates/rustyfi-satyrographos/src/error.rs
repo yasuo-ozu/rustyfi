@@ -31,6 +31,26 @@ pub enum Error {
     )]
     RootResolution,
 
+    /// A `(libraryDoc ...)`'s build command exited non-zero.
+    #[error("building `{name}` failed: `{command}` exited with {}", match code { Some(c) => c.to_string(), None => "a signal".to_string() })]
+    DocBuild {
+        name: String,
+        command: String,
+        code: Option<i32>,
+    },
+
+    /// `build` was asked for a doc target and the manifest declares none.
+    #[error("this Satyristes declares no `(libraryDoc ...)` to build")]
+    NoDocTarget,
+
+    /// Several doc targets and no `--doc` to choose between them.
+    #[error("Satyristes declares multiple doc targets (`{names}`); select one with --doc NAME")]
+    AmbiguousDoc { names: String },
+
+    /// `--doc` named nothing that exists.
+    #[error("source declares doc target(s) `{declared}`, none of which is in the requested --doc set")]
+    DocFilter { declared: String },
+
     /// A `rustyfi-package.toml` manifest failed to parse.
     #[error("{path}: invalid rustyfi-package.toml: {source}")]
     Manifest {
@@ -126,40 +146,41 @@ pub enum Error {
     )]
     AmbiguousLibrary { names: String },
 
-    /// A `Satyrfile.toml` project manifest failed to parse (phase 2, §5.3).
-    #[error("{path}: invalid Satyrfile.toml: {source}")]
-    Satyrfile {
+    /// A project manifest (`Satyristes`, read for its dependency sources)
+    /// failed to parse.
+    #[error("{path}: invalid project manifest: {source}")]
+    ProjectManifest {
         path: PathBuf,
         #[source]
         source: toml::de::Error,
     },
 
-    /// A `Satyrfile.lock` lockfile failed to parse (phase 2, §5.3).
-    #[error("{path}: invalid Satyrfile.lock: {source}")]
+    /// A `Satyristes.lock` lockfile failed to parse.
+    #[error("{path}: invalid Satyristes.lock: {source}")]
     Lockfile {
         path: PathBuf,
         #[source]
         source: toml::de::Error,
     },
 
-    /// Manifest-mode `install` (no PATH) found no `Satyrfile.toml` at or above
+    /// Manifest-mode `install` (no PATH) found no `Satyristes` at or above
     /// the search root (exit `3` — nothing to operate on).
-    #[error("no Satyrfile.toml found in this directory or any parent")]
-    SatyrfileNotFound,
+    #[error("no Satyristes found in this directory or any parent")]
+    ManifestNotFound,
 
-    /// A `Satyrfile.toml` `source = { … }` table named none of `path`, `git`,
+    /// A dependency's source named none of `path`, `git`,
     /// or `registry` — nothing to materialise (`{{ path = … }}`, `{{ git = …
     /// }}`, and `{{ registry = … }}` are all supported as of saphe 7d
     /// slice S3, plan §5.4).
-    #[error("unsupported source kind in Satyrfile.toml: {kind}")]
-    UnsupportedSource { kind: &'static str },
+    #[error("unsupported dependency source: {kind}")]
+    UnsupportedSource { kind: String },
 
     // --- Phase 3: registry (plan §5.4) --------------------------------------
     /// No registry URL could be resolved from `--registry`, `$RUSTYFI_REGISTRY`,
-    /// or a `Satyrfile.toml` `[registry]` url (exit `3` — nothing to consult).
+    /// or a `Satyristes` `(registry (url …))` (exit `3` — nothing to consult).
     #[error(
         "no registry configured: pass `--registry URL`, set $RUSTYFI_REGISTRY, \
-         or add a [registry] url to Satyrfile.toml"
+         or add a `(registry (url …))` to Satyristes"
     )]
     NoRegistry,
 

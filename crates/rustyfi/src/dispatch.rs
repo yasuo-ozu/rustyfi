@@ -214,7 +214,7 @@ fn compile_command(name: &'static str) -> Command {
 
 /// The shared `--registry URL` flag (plan §5.4 step 1), attached to the
 /// registry-aware subcommands (`install`, `search`, `update`). Overrides
-/// `$RUSTYFI_REGISTRY` and any `Satyrfile.toml` `[registry]` url.
+/// `$RUSTYFI_REGISTRY` and any `Satyristes` `[registry]` url.
 fn registry_flag(cmd: Command) -> Command {
     cmd.arg(
         Arg::new("registry")
@@ -222,7 +222,7 @@ fn registry_flag(cmd: Command) -> Command {
             .value_name("URL")
             .help(
                 "Registry index URL (a git repo or a local/`file://` directory index). \
-                 Overrides $RUSTYFI_REGISTRY and Satyrfile.toml's [registry] url.",
+                 Overrides $RUSTYFI_REGISTRY and Satyristes's [registry] url.",
             ),
     )
     .arg(
@@ -272,16 +272,23 @@ fn satyrographos_command() -> Command {
             Command::new("install")
                 .about(
                     "Install a package from a directory, .tar.gz, or registry name; \
-                         with no PATH, reconcile the project's Satyrfile.toml.",
+                         with no PATH, reconcile the project's Satyristes.",
                 )
                 .arg(
                     Arg::new("path")
                         .help(
                             "Source directory or .tar.gz, or a registry NAME[@VERSION] \
                                  (used when it does not name a path on disk). Omit to \
-                                 reconcile the nearest Satyrfile.toml (manifest mode).",
+                                 reconcile the nearest Satyristes (manifest mode).",
                         )
                         .value_parser(value_parser!(String)),
+                )
+                .arg(
+                    Arg::new("lang")
+                        .long("lang")
+                        .value_name("VERSION")
+                        .value_parser(["0.0", "0.1"])
+                        .help("Restrict to blocks written for this SATySFi generation."),
                 )
                 .arg(
                     Arg::new("library")
@@ -303,6 +310,46 @@ fn satyrographos_command() -> Command {
                 .about("Remove a receipted package.")
                 .arg(Arg::new("name").required(true).help("Package name.")),
         ))
+        // No root flags: building a doc runs the typesetter in the source
+        // directory and installs nothing, so there is no root involved.
+        .subcommand(
+            Command::new("build")
+                .about("Build a `(libraryDoc ...)` target by running its own build commands.")
+                .arg(
+                    Arg::new("path")
+                        .value_name("PATH")
+                        .help("Directory holding the Satyristes (default: the current one).")
+                        .value_parser(value_parser!(PathBuf)),
+                )
+                .arg(
+                    Arg::new("lang")
+                        .long("lang")
+                        .value_name("VERSION")
+                        .value_parser(["0.0", "0.1"])
+                        .help("Restrict to doc targets for this SATySFi generation."),
+                )
+                .arg(
+                    Arg::new("doc")
+                        .long("doc")
+                        .value_name("NAME")
+                        .action(ArgAction::Append)
+                        .help("Restrict to the named doc target (repeatable)."),
+                )
+                .arg(
+                    Arg::new("lib_root")
+                        .long("lib-root")
+                        .value_name("DIR")
+                        .help("Library root for the build commands ($RUSTYFI_LIB_ROOT).")
+                        .value_parser(value_parser!(PathBuf)),
+                )
+                .arg(
+                    Arg::new("quiet")
+                        .long("quiet")
+                        .short('q')
+                        .action(ArgAction::SetTrue)
+                        .help("Do not echo each command before running it."),
+                ),
+        )
         .subcommand(root_flags(
             Command::new("list").about("List installed packages."),
         ))
@@ -322,7 +369,7 @@ fn satyrographos_command() -> Command {
                 ),
         ))
         .subcommand(registry_flag(Command::new("update").about(
-            "Re-fetch the registry index and report available upgrades vs Satyrfile.lock.",
+            "Re-fetch the registry index and report available upgrades vs Satyristes.lock.",
         )))
 }
 

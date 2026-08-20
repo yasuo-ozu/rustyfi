@@ -14,6 +14,9 @@ use crate::{archive, manifest, stage};
 /// Options for [`install`] (plan §7.2).
 #[derive(Debug, Default, Clone)]
 pub struct InstallOptions {
+    /// Restrict to blocks written for this generation. `None` accepts either,
+    /// which is only unambiguous when the name occurs once.
+    pub lang: Option<manifest::Lang>,
     pub lib_root: Option<PathBuf>,
     pub dest: Option<PathBuf>,
     /// `-l`/`--library NAME` filter (repeatable). `None` means no filter.
@@ -66,14 +69,14 @@ pub(crate) fn install_inner(
     // a `Satyristes` (phase 4) may declare several `(library ...)` blocks, in
     // which case `--library` must narrow the selection to exactly one (one
     // library is materialised per install).
-    let plan = select_plan(plans, opts.libraries.as_deref())?;
+    let plan = select_plan(plans, opts.libraries.as_deref(), opts.lang)?;
 
     // Collision policy (plan §6).
-    let old_receipt = if receipts::exists(&root, &plan.name) {
+    let old_receipt = if receipts::exists_for(&root, &plan.name, plan.lang) {
         if !opts.force {
             return Err(Error::AlreadyInstalled { name: plan.name });
         }
-        Some(receipts::read(&root, &plan.name)?)
+        Some(receipts::read_for(&root, &plan.name, plan.lang)?)
     } else {
         // No receipt for this name: refuse to clobber any pre-existing
         // (unmanaged) file at a destination path.
@@ -111,6 +114,7 @@ pub(crate) fn install_inner(
     // Record the receipt (after materialisation, so a crash never leaves a
     // receipt pointing at files that were not placed).
     let receipt = Receipt {
+        lang: plan.lang,
         schema_version: SCHEMA_VERSION,
         name: plan.name.clone(),
         package_version: plan.version.clone(),
@@ -139,8 +143,14 @@ pub(crate) fn install_inner(
 fn select_plan(
     plans: Vec<manifest::PackagePlan>,
     libraries: Option<&[String]>,
+    lang: Option<manifest::Lang>,
 ) -> Result<manifest::PackagePlan, Error> {
-    let declared: Vec<String> = plans.iter().map(|p| p.name.clone()).collect();
+    // A name is no longer unique: one manifest may declare the same library
+    // for both generations, so the pair (name, lang) is what identifies it.
+    let declared: Vec<String> = plans
+        .iter()
+        .map(|p| format!("{} (lang {})", p.name, p.lang.as_str()))
+        .collect();
     let mut selected: Vec<manifest::PackagePlan> = match libraries {
         Some(filter) => plans
             .into_iter()
@@ -148,6 +158,9 @@ fn select_plan(
             .collect(),
         None => plans,
     };
+    if let Some(lang) = lang {
+        selected.retain(|p| p.lang == lang);
+    }
     match selected.len() {
         1 => Ok(selected.pop().unwrap()),
         0 => Err(Error::LibraryFilter {
@@ -156,7 +169,7 @@ fn select_plan(
         _ => Err(Error::AmbiguousLibrary {
             names: selected
                 .iter()
-                .map(|p| p.name.clone())
+                .map(|p| format!("{} (lang {})", p.name, p.lang.as_str()))
                 .collect::<Vec<_>>()
                 .join(", "),
         }),

@@ -470,6 +470,19 @@ fn version_scoped_type_env<'s>(
 /// binding clone was ~16M entry-clones on a corpus doc, ~85% of compile time.
 const OVERLAY_CAP: usize = 64;
 
+/// One [`TypeEnv`] slot: a scheme plus the STAGE its binder was read at
+/// (upstream's `Typeenv.add tyenv varnm (pty, evid, pre.stage)` — every
+/// binder upstream registers carries the stage of the expression that
+/// introduced it, `typechecker.ml:129/136/731/1509/1574`, and its `val_stage`
+/// field in 0.1). Held behind one `Rc` per binding, exactly as the bare
+/// `Rc<PolyType>` was before the stage existed.
+pub(crate) struct EnvEntry {
+    poly: PolyType,
+    /// Where a reference to this name is legal from — see
+    /// [`Stage::can_reference`].
+    stage: Stage,
+}
+
 /// A persistent name → scheme environment split into a large SHARED base
 /// (`Rc`, the accumulated prelude/package bindings — cloned by an `Rc` bump)
 /// and a small mutable OVERLAY of the most recent bindings (cloned in full per
@@ -483,15 +496,17 @@ pub(crate) struct TypeEnv<'s> {
     // at 0.6M-1.8M type nodes copied per corpus document, an order of
     // magnitude more than `instantiate` and `generalize` together, and the
     // largest single cost left in typechecking. An `Rc` makes that clone a
-    // refcount bump.
+    // refcount bump. The stage rides INSIDE that same `Rc` (see [`EnvEntry`])
+    // rather than in a parallel map, so adding it cost neither an extra
+    // allocation nor an extra word per overlay slot.
     //
     // Sharing is sound because it changes nothing that was not already shared:
     // cloning a `PolyType` copied the type's STRUCTURE but its `TyVarRef`s are
     // `Rc<RefCell<..>>`, so the mutable cells unification writes through were
     // common to every copy already. A `PolyType`'s structure is immutable once
     // built.
-    base: std::rc::Rc<HashMap<Symbol<'s>, std::rc::Rc<PolyType>>>,
-    overlay: HashMap<Symbol<'s>, std::rc::Rc<PolyType>>,
+    base: std::rc::Rc<HashMap<Symbol<'s>, std::rc::Rc<EnvEntry>>>,
+    overlay: HashMap<Symbol<'s>, std::rc::Rc<EnvEntry>>,
     /// Slice X2b: the set of names bound by a REAL program binding
     /// (`with`/`with_all`, not the `with_primitive` primitive-seeding loops).
     /// `version_scoped_type_env` consults it (via [`TypeEnv::is_shadowed`]) to
@@ -525,10 +540,15 @@ impl<'s> TypeEnv<'s> {
         }
     }
 
-    pub(crate) fn with(&self, name: Symbol<'s>, poly: PolyType) -> TypeEnv<'s> {
+    /// Bind `name` at `stage` — always the stage the BINDER was read at
+    /// (`Checker::binding_stage`), never a guess. The parameter is explicit
+    /// rather than defaulted precisely because a wrong stage here is silent:
+    /// it does not fail to compile, it just lets a reference through that
+    /// upstream refuses.
+    pub(crate) fn with(&self, name: Symbol<'s>, poly: PolyType, stage: Stage) -> TypeEnv<'s> {
         let mut e = self.clone();
         e.overlay_shadowed.insert(name);
-        e.overlay.insert(name, std::rc::Rc::new(poly));
+        e.overlay.insert(name, std::rc::Rc::new(EnvEntry { poly, stage }));
         e.maybe_promote();
         e
     }
@@ -541,14 +561,28 @@ impl<'s> TypeEnv<'s> {
     /// which always goes through `with`/`with_all` instead. This is exactly
     /// what lets `version_scoped_type_env` distinguish "still untouched
     /// builtin" from "user-shadowed" (see its doc comment).
+    /// A primitive is `Persistent0`, so every stage may name it — upstream
+    /// registers the whole primitive table that way (`primitives.cppo.ml:596`,
+    /// `Typeenv.add tyenv varnm (pty, evid, Persistent0)`). Anything else
+    /// would make `\emph` unreachable from a `@stage: 0` library.
     fn with_primitive(&self, name: Symbol<'s>, poly: PolyType) -> TypeEnv<'s> {
         let mut e = self.clone();
-        e.overlay.insert(name, std::rc::Rc::new(poly));
+        e.overlay.insert(
+            name,
+            std::rc::Rc::new(EnvEntry {
+                poly,
+                stage: Stage::Persistent0,
+            }),
+        );
         e.maybe_promote();
         e
     }
 
-    pub(crate) fn get(&self, name: Symbol<'s>) -> Option<&PolyType> {
+    /// The raw slot. Every OCCURRENCE goes through `Checker::staged` instead,
+    /// which reads this and then enforces the staging matrix — there is
+    /// deliberately no stage-blind `get`, so a new reference site cannot
+    /// silently skip the check.
+    fn entry(&self, name: Symbol<'s>) -> Option<&EnvEntry> {
         self.overlay
             .get(&name)
             .or_else(|| self.base.get(&name))
@@ -563,11 +597,16 @@ impl<'s> TypeEnv<'s> {
 
     /// Extend with each scheme in order (later shadows earlier) — the
     /// canonical way to commit `infer_binding`'s result.
-    pub(crate) fn with_all(&self, schemes: Vec<(Symbol<'s>, PolyType)>) -> TypeEnv<'s> {
+    pub(crate) fn with_all(
+        &self,
+        schemes: Vec<(Symbol<'s>, PolyType)>,
+        stage: Stage,
+    ) -> TypeEnv<'s> {
         let mut e = self.clone();
         for (name, poly) in schemes {
             e.overlay_shadowed.insert(name);
-            e.overlay.insert(name, std::rc::Rc::new(poly));
+            e.overlay
+                .insert(name, std::rc::Rc::new(EnvEntry { poly, stage }));
             e.maybe_promote();
         }
         e
@@ -584,7 +623,7 @@ impl<'s> TypeEnv<'s> {
     /// one-time flatten is fine.
     #[allow(dead_code)]
     pub(crate) fn without_all(&self, names: &[Symbol<'s>]) -> TypeEnv<'s> {
-        let mut vars = (*self.base).clone();
+        let mut vars: HashMap<Symbol<'s>, std::rc::Rc<EnvEntry>> = (*self.base).clone();
         for (k, v) in &self.overlay {
             vars.insert(*k, v.clone());
         }
@@ -1115,6 +1154,23 @@ fn lower_type_app(
             match name.name.as_str() {
                 "list" if single.is_some() => list(single.unwrap()),
                 "ref" if single.is_some() => reff(single.unwrap()),
+                // `code τ` — the staged-value type, spelled in SOURCE only by
+                // 0.1 (`dev-0-1-0 src/frontend/manualTypeDecoder.ml:31-36`,
+                // decoded as a one-argument application right beside `list`
+                // at `:37-42` and `ref` at `:44-49`). 0.0.6's own manual-type
+                // decoder (`v0.0.6 src/frontend/typeenv.ml:527-530`) knows
+                // only `list` and `ref`, so under `V0_0` an `int code`
+                // annotation stays what it has always been here: an unknown
+                // nominal `Variant("code", [int])`, which unifies with
+                // nothing and is refused just as upstream's
+                // `UndefinedTypeName` refuses it.
+                //
+                // 0.1 writes types PREFIX (`code int`); `v1/lower.rs` has
+                // already flipped that into this cst's postfix
+                // `TypeApp { head, rest }` shape by the time it arrives.
+                "code" if single.is_some() && version.has_code_type_syntax() => {
+                    MonoType::Code(Box::new(single.unwrap()))
+                }
                 // `T implicit` — `satysfi-base`'s typeclass-dictionary marker —
                 // is transparent: an implicit `T` argument just has type `T`.
                 "implicit" if single.is_some() => single.unwrap(),
@@ -2388,12 +2444,16 @@ impl<'s> Checker<'s> {
 
             BindingView::LetRec(bindings) => {
                 self.ctx.enter_level();
+                // The group's own stage, so a `@stage: 0` library's mutually
+                // recursive clauses can still see each other (they are read at
+                // stage 0, and a stage-0 read of a stage-1 binder is refused).
+                let group_stage = self.binding_stage_rec(bindings);
                 let mut rec_env = env.clone();
                 let mut vars = Vec::with_capacity(bindings.len());
                 for (name, _) in bindings {
                     let v = self.fresh();
                     vars.push(v.clone());
-                    rec_env = rec_env.with(*name, PolyType::mono(v));
+                    rec_env = rec_env.with(*name, PolyType::mono(v), group_stage);
                 }
                 for ((name, val), v) in bindings.iter().zip(vars.iter()) {
                     let tv = self.infer(&rec_env, val)?;
@@ -2547,17 +2607,81 @@ impl<'s> Checker<'s> {
         let mut opt_tys = Vec::with_capacity(opts.len());
         for (label, binder) in opts {
             let tl = self.fresh();
-            inner = inner.with(*binder, PolyType::mono(t_option(tl.clone())));
+            inner = inner.with(*binder, PolyType::mono(t_option(tl.clone())), self.stage);
             opt_tys.push((label.clone(), tl));
         }
         let tp = self.fresh();
-        inner = inner.with(param, PolyType::mono(tp.clone()));
+        inner = inner.with(param, PolyType::mono(tp.clone()), self.stage);
         let tb = self.infer(&inner, body)?;
         let mut row = Row::Empty;
         for (label, tl) in opt_tys.into_iter().rev() {
             row = Row::Cons(label, Box::new(tl), Box::new(row));
         }
         Ok(MonoType::Func(Box::new(row), Box::new(tp), Box::new(tb)))
+    }
+
+    /// The stage a binding whose right-hand side is `value` is introduced at
+    /// — upstream's `pre.stage` at the point of `Typeenv.add`.
+    ///
+    /// Upstream reads a whole FILE at one stage, so `pre.stage` is simply the
+    /// ambient stage there. This port flattens every library into one
+    /// `let`-chain and instead marks each spliced binding's RHS with
+    /// [`Ast::StageScope`] (`elaborate.rs`'s per-item wrap), so the ambient
+    /// stage is only right for a binding the current file wrote itself. The
+    /// peeling through `ModuleScope`/`VersionScope` is because those wrappers
+    /// are applied INSIDE `push_named_binding`/the `LetRec` arm, i.e. after
+    /// the stage wrap, for a module member.
+    pub(crate) fn binding_stage(&self, value: &Ast<'s>) -> Stage {
+        fn declared<'s>(a: &Ast<'s>) -> Option<Stage> {
+            match a {
+                Ast::StageScope(st, _) => Some(*st),
+                Ast::ModuleScope(_, b) | Ast::VersionScope(_, b) => declared(b),
+                _ => None,
+            }
+        }
+        declared(value).unwrap_or(self.stage)
+    }
+
+    /// [`Checker::binding_stage`] for a `let-rec` GROUP. Every clause of one
+    /// group comes from one item of one file, so they share a stage; the
+    /// elaborator wraps them identically and the first is representative.
+    pub(crate) fn binding_stage_rec(&self, bindings: &[(Symbol<'s>, Rc<Ast<'s>>)]) -> Stage {
+        match bindings.first() {
+            Some((_, v)) => self.binding_stage(v),
+            None => self.stage,
+        }
+    }
+
+    /// Look `name` up for an OCCURRENCE, enforcing the staging matrix
+    /// ([`Stage::can_reference`]) — upstream's `UTContentOf` arm, which is
+    /// where a stage-0 name used from stage 1 (or the reverse) is refused.
+    ///
+    /// `Ok(None)` means unbound, left to each caller because each has its own
+    /// "should not happen post-elaboration" wording. `what` names the kind of
+    /// occurrence for the diagnostic (`"variable"`, `"inline command"`, …).
+    fn staged<'e>(
+        &self,
+        env: &'e TypeEnv<'s>,
+        name: Symbol<'s>,
+        span: Option<Span>,
+        what: &str,
+    ) -> Result<Option<&'e PolyType>, TypeError> {
+        let Some(entry) = env.entry(name) else {
+            return Ok(None);
+        };
+        if !self.stage.can_reference(entry.stage) {
+            return Err(TypeError::simple(
+                span,
+                format!(
+                    "invalid occurrence of {what} '{}' as to stage: it is bound at {}, \
+                     but this is {}",
+                    self.text(name),
+                    entry.stage.as_str(),
+                    self.stage.as_str()
+                ),
+            ));
+        }
+        Ok(Some(&entry.poly))
     }
 
     /// `infer`, reading `ast` at a different stage and restoring afterwards --
@@ -2621,7 +2745,7 @@ impl<'s> Checker<'s> {
             Ast::Length(_) => Ok(t_length()),
             Ast::Str(_) => Ok(t_string()),
 
-            Ast::Var(name, span) => match env.get(*name) {
+            Ast::Var(name, span) => match self.staged(env, *name, Some(*span), "variable")? {
                 Some(poly) => Ok(instantiate(poly, self.ctx.level())),
                 // Should not happen post-elaboration: `elaborate.rs`'s
                 // `scoped_var` already rejects any unbound name before this
@@ -2664,7 +2788,7 @@ impl<'s> Checker<'s> {
 
             Ast::Lambda(param, body) => {
                 let tp = self.fresh();
-                let inner = env.with(*param, PolyType::mono(tp.clone()));
+                let inner = env.with(*param, PolyType::mono(tp.clone()), self.stage);
                 let tb = self.infer(&inner, body)?;
                 Ok(arrow(tp, tb))
             }
@@ -2686,7 +2810,7 @@ impl<'s> Checker<'s> {
 
             Ast::LetIn(name, value, body) => {
                 let schemes = self.infer_binding(env, BindingView::Let { name: *name, value })?;
-                let inner = env.with_all(schemes);
+                let inner = env.with_all(schemes, self.binding_stage(value));
                 self.infer(&inner, body)
             }
 
@@ -2699,13 +2823,13 @@ impl<'s> Checker<'s> {
             Ast::LetMathIn(name, value, body) => {
                 let schemes =
                     self.infer_binding(env, BindingView::LetMath { name: *name, value })?;
-                let inner = env.with_all(schemes);
+                let inner = env.with_all(schemes, self.binding_stage(value));
                 self.infer(&inner, body)
             }
 
             Ast::LetRecIn(bindings, body) => {
                 let schemes = self.infer_binding(env, BindingView::LetRec(bindings))?;
-                let inner = env.with_all(schemes);
+                let inner = env.with_all(schemes, self.binding_stage_rec(bindings));
                 self.infer(&inner, body)
             }
 
@@ -2813,12 +2937,12 @@ impl<'s> Checker<'s> {
                 // `infer_binding`'s `BindingView::LetMutable` arm.
                 let schemes =
                     self.infer_binding(env, BindingView::LetMutable { name: *name, init })?;
-                let inner = env.with_all(schemes);
+                let inner = env.with_all(schemes, self.binding_stage(init));
                 self.infer(&inner, body)
             }
 
             Ast::Overwrite(name, span, value) => {
-                let t_ref = match env.get(*name) {
+                let t_ref = match self.staged(env, *name, Some(*span), "mutable variable")? {
                     Some(poly) => instantiate(poly, self.ctx.level()),
                     None => {
                         return Err(TypeError::simple(
@@ -3022,7 +3146,7 @@ impl<'s> Checker<'s> {
     ) -> Result<TypeEnv<'s>, TypeError> {
         match pat {
             Pattern::Wild => Ok(env),
-            Pattern::Var(name) => Ok(env.with(*name, PolyType::mono(ty.clone()))),
+            Pattern::Var(name) => Ok(env.with(*name, PolyType::mono(ty.clone()), self.stage)),
             Pattern::Unit => {
                 self.unify_ctx(&t_unit(), ty, None, "a unit pattern")?;
                 Ok(env)
@@ -3095,7 +3219,7 @@ impl<'s> Checker<'s> {
             }
             Pattern::As(inner, name) => {
                 let env = self.bind_pattern(env, inner, ty)?;
-                Ok(env.with(*name, PolyType::mono(ty.clone())))
+                Ok(env.with(*name, PolyType::mono(ty.clone()), self.stage))
             }
         }
     }
@@ -3115,7 +3239,7 @@ impl<'s> Checker<'s> {
         match it {
             IText::Text(_) | IText::CodeText(_) => Ok(()),
             IText::Cmd { name, span, args } => {
-                let tcmd = match env.get(*name) {
+                let tcmd = match self.staged(env, *name, Some(*span), "inline command")? {
                     Some(poly) => instantiate(poly, self.ctx.level()),
                     None => {
                         return Err(TypeError::simple(
@@ -3174,7 +3298,7 @@ impl<'s> Checker<'s> {
     fn check_btext(&mut self, env: &TypeEnv<'s>, bt: &BText<'s>) -> Result<(), TypeError> {
         match bt {
             BText::Cmd { name, span, args } => {
-                let tcmd = match env.get(*name) {
+                let tcmd = match self.staged(env, *name, Some(*span), "block command")? {
                     Some(poly) => instantiate(poly, self.ctx.level()),
                     None => {
                         return Err(TypeError::simple(
@@ -3242,7 +3366,7 @@ impl<'s> Checker<'s> {
             }
             MathElem::Primes(base, _) => self.check_math_elem(env, base),
             MathElem::Cmd { name, span, args } => {
-                let tcmd = match env.get(*name) {
+                let tcmd = match self.staged(env, *name, Some(*span), "math command")? {
                     Some(poly) => instantiate(poly, self.ctx.level()),
                     None => {
                         return Err(TypeError::simple(
@@ -3481,24 +3605,24 @@ mod l3_per_binding_tests {
                 Ast::LetIn(name, value, body) => {
                     let schemes =
                         checker.infer_binding(&env, BindingView::Let { name: *name, value })?;
-                    env = env.with_all(schemes);
+                    env = env.with_all(schemes, checker.binding_stage(value));
                     body
                 }
                 Ast::LetMathIn(name, value, body) => {
                     let schemes =
                         checker.infer_binding(&env, BindingView::LetMath { name: *name, value })?;
-                    env = env.with_all(schemes);
+                    env = env.with_all(schemes, checker.binding_stage(value));
                     body
                 }
                 Ast::LetRecIn(bindings, body) => {
                     let schemes = checker.infer_binding(&env, BindingView::LetRec(bindings))?;
-                    env = env.with_all(schemes);
+                    env = env.with_all(schemes, checker.binding_stage_rec(bindings));
                     body
                 }
                 Ast::LetMutableIn(name, init, body) => {
                     let schemes = checker
                         .infer_binding(&env, BindingView::LetMutable { name: *name, init })?;
-                    env = env.with_all(schemes);
+                    env = env.with_all(schemes, checker.binding_stage(init));
                     body
                 }
                 other => {

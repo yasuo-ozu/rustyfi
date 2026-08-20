@@ -226,6 +226,147 @@ fn manifest_mode_without_a_manifest_exits_3() {
     assert_eq!(out.status.code(), Some(3), "no Satyristes → exit 3");
 }
 
+/// A leading global flag (`--config`, before the subcommand) must behave
+/// exactly like the same flag after it — this is the bug `dispatch::get_matches`
+/// exists to fix. `--config` names a config FILE that must exist to be read
+/// (see `cmd::registry_fallbacks`'s doc comment), so give it a real,
+/// registry-less one; the point of this test is dispatch, not what the file
+/// says.
+#[cfg(unix)]
+#[test]
+fn leading_global_flag_reaches_a_subcommand() {
+    let work = tmpdir("leading-global");
+    let config = work.join("config.toml");
+    std::fs::write(&config, "").unwrap();
+    let root = tmpdir("leading-global-root");
+
+    // `search` needs a registry; a `list --dest` on an empty root is enough
+    // to prove `--config` before the subcommand was consumed AND `list`
+    // still dispatched (the pre-fix failure mode was "unexpected argument
+    // '--dest' found", `input` having swallowed "list").
+    let out = run_as(
+        "rustyfi",
+        &[
+            "--config",
+            config.to_str().unwrap(),
+            "list",
+            "--dest",
+            root.to_str().unwrap(),
+        ],
+    );
+    assert!(
+        out.status.success(),
+        "leading --config before `list` should parse and dispatch:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(String::from_utf8_lossy(&out.stdout).contains("(no packages installed)"));
+
+    // Same argv, flag after the subcommand — must produce byte-identical
+    // stdout, proving the two orders are truly equivalent, not just both
+    // exit 0.
+    let out_after = run_as(
+        "rustyfi",
+        &[
+            "list",
+            "--config",
+            config.to_str().unwrap(),
+            "--dest",
+            root.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(out.stdout, out_after.stdout);
+}
+
+/// The narrower failure mode: with nothing else on the command line to
+/// expose the mistake, `rustyfi --config F install` used to parse
+/// SUCCESSFULLY as compile mode with `input = "install"` (attempting to
+/// compile a file literally named `install`) instead of dispatching the
+/// `install` subcommand — because `--config` had already matched before
+/// clap reached the word `install`. `install` with no PATH means "reconcile
+/// the nearest Satyristes" (no leading flag needed to see that); a leading
+/// flag must resolve the exact same ambiguity the exact same way.
+#[cfg(unix)]
+#[test]
+fn leading_global_flag_does_not_swallow_a_bare_subcommand_name() {
+    use std::os::unix::process::CommandExt as _;
+
+    let empty = tmpdir("leading-global-bare");
+    let config = empty.join("config.toml");
+    std::fs::write(&config, "").unwrap();
+
+    let with_leading_flag = Command::new(bin())
+        .arg0("rustyfi")
+        .current_dir(&empty)
+        .args(["--config", config.to_str().unwrap(), "install"])
+        .output()
+        .expect("spawn");
+    let bare = Command::new(bin())
+        .arg0("rustyfi")
+        .current_dir(&empty)
+        .args(["install"])
+        .output()
+        .expect("spawn");
+
+    // Both must mean "reconcile" (exit 3, no Satyristes here) — NOT a
+    // compile-mode "install: No such file or directory".
+    assert_eq!(
+        with_leading_flag.status.code(),
+        bare.status.code(),
+        "leading --config must not change what bare `install` means:\n{}",
+        String::from_utf8_lossy(&with_leading_flag.stderr)
+    );
+    assert_eq!(with_leading_flag.status.code(), Some(3));
+    assert_eq!(with_leading_flag.stderr, bare.stderr);
+}
+
+/// The pre-fix nesting closed off by `package_commands_are_top_level` must
+/// stay closed even with a leading global flag in front of it — the hoist
+/// pre-pass must not accidentally resurrect `rustyfi satyrographos list`.
+#[cfg(unix)]
+#[test]
+fn leading_global_flag_does_not_revive_the_old_nesting() {
+    let root = tmpdir("leading-global-old-nesting");
+    let config_dir = tmpdir("leading-global-old-nesting-cfg");
+    let config = config_dir.join("config.toml");
+    std::fs::write(&config, "").unwrap();
+
+    let out = run_as(
+        "rustyfi",
+        &[
+            "--config",
+            config.to_str().unwrap(),
+            "satyrographos",
+            "list",
+            "--dest",
+            root.to_str().unwrap(),
+        ],
+    );
+    assert!(
+        !out.status.success(),
+        "`rustyfi --config F satyrographos list …` should still not parse"
+    );
+}
+
+/// `--help` after a leading global flag must show the SUBCOMMAND's help
+/// (what the user actually asked to run), not the compile personality's —
+/// the hoist-and-retry fallback prefers a `DisplayHelp`/`DisplayVersion`
+/// result over the original, less specific error.
+#[cfg(unix)]
+#[test]
+fn leading_global_flag_help_is_subcommand_specific() {
+    let config_dir = tmpdir("leading-global-help-cfg");
+    let config = config_dir.join("config.toml");
+    std::fs::write(&config, "").unwrap();
+
+    let with_leading_flag = run_as(
+        "rustyfi",
+        &["--config", config.to_str().unwrap(), "install", "--help"],
+    );
+    let direct = run_as("rustyfi", &["install", "--help"]);
+    assert!(with_leading_flag.status.success());
+    assert_eq!(with_leading_flag.stdout, direct.stdout);
+}
+
 /// End-to-end phase-1 contract: install a tiny package into a temp root
 /// (through the library API the CLI calls into), then load a document that
 /// `@require:`s it against that same root — proving the installer's nested

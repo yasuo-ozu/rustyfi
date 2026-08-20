@@ -109,6 +109,32 @@ impl RustyfiVersion {
         matches!(self, Self::V0_1)
     }
 
+    /// Whether a single BINDING may carry its own stage qualifier — 0.1's
+    /// `val ~x = e` / `val persistent ~x = e` (`dev-0-1-0`
+    /// `parser.mly:416-421`, `UTBindValue(Stage0 | Persistent0, _)`). `false`
+    /// for `V0_0`, which declares one stage per FILE with a `@stage:` header
+    /// and has no binding-level spelling at all: 0.0.6's `EXACT_TILDE` occurs
+    /// only as a splice operand prefix (`v0.0.6 parser.mly:797`) and as macro
+    /// syntax (`:608`, `:1199`).
+    ///
+    /// The two generations share one `cst::TopLet`/`TopBinding` (the 0.1
+    /// lowering builds them), so the `~` prefix is *parseable* under both and
+    /// this is what makes it an ERROR under 0.0.6 rather than a silent accept
+    /// — see `elaborate.rs`'s `binding_stage`.
+    pub fn has_per_binding_stage(&self) -> bool {
+        matches!(self, Self::V0_1)
+    }
+
+    /// Whether the `code` TYPE has a surface spelling — 0.1's `code τ`, a
+    /// one-argument prefix type application decoded alongside `list`/`ref`
+    /// (`dev-0-1-0 src/frontend/manualTypeDecoder.ml:31-36`). `false` for
+    /// `V0_0`, whose own manual-type decoder (`v0.0.6
+    /// src/frontend/typeenv.ml:527-530`) special-cases `list` and `ref` and
+    /// nothing else, so `CodeType` there is inference-only.
+    pub fn has_code_type_syntax(&self) -> bool {
+        matches!(self, Self::V0_1)
+    }
+
     /// Whether this port actually implements this version end-to-end
     /// (lexer through PDF rendering). Both generations, Slice 1 scope for
     /// `V0_1`
@@ -406,6 +432,12 @@ mod tests {
 
         assert!(!RustyfiVersion::V0_0.graphics_is_collection());
         assert!(RustyfiVersion::V0_1.graphics_is_collection());
+
+        assert!(!RustyfiVersion::V0_0.has_per_binding_stage());
+        assert!(RustyfiVersion::V0_1.has_per_binding_stage());
+
+        assert!(!RustyfiVersion::V0_0.has_code_type_syntax());
+        assert!(RustyfiVersion::V0_1.has_code_type_syntax());
     }
 
     #[test]

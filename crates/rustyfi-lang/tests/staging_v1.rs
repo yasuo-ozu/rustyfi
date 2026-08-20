@@ -14,10 +14,19 @@
 //! the floor would still compile, still typecheck, and quietly run a macro at
 //! the wrong stage, so each test states which side of that join it holds
 //! down.
+//!
+//! The qualifier applies to EVERY binding shape, not just the plain
+//! non-recursive `val`: upstream puts it before the whole `bind_value`
+//! (`parser_v1.mly:417-421`), and `bind_value` is what selects between the
+//! plain form and `rec`/`mutable`/`inline`/`block`/`math` (`:581-593`). The
+//! last group of tests covers the `code τ` TYPE, 0.1's surface spelling of
+//! `MonoType::Code` (`dev-0-1-0 src/frontend/manualTypeDecoder.ml:31-36`) —
+//! without it a signature cannot describe a staged member at all.
 
 use rustyfi_backend::{FontKey, FontMetrics, Length};
 use rustyfi_lang::value::Value;
 use rustyfi_lang::{elaborate, eval, primitives, typecheck, v1::lower};
+use rustyfi_loader::{LoadedCst, LoadedFile};
 use rustyfi_syntax::cst;
 use rustyfi_syntax::leaf::KwIn;
 use rustyfi_syntax::{parse_file_v1, RustyfiVersion, Span};
@@ -68,7 +77,12 @@ fn compile_v01(lib_src: &str, doc_src: &str) -> Result<Value, String> {
 
     let env = primitives::base_env_with_version(RustyfiVersion::V0_1);
     let store = rustyfi_lang::symbol::SymbolStore::new();
-    let scope = elaborate::Scope::new(&store, env.names());
+    // `new_with_version(V0_1)`, not `Scope::new` (which is V0_0): the
+    // elaborate scope's version is what gates 0.1-only surface, and the
+    // per-binding stage qualifier is now one of those gates -- a 0.0.6-scoped
+    // elaboration refuses `val ~x` outright (`elaborate.rs`'s `binding_stage`).
+    // This is also what the real 0.1 pipeline does (`lib.rs:714`, `:1002`).
+    let scope = elaborate::Scope::new_with_version(&store, env.names(), RustyfiVersion::V0_1);
     let elaborated =
         elaborate::elaborate_program(&file, &scope).map_err(|e| format!("elaborate: {e}"))?;
     typecheck::typecheck_with_version(&elaborated, RustyfiVersion::V0_1)
@@ -77,6 +91,59 @@ fn compile_v01(lib_src: &str, doc_src: &str) -> Result<Value, String> {
     interp
         .eval(&env, &rustyfi_lang::ast::debrand(&elaborated.body, &store))
         .map_err(|e| format!("eval: {e}"))
+}
+
+/// Run the FULL public 0.1 pipeline (which, unlike [`compile_v01`], also runs
+/// `v1::module_check` — the `:>` seal check, the only consumer that lowers a
+/// SIGNATURE's declared type). Same `LoadedFile`/`NotADocument` shape
+/// `v01_sealing.rs` uses and for the same reasons: `check_program` is
+/// `pub(crate)`, so an integration test reaches it only through
+/// `compile_document_v1`, and a program that type-checks but is not a real
+/// document envelope surfaces as `NotADocument` — reachable only once the
+/// seal check has already accepted it.
+/// (`CompileError` is boxed only to keep `clippy::result_large_err` quiet.)
+fn compile_v01_sealed(lib_src: &str, doc_src: &str) -> Result<(), Box<rustyfi_lang::CompileError>> {
+    let files = vec![
+        LoadedFile {
+            path: std::path::PathBuf::from("lib.satyh"),
+            cst: LoadedCst::V0_1(
+                parse_file_v1(lib_src).unwrap_or_else(|e| panic!("lib parse failed: {e}")),
+            ),
+            origin: Default::default(),
+            version: RustyfiVersion::V0_1,
+        },
+        LoadedFile {
+            path: std::path::PathBuf::from("doc.saty"),
+            cst: LoadedCst::V0_1(
+                parse_file_v1(doc_src).unwrap_or_else(|e| panic!("doc parse failed: {e}")),
+            ),
+            origin: Default::default(),
+            version: RustyfiVersion::V0_1,
+        },
+    ];
+    rustyfi_lang::compile_document_v1(&files, &NoFonts)
+        .map(|_| ())
+        .map_err(Box::new)
+}
+
+fn assert_sealed_accepts(lib_src: &str, doc_src: &str) {
+    match compile_v01_sealed(lib_src, doc_src) {
+        Ok(()) => {}
+        Err(e) => match *e {
+            rustyfi_lang::CompileError::NotADocument(_) => {}
+            other => panic!("expected the seal check to accept, got: {other}"),
+        },
+    }
+}
+
+fn assert_sealed_type_error(lib_src: &str, doc_src: &str) -> String {
+    match compile_v01_sealed(lib_src, doc_src) {
+        Err(e) => match *e {
+            rustyfi_lang::CompileError::Type(t) => t.to_string(),
+            other => panic!("expected a type error, got: {other}"),
+        },
+        Ok(()) => panic!("expected a type error, the program was accepted"),
+    }
 }
 
 fn as_int(v: Value) -> i64 {
@@ -188,6 +255,55 @@ fn the_stage_does_not_leak_to_the_next_binding() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// The occurrence matrix, through the 0.1 qualifier
+//
+// `staging.rs` pins all nine cells against 0.0.6's whole-file `@stage:`. These
+// three pin that the 0.1 PER-BINDING qualifier feeds the same matrix — a
+// lowering that recorded the stage well enough for `&`/`~` but dropped it
+// before the environment would pass every test above this line and still let a
+// document read a stage-0 macro directly.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_stage_zero_val_is_not_nameable_from_the_document_stage() {
+    // The same `val ~c` that `~M.c` reaches legally two tests up. Without the
+    // splice, this is a stage-1 occurrence of a stage-0 binding, and it is not
+    // merely bad style: `c` is a `code int`, so what the document would get is
+    // not even the value it looks like it is asking for.
+    let err = compile_v01("module M = struct val ~c = &(1 + 1) end", "M.c").unwrap_err();
+    assert!(
+        err.contains("invalid occurrence") && err.contains("as to stage"),
+        "expected a staging-occurrence error, got {err}"
+    );
+}
+
+#[test]
+fn a_persistent_val_is_nameable_from_the_document_stage() {
+    // `persistent` earns its keyword here: the SAME reference the test above
+    // refuses is legal, because a persistent binding is the one kind nameable
+    // from every stage. Both tests are needed — either alone is satisfied by
+    // a lowering that maps both qualifiers to the same stage.
+    let v = compile_v01("module M = struct val persistent ~c = 40 + 2 end", "M.c").unwrap();
+    assert_eq!(as_int(v), 42);
+}
+
+#[test]
+fn a_document_stage_val_is_not_nameable_from_inside_a_splice() {
+    // The reverse crossing, which the 0.1 surface can express in one file: a
+    // splice reads its operand at stage 0, where a plain (stage-1) `val` is
+    // not yet bound. Upstream refuses it on exactly the same matrix cell.
+    //
+    // The occurrence has to be refused BEFORE the splice's own `code b`
+    // unification — `M.c` is an `int`, so a port that checked the type first
+    // would report a type mismatch and hide the staging error underneath it.
+    let err = compile_v01("module M = struct val c = 1 end", "~M.c").unwrap_err();
+    assert!(
+        err.contains("invalid occurrence") && err.contains("as to stage"),
+        "expected a staging-occurrence error, got {err}"
+    );
+}
+
 #[test]
 fn an_unstaged_zero_one_program_is_unaffected() {
     // The `Option<BindStageV1>`/`Option<StagePrefix>` fields are tried before
@@ -195,6 +311,129 @@ fn an_unstaged_zero_one_program_is_unaffected() {
     // fail at the first token and steal nothing.
     let v = compile_v01("module M = struct val c = 1 + 1 end", "M.c").unwrap();
     assert_eq!(as_int(v), 2);
+}
+
+// ---------------------------------------------------------------------------
+// The qualifier on the OTHER binding shapes
+// ---------------------------------------------------------------------------
+//
+// Upstream puts the stage before the whole `bind_value`
+// (`parser_v1.mly:417-421`), and `bind_value` is what selects between the
+// plain non-recursive form and `rec`/`mutable`/`inline`/`block`/`math`
+// (`:581-593`) -- so all six shapes take the prefix, not just the first.
+
+#[test]
+fn a_stage_zero_val_rec_may_quote() {
+    // Closed quote: `&(x)` would name a stage-0 parameter from inside the
+    // quote (stage 1), which the stage-reference matrix refuses in its own
+    // right -- see `staging.rs`'s `a_stage_zero_let_rec_may_quote`.
+    compile_v01("module M = struct val ~rec f x = &(1) end", "0")
+        .expect("a `val ~rec` binding may quote");
+}
+
+#[test]
+fn a_default_stage_val_rec_may_not_quote() {
+    // The pair that proves the prefix is what did it, not `val rec` as such.
+    let err = compile_v01("module M = struct val rec f x = &(1) end", "0").unwrap_err();
+    assert!(
+        err.contains("only valid at stage 0"),
+        "expected a staging error, got {err}"
+    );
+}
+
+#[test]
+fn a_stage_zero_val_rec_covers_the_whole_and_chain() {
+    // One qualifier, one `UTBindValue(stage, UTRec(binds))` upstream: the
+    // second clause is at stage 0 too, so ITS quote is legal as well. A
+    // lowering that wrapped only the first clause would fail here.
+    compile_v01(
+        "module M = struct val ~rec f x = &(1) and g y = &(2) end",
+        "0",
+    )
+    .expect("every clause of a staged `val ~rec` is at that stage");
+}
+
+#[test]
+fn a_stage_zero_val_mutable_may_quote() {
+    compile_v01("module M = struct val ~mutable r <- &(1) end", "0")
+        .expect("a `val ~mutable` binding may quote");
+}
+
+#[test]
+fn a_stage_zero_command_val_may_quote() {
+    // `val ~inline` / `val ~block` / `val ~math` -- the three command shapes,
+    // each built by its own `walk_bindings` arm and so each needing its own
+    // wrap. A bare `&` is the probe (see `staging.rs`'s twin): legal at stage
+    // 0 and nowhere else.
+    for lib in [
+        "module M = struct val ~inline \\c = let n = &(1) in { } end",
+        "module M = struct val ~block +c = let n = &(1) in '< > end",
+        "module M = struct val ~math ctx \\c = let n = &(1) in read-math ctx ${} end",
+    ] {
+        compile_v01(lib, "0").unwrap_or_else(|e| panic!("{lib} -> {e}"));
+    }
+}
+
+#[test]
+fn a_default_stage_command_val_may_not_quote() {
+    for lib in [
+        "module M = struct val inline \\c = let n = &(1) in { } end",
+        "module M = struct val block +c = let n = &(1) in '< > end",
+        "module M = struct val math ctx \\c = let n = &(1) in read-math ctx ${} end",
+    ] {
+        let err = compile_v01(lib, "0").unwrap_err();
+        assert!(
+            err.contains("only valid at stage 0"),
+            "expected a staging error for {lib}, got {err}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The `code` type, written out
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_signature_may_name_the_code_type() {
+    // `code τ` is 0.1's surface spelling of `MonoType::Code`
+    // (`dev-0-1-0 src/frontend/manualTypeDecoder.ml:31-36`, decoded as a
+    // one-argument type application right beside `list` and `ref`). Before
+    // this, no `TypeExpr` production yielded `MonoType::Code` at all, so the
+    // name fell through to an unknown nominal `Variant("code", [int])` and a
+    // signature simply could not describe a staged member.
+    assert_sealed_accepts(
+        "module M :> sig val ~c : code int end = struct val ~c = &(1) end",
+        "0",
+    );
+}
+
+#[test]
+fn the_code_type_is_checked_not_merely_parsed() {
+    // The mirror: `code int` must not unify with a `code string`. If the
+    // annotation were still an opaque nominal type this would be accepted
+    // (nothing would unify with anything), which is the failure mode worth
+    // guarding.
+    let err = assert_sealed_type_error(
+        "module M :> sig val ~c : code string end = struct val ~c = &(1) end",
+        "0",
+    );
+    assert!(
+        err.contains("code"),
+        "expected the mismatch to name `code`, got {err}"
+    );
+}
+
+#[test]
+fn the_code_type_takes_exactly_one_argument() {
+    // A bare `code` (no argument) is not the code type -- upstream reaches
+    // its `CodeType` branch only with `[ ty ]` and reports
+    // `IllegalNumberOfTypeArguments` otherwise. Here the zero-argument
+    // spelling stays an unknown nominal name, so it cannot stand in for
+    // `code int`.
+    assert_sealed_type_error(
+        "module M :> sig val ~c : code end = struct val ~c = &(1) end",
+        "0",
+    );
 }
 
 #[test]

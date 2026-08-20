@@ -568,7 +568,20 @@ pub fn compile_document_v1_with_aux(
                         .map(|e| v1::xver_adapt::needs_unite_helper(e))
                         == Ok(true)
                     {
+                        let helper_start = prelude.len();
                         prelude.extend(v1::xver_adapt::unite_helper_prelude());
+                        // Persistent, so the wrapper that calls it can name it
+                        // from whatever stage the DEPENDENCY declared: these
+                        // helpers are compiler-generated machinery spliced
+                        // outside the dependency's own `@stage:` range, and a
+                        // `@stage: persistent` dependency may not name a
+                        // stage-1 binding (`Stage::can_reference`). Persistent
+                        // is the one stage every other stage may reach, which
+                        // is exactly the property a generated helper needs.
+                        stages.extend(
+                            (helper_start..prelude.len())
+                                .map(|i| (i, types::Stage::Persistent0)),
+                        );
                     }
                 }
                 let start = prelude.len();

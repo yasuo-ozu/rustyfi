@@ -76,7 +76,11 @@ fn main() {
 /// not-installed; `5` filesystem/archive/manifest; `1` compile error or a
 /// `status` mismatch.
 fn run() -> i32 {
-    let matches = dispatch::build_cli().get_matches();
+    // `dispatch::get_matches` (not a bare `build_cli().get_matches()`) so a
+    // global flag given BEFORE the subcommand (`rustyfi --config F install
+    // NAME`) works the same as after it — see `dispatch`'s module doc for
+    // why that needs a pre-pass rather than a clap setting.
+    let matches = dispatch::get_matches();
 
     // `multicall(true)` turns argv[0]'s basename into the top-level
     // subcommand: `rustyfi` | `satyrographos`.

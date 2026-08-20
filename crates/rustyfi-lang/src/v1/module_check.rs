@@ -328,12 +328,17 @@ fn check_program_inner<'s, 'a>(
                 )?;
                 let name_text = store.resolve(*name);
                 let is_xver_shadow = xver_sealed_once.contains(name_text);
+                // 0.1's per-binding `val ~x` / `val persistent ~x` reaches
+                // here as an `Ast::StageScope` on the RHS; the sealed arm
+                // below commits the SIGNATURE's scheme but the binding is
+                // still the same binding, so it keeps its own stage.
+                let bind_stage = ck.binding_stage(value);
                 env = match static_env.seals.get(name_text) {
                     // Slice X4b: the cross-version coercion REBINDING of an
                     // already-sealed member — commit its own inferred scheme
                     // (the version-adapted view), do NOT re-check it against
                     // the exporter's signature.
-                    Some(_) if is_xver_shadow => env.with_all(schemes),
+                    Some(_) if is_xver_shadow => env.with_all(schemes, bind_stage),
                     // the alias binding of a SEALED member: subsumption-
                     // check, then commit the DECLARED scheme (§4.2 steps
                     // 4-5 — sealing).
@@ -349,13 +354,13 @@ fn check_program_inner<'s, 'a>(
                         if xver_shadows.contains(name_text) {
                             xver_sealed_once.insert(name_text.to_string());
                         }
-                        env.with(*name, decl.scheme.clone())
+                        env.with(*name, decl.scheme.clone(), bind_stage)
                     }
                     // the alias binding of a HIDDEN member: commit NOTHING.
                     None if static_env.hidden.contains_key(name_text) => env,
                     // every ordinary binding (locals, unsealed aliases,
                     // opens).
-                    None => env.with_all(schemes),
+                    None => env.with_all(schemes, bind_stage),
                 };
                 // Sub-slice 2d-2 §2.2: this alias may be a deferred
                 // ctor-hide trigger (the sealing module's LAST value
@@ -390,7 +395,7 @@ fn check_program_inner<'s, 'a>(
                     ck.infer_binding(&env, BindingView::LetMath { name: *name, value }),
                     &static_env,
                 )?;
-                env = env.with_all(schemes);
+                env = env.with_all(schemes, ck.binding_stage(value));
                 body
             }
             Ast::LetRecIn(bindings, body) => {
@@ -398,7 +403,7 @@ fn check_program_inner<'s, 'a>(
                     ck.infer_binding(&env, BindingView::LetRec(bindings)),
                     &static_env,
                 )?;
-                env = env.with_all(schemes);
+                env = env.with_all(schemes, ck.binding_stage_rec(bindings));
                 body
             }
             Ast::LetMutableIn(name, init, body) => {
@@ -406,7 +411,7 @@ fn check_program_inner<'s, 'a>(
                     ck.infer_binding(&env, BindingView::LetMutable { name: *name, init }),
                     &static_env,
                 )?;
-                env = env.with_all(schemes);
+                env = env.with_all(schemes, ck.binding_stage(init));
                 body
             }
             other => {

@@ -227,9 +227,12 @@ upstream's default (non-bytecode) interpreter it is still 3.1× faster.
 - `figbox` comes out one page short of upstream — a line-packing difference.
 - Fonts are named by file or hash entry, not by package: a document asking for
   `fonts-junicode:Junicode-Bold` falls back to a name heuristic.
-- Cross-version `deco` crosses one way (a 0.0 package's deco used from a 0.1
-  document), not yet the reverse.
-- `font` and 0.1's `paren` are stand-in types.
+- Cross-version `deco` crosses both ways now, but not through an
+  optional-argument arrow, and the reverse direction not through a nested
+  module signature.
+- `font` and 0.1's `paren` are stand-in types, and neither generation has
+  surface syntax for the `code` type, so a signature cannot name a staged
+  member.
 
 ## The manual
 

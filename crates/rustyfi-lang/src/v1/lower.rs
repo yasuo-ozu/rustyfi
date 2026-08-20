@@ -590,6 +590,7 @@ fn lower_bind_v1<'s>(
         }
         cst_v1::Bind::ValueInline {
             kw,
+            stage,
             ctx,
             cmd,
             params,
@@ -598,6 +599,7 @@ fn lower_bind_v1<'s>(
             ..
         } => Ok(vec![cst::TopBinding::LetInline {
             kw: KwLetHorz(kw.0),
+            stage: stage.as_ref().map(lower_bind_stage),
             ctx: ctx.clone(),
             cmd: plain_horz(cmd)?,
             params: lower_command_params(params)?,
@@ -606,6 +608,7 @@ fn lower_bind_v1<'s>(
         }]),
         cst_v1::Bind::ValueBlock {
             kw,
+            stage,
             ctx,
             cmd,
             params,
@@ -614,6 +617,7 @@ fn lower_bind_v1<'s>(
             ..
         } => Ok(vec![cst::TopBinding::LetBlock {
             kw: KwLetVert(kw.0),
+            stage: stage.as_ref().map(lower_bind_stage),
             ctx: ctx.clone(),
             cmd: plain_vert(cmd)?,
             params: lower_command_params(params)?,
@@ -622,6 +626,7 @@ fn lower_bind_v1<'s>(
         }]),
         cst_v1::Bind::ValueMath {
             kw,
+            stage,
             ctx,
             cmd,
             params,
@@ -630,12 +635,17 @@ fn lower_bind_v1<'s>(
             body,
             ..
         } => Ok(vec![lower_value_math(
-            kw, ctx, cmd, params, scripts, eq, body,
+            kw, stage, ctx, cmd, params, scripts, eq, body,
         )?]),
         cst_v1::Bind::ValueRec {
-            kw, first, ands, ..
+            kw,
+            stage,
+            first,
+            ands,
+            ..
         } => Ok(vec![cst::TopBinding::LetRec {
             kw: KwLetRec(kw.0),
+            stage: stage.as_ref().map(lower_bind_stage),
             first: lower_rec_clause(first)?,
             ands: ands
                 .iter()
@@ -649,12 +659,14 @@ fn lower_bind_v1<'s>(
         }]),
         cst_v1::Bind::ValueMutable {
             kw,
+            stage,
             name,
             arrow,
             value,
             ..
         } => Ok(vec![cst::TopBinding::LetMutable {
             kw: KwLetMutable(kw.0),
+            stage: stage.as_ref().map(lower_bind_stage),
             name: name.clone(),
             arrow: arrow.clone(),
             value: lower_expr(value)?,
@@ -1727,6 +1739,7 @@ fn fun1(param_name: &str, span: Span, body: cst::ast::Expr) -> cst::ast::Expr {
 ///   scripts appended under `enter_script`).
 fn lower_value_math(
     kw: &KwVal,
+    stage: &Option<cst_v1::BindStageV1>,
     ctx: &VarTok,
     cmd: &AnyHorzCmdTok,
     params: &[cst_v1::Param],
@@ -1766,6 +1779,7 @@ fn lower_value_math(
     );
     Ok(cst::TopBinding::LetMath {
         kw: KwLetMath(kw.0),
+        stage: stage.as_ref().map(lower_bind_stage),
         cmd: plain_horz(cmd)?,
         params: lower_command_params(params)?,
         eq: eq.clone(),

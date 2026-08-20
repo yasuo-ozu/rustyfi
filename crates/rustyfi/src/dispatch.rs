@@ -16,10 +16,195 @@
 //! `satyrographos`/`multicall` subcommand trees coexist via
 //! `args_conflicts_with_subcommands` + `subcommand_negates_reqs`, so the
 //! required positional `input` is only demanded when no subcommand is used.
+//!
+//! ## Leading global flags (`rustyfi --config F install NAME`)
+//!
+//! `args_conflicts_with_subcommands` is exactly what makes the positional
+//! `input` and the subcommand tree coexist on one `Command` — but clap
+//! implements it with a single per-parse `valid_arg_found` bit that does not
+//! distinguish "a flag matched" from "a positional matched": once ANY
+//! argument matches at this level, clap stops treating later bare words as
+//! subcommand names at all (`clap_builder`'s `Parser::possible_subcommand`).
+//! So `rustyfi --config F install NAME` matches `--config` on the `rustyfi`
+//! node, and from that point on "install" can no longer start a subcommand —
+//! it instead fills the compile positional `input`, and `NAME` (or a
+//! subcommand-only flag like `--dest`) then fails to parse against the
+//! compile arg set.
+//!
+//! Turning `args_conflicts_with_subcommands` off doesn't work either: without
+//! it, clap will ALSO treat a bare word as a subcommand name AFTER an
+//! unrelated word has already filled `input` (that's the documented default,
+//! "arguments between subcommands") — which resurrects the exact nesting the
+//! `package_commands_are_top_level` test deliberately closed off
+//! (`rustyfi satyrographos list --dest X` would start "succeeding" again, by
+//! filling `input` with `"satyrographos"` and then dispatching `list`
+//! anyway). There is no third setting that means "flags before the
+//! subcommand are fine, bare words are not" — clap's model genuinely has
+//! nothing finer-grained than the one bit.
+//!
+//! [`get_matches`] is the fix: parse `argv` once, normally. If that FAILS, it
+//! looks for a subcommand name anywhere in the tail, moves everything before
+//! it to just after it, and retries — i.e. rewrites
+//! `rustyfi --config F install NAME` to `rustyfi install --config F NAME`
+//! and parses that instead. This is deliberately a pre-pass, not a clap
+//! setting, because no clap setting expresses the distinction above.
+//!
+//! A second, narrower case: the first parse can also SUCCEED with the wrong
+//! meaning instead of failing outright, when nothing follows the swallowed
+//! word to expose the mistake — `rustyfi --config F install` (no PATH) parses
+//! as compile mode with `input = "install"` (a document literally named
+//! `install`) rather than the `install` subcommand, because `--config`
+//! already set clap's "an arg matched" bit before `install` was reached. This
+//! is the SAME ambiguity `rustyfi install` (no leading flag) already resolves
+//! in the subcommand's favor — a leading flag must not flip that resolution —
+//! so `get_matches` also re-checks a successful compile-mode parse whose
+//! `input` string is *itself* exactly a subcommand name, and prefers the
+//! hoisted reading when that also parses. An explicit path (`./install`)
+//! escapes this by no longer string-matching a bare name, same as it already
+//! does for the leading-flag-free case.
+//!
+//! Both retries are gated on the plain parse already being unusable (an
+//! error, or this specific swallowed-subcommand shape) so they can never
+//! change the outcome of anything else that parses correctly today — compile
+//! mode on a real document is untouched, byte for byte.
+//!
+//! Documented edge case: the hoist looks for the FIRST tail token that is
+//! literally a subcommand name, so a flag *value* that happens to collide
+//! with a subcommand name (`--lib-root search install foo`, meaning
+//! `--lib-root=search`, subcommand `install`) can pick the wrong split. Since
+//! the rewrite is only trusted when it goes on to parse cleanly (or resolves
+//! to a MORE specific `--help`/`--version`), the worst case is that the
+//! user's ORIGINAL error is reported unchanged — never a silently wrong
+//! compile or install. A literal `--` in the tail before any candidate word
+//! disables hoisting entirely, since at that point the user has explicitly
+//! said "nothing after this is a flag".
 
+use std::ffi::OsString;
 use std::path::PathBuf;
 
-use clap::{value_parser, Arg, ArgAction, ArgGroup, Command};
+use clap::{value_parser, Arg, ArgAction, ArgGroup, ArgMatches, Command};
+
+/// Parse `std::env::args_os()`, working around the leading-global-flag
+/// limitation documented above. Behaves exactly like `build_cli().get_matches()`
+/// when the argv already parses (the overwhelmingly common case, and the
+/// entirety of compile mode); only reaches for the hoist-and-retry fallback
+/// when the direct parse fails.
+pub fn get_matches() -> ArgMatches {
+    let argv: Vec<OsString> = std::env::args_os().collect();
+    match build_cli().try_get_matches_from(argv.clone()) {
+        Ok(m) => {
+            // The parse succeeded, but may have swallowed a subcommand name
+            // into the compile positional `input` because a leading flag
+            // already matched first (module doc, second case). Only retry
+            // when that specific, narrow shape is detected; any other
+            // successful parse is returned exactly as clap produced it.
+            if compile_mode_input(&m).is_some_and(|input| is_hoistable_name(input)) {
+                if let Some(reordered) = hoist_leading_subcommand(&argv) {
+                    if let Ok(m2) = build_cli().try_get_matches_from(reordered) {
+                        return m2;
+                    }
+                }
+            }
+            m
+        }
+        Err(original_err) => {
+            if let Some(reordered) = hoist_leading_subcommand(&argv) {
+                match build_cli().try_get_matches_from(reordered) {
+                    Ok(m) => return m,
+                    // The rewrite still fails, but more specifically as a
+                    // `--help`/`--version` request scoped to the subcommand
+                    // the user actually meant (e.g. `rustyfi --config F
+                    // install --help` should show `install`'s help, not the
+                    // compile personality's) — strictly more useful than the
+                    // original error, so prefer it.
+                    Err(e)
+                        if matches!(
+                            e.kind(),
+                            clap::error::ErrorKind::DisplayHelp
+                                | clap::error::ErrorKind::DisplayVersion
+                                | clap::error::ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
+                        ) =>
+                    {
+                        e.exit()
+                    }
+                    // Any other failure means the hoist guessed wrong (or the
+                    // command was simply broken to start with); the original
+                    // error is at least about what the user actually typed.
+                    Err(_) => {}
+                }
+            }
+            // Same behavior as `Command::get_matches`: print and exit with
+            // clap's own formatting and exit code.
+            original_err.exit()
+        }
+    }
+}
+
+/// The compile positional `input`'s value, but only when compile mode is
+/// actually what was parsed (the `rustyfi` personality, no subcommand
+/// dispatched under it) — `None` for the `satyrographos` personality (which
+/// has no compile mode at all) and for a real subcommand dispatch.
+fn compile_mode_input(m: &ArgMatches) -> Option<&PathBuf> {
+    let (name, inner) = m.subcommand()?;
+    if name != "rustyfi" || inner.subcommand().is_some() {
+        return None;
+    }
+    inner.get_one::<PathBuf>("input")
+}
+
+/// Whether `input` is, verbatim, the name of a subcommand reachable under
+/// either personality — the telltale of the "successful but wrong" case
+/// (module doc). An explicit path (`./install`) never matches, by design.
+fn is_hoistable_name(input: &PathBuf) -> bool {
+    input
+        .to_str()
+        .is_some_and(|s| hoistable_subcommand_names().iter().any(|n| n == s))
+}
+
+/// The set of words that could plausibly be "the subcommand", read off the
+/// real tree rather than hand-duplicated, so a subcommand added later is
+/// covered automatically. `install`/`uninstall`/`build`/`list`/`status`/
+/// `search`/`update` are shared by both personalities; `multicall`/`man` are
+/// `rustyfi`-only, and included for the same reason: they sit on the same
+/// conflicted `Command` node.
+fn hoistable_subcommand_names() -> Vec<String> {
+    let cli = build_cli();
+    let mut names: Vec<String> = Vec::new();
+    for personality in ["rustyfi", "satyrographos"] {
+        if let Some(p) = cli.find_subcommand(personality) {
+            names.extend(p.get_subcommands().map(|sc| sc.get_name().to_string()));
+        }
+    }
+    names
+}
+
+/// If some tail token (after `argv[0]`, the multicall personality selector)
+/// is exactly the name of a subcommand reachable under either personality,
+/// move every token before it to just after it and return the rewritten
+/// argv. Returns `None` when there is nothing to hoist — no candidate word
+/// found, the first tail token already IS one (nothing precedes it to move),
+/// or a literal `--` appears first (see the module doc's edge-case note).
+fn hoist_leading_subcommand(argv: &[OsString]) -> Option<Vec<OsString>> {
+    let names = hoistable_subcommand_names();
+
+    let rest = argv.get(1..)?;
+    let stop = rest.iter().position(|a| a == "--").unwrap_or(rest.len());
+    let split = rest[..stop]
+        .iter()
+        .position(|a| a.to_str().is_some_and(|s| names.iter().any(|n| n == s)))?;
+    if split == 0 {
+        // Already `SUBCOMMAND ...`; there is nothing before it to hoist, and
+        // if this shape still fails to parse, reordering cannot help.
+        return None;
+    }
+
+    let mut out = Vec::with_capacity(argv.len());
+    out.push(argv[0].clone());
+    out.push(rest[split].clone());
+    out.extend_from_slice(&rest[..split]);
+    out.extend_from_slice(&rest[split + 1..]);
+    Some(out)
+}
 
 /// Build the full multicall dispatch tree.
 pub fn build_cli() -> Command {
@@ -338,10 +523,13 @@ fn package_subcommands(cmd: Command) -> Command {
     // refused depending on which subcommand precedes it is a worse surprise
     // than one accepted and unused.
     //
-    // It must come after the subcommand (`list --config F`, not `--config F
-    // list`): the compiler personality takes a positional document and sets
-    // `args_conflicts_with_subcommands`, so an argument given before the
-    // subcommand puts clap in compile mode.
+    // Either order works (`list --config F` and `--config F list`): a flag
+    // given BEFORE the subcommand would, on its own, put clap in compile
+    // mode (the compiler personality takes a positional document and sets
+    // `args_conflicts_with_subcommands`) — `dispatch::get_matches`'s
+    // hoist-and-retry pre-pass is what makes the leading form work anyway.
+    // See this module's top doc comment for why that is a pre-pass and not a
+    // clap setting.
     cmd.arg(
         Arg::new("config")
             .long("config")

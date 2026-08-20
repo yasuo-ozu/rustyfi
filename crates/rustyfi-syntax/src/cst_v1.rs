@@ -291,6 +291,11 @@ pub enum Bind {
     /// too, for free).
     ValueInline {
         kw: KwVal,
+        /// See [`Bind::Value::stage`] — upstream's qualifier sits before the
+        /// whole `bind_value`, and `bind_value` is what `inline`/`block`/
+        /// `math`/`rec`/`mutable` select between (`parser_v1.mly:417-421` →
+        /// `:581-593`), so every arm below carries the same prefix.
+        stage: Option<BindStageV1>,
         inline_kw: KwInline,
         ctx: Option<VarTok>,
         cmd: AnyHorzCmdTok,
@@ -302,6 +307,8 @@ pub enum Bind {
     /// <ctx> +cmd <param>* = <expr>`.
     ValueBlock {
         kw: KwVal,
+        /// See [`Bind::ValueInline::stage`].
+        stage: Option<BindStageV1>,
         block_kw: KwBlock,
         ctx: Option<VarTok>,
         cmd: AnyVertCmdTok,
@@ -319,6 +326,8 @@ pub enum Bind {
     /// arm can steal another's input.
     ValueMath {
         kw: KwVal,
+        /// See [`Bind::ValueInline::stage`].
+        stage: Option<BindStageV1>,
         math_kw: KwMath,
         ctx: VarTok,
         /// `\cmd` — math commands share the `\` sigil with inline commands
@@ -340,6 +349,10 @@ pub enum Bind {
     /// because it is the overwhelmingly common arm.
     ValueRec {
         kw: KwVal,
+        /// See [`Bind::ValueInline::stage`]. One qualifier covers the whole
+        /// `and`-chain, matching upstream's single `UTBindValue(stage,
+        /// UTRec(binds))`.
+        stage: Option<BindStageV1>,
         rec_kw: KwRec,
         first: ast::RecClauseV1,
         ands: Vec<ast::AndClauseV1>,
@@ -350,6 +363,8 @@ pub enum Bind {
     /// (`cst::TopBinding::LetMutable.name`, `cst.rs:237`).
     ValueMutable {
         kw: KwVal,
+        /// See [`Bind::ValueInline::stage`].
+        stage: Option<BindStageV1>,
         mutable_kw: KwMutable,
         name: VarTok,
         arrow: OverwriteEqTok,

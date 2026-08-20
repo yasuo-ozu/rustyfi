@@ -620,43 +620,117 @@ pub fn elaborate_program_with_versions<'s>(
     })
 }
 
-/// Wrap `value` in [`Ast::VersionScope`]`(V0_0, _)` iff `this_v006` — the
-/// one-line helper every `walk_bindings` binding-construction arm below
-/// calls right after building its (fully elaborated) RHS. See
-/// [`elaborate_program_with_versions`]'s doc comment.
-/// Wrap a binding's value in the stage its FILE declared, when that is not
-/// the default. Mirrors [`maybe_v006_scope`] below: both carry a per-file
-/// property across the loader's prelude merge.
 /// Where each TOP-LEVEL entry of a merged prelude came from.
 ///
 /// The loader concatenates every library's prelude into one file, which drops
 /// two per-file properties the bindings still need: which generation authored
 /// them (`v006`, Slice X2a) and which `@stage:` their file declared
 /// (`stages`). Both are keyed by the entry's index at THIS level, and both are
-/// empty for a single-file compile.
+/// empty for a single-file compile. `v006` is carried onto a binding by
+/// [`maybe_v006_scope`], `stages` by [`stage_wrap_item`].
 pub struct ItemOrigins<'a> {
     pub v006: &'a HashSet<usize>,
     pub stages: &'a HashMap<usize, crate::types::Stage>,
 }
 
-fn maybe_stage_scope<'s>(value: Ast<'s>, this_stage: Option<crate::types::Stage>) -> Ast<'s> {
-    match this_stage {
-        Some(st) => Ast::StageScope(st, Box::new(value)),
-        None => value,
+/// Does `value` already carry a stage of its own? True for a nested module's
+/// members (the recursive `walk_bindings` call wrapped them) and for a 0.1
+/// `val ~x` (its own qualifier wins); [`stage_wrap_item`] leaves those alone
+/// so the INNER, more specific stage is the one the typechecker reads.
+///
+/// The `ModuleScope`/`VersionScope` peeling mirrors
+/// `typecheck::Checker::binding_stage`, which looks for the same node through
+/// the same two wrappers — the two must agree or a binding could be wrapped
+/// twice with different stages.
+fn already_staged(value: &Ast<'_>) -> bool {
+    match value {
+        Ast::StageScope(..) => true,
+        Ast::ModuleScope(_, b) | Ast::VersionScope(_, b) => already_staged(b),
+        _ => false,
+    }
+}
+
+/// Mark every binding one top-level item contributed as belonging to `stage`.
+///
+/// One item is not one binding: a module member also mints a qualified alias,
+/// a `let-rec` group inside a module mints one alias per clause, `open` and
+/// `direct` mint one per re-exposed name, a destructuring `let` mints one per
+/// pattern variable. Every one of them is code from the SAME file, and so is
+/// at that file's stage — wrapping only the "main" value (which is all this
+/// used to do, for `TopBinding::Let` alone) left the aliases at the default
+/// stage 1, which the per-binding staging matrix then reads as a genuine
+/// stage crossing: `list.satyg`'s `@stage: persistent` `let reverse lst =
+/// fold-left …` would be refused for naming its own `let-rec` sibling.
+fn stage_wrap_item<'s>(bindings: &mut [Binding<'s>], stage: crate::types::Stage) {
+    fn wrap<'s>(slot: &mut Ast<'s>, stage: crate::types::Stage) {
+        if already_staged(slot) {
+            return;
+        }
+        let taken = std::mem::replace(slot, Ast::Unit);
+        *slot = Ast::StageScope(stage, Box::new(taken));
+    }
+    for b in bindings {
+        match b {
+            Binding::Let(_, v) | Binding::LetMutable(_, v) | Binding::LetMath(_, v) => {
+                wrap(v, stage)
+            }
+            Binding::LetRec(clauses) => {
+                for (_, v) in clauses.iter_mut() {
+                    if already_staged(v) {
+                        continue;
+                    }
+                    *v = Rc::new(Ast::StageScope(stage, Box::new((**v).clone())));
+                }
+            }
+        }
     }
 }
 
 /// The stage ONE binding declared on itself (`cst::TopStage`), if any — the
 /// per-binding half of the same question `ItemOrigins::stages` answers per
 /// FILE. SATySFi 0.1 writes it as `val ~x = e` / `val persistent ~x = e`
-/// (`v1/lower.rs` puts it here); 0.0.6 source never sets it.
-fn top_let_stage(stage: Option<&cst::TopStage>) -> Option<crate::types::Stage> {
-    stage.map(|s| match s.persistent {
+/// (`v1/lower.rs` puts it here); 0.0.6 source never sets it, and saying so is
+/// this function's other job.
+///
+/// **Version gate.** The two generations share `cst::TopBinding`, so the `~`
+/// qualifier PARSES under 0.0.6 as well — which would have let a genuine
+/// 0.0.6 file write `let ~x = e`, a form upstream 0.0.6 does not have at all
+/// (its `EXACT_TILDE` appears only as a splice operand prefix, `v0.0.6
+/// parser.mly:797`, and as macro syntax, `:608`/`:1199`; 0.0.6 declares one
+/// stage per FILE, with a `@stage:` header). Elaboration is the first place
+/// that knows which generation authored the binding, so it is where the form
+/// is refused.
+///
+/// `authored_v006` is that per-ITEM answer, not the file's: in a mixed
+/// compile the scope carries ONE version (`V0_1` for both cross-version
+/// roots, see `lib.rs`) while `ItemOrigins::v006` marks the individual
+/// prelude slots a 0.0.6 dependency contributed — so a spliced 0.0.6 item is
+/// gated even inside a 0.1-rooted program, and a spliced 0.1 item is not
+/// gated even inside a 0.0.6-rooted one.
+fn binding_stage(
+    stage: Option<&cst::TopStage>,
+    version: RustyfiVersion,
+    authored_v006: bool,
+) -> Result<Option<crate::types::Stage>, ElabError> {
+    let Some(s) = stage else { return Ok(None) };
+    if authored_v006 || !version.has_per_binding_stage() {
+        return err(
+            s.tilde.0,
+            "a per-binding stage qualifier (`~`) is SATySFi 0.1 syntax (`val ~x = e`) — \
+             this binding is compiled as 0.0.6, which declares its stage per FILE \
+             with a `@stage:` header",
+        );
+    }
+    Ok(Some(match s.persistent {
         Some(_) => crate::types::Stage::Persistent0,
         None => crate::types::Stage::Stage0,
-    })
+    }))
 }
 
+/// Wrap `value` in [`Ast::VersionScope`]`(V0_0, _)` iff `this_v006` — the
+/// one-line helper every `walk_bindings` binding-construction arm below
+/// calls right after building its (fully elaborated) RHS. See
+/// [`elaborate_program_with_versions`]'s doc comment.
 fn maybe_v006_scope<'s>(value: Ast<'s>, this_v006: bool) -> Ast<'s> {
     if this_v006 {
         Ast::VersionScope(RustyfiVersion::V0_0, Box::new(value))
@@ -1004,7 +1078,27 @@ fn walk_bindings<'s>(
         // pure-0.0.6 / pure-0.1 paths), so this is a dead branch there.
         let this_v006 = origins.v006.contains(&item_idx);
         // The stage the file this item came from declared, if not the default.
-        let this_stage = origins.stages.get(&item_idx).copied();
+        // A stage the BINDING declared on itself (0.1's `val ~x`) wins over
+        // the one its FILE declared (0.0.6's `@stage:`) — they cannot both be
+        // set, since no file is authored in both generations, so the `or` is
+        // really a merge of two disjoint sources rather than a precedence
+        // rule.
+        let own_stage = match top {
+            cst::TopBinding::Let(b) => b.stage.as_ref(),
+            cst::TopBinding::LetRec { stage, .. }
+            | cst::TopBinding::LetInline { stage, .. }
+            | cst::TopBinding::LetBlock { stage, .. }
+            | cst::TopBinding::LetMath { stage, .. }
+            | cst::TopBinding::LetMutable { stage, .. } => stage.as_ref(),
+            _ => None,
+        };
+        let this_stage = binding_stage(own_stage, scope.version, this_v006)?
+            .or_else(|| origins.stages.get(&item_idx).copied());
+        // Every binding this item is about to append belongs to `this_stage`
+        // — including the aliases the arms below mint alongside the value
+        // itself. Recorded by index so `stage_wrap_item` can wrap exactly
+        // that range once the arm is done (see its doc comment).
+        let bindings_before = bindings.len();
         match top {
             cst::TopBinding::Let(top_let) => {
                 // Same curry-with-patterns desugaring as a `let-rec` clause
@@ -1015,13 +1109,7 @@ fn walk_bindings<'s>(
                 // `gr.satyh`-style tuple-destructuring params.
                 let top_let_params = params_to_patbots(&top_let.params);
                 let value = rec_clause_value(&top_let_params, &top_let.value, &[], &running)?;
-                // A stage the BINDING declared on itself (0.1's `val ~x`)
-                // wins over the one its FILE declared (0.0.6's `@stage:`) —
-                // they cannot both be set, since no file is authored in both
-                // generations, so the `or` is really a merge of two disjoint
-                // sources rather than a precedence rule.
-                let this_stage = top_let_stage(top_let.stage.as_ref()).or(this_stage);
-                let value = maybe_stage_scope(maybe_v006_scope(value, this_v006), this_stage);
+                let value = maybe_v006_scope(value, this_v006);
                 // A parameter-less binding may be a plain value alias
                 // (`let document = StdJa.document`) — inherit the aliased
                 // name's optional shape so a marker-less call auto-omits its
@@ -1110,6 +1198,18 @@ fn walk_bindings<'s>(
                 } else {
                     recs
                 };
+                // Same per-clause granularity for the stage: the `LetRecIn`
+                // node itself is not an expression the typechecker reads at a
+                // stage, its clause BODIES are.
+                let recs: Vec<(String, Rc<Ast<'s>>)> = match this_stage {
+                    Some(st) => recs
+                        .into_iter()
+                        .map(|(n, body)| {
+                            (n, Rc::new(Ast::StageScope(st, Box::new((*body).clone()))))
+                        })
+                        .collect(),
+                    None => recs,
+                };
                 // Mark each clause body as belonging to `mod_path` (ctor
                 // scoping — see `Ast::ModuleScope`); a no-op at top level.
                 let recs: Vec<(String, Rc<Ast<'s>>)> = if mod_path.is_empty() {
@@ -1148,7 +1248,8 @@ fn walk_bindings<'s>(
             } => {
                 let value_ast =
                     elaborate_let_inline(ctx.as_ref(), params, value, &running, "read-inline")?;
-                let value_ast = maybe_v006_scope(value_ast, this_v006);
+                let value_ast =
+                    maybe_v006_scope(value_ast, this_v006);
                 push_named_binding(
                     mod_path,
                     cmd.name.clone(),
@@ -1169,7 +1270,8 @@ fn walk_bindings<'s>(
             } => {
                 let value_ast =
                     elaborate_let_inline(ctx.as_ref(), params, value, &running, "read-block")?;
-                let value_ast = maybe_v006_scope(value_ast, this_v006);
+                let value_ast =
+                    maybe_v006_scope(value_ast, this_v006);
                 push_named_binding(
                     mod_path,
                     cmd.name.clone(),
@@ -1182,10 +1284,14 @@ fn walk_bindings<'s>(
                 );
             }
             cst::TopBinding::LetMath {
-                cmd, params, value, ..
+                cmd,
+                params,
+                value,
+                ..
             } => {
                 let value_ast = elaborate_let_math(params, value, &running)?;
-                let value_ast = maybe_v006_scope(value_ast, this_v006);
+                let value_ast =
+                    maybe_v006_scope(value_ast, this_v006);
                 push_named_binding(
                     mod_path,
                     cmd.name.clone(),
@@ -1212,9 +1318,15 @@ fn walk_bindings<'s>(
                     }
                 }
             }
-            cst::TopBinding::LetMutable { name, value, .. } => {
+            cst::TopBinding::LetMutable {
+                name, value, ..
+            } => {
                 let value_ast = expr(value, &running)?;
-                let value_ast = maybe_v006_scope(value_ast, this_v006);
+                // The stage wraps the INITIAL value (the only expression a
+                // `let-mutable` holds); `Binding::LetMutable` then makes the
+                // ref cell out of it.
+                let value_ast =
+                    maybe_v006_scope(value_ast, this_v006);
                 push_named_binding(
                     mod_path,
                     name.name.clone(),
@@ -1376,6 +1488,9 @@ fn walk_bindings<'s>(
                     }
                 }
             }
+        }
+        if let Some(st) = this_stage {
+            stage_wrap_item(&mut bindings[bindings_before..], st);
         }
     }
     Ok((bindings, exported, running))

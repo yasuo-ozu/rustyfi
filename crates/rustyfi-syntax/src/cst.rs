@@ -52,14 +52,16 @@ pub enum Header {
     Require(HeaderRequireTok),
     /// Accepted and currently ignored (driven by the loader crate).
     Import(HeaderImportTok),
-    /// `@stage: persistent` / `@stage: 0` / `@stage: 1`. Accepted and
-    /// treated as an inert no-op: this port only implements single-stage
-    /// (stage-0) compilation (no `&(…)`/`~(…)` quotation), so there is no
-    /// second stage for `persistent`/`1` to actually select — every stage
-    /// header is interpreted as ordinary stage-0 code. Sound for any file
-    /// that (like the bundled `option.satyg`/`list.satyg`) contains no
-    /// staging brackets Risks section for the general (unimplemented)
-    /// staging case.
+    /// `@stage: persistent` / `@stage: 0` / `@stage: 1` — the stage EVERY
+    /// binding in this file is written at (0.0.6 declares it per file; 0.1
+    /// dropped the header and says the same thing per binding, see
+    /// [`TopStage`]). Honoured, not ignored: the loader's prelude merge
+    /// records the entry range each file contributed
+    /// (`rustyfi_lang::note_stage`) and `elaborate.rs` wraps every one of
+    /// that file's bindings — `let`, `let-rec`, `let-inline`, `let-block`,
+    /// `let-math` and `let-mutable` alike — in `Ast::StageScope`, so a
+    /// stage-0 library may use `&(…)` and the document that requires it may
+    /// not.
     Stage(HeaderStageTok),
 }
 
@@ -205,9 +207,12 @@ pub struct TopLet {
 /// `persistent` is a 0.1-only keyword (`lexer.rs`'s version-gated table), so
 /// under 0.0.6 the `Some(_)` shape is unreachable through the `persistent`
 /// spelling and reachable only as a bare `let ~x = e` — syntax upstream
-/// 0.0.6 does not have. Accepting it there is deliberate latitude of the
-/// same kind [`ast::AppExpr`] already takes (`&!x`), not a claim that 0.0.6
-/// grew per-binding stages.
+/// 0.0.6 does not have (its `EXACT_TILDE` is a splice operand prefix,
+/// `v0.0.6 parser.mly:797`, or macro syntax, `:608`/`:1199` — never a
+/// binding qualifier). PARSING it under 0.0.6 is the usual additive-accept
+/// latitude this shared cst takes; ELABORATING it is not — `elaborate.rs`'s
+/// `binding_stage` refuses a stage qualifier on 0.0.6-authored input with a
+/// version error, so no 0.0.6 file can quietly acquire a per-binding stage.
 #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
 pub struct TopStage {
     pub persistent: Option<KwPersistent>,
@@ -222,6 +227,14 @@ pub enum TopBinding {
     /// `let-rec name param* = expr (and name param* = expr)*`
     LetRec {
         kw: KwLetRec,
+        /// See [`TopLet::stage`] — upstream 0.1 puts the qualifier before the
+        /// WHOLE `bind_value`, and `bind_value` covers `rec`/`mutable`/
+        /// `inline`/`block`/`math` as well as the plain non-recursive form
+        /// (`dev-0-1-0 parser.mly:417-421` → `:581-593`), so every binding
+        /// shape below carries one too. The stage applies to each `and`
+        /// clause of this one `let-rec`, exactly as it does upstream (one
+        /// `UTBindValue(stage, UTRec(binds))` for the whole chain).
+        stage: Option<TopStage>,
         first: ast::RecBinding,
         ands: Vec<ast::AndBinding>,
     },
@@ -247,6 +260,8 @@ pub enum TopBinding {
     /// [`ast::Param`]'s doc comment — `parser.mly:622-624`).
     LetInline {
         kw: KwLetHorz,
+        /// See [`TopBinding::LetRec::stage`].
+        stage: Option<TopStage>,
         ctx: Option<VarTok>,
         cmd: HorzCmdTok,
         params: Vec<ast::Param>,
@@ -256,6 +271,8 @@ pub enum TopBinding {
     /// `[ctxvar] let-block +cmd param* = expr` (`nxvertdec`).
     LetBlock {
         kw: KwLetVert,
+        /// See [`TopBinding::LetRec::stage`].
+        stage: Option<TopStage>,
         ctx: Option<VarTok>,
         cmd: VertCmdTok,
         params: Vec<ast::Param>,
@@ -275,6 +292,8 @@ pub enum TopBinding {
     /// introduced them).
     LetMath {
         kw: KwLetMath,
+        /// See [`TopBinding::LetRec::stage`].
+        stage: Option<TopStage>,
         cmd: HorzCmdTok,
         params: Vec<ast::Param>,
         eq: DefEqTok,
@@ -289,6 +308,8 @@ pub enum TopBinding {
     /// [`ast::Expr::LetMutableIn`]).
     LetMutable {
         kw: KwLetMutable,
+        /// See [`TopBinding::LetRec::stage`].
+        stage: Option<TopStage>,
         name: VarTok,
         arrow: OverwriteEqTok,
         value: ast::Expr,

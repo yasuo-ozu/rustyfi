@@ -8,11 +8,12 @@
 //! silently and renders the wrong document, which is the failure worth
 //! guarding against.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use rustyfi_lang::types::Stage;
 use rustyfi_lang::value::Value;
 use rustyfi_lang::{elaborate, eval, primitives, typecheck};
+use rustyfi_syntax::RustyfiVersion;
 
 /// Evaluate a whole file's tail expression (no typechecking) — the value half.
 fn eval_str(src: &str) -> Result<Value, String> {
@@ -178,10 +179,252 @@ fn the_stage_does_not_leak_past_the_binding_it_was_declared_for() {
     );
 }
 
+/// A `@stage:` header covers the file, so it has to reach EVERY binding shape
+/// the file can hold — not just plain `let`.
+///
+/// This is the silent half of the staging gap: `let-rec`/`let-inline`/
+/// `let-block`/`let-math`/`let-mutable` used to be built without ever
+/// consulting the file's stage, so a `@stage: 0` library's `let-rec` was read
+/// at stage 1 and its `&` refused. Nothing warned; the library simply could
+/// not be written.
+#[test]
+fn a_stage_zero_let_rec_may_quote() {
+    let mut stages = HashMap::new();
+    stages.insert(0usize, Stage::Stage0);
+    // The quote is CLOSED deliberately. `&(x)` would name `x` -- a parameter
+    // bound at stage 0 -- from inside the quote, which is stage 1, and that is
+    // independently illegal under the stage-reference matrix (upstream's
+    // `typechecker.ml` refuses it the same way). Writing it that way would
+    // make this test fail for a reason that has nothing to do with what it is
+    // about: whether the FILE's stage reached a `let-rec` at all.
+    typecheck_str("let-rec f x = &(1) in 0", &stages).expect("a stage-0 `let-rec` may quote");
+}
+
+#[test]
+fn a_stage_zero_let_mutable_may_quote() {
+    let mut stages = HashMap::new();
+    stages.insert(0usize, Stage::Stage0);
+    typecheck_str("let-mutable r <- &(1) in 0", &stages)
+        .expect("a stage-0 `let-mutable` may quote");
+}
+
+#[test]
+fn a_stage_zero_command_binding_may_quote() {
+    // `let-inline`/`let-block`/`let-math` all funnel through the same
+    // command-binding arms; each is built by its own `walk_bindings` arm, so
+    // each needs its own wrap.
+    //
+    // A BARE `&` is the probe that tells the two apart: legal at stage 0, and
+    // "only valid at stage 0" anywhere else. (`~(&e)` would not -- it is legal
+    // at stage 1 too, which is exactly how it hides a lost stage.)
+    for src in [
+        "let-inline \\c = let n = &(1) in { } in 0",
+        "let-block +c = let n = &(1) in '< > in 0",
+        "let-math \\c = let n = &(1) in ${} in 0",
+    ] {
+        let mut stages = HashMap::new();
+        stages.insert(0usize, Stage::Stage0);
+        typecheck_str(src, &stages)
+            .unwrap_or_else(|e| panic!("the file's stage must reach this binding: {src} -> {e}"));
+    }
+}
+
+/// The 0.1 per-binding stage rides on the shared `cst::TopLet`, which made
+/// `let ~x = e` parse in a genuine 0.0.6 file too. Upstream 0.0.6 has no such
+/// form -- its `EXACT_TILDE` is a splice (`parser.mly:797`) or macro syntax
+/// (`:608`, `:1199`), never a binding qualifier -- so elaborating one under
+/// 0.0.6 must be refused, not silently honoured.
+#[test]
+fn a_staged_let_is_rejected_in_a_zero_zero_six_file() {
+    // The qualifier sits right after the binding keyword in every shape (it
+    // precedes the whole `bind_value` upstream), so `let-inline ~ctx \c` is
+    // the 0.0.6-token spelling of 0.1's `val ~inline ctx \c`.
+    for src in [
+        "let ~x = 1 in 0",
+        "let-rec ~f x = x in 0",
+        "let-mutable ~r <- 1 in 0",
+        "let-inline ~ctx \\c = { } in 0",
+        "let-block ~ctx +c = '< > in 0",
+        "let-math ~\\c = ${} in 0",
+    ] {
+        let err = typecheck_str(src, &HashMap::new()).unwrap_err();
+        assert!(
+            err.contains("SATySFi 0.1 syntax"),
+            "expected a version error for {src}, got {err}"
+        );
+    }
+}
+
+/// The `code` TYPE has no 0.0.6 surface spelling, and adding 0.1's must not
+/// give it one.
+///
+/// Upstream 0.0.6's manual-type decoder special-cases exactly `list` and `ref`
+/// (`src/frontend/typeenv.ml:527-530`) and reports `UndefinedTypeName` for
+/// anything else it cannot find; `code` is added only in 0.1
+/// (`dev-0-1-0 src/frontend/manualTypeDecoder.ml:31-36`). So an `int code`
+/// annotation here stays an unknown nominal name and does NOT describe the
+/// value a `&` produces.
+#[test]
+fn the_code_type_has_no_zero_zero_six_spelling() {
+    let mut stages = HashMap::new();
+    stages.insert(1usize, Stage::Stage0);
+    let err = typecheck_str("type t = C of int code\nlet x = C (&(1)) in 0", &stages).unwrap_err();
+    assert!(
+        err.contains("mismatch"),
+        "`int code` must not name the code type under 0.0.6, got {err}"
+    );
+}
+
 #[test]
 fn an_unstaged_program_is_unaffected() {
     typecheck_str("let x = 1 + 1 in x", &HashMap::new()).expect("no staging, no change");
     assert!(matches!(eval_str("let x = 1 + 1 in x").unwrap(), Value::Int(2)));
+}
+
+// ---------------------------------------------------------------------------
+// The occurrence matrix: which stage may NAME a binding of which stage
+//
+// `&`/`~` police the OPERATORS; this half polices ordinary variable
+// references, which upstream refuses independently (`typechecker.ml:667-681`
+// in 0.0.6, `:340-353` on `dev-0-1-0` — the two agree on the accept/reject
+// split). Nine cells, all nine pinned below, because the cheapest way to
+// "pass" a rejection test is to reject everything: five of these tests exist
+// only to prove the check is not a blanket refusal, and `an_unstaged_program_
+// is_unaffected` above plus the whole rest of the suite pin the ninth
+// (stage 1 naming stage 1) at scale.
+//
+// The harness marks prelude ENTRY INDICES, so entry 0 is the "library"
+// binding under test and entry 1 the one that references it; an index absent
+// from the map is stage 1, the document's own stage.
+// ---------------------------------------------------------------------------
+
+/// The two entries' stages, as `typecheck_str` wants them. `None` means "not
+/// marked", i.e. the default stage 1.
+fn two_entries(bound: Option<Stage>, user: Option<Stage>) -> HashMap<usize, Stage> {
+    let mut stages = HashMap::new();
+    if let Some(st) = bound {
+        stages.insert(0usize, st);
+    }
+    if let Some(st) = user {
+        stages.insert(1usize, st);
+    }
+    stages
+}
+
+/// `let a = 1` at `bound`, then `let b = a` at `user` — the minimal shape of
+/// one occurrence crossing a stage boundary.
+fn reference_across(bound: Option<Stage>, user: Option<Stage>) -> Result<(), String> {
+    typecheck_str("let a = 1\nlet b = a in 0", &two_entries(bound, user))
+}
+
+fn assert_stage_rejected(bound: Option<Stage>, user: Option<Stage>) {
+    let err = reference_across(bound, user).expect_err("this occurrence must be refused");
+    assert!(
+        err.contains("invalid occurrence") && err.contains("as to stage"),
+        "expected a staging-occurrence error, got {err}"
+    );
+}
+
+#[test]
+fn a_stage_zero_binding_is_not_nameable_from_stage_one() {
+    // The headline gap this closes: before per-binding stages, a document
+    // could name (and the evaluator would happily run) a library binding that
+    // exists only at the earlier stage.
+    assert_stage_rejected(Some(Stage::Stage0), None);
+}
+
+#[test]
+fn a_stage_one_binding_is_not_nameable_from_stage_zero() {
+    // The mirror. A stage-0 library runs BEFORE the document stage, so a
+    // stage-1 binding is not merely wrong to name — it does not exist yet.
+    assert_stage_rejected(None, Some(Stage::Stage0));
+}
+
+#[test]
+fn a_stage_zero_binding_is_not_nameable_from_the_persistent_stage() {
+    // `persistent` is not a superset of stage 0: it is its own stage, and the
+    // only one nameable from everywhere is the one being POINTED AT, never the
+    // one pointing.
+    assert_stage_rejected(Some(Stage::Stage0), Some(Stage::Persistent0));
+}
+
+#[test]
+fn a_stage_one_binding_is_not_nameable_from_the_persistent_stage() {
+    // Same asymmetry, the other neighbour — this is the rule that makes a
+    // `@stage: persistent` library self-contained.
+    assert_stage_rejected(None, Some(Stage::Persistent0));
+}
+
+#[test]
+fn same_stage_references_are_accepted() {
+    // Stage 0 -> stage 0 and persistent -> persistent. Without these two the
+    // rejections above would be satisfied by refusing every staged reference,
+    // which would break `list.satyg` (a real `@stage: persistent` library
+    // whose members call each other).
+    reference_across(Some(Stage::Stage0), Some(Stage::Stage0))
+        .expect("stage 0 may name stage 0");
+    reference_across(Some(Stage::Persistent0), Some(Stage::Persistent0))
+        .expect("the persistent stage may name itself");
+}
+
+#[test]
+fn a_persistent_binding_is_nameable_from_every_stage() {
+    // The whole point of `persistent`, and the row of the matrix that has to
+    // stay open for a document to use `List.map` at all. Upstream compiles
+    // these to a `Persistent` node so they survive its stage-1 preprocess
+    // pass; this port evaluates every stage in one environment, so an accepted
+    // occurrence is just an occurrence.
+    reference_across(Some(Stage::Persistent0), None).expect("stage 1 may name persistent");
+    reference_across(Some(Stage::Persistent0), Some(Stage::Stage0))
+        .expect("stage 0 may name persistent");
+    reference_across(Some(Stage::Persistent0), Some(Stage::Persistent0))
+        .expect("persistent may name persistent");
+}
+
+#[test]
+fn a_primitive_is_nameable_from_every_stage() {
+    // Primitives are registered `Persistent0` upstream
+    // (`primitives.cppo.ml:596`); binding them at the default stage instead
+    // would make `+` unreachable from a `@stage: 0` library — a rejection that
+    // would look like a staging bug in the library rather than in the port.
+    for st in [Stage::Persistent0, Stage::Stage0, Stage::Stage1] {
+        let mut stages = HashMap::new();
+        stages.insert(0usize, st);
+        typecheck_str("let a = 1 + 1 in 0", &stages)
+            .unwrap_or_else(|e| panic!("`+` must be nameable at {}: {e}", st.as_str()));
+    }
+}
+
+#[test]
+fn a_staged_binding_may_name_its_own_siblings_through_the_aliases_it_mints() {
+    // One source item is not one binding: a module member also mints a
+    // qualified alias, and a `let-rec` group mints one per clause. Those
+    // aliases are code from the same file and so carry the same stage — if
+    // they were left at the default, this (the shape `list.satyg`'s `let
+    // reverse lst = fold-left .. lst` has) would be refused for naming its own
+    // neighbour.
+    let mut stages = HashMap::new();
+    for i in 0..2 {
+        stages.insert(i, Stage::Persistent0);
+    }
+    // `M.twice` -> `double`: a `let` member naming a `let-rec` sibling, which
+    // is `list.satyg`'s `let reverse lst = fold-left .. lst` exactly.
+    // `N.four` -> `M.twice`: a member of one persistent library naming
+    // ANOTHER's qualified alias, which is `list.satyg`'s `Option.is-none`
+    // use. Only the first is caught by wrapping the member value; the second
+    // needs the alias `M.twice` itself to carry the stage.
+    typecheck_str(
+        "module M : sig val twice : int -> int end = struct\n\
+         \x20 let-rec double x = x * 2\n\
+         \x20 let twice x = double x\n\
+         end\n\
+         module N : sig val four : int end = struct\n\
+         \x20 let four = M.twice 2\n\
+         end\n\
+         let n = N.four in n",
+        &stages,
+    )
+    .expect("a persistent module's members may name each other and be named from the document");
 }
 
 // ---------------------------------------------------------------------------
@@ -209,5 +452,45 @@ fn a_stage_header_survives_the_cross_version_splice() {
     assert!(
         err.contains("only valid at stage 0"),
         "the consumer's own bindings stay stage 1: {err}"
+    );
+}
+
+/// The version gate on `let ~x` is per ITEM, not per file.
+///
+/// In a cross-version compile the elaborate scope carries ONE version --
+/// `V0_1` for both roots (`lib.rs:714`, `:1002`) -- while `ItemOrigins::v006`
+/// marks the individual prelude slots a 0.0.6 dependency contributed. A gate
+/// that only consulted the scope would let a 0.0.6 library acquire `let ~x`
+/// merely by being `@require:`d from a 0.1 document.
+#[test]
+fn a_staged_let_is_rejected_in_a_spliced_zero_zero_six_dependency() {
+    let file = rustyfi_syntax::parse_file("let ~x = 1 in 0").expect("parse");
+    let env = primitives::base_env();
+    let store = rustyfi_lang::symbol::SymbolStore::new();
+    let scope = elaborate::Scope::new_with_version(&store, env.names(), RustyfiVersion::V0_1);
+
+    // Unmarked: 0.1-authored, and so legal.
+    elaborate::elaborate_program_with_versions(
+        &file,
+        &scope,
+        &HashSet::new(),
+        &HashMap::new(),
+        None,
+    )
+    .expect("a V0_1-authored `let ~x` elaborates");
+
+    // The same node, now attributed to a spliced 0.0.6 file.
+    let err = elaborate::elaborate_program_with_versions(
+        &file,
+        &scope,
+        &HashSet::from([0usize]),
+        &HashMap::new(),
+        None,
+    )
+    .expect_err("a V0_0-authored `let ~x` must be refused even under a V0_1 scope")
+    .to_string();
+    assert!(
+        err.contains("SATySFi 0.1 syntax"),
+        "expected a version error, got {err}"
     );
 }

@@ -362,6 +362,7 @@ fn subst_bind(
         },
         cst_v1::Bind::ValueInline {
             kw,
+            stage,
             inline_kw,
             ctx,
             cmd,
@@ -370,6 +371,7 @@ fn subst_bind(
             body,
         } => cst_v1::Bind::ValueInline {
             kw: kw.clone(),
+            stage: stage.clone(),
             inline_kw: inline_kw.clone(),
             ctx: ctx.clone(),
             cmd: subst_any_horz_cmd(cmd, rw, path)?,
@@ -379,6 +381,7 @@ fn subst_bind(
         },
         cst_v1::Bind::ValueBlock {
             kw,
+            stage,
             block_kw,
             ctx,
             cmd,
@@ -387,6 +390,7 @@ fn subst_bind(
             body,
         } => cst_v1::Bind::ValueBlock {
             kw: kw.clone(),
+            stage: stage.clone(),
             block_kw: block_kw.clone(),
             ctx: ctx.clone(),
             cmd: subst_any_vert_cmd(cmd, rw, path)?,
@@ -396,6 +400,7 @@ fn subst_bind(
         },
         cst_v1::Bind::ValueMath {
             kw,
+            stage,
             math_kw,
             ctx,
             cmd,
@@ -405,6 +410,7 @@ fn subst_bind(
             body,
         } => cst_v1::Bind::ValueMath {
             kw: kw.clone(),
+            stage: stage.clone(),
             math_kw: math_kw.clone(),
             ctx: ctx.clone(),
             cmd: subst_any_horz_cmd(cmd, rw, path)?,
@@ -415,11 +421,13 @@ fn subst_bind(
         },
         cst_v1::Bind::ValueRec {
             kw,
+            stage,
             rec_kw,
             first,
             ands,
         } => cst_v1::Bind::ValueRec {
             kw: kw.clone(),
+            stage: stage.clone(),
             rec_kw: rec_kw.clone(),
             first: subst_rec_clause(first, rw, path)?,
             ands: ands
@@ -434,12 +442,14 @@ fn subst_bind(
         },
         cst_v1::Bind::ValueMutable {
             kw,
+            stage,
             mutable_kw,
             name,
             arrow,
             value,
         } => cst_v1::Bind::ValueMutable {
             kw: kw.clone(),
+            stage: stage.clone(),
             mutable_kw: mutable_kw.clone(),
             name: name.clone(),
             arrow: arrow.clone(),

@@ -391,6 +391,35 @@ impl Stage {
             _ => None,
         }
     }
+
+    /// May an expression being read at `self` name a binding introduced at
+    /// `bound`? The whole staging discipline for *occurrences*, as opposed to
+    /// the `&`/`~` operator rules — upstream's `UTContentOf` arm, whose
+    /// accepting cases are written out one by one and whose `_` fallthrough
+    /// raises `InvalidOccurrenceAsToStaging`:
+    ///
+    /// | use \ bind | `persistent` | `0` | `1` |
+    /// |------------|--------------|-----|-----|
+    /// | `persistent` | yes        | NO  | NO  |
+    /// | `0`          | yes        | yes | NO  |
+    /// | `1`          | yes (lift) | NO  | yes |
+    ///
+    /// So: a `persistent` binding is nameable from everywhere, every other
+    /// binding only from its own stage. The two generations agree on the
+    /// accept/reject split and differ only in which *node* an accepted
+    /// persistent occurrence compiles to — 0.0.6 emits `Persistent` for all
+    /// three uses (`typechecker.ml:667-681`), `dev-0-1-0` only for the
+    /// `Stage1` use (`typechecker.ml:340-353`). That distinction exists to
+    /// carry a persistent name through upstream's stage-1 PREPROCESS pass
+    /// (`CdPersistent` unlifts back to a plain `ContentOf`, `types.cppo.ml:
+    /// 1506`); this port has no such pass, evaluates every stage in one
+    /// environment, and so needs only the verdict.
+    pub fn can_reference(self, bound: Stage) -> bool {
+        matches!(
+            (self, bound),
+            (_, Stage::Persistent0) | (Stage::Stage0, Stage::Stage0) | (Stage::Stage1, Stage::Stage1)
+        )
+    }
 }
 
 /// A monomorphic type. Mirrors v0.0.6's `mono_type` (the `type_main`

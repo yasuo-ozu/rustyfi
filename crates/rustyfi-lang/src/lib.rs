@@ -433,14 +433,77 @@ pub fn compile_document_v1_with_aux(
     // generation and not the other.
     let mut stages: std::collections::HashMap<usize, types::Stage> =
         std::collections::HashMap::new();
+    // Slice X3c placement: every `deco`/`deco-set`/`paren` export X3b has
+    // adapted so far, and whether the 0.0.6-shaped (UNWRAPPED) view of them is
+    // the one currently installed at this point in the merged prelude.
+    //
+    // X3b installs the 0.1-shaped view by shadowing the export's own name, and
+    // that shadow is permanent: the prelude is one flat `Ast::LetIn` chain and
+    // `Ast::VersionScope(V0_0, _)` wraps a binding's RHS, not the continuation
+    // after it. A LATER 0.0.6-AUTHORED dependency consuming the same export
+    // therefore read it at 0.1's shape and failed to typecheck — `math.satyh`'s
+    // `val paren-right : paren` against `latexcmds`' five-argument call, and
+    // the `graphics list`/`graphics` mismatch for `deco`. The view is now
+    // SCHEDULED instead, exactly as X4b schedules the reverse one: captured
+    // once under a private name while the wrapped view is in force, the
+    // ORIGINAL restored on entering a 0.0.6-authored block, the wrapped view
+    // re-installed on entering a 0.1-authored one (the entry always is, and is
+    // always last). See `xver_adapt`'s "X3c" banner for the full derivation.
+    //
+    // Both transitions are lazy, so a program whose 0.0.6 dependencies never
+    // consume each other's crossed exports emits NOTHING extra.
+    // `deco_view_captured` counts how many of `deco_exports` already have a
+    // private `Capture` of their WRAPPED view in the prelude — the schedule
+    // grows as later dependencies cross more exports, and an `Install` may
+    // only name a view that has been captured.
+    let mut deco_exports: Vec<v1::xver_adapt::DecoExport> = Vec::new();
+    let mut v006_view_installed = false;
+    let mut deco_view_captured: usize = 0;
     for dep in deps {
         match &dep.cst {
             rustyfi_loader::LoadedCst::V0_1(cst) => {
+                // Transition back INTO 0.1-authored code: this dependency
+                // reads any crossed export at the adapted 0.1 shape, which is
+                // what X3b's wrapper is for.
+                if v006_view_installed {
+                    prelude.extend(v1::xver_adapt::deco_upgrade_prelude(
+                        &deco_exports[..deco_view_captured],
+                        v1::xver_adapt::UpgradeStep::Install,
+                    ));
+                    v006_view_installed = false;
+                }
                 v1::surface::build_file_surface(cst, &mut surfaces);
                 prelude.extend(v1::lower::lower_file_v1_with_surfaces(cst, &surfaces)?);
                 dep_csts.push(cst);
             }
             rustyfi_loader::LoadedCst::V0_0(cst) => {
+                // Slice X3c — transition INTO 0.0.6-authored code: this
+                // dependency means 0.0.6's shape by every name it writes, so
+                // any export X3b has already adapted must read as its
+                // UNWRAPPED original here. Deliberately emitted BEFORE `start`
+                // is taken below, so this 0.1-authored glue never lands in
+                // `v006_indices`/`stages`.
+                //
+                // The `Capture` rides along with the FIRST such transition
+                // rather than being emitted per-dependency: this is the last
+                // position at which naming the export's own key still yields
+                // X3b's wrapped view, and emitting it lazily is what keeps a
+                // program with no 0.0.6-to-0.0.6 consumption byte-identical to
+                // the pre-X3c splice.
+                if !v006_view_installed || deco_view_captured < deco_exports.len() {
+                    if deco_view_captured < deco_exports.len() {
+                        prelude.extend(v1::xver_adapt::deco_upgrade_prelude(
+                            &deco_exports[deco_view_captured..],
+                            v1::xver_adapt::UpgradeStep::Capture,
+                        ));
+                        deco_view_captured = deco_exports.len();
+                    }
+                    prelude.extend(v1::xver_adapt::deco_upgrade_prelude(
+                        &deco_exports,
+                        v1::xver_adapt::UpgradeStep::Restore,
+                    ));
+                    v006_view_installed = !deco_exports.is_empty();
+                }
                 // X2a: the value half of X1's forked-name guard
                 // (`free.values` against `forked_prim_names`) is REMOVED —
                 // its whole reason to exist (a single `base_env_with_version
@@ -688,9 +751,26 @@ pub fn compile_document_v1_with_aux(
                     // sequential shadowing applies one scope deeper.
                     v1::xver_adapt::inject_module_deco_wrappers(&mut prelude[start..], &exports);
                     prelude.extend(v1::xver_adapt::deco_coercion_prelude(&exports));
+                    // Slice X3c: from here on this export has TWO views in the
+                    // program — the wrapper just spliced, and the unwrapped
+                    // original the two injectors above kept reachable under
+                    // `xver-fwd-orig-`. Record it so the transitions can pick
+                    // the right one for whatever block comes next.
+                    deco_exports.extend(exports);
                 }
             }
         }
+    }
+    // The last (and, for every single-generation dependency set, the ONLY)
+    // transition back into 0.1-authored code: the entry itself, which is
+    // always `V0_1` here and reads every crossed export at X3b's adapted
+    // shape. Emitted only if some intervening 0.0.6 dependency restored the
+    // originals; with no such dependency the whole schedule stays silent.
+    if v006_view_installed {
+        prelude.extend(v1::xver_adapt::deco_upgrade_prelude(
+            &deco_exports[..deco_view_captured],
+            v1::xver_adapt::UpgradeStep::Install,
+        ));
     }
     let entry_cst = as_v01(entry);
     let body = v1::lower::lower_document_v1(entry_cst)?;

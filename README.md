@@ -23,21 +23,51 @@ other.
 
 ## Install
 
-Take an archive for your platform from the [releases page][releases] and unpack
-it into a prefix — `~/.local` for yourself, `/usr/local` for everyone:
+```console
+$ curl -fsSL https://raw.githubusercontent.com/yasuo-ozu/rustyfi/main/install.sh | bash
+$ rustyfi --version
+```
+
+That picks the right release archive for your platform, checks it against the
+published SHA-256, and unpacks it under **`~/.local`**. Run it with `sudo` and
+the default becomes **`/usr`** instead:
+
+```console
+$ curl -fsSL https://raw.githubusercontent.com/yasuo-ozu/rustyfi/main/install.sh | sudo bash
+```
+
+Either way `--prefix` wins over both, and `bash -s --` is how you get arguments
+past the pipe:
+
+```console
+$ curl -fsSL .../install.sh | bash -s -- --prefix /opt/rustyfi
+$ curl -fsSL .../install.sh | PREFIX=/opt/rustyfi bash
+```
+
+Piping a script into a shell runs code you haven't read; `curl -O` it first if
+you'd rather look. `install.sh --help` lists every option and the exact layout
+it writes.
+
+### From an archive
+
+The releases page has the same archives if you'd sooner unpack one yourself.
+Each ships with a `.sha256` beside it:
 
 ```console
 $ shasum -a 256 -c rustyfi-<tag>-x86_64-unknown-linux-gnu.tar.gz.sha256
 $ tar -xzf rustyfi-<tag>-x86_64-unknown-linux-gnu.tar.gz --strip-components=1 -C ~/.local
-$ rustyfi --version
 ```
 
 ### From source
+
+`install.sh` doubles as the installer for a checkout — run inside one, it uses
+the binary you just built instead of downloading anything:
 
 ```console
 $ git clone https://github.com/yasuo-ozu/rustyfi && cd rustyfi
 $ cargo build --release --bin rustyfi
 $ sh scripts/download-fonts.sh      # IPAex, Junicode, Latin Modern — pinned, ~175 MB
+$ ./install.sh                      # --prefix DIR to put it elsewhere
 ```
 
 ## Compile a document

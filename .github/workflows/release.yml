@@ -104,27 +104,15 @@ jobs:
       - name: Smoke test
         run: ./target/${{ matrix.target }}/release/rustyfi${{ matrix.exe }} --version
 
-      #   bin/rustyfi[.exe]
-      #   lib/rustyfi/dist/packages/          0.0 packages
-      #   lib/rustyfi/dist/fonts/             the faces + licences  (artifact)
-      #   lib/rustyfi/dist/hash/              font name -> file     (artifact)
-      #   lib/rustyfi/dist-v01/packages/      0.1 packages
-      #   share/rustyfi/config.toml           shipped defaults (<exe>/../share)
-      #   share/man/man1/rustyfi.1
-      #   share/doc/rustyfi/README.md, LICENSE
+      # The archive is just an install tree with a directory name around it, so
+      # staging it is `./install.sh` with the staging dir as the prefix. See
+      # `install.sh --help` for the layout it produces; the fonts are the one
+      # part it does not fill in, and the next step unpacks them over it.
       - name: Stage archive
         run: |
-          mkdir -p "stage/$DIR/bin" "stage/$DIR/lib/rustyfi" \
-                   "stage/$DIR/share/rustyfi" "stage/$DIR/share/doc/rustyfi" \
-                   "stage/$DIR/share/man/man1"
-          cp "target/${{ matrix.target }}/release/rustyfi${{ matrix.exe }}" "stage/$DIR/bin/"
-          cp -r lib-rustyfi/dist lib-rustyfi/dist-v01 "stage/$DIR/lib/rustyfi/"
-          "target/${{ matrix.target }}/release/rustyfi${{ matrix.exe }}" man \
-              > "stage/$DIR/share/man/man1/rustyfi.1"
-          test -s "stage/$DIR/share/man/man1/rustyfi.1"
-          cp config.toml "stage/$DIR/share/rustyfi/"
-          cp README.md LICENSE "stage/$DIR/share/doc/rustyfi/"
-          find "stage/$DIR" -name .gitignore -delete
+          ./install.sh \
+            --prefix "stage/$DIR" \
+            --bin "target/${{ matrix.target }}/release/rustyfi${{ matrix.exe }}"
 
       - name: Add the bundled fonts
         uses: actions/download-artifact@v4

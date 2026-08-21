@@ -96,6 +96,11 @@ fn is_str_char(c: char) -> bool {
 fn is_mathsymbol_top(c: char) -> bool {
     matches!(c, '+' | '-' | '*' | '/' | ':' | '=' | '<' | '>' | '~' | '.' | ',' | '`')
 }
+/// v0.0.6's `mathsymbol` (`lexer.mll:129`) — `mathsymboltop` plus `?`. Kept
+/// as documentation of the source class; the math lexer emits one token per
+/// symbol (see its `is_mathsymbol_top` arm) and `?` is claimed earlier by
+/// `?:`/`?*`, so nothing consumes a RUN of these any more.
+#[allow(dead_code)]
 fn is_mathsymbol(c: char) -> bool {
     is_mathsymbol_top(c) || c == '?'
 }
@@ -1399,11 +1404,27 @@ impl Lexer {
                     }
                     return self.error(start, "illegal token '\\' in a math area");
                 }
+                // ONE token per math symbol, not per RUN of them.
+                //
+                // v0.0.6's rule is `mathsymboltop (mathsymbol*)`
+                // (`lexer.mll:556`), a single `MATHCHAR` for the whole run —
+                // and that run then misses `default_math_class_map`, whose
+                // keys are all one character, so `${-------}` set SEVEN ASCII
+                // hyphens where the reference sets seven U+2212 MINUS SIGNs
+                // (latexcmds' `\overbrace…{\underbrace…{-------}}`, and the
+                // whole of that document's `chars_missing`). Splitting makes
+                // each symbol its own math ATOM, so each one hits the class
+                // map on its own — which is also what the reference engine
+                // does: `${a -- b}` sets `𝑎 − −𝑏` there, with binary spacing
+                // BETWEEN the two minuses, which one atom cannot produce.
+                //
+                // `is_mathsymbol`'s extra `?` is consumed by the `'?'` arm
+                // above (`?:`/`?*`) before this one is ever reached, so
+                // dropping the run scan loses no token shape that was
+                // reachable.
                 _ if is_mathsymbol_top(c) => {
                     self.bump();
-                    let mut run = c.to_string();
-                    run.push_str(&self.scan_while(is_mathsymbol));
-                    self.emit(start, Token::MathChar(run));
+                    self.emit(start, Token::MathChar(c.to_string()));
                     return Ok(());
                 }
                 _ if c.is_ascii_alphanumeric() => {

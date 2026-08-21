@@ -56,6 +56,22 @@ pub enum DecoEntry {
         /// obey — see this enum's doc comment.
         version: RustyfiVersion,
     },
+    /// `inline-frame-breakable`'s deco set, behind a
+    /// `PureHorzBox::InlineFrameMarker` pair. The inline twin of `Block`
+    /// above: the frame may split across LINE breaks rather than page breaks,
+    /// so `fire_hooks` picks `decoS`/`decoH`/`decoM`/`decoT` per line
+    /// fragment the same way. `pads` is kept for the vertical half only —
+    /// `paddingL`/`paddingR` are already spliced into the box stream as
+    /// `FixedEmpty` (upstream `append_horz_padding`), so only `t`/`b` are
+    /// read back here, to size each fragment's rect.
+    InlineBreakable {
+        pads: rustyfi_backend::Paddings,
+        /// `(decoS, decoH, decoM, decoT)` — evalUtil.ml:169 `get_decoset`.
+        decoset: [Value; 4],
+        /// The generation whose `deco` calling convention these closures
+        /// obey — see this enum's doc comment.
+        version: RustyfiVersion,
+    },
 }
 
 impl DecoEntry {
@@ -64,7 +80,9 @@ impl DecoEntry {
     /// than whatever `interp.version` happens to be at fire time.
     pub fn version(&self) -> RustyfiVersion {
         match self {
-            DecoEntry::Inline { version, .. } | DecoEntry::Block { version, .. } => *version,
+            DecoEntry::Inline { version, .. }
+            | DecoEntry::Block { version, .. }
+            | DecoEntry::InlineBreakable { version, .. } => *version,
         }
     }
 }

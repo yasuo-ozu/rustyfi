@@ -423,7 +423,13 @@ pub struct DocumentValue {
     /// deco closure — see `eval::Interp::link_decos`'s doc comment for why
     /// this, not `extras.annotations` (page-absolute, no `DecoId`), is what
     /// the reflow backend needs to find which `PureHorzBox::Frame` in
-    /// `reflow_source` a link belongs to. Filled in by `eval_document_trials`
+    /// `reflow_source` a link belongs to. NOTE for whoever merges the
+    /// `html-support` branch: `\href`/`\ref` go through
+    /// `inline-frame-breakable`, which no longer builds a `Frame` at all —
+    /// it splices its contents between a `PureHorzBox::InlineFrameMarker`
+    /// pair — so the reflow walker has to match the MARKER's `DecoId` (and
+    /// wrap the boxes between the pair) rather than a `Frame`'s, or every
+    /// link silently stops being wrapped. Filled in by `eval_document_trials`
     /// alongside `extras`, AFTER `fire_hooks` (hooks/decos haven't fired yet
     /// when `page_break_core` packages the initial `DocumentValue`). Empty
     /// (not absent) by default — same "purely additive, cheap when unused"

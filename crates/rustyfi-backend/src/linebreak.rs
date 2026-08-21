@@ -212,6 +212,11 @@ impl LineMetrics {
             PureHorzBox::EmbeddedBlock { width, .. } => self.natural += *width,
             PureHorzBox::Frame { width, .. } => self.natural += *width,
             PureHorzBox::FrameMarker { .. } => {}
+            // Zero-width bracket around contents that are already IN this
+            // stream (see the variant's doc comment) — the frame's own width,
+            // stretch and shrink are whatever its spliced boxes contribute, so
+            // the marker itself must add nothing or it would double-count.
+            PureHorzBox::InlineFrameMarker { .. } => {}
             // Zero-width marker; fired to the page bottom by `chop_page`.
             PureHorzBox::Footnote { .. } => {}
             // inert, zero contribution — read only by the reflow HTML
@@ -380,6 +385,13 @@ pub fn natural_metrics(boxes: &[HorzBox]) -> (Length, Length, Length) {
                     *depth = (*depth).max(*d);
                 }
                 PureHorzBox::FrameMarker { .. } => {}
+                // Zero width (its contents are spliced siblings), but the
+                // frame's padded vertical extent still feeds the run's outer
+                // metrics — the same shape as `GraphicsOuter` above.
+                PureHorzBox::InlineFrameMarker { height: h, depth: d, .. } => {
+                    *height = (*height).max(*h);
+                    *depth = (*depth).max(*d);
+                }
                 PureHorzBox::Footnote { .. } => {}
                 // inert, zero contribution.
                 PureHorzBox::InlineMark(_) => {}
@@ -592,6 +604,7 @@ fn carries_ink(b: &PureHorzBox) -> bool {
             | PureHorzBox::OuterFil
             | PureHorzBox::FixedEmpty { .. }
             | PureHorzBox::FrameMarker { .. }
+            | PureHorzBox::InlineFrameMarker { .. }
             | PureHorzBox::HookPageBreak { .. }
             | PureHorzBox::Discretionary { .. }
     )
@@ -996,6 +1009,7 @@ fn sole_breakable_block(content: &[PureHorzBox]) -> Option<Vec<VertBox>> {
             }
             // Inert: carries no ink and no width of its own.
             PureHorzBox::FrameMarker { .. }
+            | PureHorzBox::InlineFrameMarker { .. }
             | PureHorzBox::HookPageBreak { .. }
             | PureHorzBox::OuterEmpty { .. }
             | PureHorzBox::OuterFil
@@ -1226,6 +1240,16 @@ fn justify_line(
             // Zero-width/height/depth marker (`is_glue == false`); read back
             // by `fire_hooks`, after placement.
             PureHorzBox::FrameMarker { .. } => Length::ZERO,
+            // Zero-WIDTH bracket whose contents are spliced siblings on this
+            // same line, so it advances nothing — but it does carry the
+            // frame's padded vertical extent (see the variant's doc comment),
+            // which is how `paddingT`/`paddingB` reach the line's height and
+            // depth now that the frame is no longer one atomic box.
+            PureHorzBox::InlineFrameMarker { height: h, depth: d, .. } => {
+                height = height.max(*h);
+                depth = depth.max(*d);
+                Length::ZERO
+            }
             // Zero-width/height/depth marker (`is_glue == false`); extracted
             // and bottom-placed by `chop_page` at page-commit time.
             PureHorzBox::Footnote { .. } => Length::ZERO,

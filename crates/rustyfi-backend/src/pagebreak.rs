@@ -92,6 +92,16 @@ pub fn placed_line_extent(line: &PlacedLine) -> Option<(Length, Length)> {
             // inert, zero contribution — same treatment as
             // `HookPageBreak`/`FrameMarker` above.
             PureHorzBox::InlineMark(_) => {}
+            // Folds its padded extent in (that is the only way an inline
+            // breakable frame's `paddingT`/`paddingB` reaches this walk — its
+            // contents are spliced siblings, already visited above) but never
+            // sets `has_real`: a line holding nothing but the bracket has no
+            // content to decorate, and claiming otherwise would give a carried
+            // block frame a fragment over an empty line.
+            PureHorzBox::InlineFrameMarker { height: h, depth: d, .. } => {
+                *height = (*height).max(*h);
+                *depth = (*depth).max(*d);
+            }
         }
     }
     let mut height = Length::ZERO;

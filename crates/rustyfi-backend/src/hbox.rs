@@ -448,12 +448,13 @@ pub enum PureHorzBox {
         /// `break_into_lines`, which does exactly that for this flag.
         breakable: bool,
     },
-    /// An inline frame (`inline-frame-outer`/`-inner`/`-breakable`;
-    /// upstream `PHGOuterFrame`/`PHGInnerFrame`/`HorzFrameBreakable`) —
-    /// ATOMIC in this port: contents are pre-fit at their natural width
-    /// (`fit_cell` — the same no-Context fit tabular cells use), and the
-    /// frame never splits across a line break (the breakable variant fires
-    /// only its whole-frame deco, see `prim_inline_frame_breakable`).
+    /// An UNBREAKABLE inline frame (`inline-frame-outer`/`-inner`; upstream
+    /// `PHGOuterFrame`/`PHGInnerFrame`) — ATOMIC: contents are pre-fit at
+    /// their natural width (`fit_cell` — the same no-Context fit tabular
+    /// cells use) and the frame never splits across a line break, which is
+    /// exactly upstream's model for these two (they are *pure* boxes there
+    /// too). `inline-frame-breakable` is NOT this variant — see
+    /// [`PureHorzBox::InlineFrameMarker`].
     /// `width`/`height`/`depth` are the OUTER dims (padding included;
     /// baseline unshifted — padding grows the box, upstream lineBreak.ml's
     /// frame metrics). `contents` carry x-offsets from the frame's left edge
@@ -471,6 +472,42 @@ pub enum PureHorzBox {
     /// page breaking) — zero-width, renders nothing (writers' wildcard arm),
     /// read back by `fire_hooks` only.
     FrameMarker { id: DecoId, end: bool },
+    /// One boundary of an inline BREAKABLE frame (`inline-frame-breakable`;
+    /// upstream `HorzFrameBreakable`) — the horizontal twin of
+    /// [`PureHorzBox::FrameMarker`], and for the same reason.
+    ///
+    /// Upstream keeps a breakable frame TRANSPARENT to the paragraph breaker:
+    /// `LBFrameBreakable` threads the enclosing width map straight through its
+    /// contents (`lineBreak.ml:1094`), so glue and discretionaries *inside* the
+    /// frame are ordinary DP nodes of the enclosing paragraph, and `cut`
+    /// (`:824`) re-frames the resulting fragments one line at a time
+    /// (`append_framed_lines`), firing `decoS` for an unbroken frame and
+    /// `decoH`/`decoM`/`decoT` per fragment for a broken one.
+    ///
+    /// This port's breaker is a flat index DP over one `Vec<PureHorzBox>`, so
+    /// the same transparency is spelled the other way round: the primitive
+    /// SPLICES the frame's contents into the paragraph stream (padding-L and
+    /// -R as `FixedEmpty`, exactly upstream's `append_horz_padding`) and
+    /// brackets them with this zero-width marker pair. Nothing special happens
+    /// in the DP — the inner boxes simply *are* the paragraph's boxes, so its
+    /// break opportunities are visible and its glue stretches with the line —
+    /// and `fire_hooks` reassembles the fragments by walking the markers, the
+    /// same walk it already does for block frames.
+    ///
+    /// `height`/`depth` are the WHOLE frame's padded content extent
+    /// (`content ± pad`), carried on BOTH markers so that any line holding
+    /// either one reserves the frame's full vertical extent. Upstream sizes
+    /// each fragment from its own contents; for an unbroken frame (every
+    /// bundled caller: `\ref`, `\href`, TOC entries — all with zero padding)
+    /// the two agree exactly, and for a broken one this over-reserves a
+    /// fragment by the difference between the frame's tallest content and that
+    /// fragment's, which is zero for uniform text.
+    InlineFrameMarker {
+        id: DecoId,
+        end: bool,
+        height: Length,
+        depth: Length,
+    },
     /// `add-footnote`'s marker (v0.0.6 `PHGFootnote(imvblst)`,
     /// `horzBox.ml:283` → `ImHorzFootnote`, `:306`): a zero-width/height/
     /// depth inline box carrying the footnote's already-assembled block.
@@ -578,6 +615,7 @@ impl PureHorzBox {
             PureHorzBox::EmbeddedBlock { width, .. } => *width,
             PureHorzBox::Frame { width, .. } => *width,
             PureHorzBox::FrameMarker { .. } => Length::ZERO,
+            PureHorzBox::InlineFrameMarker { .. } => Length::ZERO,
             // Zero width, like `HookPageBreak` (`ImHorzFootnote` is skipped
             // by every width scan upstream, lineBreak.ml:1200/1254).
             PureHorzBox::Footnote { .. } => Length::ZERO,

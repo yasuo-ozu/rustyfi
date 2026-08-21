@@ -409,6 +409,22 @@ fn write_box(out: &mut String, indent: usize, dx: Length, bx: &PureHorzBox) {
                 end
             );
         }
+        PureHorzBox::InlineFrameMarker {
+            id,
+            end,
+            height,
+            depth,
+        } => {
+            let _ = writeln!(
+                out,
+                "{pad}dx={} InlineFrameMarker id={} end={} h={} d={}",
+                fmt_len(dx),
+                id.0,
+                end,
+                fmt_len(*height),
+                fmt_len(*depth)
+            );
+        }
         PureHorzBox::Footnote { block } => {
             let _ = writeln!(
                 out,

@@ -5241,8 +5241,10 @@ fn prim_get_natural_metrics(
     ]))
 }
 
-/// Build the atomic `PureHorzBox::Frame` for `inline-frame-outer`/`-inner`/
-/// `-breakable`: fit `inner` at its natural width (`fit_cell` — the same
+/// Build the atomic `PureHorzBox::Frame` for `inline-frame-outer`/`-inner`
+/// (upstream keeps both atomic too; `-breakable` is transparent instead, see
+/// [`prim_inline_frame_breakable`]): fit `inner` at its natural width
+/// (`fit_cell` — the same
 /// no-Context fit tabular cells use), pad the fitted run by `pads`, intern
 /// `deco` into `interp.decos`. §D: `deco` is fired lang-side, after
 /// placement, by `fire_hooks`/ `fire_inline_frame` — this constructor never
@@ -5501,17 +5503,29 @@ fn prim_get_rightmost_script(
 }
 
 /// `inline-frame-breakable : paddings -> deco-set -> inline-boxes ->
-/// inline-boxes` (vminstdef.yaml:1672 `BackendOuterFrameBreakable`) — the
-/// `inline-frame-outer` playbook applied to a deco *set* instead of a single
-/// `deco`: upstream wraps `hblst` in a `HorzFrameBreakable` that can split
-/// across a line break, invoking a different one of the four `deco-set`
-/// closures (start/head/middle/tail) once each fragment is placed. This
-/// port's atomic `PureHorzBox::Frame` never splits, so only `decoS` (the
-/// whole-frame closure) is kept — correct for the unbroken case, and this
-/// port never breaks it. Faithful for unbroken frames (`\href` in running
-/// text that fits one line — the dominant case); a documented deviation for
-/// a frame that would have split (upstream would additionally fire
-/// `decoH`/`decoM`/`decoT` per fragment).
+/// inline-boxes` (vminstdef.yaml:1672 `BackendOuterFrameBreakable`) —
+/// FAITHFUL: upstream's `HorzFrameBreakable` is *transparent* to the
+/// paragraph breaker (`lineBreak.ml:1094` threads the enclosing width map
+/// straight through the frame's contents), so the frame's own glue and
+/// discretionaries are break candidates of the enclosing paragraph, and
+/// `cut` (`:824`) re-frames the chosen fragments one line at a time —
+/// `decoS` for a frame that came out unbroken, `decoH`/`decoM`/`decoT` per
+/// fragment for one that split.
+///
+/// This port's breaker is a flat index DP rather than upstream's recursive
+/// one, so transparency is spelled by SPLICING: the contents go straight into
+/// the returned box list, bracketed by a zero-width
+/// [`PureHorzBox::InlineFrameMarker`] pair that `fire_hooks` walks to
+/// reassemble the fragments and fire the right closure for each. The
+/// horizontal paddings become `FixedEmpty` boxes inside the bracket, exactly
+/// upstream's `append_horz_padding` (`lineBreak.ml:79`); the vertical ones
+/// ride on the markers (which is how they still reach the line's height and
+/// depth) and are re-applied per fragment at fire time.
+///
+/// The atomic `PureHorzBox::Frame` this used to build — which fired only
+/// `decoS` and, being width-rigid, could neither break nor let an interior
+/// `inline-fil` stretch — is now reserved for `inline-frame-outer`/`-inner`,
+/// which upstream really does keep atomic.
 fn prim_inline_frame_breakable(
     interp: &mut Interp,
     version: RustyfiVersion,
@@ -5519,9 +5533,44 @@ fn prim_inline_frame_breakable(
 ) -> Result<Value, EvalError> {
     let inner = as_inline_boxes(args.pop().unwrap())?;
     let decoset = as_decoset(args.pop().unwrap())?;
-    let pads = as_paddings(args.pop().unwrap())?;
-    let [deco_s, _h, _m, _t] = decoset;
-    Ok(make_inline_frame(interp, version, pads, deco_s, inner))
+    let (pad_l, pad_r, pad_t, pad_b) = as_paddings(args.pop().unwrap())?;
+    let (_, height, depth) = natural_metrics(&inner);
+    let id = DecoId(interp.decos.len());
+    // `version` is the CALLING code's generation — see `make_inline_frame`'s
+    // identical comment and `DecoEntry`'s doc comment.
+    interp.decos.push(DecoEntry::InlineBreakable {
+        pads: Paddings {
+            l: pad_l,
+            r: pad_r,
+            t: pad_t,
+            b: pad_b,
+        },
+        decoset,
+        version,
+    });
+    let marker = |end| {
+        HorzBox::Pure(PureHorzBox::InlineFrameMarker {
+            id,
+            end,
+            height: height + pad_t,
+            depth: depth + pad_b,
+        })
+    };
+    let mut out = Vec::with_capacity(inner.len() + 4);
+    out.push(marker(false));
+    // Upstream emits both padding boxes unconditionally; a zero-width
+    // `FixedEmpty` is inert everywhere in this port too, but skipping it keeps
+    // the box stream (and every placed-line snapshot) unchanged for the
+    // zero-padding callers, which is every bundled one.
+    if pad_l != Length::ZERO {
+        out.push(HorzBox::Pure(PureHorzBox::FixedEmpty { width: pad_l }));
+    }
+    out.extend(inner);
+    if pad_r != Length::ZERO {
+        out.push(HorzBox::Pure(PureHorzBox::FixedEmpty { width: pad_r }));
+    }
+    out.push(marker(true));
+    Ok(Value::InlineBoxes(out))
 }
 
 /// `deco-set` = `Value::Tuple` of 4 closures (`(decoS, decoH, decoM,
@@ -8780,6 +8829,9 @@ fn math_glyphs_of_inline_boxes(boxes: &[HorzBox]) -> (Vec<MathGlyph>, Length) {
             // walk can extract — advance past it like `Image`/`Tabular`.
             PureHorzBox::Frame { width, .. } => *x += *width,
             PureHorzBox::FrameMarker { .. } => {}
+            // Zero-width bracket; its contents are spliced siblings, already
+            // walked by this same loop.
+            PureHorzBox::InlineFrameMarker { .. } => {}
             // Zero-width marker; no glyph representation. Same treatment
             // as `HookPageBreak`.
             PureHorzBox::Footnote { .. } => {}
@@ -8874,6 +8926,9 @@ fn math_boxes_of_inline_boxes(boxes: &[HorzBox]) -> (Vec<MathGlyph>, Vec<Graphic
             // See `math_glyphs_of_inline_boxes`'s matching arm.
             PureHorzBox::Frame { width, .. } => *x += *width,
             PureHorzBox::FrameMarker { .. } => {}
+            // Zero-width bracket; its contents are spliced siblings, already
+            // walked by this same loop.
+            PureHorzBox::InlineFrameMarker { .. } => {}
             // Zero-width marker; no glyph/graphics representation.
             PureHorzBox::Footnote { .. } => {}
             // same inert treatment as the other zero-width markers

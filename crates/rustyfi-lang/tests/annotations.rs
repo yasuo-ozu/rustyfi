@@ -244,18 +244,18 @@ fn get_leftmost_and_rightmost_script_return_none_stand_in() {
     }
 }
 
-/// The four-closure `deco-set` argument is popped and only its first
-/// element (`decoS`) is kept/interned (see the prim's doc comment — the
-/// atomic `PureHorzBox::Frame` never splits, so only the whole-frame closure
-/// is reachable); a dummy `(fun _ _ _ _ -> [])`-shaped tuple stands in here
-/// since the closures themselves are never invoked at construction time
-/// (only later, by `fire_hooks`/`apply_deco`).
+/// The four-closure `deco-set` argument is popped and interned WHOLE (all
+/// four closures — a breakable frame that splits fires `decoH`/`decoM`/
+/// `decoT` per fragment, see the prim's doc comment); a dummy
+/// `(fun _ _ _ _ -> [])`-shaped tuple stands in here since the closures
+/// themselves are never invoked at construction time (only later, by
+/// `fire_hooks`/`apply_deco`).
 fn dummy_decoset() -> Ast {
     Ast::Tuple(vec![Ast::Unit, Ast::Unit, Ast::Unit, Ast::Unit])
 }
 
 #[test]
-fn inline_frame_breakable_builds_an_atomic_frame_and_interns_the_decoset() {
+fn inline_frame_breakable_splices_its_contents_between_markers() {
     let ast = apply_all(
         "inline-frame-breakable",
         vec![
@@ -271,22 +271,40 @@ fn inline_frame_breakable_builds_an_atomic_frame_and_interns_the_decoset() {
     let Value::InlineBoxes(boxes) = v else {
         panic!("expected inline-boxes")
     };
-    assert_eq!(
-        boxes,
-        vec![HorzBox::Pure(PureHorzBox::Frame {
-            width: Length::pt(5.0),  // paddingL + inner(0) + paddingR
+    let marker = |end| {
+        HorzBox::Pure(PureHorzBox::InlineFrameMarker {
+            id: rustyfi_backend::DecoId(0),
+            end,
             height: Length::pt(4.0), // inner(0) + paddingT
             depth: Length::pt(5.0),  // inner(0) + paddingB
-            deco: rustyfi_backend::DecoId(0),
-            contents: Vec::new(),
-        })],
-        "an atomic PureHorzBox::Frame, padded on all four sides, empty \
-         contents for an empty inner run"
+        })
+    };
+    assert_eq!(
+        boxes,
+        vec![
+            marker(false),
+            // paddingL / paddingR as ordinary fixed boxes INSIDE the bracket,
+            // upstream's `append_horz_padding` (lineBreak.ml:79).
+            HorzBox::Pure(PureHorzBox::FixedEmpty {
+                width: Length::pt(2.0)
+            }),
+            HorzBox::Pure(PureHorzBox::FixedEmpty {
+                width: Length::pt(3.0)
+            }),
+            marker(true),
+        ],
+        "the frame's contents are SPLICED into the enclosing box stream \
+         (so the paragraph breaker sees their break opportunities) between \
+         a zero-width marker pair carrying the padded vertical extent"
     );
     assert_eq!(
         interp.decos.len(),
         1,
-        "the deco-set's first (decoS) closure must be interned into interp.decos"
+        "the whole deco-set must be interned into interp.decos"
+    );
+    assert!(
+        matches!(interp.decos[0], eval::DecoEntry::InlineBreakable { .. }),
+        "a breakable frame interns all four closures, not a single `Inline` deco"
     );
 }
 

@@ -2532,6 +2532,98 @@ struct OpenFrame {
     carried: bool,
 }
 
+/// The inline twin of [`OpenFrame`]: one `inline-frame-breakable` that is open
+/// at some point during the placed-line walk. Where a block frame's fragments
+/// are delimited by PAGE boundaries, an inline frame's are delimited by LINE
+/// boundaries (upstream `append_framed_lines`, `lineBreak.ml:695`), so one of
+/// these can open and close within a single line — the common case, and the
+/// one that fires `decoS`.
+#[derive(Clone)]
+struct OpenInlineFrame {
+    id: DecoId,
+    /// Left edge of the fragment currently being accumulated, in absolute page
+    /// coordinates: the start marker's own x on the line that opened the
+    /// frame, and the line's own left edge on every continuation line.
+    x: Length,
+    /// Baseline of the line the current fragment sits on.
+    baseline_y: Length,
+    /// The frame's padded vertical extent, carried on its markers — see
+    /// `PureHorzBox::InlineFrameMarker` for why it is the whole frame's rather
+    /// than this fragment's.
+    height: Length,
+    depth: Length,
+    /// `true` once an earlier fragment of this frame has already fired, i.e.
+    /// the frame really did split. Drives the same S/H/M/T choice `OpenFrame`
+    /// makes: not carried and closing -> `decoS`, carried and closing ->
+    /// `decoT`, not carried and continuing -> `decoH`, carried and continuing
+    /// -> `decoM`.
+    carried: bool,
+}
+
+/// The absolute x just past a placed line's last box — where a fragment that
+/// runs off the end of this line has to stop.
+///
+/// Uses each box's NATURAL width rather than its justified advance: the only
+/// boxes whose two differ are glue, `line_content` trims a line's trailing
+/// glue away, and an `inline-fil` that survives (the `… ++ inline-fil`
+/// flush-left idiom) is exactly the case where the fragment should stop at the
+/// ink rather than at the stretched fil.
+fn placed_line_right_edge(line: &rustyfi_backend::PlacedLine) -> Length {
+    let mut edge = Length::ZERO;
+    for (dx, bx) in &line.contents {
+        let right = *dx + bx.natural_width();
+        if right > edge {
+            edge = right;
+        }
+    }
+    line.x + edge
+}
+
+/// Fire one placed `inline-frame-breakable` fragment's decoration
+/// (`decoS`/`decoH`/`decoM`/`decoT` picked by `deco_idx` — 0/1/2/3,
+/// evalUtil.ml:169 `get_decoset` order), spanning `frame.x` to `right`.
+///
+/// The vertical padding is already folded into `frame.height`/`frame.depth`
+/// (the markers carry the padded extent), so unlike the block twin this takes
+/// no per-fragment pad selection: upstream's `append_vert_padding`
+/// (`lineBreak.ml:74`) applies `paddingT`/`paddingB` to EVERY fragment of an
+/// inline frame, not just the first and last — the split is horizontal, so
+/// each fragment has its own full-height top and bottom edge.
+fn fire_inline_frame_fragment(
+    interp: &mut eval::Interp,
+    doc: &DocumentValue,
+    page: usize,
+    frame: &OpenInlineFrame,
+    right: Length,
+    deco_idx: usize,
+) -> Result<(), eval::EvalError> {
+    let (deco, deco_version) = match &interp.decos[frame.id.0] {
+        eval::DecoEntry::InlineBreakable {
+            decoset, version, ..
+        } => (decoset[deco_idx].clone(), *version),
+        _ => {
+            return eval::eval_error("BUG: non-breakable deco behind an inline frame marker");
+        }
+    };
+    let width = right - frame.x;
+    let pt = (frame.x, doc.geometry.paper_height - frame.baseline_y);
+    // S2: see the block-frame call site's identical comment — `annot.satyh`'s
+    // `\href` fires `register-link-to-uri` from exactly this closure.
+    interp.current_deco_id = Some(frame.id);
+    let gr = primitives::apply_deco(
+        interp,
+        deco_version,
+        deco,
+        pt,
+        width,
+        frame.height,
+        frame.depth,
+    )?;
+    interp.current_deco_id = None;
+    interp.page_graphics[page].extend(gr);
+    Ok(())
+}
+
 /// Fire every placed page-break hook and §D decoration, in document order,
 /// now that final page numbers and points are known. THIS is the port's
 /// `make_hook` + `handlePdf.ml:234/337`'s invocation (hooks) and
@@ -2576,6 +2668,10 @@ pub fn fire_hooks(interp: &mut eval::Interp, doc: &DocumentValue) -> Result<(), 
     // `FrameEnd` finally arrives. Single-page frames are pushed and removed
     // within one page's walk exactly as before.
     let mut open: Vec<OpenFrame> = Vec::new();
+    // Inline frames persist across LINES the same way, and across pages too
+    // (the line a frame continues onto can be the first line of the next
+    // page), so this lives outside the page loop as well.
+    let mut open_inline: Vec<OpenInlineFrame> = Vec::new();
     for (i, page) in doc.pages.iter().enumerate() {
         interp.current_page = Some(i);
         let page_number = (i + 1) as i64; // 1-based, = pbinfo#page-number
@@ -2591,6 +2687,20 @@ pub fn fire_hooks(interp: &mut eval::Interp, doc: &DocumentValue) -> Result<(), 
         let mut closings: Vec<(usize, Vec<GraphicsElem>)> = Vec::new();
 
         for (line_idx, line) in page.lines.iter().enumerate() {
+            // An inline frame that was still open when the previous line ended
+            // continues here: re-anchor it to THIS line's left edge and
+            // baseline, so its next fragment measures from where it resumes.
+            // Body lines only — the header and footer are appended after the
+            // columns and belong to their own line-break runs, so a frame
+            // straddling the body/header boundary must not paint across them
+            // (the same reason `Page::body_lines` exists for block frames).
+            let is_body = line_idx < page.body_lines;
+            if is_body {
+                for f in &mut open_inline {
+                    f.x = line.x;
+                    f.baseline_y = line.baseline_y;
+                }
+            }
             for (dx, bx) in &line.contents {
                 match bx {
                     PureHorzBox::HookPageBreak { id } => {
@@ -2603,8 +2713,50 @@ pub fn fire_hooks(interp: &mut eval::Interp, doc: &DocumentValue) -> Result<(), 
                             *id,
                         )?;
                     }
-                    PureHorzBox::Frame { .. } => {
+                    // `Tabular`/`Graphics` for the same reason `Frame` is here:
+                    // a cell's boxes, and the inline run a `draw-text` carries,
+                    // never appear in the page flow, so a `\href` or a
+                    // `hook-page-break` inside one is only reachable through
+                    // this recursion.
+                    PureHorzBox::Frame { .. }
+                    | PureHorzBox::Tabular(_)
+                    | PureHorzBox::Graphics { .. } => {
                         fire_inline_frame(interp, doc, i, line.x + *dx, line.baseline_y, bx)?;
+                    }
+                    PureHorzBox::InlineFrameMarker {
+                        id,
+                        end: false,
+                        height,
+                        depth,
+                    } => {
+                        open_inline.push(OpenInlineFrame {
+                            id: *id,
+                            x: line.x + *dx,
+                            baseline_y: line.baseline_y,
+                            height: *height,
+                            depth: *depth,
+                            carried: false,
+                        });
+                    }
+                    PureHorzBox::InlineFrameMarker { id, end: true, .. } => {
+                        // Innermost still-open frame with this id (well-nested
+                        // by construction — `prim_inline_frame_breakable`
+                        // always splices a matched pair around its own
+                        // contents). Closing on the line it opened on is an
+                        // UNBROKEN frame: `decoS`. Closing on a later line
+                        // makes this the last of several fragments: `decoT`.
+                        if let Some(pos) = open_inline.iter().rposition(|f| f.id == *id) {
+                            let frame = open_inline.remove(pos);
+                            let deco_idx = if frame.carried { 3 } else { 0 };
+                            fire_inline_frame_fragment(
+                                interp,
+                                doc,
+                                i,
+                                &frame,
+                                line.x + *dx,
+                                deco_idx,
+                            )?;
+                        }
                     }
                     PureHorzBox::FrameMarker { id, end: false } => {
                         open.push(OpenFrame {
@@ -2693,6 +2845,22 @@ pub fn fire_hooks(interp: &mut eval::Interp, doc: &DocumentValue) -> Result<(), 
                     }
                 }
             }
+            // An inline frame still open at the end of a line really did split
+            // (upstream `append_framed_lines`' non-final `PureLine` arms): fire
+            // this line's fragment — `decoH` for the first, `decoM` for every
+            // later one. The frame stays open; the re-anchor at the top of the
+            // next body line's turn moves it on.
+            if is_body && !open_inline.is_empty() {
+                let right = placed_line_right_edge(line);
+                let pending: Vec<OpenInlineFrame> = open_inline.clone();
+                for frame in &pending {
+                    let deco_idx = if frame.carried { 2 } else { 1 };
+                    fire_inline_frame_fragment(interp, doc, i, frame, right, deco_idx)?;
+                }
+                for f in &mut open_inline {
+                    f.carried = true;
+                }
+            }
         }
         // Frames still open at page end straddle the following page break: fire
         // this page's fragment — a HEAD (`decoH`, top pad only) the first time a
@@ -2760,7 +2928,7 @@ fn fire_block_frame_fragment(
             decoset,
             version,
         } => (*pads, *width, decoset[deco_idx].clone(), *version),
-        eval::DecoEntry::Inline { .. } => {
+        eval::DecoEntry::Inline { .. } | eval::DecoEntry::InlineBreakable { .. } => {
             return eval::eval_error("BUG: inline deco behind a block-frame marker")
         }
     };
@@ -2829,10 +2997,48 @@ fn fire_embedded_block_frames(
     };
     let anchor_offset = anchor.baseline_y;
     let mut open: Vec<OpenFrame> = Vec::new();
+    // `inline-frame-breakable` inside an embedded block, same story as the
+    // `PureHorzBox::Frame` arm below: latexcmds' `\fbox`/`\doublebox`/
+    // `\ovalbox`/`\shadowbox` all go through the BREAKABLE primitive, and a
+    // `+listing` item's lines live here rather than in the page flow.
+    let mut open_inline: Vec<OpenInlineFrame> = Vec::new();
     for pl in &placed {
         let abs_baseline = baseline_ydown + (pl.baseline_y - anchor_offset);
+        for f in &mut open_inline {
+            f.x = tx + pl.x;
+            f.baseline_y = abs_baseline;
+        }
         for (dx, bx) in &pl.contents {
             match bx {
+                PureHorzBox::InlineFrameMarker {
+                    id,
+                    end: false,
+                    height,
+                    depth,
+                } => {
+                    open_inline.push(OpenInlineFrame {
+                        id: *id,
+                        x: tx + pl.x + *dx,
+                        baseline_y: abs_baseline,
+                        height: *height,
+                        depth: *depth,
+                        carried: false,
+                    });
+                }
+                PureHorzBox::InlineFrameMarker { id, end: true, .. } => {
+                    if let Some(pos) = open_inline.iter().rposition(|f| f.id == *id) {
+                        let frame = open_inline.remove(pos);
+                        let deco_idx = if frame.carried { 3 } else { 0 };
+                        fire_inline_frame_fragment(
+                            interp,
+                            doc,
+                            page,
+                            &frame,
+                            tx + pl.x + *dx,
+                            deco_idx,
+                        )?;
+                    }
+                }
                 PureHorzBox::FrameMarker { id, end: false } => {
                     open.push(OpenFrame {
                         id: *id,
@@ -2859,7 +3065,11 @@ fn fire_embedded_block_frames(
                 // whose lines live in an embedded block rather than the page
                 // flow — so 26 of the document's 144 inline frames never fired
                 // at all and every one of those boxes rendered as bare text.
-                PureHorzBox::Frame { .. } => {
+                // `Tabular`/`Graphics` too — see the identical arm in
+                // `fire_hooks`.
+                PureHorzBox::Frame { .. }
+                | PureHorzBox::Tabular(_)
+                | PureHorzBox::Graphics { .. } => {
                     fire_inline_frame(interp, doc, page, tx + pl.x + *dx, abs_baseline, bx)?;
                 }
                 PureHorzBox::EmbeddedBlock {
@@ -2888,6 +3098,17 @@ fn fire_embedded_block_frames(
             for f in &mut open {
                 f.top = Some(f.top.map_or(top, |t| t.min(top)));
                 f.bottom = Some(f.bottom.map_or(bottom, |b| b.max(bottom)));
+            }
+        }
+        if !open_inline.is_empty() {
+            let right = tx + placed_line_right_edge(pl);
+            let pending: Vec<OpenInlineFrame> = open_inline.clone();
+            for frame in &pending {
+                let deco_idx = if frame.carried { 2 } else { 1 };
+                fire_inline_frame_fragment(interp, doc, page, frame, right, deco_idx)?;
+            }
+            for f in &mut open_inline {
+                f.carried = true;
             }
         }
     }
@@ -2945,6 +3166,15 @@ fn fire_page_break_hook(
 }
 
 /// entire `\href` unlock.
+///
+/// Also the entry point for firing whatever is nested INSIDE a placed box:
+/// besides an inline frame's own contents this descends into a
+/// `Tabular`'s cells, since a cell's boxes never reach the page flow that
+/// [`fire_hooks`] walks. Everything a cell can carry — a `\href`, a `\ref`,
+/// a `hook-page-break` — was silently inert before: a `\href` in an
+/// easytable cell produced no `/Link` annotation at all, which is 3 of
+/// slydifi's 4 links. `bx` that is neither a frame nor a tabular is a no-op,
+/// so callers can hand it every box on a line.
 fn fire_inline_frame(
     interp: &mut eval::Interp,
     doc: &DocumentValue,
@@ -2953,38 +3183,164 @@ fn fire_inline_frame(
     baseline_y: Length,
     bx: &PureHorzBox,
 ) -> Result<(), eval::EvalError> {
-    let PureHorzBox::Frame {
-        width,
-        height,
-        depth,
-        deco,
-        contents,
-    } = bx
-    else {
-        return Ok(());
-    };
-    let (deco_v, deco_version) = match &interp.decos[deco.0] {
-        eval::DecoEntry::Inline { deco, version } => (deco.clone(), *version),
-        eval::DecoEntry::Block { .. } => {
-            return eval::eval_error("BUG: block deco behind an inline frame")
+    let contents = match bx {
+        PureHorzBox::Frame {
+            width,
+            height,
+            depth,
+            deco,
+            contents,
+        } => {
+            let (deco_v, deco_version) = match &interp.decos[deco.0] {
+                eval::DecoEntry::Inline { deco, version } => (deco.clone(), *version),
+                eval::DecoEntry::Block { .. } | eval::DecoEntry::InlineBreakable { .. } => {
+                    return eval::eval_error("BUG: block deco behind an inline frame")
+                }
+            };
+            let pt = (x, doc.geometry.paper_height - baseline_y);
+            // S2: see the block-frame call site's identical comment —
+            // `annot.satyh`'s `\href` fires `register-link-to-uri` from exactly
+            // this closure.
+            interp.current_deco_id = Some(*deco);
+            let gr =
+                primitives::apply_deco(interp, deco_version, deco_v, pt, *width, *height, *depth)?;
+            interp.current_deco_id = None;
+            interp.page_graphics[page].extend(gr);
+            contents
         }
+        PureHorzBox::Tabular(tab) => {
+            // Each cell is its own placed run on its own baseline. The
+            // writers' convention (`rustyfi-pdf`'s `emit_box`, `ty +
+            // cell.baseline_y` in PDF y-UP space) means `cell.baseline_y` is
+            // measured upward from the tabular box's own baseline, so in this
+            // walk's y-DOWN page coordinates it subtracts.
+            for cell in &tab.cells {
+                fire_nested_in_contents(
+                    interp,
+                    doc,
+                    page,
+                    x + cell.x,
+                    baseline_y - cell.baseline_y,
+                    &cell.contents,
+                )?;
+            }
+            return Ok(());
+        }
+        PureHorzBox::Graphics {
+            elems,
+            origin_independent,
+            ..
+        } => {
+            // `draw-text` runs (`GraphicsElem::Text`) carry real inline boxes,
+            // and figbox's `textbox` puts whole tables in one — slydifi's
+            // theme table reaches its `\link`s only through here. Element
+            // coordinates are box-local PDF y-up from the box's placed anchor,
+            // except for an `origin_independent` box whose callback already
+            // produced page-absolute ones: exactly `rustyfi-pdf`'s own
+            // `(ax, ay)` choice, kept in step with it.
+            let anchor_y = if *origin_independent {
+                doc.geometry.paper_height
+            } else {
+                baseline_y
+            };
+            let anchor_x = if *origin_independent { Length::ZERO } else { x };
+            fire_nested_in_graphics(interp, doc, page, anchor_x, anchor_y, elems)?;
+            return Ok(());
+        }
+        _ => return Ok(()),
     };
-    let pt = (x, doc.geometry.paper_height - baseline_y);
-    // S2: see the block-frame call site's identical comment —
-    // `annot.satyh`'s `\href` fires `register-link-to-uri` from exactly
-    // this closure.
-    interp.current_deco_id = Some(*deco);
-    let gr = primitives::apply_deco(interp, deco_version, deco_v, pt, *width, *height, *depth)?;
-    interp.current_deco_id = None;
-    interp.page_graphics[page].extend(gr);
+    fire_nested_in_contents(interp, doc, page, x, baseline_y, contents)
+}
+
+/// Fire every hook and decoration carried by a graphics box's elements —
+/// i.e. inside the inline runs a `draw-text` (`GraphicsElem::Text`) holds,
+/// recursing through `Group`/`Clip`. `anchor_x`/`anchor_y` are the box's
+/// placed origin in this walk's (x, y-DOWN) page coordinates.
+///
+/// A `Text` element's own `transform` (from `rotate-graphics`/
+/// `scale-graphics`) is deliberately NOT applied: a decoration's rect is an
+/// axis-aligned rectangle, so a rotated run has no faithful rect to report,
+/// and firing at the untransformed anchor at least puts a `\href`'s link
+/// where the run starts rather than nowhere at all.
+fn fire_nested_in_graphics(
+    interp: &mut eval::Interp,
+    doc: &DocumentValue,
+    page: usize,
+    anchor_x: Length,
+    anchor_y: Length,
+    elems: &[GraphicsElem],
+) -> Result<(), eval::EvalError> {
+    for elem in elems {
+        match elem {
+            GraphicsElem::Text { pt, contents, .. } => {
+                // `pt` is PDF y-UP relative to the anchor; this walk is y-down.
+                fire_nested_in_contents(
+                    interp,
+                    doc,
+                    page,
+                    anchor_x + pt.0,
+                    anchor_y - pt.1,
+                    contents,
+                )?;
+            }
+            GraphicsElem::Group(inner) | GraphicsElem::Clip(_, inner) => {
+                fire_nested_in_graphics(interp, doc, page, anchor_x, anchor_y, inner)?;
+            }
+            GraphicsElem::Fill(..) | GraphicsElem::Stroke(..) | GraphicsElem::DashedStroke(..) => {}
+        }
+    }
+    Ok(())
+}
+
+/// Fire every hook and decoration inside one placed content run — an inline
+/// frame's contents or a tabular cell's — with `x0`/`baseline_y` as the run's
+/// own absolute origin.
+///
+/// An `inline-frame-breakable` reached through here is spliced into the run as
+/// a marker pair (see `prim_inline_frame_breakable`). Such a run is a single
+/// `fit_cell` line, so the frame is always unbroken and always fires `decoS` —
+/// which is also what upstream does in this position, since a breakable frame
+/// reached through a *pure* box degrades to an atomic `LBOuterFrame`
+/// (`convert_list_for_line_breaking_pure`, lineBreak.ml:335).
+fn fire_nested_in_contents(
+    interp: &mut eval::Interp,
+    doc: &DocumentValue,
+    page: usize,
+    x0: Length,
+    baseline_y: Length,
+    contents: &[(Length, PureHorzBox)],
+) -> Result<(), eval::EvalError> {
+    let mut open_inline: Vec<OpenInlineFrame> = Vec::new();
     for (dx, child) in contents {
         // A `hook-page-break` can sit INSIDE the frame — `stdja`'s `+section`
         // appends one to a heading that the title deco then wraps in a frame —
         // and the top-level walk never sees it. See `fire_page_break_hook`.
         if let PureHorzBox::HookPageBreak { id } = child {
-            fire_page_break_hook(interp, doc, (page + 1) as i64, x + *dx, baseline_y, *id)?;
+            fire_page_break_hook(interp, doc, (page + 1) as i64, x0 + *dx, baseline_y, *id)?;
         }
-        fire_inline_frame(interp, doc, page, x + *dx, baseline_y, child)?;
+        match child {
+            PureHorzBox::InlineFrameMarker {
+                id,
+                end: false,
+                height,
+                depth,
+            } => open_inline.push(OpenInlineFrame {
+                id: *id,
+                x: x0 + *dx,
+                baseline_y,
+                height: *height,
+                depth: *depth,
+                carried: false,
+            }),
+            PureHorzBox::InlineFrameMarker { id, end: true, .. } => {
+                if let Some(pos) = open_inline.iter().rposition(|f| f.id == *id) {
+                    let frame = open_inline.remove(pos);
+                    fire_inline_frame_fragment(interp, doc, page, &frame, x0 + *dx, 0)?;
+                }
+            }
+            _ => {}
+        }
+        fire_inline_frame(interp, doc, page, x0 + *dx, baseline_y, child)?;
     }
     Ok(())
 }

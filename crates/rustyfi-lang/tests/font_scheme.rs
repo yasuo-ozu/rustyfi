@@ -248,7 +248,11 @@ fn other_script_resolves_through_the_dominant_narrow_script() {
             _ => None,
         })
         .expect("expected an InnerString");
-    assert_eq!(font, FontKey(3), "default must still read the OtherScript slot");
+    assert_eq!(
+        font,
+        FontKey(3),
+        "default must still read the OtherScript slot"
+    );
     assert_eq!(size, ctx.font_size);
 
     // `set-dominant-narrow-script Kana` redirects it, ratio included.
@@ -263,7 +267,11 @@ fn other_script_resolves_through_the_dominant_narrow_script() {
             _ => None,
         })
         .expect("expected an InnerString");
-    assert_eq!(font, FontKey(7), "OtherScript must follow dominant_narrow_script");
+    assert_eq!(
+        font,
+        FontKey(7),
+        "OtherScript must follow dominant_narrow_script"
+    );
     assert_eq!(
         size,
         ctx.font_size * 0.88,

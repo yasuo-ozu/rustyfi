@@ -7535,8 +7535,13 @@ fn layout_math_list(
     // (`math.ml:753-765`, via `get_right_math_kind`/`get_left_math_kind`).
     // The layout of an atom does not depend on its class, only the SPACING
     // between atoms does, so splitting the walk in two moves no glyph.
-    let mut laid: Vec<(Vec<MathGlyph>, Vec<GraphicsElem>, Length, MathKind, MathKind)> =
-        Vec::with_capacity(elems.len());
+    let mut laid: Vec<(
+        Vec<MathGlyph>,
+        Vec<GraphicsElem>,
+        Length,
+        MathKind,
+        MathKind,
+    )> = Vec::with_capacity(elems.len());
     for atom in elems {
         laid.push(layout_math_atom(interp, ctx, atom, size)?);
     }
@@ -7552,11 +7557,7 @@ fn layout_math_list(
         // `mkprev`/`mknext` are the neighbours' RAW classes (upstream never
         // feeds a normalized class back in), and the ends of the list are
         // `MathEnd` — `math.ml:1270`'s `convert_to_low mathctx MathEnd MathEnd`.
-        let prev_raw = if i == 0 {
-            MathKind::End
-        } else {
-            laid[i - 1].4
-        };
+        let prev_raw = if i == 0 { MathKind::End } else { laid[i - 1].4 };
         let next_raw = laid.get(i + 1).map_or(MathKind::End, |a| a.3);
         let left = normalize_math_kind(prev_raw, next_raw, left_raw);
         let right = normalize_math_kind(prev_raw, next_raw, right_raw);

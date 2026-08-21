@@ -42,6 +42,28 @@
 //!   are all inside the free band. figbox's page gap does not close. Do not
 //!   re-derive this from lineBreak.ml alone; the cost model and the graph
 //!   structure are a package, and we only have the one.
+//!
+//!   RETRIED after `text_to_boxes` started emitting inter-CJK glue at PREVENTED
+//!   boundaries as well (upstream's `LBPure` arm — the hypothesis being that
+//!   quantizing might behave differently once every boundary is elastic). It
+//!   does not: easytable 555 -> 553 lines, enumitem 869 -> 868, and the gate
+//!   fails 7 ways (easytable `text_match` 0.8743 -> 0.8539). More elasticity
+//!   puts MORE lines inside the free band, so `LINE_PENALTY` gets more say, not
+//!   less.
+//!
+//!   And a note on what the remaining gap actually is, so the next reader does
+//!   not look for a cost that closes it. Upstream's weight is `badness +
+//!   pnltybreak` with NO per-line term, so within the free band every partition
+//!   of a paragraph scores exactly 0 whatever its line count. Which one comes
+//!   out is decided by `FlowGraph.shortest_path`: labels only ever improve on a
+//!   STRICT `<` (`flowGraph.ml:200`), so each vertex keeps the first parent that
+//!   reached it, and the pop order among all-zero distances comes from a
+//!   `Pairing_heap` seeded by `MainTable.iter` — a `Hashtbl`. Upstream's break
+//!   placement inside the free band is therefore hash order, not a preference,
+//!   and this DP's "minimize |ratio|" is a substitute for indifference rather
+//!   than an approximation of a target. It systematically packs to the
+//!   feasibility limit; upstream lands somewhere arbitrary short of it. That is
+//!   the line-packing floor the port's notes record as proven.
 
 use crate::context::Context;
 use crate::hbox::{HorzBox, PureHorzBox, FORCED_BREAK_PENALTY};
@@ -683,7 +705,11 @@ pub fn break_into_lines(ctx: &Context, boxes: Vec<HorzBox>) -> Vec<VertBox> {
     // guard below).
     let last_ink = pure.iter().rposition(carries_ink).unwrap_or(0);
     for g in 1..n {
-        let is_disc = matches!(pure[g], PureHorzBox::Discretionary { .. });
+        // `is_break_point`, not a bare `matches!`: a `NO_BREAK_PENALTY`
+        // discretionary is upstream's `LBPure(glue)` (`convertText.ml:190`) and
+        // must not become a candidate through the `|| is_disc` clause below.
+        let is_disc =
+            matches!(pure[g], PureHorzBox::Discretionary { .. }) && pure[g].is_break_point();
         // A break candidate is the FIRST box of a run of break points
         // (`is_break_point && !prev-is-break-point`) — breaking at glue
         // discards that glue. BUT a `Discretionary` is ALSO a candidate even
@@ -857,11 +883,15 @@ pub fn break_into_lines(ctx: &Context, boxes: Vec<HorzBox>) -> Vec<VertBox> {
 /// slack without being force-justified). Only the *last* line's raw range
 /// can have one of these at its tail in the first place — see the
 /// breakpoint-collapsing comment in `break_into_lines`.
+///
+/// A `NO_BREAK_PENALTY` discretionary is exempt: it is not a breakpoint at all
+/// but upstream's `LBPure(glue)`, which is never discardable.
 fn trim_trailing_glue(line: &[PureHorzBox]) -> &[PureHorzBox] {
     let mut end = line.len();
     while end > 0 {
         match &line[end - 1] {
-            PureHorzBox::OuterEmpty { .. } | PureHorzBox::Discretionary { .. } => end -= 1,
+            PureHorzBox::OuterEmpty { .. } => end -= 1,
+            b @ PureHorzBox::Discretionary { .. } if b.is_break_point() => end -= 1,
             _ => break,
         }
     }
@@ -880,13 +910,16 @@ fn trim_trailing_glue(line: &[PureHorzBox]) -> &[PureHorzBox] {
 /// block). Dropping it here silently collapsed every centered/right-flushed
 /// line to the left margin. `trim_trailing_glue` already keeps a trailing
 /// `OuterFil` for the same reason; this is the symmetric leading case.
+/// `NO_BREAK_PENALTY` discretionaries are exempt here too, for the reason given
+/// on `trim_trailing_glue`.
 fn trim_leading_glue(line: &[PureHorzBox]) -> &[PureHorzBox] {
     let mut start = 0;
     while start < line.len()
-        && matches!(
-            line[start],
-            PureHorzBox::OuterEmpty { .. } | PureHorzBox::Discretionary { .. }
-        )
+        && match &line[start] {
+            PureHorzBox::OuterEmpty { .. } => true,
+            b @ PureHorzBox::Discretionary { .. } => b.is_break_point(),
+            _ => false,
+        }
     {
         start += 1;
     }

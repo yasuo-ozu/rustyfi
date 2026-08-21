@@ -29,6 +29,7 @@ pub use graphics::{
 pub use hbox::{
     DecoId, GraphicsFnId, HookId, HorzBox, HorzStringInfo, ImageId, ImageResource, ImportedObjects,
     InlineMarkKind, JpegDct, ObjRepr, PdfPageResource, PureHorzBox, FORCED_BREAK_PENALTY,
+    NO_BREAK_PENALTY,
 };
 pub use length::Length;
 pub use linebreak::{

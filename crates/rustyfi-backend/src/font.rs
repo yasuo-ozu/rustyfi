@@ -238,6 +238,29 @@ pub trait FontMetrics {
         None
     }
 
+    /// The inverse of [`FontMetrics::resolve_font_abbrev`]: which registry
+    /// abbrev minted `key`. This exists for 0.0.6's `get-font`, whose result
+    /// type `tFONT = string * float * float` leads with an ABBREV — upstream
+    /// keeps the abbrev in `context_main.font_scheme` and only resolves it to
+    /// a file at render time, whereas this port resolves eagerly at `set-font`
+    /// and stores a `FontKey`, so the name has to be recovered from whoever
+    /// minted the key.
+    ///
+    /// It is a genuine inverse where it answers at all: `build_store`
+    /// allocates one `FontKey` per CONFIGURED abbrev even when two abbrevs
+    /// name the same font file (they share a `files` index, not a key), so no
+    /// key is reachable from two abbrevs. `None` means the key was never named
+    /// by the registry — the three seeded default faces (regular/bold/oblique,
+    /// `FontKey(0..3)`), anything a bare `TtfFontStore::load` produced, and
+    /// every `Base14Metrics` key. `get-font` reports those as `""` rather than
+    /// inventing a name; nothing in the corpus reads the slot (every caller,
+    /// and upstream's own `convertText.ml:78`, writes `let (_, ratio, _) =`),
+    /// so the ratio and rising — which are exact either way — are what
+    /// actually matters.
+    fn font_abbrev(&self, _key: FontKey) -> Option<String> {
+        None
+    }
+
     /// The configured default `(font, ratio, rising)` for `script`, from
     /// `default-font.satysfi-hash`'s `scripts` block (D1a). `None` means "no
     /// scheme configured for this script" — the caller then falls back to

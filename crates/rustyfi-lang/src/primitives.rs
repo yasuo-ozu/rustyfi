@@ -664,6 +664,10 @@ prims! {
     // `string * float * float` vs saphe-split's `font * float * float`.
     v006 "set-font" (3) => prim_set_font_v006;
     v01  "set-font" (3) => prim_set_font_v01;
+    // `get-font` (vminstdef.yaml:1350) forks in its RESULT's head, for the
+    // same reason and along the same seam.
+    v006 "get-font" (2) => prim_get_font_v006;
+    v01  "get-font" (2) => prim_get_font_v01;
     "set-code-text-command" (2) => prim_set_code_text_command;
     "get-natural-length" (1) => prim_get_natural_length;
 
@@ -688,6 +692,7 @@ prims! {
     // `tools/gencode/vminst.ml`), `add-footnote` :1130. ====
     "embed-block-bottom" (3) => prim_embed_block_bottom;
     "line-stack-bottom" (1) => prim_line_stack_bottom;
+    "line-stack-top" (1) => prim_line_stack_top;
     "add-footnote" (1) => prim_add_footnote;
 
     // ==== (text-mode-context sliver):
@@ -9372,12 +9377,31 @@ fn prim_embed_block_bottom(interp: &mut Interp, mut args: Vec<Value>) -> Result<
 /// `prev_depth + this_height` apart (see `pagebreak.rs`'s
 /// `leading.max(height)` placement formula — this choice makes that `max`
 /// always resolve to our computed `leading`). Like `embed-block-top`, the
-/// upstream `-top`/`-bottom` split (`adjust_to_first_line` vs.
-/// `adjust_to_last_line`) collapses to one shape here; `line-stack-top`
-/// isn't registered because nothing in this sweep's target packages calls
-/// it, but it would be this same construction too.
+/// upstream `-top`/`-bottom` split is exactly `adjust_to_first_line` vs.
+/// `adjust_to_last_line`, which here is [`make_embedded_block`]'s
+/// `anchor_last` flag — see [`prim_line_stack_top`] for the other half.
 fn prim_line_stack_bottom(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
-    let hblstlst = as_list(args.pop().unwrap())?
+    line_stack(args.pop().unwrap(), true)
+}
+
+/// `line-stack-top : inline-boxes list -> inline-boxes`
+/// (vminstdef.yaml:1109 `BackendLineStackTop`) — FAITHFUL: the same
+/// `make_line_stack` construction as [`prim_line_stack_bottom`], differing
+/// only in which stacked line's baseline becomes the result's. Upstream is
+/// `adjust_to_first_line` here against `adjust_to_last_line` there; this port
+/// spells that as `make_embedded_block`'s `anchor_last`, so the two prims are
+/// one body and one flag rather than two copies that could drift.
+///
+/// `ruby` calls this to sit its annotation above the base run.
+fn prim_line_stack_top(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+    line_stack(args.pop().unwrap(), false)
+}
+
+/// `evalUtil.ml`'s `make_line_stack` — shared body of the two `line-stack-*`
+/// prims; `anchor_last` picks upstream's `adjust_to_last_line` (`true`) or
+/// `adjust_to_first_line` (`false`).
+fn line_stack(arg: Value, anchor_last: bool) -> Result<Value, EvalError> {
+    let hblstlst = as_list(arg)?
         .into_iter()
         .map(as_inline_boxes)
         .collect::<Result<Vec<_>, _>>()?;
@@ -9402,15 +9426,17 @@ fn prim_line_stack_bottom(_interp: &mut Interp, mut args: Vec<Value>) -> Result<
         });
         prev_depth = depth;
     }
-    // Route through `make_embedded_block` with `anchor_last = true`:
-    // `line-stack-bottom` is BOTTOM-anchored (SATySFi vminst.ml:1229 — the
-    // result baseline is the LAST stacked line's baseline), so the box's height
-    // spans everything above that last line and its depth is the last line's
-    // depth. Top-anchoring (`false`) put the baseline at the FIRST line, which
-    // dropped the whole stack below the baseline — e.g. figbox's `margin`/
-    // `hvmargin` (a `line-stack-bottom` of [top-mgn; content; bot-mgn]) had its
-    // content rendered below its frame (the E=mc² bug).
-    Ok(make_embedded_block(wid, block, true, false))
+    // `anchor_last` IS upstream's `adjust_to_last_line`/`adjust_to_first_line`
+    // choice: `line-stack-bottom` is BOTTOM-anchored (SATySFi vminst.ml:1229 —
+    // the result baseline is the LAST stacked line's baseline), so the box's
+    // height spans everything above that last line and its depth is the last
+    // line's depth. Top-anchoring it instead put the baseline at the FIRST
+    // line, which dropped the whole stack below the baseline — e.g. figbox's
+    // `margin`/`hvmargin` (a `line-stack-bottom` of [top-mgn; content;
+    // bot-mgn]) had its content rendered below its frame (the E=mc² bug). For
+    // `line-stack-top` the first line IS the right anchor, which is the whole
+    // difference between the two prims.
+    Ok(make_embedded_block(wid, block, anchor_last, false))
 }
 
 /// `add-footnote : block-boxes -> inline-boxes` (vminst.ml:1130
@@ -9469,6 +9495,50 @@ fn prim_set_font_v01(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value
     let script = as_script(args.pop().unwrap())?;
     install_script_font(&mut ctx, script, font, size_ratio, rising_ratio);
     Ok(Value::Context(Box::new(ctx)))
+}
+
+/// `get-font : script -> context -> string * float * float`
+/// (vminstdef.yaml:1350 `PrimitiveGetFont`) — FAITHFUL: `script_font` IS
+/// upstream's `get_font_with_ratio` (normalize the script, then read the
+/// scheme slot), and the triple is `evalUtil.ml:196`'s `make_font_value`.
+///
+/// The head is a font ABBREV. Upstream's `font_scheme` stores abbrevs and
+/// resolves them to files only at render time; this port resolves eagerly in
+/// [`prim_set_font_v006`] and stores a `FontKey`, so the name comes back from
+/// the store that minted it (`FontMetrics::font_abbrev`) and is `""` when the
+/// key was never named by a registry — see that method for exactly when, and
+/// why the corpus does not care (every caller in it, and upstream's own
+/// `convertText.ml:78`, writes `let (_, ratio, _) =` and uses the RATIO,
+/// which is exact).
+///
+/// This is what `ruby` and `quotation` need: the CJK face's size ratio, so a
+/// ruby annotation or a two-em Japanese indent scales with the face rather
+/// than with the Latin `get-font-size`.
+fn prim_get_font_v006(interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+    let ctx = as_context(args.pop().unwrap())?;
+    let script = as_script(args.pop().unwrap())?;
+    let sf = script_font(&ctx, script);
+    let abbrev = interp.metrics.font_abbrev(sf.font).unwrap_or_default();
+    Ok(Value::Tuple(vec![
+        Value::Str(abbrev),
+        Value::Float(sf.ratio),
+        Value::Float(sf.rising),
+    ]))
+}
+
+/// `get-font : script -> context -> font * float * float` — the 0.1 arm,
+/// mirroring [`prim_set_font_v006`]/[`prim_set_font_v01`]'s split. 0.1's
+/// `font` IS the opaque handle this port already stores, so unlike the 0.0.6
+/// arm there is nothing to recover: the value round-trips exactly.
+fn prim_get_font_v01(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+    let ctx = as_context(args.pop().unwrap())?;
+    let script = as_script(args.pop().unwrap())?;
+    let sf = script_font(&ctx, script);
+    Ok(Value::Tuple(vec![
+        Value::Font(sf.font),
+        Value::Float(sf.ratio),
+        Value::Float(sf.rising),
+    ]))
 }
 
 /// The half of `set-font` that is NOT version-forked — the `Context` write

@@ -304,6 +304,11 @@ pub const PRIMITIVE_NAMES: &[&str] = &[
     "block-frame-breakable",
     "embed-block-top",
     "set-font",
+    // vminstdef.yaml:1350 `PrimitiveGetFont` — the reader for the slot
+    // `set-font` writes (`ruby` and `quotation` want the CJK face's size
+    // ratio); forked at the result head exactly like `set-font`'s second
+    // argument.
+    "get-font",
     "set-code-text-command",
     "get-natural-length",
     // ---- step 8/9 orphans ----
@@ -324,6 +329,9 @@ pub const PRIMITIVE_NAMES: &[&str] = &[
     // ---- proof.satyh/footnote-scheme.satyh unblockers (tail-prims sweep) ----
     "embed-block-bottom",
     "line-stack-bottom",
+    // vminstdef.yaml:1109 `BackendLineStackTop` — the top-anchored twin
+    // (`ruby` stacks its annotation above the base run).
+    "line-stack-top",
     "add-footnote",
     // ---- page-level prims blocking mitou-report/stdjareport ----
     "clear-page",

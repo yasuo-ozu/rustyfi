@@ -64,7 +64,7 @@
     "cross": true
   },
   "quotation": {
-    "control": false,
+    "control": true,
     "cross": false
   },
   "railway": {
@@ -72,8 +72,8 @@
     "cross": true
   },
   "ruby": {
-    "control": false,
-    "cross": false
+    "control": true,
+    "cross": true
   },
   "siunitx": {
     "control": true,

@@ -186,6 +186,51 @@ fn line_stack_bottom_stacks_each_element_as_one_line_at_the_widest_natural_width
 }
 
 // ============================================================================
+// `line-stack-top` (ruby) — the same `make_line_stack`, anchored at the FIRST
+// stacked line instead of the last (upstream `adjust_to_first_line` vs
+// `adjust_to_last_line`, vminstdef.yaml:1109 vs :1129).
+// ============================================================================
+
+#[test]
+fn line_stack_top_typechecks() {
+    assert_well_typed("line-stack-top [inline-skip 10pt; inline-skip 20pt]");
+}
+
+#[test]
+fn line_stack_top_rejects_a_non_inline_boxes_list() {
+    assert_type_error("line-stack-top [1; 2; 3]");
+}
+
+/// The two prims build the SAME block and differ only in which line's
+/// baseline the resulting box carries — so `anchor_last` is the whole
+/// observable difference, and it is what `ruby` depends on to sit its
+/// annotation ABOVE the base run rather than below it.
+#[test]
+fn line_stack_top_and_bottom_differ_only_in_the_anchor() {
+    fn unwrap(v: Value) -> (Length, usize, bool) {
+        match v {
+            Value::InlineBoxes(boxes) => match &boxes[0] {
+                rustyfi_backend::HorzBox::Pure(PureHorzBox::EmbeddedBlock {
+                    width,
+                    block,
+                    anchor_last,
+                    ..
+                }) => (*width, block.len(), *anchor_last),
+                other => panic!("expected an EmbeddedBlock, got {other:?}"),
+            },
+            other => panic!("expected inline-boxes, got {other:?}"),
+        }
+    }
+    let src = "[inline-skip 10pt; inline-skip 20pt]";
+    let (top_w, top_n, top_anchor) = unwrap(eval_str(&format!("line-stack-top {src}")));
+    let (bot_w, bot_n, bot_anchor) = unwrap(eval_str(&format!("line-stack-bottom {src}")));
+
+    assert_eq!((top_w, top_n), (bot_w, bot_n), "same block, same width");
+    assert!(!top_anchor, "`-top` anchors at the FIRST line");
+    assert!(bot_anchor, "`-bottom` anchors at the LAST line");
+}
+
+// ============================================================================
 // `add-footnote` (footnote-scheme.satyh) — `block-boxes -> inline-boxes`.
 // FAITHFUL: wraps the block in a zero-metric `PureHorzBox::Footnote`
 // marker that `chop_page` (rustyfi-backend) later extracts and bottom-

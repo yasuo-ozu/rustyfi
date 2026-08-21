@@ -362,7 +362,7 @@ fn primitive_names_are_cross_checked_against_primitives_source() {
     let src = include_str!("../src/primitives.rs");
     assert_eq!(
         typecheck::PRIMITIVE_NAMES.len(),
-        209,
+        211,
         "real-world-compat round 6 added 3: regexp-of-string, string-match, \
          split-on-regexp (satysfi-base char.satyg / figbox). keep this in sync \
          with primitives.rs's prims! table and \
@@ -381,7 +381,10 @@ fn primitive_names_are_cross_checked_against_primitives_source() {
          added 1: inline-frame-inner — the primitive was already registered \
          in primitives.rs/prim_types.rs, only this list omitted it; \
          reflow S4 lists added 2: list-mark, inline-mark; the 0.1 `font` \
-         build-out added 1: load-single-font, V0_1-only)"
+         build-out added 1: load-single-font, V0_1-only; the registry-corpus \
+         sweep added 2: get-font (vminstdef.yaml:1350, version-forked like \
+         set-font) and line-stack-top (:1109), which is what `ruby` and \
+         `quotation` were missing)"
     );
     for name in typecheck::PRIMITIVE_NAMES {
         // Escape backslashes the way they'd actually appear in Rust source

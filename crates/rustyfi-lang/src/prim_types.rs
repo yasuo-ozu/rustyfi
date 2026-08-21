@@ -1774,6 +1774,10 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
         // `line-stack-bottom`): `~% ((tL tIB) @-> tIB)`. FAITHFUL — see
         // `primitives.rs`'s `prim_line_stack_bottom`.
         "line-stack-bottom" => poly0(arrow(list(t_inline_boxes()), t_inline_boxes())),
+        // vminstdef.yaml:1109 `BackendLineStackTop`: the same
+        // `~% ((tL tIB) @-> tIB)`, differing only in which stacked line's
+        // baseline the result carries. FAITHFUL — see `prim_line_stack_top`.
+        "line-stack-top" => poly0(arrow(list(t_inline_boxes()), t_inline_boxes())),
         // vminst.ml:1130 PrimitiveAddFootnote: ~% (tBB @-> tIB). FAITHFUL —
         // see primitives.rs's prim_add_footnote (footnote float
         // accumulator).
@@ -1786,6 +1790,14 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
         "set-font" => poly0(arrows(
             vec![t_script(), t_font_with_ratio(version), t_context()],
             t_context(),
+        )),
+        // 0.0.6 `vminstdef.yaml:1350` `~% (tSCR @-> tCTX @-> tFONT)` — the
+        // reader for the slot `set-font` writes, so it forks at the SAME head
+        // via the same [`t_font_with_ratio`]. FAITHFUL — see `primitives.rs`'s
+        // `prim_get_font_v006`.
+        "get-font" => poly0(arrows(
+            vec![t_script(), t_context()],
+            t_font_with_ratio(version),
         )),
         // `set-code-text-command : [string] inline-cmd -> context -> context`
         // (`stdja:116`; orphan #4 of, not in any vminst.ml table this port

@@ -486,6 +486,16 @@ impl FontMetrics for TtfFontStore {
         self.abbrev_key(abbrev)
     }
 
+    /// Reverse scan of `abbrevs`. Linear, but that map holds one row per
+    /// configured font (tens at most) and `get-font` is called a handful of
+    /// times per document, so a second index would cost more than it saves.
+    fn font_abbrev(&self, key: FontKey) -> Option<String> {
+        self.abbrevs
+            .iter()
+            .find(|(_, k)| **k == key)
+            .map(|(abbrev, _)| abbrev.clone())
+    }
+
     fn default_script_font(&self, script: Script) -> Option<(FontKey, f64, f64)> {
         self.script_default(script as usize)
     }

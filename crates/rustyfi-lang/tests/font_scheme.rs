@@ -58,6 +58,74 @@ fn set_font(
     }
 }
 
+/// `get-font script ctx` -> `(abbrev, ratio, rising)`.
+fn get_font(
+    interp: &mut Interp,
+    env: &BaseEnv,
+    script: &str,
+    ctx: Context,
+) -> (String, f64, f64) {
+    let prim = env.lookup("get-font").expect("get-font is registered");
+    let script_v = Value::Ctor(script.to_string(), None);
+    let v1 = interp.apply(prim, script_v).unwrap();
+    match interp.apply(v1, Value::Context(Box::new(ctx))).unwrap() {
+        Value::Tuple(vs) => match &vs[..] {
+            [Value::Str(a), Value::Float(r), Value::Float(ri)] => (a.clone(), *r, *ri),
+            other => panic!("get-font returned an unexpected triple: {other:?}"),
+        },
+        other => panic!("get-font did not return a tuple: {other:?}"),
+    }
+}
+
+/// The ratio/rising round-trip is what every real caller uses — `ruby`'s
+/// `let (_, ratio, _) = get-font HanIdeographic ctx`, `quotation`'s two-em
+/// Japanese indent, and upstream's own `convertText.ml:78`.
+#[test]
+fn get_font_reads_back_what_set_font_wrote() {
+    let stub = Stub;
+    let mut interp = Interp::new(&stub);
+    let env = primitives::base_env();
+    let ctx = Context::initial(Length::pt(400.0));
+
+    let after = set_font(&mut interp, &env, "Kana", "mykana", 0.88, 0.25, ctx);
+    let (abbrev, ratio, rising) = get_font(&mut interp, &env, "Kana", after.clone());
+
+    assert_eq!(ratio, 0.88, "the size ratio must round-trip exactly");
+    assert_eq!(rising, 0.25, "so must the rising ratio");
+    // `Stub` implements `resolve_font_abbrev` but not its inverse
+    // `font_abbrev`, so the head comes back empty — the documented
+    // "resolved eagerly, name recoverable only from the store that minted the
+    // key" case. Nothing in the corpus reads this slot.
+    assert_eq!(abbrev, "", "no reverse map on this provider");
+
+    // A script nobody set still answers, with the initial scheme's values,
+    // rather than erroring the way upstream's `failwith` would.
+    let (_, latin_ratio, latin_rising) = get_font(&mut interp, &env, "Latin", after);
+    assert_eq!((latin_ratio, latin_rising), (1.0, 0.0));
+}
+
+/// `get-font OtherScript` follows `set-dominant-narrow-script` the same way
+/// glyph measurement does — both go through `script_font`, which IS upstream's
+/// `get_font_with_ratio` (normalize the script, then read the scheme slot).
+#[test]
+fn get_font_normalizes_other_script_through_the_dominant_narrow_script() {
+    let stub = Stub;
+    let mut interp = Interp::new(&stub);
+    let env = primitives::base_env();
+    let ctx = Context::initial(Length::pt(400.0));
+
+    let mut ctx = set_font(&mut interp, &env, "Kana", "mykana", 0.88, 0.0, ctx);
+    let (_, before, _) = get_font(&mut interp, &env, "OtherScript", ctx.clone());
+    assert_eq!(before, 1.0, "unset OtherScript reads its own (initial) slot");
+
+    ctx.dominant_narrow_script = Script::Kana;
+    let (_, after, _) = get_font(&mut interp, &env, "OtherScript", ctx);
+    assert_eq!(
+        after, 0.88,
+        "with a dominant narrow script, OtherScript resolves to ITS slot"
+    );
+}
+
 #[test]
 fn set_font_kana_changes_only_scheme_kana() {
     let stub = Stub;

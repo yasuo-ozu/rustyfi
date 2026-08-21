@@ -365,7 +365,7 @@ fn compile_command(name: &'static str) -> Command {
                 .long("format")
                 .value_name("FORMAT")
                 .help(
-                    "Output format: pdf. HTML output lives on the `html-support` branch.",
+                    "Output format: pdf.",
                 )
                 .value_parser(["pdf"])
                 .default_value("pdf"),

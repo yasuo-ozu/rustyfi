@@ -190,6 +190,20 @@ pub struct TopLet {
     /// check it against). Sits before `params`, matching `patbotwithann
     /// argpart`.
     pub ascription: Option<ast::RecAscription>,
+    /// The `|` upstream's `nonrecdecargpart` allows between the name (or its
+    /// ascription) and the argument list — `let f : τ | x = e` and
+    /// `let f | x = e`, `parser.mly:610-614`. Unlike `let-rec`'s, a non-rec
+    /// `|` introduces NO further clauses (`nonrecdecargpart` has no
+    /// `nxrecdecpar` tail): it is purely a separator, so nothing downstream
+    /// reads this field — it exists to make verbatim upstream source parse,
+    /// exactly like [`ast::RecBinding::leading_bar`].
+    ///
+    /// Real source writes it: `azmath`'s `util.satyh` opens with
+    /// `let math-in-math : math-class -> (context -> math) -> math`
+    /// `| mcls embedf = ..`, and without this the whole file failed at its
+    /// first binding — the package's ONLY blocker, in both the 0.0.6 and
+    /// the cross-version arm.
+    pub leading_bar: Option<BarTok>,
     pub params: Vec<ast::Param>,
     pub eq: DefEqTok,
     pub value: ast::Expr,
@@ -688,6 +702,10 @@ pub mod ast {
             /// Optional `: ty` ascription (`let f : ty x = e in ..`) —
             /// parse-and-ignore, like [`RecBinding::ascription`].
             ascription: Option<RecAscription>,
+            /// The `|` of `nonrecdecargpart` — see
+            /// [`super::TopLet::leading_bar`], whose doc comment carries the
+            /// whole story; this is the expression-level twin.
+            leading_bar: Option<BarTok>,
             params: Vec<Param>,
             eq: DefEqTok,
             value: Box<Expr>,

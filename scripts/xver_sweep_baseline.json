@@ -8,7 +8,7 @@
     "cross": false
   },
   "azmath": {
-    "control": false,
+    "control": true,
     "cross": false
   },
   "base": {

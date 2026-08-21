@@ -583,6 +583,8 @@ fn lower_bind_v1<'s>(
                 stage: stage.as_ref().map(lower_bind_stage),
                 name: name.clone(),
                 ascription: None,
+                // 0.1's grammar has no `nonrecdecargpart` bar to lower.
+                leading_bar: None,
                 params: ps,
                 eq: eq.clone(),
                 value,
@@ -1001,6 +1003,8 @@ fn alias_member_decls(
                 stage: None,
                 name: cst::BindName::from(var_tok(x, span)),
                 ascription: None,
+                // 0.1's grammar has no `nonrecdecargpart` bar to lower.
+                leading_bar: None,
                 params: Vec::new(),
                 eq: DefEqTok(span),
                 value: target_ref,
@@ -1844,6 +1848,8 @@ fn lower_expr(e: &ast_v1::Expr) -> Result<cst::ast::Expr, LowerError> {
                 kw: kw.clone(),
                 name: name.clone(),
                 ascription: None,
+                // 0.1's grammar has no `nonrecdecargpart` bar to lower.
+                leading_bar: None,
                 params: ps,
                 eq: eq.clone(),
                 value: Box::new(value_expr),

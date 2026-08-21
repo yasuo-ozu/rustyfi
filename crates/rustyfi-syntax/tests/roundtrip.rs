@@ -40,6 +40,26 @@ fn headers_and_prelude() {
     assert_roundtrip("let x = 1\nlet y = 2\nin y");
 }
 
+/// `nonrecdecargpart` (`parser.mly:610-614`) — a NON-recursive `let` may put
+/// a `|` between the name (or its `: τ` ascription) and the argument list,
+/// which `let-rec` already had here but plain `let` did not. `azmath`'s
+/// `util.satyh` opens with the ascribed form and failed at its first binding
+/// without it.
+///
+/// Unlike `let-rec`'s, this `|` introduces NO further clauses: upstream's
+/// `nonrecdecargpart` has no `nxrecdecpar` tail, so it is purely a separator.
+#[test]
+fn non_recursive_let_accepts_a_leading_bar() {
+    // All four `nonrecdecargpart` alternatives, in the order they appear
+    // upstream.
+    assert_roundtrip("let f : int -> int = 1 in f");
+    assert_roundtrip("let f : int -> int | x = x in f 1");
+    assert_roundtrip("let f | x = x in f 1");
+    assert_roundtrip("let f x = x in f 1");
+    // Top-level (`TopLet`) as well as expression-level (`Expr::LetIn`).
+    assert_roundtrip("let f : int -> int | x = x\nin f 1");
+}
+
 #[test]
 fn records_lists_functions() {
     assert_roundtrip("(| title = {T}; size = 3pt |)");

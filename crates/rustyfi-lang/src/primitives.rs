@@ -3995,7 +3995,7 @@ fn prim_block_skip(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, 
 /// calls this. Only `page_break_core`'s `reflow_source` clone (taken BEFORE
 /// `chop_page` drains its input, `primitives.rs`'s own doc comment on that
 /// clone) retains it, for the reflow HTML walker
-/// (`crates/rustyfi-html/src/reflow/block.rs`) to read back.
+/// (`the `html-support` branch's rustyfi-html/src/reflow/block.rs`) to read back.
 ///
 /// `tag` encoding (the only "int tag" scheme any caller needs to know,
 /// since this primitive is never reflected through the type system beyond
@@ -4032,7 +4032,7 @@ fn prim_list_mark(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, E
 /// (their `emit_box`'s wildcard arm) wherever it ends up riding inside a
 /// placed line's `contents` — so PDF/faithful HTML are byte-identical. Read
 /// only by the reflow HTML walker
-/// (`crates/rustyfi-html/src/reflow/inline.rs`).
+/// (`the `html-support` branch's rustyfi-html/src/reflow/inline.rs`).
 ///
 /// `tag` encoding:
 /// - `0` = `EmphStart { strong: false }` (opens `<em>`)

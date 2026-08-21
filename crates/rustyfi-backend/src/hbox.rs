@@ -496,7 +496,7 @@ pub enum PureHorzBox {
     /// wherever it rides inside a placed line's `contents`, so PDF/faithful
     /// HTML are byte-identical whether or not a document's stdlib emits
     /// these. Read only by the reflow HTML walker
-    /// (`crates/rustyfi-html/src/reflow/inline.rs`'s `emit_inline`), which
+    /// (`the `html-support` branch's rustyfi-html/src/reflow/inline.rs`'s `emit_inline`), which
     /// uses `EmphStart`/`EmphEnd` to wrap `<em>`/`<strong>` and
     /// `BulletStart`/`BulletEnd` to suppress the drawn bullet/number glyph
     /// run (the real marker comes from the `<ul>`/`<ol>` itself).

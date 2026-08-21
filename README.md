@@ -265,23 +265,19 @@ order; here a splice runs where it stands. For the pure code-building staging is
 for, the value is identical — the two differ only for side effects interleaved
 between a splice and the stage-1 code around it.
 
-## HTML output
+## HTML output — on a branch
 
-```console
-$ rustyfi doc.saty --format html         # every glyph where the PDF puts it
-$ rustyfi doc.saty --format html-reflow  # real flowing paragraphs, CSS layout
-```
-
-`html` is the same laid-out page the PDF writer renders, serialized with
-absolute positions and the real fonts embedded — a preview and visual-diff aid.
-`html-reflow` is the opposite trade: semantic, reflowable, not layout-faithful.
+Two HTML backends exist but are **not built on `main`**: a layout-faithful one
+that serializes the same placed pages the PDF writer renders, and a reflowable,
+semantic one. Both live on the `html-support` branch, with the
+`--format html`/`html-reflow` arms.
 
 ## Useful options
 
 | flag | what it does |
 |---|---|
 | `-o <path>` | output path (default: the input with a `.pdf` extension) |
-| `--format <fmt>` | `pdf` (default), `html`, `html-reflow` |
+| `--format <fmt>` | `pdf` (HTML is on the `html-support` branch) |
 | `--lib-root <dir>` | where `@require:` looks for packages |
 | `--lang <v>` | `0.0` (default) or `0.1`; a `use` header auto-selects `0.1` |
 | `--font <file>` | use a TrueType/OpenType file as the regular face |

@@ -11,17 +11,14 @@
 /// `--format` keeps every existing invocation's behavior byte-identical to
 /// before this flag existed.
 ///
-/// `HtmlReflow` ("CLI"): a THIRD, independent format alongside `Pdf`/`Html` —
-/// the reflowable/semantic HTML twin (`rustyfi_html::render_html_reflow`),
-/// not a variant of `Html`. Adding it changes no existing match arm's
-/// behavior (every prior exhaustive `match format { ... }` gains one new arm;
-/// `Pdf`/`Html` are untouched).
+/// Only `Pdf` is built on this branch. The HTML backends (a
+/// layout-faithful serialization and a reflowable/semantic one) live on the
+/// `html-support` branch, which re-adds the `rustyfi-html` crate and the
+/// `--format html`/`html-reflow` arms on top of this enum.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
 pub enum OutputFormat {
     #[default]
     Pdf,
-    Html,
-    HtmlReflow,
 }
 
 impl std::str::FromStr for OutputFormat {
@@ -29,10 +26,8 @@ impl std::str::FromStr for OutputFormat {
     fn from_str(s: &str) -> Result<Self, String> {
         match s {
             "pdf" => Ok(OutputFormat::Pdf),
-            "html" => Ok(OutputFormat::Html),
-            "html-reflow" => Ok(OutputFormat::HtmlReflow),
             other => Err(format!(
-                "unknown --format {other:?} (expected pdf|html|html-reflow)"
+                "unknown --format {other:?} (expected pdf)"
             )),
         }
     }
@@ -48,8 +43,6 @@ impl OutputFormat {
     pub fn extension(self) -> &'static str {
         match self {
             OutputFormat::Pdf => "pdf",
-            OutputFormat::Html => "html",
-            OutputFormat::HtmlReflow => "html",
         }
     }
 
@@ -57,14 +50,9 @@ impl OutputFormat {
     /// (`cache.rs::hash_inputs`) so a PDF render and an HTML render of the
     /// identical input never collide under the same cache key (and so a
     /// hit's stored bytes are never written to the wrong-format output).
-    /// `HtmlReflow` gets its OWN distinct tag (not `"html"`) so a cached
-    /// faithful-HTML render can never be served back for a `html-reflow`
-    /// request or vice versa.
     pub(crate) fn cache_tag(self) -> &'static str {
         match self {
             OutputFormat::Pdf => "pdf",
-            OutputFormat::Html => "html",
-            OutputFormat::HtmlReflow => "html-reflow",
         }
     }
 }

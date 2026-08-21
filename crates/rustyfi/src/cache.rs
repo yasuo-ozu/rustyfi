@@ -163,6 +163,10 @@ pub fn compute_key(
 
 /// The key computation over a bare sequence of input paths (see
 /// [`compute_key`]). Split out so it can be unit-tested without constructing a
+/// The output FORMAT is part of the key: a cached render for one format must
+/// never be served for another. Only `Pdf` exists on this branch, so the test
+/// that pinned it (two formats hashing differently) lives on `html-support`
+/// alongside the backends -- restore it with them.
 /// [`LoadedProgram`], whose `cst` field is impractical to build by hand.
 fn hash_inputs<'a>(
     paths: impl Iterator<Item = &'a Path>,
@@ -454,43 +458,6 @@ mod tests {
         assert_ne!(
             without_font, with_font,
             "configuring a font must change the cache key vs. the base-14 path"
-        );
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    /// HTML output backend, Slice 1 (surface, "Cache key"): a PDF compile
-    /// and an HTML compile of the exact same document/version/font must hash
-    /// to DIFFERENT keys — otherwise a `--format html` run could hit a key a
-    /// prior `--format pdf` run populated (or vice versa) and write the
-    /// wrong-format bytes to the requested output.
-    #[test]
-    fn key_changes_with_output_format() {
-        let dir = scratch();
-        let a = dir.join("a.saty");
-        std::fs::write(&a, b"document (||) '<>\n").unwrap();
-        let pdf = hash_inputs(
-            [a.as_path()].into_iter(),
-            "0.1.0",
-            RustyfiVersion::DEFAULT,
-            &a,
-            None,
-            OutputFormat::Pdf,
-            None,
-        )
-        .unwrap();
-        let html = hash_inputs(
-            [a.as_path()].into_iter(),
-            "0.1.0",
-            RustyfiVersion::DEFAULT,
-            &a,
-            None,
-            OutputFormat::Html,
-            None,
-        )
-        .unwrap();
-        assert_ne!(
-            pdf, html,
-            "--format pdf and --format html must hash to different keys"
         );
         std::fs::remove_dir_all(&dir).ok();
     }

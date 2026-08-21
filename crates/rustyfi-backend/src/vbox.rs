@@ -65,7 +65,7 @@ pub enum VertBox {
     /// `place_block_at`'s pure-skip arms — see those functions' doc comments)
     /// — it never reaches a `PlacedLine`, so PDF and faithful HTML are
     /// byte-identical whether or not a document's stdlib emits these. Read
-    /// only by the reflow HTML walker (`crates/rustyfi-html/src/reflow/
+    /// only by the reflow HTML walker (`the `html-support` branch's rustyfi-html/src/reflow/
     /// block.rs`'s `walk_vboxes`), which uses the Start/End nesting to
     /// rebuild real `<ul>`/`<ol>`/`<li>` structure — nesting depth is NOT
     /// carried in the payload (see `ListMarkKind`'s doc comment); it falls

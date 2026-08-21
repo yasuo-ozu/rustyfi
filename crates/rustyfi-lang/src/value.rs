@@ -412,9 +412,9 @@ pub struct DocumentValue {
     /// test) can still leave it `None`.
     ///
     /// **Purely additive.** Neither `rustyfi_pdf::render_pdf*` nor
-    /// `rustyfi_html::render_html`/`render_html_ttf_with` (the faithful
+    /// the `html-support` branch's faithful HTML backend (the faithful
     /// backend) ever reads this field — only
-    /// `rustyfi_html::render_html_reflow`/`render_html_reflow_ttf_with`
+    /// its reflowable backend
     /// (the reflowable backend) does — so its presence changes no byte of
     /// their output.
     pub reflow_source: Option<Vec<VertBox>>,
@@ -428,7 +428,7 @@ pub struct DocumentValue {
     /// when `page_break_core` packages the initial `DocumentValue`). Empty
     /// (not absent) by default — same "purely additive, cheap when unused"
     /// policy as `reflow_source`; neither `rustyfi_pdf` nor the faithful
-    /// `rustyfi_html::render_html`/`render_html_ttf_with` reads it.
+    /// the `html-support` branch's faithful HTML backend reads it.
     pub reflow_links: Vec<(DecoId, AnnotAction)>,
     /// Same idea as `reflow_links`, for `register-destination`
     /// (`annot.satyh`'s `register-location-frame` idiom): `(DecoId, name)`.

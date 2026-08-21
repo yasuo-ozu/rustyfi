@@ -105,17 +105,36 @@ WHAT THE PINNED DEFICITS ACTUALLY ARE
 
 A guarded number nobody has read the cause of turns back into folklore, so:
 
-  easytable   56 chars, and the only one that is a BUG rather than a rounding
-              of glyph coverage. Each table in this document appears twice, as
-              a code listing and then rendered; the LISTINGS match exactly and
-              two RENDERED tables lose cells. Upstream's `set-fmt`/`merge`
-              showcase on p11 sets `Program | Answer | Time [ms]` over a
-              `case A | case B | case A | case B` sub-header over four body
-              rows; the port sets `ProgramAnswer` and drops the whole
-              sub-header row, the merged `Time [ms]` cell, and `16 / No / – /
-              8 / – / max / 78`. The 2020-holidays table later does the same.
-              Read as "multi-row / merged cells lose content", not "6% of the
-              document is missing", which is what the old word count implied.
+  easytable    3 = one TOC leader dot, one TOC page NUMBER (`5` upstream, `6`
+              here — the enumitem case below, same class) and one `-` from a
+              hyphenated break. `chars_extra` is 2: the `6` that replaced that
+              `5`, and one math exponent that upstream's `ToUnicode` does not
+              carry (the port being better, as above).
+
+              This entry used to read 56, "the only one that is a BUG rather
+              than a rounding of glyph coverage", and blamed the port's
+              renderer for dropping the merged cells out of the `set-fmt`/
+              `merge` showcase on p11 and the 2020-holidays table. That was
+              WRONG, and the way it was wrong is worth keeping: SATySFi 0.0.11
+              (flake.nix's `satysfi`) drops exactly the same cells from the
+              same sources — the two engines agreed all along. The cause was
+              `easytable/src/matrix.satyg`'s `Matrix.set-nth`, written against
+              an INDEX-based `List.take`/`List.split-at` and vendored here next
+              to a COUNT-based `satysfi-base`, so `Matrix.set` grew or shrank
+              the row it wrote to and `TableBuilder.build`'s `Matrix.eachmap`
+              truncated the grid. `doc/easytable.pdf` (the reference, built by
+              the package author against the older base) was simply not
+              reachable from the vendored pairing. Repaired in that file, with
+              the measurement, at its `set-nth`.
+
+              Unmasking it cost `lines_dev` 0 -> 2 and `chars_extra` 0 -> 2.
+              Neither is new port behaviour: with the tables truncated the port
+              was 2 baselines SHORT on the pages that hold them and 2 long
+              elsewhere, and 565 == 565 was the sum of those cancelling (no
+              page's count matched: the per-page deltas were -1 -1 -2 -1 +3 +2
+              +2 -1 +1 -2). With the tables whole, p11's table now matches the
+              reference baseline-for-baseline and the residual +2 is the
+              line-packing floor, which is where it always was.
   enumitem    13 = three `✓` (a checkmark the doc builds by overprinting
               glyphs), nine leader dots in the table of contents, and one TOC
               page number (`19` upstream, `18` here) — a cross-reference

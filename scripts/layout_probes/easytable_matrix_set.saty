@@ -1,0 +1,50 @@
+% Probe: does easytable's `Matrix.set` preserve the matrix's SHAPE?
+%
+% Run BOTH engines --- the whole point is that they agree:
+%
+%   scripts/layout_probe.py scripts/layout_probes/easytable_matrix_set.saty \
+%       --stage easytable
+%
+% Every merged / multi-row cell in easytable goes through `Matrix.set`
+% (`merge`, `set-fmt-`, `set-text-` all end there), and `Matrix.set` is only
+% as good as `matrix.satyg`'s `set-nth`. That function was written against a
+% `satysfi-base` whose `List.take` / `List.split-at` took an INDEX; the base
+% vendored in this corpus is COUNT-based, and under it `set-nth` neither
+% replaced the element nor preserved the length:
+%
+%   m1 (set (0,1))  ->  shape 4x3, flat 9,1,1,1,1,1,1,1,1,1,1,   (row GROWN)
+%   m2 (set (1,2))  ->  shape 3x2, flat 7,1,1,1,1,1,1,1,         (element LOST)
+%
+% `TableBuilder.build` then `Matrix.eachmap`s the format matrix against the
+% text matrix, `eachmap` truncates to the shorter of the two, and cells
+% disappear --- which is what made easytable's `merge` showcase drop its
+% `case A | case B | case A | case B` sub-header and its merged `Time [ms]`.
+%
+% It was never a renderer bug: SATySFi 0.0.11 printed the same two wrong
+% shapes. Correct output is `3x3` for all three, with 9 at index 1 and 7 at
+% index 5.
+@require: stdjabook
+@require: easytable/matrix
+
+let-inline \shape m =
+  let (r, c) = Matrix.shape m in
+  embed-string ((arabic r) ^ `x` ^ (arabic c))
+
+let-inline \flat m =
+  embed-string (m |> Matrix.to-list |> List.fold-left (fun a x -> a ^ (arabic x) ^ `,`) ` `)
+
+let m0 = Matrix.tile (3, 3) 1
+let m1 = m0 |> Matrix.set (0, 1) 9
+let m2 = m0 |> Matrix.set (1, 2) 7
+in
+
+document (|
+  title = {Matrix.set probe};
+  author = {};
+  show-title = false;
+  show-toc = false;
+|) '<
+  +p{m0 shape \shape(m0); flat \flat(m0);}
+  +p{m1 shape \shape(m1); flat \flat(m1);}
+  +p{m2 shape \shape(m2); flat \flat(m2);}
+>

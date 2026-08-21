@@ -536,6 +536,72 @@ mod tests {
         assert_eq!(solved.cells[0].x, Length::pt(0.0));
     }
 
+    /// A multi-ROW span: the counterpart of the multi-column case above, and
+    /// the one the easytable corpus document actually leans on (its `merge
+    /// (4, 1) (5, 2)` / `merge (4, 4) (5, 4)`). Pins the two things a
+    /// column-span test cannot reach — that a `MultiCell` with `nr > 1`
+    /// contributes NOTHING to its own row's height (tabular.ml:34-42, so the
+    /// row is sized by its ordinary cells alone) and that its content is then
+    /// CENTERED in the combined vertical extent (tabular.ml:288-297).
+    ///
+    /// This path went unmeasured by the corpus gate for a long time: the
+    /// vendored easytable's `Matrix.set-nth` was corrupting the grid before
+    /// the solver ever saw a span, so both engines were rendering a truncated
+    /// table and agreeing about it.
+    #[test]
+    fn multi_row_span_centers_content_across_the_rows_it_spans() {
+        // col0: Normal(h10,d2) | Multi(2,1, h6,d1) | Empty
+        // col1: Normal(h8,d1)  | Normal(h9,d3)     | Normal(h7,d2)
+        let rows = vec![
+            vec![
+                Cell::Normal(zero_pads(), probe(20.0, 10.0, 2.0)),
+                Cell::Normal(zero_pads(), probe(15.0, 8.0, 1.0)),
+            ],
+            vec![
+                Cell::Multi(2, 1, zero_pads(), probe(12.0, 6.0, 1.0)),
+                Cell::Normal(zero_pads(), probe(15.0, 9.0, 3.0)),
+            ],
+            vec![
+                Cell::Empty,
+                Cell::Normal(zero_pads(), probe(15.0, 7.0, 2.0)),
+            ],
+        ];
+        let solved = main(rows);
+
+        // Row 1's height/depth come from its col1 `Normal` ALONE (9, 3): the
+        // span contributes only pending `rest_row` state. Rows are 12/12/9.
+        assert_eq!(solved.height, Length::pt(33.0));
+        assert_eq!(
+            solved.ys,
+            vec![
+                Length::pt(33.0),
+                Length::pt(21.0),
+                Length::pt(9.0),
+                Length::pt(0.0)
+            ]
+        );
+        // A single-COLUMN span still sets its column's width (nc == 1), but
+        // loses to the wider ordinary cell above it.
+        assert_eq!(
+            solved.xs,
+            vec![Length::pt(0.0), Length::pt(20.0), Length::pt(35.0)]
+        );
+
+        // r0c0, r0c1, r1c0(span), r1c1, r2c1 — the r2c0 `Empty` the span
+        // reserves produces no box.
+        assert_eq!(solved.cells.len(), 5);
+        assert_eq!(solved.cells[0].baseline_y, Length::pt(23.0)); // 33 - 10
+        assert_eq!(solved.cells[1].baseline_y, Length::pt(23.0));
+        // The span: combined extent 12 + 9 = 21, content 6 + 1 = 7, so
+        // lenspace = 7 and the content sits at 6 + 7 = 13 below the row top
+        // (21) => baseline 8, i.e. centered rather than sitting on row 1's
+        // own baseline (12).
+        assert_eq!(solved.cells[2].x, Length::pt(0.0));
+        assert_eq!(solved.cells[2].baseline_y, Length::pt(8.0));
+        assert_eq!(solved.cells[3].baseline_y, Length::pt(12.0)); // 21 - 9
+        assert_eq!(solved.cells[4].baseline_y, Length::pt(2.0)); // 9 - 7
+    }
+
     #[test]
     fn tabular_box_measures_as_a_single_leaf() {
         let rows = vec![vec![Cell::Normal(zero_pads(), probe(30.0, 12.0, 3.0))]];

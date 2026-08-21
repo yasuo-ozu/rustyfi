@@ -1817,6 +1817,25 @@ fn cjk_leading_kern(c: char) -> f64 {
 /// ordinary characters, and the bulk of the elasticity a Japanese line
 /// justifies with. Two punctuation marks in a row (`」、`, `」。`) get NO space
 /// back, so the pair sets 0.5em tighter than its glyphs.
+///
+/// A KNOWN, MEASURED deviation: every ratio here is applied to `ctx.font_size`,
+/// where upstream applies the kerns and all four `pure_halfwidth_space_*` sizes
+/// to `get_corrected_font_size ctx script` (`convertText.ml:76`, i.e. font size
+/// TIMES the script's own ratio — 0.88 for stdja's CJK face, so a half-width
+/// kern at 12pt is −5.28pt and not −6pt). Only `adjacent_space` (`:102`) and the
+/// inter-script glue (`:225`) really take the RAW size.
+///
+/// Correcting it was written and measured, and it does not land yet. It moves NO
+/// line break on any corpus document (the `linebreak_probe.py` line-match figure
+/// is identical to four decimals across all six), and it fails the fidelity gate
+/// on word-count deviation (xpath 5 -> 8, easytable 100 -> 110) while
+/// `text_match` falls on latexcmds and easytable. The direction says why: a
+/// smaller class space closes inter-character gaps, and upstream has MORE word
+/// gaps than this port, not fewer. The missing width is elsewhere — in the
+/// per-character kerns this port does not emit at a CJK↔Latin boundary or a run
+/// edge (see [`cjk_trailing_kern`]) — so shrinking the spaces alone moves away
+/// from upstream. The two changes are a package; do not re-derive either half
+/// from `convertText.ml` alone.
 fn cjk_pair_space(a: char, b: char, adjacent_stretch: f64) -> (f64, f64, f64) {
     use JlClass::*;
     let (ca, cb) = (jl_class(a), jl_class(b));

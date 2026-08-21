@@ -100,6 +100,36 @@ port-minus-upstream baseline delta across a range of clustering tolerances for
 every doc, which is what separates a real gap (tolerance-stable) from a
 clustering artifact (collapses as the tolerance grows).
 
+WHAT THE PINNED DEFICITS ACTUALLY ARE
+-------------------------------------
+
+A guarded number nobody has read the cause of turns back into folklore, so:
+
+  easytable   56 chars, and the only one that is a BUG rather than a rounding
+              of glyph coverage. Each table in this document appears twice, as
+              a code listing and then rendered; the LISTINGS match exactly and
+              two RENDERED tables lose cells. Upstream's `set-fmt`/`merge`
+              showcase on p11 sets `Program | Answer | Time [ms]` over a
+              `case A | case B | case A | case B` sub-header over four body
+              rows; the port sets `ProgramAnswer` and drops the whole
+              sub-header row, the merged `Time [ms]` cell, and `16 / No / – /
+              8 / – / max / 78`. The 2020-holidays table later does the same.
+              Read as "multi-row / merged cells lose content", not "6% of the
+              document is missing", which is what the old word count implied.
+  enumitem    13 = three `✓` (a checkmark the doc builds by overprinting
+              glyphs), nine leader dots in the table of contents, and one TOC
+              page number (`19` upstream, `18` here) — a cross-reference
+              difference, though the page COUNT still matches.
+  latexcmds    9 = seven `−` U+2212 that the port sets as ASCII `-` (they show
+              up as five of its 16 "extra" too, so this is a substitution, not
+              a loss) plus two `!`.
+  slydifi      7 = one truncated run, `inline-text list型。` set as
+              `inline-tex`. One place, and the only content the whole slide
+              deck loses — `char_match` is 0.9996.
+  xpath, figbox   0. Nothing missing at all.
+
+None of these are fixed here; this script measures, it does not typeset.
+
 The baseline (`layout_fidelity_baseline.json`) pins each metric at its current
 value, so this PASSES today and FAILS on a regression. Re-baseline with
 `--update` after an intentional change.

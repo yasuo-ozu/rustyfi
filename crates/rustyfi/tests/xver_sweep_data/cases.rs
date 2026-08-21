@@ -7,8 +7,8 @@
 //! document — which is what separates a bridge failure from a pre-existing
 //! 0.0.6-side gap. See `CLAUDE.md` §1, "What the REAL corpus says".
 //!
-//! Transcribed byte for byte from `scripts/xver_sweep/{cases,v006}/*.saty`;
-//! `expect_cross`/`expect_v006` mirror `scripts/xver_sweep_baseline.json`.
+//! Transcribed byte for byte from `layout-tests/xver_sweep/{cases,v006}/*.saty`;
+//! `expect_cross`/`expect_v006` mirror `layout-tests/xver_sweep_baseline.json`.
 //! Keep entries alphabetical by `name`.
 
 #![allow(dead_code)]
@@ -32,7 +32,7 @@ pub struct Case {
 // the registry's `code-printer`, and `base` probes `base/string`. `mathpkg`'s
 // `math` is the odd one out entirely — it is the port's own bundled 0.0.6
 // corpus, not a registry install, so an installer driven off this field must
-// skip it. Conversely `fss` is installed by `scripts/xver_sweep.py` as a
+// skip it. Conversely `fss` is installed by `layout-tests/xver_sweep.py` as a
 // dependency and has no case of its own.
 //
 // Every case currently carries a control, so `v006` is `Some` throughout; the

@@ -76,9 +76,10 @@ Resulting layout, relative to the prefix:
 The binary finds lib/ and share/ relative to itself, so the tree is
 self-contained: copy or unpack it anywhere and nothing needs exporting.
 
-Local mode does NOT download the ~175 MB of bundled fonts. Run
-scripts/download-fonts.sh first if you want them in lib/rustyfi/dist/fonts;
-a release archive already contains them.
+Local mode fetches the ~175 MB of bundled faces via ./download-fonts.sh when
+lib-rustyfi/dist/fonts is empty (they are gitignored, so a fresh checkout has
+nothing there). A release archive already contains them, so remote mode never
+downloads fonts separately.
 
 Examples:
   ./install.sh --prefix ~/.local
@@ -218,6 +219,17 @@ or point at an existing one with --bin PATH (or RUSTYFI_BIN=PATH)."
         *.exe) exe_name=rustyfi.exe ;;
         *) exe_name=rustyfi ;;
     esac
+
+    if [ -z "$(ls -A "$REPO_ROOT/lib-rustyfi/dist/fonts" 2>/dev/null | grep -v '^\.gitignore$')" ]; then
+        if [ -x "$REPO_ROOT/download-fonts.sh" ]; then
+            printf 'no bundled faces in lib-rustyfi/dist/fonts — fetching them\n'
+            sh "$REPO_ROOT/download-fonts.sh"
+        else
+            printf 'warning: lib-rustyfi/dist/fonts is empty and %s is missing;\n' \
+                   "$REPO_ROOT/download-fonts.sh" >&2
+            printf '         the install will have no bundled faces\n' >&2
+        fi
+    fi
 
     printf 'installing %s -> %s\n' "$bin" "$prefix"
 

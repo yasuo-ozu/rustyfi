@@ -35,7 +35,7 @@
 //!
 //!   Adopting upstream's exact formula here was TRIED AND MEASURED, not
 //!   assumed: it regresses 6 of the 7 layout-fidelity corpus documents
-//!   (`scripts/layout_fidelity.py`), and quantizing moves easytable and
+//!   (`layout-tests/fidelity.py`), and quantizing moves easytable and
 //!   enumitem's line counts DOWN, because `LINE_PENALTY` becomes the only
 //!   thing separating partitions whose lines are all inside the free band.
 //!   figbox's page gap does not close. Do not re-derive this from

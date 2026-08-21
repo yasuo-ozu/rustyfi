@@ -21,7 +21,7 @@ The manual builds against the port's own bundled packages and nothing else; the
 logo `@require:`s `xpath/xpath`, which is not bundled, so the Makefile assembles
 a scratch lib-root and INSTALLS `xpath` into it with the port's own
 Satyrographos — deliberately, rather than reaching into the corpus tree with a
-relative `@import:`. `scripts/layout_fidelity_corpus/xpath/Satyristes` is the
+relative `@import:`. `layout-tests/corpus/xpath/Satyristes` is the
 manifest that makes that possible.
 
 Both documents are compiled `--no-cache --no-aux`: these are reference

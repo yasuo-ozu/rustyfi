@@ -2680,7 +2680,7 @@ fn glyphs_extent(glyphs: &[MathGlyph]) -> (Length, Length) {
 /// therefore lost when upstream's wins. `${\paren{\frac{1}{1-v}}^{2}}` at
 /// 12pt: `h_base` 16.116pt (content) vs upstream's 17.316pt (`hgtaxis +
 /// halflen`, the paren's own declared box), i.e. a 1.2pt-too-low superscript
-/// — `scripts/layout_probes/math_box_extent.saty` row 4. The bbox of
+/// — `layout-tests/probes/math_box_extent.saty` row 4. The bbox of
 /// `math.satyh`'s `paren-left`/`angle-left`/… path is exactly that declared
 /// box (its extreme points ARE `ycenter ± halflen`), so folding the rule in
 /// reproduces upstream's number rather than approximating it.
@@ -2898,7 +2898,7 @@ fn push_char_glyph(
 /// `9.672 - 3.0 = 6.672pt` of superscript rise where upstream's own clamp
 /// picks `SuperscriptShiftUp = 4.356pt` (plus a gap correction, 4.525pt), and
 /// `2.328 + 2.4 = 4.728pt` of subscript drop where upstream picks
-/// `SubscriptShiftDown = 2.964pt` — measured by `scripts/layout_probes/
+/// `SubscriptShiftDown = 2.964pt` — measured by `layout-tests/probes/
 /// math_script_drop.saty`.
 ///
 /// Falls back to `ascender`/`descender` when the provider exposes no per-glyph
@@ -9243,7 +9243,7 @@ fn prim_block_frame_breakable(
     // `lineBreak.ml:855-857`), and the frame's margin does NOT. Keeping the
     // body's made the advance INTO a frame a constant — `max(0, 9pt - hgt)`
     // cancels the first line's own height — where upstream's tracks the ink:
-    // measured on `scripts/layout_probes/code_line_height.saty` against real
+    // measured on `layout-tests/probes/code_line_height.saty` against real
     // SATySFi 0.0.11, `+code(`ooo`)` / `lll` / `ggg` advance 29.114 / 31.166 /
     // 29.138pt upstream and a flat 32.835pt here.
     strip_outer_margins(&mut indented);

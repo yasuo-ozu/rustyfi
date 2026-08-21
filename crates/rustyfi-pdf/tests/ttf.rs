@@ -498,13 +498,13 @@ fn contains(haystack: &[u8], needle: &[u8]) -> bool {
     haystack.windows(needle.len()).any(|w| w == needle)
 }
 
-/// The bundled `lmsans` face (real Latin Modern Sans, `scripts/download-fonts.sh`
+/// The bundled `lmsans` face (real Latin Modern Sans, `download-fonts.sh`
 /// — replaces the old Noto glyf stand-in now that CFF embedding exists) is itself
 /// a CFF-outline OpenType face, so it must take the same
 /// `CIDFontType0`/`/FontFile3` path as the fontconfig-discovered CFF faces above
 /// — this is the concrete, named abbrev a `set-font` call actually resolves to,
 /// not just "some CFF found on the host". Skips gracefully if
-/// `scripts/download-fonts.sh` hasn't been run in this checkout (the font is
+/// `download-fonts.sh` hasn't been run in this checkout (the font is
 /// gitignored, not committed).
 ///
 /// Also the S2 SIZE-WIN check: the probe text "Latin Modern Sans" uses only a small
@@ -522,7 +522,7 @@ fn lmsans_bundled_font_embeds_as_fontfile3_cidfonttype0() {
         .join("../../lib-rustyfi/dist/fonts/lmsans10-regular.otf");
     if !path.is_file() {
         eprintln!(
-            "skipping: {path:?} not present — run `scripts/download-fonts.sh` first \
+            "skipping: {path:?} not present — run `download-fonts.sh` first \
              (font binaries are gitignored, not committed)"
         );
         return;

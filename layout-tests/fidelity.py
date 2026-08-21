@@ -2,7 +2,7 @@
 """Layout-fidelity comparison: this Rust port vs. upstream SATySFi.
 
 For each corpus document that ships an upstream-built reference PDF (produced by
-the original OCaml SATySFi and vendored under `scripts/layout_fidelity_corpus/`), this
+the original OCaml SATySFi and vendored under `layout-tests/corpus/`), this
 builds the SAME source with the Rust port and compares the two PDFs' *layout* —
 not their bytes. The port bundles the SAME fonts SATySFi uses (IPAex / Latin
 Modern / Junicode / DejaVu-Math), so glyph metrics are identical and any layout
@@ -155,8 +155,8 @@ value, so this PASSES today and FAILS on a regression. Re-baseline with
 
 Output: each run leaves the pair it compared beside the package it came from,
 
-  scripts/layout_fidelity_corpus/<doc>/<doc>.port.pdf      the port's render
-  scripts/layout_fidelity_corpus/<doc>/<doc>.satysfi.pdf   the reference it was
+  layout-tests/corpus/<doc>/<doc>.port.pdf      the port's render
+  layout-tests/corpus/<doc>/<doc>.satysfi.pdf   the reference it was
                                                            compared against
 
 so when a metric moves you can open the two PDFs the number came from instead of
@@ -166,7 +166,7 @@ reference itself keeps its own upstream name (`doc.ref`) and stays tracked, and
 collects every doc into one directory instead; `--no-persist` writes nothing.
 
 Usage:
-  scripts/layout_fidelity.py [--doc NAME]... [--update] [--bin PATH]
+  layout-tests/fidelity.py [--doc NAME]... [--update] [--bin PATH]
       [--keep-going] [--verbose]
 
 Exit status: 0 iff every compared document meets its baseline (or --update).
@@ -195,7 +195,7 @@ from pathlib import Path
 # existed — it is what settled the math-metrics work — so this imports it rather
 # than growing a second copy that can drift out of agreement with the probe
 # scripts (`vspace_probe/pagetops.py` reads the same `runs_of`).
-sys.path.insert(0, str(Path(__file__).resolve().parent / "vspace_probe"))
+sys.path.insert(0, str(Path(__file__).resolve().parent / "measure"))
 from baselines import page_baselines  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
@@ -206,9 +206,9 @@ REPO = Path(__file__).resolve().parent.parent
 # `satysfi-base/src`. That is 9.4 MB against the submodules' 19 MB, needs no
 # `git submodule update --init` (nor `submodules: recursive` in CI), and cannot
 # drift: the reference PDFs are the fixed point the whole comparison rests on.
-CORPUS = Path(__file__).resolve().parent / "layout_fidelity_corpus"
+CORPUS = Path(__file__).resolve().parent / "corpus"
 LIB_RUSTYFI = REPO / "lib-rustyfi"
-BASELINE_PATH = Path(__file__).resolve().parent / "layout_fidelity_baseline.json"
+BASELINE_PATH = Path(__file__).resolve().parent / "baseline.json"
 
 # Content-stream baselines within this many points of each other are one text
 # line. Every run of one typeset line is emitted at the identical `y` by both
@@ -865,7 +865,7 @@ def main() -> int:
         default=None,
         help="write every doc's PDFs into this ONE directory instead of each doc's own "
         "corpus directory. By default each pair lands beside the package it came from, "
-        "in scripts/layout_fidelity_corpus/<doc>/ — <doc>.port.pdf (the port's render) "
+        "in layout-tests/corpus/<doc>/ — <doc>.port.pdf (the port's render) "
         "and, when a reference exists, <doc>.satysfi.pdf (the reference it was compared "
         "against). Both suffixes are gitignored.",
     )

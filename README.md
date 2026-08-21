@@ -66,7 +66,7 @@ the binary you just built instead of downloading anything:
 ```console
 $ git clone https://github.com/yasuo-ozu/rustyfi && cd rustyfi
 $ cargo build --release --bin rustyfi
-$ sh scripts/download-fonts.sh      # IPAex, Junicode, Latin Modern — pinned, ~175 MB
+$ sh download-fonts.sh      # IPAex, Junicode, Latin Modern — pinned, ~175 MB
 $ ./install.sh                      # --prefix DIR to put it elsewhere
 ```
 
@@ -321,7 +321,7 @@ The `.satysfi-aux` file is upstream's format, so the two engines can share one.
 ## How close is it?
 
 Every document in the vendored corpus is rebuilt and compared against the PDF
-the original SATySFi produced (`scripts/layout_fidelity.py`). Lines are counted
+the original SATySFi produced (`layout-tests/fidelity.py`). Lines are counted
 from each PDF's own content stream and content is compared character by
 character, because both of the obvious `pdftotext` measurements — clustering
 glyph boxes into lines, and counting words — move on things that are not the
@@ -348,7 +348,7 @@ that is all six of figbox's.)
 
 It is also faster. Minimum CPU time over three interleaved runs against SATySFi
 0.0.11 (`--bytecomp` is upstream's bytecode compiler, the fair comparison for
-the evaluator; `scripts/benchmark.py` reproduces it):
+the evaluator; `benchmark.py` reproduces it):
 
 | doc | SATySFi | SATySFi `--bytecomp` | rustyfi | cached |
 |---|---|---|---|---|
@@ -410,7 +410,8 @@ crates/
   rustyfi-satyrographos/  package manager
   rustyfi/                the binary
 lib-rustyfi/              bundled packages: dist/ (0.0) and dist-v01/ (0.1)
-scripts/                  fidelity and benchmark harnesses, font fetcher
+layout-tests/             layout fidelity gate, corpus, probes, measurement
+install.sh, download-fonts.sh, benchmark.py
 ```
 
 The grammar is derived, not hand-written, using the
@@ -423,6 +424,6 @@ regression and the layout-fidelity comparison above.
 MIT — see [LICENSE](LICENSE).
 
 Two sets of files bundled here are not covered by it and keep their own terms.
-The fonts `scripts/download-fonts.sh` fetches carry the IPA Font License v1.0,
+The fonts `download-fonts.sh` fetches carry the IPA Font License v1.0,
 SIL OFL 1.1, the GUST Font License and DejaVu's, each copied next to the font it
 covers. The SATySFi packages under `lib-rustyfi/` are upstream's, LGPL-3.0.

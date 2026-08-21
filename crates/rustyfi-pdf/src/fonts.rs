@@ -79,7 +79,7 @@
 //!
 //! An optional `"math"` key (Slice B) names the abbrev `get-initial-context`
 //! seeds `Context::math_font` with, e.g. `{ "regular": "Junicode", "math":
-//! "lmmath" }` — `scripts/ download-fonts.sh` wires this to the bundled
+//! "lmmath" }` — `download-fonts.sh` wires this to the bundled
 //! Latin Modern Math (`lmmath`, upstream SATySFi's own default math font),
 //! falling back to `dejavu-math` only if LM Math is unavailable. Absent ⇒ no
 //! math default is configured, and `math_font` stays at `Context::initial`'s

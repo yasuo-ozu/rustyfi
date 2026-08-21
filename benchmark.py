@@ -6,9 +6,9 @@ LAYOUT as upstream. This asks what it costs to produce it — wall clock, CPU an
 peak memory — over the same vendored corpus, so a performance claim in a commit
 message can be reproduced instead of taken on trust.
 
-    scripts/benchmark.py                       # every doc, 3 runs, all configs
-    scripts/benchmark.py --doc xpath --runs 5
-    scripts/benchmark.py --json bench.json     # machine-readable alongside the table
+    benchmark.py                       # every doc, 3 runs, all configs
+    benchmark.py --doc xpath --runs 5
+    benchmark.py --json bench.json     # machine-readable alongside the table
 
 Four configurations, per document:
 

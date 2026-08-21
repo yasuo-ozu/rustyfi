@@ -117,7 +117,7 @@ fn find_noto_math() -> Option<PathBuf> {
 /// Either font — used by the e2e tests, which only need ONE real MATH font,
 /// mirroring `math_font.rs`'s `find_math_font`. Re-baselined to prefer the
 /// bundled Latin Modern Math (`lib-rustyfi/dist/fonts/latinmodern-math.otf`,
-/// `scripts/download-fonts.sh`'s new upstream-correct default — a CFF face,
+/// `download-fonts.sh`'s new upstream-correct default — a CFF face,
 /// same outline family as this file's "Noto Sans Math" case) FIRST, so the
 /// e2e tests below no longer depend on a host-wide font install once that
 /// script has been run; only fall through to fontconfig (whichever of Noto

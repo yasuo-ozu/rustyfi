@@ -14,7 +14,7 @@
 //! frame's margin does not, so keeping the body's made the advance INTO a
 //! frame a CONSTANT — `max(0, 9pt - hgt)` cancels the first line's own height.
 //! Measured against real SATySFi 0.0.11 on
-//! `scripts/layout_probes/code_line_height.saty`, `+code(`ooo`)` / `lll` /
+//! `layout-tests/probes/code_line_height.saty`, `+code(`ooo`)` / `lll` /
 //! `ggg` advance 29.114 / 31.166 / 29.138pt upstream; this port advanced a
 //! flat 32.835pt for all three and now advances 29.115 / 31.167 / 29.139.
 

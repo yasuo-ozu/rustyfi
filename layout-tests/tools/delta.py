@@ -12,8 +12,8 @@ Only same-page pairs are usable — a pair straddling a page break measures the
 page geometry, not the construct — but that is enough: page breaks are where the
 two files disagree, and every gap on either side of one is still measured.
 
-    scripts/layout_delta.py a.port.pdf a.satysfi.pdf            # top offenders
-    scripts/layout_delta.py a.port.pdf a.satysfi.pdf --all      # every gap
+    layout-tests/tools/delta.py a.port.pdf a.satysfi.pdf            # top offenders
+    layout-tests/tools/delta.py a.port.pdf a.satysfi.pdf --all      # every gap
 
 The `dy` here is a DIFFERENCE of one engine's own numbers, so the font-descriptor
 trap that invalidates comparing a latin word's absolute `yMin` across engines

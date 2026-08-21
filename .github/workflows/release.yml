@@ -37,10 +37,10 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .fontcache
-          key: fonts-${{ hashFiles('scripts/download-fonts.sh') }}
+          key: fonts-${{ hashFiles('download-fonts.sh') }}
 
       - name: Fetch the pinned faces
-        run: sh scripts/download-fonts.sh
+        run: sh download-fonts.sh
 
       - name: Upload
         uses: actions/upload-artifact@v4

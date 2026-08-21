@@ -306,7 +306,7 @@ fn page_top_discards_margins_but_keeps_frame_padding() {
 /// rather than zeroing them (`:352-357`); `handlePdf.ml:325-330` lays every
 /// fragment out at `ypos -% paddingT`.
 ///
-/// Measured against real SATySFi 0.0.11 on `scripts/vspace_probe/fixtures/
+/// Measured against real SATySFi 0.0.11 on `layout-tests/measure/fixtures/
 /// p06-frame-across-page.saty` (one frame, 13pt top pad, body spanning a page
 /// break): the continuation page's first baseline was 99.31 against upstream's
 /// 112.31 — exactly 13.00pt too high — and is now 112.31.

@@ -29,7 +29,7 @@ origin: easytable's port render reports 513 baselines that way against its real
 Usage: baselines.py FILE.pdf [--page N]... [--tol 0.05]
 
 `page_baselines()` is the reusable entry point (used by
-`scripts/layout_fidelity.py`'s `lines` metric).
+`layout-tests/fidelity.py`'s `lines` metric).
 """
 
 from __future__ import annotations
@@ -351,7 +351,7 @@ def page_baselines(pdf: Path, tol: float = 0.05) -> list[list[float]]:
     agree to within `tol` are one row: within a single writer, every run of one
     typeset line is emitted at the identical `y` (to the 3 decimals PDF numbers
     carry), so `tol` only has to absorb that rounding — see
-    `scripts/layout_fidelity.py`'s `line_count` for the measured evidence that
+    `layout-tests/fidelity.py`'s `line_count` for the measured evidence that
     the port-vs-upstream delta is flat from 0.02 all the way to 0.5.
 
     `tol=0.0` returns the RAW distinct baselines (exact duplicates collapsed

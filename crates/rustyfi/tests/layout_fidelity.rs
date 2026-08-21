@@ -12,20 +12,20 @@
 //! and TEXT from poppler `pdftotext`, compared as characters. Neither half uses
 //! a `pdftotext` glyph BOX or word SPLIT, because both of those move on things
 //! that are not the layout — a font descriptor the two writers disagree about,
-//! and how far justification opened an inter-word gap. `scripts/
-//! layout_fidelity.py`'s docstring carries the measurements.
+//! and how far justification opened an inter-word gap. `layout-tests/
+//! fidelity.py`'s docstring carries the measurements.
 //!
-//! The heavy lifting lives in `scripts/layout_fidelity.py` (lib-root assembly,
+//! The heavy lifting lives in `layout-tests/fidelity.py` (lib-root assembly,
 //! per-doc build, poppler extraction, metric computation, baseline compare) —
 //! reused by a plain CLI so a developer can run/inspect/update it directly:
 //!
-//!   scripts/layout_fidelity.py                 # check against baseline
-//!   scripts/layout_fidelity.py --update        # re-record the baseline
-//!   scripts/layout_fidelity.py --doc easytable # one construct
+//!   layout-tests/fidelity.py                 # check against baseline
+//!   layout-tests/fidelity.py --update        # re-record the baseline
+//!   layout-tests/fidelity.py --doc easytable # one construct
 //!
 //! This wrapper just drives that script against the FRESHLY BUILT binary
 //! (`CARGO_BIN_EXE_rustyfi`) so `cargo test` picks up the current code, and
-//! fails if any document's layout regresses past `scripts/layout_fidelity_
+//! fails if any document's layout regresses past `layout-tests/
 //! baseline.json`. It is `#[ignore]`d (like `typecheck_corpus` /
 //! `pdf_image_diff`) because it needs poppler, python3, and the corpus
 //! the vendored corpus; the script itself self-skips (exit 0) when a prerequisite is
@@ -56,7 +56,7 @@ fn tool_present(name: &str) -> bool {
 #[ignore = "needs poppler + python3; run with --ignored"]
 fn layout_matches_upstream_satysfi_within_baseline() {
     let root = repo_root();
-    let script = root.join("scripts/layout_fidelity.py");
+    let script = root.join("layout-tests/fidelity.py");
     assert!(script.exists(), "missing {}", script.display());
 
     // Self-skip if a prerequisite is missing, mirroring the script's own
@@ -71,7 +71,7 @@ fn layout_matches_upstream_satysfi_within_baseline() {
         return;
     }
     if !root
-        .join("scripts/layout_fidelity_corpus/latexcmds/doc/latexcmds-doc.pdf")
+        .join("layout-tests/corpus/latexcmds/doc/latexcmds-doc.pdf")
         .exists()
     {
         eprintln!("SKIP layout_fidelity: vendored corpus missing");
@@ -86,7 +86,7 @@ fn layout_matches_upstream_satysfi_within_baseline() {
     // THE VENDORED REFERENCE PDFs ARE THE DEFAULT, DELIBERATELY.
     //
     // This test measures the PORT against a fixed point. The vendored PDFs are
-    // that fixed point: `scripts/layout_fidelity_baseline.json` records the
+    // that fixed point: `layout-tests/baseline.json` records the
     // metrics of this port compared to THOSE FILES, so anything that moves the
     // reference moves every threshold with it.
     //
@@ -104,7 +104,7 @@ fn layout_matches_upstream_satysfi_within_baseline() {
     //
     // So regenerating is now opt-in, for the one job it is actually for:
     // deliberately refreshing the references, which must be followed by
-    // `scripts/layout_fidelity.py --update` to re-record the baseline against
+    // `layout-tests/fidelity.py --update` to re-record the baseline against
     // them. Never let it turn on by itself.
     if std::env::var_os("RUSTYFI_GEN_REFS").is_some() {
         assert!(
@@ -134,6 +134,6 @@ fn layout_matches_upstream_satysfi_within_baseline() {
         output.status.success(),
         "layout fidelity regressed vs upstream SATySFi (or a corpus doc failed to \
          build). Full report above; re-baseline intentional changes with \
-         `scripts/layout_fidelity.py --update`.\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}"
+         `layout-tests/fidelity.py --update`.\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}"
     );
 }

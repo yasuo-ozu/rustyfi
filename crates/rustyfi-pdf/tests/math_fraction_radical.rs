@@ -29,10 +29,10 @@ use rustyfi_pdf::{render_pdf, render_pdf_ttf, Base14Metrics, TtfFontStore};
 
 fn find_math_font() -> Option<PathBuf> {
     // Slice B, re-baselined for the upstream-correct default (see
-    // `scripts/download-fonts.sh`'s header comment): the repo now bundles
+    // `download-fonts.sh`'s header comment): the repo now bundles
     // the REAL Latin Modern Math at
     // `lib-rustyfi/dist/fonts/latinmodern-math.otf` (fetched by
-    // `scripts/download-fonts.sh`, same as ipaexm/Junicode) and wires it as
+    // `download-fonts.sh`, same as ipaexm/Junicode) and wires it as
     // `default-font.satysfi-hash`'s `"math"` default. Check it FIRST so this
     // test no longer depends on a host-wide font install once that script
     // has been run. Every assertion in this file recomputes its expected
@@ -299,7 +299,7 @@ fn radical_overbar_and_sign_fills_with_math_font() {
     // ascender/descender: upstream measures a math glyph from its own bbox
     // (`get_math_glyph_metrics`, fontFormat.ml:2257-2264) and the font-wide
     // pair is precisely the substitution that used to mis-place every script
-    // (`scripts/layout_probes/math_script_drop.saty`).
+    // (`layout-tests/probes/math_script_drop.saty`).
     let h_cont = glyphs[0].height;
     let d_cont = glyphs[0].depth;
     let h_bar = h_cont + size * mc.radical_vertical_gap;

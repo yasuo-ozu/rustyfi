@@ -75,10 +75,10 @@
 set -ue
 
 MESSAGE_PREFIX="[download-fonts.sh]"
-cd "$(dirname "$0")/.."   # repo root
+cd "$(dirname "$0")"   # repo root
 # The archive cache lives in the system temp dir, not in the working tree: it
 # is ~175 MB of pinned upstream zips, none of it source, and a copy sitting in
-# `scripts/` shows up in every `du`, backup and grep for the rest of time.
+# the working tree shows up in every `du`, backup and grep for the rest of time.
 #
 # A STABLE path, deliberately, not `mktemp -d`: the whole point of the cache is
 # that a re-run verifies sha1s instead of re-downloading ~150 MB, and a fresh

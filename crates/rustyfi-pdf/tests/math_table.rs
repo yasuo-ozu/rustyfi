@@ -29,10 +29,10 @@ use rustyfi_pdf::{Base14Metrics, TtfFontStore};
 /// Modern Math (CFF), same discovery order/guard as `tests/math_font.rs`.
 fn find_math_font() -> Option<PathBuf> {
     // Slice B, re-baselined for the upstream-correct default (see
-    // `scripts/download-fonts.sh`'s header comment): the repo now bundles
+    // `download-fonts.sh`'s header comment): the repo now bundles
     // the REAL Latin Modern Math at
     // `lib-rustyfi/dist/fonts/latinmodern-math.otf` (fetched by
-    // `scripts/download-fonts.sh`, same as ipaexm/Junicode) and wires it as
+    // `download-fonts.sh`, same as ipaexm/Junicode) and wires it as
     // `default-font.satysfi-hash`'s `"math"` default. Check it FIRST so this
     // test no longer depends on a host-wide font install once that script
     // has been run. Every assertion in this file recomputes its expected
@@ -297,7 +297,7 @@ fn headline_math_font_superscript_shift_differs_from_flat_heuristic() {
     // `dpt = ymin`, each truncated towards the baseline). NOT the font-wide
     // ascender/descender, which is what `push_char_glyph` used to hand the
     // clamp and which put every script 1.7-2.1pt off
-    // (`scripts/layout_probes/math_script_drop.saty`).
+    // (`layout-tests/probes/math_script_drop.saty`).
     let mc = store
         .math_constants(FontKey(0))
         .expect("MATH font should expose MathConstants");

@@ -42,10 +42,10 @@ const DBL_D: char = '\u{1D53B}';
 /// common distro/nix paths, then skip gracefully.
 fn find_math_font() -> Option<PathBuf> {
     // Slice B, re-baselined for the upstream-correct default (see
-    // `scripts/download-fonts.sh`'s header comment): the repo now bundles
+    // `download-fonts.sh`'s header comment): the repo now bundles
     // the REAL Latin Modern Math at
     // `lib-rustyfi/dist/fonts/latinmodern-math.otf` (fetched by
-    // `scripts/download-fonts.sh`, same as ipaexm/Junicode) and wires it as
+    // `download-fonts.sh`, same as ipaexm/Junicode) and wires it as
     // `default-font.satysfi-hash`'s `"math"` default. Check it FIRST so this
     // test no longer depends on a host-wide font install once that script
     // has been run. LM Math covers every codepoint this test needs

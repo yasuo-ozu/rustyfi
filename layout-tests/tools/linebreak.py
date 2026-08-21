@@ -29,9 +29,9 @@ Run `layout_fidelity.py` first — it leaves `<doc>.port.pdf` and
 reads. To compare two builds, give `layout_fidelity.py --out-dir DIR` for the
 first one and pass DIR here as `--port-dir`.
 
-    scripts/layout_fidelity.py --bin target/debug/rustyfi
-    scripts/linebreak_probe.py
-    scripts/linebreak_probe.py --doc figbox --worst 10
+    layout-tests/fidelity.py --bin target/debug/rustyfi
+    layout-tests/tools/linebreak.py
+    layout-tests/tools/linebreak.py --doc figbox --worst 10
 """
 
 from __future__ import annotations
@@ -45,8 +45,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parent.parent
-CORPUS = REPO / "scripts" / "layout_fidelity_corpus"
+REPO = Path(__file__).resolve().parent.parent.parent
+CORPUS = REPO / "layout-tests" / "corpus"
 DOCS = ["latexcmds", "xpath", "enumitem", "easytable", "figbox", "slydifi"]
 
 PAGE_RE = re.compile(r'<page width="([\d.]+)" height="([\d.]+)"')

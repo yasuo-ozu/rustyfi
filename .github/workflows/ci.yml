@@ -48,8 +48,8 @@ jobs:
     # Rebuilds every corpus document with the port and compares its PDF LAYOUT
     # (word bounding boxes via poppler `pdftotext`) against the reference PDF
     # the ORIGINAL OCaml SATySFi (0.0.11) produced — vendored under
-    # `scripts/layout_fidelity_corpus/`, and the fixed point
-    # `scripts/layout_fidelity_baseline.json` was recorded against.
+    # `layout-tests/corpus/`, and the fixed point
+    # `layout-tests/baseline.json` was recorded against.
     #
     # It does NOT install the original typesetter to re-render those references.
     # It used to, via `nix develop`, and that was the bug: SATySFi finds its
@@ -64,7 +64,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
           # The corpus documents AND their upstream reference PDFs are vendored
-          # under `scripts/layout_fidelity_corpus/`, so there is nothing to
+          # under `layout-tests/corpus/`, so there is nothing to
           # check out beyond this repo (it used to need `submodules: recursive`
           # for the 11 docs-corpus/* submodules).
       - name: Install Rust
@@ -79,8 +79,8 @@ jobs:
       # The corpus docs set Japanese text in the bundled IPAex fonts, so the
       # sha1-pinned fonts must be present (else the port falls back to base-14
       # and every Japanese run is unencodable).
-      - name: Download fonts (scripts/download-fonts.sh)
-        run: sh scripts/download-fonts.sh
+      - name: Download fonts (download-fonts.sh)
+        run: sh download-fonts.sh
       # The script self-skips (green) if a prerequisite is somehow absent.
       - name: Layout-fidelity test (vs the vendored SATySFi references)
         run: cargo test -p rustyfi --test layout_fidelity -- --ignored --nocapture
@@ -127,7 +127,7 @@ jobs:
       # overwrite what they contributed.
       - name: Seed the root with the bundled standard library
         run: |
-          sh scripts/download-fonts.sh
+          sh download-fonts.sh
           mkdir -p root/dist
           cp -r lib-rustyfi/dist/. root/dist/
           # The port vendors its own copy of xpath. This job's point is to

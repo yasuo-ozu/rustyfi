@@ -14,7 +14,7 @@
 //! `tests/math_fraction_radical.rs`'s raw-primitive pipeline harness.
 //!
 //! **Slice B update**: the repo now bundles a math font (via
-//! `scripts/download-fonts.sh`) and wires it as
+//! `download-fonts.sh`) and wires it as
 //! `default-font.satysfi-hash`'s `"math"` default, so `${...}` math renders
 //! with real MATH-table metrics BY DEFAULT — not just under `set-math-font`.
 //! **Re-baselined**: the bundled default is now the REAL upstream Latin
@@ -66,10 +66,10 @@ use rustyfi_pdf::TtfFontStore;
 
 fn find_math_font() -> Option<PathBuf> {
     // Slice B, re-baselined for the upstream-correct default (see
-    // `scripts/download-fonts.sh`'s header comment): the repo now bundles
+    // `download-fonts.sh`'s header comment): the repo now bundles
     // the REAL Latin Modern Math at
     // `lib-rustyfi/dist/fonts/latinmodern-math.otf` (fetched by
-    // `scripts/download-fonts.sh`, same as ipaexm/Junicode) and wires it as
+    // `download-fonts.sh`, same as ipaexm/Junicode) and wires it as
     // `default-font.satysfi-hash`'s `"math"` default. Check it FIRST so this
     // test no longer depends on a host-wide font install once that script
     // has been run — this is what makes the cramped/uncramped divergence
@@ -190,7 +190,7 @@ fn math_glyphs(v: Value) -> Vec<MathGlyph> {
 /// (`FontFormat.get_math_glyph_metrics`, fontFormat.ml:2257-2264 —
 /// `hgt = truncate_negative ymax`, `dpt = truncate_positive ymin`), and the
 /// font-level ascender/descender is exactly the substitution that used to put
-/// this port's scripts 1.7-2.1pt off (`scripts/layout_probes/
+/// this port's scripts 1.7-2.1pt off (`layout-tests/probes/
 /// math_script_drop.saty`). Reading them back off `MathGlyph` keeps this
 /// test's recompute independent of the CLAMP — which is what it is about —
 /// without re-deriving the extent convention here as well.

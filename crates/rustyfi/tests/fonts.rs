@@ -37,7 +37,7 @@ fn minimal_fixture() -> PathBuf {
 }
 
 /// A `--lib-root`-shaped directory with NO `dist/hash/` — i.e. genuinely
-/// "nothing configured" — regardless of whether `scripts/download-fonts.sh`
+/// "nothing configured" — regardless of whether `download-fonts.sh`
 /// has already been run against the real `lib_root()` (which then
 /// legitimately DOES carry a `dist/hash/fonts.satysfi-hash` /
 /// `default-font.satysfi-hash`, for `crates/rustyfi/tests/cjk_render.rs`
@@ -274,7 +274,7 @@ fn no_font_config_matches_base14_byte_for_byte() {
     let work = tmpdir("no-font-config");
     let out = work.join("out.pdf");
     // A `dist/hash`-free lib root — NOT `lib_root()` directly, which (once
-    // `scripts/download-fonts.sh` has been run for the CJK proof,
+    // `download-fonts.sh` has been run for the CJK proof,
     // `tests/cjk_render.rs`) legitimately carries a real font config and so
     // would no longer exercise the "nothing configured" invariant this test
     // is about.
@@ -344,7 +344,7 @@ fn changing_font_config_invalidates_the_compile_cache() {
     // `dist/hash`-free (see `font_free_lib_root`'s doc): keeps this test's
     // "first run" genuinely base-14, independent of whether the real
     // `lib_root()` has since gained a font config via
-    // `scripts/download-fonts.sh` (`tests/cjk_render.rs`).
+    // `download-fonts.sh` (`tests/cjk_render.rs`).
     let font_free_root = font_free_lib_root(&work);
 
     let was_cached = |out: &Output| String::from_utf8_lossy(&out.stderr).contains("(cached)");

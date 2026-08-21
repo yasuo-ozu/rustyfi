@@ -2,9 +2,9 @@
 """Render one probe `.saty` with BOTH engines and print their text lines
 side by side.
 
-  scripts/vspace_probe/run.py FIXTURE.saty [--page N] [--bin PATH]
+  layout-tests/tools/compare.py FIXTURE.saty [--page N] [--bin PATH]
 
-The port gets the same assembled lib-root `scripts/layout_fidelity.py` builds
+The port gets the same assembled lib-root `layout-tests/fidelity.py` builds
 (port packages + full satysfi-base + the corpus `enumitem`/`easytable` sources);
 the original SATySFi gets a `-C` root holding only the non-stdlib packages, so
 it resolves its own stdlib from its default config path — exactly as the
@@ -27,7 +27,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent.parent
-CORPUS = REPO / "scripts" / "layout_fidelity_corpus"
+CORPUS = REPO / "layout-tests" / "corpus"
 LIB = REPO / "lib-rustyfi"
 
 # Corpus packages staged under a published prefix, mirroring layout_fidelity.py.
@@ -117,10 +117,10 @@ def main() -> int:
         for pg in args.page:
             pages += ["--page", str(pg)]
         print("######## PORT ########")
-        subprocess.run([sys.executable, str(HERE / "lines.py"), str(port_pdf)] + pages)
+        subprocess.run([sys.executable, str(HERE.parent / "measure" / "lines.py"), str(port_pdf)] + pages)
         if ok_saty:
             print("######## SATySFi 0.0.11 ########")
-            subprocess.run([sys.executable, str(HERE / "lines.py"), str(saty_pdf)] + pages)
+            subprocess.run([sys.executable, str(HERE.parent / "measure" / "lines.py"), str(saty_pdf)] + pages)
     return 0
 
 

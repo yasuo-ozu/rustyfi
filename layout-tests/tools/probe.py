@@ -2,16 +2,16 @@
 """Render ONE minimal `.saty` probe with BOTH engines and print the word boxes
 side by side.
 
-`scripts/layout_fidelity.py` measures whole corpus documents; that is the right
+`layout-tests/fidelity.py` measures whole corpus documents; that is the right
 granularity for a regression gate and the wrong one for a diagnosis, because a
 whole document composes dozens of constructs and any one of them can absorb a
 few points. This driver is the diagnostic counterpart: point it at a probe that
 exercises a SINGLE construct and it reports, per word, where the port put it and
 where upstream SATySFi put it.
 
-    scripts/layout_probe.py scripts/layout_probes/code_block.saty
-    scripts/layout_probe.py --port-only ...       # skip the `satysfi` run
-    scripts/layout_probe.py --keep out/           # keep both PDFs
+    layout-tests/tools/probe.py layout-tests/probes/code_block.saty
+    layout-tests/tools/probe.py --port-only ...       # skip the `satysfi` run
+    layout-tests/tools/probe.py --keep out/           # keep both PDFs
 
 MEASUREMENT TRAP, and it has already produced one false finding: the two writers
 emit DIFFERENT font descriptors for identical glyphs at identical size, so a
@@ -34,8 +34,8 @@ import sys
 import tempfile
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from layout_fidelity import (  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from fidelity import (  # noqa: E402
     DOCS,
     LIB_RUSTYFI,
     assemble_lib_root,
@@ -43,7 +43,7 @@ from layout_fidelity import (  # noqa: E402
     extract_pages,
 )
 
-REPO = Path(__file__).resolve().parent.parent
+REPO = Path(__file__).resolve().parent.parent.parent
 
 
 def find_pdftotext() -> str:

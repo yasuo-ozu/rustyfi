@@ -2,7 +2,7 @@
 //! `@require:`d from a 0.1 document against a lib root that holds ONLY the
 //! 0.0.6 corpus.
 //!
-//! This is the Rust successor to `scripts/xver_sweep.py`, which measured the
+//! This is the Rust successor to `layout-tests/xver_sweep.py`, which measured the
 //! same 22 packages by spawning `target/debug/rustyfi` once per compile and
 //! grepping its stderr for `output written on`. Same cases, same baseline, same
 //! two-compiles-per-package shape — but the port is CALLED, not spawned:
@@ -121,7 +121,7 @@ mod cases;
 
 use cases::{Case, CASES, HELPER_SATYH};
 
-/// The registry packages to install, in `scripts/xver_sweep.py`'s own
+/// The registry packages to install, in `layout-tests/xver_sweep.py`'s own
 /// dependency-friendly order.
 ///
 /// This is deliberately ITS OWN constant rather than a projection of
@@ -184,7 +184,7 @@ fn repo_root() -> PathBuf {
 /// same thing. Deliberately process-free, unlike those two: they probe
 /// `fc-match` first, and the entire premise of this file is that it shells out
 /// to nothing. The static candidate list is the union of theirs and
-/// `scripts/xver_sweep.py`'s `find_font`, plus a NARROW walk of `/nix/store`
+/// `layout-tests/xver_sweep.py`'s `find_font`, plus a NARROW walk of `/nix/store`
 /// (only into directory names containing `dejavu`, so this stays cheap on a
 /// store with 10^5 entries).
 ///
@@ -388,7 +388,7 @@ fn check_cases_are_installable(root: &Path) {
 }
 
 /// `<root>/dist/packages/` = the port's bundled 0.0.6 corpus + registry
-/// installs — `scripts/xver_sweep.py`'s `assemble_root`, as library calls.
+/// installs — `layout-tests/xver_sweep.py`'s `assemble_root`, as library calls.
 ///
 /// The order is [`PACKAGES`]'s own, which puts the shared dependencies
 /// (`base`, `fss`) ahead of their dependents. Installs are independent
@@ -638,7 +638,7 @@ fn merge_program(
 }
 
 /// One line, with the (long, temp-dir-flavoured) lib-root and document paths
-/// stripped, so two runs' output diffs cleanly — `scripts/xver_sweep.py`'s
+/// stripped, so two runs' output diffs cleanly — `layout-tests/xver_sweep.py`'s
 /// `short`. There is no `Error: ` prefix to strip here and no `<doc>.saty: `
 /// preamble: those were `main.rs`'s framing of a `CompileError`, and this
 /// harness holds the error value itself.
@@ -778,7 +778,7 @@ fn sweep() {
     }
     let _ = std::fs::remove_dir_all(&work);
 
-    // ---- report, exactly `scripts/xver_sweep.py`'s layout ----
+    // ---- report, exactly `layout-tests/xver_sweep.py`'s layout ----
     let subs: [(&Path, &str); 2] = [(root.as_path(), "<root>/"), (work.as_path(), "<work>/")];
     let width = rows.iter().map(|r| r.name.len()).max().unwrap_or(0);
     let mut drift: Vec<String> = Vec::new();

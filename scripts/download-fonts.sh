@@ -145,6 +145,25 @@ cp "$CACHE/IPAexfont00401/IPA_Font_License_Agreement_v1.0.txt" \
 show_message "installed ipaexm.ttf / ipaexg.ttf (IPA Font License v1.0)"
 
 # ---- Junicode (Junicode.ttf / -Bold.ttf / -Italic.ttf) --------------------
+#
+# The version is pinned at 1.002 DELIBERATELY, and upgrading it has been
+# measured and rejected — do not "fix" the mismatch below without re-measuring.
+#
+# Upstream SATySFi 0.0.11 bundles Junicode **2.222** (upem 1000; ours is 1.002,
+# upem 2048), so the corpus's Latin metrics genuinely differ from the engine
+# the reference PDFs came from: "Gallery" is 32.965pt here, 33.276pt under
+# 2.222, and 33.492pt in the reference itself — so the references were built
+# with a THIRD Junicode, matching neither.
+#
+# Swapping in 2.222 wholesale (2026-08-21): `chars_missing` improves a lot
+# (corpus-wide 24 -> 13; enumitem 10 -> 1, because the TOC leader-dot count is
+# a `round` over Latin widths and lands right), but `width_p95` regresses on
+# EVERY document — enumitem 0.609 -> 1.692pt, easytable 0.701 -> 1.068,
+# latexcmds 0.722 -> 0.864 — and `chars_extra` explodes (enumitem 22 -> 122)
+# as the dot counts overshoot instead. The layout gate fails on enumitem.
+#
+# So the leader-dot residual is a corpus-asset difference, not a port defect,
+# and chasing it through font versions makes real metric agreement worse.
 JUNICODE_ZIP="junicode-1.002.zip"
 download_file "$JUNICODE_ZIP" \
   "https://downloads.sourceforge.net/project/junicode/junicode/junicode-1.002/junicode-1.002.zip" \

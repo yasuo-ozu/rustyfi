@@ -1543,7 +1543,32 @@ fn uax14_boundaries(text: &str) -> Vec<Option<BreakKind>> {
 /// primitive that only ever touches `ctx.font` — keep working exactly as
 /// before D1, while still picking up `font_scheme[Latin]`'s ratio/rising
 /// (written in lockstep by `set-font Latin ..`, see that primitive).
+///
+/// `OtherScript` first goes through `normalize_script` (`horzBox.ml:472`,
+/// which `get_font_with_ratio` applies before every scheme lookup): upstream's
+/// `CommonNarrow`/`Inherited` resolve to `ctx.dominant_narrow_script` rather
+/// than to a scheme slot of their own. This port's `char_script` has no
+/// separate Common bucket — everything outside Latin-1..Latin-Ext-B and the
+/// CJK ranges lands in `OtherScript` — and upstream's own EAW split puts the
+/// only WIDE Common characters (`U+3000`, the fullwidth forms) in ranges
+/// `char_script` already calls `HanIdeographic`, so the whole bucket is
+/// `CommonNarrow` for practical purposes.
+///
+/// This is not a niceness. `set-dominant-narrow-script Kana` is how a document
+/// says "set my `□` and `✓` in the CJK face", and without it both resolve to a
+/// Latin face that has NEITHER glyph, so both degrade to `.notdef` — the same
+/// glyph id, hence the same `ToUnicode` entry, hence one of the two simply
+/// disappears from the extracted text. That is enumitem's three missing `✓`,
+/// each one overprinted onto a `□` by the document's own `ooalign`.
+///
+/// `dominant_narrow_script` DEFAULTS to `OtherScript` (`Context::initial`, and
+/// upstream's `get_pdf_mode_initial_context` likewise), which lands back on the
+/// same slot as before — so a document that never calls the primitive is
+/// unaffected, and the recursion is one step deep at most.
 fn script_font(ctx: &Context, script: Script) -> ScriptFont {
+    if script == Script::OtherScript && ctx.dominant_narrow_script != Script::OtherScript {
+        return script_font(ctx, ctx.dominant_narrow_script);
+    }
     if script == Script::Latin {
         ScriptFont {
             font: ctx.font,
@@ -2735,12 +2760,57 @@ fn ascii_math_kind(c: char) -> MathKind {
     }
 }
 
+/// `normalize_math_kind` (`math.ml:238-277`): a BINARY atom whose neighbours
+/// make it unary is really an ORDINARY one, and gets none of `Bin`'s spacing.
+/// Upstream demotes on `mkprev in {Op, Bin, Rel, Open, Punct}` or `mknext in
+/// {Rel, Close, Punct}`; `MathEnd` — the sentinel `math.ml:1270` passes for
+/// both ends of a formula — is included here on the LEFT, which is what makes
+/// `${-------}` set seven tight glyphs rather than a leading binary minus
+/// followed by six ordinaries, and what keeps `${-N, -N + 1}`'s minus signs
+/// tight against their operands the way the reference sets them. Every other
+/// class passes through unchanged.
+///
+/// Reachable at all only since the math lexer stopped gluing a run of symbols
+/// into one token: before that a `--` was a single `Ord` atom and there was no
+/// adjacent pair to normalize.
+fn normalize_math_kind(prev: MathKind, next: MathKind, raw: MathKind) -> MathKind {
+    if raw != MathKind::Bin {
+        return raw;
+    }
+    let unary_left = matches!(
+        prev,
+        MathKind::Op
+            | MathKind::Bin
+            | MathKind::Rel
+            | MathKind::Open
+            | MathKind::Punct
+            | MathKind::End
+    );
+    let unary_right = matches!(next, MathKind::Rel | MathKind::Close | MathKind::Punct);
+    if unary_left || unary_right {
+        MathKind::Ord
+    } else {
+        MathKind::Bin
+    }
+}
+
 /// A deliberately tiny stand-in for `space_between_math_kinds`
 /// (`math.ml:319-410`, a 40-pair table driven by context ratios + MATH-table
 /// `space_after_script`, roadmap A): a thin space when either neighbor is
 /// `Bin`, a thick space when either is `Rel`, none otherwise.
+///
+/// TWO IDENTICAL classes in a row are the one pair this stand-in gets right by
+/// exception rather than by rule. Upstream's table lists `(Bin, Ord)`,
+/// `(Ord, Bin)`, `(Rel, Ord)`, `(Ord, Rel)`, … but NOT `(Bin, Bin)` or
+/// `(Rel, Rel)`, so those fall through to its `_` arm and get NO space — which
+/// is why `${a:=b}` sets `:=` as one tight pair between two thick spaces. The
+/// distinction only became reachable when the math lexer stopped gluing a run
+/// of symbols into a single token; before that `:=` was one `Ord` atom and got
+/// no spacing on EITHER side.
 fn space_before(prev: MathKind, cur: MathKind, font_size: Length) -> Length {
-    if prev == MathKind::Bin || cur == MathKind::Bin {
+    if prev == cur && matches!(prev, MathKind::Bin | MathKind::Rel) {
+        Length::ZERO
+    } else if prev == MathKind::Bin || cur == MathKind::Bin {
         font_size * 0.22
     } else if prev == MathKind::Rel || cur == MathKind::Rel {
         font_size * 0.28
@@ -7459,14 +7529,38 @@ fn layout_math_list(
     ),
     EvalError,
 > {
+    // Lay every atom out FIRST, because `normalize_math_kind` below needs each
+    // one's NEIGHBOURS' raw classes — upstream's `convert_to_low` passes
+    // `mkprev`/`mknext` into `convert_to_low_single` for exactly this
+    // (`math.ml:753-765`, via `get_right_math_kind`/`get_left_math_kind`).
+    // The layout of an atom does not depend on its class, only the SPACING
+    // between atoms does, so splitting the walk in two moves no glyph.
+    let mut laid: Vec<(
+        Vec<MathGlyph>,
+        Vec<GraphicsElem>,
+        Length,
+        MathKind,
+        MathKind,
+    )> = Vec::with_capacity(elems.len());
+    for atom in elems {
+        laid.push(layout_math_atom(interp, ctx, atom, size)?);
+    }
+
     let mut glyphs = Vec::new();
     let mut rules = Vec::new();
     let mut x = Length::ZERO;
     let mut last_kind: Option<MathKind> = None;
     let mut first_kind: Option<MathKind> = None;
-    for atom in elems {
-        let (atom_glyphs, atom_rules, atom_width, left, right) =
-            layout_math_atom(interp, ctx, atom, size)?;
+    for (i, (atom_glyphs, atom_rules, atom_width, left_raw, right_raw)) in
+        laid.iter().cloned().enumerate()
+    {
+        // `mkprev`/`mknext` are the neighbours' RAW classes (upstream never
+        // feeds a normalized class back in), and the ends of the list are
+        // `MathEnd` — `math.ml:1270`'s `convert_to_low mathctx MathEnd MathEnd`.
+        let prev_raw = if i == 0 { MathKind::End } else { laid[i - 1].4 };
+        let next_raw = laid.get(i + 1).map_or(MathKind::End, |a| a.3);
+        let left = normalize_math_kind(prev_raw, next_raw, left_raw);
+        let right = normalize_math_kind(prev_raw, next_raw, right_raw);
         if let Some(prev) = last_kind {
             x += space_before(prev, left, ctx.font_size);
         }

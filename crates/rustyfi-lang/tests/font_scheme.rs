@@ -210,3 +210,71 @@ fn manual_rising_is_added_to_inner_string_rising() {
         "set-manual-rising must reach HorzStringInfo.rising"
     );
 }
+
+/// `normalize_script` (`horzBox.ml:472`): a character in the `OtherScript`
+/// bucket — this port's stand-in for upstream's `CommonNarrow` — resolves its
+/// font through `ctx.dominant_narrow_script`, not through the `OtherScript`
+/// scheme slot.
+///
+/// `□` (U+25A1) is the case that matters: `set-dominant-narrow-script Kana` is
+/// how enumitem's document asks for it in the CJK face, and reading the
+/// `OtherScript` slot instead put it in a Latin face with no such glyph.
+#[test]
+fn other_script_resolves_through_the_dominant_narrow_script() {
+    let stub = Stub;
+    let mut interp = Interp::new(&stub);
+    let mut ctx = Context::initial(Length::pt(400.0));
+    ctx.font_scheme[Script::Kana as usize] = rustyfi_backend::ScriptFont {
+        font: FontKey(7),
+        ratio: 0.88,
+        rising: 0.0,
+    };
+    ctx.font_scheme[Script::OtherScript as usize] = rustyfi_backend::ScriptFont {
+        font: FontKey(3),
+        ratio: 1.0,
+        rising: 0.0,
+    };
+    let elems = vec![IText::Text("\u{25A1}".to_string())];
+
+    // Default `dominant_narrow_script == OtherScript`: the slot itself, i.e.
+    // exactly the pre-normalization behaviour.
+    let boxes = primitives::read_inline(&mut interp, &ctx, &elems, &Env::root()).unwrap();
+    let (font, size) = boxes
+        .iter()
+        .find_map(|hb| match hb {
+            rustyfi_backend::HorzBox::Pure(PureHorzBox::InnerString { info, .. }) => {
+                Some((info.font, info.size))
+            }
+            _ => None,
+        })
+        .expect("expected an InnerString");
+    assert_eq!(
+        font,
+        FontKey(3),
+        "default must still read the OtherScript slot"
+    );
+    assert_eq!(size, ctx.font_size);
+
+    // `set-dominant-narrow-script Kana` redirects it, ratio included.
+    ctx.dominant_narrow_script = Script::Kana;
+    let boxes = primitives::read_inline(&mut interp, &ctx, &elems, &Env::root()).unwrap();
+    let (font, size) = boxes
+        .iter()
+        .find_map(|hb| match hb {
+            rustyfi_backend::HorzBox::Pure(PureHorzBox::InnerString { info, .. }) => {
+                Some((info.font, info.size))
+            }
+            _ => None,
+        })
+        .expect("expected an InnerString");
+    assert_eq!(
+        font,
+        FontKey(7),
+        "OtherScript must follow dominant_narrow_script"
+    );
+    assert_eq!(
+        size,
+        ctx.font_size * 0.88,
+        "and pick up that script's ratio too"
+    );
+}

@@ -136,13 +136,18 @@ fn gap5_minus_reclassified_as_bin_with_minus_sign_glyph() {
     );
 }
 
-/// `${a->b}`: `-` and `>` are consecutive symbol chars, lexed as ONE
-/// MATHCHAR token `"->"` — not in `default_math_class_map`, so the whole
-/// token is ONE `Ord` atom (no Bin/Rel spacing anywhere), unlike the
-/// pre-gap-5 per-char split which would have added `Bin` spacing around the
-/// `-`.
+/// `${a->b}`: `-` and `>` are consecutive symbol chars, and each is its OWN
+/// MATHCHAR token — so each hits `default_math_class_map` on its own (`-` ->
+/// U+2212 `Bin`, `>` -> `Rel`), which a single `"->"` token could not (the map's
+/// keys are all one character, and the run used to fall through to one `Ord`
+/// atom with no spacing anywhere).
+///
+/// The `-` here is `Bin` RAW but sits immediately before a `Rel`, so
+/// `normalize_math_kind` demotes it to `Ord` — no `Bin` space at all. What
+/// remains is `Rel` spacing on both sides of the `>`, matching how the
+/// reference engine sets `${a->b}` (`𝑎−` ␣ `>` ␣ `𝑏`).
 #[test]
-fn gap5_multi_char_symbol_run_is_one_ord_atom_no_spacing() {
+fn gap5_multi_char_symbol_run_splits_into_per_char_atoms() {
     let src = with_ctx("embed-math ctx ${a->b}");
     let v = run(&src).expect("${a->b} should compile and evaluate");
     let (width, glyphs) = math_box(v);
@@ -152,9 +157,73 @@ fn gap5_multi_char_symbol_run_is_one_ord_atom_no_spacing() {
         "expected 4 glyphs (a, -, >, b), got {glyphs:?}"
     );
     assert_eq!(
+        glyphs[1].text, "\u{2212}",
+        "the `-` gets its own class-map hit now that it is its own token"
+    );
+    let glyph_w = Length::pt(12.0) * 0.5;
+    let rel_space = Length::pt(12.0) * 0.28;
+    assert_eq!(
         width,
-        Length::pt(24.0),
-        "expected 4 * 6pt with no inter-atom spacing"
+        glyph_w * 4.0 + rel_space * 2.0,
+        "expected 4 glyphs + Rel spacing either side of `>` (the `-` is \
+         normalized to Ord before a Rel), got {width:?}"
+    );
+}
+
+/// Two atoms of the SAME class in a row get NO space between them: upstream's
+/// `space_between_math_kinds` table has `(Rel, Ord)` and `(Ord, Rel)` but no
+/// `(Rel, Rel)`, so `${a:=b}` sets `:=` tight between two thick spaces rather
+/// than opening a third one in the middle.
+#[test]
+fn adjacent_relations_get_no_space_between_them() {
+    let src = with_ctx("embed-math ctx ${a:=b}");
+    let v = run(&src).expect("${a:=b} should compile and evaluate");
+    let (width, glyphs) = math_box(v);
+    assert_eq!(glyphs.len(), 4, "expected 4 glyphs (a, :, =, b)");
+    let glyph_w = Length::pt(12.0) * 0.5;
+    let rel_space = Length::pt(12.0) * 0.28;
+    assert_eq!(
+        width,
+        glyph_w * 4.0 + rel_space * 2.0,
+        "expected 4 glyphs + exactly TWO Rel spaces, got {width:?}"
+    );
+}
+
+/// A `Bin` at the START of a math list is unary, and `normalize_math_kind`
+/// demotes it — `${-a}` is a minus sign tight against its operand, not a
+/// binary minus with a leading thin space.
+#[test]
+fn leading_binary_is_normalized_to_ordinary() {
+    let src = with_ctx("embed-math ctx ${-a}");
+    let v = run(&src).expect("${-a} should compile and evaluate");
+    let (width, glyphs) = math_box(v);
+    assert_eq!(glyphs.len(), 2, "expected 2 glyphs (-, a)");
+    assert_eq!(
+        width,
+        Length::pt(12.0) * 0.5 * 2.0,
+        "expected 2 glyphs and NO Bin space, got {width:?}"
+    );
+}
+
+/// The same demotion one atom in: in `${-------}` only the first `-` could be
+/// binary (the rest each follow a raw `Bin`, which `normalize_math_kind`
+/// counts as unary-making), and the first is at the list start — so the whole
+/// run sets tight, exactly as the reference does for latexcmds'
+/// `\underbrace…{-------}`.
+#[test]
+fn a_run_of_minuses_sets_tight_as_all_minus_signs() {
+    let src = with_ctx("embed-math ctx ${-------}");
+    let v = run(&src).expect("${-------} should compile and evaluate");
+    let (width, glyphs) = math_box(v);
+    assert_eq!(glyphs.len(), 7, "expected 7 glyphs, got {glyphs:?}");
+    assert!(
+        glyphs.iter().all(|g| g.text == "\u{2212}"),
+        "every one should be U+2212 MINUS SIGN, got {glyphs:?}"
+    );
+    assert_eq!(
+        width,
+        Length::pt(12.0) * 0.5 * 7.0,
+        "expected 7 glyphs and no inter-atom spacing, got {width:?}"
     );
 }
 

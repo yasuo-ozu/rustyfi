@@ -1,18 +1,12 @@
 /target
-/scripts/layout_fidelity_corpus/*/*.port.pdf
-/scripts/layout_fidelity_corpus/*/*.satysfi.pdf
+/layout-tests/corpus/*/*.port.pdf
+/layout-tests/corpus/*/*.satysfi.pdf
 
-# The real faces (IPAex, Junicode, Latin Modern, DejaVu Math) and the hash files
-# naming them are FETCHED, not committed: `make -C manual fonts`, or
-# scripts/download-fonts.sh directly. They are large, and their licences
-# (IPA, OFL, GUST, DejaVu) are satisfied by the script copying each licence text
-# alongside the font it covers rather than by vendoring the binaries here.
 /lib-rustyfi/dist/fonts/*
+/lib-rustyfi/dist/hash/*
 
-# SATySFi cross-reference cache written next to a built .saty.
 *.satysfi-aux
+Satyristes.lock
+.satyrographos/
 
 __pycache__/
-
-# the standalone design POC builds into its own target/
-/docs/plans/dup-checkpoint-poc/target/

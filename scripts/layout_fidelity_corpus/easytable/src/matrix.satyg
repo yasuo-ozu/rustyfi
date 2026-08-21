@@ -130,13 +130,43 @@ end = struct
     | None -> None
 
   % List の idx 番目の要素を v に変更した新たなリストを返す。
+  %
+  % LOCAL FIX (rustyfi corpus), NOT an engine difference. The line this
+  % replaced,
+  %
+  %     let head = head |> List.take ((head |> List.length) - 2) in
+  %     List.concat [head; [v]; tail]
+  %
+  % was written against a `satysfi-base` whose `List.take`/`List.split-at`
+  % took an INDEX (`take i` = `lst[0..i]` inclusive, `split-at i` =
+  % `(lst[0..i], lst[i+1..])`); under the COUNT-based pair this corpus
+  % vendors (`satysfi-base/src/list-ext.satyg`: `take i` = the first `i`,
+  % `split-at n = (take n, drop n)`) it neither replaces nor preserves
+  % length. Measured, with the vendored base:
+  %
+  %     Matrix.set (0,1) 9 (Matrix.tile (3,3) 1)  ->  shape 4x3 (a row is
+  %                                                   GROWN, 9 lands at (0,0))
+  %     Matrix.set (1,2) 7 (Matrix.tile (3,3) 1)  ->  shape 3x2 (an element
+  %                                                   is LOST)
+  %
+  % so every `Matrix.set` — i.e. every `merge`, `set-fmt-`, `set-text-` —
+  % corrupts the grid, and `TableBuilder.build`'s `Matrix.eachmap` then
+  % truncates the format matrix against the text matrix and silently drops
+  % cells. That is what made this document's two merged-cell tables lose
+  % `Time [ms]`, the whole `case A | case B | case A | case B` sub-header,
+  % `No / – / – / 8 / 16 / 78 / max`, and the 2020-holidays rows.
+  %
+  % It is NOT a rustyfi bug: SATySFi 0.0.11 (flake.nix's `satysfi`) drops
+  % exactly the same cells from the same sources, and the vendored reference
+  % `doc/easytable.pdf` — which has the cells — is simply unreproducible
+  % from this pairing. The rewrite below is the author's intended semantics
+  % (replace element `idx`), expressed against the base that is here.
   let set-nth idx v lst =
     match lst |> List.nth idx with
     | None -> lst  % その要素がなければ何も変更しない
     | Some(_) ->
         let (head, tail) = lst |> List.split-at idx in
-        let head = head |> List.take ((head |> List.length) - 2) in
-        List.concat [head; [v]; tail]
+        List.concat [head; [v]; tail |> List.drop 1]
 
   let embed-nth idx lst-dist lst-orig =
     lst-orig |> List.mapi (

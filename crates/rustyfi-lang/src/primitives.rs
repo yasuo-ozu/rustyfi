@@ -25,7 +25,7 @@ use rustyfi_backend::{
     MathConstants, MathCorner, MathGlyph, MathKind, MathScriptLevel, NamedDest, ObjRepr,
     OutlineEntry, Paddings, Page, PageGeometry, PaperSize, Path, PathSeg, PdfPageResource, Point,
     PrePath, PureHorzBox, Script, ScriptFont, Subpath, TabularBox, VertBox, VertVariantPolicy,
-    FORCED_BREAK_PENALTY, MIN_FIRST_ASCENDER,
+    FORCED_BREAK_PENALTY, MIN_FIRST_ASCENDER, NO_BREAK_PENALTY,
 };
 use rustyfi_syntax::RustyfiVersion;
 use std::collections::{BTreeMap, BTreeSet};
@@ -1773,6 +1773,35 @@ fn jl_class(c: char) -> Option<JlClass> {
     }
 }
 
+/// `ideographic_single`'s TRAILING kern for `c` (`convertText.ml:266-283`), as a
+/// negative ratio of `font_size`: JLCP/JLFS/JLCM are `[glyph; hwkern]`, JLMD is
+/// `[qwkern; glyph; qwkern]`.
+///
+/// A kern belongs to the CHARACTER, not to the boundary — `ideographic_single`
+/// runs per chunk and never consults its neighbours. Hence one char per
+/// function, even though the only caller today is the pair-shaped
+/// [`cjk_pair_space`]: at a CJK↔Latin boundary the CJK side still carries its own
+/// kern upstream, and this port does not yet emit it there (see the
+/// `PreventBreak` arm of `text_to_boxes` for what that costs and what unblocking
+/// it needs).
+fn cjk_trailing_kern(c: char) -> f64 {
+    match jl_class(c) {
+        Some(JlClass::Close) | Some(JlClass::FullStop) | Some(JlClass::Comma) => -0.5,
+        Some(JlClass::MiddleDot) => -0.25,
+        _ => 0.0,
+    }
+}
+
+/// `ideographic_single`'s LEADING kern for `c` — JLOP is `[hwkern; glyph]`,
+/// JLMD `[qwkern; glyph; qwkern]`. See [`cjk_trailing_kern`].
+fn cjk_leading_kern(c: char) -> f64 {
+    match jl_class(c) {
+        Some(JlClass::Open) => -0.5,
+        Some(JlClass::MiddleDot) => -0.25,
+        _ => 0.0,
+    }
+}
+
 /// The glue SATySFi puts between two directly adjacent CJK characters, as
 /// `(natural, shrink, stretch)` ratios of `font_size` — `space_between_chunks`
 /// (`convertText.ml:220`) with `ideographic_single`'s compensating kerns
@@ -1788,19 +1817,33 @@ fn jl_class(c: char) -> Option<JlClass> {
 /// ordinary characters, and the bulk of the elasticity a Japanese line
 /// justifies with. Two punctuation marks in a row (`」、`, `」。`) get NO space
 /// back, so the pair sets 0.5em tighter than its glyphs.
+///
+/// A KNOWN, MEASURED deviation: every ratio here is applied to `ctx.font_size`,
+/// where upstream applies the kerns and all four `pure_halfwidth_space_*` sizes
+/// to `get_corrected_font_size ctx script` (`convertText.ml:76`, i.e. font size
+/// TIMES the script's own ratio — 0.88 for stdja's CJK face, so a half-width
+/// kern at 12pt is −5.28pt and not −6pt). Only `adjacent_space` (`:102`) and the
+/// inter-script glue (`:225`) really take the RAW size.
+///
+/// Correcting it was written and measured, and it does not land yet. It moves NO
+/// line break on any corpus document (the `linebreak_probe.py` line-match figure
+/// is identical to four decimals across all six), and it fails the fidelity gate
+/// on word-count deviation (xpath 5 -> 8, easytable 100 -> 110) while
+/// `text_match` falls on latexcmds and easytable. The direction says why: a
+/// smaller class space closes inter-character gaps, and upstream has MORE word
+/// gaps than this port, not fewer. The missing width is elsewhere — in the
+/// per-character kerns this port does not emit at a CJK↔Latin boundary or a run
+/// edge (see [`cjk_trailing_kern`]) — so shrinking the spaces alone moves away
+/// from upstream. The two changes are a package; do not re-derive either half
+/// from `convertText.ml` alone.
 fn cjk_pair_space(a: char, b: char, adjacent_stretch: f64) -> (f64, f64, f64) {
     use JlClass::*;
     let (ca, cb) = (jl_class(a), jl_class(b));
-    // Kerns from `ideographic_single`, as a NEGATIVE ratio of font_size.
-    let kern = match ca {
-        Some(Close) | Some(FullStop) | Some(Comma) => -0.5,
-        Some(MiddleDot) => -0.25,
-        _ => 0.0,
-    } + match cb {
-        Some(Open) => -0.5,
-        Some(MiddleDot) => -0.25,
-        _ => 0.0,
-    };
+    // Kerns from `ideographic_single`, as a NEGATIVE ratio of font_size. Between
+    // two CJK characters the pair's kern is exactly `a`'s trailing plus `b`'s
+    // leading one, which is what makes the pair form equivalent to upstream's
+    // per-character one here.
+    let kern = cjk_trailing_kern(a) + cjk_leading_kern(b);
     // `pure_space_between_classes`, in its own match order.
     let hwsoft = (0.5, 0.25, 0.25);
     let hwhard = (0.5, 0.0, 0.25);
@@ -2152,61 +2195,132 @@ fn text_to_boxes(
         // is CHUNKED, not where any glyph lands.
         if !is_gated_soft_hyphen {
             let after = i + c.len_utf8();
-            if let Some(kind) = boundary[after] {
-                flush_word(&mut word, script, out)?;
-                word_script = None;
-                // `adjacent_space` (`convertText.ml:101`): between two DIRECTLY
-                // ADJACENT CJK characters SATySFi carries stretchable glue —
-                // natural 0, shrink 0, stretch `font_size * adjacent_stretch` —
-                // in the discretionary's NO-BREAK slot (upstream
-                // `LBDiscretionary(badness, id, [glue], [], [])`, whose first
-                // list is the not-taken content: `lineBreak.ml:1042` folds it in
-                // via `add_width_all`). So it vanishes when the break is taken
-                // and gives the line elasticity when it is not.
-                //
-                // This is the elasticity a Japanese line justifies with. Without
-                // it a CJK line's only give was whatever incidental Latin spaces
-                // it happened to contain — a handful of points across a whole
-                // line — so the breaker could neither fill to the column nor
-                // accept a break that needed a hair of stretch.
-                //
-                // Only between two CJK characters: a CJK/Latin boundary is
-                // `pure_space_between_scripts`'s job (the inter-script glue
-                // above), and upstream falls through to `adjacent_space` only
-                // once that has returned `None` (`space_between_chunks`,
-                // `convertText.ml:220`).
-                let is_cjk = |s| matches!(s, Script::HanIdeographic | Script::Kana);
-                let next_char = text[after..].chars().next();
-                let next_is_cjk = next_char.is_some_and(|nc| is_cjk(char_script(nc)));
-                let no_break = if is_cjk(script) && next_is_cjk {
-                    let (n, sh, st) =
-                        cjk_pair_space(c, next_char.expect("checked"), ctx.adjacent_stretch);
-                    let mut boxes = Vec::new();
-                    // The kern part is RIGID and must never be a break point,
-                    // so it rides as a `FixedEmpty` rather than as glue.
-                    if n != 0.0 {
-                        boxes.push(PureHorzBox::FixedEmpty {
-                            width: ctx.font_size * n,
+            // The inter-chunk spacing between two DIRECTLY ADJACENT CJK
+            // characters: `cjk_pair_space` folds `pure_space_between_classes` /
+            // `adjacent_space` (`convertText.ml:101/194`) together with
+            // `ideographic_single`'s compensating kerns (`convertText.ml:266`).
+            //
+            // The elastic part is the give a Japanese line justifies with.
+            // Without it a CJK line's only give was whatever incidental Latin
+            // spaces it happened to contain — a handful of points across a whole
+            // line — so the breaker could neither fill to the column nor accept a
+            // break that needed a hair of stretch.
+            //
+            // Only between two CJK characters: a CJK/Latin boundary is
+            // `pure_space_between_scripts`'s job (the inter-script glue
+            // above), and upstream falls through to `adjacent_space` only
+            // once that has returned `None` (`space_between_chunks`,
+            // `convertText.ml:220`).
+            let is_cjk = |s| matches!(s, Script::HanIdeographic | Script::Kana);
+            let next_char = text[after..].chars().next();
+            let next_is_cjk = next_char.is_some_and(|nc| is_cjk(char_script(nc)));
+            let pair = if is_cjk(script) && next_is_cjk {
+                Some(cjk_pair_space(
+                    c,
+                    next_char.expect("checked"),
+                    ctx.adjacent_stretch,
+                ))
+            } else {
+                None
+            };
+            // `discretionary_if_breakable alw badns lphb`
+            // (`convertText.ml:183-190`) — the ONE decision upstream makes at a
+            // chunk boundary. The spacing is computed the same way either way;
+            // only its container depends on whether UAX#14 grants a break:
+            //
+            //   AllowBreak    -> LBDiscretionary(badns, id, [glue], [], [])
+            //   PreventBreak  -> LBPure(glue)
+            //
+            // The port used to emit the `AllowBreak` arm and *nothing* for
+            // `PreventBreak`, so at every prohibited boundary — and in Japanese
+            // prose that is one boundary in several, since LB13 forbids a break
+            // before `、`/`。`/`」`/`）` and LB14 after `（`/`「` — a CJK line
+            // carried give only at the subset of its boundaries that happened to
+            // be breakable. A line with no give has to FILL its measure with
+            // characters, which is part of why the port packs more per line than
+            // SATySFi.
+            match boundary[after] {
+                Some(kind) => {
+                    flush_word(&mut word, script, out)?;
+                    word_script = None;
+                    let mut no_break = Vec::new();
+                    if let Some((n, sh, st)) = pair {
+                        // The kern part is RIGID and must never be a break point,
+                        // so it rides as a `FixedEmpty` rather than as glue.
+                        if n != 0.0 {
+                            no_break.push(PureHorzBox::FixedEmpty {
+                                width: ctx.font_size * n,
+                            });
+                        }
+                        no_break.push(PureHorzBox::OuterEmpty {
+                            natural: Length::ZERO,
+                            shrinkable: ctx.font_size * sh,
+                            stretchable: ctx.font_size * st,
                         });
                     }
-                    boxes.push(PureHorzBox::OuterEmpty {
-                        natural: Length::ZERO,
-                        shrinkable: ctx.font_size * sh,
-                        stretchable: ctx.font_size * st,
-                    });
-                    boxes
-                } else {
-                    Vec::new()
-                };
-                out.push(HorzBox::Pure(PureHorzBox::Discretionary {
-                    penalty: match kind {
-                        BreakKind::Allowed => 0,
-                        BreakKind::Mandatory => FORCED_BREAK_PENALTY,
-                    },
-                    pre_break: Vec::new(),
-                    post_break: Vec::new(),
-                    no_break,
-                }));
+                    out.push(HorzBox::Pure(PureHorzBox::Discretionary {
+                        penalty: match kind {
+                            BreakKind::Allowed => 0,
+                            BreakKind::Mandatory => FORCED_BREAK_PENALTY,
+                        },
+                        pre_break: Vec::new(),
+                        post_break: Vec::new(),
+                        no_break,
+                    }));
+                }
+                // The `PreventBreak` arm: `LBPure(glue)`, spelled here as a
+                // `Discretionary` whose every break slot is empty and whose
+                // penalty is `NO_BREAK_PENALTY` (see that constant — a bare
+                // `OuterEmpty` IS a breakpoint in this box model, so a pure
+                // elastic box has no other spelling).
+                //
+                // Only the ELASTIC half, deliberately, and this is the one place
+                // the port knowingly diverges from `discretionary_if_breakable`.
+                // Landing the RIGID half too was written and MEASURED, and it
+                // makes the kern model ASYMMETRIC rather than complete:
+                // `cjk_pair_space`'s kern is a property of the PAIR, whereas
+                // upstream's is a property of the CHARACTER
+                // (`ideographic_single` never looks at its neighbours), and the
+                // two agree only when BOTH neighbours are CJK. Applying it here
+                // therefore gives `生成・変換` the nakaten's kern on both sides
+                // while `（例：textbox` still gets only its leading one, because
+                // the trailing side faces Latin and no `cjk_pair_space` reaches
+                // there — figbox's largest intra-line divergence from upstream
+                // (mean |dx| on that line 2.5pt -> 6.5pt).
+                //
+                // Completing it means emitting the per-character kerns at
+                // CJK<->Latin boundaries and at run edges as well, which in turn
+                // needs the source-whitespace rewrite (the `' ' | '\n'` block
+                // above) applied BEFORE `uax14_boundaries` rather than during
+                // this loop — upstream's own order (`lineBreakDataMap.ml:143-157`
+                // then `append_break_opportunity`). Without that, a `。` before a
+                // deleted source newline gets its trailing −0.5em kern while the
+                // `(FullStop, _) -> hwhard` class space that pays it back is
+                // skipped (the lookahead sees the newline, not the character
+                // after it), and Japanese source is hard-wrapped constantly: the
+                // layout-fidelity gate fails 12 ways.
+                //
+                // So the natural-width bug the rigid half would fix — `」。` and
+                // `」、` set a half-em too wide, `末・雲` a quarter — stays open,
+                // and stays exactly as open as it was before this change.
+                None => {
+                    if let Some((_, sh, st)) = pair {
+                        if sh != 0.0 || st != 0.0 {
+                            flush_word(&mut word, script, out)?;
+                            word_script = None;
+                            out.push(HorzBox::Pure(PureHorzBox::Discretionary {
+                                penalty: NO_BREAK_PENALTY,
+                                pre_break: Vec::new(),
+                                post_break: Vec::new(),
+                                no_break: vec![PureHorzBox::OuterEmpty {
+                                    natural: Length::ZERO,
+                                    shrinkable: ctx.font_size * sh,
+                                    stretchable: ctx.font_size * st,
+                                }],
+                            }));
+                        }
+                    }
+                }
             }
         }
     }

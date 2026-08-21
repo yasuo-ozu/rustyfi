@@ -530,6 +530,26 @@ pub enum InlineMarkKind {
 /// into a break the DP cannot skip over (see `linebreak.rs`'s `floor`).
 pub const FORCED_BREAK_PENALTY: i32 = -10_000;
 
+/// The mirror convention at the other extreme: a `Discretionary` carrying this
+/// penalty offers NO break at all — it exists only to render its `no_break`
+/// slot, unbreakably.
+///
+/// This is upstream's `LBPure(lphb)`, the `PreventBreak` arm of
+/// `discretionary_if_breakable` (`convertText.ml:189-190`). Upstream inserts
+/// inter-chunk spacing between EVERY pair of adjacent chunks, and only the
+/// *breakability* of that boundary decides which lineBreakBox it becomes:
+/// `AllowBreak` gives `LBDiscretionary(badns, id, [glue], [], [])`,
+/// `PreventBreak` gives a plain `LBPure(glue)`. A pure glue box is not a
+/// breakpoint but its stretch/shrink still count toward the line's elasticity
+/// (`lineBreak.ml`'s `add_width_all` over the accumulated pure boxes).
+///
+/// The port's box model has no separate "pure elastic box": a bare
+/// `OuterEmpty` IS a breakpoint (`is_glue`). So `PreventBreak` is modelled as a
+/// `Discretionary` with every break slot empty, its content in `no_break`, and
+/// this penalty — which `is_break_point` reads as "not a candidate". That keeps
+/// one code path in `text_to_boxes` for both arms, exactly as upstream has one.
+pub const NO_BREAK_PENALTY: i32 = i32::MAX;
+
 impl PureHorzBox {
     pub fn natural_width(&self) -> Length {
         match self {
@@ -579,8 +599,15 @@ impl PureHorzBox {
     /// A legal paragraph-break candidate: glue (today's only breakpoints)
     /// or a discretionary (UAX#14/hyphenation break points). CJK text has
     /// no glue at all, so discretionaries are its *only* break candidates.
+    ///
+    /// EXCEPT a `NO_BREAK_PENALTY` discretionary, which is upstream's
+    /// `LBPure(glue)` in disguise (see that constant): it renders its
+    /// `no_break` slot and offers no edge.
     pub fn is_break_point(&self) -> bool {
-        self.is_glue() || matches!(self, PureHorzBox::Discretionary { .. })
+        match self {
+            PureHorzBox::Discretionary { penalty, .. } => *penalty != NO_BREAK_PENALTY,
+            _ => self.is_glue(),
+        }
     }
 
     /// The break's own penalty (TeX's discretionary/`\penalty`

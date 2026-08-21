@@ -1543,7 +1543,32 @@ fn uax14_boundaries(text: &str) -> Vec<Option<BreakKind>> {
 /// primitive that only ever touches `ctx.font` — keep working exactly as
 /// before D1, while still picking up `font_scheme[Latin]`'s ratio/rising
 /// (written in lockstep by `set-font Latin ..`, see that primitive).
+///
+/// `OtherScript` first goes through `normalize_script` (`horzBox.ml:472`,
+/// which `get_font_with_ratio` applies before every scheme lookup): upstream's
+/// `CommonNarrow`/`Inherited` resolve to `ctx.dominant_narrow_script` rather
+/// than to a scheme slot of their own. This port's `char_script` has no
+/// separate Common bucket — everything outside Latin-1..Latin-Ext-B and the
+/// CJK ranges lands in `OtherScript` — and upstream's own EAW split puts the
+/// only WIDE Common characters (`U+3000`, the fullwidth forms) in ranges
+/// `char_script` already calls `HanIdeographic`, so the whole bucket is
+/// `CommonNarrow` for practical purposes.
+///
+/// This is not a niceness. `set-dominant-narrow-script Kana` is how a document
+/// says "set my `□` and `✓` in the CJK face", and without it both resolve to a
+/// Latin face that has NEITHER glyph, so both degrade to `.notdef` — the same
+/// glyph id, hence the same `ToUnicode` entry, hence one of the two simply
+/// disappears from the extracted text. That is enumitem's three missing `✓`,
+/// each one overprinted onto a `□` by the document's own `ooalign`.
+///
+/// `dominant_narrow_script` DEFAULTS to `OtherScript` (`Context::initial`, and
+/// upstream's `get_pdf_mode_initial_context` likewise), which lands back on the
+/// same slot as before — so a document that never calls the primitive is
+/// unaffected, and the recursion is one step deep at most.
 fn script_font(ctx: &Context, script: Script) -> ScriptFont {
+    if script == Script::OtherScript && ctx.dominant_narrow_script != Script::OtherScript {
+        return script_font(ctx, ctx.dominant_narrow_script);
+    }
     if script == Script::Latin {
         ScriptFont {
             font: ctx.font,

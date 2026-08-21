@@ -1,7 +1,0 @@
-@require: stdjabook
-@require: derive/derive
-
-let ast = DeriveDSL.derive ${A} in
-document (| title = {t}; author = {a}; show-title = false; show-toc = false |) '<
-  +p { a derivation ast was built. }
->

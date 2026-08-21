@@ -1,8 +1,0 @@
-@require: stdjabook
-@require: algorithm/algorithm
-
-document (| title = {t}; author = {a}; show-title = false; show-toc = false |) '<
-  +algorithmic<
-    +p { a step }
-  >
->

@@ -1,7 +1,0 @@
-@require: stdjabook
-@require: ruby/ruby
-
-let ib ctx = Ruby.ruby ctx [] [`kanji`] [{KANJI}] in
-document (| title = {t}; author = {a}; show-title = false; show-toc = false |) '<
-  +p { \ruby([`kanji`])([{KANJI}]); }
->

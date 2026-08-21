@@ -1,8 +1,0 @@
-@require: stdjabook
-@require: base/string
-
-let s = String.concat [`a`; `b`; `c`] in
-let s-text = embed-string s in
-document (| title = {t}; author = {a}; show-title = false; show-toc = false |) '<
-  +p { base String.concat gives #s-text;. }
->

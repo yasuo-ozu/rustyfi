@@ -1,9 +1,0 @@
-@require: stdjabook
-@require: lipsum/lipsum
-
-let n = string-length Lipsum.quick-brown-fox-string in
-let n-text = embed-string (arabic n) in
-document (| title = {t}; author = {a}; show-title = false; show-toc = false |) '<
-  +p { fox string length is #n-text;. }
-  +p { \quick-brown-fox; }
->

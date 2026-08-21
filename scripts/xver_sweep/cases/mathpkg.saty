@@ -1,7 +1,0 @@
-@require: math
-@import: h
-
-let open H in
-document (| title = `mathpkg` |) '<
-  +p { math package required. }
->

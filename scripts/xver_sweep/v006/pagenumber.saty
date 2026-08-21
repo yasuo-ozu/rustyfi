@@ -1,8 +1,0 @@
-@require: stdjabook
-@require: pagenumber/pagenumber
-
-let s = PageNumber.get-page-string 1 in
-let s-text = embed-string s in
-document (| title = {t}; author = {a}; show-title = false; show-toc = false |) '<
-  +p { page string #s-text;. }
->

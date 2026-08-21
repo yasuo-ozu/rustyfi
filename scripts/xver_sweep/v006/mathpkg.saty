@@ -1,6 +1,0 @@
-@require: stdjabook
-@require: math
-
-document (| title = {t}; author = {a}; show-title = false; show-toc = false |) '<
-  +p { control. }
->

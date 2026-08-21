@@ -1,8 +1,0 @@
-@require: figbox/figbox
-@import: h
-
-let fb = FigBox.frame 1pt Color.black (FigBox.dummy-box 40pt 20pt) in
-let open H in
-document (| title = `figbox` |) '<
-  +fig-block(fb);
->

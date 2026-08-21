@@ -1,7 +1,0 @@
-@require: stdjabook
-@require: matrixcd/matrixcd
-
-let o = MatrixCD.row-sep 5pt in
-document (| title = {t}; author = {a}; show-title = false; show-toc = false |) '<
-  +p { matrixcd option built. }
->

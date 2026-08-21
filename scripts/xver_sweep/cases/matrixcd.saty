@@ -1,8 +1,0 @@
-@require: matrixcd/matrixcd
-@import: h
-
-let o = MatrixCD.row-sep 5pt in
-let open H in
-document (| title = `matrixcd` |) '<
-  +p { matrixcd option built. }
->

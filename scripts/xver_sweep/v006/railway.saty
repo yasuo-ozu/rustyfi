@@ -1,9 +1,0 @@
-@require: stdjabook
-@require: railway/railway
-
-let r = Rail.push-line (10pt, 0pt) Rail.init in
-let n = Rail.length r in
-let n-text = embed-string (arabic n) in
-document (| title = {t}; author = {a}; show-title = false; show-toc = false |) '<
-  +p { rail length #n-text;. }
->

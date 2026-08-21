@@ -1,7 +1,0 @@
-@require: texlogo/texlogo
-@import: h
-
-let open H in
-document (| title = `texlogo` |) '<
-  +p { The \TeX; and \LaTeX; logos, typeset by a real 0.0.6 package. }
->

@@ -1,9 +1,0 @@
-@require: base/string
-@import: h
-
-let s = String.concat [`a`, `b`, `c`] in
-let s-text = embed-string s in
-let open H in
-document (| title = `base` |) '<
-  +p { base String.concat gives #s-text;. }
->

@@ -1,9 +1,0 @@
-@require: quotation/quotation
-@import: h
-
-let open H in
-document (| title = `quotation` |) '<
-  +quotation<
-    +p { quoted text from a 0.0.6 package. }
-  >
->

@@ -1,9 +1,0 @@
-@require: arrows/arrows
-@import: h
-
-let a = Arrow.solid (| line-width = 1.0, head-size = 1.0 |) in
-let b = Arrow.invert a in
-let open H in
-document (| title = `arrows` |) '<
-  +p { an arrow value was built. }
->

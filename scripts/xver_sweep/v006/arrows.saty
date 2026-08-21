@@ -1,8 +1,0 @@
-@require: stdjabook
-@require: arrows/arrows
-
-let a = Arrow.solid (| line-width = 1.0; head-size = 1.0 |) in
-let b = Arrow.invert a in
-document (| title = {t}; author = {a}; show-title = false; show-toc = false |) '<
-  +p { an arrow value was built. }
->

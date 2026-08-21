@@ -1,6 +1,0 @@
-@require: stdjabook
-@require: siunitx/siunitx
-
-document (| title = {t}; author = {a}; show-title = false; show-toc = false |) '<
-  +p { one ${\kilo\gram}. }
->

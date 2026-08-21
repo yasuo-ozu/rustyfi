@@ -1,9 +1,0 @@
-@require: stdjabook
-@require: enumitem/enumitem
-
-document (| title = {t}; author = {a}; show-title = false; show-toc = false |) '<
-  +itemize(EnumitemAlias.dot-arabic)<
-    +item{first}<>
-    +item{second}<>
-  >
->

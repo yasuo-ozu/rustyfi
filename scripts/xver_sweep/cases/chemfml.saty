@@ -1,7 +1,0 @@
-@require: chemfml/chemfml
-@import: h
-
-let open H in
-document (| title = `chemfml` |) '<
-  +p { water is \chem(`H2O`);. }
->

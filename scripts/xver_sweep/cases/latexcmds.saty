@@ -1,7 +1,0 @@
-@require: latexcmds/latexcmds
-@import: h
-
-let open H in
-document (| title = `latexcmds` |) '<
-  +p { before\hspace(10pt);after }
->

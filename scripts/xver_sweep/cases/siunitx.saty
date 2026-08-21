@@ -1,7 +1,0 @@
-@require: siunitx/siunitx
-@import: h
-
-let open H in
-document (| title = `siunitx` |) '<
-  +p { one \math(${\kilo\gram});. }
->

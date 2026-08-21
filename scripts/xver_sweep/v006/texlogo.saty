@@ -1,6 +1,0 @@
-@require: stdjabook
-@require: texlogo/texlogo
-
-document (| title = {t}; author = {a}; show-title = false; show-toc = false |) '<
-  +p { The \TeX; and \LaTeX; logos, typeset by a real 0.0.6 package. }
->

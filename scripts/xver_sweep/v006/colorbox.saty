@@ -1,9 +1,0 @@
-@require: stdjabook
-@require: colorbox/colorbox
-
-let opts = [Colorbox.colback Color.white; Colorbox.arc 3pt] in
-document (| title = {t}; author = {a}; show-title = false; show-toc = false |) '<
-  +Colorbox.colorbox(opts)<
-    +p { inside a 0.0.6 colorbox. }
-  >
->

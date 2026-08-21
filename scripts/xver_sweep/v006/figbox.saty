@@ -1,7 +1,0 @@
-@require: stdjabook
-@require: figbox/figbox
-
-let fb = FigBox.frame 1pt Color.black (FigBox.dummy-box 40pt 20pt) in
-document (| title = {t}; author = {a}; show-title = false; show-toc = false |) '<
-  +fig-block(fb);
->

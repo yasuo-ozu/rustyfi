@@ -1,0 +1,42 @@
+[package]
+name = "rustyfi-lsp"
+description = "Language Server Protocol server and single-file diagnostics for SATySFi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme.workspace = true
+authors.workspace = true
+
+[dependencies]
+# The ONLY hard dependency of the analysis half (`analysis`, `line_index`,
+# `version`): lexing + parsing, both generations. Deliberately not
+# `rustyfi-lang` / `rustyfi-loader` — see the crate doc comment for why
+# single-file elaboration cannot produce honest diagnostics.
+rustyfi-syntax.workspace = true
+# The parser framework `rustyfi-syntax`'s grammar is written in. Needed
+# directly because `rustyfi_syntax::parse_file` flattens syan's error TREE
+# into a `String` with `format!("{err:?}")`, and the tree is what carries the
+# furthest-failure position and the short per-alternative reasons a usable
+# diagnostic needs (`analysis::best_failure`). Not a new crate in this
+# workspace: `rustyfi-syntax` already depends on it.
+syan.workspace = true
+
+# The protocol half only. `serde_json` is already in this workspace's
+# dependency graph (`rustyfi`, `rustyfi-pdf`), so it is not a new crate; it is
+# behind the default-on `server` feature all the same, so a
+# `wasm32-unknown-unknown` consumer of `analyze` can build with
+# `default-features = false` and pull in nothing but `rustyfi-syntax`.
+serde_json = { version = "1", optional = true, default-features = false, features = [
+  "std",
+] }
+
+[features]
+default = ["server"]
+# The stdio JSON-RPC server (`server`, `jsonrpc` modules) and everything that
+# needs a runtime JSON encoder. Off ⇒ the crate is the pure, no-I/O,
+# wasm-safe `analyze` seam and nothing else.
+server = ["dep:serde_json"]

@@ -1581,6 +1581,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustyfi-lsp"
+version = "0.1.0"
+dependencies = [
+ "rustyfi-syntax",
+ "serde_json",
+ "syan",
+]
+
+[[package]]
 name = "rustyfi-pdf"
 version = "0.1.0"
 dependencies = [

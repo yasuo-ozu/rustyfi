@@ -84,7 +84,7 @@ reproduction, with the measurement.
 
 Stub that one call out and the port builds the entire document, at PAGE PARITY
 with upstream: `fidelity.py` reports 15 pages against upstream's 15,
-`char_match=0.9645`, 581 baselines against 583, `missing=49 extra=92`. (It was
+`char_match=0.9688`, 581 baselines against 583, `missing=1 extra=92`. (It was
 14 pages / 571 baselines / `char_match=0.9569` / `missing=135` when these
 sources were first vendored; the 86-character content deficit that closed was
 `\overbrace`/`\underbrace` — see `math_boxes_of_inline_boxes`'s
@@ -101,6 +101,29 @@ repaired here rather than thrown away — registering azmath is a six-line
         "display math: aligned equations, matrices, auto-sized parens, accents",
         {"enumitem": "enumitem/src"},   # azmath arrives by relative @import:
     ),
+
+Those numbers only reproduce with `assemble_satysfi_lib_root` staging the
+port's OWN fonts into the `-C` root, which it does since the commit that added
+the `dist/fonts` copy there. Before that, the reference was built with the
+SATySFi installation's `dist/fonts/Junicode.ttf` — for the flake's 0.0.11 that
+is Junicode **2.222** (1000 upem), whose default figures are OLDSTYLE and
+whose `period` advances 234/1000 against the port's bundled **1.002**'s
+520/2048. This document is the corpus's most digit-dense (an equation tag on
+nearly every display line, plus a table of contents) so it felt that harder
+than anything else: `width_p95` read **0.926 pt** instead of 0.386, because
+every `1` set 3.816 pt wide upstream and 5.602 pt here, and `missing` read
+**49** instead of 1, because the narrower period fits ~8.5% more leader dots
+per TOC line. Neither number was about layout. The remaining 0.386 -> 0.253
+was a real math-spacing fix (`space_between_math_kinds`).
+
+`extra=92` is NOT a port defect and will not go to zero: upstream DRAWS 11093
+glyphs and poppler extracts 11001 of them, because the 92 it drops are the
+`ssty`/`MathVariants` glyphs (`two.st` x72, `zero.st`, `one.st`, `three.st`,
+`u1D458.st`, `u1D465.st`, `integral.v1`, `summation.v1`, `product.v1`,
+`infinity.st`) and upstream's ToUnicode CMap has no entry for those CIDs. The
+port draws the same content and maps it, so poppler reads 92 more characters
+out of the port's PDF than out of upstream's. Verified by decoding both
+content streams: `port extracted 11092 == ref drawn 11093 - 1`.
 
 THE REFERENCE PDF
 -----------------

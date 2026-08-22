@@ -148,9 +148,14 @@ FONT-METRIC difference rather than a content loss or a port bug.
 The first conclusion was that the pin was at fault: the port downloads Junicode
 **1.002** (upem 2048, period 520 = 0.2539 em) while the flake's SATySFi 0.0.11
 bundles **2.222** (upem 1000, period 234 = 0.234 em), an 8.5% wider dot cell,
-so the port fit 745 dots against upstream's 794. That measurement was right.
-The remedy inferred from it — repin the port to 2.222 and regenerate the
-corpus's committed reference PDFs — was not.
+so the port fit 745 dots against upstream's 794. That measurement was right,
+and — this was over-corrected once, so state it carefully — the pin is a REAL
+issue too, just not the one this metric was reporting. Against a stock SATySFi
+0.0.11 the port on 1.002 really does render 49 fewer leader dots here (and 112
+fewer in enumitem), in its own output, for any user. What was NOT true is that
+the metric proved it: the harness was charging the port for the font gap twice,
+so the measured deficit was inflated and the remedy inferred from it —
+regenerate the corpus's committed references — did not follow.
 
 The actual cause is one line of the HARNESS: `fidelity.py --gen-refs` built the
 reference with the SATySFi installation's own fonts, because
@@ -161,9 +166,14 @@ root — which upstream searches before its own (`main.ml:1063`) — took azmath
 from `missing=49, width_p95=0.926pt` to `missing=1, width_p95=0.386pt`, with no
 change to the pin, no new download, and no reference regenerated.
 
-The lesson, since it cost two investigations: when a metric implicates an
-ASSET, check that both sides of the comparison were actually given the same
-asset before concluding the asset is wrong.
+Two lessons, since this cost three investigations:
+
+  * when a metric implicates an ASSET, check that both sides of the comparison
+    were given the same asset before concluding the asset is wrong; and
+  * a mismeasurement does not make the underlying suspicion false. Fixing the
+    ruler (this change) and fixing the artifact (repinning the font) are
+    different repairs to different problems, and only the first is done here.
+    The second is argued in `download-fonts.sh`'s pin comment.
 
 THE REFERENCE PDF
 -----------------

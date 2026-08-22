@@ -10,7 +10,7 @@ message can be reproduced instead of taken on trust.
     benchmark.py --doc xpath --runs 5
     benchmark.py --json bench.json     # machine-readable alongside the table
 
-Four configurations, per document:
+Five configurations, per document:
 
   port-cold        the port with `--no-cache --no-aux`. The honest number: every
                    phase actually runs. This is what a first build costs.
@@ -21,6 +21,10 @@ Four configurations, per document:
   satysfi-bytecomp upstream with `--bytecomp`, if this build has the flag. This
                    is the fair comparison point for the port's evaluator, and
                    the one the project's past measurements used.
+  satysfi-cached   upstream with the previous run's `.satysfi-aux` left in
+                   place, so its cross-reference fixpoint starts seeded. The
+                   counterpart to `port-cached` — upstream has no compile
+                   cache, so this measures only the saved typesetting pass.
 
 Three things this harness does deliberately, because getting them wrong is how
 benchmarks come to lie:
@@ -312,6 +316,12 @@ def main() -> int:
         configs.append(("satysfi", "sfi"))
         if bytecomp:
             configs.append(("satysfi-bytecomp", "sfi"))
+        # Upstream's own warm case, and the honest counterpart to `port-cached`:
+        # the `.satysfi-aux` from the previous run is LEFT in place, so the
+        # cross-reference fixpoint starts seeded and can save a whole typesetting
+        # pass. Not a compile cache — upstream has none — so it is a much smaller
+        # win than the port's, which is exactly the thing worth showing.
+        configs.append(("satysfi-cached", "sfi"))
 
     print(f"# rustyfi vs SATySFi — {time.strftime('%Y-%m-%d %H:%M')}")
     print()
@@ -352,7 +362,7 @@ def main() -> int:
         for cfg, _ in configs:
             out = root / f"warm-{doc.name}-{cfg}.pdf"
             try:
-                if cfg.startswith("satysfi"):
+                if cfg.startswith("satysfi") and cfg != "satysfi-cached":
                     clear_aux(cwd)
                 run_once(argv_for(doc, cfg, out), cwd, args.timeout, gnu_time)
                 results[(doc.name, cfg)].pages = page_count(out)
@@ -369,7 +379,7 @@ def main() -> int:
                     continue
                 out = root / f"{doc.name}-{cfg}.pdf"
                 try:
-                    if cfg.startswith("satysfi"):
+                    if cfg.startswith("satysfi") and cfg != "satysfi-cached":
                         clear_aux(cwd)
                     r.samples.append(run_once(argv_for(doc, cfg, out), cwd, args.timeout, gnu_time))
                 except Exception as exc:  # noqa: BLE001

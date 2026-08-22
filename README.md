@@ -320,8 +320,10 @@ The `.satysfi-aux` file is upstream's format, so the two engines can share one.
 
 ## How close is it?
 
-Every document in the vendored corpus is rebuilt and compared against the PDF
-the original SATySFi produced (`layout-tests/fidelity.py`). Lines are counted
+Each document below is rebuilt and compared against the PDF the original
+SATySFi produced (`layout-tests/fidelity.py`; the corpus's seventh document,
+`gakushin`, is checked against its own snapshot instead — upstream cannot
+build it without a Satyrographos-installed font package). Lines are counted
 from each PDF's own content stream and content is compared character by
 character, because both of the obvious `pdftotext` measurements — clustering
 glyph boxes into lines, and counting words — move on things that are not the
@@ -329,54 +331,86 @@ layout at all; the script's docstring has the details and the evidence.
 
 | doc | pages | lines (port / SATySFi) | characters missing / extra | exercises |
 |---|---|---|---|---|
-| latexcmds | 12 / 12 | 341 / 343 | 9 / 16 of 7 972 | math, framed and coloured boxes |
+| latexcmds | 12 / 12 | 343 / 343 | 4 / 11 of 7 972 | math, framed and coloured boxes |
 | xpath | 11 / 11 | 292 / 290 | 0 / 11 of 8 292 | paths, béziers, diagrams |
-| enumitem | 27 / 27 | 882 / 883 | 13 / 22 of 18 460 | deeply nested, customized lists |
-| easytable | 19 / 19 | 565 / 565 | 56 / 0 of 15 992 | tables, rules, spans |
+| enumitem | 27 / 27 | 882 / 883 | 10 / 22 of 18 460 | deeply nested, customized lists |
+| easytable | 19 / 19 | 567 / 565 | 3 / 2 of 15 992 | tables, rules, spans |
 | figbox | 21 / 21 | 590 / 590 | 0 / 6 of 14 207 | figures, floats, captions |
-| slydifi | 30 / 30 | 392 / 393 | 7 / 0 of 8 625 | slides, overlays, themes |
+| slydifi | 30 / 30 | 393 / 393 | 0 / 0 of 8 625 | slides, overlays, themes |
 
 Every document paginates exactly as upstream does, sets its text on the same
-number of baselines to within two, and typesets at least 99.6 % of upstream's
-characters — `easytable`'s 56, the worst case, is a handful of cells in one
-multi-row table. Glyph metrics agree to within 0.75 pt at the 95th percentile.
+number of baselines to within two, and typesets **99.95 %** of upstream's
+characters at worst per document (17 missing of 73 548 across the corpus, and
+`slydifi` is exact). Glyph metrics agree to within 0.75 pt at the 95th
+percentile — the widest is latexcmds at 0.722 pt.
 
 ("extra" is the other direction, and is usually the port doing better: an
 upstream math superscript often carries no usable `ToUnicode`, so `𝐸=𝑚𝑐²`'s
 exponent extracts as nothing from the reference and as `2` from the port —
 that is all six of figbox's.)
 
-It is also faster. Minimum CPU time over three interleaved runs against SATySFi
-0.0.11 (`--bytecomp` is upstream's bytecode compiler, the fair comparison for
-the evaluator; `benchmark.py` reproduces it):
+It is also fast. Minimum CPU time over three interleaved runs against SATySFi
+0.0.11, all five configurations measured in one pass (`benchmark.py`):
 
-| doc | SATySFi | SATySFi `--bytecomp` | rustyfi | cached |
-|---|---|---|---|---|
-| latexcmds | 1.38 s | 1.34 s | **0.48 s** | 0.32 s |
-| xpath | 12.66 s | 3.33 s | 4.04 s | 0.38 s |
-| enumitem | 3.18 s | 3.12 s | **1.27 s** | 0.42 s |
-| easytable | 3.63 s | 3.56 s | **1.61 s** | 0.46 s |
-| figbox | 3.26 s | 3.07 s | **1.86 s** | 0.51 s |
-| slydifi | 2.26 s | 1.75 s | **1.21 s** | 0.44 s |
+- **cold** — the port with its compile cache disabled: every phase really runs.
+- **cached** — an unchanged rebuild, cache allowed.
+- **SATySFi** — upstream as the fidelity harness invokes it.
+- **`--bytecomp`** — upstream's bytecode compiler, the fair comparison for the
+  evaluator.
+- **warm aux** — upstream with the previous run's `.satysfi-aux` left in place,
+  so its cross-reference fixpoint starts seeded. This is upstream's *only*
+  warm path; it has no compile cache.
 
-`xpath` is the one loss, and it is the one document dominated by user-level
-arithmetic rather than layout: it measures interpreter against VM. Against
-upstream's default (non-bytecode) interpreter it is still 3.1× faster.
+| doc | pages | rustyfi cold | rustyfi cached | SATySFi | `--bytecomp` | warm aux |
+|---|---|---|---|---|---|---|
+| latexcmds | 12 | **0.22 s** | **0.08 s** | 1.07 s | 1.04 s | 0.67 s |
+| enumitem | 27 | **0.96 s** | **0.12 s** | 2.54 s | 2.33 s | 1.46 s |
+| easytable | 19 | **1.34 s** | **0.14 s** | 2.91 s | 2.85 s | 1.19 s |
+| figbox | 21 | 1.28 s | **0.16 s** | 2.55 s | 2.43 s | 1.12 s |
+| slydifi | 30 | 1.21 s | **0.13 s** | 1.74 s | 1.28 s | 1.16 s |
+| xpath | 11 | 3.00 s | **0.10 s** | 9.49 s | 2.65 s | 3.37 s |
+
+Like for like, cold against cold, the port beats upstream's bytecode VM on five
+of six — 0.21× on latexcmds, 0.41× enumitem, 0.47× easytable, 0.53× figbox,
+0.95× slydifi — and beats the plain interpreter on all six, by 3.2× on xpath.
+Warm against warm it is 7–34× faster, because the two warm paths are not
+comparable in kind: the port skips compilation entirely, while upstream can only
+skip a typesetting pass.
+
+That last point is the interesting one. A seeded aux is worth *more* to upstream
+than bytecode is on every layout-bound document — easytable 2.85 s with
+`--bytecomp` against 1.19 s with a warm aux — because those documents spend
+their time in typesetting passes, not in the evaluator. `xpath` inverts it
+(2.65 s against 3.37 s), which is the same fact from the other side.
+
+`xpath` is the one cold loss, and it is the one document dominated by user-level
+arithmetic rather than layout: a closure-tree interpreter against a real VM.
+That is architectural, not a tuning gap — note the bytecode compiler earns 9.49 s
+→ 2.65 s there and almost nothing elsewhere.
+
+Peak RSS is lower on five of six (52 MB against 84 for latexcmds, 74 against
+111 for easytable, 86 against 90 for slydifi) and worse on exactly one —
+figbox, at 185 MB against 118 MB.
+
+`gakushin` is absent because upstream cannot build it — it needs a
+Satyrographos-installed `fonts-junicode` package and stops with "cannot find a
+font named 'fonts-junicode:Junicode-Bold'". The port renders it in 0.22 s cold.
+
+Reproduce with `nix build .#satysfi` (the pinned 0.0.11) and `benchmark.py
+--satysfi <path>`: it interleaves configurations, reports the minimum rather
+than the mean, and builds in a scratch workspace.
 
 ## Known gaps
 
-- A `block-frame-breakable` that is CUT by a page break loses its top padding on
-  the continuation page: upstream re-enters the frame box on the new page and
-  charges `paddingT` again (`pageBreak.ml:323`), whereas here the frame's
-  `FrameStart`/pad markers were consumed by the page that opened it. Worth about
-  10 pt for a `+block-frame`, and only for frames that actually straddle a
-  break — no corpus document's pagination turns on it.
 - Fonts are named by file or hash entry, not by package: a document asking for
   `fonts-junicode:Junicode-Bold` falls back to a name heuristic.
 - Cross-version `deco` crosses both ways now, including through optional
   arguments and nested module signatures — but not through an *open* optional
   row (nothing names the labels to forward) or a functor signature member.
-- `font` and 0.1's `paren` are stand-in types, so neither crosses generations.
+- `font` and 0.1's `paren` cross in neither direction, and no bridge would
+  change that: both are representation forks rather than missing features.
+  0.0.6 has no `font` type at all, and 0.1's `paren` takes a context where
+  0.0.6 takes three explicit scalars, with no way to recover the axis.
 - A 0.0.6 package that WRITES `code` in a `type` declaration is refused rather
   than crossing: 0.0.6 has no `code` spelling, so that text would silently
   acquire 0.1's meaning on the way in. Ordinary staged exports — the inferred
@@ -406,7 +440,6 @@ crates/
   rustyfi-backend/        boxes and glue, line and page breaking, math
   rustyfi-loader/         @require/@import resolution and load order
   rustyfi-pdf/            PDF writer, font embedding
-  rustyfi-html/           the two HTML backends
   rustyfi-satyrographos/  package manager
   rustyfi/                the binary
 lib-rustyfi/              bundled packages: dist/ (0.0) and dist-v01/ (0.1)
@@ -416,12 +449,12 @@ install.sh, download-fonts.sh, benchmark.py
 
 The grammar is derived, not hand-written, using the
 [`syan`](https://crates.io/crates/syan) parser framework: the CST types *are*
-the grammar. `cargo test --workspace` runs 1745 tests; CI adds the corpus
+the grammar. `cargo test --workspace` runs 1785 tests; CI adds the corpus
 regression and the layout-fidelity comparison above.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT — see [LICENSE](./LICENSE).
 
 Two sets of files bundled here are not covered by it and keep their own terms.
 The fonts `download-fonts.sh` fetches carry the IPA Font License v1.0,

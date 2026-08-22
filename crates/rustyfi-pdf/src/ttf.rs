@@ -80,16 +80,51 @@ impl TtfFontStore {
         bold: Option<&Path>,
         oblique: Option<&Path>,
     ) -> Result<Self, FontError> {
-        let mut files = vec![Self::read_and_validate(regular)?];
-        let mut slots = vec![0usize, 0, 0];
+        let regular = Self::read_and_validate(regular)?;
+        let bold = bold.map(Self::read_and_validate).transpose()?;
+        let oblique = oblique.map(Self::read_and_validate).transpose()?;
+        // Already validated above, with the real paths in any error; the
+        // re-parse `from_bytes` does is cheap (the sfnt table directory only)
+        // and cannot fail here.
+        Self::from_bytes(regular, bold, oblique, "<font file>")
+    }
 
-        if let Some(path) = bold {
-            files.push(Self::read_and_validate(path)?);
-            slots[1] = files.len() - 1;
-        }
-        if let Some(path) = oblique {
-            files.push(Self::read_and_validate(path)?);
-            slots[2] = files.len() - 1;
+    /// [`Self::load`] for bytes that never came from a path.
+    ///
+    /// The WebAssembly build is why this exists: a browser has no filesystem,
+    /// so a font supplied by the user arrives as bytes from a file picker.
+    /// `label` names the source in a [`FontError::Parse`] — a file name, a URL,
+    /// whatever the caller can show the user — since there is no path to
+    /// report.
+    ///
+    /// `bold`/`oblique` fall back to `regular` when absent, exactly as
+    /// [`Self::load`] does, and the bytes are shared rather than duplicated.
+    pub fn from_bytes(
+        regular: Vec<u8>,
+        bold: Option<Vec<u8>>,
+        oblique: Option<Vec<u8>>,
+        label: &str,
+    ) -> Result<Self, FontError> {
+        let validate = |bytes: &[u8]| {
+            // Fail at construction rather than at the first metrics call, the
+            // same contract `read_and_validate` holds to.
+            Face::parse(bytes, 0)
+                .map(|_| ())
+                .map_err(|source| FontError::Parse {
+                    path: PathBuf::from(label),
+                    source,
+                })
+        };
+
+        validate(&regular)?;
+        let mut files = vec![regular];
+        let mut slots = vec![0usize, 0, 0];
+        for (slot, bytes) in [(1, bold), (2, oblique)] {
+            if let Some(bytes) = bytes {
+                validate(&bytes)?;
+                files.push(bytes);
+                slots[slot] = files.len() - 1;
+            }
         }
 
         Ok(TtfFontStore {
@@ -485,5 +520,66 @@ impl FontMetrics for TtfFontStore {
 
     fn default_math_font(&self) -> Option<FontKey> {
         self.math_font_default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `expect_err` is unavailable here — `TtfFontStore` is deliberately not
+    /// `Debug` (it owns whole font files), so the error is taken by `match`.
+    fn expect_rejected(result: Result<TtfFontStore, FontError>) -> FontError {
+        match result {
+            Ok(_) => panic!("these bytes are not a font, but were accepted"),
+            Err(e) => e,
+        }
+    }
+
+    /// Validation happens at construction, not at the first metrics call, and
+    /// the caller's `label` is what identifies the source — there is no path
+    /// to report when the bytes came from a browser file picker.
+    #[test]
+    fn from_bytes_rejects_something_that_is_not_a_font() {
+        let err = expect_rejected(TtfFontStore::from_bytes(
+            b"not a font at all".to_vec(),
+            None,
+            None,
+            "upload.ttf",
+        ));
+        assert!(err.to_string().contains("upload.ttf"), "{err}");
+        assert!(matches!(err, FontError::Parse { .. }), "{err}");
+    }
+
+    /// A bad BOLD face must not slip through behind a good regular one: every
+    /// slot handed in is validated, not just the first.
+    #[test]
+    fn from_bytes_validates_every_face_it_is_given() {
+        // Only meaningful with a real regular face; without one the first slot
+        // already rejects and the test would prove nothing.
+        let Some(regular) = system_font() else {
+            return;
+        };
+        let err = expect_rejected(TtfFontStore::from_bytes(
+            regular,
+            Some(b"not a font".to_vec()),
+            None,
+            "bold.ttf",
+        ));
+        assert!(matches!(err, FontError::Parse { .. }), "{err}");
+    }
+
+    /// A real font from the system, when one is installed. Returns `None`
+    /// rather than failing: which faces exist varies by machine, and a font
+    /// test must not be the reason an unrelated change looks broken.
+    fn system_font() -> Option<Vec<u8>> {
+        [
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/TTF/DejaVuSans.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        ]
+        .iter()
+        .find_map(|path| std::fs::read(path).ok())
     }
 }

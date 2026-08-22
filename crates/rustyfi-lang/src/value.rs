@@ -422,7 +422,17 @@ struct FxHasher {
     hash: usize,
 }
 
+/// rustc-hash's multiplier, per pointer width — the golden ratio scaled to
+/// 2^64 and to 2^32 respectively, which is the pair rustc-hash itself uses.
+///
+/// Spelled per width because the 64-bit literal does not FIT a 32-bit `usize`:
+/// it silently truncates to a different (and much worse) constant, and rustc
+/// rejects it outright. `wasm32-unknown-unknown` is a 32-bit target, which is
+/// where this first mattered.
+#[cfg(target_pointer_width = "64")]
 const FX_SEED: usize = 0x51_7c_c1_b7_27_22_0a_95;
+#[cfg(not(target_pointer_width = "64"))]
+const FX_SEED: usize = 0x9e_37_79_b9;
 
 impl FxHasher {
     #[inline]
@@ -434,11 +444,20 @@ impl FxHasher {
 impl std::hash::Hasher for FxHasher {
     #[inline]
     fn write(&mut self, mut bytes: &[u8]) {
-        while bytes.len() >= 8 {
-            self.add(usize::from_le_bytes(bytes[..8].try_into().unwrap()));
-            bytes = &bytes[8..];
+        // One `usize` per step: 8 bytes on a 64-bit target, 4 on a 32-bit one.
+        // The width was hard-coded as 8, which on a 32-bit build both
+        // over-advanced the cursor and panicked in `try_into` — a 4-byte
+        // `usize` cannot be built from an 8-byte slice. On 64-bit this is the
+        // same sequence of `add` calls as before, byte for byte.
+        const WIDE: usize = std::mem::size_of::<usize>();
+        while bytes.len() >= WIDE {
+            let (head, rest) = bytes.split_at(WIDE);
+            self.add(usize::from_le_bytes(head.try_into().unwrap()));
+            bytes = rest;
         }
-        if bytes.len() >= 4 {
+        // Skipped where `usize` is already 4 bytes: the loop above consumed
+        // every whole 4-byte group there.
+        if WIDE > 4 && bytes.len() >= 4 {
             self.add(u32::from_le_bytes(bytes[..4].try_into().unwrap()) as usize);
             bytes = &bytes[4..];
         }

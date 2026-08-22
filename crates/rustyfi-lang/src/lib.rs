@@ -207,6 +207,30 @@ fn splice_upgrade_glue(
     }
 }
 
+/// A phase stopwatch that only exists when `$RUSTYFI_TIMING` asked for one.
+///
+/// The point is the `None` case. `Instant::now()` has no implementation on
+/// `wasm32-unknown-unknown` — there is no clock to read, and the call PANICS —
+/// so taking one unconditionally meant the browser build could not compile a
+/// document at all, however little anyone wanted the timing. An untimed run
+/// has no use for the value either way, so not taking it costs nothing.
+#[derive(Clone, Copy)]
+struct Phase(Option<std::time::Instant>);
+
+impl Phase {
+    fn start(timing: bool) -> Self {
+        Phase(timing.then(std::time::Instant::now))
+    }
+
+    /// Milliseconds since [`Self::start`]. `0.0` when untimed — every caller
+    /// is inside an `if timing` that will not print it.
+    fn ms(self) -> f64 {
+        self.0
+            .map(|t| t.elapsed().as_secs_f64() * 1e3)
+            .unwrap_or(0.0)
+    }
+}
+
 /// [`compile_document_cst_with_aux`] told which merged prelude entries came
 /// from a file that declared a non-default `@stage:`.
 ///
@@ -221,7 +245,7 @@ pub fn compile_document_cst_with_stages(
     stages: &std::collections::HashMap<usize, types::Stage>,
 ) -> Result<(std::rc::Rc<DocumentValue>, u32), CompileError> {
     let timing = std::env::var_os("RUSTYFI_TIMING").is_some();
-    let t = std::time::Instant::now();
+    let t = Phase::start(timing);
     let env0 = primitives::base_env();
     // The BRANDED front half lives in its own scope: the `SymbolStore`, the
     // elaborated `Ast<Symbol>` and the typechecker's tables are all dead by
@@ -238,18 +262,12 @@ pub fn compile_document_cst_with_stages(
         let scope = elaborate::Scope::new(&store, env0.names());
         let program = elaborate::elaborate_program_with_stages(file, &scope, stages)?;
         if timing {
-            eprintln!(
-                "TIMING   elaborate        {:>8.1}ms",
-                t.elapsed().as_secs_f64() * 1e3
-            );
+            eprintln!("TIMING   elaborate        {:>8.1}ms", t.ms());
         }
-        let t = std::time::Instant::now();
+        let t = Phase::start(timing);
         typecheck::typecheck(&program)?;
         if timing {
-            eprintln!(
-                "TIMING   typecheck        {:>8.1}ms",
-                t.elapsed().as_secs_f64() * 1e3
-            );
+            eprintln!("TIMING   typecheck        {:>8.1}ms", t.ms());
         }
         // The compile membrane: resolve every `Symbol` back to its text, so
         // nothing downstream (the `CompiledExpr`, the per-trial `Env`s,
@@ -261,13 +279,10 @@ pub fn compile_document_cst_with_stages(
     // `crossrefs`) `Interp` — safe because `CompiledExpr::run` takes `&self`
     // and re-executes the whole tree from scratch, reproducing upstream's
     // `eval_main i env_freezed ast` per trial (`main.ml:337-397`).
-    let t = std::time::Instant::now();
+    let t = Phase::start(timing);
     let compiled = compile::compile_program(&body, &env0);
     if timing {
-        eprintln!(
-            "TIMING   compile-tree     {:>8.1}ms",
-            t.elapsed().as_secs_f64() * 1e3
-        );
+        eprintln!("TIMING   compile-tree     {:>8.1}ms", t.ms());
     }
     eval_document_trials(
         &compiled,
@@ -321,7 +336,7 @@ fn eval_trials_seeded(
     let mut trials = 0u32;
     loop {
         trials += 1;
-        let t_trial = std::time::Instant::now();
+        let t_trial = Phase::start(timing);
         // Fresh per trial: `let-mutable` store state resets (== upstream's
         // `env_freezed` re-eval), and a fresh `Interp` resets `hooks`/
         // `images` too — only `crossrefs` is threaded through.
@@ -343,8 +358,8 @@ fn eval_trials_seeded(
             Value::Document(doc) => doc,
             other => return Err(CompileError::NotADocument(other.type_name())),
         };
-        let t_hooks = std::time::Instant::now();
-        let run_ms = t_trial.elapsed().as_secs_f64() * 1e3;
+        let t_hooks = Phase::start(timing);
+        let run_ms = t_trial.ms();
         // Fire every placed page-break hook now that `break_pages` has given
         // every one of them its final page number/point; hooks mutate
         // `crossrefs` (the only place that seam is legally crossed — see
@@ -354,7 +369,7 @@ fn eval_trials_seeded(
             eprintln!(
                 "TIMING   trial {trials}: run(eval+layout) {:>8.1}ms  fire_hooks {:>6.1}ms",
                 run_ms,
-                t_hooks.elapsed().as_secs_f64() * 1e3
+                t_hooks.ms()
             );
         }
         let verdict = crossrefs.borrow_mut().verdict();

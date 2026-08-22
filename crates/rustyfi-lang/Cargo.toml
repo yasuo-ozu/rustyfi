@@ -17,8 +17,9 @@ rustyfi-backend.workspace = true
 thiserror.workspace = true
 # Raster image decoding for `load-image`.
 image.workspace = true
-# PDF object-model reader for `load-pdf-image`.
-lopdf.workspace = true
+# PDF object-model reader for `load-pdf-image`, behind the default-on
+# `pdf-image` feature — see `[features]` below for why it can be turned off.
+lopdf = { workspace = true, optional = true }
 # Knuth-Liang hyphenation (D4): en-US
 # patterns only, embedded at compile time (no dictionary files to ship at
 # runtime) — the same Liang/TeX pattern data upstream's
@@ -37,3 +38,18 @@ rustyfi-loader.workspace = true
 # upstream uses uunf/uuseg for exactly these two purposes.
 unicode-normalization = "0.1"
 unicode-segmentation = "1"
+
+[features]
+default = ["pdf-image"]
+# `load-pdf-image`'s reader. On by default: every host build wants it, and
+# turning it off changes what one primitive DOES, not what exists — the name
+# stays registered in `primitives.rs`, `prim_types.rs` and
+# `typecheck::PRIMITIVE_NAMES` either way, so the tables stay consistent and a
+# document that names it gets an honest runtime error instead of "unbound".
+#
+# It is a feature because of `wasm32-unknown-unknown`, where `lopdf` cannot be
+# built at all: it pulls in `rayon` (threads), `rand`/`getrandom` (no backend
+# on that target) and three date/time crates. Nothing is lost there in any
+# case — the primitive takes a FILESYSTEM path, and a browser has no
+# filesystem.
+pdf-image = ["dep:lopdf"]

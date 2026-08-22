@@ -19,14 +19,20 @@ use rustyfi_backend::{
     natural_metrics, path_bbox, place_block_at, placed_line_extent, shift_graphics, shift_path,
     Annot, AnnotAction, BreakKind, Cell, Closing, Color, Context, Dash, DecoId, DocExtras, DocInfo,
     FontKey, GraphicsElem, GraphicsFnId, HookId, HorzBox, HorzStringInfo, HyphenLang, ImageId,
-    ImageResource, ImportedObjects, InlineMarkKind, Language, Length, ListMarkKind, MathCharClass,
-    MathConstants, MathCorner, MathGlyph, MathKind, MathScriptLevel, NamedDest, ObjRepr,
-    OutlineEntry, Paddings, Page, PageGeometry, PaperSize, Path, PathSeg, PdfPageResource, Point,
-    PrePath, PureHorzBox, Script, ScriptFont, Subpath, TabularBox, VertBox, VertVariantPolicy,
-    FORCED_BREAK_PENALTY, MIN_FIRST_ASCENDER, NO_BREAK_PENALTY,
+    ImageResource, InlineMarkKind, Language, Length, ListMarkKind, MathCharClass, MathConstants,
+    MathCorner, MathGlyph, MathKind, MathScriptLevel, NamedDest, OutlineEntry, Paddings, Page,
+    PageGeometry, PaperSize, Path, PathSeg, Point, PrePath, PureHorzBox, Script, ScriptFont,
+    Subpath, TabularBox, VertBox, VertVariantPolicy, FORCED_BREAK_PENALTY, MIN_FIRST_ASCENDER,
+    NO_BREAK_PENALTY,
 };
+// Only the `load-pdf-image` importer builds these, and it is compiled out
+// without the `pdf-image` feature.
+#[cfg(feature = "pdf-image")]
+use rustyfi_backend::{ImportedObjects, ObjRepr, PdfPageResource};
 use rustyfi_syntax::RustyfiVersion;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
+#[cfg(feature = "pdf-image")]
+use std::collections::BTreeSet;
 use std::rc::Rc;
 use std::sync::Arc;
 // UAX #15 normalization / UAX #29 grapheme segmentation, for
@@ -4269,6 +4275,7 @@ fn prim_use_image_by_width(interp: &mut Interp, mut args: Vec<Value>) -> Result<
 /// - no usable `/MediaBox` (missing at every level of the inherited page
 ///   tree, wrong array length, or non-numeric entries) → "page <n> of
 ///   '<path>' has no usable MediaBox".
+#[cfg(feature = "pdf-image")]
 fn prim_load_pdf_image(interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
     let pageno = as_int(args.pop().unwrap())?;
     let path = as_str(args.pop().unwrap())?;
@@ -4322,12 +4329,31 @@ fn prim_load_pdf_image(interp: &mut Interp, mut args: Vec<Value>) -> Result<Valu
     Ok(Value::Image(id))
 }
 
+/// Without the `pdf-image` feature no PDF reader is linked in, so the
+/// primitive can only fail — which it does at the call site, naming why.
+///
+/// The name stays REGISTERED rather than being gated out of the primitive
+/// tables: `typecheck::PRIMITIVE_NAMES`, `prim_types::primitive_type` and this
+/// table are cross-checked against each other (`tests/typecheck.rs`), and a
+/// document that reaches for `load-pdf-image` is better told that this build
+/// cannot read PDFs than that the name does not exist.
+#[cfg(not(feature = "pdf-image"))]
+fn prim_load_pdf_image(_interp: &mut Interp, _args: Vec<Value>) -> Result<Value, EvalError> {
+    eval_error(
+        "load-pdf-image: this build has no PDF reader (the `pdf-image` feature \
+         is off). It is off for WebAssembly, where the primitive could not work \
+         regardless: it takes a filesystem path."
+            .to_string(),
+    )
+}
+
 /// `/MediaBox` lookup with page-tree inheritance (`lopdf` does not resolve
 /// this automatically, unlike upstream camlpdf's `Pdfpage` helpers): walk
 /// `page_dict`, then its `/Parent` chain, returning the first `/MediaBox`
 /// found as `(x0, y0, x1, y1)` in raw PDF points. `None`
 /// if no ancestor carries a well-formed 4-element numeric array, or if a
 /// `/Parent` cycle is detected.
+#[cfg(feature = "pdf-image")]
 fn resolve_pdf_media_box(
     doc: &lopdf::Document,
     page_dict: &lopdf::Dictionary,
@@ -4373,6 +4399,7 @@ fn resolve_pdf_media_box(
 /// (possibly inline) `/Resources` dictionary itself; every other entry is a
 /// real source PDF object number, keyed by `convert_pdf_object`'s
 /// transitive walk of every `Reference` reachable from it.
+#[cfg(feature = "pdf-image")]
 fn import_pdf_resources(doc: &lopdf::Document, page_dict: &lopdf::Dictionary) -> ImportedObjects {
     let mut out: Vec<(u32, ObjRepr)> = Vec::new();
     let mut seen: BTreeSet<u32> = BTreeSet::new();
@@ -4388,6 +4415,7 @@ fn import_pdf_resources(doc: &lopdf::Document, page_dict: &lopdf::Dictionary) ->
 /// `resolve_pdf_media_box` but returning the raw (possibly-inline)
 /// `&lopdf::Object` rather than a decoded value, since `/Resources` may
 /// legally be either a direct dictionary or an indirect reference.
+#[cfg(feature = "pdf-image")]
 fn resolve_pdf_resources_object<'a>(
     doc: &'a lopdf::Document,
     page_dict: &'a lopdf::Dictionary,
@@ -4423,6 +4451,7 @@ fn resolve_pdf_resources_object<'a>(
 /// embedded image XObject, ICC profile, ...) is re-emitted byte-for-byte,
 /// so no decode/re-encode risk is taken on data this importer doesn't need
 /// to understand.
+#[cfg(feature = "pdf-image")]
 fn convert_pdf_object(
     doc: &lopdf::Document,
     obj: &lopdf::Object,
@@ -4464,6 +4493,7 @@ fn convert_pdf_object(
     }
 }
 
+#[cfg(feature = "pdf-image")]
 fn convert_pdf_dict(
     doc: &lopdf::Document,
     dict: &lopdf::Dictionary,

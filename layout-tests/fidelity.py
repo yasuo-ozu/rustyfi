@@ -434,9 +434,33 @@ def assemble_satysfi_lib_root(dst: Path, docs: list[Doc]) -> Path:
     """A `-C` config root for the ORIGINAL SATySFi holding only the NON-stdlib
     corpus packages (base + each doc's sibling packages). SATySFi's own standard
     library (stdjabook, math, itemize, ...) comes from its default config path,
-    so — unlike the port's lib-root — we do NOT copy lib-rustyfi here."""
+    so — unlike the port's lib-root — we do NOT copy lib-rustyfi here.
+
+    It DOES stage `lib-rustyfi/dist/fonts/`, though, because "the port bundles
+    the SAME fonts SATySFi uses" is a premise of every metric here and it is
+    not true by default: a `-C` root is searched BEFORE the runtime's own
+    (`main.ml:1063`, `extra_dirs @ default_dirs`), so each font file present
+    here shadows the SATySFi installation's copy of it and each one absent
+    falls through to it. Without this, upstream reads its OWN
+    `dist/fonts/Junicode.ttf` — which for the flake's 0.0.11 is Junicode
+    **2.222** (1000 upem), whose DEFAULT figures are OLDSTYLE, against the
+    port's bundled **1.002** (2048 upem, lining): every digit in the document
+    then differs in advance by up to 1.8 pt (`1` sets 3.816 pt against 5.602
+    pt) and `width_p95` measures the font mismatch rather than the layout.
+    Measured on azmath, whose equation tags and page numbers make it
+    digit-dense: 0.926 pt -> 0.386 pt from this line alone.
+
+    The hash file is NOT staged: the port's `dist/hash/fonts.satysfi-hash` is
+    a plain object map and upstream wants variant-tagged (`<Single: {..}>`)
+    entries, so shadowing it would make upstream fail outright. Leaving it to
+    the installation is also what keeps abbrevs the port does not bundle
+    (`lmroman`, ...) resolvable.
+    """
     pkg = dst / "dist" / "packages"
     pkg.mkdir(parents=True, exist_ok=True)
+    fonts = LIB_RUSTYFI / "dist" / "fonts"
+    if fonts.is_dir():
+        shutil.copytree(fonts, dst / "dist" / "fonts", dirs_exist_ok=True)
     base_src = CORPUS / "satysfi-base" / "src"
     if base_src.exists():
         shutil.copytree(base_src, pkg / "base", dirs_exist_ok=True)

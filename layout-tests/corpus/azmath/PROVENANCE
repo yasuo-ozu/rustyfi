@@ -93,25 +93,35 @@ here against upstream's 20.134pt.
 
 WHY THIS IS STILL NOT IN fidelity.py's `DOCS`
 ---------------------------------------------
-Measured UNSTUBBED, with both the deferred-destination fix and the
-`text-in-math` `EmbeddedBlock` fix in place:
+Measured UNSTUBBED, with every fix in place:
 
-    char_match=0.9645  chars: port=11092 upstream=11049 (missing=49 extra=92)
-    pages: port=15 upstream=15 (+0)   lines: port=581 upstream=583 (-2)
-    width_p95=0.926pt
+    char_match=0.9720  chars: port=11092 upstream=11001 (missing=1 extra=92)
+    pages: port=15 upstream=15 (+0)   lines: port=582 upstream=583 (-1)
+    width_p95=0.233pt
 
-Page parity, and within two baselines. Note this is IDENTICAL to the
-stubbed-both-sides figure: real anchors cost nothing in layout.
+`width_p95` 0.233pt makes this the second most accurate document in the corpus
+on glyph geometry, behind xpath's 0.230. It was 0.926 — the worst — when these
+sources were vendored, and the document did not build at all.
 
 What the two remaining numbers are, so neither gets re-investigated:
 
-  * `missing=49` is entirely `.` — the table-of-contents leader dots. NOT a
-    port defect but the pinned Junicode release; the arithmetic is exact given
-    equal metrics. Detailed below, under WHAT THE 49 MISSING CHARACTERS ARE.
+  * `missing=1` is a single character. The 49 that used to be here were
+    table-of-contents leader dots, and they were never a port defect NOR a font
+    pin problem: `fidelity.py --gen-refs` was building the reference with the
+    SATySFi installation's OWN fonts while the port rendered with its bundled
+    ones, so `width_p95` and the dot count were reading a Junicode version gap.
+    `assemble_satysfi_lib_root` now stages the port's `dist/fonts` into the
+    `-C` root, and the deficit went 49 -> 1 from that line alone.
 
-  * Of `extra=92`, 72 are `2`: upstream positions superscripts such that
-    `pdftotext` does not extract them and this port positions them such that it
-    does. A text-extraction difference, not ink.
+  * `extra=92` is upstream's ToUnicode gap, not port output. Upstream DRAWS
+    11093 glyphs and poppler extracts 11001; the 92 it drops are exactly the
+    CIDs upstream's own ToUnicode CMap has no entry for, and they are all
+    variant glyphs — `two.st` x72, `zero.st` x5, `three.st` x3, `u1D458.st` x3,
+    `infinity.st` x3, `one.st` x2, plus `integral.v1`/`summation.v1`/
+    `product.v1`. The port maps them, so poppler reads 92 more out of its PDF.
+    Note `port extracted 11092 == upstream drawn 11093 - 1`. The same holds in
+    latexcmds (11 unmapped <-> 11 extra), easytable and figbox, so `chars_extra`
+    corpus-wide is largely this, not a port difference.
 
 Registering it is a six-line `DOCS` entry plus a decision about the reference
 PDF (see below), not a code change:
@@ -124,38 +134,36 @@ PDF (see below), not a code change:
         {"enumitem": "enumitem/src"},   # azmath arrives by relative @import:
     ),
 
-WHAT THE 49 MISSING CHARACTERS ARE
-----------------------------------
-All 49 are table-of-contents leader dots, and they are NOT a port defect: they
-are the Junicode version pinned in `download-fonts.sh`. Do not re-investigate
-this from the PDFs — the measurement below settles it.
+WHAT THE 49 LEADER DOTS WERE (RESOLVED — THE HARNESS, NOT THE FONT PIN)
+-----------------------------------------------------------------------
+This entry is kept because the first diagnosis was WRONG in a way worth not
+repeating.
 
-`stdjabook.satyh`'s `make-dots-line` emits `round (w /' wdot)` dots, where
-`wdot` is the natural width of `{.}` plus 1pt and `w` is what the line has
-left over. Both inputs are pure Latin glyph advances, so the count is a direct
-readout of the Latin font. The port downloads Junicode **1.002** (upem 2048,
-period 520 = 0.2539 em); the flake's SATySFi 0.0.11, which generates this
-document's reference, bundles **2.222** (upem 1000, period 234 = 0.234 em).
-That is a 8.5% wider dot cell, so the port fits 93.8% of upstream's dots on
-every line — 745 against 794, uniformly short, never a content loss. Junicode
-2.222 also switched the digits from tabular (all 0.4668 em) to proportional
-oldstyle (`1` is 0.318 em), which is the smaller second term: it widens the
-port's page-number column and shrinks `w` further.
+The symptom: 49 missing characters, all table-of-contents leader dots, every
+line uniformly short by ~6.2%. `stdjabook.satyh`'s `make-dots-line` emits
+`round (w /' wdot)` dots, where `wdot` is the natural width of `{.}` plus 1pt —
+a direct readout of the Latin font — so the deficit correctly identified a
+FONT-METRIC difference rather than a content loss or a port bug.
 
-Measured by a probe reading `wdot`, `w` and the dot count out of both engines,
-then by swapping 2.222 into the port's font dir and re-running `fidelity.py`:
+The first conclusion was that the pin was at fault: the port downloads Junicode
+**1.002** (upem 2048, period 520 = 0.2539 em) while the flake's SATySFi 0.0.11
+bundles **2.222** (upem 1000, period 234 = 0.234 em), an 8.5% wider dot cell,
+so the port fit 745 dots against upstream's 794. That measurement was right.
+The remedy inferred from it — repin the port to 2.222 and regenerate the
+corpus's committed reference PDFs — was not.
 
-                    Junicode 1.002      Junicode 2.222     upstream
-    wdot                4.046875pt          3.808pt         3.808pt
-    chars missing              49                0                -
-    width_p95              0.926pt          0.360pt                -
-    char_match              0.9645           0.9676                -
-    pages / lines      15 / 581         15 / 581        15 / 583
+The actual cause is one line of the HARNESS: `fidelity.py --gen-refs` built the
+reference with the SATySFi installation's own fonts, because
+`assemble_satysfi_lib_root` deliberately did not copy `lib-rustyfi`. So every
+`--gen-refs` measurement in this corpus was reading a Junicode version gap on
+top of the layout difference. Staging the port's `dist/fonts` into the `-C`
+root — which upstream searches before its own (`main.ml:1063`) — took azmath
+from `missing=49, width_p95=0.926pt` to `missing=1, width_p95=0.386pt`, with no
+change to the pin, no new download, and no reference regenerated.
 
-So with the same font release the port reproduces upstream's leader arithmetic
-to the digit, and azmath's remaining character deficit is zero. The pin stays
-where it is for corpus-wide reasons argued at the Junicode block in
-`download-fonts.sh`; that block also carries what moving it would cost.
+The lesson, since it cost two investigations: when a metric implicates an
+ASSET, check that both sides of the comparison were actually given the same
+asset before concluding the asset is wrong.
 
 THE REFERENCE PDF
 -----------------

@@ -12,6 +12,7 @@ use rustyfi_backend::{
     FontKey, FontMetrics, Length, MathConstants, MathCorner, MathVariantGlyph, Script,
     VertVariantPolicy,
 };
+use ttf_parser::gsub::{SingleSubstitution, SubstitutionSubtable};
 use ttf_parser::Face;
 
 #[derive(Debug, thiserror::Error)]
@@ -371,6 +372,101 @@ impl FontMetrics for TtfFontStore {
     /// Assembly-only constructions (`variants.len() == 0`, big enough
     /// stretchy delimiters in some fonts) return `None` here — they are
     /// `math_vertical_assembly`'s job.
+    /// `ssty` (Math Script Style), the GSUB feature a math font uses to swap
+    /// in purpose-drawn exponent/index forms — upstream's
+    /// `FontFormat.get_math_script_variant` (`fontFormat.ml:2216-2241`), which
+    /// resolves the feature once at `math_decoder` construction and then
+    /// folds its `single` and `alt` substitutions over one glyph.
+    ///
+    /// Two deliberate simplifications of that fold, neither reachable in the
+    /// math fonts this port ships or tests against:
+    ///
+    ///   * upstream reaches `ssty` through a SCRIPT and its default langsys
+    ///     (`fontFormat.ml:2185-2194`), while this scans the feature LIST by
+    ///     tag. A font whose `ssty` differs per script would diverge; math
+    ///     fonts register one `ssty` under `math`/`DFLT` (Latin Modern Math,
+    ///     DejaVu Math TeX Gyre and Noto Sans Math all do);
+    ///   * an `Alternate` substitution takes the FIRST alternate, which is
+    ///     upstream's `gidorgto :: _` verbatim. OpenType would index it by
+    ///     script LEVEL (0 = first-level script, 1 = second); upstream does
+    ///     not, and neither does this — matching upstream is the point, and
+    ///     the port's own script-level scale is already flat (see
+    ///     `MathC::script_scale`).
+    ///
+    /// Ordering: upstream substitutes `ssty` BEFORE looking for a
+    /// `MathVariants` vertical variant (`fontInfo.ml:379-401`). This port
+    /// applies `ssty` in `push_char_glyph` only, so a BIG operator inside a
+    /// script keeps its unsubstituted vertical variant. `MathVariants`
+    /// constructions and `ssty` coverage are disjoint in practice — a
+    /// `summation` has vertical variants and no `ssty` entry, a `two` the
+    /// reverse — so the two orders agree on every glyph in the corpus.
+    fn math_script_variant(
+        &self,
+        font: FontKey,
+        c: char,
+        size: Length,
+    ) -> Option<MathVariantGlyph> {
+        let face = self.face(font)?;
+        let gid = face.glyph_index(c)?;
+        let gsub = face.tables().gsub?;
+        let ssty = ttf_parser::Tag::from_bytes(b"ssty");
+        let mut sub: Option<ttf_parser::GlyphId> = None;
+        'outer: for fi in 0..gsub.features.len() {
+            let feature = gsub.features.get(fi)?;
+            if feature.tag != ssty {
+                continue;
+            }
+            for li in 0..feature.lookup_indices.len() {
+                let lookup = gsub.lookups.get(feature.lookup_indices.get(li)?)?;
+                for st in lookup.subtables.into_iter::<SubstitutionSubtable>() {
+                    match st {
+                        SubstitutionSubtable::Single(s) => {
+                            let idx = s.coverage().get(gid);
+                            match (s, idx) {
+                                (SingleSubstitution::Format1 { delta, .. }, Some(_)) => {
+                                    sub = Some(ttf_parser::GlyphId(
+                                        (gid.0 as i32 + delta as i32) as u16,
+                                    ));
+                                }
+                                (SingleSubstitution::Format2 { substitutes, .. }, Some(i)) => {
+                                    sub = substitutes.get(i);
+                                }
+                                _ => continue,
+                            }
+                        }
+                        SubstitutionSubtable::Alternate(a) => {
+                            let Some(i) = a.coverage.get(gid) else {
+                                continue;
+                            };
+                            sub = a.alternate_sets.get(i).and_then(|s| s.alternates.get(0));
+                        }
+                        _ => continue,
+                    }
+                    if sub.is_some() {
+                        break 'outer;
+                    }
+                }
+            }
+        }
+        let vgid = sub?;
+        if vgid == gid {
+            return None;
+        }
+        let upem = face.units_per_em() as f64;
+        let advance = face.glyph_hor_advance(vgid)? as f64;
+        // Same y-truncation as `math_glyph_vextent` / `math_vertical_variant`:
+        // upstream's `truncate_negative`/`truncate_positive`
+        // (`fontFormat.ml:2257-2264`), so a glyph wholly on one side of the
+        // baseline reports zero on the other.
+        let bbox = face.glyph_bounding_box(vgid)?;
+        Some(MathVariantGlyph {
+            gid: vgid.0,
+            advance: size * (advance / upem),
+            height: size * (bbox.y_max.max(0) as f64 / upem),
+            depth: size * ((-(bbox.y_min.min(0) as i32)) as f64 / upem),
+        })
+    }
+
     fn math_vertical_variant(
         &self,
         font: FontKey,

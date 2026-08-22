@@ -104,8 +104,8 @@ fn with_ctx(body: &str) -> String {
 
 /// `${a-b}`: `-` is its own MATHCHAR token, reclassified `Bin` (and
 /// remapped to U+2212 MINUS SIGN) by `default_math_class_map` — width gains
-/// `Bin` spacing on both sides (`space_before`'s `font_size * 0.22`, the
-/// REAL constant read from `primitives.rs`, not hardcoded).
+/// `Bin` spacing on both sides (`space_before`'s `SPACE_MATH_BIN`,
+/// `primitives.cppo.ml:528`'s `space_math_bin` natural ratio).
 #[test]
 fn gap5_minus_reclassified_as_bin_with_minus_sign_glyph() {
     let src = with_ctx("embed-math ctx ${a-b}");
@@ -122,7 +122,7 @@ fn gap5_minus_reclassified_as_bin_with_minus_sign_glyph() {
     );
 
     let glyph_w = Length::pt(12.0) * 0.5;
-    let bin_space = Length::pt(12.0) * 0.22;
+    let bin_space = Length::pt(12.0) * 0.25;
     let expected = glyph_w + bin_space + glyph_w + bin_space + glyph_w;
     assert_eq!(
         width, expected,
@@ -155,7 +155,7 @@ fn gap5_multi_char_symbol_run_splits_into_per_char_atoms() {
         "the `-` gets its own class-map hit now that it is its own token"
     );
     let glyph_w = Length::pt(12.0) * 0.5;
-    let rel_space = Length::pt(12.0) * 0.28;
+    let rel_space = Length::pt(12.0) * 0.375;
     assert_eq!(
         width,
         glyph_w * 4.0 + rel_space * 2.0,
@@ -175,7 +175,7 @@ fn adjacent_relations_get_no_space_between_them() {
     let (width, glyphs) = math_box(v);
     assert_eq!(glyphs.len(), 4, "expected 4 glyphs (a, :, =, b)");
     let glyph_w = Length::pt(12.0) * 0.5;
-    let rel_space = Length::pt(12.0) * 0.28;
+    let rel_space = Length::pt(12.0) * 0.375;
     assert_eq!(
         width,
         glyph_w * 4.0 + rel_space * 2.0,
@@ -222,8 +222,9 @@ fn a_run_of_minuses_sets_tight_as_all_minus_signs() {
 }
 
 /// `${a:b}`: `:` is reclassified `Rel` (was `Punct` under the old
-/// `ascii_math_kind` stand-in) — width gains `Rel` spacing (`font_size *
-/// 0.28`) on both sides, strictly more than the old 18pt.
+/// `ascii_math_kind` stand-in) — width gains `Rel` spacing
+/// (`SPACE_MATH_REL`, `primitives.cppo.ml:529`) on both sides, strictly more
+/// than the old 18pt.
 #[test]
 fn gap5_colon_reclassified_as_rel() {
     let src = with_ctx("embed-math ctx ${a:b}");
@@ -232,7 +233,7 @@ fn gap5_colon_reclassified_as_rel() {
     assert_eq!(glyphs.len(), 3);
 
     let glyph_w = Length::pt(12.0) * 0.5;
-    let rel_space = Length::pt(12.0) * 0.28;
+    let rel_space = Length::pt(12.0) * 0.375;
     let expected = glyph_w + rel_space + glyph_w + rel_space + glyph_w;
     assert_eq!(width, expected, "expected Rel spacing on both sides of ':'");
     assert!(

@@ -2667,29 +2667,93 @@ fn normalize_math_kind(prev: MathKind, next: MathKind, raw: MathKind) -> MathKin
     }
 }
 
-/// A deliberately tiny stand-in for `space_between_math_kinds`
-/// (`math.ml:319-410`, a 40-pair table driven by context ratios + MATH-table
-/// `space_after_script`): a thin space when either neighbor is
-/// `Bin`, a thick space when either is `Rel`, none otherwise.
+/// The six inter-atom space ratios `space_between_math_kinds` multiplies the
+/// math font size by — `primitives.cppo.ml:528-533`'s `space_math_bin`,
+/// `_rel`, `_op`, `_punct`, `_inner`, `_prefix`. Upstream carries the
+/// NATURAL/shrink/stretch triple on `HorzBox.context_main` and no primitive
+/// in v0.0.6 writes it, so a document cannot observe the difference between
+/// a context field and a constant; only the natural component is kept here,
+/// since this port's math spacer emits a fixed kern rather than glue.
+const SPACE_MATH_BIN: f64 = 0.25;
+const SPACE_MATH_REL: f64 = 0.375;
+const SPACE_MATH_OP: f64 = 0.125;
+const SPACE_MATH_PUNCT: f64 = 0.125;
+const SPACE_MATH_INNER: f64 = 0.125;
+const SPACE_MATH_PREFIX: f64 = 0.125;
+
+/// `space_between_math_kinds` (`math.ml:319-410`), arm for arm and in the
+/// same ORDER — OCaml's `match` is first-match, so `(Punct, Close)` has to
+/// reach the `(Punct, _)` arm and not `(_, Close)`, and `(Bin, Close)` the
+/// other way round. Every ratio is `primitives.cppo.ml:528-533`'s.
 ///
-/// TWO IDENTICAL classes in a row are the one pair this stand-in gets right by
-/// exception rather than by rule. Upstream's table lists `(Bin, Ord)`,
-/// `(Ord, Bin)`, `(Rel, Ord)`, `(Ord, Rel)`, … but NOT `(Bin, Bin)` or
-/// `(Rel, Rel)`, so those fall through to its `_` arm and get NO space — which
-/// is why `${a:=b}` sets `:=` as one tight pair between two thick spaces. The
-/// distinction only became reachable when the math lexer stopped gluing a run
-/// of symbols into a single token; before that `:=` was one `Ord` atom and got
-/// no spacing on EITHER side.
-fn space_before(prev: MathKind, cur: MathKind, font_size: Length) -> Length {
-    if prev == cur && matches!(prev, MathKind::Bin | MathKind::Rel) {
-        Length::ZERO
-    } else if prev == MathKind::Bin || cur == MathKind::Bin {
-        font_size * 0.22
-    } else if prev == MathKind::Rel || cur == MathKind::Rel {
-        font_size * 0.28
+/// `in_script` is `not (MathContext.is_in_base_level mathctx)`: inside a
+/// sub/superscript upstream suppresses the WHOLE table except the five
+/// operator pairs. This port used to apply full base-level spacing at every
+/// depth, which in a script-dense document is the larger of the two errors
+/// the old stand-in made — the other being the ratios themselves (it used
+/// 0.22 for `Bin` and 0.28 for `Rel` against upstream's 0.25 and 0.375, so
+/// an `${x = y}` came out 1.14 pt narrow at 12 pt and an `${x + 1}` 0.72 pt).
+///
+/// `font_size` is `FontInfo.actual_math_font_size mathctx`, i.e. the size of
+/// the level being laid out, NOT the ambient base size — which is why the
+/// callers pass their local `size`.
+///
+/// The `space_correction` channel upstream threads alongside `mkprev` is
+/// pinned at `NoSpace` here: the three arms that read it — `(_, Close)`,
+/// `(Ord|Prefix, Open)` and the `_` fallthrough — therefore all yield no
+/// space, which is exactly what upstream yields for `NoSpace` and is the
+/// conservative reading of the other two (a trailing italics correction, and
+/// the MATH table's `space_after_script`).
+fn space_before(prev: MathKind, cur: MathKind, in_script: bool, font_size: Length) -> Length {
+    use MathKind::*;
+    let ratio = if in_script {
+        match (prev, cur) {
+            (Op, Ord) | (Ord, Op) | (Op, Op) | (Close, Op) | (Inner, Op) => SPACE_MATH_OP,
+            _ => return Length::ZERO,
+        }
     } else {
-        Length::ZERO
-    }
+        match (prev, cur) {
+            (Punct, _) => SPACE_MATH_PUNCT,
+
+            (Inner, Ord) | (Inner, Open) | (Inner, Punct) | (Inner, Inner) | (Ord, Inner)
+            | (Prefix, Inner) | (Close, Inner) => SPACE_MATH_INNER,
+
+            // `corr = NoSpace`: no italics correction to append.
+            (_, Close) => return Length::ZERO,
+
+            // `corr = NoSpace`: no `space_after_script` either.
+            (Ord, Open) | (Prefix, Open) => return Length::ZERO,
+
+            (Bin, Ord) | (Bin, Prefix) | (Bin, Op) | (Bin, Open) | (Bin, Inner) | (Ord, Bin)
+            | (Close, Bin) | (Inner, Bin) => SPACE_MATH_BIN,
+
+            (Rel, Ord) | (Rel, Op) | (Rel, Inner) | (Rel, Open) | (Rel, Prefix) | (Ord, Rel)
+            | (Op, Rel) | (Inner, Rel) | (Close, Rel) => SPACE_MATH_REL,
+
+            (Op, Ord) | (Op, Op) | (Op, Inner) | (Op, Prefix) | (Ord, Op) | (Close, Op)
+            | (Inner, Op) => SPACE_MATH_OP,
+
+            (Ord, Prefix) | (Inner, Prefix) => SPACE_MATH_PREFIX,
+
+            (_, End) | (End, _) => return Length::ZERO,
+
+            _ => return Length::ZERO,
+        }
+    };
+    font_size * ratio
+}
+
+/// `not (MathContext.is_in_base_level mathctx)` for a `(ctx, size)` pair, the
+/// shape this port's math layout threads instead of upstream's
+/// `math_context`. Two independent witnesses, because the two engines record
+/// the level differently: `layout_math_atom`'s script arms shrink only the
+/// LOCAL `size` and hand the recursion the ambient `ctx` unchanged, whereas
+/// `attach_scripts` (and `read-math`'s `Math::WithContext`) go through
+/// `enter_script`, which advances `Context::math_script_level` and scales
+/// `font_size` together — so a `WithContext` captured under a script arrives
+/// with `size == ctx.font_size` and has to be recognised by its level.
+fn math_in_script(ctx: &Context, size: Length) -> bool {
+    size != ctx.font_size || ctx.math_script_level != MathScriptLevel::Base
 }
 
 /// FontKey a math glyph c@size should measure/emit in: dedicated ctx.math_font
@@ -2992,7 +3056,7 @@ fn layout_math_elem(
             for c in s.chars() {
                 let kind = ascii_math_kind(c);
                 if let Some(prev) = *last_kind {
-                    *x += space_before(prev, kind, ctx.font_size);
+                    *x += space_before(prev, kind, math_in_script(ctx, size), size);
                 }
                 push_char_glyph(interp, ctx, c, size, out, x)?;
                 *last_kind = Some(kind);
@@ -7437,6 +7501,7 @@ fn layout_math_list(
     let mut x = Length::ZERO;
     let mut last_kind: Option<MathKind> = None;
     let mut first_kind: Option<MathKind> = None;
+    let in_script = math_in_script(ctx, size);
     for (i, (atom_glyphs, atom_rules, atom_width, left_raw, right_raw)) in
         laid.iter().cloned().enumerate()
     {
@@ -7448,7 +7513,7 @@ fn layout_math_list(
         let left = normalize_math_kind(prev_raw, next_raw, left_raw);
         let right = normalize_math_kind(prev_raw, next_raw, right_raw);
         if let Some(prev) = last_kind {
-            x += space_before(prev, left, ctx.font_size);
+            x += space_before(prev, left, in_script, size);
         }
         first_kind.get_or_insert(left);
         let base_x = x;

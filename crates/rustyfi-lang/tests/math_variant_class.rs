@@ -439,3 +439,104 @@ fn convert_string_for_math_uses_passed_class() {
     let v = run(&src).expect("convert-string-for-math should compile and evaluate");
     assert_eq!(as_string(v), "\u{1D400}");
 }
+
+// ============================================================================
+// `text-in-math` over a `line-stack-*` box — azmath's `\overbrace` shape.
+// ============================================================================
+
+/// Same unwrap as [`math_box`], but keeping the `rules` too: a stacked
+/// body's ink can be GRAPHICS (azmath draws its brace with
+/// `inline-graphics`), not only glyphs.
+fn math_box_full(v: Value) -> (Length, Vec<MathGlyph>, Vec<rustyfi_backend::GraphicsElem>) {
+    match v {
+        Value::InlineBoxes(boxes) => {
+            assert_eq!(boxes.len(), 1, "expected exactly one box, got {boxes:?}");
+            match boxes.into_iter().next().unwrap() {
+                HorzBox::Pure(PureHorzBox::Math {
+                    width,
+                    glyphs,
+                    rules,
+                    ..
+                }) => (width, glyphs, rules),
+                other => panic!("expected a PureHorzBox::Math, got {other:?}"),
+            }
+        }
+        other => panic!("expected inline-boxes, got {other:?}"),
+    }
+}
+
+/// azmath's `\overbrace`/`\underbrace` (`parens.satyh:533`/`:561`) stack the
+/// brace over the braced formula with `line-stack-bottom`/`-top` and hand
+/// the result BACK to math through `text-in-math`. That makes the
+/// `text-in-math` body a single `PureHorzBox::EmbeddedBlock`, and
+/// `math_boxes_of_inline_boxes` used to keep only its WIDTH — so every
+/// `\overbrace{…}` in the corpus rendered as a correctly-sized hole, brace
+/// and contents alike. This is the same nested-container walk bug as the
+/// `\underset`/`\overset` one the `EmbeddedText` arm's comment records, one
+/// container further in.
+#[test]
+fn text_in_math_descends_into_a_line_stacked_embedded_block() {
+    let src = with_ctx(
+        "let braced = embed-math ctx ${abc} in\n\
+         let brace = inline-graphics 10pt 3pt 0pt (fun (x, y) ->\n\
+           [fill (Gray(0.0)) (start-path (x, y) |> line-to (x +' 10pt, y)\n\
+                              |> close-with-line)]) in\n\
+         let stacked = line-stack-bottom [brace; braced] in\n\
+         embed-math ctx (text-in-math MathOrd (fun _ -> stacked))",
+    );
+    let v = run(&src).expect("the `\\overbrace` shape should compile and evaluate");
+    let (width, glyphs, rules) = math_box_full(v);
+
+    assert_eq!(
+        glyphs.len(),
+        3,
+        "the stacked `${{abc}}` line's three glyphs must survive, got {glyphs:?}"
+    );
+    assert!(
+        !rules.is_empty(),
+        "the stacked `inline-graphics` brace must survive as a rule"
+    );
+    assert!(width > Length::ZERO, "the box keeps its width");
+
+    // `line-stack-bottom` anchors the LAST line, so the brace line above it
+    // sits at a POSITIVE `dy` — the stack's vertical offsets have to reach
+    // the glyphs, not just their horizontal ones.
+    let braced_line_dy = glyphs[0].dy;
+    assert_eq!(
+        braced_line_dy,
+        Length::ZERO,
+        "the anchored (last) line sits on the math baseline"
+    );
+    let rule_top = rules
+        .iter()
+        .filter_map(rustyfi_backend::graphics_bbox)
+        .map(|((_, _), (_, max_y))| max_y)
+        .fold(Length::ZERO, |a, b| if b > a { b } else { a });
+    assert!(
+        rule_top > Length::ZERO,
+        "the brace line stacks ABOVE the anchored line, got top {rule_top:?}"
+    );
+}
+
+/// The same walk's vertical thread, on the GLYPH side: with the math line
+/// stacked above the anchored one, its glyphs have to come out above the
+/// math baseline too. Harvesting a nested `PureHorzBox::Math`'s glyphs
+/// without adding the stacked line's offset collapses every line onto one
+/// baseline — the brace overprinting the formula rather than sitting over
+/// it, which reads as a rendering artifact instead of the walk bug it is.
+#[test]
+fn a_stacked_math_line_above_the_anchor_keeps_its_vertical_offset() {
+    let src = with_ctx(
+        "let braced = embed-math ctx ${abc} in\n\
+         let anchor = inline-skip 10pt in\n\
+         let stacked = line-stack-bottom [braced; anchor] in\n\
+         embed-math ctx (text-in-math MathOrd (fun _ -> stacked))",
+    );
+    let v = run(&src).expect("a two-line stack should compile and evaluate");
+    let (_, glyphs, _) = math_box_full(v);
+    assert_eq!(glyphs.len(), 3, "expected 3 glyphs, got {glyphs:?}");
+    assert!(
+        glyphs.iter().all(|g| g.dy > Length::ZERO),
+        "every glyph of the non-anchored line sits above the baseline, got {glyphs:?}"
+    );
+}

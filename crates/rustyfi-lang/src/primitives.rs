@@ -8687,19 +8687,31 @@ fn math_glyphs_of_inline_boxes(boxes: &[HorzBox]) -> (Vec<MathGlyph>, Length) {
 /// shape a `make_paren` closure's result needs, since a delimiter drawn via
 /// `inline-graphics` (`math.satyh`'s `paren-left`/`abs-left`/…, `fill`/
 /// `stroke` a path) carries its ink as a `PureHorzBox::Graphics` box, not a
-/// `MathGlyph`. Same exhaustive walk as `math_glyphs_of_inline_boxes` (do
-/// NOT modify that function — every OTHER caller still wants glyphs-only,
-/// e.g. `EmbeddedText`), but additionally harvests `Graphics::elems` (`dx`-
-/// shifted via `shift_graphics`, the box's own local-origin convention —
-/// see `PureHorzBox::Graphics`'s doc comment) and forwards BOTH the glyphs
-/// AND `rules` out of any nested `PureHorzBox::Math` box (a paren closure
-/// could, in principle, embed one via `text-in-math`/`embed-math`).
+/// `MathGlyph`. The same exhaustive `PureHorzBox` variant list as
+/// `math_glyphs_of_inline_boxes` (do NOT modify that function — every OTHER
+/// caller still wants glyphs-only, e.g. `EmbeddedText`), but additionally
+/// harvests `Graphics::elems` (`dx`-shifted via `shift_graphics`, the box's
+/// own local-origin convention — see `PureHorzBox::Graphics`'s doc comment)
+/// and forwards BOTH the glyphs AND `rules` out of any nested
+/// `PureHorzBox::Math` box (a paren closure could, in principle, embed one
+/// via `text-in-math`/`embed-math`).
+///
+/// ONE arm genuinely diverges from that sibling, and it makes this walk
+/// VERTICAL too: `dy` (y-up, box-local — `MathGlyph::dy`'s own frame) carries
+/// the offset of the stacked line a nested `EmbeddedBlock`'s content sits on,
+/// so a `line-stack-top`/`-bottom` box handed back to math through
+/// `text-in-math` contributes its ink at the right height instead of only its
+/// width. See that arm. Every other container still contributes width alone:
+/// `Frame` and `Tabular` could be descended into the same way, but no corpus
+/// document puts either inside a `text-in-math` body, so neither has a
+/// measured shape to be faithful to.
 fn math_boxes_of_inline_boxes(boxes: &[HorzBox]) -> (Vec<MathGlyph>, Vec<GraphicsElem>, Length) {
     fn go(
         pure: &PureHorzBox,
         out: &mut Vec<MathGlyph>,
         rules: &mut Vec<GraphicsElem>,
         x: &mut Length,
+        dy: Length,
     ) {
         match pure {
             PureHorzBox::InnerString {
@@ -8714,7 +8726,7 @@ fn math_boxes_of_inline_boxes(boxes: &[HorzBox]) -> (Vec<MathGlyph>, Vec<Graphic
                     text: text.clone(),
                     gid: None,
                     dx: *x,
-                    dy: Length::ZERO,
+                    dy,
                     width: *width,
                     height: *height,
                     depth: *depth,
@@ -8727,12 +8739,12 @@ fn math_boxes_of_inline_boxes(boxes: &[HorzBox]) -> (Vec<MathGlyph>, Vec<Graphic
             PureHorzBox::Image { width, .. } => *x += *width,
             PureHorzBox::Discretionary { no_break, .. } => {
                 for p in no_break {
-                    go(p, out, rules, x);
+                    go(p, out, rules, x, dy);
                 }
             }
             PureHorzBox::Graphics { width, elems, .. } => {
                 for e in elems {
-                    rules.push(shift_graphics((*x, Length::ZERO), e));
+                    rules.push(shift_graphics((*x, dy), e));
                 }
                 *x += *width;
             }
@@ -8747,16 +8759,63 @@ fn math_boxes_of_inline_boxes(boxes: &[HorzBox]) -> (Vec<MathGlyph>, Vec<Graphic
                 for g in glyphs {
                     let mut g = g.clone();
                     g.dx = *x + g.dx;
+                    g.dy += dy;
                     out.push(g);
                 }
                 for r in inner_rules {
-                    rules.push(shift_graphics((*x, Length::ZERO), r));
+                    rules.push(shift_graphics((*x, dy), r));
                 }
                 *x += *width;
             }
             PureHorzBox::HookPageBreak { .. } => {}
             PureHorzBox::Tabular(tab) => *x += tab.width,
-            PureHorzBox::EmbeddedBlock { width, .. } => *x += *width,
+            // A `line-stack-top`/`-bottom` (or `embed-block-top`/`-bottom`)
+            // box handed BACK to math through `text-in-math` — azmath's
+            // `\overbrace`/`\underbrace` (`parens.satyh:533`/`:561`) stack
+            // the brace over the braced formula exactly this way. Keeping
+            // only `width` here dropped the whole stack, brace and contents
+            // alike, leaving a correctly-sized hole: the same nested-container
+            // walk bug the `EmbeddedText` arm's comment records for
+            // `\underset`/`\overset`, one container further in.
+            //
+            // Placing it is `place_embedded_block`'s (rustyfi-pdf) geometry,
+            // in this walk's y-UP frame: `place_block_at` seats the stack at
+            // a page-y-DOWN origin, the anchored line (`anchor_last`: the
+            // LAST for `-bottom`, the FIRST for `-top` — upstream's
+            // `adjust_to_last_line`/`adjust_to_first_line`) lands on the math
+            // baseline, and every other line is offset by the NEGATED
+            // difference of their placed baselines. That is the same split
+            // `make_embedded_block` measured the box's own height/depth from,
+            // so the glyph/rule extents `layout_math_value` folds back up
+            // agree with the box metrics the rest of the pipeline already saw.
+            PureHorzBox::EmbeddedBlock {
+                width,
+                block,
+                anchor_last,
+                ..
+            } => {
+                let placed = place_block_at((Length::ZERO, Length::ZERO), block.clone());
+                let anchor = if *anchor_last {
+                    placed.last()
+                } else {
+                    placed.first()
+                };
+                if let Some(anchor) = anchor {
+                    let anchor_y = anchor.baseline_y;
+                    for line in &placed {
+                        let line_dy = dy - (line.baseline_y - anchor_y);
+                        for (cdx, cbx) in &line.contents {
+                            // Each stacked line has its own horizontal
+                            // origin; a nested box must not advance the
+                            // OUTER run's pen, which the block's own `width`
+                            // accounts for once, below.
+                            let mut cx = *x + line.x + *cdx;
+                            go(cbx, out, rules, &mut cx, line_dy);
+                        }
+                    }
+                }
+                *x += *width;
+            }
             // See `math_glyphs_of_inline_boxes`'s matching arm.
             PureHorzBox::Frame { width, .. } => *x += *width,
             PureHorzBox::FrameMarker { .. } => {}
@@ -8772,7 +8831,7 @@ fn math_boxes_of_inline_boxes(boxes: &[HorzBox]) -> (Vec<MathGlyph>, Vec<Graphic
     let mut rules = Vec::new();
     let mut x = Length::ZERO;
     for HorzBox::Pure(p) in boxes {
-        go(p, &mut glyphs, &mut rules, &mut x);
+        go(p, &mut glyphs, &mut rules, &mut x, Length::ZERO);
     }
     (glyphs, rules, x)
 }

@@ -45,6 +45,51 @@ use crate::satyristes::{self, LibraryMeta};
 use crate::source::RegistryConfig;
 use crate::util;
 
+/// The metadata fields of an in-tree `<id>.opam` that cannot be derived from
+/// the `Satyristes`, which knows a library's name, version, generation and
+/// dependencies and nothing else about it.
+///
+/// Every field is optional: an opam file without a `license:` is worse than one
+/// with, but it is still valid and still installs. Refusing to write anything
+/// until a human supplies all of them would make `publish` unusable in the
+/// non-interactive case it must keep working in.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct OpamFields {
+    pub synopsis: Option<String>,
+    pub description: Option<String>,
+    pub maintainer: Option<String>,
+    pub authors: Option<String>,
+    pub license: Option<String>,
+    pub homepage: Option<String>,
+    pub bug_reports: Option<String>,
+    pub dev_repo: Option<String>,
+}
+
+/// Asked for each field of an `<id>.opam` that has to be created.
+///
+/// A trait rather than direct console I/O so this crate never reads stdin: the
+/// binary supplies a terminal-backed implementation, tests supply a scripted
+/// one, and a non-interactive caller supplies none at all — in which case the
+/// derived defaults are written without asking anyone. A library that prompted
+/// on its own would hang every test and every CI run that called it.
+pub trait OpamPrompt {
+    /// Announce that `file` is about to be created for `library`. Called once
+    /// per file, before its fields.
+    fn begin(&mut self, library: &str, file: &Path) -> Result<(), Error> {
+        let _ = (library, file);
+        Ok(())
+    }
+
+    /// Ask for one field. `default` is the derived value, used when the answer
+    /// is empty. Returning `None` leaves the field out of the file.
+    fn ask(
+        &mut self,
+        field: &str,
+        question: &str,
+        default: Option<&str>,
+    ) -> Result<Option<String>, Error>;
+}
+
 /// Which layout a package repository stores its definitions in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RepoShape {
@@ -133,6 +178,11 @@ pub struct PublishReport {
     pub contents: String,
     /// The branch the commit landed on, when `--commit` was given.
     pub committed: Option<String>,
+    /// The `<id>.opam` files created beside the project's own `Satyristes`,
+    /// in declaration order. Empty when every `(library …)` block already had
+    /// one. Under `--dry-run` these are the files that WOULD be created —
+    /// nothing is written.
+    pub opam_files: Vec<PathBuf>,
     /// The commands the author runs next, in order. Printed, never run.
     pub next_steps: Vec<String>,
     pub dry_run: bool,
@@ -147,6 +197,18 @@ pub fn publish(
     opts: &PublishOptions,
     reg_opts: &RegistryOptions,
     repos: &[RegistryConfig],
+) -> Result<PublishReport, Error> {
+    publish_with_prompt(opts, reg_opts, repos, None)
+}
+
+/// [`publish`], asking `prompt` for the fields of every `<id>.opam` it has to
+/// create. With `None` the derived defaults are written unasked, which is what
+/// [`publish`] does and what any non-interactive caller wants.
+pub fn publish_with_prompt(
+    opts: &PublishOptions,
+    reg_opts: &RegistryOptions,
+    repos: &[RegistryConfig],
+    prompt: Option<&mut dyn OpamPrompt>,
 ) -> Result<PublishReport, Error> {
     let manifest = find_manifest(opts.project.as_deref())?;
     let lib = select_library(&manifest, opts.library.as_deref())?;
@@ -187,6 +249,13 @@ pub fn publish(
         read_back(&repo, &installable, &lib.version, &opts.url, &sha256)?;
     }
 
+    // Upstream keeps an `<id>.opam` beside the `Satyristes` for every
+    // `(library …)` block — it is what an opam pin of the SOURCE TREE reads,
+    // and `(opam "…")` in the manifest names it. Written after the repository
+    // definition has been read back, so a publish that fails validation leaves
+    // the author's tree untouched.
+    let opam_files = write_local_opams(&manifest, &lib, opts, prompt)?;
+
     let committed = if opts.commit && !opts.dry_run {
         Some(git_commit(
             &repo,
@@ -199,6 +268,7 @@ pub fn publish(
     };
 
     Ok(PublishReport {
+        opam_files,
         next_steps: next_steps(
             &repo,
             &relative,
@@ -602,6 +672,209 @@ fn opam_text(
         "url {{\n  src: {}\n  checksum: [\n    \"sha256={sha256}\"\n  ]\n}}\n",
         quoted(url)
     ));
+    Ok(out)
+}
+
+/// Create an `<id>.opam` beside `manifest` for every `(library …)` block that
+/// has none, returning the paths (created, or — under `--dry-run` — merely
+/// planned) in declaration order.
+///
+/// An existing file is never touched. A hand-maintained opam carries fields
+/// this cannot derive (`license:`, `bug-reports:`, `dev-repo:`, pinned
+/// dependency constraints), so overwriting one would silently discard the
+/// author's own metadata.
+///
+/// The in-tree file is deliberately NOT the repository's copy:
+///
+/// - it carries `name:`/`version:`, which in a repository are implied by the
+///   `packages/<id>/<id>.<version>/` path and so are omitted there;
+/// - it carries NO `url { }` block, because a source tree is not a released
+///   tarball. The url/checksum pair describes one specific archive and belongs
+///   only to the repository entry that pins it.
+///
+/// Both points match upstream practice — compare `monaqa/satysfi-easytable`'s
+/// own `satysfi-easytable.opam` against its entry in `satyrographos-repo`.
+///
+/// `--description`/`--maintainer`/`--package` describe the ONE library being
+/// published, so they are applied only to that block; a sibling library's
+/// generated opam gets its own derived id and no borrowed prose.
+fn write_local_opams(
+    manifest: &Path,
+    selected: &LibraryMeta,
+    opts: &PublishOptions,
+    mut prompt: Option<&mut dyn OpamPrompt>,
+) -> Result<Vec<PathBuf>, Error> {
+    let dir = manifest.parent().unwrap_or(Path::new("."));
+    let mut made = Vec::new();
+    for lib in satyristes::read_libraries(manifest)? {
+        let is_selected = lib.name == selected.name;
+        let forced = if is_selected {
+            opts.package_name.as_deref()
+        } else {
+            None
+        };
+        // Always the OPAM-shaped id: a `.opam` file is an opam artifact, even
+        // when the repository being published to is the native TOML index.
+        let id = package_id(&lib, RepoShape::Opam, forced);
+        let file = match &lib.opam {
+            Some(named) => named.clone(),
+            None => format!("{id}.opam"),
+        };
+        let path = dir.join(&file);
+        if path.exists() {
+            continue;
+        }
+        let mut fields = derive_fields(dir, &lib, opts, is_selected);
+        if let Some(p) = prompt.as_mut() {
+            p.begin(&lib.name, &path)?;
+            fields = ask_fields(*p, fields)?;
+        }
+        let text = local_opam_text(&lib, &id, &fields)?;
+        if !opts.dry_run {
+            write_definition(&path, &text)?;
+        }
+        made.push(path);
+    }
+    Ok(made)
+}
+
+/// What can be known without asking: the publish flags for the library being
+/// published, and the project's own git remote for the three URL fields.
+fn derive_fields(
+    dir: &Path,
+    lib: &LibraryMeta,
+    opts: &PublishOptions,
+    is_selected: bool,
+) -> OpamFields {
+    // `--description`/`--maintainer` describe the ONE library being published,
+    // so a sibling must not inherit them.
+    let mut fields = OpamFields {
+        synopsis: is_selected.then(|| opts.description.clone()).flatten(),
+        maintainer: is_selected.then(|| opts.maintainer.clone()).flatten(),
+        ..Default::default()
+    };
+    if let Some(who) = git_identity(dir) {
+        fields.maintainer.get_or_insert_with(|| who.clone());
+        fields.authors.get_or_insert(who);
+    }
+    if let Some(home) = git_homepage(dir) {
+        fields.bug_reports = Some(format!("{home}/issues"));
+        fields.dev_repo = Some(format!("git+{home}.git"));
+        fields.homepage = Some(home);
+    }
+    let _ = lib;
+    fields
+}
+
+/// `user.name <user.email>` from git's own configuration, which is where an
+/// author's identity already lives.
+fn git_identity(dir: &Path) -> Option<String> {
+    let d = dir.to_string_lossy().into_owned();
+    let name = registry::git_capture(&["-C", &d, "config", "user.name"]).ok()?;
+    let name = name.trim();
+    if name.is_empty() {
+        return None;
+    }
+    match registry::git_capture(&["-C", &d, "config", "user.email"]) {
+        Ok(mail) if !mail.trim().is_empty() => Some(format!("{name} <{}>", mail.trim())),
+        _ => Some(name.to_string()),
+    }
+}
+
+/// The project's `origin` remote as a browsable https URL, with the `.git`
+/// suffix and any `git@host:` form normalised away.
+fn git_homepage(dir: &Path) -> Option<String> {
+    let d = dir.to_string_lossy().into_owned();
+    let url = registry::git_capture(&["-C", &d, "remote", "get-url", "origin"]).ok()?;
+    let url = url.trim();
+    let url = url.strip_suffix(".git").unwrap_or(url);
+    if let Some(rest) = url.strip_prefix("git@") {
+        // `git@github.com:user/repo` -> `https://github.com/user/repo`
+        let (host, path) = rest.split_once(':')?;
+        return Some(format!("https://{host}/{path}"));
+    }
+    if let Some(rest) = url.strip_prefix("ssh://git@") {
+        return Some(format!("https://{rest}"));
+    }
+    url.starts_with("https://").then(|| url.to_string())
+}
+
+/// Put each field to `prompt`, keeping the derived value when the answer is
+/// empty.
+fn ask_fields(prompt: &mut dyn OpamPrompt, derived: OpamFields) -> Result<OpamFields, Error> {
+    let mut out = OpamFields::default();
+    out.synopsis = prompt.ask(
+        "synopsis",
+        "One-line summary",
+        derived.synopsis.as_deref(),
+    )?;
+    out.description = prompt.ask(
+        "description",
+        "Longer description",
+        derived
+            .description
+            .as_deref()
+            .or(out.synopsis.as_deref()),
+    )?;
+    out.maintainer = prompt.ask("maintainer", "Maintainer", derived.maintainer.as_deref())?;
+    out.authors = prompt.ask(
+        "authors",
+        "Authors",
+        derived.authors.as_deref().or(out.maintainer.as_deref()),
+    )?;
+    out.license = prompt.ask("license", "License (SPDX id, e.g. MIT)", derived.license.as_deref())?;
+    out.homepage = prompt.ask("homepage", "Homepage", derived.homepage.as_deref())?;
+    out.bug_reports = prompt.ask(
+        "bug-reports",
+        "Bug tracker",
+        derived.bug_reports.as_deref(),
+    )?;
+    out.dev_repo = prompt.ask("dev-repo", "Development repository", derived.dev_repo.as_deref())?;
+    Ok(out)
+}
+
+/// The text of an in-tree `<id>.opam`. See [`write_local_opams`] for why this
+/// is not [`opam_text`] with a different path.
+fn local_opam_text(lib: &LibraryMeta, id: &str, fields: &OpamFields) -> Result<String, Error> {
+    let mut out = String::from("opam-version: \"2.0\"\n");
+    out.push_str(&format!("name: {}\n", quoted(id)));
+    out.push_str(&format!("version: {}\n", quoted(&lib.version)));
+    for (key, value) in [
+        ("synopsis", &fields.synopsis),
+        ("maintainer", &fields.maintainer),
+        ("authors", &fields.authors),
+        ("license", &fields.license),
+        ("homepage", &fields.homepage),
+        ("bug-reports", &fields.bug_reports),
+        ("dev-repo", &fields.dev_repo),
+    ] {
+        if let Some(text) = value {
+            check_opam_scalar(key, text)?;
+            out.push_str(&format!("{key}: {}\n", quoted(text)));
+        }
+    }
+    // A multi-line `description:` uses opam's triple-quoted form, so it needs
+    // no escaping and may contain the newlines a synopsis may not.
+    if let Some(text) = &fields.description {
+        if !text.contains("\"\"\"") {
+            out.push_str(&format!("description: \"\"\"{text}\"\"\"\n"));
+        }
+    }
+
+    out.push_str("depends: [\n");
+    out.push_str(&format!(
+        "  \"satysfi\" {{{}}}\n",
+        satysfi_constraint(lib.lang)
+    ));
+    out.push_str("  \"satyrographos\"\n");
+    for dep in lib.dependencies.keys() {
+        check_opam_scalar("a dependency name", dep)?;
+        out.push_str(&format!("  {}\n", quoted(&opam_dep_id(dep))));
+    }
+    out.push_str("]\n");
+
+    out.push_str(&satyrographos_stanza("build", &lib.name));
+    out.push_str(&satyrographos_stanza("install", &lib.name));
     Ok(out)
 }
 

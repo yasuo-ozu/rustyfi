@@ -59,7 +59,10 @@ pub use satyristes::{find_upward, LibraryMeta, Project};
 pub use source::{LibraryEntry, RegistryConfig, RegistryKind, SourceKind, SourceSpec};
 
 pub use ops::prepare::PrepareReport;
-pub use ops::publish::{publish, PublishOptions, PublishReport, RepoShape};
+pub use ops::publish::{
+    publish, publish_with_prompt, OpamFields, OpamPrompt, PublishOptions, PublishReport,
+    RepoShape,
+};
 pub use ops::registry_install::{install_registry, Resolved};
 pub use ops::search::{search, SearchHit};
 pub use ops::update::{update, update_multi, Upgrade, UpdateReport};

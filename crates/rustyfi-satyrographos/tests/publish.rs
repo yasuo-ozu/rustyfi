@@ -485,3 +485,337 @@ fn a_dry_run_writes_nothing_but_shows_the_definition() {
         "--dry-run must not publish anything resolvable"
     );
 }
+
+// ---------------------------------------------------------------------------
+// The `<id>.opam` beside the Satyristes.
+//
+// Upstream package repos carry one per `(library …)` block (see
+// `monaqa/satysfi-easytable`'s own `satysfi-easytable.opam`), and it is NOT the
+// repository's copy: an opam pin reads the source tree, so it needs
+// `name:`/`version:` and must NOT claim a released tarball's url/checksum.
+// ---------------------------------------------------------------------------
+
+/// A project whose `Satyristes` is written verbatim by the caller.
+fn project_with(dir: &Path, manifest: &str) -> PathBuf {
+    let root = dir.join("project");
+    fs::create_dir_all(root.join("packages")).unwrap();
+    fs::write(root.join("Satyristes"), manifest).unwrap();
+    root
+}
+
+#[test]
+fn the_opam_file_named_by_the_manifest_is_created_beside_it() {
+    let dir = tmp("opam-local-named");
+    let proj = project(&dir, "1.0.0");
+    let repo = opam_repo(&dir);
+
+    let report = sg::publish(&opts(&proj), &reg(&repo), &[]).expect("publish");
+
+    // `(opam "satysfi-great-package.opam")` names it, so that is the file.
+    let path = proj.join("satysfi-great-package.opam");
+    assert!(path.is_file(), "the manifest's own .opam should be created");
+    assert_eq!(report.opam_files, vec![path.clone()]);
+
+    let text = fs::read_to_string(&path).unwrap();
+    assert!(
+        text.contains("name: \"satysfi-great-package\"") && text.contains("version: \"1.0.0\""),
+        "an in-tree opam must state its own name and version, which a \
+         repository entry gets from its path instead:\n{text}"
+    );
+    // The load-bearing difference from the repository copy.
+    assert!(
+        !text.contains("url {") && !text.contains("checksum"),
+        "a source tree is not a released tarball; the url/checksum pair \
+         belongs only to the repository entry that pins it:\n{text}"
+    );
+    // It is still a real opam file for the same library.
+    assert!(text.contains("\"--name\" \"great-package\""), "{text}");
+    assert!(text.contains("\"satysfi-base\""), "{text}");
+}
+
+#[test]
+fn an_existing_opam_file_is_never_overwritten() {
+    let dir = tmp("opam-local-keep");
+    let proj = project(&dir, "1.0.0");
+    let repo = opam_repo(&dir);
+
+    // A hand-maintained opam carries fields publish cannot derive.
+    let path = proj.join("satysfi-great-package.opam");
+    let mine = "opam-version: \"2.0\"\nlicense: \"MIT\"\nbug-reports: \"https://example.invalid\"\n";
+    fs::write(&path, mine).unwrap();
+
+    let report = sg::publish(&opts(&proj), &reg(&repo), &[]).expect("publish");
+
+    assert_eq!(
+        fs::read_to_string(&path).unwrap(),
+        mine,
+        "publishing must not discard the author's own opam metadata"
+    );
+    assert!(
+        report.opam_files.is_empty(),
+        "a file that already existed was not created: {:?}",
+        report.opam_files
+    );
+}
+
+#[test]
+fn the_opam_file_name_is_derived_when_the_manifest_names_none() {
+    let dir = tmp("opam-local-derived");
+    let proj = project_with(
+        &dir,
+        "(version 0.0.2)\n\
+         (library\n  \
+           (name \"great-package\")\n  \
+           (version \"1.0.0\")\n  \
+           (lang 0.0)\n  \
+           (sources ((packageDir \"packages\"))))\n",
+    );
+    let repo = opam_repo(&dir);
+
+    let report = sg::publish(&opts(&proj), &reg(&repo), &[]).expect("publish");
+
+    // The opam id, not the library name a `@require:` types.
+    let path = proj.join("satysfi-great-package.opam");
+    assert!(path.is_file(), "expected a derived satysfi-*.opam");
+    assert!(!proj.join("great-package.opam").exists());
+    assert_eq!(report.opam_files, vec![path]);
+}
+
+#[test]
+fn a_dry_run_reports_the_opam_file_without_writing_it() {
+    let dir = tmp("opam-local-dry");
+    let proj = project(&dir, "1.0.0");
+    let repo = opam_repo(&dir);
+
+    let mut o = opts(&proj);
+    o.dry_run = true;
+    let report = sg::publish(&o, &reg(&repo), &[]).expect("publish");
+
+    let path = proj.join("satysfi-great-package.opam");
+    assert_eq!(
+        report.opam_files,
+        vec![path.clone()],
+        "a dry run should still say what it would create"
+    );
+    assert!(!path.exists(), "--dry-run must write nothing");
+}
+
+#[test]
+fn a_sibling_library_gets_its_own_opam_and_none_of_the_published_one_s_prose() {
+    let dir = tmp("opam-local-sibling");
+    let proj = project_with(
+        &dir,
+        "(version 0.0.2)\n\
+         (library\n  \
+           (name \"great-package\")\n  \
+           (version \"1.0.0\")\n  \
+           (lang 0.0)\n  \
+           (sources ((packageDir \"packages\"))))\n\
+         (library\n  \
+           (name \"great-extras\")\n  \
+           (version \"2.5.0\")\n  \
+           (lang 0.0)\n  \
+           (sources ((packageDir \"packages\"))))\n",
+    );
+    let repo = opam_repo(&dir);
+
+    let mut o = opts(&proj);
+    o.library = Some("great-package".to_string());
+    o.description = Some("the published one".to_string());
+    let report = sg::publish(&o, &reg(&repo), &[]).expect("publish");
+
+    assert_eq!(report.opam_files.len(), 2, "both blocks get a file");
+
+    let published = fs::read_to_string(proj.join("satysfi-great-package.opam")).unwrap();
+    assert!(published.contains("synopsis: \"the published one\""), "{published}");
+
+    // `--description` describes the library being published, so a sibling must
+    // not silently inherit it — nor the published one's version.
+    let sibling = fs::read_to_string(proj.join("satysfi-great-extras.opam")).unwrap();
+    assert!(
+        !sibling.contains("synopsis:"),
+        "a sibling must not borrow the published library's description:\n{sibling}"
+    );
+    assert!(sibling.contains("version: \"2.5.0\""), "{sibling}");
+    assert!(sibling.contains("\"--name\" \"great-extras\""), "{sibling}");
+}
+
+// ---------------------------------------------------------------------------
+// The wizard.
+// ---------------------------------------------------------------------------
+
+/// Records what it was asked and replays canned answers, so the prompting can
+/// be tested without a terminal. `None` in `answers` means "accept the default
+/// the caller offered", which is what an empty line does on the console.
+struct ScriptedPrompt {
+    answers: std::collections::HashMap<&'static str, Option<&'static str>>,
+    asked: Vec<String>,
+    began: Vec<String>,
+}
+
+impl ScriptedPrompt {
+    fn new(answers: &[(&'static str, Option<&'static str>)]) -> Self {
+        Self {
+            answers: answers.iter().copied().collect(),
+            asked: Vec::new(),
+            began: Vec::new(),
+        }
+    }
+}
+
+impl sg::OpamPrompt for ScriptedPrompt {
+    fn begin(&mut self, library: &str, _file: &Path) -> Result<(), sg::Error> {
+        self.began.push(library.to_string());
+        Ok(())
+    }
+
+    fn ask(
+        &mut self,
+        field: &str,
+        _question: &str,
+        default: Option<&str>,
+    ) -> Result<Option<String>, sg::Error> {
+        self.asked.push(field.to_string());
+        match self.answers.get(field) {
+            // An explicit answer.
+            Some(Some(text)) => Ok(Some((*text).to_string())),
+            // Explicitly cleared.
+            Some(None) => Ok(None),
+            // Not scripted: behave like an empty line and take the default.
+            None => Ok(default.map(str::to_string)),
+        }
+    }
+}
+
+#[test]
+fn the_wizard_fills_the_fields_the_manifest_cannot_supply() {
+    let dir = tmp("wizard-fill");
+    let proj = project(&dir, "1.0.0");
+    let repo = opam_repo(&dir);
+
+    let mut prompt = ScriptedPrompt::new(&[
+        ("synopsis", Some("A great package")),
+        ("license", Some("MIT")),
+        ("homepage", Some("https://example.org/great")),
+        ("bug-reports", Some("https://example.org/great/issues")),
+        ("dev-repo", Some("git+https://example.org/great.git")),
+        ("authors", Some("Ada Lovelace <ada@example.org>")),
+        ("maintainer", Some("Ada Lovelace <ada@example.org>")),
+        ("description", Some("A great package, at length.")),
+    ]);
+    sg::publish_with_prompt(&opts(&proj), &reg(&repo), &[], Some(&mut prompt)).expect("publish");
+
+    // It announced the file once, for the library it belongs to.
+    assert_eq!(prompt.began, vec!["great-package".to_string()]);
+
+    let text = fs::read_to_string(proj.join("satysfi-great-package.opam")).unwrap();
+    for want in [
+        "synopsis: \"A great package\"",
+        "license: \"MIT\"",
+        "homepage: \"https://example.org/great\"",
+        "bug-reports: \"https://example.org/great/issues\"",
+        "dev-repo: \"git+https://example.org/great.git\"",
+        "authors: \"Ada Lovelace <ada@example.org>\"",
+        "description: \"\"\"A great package, at length.\"\"\"",
+    ] {
+        assert!(text.contains(want), "missing {want:?} in:\n{text}");
+    }
+    // Still not a repository entry.
+    assert!(!text.contains("url {"), "{text}");
+}
+
+#[test]
+fn an_unanswered_field_keeps_the_derived_default() {
+    let dir = tmp("wizard-default");
+    let proj = project(&dir, "1.0.0");
+    let repo = opam_repo(&dir);
+
+    // Nothing scripted: every answer is "empty line", so every field falls back
+    // to what publish derived. `--maintainer` is the derivable one here.
+    let mut o = opts(&proj);
+    o.maintainer = Some("Derived Person <d@example.org>".to_string());
+    let mut prompt = ScriptedPrompt::new(&[]);
+    sg::publish_with_prompt(&o, &reg(&repo), &[], Some(&mut prompt)).expect("publish");
+
+    let text = fs::read_to_string(proj.join("satysfi-great-package.opam")).unwrap();
+    assert!(
+        text.contains("maintainer: \"Derived Person <d@example.org>\""),
+        "an empty answer must keep the offered default:\n{text}"
+    );
+}
+
+#[test]
+fn a_cleared_field_is_left_out_of_the_file() {
+    let dir = tmp("wizard-clear");
+    let proj = project(&dir, "1.0.0");
+    let repo = opam_repo(&dir);
+
+    let mut o = opts(&proj);
+    o.maintainer = Some("Derived Person <d@example.org>".to_string());
+    // `None` is the console's `-`: drop the field even though a default exists.
+    let mut prompt = ScriptedPrompt::new(&[("maintainer", None)]);
+    sg::publish_with_prompt(&o, &reg(&repo), &[], Some(&mut prompt)).expect("publish");
+
+    let text = fs::read_to_string(proj.join("satysfi-great-package.opam")).unwrap();
+    assert!(
+        !text.contains("maintainer:"),
+        "a cleared field must not be written:\n{text}"
+    );
+}
+
+#[test]
+fn the_wizard_is_not_consulted_for_an_opam_that_already_exists() {
+    let dir = tmp("wizard-skip");
+    let proj = project(&dir, "1.0.0");
+    let repo = opam_repo(&dir);
+    fs::write(
+        proj.join("satysfi-great-package.opam"),
+        "opam-version: \"2.0\"\nlicense: \"MIT\"\n",
+    )
+    .unwrap();
+
+    let mut prompt = ScriptedPrompt::new(&[]);
+    sg::publish_with_prompt(&opts(&proj), &reg(&repo), &[], Some(&mut prompt)).expect("publish");
+
+    assert!(
+        prompt.asked.is_empty() && prompt.began.is_empty(),
+        "nothing should be asked about a file that is not being written: {:?}",
+        prompt.asked
+    );
+}
+
+#[test]
+fn each_missing_opam_gets_its_own_round_of_questions() {
+    let dir = tmp("wizard-two");
+    let proj = project_with(
+        &dir,
+        "(version 0.0.2)\n\
+         (library\n  \
+           (name \"great-package\")\n  \
+           (version \"1.0.0\")\n  \
+           (lang 0.0)\n  \
+           (sources ((packageDir \"packages\"))))\n\
+         (library\n  \
+           (name \"great-extras\")\n  \
+           (version \"2.5.0\")\n  \
+           (lang 0.0)\n  \
+           (sources ((packageDir \"packages\"))))\n",
+    );
+    let repo = opam_repo(&dir);
+
+    let mut o = opts(&proj);
+    o.library = Some("great-package".to_string());
+    let mut prompt = ScriptedPrompt::new(&[("license", Some("MIT"))]);
+    sg::publish_with_prompt(&o, &reg(&repo), &[], Some(&mut prompt)).expect("publish");
+
+    assert_eq!(
+        prompt.began,
+        vec!["great-package".to_string(), "great-extras".to_string()],
+        "every block that needs a file gets its own round"
+    );
+    // The answer applies to the file being filled in, not just the first.
+    for name in ["satysfi-great-package.opam", "satysfi-great-extras.opam"] {
+        let text = fs::read_to_string(proj.join(name)).unwrap();
+        assert!(text.contains("license: \"MIT\""), "{name}:\n{text}");
+    }
+}

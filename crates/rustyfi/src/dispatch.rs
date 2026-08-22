@@ -793,6 +793,15 @@ fn publish_command() -> Command {
                     .long("dry-run")
                     .action(ArgAction::SetTrue)
                     .help("Compose and check everything, print the definition, write nothing."),
+            )
+            .arg(
+                Arg::new("no_wizard")
+                    .long("no-wizard")
+                    .action(ArgAction::SetTrue)
+                    .help(
+                        "Do not prompt for the fields of a missing <id>.opam; write the \
+                         derived file instead. Implied when stdin is not a terminal.",
+                    ),
             ),
     )
 }

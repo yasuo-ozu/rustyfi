@@ -4,6 +4,7 @@
 //! `satyrographos` (package manager), dispatched on `argv[0]`'s basename and
 //! on the first subcommand.
 
+use std::io::IsTerminal as _;
 use std::path::{Path, PathBuf};
 
 use clap::ArgMatches;
@@ -999,6 +1000,51 @@ fn cmd_update(m: &ArgMatches) -> Result<(), sg::Error> {
     Ok(())
 }
 
+/// Asks on the terminal for the fields of an `<id>.opam` that has to be
+/// created.
+///
+/// Empty accepts the shown default; `-` clears a field that has one, which is
+/// the only way to say "leave this out" once a default has been offered.
+struct StdinPrompt;
+
+impl sg::OpamPrompt for StdinPrompt {
+    fn begin(&mut self, library: &str, file: &std::path::Path) -> Result<(), sg::Error> {
+        println!(
+            "\n{} has no opam file. Answer to fill it in (Enter accepts the \
+             default, `-` leaves a field out):\n  {}",
+            library,
+            file.display()
+        );
+        Ok(())
+    }
+
+    fn ask(
+        &mut self,
+        _field: &str,
+        question: &str,
+        default: Option<&str>,
+    ) -> Result<Option<String>, sg::Error> {
+        use std::io::Write as _;
+        match default {
+            Some(d) => print!("  {question} [{d}]: "),
+            None => print!("  {question}: "),
+        }
+        let _ = std::io::stdout().flush();
+        let mut line = String::new();
+        if std::io::stdin().read_line(&mut line).is_err() {
+            return Ok(default.map(str::to_string));
+        }
+        let line = line.trim();
+        if line == "-" {
+            return Ok(None);
+        }
+        if line.is_empty() {
+            return Ok(default.map(str::to_string));
+        }
+        Ok(Some(line.to_string()))
+    }
+}
+
 /// `publish`: write this project's `Satyristes` library into a package
 /// repository as an installable definition — the `opam publish` step, minus
 /// the parts that need credentials.
@@ -1030,7 +1076,18 @@ fn cmd_publish(m: &ArgMatches) -> Result<(), sg::Error> {
     // The same fallback chain every registry-aware command uses; `publish`
     // differs only in refusing a LIST rather than taking its head
     // (`ops::publish::select_repository`).
-    let report = sg::publish(&opts, &registry_options(m)?, &registry_fallbacks(m)?)?;
+    // Prompt only when there is a human to answer. A pipeline, a CI job or a
+    // test gets the derived file written unasked — a library that read stdin on
+    // its own would hang all three.
+    let interactive =
+        !m.get_flag("no_wizard") && !opts.dry_run && std::io::stdin().is_terminal();
+    let mut prompt = StdinPrompt;
+    let report = sg::publish_with_prompt(
+        &opts,
+        &registry_options(m)?,
+        &registry_fallbacks(m)?,
+        interactive.then_some(&mut prompt as &mut dyn sg::OpamPrompt),
+    )?;
 
     let verb = if report.dry_run { "would publish" } else { "published" };
     println!(
@@ -1046,6 +1103,16 @@ fn cmd_publish(m: &ArgMatches) -> Result<(), sg::Error> {
     println!("  install as `{}`", report.installable);
     if let Some(branch) = &report.committed {
         println!("  committed on {branch}");
+    }
+    // These land in the AUTHOR's own tree rather than the repository checkout,
+    // so they are not covered by the `next:` steps below (which are all `git`
+    // commands run inside the repository).
+    if !report.opam_files.is_empty() {
+        let verb = if report.dry_run { "would create" } else { "created" };
+        println!("{verb} beside the Satyristes:");
+        for path in &report.opam_files {
+            println!("  {}", path.display());
+        }
     }
     if report.dry_run {
         println!("--- {} (not written) ---", report.relative);

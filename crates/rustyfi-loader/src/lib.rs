@@ -48,7 +48,7 @@ pub enum LoadMode {
         /// `--deps` flag on `rustyfi build`, `saphe-split:bin/rustyfi.ml`,
         /// `flag_deps`). `None` = no package dependencies available: any `use
         /// package` header is a [`LoadError::PackageDependencyUnresolved`].
-        /// `Some(path)` (Ld3b-2) is decoded, its envelopes are read + topo-
+        /// `Some(path)` is decoded, its envelopes are read + topo-
         /// sorted, and each `use package M` header is validated against the
         /// config's `used_as` aliases; the envelope source files are prepended
         /// to the loaded program (dependency-first, before any local file).
@@ -93,7 +93,7 @@ impl LoadOptions {
     /// The library-root search path in order: [`Self::lib_root`], then
     /// [`Self::fallback_roots`]. Empty when no root is configured at all, in
     /// which case every `@require:` fails to resolve.
-    pub fn roots(&self) -> Vec<&Path> {
+    fn roots(&self) -> Vec<&Path> {
         self.lib_root
             .as_deref()
             .into_iter()
@@ -152,16 +152,16 @@ impl LoadedCst {
     }
 }
 
-/// Where a loaded file came from — metadata for diagnostics and for the
-/// future `used_as` → module binding (Ld3c). Nothing in `rustyfi-lang` reads
+/// Where a loaded file came from — metadata for diagnostics and for a
+/// future `used_as` → module binding. Nothing in `rustyfi-lang` reads
 /// it yet.
 ///
 /// Only two variants: a Legacy-mode file and an Envelopes-mode *local*
 /// (`use … of`) file / the entry document are both just "a plain local file"
 /// ([`FileOrigin::Local`], the [`Default`]); a distinct `Legacy` variant
-/// would be a distinction without a consumer (revisit if Ld3c needs the
-/// split). [`FileOrigin::Envelope`] tags a source file that came out of a
-/// deps-config envelope (`rustyfi-envelope.yaml`).
+/// would be a distinction without a consumer (revisit if a future need
+/// requires the split). [`FileOrigin::Envelope`] tags a source file that
+/// came out of a deps-config envelope (`rustyfi-envelope.yaml`).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum FileOrigin {
     /// A Legacy-mode file, an Envelopes-mode local (`use … of`) dependency,
@@ -187,14 +187,14 @@ pub struct LoadedFile {
     pub origin: FileOrigin,
     /// The `RustyfiVersion` grammar this SPECIFIC file was parsed under —
     /// always matches `cst`'s variant (`V0_0` <-> `LoadedCst::V0_0`, `V0_1`
-    /// <-> `LoadedCst::V0_1`). Cross-version import (X1): under `LoadMode::
+    /// <-> `LoadedCst::V0_1`). Cross-version import: under `LoadMode::
     /// Envelopes` and under a `LoadOptions { version: V0_0, .. }` Legacy
     /// load, every file in one `LoadedProgram` shares one version (the
     /// load's `opts.version`). Only a `LoadOptions { version: V0_1, mode:
     /// Legacy, .. }` load can produce a MIXED-version `files` list:
     /// `load_legacy`'s worklist (see its doc comment) per-file-detects a
-    /// `V0_0` dependency via the Q4 rule, so a `V0_1` document can
-    /// `@require:` a frozen `V0_0` package.
+    /// `V0_0` dependency via the per-file version-detection rule below, so a
+    /// `V0_1` document can `@require:` a frozen `V0_0` package.
     pub version: RustyfiVersion,
 }
 
@@ -212,7 +212,7 @@ pub struct LoadedProgram {
 
 /// Load `entry` (a `.saty` document) and its full transitive dependency
 /// graph, dispatching on [`LoadOptions::mode`] (Axis B). [`LoadMode::Legacy`]
-/// resolves `@require:`/`@import:` headers ([`load_legacy`]);
+/// resolves `@require:`/`@import:` headers (`load_legacy`);
 /// [`LoadMode::Envelopes`] resolves `use package`/`use … of` headers
 /// (`v01x::open_doc`).
 pub fn load(entry: &Path, opts: &LoadOptions) -> Result<LoadedProgram, LoadError> {
@@ -289,18 +289,18 @@ fn load_legacy(entry: &Path, opts: &LoadOptions) -> Result<LoadedProgram, LoadEr
     let mut id_of: HashMap<PathBuf, u32> = HashMap::new();
     let mut path_of: HashMap<u32, PathBuf> = HashMap::new();
     let mut cst_of: HashMap<u32, LoadedCst> = HashMap::new();
-    // X1 Q4: the per-file version each graph node was actually parsed
+    // The per-file version each graph node was actually parsed
     // under — see `LoadedFile::version`'s doc comment. Populated in
     // lockstep with `cst_of` below; a `V0_0` load inserts `V0_0` for every
     // node.
     let mut version_of: HashMap<u32, RustyfiVersion> = HashMap::new();
-    // X1 Q4: node ids reached via at least one `@require:` header edge (as
+    // Node ids reached via at least one `@require:` header edge (as
     // opposed to only `@import:` edges) — the "resolves under `lib_root`'s
     // package tree" half of the per-file detection rule. Populated as
     // dependency edges are discovered, below; irrelevant (never consulted)
     // for a `V0_0` load.
     let mut require_targets: HashSet<u32> = HashSet::new();
-    // X4a Q4-mirror: node ids reached via at least one `@require:` edge
+    // The mirror: node ids reached via at least one `@require:` edge
     // that resolved PHYSICALLY under `dist-v01/packages/` — the "resolves
     // under the 0.1 corpus" half of the mirrored per-file detection rule.
     // Populated in lockstep with `require_targets`, below; irrelevant
@@ -348,7 +348,7 @@ fn load_legacy(entry: &Path, opts: &LoadOptions) -> Result<LoadedProgram, LoadEr
             path: path.clone(),
             source,
         })?;
-        // X1 Q4: under a `V0_1` load, every NON-entry file gets its own
+        // Under a `V0_1` load, every NON-entry file gets its own
         // per-file version — `sniff_version` first (a `use`/`val`-shaped
         // file sniffs `Some(V0_1)` even inside the frozen corpus), else
         // `V0_0` if this id was reached via at least one `@require:` edge
@@ -383,7 +383,7 @@ fn load_legacy(entry: &Path, opts: &LoadOptions) -> Result<LoadedProgram, LoadEr
                             .unwrap_or(RustyfiVersion::V0_1)
                     },
                 ),
-            // X4a Q4-mirror: a `V0_0`-rooted load's NON-entry file defaults
+            // The mirror: a `V0_0`-rooted load's NON-entry file defaults
             // to `opts.version` (`V0_0`) unless `sniff_version` returns
             // `Some(V0_1)`, in which case it MUST default to `V0_1` when
             // this id was reached via at least one `@require:` edge that
@@ -460,8 +460,8 @@ fn load_legacy(entry: &Path, opts: &LoadOptions) -> Result<LoadedProgram, LoadEr
         // Collect this file's resolved dependency paths (per grammar
         // generation), then allocate ids for them uniformly below — so the
         // id/worklist bookkeeping is written exactly once. The `bool` is
-        // whether the header that resolved this path was `@require:` (X1 Q4:
-        // feeds `require_targets`, below) as opposed to `@import:`.
+        // whether the header that resolved this path was `@require:` (feeds
+        // `require_targets`, below) as opposed to `@import:`.
         let mut resolved_deps: Vec<(PathBuf, bool)> = Vec::new();
         if let Some(headers) = cst.headers_v006() {
             for header in headers {
@@ -474,7 +474,7 @@ fn load_legacy(entry: &Path, opts: &LoadOptions) -> Result<LoadedProgram, LoadEr
             use rustyfi_syntax::cst_v1::HeaderV1;
             for header in headers {
                 match header {
-                    // dev-0-1-0 semantics under Legacy (Ld2): an `@`-header on
+                    // dev-0-1-0 semantics under Legacy: an `@`-header on
                     // a 0.1 file resolves exactly like a 0.0.6 one.
                     HeaderV1::Legacy(h) => {
                         let is_require = matches!(h, rustyfi_syntax::cst::Header::Require(_));
@@ -484,7 +484,7 @@ fn load_legacy(entry: &Path, opts: &LoadOptions) -> Result<LoadedProgram, LoadEr
                     }
                     // A `use`-family header under Legacy mode: a typed *mode*
                     // error naming the fix, rather than the parse error a
-                    // grammar-level rejection would give (Ld3a).
+                    // grammar-level rejection would give.
                     HeaderV1::UsePackage { .. } | HeaderV1::UseOf { .. } | HeaderV1::Use { .. } => {
                         return Err(LoadError::EnvelopeHeaderUnderLegacy {
                             header: header.display_name(),
@@ -498,7 +498,7 @@ fn load_legacy(entry: &Path, opts: &LoadOptions) -> Result<LoadedProgram, LoadEr
         let mut deps = Vec::new();
         for (resolved, is_require) in resolved_deps {
             let dep_canon = canonicalize(&resolved)?;
-            // X1 Q4: "a `@require:`-resolved target … that RESOLVES UNDER
+            // "a `@require:`-resolved target … that RESOLVES UNDER
             // `lib-rustyfi/dist/packages/`" — the FROZEN 0.0.6 corpus path
             // specifically, NOT every `@require:` edge. This is the
             // load-bearing narrowing: a `V0_1` package `@require:`d out of
@@ -507,11 +507,11 @@ fn load_legacy(entry: &Path, opts: &LoadOptions) -> Result<LoadedProgram, LoadEr
             // canonical path is NOT under a `dist/packages` segment) must
             // stay `V0_1`, or it would be mis-parsed with the
             // 0.0.6 grammar. Only a target physically under a `dist/packages`
-            // directory is the frozen 0.0.6 corpus and eligible for the Q4
-            // provenance downgrade (a genuinely-0.1 package dropped there
-            // still wins via its own `Some(V0_1)` sniff, per the rule).
+            // directory is the frozen 0.0.6 corpus and eligible for the
+            // provenance-based downgrade (a genuinely-0.1 package dropped
+            // there still wins via its own `Some(V0_1)` sniff, per this rule).
             let is_corpus_target = is_require && is_dist_packages_target(&dep_canon);
-            // X4a Q4-mirror: the same narrowing, for the 0.1 corpus —
+            // The same narrowing, mirrored for the 0.1 corpus —
             // `is_require && is_dist_v01_packages_target(&dep_canon)`.
             // Deliberately checked independently of `is_corpus_target`
             // (`dist` and `dist-v01` never both match the same path), so a
@@ -578,7 +578,7 @@ pub(crate) fn canonicalize(path: &Path) -> Result<PathBuf, LoadError> {
 }
 
 /// Whether `path` lives under a `dist/packages/` directory — the frozen 0.0.6
-/// corpus layout, the `@require:`-provenance signal the X1 per-file version
+/// corpus layout, the `@require:`-provenance signal the per-file version
 /// detector uses to downgrade a sniff-`None` corpus dependency to `V0_0`.
 /// Matches ANY two consecutive components `dist` then `packages` anywhere in
 /// the path, so it recognizes both this port's own
@@ -594,7 +594,7 @@ fn is_dist_packages_target(path: &Path) -> bool {
 }
 
 /// Whether `path` lives under a `dist-v01/packages/` directory — the 0.1
-/// corpus layout (Slice X4a, item 2), the MIRROR of
+/// corpus layout, the MIRROR of
 /// [`is_dist_packages_target`] used by the symmetric per-file version
 /// detector to default a sniff-`None` 0.1-corpus dependency (e.g. a `module
 /// … :> sig …`-headed package like `v01-sealed.satyh`) to `V0_1` under a

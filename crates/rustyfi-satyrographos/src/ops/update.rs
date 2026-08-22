@@ -1,29 +1,24 @@
-//! `satyrographos update`: re-fetch the registry index (a git index is
-//! fetched into the cache and its resolved commit sha
-//! recorded) and **report** which locked registry dependencies have a newer
-//! version available — without applying them. Applying an upgrade is a
-//! deliberate second step (`install <name>@<newer>` or editing the manifest and
-//! reconciling), mirroring how `update` only refreshes the index.
+//! `satyrographos update`: re-fetch the registry index and **report** which
+//! locked registry dependencies have a newer version available — without
+//! applying them (a deliberate second step: `install <name>@<newer>` or
+//! reconciling).
 //!
 //! Phase-7c: the diff is solver-based, not a bare per-package
 //! "highest available" lookup — every currently-locked registry package
 //! (direct **and** transitive) is re-solved *together* against the
-//! freshly-refreshed index, so a package whose latest published version would
-//! violate some other locked package's declared dependency is correctly
-//! reported at the highest version that still fits the *whole* graph, not the
-//! index's bare maximum. `Satyristes`'s own `source.version` pin is
-//! deliberately **not** fed into the solve here (it is an exact-or-absent
-//! install pin, matching `registry::select_version`'s "exact if given, else
-//! highest" contract — feeding it in as a root constraint would make an exact
-//! pin *never* report an upgrade, which is the opposite of what `update` is
-//! for): every currently-locked registry package is a root with
-//! [`Constraint::Any`].
+//! freshly-refreshed index, so a package whose latest published version
+//! would violate some other locked package's declared dependency is
+//! reported at the highest version that still fits the *whole* graph.
+//! `Satyristes`'s own `source.version` pin is deliberately **not** fed into
+//! the solve here — feeding it in as a root constraint would make an exact
+//! pin *never* report an upgrade — so every currently-locked registry
+//! package is a root with [`Constraint::Any`] instead.
 
 use std::collections::HashMap;
 use std::path::Path;
 
 use crate::error::Error;
-use crate::lockfile::{self, LockEntry};
+use crate::lockfile;
 use crate::registry::{self, MultiRegistryDepSource, RegistryOptions};
 use crate::satyristes;
 use crate::solve;
@@ -50,34 +45,26 @@ pub struct UpdateReport {
     pub up_to_date: Vec<String>,
     /// Configured repositories that could not be refreshed (url, error) — a
     /// warning, not a failure: the solve still ran against whichever
-    /// repositories WERE reachable (mirrors `cmd_search`'s "one unreachable
-    /// repository must not hide the others").
+    /// repositories WERE reachable.
     pub unreachable: Vec<(String, Error)>,
 }
 
 /// Re-fetch the index for `manifest_path`'s project and diff every locked
 /// registry entry (direct and transitive) against the highest version the
 /// solver finds when it re-solves the whole registry sub-graph fresh.
-/// `manifest_path` locates both the `Satyristes` (for its `[registry]`
-/// url fallback) and the sibling `Satyristes.lock` (for the currently-locked
-/// versions and package identities). Consults exactly the one registry
-/// `reg_opts`/the manifest name — for every configured repository, see
-/// [`update_multi`].
+/// Consults exactly the manifest's one registry — for every configured
+/// repository, see [`update_multi`].
 pub fn update(manifest_path: &Path, reg_opts: &RegistryOptions) -> Result<UpdateReport, Error> {
     update_multi(manifest_path, reg_opts, &[])
 }
 
 /// As [`update`], but consulting every repository in `repos`, in order, when
-/// `reg_opts` does not already pin one explicit `--registry`/
-/// `$RUSTYFI_REGISTRY` URL — the same coverage `search`/`install NAME` have.
-/// Every currently-locked registry package is re-solved together against the
-/// UNION of every reachable repository's index: [`MultiRegistryDepSource`]
-/// tries each repository in the given order and uses the first that has a
-/// given package, exactly the "first repository that has it wins" rule
-/// `install NAME` applies.
-/// One unreachable repository is reported in [`UpdateReport::unreachable`]
-/// rather than aborting the whole report, as long as at least one repository
-/// is reachable (mirrors `cmd_search`).
+/// `reg_opts` does not already pin one explicit URL. Every currently-locked
+/// registry package is re-solved together against the UNION of every
+/// reachable repository's index (`MultiRegistryDepSource`: first
+/// repository that has a package wins). One unreachable repository is
+/// reported in [`UpdateReport::unreachable`] rather than aborting the whole
+/// report, as long as at least one repository is reachable.
 pub fn update_multi(
     manifest_path: &Path,
     reg_opts: &RegistryOptions,
@@ -154,11 +141,4 @@ pub fn update_multi(
     }
 
     Ok(report)
-}
-
-/// The concrete version a lock entry pins (registry entries record it in
-/// `source.version`). Kept for callers that still want the raw pin without
-/// going through [`update`]'s solver-based diff.
-pub fn locked_version(entry: &LockEntry) -> Option<String> {
-    entry.source.version.clone()
 }

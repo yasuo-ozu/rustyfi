@@ -1,7 +1,7 @@
 //! Knuth–Liang hyphenation engine.
 //!
 //! Confines the `hyphenation` crate dependency to this module: `Context`
-//! (in `rustyfi-backend`) only stores a lightweight `HyphenLang` tag (D3) —
+//! (in `rustyfi-backend`) only stores a lightweight `HyphenLang` tag —
 //! the actual `hyphenation::Standard` dictionaries (each ~89 KiB of decoded
 //! bincode, not cheaply clonable) live in a process-global, load-once cache
 //! here, keyed by that tag.
@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 /// Map the port's crate-independent tag (`rustyfi_backend::HyphenLang`) to
 /// the `hyphenation` crate's own language enum — the one place this crate's
 /// dependency on `hyphenation` and the backend's independence meet.
-pub fn language_of(tag: HyphenLang) -> Language {
+fn language_of(tag: HyphenLang) -> Language {
     match tag {
         HyphenLang::EnglishUS => Language::EnglishUS,
         HyphenLang::EnglishGB => Language::EnglishGB,
@@ -26,21 +26,16 @@ pub fn language_of(tag: HyphenLang) -> Language {
 /// crate's own `dictionaries/en-gb.standard.bincode` (v0.8.4; same
 /// Apache-2.0/MIT `hyph-utf8`-derived "standard" tier as the embedded en-US
 /// data — NOT one of the two non-permissively-licensed *extended* pattern
-/// sets, `hyph-hu.ext`/`hyph-ca.ext`, that the crate's README calls out
-/// separately).
+/// sets, `hyph-hu.ext`/`hyph-ca.ext`, the crate's README calls out separately).
 ///
-/// Why vendor a file instead of a Cargo feature: `hyphenation` 0.8.4 only
-/// exposes two embedding features, `embed_en-us` (en-US only) and
-/// `embed_all` (all 82 languages, ~3 MiB, and it is `embed_all` — not a
-/// per-language `embed_en-gb` — that would be required to embed en-GB via
-/// the crate's own mechanism). Pulling in all 82 languages just for en-GB
-/// was rejected as unnecessary bloat and needless exposure to `embed_all`'s
-/// bundled non-permissive `.ext` files. The crate's own README names
-/// "shipping a `.bincode` and using `from_path`" as the alternative; this is
-/// that alternative, via `include_bytes!` + `from_reader` instead of a
-/// runtime path, so the dictionary still needs no disk I/O — matching
-/// `embed_en-us`'s own no-filesystem property. `Cargo.toml`'s `hyphenation`
-/// feature list, and therefore the root `Cargo.lock`, stays untouched.
+/// Vendored instead of using a Cargo feature: `hyphenation` 0.8.4 only
+/// exposes `embed_en-us` (en-US only) and `embed_all` (all 82 languages,
+/// ~3 MiB, including the non-permissive `.ext` files) — no per-language
+/// `embed_en-gb`. The crate's README names "shipping a `.bincode` and using
+/// `from_path`" as the alternative; this is that, via `include_bytes!` +
+/// `from_reader` instead of a runtime path, so it still needs no disk I/O.
+/// `Cargo.toml`'s `hyphenation` feature list, and therefore the root
+/// `Cargo.lock`, stays untouched.
 const EN_GB_STANDARD_BINCODE: &[u8] = include_bytes!("hyph-data/en-gb.standard.bincode");
 
 fn cache() -> &'static Mutex<HashMap<HyphenLang, Arc<Standard>>> {
@@ -51,9 +46,8 @@ fn cache() -> &'static Mutex<HashMap<HyphenLang, Arc<Standard>>> {
 /// Load-once, process-global: the underlying `hyphenation` load call runs at
 /// most once per language per process, after which every caller shares the
 /// same `Arc`. `None` only if the dictionary data is somehow unreadable
-/// (never expected in practice — both en-US, via `embed_en-us`'s
-/// `from_embedded`, and en-GB, via the vendored bytes above and
-/// `from_reader`, are baked into the binary at compile time, no disk I/O).
+/// (never expected in practice — both dictionaries are baked into the
+/// binary at compile time, no disk I/O).
 fn dict(tag: HyphenLang) -> Option<Arc<Standard>> {
     let mut map = cache().lock().unwrap();
     if let Some(d) = map.get(&tag) {
@@ -74,7 +68,7 @@ fn dict(tag: HyphenLang) -> Option<Arc<Standard>> {
 /// Char-index break offsets into `word` — Knuth–Liang candidates from the
 /// installed dictionary, converted from the crate's byte offsets and
 /// filtered so that each accepted break leaves at least `left_min` chars
-/// before it and `right_min` chars after it (D6, matches upstream's
+/// before it and `right_min` chars after it (matches upstream's
 /// `uchar_segment`-counted minimums).
 ///
 /// Returns an empty `Vec` when the dictionary is unavailable, the word is
@@ -118,29 +112,23 @@ pub fn hyphenate_word(
 
 /// Explicit soft hyphens (U+00AD) embedded in `word`, split out into (a) the
 /// word with every one of them removed and (b) the char-index break points
-/// into that *cleaned* word where each one sat — S3: "Honor input soft
-/// hyphen (U+00AD) priority (crate already does; add a test)".
+/// into that *cleaned* word where each one sat.
 ///
 /// The `hyphenation` crate's own `Standard::hyphenate` already special-cases
-/// this (`hyphenator.rs`'s `soft_hyphen_indices`/priority comment: "Soft
-/// hyphens take priority over dictionary hyphenation; if the word contains
-/// any, they will be returned as the only breaks available" — and, notably,
-/// bypasses its own `unbreakable_chars`/`boundaries` min-fragment machinery
-/// entirely for that path, i.e. an explicit soft hyphen is authored intent,
-/// not a pattern-derived candidate, so it is never filtered). But the
-/// `Word` it returns keeps the original text with the soft hyphen character
-/// *still embedded* and reports each break as the byte offset of the soft
-/// hyphen itself — callers must know to drop that character or it leaks
-/// into a rendered fragment as a literal (usually glyph-less) character.
-/// Implementing the equivalent directly here — instead of routing through
-/// `dict.hyphenate` and post-processing its byte offsets — sidesteps that
-/// footgun and keeps `hyphenate_word` above (and its existing tests/dict
-/// cache) untouched.
+/// this (soft hyphens take priority over dictionary hyphenation and are
+/// never filtered by the min-fragment machinery — an explicit soft hyphen is
+/// authored intent, not a pattern-derived candidate), but its returned
+/// `Word` keeps the soft hyphen character *still embedded* and reports each
+/// break as that character's own byte offset — callers must know to drop it
+/// or it leaks into a rendered fragment as a literal glyph-less character.
+/// Implementing the equivalent directly here, instead of routing through
+/// `dict.hyphenate` and post-processing its byte offsets, sidesteps that
+/// footgun and keeps `hyphenate_word` above untouched.
 ///
 /// Returns `(word.to_string(), Vec::new())` unchanged when `word` has no
 /// soft hyphen, so a caller can always use the returned string in place of
 /// `word` from here on.
-pub fn strip_soft_hyphens(word: &str) -> (String, Vec<usize>) {
+pub(crate) fn strip_soft_hyphens(word: &str) -> (String, Vec<usize>) {
     if !word.contains('\u{ad}') {
         return (word.to_string(), Vec::new());
     }
@@ -168,8 +156,6 @@ mod tests {
         // example set (byte breaks map 1:1 to char offsets here — ASCII).
         let breaks = hyphenate_word(HyphenLang::EnglishUS, "hyphenation", 3, 2);
         assert!(!breaks.is_empty(), "expected at least one break");
-        // Reconstruct fragments from the char offsets and check they
-        // rejoin to the original word, and are non-trivial (length > 0).
         let chars: Vec<char> = "hyphenation".chars().collect();
         let mut prev = 0;
         let mut fragments = Vec::new();

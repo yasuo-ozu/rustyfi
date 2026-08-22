@@ -10,70 +10,50 @@ use crate::vbox::VertBox;
 pub struct HorzStringInfo {
     pub font: FontKey,
     pub size: Length,
-    /// A manual baseline raise (D1b, `ScriptFont::rising` scaled by the
-    /// run's font size — `fontInfo.ml`'s `get_font_with_ratio`). `ZERO` for
-    /// every pre-D1 construction site and every stdja default, so this
-    /// field being carried instead of dropped changes no existing output —
-    /// both PDF writers add it to the placed `ty` before `Tj`.
+    /// A manual baseline raise (`ScriptFont::rising` scaled by the
+    /// run's font size — `fontInfo.ml`'s `get_font_with_ratio`). Both PDF
+    /// writers add it to the placed `ty` before `Tj`.
     pub rising: Length,
     /// `set-text-color`'s value at the time this run/glyph was built
-    /// (`Context::text_color`, `context.rs`). Both `PureHorzBox::InnerString`
-    /// (text runs) and `MathGlyph` (math glyphs) embed this same struct, so
-    /// one field threads color to both. `Color::Gray(0.0)` (black) is the
-    /// PDF/HTML default; both writers emit NO color op for a black run, so
-    /// every pre-existing all-black construction site stays byte-identical.
+    /// (`Context::text_color`). `Color::Gray(0.0)` (black) is the default and
+    /// both writers emit NO color op for a black run.
     pub color: Color,
 }
 
-/// An index into a document-wide table of decoded raster images
-/// (`DocumentValue::images` in rustyfi-lang), the way `FontKey` indexes a
-/// font table. `Value::Image` (rustyfi-lang) carries one of these as its
-/// only payload, and `PureHorzBox::Image` places one on a page; neither
-/// carries the decoded bytes directly, so cloning a box (routine during line
+/// An index into `DocumentValue::images` (rustyfi-lang). Boxes carry this
+/// rather than the decoded bytes, so cloning a box (routine during line
 /// breaking) never copies image data.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ImageId(pub usize);
 
 /// An opaque index into a lang-side table of deferred page-break-hook
-/// closures (`Interp::hooks`), the exact analogue of `ImageId` but pointing
-/// at a *computation* instead of a resource. `break_pages` places the box
-/// this token lives in like any other content and never learns what the hook
-/// computes; a lang-side post-pass (`fire_hooks`) reads the token back once
-/// geometry is final.
+/// closures (`Interp::hooks`). `break_pages` places the box this token lives
+/// in like any other content and never learns what the hook computes; a
+/// lang-side post-pass (`fire_hooks`) reads the token back once geometry is
+/// final. `DecoId`/`GraphicsFnId` below follow the same pattern.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct HookId(pub usize);
 
-/// An opaque index into a lang-side table of deferred *decoration* closures
-/// (`Interp::decos`) — `HookId`'s twin for §D frames. The backend carries it
-/// through line breaking and never learns what the deco draws; `fire_hooks`
-/// (rustyfi-lang) fires it with the frame's placed `(x, y, w, h, d)` and
+/// Deferred *decoration* closures (`Interp::decos`) for frames.
+/// `fire_hooks` fires one with the frame's placed `(x, y, w, h, d)` and
 /// accumulates the returned graphics onto the page.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct DecoId(pub usize);
 
-/// An opaque index into a lang-side table of deferred `inline-graphics-outer`
-/// callbacks (`Interp::outer_graphics`) — `HookId`'s exact pattern: the box
-/// stays POD-cloneable, and a lang-side post-pass (`resolve_outer_graphics_*`
-/// in rustyfi-lang's primitives, run by `line-break`/`tabular`) reads the
-/// token back once line layout has resolved the box's width.
+/// Deferred `inline-graphics-outer` callbacks (`Interp::outer_graphics`),
+/// read back by `resolve_outer_graphics_*` once line layout has resolved the
+/// box's width.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct GraphicsFnId(pub usize);
 
-/// A decoded raster image, referenced by `PureHorzBox::Image`/`Value::Image`
-/// via its `ImageId` index. Mirrors v0.0.6's `ImageInfo` (`imageInfo.ml`)
-/// trimmed to what Slice 1 needs: pixel dimensions (for the
-/// `use-image-by-width` aspect-ratio computation) plus enough sample data to
-/// emit a PDF Image XObject directly.
+/// A decoded raster image, referenced via its `ImageId`. Mirrors v0.0.6's
+/// `ImageInfo` (`imageInfo.ml`).
 ///
-/// **Slice 1 simplification**: every source format is flattened to 8-bit
-/// `DeviceRGB` and any alpha channel is dropped — `samples`/`px_w`/`px_h`
-/// are always populated this way (the HTML backend's `<img>` data URI and
-/// the PDF writer's non-JPEG path both rely on that). Transparency
-/// (`/SMask`) is still roadmap; a JPEG `DCTDecode` passthrough is not —
-/// `jpeg_dct` additionally carries the source's original, still-DCT-encoded
-/// bytes when `load-image` recognized it as a baseline JPEG, so the PDF
-/// writer (`write_image_xobjects`, `rustyfi-pdf`) can embed those bytes
-/// directly instead of re-encoding the flattened RGB8 samples.
+/// Every source format is flattened to 8-bit `DeviceRGB` and any alpha
+/// channel is dropped; transparency (`/SMask`) is unimplemented. `jpeg_dct`
+/// additionally carries the source's original, still-DCT-encoded bytes for a
+/// baseline JPEG, so `write_image_xobjects` can embed those directly instead
+/// of re-encoding the flattened RGB8 samples.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ImageResource {
     /// Row-major, top-to-bottom, 3-bytes-per-pixel RGB8 samples with no
@@ -82,30 +62,23 @@ pub struct ImageResource {
     pub samples: Vec<u8>,
     pub px_w: u32,
     pub px_h: u32,
-    /// `Some` when the source file `load-image` decoded was itself a
-    /// baseline (or extended-sequential) 8-bit JPEG with 1 or 3 color
-    /// components — see `sniff_baseline_jpeg_dct`'s doc comment for exactly
-    /// which JPEGs qualify and why the rest fall back to `None` (and thus to
-    /// the flattened-RGB8 embedding above). `None` for every non-JPEG
-    /// source, and for a JPEG this port doesn't yet know how to map to a PDF
-    /// colorspace without guessing (progressive, 12-bit, or 4-component
-    /// CMYK/YCCK).
+    /// `Some` for a baseline (or extended-sequential) 8-bit JPEG with 1 or 3
+    /// color components — see `sniff_baseline_jpeg_dct` for exactly which
+    /// qualify. `None` for every non-JPEG source, and for a JPEG this port
+    /// cannot map to a PDF colorspace without guessing (progressive, 12-bit,
+    /// or 4-component CMYK/YCCK).
     pub jpeg_dct: Option<JpegDct>,
     /// `Some` when this resource is an imported page of an external PDF
-    /// (`load-pdf-image`) rather than a decoded raster image.
-    /// `samples`/`px_w`/`px_h` are left at their default/empty values in
-    /// that case — every raster consumer keeps reading those fields
-    /// unchanged; PDF-page consumers branch on this field instead. Additive:
-    /// every pre-existing `ImageResource { .. }` construction site gets
-    /// `pdf: None`.
+    /// (`load-pdf-image`) rather than a decoded raster image;
+    /// `samples`/`px_w`/`px_h` are then left empty, and PDF-page consumers
+    /// branch on this field instead.
     pub pdf: Option<PdfPageResource>,
 }
 
 /// An embedded page of an external PDF (`load-pdf-image`), carrying just
 /// enough of the source page's object graph to re-emit it as a PDF **Form
-/// XObject**. Parsed by `rustyfi-lang` (via `lopdf`) and consumed by
-/// `rustyfi-pdf`'s writer; this struct itself is `lopdf`-free plain data so
-/// `rustyfi-backend` need not depend on `lopdf`.
+/// XObject**. Deliberately `lopdf`-free plain data so `rustyfi-backend` need
+/// not depend on `lopdf`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PdfPageResource {
     /// The source page's `/MediaBox`, `(x0, y0, x1, y1)` in raw PDF points
@@ -126,18 +99,15 @@ pub struct PdfPageResource {
     pub resources: ImportedObjects,
 }
 
-/// A serialized subtree of a *foreign* PDF's object graph, self-contained
-/// and neutral (no `lopdf` types) so it can cross the `rustyfi-backend`
-/// boundary as plain data. See `PdfPageResource::resources`'s doc comment
-/// for the local-id convention.
+/// A serialized subtree of a *foreign* PDF's object graph. See
+/// `PdfPageResource::resources` for the local-id convention.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ImportedObjects(pub Vec<(u32, ObjRepr)>);
 
 /// A minimal sum type mirroring the PDF object grammar, just enough to
 /// re-emit an imported object verbatim. `Ref(u32)` refers to another entry's
-/// local id in the same `ImportedObjects` table (or, in principle, to an
-/// object outside the imported subtree — the writer should treat an
-/// unresolved `Ref` as a bug in the importer, not attempt to fetch it).
+/// local id in the same `ImportedObjects` table; the writer treats an
+/// unresolved `Ref` as an importer bug rather than fetching it.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ObjRepr {
     Null,
@@ -161,50 +131,44 @@ pub enum ObjRepr {
     Stream(Vec<(Vec<u8>, ObjRepr)>, Vec<u8>),
 }
 
-/// The original, still-DCT-encoded bytes of a source JPEG file, plus just
-/// enough metadata (`components`) for the PDF writer to pick the matching
-/// `/ColorSpace` — never re-derived from the flattened `samples` (those have
-/// already lost whatever the JPEG's own YCbCr subsampling/quantization
-/// looked like; the whole point of a passthrough is to hand the PDF viewer
-/// the exact bytes the encoder produced).
+/// The original, still-DCT-encoded bytes of a source JPEG, plus enough
+/// metadata (`components`) for the writer to pick the matching
+/// `/ColorSpace`. Never re-derived from the flattened `samples`, which have
+/// already lost the JPEG's own subsampling/quantization.
 #[derive(Clone, Debug, PartialEq)]
 pub struct JpegDct {
-    /// The complete original file contents, `FFD8` (SOI) to `FFD9` (EOI)
-    /// and everything in between, byte-for-byte as `load-image` read it —
-    /// this is exactly the stream a PDF `/Filter /DCTDecode` XObject wants.
+    /// The complete original file contents, `FFD8` (SOI) to `FFD9` (EOI),
+    /// byte-for-byte — exactly the stream a `/Filter /DCTDecode` XObject wants.
     pub bytes: Vec<u8>,
-    /// Color components declared by the JPEG's own SOF marker: `1`
-    /// (grayscale, maps to `/DeviceGray`) or `3` (YCbCr/RGB, maps to
-    /// `/DeviceRGB`). `sniff_baseline_jpeg_dct` never returns any other
-    /// value here (4-component CMYK/YCCK is rejected, not represented).
+    /// Color components from the JPEG's SOF marker: `1` (grayscale ->
+    /// `/DeviceGray`) or `3` (YCbCr/RGB -> `/DeviceRGB`).
+    /// `sniff_baseline_jpeg_dct` never returns any other value.
     pub components: u8,
 }
 
 impl ImageResource {
     /// Scan raw file bytes for a JPEG **SOF0** (baseline DCT) or **SOF1**
-    /// (extended sequential DCT) marker — the two JPEG variants a PDF
-    /// `/Filter /DCTDecode` XObject can safely wrap verbatim, matching
-    /// upstream SATySFi's own JPEG special-case (`imageInfo.ml`'s bypass of
-    /// full decode/re-encode for `Jpeg`). Returns `None` — meaning "fall
-    /// back to the flattened RGB8 embedding" — for:
+    /// (extended sequential DCT) marker — the two variants a `/DCTDecode`
+    /// XObject can safely wrap verbatim, matching upstream's own JPEG
+    /// special-case (`imageInfo.ml`'s bypass of decode/re-encode for `Jpeg`).
+    /// Returns `None`, meaning "fall back to the flattened RGB8 embedding",
+    /// for:
     ///
-    /// - anything that isn't a JPEG at all (no `FFD8` SOI marker);
-    /// - a malformed/truncated JPEG (a marker's declared segment length runs
-    ///   past the end of the buffer, or entropy-coded scan data is reached
-    ///   before any SOF marker was seen);
-    /// - progressive, lossless, arithmetic-coded, or hierarchical JPEGs
-    ///   (any SOF marker other than `0xC0`/`0xC1`) — a real PDF viewer's
-    ///   `DCTDecode` support for these is inconsistent, so this port only
-    ///   trusts the two most common, universally-supported variants;
+    /// - anything that isn't a JPEG (no `FFD8` SOI marker);
+    /// - a malformed/truncated JPEG (a segment length running past the end of
+    ///   the buffer, or scan data reached before any SOF marker);
+    /// - progressive, lossless, arithmetic-coded, or hierarchical JPEGs (any
+    ///   SOF other than `0xC0`/`0xC1`) — viewer `DCTDecode` support for these
+    ///   is inconsistent, so only the two universally-supported variants are
+    ///   trusted;
     /// - non-8-bit sample precision;
-    /// - anything other than 1 (grayscale) or 3 (YCbCr/RGB) color
-    ///   components — in particular 4-component CMYK/YCCK JPEGs, whose
-    ///   correct PDF embedding depends on an Adobe APP14 marker's transform
-    ///   flag (some CMYK JPEGs store inverted samples) that this port does
-    ///   not attempt to interpret.
+    /// - anything other than 1 or 3 color components — in particular
+    ///   4-component CMYK/YCCK, whose correct embedding depends on an Adobe
+    ///   APP14 transform flag (some store inverted samples) this port does not
+    ///   interpret.
     ///
-    /// `bytes` is consumed (not just borrowed) so the `Some` case can hand
-    /// the original file contents straight into `JpegDct` with no copy.
+    /// `bytes` is consumed so the `Some` case hands the file contents into
+    /// `JpegDct` with no copy.
     pub fn sniff_baseline_jpeg_dct(bytes: Vec<u8>) -> Option<JpegDct> {
         if bytes.len() < 4 || bytes[0] != 0xFF || bytes[1] != 0xD8 {
             return None; // no SOI marker: not a JPEG.
@@ -267,12 +231,11 @@ impl ImageResource {
         None
     }
 
-    /// The image's intrinsic dimensions for aspect-ratio math
-    /// (`use-image-by-width`): pixel extents for a raster resource, MediaBox
-    /// point extents for an imported PDF page. Both ratios are dimensionless
-    /// (px/px or pt/pt), so callers can apply the exact same `height = width
-    /// * ih/iw` formula regardless of kind — only the placement CTM
-    /// (rustyfi-pdf) needs to know which units these actually are.
+    /// Intrinsic dimensions for aspect-ratio math (`use-image-by-width`):
+    /// pixel extents for a raster resource, MediaBox point extents for an
+    /// imported PDF page. Both ratios are dimensionless (px/px or pt/pt), so
+    /// callers apply the same `height = width * ih/iw` regardless of kind —
+    /// only the placement CTM needs to know which units these are.
     pub fn intrinsic_dims_pt(&self) -> (f64, f64) {
         if let Some(pdf) = &self.pdf {
             let (x0, y0, x1, y1) = pdf.media_box;
@@ -307,11 +270,10 @@ pub enum PureHorzBox {
     /// v0.0.6: `PHSFixedEmpty`). Unlike `OuterEmpty` this is never a legal
     /// line-break point (see `is_glue`).
     FixedEmpty { width: Length },
-    /// A raster image placed at a fixed on-page size (`use-image-by-width`'s
-    /// result). `width`/`height` are the already-computed on-page
-    /// dimensions (v0.0.6 `ImageInfo.get_height_from_width`); `image` looks
-    /// the decoded bytes up in the document's image table. Like
-    /// `FixedEmpty`, this is never a legal line-break point (`is_glue`).
+    /// A raster image placed at a fixed on-page size (`use-image-by-width`).
+    /// `width`/`height` are already-computed on-page dimensions (v0.0.6
+    /// `ImageInfo.get_height_from_width`). Like `FixedEmpty`, never a legal
+    /// line-break point (`is_glue`).
     Image {
         width: Length,
         height: Length,
@@ -322,11 +284,10 @@ pub enum PureHorzBox {
     /// `ref:src/backend/lineBreakBox.ml:22-27`). If the paragraph breaker
     /// chooses to break here, `pre_break` renders at the end of the closed
     /// line and `post_break` at the start of the next; otherwise `no_break`
-    /// renders in its place. UAX#14 (§3) only needs zero-width inter-chunk
-    /// break points with all three slots empty; hyphenation (§4, future)
-    /// is expected to fill `pre_break` with a hyphen glyph. Unlike
-    /// `OuterEmpty`/`OuterFil` this is not "glue" (see `is_glue`'s doc) —
-    /// it is scored separately via `is_break_point`/`break_penalty`.
+    /// renders in its place. UAX#14 only needs zero-width inter-chunk
+    /// break points with all three slots empty. Unlike `OuterEmpty`/`OuterFil`
+    /// this is not "glue" (see `is_glue`) — it is scored separately via
+    /// `is_break_point`/`break_penalty`.
     Discretionary {
         penalty: i32,
         pre_break: Vec<PureHorzBox>,
@@ -335,11 +296,9 @@ pub enum PureHorzBox {
     },
     /// A box carrying resolved `graphics` elements (`inline-graphics`;
     /// v0.0.6: `PHGFixedGraphics`), coordinates already relative to the
-    /// box's baseline-left origin. Unlike `Image`-style boxes this carries a
-    /// real depth (a graphics box can extend below the baseline), so both
-    /// `height` and `depth` feed line metrics (see `linebreak.rs`'s
-    /// `measure`/`layout_line`). Never a legal line-break point (see
-    /// `is_glue`).
+    /// box's baseline-left origin. Carries a real depth (graphics can extend
+    /// below the baseline), so both `height` and `depth` feed line metrics.
+    /// Never a legal line-break point (see `is_glue`).
     Graphics {
         width: Length,
         height: Length,
@@ -361,9 +320,9 @@ pub enum PureHorzBox {
     /// lineBreak.ml:40-48). `width` starts at ZERO and is written by
     /// `justify_line` with the box's per-fil slack share; the box is then
     /// replaced by a resolved `Graphics` in a lang-side post-pass that fires
-    /// `fn_id`'s callback with that width (see `GraphicsFnId`). NOT glue
-    /// (`is_glue` = false — upstream's box is pure content, never a break
-    /// point), but counted as a fil by `measure`/`justify_line`.
+    /// `fn_id`'s callback with that width. NOT glue (upstream's box is pure
+    /// content, never a break point), but counted as a fil by
+    /// `measure`/`justify_line`.
     GraphicsOuter {
         height: Length,
         depth: Length,
@@ -379,18 +338,14 @@ pub enum PureHorzBox {
     /// never re-enters the math engine. Never a legal line-break point (see
     /// `is_glue`) — a math run is laid out and flowed atomically.
     ///
-    /// `rules` (§B2): filled paths the run needs alongside its glyphs — the
+    /// `rules`: filled paths the run needs alongside its glyphs — the
     /// fraction bar and radical sign/overbar are `Fill`s, not glyphs, since
-    /// neither is drawable through a font's `Tj` at all. Box-local, y-**up**
-    /// coordinates relative to this box's own baseline-left origin — exactly
-    /// `PureHorzBox::Graphics::elems`' convention (see that variant's doc
-    /// comment), NOT `MathGlyph::dy`'s sign (which happens to agree: up is
-    /// positive either way, just via a different type). `natural_width` is
-    /// unaffected (rules never extend the run's own advance — a
-    /// bar/radical-sign always sits within `glyphs`' already-measured span).
-    /// Empty for the Slice-1 `read_math` path (its `MathElem` tree has no
-    /// `Fraction`/`Radical` production at all) and for every atom the
-    /// faithful `layout_math_atom` path doesn't specially handle.
+    /// neither is drawable through a font's `Tj`. Box-local, y-**up**
+    /// coordinates relative to this box's own baseline-left origin, exactly
+    /// `PureHorzBox::Graphics::elems`' convention. `natural_width` is
+    /// unaffected — a bar/radical-sign always sits within `glyphs`'
+    /// already-measured span. Empty for the `read_math` path and for every
+    /// atom `layout_math_atom` doesn't specially handle.
     Math {
         width: Length,
         height: Length,
@@ -399,26 +354,18 @@ pub enum PureHorzBox {
         rules: Vec<GraphicsElem>,
     },
     /// A deferred page-break hook (`hook-page-break`; v0.0.6's
-    /// `PHGHookPageBreak`). Carries only the opaque token — no closure, no
-    /// trait object — so the box stays POD-cloneable; `break_pages` places
-    /// it like any other zero-width content, and a lang-side post-pass
-    /// (`fire_hooks`) fires the stored closure once placement is final.
-    /// Renders nothing (see the PDF writers' wildcard arm).
+    /// `PHGHookPageBreak`). Zero-width, renders nothing.
     HookPageBreak { id: HookId },
-    /// A ruled grid box (`tabular`; v0.0.6's `PHGFixedTabular`) — the first
-    /// composite box: it carries other already-laid-out inline boxes (each
-    /// cell's own `Vec<(Length, PureHorzBox)>` run, `tabular::TabularCellBox`)
+    /// A ruled grid box (`tabular`; v0.0.6's `PHGFixedTabular`), carrying
+    /// each cell's already-laid-out inline run (`tabular::TabularCellBox`)
     /// plus the resolved rule graphics from the user's callback. The PDF
     /// writers recurse into it in `emit_box`, which is also where its three
     /// coordinate frames are reconciled.
     Tabular(TabularBox),
-    /// An inline box carrying a whole block (`embed-block-top`; rows 7-8;
-    /// upstream's `PHGEmbeddedVert`/`HorzEmbeddedVertBreakable`). `block`
-    /// is already broken into `VertBox` lines; the writer stacks them from
-    /// the box's placed origin by reentering the same per-`PureHorzBox`
-    /// emission a top-level line uses (the `Tabular` cells' recursion,
-    /// above, is the same pattern one level up). FIRST CUT is ATOMIC — it
-    /// does not split across a page boundary.
+    /// An inline box carrying a whole block (`embed-block-top`; upstream's
+    /// `PHGEmbeddedVert`/`HorzEmbeddedVertBreakable`). `block` is already
+    /// broken into `VertBox` lines, which the writer stacks from the box's
+    /// placed origin. ATOMIC — it does not split across a page boundary.
     EmbeddedBlock {
         width: Length,
         height: Length,
@@ -432,26 +379,23 @@ pub enum PureHorzBox {
         anchor_last: bool,
         /// Built by `embed-block-BREAKABLE` (upstream
         /// `HorzEmbeddedVertBreakable`) rather than `embed-block-top`/`-bottom`
-        /// (`HorzEmbeddedVert`). Upstream keeps these two apart because the
-        /// breakable one is not laid out as inline content at all: the line
-        /// breaker flushes the current line, splices the block's own vertical
-        /// boxes straight into the vertical list (`AlreadyVert`,
-        /// `lineBreak.ml:809-818`), and starts a fresh line. See
-        /// `break_into_lines`, which does exactly that for this flag.
+        /// (`HorzEmbeddedVert`). The breakable one is not laid out as inline
+        /// content at all: the line breaker flushes the current line, splices
+        /// the block's own vertical boxes straight into the vertical list
+        /// (`AlreadyVert`, `lineBreak.ml:809-818`), and starts a fresh line.
+        /// See `break_into_lines`.
         breakable: bool,
     },
     /// An UNBREAKABLE inline frame (`inline-frame-outer`/`-inner`; upstream
     /// `PHGOuterFrame`/`PHGInnerFrame`) — ATOMIC: contents are pre-fit at
-    /// their natural width (`fit_cell` — the same no-Context fit tabular
-    /// cells use) and the frame never splits across a line break, which is
-    /// exactly upstream's model for these two (they are *pure* boxes there
-    /// too). `inline-frame-breakable` is NOT this variant — see
-    /// [`PureHorzBox::InlineFrameMarker`].
-    /// `width`/`height`/`depth` are the OUTER dims (padding included;
-    /// baseline unshifted — padding grows the box, upstream lineBreak.ml's
-    /// frame metrics). `contents` carry x-offsets from the frame's left edge
-    /// (pad-L already applied), all on the frame's own baseline — the
-    /// writers recurse exactly like `Tabular` cells. `deco` is fired
+    /// their natural width (`fit_cell`) and the frame never splits across a
+    /// line break, matching upstream's model. `inline-frame-breakable` is NOT
+    /// this variant — see [`PureHorzBox::InlineFrameMarker`].
+    ///
+    /// `width`/`height`/`depth` are the OUTER dims (padding included, baseline
+    /// unshifted — padding grows the box, upstream lineBreak.ml's frame
+    /// metrics). `contents` carry x-offsets from the frame's left edge (pad-L
+    /// already applied), all on the frame's own baseline. `deco` is fired
     /// lang-side after placement; the writers draw nothing for it here.
     Frame {
         width: Length,
@@ -479,21 +423,19 @@ pub enum PureHorzBox {
     /// This port's breaker is a flat index DP over one `Vec<PureHorzBox>`, so
     /// the same transparency is spelled the other way round: the primitive
     /// SPLICES the frame's contents into the paragraph stream (padding-L and
-    /// -R as `FixedEmpty`, exactly upstream's `append_horz_padding`) and
-    /// brackets them with this zero-width marker pair. Nothing special happens
-    /// in the DP — the inner boxes simply *are* the paragraph's boxes, so its
-    /// break opportunities are visible and its glue stretches with the line —
-    /// and `fire_hooks` reassembles the fragments by walking the markers, the
-    /// same walk it already does for block frames.
+    /// -R as `FixedEmpty`, upstream's `append_horz_padding`) and brackets them
+    /// with this zero-width marker pair, so the inner boxes simply *are* the
+    /// paragraph's boxes. `fire_hooks` reassembles the fragments by walking
+    /// the markers.
     ///
     /// `height`/`depth` are the WHOLE frame's padded content extent
     /// (`content ± pad`), carried on BOTH markers so that any line holding
-    /// either one reserves the frame's full vertical extent. Upstream sizes
-    /// each fragment from its own contents; for an unbroken frame (every
-    /// bundled caller: `\ref`, `\href`, TOC entries — all with zero padding)
-    /// the two agree exactly, and for a broken one this over-reserves a
-    /// fragment by the difference between the frame's tallest content and that
-    /// fragment's, which is zero for uniform text.
+    /// either one reserves the frame's full vertical extent. Upstream instead
+    /// sizes each fragment from its own contents; for an unbroken frame (every
+    /// bundled caller: `\ref`, `\href`, TOC entries — all zero-padding) the two
+    /// agree exactly, and for a broken one this over-reserves a fragment by the
+    /// difference between the frame's tallest content and that fragment's,
+    /// which is zero for uniform text.
     InlineFrameMarker {
         id: DecoId,
         end: bool,
@@ -516,28 +458,22 @@ pub enum PureHorzBox {
     /// line's contents must treat this variant as inert or it will
     /// double-count the body.
     Footnote { block: Vec<VertBox> },
-    /// an INERT reflow marker for emphasis runs (`\emph`/`\bold` in the
-    /// repo-controlled stdlibs that opt in, §5) and list-bullet fencing,
-    /// emitted by the `inline-mark` primitive. Zero width/height/depth,
-    /// exactly like `FrameMarker` above (renders nothing — see the
-    /// PDF/faithful-HTML writers' wildcard arms, and
-    /// `natural_width`/`is_glue` below) — it contributes zero advance
-    /// wherever it rides inside a placed line's `contents`, so PDF/faithful
-    /// HTML are byte-identical whether or not a document's stdlib emits
-    /// these. Read only by the reflow HTML walker
-    /// (`the `html-support` branch's rustyfi-html/src/reflow/inline.rs`'s `emit_inline`), which
-    /// uses `EmphStart`/`EmphEnd` to wrap `<em>`/`<strong>` and
-    /// `BulletStart`/`BulletEnd` to suppress the drawn bullet/number glyph
-    /// run (the real marker comes from the `<ul>`/`<ol>` itself).
+    /// An INERT reflow marker for emphasis runs (`\emph`/`\bold` in the
+    /// repo-controlled stdlibs that opt in) and list-bullet fencing,
+    /// emitted by the `inline-mark` primitive. Zero width/height/depth and
+    /// renders nothing, so it contributes zero advance wherever it rides in a
+    /// placed line's `contents`. Read only by the reflow HTML walker (the
+    /// `html-support` branch's `reflow/inline.rs`), which uses
+    /// `EmphStart`/`EmphEnd` to wrap `<em>`/`<strong>` and
+    /// `BulletStart`/`BulletEnd` to suppress the drawn bullet/number glyph run
+    /// (the real marker comes from the `<ul>`/`<ol>` itself).
     InlineMark(InlineMarkKind),
 }
 
-/// The marker kind a `PureHorzBox::InlineMark` carries. `strong` on
-/// `EmphStart` is a naming choice made AT THE WRAP SITE (which stdlib
-/// command calls `inline-mark` with which tag) — not recovered from the box
-/// tree, honest per §5: we map `\emph` -> `EmphStart { strong: false }`
-/// (`<em>`), `\bold`/`\strong` -> `EmphStart { strong: true }`
-/// (`<strong>`).
+/// The marker kind a `PureHorzBox::InlineMark` carries. `strong` is chosen AT
+/// THE WRAP SITE (which stdlib command calls `inline-mark` with which tag),
+/// not recovered from the box tree: `\emph` -> `strong: false` (`<em>`),
+/// `\bold`/`\strong` -> `strong: true` (`<strong>`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InlineMarkKind {
     /// Opens `<em>` (`strong = false`) or `<strong>` (`strong = true`).
@@ -564,19 +500,15 @@ pub const FORCED_BREAK_PENALTY: i32 = -10_000;
 /// slot, unbreakably.
 ///
 /// This is upstream's `LBPure(lphb)`, the `PreventBreak` arm of
-/// `discretionary_if_breakable` (`convertText.ml:189-190`). Upstream inserts
-/// inter-chunk spacing between EVERY pair of adjacent chunks, and only the
-/// *breakability* of that boundary decides which lineBreakBox it becomes:
-/// `AllowBreak` gives `LBDiscretionary(badns, id, [glue], [], [])`,
-/// `PreventBreak` gives a plain `LBPure(glue)`. A pure glue box is not a
-/// breakpoint but its stretch/shrink still count toward the line's elasticity
-/// (`lineBreak.ml`'s `add_width_all` over the accumulated pure boxes).
+/// `discretionary_if_breakable` (`convertText.ml:189-190`). A pure glue box is
+/// not a breakpoint but its stretch/shrink still count toward the line's
+/// elasticity (`lineBreak.ml`'s `add_width_all`).
 ///
 /// The port's box model has no separate "pure elastic box": a bare
 /// `OuterEmpty` IS a breakpoint (`is_glue`). So `PreventBreak` is modelled as a
 /// `Discretionary` with every break slot empty, its content in `no_break`, and
-/// this penalty — which `is_break_point` reads as "not a candidate". That keeps
-/// one code path in `text_to_boxes` for both arms, exactly as upstream has one.
+/// this penalty — which `is_break_point` reads as "not a candidate", keeping
+/// one code path in `text_to_boxes` for both arms.
 pub const NO_BREAK_PENALTY: i32 = i32::MAX;
 
 impl PureHorzBox {
@@ -587,18 +519,16 @@ impl PureHorzBox {
             PureHorzBox::OuterFil => Length::ZERO,
             PureHorzBox::FixedEmpty { width } => *width,
             PureHorzBox::Image { width, .. } => *width,
-            // Un-taken discretionary: renders as `no_break` (§4, hyphenation
-            // — `linebreak.rs`'s `line_content` handles the taken case,
-            // which never reaches this generic accessor). Empty for §3
-            // (UAX#14-only discretionaries), hence zero then.
+            // Un-taken discretionary: renders as `no_break` (hyphenation —
+            // `linebreak.rs`'s `line_content` handles the taken case, which
+            // never reaches this generic accessor). Empty for
+            // UAX#14-only discretionaries, hence zero then.
             PureHorzBox::Discretionary { no_break, .. } => no_break
                 .iter()
                 .map(PureHorzBox::natural_width)
                 .fold(Length::ZERO, |acc, w| acc + w),
             PureHorzBox::Graphics { width, .. } => *width,
-            // Fil semantics: zero natural width, like `OuterFil` — a
-            // resolved box is a `Graphics`, never re-measured as this
-            // variant (see the variant's own doc comment).
+            // Fil semantics: zero natural width, like `OuterFil`.
             PureHorzBox::GraphicsOuter { .. } => Length::ZERO,
             PureHorzBox::Math { width, .. } => *width,
             // `EvHorzHookPageBreak` has width `Length.zero` (pageInfo.ml:42).
@@ -608,17 +538,14 @@ impl PureHorzBox {
             PureHorzBox::Frame { width, .. } => *width,
             PureHorzBox::FrameMarker { .. } => Length::ZERO,
             PureHorzBox::InlineFrameMarker { .. } => Length::ZERO,
-            // Zero width, like `HookPageBreak` (`ImHorzFootnote` is skipped
-            // by every width scan upstream, lineBreak.ml:1200/1254).
+            // `ImHorzFootnote` is skipped by every width scan upstream,
+            // lineBreak.ml:1200/1254.
             PureHorzBox::Footnote { .. } => Length::ZERO,
-            // Zero width — see the variant's own doc comment.
             PureHorzBox::InlineMark(_) => Length::ZERO,
         }
     }
 
-    /// `false` for every variant except the two glue kinds — including the
-    /// new `Image` (an image is exactly as "fixed" a box as `FixedEmpty`),
-    /// which falls out of this `matches!` without needing its own arm.
+    /// `false` for every variant except the two glue kinds.
     pub fn is_glue(&self) -> bool {
         matches!(
             self,
@@ -643,7 +570,7 @@ impl PureHorzBox {
     /// The break's own penalty (TeX's discretionary/`\penalty`
     /// convention): 0 for glue (no preference either way), a
     /// discretionary's own `penalty` otherwise.
-    pub fn break_penalty(&self) -> i32 {
+    pub(crate) fn break_penalty(&self) -> i32 {
         match self {
             PureHorzBox::Discretionary { penalty, .. } => *penalty,
             _ => 0,
@@ -652,7 +579,7 @@ impl PureHorzBox {
 
     /// Whether breaking here is not just legal but mandatory
     /// (`penalty <= FORCED_BREAK_PENALTY`).
-    pub fn is_forced_break(&self) -> bool {
+    pub(crate) fn is_forced_break(&self) -> bool {
         self.break_penalty() <= FORCED_BREAK_PENALTY
     }
 }

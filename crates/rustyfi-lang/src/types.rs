@@ -1,18 +1,16 @@
-//! The type language: base types, the mutable (union-find) representation of
-//! type/row variables, monomorphic and polymorphic types, and level-based
-//! generalization.
-//!
-//! This mirrors `mono_type_main` / `poly_type` / `kind` in v0.0.6's
-//! `src/frontend/types.cppo.ml`, with two deliberate departures documented
-//! at the relevant definitions below:
+//! The type language: base types, the mutable (union-find) representation
+//! of type/row variables, monomorphic and polymorphic types, and
+//! level-based generalization. Mirrors `mono_type_main` / `poly_type` /
+//! `kind` in v0.0.6's `src/frontend/types.cppo.ml`, with two deliberate
+//! departures documented at their definitions:
 //!
 //! 1. **Generalization is level-based (Rémy levels)**, not v0.0.6's
 //!    `quantifiability` flag. See [`TypeContext`], [`generalize`] and
 //!    [`instantiate`].
 //! 2. **Extensible records are a first-class row type** (`Row::Empty` /
-//!    `Row::Var` / `Row::Cons`), not v0.0.6's scheme of a *closed*
-//!    `RecordType` plus a plain type variable that merely carries a
-//!    `RecordKind` label-subset constraint. See [`Row`].
+//!    `Row::Var` / `Row::Cons`), not v0.0.6's closed `RecordType` plus a
+//!    plain type variable carrying a `RecordKind` label-subset constraint.
+//!    See [`Row`].
 
 use std::borrow::Cow;
 use std::cell::RefCell;
@@ -26,12 +24,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 // ============================================================================
 
 /// Primitive types with no internal structure — the subset of v0.0.6's
-/// `base_type` (`types.cppo.ml:255`) that this milestone's primitives need.
-/// (`EnvType`/`RegExpType`/`InputPosType` are not yet used by anything in
-/// `primitives.rs` and are left out; add them here when a primitive needs
-/// them. `ImageType` was added for `load-image`/`use-image-by-width`, and
-/// `PrePathType`/`PathType`/ `GraphicsType` for the Slice-1 graphics
-/// primitives.)
+/// `base_type` (`types.cppo.ml:255`) that this port's primitives
+/// need. (`EnvType`/`RegExpType`/`InputPosType` are unused and left out;
+/// add them when a primitive needs them.)
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum BaseType {
     Unit,
@@ -136,20 +131,18 @@ impl fmt::Display for BaseType {
 // available (see the doc comment on `instantiate` for why that happens).
 // ============================================================================
 
-/// `TypeContext` hands out ids from its own small counter (see below) for
-/// ordinary inference-time freshness. `instantiate` and `unify`'s row
-/// extension, however, have fixed signatures (per this crate's contract)
-/// that carry no `TypeContext`, yet still need to mint brand new variables
-/// (a fresh copy of each generalized variable; a fresh field/remainder pair
-/// when extending an open row). They draw ids from this separate,
-/// process-wide counter instead.
+/// `TypeContext` hands out ids from its own small counter for ordinary
+/// inference-time freshness. `instantiate` and `unify`'s row extension
+/// have fixed signatures carrying no `TypeContext`, yet still need to mint
+/// fresh variables, so they draw ids from this separate, process-wide
+/// counter instead.
 ///
 /// This is purely cosmetic: variable *identity* is always pointer equality
-/// (`TyVarRef::same` / `RowVarRef::same`), never id equality, so the two
+/// (`TyVarRef::same`/`RowVarRef::same`), never id equality, so the two
 /// counters can never collide in any way that affects correctness — at
-/// worst two unrelated variables coming from different sources print with
-/// the same debug id. Seeded far away from `TypeContext`'s own counter just
-/// to make that cosmetic overlap unlikely in small examples/tests.
+/// worst two unrelated variables print with the same debug id. Seeded far
+/// from `TypeContext`'s own counter to make that overlap unlikely in small
+/// examples.
 static FRESH_ID: AtomicU64 = AtomicU64::new(1 << 32);
 
 fn fresh_id() -> u64 {
@@ -163,18 +156,16 @@ fn fresh_id() -> u64 {
 /// The kind of a free type variable.
 ///
 /// `Record(labels)` mirrors v0.0.6's `RecordKind`: it constrains a variable
-/// that is not yet known to be anything in particular, but which field
-/// access (`e#lbl`) or similar has already shown must eventually resolve to
-/// *some* record type containing (at least) `labels`. Unlike v0.0.6's
-/// `RecordKind`, which pairs each required label with its required field
-/// type directly in the kind, this port stores only the label *names* here:
-/// the field types themselves are tracked by the [`Row`] the variable
-/// eventually gets bound to (see `unify::bind_var`'s `Kind::Record` branch).
-/// This is strictly simpler and loses nothing, because in this port a
-/// concrete record's structure is *always* a first-class `Row` — v0.0.6
-/// needed to carry field types in the kind itself because its concrete
-/// `RecordType` has no notion of "the type of label `l`" separate from the
-/// whole closed association list.
+/// not yet known to be anything in particular, but which field access
+/// (`e#lbl`) has already shown must resolve to *some* record type
+/// containing (at least) `labels`. Unlike v0.0.6, which pairs each
+/// required label with its field type directly in the kind, this port
+/// stores only the label *names* here — the field types are tracked by
+/// the [`Row`] the variable eventually binds to (`unify::bind_var`'s
+/// `Kind::Record` branch). This loses nothing because a concrete record's
+/// structure here is *always* a first-class `Row`; v0.0.6 needed field
+/// types in the kind because its closed `RecordType` has no notion of
+/// "the type of label `l`" apart from the whole association list.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Kind {
     Universal,
@@ -188,7 +179,7 @@ pub enum Kind {
 
 /// The mutable union-find cell behind a type variable.
 #[derive(Debug)]
-pub enum TyVarLink {
+enum TyVarLink {
     Free {
         id: u64,
         level: u32,
@@ -228,7 +219,6 @@ impl TyVarRef {
         }
     }
 
-    /// `None` if this variable has already been bound.
     pub fn level(&self) -> Option<u32> {
         match &*self.0.borrow() {
             TyVarLink::Free { level, .. } => Some(*level),
@@ -253,7 +243,6 @@ impl TyVarRef {
         }
     }
 
-    /// No-op if this variable has already been bound.
     pub fn set_kind(&self, new_kind: Kind) {
         if let TyVarLink::Free { kind, .. } = &mut *self.0.borrow_mut() {
             *kind = new_kind;
@@ -284,14 +273,13 @@ pub(crate) fn new_ty_var(level: u32) -> TyVarRef {
 
 // ============================================================================
 // Row variables — the tail of an extensible record row. Structurally a
-// mirror of `TyVarRef`/`TyVarLink`, except its "kind" is simply the set of
-// labels already known to appear in whatever row it eventually resolves to
-// (there is no `Universal` case: an empty set means "no labels required
-// yet", which *is* the universal case for a row).
+// mirror of `TyVarRef`/`TyVarLink`, except its "kind" is the set of labels
+// already known to appear in whatever row it resolves to (no `Universal`
+// case: an empty set already means "no labels required yet").
 // ============================================================================
 
 #[derive(Debug)]
-pub enum RowVarLink {
+enum RowVarLink {
     Free {
         id: u64,
         level: u32,
@@ -474,9 +462,8 @@ impl Stage {
 
 /// A monomorphic type. Mirrors v0.0.6's `mono_type` (the `type_main`
 /// variant instantiated at `mono_type_variable_info ref`), minus
-/// `SynonymType`/`CodeType` (no type synonyms or multi-stage code in this
-/// milestone) and with `Row`-based records instead of a closed `RecordType`
-/// (see the module doc comment and [`Row`]).
+/// `SynonymType` (no type synonyms in this port) and with `Row`-based
+/// records instead of a closed `RecordType` (see [`Row`]).
 #[derive(Clone, Debug)]
 pub enum MonoType {
     Var(TyVarRef),
@@ -484,22 +471,22 @@ pub enum MonoType {
     /// `?(row) dom -> cod` — a function type carrying a labeled
     /// optional-argument [`Row`] (upstream `FuncType of row * typ * typ`,
     /// SATySFi 0.1). The row is `Row::Empty` for every 0.0.6-constructed
-    /// function (see [`crate::prim_types::arrow`]), where it prints nothing
-    /// and unifies trivially, so 0.0.6 behavior is byte-identical. A
+    /// function ([`crate::prim_types::arrow`]), printing nothing and
+    /// unifying trivially, so 0.0.6 behavior is byte-identical. A
     /// non-empty row (`Cons(label, option-payload-type, …)`) records the
     /// value-level `?(l = e)` labeled optional arguments the function
-    /// accepts (SATySFi 0.1 optional-argument rows). The field is
-    /// **positional** (no `..` in any destructure) deliberately: widening
-    /// this variant makes the compiler flag every match site, guarding
-    /// against a silently-dropped row in the sealed-module subsumption path.
+    /// accepts. The field is **positional** (no `..` in any destructure)
+    /// deliberately: widening this variant makes the compiler flag every
+    /// match site, guarding against a silently-dropped row in the
+    /// sealed-module subsumption path.
     ///
-    /// The row is **boxed** (`Box<Row>`, not an inline `Row`) so widening
-    /// `Func` does not enlarge `MonoType` itself (`Row` is a ~40-byte enum;
-    /// inlining it would make `Func` the largest variant and grow every
-    /// stack frame that holds a `MonoType` by value — enough to tip the deep
-    /// recursive typecheck of a large merged program over the default stack).
-    /// A `Box<Row>` keeps `MonoType` at its pre-widening size, so 0.0.6 stack
-    /// usage is unchanged.
+    /// The row is **boxed** (`Box<Row>`, not inline) so widening `Func`
+    /// does not enlarge `MonoType` itself: `Row` is a ~40-byte enum, and
+    /// inlining it would make `Func` the largest variant, growing every
+    /// stack frame holding a `MonoType` by value enough to tip a deep
+    /// recursive typecheck over the default stack. `Box<Row>` keeps
+    /// `MonoType` at its pre-widening size, so 0.0.6 stack usage is
+    /// unchanged.
     Func(Box<Row>, Box<MonoType>, Box<MonoType>),
     /// A tuple type, always with at least two elements.
     Product(Vec<MonoType>),
@@ -509,10 +496,9 @@ pub enum MonoType {
     /// A user-defined variant type applied to its arguments, e.g.
     /// `Variant("option", [int])` for `int option`. Identified by name
     /// rather than by a fresh `TypeID.t` as in v0.0.6 (`types.cppo.ml:318`)
-    /// — this milestone has no notion of shadowing/re-declaring a variant
+    /// — this port has no notion of shadowing/re-declaring a variant
     /// type under the same name within one compilation, so a `String` is
-    /// an adequate (and much simpler) stand-in for v0.0.6's globally-fresh
-    /// `TypeID.t`.
+    /// a simpler stand-in for v0.0.6's globally-fresh `TypeID.t`.
     Variant(String, Vec<MonoType>),
     /// `code ty` — the type of a quoted (`&e`) fragment awaiting the next
     /// stage. Upstream's `CodeType` (`types.cppo.ml:324`). Structurally it
@@ -530,7 +516,7 @@ pub enum MonoType {
 /// One command argument type: `ty` for a mandatory argument, or `ty?` for
 /// an optional one (v0.0.6: `MandatoryArgumentType` / `OptionalArgumentType`,
 /// types.cppo.ml:326-328). `optional`/`opt_labels` are version-discriminated
-/// by construction (optional-arg-rows increment 3a): under `V0_0`
+/// by construction: under `V0_0`
 /// (positional model) `optional` marks a whole-slot `ty?` optional and
 /// `opt_labels` is always empty; under `V0_1` (labeled model, upstream
 /// `CommandArgType of typ LabelMap.t * typ`, `types.cppo.ml:214`) `optional`
@@ -552,22 +538,18 @@ pub struct CmdArgType {
 /// others) or in `Var` (an *open* record — at least these labels, plus
 /// whatever the row variable's eventual binding adds).
 ///
-/// **Deviation from v0.0.6**: v0.0.6 has no such type former. Its
-/// `RecordType` (types.cppo.ml:319) is always closed, and the only
-/// polymorphism available for records is indirect: a plain type variable
-/// can carry a `RecordKind` (a label-typed lower bound), and unifying that
-/// variable against a concrete closed `RecordType` succeeds if the kind's
-/// labels are a subset of the record's (typechecker.ml:480-500,
-/// `Assoc.domain_included`). That scheme cannot express an open record
-/// *type* standing on its own (e.g. as a function's return type) — only a
-/// variable can be "open". Giving rows their own recursive type former
-/// (`Row::Cons`/`Var`/`Empty`, Rémy-style row polymorphism, as used in
-/// e.g. OCaml's own object/polymorphic-variant rows) is strictly more
-/// general, lets `unify` do genuine label-subsumption with a *remainder*
-/// row variable (see `unify::row_extract`), and is the more standard
-/// design for a fresh implementation. `Kind::Record` is kept for the one
-/// case v0.0.6 also has it for: a variable not yet known to be a record at
-/// all (see `Kind`'s doc comment).
+/// **Deviation from v0.0.6**: its `RecordType` (types.cppo.ml:319) is
+/// always closed; the only record polymorphism is indirect, via a plain
+/// type variable carrying a `RecordKind` (a label-typed lower bound) that
+/// unifies against a closed `RecordType` when the kind's labels are a
+/// subset of the record's (typechecker.ml:480-500,
+/// `Assoc.domain_included`) — which cannot express an open record type
+/// standing on its own (only a variable can be "open"). Giving rows their
+/// own recursive type former (`Row::Cons`/`Var`/`Empty`, Rémy-style row
+/// polymorphism) is strictly more general and lets `unify` do genuine
+/// label-subsumption with a *remainder* row variable
+/// (`unify::row_extract`). `Kind::Record` is kept for the one case v0.0.6
+/// also has it for: a variable not yet known to be a record at all.
 #[derive(Clone, Debug)]
 pub enum Row {
     Empty,
@@ -636,29 +618,23 @@ pub fn resolve_row(row: &Row) -> Cow<'_, Row> {
 /// A type scheme: a monomorphic body plus the set of that body's free
 /// variables which are quantified over it.
 ///
-/// **Deviation from v0.0.6**: v0.0.6 (types.cppo.ml:351-364) represents a
-/// generalized variable by *converting* its `MonoFree` cell into a
-/// `PolyBound` id, so the same physical type carries different
-/// representations depending on whether you're looking at it "as a mono
-/// type" or "as a poly type", and instantiating walks the body rebuilding
-/// `PolyBound` occurrences into fresh `MonoFree` cells
-/// (`typechecker.ml`/`typeenv.ml`'s `instantiate`). This port instead keeps
-/// the quantified variables as ordinary (still-`Free`) `TyVarRef`/
-/// `RowVarRef` cells and simply *remembers which ones they are* (`vars`/
-/// `row_vars` below). `instantiate` then deep-copies `body`, replacing each
-/// remembered variable (found by pointer identity, not by re-deriving
-/// "is this quantifiable") with a fresh one, and leaving every other
-/// variable in `body` (i.e. anything free in the surrounding, not-yet-
-/// generalized context) completely untouched and shared. This is the
-/// standard "efficient generalization via levels" technique used by many
-/// modern ML-family implementations; it avoids v0.0.6's need for a
-/// `quantifiability` flag (`Quantifiable`/`Unquantifiable`,
-/// types.cppo.ml:54) to guard against generalizing a variable that
-/// unification has already linked to something outside the current let
-/// binding — here that's instead simply a consequence of levels: a
-/// variable that unification touches from an outer scope gets its level
-/// lowered (see `unify::occurs_var`/`occurs_var_in_row`), so by the time
-/// `generalize` runs, it no longer looks "deep enough" to quantify.
+/// **Deviation from v0.0.6**: v0.0.6 (types.cppo.ml:351-364) converts a
+/// generalized variable's `MonoFree` cell into a `PolyBound` id, so the
+/// same physical type reads differently as "a mono type" vs "a poly type",
+/// and instantiating rebuilds `PolyBound` occurrences into fresh
+/// `MonoFree` cells. This port instead keeps quantified variables as
+/// ordinary (still-`Free`) `TyVarRef`/`RowVarRef` cells and just remembers
+/// which ones they are (`vars`/`row_vars` below); `instantiate` deep-copies
+/// `body`, replacing each remembered variable (by pointer identity) with a
+/// fresh one and leaving everything else shared untouched. This is the
+/// standard "generalization via levels" technique, and it replaces
+/// v0.0.6's `quantifiability` flag (`Quantifiable`/`Unquantifiable`,
+/// types.cppo.ml:54) — which guards against generalizing a variable
+/// unification already linked outside the current let binding — with a
+/// consequence of levels instead: a variable unification touches from an
+/// outer scope gets its level lowered (`unify::occurs_var`/
+/// `occurs_var_in_row`), so by the time `generalize` runs it no longer
+/// looks "deep enough" to quantify.
 #[derive(Clone, Debug)]
 pub struct PolyType {
     vars: Vec<TyVarRef>,
@@ -864,8 +840,8 @@ fn collect_generalizable_row(
 /// Instantiate a scheme: replace every quantified variable with a fresh
 /// one at `level`, leaving everything else in the body shared as-is.
 ///
-/// Note this takes no `&mut TypeContext` (per this module's contract) —
-/// see `FRESH_ID`'s doc comment for how it still mints fresh, correctly
+/// This takes no `&mut TypeContext` (per this module's contract) — see
+/// `FRESH_ID`'s doc comment for how it still mints fresh, correctly
 /// leveled variables.
 pub fn instantiate(poly: &PolyType, level: u32) -> MonoType {
     let mut var_map: HashMap<usize, MonoType> = HashMap::new();
@@ -966,16 +942,15 @@ pub(crate) fn ptr_key(v: &TyVarRef) -> usize {
 // ============================================================================
 // Display — a SATySFi-syntax-ish pretty printer for error messages.
 //
-// This is intentionally not byte-for-byte identical to v0.0.6's own
-// printer (`display.ml`); it exists to make unification error messages
-// readable, and picks a simple, consistent parenthesization convention:
-// atoms (base types, variables, records, argument-less variants) never
-// need parens; `list`/`ref`/single-argument variants are postfix and only
-// parenthesize a compound (function/product) operand; a function's
-// codomain is parenthesized whenever it isn't itself an atom, which is why
-// `int -> (string list)` prints with parens around the list even though
-// `list` binds tighter than `->` (there's no source-level ambiguity here —
-// the parens are purely for readability in error output).
+// Intentionally not byte-for-byte identical to v0.0.6's own printer
+// (`display.ml`); it exists to make unification errors readable, with a
+// simple parenthesization convention: atoms never need parens;
+// `list`/`ref`/single-argument variants are postfix and only parenthesize
+// a compound (function/product) operand; a function's codomain is
+// parenthesized whenever it isn't itself an atom — so `int -> (string
+// list)` gets parens around the list even though `list` binds tighter
+// than `->` (there's no source-level ambiguity; it's purely for
+// readability).
 // ============================================================================
 
 struct VarNamer {
@@ -1027,15 +1002,10 @@ fn is_atomic(ty: &MonoType) -> bool {
     }
 }
 
-/// Needs parens as the operand of a postfix constructor (`list`/`ref`/a
-/// single-argument variant) or as an element of a product.
 fn needs_parens_as_operand(ty: &MonoType) -> bool {
     matches!(ty, MonoType::Func(_, _, _) | MonoType::Product(_))
 }
 
-/// Print `ty` as a postfix/product/function-domain operand, wrapping it in
-/// parens exactly when [`needs_parens_as_operand`] says a bare rendering
-/// would misgroup.
 fn fmt_operand(ty: &MonoType, f: &mut fmt::Formatter<'_>, namer: &mut VarNamer) -> fmt::Result {
     if needs_parens_as_operand(&resolve(ty)) {
         f.write_str("(")?;

@@ -1,28 +1,13 @@
-//! Saphe phase 7d slice S1: the real `http` feature transport under test with
-//! a **mocked local server** — no real internet. A hand-rolled `TcpListener`
-//! loopback server (no new dev-dependency, matching the crate's
-//! dependency-minimal ethos) stands in for a registry's tarball host; the
-//! **index stays a plain local directory**
-//! (git-clone/plain-dir acquisition is unchanged for 7d, only the tarball
-//! fetch is new-network), with `tarball_url` entries pointing at
-//! `http://127.0.0.1:<port>/…`. This exercises the real `ureq` + rustls
-//! client configured in `registry.rs`'s `http` module, not a fake.
+//! Saphe phase 7d slice S1: the real `http` feature transport, tested against
+//! a mocked local server (a hand-rolled `TcpListener` loopback, no real
+//! internet) exercising the actual `ureq` + rustls client in `registry.rs`'s
+//! `http` module. The index stays a plain local directory; only the tarball
+//! fetch is new-network.
 //!
-//! Coverage (S1 cases):
-//! - happy path: fetch → verify → materialise, receipt records the `http://`
-//!   url and sha256;
-//! - 404 and 500 map to `Error::HttpFailed` with no `dist/`/receipt writes;
-//! - a checksum mismatch (server serves the real bytes, index lies about the
-//!   sha256) aborts with `Error::ChecksumMismatch`, no `dist/` writes — same
-//!   guarantee the `file://` transport already has (`tests/registry.rs`);
-//! - a stalled server (accepts, never responds) trips the configured
-//!   connect/read timeout instead of hanging forever.
-//!
-//! This file only runs when the `http` feature is enabled — which is now the
-//! crate's default, so a plain `cargo test -p rustyfi-satyrographos`
-//! exercises it. `cargo test --no-default-features` skips it entirely (no HTTP
-//! client compiled in); `tests/registry.rs`'s `file://`/git coverage keeps
-//! running unconditionally either way.
+//! Runs only when the `http` feature is enabled, which is now the crate's
+//! default; `cargo test --no-default-features` skips this file entirely,
+//! while `tests/registry.rs`'s `file://`/git coverage keeps running either
+//! way.
 
 #![cfg(feature = "http")]
 
@@ -38,10 +23,6 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use rustyfi_satyrographos::{self as sg, InstallOptions, RegistryKind, RegistryOptions, RootOptions};
-
-// ---------------------------------------------------------------------------
-// Temp-dir fixture helper (same pattern as tests/registry.rs).
-// ---------------------------------------------------------------------------
 
 struct TempDir(PathBuf);
 
@@ -201,12 +182,10 @@ fn assert_no_dist_or_receipts(root: &Path) {
     assert_eq!(count, 0, "no receipt may be written");
 }
 
-// ---------------------------------------------------------------------------
 // A minimal loopback HTTP/1.1 server (no new dev-dependency): binds
 // `127.0.0.1:0`, replies to `GET <path>` with a pre-registered `Route`. Each
 // connection is handled on its own thread and closed after one response
 // (`Connection: close`), so no keep-alive bookkeeping is needed.
-// ---------------------------------------------------------------------------
 
 enum Route {
     Body(Vec<u8>),
@@ -276,10 +255,7 @@ impl MockServer {
         format!("http://127.0.0.1:{}{}", self.port, path)
     }
 
-    /// The server's bare origin (no path) — a mirror/sparse-index "base URL"
-    /// (a mirror is a host/prefix substitution applied
-    /// to the primary URL's own path, so a mirror config value is always a
-    /// bare origin like this, never a full resource URL).
+    /// The server's bare origin (no path) — a mirror/sparse-index "base URL".
     fn base_url(&self) -> String {
         format!("http://127.0.0.1:{}", self.port)
     }
@@ -376,10 +352,6 @@ fn handle_conn(
     }
 }
 
-// ---------------------------------------------------------------------------
-// S1 happy path.
-// ---------------------------------------------------------------------------
-
 #[test]
 fn http_registry_install_happy_path() {
     let tmp = TempDir::new("happy");
@@ -420,10 +392,6 @@ fn http_registry_install_happy_path() {
 
     assert_eq!(server.hit_count("/great-package-1.0.0.tar.gz"), 1);
 }
-
-// ---------------------------------------------------------------------------
-// S1 404 / 500.
-// ---------------------------------------------------------------------------
 
 #[test]
 fn http_registry_404_maps_to_http_failed_no_writes() {
@@ -487,11 +455,9 @@ fn http_registry_500_maps_to_http_failed_no_writes() {
     assert_no_dist_or_receipts(&root);
 }
 
-// ---------------------------------------------------------------------------
 // S1 checksum mismatch: server serves the real bytes honestly; the index
 // lies about the sha256. Same "abort before dist/" guarantee as the file://
 // transport (tests/registry.rs's sha256_mismatch_leaves_dist_and_receipts_untouched).
-// ---------------------------------------------------------------------------
 
 #[test]
 fn http_registry_checksum_mismatch_no_dist_writes() {
@@ -522,8 +488,6 @@ fn http_registry_checksum_mismatch_no_dist_writes() {
     );
     assert_no_dist_or_receipts(&root);
 
-    // The server really was reached (this is not a 404 masquerading as a
-    // mismatch) and the download was cleaned out of tmp/.
     assert_eq!(server.hit_count("/great-package-1.0.0.tar.gz"), 1);
     let tmp_dir = root.join(".satyrographos/tmp");
     let leftovers = fs::read_dir(&tmp_dir)
@@ -532,14 +496,12 @@ fn http_registry_checksum_mismatch_no_dist_writes() {
     assert_eq!(leftovers, 0, "unverified download must be cleaned up");
 }
 
-// ---------------------------------------------------------------------------
 // S1 timeout: a stalled server must not hang the install past the configured
-// budget. `RUSTYFI_HTTP_TIMEOUT` (registry.rs's http::TIMEOUT_ENV) is set to a
+// budget. `RUSTYFI_HTTP_TIMEOUT` (`sg::registry::HTTP_TIMEOUT_ENV`) is set to a
 // small value for the duration of this test so it does not have to wait out
 // the real 30s default; `get_to_file` reads the env var fresh on every call,
 // so this takes effect immediately and the process-wide mutation only needs
 // to outlive this one synchronous call.
-// ---------------------------------------------------------------------------
 
 #[test]
 fn http_registry_timeout_errors_within_configured_budget() {
@@ -566,14 +528,14 @@ fn http_registry_timeout_errors_within_configured_budget() {
     // server regardless of the timeout budget, so a race would not make them
     // flaky even if one occurred.
     unsafe {
-        std::env::set_var("RUSTYFI_HTTP_TIMEOUT", "1");
+        std::env::set_var(sg::registry::HTTP_TIMEOUT_ENV, "1");
     }
     let started = Instant::now();
     let err = sg::install_registry("great-package", None, &install_opts(&root), &reg, None)
         .expect_err("a stalled server must time out, not hang");
     let elapsed = started.elapsed();
     unsafe {
-        std::env::remove_var("RUSTYFI_HTTP_TIMEOUT");
+        std::env::remove_var(sg::registry::HTTP_TIMEOUT_ENV);
     }
 
     assert!(
@@ -588,12 +550,10 @@ fn http_registry_timeout_errors_within_configured_budget() {
     assert_no_dist_or_receipts(&root);
 }
 
-// ---------------------------------------------------------------------------
 // Saphe 7d slice S3: bearer-token auth. `RUSTYFI_REGISTRY_TOKEN`
-// (`registry.rs`'s `http::AUTH_TOKEN_ENV`) is attached as `Authorization:
+// (`sg::registry::REGISTRY_TOKEN_ENV`) is attached as `Authorization:
 // Bearer <token>` on every tarball GET; `get_to_file` reads it fresh per call,
 // same discipline as the timeout test's `RUSTYFI_HTTP_TIMEOUT` above.
-// ---------------------------------------------------------------------------
 
 // Both the "no token configured" and "token configured" cases live in ONE
 // test function (rather than two `#[test]`s) so the `RUSTYFI_REGISTRY_TOKEN`
@@ -605,7 +565,6 @@ fn http_registry_timeout_errors_within_configured_budget() {
 fn http_registry_bearer_token_header_matches_configuration() {
     let tmp = TempDir::new("auth");
 
-    // No token configured: no Authorization header sent.
     {
         let (bytes, sha) = make_tarball_bytes(&tmp, "no-token-pkg", "1.0.0", "let x = 1\n");
         let server = MockServer::start(vec![("/no-token-pkg-1.0.0.tar.gz", Route::Body(bytes))]);
@@ -631,7 +590,6 @@ fn http_registry_bearer_token_header_matches_configuration() {
         );
     }
 
-    // Token configured: every tarball GET carries it as a bearer token.
     {
         let (bytes, sha) = make_tarball_bytes(&tmp, "token-pkg", "1.0.0", "let y = 1\n");
         let server = MockServer::start(vec![("/token-pkg-1.0.0.tar.gz", Route::Body(bytes))]);
@@ -657,11 +615,11 @@ fn http_registry_bearer_token_header_matches_configuration() {
         // (never interleaved with the "no token" case above, which already
         // completed).
         unsafe {
-            std::env::set_var("RUSTYFI_REGISTRY_TOKEN", "s3kr1t");
+            std::env::set_var(sg::registry::REGISTRY_TOKEN_ENV, "s3kr1t");
         }
         let result = sg::install_registry("token-pkg", None, &install_opts(&root), &reg, None);
         unsafe {
-            std::env::remove_var("RUSTYFI_REGISTRY_TOKEN");
+            std::env::remove_var(sg::registry::REGISTRY_TOKEN_ENV);
         }
         result.expect("install with a configured token still succeeds");
 
@@ -673,19 +631,15 @@ fn http_registry_bearer_token_header_matches_configuration() {
     }
 }
 
-// ===========================================================================
 // Saphe phase 7d slice S2: content-addressed archive cache + `--offline`.
 // Every case here shares ONE mock server (a real `ureq`
 // GET, request-counted) and ONE archive-cache dir across MULTIPLE installs
 // into SEPARATE fresh roots — so a second install that hits ZERO GETs proves
 // the *cache* short-circuited the fetch, not the reconcile receipt-skip
 // (which a same-root re-install would trigger for an unrelated reason).
-// ===========================================================================
 
-/// Registry options pointed at a `file://` plain-dir index plus an explicit
-/// archive-cache dir, in the given offline mode. The index is always local
-/// (never network), so these tests isolate the *archive* cache /
-/// offline behaviour, not index acquisition.
+/// The index is always local (never network), so these tests isolate the
+/// *archive* cache / offline behaviour, not index acquisition.
 fn reg_cached(index: &Path, cache: &Path, offline: bool) -> RegistryOptions {
     RegistryOptions {
         url: Some(format!("file://{}", index.display())),
@@ -707,7 +661,6 @@ fn s2_warm_cache_second_install_makes_zero_gets() {
     let index = write_index(&tmp, "great-package", "1.0.0", &server.url(route), &sha);
     let cache = tmp.path().join("archive-cache");
 
-    // Cold cache: one real GET fills the cache.
     let root1 = tmp.path().join("root1");
     sg::install_registry(
         "great-package",
@@ -720,7 +673,6 @@ fn s2_warm_cache_second_install_makes_zero_gets() {
     assert_eq!(server.hit_count(route), 1, "cold install fetches once");
     assert!(cache.join(format!("{sha}.tar.gz")).is_file(), "cache populated by sha");
 
-    // Warm cache, fresh root: zero further GETs, still installs.
     let root2 = tmp.path().join("root2");
     sg::install_registry(
         "great-package",
@@ -746,7 +698,6 @@ fn s2_offline_warm_cache_succeeds_zero_gets() {
     let index = write_index(&tmp, "great-package", "1.0.0", &server.url(route), &sha);
     let cache = tmp.path().join("archive-cache");
 
-    // Warm the cache with one online install.
     sg::install_registry(
         "great-package",
         None,
@@ -757,7 +708,6 @@ fn s2_offline_warm_cache_succeeds_zero_gets() {
     .expect("warm-up install ok");
     assert_eq!(server.hit_count(route), 1);
 
-    // Offline, fresh root: served entirely from cache, zero GETs.
     let root = tmp.path().join("offline-root");
     sg::install_registry(
         "great-package",
@@ -782,7 +732,7 @@ fn s2_offline_cold_cache_errors_without_network() {
     let server = MockServer::start(vec![("/great-package-1.0.0.tar.gz", Route::Body(bytes))]);
     let route = "/great-package-1.0.0.tar.gz";
     let index = write_index(&tmp, "great-package", "1.0.0", &server.url(route), &sha);
-    let cache = tmp.path().join("empty-cache"); // never populated
+    let cache = tmp.path().join("empty-cache");
 
     let root = tmp.path().join("root");
     let err = sg::install_registry(
@@ -797,7 +747,6 @@ fn s2_offline_cold_cache_errors_without_network() {
         sg::Error::Offline { url } => assert!(url.contains("great-package-1.0.0.tar.gz"), "{err}"),
         other => panic!("expected Error::Offline, got {other}"),
     }
-    // No request was ever made, and nothing was installed.
     assert_eq!(server.hit_count(route), 0, "offline must not touch the network");
     assert_no_dist_or_receipts(&root);
 }
@@ -815,7 +764,6 @@ fn s2_corrupted_cache_entry_is_refetched_and_offline_errors() {
     let index = write_index(&tmp, "great-package", "1.0.0", &server.url(route), &sha);
     let cache = tmp.path().join("archive-cache");
 
-    // Warm the cache, then corrupt the cached archive's bytes in place.
     sg::install_registry(
         "great-package",
         None,
@@ -829,7 +777,6 @@ fn s2_corrupted_cache_entry_is_refetched_and_offline_errors() {
     assert!(cached_path.is_file());
     fs::write(&cached_path, b"corrupted not-a-tarball").expect("corrupt the cache entry");
 
-    // Offline: the corrupt entry cannot be trusted and cannot be re-fetched.
     let offline_root = tmp.path().join("offline-root");
     let err = sg::install_registry(
         "great-package",
@@ -846,8 +793,6 @@ fn s2_corrupted_cache_entry_is_refetched_and_offline_errors() {
     assert_eq!(server.hit_count(route), 1, "offline must not re-fetch");
     assert_no_dist_or_receipts(&offline_root);
 
-    // Online: the corrupt entry is discarded and re-fetched (one more GET),
-    // the cache is repaired, and the install succeeds with the honest bytes.
     let online_root = tmp.path().join("online-root");
     sg::install_registry(
         "great-package",
@@ -861,7 +806,6 @@ fn s2_corrupted_cache_entry_is_refetched_and_offline_errors() {
     assert!(online_root
         .join("dist/packages/great-package/great-package.satyh")
         .is_file());
-    // The cache was repaired to the honest bytes (re-verifies against sha).
     assert_eq!(
         sha256_of_bytes(&fs::read(&cached_path).unwrap()),
         sha,
@@ -869,17 +813,13 @@ fn s2_corrupted_cache_entry_is_refetched_and_offline_errors() {
     );
 }
 
-// ===========================================================================
 // Slice M: registry mirror-list fallback. Two independent loopback servers
-// stand in for a primary
-// registry host and a mirror host; `RegistryOptions::mirrors` is a **bare
-// origin** (a mirror is a host/prefix substitution applied to the
-// primary URL's own path — [`MockServer::base_url`]), rewritten against the
-// index's `tarball_url` by `registry::rewrite_to_mirror`.
-// ===========================================================================
+// stand in for a primary registry host and a mirror host;
+// `RegistryOptions::mirrors` is a **bare origin** (a mirror is a host/prefix
+// substitution applied to the primary URL's own path — [`MockServer::
+// base_url`]), rewritten against the index's `tarball_url` by
+// `registry::rewrite_to_mirror`.
 
-/// Registry options pointed at a `file://` plain-dir index, an isolated
-/// archive cache, and (optionally) a mirror candidate list.
 fn reg_with_mirrors(index: &Path, cache: &Path, mirrors: Vec<String>) -> RegistryOptions {
     RegistryOptions {
         url: Some(format!("file://{}", index.display())),
@@ -938,8 +878,6 @@ fn mirrors_bad_bytes_falls_through_to_good_mirror() {
 
     assert_eq!(primary.hit_count(path), 1, "the corrupt primary is tried once");
     assert_eq!(mirror.hit_count(path), 1, "the good mirror serves the successful fetch");
-    // The cache holds ONLY the honest bytes (verified before the cache write,
-    // so the primary's bad bytes never touched it even transiently).
     let cached_path = cache.join(format!("{sha}.tar.gz"));
     assert_eq!(
         sha256_of_bytes(&fs::read(&cached_path).unwrap()),
@@ -990,15 +928,12 @@ fn mirrors_warm_cache_tries_zero_urls() {
     let index = write_index(&tmp, "great-package", "1.0.0", &primary.url(path), &sha);
     let cache = isolated_cache(&tmp);
 
-    // Cold cache, no mirrors configured yet: one real GET fills the cache.
     let root1 = tmp.path().join("root1");
     let reg_cold = reg_with_mirrors(&index, &cache, vec![]);
     sg::install_registry("great-package", None, &install_opts(&root1), &reg_cold, None)
         .expect("cold install ok");
     assert_eq!(primary.hit_count(path), 1, "cold install fetches once");
 
-    // Warm cache, fresh root, NOW with mirrors configured: zero further GETs
-    // to primary or mirror.
     let root2 = tmp.path().join("root2");
     let reg_warm = reg_with_mirrors(&index, &cache, vec![mirror.base_url()]);
     sg::install_registry("great-package", None, &install_opts(&root2), &reg_warm, None)
@@ -1010,13 +945,11 @@ fn mirrors_warm_cache_tries_zero_urls() {
         .is_file());
 }
 
-// ===========================================================================
 // Slice S: sparse HTTP index. `packages/<name>.toml` is fetched
 // on demand over HTTP from a mocked loopback server instead of being
 // git-cloned/read from a plain directory — `RegistryConfig`/`RegistryOptions`
 // `kind = Sparse` selects the transport; `lookup` is backend-aware; the
 // solver (`solve.rs`/`RegistryDepSource`) is untouched.
-// ===========================================================================
 
 /// A `[versions."<v>"]` sparse-index TOML body, matching the exact
 /// `PackageIndex`/`VersionEntry` schema a local/git index already parses (no
@@ -1178,7 +1111,6 @@ fn sparse_with_mirrors_falls_back() {
         "/packages/great-package.toml",
         Route::Status(500, "Internal Server Error"),
     )]);
-    // The mirror's index entry self-references its own tarball route.
     let mirror = MockServer::start_self_referencing(|port| {
         let base = format!("http://127.0.0.1:{port}");
         vec![
@@ -1243,7 +1175,6 @@ fn sparse_lockfile_reproducible_offline() {
     let manifest = write_sparse_manifest(&tmp, &server.base_url(), &[], "great-package", "1.0.0");
     let cache = isolated_cache(&tmp);
 
-    // First: online reconcile, warms the archive cache and writes the lock.
     let root1 = tmp.path().join("root1");
     let reg_online = RegistryOptions {
         archive_cache_dir: Some(cache.clone()),

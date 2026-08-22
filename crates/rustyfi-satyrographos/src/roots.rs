@@ -11,13 +11,13 @@ use std::path::{Path, PathBuf};
 use crate::error::Error;
 
 /// The marker/bookkeeping directory under a managed root.
-pub const MANAGED_DIR: &str = ".satyrographos";
+const MANAGED_DIR: &str = ".satyrographos";
 
 /// A checked-out source tree's own root — the development case.
-pub const DEV_DIR: &str = "lib-rustyfi";
+const DEV_DIR: &str = "lib-rustyfi";
 
 /// A project-local root, beside the `Satyristes` that describes the project.
-pub const LOCAL_DIR: &str = ".rustyfi";
+const LOCAL_DIR: &str = ".rustyfi";
 
 /// Under a user or system prefix, the layout the release archive unpacks to
 /// (`<prefix>/{bin,lib,share}`), so untarring one into `~/.local` or
@@ -45,7 +45,7 @@ const PREFIX_SUFFIX: &str = "lib/rustyfi";
 /// Existence is the whole test for 1 and 2 — a directory of either name is a
 /// deliberate marker. The prefixes in 3 and 4 are ordinary locations that
 /// merely might exist, so they must actually hold a `dist/` to count.
-pub fn discover(start: &Path) -> Option<PathBuf> {
+pub(crate) fn discover(start: &Path) -> Option<PathBuf> {
     discover_all(start).into_iter().next()
 }
 
@@ -57,7 +57,7 @@ pub fn discover(start: &Path) -> Option<PathBuf> {
 /// of its `@require:`s from the development tree or the system install, the
 /// same way upstream SATySFi searches `$CWD/.satysfi`, `$HOME/.satysfi` and
 /// `/usr/share/satysfi` in turn and takes the first root that has the file.
-/// Only the FIRST entry is a write target (see [`resolve_root`]); the rest are
+/// Only the FIRST entry is a write target (see `resolve_root`); the rest are
 /// there to read from.
 ///
 /// Duplicates are dropped, so a root reachable two ways (say the walk reaches
@@ -116,19 +116,15 @@ pub fn discover_all(start: &Path) -> Vec<PathBuf> {
 }
 
 /// The prefix this executable is installed under: `<prefix>/bin/rustyfi`
-/// yields `<prefix>`.
-///
-/// This is what makes an unpacked archive self-contained wherever it lands —
-/// `/opt/rustyfi`, a home directory, a build tree — without exporting
-/// anything. `current_exe` resolves symlinks, so a link in `~/bin` pointing
-/// into the install still finds the install.
-pub fn exe_prefix() -> Option<PathBuf> {
+/// yields `<prefix>`. `current_exe` resolves symlinks, so a link in `~/bin`
+/// pointing into the install still finds the install.
+pub(crate) fn exe_prefix() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     exe.parent()?.parent().map(Path::to_path_buf)
 }
 
 /// The user-wide root, then the system-wide ones, in search order.
-pub fn prefix_roots() -> Vec<PathBuf> {
+fn prefix_roots() -> Vec<PathBuf> {
     let mut roots = Vec::new();
     // This binary's own `<prefix>/lib/rustyfi` first: a program shipped with
     // its packages should use THOSE, not another copy that happens to be
@@ -162,7 +158,7 @@ pub fn prefix_roots() -> Vec<PathBuf> {
 /// If none is available, [`Error::RootResolution`] (CLI exit `3`). `dest`
 /// and `lib_root` are mutually exclusive at the CLI (an `ArgGroup`); if both
 /// somehow arrive here, `dest` wins.
-pub fn resolve_root(lib_root: Option<&Path>, dest: Option<&Path>) -> Result<PathBuf, Error> {
+fn resolve_root(lib_root: Option<&Path>, dest: Option<&Path>) -> Result<PathBuf, Error> {
     if let Some(dest) = dest {
         return Ok(dest.to_path_buf());
     }
@@ -184,11 +180,10 @@ pub fn resolve_root(lib_root: Option<&Path>, dest: Option<&Path>) -> Result<Path
 
 /// The shared `--lib-root`/`--dest` root selection carried by both
 /// [`InstallOptions`](crate::ops::install::InstallOptions) and
-/// [`RootOptions`](crate::ops::uninstall::RootOptions). Implementing it in one
-/// place keeps every operation's root resolution identical: the install/
-/// reconcile/registry paths go through [`resolve_managed_root`] (which
-/// also lays down the `.satyrographos/` skeleton), and the read-only
-/// list/status/uninstall paths through [`resolve_root`].
+/// [`RootOptions`](crate::ops::uninstall::RootOptions): install/reconcile/
+/// registry paths go through [`resolve_managed_root`] (which also lays down
+/// the `.satyrographos/` skeleton); read-only list/status/uninstall paths
+/// go through [`resolve_root`].
 ///
 /// [`resolve_managed_root`]: RootSelection::resolve_managed_root
 /// [`resolve_root`]: RootSelection::resolve_root
@@ -214,20 +209,14 @@ pub(crate) trait RootSelection {
 }
 
 /// The `<root>/.satyrographos/` bookkeeping directory.
-pub fn managed_dir(root: &Path) -> PathBuf {
+fn managed_dir(root: &Path) -> PathBuf {
     root.join(MANAGED_DIR)
-}
-
-/// Whether `root` is already managed by this tool (its `.satyrographos/`
-/// marker exists, even if empty) — the managed-root check.
-pub fn is_managed(root: &Path) -> bool {
-    managed_dir(root).is_dir()
 }
 
 /// Ensure `root` is a managed root, creating the `.satyrographos/`,
 /// `.satyrographos/receipts/`, and `.satyrographos/tmp/` skeleton on first
 /// use — `install`/`uninstall` create it on first use. Idempotent.
-pub fn ensure_managed(root: &Path) -> Result<(), Error> {
+fn ensure_managed(root: &Path) -> Result<(), Error> {
     for sub in [managed_dir(root), receipts_dir(root), tmp_dir(root)] {
         std::fs::create_dir_all(&sub).map_err(|e| Error::io(&sub, e))?;
     }
@@ -235,13 +224,13 @@ pub fn ensure_managed(root: &Path) -> Result<(), Error> {
 }
 
 /// `<root>/.satyrographos/receipts/`.
-pub fn receipts_dir(root: &Path) -> PathBuf {
+pub(crate) fn receipts_dir(root: &Path) -> PathBuf {
     managed_dir(root).join("receipts")
 }
 
 /// `<root>/.satyrographos/tmp/` — staging and archive extraction, kept under
 /// `<root>` so the final rename into `dist/` is same-filesystem/atomic.
-pub fn tmp_dir(root: &Path) -> PathBuf {
+pub(crate) fn tmp_dir(root: &Path) -> PathBuf {
     managed_dir(root).join("tmp")
 }
 
@@ -288,8 +277,6 @@ mod tests {
 
     #[test]
     fn a_local_dir_without_a_satyristes_is_not_a_root() {
-        // Otherwise a stray `.rustyfi/` high up the filesystem would capture
-        // every document beneath it.
         let root = tmp("local-unmarked");
         fs::create_dir_all(root.join(LOCAL_DIR)).unwrap();
         assert_ne!(discover(&root), Some(root.join(LOCAL_DIR)));
@@ -297,8 +284,6 @@ mod tests {
 
     #[test]
     fn the_nearest_directory_wins_over_a_higher_one() {
-        // A project-local root in the directory you are standing in beats a
-        // development tree further up.
         let outer = tmp("nearest");
         fs::create_dir_all(outer.join(DEV_DIR)).unwrap();
         let inner = outer.join("vendor/thing");
@@ -319,9 +304,6 @@ mod tests {
 
     #[test]
     fn a_project_local_root_layers_over_the_wider_one() {
-        // The point of a search PATH: `.rustyfi/` carries what the project
-        // installed for itself, and everything else still resolves from the
-        // tree above it.
         let outer = tmp("layered");
         fs::create_dir_all(outer.join(DEV_DIR).join("dist/packages")).unwrap();
         let proj = outer.join("proj");
@@ -335,8 +317,6 @@ mod tests {
 
     #[test]
     fn a_relative_start_still_walks_upward() {
-        // `parent()` of a bare `doc.saty` is `""`, and `absolute("")` is an
-        // error, so an unguarded walk sees only the working directory.
         let root = tmp("relative");
         fs::create_dir_all(root.join(DEV_DIR)).unwrap();
         let deep = root.join("a/b");
@@ -352,9 +332,6 @@ mod tests {
 
     #[test]
     fn a_path_through_dotdot_does_not_re_enter_the_directory_it_left() {
-        // `absolute()` only prefixes the working directory, so walking
-        // `root/../other` upward would pass through `root` itself and find its
-        // tree — a root the path was pointing AWAY from.
         let base = tmp("dotdot");
         let root = base.join("root");
         let other = base.join("other/doc");

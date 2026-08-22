@@ -1,4 +1,4 @@
-//! Match exhaustiveness and redundancy checking (Slice 1) — a row-major
+//! Match exhaustiveness and redundancy checking — a row-major
 //! reimplementation of the Maranget "usefulness"
 //! matrix algorithm v0.0.6 uses in `src/frontend/exhchecker.ml`. Non-fatal:
 //! this module only produces [`MatchWarning`]s, never a [`crate::typecheck::TypeError`]
@@ -16,10 +16,10 @@
 //!   this is `None` (it matches nothing the earlier arms don't already).
 //!
 //! **Port-specific adaptation (read this before touching `specialize`):**
-//! v0.0.6 gives every constructor exactly one sub-pattern (unit for
-//! nullary). This port's [`Pattern::Ctor`] carries `Option<Box<Pattern>>`,
-//! so a constructor's arity is 0 or 1 — a nullary ctor (`None`, `A`) expands
-//! into **zero** sub-columns, not one. Get this wrong and `None`/`[]`-style
+//! this port's [`Pattern::Ctor`] carries `Option<Box<Pattern>>`, so a
+//! constructor's arity is 0 or 1 — a nullary ctor (`None`, `A`) expands into
+//! **zero** sub-columns, not one (v0.0.6 gives every constructor exactly one
+//! sub-pattern, unit for nullary). Get this wrong and `None`/`[]`-style
 //! matches miscount.
 
 use crate::ast::branded::{MatchArm, Pattern};
@@ -32,9 +32,9 @@ use std::rc::Rc;
 
 /// A non-fatal diagnostic from this pass: either "this match may not be
 /// exhaustive" (with a witness pattern baked into `message`) or "this arm is
-/// unreachable". `span` is best-effort (see `TypeError`'s doc comment on the
-/// same theme) — patterns carry no span of their own, so it falls back to
-/// the scrutinee's or the arm body's span, or `None`.
+/// unreachable". `span` is best-effort — patterns carry no span of their
+/// own, so it falls back to the scrutinee's or the arm body's span, or
+/// `None`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct MatchWarning {
     pub span: Option<Span>,
@@ -51,7 +51,6 @@ enum HeadKey {
     Bool(bool),
     Int(i64),
     Str(String),
-    /// The one-and-only tuple "constructor" for an arity-`n` product type.
     Tuple(usize),
     EmptyList,
     Cons,
@@ -61,17 +60,14 @@ enum HeadKey {
 /// One row/column entry of the usefulness matrix: `Vec<Pattern>` (a row),
 /// `Vec<Vec<Pattern>>` (a whole matrix `P`). Patterns are cloned freely
 /// throughout this module rather than borrowed — matches are small
-/// hand-written things, not a performance-critical path (matrix blow-up
-/// needs no mitigation at this milestone).
+/// hand-written things, not a performance-critical path.
 type Matrix<'s> = Vec<Vec<Pattern<'s>>>;
 
 /// Classify a pattern's head shape, normalizing away `Var`/`As` first
-/// (`exhchecker.ml`'s `normalize_pat`, lines 151-158: a bare variable is
-/// just a wildcard; `pat as name` is its inner pattern). Returns `None` for
-/// a wildcard (nothing further constrains the value there), else the head
-/// key plus that head's sub-patterns (0, 1, or 2 of them: literals/nullary
-/// ctors/`[]` have none, `Ctor(_, Some(p))` has one, `Cons` has two, `Tuple`
-/// has as many as its arity).
+/// (`exhchecker.ml`'s `normalize_pat`, lines 151-158). Returns `None` for a
+/// wildcard, else the head key plus that head's sub-patterns (0, 1, or 2 of
+/// them: literals/nullary ctors/`[]` have none, `Ctor(_, Some(p))` has one,
+/// `Cons` has two, `Tuple` has as many as its arity).
 fn head_of<'s>(p: &Pattern<'s>) -> Option<(HeadKey, Vec<Pattern<'s>>)> {
     match p {
         Pattern::Wild | Pattern::Var(_) => None,
@@ -94,9 +90,7 @@ fn head_of<'s>(p: &Pattern<'s>) -> Option<(HeadKey, Vec<Pattern<'s>>)> {
 
 /// Render a witness (or matrix) pattern back to source-ish text, e.g.
 /// `Some(_)`, `_ :: _`, `[]`, `(_, true)` (mirrors `pattern_instance` /
-/// `string_of_instance`, exhchecker.ml 16-25, 117-148) — only ever called on
-/// patterns this module builds itself (or copies from the source), so every
-/// variant is worth spelling out reasonably.
+/// `string_of_instance`, exhchecker.ml 16-25, 117-148).
 ///
 /// Pattern-bound *variables* are interned, so this takes the store and
 /// resolves them back to their source text — the rendered string lands
@@ -127,10 +121,9 @@ fn render_pattern<'s>(store: &'s SymbolStore, p: &Pattern<'s>) -> String {
 
 /// The full constructor signature of a column's type — `complete_sig`
 /// (exhchecker.ml 299-310), adapted: rather than a special "always
-/// complete" case for products, `Product` is simply modeled as a
-/// one-constructor `Finite` signature (arity = element count), which the
-/// generic Finite-vs-`Signature` completeness check already handles
-/// correctly whether or not any row actually spells out a tuple pattern.
+/// complete" case for products, `Product` is modeled as a one-constructor
+/// `Finite` signature (arity = element count), which the generic
+/// Finite-vs-`Signature` completeness check already handles correctly.
 enum Signature {
     /// Every `(head, arity)` this type could ever match on. Completeness of
     /// a matrix column is "does its set of observed heads cover all of
@@ -168,8 +161,7 @@ fn signature(rty: &MonoType, variants: &HashMap<String, Rc<VariantDecl>>) -> Sig
             // rather than risk under-reporting.
             None => Signature::Infinite,
         },
-        // `int`/`string`/`float`/`length`/an unresolved `Var`/any other base
-        // or type former this grammar has no pattern syntax for.
+        // Any other base/type former this grammar has no pattern syntax for.
         _ => Signature::Infinite,
     }
 }
@@ -178,8 +170,8 @@ fn signature(rty: &MonoType, variants: &HashMap<String, Rc<VariantDecl>>) -> Sig
 /// column of type `rty` (only meaningful when `head` is actually one of
 /// `rty`'s constructors, which is always true for every call site below).
 /// Returns 0, 1, or 2 types — the tuple case aside, arity is always 0 or 1
-/// per this port's `Ctor` payload shape (see this module's top doc
-/// comment), and `Cons` is the sole arity-2 case (head element, tail list).
+/// per this port's `Ctor` payload shape, and `Cons` is the sole arity-2
+/// case (head element, tail list).
 fn sub_types_for(
     head: &HeadKey,
     rty: &MonoType,
@@ -205,10 +197,8 @@ fn sub_types_for(
 /// guards `usefulness`'s `split_at` against ever panicking if a type-side
 /// lookup above returns an unexpected count (should not happen after a
 /// successful typecheck, but this pass must never crash the compiler over a
-/// warning). The filler type's identity doesn't matter: it is only ever
-/// reached through a defensive mismatch, and even then only constrains a
-/// position that a well-typed program can only ever put a wildcard/var
-/// against.
+/// warning). The filler type's identity doesn't matter: it only reaches a
+/// position a well-typed program can only put a wildcard/var against.
 fn pad_types(mut tys: Vec<MonoType>, arity: usize) -> Vec<MonoType> {
     while tys.len() < arity {
         tys.push(MonoType::Base(BaseType::Unit));
@@ -241,9 +231,7 @@ fn wildcards<'s>(arity: usize) -> Vec<Pattern<'s>> {
 /// type not already covered by the literals seen so far" — used only when
 /// `signature` says `Infinite`. `int`/`string` get an honest fresh literal
 /// (smallest int, or shortest string, not already in `sigma`); anything else
-/// (an unresolved type variable, or any base type this grammar has no
-/// literal-pattern syntax for) falls back to `_`, which is always
-/// acceptable as a "some other value" witness.
+/// falls back to `_`, which is always acceptable as a witness.
 fn infinite_witness<'s>(rty: &MonoType, sigma: &HashSet<HeadKey>) -> Pattern<'s> {
     match rty {
         MonoType::Base(BaseType::Int) => {
@@ -323,9 +311,9 @@ fn column_heads<'s>(matrix: &Matrix<'s>) -> HashSet<HeadKey> {
 // ============================================================================
 
 /// Read-only context threaded through the recursion: the variant-type table
-/// (`Checker::variants`, keyed by *type* name — see `typecheck.rs`), needed
-/// to enumerate a user variant's full constructor set and to instantiate a
-/// chosen constructor's payload type.
+/// (`Checker::variants`, keyed by *type* name), needed to enumerate a user
+/// variant's full constructor set and to instantiate a chosen constructor's
+/// payload type.
 struct Ctx<'a> {
     variants: &'a HashMap<String, Rc<VariantDecl>>,
 }
@@ -423,16 +411,15 @@ fn usefulness<'s>(
 // ============================================================================
 
 /// Check one `match`'s arms for redundancy and exhaustiveness, given the
-/// (already as-resolved-as-inference-will-make-it) scrutinee type. Called
-/// from `typecheck.rs`'s `Ast::Match` rule, after its arm-typing loop.
+/// (already as-resolved-as-inference-will-make-it) scrutinee type.
 ///
 /// Guarded arms (`MatchArm.guard.is_some()`) may fail at runtime, so they
-/// never contribute coverage: they are skipped entirely (never checked for
+/// never contribute coverage: skipped entirely (never checked for
 /// redundancy, never added to the growing matrix), matching
 /// `exhchecker.ml`'s separate `nonexh_guard` tracking (lines 358-360). A
 /// match whose only catch-all is guarded is therefore correctly reported
 /// non-exhaustive.
-pub fn check_match<'s>(
+pub(crate) fn check_match<'s>(
     store: &'s SymbolStore,
     scrutinee_ty: &MonoType,
     scrutinee_span: Option<Span>,

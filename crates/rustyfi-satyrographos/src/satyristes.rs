@@ -1,9 +1,9 @@
 //! Minimal S-expression reader for real (OCaml) Satyrographos `Satyristes`
 //! build files (phase 4). This is an alternative *front-end* for
-//! the same [`crate::manifest::PackagePlan`] the `rustyfi-package.toml`
+//! the same `manifest::PackagePlan` the `rustyfi-package.toml`
 //! parser produces — a `Satyristes` is read into one `manifest::Manifest`
 //! per `(library ...)` block and run through the exact same
-//! [`crate::manifest::plan_from_manifest`] destination logic, so the two
+//! `manifest::plan_from_manifest` destination logic, so the two
 //! formats stay byte-for-byte identical in where files land.
 //!
 //! ## Grammar (hand-rolled, ~cf. sexplib)
@@ -34,7 +34,7 @@
 //! | `(hash "dst" "src")` | `Hash` (lands flat in `dist/hash/<dst>`) |
 //! | `(md "dst" "src")` | `Md` |
 //! | `(doc "dst" "src")` | `Doc` (also how a `(libraryDoc ...)` block's own
-//!   `(sources ...)` are read — see [`doc_target_plan`]) |
+//!   `(sources ...)` are read — see `doc_target_plan`) |
 //! | `(file "dst" "src")` | `File` |
 
 use std::collections::BTreeMap;
@@ -46,11 +46,7 @@ use crate::source::{LibraryEntry, RegistryConfig, RegistryKind, SourceSpec};
 use crate::util;
 
 /// The upstream build-file name.
-pub const SATYRISTES_NAME: &str = "Satyristes";
-
-// ---------------------------------------------------------------------------
-// Reader: tokenizer + recursive-descent S-expression parser.
-// ---------------------------------------------------------------------------
+pub(crate) const SATYRISTES_NAME: &str = "Satyristes";
 
 /// A parsed S-expression node.
 #[derive(Debug, Clone, PartialEq)]
@@ -221,16 +217,12 @@ fn parse(input: &str) -> Result<Vec<Sexp>, ParseError> {
     Reader::new(input).parse_all()
 }
 
-// ---------------------------------------------------------------------------
-// Interpretation: S-expressions -> library declarations -> PackagePlan.
-// ---------------------------------------------------------------------------
-
 /// A `(libraryDoc ...)` block: a document built FROM a library rather than a
 /// library itself. Unlike `(library ...)` it carries `(build ...)` command
 /// lines, which is the whole point — the products are made by running a
 /// typesetter, not copied.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DocTarget {
+pub(crate) struct DocTarget {
     /// The doc's own name, e.g. `rustyfi-manual-doc`.
     pub name: String,
     pub version: String,
@@ -289,7 +281,7 @@ fn ignore_note(kind: &str) {
 }
 
 /// Every `(libraryDoc ...)` block, in declaration order.
-pub fn doc_targets(source_root: &Path) -> Result<Vec<DocTarget>, Error> {
+pub(crate) fn doc_targets(source_root: &Path) -> Result<Vec<DocTarget>, Error> {
     let path = source_root.join(SATYRISTES_NAME);
     let text = util::read_to_string(&path)?;
     let forms = parse(&text).map_err(|pe| Error::Satyristes {
@@ -305,14 +297,12 @@ pub fn doc_targets(source_root: &Path) -> Result<Vec<DocTarget>, Error> {
 /// [`PackagePlan`], using the same `FileKind::Doc` → `dist/doc/<name>/<dst>`
 /// destination convention a `(library ...)`'s own `doc` sources get.
 ///
-/// This does not run any build command or check that a source file exists —
-/// [`crate::ops::build::build`] does that first; `sources` is expected to be
-/// already filtered to the pairs whose `src` is actually present on disk (a
-/// declared-but-unwritten product is a manifest bug `build`'s own report
-/// already surfaces, not something to fail an install over). `source_root` is
-/// the directory holding the `Satyristes` — `src` is relative to it, per
-/// [`DocTarget::sources`]'s own doc comment.
-pub fn doc_target_plan(
+/// Does not run any build command or check that a source file exists —
+/// [`crate::ops::build::build`] does that first; `sources` is expected to
+/// already be filtered to pairs whose `src` is present on disk.
+/// `source_root` is the directory holding the `Satyristes` — `src` is
+/// relative to it.
+pub(crate) fn doc_target_plan(
     source_root: &Path,
     name: &str,
     version: &str,
@@ -363,15 +353,15 @@ pub struct Project {
 }
 
 impl Project {
-    pub fn registry_url(&self) -> Option<&str> {
+    pub(crate) fn registry_url(&self) -> Option<&str> {
         self.registry.as_ref().and_then(|r| r.url.as_deref())
     }
 
-    pub fn registry_mirrors(&self) -> &[String] {
+    pub(crate) fn registry_mirrors(&self) -> &[String] {
         self.registry.as_ref().map(|r| r.mirrors.as_slice()).unwrap_or(&[])
     }
 
-    pub fn registry_kind(&self) -> Option<RegistryKind> {
+    pub(crate) fn registry_kind(&self) -> Option<RegistryKind> {
         self.registry.as_ref().and_then(|r| r.kind)
     }
 }
@@ -438,17 +428,14 @@ fn parse_registry(items: &[Sexp]) -> RegistryConfig {
     cfg
 }
 
-/// The `.opam` files the `(library ...)` blocks claim as their own.
-///
-/// A package directory may hold several — `satysfi-fonts-theano` ships one for
-/// the fonts and one for its documentation — and only the libraries' own
-/// matter here. The doc one's `build:` is OPAM calling Satyrographos to
-/// install the built PDF, which this port does from the manifest itself.
+/// The `.opam` files the `(library ...)` blocks claim as their own (a
+/// package directory may hold several — only the libraries' own matter
+/// here).
 ///
 /// Reads the manifest WITHOUT planning, because planning walks the source
-/// files, and for a font package those do not exist until the opam build has
-/// run. This is what breaks that circle.
-pub fn library_opam_files(source_root: &Path) -> Vec<PathBuf> {
+/// files, and for a font package those do not exist until the opam build
+/// has run. This is what breaks that circle.
+pub(crate) fn library_opam_files(source_root: &Path) -> Vec<PathBuf> {
     let path = source_root.join(SATYRISTES_NAME);
     let Ok(text) = util::read_to_string(&path) else {
         return Vec::new();
@@ -814,15 +801,11 @@ fn source_from(payload: &[Sexp]) -> Result<Option<SourceSpec>, String> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Public entry point.
-// ---------------------------------------------------------------------------
-
 /// Read the `Satyristes` at `source_root/Satyristes`, returning one
 /// [`PackagePlan`] per `(library ...)` block (destination logic shared with
 /// the `rustyfi-package.toml` front-end via
-/// [`crate::manifest::plan_from_manifest`]).
-pub fn read(source_root: &Path) -> Result<Vec<PackagePlan>, Error> {
+/// `manifest::plan_from_manifest`).
+pub(crate) fn read(source_root: &Path) -> Result<Vec<PackagePlan>, Error> {
     let path = source_root.join(SATYRISTES_NAME);
     let text = util::read_to_string(&path)?;
     let forms = parse(&text).map_err(|pe| Error::Satyristes {
@@ -869,10 +852,6 @@ pub fn read(source_root: &Path) -> Result<Vec<PackagePlan>, Error> {
     }
     Ok(plans)
 }
-
-// ---------------------------------------------------------------------------
-// Reader unit tests (parse-level; no filesystem).
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -937,7 +916,6 @@ mod tests {
     fn malformed_unterminated_list_reports_position() {
         let err = parse("(a (b c)").unwrap_err();
         assert!(err.msg.contains("unterminated list"), "{}", err.msg);
-        // Position is reported (non-zero line/col).
         assert!(err.line >= 1 && err.col >= 1);
     }
 
@@ -982,7 +960,6 @@ mod tests {
         let lib = &libs[0];
         assert_eq!(lib.name, "great-package");
         assert_eq!(lib.version, "1.0");
-        // Three source declarations, mapped per the module doc's table.
         assert_eq!(lib.sources.len(), 3);
         let font_dir = &lib.sources[0];
         assert_eq!(font_dir.kind, FileKind::FontDir);
@@ -995,7 +972,6 @@ mod tests {
         let package_dir = &lib.sources[2];
         assert_eq!(package_dir.kind, FileKind::PackageDir);
         assert_eq!(package_dir.src, "packages");
-        // opam ignored; one dependency, wildcard constraint.
         assert_eq!(lib.dependencies.get("fonts-theano").map(String::as_str), Some("*"));
     }
 

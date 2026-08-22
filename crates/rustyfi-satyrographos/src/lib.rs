@@ -7,65 +7,22 @@
 //! `<lib_root>/.satyrographos/receipts/`, so the thin `rustyfi` shell
 //! only parses arguments and calls in here.
 //!
-//! ## Phase 1
+//! Sources may be a directory, a `.tar.gz`/`.tgz` archive, a `{ registry =
+//! … }`/`{ git = … }` reference, or a real (OCaml) Satyrographos
+//! `Satyristes` — all funnel through the same install pipeline
+//! (`ops::install`) and the same atomic stage-then-swap transaction
+//! (`stage`). `ops::reconcile::install_manifest` diffs a project's
+//! `Satyristes`/`Satyristes.lock` against installed receipts and
+//! re-materialises only changed/missing entries. The registry fetch
+//! verifies SHA-256 before touching `dist/`, and `--offline`/
+//! `$RUSTYFI_OFFLINE` turn any would-be network request into a clean
+//! [`error::Error::Offline`] instead of a silent fetch (slice S2, with
+//! `cache`'s content-addressed archive cache in front of the fetch);
+//! `{ git = … }` sources are slice S3. The HTTP transport is behind the
+//! `http` cargo feature, default-on (slice S1); `--no-default-features`
+//! builds a pure-offline embedder with no HTTP client compiled in.
 //!
-//! - Root resolution (`roots`) and the managed-root marker.
-//! - `rustyfi-package.toml` manifest parsing plus the no-manifest
-//!   `packages/`-flat-copy fallback (`manifest`).
-//! - Directory *and* `.tar.gz`/`.tgz` sources, with a path-traversal
-//!   ("zip-slip") guard (`archive`/`stage`).
-//! - Per-package receipts (`receipts`).
-//! - The atomic install transaction — stage under `<root>/.satyrographos/
-//!   tmp/`, then swap into place, orphaning a prior receipt's files on
-//!   `--force` (`stage`).
-//! - `ops::{install, uninstall, list, status}`.
-//! - Phase 4's `Satyristes` S-expression reader (`satyristes`):
-//!   an alternative front-end that feeds the same install pipeline, so
-//!   packages authored for real (OCaml) Satyrographos install directly.
-//!
-//! ## Phase 2
-//!
-//! - The project-level `Satyristes` manifest + `Satyristes.lock`
-//!   lockfile (`satyrfile`/`lockfile`).
-//! - `ops::reconcile::install_manifest` — the no-`PATH` `satyrographos
-//!   install`: diff each manifest entry's source hash against the lockfile
-//!   and the installed receipts, and re-materialise only changed/missing
-//!   entries via the phase-1 `install` primitive.
-//!
-//! ## Phase 3
-//!
-//! - The remote registry (`registry`): a git-hosted or
-//!   plain-directory TOML index (`packages/<name>.toml`), acquired by shelling
-//!   out to `git` (or read in place for a local index), with per-version
-//!   `tarball_url` + `sha256`.
-//! - `ops::registry_install` — the fetch → verify → materialise algorithm:
-//!   download the tarball, verify its SHA-256 *before* touching `dist/`, then
-//!   feed it through the phase-1 install pipeline with a `registry` receipt
-//!   source.
-//! - `{ registry = … }` sources in `Satyristes` reconcile, locking the
-//!   resolved `(version, url, sha256)` into `Satyristes.lock` for reproducible
-//!   re-installs without re-consulting the index.
-//! - `ops::{search, update}` — index substring search and lockfile-vs-index
-//!   upgrade reporting.
-//! - The HTTP transport (`registry`'s `http` module) is behind the `http`
-//!   cargo feature, default-on for this crate (saphe phase 7d slice S1);
-//!   `--no-default-features` builds a pure-offline embedder with no HTTP
-//!   client compiled in.
-//! - `cache` (phase 7d slice S2) — a persistent, content-addressed
-//!   (sha256-keyed) archive cache in front of the HTTP fetch, plus
-//!   `RegistryOptions::is_offline` (`--offline` / `$RUSTYFI_OFFLINE`): a
-//!   pin whose archive is already cached materialises with zero network,
-//!   and offline mode turns any would-be network request into a clean
-//!   [`error::Error::Offline`] instead of a silent fetch.
-//! - `{ git = … }` sources in `Satyristes` (phase 7d slice S3): cloned via
-//!   the `git` CLI (`registry::acquire_git_source`) into their own cache leaf,
-//!   honouring `--offline`/`$RUSTYFI_OFFLINE` the same way a registry archive
-//!   does; the checkout is then materialised through the phase-1 install
-//!   pipeline exactly like a `{ path = … }` source, with the lockfile
-//!   recording the git url and resolved commit sha. Optional bearer-token
-//!   auth for the HTTP tarball transport (`RUSTYFI_REGISTRY_TOKEN`).
-//!
-//! Phase 5 (system fonts) is out of scope here.
+//! System fonts are out of scope here.
 
 mod archive;
 pub mod cache;
@@ -90,7 +47,6 @@ pub use config::{Config, Registries};
 pub use error::Error;
 pub use manifest::Lang;
 
-// Flat re-exports of the crate's public API.
 pub use ops::build::{build, BuildOptions, BuildReport};
 pub use ops::install::{install, install_url, is_url, InstallOptions, InstallReport};
 pub use ops::list::{list, PackageSummary};
@@ -98,19 +54,15 @@ pub use ops::reconcile::{install_manifest, install_manifest_reg, install_manifes
 pub use ops::status::{status, PackageStatus, StatusReport};
 pub use ops::uninstall::{uninstall, RootOptions};
 
-// Phase-2 manifest/lockfile schema types.
 pub use lockfile::{LockEntry, Lockfile};
 pub use satyristes::{find_upward, Project};
-pub use source::{LibraryEntry, RegistryConfig, RegistryKind, SourceSpec};
+pub use source::{LibraryEntry, RegistryConfig, RegistryKind, SourceKind, SourceSpec};
 
-// Phase-3 registry: index client + the fetch/verify/materialize
-// entry points and the new `search`/`update` operations.
+pub use ops::prepare::PrepareReport;
 pub use ops::registry_install::{install_registry, Resolved};
 pub use ops::search::{search, SearchHit};
 pub use ops::update::{update, update_multi, Upgrade, UpdateReport};
-pub use registry::{AcquiredRepo, MultiRegistryDepSource, RegistryDepSource, RegistryOptions};
+pub use registry::{AcquiredRepo, Registry, RegistryOptions};
 
-// Phase-7c solver: the version/constraint value types and the backtracking
-// dependency resolver.
 pub use solve::{solve, DepSource, Solution};
 pub use version::{Constraint, Version};

@@ -1,4 +1,4 @@
-//! Runtime values (a milestone-1 subset of `syntactic_value`).
+//! Runtime values (a subset of `syntactic_value`).
 
 use crate::compile::CompiledExpr;
 use crate::primitives::PrimDef;
@@ -11,10 +11,10 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
 
-// `Value::CompiledClosure` carries a crate-internal `CompiledExpr` body (an
-// opaque compiled-closure handle). External code can obtain such a value but
-// cannot name, construct, or inspect its body, which is the intent — so the
-// `private_interfaces` lint for that one field is deliberately allowed.
+// `Value::CompiledClosure` carries a crate-internal `CompiledExpr` body.
+// External code can obtain such a value but cannot name, construct, or
+// inspect its body, which is the intent — so `private_interfaces` is
+// deliberately allowed for that one field.
 #[allow(private_interfaces)]
 #[derive(Clone, Debug)]
 pub enum Value {
@@ -32,13 +32,11 @@ pub enum Value {
     Record(BTreeMap<String, Value>),
     Context(Box<Context>),
     /// Quoted inline text with its captured environment
-    /// (`InputHorzWithEnvironment`).
-    ///
-    /// `elems` is the COMPILED element tree ([`crate::quoted`]): command names
-    /// and embedded expressions were resolved at compile time, so nothing in
-    /// here is looked up by name at layout time. The environment is still
-    /// captured — a compiled node resolves its *locals* against the
-    /// environment it runs in.
+    /// (`InputHorzWithEnvironment`). `elems` is the COMPILED element tree
+    /// ([`crate::quoted`]): command names and embedded expressions were
+    /// resolved at compile time, so nothing here is looked up by name at
+    /// layout time — the environment is still captured because a compiled
+    /// node resolves its *locals* against the environment it runs in.
     InlineText {
         elems: Rc<Vec<IText>>,
         env: Env,
@@ -49,13 +47,13 @@ pub enum Value {
         env: Env,
     },
     /// Quoted math text with its captured environment (mirrors
-    /// `InlineText`/`BlockText`); typesetting is deferred to phase 7, so this
+    /// `InlineText`/`BlockText`); typesetting is deferred, so this
     /// is carried opaquely for now.
     MathText {
         elems: Rc<Vec<MathElem>>,
         env: Env,
     },
-    /// The faithful `math` value (item 1) — what every `math-*` primitive
+    /// The faithful `math` value — what every `math-*` primitive
     /// (`math-char`, `math-concat`, `math-sup`, …) builds and consumes, as
     /// opposed to `MathText`'s elaborator-fused literal form. A `math`
     /// value is always a *sequence* of atoms (mirroring upstream `MathValue
@@ -63,20 +61,17 @@ pub enum Value {
     /// already-classed atom, not a further list), so `math-concat` is a
     /// plain `Vec` append and `math-group`/`math-sup`/… each wrap the whole
     /// inner `Vec` as ONE new atom. Both this and `MathText` type as
-    /// `"math"` (`BaseType:: MathText`) — a `${…}` literal and a
-    /// `math-*`-primitive-built value are interchangeable wherever a
-    /// `math`-typed argument is expected (see `primitives.rs`'s `as_math`,
-    /// which accepts either, reflecting a `MathText`'s `MathElem` tree into
-    /// `Math` nodes on the fly).
+    /// `"math"` — a `${…}` literal and a `math-*`-primitive-built value are
+    /// interchangeable wherever a `math`-typed argument is expected (see
+    /// `primitives.rs`'s `as_math`, which accepts either).
     Math(Rc<Vec<Math>>),
-    /// `math-boxes` (V0_1 only; `BaseType::MathBoxes`) — the evaluated math
-    /// tree `read-math` produces, wrapping the SAME `Math` atom tree
-    /// `Value::Math` uses so every layout/primitive helper is shared
-    /// unchanged. Distinct from `Value::Math`: no
-    /// V0_0 primitive ever produces or consumes this variant, and no V0_1
-    /// primitive ever produces `Value::Math` — the two are kept apart so a
-    /// V0_1 program can't silently pass a `math-text` where `math-boxes` is
-    /// required (`as_math_boxes` is strict).
+    /// `math-boxes` (V0_1 only) — the evaluated math tree `read-math`
+    /// produces, wrapping the SAME `Math` atom tree `Value::Math` uses so
+    /// every layout/primitive helper is shared unchanged. Distinct from
+    /// `Value::Math`: no V0_0 primitive ever produces or consumes this
+    /// variant, and no V0_1 primitive ever produces `Value::Math` — kept
+    /// apart so a V0_1 program can't silently pass a `math-text` where
+    /// `math-boxes` is required (`as_math_boxes` is strict).
     MathBoxes(Rc<Vec<Math>>),
     /// A mutable cell (`let-mutable`'s binding; v0.0.6's `Location`/store
     /// entry). This port uses a directly-shared `RefCell` instead of an
@@ -87,25 +82,22 @@ pub enum Value {
     /// `block-boxes` (the `Vert` base constant).
     BlockBoxes(Vec<VertBox>),
     /// `image` (`load-image`'s result): an index into the document-wide
-    /// image table built up on `eval::Interp` (`Interp::images`) as the
-    /// document evaluates, then moved into `DocumentValue::images` once
-    /// `page-break` packages the final document. Carrying just the index
-    /// (not the decoded bytes) keeps this value cheap to clone, same as
-    /// `Value::Ref`'s `Rc`.
+    /// image table (`Interp::images`), moved into `DocumentValue::images`
+    /// once `page-break` packages the final document. Carrying just the
+    /// index (not the decoded bytes) keeps this value cheap to clone, same
+    /// as `Value::Ref`'s `Rc`.
     Image(ImageId),
     Document(Rc<DocumentValue>),
-    /// A closure. Its body is an already-compiled [`CompiledExpr`], run
-    /// directly by [`crate::eval::Interp::apply`].
-    ///
-    /// The name is historical — there is no AST-bodied closure variant beside
-    /// it; this is the only closure representation.
+    /// A closure. Its body is an already-compiled `CompiledExpr`, run
+    /// directly by [`crate::eval::Interp::apply`] — the only closure
+    /// representation.
     CompiledClosure {
         /// SATySFi 0.1 labeled optional LABELS, in binder order; empty for
         /// every 0.0.6-built closure. Each receives an `option`-typed value at
         /// application (`Some v` when the call supplies `?(label = v)`, `None`
         /// otherwise). Only the labels survive — a call site matches against
         /// them by name — while the binders they bind to are slots `0..n` of
-        /// the frame application pushes, so their names are gone (Phase 4).
+        /// the frame application pushes, so their names are gone.
         opt_labels: Vec<String>,
         /// The positional parameter's slot is `opt_labels.len()`, immediately
         /// after the optional binders, so it needs no field of its own.
@@ -113,15 +105,15 @@ pub enum Value {
         env: Env,
     },
     /// `&e` — a quoted expression awaiting the next stage, with the
-    /// environment it was quoted in. Typed `code ty` ([`MonoType::Code`]).
+    /// environment it was quoted in. Typed `code ty` ([`crate::types::MonoType::Code`]).
     ///
-    /// The same shape as [`Value::CompiledClosure`] minus a parameter, and for
-    /// the same reason: this evaluator compiles to slot-indexed closures, so a
-    /// fragment cannot be carried as a re-compilable syntax tree the way
-    /// upstream's `code_value` is -- its variable references are already bound
-    /// to the frames of the scope it was written in. Carrying the compiled
-    /// body with its environment keeps those references meaning what they
-    /// said, which is what `~` then forces.
+    /// The same shape as [`Value::CompiledClosure`] minus a parameter, and
+    /// for the same reason: this evaluator compiles to slot-indexed
+    /// closures, so a fragment cannot be carried as a re-compilable syntax
+    /// tree the way upstream's `code_value` is — its variable references
+    /// are already bound to the frames of the scope it was written in.
+    /// Carrying the compiled body with its environment keeps those
+    /// references meaning what they said, which is what `~` then forces.
     Code {
         body: CompiledExpr,
         env: Env,
@@ -131,7 +123,7 @@ pub enum Value {
         def: &'static PrimDef,
         applied: Vec<Value>,
     },
-    /// `pre-path` (Slice 1 graphics; `start-path`/`line-to`'s result).
+    /// `pre-path` (`start-path`/`line-to`'s result).
     PrePath(rustyfi_backend::PrePath),
     /// `path` (`terminate-path`/`close-with-line`'s result).
     Path(rustyfi_backend::Path),
@@ -142,27 +134,24 @@ pub enum Value {
     /// FontKey.t`) — an OPAQUE handle on one loaded face, already resolved
     /// through the metrics provider's font store at the point the value was
     /// minted. Upstream mints one per `files[]` entry of a FONT ENVELOPE
-    /// (`envelopeChecker.ml`'s `check_font_envelope`, whose synthesized
-    /// binding evaluates the internal `LoadSingleFont{path}` /
-    /// `LoadCollectionFont{path;index}` node to `BCFontKey`); this port's
-    /// bundled 0.1 font envelopes are `.satyh` stand-ins, so they mint
-    /// theirs through the LOCAL `load-single-font` primitive instead — see
-    /// `primitives.rs`'s `prim_load_single_font`.
+    /// (`envelopeChecker.ml`'s `check_font_envelope`, evaluating the
+    /// internal `LoadSingleFont{path}`/`LoadCollectionFont{path;index}`
+    /// node to `BCFontKey`); this port's bundled 0.1 font envelopes are
+    /// `.satyh` stand-ins that mint theirs through the LOCAL
+    /// `load-single-font` primitive instead.
     ///
     /// Deliberately carries NO abbrev/name/path: it is a store INDEX, the
     /// same thing upstream's `FontKey.t` is, and nothing in the language can
     /// map it back. That opacity is load-bearing for the cross-version
-    /// boundary (`v1::xver_adapt::forked_note`'s `"font"` arm): 0.0.6's
-    /// font-consuming primitives want an ABBREV naming a row of
-    /// `dist/hash/fonts.satysfi-hash`, and no such name is recoverable from
-    /// a key.
+    /// boundary: 0.0.6's font-consuming primitives want an ABBREV naming a
+    /// row of `dist/hash/fonts.satysfi-hash`, and no such name is
+    /// recoverable from a key.
     Font(rustyfi_backend::FontKey),
     /// `text-info` (the text-mode-context sliver).
     TextInfo(TextInfo),
-    /// `hyphenation` (`load-hyphenation-dictionary`'s result; S1) — the
-    /// tag `set-hyphenation- dictionary` writes into
-    /// `Context::hyphen_dictionary` — it carries which dictionary was
-    /// requested.
+    /// `hyphenation` (`load-hyphenation-dictionary`'s result) — the tag
+    /// `set-hyphenation-dictionary` writes into
+    /// `Context::hyphen_dictionary`, naming which dictionary was requested.
     Hyphenation(HyphenLang),
 }
 
@@ -205,14 +194,13 @@ impl Value {
 }
 
 /// One atom of a faithful `math` value (`Value::Math`'s element type) —
-/// trimmed mirror of upstream `math` (`types.cppo.ml:1024`, item 1). Every
+/// trimmed mirror of upstream `math` (`types.cppo.ml:1024`). Every
 /// closure-typed field upstream carries (kern functions, a paren pair's
 /// sizing closures, `math-pull-in-scripts`' resolver, `text-in-math`'s
 /// embedded-box callback) is stored here OPAQUELY as a plain `Value` —
-/// constructing one of these variants (a `math-*` primitive's whole
-/// runtime job) never *calls* such a closure, exactly like upstream, where
-/// a `math` value is inert data until the real layout engine (roadmap B/D)
-/// walks it.
+/// constructing one of these variants never *calls* such a closure, exactly
+/// like upstream, where a `math` value is inert data until the real layout
+/// engine walks it.
 #[derive(Clone, Debug)]
 pub enum Math {
     /// One base atom — a char run, a styled char, or embedded text. See
@@ -235,7 +223,7 @@ pub enum Math {
     /// -> `MathRoman` -> `MathCharClass::Roman`, …). Its layout arm
     /// (`primitives.rs`) sets `Context::math_char_class` to this while
     /// laying out the inner list, which is what makes `VariantCharPending`'s
-    /// per-char remap style- sensitive.
+    /// per-char remap style-sensitive.
     ChangeCharClass(MathCharClass, Vec<Math>),
     /// `math-frac`: numerator, denominator.
     Fraction(Vec<Math>, Vec<Math>),
@@ -285,7 +273,7 @@ pub enum Math {
 pub enum MathElement {
     /// `math-char` / `math-big-char`: a run of math characters, one atom.
     /// `big` selects the large-operator size class (`\sum`/`\int`-style;
-    /// roadmap D — Slice 1's layout does not yet upscale it).
+    /// layout does not yet upscale it).
     Char {
         class: MathKind,
         big: bool,
@@ -293,8 +281,9 @@ pub enum MathElement {
     },
     /// `math-char-with-kern` / `math-big-char-with-kern`: like `Char`, plus
     /// opaque left/right kern-function closures (each `length -> length ->
-    /// length`, fontsize/y-position -> kern amount; `\int`'s italic-correction
-    /// kern is the motivating case). Not yet consulted by layout (roadmap B).
+    /// length`, fontsize/y-position -> kern amount; `\int`'s
+    /// italic-correction kern is the motivating case). Not yet consulted by
+    /// layout.
     CharWithKern {
         class: MathKind,
         big: bool,
@@ -304,8 +293,8 @@ pub enum MathElement {
     },
     /// `text-in-math` (`\text`, `\cases`): an embedded `context ->
     /// inline-boxes` closure, carried opaquely — the box it eventually
-    /// produces isn't yet nestable into a math run's glyph model (roadmap
-    /// E), so this is stored faithfully but not rendered.
+    /// produces isn't yet nestable into a math run's glyph model,
+    /// so this is stored faithfully but not rendered.
     EmbeddedText { class: MathKind, body: Box<Value> },
     /// `math-variant-char` (`primitives.cppo.ml`'s `MathVariantCharDirect`)
     /// — one atom with a per-style codepoint set (Greek letters, `math.
@@ -319,23 +308,20 @@ pub enum MathElement {
     },
     /// One MATHCHAR token from a `${…}` literal, not yet resolved to a
     /// `MathKind`/codepoint — `reflect_math_elem`'s `MathElem::Chars` arm
-    /// pushes exactly one of these per token (the lexer already groups a
-    /// symbol run or a single latin digit/letter into one token; see gap 5's
-    /// "one atom per run" note), deferring both the whole-token class-map
-    /// lookup (`Context::math_class_map`) and the per-char variant remap
-    /// (`Context::math_variant_char_map`/`default_math_variant_char`) to
-    /// layout time, where the current `Context::font`/`math_char_class` are
-    /// available to metrics-probe the remap (`resolve_variant_char`).
+    /// pushes exactly one of these per token, deferring both the
+    /// whole-token class-map lookup and the
+    /// per-char variant remap to layout time, where the current
+    /// `Context::font`/`math_char_class` are available to metrics-probe
+    /// the remap (`resolve_variant_char`).
     VariantCharPending(String),
     /// V0_1 only: `embed-inline-to-math`'s payload — already-evaluated
-    /// inline boxes carrying an explicit math class.
-    /// Contrast `EmbeddedText`'s 0.0.6 closure (evaluated lazily at layout
-    /// time under a `context`); this is eager, already-materialized data,
+    /// inline boxes carrying an explicit math class. Contrast
+    /// `EmbeddedText`'s 0.0.6 closure (evaluated lazily at layout time
+    /// under a `context`); this is eager, already-materialized data,
     /// matching upstream's `embed_inline_to_math` (which has no context to
-    /// re-apply a closure under). Layout: the same deliberately-cheap
-    /// stand-in rendering path `EmbeddedText` gets today (roadmap E) —
-    /// `math_glyphs_of_inline_boxes` over `boxes` directly, no closure
-    /// application.
+    /// re-apply a closure under). Layout: the same stand-in rendering path
+    /// `EmbeddedText` gets — `math_glyphs_of_inline_boxes` over
+    /// `boxes` directly, no closure application.
     EmbeddedBoxes {
         class: MathKind,
         boxes: Vec<HorzBox>,
@@ -343,10 +329,9 @@ pub enum MathElement {
 }
 
 /// `math-variant-char`'s 9-field per-style codepoint record
-/// (`math.satyh`'s `greek-lowercase`/ `greek-uppercase` build one per
-/// Greek letter). Field order/names mirror the record literal math.satyh
-/// constructs (`italic`, `bold-italic`, `roman`, `bold-roman`, `script`,
-/// `bold-script`, `fraktur`, `bold-fraktur`, `double-struck`).
+/// (`math.satyh`'s `greek-lowercase`/`greek-uppercase` build one per Greek
+/// letter). Field order/names mirror the record literal math.satyh
+/// constructs.
 #[derive(Clone, Debug)]
 pub struct MathVariantStyle {
     pub italic: String,
@@ -379,54 +364,46 @@ pub struct DocumentValue {
     /// Every image `load-image` decoded while evaluating this document,
     /// indexed by `ImageId` (`PureHorzBox::Image::image` / `Value::Image`
     /// point in here). Moved out of `eval::Interp::images` by `page-break`
-    /// (`primitives::prim_page_break`) when it packages the final document;
-    /// threaded to `rustyfi_pdf::render_pdf`/`render_pdf_ttf` so the PDF
-    /// writer can emit one Image XObject per image actually used.
+    /// when it packages the final document; threaded to
+    /// `rustyfi_pdf::render_pdf`/`render_pdf_ttf` so the PDF writer can emit
+    /// one Image XObject per image actually used.
     pub images: Vec<ImageResource>,
-    /// §B/§C/§D extras (annotations / destinations / outline / per-page deco
+    /// Extras (annotations / destinations / outline / per-page deco
     /// overlays), attached by the compile driver AFTER the final trial's
     /// `fire_hooks` — `prim_page_break` cannot fill this (hooks/decos fire
     /// only after placement), so it packages `DocExtras::default()` and
     /// `compile_document_cst_with_trials` overwrites it on the winning trial.
     pub extras: DocExtras,
-    /// Reflowable/semantic HTML side-channel ("Option B"): a clone of the
+    /// Reflowable/semantic HTML side-channel: a clone of the
     /// flat `Vec<VertBox>` as it existed just BEFORE `page_break_core`
-    /// (`primitives.rs`) handed it to `chop_page` — the document's natural
-    /// linear flow, with paragraph boundaries (`Skip`), frame nesting
-    /// (`FrameStart`/`FrameEnd` marker pairs), and `ClearPage` all intact,
-    /// not yet sliced into pages and not yet carrying injected
-    /// headers/footers/footnotes. `page_break_core` populates this
-    /// unconditionally (an unconditional cheap clone — one `Vec<VertBox>`
-    /// clone per compile, negligible — rather than threading a `want_reflow` flag
-    /// through every `compile_document_*`/`prim_page_break_*` entry point).
-    /// `Option` (rather than a bare `Vec`) keeps the field's *meaning*
-    /// "present only for a reflow-capable compile" self-documenting even
-    /// though every current producer fills it; a future producer that
-    /// legitimately can't capture it (e.g. a hand-built `DocumentValue` in a
-    /// test) can still leave it `None`.
+    /// handed it to `chop_page` — the document's natural linear flow, with
+    /// paragraph boundaries (`Skip`), frame nesting (`FrameStart`/`FrameEnd`
+    /// marker pairs), and `ClearPage` all intact, not yet sliced into pages
+    /// or carrying injected headers/footers/footnotes. Populated
+    /// unconditionally (one negligible `Vec<VertBox>` clone per compile,
+    /// rather than threading a `want_reflow` flag through every entry
+    /// point). `Option` keeps the field's meaning ("present only for a
+    /// reflow-capable compile") self-documenting even though every current
+    /// producer fills it.
     ///
     /// **Purely additive.** Neither `rustyfi_pdf::render_pdf*` nor the
-    /// `html-support` branch's faithful HTML backend reads this field — only
-    /// that branch's REFLOWABLE backend does — so its presence changes no byte
-    /// of their output.
+    /// `html-support` branch's faithful HTML backend reads this field —
+    /// only that branch's REFLOWABLE backend does.
     pub reflow_source: Option<Vec<VertBox>>,
-    /// S2 links ("Links/metadata"): one `(DecoId, action)` per
-    /// `register-link-to-uri`/`-to-location` call made from inside a firing
-    /// deco closure — see `eval::Interp::link_decos`'s doc comment for why
-    /// this, not `extras.annotations` (page-absolute, no `DecoId`), is what
-    /// the reflow backend needs to find which `PureHorzBox::Frame` in
-    /// `reflow_source` a link belongs to. NOTE for whoever merges the
-    /// `html-support` branch: `\href`/`\ref` go through
+    /// Links: one `(DecoId, action)` per `register-link-to-uri`/
+    /// `-to-location` call made from inside a firing deco closure — needed
+    /// because (unlike `extras.annotations`, which is page-absolute with no
+    /// `DecoId`) this is what lets the reflow backend find which
+    /// `PureHorzBox::Frame` in `reflow_source` a link belongs to.
+    ///
+    /// NOTE for whoever merges `html-support`: `\href`/`\ref` go through
     /// `inline-frame-breakable`, which no longer builds a `Frame` at all —
     /// it splices its contents between a `PureHorzBox::InlineFrameMarker`
     /// pair — so the reflow walker has to match the MARKER's `DecoId` (and
     /// wrap the boxes between the pair) rather than a `Frame`'s, or every
     /// link silently stops being wrapped. Filled in by `eval_document_trials`
-    /// alongside `extras`, AFTER `fire_hooks` (hooks/decos haven't fired yet
-    /// when `page_break_core` packages the initial `DocumentValue`). Empty
-    /// (not absent) by default — same "purely additive, cheap when unused"
-    /// policy as `reflow_source`; neither `rustyfi_pdf` nor the
-    /// `html-support` branch's faithful HTML backend reads it.
+    /// AFTER `fire_hooks`. Empty by default, same "purely additive" policy
+    /// as `reflow_source`.
     pub reflow_links: Vec<(DecoId, AnnotAction)>,
     /// Same idea as `reflow_links`, for `register-destination`
     /// (`annot.satyh`'s `register-location-frame` idiom): `(DecoId, name)`.
@@ -441,7 +418,7 @@ pub struct DocumentValue {
 /// Processing 8/4/2/1 bytes at a step with a rotate-xor-multiply is ~3-5x
 /// faster and is exactly what an internal, trusted env map wants.
 #[derive(Default)]
-pub(crate) struct FxHasher {
+struct FxHasher {
     hash: usize,
 }
 
@@ -488,7 +465,7 @@ impl std::hash::Hasher for FxHasher {
 }
 
 #[derive(Default, Clone)]
-pub(crate) struct FxBuild;
+struct FxBuild;
 impl std::hash::BuildHasher for FxBuild {
     type Hasher = FxHasher;
     #[inline]
@@ -500,12 +477,12 @@ impl std::hash::BuildHasher for FxBuild {
 type FxMap = HashMap<Rc<str>, Value, FxBuild>;
 
 /// The **compile-time** environment: the flat name -> value table of
-/// primitives and base constants that [`crate::compile`] folds unshadowed
+/// primitives and base constants that `crate::compile` folds unshadowed
 /// references against, and whose [`BaseEnv::names`] seed the elaborator's
 /// scope.
 ///
 /// This is deliberately NOT the runtime environment, and is not the root of
-/// the runtime frame chain (Phase 4). Nothing resolves a name at run time —
+/// the runtime frame chain. Nothing resolves a name at run time —
 /// top-level bindings go through the compiler's `Globals` table, locals
 /// through slot indices, and unshadowed base names are constant-folded at
 /// compile time — so the two are what they actually are: a name map used
@@ -542,7 +519,7 @@ impl BaseEnv {
 
 /// The **runtime** environment: a chain of positional frames.
 ///
-/// Phase 4. A frame is a plain `Vec<Value>`, and a compiled variable reference
+/// A frame is a plain `Vec<Value>`, and a compiled variable reference
 /// is a `(depth, index)` pair resolved at compile time — walk `depth` parents,
 /// index the vector. There are no names here at all: the compiler's scope
 /// stack is 1:1 with this chain (it pushes exactly where a frame is created),

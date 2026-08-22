@@ -11,17 +11,15 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 pub type AuxTable = BTreeMap<String, String>;
 
 /// `crossRef.ml:23`'s `count_max`.
-pub const COUNT_MAX: u32 = 4;
+const COUNT_MAX: u32 = 4;
 
 /// What the driver should do after one trial finished and hooks fired.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Verdict {
     /// The table changed this trial; run another trial.
     NeedsAnotherTrial,
-    /// The table stabilized (no `register` changed a value this trial).
-    /// Carries the keys `get` missed during the *final* trial (unresolved
-    /// forward references), mirroring `crossRef.ml:78`'s `needs_another_trial`
-    /// returning the leftover unresolved list on termination.
+    /// The table stabilized. Carries the keys `get` missed during the
+    /// *final* trial (unresolved forward references; `crossRef.ml:78`).
     CanTerminate(Vec<String>),
     /// The table kept changing through `COUNT_MAX` trials; give up rather
     /// than loop forever.
@@ -66,11 +64,9 @@ impl CrossRefs {
     ///
     /// Seeding only changes how fast the fixpoint converges, never where it
     /// converges to: a seeded value a `get` observes and a later `register`
-    /// contradicts still marks the layout stale and forces another trial,
-    /// exactly as a value derived this run would. What seeding buys is the
-    /// common case — a forward reference (`\ref` to a later section, a page
-    /// number) reads the right answer on trial 1 instead of missing, being
-    /// registered, and forcing trial 2.
+    /// contradicts still marks the layout stale and forces another trial. It
+    /// mainly helps a forward reference (`\ref` to a later section) resolve
+    /// on trial 1 instead of trial 2.
     pub fn seeded(table: AuxTable) -> CrossRefs {
         CrossRefs {
             seeded: table.keys().cloned().collect(),
@@ -82,9 +78,7 @@ impl CrossRefs {
     /// The table as it should be written back out.
     ///
     /// Keys this run neither read nor registered are carried through
-    /// verbatim, which is what lets an auxiliary file round-trip between this
-    /// port and upstream SATySFi without either dropping the other's
-    /// bookkeeping.
+    /// verbatim, so an auxiliary file round-trips with upstream SATySFi.
     pub fn export(&self) -> AuxTable {
         self.table
             .iter()
@@ -95,13 +89,11 @@ impl CrossRefs {
     /// Did the trial that just ended READ a seeded value that it never
     /// re-registered?
     ///
-    /// If so the layout depended on a value carried in from a previous run
-    /// and never re-derived — a document that dropped the `\label` some
-    /// surviving `\ref` points at. The value is not wrong so much as
-    /// unverifiable, and trusting it would make the output depend on whether
-    /// an auxiliary file happened to exist. The driver's answer is to discard
-    /// the seed and redo the fixpoint cold, so a warm build is always
-    /// byte-identical to a cold one.
+    /// If so the layout depended on a value from a previous run that was
+    /// never re-derived this run (e.g. a `\label` the document dropped but
+    /// some `\ref` still targets) — unverifiable, not necessarily wrong. The
+    /// driver's answer is to discard the seed and redo the fixpoint cold, so
+    /// a warm build is always byte-identical to a cold one.
     pub fn seed_unvalidated(&self) -> bool {
         self.seed_unvalidated
     }
@@ -112,7 +104,7 @@ impl CrossRefs {
     /// (re)registered but never read this trial does NOT force a retrial — its
     /// value cannot have affected the output — which is what lets a document
     /// that only *writes* cross-references (e.g. page labels nothing `\ref`s)
-    /// converge in ONE trial instead of the old always-two.
+    /// converge in ONE trial.
     pub fn register(&mut self, k: String, v: String) {
         self.registered_this_trial.insert(k.clone());
         if let Some(observed) = self.read_this_trial.get(&k) {
@@ -156,9 +148,8 @@ impl CrossRefs {
     /// (re)registration. Consumes this trial's bookkeeping and resets it.
     pub fn verdict(&mut self) -> Verdict {
         // A seeded key the layout READ but this trial never re-registered is
-        // an unverified dependency (see `seed_unvalidated`). Compute it before
-        // the per-trial bookkeeping is cleared; only the FINAL trial's answer
-        // matters, and each trial overwrites it.
+        // an unverified dependency (see `seed_unvalidated`); compute it before
+        // the per-trial bookkeeping below is cleared.
         self.seed_unvalidated = self
             .read_this_trial
             .keys()
@@ -188,8 +179,7 @@ mod tests {
     fn a_write_only_key_converges_on_the_first_trial() {
         let mut cr = CrossRefs::new();
         // A key that is registered but never READ this trial cannot have
-        // affected the layout, so the fixpoint terminates immediately — no
-        // wasted confirmation trial (the whole point of the shortcut).
+        // affected the layout, so the fixpoint terminates immediately.
         cr.register("p".to_string(), "1".to_string());
         assert_eq!(cr.verdict(), Verdict::CanTerminate(Vec::new()));
     }
@@ -215,9 +205,8 @@ mod tests {
         let mut cr = CrossRefs::new();
         for i in 0..(COUNT_MAX + 2) {
             // A pathological document that READS a key and then registers a
-            // *new* value for it every trial never stabilizes; the cap must
-            // still terminate it. (The read is what makes the change matter —
-            // a write-only churn would harmlessly converge on trial 1.)
+            // *new* value every trial never stabilizes; the cap must still
+            // terminate it (a write-only churn would converge on trial 1).
             let _ = cr.get("k");
             cr.register("k".to_string(), i.to_string());
             let v = cr.verdict();
@@ -231,11 +220,9 @@ mod tests {
     #[test]
     fn an_unresolved_get_forces_another_trial_via_the_caller_not_verdict_alone() {
         // `get` missing a key does not, by itself, set `changed` — only
-        // `register` does (matching `crossRef.ml`: the "needs another
-        // trial" signal is entirely the `changed` flag; the unresolved list
-        // is informational/diagnostic). A document that never registers the
-        // key it `get`s therefore converges immediately, with the miss
-        // surfaced in `CanTerminate`'s payload.
+        // `register` does; the unresolved list is informational/diagnostic
+        // only. A document that never registers the key it `get`s converges
+        // immediately, with the miss surfaced in `CanTerminate`'s payload.
         let mut cr = CrossRefs::new();
         assert_eq!(cr.get("missing"), None);
         assert_eq!(
@@ -246,11 +233,10 @@ mod tests {
 
     #[test]
     fn seeding_resolves_a_forward_reference_on_the_first_trial() {
-        // Cold, this is the two-trial case (see the test above): the layout
-        // reads "p" before anything registers it, so trial 1's observation
-        // goes stale. Seeded from the previous run's table, the same read hits
-        // the right value immediately and the re-registration confirms it —
-        // one trial, same answer.
+        // Cold, this is the two-trial case above: the layout reads "p"
+        // before anything registers it, so trial 1 goes stale. Seeded from
+        // the previous run's table, the same read hits the right value
+        // immediately and the re-registration confirms it in one trial.
         let mut aux = AuxTable::new();
         aux.insert("p".to_string(), "1".to_string());
         let mut cr = CrossRefs::seeded(aux);
@@ -277,11 +263,10 @@ mod tests {
 
     #[test]
     fn a_seed_that_is_read_but_never_re_registered_is_flagged() {
-        // The dangerous shape: the document still `\ref`s a key but no longer
-        // defines it, so nothing this run can confirm the seeded value. The
-        // fixpoint converges happily — which is the problem — so `verdict`
-        // reports it and the driver redoes the run cold rather than emit a
-        // layout that depends on a file being present.
+        // The dangerous shape: the document still `\ref`s a key but no
+        // longer defines it, so nothing this run can confirm the seeded
+        // value. The fixpoint converges happily anyway, so `verdict` flags
+        // it and the driver redoes the run cold.
         let mut aux = AuxTable::new();
         aux.insert("p".to_string(), "1".to_string());
         let mut cr = CrossRefs::seeded(aux);
@@ -297,10 +282,8 @@ mod tests {
     #[test]
     fn an_unread_seed_is_not_flagged_and_is_carried_through() {
         // A seeded key the document never reads cannot have affected the
-        // layout, so it is no reason to redo anything — but it is still
-        // written back out, which is what lets an auxiliary file round-trip
-        // between this port and upstream SATySFi (whose own `changed` marker
-        // lives in the same table) without either dropping the other's keys.
+        // layout, so it is no reason to redo anything, but it is still
+        // written back out (see `export`'s doc comment for why).
         let mut aux = AuxTable::new();
         aux.insert("changed".to_string(), "F".to_string());
         aux.insert("stale-label".to_string(), "9".to_string());

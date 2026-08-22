@@ -1,20 +1,15 @@
-//! The drawing data model — paths, colors, and `graphics` elements. The
-//! analog of upstream's `GraphicBase`/`PrePath`/`GraphicD`, trimmed to what
-//! this port's backend actually draws. Everything here is already-resolved
-//! coordinates/data — no lang-side closures or deferred computation crosses
-//! into this module (see `PureHorzBox::Graphics`, `hbox.rs`, and the
-//! `inline-graphics` primitive, `rustyfi-lang/src/primitives.rs`, for how a
-//! lang `graphics list` becomes one of these).
+//! The drawing data model — paths, colors, and `graphics` elements; the
+//! analog of upstream's `GraphicBase`/`PrePath`/`GraphicD`. Everything here is
+//! already-resolved coordinates/data: no lang-side closure or deferred
+//! computation crosses into this module.
 
 use crate::hbox::PureHorzBox;
 use crate::length::Length;
 
 /// A point in graphics space (upstream `point`; matches the runtime
-/// `Value::Tuple([Length, Length])` representation — see `as_point` in
-/// `rustyfi-lang/src/primitives.rs`). Graphics space is y-**up** (PDF-native);
-/// the PDF writer's `place_graphics` is what flips page-layout's y-down
-/// convention when placing a graphics box on a line (see that function's
-/// doc comment in `rustyfi-pdf`).
+/// `Value::Tuple([Length, Length])` representation). Graphics space is
+/// y-**up** (PDF-native); the PDF writer's `place_graphics` flips
+/// page-layout's y-down convention when placing a graphics box on a line.
 pub type Point = (Length, Length);
 
 /// A dash pattern (`dashed-stroke`'s 2nd argument; upstream `graphicD.ml`'s
@@ -34,10 +29,7 @@ pub enum Color {
 
 /// One path element: a control-point-free straight segment, or a cubic
 /// Bézier (2 control points + destination) — `graphicBase.ml`'s
-/// `point path_element`. Only `Line` is produced by any Slice-1 primitive;
-/// `Bezier` is carried from the start (cheap, and the renderer already
-/// handles it) so `bezier-to` (roadmap A) is a pure `primitives.rs` addition
-/// with no data-model or writer change needed later.
+/// `point path_element`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum PathSeg {
     Line(Point),
@@ -46,9 +38,8 @@ pub enum PathSeg {
 
 /// How a subpath closes (`graphicBase.ml`'s `path`'s `cycleopt`): left open,
 /// closed with a straight segment back to the start (`close-with-line`), or
-/// closed with a cubic (`close-with-bezier`, roadmap A; the destination is
-/// always the subpath's own `start`, so only the two control points are
-/// stored).
+/// closed with a cubic (`close-with-bezier` — the destination is always the
+/// subpath's own `start`, so only the two control points are stored).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Closing {
     Open,
@@ -65,8 +56,7 @@ pub struct Subpath {
 }
 
 /// The `path` value = upstream `path list` (`unite-path` appends subpath
-/// lists; Slice 1 always produces exactly one subpath per `terminate-path`/
-/// `close-with-line`).
+/// lists).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Path {
     pub subpaths: Vec<Subpath>,
@@ -75,43 +65,32 @@ pub struct Path {
 /// The `pre-path` value (`PrePath.t`): a start point plus forward-accumulated
 /// segments, before a `terminate-path`/`close-with-line` fixes a closing.
 /// Upstream accumulates in reverse and flips at close time; this port pushes
-/// forward directly (`line-to` appends to the end of `segs`), an
-/// implementation detail invisible to any observable behavior.
+/// forward directly, which is unobservable.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PrePath {
     pub start: Point,
     pub segs: Vec<PathSeg>,
 }
 
-/// One `graphics` element (`GraphicD.element`). Roadmap A/B/D (bezier path
-/// ops, shift/linear-transform, dashed strokes) are pure coordinate maps
-/// over `Fill`/`Stroke`/`DashedStroke`'s existing `Path`, so they need no
-/// new variant here (see `shift_graphics`/`linear_transform_graphics`
-/// below); `place_graphics` (rustyfi-pdf) still matches this exhaustively
-/// without a wildcard arm.
+/// One `graphics` element (`GraphicD.element`). `place_graphics`
+/// (rustyfi-pdf) matches this exhaustively, without a wildcard arm.
 #[derive(Clone, Debug, PartialEq)]
 pub enum GraphicsElem {
-    /// Filled region, even-odd rule (matches upstream's `op_f'`; see
-    /// `place_graphics`'s doc comment).
+    /// Filled region, even-odd rule (upstream's `op_f'`).
     Fill(Color, Path),
     /// Stroked outline at the given line width.
     Stroke(Length, Color, Path),
-    /// Dashed stroked outline (`dashed-stroke`; roadmap D). Rendered by
-    /// `place_graphics` with a PDF `d` dash-array op alongside the same
-    /// stroke ops as `Stroke`.
+    /// Dashed stroked outline (`dashed-stroke`), rendered with a PDF `d`
+    /// dash-array op alongside the same stroke ops as `Stroke`.
     DashedStroke(Length, Dash, Color, Path),
-    /// `draw-text` (roadmap C): a text run anchored at `pt` (box-local, y-up;
-    /// the run's leftmost baseline point). `contents` is the run laid out at
-    /// NATURAL width (upstream `LineBreak.natural` = `determine_widths None`,
-    /// `widperfil = 0`; this port: `fit_cell(boxes, natural_width)`), each box
-    /// with its x offset from `pt` — the same `(Length, PureHorzBox)` shape a
-    /// `PlacedLine`/`TabularCellBox` carries. `width`/`height`/`depth` are the
-    /// run's `natural_metrics`, stored at construction so `graphics_bbox`
-    /// needs no re-measure (upstream recomputes via
-    /// `get_metrics_of_intermediate_horz_box_list`; same numbers).
-    /// Rendered by each PDF writer re-entering its own per-box emission at
-    /// `pt + dx` INSIDE `place_graphics`'s box-local `cm` frame (see that
-    /// function's `emit_nested` parameter).
+    /// `draw-text`: a text run anchored at `pt` (box-local, y-up; the run's
+    /// leftmost baseline point). `contents` is the run laid out at NATURAL
+    /// width (upstream `LineBreak.natural` = `determine_widths None`,
+    /// `widperfil = 0`; here `fit_cell(boxes, natural_width)`), each box with
+    /// its x offset from `pt`. `width`/`height`/`depth` are the run's
+    /// `natural_metrics`, stored at construction so `graphics_bbox` needs no
+    /// re-measure. Rendered by each PDF writer re-entering its own per-box
+    /// emission at `pt + dx` INSIDE `place_graphics`'s box-local `cm` frame.
     Text {
         pt: Point,
         contents: Vec<(Length, PureHorzBox)>,
@@ -120,57 +99,46 @@ pub enum GraphicsElem {
         depth: Length,
         /// The accumulated 2×2 linear transform (`linear-transform-graphics`,
         /// row-major `(a, b, c, d)` — same convention as
-        /// [`linear_transform_point`]) applied to the run about its local
-        /// origin BEFORE the `pt` translation. `None` means identity — the run
-        /// is drawn upright at `pt` exactly as before this field existed, so
-        /// every pre-existing `draw-text` render stays byte-identical. `Some`
-        /// only appears once `rotate-graphics`/`scale-graphics` (figbox's
-        /// `rotate`/`scale`) is composed onto a `draw-text`; the writer then
-        /// emits the run under a `cm` carrying this matrix so the glyphs/image
-        /// actually rotate/scale (upstream's lazy `LinearTrans` render-time
-        /// `cm`, which this port previously dropped for text runs).
+        /// `linear_transform_point`) applied to the run about its local
+        /// origin BEFORE the `pt` translation. `None` means identity: the run
+        /// is drawn upright at `pt`. `Some` appears once
+        /// `rotate-graphics`/`scale-graphics` is composed onto a `draw-text`;
+        /// the writer then emits the run under a `cm` carrying this matrix
+        /// (upstream's lazy `LinearTrans` render-time `cm`).
         transform: Option<(f64, f64, f64, f64)>,
     },
     /// 0.1 collection node (`GraphicD.concat`, dev-0-1-0 `graphicD.ml:23`):
-    /// `unite-graphics`' payload. Never constructed by any 0.0.6 path — no
-    /// 0.0.6-visible primitive builds one, so it is unreachable from 0.0.6
-    /// rendering by construction (the golden-PDF byte-compare is the
-    /// tripwire that proves it).
+    /// `unite-graphics`' payload. No 0.0.6-visible primitive builds one, so it
+    /// is unreachable from 0.0.6 rendering by construction.
     Group(Vec<GraphicsElem>),
     /// 0.1 clip node (`GraphicD.make_clip`, `graphicD.ml:97-98`): render
     /// `contents` clipped to `clip` (even-odd, `Op_W'` — `graphicD.ml:331`).
     /// The port's `Path` already carries N subpaths, standing in for
-    /// upstream's `path list`. Never constructed by any 0.0.6 path (same
-    /// invariant as `Group` above).
+    /// upstream's `path list`. Never constructed by any 0.0.6 path, as `Group`.
     Clip(Path, Vec<GraphicsElem>),
 }
 
-// ============================================================================
-// ---- Roadmap A/B: pure coordinate transforms -----------------------------
 // `shift-path`/`shift-graphics`/`linear-transform-path`/
-// `linear-transform-graphics` (roadmap A/B) are all EAGER point remaps —
-// no PDF-writer change, no lazy `LinearTrans`-wrapper element: every point
-// in a `Path`/`GraphicsElem` is rewritten up front, exactly mirroring
-// `graphicBase.ml`'s `shift_path`/ `linear_transform_path` (`(x, y) ->
+// `linear-transform-graphics` are all EAGER point remaps — no lazy
+// `LinearTrans`-wrapper element: every point is rewritten up front, mirroring
+// `graphicBase.ml`'s `shift_path`/`linear_transform_path` (`(x, y) ->
 // (x*a + y*b, x*c + y*d)` for the 2x2 matrix `((a, b), (c, d))`).
-// ============================================================================
 
 /// `shift_path v pt` (`graphicBase.ml`'s `(+@%)`).
-pub fn shift_point(v: Point, pt: Point) -> Point {
+fn shift_point(v: Point, pt: Point) -> Point {
     (pt.0 + v.0, pt.1 + v.1)
 }
 
 /// `graphicBase.ml`'s `linear_transform_point`: `(x, y) |-> (x*a + y*b, x*c +
 /// y*d)` for matrix `mat = (a, b, c, d)`.
-pub fn linear_transform_point(mat: (f64, f64, f64, f64), pt: Point) -> Point {
+fn linear_transform_point(mat: (f64, f64, f64, f64), pt: Point) -> Point {
     let (a, b, c, d) = mat;
     (pt.0 * a + pt.1 * b, pt.0 * c + pt.1 * d)
 }
 
 /// Map `f` over every point of `path` (subpath starts, every segment's
 /// points — including Bézier control points — and any closing control
-/// points), preserving structure. The shared plumbing `shift_path`/
-/// `linear_transform_path` below specialize with `f`.
+/// points), preserving structure.
 fn map_path(path: &Path, f: impl Fn(Point) -> Point) -> Path {
     Path {
         subpaths: path
@@ -209,9 +177,7 @@ pub fn linear_transform_path(mat: (f64, f64, f64, f64), path: &Path) -> Path {
 }
 
 /// `shift-graphics : point -> graphics -> graphics` (vminst.ml:2451) —
-/// `graphicD.ml`'s `shift_element`, specialized to the variants this port
-/// has (no lazy `LinearTrans` wrapper to recurse through — see the roadmap
-/// A/B doc comment above).
+/// `graphicD.ml`'s `shift_element`.
 pub fn shift_graphics(v: Point, elem: &GraphicsElem) -> GraphicsElem {
     match elem {
         GraphicsElem::Fill(c, p) => GraphicsElem::Fill(*c, shift_path(v, p)),
@@ -245,7 +211,7 @@ pub fn shift_graphics(v: Point, elem: &GraphicsElem) -> GraphicsElem {
 
 /// `linear-transform-graphics : float -> float -> float -> float ->
 /// graphics -> graphics` (vminst.ml:2432) — `graphicD.ml`'s
-/// `make_linear_trans`, applied eagerly (see the roadmap A/B doc comment).
+/// `make_linear_trans`, applied eagerly.
 pub fn linear_transform_graphics(mat: (f64, f64, f64, f64), elem: &GraphicsElem) -> GraphicsElem {
     match elem {
         GraphicsElem::Fill(c, p) => GraphicsElem::Fill(*c, linear_transform_path(mat, p)),
@@ -278,7 +244,6 @@ pub fn linear_transform_graphics(mat: (f64, f64, f64, f64), elem: &GraphicsElem)
                 transform: Some(composed),
             }
         }
-        // Same recursing shape as `shift_graphics` above.
         GraphicsElem::Group(gs) => GraphicsElem::Group(
             gs.iter().map(|g| linear_transform_graphics(mat, g)).collect(),
         ),
@@ -336,7 +301,7 @@ fn bezier_axis_extent(r0: f64, r1: f64, r2: f64, r3: f64) -> (f64, f64) {
 /// `Bezier(c1,c2,p)` contributes the cubic extrema of `(cur, c1, c2, p)`; a
 /// `Closing::Bezier(c1,c2)` contributes the extrema of `(cur, c1, c2,
 /// start)`), taking each axis's true curve extent via
-/// [`bezier_axis_extent`] rather than the (looser) control-point hull.
+/// `bezier_axis_extent` rather than the (looser) control-point hull.
 pub fn path_bbox(path: &Path) -> (Point, Point) {
     fn include(bounds: &mut (f64, f64, f64, f64), p: Point) {
         bounds.0 = bounds.0.min(p.0 .0);
@@ -385,7 +350,6 @@ pub fn path_bbox(path: &Path) -> (Point, Point) {
     )
 }
 
-/// Union two bounding boxes (component-wise min/max of the two corners).
 fn union_bbox((amin, amax): (Point, Point), (bmin, bmax): (Point, Point)) -> (Point, Point) {
     (
         (
@@ -400,17 +364,14 @@ fn union_bbox((amin, amax): (Point, Point), (bmin, bmax): (Point, Point)) -> (Po
 }
 
 /// `get-graphics-bbox : graphics -> point * point` (v0.0.6 vminst.ml:2466) /
-/// `graphics -> option (point * point)` (dev-0-1-0 vminst.ml:2301, — the L8b
+/// `graphics -> option (point * point)` (dev-0-1-0 vminst.ml:2301, the
 /// "version-blind fix") — `graphicD.ml`'s `get_bbox`/`get_element_bbox`,
-/// ignoring stroke thickness (matching upstream's own documented
-/// simplification); `Text`'s bbox is the run's stored `natural_metrics` at
-/// its anchor (see that variant's doc comment). `Clip(paths, _)` returns the
-/// CLIP PATHS' own bbox, ignoring `contents` (upstream `graphicD.ml:50-52` —
-/// deliberate: the clip boundary, not what's inside it, bounds the visible
-/// ink). `Group` union-folds its children (`graphicD.ml:61-74`'s fold);
-/// `None` for an empty `Group` (no ink at all) or an empty top-level list —
-/// the caller-visible witness of "nothing here" that v0.0.6 could never
-/// produce (no 0.0.6 constructor yields `Group`/`Clip`).
+/// ignoring stroke thickness (upstream's own documented simplification).
+/// `Clip(paths, _)` returns the CLIP PATHS' own bbox, ignoring `contents`
+/// (upstream `graphicD.ml:50-52` — deliberate: the clip boundary, not what is
+/// inside it, bounds the visible ink). `Group` union-folds its children
+/// (`graphicD.ml:61-74`); `None` for an empty `Group` or an empty top-level
+/// list, which v0.0.6 could never produce.
 pub fn graphics_bbox(elem: &GraphicsElem) -> Option<(Point, Point)> {
     match elem {
         GraphicsElem::Fill(_, p)
@@ -418,13 +379,12 @@ pub fn graphics_bbox(elem: &GraphicsElem) -> Option<(Point, Point)> {
         | GraphicsElem::DashedStroke(_, _, _, p) => Some(path_bbox(p)),
         GraphicsElem::Text { pt, width, height, depth, transform, .. } => {
             match transform {
-                // Upright run: its box is the axis-aligned `[0,width]×[-depth,
-                // height]` extent translated to `pt` (unchanged).
+                // Upright run: the axis-aligned `[0,width]×[-depth, height]`
+                // extent translated to `pt`.
                 None => Some(((pt.0, pt.1 - *depth), (pt.0 + *width, pt.1 + *height))),
-                // Rotated/scaled run: transform the four local corners of that
-                // box by the matrix, translate by `pt`, and take the axis-
-                // aligned hull — this is what `get-graphics-bbox` needs so a
-                // `rotate`d figbox reserves the correct (rotated) inline size.
+                // Rotated/scaled run: transform the four local corners, translate
+                // by `pt`, take the axis-aligned hull — so a `rotate`d figbox
+                // reserves the correct (rotated) inline size.
                 Some(mat) => {
                     let corners = [
                         (Length::ZERO, -*depth),
@@ -473,9 +433,8 @@ mod tests {
         }
     }
 
-    /// L5b: `shift-graphics`/`linear-transform-graphics` over a `Clip`/`Group`
-    /// move both the clip path and the contents (the `graphicD.ml:38`
-    /// recursing-arm contract).
+    /// Over a `Clip`/`Group` both move the clip path AND the contents
+    /// (the `graphicD.ml:38` recursing-arm contract).
     #[test]
     fn shift_and_transform_recurse_into_clip_and_group() {
         let fill = GraphicsElem::Fill(Color::Gray(0.0), rect(0.0, 0.0, 1.0, 1.0));
@@ -528,7 +487,7 @@ mod tests {
         }
     }
 
-    /// `get-graphics-bbox` `Option` semantics (L8b): an empty `Group` has no
+    /// `get-graphics-bbox` `Option` semantics: an empty `Group` has no
     /// ink and returns `None`; a `Group` of two fills union-folds; a `Clip`
     /// returns the CLIP PATH's own bbox, ignoring `contents`.
     #[test]

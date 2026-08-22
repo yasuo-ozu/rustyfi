@@ -13,34 +13,17 @@
 //! sha256 = "…"
 //! ```
 //!
-//! ## What this module does
-//!
-//! - **Acquire** the index into a local directory ([`acquire`]): a
-//!   plain-directory index is read in place; a git index is
-//!   shallow-cloned/fetched into a cache dir by shelling out to `git` (no
-//!   libgit2 dependency).
-//! - **Look up** `packages/<name>.toml` and **select a version** ([`lookup`],
-//!   [`select_version`]): the exact requested version, else the highest by a
-//!   simple dotted-numeric comparison.
-//! - **Fetch** a `tarball_url` into a destination file ([`fetch_tarball`]):
-//!   `file://`/plain paths are copied directly; `http(s)://` goes through
-//!   [`crate::cache`]'s content-addressed archive cache (phase 7d S2), and
-//!   falls back to the feature-gated [`http`] client on a miss.
-//! - **Verify** the tarball's SHA-256 against the index entry ([`verify_sha256`])
-//!   — the caller does this *before* touching `dist/`.
-//! - **Acquire a git package source** ([`acquire_git_source`], saphe 7d slice
-//!   S3): a `Satyristes` `{ git = …, rev = … }` entry — distinct from a
-//!   registry index — is cloned into its own cache leaf and handed to
-//!   `ops::reconcile` as a plain directory, the same materialisation path a
-//!   `{ path = … }` source takes (no archive/verify step — there is no
-//!   tarball/sha256 for a git source, only the resolved commit).
-//! - Optional **bearer-token auth** for the HTTP tarball transport
-//!   (`RUSTYFI_REGISTRY_TOKEN`, `http::AUTH_TOKEN_ENV`, saphe 7d slice S3).
+//! `acquire`/`lookup`/`select_version` read the index; `fetch_tarball`
+//! + `verify_sha256` fetch and verify a tarball through
+//! [`crate::cache`]'s content-addressed archive cache (slice S2);
+//! `acquire_git_source`
+//! (slice S3) clones a `Satyristes` `{ git = …, rev = … }` source directly, no
+//! archive/verify step. Optional bearer-token auth on the HTTP transport is
+//! [`REGISTRY_TOKEN_ENV`] (slice S3).
 //!
 //! The fetch → verify → materialize orchestration lives in
-//! [`crate::ops::install`] (registry form) and [`crate::ops::reconcile`]
-//! (manifest and git-source form); this module is the index/transport layer
-//! only.
+//! [`crate::ops::install`]/[`crate::ops::reconcile`]; this module is the
+//! index/transport layer only.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -52,86 +35,87 @@ use crate::solve::DepSource;
 use crate::util;
 use crate::version::{Constraint, Version};
 
-/// The environment variable consulted for the registry URL when no
-/// `--registry` flag and no `Satyristes` `[registry]` url is given.
+/// Registry URL, used when no `--registry` flag / `Satyristes` url is given.
 pub const REGISTRY_ENV: &str = "RUSTYFI_REGISTRY";
 
-/// Environment override for the git-index cache directory (used by tests to
-/// stay hermetic; production defaults to `$XDG_CACHE_HOME/rustyfi/
-/// registry/`).
+/// Git-index cache directory override; default `$XDG_CACHE_HOME/rustyfi/registry/`.
 pub const CACHE_ENV: &str = "RUSTYFI_REGISTRY_CACHE";
 
-/// Environment override for offline mode (saphe phase 7d slice S2):
-/// `RUSTYFI_OFFLINE=1` behaves like `--offline` for every registry
-/// operation, so CI/scripted reconciles can force it without a flag.
+/// `RUSTYFI_OFFLINE=1` behaves like `--offline` for every registry operation
+/// (slice S2).
 pub const OFFLINE_ENV: &str = "RUSTYFI_OFFLINE";
 
-/// Environment override for the git package-source clone cache directory
-/// (saphe 7d slice S3): a sibling of the git-index cache
-/// ([`CACHE_ENV`]) and the archive cache ([`crate::cache::ARCHIVE_CACHE_ENV`])
-/// under its own leaf, so a `{ git = … }` `Satyristes` package source
-/// never collides with an index clone or a tarball blob. Production default is
-/// `$XDG_CACHE_HOME/rustyfi/git-sources/`.
+/// Git package-source clone cache directory override (slice S3); sibling of
+/// [`CACHE_ENV`]/[`crate::cache::ARCHIVE_CACHE_ENV`] under its own leaf so a
+/// `{ git = … }` source never collides with an index clone or a tarball blob.
+/// Default `$XDG_CACHE_HOME/rustyfi/git-sources/`.
 pub const GIT_SOURCE_CACHE_ENV: &str = "RUSTYFI_GIT_SOURCE_CACHE";
+
+/// Overrides the HTTP connect/read timeout in seconds (default 30s); tests set
+/// this small so a stalled-server case does not wait out the real default.
+/// Only consulted when the `http` cargo feature is compiled in.
+#[cfg(feature = "http")]
+pub const HTTP_TIMEOUT_ENV: &str = "RUSTYFI_HTTP_TIMEOUT";
+
+/// Bearer-token auth for the HTTP transport (slice S3): when set, every `GET`
+/// carries an `Authorization: Bearer <token>` header. Documented user-facing
+/// in the CLI's man page. Only consulted when the `http` cargo feature is
+/// compiled in.
+#[cfg(feature = "http")]
+pub const REGISTRY_TOKEN_ENV: &str = "RUSTYFI_REGISTRY_TOKEN";
 
 /// How to reach and cache a registry index.
 #[derive(Debug, Default, Clone)]
 pub struct RegistryOptions {
     /// The `--registry URL` flag, if given (highest precedence).
     pub url: Option<String>,
-    /// The git-index cache directory; falls back to `$RUSTYFI_REGISTRY_CACHE`
-    /// then `$XDG_CACHE_HOME/rustyfi/registry/`.
+    /// Git-index cache dir; falls back to `$RUSTYFI_REGISTRY_CACHE` then
+    /// `$XDG_CACHE_HOME/rustyfi/registry/`.
     pub cache_dir: Option<PathBuf>,
-    /// Re-fetch a git index even if it is already cloned in the cache
+    /// Re-fetch a git index even if already cloned in the cache
     /// (`satyrographos update` sets this; plain `install` reuses the cache).
     pub refresh: bool,
-    /// The content-addressed archive cache directory (phase 7d S2); falls
-    /// back to `$RUSTYFI_ARCHIVE_CACHE` then
-    /// `$XDG_CACHE_HOME/rustyfi/archives/` (see [`crate::cache`]).
+    /// Content-addressed archive cache dir (slice S2); falls back to
+    /// `$RUSTYFI_ARCHIVE_CACHE` then `$XDG_CACHE_HOME/rustyfi/archives/`
+    /// (see [`crate::cache`]).
     pub archive_cache_dir: Option<PathBuf>,
-    /// The git package-source clone cache directory (phase 7d S3,
-    /// [`acquire_git_source`]); falls back to `$RUSTYFI_GIT_SOURCE_CACHE`
-    /// then `$XDG_CACHE_HOME/rustyfi/git-sources/`.
+    /// Git package-source clone cache dir (`acquire_git_source`); falls
+    /// back to `$RUSTYFI_GIT_SOURCE_CACHE` then
+    /// `$XDG_CACHE_HOME/rustyfi/git-sources/`.
     pub git_source_cache_dir: Option<PathBuf>,
-    /// Forbid network requests (`--offline`); see [`RegistryOptions::is_offline`].
+    /// Forbid network requests (`--offline`); see `RegistryOptions::is_offline`.
     pub offline: bool,
-    /// Fallback registry base URLs, tried in order
-    /// after the primary URL when a fetch fails: a tarball fetch
-    /// ([`fetch_tarball`]) or, once a registry's `kind` is `Sparse`, a
-    /// per-package index GET. Each candidate is a **host/prefix
-    /// substitution** applied to the primary URL's path+query (see
-    /// [`rewrite_to_mirror`]), verified against the *same* sha256 for a
-    /// tarball. Empty by default; an explicit flag/env value takes precedence
-    /// over a `Satyristes` `[registry] mirrors` fallback
-    /// ([`RegistryOptions::resolve_mirrors`]).
+    /// Fallback registry base URLs, tried in order after the primary URL
+    /// when a fetch fails: a tarball fetch (`fetch_tarball`) or, once a
+    /// registry's `kind` is `Sparse`, a per-package index GET. Each
+    /// candidate is a host/prefix substitution applied to the primary URL's
+    /// path+query (`rewrite_to_mirror`), verified against the same sha256
+    /// for a tarball. An explicit flag/env value takes precedence over a
+    /// `Satyristes` `[registry] mirrors` fallback (`RegistryOptions::resolve_mirrors`).
     pub mirrors: Vec<String>,
-    /// The index transport. `None` = today's
-    /// local-dir/git dispatch by URL shape ([`satyrfile::RegistryKind::Auto`]);
-    /// only `Some(Sparse)` selects the per-package HTTP index path.
+    /// The index transport. `None` = local-dir/git dispatch by URL shape
+    /// ([`crate::source::RegistryKind::Auto`]); only `Some(Sparse)` selects the
+    /// per-package HTTP index path.
     pub kind: Option<crate::source::RegistryKind>,
 }
 
 impl RegistryOptions {
-    /// Whether network access is forbidden for this operation (phase 7d
-    /// S2): either the `offline` field (set by `--offline`) or
-    /// `$RUSTYFI_OFFLINE=1`. When true, both the registry-index acquisition
-    /// ([`acquire`]) and the archive fetch ([`fetch_tarball`] /
-    /// [`crate::cache::get_or_fetch`]) must resolve entirely from what is
-    /// already cached on disk, returning [`Error::Offline`] on any miss
-    /// rather than silently reaching the network.
-    pub fn is_offline(&self) -> bool {
+    /// Whether network access is forbidden (slice S2): `offline` (set by
+    /// `--offline`) or `$RUSTYFI_OFFLINE=1`. When true, both index acquisition
+    /// ([`acquire`]) and the archive fetch must resolve entirely from what
+    /// is already cached, returning [`Error::Offline`] on any miss.
+    pub(crate) fn is_offline(&self) -> bool {
         self.offline
             || std::env::var_os(OFFLINE_ENV)
                 .map(|v| v == "1")
                 .unwrap_or(false)
     }
 
-    /// Resolve the registry URL, preferring the explicit `--registry` flag,
-    /// then `$RUSTYFI_REGISTRY`, then the `fallback` (a `Satyristes`
-    /// `[registry] url`, if any). No built-in default is shipped (the hosting
-    /// repo is undecided), so an unresolved URL is
+    /// Resolve the registry URL: explicit `--registry` flag, then
+    /// `$RUSTYFI_REGISTRY`, then `fallback` (a `Satyristes` `[registry]
+    /// url`). No built-in default is shipped, so an unresolved URL is
     /// [`Error::NoRegistry`].
-    pub fn resolve_url(&self, fallback: Option<&str>) -> Result<String, Error> {
+    pub(crate) fn resolve_url(&self, fallback: Option<&str>) -> Result<String, Error> {
         if let Some(u) = &self.url {
             return Ok(u.clone());
         }
@@ -146,13 +130,11 @@ impl RegistryOptions {
         Err(Error::NoRegistry)
     }
 
-    /// Resolve the mirror candidate list, preferring an
-    /// explicit `self.mirrors` (e.g. a future `--registry-mirror` flag) over
-    /// `fallback` (a `Satyristes` `[registry] mirrors`) — the same
-    /// explicit-wins-over-manifest precedence [`resolve_url`] uses for the
-    /// registry URL itself. `fallback` is used verbatim (not merged) when
-    /// `self.mirrors` is empty.
-    pub fn resolve_mirrors(&self, fallback: &[String]) -> Vec<String> {
+    /// Resolve the mirror candidate list: explicit `self.mirrors` takes
+    /// precedence over `fallback` (a `Satyristes` `[registry] mirrors`),
+    /// same precedence as [`Self::resolve_url`]. `fallback` is used verbatim (not
+    /// merged) when `self.mirrors` is empty.
+    pub(crate) fn resolve_mirrors(&self, fallback: &[String]) -> Vec<String> {
         if !self.mirrors.is_empty() {
             self.mirrors.clone()
         } else {
@@ -160,7 +142,6 @@ impl RegistryOptions {
         }
     }
 
-    /// The cache directory for git-cloned indexes.
     fn cache_root(&self) -> PathBuf {
         if let Some(dir) = &self.cache_dir {
             return dir.clone();
@@ -173,7 +154,6 @@ impl RegistryOptions {
         util::xdg_cache_base().join("rustyfi").join("registry")
     }
 
-    /// The cache directory for git package-source clones (phase 7d S3).
     fn git_source_cache_root(&self) -> PathBuf {
         if let Some(dir) = &self.git_source_cache_dir {
             return dir.clone();
@@ -188,10 +168,10 @@ impl RegistryOptions {
 }
 
 /// An acquired registry index: either a live local directory holding
-/// `packages/` (a git clone or a plain directory), or — Slice S — a sparse
-/// HTTP index fetched one `packages/<name>.toml` at a time. `commit` is the
-/// resolved git commit sha for a git index (`None` for a plain directory or a
-/// sparse index — neither has a single-snapshot commit to report).
+/// `packages/` (a git clone or a plain directory), or a sparse HTTP index
+/// fetched one `packages/<name>.toml` at a time. `commit` is the resolved
+/// git commit sha for a git index (`None` for a plain directory or a sparse
+/// index — neither has a single-snapshot commit to report).
 #[derive(Debug)]
 pub struct Registry {
     backend: RegistryBackend,
@@ -204,12 +184,11 @@ enum RegistryBackend {
     /// A local directory holding `packages/<name>.toml` — a git clone or a
     /// hand-made/checked-out plain directory.
     Local(PathBuf),
-    /// A sparse HTTP index: `packages/<name>.toml` is GET-ed
-    /// lazily from `<base>/packages/<name>.toml` (mirror-rewritten via
-    /// `opts.mirrors`), the *first* time each package name is looked up, and
-    /// cached in `cache` for the remainder of this `Registry`'s lifetime (one
-    /// `acquire` call = one solve/lookup pass) — a within-process cache,
-    /// not a persistent on-disk one.
+    /// A sparse HTTP index: `packages/<name>.toml` is GET-ed lazily
+    /// (mirror-rewritten via `opts.mirrors`) the first time each package
+    /// name is looked up, and cached in `cache` for the remainder of this
+    /// `Registry`'s lifetime — a within-process cache, not a persistent
+    /// on-disk one.
     Sparse {
         base: String,
         opts: RegistryOptions,
@@ -228,7 +207,7 @@ enum RegistryBackend {
 ///   directory that already has `packages/` (skips `Auto`'s short-circuit).
 /// - `Sparse`: `url` is a sparse-index base — no clone at all; `lookup` fetches
 ///   `packages/<name>.toml` over HTTP on demand.
-pub fn acquire(url: &str, opts: &RegistryOptions) -> Result<Registry, Error> {
+pub(crate) fn acquire(url: &str, opts: &RegistryOptions) -> Result<Registry, Error> {
     use crate::source::RegistryKind;
     match opts.kind.unwrap_or(RegistryKind::Auto) {
         RegistryKind::Sparse => Ok(Registry {
@@ -241,7 +220,6 @@ pub fn acquire(url: &str, opts: &RegistryOptions) -> Result<Registry, Error> {
         }),
         RegistryKind::Git => git_acquire(url, opts),
         RegistryKind::Auto => {
-            // Plain-directory index: a local path already holding `packages/`.
             if let Some(local) = local_path_from_url(url) {
                 if local.join("packages").is_dir() {
                     return Ok(Registry {
@@ -250,8 +228,6 @@ pub fn acquire(url: &str, opts: &RegistryOptions) -> Result<Registry, Error> {
                     });
                 }
             }
-            // Otherwise treat `url` as a git remote (or bare local repo) and
-            // clone/fetch.
             git_acquire(url, opts)
         }
     }
@@ -263,13 +239,9 @@ fn git_acquire(url: &str, opts: &RegistryOptions) -> Result<Registry, Error> {
     let dest = cache_root.join(cache_key(url));
     let already_cloned = dest.join(".git").is_dir();
 
-    // Offline (phase 7d S2): never shell out to `git` for
-    // anything that would touch the network. An already-cloned index is
-    // reused as-is (a stale `refresh` request is silently skipped rather than
-    // erroring — the caller asked to stay offline, which takes precedence);
-    // a never-cloned index has nothing to reuse, so it is a clean
-    // [`Error::Offline`] rather than a `git clone` that hangs/fails against a
-    // real network with a confusing [`Error::GitFailed`].
+    // Offline (slice S2): never shell out to `git`. Already-cloned is reused as-is
+    // (a stale `refresh` is silently skipped); never-cloned is a clean
+    // `Error::Offline` rather than a `git clone` against a real network.
     if opts.is_offline() {
         if !already_cloned {
             return Err(Error::Offline {
@@ -279,7 +251,6 @@ fn git_acquire(url: &str, opts: &RegistryOptions) -> Result<Registry, Error> {
     } else if already_cloned {
         if opts.refresh {
             run_git(&["-C", &dest.to_string_lossy(), "fetch", "--depth", "1", "origin"])?;
-            // Move the working tree to the freshly fetched tip.
             run_git(&[
                 "-C",
                 &dest.to_string_lossy(),
@@ -317,8 +288,7 @@ fn git_acquire(url: &str, opts: &RegistryOptions) -> Result<Registry, Error> {
     })
 }
 
-/// Run `git <args>`, mapping a non-zero exit (or a missing `git`) to
-/// [`Error::GitFailed`].
+/// Maps a non-zero exit (or missing `git`) to [`Error::GitFailed`].
 fn run_git(args: &[&str]) -> Result<(), Error> {
     let output = std::process::Command::new("git")
         .args(args)
@@ -353,56 +323,40 @@ fn git_head(repo: &Path) -> Result<String, Error> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-/// A filesystem-safe cache subdirectory name for a registry URL (the first 8
-/// bytes of its SHA-256 as hex, so two different registries never collide in the
-/// cache).
+/// A filesystem-safe cache subdirectory name for a registry URL: the first 8
+/// bytes of its SHA-256 as hex.
 fn cache_key(url: &str) -> String {
     util::sha256_hex(url.as_bytes())[..16].to_string()
 }
 
 // ---------------------------------------------------------------------------
-// Git package sources (saphe 7d slice S3): a `Satyristes`
-// `[[library]] source = { git = "…", rev = "…" }` entry — a package fetched
-// directly from a git repo, as opposed to a `{ registry = … }` entry (a
-// package looked up in a registry index, which may itself be git-hosted;
-// see `git_acquire` above). The repo is cloned through the same `git` CLI
-// shell-out `git_acquire` uses, then handed to `ops::reconcile` as a plain
-// directory — the exact same materialisation path a `{ path = … }` source
-// takes.
+// Git package sources (slice S3): a `Satyristes`
+// `[[library]] source = { git = "…", rev = "…" }` entry, fetched directly
+// from a git repo via the same `git` CLI shell-out `git_acquire` uses, then
+// handed to `ops::reconcile` as a plain directory (the `{ path = … }` path).
 // ---------------------------------------------------------------------------
 
-/// An acquired git package-source checkout: a live local
-/// working tree, checked out at the resolved commit.
+/// An acquired git package-source checkout: a live local working tree,
+/// checked out at the resolved commit.
 #[derive(Debug)]
-pub struct GitSource {
-    /// The checkout's working-tree root — readable exactly like a `{ path =
-    /// … }` source (`archive::prepare`/`ops::install::install_inner` treat it
-    /// as a plain directory; no archive/verify step applies to a git source).
+pub(crate) struct GitSource {
+    /// The checkout's working-tree root — readable like a `{ path = … }`
+    /// source; no archive/verify step applies to a git source.
     pub root: PathBuf,
-    /// The commit sha HEAD points at after checkout: what `reconcile` pins as
-    /// `Satyristes.lock`'s `rev`, so a later reconcile is reproducible without
-    /// re-resolving a moving branch/tag name: the git url plus the resolved
-    /// rev.
+    /// The commit sha HEAD points at after checkout: what `reconcile` pins
+    /// as `Satyristes.lock`'s `rev`.
     pub resolved_rev: String,
 }
 
-/// Acquire a `{ git = url, rev }` package source: clone/reuse
-/// `url` in the git-source cache ([`RegistryOptions::git_source_cache_dir`]),
-/// checked out at `rev` (a branch, tag, or commit-ish — `git checkout`
-/// resolves any of them) when given, else the remote's default-branch tip.
-///
-/// Mirrors [`git_acquire`]'s cache/refresh/offline shape exactly:
-/// - an already-cloned checkout is reused as-is unless `opts.refresh`;
-/// - [`RegistryOptions::is_offline`] forbids any `git` invocation that would
-///   touch the network — an offline request against an unseen `(url, rev)`
-///   pair is a clean [`Error::Offline`] rather than a hanging/failing clone.
+/// Acquire a `{ git = url, rev }` package source: clone/reuse `url` in the
+/// git-source cache ([`RegistryOptions::git_source_cache_dir`]), checked out
+/// at `rev` (branch, tag, or commit-ish) when given, else the default-branch
+/// tip. Mirrors `git_acquire`'s cache/refresh/offline shape.
 ///
 /// A `rev`-pinned source does a full (non-shallow) clone so `git checkout`
-/// can reach any commit, not just the branch tip a shallow clone would carry
-/// (a heavier but robust default; a shallow-clone-of-one-commit optimisation
-/// is a deferred edge case). A `rev`-less source shallow
-/// clones (`--depth 1`) the default branch, matching [`git_acquire`].
-pub fn acquire_git_source(
+/// can reach any commit, not just a shallow clone's branch tip. A `rev`-less
+/// source shallow clones (`--depth 1`), matching `git_acquire`.
+pub(crate) fn acquire_git_source(
     url: &str,
     rev: Option<&str>,
     opts: &RegistryOptions,
@@ -437,7 +391,6 @@ pub fn acquire_git_source(
             }
         }
     } else {
-        // A stale non-git dir would make clone fail; clear it first.
         if dest.exists() {
             std::fs::remove_dir_all(&dest).map_err(|e| Error::io(&dest, e))?;
         }
@@ -465,7 +418,7 @@ pub fn acquire_git_source(
 
 /// A parsed `packages/<name>.toml` index entry.
 #[derive(Debug, Clone, Deserialize)]
-pub struct PackageIndex {
+pub(crate) struct PackageIndex {
     /// Optional package description (this port's addition; surfaced by
     /// `search`).
     #[serde(default)]
@@ -477,28 +430,24 @@ pub struct PackageIndex {
 
 /// One `[versions."<v>"]` table.
 #[derive(Debug, Clone, Deserialize)]
-pub struct VersionEntry {
+pub(crate) struct VersionEntry {
     pub tarball_url: String,
-    /// The sha256 an index entry declares. Empty when the index publishes only
-    /// a [`Self::sha512`] — an OPAM repository does.
+    /// Empty when the index publishes only a [`Self::sha512`] — an OPAM
+    /// repository does.
     #[serde(default)]
     pub sha256: String,
-    /// A sha512, when that is what the index declares.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sha512: Option<String>,
-    /// This version's own declared dependencies (`name -> constraint text`,
-    /// e.g. `"^1.2.0"`, `"1.2.0"`, or `"*"` — `version::Constraint::parse`
-    /// syntax), feeding the phase-7c solver's transitive walk
-    /// (`solve::RegistryDepSource`). `#[serde(default)]` so an index written
-    /// before this field existed still parses — such a package is simply
-    /// treated as a leaf (no declared dependencies).
+    /// `name -> constraint text` (`"^1.2.0"`, `"1.2.0"`, `"*"` —
+    /// `version::Constraint::parse` syntax), feeding the solver's transitive
+    /// walk. `#[serde(default)]` so an index predating this field still
+    /// parses, as a leaf.
     #[serde(default)]
     pub dependencies: BTreeMap<String, String>,
 }
 
 impl Registry {
-    /// The on-disk path of `packages/<name>.toml`, for a [`Local`](RegistryBackend::Local)
-    /// backend — `None` for a `Sparse` index (there is no on-disk index root).
+    /// `None` for a `Sparse` index (there is no on-disk index root).
     fn local_package_path(&self, name: &str) -> Option<PathBuf> {
         match &self.backend {
             RegistryBackend::Local(root) => Some(root.join("packages").join(format!("{name}.toml"))),
@@ -507,29 +456,23 @@ impl Registry {
     }
 }
 
-/// Read and parse `packages/<name>.toml` from an acquired index
-/// (backend-aware):
-///
-/// - **Local**: read `<root>/packages/<name>.toml` from disk. A missing file
-///   is [`Error::PackageNotFound`].
-/// - **Sparse**: GET `<base>/packages/<name>.toml` (mirror-rewritten via
-///   `opts.mirrors`), through the same configured `ureq` agent +
-///   bearer auth as a tarball fetch. The parsed text is cached in the
-///   `Registry` for the remainder of its lifetime, so a package the solver
-///   visits more than once during one solve triggers only one GET
-///   (zero solver change — `RegistryDepSource` just calls `lookup`).
-pub fn lookup(reg: &Registry, name: &str) -> Result<PackageIndex, Error> {
+/// Read and parse `packages/<name>.toml` from an acquired index:
+/// **Local** reads `<root>/packages/<name>.toml` from disk (a missing file
+/// is [`Error::PackageNotFound`]); **Sparse** GETs
+/// `<base>/packages/<name>.toml` (mirror-rewritten via `opts.mirrors`) and
+/// caches the parsed text in the `Registry` for its lifetime, so the solver
+/// visiting a package more than once triggers only one GET.
+pub(crate) fn lookup(reg: &Registry, name: &str) -> Result<PackageIndex, Error> {
     if let Some(path) = reg.local_package_path(name) {
         if !path.is_file() {
-            // Satyrographos' own index is an OPAM repository — one DIRECTORY
-            // per package, holding `<name>.<version>/opam` — rather than this
-            // port's flat `packages/<name>.toml`. Read that shape too, so the
-            // packages SATySFi users already publish are reachable.
+            // Satyrographos' own index is an OPAM repository — one directory
+            // per package, holding `<name>.<version>/opam`. Read that shape
+            // too, so packages SATySFi users already publish are reachable.
             if let Some(idx) = opam_index::lookup(&path, name)? {
                 return Ok(idx);
             }
             // Satyrographos publishes library `xpath` as opam package
-            // `satysfi-xpath`, so a user naming the library still finds it.
+            // `satysfi-xpath`, so naming the library still finds it.
             let prefixed = path.with_file_name(format!("satysfi-{name}.toml"));
             if let Some(idx) = opam_index::lookup(&prefixed, &format!("satysfi-{name}"))? {
                 return Ok(idx);
@@ -563,12 +506,8 @@ fn parse_package_index(text: &str, name: &str) -> Result<PackageIndex, Error> {
     })
 }
 
-/// Fetch a sparse index file's raw text, trying `candidates` in order
-/// (the same fallback loop the tarball fetch uses). A 404 from
-/// every candidate (the package genuinely does not exist in the index) is
-/// reported as [`Error::PackageNotFound`], not a generic `HttpFailed`, so a
-/// sparse lookup surfaces the same error shape a local/git index's missing
-/// file does.
+/// A 404 from every candidate is reported as [`Error::PackageNotFound`], not
+/// a generic `HttpFailed`, matching a local/git index's missing-file error.
 fn sparse_fetch_index_text(candidates: &[String], opts: &RegistryOptions, name: &str) -> Result<String, Error> {
     if opts.is_offline() {
         return Err(Error::Offline {
@@ -586,10 +525,9 @@ fn sparse_fetch_index_text(candidates: &[String], opts: &RegistryOptions, name: 
     }
 }
 
-/// Select a version from an index entry: the exact `req`
-/// version if given (else [`Error::VersionNotFound`]), otherwise the highest
-/// available by [`version_cmp`].
-pub fn select_version<'a>(
+/// The exact `req` version if given (else [`Error::VersionNotFound`]),
+/// otherwise the highest by [`version_cmp`].
+pub(crate) fn select_version<'a>(
     idx: &'a PackageIndex,
     name: &str,
     req: Option<&str>,
@@ -614,34 +552,30 @@ pub fn select_version<'a>(
         })
 }
 
-/// Every version of `idx` that parses as a [`Version`],
-/// **sorted descending** (highest first) — the order the solver's
-/// highest-version-first candidate search wants. An index entry whose key
-/// does not parse as `major.minor.patch[-pre]` is silently skipped rather
-/// than failing the whole lookup (mirrors `#[serde(default)]` on
-/// [`VersionEntry::dependencies`]'s back-compat stance: a malformed one entry
-/// should not break every other version).
-pub fn available_versions(idx: &PackageIndex) -> Vec<Version> {
+/// Every version of `idx` that parses as a [`Version`], sorted descending
+/// (highest first). An entry whose key does not parse as
+/// `major.minor.patch[-pre]` is silently skipped rather than failing the
+/// whole lookup.
+pub(crate) fn available_versions(idx: &PackageIndex) -> Vec<Version> {
     let mut versions: Vec<Version> = idx.versions.keys().filter_map(|s| Version::parse(s).ok()).collect();
     versions.sort();
     versions.reverse();
     versions
 }
 
-/// The index entry for the exact version `v` (matched by re-parsing each key,
-/// since [`PackageIndex::versions`] is keyed by the original version string,
-/// not a [`Version`]).
-pub fn entry_for<'a>(idx: &'a PackageIndex, v: &Version) -> Option<&'a VersionEntry> {
+/// Matched by re-parsing each key, since [`PackageIndex::versions`] is keyed
+/// by the original version string, not a [`Version`].
+pub(crate) fn entry_for<'a>(idx: &'a PackageIndex, v: &Version) -> Option<&'a VersionEntry> {
     idx.versions
         .iter()
         .find(|(k, _)| Version::parse(k).ok().as_ref() == Some(v))
         .map(|(_, entry)| entry)
 }
 
-/// A simple "semver-ish" ordering: compare dotted components numerically
-/// where both parse as
-/// integers, else lexically; a shorter prefix (`1.0` vs `1.0.1`) sorts lower.
-pub fn version_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+/// A simple "semver-ish" ordering: dotted components compared numerically
+/// where both parse as integers, else lexically; a shorter prefix (`1.0` vs
+/// `1.0.1`) sorts lower.
+fn version_cmp(a: &str, b: &str) -> std::cmp::Ordering {
     use std::cmp::Ordering;
     let mut ai = a.split('.');
     let mut bi = b.split('.');
@@ -663,11 +597,10 @@ pub fn version_cmp(a: &str, b: &str) -> std::cmp::Ordering {
     }
 }
 
-/// Every package name in the index (the stems of `packages/*.toml`), sorted —
-/// used by `search`/`update` to enumerate the whole index. Not supported for a
-/// `Sparse` backend: there is no listing endpoint, only
-/// per-package GETs, matching Cargo's own sparse-index `search` limitation.
-pub fn all_package_names(reg: &Registry) -> Result<Vec<String>, Error> {
+/// Stems of `packages/*.toml`, sorted. Not supported for a `Sparse` backend:
+/// no listing endpoint, only per-package GETs (matches Cargo's own
+/// sparse-index `search` limitation).
+pub(crate) fn all_package_names(reg: &Registry) -> Result<Vec<String>, Error> {
     let root = match &reg.backend {
         RegistryBackend::Local(root) => root,
         RegistryBackend::Sparse { base, .. } => {
@@ -702,31 +635,23 @@ pub fn all_package_names(reg: &Registry) -> Result<Vec<String>, Error> {
 
 /// Reading an OPAM repository as a package index.
 ///
-/// Satyrographos publishes through OPAM, so its index is
-/// `packages/<name>/<name>.<version>/opam` — a directory per package, a
-/// directory per version, and the package's source in the opam's own `url {
-/// src: … checksum: … }` block. This maps that onto [`PackageIndex`] so the
-/// rest of the installer does not need to know which shape it came from.
+/// Satyrographos publishes through OPAM: `packages/<name>/<name>.<version>/opam`,
+/// with the source in the opam's own `url { src: … checksum: … }` block.
+/// This maps that onto [`PackageIndex`] so the rest of the installer does
+/// not need to know which shape it came from.
 ///
-/// `depends:` is deliberately NOT translated into [`VersionEntry::dependencies`]
-/// (such an entry stays a leaf to the solver), for two independent reasons,
-/// either one enough on its own:
-///
+/// `depends:` is deliberately NOT translated into [`VersionEntry::dependencies`]:
 /// - **Names.** Opam names a dependency by its opam package id
-///   (`satysfi-fonts-theano`, but also build tooling like `ocaml`/`dune`, or
-///   a version pin on `satysfi` itself — not a library at all) while this
-///   port's solver keys packages by library name (`fonts-theano`). Guessing
-///   that mapping would resolve the wrong thing, and trying to resolve
-///   `ocaml`/`dune`/`satysfi` as installable packages would turn an
-///   already-working leaf install into a hard failure.
-/// - **Constraints.** Opam's version-constraint grammar (ranges, `&`/`|`
-///   conjunction, non-version filters) has no faithful translation into this
-///   crate's [`Constraint`] (an exact pin, a caret range, or "any"); see
-///   [`crate::opam::Dependency`]'s doc.
+///   (`satysfi-fonts-theano`, or non-library tooling like `ocaml`/`dune`/
+///   `satysfi`) while this port's solver keys by library name
+///   (`fonts-theano`); guessing that mapping would resolve the wrong thing.
+/// - **Constraints.** Opam's constraint grammar (ranges, `&`/`|`, non-version
+///   filters) has no faithful translation into this crate's [`Constraint`];
+///   see [`crate::opam::Dependency`]'s doc.
 ///
-/// [`crate::opam`] parses and RECORDS `depends:` (name + raw constraint text)
-/// for a package's own `.opam` — used by [`crate::ops::prepare`] — so the
-/// data is not lost, just not wired into the solver here.
+/// [`crate::opam`] parses and records `depends:` for a package's own
+/// `.opam` (used by [`crate::ops::prepare`]), so the data is not lost, just
+/// not wired into the solver here.
 pub(crate) mod opam_index {
     use std::collections::BTreeMap;
     use std::path::Path;
@@ -735,8 +660,7 @@ pub(crate) mod opam_index {
     use crate::error::Error;
     use crate::util;
 
-    /// Whether `dir` looks like an OPAM package directory: it holds at least
-    /// one `<name>.<version>/opam`.
+    /// Holds at least one `<name>.<version>/opam`.
     pub(crate) fn is_package_dir(dir: &Path) -> bool {
         util::read_dir_paths(dir)
             .map(|paths| paths.iter().any(|p| p.join("opam").is_file()))
@@ -746,8 +670,7 @@ pub(crate) mod opam_index {
     /// Build an index for `name` from `<packages>/<name>/`. `Ok(None)` when
     /// that directory is not an OPAM package directory.
     pub(crate) fn lookup(toml_path: &Path, name: &str) -> Result<Option<PackageIndex>, Error> {
-        // `local_package_path` gave us `packages/<name>.toml`; the directory
-        // beside it is `packages/<name>`.
+        // `packages/<name>.toml`'s sibling directory is `packages/<name>`.
         let dir = toml_path.with_extension("");
         if !dir.is_dir() || !is_package_dir(&dir) {
             return Ok(None);
@@ -763,9 +686,7 @@ pub(crate) mod opam_index {
             let Some(dir_name) = version_dir.file_name().and_then(|s| s.to_str()) else {
                 continue;
             };
-            // `<name>.<version>` — everything after the first dot is the
-            // version, which for these packages looks like
-            // `2.0+satysfi0.0.3+satyrographos0.0.2`.
+            // `<name>.<version>`, e.g. `2.0+satysfi0.0.3+satyrographos0.0.2`.
             let version = dir_name
                 .strip_prefix(&format!("{name}."))
                 .unwrap_or(dir_name)
@@ -776,8 +697,6 @@ pub(crate) mod opam_index {
                 description = field(&text, "synopsis:");
             }
             let Some((tarball_url, sha256, sha512)) = source_of(&text) else {
-                // A version with no fetchable source is not installable; skip
-                // it rather than offering something that cannot be resolved.
                 continue;
             };
             versions.insert(
@@ -799,10 +718,7 @@ pub(crate) mod opam_index {
         }))
     }
 
-    /// The `url { src: "…" checksum: [ "sha256=…" ] }` block's archive and
-    /// sha256. A version whose checksum this crate cannot verify is not
-    /// offered: an unverifiable download that looks verified is worse than an
-    /// absent one.
+    /// The `url { src: "…" checksum: [ "sha256=…" ] }` block's archive and digests.
     fn source_of(text: &str) -> Option<(String, Option<String>, Option<String>)> {
         let at = text.find("url {").or_else(|| text.find("url{"))?;
         let rest = &text[at..];
@@ -815,12 +731,10 @@ pub(crate) mod opam_index {
                 .find(|s| s.starts_with(prefix))
                 .map(|s| s.trim_start_matches(prefix).to_string())
         };
-        // sha256 if the entry has one; otherwise sha512, which is what
-        // Satyrographos' index actually publishes. md5 is ignored.
+        // md5 is ignored; Satyrographos' index actually publishes sha512.
         Some((url, digest("sha256="), digest("sha512=")))
     }
 
-    /// A `field: "value"` string at the top level of an opam file.
     fn field(text: &str, field: &str) -> Option<String> {
         text.lines()
             .find(|l| l.starts_with(field))
@@ -836,68 +750,30 @@ pub(crate) mod opam_index {
     }
 }
 
-/// Adapts a live, already-[`acquire`]d [`Registry`] index to the solver's
-/// [`DepSource`] trait: each call does a fresh
-/// `packages/<name>.toml` lookup, so the solver can recurse into any package
-/// name its dependency edges name without the caller having to pre-load the
-/// whole index.
-pub struct RegistryDepSource<'a> {
-    reg: &'a Registry,
-}
-
-impl<'a> RegistryDepSource<'a> {
-    pub fn new(reg: &'a Registry) -> Self {
-        RegistryDepSource { reg }
-    }
-}
-
-impl<'a> DepSource for RegistryDepSource<'a> {
-    fn versions(&self, name: &str) -> Result<Vec<Version>, Error> {
-        let idx = lookup(self.reg, name)?;
-        Ok(available_versions(&idx))
-    }
-
-    fn deps(&self, name: &str, v: &Version) -> Result<Vec<(String, Constraint)>, Error> {
-        let idx = lookup(self.reg, name)?;
-        let entry = entry_for(&idx, v).ok_or_else(|| Error::VersionNotFound {
-            name: name.to_string(),
-            version: v.to_string(),
-        })?;
-        entry
-            .dependencies
-            .iter()
-            .map(|(dep_name, req)| Ok((dep_name.clone(), Constraint::parse(req)?)))
-            .collect()
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Several repositories at once: `update`/reconcile consult every configured
 // registry, in order — the same coverage `search` and `install NAME` have.
 // ---------------------------------------------------------------------------
 
 /// One repository, acquired, paired with the URL it was acquired from (for
-/// labeling/error messages) — [`acquire_all`]'s success list.
+/// labeling/error messages) — `acquire_all`'s success list.
 pub struct AcquiredRepo {
     pub url: String,
     pub registry: Registry,
 }
 
-/// Acquire every configured repository in `repos`, in the order they are
-/// written, mirroring `search`'s per-repository failure handling: one
-/// unreachable repository must not hide the others (a warning-worthy failure,
-/// not a fatal one, as long as at least one repository is reachable).
+/// Acquire every configured repository in `repos`, in order: one
+/// unreachable repository must not hide the others.
 ///
-/// When `reg_opts.url` already pins one explicit registry — `--registry` /
-/// `$RUSTYFI_REGISTRY`, resolved through `single_fallback` — or `repos` is
-/// empty, this acquires exactly that ONE registry: a caller who named a
-/// specific registry did not ask for every configured one to be searched too.
+/// When `reg_opts.url` already pins one explicit registry (`--registry` /
+/// `$RUSTYFI_REGISTRY`, resolved through `single_fallback`) or `repos` is
+/// empty, this acquires exactly that one registry.
 ///
-/// Returns the registries that were successfully acquired (each labeled with
-/// its URL) alongside every failure encountered (`(url, error)`, empty when
-/// everything acquired cleanly). [`Error::NoRegistry`] (or the first failure)
-/// only when NOTHING could be acquired at all.
-pub fn acquire_all(
+/// Returns the registries successfully acquired (each labeled with its URL)
+/// alongside every failure (`(url, error)`, empty when all acquired
+/// cleanly). [`Error::NoRegistry`] (or the first failure) only when nothing
+/// could be acquired at all.
+pub(crate) fn acquire_all(
     repos: &[crate::source::RegistryConfig],
     reg_opts: &RegistryOptions,
     single_fallback: Option<&str>,
@@ -912,11 +788,8 @@ pub fn acquire_all(
     let mut failed = Vec::new();
     for repo in repos {
         let Some(url) = repo.url.clone() else { continue };
-        // Each repository may declare its own mirrors/kind;
-        // an explicit `--registry`-flag-level override already short-circuited
-        // above, so here only `reg_opts`' cache/offline/token settings carry
-        // over, mirroring `mirrors`/`kind` the same way `resolve_mirrors` does
-        // for the single-registry path.
+        // Each repository may declare its own mirrors/kind; only
+        // `reg_opts`' cache/offline/token settings carry over.
         let per_repo_opts = RegistryOptions {
             url: None,
             mirrors: reg_opts.resolve_mirrors(&repo.mirrors),
@@ -938,26 +811,22 @@ pub fn acquire_all(
     Ok((ok, failed))
 }
 
-/// Adapts SEVERAL already-[`acquire`]d registries to the solver's
-/// [`DepSource`] trait at once: each lookup tries every registry in order and
-/// uses the first that HAS the package — the same "first repository that has
-/// it wins" rule `install NAME` already applies across repositories
-/// (`crates/rustyfi/src/main.rs`'s `install_one`), now also available to a
-/// solve that spans every configured repository (`update`, reconcile's
-/// registry closure).
-pub struct MultiRegistryDepSource<'a> {
+/// Adapts several already-[`acquire`]d registries to the solver's
+/// [`DepSource`] trait at once: each lookup tries every registry in order
+/// and uses the first that has the package (matching `install NAME`'s
+/// first-repository-wins rule, `crates/rustyfi/src/main.rs`'s `install_one`).
+pub(crate) struct MultiRegistryDepSource<'a> {
     regs: &'a [AcquiredRepo],
 }
 
 impl<'a> MultiRegistryDepSource<'a> {
-    pub fn new(regs: &'a [AcquiredRepo]) -> Self {
+    pub(crate) fn new(regs: &'a [AcquiredRepo]) -> Self {
         MultiRegistryDepSource { regs }
     }
 
     /// The first registry (in order) whose index has `name`, and which one
-    /// that was — so a caller can record which repository a resolved package
-    /// actually came from.
-    pub fn lookup_first(&self, name: &str) -> Result<(&'a AcquiredRepo, PackageIndex), Error> {
+    /// that was.
+    pub(crate) fn lookup_first(&self, name: &str) -> Result<(&'a AcquiredRepo, PackageIndex), Error> {
         let mut last_err: Option<Error> = None;
         for repo in self.regs {
             match lookup(&repo.registry, name) {
@@ -995,19 +864,17 @@ impl<'a> DepSource for MultiRegistryDepSource<'a> {
 // Tarball fetch + verify.
 // ---------------------------------------------------------------------------
 
-/// Fetch `tarball_url` into the file at `dest`, preferring
-/// the content-addressed archive cache (phase 7d S2) for any
-/// network URL.
+/// Fetch `tarball_url` into the file at `dest`, preferring the
+/// content-addressed archive cache for any network URL.
 ///
-/// - `file://` / plain local paths are copied directly (fully offline,
-///   never cached — a local path is already as cheap as the cache, and
-///   caching it would just be a second copy of the same bytes).
-/// - `http(s)://` is resolved through [`crate::cache::get_or_fetch`]: a
-///   cache hit that re-verifies against `sha256` is copied to `dest` with
-///   zero network; a miss fetches over HTTP (or, with `opts.is_offline()`
-///   set, fails with [`Error::Offline`] instead of fetching). Without the
-///   `http` cargo feature, any fetch attempt is [`Error::HttpDisabled`].
-pub fn fetch_tarball(
+/// - `file://` / plain local paths are copied directly (never cached — a
+///   local path is already as cheap as the cache).
+/// - `http(s)://` is resolved through `cache::get_or_fetch`: a
+///   cache hit re-verifying against `sha256` costs zero network; a miss
+///   fetches over HTTP, or fails with [`Error::Offline`] under
+///   `opts.is_offline()`. Without the `http` cargo feature, any fetch
+///   attempt is [`Error::HttpDisabled`].
+pub(crate) fn fetch_tarball(
     url: &str,
     checksum: &Checksum,
     dest: &Path,
@@ -1021,7 +888,6 @@ pub fn fetch_tarball(
     crate::cache::get_or_fetch(&candidates, checksum, dest, opts)
 }
 
-/// The raw network transport for a `http(s)://` URL, with no cache lookup —
 /// [`crate::cache::get_or_fetch`]'s sole seam into the feature-gated `http`
 /// module (kept private to this file otherwise).
 pub(crate) fn raw_http_fetch(url: &str, dest: &Path) -> Result<(), Error> {
@@ -1033,10 +899,9 @@ pub(crate) fn raw_http_fetch(url: &str, dest: &Path) -> Result<(), Error> {
 // failed fetch from the primary URL falls through to each mirror in order.
 // ---------------------------------------------------------------------------
 
-/// Build the ordered candidate URL list for a fetch: the
-/// primary URL first, then each of `mirrors` rewritten against it
-/// ([`rewrite_to_mirror`]). Shared by [`fetch_tarball`] and (Slice S)
-/// `lookup`'s sparse per-package GET.
+/// Primary URL first, then each of `mirrors` rewritten against it
+/// ([`rewrite_to_mirror`]). Shared by [`fetch_tarball`] and `lookup`'s
+/// sparse per-package GET.
 pub(crate) fn candidate_urls(primary: &str, mirrors: &[String]) -> Vec<String> {
     let mut urls = Vec::with_capacity(1 + mirrors.len());
     urls.push(primary.to_string());
@@ -1044,11 +909,8 @@ pub(crate) fn candidate_urls(primary: &str, mirrors: &[String]) -> Vec<String> {
     urls
 }
 
-/// Rewrite `primary` to be served by `mirror_base` instead: a
-/// mirror base URL is a **host/prefix substitution** — take the primary URL's
-/// path (and query) and re-root it under the mirror base, so the index stays
-/// authoritative for the path layout and a mirror is just an alternate origin
-/// serving the identical tree. E.g. primary
+/// A host/prefix substitution: re-root the primary URL's path (and query)
+/// under the mirror base. E.g. primary
 /// `https://packages.example.org/dist/foo-1.2.0.tar.gz` + mirror
 /// `https://mirror-eu.example.org` →
 /// `https://mirror-eu.example.org/dist/foo-1.2.0.tar.gz`.
@@ -1061,11 +923,9 @@ pub(crate) fn rewrite_to_mirror(primary: &str, mirror_base: &str) -> String {
     format!("{}{path}", mirror_base.trim_end_matches('/'))
 }
 
-/// Try each of `urls` in order via `f`, returning the first `Ok`, or (if
-/// every candidate fails) the **last** error encountered
-/// — a mirror serving wrong bytes or a 5xx/transport failure both fall
-/// through to the next candidate. Shared by [`crate::cache::get_or_fetch`]'s
-/// tarball-fetch loop and the sparse index's per-package GET.
+/// Returns the first `Ok`, or (if every candidate fails) the last error
+/// encountered. Shared by [`crate::cache::get_or_fetch`]'s tarball-fetch
+/// loop and the sparse index's per-package GET.
 pub(crate) fn try_candidates<T>(
     urls: &[String],
     mut f: impl FnMut(&str) -> Result<T, Error>,
@@ -1086,10 +946,10 @@ pub(crate) fn try_candidates<T>(
 /// What an index entry says a download must hash to.
 ///
 /// An OPAM repository publishes md5 and sha512; this port's own index
-/// publishes sha256. Carrying both through the fetch means the CACHE KEY and
-/// the VERIFICATION always speak the same algorithm — keying by an empty
-/// sha256 while verifying a sha512 would collide every unverified download
-/// onto one cache entry.
+/// publishes sha256. Carrying both through the fetch keeps the cache key and
+/// the verification speaking the same algorithm — keying by an empty sha256
+/// while verifying a sha512 would collide every unverified download onto
+/// one cache entry.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Checksum {
     pub sha256: String,
@@ -1119,9 +979,8 @@ impl Checksum {
 }
 
 /// Verify `path` against whichever digest the index declared: sha256 when it
-/// has one, else sha512. A version with neither is refused — an unverified
-/// download that looks verified is the outcome to avoid.
-pub fn verify_entry(path: &Path, sha256: &str, sha512: Option<&str>) -> Result<String, Error> {
+/// has one, else sha512. A version with neither is refused.
+pub(crate) fn verify_entry(path: &Path, sha256: &str, sha512: Option<&str>) -> Result<String, Error> {
     if !sha256.trim().is_empty() {
         return verify_sha256(path, sha256);
     }
@@ -1141,10 +1000,9 @@ pub fn verify_entry(path: &Path, sha256: &str, sha512: Option<&str>) -> Result<S
     Ok(actual)
 }
 
-/// Verify that the file at `path` hashes to `expected` (lowercase-hex SHA-256,
-/// compared case-insensitively). [`Error::ChecksumMismatch`] otherwise — the
-/// caller aborts before touching `dist/`.
-pub fn verify_sha256(path: &Path, expected: &str) -> Result<String, Error> {
+/// [`Error::ChecksumMismatch`] on mismatch (case-insensitive hex compare) —
+/// the caller aborts before touching `dist/`.
+pub(crate) fn verify_sha256(path: &Path, expected: &str) -> Result<String, Error> {
     let actual = util::sha256_file(path)?;
     if !actual.eq_ignore_ascii_case(expected.trim()) {
         return Err(Error::ChecksumMismatch {
@@ -1158,12 +1016,11 @@ pub fn verify_sha256(path: &Path, expected: &str) -> Result<String, Error> {
 /// Interpret a registry/tarball URL as a local filesystem path, or `None` for a
 /// network URL. `file://` (optionally `file://localhost/…`) is stripped to its
 /// path; a string with no `scheme://` is treated as a plain local path.
-pub fn local_path_from_url(url: &str) -> Option<PathBuf> {
+pub(crate) fn local_path_from_url(url: &str) -> Option<PathBuf> {
     if let Some(rest) = url.strip_prefix("file://") {
-        // The authority must be empty (`file:///abs/path`) or exactly
-        // `localhost` (`file://localhost/abs/path`); any other host is a
-        // non-local URL we do not treat as an on-disk path (so it falls through
-        // to the git-clone path instead of silently reading a bogus directory).
+        // Authority must be empty (`file:///abs/path`) or `localhost`; any
+        // other host falls through to the git-clone path instead of
+        // silently reading a bogus directory.
         if let Some(after) = rest.strip_prefix("localhost/") {
             return Some(PathBuf::from(format!("/{after}")));
         }
@@ -1189,58 +1046,39 @@ pub fn local_path_from_url(url: &str) -> Option<PathBuf> {
 pub(crate) mod http {
     use super::*;
 
-    /// Overrides the connect/read timeout in seconds; production
-    /// defaults to [`DEFAULT_TIMEOUT_SECS`]. Tests set this to a small value so
-    /// the stalled-server timeout case does not have to wait out the real
-    /// default.
-    #[cfg(feature = "http")]
-    pub const TIMEOUT_ENV: &str = "RUSTYFI_HTTP_TIMEOUT";
-
     #[cfg(feature = "http")]
     const DEFAULT_TIMEOUT_SECS: u64 = 30;
 
-    /// Bounded redirect following — enough for a CDN/registry
-    /// mirror hop, not an open-ended chain.
     #[cfg(feature = "http")]
     const MAX_REDIRECTS: u32 = 5;
 
-    /// Refuse to stream more than this many bytes from a single tarball
-    /// response — the max response-body size guard: a
-    /// hostile/misconfigured server must not be able to exhaust disk/memory on
-    /// a fetch. Generous for any real SATySFi package archive.
+    /// Max response-body size: a hostile/misconfigured server must not be
+    /// able to exhaust disk/memory on a fetch.
     #[cfg(feature = "http")]
     const MAX_BODY_BYTES: u64 = 512 * 1024 * 1024; // 512 MiB
 
-    /// Bearer-token auth for the registry HTTP transport (saphe 7d slice
-    /// S3): token auth via an env var, which `ureq` already
-    /// supports. When set, every tarball `GET` carries an `Authorization:
-    /// Bearer <token>` header — `ureq`'s request builder already supports
-    /// arbitrary headers, so this needs no auth-specific dependency. The
-    /// value is read fresh per request and never included in any `Error`
-    /// message/log (only the URL and status/transport text are).
-    #[cfg(feature = "http")]
-    pub const AUTH_TOKEN_ENV: &str = "RUSTYFI_REGISTRY_TOKEN";
-
+    /// Bearer-token auth (slice S3), read fresh per request and never
+    /// included in any `Error` message/log (only the URL and status/transport
+    /// text are). See [`super::REGISTRY_TOKEN_ENV`].
     #[cfg(feature = "http")]
     fn auth_token() -> Option<String> {
-        std::env::var(AUTH_TOKEN_ENV)
+        std::env::var(super::REGISTRY_TOKEN_ENV)
             .ok()
             .filter(|s| !s.is_empty())
     }
 
     #[cfg(feature = "http")]
     fn timeout() -> std::time::Duration {
-        std::env::var(TIMEOUT_ENV)
+        std::env::var(super::HTTP_TIMEOUT_ENV)
             .ok()
             .and_then(|s| s.parse::<u64>().ok())
             .map(std::time::Duration::from_secs)
             .unwrap_or(std::time::Duration::from_secs(DEFAULT_TIMEOUT_SECS))
     }
 
-    /// A configured agent: explicit connect+read timeout
-    /// and a bounded redirect count, so a stalled or endlessly-redirecting
-    /// server must fail within a bounded budget instead of hanging the
-    /// install.
+    /// Explicit connect+read timeout and bounded redirect count, so a
+    /// stalled or endlessly-redirecting server fails within a bounded
+    /// budget instead of hanging the install.
     #[cfg(feature = "http")]
     fn agent() -> ureq::Agent {
         let t = timeout();
@@ -1299,12 +1137,10 @@ pub(crate) mod http {
         })
     }
 
-    /// `get_to_file`'s sibling for the sparse index (Slice S):
-    /// GET `url` and return its body as a `String` rather than writing it to
-    /// disk — a `packages/<name>.toml` is small text, not a tarball, and has
-    /// no sha256 to verify against (the index entry itself is what a
-    /// tarball's sha256 checks). Reuses the same configured [`agent`], bearer
-    /// auth, timeout, redirect bound, and body-size cap as [`get_to_file`].
+    /// `get_to_file`'s sibling for the sparse index: returns the body as a
+    /// `String` rather than writing it to disk — a `packages/<name>.toml`
+    /// has no sha256 to verify against. Reuses [`agent`], bearer auth,
+    /// timeout, redirect bound, and body-size cap.
     #[cfg(feature = "http")]
     pub fn get_to_string(url: &str) -> Result<String, Error> {
         let mut req = agent().get(url);
@@ -1370,7 +1206,6 @@ mod tests {
         assert_eq!(local_path_from_url("file://realhost/srv/index"), None);
         assert_eq!(local_path_from_url("file://localhost-mirror/pkg"), None);
         assert_eq!(local_path_from_url("file://localhost"), None);
-        // Network URLs are never local.
         assert_eq!(local_path_from_url("https://example.com/x.tar.gz"), None);
         assert_eq!(local_path_from_url("git://host/repo.git"), None);
     }

@@ -17,7 +17,7 @@
 //! ```
 //!
 //! That value is Yojson, not JSON — upstream's variant syntax, which
-//! [`rustyfi_pdf`]'s reader accepts. Parsing it into a JSON model and printing
+//! `rustyfi_pdf`'s reader accepts. Parsing it into a JSON model and printing
 //! it back would silently rewrite a package's own declaration into a shape its
 //! author never wrote, so each entry's text is preserved exactly as it came and
 //! only the *keys* are interpreted. What is merged is the set of keys; what is
@@ -36,7 +36,6 @@ pub struct HashFile {
     entries: Vec<(String, String)>,
 }
 
-/// Why a hash file could not be read as one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParseError {
     pub message: String,
@@ -49,8 +48,7 @@ impl std::fmt::Display for ParseError {
 }
 
 impl HashFile {
-    /// Read a hash file. The outer value must be an object; each member's value
-    /// is kept as text.
+    /// The outer value must be an object; each member's value is kept as text.
     pub fn parse(text: &str) -> Result<Self, ParseError> {
         let chars: Vec<char> = text.chars().collect();
         let mut i = skip_ws(&chars, 0);
@@ -87,7 +85,7 @@ impl HashFile {
         Ok(HashFile { entries })
     }
 
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
 
@@ -97,7 +95,7 @@ impl HashFile {
     }
 
     /// Drop `keys` — how a package's own entries leave a shared file.
-    pub fn remove_keys(&mut self, keys: &[String]) {
+    pub(crate) fn remove_keys(&mut self, keys: &[String]) {
         let drop: BTreeSet<&str> = keys.iter().map(String::as_str).collect();
         self.entries.retain(|(k, _)| !drop.contains(k.as_str()));
     }
@@ -106,7 +104,7 @@ impl HashFile {
     /// the caller removes the ones it owns first, so anything left is another
     /// package's (or the standard library's) and silently overwriting it would
     /// change which file a font name resolves to.
-    pub fn merge_in(&mut self, other: &HashFile) -> Result<(), Vec<String>> {
+    pub(crate) fn merge_in(&mut self, other: &HashFile) -> Result<(), Vec<String>> {
         let mine: BTreeSet<&str> = self.keys().collect();
         let clashes: Vec<String> = other
             .keys()
@@ -121,7 +119,7 @@ impl HashFile {
     }
 
     /// Serialise: one entry per line, values as they came in.
-    pub fn to_text(&self) -> String {
+    pub(crate) fn to_text(&self) -> String {
         if self.entries.is_empty() {
             return "{}\n".to_string();
         }
@@ -219,8 +217,6 @@ mod tests {
 
     #[test]
     fn a_yojson_variant_value_survives_a_round_trip() {
-        // Upstream's own spelling. Reprinting this as plain JSON would rewrite
-        // a package author's declaration.
         let text = r#"{ "TheanoDidot": <Single: { "src-dist": "fonts-theano/T.otf" }> }"#;
         let f = HashFile::parse(text).unwrap();
         let out = f.to_text();

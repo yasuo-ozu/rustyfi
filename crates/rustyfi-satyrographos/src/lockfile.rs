@@ -16,7 +16,7 @@ use crate::source::SourceSpec;
 use crate::util;
 
 /// The lockfile filename (a sibling of `Satyristes`).
-pub const LOCK_NAME: &str = "Satyristes.lock";
+const LOCK_NAME: &str = "Satyristes.lock";
 
 /// A parsed `Satyristes.lock`.
 #[derive(Debug, Default, Clone, Deserialize, Serialize)]
@@ -28,7 +28,7 @@ pub struct Lockfile {
 /// One locked entry: the manifest entry plus its resolved content hash.
 ///
 /// For a `{ path = … }` source, `sha256` is a deterministic digest over the
-/// source tree ([`util::sha256_tree`](crate::util::sha256_tree)) and `url` is
+/// source tree ([`source_digest`]) and `url` is
 /// `None`. For a `{ registry = … }` source (phase 3), the entry
 /// pins the concrete resolved *(version, url, sha256)* — `source.version`
 /// carries the resolved version, `url` the tarball URL, and `sha256` the
@@ -50,30 +50,52 @@ pub struct LockEntry {
     pub resolved_at: String,
 }
 
+/// The content digest a `{ path = … }` [`LockEntry::sha256`] records —
+/// exposed so an external tool (a `Satyristes.lock` writer or verifier that
+/// is not this crate, e.g. the `rustyfi-saphe` port) can reproduce or check a
+/// lock entry byte-for-byte without re-deriving the algorithm from scratch.
+///
+/// The algorithm, precisely:
+///
+/// - **A regular file** at `path` digests to the lowercase-hex SHA-256 of its
+///   raw bytes.
+/// - **A directory** at `path` digests as a Merkle-style hash over every
+///   regular file it contains, at any depth: each contributing file emits one
+///   row `"<rel-path>\0<file-sha256>\n"`, where `rel-path` is its path
+///   relative to `path` with `/` separators (regardless of host OS) and
+///   `file-sha256` is that file's own lowercase-hex SHA-256 digest as defined
+///   above. The rows are sorted lexicographically by their exact `rel-path`
+///   text, concatenated in that order, and the whole concatenation is hashed
+///   with SHA-256 (lowercase hex). Sorting first makes the result independent
+///   of directory-iteration order; the row shape (`\0` before the digest,
+///   `\n` after it) makes it depend on both a file's path AND its content,
+///   so either one changing changes the digest.
+///
+/// Sub-directories contribute no row of their own — only the files they
+/// (transitively) contain do.
+pub fn source_digest(path: &Path) -> Result<String, Error> {
+    util::sha256_tree(path)
+}
+
 impl Lockfile {
     /// The locked entry for `name`, if any.
-    pub fn get(&self, name: &str) -> Option<&LockEntry> {
+    pub(crate) fn get(&self, name: &str) -> Option<&LockEntry> {
         self.libraries.iter().find(|e| e.name == name)
     }
 
-    /// A stable content fingerprint of the resolved graph (C3):
-    /// a SHA-256 over every entry's `(name, resolved version or source path,
-    /// sha256)` triple, sorted by name so the digest does not depend on the
-    /// lockfile's on-disk `[[library]]` order (which the phase-7c solver's
-    /// closure assembly does not guarantee to be manifest order — see
-    /// `ops::reconcile`). Feeds the compiler's cache key
-    /// (`rustyfi/src/cache.rs::compute_key`): a re-solve that changes any
-    /// locked version changes this digest, which invalidates every cached
-    /// render keyed on the old one.
+    /// A stable content fingerprint of the resolved graph (C3): a SHA-256
+    /// over every entry's `(name, resolved version or source path, sha256)`
+    /// triple, sorted by name so the digest does not depend on the
+    /// lockfile's on-disk `[[library]]` order. Feeds the compiler's cache
+    /// key (`rustyfi/src/cache.rs::compute_key`): a re-solve that changes
+    /// any locked version invalidates every cached render keyed on the old
+    /// digest.
     ///
     /// The "resolved version" component is `source.version` for a registry
-    /// entry (the pin `reconcile`/`solve` chose), `source.path` for a path
-    /// entry (there is no version, but the path participates so a
-    /// re-pointed — same-name, same-hash-coincidentally — path entry still
-    /// changes the digest), or `source.rev` for a git entry (the resolved
-    /// commit sha `reconcile` pinned, saphe 7d slice S3) — a genuinely empty
-    /// entry (never materialised, `Error::UnsupportedSource`) falls back to
-    /// `""`.
+    /// entry, `source.path` for a path entry (no version, but the path
+    /// still changes the digest if re-pointed), or `source.rev` for a git
+    /// entry (the resolved commit sha, slice S3) — a never-materialised
+    /// entry falls back to `""`.
     pub fn digest(&self) -> String {
         let mut rows: Vec<(String, String, String)> = self
             .libraries
@@ -135,7 +157,7 @@ pub fn read(path: &Path) -> Result<Lockfile, Error> {
 
 /// Serialise and atomically write `lock` to `path` (temp file + rename, so a
 /// reader never sees a half-written lockfile — same discipline as receipts).
-pub fn write(path: &Path, lock: &Lockfile) -> Result<(), Error> {
+pub(crate) fn write(path: &Path, lock: &Lockfile) -> Result<(), Error> {
     util::write_toml_atomic(path, lock)
 }
 

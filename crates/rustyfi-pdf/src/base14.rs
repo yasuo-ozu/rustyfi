@@ -1,15 +1,13 @@
 //! Base-14 Helvetica metrics (advance widths transcribed from the freely
-//! redistributable Adobe Core-14 AFM files), covering ASCII 32–126. This is
-//! the milestone-1 `FontMetrics` provider — no font files are parsed at all.
+//! redistributable Adobe Core-14 AFM files), covering ASCII 32–126. No font
+//! files are parsed — advances come from this fixed table.
 
 use rustyfi_backend::{FontKey, FontMetrics, Length};
 
-pub const FONT_REGULAR: FontKey = FontKey(0);
-pub const FONT_BOLD: FontKey = FontKey(1);
-pub const FONT_OBLIQUE: FontKey = FontKey(2);
+pub(crate) const FONT_BOLD: FontKey = FontKey(1);
 
 /// PostScript base font names, indexed by `FontKey`.
-pub const BASE_FONT_NAMES: [&str; 3] = ["Helvetica", "Helvetica-Bold", "Helvetica-Oblique"];
+pub(crate) const BASE_FONT_NAMES: [&str; 3] = ["Helvetica", "Helvetica-Bold", "Helvetica-Oblique"];
 
 /// Helvetica advance widths for chars 32..=126, in 1/1000 em.
 /// (Helvetica-Oblique shares these.)

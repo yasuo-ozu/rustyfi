@@ -7,10 +7,10 @@
 //! ## Key and location
 //!
 //! The cache key is the archive's SHA-256 — exactly what a lockfile
-//! [`crate::lockfile::LockEntry`] / registry [`crate::registry::VersionEntry`]
+//! [`crate::lockfile::LockEntry`] / registry `VersionEntry`
 //! already carries, so the key is known *before* any fetch. The cache root
-//! mirrors [`crate::registry::RegistryOptions::cache_root`]'s XDG-cache-dir
-//! resolution (both share [`crate::util::xdg_cache_base`]), but under a
+//! mirrors `RegistryOptions::cache_root`'s XDG-cache-dir
+//! resolution (both share `util::xdg_cache_base`), but under a
 //! sibling `archives/` leaf instead of `registry/` — the two caches hold
 //! different content (a git-cloned index tree vs. content-addressed tarball
 //! blobs) and must never collide:
@@ -21,13 +21,13 @@
 //! 3. `$XDG_CACHE_HOME/rustyfi/archives/` (else `$HOME/.cache/…`, else
 //!    `.cache/…`).
 //!
-//! ## Fetch flow ([`get_or_fetch`])
+//! ## Fetch flow (`get_or_fetch`)
 //!
 //! 1. If `<cache_root>/<sha256>.tar.gz` exists **and re-verifies** against
 //!    `sha256`, copy it to `dest` — zero network. An entry that exists but
 //!    fails to re-verify (corrupted on disk, say) is never trusted blindly:
 //!    it is discarded and treated as a miss.
-//! 2. Otherwise: if [`RegistryOptions::is_offline`], [`Error::Offline`] —
+//! 2. Otherwise: if `RegistryOptions::is_offline`, [`Error::Offline`] —
 //!    no request is attempted.
 //! 3. Otherwise: fetch `url` into a private temp file under the cache root,
 //!    verify it against `sha256` (a mismatch deletes the temp file and
@@ -47,8 +47,8 @@ pub const ARCHIVE_CACHE_ENV: &str = "RUSTYFI_ARCHIVE_CACHE";
 
 /// The archive cache root directory (see the cache-location precedence
 /// below). Archives themselves live at `<cache_root>/<sha256>.tar.gz`
-/// (see [`cache_path`]).
-pub fn cache_root(opts: &RegistryOptions) -> PathBuf {
+/// (see `cache_path`).
+fn cache_root(opts: &RegistryOptions) -> PathBuf {
     if let Some(dir) = &opts.archive_cache_dir {
         return dir.clone();
     }
@@ -64,7 +64,7 @@ pub fn cache_root(opts: &RegistryOptions) -> PathBuf {
 /// cache root. `sha256` is normalised to lowercase (the same
 /// case-insensitive comparison [`registry::verify_sha256`] uses) so an
 /// index/lockfile entry with uppercase hex still hits the same cache file.
-pub fn cache_path(opts: &RegistryOptions, sha256: &str) -> PathBuf {
+fn cache_path(opts: &RegistryOptions, sha256: &str) -> PathBuf {
     cache_root(opts).join(format!("{}.tar.gz", sha256.trim().to_lowercase()))
 }
 
@@ -94,9 +94,6 @@ pub(crate) fn get_or_fetch(
         std::fs::copy(&cached, dest).map_err(|e| Error::io(&cached, e))?;
         return Ok(());
     }
-    // A stale/corrupted cache entry (present but failed to re-verify) is
-    // dropped rather than trusted — fall through to a fresh fetch below,
-    // which will overwrite it once the new download re-verifies.
     if cached.is_file() {
         let _ = std::fs::remove_file(&cached);
     }
@@ -118,7 +115,7 @@ pub(crate) fn get_or_fetch(
         let _guard = TmpGuard(tmp.clone());
 
         registry::raw_http_fetch(url, &tmp)?;
-        checksum.verify(&tmp)?; // mismatch: TmpGuard cleans `tmp`, cache stays unpopulated; try the next candidate.
+        checksum.verify(&tmp)?;
 
         // Atomically populate the cache (rename, not copy, so a reader never
         // observes a half-written cache entry), then copy the verified bytes

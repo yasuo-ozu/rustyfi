@@ -18,9 +18,6 @@ use sha2::{Digest, Sha256};
 
 use crate::error::Error;
 
-/// Read `path` to a `String`, mapping any I/O failure to [`Error::io`] with the
-/// path that failed — the read half of every manifest/receipt/lockfile/index
-/// parse in the crate.
 pub(crate) fn read_to_string(path: &Path) -> Result<String, Error> {
     std::fs::read_to_string(path).map_err(|e| Error::io(path, e))
 }
@@ -92,9 +89,8 @@ pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), Error> {
 }
 
 /// Current wall-clock time as an RFC 3339 UTC string, e.g.
-/// `2026-07-04T12:00:00Z`. Uses Howard Hinnant's `civil_from_days` to turn
-/// a Unix day count into a Gregorian date without any calendar crate.
-pub fn now_rfc3339() -> String {
+/// `2026-07-04T12:00:00Z`.
+pub(crate) fn now_rfc3339() -> String {
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -125,15 +121,13 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
     (if m <= 2 { y + 1 } else { y }, m, d)
 }
 
-/// Lowercase-hex SHA-256 of an in-memory byte slice.
 pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
     hex(&hasher.finalize())
 }
 
-/// Lowercase-hex SHA-256 of the file at `path`.
-pub fn sha256_file(path: &Path) -> Result<String, Error> {
+pub(crate) fn sha256_file(path: &Path) -> Result<String, Error> {
     let bytes = std::fs::read(path).map_err(|e| Error::io(path, e))?;
     Ok(sha256_hex(&bytes))
 }
@@ -144,7 +138,7 @@ pub fn sha256_file(path: &Path) -> Result<String, Error> {
 /// `sha256`, so verifying what it actually ships means speaking sha512 too.
 /// md5 is deliberately not accepted: a checksum that no longer resists
 /// collisions is not a check.
-pub fn sha512_file(path: &Path) -> Result<String, Error> {
+pub(crate) fn sha512_file(path: &Path) -> Result<String, Error> {
     use sha2::{Digest, Sha512};
     let bytes = std::fs::read(path).map_err(|e| Error::io(path, e))?;
     let mut hasher = Sha512::new();
@@ -158,7 +152,11 @@ pub fn sha512_file(path: &Path) -> Result<String, Error> {
 /// files — each contributing `"<rel-path>\0<file-sha256>\n"` in sorted order,
 /// so the digest is stable regardless of directory-iteration order and
 /// changes iff any file's path or content changes.
-pub fn sha256_tree(path: &Path) -> Result<String, Error> {
+///
+/// Exposed to the rest of the crate only through
+/// [`crate::lockfile::source_digest`], which is the public spelling of this
+/// exact algorithm.
+pub(crate) fn sha256_tree(path: &Path) -> Result<String, Error> {
     if path.is_file() {
         return sha256_file(path);
     }

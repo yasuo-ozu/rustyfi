@@ -1,5 +1,5 @@
 //! `rustyfi-package.toml` parsing and the no-manifest fallback discovery,
-//! producing a flat [`PackagePlan`]: the concrete list of (absolute source
+//! producing a flat `PackagePlan`: the concrete list of (absolute source
 //! file → root-relative destination) pairs that the installer stages and
 //! materialises.
 //!
@@ -24,12 +24,10 @@ use serde::{Deserialize, Serialize};
 use crate::error::Error;
 use crate::util;
 
-/// The name of the per-package manifest, at the root of an install source.
-pub const MANIFEST_NAME: &str = "rustyfi-package.toml";
+pub(crate) const MANIFEST_NAME: &str = "rustyfi-package.toml";
 
-/// A parsed `rustyfi-package.toml`.
 #[derive(Debug, Deserialize)]
-pub struct Manifest {
+pub(crate) struct Manifest {
     pub package: PackageMeta,
     #[serde(default)]
     pub files: Vec<FileDecl>,
@@ -37,14 +35,16 @@ pub struct Manifest {
     pub dependencies: BTreeMap<String, String>,
 }
 
-/// The `[package]` table.
 #[derive(Debug, Deserialize)]
-pub struct PackageMeta {
+pub(crate) struct PackageMeta {
     pub name: String,
     pub version: String,
     /// Required, but phase 1 only *warns* against it — no hard gate, so
-    /// this crate merely records it.
+    /// this crate merely records it. Deliberately never read back out
+    /// (see the doc above); `dead_code` would otherwise flag it now that
+    /// `PackageMeta` is `pub(crate)` rather than fully public.
     #[serde(rename = "rustyfi-version-compat")]
+    #[allow(dead_code)]
     pub rustyfi_version_compat: String,
     #[serde(default)]
     pub description: Option<String>,
@@ -53,9 +53,8 @@ pub struct PackageMeta {
     pub lang: Lang,
 }
 
-/// One `[[files]]` declaration.
 #[derive(Debug, Deserialize)]
-pub struct FileDecl {
+pub(crate) struct FileDecl {
     pub kind: FileKind,
     /// Source path, relative to the source root.
     pub src: String,
@@ -83,8 +82,7 @@ pub enum Lang {
 }
 
 impl Lang {
-    /// The corpus directory this generation installs into.
-    pub fn dist_dir(self) -> &'static str {
+    fn dist_dir(self) -> &'static str {
         match self {
             Lang::V0_0 => "dist",
             Lang::V0_1 => "dist-v01",
@@ -109,10 +107,9 @@ impl Lang {
     }
 }
 
-/// A source-declaration kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-pub enum FileKind {
+pub(crate) enum FileKind {
     PackageDir,
     Package,
     FontDir,
@@ -129,7 +126,7 @@ pub enum FileKind {
 /// One planned copy: absolute source file → root-relative destination
 /// (`/`-separated).
 #[derive(Debug, Clone)]
-pub struct PlannedFile {
+pub(crate) struct PlannedFile {
     pub src: PathBuf,
     pub dst: String,
     /// Merge into whatever is already at `dst` instead of replacing it — true
@@ -139,19 +136,24 @@ pub struct PlannedFile {
     pub merge: bool,
 }
 
-/// A flat, ready-to-stage install plan derived from a source tree.
 #[derive(Debug)]
-pub struct PackagePlan {
+pub(crate) struct PackagePlan {
     pub name: String,
     /// Which corpus this plan installs into.
     pub lang: Lang,
     pub version: String,
+    /// Recorded only; not currently consulted (kept for parity with the
+    /// manifest, and for a future receipt/listing use).
+    #[allow(dead_code)]
     pub description: Option<String>,
     /// Recorded only; never resolved through phase 3.
+    #[allow(dead_code)]
     pub dependencies: BTreeMap<String, String>,
     pub files: Vec<PlannedFile>,
     /// True when this plan came from the no-manifest `packages/`-fallback
-    /// rather than a real `rustyfi-package.toml`.
+    /// rather than a real `rustyfi-package.toml`. Recorded only; not
+    /// currently branched on.
+    #[allow(dead_code)]
     pub from_fallback: bool,
 }
 
@@ -163,7 +165,7 @@ pub struct PackagePlan {
 /// `(library ...)` blocks; the `toml` and fallback paths always yield exactly
 /// one plan. A source carrying *both* a `rustyfi-package.toml` and a
 /// `Satyristes` is rejected as ambiguous (the plan states no precedence).
-pub fn discover(source_root: &Path) -> Result<Vec<PackagePlan>, Error> {
+pub(crate) fn discover(source_root: &Path) -> Result<Vec<PackagePlan>, Error> {
     let manifest_path = source_root.join(MANIFEST_NAME);
     let has_manifest = manifest_path.is_file();
     let has_satyristes = source_root.join(crate::satyristes::SATYRISTES_NAME).is_file();
@@ -193,8 +195,6 @@ pub fn discover(source_root: &Path) -> Result<Vec<PackagePlan>, Error> {
 
 pub(crate) fn plan_from_manifest(source_root: &Path, manifest: Manifest) -> Result<PackagePlan, Error> {
     let name = manifest.package.name;
-    // 0.1 packages live in their own corpus directory; everything below is the
-    // same layout under a different root.
     let lang = manifest.package.lang;
     let dist = lang.dist_dir();
     let mut files = Vec::new();
@@ -224,9 +224,6 @@ pub(crate) fn plan_from_manifest(source_root: &Path, manifest: Manifest) -> Resu
                 push_file(&src_abs, &format!("{dist}/doc/{name}/{dst}"), &mut files)?
             }
             FileKind::Hash => {
-                // Flat, no per-library namespace — and shared, so
-                // merged rather than copied: `fonts.satysfi-hash` holds every
-                // font package's entries at once.
                 let dst = require_dst(decl, "hash")?;
                 push_merge_file(&src_abs, &format!("{dist}/hash/{dst}"), &mut files)?
             }
@@ -285,8 +282,6 @@ fn require_dst<'a>(decl: &'a FileDecl, kind: &'static str) -> Result<&'a str, Er
         .ok_or(Error::MissingDst { kind })
 }
 
-/// Push a single source file → dst, verifying the source exists and is a
-/// regular file.
 fn push_file(src: &Path, dst: &str, out: &mut Vec<PlannedFile>) -> Result<(), Error> {
     push_one(src, dst, false, out)
 }

@@ -26,10 +26,8 @@ use crate::error::Error;
 use crate::source::RegistryConfig;
 use crate::util;
 
-/// The file name looked for inside the config directory.
-pub const CONFIG_NAME: &str = "config.toml";
+const CONFIG_NAME: &str = "config.toml";
 
-/// A parsed `config.toml`.
 #[derive(Debug, Default, Clone, Deserialize)]
 pub struct Config {
     /// The default package repositories. Written either as one `[registry]`
@@ -95,7 +93,7 @@ impl Config {
 ///
 /// The shipped file is last: a default that travelled with the program must
 /// never win over a config its user wrote.
-pub fn config_dirs() -> Vec<PathBuf> {
+fn config_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     if let Some(dir) = std::env::var_os("RUSTYFI_CONFIG_DIR") {
         dirs.push(PathBuf::from(dir));
@@ -111,8 +109,7 @@ pub fn config_dirs() -> Vec<PathBuf> {
     dirs
 }
 
-/// The first config file that exists, if any.
-pub fn config_path() -> Option<PathBuf> {
+fn config_path() -> Option<PathBuf> {
     config_dirs()
         .into_iter()
         .map(|dir| dir.join(CONFIG_NAME))
@@ -129,7 +126,6 @@ pub fn load() -> Result<Config, Error> {
     }
 }
 
-/// Read a config from an explicit path.
 pub fn read(path: &Path) -> Result<Config, Error> {
     let text = util::read_to_string(path)?;
     toml::from_str(&text).map_err(|source| Error::Config {

@@ -1,5 +1,5 @@
-//! Box/glue model, typesetting context, line and page breaking — the
-//! backend of the SATySFi port (a milestone-1 subset of `src/backend/`).
+//! Box/glue model, typesetting context, line and page breaking — the port of
+//! upstream `src/backend/`.
 
 pub mod context;
 pub mod doc;
@@ -35,9 +35,7 @@ pub use length::Length;
 pub use linebreak::{
     break_into_lines, break_opportunities, fit_cell, measure_block, natural_metrics, BreakKind,
 };
-pub use math::{
-    default_math_class_map, default_math_variant_char, MathCharClass, MathGlyph, MathKind,
-};
+pub use math::{default_math_variant_char, MathCharClass, MathGlyph, MathKind};
 pub use pagebreak::{
     chop_page, place_block_at, placed_line_extent, Page, PlacedLine, MIN_FIRST_ASCENDER,
 };

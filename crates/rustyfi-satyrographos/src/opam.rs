@@ -1,19 +1,16 @@
 //! The `.opam` fields a SATySFi package needs before it can be installed:
 //! `extra-source`, `build:`, and `depends:`.
 //!
-//! Font packages are the reason for the first two. `satysfi-fonts-theano`
-//! ships no fonts — it ships an `extra-source` naming an upstream zip and a
-//! checksum, and a `build:` line that unpacks it; only then do the paths its
-//! `Satyristes` declares exist. Reading the whole opam language is not the
-//! goal, and this deliberately does not: it scans for these fields and
-//! ignores the rest, because everything else in the file is for OPAM, which
-//! this port does not have.
+//! Font packages are the reason for the first two: `satysfi-fonts-theano`
+//! ships no fonts, only an `extra-source` naming an upstream zip and
+//! checksum plus a `build:` line that unpacks it; only then do the paths
+//! its `Satyristes` declares exist. This deliberately scans for these three
+//! fields and ignores the rest of the opam language, which is for OPAM.
 //!
 //! `depends:` is parsed too (name plus raw constraint text — see
 //! [`Dependency`]) and RECORDED on [`Opam`], but deliberately not translated
 //! into [`crate::version::Constraint`] or fed to the solver: see
-//! [`Dependency`]'s own doc for why, and `registry::opam_index`'s module doc
-//! for the sibling registry-index reader's story.
+//! [`Dependency`]'s own doc for why.
 //!
 //! ```text
 //! extra-source "theano-2.0.otf.zip" {
@@ -54,16 +51,14 @@ pub struct ExtraSource {
 ///
 /// The clause is kept as opam's own text (`>= "0.0.3" & < "0.0.4"`, `= "1.0.0"`,
 /// a `{ os = "linux" }` build filter, …) rather than translated into
-/// [`crate::version::Constraint`]. Opam's grammar has comparison ranges,
-/// boolean `&`/`|` conjunction, and non-version filters; this crate's
-/// constraint model is only an exact pin, a caret range, or "any"
-/// ([`crate::version::Constraint`]) — there is no faithful mapping from one to
-/// the other, and a *guessed* one would be worse than an admittedly-unparsed
-/// one, because a wrong constraint that happens to parse looks trustworthy.
-/// Likewise the name is opam's own package id (`"satysfi"`, `"ocaml"`,
-/// `"satysfi-base"`, …), not resolved against this port's library-name
-/// registry lookup — see `registry::opam_index`'s module doc for why that step
-/// is also not taken here.
+/// [`crate::version::Constraint`]: opam's grammar has comparison ranges,
+/// boolean `&`/`|` conjunction, and non-version filters, while this crate's
+/// constraint model is only an exact pin, a caret range, or "any" — no
+/// faithful mapping exists, and a guessed one would be worse than an
+/// admittedly-unparsed one. Likewise the name is opam's own package id
+/// (`"satysfi"`, `"ocaml"`, `"satysfi-base"`, …), not resolved against this
+/// port's library-name registry lookup — see `registry::opam_index`'s module
+/// doc for why.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Dependency {
     pub name: String,
@@ -77,21 +72,21 @@ pub struct Opam {
     /// `build:` command lines, in order.
     pub build: Vec<Vec<String>>,
     /// `depends:` entries, in order (see [`Dependency`]). Parsed and
-    /// recorded for inspection; not consulted by [`Opam::is_empty`] (nothing
+    /// recorded for inspection; not consulted by `Opam::is_empty` (nothing
     /// about *preparing* a package — fetching `extra-source`s, running
     /// `build:` — depends on them) and not fed to the solver.
     pub depends: Vec<Dependency>,
 }
 
 impl Opam {
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.extra_sources.is_empty() && self.build.is_empty()
     }
 }
 
 /// The `.opam` files in `dir`, sorted, so a package with several is read in a
 /// stable order.
-pub fn opam_files(dir: &Path) -> Vec<PathBuf> {
+pub(crate) fn opam_files(dir: &Path) -> Vec<PathBuf> {
     let mut found: Vec<PathBuf> = std::fs::read_dir(dir)
         .into_iter()
         .flatten()
@@ -104,24 +99,12 @@ pub fn opam_files(dir: &Path) -> Vec<PathBuf> {
 }
 
 /// Read `path`, keeping only `extra-source`, `build:`, and `depends:`.
-pub fn read(path: &Path) -> Result<Opam, Error> {
+pub(crate) fn read(path: &Path) -> Result<Opam, Error> {
     Ok(parse(&util::read_to_string(path)?))
 }
 
-/// Everything the package directory declares, across its `.opam` files.
-pub fn read_dir(dir: &Path) -> Result<Opam, Error> {
-    let mut all = Opam::default();
-    for file in opam_files(dir) {
-        let one = read(&file)?;
-        all.extra_sources.extend(one.extra_sources);
-        all.build.extend(one.build);
-        all.depends.extend(one.depends);
-    }
-    Ok(all)
-}
-
 /// Scan the three fields out of an opam file's text.
-pub fn parse(text: &str) -> Opam {
+fn parse(text: &str) -> Opam {
     let mut opam = Opam::default();
     let bytes: Vec<char> = text.chars().collect();
     let mut i = 0;
@@ -371,8 +354,6 @@ install: [
             opam.build,
             vec![vec!["unzip", "-o", "theano-2.0.otf.zip", "*.otf", "-d", "theano"]]
         );
-        // `install:` is OPAM invoking Satyrographos, which this port does not
-        // need: it installs from the Satyristes itself.
         assert!(
             !opam.build.iter().any(|l| l[0] == "satyrographos"),
             "install: must not be read as build:"
@@ -404,9 +385,6 @@ install: [
 
     #[test]
     fn depends_is_not_counted_by_is_empty() {
-        // Nothing about preparing a package (fetching extra-sources, running
-        // build:) depends on `depends:`, so a file with only that field is
-        // still "nothing to prepare".
         let opam = parse("depends: [\n  \"satysfi\" {>= \"0.0.3\"}\n]\n");
         assert_eq!(opam.depends.len(), 1);
         assert!(opam.is_empty());

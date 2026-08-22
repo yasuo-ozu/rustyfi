@@ -1,10 +1,10 @@
 //! Interpreter state and beta-reduction.
 //!
-//! Expression evaluation lives entirely in [`crate::compile`]; what remains
+//! Expression evaluation lives entirely in `crate::compile`; what remains
 //! here is genuinely runtime: the [`Interp`] state every primitive threads
 //! (images, hooks, cross-references, decorations, …), function application,
-//! and pattern matching. The port follows `evaluator.cppo.ml`'s naive
-//! interpreter, not its bytecode VM, which was deliberately not ported.
+//! and pattern matching. Follows `evaluator.cppo.ml`'s naive interpreter, not
+//! its bytecode VM, which was deliberately not ported.
 
 use crate::ast::{Ast, Pattern};
 use crate::crossref::CrossRefs;
@@ -16,30 +16,20 @@ use std::rc::Rc;
 
 /// See [`Interp::decos`].
 ///
-/// Each entry records the `interp.version` that was active when the deco
-/// closure was CAPTURED ([`DecoEntry::version`]). Reading `interp.version` at
-/// FIRE time instead is wrong: the consumer (`primitives::apply_deco`, called
-/// only from `lib.rs`'s post-page-break hook-firing pass) always runs outside
-/// every `VersionScope`'s save/restore window, so in a cross-version program
-/// the flag there is the ENTRY's generation, never the deco author's.
-///
-/// The corpus makes that concrete: `uline`, `enumitem` and `figbox` are
-/// ordinary 0.0.6 packages that call `inline-frame-*`/`block-frame-*`
-/// themselves, with their own 0.0.6 `graphics list` decos. Nothing about
-/// them is an export-boundary `deco` (X3b's business); they just register a
-/// deco while `interp.version` is `V0_0` and have it fired while it is
-/// `V0_1`, so `coerce_graphics_result` demanded a single `graphics` and got
-/// a list — "expected graphics, got list", at eval time, from inside a
-/// package the user never wrote. Capturing the version at push time is
-/// exactly the promise the splice already makes for every other forked
-/// primitive (`Ast::VersionScope`'s eval arm), just extended to the one
-/// consumer that runs after the window closes.
+/// Each entry records the `interp.version` active when the deco closure was
+/// CAPTURED ([`DecoEntry::version`]). Reading `interp.version` at FIRE time
+/// instead is wrong: the consumer (`primitives::apply_deco`, called only from
+/// `lib.rs`'s post-page-break hook-firing pass) always runs outside every
+/// `VersionScope`'s save/restore window, so in a cross-version program the
+/// flag there is the ENTRY's generation, never the deco author's — concretely,
+/// `uline`, `enumitem` and `figbox` are ordinary 0.0.6 packages with their own
+/// 0.0.6 `graphics list` decos; they register while `interp.version` is
+/// `V0_0` and get fired while it is `V0_1`, so `coerce_graphics_result`
+/// demanded a single `graphics` and got a list.
 #[derive(Clone, Debug)]
 pub enum DecoEntry {
     Inline {
         deco: Value,
-        /// The generation whose `deco` calling convention this closure obeys
-        /// — see this enum's doc comment.
         version: RustyfiVersion,
     },
     Block {
@@ -60,16 +50,12 @@ pub enum DecoEntry {
     /// read back here, to size each fragment's rect.
     InlineBreakable {
         pads: rustyfi_backend::Paddings,
-        /// `(decoS, decoH, decoM, decoT)` — evalUtil.ml:169 `get_decoset`.
         decoset: [Value; 4],
         version: RustyfiVersion,
     },
 }
 
 impl DecoEntry {
-    /// The generation this entry's deco closure(s) were captured under — the
-    /// one `primitives::apply_deco` must decode their result with, rather
-    /// than whatever `interp.version` happens to be at fire time.
     pub fn version(&self) -> RustyfiVersion {
         match self {
             DecoEntry::Inline { version, .. }
@@ -86,7 +72,7 @@ pub struct EvalError {
     pub msg: String,
 }
 
-pub fn eval_error<T>(msg: impl Into<String>) -> Result<T, EvalError> {
+pub(crate) fn eval_error<T>(msg: impl Into<String>) -> Result<T, EvalError> {
     Err(EvalError {
         span: None,
         msg: msg.into(),
@@ -101,89 +87,74 @@ pub(crate) fn available_fields(map: &std::collections::BTreeMap<String, Value>) 
     keys.join(", ")
 }
 
-/// Evaluation state: the font-metrics seam (and later: cross references,
-/// mutable stores).
+/// Evaluation state threaded through every primitive: font metrics, images,
+/// hooks, cross-references, and the per-trial accumulators below.
 pub struct Interp<'a> {
     pub metrics: &'a dyn FontMetrics,
-    /// The document-wide image table: `load-image`
-    /// (`primitives::prim_load_image`) decodes eagerly and pushes here,
-    /// returning the new entry's index as `Value::Image`;
-    /// `use-image-by-width` (`primitives::prim_use_image_by_width`) looks
-    /// the resource back up by that index. `page-break`
-    /// (`primitives::prim_page_break`) clones this out into
-    /// `DocumentValue::images` when it packages the final document, so the
-    /// PDF writer sees every image ever decoded while evaluating (a superset
-    /// of what actually ends up placed on a page — the writer itself filters
-    /// down to the ones a placed line actually references).
+    /// The document-wide image table: `load-image` decodes eagerly and
+    /// pushes here, returning the index as `Value::Image`;
+    /// `use-image-by-width` looks the resource back up by it. `page-break`
+    /// clones this into `DocumentValue::images` (a superset of what actually
+    /// ends up placed on a page — the PDF writer itself filters down to the
+    /// images a placed line actually references).
     pub images: Vec<ImageResource>,
     /// The document-wide page-break-hook closure table: `hook-page-break`
-    /// pushes its closure argument here and returns a `HookId` index (via
-    /// `PureHorzBox::HookPageBreak`) — the same `ImageId`-style seam as
-    /// `images` above, but for a deferred *computation* rather than a resource.
-    /// Reset every trial (see `crossrefs`, which is the one exception), read
-    /// back by `fire_hooks` once `break_pages` has placed every hook and its
-    /// final geometry is known.
+    /// pushes its closure and returns a `HookId` index
+    /// (`PureHorzBox::HookPageBreak`) — the `images`-style seam, but for a
+    /// deferred computation. Reset every trial (see `crossrefs`, the one
+    /// exception); read back by `fire_hooks` once placement is known.
     pub hooks: Vec<Value>,
     /// Installed-math-command table (`get-initial-context`/
     /// `set-math-command` push here; `Context::math_command` holds the
-    /// index) — the `ImageId`/`HookId`-style seam, because the backend
-    /// `Context` cannot hold a lang-side `Value`. Read back by
-    /// `read_inline`'s `EmbedMath` arm.
+    /// index) — needed because the backend `Context` cannot hold a lang-side
+    /// `Value`. Read back by `read_inline`'s `EmbedMath` arm.
     pub math_commands: Vec<Value>,
-    /// The cross-reference table, shared with the compile driver
-    /// (`lib.rs::compile_document_cst`) across every trial of the fixpoint
-    /// loop — unlike `hooks`/`images`, this must *not* reset per trial, so
-    /// the driver constructs one `Rc<RefCell<CrossRefs>>` and clones the
-    /// handle into each trial's fresh `Interp`. Defaults to a fresh empty
-    /// table so existing single-run call sites/unit tests compile unchanged.
+    /// The cross-reference table, shared with the compile driver across
+    /// every trial of the fixpoint loop — unlike `hooks`/`images`, this must
+    /// *not* reset per trial, so the driver clones one `Rc<RefCell<
+    /// CrossRefs>>` handle into each trial's fresh `Interp`.
     pub crossrefs: Rc<RefCell<CrossRefs>>,
-    /// §B/§C accumulators: link annotations / named destinations /
-    /// outline entries, plus the per-page deco-graphics overlays (§D).
-    /// All reset per trial (fresh `Interp`); the FINAL trial's contents
-    /// are moved into `DocumentValue::extras` by
-    /// `compile_document_cst_with_trials`.
+    /// Accumulators: link annotations / named destinations / outline
+    /// entries, plus the per-page deco-graphics overlays. All reset per
+    /// trial; the FINAL trial's contents are moved into
+    /// `DocumentValue::extras` by `compile_document_cst_with_trials`.
     pub annotations: Vec<rustyfi_backend::Annot>,
     pub destinations: Vec<rustyfi_backend::NamedDest>,
     pub outline: Vec<rustyfi_backend::OutlineEntry>,
     pub page_graphics: Vec<Vec<rustyfi_backend::GraphicsElem>>,
-    /// `register-document-information`'s accumulator — LAST WRITE WINS, the
-    /// same reset-per-trial policy as
-    /// `outline`/`annotations`/`destinations` above (a fresh `Interp` per
-    /// trial resets this to `None`; the final trial's value is drained into
-    /// `DocExtras::doc_info` by `lib.rs`'s `eval_document_trials`).
+    /// `register-document-information`'s accumulator — LAST WRITE WINS,
+    /// same reset-per-trial policy as `outline`/`annotations`/`destinations`.
     pub doc_info: Option<DocInfo>,
     /// `Some(0-based page)` only while `fire_hooks` is walking that page —
     /// the port of upstream's `State.during_page_break` + "current page"
     /// (`annotation.ml:15`, `namedDest.ml`'s `notify_pagebreak`).
     pub current_page: Option<usize>,
-    /// S2 ("Links/metadata"): the `DecoId` of the deco closure currently
-    /// being fired by `fire_hooks`' two `apply_deco` call sites (`lib.rs`),
-    /// `None` outside any such window (e.g. inside a plain
-    /// `hook-page-break` closure). This is the STRUCTURAL link between a
+    /// Links/metadata: the `DecoId` of the deco closure currently
+    /// being fired by `fire_hooks`' two `apply_deco` call sites, `None`
+    /// outside any such window. This is the STRUCTURAL link between a
     /// placed `Annot`/`NamedDest` (page-absolute, known only
     /// post-page-break) and the `PureHorzBox::Frame`/
     /// `VertBox::FrameStart`/`FrameEnd` marker that produced it in the
     /// PRE-page-break `DocumentValue::reflow_source` — both carry the SAME
-    /// `DecoId`, so `register_link`/`prim_register_destination` recording
-    /// it here (into `link_decos`/`dest_decos` below) lets the reflow
-    /// backend resolve "which Frame is this link" exactly, not by
-    /// geometry/position (which `reflow_source` doesn't have).
+    /// `DecoId`, so recording it here (into `link_decos`/`dest_decos`
+    /// below) lets the reflow backend resolve "which Frame is this link"
+    /// exactly, not by geometry/position.
     pub current_deco_id: Option<rustyfi_backend::DecoId>,
     /// One `(DecoId, action)` per `register-link-to-uri`/`-to-location`
-    /// call made while `current_deco_id` was `Some` — see that field's doc
-    /// comment. Reset per trial, drained into `DocumentValue::reflow_links`
-    /// by `eval_document_trials` alongside `extras`.
+    /// call made while `current_deco_id` was `Some`. Reset per trial,
+    /// drained into `DocumentValue::reflow_links` by `eval_document_trials`
+    /// alongside `extras`.
     pub link_decos: Vec<(rustyfi_backend::DecoId, rustyfi_backend::AnnotAction)>,
     /// Same idea as `link_decos`, for `register-destination`
     /// (`annot.satyh`'s `register-location-frame` idiom): `(DecoId, name)`.
     /// Drained into `DocumentValue::reflow_dests`.
     pub dest_decos: Vec<(rustyfi_backend::DecoId, String)>,
-    /// `namedDest.ml`'s key -> "nameddest{N}" sanitizer table (`name_from_
-    /// hash_table`): arbitrary user keys become stable PDF name strings,
-    /// shared by register-destination / register-link-to-location /
-    /// register-outline within one trial.
+    /// `namedDest.ml`'s key -> "nameddest{N}" sanitizer table: arbitrary
+    /// user keys become stable PDF name strings, shared by
+    /// register-destination / register-link-to-location / register-outline
+    /// within one trial.
     dest_names: std::collections::HashMap<String, String>,
-    /// §D deco-closure table (`DecoId` indexes here) — `hooks`' twin for
+    /// Deco-closure table (`DecoId` indexes here) — `hooks`' twin for
     /// decorations. `Inline` holds one `deco` closure
     /// (`point -> length -> length -> length -> graphics list`); `Block`
     /// holds a block frame's four-closure deco-set + the geometry the
@@ -191,21 +162,17 @@ pub struct Interp<'a> {
     pub decos: Vec<DecoEntry>,
     /// Deferred `inline-graphics-outer` callbacks (`length -> point ->
     /// graphics list`), indexed by `GraphicsFnId` — the `hooks` pattern.
-    /// Reset per trial like `hooks`/`images`.
-    /// Each entry is the deferred callback PLUS the generation it was
-    /// registered under, for the same reason [`DecoEntry`] carries one: the
-    /// callback's RESULT shape (`graphics list` vs one `graphics`) is a
-    /// property of the code that wrote it, and
-    /// `primitives::resolve_outer_graphics_in_contents` runs long after,
-    /// from a line-breaking post-pass with no version context of its own.
+    /// Each entry also carries the generation it was registered under, for
+    /// the same reason [`DecoEntry`] does: the callback's RESULT shape
+    /// (`graphics list` vs one `graphics`) is a property of the code that
+    /// wrote it, and `primitives::resolve_outer_graphics_in_contents` runs
+    /// long after, from a line-breaking post-pass with no version context
+    /// of its own.
     pub outer_graphics: Vec<(Value, RustyfiVersion)>,
     /// The target language version this evaluation run is checking against
     /// — consulted only by `read_inline`'s `IText::EmbedMath` FALLBACK arm
-    /// (no installed math command; unit-test
-    /// contexts only — the installed-command path is version-blind already).
-    /// Default `V0_0`; `lib.rs`'s `eval_document_trials` (the shared tail
-    /// both `compile_document_cst_with_trials` and
-    /// `compile_document_v1_with_trials` fall into) sets this to the real
+    /// (no installed math command; unit-test contexts only). Default
+    /// `V0_0`; `lib.rs`'s `eval_document_trials` sets this to the real
     /// target version on every `Interp` it constructs.
     pub version: RustyfiVersion,
 }
@@ -237,15 +204,14 @@ impl<'a> Interp<'a> {
     /// Evaluate `ast` by compiling it against `env` and running the result.
     ///
     /// A thin shim: ~25 integration tests drive the evaluator through it, and
-    /// it is precisely what their compiled counterpart already does. There is
-    /// exactly one evaluator — quoted text is compiled eagerly into
-    /// [`crate::quoted`]'s name-free form, so nothing can build a
-    /// `Value::InlineText` without invoking the compiler.
+    /// it is precisely what their compiled counterpart already does — there
+    /// is exactly one evaluator, since quoted text is compiled eagerly into
+    /// [`crate::quoted`]'s name-free form.
     ///
     /// `base` is the COMPILE-time environment `ast`'s free names resolve
-    /// against; the program itself runs in a fresh, empty runtime frame chain
-    /// — the base environment is NOT that chain's root, because nothing
-    /// resolves a name at run time.
+    /// against; the program itself runs in a fresh, empty runtime frame
+    /// chain — `base` is NOT that chain's root, because nothing resolves a
+    /// name at run time.
     pub fn eval(&mut self, base: &BaseEnv, ast: &Ast) -> Result<Value, EvalError> {
         crate::compile::compile_program(ast, base).run(&Env::root(), self)
     }
@@ -271,9 +237,8 @@ impl<'a> Interp<'a> {
 
     pub fn apply(&mut self, func: Value, arg: Value) -> Result<Value, EvalError> {
         // A plain (0.0.6-shaped) application supplies no optional bundle; a
-        // closure that *does* declare optional params (reached this way from
-        // e.g. a higher-order caller) then defaults every one to `None`,
-        // faithful to upstream's `reduce_beta_list`.
+        // closure that *does* declare optional params defaults every one to
+        // `None`, faithful to upstream's `reduce_beta_list`.
         self.apply_with_opts(func, Vec::new(), arg)
     }
 
@@ -296,9 +261,9 @@ impl<'a> Interp<'a> {
                 body,
                 env,
             } => {
-                // Slot order: the declared optional binders, then the
-                // positional parameter — exactly what `Ast::LambdaOpt` pushed
-                // onto the compiler's scope stack.
+                // Slot order: declared optional binders, then the positional
+                // parameter — what `Ast::LambdaOpt` pushed onto the
+                // compiler's scope stack.
                 let mut slots = Vec::with_capacity(opt_labels.len() + 1);
                 push_opt_slots(&mut slots, &opt_labels, &opt_vals);
                 slots.push(arg);
@@ -345,11 +310,11 @@ fn push_opt_slots(slots: &mut Vec<Value>, opt_labels: &[String], opt_vals: &[(St
 /// arm) otherwise.
 ///
 /// The push order here is the same left-to-right traversal
-/// `compile::pattern_vars` uses to collect the arm's names, so position `i` in
-/// `bindings` is slot `i` of the frame the arm runs in (Phase 4). Keep the two
-/// in step. A pattern and a value of mismatched shape is simply "no match",
-/// never an error: this untyped evaluator relies on the separate
-/// exhaustiveness/type checker to rule out ill-typed matches ahead of time.
+/// `compile::pattern_vars` uses to collect the arm's names, so position `i`
+/// in `bindings` is slot `i` of the frame the arm runs in — keep the two in
+/// step. A pattern/value shape mismatch is simply "no match", never an
+/// error: this untyped evaluator relies on the separate exhaustiveness/type
+/// checker to rule out ill-typed matches ahead of time.
 pub fn match_pattern(pat: &Pattern, value: &Value, bindings: &mut Vec<Value>) -> bool {
     match pat {
         Pattern::Wild => true,

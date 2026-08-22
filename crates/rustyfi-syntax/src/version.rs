@@ -40,10 +40,9 @@ pub enum RustyfiVersion {
     /// near-identically by `saphe-split` (confirmed by direct diff). This
     /// says nothing about *packaging*: `V0_1` documents may resolve
     /// dependencies via either today's `@require:`/`@import:` headers
-    /// (`dev-0-1-0`'s own model, and this port's `LoadMode::Legacy` — Slice
-    /// 1's target) or the `use`/manifest/lockfile model (`saphe-split`'s
-    /// `LoadMode::Envelopes`, a later milestone) — see
-    /// `rustyfi_loader::LoadMode`.
+    /// (`dev-0-1-0`'s own model, and this port's `LoadMode::Legacy`) or the
+    /// `use`/manifest/lockfile model (`saphe-split`'s `LoadMode::Envelopes`,
+    /// a later milestone) — see `rustyfi_loader::LoadMode`.
     V0_1,
 }
 
@@ -56,7 +55,12 @@ impl RustyfiVersion {
     /// inside them, later: signatures/functors). `false` for `V0_0` (which
     /// has only its own non-parameterized, single-level `module`/`sig`
     /// surface — not a real module *system*); `true` for `V0_1`.
-    pub fn has_module_system(&self) -> bool {
+    ///
+    /// Unlike every sibling capability probe, this one has no non-test
+    /// caller — only this file's own `capability_probes` unit test —
+    /// hence `cfg(test)` rather than a live `pub`/`pub(crate)` method.
+    #[cfg(test)]
+    fn has_module_system(&self) -> bool {
         matches!(self, Self::V0_1)
     }
 
@@ -73,7 +77,7 @@ impl RustyfiVersion {
     /// argument, as opposed to `V0_1`'s plain `length * length`. Deliberately
     /// phrased as an assertion about `V0_0`'s surface (not "is it 0.0.6"),
     /// so a future third generation that also drops the ADT reads correctly
-    /// without touching call sites (L7).
+    /// without touching call sites.
     pub fn has_page_adt(&self) -> bool {
         matches!(self, Self::V0_0)
     }
@@ -90,7 +94,7 @@ impl RustyfiVersion {
     /// 'a element list`, with `Clip`/`Group` container elements — a
     /// graphics-producing callback returns ONE `graphics` value) as opposed
     /// to `V0_0`'s single drawing element (a callback returns `list
-    /// graphics`). `false` for `V0_0`; `true` for `V0_1`. Backs the L5b
+    /// graphics`). `false` for `V0_0`; `true` for `V0_1`. Backs the
     /// graphics-collection sweep: every fork in the shared
     /// `place_graphics`/`coerce_graphics_result` machinery keys on this one
     /// method, so the env and type-env agree by construction (mirrors
@@ -126,19 +130,23 @@ impl RustyfiVersion {
     }
 
     /// Whether this port actually implements this version end-to-end
-    /// (lexer through PDF rendering). Both generations, Slice 1 scope for
-    /// `V0_1`
+    /// (lexer through PDF rendering). True for both generations.
     pub fn is_implemented(&self) -> bool {
         matches!(self, Self::V0_0 | Self::V0_1)
     }
 
     /// Every version this enum currently distinguishes (implemented or
     /// not), in a stable order, for building help/error text.
-    pub fn all() -> &'static [RustyfiVersion] {
+    ///
+    /// `cfg(test)`-gated: only this file's own round-trip unit test calls
+    /// it; `Self::supported`, the method callers outside this module
+    /// actually want, does not go through it.
+    #[cfg(test)]
+    fn all() -> &'static [RustyfiVersion] {
         &[Self::V0_0, Self::V0_1]
     }
 
-    /// The subset of [`RustyfiVersion::all`] this port can actually load.
+    /// The subset of `RustyfiVersion::all` this port can actually load.
     pub fn supported() -> &'static [RustyfiVersion] {
         &[Self::V0_0, Self::V0_1]
     }
@@ -200,7 +208,7 @@ impl FromStr for RustyfiVersion {
 ///   in both v0.0.6 and dev-0-1-0, so their presence pins neither axis — they
 ///   are skipped just like a blank/comment line.
 /// - A `use`-shaped header line — 0.1/Saphe's module-header syntax, see
-///   [`is_use_header`] — yields `Some(V0_1)`. **This half of the heuristic is
+///   `is_use_header` — yields `Some(V0_1)`. **This half of the heuristic is
 ///   best-effort**: the exact grammar could not be confirmed against
 ///   upstream from this sandbox (no network access to GitHub / zenn.dev at
 ///   the time this was written).
@@ -208,7 +216,7 @@ impl FromStr for RustyfiVersion {
 ///   versions) are skipped while looking for the first header-shaped line.
 /// - Once a non-blank, non-comment, non-header line is reached (headers are
 ///   only valid at the top of a file), that single line is inspected for a
-///   content-level signal (see [`sniff_content_line`]) and the result —
+///   content-level signal (see `sniff_content_line`) and the result —
 ///   including `None` — is returned regardless.
 /// - Returns `None` if no signal is found at all (e.g. a bare `let ... in
 ///   ...` document with no headers, which is valid and version-ambiguous in
@@ -233,9 +241,9 @@ pub struct HeaderSniff {
 /// Best-effort detection of a document's target version AND packaging axis
 /// from its source text — see [`sniff_version`]'s doc comment for the
 /// version-detection rules. The one addition: a `use`-shaped header line
-/// ([`is_use_header`]) sets both `version = Some(V0_1)` and
+/// (`is_use_header`) sets both `version = Some(V0_1)` and
 /// `envelope_headers = true`, so the CLI's detection ladder can pin
-/// `LoadMode::Envelopes` off it (Ld3a).
+/// `LoadMode::Envelopes` off it.
 pub fn sniff_headers(src: &str) -> HeaderSniff {
     for raw_line in src.lines() {
         let line = match raw_line.find('%') {
@@ -263,7 +271,8 @@ pub fn sniff_headers(src: &str) -> HeaderSniff {
         // neither axis. Skip past them exactly like a blank/comment line —
         // do NOT return here: returning `Some(V0_0)` on the very first
         // `@require:` misclassifies every 0.1-syntax-body-with-legacy-headers
-        // document, which is Slice 1's own target shape (the S1 bug).
+        // document, which is a legitimate document shape this loader must
+        // support.
         if line.starts_with("@require:") || line.starts_with("@import:") {
             continue;
         }
@@ -289,7 +298,7 @@ pub fn sniff_headers(src: &str) -> HeaderSniff {
 /// Recognize a `use`-shaped 0.1/Saphe header line: bare `use Ident[.Ident]*`,
 /// `use package ...`, `use open ...`, or `use #[attr] ...`. Best-effort
 /// (Saphe's exact grammar is `saphe-split`-only and not yet ported), but
-/// deliberately broader than "bare `use Ident`" per S1 — narrow enough that
+/// deliberately broader than "bare `use Ident`" — narrow enough that
 /// no 0.0.6 keyword or identifier can start a line with `use ` (0.0.6 has no
 /// `use` keyword at all), so widening this can only ever gain true positives,
 /// never introduce a false positive against the 0.0.6 corpus.
@@ -444,7 +453,7 @@ mod tests {
 
     #[test]
     fn sniff_require_import_are_transparent_stage_still_pins() {
-        // `@require:`/`@import:` do not pin a version by themselves (S1) —
+        // `@require:`/`@import:` do not pin a version by themselves —
         // with no other signal on the first content line (a bare,
         // non-hyphenated `let`), the result is `None` (falling to
         // `RustyfiVersion::DEFAULT` downstream in `resolve_version`, not
@@ -467,9 +476,9 @@ mod tests {
 
     #[test]
     fn sniff_require_then_module_is_none() {
-        // The S1 case: a legacy-header-then-module-body file (Slice 1's own
-        // target shape — a V0_1-syntax library reached through the unmodified
-        // `@require:` loader) must sniff `None`, not `V0_0` and not `V0_1`
+        // A legacy-header-then-module-body file (a V0_1-syntax library
+        // reached through the unmodified `@require:` loader) must sniff
+        // `None`, not `V0_0` and not `V0_1`
         // (no positive signal either way — `module` is deliberately not a
         // signal).
         assert_eq!(

@@ -3,15 +3,13 @@ use std::ops::{Add, Div, Mul, Neg, Sub};
 
 /// A physical length in PDF points (1/72 inch), the `length.ml` unit.
 ///
-/// `Add`, `Sub`, `Neg` and `Mul<f64>` stay hand-written: `newer-type`'s
-/// generic `ops` markers forward the *inner* type's `Output` verbatim (so
+/// `Add`, `Sub`, `Neg` and `Mul<f64>` stay hand-written: `newer-type`'s generic
+/// `ops` markers forward the *inner* type's `Output` verbatim, so
 /// `newer_type_std::ops::Add` on an `f64` newtype yields `Output = f64`, not
-/// `Output = Self` — confirmed empirically, and the macro has no syntax for
-/// pinning an associated type: `newer-type-macro`'s `Implementor::parse`
-/// explicitly rejects `AssocType` arguments in the `#[implement(...)]` list).
-/// Using it here would silently change `Length + Length` from `Length` to
-/// `f64`, so those four impls keep their hand-written `Output = Length`
-/// bodies. `AddAssign` has no `Output` to lose, so it converts cleanly.
+/// `Output = Self`, and the macro has no syntax for pinning an associated type
+/// (`newer-type-macro`'s `Implementor::parse` rejects `AssocType` arguments).
+/// Using it would silently change `Length + Length` to `f64`. `AddAssign` has
+/// no `Output` to lose, so it converts cleanly.
 #[implement(newer_type_std::ops::AddAssign)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, PartialOrd)]
 pub struct Length(pub f64);
@@ -43,7 +41,7 @@ impl Length {
         Length(self.0.min(other.0))
     }
 
-    pub fn is_positive(self) -> bool {
+    pub(crate) fn is_positive(self) -> bool {
         self.0 > 0.0
     }
 }

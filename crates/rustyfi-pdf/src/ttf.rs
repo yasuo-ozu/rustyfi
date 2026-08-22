@@ -1,5 +1,5 @@
-//! A [`FontMetrics`] provider backed by real TrueType/OpenType font files
-//! (phase 5, first slice). Loads up to three faces — regular, bold, oblique —
+//! A [`FontMetrics`] provider backed by real TrueType/OpenType font files.
+//! Loads up to three faces — regular, bold, oblique —
 //! mapped onto the existing `FontKey(0/1/2)` convention from `base14`, and
 //! measures through `ttf-parser`'s `cmap`/`hmtx`/`hhea`/`OS/2` tables instead
 //! of hardcoded AFM widths.
@@ -48,7 +48,7 @@ pub struct TtfFontStore {
     files: Vec<Vec<u8>>,
     /// `FontKey(0)=regular, 1=bold, 2=oblique, 3.. = registry abbrevs` ->
     /// index into `files`. Missing bold/oblique share the regular slot
-    /// (index 0). `FontRegistry::build_store` (D1a) allocates one slot per
+    /// (index 0). `FontRegistry::build_store` allocates one slot per
     /// configured abbrev beyond the three seeded defaults; `slots[0..3]`
     /// always stay regular/bold/oblique, so a bare `TtfFontStore::load`
     /// store has exactly 3.
@@ -61,12 +61,12 @@ pub struct TtfFontStore {
     abbrevs: BTreeMap<String, FontKey>,
     /// The configured default `(font, ratio, rising)` per `Script`
     /// (`context::Script` as `usize`), from `default-font.satysfi-hash`'s
-    /// optional `scripts` block (D1a). `None` per-slot (the default) means
+    /// optional `scripts` block. `None` per-slot (the default) means
     /// "no script scheme configured" — callers overlay `(ctx.font, 1.0,
     /// 0.0)` themselves, keeping today's single-font behavior.
     script_defaults: [Option<(FontKey, f64, f64)>; 4],
     /// The `FontKey` allocated for `default-font.satysfi-hash`'s optional
-    /// `"math"` abbrev (Slice B). `None` for a bare `TtfFontStore::load` or
+    /// `"math"` abbrev. `None` for a bare `TtfFontStore::load` or
     /// a registry with no `"math"` entry — `get-initial-context` then leaves
     /// `Context::math_font` at its `Context::initial` seed.
     math_default: Option<FontKey>,
@@ -101,8 +101,8 @@ impl TtfFontStore {
         })
     }
 
-    /// Builder used only by [`crate::fonts::FontRegistry::build_store`]
-    /// (D1a): construct a store with the three default slots already
+    /// Builder used only by [`crate::fonts::FontRegistry::build_store`]:
+    /// construct a store with the three default slots already
     /// loaded (via [`Self::load`]) plus every other configured abbrev's
     /// file appended as its own slot (deduped by canonical path against
     /// files already loaded), and the abbrev -> `FontKey` map that
@@ -145,18 +145,22 @@ impl TtfFontStore {
     /// The physical-file index backing `font` (after bold/oblique fallback).
     /// Used by the CID embedder to dedup: two `FontKey`s that resolve to the
     /// same file are embedded (and their Type0 font object shared) once.
-    pub fn file_index(&self, font: FontKey) -> usize {
+    pub(crate) fn file_index(&self, font: FontKey) -> usize {
         self.slots[self.key_slot(font)]
     }
 
-    /// Number of distinct font files backing this store.
     pub fn num_files(&self) -> usize {
         self.files.len()
     }
 
     /// Number of allocated `FontKey` slots (3 for a bare `load`; 3 + one
     /// per extra configured abbrev for a registry-built store).
-    pub fn num_slots(&self) -> usize {
+    ///
+    /// Only a test consumer remains (`fonts.rs`'s in-src unit tests) since
+    /// the font registry landed, so this is `cfg(test)`-gated rather than a live
+    /// `pub(crate)` accessor with no non-test caller.
+    #[cfg(test)]
+    pub(crate) fn num_slots(&self) -> usize {
         self.slots.len()
     }
 
@@ -172,18 +176,13 @@ impl TtfFontStore {
         self.abbrevs.get(abbrev).copied()
     }
 
-    /// The configured default `(font, ratio, rising)` for `script` (as its
-    /// `usize` discriminant — `context::Script`), from
-    /// `default-font.satysfi-hash`'s `scripts` block, or `None` when no
-    /// scheme was configured for that script (the caller then falls back to
-    /// `(ctx.font, 1.0, 0.0)`).
+    /// See the `script_defaults` field doc.
     pub fn script_default(&self, script: usize) -> Option<(FontKey, f64, f64)> {
         self.script_defaults.get(script).copied().flatten()
     }
 
-    /// The `FontKey` allocated for the configured `"math"` default abbrev
-    /// (Slice B), or `None` when nothing was configured.
-    pub fn math_font_default(&self) -> Option<FontKey> {
+    /// See the `math_default` field doc.
+    pub(crate) fn math_font_default(&self) -> Option<FontKey> {
         self.math_default
     }
 
@@ -193,8 +192,7 @@ impl TtfFontStore {
         self.face_by_file(self.file_index(font))
     }
 
-    /// Parse the face for a given physical file index directly.
-    pub fn face_by_file(&self, file_index: usize) -> Option<Face<'_>> {
+    pub(crate) fn face_by_file(&self, file_index: usize) -> Option<Face<'_>> {
         Face::parse(self.files.get(file_index)?, 0).ok()
     }
 }
@@ -257,7 +255,7 @@ impl FontMetrics for TtfFontStore {
     // fields, not methods, each with a `.get(GlyphId)` accessor;
     // `KernInfo`'s four corners are `Option<Kern>` fields.
     //
-    // §B3 (`math_vertical_variant`, below) consumes `Variants` itself:
+    // `math_vertical_variant`, below, consumes `Variants` itself:
     // `Variants { min_connector_overlap: u16, vertical_constructions,
     // horizontal_constructions }`; `GlyphConstruction { assembly:
     // Option<GlyphAssembly>, variants: LazyArray16<GlyphVariant> }`;
@@ -333,11 +331,11 @@ impl FontMetrics for TtfFontStore {
         Some(size * (kern.kern(idx)?.value as f64 / upem))
     }
 
-    /// §B3 (`MathVariants`): pick a vertically-grown variant of `c` per
+    /// Pick a vertically-grown MATH variant (`MathVariants`) of `c` per
     /// `policy` and report its real per-glyph ink metrics at `size`.
     /// Assembly-only constructions (`variants.len() == 0`, big enough
     /// stretchy delimiters in some fonts) return `None` here — they are
-    /// `math_vertical_assembly`'s (§B) job.
+    /// `math_vertical_assembly`'s job.
     fn math_vertical_variant(
         &self,
         font: FontKey,
@@ -386,7 +384,7 @@ impl FontMetrics for TtfFontStore {
         })
     }
 
-    /// §B (`GlyphAssembly`): stretch `c` beyond the largest discrete
+    /// Stretch `c` (via OpenType MATH `GlyphAssembly`) beyond the largest discrete
     /// `MathVariants` record by stacking the assembly's `GlyphPart`s
     /// vertically, repeating `extender` parts to reach `target`. Faithful to
     /// the OpenType "assembling glyphs" recipe (and `math.ml`'s
@@ -454,8 +452,6 @@ impl FontMetrics for TtfFontStore {
         if seq.is_empty() {
             return None;
         }
-        // Place bottom-to-top. `advance` is the scaled full_advance; each next
-        // part's baseline is raised by `advance - overlap`.
         let overlap_scaled = size * (overlap_du / upem);
         let mut out = Vec::with_capacity(seq.len());
         let mut cursor = Length::ZERO;
@@ -467,7 +463,7 @@ impl FontMetrics for TtfFontStore {
         Some(out)
     }
 
-    // ---- D1a: registry-abbrev resolution --------------------------------------------------------------------
+    // ---- Registry-abbrev resolution --------------------------------------------------------------------
 
     fn resolve_font_abbrev(&self, abbrev: &str) -> Option<FontKey> {
         self.abbrev_key(abbrev)

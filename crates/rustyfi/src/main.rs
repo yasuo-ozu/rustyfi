@@ -64,6 +64,7 @@ fn run() -> i32 {
         Some(("rustyfi", m)) => match m.subcommand() {
             Some((name, sm)) if is_package_command(name) => run_package(name, sm),
             Some(("multicall", sm)) => run_multicall(sm),
+            Some(("lsp", sm)) => run_lsp(sm),
             Some(("man", _)) => match man::render(&mut std::io::stdout().lock()) {
                 Ok(()) => 0,
                 Err(e) => {
@@ -78,6 +79,43 @@ fn run() -> i32 {
         _ => {
             eprintln!("error: no command given");
             2
+        }
+    }
+}
+
+/// `rustyfi lsp`: speak the Language Server Protocol over stdin/stdout until
+/// the editor disconnects.
+///
+/// A thin adapter and nothing else — the loop, the framing and the analysis
+/// all live in `rustyfi-lsp`, so this function's whole job is to turn
+/// `--lang` into an option and lock the two standard streams. It inherits the
+/// 256 MB worker stack `main` spawns, which matters: the parser recurses as
+/// deeply on a buffer in an editor as it does on a file being compiled.
+///
+/// **Nothing may be written to stdout here.** stdout is the protocol
+/// channel; a stray `println!` would be read by the editor as a malformed
+/// message and desynchronize the session. Diagnostics-about-the-server go to
+/// stderr, which editors surface in an output pane.
+fn run_lsp(m: &ArgMatches) -> i32 {
+    let lang = match m.get_one::<String>("lang") {
+        Some(s) => match s.parse::<rustyfi_syntax::RustyfiVersion>() {
+            Ok(v) => Some(v),
+            Err(e) => {
+                eprintln!("error: --lang: {e}");
+                return 2;
+            }
+        },
+        None => None,
+    };
+    let stdin = std::io::stdin();
+    let stdout = std::io::stdout();
+    let mut input = stdin.lock();
+    let mut output = stdout.lock();
+    match rustyfi_lsp::server::run(&mut input, &mut output, rustyfi_lsp::server::Options { lang }) {
+        Ok(code) => code,
+        Err(e) => {
+            eprintln!("error: language server I/O: {e}");
+            1
         }
     }
 }

@@ -182,6 +182,37 @@ url = "https://example.org/another-index"
 | `--no-aux` | do not read or write the `.satysfi-aux` cross-reference file |
 | `--timing` | per-phase timing to stderr (load / typecheck / eval / render) |
 
+## Editor support
+
+`rustyfi lsp` is a Language Server Protocol server speaking over stdio. Point
+your editor's LSP client at it for the `satysfi` language:
+
+```console
+$ rustyfi lsp                # detect each file's generation from its own text
+$ rustyfi lsp --lang 0.1     # analyse everything as 0.1
+```
+
+What it does today is **diagnostics**: lex and parse errors, live as you type,
+under whichever SATySFi generation the file is written in. Both 0.0.6 and 0.1
+are supported, and the generation is chosen per file the same way a compile
+chooses it for the entry document — a `use` header or a `val` head selects
+0.1, a `@stage:` header or a `let-*` head selects 0.0, and a file that signals
+neither is checked against both rather than guessed at. Measured against every
+`.saty`/`.satyh`/`.satyg` file in this repository — 247 of them, 64 of which
+are 0.1 — it reports **no diagnostics at all on files that compile.**
+
+It deliberately stops short of typechecking. Type errors in SATySFi are a
+property of a whole *program* — the entry document plus every `@require:`d
+package, in dependency order — and reporting them for one file in isolation
+would bury the real error under a hundred "unbound variable"s for names the
+document legitimately imports. Hover, go-to-definition and completion are not
+implemented either.
+
+The analysis is also available as a plain library function,
+`rustyfi_lsp::analyze(source, lang) -> Vec<Diag>`, with no LSP types in its
+signature, no filesystem access and no default features needed — so the same
+diagnostics can run in a browser editor compiled to `wasm32-unknown-unknown`.
+
 ## Performance
 
 Minimum CPU time over three interleaved runs against SATySFi

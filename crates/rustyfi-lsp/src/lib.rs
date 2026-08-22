@@ -3,14 +3,30 @@
 //!
 //! The crate is deliberately two halves with a hard line between them:
 //!
-//! - [`analyze`] and friends ([`Diag`], [`Severity`], [`LineIndex`],
-//!   [`detect_version`]) — **no LSP types, no filesystem, no I/O**, and
-//!   nothing outside `rustyfi-syntax`. This half builds for
-//!   `wasm32-unknown-unknown` with `default-features = false`, so the
-//!   browser playground's editor gets exactly the diagnostics the editor
-//!   on the desktop does, out of the same code.
+//! - [`analyze`] and friends ([`analyze_auto`], [`analyze_detected`],
+//!   [`Diag`], [`Severity`], [`LineIndex`], [`detect_version`]) — **no LSP
+//!   types, no filesystem, no I/O**, and nothing outside `rustyfi-syntax`.
+//!   This half builds for `wasm32-unknown-unknown`, so the browser
+//!   playground's editor gets exactly the diagnostics the editor on the
+//!   desktop does, out of the same code:
+//!
+//!   ```console
+//!   $ cargo build -p rustyfi-lsp --target wasm32-unknown-unknown --no-default-features
+//!   ```
+//!
+//!   (The default features build for wasm too — `serde_json` is portable —
+//!   but `--no-default-features` leaves `rustyfi-syntax` as the only
+//!   dependency in the graph.)
 //! - [`server`] (feature `server`, on by default) — the stdio JSON-RPC loop
 //!   `rustyfi lsp` runs. It owns every LSP-shaped structure in the crate.
+//!
+//! # Positions
+//!
+//! Every position this crate produces is an LSP position: **zero-based**
+//! lines, and characters counted in **UTF-16 code units**. Neither of the
+//! obvious shortcuts works — `rustyfi_syntax::Loc` is 1-based with a `char`
+//! column, and a byte offset is wrong for the whole Japanese corpus. See
+//! [`LineIndex`].
 //!
 //! # Why the analysis stops at parsing
 //!
@@ -31,8 +47,6 @@
 //! Whole-program typechecking needs a resolved library root, a font store and
 //! a build's worth of work per keystroke; it belongs behind a debounce and a
 //! cache, and it is left for later rather than half-done here.
-
-#![cfg_attr(docsrs, feature(doc_cfg))]
 
 mod analysis;
 mod high_water;

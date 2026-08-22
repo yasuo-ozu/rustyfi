@@ -304,6 +304,7 @@ pub fn build_cli() -> Command {
         .subcommand(
             package_subcommands(compile_command("rustyfi"))
                 .subcommand(multicall_command())
+                .subcommand(lsp_command())
                 .subcommand(man_command())
                 .args_conflicts_with_subcommands(true)
                 .subcommand_negates_reqs(true),
@@ -708,6 +709,27 @@ fn man_command() -> Command {
     Command::new("man")
         .about("Write the man page (roff) to stdout.")
         .hide(true)
+}
+
+/// `rustyfi lsp` — the editor-facing personality.
+///
+/// Deliberately NOT hidden: unlike `man`/`multicall`, which are packaging
+/// steps, this is something a user configures their editor to run and so
+/// needs to be discoverable in `--help`.
+fn lsp_command() -> Command {
+    Command::new("lsp")
+        .about("Run a Language Server Protocol server for SATySFi over stdio.")
+        .arg(
+            Arg::new("lang")
+                .long("lang")
+                .value_name("VERSION")
+                .help(
+                    "Analyse every buffer as this SATySFi generation: 0.0 or 0.1. \
+                     Same spelling as the compiler's --lang. When omitted, the \
+                     generation is detected per file from its own text, exactly as \
+                     a compile would detect it for the entry document.",
+                ),
+        )
 }
 
 fn multicall_command() -> Command {

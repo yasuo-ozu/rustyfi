@@ -1538,6 +1538,7 @@ dependencies = [
  "rustyfi-backend",
  "rustyfi-lang",
  "rustyfi-loader",
+ "rustyfi-lsp",
  "rustyfi-pdf",
  "rustyfi-satyrographos",
  "rustyfi-syntax",

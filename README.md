@@ -88,8 +88,60 @@ $ rustyfi doc.saty
   output written on doc.pdf (1 page(s), 2 line(s)).
 ```
 
-Recompiling an unchanged document is near-instant: results are cached by content
-hash (`--no-cache` opts out).
+### A project with a `Satyristes`
+
+For anything larger than one file, describe the project in a `Satyristes` —
+Satyrographos' own S-expression build file, which this port reads directly:
+
+```lisp
+(version 0.0.2)
+
+(library
+  (name    "mylib")
+  (version "0.1.0")
+  (sources ((packageDir "src"))))
+
+(libraryDoc
+  (name             "mylib-doc")
+  (version          "0.1.0")
+  (workingDirectory "doc")
+  (build            ((rustyfi "manual.saty")))
+  (sources          ((doc "manual.pdf" "doc/manual.pdf"))))
+```
+
+`(library …)` says what the project *publishes*: `(packageDir "src")` installs
+every `.satyh`/`.satyg` under `src/` as the package `mylib`. Install it into a
+project-local root and it becomes `@require:`-able:
+
+```console
+$ rustyfi install . --dest .rustyfi
+installed mylib 0.1.0 (1 path(s)):
+  dist/packages/mylib
+
+$ rustyfi list --dest .rustyfi
+mylib 0.1.0 (lang 0.0, 1 files)
+  .rustyfi/dist/packages/mylib
+```
+
+A document anywhere beside that `Satyristes` now finds `.rustyfi/` on its own —
+it is the second root in the search order below — so nothing needs exporting,
+and the project's own copy layers over a system-wide one rather than hiding it.
+`rustyfi status` reports whether the installed files are still present, and
+`rustyfi install` with no path reconciles the declared dependencies instead.
+
+`(libraryDoc …)` is a build target rather than a package: `rustyfi build` runs
+its `(build …)` commands in `(workingDirectory …)`, then installs what
+`(sources …)` names.
+
+```console
+$ rustyfi build
+  rustyfi manual.saty
+```
+
+Other top-level forms real `Satyristes` files carry — `(opam …)`,
+`(compatibility …)` — are parsed and ignored, so an existing Satyrographos
+project needs no edits to build here. An unrecognised form is an error naming
+itself rather than a silent skip.
 
 ## Packages
 

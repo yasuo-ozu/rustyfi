@@ -22,7 +22,7 @@ categories = ["text-processing", "command-line-utilities"]
 readme = "README.md"
 
 [workspace.dependencies]
-syan = "0.2.0"
+syan = "0.2.2"
 rustyfi-syntax = { path = "crates/rustyfi-syntax", version = "0.1.0" }
 rustyfi-backend = { path = "crates/rustyfi-backend", version = "0.1.0" }
 rustyfi-lang = { path = "crates/rustyfi-lang", version = "0.1.0" }

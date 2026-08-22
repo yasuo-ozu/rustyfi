@@ -2785,6 +2785,35 @@ fn push_char_glyph(
     x: &mut Length,
 ) -> Result<(), EvalError> {
     let font = math_glyph_font(interp, ctx, c, size);
+    // `fontInfo.ml:379-383`: a math glyph that is NOT at base level is set in
+    // the font's `ssty` (Math Script Style) variant — a purpose-drawn
+    // exponent/index form, not merely the base glyph shrunk. Its advance
+    // differs (Latin Modern Math's `two.st` is 569/1000 em against `two`'s
+    // 500), so this is a WIDTH fix as much as a shape one. On any miss — no
+    // GSUB, no `ssty`, no coverage for this glyph, every base-14 provider —
+    // the base glyph is used unchanged, so nothing outside a script and
+    // nothing in a MATH-table-less font moves.
+    if math_in_script(ctx, size) {
+        if let Some(v) = interp.metrics.math_script_variant(font, c, size) {
+            out.push(MathGlyph {
+                info: HorzStringInfo {
+                    font,
+                    size,
+                    rising: Length::ZERO,
+                    color: ctx.text_color,
+                },
+                text: c.to_string(),
+                gid: Some(v.gid),
+                dx: *x,
+                dy: Length::ZERO,
+                width: v.advance,
+                height: v.height,
+                depth: v.depth,
+            });
+            *x += v.advance;
+            return Ok(());
+        }
+    }
     // Graceful degradation for a math character neither the math font nor the
     // text font can render (e.g. `⋯` U+22EF under the bundled faces): fall back
     // to a half-em advance and let the glyph degrade to `.notdef` at render

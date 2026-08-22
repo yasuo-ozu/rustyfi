@@ -204,6 +204,28 @@ pub trait FontMetrics {
         None
     }
 
+    /// The `ssty` (Math Script Style) GSUB variant of `c` at `size` —
+    /// upstream `FontFormat.get_math_script_variant` (`fontFormat.ml:2216`),
+    /// applied by `fontInfo.ml:379-383` to EVERY math glyph that is not at
+    /// base level. `None` when the font has no GSUB, no `ssty` feature, or
+    /// no substitution covering this glyph; every caller must treat that as
+    /// "use the base glyph unchanged" (`push_char_glyph`), so a provider
+    /// that never overrides this (every base-14 provider) is unaffected.
+    ///
+    /// These are the small-but-not-merely-scaled forms a math font ships for
+    /// exponents and indices — Latin Modern Math's `two.st` advances
+    /// 569/1000 em against plain `two`'s 500, so ignoring the feature sets
+    /// every script digit 14% narrow, and the error compounds through the
+    /// width of whatever encloses the script.
+    fn math_script_variant(
+        &self,
+        _font: FontKey,
+        _c: char,
+        _size: Length,
+    ) -> Option<MathVariantGlyph> {
+        None
+    }
+
     /// Build a vertically-stretched delimiter/big-op from the OpenType MATH
     /// `GlyphAssembly` of `c` (the stretch-beyond-the-largest-discrete-variant
     /// path). Returns the placed parts as `(gid, dy, advance)`, bottom-to-top,

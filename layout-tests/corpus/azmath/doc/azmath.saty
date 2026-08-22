@@ -1,0 +1,862 @@
+@require: stdjabook
+@require: code
+@require: color
+@require: hdecoset
+@require: enumitem/enumitem
+@require: math
+@import: ../src/azmath
+
+let-block ctx +ctx ctxf bt = read-block (ctxf ctx) bt
+
+let () = AZMathEquation.allow-display-break |> AZMathParam.set true
+% let () = AZMathEquation.vmargin-before-eqn |> AZMathParam.set (fun _ -> 30pt)
+% let () = AZMathEquation.vmargin-between-eqn |> AZMathParam.set (fun _ -> 20pt)
+
+let sbr-labelfmt ctx label-meta =
+  let tagstr = label-meta#tag in
+  let it = match tagstr with
+    | Some(tagstr) -> embed-string tagstr
+    | None -> (
+        let v = AZMathEquation.ctr |> Counter.inc in
+        embed-string (arabic v)
+    )
+  in
+  Some(read-inline ctx {[[#it;]]})
+
+let notag = AZMathEquation.notag
+
+let document record content = StdJaBook.document record '<%
+  +ctx(fun ctx -> (
+    let fsize = get-font-size ctx in
+    ctx |> set-paragraph-margin fsize fsize
+        |> set-leading (fsize *' 1.4)
+        |> set-min-gap-of-lines (fsize *' 0.4)
+        |> set-code-text-command (command \code)
+  ))(content);
+>%
+
+let-block ctx +block-frame bt =
+  let decoset = VDecoSet.simple-frame 0.5pt Color.black Color.white in
+  block-frame-breakable ctx (5pt, 5pt, 10pt, 10pt) decoset (fun ctx -> read-block ctx bt)
+
+let-block +example str bt =
+  '<%
+    +code(str);
+    +block-frame(bt);
+  >%
+
+% Vendoring repair, lifted verbatim from azmath's own master branch (commit
+% e6775b6, "Bump enumitem to 3"): enumitem 2 gave `+description` an `itemize`
+% argument, enumitem 3 gives it a `block-text` of `+ditem`s. The corpus stages
+% ONE enumitem for every document (fidelity.py's assemble_lib_root merges all
+% stage maps into a single lib root), and that one is enumitem 3.
+let-block +dd dt bt-dd =
+  '<
+    +EnumitemAlias.ditem{#dt;}{}<#bt-dd;>
+  >
+
+let-math \p-big m =
+  let mathf ctx =
+    let (_, ht, _) = get-natural-metrics (embed-math ctx ${\sqrt{2}}) in
+    ${\p?:!(ht)!(m)}
+  in
+  math-in-math MathOrd mathf
+
+let-math \p-Big m =
+  let mathf ctx =
+    let (_, ht, _) = get-natural-metrics (embed-math ctx ${\sqrt{2}^2}) in
+    ${\p?:!(ht)!(m)}
+  in
+  math-in-math MathOrd mathf
+
+let-math \p-bigg m =
+  let mathf ctx =
+    let (_, ht, _) = get-natural-metrics (embed-math ctx ${\frac{1}{2}}) in
+    ${\p?:!(ht)!(m)}
+  in
+  math-in-math MathOrd mathf
+
+let-math \p-Bigg m =
+  let mathf ctx =
+    let (_, ht, _) = get-natural-metrics (embed-math ctx ${\int_1^2}) in
+    ${\p?:!(ht)!(m)}
+  in
+  math-in-math MathOrd mathf
+
+in
+
+document (|
+  title = {AZmath パッケージ};
+  author = {\@monaqa};
+  date = {2020/10/10};
+  show-title = true;
+  show-toc = true;
+|) '<%
+
++section{AZmath パッケージの概要}<%
+
+  +p{
+    AZmath パッケージは，\SATySFi; に豊富な math command を提供するパッケージです．
+    現在は以下のようなコマンドを提供しています．
+  }
+
+  +listing{
+    * 数式環境 (`+gather`, `+align`, etc.)
+    * アクセント (`\hat`, `\tilde`, etc.)
+    * 行列 (`\matrix`, `\pmatrix`, etc.)
+    * 括弧 (`\p`, `\pb`, etc.)
+  }
+
+>%
+
++section{数式環境}<%
+
+  +p{
+    \LaTeX; では、 `equation` や amsmath パッケージの `gather`, `align` といった
+    環境 (environment) を用いて別行立て数式を記述します。
+    \SATySFi; は\LaTeX;と異なり、本来「環境」と呼ぶべき概念はありませんが、
+    ここでは `\alpha` や `\sum` など数式内で用いるコマンドと区別するため、
+    インラインテキストまたはブロックテキストから別行立て数式に入るためのコマンド及び、
+    それに類するコマンドのことを便宜上「数式環境」と呼ぶことにします。
+  }
+
+  +p{
+    SATySFi に標準で用意されている `math` パッケージでは、
+    別行立ての数式を実現するために以下のコマンドが用意されています。
+    \listing{
+      * `+math`: 通常の別行立て数式
+      * `+math-list`: 複数の数式を別行立てで横に並べる（長くなると改行）
+      * `+align`: 複数の数式を揃えながら並べる
+        (\LaTeX; の `align` 環境と `alignat` 環境を兼ねたようなコマンド)
+      * `\eqn`: `+eqn` のインライン版
+      * `\math-list`: `+math-list` のインライン版
+      * `\align`: `+align` のインライン版
+    }
+
+    それに対し、AZmath パッケージでは以下のコマンドが定義されています。
+
+    \listing{
+      * `+eqn`: 通常の別行立て数式
+      * `+gather`: 複数の数式を縦に並べる。 \LaTeX; の `gather` 環境に近い。
+      * `+align`: 複数の数式を、所定の位置で揃えて縦に並べる。 \LaTeX; の `align` 環境に近い。
+      * `+alignat`: 複数の数式を、所定の位置で揃えて縦縦に並べる。 \LaTeX; の `alignat` 環境に近い。
+      * `\eqn`: `+eqn` のインライン版
+      * `\gather`: `+gather` のインライン版
+      * `\align`: `+align` のインライン版
+      * `\alignat`: `+alignat` のインライン版
+      * `\aligned`: `+align` と似たような揃え方を数式の中で行う。 \LaTeX; の `aligned` 環境に近い。
+      * `\cases`: 数式の中で場合分けを作る。\LaTeX; の `cases` 環境に近い。
+    }
+
+    \LaTeX; に馴染みのある人に馴染みやすいよう、命名規則は \LaTeX; のものを踏襲しています。
+  }
+
+  +p{
+    AZmath パッケージでは、標準の `math` パッケージと比較して以下のような機能が追加されています。
+    \listing{
+      * 自動連番のタグを付与することができる。
+
+      * タグにラベルを付与し、 `\ref` コマンドなどを用いて参照することが出来る。
+
+      * 複数行からなる別行立て数式（`+gather`, `+align` など）の1行1行にタグを付けることができる。
+        タグ付けを手動で抑制することも出来る。
+
+      * 複数行からなる別行立て数式の途中で改ページを行うことができる。改ページを抑制することもできる。
+
+      * 数式環境前後の余白や、複数行数式がある場合の数式行同士の余白を変更することができる。
+    }
+    以下、具体的に使い方を説明します。
+  }
+
+  +subsection{数式環境の使い方}<%
+
+    +p{
+      最も単純な別行立て数式用のコマンドは `+eqn` であり、
+      標準パッケージの `+math` コマンドと同様に1行の別行立て数式を組むことができます。
+      ただし、 `+eqn` を用いた場合はデフォルトで連番の数式番号が付与されます。
+    }
+
+    +example(```
+    +eqn(${
+        x = \frac{-b \pm \sqrt{b^2 - 4ac}}{2a}
+      });
+    ```) <%
+    +eqn(${
+        x = \frac{-b \pm \sqrt{b^2 - 4ac}}{2a}
+      });
+    >%
+
+    +p{
+      数式前後で改段落を行いたくない場合は、
+      インラインテキストの中に `\eqn` を挿入することでも同様の環境を実現することができます。
+    }
+
+    +example(```
+    +p{
+      したがって、2次方程式の解の公式は
+      \eqn(${
+          x = \frac{-b \pm \sqrt{b^2 - 4ac}}{2a}
+        });
+      で与えられる。
+    }
+    ```) <%
+    +p{
+      したがって、2次方程式の解の公式は
+      \eqn(${
+          x = \frac{-b \pm \sqrt{b^2 - 4ac}}{2a}
+        });
+      で与えられる。
+    }
+    >%
+
+    +p{
+      複数の数式を縦に並べたい場合は複数の `+eqn` をそのまま並べてもよいですが、
+      `+gather` コマンドを使えばよりスマートに複数の数式を表示することができます．
+      `+gather` コマンドでは、単一の数式 (`math`) の代わりに数式のリスト (`math list`) を指定します。
+    }
+
+    +example(```
+    +gather(${
+      | \p{x + y}^2 = x^2 + 2xy + y^2,
+      | \p{x + a}\p{x + b} = x^2 + \p{a + b} x + ab,
+      | \p{x + y}\p{x - y} = x^2 - y^2.
+      |});
+    ```) <%
+    +gather(${
+      | \p{x + y}^2 = x^2 + 2xy + y^2,
+      | \p{x + a}\p{x + b} = x^2 + \p{a + b} x + ab,
+      | \p{x + y}\p{x - y} = x^2 - y^2.
+      |});
+    >%
+
+    +p{
+      上の例にあるように、
+      `+gather` を用いて並べた式にもデフォルトで連番の数式番号が付与されます。
+      また、 `+eqn` と同様にインラインテキスト版の `\eqn` も用意されています。
+    }
+
+    +p{
+      なお、デフォルトでは `+gather` 環境は中央揃えとなっています。
+      後述するパラメータの値を変更することにより、式を左揃えにすることもできます。
+      以下の例と上の例を見比べてみてください。
+    }
+
+
+    +example(```
+    +with-param(AZMathEquation.eqn-gather-align-coef)(0.0)<
+      +gather(${
+        | \p{x + y}^2 = x^2 + 2xy + y^2,
+        | \p{x + a}\p{x + b} = x^2 + \p{a + b} x + ab,
+        | \p{x + y}\p{x - y} = x^2 - y^2.
+        |});
+      >
+    ```) <%
+     +AZMathParam.with-param(AZMathEquation.eqn-gather-align-coef)(0.0)<%
+      +gather(${
+        | \p{x + y}^2 = x^2 + 2xy + y^2,
+        | \p{x + a}\p{x + b} = x^2 + \p{a + b} x + ab,
+        | \p{x + y}\p{x - y} = x^2 - y^2.
+        |});
+      >%
+    >%
+
+
+    +p{
+      長い式を途中で折り返すときや式変形の経過を見せたいときなど、
+      式を特定の箇所で揃えたい場合があります。
+      そのような用途には `+align` を用いることができます。
+    }
+
+    +example(```
+    +align(${
+      | \p{x + y}\p{x - y} |= x^2 -xy + xy - y^2 \notag
+      |                    |= x^2 - y^2.
+      |});
+    ```) <%
+    +align(${
+      | \p{x + y}\p{x - y} |= x^2 -xy + xy - y^2 \notag
+      |                    |= x^2 - y^2.
+      |});
+    >%
+
+    +p{
+      なお、`\notag` はその行における数式番号の付与を抑制するコマンドです
+      （タグの仕様についての詳細は後述します）。
+      先程の `gather` と異なり、イコールの記号 `=` の前にバー `|` が付いています。
+      数式はこのバーの位置を基準として、左にあるものは右揃えで、右にあるものは左揃えで整列されます。
+      上の例ではコードの見栄えのために縦棒の位置を揃えて書きましたが、
+      コード上の縦棒の位置を揃える必要はもちろんありません。
+      なお、この縦棒はいずれも数式の区切りを意味するものであり、
+      以下のように数式のリストを渡した場合と同じ動作となります。
+    }
+
+    +code(```
+    +align[
+      ${ \p{x + y}\p{x - y} };
+      ${= x^2 -xy + xy - y^2 \notag};
+      ${};
+      ${= x^2 - y^2.};
+    ];
+    ```);
+
+    +p{
+      つまり、
+      `+align` コマンドも結局は `+gather` と同様に数式のリストを与えているにすぎないのですが、
+      `+align` コマンドでは2つのペアごとに数式を並べる点が異なっており、
+      結果としてイコールの前などの位置で数式を揃えることができるようになっています。
+    }
+
+    +p{
+      `+alignat` は複数の数式を縦横に並べるためのコマンドです。
+      並べる数式の列数と、数式のリストを指定します。
+    }
+
+    +example(```
+    +alignat(2)(${
+      | \p{x + y}^2        |= x^2 + 2xy + y^2,
+      | \p{x - y}^2        |= x^2 - 2xy + y^2,
+      | \p{x + a}\p{x + b} |= x^2 + \p{a + b} x + ab,
+      | \p{x + y}\p{x - y} |= x^2 - y^2.
+      |});
+    +alignat(3)(${
+      | a |= x, | b =| y,  | c      |= z,
+      | d |= w, | e  |= s, | f = t. |
+      |});
+    ```) <%
+    +alignat(2)(${
+      | \p{x + y}^2        |= x^2 + 2xy + y^2,
+      | \p{x - y}^2        |= x^2 - 2xy + y^2,
+      | \p{x + a}\p{x + b} |= x^2 + \p{a + b} x + ab,
+      | \p{x + y}\p{x - y} |= x^2 - y^2.
+      |});
+    +alignat(3)(${
+      | a |= x, | b =| y,  | c      |= z,
+      | d |= w, | e  |= s, | f = t. |
+      |});
+    >%
+
+    +p{
+      `\aligned` は、数式の中で `\align` のような揃え方を実現したい場合に用いられます。
+      特に場合分けを行う際には `\cases` が便利です。
+    }
+
+    +example(```
+      +eqn(${
+        y = \cases{
+        | x      | \p{x \geq 0}
+        | \neg x | \p{x < 0}
+        |}
+        });
+    ```) <%
+      +eqn(${
+        y = \cases{
+        | x      | \p{x \geq 0}
+        | \neg x | \p{x < 0}
+        |}
+        });
+    >%
+
+  >%
+
+  +subsection{数式のタグ}<%
+    +p{
+      数式には自動で数式番号がつくという話をしました。
+      番号のつく数式には、以下のようにラベルを付与することができます。
+    }
+
+    +example(```
+    +gather(${
+      | \p{x + y}^2 = x^2 + 2xy + y^2, \label!(`formula1`)
+      | \p{x + a}\p{x + b} = x^2 + \p{a + b} x + ab, \label!(`formula2`)
+      | \p{x + y}\p{x - y} = x^2 - y^2. \label!(`formula3`)
+      |});
+    ```) <%
+    +gather(${
+      | \p{x + y}^2 = x^2 + 2xy + y^2,               \label!(`formula1`)
+      | \p{x + a}\p{x + b} = x^2 + \p{a + b} x + ab, \label!(`formula2`)
+      | \p{x + y}\p{x - y} = x^2 - y^2.              \label!(`formula3`)
+      |});
+    >%
+
+    +p{
+      付与した数式は ``\ref(`eq:formula1`);`` とすることで参照することができます。
+      たとえば先程の例の一番上の式は (\ref(`eq:formula1`);) 式でした。
+    }
+
+    +p{
+      さらに、表示するタグを変更することもできます。
+    }
+
+    +example(```
+    +gather(${
+      | \p{x + y}^2 = x^2 + 2xy + y^2,  \label?:!(`1-a`)!(`formula4`)
+      | \p{x + y}\p{x - y} = x^2 - y^2.
+        \label?:!(`very long tag`)!(`formula5`)
+      |});
+    ```) <%
+    +gather(${
+      | \p{x + y}^2 = x^2 + 2xy + y^2,  \label?:!(`1-a`)!(`formula4`)
+      | \p{x + y}\p{x - y} = x^2 - y^2.
+        \label?:!(`very long tag`)!(`formula5`)
+      |});
+    >%
+
+    +p{
+      式変形の途中など、数式番号やタグを表示したくない場合もあるでしょう。
+      タグを非表示にする方法は2通りあります。
+      1つ目は `\notag` コマンドを用いる方法です。
+      `\label` の代わりに `\notag` を用いると、タグが付かなくなります。
+      式変形や長い数式の途中など、特定の行のみ無効化したい場合に有効です。
+    }
+
+    +example(```
+    +gather(${
+      | \p{x + y}^2 = x^2 + 2xy + y^2, \notag
+      | \p{x + a}\p{x + b} = x^2 + \p{a + b} x + ab,
+      | \p{x + y}\p{x - y} = x^2 - y^2.
+      |});
+    ```) <%
+    +gather(${
+      | \p{x + y}^2 = x^2 + 2xy + y^2, \notag
+      | \p{x + a}\p{x + b} = x^2 + \p{a + b} x + ab,
+      | \p{x + y}\p{x - y} = x^2 - y^2.
+      |});
+    >%
+
+    +p{
+      2つ目は、数式環境の引数に `AZMathEquation.notag` を与える方法です。
+      `AZMathEquation.notag` を指定した数式環境ではデフォルトでタグが付かなくなり、
+      `\label` コマンドを用いた箇所にのみタグが付くようになります。
+      特定の箇所に限りタグを付与したい場合には有効な手段と言えます。
+    }
+
+    +example(```
+    +gather?:(AZMathEquation.notag)(${
+      | \p{x + y}^2 = x^2 + 2xy + y^2,
+      | \p{x + a}\p{x + b} = x^2 + \p{a + b} x + ab,
+      | \p{x + y}\p{x - y} = x^2 - y^2. \label!(`formula-notag`)
+      |});
+    ```) <%
+    +gather?:(AZMathEquation.notag)(${
+      | \p{x + y}^2 = x^2 + 2xy + y^2,
+      | \p{x + a}\p{x + b} = x^2 + \p{a + b} x + ab,
+      | \p{x + y}\p{x - y} = x^2 - y^2. \label!(`formula-notag`)
+      |});
+    >%
+
+    +p{
+      数式環境のオプション引数に指定する `notag` などの関数は、
+      本来数式のタグの体裁を指定するのに利用されます。
+      したがって、関数定義によって数式のラベルを別の体裁にすることもできます。
+    }
+
+    +p{
+      数式が長いことによって通常の位置にタグを打つと数式とタグが重なってしまう場合、
+      タグの位置を自動で下にずらしてくれるのは AZmath パッケージの数式環境の強みです。
+    }
+
+    +example(```
+    +gather(${
+      | \p{a + b + c + d + e}\p{x + y}
+        = ax + ay + bx + by + cx + cy + dx + dy + ex + ey
+      | x^3 + y^3 + z^3 - 3xyz =
+        \p{x + y + z}\p{x^2 + y^2 + z^2 - xy - yz - zx}
+        \label?:!(`long tag`)!(`long-tag-formula`)
+      |});
+    ```) <%
+    +gather(${
+      | \p{a + b + c + d + e}\p{x + y}
+        = ax + ay + bx + by + cx + cy + dx + dy + ex + ey
+      | x^3 + y^3 + z^3 - 3xyz =
+        \p{x + y + z}\p{x^2 + y^2 + z^2 - xy - yz - zx}
+        \label?:!(`long tag`)!(`long-tag-formula`)
+      |});
+    >%
+
+  >%
+
+  +subsection{数式環境途中での改ページ}<%
+    +p{
+      標準パッケージの `+align` では数式環境の途中で改ページを行うことができなかったのに対し、
+      AZmath パッケージの `+gather`, `+align`, `+alignat`
+      ではデフォルトで数式環境の途中で改ページを行うことができます。
+      \LaTeX; の `\allowdisplaybreaks` オプションを付けた場合と同じような挙動と言えます。
+      しかし、改ページを抑制したい場合もあるでしょう。
+      数式の中で `\keeppage` コマンドを付けることで、
+      その数式の直後の位置で改ページすることを抑制できます。
+    }
+    +p{
+      数式の途中だからタグ付けも改ページもしたくない、
+      という場合には `\notag\keeppage` としてもよいですが、
+      同じ効果を持つ `\tbc`（To Be Continued の略）というより短いコマンドも用意しています。
+    }
+  >%
+
+  +subsection{数式環境のパラメータ}<%
+
+    +p{
+      AZmath パッケージで用意されている数式環境では、
+      パラメータを指定してその振る舞いを変更することができます。
+    }
+
+    +description<
+      +dd{`allow-display-break`}<
+        +pn{
+          bool 型のパラメータ。デフォルトは `true`。
+        }
+        +pn{
+          別行立て数式の途中で改行することを許すかどうか。
+          false にすると別行立て数式に入る直前及び、
+          別行立て数式の行の間では改行ができない。
+        }
+      >
+
+      +dd{`vmargin-between-eqn`}<
+        +pn{
+          `context -> length` 型のパラメータ。デフォルトは `(fun ctx -> (get-font-size ctx) *' 0.6)`。
+        }
+        +pn{
+          数式同士の間の余白。テキスト処理文脈を引数に取る関数の形で指定する。
+          たとえば `(fun ctx -> (get-font-size ctx) *' 1.5)` とすると
+          現在のフォントサイズの 1.5 倍の高さとなり、
+          `(fun _ -> 20pt)` とすると現在のフォントサイズなどによらず20ptとなる。
+        }
+      >
+
+      +dd{`vmargin-between-eqn`, `vmargin-after-eqn`}<
+        +pn{
+          `context -> length` 型のパラメータ。デフォルトはともに `(fun ctx -> (get-font-size ctx) *' 1.0)`。
+        }
+        +pn{
+          別行立て数式前後の余白（段落間空白）。
+        }
+      >
+
+      +dd{`min-gap-between-eqn-and-tag`}<
+        +pn{
+          `context -> length` 型のパラメータ。デフォルトは `(fun ctx -> 2pt)`。
+        }
+        +pn{
+          数式やタグがどこまで近づいてよいか。
+          数式を整列させたとき、数式の右端とタグの左端がこのパラメータで示す値以上無かった場合、
+          タグは数式の下に回り込んで組まれる。
+          テキスト処理文脈を引数に取る関数の形で指定する。
+        }
+      >
+
+      +dd{`vmargin-between-eqn-and-tag`}<
+        +pn{
+          `context -> length` 型のパラメータ。デフォルトは `(fun ctx -> (get-font-size ctx) *' 0.3)`。
+        }
+        +pn{
+          数式やタグが長いためにタグが数式の下に回り込んだ際に、
+          数式とタグの間に入る縦方向の余白。
+          テキスト処理文脈を引数に取る関数の形で指定する。
+        }
+      >
+
+    >
+
+    +p{
+      パラメータはプリアンブルで以下のように指定することができます。
+    }
+    +code(```
+      let () = AZMathEquation.allow-display-break
+        |> AZMathParam.set true
+      let () = AZMathEquation.vmargin-between-eqn
+        |> AZMathParam.set (fun _ -> 20pt)
+    ```);
+
+    +p{
+      また、パラメータをブロックテキスト・インラインテキスト中で指定するコマンドも存在します。
+    }
+
+  >%
+
+>%
+
++section{アクセント}<%
+
+  +p{
+    `\hat{x}` などとすることによって、数式にアクセントを追加することができます．
+  }
+
+  +gather(${
+    | \hat{a}, \hat{b}, \hat{c}, \hat{d}, \hat{e}, \hat{f},
+      \hat{g}, \hat{h}, \hat{i}, \hat{j}, \hat{k}, \hat{l}, \hat{m},
+      \hat{n}, \hat{o}, \hat{p}, \hat{q}, \hat{r}, \hat{s},
+      \hat{t}, \hat{u}, \hat{v}, \hat{w}, \hat{x}, \hat{y}, \hat{z},
+    | \hat{A}, \hat{B}, \hat{C}, \hat{D}, \hat{E}, \hat{F},
+      \hat{G}, \hat{H}, \hat{I}, \hat{J}, \hat{K}, \hat{L}, \hat{M},
+      \hat{N}, \hat{O}, \hat{P}, \hat{Q}, \hat{R}, \hat{S},
+      \hat{T}, \hat{U}, \hat{V}, \hat{W}, \hat{X}, \hat{Y}, \hat{Z},
+    | \hat{\alpha}, \hat{\beta}, \hat{\gamma}, \hat{\delta}, \hat{\epsilon}, \hat{\zeta},
+      \hat{\eta}, \hat{\theta}, \hat{\iota}, \hat{\kappa}, \hat{\lambda}, \hat{\mu},
+      \hat{\nu}, \hat{\xi}, \hat{\omicron}, \hat{\pi}, \hat{\rho}, \hat{\sigma},
+      \hat{\tau}, \hat{\upsilon}, \hat{\phi}, \hat{\chi}, \hat{\psi}, \hat{\omega},
+    | \hat{\Alpha}, \hat{\Beta}, \hat{\Gamma}, \hat{\Delta}, \hat{\Epsilon}, \hat{\Zeta},
+      \hat{\Eta}, \hat{\Theta}, \hat{\Iota}, \hat{\Kappa}, \hat{\Lambda}, \hat{\Mu},
+      \hat{\Nu}, \hat{\Xi}, \hat{\Omicron}, \hat{\Pi}, \hat{\Rho}, \hat{\Sigma},
+      \hat{\Tau}, \hat{\Upsilon}, \hat{\Phi}, \hat{\Chi}, \hat{\Psi}, \hat{\Omega}.
+    |});
+
+  +p{
+    他のアクセントについても同様に付けることができます．
+    現時点で使用可能なコマンドは
+    `\hat{}`, `\tilde{}`, `\bar{}`, `\adot{}`, `\ddot{}`, `\breve{}`
+    です。
+  }
+
+  +gather(${
+    | \tilde{a}, \tilde{b}, \tilde{c}, \tilde{d}, \tilde{e}, \tilde{f},
+      \tilde{g}, \tilde{h}, \tilde{i}, \tilde{j}, \tilde{k}, \tilde{l}, \tilde{m},
+      \tilde{n}, \tilde{o}, \tilde{p}, \tilde{q}, \tilde{r}, \tilde{s},
+      \tilde{t}, \tilde{u}, \tilde{v}, \tilde{w}, \tilde{x}, \tilde{y}, \tilde{z},
+    | \bar{a}, \bar{b}, \bar{c}, \bar{d}, \bar{e}, \bar{f},
+      \bar{g}, \bar{h}, \bar{i}, \bar{j}, \bar{k}, \bar{l}, \bar{m},
+      \bar{n}, \bar{o}, \bar{p}, \bar{q}, \bar{r}, \bar{s},
+      \bar{t}, \bar{u}, \bar{v}, \bar{w}, \bar{x}, \bar{y}, \bar{z},
+    | \adot{a}, \adot{b}, \adot{c}, \adot{d}, \adot{e}, \adot{f},
+      \adot{g}, \adot{h}, \adot{i}, \adot{j}, \adot{k}, \adot{l}, \adot{m},
+      \adot{n}, \adot{o}, \adot{p}, \adot{q}, \adot{r}, \adot{s},
+      \adot{t}, \adot{u}, \adot{v}, \adot{w}, \adot{x}, \adot{y}, \adot{z},
+    | \ddot{a}, \ddot{b}, \ddot{c}, \ddot{d}, \ddot{e}, \ddot{f},
+      \ddot{g}, \ddot{h}, \ddot{i}, \ddot{j}, \ddot{k}, \ddot{l}, \ddot{m},
+      \ddot{n}, \ddot{o}, \ddot{p}, \ddot{q}, \ddot{r}, \ddot{s},
+      \ddot{t}, \ddot{u}, \ddot{v}, \ddot{w}, \ddot{x}, \ddot{y}, \ddot{z}.
+    | \breve{a}, \breve{b}, \breve{c}, \breve{d}, \breve{e}, \breve{f},
+      \breve{g}, \breve{h}, \breve{i}, \breve{j}, \breve{k}, \breve{l}, \breve{m},
+      \breve{n}, \breve{o}, \breve{p}, \breve{q}, \breve{r}, \breve{s},
+      \breve{t}, \breve{u}, \breve{v}, \breve{w}, \breve{x}, \breve{y}, \breve{z}.
+    |});
+
+  +p{
+    ${\hat{f}} や ${\hat{J}} など，中にはアクセントを付けるときに ${x} 方向の位置がズレているように見えるものがあります．
+    これは，引数の文字に関わらず ${x} 方向の位置を一律に定めて文字を付けているためであり，
+    アクセントの適切な位置をフォントから取得する機構が \SATySFi; にまだ備わっていないことに起因します．
+    場当たり的な解決策として，オプション引数に補正係数を指定して
+    `\hat?:!(0.18){f}` などとすれば補正することができます．
+  }
+
+  +example(```
+    +alignat(3)(${
+      | \hat{f} |= \hat?:!(0.18){f},
+      | \hat{J} |= \hat?:!(0.20){J},
+      | \hat{m} |= \hat?:!(0.-.0.15){m}.
+      |});
+  ```)<%
+    +alignat(3)(${
+      | \hat{f} |= \hat?:!(0.18){f},
+      | \hat{J} |= \hat?:!(0.20){J},
+      | \hat{m} |= \hat?:!(0.-.0.15){m}.
+      |});
+  >%
+
+
+  +p{
+    現時点での実用的な運用方法は，文書で使いそうなアクセント変数を
+    プリアンブル部分で以下のように定義してしまうことでしょう．
+  }
+  +code(```
+    let-math \hat-f = ${\hat?:!(0.18){f}}
+    let-math \hat-J = ${\hat?:!(0.20){J}}
+  ```);
+
+
+>%
+
++section{括弧}<%
+  +p{
+    標準の `math` パッケージにも括弧は定義されていますが，
+    `azmath` パッケージでも新たな括弧を定義しています．
+    標準のアプローチと同様に括弧はグラフィックスで定義しており，
+    フォントに入っている括弧は用いていません．
+  }
+
+  +example(```
+    +gather(${
+      | \p{\int_0^\infty \frac{\sin x}{\sqrt{x}} \ordd x}^2
+        = \sum_{k=0}^\infty
+          \frac{\p{2k}\!}{2^{2k}\p{k\!}^2} \frac{1}{2k + 1}
+        = \prod_{k=1}^\infty \frac{4k^2}{4k^2 - 1}
+        = \frac{\pi}{2}
+      | \lim_{x \to 0}\p{\frac{1}{2} \p{\p{\p{x + 1} + x}^2}}
+      |});
+  ```)<%
+    +gather(${
+      | \p{\int_0^\infty \frac{\sin x}{\sqrt{x}} \ordd x}^2
+        = \sum_{k=0}^\infty
+          \frac{\p{2k}\!}{2^{2k}\p{k\!}^2} \frac{1}{2k + 1}
+        = \prod_{k=1}^\infty \frac{4k^2}{4k^2 - 1}
+        = \frac{\pi}{2}
+      | \lim_{x \to 0}\p{\frac{1}{2} \p{\p{\p{x + 1} + x}^2}}
+      |});
+  >%
+
+
+  +p{
+    `azmath` で定義された括弧にはいくつかの特徴があります．
+  }
+
+  +listing{
+    * 括弧の高さは必要に応じて伸縮する．
+    * 複数の括弧を入れても，括弧の高さは変わらない．
+      ただし例外として，絶対値に用いられる `\pabs` のように開き括弧と閉じ括弧の区別が見かけ上つかない括弧については，
+      括弧のネストをわかりやすくするため中身より一段階高くする．
+  }
+
+  +p{
+    2番目については，以下のような例を見るとよりはっきりと違いが分かるでしょう．
+    左側が標準で用意されている `\paren` 及び `\sqbracket`、
+    右側が AZmath で定義されている `\p` 及び `\pB` です。
+  }
+
+  +alignat(2)(${
+    | \paren{\paren{\paren{\paren{\paren{\paren{\paren{x}}}}}}}, |
+    | \p{\p{\p{\p{\p{\p{\p{x}}}}}}}. |
+
+    | \sqbracket{\sqbracket{\sqbracket{\sqbracket{\sqbracket{\sqbracket{\sqbracket{x}}}}}}}, |
+    | \pB{\pB{\pB{\pB{\pB{\pB{\pB{x}}}}}}}. |
+    |});
+
+  +p{
+    括弧の種類はいくつか用意されています．
+  }
+
+  +example(```
+    +gather(${
+      | \pb{\frac{1}{2} \pb{\pb{\pb{x + 1} + x}^2}}
+      | \pB{\frac{1}{2} \pB{\pB{\pB{x + 1} + x}^2}}
+      | \pabs{\frac{1}{2} \pabs{\pabs{\pabs{x + 1} + x}^2}}
+      | \pnorm{\frac{1}{2} \pnorm{\pnorm{\pnorm{x + 1} + x}^2}}
+      | \pangle{\frac{1}{2} \pangle{\pangle{\pangle{x + 1} + x}^2}}^2
+      |});
+  ```)<%
+    +gather(${
+      | \pb{\frac{1}{2} \pb{\pb{\pb{x + 1} + x}^2}}
+      | \pB{\frac{1}{2} \pB{\pB{\pB{x + 1} + x}^2}}
+      | \pabs{\frac{1}{2} \pabs{\pabs{\pabs{x + 1} + x}^2}}
+      | \pnorm{\frac{1}{2} \pnorm{\pnorm{\pnorm{x + 1} + x}^2}}
+      | \pangle{\frac{1}{2} \pangle{\pangle{\pangle{x + 1} + x}^2}}^2
+      |});
+  >%
+
+  +p{
+    時には括弧の大きさを自動ではなく手動で調整したい場合もあるかもしれません．
+    括弧の大きさはオプション引数によって調整できます． `\p?:!(20pt){xxx}` で，
+    あたかも中身が20ptの高さを持っているかのように括弧を組むことができます．
+  }
+
+  +example(```
+    +gather(${
+      | \p?:!(10pt){xxx} = \p?:!(15pt){xxx} = \p?:!(30pt){xxx}
+      | \pangle?:!(12pt){ \frac{1}{2} \pangle?:!(8pt){
+          \pangle?:!(16pt){\pangle?:!(12pt){x + 1} + x}^2
+          }}
+      |});
+  ```)<%
+    +gather(${
+      | \p?:!(10pt){xxx} = \p?:!(15pt){xxx} = \p?:!(30pt){xxx}
+      | \pangle?:!(12pt){ \frac{1}{2} \pangle?:!(8pt){
+          \pangle?:!(16pt){\pangle?:!(12pt){x + 1} + x}^2
+          }}
+      |});
+  >%
+
+  +p{
+    数式を囲む括弧とは少し異なる括弧のコマンドとして、
+    `\overbrace{m}`, `\underbrace{m}` で数式の上下に波括弧を描く事ができます．
+    数式の一部に注釈を入れたいときなどに使えます．
+  }
+
+  +example(```
+    +gather(
+      let m = ${\frac{\neg b \pm \sqrt{b^2 - 4ac}}{2a}} in
+      ${
+        | x = \overbrace{#m} + \overbrace{\pb{#m} + #m}^{\text!{大事！}}
+        | x = \underbrace{#m + \pb{#m}} + \underbrace{#m}_{\text!{大事！}}
+        |});
+  ```)<%
+    +gather(
+      let m = ${\frac{\neg b \pm \sqrt{b^2 - 4ac}}{2a}} in
+      ${
+        |x = \overbrace{#m} + \overbrace{\pb{#m} + #m}^{\text!{大事！}}
+        |x = \underbrace{#m + \pb{#m}} + \underbrace{#m}_{\text!{大事！}}
+        |});
+  >%
+
+  +p{
+    片方が片方に内包される形であれば，入れ子にして使うことも可能です．
+  }
+
+  +example(```
+    +gather(${
+      | x = \underbrace{
+          \overbrace{ a + \underbrace{b + c}_{=0} }^{\text!{foo}}
+          + d + \overbrace{e + f}
+        }_{=0}
+      |});
+  ```)<%
+    +gather(${
+      | x = \underbrace{
+          \overbrace{ a + \underbrace{b + c}_{=0} }^{\text!{foo}}
+          + d + \overbrace{e + f}
+        }_{=0}
+      |});
+  >%
+
+>%
+
++section{行列}<%
+
+  +p{
+    行列を描くことも出来ます．
+    `\pmatrix!(n){| ... elements ... |}` とすることで、
+    ${n} 個の列を持つ行列を組むことができます。
+    なお、行の数は要素数から自動で判断されます。
+  }
+
+
+  +example(```
+    +gather(${
+      | A = \pmatrix!(2){| a | b | c | d |}
+      | A^{-1} = \frac{1}{ad - bc} \pmatrix!(2){|d|\neg b|\neg c|a|}
+        = \pmatrix!(2){
+        |      \frac{d}{ad - bc} | \neg \frac{b}{ad - bc}
+        | \neg \frac{c}{ad - bc} |      \frac{a}{ad - bc}
+        |}
+      |});
+  ```)<%
+    +gather(${
+      | A = \pmatrix!(2){| a | b | c | d |}
+      | A^{-1} = \frac{1}{ad - bc} \pmatrix!(2){|d|\neg b|\neg c|a|}
+        = \pmatrix!(2){
+        |      \frac{d}{ad - bc} | \neg \frac{b}{ad - bc}
+        | \neg \frac{c}{ad - bc} |      \frac{a}{ad - bc}
+        |}
+      |});
+  >%
+
+  +p{
+    行列の括弧は色々変えられます．
+  }
+
+  +example(```
+    +align(${
+      | A |= \matrix!(2){| a | b | c | d |}
+      | A |= \bmatrix!(2){| a | b | c | d |}
+      | A |= \vmatrix!(2){| a | b | c | d |}
+      | A |= \dmatrix!(2){| a | b | c | d |}
+      |});
+  ```)<%
+    +align(${
+      | A |= \matrix!(2){| a | b | c | d |}
+      | A |= \bmatrix!(2){| a | b | c | d |}
+      | A |= \vmatrix!(2){| a | b | c | d |}
+      | A |= \dmatrix!(2){| a | b | c | d |}
+      |});
+  >%
+
+>%
+
+>%

@@ -1,0 +1,47 @@
+% Probe: can a PDF named destination be registered from an `inline-graphics`
+% callback?
+%
+% Run BOTH engines --- here they DISAGREE, which is the point:
+%
+%   layout-tests/tools/probe.py layout-tests/probes/inline_graphics_dest.saty
+%
+%   SATySFi 0.0.11   renders, and the anchor lands in the PDF
+%   this port        Error: register-destination can only be called during
+%                    page breaking (from a page-break hook or a decoration)
+%
+% Upstream and this port agree on the GATE --- `annotation.ml:15` raises
+% `State.NotDuringPageBreak` outside the window too, so relaxing it here would
+% be the unfaithful fix. They disagree on WHEN the callback runs.
+% `primitives.rs`'s `prim_inline_graphics` documents the deviation as its
+% "eager-callback shortcut": a lang closure cannot live inside a
+% `PureHorzBox::Graphics`, so the callback is applied once at construction
+% time at `(0pt, 0pt)` (and a second time at a probe point, to detect a
+% page-absolute callback) and the writer's per-box `cm` supplies the placed
+% position later. That is exact for a shift-covariant graphics generator and
+% wrong for a SIDE-EFFECTING one: at construction time no page exists, so
+% `interp.current_page` is `None`.
+%
+% Measured on azmath (satysfi-azmath 0.0.3), whose `equation.satyh`
+% `ib-annotation` is exactly the shape below --- it anchors every `\label`ed
+% equation. With this one call stubbed out the port builds azmath's whole
+% 30-page-source manual (14 pages, 619 lines against upstream's 15), so this
+% single primitive-timing gap is all that keeps azmath out of `corpus/`.
+% Closing it needs the deferred-firing architecture the `deco` family already
+% has: the destination's key would ride in the `Graphics` box and be resolved
+% to `(page, x, y)` by `fire_hooks`, which already walks that box.
+@require: stdjabook
+
+let-inline ctx \anchor key =
+  inline-graphics 0pt 0pt 0pt (fun (x, y) -> (
+    let () = register-destination key (x, y) in []
+  ))
+in
+
+document (|
+  title = {inline-graphics destination probe};
+  author = {};
+  show-title = false;
+  show-toc = false;
+|) '<
+  +p{before \anchor(`probe-dest`); after}
+>

@@ -1,0 +1,111 @@
+azmath — where this came from, what was changed, and why it is not gated yet
+============================================================================
+
+Upstream
+--------
+  repository  https://github.com/monaqa/satysfi-azmath
+  version     0.0.3 (tag v0.0.3, 2020-11-07 — the latest RELEASE; the only
+              later tags are v0.0.1/v0.0.2, and master has moved on, see below)
+  tarball     https://github.com/monaqa/satysfi-azmath/archive/v0.0.3.tar.gz
+  sha512      725917ab03e5599f7ef2d5065afa904197bf58ddd61ebec0b7dd160f1bce1e60
+              bbfe4fecddc40f753c6e33fc103fe5a0ef36d3fe9dcab58c40bb2236617b3812
+  licence     MIT (satysfi-azmath.opam `license: "MIT"`; LICENSE is vendored
+              beside this file)
+  author      Shinichi Mogami <mogassy@yahoo.co.jp>
+
+The sha512 above is the one the package index at
+https://yasuo-ozu.github.io/rustyfi-packages/packages/azmath.toml publishes for
+0.0.3, and it matches the archive that was actually unpacked here.
+
+Vendored: `src/` and `doc/azmath.saty`, the corpus convention (each project's
+own document plus its package sources). `Satyristes`, the `.opam` files,
+`HISTORY.md`, `commands.md`, `README.md` and the upstream-built `doc/azmath.pdf`
+are NOT vendored — see "the reference PDF" below for why that last one would be
+actively misleading.
+
+WHY NOT master
+--------------
+master (67bf1e0a, 2022-05-15) is newer and its `+description` already speaks
+enumitem 3, which would have saved one of the two changes below. It is
+unusable here anyway: master's document added a "Unicode を用いた数式の記述"
+section that writes `${ x ÷ y }`, and a raw Unicode character in MATH mode is a
+SATySFi 0.0.7 feature — 0.0.6's lexer (`lexer.mll:128`, `mathsymboltop`) accepts
+only `+-*/:=<>~.,\`?`. This port targets 0.0.6 and rejects it, correctly.
+Upstream SATySFi 0.0.11 does accept it and then recurses forever on master's
+document (>12 CPU-minutes, 1.8 GB, killed), which is consistent with master's
+own opam pinning `satysfi {>= "0.0.6" & < "0.0.7"}`.
+
+TWO CHANGES TO THE VENDORED SOURCE
+----------------------------------
+Both are recorded at the site as well; this is the index.
+
+1. `doc/azmath.saty` — enumitem 2 -> 3. Lifted verbatim from azmath's own
+   master branch (commit e6775b6, "Bump enumitem to 3"): the `+dd` helper and
+   the `+description<...>` rewrite. enumitem 2 gave `+description` an `itemize`
+   argument, enumitem 3 gives it a `block-text` of `+ditem`s, and
+   `fidelity.py`'s `assemble_lib_root` merges every document's stage map into
+   ONE lib root, so the corpus can hold exactly one enumitem — which is 3.
+   Without this the document does not typecheck in EITHER engine.
+
+2. `src/equation.satyh` — `group-by-`'s two `- 1`s dropped. Same index-vs-count
+   `List.take`/`List.split-at` hazard `easytable/src/matrix.satyg`'s
+   `Matrix.set-nth` already carries in this corpus. As written,
+   `split-at (n - 1)` with `+gather`'s n = 1 splits at 0 against a COUNT-based
+   `satysfi-base`, so the recursive `aux` is handed back the list it was given
+   and never terminates. This is azmath's own bug, not either engine's:
+
+     - a two-row `+gather` in a 13-line document overflows this port's 256 MB
+       evaluator stack in 0.8 s AND upstream SATySFi 0.0.11's 8 MB one in 0.2 s;
+     - it is not proportional to input size — one row terminates, two do not;
+     - a ONE-row equation terminated but silently DROPPED its own contents
+       (`take (1*1 - 1)` = `take 0` = `[]`), so `+eqn` rendered a blank line.
+
+   With this fixed, upstream SATySFi 0.0.11 builds the whole document in 1.6 s
+   (15 pages).
+
+WHY THIS IS NOT IN fidelity.py's `DOCS`
+---------------------------------------
+The port cannot build it. One primitive-timing gap remains, and it is the
+port's, not azmath's:
+
+  Error: register-destination can only be called during page breaking
+         (from a page-break hook or a decoration)
+
+`equation.satyh`'s `ib-annotation` anchors every `\label`ed equation by calling
+`register-destination` from inside an `inline-graphics` callback, and
+`primitives.rs`'s `prim_inline_graphics` documents its "eager-callback
+shortcut": the callback runs at CONSTRUCTION time, where no page exists, rather
+than at page-break time where upstream runs it. The gate itself is faithful —
+upstream's `annotation.ml:15` raises `State.NotDuringPageBreak` outside the
+window too, so relaxing it would be the wrong fix.
+
+`layout-tests/probes/inline_graphics_dest.saty` is the package-free
+reproduction, with the measurement.
+
+Stub that one call out and the port builds the entire document: 14 pages / 619
+lines against upstream's 15 pages. So this single gap is the whole remaining
+distance, which is why the sources are vendored and repaired here rather than
+thrown away — registering azmath is a six-line `DOCS` entry once it closes:
+
+    Doc(
+        "azmath",
+        "azmath/doc/azmath.saty",
+        "azmath/doc/azmath.pdf",
+        "display math: aligned equations, matrices, auto-sized parens, accents",
+        {"enumitem": "enumitem/src"},   # azmath arrives by relative @import:
+    ),
+
+THE REFERENCE PDF
+-----------------
+Not vendored, deliberately. Upstream's own `doc/azmath.pdf` in the 0.0.3
+tarball was built from the UNPATCHED document — enumitem 2's `+description` and
+the runaway `group-by-` — so it is not a render of the source in this
+directory and would silently anchor the comparison to the wrong text.
+
+Produce the real one the way `fidelity.py --gen-refs` does, from the flake's
+SATySFi 0.0.11 (`nix build .#satysfi --no-link --print-out-paths`), with a `-C`
+root holding `satysfi-base/src` as `base` and `enumitem/src` as `enumitem`:
+
+    satysfi doc/azmath.saty -o doc/azmath.pdf -C <root>
+
+Run it from `doc/`, so the document's `@import: ../src/azmath` resolves.

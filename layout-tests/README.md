@@ -12,7 +12,7 @@ Three roles live here, and they are easy to confuse because all three involve
 
     fidelity.py          the comparison, and the pass/fail
     baseline.json        the recorded per-document numbers
-    corpus/              10 vendored third-party projects, and 6 PDFs built by
+    corpus/              11 vendored third-party projects, and 6 PDFs built by
                          the ORIGINAL OCaml SATySFi
 
 `fidelity.py` rebuilds each corpus document with the port and compares the
@@ -26,6 +26,15 @@ uses:
 
 The reference PDFs are the fixed point the whole comparison rests on. Do not
 regenerate them to make a number go green.
+
+One project is vendored WITHOUT being registered in `DOCS`: `corpus/azmath/`.
+Its sources are repaired and upstream builds them, but the port cannot — every
+`\label`ed equation anchors itself with `register-destination` from inside an
+`inline-graphics` callback, which this port runs eagerly at construction time
+rather than during page breaking. `corpus/azmath/PROVENANCE` carries the whole
+account and the `DOCS` entry to paste in once that closes;
+`probes/inline_graphics_dest.saty` is the package-free reproduction. It is
+staged rather than gated so nothing here goes red over it.
 
 ## The probes
 

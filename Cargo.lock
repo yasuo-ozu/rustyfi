@@ -1551,6 +1551,7 @@ version = "0.1.0"
 dependencies = [
  "newer-type 0.3.0",
  "newer-type-std",
+ "syan",
  "unicode-linebreak",
 ]
 

@@ -248,7 +248,19 @@ impl ImageResource {
 
 /// A milestone-1 subset of `pure_horz_box` from horzBox.ml, keeping its
 /// vocabulary so the full port extends rather than replaces it.
-#[derive(Clone, Debug, PartialEq)]
+///
+/// The `#[subast]` list names every *other* box type reachable from a field
+/// of this enum; self-recursion (`Discretionary`, `Frame`) is implicit. It is
+/// what [`crate::visit`]'s generated traversal descends through, and it is
+/// **unchecked on stable Rust** — see that module's "The one trap" note and
+/// the `tests/visit_reachability.rs` test standing in for the missing check.
+#[derive(Clone, Debug, PartialEq, syan::visit::Ast)]
+#[subast(
+    crate::hbox::PureHorzBox,
+    crate::vbox::VertBox,
+    crate::graphics::GraphicsElem,
+    crate::tabular::TabularBox
+)]
 pub enum PureHorzBox {
     /// Fixed text with pre-measured dimensions.
     InnerString {

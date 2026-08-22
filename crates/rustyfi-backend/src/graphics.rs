@@ -74,7 +74,11 @@ pub struct PrePath {
 
 /// One `graphics` element (`GraphicD.element`). `place_graphics`
 /// (rustyfi-pdf) matches this exhaustively, without a wildcard arm.
-#[derive(Clone, Debug, PartialEq)]
+///
+/// See [`crate::hbox::PureHorzBox`] for what the `#[subast]` list means and
+/// what checks it.
+#[derive(Clone, Debug, PartialEq, syan::visit::Ast)]
+#[subast(crate::graphics::GraphicsElem, crate::hbox::PureHorzBox)]
 pub enum GraphicsElem {
     /// Filled region, even-odd rule (upstream's `op_f'`).
     Fill(Color, Path),

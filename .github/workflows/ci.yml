@@ -87,6 +87,14 @@ jobs:
         with:
           path: ${{ runner.temp }}/rustyfi-fontcache
           key: font-archives-${{ hashFiles('download-fonts.sh') }}
+          # Editing the script for any reason — a comment, a new face — changes
+          # the key and would otherwise mean a fully cold refetch, which is
+          # exactly the moment the outage above bites. Fall back to the newest
+          # existing archive cache instead: the script re-verifies every sha1,
+          # so a stale entry whose pin changed is re-downloaded on its own
+          # merits and the untouched ones are still reused.
+          restore-keys: |
+            font-archives-
       # The corpus docs set Japanese text in the bundled IPAex fonts, so the
       # sha1-pinned fonts must be present (else the port falls back to base-14
       # and every Japanese run is unencodable).
@@ -141,6 +149,14 @@ jobs:
         with:
           path: ${{ runner.temp }}/rustyfi-fontcache
           key: font-archives-${{ hashFiles('download-fonts.sh') }}
+          # Editing the script for any reason — a comment, a new face — changes
+          # the key and would otherwise mean a fully cold refetch, which is
+          # exactly the moment the outage above bites. Fall back to the newest
+          # existing archive cache instead: the script re-verifies every sha1,
+          # so a stale entry whose pin changed is re-downloaded on its own
+          # merits and the untouched ones are still reused.
+          restore-keys: |
+            font-archives-
       # The faces the standard library needs, then the standard library itself,
       # INTO THE ROOT THE PACKAGES INSTALL INTO — the order matters. Every font
       # package merges its entries into the one shared

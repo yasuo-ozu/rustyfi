@@ -151,6 +151,7 @@ fn cmd_compile(m: &ArgMatches) -> anyhow::Result<()> {
             fallback_roots: fallback_roots.clone(),
             version,
             mode,
+            ..Default::default()
         },
     )
     .map_err(|e| anyhow::anyhow!("{e}"))?;

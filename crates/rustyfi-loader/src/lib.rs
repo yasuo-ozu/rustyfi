@@ -29,6 +29,61 @@ use std::path::{Path, PathBuf};
 pub use error::LoadError;
 pub use rustyfi_syntax::RustyfiVersion;
 
+/// Where the Legacy loader gets source text from.
+///
+/// Three operations, which is the entire filesystem surface of the
+/// `@require:`/`@import:` path: read a file, probe a resolution candidate,
+/// and turn a path into the identity its dependency-graph node is keyed by.
+///
+/// The seam exists because `wasm32-unknown-unknown` has no filesystem at all,
+/// and a SATySFi document that cannot `@require:` anything is barely a
+/// document — the browser playground serves the bundled 0.0.6 corpus straight
+/// out of the binary through this trait. It is also the honest way to write a
+/// loader test that needs a dependency graph but not a temp directory.
+///
+/// `LoadOptions::sources` is `None` by default, which means [`FsSources`] —
+/// the real filesystem, byte-for-byte the behaviour that predates this trait.
+pub trait SourceProvider {
+    /// The file's text. `Err` is surfaced as [`LoadError::Io`].
+    fn read(&self, path: &Path) -> std::io::Result<String>;
+
+    /// Whether `path` names a readable file. Drives candidate selection in
+    /// `@require:`/`@import:` resolution, so a `false` here is an ordinary
+    /// "try the next candidate", not an error.
+    fn is_file(&self, path: &Path) -> bool;
+
+    /// `path`'s canonical form — the key two headers naming the same file
+    /// must agree on, or it would be loaded (and its bindings emitted) twice.
+    ///
+    /// A provider whose paths are already unique and absolute by construction
+    /// may return `path` unchanged; the loader only requires that the same
+    /// file always maps to the same key. Note that the per-file version
+    /// detector reads the RESULT, so a provider serving the frozen 0.0.6
+    /// corpus must keep the `dist/packages` components in it.
+    fn canonicalize(&self, path: &Path) -> std::io::Result<PathBuf>;
+}
+
+/// The real filesystem — [`SourceProvider`]'s default.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct FsSources;
+
+impl SourceProvider for FsSources {
+    fn read(&self, path: &Path) -> std::io::Result<String> {
+        std::fs::read_to_string(path)
+    }
+
+    fn is_file(&self, path: &Path) -> bool {
+        path.is_file()
+    }
+
+    fn canonicalize(&self, path: &Path) -> std::io::Result<PathBuf> {
+        std::fs::canonicalize(path)
+    }
+}
+
+/// The `None` case of [`LoadOptions::sources`], as a borrowable value.
+static FS_SOURCES: FsSources = FsSources;
+
 /// How multi-file dependencies are declared and resolved — Axis B,
 /// orthogonal to [`RustyfiVersion`] (Axis A, the grammar generation),
 /// except that the one combination with no upstream analogue — `V0_0` +
@@ -87,6 +142,14 @@ pub struct LoadOptions {
     /// which resolves `use … of` relative paths and a `rustyfi-deps.yaml`
     /// envelope graph instead.
     pub mode: LoadMode,
+    /// Where source text comes from. `None` (the default) is the real
+    /// filesystem, [`FsSources`].
+    ///
+    /// Honoured by [`LoadMode::Legacy`] only. The Envelopes backend reads
+    /// deps/envelope configs through `std::fs` directly and would silently
+    /// ignore this, so [`load`] refuses that combination up front rather than
+    /// half-applying it.
+    pub sources: Option<Box<dyn SourceProvider>>,
 }
 
 impl LoadOptions {
@@ -99,6 +162,14 @@ impl LoadOptions {
             .into_iter()
             .chain(self.fallback_roots.iter().map(|p| p.as_path()))
             .collect()
+    }
+
+    /// [`Self::sources`], defaulting to the real filesystem.
+    fn sources(&self) -> &dyn SourceProvider {
+        match &self.sources {
+            Some(provider) => provider.as_ref(),
+            None => &FS_SOURCES,
+        }
     }
 }
 
@@ -226,6 +297,13 @@ pub fn load(entry: &Path, opts: &LoadOptions) -> Result<LoadedProgram, LoadError
     match &opts.mode {
         LoadMode::Legacy => load_legacy(entry, opts),
         LoadMode::Envelopes { deps } => {
+            // The Envelopes backend reads its deps/envelope configs through
+            // `std::fs` directly, so a caller-supplied provider would be
+            // half-honoured at best. Refuse loudly rather than serve a
+            // dependency graph half out of memory and half off the disk.
+            if opts.sources.is_some() {
+                return Err(LoadError::SourceProviderUnderEnvelopes);
+            }
             // The one combination with no upstream analogue: 0.0.6 has no
             // `use` headers to resolve against an envelope graph at all.
             // Reject before touching the filesystem,
@@ -254,7 +332,8 @@ fn resolve_legacy_header(
 ) -> Result<Option<PathBuf>, LoadError> {
     Ok(Some(match header {
         rustyfi_syntax::cst::Header::Import(tok) => {
-            v006::resolve::resolve_import(dir, &tok.content).map_err(|searched| {
+            let sources = opts.sources();
+            v006::resolve::resolve_import(sources, dir, &tok.content).map_err(|searched| {
                 LoadError::UnresolvedImport {
                     name: tok.content.clone(),
                     from: from.to_path_buf(),
@@ -263,11 +342,14 @@ fn resolve_legacy_header(
             })?
         }
         rustyfi_syntax::cst::Header::Require(tok) => {
-            v006::resolve::resolve_require(&opts.roots(), &tok.content, opts.version)
-                .map_err(|searched| LoadError::UnresolvedRequire {
+            let sources = opts.sources();
+            let roots = opts.roots();
+            v006::resolve::resolve_require(sources, &roots, &tok.content, opts.version).map_err(
+                |searched| LoadError::UnresolvedRequire {
                     name: tok.content.clone(),
                     searched,
-                })?
+                },
+            )?
         }
         // `@stage: persistent` / `@stage: 0` / `@stage: 1` — a property of the
         // file's BINDINGS, read by the compiler (`declared_stage`), not by
@@ -283,7 +365,8 @@ fn resolve_legacy_header(
 /// file with a `use` header gets a typed
 /// [`LoadError::EnvelopeHeaderUnderLegacy`] rather than a parse error.
 fn load_legacy(entry: &Path, opts: &LoadOptions) -> Result<LoadedProgram, LoadError> {
-    let entry_canon = canonicalize(entry)?;
+    let sources = opts.sources();
+    let entry_canon = canonicalize_via(sources, entry)?;
 
     let mut next_id: u32 = 0;
     let mut id_of: HashMap<PathBuf, u32> = HashMap::new();
@@ -344,7 +427,7 @@ fn load_legacy(entry: &Path, opts: &LoadOptions) -> Result<LoadedProgram, LoadEr
         processed.insert(id);
 
         let path = path_of[&id].clone();
-        let src = std::fs::read_to_string(&path).map_err(|source| LoadError::Io {
+        let src = sources.read(&path).map_err(|source| LoadError::Io {
             path: path.clone(),
             source,
         })?;
@@ -497,7 +580,7 @@ fn load_legacy(entry: &Path, opts: &LoadOptions) -> Result<LoadedProgram, LoadEr
 
         let mut deps = Vec::new();
         for (resolved, is_require) in resolved_deps {
-            let dep_canon = canonicalize(&resolved)?;
+            let dep_canon = canonicalize_via(sources, &resolved)?;
             // "a `@require:`-resolved target … that RESOLVES UNDER
             // `lib-rustyfi/dist/packages/`" — the FROZEN 0.0.6 corpus path
             // specifically, NOT every `@require:` edge. This is the
@@ -570,8 +653,15 @@ fn load_legacy(entry: &Path, opts: &LoadOptions) -> Result<LoadedProgram, LoadEr
     Ok(LoadedProgram { files })
 }
 
+/// The filesystem's own canonicalization — what the Envelopes backend uses,
+/// which has no [`SourceProvider`] seam (see [`LoadOptions::sources`]).
 pub(crate) fn canonicalize(path: &Path) -> Result<PathBuf, LoadError> {
-    std::fs::canonicalize(path).map_err(|source| LoadError::Io {
+    canonicalize_via(&FS_SOURCES, path)
+}
+
+/// [`SourceProvider::canonicalize`] with the loader's error mapping.
+fn canonicalize_via(sources: &dyn SourceProvider, path: &Path) -> Result<PathBuf, LoadError> {
+    sources.canonicalize(path).map_err(|source| LoadError::Io {
         path: path.to_path_buf(),
         source,
     })

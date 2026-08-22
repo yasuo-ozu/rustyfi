@@ -80,6 +80,16 @@ pub enum LoadError {
     )]
     InvalidModeVersion { version: RustyfiVersion },
 
+    /// A [`crate::SourceProvider`] was supplied alongside `LoadMode::Envelopes`.
+    /// The Envelopes backend reads its deps/envelope configs through `std::fs`
+    /// directly, so honouring the provider for some reads and not others would
+    /// assemble a dependency graph half out of memory and half off the disk.
+    #[error(
+        "a custom source provider is only honoured in Legacy mode; \
+         `Envelopes` reads its deps/envelope configs from the filesystem directly"
+    )]
+    SourceProviderUnderEnvelopes,
+
     /// `use package Mod` with no deps config to resolve `Mod` against
     /// (upstream's used_as map is empty).
     #[error(

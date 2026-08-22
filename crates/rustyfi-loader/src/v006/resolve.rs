@@ -6,6 +6,7 @@
 //! mode-specific `.satyh-<mode>` extension SATySFi also tries — out of scope
 //! here, matching the task's transcription instructions.
 
+use crate::SourceProvider;
 use rustyfi_syntax::RustyfiVersion;
 use std::path::{Path, PathBuf};
 
@@ -39,10 +40,14 @@ fn candidates_in(base: &Path, name: &str) -> Vec<PathBuf> {
 ///
 /// Returns the first candidate that exists, or `Err` with the full list of
 /// paths tried (for `UnresolvedImport::searched`).
-pub(crate) fn resolve_import(dir: &Path, name: &str) -> Result<PathBuf, Vec<PathBuf>> {
+pub(crate) fn resolve_import(
+    sources: &dyn SourceProvider,
+    dir: &Path,
+    name: &str,
+) -> Result<PathBuf, Vec<PathBuf>> {
     let candidates = candidates_in(dir, name);
     for candidate in &candidates {
-        if candidate.is_file() {
+        if sources.is_file(candidate) {
             return Ok(candidate.clone());
         }
     }
@@ -79,6 +84,7 @@ pub(crate) fn resolve_import(dir: &Path, name: &str) -> Result<PathBuf, Vec<Path
 /// If `lib_root` is `None`, there is nowhere to search: returns `Err(vec![])`
 /// immediately (surfaced by `UnresolvedRequire` as "no candidates").
 pub(crate) fn resolve_require(
+    sources: &dyn SourceProvider,
     roots: &[&Path],
     name: &str,
     version: RustyfiVersion,
@@ -88,7 +94,7 @@ pub(crate) fn resolve_require(
     // carry the rest.
     let mut searched = Vec::new();
     for root in roots {
-        match resolve_require_in(root, name, version) {
+        match resolve_require_in(sources, root, name, version) {
             Ok(found) => return Ok(found),
             Err(tried) => searched.extend(tried),
         }
@@ -97,6 +103,7 @@ pub(crate) fn resolve_require(
 }
 
 fn resolve_require_in(
+    sources: &dyn SourceProvider,
     root: &Path,
     name: &str,
     version: RustyfiVersion,
@@ -138,7 +145,7 @@ fn resolve_require_in(
         candidates.extend(candidates_in(base, name));
     }
     for candidate in &candidates {
-        if candidate.is_file() {
+        if sources.is_file(candidate) {
             return Ok(candidate.clone());
         }
     }

@@ -447,6 +447,7 @@ fn compile_one(
             fallback_roots: Vec::new(),
             version,
             mode,
+            ..Default::default()
         },
     ) {
         Ok(p) => p,

@@ -4686,6 +4686,52 @@ fn prim_stroke(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, Eval
     Ok(Value::Graphics(GraphicsElem::Stroke(wid, color, path)))
 }
 
+/// Apply a graphics callback under the eager-call window, returning its
+/// resolved elements with every `register-destination` it made appended as a
+/// [`GraphicsElem::Destination`] marker.
+///
+/// The eager call runs outside any page-break window, so a
+/// `register-destination` inside it has no page to bind to. Rather than error
+/// (see `prim_register_destination`), it lands in `Interp::pending_dests`;
+/// here those requests become box-local markers that `fire_hooks` replays
+/// once the box is placed. They are appended AFTER the real elements, so ink
+/// z-order is untouched and a callback that registers nothing produces a
+/// byte-identical `elems` to before.
+///
+/// The window is not opened INSIDE a page-break walk (`current_page` is
+/// `Some` — a deco can build an `inline-graphics` of its own): a box built
+/// there is drawn straight into `page_graphics`, which `fire_hooks` never
+/// re-walks, so a marker minted for it would be silently dropped. There the
+/// direct registration is both available and correct.
+fn apply_graphics_callback(
+    interp: &mut Interp,
+    version: RustyfiVersion,
+    apply: impl FnOnce(&mut Interp) -> Result<Value, EvalError>,
+) -> Result<Vec<GraphicsElem>, EvalError> {
+    let defer = interp.current_page.is_none();
+    let saved = if defer {
+        interp.pending_dests.replace(Vec::new())
+    } else {
+        None
+    };
+    let result = apply(interp).and_then(|v| coerce_graphics_result_for(version, v));
+    let pending = if defer {
+        interp.pending_dests.take().unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    if defer {
+        interp.pending_dests = saved;
+    }
+    let mut elems = result?;
+    elems.extend(
+        pending
+            .into_iter()
+            .map(|(key, pt)| GraphicsElem::Destination { key, pt }),
+    );
+    Ok(elems)
+}
+
 /// `inline-graphics : length -> length -> length -> (point -> graphics
 /// list) -> inline-boxes` (vminst.ml:1872 `BackendInlineGraphics`) — a box
 /// of size `(w, h, d)` carrying the callback's resolved graphics elements,
@@ -4701,9 +4747,22 @@ fn prim_stroke(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, Eval
 /// position via a single `cm` at render time. This equals upstream's
 /// behavior if and only if `gfun` uses its point argument purely additively
 /// (shift-covariant) — true of every real `Gr`/`deco` generator, but not
-/// enforced by this signature. Deferring it faithfully would need the same
-/// deferred-firing architecture the `deco` family already uses
-/// (`interp.decos`/`fire_hooks`).
+/// enforced by this signature.
+///
+/// **The one SIDE EFFECT that survives the shortcut** is
+/// `register-destination`, which the shortcut would otherwise make
+/// impossible rather than merely approximate: at construction time there is
+/// no page, so `annotation.ml:15`'s gate refuses it and the whole document
+/// fails (azmath's `equation.satyh` anchors every `\label`ed equation exactly
+/// this way). It is deferred properly — [`apply_graphics_callback`] turns
+/// each call into a `GraphicsElem::Destination` marker riding in `elems`, and
+/// `fire_hooks` replays it against the box's real page and placed point. The
+/// marker rides `elems` rather than a field of its own so it inherits the
+/// whole existing pipeline: the `origin_independent` probe below,
+/// `fire_hooks`' existing recursion into a graphics box's elements, and
+/// `shift_graphics`/`linear_transform_graphics` wherever those move a box's
+/// ink. (`GraphicsElem::Destination` records the one walk that still drops
+/// it, `math_boxes_of_inline_boxes`' harvest into a math run's `rules`.)
 fn prim_inline_graphics(
     interp: &mut Interp,
     version: RustyfiVersion,
@@ -4713,12 +4772,14 @@ fn prim_inline_graphics(
     let d = as_length(args.pop().unwrap())?;
     let h = as_length(args.pop().unwrap())?;
     let w = as_length(args.pop().unwrap())?;
-    let origin = make_point_value((Length::ZERO, Length::ZERO));
-    let list_v = interp.apply(gfun.clone(), origin)?;
     // The callback's result type is `list graphics` under v0.0.6, one
     // `graphics` collection under v0.1 — see `coerce_graphics_result`'s doc
     // comment.
-    let elems = coerce_graphics_result_for(version, list_v)?;
+    let gf = gfun.clone();
+    let elems = apply_graphics_callback(interp, version, move |it| {
+        let origin = make_point_value((Length::ZERO, Length::ZERO));
+        it.apply(gf, origin)
+    })?;
     // Detect a PAGE-ABSOLUTE callback: run it again at a far-off probe point
     // and compare. If the output is byte-identical the callback ignored its
     // placed-point argument (`fun _ -> …`, e.g. slydifi's frame background /
@@ -4730,13 +4791,19 @@ fn prim_inline_graphics(
     // Upstream (`handlePdf.ml`) always calls the callback with the true placed
     // point and never post-translates; this recovers that for the constant
     // case without a post-layout deferral. (The extra evaluation must be free
-    // of observable side effects — true of every `Gr`/`draw-text` generator.)
+    // of observable side effects — true of every `Gr`/`draw-text` generator,
+    // and the one effect that is NOT free, `register-destination`, is captured
+    // per call rather than committed, so the probe's copy is simply dropped.)
+    //
+    // Comparing the marker-bearing `elems` is what keeps an ANCHOR-ONLY
+    // callback (`fun (x, y) -> register-destination k (x, y); []`) honest:
+    // its ink is `[]` at both points, so on ink alone it would look
+    // page-absolute and its anchor would never be translated to where the box
+    // actually landed.
     let origin_independent = {
         let probe = make_point_value((Length::pt(4096.0), Length::pt(2731.0)));
-        match interp.apply(gfun, probe) {
-            Ok(v) => coerce_graphics_result_for(version, v)
-                .map(|e2| e2 == elems)
-                .unwrap_or(false),
+        match apply_graphics_callback(interp, version, move |it| it.apply(gfun, probe)) {
+            Ok(e2) => e2 == elems,
             Err(_) => false,
         }
     };
@@ -4808,15 +4875,20 @@ fn resolve_outer_graphics_in_contents(
                     ))
                 }
             };
-            let partial = interp.apply(gfun, Value::Length(w))?;
-            let listv = interp.apply(partial, make_point_value((Length::ZERO, Length::ZERO)))?;
             // Same per-version coercion as `prim_inline_graphics`
             // above, shared with `tabular`'s per-cell use. The generation is
             // the one the callback was REGISTERED under, carried alongside it in
             // `Interp::outer_graphics`: this pass is a DEFERRED one
             // (`line-break`/`tabular`/`draw-text`), so `interp.version` here
             // is the entry document's, not the callback author's.
-            let elems = coerce_graphics_result_for(gver, listv)?;
+            //
+            // Deferred, but still deferred to LINE-BREAK time rather than page
+            // break, so a `register-destination` in here has no page either:
+            // it goes through the same capture as `prim_inline_graphics`.
+            let elems = apply_graphics_callback(interp, gver, move |it| {
+                let partial = it.apply(gfun, Value::Length(w))?;
+                it.apply(partial, make_point_value((Length::ZERO, Length::ZERO)))
+            })?;
             *bx = PureHorzBox::Graphics {
                 width: w,
                 height: h,
@@ -5538,12 +5610,27 @@ fn as_border_option(v: Value) -> Result<Option<(Length, Color)>, EvalError> {
 /// into one step, since our firing window (`fire_hooks`) already knows the
 /// page. Errors outside that window (`annotation.ml:15`'s
 /// `State.during_page_break` gate).
+///
+/// **One exception, and it is a re-timing rather than a relaxation of the
+/// gate.** Inside an eagerly-applied `inline-graphics` callback the port is
+/// running code upstream would only run DURING page breaking (see
+/// `prim_inline_graphics`), so refusing here refuses a call upstream accepts.
+/// Such a call is instead DEFERRED — recorded in `Interp::pending_dests`, from
+/// where the caller mints a `GraphicsElem::Destination` marker that
+/// `fire_hooks` replays against the box's real page and placed point. Outside
+/// that one window the gate is unchanged: no page, no destination.
 fn prim_register_destination(
     interp: &mut Interp,
     mut args: Vec<Value>,
 ) -> Result<Value, EvalError> {
     let (x, y) = as_point(args.pop().unwrap())?;
     let key = as_str(args.pop().unwrap())?;
+    if interp.current_page.is_none() {
+        if let Some(pending) = interp.pending_dests.as_mut() {
+            pending.push((key, (x, y)));
+            return Ok(Value::Unit);
+        }
+    }
     let Some(page) = interp.current_page else {
         return eval_error(
             "register-destination can only be called during page breaking \

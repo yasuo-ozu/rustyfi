@@ -140,6 +140,17 @@ pub struct Interp<'a> {
     /// below) lets the reflow backend resolve "which Frame is this link"
     /// exactly, not by geometry/position.
     pub current_deco_id: Option<rustyfi_backend::DecoId>,
+    /// `Some` only while an `inline-graphics`/`inline-graphics-outer`
+    /// callback is being applied EAGERLY (at construction time, outside any
+    /// page-break window) — see `primitives::apply_graphics_callback`.
+    /// `register-destination` appends its `(key, box-local point)` here
+    /// instead of erroring, and the caller turns each one into a
+    /// `GraphicsElem::Destination` marker riding in the resulting box, which
+    /// `fire_hooks` replays with the box's placed page and point.
+    ///
+    /// `None` inside a page-break window, so the faithful direct path
+    /// (`current_page` is `Some`) always wins there.
+    pub pending_dests: Option<Vec<(String, rustyfi_backend::Point)>>,
     /// One `(DecoId, action)` per `register-link-to-uri`/`-to-location`
     /// call made while `current_deco_id` was `Some`. Reset per trial,
     /// drained into `DocumentValue::reflow_links` by `eval_document_trials`
@@ -192,6 +203,7 @@ impl<'a> Interp<'a> {
             doc_info: None,
             current_page: None,
             current_deco_id: None,
+            pending_dests: None,
             link_decos: Vec::new(),
             dest_decos: Vec::new(),
             dest_names: std::collections::HashMap::new(),

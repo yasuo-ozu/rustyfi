@@ -531,12 +531,54 @@ fn stack_height(vboxes: &[VertBox]) -> Length {
 /// still renders — line breaking never involves this pass). NOT into a
 /// `Footnote`'s own block ("Ignores footnote designation in footnote",
 /// pageBreak.ml:133).
+///
+/// A `Graphics` (`draw-text`) is excluded ON PURPOSE — that one is fidelity
+/// rather than a gap, and the measurement is on the arm itself.
 fn collect_footnotes(contents: &[(Length, PureHorzBox)], out: &mut Vec<VertBox>) {
     for (_, bx) in contents {
         collect_footnotes_in_box(bx, out);
     }
 }
 
+/// The per-box half of [`collect_footnotes`].
+///
+/// The match is deliberately **wildcard-free**. A `_ => {}` arm is the exact
+/// silent-omission shape [`crate::visit`] exists to abolish: a new
+/// box-carrying `PureHorzBox` variant lands in it, collects nothing, and the
+/// only symptom is a footnote body that never renders. Naming every variant
+/// makes adding one a compile error HERE, so whoever adds it has to decide
+/// whether a footnote can ride inside it.
+///
+/// It stays a hand-written match rather than becoming `crate::visit`'s
+/// generated traversal because this walk must follow the RENDERED shape, and
+/// the generated descent is unconditional in two places where that is wrong:
+///
+/// * a `Footnote`'s own `block` — upstream's "Ignores footnote designation
+///   in footnote" (pageBreak.ml:133), already pinned by
+///   `footnote_in_footnote_is_ignored`;
+/// * a `Discretionary`'s `pre_break` / `post_break` slots. A discretionary
+///   the paragraph breaker acted on is already gone by the time a line
+///   reaches here — `linebreak::line_content` splices the chosen slot in
+///   flat. One that survives into a placed line is therefore always an
+///   UN-TAKEN candidate (a `fit_cell`-measured cell / `draw-text` run /
+///   frame content is laid out unbroken and keeps its discretionaries
+///   whole), so `no_break` is the slot that renders and the other two render
+///   nothing at all. Collecting from them would bottom-place a footnote the
+///   page never shows.
+///
+/// A `visitor!` closure cannot prune, so the alternative is a hand-written
+/// `Visit` impl declining those edges — which buys exhaustiveness over the
+/// whole node set at the cost of stating both exclusions as overrides of a
+/// default that does the opposite.
+///
+/// **What the wildcard-free match does not buy, honestly:** exhaustiveness
+/// over the OTHER node types this walk reaches through. The `Tabular`,
+/// `EmbeddedBlock` and `Frame` arms are open-coded field accesses, so a new
+/// node-carrying field on `TabularBox` / `TabularCellBox`, or a second
+/// `VertBox` variant that carries a line, is still skipped in silence. Only
+/// `PureHorzBox` — where every hole found in this walk so far has been — is
+/// covered. `tests/pagebreak.rs`'s `footnote_*` group pins the edges that
+/// exist today.
 fn collect_footnotes_in_box(bx: &PureHorzBox, out: &mut Vec<VertBox>) {
     match bx {
         PureHorzBox::Footnote { block } => out.extend(block.iter().cloned()),
@@ -564,7 +606,52 @@ fn collect_footnotes_in_box(bx: &PureHorzBox, out: &mut Vec<VertBox>) {
                 collect_footnotes_in_box(cbx, out);
             }
         }
-        _ => {}
+        // NOT recursed into, and this one is FIDELITY rather than a gap.
+        //
+        // A `Graphics`' `elems` can hold a `GraphicsElem::Text` (`draw-text`)
+        // whose `contents` are real inline boxes, so a `\footnote` genuinely
+        // can sit under one: figbox's `FigBox.frame` / `rotate` / `scale` /
+        // `shift` and `\fig-inline` all wrap their content in exactly that
+        // shape. Upstream does not collect it either — `embed_page_info`'s
+        // `ImHorzInlineGraphics` arm (pageInfo.ml:44-45) returns the box
+        // untouched, with no `iter` and no `appendF`, while every arm around
+        // it (`ImHorzRising` :22-25, `ImHorzFrame` :27-30,
+        // `ImHorzEmbeddedVert` :36-39) recurses. In both engines the marker
+        // renders and the body does not.
+        //
+        // Measured, not inferred: one document setting the same `\footnote`
+        // six ways (plain, `\fig-inline`+`textbox`, `\fig-center`+`textbox`,
+        // `hconcat`, `frame`, `rotate`) renders character-identical under
+        // this port and under upstream 0.0.11 — all six markers present and
+        // identically numbered, bodies 1/3/4 rendered, 2/5/6 absent. The
+        // three that survive reach the line as ordinary inline boxes or via
+        // `line-stack-bottom`'s `EmbeddedBlock`, never through a `draw-text`.
+        //
+        // So recursing here would make the port DIVERGE from the reference it
+        // is measured against (`layout-tests/fidelity.py` gates figbox). If
+        // that is ever wanted, want it deliberately;
+        // `footnote_under_a_draw_text_is_not_collected_matching_upstream` in
+        // `tests/pagebreak.rs` goes red the moment this arm starts to.
+        PureHorzBox::Graphics { .. } => {}
+        // Leaf-shaped for this pass. `Math`'s `rules` are engine-built
+        // fraction bars and radical signs — `GraphicsElem`s with no user
+        // content, so no footnote can ride one. A `GraphicsOuter` is replaced
+        // by a resolved `Graphics` before placement. The two marker pairs are
+        // zero-width and carry no boxes at all: an `InlineFrameMarker`'s
+        // frame contents are SPLICED into the enclosing paragraph (see that
+        // variant's own note), so they are reached here as siblings of the
+        // marker rather than through it.
+        PureHorzBox::InnerString { .. }
+        | PureHorzBox::OuterEmpty { .. }
+        | PureHorzBox::OuterFil
+        | PureHorzBox::FixedEmpty { .. }
+        | PureHorzBox::Image { .. }
+        | PureHorzBox::GraphicsOuter { .. }
+        | PureHorzBox::Math { .. }
+        | PureHorzBox::HookPageBreak { .. }
+        | PureHorzBox::FrameMarker { .. }
+        | PureHorzBox::InlineFrameMarker { .. }
+        | PureHorzBox::InlineMark(_) => {}
     }
 }
 

@@ -111,6 +111,22 @@ impl RegistryOptions {
                 .unwrap_or(false)
     }
 
+    /// Whether the first two rungs of [`Self::resolve_url`] — the
+    /// `--registry` flag and `$RUSTYFI_REGISTRY` — already settle which
+    /// repository is meant, so no `fallback` will be consulted.
+    ///
+    /// [`crate::ops::publish`] needs the question separately from the answer:
+    /// it must refuse a *list* of configured repositories rather than take the
+    /// first, and only an explicit choice makes that list irrelevant. Kept
+    /// beside `resolve_url` so the two cannot disagree about what "explicit"
+    /// means.
+    pub(crate) fn has_explicit_url(&self) -> bool {
+        self.url.is_some()
+            || std::env::var_os(REGISTRY_ENV)
+                .map(|u| !u.is_empty())
+                .unwrap_or(false)
+    }
+
     /// Resolve the registry URL: explicit `--registry` flag, then
     /// `$RUSTYFI_REGISTRY`, then `fallback` (a `Satyristes` `[registry]
     /// url`). No built-in default is shipped, so an unresolved URL is
@@ -289,7 +305,14 @@ fn git_acquire(url: &str, opts: &RegistryOptions) -> Result<Registry, Error> {
 }
 
 /// Maps a non-zero exit (or missing `git`) to [`Error::GitFailed`].
-fn run_git(args: &[&str]) -> Result<(), Error> {
+pub(crate) fn run_git(args: &[&str]) -> Result<(), Error> {
+    git_capture(args).map(|_| ())
+}
+
+/// [`run_git`] keeping stdout (trimmed). The whole argument list goes into the
+/// failure message rather than just the subcommand: with `-C DIR` in front,
+/// naming only `args[0]` would report every failure as "git -C failed".
+pub(crate) fn git_capture(args: &[&str]) -> Result<String, Error> {
     let output = std::process::Command::new("git")
         .args(args)
         .output()
@@ -300,27 +323,16 @@ fn run_git(args: &[&str]) -> Result<(), Error> {
         return Err(Error::GitFailed {
             message: format!(
                 "git {} failed: {}",
-                args.first().copied().unwrap_or(""),
+                args.join(" "),
                 String::from_utf8_lossy(&output.stderr).trim()
             ),
         });
     }
-    Ok(())
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
 fn git_head(repo: &Path) -> Result<String, Error> {
-    let output = std::process::Command::new("git")
-        .args(["-C", &repo.to_string_lossy(), "rev-parse", "HEAD"])
-        .output()
-        .map_err(|e| Error::GitFailed {
-            message: format!("cannot run git: {e}"),
-        })?;
-    if !output.status.success() {
-        return Err(Error::GitFailed {
-            message: "git rev-parse HEAD failed".to_string(),
-        });
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    git_capture(&["-C", &repo.to_string_lossy(), "rev-parse", "HEAD"])
 }
 
 /// A filesystem-safe cache subdirectory name for a registry URL: the first 8
@@ -417,11 +429,16 @@ pub(crate) fn acquire_git_source(
 // ---------------------------------------------------------------------------
 
 /// A parsed `packages/<name>.toml` index entry.
-#[derive(Debug, Clone, Deserialize)]
+///
+/// `Serialize` as well as `Deserialize` because [`crate::ops::publish`] WRITES
+/// this shape: emitting it through the same struct the installer reads is what
+/// makes a published entry parse back by construction rather than by a
+/// hand-kept-in-step formatter.
+#[derive(Debug, Clone, Default, Deserialize, serde::Serialize)]
 pub(crate) struct PackageIndex {
     /// Optional package description (this port's addition; surfaced by
     /// `search`).
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     /// Released versions, keyed by version string.
     #[serde(default)]
@@ -429,7 +446,7 @@ pub(crate) struct PackageIndex {
 }
 
 /// One `[versions."<v>"]` table.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, serde::Serialize)]
 pub(crate) struct VersionEntry {
     pub tarball_url: String,
     /// Empty when the index publishes only a [`Self::sha512`] — an OPAM
@@ -442,7 +459,7 @@ pub(crate) struct VersionEntry {
     /// `version::Constraint::parse` syntax), feeding the solver's transitive
     /// walk. `#[serde(default)]` so an index predating this field still
     /// parses, as a leaf.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub dependencies: BTreeMap<String, String>,
 }
 

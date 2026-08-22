@@ -506,7 +506,10 @@ use rustyfi_satyrographos as sg;
 fn sg_exit_code(err: &sg::Error) -> i32 {
     use sg::Error::*;
     match err {
-        RootResolution | ManifestNotFound | NoRegistry => 3,
+        RootResolution | ManifestNotFound | NoRegistry | ProjectNotFound { .. } => 3,
+        // Several repositories configured and none chosen: nothing to publish
+        // INTO, the same "no target resolved" class as NoRegistry.
+        AmbiguousRegistry { .. } => 3,
         // Not-found: a missing receipt, package/version absent, or the
         // solver's Unsatisfiable/VersionConflict (its analogue of
         // VersionNotFound).
@@ -515,8 +518,16 @@ fn sg_exit_code(err: &sg::Error) -> i32 {
         | PackageNotFound { .. }
         | VersionNotFound { .. }
         | Unsatisfiable { .. }
-        | VersionConflict { .. } => 4,
-        LibraryFilter { .. } | AmbiguousLibrary { .. } | AmbiguousDoc { .. } | DocFilter { .. } => 2,
+        | VersionConflict { .. }
+        // A version already published is the publish-side twin of
+        // AlreadyInstalled: a collision `--force` overrides.
+        | AlreadyPublished { .. } => 4,
+        LibraryFilter { .. }
+        | AmbiguousLibrary { .. }
+        | AmbiguousDoc { .. }
+        | DocFilter { .. }
+        // A missing/malformed/contradictory publish argument is a usage error.
+        | PublishInput { .. } => 2,
         NoDocTarget => 3,
         DocBuild { .. } | OpamBuild { .. } => 1,
         Io { .. }
@@ -542,6 +553,7 @@ fn sg_exit_code(err: &sg::Error) -> i32 {
         | InvalidVersion { .. }
         | HashFile { .. }
         | HashKeyConflict { .. }
+        | RepositoryShape { .. }
         | Offline { .. } => 5,
     }
 }
@@ -564,7 +576,7 @@ fn finish<E: std::fmt::Display>(result: Result<(), E>, code: impl FnOnce(&E) -> 
 fn is_package_command(name: &str) -> bool {
     matches!(
         name,
-        "install" | "uninstall" | "build" | "list" | "status" | "search" | "update"
+        "install" | "uninstall" | "build" | "list" | "status" | "search" | "update" | "publish"
     )
 }
 
@@ -578,6 +590,7 @@ fn run_package(name: &str, sm: &ArgMatches) -> i32 {
         "status" => return cmd_status(sm),
         "search" => cmd_search(sm),
         "update" => cmd_update(sm),
+        "publish" => cmd_publish(sm),
         other => {
             eprintln!("error: unknown command `{other}`");
             return 2;
@@ -982,6 +995,65 @@ fn cmd_update(m: &ArgMatches) -> Result<(), sg::Error> {
     }
     for (url, e) in &report.unreachable {
         eprintln!("warning: registry `{url}` could not be refreshed: {e}");
+    }
+    Ok(())
+}
+
+/// `publish`: write this project's `Satyristes` library into a package
+/// repository as an installable definition — the `opam publish` step, minus
+/// the parts that need credentials.
+///
+/// The push (and any pull request) is PRINTED rather than run: a release is
+/// the one operation whose mistakes other people inherit, so the author gets
+/// to look at the written file before it leaves the machine.
+fn cmd_publish(m: &ArgMatches) -> Result<(), sg::Error> {
+    let opts = sg::PublishOptions {
+        project: m.get_one::<PathBuf>("project").cloned(),
+        library: m.get_one::<String>("library").cloned(),
+        url: m
+            .get_one::<String>("url")
+            .expect("--url is required by clap")
+            .clone(),
+        sha256: m.get_one::<String>("sha256").cloned(),
+        archive: m.get_one::<PathBuf>("archive").cloned(),
+        shape: m
+            .get_one::<String>("shape")
+            .and_then(|s| sg::RepoShape::parse(s)),
+        package_name: m.get_one::<String>("package_name").cloned(),
+        description: m.get_one::<String>("description").cloned(),
+        maintainer: m.get_one::<String>("maintainer").cloned(),
+        force: m.get_flag("force"),
+        commit: m.get_flag("commit"),
+        branch: m.get_one::<String>("branch").cloned(),
+        dry_run: m.get_flag("dry_run"),
+    };
+    // The same fallback chain every registry-aware command uses; `publish`
+    // differs only in refusing a LIST rather than taking its head
+    // (`ops::publish::select_repository`).
+    let report = sg::publish(&opts, &registry_options(m)?, &registry_fallbacks(m)?)?;
+
+    let verb = if report.dry_run { "would publish" } else { "published" };
+    println!(
+        "{verb} {} {} as {} ({} repository)",
+        report.library,
+        report.version,
+        report.package,
+        report.shape.as_str()
+    );
+    println!("  {}", report.repository.join(&report.relative).display());
+    println!("  url    {}", report.url);
+    println!("  sha256 {}", report.sha256);
+    println!("  install as `{}`", report.installable);
+    if let Some(branch) = &report.committed {
+        println!("  committed on {branch}");
+    }
+    if report.dry_run {
+        println!("--- {} (not written) ---", report.relative);
+        print!("{}", report.contents);
+    }
+    println!("next:");
+    for step in &report.next_steps {
+        println!("  {step}");
     }
     Ok(())
 }

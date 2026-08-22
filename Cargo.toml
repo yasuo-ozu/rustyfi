@@ -5,6 +5,7 @@ members = [
   "crates/rustyfi-backend",
   "crates/rustyfi-lang",
   "crates/rustyfi-pdf",
+  "crates/rustyfi-html",
   "crates/rustyfi",
   "crates/rustyfi-loader",
   "crates/rustyfi-satyrographos",
@@ -27,6 +28,7 @@ rustyfi-syntax = { path = "crates/rustyfi-syntax", version = "0.1.0" }
 rustyfi-backend = { path = "crates/rustyfi-backend", version = "0.1.0" }
 rustyfi-lang = { path = "crates/rustyfi-lang", version = "0.1.0" }
 rustyfi-pdf = { path = "crates/rustyfi-pdf", version = "0.1.0" }
+rustyfi-html = { path = "crates/rustyfi-html", version = "0.1.0" }
 rustyfi-loader = { path = "crates/rustyfi-loader", version = "0.1.0" }
 rustyfi-satyrographos = { path = "crates/rustyfi-satyrographos", version = "0.1.0" }
 thiserror = "2"

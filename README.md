@@ -173,7 +173,7 @@ url = "https://example.org/another-index"
 | flag | what it does |
 |---|---|
 | `-o <path>` | output path (default: the input with a `.pdf` extension) |
-| `--format <fmt>` | `pdf` (HTML is on the `html-support` branch) |
+| `--format <fmt>` | `pdf` (default), `html`, `html-reflow` |
 | `--lib-root <dir>` | where `@require:` looks for packages |
 | `--lang <v>` | `0.0` (default) or `0.1`; a `use` header auto-selects `0.1` |
 | `--font <file>` | use a TrueType/OpenType file as the regular face |

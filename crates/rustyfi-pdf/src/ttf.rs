@@ -180,7 +180,11 @@ impl TtfFontStore {
     /// The physical-file index backing `font` (after bold/oblique fallback).
     /// Used by the CID embedder to dedup: two `FontKey`s that resolve to the
     /// same file are embedded (and their Type0 font object shared) once.
-    pub(crate) fn file_index(&self, font: FontKey) -> usize {
+    ///
+    /// `pub` rather than `pub(crate)` because `rustyfi-html` needs it too, to
+    /// key its `@font-face` set by physical file the same way — a one-way
+    /// dependency, since `rustyfi-pdf` does not depend back on it.
+    pub fn file_index(&self, font: FontKey) -> usize {
         self.slots[self.key_slot(font)]
     }
 

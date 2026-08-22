@@ -116,6 +116,38 @@ pub enum GraphicsElem {
     /// The port's `Path` already carries N subpaths, standing in for
     /// upstream's `path list`. Never constructed by any 0.0.6 path, as `Group`.
     Clip(Path, Vec<GraphicsElem>),
+    /// A DEFERRED `register-destination` call, carrying NO ink.
+    ///
+    /// Upstream calls an `inline-graphics` callback during page breaking, with
+    /// the box's true placed point; this port calls it eagerly at construction
+    /// time (`prim_inline_graphics`'s "eager-callback shortcut"), when no page
+    /// exists — so a `register-destination` inside one has no page to register
+    /// against and `annotation.ml:15`'s gate rightly refuses it. Rather than
+    /// relax that gate (which would silently mint a wrong destination), the
+    /// eager call RECORDS the request here and `rustyfi-lang`'s `fire_hooks`
+    /// replays it once the box is placed — `azmath`'s `equation.satyh`
+    /// anchors every `\label`ed equation this way.
+    ///
+    /// `pt` is box-local in exactly the same y-**up** frame as every other
+    /// element's coordinates, so the whole existing transform pipeline
+    /// (`shift_graphics`, `linear_transform_graphics`, the writers' per-box
+    /// `cm`) carries it correctly; `fire_hooks` applies the same
+    /// anchor arithmetic it already uses for a `Text` element's `pt`.
+    ///
+    /// Carries no ink, so it contributes nothing to `graphics_bbox` and the
+    /// PDF writers skip it. No `graphics`-typed primitive constructs one, so
+    /// no user-reachable `graphics` value can hold it — only the `elems` of a
+    /// `PureHorzBox::Graphics` built by `inline-graphics`.
+    ///
+    /// **One place a marker is dropped**, inherited rather than introduced:
+    /// `math_boxes_of_inline_boxes` (rustyfi-lang) harvests a graphics box's
+    /// elements into a `PureHorzBox::Math`'s `rules`, and `fire_hooks` has no
+    /// `Math` arm — so an anchor inside a `make_paren` delimiter closure never
+    /// fires. That walk already drops a `Text` element's decorations the same
+    /// way; adding a `Math` arm would newly fire those too, which is a layout
+    /// question rather than an annotation one. `shift_graphics` still carries
+    /// the point correctly, so closing the gap is one arm and no arithmetic.
+    Destination { key: String, pt: Point },
 }
 
 // `shift-path`/`shift-graphics`/`linear-transform-path`/
@@ -206,6 +238,12 @@ pub fn shift_graphics(v: Point, elem: &GraphicsElem) -> GraphicsElem {
             shift_path(v, path),
             gs.iter().map(|g| shift_graphics(v, g)).collect(),
         ),
+        // A deferred destination's point rides the same box-local frame as
+        // every path coordinate, so it shifts with them.
+        GraphicsElem::Destination { key, pt } => GraphicsElem::Destination {
+            key: key.clone(),
+            pt: shift_point(v, *pt),
+        },
     }
 }
 
@@ -251,6 +289,12 @@ pub fn linear_transform_graphics(mat: (f64, f64, f64, f64), elem: &GraphicsElem)
             linear_transform_path(mat, path),
             gs.iter().map(|g| linear_transform_graphics(mat, g)).collect(),
         ),
+        // As `shift_graphics`: the anchor point is an ordinary box-local
+        // coordinate, so it transforms like one.
+        GraphicsElem::Destination { key, pt } => GraphicsElem::Destination {
+            key: key.clone(),
+            pt: linear_transform_point(mat, *pt),
+        },
     }
 }
 
@@ -412,6 +456,9 @@ pub fn graphics_bbox(elem: &GraphicsElem) -> Option<(Point, Point)> {
             .iter()
             .filter_map(graphics_bbox)
             .reduce(union_bbox),
+        // No ink: a deferred destination must not inflate the bbox its box
+        // reports (an anchor is typically a 0x0x0 `inline-graphics`).
+        GraphicsElem::Destination { .. } => None,
     }
 }
 

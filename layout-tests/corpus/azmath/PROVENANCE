@@ -63,10 +63,9 @@ Both are recorded at the site as well; this is the index.
    With this fixed, upstream SATySFi 0.0.11 builds the whole document in 1.6 s
    (15 pages).
 
-WHY THIS IS NOT IN fidelity.py's `DOCS`
----------------------------------------
-The port cannot build it. One primitive-timing gap remains, and it is the
-port's, not azmath's:
+THE BLOCKER THAT IS NOW CLOSED
+------------------------------
+The port used to refuse this document outright:
 
   Error: register-destination can only be called during page breaking
          (from a page-break hook or a decoration)
@@ -77,22 +76,48 @@ port's, not azmath's:
 shortcut": the callback runs at CONSTRUCTION time, where no page exists, rather
 than at page-break time where upstream runs it. The gate itself is faithful —
 upstream's `annotation.ml:15` raises `State.NotDuringPageBreak` outside the
-window too, so relaxing it would be the wrong fix.
+window too, so relaxing it would have been the wrong fix.
 
-`layout-tests/probes/inline_graphics_dest.saty` is the package-free
-reproduction, with the measurement.
+It is fixed by RE-TIMING instead: the eager call records the request, the box
+carries it as a `GraphicsElem::Destination` marker, and `fire_hooks` replays it
+once the box has a page and a placed point. `layout-tests/probes/
+inline_graphics_dest.saty` is the package-free confirmation (both engines
+render it, y agreeing to 0.001pt) and
+`crates/rustyfi-lang/tests/inline_graphics_dest.rs` is the regression test.
 
-Stub that one call out and the port builds the entire document, at PAGE PARITY
-with upstream: `fidelity.py` reports 15 pages against upstream's 15,
-`char_match=0.9645`, 581 baselines against 583, `missing=49 extra=92`. (It was
-14 pages / 571 baselines / `char_match=0.9569` / `missing=135` when these
-sources were first vendored; the 86-character content deficit that closed was
-`\overbrace`/`\underbrace` — see `math_boxes_of_inline_boxes`'s
-`EmbeddedBlock` arm in `primitives.rs`, which kept a `line-stack`ed
-`text-in-math` body's WIDTH and dropped its contents.) So this single gap is
-the whole remaining distance, which is why the sources are vendored and
-repaired here rather than thrown away — registering azmath is a six-line
-`DOCS` entry once it closes:
+The document now builds unstubbed, and its anchors are REAL: 16 named
+destinations, exactly upstream's 16, in the same right-hand tag column. Their
+absolute positions carry the document's ordinary layout drift, but their
+relative spacing does not — consecutive equation anchors sit 20.255pt apart
+here against upstream's 20.134pt.
+
+WHY THIS IS STILL NOT IN fidelity.py's `DOCS`
+---------------------------------------------
+Measured UNSTUBBED, with both the deferred-destination fix and the
+`text-in-math` `EmbeddedBlock` fix in place:
+
+    char_match=0.9645  chars: port=11092 upstream=11049 (missing=49 extra=92)
+    pages: port=15 upstream=15 (+0)   lines: port=581 upstream=583 (-2)
+    width_p95=0.926pt
+
+Page parity, and within two baselines. Note this is IDENTICAL to the
+stubbed-both-sides figure: real anchors cost nothing in layout.
+
+What the two remaining numbers are, so neither gets re-investigated:
+
+  * `missing=49` is entirely `.` — the table-of-contents leader dots, every
+    line short by the same 6.2%. NOT a port defect: this port renders with
+    Junicode 1.002 (`download-fonts.sh` pins it) and the reference is generated
+    by a SATySFi that bundles Junicode 2.222, whose `.` is 0.234em against
+    1.002's 0.2539em. The port's leader arithmetic is exact given equal
+    metrics. See `download-fonts.sh`'s pin comment.
+
+  * Of `extra=92`, 72 are `2`: upstream positions superscripts such that
+    `pdftotext` does not extract them and this port positions them such that it
+    does. A text-extraction difference, not ink.
+
+Registering it is a six-line `DOCS` entry plus a decision about the reference
+PDF (see below), not a code change:
 
     Doc(
         "azmath",

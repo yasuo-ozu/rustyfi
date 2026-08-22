@@ -15,6 +15,9 @@ authors.workspace = true
 rustyfi-syntax.workspace = true
 rustyfi-backend.workspace = true
 thiserror.workspace = true
+# Derives the one exhaustive traversal of the `MonoType`/`Row`/`CmdArgType`
+# type representation — see `src/visit.rs` for what it can and cannot cover.
+syan.workspace = true
 # Raster image decoding for `load-image`.
 image.workspace = true
 # PDF object-model reader for `load-pdf-image`, behind the default-on

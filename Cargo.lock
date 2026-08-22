@@ -1565,6 +1565,7 @@ dependencies = [
  "rustyfi-backend",
  "rustyfi-loader",
  "rustyfi-syntax",
+ "syan",
  "thiserror",
  "unicode-normalization",
  "unicode-segmentation",

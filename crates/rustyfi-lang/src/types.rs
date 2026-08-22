@@ -464,7 +464,16 @@ impl Stage {
 /// variant instantiated at `mono_type_variable_info ref`), minus
 /// `SynonymType` (no type synonyms in this port) and with `Row`-based
 /// records instead of a closed `RecordType` (see [`Row`]).
-#[derive(Clone, Debug)]
+///
+/// The `#[subast]` list names every *other* type in this family reachable
+/// from a field; see [`crate::visit`] for what the generated traversal
+/// covers and — importantly — what it deliberately does not.
+///
+/// [`MonoType::Var`]'s [`TyVarRef`] is **not** listed, so the traversal
+/// treats a type variable as a leaf and never follows a `Bound` link. That
+/// is not an oversight: see [`crate::visit`].
+#[derive(Clone, Debug, syan::visit::Ast)]
+#[subast(crate::types::Row, crate::types::CmdArgType)]
 pub enum MonoType {
     Var(TyVarRef),
     Base(BaseType),
@@ -526,7 +535,11 @@ pub enum MonoType {
 /// producer (`command_scheme`'s harvest, `lower_type_atom`'s sig lowering) so
 /// `unify`/`Display`/sealing are order-insensitive — see `unify_cmd_args`'s
 /// zip-equal equal-domain test.
-#[derive(Clone, Debug)]
+///
+/// See [`MonoType`] for what the `#[subast]` list means. `opt_labels` is the
+/// field four hand-written walks forgot; the generated traversal cannot.
+#[derive(Clone, Debug, syan::visit::Ast)]
+#[subast(crate::types::MonoType)]
 pub struct CmdArgType {
     pub optional: bool,
     pub opt_labels: Vec<(String, MonoType)>,
@@ -550,7 +563,11 @@ pub struct CmdArgType {
 /// label-subsumption with a *remainder* row variable
 /// (`unify::row_extract`). `Kind::Record` is kept for the one case v0.0.6
 /// also has it for: a variable not yet known to be a record at all.
-#[derive(Clone, Debug)]
+///
+/// See [`MonoType`] for what the `#[subast]` list means. As with
+/// `MonoType::Var`, [`RowVarRef`] is not listed and a row variable is a leaf.
+#[derive(Clone, Debug, syan::visit::Ast)]
+#[subast(crate::types::MonoType)]
 pub enum Row {
     Empty,
     Var(RowVarRef),

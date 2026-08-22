@@ -127,6 +127,39 @@ PDF (see below), not a code change:
         {"enumitem": "enumitem/src"},   # azmath arrives by relative @import:
     ),
 
+WHAT THE 49 MISSING CHARACTERS ARE
+----------------------------------
+All 49 are table-of-contents leader dots, and they are NOT a port defect: they
+are the Junicode version pinned in `download-fonts.sh`. Do not re-investigate
+this from the PDFs — the measurement below settles it.
+
+`stdjabook.satyh`'s `make-dots-line` emits `round (w /' wdot)` dots, where
+`wdot` is the natural width of `{.}` plus 1pt and `w` is what the line has
+left over. Both inputs are pure Latin glyph advances, so the count is a direct
+readout of the Latin font. The port downloads Junicode **1.002** (upem 2048,
+period 520 = 0.2539 em); the flake's SATySFi 0.0.11, which generates this
+document's reference, bundles **2.222** (upem 1000, period 234 = 0.234 em).
+That is a 8.5% wider dot cell, so the port fits 93.8% of upstream's dots on
+every line — 745 against 794, uniformly short, never a content loss. Junicode
+2.222 also switched the digits from tabular (all 0.4668 em) to proportional
+oldstyle (`1` is 0.318 em), which is the smaller second term: it widens the
+port's page-number column and shrinks `w` further.
+
+Measured by a probe reading `wdot`, `w` and the dot count out of both engines,
+then by swapping 2.222 into the port's font dir and re-running `fidelity.py`:
+
+                    Junicode 1.002      Junicode 2.222     upstream
+    wdot                4.046875pt          3.808pt         3.808pt
+    chars missing              49                0                -
+    width_p95              0.926pt          0.360pt                -
+    char_match              0.9645           0.9676                -
+    pages / lines      15 / 581         15 / 581        15 / 583
+
+So with the same font release the port reproduces upstream's leader arithmetic
+to the digit, and azmath's remaining character deficit is zero. The pin stays
+where it is for corpus-wide reasons argued at the Junicode block in
+`download-fonts.sh`; that block also carries what moving it would cost.
+
 THE REFERENCE PDF
 -----------------
 Not vendored, deliberately. Upstream's own `doc/azmath.pdf` in the 0.0.3

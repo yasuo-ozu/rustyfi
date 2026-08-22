@@ -298,27 +298,39 @@ fn styled_math_renders_through_cid_pipeline() {
         "output should start with a PDF header"
     );
 
-    // The discovered math font is the bundled Latin Modern Math — a CFF
-    // (`OTTO`)-outline face — so the CID writer takes the
-    // `CIDFontType0`/`FontFile3` path (`cid.rs`'s `write_font_cff`, which
-    // embeds either the whole face or a CFF subset), not the
-    // `CIDFontType2`/`FontFile2` path a `glyf`-outline
-    // face takes. A subsetted `FontFile3` is (much) smaller than the whole
-    // source file, so the font-behavior-matched check is `PDF < font file` —
-    // the direction the sibling `tests/ttf.rs::cff_face_embeds_as_fontfile3_
-    // cidfonttype0`/`subsetter_can_subset_cff_and_the_writer_now_uses_it`
-    // also use. We ALSO assert the font is genuinely embedded (`FontFile3`
-    // present) so "smaller" can't be satisfied by dropping the font entirely.
+    // Which key the font is embedded under follows the face's OUTLINE
+    // FLAVOUR, so the assertion has to read the face rather than assume one:
+    // `find_math_font` prefers the bundled CFF Latin Modern Math but falls
+    // back to fontconfig and to distro paths, and a runner with no bundled
+    // fonts legitimately lands on a `glyf` face such as Noto Sans Math. A CFF
+    // (`OTTO`) face takes `cid.rs`'s `write_font_cff` -> `CIDFontType0` /
+    // `FontFile3`; a `glyf` face takes `CIDFontType2` / `FontFile2`. Asserting
+    // `FontFile3` unconditionally made this test pass on a developer machine
+    // with the bundled fonts and fail in CI, which does not fetch them for the
+    // unit-test job.
+    let flavour = std::fs::read(&path).expect("read font file");
+    let is_cff = flavour.starts_with(b"OTTO");
+    let want: &[u8] = if is_cff { b"FontFile3" } else { b"FontFile2" };
     assert!(
-        pdf_bytes.windows(9).any(|w| w == b"FontFile3"),
-        "expected an embedded (subsetted) CFF font (FontFile3) in the math PDF"
+        pdf_bytes.windows(want.len()).any(|w| w == want),
+        "expected the math font to be embedded as {} (the {} face at {}) — asserting \
+         embedding, not just size, so 'smaller' cannot be satisfied by dropping the font",
+        String::from_utf8_lossy(want),
+        if is_cff { "CFF/OTTO" } else { "glyf" },
+        path.display()
     );
+
+    // Both paths SUBSET, so the whole-file comparison holds either way: a
+    // PDF carrying a subset of one face is smaller than that face's file.
+    // Same direction as `tests/ttf.rs`'s
+    // `cff_face_embeds_as_fontfile3_cidfonttype0`.
     let font_len = std::fs::metadata(&path).expect("stat font file").len() as usize;
     assert!(
         pdf_bytes.len() < font_len,
         "expected the subsetted PDF ({} bytes) to be smaller than the whole source math \
-         font file ({} bytes) — the CFF-outline LM Math face takes the CFF subsetting path",
+         font file ({} bytes, {})",
         pdf_bytes.len(),
-        font_len
+        font_len,
+        path.display()
     );
 }

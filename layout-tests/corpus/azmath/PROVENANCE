@@ -82,10 +82,17 @@ window too, so relaxing it would be the wrong fix.
 `layout-tests/probes/inline_graphics_dest.saty` is the package-free
 reproduction, with the measurement.
 
-Stub that one call out and the port builds the entire document: 14 pages / 619
-lines against upstream's 15 pages. So this single gap is the whole remaining
-distance, which is why the sources are vendored and repaired here rather than
-thrown away — registering azmath is a six-line `DOCS` entry once it closes:
+Stub that one call out and the port builds the entire document, at PAGE PARITY
+with upstream: `fidelity.py` reports 15 pages against upstream's 15,
+`char_match=0.9645`, 581 baselines against 583, `missing=49 extra=92`. (It was
+14 pages / 571 baselines / `char_match=0.9569` / `missing=135` when these
+sources were first vendored; the 86-character content deficit that closed was
+`\overbrace`/`\underbrace` — see `math_boxes_of_inline_boxes`'s
+`EmbeddedBlock` arm in `primitives.rs`, which kept a `line-stack`ed
+`text-in-math` body's WIDTH and dropped its contents.) So this single gap is
+the whole remaining distance, which is why the sources are vendored and
+repaired here rather than thrown away — registering azmath is a six-line
+`DOCS` entry once it closes:
 
     Doc(
         "azmath",

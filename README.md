@@ -20,6 +20,26 @@ same output, faster compilation, no OCaml toolchain to install.
 It speaks both dialects: **0.0** (upstream v0.0.x) and **0.1** (`dev-0-1-0`),
 and a document in one may use packages from the other.
 
+<p align="center">
+  <a href="https://yasuo-ozu.github.io/rustyfi-playground/">
+    <img src="https://img.shields.io/badge/%E2%96%B6%20Playground-typeset%20in%20your%20browser-7a4fd6?style=for-the-badge" alt="Open the rustyfi playground">
+  </a>
+  &nbsp;
+  <a href="https://yasuo-ozu.github.io/rustyfi-packages/">
+    <img src="https://img.shields.io/badge/%F0%9F%93%A6%20Packages-browse%20the%20index-1f7a44?style=for-the-badge" alt="Browse the rustyfi package index">
+  </a>
+</p>
+
+<p align="center">
+  <sub>
+    The <a href="https://yasuo-ozu.github.io/rustyfi-playground/">playground</a> runs this
+    typesetter compiled to WebAssembly — your document never leaves the tab, and there is no
+    server. The <a href="https://yasuo-ozu.github.io/rustyfi-packages/">package index</a> is a
+    static mirror of Satyrographos' repository that <code>rustyfi install</code> can read
+    directly.
+  </sub>
+</p>
+
 ## Install
 
 ### From latest release

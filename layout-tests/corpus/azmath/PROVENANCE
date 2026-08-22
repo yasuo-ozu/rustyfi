@@ -105,12 +105,9 @@ stubbed-both-sides figure: real anchors cost nothing in layout.
 
 What the two remaining numbers are, so neither gets re-investigated:
 
-  * `missing=49` is entirely `.` — the table-of-contents leader dots, every
-    line short by the same 6.2%. NOT a port defect: this port renders with
-    Junicode 1.002 (`download-fonts.sh` pins it) and the reference is generated
-    by a SATySFi that bundles Junicode 2.222, whose `.` is 0.234em against
-    1.002's 0.2539em. The port's leader arithmetic is exact given equal
-    metrics. See `download-fonts.sh`'s pin comment.
+  * `missing=49` is entirely `.` — the table-of-contents leader dots. NOT a
+    port defect but the pinned Junicode release; the arithmetic is exact given
+    equal metrics. Detailed below, under WHAT THE 49 MISSING CHARACTERS ARE.
 
   * Of `extra=92`, 72 are `2`: upstream positions superscripts such that
     `pdftotext` does not extract them and this port positions them such that it

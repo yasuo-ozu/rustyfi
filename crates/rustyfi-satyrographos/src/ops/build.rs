@@ -42,15 +42,14 @@ pub struct BuildOptions {
     /// When set, install each built doc's declared
     /// `(sources ((doc "dst" "src") ...))` products into this root after a
     /// successful build — `dist/doc/<name>/<dst>` (`FileKind::Doc`), the same
-    /// destination convention any other manifest's own `doc` sources get
-    /// (task: a `(libraryDoc ...)`'s products used to have nowhere to go).
-    /// `None` (the default) leaves `build` exactly as before: it runs the
-    /// commands and reports which products exist, and installs nothing. A
-    /// product the build declares but did not actually write is skipped
-    /// rather than failing the install — `products` already surfaces that as
-    /// a manifest bug. Re-running a build always replaces its own previous
-    /// install (there is no separate `--force`: a doc target is a build
-    /// artifact, and rebuilding it is expected to be idempotent).
+    /// destination convention any other manifest's own `doc` sources get.
+    /// `None` (the default) runs the commands and reports which products
+    /// exist, and installs nothing. A product the build declares but did not
+    /// actually write is skipped rather than failing the install —
+    /// `products` already surfaces that as a manifest bug. Re-running a build
+    /// always replaces its own previous install (there is no separate
+    /// `--force`: a doc target is a build artifact, and rebuilding it is
+    /// expected to be idempotent).
     pub install: Option<RootOptions>,
 }
 
@@ -158,9 +157,6 @@ fn install_doc_products(
     let install_opts = InstallOptions {
         lib_root: root_opts.lib_root.clone(),
         dest: root_opts.dest.clone(),
-        // A doc target is a build artifact: rebuilding it and reinstalling
-        // over the previous run is the whole point, so this never refuses on
-        // an existing receipt the way a plain `install` does.
         force: true,
         ..Default::default()
     };

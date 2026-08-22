@@ -1,6 +1,6 @@
-//! `uninstall` (plan §4.2, §6): remove *only* the files a receipt lists,
-//! then the receipt, then now-empty parent directories — never a recursive
-//! `rm -rf`, so hand-added files under the package's directory survive.
+//! `uninstall`: remove *only* the files a receipt lists, then the receipt,
+//! then now-empty parent directories — never a recursive `rm -rf`, so
+//! hand-added files under the package's directory survive.
 
 use std::path::{Path, PathBuf};
 
@@ -8,7 +8,6 @@ use crate::error::Error;
 use crate::roots::RootSelection;
 use crate::{receipts, stage, util};
 
-/// Shared root-selection flags for uninstall/list/status (plan §7.2).
 #[derive(Debug, Default, Clone)]
 pub struct RootOptions {
     pub lib_root: Option<PathBuf>,
@@ -24,12 +23,11 @@ impl RootSelection for RootOptions {
     }
 }
 
-/// The `dist/<category>` directories that pruning must never remove (plan
-/// §6): a package's *own* directory (`dist/packages/<name>/`) may go once
-/// empty, but the shared category roots stay.
+/// The `dist/<category>` directories that pruning must never remove: a
+/// package's *own* directory (`dist/packages/<name>/`) may go once empty,
+/// but the shared category roots stay.
 const PRUNE_STOP_DEPTH: usize = 3;
 
-/// Uninstall the package named `name`.
 pub fn uninstall(name: &str, opts: &RootOptions) -> Result<(), Error> {
     let root = opts.resolve_root()?;
 

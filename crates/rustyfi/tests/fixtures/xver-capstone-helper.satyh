@@ -4,8 +4,8 @@
 % for the full rationale of each surface form). Reached from the capstone
 % entry via `@import:` (a same-directory sibling), NOT `@require:` — so it
 % is never a `@require:`-resolved corpus target and stays `V0_1` under the
-% loader's per-file version-detection rule (`design-cross-version-import.md`
-% §5, Q4), exactly like `xver_import.rs`'s own `XVER_HELPER_SRC`. Keeping
+% loader's per-file version-detection rule, exactly like `xver_import.rs`'s
+% own `XVER_HELPER_SRC`. Keeping
 % this scaffolding local (rather than requiring the real `v01-mini`/
 % `stdja-mini` packages out of `dist-v01/packages/`) is what lets the
 % capstone's `lib_root` point straight at `lib-rustyfi/` and reach the REAL

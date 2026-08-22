@@ -2,8 +2,8 @@
 % transliteration of lib-rustyfi/dist/packages/stdja-mini.satyh (which
 % stays frozen; see that file's header comments for the semantics both
 % versions share). Deltas, all of them 0.1 surface syntax:
-%   - `module V01Mini = struct … end` wrapper — a REAL module (Sub-slice
-%     2a's v1/lower.rs): every binding is exported qualified (`V01Mini.x`),
+%   - `module V01Mini = struct … end` wrapper — a REAL module (v1/lower.rs):
+%     every binding is exported qualified (`V01Mini.x`),
 %     exactly 0.0.6 module semantics; a document depending on this package
 %     reaches its bindings via `V01Mini.x`, `\V01Mini.cmd`/`+V01Mini.cmd`,
 %     or `let open V01Mini in`, never bare;
@@ -11,9 +11,9 @@
 %     `let-block`;
 %   - `,`-separated records;
 %   - `page-break (210mm, 297mm) …` — 0.1 has no `page` ADT (A4Paper is
-% gone; L7), so the paper size is
+% gone), so the paper size is
 %     a plain length pair. 210mm x 297mm IS A4.
-%   - type / val rec …and… / val mutable / val ( binop ) binds — Sub-slice 2b
+%   - type / val rec …and… / val mutable / val ( binop ) binds
 
 module V01Mini = struct
 
@@ -39,7 +39,7 @@ module V01Mini = struct
   val inline ctx \bold it =
     read-inline (set-font-key 1 ctx) it
 
-  % ---- Sub-slice 2b surface: type / val rec / val mutable / ( binop ) ----
+  % ---- type / val rec / val mutable / ( binop ) surface ----
 
   type answer-shape = | Known of int | Unknown
 

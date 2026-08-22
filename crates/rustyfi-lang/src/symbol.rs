@@ -1,11 +1,9 @@
 //! Interned identifiers: [`SymbolStore`] (an append-only unique-string
 //! registry) and [`Symbol`] (a `Copy`, `u32`-sized handle into one).
 //!
-//! Phase 0 of. This module is deliberately self-contained: nothing in the
-//! pipeline uses it yet. Phase 1 brands the *compile side* (`Ast` →
-//! elaborate → typecheck) with `Symbol<'s>`; the runtime side never sees
-//! one, because names are resolved away at the compile membrane
-//! (`compile.rs`).
+//! The brand covers the *compile side* only (`Ast` → elaborate →
+//! typecheck); the runtime side never sees a `Symbol`, because names are
+//! resolved away at the compile membrane (`compile.rs`).
 //!
 //! # Why a lifetime brand
 //!
@@ -17,7 +15,7 @@
 //! read back as text. The brand costs nothing at run time — and it is
 //! *deliberately* confined to the front half of the pipeline: letting it reach
 //! `Value` would cascade a lifetime through all 172 `prim_*` functions for
-//! zero speed (see the design doc §1).
+//! zero speed.
 //!
 //! # Interning is not enough — `resolve` must be cheap
 //!
@@ -67,7 +65,7 @@ impl Symbol<'_> {
 /// Prints the index, not the text — a `Symbol` is a bare `u32` plus a
 /// zero-sized brand, so it has no way to reach its store from here.
 ///
-/// This is a deliberate choice (design doc §7): golden tests must diff
+/// This is a deliberate choice: golden tests must diff
 /// *resolved* strings produced at their format site, never `Debug`-of-AST.
 impl std::fmt::Debug for Symbol<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -105,13 +103,12 @@ struct StoreInner {
 }
 
 impl SymbolStore {
-    /// A fresh, empty store.
     pub fn new() -> SymbolStore {
         SymbolStore::default()
     }
 
     /// Intern `text`, returning its symbol. Interning the same text twice
-    /// returns the same symbol, so `Symbol` equality is string equality.
+    /// returns the same symbol.
     pub fn intern<'s>(&'s self, text: &str) -> Symbol<'s> {
         let mut inner = self.inner.borrow_mut();
         if let Some(&i) = inner.index.get(text) {
@@ -162,7 +159,6 @@ impl SymbolStore {
         self.inner.borrow().texts.len()
     }
 
-    /// Whether nothing has been interned yet.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
@@ -201,8 +197,6 @@ mod tests {
             syms.iter().map(|s| s.index()).collect::<Vec<_>>(),
             vec![0, 1, 2]
         );
-        // Ord is insertion order, NOT lexicographic — the whole reason
-        // byte-identical sorting has to go through `resolve`.
         let mut sorted = syms.clone();
         sorted.sort();
         assert_eq!(sorted, syms);
@@ -213,9 +207,8 @@ mod tests {
 
     #[test]
     fn resolved_borrows_survive_further_interning() {
-        // The load-bearing property: a `&str` handed out by `resolve` must stay
-        // valid while the store keeps growing (elaborate/typecheck mint derived
-        // names mid-walk, while earlier resolved text is still in use).
+        // resolve()'s borrow must survive further interning (elaborate/
+        // typecheck mint derived names mid-walk).
         let store = SymbolStore::new();
         let first = store.resolve(store.intern("first"));
         for i in 0..10_000 {

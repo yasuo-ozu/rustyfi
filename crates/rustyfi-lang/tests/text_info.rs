@@ -1,8 +1,5 @@
-//! group E3 (sliver): `text-info` — the
-//! `get-initial-text-info`/`deepen-indent`/`break` pure prims. Harness copied
-//! from `context_box.rs` (typecheck half via `parse_file` ->
-//! `elaborate_program` -> `typecheck`; eval half via direct `Ast` apply
-//! chains through `eval::Interp` + `primitives::base_env()`).
+//! The text-mode-context sliver: `text-info` — the
+//! `get-initial-text-info`/`deepen-indent`/`break` pure prims.
 //!
 //! SCOPING: `stringify-inline`/`stringify-block` and the `.satyh-text`/
 //! `--text-mode` HTML backend are deliberately OUT of scope for this PDF
@@ -15,10 +12,6 @@ use rustyfi_lang::eval;
 use rustyfi_lang::value::Value;
 use rustyfi_lang::{elaborate, prim_types, primitives, typecheck, CompileError};
 use rustyfi_syntax::Span;
-
-// ============================================================================
-// Typecheck half
-// ============================================================================
 
 fn typecheck_str(src: &str) -> Result<(), CompileError> {
     let file = rustyfi_syntax::parse_file(src)?;
@@ -60,10 +53,7 @@ fn deepen_indent_rejects_a_pdf_context_argument() {
     );
 }
 
-// ============================================================================
-// Eval half — direct `Ast` apply chains (no parser), mirroring
-// `context_box.rs`'s style.
-// ============================================================================
+// Eval half — direct `Ast` apply chains (no parser).
 
 struct Mono;
 
@@ -134,21 +124,13 @@ fn negative_increment_is_clamped_per_call() {
     assert_str_eq(run(&ast), "\n    ");
 }
 
-// ============================================================================
-// Registration coverage: every new group-E primitive resolves in base_env
-// AND has a registered type (pattern: `prims_phase4.rs`'s
-// `every_new_primitive_resolves_in_base_env`/`_has_a_registered_type`, but
-// scoped to all 7 group-E names across E1/E2/E3).
-// ============================================================================
-
+// Registration coverage: all 7 names below resolve in
+// base_env AND have a registered type.
 const GROUP_E_NAMES: &[&str] = &[
-    // E1
     "probe-cross-reference",
-    // E2
     "get-dominant-wide-script",
     "get-dominant-narrow-script",
     "get-language",
-    // E3
     "get-initial-text-info",
     "deepen-indent",
     "break",

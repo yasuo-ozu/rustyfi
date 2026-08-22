@@ -1,7 +1,7 @@
 //! A semver-triple value type ([`Version`]) and dependency-requirement
 //! language ([`Constraint`]) for the phase-7c solver (`solve.rs`).
 //!
-//! This replaces the ad-hoc string [`crate::registry::version_cmp`] with a
+//! This replaces the ad-hoc string `registry::version_cmp` with a
 //! real, totally-ordered value type, and adds the upstream-faithful
 //! constraint syntax the solver recurses on: **caret-only** requirements
 //! (`^X.Y.Z`), matching `saphe-split:src-util/semanticVersion.ml` /
@@ -9,7 +9,7 @@
 //!
 //! No `semver` crate: the surface here is deliberately small (parse, order,
 //! caret-match, compat-bucket) and self-contained, so the crate keeps its
-//! `std`-only, hand-rolled resolver footprint (design §7).
+//! `std`-only, hand-rolled resolver footprint.
 
 use std::cmp::Ordering;
 use std::fmt;
@@ -35,9 +35,8 @@ pub struct Version {
 }
 
 impl Version {
-    /// Construct a release version (no pre-release tag) directly, without
-    /// going through [`Version::parse`]. Handy for tests and for callers that
-    /// already have the three numbers in hand.
+    /// A release version (no pre-release tag), without going through
+    /// [`Version::parse`].
     pub fn new(major: u64, minor: u64, patch: u64) -> Self {
         Version {
             major,
@@ -127,10 +126,10 @@ impl Ord for Version {
 /// (the *only* syntax `saphe-split` accepts); `Exact` and `Any` are kept so
 /// the pre-existing `Satyristes` exact pin (`"1.2.3"`) and the
 /// `Satyristes` wildcard (`"*"`) map onto the same type without a format
-/// change to either front end (design §3.1).
+/// change to either front end.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Constraint {
-    /// `^X.Y.Z[-pre]` — npm/cargo-style caret compatibility (§3.3).
+    /// `^X.Y.Z[-pre]` — npm/cargo-style caret compatibility.
     Caret(Version),
     /// An exact pin: matches only that one version.
     Exact(Version),
@@ -151,7 +150,7 @@ impl Constraint {
         Ok(Constraint::Exact(Version::parse(s)?))
     }
 
-    /// Whether `v` satisfies this requirement (§3.3 — must match
+    /// Whether `v` satisfies this requirement (must match
     /// `semanticVersion.ml`'s `is_compatible`):
     ///
     /// - `Any` always matches.
@@ -184,7 +183,7 @@ impl Constraint {
     /// The upstream compat bucket a version belongs to: `(major, minor if
     /// major == 0 else 0)`. Two versions in different buckets are different
     /// *roles* to the solver — never interchangeable, matching upstream's
-    /// `RegisteredRole{package_id, compatibility}` (design §3.1/§4.2).
+    /// `RegisteredRole{package_id, compatibility}`.
     pub fn bucket(v: &Version) -> (u64, u64) {
         if v.major == 0 {
             (0, v.minor)
@@ -219,8 +218,6 @@ impl fmt::Display for Constraint {
 mod tests {
     use super::*;
 
-    // -- Version::parse round-trips ----------------------------------------
-
     #[test]
     fn parse_plain_triple() {
         let v = Version::parse("1.2.3").unwrap();
@@ -248,8 +245,6 @@ mod tests {
         assert!(Version::parse("").is_err());
     }
 
-    // -- Ord ------------------------------------------------------------
-
     #[test]
     fn ord_numeric_not_lexical() {
         assert!(Version::new(1, 10, 0) > Version::new(1, 9, 0));
@@ -272,8 +267,6 @@ mod tests {
         assert!(a < b);
     }
 
-    // -- Constraint::parse ------------------------------------------------
-
     #[test]
     fn constraint_parse_forms() {
         assert_eq!(Constraint::parse("*").unwrap(), Constraint::Any);
@@ -289,8 +282,6 @@ mod tests {
         assert!(Constraint::parse(">=1.2.3").is_err());
         assert!(Constraint::parse("~1.2.3").is_err());
     }
-
-    // -- Constraint::matches — caret semantics -----------------------------
 
     #[test]
     fn caret_zero_major_is_minor_locked() {
@@ -333,8 +324,6 @@ mod tests {
         assert!(Constraint::Any.matches(&Version::new(0, 0, 0)));
         assert!(Constraint::Any.matches(&Version::new(99, 99, 99)));
     }
-
-    // -- bucket -------------------------------------------------------------
 
     #[test]
     fn bucket_zero_major_is_per_minor() {

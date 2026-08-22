@@ -1,7 +1,7 @@
 //! Empirical proof that a dedicated math font (`set-math-font` /
 //! `Context::math_font` and `primitives.rs`'s
 //! `math_glyph_font`/`math_char_available`) makes styled Mathematical-
-//! Alphanumeric glyphs (gap 5's `resolve_variant_char` remap targets) render
+//! Alphanumeric glyphs (`resolve_variant_char`'s remap targets) render
 //! end-to-end through the REAL CID pipeline — not just under the permissive
 //! `Mono` stub other math tests use.
 //!
@@ -41,18 +41,16 @@ const DBL_D: char = '\u{1D53B}';
 /// generic font when the family isn't installed), then fall back to a few
 /// common distro/nix paths, then skip gracefully.
 fn find_math_font() -> Option<PathBuf> {
-    // Slice B, re-baselined for the upstream-correct default (see
-    // `download-fonts.sh`'s header comment): the repo now bundles
-    // the REAL Latin Modern Math at
+    // The canonical copy of this discovery order (the sibling
+    // math tests point here): the repo bundles the real Latin Modern Math at
     // `lib-rustyfi/dist/fonts/latinmodern-math.otf` (fetched by
     // `download-fonts.sh`, same as ipaexm/Junicode) and wires it as
-    // `default-font.satysfi-hash`'s `"math"` default. Check it FIRST so this
-    // test no longer depends on a host-wide font install once that script
-    // has been run. LM Math covers every codepoint this test needs
+    // `default-font.satysfi-hash`'s `"math"` default. Check it FIRST, so
+    // this test depends on that script having been run rather than on a
+    // host-wide font install. LM Math covers every codepoint this test needs
     // (Mathematical Italic 'a', minus sign, Double-Struck R/D). Fall back to
-    // the previously-bundled DejaVu Math TeX Gyre (still fetched as a
-    // secondary abbrev) only if LM Math isn't present, then fontconfig/
-    // distro paths.
+    // the secondary bundled DejaVu Math TeX Gyre only if LM Math is absent,
+    // then fontconfig/distro paths.
     let bundled_lmmath = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../lib-rustyfi/dist/fonts/latinmodern-math.otf");
     if bundled_lmmath.is_file() {
@@ -150,10 +148,8 @@ fn math_font_has_cmap_glyphs() {
 
 // ----------------------------------------------------------------------
 // (c) embed-math ${...} emits the styled codepoints through the REAL
-// eval pipeline (parse -> elaborate -> typecheck -> eval), under the real
-// `TtfFontStore` as the `FontMetrics` impl — mirrors `math_variant_class.rs`'s
-// `run`/`with_ctx`/`math_box` harness, but against a real font instead of
-// the permissive `Mono` stub.
+// eval pipeline (parse -> elaborate -> typecheck -> eval) — mirrors
+// `math_variant_class.rs`'s `run`/`with_ctx`/`math_box` harness.
 // ----------------------------------------------------------------------
 
 fn run_math(src: &str, metrics: &dyn FontMetrics) -> Result<Value, CompileError> {
@@ -230,8 +226,6 @@ fn embed_math_emits_styled_codepoints_under_math_font() {
         "expected the middle glyph to be U+2212 MINUS SIGN"
     );
 
-    // `math-char-class MathDoubleStruck ${D}` -> `default_math_variant_char`
-    // (DoubleStruck, 'D') = cp(0x1D538, 3) = U+1D53B.
     let src = with_ctx("embed-math ctx (math-char-class MathDoubleStruck ${D})");
     let v = run_math(&src, &store)
         .expect("math-char-class MathDoubleStruck ${D} should compile and evaluate");
@@ -304,19 +298,17 @@ fn styled_math_renders_through_cid_pipeline() {
         "output should start with a PDF header"
     );
 
-    // Re-baseline (LM Math default, replacing the earlier DejaVu Math TeX
-    // Gyre re-baseline): the discovered math font is now the bundled Latin
-    // Modern Math — a CFF (`OTTO`)-outline face — so the CID writer takes
-    // the `CIDFontType0`/`FontFile3` path (`cid.rs`'s `write_font_cff`, S1
-    // `526e1f3` + S2 subsetting `962addc`), not the `CIDFontType2`/
-    // `FontFile2` path a `glyf`-outline face (DejaVu Math TeX Gyre) took. A
-    // subsetted `FontFile3` is (much) smaller than the whole source file, so
-    // the correct, font-behavior-matched check is `PDF < font file` — the
-    // exact direction the sibling `tests/ttf.rs::cff_face_embeds_as_fontfile3_
+    // The discovered math font is the bundled Latin Modern Math — a CFF
+    // (`OTTO`)-outline face — so the CID writer takes the
+    // `CIDFontType0`/`FontFile3` path (`cid.rs`'s `write_font_cff`, which
+    // embeds either the whole face or a CFF subset), not the
+    // `CIDFontType2`/`FontFile2` path a `glyf`-outline
+    // face takes. A subsetted `FontFile3` is (much) smaller than the whole
+    // source file, so the font-behavior-matched check is `PDF < font file` —
+    // the direction the sibling `tests/ttf.rs::cff_face_embeds_as_fontfile3_
     // cidfonttype0`/`subsetter_can_subset_cff_and_the_writer_now_uses_it`
-    // already use. We ALSO assert the font is genuinely embedded
-    // (`FontFile3` present) so "smaller" can't be satisfied by dropping the
-    // font entirely.
+    // also use. We ALSO assert the font is genuinely embedded (`FontFile3`
+    // present) so "smaller" can't be satisfied by dropping the font entirely.
     assert!(
         pdf_bytes.windows(9).any(|w| w == b"FontFile3"),
         "expected an embedded (subsetted) CFF font (FontFile3) in the math PDF"

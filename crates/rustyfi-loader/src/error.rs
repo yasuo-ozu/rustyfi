@@ -73,8 +73,7 @@ pub enum LoadError {
     },
 
     /// `LoadMode::Envelopes` was requested for a version with no `use`
-    /// headers (plan §1.2: the rejected combination). Checked before any file
-    /// is read.
+    /// headers — the rejected combination. Checked before any file is read.
     #[error(
         "SATySFi {version} has no `use` headers; `Envelopes` mode requires 0.1 \
          (drop --deps, or pass --lang 0.1)"
@@ -91,7 +90,7 @@ pub enum LoadError {
 
     /// Bare `use Mod` at document/open level (upstream `CannotUseHeaderUse`):
     /// a document cannot reach into a package's internals by module name.
-    /// Permanent (not a stub): Ld3b's closed resolver handles bare `use` only
+    /// Permanent (not a stub): the closed resolver handles bare `use` only
     /// *inside* envelope source trees.
     #[error(
         "{from}: bare `use {module}` is only allowed between files inside one \
@@ -128,11 +127,8 @@ pub enum LoadError {
     )]
     LegacyHeaderUnderEnvelopes { header: String, from: PathBuf },
 
-    /// Ld3b-1: the `--deps` file (`rustyfi-deps.yaml`) could not be read.
-    /// Upstream `DepsConfigNotFound`, `depsConfig.ml:40-45`. Nothing calls
-    /// [`crate::v01x::deps::load`] yet (that wiring is Ld3b-2); this variant
-    /// exists so the decoder's own unit tests can exercise the real error
-    /// path.
+    /// The `--deps` file (`rustyfi-deps.yaml`) could not be read.
+    /// Upstream `DepsConfigNotFound`, `depsConfig.ml:40-45`.
     #[error("{path}: cannot read rustyfi-deps.yaml: {source}")]
     DepsConfigNotFound {
         path: PathBuf,
@@ -140,17 +136,17 @@ pub enum LoadError {
         source: std::io::Error,
     },
 
-    /// Ld3b-1: `rustyfi-deps.yaml` failed to decode or validate — either a
+    /// `rustyfi-deps.yaml` failed to decode or validate — either a
     /// YAML/shape error from `serde_yaml` or one of the two non-structural
     /// checks (`path` must be absolute; `used_as` must be an uppercased
     /// identifier). Upstream `DepsConfigError` wrapping `YamlError`
     /// (`depsConfig.ml:46-47`, `yamlDecoder.ml`); `message` carries a
     /// dotted-path context string in the same spirit as upstream's
-    /// `show_yaml_context` (wording is this port's own, per Ld3b spec §3.4).
+    /// `show_yaml_context` (wording is this port's own).
     #[error("{path}: invalid rustyfi-deps.yaml: {message}")]
     DepsConfigDecode { path: PathBuf, message: String },
 
-    /// Ld3b-1: a `rustyfi-envelope.yaml` could not be read. Upstream
+    /// A `rustyfi-envelope.yaml` could not be read. Upstream
     /// `EnvelopeConfigNotFound`, `envelopeConfig.ml:142-147`.
     #[error("{path}: cannot read rustyfi-envelope.yaml: {source}")]
     EnvelopeConfigNotFound {
@@ -159,7 +155,7 @@ pub enum LoadError {
         source: std::io::Error,
     },
 
-    /// Ld3b-1: a `rustyfi-envelope.yaml` failed to decode or validate.
+    /// A `rustyfi-envelope.yaml` failed to decode or validate.
     /// Upstream `EnvelopeConfigError`. Covers the `library`/`font` branch
     /// check, `opentype_single`/`opentype_collection` branch check, relative
     /// `path`, lowercased font `name`, and the 18 `markdown_conversion`
@@ -167,7 +163,7 @@ pub enum LoadError {
     #[error("{path}: invalid rustyfi-envelope.yaml: {message}")]
     EnvelopeConfigDecode { path: PathBuf, message: String },
 
-    /// Ld3b-2: a `source_directories` entry of an envelope could not be
+    /// A `source_directories` entry of an envelope could not be
     /// listed. Upstream `CannotReadDirectory`, `envelopeReader.ml:15-16`.
     #[error("{path}: cannot list envelope source directory: {source}")]
     CannotReadDirectory {
@@ -176,24 +172,24 @@ pub enum LoadError {
         source: std::io::Error,
     },
 
-    /// Ld3b-2: two deps-config envelopes share a name. Upstream
+    /// Two deps-config envelopes share a name. Upstream
     /// `EnvelopeNameConflict`, `closedEnvelopeDependencyResolver.ml:50-51`.
     #[error("rustyfi-deps.yaml: two envelopes are named `{name}`")]
     EnvelopeNameConflict { name: String },
 
-    /// Ld3b-2: an envelope depends on a name absent from the deps config's
+    /// An envelope depends on a name absent from the deps config's
     /// envelope set. Upstream `DependencyOnUnknownEnvelope`,
     /// `closedEnvelopeDependencyResolver.ml:71-76`.
     #[error("envelope `{depending}` depends on unknown envelope `{depended}`")]
     DependencyOnUnknownEnvelope { depending: String, depended: String },
 
-    /// Ld3b-2: a cycle in the envelope dependency graph. Upstream
+    /// A cycle in the envelope dependency graph. Upstream
     /// `CyclicEnvelopeDependency`; `chain` is names (not paths), the first
-    /// element repeated last, matching [`Cycle`]'s shape.
+    /// element repeated last, matching [`LoadError::Cycle`]'s shape.
     #[error("envelope dependency cycle: {}", .chain.join(" -> "))]
     CyclicEnvelopeDependency { chain: Vec<String> },
 
-    /// Ld3b-2: two source files in one envelope declare the same module
+    /// Two source files in one envelope declare the same module
     /// name. Upstream `FileModuleNameConflict`,
     /// `closedFileDependencyResolver.ml:20-22`.
     #[error(
@@ -207,12 +203,12 @@ pub enum LoadError {
         path: PathBuf,
     },
 
-    /// Ld3b-2: a bare `use M` inside an envelope names no sibling module.
+    /// A bare `use M` inside an envelope names no sibling module.
     /// Upstream `FileModuleNotFound`, `closedFileDependencyResolver.ml:37-41`.
     #[error("{from}: `use {module}` names no module in this envelope")]
     FileModuleNotFound { module: String, from: PathBuf },
 
-    /// Ld3b-2: a `use … of` header inside an envelope source tree. Upstream
+    /// A `use … of` header inside an envelope source tree. Upstream
     /// `CannotUseHeaderUseOf`, `closedFileDependencyResolver.ml:51-52`.
     #[error(
         "{from}: `use {module} of …` is not allowed inside a package; package \
@@ -220,10 +216,10 @@ pub enum LoadError {
     )]
     UseOfInsidePackage { module: String, from: PathBuf },
 
-    /// Ld3b-2: a `use package M` header whose head matches no `used_as` alias
+    /// A `use package M` header whose head matches no `used_as` alias
     /// in the supplied deps config. Upstream `UnknownPackageDependency`
     /// (typecheck-side there, load-side here — this port's loader is the only
-    /// header consumer; see Ld3b spec §6 step 5).
+    /// header consumer).
     #[error(
         "{from}: `use package {module}` does not match any dependency alias \
          (`used_as`) in the supplied rustyfi-deps.yaml"

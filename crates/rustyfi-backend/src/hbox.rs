@@ -31,8 +31,6 @@ pub struct HorzStringInfo {
 /// only payload, and `PureHorzBox::Image` places one on a page; neither
 /// carries the decoded bytes directly, so cloning a box (routine during line
 /// breaking) never copies image data.
-///
-/// raster images.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ImageId(pub usize);
 
@@ -41,16 +39,15 @@ pub struct ImageId(pub usize);
 /// at a *computation* instead of a resource. `break_pages` places the box
 /// this token lives in like any other content and never learns what the hook
 /// computes; a lang-side post-pass (`fire_hooks`) reads the token back once
-/// geometry is final. See
+/// geometry is final.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct HookId(pub usize);
 
 /// An opaque index into a lang-side table of deferred *decoration* closures
-/// (`Interp::decos`) — `HookId`'s twin for §D frames (: the resolved struct
-/// layout). The backend carries it through line breaking and never learns
-/// what the deco draws; `fire_hooks` (rustyfi-lang) fires it with the frame's
-/// placed `(x, y, w, h, d)` and accumulates the returned graphics onto the
-/// page.
+/// (`Interp::decos`) — `HookId`'s twin for §D frames. The backend carries it
+/// through line breaking and never learns what the deco draws; `fire_hooks`
+/// (rustyfi-lang) fires it with the frame's placed `(x, y, w, h, d)` and
+/// accumulates the returned graphics onto the page.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct DecoId(pub usize);
 
@@ -68,17 +65,15 @@ pub struct GraphicsFnId(pub usize);
 /// `use-image-by-width` aspect-ratio computation) plus enough sample data to
 /// emit a PDF Image XObject directly.
 ///
-/// **Slice 1 simplification** (Risks section): every source format is
-/// flattened to 8-bit `DeviceRGB` and any alpha channel is dropped —
-/// `samples`/`px_w`/`px_h` are always populated this way (the HTML
-/// backend's `<img>` data URI and the PDF writer's non-JPEG path both rely
-/// on that). Transparency (`/SMask`) is still roadmap. A JPEG `DCTDecode`
-/// passthrough (JPEG DCTDecode passthrough slice, see
-/// `write_image_xobjects` in `rustyfi-pdf`) is no longer roadmap:
-/// `jpeg_dct` additionally carries the source's original,
-/// still-DCT-encoded bytes when `load-image` recognized it as a baseline
-/// JPEG, so the PDF writer can embed those bytes directly instead of
-/// re-encoding the flattened RGB8 samples.
+/// **Slice 1 simplification**: every source format is flattened to 8-bit
+/// `DeviceRGB` and any alpha channel is dropped — `samples`/`px_w`/`px_h`
+/// are always populated this way (the HTML backend's `<img>` data URI and
+/// the PDF writer's non-JPEG path both rely on that). Transparency
+/// (`/SMask`) is still roadmap; a JPEG `DCTDecode` passthrough is not —
+/// `jpeg_dct` additionally carries the source's original, still-DCT-encoded
+/// bytes when `load-image` recognized it as a baseline JPEG, so the PDF
+/// writer (`write_image_xobjects`, `rustyfi-pdf`) can embed those bytes
+/// directly instead of re-encoding the flattened RGB8 samples.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ImageResource {
     /// Row-major, top-to-bottom, 3-bytes-per-pixel RGB8 samples with no
@@ -317,7 +312,6 @@ pub enum PureHorzBox {
     /// dimensions (v0.0.6 `ImageInfo.get_height_from_width`); `image` looks
     /// the decoded bytes up in the document's image table. Like
     /// `FixedEmpty`, this is never a legal line-break point (`is_glue`).
-    ///
     Image {
         width: Length,
         height: Length,
@@ -380,11 +374,10 @@ pub enum PureHorzBox {
     /// pre-shifted sub-glyphs, each with a vertical offset relative to this
     /// box's baseline (`MathGlyph::dy`) — the line model has only a
     /// horizontal `dx` per box and a single `baseline_y` per line, so a
-    /// superscript can't be a separate box (see the plan's "structural
-    /// difference" note). `width`/`height`/`depth` are the run's outer
-    /// metrics (computed by `read_math`), so the line breaker never re-enters
-    /// the math engine. Never a legal line-break point (see `is_glue`) — a
-    /// math run is laid out and flowed atomically.
+    /// superscript can't be a separate box. `width`/`height`/`depth` are the
+    /// run's outer metrics (computed by `read_math`), so the line breaker
+    /// never re-enters the math engine. Never a legal line-break point (see
+    /// `is_glue`) — a math run is laid out and flowed atomically.
     ///
     /// `rules` (§B2): filled paths the run needs alongside its glyphs — the
     /// fraction bar and radical sign/overbar are `Fill`s, not glyphs, since
@@ -411,14 +404,13 @@ pub enum PureHorzBox {
     /// it like any other zero-width content, and a lang-side post-pass
     /// (`fire_hooks`) fires the stored closure once placement is final.
     /// Renders nothing (see the PDF writers' wildcard arm).
-    ///
     HookPageBreak { id: HookId },
     /// A ruled grid box (`tabular`; v0.0.6's `PHGFixedTabular`) — the first
     /// composite box: it carries other already-laid-out inline boxes (each
     /// cell's own `Vec<(Length, PureHorzBox)>` run, `tabular::TabularCellBox`)
-    /// plus the resolved rule graphics from the user's callback. See for how
-    /// the PDF writers recurse into it (`emit_box`) and reconcile its three
-    /// coordinate frames.
+    /// plus the resolved rule graphics from the user's callback. The PDF
+    /// writers recurse into it in `emit_box`, which is also where its three
+    /// coordinate frames are reconciled.
     Tabular(TabularBox),
     /// An inline box carrying a whole block (`embed-block-top`; rows 7-8;
     /// upstream's `PHGEmbeddedVert`/`HorzEmbeddedVertBreakable`). `block`
@@ -426,7 +418,7 @@ pub enum PureHorzBox {
     /// the box's placed origin by reentering the same per-`PureHorzBox`
     /// emission a top-level line uses (the `Tabular` cells' recursion,
     /// above, is the same pattern one level up). FIRST CUT is ATOMIC — it
-    /// does not split across a page boundary (see that plan's §Risks).
+    /// does not split across a page boundary.
     EmbeddedBlock {
         width: Length,
         height: Length,

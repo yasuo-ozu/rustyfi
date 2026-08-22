@@ -1,12 +1,8 @@
-//! The real `@require: math` gate (+ §G):
+//! The real `@require: math` gate:
 //! `lib-rustyfi/dist/packages/math.satyh` (ported byte-for-byte from
 //! upstream) must PARSE, ELABORATE, TYPECHECK, and EVALUATE through the
 //! production multi-file loader — the same "compiles" bar
-//! `stdlib_tier0.rs`'s own tests hold `list`/`option`/`pervasives`/`gr` to
-//! (that file is owned by a concurrent sibling agent porting off-path
-//! packages, so this is a NEW file rather than an addition there; the
-//! helper shapes below are deliberately copied, not shared, per that
-//! constraint).
+//! `stdlib_tier0.rs`'s own tests hold `list`/`option`/`pervasives`/`gr` to.
 //!
 //! `math.satyh` transitively pulls in `pervasives`, `list` (hence
 //! `option`), and `gr` (hence `geom`) — all five already ported and proven
@@ -16,7 +12,7 @@
 //! `\to`/`\pm`/…, `\sum`/`\int`/…, `\paren`/`\brace`/…, `\frac`, `\sqrt`,
 //! …) both type-checks against its `sig` and evaluates without error — most
 //! of them via a FULLY-APPLIED `math-*` primitive call at binding time (see
-//! `primitives.rs`'s new §A + §G section), not merely a deferred closure.
+//! `primitives.rs`'s math-primitive section), not merely a deferred closure.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -30,15 +26,12 @@ use rustyfi_lang::{elaborate, eval, primitives, typecheck};
 use rustyfi_loader::{LoadOptions, LoadedProgram};
 
 /// This repo's `lib-rustyfi/` (`math.satyh`'s real home), resolved relative
-/// to this crate's manifest directory — the same convention
-/// `stdlib_tier0.rs`/`compile.rs`'s test helpers already use.
+/// to this crate's manifest directory.
 fn lib_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../lib-rustyfi")
 }
 
-/// A uniquely-named temp `.saty` file, cleaned up on drop (mirrors
-/// `stdlib_tier0.rs`'s own `TempDoc`, copied rather than shared — see this
-/// module's doc comment).
+/// A uniquely-named temp `.saty` file, cleaned up on drop.
 struct TempDoc(PathBuf);
 
 impl TempDoc {
@@ -62,10 +55,9 @@ impl Drop for TempDoc {
 }
 
 /// Merge a loader-resolved program's preludes into one synthetic
-/// `cst::File`, exactly like `rustyfi`'s `merge_program` /
-/// `stdlib_tier0.rs`'s own copy: the loader guarantees dependency-first
-/// order with the entry document last, so every library's prelude is
-/// spliced ahead of the entry's own, in that order.
+/// `cst::File`, exactly like `rustyfi`'s `merge_program`: the loader
+/// guarantees dependency-first order with the entry document last, so every
+/// library's prelude is spliced ahead of the entry's own, in that order.
 fn as_v006(cst: rustyfi_loader::LoadedCst) -> rustyfi_syntax::cst::File {
     match cst {
         rustyfi_loader::LoadedCst::V0_0(f) => f,
@@ -94,10 +86,9 @@ fn merge_program(program: LoadedProgram) -> rustyfi_syntax::cst::File {
 }
 
 /// `FontMetrics` stub: `math.satyh`'s own top-level evaluation never
-/// actually measures a glyph (see this module's doc comment — every
-/// `math-*` primitive call at binding time just builds a `Value::Math`
-/// tree; nothing here calls `embed-math`/renders a page), so this is never
-/// consulted, mirroring `stdlib_tier0.rs`'s `NoFonts`.
+/// actually measures a glyph (every `math-*` primitive call at binding time
+/// just builds a `Value::Math` tree; nothing here calls `embed-math`/renders
+/// a page), so this is never consulted.
 struct NoFonts;
 
 impl FontMetrics for NoFonts {
@@ -115,16 +106,15 @@ impl FontMetrics for NoFonts {
 /// Load `src` (a document `@require:`ing packages resolved against
 /// `lib_root()`) through the real loader, merge, elaborate, typecheck, and
 /// evaluate — returning the final `Value`. The full "compiles" bar, not
-/// merely a parse or a typecheck (mirrors `stdlib_tier0.rs`'s
-/// `compile_via_loader`).
+/// merely a parse or a typecheck.
 fn compile_via_loader(tag: &str, src: &str) -> Result<Value, String> {
     compile_via_loader_with_metrics(tag, src, &NoFonts)
 }
 
 /// Same as [`compile_via_loader`], but with a caller-supplied `FontMetrics`
-/// — for the Gap 1/Gap 2 tests below that actually render `${…}` through
+/// — for the tests below that actually render `${…}` through
 /// `read-inline`/`embed-math`, which `NoFonts` (advance always `None`)
-/// cannot do (mirrors `stdlib_tier0.rs`'s twin helper).
+/// cannot do.
 fn compile_via_loader_with_metrics(
     tag: &str,
     src: &str,
@@ -152,8 +142,8 @@ fn compile_via_loader_with_metrics(
 
 /// A fully permissive `FontMetrics` stub — `Some(size * 0.5)` for EVERY
 /// char, ASCII or not (unlike `stdlib_tier0.rs`'s ASCII-only `Mono`) — for
-/// the Gap 1/Gap 2 width-asserting tests below that render non-WinAnsi
-/// prose math (`α`, `∑`). Mirrors `math_slice1.rs`'s own `Mono`.
+/// the width-asserting tests below that render non-WinAnsi
+/// prose math (`α`, `∑`).
 struct Mono;
 
 impl FontMetrics for Mono {
@@ -208,7 +198,7 @@ fn natural_width(v: Value) -> Length {
 }
 
 /// `embed-math ctx <math>`'s result (a single `inline-boxes` list wrapping
-/// one `PureHorzBox::Math`) unwrapped down to its glyphs — for gap 5/6 tests
+/// one `PureHorzBox::Math`) unwrapped down to its glyphs — for tests
 /// below that need to inspect actual glyph text, not just `get-
 /// natural-metrics`' summary width.
 fn math_glyphs(v: Value) -> Vec<MathGlyph> {
@@ -224,7 +214,7 @@ fn math_glyphs(v: Value) -> Vec<MathGlyph> {
     }
 }
 
-/// Like [`math_glyphs`] but also returns the drawn `rules` — B3b-2 delimiter
+/// Like [`math_glyphs`] but also returns the drawn `rules` — delimiter
 /// identity lives in the drawn graphics, not the glyphs.
 fn math_box(v: Value) -> (Vec<MathGlyph>, Vec<GraphicsElem>) {
     match v {
@@ -255,9 +245,9 @@ fn delim_box(delim_math: &str) -> (Vec<MathGlyph>, Vec<GraphicsElem>) {
     math_box(v)
 }
 
-/// B3b-2: the `make_paren` closure route restores delimiter IDENTITY.
+/// The `make_paren` closure route restores delimiter IDENTITY.
 /// `\paren` fills bezier bowls; `\abs` strokes bars — DIFFERENT shapes, not
-/// the identical stretched `(` that B3b(i) collapsed every delimiter to. And
+/// the identical stretched `(` every delimiter used to collapse to. And
 /// because the closures draw via graphics (not font glyphs), this works under
 /// the plain `Mono` stub with no MATH font at all.
 #[test]
@@ -266,8 +256,8 @@ fn b3b2_paren_and_abs_draw_different_shapes_through_the_closures() {
         let (paren_g, paren_r) = delim_box(r"${\paren{x}}");
         let (abs_g, abs_r) = delim_box(r"${\abs{x}}");
         // Identity restored: only the inner `x` glyph remains; the
-        // delimiters are DRAWN ink, not `(`/`)` glyphs (B3b(i) gave 3 glyphs,
-        // 0 rules and made \abs identical to \paren).
+        // delimiters are DRAWN ink, not `(`/`)` glyphs (this used to give 3
+        // glyphs, 0 rules and make \abs identical to \paren).
         assert_eq!(
             paren_g.len(),
             1,
@@ -287,7 +277,7 @@ fn b3b2_paren_and_abs_draw_different_shapes_through_the_closures() {
     });
 }
 
-/// B3b-2: `\brace` also draws (via the closures) and differs from `\paren` —
+/// `\brace` also draws (via the closures) and differs from `\paren` —
 /// both fill, but distinct shapes ⇒ distinct total advances. Confirms the
 /// closure route is exercised for more than one delimiter kind.
 #[test]
@@ -306,16 +296,14 @@ fn b3b2_brace_draws_and_differs_from_paren() {
 #[test]
 fn require_math_compiles_and_evaluates() {
     run_with_big_stack(|| {
-        // The cheapest whole-module proof (same rationale as
-        // `stdlib_tier0.rs`'s `require_gr_rectangle_compiles_and_evaluates`):
-        // a trivial body still forces the loader to resolve the FULL
-        // transitive graph (`pervasives`, `list` -> `option`, `gr` ->
-        // `geom`) and forces elaboration/typecheck/evaluation of every one
-        // of `math.satyh`'s top-level bindings (`Ast::LetIn`/`Ast::
-        // LetMathIn` always infers + evaluates its value eagerly,
-        // regardless of whether the entry body ever references it) — so
-        // success here means the ENTIRE file compiled, not just whatever
-        // the body names.
+        // The cheapest whole-module proof: a trivial body still forces the
+        // loader to resolve the FULL transitive graph (`pervasives`, `list`
+        // -> `option`, `gr` -> `geom`) and forces elaboration/typecheck/
+        // evaluation of every one of `math.satyh`'s top-level bindings
+        // (`Ast::LetIn`/`Ast::LetMathIn` always infers + evaluates its value
+        // eagerly, regardless of whether the entry body ever references it)
+        // — so success here means the ENTIRE file compiled, not just
+        // whatever the body names.
         let src = "@require: math
 in
 0";
@@ -327,7 +315,6 @@ in
 #[test]
 fn require_math_join_is_reachable_across_the_module_boundary() {
     run_with_big_stack(|| {
-        // A slightly stronger proof than the trivial-body test above:
         // `Math.join` (a plain, non-`let-math` `val`, built out of
         // `List.fold-left`/`math-concat`) called from OUTSIDE the module —
         // proving the module's own qualified-export machinery
@@ -344,12 +331,12 @@ match Math.join (math-char MathOrd `,`) [] with
 }
 
 // ============================================================================
-// Gap 1 (`class-signature-lang-gaps.md`) — the `get-initial-context`/
-// `set-math-command`-installed `[math] inline-cmd` bare `${…}` in prose
-// dispatches to (`read_inline`'s `EmbedMath` arm).
+// The `get-initial-context`/`set-math-command`-installed `[math]
+// inline-cmd` bare `${…}` in prose dispatches to (`read_inline`'s
+// `EmbedMath` arm).
 // ============================================================================
 
-/// Gap 1 end-to-end: `Math`'s own `\math` (`direct \math : [math]
+/// End-to-end: `Math`'s own `\math` (`direct \math : [math]
 /// inline-cmd`, `let-inline ctx \math fml = script-guard Latin (embed-math
 /// ctx fml)`), installed via `get-initial-context`'s second argument, must
 /// actually run when `read-inline` walks a plain `{ ${…} }` quoted literal
@@ -370,7 +357,7 @@ get-natural-metrics
     });
 }
 
-/// Gap 1 override: a locally-defined stub `\m0` (ignoring its `math`
+/// Override: a locally-defined stub `\m0` (ignoring its `math`
 /// argument entirely, `inline-skip 42pt`) installed via `set-math-command`
 /// must be the command that actually runs for `${x}` — not some fallback —
 /// proving `set-math-command` re-installs `Context::math_command` (not just
@@ -393,17 +380,16 @@ get-natural-metrics (read-inline ctx {${x}})";
     );
 }
 
-// Gap 1 fallback (`Context::initial` directly, no installed command ->
-// reflect + lay out through the faithful engine) stays proven by
-// `eval_phase2b.rs`'s `itext_embed_math_renders_through_read_inline`, which
-// this change kept green (see that file — no new test needed here).
+// Fallback (`Context::initial` directly, no installed command ->
+// reflect + lay out through the faithful engine) is pinned by
+// `eval_phase2b.rs`'s `itext_embed_math_renders_through_read_inline`.
 
 // ============================================================================
-// Gap 2 (`class-signature-lang-gaps.md`) — `math-pull-in-scripts` resolver
-// argument order/values, and the `check_subscript` merged sub+sup pair.
+// `math-pull-in-scripts` resolver argument order/values, and the
+// `check_subscript` merged sub+sup pair.
 // ============================================================================
 
-/// Gap 2 resolver args: a width-discriminating resolver distinguishes
+/// Resolver args: a width-discriminating resolver distinguishes
 /// `Some(sup)` (from `${#m^{2}}`) from the bare `(None, None)` case (from
 /// `${#m}`) — proving `layout_pull_in_scripts` actually threads the pulled-
 /// in scripts through to the resolver rather than always calling it with
@@ -456,7 +442,7 @@ let w-bare = get-natural-metrics (embed-math ctx ${#m}) in
     );
 }
 
-/// Gap 2 `\sum`: `Math`'s own `\sum` (`bigop` = `vop-scheme math-big-char`,
+/// `\sum`: `Math`'s own `\sum` (`bigop` = `vop-scheme math-big-char`,
 /// built on `math-pull-in-scripts`) with both a sub- and a super-script
 /// (`\sum_{k=1}^{n}`) must render without error through the real
 /// `check_subscript`/pull-in resolution — the production path `+math`/`\eqn`
@@ -475,8 +461,8 @@ get-natural-metrics (embed-math ctx ${\\sum_{k=1}^{n}})";
     });
 }
 
-/// Gap 2 merged sub-sup pair: `${x_1^2}` (a base-tail `Sub` folded into one
-/// `Sup` by `check_subscript`, `E10`) must lay out its sub- and super-script
+/// Merged sub-sup pair: `${x_1^2}` (a base-tail `Sub` folded into one
+/// `Sup` by `check_subscript`) must lay out its sub- and super-script
 /// SIDE BY SIDE on the same base — width `w(x) + max(w(1), w(2))·scale` —
 /// rather than sequentially stacking two independent corner scripts (the
 /// pre-fix behavior, which would additionally add the subscript's own width
@@ -511,19 +497,16 @@ get-natural-metrics (embed-math ctx ${x_1^2})";
 }
 
 // ============================================================================
-// Gap 3 — `|`-separated math lists (`${| a | b |}`, a `math list`
+// `|`-separated math lists (`${| a | b |}`, a `math list`
 // LITERAL, not a matrix) consumed by `Math`'s own verbatim-ported
 // `+align`, over the generic `tabular` primitive.
 // ============================================================================
 
-/// Gap 3 package smoke: `Math.+align : [(math list) list] block-cmd` applied
+/// Package smoke: `Math.+align : [(math list) list] block-cmd` applied
 /// to a real two-row, two-column `${| a | b |}; ${| c | d |}` table must
 /// compile and evaluate through the production `read-block` path — proving
 /// the elaborator-only `math_block_ast` split feeds a real bundled consumer,
-/// not just a synthetic `match` on the resulting list shape. Reuses
-/// `math.satyh`'s own `direct \math` (installed via `get-initial-context`'s
-/// second argument, same as the Gap 1 tests above) rather than defining a
-/// local stub.
+/// not just a synthetic `match` on the resulting list shape.
 #[test]
 fn gap3_align_over_bar_separated_math_lists_evaluates() {
     run_with_big_stack(|| {
@@ -541,12 +524,12 @@ read-block ctx '<+align[${| a | b |}; ${| c | d |}];>";
 }
 
 // ============================================================================
-// Gap 5/6 — bundled `math.satyh` consumers: `\mathrm`/`\text` are real
+// Bundled `math.satyh` consumers: `\mathrm`/`\text` are real
 // production commands built on `math-char-class`/`text-in-math`, not
 // synthetic stubs.
 // ============================================================================
 
-/// Gap 6 package smoke: `math.satyh`'s own `\text` (`let-math \text it =
+/// Package smoke: `math.satyh`'s own `\text` (`let-math \text it =
 /// text-in-math MathOrd (fun ctx -> read-inline ctx it)`) applied to a real
 /// inline-text literal, embedded through `embed-math`/`command \math`, must
 /// render WITHOUT erroring and with positive width — proving the
@@ -567,12 +550,12 @@ get-natural-metrics (embed-math ctx ${\\text!{ab}})";
     });
 }
 
-/// Gap 5 package smoke: `math.satyh`'s own `\mathrm` (`let-math \mathrm m =
+/// Package smoke: `math.satyh`'s own `\mathrm` (`let-math \mathrm m =
 /// ${\math-style!(MathRoman){#m}}`, built on `math-char-class`) applied to
 /// `${\mathrm{x}}` must render the PLAIN ascii `"x"` (Roman = identity),
 /// while the bare `${x}` (default `Italic` restyling) renders the actual
 /// Unicode Mathematical Italic Small X remap — proving `\mathrm` (a real
-/// bundled command, not a synthetic `math-char-class` call) reaches gap 5's
+/// bundled command, not a synthetic `math-char-class` call) reaches the
 /// `ChangeCharClass` layout arm end to end.
 #[test]
 fn gap5_mathrm_command_via_math_satyh_keeps_plain_ascii() {

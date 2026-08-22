@@ -12,8 +12,7 @@ use rustyfi_backend::ImageResource;
 /// The checked-in fixture: a tiny 8x4 baseline (SOF0), 8-bit, 3-component
 /// (YCbCr/RGB) JPEG generated with Pillow — same bytes as
 /// `rustyfi-pdf/tests/fixtures/dot.jpg` / `rustyfi-lang/tests/fixtures/dot.jpg`
-/// (duplicated per this workspace's existing per-crate fixture convention;
-/// see `rustyfi-lang/tests/images.rs`'s `fixture_path` doc comment for why).
+/// (duplicated per this workspace's per-crate fixture convention).
 fn jpeg_bytes() -> Vec<u8> {
     std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/dot.jpg"))
         .expect("fixture must be readable")

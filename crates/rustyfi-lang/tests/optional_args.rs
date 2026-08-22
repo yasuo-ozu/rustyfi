@@ -1,17 +1,12 @@
-//! End-to-end acceptance coverage for runtime optional args (build-order step
-//! 3 Sub-area 2 and the `?->`/`string?` type-grammar parts of): real SATySFi
-//! source text run through the full pipeline — `parse_file` ->
-//! `elaborate::elaborate_program` -> `typecheck::typecheck` -> `eval::Interp`
-//! — proving:
+//! End-to-end acceptance coverage for runtime optional args, including the
+//! `?->`/`string?` type grammar: real SATySFi source text run through the
+//! full pipeline — `parse_file` -> `elaborate::elaborate_program` ->
+//! `typecheck::typecheck` -> `eval::Interp`.
 //!
-//! 1. an inline command with an optional argument, called both `?:`-supplied
-//!    and `?*`-omitted, type-checks and evaluates to observably different
-//!    content;
-//! 2. a `?->`-typed function (declared via a `type` synonym, since this
-//!    milestone has no signature-*enforcement* pass yet — see that plan's
-//!    Risks) unifies with a real function whose domain is a plain `option`,
-//!    and with `?:`/`?*` call sites against it — the "one consistent
-//!    optional-arg model" the two plans share.
+//! Section 2's `?->` function is declared via a `type` synonym rather than a
+//! signature because there is no signature-*enforcement* pass at this layer;
+//! what it pins is that the `?->` encoding and a plain `option` domain are
+//! the same type — the "one consistent optional-arg model".
 
 use rustyfi_backend::{FontKey, FontMetrics, Length};
 use rustyfi_lang::value::Value;
@@ -62,12 +57,10 @@ fn int(src: &str) -> i64 {
 // ============================================================================
 // 1. An inline command with an optional argument: `?:` supplied vs `?*`
 //    omitted, both parsed via `CmdTail::Args`'s leading-`AppArg` grammar.
-// `name`'s def-site `?:` marker (Gap 4,
-//    gaps.md`) additionally registers `\greet`'s leading-optional-arity as
-//    1 (`leading_optional_count`), enabling the marker-less bare-call
-//    padding test below — it changes nothing for the explicit `?:`/`?*`
-//    call sites already exercised here (arity only matters for a call that
-//    supplies NO marker at all).
+//    `name`'s def-site `?:` marker additionally registers
+//    `\greet`'s leading-optional arity as 1 (`leading_optional_count`),
+//    which only matters for a call supplying NO marker at all — see the
+//    marker-less bare-call test below.
 // ============================================================================
 
 const GREET_CMD: &str = "let-inline ctx \\greet ?:name =
@@ -82,11 +75,9 @@ in
 
 #[test]
 fn inline_command_optional_arg_supplied_and_omitted_typecheck_and_evaluate() {
-    // Supplied (`?:(1)`) takes the `Some` branch (longer text); omitted
-    // (`?*`) takes the `None` branch (shorter text) — both are well-typed
-    // (the command's inferred `name` domain is `int option`, peeled by
-    // `command_scheme` into `CmdArgType { optional: true, ty: int }`) and
-    // both evaluate to `inline-boxes` with observably different widths.
+    // Both call sites are well-typed: the command's inferred `name` domain
+    // is `int option`, peeled by `command_scheme` into
+    // `CmdArgType { optional: true, ty: int }`.
     let src = format!(
         "{GREET_CMD}\
          let base = get-initial-context 200pt (command \\math) in
@@ -117,7 +108,7 @@ fn inline_command_with_only_an_omission_marker_still_evaluates() {
     assert_eq!(int(&src), 1);
 }
 
-/// Gap 4: a command call that leaves its leading `?:`-marked optional
+/// A command call that leaves its leading `?:`-marked optional
 /// slot completely unmarked — `{ \greet; }`, `CmdTail::Semi` with zero
 /// `AppArg`s at all — must auto-pad a `None` for it (`cmd_args`'s
 /// `leading` param, fed by `\greet`'s registered `optional_arity` of 1)
@@ -125,9 +116,7 @@ fn inline_command_with_only_an_omission_marker_still_evaluates() {
 #[test]
 fn inline_command_marker_less_bare_call_pads_the_same_as_explicit_omission() {
     // `==`/`>'` aren't polymorphic over `length` in this language, so the
-    // two widths are returned as a tuple and compared in Rust (same style
-    // as `math_package.rs`'s `gap2_pull_in_scripts_resolver_receives_the_
-    // actual_scripts`).
+    // two widths are returned as a tuple and compared in Rust.
     let src = format!(
         "{GREET_CMD}\
          let base = get-initial-context 200pt (command \\math) in

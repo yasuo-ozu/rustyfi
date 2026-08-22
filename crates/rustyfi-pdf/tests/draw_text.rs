@@ -1,4 +1,4 @@
-//! Integration tests for `draw-text` glyph emission (roadmap C1):
+//! Integration tests for `draw-text` glyph emission:
 //! `GraphicsElem::Text` re-enters each PDF writer's own per-box `emit_box`
 //! at box-local coordinates, threaded through `place_graphics`'s
 //! `NestedEmitter` callback (`crates/rustyfi-pdf/src/lib.rs`). Base-14
@@ -122,7 +122,7 @@ fn base14_draw_text_emits_td_tj_inside_the_boxs_q_cm_q() {
     );
 
     // Everything from the `cm` onward: the fill, then the text run, in that
-    // order (z-order: fill painted first, text drawn on top).
+    // order.
     let after_cm = span_after(&hay, &expected_cm);
     let fill_pos = after_cm.find("f*").expect("fill op");
     let bt_pos = after_cm.find("BT").expect("BT (text run)");
@@ -181,12 +181,8 @@ fn base14_draw_text_on_an_empty_run_emits_no_text_operators() {
     assert!(!hay.contains("BT"), "empty Text run should emit no BT:\n{hay}");
 }
 
-// ============================================================================
-// CID writer (`render_pdf_ttf`): text extraction through `pdftotext`, since
-// an Identity-H glyph run's `Tj` operand is raw big-endian glyph IDs, not
-// readable ASCII. Skips gracefully (mirrors `tests/ttf.rs`) when no
-// TrueType font or `pdftotext` is available on this machine.
-// ============================================================================
+// CID writer (`render_pdf_ttf`): skips gracefully (mirrors `tests/ttf.rs`)
+// when no TrueType font or `pdftotext` is available on this machine.
 
 fn find_regular_font() -> Option<PathBuf> {
     if let Ok(output) = Command::new("fc-match").args(["--format=%{file}", "DejaVuSans"]).output() {
@@ -295,13 +291,10 @@ fn cid_draw_text_run_survives_pdftotext_extraction() {
     );
 }
 
-// ============================================================================
-// Regression: a Fill/Stroke-only graphics box (no Text element) produces a
-// byte-identical content stream to before this slice — `tests/graphics.rs`
-// already pins this exactly; this is a second, independent witness that the
-// `place_graphics` signature change (adding `NestedEmitter`) is behavior-
-// neutral for existing (Text-free) documents.
-// ============================================================================
+// Regression: a Fill/Stroke-only graphics box (no Text element) must render
+// exactly as `tests/graphics.rs` already pins it — a second, independent
+// witness that `place_graphics`'s `NestedEmitter` parameter is
+// behavior-neutral for Text-free documents.
 
 #[test]
 fn a_text_free_graphics_box_is_unaffected_by_the_nested_emitter_plumbing() {
@@ -330,7 +323,6 @@ fn a_text_free_graphics_box_is_unaffected_by_the_nested_emitter_plumbing() {
     assert!(hay.contains("f*"));
 }
 
-// ============================================================================
 // A `draw-text` run's `contents` can carry a `PureHorzBox::Image` (its
 // `inline-boxes` argument is arbitrary `read-inline`d content, so it can
 // embed a `use-image-by-width` box). `used_images`'s recursive scan
@@ -338,7 +330,6 @@ fn a_text_free_graphics_box_is_unaffected_by_the_nested_emitter_plumbing() {
 // run — the same nested-content class as `Frame`/`Tabular`/`EmbeddedBlock`
 // — or the writer never registers the `/XObject` the content stream's `Do`
 // operator then dangles on.
-// ============================================================================
 
 #[test]
 fn an_image_nested_inside_a_draw_text_run_gets_its_xobject_registered() {
@@ -383,9 +374,6 @@ fn an_image_nested_inside_a_draw_text_run_gets_its_xobject_registered() {
     let bytes = rustyfi_pdf::render_pdf(&geometry, std::slice::from_ref(&page), &[image])
         .expect("PDF rendering must succeed");
     let hay = String::from_utf8_lossy(&bytes);
-    // The page's `/XObject` resource dictionary must list the image (proving
-    // `used_images` found it through the `Text` run, not just skipped it),
-    // and the content stream must place it (`Do`).
     assert!(hay.contains("/Im0"), "expected the image's XObject to be registered:\n{hay}");
     assert!(hay.contains("Do"), "expected a Do operator placing the image:\n{hay}");
 }

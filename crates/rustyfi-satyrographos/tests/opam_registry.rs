@@ -62,7 +62,6 @@ fn opts(index: &PathBuf) -> sg::RegistryOptions {
 
 #[test]
 fn a_library_name_resolves_through_the_satysfi_prefix() {
-    // Satyrographos publishes library `xpath` as package `satysfi-xpath`.
     let dir = tmp("prefix");
     opam_index(&dir);
     let resolved = sg::ops::registry_install::resolve("xpath", None, &opts(&dir), None)
@@ -77,7 +76,6 @@ fn a_library_name_resolves_through_the_satysfi_prefix() {
 
 #[test]
 fn search_skips_entries_it_cannot_install() {
-    // `conf-yarn` has no source; one such entry must not sink the search.
     let dir = tmp("search");
     opam_index(&dir);
     let hits = sg::search(&["xpath"], &opts(&dir), None).expect("search");
@@ -91,11 +89,9 @@ fn search_skips_entries_it_cannot_install() {
 
 #[test]
 fn search_result_name_is_what_install_accepts() {
-    // Copying a `search` hit's `name` straight into `install` must actually
-    // work: `search` used to print the registry's raw opam id
-    // (`satysfi-xpath`), which `install` also happens to accept, but is not
-    // the name a user reaches for anywhere else (`@require:`, a `Satyristes`
-    // dependency entry) — the two commands must agree on ONE name.
+    // The registry's raw opam id (`satysfi-xpath`) is not the name a user
+    // reaches for elsewhere (`@require:`, a `Satyristes` entry) — search and
+    // install must agree on one name.
     let dir = tmp("roundtrip");
     opam_index(&dir);
     let hits = sg::search(&["xpath"], &opts(&dir), None).expect("search");

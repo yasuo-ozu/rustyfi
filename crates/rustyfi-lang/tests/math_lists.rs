@@ -1,9 +1,7 @@
-//! End-to-end acceptance coverage for Gap 3: `|`-separated math lists `${| a
+//! End-to-end acceptance coverage for `|`-separated math lists `${| a
 //! | b |}`. Upstream desugars a LEADING `|` in-grammar to an ordinary list
 //! literal of `math` values (`mathblock`, parser.mly:1059-1066) — this is a
-//! `math list` LITERAL, not a matrix/grid. Pure-pipeline `run`/`int` helpers
-//! copied from `optional_args.rs` (per that file's own copy-not-share
-//! convention, since test harness files are intentionally standalone).
+//! `math list` LITERAL, not a matrix/grid.
 
 use rustyfi_backend::{FontKey, FontMetrics, Length};
 use rustyfi_lang::value::Value;
@@ -59,10 +57,6 @@ fn assert_compile_error_contains(src: &str, needle: &str) {
     }
 }
 
-// ============================================================================
-// 1. `${|a|b|}` is a 2-elem math list.
-// ============================================================================
-
 #[test]
 fn leading_sep_math_list_has_two_elements() {
     let src = "match ${| a | b |} with
@@ -70,10 +64,6 @@ fn leading_sep_math_list_has_two_elements() {
   | _ -> 0";
     assert_eq!(int(src), 1);
 }
-
-// ============================================================================
-// 2. Degenerate list-mode shapes.
-// ============================================================================
 
 #[test]
 fn empty_bars_is_the_empty_list() {
@@ -91,15 +81,9 @@ fn double_bar_is_one_empty_cell() {
     assert_eq!(int(src), 1);
 }
 
-// ============================================================================
-// 3. Rejections.
-// ============================================================================
-
 #[test]
 fn non_leading_sep_is_rejected() {
-    // Not list mode (no leading `|`): the interior `|` hits `math_bot`'s
-    // upgraded `Sep` error, which mentions both "starts with '|'" and
-    // "mid-formula".
+    // Interior `|` with no leading `|` hits `math_bot`'s upgraded `Sep` error.
     assert_compile_error_contains("${ a | b }", "starts with '|'");
     assert_compile_error_contains("${ a | b }", "mid-formula");
 }
@@ -124,12 +108,7 @@ fn math_list_cannot_be_embedded_in_inline_text() {
     assert_compile_error_contains("{ text ${| a |} }", "cannot be embedded");
 }
 
-// ============================================================================
-// 5. Round-trip smoke (parse-only; full token round-trip lives in
-//    `rustyfi-syntax`'s own `roundtrip.rs`) — proves this pipeline's parser
-//    accepts the same source `assert_roundtrip` covers.
-// ============================================================================
-
+// Parse-only smoke; full token round-trip lives in rustyfi-syntax's roundtrip.rs.
 #[test]
 fn math_list_sources_parse() {
     rustyfi_syntax::parse_file("${| a | b |}").expect("${| a | b |} should parse");

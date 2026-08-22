@@ -1,7 +1,7 @@
 % The 0.0.6-syntax twin of v01-minimal.saty (rustyfi-lang/tests/v01_slice1.rs
 % — semantic-equivalence proof): same content, spelled with 0.0.6's
-% `let-rec`/`let-mutable`/`;`-lists/no-`end`-match surface. The 2b binds the
-% v01 library declares (type/val rec/(+++)) live in this document's own
+% `let-rec`/`let-mutable`/`;`-lists/no-`end`-match surface. The extra bindings
+% the v01 library declares (type/val rec/(+++)) live in this document's own
 % prelude here, since stdja-mini stays frozen.
 
 @require: stdja-mini

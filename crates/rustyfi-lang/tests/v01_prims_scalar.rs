@@ -1,10 +1,9 @@
-//! L5a (`…/tmp/prim-retype-sweep.md` §4.1): the scalar/string/IO non-math
-//! primitive slice — bitwise ops, Unicode string ops, `read-file`,
-//! `register-document-information`, the `get-initial-text-info` R1 fork,
-//! and the bare-constant audit. Harness: direct `Interp::apply` chains
-//! against `base_env`/`base_env_with_version` (the `font_scheme.rs`/
-//! `images.rs` pattern) — a full compile is overkill for pure-eval
-//! primitives with no context/layout dependency.
+//! the scalar/string/IO non-math primitives — bitwise ops,
+//! Unicode string ops, `read-file`, `register-document-information`, the
+//! `get-initial-text-info` fork, and the bare-constant audit. Harness:
+//! direct `Interp::apply` chains against `base_env`/`base_env_with_version`
+//! (the `font_scheme.rs`/`images.rs` pattern) — a full compile is overkill
+//! for pure-eval primitives with no context/layout dependency.
 
 use rustyfi_backend::{Context, DocInfo, FontKey, FontMetrics, HyphenLang, Length};
 use rustyfi_lang::eval::Interp;
@@ -95,7 +94,7 @@ fn as_string_list(v: Value) -> Vec<String> {
 }
 
 // ============================================================================
-// 1. Bitwise ops (A1-A6)
+// 1. Bitwise ops
 // ============================================================================
 
 #[test]
@@ -171,7 +170,7 @@ fn bitwise_ops_evaluate() {
 }
 
 // ============================================================================
-// 2/3. Unicode string ops (A7-A9)
+// 2/3. Unicode string ops
 // ============================================================================
 
 #[test]
@@ -267,7 +266,7 @@ fn grapheme_split_uax29() {
 }
 
 // ============================================================================
-// 4. `read-file` (A10)
+// 4. `read-file`
 // ============================================================================
 
 #[test]
@@ -319,7 +318,7 @@ fn read_file_reads_lines() {
 }
 
 // ============================================================================
-// 5. `register-document-information` (A11)
+// 5. `register-document-information`
 // ============================================================================
 
 fn doc_info_record(title: Value, subject: Value, author: Value, keywords: Vec<&str>) -> Value {
@@ -389,7 +388,7 @@ fn register_document_information_registers() {
 }
 
 // ============================================================================
-// 6. `get-initial-text-info` — the R1 fork
+// 6. `get-initial-text-info` — the version fork
 // ============================================================================
 
 #[test]
@@ -496,7 +495,7 @@ fn added_prims_gate_by_version() {
 }
 
 // ============================================================================
-// 9. The bare-constant audit (§1.4)
+// 9. The bare-constant audit
 // ============================================================================
 
 #[test]
@@ -517,11 +516,10 @@ fn bare_constants_bound_under_v01() {
 }
 
 // ============================================================================
-// 10. G6 (`…/tmp/g6-g7-standins.md` §5.2) — `load-unicode-char-database`/
-// `set-unicode-char-database` are still ACCEPT-AND-RETURN stand-ins (never
-// a `stringify-math`-style hard error), `here` resolves to the empty
-// string, and `load-hyphenation-dictionary`/`set-hyphenation-dictionary`
-// are now REAL (S1) — no longer no-ops.
+// 10. `load-unicode-char-database`/`set-unicode-char-database` are
+// ACCEPT-AND-RETURN stand-ins (never a `stringify-math`-style hard error),
+// `here` resolves to the empty string, and `load-hyphenation-dictionary`/
+// `set-hyphenation-dictionary` are REAL, not no-ops.
 // ============================================================================
 
 fn as_context(v: Value) -> Context {
@@ -642,16 +640,14 @@ fn set_hyphenation_dictionary_is_real_but_set_unicode_char_database_is_still_a_n
     ));
     // Upstream loads `english.satysfi-hyph` into `default_hyphen_dictionary` at
     // startup and gives it to every initial context (`primitives.cppo.ml:500,607`),
-    // so English is the default here too. (This asserted `None` while the port
-    // held hyphenation opt-in behind the D4 byte-identity gate.)
+    // so English is the default here too.
     assert_eq!(
         ctx0.hyphen_dictionary,
         Some(rustyfi_backend::HyphenLang::EnglishUS),
         "Context::initial must default to English, matching upstream"
     );
 
-    // `set-hyphenation-dictionary` (S1) is now REAL: it writes
-    // `Context::hyphen_dictionary`, no longer a no-op.
+    // `set-hyphenation-dictionary` writes `Context::hyphen_dictionary`.
     let ctx1 = as_context(call(
         &mut interp,
         &env,
@@ -671,8 +667,7 @@ fn set_hyphenation_dictionary_is_real_but_set_unicode_char_database_is_still_a_n
         "every other field must be unchanged"
     );
 
-    // `set-unicode-char-database` is untouched by this slice — still a
-    // no-op.
+    // `set-unicode-char-database`, by contrast, is still a no-op.
     let ctx2 = as_context(call(
         &mut interp,
         &env,

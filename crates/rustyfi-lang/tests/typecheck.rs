@@ -1,4 +1,4 @@
-//! End-to-end coverage for the phase-3 type inferencer: real SATySFi source
+//! End-to-end coverage for the type inferencer: real SATySFi source
 //! text run through `parse_file` -> `elaborate::elaborate_program` ->
 //! `typecheck::typecheck`, exercising every typing rule against both
 //! well-typed and ill-typed programs.
@@ -29,9 +29,6 @@ fn assert_type_error(src: &str) -> CompileError {
     }
 }
 
-// ============================================================================
-// Basics: literals, arithmetic, if/tuple.
-// ============================================================================
 
 #[test]
 fn arithmetic_basics_typecheck() {
@@ -48,9 +45,6 @@ fn if_branches_must_unify() {
     assert_type_error("if true then 1 else false");
 }
 
-// ============================================================================
-// Let-polymorphism vs. lambda-bound monomorphism.
-// ============================================================================
 
 #[test]
 fn polymorphic_id_used_at_two_types() {
@@ -63,9 +57,8 @@ fn polymorphic_id_used_at_two_types() {
 
 #[test]
 fn lambda_bound_argument_rejects_polymorphic_use() {
-    // `f` is monomorphic inside the lambda body — unlike a `let`-bound name,
-    // it is never generalized, so using it at two different types is a
-    // type error (classic HM lambda-vs-let distinction).
+    // Lambda-bound `f` is monomorphic (never generalized like `let`), so
+    // using it at two types is a type error — the classic HM distinction.
     assert_type_error("fun f -> (f 1, f true)");
 }
 
@@ -79,9 +72,6 @@ fn let_rec_mutual_recursion_typechecks() {
     );
 }
 
-// ============================================================================
-// Lists.
-// ============================================================================
 
 #[test]
 fn homogeneous_list_typechecks() {
@@ -93,9 +83,6 @@ fn list_with_mixed_element_types_is_rejected() {
     assert_type_error("[1; true]");
 }
 
-// ============================================================================
-// Records: open-row polymorphism via field access, and missing labels.
-// ============================================================================
 
 #[test]
 fn open_row_function_applies_to_a_record_with_extra_fields() {
@@ -107,10 +94,6 @@ fn record_missing_a_required_label_is_rejected() {
     assert_type_error("(fun r -> r#a) (| b = 1 |)");
 }
 
-// ============================================================================
-// Constructors: built-in `option`, and a user `type` declaration surfaced by
-// `elaborate::elaborate_program`.
-// ============================================================================
 
 #[test]
 fn builtin_option_ctor_round_trip() {
@@ -141,11 +124,8 @@ fn user_variant_payload_type_mismatch_is_rejected() {
     );
 }
 
-// ============================================================================
-// `color` built-in variant (frontend-completion.md §Slice1-B): `Gray of
-// float | RGB of (float*float*float) | CMYK of (float*float*float*float)` —
-// no base type, no primitive, ordinary `Ast::Ctor`/`Value::Ctor` plumbing.
-// ============================================================================
+// `color` built-in variant — no base type, no primitive, just
+// ordinary `Ast::Ctor`/`Value::Ctor` plumbing.
 
 #[test]
 fn color_variant_ctors_typecheck() {
@@ -175,9 +155,6 @@ fn color_variant_wrong_ctor_arity_is_rejected() {
     assert_type_error("Gray (0.1, 0.2, 0.3)");
 }
 
-// ============================================================================
-// Match: arm-type joining and guards.
-// ============================================================================
 
 #[test]
 fn match_arms_join_to_a_common_type() {
@@ -206,10 +183,6 @@ fn match_guard_must_be_boolean() {
     );
 }
 
-// ============================================================================
-// Mutable references: the value restriction (no generalization), overwrite,
-// while, and sequencing (`before`).
-// ============================================================================
 
 #[test]
 fn overwrite_well_typed_case() {
@@ -231,13 +204,10 @@ fn overwrite_type_mismatch_is_rejected() {
 
 #[test]
 fn mutable_ref_does_not_generalize_across_overwrites() {
-    // The classic ML "value restriction" leak: if `let-mutable`'s binding
-    // were (wrongly) generalized the way an ordinary `let` is, `r`'s
-    // element type could be instantiated to `int` at the first overwrite
-    // and, independently, to `bool` at the second — smuggling both through
-    // the very same cell. It must instead stay monomorphic for the whole
-    // body, so the second overwrite's `bool` conflicts with the first's
-    // `int`.
+    // The classic ML "value restriction" leak: if `let-mutable` were
+    // (wrongly) generalized like `let`, `r`'s element type could be
+    // instantiated to `int` at one overwrite and `bool` at the other,
+    // smuggling both through the same cell — it must stay monomorphic.
     assert_type_error(
         "let-mutable r <- []
          in
@@ -269,16 +239,9 @@ fn sequential_requires_a_unit_left_hand_side() {
     assert_type_error("1 before 2");
 }
 
-// ============================================================================
-// Inline/block commands and itemize.
-// ============================================================================
 
-// `\emph`/`+p` are no longer built-in primitives as of phase 4 (they moved
-// to the real `stdja-mini` stdlib package, loaded through the multi-file
-// loader) — these tests define local stand-ins with the same shape
-// (`context -> inline-text -> inline-boxes` / `.. -> block-boxes`) so the
-// typechecking rules they exercise (command-argument unification) are
-// unaffected by that move.
+// `\emph`/`+p` live in the `stdja-mini` stdlib package, not the primitive
+// table, so these tests use local stand-ins of the same shape instead.
 
 #[test]
 fn inline_command_with_matching_argument_type_typechecks() {
@@ -291,9 +254,8 @@ fn inline_command_with_matching_argument_type_typechecks() {
 
 #[test]
 fn inline_command_argument_type_mismatch_is_rejected() {
-    // `\emph : context -> inline-text -> inline-boxes` — passing a program-
-    // mode `int` (via the active-mode `(...)`  escape) instead of
-    // inline-text is a type error.
+    // `\emph : context -> inline-text -> inline-boxes` — the active-mode
+    // `(...)` escape passes a program-mode `int` where inline-text is expected.
     assert_type_error(
         "let-inline ctx \\emph it = read-inline ctx it
          in
@@ -303,10 +265,8 @@ fn inline_command_argument_type_mismatch_is_rejected() {
 
 #[test]
 fn itemize_value_is_not_inline_text() {
-    // `{ * a }` elaborates to an `itemize` constructor value, not plain
-    // inline-text — applying `+p` (which expects `inline-text`) to it must
-    // be rejected, confirming itemize really does get its own nominal type
-    // rather than silently degrading to `inline-text`.
+    // `{ * a }` elaborates to an `itemize` value, not inline-text — `+p`
+    // (which expects inline-text) applied to it must be rejected.
     assert_type_error(
         "let-block ctx +p it = line-break true true ctx (read-inline ctx it)
          in
@@ -314,9 +274,6 @@ fn itemize_value_is_not_inline_text() {
     );
 }
 
-// ============================================================================
-// Display: spot-check that error messages render both types involved.
-// ============================================================================
 
 #[test]
 fn display_shows_both_types_for_an_arithmetic_mismatch() {
@@ -342,20 +299,17 @@ fn display_includes_a_span_for_an_overwrite_mismatch() {
          x <- true",
     );
     let msg = err.to_string();
-    // `Span`'s `Display` always renders as "line N, characters A-B" (or the
-    // two-line variant) — see `rustyfi_syntax::span::Span`.
+    // `Span::Display` renders "line N, characters A-B" (or the two-line form).
     assert!(
         msg.contains("line"),
         "message should include a source location: {msg}"
     );
 }
 
-// ============================================================================
 // Sanity: the hand-kept `typecheck::PRIMITIVE_NAMES` list (needed because
-// `prim_types::primitive_type` has no way to enumerate its own domain, and
+// `prim_types::primitive_type` can't enumerate its own domain, and
 // `primitives.rs`'s `PRIM_DEFS` table is private) stays in sync with
-// `primitives.rs`'s actual `prims!` registration table.
-// ============================================================================
+// `primitives.rs`'s `prims!` registration table.
 
 #[test]
 fn primitive_names_are_cross_checked_against_primitives_source() {
@@ -387,9 +341,8 @@ fn primitive_names_are_cross_checked_against_primitives_source() {
          `quotation` were missing)"
     );
     for name in typecheck::PRIMITIVE_NAMES {
-        // Escape backslashes the way they'd actually appear in Rust source
-        // text (e.g. the value `\emph` — one backslash — is spelled
-        // `"\\emph"` — two backslashes — in `primitives.rs`'s own source).
+        // Escape backslashes as they appear in Rust source text (e.g. one
+        // backslash in `\emph` becomes two in `primitives.rs`'s `"\\emph"`).
         let escaped = name.replace('\\', "\\\\");
         let quoted = format!("\"{escaped}\"");
         assert!(
@@ -400,22 +353,11 @@ fn primitive_names_are_cross_checked_against_primitives_source() {
     }
 }
 
-// ============================================================================
-// Phase 4/2: user-defined `let-inline`/`let-block` bindings get real command
-// types (`MonoType::InlineCmd`/`BlockCmd`, `Checker::command_scheme`) rather
-// than being unified as plain "context-curried" functions — and a command
-// application (`IText::Cmd`/`BText::Cmd`) is checked against that command
-// type's argument list directly (`Checker::check_cmd_args`): exact arity,
-// then one unification per argument.
-//
-// (Polymorphic commands are intentionally not exercised here: every command
-// argument this milestone's grammar can produce is a mandatory, monomorphic-
-// enough type by construction — `inline-text`/`block-text` literals, or a
-// program-mode expression whose own type is unrelated to `command_scheme`'s
-// generalization step — so there is no case among these rules that actually
-// needs a *quantified* command-argument type variable to exercise; nothing
-// here would tell "poly command" apart from "any other command".)
-// ============================================================================
+// User-defined `let-inline`/`let-block` bindings get real command
+// types (`MonoType::InlineCmd`/`BlockCmd`, `Checker::command_scheme`), and a
+// command application is checked via `Checker::check_cmd_args`: exact arity,
+// then one unification per argument. Polymorphic commands aren't exercised
+// here — nothing in this port's grammar can tell one apart from another.
 
 #[test]
 fn user_defined_inline_command_gets_an_inline_cmd_type_and_applies() {
@@ -438,11 +380,8 @@ fn user_defined_block_command_gets_a_block_cmd_type_and_applies() {
 
 #[test]
 fn lightweight_ctx_less_inline_form_still_yields_an_inline_cmd_type() {
-    // The ctx-less form elaborates to `Lambda(%context, Lambda(it,
-    // read-inline %context it))` (`elaborate_let_inline`'s `None` branch) —
-    // structurally just another `context -> inline-text -> inline-boxes`
-    // function, so it must be picked up by the very same `command_scheme`
-    // peeling as the explicit-context form above.
+    // Ctx-less form elaborates to `Lambda(%context, Lambda(it, read-inline
+    // %context it))` (`elaborate_let_inline`'s `None` branch) — same shape.
     assert_well_typed(
         "let-inline \\whisper it = it
          in
@@ -494,11 +433,8 @@ fn block_command_called_with_wrong_arity_is_rejected() {
 
 #[test]
 fn inline_command_argument_type_mismatch_names_the_argument_position() {
-    // A custom command (rather than the built-in `\emph`) whose single
-    // parameter is `inline-text`, called with a program-mode `int` instead
-    // (via the active-mode `(...)` escape) — the message should name the
-    // argument position and both types involved, not just "some unify
-    // failed somewhere".
+    // Distinct from `\emph` (covered below via the command path): the
+    // message should name the argument position and both types.
     let err = assert_type_error(
         "let-inline ctx \\only it = read-inline ctx it
          in
@@ -522,16 +458,9 @@ fn inline_command_argument_type_mismatch_names_the_argument_position() {
 
 #[test]
 fn emph_given_an_int_is_still_rejected_via_the_command_path() {
-    // Regression: `\emph`'s signature moved from a plain `context ->
-    // inline-text -> inline-boxes` function (unified against `IText::Cmd`'s
-    // whole application) to `MonoType::InlineCmd([inline-text])` (checked
-    // argument-by-argument by `check_cmd_args`) — the same ill-typed program
-    // that `inline_command_argument_type_mismatch_is_rejected` already
-    // covers must still be rejected, now via the new code path, with a
-    // message in the new shape. (`\emph` itself moved to the `stdja-mini`
-    // stdlib package in phase 4 — see this file's comment above
-    // `inline_command_with_matching_argument_type_typechecks` — so it's
-    // locally re-declared here with the same shape.)
+    // Regression: `\emph` is checked as `MonoType::InlineCmd([inline-text])`
+    // argument-by-argument (`check_cmd_args`), not by unifying the whole
+    // `IText::Cmd` application against one plain function type.
     let err = assert_type_error(
         "let-inline ctx \\emph it = read-inline ctx it
          in
@@ -570,10 +499,8 @@ fn block_command_argument_type_mismatch_is_rejected() {
 
 #[test]
 fn inline_command_binding_not_context_headed_is_rejected() {
-    // `\bad`'s first (and only) lambda-bound parameter is used as an `int`
-    // (via `+`) rather than passed through to any context-consuming
-    // primitive, so it can never unify with `context` — the binding itself
-    // must be rejected, independent of whether `\bad` is ever applied.
+    // `ctx` is used as an `int` (via `+`), never passed to anything
+    // context-consuming, so it can't unify with `context`.
     assert_type_error(
         "let-inline ctx \\bad = ctx + 1
          in
@@ -583,9 +510,7 @@ fn inline_command_binding_not_context_headed_is_rejected() {
 
 #[test]
 fn inline_command_binding_with_wrong_result_type_is_rejected() {
-    // `\bad`'s body is a bare `int`, never routed through `read-inline` (or
-    // anything else that would force `inline-boxes`) — the peeled result
-    // type can't unify with `inline-boxes`.
+    // Bare `int` body, never routed through anything forcing `inline-boxes`.
     assert_type_error(
         "let-inline ctx \\bad it = 4
          in
@@ -595,11 +520,8 @@ fn inline_command_binding_with_wrong_result_type_is_rejected() {
 
 #[test]
 fn module_exported_inline_command_via_open_still_applies() {
-    // `Helper.\shout` (bound by `export_alias` as `LetIn(\"M.\\shout\",
-    // Ast::Var(...), ..)`) and then `open`'s own alias-rebinding (another
-    // `Ast::Var`-valued `LetIn`) must both be *transparent* to the command
-    // type `command_scheme` already gave `\shout` at its original
-    // `let-inline` site — see `command_scheme`'s alias branch.
+    // `export_alias` and `open`'s rebinding are both `Ast::Var`-valued
+    // `LetIn`s that must stay transparent to `command_scheme`'s alias branch.
     assert_well_typed(
         "module Helper = struct
            let-inline ctx \\shout it = read-inline ctx it
@@ -613,9 +535,7 @@ fn module_exported_inline_command_via_open_still_applies() {
 
 #[test]
 fn module_qualified_inline_command_reference_has_a_command_type() {
-    // Same as above but via the qualified `M.\cmd` form directly, without an
-    // intervening `open` — exercises `export_alias`'s own `Ast::Var`-valued
-    // `LetIn` in isolation.
+    // Same as above via the qualified `M.\cmd` form, without `open`.
     assert_well_typed(
         "module Helper = struct
            let-inline ctx \\shout it = read-inline ctx it
@@ -625,19 +545,12 @@ fn module_qualified_inline_command_reference_has_a_command_type() {
     );
 }
 
-// ============================================================================
-// Slice 1: raster images. These only exercise typechecking — `load-image`
-// is never actually evaluated here, so no real file needs to exist on disk
-// (a runtime round trip against a real decoded PNG lives in
-// `crates/rustyfi-lang/tests/images.rs`).
-// ============================================================================
+// Raster images — typechecking only, `load-image` is never
+// evaluated (no file needs to exist on disk); the runtime round trip
+// against a real decoded PNG lives in `tests/images.rs`.
 
 #[test]
 fn image_primitives_typecheck_end_to_end() {
-    // `load-image : string -> image`, `use-image-by-width : image -> length
-    // -> inline-boxes` — chained together and used where `inline-boxes` is
-    // expected (a command argument), exactly like `use-image-by-width
-    // (load-image \`fig.png\`) 40pt` would appear in real source.
     assert_well_typed(
         "let-inline ctx \\fig it = use-image-by-width (load-image `fig.png`) 40pt
          in
@@ -645,18 +558,13 @@ fn image_primitives_typecheck_end_to_end() {
     );
 }
 
-// Slice 1 graphics primitives: no `@require`, no type synonyms (`point`
-// isn't parsed as a synonym yet — see the plan's §5) — just the seven new
-// prims' own signatures, exercised by inference alone, exactly the "minimal
-// self-contained module" the plan's acceptance criterion asks for.
-// ============================================================================
+// Graphics primitives: no `@require`, no type synonyms — `point`
+// isn't parsed as a synonym yet, just the seven new prims' own signatures.
 
 #[test]
 fn graphics_path_fill_stroke_typecheck() {
-    // `point = length * length` unifies against `start-path`/`line-to`'s
-    // `point` domain via plain tuple literals (no synonym needed); `fill`/
-    // `stroke` both consume the resulting `path` and the built-in `color`
-    // variant (`Gray`/`RGB`).
+    // `point = length * length` unifies via plain tuple literals (no
+    // synonym needed); `fill`/`stroke` consume the resulting `path`.
     assert_well_typed(
         "let p = close-with-line (line-to (1pt, 1pt) (start-path (0pt, 0pt))) in
          let g = fill (Gray(0.)) p in
@@ -666,9 +574,7 @@ fn graphics_path_fill_stroke_typecheck() {
 
 #[test]
 fn use_image_by_width_rejects_a_non_image_first_argument() {
-    // `image` is a real, distinct base type — passing an `int` where
-    // `use-image-by-width` expects the `image` `load-image` returns must be
-    // rejected, not silently accepted via some other type.
+    // `image` is a real, distinct base type, not an alias for anything else.
     let err = assert_type_error("use-image-by-width 3 40pt");
     let msg = err.to_string();
     assert!(
@@ -694,9 +600,7 @@ fn terminate_path_is_also_a_valid_path_source() {
 
 #[test]
 fn inline_graphics_callback_typechecks() {
-    // `(point -> graphics list)` — a function argument nested inside
-    // `inline-graphics`'s arrow chain; the callback here ignores its point
-    // argument and returns an empty list, exactly Slice 1's eager-callback
+    // `(point -> graphics list)` callback — the eager-callback
     // shortcut (see `prim_inline_graphics`'s doc comment).
     assert_well_typed("inline-graphics 1pt 1pt 1pt (fun pt -> [])");
 }
@@ -706,15 +610,10 @@ fn fill_rejects_a_non_color_first_argument() {
     assert_type_error("fill 1 (terminate-path (start-path (0pt, 0pt)))");
 }
 
-// ============================================================================
-// Slice 1: `tabular` + the `cell` variant — a self-contained
-// `\tabular`-shaped `let-inline` command, mirroring `tabular.satyh`'s real
-// `\tabular` (positional cell builders, no record/option front-end — that's
-// roadmap G) exercises `NormalCell`/`MultiCell`/`EmptyCell` inferring
-// `cell`, `cellssf cellf multif empty` inferring `(cell list) list`, and
-// `tabular … rulef` unifying `rulef` against `length list -> length list ->
-// graphics list`.
-// ============================================================================
+// `tabular` + the `cell` variant — a self-contained, `tabular.
+// satyh`-shaped `let-inline` command (positional cell builders; record/option
+// front-ends aren't exercised here) exercising `NormalCell`/`MultiCell`/
+// `EmptyCell` inferring `cell`, and `rulef` unifying against `graphics list`.
 
 const TABULAR_CMD: &str = "let-inline ctx \\tabular cellssf rulef =
        let pads = (5pt, 5pt, 2pt, 2pt) in
@@ -725,11 +624,8 @@ const TABULAR_CMD: &str = "let-inline ctx \\tabular cellssf rulef =
 
 #[test]
 fn tabular_command_shape_typechecks_end_to_end() {
-    // The trailing `;` closes the lexer's "active area" opened by `\tabular`
-    // once its last argument is a program-mode `(...)` value rather than a
-    // `{...}`/`<...>` text group (`cst.rs`'s `CmdTail::Args`'s doc comment);
-    // it is required here for exactly the same reason `\tabular(...)(...)`
-    // needs it in `table.satyh`/`tabular.satyh`'s real front-ends.
+    // Trailing `;` closes the lexer's "active area" opened by `\tabular`
+    // (`cst.rs`'s `CmdTail::Args` doc comment) — same as real front-ends.
     assert_well_typed(&format!(
         "{TABULAR_CMD}
          in
@@ -739,7 +635,6 @@ fn tabular_command_shape_typechecks_end_to_end() {
 
 #[test]
 fn tabular_rejects_a_rule_callback_with_the_wrong_result_type() {
-    // The rule callback must return `graphics list`, not `inline-boxes`.
     let err = assert_type_error(&format!(
         "{TABULAR_CMD}
          in
@@ -759,19 +654,12 @@ fn multi_cell_ctor_infers_the_cell_type() {
     );
 }
 
-// ============================================================================
-// Slice 1 hooks + cross-references — `hook-page-break`'s closure argument
-// receives a `page-break-info` closed record row (`{| page-number : int
-// |}`) with no nominal type needed, and
-// `register-cross-reference`/`get-cross-reference` round-trip through the
-// `string option` the built-in `option` variant provides.
-// ============================================================================
+// Hooks + cross-references — `hook-page-break`'s closure gets a
+// `page-break-info` closed record row with no nominal type needed;
+// `register`/`get-cross-reference` round-trip through `string option`.
 
 #[test]
 fn hook_page_break_closure_typechecks_against_the_pbinfo_record_row() {
-    // `#page-number` structurally unifies the lambda's `pbinfo` parameter
-    // against the closed row `hook-page-break` expects — no `tPBINFO`
-    // nominal type needed (the plan's §5 point).
     assert_well_typed(
         "hook-page-break (fun pbinfo pt -> register-cross-reference `p` (arabic pbinfo#page-number))",
     );
@@ -779,9 +667,7 @@ fn hook_page_break_closure_typechecks_against_the_pbinfo_record_row() {
 
 #[test]
 fn hook_page_break_rejects_a_closure_missing_the_page_number_field() {
-    // A closure that never uses `#page-number` still has to accept an
-    // argument shaped like a `page-break-info`; passing one that's used
-    // some other way entirely (here, as a `string`) must be rejected.
+    // Never uses `#page-number`, but still must be shaped like `page-break-info`.
     let err = assert_type_error(r#"hook-page-break (fun pbinfo pt -> string-length pbinfo)"#);
     let _ = err; // any type error is acceptable; message content isn't pinned.
 }
@@ -806,13 +692,9 @@ fn get_cross_reference_rejects_a_non_string_argument() {
     assert_type_error("get-cross-reference 3");
 }
 
-// ============================================================================
-// Slice 1: the real 4-arg `page-break` — `page-content-scheme` (`{|
-// text-origin : point; text-height : length |}`) and `page-parts` (`{|
-// header-origin; header-content; footer-origin; footer-content |}`) are
-// structural closed rows, same as `pbinfo` itself: no nominal scheme
-// type needed, just two ordinary `fun pbinfo -> record` closures.
-// ============================================================================
+// The real 4-arg `page-break` — `page-content-scheme` and
+// `page-parts` are structural closed rows, same as `pbinfo`: no nominal
+// scheme type needed, just two ordinary `fun pbinfo -> record` closures.
 
 #[test]
 fn page_break_typechecks_over_two_content_and_parts_scheme_closures() {
@@ -863,19 +745,13 @@ fn user_defined_paper_takes_a_length_pair() {
     );
 }
 
-// ============================================================================
-// gap 1: first-class command values `(command \cmd)` — elaborates to a
-// plain `Var` referencing the command's own `let-inline` binding, so it
-// infers exactly that binding's `InlineCmd` scheme
-// (`Checker::command_scheme`).
-// ============================================================================
+// First-class command values `(command \cmd)` elaborate to a plain
+// `Var` referencing the binding, inferring its `InlineCmd` scheme directly.
 
 #[test]
 fn command_value_typechecks_and_unifies_with_another_of_the_same_shape() {
-    // Two independently-defined, shape-identical inline commands: their
-    // `(command \cmd)` values must unify (both `InlineCmd([inline-text])`),
-    // proving `(command \cmd)` really does carry the command's own
-    // `MonoType`, not some untyped/opaque placeholder.
+    // Two shape-identical commands' `(command \cmd)` values must unify,
+    // proving the value carries the command's real `MonoType`.
     assert_well_typed(
         "let-inline ctx \\m it = read-inline ctx it
          let-inline ctx \\n it = read-inline ctx it
@@ -886,10 +762,8 @@ fn command_value_typechecks_and_unifies_with_another_of_the_same_shape() {
 
 #[test]
 fn command_value_of_mismatched_arity_is_rejected() {
-    // `\m` is `[inline-text] inline-cmd`, `\pair` is `[inline-text;
-    // inline-text] inline-cmd` — pinning that `(command \cmd)`'s type is
-    // the *specific* `InlineCmd` argument list, not some generic stand-in
-    // that would let any two commands unify.
+    // `\m` and `\pair` have different `InlineCmd` argument-list arities —
+    // pinning that `(command \cmd)`'s type isn't a generic stand-in.
     assert_type_error(
         "let-inline ctx \\m it = read-inline ctx it
          let-inline ctx \\pair a b = read-inline ctx a
@@ -900,8 +774,7 @@ fn command_value_of_mismatched_arity_is_rejected() {
 
 #[test]
 fn command_value_of_an_undefined_command_is_rejected() {
-    // `scoped_var`'s ordinary scope check fires for `Atomic::Command` too
-    // (elaboration-time, before typechecking ever runs).
+    // `scoped_var`'s scope check fires for `Atomic::Command` too (at elaboration).
     let file = rustyfi_syntax::parse_file("(command \\nonexistent)").unwrap();
     let env = primitives::base_env();
     let store = rustyfi_lang::symbol::SymbolStore::new();
@@ -921,14 +794,8 @@ fn get_standard_context_construct_typechecks_with_stand_in_bindings() {
     //     get-initial-context wid (command \math)
     //       |> set-code-text-command (command \code)
     //       |> ...
-    // using *locally*-defined stand-ins for `\math`/`\code`/
-    // `get-initial-context`/`set-code-text-command` (restoring the real
-    // `get-initial-context` primitive's `[math] inline-cmd` type lives in
-    // `prim_types.rs`, out of this wave's file boundary — a sibling agent
-    // owns that file concurrently; see `class-signature-lang-gaps.md`'s
-    // Slice 1 note on this exact risk). This still proves the *construct*
-    // end-to-end: `(command \cmd)` flowing into a `[…] inline-cmd`-typed
-    // parameter and back out through a pipe chain.
+    // using local stand-ins, proving `(command \cmd)` flows end-to-end into
+    // an `inline-cmd`-typed parameter and back out through a pipe chain.
     assert_well_typed(
         "let-inline ctx \\math m = inline-nil
          let-inline ctx \\code s = inline-nil

@@ -1,4 +1,4 @@
-//! Integration test for the Slice 1 graphics writer (`place_graphics`): a
+//! Integration test for the graphics writer (`place_graphics`): a
 //! page whose only content is a `PureHorzBox::Graphics` box (fill + stroke
 //! of a rectangle) renders to a PDF whose uncompressed content stream
 //! contains the expected path operators, with the box translated to its
@@ -70,8 +70,7 @@ fn graphics_box_renders_path_operators_into_the_content_stream() {
 
     let hay = String::from_utf8_lossy(&bytes);
 
-    // Path construction: move-to the subpath start, three line-tos tracing
-    // the rectangle, and `close_path` (`h`) on its own line (zero operands).
+    // `h` (close) takes zero operands, hence on its own line.
     for op in ["0 0 m", "20 0 l", "20 20 l", "0 20 l", "\nh\n"] {
         assert!(hay.contains(op), "content stream missing {op:?}:\n{hay}");
     }
@@ -94,14 +93,9 @@ fn graphics_box_renders_path_operators_into_the_content_stream() {
     );
 }
 
-// ============================================================================
-// L5b (prim-retype-sweep §3.3, §4.2 test 5): the `Group`/`Clip` container
-// arms `place_graphics` gained for 0.1's graphics-collection sweep. Never
-// reachable from a 0.0.6 program (no 0.0.6-visible prim constructs either
-// variant — see `GraphicsElem`'s doc comment); these are the tripwire that a
-// FUTURE 0.1 caller renders the right ops, exercised directly at the
-// `GraphicsElem` level exactly like the fixture above.
-// ============================================================================
+// `Group`/`Clip` — unreachable from a 0.0.6 program (see `GraphicsElem`'s
+// doc comment); a tripwire for a future 0.1 caller, exercised directly at the
+// `GraphicsElem` level.
 
 fn render_elems(elems: Vec<GraphicsElem>) -> String {
     let geometry = PageGeometry {

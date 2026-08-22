@@ -1,9 +1,9 @@
-//! `Satyristes.lock` — the phase-2 lockfile (plan §5.3): mirrors
-//! `Satyristes` 1:1, but with every entry's `source` pinned to a
-//! concrete, content-addressed form (`sha256` of the resolved source tree)
-//! plus a `resolved_at` timestamp. `reconcile.rs` diffs a fresh source hash
-//! against the recorded one to decide whether an entry's files need
-//! re-materialising or can be left untouched.
+//! `Satyristes.lock` — the phase-2 lockfile: mirrors `Satyristes` 1:1, but
+//! with every entry's `source` pinned to a concrete, content-addressed form
+//! (`sha256` of the resolved source tree) plus a `resolved_at` timestamp.
+//! `reconcile.rs` diffs a fresh source hash against the recorded one to
+//! decide whether an entry's files need re-materialising or can be left
+//! untouched.
 
 use std::path::{Path, PathBuf};
 
@@ -29,7 +29,7 @@ pub struct Lockfile {
 ///
 /// For a `{ path = … }` source, `sha256` is a deterministic digest over the
 /// source tree ([`util::sha256_tree`](crate::util::sha256_tree)) and `url` is
-/// `None`. For a `{ registry = … }` source (phase 3, plan §5.4), the entry
+/// `None`. For a `{ registry = … }` source (phase 3), the entry
 /// pins the concrete resolved *(version, url, sha256)* — `source.version`
 /// carries the resolved version, `url` the tarball URL, and `sha256` the
 /// verified tarball digest — so a later reconcile can re-materialise it
@@ -56,7 +56,7 @@ impl Lockfile {
         self.libraries.iter().find(|e| e.name == name)
     }
 
-    /// A stable content fingerprint of the resolved graph (design §5.3, C3):
+    /// A stable content fingerprint of the resolved graph (C3):
     /// a SHA-256 over every entry's `(name, resolved version or source path,
     /// sha256)` triple, sorted by name so the digest does not depend on the
     /// lockfile's on-disk `[[library]]` order (which the phase-7c solver's

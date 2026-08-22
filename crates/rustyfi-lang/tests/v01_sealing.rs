@@ -1,33 +1,29 @@
-//! Sub-slice 2d-1 (`…/tmp/slice2d-sealing.md` §4.5): the end-to-end sealing
-//! test suite, driven through the REAL public pipeline
-//! (`rustyfi_lang::compile_document_v1`, the `LoadedFile`/`LoadedCst`
+//! The end-to-end sealing test suite. Driven through the
+//! public `rustyfi_lang::compile_document_v1` (the `LoadedFile`/`LoadedCst`
 //! gate-bypass shape `v01_modules.rs`/`v01_slice1.rs` already use) rather
-//! than `v1::module_check::check_program` directly — that entry point is
-//! deliberately `pub(crate)` (spec §4.3-D), so an external integration test
-//! can only reach it through the crate's public surface.
+//! than `v1::module_check::check_program`, which is deliberately
+//! `pub(crate)` and so unreachable from an integration test.
 //!
 //! **The `NotADocument` trick.** `compile_document_v1` runs the FULL
 //! pipeline (elaborate → `check_program` → compile → eval), and eval
-//! requires the entry expression to actually produce a `Value::Document` —
-//! but every ACCEPT-case fixture below is a plain expression (`M.x + 1`,
-//! `!M.r`, …), not a real SATySFi document envelope (building one needs a
-//! whole `page-break`-based `document` helper the sealed-`val`-only 2d-1
-//! surface can't even declare, §3.2). Since type-checking happens BEFORE
-//! evaluation, a type error always surfaces as `CompileError::Type`
-//! regardless of what the body would have evaluated to; a program that
-//! type-checks but isn't a document surfaces as `CompileError::
-//! NotADocument` instead — a value we can only ever reach if `check_program`
+//! requires the entry expression to produce a `Value::Document` — but every
+//! ACCEPT-case fixture below is a plain expression (`M.x + 1`, `!M.r`, …),
+//! not a document envelope (building one needs a whole `page-break`-based
+//! `document` helper the sealed-`val`-only surface cannot declare).
+//! Type-checking happens BEFORE evaluation, so a type error always surfaces
+//! as `CompileError::Type` regardless of what the body would have evaluated
+//! to; a program that type-checks but isn't a document surfaces as
+//! `CompileError::NotADocument`, which is only reachable if `check_program`
 //! already accepted the program. `assert_accepts` treats both `Ok` and
 //! `NotADocument` as "type-checking accepted"; `assert_type_error` demands
 //! exactly `CompileError::Type` and returns its message for content checks.
 //!
-//! Sub-slice 2d-2 (`…/tmp/slice2d2-opaque-types.md` §5) extends this suite
-//! with its own U-numbered group below: opaque type sealing, transparent
-//! type equality, constructor hiding, command-type decls, and `LONG_LOWER`
-//! qualified type names. `assert_accepts_multi`/`assert_type_error_multi`
-//! are this group's twin of `assert_accepts`/`assert_type_error`, taking
-//! SEVERAL dependency libraries (needed by U10/U11's cross-module
-//! `LONG_LOWER` fixtures) instead of exactly one.
+//! The opaque-type-sealing group below covers opaque type sealing,
+//! transparent type equality, constructor hiding, command-type decls, and
+//! `LONG_LOWER` qualified type names; `assert_accepts_multi`/
+//! `assert_type_error_multi` are its twin of the two helpers above, taking
+//! SEVERAL dependency libraries (some of its cross-module fixtures) instead
+//! of exactly one.
 
 use rustyfi_backend::{FontKey, FontMetrics, Length};
 use rustyfi_lang::CompileError;
@@ -35,11 +31,10 @@ use rustyfi_loader::{LoadedCst, LoadedFile};
 use rustyfi_syntax::parse_file_v1;
 use rustyfi_syntax::RustyfiVersion;
 
-/// A real (if crude) `FontMetrics` stub — never actually exercised (every
-/// fixture below either fails type-checking or fails at the `NotADocument`
-/// stage, before any text is ever measured), but `compile_document_v1`'s
-/// signature still needs a concrete `&dyn FontMetrics` — same stub shape as
-/// `v01_modules.rs`/`v01_slice1.rs`.
+/// A `FontMetrics` stub — never actually exercised (every fixture below
+/// either fails type-checking or stops at `NotADocument`, before any text is
+/// measured), but `compile_document_v1`'s signature still needs a concrete
+/// `&dyn FontMetrics`.
 struct Mono;
 
 impl FontMetrics for Mono {
@@ -100,7 +95,7 @@ fn assert_type_error(lib_src: &str, doc_src: &str) -> String {
     }
 }
 
-/// [`run`]'s multi-dependency twin (Sub-slice 2d-2's U10/U11 need TWO
+/// [`run`]'s multi-dependency twin (some fixtures below need TWO
 /// separate `module … = struct … end` library files, one referencing the
 /// other's types via `LONG_LOWER`).
 fn run_multi(lib_srcs: &[&str], doc_src: &str) -> Result<(), CompileError> {
@@ -144,11 +139,11 @@ fn assert_type_error_multi(lib_srcs: &[&str], doc_src: &str) -> String {
 }
 
 // ============================================================================
-// Positive (§4.5)
+// Positive
 // ============================================================================
 
-/// T1 accept: the spec's §4.1 worked example — width + depth both satisfied,
-/// `secret` (undeclared) is silently hidden.
+/// Accept: the worked example — width + depth both satisfied, `secret`
+/// (undeclared) is silently hidden.
 #[test]
 fn t1_width_and_depth_accept() {
     let lib = "\
@@ -164,14 +159,13 @@ end
     assert_accepts(lib, "M.x + M.f 1");
 }
 
-/// T1's exact minimal spec fixture.
 #[test]
 fn t1_minimal_spec_fixture_accepts() {
     let lib = "module M :> sig val x : int end = struct val x = 1 end";
     assert_accepts(lib, "M.x");
 }
 
-/// T2 polymorphic accept: `val f 'a : 'a -> 'a` over `val f y = y` — usable
+/// Polymorphic accept: `val f 'a : 'a -> 'a` over `val f y = y` — usable
 /// at multiple instances downstream (proving the COMMITTED scheme is still
 /// genuinely polymorphic, not accidentally monomorphized).
 #[test]
@@ -180,7 +174,7 @@ fn t2_polymorphic_accepts() {
     assert_accepts(lib, "(M.f 1, M.f true)");
 }
 
-/// T3 specialize accept: `val f : int -> int` over the polymorphic
+/// Specialize accept: `val f : int -> int` over the polymorphic
 /// `val f y = y` — the declared (narrower) type is what's committed.
 #[test]
 fn t3_specialize_accepts() {
@@ -188,7 +182,7 @@ fn t3_specialize_accepts() {
     assert_accepts(lib, "M.f 1");
 }
 
-/// T4 THE SEALING FINGERPRINT: same module as T3, but `M.f true` — REJECTED,
+/// THE SEALING FINGERPRINT: same module as the specialize-accept case above, but `M.f true` — REJECTED,
 /// because the committed scheme is the declared `int -> int`, not the
 /// inferred `'a -> 'a`. This is the one test that distinguishes real
 /// sealing from parse-and-ignore.
@@ -199,7 +193,7 @@ fn t4_sealing_fingerprint_rejects_narrowed_use() {
     assert!(!msg.is_empty(), "expected a real diagnostic");
 }
 
-/// T6 own-type reference (transparent synonym): `val f : t -> t` declared
+/// Own-type reference (transparent synonym): `val f : t -> t` declared
 /// over `type t = int  val f y = y + 1` — the declared side expands `t`
 /// through the SAME synonym table the impl side does.
 #[test]
@@ -215,7 +209,7 @@ end
     assert_accepts(lib, "M.f 1");
 }
 
-/// T6's variant twin: `val mk : t` declared over `type t = | A  val mk = A`
+/// The own-type-reference test's variant twin: `val mk : t` declared over `type t = | A  val mk = A`
 /// — nominal `\"M.t\"` on both sides.
 #[test]
 fn t6_own_variant_type_accepts() {
@@ -230,7 +224,7 @@ end
     assert_accepts(lib, "M.mk");
 }
 
-/// T7 nested seal: a sealed module nested inside an UNSEALED one still gets
+/// Nested seal: a sealed module nested inside an UNSEALED one still gets
 /// checked, and its declared member is reachable qualified from outside.
 #[test]
 fn t7_nested_seal_accepts_declared_member() {
@@ -247,7 +241,7 @@ end
     assert_accepts(lib, "M.N.y");
 }
 
-/// T8 mutable member: `val r : ref int` declared over `val mutable r <- 0`
+/// Mutable member: `val r : ref int` declared over `val mutable r <- 0`
 /// — accepts (mono vs mono). (0.1's type-application grammar is PREFIX —
 /// `ref int`, not 0.0.6's postfix `int ref` — see `ast_v1::TypeApp`'s doc
 /// comment.)
@@ -257,7 +251,7 @@ fn t8_mutable_member_accepts() {
     assert_accepts(lib, "!M.r");
 }
 
-/// T8's negative half: a heterogeneous downstream use is still rejected
+/// The mutable-member test's negative half: a heterogeneous downstream use is still rejected
 /// through the committed `ref int` scheme. `Overwrite`'s target is a bare
 /// `VarTok` in 0.1's grammar (no qualified name), so `open` first.
 #[test]
@@ -267,10 +261,10 @@ fn t8_mutable_member_heterogeneous_use_rejects() {
 }
 
 // ============================================================================
-// Negative (§4.5) — message content + span
+// Negative — message content + span
 // ============================================================================
 
-/// T10 depth mismatch: `val x : int` over `` val x = `abc` `` — message
+/// Depth mismatch: `val x : int` over `` val x = `abc` `` — message
 /// names the module, the member, and both types.
 #[test]
 fn t10_depth_mismatch_message() {
@@ -285,7 +279,7 @@ fn t10_depth_mismatch_message() {
     assert!(msg.contains("string"), "{msg}");
 }
 
-/// T11 width missing: `val y : int` with no `y` defined.
+/// Width missing: `val y : int` with no `y` defined.
 #[test]
 fn t11_width_missing_message() {
     let lib = "module M :> sig val y : int end = struct val x = 1 end";
@@ -293,7 +287,7 @@ fn t11_width_missing_message() {
     assert!(msg.contains("never defines `y`"), "{msg}");
 }
 
-/// T5 hiding: an undeclared member used from outside the seal — precise
+/// Hiding: an undeclared member used from outside the seal — precise
 /// diagnostic, not the raw "unbound variable" internal-error string.
 #[test]
 fn t5_hidden_member_use_message() {
@@ -312,7 +306,7 @@ end
     assert!(!msg.contains("internal error"), "{msg}");
 }
 
-/// T7's negative half: a sibling of a nested seal is likewise hidden.
+/// The nested-seal test's negative half: a sibling of a nested seal is likewise hidden.
 #[test]
 fn t7_nested_seal_hides_undeclared_sibling() {
     let lib = "\
@@ -330,7 +324,7 @@ end
     assert!(msg.contains("not exported by its signature"), "{msg}");
 }
 
-/// T12 declared-more-general: `val f 'a : 'a -> 'a` declared over the
+/// Declared-more-general: `val f 'a : 'a -> 'a` declared over the
 /// monomorphic `val f y = y + 1` — the implementation is less polymorphic
 /// than the signature claims.
 #[test]
@@ -339,10 +333,10 @@ fn t12_declared_more_general_rejects() {
     assert_type_error(lib, "1");
 }
 
-/// T13 escaped skolem: `val r 'a : ref (list 'a)` declared over
+/// Escaped skolem: `val r 'a : ref (list 'a)` declared over
 /// `val mutable r <- []` — the mutable cell is monomorphic (value
 /// restriction), so it cannot honestly claim the declared polymorphism.
-/// (Prefix type application, as T8's note explains.)
+/// (Prefix type application, as the mutable-member test's note explains.)
 #[test]
 fn t13_escaped_skolem_message() {
     let lib = "module M :> sig val r 'a : ref (list 'a) end = struct val mutable r <- [] end";
@@ -353,7 +347,7 @@ fn t13_escaped_skolem_message() {
     );
 }
 
-/// T14 unbound quant tyvar: `val f : 'a -> 'a` with NO quantifier list.
+/// Unbound quant tyvar: `val f : 'a -> 'a` with NO quantifier list.
 #[test]
 fn t14_unbound_quant_tyvar_message() {
     let lib = "module M :> sig val f : 'a -> 'a end = struct val f y = y end";
@@ -362,22 +356,15 @@ fn t14_unbound_quant_tyvar_message() {
     assert!(msg.contains("quantifier list"), "{msg}");
 }
 
-/// T15 placeholder decls: every remaining non-`Val`/non-`Type`/non-command
-/// `Decl` arm errors naming its owning sub-slice — never panics. Sub-slice
-/// 2d-2 retires the `type t :: o`/`type u = int`/`val \c : ..`/`val +p : ..`
-/// rows this test used to pin as placeholders (§4-D of the opaque-types
-/// spec: `TypeOpaque`/`Type`/`ValHorzCmd`/`ValVertCmd` are processed for
-/// real now) — their NEW behavior is covered by `v1::module_check`'s own
-/// U-numbered test group below instead.
+/// Every remaining non-`Val`/non-`Type`/non-command `Decl` arm errors
+/// precisely — never panics. `Decl::Module`/`Decl::Signature` members are
+/// recursively matched, so an `N`/`S` the struct body
+/// never defines is a REAL width error naming the missing member; `include
+/// S` decls FLATTEN through `resolve_sig`, so an undefined
+/// `S` is the precise "unknown signature name" error (the same shape the
+/// sig-include unknown-name test below pins).
 #[test]
 fn t15_placeholder_decls_name_their_sub_slice() {
-    // Sub-slice 2d-3b retires rows 1-2 (`Decl::Module`/`Decl::Signature`
-    // members are now recursively matched, not placeholder-rejected) —
-    // neither `N` nor `S` is ever defined by the struct body below, so both
-    // now get a REAL width error naming the missing member. Sub-slice 2e-2
-    // retires row 3: `include S` decls now FLATTEN for real (`resolve_sig`)
-    // — `S` is undefined here, so the precise "unknown signature name"
-    // error fires (S6's shape), not a placeholder.
     let cases: &[(&str, &str)] = &[
         ("module N : sig end", "never defines `N`"),
         (
@@ -396,15 +383,12 @@ fn t15_placeholder_decls_name_their_sub_slice() {
     }
 }
 
-/// T16 non-struct sig forms. Sub-slice 2d-3 retires the two named-signature
-/// placeholders: `:> S` / `:> A.B.S` now RESOLVE through the signature table
-/// (`v1/surface.rs`), so an UNDEFINED name is a precise "unknown signature
-/// name" error (not a "not enforced yet" placeholder). Sub-slice 2e-2
-/// retires the `with type` row: `sig end with type t = int` now resolves
-/// for real — the base sig `sig end` never declares `t`, so it hits the
-/// precise "refines a type the signature never declares" error (W3's
-/// shape), not a placeholder. Functor signatures (2f) stay their
-/// sub-slice placeholder.
+/// Non-struct sig forms. `:> S` / `:> A.B.S` resolve through the
+/// signature table (`v1/surface.rs`), so an UNDEFINED name
+/// is a precise "unknown signature name" error; `sig end with type t = int`
+/// resolves for real and, the base sig never declaring
+/// `t`, hits the precise "refines a type the signature never declares"
+/// error (the same shape the with-type undefined-name test below pins).
 #[test]
 fn t16_non_struct_sig_forms_name_their_sub_slice() {
     let cases: &[(&str, &str)] = &[
@@ -420,10 +404,9 @@ fn t16_non_struct_sig_forms_name_their_sub_slice() {
             "module M :> sig end with type t = int = struct val x = 1 end",
             "refines a type the signature never declares",
         ),
-        // Sub-slice 2f-2b reworded this permanently (a functor-signature
-        // ASCRIPTION directly on a module bind stays unsupported — no
-        // demand; a functor sig is only enforced as a `Decl::Module` sig
-        // MEMBER, which 2f-2b DOES enforce).
+        // A functor-signature ASCRIPTION directly on a module bind stays
+        // unsupported (no demand); a functor sig is only enforced as a
+        // `Decl::Module` sig MEMBER, which is enforced elsewhere.
         (
             "module M :> (X : S) -> S2 = struct val x = 1 end",
             "not supported",
@@ -439,10 +422,10 @@ fn t16_non_struct_sig_forms_name_their_sub_slice() {
 }
 
 // ============================================================================
-// Parity/regression (§4.5)
+// Parity/regression
 // ============================================================================
 
-/// T9's e2e twin: an existing, seal-free `v01_modules.rs`-style source still
+/// The end-to-end twin of the whole-program/per-binding parity check: an existing, seal-free `v01_modules.rs`-style source still
 /// compiles clean end-to-end through the new `check_program`-based V0_1
 /// pipeline (the fine-grained verdict/warning/error parity itself is
 /// pinned inside `v1::module_check`'s own unit tests, which have direct
@@ -465,13 +448,12 @@ end
 }
 
 // ============================================================================
-// Sub-slice 2d-2 (`…/tmp/slice2d2-opaque-types.md` §5): opaque type sealing,
-// transparent type equality, constructor hiding, command-type decls,
-// `LONG_LOWER` qualified type names.
+// Opaque type sealing, transparent type equality,
+// constructor hiding, command-type decls, `LONG_LOWER` qualified type names.
 // ============================================================================
 
-/// The spec's own worked example (§3): `type t :: o` opaque, a plain `val`
-/// pair (`make`/`get`), and a sealed inline command (`\show`).
+/// The worked example: `type t :: o` opaque, a plain `val` pair
+/// (`make`/`get`), and a sealed inline command (`\show`).
 const WORKED_EXAMPLE: &str = "\
 module M :> sig
   type t :: o
@@ -486,17 +468,17 @@ end = struct
 end
 ";
 
-/// U1 opaque accept: the worked example, doc `M.get (M.make 3)` compiles
+/// Opaque accept: the worked example, doc `M.get (M.make 3)` compiles
 /// clean.
 #[test]
 fn u1_opaque_accept() {
     assert_accepts(WORKED_EXAMPLE, "M.get (M.make 3)");
 }
 
-/// U2 THE OPACITY FINGERPRINT: `M.get 3` (an `int`, not the opaque `M.t`)
+/// THE OPACITY FINGERPRINT: `M.get 3` (an `int`, not the opaque `M.t`)
 /// is REJECTED, as is `(M.make 3) + 1` — the one test pair distinguishing
 /// real abstraction from parse-and-ignore. Messages contain `M.t` and NOT
-/// `#` (pins `strip_stamps`, = U17).
+/// `#` (pins `strip_stamps`).
 #[test]
 fn u2_opacity_fingerprint() {
     let msg = assert_type_error(WORKED_EXAMPLE, "M.get 3");
@@ -507,7 +489,7 @@ fn u2_opacity_fingerprint() {
     assert!(!msg2.contains('#'), "no stamp should leak: {msg2}");
 }
 
-/// U3 inside-transparency (synonym impl): `type t :: o` over `type t = int;
+/// Inside-transparency (synonym impl): `type t :: o` over `type t = int;
 /// val make n = n; val get x = x + 1` — accepts inside (`t ≡ int`
 /// transparently); `M.get (M.make 1)` ✓, `M.get 5` ✗ (outside, `t` is
 /// opaque).
@@ -528,7 +510,7 @@ end
     assert_type_error(lib, "M.get 5");
 }
 
-/// U5 transparent equality accept: sig `type sz = int  val width : sz` over
+/// Transparent equality accept: sig `type sz = int  val width : sz` over
 /// impl `type sz = int  val width = 10`; doc `M.width + 1` ✓ (concrete
 /// outside).
 #[test]
@@ -545,7 +527,7 @@ end
     assert_accepts(lib, "M.width + 1");
 }
 
-/// U6 transparent mismatch: sig `type sz = string` over impl `type sz =
+/// Transparent mismatch: sig `type sz = string` over impl `type sz =
 /// int` → a precise message naming both sides.
 #[test]
 fn u6_transparent_mismatch() {
@@ -563,7 +545,7 @@ end
     assert!(msg.contains("does not match its signature"), "{msg}");
 }
 
-/// U7 kind/arity: `type t :: o -> o` over `type t 'a = list 'a` ✓ (with
+/// Kind/arity: `type t :: o -> o` over `type t 'a = list 'a` ✓ (with
 /// `val wrap 'a : 'a -> t 'a`); `type t :: o` over the same impl → arity
 /// error; `type t :: nat` → unsupported-kind error; opaque decl with no
 /// impl type → width error.
@@ -614,7 +596,7 @@ end
     assert!(msg.contains("never defines it"), "{msg}");
 }
 
-/// U8 command decls: the worked example's `\show` seals cleanly; a depth
+/// Command decls: the worked example's `\show` seals cleanly; a depth
 /// mismatch, a wrong command-type KIND (`block` declared over an `inline`
 /// impl), and a plain (non-command) declared type over a command impl all
 /// reject; `val +p : block [inline-text]` over a `val block` impl accepts.
@@ -654,7 +636,7 @@ end
     // TYPE spelled after `:` — declaring `block […]` for it is a shape
     // violation against the required `inline […]`/`math […]` shape (the
     // sigil, not the spelling, decides `Decl::ValHorzCmd` vs `ValVertCmd`;
-    // math-package completion M1 widened the guard's accepted set to
+    // the guard's accepted set is
     // `inline […]` OR `math […]`, since math commands share the `\` sigil
     // too).
     let msg = assert_type_error(lib_wrong_kind, "1");
@@ -687,7 +669,7 @@ end
     assert_accepts(lib_block_ok, "1");
 }
 
-/// U9 ctor hiding: `T 1` (expression) → `constructor T belongs to type t,
+/// Ctor hiding: `T 1` (expression) → `constructor T belongs to type t,
 /// which module M's signature seals abstract`; `match M.make 1 with T n ->
 /// n end` (pattern) → same diagnostic; wildcard `match M.make 1 with _ ->
 /// 0 end` ✓ (exhaustive.rs's unknown-domain fact, zero edits).
@@ -706,7 +688,7 @@ fn u9_ctor_hiding() {
     assert_accepts(WORKED_EXAMPLE, "match M.make 1 with _ -> 0 end");
 }
 
-/// U10 hidden type via `LONG_LOWER`: impl has `type u = int` the sig omits;
+/// Hidden type via `LONG_LOWER`: impl has `type u = int` the sig omits;
 /// a second lib's SEALED sig `val g : M.u -> int` → "exists in module `M`
 /// but is not exported"; an UNSEALED lib's bare `type s = M.u` → same
 /// (phase B's general path).
@@ -742,7 +724,7 @@ end
     assert!(msg2.contains("not exported by its signature"), "{msg2}");
 }
 
-/// U11 THE LEAK FIXTURE: `module N :> sig type s = M.t val get2 : s -> int
+/// THE LEAK FIXTURE: `module N :> sig type s = M.t val get2 : s -> int
 /// end = struct type s = M.t val get2 = M.get end` — `N.get2 (M.make 3)`
 /// flows (stamp equality, the leak fix did NOT block the legitimate path);
 /// `N.get2 3` is REJECTED (the synonym table did not pierce `M`'s seal
@@ -774,7 +756,7 @@ end
     assert!(!msg.is_empty(), "{msg}");
 }
 
-/// U12 sealed nested module + sibling: `module M = struct module N :> sig
+/// Sealed nested module + sibling: `module M = struct module N :> sig
 /// type t :: o val mk : int -> t end = struct … end val result = M.N.mk 1
 /// end` ✓ (a sibling reaches a nested module through the SAME full
 /// qualified path elaboration always exports, `M.N.mk` — not a bare `N.mk`,
@@ -812,11 +794,11 @@ end
     assert!(!msg.is_empty(), "{msg}");
 }
 
-/// U13 self-containment: sig `val f : u -> u` where the sig declares `type
+/// Self-containment: sig `val f : u -> u` where the sig declares `type
 /// t :: o` (opting into type control) but NOT `u` (impl-defined) →
 /// "mentions its type `u` without declaring it". A module whose sig
-/// declares ZERO types at all is exempt (T6's pinned pre-2d-2 accept
-/// behavior — a bare own-type reference with no sig-level type control at
+/// declares ZERO types at all is exempt (the own-type-reference test's
+/// pinned accept behavior — a bare own-type reference with no sig-level type control at
 /// all stays implicitly transparent).
 #[test]
 fn u13_self_containment() {
@@ -839,7 +821,7 @@ end
     );
 }
 
-/// U15 zero-value-member module: `module M :> sig type t :: o end = struct
+/// Zero-value-member module: `module M :> sig type t :: o end = struct
 /// type t = | T end` + doc `T` → hidden-ctor error (the immediate-hide
 /// path — no value member exists for the trigger to ride on).
 #[test]
@@ -859,17 +841,14 @@ end
     );
 }
 
-/// U19 placeholder decls: `module N : sig end` / `signature S = sig end` /
-/// `include S` decls in a sig still produce their 2d-3/2e errors; a sig
-/// `type t = | A` (variant body) produces the NEW 2d-3 ctor-re-export
-/// placeholder.
+/// The four non-`Val` sig decls all error precisely, never panic.
+/// `module N : sig end` / `signature S = sig end` are real width errors
+/// (recursively matched); `include S` FLATTENS, so an undefined
+/// `S` is "unknown signature name"; a sig-side variant redeclaration
+/// (`type t = | A`) is PERMANENTLY unsupported — a transparently declared
+/// type whose implementation is a variant is refused.
 #[test]
 fn u19_placeholder_decls_still_error() {
-    // Sub-slice 2d-3b retires rows 1-2 (real width errors now); the sig-side
-    // variant-redeclaration row (4) is permanently unsupported (renamed
-    // away from "Sub-slice 2d-3" wording, §10) rather than a sub-slice
-    // placeholder. Sub-slice 2e-2 retires row 3: `include S` FLATTENS for
-    // real now — `S` is undefined, so "unknown signature name" fires.
     let cases: &[(&str, &str)] = &[
         ("module N : sig end", "never defines `N`"),
         (
@@ -889,7 +868,7 @@ fn u19_placeholder_decls_still_error() {
     }
 }
 
-/// U20 hidden command member: sig omits `\hidden`; doc `{ \M.hidden; }` →
+/// Hidden command member: sig omits `\hidden`; doc `{ \M.hidden; }` →
 /// "value `M.\hidden` exists in module `M` but is not exported by its
 /// signature" (pins the two new command-format matchers, dual-side, like
 /// 2d-1's `:1429` coupling).
@@ -909,9 +888,9 @@ end
 }
 
 // ============================================================================
-// optional-arg-rows increment 2 — the unsoundness gate's PROOF: a sealed
+// The unsoundness gate's PROOF: a sealed
 // signature whose `val` declares a labeled-optional-argument type
-// (`?(bias : int) int -> int`, `TypeExpr::OptRowFun`) matches an increment-1
+// (`?(bias : int) int -> int`, `TypeExpr::OptRowFun`) matches a plain
 // `?(bias = …)`-taking implementation END-TO-END through the SAME `unify`-
 // based subsumption path every other sealed `val` flows through — because
 // `MonoType::Func` now carries the optional-arg `Row` and
@@ -919,11 +898,11 @@ end
 // closed-row `Func` that `Ast::LambdaOpt` infers for the impl. And two
 // mismatches (a declared optional label ABSENT from the impl; a WRONG
 // codomain type) are rejected — proving the row and the domains are really
-// carried through subsumption, not silently dropped (spec §13 risk 1).
+// carried through subsumption, not silently dropped.
 // ============================================================================
 
-/// V1 (the sealed-sig PROOF): `val f : ?(bias : int) int -> int` over an
-/// increment-1 `val f ?(bias = b) x = …` impl seals, and a plain `M.f 1`
+/// (the sealed-sig PROOF): `val f : ?(bias : int) int -> int` over a plain
+/// `val f ?(bias = b) x = …` impl seals, and a plain `M.f 1`
 /// (no bundle — `bias` defaults) type-checks against the committed scheme.
 #[test]
 fn v1_opt_arg_typed_sig_matches_opt_taking_impl() {
@@ -937,7 +916,7 @@ end
     assert_accepts(lib, "M.f 1");
 }
 
-/// V2 reject: the sig declares an optional `bias`, but the impl is a plain
+/// Reject: the sig declares an optional `bias`, but the impl is a plain
 /// `val f x = …` with no optional argument at all — the declared row
 /// `Cons(bias, int, Empty)` cannot unify against the impl's empty row, so
 /// sealing is rejected (the "declared optional label absent from impl" case).
@@ -953,7 +932,7 @@ end
     assert_type_error(lib, "M.f 1");
 }
 
-/// V3 reject: the impl DOES take the optional `bias`, but its codomain is
+/// Reject: the impl DOES take the optional `bias`, but its codomain is
 /// `bool`, not the declared `int` — the domain/codomain still flow through
 /// subsumption alongside the row, so the `int` vs `bool` codomain clash is
 /// caught (the "wrong type" case).
@@ -970,14 +949,11 @@ end
 }
 
 // ============================================================================
-// Sub-slice 2d-3 (`…/tmp/slice2d3-module-sig-decls.md` §5): named signatures
-// at ascription sites + module-alias re-export. (`Decl::Module`/
-// `Decl::Signature` MEMBERS of a signature, revocation, and sealed-alias
-// NARROWING are deferred — see `v1/module_check.rs`'s module doc; those
-// still emit their precise placeholder/"unknown" errors, never panic.)
+// Named signatures at ascription sites + module-alias
+// re-export.
 // ============================================================================
 
-/// N5 named sig at an ascription: `signature S = sig … end` in a library,
+/// Named sig at an ascription: `signature S = sig … end` in a library,
 /// then `module A :> S = struct … end`. Declared `x` is committed; the
 /// undeclared `y` is hidden.
 #[test]
@@ -991,7 +967,7 @@ end
     assert_accepts(lib, "Lib.A.x");
 }
 
-/// N5b: a hidden member reached through the named-sig seal errors precisely
+/// A hidden member reached through the named-sig seal errors precisely
 /// (the seal really narrowed the surface — not parse-and-ignore).
 #[test]
 fn n5b_named_signature_hides_undeclared_member() {
@@ -1008,7 +984,7 @@ end
     );
 }
 
-/// N5c: an ascription against an UNDEFINED signature name is a precise
+/// An ascription against an UNDEFINED signature name is a precise
 /// "unknown signature name" error.
 #[test]
 fn n5c_unknown_signature_name_rejects() {
@@ -1021,8 +997,8 @@ end
     assert!(msg.contains("unknown signature name"), "got: {msg}");
 }
 
-/// N7 GENERATIVITY FINGERPRINT (spec §5): the same named signature `Store`
-/// used at TWO ascription sites mints DISTINCT opaque `t` stamps, so a value
+/// GENERATIVITY FINGERPRINT: the same named signature `Store` used at
+/// TWO ascription sites mints DISTINCT opaque `t` stamps, so a value
 /// made by `A.mk` cannot be consumed by `B`'s view of the abstract type.
 /// This is the one test distinguishing per-site stamping from
 /// "elaborate-once" (which would wrongly share one stamp).
@@ -1046,9 +1022,10 @@ end
     assert!(!msg.is_empty(), "expected a generativity mismatch");
 }
 
-/// N8 self-containment through a NAMED signature: U13's exact scenario, but
+/// Self-containment through a NAMED signature: the direct self-containment
+/// test's exact scenario, but
 /// the sig is `signature S = …` used at an ascription. The resolved decls
-/// feed the identical prescan pipeline, so 2d-2's own-type rule applies
+/// feed the identical prescan pipeline, so the same own-type rule applies
 /// unchanged — a `val` mentioning an impl-defined but sig-undeclared type
 /// `u` (the sig having opted into type control by declaring `t`) is the
 /// same "mentions its type … without declaring it" error.
@@ -1073,7 +1050,7 @@ end
     assert!(msg.contains("without declaring it"), "got: {msg}");
 }
 
-/// L1 alias re-export: `module Alias = Base` re-exports Base's public
+/// Alias re-export: `module Alias = Base` re-exports Base's public
 /// surface under `Alias.*` — values usable at the target's own types, and
 /// an alias member interchangeable with the target's (an alias is NOT
 /// generative, upstream `UTModVar` returns the same signature).
@@ -1093,7 +1070,7 @@ end
     assert_accepts(lib, "Lib.Alias.get (Lib.Base.mk 3)");
 }
 
-/// L1b path alias: `module C = A.B` re-exports a nested target's members.
+/// Path alias: `module C = A.B` re-exports a nested target's members.
 #[test]
 fn l1b_path_alias_reexports_nested_members() {
     let lib = "\
@@ -1108,16 +1085,18 @@ end
 }
 
 // ============================================================================
-// Sub-slice 2e-1: struct-include (`include M`) — spec §5's I-numbered group.
+// Struct-include (`include M`).
 // ============================================================================
 
-/// I4 + I7 + I14: the spec's worked example 1 — `include Base` inside a
-/// SEALED includer `P`. Combines three fingerprints in one fixture:
-/// - I7 re-abstraction: `P.get (P.mk 1)` accepts (P's own fresh stamp,
+/// Worked example 1 — `include Base` inside a SEALED
+/// includer `P`. Combines three fingerprints in one fixture:
+/// - The included members are usable in a further definition inside the
+///   same sealed module (`val extra = get (mk 3)`, `Lib.P.extra + 1` accepts).
+/// - Re-abstraction: `P.get (P.mk 1)` accepts (P's own fresh stamp,
 ///   round-trip), `P.get (Base.mk 1)` REJECTS (P's `t` is a NEW abstract
 ///   stamp minted at P's own ascription — the include copy re-abstracts,
 ///   it does not inherit Base's concrete `t`).
-/// - I14 ctor visibility: `Base`'s constructor `T` is NEVER hidden by `P`'s
+/// - Ctor visibility: `Base`'s constructor `T` is NEVER hidden by `P`'s
 ///   seal — it still belongs to (and is exported by) `Base` — so `T 1`
 ///   keeps constructing OUTSIDE `P` even though `P.t` is sealed abstract.
 #[test]
@@ -1140,22 +1119,22 @@ module Lib = struct
   end
 end
 ";
-    // I7 round-trip through P's own fresh stamp.
+    // Round-trip through P's own fresh stamp.
     assert_accepts(lib, "Lib.P.get (Lib.P.mk 1)");
     assert_accepts(lib, "Lib.P.extra + 1");
-    // I7 re-abstraction: Base's concrete `t` does not subsume P's stamp.
+    // Re-abstraction: Base's concrete `t` does not subsume P's stamp.
     let msg = assert_type_error(lib, "Lib.P.get (Lib.Base.mk 1)");
     assert!(
         !msg.is_empty(),
         "expected a generativity mismatch, got empty message"
     );
-    // I14: Base's own ctor T is untouched by P's seal.
+    // Base's own ctor T is untouched by P's seal.
     assert_accepts(lib, "Lib.Base.get (Lib.Base.mk 1)");
     let doc = "match Lib.Base.mk 1 with | T n -> n end";
     assert_accepts(lib, doc);
 }
 
-/// I5: a sig omitting an INCLUDED member hides it (the standard
+/// A sig omitting an INCLUDED member hides it (the standard
 /// not-exported rewrite, owner = the includer `P`, not `Base`); a sig
 /// declaring a member neither defined nor included is the standard width
 /// error.
@@ -1197,15 +1176,13 @@ end
     assert!(msg.contains("never defines"), "got: {msg}");
 }
 
-/// I5's tripwire (spec §8 risk 2): the sealed includer's LAST value member
-/// arrives VIA the include (not a direct bind) — the ctor-hide/revocation
-/// trigger key ("the last value member in source order") must count the
-/// SPLICED member, not the last direct bind before it. If
-/// `struct_member_names_spliced` ever regressed to ignoring `Bind::Include`
-/// (like the retired `struct_member_names`), the trigger would key on
-/// `pre` instead of `mk` — this fixture at least proves the splice-position
-/// code path runs to completion and gives the right verdict, structurally
-/// exercising the exact "include is the final bind" shape.
+/// The sig-omission test's tripwire: the sealed includer's LAST value member arrives VIA the
+/// include (not a direct bind) — the ctor-hide/revocation trigger key ("the
+/// last value member in source order") must count the SPLICED member, not
+/// the last direct bind before it. If `struct_member_names_spliced` ever
+/// regressed to ignoring `Bind::Include` the trigger would key on `pre`
+/// instead of `mk`; this fixture exercises the exact "include is the final
+/// bind" shape and pins the right verdict.
 #[test]
 fn i5_tripwire_last_value_member_arrives_via_include() {
     let lib = "\
@@ -1225,7 +1202,7 @@ end
     assert_accepts(lib, "Lib.P.mk (Lib.P.pre) + 1");
 }
 
-/// I2 include-then-shadow (a documented deviation from upstream, which
+/// Include-then-shadow (a documented deviation from upstream, which
 /// REJECTS this as `ConflictInSignature`): a LATER direct bind of the same
 /// name shadows the included copy — the qualified alias `P.mk` ends up
 /// meaning the LAST binding in source order, exactly like the port's
@@ -1255,7 +1232,7 @@ end
     );
 }
 
-/// I6 type re-export: a downstream synonym over the includer's re-exported
+/// Type re-export: a downstream synonym over the includer's re-exported
 /// type unifies with the TARGET's own values (the copy is a synonym chain
 /// `P.t = Base.t`, transparently expanding).
 #[test]
@@ -1274,7 +1251,7 @@ end
     assert_accepts(lib, "Lib.P.mk 1 + Lib.Base.mk 2");
 }
 
-/// I8 nested module through include: `Base.Inner.x` is reachable as
+/// Nested module through include: `Base.Inner.x` is reachable as
 /// `P.Inner.x` after `include Base` (recursive member-copy through nested
 /// modules).
 #[test]
@@ -1294,9 +1271,8 @@ end
     assert_accepts(lib, "Lib.P.Inner.x + 1");
 }
 
-/// I9 sig-member re-export: `include Basic` (which itself defines a named
-/// signature `Ord`) makes `P.Ord` resolvable at a LATER ascription site —
-/// the spec's example 3 shape.
+/// Sig-member re-export: `include Basic` (which itself defines a named
+/// signature `Ord`) makes `P.Ord` resolvable at a LATER ascription site.
 #[test]
 fn i9_include_reexports_the_targets_named_signature() {
     let lib = "\
@@ -1322,8 +1298,8 @@ end
     assert_accepts(lib, "Lib.M.compare 1 2");
 }
 
-/// I9b: the SAME re-export through an ALIAS instead of an include — the
-/// found 2d-3 gap fix (`Alias.S` never resolved before 2e-1's
+/// The SAME re-export through an ALIAS instead of an include — a
+/// gap fix (`Alias.S` never resolved before
 /// `register_sig_reexports`).
 #[test]
 fn i9b_alias_reexports_the_targets_named_signature() {
@@ -1346,31 +1322,30 @@ end
     assert_accepts(lib, "Lib.M.compare 1 2");
 }
 
-/// I10 mutable sharing: `include Base` shares Base's mutable CELL (not a
+/// Mutable sharing: `include Base` shares Base's mutable CELL (not a
 /// copy of its current value) — a write through `P`'s alias is observed
 /// through `Base`'s own name.
 #[test]
 fn i10_include_shares_the_targets_mutable_cell() {
-    // Two dependency files (cross-file include, §2.1 step 1's "the
-    // cross-file case rides the existing outward fallback") so the
-    // document can `let open P in` — `let open` only accepts a BARE
-    // `CtorTok` (`cst_v1.rs`'s `OpenIn`), so a NESTED `P` (one wrapped
-    // inside an outer `Lib`) could not be opened directly from the
-    // document at all; making `P` its own top-level library sidesteps
-    // that unrelated grammar limit while still proving the point: a
-    // write through `P`'s alias is observed through `Base`'s own name —
+    // Two dependency files (the cross-file include case rides the existing
+    // outward fallback) so the document can `let open P in` — `let open`
+    // only accepts a BARE `CtorTok` (`cst_v1.rs`'s `OpenIn`), so a NESTED
+    // `P` (one wrapped inside an outer `Lib`) could not be opened directly
+    // from the document at all; making `P` its own top-level library
+    // sidesteps that unrelated grammar limit while still proving the point:
+    // a write through `P`'s alias is observed through `Base`'s own name —
     // ONE shared cell, not a copy of a value.
     let lib_base = "module Base = struct val mutable r <- 0 end";
     let lib_p = "module P = struct include Base end";
     // V0_1 dropped 0.0.6's `before` sequencing keyword; use `let _ = e1 in e2`
-    // (G10 confirmed wildcard expr-`let` params) to sequence the write-then-read.
+    // (wildcard expr-`let` params are supported) to sequence the write-then-read.
     assert_accepts_multi(
         &[lib_base, lib_p],
         "let open P in (let _ = (r <- 5) in !Base.r)",
     );
 }
 
-/// I13 stdlib shape (spec example 3, the demand pin): `include Basic`
+/// Stdlib shape (the demand pin): `include Basic`
 /// splices a variant + a named signature; the ctors stay globally usable
 /// (flat namespace, nothing hidden — Std is unsealed here).
 #[test]
@@ -1401,12 +1376,11 @@ end
 }
 
 // ============================================================================
-// Sub-slice 2d-3b (`…/tmp/slice2d3b-2f2-sigmembers.md` §3/§7/§8): nested-
-// module sig MEMBERS, `Decl::Signature` identity, `member_revoke`, and
-// alias-body seal narrowing.
+// Nested-module sig MEMBERS, `Decl::Signature` identity,
+// `member_revoke`, and alias-body seal narrowing.
 // ============================================================================
 
-/// D1/D2/D3's shared fixture (spec §7's worked example): `M`'s own seal
+/// The shared fixture for the tests below (the worked example): `M`'s own seal
 /// imposes `module N : sig val y : int end` over a sub-module `N` that is
 /// ITSELF sealed more widely (`val y`+`val z`) — the `PendingLink` shape.
 fn d123_lib() -> &'static str {
@@ -1423,7 +1397,7 @@ end
 "
 }
 
-/// D1: the layer check accepts (`N`'s own sealed `y : int` ⊑ `M`'s declared
+/// The layer check accepts (`N`'s own sealed `y : int` ⊑ `M`'s declared
 /// `y : int`) and a document use of the still-visible members type-checks —
 /// `M.N.y` (through the link) and `M.w` (M's own declared member, whose OWN
 /// body `M.N.z` type-checked fine while `z` was still committed, BEFORE the
@@ -1433,7 +1407,7 @@ fn d1_nested_module_sig_member_accepts_through_the_link() {
     assert_accepts(d123_lib(), "M.N.y + M.w");
 }
 
-/// D2: the SAME fixture — `M.N.z` is exported by `N`'s own seal but omitted
+/// The SAME fixture — `M.N.z` is exported by `N`'s own seal but omitted
 /// by `M`'s imposed `S_N`, so it is REVOKED once `M`'s subtree-last value
 /// alias (`M.w`) commits; a document (which runs strictly AFTER the whole
 /// library) using `M.N.z` is rejected with the precise "not exported"
@@ -1447,7 +1421,7 @@ fn d2_member_revoke_hides_the_omitted_member_after_the_parent_trigger_commits() 
     );
 }
 
-/// D3 (the correctness-core tripwire, spec §11 risk 1): `M`'s sig declares
+/// (the correctness-core tripwire): `M`'s sig declares
 /// `N.id` MORE POLYMORPHIC (`'a -> 'a`) than `N`'s OWN seal committed
 /// (`int -> int`, narrower than the RAW impl's genuinely-polymorphic `val id
 /// x = x`) — rejected because the layer check compares INNER (the
@@ -1475,7 +1449,7 @@ end
     );
 }
 
-/// D3s: the link layer compares the declared STAGE as well as the declared
+/// The link layer compares the declared STAGE as well as the declared
 /// type — the parent-vs-child half of the stage conformance
 /// `staging_v1.rs` pins for the sig-vs-implementation half.
 ///
@@ -1490,7 +1464,7 @@ end
 /// Reaching this needs a NESTED sealed module (`d123_lib`'s shape): only there
 /// do two signatures meet each other, rather than a signature meeting a
 /// binding. `int` and `int` unify in every case below, so a link layer that
-/// compares only types accepts all four — which is what it used to do.
+/// compares only types accepts all four.
 #[test]
 fn d3s_link_layer_checks_the_declared_stage_not_only_the_type() {
     // The parent promises the document stage may not name `N.y` without a
@@ -1580,7 +1554,7 @@ end
     );
 }
 
-/// D3b width: the sig declares `module P : sig end` but the struct never
+/// Width: the sig declares `module P : sig end` but the struct never
 /// defines `P` at all, and (second case) defines `P` as a plain VALUE
 /// instead of a module — both precise width errors, not a panic.
 #[test]
@@ -1599,11 +1573,11 @@ fn d3b_nested_module_width_errors_both_wordings() {
     assert!(missing.contains("never defines `P`"), "{missing}");
 }
 
-/// D4: an UNSEALED child recursed via a SYNTHETIC (parent-imposed) seal —
+/// An UNSEALED child recursed via a SYNTHETIC (parent-imposed) seal —
 /// the declared member escapes, and an omitted member is revoked at the
 /// PARENT's own trigger rather than hidden immediately: a SIBLING use
 /// (`val w = M.N.z`, inside the SAME lib, BEFORE the trigger fires) still
-/// accepts — the parent-imposed-deferral pin (spec §3.3-6/§11 risk 2).
+/// accepts — the parent-imposed-deferral pin.
 #[test]
 fn d4_unsealed_child_defers_hiding_to_the_parent_trigger() {
     let lib = "\
@@ -1623,7 +1597,7 @@ end
     );
 }
 
-/// D5: alias-body seal narrowing is now enforced — `module M :> sig val mk
+/// Alias-body seal narrowing is now enforced — `module M :> sig val mk
 /// : int -> int end = Base` REJECTS when `Base`'s `mk` does not match, and
 /// hides an un-declared member of `Base` (the alias copies through the
 /// same seal machinery a struct literal gets); the double spelling `module
@@ -1674,7 +1648,7 @@ fn d5_alias_body_seal_narrowing_is_enforced() {
     assert!(chain_hidden.contains("not exported"), "{chain_hidden}");
 }
 
-/// D7: `Decl::Signature` members — verbatim re-declaration (code.satyh's
+/// `Decl::Signature` members — verbatim re-declaration (code.satyh's
 /// shape) accepts; a differing body is the identity-comparator error; an
 /// omitted struct signature is rejected too (narrower width).
 #[test]
@@ -1705,8 +1679,7 @@ end
 }
 
 // ============================================================================
-// Sub-slice 2f-2b (`…/tmp/slice2d3b-2f2-sigmembers.md` §5/§8): functor sig-
-// MEMBERS inside a `:> sig … end` umbrella.
+// Functor sig-MEMBERS inside a `:> sig … end` umbrella.
 // ============================================================================
 
 /// The map.satyg-shaped umbrella fixture: `Map :> sig module Make : (Key :
@@ -1754,7 +1727,7 @@ end
 "
 }
 
-/// U1: the umbrella accepts and a consumer application works through the
+/// The umbrella accepts and a consumer application works through the
 /// declared (sealed) interface.
 #[test]
 fn u1_functor_umbrella_accepts_and_applications_work() {
@@ -1765,7 +1738,7 @@ fn u1_functor_umbrella_accepts_and_applications_work() {
 /// CROSS-instantiation use (mixing `M1`'s and `M2`'s results, two SEPARATE
 /// applications of the identical functor to the identical argument) is
 /// REJECTED at the abstract level (fresh stamps per application —
-/// generative, spec §0.4's caveat); internal helpers (`helper`) are hidden
+/// generative); internal helpers (`helper`) are hidden
 /// with the sealing wording, not a raw unbound-variable message.
 #[test]
 fn f_gen_abstract_fingerprint_rejects_cross_instantiation_use() {
@@ -1778,7 +1751,7 @@ fn f_gen_abstract_fingerprint_rejects_cross_instantiation_use() {
     );
 }
 
-/// U2: a hidden-functor application is rejected — the umbrella's `Map`
+/// A hidden-functor application is rejected — the umbrella's `Map`
 /// exports ONLY `Make`; a hypothetical direct access to a functor the
 /// umbrella never declares (simulated here by sealing `Map` OVER a wider
 /// struct that ALSO defines a second, undeclared functor `Other`) is
@@ -1808,7 +1781,7 @@ end
     assert!(msg.contains("not exported by its signature"), "{msg}");
 }
 
-/// U4: `NestedFunctorSubstitution` reachable from real source — a curried
+/// `NestedFunctorSubstitution` reachable from real source — a curried
 /// functor sig MEMBER (`module F : (X:S) -> (Y:S2) -> S3`) is the typed
 /// rejection, not a panic; `t16`'s functor-ascription row (a DIRECT
 /// ascription, not a member) is the separate, still-unsupported shape.
@@ -1831,13 +1804,11 @@ end
 }
 
 // ============================================================================
-// Sub-slice 2e-2 (`…/tmp/slice2e-include-withtype.md` §5): sig-`include`
-// (`Decl::Include`) + `with type` (`SigExpr::WithType`) — the S-/W-numbered
-// test group (spec §5's naming, this file's `assert_accepts`/
-// `assert_type_error` shapes throughout).
+// Sig-`include` (`Decl::Include`) + `with type`
+// (`SigExpr::WithType`).
 // ============================================================================
 
-/// S1 sig-include accepts + hides an undeclared member: `Big` splices
+/// Sig-include accepts + hides an undeclared member: `Big` splices
 /// `Eq`'s `type t :: o`/`val equal` in, adds `val hash`; `A :> Big` defines
 /// all three PLUS an undeclared `secret` — the module itself type-checks,
 /// and `secret` is hidden with the standard "not exported" wording.
@@ -1866,7 +1837,7 @@ end
     assert!(msg.contains("not exported"), "{msg}");
 }
 
-/// S2 include of a literal + a dep-file-qualified path: `include sig val x
+/// Include of a literal + a dep-file-qualified path: `include sig val x
 /// : int end` inline, and `include Other.S` naming a signature defined in
 /// an earlier module.
 #[test]
@@ -1883,7 +1854,7 @@ end
     assert_accepts(lib, "Lib.A.x + Lib.B.z");
 }
 
-/// S3 spliced-opaque generativity: two modules independently sealed `:>
+/// Spliced-opaque generativity: two modules independently sealed `:>
 /// Big` (an included `type t :: o`, unrefined) each mint their OWN fresh
 /// stamp for `t` — mixing values across the two instantiations rejects,
 /// same-instantiation use accepts (the per-site-stamps-through-a-splice
@@ -1917,7 +1888,7 @@ end
     assert_accepts(lib, "Lib.A.hash (Lib.A.mk 1)");
 }
 
-/// S4 conflict: an `include`-spliced `val equal` colliding with a directly
+/// Conflict: an `include`-spliced `val equal` colliding with a directly
 /// declared `val equal` in the same sig is a hard `ConflictInSignature`-
 /// shaped error; the tightening this ALSO applies to a literal sig with two
 /// DIRECT `val x` decls (pre-2e-2: silently last-wins) is pinned too.
@@ -1949,7 +1920,7 @@ end
     assert!(msg2.contains("conflicting declarations for `x`"), "{msg2}");
 }
 
-/// S5 cycle: `signature S = sig include S end`, used at an ascription,
+/// Cycle: `signature S = sig include S end`, used at an ascription,
 /// "includes itself" — never a stack overflow/panic.
 #[test]
 fn s5_sig_include_self_cycle_rejects() {
@@ -1963,7 +1934,7 @@ end
     assert!(msg.contains("includes itself"), "{msg}");
 }
 
-/// S6 unknown: `sig include Nope end` → "unknown signature name `Nope`"
+/// Unknown: `sig include Nope end` → "unknown signature name `Nope`"
 /// (the shape `t15`/`u19`'s re-pinned rows exercise end-to-end).
 #[test]
 fn s6_sig_include_unknown_name_rejects() {
@@ -1972,7 +1943,7 @@ fn s6_sig_include_unknown_name_rejects() {
     assert!(msg.contains("unknown signature name `Nope`"), "{msg}");
 }
 
-/// W1 refinement accepts + the transparency fingerprint: `sig type t :: o
+/// Refinement accepts + the transparency fingerprint: `sig type t :: o
 /// val mk : int -> t val get : t -> int end with type t = int` — BOTH
 /// directions flow concrete ints through the doc side (`t` is really
 /// transparent, not just parsed-and-ignored).
@@ -1992,7 +1963,7 @@ end
     assert_accepts(lib, "A.get 5 + A.mk 1");
 }
 
-/// W2 impl mismatch: `with type t = int` over an implementation whose OWN
+/// Impl mismatch: `with type t = int` over an implementation whose OWN
 /// `type t = bool` — the transparent-equality error fires, reached via
 /// refinement instead of a literal `type t = τ` sig decl.
 #[test]
@@ -2010,7 +1981,7 @@ end
     assert!(msg.contains("does not match its signature"), "{msg}");
 }
 
-/// W3 undefined: `with type u = int` over a sig that never declares `u` —
+/// Undefined: `with type u = int` over a sig that never declares `u` —
 /// "refines a type the signature never declares".
 #[test]
 fn w3_with_type_refines_undeclared_type_rejects() {
@@ -2022,7 +1993,7 @@ fn w3_with_type_refines_undeclared_type_rejects() {
     );
 }
 
-/// W4 transparent restrict: the base sig already declares `type t = bool`
+/// Transparent restrict: the base sig already declares `type t = bool`
 /// TRANSPARENTLY — `with type t = int` cannot restrict it (upstream
 /// `CannotRestrictTransparentType`).
 #[test]
@@ -2040,7 +2011,7 @@ end
     assert!(msg.contains("already declares it transparently"), "{msg}");
 }
 
-/// W5 arity both ways: `type t :: o -> o` refined by an arity-0 `with type
+/// Arity both ways: `type t :: o -> o` refined by an arity-0 `with type
 /// t = int` rejects (the refine-arity error); `type t :: o -> o` refined by
 /// `with type t 'a = list 'a` over a matching `type t 'a = list 'a` impl
 /// accepts.
@@ -2068,7 +2039,7 @@ end
     assert_accepts(lib_ok, "M.wrap 1");
 }
 
-/// W6 named-sig storage + chained refinement: `signature S2 = S with type
+/// Named-sig storage + chained refinement: `signature S2 = S with type
 /// t = int` composes across the `signature` bind boundary (`B :> S2`
 /// accepts, `B.mk 1 + 1` typechecks — a plain-int flow); refining `S2`
 /// AGAIN at a use site (`S2 with type t = bool`) hits the ordered-first-
@@ -2107,7 +2078,7 @@ end
     assert!(msg.contains("already declares it transparently"), "{msg}");
 }
 
-/// W7 mixed generativity: `A :> S` (unrefined, fresh stamp), `C`/`D :> S
+/// Mixed generativity: `A :> S` (unrefined, fresh stamp), `C`/`D :> S
 /// with type t = int` (both refined to concrete `int`) — `C`/`D` mix with
 /// each other and with plain ints; `A` mixes with neither (upstream's
 /// `quant.remove(tyid)` semantics — refining removes the member from the
@@ -2140,7 +2111,7 @@ end
     assert!(!msg.is_empty(), "{msg}");
 }
 
-/// W8 out-of-scope rows: a variant-bodied refinement (`with type t = | A`)
+/// Out-of-scope rows: a variant-bodied refinement (`with type t = | A`)
 /// cannot introduce constructors.
 #[test]
 fn w8_with_type_out_of_scope_rows() {
@@ -2149,10 +2120,8 @@ fn w8_with_type_out_of_scope_rows() {
     assert!(msg.contains("cannot introduce constructors"), "{msg}");
 }
 
-/// W8b `S with M type t = τ` — the SUB-MODULE refinement form. It used to
-/// reject outright, naming Sub-slice 2d-3b: at the time, a signature could
-/// not have `Decl::Module` members at all, so there was no child layer to
-/// route the refinement into. 2d-3b landed, and this is that routing: the
+/// `S with M type t = τ` — the SUB-MODULE refinement form, routed into
+/// the `Decl::Module` members the child layer created: the
 /// chain rides on [`surface::Refine::path`], `prescan_seal_types` hands it to
 /// the `Decl::Module` member of that name with one segment consumed, and the
 /// child layer applies it to its own `type t :: o` exactly as an
@@ -2194,10 +2163,10 @@ end
     assert!(!msg.is_empty(), "{msg}");
 }
 
-/// W8c the same form, spelled through a NAMED signature
+/// The same form, spelled through a NAMED signature
 /// (`signature S2 = S with Sub type t = int`) — the refinement is stored on
-/// the `SigDef` and inherited at every use site, the same composition W6
-/// pins for the unqualified form.
+/// the `SigDef` and inherited at every use site, the same composition the
+/// unqualified-form test above pins.
 #[test]
 fn w8c_with_submodule_type_composes_through_a_named_signature() {
     let lib = "\
@@ -2220,7 +2189,7 @@ end
     assert_accepts(lib, "Lib.M.Sub.mk 1 + 1");
 }
 
-/// W8d the two shapes `S with M type t = τ` still refuses, each for a reason
+/// The two shapes `S with M type t = τ` still refuses, each for a reason
 /// derived from what a refinement IS — a narrowing of a type member that
 /// exists at a path:
 ///
@@ -2253,7 +2222,7 @@ end
     assert!(msg2.contains("FUNCTOR"), "{msg2}");
 }
 
-/// W9 refinement through a splice: example 2 verbatim — `Big` includes `Eq`
+/// Refinement through a splice: example 2 verbatim — `Big` includes `Eq`
 /// (contributing the abstract `t`), `A :> Big with type t = int` refines
 /// the INCLUDE-DEFINED `t`; both `hash` (declared OUTSIDE the include) and
 /// `equal` (declared INSIDE it) see the same transparent `t` — the splice
@@ -2282,11 +2251,10 @@ end
 }
 
 // ============================================================================
-// Sub-slice 2e-2 refresh §(e): the two tests forced by the 2f-1 interaction
-// — a functor parameter signature may now use `include` (flattened for
-// real, at the functor-application width/arity check); `with type` there
-// stays an EXPLICIT reject (2f-1's own "name/arity only" posture), never
-// silence.
+// A functor PARAMETER signature may use `include`
+// (flattened for real, at the functor-application width/arity check);
+// `with type` there is an EXPLICIT reject (this check's own "name/arity only"
+// posture), never silence.
 // ============================================================================
 
 /// (i) A functor parameter signature using `include` flattens for real:

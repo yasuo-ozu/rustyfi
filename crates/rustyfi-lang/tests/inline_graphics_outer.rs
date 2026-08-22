@@ -1,9 +1,8 @@
-//! `inline-graphics-outer` (roadmap C2): a fil-stretchy graphics box whose
+//! `inline-graphics-outer`: a fil-stretchy graphics box whose
 //! callback needs the RESOLVED width, unknown until line layout. Driven as a
-//! raw `Ast`-apply chain (the same style `hooks_crossref.rs`/`page_prims.rs`
-//! use for tests that need to inspect the returned `Value`/backend
-//! structures directly, not just a typechecked source string) — no parser,
-//! no `|>` (unsupported by this port's frontend), just
+//! raw `Ast`-apply chain, so the returned `Value`/backend structures can be
+//! inspected directly rather than through a typechecked source string — no
+//! parser, no `|>` (unsupported by this port's frontend), just
 //! `start-path`/`line-to`/`close-with-line`/`fill` application chains
 //! building a `0..w`-wide rectangle so the resolved width is directly
 //! checkable against the fill path's own bbox.
@@ -113,9 +112,9 @@ fn inline_graphics_outer_resolves_to_a_graphics_box_with_the_lines_slack_width()
     let Value::BlockBoxes(lines) = v else {
         panic!("expected block-boxes, got {v:?}")
     };
-    // line-break now brackets the formed paragraph with paragraph_top/bottom
-    // margin Skips (design-silent-fields FIX 3), so the single fil-only line
-    // sits between two VertBox::Skip — find it rather than assuming index 0.
+    // line-break brackets the formed paragraph with paragraph_top/bottom
+    // margin Skips, so the single fil-only line sits between two
+    // VertBox::Skip — find it rather than assuming index 0.
     let contents = lines
         .iter()
         .find_map(|vb| match vb {

@@ -1,23 +1,8 @@
-// The crate's front page IS the README: one description of what this program
-// is, kept in one file, so the two cannot drift. Everything below it is the
-// implementation note for this file specifically.
 #![doc = include_str!("../../../README.md")]
 //!
-//! # Implementation notes
-//!
-//! The chimera CLI (plan §1/§4/§7.3): a single multicall
-//! (busybox-/rustup-style) binary that behaves as three tools, dispatched on
-//! its `argv[0]` basename and on its first subcommand:
-//!
-//! - `rustyfi` — the compiler (default) plus the `satyrographos` and
-//!   `multicall` subcommand trees;
-//! - `satyrographos` — the package manager only.
-//!
-//! Package-management logic lives in the clap-free `rustyfi-satyrographos`
-//! crate; this file only parses arguments, resolves `lib_root`/`dest`, and
-//! calls in. The compile path (`cmd_compile`) is byte-for-byte the old
-//! `main`: positional input, `--output`, `--lib-root` with upward
-//! `lib-rustyfi/` discovery, and `--lang` with header sniffing.
+//! Multicall binary: behaves as `rustyfi` (compiler, default) or
+//! `satyrographos` (package manager), dispatched on `argv[0]`'s basename and
+//! on the first subcommand.
 
 use std::path::{Path, PathBuf};
 
@@ -30,11 +15,8 @@ mod man;
 
 /// Read an auxiliary cross-reference table, or an empty one if the file is
 /// absent, unreadable, or not the flat `{"key": "value"}` object upstream
-/// SATySFi writes.
-///
-/// Best-effort by design: an aux file is a hint that lets the fixpoint start
-/// closer to its answer, never an input the result depends on, so a corrupt or
-/// foreign one costs a trial rather than a wrong render or an error.
+/// SATySFi writes. Best-effort: a corrupt or foreign file costs a fixpoint
+/// trial, never a wrong render or an error.
 fn read_aux(path: &Path) -> rustyfi_lang::crossref::AuxTable {
     let Ok(text) = std::fs::read_to_string(path) else {
         return Default::default();
@@ -46,9 +28,8 @@ fn read_aux(path: &Path) -> rustyfi_lang::crossref::AuxTable {
 }
 
 /// Write `aux` back out, as the same flat JSON object upstream SATySFi reads.
-/// `AuxTable` is a `BTreeMap`, so the bytes are deterministic for a given
-/// table. Failure is ignored for the same reason a read failure is: a missing
-/// aux file only costs a fixpoint trial next time.
+/// `AuxTable` is a `BTreeMap`, so the bytes are deterministic. Failure is
+/// ignored: a missing aux file only costs a fixpoint trial next time.
 fn write_aux(path: &Path, aux: &rustyfi_lang::crossref::AuxTable) {
     if let Ok(text) = serde_json::to_string(aux) {
         let _ = std::fs::write(path, text);
@@ -56,11 +37,9 @@ fn write_aux(path: &Path, aux: &rustyfi_lang::crossref::AuxTable) {
 }
 
 fn main() {
-    // Compat fix: the recursive-descent parser + elaborator use deep stacks on
-    // real documents (the ~300-line official SATySFi demo overflows the default
-    // 8 MB main-thread stack). The test suite already runs the compile on a
-    // large-stack worker thread; do the same for the CLI so real documents don't
-    // crash with a bare "stack overflow" before any diagnostic prints.
+    // The recursive-descent parser + elaborator use deep stacks on real
+    // documents (the ~300-line official SATySFi demo overflows the default
+    // 8 MB main-thread stack), hence the large worker-thread stack below.
     let code = std::thread::Builder::new()
         .name("rustyfi-main".into())
         .stack_size(256 * 1024 * 1024)
@@ -71,23 +50,18 @@ fn main() {
     std::process::exit(code);
 }
 
-/// Exit codes (plan §4): `0` success; `2` clap usage error (clap exits `2`
+/// Exit codes: `0` success; `2` clap usage error (clap exits `2`
 /// itself on parse failure); `3` root resolution; `4` receipt collision /
 /// not-installed; `5` filesystem/archive/manifest; `1` compile error or a
 /// `status` mismatch.
 fn run() -> i32 {
     // `dispatch::get_matches` (not a bare `build_cli().get_matches()`) so a
     // global flag given BEFORE the subcommand (`rustyfi --config F install
-    // NAME`) works the same as after it — see `dispatch`'s module doc for
-    // why that needs a pre-pass rather than a clap setting.
+    // NAME`) works the same as after it.
     let matches = dispatch::get_matches();
 
-    // `multicall(true)` turns argv[0]'s basename into the top-level
-    // subcommand: `rustyfi` | `satyrographos`.
     match matches.subcommand() {
         Some(("rustyfi", m)) => match m.subcommand() {
-            // The package commands sit at top level now; `satyrographos …`
-            // remains as the personality invoked by that argv[0].
             Some((name, sm)) if is_package_command(name) => run_package(name, sm),
             Some(("multicall", sm)) => run_multicall(sm),
             Some(("man", _)) => match man::render(&mut std::io::stdout().lock()) {
@@ -99,7 +73,6 @@ fn run() -> i32 {
             },
             _ => run_compile(m),
         },
-        // Bare `satyrographos` personality.
         Some(("satyrographos", sm)) => run_satyrographos(sm),
         // Unreachable: clap requires one of the personalities.
         _ => {
@@ -108,10 +81,6 @@ fn run() -> i32 {
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Compile mode (unchanged behavior from the pre-chimera `main`).
-// ---------------------------------------------------------------------------
 
 fn run_compile(m: &ArgMatches) -> i32 {
     match cmd_compile(m) {
@@ -123,8 +92,6 @@ fn run_compile(m: &ArgMatches) -> i32 {
     }
 }
 
-/// The former `main` body, verbatim in behavior: load the document through
-/// the multi-file loader, merge preludes, compile, render, and write the PDF.
 fn cmd_compile(m: &ArgMatches) -> anyhow::Result<()> {
     use anyhow::Context as _;
 
@@ -132,10 +99,8 @@ fn cmd_compile(m: &ArgMatches) -> anyhow::Result<()> {
         .get_one::<PathBuf>("input")
         .expect("input is required by clap")
         .clone();
-    // HTML output backend, Slice 1 (surface): `--format` has a clap
-    // `.default_value("pdf")`, so this `get_one` is always `Some`;
-    // `str::parse` mirrors how `--lang` is parsed below
-    // (`format.rs`'s doc comment).
+    // `--format` has a clap `.default_value("pdf")`, so this `get_one` is
+    // always `Some`.
     let format: format::OutputFormat = m
         .get_one::<String>("format")
         .expect("--format has a clap default")
@@ -145,12 +110,10 @@ fn cmd_compile(m: &ArgMatches) -> anyhow::Result<()> {
         .get_one::<PathBuf>("output")
         .cloned()
         .unwrap_or_else(|| input.with_extension(format.extension()));
-    // A NAMED root is exactly that one root: `--lib-root`/`$RUSTYFI_LIB_ROOT`
-    // says where to look, and adding discovered roots behind it would make a
-    // build depend on what happens to be installed on the machine. Discovery
-    // instead supplies the WHOLE chain when nothing is named, so a
-    // project-local `.rustyfi/` layers over the development tree and the
-    // system install rather than replacing them.
+    // A NAMED root is exactly that one root — no discovered roots appended
+    // behind it, or a build would depend on what happens to be installed on
+    // the machine. Discovery instead supplies the WHOLE chain when nothing
+    // is named.
     let named = m
         .get_one::<PathBuf>("lib_root")
         .cloned()
@@ -166,17 +129,15 @@ fn cmd_compile(m: &ArgMatches) -> anyhow::Result<()> {
     let lang = m.get_one::<String>("lang").map(String::as_str);
     let deps_flag = m.get_one::<PathBuf>("deps").map(PathBuf::as_path);
     let (version, mode) = resolve_version_and_mode(lang, deps_flag, &input)?;
-    // Phase-7c saphe solver, C3: whether this compile is package-manager
+    // Whether this compile is package-manager
     // driven (Envelopes/manifest mode) — decides below whether a sibling
     // `Satyristes.lock`'s digest folds into the cache key. Captured before
     // `mode` is moved into `LoadOptions`.
     let is_envelopes_mode = matches!(mode, rustyfi_loader::LoadMode::Envelopes { .. });
 
-    // `--timing` (or RUSTYFI_TIMING=1): coarse per-phase wall-clock breakdown to
-    // stderr, for profiling the load→compile→render pipeline without an external
-    // profiler. The flag propagates to the library phases (elaborate/typecheck/
-    // eval trials, which read RUSTYFI_TIMING) via the env var, and forces
-    // `--no-cache` below so every phase actually runs rather than a cache hit.
+    // `--timing` (or RUSTYFI_TIMING=1): propagates to the library phases via
+    // the env var, and forces `--no-cache` below so every phase actually
+    // runs rather than a cache hit.
     let timing = m.get_flag("timing") || std::env::var_os("RUSTYFI_TIMING").is_some();
     if timing {
         std::env::set_var("RUSTYFI_TIMING", "1");
@@ -200,33 +161,19 @@ fn cmd_compile(m: &ArgMatches) -> anyhow::Result<()> {
         );
     }
 
-    // Text-rendering plan, Slice 1: resolve font configuration (flags >
-    // --font-dir/$RUSTYFI_FONT_DIR > --lib-root) into a real TtfFontStore,
-    // or `None` when nothing is configured anywhere — in which case every
-    // remaining step below is byte-for-byte the pre-Slice-1 base-14 path.
     let font_store = resolve_font_store(m, lib_root.as_deref())?;
 
-    // Phase-7c saphe solver, C3: when this compile is package-manager driven
-    // (Envelopes/manifest mode), best-effort locate the project's
-    // `Satyristes`/`Satyristes.lock` (upward search from the input,
-    // exactly like `--lib-root` discovery) and fold the lock's digest into
-    // the cache key below, so a `saphe update`/reconcile that changes a
+    // Fold the resolved `Satyristes`/lock digest
+    // into the cache key, so a `saphe update`/reconcile that changes a
     // locked package's version invalidates the cache even when the entry
-    // document's own bytes did not change. A project with no
-    // `Satyristes`/lock (or a Legacy-mode compile) simply folds in
-    // `None`, unchanged from before this fold existed.
+    // document's own bytes did not change.
     let deps_lock_digest: Option<String> = is_envelopes_mode
         .then(|| discover_deps_lock_digest(&input))
         .flatten();
 
-    // Content-addressed compile cache (plan: "make recompiling an unchanged
-    // document near-instant"). Caching is ON by default; `--no-cache` disables
-    // both read and write. The key is computed from the just-loaded program —
-    // its resolved input bytes, the compiler/target version, the entry name,
-    // (Slice 1) the resolved font identity, and (C3) the resolved deps-lock
-    // digest — *before* the expensive compile+render, so a hit skips them
-    // entirely and writes byte-for-byte the PDF an earlier miss rendered and
-    // stored.
+    // Content-addressed compile cache. Caching is ON by default; `--no-cache`
+    // disables both read and write. The key is computed from the program
+    // *before* the expensive compile+render, so a hit skips them entirely.
     let cache = if m.get_flag("no_cache") || timing {
         None
     } else {
@@ -258,32 +205,18 @@ fn cmd_compile(m: &ArgMatches) -> anyhow::Result<()> {
         }
     }
 
-    // `Some(store)` ⇒ typeset and render through the real embedded TrueType
-    // face (Type0/CIDFontType2, `render_pdf_ttf`); `None` ⇒ today's base-14
-    // path, verbatim (same `Base14Metrics` instance, same `render_pdf` call),
-    // so existing fixtures/behavior are untouched with no font configured.
     let base14 = rustyfi_pdf::Base14Metrics;
     let metrics: &dyn rustyfi_backend::FontMetrics = match &font_store {
         Some(store) => store,
         None => &base14,
     };
-    // Auxiliary cross-reference file (upstream SATySFi's `<doc>.satysfi-aux`,
-    // same name and same flat JSON object, so the two interoperate): seeds the
-    // cross-reference fixpoint from the previous run so a forward reference
-    // resolves on the first trial instead of forcing a second. Disabled by
-    // `--no-aux`.
-    //
-    // Unlike the compile cache, this is NOT forced off by `--timing`: a cache
-    // hit skips every phase, leaving a profiling run nothing to measure, but an
-    // aux file skips no phase — it only changes how many fixpoint trials are
-    // needed, which is exactly what a profiling run wants to see. A cold
-    // measurement asks for `--no-aux` (and, comparing against upstream
-    // SATySFi, deletes its `.satysfi-aux` too — upstream reads one by default
-    // just the same).
-    //
-    // This cannot change the output: `rustyfi_lang` discards the seed and
-    // redoes the fixpoint cold if the final trial turned out to depend on a
-    // seeded value it never re-derived (`CrossRefs::seed_unvalidated`).
+    // Auxiliary cross-reference file (interoperates with upstream's
+    // `<doc>.satysfi-aux`). Unlike the compile cache, NOT forced off by
+    // `--timing`: it changes how many fixpoint trials are needed, not which
+    // phases run, so a profiling run still wants it (use `--no-aux` for a
+    // cold measurement). Cannot change the output: a seeded value the final
+    // trial didn't re-derive forces a cold redo
+    // (`CrossRefs::seed_unvalidated`).
     let aux_path: Option<PathBuf> = if m.get_flag("no_aux") {
         None
     } else {
@@ -300,22 +233,17 @@ fn cmd_compile(m: &ArgMatches) -> anyhow::Result<()> {
         rustyfi_syntax::RustyfiVersion::V0_1 => {
             // 0.1 libraries are modules, not prelude-concatenable flat
             // binding lists — no merge_program; each file keeps its own
-            // FileV1 CST (plan C1). Slice 1's lowering erases the module
-            // wrapper lang-side (rustyfi_lang::v1::lower).
+            // FileV1 CST.
             rustyfi_lang::compile_document_v1_with_aux(&program.files, metrics, &mut aux)
                 .map_err(|e| anyhow::anyhow!("{}: {e}", input.display()))?
                 .0
         }
         _ => {
-            // Slice X4a: a V0_0-rooted load whose dependency graph contains
-            // at least one foreign V0_1 node (a `@require:` of a
-            // `dist-v01/packages/` package, per the loader's Q4-mirror
-            // rule) routes through the new `compile_document_v006_xver`
-            // entry point instead of the pure-0.0.6
-            // `merge_program`/`compile_document_cst` path — ONLY when such
-            // a dependency is actually present, so a pure-0.0.6 load (the
-            // overwhelming majority — every existing fixture) takes the
-            // exact old path, byte-identical.
+            // A V0_0-rooted load with a foreign V0_1 dependency
+            // (a `@require:` into `dist-v01/packages/`, per the loader's
+            // per-file version-detection rule) routes through `compile_document_v006_xver`
+            // instead of the pure-0.0.6 path — only when such a dependency is
+            // present, so a pure-0.0.6 load stays byte-identical.
             let has_v01_dep = program
                 .files
                 .iter()
@@ -333,8 +261,6 @@ fn cmd_compile(m: &ArgMatches) -> anyhow::Result<()> {
         }
     };
 
-    // Everything above (load, version resolution, font store, cache lookup,
-    // compile) is shared; only this terminal render+write step differs.
     if timing {
         eprintln!(
             "TIMING compile(elab+eval) {:>8.1}ms  ({} pages)",
@@ -368,16 +294,15 @@ fn cmd_compile(m: &ArgMatches) -> anyhow::Result<()> {
 
     let line_count: usize = doc.pages.iter().map(|p| p.lines.len()).sum();
 
-    // Persist the cross-reference table for next time, so a forward reference
-    // resolves on the first trial (see `aux_path` above). Written only after a
-    // successful render, and only on the compile path — a cache hit returned
-    // long before here, leaving the previous run's file exactly as it was.
+    // Written only after a successful render, and only on the compile path
+    // — a cache hit returned long before here, leaving the previous run's
+    // file exactly as it was.
     if let Some(path) = &aux_path {
         write_aux(path, &aux);
     }
 
-    // Populate the cache for next time (best-effort: a cache-write failure
-    // must never fail an otherwise-successful compile).
+    // Best-effort: a cache-write failure must never fail an otherwise-
+    // successful compile.
     if let (Some(cache), Some(key)) = (&cache, &cache_key) {
         let _ = cache.put(key, &bytes, doc.pages.len(), line_count);
     }
@@ -391,29 +316,11 @@ fn cmd_compile(m: &ArgMatches) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Resolve the text-rendering plan's Slice-1 font configuration into a
-/// ready [`rustyfi_pdf::TtfFontStore`], or `None` when nothing is configured
-/// (the caller then keeps the base-14 path exactly as before this feature
-/// existed).
-///
-/// Precedence (highest first), mirroring how `lib_root` itself resolves
-/// `--lib-root` > `$RUSTYFI_LIB_ROOT` > upward discovery:
-///
-/// 1. `--font` (+ optional `--font-bold`/`--font-oblique`, enforced by clap
-///    to require `--font`) — a config-less one-off, no `fonts.satysfi-hash`
-///    involved.
-/// 2. `--font-dir <DIR>`.
-/// 3. `$RUSTYFI_FONT_DIR`.
-/// 4. `lib_root` itself (already resolved by the caller), so a project that
-///    keeps its font config alongside `dist/packages/` needs no extra flag.
-///
-/// A missing configuration at whichever root ends up being examined (or no
-/// root at all) is "nothing configured" (`Ok(None)`); once a
-/// `fonts.satysfi-hash` *is* found, any further problem — malformed JSON, an
-/// unknown default-face abbrev, a font file that fails to load — is a real
-/// error, surfaced to the user via the normal compile-error path rather than
-/// silently substituting base-14 for what looks like a real, if broken,
-/// font configuration (see `rustyfi_pdf::fonts`'s module docs).
+/// Resolve font configuration, highest precedence first: `--font` (+
+/// `--font-bold`/`--font-oblique`) > `--font-dir` > `$RUSTYFI_FONT_DIR` >
+/// `lib_root`. `Ok(None)` when nothing is configured anywhere; once a
+/// `fonts.satysfi-hash` config IS found, further problems are real errors
+/// (see `rustyfi_pdf::fonts`'s module docs).
 fn resolve_font_store(
     m: &ArgMatches,
     lib_root: Option<&Path>,
@@ -439,16 +346,10 @@ fn resolve_font_store(
     Ok(Some(store))
 }
 
-/// The CLI's default `--lib-root` rule, used only when neither `--lib-root`
-/// nor `$RUSTYFI_LIB_ROOT` is given: [`sg::roots::discover_all`], the same search
-/// the package manager runs, so a document compiles against exactly the root
-/// an install would have written to — a development `lib-rustyfi/`, then a
-/// project-local `.rustyfi/` beside its `Satyristes`, then the user and
-/// system prefixes.
-///
-/// It starts at the DOCUMENT's own directory rather than the working
-/// directory, so `rustyfi some/nested/doc.saty` behaves the same regardless of
-/// where the command was run from.
+/// The CLI's default `--lib-root`: [`sg::roots::discover_all`], starting at
+/// the DOCUMENT's own directory (not the working directory), so
+/// `rustyfi some/nested/doc.saty` behaves the same regardless of where the
+/// command was run from.
 fn discover_lib_roots(input: &std::path::Path) -> Vec<PathBuf> {
     input
         .parent()
@@ -456,13 +357,9 @@ fn discover_lib_roots(input: &std::path::Path) -> Vec<PathBuf> {
         .unwrap_or_default()
 }
 
-/// Phase-7c saphe solver, C3: find the nearest `Satyristes` at or above
-/// `input`'s directory (same upward-search shape as [`discover_lib_root`])
-/// and, if its sibling `Satyristes.lock` exists and has at least one locked
-/// entry, return `Some(digest)`. `None` covers every "nothing to fold in"
-/// case uniformly — no `Satyristes` found, no lockfile yet, or an empty
-/// one — so the cache key is byte-for-byte unchanged from before this fold
-/// for any project that has not adopted the package manager.
+/// Nearest `Satyristes`'s `Satyristes.lock`
+/// digest, if it has at least one locked entry; `None` otherwise (no
+/// manifest, no lock, or an empty one).
 fn discover_deps_lock_digest(input: &std::path::Path) -> Option<String> {
     let dir = input.parent()?;
     let manifest_path = rustyfi_satyrographos::find_upward(dir)?;
@@ -474,26 +371,16 @@ fn discover_deps_lock_digest(input: &std::path::Path) -> Option<String> {
     Some(lock.digest())
 }
 
-/// Resolve BOTH axes of the load — the language version (Axis A) and the
-/// packaging mode (Axis B, `rustyfi_loader::LoadMode`) — from the
-/// `--lang` flag, the `--deps` flag, and best-effort header
-/// detection (`rustyfi_syntax::sniff_headers`). This is the plan's detection
-/// ladder (§1.4) in its Ld3a-minimal form.
-///
-/// Axis A (version), exactly as before this became two-axis:
-/// - flag given, sniffer disagrees: warn to stderr, obey the flag;
-/// - flag given: obey it (the loader still rejects unimplemented versions);
-/// - no flag, sniffer detects an unimplemented version: fail now with a hint;
-/// - otherwise: the default, 0.0.6.
-///
-/// Axis B (mode):
-/// - `--deps <FILE>` given → `Envelopes { deps: Some(FILE) }` (ladder step 2);
-/// - else a `use`-shaped header sniffed → `Envelopes { deps: None }` (step 3);
-/// - else `Legacy` (step 4).
-///
-/// The rejected combination (Axis A = 0.0.6, Axis B = Envelopes) is surfaced
-/// here, early and naming the flag that pinned each axis, rather than left to
-/// the loader's `InvalidModeVersion` backstop.
+/// Resolve BOTH axes of the load — language version (Axis A) and packaging
+/// mode (Axis B, `rustyfi_loader::LoadMode`) — from `--lang`, `--deps`, and
+/// header sniffing (Ld3a-minimal). Axis A: an explicit `--lang` wins
+/// (warning if the sniffer disagrees); otherwise the sniffer's verdict,
+/// unless it names an unimplemented version, in which case this fails with a
+/// hint; default 0.0.6. Axis B: `--deps` ⇒ `Envelopes { deps: Some(_) }`;
+/// else a sniffed `use` header ⇒ `Envelopes { deps: None }`; else `Legacy`.
+/// The rejected combination (0.0.6 + Envelopes) is reported here, naming
+/// which flag pinned each axis, rather than left to the loader's
+/// `InvalidModeVersion` backstop.
 fn resolve_version_and_mode(
     flag: Option<&str>,
     deps_flag: Option<&Path>,
@@ -512,7 +399,6 @@ fn resolve_version_and_mode(
         .map(|src| rustyfi_syntax::sniff_headers(&src))
         .unwrap_or_default();
 
-    // ---- Axis A: the language version ----
     let version = match (flag, sniff.version) {
         (Some(v), Some(s)) if s != v => {
             eprintln!(
@@ -534,7 +420,6 @@ fn resolve_version_and_mode(
         (None, _) => RustyfiVersion::DEFAULT,
     };
 
-    // ---- Axis B: the packaging mode ----
     let mode = if let Some(deps) = deps_flag {
         rustyfi_loader::LoadMode::Envelopes {
             deps: Some(deps.to_path_buf()),
@@ -545,9 +430,6 @@ fn resolve_version_and_mode(
         rustyfi_loader::LoadMode::Legacy
     };
 
-    // The rejected combination (plan §1.3 row 4): 0.0.6 has no `use` headers.
-    // Name the flag that pinned each axis — a diagnostic the loader's
-    // `InvalidModeVersion` backstop cannot give.
     if matches!(mode, rustyfi_loader::LoadMode::Envelopes { .. })
         && !matches!(version, RustyfiVersion::V0_1)
     {
@@ -569,19 +451,12 @@ fn resolve_version_and_mode(
 
 /// Concatenate the dependency-ordered library preludes ahead of the entry
 /// document's own prelude, producing one synthetic file for elaboration.
-/// (The v0.0.6 analog type-checks each library into a shared environment in
-/// dependency order; untyped elaboration gets the same scoping by prelude
-/// concatenation.)
 fn merge_program(
     program: rustyfi_loader::LoadedProgram,
 ) -> (
     rustyfi_syntax::cst::File,
     std::collections::HashMap<usize, rustyfi_lang::types::Stage>,
 ) {
-    // `merge_program` is the V0_0-only path; V0_1 goes through
-    // `compile_document_v1` once it exists. `LoadedCst::V0_1` is genuinely
-    // unreachable today: `is_implemented()` still gates `V0_1` out at
-    // `rustyfi_loader::load()`.
     fn as_v006(cst: rustyfi_loader::LoadedCst) -> rustyfi_syntax::cst::File {
         match cst {
             rustyfi_loader::LoadedCst::V0_0(f) => f,
@@ -595,10 +470,10 @@ fn merge_program(
     let entry = files.pop().expect("loader always yields the entry last");
     let entry_cst = as_v006(entry.cst);
     let mut prelude = Vec::new();
-    // Concatenation drops each file's headers, so the one header that is a
-    // property of its BINDINGS rather than of the file as a document --
-    // `@stage:` -- is recorded here against the slots they land in. The entry
-    // document is stage 1 by definition and contributes nothing.
+    // Concatenation drops each file's headers, so `@stage:` — a property of
+    // its BINDINGS, not of the file as a document — is recorded here
+    // against the slots they land in. The entry document is stage 1 by
+    // definition and contributes nothing.
     let mut stages = std::collections::HashMap::new();
     for lib in files {
         let cst = as_v006(lib.cst);
@@ -624,37 +499,25 @@ fn merge_program(
 
 
 
-// ---------------------------------------------------------------------------
-// Package-manager mode (satyrographos <cmd>).
-// ---------------------------------------------------------------------------
-
 use rustyfi_satyrographos as sg;
 
-/// Map a `rustyfi_satyrographos::Error` to the plan's §4 exit codes.
+/// Map a `rustyfi_satyrographos::Error` to `run`'s exit codes.
 fn sg_exit_code(err: &sg::Error) -> i32 {
     use sg::Error::*;
     match err {
-        // Nothing to operate on (no root, no Satyristes, or no registry config).
         RootResolution | ManifestNotFound | NoRegistry => 3,
-        // Not-found: a missing receipt, or a package/version absent from the
-        // index — including the phase-7c solver's own "no version fits"
-        // outcomes ([`Unsatisfiable`]/[`VersionConflict`]), which are the
-        // solver-graph analogue of a plain [`VersionNotFound`].
+        // Not-found: a missing receipt, package/version absent, or the
+        // solver's Unsatisfiable/VersionConflict (its analogue of
+        // VersionNotFound).
         AlreadyInstalled { .. }
         | NotInstalled { .. }
         | PackageNotFound { .. }
         | VersionNotFound { .. }
         | Unsatisfiable { .. }
         | VersionConflict { .. } => 4,
-        // Library/doc-selection / filter usage errors (plan §4.1).
         LibraryFilter { .. } | AmbiguousLibrary { .. } | AmbiguousDoc { .. } | DocFilter { .. } => 2,
-        // Nothing to build here.
         NoDocTarget => 3,
-        // A doc's own build command failed: its exit status is the story, and
-        // the typesetter has already said why on stderr.
         DocBuild { .. } | OpamBuild { .. } => 1,
-        // Filesystem / archive / manifest / Satyristes / lockfile / registry-
-        // fetch / integrity failures.
         Io { .. }
         | Manifest { .. }
         | Config { .. }
@@ -697,8 +560,6 @@ fn finish<E: std::fmt::Display>(result: Result<(), E>, code: impl FnOnce(&E) -> 
     }
 }
 
-/// Whether `name` is one of the package-manager commands, which the compiler
-/// personality and the `satyrographos` personality both carry.
 fn is_package_command(name: &str) -> bool {
     matches!(
         name,
@@ -706,7 +567,6 @@ fn is_package_command(name: &str) -> bool {
     )
 }
 
-/// Run one package-manager command, whichever personality it arrived through.
 fn run_package(name: &str, sm: &ArgMatches) -> i32 {
     let result = match name {
         "install" => cmd_install(sm),
@@ -745,8 +605,8 @@ fn cmd_build(m: &ArgMatches) -> Result<(), sg::Error> {
         .cloned()
         .unwrap_or_else(|| PathBuf::from("."));
     // `--install` materialises the built products into the resolved root
-    // (dist/doc/<name>/<dst>); with no `--install`, `build` runs the commands
-    // and reports which products exist, exactly as before.
+    // (dist/doc/<name>/<dst>); with no `--install`, `build` only runs the
+    // commands and reports which products exist.
     let install = m.get_flag("install").then(|| root_options(m));
     let opts = sg::BuildOptions {
         lang: m.get_one::<String>("lang").and_then(|s| sg::Lang::parse(s)),
@@ -778,9 +638,9 @@ fn root_options(m: &ArgMatches) -> sg::RootOptions {
     }
 }
 
-/// Registry options from the shared `--registry`/`--offline` flags (plan
-/// §5.4 step 1; phase 7d slice S2 design §2.5/§4). The cache dir / refresh
-/// come from `$RUSTYFI_REGISTRY_CACHE` and each command's own semantics;
+/// Registry options from the shared `--registry`/`--offline` flags.
+/// The cache dir / refresh come from
+/// `$RUSTYFI_REGISTRY_CACHE` and each command's own semantics;
 /// `update` sets `refresh` itself. `offline` also honors `$RUSTYFI_OFFLINE`
 /// (via `RegistryOptions::is_offline`) even when `--offline` is not passed.
 fn registry_options(m: &ArgMatches) -> Result<sg::RegistryOptions, sg::Error> {
@@ -831,8 +691,8 @@ fn registry_fallback(m: &ArgMatches) -> Result<Option<sg::RegistryConfig>, sg::E
     Ok(registry_fallbacks(m)?.into_iter().next())
 }
 
-/// The nearest `Satyristes`, searched upward from the current directory
-/// (plan §5.3), or `None` if there is none. Callers map the `None` case to the
+/// The nearest `Satyristes`, searched upward from the current directory,
+/// or `None` if there is none. Callers map the `None` case to the
 /// exit-`3` [`sg::Error::ManifestNotFound`]. Shared by manifest-mode `install`
 /// and by `update`.
 fn find_manifest() -> Option<PathBuf> {
@@ -841,7 +701,7 @@ fn find_manifest() -> Option<PathBuf> {
 }
 
 fn cmd_install(m: &ArgMatches) -> Result<(), sg::Error> {
-    // No PATH → phase-2 manifest mode (reconcile the nearest Satyristes).
+    // No PATH → manifest mode (reconcile the nearest Satyristes).
     let Some(args) = m.get_many::<String>("path") else {
         return cmd_install_manifest(m);
     };
@@ -872,8 +732,8 @@ fn install_one(arg: &str, m: &ArgMatches) -> Result<(), sg::Error> {
         force: m.get_flag("force"),
     };
 
-    // Registry form (plan §5.4): the argument is a registry NAME[@VERSION] when
-    // it does not name a path on disk. A path on disk is a phase-1 install.
+    // Registry form: the argument is a registry NAME[@VERSION] when
+    // it does not name a path on disk. A path on disk is installed directly.
     let report = if sg::is_url(arg) {
         let (url, sha256) = split_url_checksum(arg);
         if sha256.is_none() {
@@ -889,16 +749,9 @@ fn install_one(arg: &str, m: &ArgMatches) -> Result<(), sg::Error> {
     } else {
         let (name, version) = split_name_version(arg);
         let reg_opts = registry_options(m)?;
-        // Registry-URL precedence (plan §5.4 / this port's [registry] section):
-        // --registry flag > $RUSTYFI_REGISTRY > the nearest Satyristes's
-        // (registry …) > the user's config.toml
-        // [registry] url. The first two live in `reg_opts`; supply the third as
-        // the fallback so a project with a declared registry needs no flag.
-        // Each configured repository in turn: the first that HAS the package
-        // wins, and a package missing from one is not an error until every
-        // one has been asked.
-        // The user named a package; if its manifest declares a library of
-        // that name, that is the one they meant.
+        // Each configured repository in turn: the first that HAS the
+        // package wins, and a package missing from one is not an error
+        // until every one has been asked.
         let opts = sg::InstallOptions {
             prefer_library: Some(name.to_string()),
             ..opts
@@ -986,8 +839,6 @@ fn cmd_install_manifest(m: &ArgMatches) -> Result<(), sg::Error> {
     }
     let opts = sg::RootOptions { lib_root, dest };
 
-    // Every configured repository, in order (task: reconcile used to consult
-    // only the first) — same source `cmd_search`/`install_one` already use.
     let repos = registry_fallbacks(m)?;
     let report = sg::install_manifest_reg_multi(&manifest, &opts, &registry_options(m)?, &repos)?;
     println!("reconciled {}", manifest.display());
@@ -1000,8 +851,6 @@ fn cmd_install_manifest(m: &ArgMatches) -> Result<(), sg::Error> {
     for name in &report.removed {
         println!("  dropped {name} (left installed; not pruned)");
     }
-    // One unreachable repository must not hide the others' results; report it
-    // once reconciliation has otherwise finished (mirrors `cmd_search`).
     for (url, e) in &report.unreachable_registries {
         eprintln!("warning: registry `{url}` could not be reached: {e}");
     }
@@ -1042,8 +891,6 @@ fn cmd_list(m: &ArgMatches) -> Result<(), sg::Error> {
     Ok(())
 }
 
-/// `search <keyword>...` (plan §8): list matching registry packages, one
-/// `name version — description` line each, sorted by name.
 /// How many repositories a search round covers.
 fn urls_len(repos: &[sg::RegistryConfig], opts: &sg::RegistryOptions) -> usize {
     if opts.url.is_some() || repos.is_empty() {
@@ -1053,6 +900,8 @@ fn urls_len(repos: &[sg::RegistryConfig], opts: &sg::RegistryOptions) -> usize {
     }
 }
 
+/// `search <keyword>...`: list matching registry packages, one
+/// `name version — description` line each, sorted by name.
 fn cmd_search(m: &ArgMatches) -> Result<(), sg::Error> {
     let terms: Vec<&str> = m
         .get_many::<String>("term")
@@ -1083,10 +932,8 @@ fn cmd_search(m: &ArgMatches) -> Result<(), sg::Error> {
                         String::new()
                     };
                     // `hit.name` is always what `install NAME` accepts; the
-                    // registry's own raw id (e.g. an opam package id) is
-                    // shown alongside in parens when it differs, since it is
-                    // still useful to see which package actually backs a
-                    // hit — see `ops::search`'s module doc.
+                    // registry's own raw id is shown alongside in parens
+                    // when it differs.
                     let raw = hit
                         .registry_name
                         .as_deref()
@@ -1108,7 +955,6 @@ fn cmd_search(m: &ArgMatches) -> Result<(), sg::Error> {
     }
     if !any {
         if failures.len() == urls_len(&repos, &opts) {
-            // Nothing was searched successfully at all.
             return Err(failures.into_iter().next().map(|(_, e)| e).unwrap_or(sg::Error::NoRegistry));
         }
         println!("(no matching packages)");
@@ -1116,12 +962,10 @@ fn cmd_search(m: &ArgMatches) -> Result<(), sg::Error> {
     Ok(())
 }
 
-/// `update` (plan §8, §5.4 step 1): re-fetch the index and report available
+/// `update`: re-fetch the index and report available
 /// upgrades against the nearest `Satyristes.lock` (does not apply them).
 fn cmd_update(m: &ArgMatches) -> Result<(), sg::Error> {
     let manifest = find_manifest().ok_or(sg::Error::ManifestNotFound)?;
-    // Every configured repository, in order (task: `update` used to consult
-    // only the first) — same source `cmd_search`/`install_one` already use.
     let repos = registry_fallbacks(m)?;
     let report = sg::update_multi(&manifest, &registry_options(m)?, &repos)?;
 
@@ -1135,15 +979,13 @@ fn cmd_update(m: &ArgMatches) -> Result<(), sg::Error> {
             println!("{}: {} -> {} available", up.name, up.current, up.latest);
         }
     }
-    // One unreachable repository must not hide the others' results (mirrors
-    // `cmd_search`).
     for (url, e) in &report.unreachable {
         eprintln!("warning: registry `{url}` could not be refreshed: {e}");
     }
     Ok(())
 }
 
-/// `status` maps a missing-files result to exit `1` (plan §4.4), so it
+/// `status` maps a missing-files result to exit `1`, so it
 /// returns a code directly rather than through the shared `Ok/Err` path.
 fn cmd_status(m: &ArgMatches) -> i32 {
     let name = m.get_one::<String>("name").map(String::as_str);
@@ -1156,7 +998,6 @@ fn cmd_status(m: &ArgMatches) -> i32 {
     };
 
     if name.is_some() {
-        // Full presence report for the single named package.
         for pkg in &report.packages {
             println!("{} {}", pkg.name, pkg.version);
             for path in &pkg.missing_files {
@@ -1186,10 +1027,6 @@ fn cmd_status(m: &ArgMatches) -> i32 {
         0
     }
 }
-
-// ---------------------------------------------------------------------------
-// `rustyfi multicall install --dir DIR` (plan §4.5).
-// ---------------------------------------------------------------------------
 
 fn run_multicall(m: &ArgMatches) -> i32 {
     match m.subcommand() {

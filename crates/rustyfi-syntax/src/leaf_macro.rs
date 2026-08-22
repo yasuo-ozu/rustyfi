@@ -13,10 +13,6 @@
 //! synthesize identifiers, so each leaf name is passed explicitly (the derive
 //! read it from `#[leaf(name = "..")]`), and it cannot inspect the enum, so the
 //! variant list is maintained by hand here rather than derived from `Token`.
-//!
-//! NOT YET WIRED IN. `token.rs` still uses the derive; the `tests` module below
-//! type-checks this macro against the real `Atom`/`Token` under throwaway leaf
-//! names so it is known-good before the ~99 declarations are migrated.
 
 /// Generate leaf structs + `Parse`/`Unparse`/`Spanned`, one per rule.
 ///

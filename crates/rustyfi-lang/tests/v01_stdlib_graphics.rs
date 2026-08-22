@@ -1,80 +1,26 @@
-//! Vendoring Wave 2 (`…/tmp/vendoring-scout.md` §4 Wave 1, gated on L5b/
-//! G3): the 9 graphics-tier upstream 0.1 `stdlib`/`tabular`/
-//! `footnote-scheme` packages — `lib-rustyfi/dist-v01/packages/{graphics,
-//! deco,hdecoset,vdecoset,inline,block,logo,tabular,footnote-scheme}.
-//! satyh` — transliterated from the real upstream source
-//! (`saphe-split@b836d512`) per the scout's T1-T8 dialect, extended to
-//! cover module-body `use open` erasure via per-binding `let open M in`
-//! (no `Bind::Open` exists in this port's v1 grammar — see `logo.satyh`'s
-//! own banner) and the T4/G1 operator-section lambda fallback (`( ++ )`/
-//! `( +++ )`, `Atomic::OpRef` still unbuilt).
+//! Vendoring the 9 graphics-tier upstream 0.1
+//! `stdlib`/`tabular`/`footnote-scheme` packages — `lib-rustyfi/dist-v01/
+//! packages/{graphics,deco,hdecoset,vdecoset,inline,block,logo,tabular,
+//! footnote-scheme}.satyh` — transliterated from the real upstream source
+//! (`saphe-split@b836d512`), extended to cover
+//! module-body `use open` erasure via per-binding `let open M in` (no
+//! `Bind::Open` in this port's v1 grammar) and the operator-section
+//! lambda fallback (`( ++ )`/`( +++ )`, `Atomic::OpRef` still unbuilt).
 //!
-//! **G8 (discovered by this wave, see `graphics.satyh`'s banner for the
-//! full writeup): every package here is tested ONLY via the "value bar"**
-//! (`compile_v01_via_loader`, reproduced from `v01_stdlib.rs` — real
-//! loader -> `lower_file_v1` prelude concatenation -> `elaborate_program`
-//! -> plain `typecheck_with_version` -> `eval::Interp::eval`), never via
-//! the sealing-checked `compile_document_v1` bar `v01_stdlib.rs` reserves
-//! for `color`'s capstone. Reason: this port's v1 module-sealing width
-//! check (`v1::module_check::check_program`, what `compile_document_v1`
-//! runs) resolves bare sig type names through `typecheck.rs`'s
-//! `name_to_mono`, which has no case for `"path"`/`"pre-path"`/
-//! `"graphics"`/`"deco"`/`"deco-set"`/`"image"` — every one of these 9
-//! packages' SEALED (`:>`) signatures mentions at least one of them
-//! (directly, or transitively through `@require: inline`, whose own
-//! sig does), so `compile_document_v1` on ANY document requiring ANY of
-//! them fails with a spurious "does not match its signature" mismatch
-//! (confirmed by an un-committed probe against `path.satyh`, which
-//! already carried this exact latent gap since Wave 0 — Wave 0 simply
-//! never exercised it, since only `color`'s capstone used
-//! `compile_document_v1` and `color`'s sig only mentions `color`, a
-//! registered builtin variant, which — unlike `path`/`graphics`/`deco`/
-//! `deco-set` — happens to already resolve correctly). `footnote-
-//! scheme.satyh`'s OWN sig is clean (no `path`/`graphics`/`deco`
-//! mentions) but it `@require:`s `inline`, which is not, so it is
-//! equally affected transitively. This is a PRE-EXISTING port gap, not
-//! introduced by this vendoring pass, and not fixable without editing
-//! `typecheck.rs`/`v1/module_check.rs` (out of scope for this pass: no
-//! `.rs` source edits). The value-bar tests below still prove real
-//! end-to-end loading, lowering, elaboration, (unsealed) typechecking,
-//! and evaluation through the production loader — exactly the bar 16 of
-//! Wave 0's 17 packages already relied on.
+//! Most packages are proven via `compile_v01_via_loader` (real loader ->
+//! `lower_file_v1` prelude concatenation -> `elaborate_program` -> plain
+//! `typecheck_with_version` -> `eval::Interp::eval`); the sealing-checked
+//! `compile_document_v1` bar is exercised by a capstone test at the end.
 //!
-//! Three more PRE-EXISTING, previously-latent gaps this wave's transliteration
-//! surfaced — a later language-completeness pass resolved all three (G9
-//! by a real one-line fix; G10/G11 were already subsumed by intervening
-//! work, see each note below):
-//!  - **G9 FIXED** (`inline.satyh`'s banner): `typecheck.rs`'s
-//!    `PRIMITIVE_NAMES` list (consulted only by the plain/unsealed
-//!    typecheck path) omitted `"inline-frame-inner"`, even though the
-//!    primitive itself and `prim_types.rs` both registered it correctly —
-//!    `frame-inner` was dropped from the vendored `Inline` module (T6) as
-//!    a result. Fixed by adding the one missing name; `Inline.frame-inner`
-//!    is restored. See `crates/rustyfi-lang/tests/v01_lang_completeness.rs`'s
+//! Three gaps this transliteration surfaced, all fixed:
+//!  - `typecheck.rs`'s `PRIMITIVE_NAMES` list omitted
+//!    `"inline-frame-inner"`. See `v01_lang_completeness.rs`'s
 //!    `inline_frame_inner_typechecks_and_evaluates`.
-//!  - **G10 ALREADY FIXED** (`hdecoset.satyh`'s banner): an
-//!    EXPRESSION-LEVEL named `let NAME param* = … in …`
-//!    (`cst_v1::ast::Expr::LetIn`) was reported to only accept plain
-//!    variable names as params — no wildcards, no compound patterns —
-//!    unlike top-level `val` binds. By the time this was investigated, the
-//!    optional-arg-rows increments (2/3a) had already generalized
-//!    `cst_v1::ast::Param`/`ParamBody` (shared by `Expr::Fun`,
-//!    `RecClauseV1`, AND `Expr::LetIn` alike) to carry a full `PatBot`, so
-//!    `let decoS (x, y) w h d = …` now parses and lowers exactly like
-//!    `hdecoset.satyh`/`vdecoset.satyh`'s ORIGINAL (pre-transliteration)
-//!    source without the `fun (x, y) w h d -> …` spelling workaround. See
-//!    `v01_lang_completeness.rs`'s `let_binding_wildcard_parameter_
-//!    ignores_its_argument`/`let_binding_tuple_destructuring_parameter`.
-//!  - **G11 NOT A BUG** (this file, `footnote-scheme.satyh`'s test
-//!    section): a flat program containing BOTH a `command \math`-shaped
-//!    value AND a `+++` (`block-boxes` concat) application elsewhere was
-//!    reported to spuriously fail the `+++` site. Root-caused to `let open
-//!    V01Mini in` shadowing the global `+++` with `v01-mini.satyh`'s own
-//!    test-only `val (+++) a b = a + b * 2` (ordinary `open` shadowing,
-//!    not an inference defect) — see that test section's comment for the
-//!    full writeup and `footnote_scheme_main_with_a_command_math_context_
-//!    compiles_and_evaluates` for the real-world scenario now proven to
-//!    work end to end.
+//!  - expression-level `let NAME param* = … in …` needed a full
+//!    `PatBot` per param. See `v01_lang_completeness.rs`'s
+//!    `let_binding_wildcard_parameter_ignores_its_argument`/
+//!    `let_binding_tuple_destructuring_parameter`.
+//!  - **NOT A BUG** — see the `footnote-scheme.satyh` section below.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -126,10 +72,8 @@ impl FontMetrics for NoFonts {
     }
 }
 
-/// A real (ASCII-only) `FontMetrics`, for tests that DO render real text
-/// through `read-inline` (`logo.satyh`'s `\SATySFi`/`\LaTeX`/`\TeX`,
-/// `footnote-scheme.satyh`'s label text) — mirrors `v01_stdlib.rs`'s own
-/// `Mono`.
+/// A real (ASCII-only) `FontMetrics` for tests that render actual text via
+/// `read-inline` — mirrors `v01_stdlib.rs`'s own `Mono`.
 struct Mono;
 
 impl FontMetrics for Mono {
@@ -155,8 +99,7 @@ fn as_v01(f: &LoadedFile) -> &rustyfi_syntax::cst_v1::FileV1 {
     }
 }
 
-/// Reproduced from `v01_stdlib.rs` (this crate's established per-file-
-/// helper convention — no shared test-support library target exists).
+/// Reproduced from `v01_stdlib.rs` — no shared test-support library exists.
 fn compile_v01_via_loader(tag: &str, src: &str) -> Result<Value, String> {
     compile_v01_via_loader_with_metrics(tag, src, &NoFonts)
 }
@@ -204,14 +147,10 @@ fn compile_v01_via_loader_with_metrics(
     typecheck::typecheck_with_version(&elaborated, RustyfiVersion::V0_1)
         .map_err(|e| format!("typecheck: {e}"))?;
     let mut interp = eval::Interp::new(metrics);
-    // `coerce_graphics_result` (H1-H6/R2, `v01_graphics_collection.rs`'s own
-    // harness) forks on `interp.version` at EVAL time (unlike the primitive
-    // *selection*, which `base_env_with_version` already resolved) — a
-    // graphics-tier package's `graphics`-callback primitives
-    // (`inline-graphics`/`inline-graphics-outer`/`tabular`/the deco family)
-    // need this set, or they eval under the default `V0_0` behavior
-    // (expects the callback to return a LIST) even though everything above
-    // was compiled as V0_1.
+    // `coerce_graphics_result` forks on `interp.version` at EVAL
+    // time — graphics-tier callback primitives need this set or they eval
+    // under the default V0_0 behavior (expects a LIST) despite being
+    // compiled as V0_1.
     interp.version = RustyfiVersion::V0_1;
     interp
         .eval(&env, &rustyfi_lang::ast::debrand(&elaborated.body, &store))
@@ -284,10 +223,8 @@ fn run_with_big_stack(f: impl FnOnce() + Send + 'static) {
         .expect("big-stack thread panicked (see assertion above)");
 }
 
-// ============================================================================
-// `graphics.satyh` — sealed; `Basic.point`/`unite-graphics`/`shift-
-// graphics`/`get-graphics-bbox`'s `Option` fork (R3).
-// ============================================================================
+// `graphics.satyh` — sealed; `Basic.point`/`unite-graphics`/`shift-graphics`/
+// `get-graphics-bbox`'s `Option` fork.
 
 #[test]
 fn graphics_bare_empty_is_unbound_without_qualification() {
@@ -326,12 +263,9 @@ get-graphics-bbox (Graphics.shift (5pt, 5pt) gr)";
     });
 }
 
-// ============================================================================
-// `deco.satyh` — sealed; a `deco` is a plain 4-ary curried function
-// `point -> length -> length -> length -> graphics` (L5b/G3's H3-H6
-// singular retype) — applied directly here, no document/frame firing
-// needed to observe it.
-// ============================================================================
+// `deco.satyh` — sealed; a `deco` is a plain 4-ary curried function `point
+// -> length -> length -> length -> graphics` (a singular-`graphics`
+// retype), applied directly with no document/frame firing needed.
 
 #[test]
 fn deco_bare_empty_is_unbound_without_qualification() {
@@ -354,9 +288,7 @@ get-graphics-bbox (Deco.simple-frame 1pt Color.black Color.white (10pt, 20pt) 30
     });
 }
 
-// ============================================================================
 // `hdecoset.satyh` — sealed; `deco-set = deco * deco * deco * deco`.
-// ============================================================================
 
 #[test]
 fn hdecoset_bare_empty_is_unbound_without_qualification() {
@@ -382,10 +314,8 @@ get-graphics-bbox (decoS (0pt, 0pt) 10pt 4pt 2pt)";
     });
 }
 
-// ============================================================================
 // `vdecoset.satyh` — sealed; `Gray(0.5)`/`Color.black` flat ctor/qualified
 // constant, `unite-graphics` called bare.
-// ============================================================================
 
 #[test]
 fn vdecoset_bare_paper_is_unbound_without_qualification() {
@@ -422,10 +352,9 @@ let (decoS, decoH, decoM, decoT) = VDecoSet.paper in
 get-graphics-bbox (decoS (0pt, 0pt) 10pt 4pt 2pt)";
         let v = compile_v01_via_loader("vdecoset-paper-bbox", src)
             .expect("vdecoset.satyh should compile");
-        // Union of the shadow polygon (extends `xshift`=2pt/`yshift`=1pt past
-        // the frame) and the 0.5pt-stroked frame rectangle itself — just prove
-        // it is `Some` and strictly larger than the bare frame rectangle
-        // (0,-2)-(10,4), rather than pinning every shadow vertex.
+        // Union of the shadow polygon (xshift=2pt/yshift=1pt past the frame)
+        // and the 0.5pt-stroked frame rect — just prove it's `Some` and
+        // strictly larger than the bare frame (0,-2)-(10,4), not every vertex.
         let (lo, hi) = v
             .clone()
             .pipe(as_bbox_option)
@@ -444,11 +373,8 @@ trait Pipe: Sized {
 }
 impl<T> Pipe for T {}
 
-// ============================================================================
-// `inline.satyh` — sealed; `concat`'s `( ++ )` T4/G1 lambda fallback,
-// `skip`/`kern`/`get-natural-advance`, `graphics-fixed`/`graphics-outer`
-// (H1/H2 singular-`graphics` callbacks).
-// ============================================================================
+// `inline.satyh` — sealed; `concat`'s `( ++ )` operator-section lambda fallback;
+// `graphics-fixed`/`graphics-outer` are singular-`graphics` callbacks.
 
 #[test]
 fn inline_bare_nil_is_unbound_without_qualification() {
@@ -493,10 +419,8 @@ Inline.get-natural-advance
     });
 }
 
-// ============================================================================
 // `block.satyh` — sealed; every `Inline` reference already qualified
-// upstream; `concat`'s `( +++ )` T4/G1 lambda fallback.
-// ============================================================================
+// upstream; `concat`'s `( +++ )` operator-section lambda fallback.
 
 #[test]
 fn block_bare_nil_is_unbound_without_qualification() {
@@ -518,10 +442,8 @@ Block.concat [Block.skip 3pt, Block.skip 4pt]";
     });
 }
 
-// ============================================================================
 // `logo.satyh` — sealed, command-only; `use open Inline` erasure via
 // per-binding `let open Inline in` (no `Bind::Open` in this grammar).
-// ============================================================================
 
 #[test]
 fn logo_rustyfi_command_reads_to_nonempty_inline_boxes() {
@@ -539,23 +461,11 @@ read-inline ctx {\\Logo.SATySFi;}";
     });
 }
 
-// ============================================================================
 // `tabular.satyh` — sealed, command-only; the rules callback's singular-
-// `graphics` command-arg type (R2). The `\tabular` command's own two
-// command-args are each themselves FUNCTION types (a callback taking two
-// more callbacks, then a `cell` builder), and this port's `CmdTail::Args`
-// lowering (`v1/lower.rs::lower_cmd_tail`) treats everything after the
-// command name as ONE plain application chain — getting a *closure-typed*
-// argument bound to the right `AppArg` position while also satisfying the
-// lexer's "active area" tokenizing turned out fragile to hand-write get
-// right in a `{…}` inline-text call site; rather than chase that
-// syntax, this package is proven the same way `path`/`context`'s own
-// non-command members are: the qualified-export probe below, plus loading
-// the module standalone (the same bar `color`/`context`'s OTHER members
-// use) — real loader -> lower -> elaborate -> typecheck -> eval, proving
-// the sig's command-arg type (with its embedded singular-`graphics`
-// callback) itself lowers/typechecks cleanly.
-// ============================================================================
+// `graphics` command-arg type. `\tabular`'s two command-args are
+// themselves FUNCTION types, and hand-writing a closure-typed argument in
+// a `{…}` call site is fragile against the lexer's "active area" — so this
+// package is proven via the qualified-export probe plus loading standalone.
 
 #[test]
 fn tabular_bare_tabular_command_is_unbound_without_qualification() {
@@ -574,13 +484,9 @@ fn tabular_module_loads_and_typechecks_standalone() {
     });
 }
 
-// ============================================================================
-// `footnote-scheme.satyh` — sealed; its OWN sig is G8-clean (no `path`/
-// `graphics`/`deco`/`deco-set` mentions), but it `@require:`s `inline`,
-// which is not — still tested via the value bar for consistency with the
-// rest of this wave (and because `@require: inline` alone already makes
-// a sealing-checked capstone fail).
-// ============================================================================
+// `footnote-scheme.satyh` — sealed; its own sig is sealing-clean, but it
+// `@require:`s `inline`, which is not — `@require: inline` alone already
+// makes a sealing-checked capstone fail, so this is tested via the value bar.
 
 #[test]
 fn footnote_scheme_bare_initialize_is_unbound_without_qualification() {
@@ -601,50 +507,25 @@ FootnoteScheme.start-page ()";
     });
 }
 
-// `FootnoteScheme.main`/`main-no-number` ARE now exercised end-to-end below
-// (see `footnote_scheme_main_with_a_command_math_context_compiles_and_
-// evaluates`).
-//
-// G11 RESOLVED (was reported as: in this harness, a flat program
-// containing BOTH a `command \math`-shaped value AND a `+++` application
-// elsewhere spuriously fails the `+++` site with "type mismatch: expected
-// `int`, found `block-boxes`"). INVESTIGATED: this is NOT a type-inference
-// bug. The only source of a bare, unqualified `\math` binding available to
-// this harness's tests is `let open V01Mini in` (`v01-mini.satyh`), and
-// `V01Mini` ALSO defines its own test-only `val (+++) a b = a + b * 2`
-// (added for Sub-slice 2b's "`val ( binop )` binds" coverage) — `let open
-// V01Mini in` therefore shadows the GLOBAL block-boxes-concatenating
-// `+++` with `V01Mini`'s own int-typed one for the rest of that scope,
-// exactly matching the "expected `int`" symptom. This is ordinary `open`
-// shadowing, not a defect: a `command \math` value built WITHOUT opening
-// `V01Mini` (e.g. a fresh module that doesn't redefine `+++`) never
-// triggers it (see `crates/rustyfi-lang/tests/v01_lang_completeness.rs`'s
-// `command_math_value_does_not_shadow_the_global_plus_plus_plus_operator`),
-// and the actual real-world scenario this blocked —
-// `FootnoteScheme.main` (which itself uses `+++` internally) applied to a
-// real context built via `command \math` — compiles and evaluates cleanly
-// end to end, proven below.
+// The trap, NOT a type-inference bug. A flat program with BOTH a
+// `command \math` value AND a `+++` application elsewhere fails the `+++`
+// site with "expected `int`, found `block-boxes`": `let open V01Mini in`
+// (the only source of bare `\math` here) also opens `V01Mini`'s own
+// test-only `val (+++) a b = a + b * 2`, which
+// shadows the global block-boxes-concatenating `+++`. See
+// `v01_lang_completeness.rs`'s
+// `command_math_value_does_not_shadow_the_global_plus_plus_plus_operator`.
 
-// ============================================================================
-// G8 FIXED: `typecheck.rs`'s `name_to_mono` now recognizes `path`/
-// `pre-path`/`graphics`/`image`/`deco`/`deco-set` (version-gated on V0_1)
-// — see that function's own doc comment. This wave's packages (`deco`,
-// transitively `graphics`/`path`) can now be proven through the REAL
-// sealing-checked pipeline (`rustyfi_lang::compile_document_v1`, which
-// runs `v1::module_check::check_program` over every dependency), not just
-// the "value bar" (`compile_v01_via_loader`) every test above uses. This
-// mirrors `v01_stdlib.rs`'s `color_document_capstone_loads_and_compiles_
-// via_v01_mini` — real loader -> `compile_document_v1` through
-// `V01Mini.document` — except here the exercised sig lines are `deco`
-// (`Deco.simple-frame`'s own `: length -> color -> color -> deco`) and,
-// transitively via `deco.satyh`'s `@require: graphics`/`@require: path`,
-// `graphics` and `path` (`Graphics`/`Path`'s sealed sigs) — exactly the
-// three base types `graphics.satyh`'s G8 banner named as unrecognized
-// before this fix. Before the fix, this test's `compile_document_v1` call
-// failed with a spurious "module `Deco`/`Graphics`/`Path` does not match
-// its signature: … type mismatch: expected `deco`, found `deco`" (etc.,
-// `Display`-identical both sides); it now succeeds.
-// ============================================================================
+// `typecheck.rs`'s `name_to_mono` recognizes `path`/`pre-path`/
+// `graphics`/`image`/`deco`/`deco-set` (version-gated on V0_1). Without
+// those cases the v1 module-sealing width check can't resolve these
+// packages' bare sig type names, and every such document fails with a
+// spurious "type mismatch: expected `deco`, found `deco`" —
+// `Display`-identical on both sides, which is the tell.
+//
+// Mirrors `v01_stdlib.rs`'s
+// `color_document_capstone_loads_and_compiles_via_v01_mini`, except the
+// exercised sig lines are `deco` and, transitively, `graphics`/`path`.
 
 #[test]
 fn deco_document_capstone_loads_and_compiles_via_v01_mini_through_the_sealed_pipeline() {
@@ -670,17 +551,13 @@ document (| title = `deco` |) '<
         let program = rustyfi_loader::load(&doc.0, &opts)
             .expect("v01-mini + deco (+ its graphics/path deps) should load");
 
-        // Every dependency the loader pulled in must be a real V0_1 parse
-        // (deco.satyh, graphics.satyh, path.satyh, color.satyh, v01-mini.satyh,
-        // and their own basic/float/point/length/list transitive deps).
+        // Every dependency the loader pulled in must be a real V0_1 parse.
         for f in &program.files {
             assert!(matches!(f.cst, LoadedCst::V0_1(_)));
         }
 
         // THE POINT OF THIS TEST: `compile_document_v1` runs
-        // `v1::module_check::check_program`, the sealing width check G8
-        // fixed. Before the fix this `expect` panicked with a spurious
-        // signature-mismatch on `deco`/`graphics`/`path`.
+        // `v1::module_check::check_program`, the sealing width check.
         let doc_value = rustyfi_lang::compile_document_v1(&program.files, &Mono).expect(
             "deco.satyh (+ transitively graphics.satyh/path.satyh) should now seal \
              through the real compile_document_v1 pipeline (G8 fixed)",
@@ -696,16 +573,10 @@ document (| title = `deco` |) '<
 
 #[test]
 fn footnote_scheme_main_with_a_command_math_context_compiles_and_evaluates() {
-    // THE POINT OF THIS TEST (G11): builds a REAL context via
-    // `command \math` (through `V01Mini`, `let open V01Mini in`) and
-    // applies `FootnoteScheme.main` — whose own body uses `+++`
-    // internally (`add-footnote (bb-before +++ bb)`) — to it, all in one
-    // flat program. Before investigating G11 this combination was
-    // suspected to spuriously fail the `+++` site; it does not (see the
-    // "G11 RESOLVED" comment above this test's module section for why the
-    // original report's repro fails for an unrelated, expected reason:
-    // `V01Mini`'s own test-only `val (+++)` shadowing the global operator
-    // under `let open`, not a type-checker defect).
+    // THE POINT OF THIS TEST: a real context built via `command
+    // \math` applied to `FootnoteScheme.main` (whose body uses `+++`
+    // internally), all in one flat program — this combination compiles;
+    // the `+++` failure described above comes only from `V01Mini`'s own shadow.
     run_with_big_stack(|| {
         let src = "@require: v01-mini
 @require: footnote-scheme

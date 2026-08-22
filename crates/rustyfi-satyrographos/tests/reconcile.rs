@@ -1,17 +1,6 @@
-//! Phase-2 manifest/lockfile reconcile tests (plan §5.3, §9 phase 2): a
-//! `Satyristes` with two `{ path = … }` entries, driven through the
-//! library `install_manifest` API against a `--dest` root. Same `TempDir`
-//! pattern as `tests/ops.rs` / `rustyfi-loader/tests/loader.rs` — no extra
-//! dev-dependencies.
-//!
-//! Coverage:
-//! - a no-change second reconcile skips every entry and leaves file **mtimes**
-//!   untouched;
-//! - editing one source re-materialises *only* that entry (content updated),
-//!   the other entry's mtime preserved;
-//! - dropping an entry from the manifest leaves its files installed (phase 2
-//!   does not prune) and drops it from the rewritten lockfile;
-//! - a hand-deleted receipt (lockfile drift) self-heals on the next reconcile.
+//! Phase-2 manifest/lockfile reconcile tests: a `Satyristes` with two
+//! `{ path = … }` entries, driven through `install_manifest` against a
+//! `--dest` root.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -20,10 +9,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime};
 
 use rustyfi_satyrographos::{self as sg, RegistryOptions, RootOptions};
-
-// ---------------------------------------------------------------------------
-// Temp-dir fixture helper (same as tests/ops.rs).
-// ---------------------------------------------------------------------------
 
 struct TempDir(PathBuf);
 
@@ -64,7 +49,6 @@ impl Drop for TempDir {
     }
 }
 
-/// Write a manifest-form package source at `<tmp>/vendor/<name>/`.
 fn write_pkg(tmp: &TempDir, name: &str, version: &str, body: &str) {
     tmp.write(
         &format!("vendor/{name}/rustyfi-package.toml"),
@@ -82,8 +66,8 @@ fn write_pkg(tmp: &TempDir, name: &str, version: &str, body: &str) {
     tmp.write(&format!("vendor/{name}/packages/{name}.satyh"), body);
 }
 
-/// A project `Satyristes` at `<tmp>/proj/Satyristes` whose dependencies name
-/// `../vendor/<name>` sources (relative to the manifest's own directory).
+/// Dependencies resolve `../vendor/<name>` relative to the manifest's own
+/// directory.
 fn write_satyrfile(tmp: &TempDir, entries: &[&str]) -> PathBuf {
     let deps: String = entries
         .iter()
@@ -112,10 +96,6 @@ fn mtime(p: &Path) -> SystemTime {
     fs::metadata(p).expect("stat").modified().expect("mtime")
 }
 
-// ---------------------------------------------------------------------------
-// Tests.
-// ---------------------------------------------------------------------------
-
 #[test]
 fn first_reconcile_installs_all_and_writes_lockfile() {
     let tmp = TempDir::new("first");
@@ -131,8 +111,6 @@ fn first_reconcile_installs_all_and_writes_lockfile() {
     assert!(root.join("dist/packages/alpha/alpha.satyh").is_file());
     assert!(root.join("dist/packages/beta/beta.satyh").is_file());
 
-    // The lockfile was written next to the manifest, listing both entries with
-    // a resolved sha256.
     let lock = tmp.path().join("proj/Satyristes.lock");
     assert!(lock.is_file(), "lockfile written");
     let text = fs::read_to_string(&lock).unwrap();
@@ -183,7 +161,6 @@ fn changed_source_rematerializes_only_that_entry() {
 
     std::thread::sleep(Duration::from_millis(50));
 
-    // Edit only alpha's source.
     fs::write(
         tmp.path().join("vendor/alpha/packages/alpha.satyh"),
         "let alpha = 999\n",
@@ -195,7 +172,6 @@ fn changed_source_rematerializes_only_that_entry() {
     assert_eq!(report.installed[0].name, "alpha");
     assert_eq!(report.skipped, ["beta"], "beta skipped");
 
-    // alpha's content is updated; beta is untouched (mtime preserved).
     assert_eq!(
         fs::read_to_string(&f_alpha).unwrap(),
         "let alpha = 999\n",
@@ -203,7 +179,6 @@ fn changed_source_rematerializes_only_that_entry() {
     );
     assert_eq!(mtime(&f_beta), before_beta, "beta untouched");
 
-    // The lockfile hash for alpha changed to match the new source.
     let text = fs::read_to_string(tmp.path().join("proj/Satyristes.lock")).unwrap();
     assert!(text.contains("name = \"alpha\""), "{text}");
 }
@@ -219,7 +194,6 @@ fn removed_entry_is_left_installed_and_dropped_from_lock() {
 
     sg::install_manifest(&manifest, &root_opts(&root)).expect("first reconcile");
 
-    // Drop beta from the manifest, keep alpha.
     write_satyrfile(&tmp, &["alpha"]);
     let report = sg::install_manifest(&manifest, &root_opts(&root)).expect("second reconcile");
     assert_eq!(report.removed, ["beta"], "beta reported as dropped");
@@ -231,7 +205,7 @@ fn removed_entry_is_left_installed_and_dropped_from_lock() {
     );
     assert!(root.join(".satyrographos/receipts/beta.toml").is_file());
 
-    // But the lockfile no longer lists beta (mirrors the manifest 1:1).
+    // The lockfile mirrors the manifest 1:1: beta is dropped from it too.
     let text = fs::read_to_string(tmp.path().join("proj/Satyristes.lock")).unwrap();
     assert!(text.contains("name = \"alpha\""), "{text}");
     assert!(!text.contains("name = \"beta\""), "beta dropped from lock: {text}");
@@ -246,8 +220,8 @@ fn deleted_receipt_self_heals() {
 
     sg::install_manifest(&manifest, &root_opts(&root)).expect("first reconcile");
 
-    // Hand-delete the receipt (lockfile drift): the lock still records alpha's
-    // hash, but the receipt is gone.
+    // Lockfile drift: the lock still records alpha's hash, but the receipt
+    // is gone.
     fs::remove_file(root.join(".satyrographos/receipts/alpha.toml")).unwrap();
 
     let report = sg::install_manifest(&manifest, &root_opts(&root)).expect("reconcile heals");
@@ -294,11 +268,8 @@ fn empty_source_table_is_rejected() {
     assert!(matches!(err, sg::Error::UnsupportedSource { .. }), "{err}");
 }
 
-// ---------------------------------------------------------------------------
-// Saphe 7d slice S3: `{ git = … }` package sources (S3) — a local git repo
-// fixture only, never real network (same discipline as `tests/registry.rs`'s
-// bare-git index fixture).
-// ---------------------------------------------------------------------------
+// Saphe 7d slice S3: `{ git = … }` package sources — a local git repo
+// fixture only, never real network.
 
 fn git(args: &[&str], cwd: Option<&Path>) {
     let mut cmd = Command::new("git");
@@ -444,14 +415,11 @@ fn git_package_source_clones_and_installs_default_branch() {
     assert_eq!(report.installed.len(), 1, "the git source is freshly installed");
     assert!(root.join("dist/packages/gitpkg/gitpkg.satyh").is_file());
 
-    // The receipt records a `git` source with the resolved rev.
     let receipt = fs::read_to_string(root.join(".satyrographos/receipts/gitpkg.toml")).unwrap();
     assert!(receipt.contains("kind = \"git\""), "{receipt}");
     assert!(receipt.contains(&format!("value = \"{}\"", file_url(&repo))), "{receipt}");
     assert!(receipt.contains(&format!("version = \"{head}\"")), "{receipt}");
 
-    // The lockfile pins the git url + the resolved HEAD commit sha (design
-    // §3 S3: "record the git url + resolved rev").
     let lock_text = fs::read_to_string(tmp.path().join("proj/Satyristes.lock")).unwrap();
     assert!(
         lock_text.contains(&format!("git = \"{}\"", file_url(&repo))),
@@ -559,6 +527,5 @@ fn git_package_source_offline_errors_when_never_cloned() {
     let err = sg::install_manifest_reg(&manifest, &root_opts(&root), &reg).unwrap_err();
     assert!(matches!(err, sg::Error::Offline { .. }), "{err}");
 
-    // Nothing was installed either.
     assert!(!root.join("dist").exists());
 }

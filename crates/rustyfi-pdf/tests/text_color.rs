@@ -1,12 +1,11 @@
-//! `set-text-color` fidelity fix: `Context::text_color` (`rustyfi-backend`'s
-//! `context.rs`) round-trips through `get-text-color` but, before this fix,
-//! was never consumed by either PDF writer's glyph emission — every glyph
-//! painted black regardless. `HorzStringInfo` (shared by
-//! `PureHorzBox::InnerString` text runs AND `MathGlyph` math glyphs) now
+//! `set-text-color` fidelity: `Context::text_color` (`rustyfi-backend`'s
+//! `context.rs`) must reach each PDF writer's glyph emission, not just
+//! round-trip through `get-text-color`. `HorzStringInfo` (shared by
+//! `PureHorzBox::InnerString` text runs AND `MathGlyph` math glyphs)
 //! carries a `color: Color` field; both writers (`crate::emit_box`/
 //! `place_math` in `lib.rs`, `cid::emit_box`) wrap a NON-black run's glyph
 //! emission in `q`/a fill-color op/`Q`, and emit NOTHING extra for a black
-//! run — the byte-identity guard for every pre-existing all-black document.
+//! run — the byte-identity guard for an all-black document.
 //!
 //! Mirrors `tests/graphics.rs`/`tests/draw_text.rs`'s technique: render to an
 //! uncompressed PDF and scan the content stream for the exact operators.
@@ -47,9 +46,7 @@ fn text_box(text: &str, color: Color) -> PureHorzBox {
     }
 }
 
-// ============================================================================
 // Base-14 writer (`render_pdf`, `crate::emit_box`'s `InnerString` arm).
-// ============================================================================
 
 #[test]
 fn base14_colored_run_is_scoped_in_q_rg_q_black_run_emits_no_color_op() {
@@ -103,8 +100,7 @@ fn base14_colored_run_is_scoped_in_q_rg_q_black_run_emits_no_color_op() {
 #[test]
 fn base14_all_black_page_emits_no_color_ops_at_all() {
     // The non-regression control: a page shaped just like the one above but
-    // with BOTH runs black must emit no `q`/`Q`/color op whatsoever —
-    // exactly today's pre-fix output for an all-black document.
+    // with BOTH runs black must emit no `q`/`Q`/color op whatsoever.
     let page = Page {
             body_lines: usize::MAX,
         lines: vec![PlacedLine {
@@ -125,11 +121,9 @@ fn base14_all_black_page_emits_no_color_ops_at_all() {
     assert!(hay.contains("(Blk) Tj") && hay.contains("(Two) Tj"));
 }
 
-// ============================================================================
-// Math glyphs (`place_math`, shared by both writers): the `HorzStringInfo`
-// win — a colored `MathGlyph` needs no writer-specific code at all, since
-// `MathGlyph::info` is the exact same struct as `InnerString`'s.
-// ============================================================================
+// Math glyphs (`place_math`, shared by both writers): a colored `MathGlyph`
+// needs no writer-specific code at all, since `MathGlyph::info` is the
+// exact same struct as `InnerString`'s.
 
 fn math_glyph(text: &str, color: Color) -> MathGlyph {
     MathGlyph {
@@ -200,12 +194,9 @@ fn base14_colored_math_glyph_is_scoped_in_q_rg_q_black_sibling_glyph_is_not() {
     );
 }
 
-// ============================================================================
 // CID/TrueType writer (`render_pdf_ttf`, `cid::emit_box`'s `InnerString`
-// arm) — the std-ja capstone's real font-embedding path. Skips gracefully
-// (mirrors `tests/ttf.rs`) when no TrueType font is available on this
+// arm). Skips gracefully when no TrueType font is available on this
 // machine, since it needs real glyph metrics/ids.
-// ============================================================================
 
 fn find_regular_font() -> Option<PathBuf> {
     if let Ok(output) = Command::new("fc-match").args(["--format=%{file}", "DejaVuSans"]).output() {

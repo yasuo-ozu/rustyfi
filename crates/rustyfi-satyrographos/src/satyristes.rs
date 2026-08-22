@@ -1,5 +1,5 @@
 //! Minimal S-expression reader for real (OCaml) Satyrographos `Satyristes`
-//! build files (plan §5.5, phase 4). This is an alternative *front-end* for
+//! build files (phase 4). This is an alternative *front-end* for
 //! the same [`crate::manifest::PackagePlan`] the `rustyfi-package.toml`
 //! parser produces — a `Satyristes` is read into one `manifest::Manifest`
 //! per `(library ...)` block and run through the exact same
@@ -13,9 +13,9 @@
 //! - `;`-to-end-of-line comments (the README's `Satyristes` uses `;;`).
 //!
 //! Deliberately **not** built on `syan2`: that reader is scoped to the
-//! SATySFi grammar, a different S-expression entirely (plan §8).
+//! SATySFi grammar, a different S-expression entirely.
 //!
-//! ## Mapping (plan §5.5, verified verbatim against the upstream README)
+//! ## Mapping (verified verbatim against the upstream README)
 //!
 //! Top-level: `(library …)` is read; `(version …)` (the *Satyristes format*
 //! version), `(opam …)`, `(libraryDoc …)`, `(compatibility …)` are
@@ -45,7 +45,7 @@ use crate::manifest::{self, FileDecl, FileKind, Lang, Manifest, PackageMeta, Pac
 use crate::source::{LibraryEntry, RegistryConfig, RegistryKind, SourceSpec};
 use crate::util;
 
-/// The upstream build-file name (plan §2/§5.5).
+/// The upstream build-file name.
 pub const SATYRISTES_NAME: &str = "Satyristes";
 
 // ---------------------------------------------------------------------------
@@ -63,8 +63,7 @@ enum Sexp {
     List(Vec<Sexp>),
 }
 
-/// A reader-level failure, carrying a `line:col:` position (plan §9: "with
-/// positions if cheap").
+/// A reader-level failure, carrying a `line:col:` position.
 #[derive(Debug)]
 struct ParseError {
     line: usize,
@@ -280,7 +279,7 @@ fn head(list: &[Sexp]) -> Option<&str> {
     }
 }
 
-/// Emit a debug-level note for a parsed-and-ignored form (plan §5.5). No log
+/// Emit a debug-level note for a parsed-and-ignored form. No log
 /// framework is wired into this crate, so this stays a stderr line gated on
 /// `$RUSTYFI_DEBUG` rather than a hard dependency.
 fn ignore_note(kind: &str) {
@@ -354,7 +353,7 @@ fn libraries_from(forms: &[Sexp]) -> Result<Vec<Library>, String> {
 ///
 /// The same file serves both roles. `(library ...)` describes what this
 /// directory PUBLISHES; the dependency payloads describe what it CONSUMES, and
-/// this view is the consuming half — the role `Satyristes` used to play.
+/// this view is the consuming half.
 #[derive(Debug, Default)]
 pub struct Project {
     /// Every dependency that named a source, in declaration order.
@@ -412,7 +411,7 @@ pub fn read_project(path: &Path) -> Result<Project, Error> {
 }
 
 /// `(registry (url "…") (kind git|sparse|auto) (mirrors ("…" "…")))` — the
-/// project-level registry, previously `Satyristes`'s `[registry]` table.
+/// project-level registry.
 fn parse_registry(items: &[Sexp]) -> RegistryConfig {
     let mut cfg = RegistryConfig::default();
     for item in items {
@@ -498,7 +497,7 @@ fn split_forms(forms: &[Sexp]) -> Result<(Vec<Library>, Vec<DocTarget>), String>
         match kind {
             "library" => libs.push(parse_library(&list[1..])?),
             "libraryDoc" => docs.push(parse_library_doc(&list[1..])?),
-            // Parsed and ignored (plan §5.5). `version` here is the
+            // Parsed and ignored. `version` here is the
             // *Satyristes format* version, distinct from a library's own.
             "version" | "opam" | "compatibility" => ignore_note(kind),
             other => return Err(format!("unknown top-level form `{other}`")),
@@ -687,14 +686,13 @@ fn parse_source_decl(sexp: &Sexp) -> Result<FileDecl, String> {
         _ => return Err("source declaration must be a non-empty list".to_string()),
     };
     let kind = head(list).ok_or("source declaration must start with a symbol")?;
-    // Collect the string arguments after the kind symbol.
     let args: Vec<&str> = list[1..]
         .iter()
         .map(|s| scalar(s).ok_or_else(|| format!("`{kind}` arguments must be strings")))
         .collect::<Result<_, _>>()?;
 
     // `*-dir` kinds take a single `src`; every other kind takes `dst` then
-    // `src` (plan §5.5).
+    // `src`.
     let (file_kind, dst, src) = match kind {
         "packageDir" => (FileKind::PackageDir, None, one_arg(kind, &args)?),
         "fontDir" => (FileKind::FontDir, None, one_arg(kind, &args)?),
@@ -736,7 +734,7 @@ fn two_args(
 
 /// Parse `(dependencies ((name ()) ...))`. Upstream's `()` carries no version
 /// (real constraints live in the sibling `.opam`, no analog here), so every
-/// dependency is recorded with the wildcard `"*"` constraint (plan §5.5).
+/// dependency is recorded with the wildcard `"*"` constraint.
 fn parse_dependencies(args: &[Sexp]) -> BTreeMap<String, String> {
     parse_dependency_entries(args)
         .into_iter()
@@ -859,7 +857,7 @@ pub fn read(source_root: &Path) -> Result<Vec<PackagePlan>, Error> {
                 name: lib.name,
                 version: lib.version,
                 // No Satyristes analog: recorded empty; phase 1 never gates
-                // on it (plan §5.1/§10).
+                // on it.
                 rustyfi_version_compat: String::new(),
                 description: None,
                 lang: lib.lang,
@@ -873,7 +871,7 @@ pub fn read(source_root: &Path) -> Result<Vec<PackagePlan>, Error> {
 }
 
 // ---------------------------------------------------------------------------
-// Reader unit tests (parse-level; no filesystem — plan §9).
+// Reader unit tests (parse-level; no filesystem).
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
@@ -984,7 +982,7 @@ mod tests {
         let lib = &libs[0];
         assert_eq!(lib.name, "great-package");
         assert_eq!(lib.version, "1.0");
-        // Three source declarations, mapped per §5.5's table.
+        // Three source declarations, mapped per the module doc's table.
         assert_eq!(lib.sources.len(), 3);
         let font_dir = &lib.sources[0];
         assert_eq!(font_dir.kind, FileKind::FontDir);
@@ -1003,10 +1001,8 @@ mod tests {
 
     #[test]
     fn a_library_may_declare_a_doc_source_directly() {
-        // `(doc "dst" "src")` used to parse fine as a source declaration and
-        // then be rejected as an "unknown source kind" — there was no
-        // `FileKind` for it. It now maps to `FileKind::Doc`, the same
-        // dst/src shape `md`/`font`/`file` already use.
+        // `(doc "dst" "src")` maps to `FileKind::Doc`, the same dst/src shape
+        // `md`/`font`/`file` use.
         let text = r#"(library (name "p") (version "1")
             (sources ((packageDir "packages") (doc "manual.pdf" "docs/manual.pdf"))))"#;
         let libs = libraries_from(&parse(text).unwrap()).unwrap();

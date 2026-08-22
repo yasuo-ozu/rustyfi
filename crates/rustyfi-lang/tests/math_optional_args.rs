@@ -1,9 +1,6 @@
-//! End-to-end acceptance coverage for Gap 4: optional/omitted math-command
+//! End-to-end acceptance coverage for optional/omitted math-command
 //! args (`\cmd?:{…}`/ `?*`) and auto-`None` padding for a marker-less bare
-//! math-command call. Pure-pipeline `run`/`int` helpers copied from
-//! `optional_args.rs`/ `math_lists.rs` (per those files' own
-//! copy-not-share convention, since test harness files are intentionally
-//! standalone).
+//! math-command call. Pure pipeline, standalone helpers.
 
 use rustyfi_backend::{FontKey, FontMetrics, Length};
 use rustyfi_lang::value::Value;
@@ -56,8 +53,7 @@ fn natural_width(v: Value) -> Length {
 
 /// A `let-math` command with one leading `?:`-marked optional parameter:
 /// `None` (omitted) falls back to the mandatory `m`, `Some(n)` overrides it
-/// with the supplied math value `n` instead. Patterned on `math_package.rs`'s
-/// `gap2_`-prefixed tests' own inline stub style.
+/// with the supplied math value `n` instead.
 const FOO_MATH_CMD: &str = "let-math \\foo ?:o m = (match o with None -> m | Some(n) -> n)
 let-inline ctx \\dummy m = inline-nil
 in
@@ -65,15 +61,10 @@ in
 
 #[test]
 fn math_optional_arg_supplied_is_wider_than_omitted_and_bare() {
-    // `?:{yy}` supplies a 2-char override (`yy`, wider); `?*` explicitly
-    // omits, falling back to the 1-char mandatory `x`; a marker-less bare
-    // call (`\foo{x}`, no `?:`/`?*` at all) must auto-pad a `None` for the
-    // leading optional slot and elaborate BYTE-IDENTICALLY to the explicit
-    // `?*` call — so `w-omitted == w-bare`, and both are narrower than
-    // `w-supplied`. (`==`/`>'` aren't polymorphic over `length` in this
-    // language, so the three widths are returned as a tuple and compared in
-    // Rust — same style as `math_package.rs`'s `gap2_pull_in_scripts_
-    // resolver_receives_the_actual_scripts`.)
+    // A marker-less bare call (`\foo{x}`) must auto-pad `None` for the
+    // leading optional slot and elaborate BYTE-IDENTICALLY to an explicit
+    // `?*` call. `==`/`>'` aren't polymorphic over `length` here, so the
+    // three widths are returned as a tuple and compared in Rust.
     let src = format!(
         "{FOO_MATH_CMD}\
          let ctx = get-initial-context 200pt (command \\dummy) in
@@ -105,9 +96,8 @@ fn math_optional_arg_supplied_is_wider_than_omitted_and_bare() {
 
 #[test]
 fn math_optional_arg_supplied_omitted_bare_widths_directly() {
-    // Same three call shapes as above, but comparing the actual `Length`s
-    // directly (rather than folding the comparison into the evaluated
-    // program) for a clearer failure message if this ever regresses.
+    // Same three call shapes, but comparing `Length`s directly for a
+    // clearer failure message if this regresses.
     let base = |cmd: &str| {
         let src = format!(
             "{FOO_MATH_CMD}\

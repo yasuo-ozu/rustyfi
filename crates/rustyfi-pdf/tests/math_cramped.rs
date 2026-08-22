@@ -1,4 +1,4 @@
-//! Slice A2: proof that the cramped-style superscript shift-up formula
+//! Proof that the cramped-style superscript shift-up formula
 //! (`sup_shift_clamped`, `crates/rustyfi-lang/ src/primitives.rs`) is
 //! correctly wired end to end — a superscript nested in a radicand
 //! (`Math::Radical`) or a fraction denominator (`Math::Fraction`) is laid out
@@ -9,46 +9,33 @@
 //! Only observable at all under a real OpenType MATH font: every checked-in
 //! fixture font (base-14/ipaexm/Junicode) has no MATH table, and the
 //! no-MATH-table fallback deliberately sets `SUP_SHIFT_CRAMPED ==
-//! SUP_SHIFT` (design doc §2.4) so base-14 output stays byte-identical. This
+//! SUP_SHIFT` so base-14 output stays byte-identical. This
 //! test mirrors `tests/math_table.rs`'s font discovery/skip discipline and
 //! `tests/math_fraction_radical.rs`'s raw-primitive pipeline harness.
 //!
-//! **Slice B update**: the repo now bundles a math font (via
-//! `download-fonts.sh`) and wires it as
+//! The repo bundles the real Latin Modern Math
+//! (`lib-rustyfi/dist/fonts/latinmodern-math.otf`, upstream SATySFi's own
+//! default math font, via `download-fonts.sh`) and wires it as
 //! `default-font.satysfi-hash`'s `"math"` default, so `${...}` math renders
-//! with real MATH-table metrics BY DEFAULT — not just under `set-math-font`.
-//! **Re-baselined**: the bundled default is now the REAL upstream Latin
-//! Modern Math (`lib-rustyfi/dist/fonts/latinmodern-math.otf`, upstream
-//! SATySFi's own default math font) rather than the earlier DejaVu Math TeX
-//! Gyre stand-in — `find_math_font` below checks the LM Math copy first
-//! (falling back to DejaVu Math TeX Gyre, still fetched as a secondary
-//! abbrev), so this test (and the cramped/uncramped divergence it proves) no
-//! longer depends on a host-wide font install — only on `download-fonts.sh`
-//! having been run, same prerequisite `tests/cjk_render.rs` already has. The
-//! `need_math_font!` skip is kept rather than dropped: it is still the right
-//! behavior for a checkout that hasn't run `download-fonts.sh` (or where
-//! fontconfig also comes up empty), and it costs nothing when the bundled
-//! font IS present.
+//! with real MATH-table metrics by default. `find_math_font` below checks
+//! that copy first (same prerequisite as `tests/cjk_render.rs`); the
+//! `need_math_font!` skip covers a checkout that hasn't run it.
 //!
-//! **Clamp-dominance caveat** (found while writing this test): `math_ml:
-//! 524-533`'s clamp (`sup_shift_clamped`) takes `max(cand1, cand2, cand3)`,
-//! where only `cand1 = s * (shift_up or shift_up_cramped)` depends on the
-//! cramped bit. `cand2 = h_base - s * superscript_baseline_drop_max` depends
-//! on the BASE's ink height `h_base` — and this port measures every glyph's
-//! height from the font's whole-face ascender (`push_char_glyph`,
-//! `primitives.rs`), not a real per-glyph bounding box. A font's ascender is
-//! typically much taller than a lowercase letter's real ink height, which
-//! can make `cand2` the dominant clamp term for a plain single-character
-//! base REGARDLESS of the cramped bit — on both real MATH fonts available at
-//! the time this test was written (DejaVu Math TeX Gyre, Noto Sans Math),
-//! `cand2` dominates for `x^2`/`y^2`, so the FINAL raise coincides between
-//! cramped and uncramped even though `cand1` genuinely differs. The tests
-//! below therefore assert the STRONGER, font-independent claim (the pipeline
+//! **Clamp-dominance caveat**: `math_ml:524-533`'s clamp
+//! (`sup_shift_clamped`) takes `max(cand1, cand2, cand3)`, where only
+//! `cand1 = s * (shift_up or shift_up_cramped)` depends on the cramped bit.
+//! `cand2 = h_base - s * superscript_baseline_drop_max` depends on the
+//! BASE's ink height `h_base` — and this port measures every glyph's height
+//! from the font's whole-face ascender (`push_char_glyph`, `primitives.rs`),
+//! not a real per-glyph bounding box, which typically makes `cand2` the
+//! dominant clamp term for a plain single-character base REGARDLESS of the
+//! cramped bit: on both DejaVu Math TeX Gyre and Noto Sans Math, `cand2`
+//! dominates for `x^2`/`y^2`, so the final raise coincides between cramped
+//! and uncramped even though `cand1` genuinely differs. The tests below
+//! therefore assert the stronger, font-independent claim (the pipeline
 //! matches an independently recomputed clamp using the correct
-//! cramped/uncramped branch — proving the wiring is correct), and
-//! ADDITIONALLY assert strict inequality whenever `cand1` happens to be the
-//! dominant term for the host font (which would make the divergence
-//! visible).
+//! cramped/uncramped branch), and additionally assert strict inequality
+//! whenever `cand1` happens to be the dominant term for the host font.
 
 use std::path::{Path as FsPath, PathBuf};
 use std::process::Command;
@@ -65,21 +52,11 @@ use rustyfi_pdf::TtfFontStore;
 // ----------------------------------------------------------------------
 
 fn find_math_font() -> Option<PathBuf> {
-    // Slice B, re-baselined for the upstream-correct default (see
-    // `download-fonts.sh`'s header comment): the repo now bundles
-    // the REAL Latin Modern Math at
-    // `lib-rustyfi/dist/fonts/latinmodern-math.otf` (fetched by
-    // `download-fonts.sh`, same as ipaexm/Junicode) and wires it as
-    // `default-font.satysfi-hash`'s `"math"` default. Check it FIRST so this
-    // test no longer depends on a host-wide font install once that script
-    // has been run — this is what makes the cramped/uncramped divergence
-    // PROVEN BY THIS FILE observable by default in this repo, not just on
-    // machines that happen to have a system math font. Every assertion below
+    // Bundled LM Math first, then bundled DejaVu Math TeX Gyre,
+    // then fontconfig/distro paths — see `tests/math_font.rs`'s
+    // `find_math_font` for the full rationale. Every assertion below
     // recomputes its expected clamp from `mc` (the font's OWN
-    // `MathConstants`), so the proof holds for LM Math exactly as it did for
-    // DejaVu Math TeX Gyre. Fall back to the previously-bundled DejaVu Math
-    // TeX Gyre (still fetched as a secondary abbrev) only if LM Math isn't
-    // present, then fontconfig/distro paths.
+    // `MathConstants`), so the proof is font-independent.
     let bundled_lmmath = FsPath::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../lib-rustyfi/dist/fonts/latinmodern-math.otf");
     if bundled_lmmath.is_file() {
@@ -189,11 +166,10 @@ fn math_glyphs(v: Value) -> Vec<MathGlyph> {
 /// upstream measures a math glyph from its OWN bounding box
 /// (`FontFormat.get_math_glyph_metrics`, fontFormat.ml:2257-2264 —
 /// `hgt = truncate_negative ymax`, `dpt = truncate_positive ymin`), and the
-/// font-level ascender/descender is exactly the substitution that used to put
-/// this port's scripts 1.7-2.1pt off (`layout-tests/probes/
+/// font-level ascender/descender is exactly the substitution that used to
+/// put this port's scripts 1.7-2.1pt off (`layout-tests/probes/
 /// math_script_drop.saty`). Reading them back off `MathGlyph` keeps this
-/// test's recompute independent of the CLAMP — which is what it is about —
-/// without re-deriving the extent convention here as well.
+/// test's recompute independent of the clamp itself.
 fn base_and_script_extents(glyphs: &[MathGlyph]) -> (Length, Length) {
     (glyphs[0].height, glyphs[1].depth)
 }
@@ -351,8 +327,6 @@ fn cramped_superscript_in_fraction_denominator_uses_the_cramped_constant() {
         "expected numerator '1' + denominator base 'y' + denominator script '2', got \
          {frac_glyphs:?}"
     );
-    // glyphs[0] = numerator '1', glyphs[1] = denominator base 'y',
-    // glyphs[2] = denominator script '2'.
     let den_local_raise = frac_glyphs[2].dy - frac_glyphs[1].dy;
     let den_expected = expected_sup_shift(&mc, true, size, h_base, d_sup);
     assert_eq!(

@@ -2,53 +2,39 @@
 //! `@require:`d from a 0.1 document against a lib root that holds ONLY the
 //! 0.0.6 corpus.
 //!
-//! This is the Rust successor to `layout-tests/xver_sweep.py`, which measured the
-//! same 22 packages by spawning `target/debug/rustyfi` once per compile and
-//! grepping its stderr for `output written on`. Same cases, same baseline, same
-//! two-compiles-per-package shape — but the port is CALLED, not spawned:
-//! `rustyfi_loader::load` + the `compile_document_*` entry points, straight out
-//! of this test binary. What that buys is not speed, it is honesty about WHAT
-//! is being measured: a subprocess sweep measures the binary that happens to be
-//! in `target/debug/` (which need not be the code `cargo test` just built), and
-//! everything it can say about a failure is one grepped line. Here a failure is
-//! a `CompileError` value, the dispatch below is visibly the same dispatch
-//! `main.rs` performs, and there is no `--no-cache`/`--no-aux` to remember —
-//! there is no cache and no aux file on this path at all.
+//! The port is CALLED, not spawned (`rustyfi_loader::load` +
+//! `compile_document_*`, straight out of this test binary) — a subprocess
+//! sweep could measure a stale `target/debug/` binary and only report a
+//! grepped line.
 //!
 //! # What it measures
 //!
-//! For each case, two compiles (`xver_sweep_data/cases.rs` holds the documents;
-//! they live in Rust source rather than as `.saty` files in the repo, so a
-//! probe cannot be edited without a diff on this test):
+//! Two compiles per case (`xver_sweep_data/cases.rs` holds the documents, in
+//! Rust source so a probe can't be edited without a diff on this test):
 //!
-//! * the CROSSING case — a minimal **0.1** document that `@require:`s the
-//!   package. The lib root contains `dist/` only, never `dist-v01/`, so
-//!   `v006::resolve::resolve_require`'s same-generation preference has nothing
-//!   to prefer and every `@require:` genuinely crosses. This is the trap
-//!   `xver_capstone.rs` documents at length: with both corpora visible a 0.1
-//!   entry (correctly) gets the 0.1 package and the sweep quietly stops
-//!   measuring the bridge while still passing. `check_root` below refuses a
-//!   root with a `dist-v01/` in it for exactly that reason.
-//! * the **0.0.6 CONTROL** — the same package exercised the same way from an
-//!   ordinary 0.0.6 document. This is what separates a BRIDGE failure from a
-//!   pre-existing 0.0.6-side gap, and it reclassified 5 of the 22 cases in the
-//!   original audit (`CLAUDE.md` §1, "What the REAL corpus says": `azmath` and
-//!   `ruby` fail IDENTICALLY as plain 0.0.6 documents — a 0.0.6 parser gap and
-//!   three missing primitives, never the boundary's fault). Never read a
-//!   `refuse` without its control.
+//! * the CROSSING case — a 0.1 document that `@require:`s the package,
+//!   against a root with `dist/` only, never `dist-v01/`. **A root that also
+//!   carries the 0.1 corpus hands a 0.1 probe the 0.1 package, so every case
+//!   passes, nothing crosses, and the sweep measures nothing at all** — the
+//!   trap `xver_capstone.rs` documents. `check_root` below refuses a root
+//!   with a `dist-v01/` in it for this reason.
+//! * the 0.0.6 CONTROL — the same package from an ordinary 0.0.6 document,
+//!   separating a bridge failure from a pre-existing 0.0.6-side gap; it
+//!   reclassifies 5 of the 22 cases (`azmath`/`ruby` fail identically as
+//!   plain 0.0.6 documents — a parser gap and missing primitives, never the
+//!   boundary's fault). The two figures move
+//!   independently: strengthening a control can turn a "bridge refusal"
+//!   into a "0.0.6-side gap" with nothing changing in the bridge.
 //!
-//! Both directions of drift are failures. An unexpected PASS is reported and
-//! fails the test just as loudly as a regression, because a baseline that
-//! silently absorbs improvements stops describing anything.
+//! Both directions of drift fail the test, including an unexpected PASS: a
+//! baseline that silently absorbs improvements stops describing anything.
 //!
-//! # The lib root, and why it is not assembled by default
+//! # The lib root
 //!
-//! The 22 packages are third-party; they cannot be embedded in Rust source the
-//! way the probe documents are. The root therefore has to be assembled:
-//! `lib-rustyfi/dist/packages/` (the port's own bundled 0.0.6 corpus) copied
-//! into `<root>/dist/packages/`, then each registry package installed on top.
-//! That needs the network and takes minutes, so, exactly like
-//! `layout_fidelity.rs`, this test is `#[ignore]`d and opts in:
+//! The 22 packages are third-party and must be assembled:
+//! `lib-rustyfi/dist/packages/` copied into `<root>/dist/packages/`, then
+//! each registry package installed on top. That needs the network and takes
+//! minutes, so — like `layout_fidelity.rs` — this test is `#[ignore]`d:
 //!
 //! ```text
 //! # against an already-assembled root (seconds):
@@ -60,51 +46,32 @@
 //! RUSTYFI_XVER_ROOT=/path/to/root RUSTYFI_XVER_ASSEMBLE=1 \
 //!   cargo test -p rustyfi --features http --test xver_sweep -- --ignored --nocapture
 //!
-//! # ... and RUSTYFI_XVER_OFFLINE=1 assembles with no network at all when the
-//! # archive cache is already warm — no `http` feature needed, since a cache
-//! # hit never reaches for the transport. RUSTYFI_XVER_ONLY=a,b restricts the
-//! # sweep (the Python's repeatable `--only`).
+//! # RUSTYFI_XVER_OFFLINE=1 assembles from a warm archive cache with no
+//! # network at all; RUSTYFI_XVER_ONLY=a,b restricts the sweep to those cases.
 //! ```
 //!
 //! An assembled root is ~1.4 MB and the whole 44-compile sweep takes ~19 s
-//! against it (measured, debug build) — the Python's per-compile process spawn
-//! and PDF render were most of its wall clock, and neither is measuring
-//! anything the baseline records.
+//! against it (measured, debug build).
 //!
-//! Assembly calls `rustyfi_satyrographos` as a LIBRARY —
-//! `sg::install_registry`, the same call `main.rs`'s `install_one` makes for a
-//! registry `NAME` argument, reading this repo's own `config.toml` for the
-//! repository URL/mirrors/kind just as the Python passed `--config`. Nothing
-//! here spawns `rustyfi install`. (`sg::registry::acquire` does shell out to
-//! `git` for a git-kind index, and the archive fetch is `sg`'s HTTP client;
-//! both are the package manager's own business, inside the library, not this
-//! harness reaching for a CLI.)
+//! **A missing root never produces a green test**: [`resolve_root`] panics
+//! naming the two variables above, and this file also refuses a root with no
+//! `dist/packages/`, a root with a `dist-v01/` sibling, and a run in which
+//! every PASSING crossing case loaded no `V0_0` dependency at all — the
+//! vacuity check.
 //!
-//! **A missing root never produces a green test.** Not a skip, not zero cases
-//! quietly asserted over: [`resolve_root`] panics naming the two variables
-//! above. This file also refuses a root with no `dist/packages/`, a root with a
-//! `dist-v01/` sibling, and — the vacuity check with real teeth — a run in
-//! which every crossing case that PASSED loaded no `V0_0` dependency at all,
-//! which is what "the 0.1 entry never crossed anything" looks like from the
-//! outside.
+//! # The dispatch
 //!
-//! # The dispatch is the point
+//! `compile_one` mirrors `main.rs`'s `cmd_compile`: Axis A pinned by the
+//! case's `--lang`, Axis B sniffed from the document's own headers, then
+//! `V0_1 => compile_document_v1_with_aux`, otherwise a split on
+//! whether any loaded dependency carries a `LoadedCst::V0_1`
+//! (`compile_document_v006_xver_with_aux` if so, else `merge_program` +
+//! `compile_document_cst_with_stages` — the path every 0.0.6 CONTROL takes,
+//! since it's the only one that carries `@stage:` headers through prelude
+//! concatenation).
 //!
-//! `compile_one` reproduces `crates/rustyfi/src/main.rs`'s `cmd_compile` from
-//! `resolve_version_and_mode` down to the `match version` at its line ~299:
-//! Axis A pinned by the case (the `--lang` the Python passed), Axis B sniffed
-//! from the document's own headers (`sniff_headers().envelope_headers`), then
-//! `V0_1 => compile_document_v1_with_aux`, and otherwise the X4a split on
-//! "does any loaded dependency carry a `LoadedCst::V0_1`" —
-//! `compile_document_v006_xver_with_aux` if so, else `merge_program` +
-//! `compile_document_cst_with_stages`. That third arm is not decoration: the
-//! 0.0.6 CONTROLS take it, and it is the only path that carries `@stage:`
-//! headers through prelude concatenation, so a control compiled through the
-//! xver entry point would not be the same measurement.
-//!
-//! `merge_program` is duplicated below because it lives in a `[[bin]]` and a
-//! binary crate exports nothing. It is a verbatim copy; if `main.rs`'s ever
-//! changes, this one must follow.
+//! `merge_program` is duplicated below (verbatim) because it lives in a
+//! `[[bin]]`, which exports nothing; keep the two in sync.
 
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
@@ -121,22 +88,15 @@ mod cases;
 
 use cases::{Case, CASES, HELPER_SATYH};
 
-/// The registry packages to install, in `layout-tests/xver_sweep.py`'s own
-/// dependency-friendly order.
+/// The registry packages to install, in dependency-friendly order.
 ///
-/// This is deliberately ITS OWN constant rather than a projection of
-/// `CASES`, because the two lists genuinely differ at both ends:
-///
-/// * `fss` is here and is probed by no case — several packages depend on it,
-///   nothing measures it directly;
-/// * `math` is a case (`mathpkg`) and is NOT here — it is the port's own
-///   bundled 0.0.6 corpus, copied out of `lib-rustyfi/dist/packages/`, and
-///   asking the registry for it would fail.
-///
-/// `Case::package` still earns its place: it is what the installer knows a
-/// package by, which differs from the case stem exactly once (`codeprinter` ->
-/// `code-printer`). `check_cases_are_installable` below cross-checks the two
-/// lists so a new case cannot silently probe a package nothing installed.
+/// Deliberately its own constant rather than a projection of `CASES`: `fss`
+/// is here and probed by no case (other packages depend on it); `math` is a
+/// case (`mathpkg`) and NOT here (it's the port's own bundled 0.0.6 corpus,
+/// and the registry doesn't have it). `Case::package` differs from the case
+/// stem exactly once (`codeprinter` -> `code-printer`);
+/// `check_cases_are_installable` below cross-checks the two lists so a new
+/// case cannot silently probe a package nothing installed.
 const PACKAGES: &[&str] = &[
     "base",
     "fss",
@@ -162,14 +122,9 @@ const PACKAGES: &[&str] = &[
     "uline",
 ];
 
-// ---------------------------------------------------------------------------
-// Paths, fonts, environment
-// ---------------------------------------------------------------------------
-
-/// The repo root — `crates/rustyfi/` up two, the same derivation
-/// `xver_capstone.rs`'s `lib_root()` and `layout_fidelity.rs`'s `repo_root()`
-/// use, so the test is independent of the working directory `cargo test` ran
-/// from.
+/// The repo root — same derivation `xver_capstone.rs`'s `lib_root()` and
+/// `layout_fidelity.rs`'s `repo_root()` use, independent of the working
+/// directory `cargo test` ran from.
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
@@ -178,18 +133,12 @@ fn repo_root() -> PathBuf {
 }
 
 /// A real TTF to set text in, so a failure is never a font-discovery one.
-///
-/// Any serif face does — the sweep only ever asks whether a document COMPILES,
-/// and `find_regular_ttf`'s callers in `e2e.rs`/`xver_capstone.rs` want the
-/// same thing. Deliberately process-free, unlike those two: they probe
-/// `fc-match` first, and the entire premise of this file is that it shells out
-/// to nothing. The static candidate list is the union of theirs and
-/// `layout-tests/xver_sweep.py`'s `find_font`, plus a NARROW walk of `/nix/store`
-/// (only into directory names containing `dejavu`, so this stays cheap on a
-/// store with 10^5 entries).
-///
-/// `None` falls back to base-14, exactly as the Python did when it found no
-/// `--font`.
+/// Deliberately process-free, unlike `e2e.rs`/`xver_capstone.rs`'s
+/// `find_regular_ttf` (they probe `fc-match` first): this file shells out to
+/// nothing. The static candidate list is the union of theirs, plus a NARROW
+/// walk of `/nix/store` (only into directory names containing `dejavu`, so
+/// this stays cheap on a store with 10^5 entries). `None` falls back to
+/// base-14.
 fn find_regular_ttf() -> Option<PathBuf> {
     if let Some(p) = std::env::var_os("RUSTYFI_SWEEP_FONT").map(PathBuf::from) {
         if p.is_file() {
@@ -245,9 +194,8 @@ fn find_named_ttf(dir: &Path, name: &str, depth: usize) -> Option<PathBuf> {
         .find_map(|d| find_named_ttf(&d, name, depth - 1))
 }
 
-/// `RUSTYFI_XVER_ONLY=a,b` — the Python's repeatable `--only`, as one env var.
-/// A filter matching nothing is an error, never an empty (and therefore
-/// vacuously green) sweep.
+/// `RUSTYFI_XVER_ONLY=a,b` — restrict the sweep. A filter matching nothing is
+/// an error, never an empty (and therefore vacuously green) sweep.
 fn only_filter() -> Option<BTreeSet<String>> {
     let raw = std::env::var("RUSTYFI_XVER_ONLY").ok()?;
     let set: BTreeSet<String> = raw
@@ -259,10 +207,6 @@ fn only_filter() -> Option<BTreeSet<String>> {
     (!set.is_empty()).then_some(set)
 }
 
-// ---------------------------------------------------------------------------
-// Lib-root policy
-// ---------------------------------------------------------------------------
-
 /// Where the sweep's lib root comes from, and the guarantee that there IS one.
 ///
 /// * `$RUSTYFI_XVER_ROOT` pointing at an assembled root → use it as is.
@@ -272,9 +216,7 @@ fn only_filter() -> Option<BTreeSet<String>> {
 ///   tight and an unnamed root is nobody's cache.
 /// * neither → panic naming both variables. There is deliberately no "skip
 ///   quietly" arm: a sweep over zero packages that reports success is the exact
-///   failure mode this project has already been bitten by
-///   (`xver-forked-set-verify-upstream` memory: "regex delete emptied
-///   known_gaps() (vacuous green)").
+///   failure mode this project has already been bitten by.
 ///
 /// Returns `(root, delete_when_done)`.
 fn resolve_root() -> (PathBuf, bool) {
@@ -301,9 +243,9 @@ fn resolve_root() -> (PathBuf, bool) {
                 .join(format!("rustyfi-xver-sweep-root-{}", std::process::id()));
             let _ = std::fs::remove_dir_all(&root);
             assemble_root(&root);
-            // Deleted at the end: this machine's disk sits near full, and an
-            // unnamed root cannot be reused by a later run anyway (the pid is
-            // in its name). Name one with RUSTYFI_XVER_ROOT to keep it.
+            // Deleted at the end: disk here is tight, and an unnamed root
+            // cannot be reused by a later run anyway (the pid is in its
+            // name). Name one with RUSTYFI_XVER_ROOT to keep it.
             (root, true)
         }
         (None, false) => panic!(
@@ -323,14 +265,8 @@ fn resolve_root() -> (PathBuf, bool) {
 }
 
 /// The two structural facts the sweep's meaning depends on, checked before a
-/// single document is compiled.
-///
-/// The `dist-v01/` half is the one that matters. `resolve_require` prefers the
-/// requesting file's own generation, so a root that ALSO carries the 0.1 corpus
-/// hands a 0.1 probe the 0.1 package: every case passes, nothing crosses, and
-/// the sweep has measured nothing at all. `xver_capstone.rs` builds a symlink
-/// farm to avoid precisely this; a pre-assembled root handed in by env var
-/// could just as easily be `lib-rustyfi/` itself, so say so out loud.
+/// single document is compiled — see the module doc for why `dist-v01/`
+/// matters.
 fn check_root(root: &Path) {
     let packages = root.join("dist").join("packages");
     assert!(
@@ -359,13 +295,10 @@ fn check_root(root: &Path) {
 
 /// Every case's package must be something the root actually has: either a
 /// member of [`PACKAGES`] (installed from the registry) or a name already in
-/// the bundled 0.0.6 corpus (`mathpkg` -> `math`, which is `math.satyh` and is
-/// deliberately never fetched).
-///
-/// The two lists are independent by necessity, and independent lists drift. A
-/// case added without its install would otherwise show up as an ordinary
-/// `refuse` with an unresolved-`@require:` message and be read as a bridge
-/// result; this turns it into what it is, a harness mistake.
+/// the bundled 0.0.6 corpus (`mathpkg` -> `math`, deliberately never
+/// fetched). Without this check, a case added with no matching install would
+/// show up as an ordinary `refuse` and be misread as a bridge result rather
+/// than a harness mistake.
 fn check_cases_are_installable(root: &Path) {
     let dir = root.join("dist").join("packages");
     for case in CASES {
@@ -388,15 +321,13 @@ fn check_cases_are_installable(root: &Path) {
 }
 
 /// `<root>/dist/packages/` = the port's bundled 0.0.6 corpus + registry
-/// installs — `layout-tests/xver_sweep.py`'s `assemble_root`, as library calls.
+/// installs, as library calls.
 ///
 /// The order is [`PACKAGES`]'s own, which puts the shared dependencies
 /// (`base`, `fss`) ahead of their dependents. Installs are independent
-/// tarballs, but
-/// `force` orphans a colliding prior receipt's files, so the order is not
-/// purely cosmetic.
-///
-/// `dist-v01/` is never created. That is the whole point — see [`check_root`].
+/// tarballs, but `force` orphans a colliding prior receipt's files, so the
+/// order is not purely cosmetic. `dist-v01/` is never created — see
+/// [`check_root`].
 fn assemble_root(root: &Path) {
     let src = repo_root()
         .join("lib-rustyfi")
@@ -406,8 +337,7 @@ fn assemble_root(root: &Path) {
     std::fs::create_dir_all(&dst).expect("create <root>/dist/packages");
     copy_dir_all(&src, &dst).unwrap_or_else(|e| panic!("copy the bundled 0.0.6 corpus: {e}"));
 
-    // The repository the Python named with `--config <repo>/config.toml`: this
-    // repo's shipped default, Satyrographos' own opam registry. Read here
+    // This repo's shipped default, Satyrographos' own opam registry. Read here
     // rather than through `sg::config::load()` so the sweep does not silently
     // depend on the developer's `~/.config/rustyfi/config.toml`.
     let cfg_path = repo_root().join("config.toml");
@@ -468,40 +398,32 @@ fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// The compile, mirroring `main.rs`'s `cmd_compile`
-// ---------------------------------------------------------------------------
-
 /// What one compile produced: whether it succeeded, and how many of the loaded
 /// dependencies were 0.0.6-tagged.
 ///
-/// The second number is the anti-vacuity instrument. A crossing case that
-/// compiles having loaded ZERO `V0_0` dependencies did not cross anything — it
-/// resolved a same-generation package, or resolved nothing at all — and a sweep
-/// where that is true of every passing case is measuring its own lib root
-/// rather than the bridge.
+/// The second number is the anti-vacuity instrument: a crossing case that
+/// compiles having loaded ZERO `V0_0` dependencies did not cross anything —
+/// a sweep where that is true of every passing case is measuring its own
+/// lib root rather than the bridge.
 ///
-/// It is PRINTED per case and ENFORCED only in aggregate (see `sweep`'s closing
-/// assert). Per case it would be too sharp: `load_legacy`'s `sniff_version`
-/// runs before the `/dist/packages/` provenance fallback, so a published 0.0.6
-/// package that happened to sniff `Some(V0_1)` would be a legitimate zero, and
-/// this must not invent a failure out of that. Measured on the real corpus the
-/// counts run 1..34 and no passing case is zero.
+/// PRINTED per case and ENFORCED only in aggregate (see `sweep`'s closing
+/// assert) — per case it would be too sharp: `load_legacy`'s `sniff_version`
+/// runs before the `/dist/packages/` provenance fallback, so a published
+/// 0.0.6 package that happened to sniff `Some(V0_1)` would be a legitimate
+/// zero. Measured on the real corpus the counts run 1..34 and no passing
+/// case is zero.
 struct Outcome {
     ok: bool,
     err: String,
     v006_deps: usize,
 }
 
-/// Load + compile one document exactly as `cmd_compile` does, minus the render,
-/// the cache and the aux file (a fresh empty `AuxTable` per compile is
-/// `--no-aux`; there is no cache to disable).
-///
-/// `version` is the case's `--lang`: `V0_1` for a crossing probe, `V0_0` for a
-/// control. Axis B is sniffed from the document rather than assumed, because
-/// that is what `resolve_version_and_mode` does — the probes carry `@require:`
-/// headers and so land on `Legacy`, and if one ever grew a `use` header the
-/// mirror should notice rather than silently mis-load it.
+/// Load + compile one document exactly as `cmd_compile` does, minus the
+/// render, the cache and the aux file. `version` is the case's `--lang`:
+/// `V0_1` for a crossing probe, `V0_0` for a control. Axis B is sniffed from
+/// the document rather than assumed, mirroring `resolve_version_and_mode`,
+/// so a probe that ever grew a `use` header would be noticed rather than
+/// silently mis-loaded.
 fn compile_one(
     entry: &Path,
     root: &Path,
@@ -553,7 +475,7 @@ fn compile_one(
                 .map(|_| ())
         }
         _ => {
-            // Slice X4a: a V0_0-rooted load whose dependency graph contains at
+            // A V0_0-rooted load whose dependency graph contains at
             // least one foreign V0_1 node routes through the xver entry point;
             // a pure-0.0.6 load (every control here, and every existing
             // fixture) takes the old merge_program path, byte-identical.
@@ -587,13 +509,10 @@ fn compile_one(
 }
 
 /// Verbatim copy of `main.rs`'s `merge_program` — concatenate the
-/// dependency-ordered library preludes ahead of the entry's own, recording each
-/// library's `@stage:` header against the prelude slots its bindings land in
-/// (concatenation drops the headers themselves, and a stage is a property of
-/// the BINDINGS, not of the file as a document).
-///
-/// Duplicated rather than imported because it lives in a `[[bin]]`, which
-/// exports nothing. Keep the two in sync.
+/// dependency-ordered library preludes ahead of the entry's own, recording
+/// each library's `@stage:` header against the prelude slots its bindings
+/// land in (concatenation drops the headers themselves, and a stage is a
+/// property of the BINDINGS, not of the file as a document).
 fn merge_program(
     program: rustyfi_loader::LoadedProgram,
 ) -> (
@@ -638,10 +557,9 @@ fn merge_program(
 }
 
 /// One line, with the (long, temp-dir-flavoured) lib-root and document paths
-/// stripped, so two runs' output diffs cleanly — `layout-tests/xver_sweep.py`'s
-/// `short`. There is no `Error: ` prefix to strip here and no `<doc>.saty: `
-/// preamble: those were `main.rs`'s framing of a `CompileError`, and this
-/// harness holds the error value itself.
+/// stripped, so two runs' output diffs cleanly. There is no `Error: ` prefix
+/// to strip and no `<doc>.saty: ` preamble: those are `main.rs`'s framing of a
+/// `CompileError`, and this harness holds the error value itself.
 fn short(msg: &str, subs: &[(&Path, &str)]) -> String {
     let mut s = msg.split_whitespace().collect::<Vec<_>>().join(" ");
     for (path, with) in subs {
@@ -654,13 +572,12 @@ fn short(msg: &str, subs: &[(&Path, &str)]) -> String {
     s
 }
 
-/// Both documents of one case, written where the loader expects them: the entry
-/// beside `h.satyh`, because a crossing probe reaches its 0.1 scaffolding with
-/// `@import: h` — a same-directory-relative header resolved by `resolve_import`
-/// independently of `lib_root`, which is exactly what leaves `lib_root` free to
-/// be a 0.0.6-only corpus (see `xver_capstone.rs`'s module doc). The helper is
-/// written for the control too even though a 0.0.6 document never imports it;
-/// an unreferenced file is never opened.
+/// Both documents of one case, written beside `h.satyh`: a crossing probe
+/// reaches its 0.1 scaffolding with `@import: h`, a same-directory-relative
+/// header resolved by `resolve_import` independently of `lib_root` — which
+/// is exactly what leaves `lib_root` free to be a 0.0.6-only corpus. The
+/// helper is written for the control too; an unreferenced file is never
+/// opened.
 fn write_case(dir: &Path, case: &Case) -> (PathBuf, Option<PathBuf>) {
     std::fs::create_dir_all(dir).expect("create the case work dir");
     std::fs::write(dir.join("h.satyh"), HELPER_SATYH).expect("write h.satyh");
@@ -674,10 +591,6 @@ fn write_case(dir: &Path, case: &Case) -> (PathBuf, Option<PathBuf>) {
     (cross, control)
 }
 
-// ---------------------------------------------------------------------------
-// The sweep
-// ---------------------------------------------------------------------------
-
 #[test]
 #[ignore = "needs an assembled lib root of 22 registry packages (network + minutes); \
             run with --ignored and RUSTYFI_XVER_ROOT / RUSTYFI_XVER_ASSEMBLE"]
@@ -687,9 +600,8 @@ fn xver_sweep_matches_baseline() {
     // them: `xver_capstone.rs`'s 64 MB is NOT enough here (`algorithm`, the
     // first case, overflows it in a debug build), which is precisely why
     // `main.rs` spawns its own work on 256 MB rather than the default 8. Match
-    // the CLI's figure — the Python sweep was measuring documents compiled on
-    // that stack, and a stack overflow is an abort, not a `refuse`: it takes
-    // the whole harness down and reports nothing.
+    // the CLI's figure — a stack overflow is an abort, not a `refuse`: it
+    // takes the whole harness down and reports nothing.
     let handle = std::thread::Builder::new()
         .stack_size(256 * 1024 * 1024)
         .spawn(sweep)
@@ -717,9 +629,8 @@ fn sweep() {
             CASES.iter().map(|c| c.name).collect::<Vec<_>>()
         );
     }
-    // The corpus itself must not be empty, whatever the reason. A sweep over
-    // zero cases that prints `crossing 0/0` and exits 0 is the failure mode
-    // this whole file is written to make impossible.
+    // A sweep over zero cases that prints `crossing 0/0` and exits 0 is the
+    // failure mode this whole file is written to make impossible.
     assert!(!selected.is_empty(), "no cases to sweep");
 
     let (root, cleanup) = resolve_root();
@@ -753,7 +664,6 @@ fn sweep() {
         None => &base14,
     };
 
-    // Compile in a scratch directory so nothing is written next to the repo.
     let work = std::env::temp_dir().join(format!("rustyfi-xver-docs-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&work);
 
@@ -778,7 +688,6 @@ fn sweep() {
     }
     let _ = std::fs::remove_dir_all(&work);
 
-    // ---- report, exactly `layout-tests/xver_sweep.py`'s layout ----
     let subs: [(&Path, &str); 2] = [(root.as_path(), "<root>/"), (work.as_path(), "<work>/")];
     let width = rows.iter().map(|r| r.name.len()).max().unwrap_or(0);
     let mut drift: Vec<String> = Vec::new();
@@ -816,9 +725,8 @@ fn sweep() {
         if let Some(control) = &row.control {
             if !control.ok {
                 // Printed for every failing control, not only when the crossing
-                // also failed: a package whose plain-0.0.6 compile is broken was
-                // never the boundary's to fix, and that is the single most
-                // misread line in the original audit.
+                // also failed: a package whose plain-0.0.6 compile is broken
+                // was never the boundary's to fix.
                 println!(
                     "{:<width$}    0.0.6: {}",
                     "",

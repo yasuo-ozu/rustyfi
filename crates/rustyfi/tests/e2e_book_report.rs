@@ -1,21 +1,18 @@
-//! Wave-4 batch A: `std-ja-book` and `std-ja-report`, the two sibling
-//! upstream SATySFi 0.1 document classes newly vendored at
+//! `std-ja-book` and `std-ja-report`, the two sibling
+//! upstream SATySFi 0.1 document classes vendored at
 //! `dist-v01/packages/std-ja-book.satyh` / `std-ja-report.satyh` (near-clones
-//! of the already-proven `std-ja` capstone in `e2e.rs`). New file, disjoint
-//! from `e2e.rs`, mirroring its `v01_stdja_capstone_renders_to_extractable_
-//! text` (THE MARQUEE CAPSTONE, ~:1519) end to end: V0_1 lex -> cst_v1 parse
-//! -> loader (`@require:` transitive resolution) -> v1 lowering -> shared
+//! of the `std-ja` capstone in `e2e.rs`). Disjoint from `e2e.rs`, mirroring
+//! its `v01_stdja_capstone_renders_to_extractable_text` end to end: V0_1 lex
+//! -> cst_v1 parse -> loader (`@require:`
+//! transitive resolution) -> v1 lowering -> shared
 //! elaborate/typecheck(V0_1)/sealing -> eval -> line break -> page break ->
 //! PDF, `pdftotext`-asserted, skip-gated on a real DejaVu TrueType face
 //! exactly like the std-ja capstone (both classes' footers/body need a real
 //! font, not just base-14).
 //!
-//! `std-ja-report`'s `document` is also the FIRST fixture anywhere in this
-//! port to actually EXERCISE `page-break-multicolumn`'s V0_1 arm at
-//! run time (`primitives.rs`'s `prim_page_break_multicolumn_v01` doc comment
-//! previously flagged it "untested by Slice 1's own fixture, registered for
-//! type-table completeness/symmetry only") — this file is that missing
-//! exercise.
+//! `std-ja-report`'s `document` is also the only fixture in this port that
+//! EXERCISES `page-break-multicolumn`'s V0_1 arm at run time; everywhere
+//! else it is registered for type-table completeness only.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -28,8 +25,8 @@ fn lib_root() -> PathBuf {
 
 /// `annot`'s (and other deep `@require:` chains') CST recursion can overflow
 /// the default 8 MiB test-thread stack — mirrors `e2e.rs`'s own helper of the
-/// same name (duplicated here: this crate has no shared test-support library
-/// target, same caveat `e2e.rs`'s own doc comments already note).
+/// same name (duplicated: this crate has no shared test-support library
+/// target).
 fn run_with_big_stack(f: impl FnOnce() + Send + 'static) {
     std::thread::Builder::new()
         .stack_size(64 * 1024 * 1024)
@@ -72,7 +69,7 @@ fn find_regular_ttf() -> Option<PathBuf> {
     None
 }
 
-/// `std-ja-book` (wave-4 batch A): title-page deco, section rules,
+/// `std-ja-book`: title-page deco, section rules,
 /// `FootnoteScheme.main` (`\footnote`) all through the real V0_1 pipeline.
 #[test]
 fn v01_stdjabook_capstone_renders_to_extractable_text() {
@@ -137,8 +134,8 @@ fn v01_stdjabook_capstone_renders_to_extractable_text() {
                     text.contains("The Vendoring Agents"),
                     "missing author:\n{text}"
                 );
-                // `+section`'s auto-numbering, unbundled (increment 3a's
-                // None-defaulting path, live).
+                // `+section`'s auto-numbering, unbundled (the optional-
+                // argument None-defaulting path, live).
                 assert!(
                     text.contains("1. Introduction"),
                     "missing section 1 title:\n{text}"
@@ -167,15 +164,13 @@ fn v01_stdjabook_capstone_renders_to_extractable_text() {
                 // by `chop_page` (`pagebreak.rs`): `FootnoteScheme.main`
                 // wraps its `add-footnote` call in `Inline.no-break`, which
                 // lowers to a `PureHorzBox::Frame` — `collect_footnotes_in_
-                // box` now recurses into `Frame`'s `contents` (matching
-                // upstream `pageInfo.ml`'s `ImHorzFrame` arm), so the
-                // footnote marker nested inside that frame is found and its
-                // block is bottom-placed and rendered.
+                // box` must recurse into `Frame`'s `contents` (matching
+                // upstream `pageInfo.ml`'s `ImHorzFrame` arm) for the marker
+                // nested inside that frame to be found at all.
                 assert!(
                     text.contains("A trailing footnote"),
                     "missing footnote body text:\n{text}"
                 );
-                // The footer's page number (`— #it-pageno; —`).
                 assert!(text.contains('1'), "missing footer page number:\n{text}");
             }
             _ => eprintln!(
@@ -186,7 +181,7 @@ fn v01_stdjabook_capstone_renders_to_extractable_text() {
     });
 }
 
-/// `std-ja-report` (wave-4 batch A): chapters, sections, theorem
+/// `std-ja-report`: chapters, sections, theorem
 /// environments (`+definition`/`+theorem`/`+proof`), and
 /// `page-break-multicolumn`/`hook-page-break-block` (the V0_1 arm's FIRST
 /// real exercise, see this file's module doc comment) all through the real
@@ -291,15 +286,12 @@ fn v01_stdjareport_capstone_renders_to_extractable_text() {
                     "missing footnote superscript marker:\n{text}"
                 );
                 // The footnote BODY float, bottom-placed in the same column
-                // — see the book test above's comment for the root cause
-                // (`collect_footnotes_in_box` now recurses into
-                // `PureHorzBox::Frame`, which is what `Inline.no-break`
-                // lowers to).
+                // — see the book test above for the `PureHorzBox::Frame`
+                // traversal it depends on.
                 assert!(
                     text.contains("A trailing footnote"),
                     "missing footnote body text:\n{text}"
                 );
-                // The footer's page number (`— #it-pageno; —`).
                 assert!(text.contains('1'), "missing footer page number:\n{text}");
             }
             _ => eprintln!(

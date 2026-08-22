@@ -1,9 +1,8 @@
 use crate::context::Script;
 use crate::length::Length;
 
-/// An abstract handle to a loaded font face. Milestone 1 knows three: the
-/// base-14 Helvetica family (regular/bold/oblique); later phases hand out
-/// keys from a real font registry.
+/// An abstract handle to a loaded font face: the base-14 Helvetica family
+/// (regular/bold/oblique), or a key handed out by a real font registry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct FontKey(pub u16);
 
@@ -62,9 +61,9 @@ pub enum MathCorner {
 }
 
 /// Classify one character into the four-way script bucket a font scheme is
-/// indexed by (D1b, 2). Deviation from the spec's originally-proposed
-/// standalone `CharScript` enum: this port already has `context::Script`
-/// (Group E, `set-dominant-*-script`) with the exact same four
+/// indexed by. Deviation from the originally-proposed standalone
+/// `CharScript` enum: this port already has `context::Script`
+/// (`set-dominant-*-script`) with the exact same four
 /// constructors in the exact same order (`HanIdeographic=0, Kana=1,
 /// Latin=2, OtherScript=3`) — introducing a second, structurally-identical
 /// enum just to keep "per-char classifier" and "context-stored dominant
@@ -98,9 +97,9 @@ pub fn char_script(c: char) -> Script {
 }
 
 /// The seam between typesetting and font data: the line breaker and the box
-/// builders only measure through this trait. Milestone 1 implements it with
-/// hardcoded base-14 AFM tables (rustyfi-pdf); phase 5 replaces that with a
-/// ttf-parser-backed registry.
+/// builders only measure through this trait. Implemented in `rustyfi-pdf`,
+/// over the hardcoded base-14 AFM tables (`Base14Metrics`) and the
+/// ttf-parser-backed registry (`TtfFontStore`).
 pub trait FontMetrics {
     /// Horizontal advance of `c` at `size`, or `None` if the font has no
     /// glyph for it.
@@ -190,10 +189,11 @@ pub trait FontMetrics {
     /// `policy` (OpenType MATH `MathVariants`, — big operators/stretchy
     /// delimiters). `None` when the font has no MATH table, no vertical
     /// construction for `c`, or the construction has no prepared variant
-    /// records (assembly-only — out of §B3 scope); every caller must treat
+    /// records (assembly-only); every caller must treat
     /// `None` as "use the base glyph unchanged" (`push_char_glyph`), so a
     /// provider that never overrides this (every base-14 provider) leaves
-    /// every pre-B3 fixture byte-identical.
+    /// every fixture that predates vertical MATH-variant support
+    /// byte-identical.
     fn math_vertical_variant(
         &self,
         _font: FontKey,
@@ -229,11 +229,12 @@ pub trait FontMetrics {
     }
 
     /// Resolve a registry abbrev (`"ipaexm"`, `"Junicode-b"`, ...) to its
-    /// `FontKey` (D1a). `None` means either "no such abbrev in this
+    /// `FontKey`. `None` means either "no such abbrev in this
     /// provider's registry" or "this provider has no registry at all" (every
-    /// pre-D1 provider, `Base14Metrics`) — the caller then falls back to the
-    /// milestone-1 3-face name heuristic (`resolve_font_abbrev` free fn,
-    /// rustyfi-lang), keeping every pre-D1 `set-font` call byte-identical.
+    /// provider that predates the registry, `Base14Metrics`) — the caller
+    /// then falls back to the milestone-1 3-face name heuristic
+    /// (`resolve_font_abbrev` free fn, rustyfi-lang), keeping every existing
+    /// `set-font` call byte-identical.
     fn resolve_font_abbrev(&self, _abbrev: &str) -> Option<FontKey> {
         None
     }
@@ -262,7 +263,7 @@ pub trait FontMetrics {
     }
 
     /// The configured default `(font, ratio, rising)` for `script`, from
-    /// `default-font.satysfi-hash`'s `scripts` block (D1a). `None` means "no
+    /// `default-font.satysfi-hash`'s `scripts` block. `None` means "no
     /// scheme configured for this script" — the caller then falls back to
     /// `(ctx.font, 1.0, 0.0)`, i.e. today's single-font behavior.
     fn default_script_font(&self, _script: Script) -> Option<(FontKey, f64, f64)> {
@@ -270,18 +271,19 @@ pub trait FontMetrics {
     }
 
     /// The configured default math font, from `default-font.satysfi-hash`'s
-    /// optional `"math"` abbrev (Slice B). `None` means "no math default
+    /// optional `"math"` abbrev. `None` means "no math default
     /// configured" — the caller (`get-initial-context`) then leaves
     /// `Context::math_font` at its `Context::initial` seed (`FontKey(0)`, the
-    /// regular text face), i.e. today's behavior. Every pre-Slice-B provider
-    /// (`Base14Metrics`, a bare `TtfFontStore::load`, a registry with no
-    /// `"math"` entry) returns `None` here, so this is purely additive.
+    /// regular text face), i.e. today's behavior. Every provider that
+    /// predates this math-default support (`Base14Metrics`, a bare
+    /// `TtfFontStore::load`, a registry with no `"math"` entry) returns
+    /// `None` here, so this is purely additive.
     fn default_math_font(&self) -> Option<FontKey> {
         None
     }
 }
 
-/// How to pick a vertically-grown MATH variant (`MathVariants`, §B3).
+/// How to pick a vertically-grown MATH variant (`MathVariants`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum VertVariantPolicy {
     /// v0.0.6 big-operator policy (`fontInfo.ml:386-401`): the 2nd record if

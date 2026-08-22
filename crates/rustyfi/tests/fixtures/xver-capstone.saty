@@ -1,9 +1,8 @@
-% THE CROSS-VERSION IMPORT CAPSTONE (design-cross-version-import.md's
-% marquee end-to-end proof): a real SATySFi 0.1 (dev-0-1-0) document
+% THE CROSS-VERSION IMPORT CAPSTONE: a real SATySFi 0.1 (dev-0-1-0) document
 % `@require:`-ing a REAL, unmodified upstream SATySFi 0.0.6 package —
 % `lib-rustyfi/dist/packages/list.satyg` (which itself `@require:`s
 % `option.satyg`) — through the FULL pipeline: V0_1 lex -> cst_v1 parse ->
-% loader (`load_legacy`'s X1 Q4 per-file version detection tags `list`/
+% loader (`load_legacy`'s per-file version detection tags `list`/
 % `option` as `V0_0`, everything else stays `V0_1`) -> `v1::lower` ->
 % shared elaborate/typecheck(V0_1 whole-program, `Ast::VersionScope`-wrapped
 % dependency)/eval -> line break -> page break -> PDF. `List.map`/

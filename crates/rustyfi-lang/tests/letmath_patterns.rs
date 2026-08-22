@@ -1,11 +1,7 @@
-//! End-to-end acceptance coverage for Gap 8: pattern (not just
-//! plain-variable) parameters for `let-math`/`let-inline`/`let-block`
-//! bindings (`cst::ast::Param`, reused from `TopLet`/`Expr::LetIn` —
-//! `curry_cmd_params` in `elaborate.rs`), and the expression-level `let-math
-//! \cmd param* = value in body` form (`Expr::LetMathIn`, upstream's only
-//! command binding with a local `in` form, `parser.mly:688`). Pure-pipeline
-//! `run`/`Mono`/width harness copied from `math_optional_args.rs` (per this
-//! crate's tests' own copy-not-share convention).
+//! Pattern (not just plain-variable) parameters for
+//! `let-math`/`let-inline`/`let-block` bindings, and the expression-level
+//! `let-math \cmd param* = value in body` form (`Expr::LetMathIn`,
+//! upstream's only command binding with a local `in` form, `parser.mly:688`).
 
 use rustyfi_backend::{FontKey, FontMetrics, Length};
 use rustyfi_lang::value::Value;
@@ -48,7 +44,6 @@ fn as_length(v: Value) -> Length {
     }
 }
 
-/// `get-natural-metrics`'s `(width, height, depth)` result — the width only.
 fn natural_width(v: Value) -> Length {
     match v {
         Value::Tuple(vs) if vs.len() == 3 => as_length(vs.into_iter().next().unwrap()),
@@ -58,12 +53,8 @@ fn natural_width(v: Value) -> Length {
 
 /// Shared dummy `let-inline` command, just so `get-initial-context` has a
 /// `[math] inline-cmd` to install (unrelated to what each test actually
-/// exercises) — same technique as `math_optional_args.rs`'s `FOO_MATH_CMD`.
+/// exercises).
 const DUMMY_CTX_CMD: &str = "let-inline ctx \\dummy m = inline-nil\n";
-
-// ============================================================================
-// 1. A tuple pattern parameter in `let-math`.
-// ============================================================================
 
 #[test]
 fn let_math_tuple_pattern_param() {
@@ -93,10 +84,6 @@ fn let_math_tuple_pattern_param() {
          via the (m, _) tuple pattern, discarding ${{y}}"
     );
 }
-
-// ============================================================================
-// 2. Wildcard and literal patterns in `let-math` parse and evaluate.
-// ============================================================================
 
 #[test]
 fn let_math_wildcard_and_literal_patterns() {
@@ -132,10 +119,6 @@ fn let_math_wildcard_and_literal_patterns() {
         other => panic!("expected a (length * length * length) tuple, got {other:?}"),
     }
 }
-
-// ============================================================================
-// 3. A `?:` marker composed with a following pattern parameter.
-// ============================================================================
 
 #[test]
 fn let_math_optional_marker_composes_with_pattern_param() {
@@ -178,11 +161,6 @@ fn let_math_optional_marker_composes_with_pattern_param() {
     }
 }
 
-// ============================================================================
-// 4. A pattern parameter for `let-inline`, both the `ctx` and the
-//    lightweight (`%context`-wrapping) forms.
-// ============================================================================
-
 #[test]
 fn let_inline_tuple_pattern_param_both_forms() {
     const PICK_CMD: &str =
@@ -216,11 +194,6 @@ let-inline ctx \\math m = inline-nil
     );
 }
 
-// ============================================================================
-// 5. A refutable pattern parameter fails (a runtime error) when the
-//    supplied argument doesn't match, at application time.
-// ============================================================================
-
 #[test]
 fn let_math_refutable_pattern_param_fails_at_apply_time() {
     // `\lit (0, m) = m`, called with a first tuple component of `1`, not
@@ -241,29 +214,20 @@ fn let_math_refutable_pattern_param_fails_at_apply_time() {
     }
 }
 
-// ============================================================================
-// 6. Expression-level `let-math \cmd param* = value in body`
-//    (`Expr::LetMathIn`, Gap 8(b)).
-// ============================================================================
+// Expression-level `let-math \cmd param* = value in body` (`Expr::LetMathIn`).
 
 #[test]
 fn expression_level_let_math_in() {
-    // `\g m = ${#m#m}` splices `m`'s math value twice — applied to `${x}`
-    // (1 char), the result should render at the same width as `${xx}`
-    // (2 chars) under this harness's `Mono` font (a per-char fixed advance,
-    // so two back-to-back splices of the same 1-char value sum to the same
-    // total advance as one 2-char run). `\math` (needed for
-    // `get-initial-context`'s second argument) is a genuine TOP-LEVEL
-    // prelude binding — `let-inline` has no expression-level `in` form
-    // (only `let-math` does, see `cst.rs`'s `Expr::LetMathIn` doc comment)
-    // — so it sits BEFORE the file's own top `in`; `let-math \g .. in ..`
-    // only then appears in the file's BODY expression (past that `in`),
-    // proving it really parses as `Expr::LetMathIn` there (a bare
-    // `let-math` as a file's very first construct would instead be
-    // swallowed whole as a `TopBinding::LetMath` prelude item, with the
-    // following `in` reinterpreted as the file's own — see the
-    // `_nested_under_a_plain_let` sibling test for that same reason this
-    // one nests one level deeper still).
+    // `\g m = ${#m#m}` splices `m`'s math value twice, so applying it to
+    // `${x}` (1 char) should render as wide as `${xx}` (2 chars) under this
+    // harness's per-char-fixed-advance `Mono` font.
+    //
+    // `\math` sits BEFORE the file's own top `in` (a genuine top-level
+    // prelude binding — `let-inline` has no expression-level `in` form);
+    // `let-math \g .. in ..` only then appears in the file's BODY
+    // expression, proving it parses as `Expr::LetMathIn` there rather than
+    // being swallowed as a `TopBinding::LetMath` prelude item with the
+    // following `in` reinterpreted as the file's own.
     let src = "let-inline ctx \\math m2 = inline-nil
 in
 let-math \\g m = ${#m#m} in
@@ -318,11 +282,8 @@ in
     }
 }
 
-// ============================================================================
-// 7. Typing negative: an expression-level `let-math` binding whose value
-//    isn't `math` must fail typechecking (`math_command_scheme`, reached
-//    now from `Expr::LetMathIn` too, not just the top-level form).
-// ============================================================================
+// An expression-level `let-math` binding whose value isn't `math` must fail
+// typechecking (`math_command_scheme`, reached from `Expr::LetMathIn` too).
 
 #[test]
 fn expression_level_let_math_in_non_math_value_fails_typecheck() {

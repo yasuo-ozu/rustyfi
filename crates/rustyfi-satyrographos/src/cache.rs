@@ -1,8 +1,8 @@
-//! Content-addressed archive cache (saphe phase 7d slice S2, design
-//! §2.5/§3 S2): a persistent, sha256-keyed store for fetched `.tar.gz`
-//! package archives, so re-materialising an already-locked registry pin
-//! never re-downloads bytes it already verified once, and `--offline`
-//! reconcile can succeed straight from disk.
+//! Content-addressed archive cache (saphe phase 7d slice S2): a persistent,
+//! sha256-keyed store for fetched `.tar.gz` package archives, so
+//! re-materialising an already-locked registry pin never re-downloads bytes
+//! it already verified once, and `--offline` reconcile can succeed straight
+//! from disk.
 //!
 //! ## Key and location
 //!
@@ -24,10 +24,9 @@
 //! ## Fetch flow ([`get_or_fetch`])
 //!
 //! 1. If `<cache_root>/<sha256>.tar.gz` exists **and re-verifies** against
-//!    `sha256`, copy it to `dest` — zero network. A cache entry that exists
-//!    but fails to re-verify (corrupted on disk, or a same-hash collision
-//!    that somehow doesn't match — should never happen, but is not trusted
-//!    blindly either way) is discarded and treated as a miss.
+//!    `sha256`, copy it to `dest` — zero network. An entry that exists but
+//!    fails to re-verify (corrupted on disk, say) is never trusted blindly:
+//!    it is discarded and treated as a miss.
 //! 2. Otherwise: if [`RegistryOptions::is_offline`], [`Error::Offline`] —
 //!    no request is attempted.
 //! 3. Otherwise: fetch `url` into a private temp file under the cache root,
@@ -46,8 +45,8 @@ use crate::util;
 /// [`crate::registry::CACHE_ENV`]'s role for the registry-index cache).
 pub const ARCHIVE_CACHE_ENV: &str = "RUSTYFI_ARCHIVE_CACHE";
 
-/// The archive cache root directory (design §2.5's cache location
-/// precedence). Archives themselves live at `<cache_root>/<sha256>.tar.gz`
+/// The archive cache root directory (see the cache-location precedence
+/// below). Archives themselves live at `<cache_root>/<sha256>.tar.gz`
 /// (see [`cache_path`]).
 pub fn cache_root(opts: &RegistryOptions) -> PathBuf {
     if let Some(dir) = &opts.archive_cache_dir {
@@ -70,20 +69,18 @@ pub fn cache_path(opts: &RegistryOptions, sha256: &str) -> PathBuf {
 }
 
 /// Populate `dest` with the archive at one of `urls` (the primary tarball URL
-/// first, then any mirror candidates — mirrors design §2.2) matching
+/// first, then any mirror candidates) matching
 /// `sha256`, preferring the cache (see the module docs for the full flow).
 /// This is [`crate::registry::fetch_tarball`]'s sole seam for any `http(s)://`
-/// URL — `file://`/plain-path URLs never reach here (they are cheap enough,
-/// and already-local, that caching them would just be a second copy of the
-/// same bytes).
+/// URL — `file://`/plain-path URLs never reach here.
 ///
 /// **The cache key is `sha256` alone, independent of which URL supplied the
-/// bytes** (mirrors design §2.2 step 2): a warm cache entry is copied to
-/// `dest` before any candidate in `urls` is even looked at, so a repeat
+/// bytes**: a warm cache entry is copied to `dest` before any candidate in
+/// `urls` is even looked at, so a repeat
 /// install with a populated cache never touches the network — primary or
 /// mirror. On a cache miss, each candidate is fetched to a temp file and
-/// verified against `sha256` *before* the cache is populated (design §2.2
-/// step 3) — a mirror serving wrong bytes cannot poison the cache; it is
+/// verified against `sha256` *before* the cache is populated — a mirror
+/// serving wrong bytes cannot poison the cache; it is
 /// simply discarded and the next candidate is tried
 /// ([`registry::try_candidates`]).
 pub(crate) fn get_or_fetch(

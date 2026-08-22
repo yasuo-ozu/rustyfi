@@ -1,14 +1,14 @@
-% Slice 1 graphics fixture: exercises the seven new prims directly —
+% Graphics fixture: exercises the seven new prims directly —
 % start-path/line-to/close-with-line build a 20pt square `path`, fill/stroke
 % turn it into `graphics`, and a local `\graphics` command (a tiny let-inline
-% wrapping inline-graphics) is the on-page sink. Also exercises roadmap C1's
+% wrapping inline-graphics) is the on-page sink. Also exercises
 % `draw-text` (a real inline text run inside the callback, above the
 % fill/stroke rectangle) — the box was grown to 40pt tall so the run at (0pt,
 % 25pt) fits within it.
 %
 % Deliberately NOT `@require: gr`: the real gr.satyh needs `pervasives`'s
-% `point` type synonym, which this port doesn't parse yet (§5 of the plan) —
-% this fixture is the no-@require six-prim subset the plan's Slice 1 targets
+% `point` type synonym, which this port doesn't parse yet —
+% this fixture is the no-@require six-prim subset exercised
 % instead.
 
 @require: stdja-mini

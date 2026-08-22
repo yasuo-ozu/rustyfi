@@ -48,13 +48,11 @@ pub struct OutlineEntry {
     pub is_open: bool,
 }
 
-/// `register-document-information`'s payload (prim-retype-sweep §2.4;
-/// upstream `tDOCINFODIC` = `document-information-dictionary`,
+/// `register-document-information`'s payload (upstream `tDOCINFODIC` =
+/// `document-information-dictionary`,
 /// `dev-0-1-0:src/frontend/primitives.cppo.ml:98-107`): `/Info` dictionary
-/// fields. Structural on the language side (`rustyfi-lang`'s
-/// `t_doc_info_dictionary()` reuses the `t_pbinfo` closed-record
-/// precedent, not a nominal synonym type) — this struct is just the plain
-/// Rust value both PDF writers read.
+/// fields. Structural on the language side (`t_doc_info_dictionary()` is a
+/// closed record, not a nominal synonym type).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct DocInfo {
     pub title: Option<String>,
@@ -78,7 +76,7 @@ pub struct DocExtras {
     pub page_graphics: Vec<Vec<GraphicsElem>>,
     /// `register-document-information`'s registered value, `None` when
     /// never called (both PDF writers gate the whole `/Info` dict emission
-    /// on this — every pre-L5a document stays byte-identical, prim-retype-
-    /// sweep §2.4 step 5).
+    /// on this — every document that never calls
+    /// `register-document-information` stays byte-identical).
     pub doc_info: Option<DocInfo>,
 }

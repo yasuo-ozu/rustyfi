@@ -5,8 +5,7 @@ use crate::math::{default_math_class_map, MathCharClass, MathKind};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-/// Opaque handle to the context's installed math command
-/// (`get-initial-context`'s second argument / `set-math-command`; v0.0.6
+/// Opaque handle to the context's installed math command (v0.0.6
 /// `context_main.math_command`). The closure VALUE lives lang-side in
 /// `Interp::math_commands` — this crate cannot depend on
 /// `rustyfi_lang::Value`, so this is the same id-into-an-`Interp`-table
@@ -18,9 +17,8 @@ pub struct MathCmdId(pub usize);
 /// `script` VALUE can carry (`get_script`, evalUtil.ml:235-241; the port's
 /// `script` variant decl, prim_types.rs `script_decl`). Upstream's
 /// internal-only `CommonNarrow`/`CommonWide`/`Inherited` (charBasis.ml:11-13)
-/// arise solely inside the char decoder — group D (text-rendering.md Slice
-/// 2) adds them there if its `normalize_script` port needs them; context
-/// storage never sees them. Discriminants index `langsys_scheme`.
+/// arise solely inside the char decoder; context storage never sees them.
+/// Discriminants index `langsys_scheme`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Script {
     HanIdeographic = 0,
@@ -39,26 +37,22 @@ pub enum Language {
 }
 
 /// The set of Knuth–Liang hyphenation dictionaries a `Context` may have
-/// installed (D3). Deliberately a small `Copy` tag with **no dependency on
-/// the `hyphenation` crate** — `Context` (this crate, `rustyfi-backend`) is
-/// cloned constantly, so it cannot own a `hyphenation::Standard` dictionary
-/// (~89 KiB, not cheaply clonable). The actual dictionaries live in a
-/// process-global load-once cache in `rustyfi-lang`
-/// (`crates/rustyfi-lang/src/hyphenation.rs`), keyed by this tag.
+/// installed. Deliberately a `Copy` tag with **no dependency on the
+/// `hyphenation` crate** — `Context` is cloned constantly, so it cannot own a
+/// `hyphenation::Standard` dictionary (~89 KiB, not cheaply clonable). The
+/// dictionaries live in a process-global load-once cache in
+/// `crates/rustyfi-lang/src/hyphenation.rs`, keyed by this tag.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum HyphenLang {
     EnglishUS,
-    /// British English (en-GB option). Maps to
-    /// `hyphenation::Language::EnglishGB`.
+    /// en-GB. Maps to `hyphenation::Language::EnglishGB`.
     EnglishGB,
 }
 
 /// SATySFi 0.1's `math_script_level` (`dev-0-1-0 src/backend/horzBox.ml:
 /// 139-142`) — how many script-nesting levels deep the current math reading
-/// context sits, consulted by [`Context::math_script_level`]. V0_0 never
-/// reads this field (its script-size shrink is a fixed per-call constant,
-/// not context-carried); it exists purely for V0_1's `read-math`/`enter-
-/// script` (`rustyfi-lang`'s `enter_script`, math-split spec §3.3).
+/// context sits. V0_0 never reads it (its script-size shrink is a fixed
+/// per-call constant, not context-carried).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MathScriptLevel {
     Base,
@@ -66,11 +60,10 @@ pub enum MathScriptLevel {
     ScriptScript,
 }
 
-/// One script's font selection within a `Context::font_scheme` (D1b):
+/// One script's font selection within a `Context::font_scheme`:
 /// upstream `font_with_ratio` (`horzBox.ml`) folded into a plain struct.
-/// `ratio` scales `ctx.font_size` for this script's glyphs (e.g. a CJK face
-/// set at 0.88 of the Latin size, stdja's `ipaexm` convention); `rising` is
-/// a further fraction-of-size baseline raise (`fontInfo.ml`'s
+/// `ratio` scales `ctx.font_size` for this script's glyphs; `rising` is a
+/// further fraction-of-size baseline raise (`fontInfo.ml`'s
 /// `get_font_with_ratio`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ScriptFont {
@@ -79,17 +72,14 @@ pub struct ScriptFont {
     pub rising: f64,
 }
 
-/// The typesetting context (a milestone-1 subset of `context_main` in
-/// horzBox.ml). Grows field by field as primitives need them.
+/// The typesetting context (a subset of `context_main` in horzBox.ml).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Context {
     pub font: FontKey,
     /// The dedicated math font (v0.0.6 context_main.math_font; set-math-font).
     /// Math layout measures/emits glyphs under THIS key, falling back to `font`
-    /// per-glyph when it has no glyph (see primitives::math_glyph_font). Seeded
-    /// FontKey(0) — same as font — so a math-OTF regular face renders styled
-    /// math with no further setup, base-14/non-math degrades to today. The
-    /// OpenType MATH-table slice keys its lookups on this same FontKey.
+    /// per-glyph when it has no glyph (see primitives::math_glyph_font). The
+    /// OpenType MATH-table lookups key on this same FontKey.
     pub math_font: FontKey,
     pub font_size: Length,
     /// Baseline-to-baseline distance.
@@ -98,31 +88,24 @@ pub struct Context {
     pub paragraph_width: Length,
     /// Extra vertical skip inserted above a paragraph
     /// (`set-paragraph-margin`'s first argument; v0.0.6
-    /// `context_main.paragraph_top`, horzBox.ml:227). Wired into
-    /// `prim_line_break` (FIX 3) as a leading `VertBox::Skip` around the
-    /// formed lines. A skip at the very top of a page/column is discarded
-    /// by `chop_page` (mirrors upstream's page-top glue suppression), so
-    /// this does not add space above the first paragraph of a page even
-    /// though the field itself is unchanged.
+    /// `context_main.paragraph_top`, horzBox.ml:227). Emitted by
+    /// `prim_line_break` as a leading `VertBox::Skip`. A skip at the
+    /// very top of a page/column is discarded by `chop_page` (upstream's
+    /// page-top glue suppression), so this adds no space above a page's first
+    /// paragraph.
     pub paragraph_top: Length,
     /// Extra vertical skip inserted below a paragraph
     /// (`set-paragraph-margin`'s second argument; v0.0.6
-    /// `context_main.paragraph_bottom`, horzBox.ml:228). Wired into
-    /// `prim_line_break` as a trailing `VertBox::Skip`, same as
-    /// `paragraph_top`.
+    /// `context_main.paragraph_bottom`, horzBox.ml:228) — a trailing
+    /// `VertBox::Skip`.
     pub paragraph_bottom: Length,
     /// A manual vertical shift applied to text set under this context
     /// (`set-manual-rising`'s argument; v0.0.6 `context_main.manual_rising`,
-    /// horzBox.ml:232). Like `paragraph_top`/`paragraph_bottom`, not yet
-    /// wired into any box-producing primitive (upstream's `PHGRising` box
-    /// has no analogue here yet) — `pervasives.satyh`'s `\SATySFi`/`\LaTeX`/
-    /// `\TeX` set it, but this port has nothing downstream that reads it.
+    /// horzBox.ml:232). Stored only: nothing downstream reads it (upstream's
+    /// `PHGRising` box has no analogue here).
     pub manual_rising: Length,
     /// `set-dominant-wide-script` (v0.0.6 `context_main.dominant_wide_script`,
-    /// horzBox.ml:218). FAITHFUL storage; round-trips via
-    /// `get-dominant-wide-script`. The layout consumer (`normalize_script`'s
-    /// CommonWide arm → CJK font selection) is group D, text-rendering.md
-    /// Slice 2.
+    /// horzBox.ml:218). Storage only; no layout consumer yet.
     pub dominant_wide_script: Script,
     /// `set-dominant-narrow-script` (horzBox.ml:219). Same status.
     pub dominant_narrow_script: Script,
@@ -131,57 +114,44 @@ pub struct Context {
     /// 4-slot array indexed by `Script`'s discriminant; upstream's "absent
     /// from map" IS `NoLanguageSystem` (`get_language_system`'s default,
     /// horzBox.ml:483-487), so the empty map and `[NoLanguageSystem; 4]`
-    /// are indistinguishable — no Option needed. Consumer: OpenType
-    /// language-system shaping, group D.
+    /// are indistinguishable — no Option needed.
     pub langsys_scheme: [Language; 4],
-    /// `set-font`'s per-script font/ratio/rising scheme (D1b; v0.0.6
+    /// `set-font`'s per-script font/ratio/rising scheme (v0.0.6
     /// `context_main.font_scheme`, horzBox.ml:214), indexed by `Script`'s
-    /// discriminant (`char_script`'s classification of a run). Resolution
-    /// rule (back-compat critical, see `set-font`'s doc in rustyfi-lang):
-    /// `Latin`-script text keeps reading `Context::font` directly, NOT this
-    /// scheme's `Latin` slot — `set-font Latin f` writes BOTH so the two
-    /// stay in sync, but every pre-D1 `set-font-key`/`\bold`/`\emph` call
-    /// (which only ever touches `font`) is unaffected. Seeded to `{ font:
-    /// FontKey(0), ratio: 1.0, rising: 0.0 }` for all four scripts —
-    /// identical to today's single-font behavior until a `set-font` call or
-    /// a configured `default-font.satysfi-hash` `scripts` block overlays it.
+    /// discriminant. Resolution rule (back-compat critical, see `set-font`'s
+    /// doc in rustyfi-lang): `Latin`-script text reads `Context::font`
+    /// directly, NOT this scheme's `Latin` slot — `set-font Latin f` writes
+    /// BOTH so the two stay in sync, leaving a bare
+    /// `set-font-key`/`\bold`/`\emph` (which only touches `font`) unaffected.
     pub font_scheme: [ScriptFont; 4],
     /// `set-text-color`/`get-text-color` (row 1-2; v0.0.6
-    /// `context_main.text_color`). FAITHFUL storage — round-trips exactly
-    /// (`itemize.satyh`'s bullet `fill` color depends on it) — but not yet
-    /// *consumed* by either PDF writer's glyph emission, which still always
-    /// draws in black.
+    /// `context_main.text_color`). Copied into each run's
+    /// `HorzStringInfo::color` at box-construction time — which is what both
+    /// PDF writers emit their fill-color op from.
     pub text_color: Color,
     /// `set-hyphen-penalty` (row 3; v0.0.6 `context_main.hyphen_badness`).
-    /// Consumed by `rustyfi-lang`'s `flush_word` injection as each
-    /// injected `Discretionary`'s `penalty`, but only when
-    /// `hyphen_dictionary` is `Some(_)` — with no dictionary installed
-    /// this field is stored faithfully and has no layout effect, same as
-    /// before.
+    /// Consumed by `rustyfi-lang`'s `flush_word` injection as each injected
+    /// `Discretionary`'s `penalty`, but only when `hyphen_dictionary` is
+    /// `Some(_)`; with no dictionary installed it has no layout effect.
     pub hyphen_badness: i64,
     /// The installed hyphenation dictionary
     /// (`set-hyphenation-dictionary`/`load-hyphenation-dictionary`; v0.0.6
-    /// `context_main.hyphen_dictionary`). `None` (the `Context::initial`
-    /// default) is a **documented deviation** from upstream's
-    /// default-English: hyphenation is opt-in per document/class here, so
-    /// that no existing fixture's layout changes (D4/§6, the byte-identity
-    /// gate). `flush_word` (`rustyfi-lang`) runs the hyphenation branch
-    /// **iff** this is `Some(tag)` and the run's script is `Latin` (D5).
+    /// `context_main.hyphen_dictionary`). `flush_word` (`rustyfi-lang`) runs
+    /// the hyphenation branch **iff** this is `Some(tag)` and the run's
+    /// script is `Latin`.
     pub hyphen_dictionary: Option<HyphenLang>,
-    /// Minimum number of chars that must precede an accepted hyphenation
+    /// Minimum number of chars that must PRECEDE an accepted hyphenation
     /// break (`set-hyphen-min`'s first argument; v0.0.6
-    /// `context_main.left_hyphen_min`). Default 3 (D6).
+    /// `context_main.left_hyphen_min`). Default 3.
     pub left_hyphen_min: i64,
-    /// Minimum number of chars that must follow an accepted hyphenation
-    /// break (`set-hyphen-min`'s second argument; v0.0.6
-    /// `context_main.right_hyphen_min`). Default 2 (D6).
+    /// Minimum number of chars that must FOLLOW it (`set-hyphen-min`'s
+    /// second argument). Default 2.
     pub right_hyphen_min: i64,
     /// `set-space-ratio`'s three fields (row 4; v0.0.6
-    /// `context_main.space_natural`/`space_shrink`/`space_stretch`). Wired
-    /// into `text_to_boxes`'s interword-glue construction (FIX 2): natural
-    /// width = `font_size * space_natural`, shrink = `font_size *
-    /// space_shrink`, stretch = `font_size * space_stretch` — each a ratio
-    /// of `font_size` directly, not of the natural width.
+    /// `context_main.space_natural`/`space_shrink`/`space_stretch`). Each is
+    /// a ratio of `font_size` DIRECTLY, not of the natural width:
+    /// `text_to_boxes`'s interword glue is natural = `font_size *
+    /// space_natural`, shrink/stretch likewise.
     pub space_natural: f64,
     pub space_shrink: f64,
     pub space_stretch: f64,
@@ -189,14 +159,9 @@ pub struct Context {
     /// stretch, as a ratio of `font_size`, of the glue SATySFi puts between
     /// two DIRECTLY ADJACENT CJK characters (`convertText.ml:101`
     /// `adjacent_space`: natural 0, shrink 0, stretch `font_size * ratio`).
-    ///
     /// This is what lets a Japanese line fill its column: unspaced CJK has no
     /// interword glue, so without it a CJK line's only elasticity is whatever
-    /// incidental Latin spaces it happens to contain. The port modelled CJK as
-    /// rigid before this field existed, which left the line breaker unable to
-    /// justify — or to accept an otherwise-fine break that needed a hair of
-    /// give (see `linebreak.rs`'s badness rescue, which existed to paper over
-    /// exactly this).
+    /// incidental Latin spaces it happens to contain.
     pub adjacent_stretch: f64,
     /// The installed `[math] inline-cmd` applied to bare `${…}` in inline
     /// text (v0.0.6 `context_main.math_command`). `None` only for contexts
@@ -206,45 +171,33 @@ pub struct Context {
     /// `set-code-text-command` (v0.0.6 `context_main.code_text_command`) — the
     /// `[string] inline-cmd` a backtick literal inside inline text is handed
     /// to. `None` is upstream's `DefaultCodeTextCommand`: the literal is set as
-    /// ordinary text. A doc class installs one to give code spans a monospace
-    /// face, which is why `` `+easytable…` `` inside `\emph{}` must not simply
-    /// inherit the surrounding italic. Holds the same id-into-`Interp` handle
-    /// as `math_command`; the closure lives in `Interp::math_commands`.
+    /// ordinary text. Same id-into-`Interp` handle as `math_command`.
     pub code_text_command: Option<MathCmdId>,
     /// `\mathrm`/`\bm`/… restyling target (v0.0.6 `context_main.
     /// math_char_class`): which Mathematical- Alphanumeric style block a
     /// plain `${…}` letter resolves to. Set by `Math::ChangeCharClass`'s
     /// layout arm (`primitives.rs`), consulted by `resolve_variant_char`.
-    /// Defaults to `Italic` — v0.0.6's own default (plain math letters are
-    /// italic unless restyled).
+    /// Defaults to `Italic`, v0.0.6's own default.
     pub math_char_class: MathCharClass,
     /// Upstream `default_math_class_map` (`primitives.cppo.ml:465-480`):
     /// whole-TOKEN entries (`=`, `-`, `,`, …) consulted BEFORE the per-char
-    /// variant lookup below. `Arc` (not per-`Context` `BTreeMap`) since every
-    /// `Context` shares the same default table unless a future primitive
-    /// overrides it; cloning a `Context` (routine — every `..ctx` spread)
-    /// stays a cheap refcount bump.
+    /// variant lookup below. `Arc` so that cloning a `Context` (every `..ctx`
+    /// spread) stays a refcount bump.
     pub math_class_map: Arc<BTreeMap<String, (String, MathKind)>>,
-    /// `set-math-variant-char`'s runtime override table (gap 7): `(source
+    /// `set-math-variant-char`'s runtime override table: `(source
     /// char, style) -> replacement char`, consulted BEFORE
     /// `default_math_variant_char`'s built-in Mathematical-Alphanumeric
-    /// remap. Empty by default. `Arc` for the same cheap-clone reason as
-    /// `math_class_map`; `set-math-variant-char` copy-on-writes it via
-    /// `Arc::make_mut`.
+    /// remap. Empty by default; copy-on-written via `Arc::make_mut`.
     pub math_variant_char_map: Arc<BTreeMap<(char, MathCharClass), char>>,
-    /// V0_1-only: how many script-nesting levels deep this reading context
-    /// sits (`math-split` spec §3.3's `enter_script`, port of `dev-0-1-0
-    /// src/frontend/context.ml:52-68`). `Base` under V0_0 always — no
-    /// V0_0 code path ever reads or bumps this field.
+    /// V0_1-only (`enter_script`, port of `dev-0-1-0
+    /// src/frontend/context.ml:52-68`). `Base` under V0_0 always.
     pub math_script_level: MathScriptLevel,
     /// Whether the current math sub-formula is laid out "cramped" (TeXbook
     /// Appendix G): set on the recursive layout `Context` for a radical's
-    /// radicand, a fraction's denominator, and any subscript. Orthogonal to
-    /// `math_script_level` and, unlike it, read by BOTH V0_0 and V0_1 (the
-    /// bit rides the shared layout-recursion clone, not a version-gated
-    /// primitive). Only consumed by `sup_shift_clamped`'s superscript
-    /// shift-up formula — see the design doc §2.3 for why that is the sole
-    /// positioning formula cramped changes in this port's feature set.
+    /// radicand, a fraction's denominator, and any subscript. Read by BOTH
+    /// V0_0 and V0_1 (the bit rides the shared layout-recursion clone, not a
+    /// version-gated primitive). Only consumed by `sup_shift_clamped`'s
+    /// superscript shift-up formula.
     pub math_cramped: bool,
 }
 
@@ -262,10 +215,7 @@ impl Context {
             // leading(18) + 9, i.e. the effective paragraph margin is 9pt
             // (= font_size 12 × 0.75), NOT the 18pt an older reading of
             // primitives.cppo.ml assumed. Matching it makes the port's page
-            // breaks coincide with SATySFi's across the prose corpus (same
-            // content + same spacing ⇒ same flow). Doc classes that want a
-            // different margin still `set-paragraph-margin` explicitly
-            // (stdjareport does so for chapter/section headings).
+            // breaks coincide with SATySFi's across the prose corpus.
             paragraph_top: Length::pt(18.0),
             paragraph_bottom: Length::pt(18.0),
             manual_rising: Length::ZERO,
@@ -285,12 +235,7 @@ impl Context {
             hyphen_badness: 100,
             // Upstream loads `dist/hyph/english.satysfi-hyph` into
             // `default_hyphen_dictionary` at startup and hands it to EVERY
-            // initial context (`primitives.cppo.ml:500,607`), so English
-            // hyphenation is on by default there. The port used to default to
-            // `None` — opt-in, to hold a byte-identity gate (D4) that the
-            // fidelity work has long since superseded — which left long English
-            // words unbreakable: a `+code` block set `… Vestibulum lobortis` and
-            // ran wide where SATySFi sets `… Vestibu-` / `lum lobortis`.
+            // initial context (`primitives.cppo.ml:500,607`).
             hyphen_dictionary: Some(HyphenLang::EnglishUS),
             left_hyphen_min: 3,
             right_hyphen_min: 2,
@@ -338,10 +283,10 @@ impl Default for PageGeometry {
 
 impl PageGeometry {
     /// Build a geometry from `page`'s paper dimensions. Only
-    /// `paper_width`/`paper_height` are read by the PDF writer; the
-    /// `text_*` fields are vestigial here — each page's real text area
-    /// lives in its `PlacedLine` coordinates, set per page by the
-    /// content scheme (`chop_page`'s caller), not by this geometry.
+    /// `paper_width`/`paper_height` are read by the PDF writer; the `text_*`
+    /// fields are vestigial here — each page's real text area lives in its
+    /// `PlacedLine` coordinates, set per page by the content scheme
+    /// (`chop_page`'s caller).
     pub fn for_paper(paper_width: Length, paper_height: Length) -> PageGeometry {
         PageGeometry {
             paper_width,

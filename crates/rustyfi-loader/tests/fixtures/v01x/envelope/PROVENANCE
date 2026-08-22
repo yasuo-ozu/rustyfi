@@ -1,7 +1,6 @@
 Copied verbatim from the vendored upstream checkout
 (/home/yasuo/ghq/github.com/gfngfn/SATySFi), commit
-saphe-split @ b836d512689248d18970674021ecaca409e0d897 (per the Ld3b spec's
-pin, /home/yasuo/.claude/jobs/a7244c0b/tmp/axis-b-ld3b.md §0):
+saphe-split @ b836d512689248d18970674021ecaca409e0d897:
 
   annot.rustyfi-envelope.yaml            <- lib-rustyfi/packages/annot/annot.0.0.1/rustyfi-envelope.yaml.expected
   md-ja.rustyfi-envelope.yaml            <- lib-rustyfi/packages/md-ja/md-ja.0.0.1/rustyfi-envelope.yaml.expected

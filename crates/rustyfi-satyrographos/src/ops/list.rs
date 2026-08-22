@@ -1,4 +1,4 @@
-//! `list` (plan §4.3): one summary per installed receipt, sorted; an empty
+//! `list`: one summary per installed receipt, sorted; an empty
 //! or absent `.satyrographos/receipts/` is not an error.
 
 use crate::error::Error;
@@ -6,7 +6,6 @@ use crate::ops::uninstall::RootOptions;
 use crate::receipts;
 use crate::roots::RootSelection;
 
-/// A one-line summary of an installed package.
 #[derive(Debug, Clone)]
 pub struct PackageSummary {
     pub name: String,
@@ -15,14 +14,11 @@ pub struct PackageSummary {
     pub lang: crate::manifest::Lang,
     pub version: String,
     pub file_count: usize,
-    /// Where its files actually are: the root joined with the directory they
-    /// share, e.g. `<root>/dist/packages/<name>`. A package whose files do not
-    /// share a directory — `(hash …)` lands flat in `dist/hash/` — falls back
-    /// to the root itself.
+    /// Where its files actually are; falls back to the root when they don't
+    /// share a directory.
     pub path: std::path::PathBuf,
 }
 
-/// List every installed package, sorted by name.
 pub fn list(opts: &RootOptions) -> Result<Vec<PackageSummary>, Error> {
     let root = opts.resolve_root()?;
     let receipts = receipts::list_all(&root)?;

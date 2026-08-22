@@ -1,4 +1,4 @@
-//! End-to-end coverage for the phase-2b elaborator additions: real SATySFi
+//! End-to-end coverage for the elaborator additions: real SATySFi
 //! *source text* run through `parse_file` -> `elaborate` -> `eval::Interp`,
 //! exercising `let-mutable`/`<-`/`while`/`before` (through the
 //! paren-wrapping the grammar requires to attach `before` to a non-`OpChain`
@@ -206,12 +206,11 @@ fn qualified_math_command_resolves_to_the_mangled_key() {
     let src = "module M = struct let-math \\cmd x = x end in ${\\M.cmd{1}}";
     let ast = elaborate_only(src);
     // `module M = struct .. end in body` elaborates `\cmd`'s `let-math`
-    // binding under a collision-proof MANGLED key (`"$M.\cmd"` — module-
-    // member bug fix: `push_named_binding` no longer binds a separate bare
-    // `"\cmd"` `LetMathIn` that a later reference could shadow something
-    // else with, see that function's doc comment), wrapping a `LetIn` that
-    // re-binds the module-qualified key `M.\cmd` to `Var("$M.\cmd")`,
-    // wrapping `body`; unwrap both to reach the `${..}` literal.
+    // binding under a collision-proof MANGLED key (`"$M.\cmd"` — never a
+    // bare `"\cmd"` a later reference could shadow; see
+    // `push_named_binding`'s doc comment), wrapping a `LetIn` that re-binds
+    // the module-qualified key `M.\cmd` to `Var("$M.\cmd")`, wrapping
+    // `body`; unwrap both to reach the `${..}` literal.
     let rustyfi_lang::ast::Ast::LetMathIn(mangled_name, _value, rest) = ast else {
         panic!("expected LetMathIn at the top, got {ast:?}");
     };
@@ -311,8 +310,8 @@ fn single_line_literal_is_unaffected_by_omit_spaces() {
 #[test]
 fn optional_application_desugars_to_some() {
     // `f ?:(e)` (`AppArg::Optional`) desugars, untyped, straight to
-    // `Apply(f, Some(e))` — the call-site model `frontend-completion.md`
-    // Sub-area 2 specifies (see `elaborate.rs`'s `app_arg_to_ast`).
+    // `Apply(f, Some(e))` — Sub-area 2's call-site model (see
+    // `elaborate.rs`'s `app_arg_to_ast`).
     assert_eq!(
         int("(fun x -> match x with | Some n -> n | None -> 0) ?:(5)"),
         5

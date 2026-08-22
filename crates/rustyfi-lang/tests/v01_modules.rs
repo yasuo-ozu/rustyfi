@@ -1,4 +1,4 @@
-//! Sub-slice 2a's qualified-scope integration test (spec §4.3 item 3): once
+//! qualified-scope integration test: once
 //! `v1/lower.rs::lower_file_v1` wraps a library's binds in a real
 //! `cst::TopBinding::Module` instead of splicing them flat, a V0_1
 //! document can *only* reach a dependency library's bindings qualified
@@ -21,8 +21,8 @@ use rustyfi_syntax::{parse_file_v1, RustyfiVersion, Span};
 /// Elaborate one dependency library source (a `module … = struct … end`
 /// file) plus one document-body source, exactly the way
 /// `compile_document_v1_with_trials` assembles its synthetic `cst::File`
-/// (`lib.rs:165-195`) — reproduced locally (no `rustyfi` library target
-/// to import it from, same rationale `v01_slice1.rs` already documents).
+/// (`lib.rs:165-195`) — reproduced locally because there is no `rustyfi`
+/// library target to import it from.
 fn elaborate_with_lib<'s>(
     store: &'s rustyfi_lang::symbol::SymbolStore,
     lib_src: &str,
@@ -74,9 +74,9 @@ fn qualified_access_resolves() {
     );
 }
 
-/// (b) THE key erasure-is-gone guard: bare `document` in the entry now
-/// FAILS with an unbound-variable error, because Sub-slice 2a's
-/// `lower_file_v1` no longer splices the library's binds flat/unqualified
+/// (b) THE key erasure-is-gone guard: bare `document` in the entry
+/// FAILS with an unbound-variable error, because
+/// `lower_file_v1` does not splice the library's binds flat/unqualified
 /// — only the qualified `V01Mini.*` aliases are in scope after the module
 /// closes (`elaborate.rs:349-350`).
 #[test]
@@ -128,7 +128,7 @@ fn nested_module_bare_inner_name_is_unbound() {
     assert!(err.to_string().contains("unbound variable"), "{err}");
 }
 
-// ---- Sub-slice 2b: full value/type `Bind` arms -----------------------------
+// ---- full value/type `Bind` arms -----------------------------
 
 const LIB_SRC_2B: &str = "\
 module M = struct
@@ -143,7 +143,6 @@ type t = int
 end
 ";
 
-/// `M.sum-list` (a `val rec` binding) resolves qualified.
 #[test]
 fn qualified_val_rec_resolves() {
     let store = rustyfi_lang::symbol::SymbolStore::new();
@@ -192,7 +191,7 @@ fn val_op_named_binding_usable_infix_after_open() {
 }
 
 /// `type` binds surface into `Program::synonym_decls` with a qualified
-/// (`"M.t"`-format) name (§4's pre-qualification decision).
+/// (`"M.t"`-format) name.
 #[test]
 fn type_binds_surface_with_qualified_names() {
     let store = rustyfi_lang::symbol::SymbolStore::new();
@@ -206,13 +205,12 @@ fn type_binds_surface_with_qualified_names() {
     assert_eq!(program.synonym_decls[0].name, "M.t");
 }
 
-// ---- Sub-slice 2c: the placeholder-lowering pipeline-level guard -----------
+// ---- the placeholder-lowering pipeline-level guard -----------
 
 /// A real (if crude) `FontMetrics` stub — never actually exercised by this
 /// test (the `:>` `LowerError` fires before `compile_document_v1` ever
 /// reaches elaboration/typecheck/eval), but the function signature still
-/// needs a concrete `&dyn FontMetrics`, same stub shape as
-/// `v01_slice1.rs`'s `Mono`.
+/// needs a concrete `&dyn FontMetrics`.
 struct Mono;
 
 impl FontMetrics for Mono {
@@ -231,15 +229,14 @@ impl FontMetrics for Mono {
     }
 }
 
-/// §5.4, repurposed by Sub-slice 2d-1 (`…/tmp/slice2d-sealing.md` §4.3-I):
-/// a dependency library carrying a `:>` signature ascription over a
-/// `val`-only surface now COMPILES CLEAN through `compile_document_v1`'s
+/// a dependency library carrying a `:>` signature ascription
+/// over a `val`-only surface COMPILES CLEAN through `compile_document_v1`'s
 /// REAL load path (the same `LoadedFile`/`LoadedCst`-gate-bypass shape
 /// `v01_slice1.rs` uses) — ascription is enforced (`v1::module_check::
 /// check_program`), not merely parsed-and-erased. The exhaustive
 /// accept/reject sealing test suite lives in `tests/v01_sealing.rs`; this
-/// probe stays here purely as the pipeline-level (not just `lower_file_v1`-
-/// unit-level) regression guard the original test already was.
+/// probe is the pipeline-level (not just `lower_file_v1`-unit-level)
+/// regression guard.
 #[test]
 fn sig_annot_over_val_only_surface_compiles_through_compile_document_v1() {
     let lib_src = "module M :> sig val x : int end = struct\nval x = 1\nend";

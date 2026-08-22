@@ -12,10 +12,6 @@ fn labels(set: &[&str]) -> BTreeSet<String> {
     set.iter().map(|s| s.to_string()).collect()
 }
 
-// ============================================================================
-// Base types
-// ============================================================================
-
 #[test]
 fn base_types_unify_when_equal() {
     assert!(unify(&t_int(), &t_int()).is_ok());
@@ -26,10 +22,6 @@ fn base_type_mismatch_is_an_error() {
     let err = unify(&t_int(), &t_bool()).unwrap_err();
     assert!(matches!(err, UnifyError::Mismatch { .. }));
 }
-
-// ============================================================================
-// Variables
-// ============================================================================
 
 #[test]
 fn unify_links_a_variable_left_to_right() {
@@ -69,10 +61,6 @@ fn two_variables_unify_to_the_same_representative() {
     ));
 }
 
-// ============================================================================
-// Occurs check
-// ============================================================================
-
 #[test]
 fn occurs_check_rejects_a_directly_self_referential_function_type() {
     let mut ctx = TypeContext::new();
@@ -107,10 +95,6 @@ fn occurs_check_looks_through_a_record_row() {
     let err = unify(&var_ty, &self_referential).unwrap_err();
     assert!(matches!(err, UnifyError::OccursCheck));
 }
-
-// ============================================================================
-// Structural constructors: func / product / list / ref
-// ============================================================================
 
 #[test]
 fn func_types_unify_argument_and_result_wise() {
@@ -173,10 +157,6 @@ fn ref_types_unify_through_their_pointee_type() {
     ));
 }
 
-// ============================================================================
-// Records / rows
-// ============================================================================
-
 fn closed_row(fields: &[(&str, MonoType)]) -> Row {
     fields.iter().rev().fold(Row::Empty, |acc, (label, ty)| {
         Row::Cons(label.to_string(), Box::new(ty.clone()), Box::new(acc))
@@ -200,8 +180,8 @@ fn closed_record_missing_a_label_is_an_error() {
 
 #[test]
 fn closed_record_with_an_extra_label_is_also_an_error() {
-    // Symmetric to the previous test: from the smaller record's point of
-    // view, the bigger one has an extra label it doesn't have room for.
+    // Symmetric case: from the smaller record's view, the bigger one has
+    // an extra label it doesn't have room for.
     let r1 = MonoType::Record(closed_row(&[("a", t_int())]));
     let r2 = MonoType::Record(closed_row(&[("a", t_int()), ("b", t_string())]));
     let err = unify(&r1, &r2).unwrap_err();
@@ -216,9 +196,8 @@ fn open_row_var_subsumes_a_bigger_closed_row_leaving_it_fully_closed() {
     let closed = MonoType::Record(closed_row(&[("a", t_int()), ("b", t_string())]));
     unify(&open, &closed).unwrap();
 
-    // The open row got fully resolved by successive single-label
-    // extraction (see `unify::row_extract`): it now contains exactly `a`
-    // and `b`, with nothing left open.
+    // Fully resolved by successive single-label extraction
+    // (`unify::row_extract`): it should contain exactly `a` and `b`.
     let mut seen = Vec::new();
     let mut cur = resolve_row(&Row::Var(rv)).into_owned();
     loop {
@@ -284,10 +263,6 @@ fn kind_bridging_type_variable_rejects_a_record_missing_the_required_label() {
     assert!(matches!(err, UnifyError::MissingLabel { .. }));
 }
 
-// ============================================================================
-// Command argument types
-// ============================================================================
-
 #[test]
 fn command_arg_types_unify_elementwise() {
     let c1 = MonoType::InlineCmd(vec![
@@ -332,10 +307,6 @@ fn command_arg_optionality_mismatch_is_an_error() {
     let err = unify(&c1, &c2).unwrap_err();
     assert!(matches!(err, UnifyError::OptionalMismatch { .. }));
 }
-
-// ============================================================================
-// Generalization / instantiation / levels
-// ============================================================================
 
 #[test]
 fn a_variable_created_at_a_deeper_level_generalizes() {
@@ -400,10 +371,6 @@ fn a_variable_from_an_outer_level_does_not_generalize() {
     assert!(!i1.same(&i2));
 }
 
-// ============================================================================
-// Display
-// ============================================================================
-
 #[test]
 fn display_prints_a_function_type_with_a_parenthesized_list_codomain() {
     let ty = arrow(t_int(), list(t_string()));
@@ -424,10 +391,6 @@ fn display_prints_products_and_postfix_variants() {
         "int option"
     );
 }
-
-// ============================================================================
-// Primitive type table coverage
-// ============================================================================
 
 #[test]
 fn every_registered_primitive_has_a_type() {
@@ -479,7 +442,7 @@ fn every_registered_primitive_has_a_type() {
         "split-on-regexp",
         "embed-string",
         "inline-fil",
-        // ---- phase 4, part 1 additions ----
+        // ---- part 1 additions ----
         "set-font-size",
         "get-font-size",
         "set-leading",
@@ -493,13 +456,12 @@ fn every_registered_primitive_has_a_type() {
         "inline-skip",
         "inline-glue",
         "block-skip",
-        // ---- the reflow
-        // marker-box constructors ----
+        // ---- the reflow marker-box constructors ----
         "list-mark",
         "inline-mark",
-        // ---- phase 4, part 2 addition ----
+        // ---- part 2 addition ----
         "set-font-key",
-        // ---- frontend-completion.md §Slice 1.A: the ~18 pure primitives ----
+        // ---- the ~18 pure primitives ----
         // (`|>` excluded: no primitive of its own — see `elaborate.rs`'s
         // `climb` and this crate's `prims!` table comment.)
         "sin",
@@ -519,11 +481,11 @@ fn every_registered_primitive_has_a_type() {
         "string-unexplode",
         "display-message",
         "abort-with-message",
-        // ---- Slice 1 additions (raster images) ----
+        // ---- additions (raster images) ----
         "load-image",
         "load-pdf-image",
         "use-image-by-width",
-        // ---- Slice 1 graphics primitives ----
+        // ---- graphics primitives ----
         "start-path",
         "line-to",
         "terminate-path",
@@ -531,11 +493,10 @@ fn every_registered_primitive_has_a_type() {
         "fill",
         "stroke",
         "inline-graphics",
-        // ---- tables, Slice 1 ----
+        // ---- tables ----
         "tabular",
-        // ---- roadmap C2 ----
         "inline-graphics-outer",
-        // ---- gr.satyh roadmap prims (§Full roadmap A/B/C/D) ----
+        // ---- gr.satyh prims ----
         "bezier-to",
         "close-with-bezier",
         "shift-path",
@@ -554,14 +515,13 @@ fn every_registered_primitive_has_a_type() {
         "discretionary",
         // ---- Tier-2 decoration/graphics packages ----
         "get-axis-height",
-        // ---- hooks / annotations / cross-references, Slice 1 ----
+        // ---- hooks / annotations / cross-references ----
         "hook-page-break",
         "hook-page-break-block",
         "register-cross-reference",
         "get-cross-reference",
-        // ---- group E1: hooks-annotations-crossref.md §A closer ----
         "probe-cross-reference",
-        // ---- + §G ----
+        // ---- the faithful `Value::Math` primitive layer ----
         "math-char",
         "math-big-char",
         "math-char-with-kern",
@@ -621,11 +581,11 @@ fn every_registered_primitive_has_a_type() {
         "set-every-word-break",
         "register-outline",
         "extract-string",
-        // ---- group E2: dominant-script/language getters (context-box- prims.md §C landed) ----
+        // ---- dominant-script/language getters ----
         "get-dominant-wide-script",
         "get-dominant-narrow-script",
         "get-language",
-        // ---- group E3: text-mode-context sliver (context-box-prims.md §G) ----
+        // ---- text-mode-context sliver ----
         "get-initial-text-info",
         "deepen-indent",
         "break",
@@ -657,14 +617,10 @@ fn unknown_primitive_name_has_no_type() {
     assert!(prim_types::primitive_type("not-a-real-primitive").is_none());
 }
 
-// ============================================================================
-// math-split spec §2.2: the 8 V0_1-only additions. NOT folded into `NAMES`
-// above — that list's assertion checks `primitive_type` (the V0_0-default
-// wrapper), and every one of these 8 names is deliberately UNBOUND under
-// V0_0 (test 6.3-6 of the math-split spec); they're the hand-sync twin of
-// `typecheck::PRIMITIVE_NAMES`'s own "added in 0.1" block instead, verified
-// against `primitive_type_with_version` directly.
-// ============================================================================
+// The V0_1-only additions below are NOT folded into `NAMES` above — that
+// list's assertion checks `primitive_type` (the V0_0-default wrapper), and
+// each of these names is deliberately UNBOUND under V0_0; they're checked
+// against `primitive_type_with_version` directly instead.
 
 #[test]
 fn every_v01_only_primitive_has_a_type_under_v0_1_and_none_under_v0_0() {
@@ -677,9 +633,8 @@ fn every_v01_only_primitive_has_a_type_under_v0_1_and_none_under_v0_0() {
         "embed-inline-to-math",
         "get-math-axis-height-ratio",
         "%math-attach-scripts",
-        // ---- L5a (prim-retype-sweep §2): bitwise ops, Unicode string ops,
-        // `read-file`, `register-document-information` — the hand-sync twin
-        // of `typecheck::PRIMITIVE_NAMES`'s own "added in 0.1 — L5a" block.
+        // ---- bitwise ops, Unicode string ops, `read-file`,
+        // `register-document-information` ----
         "<<",
         ">>",
         "band",
@@ -691,26 +646,22 @@ fn every_v01_only_primitive_has_a_type_under_v0_1_and_none_under_v0_0() {
         "split-grapheme-cluster",
         "read-file",
         "register-document-information",
-        // ---- L5b (prim-retype-sweep §3.4/§3.6): the 2 graphics-collection
-        // additions. The 3 named + 6 hidden retypes are NOT here — each is
-        // one shared name whose type forks per version (`get-graphics-bbox`,
-        // `tabular`, `inline-graphics`, `inline-graphics-outer`,
+        // ---- the 2 graphics-collection additions. The 3 named + 6
+        // hidden retypes are NOT here — each is one shared name whose
+        // type forks per version (`get-graphics-bbox`, `tabular`,
+        // `inline-graphics`, `inline-graphics-outer`,
         // `inline-frame-outer/-inner/-breakable`, `block-frame-breakable`),
         // bound under BOTH versions, so they belong in `NAMES` above (they
         // already are), not this V0_1-only twin.
         "unite-graphics",
         "clip-graphics-by-path",
-        // ---- language-completeness sweep gap 1: 0.1 float comparisons
-        // (`primitives.rs`'s `prims!` table comment on ">."/"<."/">=."/
-        // "<=.") — the hand-sync twin of `typecheck::PRIMITIVE_NAMES`'s own
-        // trailing block.
+        // ---- language-completeness sweep: 0.1 float comparisons ----
         ">.",
         "<.",
         ">=.",
         "<=.",
-        // ---- G6 (`…/tmp/g6-g7-standins.md` §1): hyphenation/unidata loader
-        // + setter stand-ins, and the `here` lex-time-constant stand-in —
-        // the hand-sync twin of `typecheck::PRIMITIVE_NAMES`'s own G6 block.
+        // ---- hyphenation/unidata loader + setter stand-ins, and the
+        // `here` lex-time-constant stand-in ----
         "load-hyphenation-dictionary",
         "load-unicode-char-database",
         "set-hyphenation-dictionary",

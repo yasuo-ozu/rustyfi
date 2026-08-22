@@ -1,39 +1,24 @@
 //! A closure-compiling ("JIT-style") evaluator that lowers an [`Ast`] into a
 //! tree of Rust closures once, so that repeated evaluation chases compiled
-//! closures instead of re-matching `Ast` nodes on every visit.
+//! closures instead of re-matching `Ast` nodes on every visit. This is the
+//! only evaluator: [`crate::eval::Interp::eval`] is a thin shim over it.
 //!
-//! This is an **additive, opt-in fast path**: [`crate::eval::Interp::eval`]
-//! stays the reference tree-walking interpreter, and every compiled node is a
-//! faithful, byte-for-byte reproduction of the corresponding `eval` match arm
-//! (same evaluation order, same `env.child()` frames, same error messages and
-//! spans). The two paths must always produce identical [`Value`]s; the
-//! `compile.rs` unit tests below cross-check that on the shared eval test
-//! programs.
-//!
-//! # Design (approach "a" + a safe slice of "b")
+//! # Design
 //!
 //! * **Structure-only closures.** Each `Ast` node compiles to a
 //!   [`CompiledExpr`] capturing its already-compiled children, so evaluation
 //!   is pointer-chasing closures rather than `match ast { … }` dispatch +
-//!   recursion. The runtime environment stays the existing `Rc<Frame>`
-//!   HashMap chain ([`Env`]) unchanged — so variable *semantics*, shadowing,
-//!   closures/let-rec/mutable-refs, and the exact "unbound variable …" error
-//!   are all identical to the tree-walker.
-//! * **Global constant-folding (a contained bit of slot-resolution's win).**
-//!   A compile-time scope pass classifies each [`Ast::Var`]: a name bound by
-//!   some enclosing `let`/`lambda`/`match`/… is a *local* and still resolves
-//!   through `env.lookup` (identical behavior). A name that is **not** bound
-//!   by any enclosing local frame — and is therefore provably unshadowed all
-//!   the way down to the base environment — is a *global*; its `Value` is
-//!   fetched from the base environment once, at compile time, and the compiled
-//!   node just clones that captured value. This eliminates the frame-chain
-//!   walk + HashMap lookup for primitives (`+`, `<`, `==`, …), which is where
-//!   a compute-heavy workload like `fib` spends much of its time.
-//!
-//! Full slot-resolved (`Vec`-indexed) frames — the bigger "approach b" — would
-//! need a parallel value/env world threaded through `primitives.rs`
-//! (`Value::Closure`/`InlineText` capture an `Env`) and would risk the
-//! byte-identical invariant; it is intentionally left as a follow-up.
+//!   recursion.
+//! * **Compile-time name resolution.** A scope pass classifies each
+//!   [`Ast::Var`]: a name bound by some enclosing `let`/`lambda`/`match`/… is
+//!   a *local*, resolved to a `(depth, index)` pair into the runtime frame
+//!   chain ([`Env`]); a TOP-LEVEL spine binding gets a `Globals` slot instead
+//!   (see that type); and a name bound by no enclosing local frame — and
+//!   therefore provably unshadowed all the way down to the base environment —
+//!   is a *global* whose `Value` is fetched once, at compile time, so the
+//!   compiled node just clones the captured value. That last case eliminates
+//!   the lookup entirely for primitives (`+`, `<`, `==`, …), which is where a
+//!   compute-heavy workload like `fib` spends much of its time.
 
 use crate::ast::{Ast, Pattern};
 use crate::eval::{available_fields, eval_error, match_pattern, EvalError, Interp};
@@ -46,13 +31,12 @@ use std::rc::Rc;
 
 /// A compiled expression: a reference-counted closure taking the runtime
 /// environment and the interpreter and yielding a [`Value`] (or an
-/// [`EvalError`]). Cloning is a cheap `Rc` bump, so a `CompiledExpr` can be
-/// captured by several parent nodes and stored in caches / closure values.
+/// [`EvalError`]). Cloning is a cheap `Rc` bump.
 ///
-/// This is a crate-internal type. It appears as the (opaque) body of the
-/// public [`Value::CompiledClosure`] variant, but has no public constructor
-/// and only a `pub(crate)` method — so external code can neither build nor
-/// inspect it (see the `allow(private_interfaces)` note on `Value`).
+/// Crate-internal: it is the opaque body of the public
+/// [`Value::CompiledClosure`] variant, with no public constructor and only
+/// a `pub(crate)` method (see the `allow(private_interfaces)` note on
+/// `Value`).
 #[derive(Clone)]
 pub(crate) struct CompiledExpr(Rc<dyn Fn(&Env, &mut Interp<'_>) -> Result<Value, EvalError>>);
 
@@ -63,7 +47,6 @@ impl CompiledExpr {
         CompiledExpr(Rc::new(f))
     }
 
-    /// Run this compiled expression against `env`.
     pub(crate) fn run(&self, env: &Env, interp: &mut Interp<'_>) -> Result<Value, EvalError> {
         (self.0)(env, interp)
     }
@@ -75,28 +58,19 @@ impl std::fmt::Debug for CompiledExpr {
     }
 }
 
-/// The flat table of TOP-LEVEL ("spine") binding values — Phase 2 of
-/// (§6).
+/// The flat table of TOP-LEVEL ("spine") binding values.
 ///
-/// The loader concatenates every library prelude into one synthetic file, and
-/// `elaborate::nest` folds every top-level binding into a nested
-/// `LetIn`/`LetRecIn` **spine** around the document body. Each of those is one
-/// runtime `env.child()` frame, so a document reference to an early prelude
-/// function used to walk one frame per intervening top-level binding: measured
-/// at 13-90 frames per compiled variable lookup, 109M-208M frame probes on a
-/// corpus document. That was the single largest evaluator cost.
+/// Every top-level binding is folded into one `LetIn`/`LetRecIn` **spine**
+/// around the document body (`elaborate::nest`). Giving each its own
+/// `env.child()` frame costs 13-90 frame walks per compiled variable
+/// lookup (109M-208M probes on a corpus document) — the single largest
+/// evaluator cost — so a spine binding instead gets a **slot index**,
+/// assigned at compile time; it builds no frame at all.
 ///
-/// A spine binding therefore also gets a **slot index**, assigned at compile
-/// time, and a compiled reference to it reads `table[slot]` instead of walking.
-/// Phase 2 built the frame chain alongside this table, because quoted text
-/// still resolved command names by string against a captured `Env`. Phase 3
-/// removed the last such lookup and Phase 4 the chain itself, so a spine
-/// binding now writes ONLY its slot — a corpus prelude no longer allocates one
-/// frame per top-level binding per fixpoint trial.
-///
-/// Slots are written before they can be read (the spine is unconditional and
-/// executes in order), so nothing needs clearing between fixpoint trials: each
-/// trial simply overwrites every slot as the spine re-executes.
+/// Slots are written before they can be read (the spine executes
+/// unconditionally and in order), so nothing needs clearing between
+/// fixpoint trials — each trial just overwrites every slot as the spine
+/// re-executes.
 #[derive(Clone, Default)]
 struct Globals(Rc<RefCell<Vec<Value>>>);
 
@@ -111,8 +85,8 @@ impl Globals {
         self.0.borrow_mut()[slot] = v;
     }
 
-    /// Size the table once compilation has assigned every slot. The compiled
-    /// closures captured the same `Rc`, so they see this.
+    /// Size the table once compilation has assigned every slot. Compiled
+    /// closures share this `Rc`, so they see the resize.
     fn finish(&self, len: usize) {
         self.0.borrow_mut().resize(len, Value::Unit);
     }
@@ -124,7 +98,7 @@ enum Scope {
     /// of `depth` to every reference resolved past it.
     Frame(Vec<String>),
     /// A top-level (spine) binding and the [`Globals`] slot it was assigned.
-    /// Contributes NO depth — spine bindings build no frame (Phase 4).
+    /// Contributes NO depth — spine bindings build no frame.
     Global(String, usize),
 }
 
@@ -140,16 +114,13 @@ enum Binding {
 /// the base environment used for the constant-folding fast path.
 struct Compiler<'b> {
     /// ONE lexical stack, innermost last, holding both kinds of binding the
-    /// compiler can resolve — see [`Scope`].
-    ///
-    /// It has to be one stack. A top-level (spine) binding and a local frame
-    /// can shadow each other in either direction: the cross-version deco
-    /// coercion (`v1::xver_adapt::deco_coercion_prelude`) splices a top-level
-    /// `let` that shadows a `let rec` which — because its right-hand sides
-    /// are not syntactic lambdas — had to fall back to a real frame. Resolving
-    /// locals before globals (or the reverse) gets that backwards; only
-    /// walking a single stack innermost-first gives the binding order the
-    /// name-keyed frame chain used to give for free.
+    /// compiler can resolve — see [`Scope`]. It has to be one stack: a
+    /// top-level (spine) binding and a local frame can shadow each other in
+    /// either direction (the cross-version deco coercion splices a
+    /// top-level `let` that shadows a `let rec` group's frame fallback), so
+    /// resolving locals before globals or vice versa gets that shadowing
+    /// backwards — only walking one stack innermost-first reproduces the
+    /// order a name-keyed environment gave for free.
     scopes: Vec<Scope>,
     /// Slots assigned so far; also the table's final length.
     n_globals: usize,
@@ -157,35 +128,28 @@ struct Compiler<'b> {
     /// reads or writes one.
     globals: Globals,
     /// The `V0_1`-slot base environment, when unshadowed names may be
-    /// constant-folded.
-    ///
-    /// For a PURE (non-cross-version) compile this is simply *the* base
-    /// environment, regardless of which language generation it actually
-    /// binds — [`Compiler::new`] always parks it here and leaves
-    /// `globals_v006`/`current_version` at their defaults, so `globals_for`
-    /// always resolves back to this same field and the fold is unchanged
-    /// from before Slice X2a.
+    /// constant-folded. For a PURE (non-cross-version) compile this is
+    /// simply *the* base environment regardless of generation —
+    /// [`Compiler::new`] always parks it here, leaving
+    /// `globals_v006`/`current_version` at their defaults.
     globals_v01: Option<&'b BaseEnv>,
     /// The `V0_0`-slot base environment — `Some` only for a cross-version
-    /// splice compile ([`Compiler::new_xver`]), used exclusively while
-    /// `current_version` is `V0_0` (i.e. while folding inside an
-    /// `Ast::VersionScope(V0_0, _)` subtree). `None` on every pure path,
-    /// so `globals_for(V0_0)` there is `None` — irrelevant, since no
-    /// `VersionScope` node is ever emitted on a pure path (§X2.2.2).
+    /// splice compile ([`Compiler::new_xver`]), used only while
+    /// `current_version` is `V0_0` (inside an `Ast::VersionScope(V0_0, _)`
+    /// subtree). `None` on every pure path, which is fine since no
+    /// `VersionScope` node is ever emitted there.
     globals_v006: Option<&'b BaseEnv>,
-    /// Which of the two envs above is active for the primitive fold right
-    /// now — `V0_1` outside any `VersionScope`, or the tag of the innermost
-    /// enclosing one (`Ast::VersionScope`'s compile arm below). Only ever
-    /// changes away from its initial value on a cross-version splice
-    /// compile, where `Ast::VersionScope(V0_0, _)` nodes actually occur.
+    /// Which of the two envs above is active for the primitive fold —
+    /// `V0_1` outside any `VersionScope`, else the tag of the innermost
+    /// enclosing one. Only moves off its initial value during a
+    /// cross-version splice compile.
     current_version: RustyfiVersion,
 }
 
 impl<'b> Compiler<'b> {
-    /// The ordinary (pre-X2a-shaped) constructor: one base environment,
-    /// constant-folded as before. `current_version` never moves off its
-    /// initial `V0_1` slot here (no `VersionScope` node exists in a tree
-    /// compiled through this path).
+    /// The ordinary constructor: one base environment to constant-fold
+    /// against. `current_version` never moves off its initial `V0_1` slot
+    /// (no `VersionScope` node exists on this path).
     fn new(globals: Option<&'b BaseEnv>) -> Compiler<'b> {
         Compiler {
             scopes: Vec::new(),
@@ -197,12 +161,11 @@ impl<'b> Compiler<'b> {
         }
     }
 
-    /// The cross-version-splice constructor (Slice X2a): `env_v01` folds
-    /// every `Ast::Var` OUTSIDE a `VersionScope`; `env_v006` folds every
-    /// `Ast::Var` INSIDE an `Ast::VersionScope(V0_0, _)` subtree — see the
-    /// `Ast::VersionScope` compile arm below. The top-level program body
-    /// always starts un-wrapped (`V0_1`), so `current_version` starts there
-    /// too.
+    /// The cross-version-splice constructor: `env_v01` folds
+    /// every `Ast::Var` OUTSIDE a `VersionScope`; `env_v006` folds every one
+    /// INSIDE an `Ast::VersionScope(V0_0, _)` subtree (see the
+    /// `Ast::VersionScope` compile arm below). The program body always
+    /// starts un-wrapped (`V0_1`), so `current_version` starts there too.
     fn new_xver(env_v01: &'b BaseEnv, env_v006: &'b BaseEnv) -> Compiler<'b> {
         Compiler {
             scopes: Vec::new(),
@@ -221,33 +184,19 @@ impl<'b> Compiler<'b> {
         match version {
             RustyfiVersion::V0_1 => self.globals_v01,
             RustyfiVersion::V0_0 => self.globals_v006,
-            // `RustyfiVersion` is `#[non_exhaustive]` (future 0.1.z-era
-            // variants); this crate only ever constructs the two matched
-            // above, and `Compiler`'s two env slots are exactly those two —
-            // there is no third slot to resolve to.
+            // `RustyfiVersion` is `#[non_exhaustive]`; this crate only ever
+            // constructs the two variants matched above, so there is no
+            // third slot to resolve to.
             _ => None,
         }
     }
 
-    /// Where `name` lives in the runtime frame chain, if a local frame binds
-    /// it: `(depth, index)` — `depth` frames out from the innermost, then that
-    /// position in the frame.
-    ///
-    /// Frames are searched innermost-first and each frame's names LAST-first,
-    /// so a rebinding shadows the binding it overwrote — matching the
-    /// name-keyed environment this replaced, where a second `define` of the
-    /// same name in one frame simply overwrote the first. (Reachable for a
-    /// pattern that binds one name twice, and for a `let rec` group that
-    /// repeats one.)
     /// Where the program binds `name`, walking the lexical stack
-    /// innermost-first so the most recent binding wins — the same answer the
-    /// name-keyed frame chain used to give at run time.
-    ///
-    /// Within one frame, names are scanned LAST-first, so a frame that binds
-    /// one name twice resolves to the later slot — matching the environment
-    /// this replaced, where a second `define` of the same name simply
-    /// overwrote the first. (Reachable for a pattern binding one name twice,
-    /// and for a `let rec` group that repeats one.)
+    /// innermost-first so the most recent binding wins. Within one frame,
+    /// names are scanned LAST-first, so a name bound twice resolves to the
+    /// later slot — matching a name-keyed environment, where a second
+    /// `define` simply overwrites the first (reachable for a repeated
+    /// pattern-bound name, or a `let rec` group that repeats one).
     fn resolve(&self, name: &str) -> Option<Binding> {
         let mut depth = 0u16;
         for entry in self.scopes.iter().rev() {
@@ -275,7 +224,6 @@ impl<'b> Compiler<'b> {
         self.resolve(name).is_some()
     }
 
-    /// Assign `name` the next spine slot and record it on the lexical stack.
     fn alloc_global(&mut self, name: &str) -> usize {
         let slot = self.n_globals;
         self.n_globals += 1;
@@ -283,8 +231,8 @@ impl<'b> Compiler<'b> {
         slot
     }
 
-    /// Push a frame binding `names` (in slot order), compile `body` inside it,
-    /// then pop. This must stay 1:1 with where the emitted code calls
+    /// Push a frame binding `names` (in slot order), compile `body` inside
+    /// it, then pop. Must stay 1:1 with where the emitted code calls
     /// `env.child(..)` — that correspondence is what makes `(depth, index)`
     /// mean the same thing at compile time and at run time.
     fn in_frame<R>(
@@ -292,9 +240,9 @@ impl<'b> Compiler<'b> {
         names: impl IntoIterator<Item = String>,
         body: impl FnOnce(&mut Compiler<'b>) -> R,
     ) -> R {
-        // Truncate rather than pop: `body` may have pushed `Scope::Global`
-        // entries of its own (the spine continues inside a `let rec` group's
-        // fallback frame), and those belong to this region too.
+        // Truncate rather than pop: `body` may push its own `Scope::Global`
+        // entries (the spine continuing inside a `let rec` group's fallback
+        // frame), which belong to this region too.
         let mark = self.scopes.len();
         self.scopes.push(Scope::Frame(names.into_iter().collect()));
         let r = body(self);
@@ -303,17 +251,16 @@ impl<'b> Compiler<'b> {
     }
 
     /// If `ast` is a fully-applied call to an unshadowed base-environment
-    /// primitive — `op a1 … aN` where `op` resolves (as a *global*, not a
-    /// local) to a zero-args-applied [`Value::Prim`] whose arity is exactly
-    /// `N` — compile it to a direct primitive-body invocation, skipping the
-    /// per-argument `Value::Prim` clone + `applied`-vector churn the reference
-    /// interpreter performs when currying the arguments in one at a time.
+    /// primitive — `op a1 … aN` with `op` a *global* (not local) resolving
+    /// to a zero-args-applied [`Value::Prim`] of arity exactly `N` — compile
+    /// it to a direct primitive-body invocation, skipping the per-argument
+    /// `Value::Prim` clone + `applied`-vector churn of currying one
+    /// argument at a time.
     ///
-    /// The argument vector handed to `def.run` holds the same values in the
-    /// same (left-to-right) order as currying them in one at a time would, so
-    /// the primitive body — and any type error it raises — is unchanged. Under- and over-application, or a shadowed/local
-    /// `op`, return `None` and fall back to ordinary nested application (which
-    /// still specializes any *inner* saturated prim call as it recurses).
+    /// The argument vector handed to `def.run` is in the same left-to-right
+    /// order currying would produce, so the primitive body and any error it
+    /// raises are unchanged. Under/over-application or a shadowed/local
+    /// `op` return `None` and fall back to ordinary nested application.
     fn try_saturated_prim(&mut self, ast: &Ast) -> Option<CompiledExpr> {
         let (head, args) = unfold_spine(ast);
         let Ast::Var(name, _) = head else {
@@ -363,13 +310,10 @@ impl<'b> Compiler<'b> {
             }
             Ast::Str(s) => {
                 let s = s.clone();
-                // One `String` clone per evaluation, as before.
                 CompiledExpr::new(move |_, _| Ok(Value::Str(s.clone())))
             }
             Ast::Var(name, span) => self.compile_var_read(name, *span, "variable"),
             Ast::Apply(f, arg) => {
-                // Specialize a *saturated* call to an unshadowed base-env
-                // primitive (`op a1 … aN` with N == arity), if any.
                 if let Some(special) = self.try_saturated_prim(ast) {
                     special
                 } else {
@@ -394,14 +338,10 @@ impl<'b> Compiler<'b> {
                     })
                 })
             }
-            // `fun ?(l = x, …) p -> body` (SATySFi 0.1). The compiled body
-            // sees the optional binders plus the positional param in scope
-            // (they are bound at application by `Interp::apply_with_opts`).
+            // `fun ?(l = x, …) p -> body` (SATySFi 0.1): optional binders in
+            // declaration order, then the positional param — the slot order
+            // `in_frame` records here and `apply_with_opts` fills.
             Ast::LambdaOpt { opts, param, body } => {
-                // Slot order at application: the optional binders in
-                // declaration order, then the positional parameter last —
-                // which is exactly the order `in_frame` records here and
-                // `apply_with_opts` fills.
                 let binders: Vec<String> = opts
                     .iter()
                     .map(|(_, b)| b.clone())
@@ -523,7 +463,7 @@ impl<'b> Compiler<'b> {
                 })
             }
             // Quoted text is compiled EAGERLY, here, in the lexical scope of
-            // the quote site (Phase 3, `crate::quoted`): command names and
+            // the quote site (`crate::quoted`): command names and
             // embedded expressions are resolved now rather than by string
             // against the captured environment at layout time.
             Ast::InlineText(elems) => {
@@ -710,18 +650,15 @@ impl<'b> Compiler<'b> {
                     ))
                 })
             }
-            // Slice X2a (Option C): push the tag, compile `body`
-            // (recursively — every nested `Ast::Var`/saturated-prim fold
-            // reached from here, INCLUDING inside a nested `Ast::Lambda`'s
-            // body, since `compile` recurses eagerly at COMPILE time, not
-            // lazily at apply time — sees `current_version == v`), pop. This
-            // is the whole mechanism: a version-forked primitive name folds
-            // to `v`'s `PrimDef` here, and nowhere else does
-            // version-sensitive resolution happen (X2.0). `is_local`
-            // (checked first, in every `Var`/ `try_saturated_prim` arm
-            // above) still shadows this — a local binding of the same name
-            // is untouched regardless of the cursor. Never reached on a pure
-            // single-version compile: no `Ast::VersionScope` node is ever
+            // Push the tag, compile `body`
+            // recursively (every nested `Var`/saturated-prim fold under it —
+            // including inside a nested `Lambda`'s body, since `compile`
+            // recurses eagerly at COMPILE time — sees `current_version ==
+            // v`), pop. This is the whole mechanism: a version-forked
+            // primitive name folds to `v`'s `PrimDef` here and nowhere else.
+            // A local binding of the same name still shadows this
+            // regardless of the cursor. Never reached on a pure
+            // single-version compile: no `VersionScope` node is ever
             // produced there (`elaborate_program_with_versions`'s empty
             // `v006_indices`).
             Ast::VersionScope(v, body) => {
@@ -730,8 +667,8 @@ impl<'b> Compiler<'b> {
                 self.current_version = prev;
                 c
             }
-            // Ctor-scoping marker — transparent to compilation (typecheck runs
-            // on the uncompiled body; see `Ast::ModuleScope`).
+            // Ctor-scoping marker — transparent to compilation (typecheck
+            // runs on the uncompiled body).
             Ast::ModuleScope(_, body) => self.compile(body),
 
             // Stages are a typing-time discipline; evaluation of the body is
@@ -777,12 +714,6 @@ impl<'b> Compiler<'b> {
         }
     }
 
-    /// Resolve a quoted-text command name (`\emph`, `+p`, a math command) to
-    /// the expression that yields its value — the same three-way
-    /// classification [`Compiler::compile`]'s `Ast::Var` arm performs, but
-    /// falling back to a lookup that reproduces the exact "unbound {kind}
-    /// command '…' at run time" message `read_inline`/`read_block`/
-    /// `reflect_math_elem` used to raise themselves.
     /// Resolve a NAME REFERENCE to the expression that yields its value —
     /// the compiler's single three-way classification, shared by `Ast::Var`,
     /// `Ast::Overwrite`'s cell lookup, and quoted text's command names:
@@ -793,11 +724,10 @@ impl<'b> Compiler<'b> {
     /// 2. an unshadowed base-environment name -> constant-folded to its value,
     ///    against `current_version`'s slot so a version-forked primitive
     ///    referenced inside an `Ast::VersionScope` freezes to THAT version's
-    ///    `PrimDef` (Slice X2a);
+    ///    `PrimDef`;
     /// 3. otherwise nothing can be resolved — elaboration rejects unbound
     ///    names long before here, so this is unreachable for a well-formed
-    ///    program; raise the same "unbound {what} '…' at run time" error the
-    ///    runtime name lookup used to.
+    ///    program; raise "unbound {what} '…' at run time".
     ///
     /// `what` only shapes that last error: "variable", "mutable variable",
     /// "inline command", …
@@ -917,42 +847,30 @@ impl<'b> Compiler<'b> {
 
     /// Compile the top-level **spine** — the unbroken chain of Let-shaped
     /// nodes `elaborate::nest` wraps around the document body, one per
-    /// top-level/`@require`d binding — giving each binding a [`Globals`] slot
-    /// so that references to it compile to an index instead of a frame-chain
-    /// walk (Phase 2, §6).
-    ///
-    /// Each arm evaluates its right-hand side in the same order its
-    /// [`Compiler::compile`] counterpart does, and raises the same errors —
-    /// but writes the result to a slot instead of into a frame. Phase 2 still
-    /// built the frame chain alongside, because quoted text resolved command
-    /// names (`\emph`, `+p` — themselves top-level bindings) by string
-    /// against a captured `Env` at layout time. Phase 3 removed the last such
-    /// lookup, so the chain is gone too: a corpus prelude no longer allocates
-    /// one frame per top-level binding per fixpoint trial.
-    ///
-    /// The first node that is not Let-shaped is the document body; it and
-    /// everything under it compile normally.
+    /// top-level/`@require`d binding — giving each a [`Globals`] slot
+    /// instead of a frame-chain walk. Each arm evaluates its
+    /// right-hand side in the same order and raises the same errors as its
+    /// [`Compiler::compile`] counterpart, but writes to a slot and builds
+    /// no frame. The first non-Let-shaped node is the document body; it
+    /// compiles normally.
     fn compile_spine(&mut self, ast: &Ast) -> CompiledExpr {
         match ast {
             Ast::LetIn(name, value, rest) => self.spine_let(name, value, rest, false),
-            // Same runtime shape as `LetIn` (see `ast.rs`).
             Ast::LetMathIn(name, value, rest) => self.spine_let(name, value, rest, false),
             Ast::LetMutableIn(name, init, body) => self.spine_let(name, init, body, true),
             Ast::LetRecIn(bindings, body) => self.spine_let_rec(bindings, body),
-            // Not a binding — this is the document body.
             other => self.compile(other),
         }
     }
 
     /// The shared `LetIn`/`LetMathIn`/`LetMutableIn` spine arm. `mutable`
     /// selects the `let-mutable` form, whose bound value is a fresh `Ref`
-    /// cell (the SAME cell goes into both the frame and the slot, so an
-    /// `Ast::Overwrite` reached through either sees the other's writes).
+    /// cell.
     ///
-    /// Note the ordering: `value` is compiled BEFORE the slot is allocated, so
-    /// a reference to `name` inside its own right-hand side still resolves to
-    /// whatever `name` meant before this binding — matching the runtime, which
-    /// evaluates `value` in the outer env and only then creates the frame.
+    /// `value` is compiled BEFORE the slot is allocated, so a reference to
+    /// `name` inside its own right-hand side resolves to whatever `name`
+    /// meant before this binding — matching the runtime, which evaluates
+    /// `value` in the outer env before creating the frame.
     fn spine_let(&mut self, name: &str, value: &Ast, rest: &Ast, mutable: bool) -> CompiledExpr {
         let cvalue = self.compile(value);
         let slot = self.alloc_global(name);
@@ -974,18 +892,15 @@ impl<'b> Compiler<'b> {
 
     /// The `LetRecIn` spine arm.
     ///
-    /// Slots are allocated for the whole group BEFORE its values are compiled,
-    /// since every name is in scope in every body — but that is only sound
-    /// when no value can *read* a sibling while the group is still being
-    /// filled. At run time the group's frame is populated one binding at a
-    /// time, so a read of a not-yet-defined sibling falls through to the outer
-    /// scope, whereas a slot read would see the previous trial's value. A
-    /// syntactic `fun`/`fun ?(..)` right-hand side cannot read anything at
-    /// definition time (evaluating a lambda never runs its body), which is the
-    /// case every working program is in — the runtime rejects a non-function
-    /// `let-rec` binding anyway. When some value is *not* syntactically a
-    /// lambda, this falls back to an ordinary local frame for the group (the
-    /// spine continues for the body).
+    /// Slots for the whole group are allocated BEFORE its values are
+    /// compiled, which is only sound if no value can *read* a sibling
+    /// while the group is still being filled — a slot read would see the
+    /// previous trial's value, where a frame read falls through to the
+    /// outer scope instead. A syntactic `fun`/`fun ?(..)` right-hand side
+    /// can't read anything at definition time (evaluating a lambda never
+    /// runs its body), and the runtime rejects any non-function `let-rec`
+    /// binding anyway. When some value is *not* syntactically a lambda,
+    /// this falls back to an ordinary local frame for the group instead.
     fn spine_let_rec(&mut self, bindings: &[(String, Rc<Ast>)], body: &Ast) -> CompiledExpr {
         let all_lambda = bindings
             .iter()
@@ -1030,17 +945,16 @@ impl<'b> Compiler<'b> {
 fn let_rec_frame(cbindings: Vec<(Rc<str>, CompiledExpr)>, cbody: CompiledExpr) -> CompiledExpr {
     CompiledExpr::new(move |env, interp| {
         // Pre-sized with placeholders and back-patched in order: a closure
-        // built by an earlier binding captures this frame and sees the later
-        // fills, which is what makes the group mutually recursive. The names
-        // survive only for the "must be a function" message.
+        // built by an earlier binding captures this frame and sees the
+        // later fills, making the group mutually recursive. Names survive
+        // only for the "must be a function" message.
         //
-        // A value that EAGERLY reads a not-yet-filled sibling therefore sees
-        // the `Unit` placeholder, where the name-keyed chain would have fallen
-        // through to an outer binding of the same name. Only reachable in a
-        // program the next line rejects anyway (a `let rec` right-hand side
-        // that is not a function), and arguably the more faithful answer: the
-        // sibling IS the binding in scope there, so resolving it to an outer
-        // one was accidental.
+        // A value that EAGERLY reads a not-yet-filled sibling sees the
+        // `Unit` placeholder, where a name-keyed chain would fall through
+        // to an outer binding instead — only reachable in a program the
+        // next line rejects anyway (a non-function `let rec` binding), and
+        // arguably the more faithful answer: the sibling IS the binding in
+        // scope there.
         let inner = env.child(vec![Value::Unit; cbindings.len()]);
         for (i, (name, cval)) in cbindings.iter().enumerate() {
             let v = cval.run(&inner, interp)?;
@@ -1121,7 +1035,7 @@ pub(crate) fn compile_program(ast: &Ast, base_env: &BaseEnv) -> CompiledExpr {
 }
 
 /// Compile a top-level program body that may contain `Ast::VersionScope`
-/// nodes (Slice X2a — a cross-version splice, `lib.rs`'s
+/// nodes (a cross-version splice, `lib.rs`'s
 /// `compile_document_v1_with_trials`): `base_env` folds every unshadowed
 /// `Ast::Var` OUTSIDE a `VersionScope`, `base_env_v006` folds every one
 /// INSIDE an `Ast::VersionScope(V0_0, _)` subtree. See
@@ -1142,18 +1056,11 @@ mod tests {
     //! Determinism checks over a broad set of programs, plus opt-in
     //! (`#[ignore]`) micro-benchmarks.
     //!
-    //! These used to be a DIFFERENTIAL harness: each program was run through
-    //! both this module's compiler and a reference tree-walking interpreter,
-    //! and the two results compared. Phase 3 of retired the tree-walker
-    //! (quoted text is compiled eagerly now, so a tree-walker cannot build a
-    //! `Value::InlineText` without invoking the compiler), which removed one
-    //! side of the comparison. Rather than leave a tautology behind, the same
-    //! programs now check the property that actually still has teeth and that
-    //! the project's byte-identical-output constraint depends on: two
-    //! INDEPENDENT compiles, against two freshly built base environments,
-    //! must produce identical output. That is what catches nondeterminism
-    //! leaking in from hash iteration order, allocation addresses, or the
-    //! shared `Globals` table.
+    //! The property under test is the one the project's byte-identical-output
+    //! constraint depends on: two INDEPENDENT compiles, against two freshly
+    //! built base environments, must produce identical output. That is what
+    //! catches nondeterminism leaking in from hash iteration order,
+    //! allocation addresses, or the shared `Globals` table.
     //!
     //! Run the benchmarks with, e.g.:
     //! `cargo test -p rustyfi-lang --release -- --ignored --nocapture bench_`
@@ -1225,9 +1132,6 @@ mod tests {
     /// environments, separate interpreters — and require the two runs to agree
     /// exactly: identical `Value` (compared by structural `Debug`) on success,
     /// identical error text on failure, and the same success/failure verdict.
-    ///
-    /// See the module comment for why this replaced the compiled-vs-
-    /// tree-walker differential check.
     fn assert_deterministic(ast: &Ast) {
         let env_a = crate::primitives::base_env();
         let env_b = crate::primitives::base_env();
@@ -1247,9 +1151,9 @@ mod tests {
     }
 
     /// SATySFi 0.1 labeled-optional lambda/application (`LambdaOpt`/
-    /// `ApplyOpt`): the compiled path and the tree-walker must agree on the
-    /// `Some`/`None` defaulting — a provided `?(bias = e)` binds `Some e`, an
-    /// omitted one (a plain apply of an opt-closure) binds `None`.
+    /// `ApplyOpt`) `Some`/`None` defaulting: a provided `?(bias = e)` binds
+    /// `Some e`, an omitted one (a plain apply of an opt-closure) binds
+    /// `None`.
     #[test]
     fn deterministic_labeled_optionals() {
         use std::rc::Rc;
@@ -1306,7 +1210,7 @@ mod tests {
 
     #[test]
     fn deterministic_let_lambda_and_capture() {
-        // let const a b = a in const 1 2
+        // let id x = x in id 7
         assert_deterministic(&Ast::LetIn(
             "id".into(),
             Box::new(Ast::Lambda("x".into(), Rc::new(var("x")))),
@@ -1573,7 +1477,6 @@ mod tests {
     // ---- benchmarks (opt-in) ----------------------------------------------
 
     fn bench_ns<F: FnMut()>(iters: u32, mut f: F) -> f64 {
-        // warm up
         f();
         let start = std::time::Instant::now();
         for _ in 0..iters {

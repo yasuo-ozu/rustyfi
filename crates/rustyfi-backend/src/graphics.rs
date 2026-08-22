@@ -134,7 +134,7 @@ pub enum GraphicsElem {
     /// 0.1 collection node (`GraphicD.concat`, dev-0-1-0 `graphicD.ml:23`):
     /// `unite-graphics`' payload. Never constructed by any 0.0.6 path — no
     /// 0.0.6-visible primitive builds one, so it is unreachable from 0.0.6
-    /// rendering by construction (§4.3's golden-PDF byte-compare is the
+    /// rendering by construction (the golden-PDF byte-compare is the
     /// tripwire that proves it).
     Group(Vec<GraphicsElem>),
     /// 0.1 clip node (`GraphicD.make_clip`, `graphicD.ml:97-98`): render
@@ -278,10 +278,7 @@ pub fn linear_transform_graphics(mat: (f64, f64, f64, f64), elem: &GraphicsElem)
                 transform: Some(composed),
             }
         }
-        // Same recursing shape as `shift_graphics` above; the stroke-width
-        // caveat documented on the `Text` arm's doc comment above extends
-        // to any `Stroke`/`DashedStroke` nested inside a transformed `Clip`/
-        // `Group` — no behavior change, just more elements it now reaches.
+        // Same recursing shape as `shift_graphics` above.
         GraphicsElem::Group(gs) => GraphicsElem::Group(
             gs.iter().map(|g| linear_transform_graphics(mat, g)).collect(),
         ),
@@ -476,9 +473,9 @@ mod tests {
         }
     }
 
-    /// L5b §4.2 test 4: `shift-graphics`/`linear-transform-graphics` over a
-    /// `Clip`/`Group` move both the clip path and the contents (the
-    /// `graphicD.ml:38` recursing-arm contract — prim-retype-sweep.md §3.2).
+    /// L5b: `shift-graphics`/`linear-transform-graphics` over a `Clip`/`Group`
+    /// move both the clip path and the contents (the `graphicD.ml:38`
+    /// recursing-arm contract).
     #[test]
     fn shift_and_transform_recurse_into_clip_and_group() {
         let fill = GraphicsElem::Fill(Color::Gray(0.0), rect(0.0, 0.0, 1.0, 1.0));

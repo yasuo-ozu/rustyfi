@@ -5,14 +5,10 @@
 //! for the handful of names vminst.ml doesn't define directly (`::`, `!`,
 //! the comparison trio derived in `general_table`).
 //!
-//! Milestone 1 used to hardcode local signatures here for `document`, `+p`,
-//! and `\emph`. Phase 4 deleted them along with their `primitives.rs`
-//! bodies: the real definitions now live in the `stdja-mini` stdlib package
-//! (`lib-rustyfi/dist/packages/stdja-mini.satyh`), built entirely out of
-//! *other* primitives below and typechecked for real, like any other
-//! `.satyh` library. Our simplified `page-break` still has no vminst.ml
-//! entry at all — it keeps its own local signature, documented at its entry
-//! below.
+//! `document`, `+p` and `\emph` have no entry here: they are ordinary
+//! `stdja-mini` stdlib bindings
+//! (`lib-rustyfi/dist/packages/stdja-mini.satyh`), built out of *other*
+//! primitives below and typechecked like any other `.satyh` library.
 //!
 //! Also provides [`builtin_variants`], the seed set of variant type
 //! declarations ([`VariantDecl`]) primitives.cppo.ml registers before any
@@ -59,17 +55,14 @@ pub fn t_block_text() -> MonoType {
 pub fn t_math_text() -> MonoType {
     MonoType::Base(BaseType::MathText)
 }
-/// `math` — v0.0.6-only alias of [`t_math_text`], named to match own
-/// `t_math()` naming (both name the same `BaseType::MathText`; kept as a
-/// thin alias rather than renaming the original, which
-/// `IText`/`Ast::MathText`'s existing call sites already use). V0_1 code
-/// should read `t_math_text()` at its call sites instead — this alias
-/// exists only for 0.0.6 signatures already written against it.
+/// `math` — v0.0.6-only alias of [`t_math_text`] (both name the same
+/// `BaseType::MathText`). V0_1 call sites should read `t_math_text()`
+/// instead; this alias exists only for 0.0.6 signatures written against it.
 pub fn t_math() -> MonoType {
     t_math_text()
 }
 /// `math-boxes` (V0_1 only; dev-0-1-0 vminst.ml's `tMB`) — the evaluated
-/// math tree `read-math` produces (math-split spec §1.1). 0.0.6 has no name
+/// math tree `read-math` produces. 0.0.6 has no name
 /// for this type (its `math` conflates both halves).
 pub fn t_math_boxes() -> MonoType {
     MonoType::Base(BaseType::MathBoxes)
@@ -106,9 +99,8 @@ pub fn t_math_class() -> MonoType {
 pub fn t_math_char_class() -> MonoType {
     MonoType::Variant("math-char-class".to_string(), Vec::new())
 }
-/// `paren` — version-forked (math-package completion M2), the
-/// `t_deco(version)`/`t_graphics_output(version)`/`t_decoset(version)`
-/// pattern (`:396-411`):
+/// `paren` — version-forked (math-package completion M2), the same shape as
+/// `t_deco(version)`/`t_graphics_output(version)`/`t_decoset(version)`:
 /// - `V0_0` (`pervasives.satyh`'s `type paren = length -> length -> length
 ///   -> length -> color -> inline-boxes * (length -> length)`) — structural,
 ///   like `t_point()`/`t_dash()`/`t_deco()` above: directly the expanded
@@ -128,12 +120,10 @@ pub fn t_math_char_class() -> MonoType {
 /// this shape directly; this port's type-synonym expansion resolves a
 /// `paren`-named annotation (e.g. `val paren-left : paren` in a `sig`) to
 /// the same shape (V0_0: pervasives synonym expansion; V0_1: the
-/// `name_to_mono("paren", …)` nominal case, `typecheck.rs`), so what
-/// actually matters is that this matches `paren-left`/`paren-right`'s own
-/// INFERRED type, which it does by construction. Gated on
-/// `math_is_split()` — the same predicate that already forks `math-paren`
-/// itself (`:1446-1455` below), keeping type-env and runtime keyed on the
-/// same capability by construction.
+/// `name_to_mono("paren", …)` nominal case, `typecheck.rs`), so what must
+/// match is `paren-left`/`paren-right`'s own INFERRED type, which it does by
+/// construction. Gated on `math_is_split()`, the same predicate that forks
+/// `math-paren` itself, so type-env and runtime stay keyed on one capability.
 pub fn t_paren(version: RustyfiVersion) -> MonoType {
     if version.math_is_split() {
         arrows(
@@ -196,18 +186,14 @@ pub fn t_document() -> MonoType {
 /// `color` (`primitives.cppo.ml:187-190`'s `Gray of float | RGB of
 /// (float*float*float) | CMYK of (float*float*float*float)`) — a built-in
 /// **variant**, not a `BaseType`: it costs a `VariantDecl` (registered by
-/// [`builtin_variants`] below), no base type, no `Value` change, no backend
-/// (mirrors `t_document`'s shape, but through `MonoType::Variant` since
-/// there is no `BaseType::Color`). `Gray`/`RGB`/`CMYK` typecheck and
-/// evaluate as ordinary `Ast::Ctor`/`Value::Ctor` values; not yet
-/// *consumable* (no `set-text-color` — needs a `Context.text_color` field,
-/// deferred to a later Roadmap item), but sufficient for `color.satyh` to
-/// compile. `fill`/`stroke` (graphics Slice 1) are its first consumers.
+/// [`builtin_variants`] below) and no `BaseType::Color`. `Gray`/`RGB`/`CMYK`
+/// typecheck and evaluate as ordinary `Ast::Ctor`/`Value::Ctor` values;
+/// `fill`/`stroke` (graphics Slice 1) are its first consumers.
 pub fn t_color() -> MonoType {
     MonoType::Variant("color".to_string(), Vec::new())
 }
 /// `hyphenation` (dev-0-1-0 `types.cppo.ml`'s opaque `HyphenationType`) — G6
-/// stand-in (`…/tmp/g6-g7-standins.md` §1.3): NOT a declared `BaseType` or
+/// stand-in: NOT a declared `BaseType` or
 /// `VariantDecl`, just the nominal-`Variant` fallthrough `name_to_mono`
 /// already gives any unrecognized sig type name (`typecheck.rs:500`), the
 /// same shape the already-vendored `color.satyh` seals through.
@@ -263,8 +249,7 @@ pub fn t_pbinfo() -> MonoType {
 /// Structural here, the same `t_pbinfo` precedent above: upstream registers
 /// a `SynonymType` name for the identical closed row, which this port
 /// deliberately doesn't mirror nominally (cosmetic deviation — revisit only
-/// if a 0.1 package names the type in a signature, prim-retype-sweep §6
-/// item 2).
+/// if a 0.1 package names the type in a signature).
 pub fn t_doc_info_dictionary() -> MonoType {
     MonoType::Record(types::Row::Cons(
         "title".to_string(),
@@ -284,7 +269,7 @@ pub fn t_doc_info_dictionary() -> MonoType {
         )),
     ))
 }
-/// `page` (vminst.ml's `tPG`) — the one new nominal variant this plan adds:
+/// `page` (vminst.ml's `tPG`) — a nominal variant:
 /// `A0Paper | A1Paper | ... | A5Paper | USLetter | USLegal |
 /// UserDefinedPaper of (length * length)` (`primitives.cppo.ml:203-212`),
 /// registered by [`builtin_variants`]. `page-break`'s first argument
@@ -367,7 +352,7 @@ pub fn t_language() -> MonoType {
     MonoType::Variant("language".to_string(), Vec::new())
 }
 /// `text-info` (vminst.ml's `tTCTX`; v0.0.6 `TextInfoType`) — the text-mode
-/// context. §G sliver: only the three pure prims below produce/consume it.
+/// context: only the three pure prims below produce/consume it.
 pub fn t_text_info() -> MonoType {
     MonoType::Base(BaseType::TextInfo)
 }
@@ -409,7 +394,7 @@ pub fn t_graphics_output(version: RustyfiVersion) -> MonoType {
 }
 /// `deco` (vminst.ml's `tDECO_raw = tPT @-> tLN @-> tLN @-> tLN @-> (tL
 /// tGR)` under `V0_0`; dev-0-1-0 redefines the same alias with a bare
-/// `tGR` result — §1.3/H3-H6) — a callback `point -> length -> length ->
+/// `tGR` result — H3-H6) — a callback `point -> length -> length ->
 /// length -> {list graphics / graphics}`, invoked (once placed) with its own
 /// position and resolved width/height/depth. `inline-frame-outer`'s
 /// stand-in body (`primitives.rs`) never actually calls it (see that
@@ -465,9 +450,8 @@ pub fn t_font_with_ratio(version: RustyfiVersion) -> MonoType {
 }
 
 /// `dom -> cod` (vminst.ml's `@->`) — a function taking no labeled optional
-/// arguments (`Row::Empty`). This keeps the signature unchanged, so every
-/// 0.0.6 primitive/inference site building a `Func` produces the empty-row
-/// shape by construction, byte-identical to before the row widening.
+/// arguments (`Row::Empty`), so every 0.0.6 primitive/inference site
+/// building a `Func` produces the empty-row shape by construction.
 pub fn arrow(dom: MonoType, cod: MonoType) -> MonoType {
     MonoType::Func(
         Box::new(crate::types::Row::Empty),
@@ -581,11 +565,11 @@ pub fn primitive_type(name: &str) -> Option<PolyType> {
 /// resolving against `RustyfiVersion::V0_0` exactly as before.
 pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Option<PolyType> {
     Some(match name {
-        // ==== math-split spec §2.1: removed in 0.1 — guard these OUT of
-        // the type table under V0_1 before falling through to their
-        // ordinary (0.0.6-only-meaningful) arms further below. Runtime
-        // availability is the `prims!` table's `v006` tag on the same six
-        // names; this guard keeps the two mechanisms in agreement. ====
+        // ==== removed in 0.1 — guard these OUT of the type table under V0_1
+        // before falling through to their ordinary (0.0.6-only-meaningful)
+        // arms further below. Runtime availability is the `prims!` table's
+        // `v006` tag on the same six names; this guard keeps the two
+        // mechanisms in agreement. ====
         "get-axis-height"
         | "math-pull-in-scripts"
         | "math-color"
@@ -597,7 +581,7 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
             return None
         }
 
-        // ==== math-split spec §2.2: added in 0.1 — unbound under V0_0
+        // ==== added in 0.1 — unbound under V0_0
         // (falls through this guard to the catch-all `_ => return None`
         // below, since none of these names have a v0.0.6 arm at all). ====
         //
@@ -644,7 +628,7 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
         // `%math-attach-scripts : context -> math-boxes -> option math-text
         // -> option math-text -> math-boxes` — hidden (unlexable name, `%`
         // starts a comment), the synthesized script-attacher `val math`
-        // commands without `with sub sup` lower to (math-split spec §4.3).
+        // commands without `with sub sup` lower to.
         "%math-attach-scripts" if version.math_is_split() => poly0(arrows(
             vec![
                 t_context(),
@@ -655,7 +639,7 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
             t_math_boxes(),
         )),
 
-        // ==== G6 (`…/tmp/g6-g7-standins.md` §1): hyphenation/unidata loader
+        // ==== G6: hyphenation/unidata loader
         // + setter stand-ins, and the `here` lex-time-constant stand-in —
         // all V0_1-only (genuinely absent from 0.0.6 upstream, so these
         // fall through to the catch-all `_ => return None` under V0_0).
@@ -760,14 +744,6 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
             ],
             t_document(),
         )),
-        // `document`, `+p`, and `\emph` used to have LOCAL signatures here
-        // (milestone-1 natives); phase 4 deleted them along with their
-        // `primitives.rs` bodies — see this module's doc comment. They are
-        // now ordinary `stdja-mini` bindings (a plain `let`, a
-        // `let-block`, and a `let-inline` respectively), typechecked by the
-        // normal rules from the primitives below, with no bespoke entry
-        // needed in this table at all.
-
         // ---- int arithmetic ----
         // vminst.ml:2537 `Plus`: `~% (tI @-> tI @-> tI)`.
         "+" => poly0(arrows(vec![t_int(), t_int()], t_int())),
@@ -902,15 +878,11 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
         // tMATH @-> tCTX)` — faithfully, a `[math] inline-cmd` (our
         // `MonoType::InlineCmd` with exactly one mandatory `math`
         // argument), NOT `MathCmd` (that's `MathCommandType`, the different
-        // v0.0.6 type used for math-mode commands like `\sqrt`). RESTORED:
-        // `(command \math)` (`class-signature-lang-gaps.md` gap 1)
-        // constructs the first-class command reference this needs; every
-        // call site now passes `(command \math)` (or a local stub command)
-        // instead of `()`. FAITHFUL: `prim_get_initial_context`
-        // (primitives.rs) interns the command via
-        // `Interp::register_math_command` and installs it as
-        // `Context::math_command`, consulted by `read_inline`'s `EmbedMath`
-        // arm for bare `${…}` in prose.
+        // v0.0.6 type used for math-mode commands like `\sqrt`). Call sites
+        // pass `(command \math)` — or a local stub command — to build the
+        // first-class command reference this needs (gap 1); the runtime
+        // side is FAITHFUL, see `primitives.rs`'s
+        // `prim_get_initial_context`.
         "get-initial-context" => poly0(arrow(
             t_length(),
             arrow(inline_cmd(vec![mandatory(t_math_text())]), t_context()),
@@ -952,7 +924,7 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
         // see `primitives.rs`'s `prim_list_mark`/`prim_inline_mark` doc
         // comments for the `int` tag encoding. Both produce an INERT marker
         // box, stripped with zero contribution before PDF/faithful-HTML
-        // placement (§4.3) — read only by the reflow HTML walker. ----
+        // placement — read only by the reflow HTML walker. ----
         "list-mark" => poly0(arrow(t_int(), t_block_boxes())),
         "inline-mark" => poly0(arrow(t_int(), t_inline_boxes())),
 
@@ -982,7 +954,7 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
         // `mitou-report.satyh`'s `document` unblocker.
         "clear-page" => poly0(t_block_boxes()),
 
-        // ---- frontend-completion.md §Slice 1.A: the ~18 pure primitives ----
+        // ---- Slice 1.A: the ~18 pure primitives ----------------------------
         // (`|>` is excluded here on purpose — it is elaborated directly to
         // ordinary `Apply`, never a `scope`/env-bound name, so it has no
         // primitive type scheme at all; see `elaborate.rs`'s `climb`.)
@@ -1023,14 +995,14 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
         "display-message" => poly0(arrow(t_string(), t_unit())),
         // vminst.ml:3133 `AbortWithMessage`: `~% (tS @-> (~@ tv))` — a
         // fresh-per-instantiation type variable (see `!`/`::`'s `poly1`
-        // above for the same pattern). ZERO-EDIT row (prim-retype-sweep
-        // §1.4/§0.1): dev-0-1-0's vminst.ml row for this name differs only
+        // above for the same pattern). ZERO-EDIT row: dev-0-1-0's
+        // vminst.ml row for this name differs only
         // in NOTATION (`let bid = …` vs `forall "a"`), not in the type
         // itself — both generations are the identical polymorphic `∀a.
         // string -> a`, so this one arm serves both versions unchanged.
         "abort-with-message" => poly1(|a| arrow(t_string(), a)),
 
-        // ==== Slice 1 graphics primitives (§2) — paths, fill/stroke, and the `inline-graphics` on-page sink.
+        // ==== Slice 1 graphics primitives — paths, fill/stroke, and the `inline-graphics` on-page sink.
         // Argument order transcribed from `tools/gencode/vminst.ml`:
         // `start-path` :713, `line-to` :727, `terminate-path` :759,
         // `close-with-line` :773, `fill` :2398, `stroke` :2381,
@@ -1054,7 +1026,7 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
         // h, d) carrying the callback's graphics, the minimal on-page sink
         // for `graphics` values (see that primitive's body, `primitives.rs`,
         // for the eager-callback-at-origin caveat this signature doesn't
-        // capture). H1 (prim-retype-sweep.md §1.3): the callback's RESULT
+        // capture). H1: the callback's RESULT
         // forks per version via `t_graphics_output`; row stays untagged
         // (`Both`) — see `coerce_graphics_result`'s doc comment for why.
         "inline-graphics" => poly0(arrows(
@@ -1072,8 +1044,7 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
         // `tRULESF = (tL tLN) @-> (tL tLN) @-> (tL tGR)` at
         // primitives.cppo.ml:141; dev-0-1-0 inlines the same shape with a
         // bare `tGR` result, vminst.ml:487-489) — the ruled-grid primitive;
-        // R2 (prim-retype-sweep.md §1.2): same per-version callback-result
-        // fork as `inline-graphics`.
+        // R2: same per-version callback-result fork as `inline-graphics`.
         "tabular" => poly0(arrows(
             vec![
                 list(list(t_cell())),
@@ -1088,7 +1059,7 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
         // vminst.ml:1891 `BackendInlineGraphicsOuter`: `~% (tLN @-> tLN @->
         // tIGRO @-> tIB)` — tIGRO = `length -> point -> {list graphics /
         // graphics}` (the resolved width, then the placed point). H2
-        // (prim-retype-sweep.md §1.3): same per-version callback-result fork.
+        // same per-version callback-result fork.
         "inline-graphics-outer" => poly0(arrows(
             vec![
                 t_length(),
@@ -1098,7 +1069,7 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
             t_inline_boxes(),
         )),
 
-        // ==== gr.satyh roadmap prims (§Full roadmap A/B/C/D) — signatures from `tools/gencode/vminst.ml`:
+        // ==== gr.satyh roadmap prims (roadmap A/B/C/D) — signatures from `tools/gencode/vminst.ml`:
         // `bezier-to` :742, `close-with-bezier` :787, `shift-path` :663,
         // `linear-transform-path` :678, `shift-graphics` :2451,
         // `linear-transform-graphics` :2432, `get-graphics-bbox` :2466,
@@ -1129,9 +1100,8 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
             vec![t_float(), t_float(), t_float(), t_float(), t_graphics()],
             t_graphics(),
         )),
-        // `get-graphics-bbox : graphics -> point * point`.
-        // `get-graphics-bbox` — R3 fork (prim-retype-sweep.md §1.2/§3.5):
-        // v0.0.6 `graphics -> point * point` (vminst.ml:2466); v0.1
+        // `get-graphics-bbox` — R3 fork: v0.0.6 `graphics -> point * point`
+        // (vminst.ml:2466); v0.1
         // `graphics -> option (point * point)` (dev-0-1-0 vminst.ml:2301) —
         // `graphics` is a collection under 0.1, so an empty one legitimately
         // has no bbox.
@@ -1144,10 +1114,9 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
             }
         }
         // `unite-graphics : list graphics -> graphics` (dev-0-1-0
-        // vminst.ml:3119) — v0.1-only (prim-retype-sweep.md §1.1, A12); the
-        // math-split §2.2 mirror-guard idiom — under `V0_0` this guard
-        // fails and the match falls through to the catch-all `_ => return
-        // None` at the bottom, so the name is correctly unbound there.
+        // vminst.ml:3119) — v0.1-only (A12), the same mirror-guard idiom as
+        // the 0.1-only math rows (see that section's header above for how
+        // the guard leaves the name unbound under V0_0).
         "unite-graphics" if version.graphics_is_collection() => {
             poly0(arrow(list(t_graphics()), t_graphics()))
         }
@@ -1280,15 +1249,13 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
             t_unit(),
         )),
 
-        // ==== + §G: the faithful `Value::Math`
-        // primitive layer `math.satyh` is built out of. Signatures
-        // transcribed from `tools/gencode/vminst.ml` (cited per entry); the
-        // "Phase" column of the plan's primitive-inventory table follows —
-        // A unless noted. ====
+        // ==== the faithful `Value::Math` primitive layer `math.satyh` is
+        // built out of. Signatures transcribed from
+        // `tools/gencode/vminst.ml` (cited per entry). ====
         //
         // vminst.ml:388 `BackendMathChar`: `~% (tMATHCLS @-> tS @-> tMATH)`.
         // v0.1 (dev-0-1-0 vminst.ml:358): `ctx -> class -> str -> mb` — ctx
-        // ACCEPTED, not stored on the atom (math-split spec §2.3/§9 risk 1).
+        // ACCEPTED, not stored on the atom.
         "math-char" => {
             if version.math_is_split() {
                 poly0(arrows(
@@ -1604,10 +1571,8 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
         }
         // vminst.ml:77 `PrimitiveSetMathCommand`:
         // `~% (tICMD tMATH @-> tCTX @-> tCTX)` — installs the default
-        // command a bare `${…}`-in-text dispatches to. FAITHFUL: interned
-        // via `Interp::register_math_command` and installed as
-        // `Context::math_command`, consulted by `read_inline`'s `EmbedMath`
-        // arm.
+        // command a bare `${…}`-in-text dispatches to. FAITHFUL, see
+        // `primitives.rs`'s `prim_set_math_command`.
         "set-math-command" => poly0(arrow(
             inline_cmd(vec![mandatory(t_math())]),
             arrow(t_context(), t_context()),
@@ -1617,9 +1582,6 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
         // math font's ABBREV; saphe-split `tools/gencode/vminst.ml:1462`
         // `tFONTKEY @-> tCTX @-> tCTX` takes the opaque [`t_font_key`]
         // handle (its body writes `ctx.math_font_key = Some(mathkey)`).
-        // The bundled 0.1 corpus already spells the 0.1 form — e.g.
-        // `dist-v01/packages/std-ja.satyh`'s `set-math-font
-        // FontLatinModernMath.main`.
         "set-math-font" => {
             let dom = match version {
                 RustyfiVersion::V0_1 => t_font_key(),
@@ -1629,17 +1591,11 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
         }
         // LOCAL, non-upstream, V0_1-only: `load-single-font : string ->
         // font`, the port's stand-in for upstream's internal
-        // `LoadSingleFont{path}` node. Upstream never gives this a surface
-        // name — `envelopeChecker.ml`'s `check_font_envelope` synthesizes
-        // one binding per `files[]` row of a FONT ENVELOPE and evaluates
-        // that node directly. This port's bundled 0.1 font envelopes
-        // (`dist-v01/packages/font-*.satyh`) are ordinary `.satyh`
-        // stand-ins rather than envelopes the loader synthesizes from, so
-        // they need a spelling for "mint the handle for this face". Its
-        // argument is the port's font-store key (the metrics provider's
-        // abbrev), standing in for upstream's font-file path; see
-        // `primitives.rs`'s `prim_load_single_font`. Same LOCAL-primitive
-        // precedent as `set-font-key` (`primitives.rs`'s `prims!` table).
+        // `LoadSingleFont{path}` node, which has no surface name upstream.
+        // Its argument is the port's font-store key standing in for
+        // upstream's font-file path — see `primitives.rs`'s
+        // `prim_load_single_font` for why. Same LOCAL-primitive precedent as
+        // `set-font-key` (`primitives.rs`'s `prims!` table).
         "load-single-font" if version == RustyfiVersion::V0_1 => {
             poly0(arrow(t_string(), t_font_key()))
         }
@@ -1695,9 +1651,7 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
         // per entry). ====
         //
         // vminst.ml:1603 `PrimitiveSetTextColor`: `~% (tCLR @-> tCTX @-> tCTX)`.
-        // FAITHFUL store (`primitives.rs`'s `prim_set_text_color`) — glyph-
-        // color *rendering* is a later follow-on, see that primitive's doc
-        // comment.
+        // FAITHFUL (`primitives.rs`'s `prim_set_text_color`).
         "set-text-color" => poly0(arrow(t_color(), arrow(t_context(), t_context()))),
         // vminst.ml:1618 `PrimitiveGetTextColor`: `~% (tCTX @-> tCLR)`.
         // FAITHFUL — `itemize.satyh` feeds this straight into `fill`, see
@@ -1713,7 +1667,7 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
         "set-hyphen-min" => poly0(arrows(vec![t_int(), t_int(), t_context()], t_context())),
         // vminst.ml:1309 `PrimitiveSetSpaceRatio`: `~% (tFL @-> tFL @->
         // tFL @-> tCTX @-> tCTX)`, params `(natural, shrink, stretch)`.
-        // FAITHFUL store; consumption by the line breaker is a follow-on.
+        // FAITHFUL: read by `text_to_boxes`'s interword glue.
         "set-space-ratio" => poly0(arrows(
             vec![t_float(), t_float(), t_float(), t_context()],
             t_context(),
@@ -1721,11 +1675,9 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
         // vminst.ml `PrimitiveSetSpaceRatioBetweenScripts`:
         // `float -> float -> float -> script -> script -> context -> context`
         // (natural, shrink, stretch, then the two adjacent scripts). Used by
-        // slydifi's arctic theme. STAND-IN store — this port has no
-        // script-aware line breaking and inserts no inter-script glue (see
-        // `primitives.rs`'s `get-leftmost-script`), so there is nothing to
-        // tune; slydifi only calls it with `0. 0. 0.` to SUPPRESS that glue,
-        // which the port already does, so the observable output matches.
+        // slydifi's arctic theme. STAND-IN — see `primitives.rs`'s
+        // `prim_set_space_ratio_between_scripts` for why the observable
+        // output still matches upstream.
         "set-space-ratio-between-scripts" => poly0(arrows(
             vec![
                 t_float(),
@@ -1800,17 +1752,10 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
             t_font_with_ratio(version),
         )),
         // `set-code-text-command : [string] inline-cmd -> context -> context`
-        // (`stdja:116`; orphan #4 of, not in any vminst.ml table this port
-        // has transcribed — no upstream line cited). STAND-IN: `(command
-        // \cmd)` (gap 1, already landed) means real programs CAN construct a
-        // `[string] inline-cmd` value to pass here now — but `Context`
-        // (rustyfi-backend) still can't hold an arbitrary lang-side `Value`
-        // without an illegal reverse crate dependency, and the one legal
-        // indirection this codebase uses for that (`Interp::hooks`'s ID-table
-        // seam) lives in `eval.rs`, outside this slice's file boundary — so,
-        // like `set-math-command`/ `set-math-font` above, the command is
-        // accepted and dropped (see `primitives.rs`'s
-        // `prim_set_code_text_command`).
+        // (`stdja:116`; orphan #4 — not in any vminst.ml table this port has
+        // transcribed, so no upstream line is cited). STAND-IN: the command
+        // is accepted and dropped, like `set-math-command`/`set-math-font`
+        // above — see `primitives.rs`'s `prim_set_code_text_command` for why.
         "set-code-text-command" => poly0(arrow(
             inline_cmd(vec![mandatory(t_string())]),
             arrow(t_context(), t_context()),
@@ -1821,14 +1766,12 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
         // `primitives.rs`'s `prim_get_natural_length`.
         "get-natural-length" => poly0(arrow(t_block_boxes(), t_length())),
 
-        // ==== step 8/9 orphans: the
-        // remaining stdja.satyh primitives with no prior slice.
-        // `set-dominant-wide-script`/`set-dominant-narrow-script`/
-        // `set-language` (rows 15/17/18) are now FAITHFUL stores
-        // (context-box-prims.md §C landed, group E2) with real getter
-        // round-trips just below; `set-every-word-break`/`register-outline`
-        // remain STAND-INs (accepted, dropped) — see their `primitives.rs`
-        // doc comments. ====
+        // ==== step 8/9 orphans: the remaining stdja.satyh primitives with
+        // no prior slice. `set-dominant-wide-script`/
+        // `set-dominant-narrow-script`/`set-language` (rows 15/17/18) are
+        // FAITHFUL stores (group E2) with real getter round-trips just
+        // below; `set-every-word-break` is a STAND-IN (accepted, dropped) —
+        // see its `primitives.rs` doc comment. ====
         //
         // vminst.ml:1511 `PrimitiveSetDominantWideScript`:
         // `~% (tSCR @-> tCTX @-> tCTX)`.
@@ -1855,21 +1798,15 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
         )),
         // vminstdef.yaml:2794 `BackendRegisterOutline`:
         // `~% ((tL(tPROD [tI; tS; tS; tB])) @-> tU)` — a list of `(depth,
-        // title, label, is-frozen)` PDF-outline entries. STAND-IN: this
-        // port has no PDF `/Outlines` writer yet (unlike `register-
-        // destination`/`register-link-to-*`, which DO reach the PDF via
-        // `Annotation`), so the list is accepted and discarded.
+        // title, label, is-frozen)` PDF-outline entries. FAITHFUL — see
+        // `primitives.rs`'s `prim_register_outline`.
         "register-outline" => poly0(arrow(
             list(product(vec![t_int(), t_string(), t_string(), t_bool()])),
             t_unit(),
         )),
         // vminstdef.yaml:1565 `PrimitiveExtract`: `~% (tIB @-> tS)` —
-        // FAITHFUL: concatenates every `InnerString` run's own text,
-        // recursing into `Discretionary`'s `no_break` slot (mirrors
-        // `horzBox.ml`'s `extract_string`; this port's box vocabulary has no
-        // separate Rising/Frame wrapper box, since `inline-frame-breakable`
-        // et al. already flatten into the same `Vec<HorzBox>` — see
-        // `primitives.rs`'s `prim_extract_string`).
+        // FAITHFUL (mirrors `horzBox.ml`'s `extract_string`); see
+        // `primitives.rs`'s `extract_string_pure_one`.
         "extract-string" => poly0(arrow(t_inline_boxes(), t_string())),
 
         // ==== (text-mode-context sliver): the three PURE text-info prims. The text/html backends
@@ -1877,8 +1814,8 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
         // deliberately out of scope for this PDF port — see
         // `primitives.rs`'s section comment. ====
         //
-        // `get-initial-text-info` — the R1 fork (prim-retype-sweep §2.5,
-        // the `t_page_or_geometry`-style version branch, inlined since it's
+        // `get-initial-text-info` — the R1 fork (the
+        // `t_page_or_geometry`-style version branch, inlined since it's
         // one row): v0.0.6 (vminst.ml:953 `TextGetInitialTextModeContext`)
         // is `~% (tU @-> tTCTX)`; v0.1 (dev-0-1-0 vminst.ml:906) threads the
         // text-mode default math command (`inline [math-text]`) + a
@@ -1906,9 +1843,8 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
         // vminst.ml:935 `TextBreak`: `~% (tTCTX @-> tS)`.
         "break" => poly0(arrow(t_text_info(), t_string())),
 
-        // ==== L5a (prim-retype-sweep §2.1-2.4): 11 new v0.1-only rows,
-        // unbound under V0_0 (they fall through to the catch-all `_ =>
-        // return None` below, the same math-split §2.2 idiom). ====
+        // ==== L5a: 11 new v0.1-only rows, unbound under V0_0 (the same
+        // mirror-guard idiom as the 0.1-only math rows). ====
         //
         // Bitwise ops (dev-0-1-0 vminst.ml :2495/:2477/:2527/:2541/:2513/
         // :2556) — trivial int -> int (-> int); `<<`/`>>` lex as ordinary
@@ -1945,8 +1881,7 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
         // ---- language-completeness sweep gap 1: 0.1 float comparisons
         // (`primitives.rs`'s `prims!` table comment on ">."/"<."/">=."/
         // "<=." for the upstream citation + the confirmation these are
-        // genuinely absent from 0.0.6) — unbound under V0_0, same
-        // catch-all-`_` fallthrough idiom as the L5a/L5b rows above.
+        // genuinely absent from 0.0.6) — unbound under V0_0.
         ">." | "<." | ">=." | "<=." if version == RustyfiVersion::V0_1 => {
             poly0(arrows(vec![t_float(), t_float()], t_bool()))
         }
@@ -2067,7 +2002,7 @@ pub fn builtin_variants_with_version(version: RustyfiVersion) -> Vec<VariantDecl
         param_vars: Vec::new(),
     };
 
-    // `color` (frontend-completion.md §Slice1-B) — nullary variant (no type
+    // `color` (Slice 1-B) — nullary variant (no type
     // parameters, so `param_vars` is empty, same as `itemize` above):
     // `Gray of float | RGB of (float*float*float) | CMYK of
     // (float*float*float*float)` (`primitives.cppo.ml:187-190`). Unblocks
@@ -2110,9 +2045,8 @@ pub fn builtin_variants_with_version(version: RustyfiVersion) -> Vec<VariantDecl
 
     // `language` (`charBasis.ml`'s `language_system`) — nullary variant,
     // `set-language`'s 2nd argument (`stdja.satyh`'s `set-language Kana
-    // Japanese`). `set-language` itself (primitives.rs) never inspects
-    // which constructor it got (same "type faithful, behavior not yet"
-    // stand-in as `script` above).
+    // Japanese`), stored per script in `Context::langsys_scheme` and read
+    // back by `get-language` (primitives.rs).
     let language_decl = VariantDecl {
         name: "language".to_string(),
         params: 0,
@@ -2130,9 +2064,9 @@ pub fn builtin_variants_with_version(version: RustyfiVersion) -> Vec<VariantDecl
     // `page-break`'s first argument; `as_page` (`primitives.rs`) maps each
     // ctor to a backend `PaperSize`.
     //
-    // L7 (rustyfi-0-1-0-support.md §3): GONE in v0.1 upstream (no
-    // replacement ADT — paper sizes are a plain `length * length` tuple
-    // there, see `t_page_or_geometry`), so this declaration is gated on
+    // L7: GONE in v0.1 upstream (no replacement ADT — paper sizes are a
+    // plain `length * length` tuple there, see `t_page_or_geometry`), so
+    // this declaration is gated on
     // `has_page_adt()` below rather than being unconditionally registered.
     let page_decl = VariantDecl {
         name: "page".to_string(),

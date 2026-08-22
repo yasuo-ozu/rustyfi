@@ -1,5 +1,3 @@
-//! The user's `config.toml`: where it is looked for, and what it may declare.
-
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};

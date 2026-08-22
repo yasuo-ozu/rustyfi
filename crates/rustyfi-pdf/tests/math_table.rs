@@ -1,18 +1,13 @@
-//! (OpenType MATH-table metrics: constants + scripts + axis + italic-kern) —
-//! proof that:
-//!  1. `TtfFontStore` actually reads a real MATH font's `MathConstants`/
-//!     italic-correction table (ttf-parser 0.25.1's `tables::math`).
-//!  2. `Base14Metrics` overrides NONE of the new `FontMetrics` methods (they
-//!     inherit the trait's defaulted `None`), the base-14 regression floor
-//!     §B1 depends on.
-//!  3. The HEADLINE claim: laying out `${x^2}` under a real MATH font
-//!     produces a superscript shift that (a) differs from the fixed
-//!     `12pt * 0.5 = 6.0pt` heuristic base-14 still uses, and (b) equals an
-//!     INDEPENDENTLY recomputed clamped shift (`math.ml:524-533`'s
-//!     `superscript_baseline_height`) built from the exact same
-//!     `MathConstants`/ascender/descender queries `MathC`/`push_char_glyph`
-//!     use lang-side — i.e. the wired-up pipeline, not just the raw
-//!     accessor, does the real thing.
+//! OpenType MATH-table metrics (constants + scripts + axis + italic-kern):
+//! `TtfFontStore` reads a real MATH font's `MathConstants`/italic-correction
+//! table, and `Base14Metrics` overrides none of the new `FontMetrics`
+//! methods (the base-14 regression floor depends on this).
+//!
+//! Headline: laying out `${x^2}` under a real MATH font produces a
+//! superscript shift that differs from the fixed `12pt * 0.5 = 6.0pt`
+//! base-14 heuristic, and equals an independently recomputed clamped shift
+//! (`math.ml:524-533`'s `superscript_baseline_height`) — the wired-up
+//! pipeline, not just the raw accessor, does the real thing.
 //!
 //! Font discovery mirrors `tests/math_font.rs`: fontconfig first, then a
 //! handful of common distro/nix paths, then a graceful skip.
@@ -28,19 +23,8 @@ use rustyfi_pdf::{Base14Metrics, TtfFontStore};
 /// Locate a real MATH-capable OpenType font, preferring the bundled Latin
 /// Modern Math (CFF), same discovery order/guard as `tests/math_font.rs`.
 fn find_math_font() -> Option<PathBuf> {
-    // Slice B, re-baselined for the upstream-correct default (see
-    // `download-fonts.sh`'s header comment): the repo now bundles
-    // the REAL Latin Modern Math at
-    // `lib-rustyfi/dist/fonts/latinmodern-math.otf` (fetched by
-    // `download-fonts.sh`, same as ipaexm/Junicode) and wires it as
-    // `default-font.satysfi-hash`'s `"math"` default. Check it FIRST so this
-    // test no longer depends on a host-wide font install once that script
-    // has been run. Every assertion in this file recomputes its expected
-    // value from whatever font is actually loaded (`store.math_constants`
-    // etc.), so it holds for LM Math exactly as it did for DejaVu Math TeX
-    // Gyre. Fall back to the previously-bundled DejaVu Math TeX Gyre (still
-    // fetched as a secondary abbrev) only if LM Math isn't present, then
-    // fontconfig/distro paths.
+    // Every assertion in this file recomputes its expected value
+    // from whatever font is actually loaded, so it is font-independent.
     let bundled_lmmath = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../lib-rustyfi/dist/fonts/latinmodern-math.otf");
     if bundled_lmmath.is_file() {
@@ -104,9 +88,7 @@ macro_rules! need_math_font {
     };
 }
 
-// ----------------------------------------------------------------------
 // 1. Raw MathConstants/italic-correction accessors.
-// ----------------------------------------------------------------------
 
 #[test]
 fn math_font_exposes_plausible_math_constants() {
@@ -177,8 +159,7 @@ fn math_kern_does_not_panic_and_degrades_gracefully() {
     // implementation time), so this only proves the accessor chain
     // (`face.tables().math?.glyph_info?.kern_infos?.get(gid)?`) doesn't
     // panic and degrades to `None` — the exact "missing kern data ->
-    // zero-correction, not error" contract `math-table-spec.md`'s Risks
-    // section calls for.
+    // zero-correction, not error" contract.
     let path = need_math_font!();
     let store = TtfFontStore::load(&path, None, None).expect("load math font");
     for corner in [
@@ -191,12 +172,10 @@ fn math_kern_does_not_panic_and_degrades_gracefully() {
     }
 }
 
-// ----------------------------------------------------------------------
 // 2. Headline proof: the real pipeline (parse -> elaborate -> typecheck ->
 //    eval -> layout_math_atom's Sup arm) produces a MATH-font superscript
 //    shift that differs from base-14's flat heuristic and matches an
 //    independently recomputed clamp.
-// ----------------------------------------------------------------------
 
 fn run_math(src: &str, metrics: &dyn FontMetrics) -> Result<Value, CompileError> {
     let file = rustyfi_syntax::parse_file(src)?;
@@ -277,7 +256,8 @@ fn headline_math_font_superscript_shift_differs_from_flat_heuristic() {
     let size = Length::pt(12.0);
 
     // Base-14: `layout_math_atom`'s `MathC` falls back to the fixed
-    // `SUP_SHIFT = 0.5` constant this port used before §B1 -> exactly
+    // `SUP_SHIFT = 0.5` constant this port used before MATH-table support
+    // landed -> exactly
     // 12pt * 0.5 = 6.0pt, unclamped.
     let base14_src = with_ctx("embed-math ctx ${x^2}");
     let v = run_math(&base14_src, &Base14Metrics)

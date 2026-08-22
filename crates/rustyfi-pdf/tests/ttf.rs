@@ -104,8 +104,7 @@ fn bold_and_oblique_fall_back_to_regular() {
 }
 
 /// Build a single hand-placed line of text in `font`, using `store` to
-/// measure it, mirroring what the (milestone-1) line/page breaker would
-/// produce.
+/// measure it, mirroring what the line/page breaker would produce.
 fn build_line(store: &TtfFontStore, geometry: &PageGeometry, text: &str, font: FontKey) -> PlacedLine {
     let size = Length::pt(18.0);
     let width = store
@@ -149,10 +148,8 @@ fn render_pdf_ttf_produces_a_pdf_with_embedded_font() {
         "output should start with a PDF header"
     );
 
-    // D5: the embedded `FontFile2` is now SUBSET to the ~10 glyphs "Hello
-    // World" actually uses, so the whole PDF is much SMALLER than the source
-    // face (inverted from the pre-D5 whole-file-embed assertion this test
-    // used to make).
+    // The embedded `FontFile2` is SUBSET to the ~10 glyphs "Hello World"
+    // actually uses, so the whole PDF is much SMALLER than the source face.
     let font_len = std::fs::metadata(&path).expect("stat font file").len() as usize;
     assert!(
         pdf_bytes.len() < font_len,
@@ -191,7 +188,7 @@ fn subsetted_base_font_carries_a_subset_tag() {
     );
 }
 
-/// D5 reruns are reproducible: subsetting the same document twice yields
+/// Reruns are reproducible: subsetting the same document twice yields
 /// byte-identical output (the subset tag is a deterministic hash of the
 /// used-gid set, not e.g. a random UUID or a timestamp).
 #[test]
@@ -210,9 +207,9 @@ fn subsetting_is_reproducible_across_reruns() {
 
 /// A CFF-outline OpenType face (no `glyf` table at all — this host's
 /// `NotoSansTagalog-Regular.otf`, a TeX Gyre `.otf`, or any single-face
-/// non-collection `.otf` fontconfig turns up) now takes the
-/// `CIDFontType0`/`FontFile3` embed path rather than the invalid
-/// pre-design `CIDFontType2`/`FontFile2` whole-file embed.
+/// non-collection `.otf` fontconfig turns up) takes the
+/// `CIDFontType0`/`FontFile3` embed path — a `CIDFontType2`/`FontFile2`
+/// whole-file embed of a CFF face is invalid PDF.
 fn find_cff_otf() -> Option<PathBuf> {
     let output = Command::new("fc-list").output().ok()?;
     if !output.status.success() {
@@ -243,15 +240,16 @@ fn find_cff_otf() -> Option<PathBuf> {
     None
 }
 
-/// S1+S2 (§6.3): a CFF-outline OpenType face must embed as
+/// A CFF-outline OpenType face must embed as
 /// `CIDFontType0`/`/FontFile3 /Subtype /OpenType`, with no `/CIDToGIDMap` at
 /// all (illegal for `CIDFontType0`) — true whether the writer subsets it
-/// (S2) or falls back to a whole-OTF embed (S1, when `subsetter::subset`
+/// or falls back to a whole-OTF embed (when `subsetter::subset`
 /// declines this exact usage set, e.g. a seac composite/CFF2 face). The size
 /// relationship below is derived from an INDEPENDENT `subsetter::subset`
 /// call against the same single-glyph usage set the writer itself would
-/// build, rather than hardcoding "always bigger" (true only under S1) or
-/// "always smaller" (true only when S2's subsetting succeeds) — see
+/// build, rather than hardcoding "always bigger" (true only under the
+/// whole-OTF fallback) or "always smaller" (true only when subsetting
+/// succeeds) — see
 /// `subsetter_can_subset_cff_and_the_writer_now_uses_it` below for the
 /// underlying primitive this cross-checks.
 #[test]
@@ -306,11 +304,6 @@ fn cff_face_embeds_as_fontfile3_cidfonttype0() {
         !contains(&pdf_bytes, b"/CIDToGIDMap"),
         "CIDFontType0 must NOT carry a /CIDToGIDMap (PDF 32000 9.7.4.2)"
     );
-    // Whether the PDF should be smaller (S2 subsetting succeeded) or bigger
-    // (S1 whole-OTF fallback) than the source face depends on whether THIS
-    // font/usage combination is subsettable at all — determined by directly
-    // calling the same `subsetter::subset` the writer itself calls, not
-    // assumed.
     let font_len = std::fs::metadata(&path).expect("stat font file").len() as usize;
     let font_bytes = std::fs::read(&path).expect("read font file");
     let remapper = subsetter::GlyphRemapper::new_from_glyphs_sorted(&[probe_gid]);
@@ -356,14 +349,14 @@ fn cff_face_embeds_as_fontfile3_cidfonttype0() {
     );
 }
 
-/// S2: the pinned `subsetter` crate subsets CFF fonts cleanly on its own —
+/// The pinned `subsetter` crate subsets CFF fonts cleanly on its own —
 /// normalising its output to CID-keyed with `CID == new_gid` — and
 /// `write_font_cff` now uses exactly this (`cid.rs`'s module doc /
 /// `write_font_cff`'s doc comment describe the two-pass content-remap this
 /// required). This test is decoupled from `render_pdf_ttf`/`write_font_cff`
 /// entirely — it calls `subsetter::subset` directly against the discovered
 /// CFF file — so it stays meaningful regardless of which embed path the
-/// writer takes for a given face/usage (S1's whole-OTF fallback still exists
+/// writer takes for a given face/usage (the whole-OTF fallback still exists
 /// for the seac-composite/CFF2 faces `subsetter` legitimately declines,
 /// exercised by the `Err` arm below).
 #[test]
@@ -379,7 +372,7 @@ fn subsetter_can_subset_cff_and_the_writer_now_uses_it() {
     };
     // Prefer a short Latin run (exercises several glyphs, more
     // representative of real subsetting) and fall back to a single probe
-    // glyph, exactly like the sibling S1 test above.
+    // glyph, exactly like the sibling test above.
     let text = ["Hello", "Aa1 ."]
         .into_iter()
         .find(|s| s.chars().all(|c| face.glyph_index(c).is_some()))
@@ -416,7 +409,7 @@ fn subsetter_can_subset_cff_and_the_writer_now_uses_it() {
         Err(e) => {
             // Not a test failure: `subsetter` legitimately declines some
             // glyph sets (seac composites, CFF2) — that's exactly the case
-            // S1's whole-OTF fallback exists for.
+            // the whole-OTF fallback exists for.
             eprintln!(
                 "subsetter declined {path:?} (glyphs {glyphs:?}): {e:?} — expected for e.g. \
                  seac composites/CFF2, S1's whole-OTF path covers this case"
@@ -427,8 +420,8 @@ fn subsetter_can_subset_cff_and_the_writer_now_uses_it() {
 
 /// The actual writer output for a CFF face round-trips through `pdftotext`
 /// regardless of whether the probe text is a single char or a short run —
-/// whether this run's CID is the original face gid (S1 fallback) or
-/// `subsetter`'s remapped gid (S2, `write_font_cff`'s doc comment) is an
+/// whether this run's CID is the original face gid (the whole-OTF fallback) or
+/// `subsetter`'s remapped gid (the subsetting path, `write_font_cff`'s doc comment) is an
 /// internal detail: `/W`, ToUnicode, and content all key off the SAME CID
 /// either way, so pdftotext extraction is unaffected. This is really
 /// re-confirming `cff_face_embeds_as_fontfile3_cidfonttype0`'s round trip
@@ -498,16 +491,15 @@ fn contains(haystack: &[u8], needle: &[u8]) -> bool {
     haystack.windows(needle.len()).any(|w| w == needle)
 }
 
-/// The bundled `lmsans` face (real Latin Modern Sans, `download-fonts.sh`
-/// — replaces the old Noto glyf stand-in now that CFF embedding exists) is itself
-/// a CFF-outline OpenType face, so it must take the same
+/// The bundled `lmsans` face (real Latin Modern Sans, `download-fonts.sh`)
+/// is itself a CFF-outline OpenType face, so it must take the same
 /// `CIDFontType0`/`/FontFile3` path as the fontconfig-discovered CFF faces above
 /// — this is the concrete, named abbrev a `set-font` call actually resolves to,
 /// not just "some CFF found on the host". Skips gracefully if
 /// `download-fonts.sh` hasn't been run in this checkout (the font is
 /// gitignored, not committed).
 ///
-/// Also the S2 SIZE-WIN check: the probe text "Latin Modern Sans" uses only a small
+/// Also the SIZE-WIN check: the probe text "Latin Modern Sans" uses only a small
 /// fraction of lmsans's full glyph repertoire (Latin Modern ships hundreds of
 /// glyphs — accents, ligatures, extended Latin, etc.), a genuine
 /// "multi-glyph-but-not-all- glyphs" document, so a real subset embed must be
@@ -562,9 +554,6 @@ fn lmsans_bundled_font_embeds_as_fontfile3_cidfonttype0() {
         "CIDFontType0 must NOT carry a /CIDToGIDMap (PDF 32000 9.7.4.2)"
     );
 
-    // S2 size win: a real subset embed of a handful of glyphs must be
-    // substantially smaller than the whole (hundreds-of-glyphs) source OTF —
-    // see this test's doc comment.
     let font_len = std::fs::metadata(&path).expect("stat lmsans font file").len() as usize;
     assert!(
         pdf_bytes.len() < font_len,
@@ -596,7 +585,7 @@ fn lmsans_bundled_font_embeds_as_fontfile3_cidfonttype0() {
     );
 }
 
-/// D5 x §B3 interaction (module doc, "Interactions verified"): a raw
+/// Subsetting and the MATH raw-gid channel interaction (module doc, "Interactions verified"): a raw
 /// MATH-table variant gid (`MathGlyph::gid: Some(_)`, not necessarily
 /// cmap-reachable from `text`) inserted into `usage.glyphs` by `emit_box`'s
 /// `Math` arm must survive subsetting — the `subsetter` crate's `glyf`
@@ -744,7 +733,6 @@ fn to_unicode_roundtrips_through_pdftotext() {
     let line1 = build_line(&store, &geometry, "Hello World", FontKey(0));
     let extra_text = format!("caf{extra}");
     let mut line2 = build_line(&store, &geometry, &extra_text, FontKey(0));
-    // Stack the second line below the first so they don't overlap.
     line2.baseline_y = line1.baseline_y + Length::pt(24.0);
     let page = Page {
             body_lines: usize::MAX,

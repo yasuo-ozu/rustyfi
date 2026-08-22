@@ -1,12 +1,10 @@
-//! `load-pdf-image` runtime round trip, mirroring `tests/images.rs`'s style
-//! exactly (Ast apply chains driven through `eval::Interp`, no parser
-//! involved): a real, tiny PDF is generated on the fly with `lopdf` (this
-//! crate's own PDF-reader dependency, also perfectly usable as a writer for
-//! a test fixture) and `load-pdf-image`d, then `use-image-by-width` is
-//! checked against the source page's `/MediaBox` aspect ratio — the
-//! PDF-page analogue of `images.rs`'s raster-image tests. Error-path
-//! coverage (missing file, bad page number) lives here too (design doc §4's
-//! error table).
+//! `load-pdf-image` runtime round trip (Ast apply chains driven through
+//! `eval::Interp`, no parser involved): a real, tiny PDF is generated on the
+//! fly with `lopdf` (this crate's own PDF-reader dependency, also perfectly
+//! usable as a writer for a test fixture) and `load-pdf-image`d, then
+//! `use-image-by-width` is checked against the source page's `/MediaBox`
+//! aspect ratio — the PDF-page analogue of `images.rs`'s raster-image tests.
+//! Error-path coverage (missing file, bad page number) lives here too.
 
 use rustyfi_backend::{FontKey, FontMetrics, HorzBox, ImageResource, Length, PureHorzBox};
 use rustyfi_lang::ast::Ast;
@@ -30,7 +28,7 @@ impl FontMetrics for Mono {
     }
 }
 
-// ---- small Ast-builder helpers (mirrors images.rs/prims_phase4.rs) --------
+// ---- small Ast-builder helpers --------------------------------------------
 
 fn var(name: &str) -> Ast {
     Ast::Var(name.to_string(), Span::default())
@@ -75,13 +73,13 @@ fn run(ast: &Ast) -> Run {
 // ============================================================================
 // A tiny, self-built one-page PDF fixture, generated with `lopdf`'s own
 // writer side (the crate this port added specifically to *read* foreign
-// PDFs, §S0) rather than checked in as an opaque binary blob — deterministic
+// PDFs) rather than checked in as an opaque binary blob — deterministic
 // and reviewable as plain Rust. `/MediaBox` and `/Resources` are placed on
 // the shared `Pages` node rather than the leaf `Page` (deliberately, not an
 // oversight): `lopdf` does not auto-resolve page-tree inheritance
-// (design doc §1 Risk 3 / §4's `resolve_pdf_media_box` /
-// `resolve_pdf_resources_object`), so this fixture directly exercises that
-// inheritance-walk code path, not just the never-inherited case.
+// (`resolve_pdf_media_box` / `resolve_pdf_resources_object`), so this
+// fixture directly exercises that inheritance-walk code path, not just the
+// never-inherited case.
 // ============================================================================
 
 /// `100pt x 50pt` MediaBox, one page whose content stream references an
@@ -259,7 +257,7 @@ fn use_image_by_width_scales_height_by_the_media_box_aspect_ratio() {
 }
 
 // ============================================================================
-// Registration coverage: mirrors images.rs's own coverage section.
+// Registration coverage
 // ============================================================================
 
 const NEW_NAMES: &[&str] = &["load-pdf-image"];

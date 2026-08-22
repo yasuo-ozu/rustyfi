@@ -1,4 +1,4 @@
-//! End-to-end coverage for the phase-2 elaborator: real SATySFi *source
+//! End-to-end coverage for the elaborator: real SATySFi *source
 //! text* run through `parse_file` -> `elaborate` -> `eval::Interp`,
 //! exercising the operator-precedence fold, `let-rec`/`if`/`match`/tuples,
 //! unary minus, list `::`, inline-text `#var;` embeds, and `let-inline`
@@ -81,7 +81,7 @@ fn unary_minus_wraps_the_whole_application() {
     assert_eq!(int("- (2 + 3)"), -5);
 }
 
-// ---- `|>` reverse application (frontend-completion.md Blocker B) ----------
+// ---- `|>` reverse application (Blocker B) ---------------------------------
 //
 // `|>` has no `Ast`-level identity to build directly (unlike every other
 // primitive/operator): elaboration lowers `a |> f` straight to `Apply(f,
@@ -152,8 +152,8 @@ fn tuple_construction_from_source() {
 
 // ---- inline-text embeds through a document ---------------------------------
 
-/// `document`/`+p`/`\emph` are no longer hardcoded Rust natives (phase 4):
-/// they're now ordinary bindings in the real `stdja-mini` stdlib package
+/// `document`/`+p`/`\emph` are not hardcoded Rust natives:
+/// they're ordinary bindings in the real `stdja-mini` stdlib package
 /// (`lib-rustyfi/dist/packages/stdja-mini.satyh`). Compile `src` the same
 /// way the multi-file loader's `merge_program` does — concatenate the
 /// package's prelude ahead of `src`'s own — rather than pulling in the
@@ -181,12 +181,11 @@ fn compile_document_with_stdlib(
     compile_document_cst(&merged, metrics)
 }
 
-/// Collects every text run on page 0, body first. Since Slice 1 rewrote
-/// `stdja-mini`'s `document` to call the real 4-arg `page-break`, every
-/// one-page fixture now also carries a footer rendering `arabic
-/// pbinfo#page-number` — placed (via `place_block_at`) *after* the body's
-/// lines, so it always shows up as this vec's trailing `"1"` element on a
-/// single-page document.
+/// Collects every text run on page 0, body first. The `stdja-mini`
+/// `document` calls the real 4-arg `page-break`, so every one-page fixture
+/// also carries a footer rendering `arabic pbinfo#page-number` — placed (via
+/// `place_block_at`) *after* the body's lines, so it always shows up as this
+/// vec's trailing `"1"` element on a single-page document.
 fn document_words(src: &str) -> Vec<String> {
     let doc = compile_document_with_stdlib(src, &Mono).unwrap();
     doc.pages[0]

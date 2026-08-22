@@ -1,4 +1,4 @@
-//! Text-rendering plan, Slice 1: CLI font wiring tests. Drives the *built*
+//! CLI font wiring tests. Drives the *built*
 //! `rustyfi` binary (like `tests/cache.rs`/`tests/dispatch.rs`), not the
 //! library directly, because the thing under test is the CLI-level wiring
 //! itself — `--font-dir` discovery, the `cmd_compile` branch between
@@ -226,11 +226,9 @@ fn real_font_fixture_renders_through_ttf_path_and_roundtrips() {
         &pdf_bytes[..pdf_bytes.len().min(16)]
     );
 
-    // D5: the embedded `FontFile2` is now SUBSET to the glyphs
-    // `realfont.saty`'s body actually uses, so the whole output PDF is much
-    // SMALLER than the source font file (inverted from the pre-D5
-    // whole-file-embed assertion this test used to make — see
-    // `rustyfi-pdf/tests/ttf.rs`'s matching update).
+    // The embedded `FontFile2` is SUBSET to the glyphs `realfont.saty`'s
+    // body actually uses, so the whole output PDF is much SMALLER than the
+    // source font file.
     let font_bytes = std::fs::read(&font_path).expect("read font file");
     assert!(
         pdf_bytes.len() < font_bytes.len(),
@@ -263,21 +261,16 @@ fn real_font_fixture_renders_through_ttf_path_and_roundtrips() {
 
 /// Deliverable 1e, case 2 (the fallback guard): with no font configured
 /// anywhere (no flags, no `$RUSTYFI_FONT_DIR`, no `dist/hash/` under
-/// `--lib-root`), `cmd_compile` must take the *exact* pre-Slice-1 path —
-/// same `Base14Metrics` instance, same `render_pdf` call — so the output is
+/// `--lib-root`), `cmd_compile` must take the *exact* base-14 path — same
+/// `Base14Metrics` instance, same `render_pdf` call — so the output is
 /// byte-for-byte identical to calling the library directly the way
-/// `tests/e2e.rs` does. This is the core invariant: adding font support must
-/// not change a single byte of output for documents/setups that don't use
-/// it.
+/// `tests/e2e.rs` does. The core invariant: font support must not change a
+/// single byte of output for setups that don't use it.
 #[test]
 fn no_font_config_matches_base14_byte_for_byte() {
     let work = tmpdir("no-font-config");
     let out = work.join("out.pdf");
-    // A `dist/hash`-free lib root — NOT `lib_root()` directly, which (once
-    // `download-fonts.sh` has been run for the CJK proof,
-    // `tests/cjk_render.rs`) legitimately carries a real font config and so
-    // would no longer exercise the "nothing configured" invariant this test
-    // is about.
+    // `dist/hash`-free (see `font_free_lib_root`'s doc).
     let font_free_root = font_free_lib_root(&work);
 
     let output = Command::new(bin())
@@ -349,7 +342,6 @@ fn changing_font_config_invalidates_the_compile_cache() {
 
     let was_cached = |out: &Output| String::from_utf8_lossy(&out.stderr).contains("(cached)");
 
-    // First: no font config (base-14 path) populates the cache.
     let first = Command::new(bin())
         .arg(minimal_fixture())
         .args(["-o".as_ref(), out.as_os_str()])
@@ -361,9 +353,6 @@ fn changing_font_config_invalidates_the_compile_cache() {
     assert!(!was_cached(&first), "first run must be a miss");
     let base14_bytes = std::fs::read(&out).expect("read first output");
 
-    // Same document, same cache dir, but now with a real font configured:
-    // must be a fresh miss (not a stale hit under the base-14 entry), and
-    // must actually render through the TTF path (different bytes).
     let font_root = write_font_config(&work, &font_path);
     let second = Command::new(bin())
         .arg(minimal_fixture())
@@ -384,7 +373,6 @@ fn changing_font_config_invalidates_the_compile_cache() {
         "the font-configured run must actually render through the TTF path"
     );
 
-    // Running the font-configured request again now hits its own entry.
     let third = Command::new(bin())
         .arg(minimal_fixture())
         .args(["-o".as_ref(), out.as_os_str()])

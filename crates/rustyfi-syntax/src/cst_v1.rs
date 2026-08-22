@@ -1,4 +1,4 @@
-//! The Slice-1 SATySFi **0.1.0** (`dev-0-1-0`) surface grammar — a *fork* of
+//! The SATySFi **0.1.0** (`dev-0-1-0`) surface grammar — a *fork* of
 //! [`crate::cst`], not a version-gate of it (gating one shared `cst.rs` would
 //! mean hand-writing `Parse` for nearly every node, destroying the derive
 //! idiom and risking 0.0.6 on every 0.1 edit). [`crate::cst`] stays frozen:
@@ -8,67 +8,58 @@
 //! copy of `render_parse_error` — so that touching `cst_v1.rs` never touches
 //! `cst.rs`.
 //!
-//! **Scope (through Sub-slice 2c).** SATySFi 0.1's grammar adds a whole
-//! ML-style module system (`bind`/`modexpr`/`sigexpr`/`decl`) on top of an
-//! expr/pattern/type layer that is structurally close to 0.0.6's, plus five
-//! surface deltas: `,`-separated lists/records (not `;`), `EXACT_EQ` for
-//! both definitional and record `=` (reusing [`DefEqTok`] — no new `=`
-//! leaf), mandatory `match … with … end`, per-binding staging instead of a
-//! whole-file `@stage:` header, and no `when`/`while`/`before` at all. This
-//! module builds:
+//! **Scope.** SATySFi 0.1's grammar adds a whole ML-style module system
+//! (`bind`/`modexpr`/`sigexpr`/`decl`) on top of an expr/pattern/type layer
+//! that is structurally close to 0.0.6's, plus five surface deltas:
+//! `,`-separated lists/records (not `;`), `EXACT_EQ` for both definitional
+//! and record `=` (reusing [`DefEqTok`] — no new `=` leaf), mandatory
+//! `match … with … end`, per-binding staging instead of a whole-file
+//! `@stage:` header, and no `when`/`while`/`before` at all. This module
+//! builds:
 //!
 //! * [`FileV1`] — `header* expr EOI` or `header* module Name
 //!   option(sig_annot) = struct bind* end EOI`.
 //! * [`Bind`] — every arm of upstream `bind`: `val`/`val inline`/`val
-//!   block` (Slice 1), `val rec … and …`/`val mutable`/`type … and …`
-//!   (Sub-slice 2b), `module … = modexpr`/`signature … = sigexpr`/`include
-//!   modexpr` (Sub-slice 2c).
+//!   block`, `val math` (math-split — see
+//!   [`Bind::ValueMath`]), `val rec … and …`/`val mutable`/`type … and …`,
+//!   `module … = modexpr`/`signature … = sigexpr`/`include
+//!   modexpr`.
 //! * [`ast::ModExpr`]/[`ast::SigExpr`]/[`ast::Decl`] — the full
-//!   module/signature grammar (Sub-slice 2c): functor literals/
+//!   module/signature grammar: functor literals/
 //!   application, module paths/aliases, `:>` coercion, `sig … end` with
 //!   every `decl` form, `with type` refinement, `include`.
 //! * A copy of [`crate::cst::ast`]'s expr/pattern/type layer with the 0.1
 //!   deltas applied (see each type's doc comment for the exact delta),
 //!   including the full `let rec … and … in`/`let mutable … in` expression
-//!   forms and a widened `TypeExpr` grammar (products, prefix application).
+//!   forms, a widened `TypeExpr` grammar (products, prefix application),
+//!   `inline […]`/`block […]`/`math […]` command types
+//!   (`parser_v1.mly:730-735`) and `LONG_LOWER` qualified type paths
+//!   (`:720-728,742-743`; `TypeApp::AppliedLong`/`TypeAtom::LongName`).
 //!
-//! **Grammar shipped with placeholder semantics only (Sub-slice 2c).** Every
-//! module/signature construct beyond Sub-slice 2a's struct-literal
+//! **Grammar shipped with placeholder semantics only.** Every
+//! module/signature construct beyond the struct-literal
 //! `ModExpr::Struct` body PARSES and round-trips, but lowers to a precise
 //! `LowerError` (`v1/lower.rs`) rather than real semantics — see that
-//! module's doc comment for the placeholder set and the seal rule. Real
-//! signature checking is Sub-slice 2d (2e for `include`, 2f for functors).
+//! module's doc comment for the placeholder set and the seal rule.
 //!
-//! **Deliberately NOT built yet** (post-2c deferrals): macro binds/decls
-//! (phase 5); `?(l = e)` optional parameter bundles and `( pat : typ )`
-//! ascribed params; type-level records/row vars; row quantifiers
-//! (`rowquant`, no `ROWVAR` token). Staging DOES parse now — the operand
-//! prefixes `&e`/`~e` ([`ast::StagePrefix`], `parser_v1.mly:870-873`) and the
-//! per-binding qualifier of `val ~x`/`val persistent ~x` ([`BindStageV1`],
-//! `:417-421` and the decl form `:600-603`), with `persistent` a 0.1-only
-//! keyword token.
+//! **Deliberately NOT built**: macro binds/decls
+//! and row quantifiers (`rowquant`). Staging DOES parse — the
+//! operand prefixes `&e`/`~e` ([`ast::StagePrefix`],
+//! `parser_v1.mly:870-873`) and the per-binding qualifier of `val ~x`/`val
+//! persistent ~x` ([`BindStageV1`], `:417-421` and the decl form
+//! `:600-603`), with `persistent` a 0.1-only keyword token.
 //!
-//! `val math` (the math-text/math-boxes split) DOES parse
-//! now — see [`Bind::ValueMath`] (math-split spec, L6). Sub-slice 2d-2 lands
-//! the other two post-2c grammar gaps: `inline […]`/`block […]` command
-//! types (`parser_v1.mly:730-735`; `math […]` stays deferred to the
-//! math-split phase — `math` is not a V0_1 keyword, `TypeApp::InlineCmdTy`/
-//! `BlockCmdTy`'s doc comment) and `LONG_LOWER` qualified type paths
-//! (`:720-728,742-743`; `TypeApp::AppliedLong`/`TypeAtom::LongName`).
-//!
-//! **The `#[recurse]` SCC story (Sub-slice 2c: five roots).** Five
-//! singleton, directly self-referential roots — grown from three in
-//! Sub-slice 2b to five in Sub-slice 2c — the same shape [`crate::cst::ast`]
-//! uses, for the same reason (see its module doc comment for the measured
-//! compile-time blowup a naive transcription hits):
+//! **The `#[recurse]` SCC story (five roots).** Five
+//! singleton, directly self-referential roots — the same shape
+//! [`crate::cst::ast`] uses, for the same reason (see its module doc comment
+//! for the measured compile-time blowup a naive transcription hits):
 //!
 //! * [`ast::Expr`] (its variants' own `Box<Expr>` children);
 //! * [`ast::PatBot`] (`CtorApplied`'s `Box<PatBot>` argument);
 //! * [`ast::TypeExpr`] (`Fun`'s right-recursive `Box<TypeExpr>` codomain);
-//! * [`ast::ModExpr`] (`Functor.body`'s `Box<ModExpr>` self-loop; Sub-slice
-//!   2c);
+//! * [`ast::ModExpr`] (`Functor.body`'s `Box<ModExpr>` self-loop);
 //! * [`ast::SigExpr`] (`Functor.dom`/`Functor.cod`'s `Box<SigExpr>`
-//!   self-loop; Sub-slice 2c — encoded left-recursion-safe, `with` is
+//!   self-loop — encoded left-recursion-safe, `with` is
 //!   bot+suffix, never `With { base: Box<SigExpr> }`; see [`ast::SigExpr`]'s
 //!   own doc comment).
 //!
@@ -81,8 +72,7 @@
 //! and no type inside the `#[recurse]` module ever names it — it is reached
 //! only through the hand-written [`StructDeclV1`] connector (an opaque leaf
 //! to the SCC analysis, mirroring [`StructBindV1`]), so `SigExpr ↔ Decl`
-//! never forms a rootless static sub-cycle. Full edge-by-edge audit lives in
-//! the Sub-slice 2c spec §1.6.
+//! never forms a rootless static sub-cycle.
 
 use crate::leaf::*;
 use crate::span::Span;
@@ -98,12 +88,11 @@ use syan::parse::{Parse, Unparse};
 pub use crate::cst::Header;
 
 /// A 0.1 header element — the UNION of BOTH packaging generations' header
-/// forms (Axis B; see the Ld3a spec §4.1 and). `Legacy` is `dev-0-1-0`'s
-/// `@require:`/`@import:` (byte-identical to 0.0.6's, reusing [`Header`] —
-/// the previous type of `FileV1::*::headers` wholesale); the three `Use*`
+/// forms (Axis B). `Legacy` is `dev-0-1-0`'s `@require:`/`@import:`
+/// (byte-identical to 0.0.6's, reusing [`Header`]); the three `Use*`
 /// forms are `saphe-split`'s `headerelem` (`parser.mly:371-380 @ b836d512`).
 /// Which family is *legal* is a `LoadMode` question the loader answers
-/// ([`rustyfi_loader`]), not a grammar question — this ONE `V0_1` grammar
+/// (`rustyfi_loader`), not a grammar question — this ONE `V0_1` grammar
 /// accepts both so the mode error can be raised at load time with a better
 /// message than a lex error would give.
 ///
@@ -116,7 +105,7 @@ pub use crate::cst::Header;
 pub enum HeaderV1 {
     /// `USE PACKAGE optional_open mod_chain` — depend on an installed package
     /// by its consumer-chosen alias (`used_as`). Header attributes
-    /// (`#[test-only]` etc., upstream `list(attribute)`) are DEFERRED (Ld3b+).
+    /// (`#[test-only]` etc., upstream `list(attribute)`) are DEFERRED.
     UsePackage {
         use_kw: KwUse,
         package_kw: KwPackage,
@@ -192,8 +181,6 @@ impl ast::ModChainV1 {
 /// leaf-level parse (`VarTok` | `OpNameTok`) is identical in both
 /// generations, so 0.1 reuses the type rather than re-declaring it —
 /// another token-generic, non-recursive import like [`Header`] above.
-/// Retires the Slice-1 "bound name is a bare `VarTok`" simplification
-/// (this module's doc comment).
 pub use crate::cst::BindName;
 
 /// A whole 0.1 `.saty`/`.satyh` file (`main`, upstream `parser_v1.mly:364-
@@ -213,7 +200,7 @@ pub enum FileV1 {
     },
     /// `header* MODULE UPPER option(sig_annot) EXACT_EQ STRUCT bind* END
     /// EOI` (`parser_v1.mly:372-375`, `main_lib`; `sig_annot = COERCE
-    /// sigexpr`, `:555-557` — Sub-slice 2c). Note 0.1's annotation sigil is
+    /// sigexpr`, `:555-557`). Note 0.1's annotation sigil is
     /// `:>` (COERCE), never 0.0.6's `: sig … end`.
     Library {
         headers: Vec<HeaderV1>,
@@ -243,24 +230,22 @@ pub struct SigAnnotV1 {
 
 /// One parameter of a [`Bind`] (`param_unit`, `parser_v1.mly:635-646`): an
 /// optional `?(l = x, …)` labeled-optional binder bundle, then either a
-/// plain `patbot` or a `( pat : τ )` ascribed pattern (optional-arg-rows
-/// increment 2 — [`ast::ParamBody::Ascribed`]). Defined INSIDE [`mod@ast`]
+/// plain `patbot` or a `( pat : τ )` ascribed pattern
+/// ([`ast::ParamBody::Ascribed`]). Defined INSIDE [`mod@ast`]
 /// and re-exported here so that [`ast::Expr::Fun`]/[`ast::Expr::LetIn`]/
 /// [`ast::RecClauseV1`] can reference it without a boundary-crossing
 /// Parse-trait cycle (the `TypeBindsErasedV1` E0275 hazard).
 pub use ast::{AscribedInnerV1, OptParamEntryV1, OptParamsV1, Param, ParamBody};
 
 /// Every arm of `bind` (`parser_v1.mly:415-440`) — upstream's own
-/// nonterminal name (Sub-slice 2c retires the prior stopgap `V1`-suffixed
-/// name now that this carries the full arm set; helper types like
-/// [`StructBindV1`]/[`TypeBindSingleV1`] keep their `V1` suffix). Every
-/// value arm's `=` is
+/// nonterminal name (helper types like [`StructBindV1`]/
+/// [`TypeBindSingleV1`] keep a `V1` suffix). Every value arm's `=` is
 /// `EXACT_EQ` ([`DefEqTok`]) and body is an [`ast::Expr`]. `name` is a
-/// [`super::BindName`] wherever upstream's `bound_identifier` reaches it
+/// [`crate::cst::BindName`] wherever upstream's `bound_identifier` reaches it
 /// (`Value`, and the rec clauses inside [`ast::RecClauseV1`]); `ValueMutable`
 /// and `ValueInline`/`ValueBlock`'s `ctx` stay plain [`VarTok`]s — upstream's
 /// `MUTABLE LOWER …`/ctx-variable productions are a plain `LOWER`, not
-/// `bound_identifier` (see [`super::BindName`]'s doc comment for the
+/// `bound_identifier` (see [`crate::cst::BindName`]'s doc comment for the
 /// ordered-choice-safety argument).
 #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
 pub enum Bind {
@@ -317,10 +302,10 @@ pub enum Bind {
         body: ast::Expr,
     },
     /// `VAL MATH bind_math` (`parser_v1.mly:452-453` dispatch → `520-531`):
-    /// `val math <ctx> \cmd <param>* [with <sub> <sup>] = <expr>`
-    /// (math-split spec §4.1). Unlike `ValueInline`/`ValueBlock`, `ctx` is
-    /// MANDATORY — upstream has no lightweight ctx-less form (contrast
-    /// `bind_inline`'s two productions, :466-491). Placed after
+    /// `val math <ctx> \cmd <param>* [with <sub> <sup>] = <expr>`.
+    /// Unlike `ValueInline`/`ValueBlock`, `ctx` is MANDATORY — upstream
+    /// has no lightweight ctx-less form (contrast `bind_inline`'s two
+    /// productions, :466-491). Placed after
     /// `ValueBlock`, ordered-choice-safe for the same reason as `Value`
     /// above: `math`/`with` both lex as keyword tokens under V0_1, so no
     /// arm can steal another's input.
@@ -343,10 +328,10 @@ pub enum Bind {
     /// `VAL REC bind_value_nonrec (AND bind_value_nonrec)*`
     /// (`parser_v1.mly:444-445,455-465`): `val rec f p* = e (and g p* = e)*`.
     /// With `rec`/`mutable`/`inline`/`block` all lexed as keyword tokens
-    /// under V0_1 (§2 of the sub-slice 2b spec), no arm can steal another's
-    /// input — `Value.name: BindName` cannot match a keyword token — so
-    /// declared order is a documentation/perf choice; `Value` stays first
-    /// because it is the overwhelmingly common arm.
+    /// under V0_1, no arm can steal another's input —
+    /// `Value.name: BindName` cannot match a keyword token — so declared
+    /// order is a documentation/perf choice; `Value` stays first because it
+    /// is the overwhelmingly common arm.
     ValueRec {
         kw: KwVal,
         /// See [`Bind::ValueInline::stage`]. One qualifier covers the whole
@@ -381,8 +366,8 @@ pub enum Bind {
     },
     /// `MODULE UPPER option(sig_annot) EXACT_EQ modexpr` — upstream
     /// `bind`'s MODULE arm (`parser_v1.mly:434-435`), with the FULL
-    /// `modexpr` body and the optional `:>` annotation (Sub-slice 2c;
-    /// retires 2a's struct-literal-only restriction). The body goes
+    /// `modexpr` body and the optional `:>` annotation. The
+    /// body goes
     /// through [`ModExprErasedV1`]: `Bind` is outside the `#[recurse]`
     /// module, and `Bind → ModExpr → StructBindV1 → Bind` is the runtime
     /// cycle both connectors erase (one break per direction).
@@ -420,9 +405,9 @@ pub struct BindStageV1 {
 }
 
 /// `scripts_param` (`parser_v1.mly:532-534`): `WITH sub=LOWER sup=LOWER` —
-/// `val math`'s optional `with sub sup` suffix (math-split spec §4.1),
-/// binding the two script-callback parameters directly rather than
-/// synthesizing the hidden `%math-attach-scripts` wrapper (§4.2/§4.3).
+/// `val math`'s optional `with sub sup` suffix, binding the two
+/// script-callback parameters directly rather than synthesizing the
+/// hidden `%math-attach-scripts` wrapper.
 #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
 pub struct ScriptsParamV1 {
     pub with_kw: KwWith,
@@ -455,7 +440,7 @@ pub struct TypeAndV1 {
 /// (`parser_v1.mly:535-537`) — grouped into a single struct so the sig
 /// layer ([`ast::SigExpr::WithType`], [`ast::Decl::Type`]) can reference the
 /// chain through ONE eraser ([`TypeBindsErasedV1`]). [`Bind::Type`] keeps
-/// its flattened `first`/`ands` fields unchanged (avoiding 2b call-site
+/// its flattened `first`/`ands` fields unchanged (avoiding call-site
 /// churn); the two spellings are the same grammar.
 #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
 pub struct TypeBindsV1 {
@@ -501,8 +486,8 @@ pub struct BarVariantDefV1 {
     pub def: VariantDefV1,
 }
 
-/// One declaration inside a `module … = struct … end` body
-/// (Sub-slice 2a). [`Bind`]'s own alternatives are exactly what a struct
+/// One declaration inside a `module … = struct … end` body.
+/// [`Bind`]'s own alternatives are exactly what a struct
 /// body may contain (`bind*`), so this simply re-parses a [`Bind`] — but
 /// *not* by naming `Bind` as a field type directly: [`Bind`] lives
 /// **outside** the `#[recurse]` module (below), so `Bind -> ModExpr ->
@@ -513,8 +498,7 @@ pub struct BarVariantDefV1 {
 /// (`cst.rs:262-269`). Hand-writing `Parse`/`Unparse` here — the same trick
 /// as the `erased_leaf_v1!` macro below — sidesteps that: the impl has no
 /// recursive where-bound for the compiler to try to satisfy, it just calls
-/// `Bind::parse` through the stream-erasing adapter at runtime. A
-/// byte-for-byte analogue of [`crate::cst::StructDecl`] (`cst.rs:270-293`).
+/// `Bind::parse` through the stream-erasing adapter at runtime.
 #[derive(Debug, Clone, PartialEq)]
 pub struct StructBindV1(pub Box<Bind>);
 
@@ -539,18 +523,14 @@ impl Unparse<crate::token::Atom> for StructBindV1 {
 }
 
 /// One declaration inside a `sig … end` body (`list(decl)`,
-/// `parser_v1.mly:591`). [`ast::Decl`] lives INSIDE the `#[recurse]` module
-/// and `SigExpr → SigBotV1 → StructDeclV1 → Decl → SigExpr` is a runtime
-/// cycle; naming `ast::Decl` as a plain derived field of [`ast::SigBotV1`]
-/// would re-enter the module's own SCC analysis. Hand-writing
-/// `Parse`/`Unparse` here — the [`crate::cst::StructDecl`] trick
-/// (`cst.rs:262-269`, the `E0275` rationale) — makes this an opaque leaf:
-/// the impl has no recursive where-bound, it just calls `Decl::parse`
-/// through the stream-erasing adapter at runtime, closing the
-/// `SigExpr`↔`Decl` cycle at RUNTIME while keeping both SCCs singletons.
-/// NOTE: deliberately named after [`crate::cst::StructDecl`] (the
-/// mechanism), even though it carries a sig-`decl`, not a struct binding —
-/// the struct-side twin is [`StructBindV1`].
+/// `parser_v1.mly:591`) — [`StructBindV1`]'s twin, hand-written `Parse`/
+/// `Unparse` for the same `E0275` reason. [`ast::Decl`] lives INSIDE the
+/// `#[recurse]` module and `SigExpr → SigBotV1 → StructDeclV1 → Decl →
+/// SigExpr` is a runtime cycle; naming `ast::Decl` as a plain derived field
+/// of [`ast::SigBotV1`] would re-enter the module's own SCC analysis. As an
+/// opaque leaf it closes that cycle at RUNTIME while keeping both SCCs
+/// singletons. NOTE: named after [`crate::cst::StructDecl`] (the mechanism),
+/// even though it carries a sig-`decl`, not a struct binding.
 #[derive(Debug, Clone, PartialEq)]
 pub struct StructDeclV1(pub Box<ast::Decl>);
 
@@ -574,7 +554,7 @@ impl Unparse<crate::token::Atom> for StructDeclV1 {
     }
 }
 
-/// Recursion-edge eraser types for the Slice-1 expr/pattern/type layer —
+/// Recursion-edge eraser types for the expr/pattern/type layer —
 /// the `cst_v1` analogue of [`crate::cst`]'s `erased_leaf!` macro (see its
 /// doc comment for the measured compile-time blowup that makes this
 /// mandatory). Suffixed `V1` throughout so these never collide with
@@ -647,8 +627,8 @@ erased_leaf_v1! {
     TypeBindsErasedV1 => TypeBindsV1;
 }
 
-/// The recursive expression/pattern/type/text grammar for SATySFi 0.1,
-/// Slice 1. A copy of [`crate::cst::ast`] with the deltas documented on each
+/// The recursive expression/pattern/type/text grammar for SATySFi 0.1.
+/// A copy of [`crate::cst::ast`] with the deltas documented on each
 /// type; see the module doc comment for the SCC/root story.
 #[syan::parse::recurse]
 pub mod ast {
@@ -663,8 +643,7 @@ pub mod ast {
     /// boundary Parse-trait cycle. A bare `patbot` param parses `Param {
     /// opts: None, body: ParamBody::Pat(_) }` directly — the `?`-headed
     /// `opts` `Option` is tried first, failing on a non-`?` head with no
-    /// token stolen, so every existing all-plain fixture parses
-    /// byte-identically.
+    /// token stolen, so an all-plain param list parses unchanged.
     #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
     pub struct Param {
         pub opts: Option<OptParamsV1>,
@@ -673,13 +652,13 @@ pub mod ast {
 
     /// A `param_unit`'s trailing shape (`parser_v1.mly:635-646`): either a
     /// plain `patbot`, or a `( pattern : typ )` ascribed pattern
-    /// (optional-arg-rows increment 2; `parser_v1.mly:641-645`).
+    /// (`parser_v1.mly:641-645`).
     #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
     pub enum ParamBody {
-        /// Tried FIRST — preserves today's parse for every existing fixture:
-        /// `( x : int )` fails `patbot`'s own paren body at the `:` (a
-        /// `patbot` paren group expects only more patterns/`,`/`)`) and
-        /// backtracks here cleanly (ordered choice, no token stolen).
+        /// Tried FIRST: `( x : int )` fails `patbot`'s own paren body at the
+        /// `:` (a `patbot` paren group expects only more patterns/`,`/`)`)
+        /// and backtracks to `Ascribed` cleanly (ordered choice, no token
+        /// stolen).
         Pat(PatBot),
         /// `( pattern : typ )` — a FULL `pattern` (not `patbot`) ascribed
         /// with a full `typ`, both via erasers (same cycle-avoidance
@@ -724,7 +703,7 @@ pub mod ast {
     }
 
     /// `nxlet`-analogue: a let/if/match/lambda-headed expression, falling
-    /// through to the flattened operator chain ([`Ops`], [`OpChain`]) at the
+    /// through to the flattened operator chain ([`Expr::Ops`], [`OpChain`]) at the
     /// bottom. Variant order is parse priority (ordered-choice
     /// backtracking): every `let`-headed form is tried before the fallback
     /// [`Expr::Overwrite`]/[`Expr::Ops`] (which may also start with a bare
@@ -734,10 +713,9 @@ pub mod ast {
     /// **0.1 deltas from [`crate::cst::ast::Expr`]:** `Match` gains a
     /// mandatory trailing `end` (`parser_v1.mly:792`); `let-rec` becomes
     /// `let rec … in …` (a plain `let` followed by the new [`KwRec`]
-    /// keyword) with full `and`-chained mutual recursion (Sub-slice 2b —
-    /// Slice 1's single-clause restriction is retired, see
+    /// keyword) with full `and`-chained mutual recursion (see
     /// [`Expr::LetRecIn`]); a new `LetMutableIn` form covers `let mutable x
-    /// <- init in body` (Sub-slice 2b); a new `LetPatternIn` form covers
+    /// <- init in body`; a new `LetPatternIn` form covers
     /// `let pat = value in body` for any non-bare-variable pattern
     /// (`parser_v1.mly:796`, `pattern_non_var`); `open` requires a leading
     /// `let` (`parser_v1.mly:798`, `LET OPEN UPPER IN`) where 0.0.6 allows a
@@ -751,8 +729,7 @@ pub mod ast {
     pub enum Expr {
         /// `let rec clause (and clause)* in body` (`parser_v1.mly:794-795`
         /// dispatching to `bind_value_rec`, `:455-458`) — full mutual
-        /// recursion; Slice 1's single-clause restriction is retired
-        /// (Sub-slice 2b).
+        /// recursion.
         LetRecIn {
             let_kw: KwLet,
             rec_kw: KwRec,
@@ -779,8 +756,8 @@ pub mod ast {
         },
         /// `let name param* = value in body` (only a plain variable target
         /// is supported here — a general pattern falls through to
-        /// [`Expr::LetPatternIn`]). `name` is a [`super::BindName`]
-        /// (Sub-slice 2b): upstream's expression-level `let` reaches the
+        /// [`Expr::LetPatternIn`]). `name` is a [`super::BindName`] —
+        /// upstream's expression-level `let` reaches the
         /// same `bind_value_nonrec` (`:794-795` → `:459-465`) `val`/`val
         /// rec` do, so `let (+++) a b = … in` is valid 0.1 here too.
         LetIn {
@@ -822,17 +799,16 @@ pub mod ast {
             else_kw: KwElse,
             else_branch: Box<Expr>,
         },
-        /// `fun x y -> body`. **Delta from Slice 1:** `params` widened from
-        /// `Vec<VarTok>` to `Vec<PatBot>` (gaps 2+3 of the V0_1-only
-        /// language-completeness sweep) — upstream `parser_v1.mly:849-863`'s
+        /// `fun x y -> body`. Each parameter is a full `patbot` (through
+        /// `Param`), not a bare variable: upstream `parser_v1.mly:849-863`'s
         /// `fun` genuinely binds a `patbot` per parameter (`ELambda(patbot,
-        /// e)` in `types.cppo.ml`), not a bare variable, so `fun _ -> …`
-        /// (wildcard) and `fun (a, b) -> …` (tuple-destructuring) are legal
-        /// upstream syntax this port was rejecting. Same cross-root DAG edge
+        /// e)` in `types.cppo.ml`), so `fun _ -> …` (wildcard) and `fun (a,
+        /// b) -> …` (tuple-destructuring) are legal upstream syntax (gaps
+        /// 2+3 of the V0_1-only language-completeness sweep). Reaching
+        /// `PatBot` from here is the same cross-root DAG edge
         /// [`RecClauseV1::params`] already makes (both `Expr` and `PatBot`
         /// are roots inside this `#[recurse]` module — see the module doc
-        /// comment) — no new SCC edge, `PatBot` was already reachable from
-        /// `Expr` via [`super::PatErasedV1`] elsewhere.
+        /// comment), so no new SCC edge.
         Fun {
             kw: KwFun,
             params: Vec<Param>,
@@ -875,9 +851,8 @@ pub mod ast {
     /// (`bind_value_nonrec` has neither a `COLON ty` nor a `BAR`
     /// alternative — 0.0.6's `recdecargpart` machinery has no 0.1
     /// counterpart), so there are no `ascription`/`leading_bar`/`extra`
-    /// fields to mirror. `params` is upstream's `list(param_unit)`
-    /// restricted to the Slice-1 plain-pattern subset (see [`super::Param`]'s
-    /// doc comment) — held as `Vec<PatBot>` directly, the same proven
+    /// fields to mirror. `params` is upstream's `list(param_unit)` (see
+    /// [`super::Param`]'s doc comment), reaching `PatBot` through the same
     /// cross-root DAG edge `cst::ast::RecBinding.params` makes
     /// (`cst.rs:753-762`); `value` goes through [`super::ExprErasedV1`] (not
     /// `Box<Expr>`) so this struct never joins `Expr`'s SCC — byte-for-byte
@@ -1195,7 +1170,7 @@ pub mod ast {
 
     /// A command's arguments — identical shape to
     /// [`crate::cst::ast::CmdTail`] — **0.1 delta:** an optional LEADING
-    /// `?(l = e, …)` bundle (optional-arg-rows increment 3b-β). A command
+    /// `?(l = e, …)` bundle. A command
     /// applied with an optional on its FIRST argument (`\cmd ?(l = e){arg}`,
     /// `+sec ?(label = t){title}<body>` — the ONLY shape the capstone census
     /// finds) can't ride inside `args` (an `expr_app` application chain whose
@@ -1204,9 +1179,8 @@ pub mod ast {
     /// `lead_opts` and re-attached to the first argument at lowering
     /// (`v1::lower::lower_cmd_tail`). A bundle on a LATER argument
     /// (`\cmd{a} ?(l = e){b}`) still rides inside `args` as an ordinary
-    /// [`AppArg::Bundled`] (inc1). `?(`-headed, token-disjoint from every
-    /// `args` head shape, so a bundle-less tail parses `lead_opts: None`
-    /// exactly as before.
+    /// [`AppArg::Bundled`]. `?(`-headed, token-disjoint from every
+    /// `args` head shape, so a bundle-less tail parses `lead_opts: None`.
     #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
     pub enum CmdTail {
         /// `;` — no arguments.
@@ -1255,7 +1229,7 @@ pub mod ast {
     /// `patbot`, plus the constructor-pattern forms `pattr` adds —
     /// identical shape to [`crate::cst::ast::PatBot`], except
     /// [`PatBot::List`] is now `,`-separated (`parser_v1.mly:990-1015`,
-    /// comma-sep list/tuple patterns per the S5 spec's acceptance table).
+    /// comma-sep list/tuple patterns).
     #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
     pub enum PatBot {
         /// `Ctor patbot` — a constructor applied to one argument pattern.
@@ -1312,31 +1286,27 @@ pub mod ast {
 
     /// A type-expression grammar (`typ`/`typ_prod`/`typ_app`/`typ_bot`,
     /// `parser_v1.mly:685-752`, simplified — same scope as
-    /// [`crate::cst::ast::TypeExpr`]). Widened (Sub-slice 2b) from Slice 1's
-    /// `Fun{dom: TypeAtom, ..} | Atom(TypeAtom)` to also spell products
-    /// (`length * length`, [`TypeProd`]) and prefix type application (`list
-    /// int`, [`TypeApp`]) — without them a `type` bind could declare almost
-    /// nothing. Optional-arg-rows increment 2 adds the `?(…)` labeled-optional
-    /// domain prefix ([`TypeExpr::OptRowFun`]) — a row-variable TAIL inside
-    /// that prefix (`?(… | ?'r) ->`) parses but is rejected at lowering
-    /// (needs signature-level row quantification, L4/2d territory, not this
-    /// increment): `dom -> cod` right-recursive through `cod` only (the
-    /// root's unchanged self-loop). Self-recursive only through `Fun`'s/
-    /// `OptRowFun`'s codomain (right recursion); parenthesized nesting goes
-    /// through [`super::TyErasedV1`]. `TypeExpr` was unreachable from
-    /// `FileV1` before 2b (`Bind` had no type ascriptions and `Param` was
-    /// `Pat`-only); `Type` binds are its first reachable use.
+    /// [`crate::cst::ast::TypeExpr`]). Spells products (`length * length`,
+    /// [`TypeProd`]) and prefix type application (`list int`, [`TypeApp`]) —
+    /// without them a `type` bind could declare almost nothing — plus the
+    /// `?(…)` labeled-optional domain prefix
+    /// ([`TypeExpr::OptRowFun`]), where a
+    /// row-variable TAIL (`?(… | ?'r) ->`) parses but is rejected at
+    /// lowering (it needs signature-level row quantification, not yet
+    /// implemented). Self-recursive only through `Fun`'s/`OptRowFun`'s
+    /// codomain (right recursion); parenthesized nesting goes through
+    /// [`super::TyErasedV1`].
     #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
     pub enum TypeExpr {
         /// `?(l : ty, … [| ?'r]) dom -> cod` (`typ` `:688-693`, `typ_opt_dom`
-        /// `:753-758`; optional-arg-rows increment 2). `?`-headed — neither
+        /// `:753-758`). `?`-headed — neither
         /// `Fun`/`Atom` (headed by `TypeProd`) can start with
         /// `OptionalTypeTok`, so declared order relative to them is
         /// safety-neutral; declared first to mirror the upstream `typ`
         /// production order. Lowered (`v1/lower.rs`) to
         /// `cst::ast::TypeExpr::OptRowFun`, thence (`typecheck.rs`) to
         /// `MonoType::Func(Row::Cons(l1, ty1, … Row::Empty), dom, cod)` — a
-        /// CLOSED row, matching what `Ast::LambdaOpt` infers (increment 1),
+        /// CLOSED row, matching what `Ast::LambdaOpt` infers,
         /// so an explicit `?(l:τ)->` signature unifies against an actual
         /// `?(l=x)`-taking function.
         OptRowFun {
@@ -1347,7 +1317,7 @@ pub mod ast {
         },
         /// `dom -> cod` (right-associative). This field is `TypeExpr`'s own
         /// self-loop (the root SCC). `dom` widened from [`TypeAtom`] to
-        /// [`TypeProd`] (Sub-slice 2b) so e.g. `'a option -> 'b option` and
+        /// [`TypeProd`] so e.g. `'a option -> 'b option` and
         /// `'a * 'b -> 'c` both parse at their expected precedence.
         Fun {
             dom: TypeProd,
@@ -1355,7 +1325,7 @@ pub mod ast {
             cod: Box<TypeExpr>,
         },
         /// The non-arrow fallthrough — widened from [`TypeAtom`] to
-        /// [`TypeProd`] (Sub-slice 2b): a product/application with no
+        /// [`TypeProd`]: a product/application with no
         /// enclosing arrow is still just "the whole type expression minus
         /// `->`".
         Atom(TypeProd),
@@ -1375,9 +1345,9 @@ pub mod ast {
     /// A [`TypeOptDomV1`]'s group content: one or more `label : typ` entries
     /// (nonempty enforced at lowering), then an optional `| ?'r` row-variable
     /// tail (`typ_opt_dom` `:756-757`) — parsed, but rejected with a
-    /// `LowerError` (needs signature-level row quantification — L4/2d
-    /// territory, not this increment; contrast [`TypeRecordInnerV1`]'s own
-    /// `row_tail`, which the SAME increment DOES complete, since a bare
+    /// `LowerError` (needs signature-level row quantification, not
+    /// implemented; contrast [`TypeRecordInnerV1`]'s own
+    /// `row_tail`, which IS fully supported, since a bare
     /// record-typed value has no `quant`-list obligation to satisfy).
     #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
     pub struct TypeOptDomInnerV1 {
@@ -1432,35 +1402,32 @@ pub mod ast {
     /// atom to consume and falls through cleanly (a following
     /// keyword/`=`/`and`/`->`/`*` never parses as a [`TypeAtom`]).
     ///
-    /// Sub-slice 2d-2 adds three arms, all keyword- or token-headed and so
-    /// disjoint from `Applied`/`Atom`'s `VarTok`-headed shapes (ordered
-    /// BEFORE them is cosmetic, not load-bearing):
+    /// Four further arms are keyword- or token-headed and so
+    /// disjoint from `Applied`/`Atom`'s `VarTok`-headed shapes (ordering them
+    /// BEFORE those is cosmetic, not load-bearing):
     ///
-    /// - [`InlineCmdTy`](TypeApp::InlineCmdTy)/[`BlockCmdTy`](TypeApp::
-    ///   BlockCmdTy)/[`MathCmdTy`](TypeApp::MathCmdTy): `inline [τ, …]`/
+    /// - [`TypeApp::InlineCmdTy`]/[`TypeApp::BlockCmdTy`]/
+    ///   [`TypeApp::MathCmdTy`]: `inline [τ, …]`/
     ///   `block [τ, …]`/`math [τ, …]` command types (`parser.mly:730-735`,
     ///   `typ_cmd_arg` `:763-774`; `math […]`: `parser.mly:830-831`),
-    ///   `KwInline`/`KwBlock`/`KwMath`-headed (already V0_1 keywords —
-    ///   `val inline`/`val block`/`val math` binds, 2b; `math`'s keyword
-    ///   status since the math-split, `token.rs`'s `KwMath`, `lexer.rs`'s
-    ///   `"math"` arm — zero lexer work for any of the three). One
-    ///   deliberate superset of upstream remains: each bracketed slot is a
-    ///   full [`TyErasedV1`] (`TypeExpr`), not upstream's narrower
-    ///   `typ_prod`. The `?(label: τ, …)` optional-labeled-slot prefix
-    ///   (roadmap phase 4) now IS modeled — see [`TypeCmdArgItemV1::opts`]
-    ///   (optional-arg-rows increment 3a); `MathCmdTy` reuses
-    ///   `TypeCmdArgItemV1` as-is, so `math [?(l : τ) …]` sig rows work with
-    ///   zero extra grammar (math-completion M1).
+    ///   `KwInline`/`KwBlock`/`KwMath`-headed (all three are V0_1 keywords
+    ///   already — `val inline`/`val block` binds; `math` since the
+    ///   math-split). One deliberate superset of upstream remains: each
+    ///   bracketed slot is a full [`super::TyErasedV1`] (`TypeExpr`), not upstream's
+    ///   narrower `typ_prod`. The `?(label: τ, …)` optional-labeled-slot
+    ///   prefix is modeled — see [`TypeCmdArgItemV1::opts`];
+    ///   `MathCmdTy` reuses `TypeCmdArgItemV1` as-is, so
+    ///   `math [?(l : τ) …]` sig rows come for free.
     /// - [`AppliedLong`](TypeApp::AppliedLong): `M.t τ…` — the `LONG_LOWER`
     ///   qualified-head twin of `Applied` (`parser.mly:720-728`,
-    ///   `LONG_LOWER` `lexer.mll:318`), `VarWithModTok`-headed (already
-    ///   lexed by the program-mode capital-head scan, `lexer.rs:753-777` —
-    ///   zero lexer work). Needed to NAME an abstract type from outside its
-    ///   sealing module (2d-2 spec §2.4) — without it, an opaque `M.t`
-    ///   could never appear in another module's signature at all.
+    ///   `LONG_LOWER` `lexer.mll:318`), `VarWithModTok`-headed (lexed by the
+    ///   program-mode capital-head scan, `lexer.rs:753-777`). Needed to NAME
+    ///   an abstract type from outside its sealing module — without
+    ///   it, an opaque `M.t` could never appear in another module's
+    ///   signature at all.
     #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
     pub enum TypeApp {
-        /// `inline [τ, …]` (Sub-slice 2d-2) — see the enum doc comment.
+        /// `inline [τ, …]` — see the enum doc comment.
         //
         // NOTE the group fields are `ilist`/`blist`/`mlist`, not three `list`s:
         // syan names a group substruct after (group-field name, ENUM name) with
@@ -1472,30 +1439,26 @@ pub mod ast {
             #[group(self.ilist)]
             args: Vec<TypeCmdArgItemV1>,
         },
-        /// `block [τ, …]` (Sub-slice 2d-2) — see the enum doc comment.
+        /// `block [τ, …]` — see the enum doc comment.
         BlockCmdTy {
             kw: KwBlock,
             blist: ListGroup<()>,
             #[group(self.blist)]
             args: Vec<TypeCmdArgItemV1>,
         },
-        /// `math [τ, …]` (math-package completion M1; upstream
+        /// `math [τ, …]` (upstream
         /// `parser.mly:830-831` `MATH L_SQUARE optterm_list(COMMA,
         /// typ_cmd_arg) R_SQUARE → MMathCommandType(mncmdargtys)` — same
-        /// `typ_cmd_arg` as inline/block). `KwMath`-headed — `math` has been
-        /// a V0_1 lexer keyword since the math-split (`token.rs`'s
-        /// `KwMath`, `lexer.rs`'s `"math"` arm), so this arm is disjoint
-        /// from `Applied`/`Atom` (a bare `math` can never lex as a `VarTok`
-        /// under V0_1 at all) and ambiguity-free. Reuses
-        /// `TypeCmdArgItemV1`, so `?(l : τ, …)` optional-label prefixes
-        /// (inc3a) work in `math […]` rows with zero extra grammar.
+        /// `typ_cmd_arg` as inline/block). `KwMath`-headed, so this arm is
+        /// disjoint from `Applied`/`Atom` and ambiguity-free: a bare `math`
+        /// can never lex as a `VarTok` under V0_1 at all.
         MathCmdTy {
             kw: KwMath,
             mlist: ListGroup<()>,
             #[group(self.mlist)]
             args: Vec<TypeCmdArgItemV1>,
         },
-        /// `M.t τ…` (Sub-slice 2d-2) — see the enum doc comment. Mirrors
+        /// `M.t τ…` — see the enum doc comment. Mirrors
         /// `Applied`'s n-ary shape (`v1/lower.rs`'s prefix→postfix bridge
         /// rejects arity ≥ 2 identically for both).
         AppliedLong {
@@ -1512,15 +1475,13 @@ pub mod ast {
     }
 
     /// One `[…]`-bracketed command-type argument slot: an optional
-    /// `?(l : τ, …)` labeled-optional bundle PREFIX (optional-arg-rows
-    /// increment 3a — upstream `typ_cmd_arg : option(typ_opt_dom) typ_prod`,
-    /// `parser.mly:753-773`; roadmap phase 4, now landed), then the
-    /// mandatory `τ,` (`,`-separated, last `,` optional — the [`ListItem`]
-    /// pattern). A full [`TyErasedV1`] per slot (permissive superset of
-    /// upstream's narrower `typ_prod`). `opts` is `Option`-tried first: a
-    /// non-`?`-headed slot (every existing command-type element) fails the
-    /// `?` head with no token stolen, so `opts: None` parses exactly as
-    /// before this increment.
+    /// `?(l : τ, …)` labeled-optional bundle PREFIX (upstream
+    /// `typ_cmd_arg : option(typ_opt_dom) typ_prod`,
+    /// `parser.mly:753-773`), then the mandatory `τ,` (`,`-separated, last
+    /// `,` optional — the [`ListItem`] pattern). A full [`super::TyErasedV1`] per
+    /// slot (permissive superset of upstream's narrower `typ_prod`). `opts`
+    /// is `Option`-tried first: a non-`?`-headed slot fails the `?` head with
+    /// no token stolen, so a plain slot parses `opts: None`.
     #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
     pub struct TypeCmdArgItemV1 {
         pub opts: Option<TypeCmdOptDomV1>,
@@ -1528,15 +1489,15 @@ pub mod ast {
         pub comma: Option<CommaTok>,
     }
 
-    /// `?(l : τ, …)` — a CLOSED command-type optional bundle (optional-arg-
-    /// rows increment 3a; upstream `typ_opt_dom`, `parser.mly:755-761`,
+    /// `?(l : τ, …)` — a CLOSED command-type optional bundle (upstream
+    /// `typ_opt_dom`, `parser.mly:755-761`,
     /// minus the `| ?'r` row-variable tail: command optional-argument types
     /// are closed maps, never rows — upstream itself silently DISCARDS a
     /// written row variable here, `parser.mly:859-869`'s literal `TODO
     /// (error)` — so this port doesn't model one either; a stray `?'r` inside
     /// a command-type bracket is a parse error, faithfully matching
     /// upstream's "never actually usable" treatment of it). Mirrors
-    /// [`ast::CstTypeOptDom`]-shaped satellites elsewhere in this file.
+    /// [`crate::cst::ast::CstTypeOptDom`]-shaped satellites elsewhere in this file.
     #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
     pub struct TypeCmdOptDomV1 {
         pub q: OptionalTypeTok,
@@ -1558,7 +1519,7 @@ pub mod ast {
     /// An atomic type expression. `parser_v1.mly:740-752`'s record forms are
     /// fully modeled: both the closed form and the open (row-var-tailed) form
     /// share [`TypeAtom::Record`], distinguished by
-    /// [`TypeRecordInnerV1::row_tail`] (optional-arg-rows increment 2).
+    /// [`TypeRecordInnerV1::row_tail`].
     #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
     pub enum TypeAtom {
         /// `( ty )`
@@ -1568,7 +1529,7 @@ pub mod ast {
             inner: super::TyErasedV1,
         },
         /// `(| l1 : ty1, l2 : ty2, … |)` (closed) or `(| l1 : ty1, … | ?'r |)`
-        /// (open — a row-variable tail; optional-arg-rows increment 2)
+        /// (open — a row-variable tail)
         /// (`typ_bot`'s two `L_RECORD` arms, `parser_v1.mly:746-749`;
         /// `typ_record_elem` `:775-777` — COLON fields, unlike record
         /// EXPRESSIONS' `l = e`). Lowered (`v1/lower.rs`): the closed form to
@@ -1585,7 +1546,7 @@ pub mod ast {
         },
         /// A type variable, e.g. `'a`.
         Var(TypeVarTok),
-        /// `M.t` — a qualified type name (Sub-slice 2d-2; upstream
+        /// `M.t` — a qualified type name (upstream
         /// `LONG_LOWER`, `parser.mly:742-743`). `VarWithModTok`-headed,
         /// token-disjoint from `Var`/`Name`/`Paren` (`TypeVarTok`/`VarTok`/
         /// `LParenTok`) — see [`TypeApp::AppliedLong`]'s doc comment.
@@ -1595,9 +1556,8 @@ pub mod ast {
     }
 
     /// A [`TypeAtom::Record`]'s group content: the field list, plus an
-    /// optional `| ?'r` row-variable tail (optional-arg-rows increment 2 —
-    /// present ⇒ an OPEN record type; absent ⇒ closed, byte-identical to
-    /// before this increment).
+    /// optional `| ?'r` row-variable tail (present ⇒ an OPEN record type;
+    /// absent ⇒ closed).
     #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
     pub struct TypeRecordInnerV1 {
         pub fields: Vec<TypeRecordFieldV1>,
@@ -1631,7 +1591,7 @@ pub mod ast {
     /// delta; `name` accepts a module-qualified `\Mod.cmd` math command
     /// too, `AnyMathCmdTok::Mod` — the lexer already emits
     /// `Token::MathCmdWithMod` for one, `lexer.rs`'s `\\` arm in `Mode::
-    /// Math`, math-package completion M4's `${\Math.paren{…}}`-shaped
+    /// Math`, since `${\Math.paren{…}}`-shaped
     /// qualified references need it to parse at all).
     #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
     pub enum MathBot {
@@ -1720,7 +1680,7 @@ pub mod ast {
         },
     }
 
-    // ---- Sub-slice 2c: the module/signature layer -----------------------
+    // ---- the module/signature layer --------------------------------------
 
     /// `mod_chain`: `UPPER | LONG_UPPER` (`parser_v1.mly:404-414`). `M.N.P`
     /// arrives as ONE [`LongUpperTok`] (the V0_1 lexer branch), so a chain is
@@ -1740,7 +1700,7 @@ pub mod ast {
     /// `App`/`Var` so the `:>` suffix is claimed before a bare chain matches;
     /// `App` (two chains, `modexpr_app` `:388-394`) precedes `Var` (one
     /// chain, `modexpr_bot` `:398-400`) for longest-match. Struct bodies go
-    /// through [`super::StructBindV1`] (the 2a connector, erased), so
+    /// through [`super::StructBindV1`] (the struct-body connector, erased), so
     /// `ModExpr` never statically references [`super::Bind`] — see the
     /// module doc comment's SCC story.
     #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
@@ -1768,8 +1728,8 @@ pub mod ast {
         App { func: ModChainV1, arg: ModChainV1 },
         /// `mod_chain` — a (possibly long) module path (`:399-400`).
         Var(ModChainV1),
-        /// `STRUCT list(bind) END` (`:401-402`) — the (only) form 2a already
-        /// lowered; reuses 2a's connector.
+        /// `STRUCT list(bind) END` (`:401-402`) — the only form `v1/lower.rs`
+        /// gives real semantics to; reuses the struct-body connector.
         Struct {
             struct_kw: KwStruct,
             binds: Vec<super::StructBindV1>,
@@ -1819,7 +1779,7 @@ pub mod ast {
             type_kw: KwType,
             binds: super::TypeBindsErasedV1,
         },
-        /// A bare `sigexpr_bot` (`:572-573`). Must come after [`WithType`]
+        /// A bare `sigexpr_bot` (`:572-573`). Must come after [`SigExpr::WithType`]
         /// (maximal munch of the `with` suffix).
         Bot(SigBotV1),
     }
@@ -1834,8 +1794,8 @@ pub mod ast {
         Path(LongUpperTok),
         /// `UPPER` — a signature name (`:576-580`).
         Var(CtorTok),
-        /// `SIG list(decl) END` (`:591-595`). `sig` is already a
-        /// version-independent keyword (`lexer.rs`) — zero lexer work.
+        /// `SIG list(decl) END` (`:591-595`). `sig` is a version-independent
+        /// keyword (`lexer.rs`).
         Sig {
             sig_kw: KwSig,
             decls: Vec<super::StructDeclV1>,
@@ -1852,8 +1812,8 @@ pub mod ast {
     /// `RecClauseV1.params: Vec<PatBot>`) and `sig_: Box<SigExpr>`.
     ///
     /// Deferred arms (parse errors): macro decls `val \m : macro-type`
-    /// (`:608-611`, phase 5), row quantifiers (`rowquant`, `:631-633` — no
-    /// `ROWVAR` token until phase 4).
+    /// (`:608-611`), row quantifiers (`rowquant`, `:631-633` — no
+    /// `ROWVAR` token for this position yet).
     #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
     pub enum Decl {
         /// `VAL PERSISTENT? EXACT_TILDE? bound_identifier quant COLON typ`
@@ -1935,8 +1895,8 @@ pub mod ast {
     /// flattened head+`Vec` — the same deferred-fold shape as
     /// [`TypeProd`]/[`PatCons`], keeping the type acyclic. `kind_base` is a
     /// bare LOWER (`:678-681`, `MKindName`), so the whole kind grammar is
-    /// token-only. (`kind_row`, `:682-683`, arrives with row quantifiers —
-    /// phase 4.)
+    /// token-only. (`kind_row`, `:682-683`, arrives with row quantifiers,
+    /// not yet implemented.)
     #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
     pub struct KindV1 {
         pub first: VarTok,

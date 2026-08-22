@@ -1,64 +1,24 @@
-//! Box-tree / render-layout snapshot harness (next-work survey item #3:
-//! "no golden/snapshot infrastructure — the suite can stay green while box
-//! positions drift"). This is the missing safety net: `typecheck_corpus.rs`
-//! covers typecheck OUTPUT, and the e2e capstones (`tests/e2e.rs` etc.) only
-//! grep a handful of `pdftotext` substrings out of the final PDF — neither
-//! would notice a systematic shift in line spacing, box widths, or page
-//! geometry as long as the same *words* still appear somewhere.
+//! Box-tree / render-layout snapshot harness: the safety net against the
+//! suite staying green while box positions drift, since neither
+//! `typecheck_corpus.rs` (typecheck output) nor the e2e capstones (grep a
+//! few `pdftotext` substrings) would notice a systematic shift in line
+//! spacing, box widths, or page geometry.
 //!
-//! ## Design decision: WHAT to snapshot
+//! Subject: **the post-page-break placed-box model**
+//! (`rustyfi_backend::pagebreak::{Page, PlacedLine}` and the
+//! `PureHorzBox`/`VertBox` tree they carry) — not raw PDF bytes
+//! (non-deterministic across environments, unreviewable as a binary diff)
+//! and not `pdftotext` output (already covered by e2e, and by construction
+//! throws away all geometry). Each fixture compiles to a `DocumentValue`
+//! (stopping *before* either PDF writer runs) and serializes it to
+//! deterministic, human-readable text (`serialize_document`): lengths
+//! rounded to 3 decimals (`fmt_len`, absorbing last-bit float noise), no
+//! addresses/timestamps, base-14 metrics only (no installed font needed).
 //!
-//! Three candidates were on the table:
-//!
-//! 1. **Raw PDF bytes.** Rejected: not deterministic across environments/
-//!    font-subsetting/compression-timestamp changes, and a byte diff on a
-//!    binary blob isn't reviewable.
-//! 2. **`pdftotext` output.** Already covered by the e2e tests, and by
-//!    construction throws away all geometry (position, size, wrapping) —
-//!    exactly the signal this harness exists to catch.
-//! 3. **The post-page-break placed-box model** (`rustyfi_backend::pagebreak
-//!    ::{Page, PlacedLine}` and the `PureHorzBox`/`VertBox` tree they carry)
-//!    — the richest layout signal available, and the same IR both PDF
-//!    writers and the HTML writer consume. **Chosen.**
-//!
-//! So this harness compiles each fixture down to a `DocumentValue` (stopping
-//! *before* either PDF writer runs — see `compile_v006_fixture`/
-//! `compile_v01_fixture` below) and serializes `doc.geometry` + every
-//! `Page`/`PlacedLine`/`PureHorzBox` to deterministic, human-readable text
-//! (`serialize_document`), one line per box/line/page, with:
-//!
-//! - Lengths rounded to 3 decimal places (`fmt_len`) — base-14 metrics are
-//!   fixed rational AFM tables, so real drift shows up well above the 3rd
-//!   decimal; this just absorbs the last-bit float noise a `derive(Debug)`
-//!   dump would otherwise bake into the golden file.
-//! - No addresses, no timestamps, no wall-clock-anything. The only "opaque
-//!   IDs" that appear (`FontKey`/`ImageId`/`DecoId`/…) are small `usize`
-//!   resource-table indices assigned in a fixed order by a fully
-//!   deterministic single-threaded compile of a fixed input — reproducible,
-//!   not random.
-//! - Base-14 metrics only (`rustyfi_pdf::Base14Metrics`), so this test needs
-//!   no installed font (not gated on DejaVu like the TTF-based e2e
-//!   capstones) and runs identically everywhere.
-//!
-//! Fixtures (small and curated, not the whole corpus): `minimal.saty` and
-//! `phase2.saty` (0.0.6, `@require: stdja-mini` — text wrapping, `\emph`,
-//! `let-inline`/`let-rec`/`match`), and `v01-minimal.saty` (0.1,
-//! `@require: v01-mini` — proves the harness also covers the 0.1 lowering
-//! path). All three already exist under `tests/fixtures/` for the e2e PDF
-//! tests; this file reuses them rather than adding new ones.
-//!
-//! ## Update mechanism
-//!
-//! Run with `UPDATE_SNAPSHOTS=1` to (re)write the `.snap` baseline files
-//! under `tests/snapshots/` from the current compiler's output — e.g.:
-//!
-//! ```text
-//! UPDATE_SNAPSHOTS=1 cargo test -p rustyfi --test layout_snapshot
-//! ```
-//!
-//! A normal `cargo test` run instead compares freshly-serialized output
-//! against the committed `.snap` file and panics with a line-level diff
-//! (`diff_report`) on any mismatch.
+//! Run with `UPDATE_SNAPSHOTS=1` to (re)write the `.snap` baselines under
+//! `tests/snapshots/` from the current compiler's output; a normal
+//! `cargo test` compares against them and panics with a line-level diff
+//! (`diff_report`) on mismatch.
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -80,10 +40,6 @@ fn fixtures_dir() -> PathBuf {
 fn snapshots_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/snapshots")
 }
-
-// ---------------------------------------------------------------------
-// Compiling a fixture down to a `DocumentValue` (no PDF writer involved).
-// ---------------------------------------------------------------------
 
 fn as_v006(cst: LoadedCst) -> rustyfi_syntax::cst::File {
     match cst {
@@ -150,10 +106,6 @@ fn compile_v01_fixture(name: &str) -> std::rc::Rc<DocumentValue> {
     rustyfi_lang::compile_document_v1(&program.files, &metrics)
         .unwrap_or_else(|e| panic!("{name} must compile: {e}"))
 }
-
-// ---------------------------------------------------------------------
-// Deterministic serialization of the placed-box tree.
-// ---------------------------------------------------------------------
 
 /// Round to 3 decimal places and normalize `-0.0` to `0.0`, so the snapshot
 /// text is stable across runs regardless of last-bit float noise in how a
@@ -436,13 +388,11 @@ fn write_box(out: &mut String, indent: usize, dx: Length, bx: &PureHorzBox) {
                 write_vbox(out, indent + 1, vb);
             }
         }
-        // an inert reflow marker (zero width/height/depth, contributes
+        // An inert reflow marker (zero width/height/depth, contributes
         // nothing to geometry — see `linebreak.rs`'s/`hbox.rs`'s
-        // `InlineMark` arms). No current fixture emits one (none call
-        // `\emph`/`\bold`/ `\listing`/`\enumerate` under this harness's
-        // base-14 setup), but the snapshot format still names the kind
-        // explicitly rather than silently going invisible, matching this
-        // function's own exhaustive discipline (its doc comment above).
+        // `InlineMark` arms). No current fixture emits one, but the snapshot
+        // format names the kind explicitly rather than letting it go
+        // invisible — this function's exhaustive discipline, above.
         PureHorzBox::InlineMark(kind) => {
             let _ = writeln!(out, "{pad}dx={} InlineMark kind={kind:?}", fmt_len(dx));
         }
@@ -551,10 +501,6 @@ fn serialize_document(name: &str, doc: &DocumentValue) -> String {
     out
 }
 
-// ---------------------------------------------------------------------
-// Compare-or-update against the committed `.snap` baseline.
-// ---------------------------------------------------------------------
-
 /// A small, dependency-free line-oriented diff: reports the total line
 /// counts plus the first ~20 mismatching lines (1-based, both sides) — no
 /// `insta`/`similar`/etc. dependency, just enough to localize a layout
@@ -617,10 +563,6 @@ fn check_snapshot(fixture_name: &str, actual: &str) {
         );
     }
 }
-
-// ---------------------------------------------------------------------
-// The fixtures.
-// ---------------------------------------------------------------------
 
 #[test]
 fn layout_snapshot_minimal() {

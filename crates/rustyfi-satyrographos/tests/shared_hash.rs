@@ -1,10 +1,6 @@
-//! `dist/hash/*.satysfi-hash` is shared: every font package contributes
-//! entries to the one file, so installing merges into it and uninstalling takes
-//! only that package's keys back out.
-//!
-//! These are the whole lifecycle, because the failure they guard against is not
-//! an error message — it is a root that quietly lost the standard library's
-//! fonts, or a font package that cannot be installed at all.
+//! `dist/hash/*.satysfi-hash` is CO-OWNED: every font package contributes
+//! entries to the one file, so installing merges into it BY KEY (never
+//! overwrites) and uninstalling takes only that package's keys back out.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -25,8 +21,8 @@ fn tmp(tag: &str) -> PathBuf {
     p
 }
 
-/// A library root holding a standard library's own `fonts.satysfi-hash` — the
-/// state every real root is in, and the one an install has to cope with.
+/// A root holding a standard library's own `fonts.satysfi-hash` — the state
+/// every real root is in.
 fn root_with_stdlib(dir: &Path) -> PathBuf {
     let root = dir.join("root");
     fs::create_dir_all(root.join("dist/hash")).unwrap();
@@ -39,8 +35,8 @@ fn root_with_stdlib(dir: &Path) -> PathBuf {
     root
 }
 
-/// A font package shipping one face and the hash entry that names it, spelled
-/// the way upstream spells it (Yojson variant syntax).
+/// A font package shipping one face and the hash entry that names it, in
+/// upstream's spelling (Yojson variant syntax).
 fn font_package(dir: &Path, name: &str, abbrev: &str) -> PathBuf {
     let src = dir.join(name);
     fs::create_dir_all(src.join("faces")).unwrap();
@@ -170,7 +166,6 @@ fn two_packages_claiming_one_font_name_is_refused() {
     let dir = tmp("clash");
     let root = root_with_stdlib(&dir);
     install(&font_package(&dir, "fonts-a", "FaceA"), &root, false).unwrap();
-    // A second package publishing the same abbrev, pointing somewhere else.
     let rival = font_package(&dir, "fonts-b", "FaceA");
 
     let err = install(&rival, &root, false).expect_err("silently picking a winner is not allowed");

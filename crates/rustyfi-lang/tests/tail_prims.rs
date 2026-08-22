@@ -10,10 +10,9 @@
 //! formula typechecks and evaluates correctly using only pre-existing
 //! primitives, with no `@require:` needed. The three *new* primitives this
 //! file actually covers are `embed-block-bottom`/`line-stack-bottom`
-//! (`proof.satyh`) and `add-footnote` (`footnote-scheme.satyh`), mirroring
-//! `context_box.rs`'s two-halves style (source-string typecheck +
-//! source-string eval, no loader needed since none of these need
-//! `@require:`).
+//! (`proof.satyh`) and `add-footnote` (`footnote-scheme.satyh`), in two
+//! halves — source-string typecheck and source-string eval, no loader needed
+//! since none of these need `@require:`.
 
 use rustyfi_backend::{FontKey, FontMetrics, Length, PureHorzBox, VertBox};
 use rustyfi_lang::value::Value;
@@ -72,9 +71,8 @@ fn eval_str(src: &str) -> Value {
 }
 
 // ============================================================================
-// `length-abs` (cd.satyh) — already satisfied by existing primitives; no
-// Rust-side change needed. Proof: the exact `pervasives.satyh` formula
-// typechecks and evaluates.
+// `length-abs` (cd.satyh) — the exact `pervasives.satyh` formula, over
+// existing primitives only.
 // ============================================================================
 
 const LENGTH_ABS_SRC: &str = "let length-abs len = if len <' 0pt then 0pt -' len else len

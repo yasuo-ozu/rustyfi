@@ -1,10 +1,7 @@
 //! `chop_page`'s footnote accumulator (`add-footnote`): extraction at
-//! line-commit, bottom-reservation, and bottom-placement — tested directly
-//! against the backend function, mirroring
-//! `crates/rustyfi-lang/tests/page_prims.rs`'s style of driving
-//! `chop_page` with hand-built `VertBox`/`PureHorzBox` trees (no lang/eval
-//! machinery needed for these; the footnote job is entirely inside
-//! `chop_page`).
+//! line-commit, bottom-reservation, and bottom-placement, driven with
+//! hand-built `VertBox`/`PureHorzBox` trees — no lang/eval machinery, since
+//! the footnote job is entirely inside `chop_page`.
 
 use rustyfi_backend::{chop_page, Length, ListMarkKind, PlacedLine, PureHorzBox, VertBox};
 
@@ -25,9 +22,8 @@ fn fnote(block: Vec<VertBox>) -> PureHorzBox {
     PureHorzBox::Footnote { block }
 }
 
-/// T1: a single body line carrying a footnote is bottom-placed so its
-/// bottom edge (`baseline + depth`) sits exactly at the column's bottom
-/// edge (`y0 + height`).
+/// A footnote is bottom-placed so its bottom edge (`baseline + depth`)
+/// sits exactly at the column's bottom edge (`y0 + height`).
 #[test]
 fn footnote_is_bottom_placed_at_the_column_edge() {
     let mut vboxes = vec![line(
@@ -44,21 +40,17 @@ fn footnote_is_bottom_placed_at_the_column_edge() {
 
     let fn_line = &lines[1];
     assert_eq!(fn_line.x, Length::ZERO, "footnote shares the column's x origin");
-    // baseline = (100 - 20) + 20 = 100: bottom edge (baseline + depth = 100)
-    // lands exactly at y0 + height.
+    // baseline = (100 - 20) + 20 = 100, so bottom edge = y0 + height.
     assert_eq!(fn_line.baseline_y, Length::pt(100.0));
     assert!(vboxes.is_empty());
 }
 
-/// T2: reservation shrinks the number of body lines that fit. 10 identical
-/// lines (h=10, d=2, leading=12): line k's bottom edge is at `12*k - 2 + 2
-/// = 12*k` actually let's just trust the geometry: baselines are
-/// 10,22,34,...,`10+12*(k-1)`, bottoms are baseline+2. Without any
-/// reservation, 8 lines fit in 100pt (bottom of line 8 = 10+12*7+2 = 96 <=
-/// 100; line 9's bottom = 108 > 100). Line 1 carries a 20pt-tall footnote
-/// stack, shrinking the effective limit to 80pt for every subsequent line:
-/// bottom of line 6 = 10+12*5+2 = 72 <= 80; line 7's bottom = 84 > 80. So
-/// only 6 body lines fit, plus the footnote stack, leaving 4 lines behind.
+/// Reservation shrinks the number of body lines that fit. 10 identical
+/// lines (h=10, d=2, leading=12): baselines `10+12*(k-1)`, bottoms
+/// baseline+2. Unreserved, 8 fit in 100pt (line 8's bottom = 10+12*7+2 = 96
+/// <= 100; line 9's = 108 > 100). Line 1 carries a 20pt footnote stack,
+/// shrinking the limit to 80pt: line 6's bottom = 72 <= 80, line 7's = 84 >
+/// 80. So 6 body lines + the footnote stack, leaving 4 behind.
 #[test]
 fn footnote_reservation_shrinks_the_column() {
     let mut vboxes: Vec<VertBox> = (0..10)
@@ -77,7 +69,6 @@ fn footnote_reservation_shrinks_the_column() {
         .collect();
     let lines = chop_page((Length::ZERO, Length::ZERO), Length::pt(100.0), &mut vboxes);
 
-    // 6 body lines + 1 footnote line.
     assert_eq!(lines.len(), 7, "expected 6 body lines + 1 footnote line");
     for body in &lines[..6] {
         assert!(
@@ -91,22 +82,17 @@ fn footnote_reservation_shrinks_the_column() {
     assert_eq!(vboxes.len(), 4, "4 lines should roll over to the next page");
 }
 
-/// T3: a footnote attached to a line that itself doesn't fit rolls over
+/// A footnote attached to a line that itself doesn't fit rolls over
 /// WITH its footnote — the reservation must not apply until the line is
 /// actually committed.
 #[test]
 fn footnote_rolls_over_with_its_uncommitted_line() {
     // 10 identical lines (h=10, d=2, leading=12); line 7 (index 6) carries
-    // the footnote. Without any reservation, 8 lines fit (bottom of line 8
-    // = 96 <= 100). Since line 7 fits within the *unreserved* limit checked
-    // before its own footnote grows the reservation... but the reservation
-    // is computed and applied to line 7's OWN overflow check too (spec:
-    // "shrink the effective bottom limit by the accumulated footnote stack
-    // height" happens as part of evaluating whether *this* line fits). With
-    // the footnote on line 7, its own check uses the shrunk limit (80pt):
-    // bottom of line 7 = 10+12*6+2 = 84 > 80, so it rolls to the next page,
-    // taking the footnote with it — page 1 ends at line 6 (8 lines would
-    // have fit without the footnote, so this proves the rollover).
+    // the footnote. Unreserved, 8 fit (line 8's bottom = 96 <= 100). The
+    // reservation applies to line 7's OWN overflow check too, so that check
+    // uses the shrunk 80pt limit: line 7's bottom = 10+12*6+2 = 84 > 80, and
+    // it rolls to the next page taking the footnote with it. Page 1 ends at
+    // line 6, where 8 would have fit without the footnote.
     let mut vboxes: Vec<VertBox> = (0..10)
         .map(|i| {
             if i == 6 {
@@ -124,9 +110,8 @@ fn footnote_rolls_over_with_its_uncommitted_line() {
 
     let page1 = chop_page((Length::ZERO, Length::ZERO), Length::pt(100.0), &mut vboxes);
     assert_eq!(page1.len(), 6, "page 1 should hold 6 lines, none of them footnote lines");
-    // The tallest body baseline placed (line 6, 0-indexed 5) is 70pt; a
-    // bottom-placed footnote stack would sit at baseline 100pt (this
-    // geometry, same as T1/T2) — well clear of every body baseline here.
+    // The tallest body baseline placed is 70pt; a bottom-placed footnote
+    // stack would sit at 100pt in this geometry.
     assert!(
         page1.iter().all(|l| l.baseline_y <= Length::pt(70.0)),
         "no footnote line should have been placed on page 1"
@@ -139,9 +124,8 @@ fn footnote_rolls_over_with_its_uncommitted_line() {
     assert!(vboxes.is_empty());
 }
 
-/// T4: a footnote's own block is not itself scanned for nested footnotes
-/// ("Ignores footnote designation in footnote", pageBreak.ml:133) — exactly
-/// one footnote stack is placed, and the inner marker stays inert.
+/// A footnote's own block is not scanned for nested footnotes ("Ignores
+/// footnote designation in footnote", pageBreak.ml:133).
 #[test]
 fn footnote_in_footnote_is_ignored() {
     let inner = fnote(vec![plain_line(5.0, 0.0, 5.0)]);
@@ -153,13 +137,12 @@ fn footnote_in_footnote_is_ignored() {
         vec![(Length::ZERO, fnote(outer_block))],
     )];
     let lines = chop_page((Length::ZERO, Length::ZERO), Length::pt(100.0), &mut vboxes);
-    // Body line + exactly one footnote line (the outer block's own line);
-    // the inner marker inside it is never expanded into a third line.
+    // Body line + one footnote line; the inner marker never becomes a third.
     assert_eq!(lines.len(), 2);
     assert!(vboxes.is_empty());
 }
 
-/// T5: `place_block_at` (headers/footers) never extracts footnotes — a
+/// `place_block_at` (headers/footers) never extracts footnotes — a
 /// `Footnote` box riding a header/footer line is inert, contributing no
 /// extra lines.
 #[test]
@@ -174,7 +157,7 @@ fn place_block_at_does_not_extract_footnotes() {
     assert_eq!(lines.len(), 1, "no extra bottom lines for the footnote");
 }
 
-/// T6: progress guarantee — a degenerate zero-height column still places
+/// Progress guarantee — a degenerate zero-height column still places
 /// its first real line (and that line's footnote), fully draining vboxes.
 #[test]
 fn progress_guarantee_holds_with_a_footnote_on_the_first_line() {
@@ -189,7 +172,7 @@ fn progress_guarantee_holds_with_a_footnote_on_the_first_line() {
     assert!(vboxes.is_empty(), "the loop must still make progress");
 }
 
-/// T2b: multi-column shape sanity — two consecutive `chop_page` calls over
+/// Multi-column shape sanity — two consecutive `chop_page` calls over
 /// one shared `&mut Vec`, at shifted x-origins, each place their own
 /// footnotes at their own column's x.
 #[test]
@@ -222,8 +205,8 @@ fn footnotes_place_per_column_at_their_shifted_x_origin() {
     assert!(vboxes.is_empty());
 }
 
-/// (the byte-identity argument): a `VertBox::ListMark` is a PURE skip in
-/// `chop_page` — unlike `FrameStart`/`FrameEnd`, it produces NO
+/// A `VertBox::ListMark` is a PURE skip in `chop_page` — unlike
+/// `FrameStart`/`FrameEnd`, it produces NO
 /// `PlacedLine` at all (not even a zero-height marker one), is drained
 /// from `vboxes` just like every other consumed box, and contributes
 /// nothing to where the surrounding real lines land. This is the
@@ -256,10 +239,6 @@ fn list_mark_is_a_pure_skip_that_produces_no_placed_line() {
         "ListMark markers must not shift the real line's placement"
     );
 }
-
-// ============================================================================
-// Page-top glue suppression discards MARGINS but not FRAME PADDING.
-// ============================================================================
 
 /// A margin (`Skip`/`ParagTop`) before the first line of a page is glue and is
 /// dropped; a `block-frame-breakable`'s `FramePad` is interior CONTENT of the
@@ -378,28 +357,23 @@ fn a_frame_spanning_three_pages_re_pads_every_continuation() {
     }
 }
 
-// ============================================================================
-// The inter-block advance's `min_first_line_ascender` handling. CLOSED — these
-// two were `#[ignore]`d for a while, and the reason is worth keeping.
+// The inter-block advance's `min_first_line_ascender` handling.
 //
-// They encode the faithful upstream rule (the pad belongs in the paragraph's
-// own `margin_top`, BEFORE the collapse), which was written and measured long
-// before it could land: removing the ~5pt-per-stdjabook-section-heading surplus
+// These two encode the faithful upstream rule (the pad belongs in the
+// paragraph's own `margin_top`, BEFORE the collapse). On its own it LOOKED
+// like a regression: removing the ~5pt-per-stdjabook-section-heading surplus
 // made the port run FURTHER AHEAD of upstream's pagination, dropping enumitem's
 // text_match 0.8891 -> 0.8608, because a separate space DEFICIT in that
 // document was being masked by exactly this over-spacing.
 //
-// That deficit is now found and fixed: `chop_page` was dropping a
-// `block-frame-breakable`'s `paddingT` on every CONTINUATION page (upstream
-// re-applies it per fragment, `pageBreak.ml:322`), which cost the enumitem
-// manual 5pt on each page continuing a `+code` block and 10pt on each page
-// continuing its own `+block-frame` — 13 of 27 pages. With both changes in,
+// That deficit was `chop_page` dropping a `block-frame-breakable`'s `paddingT`
+// on every CONTINUATION page (upstream re-applies it per fragment,
+// `pageBreak.ml:322`), which cost the enumitem manual 5pt on each page
+// continuing a `+code` block and 10pt on each page continuing its own
+// `+block-frame` — 13 of 27 pages. With both changes in,
 // enumitem is back to 0.8865 and slydifi (0.8511 -> 0.8748), easytable
 // (0.8683 -> 0.8751) and figbox (0.8805 -> 0.8940, and page-count PARITY at
-// last) all improve. The moral: a fidelity fix that regresses one document is
-// worth pinning rather than reverting — the regression is evidence, and here
-// it pointed straight at the compensating bug.
-// ============================================================================
+// last) all improve.
 
 /// SATySFi's page accumulator adds, per box, exactly `hgt + (-dpt)` for a
 /// line and `vskip` for a skip (`pageBreak.ml:132-137`, `:201-203`), so the

@@ -1,8 +1,6 @@
-//! Paragraph breaking. Phase 6: Knuth–Plass optimal line breaking over glue
+//! Paragraph breaking. Knuth–Plass optimal line breaking over glue
 //! and discretionary breakpoints. The input model (a flat `Vec<HorzBox>` of
-//! strings, glue and discretionaries) matches what lineBreak.ml consumes,
-//! so this function is a drop-in replacement for the milestone-1 greedy
-//! breaker; callers (rustyfi-lang, rustyfi-pdf) are unaffected.
+//! strings, glue and discretionaries) matches what lineBreak.ml consumes.
 //!
 //! Deviations from lineBreak.ml (v0.0.6), noted where they matter:
 //! - v0.0.6 builds a DAG over `DiscretionaryID`s (hyphenation points) and
@@ -42,25 +40,21 @@
 //!   lineBreak.ml alone; the cost model and the graph structure are a
 //!   package, and we only have the one.
 //!
-//!   The RATIONALE this note used to give for that direction was wrong, and
-//!   is worth knowing before trusting any line-count argument. It said "the
-//!   port already sets fewer lines than SATySFi on easytable (556 vs 592) and
-//!   enumitem (869 vs 885)" — figures from the harness's old line metric,
-//!   which clustered `pdftotext` GLYPH BOXES, whose tops and bottoms come
-//!   from the font descriptor, which the two writers do not emit alike.
-//!   Counted from the PDF content stream the two engines set 565 vs 565 and
-//!   882 vs 883: easytable was never short at all. The experiment's OUTCOME
-//!   stands (it was a whole-harness comparison), but "we are already short,
-//!   so do not go shorter" is not the reason, and re-running it should
-//!   re-derive the reason from the current metric.
+//!   Do NOT argue this from line counts measured by clustering `pdftotext`
+//!   GLYPH BOXES: their tops and bottoms come from the font descriptor, which
+//!   the two writers do not emit alike. That metric made the port look short
+//!   (easytable 556 vs 592, enumitem 869 vs 885); counted from the PDF content
+//!   stream the two engines set 565 vs 565 and 882 vs 883 — easytable was never
+//!   short at all. The experiment's OUTCOME above stands (it was a
+//!   whole-harness comparison); "we are already short, so do not go shorter"
+//!   was never a valid reason for it.
 //!
 //!   RETRIED after `text_to_boxes` started emitting inter-CJK glue at PREVENTED
-//!   boundaries as well (upstream's `LBPure` arm — the hypothesis being that
-//!   quantizing might behave differently once every boundary is elastic). It
-//!   does not: easytable 555 -> 553 lines, enumitem 869 -> 868, and the gate
-//!   fails 7 ways (easytable `text_match` 0.8743 -> 0.8539). More elasticity
-//!   puts MORE lines inside the free band, so `LINE_PENALTY` gets more say, not
-//!   less.
+//!   boundaries as well (upstream's `LBPure` arm), in case quantizing behaves
+//!   differently once every boundary is elastic. It does not: easytable 555 ->
+//!   553 lines, enumitem 869 -> 868, and the gate fails 7 ways (easytable
+//!   `text_match` 0.8743 -> 0.8539). More elasticity puts MORE lines inside the
+//!   free band, so `LINE_PENALTY` gets more say, not less.
 //!
 //!   And a note on what the remaining gap actually is, so the next reader does
 //!   not look for a cost that closes it. Upstream's weight is `badness +
@@ -85,8 +79,6 @@ use crate::vbox::VertBox;
 /// paragraph breaker needs (v0.0.6's ~40-rule engine over `LineBreak.txt`
 /// classes, `ref:src/chardecoder/lineBreakDataMap.ml`, collapses the same
 /// way into `append_break_opportunity`'s direct/mandatory distinction).
-/// Wraps `unicode_linebreak::BreakOpportunity` so callers depend on this
-/// crate's vocabulary rather than the segmenter crate directly.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BreakKind {
     /// A break is legal but optional (an ordinary word/punctuation
@@ -115,9 +107,7 @@ pub fn break_opportunities(text: &str) -> Vec<(usize, BreakKind)> {
         .collect()
 }
 
-/// Badness cap. lineBreak.ml computes `badness = |ratio^3| * 10000`
-/// (lineBreak.ml:985-986, `calculate_badness`) and separately hardcodes
-/// Classic Knuth–Plass default line penalty. Not a lineBreak.ml constant:
+/// Classic Knuth–Plass default line penalty. NOT a lineBreak.ml constant:
 /// v0.0.6's edge weight is `badness + pnltybreak`, where `pnltybreak` comes
 /// from a `HorzDiscretionary`'s own penalty (lineBreak.ml:1012) — the same
 /// role our `Discretionary::penalty` plays via `demerits`. We adopt TeX's
@@ -144,9 +134,7 @@ struct LineMetrics {
     shrink: Length,
     has_fil: bool,
     /// Natural width contributed by CJK (ideographic/kana/CJK-punctuation)
-    /// glyphs on this line. Non-zero marks a line SATySFi would justify with
-    /// stretchable inter-character glue but this port renders rigidly — see the
-    /// over-stretch rescue in [`badness`].
+    /// glyphs on this line. Accumulated but NOT scored.
     cjk_natural: Length,
     /// Whether the line contains any real (breakable) interword glue
     /// (`OuterEmpty`). Distinguishes a rigid-but-spaced line (monospace/`+code`
@@ -167,9 +155,6 @@ impl LineMetrics {
         }
     }
 
-    /// Fold one box into the running metrics. Extracted from [`measure`] so
-    /// that [`measure_range`] can accumulate over a line WITHOUT materializing
-    /// it — see that function.
     fn push(&mut self, bx: &PureHorzBox) {
         match bx {
             PureHorzBox::InnerString { width, text, .. } => {
@@ -191,19 +176,16 @@ impl LineMetrics {
             PureHorzBox::OuterFil => self.has_fil = true,
             PureHorzBox::FixedEmpty { width } => self.natural += *width,
             PureHorzBox::Image { width, .. } => self.natural += *width,
-            // §4 (hyphenation): a discretionary that does NOT end this line
-            // renders its `no_break` slot (matches `hbox.rs::natural_width`
-            // and upstream's `get_leftmost/rightmost` no-break choice) —
-            // empty for every UAX#14-only discretionary (§3), so this is a
-            // no-op until §4 fills `no_break`.
+            // A discretionary that does NOT end this line renders its
+            // `no_break` slot (upstream's `get_leftmost/rightmost` no-break
+            // choice) — empty for every UAX#14-only discretionary.
             PureHorzBox::Discretionary { no_break, .. } => {
                 for b in no_break {
                     self.natural += b.natural_width();
                 }
             }
             PureHorzBox::Graphics { width, .. } => self.natural += *width,
-            // Counted as a fil for width purposes (upstream `Fils(1)`), same
-            // as `OuterFil` above — no `natural` contribution.
+            // Counted as a fil for width purposes (upstream `Fils(1)`).
             PureHorzBox::GraphicsOuter { .. } => self.has_fil = true,
             PureHorzBox::Math { width, .. } => self.natural += *width,
             // Zero-width marker; fired lang-side after placement.
@@ -212,15 +194,11 @@ impl LineMetrics {
             PureHorzBox::EmbeddedBlock { width, .. } => self.natural += *width,
             PureHorzBox::Frame { width, .. } => self.natural += *width,
             PureHorzBox::FrameMarker { .. } => {}
-            // Zero-width bracket around contents that are already IN this
-            // stream (see the variant's doc comment) — the frame's own width,
-            // stretch and shrink are whatever its spliced boxes contribute, so
-            // the marker itself must add nothing or it would double-count.
+            // The frame's width/stretch/shrink are whatever its spliced boxes
+            // contribute, so the marker must add nothing or it double-counts.
             PureHorzBox::InlineFrameMarker { .. } => {}
             // Zero-width marker; fired to the page bottom by `chop_page`.
             PureHorzBox::Footnote { .. } => {}
-            // inert, zero contribution — read only by the reflow HTML
-            // walker.
             PureHorzBox::InlineMark(_) => {}
         }
     }
@@ -244,13 +222,9 @@ fn measure(line: &[PureHorzBox]) -> LineMetrics {
 /// easytable alone (23.1M boxes cloned across 426,795 calls), and the reason
 /// `line-break` accounted for 92 % of that document's evaluation time.
 ///
-/// Nothing about the result changes: this visits exactly the boxes
-/// `line_content` would emit, in exactly that order, so every floating-point
-/// addition happens in the same order and the metrics are bit-identical — which
-/// is what lets it touch the line breaker (the component treats as delicately
-/// balanced) without moving a single break.
-///
-/// `line_content` itself stays: the chosen lines really do need their boxes.
+/// This visits exactly the boxes `line_content` would emit, in exactly that
+/// order, so every floating-point addition happens in the same order and the
+/// metrics are bit-identical — not one break moves.
 fn measure_range(pure: &[PureHorzBox], start: usize, raw_end: usize) -> LineMetrics {
     let mut m = LineMetrics::empty();
     if start > 0 {
@@ -279,11 +253,9 @@ fn measure_range(pure: &[PureHorzBox], start: usize, raw_end: usize) -> LineMetr
     m
 }
 
-/// Whether `c` is a CJK glyph that this port lays out rigidly (no stretchable
-/// inter-character glue) but SATySFi justifies — Hiragana, Katakana, CJK
-/// ideographs (incl. Extension A) and CJK symbols/punctuation. Used by
-/// [`badness`] to spot a line SATySFi would fill that this port would otherwise
-/// drop as over-stretched.
+/// Whether `c` is a CJK glyph — Hiragana, Katakana, CJK ideographs (incl.
+/// Extension A) and CJK symbols/punctuation. The classifier behind
+/// `LineMetrics::cjk_natural`.
 fn is_cjk(c: char) -> bool {
     matches!(c,
         '\u{3000}'..='\u{303F}'   // CJK symbols and punctuation (、。「」…)
@@ -386,14 +358,12 @@ pub fn natural_metrics(boxes: &[HorzBox]) -> (Length, Length, Length) {
                 }
                 PureHorzBox::FrameMarker { .. } => {}
                 // Zero width (its contents are spliced siblings), but the
-                // frame's padded vertical extent still feeds the run's outer
-                // metrics — the same shape as `GraphicsOuter` above.
+                // frame's padded vertical extent still feeds the outer metrics.
                 PureHorzBox::InlineFrameMarker { height: h, depth: d, .. } => {
                     *height = (*height).max(*h);
                     *depth = (*depth).max(*d);
                 }
                 PureHorzBox::Footnote { .. } => {}
-                // inert, zero contribution.
                 PureHorzBox::InlineMark(_) => {}
             }
         }
@@ -410,14 +380,11 @@ pub fn natural_metrics(boxes: &[HorzBox]) -> (Length, Length, Length) {
     (width, height, depth)
 }
 
-/// `embed-block-breakable`/`embed-block-top`'s box-sizing helper — the
-/// block analog of `natural_metrics` above, but summed rather than maxed
-/// (a block's lines stack vertically, they don't compete for one shared
-/// baseline the way concurrent inline boxes on a line do). Each `Line`
-/// contributes its own `height`/`depth` to the running totals; each
-/// `Skip` adds its length to `height` only (there is nothing below a bare
-/// skip to call "depth"). E.g. `measure_block(&[Line{h,d}, Skip(s)]) ==
-/// (h+s, d)`.
+/// `embed-block-breakable`/`embed-block-top`'s box-sizing helper — the block
+/// analog of `natural_metrics`, but SUMMED rather than maxed, since a block's
+/// lines stack vertically. Each `Line` contributes its own `height`/`depth`;
+/// each `Skip` adds its length to `height` only. E.g.
+/// `measure_block(&[Line{h,d}, Skip(s)]) == (h+s, d)`.
 pub fn measure_block(block: &[VertBox]) -> (Length, Length) {
     let mut height = Length::ZERO;
     let mut depth = Length::ZERO;
@@ -451,11 +418,9 @@ pub fn measure_block(block: &[VertBox]) -> (Length, Length) {
 /// "TooShort"/"TooLong" and cut it off there — those limits exist in
 /// v0.0.6 to decide whether to keep a graph edge at all, which has no
 /// analogue in a DP over every candidate line. Instead badness grows
-/// continuously as `100 * |r|^3` (the classic Knuth–Plass/TeX badness
-/// function) and simply saturates at `BADNESS_TOO_LONG` once it gets there —
-/// so a moderately-bad line (say `r = 2`, badness 800) is still scored
-/// far better than a catastrophically-bad one, instead of both being
-/// flattened to the same "TooShort" cost.
+/// continuously as `10000 * |r|^3` (lineBreak.ml:986's scale, not TeX's
+/// `100 * r^3`) and saturates at `BADNESS_TOO_LONG`, so a moderately-bad line
+/// (`r = 2`, badness 80000) still scores far better than a catastrophic one.
 fn badness(width: Length, metrics: &LineMetrics) -> f64 {
     let slack = width - metrics.natural;
     if slack.0.abs() < 1e-9 {
@@ -489,51 +454,22 @@ fn badness(width: Length, metrics: &LineMetrics) -> f64 {
                 // (lineBreak.ml:986), `|ratio|³·10000`.
                 return (10000.0 * ratio.abs().powi(3)).min(BADNESS_TOO_LONG);
             }
-            // Beyond the stretch limit (`LBTooShort`). SATySFi DROPS such a line,
-            // and so do we — EXCEPT for a line that is already NEARLY FULL. The
-            // port models CJK as rigid discretionaries with no inter-character
-            // glue (unlike SATySFi, whose CJK glue lets any line fill the
-            // column), so a near-full line that MIXES rigid CJK with a single
-            // Latin space is "under-stretched-beyond-limit" for a benign reason:
-            // it reaches the column on its own, needing that lone space to
-            // stretch only a hair. Dropping it (`BADNESS_DROPPED`) made the DP
-            // prefer a rigid, drastically SHORT line (finite `no_stretch_badness`)
-            // over that near-full line (dropped, 1e12) — shredding a CJK+inline-
-            // code paragraph into wildly uneven lines (a 134pt line before a
-            // 442pt one). So for a near-full line, score it by ABSOLUTE
-            // underfullness like a rigid line; a genuinely LOOSE line (large
-            // slack, real stretch it can't cover) still drops, matching SATySFi
-            // and keeping normal Latin justification unchanged.
-            // ...AND only for an essentially-RIGID line: its total stretch is a
-            // negligible fraction of its own width, i.e. a long rigid run (CJK)
-            // carrying a lone incidental space — NOT a Latin line whose several
-            // interword spaces give it real, proportional stretch (that stays a
-            // genuine `LBTooShort` drop, so pure-Latin justification and
-            // narrow-column footnotes are untouched).
-            // A line that CONTAINS CJK is the port's blind spot: SATySFi fills
-            // it via stretchable inter-character glue, so it is never really
-            // `LBTooShort`; this port models CJK as rigid discretionaries with no
-            // such glue, so dropping it (`BADNESS_DROPPED`) made the DP prefer a
-            // drastically SHORT rigid line over a near-full one, shredding
-            // CJK+inline-code paragraphs into wildly uneven lines. Score any
-            // CJK-bearing line by its ABSOLUTE underfullness (`no_stretch_
-            // badness`) so the DP fills it toward the column, exactly as SATySFi
-            // would. A pure-Latin line has real proportional interword stretch,
-            // so an over-stretched one is a genuine `LBTooShort` and still drops
-            // — keeping Latin justification, narrow-column footnotes, and the
-            // `kp_*` tests unchanged.
-            // (Historical: a rescue here scored any CJK-bearing line by its
-            // ABSOLUTE underfullness instead of dropping it, because the port
-            // modelled CJK as rigid — such a line had no stretch of its own, so
-            // `LBTooShort` fired for a benign reason and the DP preferred a
-            // drastically SHORT line over a near-full one. CJK now carries real
-            // `adjacent_space` glue (`primitives.rs`'s `text_to_boxes`), so the
-            // premise is gone: a CJK line beyond the stretch limit is genuinely
-            // too loose and drops, exactly as SATySFi's `LBTooShort` does.
-            // Keeping the rescue with real glue actively hurt — it let the DP
-            // take badly underfull lines cheaply, and `layout_line` then
+            // Beyond the stretch limit (`LBTooShort`): SATySFi DROPS such a
+            // line, and so do we.
+            //
+            // A rescue here once scored a CJK-bearing line by its ABSOLUTE
+            // underfullness instead, because the port modelled CJK as rigid
+            // discretionaries with no inter-character glue: such a line had no
+            // stretch of its own, so `LBTooShort` fired for a benign reason
+            // and the DP preferred a drastically SHORT rigid line (finite
+            // cost) over a near-full one (dropped, 1e12) — shredding a
+            // CJK+inline-code paragraph into wildly uneven lines (a 134pt line
+            // before a 442pt one). CJK now carries real `adjacent_space` glue
+            // (`primitives.rs`'s `text_to_boxes`), so the premise is gone, and
+            // keeping the rescue on top of real glue actively HURT: it let the
+            // DP take badly underfull lines cheaply, and `layout_line` then
             // stretched them to justify, opening ~2pt gaps between adjacent CJK
-            // characters where SATySFi has none.)
+            // characters where SATySFi has none. Do not reinstate it.
             return BADNESS_DROPPED;
         }
         // No elastic capacity at all. Upstream's `calculate_ratios` divides the
@@ -611,9 +547,8 @@ fn carries_ink(b: &PureHorzBox) -> bool {
 }
 
 /// Whether a candidate line is upstream's `LBTooLong` — overfull past what its
-/// shrink can absorb (`calculate_ratios`, `lineBreak.ml:538-548`). Mirrors
-/// [`badness`]'s overfull branches; kept separate because the DP needs the
-/// CLASSIFICATION, not just the cost (see the one-overfull-edge rule there).
+/// shrink can absorb (`calculate_ratios`, `lineBreak.ml:538-548`). Separate
+/// from [`badness`] because the DP needs the CLASSIFICATION, not just the cost.
 fn is_too_long(width: Length, m: &LineMetrics) -> bool {
     let slack = width - m.natural;
     if slack.0 >= 0.0 {
@@ -711,10 +646,9 @@ pub fn break_into_lines(ctx: &Context, boxes: Vec<HorzBox>) -> Vec<VertBox> {
 
     // Legal breakpoints: a glue-or-discretionary box (`is_break_point`)
     // immediately following a box that isn't one (never at the very start
-    // of a line — "leading glue after a break is dropped", matching the
-    // previous greedy's behavior). For each such box at index `g`, a line
-    // ending there spans up to (excluding) `g`, and the next line starts
-    // at `g + 1` (the box itself is discarded, same as glue always was).
+    // of a line — leading glue after a break is dropped). For each such box
+    // at index `g`, a line ending there spans up to (excluding) `g`, and the
+    // next line starts at `g + 1` (the box itself is discarded, as glue is).
     // A run of several adjacent break candidates collapses to just its
     // first: the trim helpers below eat whatever of the run leaks into a
     // line's edges either way, so this loses no representable line, only
@@ -804,14 +738,9 @@ pub fn break_into_lines(ctx: &Context, boxes: Vec<HorzBox>) -> Vec<VertBox> {
         } else {
             0
         };
-        // Width short-circuit: once a candidate line is wildly overfull
-        // for every remaining start (natural width only grows as `i`
-        // decreases further back... actually grows as we consider
-        // earlier starts), stop trying earlier starts for this `j`. We
-        // scan `i` from the closest (largest, tightest line) backward,
-        // so the break condition below is safe: once a line is far past
-        // any hope of representable badness (well beyond the shrink
-        // limit) trying an even earlier `i` only makes it worse.
+        // `i` is scanned from the closest (tightest line) backward, so an
+        // earlier `i` only ever makes a candidate line wider — which is what
+        // makes the width short-circuit at the end of this loop safe.
         for i in (floor..j).rev() {
             if dp[i].0.is_infinite() {
                 continue;
@@ -824,8 +753,8 @@ pub fn break_into_lines(ctx: &Context, boxes: Vec<HorzBox>) -> Vec<VertBox> {
             let mut metrics = measure_range(&pure, start, raw_end);
             // The break itself, if it's a chosen discretionary, carries
             // `pre_break` onto the CLOSED line (the hyphen/etc. that
-            // actually prints before the break) — §4 (hyphenation);
-            // empty for a UAX#14-only discretionary (§3), so a no-op then.
+            // actually prints before the break) — hyphenation;
+            // empty for a UAX#14-only discretionary, so a no-op then.
             if raw_end < n {
                 if let PureHorzBox::Discretionary { pre_break, .. } = &pure[raw_end] {
                     for b in pre_break {
@@ -952,7 +881,7 @@ fn trim_leading_glue(line: &[PureHorzBox]) -> &[PureHorzBox] {
 
 /// The actual content of a line spanning `pure[start..raw_end)`, with
 /// leading and trailing glue trimmed, and every `Discretionary` resolved
-/// to what actually renders on this line (§4, hyphenation — `linebreak.rs`
+/// to what actually renders on this line (hyphenation — `linebreak.rs`
 /// module doc, "the first filler"):
 /// - a discretionary the line does NOT end on renders its `no_break` slot
 ///   (spliced in place, matching `measure`'s treatment of one that survives
@@ -966,8 +895,9 @@ fn trim_leading_glue(line: &[PureHorzBox]) -> &[PureHorzBox] {
 /// - the break the PREVIOUS line was chosen to end on (`pure[start - 1]`,
 ///   only when `start > 0`) contributes its `post_break` slot at this
 ///   line's start (continuation text after the hyphen).
-/// Every slot is empty for a UAX#14-only discretionary (§3), so this is
-/// behavior-identical to the old borrow-only version until §4 fills them.
+/// Every slot is empty for a UAX#14-only discretionary, so this is
+/// behavior-identical to the old borrow-only version until hyphenation fills
+/// them.
 fn line_content(pure: &[PureHorzBox], start: usize, raw_end: usize) -> Vec<PureHorzBox> {
     let mut out = Vec::new();
     if start > 0 {
@@ -1028,9 +958,9 @@ fn sole_breakable_block(content: &[PureHorzBox]) -> Option<Vec<VertBox>> {
 /// justification.
 fn layout_line(ctx: &Context, line: Vec<PureHorzBox>, width: Length, is_last: bool) -> VertBox {
     let (contents, height, depth) = justify_line(line, width, is_last);
-    // EXPERIMENT: an all-glue line (e.g. `line-break ctx inline-fil`, used as
-    // a pure spacer with its own paragraph-margin skip) draws nothing and
-    // should occupy zero vertical extent — no strut.
+    // An all-glue line (e.g. `line-break ctx inline-fil`, used as a pure
+    // spacer with its own paragraph-margin skip) draws nothing and occupies
+    // zero vertical extent — no strut.
     VertBox::Line {
         height,
         depth,
@@ -1145,16 +1075,16 @@ fn justify_line(
                 // An image sits entirely on the baseline: it contributes to
                 // the line's height but never its depth. `depth` only ever
                 // grows via `.max` and starts at `ZERO`, so this is a no-op
-                // today — kept explicit (matching the plan) so the "images
-                // have zero depth" decision reads as deliberate rather than
-                // an omission if `depth` ever gains a different starting
-                // point.
+                // today — kept explicit so the "images have zero depth"
+                // decision reads as deliberate rather than an omission if
+                // `depth` ever gains a different starting point.
                 depth = depth.max(Length::ZERO);
                 *width
             }
             // Not chosen as this line's break (it would have been excluded
             // from `line` entirely otherwise, see `line_content`), so it
-            // renders as `no_break` — empty for §3, hence zero-width.
+            // renders as `no_break` — empty for a UAX#14-only discretionary,
+            // hence zero-width.
             PureHorzBox::Discretionary { .. } => Length::ZERO,
             PureHorzBox::Graphics {
                 width,
@@ -1204,8 +1134,6 @@ fn justify_line(
             // false`, like `Image`/`FixedEmpty`); fired lang-side, after
             // placement, by `fire_hooks`.
             PureHorzBox::HookPageBreak { .. } => Length::ZERO,
-            // Like `Graphics` (§4 of): a tabular box can be tall, so it
-            // drives the line's height/depth exactly the same way.
             PureHorzBox::Tabular(tab) => {
                 height = height.max(tab.height);
                 depth = depth.max(tab.depth);
@@ -1237,8 +1165,7 @@ fn justify_line(
                 depth = depth.max(*d);
                 *width
             }
-            // Zero-width/height/depth marker (`is_glue == false`); read back
-            // by `fire_hooks`, after placement.
+            // Zero-width marker; read back by `fire_hooks` after placement.
             PureHorzBox::FrameMarker { .. } => Length::ZERO,
             // Zero-WIDTH bracket whose contents are spliced siblings on this
             // same line, so it advances nothing — but it does carry the
@@ -1250,11 +1177,10 @@ fn justify_line(
                 depth = depth.max(*d);
                 Length::ZERO
             }
-            // Zero-width/height/depth marker (`is_glue == false`); extracted
-            // and bottom-placed by `chop_page` at page-commit time.
+            // Zero-width marker; extracted and bottom-placed by `chop_page`
+            // at page-commit time.
             PureHorzBox::Footnote { .. } => Length::ZERO,
-            // Zero-width/height/depth marker (`is_glue == false`); — read
-            // only by the reflow HTML walker.
+            // Zero-width marker; read only by the reflow HTML walker.
             PureHorzBox::InlineMark(_) => Length::ZERO,
         };
         contents.push((x, bx));

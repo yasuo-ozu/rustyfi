@@ -91,13 +91,13 @@ fn a_frame_carries_the_outer_margins_and_its_body_carries_none() {
     assert_eq!(
         shape,
         vec![
-            "Skip(7)",       // the frame's own margin_top  = OUTER paragraph_top
+            "Skip(7)",
             "FrameStart",
             "FramePad(3)",   // paddingT — interior, additive, not a margin
             "Line",
             "FramePad(5)",   // paddingB
             "FrameEnd",
-            "Skip(11)",      // the frame's own margin_bottom = OUTER paragraph_bottom
+            "Skip(11)",
         ],
         "no 100pt/200pt anywhere: the body's own margins do not survive"
     );

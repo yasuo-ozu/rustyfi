@@ -55,36 +55,30 @@ fn boolean(src: &str) -> bool {
     }
 }
 
-// ---- `let ( op ) = ..` / `let ( op ) param* = ..` -------------------------
-
 #[test]
 fn let_paren_op_binding_with_no_params() {
-    // The task's first minimal repro (was a parse error before this change).
     assert_eq!(int("let (+++>) = 1 in 0"), 0);
 }
 
 #[test]
 fn let_paren_op_binding_curried_infix_use() {
-    // `(<+>)` is bound as an ordinary 2-ary function, then used infix — the
-    // `OpChain` fold already resolves any user-bound operator name generically
-    // (`elaborate.rs`'s `op_chain`), so this needs no elaborator change beyond
-    // the `(op)` NAME grammar itself.
+    // The `OpChain` fold (elaborate.rs's `op_chain`) already resolves any
+    // user-bound operator name generically, so this needs no elaborator
+    // change beyond the `(op)` NAME grammar itself.
     assert_eq!(int("let (<+>) a b = a + b in 3 <+> 4"), 7);
 }
 
 #[test]
 fn let_paren_op_binding_prefix_use() {
-    // The same binding, applied prefix-style (`(op) x y`), matching how
-    // `progsynt.satyh`-style packages mostly use their custom operators.
+    // Prefix application, how `progsynt.satyh`-style packages mostly use
+    // their custom operators.
     assert_eq!(int("let (-->) a b = a * b in (-->) 3 4"), 12);
 }
-
-// ---- `( op )` as a bare atomic-expression value reference -----------------
 
 #[test]
 fn bare_paren_op_reference_to_a_builtin_primitive() {
     // `(+)` referencing the registered `"+"` primitive as a first-class
-    // value (`ast::Atomic::OpRef`), same as `(+++)`/`(-->)` would.
+    // value (`ast::Atomic::OpRef`).
     assert_eq!(int("let f = (+) in f 3 4"), 7);
 }
 
@@ -93,17 +87,11 @@ fn bare_paren_op_reference_applied_directly() {
     assert_eq!(int("(*) 6 7"), 42);
 }
 
-// ---- `val ( op ) : ty` in a module signature ------------------------------
-
 #[test]
 fn module_sig_val_paren_op_matches_struct_let_paren_op() {
-    // The task's second minimal repro (was a parse error at `module`
-    // before this change): a `val (op) : ty` signature item alongside a
-    // matching `let (op) = ..` in the struct body. Module signatures are
-    // parsed but not yet enforced against the struct (`elaborate.rs`'s
-    // `TopBinding::Module` doc comment), so this exercises parsing +
-    // elaboration + evaluation of the operator-named binding end-to-end via
-    // `open`.
+    // Module signatures are parsed but not enforced against the struct
+    // (elaborate.rs's `TopBinding::Module` doc comment), so this exercises
+    // parsing + elaboration + evaluation end-to-end via `open`.
     let src = "\
         module M : sig val (-->) : int -> int -> int end = struct \
             let (-->) a b = a + b \
@@ -113,23 +101,19 @@ fn module_sig_val_paren_op_matches_struct_let_paren_op() {
 
 #[test]
 fn module_sig_val_paren_op_parses_with_unresolved_type_name() {
-    // The task's exact second repro, verbatim: an undeclared type `t` in the
-    // signature. Since `sig .. end` is parsed but never consulted by the
-    // (untyped) elaborator or the typechecker, this only needs to PARSE.
+    // Undeclared type `t`: `sig .. end` is parsed but never consulted by the
+    // (untyped) elaborator or the typechecker, so this only needs to PARSE.
     let src = "module M : sig val (-->) : t -> t -> t end = struct \
         let (-->) a b = a end";
     rustyfi_syntax::parse_file(src)
         .expect("the parenthesized-operator sig/struct form should parse");
 }
 
-// ---- `not` binds looser than application (real-world compat round 4) ------
-
 #[test]
 fn not_binds_looser_than_application() {
     // Upstream `not f x` is `not (f x)`, NOT `(not f) x` (which would apply
     // `not` to a function value and fail to typecheck). The blocker case was
     // `satysfi-xpath`'s `util.satyh`: `not float-zero-or-nan (a +. 1.)`.
-    // `id true` is `true`, so `not id true` must be `not (id true)` = `false`.
     let src = "let id = fun b -> b in not id true";
     assert!(!boolean(src), "`not id true` must fold as `not (id true)`");
 }

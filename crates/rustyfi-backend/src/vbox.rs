@@ -8,11 +8,10 @@ pub enum VertBox {
     Line {
         height: Length,
         depth: Length,
-        /// Baseline-to-baseline distance to the *next* line (the
-        /// `leading` a `context` was set to when this line was
-        /// assembled — : `page-break` no longer takes a context, so
-        /// this moves the property onto the line itself, set by
-        /// `break_into_lines` from `ctx.leading`).
+        /// Baseline-to-baseline distance to the *next* line: the `leading`
+        /// a `context` was set to when this line was assembled. `page-break`
+        /// takes no context, so the property rides the line itself, set by
+        /// `break_into_lines` from `ctx.leading`.
         leading: Length,
         contents: Vec<(Length, PureHorzBox)>,
     },
@@ -48,7 +47,7 @@ pub enum VertBox {
     /// page's `pbinfo` and the point where it sits in the flow. Contributes
     /// zero height, same as `ClearPage`.
     HookPageBreak(HookId),
-    /// `block-frame-breakable`'s frame-extent markers (§D): the frame's
+    /// `block-frame-breakable`'s frame-extent markers: the frame's
     /// indented contents sit between a `FrameStart(id)`/`FrameEnd(id)` pair;
     /// `chop_page`/`place_block_at` place each as a zero-height marker
     /// `PlacedLine` (the `HookPageBreak` pattern) and `fire_hooks` derives
@@ -62,16 +61,12 @@ pub enum VertBox {
     /// `listing`/`listing-item`/`listing-item-breakable`/`enumerate`/
     /// `enumerate-item`. Zero height/depth, contributes nothing to any
     /// measurement (`measure_block`) or placement (`chop_page`/
-    /// `place_block_at`'s pure-skip arms — see those functions' doc comments)
-    /// — it never reaches a `PlacedLine`, so PDF and faithful HTML are
-    /// byte-identical whether or not a document's stdlib emits these. Read
-    /// only by the reflow HTML walker (`the `html-support` branch's rustyfi-html/src/reflow/
-    /// block.rs`'s `walk_vboxes`), which uses the Start/End nesting to
-    /// rebuild real `<ul>`/`<ol>`/`<li>` structure — nesting depth is NOT
-    /// carried in the payload (see `ListMarkKind`'s doc comment); it falls
-    /// out of the walker's own stack from properly nested markers, mirroring
-    /// how `FrameStart`/`FrameEnd` above already ride the box stream
-    /// positionally with no side-channel.
+    /// `place_block_at`) — it never reaches a `PlacedLine`, so PDF and
+    /// faithful HTML are byte-identical whether or not a document's stdlib
+    /// emits these. Read only by the reflow HTML walker (the `html-support`
+    /// branch's `rustyfi-html/src/reflow/block.rs`'s `walk_vboxes`), which
+    /// uses the Start/End nesting to rebuild real `<ul>`/`<ol>`/`<li>`
+    /// structure.
     ListMark(ListMarkKind),
 }
 

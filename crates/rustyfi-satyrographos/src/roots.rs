@@ -1,5 +1,4 @@
-//! Library-root resolution (plan §3/§4) and the managed-root marker
-//! (plan §6).
+//! Library-root resolution and the managed-root marker.
 //!
 //! A "root" here is a SATySFi library root: the directory that holds
 //! `dist/packages/…` (where the loader resolves `@require:` from, see
@@ -149,9 +148,9 @@ pub fn prefix_roots() -> Vec<PathBuf> {
     roots
 }
 
-/// Resolve the root to operate on, following the plan §4 precedence for the
-/// *library-management* commands (the compile-mode version→path fallback of
-/// §3 step 4 lives in the CLI layer, not here — this crate never sees a
+/// Resolve the root to operate on, following this precedence for the
+/// *library-management* commands (the compile-mode version→path fallback
+/// lives in the CLI layer, not here — this crate never sees a
 /// `RustyfiVersion`):
 ///
 /// 1. `dest` (the raw `--dest DIR` override) — used verbatim, bypassing
@@ -186,8 +185,8 @@ pub fn resolve_root(lib_root: Option<&Path>, dest: Option<&Path>) -> Result<Path
 /// The shared `--lib-root`/`--dest` root selection carried by both
 /// [`InstallOptions`](crate::ops::install::InstallOptions) and
 /// [`RootOptions`](crate::ops::uninstall::RootOptions). Implementing it in one
-/// place keeps every operation's root resolution identical (plan §4): the
-/// install/reconcile/registry paths go through [`resolve_managed_root`] (which
+/// place keeps every operation's root resolution identical: the install/
+/// reconcile/registry paths go through [`resolve_managed_root`] (which
 /// also lays down the `.satyrographos/` skeleton), and the read-only
 /// list/status/uninstall paths through [`resolve_root`].
 ///
@@ -197,7 +196,7 @@ pub(crate) trait RootSelection {
     fn lib_root(&self) -> Option<&Path>;
     fn dest(&self) -> Option<&Path>;
 
-    /// Resolve the target root by the plan §4 precedence (see the free
+    /// Resolve the target root by the shared precedence (see the free
     /// [`resolve_root`] function).
     fn resolve_root(&self) -> Result<PathBuf, Error> {
         resolve_root(self.lib_root(), self.dest())
@@ -220,14 +219,14 @@ pub fn managed_dir(root: &Path) -> PathBuf {
 }
 
 /// Whether `root` is already managed by this tool (its `.satyrographos/`
-/// marker exists, even if empty) — plan §6's managed-root check.
+/// marker exists, even if empty) — the managed-root check.
 pub fn is_managed(root: &Path) -> bool {
     managed_dir(root).is_dir()
 }
 
 /// Ensure `root` is a managed root, creating the `.satyrographos/`,
 /// `.satyrographos/receipts/`, and `.satyrographos/tmp/` skeleton on first
-/// use (plan §6: "`install`/`uninstall` create it on first use"). Idempotent.
+/// use — `install`/`uninstall` create it on first use. Idempotent.
 pub fn ensure_managed(root: &Path) -> Result<(), Error> {
     for sub in [managed_dir(root), receipts_dir(root), tmp_dir(root)] {
         std::fs::create_dir_all(&sub).map_err(|e| Error::io(&sub, e))?;
@@ -241,8 +240,7 @@ pub fn receipts_dir(root: &Path) -> PathBuf {
 }
 
 /// `<root>/.satyrographos/tmp/` — staging and archive extraction, kept under
-/// `<root>` so the final rename into `dist/` is same-filesystem/atomic
-/// (plan §6).
+/// `<root>` so the final rename into `dist/` is same-filesystem/atomic.
 pub fn tmp_dir(root: &Path) -> PathBuf {
     managed_dir(root).join("tmp")
 }

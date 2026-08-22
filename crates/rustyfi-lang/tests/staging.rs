@@ -199,13 +199,8 @@ fn the_stage_does_not_leak_past_the_binding_it_was_declared_for() {
 }
 
 /// A `@stage:` header covers the file, so it has to reach EVERY binding shape
-/// the file can hold — not just plain `let`.
-///
-/// This is the silent half of the staging gap: `let-rec`/`let-inline`/
-/// `let-block`/`let-math`/`let-mutable` used to be built without ever
-/// consulting the file's stage, so a `@stage: 0` library's `let-rec` was read
-/// at stage 1 and its `&` refused. Nothing warned; the library simply could
-/// not be written.
+/// the file can hold — `let-rec`/`let-inline`/`let-block`/`let-math`/
+/// `let-mutable`, not just plain `let`.
 #[test]
 fn a_stage_zero_let_rec_may_quote() {
     let mut stages = HashMap::new();

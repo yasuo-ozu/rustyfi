@@ -49,10 +49,10 @@ fn runs_the_build_commands_and_reports_the_product() {
 
 #[test]
 fn install_true_materialises_the_product_under_dist_doc() {
-    // `BuildOptions::install` closes the "a libraryDoc's product has nowhere
-    // to go" gap: with it set, the same product `products` already confirmed
-    // exists is ALSO staged into the resolved root, at `dist/doc/<name>/
-    // <dst>` — the same per-library-namespace convention `md` uses.
+    // With `BuildOptions::install` set, the same product `products` already
+    // confirmed exists is ALSO staged into the resolved root, at
+    // `dist/doc/<name>/<dst>` — the same per-library-namespace convention
+    // `md` uses.
     let dir = project(
         "install",
         r#"(libraryDoc (name "d") (version "1")
@@ -94,8 +94,6 @@ fn rebuilding_with_install_replaces_the_previous_output() {
 
 #[test]
 fn no_install_option_installs_nothing() {
-    // Default behaviour (`install: None`) is byte-for-byte unchanged: build
-    // runs the commands and reports the products, and stages nothing.
     let dir = project(
         "noinstall",
         r#"(libraryDoc (name "d") (version "1")
@@ -263,7 +261,7 @@ fn same_named_blocks_coexist_when_their_lang_differs() {
     .unwrap();
     let root = dir.join("root");
 
-    // A name alone no longer identifies a library.
+    // A name alone does not identify a library.
     let err = sg::install(&dir, &sg::InstallOptions { dest: Some(root.clone()), ..Default::default() })
         .expect_err("ambiguous across generations");
     assert!(matches!(err, sg::Error::AmbiguousLibrary { .. }), "{err}");

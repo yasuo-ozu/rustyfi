@@ -1,12 +1,12 @@
-% Slice 1 table fixture: a self-contained, positional `\tabular` (mirroring
+% Table fixture: a self-contained, positional `\tabular` (mirroring
 % `tabular.satyh`'s shape) exercises the new `cell` type, the `tabular`
 % primitive, and the composite-box PDF writer arm (`emit_box`): a 2x2 ruled
 % grid, cell text and grid rules on one page.
 %
 % Deliberately NOT `@require: tabular`/`table`: those packages' record/
 % optional-argument command front-ends hit the runtime-optional/record-
-% command elaboration gap (roadmap G) — this fixture is the self-contained,
-% positional-argument subset Slice 1 targets instead.
+% command elaboration gap — this fixture is the self-contained,
+% positional-argument subset exercised instead.
 
 @require: stdja-mini
 @require: list

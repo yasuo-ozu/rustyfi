@@ -1,6 +1,6 @@
-//! `.opam` preparation: fetch, verify, build — the step that makes a font
-//! package's declared files exist. No test here reaches the network: each
-//! drives a decision the fetcher makes before it would.
+//! `.opam` preparation: fetch, verify, build. No test here reaches the
+//! network — `offline = true` is the probe: a wanted fetch surfaces as an
+//! observable `Error::Offline`, so a success proves none was attempted.
 
 use std::fs;
 use std::path::PathBuf;
@@ -42,7 +42,6 @@ fn a_present_file_matching_its_checksum_is_not_refetched() {
         build: vec![],
         ..Default::default()
     };
-    // Offline: any fetch would fail, so success proves none was attempted.
     let report = sg::ops::prepare::prepare_with(&dir, &opam, true, false).expect("reused");
     assert_eq!(report.reused, ["archive.zip"]);
     assert!(report.fetched.is_empty());
@@ -57,7 +56,6 @@ fn a_present_file_with_the_wrong_checksum_is_refetched_not_accepted() {
         build: vec![],
         ..Default::default()
     };
-    // Offline turns the decision into an observable error: it wanted to fetch.
     let err = sg::ops::prepare::prepare_with(&dir, &opam, true, false)
         .expect_err("a mismatching file must not be used");
     assert!(matches!(err, sg::Error::Offline { .. }), "{err}");
@@ -95,8 +93,6 @@ fn a_failing_build_command_stops_and_says_which() {
 
 #[test]
 fn a_delegation_to_satyrographos_is_recorded_not_run() {
-    // `satyrographos opam install …` is OPAM handing the job to the tool this
-    // port replaces; running it would fail or recurse.
     let dir = tmp("delegate");
     let opam = Opam {
         extra_sources: vec![],
@@ -113,8 +109,6 @@ fn a_delegation_to_satyrographos_is_recorded_not_run() {
 
 #[test]
 fn a_source_without_a_checksum_is_reported_as_unverified() {
-    // It cannot be verified, so it must not look verified. Offline stops the
-    // fetch, which is enough to show the decision is not "accept silently".
     let dir = tmp("unverified");
     let opam = Opam {
         extra_sources: vec![source("archive.zip", None)],

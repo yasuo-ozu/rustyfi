@@ -131,11 +131,10 @@ fn cmd_args_are_application_chains() {
 #[test]
 fn deep_nesting_is_unbounded() {
     // Nest inline commands well past the engine depth (4): the runtime
-    // re-entry must keep going. Phase 2b widened several of the enums on
-    // this recursion path (`Atomic`, `AppExpr`/`AppArg`, `InlineElem`, ...),
-    // which grows each stack frame along the way; run on a thread with a
-    // generously large stack rather than relying on the default (8 MiB),
-    // which some default test-harness configurations no longer clear at
+    // re-entry must keep going. The enums on this recursion path (`Atomic`,
+    // `AppExpr`/`AppArg`, `InlineElem`, ...) make for large stack frames, so
+    // run on a thread with a generously large stack rather than the default
+    // (8 MiB), which some test-harness configurations no longer clear at
     // this depth.
     let depth = 64;
     let mut src = String::from("{");
@@ -160,9 +159,8 @@ fn parse_errors_have_positions() {
     // `let` with no body expression.
     let err = parse_file("let x = in x").unwrap_err();
     assert!(err.span.start.line >= 1);
-    // Phase 2b adds the math grammar (`Atomic::MathText`), so `${x}` now
-    // parses; a shape math genuinely rejects (an unclosed group) still
-    // reports a position.
+    // `${x}` parses (`Atomic::MathText`); a shape math genuinely rejects
+    // (an unclosed group) still reports a position.
     assert_roundtrip("${x}");
     let err = parse_file("${x").unwrap_err();
     assert!(err.span.start.line >= 1);
@@ -180,7 +178,7 @@ fn deep_parse_error_span_reaches_past_first_line() {
     assert!(err.span.end.line >= 2);
 }
 
-// ---- phase 2a: operators, if/match/let-rec, patterns, tuples, ctors, ----
+// ---- operators, if/match/let-rec, patterns, tuples, ctors, --------------
 // ---- text embeds, type declarations -------------------------------------
 
 #[test]
@@ -469,9 +467,8 @@ fn naming_form_bang_and_before() {
     // too, since it shares `OpNameTok`/`NamingOpTok` with the naming form.
     assert_roundtrip("let (!) x = x in (!) 3");
     // Ordinary prefix `!`/`!!` dereference (a SEPARATE grammar path,
-    // `AppExpr`'s `excl: Option<UnopExclamTok>`) must still parse —
-    // untouched by this fix (`deref_unop`, above, already covers this;
-    // repeated here to document the two paths don't interfere).
+    // `AppExpr`'s `excl: Option<UnopExclamTok>`) must still parse — pinned
+    // here as well as in `deref_unop`, to show the two paths don't interfere.
     assert_roundtrip("!x");
     assert_roundtrip("!!x");
     // Ordinary infix `before` (`OpChain`'s `BeforeTail`, a SEPARATE grammar
@@ -494,7 +491,7 @@ fn match_binds_greedily() {
     assert_eq!(inner_rest.len(), 1, "inner match took the remaining arm");
 }
 
-// ---- phase 2b: mutables, deref, field access, record update, optional ----
+// ---- mutables, deref, field access, record update, optional -------------
 // ---- args, itemize, math, modules, library files ------------------------
 
 #[test]
@@ -605,9 +602,8 @@ fn math_command_names_plain_and_qualified() {
 #[test]
 fn math_lists() {
     // Gap 3: a leading `|` puts the math area in list mode (`mathblock`,
-    // parser.mly:1059-1066). `Token::Sep` already round-tripped before Gap
-    // 3 landed (elaboration, not parsing, used to reject these) — this
-    // just documents the shape.
+    // parser.mly:1059-1066). Parsing always accepted these — the shape is
+    // documented here; the rejection was elaboration's.
     assert_roundtrip("${| a | b |}");
     assert_roundtrip("${|}");
     assert_roundtrip("${||}");
@@ -782,7 +778,7 @@ fn sig_constraint_suffix() {
 fn stdja_sig_block_parses() {
     // The whole `sig … end` block of the real upstream `stdja.satyh:24-51`
     // (command values, command types, `?->`, and the `constraint` suffix
-    // all together) — Slice 1's acceptance gate. Trimmed to the constructs
+    // all together) — the acceptance gate. Trimmed to the constructs
     // this port models (no tuple-of-`string*float*float` font vals needed
     // for the gate, but included anyway since `TypeProd` already supports
     // them).

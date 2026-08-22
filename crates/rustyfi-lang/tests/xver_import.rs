@@ -1,30 +1,29 @@
-//! Slices X1 + X2a: a `V0_1` document `@require:`-ing a `V0_0` package
+//! A `V0_1` document `@require:`-ing a `V0_0` package
 //! end-to-end.
 //!
 //! Driven through the REAL loader (`rustyfi_loader::load`, `LoadOptions {
-//! version: V0_1, .. }`) so the per-file detection rule (`load_legacy`'s Q4
+//! version: V0_1, .. }`) so the per-file detection rule (`load_legacy`'s
 //! worklist logic), the forked-name guard (`compile_document_v1_with_trials`'s
-//! dep loop, `collect_free_globals`), and — new in X2a — the
+//! dep loop, `collect_free_globals`), and the
 //! `Ast::VersionScope` splice wrapping are all exercised for real, not
 //! bypassed:
 //!
-//! - [`positive_case_list_and_option_render`] (X1): a `V0_1` entry requiring
+//! - [`positive_case_list_and_option_render`]: a `V0_1` entry requiring
 //!   the REAL vendored `list.satyg`/`option.satyg` (copied byte-for-byte from
 //!   `lib-rustyfi/dist/packages/` into a temp `lib_root` — see
 //!   [`TempDir::copy_real_package`]) — `List.map`/`List.fold-left`/
 //!   `Option.from` all get used, and the resulting document actually
 //!   renders (a real page with real placed content), proving the splice +
 //!   guard pass a genuinely version-neutral dependency through untouched.
-//! - [`xver_page_break_internal_renders`] (X2a headline): a `V0_0`
+//! - [`xver_page_break_internal_renders`]: a `V0_0`
 //!   package whose exported command (a NEUTRAL-typed
 //!   `block-boxes -> document`) calls `page-break` INTERNALLY with the
-//!   `V0_0` `page` ADT — a shape X1 hard-rejected (`page-break` is
-//!   version-forked, `primitives::forked_prim_names`) — now renders
-//!   end-to-end through `compile_document_v1`, proving the
+//!   `V0_0` `page` ADT (`page-break` is
+//!   version-forked, `primitives::forked_prim_names`), rendering
+//!   end-to-end through `compile_document_v1` and proving the
 //!   `Ast::VersionScope` mechanism (compile-time fold cursor +
-//!   `Interp::version` + the typecheck env swap) makes the previously-
-//!   rejected case work.
-//! - [`xver_forked_prim_coexist`] (X2a soundness core): the SAME package,
+//!   `Interp::version` + the typecheck env swap) works.
+//! - [`xver_forked_prim_coexist`]: the SAME package,
 //!   but the `V0_1` entry ALSO calls `page-break` directly (with `V0_1`'s
 //!   `length * length` geometry) alongside the package's internal `V0_0`
 //!   `page`-ADT call, in the SAME compiled program — this only
@@ -32,27 +31,20 @@
 //!   version's distinct `page-break` (mismatched arity/type would be a
 //!   `TypeError`, not a silent mis-render), so a successful render is
 //!   itself the coexistence proof.
-//! - [`negative_case_forked_type_on_boundary_is_still_rejected`] (X2a
-//!   negative, repurposed from X1): X2a removes only the VALUE half of the
-//!   forked-name guard; the TYPE half stays conservative — a `V0_0` package
-//!   that textually names a forked TYPE on an export-boundary surface site
-//!   (here, a `type` declaration's body — see `v1::xver_adapt`'s module doc
-//!   comment for why that site stays unconditionally checked even after
-//!   X2b's narrowing) is still rejected with
-//!   `CompileError::CrossVersionUnsupportedName`. X1's original negative test
-//!   used `page-break` (a forked VALUE) for this — that shape now SUCCEEDS
-//!   under X2a (see `xver_page_break_internal_renders` above), so this test
-//!   is repurposed to the type-half shape the guard still covers.
-//! - [`xver_internal_forked_type_ascription_renders`] (X2b headline,
-//! "Slice X2" §X2.3/X2.4):
-//!   the guard's TYPE half is narrowed to the export boundary only — a
-//!   `V0_0` package whose exported command (still the NEUTRAL
+//! - [`negative_case_forked_type_on_boundary_is_still_rejected`]:
+//!   only the VALUE half of the forked-name guard is relaxed above;
+//!   the TYPE half stays conservative — a `V0_0` package that textually
+//!   names a forked TYPE on an export-boundary surface site (here, a `type`
+//!   declaration's body — see `v1::xver_adapt`'s module doc comment for why
+//!   that site stays unconditionally checked even after the narrowing below) is
+//!   still rejected with `CompileError::CrossVersionUnsupportedName`.
+//! - [`xver_internal_forked_type_ascription_renders`]: the
+//!   guard's TYPE half is narrowed to the export boundary only — a `V0_0`
+//!   package whose exported command (still the NEUTRAL
 //!   `block-boxes -> document`) uses an INTERNAL, explicitly `page`-typed
-//!   local `let-rec` (`Expr::LetRecIn`'s own ascription — a shape the
-//!   pre-X2b guard rejected via `collect_free_globals`'s over-conservative
-//!   walk, even though the ascribed value never escapes the export) now
-//!   compiles and renders end-to-end, proving the walk correctly stopped
-//!   treating an internal ascription as export-boundary text.
+//!   local `let-rec` (`Expr::LetRecIn`'s own ascription, whose value never
+//!   escapes the export) compiles and renders end-to-end, proving the walk
+//!   does not treat an internal ascription as export-boundary text.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -155,7 +147,7 @@ impl FontMetrics for Mono {
 /// like the real `v01-mini.satyh`/`stdja-mini.satyh` fixtures do. Reached via
 /// `@import:` (a same-directory SIBLING of the entry), NOT `@require:` — so
 /// it is NOT a `@require:`-resolved corpus target and correctly keeps
-/// `opts.version` (`V0_1`) under the X1 Q4 per-file detection rule, even
+/// `opts.version` (`V0_1`) under the per-file detection rule, even
 /// though (like every 0.0.6-style `module … = struct … end` head) plain
 /// content sniffing alone would be ambiguous (`version.rs`'s own doc
 /// comment: a bare `module` head is deliberately not a signal).
@@ -163,7 +155,7 @@ const XVER_HELPER_SRC: &str =
     "module XverHelper = struct\n  val inline ctx \\math m = embed-math ctx (read-math ctx m)\nend\n";
 
 /// The positive-case V0_1 entry: `@require:`s the real vendored
-/// `list`/`option` (version-neutral, X1's target subset), `@import:`s the
+/// `list`/`option` (version-neutral), `@import:`s the
 /// local math-command helper above, and actually calls `List.map`/
 /// `List.fold-left`/`Option.from` — end-to-end use, not just a parse probe.
 fn positive_entry_src() -> String {
@@ -208,7 +200,7 @@ fn positive_case_list_and_option_render() {
     // The two REQUIRE'd corpus packages (list, option — option is also
     // pulled in transitively by list.satyg's own `@require: option`, so
     // both are deduplicated to ONE node each) must have been detected as
-    // `V0_0` (Q4's provenance rule), while the `@import:`-reached helper
+    // `V0_0` (the per-file detection rule's provenance check), while the `@import:`-reached helper
     // and the entry itself stay `V0_1`.
     let mut saw_v006 = 0;
     for f in &program.files[..program.files.len() - 1] {
@@ -262,20 +254,18 @@ fn positive_case_list_and_option_render() {
 }
 
 // ============================================================================
-// X2a: a V0_0 package that uses a version-forked primitive (`page-break`)
+// A V0_0 package that uses a version-forked primitive (`page-break`)
 // INTERNALLY, behind a neutral-typed (`block-boxes -> document`) export.
 // ============================================================================
 
-/// The `V0_0` package: two locally-defined `page-content-info`/
-/// `page-parts` closures plus one exported `make-doc`, all bare (unqualified
-/// — no `module .. = struct .. end` wrapper; `negative_case_forked_primitive_
-/// is_rejected` — X1's original version of this file — already established
-/// that a bare top-level `let` splices unqualified) top-level bindings.
-/// `page-break A4Paper …` is the `V0_0`-ONLY shape: `page-break`'s first
-/// argument is the `page` ADT (`A4Paper`/`UserDefinedPaper`) under `V0_0`,
-/// vs. a `length * length` tuple under `V0_1` (`page_prims.rs`'s
-/// `page_break_first_arg_is_page_adt_under_v006`/`_length_pair_under_v01`) —
-/// exactly the shape X1 hard-rejected and X2a now makes sound.
+/// The `V0_0` package: two locally-defined `page-content-info`/`page-parts`
+/// closures plus one exported `make-doc`, all bare top-level bindings (no
+/// `module .. = struct .. end` wrapper — a bare top-level `let` splices
+/// unqualified). `page-break A4Paper …` is the `V0_0`-ONLY shape:
+/// `page-break`'s first argument is the `page` ADT
+/// (`A4Paper`/`UserDefinedPaper`) under `V0_0`, vs. a `length * length`
+/// tuple under `V0_1` (`page_prims.rs`'s
+/// `page_break_first_arg_is_page_adt_under_v006`/`_length_pair_under_v01`).
 const XVER_PAGEBREAK_PKG_SRC: &str = "\
 @stage: persistent
 
@@ -286,11 +276,11 @@ let xver-parts pbinfo =
 let make-doc body = page-break A4Paper xver-content xver-parts body
 ";
 
-/// Build (and load) the shared X2a fixture tree: the `V0_0`
+/// Build (and load) the shared fixture tree: the `V0_0`
 /// `xver-pagebreak` package (above) at `dist/packages/`, the `V0_1`
-/// `xver-helper` math-command helper (reused from the X1 positive case,
-/// reached via `@import:` so it stays `V0_1` under the Q4 rule), and an
-/// entry whose body is `entry_tail` — so both X2a tests below share the same
+/// `xver-helper` math-command helper (reused from the earlier positive case,
+/// reached via `@import:` so it stays `V0_1` under that rule), and an
+/// entry whose body is `entry_tail` — so both tests below share the same
 /// scaffolding and differ only in what the entry does with `make-doc`.
 fn load_xver_pagebreak_fixture(tag: &str, entry_tail: &str) -> Vec<rustyfi_loader::LoadedFile> {
     let dir = TempDir::new(tag);
@@ -329,9 +319,9 @@ fn load_xver_pagebreak_fixture(tag: &str, entry_tail: &str) -> Vec<rustyfi_loade
     program.files
 }
 
-/// X2a headline (X2.6's `xver_page_break_internal_renders`): the case X1
-/// hard-rejected (`negative_case_forked_primitive_is_rejected` used to
-/// pin exactly this shape) now renders end-to-end.
+/// A `V0_0` dependency calling the version-forked
+/// `page-break` internally, behind a neutral-typed export, renders
+/// end-to-end.
 #[test]
 fn xver_page_break_internal_renders() {
     let files = load_xver_pagebreak_fixture("headline", "make-doc body");
@@ -358,12 +348,11 @@ fn xver_page_break_internal_renders() {
     );
 }
 
-/// X2a soundness core (X2.6's `xver_forked_prim_coexist`): the SAME `V0_0`
-/// dependency's internal `page-break A4Paper …` call, PLUS the `V0_1` entry
-/// ALSO calling `page-break` directly with `V0_1`'s `(length * length)`
-/// geometry — in the SAME compiled program. If both calls had resolved to
-/// the SAME `PrimDef` (the X1-era bug this whole slice fixes), one of the
-/// two shapes (`A4Paper` vs. a `(210mm, 297mm)` tuple) would be a
+/// The SAME `V0_0` dependency's internal `page-break
+/// A4Paper …` call, PLUS the `V0_1` entry ALSO calling `page-break` directly
+/// with `V0_1`'s `(length * length)` geometry — in the SAME compiled
+/// program. If both calls resolved to the SAME `PrimDef`, one of the two
+/// shapes (`A4Paper` vs. a `(210mm, 297mm)` tuple) would be a
 /// `TypeError` against the OTHER version's `page-break` signature
 /// (`page_prims.rs`'s `page_break_first_arg_is_page_adt_under_v006`/
 /// `_length_pair_under_v01` pin the two shapes are genuinely incompatible) —
@@ -407,10 +396,10 @@ fn xver_forked_prim_coexist() {
 }
 
 // ============================================================================
-// X2b (design-cross-version-import.md's "Slice X2" §X2.3/X2.4): the guard's
-// TYPE half narrows to the export boundary only — an INTERNAL forked-type
-// ascription (a local `let rec .. : ty = ..` nested inside another binding's
-// body) no longer trips `collect_free_globals`'s free-type scan.
+// The guard's TYPE half narrows to the export boundary only — an
+// INTERNAL forked-type ascription (a local `let rec .. : ty = ..` nested
+// inside another binding's body) does not trip `collect_free_globals`'s
+// free-type scan.
 // ============================================================================
 
 /// The `V0_0` package: same neutral-export shape as
@@ -418,13 +407,13 @@ fn xver_forked_prim_coexist() {
 /// time `page-break`'s first argument is produced by an INTERNAL, explicitly
 /// `page`-typed local `let rec` (`Expr::LetRecIn`'s own `: page` ascription)
 /// rather than a bare `A4Paper` literal — the ascription text is exactly the
-/// site `walk_rec_binding_body`'s `boundary` flag now suppresses when it is
-/// NOT a top-level `TopBinding::LetRec`. Before X2b, `collect_free_globals`
-/// walked this ascription unconditionally (`Expr::LetRecIn` shares
-/// `walk_rec_binding_body` with `TopBinding::LetRec`), so `free.types`
-/// contained `"page"` and the whole dependency was hard-rejected by
-/// `v1::xver_adapt::reject_type_names()` even though `get-page`'s `page`-ADT
-/// value never escapes `make-doc`'s own `block-boxes -> document` export.
+/// site `walk_rec_binding_body`'s `boundary` flag suppresses when it is NOT
+/// a top-level `TopBinding::LetRec`. `Expr::LetRecIn` shares
+/// `walk_rec_binding_body` with `TopBinding::LetRec`, so without that flag
+/// `free.types` contains `"page"` and the whole dependency is hard-rejected
+/// by `v1::xver_adapt::reject_type_names()` even though `get-page`'s
+/// `page`-ADT value never escapes `make-doc`'s own `block-boxes ->
+/// document` export.
 const XVER_INTERNAL_TYPED_PKG_SRC: &str = "\
 @stage: persistent
 
@@ -437,22 +426,18 @@ let make-doc body =
   page-break (get-page ()) xver-content xver-parts body
 ";
 
-/// X2b headline (`xver_internal_forked_type_ascription_renders`): the shape
-/// X1/X2a's over-conservative type-half guard rejected (an internal `: page`
-/// ascription, textually present but never boundary-observable) now compiles
-/// and renders end-to-end. Proves BOTH halves of the narrowing: (a) the
-/// pre-typecheck guard no longer rejects at the splice arm (a rejection
-/// would surface as `CompileError::CrossVersionUnsupportedName`, not
-/// whatever assertion below), and (b) the internal ascription's `: page`
-/// text is still MEANINGFUL to the version-scoped typechecker (X2a's
-/// `Ast::VersionScope(V0_0, _)` swaps in `base_type_env_with_version
-/// (V0_0)` for `make-doc`'s whole body, so `get-page`'s ascribed `page`
-/// type and `A4Paper`'s ctor both resolve under V0_0 — if the ascription
-/// were silently ignored rather than genuinely accepted-and-typechecked,
-/// a real ascription/value mismatch elsewhere would go undetected; this test
-/// only pins the success path, `xver_boundary_forked_type_page_rejected`
-/// below continues to pin that a TOP-LEVEL `page`-typed export still
-/// rejects).
+/// An internal `: page` ascription, textually present but
+/// never boundary-observable, compiles and renders end-to-end. Proves BOTH
+/// halves of the narrowing: (a) the pre-typecheck guard does not reject at
+/// the splice arm (a rejection would surface as
+/// `CompileError::CrossVersionUnsupportedName`, not whatever assertion
+/// below), and (b) the internal ascription's `: page` text is still
+/// MEANINGFUL to the version-scoped typechecker (the
+/// `Ast::VersionScope(V0_0, _)` swap swaps in `base_type_env_with_version(V0_0)`
+/// for `make-doc`'s whole body, so `get-page`'s ascribed `page` type and
+/// `A4Paper`'s ctor both resolve under V0_0). This test only pins the
+/// success path; `xver_boundary_forked_type_page_rejected` below pins that a
+/// TOP-LEVEL `page`-typed export still rejects.
 #[test]
 fn xver_internal_forked_type_ascription_renders() {
     let dir = TempDir::new("internal-typed-ascription");
@@ -508,24 +493,20 @@ make-doc body
 }
 
 // ============================================================================
-// X2a negative (repurposed from X1): the TYPE half of the forked-name guard
-// stays conservative — a V0_0 dependency that textually names a forked
-// TYPE is still rejected, even internally (not narrowed to "on the export
-// boundary only" — that's X2b/X3's job, design doc §X2.3/X2.4).
+// The TYPE half of the forked-name guard stays conservative —
+// a V0_0 dependency that textually names a forked TYPE is still rejected,
+// even internally (not narrowed to "on the export boundary only" here).
 // ============================================================================
 
-/// X1's original negative test pinned `page-break` (a forked VALUE) here;
-/// X2a repurposed it to a forked TYPE reference (`math`) — X3a now RELABELS
-/// `math` and accepts it (see `xver_export_math_relabels_and_renders`
-/// below), so this test is repointed to `page`: X3.1's note explains `page`
-/// never shows up in `typecheck::forked_type_names()`'s automatic diff (its
-/// bare NAME lowers identically under both versions) but its VALUE
-/// representation still forks (0.0.6: a 9-ctor ADT, `Value::Ctor`; 0.1: a
-/// `length*length` tuple, `Value::Product`) — `v1::xver_adapt::
-/// reject_type_names()` adds it explicitly, so a `V0_0` dependency naming
-/// it (even in a plain, unused `type` synonym) must still be rejected, now
-/// with `slice: "X3"` (the type-half check moved to `v1::xver_adapt`'s
-/// classification) — *before* any elaboration/typecheck/eval runs on the
+/// `page` is the forked type this pins, and `math` deliberately is not: the
+/// adapter RELABELS `math` and accepts it (`xver_export_math_relabels_and_renders`
+/// below). `page` never shows up in `typecheck::forked_type_names()`'s
+/// automatic diff — its bare NAME lowers identically under both versions —
+/// but its VALUE representation still forks (0.0.6: a 9-ctor ADT,
+/// `Value::Ctor`; 0.1: a `length*length` tuple, `Value::Product`), so
+/// `v1::xver_adapt::reject_type_names()` adds it explicitly. A `V0_0`
+/// dependency naming it (even in a plain, unused `type` synonym) is rejected
+/// with `slice: "X3"`, *before* any elaboration/typecheck/eval runs on the
 /// spliced dependency.
 #[test]
 fn negative_case_forked_type_on_boundary_is_still_rejected() {
@@ -565,10 +546,7 @@ fn negative_case_forked_type_on_boundary_is_still_rejected() {
 
 /// The SAME forked type, spelled as a top-level value ascription rather than
 /// a `type` declaration. Both are export-position text a consumer can see, so
-/// both must reject; the walk used to visit `LetRec`'s ascription and not
-/// plain `Let`'s, so `let x : page = ..` crossed the boundary silently while
-/// `type a = page` was refused -- a guard whose whole purpose is preventing a
-/// silent mis-render, decided by which way the package happened to spell it.
+/// both must reject.
 ///
 /// `page` is the sharpest case: 0.0.6 represents it as a 9-ctor ADT
 /// (`Value::Ctor`), 0.1 as a `length * length` tuple (`Value::Product`), so a
@@ -608,7 +586,7 @@ let xver-page : page = A4Paper
     }
 }
 
-/// The other half of that fix: walking ascriptions must not start rejecting
+/// The flip side of that guard: walking ascriptions must not reject
 /// the version-NEUTRAL ones. A `let x : int = ..` names nothing forked and has
 /// to keep crossing, or tightening the guard would break every 0.0.6 package
 /// that annotates an ordinary export.
@@ -648,20 +626,19 @@ let xver-count : int = 42
 }
 
 // ============================================================================
-// X3a ("Slice X3 — forked-type export adapter", X3.6's test plan): `math` is
-// the sole (a)-class forked type — representationally identical to `V0_1`'s
-// `math-text` (same shared `Value::MathText`/`Value::Math`, `types.rs`'s
-// `BaseType::MathText`) — so a `V0_0` export naming it now RELABELS instead
-// of rejecting. Everything else forked (`page`, and every opaque nominal —
-// `deco` included, X3a defers a real value adapter to X3b) still
-// hard-rejects.
+// The forked-type export adapter: `math` is the sole (a)-class forked
+// type — representationally identical to `V0_1`'s `math-text` (same shared
+// `Value::MathText`/`Value::Math`, `types.rs`'s `BaseType::MathText`) — so a
+// `V0_0` export naming it now RELABELS instead of rejecting. Everything else
+// forked (`page`, and every opaque nominal — `deco` included, this adapter
+// defers a real value adapter to the value-coercion pass below) still hard-rejects.
 // ============================================================================
 
 /// The `V0_0` package: a `type .. = .. of math` variant (the ONE surface
 /// site this port's typechecker actually consults for type text — see
 /// `v1::xver_adapt`'s module doc comment) wrapping/unwrapping a REAL math
 /// value built via `${1}` (embedded math syntax, `BaseType::MathText`).
-/// Without X3a's relabel, `XverMathWrap`'s ctor payload would register as
+/// Without this relabel, `XverMathWrap`'s ctor payload would register as
 /// the nominal `Variant("math",[])` under the merged program's `V0_1`
 /// whole-program `Checker` (`typecheck.rs`'s `name_to_mono("math", V0_1)`
 /// falls through to the unbound-nominal default — 0.1 has no `math` type at
@@ -682,14 +659,14 @@ let xver-unwrap-math w =
   | XverMathWrap(m) -> m
 ";
 
-/// X3.6's `xver_export_math_relabels_and_renders` (POSITIVE): the `V0_1`
-/// entry `@require:`s the package above, unwraps its `math`-typed export,
-/// and feeds the crossed value straight into `V0_1`'s own `read-math`/
-/// `embed-math` primitives (whose signatures expect `math-text` —
-/// `prim_types.rs`'s `t_math_text()`, the SAME `Base(MathText)` the crossed
-/// value already carries) — no further adaptation needed, proving the
-/// relabel is transparent: the whole-program merge type-checks AND the
-/// resulting inline boxes actually get placed onto a real page.
+/// The `V0_1` entry `@require:`s the package above, unwraps
+/// its `math`-typed export, and feeds the crossed value straight into
+/// `V0_1`'s own `read-math`/`embed-math` primitives (whose signatures expect
+/// `math-text` — `prim_types.rs`'s `t_math_text()`, the SAME
+/// `Base(MathText)` the crossed value already carries) — no further
+/// adaptation needed, proving the relabel is transparent: the whole-program
+/// merge type-checks AND the resulting inline boxes actually get placed onto
+/// a real page.
 #[test]
 fn xver_export_math_relabels_and_renders() {
     let dir = TempDir::new("math-export-positive");
@@ -743,12 +720,11 @@ page-break (210mm, 297mm) content parts body
     );
 }
 
-/// X3.6's `xver_boundary_forked_type_page_rejected` (NEGATIVE): a `V0_0`
-/// dependency actually EXPORTING (not just naming, unused) a `page`-typed
-/// value still fails loudly at compile time, never reaching eval — `page`'s
-/// runtime representation (a 9-ctor ADT, `Value::Ctor`) has no `V0_1`
-/// counterpart (a `length*length` tuple, `Value::Product`), so relabeling
-/// would be unsound (X3.8/S1).
+/// A `V0_0` dependency actually EXPORTING (not just
+/// naming, unused) a `page`-typed value still fails loudly at compile time,
+/// never reaching eval — `page`'s runtime representation (a 9-ctor ADT,
+/// `Value::Ctor`) has no `V0_1` counterpart (a `length*length` tuple,
+/// `Value::Product`), so relabeling would be unsound.
 #[test]
 fn xver_boundary_forked_type_page_rejected() {
     let dir = TempDir::new("page-export-negative");
@@ -783,17 +759,16 @@ fn xver_boundary_forked_type_page_rejected() {
     }
 }
 
-/// X3.6's `xver_boundary_deco_export_coerces_and_renders` (POSITIVE, X3b —
-/// repurposed from the X3a-era `xver_boundary_deco_export_rejected`): the
-/// `V0_0` package below has TWO independent `deco`-touching bindings:
+/// The `V0_0` package below has TWO independent
+/// `deco`-touching bindings:
 ///
-/// - `xver-deco-alias`, a bare `type .. = deco` synonym — the ORIGINAL X3a
-///   fixture, which needs no value-level coercion at all (X3b's module doc
-///   comment: `deco`'s bare NAME already means the right thing under `V0_1`
-///   once accepted — no relabel, unlike `math`);
+/// - `xver-deco-alias`, a bare `type .. = deco` synonym, which needs no
+///   value-level coercion at all (see `v1::xver_adapt`'s module doc comment: `deco`'s bare
+///   NAME already means the right thing under `V0_1` once accepted — no
+///   relabel, unlike `math`);
 /// - `xver-frame-deco`, a REAL top-level `let-rec .. : deco | (x, y) w h d =
 ///   ..` export whose body returns a `graphics list` (0.0.6 semantics) — the
-///   genuinely value-coerced case: X3b splices a second, un-scoped binding of
+///   genuinely value-coerced case: the adapter splices a second, un-scoped binding of
 ///   the SAME name that unites that list into a single `graphics` via the
 ///   real `V0_1` `unite-graphics` primitive.
 ///
@@ -879,11 +854,10 @@ page-break (210mm, 297mm) content parts body
     );
 }
 
-/// X3b, extended: the shape the REAL 0.0.6 corpus uses — a `deco` export that
+/// The shape the REAL 0.0.6 corpus uses — a `deco` export that
 /// is both ARROW-TAILED (`length -> deco`) and MODULE-SCOPED (inside `module
 /// .. : sig .. end`). `deco.satyh`, which every `std-ja` document reaches, is
-/// exactly this (`val simple-frame : length -> color -> color -> deco`), and
-/// both properties were originally outside X3b's scope.
+/// exactly this (`val simple-frame : length -> color -> color -> deco`).
 ///
 /// The module case cannot reuse the top-level mechanism: a member is named
 /// `XverDeco.frame` and there is no `let XverDeco.frame` to write, so the
@@ -962,8 +936,7 @@ page-break (210mm, 297mm) content parts body
 }
 
 /// An OPTIONAL-argument arrow in the `deco` export's type (`length ?-> length
-/// -> deco`) — the shape a real 0.0.6 package is most likely to declare, and
-/// the one X3b used to reject outright.
+/// -> deco`) — the shape a real 0.0.6 package is most likely to declare.
 ///
 /// It crosses by POSITIONAL forwarding, which is exact rather than a
 /// concession: this port lowers each `ty ?->` domain to a mandatory `option ty
@@ -1066,14 +1039,14 @@ page-break (210mm, 297mm) content parts body
     );
 }
 
-/// X3.6's `xver_boundary_mathboxes_not_aliased` (NEGATIVE/soundness, S2): a
-/// `V0_0` export whose crossed value is `math` (relabeled to
-/// `math-text`) must NOT satisfy a `V0_1` `math-boxes` site — `math-boxes`
-/// is `V0_1`-only (the EVALUATED math tree, `BaseType::MathBoxes`,
-/// value.rs:57, deliberately distinct from `BaseType::MathText`) and no
-/// `V0_0` value is ever shaped that way. Passing the crossed (still
-/// `math-text`) value directly to `embed-math`, which expects `math-boxes`
-/// under `V0_1`, must be a compile-time `TypeError`.
+/// A `V0_0` export whose crossed value is
+/// `math` (relabeled to `math-text`) must NOT satisfy a `V0_1` `math-boxes`
+/// site — `math-boxes` is `V0_1`-only (the EVALUATED math tree,
+/// `BaseType::MathBoxes`, value.rs:57, deliberately distinct from
+/// `BaseType::MathText`) and no `V0_0` value is ever shaped that way.
+/// Passing the crossed (still `math-text`) value directly to `embed-math`,
+/// which expects `math-boxes` under `V0_1`, must be a compile-time
+/// `TypeError`.
 #[test]
 fn xver_boundary_mathboxes_not_aliased() {
     let dir = TempDir::new("mathboxes-not-aliased");
@@ -1109,7 +1082,7 @@ let bad = embed-math ctx m in
     // module reference itself turns out to error first, the assertion below
     // still holds the real invariant: `compile_document_v1` must reject
     // this program somehow, and if it's a type error, the mismatch below is
-    // the exact one X3a's soundness guarantees.
+    // the exact one this soundness guarantee covers.
     let program = rustyfi_loader::load(&dir.path().join("entry.saty"), &opts).unwrap_or_else(|e| {
         panic!("loading the mathboxes-not-aliased fixture should succeed: {e}")
     });
@@ -1127,7 +1100,7 @@ let bad = embed-math ctx m in
     );
 }
 
-/// X3b positive (`deco-set`, the tuple-of-4 sibling of
+/// The `deco-set` positive case (the tuple-of-4 sibling of
 /// `xver_boundary_deco_export_coerces_and_renders`): a `V0_0` package
 /// exports a bare `: deco-set` value via the mandatory `| ()` idiom
 /// (`elaborate.rs` requires a `let-rec`'s RHS to be a function, so a plain
@@ -1220,16 +1193,15 @@ page-break (210mm, 297mm) content parts body
     );
 }
 
-/// X3b, nested-module increment: a `deco` export that sits one module
+/// A `deco` export that sits one module
 /// DEEPER than `xver_boundary_deco_export_module_scoped_curried_coerces_and_
 /// renders`'s — `module XverOuter = struct module XverInner : sig val frame
 /// : length -> deco end = struct .. end end`, reached as
 /// `XverOuter.XverInner.frame`.
 ///
-/// This used to be a hard rejection: `classify_deco_exports`'s module arm
-/// walked its own `decls` with a reject-only helper
-/// (`reject_if_nested_value_mentions_deco`), so a `deco` one level down
-/// failed the whole dependency. It now RECURSES — the classifier is the same
+/// A `deco` one level down would fail the whole dependency if
+/// `classify_deco_exports`'s module arm walked its own `decls` with a
+/// reject-only helper. It RECURSES instead — the classifier is the same
 /// one the top level uses, just under a longer `DecoExport::module_path`,
 /// which `inject_module_deco_wrappers` already knew how to match. The
 /// `GraphicsElem::Group` in the FIRED page graphics is the coercion proof, as
@@ -1306,11 +1278,10 @@ page-break (210mm, 297mm) content parts body
     );
 }
 
-/// X3b, the other half of the nested-module increment: a `deco` export
+/// The other half of the nested-module case above: a `deco` export
 /// carried by a struct member's OWN `let-rec .. : deco` ascription inside a
-/// module with NO `sig` at all. `classify_deco_exports` used to see this
-/// only through the reject-only `decls` walk; it now classifies it exactly
-/// as a sig-declared member, under the enclosing module's path.
+/// module with NO `sig` at all. `classify_deco_exports` classifies it
+/// exactly as a sig-declared member, under the enclosing module's path.
 #[test]
 fn xver_boundary_deco_export_sigless_module_ascription_coerces_and_renders() {
     let dir = TempDir::new("deco-export-sigless-module");
@@ -1377,23 +1348,20 @@ page-break (210mm, 297mm) content parts body
 }
 
 // ============================================================================
-// Corpus audit: two shapes every SYNTHETIC fixture above happens not to have,
-// which is why neither bug was visible here. Every hand-written 0.0.6 package
-// in this file is a SINGLE file and none of them declares a `let-math` — both
-// are the norm in the real published Satyrographos corpus.
+// Two shapes every SYNTHETIC fixture above happens not to have: every
+// hand-written 0.0.6 package in this file is a SINGLE file and none of them
+// declares a `let-math` — both are the norm in the real published
+// Satyrographos corpus.
 // ============================================================================
 
 /// A 0.0.6 package's OWN `@import:`ed sibling is 0.0.6 too.
 ///
 /// `@import:` is a same-package, path-relative include — it cannot name
-/// another package, let alone another generation. The per-file version rule
-/// only ever downgraded `@require:` targets, though, so under a `V0_1` load
-/// every intra-package `@import:` fell through to `opts.version` and was
-/// parsed with the 0.1 grammar. Multi-file packages are the NORM in the
+/// another package, let alone another generation, so an intra-package
+/// `@import:` inherits the IMPORTING file's own version rather than falling
+/// through to `opts.version`. Multi-file packages are the NORM in the
 /// published corpus (`azmath`, `base`, `easytable`, `arrows`, `derive`,
-/// `lipsum`, `railway`, `enumitem`, `fss`, `code-printer`, `algorithm`, …),
-/// so this took out most of it, with a parse error on the imported file's own
-/// `module M : sig` head.
+/// `lipsum`, `railway`, `enumitem`, `fss`, `code-printer`, `algorithm`, …).
 ///
 /// The imported sibling here is written in syntax the 0.1 grammar cannot
 /// parse (`module M : sig .. end = struct .. end`, plus a `let-rec` clause
@@ -1468,14 +1436,12 @@ fn a_v006_package_s_own_import_sibling_is_also_v006() {
 /// A spliced 0.0.6 package's `let-math` is scheme-checked by 0.0.6's RULE.
 ///
 /// A merged cross-version program has one `Checker::version`, hard-coded to
-/// `V0_1`, and the `Ast::LetMathIn` scheme rule used to fork on it — so every
-/// `let-math` inside a crossed 0.0.6 package was read as a 0.1 `val math` and
-/// refused for not having the three synthesized trailing `ctx`/`sub`/`sup`
-/// lambdas 0.1's lowering adds. The corpus's own `math.satyh` is a `let-math`
-/// file and published packages `@require:` it constantly, so a great many of
-/// them failed on a math-split diagnostic about a file the user never wrote.
+/// `V0_1`, but the `Ast::LetMathIn` scheme rule does not fork on it:
 /// `Checker::binding_version` asks the BINDING (its
-/// `Ast::VersionScope(V0_0, _)` wrapper) instead of the session.
+/// `Ast::VersionScope(V0_0, _)` wrapper) instead of the session, so a spliced
+/// 0.0.6 package's `let-math` is scheme-checked by 0.0.6's rule rather than
+/// being read as a 0.1 `val math` requiring the three synthesized trailing
+/// `ctx`/`sub`/`sup` lambdas 0.1's lowering adds.
 ///
 /// `\xver-lm` is zero-arity, the shape that isolates the rule cleanly: 0.0.6
 /// peels no domains and only wants the result to be math-text, while 0.1's
@@ -1525,23 +1491,22 @@ fn a_v006_dependency_s_let_math_uses_the_v006_scheme_rule() {
 /// A 0.0.6 package's own INTERNAL graphics callbacks keep 0.0.6's result
 /// shape — `graphics list`, not one `graphics` collection.
 ///
-/// This is the third corpus-audit shape, and the one furthest from anything
-/// the fixtures above test. `xver_boundary_deco_export_coerces_and_renders`
+/// This is the shape furthest from anything the fixtures above test.
+/// `xver_boundary_deco_export_coerces_and_renders`
 /// is about a `deco` that CROSSES: it appears in the package's export type,
-/// X3b classifies it, and a `unite-graphics` wrapper is generated. Here
+/// the classifier picks it up, and a `unite-graphics` wrapper is generated. Here
 /// nothing crosses at all. The package's exports are
 /// `context -> inline-text -> inline-boxes` and `unit -> inline-boxes` —
 /// version-neutral types with no forked name anywhere — and the 0.0.6 deco
 /// / graphics callbacks are strictly internal, handed straight to
 /// `inline-frame-outer` and `inline-graphics` by the package itself.
 ///
-/// That used to fail at EVAL time with "expected graphics, got list", from
-/// inside a package the user never wrote, because the callback-result decode
-/// (`coerce_graphics_result`) asked `interp.version` — one whole-program
-/// field naming the ENTRY's generation. The six H1/H2/R2/H3-H6 primitives
-/// are now registered per version (`primitives::version_forked_prims!`), so
+/// The callback-result decode (`coerce_graphics_result`) does not ask
+/// `interp.version` — the one whole-program field naming the ENTRY's
+/// generation — but resolves per call site: the six carrier primitives
+/// are registered per version (`primitives::version_forked_prims!`), so
 /// `compile.rs`'s `Ast::VersionScope` fold picks the row matching the code
-/// that WROTE the call, and the two deferred consumers carry the capture
+/// that WROTE the call, and the two deferred consumers carry their capture
 /// generation with them (`DecoEntry::version`, `Interp::outer_graphics`).
 ///
 /// It is the plain-`uline`/`enumitem`/`figbox` shape: a 0.0.6 package that
@@ -1611,7 +1576,7 @@ fn a_v006_dependency_s_internal_graphics_callbacks_keep_v006_shape() {
 
     assert_eq!(doc.pages.len(), 1, "one A4 page");
     // The deco actually FIRED, and its list decoded element-by-element —
-    // a bare `Fill`, NOT the `Group` an X3b `unite-graphics` wrap would
+    // a bare `Fill`, NOT the `Group` a `unite-graphics` wrap would
     // leave. Nothing crossed the export boundary here, so nothing should
     // have been wrapped.
     assert!(
@@ -1632,13 +1597,11 @@ fn a_v006_dependency_s_internal_graphics_callbacks_keep_v006_shape() {
 /// TOP-LEVEL binding's RHS; a nested `let-math \c = e in body`
 /// (`elaborate.rs`'s `Expr::LetMathIn` arm) is a node inside some other
 /// binding's already-wrapped RHS and carries no `Ast::VersionScope` of its
-/// own, so the peel finds nothing and the session's hard-coded `V0_1` used
-/// to answer.
+/// own, so the peel alone finds nothing and the session's hard-coded `V0_1`
+/// would answer instead.
 ///
 /// `siunitx` writes exactly this — `let-math \C = ord \`C\` in
-/// ${\math-sup{}{\circ}\C}`, one line inside `\celsius` — and failed on it
-/// with a math-split complaint about `'\C'`, a command name that appears
-/// nowhere in the user's document.
+/// ${\math-sup{}{\circ}\C}`, one line inside `\celsius`.
 #[test]
 fn an_expression_level_let_math_in_a_v006_dependency_uses_the_v006_rule() {
     let dir = TempDir::new("nested-let-math");
@@ -1684,16 +1647,16 @@ fn an_expression_level_let_math_in_a_v006_dependency_uses_the_v006_rule() {
     assert_eq!(doc.pages.len(), 1, "one A4 page");
 }
 
-/// Slice X3c: a 0.0.6 package that consumes ANOTHER 0.0.6 package's crossed
+/// A 0.0.6 package that consumes ANOTHER 0.0.6 package's crossed
 /// `deco` must still read it at 0.0.6's `graphics list` shape.
 ///
-/// X3b installs the 0.1-shaped view by SHADOWING the export's own name, and
+/// The forward deco wrapper installs the 0.1-shaped view by SHADOWING the export's own name, and
 /// the merged prelude is one flat `Ast::LetIn` chain — `Ast::VersionScope(V0_0,
-/// _)` wraps a binding's RHS, never the continuation after it — so that shadow
-/// used to be visible to everything that followed, including a 0.0.6-authored
-/// consumer whose own `inline-frame-outer` is typed `t_deco(V0_0)` inside its
-/// version scope. The result was ``expected `graphics list`, found `graphics` ``
-/// from a document that named neither package.
+/// _)` wraps a binding's RHS, never the continuation after it — so a shadow
+/// like that would be visible to everything that follows it, including a
+/// 0.0.6-authored consumer whose own `inline-frame-outer` is typed
+/// `t_deco(V0_0)` inside its version scope — which is exactly what this test
+/// guards against.
 ///
 /// No hand-written fixture could see this: every one of them is a SINGLE
 /// package consumed by the 0.1 entry, and the entry is exactly the consumer
@@ -1789,9 +1752,9 @@ page-break (210mm, 297mm) content parts body
     );
 }
 
-/// Slice X3c, the shape that motivated it: `math.satyh` declares `val
+/// The shape that motivated the mechanism above: `math.satyh` declares `val
 /// paren-right : paren` and `latexcmds` — a SECOND 0.0.6 package — applies it
-/// with 0.0.6's five arguments (`hgt dpt hgtaxis fontsize color`). X3b's
+/// with 0.0.6's five arguments (`hgt dpt hgtaxis fontsize color`). The forward
 /// wrapper had already replaced it with 0.1's three-argument (`hgt dpt ctx`)
 /// projection for everyone, so the call failed with an unlocated ``type
 /// mismatch: expected `length`, found `context` ``.
@@ -1882,10 +1845,9 @@ page-break (210mm, 297mm) content parts body
     );
 }
 
-/// Slice X3d: a 0.1 document CALLING a 0.0.6-defined math command.
+/// A 0.1 document CALLING a 0.0.6-defined math command.
 ///
-/// `@require:`-ing such a package always worked; invoking one did not, because
-/// the two generations' math-command calling conventions differ and the
+/// The two generations' math-command calling conventions differ, and the
 /// difference is invisible to the type system (`math` relabels to `math-text`
 /// and the whole program type-checks):
 ///
@@ -1894,9 +1856,6 @@ page-break (210mm, 297mm) content parts body
 ///          subscript or a superscript;
 ///   0.1    `\cmd a1 .. an ctx sub sup` -> `math-boxes`, with `sub`/`sup :
 ///          math-text option`, so a command can typeset its own scripts.
-///
-/// `${\kilo\gram}` against `siunitx` therefore died with `cannot apply a value
-/// of type math as a function`, from a document naming no 0.0.6 file.
 ///
 /// The fixture covers all three shapes that matter: a zero-argument command, a
 /// one-argument one, and a SCRIPTED occurrence — the last is the one that

@@ -1,20 +1,15 @@
-//! Solver tests (design §6 Slice B) over a plain in-memory [`Graph`]
-//! `DepSource` — no filesystem, no registry. Cases mirror the shapes
-//! upstream's `saphe-split:test/saphe/packageConstraintSolverTest.ml`
-//! exercises (that file is not vendored into this port; these are
-//! equivalent constructions per the shapes named in): a linear chain, a
-//! diamond that shares a common compatible version, a diamond that forces
-//! the solver to backtrack off its first (higher, conflicting) candidate,
-//! a genuine compat-bucket conflict, a reference to an unknown package,
-//! and a highest-version preference check.
+//! Solver tests (Slice B) over a plain in-memory [`Graph`] `DepSource` — no
+//! filesystem, no registry. Cases mirror the shapes upstream's
+//! `saphe-split:test/saphe/packageConstraintSolverTest.ml` exercises (that
+//! file is not vendored into this port; these are equivalent constructions of
+//! the same shapes): a linear chain, a diamond that shares a common
+//! compatible version, a diamond that forces the solver to backtrack off its
+//! first (higher, conflicting) candidate, a genuine compat-bucket conflict, a
+//! reference to an unknown package, and a highest-version preference check.
 
 use std::collections::HashMap;
 
 use rustyfi_satyrographos::{solve, Constraint, DepSource, Error, Version};
-
-// ---------------------------------------------------------------------------
-// In-memory dependency graph fixture.
-// ---------------------------------------------------------------------------
 
 struct Graph {
     packages: HashMap<String, Vec<(Version, Vec<(String, Constraint)>)>>,
@@ -82,10 +77,6 @@ fn v(s: &str) -> Version {
     Version::parse(s).unwrap()
 }
 
-// ---------------------------------------------------------------------------
-// Satisfiable graphs.
-// ---------------------------------------------------------------------------
-
 #[test]
 fn linear_chain_resolves() {
     let g = Graph::new()
@@ -102,7 +93,6 @@ fn linear_chain_resolves() {
 
 #[test]
 fn diamond_shares_common_compatible_version_and_prefers_highest() {
-    // a -> b, c ; b -> d ^1.0.0 ; c -> d ^1.0.0 ; d has 1.0.0 and 1.1.0.
     let g = Graph::new()
         .pkg("a", vec![("1.0.0", vec![("b", "^1.0.0"), ("c", "^1.0.0")])])
         .pkg("b", vec![("1.0.0", vec![("d", "^1.0.0")])])
@@ -115,12 +105,8 @@ fn diamond_shares_common_compatible_version_and_prefers_highest() {
 
 #[test]
 fn diamond_backtracks_off_a_conflicting_high_candidate() {
-    // root -> a (any), b (any).
-    // b has one version, forcing d to 1.0.0.
-    // a has two versions: 2.0.0 (needs d ^2.0.0 -- conflicts with the
-    // already-resolved d 1.0.0) and 1.0.0 (needs d ^1.0.0 -- fine). The
-    // highest-first candidate order means the solver must try (and reject)
-    // a@2.0.0 before backtracking to a@1.0.0.
+    // The highest-first candidate order means the solver must try (and
+    // reject) a@2.0.0 before backtracking to a@1.0.0.
     let g = Graph::new()
         .pkg(
             "a",
@@ -148,14 +134,8 @@ fn prefers_highest_compatible_version() {
     assert_eq!(sol.packages.get("a"), Some(&v("1.2.0")));
 }
 
-// ---------------------------------------------------------------------------
-// Unsatisfiable / conflicting graphs.
-// ---------------------------------------------------------------------------
-
 #[test]
 fn bucket_conflict_is_unsatisfiable() {
-    // a -> d ^1.0.0 ; b -> d ^2.0.0 : disjoint compat buckets, never
-    // satisfiable by any single version of d.
     let g = Graph::new()
         .pkg("a", vec![("1.0.0", vec![("d", "^1.0.0")])])
         .pkg("b", vec![("1.0.0", vec![("d", "^2.0.0")])])
@@ -182,10 +162,6 @@ fn zero_major_minor_lock_is_also_a_bucket_conflict() {
 
 #[test]
 fn same_bucket_but_no_published_version_covers_both_is_unsatisfiable_not_conflict() {
-    // Both requirements pin the SAME bucket (major 1), but no single
-    // published version satisfies both: a wants >=1.0.0 (fine with 1.5.0),
-    // b wants exactly 1.9.0 (not published). This is "nothing fits", not a
-    // bucket clash, so it must come back as Unsatisfiable.
     let g = Graph::new()
         .pkg("a", vec![("1.0.0", vec![("d", "^1.5.0")])])
         .pkg("b", vec![("1.0.0", vec![("d", "1.9.0")])])

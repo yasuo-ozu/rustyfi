@@ -1,9 +1,9 @@
 //! Error type for the package manager, styled after
-//! [`rustyfi_loader::LoadError`]: a `thiserror` enum with one specific
+//! `rustyfi_loader::LoadError`: a `thiserror` enum with one specific
 //! variant per failure mode, each carrying enough context to reconstruct
 //! what went wrong (which path, which package). The CLI layer
-//! (`rustyfi`) maps these variants to the exit codes in the plan's §4
-//! surface spec (`0` ok, `2` filter, `3` root, `4` receipt, `5` fs/io) —
+//! (`rustyfi`) maps these variants to exit codes
+//! (`0` ok, `2` filter, `3` root, `4` receipt, `5` fs/io) —
 //! the exit-code policy stays out of this clap-free crate.
 
 use std::path::PathBuf;
@@ -12,8 +12,7 @@ use std::path::PathBuf;
 /// inspecting packages.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    /// A filesystem read/write/rename failed. `path` is the path being
-    /// operated on when the underlying `io::Error` surfaced.
+    /// A filesystem read/write/rename failed.
     #[error("{path}: {source}")]
     Io {
         path: PathBuf,
@@ -55,11 +54,9 @@ pub enum Error {
     #[error("Satyristes declares multiple doc targets (`{names}`); select one with --doc NAME")]
     AmbiguousDoc { names: String },
 
-    /// `--doc` named nothing that exists.
     #[error("source declares doc target(s) `{declared}`, none of which is in the requested --doc set")]
     DocFilter { declared: String },
 
-    /// A `rustyfi-package.toml` manifest failed to parse.
     #[error("{path}: invalid rustyfi-package.toml: {source}")]
     Manifest {
         path: PathBuf,
@@ -67,7 +64,6 @@ pub enum Error {
         source: toml::de::Error,
     },
 
-    /// A receipt file failed to parse.
     #[error("{path}: invalid receipt: {source}")]
     Receipt {
         path: PathBuf,
@@ -87,7 +83,7 @@ pub enum Error {
 
     /// A destination path already exists on disk but is not covered by any
     /// receipt — refusing to clobber files this tool did not place (exit
-    /// `5`; mirrors upstream's managed-directory refusal, plan §2/§6).
+    /// `5`; mirrors upstream's managed-directory refusal).
     #[error(
         "destination `{}` already exists and is not managed by satyrographos; \
          remove it first (no receipt claims it)",
@@ -112,18 +108,13 @@ pub enum Error {
     HashKeyConflict { path: PathBuf, keys: String },
 
     /// An archive entry's path escaped the extraction/staging root
-    /// ("zip-slip"); refused before anything was written (exit `5`, plan
-    /// §6/§10).
+    /// ("zip-slip"); refused before anything was written (exit `5`).
     #[error("unsafe path in archive escapes the extraction root: {}", .entry.display())]
     PathTraversal { entry: PathBuf },
 
-    /// The install source is neither a directory nor a recognised
-    /// `.tar.gz`/`.tgz` archive.
     #[error("install source `{}` is neither a directory nor a .tar.gz/.tgz archive", .path.display())]
     UnknownSource { path: PathBuf },
 
-    /// The source has no `rustyfi-package.toml` and no `packages/`
-    /// subdirectory to fall back on — nothing installable.
     #[error(
         "no installable package found under `{}`: no rustyfi-package.toml manifest \
          and no packages/ directory",
@@ -136,23 +127,23 @@ pub enum Error {
     Archive(String),
 
     /// A `[[files]]` declaration of a non-`*-dir` kind omitted its required
-    /// `dst` field (plan §5.1).
+    /// `dst` field.
     #[error("[[files]] declaration of kind `{kind}` requires a `dst` field")]
     MissingDst { kind: &'static str },
 
     /// A `-l`/`--library NAME` filter was given but the source's declared
-    /// package name is not in the requested set (exit `2`, plan §4.1).
+    /// package name is not in the requested set (exit `2`).
     #[error("source declares package(s) `{declared}`, none of which is in the requested --library set")]
     LibraryFilter { declared: String },
 
-    /// A `Satyristes` file (phase 4, plan §5.5) failed to tokenize/read or
+    /// A `Satyristes` file (phase 4) failed to tokenize/read or
     /// carried a form this port does not understand. `message` already
     /// includes a `line:col:` prefix for reader-level failures.
     #[error("{path}: invalid Satyristes: {message}")]
     Satyristes { path: PathBuf, message: String },
 
     /// An install source carries *both* a `rustyfi-package.toml` and a
-    /// `Satyristes` file. The plan (§5.5) names no precedence between them,
+    /// `Satyristes` file. The plan names no precedence between them,
     /// so this port refuses the ambiguity rather than silently picking one.
     #[error(
         "source `{}` has both a rustyfi-package.toml and a Satyristes file; \
@@ -163,14 +154,13 @@ pub enum Error {
 
     /// A `Satyristes` declares several `(library ...)` blocks and the
     /// `-l`/`--library` filter did not narrow the selection to exactly one
-    /// (plan §4.1: one library materialised per install).
+    /// (one library materialised per install).
     #[error(
         "Satyristes declares multiple libraries (`{names}`); \
          select exactly one with -l/--library NAME"
     )]
     AmbiguousLibrary { names: String },
 
-    /// A `config.toml` failed to parse.
     #[error("{path}: invalid config: {source}")]
     Config {
         path: PathBuf,
@@ -187,7 +177,6 @@ pub enum Error {
         source: toml::de::Error,
     },
 
-    /// A `Satyristes.lock` lockfile failed to parse.
     #[error("{path}: invalid Satyristes.lock: {source}")]
     Lockfile {
         path: PathBuf,
@@ -203,11 +192,11 @@ pub enum Error {
     /// A dependency's source named none of `path`, `git`,
     /// or `registry` — nothing to materialise (`{{ path = … }}`, `{{ git = …
     /// }}`, and `{{ registry = … }}` are all supported as of saphe 7d
-    /// slice S3, plan §5.4).
+    /// slice S3).
     #[error("unsupported dependency source: {kind}")]
     UnsupportedSource { kind: String },
 
-    // --- Phase 3: registry (plan §5.4) --------------------------------------
+    // --- Phase 3: registry --------------------------------------------------
     /// No registry URL could be resolved from `--registry`, `$RUSTYFI_REGISTRY`,
     /// or a `Satyristes` `(registry (url …))` (exit `3` — nothing to consult).
     #[error(
@@ -235,7 +224,7 @@ pub enum Error {
     VersionNotFound { name: String, version: String },
 
     /// A downloaded tarball's SHA-256 did not match the index entry; nothing
-    /// under `dist/` was touched (exit `5`, plan §5.4 step 3).
+    /// under `dist/` was touched (exit `5`).
     #[error("checksum mismatch: expected sha256 {expected}, got {actual} (nothing installed)")]
     ChecksumMismatch { expected: String, actual: String },
 
@@ -251,7 +240,7 @@ pub enum Error {
     #[error("failed to fetch `{url}`: {message}")]
     HttpFailed { url: String, message: String },
 
-    // --- Phase 7d slice S2: archive cache + offline (plan §2.5/§2.6) --------
+    // --- Phase 7d slice S2: archive cache + offline -------------------------
     /// `--offline`/`$RUSTYFI_OFFLINE` is set and materialising this pin would
     /// require a network request (the registry index, or `url`'s archive, is
     /// not already cached). No request was attempted (exit `5`).
@@ -260,7 +249,7 @@ pub enum Error {
     )]
     Offline { url: String },
 
-    // --- Solver (plan §7c, `version.rs`/`solve.rs`) -------------------------
+    // --- Solver (phase 7c, `version.rs`/`solve.rs`) -------------------------
     /// A version or constraint string did not parse (`version.rs`): not
     /// `major.minor.patch[-pre]`, or (for a constraint) not `*`, an exact
     /// triple, or a `^`-prefixed caret requirement.
@@ -290,8 +279,6 @@ pub enum Error {
 }
 
 impl Error {
-    /// Convenience for wrapping an [`std::io::Error`] with the path that
-    /// caused it.
     pub(crate) fn io(path: impl Into<PathBuf>, source: std::io::Error) -> Self {
         Error::Io {
             path: path.into(),

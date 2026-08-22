@@ -1,30 +1,28 @@
 //! Corpus typecheck coverage, as ordinary integration tests.
 //!
-//! Every input this crate expects to typecheck is listed explicitly below, with
-//! its source embedded via `include_str!`, and asserted directly. There is no
-//! snapshot file: the expectation for each case is written next to the case.
+//! Every input this crate expects to typecheck is listed explicitly below,
+//! with its source embedded via `include_str!`, and asserted directly — no
+//! snapshot file.
 //!
 //! Two families:
 //!
-//! - [`DOCUMENTS`] — entry documents. The embedded source is materialized BESIDE
-//!   the fixture it came from, so a relative `@import:` resolves exactly as it
-//!   does for the original, then loaded, elaborated and `typecheck_verbose`d.
+//! - [`DOCUMENTS`] — entry documents. The embedded source is materialized
+//!   BESIDE the fixture it came from, so a relative `@import:` resolves
+//!   exactly as it does for the original, then loaded, elaborated and
+//!   `typecheck_verbose`d.
 //! - [`PACKAGES`] — the bundled packages under `lib-rustyfi/dist*/packages/`,
-//!   each probed the way a document reaches it: a synthetic `@require: <pkg> in
-//!   ()` entry, which is the string literal in `probe_src`.
+//!   each probed the way a document reaches it: a synthetic `@require: <pkg>
+//!   in ()` entry (`probe_src`).
 //!
-//! Each case pins two things: that the input typechecks with NO warnings, and
-//! WHICH generation the loader resolved it as. The second matters because a
-//! file silently switching generation — say `@require:` resolution changing
-//! which corpus a name comes from — is a real regression that leaves the
-//! verdict alone.
+//! Each case pins two things: that the input typechecks with NO warnings,
+//! and WHICH generation the loader resolved it as — a file silently
+//! switching generation (e.g. `@require:` resolving to a different corpus)
+//! is a real regression that leaves the verdict alone.
 //!
-//! What this does NOT cover, stated plainly so it is not mistaken for more than
-//! it is: every case here SUCCEEDS, so no error message text is exercised.
-//! Negative typecheck coverage lives in the unit suites (`types_unify.rs`,
-//! `typecheck.rs`'s own tests, and the `expect_err` cases scattered through the
-//! integration tests). Inputs that cannot typecheck at all are recorded in
-//! `typecheck_known_gaps.rs` with the reason.
+//! Every case here SUCCEEDS, so no error message text is exercised;
+//! negative typecheck coverage lives in the unit suites. Inputs that
+//! cannot typecheck at all are recorded in `typecheck_known_gaps.rs` with
+//! the reason.
 
 use rustyfi_lang::{elaborate, primitives, typecheck, v1};
 use rustyfi_loader::{LoadOptions, LoadedCst, LoadedFile, LoadedProgram};
@@ -33,11 +31,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-/// Inputs asserted in `typecheck_known_gaps.rs` instead of here. Keep the two
-
-/// This repo's root, resolved relative to this crate's own manifest
-/// directory (`crates/rustyfi-lang`) — same convention as
-/// `stdlib_tier0.rs`'s `lib_root`.
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
@@ -80,9 +73,8 @@ fn as_v006(cst: &LoadedCst) -> &rustyfi_syntax::cst::File {
     }
 }
 
-/// Merge a loader-resolved V0.0.6 program's preludes into one synthetic
-/// `cst::File` — mirrors `rustyfi`'s `merge_program` /
-/// `stdlib_tier0.rs`'s helper of the same name.
+/// Merges a loader-resolved V0.0.6 program's preludes into one synthetic
+/// `cst::File`.
 fn merge_program_v006(program: LoadedProgram) -> rustyfi_syntax::cst::File {
     let mut files = program.files;
     let entry = files.pop().expect("loader always yields the entry last");
@@ -108,11 +100,9 @@ fn as_v01(f: &LoadedFile) -> &rustyfi_syntax::cst_v1::FileV1 {
     }
 }
 
-/// V0_1 analogue of `merge_program_v006` — mirrors `lib.rs`'s
-/// `compile_document_v1_with_trials` assembly step (lowering each
-/// dependency + the entry through `v1::lower`), stopping short of eval.
-/// Also returns the X2a `v006_indices` set (mirrors production's — see
-/// `elaborate::elaborate_program_with_versions`), so callers can wrap
+/// V0_1 analogue of `merge_program_v006`, mirroring `lib.rs`'s
+/// `compile_document_v1_with_trials` assembly step, stopping short of
+/// eval. Also returns the `v006_indices` set so callers can wrap
 /// spliced V0_0 bindings the same way production does.
 fn merge_program_v01(
     files: &[LoadedFile],
@@ -123,22 +113,13 @@ fn merge_program_v01(
     let mut prelude = Vec::new();
     let mut v006_indices = std::collections::HashSet::new();
     for dep in deps {
-        // X1/X2a (design-cross-version-import.md §5, §"Slice X2 — per-group
-        // primitive environment"): mirror production's
-        // `compile_document_v1_with_trials` dep loop, which is now a
-        // MIXED-version list. A V0_1 dep is lowered as before; a V0_0 dep (a
-        // 0.0.6-corpus `@require:` target reached under a V0_1 entry) splices
-        // its `cst::File.prelude` bindings directly, and its contributed
-        // top-level indices are recorded into `v006_indices` — mirroring
-        // production's index bookkeeping — so `one_line`'s V0_1 branch can
-        // call `elaborate::elaborate_program_with_versions` the same way
-        // `compile_document_v1_with_trials` does, keeping the two in sync
-        // for a mixed-version fixture's `Ast::VersionScope` shape. Production
-        // ALSO runs the forked-name guard on this path, but this
-        // typecheck-differential harness only needs to not panic + emit a
-        // stable line, so it still splices unconditionally, guard-free. (The
-        // V0_0-first branch in `one_line` — the 0.0.6 golden lines — never
-        // reaches here and is untouched by X1/X2a.)
+        // mirrors production's dep loop, a MIXED-version list — a
+        // V0_1 dep is lowered; a V0_0 dep splices its `cst::File.prelude`
+        // directly and records its indices into `v006_indices`, so
+        // `elaborate_program_with_versions` can run exactly as production
+        // does. Production also runs the forked-name guard here; this
+        // harness splices guard-free (only needs to not panic and emit a
+        // stable line).
         match &dep.cst {
             LoadedCst::V0_1(cst) => prelude.extend(v1::lower::lower_file_v1(cst)?),
             LoadedCst::V0_0(cst) => {
@@ -166,10 +147,9 @@ fn merge_program_v01(
     ))
 }
 
-/// Load + elaborate + `typecheck_verbose` one entry file, trying V0_0 first
-/// and falling back to V0_1 if the V0_0 load itself fails (the corpus mixes
-/// both generations). Returns the generation that actually loaded plus the
-/// typechecker's warnings, or a stage-tagged error string.
+/// Tries V0_0 first, falling back to V0_1 if the V0_0 load fails (the
+/// corpus mixes both generations). Returns the generation that actually
+/// loaded, plus the typechecker's warnings.
 fn typecheck_entry(entry: &Path) -> Result<(RustyfiVersion, Vec<String>), String> {
     let opts_006 = LoadOptions {
         lib_root: Some(lib_root()),
@@ -202,12 +182,10 @@ fn typecheck_entry(entry: &Path) -> Result<(RustyfiVersion, Vec<String>), String
                 merge_program_v01(&program.files).map_err(|e| format!("lower: {e}"))?;
             let env = primitives::base_env_with_version(RustyfiVersion::V0_1);
             let store = rustyfi_lang::symbol::SymbolStore::new();
-            // Mirror `lib.rs`'s `compile_document_v1_with_trials`: the scope is
-            // tagged V0_1 (`Scope::new` is V0_0 — building this branch's scope
-            // with it elaborated every mixed-version input as 0.0.6), and when a
+            // The scope is tagged V0_1 (`Scope::new` defaults V0_0, which
+            // would elaborate every mixed-version input as 0.0.6); when a
             // V0_0 dependency was spliced the name set is the UNION of both
-            // versions', since that dependency may legitimately name a
-            // 0.0.6-only primitive and elaboration resolves names before
+            // versions', since elaboration resolves names before
             // `Ast::VersionScope` means anything.
             let names: Vec<String> = if v006_indices.is_empty() {
                 env.names()
@@ -238,7 +216,6 @@ fn typecheck_entry(entry: &Path) -> Result<(RustyfiVersion, Vec<String>), String
     }
 }
 
-/// An entry document: its own source, and the generation it must load as.
 struct Doc {
     path: &'static str,
     /// Kept beside `path` so the case table reads as source-plus-location even
@@ -248,13 +225,11 @@ struct Doc {
     version: RustyfiVersion,
 }
 
-/// A bundled package, reached the way a document reaches it.
 struct Pkg {
     name: &'static str,
     version: RustyfiVersion,
 }
 
-/// The synthetic entry that pulls one package in — the whole `.saty` source.
 fn probe_src(pkg: &str) -> String {
     format!("@require: {pkg}\nin\n()")
 }
@@ -565,9 +540,9 @@ const PACKAGES: &[Pkg] = &[
     },
 ];
 
-/// Run `cases` on a 64 MiB stack and report EVERY failure at once — elaboration
-/// and typechecking recurse deeply over a real document class's merged prelude,
-/// which overflows the default 2 MiB test stack.
+/// Runs on a 64 MiB stack and reports EVERY failure at once — elaboration
+/// over a real document class's merged prelude overflows the default
+/// 2 MiB test stack.
 fn check_all(what: &str, run: impl FnOnce() -> Vec<String> + Send + 'static) {
     let failures = std::thread::Builder::new()
         .stack_size(64 * 1024 * 1024)
@@ -589,13 +564,11 @@ fn every_corpus_document_typechecks() {
         let root = repo_root();
         let mut failures = Vec::new();
         for doc in DOCUMENTS {
-            // Load the fixture itself. `doc.src` is `include_str!` of this very
-            // path, so it IS the file's bytes — writing it back out to a
-            // stand-in beside the original and loading that was a provable
-            // no-op, and it cost a sweep, a Drop, and two `.gitignore` rules
-            // for debris an aborted run could leave among real fixtures. The
-            // literal stays because it is what makes each case readable here,
-            // and `include_str!` fails the build if the path stops existing.
+            // `doc.src`'s `include_str!` IS the file's bytes; do NOT write
+            // it back out beside the original — a no-op that would cost a
+            // sweep/Drop/gitignore rules for debris an aborted run leaves.
+            // `include_str!` also fails the build if the path stops
+            // existing.
             match typecheck_entry(&root.join(doc.path)) {
                 Ok((version, warns)) if version == doc.version && warns.is_empty() => {}
                 Ok((version, warns)) => failures.push(format!(

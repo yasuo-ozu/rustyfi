@@ -145,12 +145,12 @@ fn single_short_line() {
 /// REPRESENTABLE. Same five 24pt words and same 6pt (+3 / -1.5) spaces both
 /// times; only the column moves, by one point, across `ratio_stretch_limit`.
 ///
-/// This test spent a long time `#[ignore]`d asserting `["aaaa aaaa", "aaaa
-/// aaaa", "aaaa"]` at a 60pt column, on the intuition that two words "fit" and
-/// a third must therefore wrap. Upstream SATySFi does not do that, and the
-/// reason is exact rather than a matter of cost: two words plus one space is
-/// 54pt natural carrying 3pt of stretch, so filling a 60pt column needs
-/// adjustment ratio `(60 - 54) / 3 = 2.0` EXACTLY, and `calculate_ratios`
+/// The intuitive expectation — `["aaaa aaaa", "aaaa aaaa", "aaaa"]` at a 60pt
+/// column, because two words "fit" and a third must therefore wrap — is WRONG.
+/// Upstream SATySFi does not do that, and the reason is exact rather than a
+/// matter of cost: two words plus one space is 54pt natural carrying 3pt of
+/// stretch, so filling a 60pt column needs adjustment ratio
+/// `(60 - 54) / 3 = 2.0` EXACTLY, and `calculate_ratios`
 /// classifies `ratio_raw >= ratio_stretch_limit` (= 2.0) as `LBTooShort`
 /// (`lineBreak.ml:507`, `:534`) — a class for which `update_graph` adds NO
 /// EDGE AT ALL (`lineBreak.ml:1014-1015`). A one-word line is `LBTooShort`
@@ -241,7 +241,7 @@ fn last_line_stays_ragged() {
     assert_eq!(contents[2].0, Length::pt(18.0));
 }
 
-// -- Phase 6: Knuth–Plass optimal line breaking -----------------------------
+// -- Knuth–Plass optimal line breaking --------------------------------------
 
 /// Classic case where greedy's "pack as many words as fit" choice is
 /// suboptimal: 5 identical 12pt words with standard glue, target 63pt.
@@ -250,10 +250,6 @@ fn last_line_stays_ragged() {
 /// instead pulls a 4th word onto line 1 (natural 66, slightly overfull,
 /// shrinking at ratio -2/3, badness ~29.6) leaving a single trailing word —
 /// far lower total demerits even though line 1 is no longer underfull.
-///
-/// (Line 1's three-word form is pure Latin, so it still drops as `LBTooShort`
-/// when over-stretched — the CJK-line rescue added to `badness` does not touch
-/// it, keeping this pre-existing behavior.)
 #[test]
 fn kp_finds_lower_cost_split_than_greedy_packing() {
     let m = Mono;
@@ -403,8 +399,7 @@ fn kp_is_deterministic() {
     assert_eq!(v1, v2);
 }
 
-// -- Slice 1: the page-model split — `chop_page` / `place_block_at`
-// --------------------------------------
+// The page-model split — `chop_page` / `place_block_at`.
 
 fn leaded_line(height_pt: f64, depth_pt: f64, leading_pt: f64) -> VertBox {
     VertBox::Line {
@@ -446,8 +441,8 @@ fn chop_page_splits_across_two_pages_by_height() {
     assert_eq!(placed2[0].baseline_y, Length::pt(19.0));
 }
 
-/// Termination guard (the plan's Risks: "Progress / termination"): a
-/// degenerate content scheme with `text-height <= 0` must still place >=1
+/// Termination guard (progress): a degenerate content scheme with
+/// `text-height <= 0` must still place >=1
 /// line per non-empty page, or the lang-side per-page loop never ends.
 #[test]
 fn chop_page_still_makes_progress_at_zero_height() {
@@ -462,7 +457,7 @@ fn chop_page_still_makes_progress_at_zero_height() {
     assert_eq!(remaining.len(), 1);
 }
 
-/// §C1: `chop_page` over `[FrameStart, Line, FrameEnd]` places 3
+/// `chop_page` over `[FrameStart, Line, FrameEnd]` places 3
 /// `PlacedLine`s — the two markers zero-width/contentless, the real line's
 /// own geometry unaffected by their presence — and a marker-only page still
 /// terminates (same guarantee `HookPageBreak` already has, `pagebreak.rs`'s
@@ -499,11 +494,9 @@ fn chop_page_places_frame_markers_as_zero_width_lines_around_an_unaffected_real_
     );
 }
 
-// ============================================================================
-// Slice 1 graphics box: a `PureHorzBox::Graphics` measures like `Image` did
+// A graphics box: a `PureHorzBox::Graphics` measures like `Image` did
 // for width, but — unlike `Image` — carries a real depth, and is never a
 // legal line-break point.
-// ============================================================================
 
 fn graphics_box(width: f64, height: f64, depth: f64) -> PureHorzBox {
     PureHorzBox::Graphics {
@@ -545,13 +538,11 @@ fn graphics_box_contributes_height_and_depth_to_its_line() {
     }
 }
 
-// ============================================================================
-// Slice 1 math box: a `PureHorzBox::Math` carries its own outer
+// A math box: a `PureHorzBox::Math` carries its own outer
 // width/height/depth (computed once by `read_math`, rustyfi-lang) so the
 // line breaker never re-enters the math engine — it just measures like
 // `Graphics` (real height *and* depth), and is never a legal line-break
 // point.
-// ============================================================================
 
 fn math_box(width: f64, height: f64, depth: f64) -> PureHorzBox {
     PureHorzBox::Math {
@@ -594,12 +585,10 @@ fn math_box_contributes_height_and_depth_to_its_line() {
     }
 }
 
-// ============================================================================
-// §D inline frame: a `PureHorzBox::Frame`'s outer width/height/depth
+// An inline frame: a `PureHorzBox::Frame`'s outer width/height/depth
 // (padding already folded in by `make_inline_frame`) drive line metrics
 // exactly like `Graphics`/ `Math` above, and it's never a legal line-break
 // point (the atomic model: contents are pre-fit, the frame never splits).
-// ============================================================================
 
 fn frame_box(width: f64, height: f64, depth: f64) -> PureHorzBox {
     PureHorzBox::Frame {
@@ -646,13 +635,11 @@ fn frame_box_grows_line_height_and_depth_by_its_own_padded_metrics() {
     }
 }
 
-// ============================================================================
-// Slice 1: page-break hooks — a `PureHorzBox::HookPageBreak` is a
+// Page-break hooks — a `PureHorzBox::HookPageBreak` is a
 // zero-width/height/depth marker, never a legal line-break point;
 // `break_pages`/the PDF writers place it like any other content but render
 // nothing for it (the lang-side `fire_hooks` post-pass is the only thing
 // that ever reads its `HookId`).
-// ============================================================================
 
 fn hook_box(id: usize) -> PureHorzBox {
     PureHorzBox::HookPageBreak { id: HookId(id) }

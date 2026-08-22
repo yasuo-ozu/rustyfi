@@ -1,9 +1,6 @@
-//! Integration coverage for the Group A writer emission:
-//! `write_annotations`/ `write_named_dests`/`write_outline`
-//! (`rustyfi-pdf/src/lib.rs`), driven through the public
-//! `render_pdf_with` entry point with a hand-built `DocExtras` (no lang
-//! layer involved — see `crates/rustyfi/tests/ fixtures/annot-hook.saty`
-//! for the end-to-end version through `register-*`).
+//! `write_annotations`/`write_named_dests`/`write_outline`, driven through
+//! `render_pdf_with` with a hand-built `DocExtras` (no lang layer) — see
+//! `crates/rustyfi/tests/fixtures/annot-hook.saty` for the end-to-end version.
 
 use rustyfi_backend::{
     Annot, AnnotAction, Color, DocExtras, Length, NamedDest, OutlineEntry, Page, PageGeometry,
@@ -19,11 +16,8 @@ fn geometry() -> PageGeometry {
     }
 }
 
-/// (i) a `Uri` annot with a border, (ii) a `GotoName` annot, (iii) a
-/// `NamedDest` the `GotoName` annot's action names, (iv) a 3-entry outline
-/// `[(0,"A",k1,true), (1,"A.1",k1,true), (0,"B",k2,false)]` — a 2-level,
-/// 3-item tree (the unit test the plan's Risks section calls for: malformed
-/// Prev/Next chains are the classic bug).
+/// A 2-level, 3-item outline tree — malformed Prev/Next chains are the
+/// classic bug this shape is meant to catch.
 fn extras() -> DocExtras {
     DocExtras {
         annotations: vec![
@@ -101,7 +95,6 @@ fn render_pdf_with_emits_annots_dests_and_outlines() {
         "/Outlines",
         "/Title",
         "/First",
-        // The root outline dictionary's own /Count: 2 top-level items (A, B).
         "/Count 2",
     ] {
         assert!(hay.contains(needle), "content missing {needle:?}:\n{hay}");
@@ -116,8 +109,6 @@ fn render_pdf_with_emits_annots_dests_and_outlines() {
         "a closed leaf must carry no /Count entry, not a degenerate -0:\n{hay}"
     );
 
-    // The GotoName annot's action target and the /Dests key must agree —
-    // the whole point of `dest_name`'s shared name table.
     assert!(
         hay.contains("nameddest0"),
         "the GotoName action and /Dests entry must share the same name:\n{hay}"

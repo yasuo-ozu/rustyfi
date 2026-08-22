@@ -1,4 +1,4 @@
-% Wave-4 batch A capstone: the real upstream SATySFi 0.1 `std-ja-report`
+% Capstone: the real upstream SATySFi 0.1 `std-ja-report`
 % document class (dist-v01/packages/std-ja-report.satyh — the report
 % sibling of std-ja-book, adding chapters/theorem environments and
 % `page-break-multicolumn`/`hook-page-break-block` instead of a
@@ -11,7 +11,7 @@
 % only type-table-registered, see `primitives.rs`'s
 % `prim_page_break_multicolumn_v01` doc comment) -> PDF. Latin-only,
 % math-free, \figure never called (its baked-in `図` literal needs CJK
-% glyph coverage the single-DejaVu-face G7 font stand-in cannot provide),
+% glyph coverage the single-DejaVu-face font stand-in cannot provide),
 % mirroring `v01-stdja.saty`'s/`v01-stdja-book.saty`'s Latin-only-body
 % discipline.
 @require: std-ja-report

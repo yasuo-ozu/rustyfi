@@ -3,7 +3,7 @@
 //! payload must render as a `/Subtype /Form` XObject (not the raster
 //! `/Subtype /Image` path — that stays covered, byte-for-byte, by
 //! `image.rs`), remapping its imported `/Resources` object graph and scaling
-//! it onto the box with the §3.3 CTM formula. Mirrors
+//! it onto the box with the CTM formula. Mirrors
 //! `graphics.rs`/`frame_box.rs`'s hand-built-`Page` style (no `rustyfi-lang`
 //! parse/eval needed to exercise the writer in isolation);
 //! `crates/rustyfi-lang/tests/pdf_images.rs` covers the `load-pdf-image`
@@ -63,7 +63,7 @@ fn page_with_pdf_image_box() -> (Page, Vec<ImageResource>) {
         pdf: Some(pdf_page_resource()),
     }];
     let ibox = PureHorzBox::Image {
-        // 100x50 MediaBox scaled to 40x20 -> sx = sy = 0.4 (§3.3).
+        // 100x50 MediaBox scaled to 40x20 -> sx = sy = 0.4.
         width: Length::pt(40.0),
         height: Length::pt(20.0),
         image: ImageId(0),
@@ -79,7 +79,6 @@ fn page_with_pdf_image_box() -> (Page, Vec<ImageResource>) {
     (page, images)
 }
 
-/// Find the (sole) `/Subtype /Form` XObject stream in `doc`.
 fn find_form_stream(doc: &lopdf::Document) -> &lopdf::Stream {
     doc.objects
         .values()
@@ -113,7 +112,6 @@ fn a_pdf_page_image_box_renders_as_a_form_xobject_not_a_raster_image() {
 
     let doc = lopdf::Document::load_mem(&bytes).expect("rendered output must itself be valid PDF");
 
-    // ---- The Form XObject itself -----------------------------------------
     let form = find_form_stream(&doc);
     assert_eq!(
         form.dict.get(b"Type").and_then(|o| o.as_name()).ok(),
@@ -126,12 +124,11 @@ fn a_pdf_page_image_box_renders_as_a_form_xobject_not_a_raster_image() {
         form.dict
     );
 
-    // /BBox is the source page's raw MediaBox, unscaled (§3.1) — the scale
+    // /BBox is the source page's raw MediaBox, unscaled — the scale
     // lives entirely in the placement `cm`, checked below.
     let bbox = as_f64_array(form.dict.get(b"BBox").expect("Form XObject must carry /BBox"));
     assert_eq!(bbox, vec![0.0, 0.0, 100.0, 50.0]);
 
-    // Explicit identity /Matrix (§3.1).
     let matrix = as_f64_array(
         form.dict
             .get(b"Matrix")
@@ -144,7 +141,6 @@ fn a_pdf_page_image_box_renders_as_a_form_xobject_not_a_raster_image() {
     // no encoding round-trip risk here).
     assert_eq!(form.content, b"/GS1 gs 1 0 0 RG 5 5 90 40 re S");
 
-    // ---- The remapped /Resources graph -------------------------------
     let resources = form
         .dict
         .get(b"Resources")
@@ -165,7 +161,7 @@ fn a_pdf_page_image_box_renders_as_a_form_xobject_not_a_raster_image() {
     assert_eq!(gs1.get(b"CA").and_then(|o| o.as_float()).ok(), Some(1.0f32));
 
     // ---- Placement: the page's content stream scales+translates the Form
-    // per §3.3 (`sx = w/(x1-x0)`, `sy = h/(y1-y0)`, origin translated to
+    // (`sx = w/(x1-x0)`, `sy = h/(y1-y0)`, origin translated to
     // (tx, ty)) and invokes it by name, disjoint from `ImN`.
     let (&page_num, &page_id) = doc.get_pages().iter().next().expect("one page");
     assert_eq!(page_num, 1);
@@ -211,7 +207,6 @@ fn a_pdf_page_image_box_renders_as_a_form_xobject_not_a_raster_image() {
         String::from_utf8_lossy(name)
     );
 
-    // No raster Image XObject should appear at all for this document.
     let text = String::from_utf8_lossy(&bytes);
     assert!(
         !text.contains("/Subtype /Image"),

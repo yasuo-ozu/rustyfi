@@ -1,12 +1,11 @@
-//! L5b (`…/tmp/prim-retype-sweep.md` §4.2): the graphics-collection sweep
-//! — `unite-graphics`/`clip-graphics-by-path` (A12/A13), the `get-graphics-
-//! bbox` `Option` fork (R3), and the shared `coerce_graphics_result` per-
-//! version callback-result coercion (H1-H6/R2). Harness: direct
-//! `Interp::apply` chains against `base_env`/`base_env_with_version` for
-//! the pure prims (the `v01_prims_scalar.rs` pattern), plus small hand-built
-//! `Ast::Lambda` closures (the `frame_deco_firing.rs`/
-//! `inline_graphics_outer.rs` pattern) for the callback-coercion tests,
-//! which need a real closure value to apply.
+//! The graphics-collection sweep — `unite-graphics`/
+//! `clip-graphics-by-path`, the `get-graphics-bbox` `Option` fork,
+//! and the shared `coerce_graphics_result` per-version callback-result
+//! coercion. Harness: direct `Interp::apply` chains against
+//! `base_env`/`base_env_with_version` for the pure prims (the
+//! `v01_prims_scalar.rs` pattern), plus small hand-built `Ast::Lambda`
+//! closures (the `frame_deco_firing.rs`/`inline_graphics_outer.rs` pattern)
+//! for the callback-coercion tests, which need a real closure to apply.
 
 use rustyfi_backend::{Color, FontKey, FontMetrics, GraphicsElem, Length};
 use rustyfi_lang::ast::Ast;
@@ -117,7 +116,7 @@ fn as_bbox_option(v: Value) -> Option<((f64, f64), (f64, f64))> {
 }
 
 // ============================================================================
-// 1. `unite-graphics` (A12) / `clip-graphics-by-path` (A13) construct the
+// 1. `unite-graphics` / `clip-graphics-by-path` construct the
 //    new `GraphicsElem` container variants, and are unbound under V0_0.
 // ============================================================================
 
@@ -173,7 +172,7 @@ fn unite_and_clip_construct() {
 }
 
 // ============================================================================
-// 2. `get-graphics-bbox`'s `Option` fork (R3).
+// 2. `get-graphics-bbox`'s `Option` fork.
 // ============================================================================
 
 #[test]
@@ -183,7 +182,6 @@ fn bbox_option_semantics() {
     interp.version = RustyfiVersion::V0_1;
     let env = primitives::base_env_with_version(RustyfiVersion::V0_1);
 
-    // `unite-graphics []` -> an empty `Group` -> bbox `None`.
     let empty_group = call(
         &mut interp,
         &env,
@@ -193,7 +191,6 @@ fn bbox_option_semantics() {
     let bbox = call(&mut interp, &env, "get-graphics-bbox", vec![empty_group]);
     assert_eq!(as_bbox_option(bbox), None);
 
-    // A `Group` of two disjoint fills -> `Some` of their union.
     let p1 = rect_path(&mut interp, &env, 0.0, 0.0, 10.0, 10.0);
     let f1 = fill_val(&mut interp, &env, p1);
     let p2 = rect_path(&mut interp, &env, 20.0, 20.0, 10.0, 10.0);
@@ -240,7 +237,7 @@ fn bbox_option_semantics() {
 
 // ============================================================================
 // 3. `coerce_graphics_result`: a graphics-producing callback's result forks
-//    per version (H1: `inline-graphics`; R2: `tabular`'s rules callback).
+//    per version (`inline-graphics`; `tabular`'s rules callback).
 // ============================================================================
 
 fn var(name: &str) -> Ast {
@@ -440,7 +437,7 @@ fn tabular_rules_callback_result_coerces_per_version() {
 }
 
 // ============================================================================
-// H3-H6: the deco family's coercion happens at `apply_deco`'s deferred-fire
+// The deco family's coercion happens at `apply_deco`'s deferred-fire
 // time (far from any prim body) — exercised through an actually-fired
 // inline-frame deco, the `frame_deco_firing.rs` harness.
 // ============================================================================

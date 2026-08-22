@@ -7,17 +7,13 @@
 //! as `typechecker.ml` does over its own `unify`/`Typeenv`.
 //!
 //! This is validation only: `typecheck` returns `Result<(), TypeError>` and
-//! never touches the (unchanged, untyped) evaluator — a program that passes
-//! `typecheck` is then evaluated exactly as it always was.
+//! never touches the untyped evaluator.
 //!
 //! **Deviations from v0.0.6 and permissive corners** are called out inline
-//! at each rule with a `PERMISSIVE:` comment; see this module's doc comment
-//! in the crate report for the full list. The short version: math-mode
-//! command/embed typing (real typesetting is phase 7) and unbound type-name/
-//! type-variable references inside a `type` declaration's payload are
-//! accepted with a fresh/nominal stand-in type rather than rejected, because
-//! rejecting them would regress fixtures and tests this milestone still
-//! needs to pass untyped.
+//! at each rule with a `PERMISSIVE:` comment. The short version: math-mode
+//! command/embed typing, and unbound type-name/type-variable references
+//! inside a `type` declaration's payload, are accepted with a fresh/nominal
+//! stand-in type rather than rejected.
 
 use crate::ast::branded::{Ast, BText, CmdArg, IText, MathElem, Pattern};
 use crate::elaborate::{Program, UserSynonymDecl, UserTypeDecl};
@@ -106,11 +102,8 @@ impl std::error::Error for TypeError {
 // milestone's contract (`primitives.rs`/`prim_types.rs` are read-only), this
 // list is hand-kept in sync and cross-checked against `primitives.rs`'s
 // source text by a test (`tests/typecheck.rs`) rather than derived
-// mechanically. It matches `types_unify.rs`'s `every_registered_primitive_
-// has_a_type` test's own `NAMES` list (phase 4 dropped `document`/`+p`/
-// `\emph` from both — they're no longer primitives at all, see
-// `primitives.rs`'s module doc comment — and added `set-font-key`, the one
-// genuinely new primitive phase 4 introduces).
+// mechanically. It matches `types_unify.rs`'s
+// `every_registered_primitive_has_a_type` test's own `NAMES` list.
 // ============================================================================
 
 pub const PRIMITIVE_NAMES: &[&str] = &[
@@ -185,7 +178,7 @@ pub const PRIMITIVE_NAMES: &[&str] = &[
     // `primitive_type_with_version` returns `None` for it under V0_0 and
     // the seeding loops skip it there. ----
     "load-single-font",
-    // ---- frontend-completion.md §Slice 1.A: the ~18 pure primitives ----
+    // ---- Slice 1.A: the ~18 pure primitives ----
     // (`|>` excluded — see primitives.rs's `prims!` table comment; it has
     // no primitive of its own, so it never belongs in this list).
     "sin",
@@ -250,7 +243,7 @@ pub const PRIMITIVE_NAMES: &[&str] = &[
     "hook-page-break-block",
     "register-cross-reference",
     "get-cross-reference",
-    // ---- group E1: hooks-annotations-crossref.md §A closer ----
+    // ---- group E1: the hooks/annotations/cross-reference closer ----
     "probe-cross-reference",
     // ---- (annot.satyh) ----
     "get-leftmost-script",
@@ -259,7 +252,7 @@ pub const PRIMITIVE_NAMES: &[&str] = &[
     "register-destination",
     "register-link-to-uri",
     "register-link-to-location",
-    // ---- + §G ----
+    // ---- the faithful math primitive layer ----
     "math-char",
     "math-big-char",
     "math-char-with-kern",
@@ -318,11 +311,11 @@ pub const PRIMITIVE_NAMES: &[&str] = &[
     "set-every-word-break",
     "register-outline",
     "extract-string",
-    // ---- group E2: dominant-script/language getters (context-box-prims.md §C landed) ----
+    // ---- group E2: dominant-script/language getters ----
     "get-dominant-wide-script",
     "get-dominant-narrow-script",
     "get-language",
-    // ---- group E3: text-mode-context sliver (context-box-prims.md §G) ----
+    // ---- group E3: text-mode-context sliver ----
     "get-initial-text-info",
     "deepen-indent",
     "break",
@@ -335,7 +328,7 @@ pub const PRIMITIVE_NAMES: &[&str] = &[
     "add-footnote",
     // ---- page-level prims blocking mitou-report/stdjareport ----
     "clear-page",
-    // ---- math-split spec §2.2: added in 0.1 (`math-text`/`math-boxes` split + `read-math`) ----
+    // ---- added in 0.1 (`math-text`/`math-boxes` split + `read-math`) ----
     "read-math",
     "stringify-math",
     "set-math-char",
@@ -344,17 +337,17 @@ pub const PRIMITIVE_NAMES: &[&str] = &[
     "embed-inline-to-math",
     "get-math-axis-height-ratio",
     "%math-attach-scripts",
-    // ---- G6 (`…/tmp/g6-g7-standins.md` §1): hyphenation/unidata loader +
-    // setter stand-ins, and the `here` lex-time-constant stand-in. All 5
-    // are V0_1-only (`primitive_type_with_version` returns `None` for them
-    // under V0_0, same pattern as the L5a comment below documents). ----
+    // ---- G6: hyphenation/unidata loader + setter stand-ins, and the `here`
+    // lex-time-constant stand-in. All 5 are V0_1-only
+    // (`primitive_type_with_version` returns `None` for them under V0_0,
+    // same pattern as the L5a comment below documents). ----
     "load-hyphenation-dictionary",
     "load-unicode-char-database",
     "set-hyphenation-dictionary",
     "set-unicode-char-database",
     "here",
-    // ---- added in 0.1 — L5a (prim-retype-sweep §2): bitwise ops, Unicode
-    // string ops, `read-file`, `register-document-information`. All 11
+    // ---- added in 0.1 — L5a: bitwise ops, Unicode string ops,
+    // `read-file`, `register-document-information`. All 11
     // unbound under V0_0 (`base_type_env_with_version`'s
     // `primitive_type_with_version` filter skips them there, same as the
     // 8 math-split names just above). `get-initial-text-info` is NOT
@@ -371,21 +364,19 @@ pub const PRIMITIVE_NAMES: &[&str] = &[
     "split-grapheme-cluster",
     "read-file",
     "register-document-information",
-    // ---- added in 0.1 — L5b (prim-retype-sweep §3.4): the graphics-
-    // collection sweep's 2 added prims. Unbound under V0_0 (same
-    // `primitive_type_with_version` filter as the L5a names above); the 3
-    // named + 6 hidden retypes (`tabular`, `get-graphics-bbox`,
-    // `inline-graphics`, `inline-graphics-outer`, `inline-frame-outer/
-    // -inner/-breakable`, `block-frame-breakable`) are NOT listed again
-    // here — each is one shared name whose *type* forks per version
-    // (`prim_types.rs`), already present above. ----
+    // ---- added in 0.1 — L5b: the graphics-
+    // collection sweep's 2 added prims, unbound under V0_0. The 3 named + 6
+    // hidden retypes (`tabular`, `get-graphics-bbox`, `inline-graphics`,
+    // `inline-graphics-outer`, `inline-frame-outer/-inner/-breakable`,
+    // `block-frame-breakable`) are NOT listed again here — each is one
+    // shared name whose *type* forks per version (`prim_types.rs`),
+    // already present above. ----
     "unite-graphics",
     "clip-graphics-by-path",
     // ---- language-completeness sweep gap 1: 0.1 float comparisons
     // (`primitives.rs`'s `prims!` table comment on ">."/"<."/">=."/"<=.").
-    // Unbound under V0_0 (same `primitive_type_with_version` V0_1 guard
-    // as the L5a/L5b names above) — confirmed genuinely absent from 0.0.6
-    // upstream, unlike "+."/"-."/"*."/"/." which both generations share.
+    // Unbound under V0_0 — confirmed genuinely absent from 0.0.6 upstream,
+    // unlike "+."/"-."/"*."/"/." which both generations share.
     ">.",
     "<.",
     ">=.",
@@ -427,28 +418,23 @@ pub(crate) fn base_type_env_with_version<'s>(
 /// — i.e. user/local) binding untouched. This makes a version-forked
 /// primitive's INTERNAL use inside the returned env (e.g. a spliced 0.0.6
 /// dependency constructing a `page` ADT to hand to `page-break`) check
-/// against `version`'s shapes (X2.4's "internal forked-type use — handled by
-/// X2"), while any binder introduced AFTER this call (an ordinary
-/// `Ast::LetIn`'s `env.with_all`, reached while inferring `body`) still
-/// shadows normally, exactly as before.
+/// against `version`'s shapes, while any binder introduced AFTER this call
+/// (an ordinary `Ast::LetIn`'s `env.with_all`, reached while inferring
+/// `body`) still shadows normally.
 ///
-/// X2b fix (was: "known narrow gap, documented, not fixed" in X2a): a
-/// primitive name legitimately shadowed by a *user* binding introduced
-/// BEFORE this `VersionScope` is reached (rather than inside it) must NOT
-/// be re-stomped by this overwrite. Since a flat `TypeEnv` carries no
-/// lexical-scope stack the way `compile.rs`'s `Compiler::scopes` does, the
-/// provenance is tracked directly on `TypeEnv` instead: every REAL program
-/// binding goes through `TypeEnv::with`/`with_all` (`Ast::LetIn`, lambda
-/// params, pattern binds, `LetRecIn`, top-level decls — every call site
-/// except the two primitive-seeding loops here and in
-/// `base_type_env_with_version`), which records the bound name in
-/// `TypeEnv::shadowed`; the two primitive-seeding loops use
-/// `TypeEnv::with_primitive` instead, which does NOT record it. So
-/// `e.shadowed.contains(name)` is exactly "has a real user binding rebound
-/// this primitive name anywhere on the path from the program root to
-/// here" — skip the overwrite for those, matching `compile.rs`'s
-/// `is_local`-first discipline; every other (untouched-builtin) name still
-/// gets `version`'s scheme, unchanged from X2a.
+/// X2b: a primitive name legitimately shadowed by a USER binding introduced
+/// BEFORE this `VersionScope` is reached (rather than inside it) must NOT be
+/// re-stomped by the overwrite. A flat `TypeEnv` carries no lexical-scope
+/// stack the way `compile.rs`'s `Compiler::scopes` does, so provenance is
+/// tracked on `TypeEnv` directly: every REAL program binding goes through
+/// `TypeEnv::with`/`with_all` (`Ast::LetIn`, lambda params, pattern binds,
+/// `LetRecIn`, top-level decls — every call site except the two
+/// primitive-seeding loops here and in `base_type_env_with_version`), which
+/// records the bound name in `TypeEnv::shadowed`; the seeding loops use
+/// `TypeEnv::with_primitive`, which does NOT. So `e.shadowed.contains(name)`
+/// is exactly "has a real user binding rebound this primitive name anywhere
+/// on the path from the program root to here" — skip the overwrite for those,
+/// matching `compile.rs`'s `is_local`-first discipline.
 fn version_scoped_type_env<'s>(
     store: &'s SymbolStore,
     env: &TypeEnv<'s>,
@@ -470,10 +456,8 @@ fn version_scoped_type_env<'s>(
 }
 
 // ============================================================================
-// The type environment — a flat, persistent-clone name -> scheme map, the
-// same shape as `elaborate::Scope` (see its doc comment); cloning is cheap
-// enough at this milestone's program sizes, and keeps this module's style
-// consistent with the elaborator it sits directly behind.
+// The type environment — the same persistent base/overlay split as
+// `elaborate::Scope` (see its doc comment).
 // ============================================================================
 
 /// Overlay size at which a `TypeEnv` folds its recent bindings down into a
@@ -488,8 +472,7 @@ const OVERLAY_CAP: usize = 64;
 /// (upstream's `Typeenv.add tyenv varnm (pty, evid, pre.stage)` — every
 /// binder upstream registers carries the stage of the expression that
 /// introduced it, `typechecker.ml:129/136/731/1509/1574`, and its `val_stage`
-/// field in 0.1). Held behind one `Rc` per binding, exactly as the bare
-/// `Rc<PolyType>` was before the stage existed.
+/// field in 0.1). Held behind one `Rc` per binding.
 pub(crate) struct EnvEntry {
     poly: PolyType,
     /// Where a reference to this name is legal from — see
@@ -501,8 +484,8 @@ pub(crate) struct EnvEntry {
 /// (`Rc`, the accumulated prelude/package bindings — cloned by an `Rc` bump)
 /// and a small mutable OVERLAY of the most recent bindings (cloned in full per
 /// `with`, but capped at [`OVERLAY_CAP`]). Lookups check the overlay first,
-/// then the base. Semantically identical to the old flat map — later bindings
-/// shadow earlier — but `with`/`with_all` no longer copy the whole environment.
+/// then the base; later bindings shadow earlier ones, exactly as a flat map
+/// would — but `with`/`with_all` never copy the whole environment.
 #[derive(Clone, Default)]
 pub(crate) struct TypeEnv<'s> {
     // Schemes are held by `Rc`, not by value. Every `with` clones the overlay,
@@ -626,15 +609,13 @@ impl<'s> TypeEnv<'s> {
         e
     }
 
-    /// Remove a set of bindings (Sub-slice 2d-3, `…/tmp/
-    /// slice2d3-module-sig-decls.md` §2.3-6): a parent seal revoking a
-    /// nested module's outer-hidden members at the parent's seal point —
-    /// see `v1/module_check.rs`'s `member_revoke_triggers`. Zero 0.0.6-path
-    /// callers (V0_1-only). `#[allow(dead_code)]`: the accessor is the spec's
-    /// §4-F deliverable; its sole consumer, the `Decl::Module` revocation
-    /// mechanism, is the one 2d-3 piece deferred (see `v1/module_check.rs`'s
-    /// module doc). Flattens both layers then removes — cold path, so the
-    /// one-time flatten is fine.
+    /// Remove a set of bindings (Sub-slice 2d-3): a parent seal revoking a
+    /// nested module's outer-hidden members at the parent's seal point — see
+    /// `v1/module_check.rs`'s `member_revoke_triggers`. V0_1-only.
+    /// `#[allow(dead_code)]` because its sole consumer, the `Decl::Module`
+    /// revocation mechanism, is the one 2d-3 piece still deferred (see
+    /// `v1/module_check.rs`'s module doc). Flattens both layers then removes
+    /// — cold path, so the one-time flatten is fine.
     #[allow(dead_code)]
     pub(crate) fn without_all(&self, names: &[Symbol<'s>]) -> TypeEnv<'s> {
         let mut vars: HashMap<Symbol<'s>, std::rc::Rc<EnvEntry>> = (*self.base).clone();
@@ -697,7 +678,7 @@ fn name_to_mono(name: &str, version: RustyfiVersion) -> MonoType {
         "string" => t_string(),
         "inline-text" => t_inline_text(),
         "block-text" => t_block_text(),
-        // math-split spec §1.1: the surface-name fork lives HERE, and only
+        // The surface-name fork lives HERE, and only
         // here. `BaseType::MathText` is reused byte-identically as both
         // 0.0.6's `math` and V0_1's `math-text` (upstream's own rename);
         // `math-boxes` is V0_1-only, new. Under V0_1 the word `math` in a
@@ -746,17 +727,12 @@ fn name_to_mono(name: &str, version: RustyfiVersion) -> MonoType {
         // `graphics_bbox`, the PDF and SVG writers — handles `Group`
         // uniformly.
         //
-        // These four were originally gated on V0_1 to keep 0.0.6's
-        // `name_to_mono` output byte-identical, on the reasoning that
-        // nothing in the frozen 0.0.6 corpus needed them resolved
-        // non-nominally. Cross-version import is that consumer: the gate
-        // made `name_to_mono` DISAGREE across versions, which is precisely
-        // what `forked_type_names()` (below) diffs, so all four were
-        // reported as forked and X3's boundary guard rejected every 0.1
-        // document importing a 0.0.6 dependency that so much as mentions
-        // `graphics` in export position — the sole cause of all 7 gated
-        // fixtures. Ungating restores upstream's own table and drops them
-        // from the fork set, where they never belonged.
+        // Do NOT gate these four on `V0_1`. A gate makes `name_to_mono`
+        // DISAGREE across versions, which is exactly what
+        // `forked_type_names()` (below) diffs — all four then report as
+        // forked, and X3's boundary guard rejects every 0.1 document
+        // importing a 0.0.6 dependency that so much as mentions `graphics`
+        // in export position.
         //
         // Deliberately NOT ungated: `deco`/`deco-set` (builtin synonyms
         // whose EXPANSION really does fork — 0.0.6 returns `graphics
@@ -768,11 +744,12 @@ fn name_to_mono(name: &str, version: RustyfiVersion) -> MonoType {
         "image" => t_image(),
         "deco" if version == RustyfiVersion::V0_1 => t_deco(version),
         "deco-set" if version == RustyfiVersion::V0_1 => t_decoset(version),
-        // `font` — a REAL base type under V0_1 since the font build-out;
-        // this used to be `t_string()`, a stand-in that made `font * float
-        // * float` in a 0.1 sig accidentally coincide with 0.0.6's `string
-        // * float * float`. Upstream `saphe-split` registers `("font",
-        // FontType)` in `types.cppo.ml`'s `base_type_hash_table:175` and
+        // `font` — a REAL base type under V0_1. Do NOT make it `t_string()`
+        // again: that stand-in made `font * float * float` in a 0.1 sig
+        // accidentally coincide with 0.0.6's `string * float * float`, so the
+        // cross-version boundary accepted a coincidence. Upstream
+        // `saphe-split` registers `("font", FontType)` in
+        // `types.cppo.ml`'s `base_type_hash_table:175` and
         // spells it `tFONTKEY` (`primitives.cppo.ml:45`); its values are
         // `BCFontKey of FontKey.t`, opaque handles a FONT ENVELOPE mints
         // (`envelopeChecker.ml`'s `check_font_envelope`). `t_font_key()`
@@ -803,7 +780,7 @@ fn name_to_mono(name: &str, version: RustyfiVersion) -> MonoType {
 }
 
 // ============================================================================
-// X1 forked-name guard (design-cross-version-import.md §5): builtin TYPE
+// X1 forked-name guard: builtin TYPE
 // names that resolve differently — or not at all — between `V0_0` and
 // `V0_1`. Companion to `primitives::forked_prim_names` (VALUE names, driven
 // off the `VersionSpan`-tagged `PRIM_DEFS` table); builtin TYPE forks have no
@@ -816,7 +793,7 @@ fn name_to_mono(name: &str, version: RustyfiVersion) -> MonoType {
 /// Structural (alpha-equivalence) comparison of two [`MonoType`]s, used by
 /// [`forked_type_names`]'s diff below. Plain `MonoType`/`PolyType` derive no
 /// `PartialEq` (this slice's hard constraint keeps `types.rs`/`unify.rs`
-/// untouched — `design-cross-version-import.md`'s task brief), and even if
+/// untouched), and even if
 /// they did, a naive field compare would be WRONG here: every polymorphic
 /// primitive's scheme mints brand-new [`TyVarRef`](crate::types::TyVarRef)s
 /// from a process-wide counter (`types.rs`'s `FRESH_ID`) on each call, so two
@@ -955,27 +932,24 @@ fn bijective_pair(
 /// 0.0.6 dependency writes this name in a type, does the 0.1 consumer read it
 /// as the same type?
 ///
-/// This used to ALSO admit any name whose PRIMITIVE scheme forked
-/// (`primitive_type_with_version`, `pt_diff`), which was wrong for a type
-/// check in a way that mattered. `PRIMITIVE_NAMES` is a list of VALUE names —
-/// `band`, `read-file`, `tabular`, `<.` — and none of them is a type, so their
-/// only effect on a type-position guard is via a name collision. There was a
-/// real one: `math-char-class` is both a builtin type (nominal, version-blind
-/// under both) and a primitive whose scheme mentions the genuinely-forked
-/// `math`. Its scheme forking dragged the TYPE name into this set, so the
-/// guard rejected `math.satyh`'s perfectly safe sig mention (`\math-style :
-/// [math-char-class; math] math-cmd`) and, through it, every 0.1 document
-/// reaching the 0.0.6 math package. The design doc says as much in X3.1 —
-/// "only its constructor set forks … keep it out of X3" — but the derivation
-/// pulled it back in.
+/// Do NOT also admit names whose PRIMITIVE scheme forks
+/// (`primitive_type_with_version`, `pt_diff`). `PRIMITIVE_NAMES` is a list of
+/// VALUE names — `band`, `read-file`, `tabular`, `<.` — none of which is a
+/// type, so their only effect on a type-position guard is via a name
+/// collision, and there is a real one: `math-char-class` is both a builtin
+/// type (nominal, version-blind under both) and a primitive whose scheme
+/// mentions the genuinely-forked `math`. Pulling the TYPE name in that way
+/// makes the guard reject `math.satyh`'s perfectly safe sig mention
+/// (`\math-style : [math-char-class; math] math-cmd`) and, through it, every
+/// 0.1 document reaching the 0.0.6 math package. X3.1 says as much: "only its
+/// constructor set forks … keep it out of X3".
 ///
-/// A forked primitive VALUE is not this guard's problem: X2a made each 0.0.6
-/// dependency's bindings `Ast::VersionScope(V0_0, _)`-wrapped, so a forked
+/// A forked primitive VALUE is not this guard's problem: X2a wraps each 0.0.6
+/// dependency's bindings in `Ast::VersionScope(V0_0, _)`, so a forked
 /// primitive referenced inside one resolves against 0.0.6's own `PrimDef` and
-/// runs under `Interp::version = V0_0`. That is why `lib.rs` already dropped
-/// the value half of the guard (`free.values` against `forked_prim_names`).
-/// The names below are therefore just the builtin TYPE names, filtered to
-/// those that really do lower differently.
+/// runs under `Interp::version = V0_0`. That is why `lib.rs` has no value half
+/// of the guard. The names below are therefore just the builtin TYPE names,
+/// filtered to those that really do lower differently.
 pub fn forked_type_names() -> BTreeSet<String> {
     [
         "math",
@@ -1025,9 +999,8 @@ fn lower_type_atom(
                     // sig was written in (`command_scheme`'s harvest sorts
                     // the same way). Every 0.0.6-reachable item has
                     // `opt_labels == []` (that grammar has no such prefix at
-                    // all), so this is a no-op there — the existing
-                    // `optional`/`mandatory` split on the 0.0.6 positional
-                    // `?` suffix marker is unaffected.
+                    // all), so it takes the `optional`/`mandatory` split on
+                    // the 0.0.6 positional `?` suffix marker instead.
                     if a.opt_labels.is_empty() {
                         if a.opt.is_some() {
                             optional(ty)
@@ -1215,18 +1188,16 @@ fn lower_type_app(
 /// `dom -> cod`, with `?->`'s optional-argument prefix (`opts`) folded in as
 /// leading `option`-wrapped mandatory domains — the Slice-1 stand-in R2 calls
 /// out: `config ?-> block-text -> document` lowers to `Func(option(config),
-/// Func(block-text, document))`, exactly the shape `frontend-completion.md`
-/// Sub-area 2's call-site model produces (`Some`/`None` applied to a plain,
-/// `option`-typed domain — see `elaborate.rs`'s `app_arg_to_ast`) — the "one
-/// consistent optional-arg model" the two plans share. Not upstream's real
+/// Func(block-text, document))`, exactly the shape the call-site model
+/// produces (`Some`/`None` applied to a plain,
+/// `option`-typed domain — see `elaborate.rs`'s `app_arg_to_ast`) — one
+/// consistent optional-arg model. Not upstream's real
 /// `option_row`/arity-changing encoding (that's the full-roadmap R2 item);
 /// this only needs the two encodings to *unify*, which a plain `option`
 /// domain already does. `pub(crate)`: Sub-slice 2d-1's `v1/module_check.rs`
 /// reuses this exact lowering for a sig `val`'s declared type, twice per decl
-/// (§3.4's skolemize-by-lowering — a flexible-var map for the committed
-/// scheme, a rigid-stamp map for the subsumption check) — see this module's
-/// crate-report doc comment and the spec's §2.3 API table. Visibility-only
-/// change; behavior is untouched (2d-1's golden-diff invariant, §4.3-F).
+/// (skolemize-by-lowering — a flexible-var map for the committed scheme, a
+/// rigid-stamp map for the subsumption check).
 pub(crate) fn lower_type_expr(
     ty: &TypeExpr,
     tyvars: &HashMap<String, MonoType>,
@@ -1275,7 +1246,7 @@ pub(crate) fn lower_type_expr(
 /// optional-arg-rows increment 2: reject a `?(l : ty) -> ...`
 /// labeled-optional-argument type domain under `V0_0` with a clear version
 /// error, mirroring `elaborate.rs`'s `Expr::FunRows`/`AppArg::Bundled`
-/// value-level gates (§9.2/§9.3 there) — the TYPE-level analogue. It lives
+/// value-level gates — the TYPE-level analogue. It lives
 /// here (not `elaborate.rs`) because a `type`/ctor-payload `TypeExpr` is
 /// never routed through the elaborator at all: `UserTypeDecl`/
 /// `UserSynonymDecl` (`elaborate.rs`) carry a raw CST `TypeExpr` fragment
@@ -1349,8 +1320,7 @@ fn find_opt_row_fun_in_atom(a: &TypeAtom) -> Option<Span> {
 /// `'a`) attaches its `Kind::Record` bound to.
 ///
 /// `#[allow(dead_code)]`: only exercised by this module's own tests today —
-/// no sig-enforcement pass calls [`lower_sig_item`] yet
-/// (`typechecker-completion.md` §3, still roadmap).
+/// no sig-enforcement pass calls [`lower_sig_item`] yet (still roadmap).
 #[allow(dead_code)]
 fn collect_type_vars(ty: &TypeExpr, out: &mut Vec<String>) {
     fn push(name: &str, out: &mut Vec<String>) {
@@ -1427,7 +1397,7 @@ fn collect_type_vars(ty: &TypeExpr, out: &mut Vec<String>) {
 /// *types* — `Kind::Record` (`types.rs`) stores labels only, so
 /// `constraint 'a :: (| title : inline-text; … |)` checks label
 /// *presence*, not the field's declared type. A documented Slice-1
-/// limitation (`class-signature-lang-gaps.md` R3), not a grammar gap: the
+/// limitation (R3), not a grammar gap: the
 /// impl's row still gets its own field types from ordinary usage, so this
 /// is unlikely to admit a wrong program in practice.
 #[allow(dead_code)]
@@ -1446,7 +1416,7 @@ fn lower_record_kind(rk: &RecordKind) -> BTreeSet<String> {
 /// **The obligation check itself rides on existing code, for free.** Once
 /// this variable is ever unified against a concrete `MonoType::Record`
 /// (which is exactly what enforcing the signature against a real `struct`
-/// implementation — `typechecker-completion.md` §3, not yet built — would
+/// implementation — not yet built — would
 /// do), `unify::bind_var`'s `Kind::Record` branch already rejects a row
 /// missing any declared label via `row_require_label`. Slice 1 only wires
 /// the constraint *into* that existing machinery; no sig-enforcement pass
@@ -1781,27 +1751,22 @@ pub(crate) struct Checker<'s> {
     /// variant's full constructor set given the scrutinee's resolved
     /// `MonoType::Variant(name, _)`.
     variants: HashMap<String, Rc<VariantDecl>>,
-    /// The synonym table — previously a local of `new_with_version`, dropped
-    /// after construction. Promoted to a field so `declare_variant` can
-    /// expand ctor payloads through it after construction time (per-binding
-    /// registration). Behavior-neutral for the whole-program path: it is
-    /// populated by the same `build_synonym_decl` calls in the same order,
-    /// and nothing reads it after the variant decls are built (same as
-    /// today).
+    /// The synonym table. A field rather than a local of `new_with_version`
+    /// so `declare_variant` can expand ctor payloads through it after
+    /// construction time (per-binding registration).
     synonyms: HashMap<String, SynonymDecl>,
     /// Non-fatal diagnostics accumulated by the exhaustiveness/redundancy
     /// pass (see `typecheck_verbose`); v0.0.6's `exhchecker.ml` warns and
     /// continues rather than rejecting the program.
     warnings: Vec<MatchWarning>,
-    /// The target version this session is checking against (math-split
-    /// spec §1.1/§4.4) — set by [`Checker::install_builtin_variants`] (the
+    /// The target version this session is checking against — set by
+    /// [`Checker::install_builtin_variants`] (the
     /// one call every real construction path already makes with the real
     /// version, `Checker::empty` alone never does). Threaded into
     /// `name_to_mono`'s surface-type-name fork and `Ast::LetMathIn`'s
     /// scheme rule (`math_command_scheme` vs `math_command_scheme_v01`).
-    /// Default (`Checker::empty`, never followed by `install_builtin_
-    /// variants`) is `V0_0` — behavior-neutral for every existing
-    /// 0.0.6-only test that never installs builtins at all.
+    /// Default (`Checker::empty`, never followed by
+    /// `install_builtin_variants`) is `V0_0`.
     version: RustyfiVersion,
     /// The generation of the code currently being inferred, when that is
     /// NOT [`Checker::version`] — set (save/restore) by the
@@ -1823,8 +1788,7 @@ pub(crate) struct Checker<'s> {
     /// The stage this expression is being read at. Starts at whatever the
     /// file declared (`@stage:`, default [`Stage::Stage1`]) and is shifted by
     /// `&`/`~`: a quote reads its body one stage LATER, a splice one stage
-    /// EARLIER. Only `Next`/`Prev` consult it, so every unstaged program
-    /// checks exactly as before.
+    /// EARLIER. Only `Next`/`Prev` consult it.
     stage: Stage,
 }
 
@@ -1836,8 +1800,7 @@ pub(crate) struct Checker<'s> {
 /// through).
 pub(crate) enum BindingView<'a, 's> {
     /// `Ast::LetIn` — plain value OR `\`/`+`-sigiled command binding; the
-    /// sigil dispatch (`command_scheme`) stays inside the checker, exactly
-    /// as today.
+    /// sigil dispatch (`command_scheme`) stays inside the checker.
     Let {
         name: Symbol<'s>,
         value: &'a Ast<'s>,
@@ -1864,8 +1827,7 @@ impl<'s> Checker<'s> {
 
     /// Bare session: empty tables, fresh `TypeContext`. Registers NOTHING —
     /// not even builtins — so `new_with_version` can compose the exact
-    /// statement order of the original monolithic constructor (§5 channel
-    /// 8 of the L3 spec).
+    /// statement order of the original monolithic constructor (L3 channel 8).
     pub(crate) fn empty(store: &'s SymbolStore) -> Checker<'s> {
         Checker {
             store,
@@ -1883,32 +1845,30 @@ impl<'s> Checker<'s> {
         }
     }
 
-    /// Set the session's target version (math-split spec §1.1/§4.4's
-    /// `Checker.version` field) with NO other side effect — a pure field
-    /// write, safe to call before anything else. `new_with_version`/
-    /// `v1::module_check::check_program`'s session-setup sequences both call
-    /// this FIRST, ahead of their (order-critical, unchanged) `declare_
-    /// synonym` loop, so a V0_1 synonym body that names `math-text`/
-    /// `math-boxes` resolves correctly even though `install_builtin_
-    /// variants` (which also happens to set this field, for every path that
-    /// predates this one) doesn't run until afterward. A no-op for every
-    /// 0.0.6 path: `empty()` already defaults to `V0_0`.
+    /// Set the session's target version with NO other side effect — a pure
+    /// field write, safe to call before anything else.
+    /// `new_with_version`/`v1::module_check::check_program`'s session-setup
+    /// sequences both call this FIRST, ahead of their order-critical
+    /// `declare_synonym` loop, so a V0_1 synonym body that names
+    /// `math-text`/`math-boxes` resolves correctly even though
+    /// `install_builtin_variants` (which also sets this field) does not run
+    /// until afterward. A no-op for every 0.0.6 path: `empty()` already
+    /// defaults to `V0_0`.
     pub(crate) fn set_version(&mut self, version: RustyfiVersion) {
         self.version = version;
     }
 
     /// A symbol's source text. Every diagnostic this module formats goes
     /// through here: `Symbol`'s own `Debug` is index-only by design, and the
-    /// golden tests diff the resolved strings (design doc §7).
+    /// golden tests diff the resolved strings.
     fn text(&self, sym: Symbol<'s>) -> &'s str {
         self.store.resolve(sym)
     }
 
-    /// Register the builtin variant decls for `version` — moved verbatim
-    /// from the former `new_with_version` body. Also records `version` on
-    /// `self` (redundant with `set_version` for every path that calls both,
-    /// kept so this method alone is still enough for any caller that skips
-    /// `set_version`, e.g. `:2237`'s bare-builtins test construction).
+    /// Register the builtin variant decls for `version`, and record
+    /// `version` on `self` — redundant with `set_version` for a path that
+    /// calls both, kept so this method alone suffices for a caller that
+    /// skips `set_version` (e.g. the bare-builtins test construction).
     pub(crate) fn install_builtin_variants(&mut self, version: RustyfiVersion) {
         self.version = version;
         self.install_additional_builtin_variants(version);
@@ -1941,10 +1901,8 @@ impl<'s> Checker<'s> {
         }
     }
 
-    /// One synonym registration — moved verbatim from the former
-    /// `new_with_version` loop body. Does NOT cycle-check (matching the
-    /// original register-all-then-check shape); call `check_cycles` when
-    /// done registering. Optional-arg-rows increment 2: now fallible —
+    /// One synonym registration. Does NOT cycle-check — register all, then
+    /// call `check_cycles`. Fallible since optional-arg-rows increment 2:
     /// `check_type_expr_v0_1_only` rejects a `?(l:ty)->` domain in the
     /// synonym's body under `V0_0` before it is ever lowered.
     pub(crate) fn declare_synonym(&mut self, decl: &UserSynonymDecl) -> Result<(), TypeError> {
@@ -1987,7 +1945,7 @@ impl<'s> Checker<'s> {
     /// The original whole-program constructor, re-expressed as the exact
     /// same statement sequence through the methods above: synonyms →
     /// cycle-check → builtins → user variant decls. This order-preservation
-    /// is load-bearing (see the L3 spec §5 channels 2, 7, 8).
+    /// is load-bearing (L3 channels 2, 7, 8).
     fn new_with_version(
         program: &Program<'s>,
         version: RustyfiVersion,
@@ -2024,12 +1982,11 @@ impl<'s> Checker<'s> {
 
     /// Turn a `\`/`+`-named `LetIn` binding's ordinarily-inferred value type
     /// `tv` into the genuine command type (`MonoType::InlineCmd`/`BlockCmd`)
-    /// it gets bound under, per this phase's mandate (see this module's
-    /// crate-report entry): a user-defined command is no longer typed as a
-    /// plain "context-curried" function, but as `[τ1; ..; τn] inline-cmd`
-    /// (resp. `block-cmd`), matching v0.0.6's real `HorzCommandType`/
-    /// `VertCommandType` (`typechecker.ml`'s `UTLetHorzIn`/`UTLetVertIn`
-    /// rules).
+    /// it gets bound under: a user-defined command is typed as
+    /// `[τ1; ..; τn] inline-cmd` (resp. `block-cmd`), not as a plain
+    /// "context-curried" function — matching v0.0.6's real
+    /// `HorzCommandType`/`VertCommandType` (`typechecker.ml`'s
+    /// `UTLetHorzIn`/`UTLetVertIn` rules).
     ///
     /// Two shapes reach this function, per [`command_sigil`]'s call site:
     ///
@@ -2125,7 +2082,7 @@ impl<'s> Checker<'s> {
             // (`elaborate_let_inline` always wraps it in a plain
             // `Ast::Lambda`, which infers `Row::Empty` — `prim_types::arrow`)
             // — guard it defensively rather than silently dropping/mis-
-            // attributing a label (risk 1 of the spec).
+            // attributing a label.
             if !matches!(&*resolve_row(&ctx_row), Row::Empty) {
                 return Err(TypeError::simple(
                     span,
@@ -2176,16 +2133,16 @@ impl<'s> Checker<'s> {
                 span,
                 &format!("the result of '{name}'"),
             )?;
-            // Optional command params, this milestone's simplification (Sub-area 2
-            // / `command_scheme`'s doc comment): there is no def-site `?:param`
-            // marker (this grammar has none), so a param is treated as optional
-            // exactly when its *inferred* domain resolves to `_ option` — i.e. the
-            // body actually uses it as an `option` (`match p with Some .. | None ->
-            // ..`, etc.). `CmdArgType.ty` then stores the option's INNER type
-            // (peeled), so it matches the `[ty?; ..]` signature-lowering shape 1:1
-            // (`lower_type_atom`'s `TypeAtom::Cmd` arm) — `check_cmd_args` re-wraps
-            // it in `option(..)` per call, since call-site args always arrive
-            // pre-wrapped as `Some`/`None` (`elaborate.rs`'s `app_arg_to_ast`).
+            // Optional command params, simplified (Sub-area 2): this grammar
+            // has no def-site `?:param` marker, so a param counts as optional
+            // exactly when its INFERRED domain resolves to `_ option` — i.e.
+            // the body actually uses it as an `option` (`match p with Some ..
+            // | None -> ..`). `CmdArgType.ty` then stores the option's INNER
+            // type, matching the `[ty?; ..]` signature-lowering shape 1:1
+            // (`lower_type_atom`'s `TypeAtom::Cmd` arm); `check_cmd_args`
+            // re-wraps it in `option(..)` per call, since call-site args
+            // always arrive pre-wrapped as `Some`/`None`
+            // (`elaborate.rs`'s `app_arg_to_ast`).
             doms.into_iter()
                 .map(|d| match resolve(&d).into_owned() {
                     MonoType::Variant(vname, mut vargs)
@@ -2239,9 +2196,9 @@ impl<'s> Checker<'s> {
         Ok(generalize(self.ctx.level(), &MonoType::MathCmd(params)))
     }
 
-    /// `Ast::LetMathIn`'s V0_1 scheme-building rule (math-split spec §4.4) —
-    /// the `val math` analog of `math_command_scheme` above. The lowering
-    /// (`v1/lower.rs::lower_bind_v1`, spec §4.3) ALWAYS synthesizes exactly
+    /// `Ast::LetMathIn`'s V0_1 scheme-building rule — the `val math` analog
+    /// of `math_command_scheme` above. The lowering
+    /// (`v1/lower.rs::lower_bind_v1`) ALWAYS synthesizes exactly
     /// three trailing lambdas around a `val math` body — `fun ctx -> fun sub
     /// -> fun sup -> …` — so `tv`'s function chain always has at least 3
     /// domains; the LAST three are peeled off as `(d_ctx, d_sub, d_sup)`
@@ -2251,14 +2208,14 @@ impl<'s> Checker<'s> {
     ///
     /// optional-arg-rows increment 3b-α: like `command_scheme`'s V0_1 branch,
     /// a leading user parameter may be a `?(l = x, …)` bundle
-    /// (`curry_cmd_params_v1` already emits `Ast::LambdaOpt` for it — no
-    /// elaborate edit needed), so this uses the row-carrying
+    /// (`curry_cmd_params_v1` emits `Ast::LambdaOpt` for it), so this uses
+    /// the row-carrying
     /// `peel_func_chain_rows` + `harvest_slot` (shared with
     /// `command_scheme`) instead of the plain `peel_func_chain` + `_ option`
     /// heuristic. The synthesized ctx/sub/sup trailing trio can never
     /// legally carry a bundle (`lower_value_math` always wraps them in plain
     /// `fun`s, which infer `Row::Empty`) — guarded defensively, mirroring
-    /// `command_scheme`'s ctx-row guard (spec risk: an off-by-one here would
+    /// `command_scheme`'s ctx-row guard (an off-by-one here would
     /// silently turn `sub`/`sup` into a labeled slot or eat the last user
     /// param, since the trio is at the TAIL of the domain chain — opposite
     /// of inline/block, where ctx is FIRST).
@@ -2353,8 +2310,7 @@ impl<'s> Checker<'s> {
     /// the declared label type; a declared label this call omits simply
     /// defaults to `None` at runtime (`apply_with_opts`) — nothing to check
     /// here for it. `opts` is `[]` for every 0.0.6-reachable call and for
-    /// increment 3a's unbundled calls, so this loop is a no-op there
-    /// (frozen-corpus byte-identical).
+    /// increment 3a's unbundled calls, so this loop is a no-op there.
     fn check_cmd_args(
         &mut self,
         env: &TypeEnv<'s>,
@@ -2416,17 +2372,16 @@ impl<'s> Checker<'s> {
 
     // ---- expressions -------------------------------------------------------
 
-    /// THE L3 DELIVERABLE. Infer the scheme(s) of ONE binding against a
-    /// static `env`, WITHOUT extending anything: returns the
+    /// L3: infer the scheme(s) of ONE binding against a static `env`,
+    /// WITHOUT extending anything. Returns the
     /// `(name, PolyType)` pairs in binding order (singleton for
     /// Let/LetMath/LetMutable; group order for LetRec). The caller decides
     /// what to put in the environment — the whole-program path commits them
     /// verbatim (`env.with_all`).
     ///
     /// Level discipline, sigil dispatch, generalization, and the
-    /// value-restriction asymmetry are all INSIDE this method, moved
-    /// verbatim from the four former `infer` Let arms — callers cannot get
-    /// them wrong.
+    /// value-restriction asymmetry all live INSIDE this method, so callers
+    /// cannot get them wrong.
     pub(crate) fn infer_binding(
         &mut self,
         env: &TypeEnv<'s>,
@@ -2463,12 +2418,11 @@ impl<'s> Checker<'s> {
                 self.ctx.enter_level();
                 let tv = self.infer(env, value)?;
                 self.ctx.leave_level();
-                // math-split spec §4.4: V0_0's `let-math` and V0_1's
-                // `val math` both lower to the SAME `Ast::LetMathIn`
-                // (spec §4.3) — only the SCHEME RULE forks, since a `val
-                // math` binding's lowering always synthesizes exactly three
-                // trailing ctx/sub/sup lambdas that `math_command_scheme`'s
-                // v0.0.6 rule knows nothing about.
+                // V0_0's `let-math` and V0_1's `val math` both lower to the
+                // SAME `Ast::LetMathIn` — only the SCHEME RULE forks, since
+                // a `val math` binding's lowering always synthesizes exactly
+                // three trailing ctx/sub/sup lambdas that
+                // `math_command_scheme`'s v0.0.6 rule knows nothing about.
                 //
                 // It forks on the BINDING's generation, not the session's
                 // (`binding_version`, not `self.version`): in a merged
@@ -2476,8 +2430,7 @@ impl<'s> Checker<'s> {
                 // spliced 0.0.6 package's `let-math` RHS carries its own
                 // `Ast::VersionScope(V0_0, _)`. On every single-version
                 // program the two agree by construction (no `VersionScope`
-                // node exists there at all), so this is exactly the old
-                // dispatch.
+                // node exists there at all).
                 let scheme = if self.binding_version(value).math_is_split() {
                     self.math_command_scheme_v01(self.text(name), tv, ast_span(value))?
                 } else {
@@ -2533,9 +2486,9 @@ impl<'s> Checker<'s> {
     }
 
     /// Infer one expression against a static env — a `pub(crate)` wrapper
-    /// over the private `infer` below (kept private to leave the ~40
-    /// internal `self.infer(` call sites zero-diff). 2d uses this for the
-    /// document body and for any non-binding expression it must check.
+    /// over the private `infer` below, which stays private so the ~40
+    /// internal `self.infer(` call sites need not change. `v1::module_check`
+    /// uses this for the document body and any non-binding expression.
     pub(crate) fn infer_expr(
         &mut self,
         env: &TypeEnv<'s>,
@@ -2545,17 +2498,15 @@ impl<'s> Checker<'s> {
     }
 
     /// Drain accumulated non-fatal match warnings (exhaustiveness /
-    /// redundancy). The whole-program path keeps reading the `warnings`
-    /// field directly, so its behavior is untouched; this is additive for
-    /// per-binding callers.
+    /// redundancy) — for per-binding callers; the whole-program path reads
+    /// the `warnings` field directly.
     pub(crate) fn take_warnings(&mut self) -> Vec<MatchWarning> {
         std::mem::take(&mut self.warnings)
     }
 
     /// Mutable access to the inference context — 2d's sig lowering needs it
-    /// (`lower_sig_item(item, &mut ctx)`, already taking `&mut
-    /// TypeContext`), and 2d's subsumption check will mint fresh vars
-    /// through it.
+    /// (`lower_sig_item(item, &mut ctx)`), and its subsumption check mints
+    /// fresh vars through it.
     pub(crate) fn ctx_mut(&mut self) -> &mut TypeContext {
         &mut self.ctx
     }
@@ -2563,13 +2514,12 @@ impl<'s> Checker<'s> {
     /// Expand every synonym reference inside `ty` against this session's
     /// synonym table — a `pub(crate)` accessor over the private free fn
     /// [`expand_synonyms`], added for Sub-slice 2d-1's `v1/module_check.rs`
-    /// (spec §2.3/§4.2 step 1d): a sig `val`'s declared type may mention the
+    /// (step 1d): a sig `val`'s declared type may mention the
     /// module's own `type t = ..` synonym (by its pre-qualified `"M.t"`
     /// name, `v1/lower.rs`'s `TypeNameEnv`), and must expand through the
     /// SAME table the impl side's `build_variant_decl`/ordinary inference
     /// already does, so e.g. `val f : t -> t` over `type t = int` checks
-    /// against the impl's expanded `int -> int`. Visibility-additive only;
-    /// `expand_synonyms` itself and its call sites are untouched.
+    /// against the impl's expanded `int -> int`.
     pub(crate) fn expand_synonyms_in(&self, ty: &MonoType) -> Result<MonoType, TypeError> {
         expand_synonyms(ty, &self.synonyms)
     }
@@ -2676,15 +2626,14 @@ impl<'s> Checker<'s> {
     /// are applied INSIDE `push_named_binding`/the `LetRec` arm, i.e. after
     /// the stage wrap, for a module member.
     ///
-    /// Only the `ModuleScope` half of that peel actually fires. `elaborate.rs`
+    /// Only the `ModuleScope` half of that peel actually fires: `elaborate.rs`
     /// applies `maybe_v006_scope` to a binding's RHS and `stage_wrap_item`
     /// outside it, so a cross-version staged binding is always
-    /// `StageScope(_, VersionScope(_, ..))` — the `VersionScope` arm is
-    /// reached only if some future arm builds the opposite nesting. Deleting
-    /// it breaks no test; deleting the `ModuleScope` arm breaks
-    /// `xver_staging.rs`'s `the_file_stage_and_the_version_scope_compose_on_a_
-    /// module_member`. Kept because `elaborate::already_staged` peels the same
-    /// two and the two must not disagree.
+    /// `StageScope(_, VersionScope(_, ..))`. The `VersionScope` arm is kept
+    /// anyway, because `elaborate::already_staged` peels the same two and the
+    /// two must not disagree. Deleting the `ModuleScope` arm breaks
+    /// `xver_staging.rs`'s
+    /// `the_file_stage_and_the_version_scope_compose_on_a_module_member`.
     pub(crate) fn binding_stage(&self, value: &Ast<'s>) -> Stage {
         fn declared<'s>(a: &Ast<'s>) -> Option<Stage> {
             match a {
@@ -2715,8 +2664,7 @@ impl<'s> Checker<'s> {
     /// in a crossed 0.0.6 package — including the bundled corpus's own
     /// `math.satyh`, which the published packages `@require:` constantly
     /// (`texlogo`, `latexcmds`, `siunitx`, … all reach it transitively), so
-    /// the diagnostic a user actually saw was a math-split spec complaint
-    /// about a file they never wrote.
+    /// the diagnostic a user actually saw was about a file they never wrote.
     ///
     /// The wrapper peel is `binding_stage`'s, minus the arm that terminates
     /// it: `elaborate::walk_bindings` puts `VersionScope` INSIDE
@@ -2733,7 +2681,7 @@ impl<'s> Checker<'s> {
     /// — so the ambient generation, recorded by the `Ast::VersionScope`
     /// infer arm as it descends, is what answers for it. Outside every
     /// scope (i.e. always, on a single-version program) this is `None` and
-    /// the session's own version answers, exactly as before.
+    /// the session's own version answers.
     pub(crate) fn binding_version(&self, value: &Ast<'s>) -> RustyfiVersion {
         fn declared<'s>(a: &Ast<'s>) -> Option<RustyfiVersion> {
             match a {
@@ -2871,8 +2819,8 @@ impl<'s> Checker<'s> {
                 let tr = self.fresh();
                 // Version-split the optional-argument row: 0.0.6 functions
                 // provably carry no labeled optionals (`Row::Empty`, matching
-                // `arrow()` and every prim), so this stays byte-identical
-                // there. Under 0.1 a fresh open row var absorbs the callee's
+                // `arrow()` and every prim). Under 0.1 a fresh open row var
+                // absorbs the callee's
                 // declared optional row, letting a *plain* call of an
                 // opt-taking function typecheck (defaulting every optional to
                 // `None` at run time) and making higher-order code
@@ -2919,12 +2867,8 @@ impl<'s> Checker<'s> {
                 self.infer(&inner, body)
             }
 
-            // `let-math \cmd param* = expr in body` — structurally
-            // identical to the `Ast::LetIn` command-binding rule above, but
-            // for a binding that is ALREADY known (by construction, via the
-            // dedicated Ast variant — see its doc comment) to be a math
-            // command, so there is no sigil to dispatch on and no "which
-            // kind of `\`-binding is this" ambiguity to resolve.
+            // `let-math \cmd param* = expr in body` — see
+            // `infer_binding`'s `BindingView::LetMath` arm.
             Ast::LetMathIn(name, value, body) => {
                 let schemes =
                     self.infer_binding(env, BindingView::LetMath { name: *name, value })?;
@@ -2964,8 +2908,8 @@ impl<'s> Checker<'s> {
                         }
                     }
                 }
-                // Exhaustiveness/redundancy (typechecker-completion plan,
-                // §Slice 1): non-fatal, so it runs only after every arm has
+                // Exhaustiveness/redundancy (Slice 1): non-fatal, so it runs
+                // only after every arm has
                 // typechecked, against `tscrut` as resolved as inference will
                 // ever make it. See `exhaustive::check_match`'s doc comment.
                 let resolved_scrut = resolve(&tscrut);
@@ -3345,9 +3289,9 @@ impl<'s> Checker<'s> {
     /// rule (`Checker::command_scheme`) or, for the milestone's built-in
     /// commands, directly by `prim_types::primitive_type`'s `\emph` entry.
     /// Checking an application here is exact-arity plus one unification per
-    /// argument against `params`, via `check_cmd_args` — there is no longer
-    /// any `context -> arg1 -> .. -> inline-boxes` function shape to unify
-    /// the whole command type against.
+    /// argument against `params`, via `check_cmd_args` — there is no
+    /// `context -> arg1 -> .. -> inline-boxes` function shape to unify the
+    /// whole command type against.
     fn check_itext(&mut self, env: &TypeEnv<'s>, it: &IText<'s>) -> Result<(), TypeError> {
         match it {
             IText::Text(_) | IText::CodeText(_) => Ok(()),
@@ -3389,15 +3333,11 @@ impl<'s> Checker<'s> {
                 Ok(())
             }
             IText::EmbedMath { elems, span: _ } => {
-                // PERMISSIVE: quoted-math embedded in inline text is only
-                // ever read at run time by `read-inline`, which currently
-                // (milestone 1, ahead of phase 7's real math typesetting)
-                // always errors on it — so there is no real type to check
-                // its embedded expressions against yet. Type each embedded
-                // expression against its own fresh variable, purely so
-                // unbound-name mistakes elsewhere inside it still get
-                // (indirectly) exercised, without asserting anything about
-                // what the result should be.
+                // PERMISSIVE: there is no real type to check a quoted-math
+                // embed's expressions against. Type each against its own
+                // fresh variable, purely so unbound-name mistakes inside it
+                // are still caught, without asserting anything about the
+                // result.
                 for me in elems.iter() {
                     self.check_math_elem(env, me)?;
                 }
@@ -3524,8 +3464,7 @@ impl<'s> Checker<'s> {
 /// `mods.join(".")` prefix (module names are ordinary identifiers, so they
 /// can never themselves start with `\`/`+`) — see `qualify_key`'s doc
 /// comment. A bare (unqualified) name has no `.` at all, so
-/// `rsplit('.').next()` degrades to the whole string, which is exactly what
-/// we want.
+/// `rsplit('.').next()` degrades to the whole string.
 ///
 /// **Must also check the second character.** A genuine command name's
 /// sigil is always immediately followed by an identifier (`+p`, `\emph`,
@@ -3597,7 +3536,7 @@ fn peel_func_chain_rows(ty: MonoType) -> (Vec<(Row, MonoType)>, MonoType) {
 /// see [`peel_func_chain_rows`]) into a closed-label-map [`CmdArgType`]: walk
 /// the (resolved) row's `Cons` chain into a `Vec<(String, MonoType)>`, sorted
 /// by label so `unify_cmd_args`'s equal-domain zip is order-insensitive
-/// (optional-arg-rows increment 3a spec, risk 3). A leftover `Row::Var` (an
+/// (optional-arg-rows increment 3a). A leftover `Row::Var` (an
 /// under-constrained/free row — the ordinary case for a slot with no `?(…)`
 /// bundle at all) defaults to no labels, same as `Row::Empty`. Shared by
 /// `Checker::command_scheme`'s V0_1 branch (increment 3a) and
@@ -3637,7 +3576,7 @@ pub(crate) fn ast_span<'s>(ast: &Ast<'s>) -> Option<Span> {
 
 /// Type-check a whole elaborated [`Program`], additionally returning every
 /// non-fatal [`MatchWarning`] the exhaustiveness/redundancy pass collected
-/// (typechecker-completion plan, §Slice 1) — v0.0.6's `exhchecker.ml` warns
+/// (Slice 1) — v0.0.6's `exhchecker.ml` warns
 /// on a non-exhaustive or redundant `match` rather than rejecting the
 /// program, so these never turn a would-have-passed program into a
 /// `TypeError`.
@@ -3663,12 +3602,10 @@ pub fn typecheck_verbose_with_version<'s>(
     Ok(checker.warnings)
 }
 
-/// Type-check a whole elaborated [`Program`]. Validation only: on success
-/// the caller proceeds to evaluate `program.body` exactly as before (the
-/// evaluator is untouched by this phase). A thin wrapper over
-/// [`typecheck_verbose`] that discards its warnings — every existing caller
-/// (`lib.rs`'s `compile_document_cst`, `compile.rs`, and every test that
-/// predates §Slice 1) is therefore unaffected by the new pass.
+/// Type-check a whole elaborated [`Program`]. Validation only: on success the
+/// caller proceeds to evaluate `program.body`; the evaluator is untouched by
+/// this phase. A thin wrapper over [`typecheck_verbose`] that discards its
+/// warnings.
 pub fn typecheck<'s>(program: &Program<'s>) -> Result<(), TypeError> {
     typecheck_with_version(program, RustyfiVersion::V0_0)
 }
@@ -3683,10 +3620,9 @@ pub fn typecheck_with_version<'s>(
 }
 
 // ============================================================================
-// L3 (`…/tmp/l3-typecheck-refactor.md` §8.2): per-binding ≡ whole-program
-// equivalence, and session-incrementality. A `#[cfg(test)]` unit module
-// since `BindingView`/`Checker`/`infer_binding` etc. are `pub(crate)` — an
-// integration test can't reach them.
+// L3: per-binding ≡ whole-program equivalence, and session-incrementality.
+// A `#[cfg(test)]` unit module since `BindingView`/`Checker`/`infer_binding`
+// etc. are `pub(crate)` — an integration test can't reach them.
 // ============================================================================
 #[cfg(test)]
 mod l3_per_binding_tests {
@@ -3703,9 +3639,9 @@ mod l3_per_binding_tests {
     /// Manually drive the checker per binding: walk `program.body`'s Let
     /// chain constructing `BindingView`s by hand, `infer_binding` +
     /// `with_all` at each step, `infer_expr` on the non-Let tail. This is
-    /// exactly what `infer`'s own recursion does internally (§2.4) — driven
-    /// here from outside the engine through the `pub(crate)` per-binding
-    /// API, the same way 2d's `v1/module_check.rs` will.
+    /// exactly what `infer`'s own recursion does internally — driven here
+    /// from outside the engine through the `pub(crate)` per-binding API, the
+    /// same way `v1/module_check.rs` does.
     fn drive_manually<'s>(
         program: &Program<'s>,
         version: RustyfiVersion,
@@ -3827,7 +3763,7 @@ mod l3_per_binding_tests {
         }
     }
 
-    /// §8.2.2: session-incrementality. `declare_variant` after
+    /// Session-incrementality. `declare_variant` after
     /// `infer_binding` affects only *later* checking against the session —
     /// a ctor referenced before its `declare_variant` fails with the same
     /// "unknown constructor" error the whole-program path gives for a
@@ -3910,17 +3846,16 @@ mod x2b_shadow_tests {
     /// the whole tree under a `V0_1`-ambient `Checker`. `page-break` is a
     /// `PRIMITIVE_NAMES` member (a version-forked one, no less: its `V0_0`
     /// scheme takes the `page` ADT, its `V0_1` scheme a `length * length`
-    /// tuple — see `page_prims.rs`). BEFORE this slice's fix,
-    /// `version_scoped_type_env`'s overwrite loop unconditionally replaced
-    /// every `PRIMITIVE_NAMES` entry with `version`'s builtin scheme the
-    /// moment it entered the `VersionScope`, so the user's `page-break = 42`
-    /// binding would have been silently re-stomped with `V0_0`'s builtin
-    /// `page-break` (a curried function type) — inferring the inner `Var`
-    /// as a function, not `int`. With the fix, `version_scoped_type_env`
-    /// sees `page-break` recorded in `env.shadowed` (set by the `LetIn`
-    /// arm's `env.with_all`, which goes through `TypeEnv::with`) and skips
-    /// the overwrite for that one name, so the `Var` resolves through the
-    /// untouched user binding and the whole expression types as `int`.
+    /// tuple — see `page_prims.rs`). An overwrite loop that replaced every
+    /// `PRIMITIVE_NAMES` entry unconditionally on entering the
+    /// `VersionScope` would re-stomp the user's `page-break = 42` with
+    /// `V0_0`'s builtin `page-break` (a curried function type), inferring the
+    /// inner `Var` as a function, not `int`. Instead
+    /// `version_scoped_type_env` sees `page-break` recorded in
+    /// `env.shadowed` (set by the `LetIn` arm's `env.with_all`, which goes
+    /// through `TypeEnv::with`) and skips the overwrite for that one name, so
+    /// the `Var` resolves through the untouched user binding and the whole
+    /// expression types as `int`.
     #[test]
     fn version_scope_does_not_clobber_a_user_shadowed_primitive() {
         assert!(
@@ -3967,11 +3902,10 @@ mod x2b_shadow_tests {
     /// Companion positive control (same shape as the test above, MINUS the
     /// enclosing user shadow): a version-forked primitive referenced inside
     /// a `VersionScope` still resolves to `version`'s own (function-typed)
-    /// scheme — X2a's original headline capability, unaffected by the X2b
-    /// shadow-respecting change above. Contrasts directly with
+    /// scheme (X2a). Contrasts directly with
     /// `version_scope_does_not_clobber_a_user_shadowed_primitive`'s `int`
-    /// result: same `page-break` name, same `VersionScope(V0_0, _)`, only
-    /// difference is the absence of a prior `let page-break = …` shadow.
+    /// result: same `page-break` name, same `VersionScope(V0_0, _)`, the only
+    /// difference being the absence of a prior `let page-break = …` shadow.
     #[test]
     fn version_scope_still_resolves_unshadowed_forked_primitive() {
         let span = Span::default();
@@ -4068,7 +4002,7 @@ mod sig_constraint_tests {
         // Direct demonstration that the constraint's lowered `Kind::Record`
         // bound rides on *existing* `unify`/`bind_var` machinery for free —
         // no sig-enforcement pass exists yet to drive this against a real
-        // `struct` implementation (`class-signature-lang-gaps.md` R3), but
+        // `struct` implementation (R3), but
         // the positive-presence check itself already works once something
         // does.
         let mut ctx = TypeContext::new();
@@ -4113,8 +4047,7 @@ mod sig_constraint_tests {
         // types, `?->`, and the `constraint` suffix all together. Proves
         // Slice 1's acceptance gate: every item parses and lowers without
         // error (an empty `struct end` body is enough — sig enforcement
-        // against a real implementation is `typechecker-completion.md`
-        // §3's job, not Slice 1's).
+        // against a real implementation is not Slice 1's job).
         let sig = parse_module_sig(
             "module StdJa : sig\n\
              val default-config : config\n\

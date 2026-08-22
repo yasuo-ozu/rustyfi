@@ -1,9 +1,8 @@
-//! Phase-2b evaluator/primitive coverage: `let-mutable`/`<-`/`while`,
+//! Evaluator/primitive coverage: `let-mutable`/`<-`/`while`,
 //! `before` (Sequential), `#label`/`(| with |)` field access/update, quoted
 //! math text, and the primitives that came along for the ride ("!",
-//! `line-break`'s real 4-ary signature). Like `eval_phase2.rs`, these build
-//! `Ast` values directly — the surface syntax for these constructs is being
-//! built in a parallel worktree.
+//! `line-break`'s real 4-ary signature). Builds `Ast` values directly
+//! rather than parsing.
 
 use std::rc::Rc;
 
@@ -33,8 +32,6 @@ impl FontMetrics for Mono {
     }
 }
 
-// ---- small Ast-builder helpers -------------------------------------------------
-
 fn var(name: &str) -> Ast {
     Ast::Var(name.to_string(), Span::default())
 }
@@ -43,7 +40,6 @@ fn app1(f: Ast, a: Ast) -> Ast {
     Ast::Apply(Box::new(f), Box::new(a))
 }
 
-/// `name a b` — a curried two-argument application of a (primitive) name.
 fn app2(name: &str, a: Ast, b: Ast) -> Ast {
     app1(app1(var(name), a), b)
 }
@@ -54,8 +50,6 @@ fn run(ast: &Ast) -> Result<Value, EvalError> {
     let mut interp = eval::Interp::new(&mono);
     interp.eval(&env, ast)
 }
-
-// ---- let-mutable / overwrite / while -------------------------------------------
 
 #[test]
 fn counter_loop_reaches_three() {
@@ -104,15 +98,11 @@ fn overwrite_of_unbound_variable_errors() {
     assert!(err.to_string().contains("unbound"));
 }
 
-// ---- sequential (`before`) ------------------------------------------------------
-
 #[test]
 fn sequential_discards_first_value() {
     let ast = Ast::Sequential(Box::new(Ast::Int(1)), Box::new(Ast::Int(2)));
     assert!(matches!(run(&ast).unwrap(), Value::Int(2)));
 }
-
-// ---- access-field / update-field ------------------------------------------------
 
 fn sample_record() -> Ast {
     Ast::Record(vec![
@@ -171,8 +161,6 @@ fn update_field_absent_label_errors() {
     assert!(err.to_string().contains('z'));
 }
 
-// ---- quoted math ------------------------------------------------------------------
-
 #[test]
 fn math_text_quotes_without_evaluating() {
     let ast = Ast::MathText(Rc::new(vec![AstMathElem::Chars("x".to_string())]));
@@ -187,10 +175,9 @@ fn math_text_quotes_without_evaluating() {
     }
 }
 
-/// `read_inline`'s `EmbedMath` arm no longer errors — it walks the
-/// `MathElem` tree into a `PureHorzBox::Math` (see `math_slice1.rs` for the
-/// box's own glyph-shift/-scale assertions; this just checks the seam from
-/// `IText::EmbedMath` through `read_inline`).
+/// `read_inline`'s `EmbedMath` arm walks the `MathElem` tree into a
+/// `PureHorzBox::Math`. Only the `IText::EmbedMath` -> `read_inline` seam is
+/// checked here; `math_slice1.rs` asserts the box's own glyph shift/scale.
 #[test]
 fn itext_embed_math_renders_through_read_inline() {
     let elems = vec![IText::EmbedMath {
@@ -212,16 +199,12 @@ fn itext_embed_math_renders_through_read_inline() {
     }
 }
 
-// ---- "!" dereference primitive -----------------------------------------------------
-
 #[test]
 fn deref_of_non_ref_errors() {
     let ast = app1(var("!"), Ast::Int(5));
     let err = run(&ast).unwrap_err();
     assert!(err.to_string().contains("mutable"));
 }
-
-// ---- line-break's real 4-ary signature --------------------------------------------
 
 #[test]
 fn line_break_arity_four_through_apply_chain() {

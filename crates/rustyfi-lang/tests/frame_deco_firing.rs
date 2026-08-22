@@ -1,10 +1,8 @@
 //! `fire_hooks`' inline-frame (`fire_inline_frame`) and block-frame-fragment
-//! firing, driven directly against hand-built `DocumentValue`s (mirroring
-//! `tests/hooks_crossref.rs`'s style) — no parser, no `page-break` involved.
-//! Each deco closure is a small hand-built `Ast::Lambda` chain (curried `pt
-//! -> w -> h -> d -> …`) evaluated once to a `Value::Closure` and interned
-//! directly into `interp.decos`, exactly what
-//! `make_inline_frame`/`prim_block_frame_ breakable` do at a higher level.
+//! firing, against hand-built `DocumentValue`s — no parser, no
+//! `page-break` involved. Each deco closure is interned directly into
+//! `interp.decos`, exactly what `make_inline_frame`/`prim_block_frame_
+//! breakable` do at a higher level.
 
 use rustyfi_backend::{
     Color, DecoId, FontKey, FontMetrics, GraphicsElem, Length, Paddings, Page, PageGeometry,
@@ -145,9 +143,7 @@ fn doc_with_pages(pages: Vec<Page>) -> DocumentValue {
     }
 }
 
-// ============================================================================
 // Inline frames (`fire_inline_frame`)
-// ============================================================================
 
 #[test]
 fn a_frame_with_a_fill_deco_puts_one_element_in_page_graphics() {
@@ -365,8 +361,6 @@ fn a_frame_inside_a_draw_text_run_fires_at_the_runs_own_point() {
             },
         )],
     };
-    // Wrapped in a `Group` as well, so the recursion through the collection
-    // nodes is covered by the same assertion.
     let gfx = PureHorzBox::Graphics {
         width: Length::pt(40.0),
         height: Length::pt(20.0),
@@ -399,9 +393,7 @@ fn a_frame_inside_a_draw_text_run_fires_at_the_runs_own_point() {
     );
 }
 
-// ============================================================================
 // Inline BREAKABLE frame fragments (`InlineFrameMarker` pairs)
-// ============================================================================
 
 /// Intern a four-closure deco set whose members are distinguishable: each
 /// `register-link-to-uri`s a different URI (`"S"`/`"H"`/`"M"`/`"T"`) and
@@ -435,7 +427,6 @@ fn inline_marker(id: DecoId, end: bool) -> PureHorzBox {
     }
 }
 
-/// `(uri, rect)` per fired fragment, in fire order.
 fn fired(interp: &eval::Interp) -> Vec<(String, (f64, f64, f64, f64))> {
     interp
         .annotations
@@ -597,9 +588,7 @@ fn a_breakable_frame_spanning_three_lines_fires_h_then_m_then_t() {
     );
 }
 
-// ============================================================================
-// Block frame fragments (§C3)
-// ============================================================================
+// Block frame fragments
 
 fn block_page(lines: Vec<PlacedLine>) -> Page {
     Page {

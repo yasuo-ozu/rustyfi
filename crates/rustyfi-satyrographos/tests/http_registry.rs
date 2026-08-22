@@ -1,14 +1,14 @@
 //! Saphe phase 7d slice S1: the real `http` feature transport under test with
 //! a **mocked local server** — no real internet. A hand-rolled `TcpListener`
 //! loopback server (no new dev-dependency, matching the crate's
-//! dependency-minimal ethos, design §5) stands in for a registry's tarball
-//! host; the **index stays a plain local directory** (design §2.2:
-//! git-clone/plain-dir acquisition is unchanged for 7d, only the tarball
+//! dependency-minimal ethos) stands in for a registry's tarball host; the
+//! **index stays a plain local directory**
+//! (git-clone/plain-dir acquisition is unchanged for 7d, only the tarball
 //! fetch is new-network), with `tarball_url` entries pointing at
 //! `http://127.0.0.1:<port>/…`. This exercises the real `ureq` + rustls
 //! client configured in `registry.rs`'s `http` module, not a fake.
 //!
-//! Coverage (design §5 S1 cases):
+//! Coverage (S1 cases):
 //! - happy path: fetch → verify → materialise, receipt records the `http://`
 //!   url and sha256;
 //! - 404 and 500 map to `Error::HttpFailed` with no `dist/`/receipt writes;
@@ -19,7 +19,7 @@
 //!   connect/read timeout instead of hanging forever.
 //!
 //! This file only runs when the `http` feature is enabled — which is now the
-//! crate's default (design §4), so a plain `cargo test -p rustyfi-satyrographos`
+//! crate's default, so a plain `cargo test -p rustyfi-satyrographos`
 //! exercises it. `cargo test --no-default-features` skips it entirely (no HTTP
 //! client compiled in); `tests/registry.rs`'s `file://`/git coverage keeps
 //! running unconditionally either way.
@@ -202,7 +202,7 @@ fn assert_no_dist_or_receipts(root: &Path) {
 }
 
 // ---------------------------------------------------------------------------
-// A minimal loopback HTTP/1.1 server (no new dev-dependency, design §5): binds
+// A minimal loopback HTTP/1.1 server (no new dev-dependency): binds
 // `127.0.0.1:0`, replies to `GET <path>` with a pre-registered `Route`. Each
 // connection is handled on its own thread and closed after one response
 // (`Connection: close`), so no keep-alive bookkeeping is needed.
@@ -221,7 +221,7 @@ struct MockServer {
     hits: Arc<Mutex<Vec<String>>>,
     /// The `Authorization` header value seen on each request, in request
     /// order (`None` when the request carried none) — saphe 7d slice S3's
-    /// bearer-token-auth coverage (design §3 S3).
+    /// bearer-token-auth coverage.
     auth_headers: Arc<Mutex<Vec<Option<String>>>>,
 }
 
@@ -277,7 +277,7 @@ impl MockServer {
     }
 
     /// The server's bare origin (no path) — a mirror/sparse-index "base URL"
-    /// (mirrors design §2.1: a mirror is a host/prefix substitution applied
+    /// (a mirror is a host/prefix substitution applied
     /// to the primary URL's own path, so a mirror config value is always a
     /// bare origin like this, never a full resource URL).
     fn base_url(&self) -> String {
@@ -589,7 +589,7 @@ fn http_registry_timeout_errors_within_configured_budget() {
 }
 
 // ---------------------------------------------------------------------------
-// Saphe 7d slice S3: bearer-token auth (design §3 S3). `RUSTYFI_REGISTRY_TOKEN`
+// Saphe 7d slice S3: bearer-token auth. `RUSTYFI_REGISTRY_TOKEN`
 // (`registry.rs`'s `http::AUTH_TOKEN_ENV`) is attached as `Authorization:
 // Bearer <token>` on every tarball GET; `get_to_file` reads it fresh per call,
 // same discipline as the timeout test's `RUSTYFI_HTTP_TIMEOUT` above.
@@ -674,8 +674,8 @@ fn http_registry_bearer_token_header_matches_configuration() {
 }
 
 // ===========================================================================
-// Saphe phase 7d slice S2: content-addressed archive cache + `--offline`
-// (design §3 S2 / §5). Every case here shares ONE mock server (a real `ureq`
+// Saphe phase 7d slice S2: content-addressed archive cache + `--offline`.
+// Every case here shares ONE mock server (a real `ureq`
 // GET, request-counted) and ONE archive-cache dir across MULTIPLE installs
 // into SEPARATE fresh roots — so a second install that hits ZERO GETs proves
 // the *cache* short-circuited the fetch, not the reconcile receipt-skip
@@ -684,7 +684,7 @@ fn http_registry_bearer_token_header_matches_configuration() {
 
 /// Registry options pointed at a `file://` plain-dir index plus an explicit
 /// archive-cache dir, in the given offline mode. The index is always local
-/// (never network, design §2.2), so these tests isolate the *archive* cache /
+/// (never network), so these tests isolate the *archive* cache /
 /// offline behaviour, not index acquisition.
 fn reg_cached(index: &Path, cache: &Path, offline: bool) -> RegistryOptions {
     RegistryOptions {
@@ -870,10 +870,10 @@ fn s2_corrupted_cache_entry_is_refetched_and_offline_errors() {
 }
 
 // ===========================================================================
-// Saphe mirrors + sparse index design Slice M: registry mirror-list fallback
-// (design §2). Two independent loopback servers stand in for a primary
+// Slice M: registry mirror-list fallback. Two independent loopback servers
+// stand in for a primary
 // registry host and a mirror host; `RegistryOptions::mirrors` is a **bare
-// origin** (design §2.1: a mirror is a host/prefix substitution applied to the
+// origin** (a mirror is a host/prefix substitution applied to the
 // primary URL's own path — [`MockServer::base_url`]), rewritten against the
 // index's `tarball_url` by `registry::rewrite_to_mirror`.
 // ===========================================================================
@@ -1011,16 +1011,16 @@ fn mirrors_warm_cache_tries_zero_urls() {
 }
 
 // ===========================================================================
-// Slice S: sparse HTTP index (design §3). `packages/<name>.toml` is fetched
+// Slice S: sparse HTTP index. `packages/<name>.toml` is fetched
 // on demand over HTTP from a mocked loopback server instead of being
 // git-cloned/read from a plain directory — `RegistryConfig`/`RegistryOptions`
-// `kind = Sparse` selects the transport (§3.2); `lookup` is backend-aware
-// (§3.3); the solver (`solve.rs`/`RegistryDepSource`) is untouched (§3.4).
+// `kind = Sparse` selects the transport; `lookup` is backend-aware; the
+// solver (`solve.rs`/`RegistryDepSource`) is untouched.
 // ===========================================================================
 
 /// A `[versions."<v>"]` sparse-index TOML body, matching the exact
 /// `PackageIndex`/`VersionEntry` schema a local/git index already parses (no
-/// new file format, design §3.1) — optionally declaring `deps`.
+/// new file format) — optionally declaring `deps`.
 fn sparse_index_toml(version: &str, tarball_url: &str, sha256: &str, deps: &[(&str, &str)]) -> Vec<u8> {
     let mut toml = format!(
         "[versions.\"{version}\"]\n\
@@ -1216,8 +1216,8 @@ fn sparse_with_mirrors_falls_back() {
 }
 
 /// S — a lockfile fully satisfying the roots skips the index entirely (the
-/// `all_reusable` reconcile fast path, design §3.5): after an initial online
-/// sparse reconcile, a second install against a fresh destination root but
+/// `all_reusable` reconcile fast path): after an initial online sparse
+/// reconcile, a second install against a fresh destination root but
 /// the SAME lockfile, offline, succeeds via the warm archive cache with ZERO
 /// further GETs to the sparse index endpoint.
 #[test]

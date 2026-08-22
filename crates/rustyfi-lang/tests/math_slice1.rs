@@ -1,7 +1,6 @@
-//! Slice 1 lowering unit tests: `read_math` walks an elaborated `MathElem`
+//! Lowering unit tests: `read_math` walks an elaborated `MathElem`
 //! tree straight to a `PureHorzBox::Math` (fixed superscript shift/scale, a
-//! minimal Bin/Rel spacer, no MATH table) — no parser or elaborator
-//! involved, mirroring `prims_phase4.rs`'s style.
+//! minimal Bin/Rel spacer, no MATH table) — no parser or elaborator involved.
 
 use rustyfi_backend::{Context, FontKey, FontMetrics, Length, MathGlyph, PureHorzBox};
 use rustyfi_lang::eval::Interp;
@@ -77,9 +76,8 @@ fn binary_operator_gets_spacing_on_both_sides() {
     assert_eq!(a.text, "a");
     assert_eq!(plus.text, "+");
     assert_eq!(b.text, "b");
-    // Bin spacing on both sides of '+': it starts strictly past `a`'s own
-    // width (extra advance inserted before it), and `b` starts strictly past
-    // `+`'s own width (extra advance inserted after it).
+    // Bin spacing on both sides of '+': it starts past `a`'s own width, and
+    // `b` starts past `+`'s own width.
     assert!(
         plus.dx > a.dx + a.width,
         "'+' should get extra space after 'a': {:?} vs {:?}",

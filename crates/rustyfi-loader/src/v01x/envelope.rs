@@ -1,5 +1,4 @@
-//! `rustyfi-envelope.yaml` decoder — Ld3b-1 (Axis B increment Ld3b, §3.2/§5.2
-//! of `/home/yasuo/.claude/jobs/a7244c0b/tmp/axis-b-ld3b.md`). Transcribed
+//! `rustyfi-envelope.yaml` decoder + reader. Transcribed
 //! from `saphe-split @ b836d512689248d18970674021ecaca409e0d897`,
 //! `src/frontend/envelopeConfig.ml` (decoder) +
 //! `src-common/envelopeSystemBase.ml:11-87` (record shapes) +
@@ -7,16 +6,12 @@
 //! / `parse_long_identifier`) + `src/frontend/configUtil.ml`
 //! (`relative_path_decoder`, `lowercased_identifier_decoder`).
 //!
-//! This is the compiler-side **decoder only**: [`load_config`] decodes and
-//! validates one `rustyfi-envelope.yaml` file. The Ld3b-2 "reader" half
-//! (`envelopeReader.ml`'s directory listing + per-source parse, i.e.
-//! `EnvelopeSource`/`ReadEnvelope`/`read`) is NOT built here — nothing in
-//! this crate calls [`load_config`] yet. `#![allow(dead_code)]` reflects
-//! exactly that; every item here is exercised by this module's own unit
-//! tests, including all 19 real upstream `rustyfi-envelope.yaml.expected`
-//! fixtures (3 committed verbatim under
-//! `tests/fixtures/v01x/envelope/`, all 19 via the env-gated sweep test
-//! below).
+//! [`load_config`] decodes and validates one `rustyfi-envelope.yaml`; `read`
+//! is the `envelopeReader.ml` half (directory listing + per-source parse) on
+//! top of it. The decoder is exercised against all 19 real
+//! upstream `rustyfi-envelope.yaml.expected` fixtures (3 committed verbatim
+//! under `tests/fixtures/v01x/envelope/`, all 19 via the env-gated sweep
+//! test below).
 #![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
@@ -45,7 +40,7 @@ pub(crate) enum EnvelopeContents {
         /// uses `string`, not `uppercased_identifier_decoder`).
         main_module: String,
         /// Relative directory strings, joined to the config file's
-        /// directory at read time (Ld3b-2). NOT validated as relative here
+        /// directory at read time. NOT validated as relative here
         /// — upstream's own decoder is plain `list string`
         /// (`envelopeConfig.ml:123`), unlike `font_file_description.path`
         /// which *is* `relative_path_decoder`.
@@ -82,7 +77,7 @@ pub(crate) struct FontSpec {
 
 /// All 19 fields of `envelopeSystemBase.ml:46-69`, held as VALIDATED but
 /// UNINTERPRETED command names — nothing consumes them yet (the markdown
-/// input kind is out of scope, Ld3b spec §12).
+/// input kind is out of scope).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct MarkdownConversion {
     pub document: LongIdentifier,
@@ -134,7 +129,7 @@ pub(crate) struct LongIdentifier {
 // serde externally-tagged `enum`: upstream's `branch` combinator
 // (`yamlDecoder.ml:161-193`) tolerates extra non-tag keys beside the tag
 // key and gives named errors for 0-hit / 2-hit, which an externally-tagged
-// enum's single-key-map encoding cannot express (Ld3b spec §3.2).
+// enum's single-key-map encoding cannot express.
 
 #[derive(serde::Deserialize)]
 struct EnvelopeConfigRaw {
@@ -221,7 +216,7 @@ fn decode(text: &str) -> Result<EnvelopeConfig, String> {
     convert_config(raw)
 }
 
-/// One source file of a read envelope — Ld3b-2. Its `file` is always a
+/// One source file of a read envelope. Its `file` is always a
 /// [`FileV1::Library`] (a document among the sources is a hard error,
 /// upstream `NotALibraryFile`), and `module_name` is its declared module
 /// name (`FileV1::Library.name.name`).
@@ -235,7 +230,7 @@ pub(crate) struct EnvelopeSource {
 }
 
 /// A read envelope: its decoded config plus every parsed library source file
-/// (empty for a `font:` envelope) — Ld3b-2.
+/// (empty for a `font:` envelope).
 #[derive(Debug)]
 pub(crate) struct ReadEnvelope {
     pub config: EnvelopeConfig,
@@ -666,9 +661,9 @@ font:
         assert!(err.contains("got both"), "{err}");
     }
 
-    /// `opentype_collection` — no upstream fixture exercises this shape
-    /// (§10.1 of the Ld3b spec); synthesized directly from the decoder
-    /// shape (`envelopeConfig.ml:26-29`).
+    /// `opentype_collection` — no upstream fixture exercises this shape;
+    /// synthesized directly from the decoder shape
+    /// (`envelopeConfig.ml:26-29`).
     #[test]
     fn envelope_opentype_collection_synthesized() {
         let yaml = "font:
@@ -816,7 +811,7 @@ font:
         assert!(matches!(cfg.contents, EnvelopeContents::Library { .. }));
     }
 
-    /// The full-corpus format gate (Ld3b spec §10.1/§11): when the vendored
+    /// The full-corpus format gate: when the vendored
     /// upstream checkout is present (env var `RUSTYFI_UPSTREAM_GIT`),
     /// `git show`s and decodes all 19 real
     /// `rustyfi-envelope.yaml.expected` files at

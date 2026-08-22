@@ -2,14 +2,12 @@
 //! ported one `prims!` line at a time; primitives are registered under their
 //! real v0.0.6 names so later stdlib loading finds them.
 //!
-//! Milestone 1 used to hardcode `document`, `+p`, and `\emph` as natives.
-//! Phase 4 deletes them: the real definitions now live in the `stdja-mini`
-//! stdlib package (`lib-rustyfi/dist/packages/stdja-mini.satyh`), loaded
-//! through `rustyfi-loader` and typechecked/evaluated exactly like any other
-//! `.satyh` library. See that file's header comment for the small set of
-//! primitives it's built from (`get-initial-context`, `page-break`,
-//! `read-block`/`read-inline`, `line-break`, `++`/`inline-fil`, and the new
-//! `set-font-key` below).
+//! `document`, `+p` and `\emph` are not natives: they live in the
+//! `stdja-mini` stdlib package
+//! (`lib-rustyfi/dist/packages/stdja-mini.satyh`), loaded through
+//! `rustyfi-loader` and typechecked/evaluated like any other `.satyh`
+//! library. See that file's header comment for the primitives it is built
+//! from.
 
 use crate::eval::{available_fields, eval_error, DecoEntry, EvalError, Interp};
 use crate::quoted::{BText, IText, MathElem};
@@ -31,7 +29,7 @@ use rustyfi_syntax::RustyfiVersion;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 use std::sync::Arc;
-// L5a (prim-retype-sweep §2.2): UAX #15 normalization / UAX #29 grapheme
+// L5a: UAX #15 normalization / UAX #29 grapheme
 // segmentation traits for `normalize-string-to-nf{c,d}`/
 // `split-grapheme-cluster`.
 use unicode_normalization::UnicodeNormalization;
@@ -50,9 +48,7 @@ pub const FONT_OBLIQUE: FontKey = FontKey(2);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VersionSpan {
     /// Registered under every version this port implements. The default
-    /// for every `prims!` line that omits a tag — used by ~120 of today's
-    /// ~151 entries (L5's estimate), including every entry this L7 patch
-    /// does not touch.
+    /// for every `prims!` line that omits a tag.
     Both,
     V0_0Only,
     V0_1Only,
@@ -110,25 +106,24 @@ macro_rules! prims {
 /// Generate the `_v006`/`_v01` `PrimDef`-shaped pair for a primitive body
 /// that needs to know the generation of the code that CALLED it.
 ///
-/// The graphics-callback family (prim-retype-sweep.md's H1/H2/R2 result
-/// retypes and the deco family behind them) is the whole reason this exists:
-/// those bodies decide whether a callback returns `graphics list` (0.0.6) or
-/// one `graphics` collection (0.1), and they used to ask `interp.version` —
-/// a single whole-program field, set once by `lib.rs`'s
-/// `eval_document_trials`. That is right for a single-version program and
-/// wrong for a cross-version one, where a spliced 0.0.6 package calls these
-/// primitives with its OWN convention while the field says `V0_1`.
+/// The graphics-callback family (the H1/H2/R2 result retypes and the deco
+/// family behind them) is why this exists: those bodies
+/// decide whether a callback returns `graphics list` (0.0.6) or one
+/// `graphics` collection (0.1). Do NOT read `interp.version` for that — it
+/// is a single whole-program field, set once by `lib.rs`'s
+/// `eval_document_trials`, so in a cross-version program it names the ENTRY
+/// document's generation while a spliced 0.0.6 package calls these
+/// primitives with its OWN convention.
 ///
 /// Registering the body twice fixes it exactly, and for free: `compile.rs`'s
 /// `Ast::VersionScope` arm folds a primitive reference against the innermost
 /// enclosing scope's version (the same mechanism `page-break` already relies
 /// on), so a call inside a 0.0.6 dependency picks the `_v006` row and one in
 /// the 0.1 entry picks `_v01`. Nothing is threaded through the interpreter
-/// at all — the answer is baked in at compile time, where it is known.
-///
-/// The two rows share ONE type-table entry per version
+/// at all — the answer is baked in at compile time, where it is known. The
+/// two rows share ONE type-table entry per version
 /// (`prim_types::primitive_type_with_version`), which already forks these
-/// names; only the runtime decode was missing its half.
+/// names.
 macro_rules! version_forked_prims {
     ($($v006:ident, $v01:ident => $body:path;)*) => {$(
         fn $v006(interp: &mut Interp, args: Vec<Value>) -> Result<Value, EvalError> {
@@ -209,7 +204,7 @@ prims! {
     // PrimitiveBor :2541, PrimitiveBxor :2513, PrimitiveBnot :2556).
     // 0.0.6 upstream has none of these; `<<`/`>>` lex as ordinary
     // BinopLt/BinopGt opsymbol runs under BOTH versions (lexer.rs:634-653)
-    // and simply stay unbound names under 0.0.6 (prim-retype-sweep §2.1). --
+    // and simply stay unbound names under 0.0.6. --
     v01 "<<" (2) => prim_bit_shift_left;
     v01 ">>" (2) => prim_bit_shift_right;
     v01 "band" (2) => prim_band;
@@ -239,13 +234,11 @@ prims! {
     // CONFIRMED absent from 0.0.6 upstream (grep of gfngfn/SATySFi's v0.0.6
     // tag AND its dev-0-1-0 branch's vminst.ml/primitives.cppo.ml: 0 hits
     // for any of the four) — genuinely v01-only, unlike "+."/"-."/"*."/"/."
-    // above (which both generations share). This is the gap float.satyg's
-    // RESTORE CHECKLIST banner names: `abs`/`max`/`min` use `>=.`/`<=.` and
-    // were dropped from the vendored package until these landed. `>.`/`<.`/
-    // `>=.`/`<=.` already lex as ordinary BinopGt/BinopLt opsymbol runs
-    // under both versions (lexer.rs:634-653, same mechanism the "0.1
-    // bitwise ops" comment just above documents for "<<"/">>") — zero
-    // lexer work, only this registration + prim_types.rs/typecheck.rs.
+    // above (which both generations share). float.satyg's RESTORE CHECKLIST
+    // banner names this gap: its `abs`/`max`/`min` need `>=.`/`<=.`. All
+    // four already lex as ordinary BinopGt/BinopLt opsymbol runs under both
+    // versions (lexer.rs:634-653, same mechanism the "0.1 bitwise ops"
+    // comment just above documents for "<<"/">>").
     v01 ">." (2) => prim_float_gt;
     v01 "<." (2) => prim_float_lt;
     v01 ">=." (2) => prim_float_ge;
@@ -293,7 +286,7 @@ prims! {
     // ---- text embedding (vminst.ml:1707 PrimitiveEmbed: string -> inline- text; the interp body wraps the string as a one-element quoted text) --
     "embed-string" (1) => prim_embed_string;
 
-    // ---- context ops (phase 4, part 1 — inventory for a future .saty `document`/`+p`/`\emph`) ------------------------------------------
+    // ---- context ops (phase 4, part 1) -----------------------------------
     //
     // vminst.ml:1434 `PrimitiveSetFontSize`: `~% (tLN @-> tCTX @-> tCTX)`.
     "set-font-size" (2) => prim_set_font_size;
@@ -358,7 +351,7 @@ prims! {
 
     // ---- the reflow marker-box
     // constructors. No vminst.ml entry — these are NEW primitives (not an
-    // upstream port), the "minimal hook" §5 concludes is unavoidable since
+    // upstream port), the minimal hook that is unavoidable since
     // list/emphasis structure is 100% interpreted `.satyh` with no existing
     // Rust interception point. Both take a plain `int` tag (there is no
     // surface syntax to pass a Rust enum literal from `.satyh` source) —
@@ -368,7 +361,7 @@ prims! {
     "list-mark" (1) => prim_list_mark;
     "inline-mark" (1) => prim_inline_mark;
 
-    // ---- frontend-completion.md §Slice 1.A: the ~18 pure primitives -------
+    // ---- Slice 1.A: the ~18 pure primitives -------------------------------
     // (all use only already-existing `Value`/`BaseType`s — no backend work).
     // `|>` (reverse application) is NOT here: it is elaborated directly to
     // `Apply(f, x)` (see `elaborate.rs`'s `climb`), not a runtime primitive.
@@ -384,8 +377,8 @@ prims! {
     "log" (1) => prim_log;
     "exp" (1) => prim_exp;
     // vminst.ml:2865/2880 `PrimitiveCeil`/`PrimitiveFloor`: both `float ->
-    // float` (NOT `int` — easy to mistype, see frontend-completion.md's
-    // Risks section; contrast `round`, above, which does return `int`).
+    // float` (NOT `int` — easy to mistype; contrast `round`, above, which
+    // does return `int`).
     "ceil" (1) => prim_ceil;
     "floor" (1) => prim_floor;
     // vminst.ml:2319 `PrimitiveShowFloat`: `float -> string`, OCaml's
@@ -401,7 +394,7 @@ prims! {
     // vminst.ml:2196 `PrimitiveStringUnexplode`: inverse of `string-explode`.
     "string-unexplode" (1) => prim_string_unexplode;
 
-    // ---- 0.1 Unicode string prims (dev-0-1-0 vminst.ml :2050/:2066/:2082; prim-retype-sweep §2.2) — REAL, via the `unicode-normalization`/
+    // ---- 0.1 Unicode string prims (dev-0-1-0 vminst.ml :2050/:2066/:2082) — REAL, via the `unicode-normalization`/
     // `unicode-segmentation` crates (this crate's own Cargo.toml, not a
     // workspace dep). ---------------------------------------------------------
     v01 "normalize-string-to-nfc" (1) => prim_normalize_string_to_nfc;
@@ -424,15 +417,15 @@ prims! {
     // dev-0-1-0 `PrimitiveLoadPdfImage` — same name/type/body across both
     // versions).
     "load-pdf-image" (2) => prim_load_pdf_image;
-    // `read-file : string -> list string` (dev-0-1-0 vminst.ml :3073;
-    // prim-retype-sweep §2.3) — REAL, `load-image`'s cwd-relative-path
-    // precedent (`prim_load_image`'s doc comment above): job-directory
-    // resolution isn't plumbed into `Interp` at all yet, so this resolves
-    // against the process cwd instead of upstream's job directory —
-    // documented deviation, see `prim_read_file`'s own doc comment.
+    // `read-file : string -> list string` (dev-0-1-0 vminst.ml :3073) —
+    // REAL, `load-image`'s cwd-relative-path precedent
+    // (`prim_load_image`'s doc comment above): job-directory resolution
+    // isn't plumbed into `Interp` at all yet, so this resolves against the
+    // process cwd instead of upstream's job directory — documented
+    // deviation, see `prim_read_file`'s own doc comment.
     v01 "read-file" (1) => prim_read_file;
     // `register-document-information : document-information-dictionary ->
-    // unit` (dev-0-1-0 vminst.ml :2978; prim-retype-sweep §2.4) — REAL:
+    // unit` (dev-0-1-0 vminst.ml :2978) — REAL:
     // stores into `Interp::doc_info` (last-write-wins), drained into
     // `DocExtras::doc_info`, emitted as the PDF `/Info` dictionary by both
     // writers.
@@ -448,11 +441,10 @@ prims! {
     "close-with-line" (1) => prim_close_with_line;
     "fill" (2) => prim_fill;
     "stroke" (3) => prim_stroke;
-    // H1/H2/R2 (prim-retype-sweep.md §1.3): these three take a
-    // graphics-producing CALLBACK whose result shape forks (`graphics list`
-    // vs one `graphics` collection), so each is registered per version —
-    // see `version_forked_prims!`'s doc comment for why an `interp.version`
-    // read was wrong in a cross-version program.
+    // H1/H2/R2: these three take a graphics-producing CALLBACK whose result
+    // shape forks (`graphics list` vs one `graphics` collection), so each is
+    // registered per version — see `version_forked_prims!`'s doc comment for
+    // why an `interp.version` read was wrong in a cross-version program.
     v006 "inline-graphics" (4) => prim_inline_graphics_v006;
     v01  "inline-graphics" (4) => prim_inline_graphics_v01;
     // `tabular : (cell list) list -> (length list -> length list ->
@@ -464,7 +456,7 @@ prims! {
     // `BackendInlineGraphicsOuter`) — roadmap C2.
     v006 "inline-graphics-outer" (3) => prim_inline_graphics_outer_v006;
     v01  "inline-graphics-outer" (3) => prim_inline_graphics_outer_v01;
-    // ---- gr.satyh roadmap prims (roadmap A/B/C/D) — see that plan + tools/gencode/vminst.ml for exact
+    // ---- gr.satyh roadmap prims (roadmap A/B/C/D) — see tools/gencode/vminst.ml for exact
     // signatures: `bezier-to` :742, `close-with-bezier` :787, `shift-path`
     // :663, `linear-transform-path` :678, `shift-graphics` :2451,
     // `linear-transform-graphics` :2432, `get-graphics-bbox` :2466,
@@ -478,15 +470,14 @@ prims! {
     "linear-transform-graphics" (5) => prim_linear_transform_graphics;
     // `get-graphics-bbox`: v0.0.6 = today's un-optioned pair (upstream
     // v0.0.6 tGR @-> tPROD, vminst.ml:2466); v0.1 wraps `option` (dev-0-1-0
-    // vminst.ml:2301) — the only observable L8b surface change
-    // (prim-retype-sweep.md §3.4, R3).
+    // vminst.ml:2301) — the only observable L8b surface change (R3).
     v006 "get-graphics-bbox" (1) => prim_get_graphics_bbox_v006;
     v01  "get-graphics-bbox" (1) => prim_get_graphics_bbox_v01;
     "get-path-bbox" (1) => prim_get_path_bbox;
     "dashed-stroke" (4) => prim_dashed_stroke;
     "draw-text" (2) => prim_draw_text;
-    // ---- 0.1 graphics-collection prims (dev-0-1-0 vminst.ml :3105/:3119; prim-retype-sweep.md §3.4, A12/A13). `graphics` is a collection under
-    // 0.1 (§1.3) — these two build/wrap that collection; the 6 hidden
+    // ---- 0.1 graphics-collection prims (dev-0-1-0 vminst.ml :3105/:3119, A12/A13). `graphics` is a collection under
+    // 0.1 — these two build/wrap that collection; the 6 hidden
     // callback-result retypes (H1-H6) that make a `graphics`-producing
     // callback return ONE collection instead of `list graphics` live at
     // their existing (untagged `Both`) rows below, coerced per-version by
@@ -519,8 +510,8 @@ prims! {
 
     // ==== Tier-2 decoration/graphics packages (deco/hdecoset/vdecoset/ picture.satyh) — the only genuinely-missing primitive among them.
     // `get-axis-height` :1739 `PrimitiveGetAxisHeight` — STAND-IN, see body.
-    // math-split spec §2.1: REMOVED in 0.1 (superseded by
-    // `get-math-axis-height-ratio`) — v006-tagged.
+    // REMOVED in 0.1 (superseded by `get-math-axis-height-ratio`) —
+    // v006-tagged.
     v006 "get-axis-height" (1) => prim_get_axis_height;
 
     // ==== the
@@ -542,13 +533,12 @@ prims! {
     "register-link-to-uri" (6) => prim_register_link_to_uri;
     "register-link-to-location" (6) => prim_register_link_to_location;
 
-    // ==== + §G: the faithful `Value::Math`
-    // primitive layer `math.satyh` is built out of. math-split spec §2.3:
-    // 19 of these fork into v006/v01 sibling pairs below (v006 body =
-    // today's, renamed `_v006`, zero behavior change; v01 body
+    // ==== the faithful `Value::Math` primitive layer `math.satyh` is built
+    // out of. 19 of these fork into v006/v01 sibling pairs below (v006 body
+    // = today's, renamed `_v006`, zero behavior change; v01 body
     // consumes/produces `Value::MathBoxes` — see each `prim_*_v01` doc
-    // comment). §2.1: 5 more are REMOVED in 0.1 outright (v006-tagged,
-    // untouched bodies). ====
+    // comment). 5 more are REMOVED in 0.1 outright (v006-tagged, untouched
+    // bodies). ====
     v006 "math-char" (2) => prim_math_char_v006;
     v01  "math-char" (3) => prim_math_char_v01;
     v006 "math-big-char" (2) => prim_math_big_char_v006;
@@ -573,8 +563,7 @@ prims! {
     v01  "math-lower" (3) => prim_math_lower_v01;
     v006 "math-upper" (2) => prim_math_upper_v006;
     v01  "math-upper" (3) => prim_math_upper_v01;
-    // math-split spec §2.1: REMOVED in 0.1 outright — v006-tagged,
-    // untouched bodies.
+    // REMOVED in 0.1 outright — v006-tagged, untouched bodies.
     v006 "math-pull-in-scripts" (3) => prim_math_pull_in_scripts;
     v006 "math-color" (2) => prim_math_color;
     v006 "math-char-class" (2) => prim_math_char_class;
@@ -583,7 +572,7 @@ prims! {
     // `set-math-variant-char`/`get-left-math-class`/`get-right-math-class`
     // trio no bundled `.satyh` consumer needed yet, built on gap 5's
     // `Context::math_variant_char_map` + `VariantCharPending`. Forked
-    // v006/v01 (math-split spec §2.3). ====
+    // v006/v01. ====
     v006 "set-math-variant-char" (4) => prim_set_math_variant_char_v006;
     v01  "set-math-variant-char" (3) => prim_set_math_variant_char_v01;
     v006 "get-left-math-class" (2) => prim_get_left_math_class_v006;
@@ -594,7 +583,7 @@ prims! {
     v01  "math-paren" (4) => prim_math_paren_v01;
     v006 "math-paren-with-middle" (4) => prim_math_paren_with_middle_v006;
     v01  "math-paren-with-middle" (5) => prim_math_paren_with_middle_v01;
-    // math-split spec §2.1: REMOVED in 0.1 outright.
+    // REMOVED in 0.1 outright.
     v006 "text-in-math" (2) => prim_text_in_math;
     "convert-string-for-math" (3) => prim_convert_string_for_math;
     v006 "embed-math" (2) => prim_embed_math_v006;
@@ -610,9 +599,8 @@ prims! {
     v01  "load-single-font" (1) => prim_load_single_font;
     v006 "space-between-maths" (3) => prim_space_between_maths_v006;
     v01  "space-between-maths" (3) => prim_space_between_maths_v01;
-    // ==== math-split spec §2.2: NEW in 0.1 — `math-text`/`math-boxes` split
-    // + `read-math` + the hidden `val math`-without-scripts wrapper prim.
-    // ====
+    // ==== NEW in 0.1 — `math-text`/`math-boxes` split + `read-math` + the
+    // hidden `val math`-without-scripts wrapper prim. ====
     v01 "read-math" (2) => prim_read_math;
     v01 "stringify-math" (2) => prim_stringify_math;
     v01 "set-math-char" (4) => prim_set_math_char;
@@ -622,7 +610,7 @@ prims! {
     v01 "get-math-axis-height-ratio" (1) => prim_get_math_axis_height_ratio;
     v01 "%math-attach-scripts" (4) => prim_math_attach_scripts;
 
-    // ==== G6 (`…/tmp/g6-g7-standins.md` §1): hyphenation/unidata loader +
+    // ==== G6: hyphenation/unidata loader +
     // setter stand-ins, V0_1-only (genuinely absent from 0.0.6 upstream).
     // FAITHFUL types (`prim_types.rs`); ACCEPT-AND-RETURN bodies, not
     // hard-error stand-ins like `stringify-math` above — std-ja evaluates
@@ -673,8 +661,8 @@ prims! {
 
     // ==== step 8/9 orphans:
     // `set-dominant-wide-script`/`set-dominant-narrow-script`/`set-language`
-    // are now FAITHFUL stores (context-box-prims.md §C landed, group E2) with
-    // real getter round-trips below; `register-outline` is likewise FAITHFUL
+    // are FAITHFUL stores (group E2) with real getter round-trips below;
+    // `register-outline` is likewise FAITHFUL
     // (see its doc comment — it drives real PDF `/Outlines` bookmarks). Only
     // `set-every-word-break` remains a STAND-IN (accepted and dropped). ====
     "set-dominant-wide-script" (2) => prim_set_dominant_wide_script;
@@ -704,16 +692,15 @@ prims! {
     // html-base.satyh-html. Registered in the single shared env (upstream
     // keys prims per mode; this port has one env — deliberate, harmless).
     //
-    // `get-initial-text-info` is the R1 fork (prim-retype-sweep §2.5): v0.0.6
-    // (vminst.ml:953) is `unit -> text-info`; v0.1 (dev-0-1-0 vminst.ml:
-    // 904-925) threads the text-mode default math command + a math-scripts
-    // stringifier into `tctxsub`, `inline [math-text] -> (string -> option
-    // string -> option string -> string) -> text-info`. The v01 body ACCEPTS
-    // AND DROPS both (STAND-IN): this PDF port's `TextInfo` carries no
-    // text-mode command state because the text backend is out of scope (same
-    // degenerate policy as `stringify-math`, math-split §2.2). Registered so
-    // 0.1 sources typecheck; both bodies return the same `TextInfo{indent:
-    // 0}`. ====
+    // `get-initial-text-info` is the R1 fork: v0.0.6 (vminst.ml:953) is
+    // `unit -> text-info`; v0.1 (dev-0-1-0 vminst.ml:904-925) threads the
+    // text-mode default math command + a math-scripts stringifier into
+    // `tctxsub`, `inline [math-text] -> (string -> option string -> option
+    // string -> string) -> text-info`. The v01 body ACCEPTS AND DROPS both
+    // (STAND-IN): this PDF port's `TextInfo` carries no text-mode command
+    // state because the text backend is out of scope (same degenerate policy
+    // as `stringify-math`). Registered so 0.1 sources typecheck; both bodies
+    // return the same `TextInfo{indent: 0}`. ====
     v006 "get-initial-text-info" (1) => prim_get_initial_text_info_v006;
     v01  "get-initial-text-info" (2) => prim_get_initial_text_info_v01;
     "deepen-indent" (2) => prim_deepen_indent;
@@ -721,9 +708,7 @@ prims! {
 }
 
 /// The base environment v0.0.6 `document` programs start in. Back-compat
-/// wrapper — unchanged behavior, so none of this crate's ~90 existing
-/// `base_env()` call sites (production and tests) need editing when
-/// `VersionSpan` gating lands. Mirrors `rustyfi-syntax`'s
+/// wrapper over `base_env_with_version(V0_0)`, mirroring `rustyfi-syntax`'s
 /// `lex`/`lex_with_version` split (S4).
 pub fn base_env() -> BaseEnv {
     base_env_with_version(RustyfiVersion::V0_0)
@@ -734,13 +719,12 @@ pub fn base_env() -> BaseEnv {
 /// under the name `"page-break"`, never `prim_page_break_v006`, and vice
 /// versa. The five bare-constant `env.define`s below (`inline-fil` etc. —
 /// these live outside `PrimDef`/`VersionSpan` entirely) stay unconditional
-/// (`Both`). prim-retype-sweep §1.4/§0.3 audited all five names
+/// (`Both`). All five names
 /// (`inline-fil`/`inline-nil`/`block-nil`/`omit-skip-after`/`clear-page`)
-/// against `dev-0-1-0:src/frontend/primitives.cppo.ml` — every one exists
-/// in 0.1 upstream too, so unconditional registration is correct, not just
-/// provisional; `tests/v01_prims_scalar.rs`'s
-/// `bare_constants_bound_under_v01` proves `base_env_with_version(V0_1)`
-/// still binds all five.
+/// were audited against `dev-0-1-0:src/frontend/primitives.cppo.ml` — every
+/// one exists in 0.1 upstream too, so unconditional registration is correct;
+/// `tests/v01_prims_scalar.rs`'s `bare_constants_bound_under_v01` proves
+/// `base_env_with_version(V0_1)` still binds all five.
 pub fn base_env_with_version(version: RustyfiVersion) -> BaseEnv {
     let mut env = BaseEnv::new();
     for def in PRIM_DEFS {
@@ -773,7 +757,7 @@ pub fn base_env_with_version(version: RustyfiVersion) -> BaseEnv {
     // breaker to drop the interword glue that would otherwise follow (used
     // at the tail of `math.satyh`'s `\eqn`/`\math-list`/`\align`). STAND-IN:
     // this port's line-breaker has no such marker box yet (a genuinely
-    // separate hyphenation/line-break feature, territory, not this plan's),
+    // separate hyphenation/line-break feature),
     // so it's simply the empty `inline-boxes` list — never actually
     // consulted at load time (none of `math.satyh`'s block/inline math
     // wrappers are called by the file itself).
@@ -784,7 +768,7 @@ pub fn base_env_with_version(version: RustyfiVersion) -> BaseEnv {
     // marker `chop_page` (rustyfi-backend) treats as "end this page here".
     // FAITHFUL — `mitou-report.satyh`'s `document` unblocker.
     env.define("clear-page", Value::BlockBoxes(vec![VertBox::ClearPage]));
-    // `here : string` (G6, `…/tmp/g6-g7-standins.md` §1.1) — upstream `here`
+    // `here : string` (G6) — upstream `here`
     // is a LEXER keyword that expands at lex time to a string constant (the
     // current source file's directory, `Filename.dirname`). This port has
     // no such lexer entry (`here` lexes as a plain `Token::Var`, resolvable
@@ -808,8 +792,8 @@ pub fn base_env_with_version(version: RustyfiVersion) -> BaseEnv {
 /// dependency spliced into a 0.1 program (`lib.rs`'s
 /// `compile_document_v1_with_trials`) is rejected if it references any of
 /// these unqualified, because the merged program's single
-/// `base_env_with_version(V0_1)` can only bind ONE closure per name (§3.2's
-/// R1) — a 0.0.6 body expecting `page-break`'s `page`-ADT arity would
+/// `base_env_with_version(V0_1)` can only bind ONE closure per name (R1)
+/// — a 0.0.6 body expecting `page-break`'s `page`-ADT arity would
 /// silently get the V0_1 arity instead.
 ///
 /// Filters `PRIM_DEFS` for any row whose `version` is NOT `VersionSpan::Both`
@@ -817,8 +801,8 @@ pub fn base_env_with_version(version: RustyfiVersion) -> BaseEnv {
 /// and not the other, OR one half of a same-name v006/v01 PAIR — either way
 /// the name resolves differently, or not at all, across the boundary) plus
 /// `"here"`, the one V0_1-only bare constant that lives OUTSIDE `PRIM_DEFS`
-/// (defined directly above, `:712-714` — not a `prims!` row, so the
-/// `VersionSpan` filter above never sees it).
+/// (defined directly above — not a `prims!` row, so the `VersionSpan` filter
+/// above never sees it).
 pub fn forked_prim_names() -> BTreeSet<String> {
     PRIM_DEFS
         .iter()
@@ -1017,8 +1001,6 @@ fn as_length(v: Value) -> Result<Length, EvalError> {
     }
 }
 
-/// Used by `string-unexplode` (the only new Slice-1 primitive that needs a
-/// bare list, as opposed to a per-element extractor applied inside a loop).
 fn as_list(v: Value) -> Result<Vec<Value>, EvalError> {
     match v {
         Value::List(items) => Ok(items),
@@ -1033,7 +1015,7 @@ fn as_image(v: Value) -> Result<ImageId, EvalError> {
     }
 }
 
-// ---- graphics argument extractors (Slice 1: subsystem.md §2) ---------------------------------------------------------
+// ---- graphics argument extractors (Slice 1) --------------------------------
 
 /// `point` = `Value::Tuple([Length, Length])` (mirrors `evalUtil.ml:228`'s
 /// point extraction).
@@ -1053,9 +1035,8 @@ fn as_point(v: Value) -> Result<Point, EvalError> {
 }
 
 /// `color` = `Value::Ctor("Gray"|"RGB"|"CMYK", ..)` (mirrors
-/// `evalUtil.ml:124`'s `get_color` exactly — `fill`/`stroke` are this
-/// extractor's first callers, so a wrong shape here would fail only at draw
-/// time; see the plan's Risks section).
+/// `evalUtil.ml:124`'s `get_color` exactly — a wrong shape here would
+/// surface only at draw time).
 fn as_color(v: Value) -> Result<Color, EvalError> {
     match v {
         Value::Ctor(name, payload) => match (name.as_str(), payload.map(|b| *b)) {
@@ -1449,8 +1430,8 @@ pub fn read_inline(
                         // `Context::initial` directly, i.e. unit tests):
                         // reflect + lay out through the faithful engine so
                         // `\cmd`/`#var` still evaluate — the same machinery
-                        // `+math(${…})` uses via `as_math`. math-split spec
-                        // §3.4: this fallback dispatches on `interp.version`
+                        // `+math(${…})` uses via `as_math`. This fallback
+                        // dispatches on `interp.version`
                         // — the installed-command path above is version-
                         // blind already (an ordinary `[math-text] inline-
                         // cmd` applied to `(ctx, math-text)`).
@@ -1587,13 +1568,11 @@ fn script_font(ctx: &Context, script: Script) -> ScriptFont {
 /// Measure `text` (already known to be one script run) at `size` under
 /// `font`, falling back per-glyph to `fallback_font` (`ctx.font`) when
 /// `font` has no glyph for a character — the "CJK per-glyph metrics path
-/// stubbed" case the plan flags: a character within a script-run's bucket
+/// stubbed" case: a character within a script-run's bucket
 /// that its assigned font happens to lack (e.g. a fullwidth-form character
 /// absent from a narrow CJK face) still measures via the Latin default
 /// rather than failing the whole run. Errors (both fonts lack the glyph)
-/// name the offending character and font key, replacing the old fixed
-/// "milestone-1 base fonts (WinAnsi only)" message which no longer applies
-/// once a real font store is configured.
+/// name the offending character and font key.
 ///
 /// **Known limitation** (documented, not fixed by this slice): the
 /// measurement here can fall back per-glyph, but `PureHorzBox::InnerString`
@@ -1636,7 +1615,7 @@ fn measure_run(
 /// `text_to_boxes`'s `flush_word` for both the plain (no-hyphenation) path
 /// and each hyphenated fragment / hyphen glyph. Factored out so both paths
 /// measure/build identically — this is part of what makes the width-identity
-/// argument (§6/D2) hold: `measure_run` is purely additive per char (no
+/// argument (D2) hold: `measure_run` is purely additive per char (no
 /// kerning/ligatures), so concatenating the fragments this produces
 /// reconstructs exactly the box a single un-split call would have produced.
 fn make_inner_string_pure_box(
@@ -1983,7 +1962,7 @@ fn text_to_boxes(
             // == None` (the `Context::initial` default), `breaks` is always
             // empty and the code below falls straight through to the
             // single-`InnerString` path — byte-identical to before this slice
-            // (the byte-identity gate, §6).
+            // (the byte-identity gate).
             let breaks = match ctx.hyphen_dictionary {
                 Some(tag) if script == Script::Latin => {
                     // S3: an explicit soft hyphen (U+00AD) authored in the word
@@ -2025,8 +2004,9 @@ fn text_to_boxes(
                 return Ok(());
             }
 
-            // Width-identity invariant (§6/D2, also see `make_inner_string_pure_box`'s
-            // doc comment): `measure_run` is purely additive per char (no
+            // Width-identity invariant (D2, also see
+            // `make_inner_string_pure_box`'s doc comment): `measure_run` is
+            // purely additive per char (no
             // kerning/ligatures), so splitting `word` into fragments here and
             // rejoining them via empty-slot `Discretionary`s (taken only at a
             // chosen line break) reproduces the exact width/height/depth of the
@@ -2200,14 +2180,14 @@ fn text_to_boxes(
         // Gated on the exact same `Some(_) && Latin` condition as that
         // branch, so `hyphen_dictionary == None` (or a non-Latin run)
         // reproduces exactly today's split-at-soft-hyphen behavior — the
-        // byte-identity gate, §6.
+        // byte-identity gate.
         let is_gated_soft_hyphen =
             c == '\u{ad}' && script == Script::Latin && ctx.hyphen_dictionary.is_some();
         // UAX#14 break opportunities apply to ALL text, ASCII included — that
         // is simply what upstream's line-break engine does (it runs over the
-        // whole run with no script gate). The port used to emit these only for
-        // non-ASCII, later widening to the explicit hyphen; both were
-        // approximations, and the gap they left is load-bearing:
+        // whole run with no script gate). Do NOT narrow this to non-ASCII, or
+        // to the explicit hyphen — both approximations leave a load-bearing
+        // gap:
         //
         //   - `+fig-center` (54.7pt, unbreakable) made the candidate widths jump
         //     clean over the feasible window — 400.32pt (ratio 2.72, dropped) to
@@ -2363,8 +2343,7 @@ fn text_to_boxes(
 // ---- math conversion ----------------------
 //
 // Walks the already-elaborated `MathElem` tree straight into one
-// `PureHorzBox::Math`, fixed-constant shift/scale (no MATH table — see the
-// plan's "What Slice 1 deliberately does NOT do").
+// `PureHorzBox::Math`, fixed-constant shift/scale (no MATH table).
 
 /// Superscript/subscript size ratio, used ONLY as `MathC`'s fallback when
 /// the current math font has no OpenType MATH table (`script_percent_scale_down
@@ -2404,7 +2383,7 @@ const FRAC_DENOM_SHIFT_FALLBACK: f64 = 0.33;
 /// with no MATH table (every `Base14Metrics` call, and any TTF that lacks
 /// one) transparently falls back to the flat pre-MATH-table constants
 /// above, keeping today's fixtures byte-identical. Fields are ratios of
-/// the font size (`§1`); callers multiply by whichever size is in scope
+/// the font size; callers multiply by whichever size is in scope
 /// (`ctx.font_size` for the shift magnitudes — matching the pre-existing
 /// "shift doesn't shrink with nesting" behavior these constants always had
 /// — or the atom's own local `size` for glyph-relative queries like
@@ -2456,7 +2435,7 @@ impl MathC {
     }
 
     /// `script_percent_scale_down / 100`, or the fixed `SCRIPT_SCALE`
-    /// fallback. Nesting-level scale gap (documented in the plan): upstream
+    /// fallback. Nesting-level scale gap: upstream
     /// switches to `script_script_percent_scale_down` one level deeper;
     /// this port applies `script_scale_down` uniformly at every depth.
     fn script_scale(&self) -> f64 {
@@ -2464,8 +2443,8 @@ impl MathC {
     }
 
     /// `math.ml`'s `h_bar` (axis height): the vertical center math content
-    /// (fraction bars, `get-axis-height`) aligns to. Falls back to the same
-    /// fixed `0.25` ratio `prim_get_axis_height` used before this slice.
+    /// (fraction bars, `get-axis-height`) aligns to. Falls back to a fixed
+    /// `0.25` ratio with no MATH table.
     fn axis(&self, s: Length) -> Length {
         self.c.map(|c| s * c.axis_height).unwrap_or(s * 0.25)
     }
@@ -2687,10 +2666,10 @@ fn glyphs_extent(glyphs: &[MathGlyph]) -> (Length, Length) {
 fn inner_ink_extent(glyphs: &[MathGlyph], rules: &[GraphicsElem]) -> (Length, Length) {
     let (mut height, mut depth) = glyphs_extent(glyphs);
     for r in rules {
-        // L5b (prim-retype-sweep.md §3.2): `graphics_bbox` is now `Option`
-        // (`None` for an empty `Group` — unreachable here under 0.0.6 math
-        // rules, but the fold is version-blind and correct either way: a
-        // `None` rule contributes nothing to the ink extent).
+        // L5b: `graphics_bbox` is now `Option` (`None` for an empty `Group`
+        // — unreachable here under 0.0.6 math rules, but the fold is
+        // version-blind and correct either way: a `None` rule contributes
+        // nothing to the ink extent).
         if let Some(((_, min_y), (_, max_y))) = graphics_bbox(r) {
             height = height.max(max_y);
             depth = depth.max(-min_y);
@@ -3219,8 +3198,8 @@ fn layout_math_elem(
 /// Walk an elaborated `${…}` tree (`read_inline`'s `EmbedMath` arm) into one
 /// `PureHorzBox::Math`, measuring every glyph through `interp.metrics` at
 /// `ctx.font`/`ctx.font_size` — the same `FontMetrics` seam `text_to_boxes`
-/// uses. See for the box-model rationale (a math run carries its own
-/// pre-shifted sub-glyphs since the line model has no per-box vertical slot).
+/// uses. Box-model rationale: a math run carries its own pre-shifted
+/// sub-glyphs, since the line model has no per-box vertical slot.
 pub fn read_math(
     interp: &mut Interp,
     ctx: &Context,
@@ -3403,13 +3382,11 @@ const PAGE_NUMBER_LIMIT: i64 = 10_000;
 
 /// The real 4-arg `page-break`, v0.0.6 arm — upstream `BCDocument(pagesize,
 /// SingleColumn, (fun () -> []), (fun () -> []), …)` (vminst.ml:1039): one
-/// zero-shift column, no hooks. L7 (rustyfi-0-1-0-support.md §3): forked from
-/// the v0.1 arm below ONLY in its first-argument extraction (`as_page` vs
-/// `as_page_v01`) — deliberately two separate functions, not one function
-/// branching on a `version` parameter, per that plan's §6 risk note
-/// ("separate functions per tag, never in-function `if version` branching, so
-/// a 'shared' function is genuinely shared code"). `page_break_core` below IS
-/// that genuinely shared code.
+/// zero-shift column, no hooks. L7: forked from the v0.1 arm below ONLY in
+/// its first-argument extraction (`as_page` vs `as_page_v01`) —
+/// deliberately two separate functions per tag rather than one branching on
+/// a `version` parameter, so that a "shared" function is genuinely shared
+/// code. `page_break_core` below IS that shared code.
 fn prim_page_break_v006(interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
     let bb = as_block_boxes(args.pop().unwrap())?;
     let pagepartsf = args.pop().unwrap();
@@ -3455,8 +3432,7 @@ fn prim_page_break_v01(interp: &mut Interp, mut args: Vec<Value>) -> Result<Valu
 /// v0.0.6 arm — upstream builds `MultiColumn([origin_shift])` with the
 /// user's column hook and a trivial column-end hook (vminst.ml:1062); the
 /// `length` is the x-shift of the SECOND column's origin. See
-/// `prim_page_break_v006`'s doc comment for the fork rationale; unchanged
-/// from the former `prim_page_break_two_column` body except the rename.
+/// `prim_page_break_v006`'s doc comment for the fork rationale.
 fn prim_page_break_two_column_v006(
     interp: &mut Interp,
     mut args: Vec<Value>,
@@ -3510,8 +3486,7 @@ fn prim_page_break_two_column_v01(
 /// `BackendPageBreakingMultiColumn`), v0.0.6 arm — FAITHFUL: the shift list
 /// gives columns 2..N's x-origin shifts; upstream prepends `Length.zero` for
 /// column 1 (pageBreak.ml:762), so `stdjareport.satyh:403`'s `[]` is a
-/// one-column layout whose hooks still fire per column/page. Unchanged from
-/// the former `prim_page_break_multicolumn` body except the rename.
+/// one-column layout whose hooks still fire per column/page.
 fn prim_page_break_multicolumn_v006(
     interp: &mut Interp,
     mut args: Vec<Value>,
@@ -3735,7 +3710,7 @@ cmp_prim!(prim_int_gt, as_int, |a, b| a > b);
 cmp_prim!(prim_int_le, as_int, |a, b| a <= b);
 cmp_prim!(prim_int_ge, as_int, |a, b| a >= b);
 
-// ---- 0.1 bitwise ops (prim-retype-sweep §2.1) ------------------------------
+// ---- 0.1 bitwise ops -------------------------------------------------------
 //
 // `band`/`bor`/`bxor` mirror OCaml's `land`/`lor`/`lxor`; `bnot` mirrors
 // `lnot` (bitwise complement). DOCUMENTED DEVIATION: this port's `int` is a
@@ -3980,12 +3955,9 @@ fn prim_get_initial_context(interp: &mut Interp, mut args: Vec<Value>) -> Result
     }
     // Slice B: overlay the configured `default-font.satysfi-hash` `"math"`
     // abbrev, if any, so a document with a bundled MATH-table font renders
-    // real cramped/uncramped math metrics with zero `set-math-font` calls
-    // (`interp.metrics. default_math_font` is `None` for every provider with
-    // no such config — `Base14Metrics` and a bare
-    // `TtfFontStore::load`/registry-without- `"math"` all — so this is a
-    // no-op there, keeping every pre-Slice-B fixture's initial context
-    // byte-identical).
+    // real cramped/uncramped math metrics with zero `set-math-font` calls.
+    // `interp.metrics.default_math_font` is `None` on a provider with no such
+    // config, the same no-op-by-default shape as the `scripts` overlay above.
     if let Some(font) = interp.metrics.default_math_font() {
         ctx.math_font = font;
     }
@@ -4097,7 +4069,7 @@ fn prim_list_mark(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, E
 /// constructor: `itemize.satyh`'s `make-bullet`/`enumerate-item` fence the
 /// drawn bullet/number glyph run with `BulletStart`/`BulletEnd`, and the
 /// repo-controlled `\emph`/`\bold` definitions (`v01-mini.satyh`,
-/// `std-ja.satyh` — §5's opt-in, per-command wrap) fence their body with
+/// `std-ja.satyh` — an opt-in, per-command wrap) fence their body with
 /// `EmphStart`/`EmphEnd`. Returns a single-element `inline-boxes` carrying an
 /// INERT `PureHorzBox::InlineMark` — zero width/height/depth, contributing
 /// nothing to `measure`/ `natural_metrics`/`justify_line` (rustyfi-backend's
@@ -4130,7 +4102,7 @@ fn prim_inline_mark(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value,
     )]))
 }
 
-// ---- frontend-completion.md §Slice 1.A: the ~18 pure primitives -----------
+// ---- Slice 1.A: the ~18 pure primitives ------------------------------------
 //
 // All bodies below are `float -> float` (or `float -> float -> float`)
 // straight wraps of the matching `f64` method — vminst.ml's OCaml bodies
@@ -4273,7 +4245,7 @@ fn prim_string_unexplode(_interp: &mut Interp, mut args: Vec<Value>) -> Result<V
 /// DOCUMENTED NON-RISK: this crate's embedded Unicode table version may lag
 /// or lead upstream's uunf pin — both track recent Unicode, and no bundled
 /// package/test relies on a normalization pair that changed between
-/// versions (prim-retype-sweep §2.2/§8 risk 4).
+/// versions.
 fn prim_normalize_string_to_nfc(
     _interp: &mut Interp,
     mut args: Vec<Value>,
@@ -4425,8 +4397,7 @@ fn prim_use_image_by_width(interp: &mut Interp, mut args: Vec<Value>) -> Result<
 /// `Interp` yet).
 ///
 /// Errors (all clean `EvalError`, no panics — mirrors upstream
-/// `imageHashTable.ml`'s `add_pdf` / `loadPdf.ml`, see the design doc §4's
-/// table):
+/// `imageHashTable.ml`'s `add_pdf` / `loadPdf.ml`):
 /// - file missing/unreadable → "cannot open '<path>': <e>";
 /// - malformed/unparseable PDF → "cannot parse PDF '<path>': <e>";
 /// - `pageno < 1` → "page number must be >= 1 (got <n>)";
@@ -4490,9 +4461,9 @@ fn prim_load_pdf_image(interp: &mut Interp, mut args: Vec<Value>) -> Result<Valu
 }
 
 /// `/MediaBox` lookup with page-tree inheritance (`lopdf` does not resolve
-/// this automatically, unlike upstream camlpdf's `Pdfpage` helpers — design
-/// doc §1 Risk 3): walk `page_dict`, then its `/Parent` chain, returning the
-/// first `/MediaBox` found as `(x0, y0, x1, y1)` in raw PDF points. `None`
+/// this automatically, unlike upstream camlpdf's `Pdfpage` helpers): walk
+/// `page_dict`, then its `/Parent` chain, returning the first `/MediaBox`
+/// found as `(x0, y0, x1, y1)` in raw PDF points. `None`
 /// if no ancestor carries a well-formed 4-element numeric array, or if a
 /// `/Parent` cycle is detected.
 fn resolve_pdf_media_box(
@@ -4536,7 +4507,7 @@ fn resolve_pdf_media_box(
 
 /// Import the page's `/Resources` subtree (walking page-tree inheritance
 /// like `resolve_pdf_media_box`) into a neutral `ImportedObjects` table for
-/// the PDF writer (design doc §2-3). Local id `0` always holds the
+/// the PDF writer. Local id `0` always holds the
 /// (possibly inline) `/Resources` dictionary itself; every other entry is a
 /// real source PDF object number, keyed by `convert_pdf_object`'s
 /// transitive walk of every `Reference` reachable from it.
@@ -4578,7 +4549,7 @@ fn resolve_pdf_resources_object<'a>(
 }
 
 /// Recursively convert one `lopdf::Object` into the neutral `ObjRepr`
-/// grammar (design doc §2), following every `Reference` transitively and
+/// grammar, following every `Reference` transitively and
 /// appending newly-visited indirect objects to `out` keyed by their source
 /// object number (`seen` guards against re-visiting/cycles — a shared
 /// object referenced from multiple places is emitted once and pointed at by
@@ -4643,7 +4614,7 @@ fn convert_pdf_dict(
 }
 
 /// `read-file : string -> list string` (dev-0-1-0 vminst.ml:3073
-/// `PrimitiveReadFile`; prim-retype-sweep §2.3) — REAL, with two documented
+/// `PrimitiveReadFile`) — REAL, with two documented
 /// deviations:
 ///
 /// 1. **Path resolution**: resolves `path` against the process's current
@@ -4713,8 +4684,8 @@ fn as_option_string(v: Value) -> Result<Option<String>, EvalError> {
 }
 
 /// `register-document-information : document-information-dictionary ->
-/// unit` (dev-0-1-0 vminst.ml:2978 `PrimitiveRegisterDocumentInformation`;
-/// prim-retype-sweep §2.4) — REAL: extracts `title`/`subject`/`author`
+/// unit` (dev-0-1-0 vminst.ml:2978 `PrimitiveRegisterDocumentInformation`)
+/// — REAL: extracts `title`/`subject`/`author`
 /// (`option string`) and `keywords` (`list string`) from the record
 /// argument (`t_doc_info_dictionary()`'s shape, `prim_types.rs`) and stores
 /// them onto `Interp::doc_info` — LAST WRITE WINS (upstream's `register`,
@@ -4757,7 +4728,7 @@ fn prim_register_document_information(
 // ============================================================================
 // ---- Slice 1 graphics primitives ------
 // `start-path`/`line-to`/`terminate-path`/`close-with-line`/`fill`/`stroke`/
-// `inline-graphics` — see that plan's §2/§3 for the full design. Argument
+// `inline-graphics`. Argument
 // order matches `tools/gencode/vminst.ml` (point-first for `line-to`,
 // width-first for `stroke`).
 // ============================================================================
@@ -4827,7 +4798,7 @@ fn prim_stroke(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, Eval
 /// `inline-graphics : length -> length -> length -> (point -> graphics
 /// list) -> inline-boxes` (vminst.ml:1872 `BackendInlineGraphics`) — a box
 /// of size `(w, h, d)` carrying the callback's resolved graphics elements,
-/// the minimal on-page sink for a `graphics` value (§3 of the plan).
+/// the minimal on-page sink for a `graphics` value.
 ///
 /// **Slice-1 eager-callback shortcut.** Upstream defers the callback until
 /// the box's *placed* point is known on the page, then calls
@@ -4839,9 +4810,8 @@ fn prim_stroke(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, Eval
 /// position via a single `cm` at render time. This equals upstream's
 /// behavior if and only if `gfun` uses its point argument purely additively
 /// (shift-covariant) — true of every real `Gr`/`deco` generator, but not
-/// enforced by this signature. See for the full discussion; faithfully
-/// deferring this is the same architecture roadmap phase E (decoration
-/// hooks) needs.
+/// enforced by this signature. Deferring it faithfully needs the same
+/// architecture as roadmap phase E (decoration hooks).
 fn prim_inline_graphics(
     interp: &mut Interp,
     version: RustyfiVersion,
@@ -4853,9 +4823,9 @@ fn prim_inline_graphics(
     let w = as_length(args.pop().unwrap())?;
     let origin = make_point_value((Length::ZERO, Length::ZERO));
     let list_v = interp.apply(gfun.clone(), origin)?;
-    // H1 (prim-retype-sweep.md §1.3/§3.4): the callback's result type is
-    // `list graphics` under v0.0.6, one `graphics` collection under v0.1 —
-    // see `coerce_graphics_result`'s doc comment.
+    // H1: the callback's result type is `list graphics` under v0.0.6, one
+    // `graphics` collection under v0.1 — see `coerce_graphics_result`'s doc
+    // comment.
     let elems = coerce_graphics_result_for(version, list_v)?;
     // Detect a PAGE-ABSOLUTE callback: run it again at a far-off probe point
     // and compare. If the output is byte-identical the callback ignored its
@@ -4948,15 +4918,13 @@ fn resolve_outer_graphics_in_contents(
             };
             let partial = interp.apply(gfun, Value::Length(w))?;
             let listv = interp.apply(partial, make_point_value((Length::ZERO, Length::ZERO)))?;
-            // H2 (prim-retype-sweep.md §1.3/§3.4): same per-version
-            // coercion as `prim_inline_graphics` above — shared by both
-            // `inline-graphics-outer` itself and its use inside `tabular`
-            // cells (`prim_tabular` calls this same function per cell).
-            // The generation is the one the callback was REGISTERED under,
-            // carried alongside it in `Interp::outer_graphics`: this pass is
-            // a deferred one (`line-break`/`tabular`/`draw-text`), so
-            // `interp.version` here is the entry document's, not the
-            // callback author's.
+            // H2: same per-version coercion as `prim_inline_graphics`
+            // above, shared with `tabular`'s per-cell use. The generation is
+            // the one the
+            // callback was REGISTERED under, carried alongside it in
+            // `Interp::outer_graphics`: this pass is a DEFERRED one
+            // (`line-break`/`tabular`/`draw-text`), so `interp.version` here
+            // is the entry document's, not the callback author's.
             let elems = coerce_graphics_result_for(gver, listv)?;
             *bx = PureHorzBox::Graphics {
                 width: w,
@@ -4999,10 +4967,10 @@ fn prim_tabular(
     let ys = make_length_list(&solved.ys);
     let partial = interp.apply(rulesf, xs)?;
     let gval = interp.apply(partial, ys)?;
-    // R2 (prim-retype-sweep.md §1.2/§3.4): the rules callback returns
-    // `list graphics` under v0.0.6, one `graphics` collection under v0.1 —
-    // per the CALLER's generation (`version`), which is the one whose
-    // `tabular` type this call was checked against.
+    // R2: the rules callback returns `list graphics` under v0.0.6, one
+    // `graphics` collection under v0.1 — per the CALLER's generation
+    // (`version`), which is the one whose `tabular` type this call was
+    // checked against.
     let rules = coerce_graphics_result_for(version, gval)?;
 
     Ok(Value::InlineBoxes(vec![HorzBox::Pure(
@@ -5017,7 +4985,7 @@ fn prim_tabular(
 }
 
 // ============================================================================
-// ---- gr.satyh roadmap graphics primitives (subsystem.md §Full roadmap A/B/C/D) -------------------------------------
+// ---- gr.satyh roadmap graphics primitives (roadmap A/B/C/D) ----------------
 // ============================================================================
 
 /// `bezier-to : point -> point -> point -> pre-path -> pre-path`
@@ -5106,7 +5074,7 @@ fn prim_linear_transform_graphics(
 }
 
 /// `get-graphics-bbox : graphics -> point * point` (v0.0.6 vminst.ml:2466)
-/// — the R3 fork's v006 side (prim-retype-sweep.md §1.2/§3.4): today's body,
+/// — the R3 fork's v006 side: today's body,
 /// unchanged. `.unwrap_or(…)` is UNREACHABLE under 0.0.6 (no 0.0.6-visible
 /// constructor produces `Group`/`Clip`, so `graphics_bbox` never returns
 /// `None` here); documented rather than `.expect`ed so a future faithful
@@ -5148,8 +5116,8 @@ fn prim_get_graphics_bbox_v01(
 }
 
 /// `unite-graphics : list graphics -> graphics` (dev-0-1-0 vminst.ml:3119)
-/// — `GraphicD.concat` = `List.concat`, ported as the `Group` container
-/// (prim-retype-sweep.md §3.4). `unite-graphics []` is legal and yields the
+/// — `GraphicD.concat` = `List.concat`, ported as the `Group` container.
+/// `unite-graphics []` is legal and yields the
 /// empty collection (the `None`-bbox witness `get-graphics-bbox` exercises
 /// above).
 fn prim_unite_graphics(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
@@ -5313,13 +5281,11 @@ fn prim_inline_frame_inner(
 }
 
 /// `set-manual-rising : length -> context -> context` (vminst.ml:1661
-/// `PrimitiveSetManualRising`) — FAITHFULLY stores the rising in the new
-/// `Context::manual_rising` field, the same shape as `set-font-size`/
-/// `set-leading` above. Like `paragraph_top`/`paragraph_bottom`, nothing
-/// reads this field yet: no box-producing primitive in this port shifts
-/// text vertically by it (upstream's `PHGRising`/`raise-inline` box has no
-/// analogue here yet), so the effect is currently a no-op — a stand-in only
-/// in that downstream sense, not in what it stores.
+/// `PrimitiveSetManualRising`) — FAITHFUL store into
+/// `Context::manual_rising`, the same shape as `set-font-size`/
+/// `set-leading` above. Read by `text_to_boxes`'s `flush_word`, which adds
+/// it to the script font's own baseline raise; the default is
+/// `Length::ZERO`, so a document that never calls this is unaffected.
 fn prim_set_manual_rising(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
     let ctx = as_context(args.pop().unwrap())?;
     let rising = as_length(args.pop().unwrap())?;
@@ -5381,10 +5347,9 @@ fn prim_discretionary(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Valu
 ///
 /// FAITHFUL (§B1): reads `axis_height` from `ctx.math_font`'s OpenType MATH
 /// table via `MathC` (`FontInfo.get_axis_height mfabbrev fontsize`), falling
-/// back to the same fixed `0.25` ratio of `ctx.font_size` this returned
-/// before this slice (`pervasives.satyh`'s `\SATySFi`/`\LaTeX` manual-rising
-/// ratio) whenever the font has no MATH table — so base-14/non-math output
-/// is unchanged.
+/// back to a fixed `0.25` ratio of `ctx.font_size` (`pervasives.satyh`'s
+/// `\SATySFi`/`\LaTeX` manual-rising ratio) whenever the font has no MATH
+/// table — so base-14/non-math output is unchanged.
 fn prim_get_axis_height(interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
     let ctx = as_context(args.pop().unwrap())?;
     let mc = MathC::of(interp, &ctx);
@@ -5527,9 +5492,9 @@ fn prim_get_rightmost_script(
 /// ride on the markers (which is how they still reach the line's height and
 /// depth) and are re-applied per fragment at fire time.
 ///
-/// The atomic `PureHorzBox::Frame` this used to build — which fired only
-/// `decoS` and, being width-rigid, could neither break nor let an interior
-/// `inline-fil` stretch — is now reserved for `inline-frame-outer`/`-inner`,
+/// The atomic `PureHorzBox::Frame` is NOT usable here — it fires only
+/// `decoS` and, being width-rigid, can neither break nor let an interior
+/// `inline-fil` stretch. It is reserved for `inline-frame-outer`/`-inner`,
 /// which upstream really does keep atomic.
 fn prim_inline_frame_breakable(
     interp: &mut Interp,
@@ -5600,7 +5565,7 @@ fn as_decoset(v: Value) -> Result<[Value; 4], EvalError> {
 
 /// 0.0.6 graphics-producing callbacks return `list graphics` (`tL tGR`);
 /// 0.1's return one `graphics` collection (`tGR` — dev-0-1-0
-/// `primitives.cppo.ml:75-85`, prim-retype-sweep.md §1.3). STRICT per
+/// `primitives.cppo.ml:75-85`). STRICT per
 /// version: a 0.1 program returning a list here is a bug the type checker
 /// already rejected; don't mask it with tolerant decoding. Shared by every
 /// H1-H6 coercion site (`prim_inline_graphics`, `inline-graphics-outer`/
@@ -5633,7 +5598,7 @@ fn coerce_graphics_result_for(
 /// `point -> length -> length -> length -> graphics list` deco and coerce
 /// the result. Depths here are already user-sign (nonnegative), so no
 /// negate (upstream negates because ITS internal depths are nonpositive).
-/// H3-H6 (prim-retype-sweep.md §1.3): the deco closure's result is `list
+/// H3-H6: the deco closure's result is `list
 /// graphics` under v0.0.6, one `graphics` collection under v0.1 — see
 /// `coerce_graphics_result`'s doc comment.
 ///
@@ -5682,7 +5647,7 @@ fn as_border_option(v: Value) -> Result<Option<(Length, Color)>, EvalError> {
 /// `register-destination : string -> point -> unit` (vminstdef.yaml:2738) —
 /// FAITHFUL: upstream `NamedDest.register` + `notify_pagebreak` collapsed
 /// into one step, since our firing window (`fire_hooks`) already knows the
-/// page. Errors outside that window (§0.5, `annotation.ml:15`'s
+/// page. Errors outside that window (`annotation.ml:15`'s
 /// `State.during_page_break` gate).
 fn prim_register_destination(
     interp: &mut Interp,
@@ -5776,7 +5741,7 @@ fn prim_register_link_to_location(
 }
 
 // ============================================================================
-// + §G: the faithful `Value::Math` primitive layer `math.satyh` is built
+// The faithful `Value::Math` primitive layer `math.satyh` is built
 // out of. Every `math-*` primitive here builds or consumes a
 // `Value::Math(Rc<Vec<Math>>)` (`value.rs`'s `Math`); a `math`-typed
 // argument may equally arrive as a `Value::MathText` (a `${…}` literal —
@@ -5895,7 +5860,7 @@ fn as_math(interp: &mut Interp, v: Value) -> Result<Rc<Vec<Math>>, EvalError> {
 
 /// Reflect one elaborated `${…}` literal `MathElem` (Slice 1's fused,
 /// math-class-free form) into zero-or-more faithful `Math` atoms, pushed
-/// onto `out` — the "less churn" resolution design-debt Risk names:
+/// onto `out` — the "less churn" resolution:
 /// `MathElem` stays the fast path for a bare `${x^2}` in prose
 /// (`read_inline`'s `EmbedMath` arm, untouched), and only gets reflected
 /// into `Value::Math` at a command/primitive boundary (here — whenever a
@@ -5903,7 +5868,7 @@ fn as_math(interp: &mut Interp, v: Value) -> Result<Rc<Vec<Math>>, EvalError> {
 /// `Cmd`/`Embed` are resolved by actually evaluating them against `env` (the
 /// literal's own captured environment) and recursively reflecting/flattening
 /// the result — this is the "Embed of a `#…` program value that itself
-/// evaluates to math" roadmap-A add the plan calls for.
+/// evaluates to math" roadmap-A add.
 fn reflect_math_elem(
     interp: &mut Interp,
     elem: &MathElem,
@@ -5993,7 +5958,7 @@ fn single_math(m: Math) -> Value {
 }
 
 // ============================================================================
-// math-split spec §3: V0_1's `math-text`/`math-boxes` split + `read-math`.
+// V0_1's `math-text`/`math-boxes` split + `read-math`.
 // Everything below is additive and V0_1-only — no 0.0.6 path calls any of
 // this (`as_math`/`reflect_math_elem`/`single_math` above stay byte-
 // identical and untouched).
@@ -6045,7 +6010,7 @@ fn as_option_math_text(v: Value) -> Result<Option<(Rc<Vec<MathElem>>, Env)>, Eva
 }
 
 /// Wrap a raw (ambient-`env`-sharing) script `MathElem` slice as an `option
-/// math-text` VALUE — `Cmd`'s uniform V0_1 calling convention (§4.2) always
+/// math-text` VALUE — `Cmd`'s uniform V0_1 calling convention always
 /// passes its command's sub/sup arguments this way, never pre-reflected.
 fn option_math_text_value(opt: Option<&[MathElem]>, env: &Env) -> Value {
     match opt {
@@ -6088,8 +6053,8 @@ fn math_char_class_value(c: MathCharClass) -> Value {
     Value::Ctor(math_char_class_ctor_name(c).to_string(), None)
 }
 
-/// Port of `dev-0-1-0 src/frontend/context.ml:52-68` (math-split spec
-/// §3.3): bump `ctx`'s `math_script_level` and scale `font_size`
+/// Port of `dev-0-1-0 src/frontend/context.ml:52-68`: bump `ctx`'s
+/// `math_script_level` and scale `font_size`
 /// accordingly. `Base -> Script`: scale by the font's MATH-table
 /// `script_scale_down` (fallback `0.7`, consistent with the engine's other
 /// fixed-fraction fallbacks). `Script -> ScriptScript`: scale by
@@ -6137,7 +6102,7 @@ fn flatten_math_scripts(elem: &MathElem) -> (&MathElem, Option<&[MathElem]>, Opt
     }
 }
 
-/// `attach_scripts` (math-split spec §3.3) — mirrors upstream's
+/// `attach_scripts` — mirrors upstream's
 /// `append_sub_and_super_scripts` + its `enter_script` iteration
 /// (`evaluator.cppo.ml:901-904`): reflects `sub_opt`/`sup_opt` (each an
 /// already-extracted math-text payload — an ambient-env script slice for
@@ -6180,7 +6145,7 @@ fn attach_scripts(
 /// its (possibly absent) `sub`/`sup` script slices — the shared tail of
 /// `reflect_math_elem_v01`'s `Sub`/`Sup` arm (after flattening) AND its bare
 /// `Cmd` arm (`sub = sup = None`). `base` a `Cmd`: route ctx+sub+sup into
-/// the application per the uniform V0_1 calling convention (§4.2) — a
+/// the application per the uniform V0_1 calling convention — a
 /// SEPARATE math-command value shape does not exist in this port, so every
 /// V0_1 math command, scripted or not, is applied exactly this way. `base`
 /// anything else: reflect it plainly, then `attach_scripts`.
@@ -6270,13 +6235,13 @@ fn reflect_scripted_v01(
 
 /// V0_1 twin of `reflect_math_elem` (differs only where upstream's
 /// `read_pdf_mode_math_text` (`evaluator.cppo.ml:887-930`) differs from
-/// 0.0.6 reflection — math-split spec §3.3): `Chars`/`Group`/`Primes` are
+/// 0.0.6 reflection): `Chars`/`Group`/`Primes` are
 /// identical to the v006 arms (class/variant resolution stays deferred to
 /// layout, where `ctx`'s maps live); `Sub`/`Sup` flatten and route through
 /// [`reflect_scripted_v01`]; a bare `Cmd` also routes through it (with
 /// `sub = sup = None`) so the uniform ctx+sub+sup calling convention
 /// applies uniformly, scripted or not; `Embed` (`#x`) requires the embedded
-/// value to be `math-text` (it typechecked as `math-text`, §1.4) and
+/// value to be `math-text` (it typechecked as `math-text`) and
 /// recurses — upstream `MathTextValueGroup` (`evaluator.cppo.ml:944-949`);
 /// scripts on an embed attach via [`reflect_scripted_v01`]'s generic
 /// (non-`Cmd`) path, same as any other non-command base.
@@ -6329,7 +6294,7 @@ fn reflect_math_elem_v01(
 }
 
 /// `read-math : context -> math-text -> math-boxes` (dev-0-1-0
-/// vminst.ml:790-793) — math-split spec §3.3. Reflects every element of
+/// vminst.ml:790-793). Reflects every element of
 /// `mt` under `ctx` via [`reflect_math_elem_v01`], then wraps the whole run
 /// in a single `Math::WithContext` node so `ctx` (including any color/font/
 /// size override the caller composed onto it) reaches the layout engine —
@@ -6445,7 +6410,7 @@ fn prim_get_math_axis_height_ratio(
 }
 
 /// `%math-attach-scripts : context -> math-boxes -> option math-text ->
-/// option math-text -> math-boxes` — hidden (math-split spec §2.2/§4.3):
+/// option math-text -> math-boxes` — hidden:
 /// the synthesized script-attacher `val math` commands WITHOUT `with sub
 /// sup` lower to. Body = [`attach_scripts`] directly — the same function
 /// `reflect_scripted_v01`'s non-`Cmd` path calls.
@@ -6526,8 +6491,8 @@ fn prim_load_unicode_char_database(
 /// (`vminst.ml`'s setter: upstream stores `{ ctx with hyphen_dictionary }`).
 /// Real (S1): writes `Context::hyphen_dictionary = Some(tag)`. This is the
 /// ONLY way a `Context` acquires a dictionary — `Context::initial` seeds
-/// `None` (D4), so a document that never calls this sees byte-identical
-/// layout to before this slice.
+/// `None` (D4), so a document that never calls this gets no hyphenation at
+/// all.
 fn prim_set_hyphenation_dictionary(
     _interp: &mut Interp,
     mut args: Vec<Value>,
@@ -6565,8 +6530,8 @@ fn prim_math_char_v006(interp: &mut Interp, mut args: Vec<Value>) -> Result<Valu
 }
 
 /// `math-char : context -> math-class -> string -> math-boxes` (dev-0-1-0
-/// vminst.ml:358) — ctx ACCEPTED, not stored on the atom (math-split spec
-/// §2.3/§9 risk 1: coarse, `read-math`-granularity context capture only).
+/// vminst.ml:358) — ctx ACCEPTED, not stored on the atom (coarse,
+/// `read-math`-granularity context capture only).
 fn prim_math_char_v01(interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
     let s = as_str(args.pop().unwrap())?;
     let class = as_math_kind(args.pop().unwrap())?;
@@ -6896,7 +6861,7 @@ fn prim_math_upper_v01(interp: &mut Interp, mut args: Vec<Value>) -> Result<Valu
 /// `math-pull-in-scripts : math-class -> math-class -> (math option -> math
 /// option -> math) -> math` (vminst.ml:368) — FAITHFUL construction: the
 /// resolver closure is stored opaquely here, only ever invoked by
-/// `layout_pull_in_scripts` (Gap 2, `class-signature-lang-gaps.md`) — with
+/// `layout_pull_in_scripts` (Gap 2) — with
 /// the subscript/superscript actually pulled in off an enclosing `Sub`/`Sup`
 /// (`{scripts} m^{sup}`-style), or with `(None, None)` for the common
 /// unscripted case (a bare `\sum`/`\int` with nothing pulled in).
@@ -7325,9 +7290,8 @@ fn resolve_font_abbrev(abbrev: &str) -> FontKey {
 /// `set-math-font : string -> context -> context` (0.0.6
 /// `vminstdef.yaml:1364`) — `abbrev` resolves through the font metrics
 /// provider's registry first (D1a, same upgrade as `set-font`), falling back
-/// to the milestone-1 3-face name heuristic. A math OTF configured under any
-/// abbrev (not just the CLI regular face) can now be selected. Per-abbrev
-/// math-file selection beyond that = MATH-table slice (already landed).
+/// to the milestone-1 3-face name heuristic, so a math OTF configured under
+/// any abbrev (not just the CLI regular face) can be selected.
 fn prim_set_math_font_v006(interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
     let ctx = as_context(args.pop().unwrap())?;
     let abbrev = as_str(args.pop().unwrap())?;
@@ -7511,7 +7475,7 @@ fn prim_embed_math_v006(interp: &mut Interp, mut args: Vec<Value>) -> Result<Val
 
 /// `embed-math : context -> math-boxes -> inline-boxes` (vminst.ml:472) —
 /// `as_math_boxes` then the SAME `layout_math_value` (:5165 below) — the
-/// whole MATH-engine reuse in one primitive (math-split spec §2.3).
+/// whole MATH-engine reuse in one primitive.
 fn prim_embed_math_v01(interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
     let m = args.pop().unwrap();
     let ctx = as_context(args.pop().unwrap())?;
@@ -7772,7 +7736,7 @@ fn make_paren_run(
         // delta, `t_paren`'s doc comment). Upstream's `ictx` is already
         // scaled to the local (script-level) size at this call site; this
         // port threads `size` as a separate parameter, so clone-and-set —
-        // BIGGEST RISK (math-completion M2 spec): forgetting this silently
+        // BIGGEST RISK (M2): forgetting this silently
         // oversizes script-level delimiters (the closure would read the
         // OUTER context's font_size instead of the local scaled one).
         let mut c2 = ctx.clone();
@@ -8081,9 +8045,9 @@ fn layout_math_atom(
                 // `lp_math_kern_scheme`'s single scheme feeding both corner
                 // attachments upstream.
                 let paren_kernf = paren_trailing_kernf(interp, ctx, &new_base, size);
-                // Subscripts are always cramped (design-math-cramped.md
-                // §2.2); the superscript inherits the ambient cramped state
-                // unchanged (do NOT flip/reset it here).
+                // Subscripts are always cramped; the superscript inherits
+                // the ambient cramped state unchanged (do NOT flip/reset it
+                // here).
                 let sub_ctx = Context {
                     math_cramped: true,
                     ..ctx.clone()
@@ -8223,7 +8187,7 @@ fn layout_math_atom(
                 layout_math_list(interp, ctx, base, size)?;
             let mc = MathC::of(interp, ctx);
             let script_size = size * mc.script_scale();
-            // Subscripts are always cramped (design-math-cramped.md §2.2).
+            // Subscripts are always cramped.
             let sub_ctx = Context {
                 math_cramped: true,
                 ..ctx.clone()
@@ -8264,7 +8228,7 @@ fn layout_math_atom(
             Ok((glyphs, rules, width, left, right))
         }
         Math::ChangeCharClass(cls, inner) => {
-            // gap 5: no longer a layout no-op — lay `inner` out under a
+            // gap 5: lay `inner` out under a
             // context with `math_char_class` set to `cls`, which is what
             // `VariantCharPending`/`VariantChar`'s arms above consult.
             let ctx2 = Context {
@@ -8283,9 +8247,8 @@ fn layout_math_atom(
             // numerator/denominator aren't scripts, matching upstream's
             // `convert_to_low` call with the ambient `mathctx` unchanged).
             let (num_glyphs, num_rules, num_w, ..) = layout_math_list(interp, ctx, num, size)?;
-            // The denominator is always cramped (design-math-cramped.md
-            // §2.2); the numerator inherits the ambient cramped state
-            // unchanged.
+            // The denominator is always cramped; the numerator inherits the
+            // ambient cramped state unchanged.
             let den_ctx = Context {
                 math_cramped: true,
                 ..ctx.clone()
@@ -8326,7 +8289,7 @@ fn layout_math_atom(
                 denom_shift,
             );
             // The bar itself: `rect x∈[0,w], y∈[axis·s, axis·s+rule·s]`
-            // (§B2's test-plan shape — a deliberate simplification of
+            // (§B2's shape — a deliberate simplification of
             // upstream's own `Rectangle((xpos, ypos+h_bar+t_bar/2), (wid,
             // t_bar))`, which centers the rule on its OWN half-thickness
             // rather than sitting flush on the axis; this port picks the
@@ -8342,14 +8305,14 @@ fn layout_math_atom(
             // metrics`) plus a ported `default_radical` checkmark `Fill`
             // (`primitives.cppo.ml:311-355`) and an overbar rect `Fill` —
             // replaces the U+221A stand-in. `RadicalWithDegree` (`_degree =
-            // Some(..)`, `\sqrt[n]{..}`) stays unimplemented exactly as
-            // before this slice — the degree is carried faithfully in the
+            // Some(..)`, `\sqrt[n]{..}`) stays unimplemented — the degree is
+            // carried faithfully in the
             // `Math` value but silently NOT drawn, matching upstream's own
             // parity note (`math.ml:886-899`'s `failwith "unsupported"` is
             // upstream's harder failure mode; this port's own stand-in
             // policy, predating §B2, already chose "render the radicand
             // without the degree" over erroring — §B2 doesn't change that).
-            // The radicand is always cramped (design-math-cramped.md §2.2).
+            // The radicand is always cramped.
             let radicand_ctx = Context {
                 math_cramped: true,
                 ..ctx.clone()
@@ -8427,9 +8390,9 @@ fn layout_math_atom(
             // look different. Falls back to §B3b(i)'s MATH-native
             // stretchy-variant stand-in (`paren_variant_fallback`) only if
             // either closure errors (synthetic/ill-shaped test closures, or
-            // a real user error) — this fallback's own delimiter kind is
-            // always `(`/`)` regardless of what was requested, exactly as
-            // before this slice. Inner is laid out OUTSIDE the closure
+            // a real user error) — that fallback's own delimiter kind is
+            // always `(`/`)` regardless of what was requested. Inner is laid
+            // out OUTSIDE the closure
             // route so an inner layout error still propagates normally
             // (only closure-route errors trigger the fallback); splice
             // order `lg ++ inner ++ rg` matches upstream's own
@@ -8581,7 +8544,7 @@ fn layout_math_atom(
             // scripts): resolver gets (None, None).
             layout_pull_in_scripts(interp, ctx, &[], *cls1, *cls2, resolver, None, None, size)
         }
-        // V0_1 only (`read-math`, math-split spec §3.4): lay `inner` out
+        // V0_1 only (`read-math`): lay `inner` out
         // with ambient context = the STORED context, and size = the
         // stored context's OWN `font_size` — an ABSOLUTE override, not a
         // further multiply of the caller's `size`. This is deliberate: a
@@ -8589,7 +8552,7 @@ fn layout_math_atom(
         // already carries the script-shrunk `font_size` in `stored`, so
         // laying it out at `stored.font_size` (rather than at this call's
         // `size`) means the engine's own Sup/Sub shrink is never applied a
-        // second time on top of it (risk 3 in the math-split spec).
+        // second time on top of it.
         Math::WithContext(stored, inner) => {
             layout_math_list(interp, stored, inner, stored.font_size)
         }
@@ -8776,10 +8739,10 @@ fn radical_sign_geometry(
 /// `text-in-math` body is laid out once, by `read_inline`, before this
 /// function ever sees it).
 // UNWIRED. `layout_script` builds the same `(Vec<MathGlyph>, Length)` on the
-// live path, so nothing calls this. It is kept rather than deleted because two
-// doc comments above (`:3793`, `:7229`) describe the math/graphics harvesting
-// pair in terms of it, and because it is the upstream-faithful flattening a
-// `text-in-math` body needs if that path is ever wired back up.
+// live path, so nothing calls this. Kept rather than deleted because
+// `math_boxes_of_inline_boxes` below is documented as its sibling, and
+// because it is the upstream-faithful flattening a `text-in-math` body needs
+// if that path is ever wired back up.
 #[allow(dead_code)]
 fn math_glyphs_of_inline_boxes(boxes: &[HorzBox]) -> (Vec<MathGlyph>, Length) {
     fn go(pure: &PureHorzBox, out: &mut Vec<MathGlyph>, x: &mut Length) {
@@ -9027,9 +8990,9 @@ fn as_font_key(v: Value) -> Result<FontKey, EvalError> {
 }
 
 /// `set-text-color : color -> context -> context` (vminst.ml:1603) —
-/// FAITHFUL store (`Context::text_color`, the `set-font-size` shape); glyph-
-/// color *rendering* (emitting `rg`/`g` before `Tj` in both PDF writers) is
-/// a small follow-on, not needed for the field to round-trip.
+/// FAITHFUL store (`Context::text_color`, the `set-font-size` shape); it
+/// rides on every `HorzStringInfo` and both PDF writers emit `rg`/`g`
+/// before `Tj` for a non-black run.
 fn prim_set_text_color(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
     let ctx = as_context(args.pop().unwrap())?;
     let color = as_color(args.pop().unwrap())?;
@@ -9085,9 +9048,8 @@ fn prim_set_hyphen_min(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Val
 /// `set-space-ratio : float -> float -> float -> context -> context`
 /// (vminst.ml:1309), params `(natural, shrink, stretch)` — FAITHFUL store
 /// (`Context::space_natural`/`space_shrink`/`space_stretch`, clamped to
-/// `>= 0.0` like upstream); interword-glue *sizing* still uses the line
-/// breaker's own fixed ratios until wires these in (see `context.rs`'s
-/// field doc comments).
+/// `>= 0.0` like upstream), read by `text_to_boxes`'s interword glue (see
+/// "FIX 2" there).
 fn prim_set_space_ratio(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
     let ctx = as_context(args.pop().unwrap())?;
     let stretch = as_float(args.pop().unwrap())?.max(0.0);
@@ -9172,11 +9134,10 @@ fn indent_left(block: Vec<VertBox>, pad_l: Length) -> Vec<VertBox> {
 
 /// `block-frame-breakable : context -> paddings -> deco-set -> (context ->
 /// block-boxes) -> block-boxes` (vminst.ml:1090) — the `inline-frame-outer`
-/// playbook, one dimension up (+ hooks-annotations-crossref.md §D):
+/// playbook, one dimension up (§D):
 /// `paddingL`/`paddingR` shrink the inner `reducef` closure's context width,
-/// and the result is indented and top/bottom-padded with plain `Skip`s
-/// (unchanged from before this slice), now bracketed by a
-/// `FrameStart(id)`/`FrameEnd(id)` marker pair — the frame's
+/// and the result is indented and top/bottom-padded with plain `Skip`s,
+/// bracketed by a `FrameStart(id)`/`FrameEnd(id)` marker pair — the frame's
 /// pads/width/deco-set are interned into `interp.decos` under `id`
 /// (`DecoEntry::Block`), and `fire_hooks`'s block-fragment pass fires
 /// `decoS` once the frame's whole single-page fragment is placed (§D's first
@@ -9347,11 +9308,10 @@ fn prim_embed_block_top(interp: &mut Interp, mut args: Vec<Value>) -> Result<Val
 /// inline-boxes` (vminst.ml:1185) — the `embed-block-top` sibling that anchors
 /// the block's LAST line to the surrounding baseline (`adjust_to_last_line`),
 /// so a multi-line box hangs UP from the text line. Used by latexcmds'
-/// `\parbox?:(Bottom)`. Previously this was byte-identical to
-/// `embed-block-top` (a stand-in), which top-anchored it — visibly wrong (the
-/// box's first line sat on the baseline). `make_embedded_block(.., true)` now
-/// splits the metrics around the last line and `place_embedded_block` anchors
-/// it accordingly.
+/// `\parbox?:(Bottom)`. Top-anchoring it instead is visibly wrong (the box's
+/// first line sits on the baseline): `make_embedded_block(.., true)` splits
+/// the metrics around the last line and `place_embedded_block` anchors it
+/// accordingly.
 fn prim_embed_block_bottom(interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
     let k = args.pop().unwrap();
     let wid = as_length(args.pop().unwrap())?;
@@ -9376,10 +9336,8 @@ fn prim_embed_block_bottom(interp: &mut Interp, mut args: Vec<Value>) -> Result<
 /// this line's height, so consecutive baselines sit exactly
 /// `prev_depth + this_height` apart (see `pagebreak.rs`'s
 /// `leading.max(height)` placement formula — this choice makes that `max`
-/// always resolve to our computed `leading`). Like `embed-block-top`, the
-/// upstream `-top`/`-bottom` split is exactly `adjust_to_first_line` vs.
-/// `adjust_to_last_line`, which here is [`make_embedded_block`]'s
-/// `anchor_last` flag — see [`prim_line_stack_top`] for the other half.
+/// always resolve to our computed `leading`). See `line_stack` for the
+/// shared body and [`prim_line_stack_top`] for the other half.
 fn prim_line_stack_bottom(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
     line_stack(args.pop().unwrap(), true)
 }
@@ -9387,10 +9345,8 @@ fn prim_line_stack_bottom(_interp: &mut Interp, mut args: Vec<Value>) -> Result<
 /// `line-stack-top : inline-boxes list -> inline-boxes`
 /// (vminstdef.yaml:1109 `BackendLineStackTop`) — FAITHFUL: the same
 /// `make_line_stack` construction as [`prim_line_stack_bottom`], differing
-/// only in which stacked line's baseline becomes the result's. Upstream is
-/// `adjust_to_first_line` here against `adjust_to_last_line` there; this port
-/// spells that as `make_embedded_block`'s `anchor_last`, so the two prims are
-/// one body and one flag rather than two copies that could drift.
+/// only in which stacked line's baseline becomes the result's — one shared
+/// body and one flag rather than two copies that could drift.
 ///
 /// `ruby` calls this to sit its annotation above the base run.
 fn prim_line_stack_top(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
@@ -9448,8 +9404,7 @@ fn line_stack(arg: Value, anchor_last: bool) -> Result<Value, EvalError> {
 /// its line is committed to a page, reserves the stack's height at the
 /// column bottom, and places the block bottom-aligned there — see that
 /// function's doc comment. The cross-trial `changed`-flag protocol
-/// `footnote-scheme.satyh` layers on top rides the already-landed crossref
-/// fixpoint.
+/// `footnote-scheme.satyh` layers on top rides the crossref fixpoint.
 fn prim_add_footnote(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
     let block = as_block_boxes(args.pop().unwrap())?;
     Ok(Value::InlineBoxes(vec![HorzBox::Pure(
@@ -9557,8 +9512,8 @@ fn install_script_font(ctx: &mut Context, script: Script, font: FontKey, ratio: 
 
 /// `set-code-text-command : [string] inline-cmd -> context -> context`
 /// (`stdja:116`; orphan #4, — no vminst.ml entry to cite). STAND-IN, same
-/// shape as `set-math-command`/ `set-math-font` above: `(command \cmd)` (gap
-/// 1, already landed) means a real program CAN now build a `[string]
+/// shape as `set-math-command`/ `set-math-font` above: `(command \cmd)`
+/// (gap 1) means a real program CAN build a `[string]
 /// inline-cmd` value to pass here — but `Context` (`rustyfi-backend`) still
 /// cannot hold an arbitrary lang-side `Value` without a reverse crate
 /// dependency, and the one seam this codebase uses for that indirection
@@ -9589,8 +9544,8 @@ fn prim_get_natural_length(_interp: &mut Interp, mut args: Vec<Value>) -> Result
 
 /// `set-dominant-wide-script : script -> context -> context`
 /// (vminst.ml:1511 `PrimitiveSetDominantWideScript`) — FAITHFUL store
-/// (context-box-prims.md §C landed): consumed by `get-dominant-wide-script`
-/// now, by CJK script normalization (group D) later.
+/// (group C): consumed by `get-dominant-wide-script` now, by
+/// CJK script normalization (group D) later.
 fn prim_set_dominant_wide_script(
     _interp: &mut Interp,
     mut args: Vec<Value>,
@@ -9754,9 +9709,7 @@ fn prim_extract_string(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Val
 /// `TextGetInitialTextModeContext`) — FAITHFUL:
 /// `TextBackend.get_initial_text_mode_context` is `{ indent = 0;
 /// escape_list = [] }` (textBackend.ml:9-12); escape_list is omitted from
-/// the port's `TextInfo` (see its doc comment). Renamed `_v006` (from
-/// `prim_get_initial_text_info`) for the R1 fork — see the `prims!` table
-/// row's doc comment (prim-retype-sweep §2.5); zero behavior change.
+/// the port's `TextInfo` (see its doc comment). The R1 fork's v0.0.6 side.
 fn prim_get_initial_text_info_v006(
     _interp: &mut Interp,
     mut args: Vec<Value>,
@@ -9767,11 +9720,11 @@ fn prim_get_initial_text_info_v006(
 
 /// `get-initial-text-info : inline [math-text] -> (string -> option string
 /// -> option string -> string) -> text-info` (dev-0-1-0 vminst.ml:904-925)
-/// — the R1 fork's v0.1 side (prim-retype-sweep §2.5). STAND-IN: pops and
+/// — the R1 fork's v0.1 side. STAND-IN: pops and
 /// drops both new arguments (the text-mode default math command and the
 /// math-scripts stringifier) — this port's `TextInfo` carries no text-mode
-/// command state, same degenerate policy as `stringify-math` (math-split
-/// §2.2). Returns the same `TextInfo{indent: 0}` as the v0.0.6 side.
+/// command state, same degenerate policy as `stringify-math`. Returns the
+/// same `TextInfo{indent: 0}` as the v0.0.6 side.
 fn prim_get_initial_text_info_v01(
     _interp: &mut Interp,
     mut args: Vec<Value>,
@@ -9927,7 +9880,7 @@ mod page_model_tests {
     }
 }
 
-/// math-split spec §6.3 test 7 (`enter_script_scales_and_saturates`):
+/// `enter_script_scales_and_saturates`:
 /// `enter_script` is crate-private, so this lives here rather than in the
 /// external `tests/v01_math.rs` integration suite, which can only reach
 /// `pub` items.

@@ -1,41 +1,26 @@
-//! The inputs the whole-corpus walk cannot typecheck, pinned here
-//! individually with the REASON each one fails.
+//! The inputs the whole-corpus walk (`typecheck_corpus.rs`) cannot
+//! typecheck, pinned here individually with the REASON each one fails —
+//! not as a bare `ERR` in a golden file, which cannot say whether a
+//! failure is intended or is an artifact of the harness's own prelude
+//! merge rather than the compiler's actual verdict. Each source is
+//! embedded via `include_str!` and the corpus walk skips these paths, so
+//! its explicit case list becomes exactly "everything that should
+//! typecheck, does".
 //!
-//! `typecheck_corpus.rs` walks every fixture and bundled package and records
-//! one line per input. Eleven of those lines were `ERR`, and a bare `ERR` line
-//! in a golden file is a poor record: it pins a failure without saying whether
-//! the failure is intended, and it renders whatever error the harness's own
-//! merge happens to produce rather than what the compiler actually reports.
-//! Both problems bit here — see `KnownGap::why` on the X3 group below.
+//! Five remain, none a port bug. Four are simply not standalone entry
+//! documents: the corpus walk feeds every source file in as an entry,
+//! including ones that only ever appear behind an `@require:`.
 //!
-//! So those eleven inputs are asserted here instead, each with its source
-//! embedded via `include_str!` (the fixture files stay where they are: all but
-//! one are live fixtures for other tests, `envelopes/v01-mini.satyh` alone
-//! being referenced by fifteen), and the corpus walk skips them. What remains in
-//! `typecheck_corpus.rs`'s explicit case list is then exactly "everything that
-//! should typecheck, does".
+//! The fifth is the cross-version capstone, excluded for a CORRECT reason:
+//! `@require:` now prefers the entry's own generation, so as a 0.1 entry
+//! against the full lib root it resolves `list` to the 0.1 corpus, whose
+//! `List` has `fold` where the fixture (deliberately written against
+//! 0.0.6's) calls `fold-left`. `xver_capstone.rs` exercises it properly,
+//! against a lib root exposing only the 0.0.6 corpus.
 //!
-//! Five remain, and none is a port bug. Four are simply not standalone entry
-//! documents: the corpus walk feeds every source file in as an entry, including
-//! ones that only ever appear behind an `@require:`.
-//!
-//! The fifth is the cross-version capstone, excluded for a CORRECT reason
-//! rather than a missing feature: `@require:` now prefers the entry's own
-//! generation, so as a 0.1 entry against the full lib root it resolves `list`
-//! to the 0.1 corpus, whose `List` has `fold` where the fixture (deliberately
-//! written against 0.0.6's) calls `fold-left`. `xver_capstone.rs` exercises it
-//! properly, against a lib root exposing only the 0.0.6 corpus.
-//!
-//! The other seven this file used to carry were 0.1 documents reaching 0.0.6
-//! packages. They compile and render (X3/X3b/X3c plus same-generation
-//! `@require:` resolution) AND now typecheck in the golden harness, so they sit
-//! in `typecheck_corpus.rs`'s `DOCUMENTS` list with the rest of the corpus.
-//!
-//! `Why::CrossVersionForkedBuiltin` is deliberately KEPT with no current users.
-//! It is the discriminating machinery for the gate, and the gate still exists
-//! and still rejects (`font`, `math-text`, `math-boxes`, `page`); nothing in
-//! the corpus happens to trip it today. Deleting it would mean rebuilding it
-//! the next time something does.
+//! `Why::CrossVersionForkedBuiltin` is deliberately KEPT with no current
+//! users: it is the discriminating machinery for the gate, which still
+//! exists and still rejects (`font`, `math-text`, `math-boxes`, `page`).
 
 use rustyfi_lang::{elaborate, primitives, typecheck};
 use rustyfi_loader::{LoadOptions, LoadedCst, LoadedProgram};
@@ -54,66 +39,33 @@ fn lib_root() -> PathBuf {
     repo_root().join("lib-rustyfi")
 }
 
-/// Why an input cannot be typechecked.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Why {
-    /// The file is not a standalone entry document — it is a LIBRARY (`.satyh`
-    /// with no `in …` body), or a 0.1 file the 0.0.6 parser rejects and whose
-    /// 0.1 load then also refuses it as an entry.
-    ///
-    /// Intended, and an artifact of the harness rather than a property of the
-    /// port: the corpus walk feeds every source file in as an entry, including
-    /// ones that only ever appear behind an `@require:`. The compiler never
-    /// asks these files to stand alone.
+    /// Not a standalone entry: a LIBRARY (`.satyh` with no `in …` body), or a
+    /// 0.1 file the 0.0.6 parser rejects and whose 0.1 load also refuses it.
     NotAnEntryDocument,
-    /// A 0.1 document reaching a 0.0.6 package whose exports mention a builtin
-    /// that really is version-forked. The compiler refuses these deliberately:
-    ///
-    /// ```text
-    /// cross-version import (X3): dependency …/math.satyh references `paren`,
-    /// a version-forked builtin — X3 only supports the version-neutral subset
-    /// of the 0.0.6 corpus
-    /// ```
-    ///
-    /// `name` is the forked builtin the gate names and `slice` the gate that
-    /// fires (`X3`, `X3b`, …). Both are asserted, so a case that starts failing
-    /// on a DIFFERENT builtin, or at a different gate, shows up as a change
-    /// instead of silently continuing to "pass" for a stale reason. That is not
-    /// hypothetical: every one of these used to be recorded as `graphics`,
-    /// which turned out not to be forked at all, and the math trio then moved
-    /// from `math-char-class` to `paren` for the same kind of reason.
-    ///
-    /// This is CLAUDE.md Design TODO 1 ("Cross-version importation"); the
-    /// slices are specced in.
-    ///
-    /// Worth knowing: the golden harness reported something ELSE for these —
-    /// `unbound variable 'text-in-math'` and `unbound variable 'List.fold'` —
-    /// because it merges preludes itself and so never runs the loader's gate.
-    /// Those messages are symptoms of the same cause (a 0.0.6 package pulled
-    /// into a 0.1 program), but reading them as separate missing features would
-    /// be a mistake. They are why this file records the compiler's verdict.
+    /// A 0.1 document reaching a 0.0.6 package whose exports mention a
+    /// builtin that really is version-forked; the compiler refuses these
+    /// deliberately. `name`
+    /// and `slice` are both asserted, so a case failing on a DIFFERENT
+    /// builtin or gate shows up as a change rather than a stale "pass".
     #[allow(dead_code)] // see the module doc comment: kept deliberately
     CrossVersionForkedBuiltin {
         slice: &'static str,
         name: &'static str,
     },
     /// NOT a port gap: these compile and render through the real pipeline.
-    /// What cannot handle them is the GOLDEN HARNESS, which merges every
-    /// dependency's prelude itself and elaborates the result under ONE
-    /// version — so a mixed-version program hits a 0.1 dependency's labeled
-    /// optional arguments while "compiled as 0.0.6".
-    ///
-    /// They are pinned here so the exclusion is a recorded fact with a reason
-    /// rather than a silent omission, and the assertion is deliberately on the
-    /// HARNESS's failure text: if the harness ever learns to merge per-version,
-    /// this stops matching and these move into `typecheck_corpus.rs` instead.
+    /// The GOLDEN HARNESS can't handle them because it merges every
+    /// dependency's prelude and elaborates under ONE version — a mixed-
+    /// version program then hits a 0.1 dependency's labeled optionals while
+    /// "compiled as 0.0.6". The assertion is deliberately on the HARNESS's
+    /// failure text: if the harness learns to merge per-version, this stops
+    /// matching and the case moves into `typecheck_corpus.rs`.
     HarnessIsSingleVersion,
 }
 
 struct KnownGap {
-    /// Repo-relative, for the assertion message.
     path: &'static str,
-    /// The source itself, so the case is readable without opening the fixture.
     src: &'static str,
     why: Why,
 }
@@ -143,12 +95,6 @@ fn known_gaps() -> Vec<KnownGap> {
         },
         // ---- group 2: mixed-version programs the golden harness can't hold ----
         KnownGap {
-            // The cross-version capstone itself. Written against 0.0.6's
-            // `List` (`fold-left`), and `@require:` now prefers the entry's
-            // own generation, so as a 0.1 entry against the full lib root it
-            // gets the 0.1 `List` (which has `fold`). That is correct
-            // behaviour, and the capstone proves what it is meant to prove in
-            // `xver_capstone.rs`, which loads it against a 0.0.6-ONLY root.
             path: "crates/rustyfi/tests/fixtures/xver-capstone.saty",
             src: include_str!("../../rustyfi/tests/fixtures/xver-capstone.saty"),
             why: Why::HarnessIsSingleVersion,
@@ -211,8 +157,7 @@ impl rustyfi_backend::FontMetrics for NoMetrics {
     }
 }
 
-/// Run the front end over one source and return `Err(reason)` when it cannot
-/// be typechecked. `Ok(())` means it typechecked cleanly.
+/// Returns `Err(reason)` when `entry` cannot be typechecked.
 fn typecheck_source(entry: &Path, version: RustyfiVersion) -> Result<(), String> {
     let opts = LoadOptions {
         lib_root: Some(lib_root()),
@@ -231,12 +176,9 @@ fn typecheck_source(entry: &Path, version: RustyfiVersion) -> Result<(), String>
             typecheck::typecheck_verbose(&prog).map_err(|e| format!("typecheck: {e}"))?;
         }
         _ => {
-            // The X3 gate does NOT fire in the loader — `load` succeeds — it
-            // fires in the v1 export adapter, which only the real compile
-            // entry point runs. That is exactly why the golden harness saw
-            // `unbound variable …` instead: its own prelude merge skips the
-            // adapter. Call what the compiler calls, so this records the
-            // verdict a user actually gets.
+            // The gate fires in the v1 export adapter, not the loader —
+            // only the real compile entry point runs it. Call what the
+            // compiler calls, so this records the verdict a user gets.
             let metrics = NoMetrics;
             rustyfi_lang::compile_document_v1(&program.files, &metrics)
                 .map(|_| ())
@@ -262,12 +204,9 @@ fn brief(r: &Result<(), String>) -> String {
     }
 }
 
-/// Every known gap still fails, and fails for the reason recorded against it.
-///
-/// This is a CHANGE-DETECTOR by design: implementing cross-version import
-/// (CLAUDE.md Design TODO 1) will make the X3 cases start passing, and this
-/// test will fail. That is the intended signal — move the case out of this
-/// file and let the golden corpus cover it.
+/// Every known gap still fails, and fails for the reason recorded against
+/// it — a CHANGE-DETECTOR: if a gap closes, this test fails, signaling to
+/// move the case out of this file and into the golden corpus.
 #[test]
 fn known_gaps_still_fail_for_the_recorded_reason() {
     // Elaboration and typechecking recurse deeply over the merged prelude of a
@@ -282,22 +221,19 @@ fn known_gaps_still_fail_for_the_recorded_reason() {
 }
 
 fn check_known_gaps() {
-    // Tripwire. Both tests in this file iterate `known_gaps()`, so an EMPTY
-    // list makes both pass while asserting nothing — which is exactly what
-    // happened once: a bulk edit meant to drop the seven closed cross-version
-    // entries took the rest with them, and the suite stayed green for it.
-    // If the last real gap is ever genuinely closed, delete this file rather
-    // than leaving an empty harness behind.
+    // Tripwire: an EMPTY `known_gaps()` list would make this test pass while
+    // asserting nothing — exactly what happened once, when a bulk edit
+    // dropping closed cross-version entries took the rest with them and the
+    // suite stayed green. If the last real gap is ever closed, delete this
+    // file rather than leaving an empty harness behind.
     assert!(
         !known_gaps().is_empty(),
         "known_gaps() is empty — this file's tests would pass vacuously"
     );
     let root = repo_root();
-    // A panic or an abort skips `TempEntry::drop`, and these files are written
-    // BESIDE real fixtures (the loader resolves a relative `@import:` against
-    // the entry's own directory, so a temp dir would not do). Sweep any left by
+    // Sweep any `rustyfi-known-gap-`-prefixed files left beside a fixture by
     // an earlier crashed run, so a failure never contaminates the corpus the
-    // golden harness walks. Also gitignored, belt and braces.
+    // golden harness walks.
     for gap in known_gaps() {
         let dir = root.join(gap.path);
         let Some(dir) = dir.parent() else { continue };
@@ -327,29 +263,17 @@ fn check_known_gaps() {
             gap.path
         );
 
-        // The fixture itself: `gap.src` is `include_str!` of this very path, so
-        // writing it back out beside the original was a no-op that only created
-        // debris to sweep and ignore. The literal stays as the readable record.
+        // `gap.src`'s `include_str!` IS the file's bytes; the literal stays
+        // only as a readable record. Do NOT materialize it beside the
+        // original — that would leave debris when a run aborts.
         let entry = original.clone();
 
-        // The two groups are told apart by WHERE they fail, not by a label we
-        // could get wrong:
-        //
-        //   NotAnEntryDocument — not a document at all, so neither version's
-        //     loader will take it as an entry.
-        //   CrossVersionImportX3 — a perfectly good 0.1 document: it LOADS,
-        //     and is refused later, by the export adapter, with the X3 gate.
-        //
-        // Checking both halves is what makes a mislabelled case fail. Asserting
-        // only "it errors somehow" would not: every one of these errors under
-        // some version, so a swapped label would sail through.
+        // Checking BOTH `as_006` and `as_01` is what makes a mislabelled case
+        // fail — asserting only "it errors somehow" would not, since every
+        // case errors under some version.
         let as_006 = typecheck_source(&entry, RustyfiVersion::V0_0);
         let as_01 = typecheck_source(&entry, RustyfiVersion::V0_1);
 
-        // Both groups error under BOTH versions, so "it errors" proves nothing.
-        // What separates them is HOW the 0.1 side fails: a non-document is
-        // refused by the LOADER, while an X3 case loads cleanly and is refused
-        // afterwards by the export adapter.
         match gap.why {
             Why::NotAnEntryDocument => match (&as_006, &as_01) {
                 (Err(_), Err(e)) if e.starts_with("load:") => {}
@@ -361,11 +285,8 @@ fn check_known_gaps() {
                     brief(&as_01)
                 )),
             },
-            // Assert the gate AND the builtin it names. Matching only
-            // "cross-version import" would keep passing after the cause moved
-            // to an entirely different forked name.
-            // No entry uses this today (see the module doc comment); the arm
-            // stays so the variant keeps working the moment one does.
+            // No entry uses this today; kept so the variant works the
+            // moment one does.
             Why::CrossVersionForkedBuiltin { slice, name } => match &as_01 {
                 Err(e)
                     if e.contains(&format!("cross-version import ({slice})"))
@@ -388,8 +309,8 @@ fn check_known_gaps() {
                     brief(other)
                 )),
             },
-            // Must NOT be a cross-version rejection: the point of this group is
-            // that the bridge works and the package APIs differ.
+            // Must NOT be a cross-version rejection: the bridge works here,
+            // the package APIs just differ.
         }
     }
 

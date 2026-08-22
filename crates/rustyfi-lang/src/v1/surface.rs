@@ -1,12 +1,12 @@
-//! Sub-slice 2d-3 (`…/tmp/slice2d3-module-sig-decls.md` §2.1/§2.2/§4-A): the
-//! **purely syntactic** module-surface + named-signature table module
-//! aliases and named-signature ascriptions are resolved against.
+//! The **purely syntactic** module-surface +
+//! named-signature table module aliases and named-signature ascriptions are
+//! resolved against.
 //!
 //! Deliberately independent of both `v1/lower.rs` (which only *consumes* it,
-//! for alias member-copy expansion, §2.1) and `v1/module_check.rs` (which
-//! *also* only consumes it, for width/type checks against an alias-bodied
-//! sub-module and for named-signature resolution, §2.2/§2.3) — each of those
-//! two callers builds its OWN [`SurfaceEnv`] from the same `deps` slice via
+//! for alias member-copy expansion) and `v1/module_check.rs` (which *also*
+//! only consumes it, for width/type checks against an alias-bodied
+//! sub-module and for named-signature resolution) — each of those two
+//! callers builds its OWN [`SurfaceEnv`] from the same `deps` slice via
 //! [`build_file_surface`], so there is exactly one implementation of "what
 //! does this module export" and "what does this name denote", never two that
 //! could drift. No [`crate::typecheck::Checker`], no `crate::types` import —
@@ -19,7 +19,7 @@
 //! already use (`v1/lower.rs`'s alias `LowerError`, `v1/module_check.rs`'s
 //! `TypeError`s) — `surface.rs` itself never invents user-facing text. Where
 //! a resolution is used only to compute the FILTER (a sealed module's
-//! exported surface, §2.1's "seal filter"), a miss/unfilterable shape simply
+//! exported surface — the "seal filter"), a miss/unfilterable shape simply
 //! leaves the surface UNFILTERED (full width) — safe, because the same
 //! ascription is independently, precisely re-checked by
 //! `v1/module_check.rs`; `surface.rs` never causes a wrong ACCEPT, only (at
@@ -31,11 +31,11 @@ use rustyfi_syntax::leaf::{AnyHorzCmdTok, AnyVertCmdTok, TypeVarTok};
 use rustyfi_syntax::span::Span;
 use std::collections::{HashMap, HashSet};
 
-/// One module's exported surface: names + arities only (§2.1) — no types,
+/// One module's exported surface: names + arities only — no types,
 /// no schemes; the semantic side (schemes, opacity, stamps) stays entirely
 /// in `v1/static_env.rs`/`v1/module_check.rs`. Already **seal-filtered**
 /// (the intersection of what a `struct .. end` defines and what its `:>`
-/// declares, §2.1's "seal filter") when this is a sealed/coerced/annotated
+/// declares) when this is a sealed/coerced/annotated
 /// module; the full defined surface otherwise.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ModSurface {
@@ -55,23 +55,23 @@ pub(crate) struct ModSurface {
 }
 
 /// One `signature S = sigexpr` bind's definition, resolved to its underlying
-/// `sig … end` decl list (§2.2's eager registration — a `Var`/`Path`-shaped
+/// `sig … end` decl list (eager registration — a `Var`/`Path`-shaped
 /// right-hand side is itself resolved at registration time, so every
 /// `SigDef` bottoms out at a real decl list, borrowed straight from the
 /// parsed `cst_v1` tree the caller's `deps` slice outlives). `decls` is
 /// deliberately NOT flattened through any `Decl::Include` it may itself
 /// contain — expansion is per-USE (`v1/module_check.rs::resolve_sig`'s own
 /// job, and this module's `sig_decl_views` for the filter side), exactly
-/// like Example 2 of the sig-include spec ("`Big`'s registration stores its
-/// literal decls — the include NOT yet expanded").
+/// so `Big`'s registration stores its literal decls, the include NOT yet
+/// expanded.
 #[derive(Clone, Debug)]
 pub(crate) struct SigDef<'a> {
     pub(crate) decls: &'a [cst_v1::StructDeclV1],
-    /// Sub-slice 2e-2 §2.3 named-sig storage: `with type` refinements this
+    /// Named-sig storage: `with type` refinements this
     /// signature's OWN right-hand side carries (`signature S2 = S with type
     /// t = τ`) — `find_sig`'s consumers ([`crate::v1::module_check::
     /// resolve_sig`]) inherit these alongside `decls`, so a refinement
-    /// composes across `signature` bind boundaries (W6). Empty for every
+    /// composes across `signature` bind boundaries. Empty for every
     /// plain (non-`with type`-bodied) `signature` bind.
     pub(crate) refines: Vec<Refine<'a>>,
     /// The module path the `signature` bind appeared at — diagnostics only
@@ -80,13 +80,13 @@ pub(crate) struct SigDef<'a> {
     pub(crate) def_path: Vec<String>,
 }
 
-/// Sub-slice 2e-2 (`…/tmp/slice2e-include-withtype.md` §2.2/§2.3): one
+/// One
 /// `with type t 'a… = τ` refinement, collected off a [`ast_v1::SigExpr::
 /// WithType`] node's `binds` chain (or a named signature's OWN stored
 /// refinement, inherited through [`SigDef::refines`]). Deliberately
 /// UNVALIDATED here (`body` is kept whole — `Variant` or `Synonym`): whether
-/// a variant-bodied refinement is illegal (it is — §7's "cannot introduce
-/// constructors" row) is the CONSUMER's decision
+/// a variant-bodied refinement is illegal (it is — a refinement cannot
+/// introduce constructors) is the CONSUMER's decision
 /// ([`crate::v1::module_check`]'s `prescan_seal_types` `TypeOpaque`
 /// interception), so the SAME check applies uniformly whether a refine
 /// arrives via an inline `with type` or is inherited through a named
@@ -107,7 +107,7 @@ pub(crate) struct Refine<'a> {
     pub(crate) span: Span,
 }
 
-/// Sub-slice 2f-1 (`…/tmp/slice2f-functors.md` §2.6): one `module Make =
+/// One `module Make =
 /// fun (X : S) -> body` bind's definition, stored SYNTACTICALLY — a functor
 /// is never lowered to a runtime value (like [`SigDef`] above, or a named
 /// `signature`), so this is the whole of what `Make` denotes. Borrowed
@@ -117,26 +117,26 @@ pub(crate) struct FunctorDef<'a> {
     /// The parameter's bare name (`"X"`/`"Key"`).
     pub(crate) param: String,
     /// The parameter signature `S` — an ordinary sig (`SigBotV1::Var`/
-    /// `Path`/`Sig`), never itself a `SigExpr::Functor` (§0.1's cut: a
+    /// `Path`/`Sig`), never itself a `SigExpr::Functor` (a deliberate cut: a
     /// functor's PARAMETER is never itself higher-order in the demand).
     pub(crate) param_sig: &'a ast_v1::SigExpr,
     /// The un-instantiated body — re-lowered fresh, at a distinct path, by
-    /// EVERY application (generativity, §2.4).
+    /// EVERY application (generativity).
     pub(crate) body: &'a ast_v1::ModExpr,
     /// The functor bind's own defining path — where `S`'s named-signature
-    /// references (if any) resolve outward from (§2.2).
+    /// references (if any) resolve outward from.
     pub(crate) def_path: Vec<String>,
 }
 
-/// Sub-slice 2f-1 §2.6: the frozen, in-source-order resolution of one
+/// The frozen, in-source-order resolution of one
 /// `ModExpr::App` site (`Make Arg`) — `Some` only when BOTH `func` resolves
 /// to a registered [`FunctorDef`] AND `arg` resolves to a CONCRETE,
 /// already-registered [`ModSurface`] AND the functor's body is itself a
 /// literal `struct … end` ([`crate::v1::functor::functor_body_binds`]
 /// returns `Some`). Anything else (an unknown functor/argument name, an
-/// argument that is itself an enclosing functor's OWN parameter — 2f-2's
-/// `set.satyg` shape — or a non-struct functor body) freezes `None` here,
-/// which `v1/lower.rs` turns into a precise Sub-slice-2f-2-naming
+/// argument that is itself an enclosing functor's OWN parameter —
+/// `set.satyg`'s shape — or a non-struct functor body) freezes `None` here,
+/// which `v1/lower.rs` turns into a precise
 /// `LowerError`, never a panic.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct AppResolution {
@@ -145,7 +145,7 @@ pub(crate) struct AppResolution {
 }
 
 /// Both lookup tables, threaded across every dependency file in load order
-/// (§2.1/§2.2's "one pass, file/bind order" rule — see [`build_file_surface`]).
+/// (the "one pass, file/bind order" rule — see [`build_file_surface`]).
 #[derive(Default)]
 pub(crate) struct SurfaceEnv<'a> {
     /// Full module path (`"Lib"`, `"Lib.N"`) → its exported surface.
@@ -156,8 +156,8 @@ pub(crate) struct SurfaceEnv<'a> {
     /// resolved target, recorded ONCE, AT BUILD TIME — keyed by the
     /// ALIAS's own qualified path (`"Lib.M"`), value = the target's
     /// qualified path if resolution succeeded, `None` if it failed (unknown
-    /// name, or a FORWARD reference — §2.5's "may only target an earlier
-    /// module" rule, §7's `L3` row). Load-bearing for `v1/lower.rs`'s
+    /// name, or a FORWARD reference — the "may only target an earlier
+    /// module" rule). Load-bearing for `v1/lower.rs`'s
     /// `lower_module_alias`: [`build_file_surface`] builds the WHOLE file's
     /// surface in one pass before lowering ever starts, so by the time
     /// lowering runs, `modules` already contains EVERY module in the file
@@ -166,25 +166,24 @@ pub(crate) struct SurfaceEnv<'a> {
     /// map freezes the ordering-sensitive yes/no answer as it stood exactly
     /// when the alias bind was itself walked.
     pub(crate) alias_targets: HashMap<String, Option<String>>,
-    /// Sub-slice 2e-1 §2.1 step 1: frozen in-source-order resolutions of
+    /// Frozen in-source-order resolutions of
     /// `include` binds, keyed by (the includer's qualified path, the
     /// `include` keyword's own `Span`). A `Vec` with LINEAR lookup, not a
-    /// `HashMap`: `Span` is `Eq` but not `Hash` (span.rs:11-15 — keeping
-    /// `rustyfi-syntax` diff-empty in 2e), and a module has at most a
-    /// handful of includes. `None` = resolution failed (unknown name, or a
-    /// FORWARD reference — the same §2.5 "earlier module only" rule
+    /// `HashMap`: `Span` is `Eq` but not `Hash` (span.rs:11-15), and a
+    /// module has at most a handful of includes. `None` = resolution failed (unknown name, or a
+    /// FORWARD reference — the same "earlier module only" rule
     /// `alias_targets` enforces); a non-`Var` include body (`Struct`/
     /// `Coerce`/`App`/`Functor`) records NOTHING here — `v1/lower.rs`
     /// dispatches those straight to their own precise errors without ever
     /// consulting this table. [`frozen_include_target`] is the read side.
     pub(crate) include_targets: Vec<(String, Span, Option<String>)>,
-    /// Sub-slice 2f-1 §2.6: full functor path (`"Map.Make"`, `"Code.Make"`)
+    /// Full functor path (`"Map.Make"`, `"Code.Make"`)
     /// -> its definition. Registered by a `Bind::Module` whose body is a
     /// `ModExpr::Functor` literal — contributing NO `modules` entry (a
     /// functor name is not a usable module, mirroring `Bind::Signature`'s
     /// `sigs`-only registration).
     pub(crate) functors: HashMap<String, FunctorDef<'a>>,
-    /// Sub-slice 2f-1 §2.6: the [`AppResolution`] twin of `include_targets`
+    /// The [`AppResolution`] twin of `include_targets`
     /// — frozen in-source-order resolutions of every `ModExpr::App` site,
     /// keyed by (the enclosing scope's qualified path, the App's own
     /// FUNCTOR-CHAIN span — a genuine lexed token span, unique per
@@ -193,18 +192,18 @@ pub(crate) struct SurfaceEnv<'a> {
     /// failed (unknown functor/argument, a forward reference, the functor
     /// name actually denoting a struct, a non-struct functor body, or —
     /// `set.satyg`'s shape — the argument being an ENCLOSING functor's own
-    /// parameter rather than a concrete module; all Sub-slice 2f-2).
+    /// parameter rather than a concrete module).
     /// [`frozen_app_target`] is the read side.
     pub(crate) app_targets: Vec<(String, Span, Option<AppResolution>)>,
 }
 
-/// Sub-slice 2f-2a (`…/tmp/slice2d3b-2f2-sigmembers.md` §4.1): an innermost-
+/// An innermost-
 /// last stack of (functor parameter name -> the application's argument,
 /// already resolved to its ABSOLUTE dotted path) active while walking a
 /// functor body for one application — empty everywhere else. Lets a
 /// parameter used as a functor ARGUMENT inside the body (`module Impl =
 /// Map.Make Elem`, set.satyg's shape) resolve, instead of only a parameter
-/// used as a plain qualified-reference head (2f-1's own scope). Names only —
+/// used as a plain qualified-reference head (its own scope). Names only —
 /// no owned-tree substitution happens here (that stays `v1/functor.rs`'s
 /// job at LOWERING time); this stack only steers `resolve_module`/
 /// `resolve_functor` lookups during the SURFACE walk.
@@ -251,10 +250,9 @@ fn any_vert_name(cmd: &AnyVertCmdTok) -> String {
 /// module — same defensive posture as `v1/lower.rs::lower_file_v1`).
 ///
 /// Must be called for dependency files in the SAME order lowering/
-/// `module_check` process them — an alias may only target an EARLIER module
-/// (§2.5), and this builder's single left-to-right walk is exactly what
-/// makes that ordering rule enforceable (a forward reference simply doesn't
-/// resolve, §7's `L3` row).
+/// `module_check` process them — an alias may only target an EARLIER module,
+/// and this builder's single left-to-right walk is exactly what makes that
+/// ordering rule enforceable (a forward reference simply doesn't resolve).
 pub(crate) fn build_file_surface<'a>(file: &'a cst_v1::FileV1, env: &mut SurfaceEnv<'a>) {
     if let cst_v1::FileV1::Library {
         name,
@@ -277,8 +275,7 @@ pub(crate) fn build_file_surface<'a>(file: &'a cst_v1::FileV1, env: &mut Surface
 /// Walk one `struct .. end` body's binds (or a library's top-level `binds`),
 /// in source order, computing its raw (unfiltered) [`ModSurface`] and
 /// registering every nested module/named-signature it defines into `env` as
-/// it goes (so a LATER sibling alias can already resolve an EARLIER one,
-/// §2.5).
+/// it goes (so a LATER sibling alias can already resolve an EARLIER one).
 fn build_binds<'a>(
     binds: &[&'a cst_v1::Bind],
     path: &[String],
@@ -313,7 +310,7 @@ fn build_binds<'a>(
                 body,
                 ..
             } if matches!(&*body.0, ast_v1::ModExpr::Functor { .. }) => {
-                // Sub-slice 2f-1 §2.6: a functor DEFINITION contributes NO
+                // A functor DEFINITION contributes NO
                 // usable module at all — register the `FunctorDef` under
                 // `child_path` and `continue`, WITHOUT ever touching
                 // `env.modules`/`surf.mods` (mirrors `Bind::Signature`'s
@@ -351,12 +348,11 @@ fn build_binds<'a>(
             } => {
                 let mut child_path = path.to_vec();
                 child_path.push(name.name.clone());
-                // Sub-slice 2e-1 gap fix: the alias/coerce target's own
-                // qualified path, if this bind resolved one — carried past
-                // the `sig_annot` filter below so `register_sig_reexports`
-                // can re-export the TARGET's named signatures under `Alias.S`
-                // (2d-3's `Alias.S` re-export was never actually wired up;
-                // see [`register_sig_reexports`]'s doc comment).
+                // The alias/coerce target's own qualified
+                // path, if this bind resolved one — carried past the
+                // `sig_annot` filter below so `register_sig_reexports` can
+                // re-export the TARGET's named signatures under `Alias.S`
+                // (see that function's doc comment).
                 let mut alias_target_path: Option<String> = None;
                 let base_surf = match &*body.0 {
                     ast_v1::ModExpr::Struct { binds: inner, .. } => {
@@ -370,9 +366,9 @@ fn build_binds<'a>(
                     // eventually contain it, and that in-order yes/no answer
                     // is FROZEN into `alias_targets` so `v1/lower.rs` can't
                     // wrongly re-resolve it against the fully-built env
-                    // (§2.5's "earlier module only" rule; see
-                    // `SurfaceEnv::alias_targets`'s doc comment). Sub-slice
-                    // 2f-2a: `subst_chain` first — the alias target may
+                    // (the "earlier module only" rule; see
+                    // `SurfaceEnv::alias_targets`'s doc comment).
+                    // `subst_chain` first — the alias target may
                     // itself be the ENCLOSING functor's own parameter
                     // (`module Impl = Elem`-shaped, no demand package needs
                     // this exact shape, but it costs nothing extra once the
@@ -397,15 +393,15 @@ fn build_binds<'a>(
                         let target_surf = resolved.map(|(_, s)| s).unwrap_or_default();
                         filter_surface(target_surf, sig_, env, &child_path)
                     }
-                    // Sub-slice 2f-1 §2.6: a functor APPLICATION (`module M =
+                    // A functor APPLICATION (`module M =
                     // Make Arg`) — resolve both operands, and (only when the
                     // functor's body is itself a literal `struct … end`)
                     // compute the result surface by walking the body's OWN
                     // binds at `child_path` (member NAMES never mention the
-                    // parameter — only their REFERENCES do, §2.1 — so no
+                    // parameter — only their REFERENCES do — so no
                     // substitution is needed here, only at lowering). Freeze
                     // the (possibly failed) resolution in `app_targets`
-                    // regardless. Sub-slice 2f-2a: `subst` is threaded so
+                    // regardless. `subst` is threaded so
                     // `arg` (or `func`) may itself be the ENCLOSING functor's
                     // own parameter — set.satyg's `Map.Make Elem` shape.
                     ast_v1::ModExpr::App { func, arg } => {
@@ -432,13 +428,11 @@ fn build_binds<'a>(
             }
             cst_v1::Bind::Signature { name, sig_, .. } => {
                 let key = qualify_type_key(path, &name.name);
-                // Sub-slice 2e-2 §2.3 named-sig storage: `resolve_sig_rhs`
-                // additionally resolves a `WithType`-bodied RHS (`signature
-                // S2 = S with type t = τ`) — pre-2e-2 this arm's `sig_decls`
-                // call returned `None` for `WithType`, so `S2` silently
-                // never registered at all (a later `:> S2` missed with the
-                // generic "unknown signature name" error, §8 risk 8's
-                // "silent-unregistration wart" — closed here).
+                // Named-sig storage: `resolve_sig_rhs` also
+                // resolves a `WithType`-bodied RHS (`signature S2 = S with
+                // type t = τ`). It must: a `None` here would leave `S2`
+                // silently unregistered, and a later `:> S2` would miss with
+                // the generic "unknown signature name" error.
                 if let Some((decls, refines)) = resolve_sig_rhs(&sig_.0, env, path) {
                     env.sigs.insert(
                         key,
@@ -451,7 +445,7 @@ fn build_binds<'a>(
                 }
                 surf.sigs.push(name.name.clone());
             }
-            // `include M` (Sub-slice 2e-1, struct-include, §2.1 steps 1-2):
+            // `include M` (struct-include):
             // splice M's ENTIRE exported surface into THIS level, directly
             // (`surf.*.extend`, no synthetic sub-module wrapper — contrast
             // the alias arms above, which register a NEW name) — at THIS
@@ -460,7 +454,7 @@ fn build_binds<'a>(
             // order. Resolution is frozen in `include_targets`, exactly like
             // `alias_targets`: a forward reference misses even though
             // `env.modules` eventually contains the target. Only a `Var`
-            // body resolves for real here; `App` (Sub-slice 2f-1: `include
+            // body resolves for real here; `App` (`include
             // Make Arg`, map.satyg's shape) resolves via `app_targets`
             // instead and splices the INSTANTIATED result surface — member
             // NAMES only, same "no substitution needed at this layer"
@@ -512,7 +506,7 @@ fn mod_chain_span(c: &ast_v1::ModChainV1) -> Span {
     }
 }
 
-/// Sub-slice 2f-1 §2.6: shared by the `Bind::Module`/`Bind::Include` `App`
+/// Shared by the `Bind::Module`/`Bind::Include` `App`
 /// arms above — resolve `func`/`arg` outward from `enclosing_path`, freeze
 /// the (possibly-failed) resolution into `env.app_targets` keyed by
 /// `(enclosing_path, func`'s own span`)`, and — only on a full resolution
@@ -522,7 +516,7 @@ fn mod_chain_span(c: &ast_v1::ModChainV1) -> Span {
 /// `Bind::Include` arm's own `path` — splicing vs. wrapping is the caller's
 /// concern, this helper only computes "what the instantiation exports").
 ///
-/// Sub-slice 2f-2a (spec §4.1/§4.3): `subst` is the stack ACTIVE AT THIS
+/// `subst` is the stack ACTIVE AT THIS
 /// APPLICATION SITE (so `func`/`arg` resolve as the enclosing scope would
 /// see them — possibly themselves an outer functor's own parameter); the
 /// body walk below pushes `(fdef.param, arg's resolved absolute path)` onto
@@ -567,7 +561,7 @@ fn build_app_result_surface<'a>(
     }
 }
 
-/// Sub-slice 2f-1 §2.6: outward search against `env.functors` — the
+/// Outward search against `env.functors` — the
 /// [`resolve_module`] twin for functor names.
 pub(crate) fn resolve_functor<'a, 'b>(
     env: &'b SurfaceEnv<'a>,
@@ -582,7 +576,7 @@ pub(crate) fn resolve_functor<'a, 'b>(
     None
 }
 
-/// Sub-slice 2f-1 §2.6: the [`frozen_include_target`] twin for `ModExpr::App`
+/// The [`frozen_include_target`] twin for `ModExpr::App`
 /// sites — consult THIS rather than re-running [`resolve_functor`]/
 /// [`resolve_module`], keyed by (the enclosing scope's qualified path, the
 /// App's own functor-chain `Span`).
@@ -610,7 +604,7 @@ fn joined(mods: &[String], name: &str) -> String {
 /// resolved outward exactly ONCE, `Decl::Include` NOT flattened, matching
 /// [`SigDef::decls`]'s own deferred-expansion posture) decl list plus any
 /// `refines` the resolved definition itself carries. Shared by
-/// [`resolve_sig_rhs`] (the named-sig registration side, §2.3) and
+/// [`resolve_sig_rhs`] (the named-sig registration side) and
 /// [`sig_bot_decl_views`] delegates to its OWN (Include-flattening) sibling
 /// instead — this shallow helper is for the two call sites that need a
 /// single dereference, not a full splice.
@@ -631,17 +625,17 @@ fn sig_bot_decls<'a>(
     }
 }
 
-/// Sub-slice 2e-2 §2.3 named-sig storage: what `signature S2 = <rhs>`
+/// Named-sig storage: what `signature S2 = <rhs>`
 /// registers (`build_binds`'s `Bind::Signature` arm) — the RHS's own
 /// (unflattened) decl list, plus any `with type` refinements the RHS itself
 /// carries: its OWN `binds` chain (via [`collect_refines`]) when the RHS is
 /// a bare `WithType` node, PLUS — when the RHS's base names ANOTHER
 /// registered signature — that signature's OWN stored `refines` (so a
-/// refinement chain composes across `signature` bind boundaries, W6). A
+/// refinement chain composes across `signature` bind boundaries). A
 /// `with ⟨path⟩ type` RHS registers exactly the same way, its chain kept as
 /// the collected [`Refine::path`] (the consumer —
 /// `module_check::prescan_seal_types` — routes it into the named nested
-/// member; before that routing existed this arm was left UNREGISTERED).
+/// member).
 fn resolve_sig_rhs<'a>(
     sig: &'a ast_v1::SigExpr,
     env: &SurfaceEnv<'a>,
@@ -674,8 +668,8 @@ pub(crate) fn mod_chain_segments(path: &Option<ast_v1::ModChainV1>) -> Vec<Strin
     }
 }
 
-/// Sub-slice 2e-2 §2.2/§2.3: `with type t 'a… = τ and u… = σ` → one
-/// [`Refine`] per chain link, DEFERRED (§2.3's rationale — the body is kept
+/// `with type t 'a… = τ and u… = σ` → one
+/// [`Refine`] per chain link, DEFERRED (the body is kept
 /// whole, `Variant` or `Synonym`, so the SAME validation applies uniformly
 /// whether a refine arrives via an inline [`ast_v1::SigExpr::WithType`] or
 /// is INHERITED through a named `signature S2 = S with type …` bind).
@@ -706,16 +700,15 @@ fn refine_from_single(single: &cst_v1::TypeBindSingleV1, path: Vec<String>) -> R
     }
 }
 
-/// Sub-slice 2e-2 §2.2's `surface.rs` twin: the Vec-returning splice that
+/// The `surface.rs` twin of the `module_check.rs` version: the Vec-returning splice that
 /// recursively flattens `Decl::Include` (with a resolved-table-key cycle
 /// guard) — used by [`filter_surface`] so the seal filter works THROUGH an
 /// included signature's declarations instead of bailing to "filter
-/// nothing". `WithType` resolves to its base's decls here too (§2.2's
-/// closing note: "a refinement never changes the exported NAME set").
-/// `None` on a miss/unfilterable shape/cycle — the same safe "filter
-/// nothing" posture the pre-2e-2 bail already had (this module never
-/// invents user-facing text; the REAL error, if any, fires independently in
-/// `v1/module_check.rs::resolve_sig`).
+/// nothing". `WithType` resolves to its base's decls here too (a refinement
+/// never changes the exported NAME set). `None` on a miss/unfilterable
+/// shape/cycle — the safe "filter nothing" posture; this module never
+/// invents user-facing text, and the REAL error, if any, fires
+/// independently in `v1/module_check.rs::resolve_sig`.
 fn sig_decl_views<'a>(
     sig: &'a ast_v1::SigExpr,
     env: &SurfaceEnv<'a>,
@@ -787,10 +780,10 @@ fn splice_decl_views<'a>(
     Some(out)
 }
 
-/// The seal filter (§2.1): `raw`'s vals/types/mods/sigs, intersected with
+/// The seal filter: `raw`'s vals/types/mods/sigs, intersected with
 /// whatever `sig` actually declares (name-only — width/depth mistakes are
 /// `module_check`'s to report). `sig` resolved via [`sig_decl_views`]
-/// (Sub-slice 2e-2: now flattens `include` too); a miss or an unfilterable
+/// (which flattens `include` too); a miss or an unfilterable
 /// shape (a functor sig, or a cycle) returns `raw` UNCHANGED (full width) —
 /// safe, per the module doc comment.
 fn filter_surface<'a>(
@@ -832,7 +825,7 @@ fn filter_surface<'a>(
             ast_v1::Decl::Signature { name, .. } => {
                 ds.insert(name.name.clone());
             }
-            // Sub-slice 2e-2: `sig_decl_views` already flattened every
+            // `sig_decl_views` already flattened every
             // `Decl::Include` above — unreachable in practice; kept as a
             // defensive no-op (never a silent narrowing) rather than a
             // `_` wildcard, so a future `Decl` arm still breaks the build.
@@ -855,7 +848,7 @@ fn filter_surface<'a>(
     }
 }
 
-/// Outward search (§2.1/§2.2's shared rule): try `site_path` joined with
+/// Outward search (the shared rule): try `site_path` joined with
 /// `suffix`, then each successively shorter prefix of `site_path`, then bare
 /// `suffix` — first hit wins (lexical shadowing, innermost first).
 fn outward_candidates(site_path: &[String], suffix: &str) -> Vec<String> {
@@ -871,8 +864,8 @@ fn outward_candidates(site_path: &[String], suffix: &str) -> Vec<String> {
 }
 
 /// Resolve a module alias/path target (`chain`, e.g. `"N"` or `"A.B.C"`)
-/// outward from `site_path` against `env.modules` — §2.1's alias-expansion
-/// rule, and (unqualified) §2.3-7's `ImplView::Alias` target lookup. Returns
+/// outward from `site_path` against `env.modules` — the alias-expansion
+/// rule, and (unqualified) `ImplView::Alias`'s target lookup. Returns
 /// the resolved qualified path alongside the surface (the qualified path is
 /// what a nested-module copy's absolute references qualify against).
 pub(crate) fn resolve_module<'a, 'b>(
@@ -894,7 +887,7 @@ pub(crate) fn resolve_module<'a, 'b>(
 /// forward reference), `None` if `alias_path` names no alias bind at all
 /// (a struct-literal or functor body). `v1/lower.rs`'s `lower_module_alias`
 /// consults THIS rather than re-running [`resolve_module`], so the
-/// ordering-sensitive answer (§2.5) isn't relitigated against the
+/// ordering-sensitive answer isn't relitigated against the
 /// fully-built env — see [`SurfaceEnv::alias_targets`]'s doc comment.
 pub(crate) fn frozen_alias_target<'a, 'b>(
     env: &'b SurfaceEnv<'a>,
@@ -903,7 +896,7 @@ pub(crate) fn frozen_alias_target<'a, 'b>(
     env.alias_targets.get(&alias_path.join("."))
 }
 
-/// Sub-slice 2e-1 §2.1 step 1: the [`frozen_alias_target`] twin for
+/// The [`frozen_alias_target`] twin for
 /// `include` binds — consult THIS rather than re-running [`resolve_module`],
 /// keyed by (the includer's qualified path, the `include` keyword's own
 /// `Span` — a genuine lexed token span, unique per include). `Some(Some(t))`
@@ -924,11 +917,10 @@ pub(crate) fn frozen_include_target<'a, 'b>(
         .map(|(_, _, t)| t)
 }
 
-/// Sub-slice 2e-1: shared by the alias `Var`/`Coerce` arms (the found 2d-3
-/// gap fix — an aliased module's named signatures were never re-exported,
-/// so `:> Alias.S` used to miss even though `Alias`'s value/type members
-/// resolved fine) and the `include` arm (§2.1 step 2's own requirement) —
-/// for each signature name `s` the target surface exports, look up the
+/// Shared by the alias `Var`/`Coerce` arms and the
+/// `include` arm — without it `:> Alias.S` misses even though `Alias`'s
+/// value/type members resolve fine. For each signature name `s` the target
+/// surface exports, look up the
 /// target's OWN registered [`SigDef`] (keyed `"target_path.s"`) and
 /// re-register a CLONE under `at_path`'s own qualified key
 /// ([`SigDef`] is `Clone`; `def_path` stays the ORIGINAL definer's,
@@ -953,7 +945,7 @@ fn register_sig_reexports<'a>(
 
 /// Resolve a named-signature reference outward from `site_path` — `suffix`
 /// is `"S"` for a bare [`ast_v1::SigBotV1::Var`] or the joined
-/// `"A.B.S"` for a [`ast_v1::SigBotV1::Path`] (§2.2's resolution rule).
+/// `"A.B.S"` for a [`ast_v1::SigBotV1::Path`].
 /// `pub(crate)`: `v1/module_check.rs` calls this directly at every real
 /// ascription site (the one place a miss must become a precise, user-facing
 /// "unknown signature name" error — this module never invents that text).
@@ -967,9 +959,9 @@ pub(crate) fn find_sig<'a, 'b>(
 
 /// The [`find_sig`] twin that ALSO returns the matched candidate's fully
 /// qualified TABLE KEY — needed by `v1/module_check.rs::resolve_named_sig`'s
-/// cycle guard (Sub-slice 2e-2 §2.2: a re-entry must key on the RESOLVED
-/// name, not the written suffix, or two differently-pathed same-suffix sigs
-/// would false-positive, §8 risk 7) — `pub(crate)` for that one external
+/// cycle guard (a re-entry must key on the RESOLVED name,
+/// not the written suffix, or two differently-pathed same-suffix sigs would
+/// false-positive) — `pub(crate)` for that one external
 /// caller, mirroring [`find_sig`]'s own visibility.
 pub(crate) fn find_sig_keyed<'a, 'b>(
     env: &'b SurfaceEnv<'a>,
@@ -1074,7 +1066,7 @@ mod tests {
         assert_eq!(def.decls.len(), 1);
     }
 
-    /// Sub-slice 2e-1 §2.1 steps 1-2: `include Base` splices Base's ENTIRE
+    /// `include Base` splices Base's ENTIRE
     /// surface (vals + types) into the includer's own raw surface, at the
     /// include's position in source order — no synthetic sub-module name.
     #[test]
@@ -1097,7 +1089,7 @@ mod tests {
         assert_eq!(surf.types, vec![("t".to_string(), 0)]);
     }
 
-    /// Sub-slice 2e-1 §2.1 step 1: an `include` naming an unknown/forward
+    /// An `include` naming an unknown/forward
     /// module freezes a `Some(None)` (not a silent miss) in
     /// `include_targets` — the `v1/lower.rs` consumer turns that into a
     /// precise `LowerError`.
@@ -1125,9 +1117,9 @@ mod tests {
         );
     }
 
-    /// Sub-slice 2e-1 §2.1 step 2 + the 2d-3 gap fix: `include Basic`
-    /// re-exports `Basic`'s named signatures under the includer's OWN path
-    /// (`P.Ord` resolves after `include Basic` names `Ord`).
+    /// `include Basic` re-exports `Basic`'s named signatures
+    /// under the includer's OWN path (`P.Ord` resolves after `include Basic`
+    /// names `Ord`).
     #[test]
     fn include_reexports_the_target_named_signature() {
         let file = parse(
@@ -1144,7 +1136,7 @@ mod tests {
         assert_eq!(def.decls.len(), 1);
     }
 
-    /// Sub-slice 2e-1 §2.1 step 2: an included target's surface arrives
+    /// An included target's surface arrives
     /// PRE-FILTERED when the target itself is sealed — a hidden member
     /// never splices.
     #[test]
@@ -1164,10 +1156,9 @@ mod tests {
         assert_eq!(surf.vals, vec!["x".to_string()]);
     }
 
-    /// Sub-slice 2e-1's found 2d-3 gap fix: a plain alias (`module A2 =
-    /// Basic`) ALSO re-exports the target's named signatures under its own
-    /// path (`A2.Ord` resolves) — 2d-3 never wired this up for aliases; the
-    /// same `register_sig_reexports` helper now fixes both flavors.
+    /// A plain alias (`module A2 = Basic`) ALSO re-exports
+    /// the target's named signatures under its own path (`A2.Ord` resolves),
+    /// through the same `register_sig_reexports` helper `include` uses.
     #[test]
     fn alias_reexports_the_target_named_signature() {
         let file = parse(
@@ -1184,15 +1175,14 @@ mod tests {
         assert_eq!(def.decls.len(), 1);
     }
 
-    /// T-surf1 (Sub-slice 2f-1 spec §5): a functor DEFINITION registers a
+    /// A functor DEFINITION registers a
     /// `FunctorDef` and contributes NO `modules` entry of its own; an
     /// APPLICATION to a concrete, already-registered argument computes the
     /// result surface by walking the functor body's own binds (member
-    /// NAMES only — no substitution needed at this layer). Adapted from the
-    /// spec's literal snippet by giving `A` a real definition (§4.B's own
-    /// text requires the argument to resolve before a result surface is
-    /// computed at all — an unresolved argument leaves the result empty,
-    /// same posture as an unresolved alias/include target).
+    /// NAMES only — no substitution needed at this layer). `A` needs a real
+    /// definition: the argument must resolve before a result surface is
+    /// computed at all — an unresolved argument leaves the result empty, the
+    /// same posture as an unresolved alias/include target.
     #[test]
     fn functor_def_registers_no_member_and_application_computes_the_result_surface() {
         let file = parse(
@@ -1216,7 +1206,7 @@ mod tests {
         assert_eq!(r.vals, vec!["y".to_string()]);
     }
 
-    /// T-surf2 (spec §5): an application naming an UNKNOWN functor freezes a
+    /// An application naming an UNKNOWN functor freezes a
     /// failed (`Some(&None)`) resolution in `app_targets`, never a silent
     /// miss — the same posture `include_targets` already established.
     #[test]
@@ -1225,8 +1215,8 @@ mod tests {
         let mut env = SurfaceEnv::default();
         build_file_surface(&file, &mut env);
         // `M.R` still gets an (EMPTY) `modules` entry — the same posture an
-        // unresolved alias/`Coerce` target already has (§2.5's established
-        // "register empty, the caller decides what a miss means" rule);
+        // unresolved alias/`Coerce` target has (the "register empty, the
+        // caller decides what a miss means" rule);
         // what's under test here is that the MISS itself is frozen, not a
         // silent re-resolution risk.
         let r = env
@@ -1247,18 +1237,17 @@ mod tests {
         );
     }
 
-    /// F-surf1 (Sub-slice 2f-2a spec §4.1/§4.3, formerly T-surf2 — this test
-    /// PINNED THE GAP 2f-2a closes, and now pins the fix): a PARAMETER-
-    /// argument application (`set.satyg`'s shape — the app's argument is the
-    /// ENCLOSING functor's own bound parameter, not a directly-registered
-    /// module) now RESOLVES, via the `ParamSubst` stack `build_app_result_
+    /// A PARAMETER-argument application
+    /// (`set.satyg`'s shape — the app's argument is the ENCLOSING functor's
+    /// own bound parameter, not a directly-registered module) RESOLVES, via
+    /// the `ParamSubst` stack `build_app_result_
     /// surface` threads while walking `Outer`'s instantiated body: `X` (`F
     /// X`'s argument) substitutes to `Outer`'s own application's argument —
     /// `Base`, already resolved to `M.Base` — exactly as if `F` had been
     /// applied to `Base` directly. `Outer`'s body (`module R = F X`) is
     /// inert until `Outer` itself is applied (a functor's DEFINITION
     /// contributes nothing to the surface — only an APPLICATION walks its
-    /// body, §2.6), so this fixture applies `Outer` to a real, resolvable
+    /// body), so this fixture applies `Outer` to a real, resolvable
     /// argument (`Base`) to make that inner application actually get walked.
     #[test]
     fn application_whose_argument_is_the_enclosing_parameter_resolves_through_the_subst_stack() {
@@ -1296,10 +1285,10 @@ mod tests {
         let _ = path;
     }
 
-    /// F-surf1b: an application whose argument is the enclosing parameter
+    /// An application whose argument is the enclosing parameter
     /// but the ENCLOSING functor is never applied at all stays frozen-`None`
     /// — the parameter never resolves to anything outside an application
-    /// (2f-2a's scope guard, spec §4.1).
+    /// (the scope guard).
     #[test]
     fn application_whose_argument_is_the_enclosing_parameter_stays_unresolved_when_never_applied() {
         let file = parse(

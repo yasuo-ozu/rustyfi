@@ -2,8 +2,6 @@
 //! `crossRef.ml`. Owned by the compile driver (`lib.rs::compile_document_cst`),
 //! **not** reset per trial — it *is* the fixpoint state that persists while
 //! everything else (hooks, images, mutable store) resets each trial.
-//!
-//! & the fixpoint.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 

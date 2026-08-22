@@ -1,15 +1,6 @@
-//! the 10 context-setter/ box-combinator prims
-//! `code.satyh`/`itemize.satyh` need. Two halves:
-//! - **Typecheck** (real source text through `parse_file` ->
-//!   `elaborate::elaborate_program` -> `typecheck::typecheck`, mirroring
-//!   `tests/typecheck.rs`'s own `typecheck_str` helper) — pins each new
-//!   prim's declared signature end-to-end, including the surface syntax
-//!   that has to parse to satisfy it.
-//! - **Eval** (direct `Ast` apply chains through `eval::Interp` +
-//!   `primitives::base_env()`, mirroring `tests/prims_phase4.rs`'s style) —
-//!   round-trips the faithful stores (`set`/`get-text-color`,
-//!   `set-hyphen-penalty`, `set-space-ratio`, `split-into-lines`,
-//!   `get-natural-length`).
+//! Coverage for the 10 context-setter/box-combinator prims
+//! `code.satyh`/`itemize.satyh` need: typecheck (real source through the
+//! real pipeline) and eval (direct `Ast` apply chains) round-trips.
 
 use rustyfi_backend::{FontKey, FontMetrics, Length};
 use rustyfi_lang::ast::Ast;
@@ -17,10 +8,6 @@ use rustyfi_lang::eval;
 use rustyfi_lang::value::Value;
 use rustyfi_lang::{elaborate, primitives, typecheck, CompileError};
 use rustyfi_syntax::Span;
-
-// ============================================================================
-// Typecheck half
-// ============================================================================
 
 fn typecheck_str(src: &str) -> Result<(), CompileError> {
     let file = rustyfi_syntax::parse_file(src)?;
@@ -129,10 +116,8 @@ fn set_font_typechecks() {
 
 #[test]
 fn set_code_text_command_typechecks_with_a_first_class_command_value() {
-    // `(command \code)` (gap 1) constructs the `[string] inline-cmd`
-    // value `set-code-text-command` expects — `\code`'s param is
-    // inferred `string` because its body funnels it through
-    // `embed-string : string -> inline-text`.
+    // `(command \code)` constructs the `[string] inline-cmd` value
+    // `set-code-text-command` expects.
     assert_well_typed(
         "let-inline ctx \\code s = read-inline ctx (embed-string s)
          let-inline ctx \\math m = inline-nil
@@ -164,7 +149,6 @@ fn dominant_script_getters_typecheck() {
 
 #[test]
 fn dominant_script_getter_rejects_a_context_argument_shuffle() {
-    // `get-dominant-wide-script : context -> script`, not `script -> context`.
     assert_type_error(
         "let-inline ctx \\math m = inline-nil
          in
@@ -181,7 +165,7 @@ fn get_language_typechecks_and_the_stdja_set_language_chain_still_typechecks() {
     );
     // Regression: the `set-language Kana Japanese` chain (as `stdja.satyh`
     // writes it) must still typecheck now that the setter is a faithful
-    // store rather than a drop no-op — its declared signature is unchanged.
+    // store rather than a drop no-op.
     assert_well_typed(
         "let-inline ctx \\math m = inline-nil
          in
@@ -189,10 +173,7 @@ fn get_language_typechecks_and_the_stdja_set_language_chain_still_typechecks() {
     );
 }
 
-// ============================================================================
-// Eval half — direct `Ast` apply chains (no parser), mirroring
-// `prims_phase4.rs`'s style.
-// ============================================================================
+// Eval half — direct `Ast` apply chains (no parser).
 
 struct Mono;
 
@@ -293,7 +274,6 @@ fn set_text_color_then_get_text_color_round_trips_rgb() {
 
 #[test]
 fn get_text_color_defaults_to_black_gray() {
-    // `Context::initial`'s default (v0.0.6 `DeviceGray 0.`).
     let ast = app1(var("get-text-color"), initial_ctx(100.0));
     match run(&ast) {
         Value::Ctor(name, Some(payload)) => {
@@ -399,9 +379,7 @@ fn get_natural_length_of_a_single_skip_is_its_own_length() {
     assert_len_close(run(&ast), 10.0);
 }
 
-// ============================================================================
-// group E2: dominant-script / language context stores
-// ============================================================================
+// Dominant-script / language context stores
 
 fn ctor(name: &str) -> Ast {
     Ast::Ctor(name.to_string(), None)
@@ -468,8 +446,6 @@ fn set_language_is_a_per_script_map_insert_not_a_scalar_overwrite() {
     assert_ctor_eq(
         run(&get("HanIdeographic", &ctx)),
         "NoLanguageSystem",
-        // proves the insert is per-script, not a scalar overwrite of every
-        // script's language system.
     );
 }
 

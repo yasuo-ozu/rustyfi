@@ -1,9 +1,8 @@
-//! Integration test for the composite `Tabular` box's PDF writer arm (the
-//! "biggest risk"): a page whose only content is a `PureHorzBox::Tabular`
-//! (one text cell + one rule) renders both the cell's `Tj` text run and the
-//! rule's path operators into the same content stream, in the same
-//! coordinate frame — the reentrant `emit_box` reconciling page y-down / box
-//! y-up / cell-baseline-y-up in one `ty + cell.baseline_y` expression.
+//! The composite `Tabular` box's PDF writer arm: a page whose only content is
+//! a `Tabular` (one text cell + one rule) renders both the cell's `Tj` run and
+//! the rule's path ops into the same content stream and coordinate frame — the
+//! reentrant `emit_box` reconciling page y-down / box y-up / cell-baseline-y-up
+//! in one `ty + cell.baseline_y` expression.
 
 use rustyfi_backend::{
     Closing, Color, FontKey, GraphicsElem, HorzStringInfo, Length, Page, PageGeometry, Path,
@@ -62,8 +61,8 @@ fn page_with_tabular_box() -> Page {
 
 #[test]
 fn tabular_box_renders_cell_text_and_rule_ops_in_the_same_frame() {
-    // Round numbers throughout (as `graphics.rs`'s sibling test does) so
-    // every expected operand below is an exact integer string.
+    // Round numbers throughout, so every expected operand is an exact
+    // integer string.
     let geometry = PageGeometry {
         paper_width: Length::pt(200.0),
         paper_height: Length::pt(300.0),
@@ -96,9 +95,8 @@ fn tabular_box_renders_cell_text_and_rule_ops_in_the_same_frame() {
     assert!(hay.contains("(A) Tj"), "missing cell text run:\n{hay}");
 
     // The rule renders through the same `place_graphics` a standalone
-    // `inline-graphics` box uses, in the box's OWN frame (its `cm` is the
-    // same one the cell text's `Td` is offset from) — path ops plus a
-    // stroke.
+    // `inline-graphics` box uses, in the box's OWN frame — the same `cm` the
+    // cell text's `Td` is offset from.
     for op in ["0 0 m", "0 10 l", "1 w", "0 G", "\nS\n"] {
         assert!(hay.contains(op), "content stream missing rule op {op:?}:\n{hay}");
     }

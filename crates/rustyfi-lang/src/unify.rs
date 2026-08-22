@@ -137,8 +137,7 @@ fn unify_cmd_args(a: &[CmdArgType], b: &[CmdArgType]) -> Result<(), UnifyError> 
         // one side makes the lengths or the pairwise names diverge here,
         // exactly upstream's "invariant label set under a seal"
         // (`signatureSubtyping.ml:511-516`). A no-op when both sides are `[]`
-        // (every 0.0.6-reachable `CmdArgType`), so this is byte-identical for
-        // the frozen corpus.
+        // — every 0.0.6-reachable `CmdArgType`.
         if x.opt_labels.len() != y.opt_labels.len()
             || x.opt_labels
                 .iter()
@@ -253,8 +252,8 @@ fn row_require_label(row: &Row, label: &str) -> Result<(), UnifyError> {
 
 fn unify_row(a: &Row, b: &Row) -> Result<(), UnifyError> {
     // Owned, unlike `unify` above: the arms below destructure the row apart.
-    // Rows are tiny (`Empty` for every 0.0.6 function type), so the copy this
-    // costs is nothing like the one `resolve` used to make for whole types.
+    // Rows are tiny (`Empty` for every 0.0.6 function type), so this copy is
+    // nothing like the whole-type copy `resolve` avoids.
     let ra = resolve_row(a).into_owned();
     let rb = resolve_row(b).into_owned();
     match (ra, rb) {
@@ -292,12 +291,10 @@ fn unify_row(a: &Row, b: &Row) -> Result<(), UnifyError> {
 
 /// Extract the field labeled `label` out of `row`, returning its type and
 /// the row of everything else. If `row` is an open row var that doesn't
-/// (yet) mention `label`, this *extends* it in place — binding the
-/// variable to `Cons(label, fresh_field, Var(fresh_remainder))` — and
-/// returns the fresh field/remainder pair. This is what realizes label
-/// subsumption against an open row as "unify one field at a time, leaving
-/// a fresh remainder row variable" instead of requiring the whole row to
-/// match up front.
+/// (yet) mention `label`, this *extends* it in place, returning a fresh
+/// field/remainder pair. This is what realizes label subsumption against an
+/// open row as "unify one field at a time, leaving a fresh remainder row
+/// variable" instead of requiring the whole row to match up front.
 fn row_extract(row: &Row, label: &str) -> Result<(MonoType, Row), UnifyError> {
     // Owned for the same reason as `unify_row`: this rebuilds the row.
     match resolve_row(row).into_owned() {

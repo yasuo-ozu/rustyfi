@@ -2,13 +2,11 @@
 //! a `module M : sig .. end = struct .. end`'s signature must expose `\cmd`
 //! UNQUALIFIED at the enclosing scope — the math-command analog of the
 //! existing inline/block `direct`-exposure wave (`elaborate.rs`'s
-//! `direct_cmd_name` + `TopBinding::Module` arm) — so that an importer's
-//! `${..}` can reference `\cmd` without an `M.` prefix, exactly like
-//! `bnf.satyh` (`@require: math`) does with `Math`'s `\mid`/`\mathrel`.
+//! `direct_cmd_name` + `TopBinding::Module` arm), exactly like `bnf.satyh`
+//! does with `Math`'s `\mid`/`\mathrel`.
 //!
-//! This is a minimal, self-contained fixture (no `lib-rustyfi` package
-//! involved) proving the mechanism in isolation; `math_package.rs` covers
-//! the real `math.satyh` gate.
+//! Minimal, self-contained fixture (no `lib-rustyfi` package involved);
+//! `math_package.rs` covers the real `math.satyh` gate.
 
 use std::fs;
 use std::path::PathBuf;
@@ -19,10 +17,8 @@ use rustyfi_lang::value::Value;
 use rustyfi_lang::{elaborate, eval, primitives, typecheck};
 use rustyfi_loader::{LoadOptions, LoadedProgram};
 
-/// A uniquely-named temp directory (cleaned up on drop) holding one fixture
-/// pair: a library file (`@import:`ed) and an entry document, so
-/// `@import: lib` resolves relative to the entry's own directory (see
-/// `rustyfi-loader`'s `resolve_import`) without needing any `lib_root`.
+/// `@import: lib` resolves relative to the entry's own directory
+/// (`rustyfi-loader`'s `resolve_import`), so no `lib_root` is needed.
 struct TempDir(PathBuf);
 
 impl TempDir {
@@ -92,9 +88,9 @@ impl FontMetrics for NoFonts {
     }
 }
 
-/// An ASCII-only stub (mirrors `stdlib_tier0.rs`'s own `Mono`) — for the one
-/// test below that forces glyph metrics via `embed-math` (`NoFonts`'s
-/// always-`None` `advance` would make any character a dynamic error).
+/// For the one test below that forces glyph metrics via `embed-math`
+/// (`NoFonts`'s always-`None` `advance` would make any character a
+/// dynamic error).
 struct Mono;
 
 impl FontMetrics for Mono {
@@ -113,11 +109,6 @@ impl FontMetrics for Mono {
     }
 }
 
-/// Load `entry_path` (already written to disk, `@import:`ing a sibling
-/// library file) through the real loader, merge, elaborate, typecheck, and
-/// evaluate — the full "compiles" bar, mirroring `math_package.rs`'s
-/// `compile_via_loader` but keyed off a path rather than fresh source (no
-/// `lib_root` is needed here: everything resolves via `@import:`).
 fn compile_via_loader(entry_path: &PathBuf) -> Result<Value, String> {
     compile_via_loader_with_metrics(entry_path, &NoFonts)
 }

@@ -1,7 +1,6 @@
-//! §D writer coverage: `emit_box`'s new `PureHorzBox::Frame` recursion
-//! (contents rendered on the frame's own baseline, x-shifted by each content's
-//! own offset) and `used_images`'s recursive box scan finding an `Image`
-//! nested inside a `Frame`.
+//! Writer coverage: `emit_box`'s `PureHorzBox::Frame` recursion (contents
+//! rendered on the frame's own baseline, x-shifted by each content's own
+//! offset) and `used_images`'s box scan finding an `Image` inside a `Frame`.
 
 use rustyfi_backend::{
     Color, DecoId, FontKey, HorzStringInfo, ImageId, ImageResource, Length, Page, PageGeometry,
@@ -47,9 +46,9 @@ fn frame_content_renders_at_the_frames_placed_anchor_plus_its_own_offset() {
         .expect("render must succeed");
     let hay = String::from_utf8_lossy(&bytes);
 
-    // Text anchor: tx = line.x + box_dx(4) + inner_dx(6) = 60; ty = paper_h -
-    // baseline_y = 200 — the frame's own baseline, inherited unshifted by
-    // its content (emit_box's Frame arm passes `ty` through as-is).
+    // tx = line.x + box_dx(4) + inner_dx(6) = 60; ty = paper_h - baseline_y =
+    // 200, the frame's own baseline, inherited unshifted by its content
+    // (emit_box's Frame arm passes `ty` through as-is).
     let expected_td = "60 200 Td";
     assert!(
         hay.contains(expected_td),

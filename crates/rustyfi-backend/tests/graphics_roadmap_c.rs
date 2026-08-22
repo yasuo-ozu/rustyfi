@@ -1,8 +1,6 @@
-//! Backend-unit coverage for roadmap C2 (`PureHorzBox::GraphicsOuter`'s
-//! fil-width write-back through `fit_cell`/`natural_metrics`) and C3b
-//! (`path_bbox`'s exact cubic-extrema bounding box), independent of the
-//! lang-side primitives that build these values in practice
-//! (`crates/rustyfi-lang/tests/stdlib_tier0.rs` covers those end to end).
+//! Backend-unit coverage for `GraphicsOuter`'s fil-width write-back
+//! through `fit_cell`/`natural_metrics`, and `path_bbox`'s exact
+//! cubic-extrema bounding box. `stdlib_tier0.rs` covers these end to end.
 
 use rustyfi_backend::*;
 
@@ -23,10 +21,8 @@ fn fil() -> HorzBox {
     HorzBox::Pure(PureHorzBox::OuterFil)
 }
 
-// ============================================================================
-// C2: `fit_cell` writes the resolved per-fil width share back into a
+// `fit_cell` writes the resolved per-fil width share back into a
 // `GraphicsOuter` box, exactly like an `OuterFil` shares the same slack.
-// ============================================================================
 
 #[test]
 fn fit_cell_writes_the_resolved_width_into_a_lone_graphics_outer() {
@@ -34,9 +30,8 @@ fn fit_cell_writes_the_resolved_width_into_a_lone_graphics_outer() {
     let (contents, height, depth) = fit_cell(content, Length::pt(50.0));
 
     assert_eq!(contents.len(), 2);
-    // Slack = 50 - 20 (GraphicsOuter's own natural width is 0) = 30, all of
-    // which the lone GraphicsOuter absorbs (fil semantics: it's the only
-    // "fil" box on the line).
+    // Slack = 50 - 20 = 30 (GraphicsOuter's own natural width is 0), all
+    // absorbed by the lone GraphicsOuter.
     let (x0, b0) = &contents[0];
     assert_eq!(*x0, Length::ZERO);
     match b0 {
@@ -49,7 +44,6 @@ fn fit_cell_writes_the_resolved_width_into_a_lone_graphics_outer() {
     assert!((x1.0 - 30.0).abs() < 1e-9, "expected x offset 30pt, got {x1:?}");
     assert!(matches!(b1, PureHorzBox::FixedEmpty { .. }));
 
-    // Line metrics: height/depth max'd in from the GraphicsOuter's own (h,d).
     assert!((height.0 - 5.0).abs() < 1e-9);
     assert!((depth.0 - 2.0).abs() < 1e-9);
 }
@@ -59,7 +53,7 @@ fn fit_cell_splits_slack_three_ways_across_two_graphics_outers_and_a_fil() {
     // Two `GraphicsOuter`s + one `OuterFil`, all zero natural width, on a
     // 30pt-wide cell: slack = 30, split evenly three ways (10pt each) —
     // `justify_line`'s `fil_count` counts `OuterFil` and `GraphicsOuter`
-    // identically (upstream `Fils(nfil)`, roadmap C2's design summary).
+    // identically (upstream `Fils(nfil)`).
     let content = vec![outer(0, 3.0, 0.0), fil(), outer(1, 4.0, 1.0)];
     let (contents, height, depth) = fit_cell(content, Length::pt(30.0));
 
@@ -71,10 +65,8 @@ fn fit_cell_splits_slack_three_ways_across_two_graphics_outers_and_a_fil() {
         }
         other => panic!("expected GraphicsOuter, got {other:?}"),
     }
-    // The `OuterFil` box itself doesn't carry a resolved width field (it's
-    // zero-width by definition, `natural_width` returns ZERO for it too),
-    // but it still occupies its 1/3 share of the x-advance budget: the third
-    // box's x offset proves it.
+    // `OuterFil` carries no resolved width field, but still occupies its 1/3
+    // share of the x-advance budget: the third box's x offset proves it.
     match &contents[2].1 {
         PureHorzBox::GraphicsOuter { width, fn_id, .. } => {
             assert_eq!(*fn_id, GraphicsFnId(1));
@@ -89,11 +81,8 @@ fn fit_cell_splits_slack_three_ways_across_two_graphics_outers_and_a_fil() {
     assert!((depth.0 - 1.0).abs() < 1e-9, "depth should max in both GraphicsOuters");
 }
 
-// ============================================================================
-// C2: `natural_metrics` treats an unresolved `GraphicsOuter` as fil
-// (zero-width), while still folding its height/depth into the run's outer
-// metrics.
-// ============================================================================
+// `natural_metrics` treats an unresolved `GraphicsOuter` as fil
+// (zero-width) while still folding its height/depth into the outer metrics.
 
 #[test]
 fn natural_metrics_gives_a_graphics_outer_zero_width_but_maxes_in_height_depth() {
@@ -104,10 +93,8 @@ fn natural_metrics_gives_a_graphics_outer_zero_width_but_maxes_in_height_depth()
     assert!((depth.0 - 3.0).abs() < 1e-9);
 }
 
-// ============================================================================
-// C3b: `path_bbox`'s exact cubic-extrema bounding box vs. the (looser)
-// control-point hull it replaces.
-// ============================================================================
+// `path_bbox`'s exact cubic-extrema bounding box vs. the looser
+// control-point hull.
 
 /// `Gr.circle (cx, cy) r`'s exact path shape (`gr.satyh:128-134`): 3
 /// `bezier-to`s + a `close-with-bezier`, `k = r * 0.55228`.
@@ -140,11 +127,8 @@ fn path_bbox_of_a_circle_is_exact_within_the_radius_not_the_wider_control_hull()
     );
 }
 
-/// Companion to the exact circle test above: a single cubic segment whose
-/// control points genuinely overshoot the curve's own extent on one axis
-/// (a classic "control polygon wider than the curve" shape) — proves
-/// `path_bbox` reports the tight curve extent, not the control-point hull it
-/// used to.
+/// A single cubic whose control points overshoot the curve's own extent on one
+/// axis — proves `path_bbox` reports the tight curve extent, not the hull.
 #[test]
 fn path_bbox_of_a_bulging_bezier_is_tighter_than_its_control_hull() {
     let pt = |x: f64, y: f64| (Length::pt(x), Length::pt(y));
@@ -171,8 +155,7 @@ fn path_bbox_of_a_bulging_bezier_is_tighter_than_its_control_hull() {
 
 #[test]
 fn path_bbox_of_a_straight_line_path_is_unaffected_by_the_bezier_upgrade() {
-    // A pure `Line`-only path (no Bezier segments) should behave exactly as
-    // before: bbox = the corner extremes of its own points.
+    // A `Line`-only path: bbox = the corner extremes of its own points.
     let path = Path {
         subpaths: vec![Subpath {
             start: (Length::pt(0.0), Length::pt(0.0)),

@@ -4,8 +4,8 @@
 //! probe is a minimal **0.1** document that `@require:`s it against a lib root
 //! holding only the 0.0.6 corpus (so every `@require:` genuinely crosses), and
 //! the `v006` control exercises the same package from an ordinary 0.0.6
-//! document — which is what separates a bridge failure from a pre-existing
-//! 0.0.6-side gap. See `CLAUDE.md` §1, "What the REAL corpus says".
+//! document — which separates a bridge failure from a pre-existing 0.0.6-side
+//! gap.
 //!
 //! Transcribed byte for byte from `layout-tests/xver_sweep/{cases,v006}/*.saty`;
 //! `expect_cross`/`expect_v006` mirror `layout-tests/xver_sweep_baseline.json`.
@@ -30,13 +30,9 @@ pub struct Case {
 
 // Case stem and package name are not always the same word: `codeprinter` is
 // the registry's `code-printer`, and `base` probes `base/string`. `mathpkg`'s
-// `math` is the odd one out entirely — it is the port's own bundled 0.0.6
-// corpus, not a registry install, so an installer driven off this field must
-// skip it. Conversely `fss` is installed by `layout-tests/xver_sweep.py` as a
-// dependency and has no case of its own.
-//
-// Every case currently carries a control, so `v006` is `Some` throughout; the
-// `None` arm is for a future case a 0.0.6 document could not express.
+// `math` is the port's own bundled 0.0.6 corpus, NOT a registry install, so an
+// installer driven off this field must skip it. `fss` is installed by
+// `layout-tests/xver_sweep.py` as a dependency and has no case of its own.
 pub const CASES: &[Case] = &[
     Case {
         package: "algorithm",

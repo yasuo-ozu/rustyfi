@@ -1,7 +1,6 @@
-//! `install` (plan §4.1, §6): resolve root → prepare source (dir or
-//! `.tar.gz`) → discover plan (manifest-first, flat-copy fallback) → stage
-//! with path-traversal guard → collision check → atomic swap → write
-//! receipt.
+//! `install`: resolve root → prepare source (dir or `.tar.gz`) → discover
+//! plan (manifest-first, flat-copy fallback) → stage with path-traversal
+//! guard → collision check → atomic swap → write receipt.
 
 use std::path::{Path, PathBuf};
 
@@ -11,7 +10,6 @@ use crate::roots::RootSelection;
 use crate::util;
 use crate::{archive, manifest, stage};
 
-/// Options for [`install`] (plan §7.2).
 #[derive(Debug, Default, Clone)]
 pub struct InstallOptions {
     /// The library to prefer when the manifest declares several and no
@@ -44,7 +42,6 @@ impl RootSelection for InstallOptions {
     }
 }
 
-/// What [`install`] materialised.
 #[derive(Debug)]
 pub struct InstallReport {
     /// What the package's `.opam` preparation fetched and ran, if anything.
@@ -56,7 +53,6 @@ pub struct InstallReport {
     pub files: Vec<PathBuf>,
 }
 
-/// Install the package at `source` (a directory or `.tar.gz`).
 pub fn install(source: &Path, opts: &InstallOptions) -> Result<InstallReport, Error> {
     install_inner(source, opts, None)
 }
@@ -107,7 +103,6 @@ pub fn install_url(
     result
 }
 
-/// Whether `arg` names a remote archive rather than a path or a registry name.
 pub fn is_url(arg: &str) -> bool {
     arg.starts_with("http://") || arg.starts_with("https://")
 }
@@ -136,7 +131,7 @@ fn url_file_name(url: &str) -> String {
 /// receipt's `[source]` table (the registry form records the package name,
 /// version, tarball url, and verified sha256 there instead of a bare local
 /// path); when `None`, the receipt records the prepared `path`/`archive`
-/// source as before.
+/// source.
 pub(crate) fn install_inner(
     source: &Path,
     opts: &InstallOptions,
@@ -154,11 +149,7 @@ pub(crate) fn install_inner(
 
     let plans = manifest::discover(&prepared.source_root)?;
 
-    // `-l`/`--library` filter / library selection (plan §4.1). A single
-    // `rustyfi-package.toml` or `packages/` fallback yields exactly one plan;
-    // a `Satyristes` (phase 4) may declare several `(library ...)` blocks, in
-    // which case `--library` must narrow the selection to exactly one (one
-    // library is materialised per install).
+    // `-l`/`--library` filter / library selection (see `select_plan`'s doc).
     let plan = select_plan(
         plans,
         opts.libraries.as_deref(),
@@ -176,18 +167,17 @@ pub(crate) fn install_inner(
 
 /// Stage, collision-check, atomically materialise, and receipt one
 /// already-selected [`manifest::PackagePlan`] under `root` (already
-/// resolved). Factored out of [`install_inner`] so a plan built OUTSIDE the
-/// normal directory-discovery path — [`crate::ops::build::build`]'s
-/// doc-target install is the first such caller — can reuse the exact same
-/// atomic-swap/receipt machinery a directory/archive install uses.
-/// `receipt_source` is what the written receipt's `[source]` table records.
+/// resolved). Split out of [`install_inner`] so a plan built OUTSIDE the
+/// normal directory-discovery path — [`crate::ops::build::build`]'s doc-target
+/// install — can reuse the exact same atomic-swap/receipt machinery a
+/// directory/archive install uses. `receipt_source` is what the written
+/// receipt's `[source]` table records.
 pub(crate) fn install_plan(
     root: &Path,
     plan: manifest::PackagePlan,
     opts: &InstallOptions,
     receipt_source: Source,
 ) -> Result<InstallReport, Error> {
-    // Collision policy (plan §6).
     let old_receipt = if receipts::exists_for(root, &plan.name, plan.lang) {
         if !opts.force {
             return Err(Error::AlreadyInstalled { name: plan.name });
@@ -252,7 +242,6 @@ pub(crate) fn install_plan(
         })
         .unwrap_or_default();
 
-    // Atomic swap into place.
     stage::materialize(root, staging.path(), &new_dsts, &old_dsts)?;
 
     // A shared file the previous install contributed to and this one no longer
@@ -365,7 +354,7 @@ pub(crate) fn withdraw_keys(root: &Path, entry: &FileEntry) -> Result<(), Error>
 }
 
 /// Pick the single library to install from the discovered plan(s), honouring
-/// the `-l`/`--library` filter (plan §4.1):
+/// the `-l`/`--library` filter:
 ///
 /// - no filter + exactly one plan → that plan;
 /// - filter given → keep plans whose declared name is in the set;
@@ -377,7 +366,7 @@ fn select_plan(
     lang: Option<manifest::Lang>,
     prefer: Option<&str>,
 ) -> Result<manifest::PackagePlan, Error> {
-    // A name is no longer unique: one manifest may declare the same library
+    // A name alone is not unique: one manifest may declare the same library
     // for both generations, so the pair (name, lang) is what identifies it.
     let declared: Vec<String> = plans
         .iter()
@@ -393,7 +382,6 @@ fn select_plan(
     if let Some(lang) = lang {
         selected.retain(|p| p.lang == lang);
     }
-    // Only when it would otherwise be ambiguous, and only if it matches.
     if selected.len() > 1 {
         if let Some(prefer) = prefer {
             if selected.iter().any(|p| p.name == prefer) {
@@ -458,9 +446,6 @@ mod url_tests {
             url_file_name("https://x/y/pkg.tar.gz#sha256=ab"),
             "pkg.tar.gz"
         );
-        // A download endpoint that names no file still gets an extension this
-        // crate can dispatch on, so unpacking fails honestly rather than on a
-        // missing suffix.
         assert_eq!(url_file_name("https://x/api/download"), "package.tar.gz");
         assert_eq!(url_file_name("https://x/y/"), "package.tar.gz");
     }

@@ -1,30 +1,21 @@
 //! Target SATySFi language version.
 //!
-//! This port implements **0.0.6** semantics only. SATySFi 0.1.x overhauled
-//! the surface language (an ML-style module system replacing `@require:` /
-//! `@import:` headers with `use <Ident>` headers, among other changes), so a
-//! future port of that version will diverge from this one at several points
-//! in the pipeline (lexing headers, module resolution in the loader,
-//! elaboration in `rustyfi-lang`, ...).
-//!
-//! Rather than let each of those future divergence points grow its own
-//! ad-hoc flag, the target version is threaded through the pipeline *now*
-//! (see [`crate`]'s consumers: `rustyfi-loader`'s `LoadOptions` and
-//! `rustyfi`'s `--lang` flag) as a single [`RustyfiVersion`]
-//! value, and each divergence point is expressed as a method on it. A future
-//! 0.1 implementation flips those methods (and adds new match arms) in one
-//! place instead of scattering `if opt_a && opt_b` checks across the crate
-//! graph.
+//! 0.0.6 and 0.1.x diverge at several points in the pipeline (lexing headers,
+//! module resolution in the loader, elaboration in `rustyfi-lang`, ...).
+//! Rather than let each divergence point grow its own ad-hoc flag, the target
+//! version is threaded through the pipeline as a single [`RustyfiVersion`]
+//! value (see [`crate`]'s consumers: `rustyfi-loader`'s `LoadOptions` and
+//! `rustyfi`'s `--lang` flag), and each divergence point is expressed as a
+//! method on it, rather than scattering `if opt_a && opt_b` checks across the
+//! crate graph.
 //!
 //! ## Verification note on the 0.1 header syntax
 //!
-//! This port's sandbox could not reach the network (GitHub, raw.
-//! githubusercontent.com, and zenn.dev all rejected the fetch as an
-//! unverified domain), so the exact SATySFi 0.1.0 `use` header grammar is
-//! **not independently confirmed** from upstream sources here. The
-//! `sniff_version` heuristic below for 0.1 (`use `-prefixed header lines) is
-//! therefore marked best-effort; the 0.0.6 side (`@require:` / `@import:` /
-//! `@stage:`) *is* verified, directly against this port's own
+//! The exact SATySFi 0.1.0 `use` header grammar is **not independently
+//! confirmed** from upstream sources here (the sandbox this was written in had
+//! no network access), so the `sniff_version` heuristic below for 0.1
+//! (`use `-prefixed header lines) is best-effort. The 0.0.6 side (`@require:` /
+//! `@import:` / `@stage:`) *is* verified, directly against this port's own
 //! [`crate::cst`]/[`crate::lexer`] implementation of the v0.0.6 grammar.
 
 use std::fmt;
@@ -52,8 +43,7 @@ pub enum RustyfiVersion {
     /// (`dev-0-1-0`'s own model, and this port's `LoadMode::Legacy` — Slice
     /// 1's target) or the `use`/manifest/lockfile model (`saphe-split`'s
     /// `LoadMode::Envelopes`, a later milestone) — see
-    /// `rustyfi_loader::LoadMode`. **Not yet fully implemented** by this
-    /// port; see [`RustyfiVersion::is_implemented`].
+    /// `rustyfi_loader::LoadMode`.
     V0_1,
 }
 
@@ -83,7 +73,7 @@ impl RustyfiVersion {
     /// argument, as opposed to `V0_1`'s plain `length * length`. Deliberately
     /// phrased as an assertion about `V0_0`'s surface (not "is it 0.0.6"),
     /// so a future third generation that also drops the ADT reads correctly
-    /// without touching call sites — see L7 in the main plan.
+    /// without touching call sites (L7).
     pub fn has_page_adt(&self) -> bool {
         matches!(self, Self::V0_0)
     }
@@ -229,8 +219,8 @@ pub fn sniff_version(src: &str) -> Option<RustyfiVersion> {
 
 /// What [`sniff_headers`] learned from the header block. `version` is exactly
 /// [`sniff_version`]'s result (Axis A); `envelope_headers` is the Axis-B
-/// signal the plan's detection ladder step 3 needs (: "a `use`-shaped header
-/// … pins Axis B = `LoadMode::Envelopes`"). A `use`-shaped header sets BOTH.
+/// signal the CLI's detection ladder needs — a `use`-shaped header pins Axis
+/// B = `LoadMode::Envelopes`, and sets BOTH fields.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct HeaderSniff {
     /// The detected target version, if any (`None` = ambiguous/no signal).
@@ -260,8 +250,7 @@ pub fn sniff_headers(src: &str) -> HeaderSniff {
 
         // `@stage:` is a real signal: 0.1's lexer rejects it outright (the
         // header-lexing rule dropped the `"stage" -> HEADER_STAGE*` arm
-        // between v0.0.6 and dev-0-1-0 — see this plan's header intro), so
-        // seeing it at all means 0.0.6.
+        // between v0.0.6 and dev-0-1-0), so seeing it at all means 0.0.6.
         if line.starts_with("@stage:") {
             return HeaderSniff {
                 version: Some(RustyfiVersion::V0_0),
@@ -272,10 +261,9 @@ pub fn sniff_headers(src: &str) -> HeaderSniff {
         // `@require:`/`@import:` are *transparent*: byte-identical in both
         // v0.0.6 and dev-0-1-0 (same citation), so their presence pins
         // neither axis. Skip past them exactly like a blank/comment line —
-        // do NOT return here (that was the S1 bug: this used to return
-        // `Some(V0_0)` on the very first `@require:`, misclassifying every
-        // 0.1-syntax-body-with-legacy-headers document, which is Slice 1's
-        // own target shape).
+        // do NOT return here: returning `Some(V0_0)` on the very first
+        // `@require:` misclassifies every 0.1-syntax-body-with-legacy-headers
+        // document, which is Slice 1's own target shape (the S1 bug).
         if line.starts_with("@require:") || line.starts_with("@import:") {
             continue;
         }
@@ -336,11 +324,11 @@ fn is_use_header(line: &str) -> bool {
 }
 
 /// Inspect the first non-header content line for a version signal.
-/// `module <Upper> ... = struct` is deliberately **not** checked here — see
-/// §1.4 step 3 of the plan: 0.0.6's `TopBinding::Module` makes the sig
-/// annotation optional and all 29 shipped 0.0.6 packages open with a
-/// `module` head after their headers, so a `module` head is no signal in
-/// either direction and correctly falls through to `None` below.
+/// `module <Upper> ... = struct` is deliberately **not** checked here:
+/// 0.0.6's `TopBinding::Module` makes the sig annotation optional and all
+/// 29 shipped 0.0.6 packages open with a `module` head after their
+/// headers, so a `module` head is no signal in either direction and
+/// correctly falls through to `None` below.
 fn sniff_content_line(line: &str) -> Option<RustyfiVersion> {
     if starts_with_word(line, "val") {
         return Some(RustyfiVersion::V0_1);
@@ -395,9 +383,8 @@ mod tests {
 
     #[test]
     fn from_str_rejects_unknown_forms() {
-        // `0.0.6` and `v0.0.6` were accepted as aliases and are now rejected:
-        // the language tag names a GENERATION, and spelling it as an upstream
-        // patch release is what the `V0_0_6` -> `V0_0` rename set out to stop.
+        // `0.0.6`/`v0.0.6` are deliberately NOT aliases: the language tag
+        // names a GENERATION, never an upstream patch release.
         for s in ["", "1.0", "0.0.6", "v0.0.6", "0.0.7", "garbage", "0.2"] {
             let err = s.parse::<RustyfiVersion>().unwrap_err();
             assert_eq!(err.input, s);
@@ -457,12 +444,11 @@ mod tests {
 
     #[test]
     fn sniff_require_import_are_transparent_stage_still_pins() {
-        // `@require:`/`@import:` no longer pin a version by themselves — with
-        // no other signal on the first content line (a bare, non-hyphenated
-        // `let`), the result is `None` (falls to `RustyfiVersion::DEFAULT`
-        // downstream in `resolve_version`, not sniffed here). This is the S1
-        // fix itself: pre-fix, all three of the first assertions below
-        // returned `Some(V0_0)` directly at the header line.
+        // `@require:`/`@import:` do not pin a version by themselves (S1) —
+        // with no other signal on the first content line (a bare,
+        // non-hyphenated `let`), the result is `None` (falling to
+        // `RustyfiVersion::DEFAULT` downstream in `resolve_version`, not
+        // sniffed here).
         assert_eq!(sniff_version("@require: stdlib\nlet x = 1 in x"), None);
         assert_eq!(sniff_version("@import: helper\nlet x = 1 in x"), None);
         // Leading blank lines / comments before a transparent header must
@@ -481,11 +467,11 @@ mod tests {
 
     #[test]
     fn sniff_require_then_module_is_none() {
-        // The S1 bug case: a legacy-header-then-module-body file (Slice 1's
-        // own target shape — a V0_1-syntax library reached through the
-        // unmodified `@require:` loader) must sniff `None`, not `V0_0`
-        // (the old bug) and not `V0_1` (no positive signal for it either —
-        // `module` is deliberately not a signal).
+        // The S1 case: a legacy-header-then-module-body file (Slice 1's own
+        // target shape — a V0_1-syntax library reached through the unmodified
+        // `@require:` loader) must sniff `None`, not `V0_0` and not `V0_1`
+        // (no positive signal either way — `module` is deliberately not a
+        // signal).
         assert_eq!(
             sniff_version("@require: pervasives\nmodule V01Mini = struct\nval x = 1\nend"),
             None
@@ -530,8 +516,7 @@ mod tests {
     #[test]
     fn sniff_lib_rustyfi_corpus_never_v0_1() {
         // Every vendored 0.0.6 package must sniff `None` or `Some(V0_0)`,
-        // never `Some(V0_1)` — the non-regression guarantee §3's Acceptance
-        // depends on.
+        // never `Some(V0_1)`.
         let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../../lib-rustyfi/dist/packages");
         let mut checked = 0usize;
         for entry in std::fs::read_dir(root).expect("lib-rustyfi/dist/packages must exist") {
@@ -608,8 +593,8 @@ mod tests {
 
     #[test]
     fn sniff_version_is_a_sniff_headers_wrapper() {
-        // The back-compat wrapper must agree with the struct's `version`
-        // field for every representative input.
+        // The wrapper must agree with the struct's `version` field for every
+        // representative input.
         for src in [
             "use package foo",
             "@require: stdlib\nlet x = 1 in x",

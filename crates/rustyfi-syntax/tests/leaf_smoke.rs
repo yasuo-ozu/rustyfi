@@ -26,7 +26,7 @@ enum Atomic {
 }
 
 // syan has no `IntoParseStream for Vec<_>`, so the token vector is wrapped in
-// the crate's own `AtomStream` (which also carries the failure high-water mark).
+// the crate's own `AtomStream`.
 fn atoms(src: &str) -> AtomStream {
     let mut v = lex(src).unwrap();
     v.pop(); // drop Eoi for these fragment tests

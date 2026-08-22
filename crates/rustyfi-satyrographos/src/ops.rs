@@ -1,5 +1,5 @@
-//! The four package-manager operations (plan §4.1-4.4, §7.2), each a thin
-//! orchestration over `roots`/`archive`/`manifest`/`stage`/`receipts`.
+//! The package-manager operations, each a thin orchestration over
+//! `roots`/`archive`/`manifest`/`stage`/`receipts`.
 
 pub mod build;
 pub mod prepare;

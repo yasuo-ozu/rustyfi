@@ -1,8 +1,8 @@
-//! Differential guardrail for the S4/S5 lexer seam (`lex_with_version`):
+//! Differential guardrail for the lexer seam (`lex_with_version`):
 //! `lex(src)` and `lex_with_version(src, V0_0)` must be **byte-identical**
 //! for every 0.0.6 source, since `lex` is now defined as a thin wrapper over
 //! `lex_with_version(_, V0_0)` (see `lexer.rs`). This is the proof that
-//! threading a `version` field through `Lexer` and adding the Slice-1
+//! threading a `version` field through `Lexer` and adding the
 //! `rec`/`inline`/`block` keyword gate never perturbs existing 0.0.6 lexing.
 //!
 //! Two corpora are exercised:
@@ -10,7 +10,7 @@
 //!    CLI fixture (`crates/rustyfi/tests/fixtures/`) — real-world 0.0.6
 //!    source, walked recursively.
 //! 2. A hardcoded set of small snippets covering every lexer mode (program,
-//!    vertical, horizontal, active, math) and every new Slice-1 keyword
+//!    vertical, horizontal, active, math) and every new 0.1 keyword
 //!    spelling used as a plain identifier — self-contained, so the guardrail
 //!    still holds even if the fixture directories are ever reorganized.
 
@@ -102,7 +102,7 @@ fn lex_and_lex_with_version_v0_0_agree_on_mode_coverage_snippets() {
         "a before b",
         "(| title = {T}; size = 3pt |)",
         "[1; 2; 3]",
-        // Every Slice-1 keyword spelling, used as a plain identifier under
+        // Every 0.1 keyword spelling, used as a plain identifier under
         // 0.0.6 — the crux of the version-gating change: these three words
         // must lex identically to before (as `Var`) when no version (or
         // V0_0) is requested.
@@ -112,7 +112,7 @@ fn lex_and_lex_with_version_v0_0_agree_on_mode_coverage_snippets() {
         "rec + inline + block",
         "let mutable = 1 in mutable",
         "rec + inline + block + mutable",
-        // Sub-slice 2c: the four new V0_1 lexemes, exercised as 0.0.6
+        // The four new V0_1 lexemes, exercised as 0.0.6
         // input. `:>` must stay two tokens; `signature`/`include` must
         // stay identifiers; a dotted-UPPER path must stay the exact
         // "module path must end with a variable name" error (Err/Err).
@@ -130,7 +130,7 @@ fn lex_and_lex_with_version_v0_0_agree_on_mode_coverage_snippets() {
     }
 }
 
-/// Sub-slice 2b: the V0_1-only `mutable` keyword gate — nothing in this
+/// The V0_1-only `mutable` keyword gate — nothing in this
 /// file's other test asserts the V0_1 branch of `lex_with_version` at all
 /// (both tests above are 0.0.6-agreement guardrails), so this pins the
 /// positive case directly: `mutable` lexes as `Token::Mutable` under V0_1
@@ -145,7 +145,7 @@ fn v0_1_gates_the_bind_keywords() {
     assert!(toks.iter().all(|a| !matches!(a.slot, Token::Mutable)));
 }
 
-/// Sub-slice 2c: the `:>` COERCE token — adjacency-required, `::` wins on
+/// The `:>` COERCE token — adjacency-required, `::` wins on
 /// `::>`, and V0_0 never produces it.
 #[test]
 fn v0_1_lexes_coerce_as_one_token() {
@@ -164,7 +164,7 @@ fn v0_1_lexes_coerce_as_one_token() {
     assert!(toks.iter().all(|a| !matches!(a.slot, Token::Coerce)));
 }
 
-/// Sub-slice 2c: `LONG_UPPER` dotted module/signature paths — V0_1 only;
+/// `LONG_UPPER` dotted module/signature paths — V0_1 only;
 /// V0_0 keeps the historical lex error, and dotted-ending-in-lower is
 /// untouched in both.
 #[test]
@@ -183,7 +183,7 @@ fn v0_1_lexes_long_upper_paths() {
     assert!(err.to_string().contains("module path must end with a variable name"));
 }
 
-/// Sub-slice 2c: `signature`/`include` are V0_1-only keywords.
+/// `signature`/`include` are V0_1-only keywords.
 #[test]
 fn v0_1_gates_signature_and_include_keywords() {
     use rustyfi_syntax::token::Token;
@@ -194,7 +194,7 @@ fn v0_1_gates_signature_and_include_keywords() {
     assert!(toks.iter().all(|a| !matches!(a.slot, Token::Signature | Token::Include)));
 }
 
-/// optional-arg-rows increment 2: `?'r` — a row variable — is ONE token
+/// `?'r` — a row variable — is ONE token
 /// (`Token::RowVar`) under V0_1, adjacency-required (mirrors
 /// `v0_1_lexes_coerce_as_one_token`'s `:>` shape); a space between `?` and
 /// `'r` must NOT fuse; and V0_0 never produces `RowVar` at all — `?'r`

@@ -1,8 +1,8 @@
-//! End-to-end coverage for the match exhaustiveness/redundancy pass
-//! (typechecker-completion plan, §Slice 1): real SATySFi source text run
-//! through `parse_file` -> `elaborate::elaborate_program` ->
-//! `typecheck::typecheck_verbose`, asserting on the `MatchWarning`s it
-//! collects. Mirrors `tests/typecheck.rs`'s harness shape.
+//! End-to-end coverage for the match exhaustiveness/redundancy pass:
+//! real SATySFi source text run through `parse_file` ->
+//! `elaborate::elaborate_program` -> `typecheck::typecheck_verbose`,
+//! asserting on the `MatchWarning`s it collects. Mirrors
+//! `tests/typecheck.rs`'s harness shape.
 
 use rustyfi_lang::{elaborate, primitives, typecheck};
 
@@ -70,10 +70,6 @@ fn assert_has_unreachable(src: &str) {
     );
 }
 
-// ============================================================================
-// bool
-// ============================================================================
-
 #[test]
 fn bool_both_arms_is_exhaustive() {
     assert_exhaustive("match true with | true -> 1 | false -> 2");
@@ -104,10 +100,6 @@ fn int_without_wildcard_is_not_exhaustive() {
     );
 }
 
-// ============================================================================
-// option: a built-in two-constructor variant.
-// ============================================================================
-
 #[test]
 fn option_both_ctors_is_exhaustive() {
     assert_exhaustive(
@@ -121,10 +113,6 @@ fn option_both_ctors_is_exhaustive() {
 fn option_missing_none_is_not_exhaustive() {
     assert_non_exhaustive("match Some 3 with | Some n -> n", "None");
 }
-
-// ============================================================================
-// lists: `[]`/`::`.
-// ============================================================================
 
 #[test]
 fn list_cons_and_empty_is_exhaustive() {
@@ -151,10 +139,6 @@ fn nested_cons_pattern_missing_singleton_list() {
         "::",
     );
 }
-
-// ============================================================================
-// tuples: a gap between two partial arms.
-// ============================================================================
 
 #[test]
 fn tuple_partial_arms_leave_a_gap() {

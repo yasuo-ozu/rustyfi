@@ -1,9 +1,8 @@
-//! Slice 1 (raster images) runtime round trip: `load-image` decodes a real,
+//! Raster images runtime round trip: `load-image` decodes a real,
 //! tiny checked-in PNG fixture and `use-image-by-width` scales it into a
-//! `PureHorzBox::Image`, driven through `eval::Interp` the same way
-//! `prims_phase4.rs` exercises other primitives (`Ast` apply chains built
-//! by hand, no parser involved). A typecheck-only (no file I/O) round trip
-//! lives in `tests/typecheck.rs`.
+//! `PureHorzBox::Image`, driven through `eval::Interp` (hand-built `Ast`
+//! apply chains, no parser). A typecheck-only round trip lives in
+//! `tests/typecheck.rs`.
 
 use rustyfi_backend::{FontKey, FontMetrics, HorzBox, ImageResource, Length, PureHorzBox};
 use rustyfi_lang::ast::Ast;
@@ -28,7 +27,7 @@ impl FontMetrics for Mono {
     }
 }
 
-// ---- small Ast-builder helpers (mirrors prims_phase4.rs) -------------------
+// ---- small Ast-builder helpers ---------------------------------------------
 
 fn var(name: &str) -> Ast {
     Ast::Var(name.to_string(), Span::default())
@@ -51,12 +50,10 @@ fn str_lit(s: &str) -> Ast {
 }
 
 /// The checked-in fixture: an 8x4 (2:1 aspect ratio) RGB8 PNG. Deliberately
-/// non-square, so a test asserting `use-image-by-width`'s height computation
-/// actually exercises the aspect-ratio math rather than a width == height
-/// coincidence. `load-image` resolves its path against the process's
-/// current working directory (see `primitives.rs`'s `prim_load_image` doc
-/// comment), so tests must hand it an absolute path rather than relying on
-/// `cargo test`'s (unspecified, and in practice workspace-root) CWD.
+/// non-square, so a height-computation test exercises the aspect-ratio math
+/// rather than a width == height coincidence. `load-image` resolves its
+/// path against the process CWD, so tests must hand it an absolute path
+/// rather than relying on `cargo test`'s (unspecified) CWD.
 fn fixture_path() -> String {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/dot.png")
@@ -81,9 +78,7 @@ fn run(ast: &Ast) -> Run {
     }
 }
 
-// ============================================================================
 // load-image
-// ============================================================================
 
 #[test]
 fn load_image_decodes_the_fixture_and_records_its_pixel_dimensions() {
@@ -123,9 +118,7 @@ fn load_image_reports_a_clean_error_for_a_missing_file() {
     );
 }
 
-// ============================================================================
 // use-image-by-width
-// ============================================================================
 
 #[test]
 fn use_image_by_width_scales_height_by_the_source_aspect_ratio() {
@@ -173,10 +166,7 @@ fn use_image_by_width_is_not_a_line_break_point_once_placed() {
     assert_eq!(pure.natural_width(), Length::pt(40.0));
 }
 
-// ============================================================================
-// Registration coverage: both new names resolve in base_env AND typecheck
-// (mirrors prims_phase4.rs's own coverage section).
-// ============================================================================
+// Registration coverage: both new names resolve in base_env AND typecheck.
 
 const NEW_NAMES: &[&str] = &["load-image", "use-image-by-width"];
 

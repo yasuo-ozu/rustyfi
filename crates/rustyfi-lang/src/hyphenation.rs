@@ -35,13 +35,12 @@ pub fn language_of(tag: HyphenLang) -> Language {
 /// per-language `embed_en-gb` — that would be required to embed en-GB via
 /// the crate's own mechanism). Pulling in all 82 languages just for en-GB
 /// was rejected as unnecessary bloat and needless exposure to `embed_all`'s
-/// bundled non-permissive `.ext` files (already flags this exact tradeoff
-/// and names "shipping a `.bincode` and using `from_path`" as the
-/// alternative — this is that alternative, via `include_bytes!` +
-/// `from_reader` instead of a runtime path so the dictionary still needs no
-/// disk I/O, matching `embed_en-us`'s own no-filesystem property). This
-/// keeps `crates/rustyfi-lang/Cargo.toml`'s `hyphenation` feature list, and
-/// therefore the root `Cargo.lock`, completely untouched by en-GB support.
+/// bundled non-permissive `.ext` files. The crate's own README names
+/// "shipping a `.bincode` and using `from_path`" as the alternative; this is
+/// that alternative, via `include_bytes!` + `from_reader` instead of a
+/// runtime path, so the dictionary still needs no disk I/O — matching
+/// `embed_en-us`'s own no-filesystem property. `Cargo.toml`'s `hyphenation`
+/// feature list, and therefore the root `Cargo.lock`, stays untouched.
 const EN_GB_STANDARD_BINCODE: &[u8] = include_bytes!("hyph-data/en-gb.standard.bincode");
 
 fn cache() -> &'static Mutex<HashMap<HyphenLang, Arc<Standard>>> {

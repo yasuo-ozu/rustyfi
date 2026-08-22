@@ -9,7 +9,7 @@
 //!
 //! - `use package Mod` (upstream records an envelope edge) — with `deps:
 //!   None` there is no `used_as` map, so it is
-//!   [`LoadError::PackageDependencyUnresolved`]; with `deps: Some(_)` (Ld3b-2)
+//!   [`LoadError::PackageDependencyUnresolved`]; with `deps: Some(_)`
 //!   the head is looked up in the config's `used_as` map (miss →
 //!   [`LoadError::UnknownPackageDependency`]) and, on a hit, records nothing
 //!   (the envelope's files are already prepended to the program).
@@ -18,9 +18,10 @@
 //!   level.
 //! - `@require:`/`@import:` (upstream's lexer never lexes `@`) —
 //!   [`LoadError::LegacyHeaderUnderEnvelopes`], this port's documented
-//!   divergence (Ld3a spec §4.1: the error moves from lex-time to load-time).
+//!   divergence (the error moves from lex-time to load-time).
 //!
-//! Ld3b-2 adds the deps-config phase (upstream `build_document`,
+//! With a deps config given, this adds the deps-config phase (upstream
+//! `build_document`,
 //! `main.ml:285-316`): decode → envelope topo-sort → read + closed-sort each
 //! envelope → prepend its modules → local walk → validated `use package`.
 

@@ -1,25 +1,23 @@
-//! `satyrographos update` (plan §8, §5.4 step 1): re-fetch the registry index
-//! (a git index is fetched into the cache and its resolved commit sha
+//! `satyrographos update`: re-fetch the registry index (a git index is
+//! fetched into the cache and its resolved commit sha
 //! recorded) and **report** which locked registry dependencies have a newer
 //! version available — without applying them. Applying an upgrade is a
 //! deliberate second step (`install <name>@<newer>` or editing the manifest and
-//! reconciling), mirroring how `update` only refreshes the index (§5.4 step 1
-//! is silent on applying, so this port does not).
+//! reconciling), mirroring how `update` only refreshes the index.
 //!
-//! Phase-7c: the diff is now solver-based (design §5.2), not a bare
-//! per-package "highest available" lookup — every currently-locked registry
-//! package (direct **and** transitive) is re-solved *together* against the
+//! Phase-7c: the diff is solver-based, not a bare per-package
+//! "highest available" lookup — every currently-locked registry package
+//! (direct **and** transitive) is re-solved *together* against the
 //! freshly-refreshed index, so a package whose latest published version would
 //! violate some other locked package's declared dependency is correctly
 //! reported at the highest version that still fits the *whole* graph, not the
 //! index's bare maximum. `Satyristes`'s own `source.version` pin is
 //! deliberately **not** fed into the solve here (it is an exact-or-absent
-//! install pin, matching `registry::select_version`'s pre-solver "exact if
-//! given, else highest" contract — feeding it in as a root constraint would
-//! make an exact pin *never* report an upgrade, which is the opposite of what
-//! `update` is for): every currently-locked registry package is a root with
-//! [`Constraint::Any`], exactly mirroring the pre-solver code's
-//! `select_version(idx, name, None)`.
+//! install pin, matching `registry::select_version`'s "exact if given, else
+//! highest" contract — feeding it in as a root constraint would make an exact
+//! pin *never* report an upgrade, which is the opposite of what `update` is
+//! for): every currently-locked registry package is a root with
+//! [`Constraint::Any`].
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -71,13 +69,12 @@ pub fn update(manifest_path: &Path, reg_opts: &RegistryOptions) -> Result<Update
 
 /// As [`update`], but consulting every repository in `repos`, in order, when
 /// `reg_opts` does not already pin one explicit `--registry`/
-/// `$RUSTYFI_REGISTRY` URL (task: multiple `[[registry]]` repositories are
-/// configurable, the same as `search`/`install NAME` already consult, but
-/// `update` used to talk to only the first). Every currently-locked registry
-/// package is re-solved together against the UNION of every reachable
-/// repository's index: [`MultiRegistryDepSource`] tries each repository in
-/// the given order and uses the first that has a given package, exactly the
-/// "first repository that has it wins" rule `install NAME` already applies.
+/// `$RUSTYFI_REGISTRY` URL — the same coverage `search`/`install NAME` have.
+/// Every currently-locked registry package is re-solved together against the
+/// UNION of every reachable repository's index: [`MultiRegistryDepSource`]
+/// tries each repository in the given order and uses the first that has a
+/// given package, exactly the "first repository that has it wins" rule
+/// `install NAME` applies.
 /// One unreachable repository is reported in [`UpdateReport::unreachable`]
 /// rather than aborting the whole report, as long as at least one repository
 /// is reachable (mirrors `cmd_search`).

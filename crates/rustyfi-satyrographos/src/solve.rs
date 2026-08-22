@@ -1,7 +1,7 @@
-//! The phase-7c transitive dependency solver (design §4): a hand-rolled DFS
+//! The phase-7c transitive dependency solver: a hand-rolled DFS
 //! backtracking resolver over the compat-bucket role model from
 //! `version.rs`, reproducing `saphe-split:src-saphe/packageConstraintSolver.ml`
-//! without a SAT library (design §7 — `std` only, no `pubgrub`/`semver`).
+//! without a SAT library (`std` only, no `pubgrub`/`semver`).
 //!
 //! [`DepSource`] keeps the algorithm registry-agnostic: `registry.rs`'s
 //! `RegistryDepSource` adapts the live index; this module's own tests use a
@@ -57,7 +57,7 @@ struct State {
 
 /// Resolve `root`'s dependencies (and everything they transitively require)
 /// to one concrete [`Version`] each, or fail with [`Error::Unsatisfiable`] /
-/// [`Error::VersionConflict`] / [`Error::PackageNotFound`] (design §4.2).
+/// [`Error::VersionConflict`] / [`Error::PackageNotFound`].
 ///
 /// Backtracking DFS: repeatedly pick the unassigned package with the fewest
 /// remaining compatible candidates (MRV / fail-fast), try its candidates
@@ -67,9 +67,7 @@ struct State {
 /// and tries the next candidate there. Termination: version sets are finite
 /// and each successful step assigns one more package without revisiting a
 /// prior assignment except via backtracking, so the search tree is finite
-/// (worst case exponential, as with any such resolver — real SATySFi
-/// dependency graphs are small enough that MRV + highest-first keeps this
-/// fast in practice).
+/// (worst case exponential, as with any such resolver).
 pub fn solve(root: &[(String, Constraint)], src: &dyn DepSource) -> Result<Solution, Error> {
     let mut state = State {
         assigned: BTreeMap::new(),
@@ -100,7 +98,7 @@ fn select_next(state: &State, src: &dyn DepSource) -> Result<Option<(String, Vec
         let reqs = &state.constraints[name];
         let mut candidates = src.versions(name)?;
         candidates.sort();
-        candidates.reverse(); // highest first
+        candidates.reverse();
         candidates.retain(|v| reqs.iter().all(|r| r.constraint.matches(v)));
         let is_better = match &best {
             None => true,
@@ -196,8 +194,8 @@ fn backtrack(state: &mut State, src: &dyn DepSource) -> Result<(), Error> {
 }
 
 /// Explain why `name` has no viable candidate: if two or more of its
-/// accumulated requirements pin different compat buckets (design §3.3's
-/// `Constraint::pinned_bucket`), that mutual incompatibility is the root
+/// accumulated requirements pin different compat buckets
+/// (`Constraint::pinned_bucket`), that mutual incompatibility is the root
 /// cause ([`Error::VersionConflict`]); otherwise every requirement shares a
 /// bucket but no *published* version satisfies all of them at once
 /// ([`Error::Unsatisfiable`]).

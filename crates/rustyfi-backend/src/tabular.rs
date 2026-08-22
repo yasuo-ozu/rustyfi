@@ -6,31 +6,24 @@
 //!
 //! - **Depth sign.** `tabular.ml` threads *negative* depths (more negative =
 //!   deeper) through `Length.min`/`Length.negate`. This port's
-//!   [`natural_metrics`](crate::linebreak::natural_metrics) already returns a
+//!   [`natural_metrics`] returns a
 //!   non-negative "how far below the baseline" magnitude (see `hbox.rs`), so
-//!   every upstream `min`/`negate` pair becomes a plain `max`/`+` here — no
-//!   sign flip is needed at the call site, only at the *shape* of the
-//!   formula (documented at each function below).
+//!   every upstream `min`/`negate` pair becomes a plain `max`/`+` here.
 //! - **Row/column indexing.** `normalize_tabular` always produces a
-//!   rectangular grid (every row padded to the widest row's length), so a
-//!   positional transpose (by column index) replaces upstream's recursive
-//!   `chop_column`/`transpose_tabular` — same result, simpler in Rust.
+//!   rectangular grid, so a positional transpose (by column index) replaces
+//!   upstream's recursive `chop_column`/`transpose_tabular`.
 //!
-//! **Malformed grids degrade, they don't panic** (Risks: "Span
-//! bookkeeping"): where upstream asserts false on a cell that should have
-//! been an `EmptyCell` continuing a pending span (or a span declared with
-//! `numrow`/`numcol` < 1), this port drops the bogus pending state /
-//! clamps to 1 and keeps going, so a table author's off-by-one never
-//! aborts the whole document.
-//!
+//! **Malformed grids degrade, they don't panic**: where upstream asserts
+//! false on a cell that should have been an `EmptyCell` continuing a pending
+//! span (or a span declared with `numrow`/`numcol` < 1), this port drops the
+//! bogus pending state / clamps to 1 and keeps going.
 
 use crate::graphics::GraphicsElem;
 use crate::hbox::{HorzBox, PureHorzBox};
 use crate::length::Length;
 use crate::linebreak::{fit_cell, natural_metrics};
 
-/// `paddings` (horzBox.ml's `paddingL/R/T/B`; `prim_types::t_paddings`'s
-/// runtime shape once extracted by `as_paddings`).
+/// `paddings` (horzBox.ml's `paddingL/R/T/B`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Paddings {
     pub l: Length,
@@ -39,16 +32,15 @@ pub struct Paddings {
     pub b: Length,
 }
 
-/// `cell` (horzBox.ml:447). Content is already-measured pure boxes (the
-/// package's `read-inline ctx it` produced them via `cellf`/`multif`), so
-/// the solver never threads a `Context`.
+/// `cell` (horzBox.ml:447). Content is already-measured pure boxes, so the
+/// solver never threads a `Context`.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Cell {
     /// `NormalCell(pads, hblst)`.
     Normal(Paddings, Vec<HorzBox>),
-    /// `EmptyCell` — a blank grid slot, and also how a `MultiCell`'s spanned
-    /// (non-anchor) slots must be filled in, both across columns (in the
-    /// same row) and down rows (in later rows at the same column).
+    /// `EmptyCell` — a blank slot, and also how a `MultiCell`'s spanned
+    /// (non-anchor) slots MUST be filled in, both across columns and down
+    /// rows.
     Empty,
     /// `MultiCell(numrow, numcol, pads, hblst)`.
     Multi(usize, usize, Paddings, Vec<HorzBox>),
@@ -57,8 +49,8 @@ pub enum Cell {
 /// One placed cell inside a solved [`TabularBox`]: its box-local anchor
 /// (`x` = left edge, `baseline_y` = content baseline, both y-**up** from the
 /// box's own baseline-left origin) and its content already fitted to the
-/// cell's (or, for a span, combined) column width — exactly what a
-/// `VertBox::Line` carries. `EmptyCell`s produce no entry at all.
+/// cell's (or, for a span, combined) column width. `EmptyCell`s produce no
+/// entry at all.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TabularCellBox {
     pub x: Length,
@@ -67,7 +59,7 @@ pub struct TabularCellBox {
 }
 
 /// The solved `PHGFixedTabular` payload (horzBox.ml:279), minus `rules`
-/// (filled in lang-side once the rule callback runs — `primitives.rs`'s
+/// (filled in lang-side once the rule callback runs, `primitives.rs`'s
 /// `prim_tabular`).
 #[derive(Clone, Debug, PartialEq)]
 pub struct TabularBox {
@@ -79,9 +71,8 @@ pub struct TabularBox {
     pub rules: Vec<GraphicsElem>,
 }
 
-/// `Tabular.main`'s result (tabular.ml:309): geometry, solidified cells, and
-/// the grid-line coordinates the rule callback wants — `xs` ascending from
-/// `0` (column boundaries), `ys` **descending** from `height` (row *tops*,
+/// `Tabular.main`'s result (tabular.ml:309). `xs` ascends from `0` (column
+/// boundaries); `ys` **descends** from `height` (row *tops*,
 /// `handlePdf.ml:214-220`) down to `0`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Solved {
@@ -92,10 +83,10 @@ pub struct Solved {
     pub ys: Vec<Length>,
 }
 
-/// Per-column pending multi-**row** span state, threaded row-to-row
-/// top-to-bottom (`rest_row` in tabular.ml): `Some((rows_remaining,
-/// extra_len_needed))` at column `i` means an earlier row's `MultiCell`
-/// still owns this column for `rows_remaining` more rows.
+/// Per-column pending multi-**row** span state, threaded top-to-bottom
+/// (`rest_row` in tabular.ml): `Some((rows_remaining, extra_len_needed))` at
+/// column `i` means an earlier row's `MultiCell` still owns this column for
+/// `rows_remaining` more rows.
 type RestRow = Vec<Option<(usize, Length)>>;
 
 /// Per-row pending multi-**column** span state, threaded column-to-column
@@ -103,9 +94,9 @@ type RestRow = Vec<Option<(usize, Length)>>;
 type RestCol = Vec<Option<(usize, Length)>>;
 
 /// `normalize_tabular` (tabular.ml): pad every row to the widest row's
-/// length with trailing `EmptyCell`s. A short row is filled on the
-/// *right*, never in the middle — a mid-row gap under a span is the table
-/// author's job (an explicit `EmptyCell` at the spanned position).
+/// length with trailing `EmptyCell`s. A short row is filled on the *right*,
+/// never in the middle — a mid-row gap under a span needs an explicit
+/// `EmptyCell` from the table author.
 fn normalize_tabular(rows: Vec<Vec<Cell>>) -> (usize, Vec<Vec<Cell>>) {
     let ncols = rows.iter().map(|r| r.len()).max().unwrap_or(0);
     let htabular = rows
@@ -121,14 +112,12 @@ fn normalize_tabular(rows: Vec<Vec<Cell>>) -> (usize, Vec<Vec<Cell>>) {
 }
 
 /// Column-major view of a (rectangular, post-`normalize_tabular`) grid —
-/// replaces `transpose_tabular`'s recursive `chop_column` (see module doc
-/// comment).
+/// replaces `transpose_tabular`'s recursive `chop_column`.
 fn transpose(rows: &[Vec<Cell>], ncols: usize) -> Vec<Vec<&Cell>> {
     (0..ncols)
         .map(|c| rows.iter().map(|row| &row[c]).collect())
         .collect()
-    // Every `row` has exactly `ncols` entries post-normalize, so `row[c]`
-    // never panics.
+    // `row[c]` never panics: every row has exactly `ncols` entries here.
 }
 
 /// `determine_row_metrics` (tabular.ml:10): one row's `(height, depth
@@ -147,9 +136,8 @@ fn determine_row_metrics(restprev: &RestRow, row: &[Cell]) -> (RestRow, Length, 
             }
             (None, Cell::Empty) => restacc.push(None),
             // A span-anchor `MultiCell` does not affect `hgt_max`/
-            // `dpt_mag_max` itself (only `len`, for a *continuing* span) —
-            // faithful to tabular.ml:34-42, where the analogous `aux` call
-            // passes `hgtmax dptmin` through unchanged in this branch too.
+            // `dpt_mag_max` itself, only `len` for a *continuing* span
+            // (tabular.ml:34-42 passes `hgtmax dptmin` through unchanged).
             (None, Cell::Multi(nr, _nc, pads, content)) => {
                 let (_, hgt, dpt) = natural_metrics(content);
                 let len = (hgt + pads.t) + (dpt + pads.b);
@@ -163,8 +151,7 @@ fn determine_row_metrics(restprev: &RestRow, row: &[Cell]) -> (RestRow, Length, 
             }
             // Malformed grid (upstream `assert false`, tabular.ml:54) — a
             // real cell where a span's continuation was expected. Degrade:
-            // drop the stale pending span and treat this cell at face
-            // value, as if the slot had been `None`.
+            // drop the stale pending span, treat the slot as `None`.
             (Some(_), Cell::Normal(pads, content)) => {
                 let (_, hgt, dpt) = natural_metrics(content);
                 hgt_max = hgt_max.max(hgt + pads.t);
@@ -250,9 +237,8 @@ fn determine_column_width(restprev: &RestCol, col: &[&Cell]) -> (RestCol, Length
 }
 
 /// `multi_cell_width` (tabular.ml:207): the combined width of `nc` columns
-/// starting at `index_c`, clamped to the grid's actual column count (a
-/// malformed span that overruns the grid degrades to "the rest of the
-/// grid" instead of panicking).
+/// starting at `index_c`, clamped to the grid's actual column count (a span
+/// overrunning the grid degrades to "the rest of the grid", not a panic).
 fn multi_cell_width(widlst: &[Length], index_c: usize, nc: usize) -> Length {
     if widlst.is_empty() {
         return Length::ZERO;
@@ -277,9 +263,8 @@ fn multi_cell_vertical(vmetrlst: &[(Length, Length)], index_r: usize, nr: usize)
 }
 
 /// Wrap a cell's content with its left/right padding (tabular.ml:263-268's
-/// `hblstwithpads`) — top/bottom padding never enters the horizontal box
-/// list; it only ever affects `determine_row_metrics`'s row-height
-/// arithmetic above.
+/// `hblstwithpads`). Top/bottom padding never enters the horizontal box
+/// list; it only affects `determine_row_metrics`'s row-height arithmetic.
 fn pad_content(pads: Paddings, content: Vec<HorzBox>) -> Vec<HorzBox> {
     let mut out = Vec::with_capacity(content.len() + 2);
     out.push(HorzBox::Pure(PureHorzBox::FixedEmpty { width: pads.l }));
@@ -289,8 +274,8 @@ fn pad_content(pads: Paddings, content: Vec<HorzBox>) -> Vec<HorzBox> {
 }
 
 /// `solidify_tabular` (tabular.ml:229): fit every non-`Empty` cell's content
-/// to its (possibly combined, for a span) column width and place it at its
-/// box-local anchor.
+/// to its (possibly combined) column width and place it at its box-local
+/// anchor.
 fn solidify_tabular(
     vmetrlst: &[(Length, Length)],
     widlst: &[Length],
@@ -300,10 +285,8 @@ fn solidify_tabular(
 ) -> Vec<TabularCellBox> {
     let mut cells = Vec::new();
     for (index_r, row) in htabular.into_iter().enumerate() {
-        // Only the row's *height* is ever used for placement (Slice 1
-        // never surfaces a per-cell depth — see `TabularCellBox`'s doc
-        // comment; upstream's own `dpt` only ever feeds the roadmap-F
-        // `warn_ratios` diagnostic, not placement).
+        // Only the row's *height* is ever used for placement; upstream's own
+        // `dpt` only feeds its `warn_ratios` diagnostic.
         let hgt_row = vmetrlst
             .get(index_r)
             .map(|(h, _)| *h)
@@ -318,9 +301,8 @@ fn solidify_tabular(
                     let padded = pad_content(pads, content);
                     // Discard `fit_cell`'s own (height, depth): a
                     // `NormalCell` is placed at the *row's* shared metrics
-                    // directly (tabular.ml:271's `ImNormalCell(ratios,
-                    // (wid, hgtnmlcell, dptnmlcell), imhbs)` — the fitted
-                    // content's own hgt/dpt never appear in that tuple).
+                    // (tabular.ml:271's `ImNormalCell(ratios, (wid,
+                    // hgtnmlcell, dptnmlcell), imhbs)`).
                     let (contents, _fit_hgt, _fit_dpt) = fit_cell(padded, wid);
                     let baseline_y = row_top - hgt_row;
                     cells.push(TabularCellBox {
@@ -338,9 +320,9 @@ fn solidify_tabular(
                     // A single-row span places like `NormalCell` (the row's
                     // own metrics); a multi-row span instead centers the
                     // *fitted content's own* extent within the combined
-                    // span's vertical space (tabular.ml:288-297) — note the
-                    // sign: upstream's `(hgt +% lenspace, dpt -% lenspace)`
-                    // on a *negative* dpt is `(hgt + lenspace, dpt_mag +
+                    // span's vertical space (tabular.ml:288-297). Sign:
+                    // upstream's `(hgt +% lenspace, dpt -% lenspace)` on a
+                    // *negative* dpt is `(hgt + lenspace, dpt_mag +
                     // lenspace)` on our non-negative magnitude.
                     let hgt_cell = if nr == 1 {
                         hgt_row
@@ -363,14 +345,12 @@ fn solidify_tabular(
     cells
 }
 
-/// `Tabular.main` (tabular.ml:309): solve the whole grid — geometry,
-/// solidified cells, and the grid-line coordinates a rule callback wants.
+/// `Tabular.main` (tabular.ml:309): solve the whole grid.
 pub fn main(rows: Vec<Vec<Cell>>) -> Solved {
     let nrows = rows.len();
     let (ncols, htabular) = normalize_tabular(rows);
 
-    // Row metrics, top-to-bottom, threading multi-row span bookkeeping
-    // column-by-column.
+    // Row metrics, top-to-bottom.
     let mut restrow: RestRow = vec![None; ncols];
     let mut vmetrlst: Vec<(Length, Length)> = Vec::with_capacity(nrows);
     for row in &htabular {
@@ -379,8 +359,7 @@ pub fn main(rows: Vec<Vec<Cell>>) -> Solved {
         vmetrlst.push((hgt, dpt));
     }
 
-    // Column widths, left-to-right, threading multi-col span bookkeeping
-    // row-by-row.
+    // Column widths, left-to-right.
     let vtabular = transpose(&htabular, ncols);
     let mut restcol: RestCol = vec![None; nrows];
     let mut widlst: Vec<Length> = Vec::with_capacity(ncols);
@@ -428,10 +407,9 @@ pub fn main(rows: Vec<Vec<Cell>>) -> Solved {
 mod tests {
     use super::*;
 
-    /// A cell whose `natural_metrics` are exactly `(w, h, d)` and whose own
-    /// content width contributes nothing extra beyond that — a
-    /// `Graphics` box with no elements, so tests don't need real glyph
-    /// metrics to get deterministic geometry.
+    /// A cell whose `natural_metrics` are exactly `(w, h, d)`: a `Graphics`
+    /// box with no elements, so the geometry is deterministic without real
+    /// glyph metrics.
     fn probe(w: f64, h: f64, d: f64) -> Vec<HorzBox> {
         vec![HorzBox::Pure(PureHorzBox::Graphics {
             width: Length::pt(w),
@@ -480,16 +458,13 @@ mod tests {
         );
         assert_eq!(solved.cells.len(), 4);
 
-        // cellA (row0,col0): x=0, baseline = 29 - 12 = 17.
+        // row0 baseline = 29 - 12 = 17; row1 baseline = 14 - 10 = 4.
         assert_eq!(solved.cells[0].x, Length::pt(0.0));
         assert_eq!(solved.cells[0].baseline_y, Length::pt(17.0));
-        // cellB (row0,col1): x=30, baseline = 17.
         assert_eq!(solved.cells[1].x, Length::pt(30.0));
         assert_eq!(solved.cells[1].baseline_y, Length::pt(17.0));
-        // cellC (row1,col0): x=0, baseline = 14 - 10 = 4.
         assert_eq!(solved.cells[2].x, Length::pt(0.0));
         assert_eq!(solved.cells[2].baseline_y, Length::pt(4.0));
-        // cellD (row1,col1): x=30, baseline = 4.
         assert_eq!(solved.cells[3].x, Length::pt(30.0));
         assert_eq!(solved.cells[3].baseline_y, Length::pt(4.0));
     }
@@ -510,9 +485,7 @@ mod tests {
         // row0: Multi(1,2, w=50) | Empty
         // row1: Normal(w=20)     | Normal(w=25)
         // col0 width is forced to 20 by row1; col1 must then absorb the
-        // multi-cell's remaining 50 - 20 = 30 (tabular.ml:119's `rest`
-        // bookkeeping — this is exactly the "following Empty is absorbed"
-        // acceptance case).
+        // multi-cell's remaining 50 - 20 = 30 (tabular.ml:119's `rest`).
         let rows = vec![
             vec![
                 Cell::Multi(1, 2, zero_pads(), probe(50.0, 10.0, 2.0)),
@@ -532,22 +505,14 @@ mod tests {
         // 3 boxes: the Multi cell + the two row1 Normals; the row0 Empty
         // (the span's reserved slot) produces none.
         assert_eq!(solved.cells.len(), 3);
-        // The multi-cell starts at column 0.
         assert_eq!(solved.cells[0].x, Length::pt(0.0));
     }
 
-    /// A multi-ROW span: the counterpart of the multi-column case above, and
-    /// the one the easytable corpus document actually leans on (its `merge
-    /// (4, 1) (5, 2)` / `merge (4, 4) (5, 4)`). Pins the two things a
-    /// column-span test cannot reach — that a `MultiCell` with `nr > 1`
-    /// contributes NOTHING to its own row's height (tabular.ml:34-42, so the
-    /// row is sized by its ordinary cells alone) and that its content is then
-    /// CENTERED in the combined vertical extent (tabular.ml:288-297).
-    ///
-    /// This path went unmeasured by the corpus gate for a long time: the
-    /// vendored easytable's `Matrix.set-nth` was corrupting the grid before
-    /// the solver ever saw a span, so both engines were rendering a truncated
-    /// table and agreeing about it.
+    /// A multi-ROW span (what easytable's `merge` leans on). Pins the two
+    /// things a column-span test cannot reach: a `MultiCell` with `nr > 1`
+    /// contributes NOTHING to its own row's height (tabular.ml:34-42), and
+    /// its content is CENTERED in the combined vertical extent
+    /// (tabular.ml:288-297).
     #[test]
     fn multi_row_span_centers_content_across_the_rows_it_spans() {
         // col0: Normal(h10,d2) | Multi(2,1, h6,d1) | Empty
@@ -580,22 +545,21 @@ mod tests {
                 Length::pt(0.0)
             ]
         );
-        // A single-COLUMN span still sets its column's width (nc == 1), but
-        // loses to the wider ordinary cell above it.
+        // A single-COLUMN span sets its column's width (nc == 1), but loses
+        // to the wider ordinary cell above it.
         assert_eq!(
             solved.xs,
             vec![Length::pt(0.0), Length::pt(20.0), Length::pt(35.0)]
         );
 
         // r0c0, r0c1, r1c0(span), r1c1, r2c1 — the r2c0 `Empty` the span
-        // reserves produces no box.
+        // reserves produces none.
         assert_eq!(solved.cells.len(), 5);
         assert_eq!(solved.cells[0].baseline_y, Length::pt(23.0)); // 33 - 10
         assert_eq!(solved.cells[1].baseline_y, Length::pt(23.0));
         // The span: combined extent 12 + 9 = 21, content 6 + 1 = 7, so
-        // lenspace = 7 and the content sits at 6 + 7 = 13 below the row top
-        // (21) => baseline 8, i.e. centered rather than sitting on row 1's
-        // own baseline (12).
+        // lenspace = 7 and the content sits 6 + 7 = 13 below the row top
+        // (21) => baseline 8, centered, not on row 1's own baseline (12).
         assert_eq!(solved.cells[2].x, Length::pt(0.0));
         assert_eq!(solved.cells[2].baseline_y, Length::pt(8.0));
         assert_eq!(solved.cells[3].baseline_y, Length::pt(12.0)); // 21 - 9

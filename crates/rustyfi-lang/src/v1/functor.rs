@@ -1,74 +1,56 @@
-//! Sub-slice 2f-1 (`…/tmp/slice2f-functors.md` §2.1, §4.A): the functor-
-//! instantiation substitution pre-pass — a self-contained `cst_v1 -> cst_v1`
-//! clone+rewrite, consumed by `v1/lower.rs` (and, for the surface-only body-
-//! shape check, `v1/surface.rs`) at every functor application.
+//! Functor-instantiation substitution — a self-contained
+//! `cst_v1 -> cst_v1` clone+rewrite, consumed by `v1/lower.rs` and (for the
+//! surface-only body-shape check) `v1/surface.rs` at every functor
+//! application.
 //!
-//! **The model (spec §2.1).** A functor `Make = fun (X : S) -> body` is
-//! stored SYNTACTICALLY (never lowered to a runtime value — like a named
-//! `signature`). An application `Make Arg` is instantiated by rewriting the
-//! body: every reference whose leading module segment is the parameter name
-//! is replaced by the ARGUMENT's already-resolved ABSOLUTE path
-//! (`Key.compare` -> `Int.compare`) — because a relative dotted sibling
-//! reference does not resolve at the elaborator layer (`elaborate.rs`'s
-//! `qualify_key`/`push_named_binding`, verified in the spec's §0.4), while an
-//! absolute path (a dependency's export, or a sibling nested module's own
-//! fully-qualified export) always does. [`substitute_binds`] performs this
-//! rewrite; the caller then re-lowers the substituted binds with the
-//! ordinary, UNCHANGED `v1/lower.rs` helpers (`lower_module_bind`/
-//! `lower_bind_v1`) — this module never itself lowers anything, it only
-//! produces another `cst_v1` tree.
+//! **The model.** A functor `Make = fun (X : S) -> body` is stored
+//! SYNTACTICALLY, never lowered to a runtime value. An application `Make
+//! Arg` is instantiated by rewriting the body: every reference whose leading
+//! module segment is the parameter name is replaced by the ARGUMENT's
+//! already-resolved ABSOLUTE path (`Key.compare` -> `Int.compare`) — a
+//! relative dotted sibling reference does not resolve at the elaborator
+//! layer (`elaborate.rs`'s `qualify_key`), an absolute path always does.
+//! [`substitute_binds`] performs the rewrite; the caller re-lowers the
+//! result with the ordinary, UNCHANGED `v1/lower.rs` helpers — this module
+//! never itself lowers anything.
 //!
-//! **Exactly three (plus one deliberately-deferred) reference sites carry a
-//! parameter reference** (spec §2.1):
+//! **Reference sites that carry a parameter reference**, all rewritten the
+//! same way:
 //!
 //! 1. A value reference: [`ast_v1::Atomic::VarWithMod`] (`Key.compare`).
 //! 2. A type atom: [`ast_v1::TypeAtom::LongName`] (`Key.t`).
 //! 3. A type-application head: [`ast_v1::TypeApp::AppliedLong`] (`Key.t
 //!    int`).
-//! 4. (found beyond the spec's own list, same treatment as 1) an embedded
-//!    text-mode variable reference: `VarInHorzTok`/`VarInVertTok`/
-//!    `VarInMathTok` all carry an optional `mods` prefix too (`#Mod.var`,
-//!    `leaf.rs`'s `qualified_name_tokens!` macro) — substituted identically
-//!    to site 1.
+//! 4. An embedded text-mode variable reference (`VarInHorzTok`/
+//!    `VarInVertTok`/`VarInMathTok`'s optional `mods` prefix, `#Mod.var`).
 //! 5. A module PATH reference (`ast_v1::ModChainV1`/`ast_v1::SigBotV1::Path`)
-//!    whose head is the parameter — substituted the same way, needed for a
-//!    nested `module N = Key.Sub` or `signature S = Key.SomeSig` inside a
-//!    functor body (no demand package needs this, but it costs nothing extra
-//!    once the head-splice helper exists).
+//!    whose head is the parameter — needed for a nested `module N = Key.Sub`
+//!    or `signature S = Key.SomeSig` inside a functor body.
 //!
 //! **Deliberately NOT substituted — a precise [`LowerError`], never a silent
-//! pass-through (spec §2.1 risk 3):** a parameter-qualified COMMAND name
-//! (`\Key.cmd`/`+Key.cmd`, `HorzCmdWithModTok`/`VertCmdWithModTok`/
-//! `MathCmdWithModTok`) — no demand package's functor parameter ever carries
-//! a command member (`Ord`/`Settings` declare only `val`s), so rewriting
-//! these is Sub-slice 2f-2. A bare `Key` used where only a SINGLE module
-//! segment fits (`let open Key in …`, `Key :> S`) is substituted when the
-//! argument itself is single-segment, and a precise `LowerError` (again 2f-2)
-//! when the argument is multi-segment (neither shape needed by any demand
-//! package).
+//! pass-through:** a parameter-qualified COMMAND name (`\Key.cmd`/
+//! `+Key.cmd`) — no demand package's functor parameter carries a command
+//! member. A bare `Key` where only a
+//! SINGLE module segment fits (`let open Key in …`, `Key :> S`) substitutes
+//! when the argument is single-segment, and errors when it isn't.
 //!
-//! **No `_` wildcard in any match arm below** (spec §4.A) — a future
-//! `ast_v1` grammar arm must break THIS module's build, not silently drop a
-//! parameter reference on the floor. The one exception: subtrees PROVEN to
-//! carry no qualified-name/command-name site at all
-//! ([`ast_v1::Pattern`]/[`ast_v1::PatBot`] and everything reachable only
-//! through them, plus [`ast_v1::KindV1`]) are cloned WHOLESALE rather than
-//! walked field-by-field — sound today (no `Pattern` arm anywhere names a
-//! `VarWithModTok`/qualified command, confirmed by inspection of
-//! `cst_v1.rs`), but flagged here as the one place a future grammar addition
-//! to the pattern layer would need re-review (spec §8 risk 3's family).
+//! **No `_` wildcard in any match arm below** — a future `ast_v1` grammar
+//! arm must break this module's build, not silently drop a parameter
+//! reference. The one exception: [`ast_v1::Pattern`]/[`ast_v1::PatBot`] (and
+//! everything reachable only through them) plus [`ast_v1::KindV1`] are
+//! cloned WHOLESALE — sound today (no `Pattern` arm names a qualified
+//! reference), but the one place a future pattern-layer grammar addition
+//! needs re-review.
 
 use crate::v1::lower::LowerError;
 use rustyfi_syntax::cst_v1::{self, ast as ast_v1};
 use rustyfi_syntax::leaf::*;
 use rustyfi_syntax::Span;
 
-/// The functor body's OWN struct binds, if it is (as every 2f-1 demand
-/// package's functor is) a literal `struct … end` — `None` for any other
-/// `ModExpr` shape (`Var`/`Coerce`/`App`/nested `Functor`), which 2f-1 does
-/// not instantiate (an alias-bodied, applied-bodied, or curried functor body
-/// is Sub-slice 2f-2 territory; the caller turns a `None` here into a
-/// precise `LowerError`/a `None` frozen resolution, never a panic).
+/// The functor body's own struct binds, if it is a literal `struct … end`
+/// (as every demand package's functor is) — `None` for any other
+/// `ModExpr` shape (`Var`/`Coerce`/`App`/nested `Functor`); the caller turns
+/// `None` into a precise `LowerError`, never a panic.
 pub(crate) fn functor_body_binds(body: &ast_v1::ModExpr) -> Option<&[cst_v1::StructBindV1]> {
     match body {
         ast_v1::ModExpr::Struct { binds, .. } => Some(binds.as_slice()),
@@ -80,12 +62,10 @@ pub(crate) fn functor_body_binds(body: &ast_v1::ModExpr) -> Option<&[cst_v1::Str
 }
 
 /// Instantiate a functor's body (`binds`, from [`functor_body_binds`]) for
-/// one application: clone the whole subtree, rewriting every parameter
-/// reference's leading segment to `arg_path` (the argument's own resolved
-/// absolute path, e.g. `["Code", "DefaultSettings"]`). The result is an
-/// ordinary, freshly-owned `cst_v1` tree with NO reference to `param` left in
-/// it anywhere it could resolve as a module name — the caller re-lowers it
-/// with the unchanged `v1/lower.rs` helpers.
+/// one application: clone the subtree, rewriting every parameter
+/// reference's leading segment to `arg_path` (e.g. `["Code",
+/// "DefaultSettings"]`). The caller re-lowers the result with the unchanged
+/// `v1/lower.rs` helpers.
 pub(crate) fn substitute_binds(
     binds: &[cst_v1::StructBindV1],
     param: &str,
@@ -98,13 +78,10 @@ pub(crate) fn substitute_binds(
         .collect()
 }
 
-/// Sub-slice 2f-2b (`…/tmp/slice2d3b-2f2-sigmembers.md` §5.2-2): the
-/// codomain-substitution twin of [`substitute_binds`] — `cod[param :=
-/// arg_path]`, reusing the SAME [`ParamSubstRewrite`] this whole module's
-/// walker already drives for body substitution (one head-splice
-/// implementation, module doc comment's risk-6 guard). `module_check.rs`'s
-/// per-application abstract-result sealing calls this to compute the
-/// DECLARED codomain at the application site before sealing the
+/// The codomain-substitution twin of [`substitute_binds`]
+/// — `cod[param := arg_path]`, reusing the same [`ParamSubstRewrite`].
+/// `module_check.rs`'s per-application abstract-result sealing calls this to
+/// compute the declared codomain at the application site before sealing the
 /// instantiated result against it.
 pub(crate) fn subst_sig_expr_for_param(
     cod: &ast_v1::SigExpr,
@@ -115,26 +92,20 @@ pub(crate) fn subst_sig_expr_for_param(
     subst_sig_expr(cod, &rw, &[])
 }
 
-/// Sub-slice 2f-2a (`…/tmp/slice2d3b-2f2-sigmembers.md` §4.2): the reusable
-/// head-splice rule this whole module's walker consults at every leaf/module-
-/// path site, generalizing what was a hard-coded `(param, arg_path)` pair in
-/// 2f-1. Two implementations:
+/// The reusable head-splice rule this walker consults at
+/// every leaf/module-path site. Two implementations:
 ///
-/// - [`ParamSubstRewrite`]: 2f-1's functor-instantiation substitution,
-///   reproduced byte-for-byte — splice the argument's absolute path in place
-///   of a leading parameter-name segment; `path` (the reference site's own
-///   module path) is irrelevant here and always ignored.
-/// - `v1/lower.rs`'s `AbsolutizeRewrite` (defined there, alongside
-///   [`SurfaceEnv`](crate::v1::surface::SurfaceEnv) access — this module
-///   deliberately has no direct dependency on `v1/surface.rs` beyond the
-///   `resolve_module` call `AbsolutizeRewrite` itself makes): the lowering
-///   pre-pass that absolutizes a RELATIVE SIBLING module head (`Impl.add` ->
+/// - [`ParamSubstRewrite`]: functor-instantiation substitution —
+///   splice the argument's absolute path in place of a leading
+///   parameter-name segment; `path` is irrelevant here and always ignored.
+/// - `v1/lower.rs`'s `AbsolutizeRewrite`: the lowering pre-pass that
+///   absolutizes a RELATIVE SIBLING module head (`Impl.add` ->
 ///   `Doc.S.Impl.add`) by consulting `path` for an outward search.
 ///
-/// `mods` is the dotted head found at a reference site (`["Key"]`/
-/// `["Impl"]`/`["A","B"]`); `path` is the module path of the reference SITE
-/// itself (threaded by the walker, extended at every `Bind::Module`);
-/// `Ok(None)` means "leave `mods` unchanged".
+/// `mods` is the dotted head at a reference site (`["Key"]`/`["A","B"]`);
+/// `path` is the reference site's own module path (threaded by the walker,
+/// extended at every `Bind::Module`); `Ok(None)` means "leave `mods`
+/// unchanged".
 pub(crate) trait HeadRewrite {
     fn rewrite(
         &self,
@@ -143,11 +114,9 @@ pub(crate) trait HeadRewrite {
         span: Span,
     ) -> Result<Option<Vec<String>>, LowerError>;
 
-    /// Command-name leaf sites (`\Mod.cmd`/`+Mod.cmd`/…, spec §2.1's
-    /// deliberate non-rewrite): default = same rule as [`Self::rewrite`]
-    /// (an absolutized command head is a landed, working shape, spec
-    /// §4.2-2); [`ParamSubstRewrite`] overrides this to REJECT instead — no
-    /// demand package's functor parameter carries a command member.
+    /// Command-name leaf sites (`\Mod.cmd`/`+Mod.cmd`): default = same rule
+    /// as [`Self::rewrite`]; [`ParamSubstRewrite`] overrides this to REJECT
+    /// instead (no functor parameter carries a command member).
     fn rewrite_command(
         &self,
         mods: &[String],
@@ -157,45 +126,39 @@ pub(crate) trait HeadRewrite {
         self.rewrite(mods, path, span)
     }
 
-    /// Whether a BARE single-segment reference slot (`let open Key in …`,
-    /// `Key :> S` — grammatically a lone `CtorTok`, never a dotted chain)
-    /// may be rewritten at all. [`ParamSubstRewrite`] = true (the parameter
-    /// itself, used bare, must still substitute); the absolutizer = false
-    /// (no demand needs it, and a bare slot cannot grammatically hold a
-    /// multi-segment absolutized path — spec §4.2 leaves this un-rewritten
-    /// rather than risk a spurious width error on a working sealed alias).
+    /// Whether a bare single-segment slot (`let open Key in …`, `Key :> S`)
+    /// may be rewritten at all. [`ParamSubstRewrite`] = true; the
+    /// absolutizer = false (a bare slot cannot grammatically hold a
+    /// multi-segment path, and no demand needs it — leaving it alone beats
+    /// a spurious width error on a working sealed alias).
     fn rewrite_bare_names(&self) -> bool {
         true
     }
 
-    /// Whether to descend into signature bodies (`sig … end` decls, `:>`
-    /// annotations, `with type` refinements) at all. [`ParamSubstRewrite`]
+    /// Whether to descend into signature bodies at all. [`ParamSubstRewrite`]
     /// = true (a parameter reference inside a nested signature must still
-    /// substitute, unchanged 2f-1 behavior); the absolutizer = false (spec
-    /// §4.2-4: signature bodies are deliberately NOT absolutized — no
-    /// demand sig references a sibling module relatively).
+    /// substitute); the absolutizer = false (signature bodies are
+    /// deliberately not absolutized — no demand sig references a sibling
+    /// module relatively).
     fn walk_signatures(&self) -> bool {
         true
     }
 
-    /// Whether encountering a `ModExpr::Functor` NODE while walking is
-    /// necessarily a curried/nested functor literal (an error). Only true
-    /// for [`ParamSubstRewrite`], which walks EXCLUSIVELY inside an already-
-    /// known functor's own body (`substitute_binds`'s whole job) — any
-    /// `Functor` node found there truly is nested. The absolutizer runs
-    /// over ORDINARY, un-nested binds (every `lower_module_bind` call), so
-    /// a `Functor` node there is an everyday sibling-level definition —
-    /// left completely untouched instead (spec §4.2's scope: only an
-    /// APPLICATION's substituted-then-absolutized body ever needs this
-    /// walker to look inside a functor's contents at all).
+    /// Whether encountering a `ModExpr::Functor` node while walking is
+    /// necessarily a curried/nested functor literal (an error). True only
+    /// for [`ParamSubstRewrite`], which walks EXCLUSIVELY inside an
+    /// already-known functor's own body, so any `Functor` node found there
+    /// truly is nested. The absolutizer runs over ORDINARY, un-nested binds,
+    /// so a `Functor` node there is an everyday sibling-level definition —
+    /// left untouched; only an application's substituted-then-absolutized
+    /// body needs this walker inside a functor's contents at all.
     fn reject_nested_functor_literals(&self) -> bool {
         true
     }
 }
 
-/// 2f-1's original substitution rule, now expressed as a [`HeadRewrite`]
-/// impl instead of a hard-coded `(param, arg_path)` pair threaded by hand —
-/// behavior-identical to the pre-2f-2a code.
+/// The functor-instantiation substitution rule, as a [`HeadRewrite`]
+/// impl.
 pub(crate) struct ParamSubstRewrite<'a> {
     param: &'a str,
     arg_path: &'a [String],
@@ -237,10 +200,8 @@ impl HeadRewrite for ParamSubstRewrite<'_> {
     }
 }
 
-/// Every qualified-name leaf site (`VarWithModTok`/`TypeAtom::LongName`/
-/// `TypeApp::AppliedLong`/the `VarInHorz`/`VarInVert`/`VarInMathTok` family/
-/// `SigBotV1::Path`) reduces to this one formula: consult `rw`, and splice
-/// its answer in place of `mods` (keeping any further segments beyond the
+/// Every qualified-name leaf site reduces to this one formula: consult `rw`,
+/// splice its answer in place of `mods` (keeping further segments beyond the
 /// rewritten head), or leave `mods` unchanged on `Ok(None)`.
 fn rewrite_mods(
     mods: &[String],
@@ -253,12 +214,9 @@ fn rewrite_mods(
         .unwrap_or_else(|| mods.to_vec()))
 }
 
-/// A bare single-segment reference slot (`let open Key in …`, `Key :> S`, or
-/// `ModChainV1::Single("Key")`'s OWN name, grammatically a lone `CtorTok`) —
-/// gated by [`HeadRewrite::rewrite_bare_names`]; a `rw.rewrite` answer with
-/// more than one segment cannot be spliced into a slot that grammatically
-/// holds exactly one segment — a precise `LowerError`, not a silent
-/// truncation (2f-1's `subst_bare_param_name`, generalized).
+/// A bare single-segment slot (`let open Key in …`, `Key :> S`), gated by
+/// [`HeadRewrite::rewrite_bare_names`]; an answer with more than one segment
+/// cannot fit — a precise `LowerError`, not a silent truncation.
 fn rewrite_bare_name(
     name: &str,
     span: Span,
@@ -323,14 +281,11 @@ fn subst_struct_bind_v1(
     Ok(cst_v1::StructBindV1(Box::new(subst_bind(&sb.0, rw, path)?)))
 }
 
-/// Sub-slice 2f-2a (spec §4.2 step 3): the `Bind`-level (rather than
-/// `StructBindV1`-level) twin of [`substitute_binds`] — `v1/lower.rs::
-/// lower_module_bind`'s own `binds` shape is `impl IntoIterator<Item =
-/// &cst_v1::Bind>` (its doc comment explains why a top-level library's
-/// `Vec<Bind>` and a nested module's `Vec<StructBindV1>` differ), so this
-/// is the entry point that module reaches for, driven by ANY [`HeadRewrite`]
-/// — today only `v1/lower.rs`'s `AbsolutizeRewrite`, run as a pre-pass
-/// before every `lower_module_bind` invocation.
+/// The `Bind`-level twin of [`substitute_binds`] —
+/// `v1/lower.rs::lower_module_bind` takes `impl IntoIterator<Item =
+/// &cst_v1::Bind>`, so this is the entry point it reaches for, driven by any
+/// [`HeadRewrite`] (today only `AbsolutizeRewrite`, run as a pre-pass before
+/// every `lower_module_bind` call).
 pub(crate) fn rewrite_binds<'a>(
     binds: impl IntoIterator<Item = &'a cst_v1::Bind>,
     rw: &dyn HeadRewrite,
@@ -475,12 +430,11 @@ fn subst_bind(
             eq,
             body,
         } => {
-            // 2f-2a (spec §4.2): the walker threads `path`, extending it
-            // here — the ONE place a nested module is introduced — so a
-            // reference site inside `body` sees the correct (deeper)
-            // enclosing module path for outward resolution
-            // (`AbsolutizeRewrite`; `ParamSubstRewrite` ignores `path`
-            // entirely, so this is a no-op for 2f-1's own behavior).
+            // The walker threads `path`, extending it here — the ONE
+            // place a nested module is introduced — so a reference site
+            // inside `body` sees the correct enclosing path for outward
+            // resolution (`AbsolutizeRewrite`; `ParamSubstRewrite` ignores
+            // `path`, so this is a no-op there).
             let mut child_path = path.to_vec();
             child_path.push(name.name.clone());
             cst_v1::Bind::Module {
@@ -534,9 +488,9 @@ fn subst_param(
     path: &[String],
 ) -> Result<ast_v1::Param, LowerError> {
     Ok(ast_v1::Param {
-        // `OptParamsV1`'s entries are plain `label = var` binder pairs (no
-        // `Expr`/`TypeExpr` inside) — no parameter-reference site exists
-        // here, so cloning wholesale is exact.
+        // `OptParamsV1` entries are plain `label = var` pairs with no
+        // `Expr`/`TypeExpr` inside — no reference site here, cloning
+        // wholesale is exact.
         opts: p.opts.clone(),
         body: subst_param_body(&p.body, rw, path)?,
     })
@@ -548,8 +502,7 @@ fn subst_param_body(
     path: &[String],
 ) -> Result<ast_v1::ParamBody, LowerError> {
     Ok(match pb {
-        // `PatBot` (and everything reachable only through it) is proven
-        // reference-free (module doc comment) — clone wholesale.
+        // `PatBot` is proven reference-free (module doc) — clone wholesale.
         ast_v1::ParamBody::Pat(p) => ast_v1::ParamBody::Pat(p.clone()),
         ast_v1::ParamBody::Ascribed { paren, inner } => ast_v1::ParamBody::Ascribed {
             paren: paren.clone(),
@@ -1011,7 +964,7 @@ fn subst_inline_elem(
         ast_v1::InlineElem::CodeText(t) => ast_v1::InlineElem::CodeText(t.clone()),
         ast_v1::InlineElem::Space(t) => ast_v1::InlineElem::Space(t.clone()),
         ast_v1::InlineElem::Break(t) => ast_v1::InlineElem::Break(t.clone()),
-        // Site 4 ("found beyond the spec", module doc comment).
+        // Site 4 (module doc comment).
         ast_v1::InlineElem::Embed { var, semi } => ast_v1::InlineElem::Embed {
             var: VarInHorzTok {
                 mods: rewrite_mods(&var.mods, rw, path, var.span)?,
@@ -1170,7 +1123,7 @@ fn subst_math_bot(
                 .collect::<Result<_, LowerError>>()?,
         },
         ast_v1::MathBot::Chars(t) => ast_v1::MathBot::Chars(t.clone()),
-        // Site 4 ("found beyond the spec", module doc comment).
+        // Site 4 (module doc comment).
         ast_v1::MathBot::Embed(t) => ast_v1::MathBot::Embed(VarInMathTok {
             mods: rewrite_mods(&t.mods, rw, path, t.span)?,
             name: t.name.clone(),
@@ -1582,22 +1535,11 @@ fn subst_mod_expr(
     path: &[String],
 ) -> Result<ast_v1::ModExpr, LowerError> {
     Ok(match m {
-        // `ParamSubstRewrite` (2f-1): this walker is ONLY ever run over the
-        // CONTENTS of an already-known functor body (`substitute_binds`'s
-        // whole job), so a `ModExpr::Functor` encountered HERE necessarily
-        // means a functor DEFINED inside another functor's body (curried/
-        // nested) — out of the first-order 2f-1 slice (§0.6 of the spec: no
-        // demand package is higher-order) — a precise error, not a silent
-        // identity pass-through.
-        //
-        // `AbsolutizeRewrite` (2f-2a, spec §4.2): this walker runs over
-        // ORDINARY binds before every `lower_module_bind` — a `ModExpr::
-        // Functor` here is an everyday, SIBLING-level functor DEFINITION
-        // (never itself lowered — `lower_bind_v1`'s own `Functor` arm emits
-        // zero bindings for it), not a nested one. Its body is absolutized
-        // fresh, from scratch, only at APPLICATION time (after parameter
-        // substitution, at the instantiated site) — so it is left
-        // completely untouched here, never descended into.
+        // See `HeadRewrite::reject_nested_functor_literals`: `ParamSubstRewrite`
+        // rejects a `Functor` node here (nested/curried functors are out of
+        // scope for it); `AbsolutizeRewrite` never takes this branch on
+        // ordinary binds, so it is left untouched — absolutized fresh only
+        // at its own application site.
         ast_v1::ModExpr::Functor {
             fun_kw,
             lp,
@@ -1666,10 +1608,7 @@ fn subst_sig_expr(
     rw: &dyn HeadRewrite,
     path: &[String],
 ) -> Result<ast_v1::SigExpr, LowerError> {
-    // Spec §4.2-4: signature bodies are deliberately NOT absolutized (no
-    // demand sig references a sibling module relatively); `ParamSubstRewrite`
-    // still needs to descend here (a parameter reference inside a nested
-    // signature must still substitute, unchanged 2f-1 behavior).
+    // See `HeadRewrite::walk_signatures`.
     if !rw.walk_signatures() {
         return Ok(s.clone());
     }
@@ -1855,7 +1794,7 @@ mod tests {
         functor_body_binds(fbody).expect("a struct-literal functor body")
     }
 
-    /// T-fn1 (spec §5): `Key.compare`/`Key.t`/`Key.t int` all become
+    /// T-fn1: `Key.compare`/`Key.t`/`Key.t int` all become
     /// `Int.*`; the control reference `Local.x` is untouched.
     #[test]
     fn substitute_param_rewrites_the_three_leaf_sites_and_leaves_others_alone() {
@@ -1933,7 +1872,7 @@ mod tests {
     }
 
     /// A parameter-qualified command name (`\Key.cmd`) inside a functor body
-    /// is a precise, live error — never a silent pass-through (spec §2.1).
+    /// is a precise, live error — never a silent pass-through.
     #[test]
     fn substitute_param_rejects_a_parameter_qualified_command_name() {
         let file = parse(

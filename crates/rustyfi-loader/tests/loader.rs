@@ -159,9 +159,9 @@ fn require_resolves_against_lib_root_dist_packages() {
 }
 
 // ============================================================================
-// Slice X4a: a V0_0-rooted load's `@require:` reaches the 0.1 corpus
-// `dist-v01/packages/`, and the resolved target is tagged V0_1 (the Q4-mirror
-// rule) even though its `module …` head gives `sniff_version` no signal.
+// A V0_0-rooted load's `@require:` reaches the 0.1 corpus
+// `dist-v01/packages/`, and the resolved target is tagged V0_1
+// even though its `module …` head gives `sniff_version` no signal.
 // ============================================================================
 
 #[test]
@@ -233,10 +233,9 @@ fn require_resolves_the_nested_per_package_dist_v01_layout() {
 }
 
 /// A pure-0.0.6 load with NO `dist-v01/packages/` target must be completely
-/// unaffected by the X4a Q4-mirror rule — every node stays `V0_0`, exactly
-/// as `require_resolves_against_lib_root_dist_packages` above already pins,
-/// re-asserted here with the `version` field explicit (the non-regression
-/// invariant the X4a task brief calls out by name).
+/// unaffected by the 0.1-corpus provenance rule — every node stays `V0_0`, as
+/// `require_resolves_against_lib_root_dist_packages` above already pins,
+/// re-asserted here with the `version` field explicit.
 #[test]
 fn pure_v006_load_is_unaffected_by_the_v01_q4_mirror_rule() {
     let dir = TempDir::new("require-pure-v006");
@@ -365,13 +364,10 @@ fn import_resolves_relative_to_the_containing_file_not_the_entry_dir() {
     );
 }
 
-// `unimplemented_version_is_rejected_before_touching_disk` (formerly here)
-// deleted at the 0.1.0 Slice 1 finale's flip commit
-// (v1-finale-spec.md §7 item 2): its premise — `RustyfiVersion::V0_1` is
-// gated out of `is_implemented()` — is now false, and `RustyfiVersion` has
-// exactly two variants, so no unimplemented version remains to substitute.
-// `LoadError::UnsupportedVersion` itself stays alive (`lib.rs`'s
-// `is_implemented()` guard in `load()`) for any future third generation.
+// `LoadError::UnsupportedVersion` has no test: `RustyfiVersion` has exactly
+// two variants and both are implemented, so there is no unimplemented version
+// to feed `lib.rs`'s `is_implemented()` guard in `load()`. The guard stays
+// alive for any future third generation.
 
 #[test]
 fn default_load_options_targets_v0_0() {
@@ -379,10 +375,10 @@ fn default_load_options_targets_v0_0() {
 }
 
 // ---------------------------------------------------------------------------
-// Ld3a: LoadMode::Envelopes (the saphe-split `use … of` open resolver).
+// LoadMode::Envelopes (the saphe-split `use … of` open resolver).
 // ---------------------------------------------------------------------------
 
-/// Envelopes mode, 0.1, no deps config (the Ld3a happy path).
+/// Envelopes mode, 0.1, no deps config (the happy path).
 fn envelopes_v01() -> LoadOptions {
     LoadOptions {
         version: RustyfiVersion::V0_1,
@@ -593,7 +589,7 @@ fn envelopes_deps_file_invalid() {
 fn legacy_rejects_use_headers_with_mode_hint() {
     let dir = TempDir::new("legacy-use");
     // V0_1 grammar, but the DEFAULT (Legacy) mode: a `use` header is a typed
-    // mode error, not the old parse error.
+    // mode error, not a parse error.
     let entry = dir.write("doc.saty", "use package X\nlet x = 1 in x");
     let opts = LoadOptions {
         version: RustyfiVersion::V0_1,
@@ -631,7 +627,7 @@ fn default_mode_is_legacy() {
     assert_eq!(LoadOptions::default().mode, LoadMode::Legacy);
 }
 
-// ---- Ld3b-2: the deps-config (`--deps`) resolution path -----------------
+// ---- the deps-config (`--deps`) resolution path --------------------------
 
 /// Options with `deps: Some(path)`.
 fn envelopes_v01_with_deps(deps_path: PathBuf) -> LoadOptions {

@@ -1,4 +1,4 @@
-% math-package completion M4 seal-surface probe: `Math.math-scheme` is a
+% Seal-surface probe: `Math.math-scheme` is a
 % real internal helper (`math.satyh`'s `math-scheme`, used by `+math`/
 % `\eqn`) that upstream's sig deliberately does NOT export — referencing it
 % qualified must be rejected now that the module is genuinely sealed

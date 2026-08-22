@@ -1,28 +1,20 @@
 //! End-to-end: compile each fixture `.saty` to a PDF through the real
-//! multi-file loader (`rustyfi_loader::load` + the same prelude-merge the
-//! CLI's `merge_program` does), then verify the text — via pdftotext when
-//! available, otherwise by grepping the uncompressed content streams for the
-//! `Tj` string operands.
+//! multi-file loader, then verify the text — via pdftotext when available,
+//! otherwise by grepping the uncompressed content streams for the `Tj`
+//! string operands.
 //!
-//! Phase 4: `document`/`+p`/`\emph` are no longer hardcoded Rust natives —
-//! every fixture now `@require:`s the real `stdja-mini` stdlib package
-//! (`lib-rustyfi/dist/packages/stdja-mini.satyh`), so every compile below
-//! goes through the loader with a `lib_root` pointing at this repo's
-//! `lib-rustyfi/`, not `rustyfi_lang::compile_document` directly.
+//! `document`/`+p`/`\emph` are not hardcoded Rust natives: every fixture
+//! `@require:`s `lib-rustyfi/dist/packages/stdja-mini.satyh`, so every
+//! compile goes through the loader with a `lib_root` pointing at this repo's
+//! `lib-rustyfi/`.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// The repo's `lib-rustyfi/` directory, resolved the same way the task
-/// describes for tests: relative to this crate's own manifest directory.
 fn lib_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../lib-rustyfi")
 }
 
-/// Load `entry` and its full `@require:`/`@import:` dependency graph
-/// (against [`lib_root`]), then concatenate the dependency-ordered library
-/// preludes ahead of the entry document's own prelude — exactly
-/// `rustyfi`'s `merge_program` (src/main.rs).
 fn as_v006(cst: rustyfi_loader::LoadedCst) -> rustyfi_syntax::cst::File {
     match cst {
         rustyfi_loader::LoadedCst::V0_0(f) => f,
@@ -32,6 +24,8 @@ fn as_v006(cst: rustyfi_loader::LoadedCst) -> rustyfi_syntax::cst::File {
     }
 }
 
+/// Dependency-ordered library preludes ahead of the entry document's own —
+/// exactly `rustyfi`'s `merge_program` (src/main.rs).
 fn load_and_merge(entry: &Path) -> rustyfi_syntax::cst::File {
     let program = rustyfi_loader::load(
         entry,
@@ -60,8 +54,7 @@ fn load_and_merge(entry: &Path) -> rustyfi_syntax::cst::File {
 }
 
 /// `annot` (and its `@require` chain: pervasives, color, gr, option) parses
-/// deeply enough to overflow the default 8 MiB test-thread stack — mirrors
-/// `rustyfi-lang/tests/stdlib_tier0.rs`'s helper of the same name.
+/// deeply enough to overflow the default 8 MiB test-thread stack.
 fn run_with_big_stack(f: impl FnOnce() + Send + 'static) {
     std::thread::Builder::new()
         .stack_size(64 * 1024 * 1024)
@@ -79,12 +72,9 @@ fn run_with_big_stack(f: impl FnOnce() + Send + 'static) {
 /// `text_to_boxes` splits each hyphenatable Latin word into fragments joined
 /// by empty-slot `Discretionary`s: "Reference" renders as `(Ref) Tj … (er) Tj
 /// … (ence) Tj`, whether or not the line breaker takes any of those breaks.
-///
-/// The fallbacks below run only when `pdftotext` is unavailable, and what they
-/// are actually asserting is that the text REACHED the PDF at all — so they
-/// join the operands back up rather than assume where the hyphenator split.
-/// Asserting on `(Reference)` instead made those five tests pass or fail on
-/// whether poppler happened to be on `PATH`.
+/// The fallbacks below assert only that the text REACHED the PDF at all, so
+/// they join the operands back up rather than assume where the hyphenator
+/// split.
 fn content_literals(bytes: &[u8]) -> String {
     let mut out = String::new();
     let mut i = 0;
@@ -148,12 +138,10 @@ fn fixture_compiles_to_valid_pdf_with_expected_text() {
             }
         }
         _ => {
-            // Fallback: content streams are uncompressed, so the Tj string
-            // operands are directly visible in the bytes.
-            // `\emph{SATySFi-in-Rust}.` sets the emphasized word (oblique) and
-            // the trailing `.` as separate text runs, so the period is not part
-            // of the same operand — and hyphenation splits the words further
-            // still, hence `content_literals`.
+            // Content streams are uncompressed, so the Tj string operands
+            // are directly visible. `\emph{SATySFi-in-Rust}.` sets the
+            // emphasized word and the trailing `.` as separate text runs, so
+            // the period is not part of the same operand.
             let hay = content_literals(&bytes);
             for expected in ["Hello,", "world!", "SATySFi-in-Rust"] {
                 assert!(
@@ -182,11 +170,6 @@ fn compile_phase2_fixture() -> Vec<u8> {
         .expect("PDF rendering must succeed")
 }
 
-/// End-to-end coverage for the phase-2 elaborator (operator-precedence fold,
-/// `let-rec`, `match`, and both `let-inline` forms) via a real `.saty`
-/// document, checked the same way as the milestone-1 fixture: pdftotext
-/// when available, otherwise a direct scan of the uncompressed content
-/// stream's `Tj` string operands.
 #[test]
 fn phase2_fixture_compiles_and_renders_expected_text() {
     let bytes = compile_phase2_fixture();
@@ -247,12 +230,6 @@ fn compile_phase2b_fixture() -> Vec<u8> {
         .expect("PDF rendering must succeed")
 }
 
-/// End-to-end coverage for the phase-2b elaborator additions (a module +
-/// qualified reference, `#label` field access, `let-mutable`/`while`/
-/// `before`-built countdown string, and `+p`) via a real `.saty` document,
-/// checked the same way as the earlier fixtures: pdftotext when available,
-/// otherwise a direct scan of the uncompressed content stream's `Tj` string
-/// operands.
 #[test]
 fn phase2b_fixture_compiles_and_renders_expected_text() {
     let bytes = compile_phase2b_fixture();
@@ -293,18 +270,13 @@ fn phase2b_fixture_compiles_and_renders_expected_text() {
     let _ = std::fs::remove_file(&tmp);
 }
 
-/// A non-fixture source string, compiled through the same loader path by
-/// writing it to a temp file that itself `@require:`s `stdja-mini` — `\emph`
-/// is no longer a Rust native, so exercising it (even for this error-path
-/// test) needs the real package.
-///
 /// Text the Base14 metrics can't represent (here: CJK `こんにちは`, which the
 /// WinAnsi-encoded base-14 fonts have no glyphs for) must fail *politely* at
-/// the PDF-encoding stage rather than crash. Note the error now surfaces from
+/// the PDF-encoding stage rather than crash. The error surfaces from
 /// `render_pdf` (as `Unencodable`), not from `compile_document_cst`: the
 /// compile pipeline degrades unknown glyphs to `.notdef`/`GlyphId(0)` for the
 /// TTF/CID path and so returns `Ok`, but the base-14 WinAnsi encoder still
-/// refuses characters outside its code page with a helpful message.
+/// refuses characters outside its code page.
 #[test]
 fn non_winansi_text_errors_politely() {
     let tmp = std::env::temp_dir().join(format!(
@@ -341,63 +313,44 @@ fn compile_graphics_fixture() -> Vec<u8> {
         .expect("PDF rendering must succeed")
 }
 
-/// End-to-end coverage for the Slice 1 graphics primitives:
-/// `start-path`/`line-to`/ `close-with-line` build a 20pt-square `path`,
-/// `fill`/`stroke` turn it into `graphics`, and a local `\graphics`
-/// command (`inline-graphics`) places it on the page. Checked by scanning
-/// the uncompressed content stream for the path operators the rectangle
-/// must produce — the box's local path coordinates are exact regardless of
-/// where real line/page layout ends up placing the box (`place_graphics`
-/// translates the whole box via one `cm`, never per-coordinate). Also
-/// covers roadmap C1 (`draw-text`, real glyph emission): the same callback
-/// draws a real `read-inline`d text run above the rectangle, and the
-/// content stream must additionally carry that run's `Td`/`Tj` —
-/// end-to-end proof `place_graphics`'s `NestedEmitter` reaches
-/// `render_pdf`'s own text path through the full compile pipeline, not
-/// just a hand-built `Page`.
+/// Graphics primitives. The box's local path coordinates are exact
+/// regardless of where layout places the box (`place_graphics` translates the
+/// whole box via one `cm`, never per-coordinate). Also covers
+/// `draw-text`: `place_graphics`'s `NestedEmitter` must reach `render_pdf`'s
+/// own text path through the full pipeline, not just a hand-built `Page`.
 #[test]
 fn graphics_fixture_compiles_and_renders_path_operators() {
     let bytes = compile_graphics_fixture();
     assert!(bytes.starts_with(b"%PDF-"), "not a PDF header");
 
     let hay = String::from_utf8_lossy(&bytes);
-    // Path construction: move to the rectangle's start, three line-tos, then
-    // `close_path` (`h`, zero operands, so bounded by newlines not spaces).
+    // `close_path` is `h`, zero operands, so bounded by newlines not spaces.
     for op in ["0 0 m", "20 0 l", "20 20 l", "0 20 l", "\nh\n"] {
         assert!(hay.contains(op), "content stream missing {op:?}:\n{hay}");
     }
-    // Fill (even-odd — upstream's `op_f'`) in RGB red, then a 1pt gray
-    // stroke — each re-emits its own copy of the path before painting it.
+    // Fill (even-odd — upstream's `op_f'`), then a 1pt gray stroke.
     for op in ["1 0 0 rg", "f*", "1 w", "0 G", "\nS\n"] {
         assert!(hay.contains(op), "content stream missing {op:?}:\n{hay}");
     }
-    // The whole box is placed via a single `cm` translate, not a per-
-    // coordinate flip.
+    // A single `cm` translate, not a per-coordinate flip.
     assert!(
         hay.contains(" cm\n"),
         "content stream missing the box's placement transform:\n{hay}"
     );
 
-    // Roadmap C1: `draw-text (0pt, 25pt) (read-inline ctx {Hi})` inside the
-    // same callback — a real inline text run, emitted via `place_graphics`'s
-    // `NestedEmitter` re-entering the writer's own `emit_box` at the run's
-    // box-local anchor. (Page count still 1: `compile_graphics_fixture`
-    // already asserts `doc.pages.len() == 1` before rendering.)
+    // `draw-text (0pt, 25pt) (read-inline ctx {Hi})` inside the same
+    // callback, emitted via `place_graphics`'s `NestedEmitter` re-entering
+    // the writer's own `emit_box` at the run's box-local anchor.
     for op in ["0 25 Td", "(Hi) Tj"] {
         assert!(hay.contains(op), "content stream missing {op:?}:\n{hay}");
     }
 }
 
-/// `list.satyg` + `stdja-mini` + this fixture's own `\tabular` definition
-/// (two variant-ctor-bearing closures, `NormalCell`/`MultiCell`) push the
-/// merged program's parse tree past the default thread stack's depth budget
-/// through syan's recursive-descent parser — the same reason
-/// `rustyfi-lang/tests/stdlib_tier0.rs`'s `run_with_big_stack` and
-/// `rustyfi-syntax/tests/roundtrip.rs`'s deep-nesting test spawn a
-/// bigger-stack thread for comparably-sized inputs. `Vec<u8>` (the rendered
-/// PDF bytes) is `Send`, so the whole compile-and-render can run on that
-/// thread and its result join back out normally (unlike `stdlib_tier0.rs`'s
-/// `Value`, which holds non-`Send` `Rc`s and must never cross the join).
+/// The merged program's parse tree exceeds the default thread stack's depth
+/// budget. `Vec<u8>` (the rendered PDF bytes) is `Send`, so the whole
+/// compile-and-render can run on the big-stack thread and join back out —
+/// unlike a `Value`, which holds non-`Send` `Rc`s and must never cross the
+/// join.
 fn compile_table_fixture() -> Vec<u8> {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/table.saty");
     std::thread::Builder::new()
@@ -416,27 +369,22 @@ fn compile_table_fixture() -> Vec<u8> {
         .expect("big-stack thread panicked (see assertion above)")
 }
 
-/// End-to-end coverage for the Slice 1 table subsystem: a self-contained,
-/// positional `\tabular` (the new `cell` type + `tabular` primitive)
-/// renders a 2x2 ruled grid — both the four cells' text and the grid rules
-/// must land in the same content stream, through the composite-box
-/// `emit_box` writer arm (§4 of the plan, the subsystem's biggest risk).
+/// A positional `\tabular` renders a 2x2 ruled grid: both the four cells'
+/// text and the grid rules must land in the same content stream, through the
+/// composite-box `emit_box` writer arm.
 #[test]
 fn table_fixture_compiles_and_renders_cell_text_and_rules() {
     let bytes = compile_table_fixture();
     assert!(bytes.starts_with(b"%PDF-"), "not a PDF header");
 
     let hay = String::from_utf8_lossy(&bytes);
-    // Cell text: each of the 2x2 grid's four letters is a `Tj` run.
     for letter in ["(A) Tj", "(B) Tj", "(C) Tj", "(D) Tj"] {
         assert!(
             hay.contains(letter),
             "content stream missing cell text {letter:?}:\n{hay}"
         );
     }
-    // Rule path ops (`m`/`l`), a stroke (`S`), a set line width (`w`), and a
-    // gray color op (`g`/`G`) — the ruled grid drawn through the existing
-    // `place_graphics`.
+    // The ruled grid, drawn through `place_graphics`.
     for op in [" m\n", " l\n", "\nS\n", " w\n"] {
         assert!(
             hay.contains(op),
@@ -449,9 +397,8 @@ fn table_fixture_compiles_and_renders_cell_text_and_rules() {
     );
 }
 
-/// Multi-file loading through the loader crate: a document `@require:`s the
-/// `stdja-mini` stdlib package and `@import:`s a local library, whose
-/// bindings (a value, a command, a function) all resolve.
+/// A document `@require:`s `stdja-mini` and `@import:`s a local library,
+/// whose bindings (a value, a command, a function) all resolve.
 #[test]
 fn multifile_import_compiles_and_renders() {
     let entry = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/multifile/main.saty");
@@ -502,9 +449,8 @@ fn compile_math_fixture() -> Vec<u8> {
 }
 
 /// The nearest preceding `Tf`-size / `Td`-y pair before `glyph_tj` (e.g.
-/// `"(2) Tj"`) in an uncompressed content stream — each math glyph is its
-/// own `BT / Tf / Td / Tj / ET` run (`place_math`), so the immediately
-/// preceding `Tf`/`Td` lines are exactly that glyph's own font size and
+/// `"(2) Tj"`). Each math glyph is its own `BT / Tf / Td / Tj / ET` run
+/// (`place_math`), so those lines are exactly that glyph's own font size and
 /// placed y.
 fn glyph_size_and_y(hay: &str, glyph_tj: &str) -> (f32, f32) {
     let tj_pos = hay
@@ -532,12 +478,11 @@ fn glyph_size_and_y(hay: &str, glyph_tj: &str) -> (f32, f32) {
     (size, y)
 }
 
-/// End-to-end coverage for the Slice 1 math engine: `${x^2}` and `${a+b}`
-/// are core `${…}` syntax (no `@require: math` — the math package isn't
-/// loaded yet, §G). Checked directly against the uncompressed content
-/// stream (not `pdftotext`, which discards size/position) since the
-/// acceptance is the *offset and scale* of the superscript, not just which
-/// characters appear.
+/// `${x^2}` and `${a+b}` are core `${…}` syntax, exercised with no
+/// `@require: math` at all. Checked against the
+/// uncompressed content stream, not `pdftotext` (which discards
+/// size/position), since the acceptance is the *offset and scale* of the
+/// superscript, not which characters appear.
 #[test]
 fn math_fixture_renders_superscript_raised_and_scaled() {
     let bytes = compile_math_fixture();
@@ -570,8 +515,6 @@ fn math_fixture_renders_superscript_raised_and_scaled() {
     );
 }
 
-/// Compile the 2-trial hook-page fixture against an auxiliary cross-reference
-/// table, returning the PDF, the trial count, and the table the run produced.
 fn compile_hook_page_with_aux(aux: &mut rustyfi_lang::crossref::AuxTable) -> (Vec<u8>, u32) {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hook-page.saty");
     let merged = load_and_merge(&fixture);
@@ -583,12 +526,11 @@ fn compile_hook_page_with_aux(aux: &mut rustyfi_lang::crossref::AuxTable) -> (Ve
     (bytes, trials)
 }
 
-/// The auxiliary file's whole point: seeding the cross-reference fixpoint from
-/// a previous run resolves a forward reference on the FIRST trial, where a cold
-/// run needs a second — and produces exactly the same document either way.
-///
-/// `hook-page.saty` is the fixture that provably needs two trials cold (see
-/// the test above), which is what makes the 2 -> 1 drop meaningful here.
+/// Seeding the cross-reference fixpoint from a previous run resolves a
+/// forward reference on the FIRST trial, where a cold run needs a second —
+/// and produces exactly the same document either way. `hook-page.saty` is the
+/// fixture that provably needs two trials cold, which is what makes the
+/// 2 -> 1 drop meaningful.
 #[test]
 fn an_auxiliary_table_resolves_the_fixture_in_one_trial_with_identical_output() {
     let mut aux = rustyfi_lang::crossref::AuxTable::new();
@@ -619,7 +561,6 @@ fn a_wrong_auxiliary_table_still_converges_to_the_same_document() {
     let mut aux = rustyfi_lang::crossref::AuxTable::new();
     let (cold, _) = compile_hook_page_with_aux(&mut aux);
 
-    // Corrupt every value the previous run recorded.
     let poisoned: rustyfi_lang::crossref::AuxTable =
         aux.keys().map(|k| (k.clone(), "999".to_string())).collect();
     let mut poisoned = poisoned;
@@ -642,15 +583,13 @@ fn compile_hook_page_fixture() -> (Vec<u8>, u32) {
     (bytes, trials)
 }
 
-/// End-to-end coverage for the Slice 1 page-break-hook + cross-reference
-/// callback foundation: a `hook-page-break` closure registers the page's
-/// own (final) page number as a cross-reference; a `get-cross-reference`
-/// read-back on a later trial renders it as text. Trial 1 registers a fresh
-/// key (`changed`), forcing trial 2, where the read-back resolves and
-/// `embed-string` renders it. Asserting `trials == 2` is the load-bearing
-/// check the plan calls for: a one-pass fluke would also emit "1" if the
-/// read happened to pre-resolve, but would prove nothing about the callback
-/// seam actually firing.
+/// A `hook-page-break` closure registers the page's own (final) page number
+/// as a cross-reference; a `get-cross-reference` read-back on a later trial
+/// renders it as text. Trial 1 registers a fresh key (`changed`), forcing
+/// trial 2, where the read-back resolves. Asserting `trials == 2` is the
+/// load-bearing check: a one-pass fluke would also emit "1" if the read
+/// happened to pre-resolve, but would prove nothing about the callback seam
+/// actually firing.
 #[test]
 fn hook_page_fixture_fires_the_hook_and_renders_the_final_page_number() {
     let (bytes, trials) = compile_hook_page_fixture();
@@ -694,20 +633,13 @@ fn compile_page_footer_fixture() -> std::rc::Rc<rustyfi_lang::value::DocumentVal
     rustyfi_lang::compile_document_cst(&merged, &metrics).expect("page-footer fixture must compile")
 }
 
-/// End-to-end coverage for the Slice 1 real `page-break`: a 40-paragraph
-/// body overflows a 640pt content scheme onto multiple A4Paper pages, and
-/// a footer closure renders `pbinfo#page-number` per page. Rendering each
-/// page on its own (a 1-page slice of `doc.pages`) makes each page's
-/// footer glyph unambiguous in its content stream — the load-bearing
-/// assertion that the per-page loop re-`interp.apply`s the parts closure
-/// with an *incremented* page number, not the same one twice.
-///
-/// Page count re-baselined 2 -> 4 by FIX 3: each of the 40 paragraphs now
-/// carries its `paragraph_top`/ `paragraph_bottom` margins (18pt + 18pt
-/// default), so the same body occupies proportionally more vertical space
-/// and spills onto four pages. The per-page footer-number assertions
-/// (page[0] -> "(1)", page[1] -> "(2)") are unaffected — only the
-/// total-page count changed.
+/// Real `page-break`: a 40-paragraph body overflows a 640pt content
+/// scheme onto multiple A4Paper pages, and a footer closure renders
+/// `pbinfo#page-number` per page. Rendering each page on its own (a 1-page
+/// slice of `doc.pages`) makes each page's footer glyph unambiguous in its
+/// content stream — the load-bearing assertion that the per-page loop
+/// re-`interp.apply`s the parts closure with an *incremented* page number,
+/// not the same one twice.
 #[test]
 fn page_footer_fixture_overflows_to_multiple_pages_with_incrementing_footer_numbers() {
     let doc = compile_page_footer_fixture();
@@ -719,7 +651,7 @@ fn page_footer_fixture_overflows_to_multiple_pages_with_incrementing_footer_numb
     );
 
     // Media box: `A4Paper` is 595 x 842 pt (within 1pt of the ISO 216 mm
-    // conversion), driven by the `page` argument, not the old default.
+    // conversion), driven by the `page` argument rather than a default.
     assert!(
         (doc.geometry.paper_width.0 - 595.0).abs() < 1.0,
         "unexpected paper width: {}",
@@ -756,12 +688,10 @@ fn page_footer_fixture_overflows_to_multiple_pages_with_incrementing_footer_numb
     );
 }
 
-// ============================================================================
-// Group A: /Annots + /Dests + /Outlines emission — `annot-hook.saty`
-// reaches them via a raw `hook-page-break` closure (no §D frame/deco firing
-// needed); `href_fixture_*` below exercises the §D path
-// (`inline-frame-breakable`) through the real `annot.satyh` `\href`.
-// ============================================================================
+// /Annots + /Dests + /Outlines emission — `annot-hook.saty` reaches
+// them via a raw `hook-page-break` closure (no frame/deco firing needed);
+// `href_fixture_*` below exercises the frame/deco path (`inline-frame-breakable`)
+// through the real `annot.satyh` `\href`.
 
 fn compile_annot_hook_fixture() -> std::rc::Rc<rustyfi_lang::value::DocumentValue> {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/annot-hook.saty");
@@ -770,12 +700,11 @@ fn compile_annot_hook_fixture() -> std::rc::Rc<rustyfi_lang::value::DocumentValu
     rustyfi_lang::compile_document_cst(&merged, &metrics).expect("annot-hook fixture must compile")
 }
 
-/// A raw `hook-page-break` closure registers a named destination
-/// (`register-destination`) and a URI link (`register-link-to-uri`) on the
-/// page it fires on; a top-level `register-outline` call registers a
-/// 2-entry outline, one item keyed to the same destination. `render_pdf`
-/// (the 3-arg wrapper) would silently drop all of this — this fixture must
-/// go through `render_pdf_with(..., &doc.extras)`.
+/// A raw `hook-page-break` closure registers a named destination and a URI
+/// link on the page it fires on; a top-level `register-outline` call
+/// registers a 2-entry outline, one item keyed to the same destination.
+/// `render_pdf` (the 3-arg wrapper) would silently drop all of this — this
+/// fixture must go through `render_pdf_with(..., &doc.extras)`.
 #[test]
 fn annot_hook_fixture_emits_annots_dests_and_outlines() {
     let doc = compile_annot_hook_fixture();
@@ -797,10 +726,9 @@ fn annot_hook_fixture_emits_annots_dests_and_outlines() {
         assert!(hay.contains(needle), "content missing {needle:?}:\n{hay}");
     }
 
-    // The outline item keyed `top` and the /Dests destination it points at
-    // must share the SAME minted name (`nameddest0` — the first key seen,
-    // by `register-destination`, since it fires before `register-outline`
-    // resolves the same key through the shared `dest_name` table).
+    // `nameddest0` is the first key seen, by `register-destination`, since
+    // it fires before `register-outline` resolves the same key through the
+    // shared `dest_name` table.
     assert!(
         hay.contains("nameddest0"),
         "the outline item's /Dest and the /Dests key must agree on a shared name:\n{hay}"
@@ -814,10 +742,9 @@ fn compile_href_fixture() -> std::rc::Rc<rustyfi_lang::value::DocumentValue> {
     rustyfi_lang::compile_document_cst(&merged, &metrics).expect("href fixture must compile")
 }
 
-/// The real `annot.satyh` `\href` end-to-end: `inline-frame-breakable`
-/// builds the atomic frame, `fire_hooks`/`fire_inline_frame` fires its
-/// `decoS` (`link-to-uri-frame`) once placed, landing a real `/Annots`
-/// entry with a non-degenerate rect (the frame's fitted content width).
+/// `inline-frame-breakable` builds the atomic frame, `fire_hooks`/
+/// `fire_inline_frame` fires its `decoS` (`link-to-uri-frame`) once placed,
+/// landing an `/Annots` entry with a non-degenerate rect.
 #[test]
 fn href_fixture_emits_a_real_link_annotation_with_a_nonzero_width_rect() {
     run_with_big_stack(|| {
@@ -832,9 +759,8 @@ fn href_fixture_emits_a_real_link_annotation_with_a_nonzero_width_rect() {
             "missing /URI:\n{hay}"
         );
 
-        // Parse the four /Rect operands and assert a positive width — proof
-        // the frame's fitted content ("click here") actually measured to
-        // something, not a degenerate zero-size box.
+        // A positive width proves the frame's fitted content ("click here")
+        // actually measured to something, not a degenerate zero-size box.
         let idx = hay.find("/Rect").expect("missing /Rect array");
         let rest = &hay[idx + "/Rect".len()..];
         let open = rest.find('[').expect("/Rect must be followed by an array");
@@ -852,12 +778,9 @@ fn href_fixture_emits_a_real_link_annotation_with_a_nonzero_width_rect() {
     });
 }
 
-// ============================================================================
-// Group B (item #5): the real `add-footnote` float accumulator. F1 below
-// is the data-loss regression — it FAILS at HEAD (before this group's
-// `chop_page` accumulator) because the footnote body text is silently
-// dropped by the old STAND-IN.
-// ============================================================================
+// The real `add-footnote` float accumulator (`chop_page`).
+// F1 below is the data-loss regression test: without the accumulator the
+// footnote body text is silently dropped.
 
 fn compile_footnote_fixture() -> std::rc::Rc<rustyfi_lang::value::DocumentValue> {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/footnote.saty");
@@ -868,9 +791,7 @@ fn compile_footnote_fixture() -> std::rc::Rc<rustyfi_lang::value::DocumentValue>
 
 /// `add-footnote`'s block ends up on the SAME page as its referencing line,
 /// bottom-placed below it (`baseline_y` strictly greater than every body
-/// line's), and its text actually reaches the rendered PDF's content
-/// stream — the assertion that FAILS at HEAD today, when `add-footnote`
-/// was a documented no-op that dropped the block.
+/// line's), and its text actually reaches the content stream.
 #[test]
 fn footnote_fixture_places_the_footnote_body_below_the_reference_and_renders_its_text() {
     let doc = compile_footnote_fixture();
@@ -936,19 +857,15 @@ fn footnote_fixture_places_the_footnote_body_below_the_reference_and_renders_its
     let _ = std::fs::remove_file(&tmp);
 }
 
-/// Rendering-gap regression: `FootnoteScheme.main` (`footnote-scheme.satyh`,
-/// SATySFi 0.1) wraps its `add-footnote` call in `Inline.no-break`
-/// (`inline.satyh`'s `no-break ib = inline-frame-outer (0pt,0pt,0pt,0pt)
-/// Deco.empty ib`), which lowers to a `PureHorzBox::Frame` — unlike the bare
-/// `add-footnote` the fixture above exercises, which is never wrapped.
-/// `collect_footnotes_in_box` (`pagebreak.rs`) previously had no arm for
-/// `Frame` (its `_ => {}` wildcard swallowed it), so the `Footnote` marker
-/// nested inside that frame was unreachable from `chop_page`'s footnote-
-/// collection pass: the marker itself still rendered (line breaking never
-/// goes through this pass), but the body was silently dropped. This fixture
-/// (`v01-footnote-scheme.saty`) goes through `FootnoteScheme.main` directly
-/// — no whole document class needed — over a bare `page-break`, proving both
-/// the marker AND the body now reach the rendered PDF.
+/// `FootnoteScheme.main` (`footnote-scheme.satyh`, SATySFi 0.1) wraps its
+/// `add-footnote` call in `Inline.no-break` (`inline.satyh`'s
+/// `inline-frame-outer (0pt,0pt,0pt,0pt) Deco.empty ib`), which lowers to a
+/// `PureHorzBox::Frame` — unlike the bare `add-footnote` the fixture above
+/// exercises. Give `collect_footnotes_in_box` (`pagebreak.rs`) no arm for
+/// `Frame` and its `_ => {}` wildcard swallows it, leaving the `Footnote`
+/// marker nested inside that frame unreachable from `chop_page`'s
+/// footnote-collection pass: the marker still renders (line breaking never
+/// goes through this pass), but the body is silently dropped.
 #[test]
 fn v01_footnote_scheme_body_renders_through_page_break() {
     run_with_big_stack(move || {
@@ -990,9 +907,6 @@ fn v01_footnote_scheme_body_renders_through_page_break() {
                     text.contains("Reference line with a scheme footnote marker."),
                     "pdftotext output missing the reference line:\n{text}"
                 );
-                // The marker was never the broken part, but check it anyway
-                // — a regression here would mean the fixture itself changed
-                // shape, not just the body-collection fix.
                 assert!(
                     text.contains("*1"),
                     "missing footnote superscript marker:\n{text}"
@@ -1021,13 +935,10 @@ fn v01_footnote_scheme_body_renders_through_page_break() {
     });
 }
 
-// ============================================================================
-// Group B (item #8): real multi- column `page-break-two-column` /
-// `page-break-multicolumn`. F2 proves a genuine SECOND column at a
-// shifted x-origin (not the old single-column stand-in); F3 proves
-// `columnhookf` fires once per COLUMN (not once per page) by counting
-// its marker line per page.
-// ============================================================================
+// Real multi-column `page-break-two-column` /
+// `page-break-multicolumn`. F2 proves a genuine SECOND column at a shifted
+// x-origin (not a single-column fallback); F3 proves `columnhookf` fires
+// once per COLUMN (not once per page) by counting its marker line per page.
 
 fn compile_twocolumn_fixture() -> std::rc::Rc<rustyfi_lang::value::DocumentValue> {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/twocolumn.saty");
@@ -1037,9 +948,8 @@ fn compile_twocolumn_fixture() -> std::rc::Rc<rustyfi_lang::value::DocumentValue
 }
 
 /// `page-break-two-column A4Paper 250pt …`: page 1 must carry lines at BOTH
-/// the content scheme's own `text-origin.x` (72pt) and that plus the
-/// 250pt shift (322pt) — real second-column geometry, not a same-x
-/// single-column fallback.
+/// the content scheme's own `text-origin.x` (72pt) and that plus the 250pt
+/// shift (322pt) — not a same-x single-column fallback.
 #[test]
 fn twocolumn_fixture_places_a_second_column_at_the_shifted_x_origin() {
     let doc = compile_twocolumn_fixture();
@@ -1108,8 +1018,7 @@ fn multicolumn_fixture_fires_the_column_hook_once_per_column() {
         "the 60-paragraph body over 300pt/column should span multiple pages, got {}",
         doc.pages.len()
     );
-    // Every page but possibly the last (which may run out of content
-    // mid-column) should show 2 COLMARK lines; the FIRST page is
+    // The last page may run out of content mid-column; the FIRST page is
     // guaranteed full content on both columns.
     let first_page_marks = count_colmark_lines(&doc.pages[0]);
     assert_eq!(
@@ -1118,20 +1027,13 @@ fn multicolumn_fixture_fires_the_column_hook_once_per_column() {
     );
 }
 
-// ============================================================================
-// Capstone (build-order-to-stdja.md item #2): a real `@require: stdjabook`
-// document rendered end-to-end through the FULL pipeline (loader -> elaborate
-// -> typecheck -> eval -> line break -> page break -> PDF) to a PDF whose text
-// `pdftotext` can extract. The document classes are already proven to
-// load+evaluate (stdlib_tier0.rs); this closes the loop with the
-// render_pdf -> pdftotext layer for a full document class. The body is Latin
-// (WinAnsi, renders via base-14); CJK glyph rendering is gated on an
-// embeddable TrueType CJK face the host lacks (see Group D / download-fonts.sh).
-// ============================================================================
+// Capstone: a real `@require: stdjabook` document through the FULL pipeline
+// to a PDF whose text `pdftotext` can extract. The body is Latin (WinAnsi,
+// renders via base-14); CJK glyph rendering is gated on an embeddable
+// TrueType CJK face the host lacks (see `download-fonts.sh`).
 
-/// Locate a real regular TrueType face (DejaVu) for the capstone: the
-/// stdjabook footer's em-dash page number is not in base-14, so a real font
-/// is required — which also exercises Group D's `TtfFontStore` end-to-end.
+/// The stdjabook footer's em-dash page number is not in base-14, so a real
+/// font is required — which also exercises the real `TtfFontStore` path.
 fn find_regular_ttf() -> Option<PathBuf> {
     for family in ["DejaVuSerif", "DejaVuSans"] {
         if let Ok(output) = Command::new("fc-match")
@@ -1212,13 +1114,10 @@ fn tier4_stdjabook_capstone_renders_to_extractable_text() {
     });
 }
 
-/// Slice 1 capstone: a real SATySFi 0.1 document — `val`-bound module
+/// Capstone: a real SATySFi 0.1 document — `val`-bound module
 /// library, comma records, match…end, tuple page size — through the FULL
-/// spine (V0_1 lex -> cst_v1 parse -> loader -> v1 lowering -> shared
-/// elaborate/typecheck(V0_1)/eval -> page break -> PDF) to
-/// pdftotext-extractable text. Base-14 only (the fixture is all-WinAnsi,
-/// no capstone font dependency, so this never skips like the tier4
-/// capstone above can).
+/// V0_1 spine. Base-14 only (the fixture is all-WinAnsi), so unlike the
+/// tier4 capstone above this never skips.
 #[test]
 fn v01_slice1_document_renders_to_extractable_text() {
     run_with_big_stack(move || {
@@ -1226,11 +1125,10 @@ fn v01_slice1_document_renders_to_extractable_text() {
         let program = rustyfi_loader::load(
             &entry,
             &rustyfi_loader::LoadOptions {
-                lib_root: Some(lib_root().join("dist-v01").join("packages")), // §4.3
+                lib_root: Some(lib_root().join("dist-v01").join("packages")),
                 version: rustyfi_syntax::RustyfiVersion::V0_1,
-                // Legacy packaging (this 0.1 fixture uses `@require:`); the
-                // Axis-B default. Spelled via `..Default::default()` so the
-                // Ld3a `mode` field addition needs no explicit value here.
+                // Legacy packaging (this 0.1 fixture uses `@require:`), the
+                // Axis-B default.
                 ..Default::default()
             },
         )
@@ -1264,13 +1162,10 @@ fn v01_slice1_document_renders_to_extractable_text() {
                     text.contains("The answer is 42"),
                     "missing match/…/end result:\n{text}"
                 );
-                // \emph through the val-inline binding.
                 assert!(text.contains("Emphasis"), "missing \\emph output:\n{text}");
-                // The v01-mini footer (pbinfo#page-number via arabic).
                 assert!(text.contains('1'), "missing footer page number:\n{text}");
-                // Sub-slice 2b surface: `val rec sum-list`, `let mutable`/
-                // `<-`, `if`/`even`, and `val (+++)` all through the third
-                // `+p` paragraph.
+                // Surface: `val rec sum-list`, `let mutable`/
+                // `<-`, `if`/`even`, and `val (+++)`.
                 assert!(
                     text.contains("Sum 10 count 42 parity even label 7"),
                     "missing sub-slice 2b paragraph:\n{text}"
@@ -1282,15 +1177,11 @@ fn v01_slice1_document_renders_to_extractable_text() {
     });
 }
 
-/// Sub-slice 2d-2 (opaque types + ctor hiding + command-type decls,
-/// `…/tmp/slice2d2-opaque-types.md` §5 E1): the first SEALED SATySFi 0.1
-/// package to reach the CLI e2e suite. `v01-sealed.satyh`'s
-/// `module V01Sealed :> sig … end` seals an opaque `type t`, two plain
-/// `val`s (`make`/`get`) and a command decl (`val \show : inline [t]`);
-/// this fixture both CALLS the sealed value members (`V01Sealed.make`/
-/// `.get`) and the sealed COMMAND (`\V01Sealed.show`) — mirroring
-/// `v01_slice1_document_renders_to_extractable_text` (`lib_root` →
-/// `dist-v01/packages`), the sealed on-disk fixture 2d-1 deferred.
+/// Opaque types + ctor hiding + command-type decls:
+/// `v01-sealed.satyh`'s `module V01Sealed :> sig … end` seals an opaque
+/// `type t`, two plain `val`s (`make`/`get`) and a command decl
+/// (`val \show : inline [t]`); this fixture CALLS both the sealed value
+/// members and the sealed COMMAND.
 #[test]
 fn v01_sealed_document_renders_to_extractable_text() {
     run_with_big_stack(move || {
@@ -1328,8 +1219,7 @@ fn v01_sealed_document_renders_to_extractable_text() {
         match pdftotext {
             Ok(out) if out.status.success() => {
                 let text = String::from_utf8_lossy(&out.stdout);
-                // `V01Sealed.make 41` then `V01Sealed.get v + 1` — the
-                // opaque `t` round-tripped through a sealed val pair.
+                // `V01Sealed.make 41` then `V01Sealed.get v + 1`.
                 assert!(
                     text.contains("The answer is 42"),
                     "missing sealed val round-trip:\n{text}"
@@ -1347,13 +1237,9 @@ fn v01_sealed_document_renders_to_extractable_text() {
     });
 }
 
-/// math-split spec §7 acceptance item 1: the `v01-math.saty` capstone —
 /// `${…}` (`a^2 + b^2 = c^2`) and a `val math ctx \frac …` command, both
-/// reaching the page through `read-math` + the V0_1 math prims + the
-/// SHARED (version-agnostic) OpenType MATH layout engine — through the
-/// FULL spine (V0_1 lex -> cst_v1 parse -> loader -> v1 lowering -> shared
-/// elaborate/typecheck(V0_1)/eval -> page-break -> PDF) to a valid,
-/// pdftotext-extractable PDF.
+/// reaching the page through `read-math` + the V0_1 math prims + the SHARED
+/// (version-agnostic) OpenType MATH layout engine.
 #[test]
 fn v01_math_document_renders_to_extractable_pdf() {
     run_with_big_stack(move || {
@@ -1399,10 +1285,8 @@ fn v01_math_document_renders_to_extractable_pdf() {
                     text.contains("Fraction"),
                     "missing math paragraph 2:\n{text}"
                 );
-                // The Pythagoras formula's plain-letter atoms (a, b, c) and
-                // digits (2) reach the page as ordinary glyph runs even
-                // though they sit inside `${…}` — pdftotext should still
-                // recover them alongside the prose.
+                // The formula's plain-letter atoms reach the page as
+                // ordinary glyph runs even though they sit inside `${…}`.
                 for needle in ["a", "b", "c"] {
                     assert!(
                         text.contains(needle),
@@ -1416,17 +1300,11 @@ fn v01_math_document_renders_to_extractable_pdf() {
     });
 }
 
-/// L5a (`…/tmp/prim-retype-sweep.md` §4.1): the `v01-strings.saty` capstone
-/// — `register-document-information` (a real preamble binding),
-/// `band`/`normalize-string-to-nfc` reaching the page through `arabic`/
-/// `embed-string` — through the FULL spine (V0_1 lex -> cst_v1 parse ->
-/// loader -> v1 lowering -> shared elaborate/typecheck(V0_1)/eval ->
-/// page-break -> PDF), asserting both the extracted TEXT (bitwise result,
-/// NFC-normalized string) and the `/Info` dictionary this slice adds to
-/// the PDF bytes (`render_pdf_with`, unlike the other v01 capstones above
-/// which use the extras-dropping `render_pdf` wrapper — this one needs
-/// `doc.extras.doc_info` to actually reach the writer, exactly like
-/// `rustyfi`'s own `main.rs`).
+/// `register-document-information`, `band`/`normalize-string-to-nfc`
+/// reaching the page through `arabic`/`embed-string`. Asserts both the
+/// extracted TEXT and the `/Info` dictionary in the PDF bytes — so it uses
+/// `render_pdf_with`, not the extras-dropping `render_pdf` wrapper the other
+/// v01 capstones use, since `doc.extras.doc_info` must reach the writer.
 #[test]
 fn v01_strings_document_renders_to_extractable_text_and_info_dict() {
     run_with_big_stack(move || {
@@ -1485,9 +1363,8 @@ fn v01_strings_document_renders_to_extractable_text_and_info_dict() {
                 // `band 5 3` == 1.
                 assert!(text.contains("Bits: 1"), "missing bitwise result:\n{text}");
                 // NFC(string-unexplode [101; 769]) composes "e" + COMBINING
-                // ACUTE ACCENT (2 scalar values) into "é" (1 scalar value)
-                // — the ASCII-only witness `v01-strings.saty` uses (base14
-                // has no glyph for "é" itself).
+                // ACUTE ACCENT (2 scalar values) into "é" (1). The witness is
+                // the LENGTH because base14 has no glyph for "é" itself.
                 assert!(
                     text.contains("NFC length: 1"),
                     "missing NFC composition witness:\n{text}"
@@ -1499,16 +1376,9 @@ fn v01_strings_document_renders_to_extractable_text_and_info_dict() {
     });
 }
 
-// ============================================================================
-// G7 (`…/tmp/g6-g7-standins.md` §5.5): the first real-document render of a
-// G7 font stand-in package. Mirrors `tier4_stdjabook_capstone_renders_to_
-// extractable_text` above (skip-gated on a real DejaVu TrueType face, same
-// `TtfFontStore`/`render_pdf_ttf` path), but V0_1 and driven by
-// `font-junicode`. Latin-only, math-free body (R1: every abbrev collapses
-// to the single loaded `FontKey(0)` face — the tier4 constraint) so the
-// bare single-face store suffices; independent of the full std-ja
-// capstone, which still awaits CP4.
-// ============================================================================
+// A real-document render of a font stand-in package, driven by
+// `font-junicode`. Latin-only, math-free body (every abbrev collapses to
+// the single loaded `FontKey(0)` face) so the bare single-face store suffices.
 
 #[test]
 fn v01_font_standin_renders_to_extractable_text() {
@@ -1582,23 +1452,15 @@ fn v01_font_standin_renders_to_extractable_text() {
     });
 }
 
-// ============================================================================
-// SATySFi 0.1 document-class capstone (doc-class-capstone-road.md): a real
-// upstream 0.1 document class (`std-ja`) rendering a PDF through the port,
-// mirroring `tier4_stdjabook_capstone_renders_to_extractable_text` above but
-// for the V0_1 spine. Three per-package smoke tests (CP7 items 1-3) prove
-// each newly-vendored dependency compiles through the real loader +
-// `compile_document_v1` on its own before the capstone composes all of them
-// (plus the already-proven wave-0/1/2 stdlib packages and the G6/G7
-// stand-ins) into one document.
-// ============================================================================
+// SATySFi 0.1 document-class capstone: a real upstream 0.1 document class
+// (`std-ja`) rendering a PDF through the port. Three per-package smoke tests
+// prove each newly-vendored dependency compiles on its own
+// before the capstone composes all of them into one document.
 
 /// Compile `fixture` (a `@require:`-only smoke file, body `1`) through the
 /// real loader + `compile_document_v1`; accepts either a real document or
-/// `NotADocument` (the body is a dummy `1`, never a `document` value) —
-/// same "type-checking + evaluation succeeded" bar `v01_sealing.rs`'s/
-/// `v01_opt_cmd_rows.rs`'s own harnesses use, reproduced here since this
-/// crate has no shared test-support library target.
+/// `NotADocument`, since the body is a dummy `1` and never a `document`
+/// value. The bar is "type-checking + evaluation succeeded".
 fn assert_v01_package_compiles(fixture_name: &str) {
     let fixture_name = fixture_name.to_string();
     run_with_big_stack(move || assert_v01_package_compiles_inner(&fixture_name));
@@ -1652,31 +1514,26 @@ fn assert_v01_package_compiles_inner(fixture_name: &str) {
     }
 }
 
-/// CP7 item 1: the real upstream `annot` package (`\href` with its ONE
-/// optional-arg-rows increment 3a command row) through the real loader.
+/// The real upstream `annot` package (`\href` with its ONE
+/// optional-arg-row command row).
 #[test]
 fn v01_annot_package_compiles_through_real_loader() {
     assert_v01_package_compiles("v01-annot-package.saty");
 }
 
-/// CP7 item 2, now FULLY un-stubbed (math-package completion M1-M4): the
-/// real upstream `math` package — SEALED (`module Math :> sig … end`, M1's
-/// `math […]` command-type head + M2's `paren` sig rows), with the
-/// previously-dropped `\paren` family (M2) and `\mathsf`/`\mathtt`/14-arm
-/// greek restyling (M3) restored — through the real loader. Sig
-/// subsumption succeeds for all ~190 command rows + 19 `paren`-typed value
-/// rows.
+/// The real upstream `math`
+/// package — SEALED (`module Math :> sig … end`, its `math […]`
+/// command-type head + `paren` sig rows), carrying the `\paren` family
+/// and `\mathsf`/`\mathtt`/14-arm greek restyling. Sig subsumption
+/// succeeds for all ~190 command rows + 19 `paren`-typed value rows.
 #[test]
 fn v01_math_package_compiles_through_real_loader() {
     assert_v01_package_compiles("v01-math-package.saty");
 }
 
-/// Math-package completion M4's headline render: `v01-math-full.saty`
-/// exercises the newly-restored `\paren` family
-/// (`\Math.paren{\Math.frac{1}{2}}`) and `\mathsf`/`\mathtt` (needing a
-/// real Unicode-glyph-bearing font — gated on `find_regular_ttf()`, same
-/// as `v01_font_standin_renders_to_extractable_text`) through
-/// `compile_document_v1` to a valid, pdftotext-extractable PDF.
+/// The headline render: the `\paren` family
+/// (`\Math.paren{\Math.frac{1}{2}}`) and `\mathsf`/`\mathtt`, which need a
+/// real Unicode-glyph-bearing font — hence the `find_regular_ttf()` gate.
 #[test]
 fn v01_math_full_package_renders_to_extractable_pdf() {
     let font = match find_regular_ttf() {
@@ -1737,13 +1594,10 @@ fn v01_math_full_package_renders_to_extractable_pdf() {
     });
 }
 
-/// Math-package completion M4 seal-surface probe (spec §5): `Math.math-
-/// scheme` — a real internal helper `math.satyh` uses but upstream's own
-/// sig never exports — is UNREACHABLE now that the module is genuinely
-/// sealed. Pins that the `:>` restored in M4 is a real, enforced boundary
-/// (every sig member — `\paren`, `paren-left`, …, all ~190+19 rows — stays
-/// reachable; this asserts the converse for one representative hidden
-/// name).
+/// Seal-surface probe: `Math.math-scheme` — a real internal helper
+/// `math.satyh` uses but upstream's own sig never exports — is UNREACHABLE
+/// past the seal. The test above pins that every sig member stays reachable;
+/// this asserts the converse for one representative hidden name.
 #[test]
 fn v01_math_package_hidden_helper_is_unreachable_past_the_seal() {
     run_with_big_stack(|| {
@@ -1804,22 +1658,18 @@ fn v01_math_package_hidden_helper_is_unreachable_past_the_seal() {
     });
 }
 
-/// CP7 item 3: the functor-free `code` PORT STAND-IN — a nested plain
-/// module (`Code.Default`) and its two-level-qualified `\code` command —
-/// through the real loader.
+/// The functor-free `code` PORT STAND-IN — a nested plain
+/// module (`Code.Default`) and its two-level-qualified `\code` command.
 #[test]
 fn v01_code_package_compiles_through_real_loader() {
     assert_v01_package_compiles("v01-code-package.saty");
 }
 
-/// THE MARQUEE CAPSTONE (doc-class-capstone-road.md CP8): a real upstream
-/// 0.1 document class, `std-ja` (`dist-v01/packages/std-ja.satyh`), through
-/// the FULL pipeline to a PDF whose text `pdftotext` can extract — the 0.1
-/// analogue of `tier4_stdjabook_capstone_renders_to_extractable_text`
-/// above. `std-ja` transitively `@require:`s `annot`/`math`/`code`/
-/// `hyph-english`/`unidata`/the 4 G7 font stand-ins/the wave-0/1/2 stdlib
-/// leaf packages — this is the composition of every package this capstone
-/// vendored, driven by ONE real document.
+/// `std-ja` (`dist-v01/packages/std-ja.satyh`) through the FULL
+/// pipeline to pdftotext-extractable text. It transitively `@require:`s
+/// `annot`/`math`/`code`/`hyph-english`/`unidata`/the 4 font stand-ins/the
+/// wave-0/1/2 stdlib leaf packages — every vendored package, driven by ONE
+/// real document.
 #[test]
 fn v01_stdja_capstone_renders_to_extractable_text() {
     let font = match find_regular_ttf() {
@@ -1871,8 +1721,8 @@ fn v01_stdja_capstone_renders_to_extractable_text() {
         match pdftotext {
             Ok(out) if out.status.success() => {
                 let text = String::from_utf8_lossy(&out.stdout);
-                // The document record's title/author, rendered by std-ja's
-                // own `+make-title` (real path/bezier graphics deco).
+                // Rendered by std-ja's own `+make-title` (real path/bezier
+                // graphics deco).
                 assert!(text.contains("SATySFi in Rust"), "missing title:\n{text}");
                 assert!(
                     text.contains("The Vendoring Agents"),
@@ -1880,7 +1730,7 @@ fn v01_stdja_capstone_renders_to_extractable_text() {
                 );
                 // `+section`'s auto-numbering (`section-scheme`'s
                 // `arabic (!num-section)`), unbundled (no `?(label=…)`
-                // passed — increment 3a's None-defaulting path, live).
+                // passed — the optional-argument None-defaulting path, live).
                 assert!(
                     text.contains("1. Introduction"),
                     "missing section 1 title:\n{text}"
@@ -1889,7 +1739,6 @@ fn v01_stdja_capstone_renders_to_extractable_text() {
                     text.contains("2. Conclusion"),
                     "missing section 2 title:\n{text}"
                 );
-                // Body text through `+StdJa.p`/`read-inline`.
                 for word in ["quick", "brown", "fox"] {
                     assert!(
                         text.contains(word),
@@ -1897,8 +1746,6 @@ fn v01_stdja_capstone_renders_to_extractable_text() {
                          extractable Latin body text:\n{text}"
                     );
                 }
-                // The footer's page number (`— #it-pageno; —`, `arabic`
-                // through `get-standard-context`'s em-dash-flanked format).
                 assert!(text.contains('1'), "missing footer page number:\n{text}");
             }
             _ => eprintln!(

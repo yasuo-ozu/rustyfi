@@ -1,4 +1,4 @@
-//! The filesystem transaction (plan §6): stage every file under
+//! The filesystem transaction: stage every file under
 //! `<root>/.satyrographos/tmp/…` (same filesystem as `dist/`, so the final
 //! move is an atomic rename), reject path-traversal while staging, then swap
 //! into place — orphaning any files a prior receipt for the same package
@@ -28,7 +28,6 @@ pub struct StagingArea {
 }
 
 impl StagingArea {
-    /// Create `<root>/.satyrographos/tmp/<name>-<unique>/`.
     pub fn new(lib_root: &Path, name: &str) -> Result<Self, Error> {
         let path = roots::tmp_dir(lib_root).join(format!("{name}-{}", unique_suffix()));
         std::fs::create_dir_all(&path).map_err(|e| Error::io(&path, e))?;
@@ -70,7 +69,7 @@ impl Drop for StagingArea {
 
 /// Turn a `/`-separated root-relative destination into a `PathBuf` under
 /// `base`, rejecting absolute paths and `..` components (path-traversal
-/// guard, plan §6).
+/// guard).
 pub fn safe_join(base: &Path, dst: &str) -> Result<PathBuf, Error> {
     let rel = rel_to_path(dst);
     if rel.is_absolute() {
@@ -105,7 +104,6 @@ pub fn materialize(
 ) -> Result<(), Error> {
     let orphan = staging_root.join("__orphan");
 
-    // Step 1: orphan the previous receipt's files (force reinstall).
     for dst in old_dsts {
         let live = safe_join(lib_root, dst)?;
         if live.exists() {
@@ -117,7 +115,6 @@ pub fn materialize(
         }
     }
 
-    // Step 2: move each staged file into its final destination.
     for dst in new_dsts {
         let from = safe_join(staging_root, dst)?;
         let to = safe_join(lib_root, dst)?;

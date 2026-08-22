@@ -1,75 +1,16 @@
-//! Slice X4a ("Slice X4 — reverse direction", specifically the X4a
-//! sub-slice): a `V0_0` document `@require:`-ing a `V0_1` package
-//! end-to-end — the REVERSE of `xver_import.rs`'s whole direction.
+//! A `V0_0` document `@require:`-ing a `V0_1` package end-to-end —
+//! the REVERSE of `xver_import.rs`. Driven through the REAL loader
+//! (`LoadOptions { version: V0_0, .. }`), so `load_legacy`'s
+//! `require_v01_targets` detection and `resolve_require`'s `dist-v01/packages/`
+//! base are exercised rather than bypassed.
 //!
-//! Driven through the REAL loader (`rustyfi_loader::load`, `LoadOptions {
-//! version: V0_0, .. }`) so the Q4-mirror per-file detection rule
-//! (`load_legacy`'s `require_v01_targets` worklist logic) and the new
-//! `resolve_require` `dist-v01/packages/` base are exercised for real, not
-//! bypassed, and through `rustyfi_lang::compile_document_v006_xver` (the new
-//! sibling entry point), so the entry's own `Ast::VersionScope(V0_0, _)`
-//! wrap (both `prelude` AND the document tail) and the ambient-`V0_1`
-//! `compile_program_xver`/`check_program` plumbing all run for real:
-//!
-//! - [`reverse_unsealed_v01_dep_renders`] (X4a headline): a `V0_0` entry
-//!   `@require:`ing the REAL vendored `v01-mini.satyh` (copied byte-for-byte
-//!   from `lib-rustyfi/dist-v01/packages/`), calling its `document`/`p`
-//!   members module-qualified, renders to a real page with real placed
-//!   content.
-//! - [`reverse_sealed_v01_dep_renders_and_enforces_hiding`] (X4a sealing
-//!   proof, resolves Q2): a `V0_0` entry `@require:`ing the REAL vendored
-//!   `v01-sealed.satyh`, calling `V01Sealed.make`/`get`/`\show` (allowed) —
-//!   renders — **and** a sibling negative case that instead pattern-matches
-//!   on the sealed `T` constructor directly is rejected by
-//!   `check_program`'s existing hidden-constructor error path, proving 0.1's
-//!   sealing machinery enforces against 0.0.6-authored consumer code with NO
-//!   new code on the enforcement side (`v1::module_check` is untouched).
-//! - [`reverse_guard_rejects_forked_export`] (X4a negative): a small inline
-//!   `V0_1` fixture exporting a `graphics`-typed value (a `type .. =
-//!   graphics` synonym) — `@require:`d by a `V0_0` entry — rejected with
-//!   `CompileError::CrossVersionUnsupportedName { slice: "X4a", .. }`, not a
-//!   mis-render.
-//! - [`reverse_math_export_relabels_and_renders`] (X4a positive, the
-//!   re-derived whitelist): a small inline `V0_1` fixture exporting a
-//!   `math-text`-typed value — a `V0_0` entry consumes it where `math` is
-//!   expected — renders, proving the reverse (coarsening) relabel
-//!   `v1::xver_adapt::relabel_or_reject_name`'s new `(V0_1, V0_0)` arm
-//!   implements.
-//!
-//! Slice X4b (`docs/plans/design-cross-version-import.md` §X4.5, extended
-//! beyond its own math-only sketch) — the reverse `deco`: a `V0_1`
-//! dependency's `deco`/`deco-set` VALUE export (via a module `sig`, the ONE
-//! textual site 0.1's grammar can express such an ascription at all — an
-//! ordinary unsealed `val` has no ascription syntax whatsoever) now CROSSES,
-//! value-coerced by wrapping the single `graphics` a 0.1 deco returns in the
-//! SINGLETON LIST a 0.0.6 consumer expects — the literal inverse of X3b's
-//! `unite-graphics` wrap. The one obstacle (every 0.1 module signature
-//! annotation is the `:>` form, and `v1::module_check`'s phase-D spine walk
-//! conformance-checks EVERY such annotation name-keyed, so a coercion shadow
-//! trips it a second time) is resolved by an EXPLICIT, caller-supplied
-//! exemption — `check_program_with_xver_shadows`, which exempts only the
-//! SECOND-and-later binding of a name `lib.rs` has itself just rebound,
-//! leaving the exporting module's own conformance check fully in force. See
-//! `v1::xver_adapt`'s own "X4b" doc comment for the full derivation.
-//!
-//! - [`reverse_deco_export_via_sig_coerces_and_renders`] (X4b headline): a
-//!   module `V01DecoExport :> sig val my-deco : deco end = struct .. end`
-//!   `@require:`d by a `V0_0` entry, whose 0.0.6-authored `let-inline` hands
-//!   it to `inline-frame-outer` — renders, with the deco actually fired.
-//! - [`reverse_deco_export_curried_sig_coerces_and_renders`] — the same for
-//!   an arrow-tailed export (`length -> deco`).
-//! - [`reverse_decoset_export_via_sig_coerces_and_renders`] — the 4-tuple
-//!   sibling, through `inline-frame-breakable`.
-//! - [`reverse_deco_export_nested_module_sig_coerces_and_renders`] — a `deco`
-//!   declared inside a NESTED `module M : sig .. end` decl, crossed under the
-//!   composed qualified key (`Outer.Inner.my-deco`) that `module_check`'s own
-//!   `walk_nested_seals_a` seals it by.
-//! - [`reverse_deco_export_optional_arg_sig_still_rejected`] and
-//!   [`reverse_deco_export_nested_signature_decl_still_rejected`] — the two
-//!   DELIBERATE rejections that survive: an optional-argument arrow (no
-//!   positional spelling for the generated wrapper to forward) and a `deco`
-//!   behind a nested decl whose signature is not a literal `sig .. end`
-//!   (a named-signature reference this scan does not chase).
+//! The reverse `deco`: a `V0_1` dependency's `deco`/`deco-set` sig
+//! export crosses, value-coerced by wrapping the single `graphics` a 0.1 deco
+//! returns in the SINGLETON LIST a 0.0.6 consumer expects (the inverse of the
+//! forward deco coercion's `unite-graphics`). Since `v1::module_check`
+//! conformance-checks EVERY `:>` annotation name-keyed, the coercion shadow
+//! needs an explicit `check_program_with_xver_shadows` exemption; derivation
+//! in `v1::xver_adapt`.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -79,18 +20,12 @@ use rustyfi_backend::{FontKey, FontMetrics, Length};
 use rustyfi_lang::CompileError;
 use rustyfi_loader::{LoadOptions, RustyfiVersion};
 
-/// This repo's root, resolved relative to this crate's own manifest
-/// directory — same helper every other `v01_*`/`xver_*` integration test in
-/// this crate reproduces locally (no shared test-support library target
-/// exists here).
 fn repo(rel: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
         .join(rel)
 }
 
-/// A small fixture tree under a unique temp directory (cleaned up on drop) —
-/// mirrors `xver_import.rs`'s own `TempDir` helper.
 struct TempDir(PathBuf);
 
 impl TempDir {
@@ -122,11 +57,8 @@ impl TempDir {
         fs::write(&p, content).expect("write fixture file");
     }
 
-    /// Copy the REAL vendored `lib-rustyfi/dist-v01/packages/<name>`
-    /// byte-for-byte into this temp tree's own `dist-v01/packages/<name>` —
-    /// so `@require: <name>` against `self.path()` as `lib_root` resolves to
-    /// the actual 0.1 fixture corpus content (`resolve_require`'s new
-    /// `dist-v01/packages/` base, Slice X4a).
+    /// Copy the REAL vendored `lib-rustyfi/dist-v01/packages/<name>` in, so
+    /// `@require:` hits `resolve_require`'s `dist-v01/packages/` base.
     fn copy_real_v01_package(&self, name: &str) {
         let real = repo(&format!("lib-rustyfi/dist-v01/packages/{name}"));
         let content = fs::read_to_string(&real).unwrap_or_else(|e| panic!("read {real:?}: {e}"));
@@ -140,8 +72,6 @@ impl Drop for TempDir {
     }
 }
 
-/// A real (ASCII-only) `FontMetrics` — every positive fixture below renders
-/// actual text, so `advance` must return `Some` for ASCII.
 struct Mono;
 
 impl FontMetrics for Mono {
@@ -178,9 +108,7 @@ fn load_v006(dir: &TempDir, entry_rel: &str) -> Vec<rustyfi_loader::LoadedFile> 
     program.files
 }
 
-// ============================================================================
-// X4a headline: an UNSEALED 0.1 dependency (v01-mini.satyh).
-// ============================================================================
+// An UNSEALED 0.1 dependency (v01-mini.satyh).
 
 #[test]
 fn reverse_unsealed_v01_dep_renders() {
@@ -216,11 +144,9 @@ V01Mini.document (|title = `v01-reverse`|) '<
     );
 }
 
-// ============================================================================
-// X4a sealing proof (Q2 resolution): a SEALED 0.1 dependency
-// (v01-sealed.satyh) — allowed access renders, hidden-constructor access is
-// still rejected by `v1::module_check`'s EXISTING enforcement, unmodified.
-// ============================================================================
+// Reverse-import sealing: a SEALED 0.1 dependency — allowed access
+// renders, hidden-constructor access is still rejected by `v1::module_check`'s
+// EXISTING enforcement, unmodified.
 
 #[test]
 fn reverse_sealed_v01_dep_renders_and_enforces_hiding() {
@@ -257,26 +183,16 @@ V01Mini.document (|title = `v01-sealed-reverse`|) '<
     );
 }
 
-/// The negative sibling: a `V0_0`-authored entry that instead pattern-
-/// matches on `V01Sealed`'s hidden `T` constructor directly must still be
-/// rejected — `v1::module_check::check_program`'s hidden-constructor
-/// enforcement, driven purely from `V01Sealed`'s OWN `cst_v1` seal (`type t
-/// :: o`), has no idea the consuming code is 0.0.6-authored, and needs NO
-/// new code to reject it (§X4.1 point 2's "gets 0.1's sealing enforcement
-/// automatically" claim, pinned).
+/// `check_program`'s hidden-constructor enforcement is driven purely from
+/// `V01Sealed`'s OWN `cst_v1` seal (`type t :: o`), so it needs NO new code to
+/// reject a 0.0.6-authored consumer.
 #[test]
 fn reverse_sealed_v01_dep_hidden_ctor_still_rejected() {
     let dir = TempDir::new("sealed-negative");
     dir.copy_real_v01_package("v01-sealed.satyh");
-    // `T` is `V01Sealed`'s sealed constructor (`type t = | T of int`). 0.0.6
-    // has NO qualified-constructor-pattern syntax at all (`Mod.Ctor(..)` is
-    // a parse error — a real, independently-discovered grammar fact, not
-    // this test dodging the interesting case): a 0.0.6-authored consumer can
-    // only ever reach a bare constructor name, so the way to attempt the
-    // violation in 0.0.6 syntax is `open V01Sealed in` (bringing its members
-    // into UNQUALIFIED scope, exactly like a 0.1-authored `let open` would)
-    // followed by a bare `T(x)` pattern — hidden by the seal, must still
-    // fail to resolve.
+    // 0.0.6 has NO qualified-constructor-pattern syntax (`Mod.Ctor(..)` is a
+    // parse error), so the only way to attempt the violation in 0.0.6 syntax is
+    // `open V01Sealed in` followed by a bare `T(x)` pattern.
     let entry_src = "\
 @require: v01-sealed
 
@@ -296,33 +212,22 @@ in
         "pattern-matching a sealed module's hidden constructor from 0.0.6-authored code \
          must still be rejected by check_program's UNMODIFIED enforcement",
     );
-    // Whatever the exact shape (a TypeError naming the hidden constructor, or
-    // an elaboration-time unresolved-constructor error — both are
-    // `check_program`'s/elaborate's PRE-EXISTING enforcement, not
-    // `CrossVersionUnsupportedName`, since crossing the boundary itself was
-    // never in question here), it must NOT be a silent success.
+    // Either error shape is fine as long as it is NOT
+    // `CrossVersionUnsupportedName`: crossing was never in question here.
     assert!(
         !matches!(err, CompileError::CrossVersionUnsupportedName { .. }),
         "the rejection must come from the SEALING machinery, not the xver guard: {err}"
     );
 }
 
-// ============================================================================
-// X4a negative: the conservative guard rejects every forked-typed V0_1
-// export EXCEPT the proven-identical math-text/math-boxes family.
-// ============================================================================
-
-// `font`, not `graphics`: `graphics` turned out not to be forked at all
-// (upstream registers the same `GraphicsType` base type in both generations —
-// see `typecheck::name_to_mono`), so it now crosses in BOTH directions and can
-// no longer stand in for a rejected export here. `font` still forks, and since
-// the 0.1 `font` build-out it forks for a REAL reason rather than because 0.1's
-// was a `string` stand-in: 0.1's is saphe-split's opaque `BaseType(FontType)`
-// face handle (`Value::Font(FontKey)`), 0.0.6's is an unrelated opaque user
-// nominal — 0.0.6 registers no `font` type at all. `xver_staging.rs`'s
-// "0.1 `font` build-out" group is where that refusal is stated in full, in
-// both directions and with the control showing why the 0.0.6 font TRIPLE
-// cannot be coerced either.
+// The guard rejects every forked-typed V0_1 export EXCEPT the
+// proven-identical math-text/math-boxes family.
+//
+// `font`, not `graphics`: `graphics` is NOT forked (the same `GraphicsType`
+// base type in both generations — `typecheck::name_to_mono`), so it crosses in
+// BOTH directions and cannot stand in for a rejected export. `font` does fork:
+// 0.1's is saphe-split's opaque `BaseType(FontType)` handle, and 0.0.6
+// registers no `font` type at all.
 const V01_FORKED_EXPORT_PKG_SRC: &str = "\
 module V01ForkedExport = struct
   type my-font-alias = font
@@ -351,20 +256,12 @@ fn reverse_guard_rejects_forked_export() {
     }
 }
 
-// ============================================================================
-// X4a positive: the re-derived reverse whitelist — a V0_1 export typed
-// `math-text` (0.1's unevaluated math source) coarsens to 0.0.6's single
-// undifferentiated `math` type with ZERO value coercion (the shared
-// `Value::MathText` representation).
-// ============================================================================
-
-// A SEALED module: its sig's `val my-math : math-text` item is the ONE
-// surface site this port's guard actually SEES (`collect_free_globals`'s
-// `walk_sig_annot` — an ordinary unsealed `val` binding carries no type
-// ascription syntax at all, `cst_v1::Bind::Value` has no `: ty` field). The
-// crossing VALUE (`${1+1}`, `Value::MathText`) needs no adaptation either
-// way — it is representationally identical under both versions (§2.2); only
-// the sig's TEXT is what the whitelist guard inspects.
+// A V0_1 export typed `math-text` coarsens to 0.0.6's single
+// `math` with ZERO value coercion (the shared `Value::MathText` rep).
+//
+// SEALED because a sig's `val .. : ty` item is the ONE surface site this port's
+// guard SEES (`collect_free_globals`'s `walk_sig_annot`) — `cst_v1::Bind::Value`
+// has no `: ty` field, so an unsealed `val` carries no ascription to inspect.
 const V01_MATH_EXPORT_PKG_SRC: &str = "\
 module V01MathExport :> sig
   val my-math : math-text
@@ -408,22 +305,9 @@ V01Mini.document (|title = `v01-math-reverse`|) '<
     );
 }
 
-// ============================================================================
-// X4b: a `V0_1` dependency's `deco`/`deco-set` export (module-SIG-typed —
-// the only textual site 0.1's grammar can express such an ascription at
-// all) CROSSES into a 0.0.6 document, value-coerced by wrapping the single
-// `graphics` a 0.1 deco returns in the SINGLETON LIST a 0.0.6 consumer
-// expects — the exact inverse of X3b's `unite-graphics` wrap. See
-// `v1::xver_adapt`'s own "X4b" section for the derivation, including why the
-// coercion shadow needs an explicit `check_program_with_xver_shadows`
-// exemption from a SECOND `:>` seal check.
-// ============================================================================
+// A `V0_1` `deco`/`deco-set` export crossing into a 0.0.6 document.
 
-/// A module typed via its own `sig`: its `val my-deco : deco` item is the
-/// ONE surface site 0.1's grammar can express a bare `deco` ascription at
-/// all (an ordinary unsealed `val` binding carries no ascription syntax at
-/// all — `cst_v1::Bind::Value`'s own doc comment). Its body returns a SINGLE
-/// `graphics` (0.1 semantics), which is exactly what must be downgraded.
+/// The body returns a SINGLE `graphics` (0.1 semantics) — what gets downgraded.
 const V01_DECO_EXPORT_PKG_SRC: &str = "\
 module V01DecoExport :> sig
   val my-deco : deco
@@ -437,16 +321,11 @@ end = struct
 end
 ";
 
-/// The 0.0.6-authored consumer: a `let-inline` command that hands the
-/// crossed deco to `inline-frame-outer` — a REAL consumer
-/// (`primitives::apply_deco`, fired by `lib.rs`'s `fire_inline_frame` at
-/// render time under `interp.version == V0_0`, not a stand-in). Two things
-/// would break without the X4b coercion, and both are compile/eval failures
-/// rather than silent mis-renders: `inline-frame-outer` inside the entry's
-/// `Ast::VersionScope(V0_0, _)` carries `t_deco(V0_0)` (a `graphics list`
-/// result), so an unwrapped 0.1 deco fails to unify; and even past that,
-/// `apply_deco`'s `coerce_graphics_result` would `as_list` a bare
-/// `Value::Graphics`.
+/// A REAL consumer (`primitives::apply_deco`, fired by `fire_inline_frame` under
+/// `interp.version == V0_0`). Without the reverse deco coercion both failure modes are
+/// loud, not mis-renders: `inline-frame-outer` inside `VersionScope(V0_0, _)`
+/// carries `t_deco(V0_0)` so an unwrapped 0.1 deco fails to unify, and past that
+/// `coerce_graphics_result` would `as_list` a bare `Value::Graphics`.
 fn deco_consumer_entry(pkg: &str, deco_expr: &str) -> String {
     format!(
         "\
@@ -500,10 +379,8 @@ fn reverse_deco_export_via_sig_coerces_and_renders() {
     );
 }
 
-/// The shape a real 0.1 package would use: an ARROW-TAILED `deco` export
-/// (`length -> deco`), applied by the consumer before it reaches
-/// `inline-frame-outer`. The generated wrapper eta-expands over the leading
-/// argument first, then over `deco`'s own four.
+/// The generated wrapper eta-expands over the leading argument first, then over
+/// `deco`'s own four.
 #[test]
 fn reverse_deco_export_curried_sig_coerces_and_renders() {
     let dir = TempDir::new("deco-export-curried-coerces");
@@ -537,10 +414,8 @@ end
     );
 }
 
-/// The 4-tuple sibling: a `deco-set` export, consumed through
-/// `inline-frame-breakable` (whose FIRST component is the only one a
-/// non-broken single-line frame fires). Each component is downgraded
-/// independently.
+/// Each component is downgraded independently. `inline-frame-breakable` fires
+/// only the FIRST for a non-broken single-line frame.
 #[test]
 fn reverse_decoset_export_via_sig_coerces_and_renders() {
     let dir = TempDir::new("decoset-export-coerces");
@@ -588,32 +463,13 @@ V01Mini.document (|title = `v01-decoset-reverse`|) '<
     );
 }
 
-/// An OPTIONAL-argument arrow in the export's type — a LABELLED optional row,
-/// which is the only kind 0.1 has. It used to reject outright; it now crosses
-/// with the export's optional interface intact.
-///
-/// The shadow cannot FORWARD the label, because 0.1's two halves disagree
-/// about who owns the `option`: `Ast::LambdaOpt` binds the receiving binder at
+/// The shadow cannot FORWARD the label, because 0.1's two halves disagree about
+/// who owns the `option`: `Ast::LambdaOpt` binds the receiving binder at
 /// `length option` while `Ast::ApplyOpt`'s `?(thickness = e)` takes the raw
-/// `length` and wraps it in `Some` itself. So it CASE-SPLITS instead —
-/// `Some(v)` re-supplies as `?(thickness = v)`, `None` omits the label
-/// entirely and lets `eval.rs`'s `push_opt_slots` restore the `None`. Both
-/// arms are exercised below:
-///
-/// - `V01DecoOpt.my-deco 1pt` — the 0.0.6-authored consumer's plain call.
-///   Plain `Ast::Apply` carries an OPEN optional row under `V0_1`, which is
-///   what lets a call with no optional syntax at all typecheck against a
-///   callee that declares one.
-/// - `V01DecoOpt.my-deco ?(thickness = 4pt) 1pt` — supplying it. `?(l = e)`
-///   is reachable from a 0.0.6-lexed file (under `V0_0` a bare `?` still
-///   lexes as `OptionalType`, and only the FUSED `?:`/`?*` sigils are
-///   0.0.6-specific), and the cross-version pipeline elaborates the whole
-///   merged program under an ambient `V0_1` scope, so the bundle is not
-///   version-gated away.
-///
-/// The two calls make the deco draw at different insets, so the assertion
-/// that both fired is also an assertion that the label actually reached the
-/// 0.1 closure rather than being quietly dropped.
+/// `length` and wraps it in `Some` itself. So it CASE-SPLITS instead — `Some(v)`
+/// re-supplies as `?(thickness = v)`, `None` omits the label and lets
+/// `push_opt_slots` restore it. Both arms are exercised below, at different
+/// insets, so "both fired" also asserts the label reached the 0.1 closure.
 #[test]
 fn reverse_deco_export_optional_arg_sig_coerces_and_renders() {
     let dir = TempDir::new("deco-export-optional-coerces");
@@ -677,9 +533,8 @@ V01Mini.document (|title = `v01-deco-opt-reverse`|) '<
     );
 }
 
-/// The optional-argument narrowing that survives in this direction: a
-/// ROW-VARIABLE tail (`?(l : τ | ?'r)`) leaves the label set OPEN, so there is
-/// no finite case split to generate and the export still rejects.
+/// A ROW-VARIABLE tail (`?(l : τ | ?'r)`) leaves the label set OPEN, so there
+/// is no finite case split to generate and the export still rejects.
 #[test]
 fn reverse_deco_export_open_optional_row_still_rejected() {
     let dir = TempDir::new("deco-export-optrow-negative");
@@ -711,16 +566,11 @@ end
     }
 }
 
-/// A `deco` reached through a NESTED `module` decl in the signature now
-/// CROSSES (it used to be X4b's other deliberate narrowing). The shadow has to
-/// name the member under exactly the qualified key `v1::module_check` seals it
-/// by, and a nested member's seal goes through `walk_nested_seals_a`'s own path
-/// composition — which is simply "push each nested module's name onto its
-/// parent's path", the same composition
-/// `elaborate::push_named_binding`/`qualify_key` use for the export alias, so
-/// `classify_deco_exports_v01_sig` reproduces it by recursing into `Decl::
-/// Module` under a lengthened `module_path`. The consumer below names the
-/// member the way the seal key spells it, `V01DecoNested.Inner.my-deco`.
+/// The shadow must name the member under exactly the qualified key
+/// `v1::module_check` seals it by: `walk_nested_seals_a` pushes each nested
+/// module's name onto its parent's path (the same composition
+/// `elaborate::qualify_key` uses), so `classify_deco_exports_v01_sig` recurses
+/// into `Decl::Module` under a lengthened `module_path`.
 #[test]
 fn reverse_deco_export_nested_module_sig_coerces_and_renders() {
     let dir = TempDir::new("deco-export-nested-coerces");
@@ -760,25 +610,14 @@ end
     );
 }
 
-/// A `deco` behind a nested `module` decl whose signature is a NAMED reference
-/// rather than a literal `sig .. end` now crosses too. This is the shape that
-/// used to reject: the scan declined to chase an unresolved signature name, so
-/// a `deco` reachable only through one refused the whole dependency.
-///
-/// It resolves through the very table `v1::module_check::resolve_sig` consults
-/// — `surface::find_sig_keyed`, searched OUTWARD from the same `site_path`
-/// (`module_check`'s top-level seal and its `handle_nested_module_decl` both
-/// pass the module's own path, which is exactly the classifier's
-/// `module_path`). So the member still lands under the composed key
-/// `V01DecoNamedSig.Inner.my-deco`, which is the `env.seals` key, the
-/// `Ast::LetIn` binder name, and the string the consumer below writes.
-///
-/// Note the `signature S = ..` decl in the same signature: it declares a
-/// SIGNATURE, never a value, so on its own it neither crosses nor rejects
-/// (that used to be this test's whole subject). What it does do is register
-/// the definition `module Inner : S` then dereferences — which is why
-/// `lib.rs`'s reverse arm calls `surface::build_file_surface` BEFORE the
-/// classifier.
+/// Resolved through the very table `v1::module_check::resolve_sig` consults —
+/// `surface::find_sig_keyed`, searched OUTWARD from the same `site_path` — so the
+/// member still lands under the composed key `V01DecoNamedSig.Inner.my-deco`,
+/// which is the `env.seals` key, the `Ast::LetIn` binder name, and the string
+/// the consumer writes. The `signature S = ..` decl binds no value, so it
+/// neither crosses nor rejects; it registers the definition `module Inner : S`
+/// dereferences, which is why `lib.rs`'s reverse arm calls
+/// `surface::build_file_surface` BEFORE the classifier.
 #[test]
 fn reverse_deco_export_nested_named_signature_coerces_and_renders() {
     let dir = TempDir::new("deco-export-named-sig-coerces");
@@ -823,10 +662,9 @@ end
     );
 }
 
-/// The `include` sibling: `include S` splices S's decls into the ENCLOSING
-/// signature in place (`module_check::splice_decls`), so the member's path is
-/// the includer's own — `V01DecoInclude.my-deco`, NOT `V01DecoInclude.S.my-
-/// deco`. The classifier recurses at the unchanged `module_path` to match.
+/// `include S` splices S's decls into the ENCLOSING signature in place
+/// (`module_check::splice_decls`), so the key is `V01DecoInclude.my-deco`, NOT
+/// `V01DecoInclude.S.my-deco`.
 #[test]
 fn reverse_deco_export_through_sig_include_coerces_and_renders() {
     let dir = TempDir::new("deco-export-include-coerces");
@@ -864,14 +702,11 @@ end
     );
 }
 
-/// A member declared at a type SYNONYM of `deco` (`type frame = deco  val
-/// my-deco : length -> frame`). The scan reads a `val`'s SPELLED type, so
-/// before it expanded the signature's own transparent type declarations this
-/// tail read as the bare name `frame`, matched no forked builtin, and the
-/// export silently declined to cross — surfacing later as an ordinary
-/// `TypeError` at this entry's `inline-frame-outer` call rather than as a
-/// boundary diagnostic. `V01Syns` expands it in place, so this reads exactly
-/// as the spelled-out `length -> deco` does.
+/// The scan reads a `val`'s SPELLED type, so without expanding the signature's
+/// transparent type declarations this tail reads as the bare name `frame`,
+/// matches no forked builtin, and the export silently declines to cross —
+/// surfacing later as an ordinary `TypeError` rather than a boundary
+/// diagnostic. `V01Syns` expands it in place.
 #[test]
 fn reverse_deco_export_via_type_synonym_coerces_and_renders() {
     let dir = TempDir::new("deco-export-synonym-coerces");
@@ -907,13 +742,9 @@ end
     );
 }
 
-/// The same member, made a `deco` by a SUB-MODULE refinement
-/// (`sig module Inner : sig type t :: o  val my-deco : t end end with Inner
-/// type t = deco`). `v1::module_check::resolve_sig` used to reject that form
-/// outright, so no decl list existed even in principle and the scan could not
-/// see through it; the refinement now descends into the named member (one
-/// chain segment consumed per layer) in BOTH the seal checker and this scan,
-/// so `Inner.t` really is transparent-`deco` here and the export crosses.
+/// The refinement descends into the named member (one chain segment per layer)
+/// in BOTH `v1::module_check::resolve_sig` and this scan, so `Inner.t` really is
+/// transparent-`deco` here and the export crosses.
 #[test]
 fn reverse_deco_export_via_with_submodule_type_refinement_coerces_and_renders() {
     let dir = TempDir::new("deco-export-with-submodule-type-coerces");
@@ -956,15 +787,10 @@ end
     );
 }
 
-/// The narrowing that genuinely survives: a `deco` behind a FUNCTOR signature
-/// member. A functor is not a module — there is no `V01DecoFunctor.Make.my-
-/// deco` for a shadow to rebind, and 0.0.6 has no syntax that could apply one.
-/// Its members exist only at an APPLICATION's own path, computed by
-/// `v1::functor` in whatever file writes `module Inst = V01DecoFunctor.Make
-/// Arg` — a file this scan has no access to, and possibly one the splice loop
-/// has not read yet. So the path a shadow would have to name is not a function
-/// of THIS file's signature at all, and the dependency rejects rather than
-/// crossing silently.
+/// A functor is not a module — its members exist only at an APPLICATION's own
+/// path, computed by `v1::functor` in whatever file writes `module Inst =
+/// V01DecoFunctor.Make Arg`, a file this scan cannot see. So the path a shadow
+/// would name is not a function of THIS file's signature at all.
 #[test]
 fn reverse_deco_export_behind_functor_sig_member_still_rejected() {
     let dir = TempDir::new("deco-export-functor-negative");
@@ -996,25 +822,13 @@ end
     }
 }
 
-// ============================================================================
-// X4b placement: WHICH consumers see the coerced view.
-// ============================================================================
+// Which consumers see the coerced view.
 
-/// A LATER *0.1* dependency consuming the same `deco` export the coercion
-/// shadow rebinds.
-///
-/// `V01DecoRelay` is 0.1-authored, so it wants `V01DecoExport.my-deco` at 0.1's
-/// own `deco` (a single `graphics`) — but its `@require:` puts it AFTER the
-/// exporting dependency in the merged prelude, which is exactly where the
-/// coercion shadow used to be spliced unconditionally. It therefore saw the
-/// 0.0.6-shaped (`graphics list`) view and failed its own `:>` conformance
-/// check.
-///
-/// The shadows are now installed LAZILY — at each transition INTO a
-/// 0.0.6-authored block — and the originals restored at each transition back
-/// into a 0.1-authored one, so each generation reads the export at the shape
-/// its own `deco` means. The entry below is 0.0.6-authored and consumes the
-/// RELAY's export, which crosses through its own shadow.
+/// `V01DecoRelay` wants `V01DecoExport.my-deco` at 0.1's own `deco`, but its
+/// `@require:` puts it AFTER the exporting dependency in the merged prelude, so
+/// an unconditionally spliced shadow would reach it and fail its `:>`
+/// conformance check. Shadows are installed LAZILY instead — at each transition
+/// INTO a 0.0.6-authored block, originals restored on the way back.
 #[test]
 fn reverse_deco_export_consumed_by_a_later_v01_dep_keeps_the_v01_view() {
     let dir = TempDir::new("deco-export-later-v01-consumer");
@@ -1064,15 +878,11 @@ end
 ///                  | v01-deco-relay (0.1)  | entry (0.0.6)
 /// ```
 ///
-/// so the SAME export (`V01DecoExport.my-deco`) is read at 0.0.6's `graphics
-/// list` shape by the middle 0.0.6 dependency, then at 0.1's single-`graphics`
-/// shape by the 0.1 dependency after it, then at 0.0.6's shape again by the
-/// entry. That is one `Install`, one `Restore`, and a second `Install` — the
-/// only fixture in this file where the lazy transitions do not collapse to a
-/// single install.
-///
-/// Both consumers below actually FIRE their deco, so the two page-graphics
-/// entries are the assertion that each got a value its own generation's
+/// so the SAME export is read at 0.0.6's `graphics list` shape, then at 0.1's
+/// single-`graphics` shape, then at 0.0.6's again: one `Install`, one `Restore`
+/// and a second `Install` — the only fixture here where the lazy transitions do
+/// not collapse to a single install. Both consumers actually FIRE their deco, so
+/// the two page-graphics entries assert each got a value its own generation's
 /// `apply_deco` could use, not merely one that typechecked.
 #[test]
 fn reverse_deco_export_interleaved_v006_and_v01_consumers_each_get_their_own_view() {
@@ -1082,10 +892,9 @@ fn reverse_deco_export_interleaved_v006_and_v01_consumers_each_get_their_own_vie
         "dist-v01/packages/v01-deco-export.satyh",
         V01_DECO_EXPORT_PKG_SRC,
     );
-    // A NATIVE 0.0.6 co-dependency consuming the crossed export: its binding is
-    // spliced inside `Ast::VersionScope(V0_0, _)`, so `inline-frame-outer`
-    // there carries `t_deco(V0_0)` and only the coerced (list-shaped) view
-    // unifies.
+    // A NATIVE 0.0.6 co-dependency: spliced inside `Ast::VersionScope(V0_0, _)`,
+    // so its `inline-frame-outer` carries `t_deco(V0_0)` and only the coerced
+    // (list-shaped) view unifies.
     dir.write(
         "dist/packages/v006-deco-user.satyh",
         "\
@@ -1095,8 +904,6 @@ let-inline ctx \\v006-framed it =
   inline-frame-outer (2pt, 2pt, 2pt, 2pt) V01DecoExport.my-deco (read-inline ctx it)
 ",
     );
-    // ... and a 0.1 dependency AFTER it consuming the very same export, whose
-    // own `:>` signature declares 0.1's `deco` (a single `graphics`).
     dir.write(
         "dist-v01/packages/v01-deco-relay.satyh",
         "\

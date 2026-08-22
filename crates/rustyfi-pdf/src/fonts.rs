@@ -1,14 +1,13 @@
-//! Font configuration discovery and resolution (text-rendering plan, Slice
-//! 1): reads a small, plain-JSON font configuration and turns it into a
-//! [`TtfFontStore`] via its existing [`TtfFontStore::load`], so a document
-//! naming a real font renders through [`crate::render_pdf_ttf`] instead of
-//! falling back to the base-14 metrics.
+//! Font configuration discovery and resolution (Slice 1): reads a small,
+//! plain-JSON font configuration and turns it into a [`TtfFontStore`] via
+//! its existing [`TtfFontStore::load`], so a document naming a real font
+//! renders through [`crate::render_pdf_ttf`] instead of falling back to
+//! the base-14 metrics.
 //!
 //! This module only *resolves configuration into a store*; it does not
-//! change how typesetting reaches fonts at all — `set-font-key` already
-//! routes a `FontKey` through whatever `&dyn FontMetrics` the caller passed
-//! to `compile_document_cst`, so swapping in a [`TtfFontStore`] here is the
-//! entire change on the typesetting side.
+//! change how typesetting reaches fonts — `set-font-key` already routes a
+//! `FontKey` through whatever `&dyn FontMetrics` the caller passed to
+//! `compile_document_cst`.
 //!
 //! # Compatibility with SATySFi's own `fonts.satysfi-hash`
 //!
@@ -20,20 +19,16 @@
 //! reading anything else would mean packages install faces no document can
 //! name.
 //!
-//! `default-font` is plain JSON. `fonts` is Yojson: each entry is wrapped in a
-//! variant, `<Single: {"src": "…"}>` as upstream writes it or
-//! `<"Collection":{"src-dist":"…","index":1}>` as an installed package does,
-//! which no JSON parser accepts. [`yojson_to_json`] strips those wrappers —
-//! the tag says nothing the fields do not — after which the schema below
-//! parses with `serde_json`. Both path spellings are accepted: `src` relative
-//! to the font root, and upstream's `src-dist` relative to `dist/`.
+//! `default-font` is plain JSON. `fonts` is Yojson: each entry is wrapped in
+//! a variant that no JSON parser accepts, which [`yojson_to_json`] strips
+//! (see its doc comment) before the schema below parses with `serde_json`.
+//! Both path spellings are accepted: `src` and upstream's `src-dist`, which
+//! resolve against different bases — see `RawFontEntry`'s field docs.
 //!
-//! `serde`/`serde_json` were chosen over a tiny hand-rolled parser because
-//! the schema below is a plain, statically-shaped JSON object (no variant
-//! syntax to special-case) — exactly what `#[derive(Deserialize)]` is for —
-//! and `serde` is already a workspace dependency; reaching for a hand parser
-//! here would just be reimplementing JSON string/number/object escaping for
-//! no benefit.
+//! `serde`/`serde_json` were chosen over a hand-rolled parser: once the
+//! variant wrappers are gone the schema below is a plain, statically-shaped
+//! JSON object — exactly what `#[derive(Deserialize)]` is for — and `serde`
+//! is already a workspace dependency.
 //!
 //! # `fonts.satysfi-hash`
 //!
@@ -60,11 +55,11 @@
 //! # `default-font.satysfi-hash` (port-specific; not upstream's schema)
 //!
 //! Upstream's `default-font.satysfi-hash` maps *script* to a font selection
-//! (with `ratio`/`rising` scaling knobs) — that needs script segmentation
-//! this milestone does not have yet (see the plan's "Full roadmap" §3/§4).
-//! Slice 1 only needs to seed the three faces the base-14 provider already
-//! has (`FontKey(0/1/2)` = regular/bold/oblique, `base14.rs`), so this port
-//! defines a much smaller, unrelated schema at the same filename:
+//! (with `ratio`/`rising` scaling knobs). This port defines a smaller,
+//! unrelated schema at the same filename, seeding the three faces the
+//! base-14 provider already has (`FontKey(0/1/2)` = regular/bold/oblique,
+//! `base14.rs`), with the per-script scheme as an optional `scripts` block
+//! (D1a, see `RawScripts`):
 //!
 //! ```json
 //! { "regular": "lmroman", "bold": "lmroman-bold", "oblique": "lmroman-oblique" }
@@ -83,15 +78,13 @@
 //! Latin Modern Math (`lmmath`, upstream SATySFi's own default math font),
 //! falling back to `dejavu-math` only if LM Math is unavailable. Absent ⇒ no
 //! math default is configured, and `math_font` stays at `Context::initial`'s
-//! own seed (`FontKey(0)`, the regular text face) — unchanged pre-Slice-B
-//! behavior.
+//! own seed (`FontKey(0)`, the regular text face).
 //!
 //! # Discovery and error handling
 //!
 //! See [`FontRegistry::discover`] for the full precedence chain. In short: a
-//! missing configuration (nothing found at the location being examined) is
-//! "nothing configured" and resolves to `Ok(None)`, so a caller with no
-//! fonts set up anywhere renders exactly as before this module existed. Once
+//! missing configuration is "nothing configured" and resolves to `Ok(None)`,
+//! so a caller with no fonts set up anywhere keeps the base-14 path. Once
 //! *something* is found, though, further problems (malformed JSON, a
 //! default-face abbrev that isn't defined, a font file that fails to load)
 //! are real errors (`Err`) rather than a silent fall-back to base-14 —
@@ -122,7 +115,6 @@ pub enum FontSource {
 }
 
 impl FontSource {
-    /// The underlying file path, regardless of variant.
     pub fn path(&self) -> &Path {
         match self {
             FontSource::Single(path) => path,
@@ -135,12 +127,9 @@ impl FontSource {
 /// faces (`FontKey(0/1/2)` = regular/bold/oblique), ready to become a
 /// [`TtfFontStore`] via [`FontRegistry::build_store`].
 ///
-/// Keeping the full abbrev map around (not just the three resolved paths)
-/// is deliberate scope for the immediate follow-on the plan describes: a
-/// real `set-font` primitive that resolves an *arbitrary* abbrev to a
-/// newly-allocated `FontKey` beyond these three seeded slots. Slice 1 does
-/// not add that primitive, but this shape does not have to be revisited to
-/// support it later.
+/// The full abbrev map is kept (not just the three resolved paths) so
+/// `set-font` can resolve an *arbitrary* abbrev to a `FontKey` beyond the
+/// three seeded slots.
 #[derive(Debug, Clone)]
 pub struct FontRegistry {
     faces: BTreeMap<String, FontSource>,
@@ -158,9 +147,7 @@ pub struct FontRegistry {
     /// The abbrev named by `default-font.satysfi-hash`'s optional `"math"`
     /// key (Slice B) — the font `get-initial-context` seeds
     /// `Context::math_font` with. `None` when absent (or the registry came
-    /// from `--font`/CLI flags, which have no `"math"` concept), in which
-    /// case `math_font` stays at `Context::initial`'s own seed
-    /// (`FontKey(0)`, the regular text face).
+    /// from `--font`/CLI flags, which have no `"math"` concept).
     math_font: Option<String>,
 }
 
@@ -329,10 +316,9 @@ struct RawDefaultFace {
     #[serde(default)]
     scripts: Option<RawScripts>,
     /// Slice B: the abbrev `get-initial-context` seeds
-    /// `Context::math_font` with. Optional — absent means no math
-    /// default is configured (unchanged pre-Slice-B behavior:
-    /// `Context::math_font` stays at `Context::initial`'s `FontKey(0)`
-    /// seed).
+    /// `Context::math_font` with. Optional — absent means no math default is
+    /// configured, and `Context::math_font` stays at `Context::initial`'s
+    /// `FontKey(0)` seed.
     #[serde(default)]
     math: Option<String>,
 }
@@ -517,10 +503,9 @@ impl FontRegistry {
             }
         }
 
-        // Slice B: validate the optional `"math"` abbrev the same way as
-        // `regular`/`bold`/`oblique` — a config that NAMES a math default
-        // but gets the abbrev wrong is a broken config (`Err`), never a
-        // silent fall-back to "no math default configured".
+        // Slice B: same doctrine for the optional `"math"` abbrev — a config
+        // that NAMES a math default but gets the abbrev wrong is a broken
+        // config (`Err`), never a silent "no math default configured".
         if let Some(abbrev) = &raw_default.math {
             if !faces.contains_key(abbrev) {
                 return Err(FontConfigError::UnknownAbbrev {
@@ -570,12 +555,10 @@ impl FontRegistry {
     }
 
     /// Resolve every configured abbrev and build an N-slot [`TtfFontStore`]
-    /// (D1a): the three seeded default faces occupy `FontKey(0/1/2)`
-    /// exactly as before (byte-identical to the pre-D1a 3-slot build for a
-    /// config with no other abbrevs), and every OTHER abbrev in
-    /// [`Self::faces`] gets its own slot beyond that, deduped against every
-    /// file already loaded (by canonical path) so two abbrevs naming the
-    /// same physical font file share one embedded copy.
+    /// (D1a): the three seeded default faces occupy `FontKey(0/1/2)`, and
+    /// every OTHER abbrev in [`Self::faces`] gets its own slot beyond that,
+    /// deduped against every file already loaded (by canonical path) so two
+    /// abbrevs naming the same physical font file share one embedded copy.
     ///
     /// **Eager, not lazy.** Upstream (`fontInfo.ml:24-132`) loads a face the
     /// first time a script/abbrev actually needs it. `TtfFontStore` cannot
@@ -586,11 +569,10 @@ impl FontRegistry {
     /// cheap enough; revisit only if a huge registry appears.
     pub fn build_store(&self) -> Result<TtfFontStore, FontConfigError> {
         // Resolve every path FIRST (can fail with `UnsupportedCollectionIndex`
-        // — a pure config check, no I/O) before any file is actually read —
-        // preserves the pre-D1a guarantee that a bad config abbrev is
-        // reported without touching disk at all
+        // — a pure config check, no I/O) before any file is actually read, so
+        // a bad config abbrev is reported without touching disk at all
         // (`build_store_rejects_nonzero_collection_index_without_touching_
-        // disk`), now extended to every abbrev, not just the three defaults.
+        // disk`).
         let regular_path = self.resolve(&self.default_faces[0])?;
         let bold_path = if self.default_faces[1] != self.default_faces[0] {
             Some(self.resolve(&self.default_faces[1])?)
@@ -615,8 +597,8 @@ impl FontRegistry {
 
         // Step 1: the three default slots, in `FontKey(0/1/2)` order —
         // dedup only regular-vs-{bold,oblique} by ABBREV-NAME equality
-        // (unchanged pre-D1a behavior: `TtfFontStore::load`'s own
-        // bold/oblique-falls-back-to-regular convention).
+        // (`TtfFontStore::load`'s own bold/oblique-falls-back-to-regular
+        // convention).
         let regular_idx = load_or_dedup(&mut files, &mut file_by_path, &regular_path)?;
         let mut slots = vec![regular_idx, regular_idx, regular_idx];
         if let Some(path) = &bold_path {
@@ -665,10 +647,8 @@ impl FontRegistry {
             }
         }
 
-        // Slice B: resolve the configured `"math"` abbrev (if any) to the
-        // `FontKey` just allocated for it — same lookup as the `scripts`
-        // block above, `abbrevs` already has every abbrev (including the
-        // three default faces, via the `or_insert` loop) at this point.
+        // Slice B: resolve the configured `"math"` abbrev (if any) — same
+        // lookup as the `scripts` block above.
         let math_default = self.math_font.as_ref().map(|abbrev| {
             *abbrevs.get(abbrev).unwrap_or_else(|| {
                 panic!("FontRegistry invariant violated: math abbrev {abbrev:?} unresolved")
@@ -706,8 +686,7 @@ impl FontRegistry {
         }
     }
 
-    /// The abbrev -> font source map, e.g. for a future `set-font` primitive
-    /// resolving an abbrev beyond the three seeded default slots.
+    /// The abbrev -> font source map.
     pub fn faces(&self) -> &BTreeMap<String, FontSource> {
         &self.faces
     }

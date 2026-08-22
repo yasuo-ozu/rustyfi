@@ -1,18 +1,8 @@
-//! Slice 1 / Tier 0 stdlib port proof: `@require: list` (hence, transitively,
-//! `@require: option`) — and `@require: option` alone — must PARSE,
-//! ELABORATE, TYPECHECK, and EVALUATE through the real multi-file loader with
-//! this repo's `lib-rustyfi/` as `lib_root`. This mirrors `rustyfi`'s own
-//! production pipeline (`main.rs`'s `cmd_compile`: `rustyfi_loader::load` ->
-//! merge preludes -> `compile_document_cst`) rather than a bespoke
-//! single-file harness, so it genuinely exercises `@require:` resolution
-//! (including the NESTED `list.satyg -> @require: option` edge) through the
-//! production loader crate — not just a hand-rolled shortcut.
-//!
-//! `option.satyg`/`list.satyg` under `lib-rustyfi/dist/packages/` are copied
-//! byte-for-byte from upstream (the plan's "copy-verbatim" policy) — this
-//! test is the proof the compiler now *accepts* them (the Slice-1
-//! acceptance bar is "compiles", i.e. evaluates to a value, not merely
-//! "parses" — see the plan's Verification table).
+//! Tier 0 stdlib port proof: `@require: list` (transitively
+//! `option`) and `@require: option` alone must compile end-to-end through
+//! the real multi-file loader with `lib-rustyfi/` as `lib_root` — the same
+//! pipeline `rustyfi`'s `main.rs` uses, not a hand-rolled shortcut.
+//! `option.satyg`/`list.satyg` are copied byte-for-byte from upstream.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -26,18 +16,10 @@ use rustyfi_lang::value::Value;
 use rustyfi_lang::{elaborate, eval, primitives, typecheck};
 use rustyfi_loader::{LoadOptions, LoadedProgram};
 
-/// This repo's `lib-rustyfi/` (the real Tier-0 packages' home), resolved
-/// relative to this crate's own manifest directory — the same convention
-/// `compile.rs`'s private `prepare_document` test helper already uses for
-/// `stdja-mini.satyh`.
 fn lib_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../lib-rustyfi")
 }
 
-/// A uniquely-named temp `.saty` file, cleaned up on drop — scaled down from
-/// `rustyfi-loader/tests/loader.rs`'s `TempDir` fixture pattern to the one
-/// entry file each test here needs (the packages themselves already live on
-/// disk under `lib_root()`, so there is no fixture tree to build).
 struct TempDoc(PathBuf);
 
 impl TempDoc {
@@ -60,13 +42,6 @@ impl Drop for TempDoc {
     }
 }
 
-/// Merge a loader-resolved program's preludes into one synthetic
-/// `cst::File`, exactly like `rustyfi`'s private `merge_program`
-/// (`main.rs`): the loader guarantees dependency-first order with the entry
-/// document last, so every library's prelude is spliced ahead of the
-/// entry's own, in that order (the v0.0.6 analog typechecks each library
-/// into a shared environment in dependency order; untyped elaboration gets
-/// the same scoping by prelude concatenation).
 fn as_v006(cst: rustyfi_loader::LoadedCst) -> rustyfi_syntax::cst::File {
     match cst {
         rustyfi_loader::LoadedCst::V0_0(f) => f,
@@ -94,10 +69,8 @@ fn merge_program(program: LoadedProgram) -> rustyfi_syntax::cst::File {
     }
 }
 
-/// `FontMetrics` stub: Tier-0 packages (`option`/`list`) are pure computation
-/// over int/list/option values — never text/box primitives — so this is
-/// never actually consulted. It exists only because `eval::Interp::new`
-/// requires a `&dyn FontMetrics`.
+/// Never consulted — Tier-0 packages do no text/box rendering; exists only
+/// because `eval::Interp::new` requires a `&dyn FontMetrics`.
 struct NoFonts;
 
 impl FontMetrics for NoFonts {
@@ -112,11 +85,9 @@ impl FontMetrics for NoFonts {
     }
 }
 
-/// A real (if crude) `FontMetrics`, for the `pervasives` tests below that
-/// call `read-inline` on actual text (`\SATySFi` et al.) — `NoFonts`'s
-/// always-`None` `advance` would make any non-empty word a dynamic error
-/// (see `primitives.rs`'s `text_to_boxes`). Mirrors the `Mono` stub already
-/// used the same way by `prims_phase4.rs`/`eval_phase2.rs`/etc.
+/// A real (if crude) `FontMetrics`, for tests that call `read-inline` on
+/// actual text — `NoFonts`'s always-`None` `advance` would make any
+/// non-empty word a dynamic error (see `primitives.rs`'s `text_to_boxes`).
 struct Mono;
 
 impl FontMetrics for Mono {
@@ -135,18 +106,10 @@ impl FontMetrics for Mono {
     }
 }
 
-/// Load `src` (a document `@require:`ing packages resolved against
-/// `lib_root()`) through the real loader, merge, elaborate, typecheck, and
-/// evaluate — returning the final `Value`. This is the full Slice-1
-/// "compiles" bar (Verification table: `Parses` / `Typechecks` /
-/// `Compiles`), not merely a parse or a typecheck.
 fn compile_via_loader(tag: &str, src: &str) -> Result<Value, String> {
     compile_via_loader_with_metrics(tag, src, &NoFonts)
 }
 
-/// Same as [`compile_via_loader`], but with a caller-supplied
-/// `FontMetrics` — for tests (see `Mono`, below) that actually render text
-/// through `read-inline`, which `NoFonts` (advance always `None`) cannot do.
 fn compile_via_loader_with_metrics(
     tag: &str,
     src: &str,
@@ -172,15 +135,11 @@ fn compile_via_loader_with_metrics(
         .map_err(|e| format!("eval: {e}"))
 }
 
-/// Run `f` (a self-contained compile-and-assert closure) on a thread with a
-/// generously large stack. `gr.satyh` (205 lines — considerably bigger than
-/// any package loaded so far) needs more depth than the default stack
-/// allows through syan's recursive-descent parser, the same reason
-/// `rustyfi-syntax/tests/roundtrip.rs`'s deep-nesting test spawns a
-/// bigger-stack thread. Unlike that test, `Value` holds `Rc`s (not `Send`),
-/// so the compile call AND every assertion on its result must run entirely
-/// *inside* `f` — nothing `Value`-shaped can cross back out to the caller's
-/// (default-size-stack) thread.
+/// Runs `f` on a big-stack thread: `gr.satyh` (205 lines) needs more depth
+/// than the default stack allows through syan's recursive-descent parser.
+/// `Value` holds `Rc`s (not `Send`), so the compile call AND every assertion
+/// on its result must run entirely *inside* `f` — nothing `Value`-shaped can
+/// cross back out to the caller's thread.
 fn run_with_big_stack(f: impl FnOnce() + Send + 'static) {
     std::thread::Builder::new()
         .stack_size(64 * 1024 * 1024)
@@ -197,9 +156,6 @@ fn as_int(v: Value) -> i64 {
     }
 }
 
-/// Extract `(x, y)` raw `f64`s from a `point` (`Value::Tuple([Length,
-/// Length])`) — for asserting exact coordinates after a `shift`/`linear-
-/// transform` (roadmap A/B) or a `get-graphics-bbox` corner.
 fn as_point_f64(v: &Value) -> (f64, f64) {
     match v {
         Value::Tuple(vs) if vs.len() == 2 => match (&vs[0], &vs[1]) {
@@ -217,10 +173,8 @@ fn as_int_list(v: Value) -> Vec<i64> {
     }
 }
 
-// ============================================================================
-// `@require: list` (transitively pulls in `option`, per `list.satyg`'s own
-// `@require: option` header).
-// ============================================================================
+// `@require: list` (transitively pulls in `option` via `list.satyg`'s own
+// header).
 
 #[test]
 fn require_list_reverse_and_map_compiles_and_evaluates() {
@@ -242,10 +196,6 @@ List.length (List.map (fun x -> x + 1) [1; 2; 3])";
 
 #[test]
 fn require_list_transitively_compiles_option() {
-    // `list.satyg` itself `@require:`s `option` (`List.map-with-ends` calls
-    // `Option.is-none`) — proving a *nested* `@require:` resolves and the
-    // resulting merged program still compiles, not just `list.satyg` in
-    // isolation.
     let src = "@require: list
 in
 Option.from 0 (Some 5)";
@@ -255,9 +205,8 @@ Option.from 0 (Some 5)";
 
 #[test]
 fn require_list_uses_pipe_internally() {
-    // `list.satyg`'s `reverse`/`map-adjacent`/`map-with-ends` all use `|>`
-    // internally (Blocker B) — `fold-left-adjacent` is the most direct way
-    // to exercise that path from outside the module.
+    // `list.satyg`'s `reverse`/`map-adjacent`/`map-with-ends` use `|>`
+    // internally (Blocker B).
     let src = "@require: list
 in
 List.map-adjacent (fun x left right -> x) [1; 2; 3]";
@@ -267,15 +216,10 @@ List.map-adjacent (fun x left right -> x) [1; 2; 3]";
 
 #[test]
 fn require_list_mapi_adjacent_uses_a_tuple_pattern_lambda_correctly() {
-    // `List.mapi-adjacent`'s OWN definition is `fun (i, acc) x leftopt
-    // rightopt -> ..` — a tuple-DESTRUCTURING first parameter. This was the
-    // one real grammar gap Slice 1 hit porting `list.satyg` VERBATIM
-    // (`Expr::Fun`'s parameters were `Vec<VarTok>`, i.e. plain variables
-    // only; `cst.rs`/`elaborate.rs` now accept a full `patbot`, reusing the
-    // same pattern-currying `let-rec` already used — see `cst::ast::Expr::
-    // Fun`'s doc comment). Asserting on the resulting VALUES (not just that
-    // this parses) proves the destructuring actually binds `i`/`acc`
-    // correctly through every fold step, not merely that parsing recovered.
+    // `List.mapi-adjacent`'s own definition destructures a tuple in its
+    // first parameter (`fun (i, acc) x leftopt rightopt -> ..`) — the one
+    // grammar gap hit porting `list.satyg` verbatim (`Expr::Fun` took
+    // only plain variables; see `cst::ast::Expr::Fun`'s doc comment).
     let src = "@require: list
 in
 List.mapi-adjacent (fun i x leftopt rightopt -> i) [10; 20; 30]";
@@ -285,10 +229,6 @@ List.mapi-adjacent (fun i x leftopt rightopt -> i) [10; 20; 30]";
 
 #[test]
 fn require_list_map_with_ends_calls_option_is_none_across_module_boundary() {
-    // `List.map-with-ends` (also `|>`-internal) calls `Option.is-none`
-    // *from list.satyg's own body* — proving the nested `@require: option`
-    // dependency is not just loaded but actually callable from within the
-    // dependent package, not merely from the entry document.
     let src = "@require: list
 in
 List.map-with-ends
@@ -298,9 +238,7 @@ List.map-with-ends
     assert_eq!(as_int_list(v), vec![100, 2, 200]);
 }
 
-// ============================================================================
-// `@require: option` alone (the second, minimal Slice-1 case).
-// ============================================================================
+// `@require: option` alone (the second, minimal case).
 
 #[test]
 fn require_option_alone_compiles_and_evaluates() {
@@ -331,20 +269,13 @@ Option.from 0 (Option.bind (Some 10) (fun x -> Some (x * 2)))";
     assert_eq!(as_int(v), 20);
 }
 
-// ============================================================================
-// `color` built-in variant (frontend-completion.md §Slice1-B), through the
-// SAME loader pipeline — no `@require:` needed (it's a built-in, seeded by
-// `prim_types::builtin_variants` before any package loads), but routing it
-// through `compile_via_loader` proves a document using it compiles
-// end-to-end via the production load path too, not merely in isolation.
-// ============================================================================
+// `color` built-in variant via the loader — no `@require:`
+// needed (seeded by `prim_types::builtin_variants` before any package
+// loads).
 
 #[test]
 fn a_color_value_compiles_via_the_loader() {
-    // No `@require:` at all: `color` is a true built-in (seeded before any
-    // package loads), so a document naming it needs no package dependency —
-    // this also proves the loader/merge path tolerates a zero-dependency
-    // entry document just as well as a multi-file one.
+    // Zero-dependency entry document — no `@require:` at all.
     let src = "let c = RGB (0.2, 0.4, 0.6)
 in
 match c with
@@ -357,8 +288,6 @@ match c with
 
 #[test]
 fn a_color_value_compiles_alongside_require_list() {
-    // Combined with a real `@require:` too, so the built-in variant and a
-    // loaded package coexist in the same merged program.
     let src = "@require: list
 in
 let cs = [RGB (1.0, 0.0, 0.0); Gray 0.5; CMYK (0.0, 0.0, 0.0, 1.0)] in
@@ -367,23 +296,13 @@ List.length cs";
     assert_eq!(as_int(v), 3);
 }
 
-// ============================================================================
-// `@require: color` — the FIRST bundled `.satyh` package ported verbatim
-// (`lib-rustyfi/dist/packages/color.satyh`, byte-for-byte from upstream). It
-// wraps the built-in `Gray`/`RGB`/`CMYK` ctors in a `Color : sig … end =
-// struct … end` module (`Color.rgb`/`Color.gray`/`Color.red`/…). These prove
-// the package's module signature + struct typecheck against the built-in
-// `color` type and evaluate through the real loader — the module system
-// (already proven on `option`/`list`) applied to a `.satyh` (not `.satyg`)
-// package resolved by the loader's `.satyh`-first extension search.
-// ============================================================================
+// `@require: color` (`lib-rustyfi/dist/packages/color.satyh`, ported
+// verbatim) — wraps the built-in `Gray`/`RGB`/`CMYK` ctors in a `Color`
+// module.
 
 #[test]
 fn require_color_module_constant_red_compiles() {
-    // `Color.red = rgb 1. 0. 0. = RGB(1., 0., 0.)` — a module CONSTANT whose
-    // body calls the module's own `rgb` helper, itself a wrapper over the
-    // built-in `RGB` ctor. Matching on the result proves it evaluated to the
-    // expected variant across the module boundary.
+    // `Color.red = rgb 1. 0. 0. = RGB(1., 0., 0.)`.
     let src = "@require: color
 in
 match Color.red with
@@ -396,9 +315,6 @@ match Color.red with
 
 #[test]
 fn require_color_module_functions_gray_and_rgb_compile() {
-    // The module FUNCTIONS `Color.gray : float -> color` and
-    // `Color.rgb : float -> float -> float -> color` — proving the sig's
-    // arrow-typed `val`s typecheck and the struct's curried lets apply.
     let src = "@require: color
 in
 let g = (match Color.gray 0.5 with Gray(_) -> 1 | _ -> 0) in
@@ -408,24 +324,18 @@ g + c";
     assert_eq!(as_int(v), 2);
 }
 
-// ============================================================================
-// `@require: pervasives` — the critical-path stdlib package nearly every
-// other bundled package `@require:`s. Ported verbatim to
-// `lib-rustyfi/dist/packages/pervasives.satyh`. These tests prove it
-// PARSES + TYPECHECKS + EVALUATES through the real loader, and
-// specifically exercise the 5 primitives it needed that this port didn't
-// already have (`get-natural-metrics`, `inline-frame-outer`,
-// `set-manual-rising`, `script-guard`, `discretionary` — see
-// primitives.rs's "pervasives.satyh unblockers" section).
-// ============================================================================
+// `@require: pervasives` (`lib-rustyfi/dist/packages/pervasives.satyh`,
+// ported verbatim) — exercises the 5 primitives it needed that this port
+// didn't already have: `get-natural-metrics`, `inline-frame-outer`,
+// `set-manual-rising`, `script-guard`, `discretionary` (see primitives.rs's
+// "pervasives.satyh unblockers" section).
 
 #[test]
 fn require_pervasives_compiles_and_evaluates_math_pi() {
-    // The cheapest possible proof the WHOLE prelude typechecks: every
-    // top-level `let`/`let-inline`/`type` in pervasives.satyh sits ahead of
-    // `body` in the same nested-let chain, so this succeeding at all means
-    // the entire file (both type synonyms, all 5 commands, every helper)
-    // typechecked — not just the one binding actually evaluated below.
+    // Cheapest proof the WHOLE prelude typechecks: every top-level binding
+    // in pervasives.satyh sits ahead of `body` in the same nested-let chain,
+    // so success here means the entire file typechecked, not just this one
+    // binding.
     let src = "@require: pervasives
 in
 math-pi";
@@ -441,15 +351,11 @@ math-pi";
 
 #[test]
 fn require_pervasives_no_break_and_mandatory_break_exercise_new_prims() {
-    // `no-break`/`mandatory-break` are plain pervasives.satyh `let`s (not
-    // commands), so they can be called directly with no text rendering
-    // needed — `no-break` calls the new `inline-frame-outer`,
-    // `mandatory-break` calls the new `discretionary`, and wrapping the
-    // result in `get-natural-metrics` (also new) exercises all three at
-    // once. `ctx`'s 400pt paragraph width makes `mandatory-break`'s
-    // `inline-skip (get-text-width ctx *' 2.)` a fixed 800pt no-break box;
-    // `no-break`'s zero padding leaves it unchanged, so the natural width
-    // comes out exactly 800pt.
+    // `no-break` calls `inline-frame-outer`, `mandatory-break` calls
+    // `discretionary`; wrapping in `get-natural-metrics` exercises both plus
+    // itself. `ctx`'s 400pt width makes `mandatory-break`'s `inline-skip
+    // (get-text-width ctx *' 2.)` a fixed 800pt no-break box; `no-break`'s
+    // zero padding leaves it unchanged.
     let src = "@require: pervasives
 let-inline ctx \\math m = inline-nil
 in
@@ -471,14 +377,11 @@ get-natural-metrics (no-break (mandatory-break ctx))";
 
 #[test]
 fn require_pervasives_rustyfi_command_renders_via_read_inline() {
-    // The `\SATySFi` logo command exercises `set-manual-rising` and
-    // `script-guard` (both new), plus `no-break`/`inline-frame-outer` again
-    // — through a REAL `read-inline` pass, hence the `Mono` font stub
-    // (`NoFonts`'s always-`None` `advance` would reject any actual glyph).
-    // The trailing `;` is real SATySFi surface syntax (`lexer.rs`'s "active
-    // area"/`EndActive`): a command with no bracket arguments must be
-    // explicitly terminated before non-argument text (here, the closing
-    // `}`) may follow.
+    // Exercises `set-manual-rising`/`script-guard` via a real `read-inline`
+    // pass (hence the `Mono` font stub — `NoFonts`'s always-`None` `advance`
+    // would reject any glyph). The trailing `;` is required SATySFi syntax
+    // (`lexer.rs`'s "active area"/`EndActive`): a command with no bracket
+    // arguments must be explicitly terminated before following text.
     let src = "@require: pervasives
 let-inline ctx \\math m = inline-nil
 in
@@ -497,14 +400,8 @@ read-inline (get-initial-context 400pt (command \\math)) {\\SATySFi;}";
     }
 }
 
-// ============================================================================
 // `@require: geom` (`lib-rustyfi/dist/packages/geom.satyh`, ported verbatim,
-// `@require: pervasives`) — a tiny module of two `point`-synonym helpers,
-// `Geom.atan2-point` and `Geom.div-perp`. Needs NO new primitives: both
-// bodies are just `atan2`/`sin`/`cos`/`math-pi`/length arithmetic, all
-// already present. These tests prove the nested `geom -> pervasives`
-// `@require:` resolves and both functions evaluate correctly.
-// ============================================================================
+// `@require: pervasives`) — needs no new primitives.
 
 #[test]
 fn require_geom_atan2_point_compiles_and_evaluates() {
@@ -546,30 +443,19 @@ Geom.div-perp (0pt, 0pt) (1pt, 0pt) 0.5 10pt";
     }
 }
 
-// ============================================================================
 // `@require: gr` (`lib-rustyfi/dist/packages/gr.satyh`, ported verbatim;
-// `@require: pervasives`/`geom`/`list`) — the graphics hub package, and the
-// point of the whole graphics-roadmap prim additions (roadmap A/B/C/D):
-// `bezier-to`, `close-with-bezier`, `shift-path`, `linear-transform-path`,
-// `shift-graphics`, `linear-transform-graphics`, `get-graphics-bbox`,
-// `dashed-stroke`, and `draw-text` (all FAITHFUL — `draw-text` as of roadmap
-// C1, see `GraphicsElem::Text`'s doc comment). These tests prove the triple
-// nested `@require:` resolves and exercise every new prim through REAL
-// `Gr.*` module code (not bare primitive calls), except `draw-text`/
-// `get-graphics-bbox`, which `gr.satyh` only ever composes inside
-// `Gr.text-centering`/`-leftward` — covered separately, below, via bare
-// primitive calls and (for `Gr.text-centering` itself) a direct `Gr.*` call
-// with real-width content (`inline-skip`, no font metrics needed).
-// ============================================================================
+// `@require: pervasives`/`geom`/`list`) — the graphics prim
+// additions: `bezier-to`, `close-with-bezier`,
+// `shift-path`, `linear-transform-path`, `shift-graphics`,
+// `linear-transform-graphics`, `get-graphics-bbox`, `dashed-stroke`, and
+// `draw-text` (FAITHFUL, see `GraphicsElem::Text`'s doc
+// comment).
 
 #[test]
 fn require_gr_rectangle_compiles_and_evaluates() {
     run_with_big_stack(|| {
-        // The cheapest whole-module proof (same rationale as `math-pi`
-        // above): this forces evaluating every `let` in `Gr`'s struct body
-        // into a closure, so success here means the entire file
-        // typechecked, not just `rectangle`. `close-with-line` on 3
-        // `line-to`s from `start-path` yields one closed subpath.
+        // `close-with-line` on 3 `line-to`s from `start-path` yields one
+        // closed subpath.
         let src = "@require: gr
 in
 match Gr.rectangle (0pt, 0pt) (10pt, 10pt) with
@@ -583,8 +469,7 @@ match Gr.rectangle (0pt, 0pt) (10pt, 10pt) with
 fn require_gr_circle_exercises_bezier_to_and_close_with_bezier() {
     run_with_big_stack(|| {
         // `Gr.circle` is 3 `bezier-to`s from `start-path` then a
-        // `close-with-bezier` — the ONLY bundled use of either prim. One
-        // subpath, 3 `PathSeg::Bezier` segments, `Closing::Bezier`.
+        // `close-with-bezier` — the ONLY bundled use of either prim.
         let src = "@require: gr
 in
 Gr.circle (50pt, 50pt) 10pt";
@@ -614,11 +499,10 @@ Gr.circle (50pt, 50pt) 10pt";
 #[test]
 fn require_gr_scale_path_exercises_shift_and_linear_transform_path() {
     run_with_big_stack(|| {
-        // `Gr.scale-path` = `shift-path (-center) |> linear-transform-path
-        // (scalex, 0, 0, scaley) |> shift-path center` — the ONLY bundled
-        // use of `shift-path`/`linear-transform-path`. With `center` =
-        // the origin, both shifts are no-ops, isolating the matrix math:
-        // `(x, y) |-> (2x, 3y)`.
+        // `Gr.scale-path` = shift(-center) |> linear-transform(scalex, 0, 0,
+        // scaley) |> shift(center) — the ONLY bundled use of `shift-path`/
+        // `linear-transform-path`. With `center` at the origin, both shifts
+        // are no-ops, isolating the matrix math: `(x, y) |-> (2x, 3y)`.
         let src = "@require: gr
 in
 Gr.scale-path (0pt, 0pt) 2. 3. (Gr.line (1pt, 1pt) (2pt, 2pt))";
@@ -652,10 +536,8 @@ Gr.scale-path (0pt, 0pt) 2. 3. (Gr.line (1pt, 1pt) (2pt, 2pt))";
 #[test]
 fn require_gr_dashed_arrow_exercises_dashed_stroke() {
     run_with_big_stack(|| {
-        // `Gr.dashed-arrow thkns dash = arrow-scheme (dashed-stroke thkns
-        // dash)` — the ONLY bundled use of `dashed-stroke`. Returns
-        // `[stroke-shaft; fill-head]`; the first element is the
-        // dashed-stroked shaft.
+        // `Gr.dashed-arrow` — the ONLY bundled use of `dashed-stroke`;
+        // returns `[stroke-shaft; fill-head]`.
         let src = "@require: gr
 in
 Gr.dashed-arrow 1pt (2pt, 2pt, 0pt) (Gray(0.)) 5pt 3pt 2pt (0pt, 0pt) (10pt, 0pt)";
@@ -688,11 +570,7 @@ Gr.dashed-arrow 1pt (2pt, 2pt, 0pt) (Gray(0.)) 5pt 3pt 2pt (0pt, 0pt) (10pt, 0pt
 #[test]
 fn require_get_graphics_bbox_is_faithful_on_a_fill() {
     run_with_big_stack(|| {
-        // Exercise the `Fill`/`Stroke` bbox path directly: a rectangle's
-        // bbox is exactly its own corners. (`draw-text`'s own bbox is
-        // covered separately below, now that it's FAITHFUL — roadmap C1 —
-        // and `Gr.text-centering`/`-leftward` are exercised via
-        // `require_gr_text_centering_centers_on_the_runs_real_width`.)
+        // A rectangle's bbox is exactly its own corners.
         let src = "@require: gr
 in
 get-graphics-bbox (fill (Gray(0.)) (Gr.rectangle (0pt, 0pt) (10pt, 20pt)))";
@@ -717,15 +595,10 @@ get-graphics-bbox (fill (Gray(0.)) (Gr.rectangle (0pt, 0pt) (10pt, 20pt)))";
 #[test]
 fn require_draw_text_composes_with_shift_and_bbox_on_an_empty_run() {
     run_with_big_stack(|| {
-        // `draw-text` is now FAITHFUL (`GraphicsElem::Text`, roadmap C1) —
-        // prove it still composes correctly with `shift-graphics`/
-        // `get-graphics-bbox` (exactly how `Gr.text-centering`/`-leftward`
-        // use them), with no real font/line-break pass needed: an EMPTY run
-        // (`inline-nil`) has zero `natural_metrics`, so shifting a
-        // `Text{pt: (1, 2), width: 0, height: 0, depth: 0}` by `(5, 5)` then
-        // taking its bbox still gives the single point `(6, 7)` — the same
-        // assertion the pre-C1 stand-in proved, now for the right reason
-        // (zero-size run, not "content dropped").
+        // `draw-text` is FAITHFUL (`GraphicsElem::Text`): an
+        // EMPTY run has zero `natural_metrics`, so shifting a `Text{pt: (1,
+        // 2), width: 0, height: 0, depth: 0}` by `(5, 5)` gives bbox
+        // `(6, 7)-(6, 7)`.
         let src = "@require: gr
 in
 get-graphics-bbox (shift-graphics (5pt, 5pt) (draw-text (1pt, 2pt) inline-nil))";
@@ -750,10 +623,9 @@ get-graphics-bbox (shift-graphics (5pt, 5pt) (draw-text (1pt, 2pt) inline-nil))"
 #[test]
 fn draw_text_bbox_is_the_runs_real_natural_width() {
     run_with_big_stack(|| {
-        // `draw-text (0pt,0pt) (inline-skip 5pt)`: a `FixedEmpty{5pt}` box
-        // needs no font metrics (no glyphs), so `NoFonts` suffices, and its
-        // `natural_metrics` are exactly `(5pt, 0pt, 0pt)` — real width, not
-        // the pre-C1 stand-in's always-zero-size box.
+        // `inline-skip 5pt` is a `FixedEmpty{5pt}` box — no glyphs, so
+        // `NoFonts` suffices; its `natural_metrics` are exactly
+        // `(5pt, 0pt, 0pt)`.
         let src = "get-graphics-bbox (draw-text (0pt, 0pt) (inline-skip 5pt))";
         let v = compile_via_loader("draw-text-real-width", src).expect("should compile");
         match v {
@@ -776,11 +648,9 @@ fn draw_text_bbox_is_the_runs_real_natural_width() {
 #[test]
 fn require_gr_text_centering_centers_on_the_runs_real_width() {
     run_with_big_stack(|| {
-        // The `gr.satyh` consumer path this whole roadmap item exists for
-        // (C1's design summary): `Gr.text-centering` needs `get-graphics-
-        // bbox` to report a REAL width for a `draw-text` run — previously
-        // meaningless under the always-zero-size stand-in. `inline-skip 5pt`
-        // needs no font metrics either.
+        // The `gr.satyh` consumer path exists for:
+        // `Gr.text-centering` needs `get-graphics-bbox` to report a real
+        // width for a `draw-text` run.
         let src = "@require: gr
 in
 Gr.text-centering (0pt, 0pt) (inline-skip 5pt)";
@@ -830,11 +700,8 @@ get-path-bbox (Gr.rectangle (0pt, 0pt) (10pt, 20pt))";
 #[test]
 fn get_path_bbox_of_a_circle_is_exact_not_the_control_hull() {
     run_with_big_stack(|| {
-        // C3b: `Gr.circle` is 3 `bezier-to`s + `close-with-bezier`
-        // (`k = 0.55228`), the same shape `require_gr_circle_exercises_
-        // bezier_to_and_close_with_bezier` above pins structurally. The
-        // exact cubic-extrema bbox is the circle's own tight bounds
-        // `((40,40),(60,60))`; the (pre-C3b) control-point hull would
+        // The exact cubic-extrema bbox is the circle's own tight
+        // bounds `((40,40),(60,60))`; the old control-point hull would
         // overshoot the diagonal corners by `10 * 0.55228 ≈ 5.52pt`.
         let src = "@require: gr
 in
@@ -857,21 +724,14 @@ get-path-bbox (Gr.circle (50pt, 50pt) 10pt)";
     });
 }
 
-// ============================================================================
-// Tier-2 decoration/graphics packages:
-// `deco`/`hdecoset`/`vdecoset`/`picture` — all copied verbatim except
-// `picture.satyh`'s one unparseable sig line (bracket command-type syntax;
-// see that file's own comment). `cd.satyh` is NOT ported (needs optional
-// function parameters — `elaborate.rs`'s `app_arg_to_ast` still rejects
-// `?:`/`?*` as "not supported yet (phase 3)").
-// ============================================================================
+// Tier-2 decoration/graphics packages: `deco`/`hdecoset`/`vdecoset`/
+// `picture` — all copied verbatim except `picture.satyh`'s one unparseable
+// sig line (bracket command-type syntax; see that file's own comment).
 
 #[test]
 fn require_deco_simple_frame_compiles_and_evaluates() {
     run_with_big_stack(|| {
-        // `Deco.simple-frame` is `deco.satyh`'s only non-trivial export:
-        // `[fill fcolor path; stroke t scolor path]` once applied to a
-        // placement — forces the whole (tiny) module to evaluate.
+        // `Deco.simple-frame` is `deco.satyh`'s only non-trivial export.
         let src = "@require: deco
 in
 Deco.simple-frame 1pt (Gray(0.)) (Gray(1.)) (0pt, 0pt) 10pt 5pt 2pt";
@@ -893,10 +753,8 @@ Deco.simple-frame 1pt (Gray(0.)) (Gray(1.)) (0pt, 0pt) 10pt 5pt 2pt";
 #[test]
 fn require_hdecoset_simple_frame_stroke_compiles_and_evaluates() {
     run_with_big_stack(|| {
-        // `HDecoSet.simple-frame-stroke` returns a `deco-set` (a plain
-        // 4-tuple of `deco`s, `(decoS, decoH, decoM, decoT)`) — destructure
-        // it and apply the first component to prove the whole module
-        // (including its `Gr.poly-line`/`Gr.line` calls) evaluates.
+        // `deco-set` is a plain 4-tuple of `deco`s, `(decoS, decoH, decoM,
+        // decoT)`.
         let src = "@require: hdecoset
 in
 let (decoS, _, _, _) = HDecoSet.simple-frame-stroke 1pt (Gray(0.)) in
@@ -919,9 +777,8 @@ decoS (0pt, 0pt) 10pt 5pt 2pt";
 #[test]
 fn require_vdecoset_simple_frame_compiles_and_evaluates() {
     run_with_big_stack(|| {
-        // `VDecoSet.simple-frame` (fill background + stroke border) is the
-        // richest of `vdecoset.satyh`'s deco-sets short of `paper`/
-        // `quote-round`; its `decoS` component yields `[fill; stroke]`.
+        // `VDecoSet.simple-frame` is the richest of `vdecoset.satyh`'s
+        // deco-sets short of `paper`/`quote-round`.
         let src = "@require: vdecoset
 in
 let (decoS, _, _, _) = VDecoSet.simple-frame 1pt (Gray(0.)) (Gray(1.)) in
@@ -945,14 +802,10 @@ decoS (0pt, 0pt) 10pt 5pt 2pt";
 #[test]
 fn require_picture_draw_line_compiles_and_evaluates() {
     run_with_big_stack(|| {
-        // `Picture.draw-line` runs `draw-line-scheme`'s full bbox-vs-slope
-        // geometry (the meatiest part of `picture.satyh`) between two
-        // synthetic `node`s (`point * graphics`, built directly from
-        // `draw-text (.., inline-nil)` — an EMPTY run, so no real font
-        // metrics are needed, same trick
-        // `require_draw_text_composes_with_shift_and_bbox_on_an_empty_run`
-        // above uses) and renders one stroked, open, single-segment
-        // connecting line.
+        // `Picture.draw-line` runs `draw-line-scheme`'s bbox-vs-slope
+        // geometry between two synthetic `node`s built from EMPTY
+        // `draw-text` runs (no real font metrics needed); yields one
+        // stroked, open, single-segment line.
         let src = "@require: picture
 in
 Picture.draw-line 1pt (Gray(0.))
@@ -979,33 +832,22 @@ Picture.draw-line 1pt (Gray(0.))
     });
 }
 
-// ============================================================================
-// `tabular` — newly unblocked by the `tabular` primitive/`cell` type
-// landing: `tabular.satyh`'s own module wrapper is entirely commented out
-// upstream (dead code, `%`-prefixed), so it just defines a bare `\tabular`
-// inline command directly, positionally (`lstf cellf multif empty`, then
-// `rulef`) — no record/optional-arg surface syntax at all. Renders real
-// cell text, hence `Mono` (not `NoFonts`).
+// `tabular` needs the `tabular` primitive/`cell` type. Upstream
+// `tabular.satyh`'s own module wrapper is entirely commented out
+// (`%`-prefixed dead code), so it defines a bare `\tabular` inline command
+// positionally (`lstf cellf multif empty`, then `rulef`). Renders real cell
+// text, hence `Mono`.
 //
-// `tabularx.satyh`/`table.satyh` were previously blocked by the same
-// record-types-in-`TypeExpr` gap (see prior revision of this comment); now
-// that `cst.rs`'s `TypeAtom::Record` accepts `(| l : ty; … |)` in ordinary
-// type position (`record_types.rs`), both port verbatim below.
-// ============================================================================
+// `tabularx.satyh`/`table.satyh` need `cst.rs`'s `TypeAtom::Record`
+// accepting `(| l : ty; … |)` in ordinary type position
+// (`record_types.rs`).
 
 #[test]
 fn require_tabularx_compiles_and_evaluates() {
     run_with_big_stack(|| {
-        // `Tabularx.\tabular`'s `lstf` callback receives `cellf`/`multif`/
-        // `empty`, where `cellf : cell-record option -> inline-text -> cell`
-        // — a `None` alignment override exercises `make-alignments`'s
-        // `Option.from` default-record path. The 2nd bracket arg (`rulef`)
-        // completes the underlying `tabular` primitive's partial
-        // application (the struct's `\tabular` body binds only `lstf`, one
-        // fewer param than the sig's 2-element cmd type — sig checking is a
-        // no-op, and `tabular (lstf cellf multif empty)` is itself a
-        // `Value::Prim` left partially applied, completed by the 2nd
-        // bracket arg at the call site).
+        // `cellf : cell-record option -> inline-text -> cell` — a `None`
+        // alignment override exercises `make-alignments`'s `Option.from`
+        // default-record path.
         let src = "@require: tabularx
 let-inline ctx \\math m = inline-nil
 in
@@ -1028,31 +870,13 @@ read-inline (get-initial-context 400pt (command \\math))
     });
 }
 
-// ============================================================================
-// `progsynt.satyh` is NOT ported: it defines a custom infix operator as an
-// ordinary name, `let (-->) t1 t2 = ..` (sig: `val (-->) : t -> t -> t`) —
-// confirmed via a minimal isolated repro (a bare `module .. : sig val (-->)
-// .. end = struct let (-->) .. end` fails to parse at the `module` keyword
-// itself; the identical module WITHOUT the `(-->)` binding parses fine).
-// `cst.rs`'s `TopLet`/`SigItem::Val` both take a plain `VarTok` name — there
-// is no grammar production accepting a parenthesized operator symbol
-// (`(-->)`,`(+++>)`, `(++)`, ...) as a bindable name, only bare identifiers.
-// This is a lexer/grammar gap (`cst.rs`/`leaf.rs`/`lexer.rs`), out of this
-// wave's file boundary (no `.rs` edits permitted) — every other primitive
-// `progsynt.satyh` needs (`math-color`, `math-char-class`, `text-in-math`,
-// `math-group`, `get-font-size`, abstract `type t` in a sig, optional args)
-// already exists/parses (verified in isolation before narrowing to this).
-// ============================================================================
-
 #[test]
 fn require_table_compiles_and_evaluates() {
     run_with_big_stack(|| {
-        // `Table.\tabular`'s `cellssf` callback receives a *record VALUE*
-        // (fields `l`/`r`/`c`/`m`/`e`) whose sig type is a record `(| l :
-        // ..; r : ..; c : ..; m : ..; e : .. |)` sitting inside the arrow
-        // chain of the sig's first cmd-type element — the other half of the
-        // same record-types-in-`TypeExpr` gap `tabularx` exercises (there as
-        // a `type` synonym body, here as a bare inline record type).
+        // `cellssf` receives a record VALUE (fields `l`/`r`/`c`/`m`/`e`);
+        // the sig's record type sits inside the arrow chain of its first
+        // cmd-type element — the other half of the record-types-in-
+        // `TypeExpr` gap `tabularx` exercises.
         let src = "@require: table
 let-inline ctx \\math m = inline-nil
 in
@@ -1101,10 +925,9 @@ read-inline (get-initial-context 400pt (command \\math))
     });
 }
 
-// `code` — unblocked by the context-box-prims batch (`set-text-color`,
+// `code` — needs the context-box prims (`set-text-color`,
 // `split-into-lines`, `block-frame-breakable`, `set-code-text-command`,
-// `get-natural-length`). stdja.satyh `@require`s this directly, so it's
-// the priority package.
+// `get-natural-length`). stdja.satyh `@require`s this directly.
 
 #[test]
 fn require_code_module_scheme_compiles_and_evaluates() {
@@ -1124,16 +947,9 @@ read-block (get-initial-context 400pt (command \\math)) '<+code(`let x = 1`);>";
     });
 }
 
-// ============================================================================
 // `annot` (`lib-rustyfi/dist/packages/annot.satyh`, ported verbatim) — every
-// primitive it needs (`register-link-to-uri`, `register-link-to-location`,
-// `register-destination`, `get-leftmost-script`, `get-rightmost-script`,
-// `inline-frame-breakable`) already exists; `register-location-frame` is a
-// plain stdlib fn `Annot` defines itself. `@require`s `pervasives`, `color`,
-// `gr`, `option` — none define `\math`, so a local stub stands in for
-// `get-initial-context`'s 2nd argument, exactly like the `code`/`table`/
-// `tabular`/`tabularx` fixtures above.
-// ============================================================================
+// primitive it needs already exists; `register-location-frame` is a plain
+// stdlib fn `Annot` defines itself.
 
 #[test]
 fn require_annot_href_compiles_and_evaluates() {
@@ -1154,22 +970,13 @@ read-inline (get-initial-context 400pt (command \\math))
     });
 }
 
-// ============================================================================
 // `stdja` (`lib-rustyfi/dist/packages/stdja.satyh`, ported verbatim) — the
 // CAPSTONE: the real upstream document class, `@require`-ing pervasives, gr,
-// list, math, code, color, option, annot. Reaching this proves every one of
-// `StdJa`'s bindings (`document`, `+p`/`+pn`/`+section`/`+subsection`,
-// `\ref`/`\ref-page`/`\figure`/`\emph`, the title/header/footer/page-break
-// scheme) parses, typechecks, and evaluates through the production loader.
+// list, math, code, color, option, annot.
 //
-// `Mono` (above) rejects non-ASCII, but the footer stdja.satyh always
-// builds (`— #pageno; —`, an em dash) is non-ASCII, so this test uses its
-// own `Wide` stub that answers every character — this milestone still has
-// no real CJK/Latin font metrics, so CJK text is never actually exercised
-// here (`show-toc = false` avoids the `目次` table-of-contents heading; the
-// body is plain Latin), but the em dash alone would otherwise trip the
-// same "not in WinAnsi" guard `Mono` exists to exercise elsewhere.
-// ============================================================================
+// Uses `Wide` (not `Mono`) because the footer always renders an em dash
+// (non-ASCII); `show-toc = false` avoids the CJK ToC heading since there is
+// still no real CJK/Latin font metrics.
 
 struct Wide;
 
@@ -1217,22 +1024,11 @@ document (|
     });
 }
 
-// ============================================================================
-// `footnote-scheme` (`lib-rustyfi/dist/packages/footnote-scheme.satyh`,
-// ported verbatim; `@require: color gr`) — every primitive it needs
-// (`register-cross-reference`/`get-cross-reference`/`hook-page-break`/
-// `no-break`/`add-footnote`, all already proven above or in
-// `hooks_crossref.rs`) already exists. `FootnoteScheme.main` is exercised
-// directly (its `sig` exposes only plain `val`s, no `direct` command) with
-// trivial `ibf`/`bbf` callbacks. `add-footnote` is now FAITHFUL (wraps the
-// block in a zero-metric `PureHorzBox::Footnote` marker);
-// `get-natural-metrics` measures the marker's OWN zero width/height/depth
-// (it never re-enters the wrapped block), so the asserted metrics are
-// unaffected by that change — this still only proves the module
-// compiles/evaluates end to end, not that the footnote text lands on the
-// page (that needs a real `chop_page` run, covered by
-// `crates/rustyfi/tests/e2e.rs`'s footnote fixture).
-// ============================================================================
+// `footnote-scheme` (ported verbatim; `@require: color gr`) —
+// `add-footnote` is FAITHFUL (wraps the block in a zero-metric
+// `PureHorzBox::Footnote` marker); this only proves the module
+// compiles/evaluates, not that footnote text lands on the page (see
+// `crates/rustyfi/tests/e2e.rs`'s footnote fixture for that).
 
 #[test]
 fn require_footnote_scheme_main_compiles_and_evaluates() {
@@ -1255,22 +1051,10 @@ get-natural-metrics (FootnoteScheme.main ctx ibf bbf)";
     });
 }
 
-// ============================================================================
-// `proof` (`lib-rustyfi/dist/packages/proof.satyh`, ported verbatim;
-// `@require: gr`) — its only two exports (`\derive`/`\derive-multi`) are
-// `direct`, `math-cmd`-typed bindings; both bodies are plain closures
-// (`let-math ... = derive nameopt bopt ... mlst m`, itself a curried plain
-// `let`) that are never forced to evaluate their insides just by loading the
-// module — same "cheapest whole-module proof" rationale as
-// `require_gr_rectangle_compiles_and_evaluates`/`require_math_compiles_and_
-// evaluates` above: success here means the WHOLE file (sig match included)
-// typechecked, not merely parsed. Actually invoking `\derive` needs a real
-// `${…}`-embedded user math-cmd call under a document context — the
-// production `EmbedMath` path (`read_inline`'s installed-`Context::
-// math_command` arm, Gap 1) resolves `MathElem::Cmd` fine via
-// `reflect_math_elem`/`as_math`; exercising `\derive` end to end is simply
-// out of scope for porting this one package file (no fixture builds one).
-// ============================================================================
+// `proof` (ported verbatim; `@require: gr`) — `\derive`/`\derive-multi` are
+// `direct`, `math-cmd`-typed; loading proves the whole file typechecks, not
+// that `\derive` is ever invoked (needs a real `${…}`-embedded math-cmd
+// call — `reflect_math_elem`/`as_math`).
 
 #[test]
 fn require_proof_compiles_and_evaluates() {
@@ -1283,19 +1067,14 @@ in
     });
 }
 
-/// Gap 4 flagship: `\derive : [math?; bool?; math list; math] math-cmd`
-/// called BARE (no `?:`/`?*` marker at all) with only its two mandatory
-/// arguments — `\derive`'s `?:nameopt ?:bopt` leading params register
-/// `optional_arity("\derive") == 2`, so `math_bot`'s `Cmd` arm auto-pads
-/// `[None, None, <math list>, <math>]` before applying (Gap 3's
-/// `math_block_ast` turns `{|A|}` into the `math list` literal
-/// `[MathText([A])]`). `math-concat` forces `as_math` ->
-/// `reflect_math_elem`, which actually APPLIES `\derive`'s closure to
-/// those four arguments and runs `derive` all the way to its
-/// `text-in-math` result value — real evaluation, not just a parse/
-/// typecheck smoke test. `derive`'s body is itself `text-in-math` (Gap 6,
-/// out of scope): laying THAT out would hard-error, so this only forces
-/// evaluation via `math-concat`, never `embed-math`/layout on the result.
+/// `\derive : [math?; bool?; math list; math] math-cmd`
+/// called BARE with only its two mandatory arguments — `optional_arity`
+/// auto-pads `[None, None, <math list>, <math>]` (`math_block_ast`
+/// turns `{|A|}` into `[MathText([A])]`). `math-concat` forces `as_math` ->
+/// `reflect_math_elem`, which actually APPLIES `\derive`'s closure — real
+/// evaluation, not a parse/typecheck smoke test. `derive`'s body is itself
+/// `text-in-math` (out of scope here), so this only forces evaluation via
+/// `math-concat`, never layout.
 #[test]
 fn gap4_derive_marker_less_optional_args_evaluate_via_math_concat() {
     run_with_big_stack(|| {
@@ -1308,18 +1087,10 @@ let _ = math-concat ${\\derive{|A|}{B}} ${x} in 1";
     });
 }
 
-// ============================================================================
-// `cd` (`lib-rustyfi/dist/packages/cd.satyh`, ported verbatim;
-// `@require: gr color geom option`) — its `draw-arr-scheme` helper is a
-// PLAIN (non-`let-inline`) function with two def-site optional parameters
-// (`?:t-name-opt`/`?:len-name-opt`), and its `\diagram` sig's record field
-// types use the `?->` optional-arrow arrow-type grammar
-// (`draw-arr : math -> float?-> length ?-> obj -> obj -> graphics list`) —
-// exactly the machinery `optional_args.rs` proves end to end. Every other
-// primitive it needs (`get-graphics-bbox`/`embed-math`/`get-text-color`/
-// `Geom.atan2-point`/`Geom.div-perp`/`Gr.arrow`/`Gr.dashed-arrow`/
-// `Gr.text-rightward`/`-leftward`/`-centering`/`length-abs`) already exists.
-// ============================================================================
+// `cd` (ported verbatim; `@require: gr color geom option`) —
+// `draw-arr-scheme` uses def-site optional params (`?:t-name-opt`) and the
+// `\diagram` sig uses `?->` optional-arrow record field types — the
+// machinery `optional_args.rs` proves end to end.
 
 #[test]
 fn require_cd_compiles_and_evaluates() {
@@ -1332,17 +1103,10 @@ in
     });
 }
 
-// ============================================================================
-// `mitou-detail` (`lib-rustyfi/dist/packages/mitou-detail.satyh`, ported
-// verbatim; `@require: pervasives gr list math color`) — a full document
-// class, structurally close to `stdja.satyh`'s own capstone (title/
-// section/subsection/figure/hook-page-break/cross-reference scheme) but
-// simpler (no TOC, no footnotes). Every primitive it needs already exists
-// (proven by `stdja.satyh`'s own capstone test above using the same set).
-// `MitouDetail.document`'s title block always renders `– #subtitle; –`
-// (U+2013 EN DASH), so this needs the `Wide` (non-ASCII-tolerant) font stub,
-// exactly like the `stdja` capstone test.
-// ============================================================================
+// `mitou-detail` (ported verbatim; `@require: pervasives gr list math
+// color`) — structurally close to `stdja`'s capstone (title/section/
+// subsection/figure/hook-page-break/cross-reference), simpler (no TOC, no
+// footnotes). Title block renders `– #subtitle; –` (EN DASH), hence `Wide`.
 
 #[test]
 fn require_mitou_detail_document_compiles_and_evaluates() {
@@ -1374,9 +1138,9 @@ document (|
     });
 }
 
-// `mitou-report` — now PORTED (the `clear-page` primitive it needs was wired
-// by the page-prims wave: `VertBox::ClearPage`). Its `document` takes a
-// 5-field record (project/year/creators/manager/jouzai-number).
+// `mitou-report` — needs the `clear-page` primitive (`VertBox::ClearPage`).
+// Its `document` takes a 5-field record
+// (project/year/creators/manager/jouzai-number).
 #[test]
 fn require_mitou_report_document_compiles_and_evaluates() {
     run_with_big_stack(|| {
@@ -1410,10 +1174,9 @@ document (|
     });
 }
 
-// `stdjareport` — PORTED (needs hook-page-break-block + page-break-multicolumn,
-// both wired by the page-prims wave; @require footnote-scheme). `document`
-// takes a title/author record + a `?->` optional config (omitted via `?*`),
-// same shape as `stdjabook`.
+// `stdjareport` — needs hook-page-break-block + page-break-multicolumn;
+// `@require: footnote-scheme`. `document` takes a title/author record + a
+// `?->` optional config (omitted via `?*`), same shape as `stdjabook`.
 #[test]
 fn require_stdjareport_document_compiles_and_evaluates() {
     run_with_big_stack(|| {
@@ -1444,9 +1207,8 @@ document (|
     });
 }
 
-// `mdja` — PORTED (@require pervasives code math itemize color hdecoset
-// vdecoset annot; all now available — itemize was the last holdout).
-// `document` takes a title/author record.
+// `mdja` — `@require: pervasives code math itemize color hdecoset vdecoset
+// annot`. `document` takes a title/author record.
 #[test]
 fn require_mdja_document_compiles_and_evaluates() {
     run_with_big_stack(|| {
@@ -1477,20 +1239,13 @@ MDJa.document (|
     });
 }
 
-// ============================================================================
-// `stdjabook` (`lib-rustyfi/dist/packages/stdjabook.satyh`, ported verbatim;
-// `@require: pervasives gr list math code color option annot
-// footnote-scheme`) — the same shape as `stdja.satyh`'s own capstone test
-// above, plus a real `\footnote` command (`FootnoteScheme.main`, proven
-// standalone above) and `Code.(command \code)` (`Mod.(e)` local-open —
-// already-supported grammar, `cst.rs`'s `Atomic::OpenModule`). `\*` inside
-// `FootnoteScheme`'s footnote-mark inline text is a lexer-level escape for
-// a literal `*` (`lexer.rs`'s "symbol" class), not a module command. Uses
-// the `Wide` font stub (defined above, ahead of `stdja`'s own capstone
-// test): both the footer's em dash and `\footnote`'s mark text need
-// non-ASCII tolerance the same way `stdja`'s capstone does; `show-toc =
-// false` again avoids the `目次` heading (no real CJK metrics yet).
-// ============================================================================
+// `stdjabook` (ported verbatim; `@require: pervasives gr list math code
+// color option annot footnote-scheme`) — like `stdja`'s capstone, plus a
+// real `\footnote` command and `Code.(command \code)` local-open. `\*`
+// inside the footnote mark is a lexer-level escape for literal `*`
+// (`lexer.rs`'s "symbol" class), not a module command. Uses `Wide` (both
+// the footer's em dash and `\footnote`'s mark text need non-ASCII
+// tolerance); `show-toc = false` again avoids the CJK ToC heading.
 
 #[test]
 fn require_stdjabook_document_compiles_and_evaluates() {
@@ -1525,19 +1280,10 @@ document (|
     });
 }
 
-// ============================================================================
-// `standalone` (`lib-rustyfi/dist/packages/standalone.satyh`, ported
-// verbatim; the file itself has no `@require:` at all) — the minimal
-// one-function document class, `standalone : block-text -> document`. Needs
-// `embed-math`, `get-initial-context [math]`, `set-dominant-narrow-script`/
-// `set-dominant-wide-script`, `command`, and the `A4Paper`/`Latin`/`Kana`
-// variants — all confirmed present (final-coverage sweep). `+p` is NOT a
-// primitive (every doc class, e.g. `stdja-mini.satyh`, defines its own), and
-// `standalone.satyh` defines no block commands at all, so — like the
-// `pervasives`/`footnote-scheme` tests above defining their own local
-// `\math` — the test source defines a local `+p` (`stdja-mini.satyh`'s own
-// one-liner) to build block-text content; no extra `@require:` needed.
-// ============================================================================
+// `standalone` (ported verbatim; no `@require:` of its own) — the minimal
+// one-function document class, `standalone : block-text -> document`. `+p`
+// is not a primitive (every doc class defines its own), so the test source
+// defines a local one.
 
 #[test]
 fn require_standalone_document_compiles_and_evaluates() {
@@ -1567,19 +1313,12 @@ standalone '<
     });
 }
 
-// ============================================================================
-// `itemize` (`lib-rustyfi/dist/packages/itemize.satyh`, ported verbatim;
-// `@require: pervasives list option gr`) — `Itemize.+listing`/`\listing`/
-// `+enumerate`/`\enumerate`, built on the `itemize` variant type's `Item`
-// constructor and the `{ * .. ** .. }` bullet-marker literal syntax
-// (`rustyfi-syntax/tests/roundtrip.rs`'s `itemize_markers`). Its own
-// blockers are all cleared: the parenthesized operator name `let (+++>) =
-// List.fold-left (+++)`, and `listing-item`/`listing-item-breakable`'s
-// type-ascribed, multi-pattern `let-rec .. : context -> int -> bool -> bool
-// -> itemize -> block-boxes | ctx depth is-first is-last (Item(..)) = ..`
-// (`type_ascribed_letrec.rs`), and `+listing`/`\listing`'s def-site `?:`
-// optional binder (`marker_less_optional.rs`).
-// ============================================================================
+// `itemize` (ported verbatim; `@require: pervasives list option gr`) —
+// built on the `itemize` variant's `Item` ctor and the `{ * .. ** .. }`
+// bullet-marker literal syntax. Exercises the parenthesized operator name
+// `let (+++>) = List.fold-left (+++)`, `listing-item`'s type-ascribed
+// multi-pattern `let-rec` (`type_ascribed_letrec.rs`), and `+listing`'s
+// def-site `?:` optional binder (`marker_less_optional.rs`).
 
 #[test]
 fn require_itemize_listing_compiles_and_evaluates() {
@@ -1606,26 +1345,13 @@ get-natural-length (read-block ctx '<
     });
 }
 
-// ============================================================================
-// `progsynt` (`lib-rustyfi/dist/packages/progsynt.satyh`, ported verbatim;
-// `@require: pervasives list math`) — two small math-object modules (`Term`,
-// `Type`), built on internal `let to-math ?:iopt e = ..` calls, both bare
-// (module-internal leading-`?:` bare calls, `marker_less_optional.rs`) and
-// explicit (`to-math ?:1 e1`). Needs no new primitives (`math-char`/
-// `math-color`/`math-char-class`/`math-group`/`text-in-math`/
-// `get-font-size` all already exist).
-//
-// `Term.var`/`app`/`abs`/`letin`/`paren`/`meta` all build `${..}` MATH-TEXT
-// LITERALS (`\token{..}`/`\sp` `MathElem::Cmd` nodes) — `Ast::MathText` is
-// quoted (`eval.rs`: "captures the environment only, typesetting is phase
-// 7's job"), so building these values is safe; only ACTUALLY RENDERING one
-// (`embed-math`/`read-inline` walking into `layout_math_elem`) would hit the
-// same "math command needs the math package (phase 7 roadmap A)" gap
-// `math_package.rs`'s `require_proof_compiles_and_evaluates` already
-// documents for `\derive` — out of scope here (no `.rs` edits). So, like
-// that test, this exercises every one of `Term`/`Type`'s VALUE-building
-// functions (not just a trivial `0` body) but stops short of rendering.
-// ============================================================================
+// `progsynt` (ported verbatim; `@require: pervasives list math`) — `Term`/
+// `Type` build `${..}` MATH-TEXT LITERALS via internal bare and explicit
+// leading-`?:` calls (`marker_less_optional.rs`). `Ast::MathText` is quoted
+// (typesetting is handled elsewhere), so building these values is safe; only
+// actually RENDERING one (`embed-math`/`read-inline`) would hit the "math
+// command needs the math package" gap — this exercises every value-building
+// function but stops short of rendering.
 
 #[test]
 fn require_progsynt_term_and_type_compile_and_evaluate() {
@@ -1650,22 +1376,11 @@ eapp#assoc + eabs#assoc + elet#assoc + epar#assoc + emeta#assoc + tarr#assoc";
     });
 }
 
-// ============================================================================
-// `bnf` (`lib-rustyfi/dist/packages/bnf.satyh`, ported verbatim; `@require:
-// math`) — the final bundled package. `BNF.insert-bars`/`tabular-of-math`
-// use `Math`-package math-commands UNQUALIFIED inside their own `${..}`
-// (`Math.join ${\mid} mlst`, `embed-math ctx ${#mnontm \mathrel{: : =}}`) —
-// exactly the cross-module math-command exposure this milestone's
-// `direct_cmd_name`/`TopBinding::Module` machinery (`elaborate.rs`) already
-// generalizes to (see `math_cmd_exposure.rs`'s minimal fixture proving the
-// mechanism in isolation). Calling `+BNF` through `read-block` (rather than
-// stopping at a trivial body) forces the WHOLE pipeline: `Math`'s `\mid`/
-// `\mathrel` resolved unqualified, typechecked as `math-cmd`, and evaluated
-// through `embed-math`'s real `reflect_math_elem`/`MathElem::Cmd` forcing
-// path (not merely built as an unforced `Value::MathText`) — `\mid` renders
-// to non-ASCII `∣` (U+2223), hence the `Wide` stub (defined above, for
-// `stdja`'s em dash), not `Mono`.
-// ============================================================================
+// `bnf` (ported verbatim; `@require: math`) — uses `Math`-package math
+// commands UNQUALIFIED inside its own `${..}` — the cross-module
+// math-command exposure `elaborate.rs`'s `direct_cmd_name`/
+// `TopBinding::Module` machinery generalizes to (see `math_cmd_exposure.rs`).
+// `\mid` renders to non-ASCII `∣` (U+2223), hence `Wide`.
 
 #[test]
 fn require_bnf_direct_math_cmd_renders_via_embed_math() {

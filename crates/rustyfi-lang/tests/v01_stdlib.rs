@@ -1,35 +1,19 @@
-//! Vendoring Wave 0 (`…/tmp/vendoring-scout.md` §4): the 17 upstream 0.1
-//! `stdlib` package modules — `lib-rustyfi/dist-v01/packages/{color,basic,
-//! paper-size,ref,cross-ref,length,ordering,option,pair,int,float,list,
-//! string,vector,point,path,context}.satyh|.satyg` — transliterated from
-//! the real upstream source (`saphe-split@b836d512:lib-rustyfi/packages/
-//! stdlib/stdlib.0.0.1/src/*`) per the scout's T1-T8 dialect, PROVEN through
-//! the real production loader (`rustyfi_loader::load`, `lib_root =
-//! dist-v01/packages`, `RustyfiVersion::V0_1`) — not merely parsed.
+//! Vendoring the 17 upstream 0.1 `stdlib` package modules —
+//! `lib-rustyfi/dist-v01/packages/{color,basic,paper-size,ref,cross-ref,
+//! length,ordering,option,pair,int,float,list,string,vector,point,path,
+//! context}.satyh|.satyg` — transliterated from
+//! `saphe-split@b836d512:lib-rustyfi/packages/stdlib/stdlib.0.0.1/src/*`,
+//! PROVEN through the real production loader (`rustyfi_loader::load`,
+//! `lib_root = dist-v01/packages`, `RustyfiVersion::V0_1`) — not merely
+//! parsed.
 //!
-//! Two harness shapes, mirroring this crate's existing V0_1 test precedent:
-//!  - `compile_v01_via_loader[_with_metrics]` — the "value" bar
-//!    (`stdlib_tier0.rs`'s/`math_package.rs`'s `compile_via_loader`,
-//!    ported to the V0_1 lowering path `v1::lower::lower_file_v1`/
-//!    `lower_document_v1`, `v01_modules.rs`'s own imports): real loader ->
-//!    per-file `lower_file_v1` prelude concatenation -> `elaborate_program`
-//!    -> `typecheck` -> `eval::Interp::eval`, returning the final `Value`.
-//!    Every package below gets at least one such test exercising a real
-//!    exported member observably (an actual computed `Value`, not merely
-//!    "it compiled").
-//!  - `assert_bare_access_unbound` — the qualified-export negative probe
-//!    every one of these packages gets once: Sub-slice 2a's `TopBinding::
-//!    Module` wrapping (`v01_modules.rs`) makes EVERY vendored package's
-//!    members reachable only as `Pkg.member`, sealed or not (sealing is an
-//!    orthogonal, type-abstraction-only mechanism) — referencing the bare
-//!    name after only `@require:`ing the package must fail "unbound
-//!    variable", proving the loader-resolved dependency was wrapped as a
-//!    real module and not spliced flat.
-//!  - `color`, the fully-specced first package, additionally gets the
-//!    REAL-DOCUMENT bar: `rustyfi_loader::load` + `rustyfi_lang::
-//!    compile_document_v1` through `V01Mini.document`, asserting page/line
-//!    counts (mirrors `v01_slice1.rs`/`e2e.rs`'s `v01_slice1_document_
-//!    renders_to_extractable_text`).
+//! `compile_v01_via_loader[_with_metrics]` compiles a package member to a
+//! `Value` through the real loader/elaborate/typecheck/eval pipeline.
+//! `assert_bare_access_unbound` is the qualified-export negative probe
+//! every package gets once: referencing a member's bare name after only
+//! `@require:`ing the package must fail "unbound variable", proving the
+//! loader-resolved dependency was wrapped as a real module and not spliced
+//! flat.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -41,19 +25,10 @@ use rustyfi_lang::{elaborate, eval, primitives, typecheck, v1::lower};
 use rustyfi_loader::{LoadOptions, LoadedCst, LoadedFile};
 use rustyfi_syntax::RustyfiVersion;
 
-/// This repo's `lib-rustyfi/dist-v01/packages/` — Wave 0's real home —
-/// resolved relative to this crate's own manifest directory (mirrors
-/// `stdlib_tier0.rs`'s `lib_root()`, but pointed at the V0_1 tree so the
-/// loader's `<lib_root>/<name>` fallback candidate, `v006/resolve.rs`,
-/// resolves `@require: color` etc. directly against it).
 fn lib_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../lib-rustyfi/dist-v01/packages")
 }
 
-/// A uniquely-named temp `.saty` entry file, cleaned up on drop — same
-/// pattern as `stdlib_tier0.rs`'s/`math_package.rs`'s own `TempDoc`
-/// (reproduced locally rather than shared, per those files' own rationale:
-/// no shared test-support library target exists in this crate).
 struct TempDoc(PathBuf);
 
 impl TempDoc {
@@ -76,10 +51,8 @@ impl Drop for TempDoc {
     }
 }
 
-/// `FontMetrics` stub for the pure-computation tests below (never actually
-/// consulted — none of these fixtures call `read-inline`/`read-block` on
-/// real text; `embed-string` builds a `Value::InlineText` without
-/// rendering it). Mirrors `stdlib_tier0.rs`'s `NoFonts`.
+/// Stub — never consulted; these fixtures never render real text
+/// (`embed-string` builds a `Value::InlineText` without rendering it).
 struct NoFonts;
 
 impl FontMetrics for NoFonts {
@@ -94,9 +67,8 @@ impl FontMetrics for NoFonts {
     }
 }
 
-/// A real (ASCII-only) `FontMetrics`, for `color`'s document capstone,
-/// which DOES render real text through `V01Mini.document`'s `read-inline`
-/// pass. Mirrors `v01_slice1.rs`'s/`v01_math.rs`'s own `Mono`.
+/// Real (ASCII-only) metrics — `color`'s document capstone DOES render
+/// text via `V01Mini.document`'s `read-inline` pass.
 struct Mono;
 
 impl FontMetrics for Mono {
@@ -122,15 +94,10 @@ fn as_v01(f: &LoadedFile) -> &rustyfi_syntax::cst_v1::FileV1 {
     }
 }
 
-/// Load `src` (a document `@require:`ing Wave-0 packages resolved against
-/// `lib_root()`) through the REAL multi-file loader, assemble the synthetic
-/// `cst::File` exactly the way `compile_document_v1_with_trials` does
-/// (`lib.rs:165-195` — reproduced here, minus the sealing check
-/// `v1::module_check::check_program`, which is `pub(crate)` and so not
-/// reachable from an integration test; sealing itself is separately proven
-/// by `v01_sealing.rs`), then elaborate -> typecheck -> eval directly to a
-/// `Value` (mirrors `stdlib_tier0.rs`'s/`math_package.rs`'s own
-/// `compile_via_loader`, ported to the V0_1 lowering entry points).
+/// Reproduces `compile_document_v1_with_trials` (`lib.rs:165-195`) minus
+/// the sealing check `v1::module_check::check_program` (`pub(crate)`,
+/// unreachable from an integration test; sealing is proven separately by
+/// `v01_sealing.rs`).
 fn compile_v01_via_loader(tag: &str, src: &str) -> Result<Value, String> {
     compile_v01_via_loader_with_metrics(tag, src, &NoFonts)
 }
@@ -183,12 +150,8 @@ fn compile_v01_via_loader_with_metrics(
         .map_err(|e| format!("eval: {e}"))
 }
 
-/// The qualified-export negative probe every Wave-0 package gets once (see
-/// this module's doc comment): `bare_expr` referencing a package member
-/// WITHOUT its `Pkg.` qualifier, after only `@require: <require>`, must
-/// fail "unbound variable" — proving `lower_file_v1` wrapped the loaded
-/// package in a real `TopBinding::Module` (Sub-slice 2a), not spliced it
-/// flat.
+/// The qualified-export negative probe every Wave-0 package gets once; see
+/// this module's doc comment for what it proves and why.
 fn assert_bare_access_unbound(tag: &str, require: &str, bare_expr: &str) {
     let src = format!("@require: {require}\n{bare_expr}");
     let err = compile_v01_via_loader(tag, &src)
@@ -242,12 +205,8 @@ fn as_tuple(v: Value) -> Vec<Value> {
     }
 }
 
-/// Run `f` on a thread with a generously large stack — `list.satyg` (over
-/// 280 lines, bigger than `stdlib_tier0.rs`'s own `gr.satyh` benchmark)
-/// needs more depth than the default stack allows through syan's
-/// recursive-descent parser (mirrors `stdlib_tier0.rs`'s own
-/// `run_with_big_stack`, reproduced locally per this crate's established
-/// per-file-helper convention).
+/// Needs a big stack: `list.satyg` (280+ lines) exceeds the default
+/// recursion depth of syan's recursive-descent parser.
 fn run_with_big_stack(f: impl FnOnce() + Send + 'static) {
     std::thread::Builder::new()
         .stack_size(64 * 1024 * 1024)
@@ -257,12 +216,7 @@ fn run_with_big_stack(f: impl FnOnce() + Send + 'static) {
         .expect("big-stack thread panicked (see assertion above)");
 }
 
-// ============================================================================
-// `color.satyh` — the fully-specced first package (scout §5). Both the
-// "value" bar (via `compile_v01_via_loader`) AND the REAL-DOCUMENT bar
-// (real loader + `compile_document_v1` through `V01Mini.document`, mirroring
-// `v01_slice1.rs`).
-// ============================================================================
+// `color.satyh` — the fully-specced first package.
 
 #[test]
 fn color_bare_gray_is_unbound_without_qualification() {
@@ -288,12 +242,8 @@ g + c";
     assert_eq!(as_int(v2), 2);
 }
 
-/// The real-document bar (spec §5.3 items 1-3): `@require: v01-mini` +
-/// `@require: color`, through the real loader + `compile_document_v1`,
-/// asserting `program.files.len()` (dependency-first: color + v01-mini
-/// before the entry) and page/line geometry. `Color.red`'s payload is
-/// pattern-matched INTO the rendered text, proving the sealed value
-/// round-trips as a real `color`, not just a name.
+/// `Color.red`'s payload is pattern-matched INTO the rendered text,
+/// proving the sealed value round-trips as a real `color`, not just a name.
 #[test]
 fn color_document_capstone_loads_and_compiles_via_v01_mini() {
     run_with_big_stack(|| {
@@ -335,13 +285,8 @@ document (| title = `color` |) '<
     });
 }
 
-// ============================================================================
-// `basic.satyg` — UNSEALED (no `:>`); only `type` synonyms + ctors, no
-// runtime members of its own. Proven by (a) its ctors (`Less`/`Equal`/
-// `Greater`) becoming referenceable only once the package is loaded, and
-// (b) `ordering.satyg`'s own tests below, which are the real cross-file
-// `Basic.ordering` (R4) consumer.
-// ============================================================================
+// `basic.satyg` — UNSEALED (no `:>`); only `type` synonyms + ctors. Cross-
+// file consumer: `ordering.satyg`'s tests below.
 
 #[test]
 fn basic_ctors_become_available_once_required() {
@@ -355,9 +300,7 @@ end";
     assert_eq!(as_int(v), 1);
 }
 
-// ============================================================================
 // `paper-size.satyh` — plain UNSEALED module of `length * length` constants.
-// ============================================================================
 
 #[test]
 fn paper_size_bare_a4_is_unbound_without_qualification() {
@@ -377,11 +320,8 @@ PaperSize.a4";
     assert!((h.0 - Length::from_unit(297.0, "mm").unwrap().0).abs() < 1e-6);
 }
 
-// ============================================================================
-// `ref.satyg` — sealed; `<-`/`!` generically overwriting a `Value::Ref`
-// held by a plain function PARAMETER (not just a `let mutable`-introduced
-// local).
-// ============================================================================
+// `ref.satyg` — sealed; `<-`/`!` generically overwrite a `Value::Ref` held
+// by a function PARAMETER, not just a `let mutable`-introduced local.
 
 #[test]
 fn ref_bare_increment_is_unbound_without_qualification() {
@@ -404,11 +344,9 @@ let () = Ref.decrement r in
     assert_eq!(as_int(v), 6);
 }
 
-// ============================================================================
 // `cross-ref.satyg` — sealed; `register`/`probe` round-trip through the
 // real `register-cross-reference`/`probe-cross-reference` primitives
 // (Group E).
-// ============================================================================
 
 #[test]
 fn cross_ref_bare_register_is_unbound_without_qualification() {
@@ -428,10 +366,8 @@ end";
     assert_eq!(as_str(v), "v");
 }
 
-// ============================================================================
 // `length.satyh` — sealed; `max`/`min`/`abs`/`atan2` over the built-in
 // `length` type.
-// ============================================================================
 
 #[test]
 fn length_bare_max_is_unbound_without_qualification() {
@@ -446,11 +382,9 @@ Length.max (Length.min 3pt 5pt) (Length.abs (0pt -' 9pt))";
     assert_eq!(as_length(v), Length::pt(9.0));
 }
 
-// ============================================================================
-// `ordering.satyg` — sealed; R4's deliberately-early smoke test for
-// cross-file qualified-type identity: `Basic.ordering` is declared in
-// `basic.satyg`, matched/constructed here in a DIFFERENT vendored file.
-// ============================================================================
+// `ordering.satyg` — sealed; a smoke test for cross-file qualified-type
+// identity (`Basic.ordering`, matched/constructed here in a DIFFERENT
+// vendored file).
 
 #[test]
 fn ordering_bare_compare_is_unbound_without_qualification() {
@@ -477,10 +411,6 @@ else `WRONG`";
     assert_eq!(as_str(v), "Greater");
 }
 
-// ============================================================================
-// `option.satyg` — sealed.
-// ============================================================================
-
 #[test]
 fn option_bare_map_is_unbound_without_qualification() {
     assert_bare_access_unbound("option-bare", "option", "map (fun x -> x + 1) (Some 41)");
@@ -495,10 +425,6 @@ Option.from 0 (Option.bind (Option.map (fun x -> x + 1) (Some 41)) (fun x -> Som
     assert_eq!(as_int(v), 43);
 }
 
-// ============================================================================
-// `pair.satyg` — sealed.
-// ============================================================================
-
 #[test]
 fn pair_bare_first_is_unbound_without_qualification() {
     assert_bare_access_unbound("pair-bare", "pair", "first (1, 2)");
@@ -512,12 +438,9 @@ Pair.second (Pair.map-second (fun y -> y + 1) (1, 41))";
     assert_eq!(as_int(v), 42);
 }
 
-// ============================================================================
-// `int.satyg` — sealed. `equal`'s `( == )` operator-section source is
-// transliterated to the lambda fallback `fun n1 n2 -> n1 == n2` (T4/G1 —
-// no `Atomic::OpRef` in this port's v1 grammar); this test exercises that
-// fallback specifically.
-// ============================================================================
+// `int.satyg` — sealed; `equal`'s `( == )` operator section transliterates
+// to the lambda fallback `fun n1 n2 -> n1 == n2` (no `Atomic::OpRef`
+// in this port's v1 grammar).
 
 #[test]
 fn int_bare_compare_is_unbound_without_qualification() {
@@ -544,11 +467,7 @@ if Int.equal 4 4 then Int.equal 4 5 else true";
     assert!(!as_bool(v));
 }
 
-// ============================================================================
-// `float.satyg` — sealed, FULLY vendored (language-completeness sweep gap
-// 1 restored `abs`/`max`/`min` once float comparison operators `>.`/`<.`/
-// `>=.`/`<=.` were registered — see the package's own header note).
-// ============================================================================
+// `float.satyg` — sealed, fully vendored.
 
 #[test]
 fn float_bare_power_is_unbound_without_qualification() {
@@ -561,7 +480,7 @@ fn float_power_sqrt_and_pi_compile_and_evaluate() {
 Float.sqrt (Float.power 2. 3.)";
     let v = compile_v01_via_loader("float-power-sqrt", src).expect("float.satyg should compile");
     let f = as_float(v);
-    // power 2. 3. = exp(2 * log 3) = 3^2 = 9; sqrt 9 = 3.
+    // power 2. 3. = 3^2 = 9; sqrt 9 = 3.
     assert!((f - 3.0).abs() < 1e-6, "expected 3.0, got {f}");
 }
 
@@ -576,9 +495,6 @@ Float.pi";
         "expected pi, got {f}"
     );
 }
-
-// ---- language-completeness sweep gap 1: `abs`/`max`/`min`, restored now
-// that `>.`/`<.`/`>=.`/`<=.` are registered v01-only prims. ----
 
 #[test]
 fn float_abs_of_a_negative_value_negates_it() {
@@ -599,11 +515,9 @@ Float.max (Float.min 4. 9.) 2.";
     assert!((f - 4.0).abs() < 1e-9, "expected 4.0, got {f}");
 }
 
-// ============================================================================
-// `list.satyg` — sealed; `@require: option` transitively (`map-with-ends`
-// calls `Option.is-none`). `find`'s recursive branch is upstream-buggy
-// (see the package's own header note) — only exercised head-matches/empty.
-// ============================================================================
+// `list.satyg` — sealed; requires `option` transitively (`map-with-ends`
+// calls `Option.is-none`). `find`'s recursive branch is upstream-buggy —
+// only head-matches/empty are exercised here.
 
 #[test]
 fn list_bare_fold_is_unbound_without_qualification() {
@@ -652,11 +566,9 @@ end";
     });
 }
 
-// ============================================================================
-// `string.satyg` — sealed; `@require: basic`/`int`/`option`/`list`
-// transitively. `append`'s `( ^ )` operator-section source is
-// transliterated to the lambda fallback.
-// ============================================================================
+// `string.satyg` — sealed; requires `basic`/`int`/`option`/`list`
+// transitively. `append`'s `( ^ )` operator section transliterates to the
+// lambda fallback.
 
 #[test]
 fn string_bare_length_is_unbound_without_qualification() {
@@ -690,9 +602,7 @@ end";
     });
 }
 
-// ============================================================================
-// `vector.satyg` — sealed; `Basic.vector` (T2 qualification).
-// ============================================================================
+// `vector.satyg` — sealed; `Basic.vector` qualification.
 
 #[test]
 fn vector_bare_add_is_unbound_without_qualification() {
@@ -707,12 +617,9 @@ Vector.get-x (Vector.add (1pt, 2pt) (3pt, 4pt))";
     assert_eq!(as_length(v), Length::pt(4.0));
 }
 
-// ============================================================================
-// `point.satyh` — sealed; `Basic.point`/`Basic.vector` (T2 qualification);
-// its `add`/`get-x`/`get-y` are point-free aliases of `Vector`'s own
-// (`Basic.point` and `Basic.vector` are the SAME structural `length *
-// length` synonym, so they unify transparently).
-// ============================================================================
+// `point.satyh` — sealed; `Basic.point`/`Basic.vector`. `add`/`get-x`/
+// `get-y` are aliases of `Vector`'s own — the two are the SAME structural
+// synonym, so they unify transparently.
 
 #[test]
 fn point_bare_get_y_is_unbound_without_qualification() {
@@ -736,11 +643,8 @@ Point.get-x (Point.dividing-point 0.5 (0pt, 0pt) (10pt, 0pt))";
     assert_eq!(as_length(v), Length::pt(5.0));
 }
 
-// ============================================================================
-// `path.satyh` — sealed; `Basic.point` (T2 qualification); `rectangle`/
-// `get-bounding-box` exercise `start-path`/`line-to`/`close-with-line`/
-// `get-path-bbox` (Group C).
-// ============================================================================
+// `path.satyh` — sealed; `Basic.point`. `rectangle`/`get-bounding-box`
+// exercise `start-path`/`line-to`/`close-with-line`/`get-path-bbox`.
 
 #[test]
 fn path_bare_rectangle_is_unbound_without_qualification() {
@@ -778,21 +682,13 @@ Path.get-bounding-box (Path.circle (50pt, 50pt) 10pt)";
     });
 }
 
-// ============================================================================
-// `context.satyh` — sealed, PARTIAL vendor (7/28 members dropped, G4).
-// `initial` needs a real `inline [math-text]` command VALUE; `v01-mini`'s
-// own `\math` supplies one. GAP FOUND (not predicted by the scout's T1-T8
-// dialect): a module-qualified command reference in PROGRAM-AREA position
-// (`command \Mod.cmd`, as opposed to inside inline-text braces) does not
-// lex — `lexer.rs`'s `lex_program`'s `\` case only scans a plain
-// (unqualified) name (`Token::HorzCmd`), never `scan_dotted`; the
-// following `.` then hits "illegal token '.' in a program area"
-// (`lexer.rs:723`). Worked around with `let open V01Mini in …`, which
-// re-exposes `\math` BARE within its scope (the same qualified-alias
-// mechanism `v01_modules.rs`'s `let_open_reexposes_bare_access` proves for
-// ordinary values, applying uniformly to command bindings) — `command
-// \math` then lexes as a plain unqualified command, no dot involved.
-// ============================================================================
+// `context.satyh` — sealed, PARTIAL vendor (7/28 members dropped).
+// GAP: a module-qualified command reference in PROGRAM-AREA position
+// (`command \Mod.cmd`) does not lex — `lexer.rs`'s `lex_program` only
+// scans an unqualified name, so the following `.` hits "illegal token '.'
+// in a program area" (`lexer.rs:723`). Worked around below with `let open
+// V01Mini in …`, which re-exposes `\math` bare so `command \math` lexes
+// with no dot involved.
 
 #[test]
 fn context_bare_set_font_size_is_unbound_without_qualification() {
@@ -832,15 +728,9 @@ Context.get-text-width (Context.set-leading 15pt ctx)";
     });
 }
 
-// ============================================================================
-// G6 (`…/tmp/g6-g7-standins.md` §5.3): `unidata.satyh`/`hyph-english.satyh`
-// — the two leaf packages G6's loader stand-ins unblock. Both `val`s
-// EVALUATE `load-*` at module load (not lazily), so a plain `@require:`
-// closure that reaches them proves the loaders are accept-and-return, not
-// hard errors. Sealed sigs: `HyphEnglish.hyphenation : hyphenation`,
-// `Unidata.unidata : unicode-char-database` — both nominal-`Variant`
-// opaque types (§1.3), round-tripping through sealing subsumption.
-// ============================================================================
+// `unidata.satyh`/`hyph-english.satyh` — both `val`s EVALUATE `load-*`
+// at module load (not lazily), so reaching them via `@require:` proves the
+// loader stand-ins are accept-and-return, not hard errors.
 
 #[test]
 fn hyph_english_bare_hyphenation_is_unbound_without_qualification() {
@@ -891,28 +781,15 @@ document (| title = `hyph-unidata` |) '<
     });
 }
 
-// ============================================================================
-// G7 (`…/tmp/g6-g7-standins.md` §5.4): the 4 `.satyh` font envelope stand-in
-// packages — `font-junicode`/`font-latin-modern`/`font-latin-modern-math`/
-// `font-ipa-ex`. Each package's sig spells `font`; since the 0.1 `font`
-// build-out that is upstream saphe-split's real `BaseType(FontType)` (an
-// OPAQUE handle, `typecheck::name_to_mono`'s `"font"` arm -> `t_font_key`),
-// not the old `t_string()` stand-in — so these prove three things through
-// real sealing subsumption: the members type as `font`, they EVALUATE to
-// `Value::Font(FontKey)` handles rather than strings, and
-// `set-font`/`set-math-font` accept them downstream in the two shapes
-// upstream gives those primitives (`font * float * float` and a bare
-// `font`).
-// ============================================================================
+// The 4 font envelope stand-in packages. `font` is saphe-split's real
+// `BaseType(FontType)` (`typecheck::name_to_mono`'s `"font"` arm ->
+// `t_font_key`), an OPAQUE handle, not a `t_string()` stand-in — members
+// type as `font`, evaluate to `Value::Font(FontKey)`, and flow into
+// `set-font`/`set-math-font`.
 
-/// A `FontMetrics` whose `resolve_font_abbrev` gives every abbrev the
-/// bundled 0.1 font stand-ins name its OWN `FontKey`. The default providers
-/// here (`NoFonts`/`Mono`) take the trait's default `resolve_font_abbrev`,
-/// which returns `None` for everything and so collapses all seven onto the
-/// 3-face name heuristic — fine for rendering, useless for proving that a
-/// given package member carries the handle for a given face. This one keeps
-/// them distinguishable, which is what makes the assertions below able to
-/// see the abbrev actually reach resolution.
+/// Gives every abbrev its OWN `FontKey`, unlike `NoFonts`/`Mono`'s default
+/// `resolve_font_abbrev` (`None` for everything, collapsing all faces onto
+/// one heuristic) — needed so the assertions below can tell abbrevs apart.
 struct NamedFaces;
 
 impl NamedFaces {
@@ -963,9 +840,8 @@ impl FontMetrics for NamedFaces {
     }
 }
 
-/// The `font` handle a member evaluated to. Deliberately NOT `as_str`: the
-/// whole point of the build-out is that a `font` is no longer a string, so
-/// a test that could still read one back would be pinning the stand-in.
+/// Deliberately NOT `as_str`: a `font` is not a string, so a test
+/// that could still read one back would be pinning the old stand-in.
 fn as_font(v: Value) -> FontKey {
     match v {
         Value::Font(key) => key,
@@ -1013,9 +889,6 @@ document (| title = `f` |) '<
     });
 }
 
-/// Negative probe (spec §5.4): `FontJunicode.normal` is a type of its own,
-/// not a `length` — using it where a `length` is expected must fail to
-/// typecheck.
 #[test]
 fn font_junicode_normal_is_not_a_length() {
     run_with_big_stack(|| {
@@ -1033,12 +906,9 @@ FontJunicode.normal +' 1pt";
     });
 }
 
-/// The build-out's central negative: 0.1's `font` is NOT `string`. This is
-/// the assertion that would have passed under the old `"font" =>
-/// t_string()` stand-in and must fail now — `string-length` is the cheapest
-/// witness that the two types are no longer interchangeable, and its
-/// mirror below is the same probe in the other direction (a `string` where
-/// a `font` is wanted).
+/// Central negative: 0.1's `font` is NOT `string`. Would have passed under
+/// the old `"font" => t_string()` stand-in; `string-length` is the
+/// cheapest witness the two types do not unify.
 #[test]
 fn font_is_not_string_in_either_direction() {
     run_with_big_stack(|| {
@@ -1057,8 +927,7 @@ string-length FontJunicode.normal";
             "expected a typecheck error: {err}"
         );
 
-        // …and a bare abbrev is not a `font`: `set-math-font` takes
-        // `tFONTKEY` in 0.1, so the 0.0.6 spelling must be refused.
+        // A bare abbrev is not a `font`: `set-math-font` takes `tFONTKEY` in 0.1.
         let string_as_font = "@require: v01-mini
 let open V01Mini in
 set-math-font `lmodern` (get-initial-context 440pt (command \\math))";
@@ -1077,9 +946,8 @@ set-math-font `lmodern` (get-initial-context 440pt (command \\math))";
     });
 }
 
-/// The other half: `set-math-font` under **0.0.6** still takes the abbrev
-/// string, unchanged. Guards the corpus — every bundled 0.0.6 package calls
-/// it that way.
+/// `set-math-font` under 0.0.6 still takes the abbrev string — guards the
+/// corpus, which calls it that way throughout.
 #[test]
 fn v006_set_math_font_still_takes_the_abbrev_string() {
     let ty = rustyfi_lang::prim_types::primitive_type_with_version(
@@ -1101,10 +969,6 @@ fn v006_set_math_font_still_takes_the_abbrev_string() {
         "font -> (context -> context)"
     );
 }
-
-// ---- per-package compile tests for the remaining two G7 stand-ins
-// (`font-latin-modern`/`font-ipa-ex`), mirroring the other vendored
-// packages' bare-access + value-resolves pair. ----
 
 #[test]
 fn font_latin_modern_bare_sans_is_unbound_without_qualification() {

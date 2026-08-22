@@ -1,18 +1,14 @@
 //! End-to-end proof that CJK glyph rendering works through the real
-//! pipeline (Group D closure): a genuine Japanese sentence (kanji +
-//! hiragana + katakana), compiled through the real
-//! loader/elaborator/typechecker/evaluator/line-breaker/page-breaker, then
-//! rendered via the CID-keyed PDF writer (`render_pdf_ttf`) under a
-//! `TtfFontStore` built from the real IPAex font
-//! (`lib-rustyfi/dist/fonts/ipaexm.ttf`, fetched by
-//! `download-fonts.sh`) — an IPA-licensed, `glyf`-outline TrueType
-//! face, embeddable by this port's CID writer, unlike the host's CFF `.ttc`
-//! system CJK fonts (`cid.rs`'s module doc: only `glyf` outlines can become
-//! `FontFile2`).
+//! pipeline: a genuine Japanese sentence, compiled through
+//! the real loader/elaborator/typechecker/evaluator/line-breaker/
+//! page-breaker, rendered via the CID-keyed PDF writer under a
+//! `TtfFontStore` built from the real IPAex font (fetched by
+//! `download-fonts.sh`) — a `glyf`-outline TrueType face, embeddable by this
+//! port's CID writer, unlike the host's CFF `.ttc` system CJK fonts
+//! (`cid.rs`'s module doc: only `glyf` outlines can become `FontFile2`).
 //!
-//! Skipped (not failed) when the font isn't present on disk — this repo
-//! never commits font binaries (`lib-rustyfi/dist/fonts/*.ttf` is
-//! gitignored); run `sh download-fonts.sh` to fetch it.
+//! Skipped (not failed) when the font isn't present on disk (this repo
+//! never commits font binaries); run `sh download-fonts.sh` to fetch it.
 //!
 //! Proves, none of which the base-14/Latin-only path can prove:
 //!  (a) `get-initial-context` (called by stdja-mini's plain `document`,
@@ -262,8 +258,8 @@ fn cjk_sentence_renders_real_glyphs_end_to_end() {
 
     // Compile-time sanity check (before touching the PDF bytes): the
     // font_scheme overlay must have actually routed both CJK script buckets
-    // to `cjk_key`, not left them at the Latin default — the D1a/D1b wiring
-    // this whole test exists to prove.
+    // to `cjk_key`, not left them at the Latin default — the per-script
+    // font-scheme wiring this whole test exists to prove.
     assert_eq!(
         store.script_default(0), // HanIdeographic
         Some((cjk_key, 0.88, 0.0)),

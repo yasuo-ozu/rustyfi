@@ -1,5 +1,5 @@
-% F2 fixture (item #8): the real `page-break-two-column` — two `fun pbinfo
-% -> record` scheme literals (the plan's own Slice-1 fixture shape), a
+% Fixture: the real `page-break-two-column` — two `fun pbinfo
+% -> record` scheme literals, a
 % 250pt second-column x-shift, and a long body that overflows a narrow
 % single-column area onto roughly HALF as many pages once split across two
 % columns.

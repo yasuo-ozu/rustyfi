@@ -1,9 +1,8 @@
-//! §D underlay ordering: a page's `DocExtras::page_graphics` overlay must
-//! draw BEFORE the page's own text — `page_content`'s prologue,
-//! `rustyfi-pdf/src/lib.rs` — so a frame's background fill/border sits
-//! behind the text it decorates, exactly what upstream's per-page op
-//! ordering (deco ops emitted ahead of the page's text ops in
-//! `handlePdf.ml`) produces.
+//! Underlay ordering: a page's `DocExtras::page_graphics` overlay must draw
+//! BEFORE the page's own text (`page_content`'s prologue,
+//! `rustyfi-pdf/src/lib.rs`), so a frame's background sits behind the text it
+//! decorates — what upstream's per-page ordering (deco ops ahead of the page's
+//! text ops in `handlePdf.ml`) produces.
 
 use rustyfi_backend::{
     Closing, Color, DocExtras, FontKey, GraphicsElem, HorzStringInfo, Length, Page, PageGeometry,
@@ -76,7 +75,7 @@ fn a_frames_deco_underlay_draws_before_the_pages_first_bt() {
 
 /// The `place_graphics` prologue emits its `q`/`cm`/`Q` wrapper
 /// UNCONDITIONALLY, even for an empty slice — an empty-overlay page must NOT
-/// emit that wrapper at all, or the byte-identity floor (§A9: extras-free
+/// emit that wrapper at all, or the byte-identity floor (extras-free
 /// documents stay byte-for-byte identical) breaks.
 #[test]
 fn an_empty_overlay_emits_no_graphics_state_wrapper_at_all() {
@@ -94,9 +93,8 @@ fn an_empty_overlay_emits_no_graphics_state_wrapper_at_all() {
     assert_eq!(with_default, without_extras);
 
     let hay = String::from_utf8_lossy(&with_default);
-    // No stray `q ... cm ... Q` pair ahead of the text: the ONLY `cm` in this
-    // text-only page's content stream would come from a non-empty overlay,
-    // which this test has none of.
+    // No stray `q ... cm ... Q` ahead of the text: the ONLY `cm` in this
+    // text-only page's stream would come from a non-empty overlay.
     assert!(
         !hay.contains(" cm\n"),
         "an empty overlay must not emit place_graphics's q/cm/Q prologue at all:\n{hay}"

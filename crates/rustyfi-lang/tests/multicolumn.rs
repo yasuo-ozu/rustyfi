@@ -1,9 +1,9 @@
 //! Real multi-column `page-break` (item #8 of): `page_break_core`'s
 //! shared per-page loop — `columnhookf` firing at the start of EVERY
 //! column, `columnendhookf` firing exactly once per page (before
-//! `pagepartsf`), and the page-number-limit guard. Mirrors
-//! `page_prims.rs`'s style (a local `\math` command, `compile_document`
-//! directly — no `@require:` needed for any of these).
+//! `pagepartsf`), and the page-number-limit guard. Driven through
+//! `compile_document` directly, with a local `\math` command — no
+//! `@require:` needed for any of these.
 
 use rustyfi_backend::{FontKey, FontMetrics, Length, PlacedLine, PureHorzBox};
 use rustyfi_lang::{elaborate, primitives, typecheck, CompileError};
@@ -65,10 +65,8 @@ in
 ";
 
 /// Concatenate every `InnerString` glyph run's text reachable from one
-/// placed line's contents, in order — a coarse but sufficient way to
-/// recognize which source line ended up where (recurses into
-/// `Discretionary::no_break`, the only composite this suite's fixtures
-/// produce).
+/// placed line's contents, in order (recurses into `Discretionary::
+/// no_break`, the only composite this suite's fixtures produce).
 fn line_text(line: &PlacedLine) -> String {
     fn go(bx: &PureHorzBox, out: &mut String) {
         match bx {
@@ -88,12 +86,9 @@ fn line_text(line: &PlacedLine) -> String {
     out
 }
 
-// ============================================================================
-// T10: `columnhookf` fires at the START of every column (here, one column
+// `columnhookf` fires at the START of every column (here, one column
 // per page since the shift list is `[]`) — its line must be the topmost
-// (lowest `baseline_y`) real content on every page, and fire exactly once
-// per page (one column per page in this fixture).
-// ============================================================================
+// (lowest `baseline_y`) real content on every page, and fire exactly once.
 
 #[test]
 fn columnhookf_prepends_its_line_to_the_top_of_every_page() {
@@ -142,11 +137,9 @@ fn columnhookf_prepends_its_line_to_the_top_of_every_page() {
     );
 }
 
-// ============================================================================
-// T11: `columnendhookf` fires exactly once per page, AFTER the column loop
+// `columnendhookf` fires exactly once per page, AFTER the column loop
 // and BEFORE `pagepartsf` — injecting content on its first call rolls that
 // content onto a fresh page (the injected line opens page 2).
-// ============================================================================
 
 #[test]
 fn columnendhookf_injected_content_opens_the_next_page() {
@@ -181,12 +174,10 @@ fn columnendhookf_injected_content_opens_the_next_page() {
     );
 }
 
-// ============================================================================
-// T12: the page-number-limit guard. A `columnendhookf` that ALWAYS injects
+// The page-number-limit guard. A `columnendhookf` that ALWAYS injects
 // one more (trivially-fitting) line never lets `remaining` drain, so the
 // shared loop must eventually refuse with an error mentioning the limit
 // rather than looping forever.
-// ============================================================================
 
 #[test]
 fn columnendhookf_that_always_injects_hits_the_page_number_limit() {
@@ -205,12 +196,9 @@ fn columnendhookf_that_always_injects_hits_the_page_number_limit() {
     );
 }
 
-// ============================================================================
-// T13: `page-break-two-column` typechecks over its real 6-arg signature
+// `page-break-two-column` typechecks over its real 6-arg signature
 // (`page -> length -> (unit -> block-boxes) -> pagecontf -> pagepartsf ->
-// block-boxes -> document`), mirroring `page-break-multicolumn`'s existing
-// typing coverage (page_prims.rs).
-// ============================================================================
+// block-boxes -> document`).
 
 #[test]
 fn page_break_two_column_typechecks_over_its_6_arg_signature() {

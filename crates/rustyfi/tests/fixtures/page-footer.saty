@@ -1,4 +1,4 @@
-% Slice 1 fixture: the real 4-arg `page-break` called directly (not
+% Fixture: the real 4-arg `page-break` called directly (not
 % through stdja-mini's `document`), with a content scheme narrow enough
 % (640pt of a 842pt-tall A4Paper) that a 40-paragraph body overflows onto
 % a second page, and a footer closure rendering `pbinfo#page-number` via

@@ -1,50 +1,44 @@
 //! CID-keyed (Type0/CIDFontType2 for `glyf`, Type0/CIDFontType0 for CFF)
 //! font embedding, with a required `ToUnicode` CMap so `pdftotext`-style
-//! extraction keeps working. This is the phase-5 sibling of `render_pdf`
-//! (base-14 Type1): it shares the page geometry / line-layout plumbing but
-//! writes Identity-H glyph-index content streams against real embedded font
-//! files instead of WinAnsi bytes against the built-in base-14 fonts.
+//! extraction keeps working. The sibling of `render_pdf` (base-14 Type1): it
+//! shares the page geometry / line-layout plumbing but writes Identity-H
+//! glyph-index content streams against real embedded font files.
 //!
-//! D5 subsets a `glyf`-outline face's `FontFile2` down to the glyphs the
-//! document actually used, via a translating `/CIDToGIDMap` stream — see
-//! `write_font`'s doc comment for the design (raw original gid stays the
-//! CID; only the embedded font's OWN internal glyph ids get renumbered by
-//! the subsetter).
+//! This subsets a `glyf`-outline face's `FontFile2` down to the glyphs the
+//! document actually used, via a translating `/CIDToGIDMap` stream (see
+//! `write_font`): raw original gid stays the CID, only the embedded font's
+//! OWN internal glyph ids get renumbered.
 //!
-//! adds a second path for CFF/OpenType-CFF outlines
-//! (`CIDFontType0`/`/FontFile3`), previously out of scope (a CFF face's
-//! `FontFile2` embed is invalid PDF).
+//! CFF/OpenType-CFF outlines take a second path
+//! (`CIDFontType0`/`/FontFile3`): a CFF face's `FontFile2` embed is invalid
+//! PDF.
 //!
-//! **S2 (real CFF subsetting via `subsetter`) is implemented.** Unlike the
-//! glyf path, `CIDFontType0` has no `/CIDToGIDMap` to absorb subset
-//! renumbering, and `subsetter`'s CFF output is CID-keyed with CID == new
-//! gid (crate docs), so the CONTENT STREAM itself must emit the REMAPPED CID
-//! for a subsetted CFF file's runs. This needs the per-file `GlyphRemapper`
-//! to exist *before* content is generated, which is a real two-pass split:
-//! `render_pdf_ttf_with` first walks every page once purely to collect
-//! `usage` (glyph-id sets per physical file, discarding the throwaway
-//! content bytes that pass produces), then builds a `subsetter::subset` +
+//! **Real CFF subsetting via `subsetter`.** `CIDFontType0` has no
+//! `/CIDToGIDMap` to absorb subset renumbering, and `subsetter`'s CFF output
+//! is CID-keyed with CID == new gid (crate docs), so the CONTENT STREAM
+//! itself must emit the REMAPPED CID for a subsetted CFF file's runs. That
+//! needs the per-file `GlyphRemapper` to exist *before* content is
+//! generated, hence a two-pass split: `render_pdf_ttf_with` walks every page
+//! once purely to collect `usage` (glyph-id sets per physical file,
+//! discarding that pass's content bytes), builds a `subsetter::subset` +
 //! `GlyphRemapper` for every *used* CFF file, then walks every page a
-//! *second* time to build the real content streams — `page_content`/
-//! `emit_box`/`encode_glyph_run` all thread an extra `cid_remaps: &BTreeMap<usize,
-//! &subsetter::GlyphRemapper>` (only populated for CFF files whose subset
-//! attempt succeeded) so a CFF-backed run emits `remapper.get(original_gid)`
-//! instead of the original gid. `usage` itself stays keyed by the ORIGINAL
-//! face gid in both passes (that's what `face.glyph_index`/hmtx naturally
-//! give you) — `write_font_cff` re-keys `/W` and ToUnicode to the remapped
-//! CID at write time, looking up each glyph's metrics via its original gid
-//! (glyph metrics don't change under renumbering) but emitting the new CID as
-//! the dictionary/CMap key. `write_font_cff` still falls back to S1's
-//! whole-OTF embed (original gid as CID, matching the content pass's own
-//! fallback when `cid_remaps` has no entry for that file) whenever
-//! `subsetter::subset` fails (seac composites, CFF2).
+//! *second* time for the real content streams, threading a `cid_remaps:
+//! &BTreeMap<usize, &subsetter::GlyphRemapper>` (populated only for CFF
+//! files whose subset attempt succeeded) so a CFF-backed run emits
+//! `remapper.get(original_gid)`. `usage` itself stays keyed by the ORIGINAL
+//! face gid in both passes (what `face.glyph_index`/hmtx naturally give) —
+//! `write_font_cff` re-keys `/W` and ToUnicode to the remapped CID at write
+//! time, looking up each glyph's metrics via its original gid (metrics don't
+//! change under renumbering). It falls back to the whole-OTF embed
+//! (original gid as CID, matching the content pass's own fallback when
+//! `cid_remaps` has no entry for that file) whenever `subsetter::subset`
+//! fails (seac composites, CFF2).
 //!
 //! Still deferred: kerning/shaping (advances come straight from
-//! `FontMetrics`, matching the milestone-1 line breaker). A `.ttc` member is
-//! likewise never subset today (`subsetter::subset`'s output is a standalone
-//! sfnt, which `FontFile2`/`FontFile3` requires — embedding a raw TTC index
-//! directly would be invalid; routing TTC members through the subset path
-//! unconditionally is a documented follow-on, not implemented here).
+//! `FontMetrics`). A `.ttc` member is never subset either
+//! (`subsetter::subset`'s output is a standalone sfnt, which
+//! `FontFile2`/`FontFile3` requires — embedding a raw TTC index directly
+//! would be invalid).
 
 use std::collections::BTreeMap;
 
@@ -63,23 +57,17 @@ use crate::{
     write_form_xobjects, write_image_xobjects, write_named_dests, write_outline, PdfError,
 };
 
-/// The PDF resource name for physical font file `file_idx` (D1a) — one name
-/// per *file* actually embedded, replacing the old fixed `FONT_RES_NAMES:
-/// [&str; 3]` table that could only name `FontKey(0/1/2)` and not a
-/// registry slot beyond that. Both the page `/Resources /Font` dictionary
-/// and every `Tf` operand this writer emits go through this single naming
-/// function, so they always agree. For a document using only the default
-/// regular face, `file_idx` is always `0` and this is `"F0"` — the same
-/// resource name the pre-D1a fixed table produced, so that path stays
-/// byte-identical.
+/// The PDF resource name for physical font file `file_idx` — one name
+/// per *file* actually embedded, so a registry slot beyond `FontKey(0/1/2)`
+/// is nameable too. Both the page `/Resources /Font` dictionary and every
+/// `Tf` operand go through this one function, so they always agree.
 pub(crate) fn font_res_name(file_idx: usize) -> String {
     format!("F{file_idx}")
 }
 
 /// Which glyphs of one physical font file are referenced anywhere in the
-/// document, and the (first-seen) source character for each — enough to
-/// build both the `/W` widths array and the `ToUnicode` CMap without
-/// embedding glyphs nobody uses.
+/// document, and the (first-seen) source character for each — enough for both
+/// the `/W` widths array and the `ToUnicode` CMap.
 #[derive(Default)]
 struct FontUsage {
     /// gid -> first char that produced it.
@@ -88,8 +76,8 @@ struct FontUsage {
 
 /// Serialize typeset pages into a PDF that embeds real TrueType fonts as
 /// CID-keyed (Type0/CIDFontType2) fonts, Identity-H encoded. `images` is the
-/// document-wide image table (`DocumentValue::images`; Slice 1, raster
-/// images) — pass `&[]` for a text-only document.
+/// document-wide image table (`DocumentValue::images`) — pass `&[]` for a
+/// text-only document.
 pub fn render_pdf_ttf(
     geometry: &PageGeometry,
     pages: &[Page],
@@ -99,11 +87,9 @@ pub fn render_pdf_ttf(
     render_pdf_ttf_with(geometry, pages, store, images, &DocExtras::default())
 }
 
-/// Same as [`render_pdf_ttf`], but also emits the §B/§C/§D extras
+/// Same as [`render_pdf_ttf`], but also emits the extras
 /// (`/Annots`, `/Dests`, `/Outlines`, per-page deco-graphics underlays)
 /// accumulated while evaluating the document (`DocumentValue::extras`).
-/// `render_pdf_ttf` above is a thin wrapper over this with
-/// `&DocExtras::default()`.
 pub fn render_pdf_ttf_with(
     geometry: &PageGeometry,
     pages: &[Page],
@@ -113,13 +99,10 @@ pub fn render_pdf_ttf_with(
 ) -> Result<Vec<u8>, PdfError> {
     let paper_h = geometry.paper_height.0 as f32;
 
-    // Pass 1a: a throwaway walk of every page purely to collect `usage`
-    // (which glyphs of which physical font file are referenced anywhere in
-    // the document) — every run emits the ORIGINAL face gid as the CID here
-    // (no `cid_remaps` entries yet), and the resulting content bytes are
-    // discarded. This has to happen before any CFF file can be subset,
-    // because the subset's glyph set (and hence its `GlyphRemapper`, S2)
-    // depends on which glyphs the WHOLE document uses, not just one page.
+    // Pass 1a: a throwaway walk of every page purely to collect `usage`; the
+    // content bytes are discarded. This has to happen before any CFF file can
+    // be subset, because the subset's glyph set (and hence its
+    // `GlyphRemapper`) depends on what the WHOLE document uses.
     let mut usage: BTreeMap<usize, FontUsage> = BTreeMap::new();
     for (i, page) in pages.iter().enumerate() {
         let overlay = extras.page_graphics.get(i).map(|v| v.as_slice()).unwrap_or(&[]);
@@ -127,18 +110,15 @@ pub fn render_pdf_ttf_with(
     }
 
     // Pass 1b: subset every *used* CFF file now that `usage` is complete,
-    // keeping both the subset sfnt bytes and its `GlyphRemapper` — the
-    // remapper is also what pass 1c's content generation needs to translate
-    // each CFF run's original gid into the CID the embedded subset expects
-    // (CID == new gid, per `subsetter`'s own docs). A `glyf` file gets no
-    // entry here and is untouched by this whole S2 mechanism — its content/
-    // `/W`/ToUnicode stay keyed by the original gid exactly as before, and
-    // its own subset renumbering (D5) is absorbed by `/CIDToGIDMap`, not by
-    // rewriting the CID space. Subsetting failure (`.ok()`, e.g. a seac
-    // composite or CFF2 face) leaves that file with no entry either — S1's
-    // whole-OTF fallback (`write_font_cff`) then also keeps the original gid
-    // as the CID for that file, so `cid_remaps`'s absence is exactly the
-    // right signal for both the content pass and the writer.
+    // keeping both the subset sfnt bytes and its `GlyphRemapper` — pass 1c
+    // needs the latter to translate each CFF run's original gid into the CID
+    // the embedded subset expects (CID == new gid, per `subsetter`'s docs). A
+    // `glyf` file gets no entry: its own subset renumbering is absorbed
+    // by `/CIDToGIDMap`, not by rewriting the CID space. A subsetting failure
+    // (`.ok()`, e.g. a seac composite or CFF2 face) leaves no entry either —
+    // the whole-OTF fallback (`write_font_cff`) also keeps the original gid
+    // as the CID, so `cid_remaps`'s absence is the right signal for both the
+    // content pass and the writer.
     let mut cff_subsets: BTreeMap<usize, (Vec<u8>, subsetter::GlyphRemapper)> = BTreeMap::new();
     for (&file_idx, file_usage) in &usage {
         let Some(face) = store.face_by_file(file_idx) else {
@@ -156,12 +136,10 @@ pub fn render_pdf_ttf_with(
     let cid_remaps: BTreeMap<usize, &subsetter::GlyphRemapper> =
         cff_subsets.iter().map(|(&idx, (_, r))| (idx, r)).collect();
 
-    // Pass 1c: the REAL content streams — structurally identical to pass 1a
-    // (and `usage` ends up holding the exact same original-gid keys, since
-    // remapping never changes which original gids a run resolves to, only
-    // the bytes it emits for them), except a CFF-backed run whose file has a
-    // `cid_remaps` entry now emits `remapper.get(original_gid)` as the CID
-    // instead of the original gid.
+    // Pass 1c: the REAL content streams. `usage` ends up with the exact same
+    // original-gid keys (remapping changes only the bytes emitted, not which
+    // original gids a run resolves to), except a CFF-backed run whose file
+    // has a `cid_remaps` entry now emits `remapper.get(original_gid)`.
     let mut usage: BTreeMap<usize, FontUsage> = BTreeMap::new();
     let mut page_contents = Vec::with_capacity(pages.len());
     for (i, page) in pages.iter().enumerate() {
@@ -180,9 +158,8 @@ pub fn render_pdf_ttf_with(
     let catalog_id = next_ref(&mut alloc);
     let page_tree_id = next_ref(&mut alloc);
 
-    // One Type0 font object per *used* physical font file (dedup point for
-    // bold/oblique falling back to regular, and for skipping files that
-    // never appear in the document at all).
+    // One Type0 font object per *used* physical font file (the dedup point
+    // for bold/oblique falling back to regular).
     let mut type0_ids: BTreeMap<usize, Ref> = BTreeMap::new();
     for &file_idx in usage.keys() {
         type0_ids.insert(file_idx, next_ref(&mut alloc));
@@ -201,7 +178,7 @@ pub fn render_pdf_ttf_with(
     let page_ids: Vec<Ref> = pages.iter().map(|_| next_ref(&mut alloc)).collect();
     let content_ids: Vec<Ref> = pages.iter().map(|_| next_ref(&mut alloc)).collect();
 
-    // §B/§C: link annotations, named destinations, the outline tree — refs
+    // Link annotations, named destinations, the outline tree — refs
     // allocated right after `page_ids` (needed by `write_named_dests`); the
     // chunk model makes object-write order irrelevant, only ref
     // availability matters.
@@ -210,7 +187,7 @@ pub fn render_pdf_ttf_with(
     let dests_id =
         write_named_dests(&mut pdf, || next_ref(&mut alloc), &extras.destinations, &page_ids);
     let outline_id = write_outline(&mut pdf, || next_ref(&mut alloc), &extras.outline);
-    // prim-retype-sweep §2.4 step 5 — see `lib.rs`'s matching comment.
+    // See `lib.rs`'s matching comment.
     if let Some(info) = &extras.doc_info {
         let info_id = next_ref(&mut alloc);
         write_document_info(&mut pdf, info_id, info);
@@ -260,11 +237,9 @@ pub fn render_pdf_ttf_with(
         }
         let mut resources = p.resources();
         let mut fonts = resources.fonts();
-        // D1a: one resource name per *used* physical font FILE (not per
-        // `FontKey` slot — `FONT_RES_NAMES`'s fixed 3-entry table couldn't
-        // name a slot beyond 2, and per-file naming also collapses the
-        // bold-falls-back-to-regular alias correctly, matching `emit_box`'s
-        // own `font_res_name`).
+        // One resource name per *used* physical font FILE, not per
+        // `FontKey` slot — that also collapses the bold-falls-back-to-regular
+        // alias correctly, matching `emit_box`'s own `font_res_name`.
         let names: Vec<(String, Ref)> = type0_ids
             .iter()
             .map(|(&file_idx, &font_ref)| (font_res_name(file_idx), font_ref))
@@ -300,15 +275,13 @@ pub fn render_pdf_ttf_with(
 /// backend's x-offsets are authoritative, so no kerning/shaping is applied
 /// here beyond what `FontMetrics` already measured. Image placement
 /// (`place_image`, `crate::lib`) is identical between the two writers.
-/// `overlay` (§D deco graphics) is drawn FIRST, same as `lib.rs`'s
+/// `overlay` (deco graphics) is drawn FIRST, same as `lib.rs`'s
 /// `page_content` — see that function's doc comment for the byte-identity
 /// guard on an empty overlay.
 ///
-/// `cid_remaps` (S2): per-file `GlyphRemapper`s for CFF files that have
-/// already been subset — see `render_pdf_ttf_with`'s doc comment for the
-/// two-pass reason this exists. A `glyf` file (or a CFF file with no entry,
-/// e.g. subsetting declined it) keeps emitting the original gid,
-/// unaffected.
+/// `cid_remaps`: per-file `GlyphRemapper`s for CFF files already
+/// subset (see this module's doc comment). A `glyf` file, or a CFF file with
+/// no entry, keeps emitting the original gid.
 fn page_content(
     page: &Page,
     paper_h: f32,
@@ -415,14 +388,12 @@ fn emit_box(
                 let remap = cid_remaps.get(&file_idx).copied();
                 let file_usage = usage.entry(file_idx).or_default();
                 match g.gid {
-                    // §B3: a raw MATH-table variant glyph id
+                    // A raw MATH-table variant glyph id
                     // (`push_big_char_glyph`/`push_delimiter_glyph`) — not
                     // necessarily cmap-reachable from `g.text`, so emit it
                     // directly (Identity-H: content bytes ARE gids) rather
                     // than re-deriving a gid through `glyph_index`. `usage`
-                    // still records the ORIGINAL gid (S2); only the emitted
-                    // CONTENT bytes are remapped, when this file has a
-                    // subsetted CFF `GlyphRemapper`.
+                    // still records the ORIGINAL gid.
                     Some(gid) => {
                         file_usage
                             .glyphs
@@ -439,7 +410,7 @@ fn emit_box(
                     }
                 }
             })?;
-            // §B2: same fraction-bar/radical-sign `Fill`s as `render_pdf`'s
+            // Same fraction-bar/radical-sign `Fill`s as `render_pdf`'s
             // base-14 writer (`lib.rs`'s Math arm) — the CID writer shares
             // `place_graphics` unchanged, since a filled path carries no
             // font/text state either writer needs to specialize.
@@ -471,7 +442,7 @@ fn emit_box(
                 emit_box(content, cbx, x, y, store, usage, images, cid_remaps)
             })?;
         }
-        // §D: see `crate::emit_box`'s (base-14, `lib.rs`) matching arm.
+        // See `crate::emit_box`'s (base-14, `lib.rs`) matching arm.
         PureHorzBox::Frame { contents, .. } => {
             for (dx, cbx) in contents {
                 emit_box(content, cbx, tx + dx.0 as f32, ty, store, usage, images, cid_remaps)?;
@@ -486,13 +457,10 @@ fn emit_box(
 /// (and the first character that produced it) in `usage` for the `/W` array
 /// and `ToUnicode` CMap built later — `usage` is always keyed by the
 /// ORIGINAL face gid, for every font format (glyph metrics/cmap lookups are
-/// naturally in that space). `remap`, when `Some` (S2, — only ever
-/// populated for a CFF file whose `subsetter::subset` attempt succeeded),
-/// is applied to the EMITTED CONTENT BYTES only:
-/// `remap.get(gid).unwrap_or(gid)` becomes the CID written into the `Tj`
-/// operand, since a subsetted `CIDFontType0` font has no `/CIDToGIDMap` to
-/// absorb the renumbering the way the glyf path's does. `write_font_cff`
-/// re-keys `/W`/ToUnicode to match at write time.
+/// naturally in that space). `remap` is applied to the EMITTED CONTENT
+/// BYTES only: `remap.get(gid).unwrap_or(gid)` becomes the CID written into
+/// the `Tj` operand, and `write_font_cff` re-keys `/W`/ToUnicode to match at
+/// write time.
 fn encode_glyph_run(
     face: &Face<'_>,
     text: &str,
@@ -516,12 +484,12 @@ fn encode_glyph_run(
 /// Write the Type0 font, its CIDFontType2 descendant, FontDescriptor,
 /// FontFile2 and ToUnicode CMap for one physical font file.
 ///
-/// **Subsetting (D5).** Content-stream generation (`page_content`, pass 1)
+/// **Subsetting.** Content-stream generation (`page_content`, pass 1)
 /// runs before this function and bakes ORIGINAL face glyph ids into every
 /// `Tj` as Identity-H CIDs — renumbering CIDs here would force a two-pass
 /// restructure of the whole writer (and the math raw-gid channel,
 /// `emit_box`'s `Math` arm). Instead: the content stream and `/W`/ToUnicode
-/// (both keyed by original gid = CID) stay EXACTLY as before; only the
+/// all stay keyed by the original gid (= CID); only the
 /// embedded `FontFile2` is subsetted (via the `subsetter` crate, `glyf`
 /// faces only) and a translating `/CIDToGIDMap` stream maps each original
 /// gid (CID) to its renumbered gid inside the subset font — the PDF spec's
@@ -531,13 +499,12 @@ fn encode_glyph_run(
 /// CID space; documented, not a fidelity gap.
 ///
 /// A `glyf`-less face (CFF/OpenType-CFF) is dispatched to `write_font_cff`
-/// instead — see that function's doc comment for its own (structurally
-/// different) subsetting/fallback story; `cff_subset`, when `Some`, is that
-/// file's already-computed S2 subset bytes + `GlyphRemapper`
-/// (`render_pdf_ttf_with` builds it before content generation — see that
-/// function's doc comment), passed straight through so `write_font_cff`
+/// instead, which has its own (structurally different) subsetting/fallback
+/// story; `cff_subset`, when `Some`, is that file's already-computed
+/// subset bytes + `GlyphRemapper` (built by `render_pdf_ttf_with` before
+/// content generation), passed straight through so `write_font_cff`
 /// doesn't redo the subsetting work. For a `glyf` face, a subsetting
-/// failure degrades gracefully to the pre-D5 whole-file embed with
+/// failure degrades gracefully to a whole-file embed with
 /// `CIDToGIDMap=Identity` — subsetting is a size optimization, never a hard
 /// requirement for a correct PDF.
 fn write_font(
@@ -573,9 +540,7 @@ fn write_font(
     // CFF/OpenType-CFF outlines take a structurally different embed path —
     // `CIDFontType0`/`/FontFile3`, no `/CIDToGIDMap` — so they're dispatched
     // to `write_font_cff` right after ref allocation, before any of the
-    // glyf-specific logic below runs. The glyf branch that follows this `if`
-    // is left textually unchanged so the existing (entirely `glyf`) fixture
-    // corpus stays byte-identical.
+    // glyf-specific logic below runs.
     let tables = face.tables();
     if tables.glyf.is_none() && tables.cff.is_some() {
         return write_font_cff(
@@ -599,10 +564,10 @@ fn write_font(
     // `unitsPerEm` (DejaVu et al. use 2048).
     let scale = |v: f64| (v * 1000.0 / units_per_em) as f32;
 
-    // --- D5: subset the font file down to the glyphs `usage` references.
-    // `glyf`-only (CFF faces are dispatched to `write_font_cff` above);
-    // any subsetting failure (`.ok()`) degrades to the whole-file embed
-    // rather than a hard error — subsetting is a size optimization only. ---
+    // --- Subset the font file down to the glyphs `usage` references.
+    // `glyf`-only (CFF faces went to `write_font_cff` above); a subsetting
+    // failure (`.ok()`) degrades to the whole-file embed rather than a hard
+    // error — subsetting is a size optimization only. ---
     let glyphs: Vec<u16> = usage.glyphs.keys().copied().collect();
     let subset: Option<(Vec<u8>, subsetter::GlyphRemapper)> = if face.tables().glyf.is_some() {
         let remapper = subsetter::GlyphRemapper::new_from_glyphs_sorted(&glyphs);
@@ -633,7 +598,6 @@ fn write_font(
     let cmap_bytes = cmap.finish();
     pdf.cmap(to_unicode_ref, &cmap_bytes);
 
-    // --- Type0 (composite) font. ---
     {
         let mut t0 = pdf.type0_font(type0_ref);
         t0.base_font(Name(base_name.as_bytes()));
@@ -646,8 +610,7 @@ fn write_font(
     // indices (never renumbered, see `write_font`'s doc comment);
     // CIDSystemInfo Adobe-Identity-0 (no predefined CJK ordering). The
     // CID->embedded-glyph-id translation is `/CIDToGIDMap`: a stream when
-    // subsetted (D5), the `Identity` predefined name otherwise (pre-D5
-    // behavior, unchanged). ---
+    // subsetted, the `Identity` predefined name otherwise. ---
     let widths: BTreeMap<u16, f32> = usage
         .glyphs
         .keys()
@@ -685,7 +648,6 @@ fn write_font(
         }
     }
 
-    // --- FontDescriptor. ---
     {
         let bbox_units = face.global_bounding_box();
         let bbox = Rect::new(
@@ -724,14 +686,14 @@ fn write_font(
         fd.font_file2(font_file_ref);
     }
 
-    // --- FontFile2: the subsetted font when D5 succeeded, else the whole
-    // input file verbatim (pre-D5 behavior) — both uncompressed. ---
+    // --- FontFile2: the subsetted font when subsetting succeeded, else the whole
+    // input file verbatim — both uncompressed. ---
     match &subset {
         Some((bytes, _)) => pdf.stream(font_file_ref, bytes),
         None => pdf.stream(font_file_ref, store.file_bytes(file_idx)),
     };
 
-    // --- /CIDToGIDMap stream (D5 only): `2*(max_used_gid+1)` big-endian
+    // --- /CIDToGIDMap stream (only when subsetted): `2*(max_used_gid+1)` big-endian
     // u16s, `bytes[2*cid..] = remapper.get(cid).unwrap_or(0)` for every
     // `cid` from 0 up to the highest gid actually used — gaps (a CID that's
     // never shown) map to `.notdef` (0), which is harmless since no content
@@ -755,34 +717,32 @@ fn write_font(
 /// the `CIDFontType0`/`FontFile3` sibling of `write_font`'s
 /// `CIDFontType2`/`FontFile2` path.
 ///
-/// **S2 — real subsetting, gated by `subset`.** `CIDFontType0` has no
+/// **Real subsetting, gated by `subset`.** `CIDFontType0` has no
 /// `/CIDToGIDMap`, so unlike `write_font`'s glyf path (where the CID is
 /// always the original gid and `/CIDToGIDMap` absorbs any subset
 /// renumbering), a *subsetted* CFF embed needs the CID space itself to
-/// change: `subsetter`'s CFF output is CID-keyed with CID == new gid, and
-/// `render_pdf_ttf_with`'s two-pass content generation (see that function's
-/// doc comment) has already arranged for the content stream to emit that
-/// remapped CID for this file's runs whenever `subset` is `Some`. So here:
-/// `/W` and the ToUnicode CMap are re-keyed from the original gid (which is
-/// how `usage`/glyph-metric lookups naturally work) to
+/// change, and `render_pdf_ttf_with`'s two-pass content generation has
+/// already arranged for the content stream to emit that remapped CID for
+/// this file's runs whenever `subset` is `Some`. So here: `/W` and the
+/// ToUnicode CMap are re-keyed from the original gid (which is how
+/// `usage`/glyph-metric lookups naturally work) to
 /// `subset.1.get(original_gid)` — the same CID the content pass already
 /// wrote — and the FontFile3 stream embeds the SUBSET sfnt
 /// (`subset.0`, still a complete `OTTO`-flavoured sfnt, so `/Subtype
-/// /OpenType` remains correct per design §6.3 step 2) instead of the whole
-/// input file. `/BaseFont` gets the usual `XXXXXX+` subset tag, matching the
+/// /OpenType` remains correct) instead of the whole input file.
+/// `/BaseFont` gets the usual `XXXXXX+` subset tag, matching the
 /// glyf path's own convention.
 ///
-/// When `subset` is `None` (subsetting was never attempted for a file with
-/// no usage, or `subsetter::subset` failed — e.g. a seac composite or CFF2
-/// face, degraded via `.ok()` in `render_pdf_ttf_with`), this falls back to
-/// S1's behaviour: the verbatim input file is embedded under `/FontFile3
-/// /Subtype /OpenType`, and the CID space stays the ORIGINAL face gid — the
-/// same space the content pass falls back to for this file (no
-/// `cid_remaps` entry) — which is correct for a non-CID-keyed CFF (PDF
+/// When `subset` is `None` (never attempted for a file with no usage, or
+/// `subsetter::subset` failed — e.g. a seac composite or CFF2 face), this
+/// falls back to a whole-file embed: the verbatim input file is embedded under
+/// `/FontFile3 /Subtype /OpenType`, and the CID space stays the ORIGINAL
+/// face gid — the same space the content pass falls back to for this file
+/// (no `cid_remaps` entry) — which is correct for a non-CID-keyed CFF (PDF
 /// 32000 §9.7.4.2), covering the common case (real Latin/math OTFs). A
 /// CID-keyed whole-OTF CFF (rare on this track — CJK OTFs are the common
 /// CID-keyed case, and every CJK face this port ships is `glyf`) is out of
-/// scope for this fallback, matching the design doc's own §6.2 caveat.
+/// scope for this fallback.
 #[allow(clippy::too_many_arguments)]
 fn write_font_cff(
     pdf: &mut Pdf,
@@ -800,8 +760,8 @@ fn write_font_cff(
     let units_per_em = face.units_per_em() as f64;
     let scale = |v: f64| (v * 1000.0 / units_per_em) as f32;
     // The CID actually written into `/W`/ToUnicode/content for original gid
-    // `gid`: the remapped new-gid when this file was subset (S2), else the
-    // original gid unchanged (S1 fallback) — must agree with what
+    // `gid`: the remapped new-gid when this file was subset, else the
+    // original gid unchanged — must agree with what
     // `encode_glyph_run`/the content pass's `Math` arm already emitted.
     let cid_of = |gid: u16| -> u16 { subset.and_then(|(_, r)| r.get(gid)).unwrap_or(gid) };
 
@@ -838,7 +798,7 @@ fn write_font_cff(
 
     // --- CIDFontType0 descendant: no `/CIDToGIDMap` — a non-CID-keyed CFF
     // font interprets the CID directly as the GID (PDF 32000 §9.7.4.2), and
-    // a CID-keyed one (always true of `subsetter`'s output, S2) resolves CID
+    // a CID-keyed one (always true of `subsetter`'s output) resolves CID
     // -> GID through the embedded CFF's own charset, which `subsetter`
     // writes as identity-with-new-gid — either way the CID this dict/array
     // uses is exactly `cid_of(gid)`. Glyph METRICS are still looked up via
@@ -908,10 +868,10 @@ fn write_font_cff(
         fd.font_file3(font_file_ref);
     }
 
-    // --- FontFile3: the SUBSET sfnt (S2) when subsetting succeeded, else
-    // the whole input OTF verbatim (S1 fallback) — both carry stream
+    // --- FontFile3: the SUBSET sfnt when subsetting succeeded, else
+    // the whole input OTF verbatim — both carry stream
     // `/Subtype /OpenType` (subsetter's CFF output is itself a complete
-    // `OTTO`-flavoured sfnt, design §6.3 step 2). ---
+    // `OTTO`-flavoured sfnt). ---
     match subset {
         Some((bytes, _)) => {
             pdf.stream(font_file_ref, bytes).pair(Name(b"Subtype"), Name(b"OpenType"));

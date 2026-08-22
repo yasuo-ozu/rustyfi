@@ -9,50 +9,28 @@
 //!
 //! ## The lib-root question
 //!
-//! The entry document is `V0_1`, so its own 0.1 scaffolding (`document`/
-//! `+p`/`\math`) would normally come from a `dist-v01/packages/` package
-//! (mirroring `v01-stdja.saty` -> `std-ja.satyh`) — but the `@require:`
-//! target this capstone actually needs (`list`/`option`) is a REAL 0.0.6
-//! package that lives under `dist/packages/`, and
-//! `rustyfi_loader::v006::resolve::resolve_require`'s candidate list is
-//! ordered `<lib_root>/dist/packages/<name>`, then `<lib_root>/<name>`,
-//! then the nested Satyrographos layout — there is no candidate that
-//! reaches BOTH `dist/packages/` and `dist-v01/packages/` from a single
-//! `lib_root` at once (they are siblings, not one nested in the other), so
-//! `e2e.rs`'s own `v01_stdja_capstone` (`lib_root =
-//! lib-rustyfi/dist-v01/packages`) could never simultaneously resolve a
-//! `dist/packages` target via candidate 1 (it would look under
-//! `dist-v01/packages/dist/packages/`, which does not exist).
+//! The entry is `V0_1`, so its own 0.1 scaffolding (`document`/`+p`/`\math`)
+//! would normally come from a `dist-v01/packages/` package — but the
+//! `@require:` target this capstone needs (`list`/`option`) is a REAL 0.0.6
+//! package under `dist/packages/`, and
+//! `rustyfi_loader::v006::resolve::resolve_require`'s candidate list never
+//! reaches both `dist/packages/` and `dist-v01/packages/` from one
+//! `lib_root` (they are siblings, not nested).
 //!
-//! The fix needs no loader changes: this capstone's own 0.1 scaffolding
+//! No loader changes needed: this capstone's own 0.1 scaffolding
 //! (`tests/fixtures/xver-capstone-helper.satyh`, a trimmed `v01-mini.satyh`)
-//! is reached via `@import:` — a same-directory-relative header resolved
-//! independently of `lib_root` entirely (`resolve_import`, not
-//! `resolve_require`) — exactly like `xver_import.rs`'s own
-//! `XVER_HELPER_SRC`/`XVER_HELPER` sibling file. That leaves `lib_root`
-//! free to point straight at this repo's `lib-rustyfi/` root (NOT
-//! `dist-v01/packages`, unlike `v01-stdja.saty`'s test), so
-//! `resolve_require`'s candidate 1 (`<lib_root>/dist/packages/<name>`)
-//! reaches the REAL frozen 0.0.6 corpus directly — no temp-dir copy needed
-//! (unlike `xver_import.rs`'s synthetic fixtures, which copy `list.satyg`/
-//! `option.satyg` into a throwaway `lib_root` precisely because their
-//! entries are hand-written strings, not real files under this repo's own
-//! `tests/fixtures/`).
-//!
-//! In short: a single, realistic `LoadOptions { lib_root: Some(lib_root()),
-//! version: V0_1, .. }` DOES reach both corpora at once, provided the 0.1
-//! side of the graph is pulled in via `@import:` (local sibling) rather
-//! than `@require:` (a `dist-v01/packages` corpus lookup) — no loader
-//! wiring gap here.
+//! is reached via `@import:` — resolved independently of `lib_root`
+//! (`resolve_import`, not `resolve_require`), like `xver_import.rs`'s own
+//! `XVER_HELPER_SRC`/`XVER_HELPER` sibling file. That leaves `lib_root` free
+//! to be a 0.0.6-ONLY root (`v006_only_lib_root`, a symlink to the real
+//! frozen corpus), which is what forces the crossing — see the `saw_v006`
+//! assertion in the test.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// This repo's `lib-rustyfi/` directory — resolved relative to this crate's
-/// own manifest directory, same as `e2e.rs`'s `lib_root()`. Deliberately
-/// the plain `lib-rustyfi/` root (not `dist-v01/packages`, unlike
-/// `e2e.rs`'s `v01_stdja_capstone`) — see this file's module doc comment
-/// for why.
+/// own manifest directory, same as `e2e.rs`'s `lib_root()`.
 fn lib_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../lib-rustyfi")
 }
@@ -98,14 +76,6 @@ fn find_regular_ttf() -> Option<PathBuf> {
     None
 }
 
-/// THE CAPSTONE: `xver-capstone.saty` `@require:`s the real
-/// `lib-rustyfi/dist/packages/list.satyg` (which itself `@require:`s
-/// `option.satyg`) and actually calls `List.map`/`List.fold-left`/
-/// `Option.from` to compute `36` (`List.map (+10) [1,2,3] = [11,12,13]`,
-/// `List.fold-left (+) 0 .. = 36`, `Option.from 0 (Some 36) = 36`), then
-/// renders that number as digits in the body text — `pdftotext` must find
-/// "36" in the output, proving the 0.0.6 package's computation, not just
-/// its type, crossed the version boundary into the rendered PDF.
 /// A lib root exposing ONLY the 0.0.6 corpus, so a `V0_1` entry's `@require:`
 /// must fall back across the version boundary instead of finding a
 /// same-generation package. `dist` is symlinked rather than copied — the
@@ -123,6 +93,14 @@ fn v006_only_lib_root() -> std::path::PathBuf {
     dir
 }
 
+/// THE CAPSTONE: `xver-capstone.saty` `@require:`s the real
+/// `lib-rustyfi/dist/packages/list.satyg` (which itself `@require:`s
+/// `option.satyg`) and actually calls `List.map`/`List.fold-left`/
+/// `Option.from` to compute `36` (`List.map (+10) [1,2,3] = [11,12,13]`,
+/// `List.fold-left (+) 0 .. = 36`, `Option.from 0 (Some 36) = 36`), then
+/// renders that number as digits in the body text — `pdftotext` must find
+/// "36" in the output, proving the 0.0.6 package's computation, not just
+/// its type, crossed the version boundary into the rendered PDF.
 #[test]
 fn xver_capstone_renders_to_extractable_text() {
     let font = match find_regular_ttf() {
@@ -148,18 +126,17 @@ fn xver_capstone_renders_to_extractable_text() {
         );
 
         // Sanity: `list`/`option` were actually detected as `V0_0` corpus
-        // targets (the X1 Q4 per-file rule) — if this ever regresses to
-        // "everything V0_1" the capstone would still fail loudly at parse
-        // (0.0.6 module syntax isn't valid 0.1), but pin the provenance
-        // explicitly so a loader regression here fails with a clear message.
+        // targets (the loader's per-file version-detection rule) — pin the provenance explicitly so
+        // a loader regression here fails with a clear message.
         //
-        // This is why the load above uses a 0.0.6-ONLY lib root rather than
-        // the repo's: `@require:` now prefers the requesting file's own
+        // THE TRAP, and why the load above uses a 0.0.6-ONLY lib root rather
+        // than the repo's: `@require:` prefers the requesting file's own
         // generation, and the bundled `dist-v01/packages/` has its own
         // `list`/`option`, so against the full root a 0.1 entry would
         // (correctly) get the 0.1 pair and this capstone would quietly stop
-        // crossing versions at all. Hiding `dist-v01` keeps it a real
-        // 0.1-consumes-0.0.6 proof, which is the only thing it exists to show.
+        // crossing versions at all — while still passing. Hiding `dist-v01`
+        // keeps it a real 0.1-consumes-0.0.6 proof, the only thing it exists
+        // to show.
         let saw_v006 = program.files[..program.files.len() - 1]
             .iter()
             .filter(|f| matches!(f.version, rustyfi_syntax::RustyfiVersion::V0_0))

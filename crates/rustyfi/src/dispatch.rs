@@ -1,4 +1,4 @@
-//! The clap *builder*-style dispatch tree (plan §7.4). Builder rather than
+//! The clap *builder*-style dispatch tree. Builder rather than
 //! derive because `Command::multicall(true)` composes with builder
 //! `Command`s but not with the derive macro. The tree:
 //!
@@ -10,9 +10,9 @@
 //! ```
 //!
 //! `multicall(true)` selects the top-level subcommand from `argv[0]`'s
-//! basename, so the same binary is `rustyfi` or
-//! `satyrographos` depending on the name it is invoked under (see plan §4.5's
-//! alias-install helper). Under `rustyfi` the compile args and the
+//! basename, so the same binary is `rustyfi` or `satyrographos` depending on
+//! the name it is invoked under (see the alias-install helper). Under
+//! `rustyfi` the compile args and the
 //! `satyrographos`/`multicall` subcommand trees coexist via
 //! `args_conflicts_with_subcommands` + `subcommand_negates_reqs`, so the
 //! required positional `input` is only demanded when no subcommand is used.
@@ -68,13 +68,12 @@
 //! so `get_matches` also re-checks a successful compile-mode parse whose
 //! `input` string is *itself* exactly a subcommand name, and prefers the
 //! hoisted reading when that also parses. An explicit path (`./install`)
-//! escapes this by no longer string-matching a bare name, same as it already
-//! does for the leading-flag-free case.
+//! escapes this by no longer string-matching a bare name.
 //!
 //! Both retries are gated on the plain parse already being unusable (an
 //! error, or this specific swallowed-subcommand shape) so they can never
-//! change the outcome of anything else that parses correctly today — compile
-//! mode on a real document is untouched, byte for byte.
+//! change the outcome of anything else that parses correctly — compile mode
+//! on a real document is untouched, byte for byte.
 //!
 //! A literal `--` in the tail before any candidate word disables hoisting
 //! entirely, since at that point the user has explicitly said "nothing after
@@ -84,15 +83,15 @@
 //! command tree (every personality, every subcommand), because the walk runs
 //! before we know which subcommand — and therefore which node's arg set —
 //! actually applies. Today no flag spelling is declared value-taking in one
-//! place and boolean in another, so this union is exact; if a future flag
-//! ever reused a spelling with different arity across subcommands, the walk
-//! would apply whichever arity it saw ANYWHERE in the tree, everywhere. A
-//! flag not in the tree at all (a typo) isn't recognized as value-taking
-//! either, so its value could still be mistaken for a split. Both are the
-//! same bounded failure mode as before: the rewrite is only trusted when it
-//! goes on to parse cleanly (or resolves to a MORE specific
-//! `--help`/`--version`), so the worst case is that the user's ORIGINAL error
-//! is reported unchanged — never a silently wrong compile or install.
+//! place and boolean in another, so this union is exact; a future flag that
+//! reused a spelling with different arity across subcommands would get
+//! whichever arity the walk saw ANYWHERE in the tree, everywhere. A flag not
+//! in the tree at all (a typo) isn't recognized as value-taking either, so
+//! its value could still be mistaken for a split. Both are bounded: the
+//! rewrite is only trusted when it goes on to parse cleanly (or resolves to a
+//! MORE specific `--help`/`--version`), so the worst case is the user's
+//! ORIGINAL error reported unchanged — never a silently wrong compile or
+//! install.
 
 use std::collections::HashSet;
 use std::ffi::OsString;
@@ -295,17 +294,13 @@ fn collect_value_taking_flags(cmd: &Command, out: &mut HashSet<String>) {
     }
 }
 
-/// Build the full multicall dispatch tree.
 pub fn build_cli() -> Command {
     Command::new("rustyfi")
         .multicall(true)
         .subcommand_required(true)
         .arg_required_else_help(true)
-        // `rustyfi` personality: compiler + nested package manager. There used
-        // to be a second, compile-only `rustyfi` personality beside the full
-        // `rustyfi-rust` one; with the binary renamed they are the same name,
-        // so they are the same personality — `rustyfi` now carries the compile
-        // args AND the subcommand trees.
+        // `rustyfi` personality: compiler + nested package manager — one node
+        // carrying the compile args AND the subcommand trees.
         .subcommand(
             package_subcommands(compile_command("rustyfi"))
                 .subcommand(multicall_command())
@@ -315,13 +310,10 @@ pub fn build_cli() -> Command {
         )
         // `satyrographos` personality: the same package commands under the
         // name real Satyrographos users type. The compiler personality carries
-        // them directly now, so this is an alias, not a separate tree.
+        // them directly, so this is an alias, not a separate tree.
         .subcommand(satyrographos_command())
 }
 
-/// The compile-mode argument set — the pre-chimera derive `Args`, restated as
-/// builder `Arg`s so behavior is preserved byte-for-byte (positional input,
-/// `-o/--output`, `--lib-root`, `--lang`).
 fn compile_command(name: &'static str) -> Command {
     Command::new(name)
         .version(env!("CARGO_PKG_VERSION"))
@@ -482,7 +474,7 @@ fn compile_command(name: &'static str) -> Command {
         )
 }
 
-/// The shared `--registry URL` flag (plan §5.4 step 1), attached to the
+/// The shared `--registry URL` flag, attached to the
 /// registry-aware subcommands (`install`, `search`, `update`). Overrides
 /// `$RUSTYFI_REGISTRY` and any `Satyristes` `[registry]` url.
 fn registry_flag(cmd: Command) -> Command {
@@ -508,7 +500,7 @@ fn registry_flag(cmd: Command) -> Command {
     )
 }
 
-/// The shared `--lib-root` / `--dest` root-selection flags (plan §4): raw
+/// The shared `--lib-root` / `--dest` root-selection flags: raw
 /// `--dest` override vs. the discovery-chain `--lib-root`, mutually exclusive.
 fn root_flags(cmd: Command) -> Command {
     cmd.arg(
@@ -532,7 +524,6 @@ fn root_flags(cmd: Command) -> Command {
     .group(ArgGroup::new("root").args(["lib_root", "dest"]))
 }
 
-/// The `satyrographos` subcommand tree (plan §4.1-4.4).
 /// `build [PATH]` — run a `(libraryDoc ...)`'s own build commands, and, with
 /// `--install`, materialise its declared products into the resolved root
 /// (`dist/doc/<name>/<dst>`) the same way any other package installs.
@@ -701,7 +692,6 @@ fn package_subcommands(cmd: Command) -> Command {
     ))))
 }
 
-/// The `satyrographos` personality: the same commands, under that name.
 fn satyrographos_command() -> Command {
     package_subcommands(
         Command::new("satyrographos")
@@ -711,7 +701,6 @@ fn satyrographos_command() -> Command {
     )
 }
 
-/// The hidden `multicall install --dir DIR` alias helper (plan §4.5).
 /// `rustyfi man` — write this program's man page, in roff, to stdout. Hidden
 /// because it is a packaging step (the release archive pipes it into
 /// `share/man/man1/rustyfi.1`), not something a user needs in `--help`.

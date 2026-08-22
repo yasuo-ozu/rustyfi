@@ -2,16 +2,13 @@
 //!
 //! The whole lex→parse→elaborate→typecheck→eval→render chain is
 //! deterministic: a given set of resolved input bytes, under a given compiler
-//! and target language version, always renders the same PDF. This module
-//! turns that into a near-instant recompile of an unchanged document by
-//! hashing everything that determines the output into a stable key, storing
-//! the rendered PDF under that key, and — on a later run whose key matches —
-//! copying the stored PDF straight to the requested `--output`, skipping the
-//! expensive `compile_document_cst` + `render_pdf` entirely.
+//! and target language version, always renders the same PDF. Everything that
+//! determines the output is hashed into a stable key; a later run whose key
+//! matches copies the stored PDF straight to `--output`.
 //!
 //! Caching is transparent: a hit writes byte-for-byte the same PDF a miss
-//! would have rendered (it *is* the bytes an earlier miss rendered and
-//! stored), so correctness never depends on whether a hit occurred.
+//! would have rendered, so correctness never depends on whether a hit
+//! occurred.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -30,8 +27,8 @@ pub struct Cache {
 }
 
 /// A cache hit: the stored PDF bytes plus the page/line counts recorded
-/// alongside them, so the "output written" status line reads identically to
-/// the miss that first produced the document (with a trailing `(cached)`).
+/// alongside them, so the "output written" status line matches the miss that
+/// first produced the document (with a trailing `(cached)`).
 pub struct Hit {
     pub pdf: Vec<u8>,
     pub pages: usize,
@@ -97,10 +94,8 @@ impl Cache {
 /// The SHA-256 stream is domain-separated and covers exactly what determines
 /// the rendered output:
 ///
-/// 1. a format tag — bumped to `v2` (from `v1`) by the HTML output backend's
-/// Slice 1 (surface, "Cache key"),
-///    which also folds in field 7 below; bump again to invalidate every
-///    entry on a further layout/cache-shape change;
+/// 1. a format tag (`v2`) — bump it to invalidate every entry on a
+///    layout/cache-shape change;
 /// 2. the compiler version (`CARGO_PKG_VERSION`), so an upgrade re-renders;
 /// 3. the target language version;
 /// 4. the entry file's basename — defensive: cheap, and future-proofs against
@@ -112,8 +107,8 @@ impl Cache {
 ///    hashed — only content matters for rendering — but the set of files and
 ///    their order come straight from the loader's resolution, so a changed
 ///    `@require:`/`@import:` graph changes the key.
-/// 6. (text-rendering plan, Slice 1) the resolved font identity: `None` when
-///    compiling through the base-14 path, or each backing font file's bytes
+/// 6. the resolved font identity: `None` when compiling through the base-14
+///    path, or each backing font file's bytes
 ///    (length-prefixed, in `TtfFontStore` slot order) when a real
 ///    `TtfFontStore` is in play. Folding this in is required, not cosmetic —
 ///    without it, switching `--font-dir` (or toggling fonts on/off) would
@@ -122,13 +117,12 @@ impl Cache {
 ///    paths, so an in-place font-file edit (same path, new content) also
 ///    invalidates, matching this function's "only content matters" stance
 ///    for the resolved input files above.
-/// 7. (HTML output backend, Slice 1) `format.cache_tag()` — without this, a
-///    `--format pdf` compile and a `--format html` compile of the identical
-///    document/version/font would collide on the same key, so a hit from one
-///    format would write the OTHER format's bytes to the requested output
-///    (wrong extension, unparseable content).
-/// 8. (phase-7c saphe solver, C3 —)
-///    `deps_lock` — the resolved `Satyristes.lock`'s
+/// 7. `format.cache_tag()` — without this, a `--format pdf` compile and a
+///    `--format html` compile of the identical document/version/font would
+///    collide on the same key, so a hit from one format would write the OTHER
+///    format's bytes to the requested output (wrong extension, unparseable
+///    content).
+/// 8. `deps_lock` — the resolved `Satyristes.lock`'s
 ///    [`rustyfi_satyrographos::Lockfile::digest`], when the compile is
 ///    driven by a solved package-manager lock (Envelopes/manifest mode);
 ///    `None` when no lock is in play. Without this, a `saphe update` that
@@ -163,10 +157,6 @@ pub fn compute_key(
 
 /// The key computation over a bare sequence of input paths (see
 /// [`compute_key`]). Split out so it can be unit-tested without constructing a
-/// The output FORMAT is part of the key: a cached render for one format must
-/// never be served for another. Only `Pdf` exists on this branch, so the test
-/// that pinned it (two formats hashing differently) lives on `html-support`
-/// alongside the backends -- restore it with them.
 /// [`LoadedProgram`], whose `cst` field is impractical to build by hand.
 fn hash_inputs<'a>(
     paths: impl Iterator<Item = &'a Path>,
@@ -416,8 +406,8 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// Text-rendering plan, Slice 1: a `None` font store (base-14 path) must
-    /// hash differently from a `Some` store (the TTF path), for the same
+    /// A `None` font store (base-14 path) must hash differently from a
+    /// `Some` store (the TTF path), for the same
     /// document/version/entry — otherwise turning font support on would
     /// silently reuse a cached base-14 PDF. Uses a real system font when one
     /// is discoverable (skips gracefully otherwise, matching
@@ -462,7 +452,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// Phase-7c saphe solver, C3: the resolved dependency lock's digest must
+    /// The resolved dependency lock's digest must
     /// be part of the key — otherwise re-solving to a different locked
     /// version, with the document's own bytes unchanged, would silently keep
     /// serving a stale cached render.

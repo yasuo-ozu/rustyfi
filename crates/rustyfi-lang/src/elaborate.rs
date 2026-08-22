@@ -37,42 +37,15 @@ fn err<T>(span: Span, msg: impl Into<String>) -> Result<T, ElabError> {
     })
 }
 
-/// The names in scope (primitives plus, progressively, `let`-bound names).
-/// A flat name set — there is no real namespacing, so a module's qualified
-/// names (`"M.x"`) are just ordinary strings that happen to contain a dot
-/// (see the module doc comment on [`qualify_key`]).
-///
-/// `optional_shape` additionally tracks, for a name bound via a plain
-/// (non-`let-rec`) `let`/`let ... in` whose `Param` list contains one or more
-/// `Param::Optional` (`?:name`) entries ANYWHERE in the list (`cst.rs`'s
-/// `Param` doc comment — `TopLet`/`Expr::LetIn` and the three command-binding
-/// forms all admit that marker) — one `bool` per declared parameter position,
-/// `true` where that position is a `Param::Optional`. E.g. `let to-math ?:iopt
-/// e = ..` records `[true, false]`; `stdja.satyh`'s `let document record
-/// ?:configopt inner = ..` (the optional is the *second*, not the first,
-/// parameter) records `[false, true, false]`. This is the "marker-less
-/// optional-argument defaulting" gap (Sub-area 2 / `class-signature-lang-
-/// gaps.md`): a bare call site (`to-math e1`, no `?:`/`?*` at all) must still
-/// supply `None` for `iopt` and match `e1` against `e` — and, symmetrically,
-/// `document record body` must supply `None` for `configopt` and match `body`
-/// against `inner`, NOT against `configopt`'s `option config` domain (the bug
-/// this full per-position shape fixes — a scalar *leading-count- only*
-/// encoding can't tell "the optional is at position 1" from "there is no
-/// optional at all" once position 0 is mandatory) — see `app_chain_generic`'s
-/// use of [`Scope::optional_shape`]. The same map also covers command bindings
-/// (`let-inline`/`let-block`/`let-math` — `cst.rs`'s `Param`, shaped by the
-/// same `param_optional_shape`): `walk_bindings`'s
-/// `LetInline`/`LetBlock`/`LetMath` arms record each command's full param
-/// shape the same way; [`Scope::optional_arity`] (a derived *leading-run*
-/// count, `take_while` over the shape) still feeds the command-argument paths
-/// (`cmd_args`, `math_bot`'s `Cmd` arm), which stay leading-only / unchanged.
-/// Absent from the map means "no known optionals" — the overwhelmingly common
-/// case, and every existing name's default, so ordinary application is
-/// unaffected. Overlay size at which a [`Scope`]'s name set folds down into a
-/// fresh shared base — the same persistent split, and the same reason, as
+/// Overlay size at which a [`Scope`]'s name set folds down into a fresh
+/// shared base — the same persistent split, and the same reason, as
 /// `typecheck::OVERLAY_CAP`.
 const NAMES_OVERLAY_CAP: usize = 64;
 
+/// The names in scope (primitives plus, progressively, `let`-bound names).
+/// A flat name set — there is no real namespacing, so a module's qualified
+/// names (`"M.x"`) are just ordinary strings that happen to contain a dot
+/// (see the module doc comment on `qualify_key`).
 #[derive(Clone, Debug)]
 pub struct Scope<'s> {
     /// The names in scope, split into a large SHARED base (`Rc`, cloned by a
@@ -83,8 +56,7 @@ pub struct Scope<'s> {
     /// way to write a lexical walk — but a flat `HashSet<String>` made that
     /// O(program x scope): measured at 4-11 MILLION `String` allocations per
     /// corpus document (~4-8k scope clones, each copying 1300-2600 names), and
-    /// the dominant cost of elaboration. Exactly the shape `TypeEnv` had before
-    /// it was made persistent.
+    /// the dominant cost of elaboration. Do not flatten it back.
     ///
     /// `Rc<str>` rather than `String` so even the capped overlay copy is
     /// refcount bumps. The set is insert-only — nothing ever removes a name —
@@ -93,33 +65,53 @@ pub struct Scope<'s> {
     /// where this holds thousands, 1-2% of the clone traffic.)
     names_base: Rc<HashSet<Rc<str>>>,
     names_overlay: HashSet<Rc<str>>,
+    /// Per declared parameter position, `true` where that position is a
+    /// `Param::Optional` (`?:name`) — recorded for a name bound via a plain
+    /// (non-`let-rec`) `let`/`let .. in` or one of the three command-binding
+    /// forms, whose `Param` lists all admit the marker anywhere in the list.
+    /// `let to-math ?:iopt e = ..` records `[true, false]`; `stdja.satyh`'s
+    /// `let document record ?:configopt inner = ..` (the optional is the
+    /// SECOND parameter) records `[false, true, false]`.
+    ///
+    /// This drives marker-less optional-argument defaulting (Sub-area 2): a
+    /// bare call site (`to-math e1`, no `?:`/`?*` at all) must still supply
+    /// `None` for `iopt` and match `e1` against `e`; symmetrically `document
+    /// record body` must supply `None` for `configopt` and match `body`
+    /// against `inner`, NOT against `configopt`'s `option config` domain. A
+    /// scalar LEADING-COUNT-only encoding cannot express that — it cannot
+    /// tell "the optional is at position 1" from "there is no optional at
+    /// all" once position 0 is mandatory — which is why the full per-position
+    /// shape is stored. See `app_chain_generic`'s use of
+    /// [`Scope::optional_shape`].
+    ///
+    /// [`Scope::optional_arity`] (a derived LEADING-RUN count, `take_while`
+    /// over the shape) feeds the command-argument paths (`cmd_args`,
+    /// `math_bot`'s `Cmd` arm), which stay leading-only. Absent from the map
+    /// means "no known optionals" — the overwhelmingly common case.
     optional_shape: std::collections::HashMap<String, Vec<bool>>,
     /// A module member's bare (sibling-visible) local name → the ACTUAL Ast
-    /// key its value is bound under (module-completion bug fix, see
-    /// `push_named_binding`'s doc comment): a member of `module M = struct
-    /// .. end` is bound under a MANGLED key (`"$M.atan2"`, never a valid
-    /// surface identifier, so it can never collide with anything), not a
-    /// bare `"atan2"` `LetIn` — a SIBLING member's body that references it
-    /// bare (as literally written, `Ast::Var("atan2")`) must be redirected
-    /// to that mangled key at construction time (deliberately NOT the
-    /// qualified `"M.atan2"` key — see `push_named_binding`'s doc comment
-    /// for why the distinction matters for opaque-type sealing) — this map
-    /// is that redirect, consulted by [`scoped_var`] and the inline/block/
-    /// math command-key resolution sites. Entries are added ONLY while
-    /// processing a module's own `struct` body (`running`, local to that
-    /// recursive `walk_bindings` call) and are never propagated to the
-    /// caller's outer scope (only `names`/`optional_arity` entries for the
-    /// EXPORTED qualified keys are copied back) — so a rename can only ever
-    /// affect references
-    /// written textually inside that same module, never anything outside
-    /// it or after its `end`.
+    /// key its value is bound under (see `push_named_binding`'s doc comment):
+    /// a member of `module M = struct .. end` is bound under a MANGLED key
+    /// (`"$M.atan2"`, never a valid surface identifier, so it can never
+    /// collide with anything), not a bare `"atan2"` `LetIn` — so a SIBLING
+    /// member's body that references it bare (as literally written,
+    /// `Ast::Var("atan2")`) must be redirected to that mangled key at
+    /// construction time, deliberately NOT to the qualified `"M.atan2"` key
+    /// (that distinction is what makes opaque-type sealing work). This map is
+    /// that redirect, consulted by [`scoped_var`] and the inline/block/math
+    /// command-key resolution sites. Entries are added ONLY while processing a
+    /// module's own `struct` body (`running`, local to that recursive
+    /// `walk_bindings` call) and are never propagated to the caller's outer
+    /// scope (only `names`/`optional_arity` entries for the EXPORTED qualified
+    /// keys are copied back) — so a rename can only ever affect references
+    /// written textually inside that same module, never anything outside it
+    /// or after its `end`.
     renames: std::collections::HashMap<String, String>,
     /// The source-language version this scope elaborates under — gates the
     /// SATySFi 0.1-only labeled-optional nodes (`Expr::FunRows`,
     /// `AppArg::Bundled`) so a 0.0.6-compiled file that happens to parse them
     /// (the additive-`cst` accept-surface widening) is rejected with a
-    /// version error rather than silently accepted. `V0_0` by default so
-    /// every existing caller (and the frozen 0.0.6 path) is unaffected.
+    /// version error rather than silently accepted. `V0_0` by default.
     version: RustyfiVersion,
     /// The interner every identifier this scope helps build is minted from.
     ///
@@ -226,7 +218,7 @@ impl<'s> Scope<'s> {
     /// The Ast key a bare reference to `name` should actually use, interned:
     /// its [`Scope::rename`] redirect, if one is active, else `name` itself
     /// unchanged (the overwhelmingly common case — every name outside a
-    /// module's own body, and every module member before this fix existed).
+    /// module's own body).
     ///
     /// This is the elaborator's main text → [`Symbol`] boundary: almost every
     /// identifier an `Ast` node carries is minted right here.
@@ -249,8 +241,7 @@ impl<'s> Scope<'s> {
     /// `name`'s recorded leading-optional-parameter count (the maximal
     /// prefix of `true`s in its [`Scope::optional_shape`] entry), or `0` if
     /// none is known — the command-argument paths (`cmd_args`, `math_bot`'s
-    /// `Cmd` arm) only ever auto-omit a *leading* run, so this derived
-    /// accessor keeps them byte-identical to before the full-shape widening.
+    /// `Cmd` arm) only ever auto-omit a *leading* run.
     fn optional_arity(&self, name: &str) -> usize {
         self.optional_shape
             .get(name)
@@ -274,8 +265,8 @@ impl<'s> Scope<'s> {
     /// which brings a module's `"M."`-prefixed names into unqualified
     /// scope). Sorted for deterministic alias-binding order.
     fn names_with_prefix(&self, prefix: &str) -> Vec<String> {
-        // A `BTreeSet` gives the sorted, DEDUPLICATED result the flat
-        // `HashSet` did: a name re-inserted after a promotion can sit in both
+        // A `BTreeSet` because the result must be DEDUPLICATED as well as
+        // sorted: a name re-inserted after a promotion can sit in both
         // layers, and `open` binding an alias twice would not be harmless.
         self.names_overlay
             .iter()
@@ -294,8 +285,8 @@ impl<'s> Scope<'s> {
 /// against the BARE `name` (unaffected by any active [`Scope::rename`]
 /// redirect); the constructed node's own key goes through
 /// [`Scope::resolve`], so a module member's sibling reference compiles
-/// directly to that member's qualified key when one is active (module-
-/// completion bug fix — see `push_named_binding`'s doc comment).
+/// directly to that member's mangled key when one is active — see
+/// `push_named_binding`'s doc comment.
 fn scoped_var<'s>(name: &str, span: Span, scope: &Scope<'s>) -> Result<Ast<'s>, ElabError> {
     if scope.contains(name) {
         Ok(Ast::Var(scope.resolve(name), span))
@@ -376,7 +367,7 @@ fn lower_type_decl(
 /// `satysfi-base` module's `type t`) from colliding in the program-global
 /// synonym/variant tables. The `contains('.')` guard leaves an
 /// already-qualified name (the 0.1 lowering emits `"M.t"` directly) alone; a
-/// top-level (`mod_path` empty) declaration stays bare — the golden fast path.
+/// top-level (`mod_path` empty) declaration stays bare.
 fn lower_one_type_clause(
     tyvars: &[rustyfi_syntax::leaf::TypeVarTok],
     name: &VarTok,
@@ -549,7 +540,7 @@ pub fn elaborate_program_with_stages<'s>(
 
 /// Like [`elaborate_program`], but additionally marking a subset of
 /// `file.prelude`'s TOP-LEVEL entries (by index) as originating from a
-/// spliced `V0_0` dependency (Slice X2a,, Option C). Every `Binding` this
+/// spliced `V0_0` dependency (Slice X2a, Option C). Every `Binding` this
 /// splices in from one of those entries — and, recursively, every binding
 /// inside a `module .. = struct .. end` at such an index — has its elaborated
 /// RHS wrapped in [`Ast::VersionScope`]`(V0_0, _)`, so
@@ -557,11 +548,10 @@ pub fn elaborate_program_with_stages<'s>(
 /// version-forked primitives (and runtime-version reads) against `V0_0`
 /// instead of the merged program's ambient `V0_1`.
 ///
-/// `v006_indices` is empty for every existing caller (`elaborate_program`
+/// `v006_indices` is empty on every single-version path (`elaborate_program`
 /// above delegates here with `&HashSet::new()`), which makes `this_v006`
-/// (below) `false` for every item and so never constructs a `VersionScope`
-/// node — the pure-0.0.6 and pure-0.1 paths are therefore byte-identical to
-/// before this slice (same code, an always-false extra branch).
+/// (below) `false` for every item, so no `VersionScope` node is constructed
+/// there at all.
 ///
 /// `wrap_body_version` (Slice X4a, item 3): when `Some(v)`, the file's own
 /// document TAIL expression (`file.body`, elaborated into `body_ast` below) is
@@ -569,10 +559,8 @@ pub fn elaborate_program_with_stages<'s>(
 /// X4 needs beyond X2.2's indexed-`prelude`-item wrapping, because a `V0_0`
 /// ENTRY's tail expression (e.g. a bare `page-break doc` with no intermediate
 /// `let`) is itself `V0_0`-authored code that may reference forked primitives
-/// directly, not just its `prelude` bindings. `None` for every pre-X4a caller
-/// (`elaborate_program` above, and `compile_document_v1_with_trials`'s
-/// existing call site) — byte-identical, since `match None { .. }` never
-/// constructs the extra node.
+/// directly, not just its `prelude` bindings. `None` everywhere else, which
+/// constructs no extra node.
 pub fn elaborate_program_with_versions<'s>(
     file: &cst::File,
     prelude_scope: &Scope<'s>,
@@ -787,7 +775,7 @@ fn qualify_key(mod_path: &[String], local: &str) -> String {
 /// `typecheck.rs`, so there is no separate math case here), its bare command
 /// name (sigil included — `"\cmd"`/`"+cmd"`, the same key format
 /// `push_named_binding` binds locally) and the name token's span, for
-/// `typechecker-completion.md` §4's enclosing-scope exposure. `None` for
+/// the enclosing-scope exposure. `None` for
 /// every other `SigItem` (`val`/`type`), which stay module-qualified only.
 fn direct_cmd_name(item: &cst::SigItem) -> Option<(String, Span)> {
     match item {
@@ -848,20 +836,18 @@ fn nest<'s>(store: &'s SymbolStore, bindings: Vec<Binding<'s>>, tail: Ast<'s>) -
 /// but never to `exported`: per v0.0.6 semantics, after `end` only the
 /// qualified name is visible to what follows.
 ///
-/// Only remaining caller: `TopBinding::LetRec`'s per-name loop, where
-/// `local` is ALREADY bound (bare, by construction — a `let rec .. and ..`
-/// group's own mutual-recursion scope needs every clause visible to every
-/// other one by its bare name, which `rec_bindings` sets up before this
-/// runs), so there is no single value this function could re-bind under a
-/// mangled key the way `push_named_binding`'s fix does — the bare name
-/// genuinely stays physically present in the flat `nest()` chain, and so
-/// (pre-existing behavior, not a new regression) can still leak past this
-/// module's `end` if a `let rec` binding's bare name happens to collide
-/// with something reached later in program order. Narrower in practice
-/// than the bug `push_named_binding` fixes (a top-level `let rec .. and
-/// ..` group directly inside a `module .. = struct .. end`, rather than
-/// any of the far more common plain `val`/`let-inline`/`let-block`/
-/// `let-math`/`let mutable` members) — left as a known, separable gap.
+/// Only remaining caller: `TopBinding::LetRec`'s per-name loop, where `local`
+/// is ALREADY bound (bare, by construction — a `let rec .. and ..` group's own
+/// mutual-recursion scope needs every clause visible to every other one by its
+/// bare name, which `rec_bindings` sets up before this runs). So there is no
+/// single value this function could re-bind under a mangled key the way
+/// `push_named_binding` does: the bare name genuinely stays physically present
+/// in the flat `nest()` chain and can still leak past this module's `end` if
+/// it collides with something reached later in program order. A known,
+/// separable gap, narrower than what `push_named_binding` covers — it needs a
+/// top-level `let rec .. and ..` group directly inside a `module .. = struct
+/// .. end`, not any of the far more common plain
+/// `val`/`let-inline`/`let-block`/`let-math`/`let mutable` members.
 fn export_alias<'s>(
     mod_path: &[String],
     local: String,
@@ -902,40 +888,34 @@ fn export_alias<'s>(
 /// list that can carry the marker — `param_optional_shape`); every other
 /// binding kind here passes an empty `Vec`.
 ///
-/// Module-member bug fix: for `mod_path` non-empty (inside a `module M =
-/// struct .. end`), `value` is bound under a MANGLED key
-/// (`"$M.local"` — `$` can never appear in a surface identifier/command
-/// name, so this can never collide with anything user-written), not the
-/// bare `"local"` name the old two-step (`export_alias`, still used by
-/// `TopBinding::LetRec` below) used. The bare `LetIn` used to stay
+/// For `mod_path` non-empty (inside a `module M = struct .. end`), `value` is
+/// bound under a MANGLED key (`"$M.local"` — `$` can never appear in a
+/// surface identifier/command name, so it can never collide with anything
+/// user-written), NOT under the bare `"local"`. A bare `LetIn` stays
 /// PHYSICALLY PRESENT in the single flat `nest()` chain this whole program
-/// compiles to; since that chain has no scope-popping of its own, the bare
-/// name stayed bound (and so silently SHADOWED any unrelated same-named
-/// binding — a base primitive, or a different package's own member —
-/// reached later in program order) for literally the rest of the merged
-/// program, not just until this module's `end`. [`Scope::rename`]
-/// redirects a SIBLING member's bare reference (still written `local`, as
-/// in the source) to the mangled key instead — consulted by [`scoped_var`]
-/// and the inline/block/math command-key resolution sites in
-/// `inline_elems`/`block_elems`/`math_bot`.
+/// compiles to, and that chain pops no scopes of its own — so the bare name
+/// would stay bound, silently SHADOWING any unrelated same-named binding (a
+/// base primitive, or a different package's own member) reached later in
+/// program order, for the rest of the merged program rather than until this
+/// module's `end`. [`Scope::rename`] redirects a SIBLING member's bare
+/// reference (still written `local`, as in the source) to the mangled key —
+/// consulted by [`scoped_var`] and the inline/block/math command-key
+/// resolution sites in `inline_elems`/`block_elems`/`math_bot`.
 ///
-/// The qualified alias (`"M.local"` — unchanged in spirit from the old
-/// two-step, just now pointing at the mangled key instead of a bare one)
-/// is still bound separately, and is load-bearing beyond mere qualified
-/// lookup: `v1/module_check.rs`'s sealing pass keys its opaque/stamped
-/// type rewrite on this EXACT qualified string (`static_env.seals`), and
-/// applies it ONLY to a binding whose OWN key matches — a mangled key
-/// never matches, so a member's OWN body (and any SIBLING that reaches it
-/// via the mangled-key redirect) keeps seeing its naturally-inferred,
-/// TRANSPARENT type, exactly as a bare reference always did; only an
-/// EXPLICIT qualified reference (`M.local`, from outside, or written
-/// as such from inside) sees the sig's opaque view. Losing this
-/// distinction (e.g. by binding the real value directly under the
-/// qualified key, or by redirecting sibling references to the qualified
-/// key instead of the mangled one) breaks sealing for any member whose
-/// body uses ANOTHER sealed sibling's value at a type the sig makes
-/// opaque (`v01_sealing.rs`'s `u1_opaque_accept`/`u8_command_decls`/
-/// `u9_ctor_hiding`/`t13_escaped_skolem_message` all pin this).
+/// The qualified alias (`"M.local"`) is bound separately, and is load-bearing
+/// beyond mere qualified lookup: `v1/module_check.rs`'s sealing pass keys its
+/// opaque/stamped type rewrite on this EXACT qualified string
+/// (`static_env.seals`) and applies it ONLY to a binding whose OWN key
+/// matches. A mangled key never matches, so a member's OWN body (and any
+/// SIBLING reaching it via the redirect) keeps its naturally-inferred,
+/// TRANSPARENT type; only an EXPLICIT qualified reference (`M.local`, from
+/// outside or written as such from inside) sees the sig's opaque view. Losing
+/// that distinction — by binding the real value directly under the qualified
+/// key, or by redirecting sibling references to the qualified key instead of
+/// the mangled one — breaks sealing for any member whose body uses ANOTHER
+/// sealed sibling's value at a type the sig makes opaque (`v01_sealing.rs`'s
+/// `u1_opaque_accept`/`u8_command_decls`/`u9_ctor_hiding`/
+/// `t13_escaped_skolem_message` all pin this).
 ///
 /// The redirect and the mangled key both live only in `running`, this
 /// recursive `walk_bindings` call's OWN local scope — neither is ever
@@ -1065,7 +1045,7 @@ fn walk_bindings<'s>(
     let mut running = scope.clone();
     let mut exported: Vec<String> = Vec::new();
     // Module-local type-name qualification map (bare -> `M.t`). A no-op at the
-    // top level (`mod_path` empty) — the golden fast path. Pre-scan ALL of this
+    // top level (`mod_path` empty). Pre-scan ALL of this
     // level's `type` decls first so mutual/forward references (`type 'a state
     // = … and 'a u = ('a state) …`) resolve.
     let mut level_tymap = tymap.clone();
@@ -1113,10 +1093,10 @@ fn walk_bindings<'s>(
             cst::TopBinding::Let(top_let) => {
                 // Same curry-with-patterns desugaring as a `let-rec` clause
                 // (`rec_clause_value`), just with no multi-clause `extra` —
-                // top-level non-recursive `let` has no `|`-clause sugar.
-                // Its all-var-param fast path reproduces the old direct
-                // `Lambda`-chain behavior exactly; the general path handles
-                // `gr.satyh`-style tuple-destructuring params.
+                // top-level non-recursive `let` has no `|`-clause sugar. Its
+                // all-var-param fast path emits a plain `Lambda` chain; the
+                // general path handles `gr.satyh`-style tuple-destructuring
+                // params.
                 let top_let_params = params_to_patbots(&top_let.params);
                 let value = rec_clause_value(&top_let_params, &top_let.value, &[], &running)?;
                 let value = maybe_v006_scope(value, this_v006);
@@ -1353,18 +1333,15 @@ fn walk_bindings<'s>(
             } => {
                 // Signature annotations (`sig .. end`) are otherwise
                 // accepted and ignored: this elaborator does no type
-                // checking, so `val`/`type` items have nothing yet to check
-                // against (full reconciliation is
-                // `typechecker-completion.md` §3, deferred). `direct` items
-                // (§4) ARE handled here, though: each exposes its command
-                // UNQUALIFIED at the enclosing scope, aliasing the module's
-                // own qualified binding — the same `Ast::Var`-alias trick
-                // `export_alias`/`Open` already use below, which
-                // `typecheck.rs`'s `command_scheme` already threads command
-                // types through transparently (an alias site is
-                // indistinguishable from `open`'s), so no typecheck.rs
-                // change is needed to give the exposed name its command
-                // type.
+                // checking, so `val`/`type` items have nothing to check
+                // against (full reconciliation is deferred). `direct` items
+                // ARE handled here: each exposes its command UNQUALIFIED at
+                // the enclosing scope, aliasing the module's own qualified
+                // binding — the same `Ast::Var`-alias trick
+                // `export_alias`/`Open` use below. `typecheck.rs`'s
+                // `command_scheme` threads command types through an alias
+                // site transparently (it is indistinguishable from `open`'s),
+                // so the exposed name gets its command type for free.
                 let mut child_path = mod_path.to_vec();
                 child_path.push(name.name.clone());
                 let inner_items: Vec<&cst::TopBinding> =
@@ -1401,20 +1378,19 @@ fn walk_bindings<'s>(
                 )?;
                 // A module's own bare (unqualified) member names never leak
                 // past this `end`: `push_named_binding` (used by every
-                // ordinary member below) now binds each member DIRECTLY
-                // under its qualified key and registers a `Scope::rename`
-                // redirect for sibling lookups, instead of the old
-                // bare-then-qualified-alias two-step — see that function's
-                // doc comment for the fix and why `nest()`'s single flat
-                // `LetIn` chain made naive scope-popping unsafe (it silently
-                // broke `v1/module_check.rs`'s spine-walking sealing pass,
-                // which only recognizes TOP-LEVEL `LetIn`/`LetMathIn`/
-                // `LetRecIn`/`LetMutableIn` nodes, not ones nested inside a
-                // wrapper sub-expression).
+                // ordinary member below) binds each member under a MANGLED
+                // key and registers a `Scope::rename` redirect for sibling
+                // lookups — see that function's doc comment, and note that
+                // naive scope-popping is NOT an option here, because
+                // `nest()` produces one flat `LetIn` chain and
+                // `v1/module_check.rs`'s spine-walking sealing pass only
+                // recognizes TOP-LEVEL `LetIn`/`LetMathIn`/`LetRecIn`/
+                // `LetMutableIn` nodes, not ones nested inside a wrapper
+                // sub-expression.
                 bindings.extend(inner_bindings);
                 // The enclosing context's own module prefix (`Outer.` when
                 // this whole `walk_bindings` is elaborating `module Outer`'s
-                // body). Used to also expose each nested member under its
+                // body). Each nested member is ALSO exposed under its
                 // ENCLOSING-relative name so a sibling's `Inner.double`
                 // reference resolves (a nested module `N` inside `M` binds its
                 // members as `M.N.x`, but a sibling writes `N.x`).
@@ -1438,7 +1414,7 @@ fn walk_bindings<'s>(
                         if let Some((local, span)) = direct_cmd_name(item) {
                             let qual = qualify_key(&child_path, &local);
                             // Cheap positive-obligation check (a `direct`-only
-                            // slice of §3's fuller sig-preservation, which
+                            // slice of the fuller sig-preservation, which
                             // stays deferred for `val`/`type` items): the
                             // struct must actually define what it declares
                             // `direct`, or the alias below would dangle.
@@ -1516,13 +1492,12 @@ fn walk_bindings<'s>(
 /// shape, kept here because that's what upstream itself does for command
 /// arguments).
 ///
-/// The all-variable-parameter fast path (every existing binding in the
-/// bundled packages) reproduces the plain `Lambda` chain byte-for-byte: it
-/// must, since `elaborate_let_inline`'s "lightweight" (`%context`-wrapping)
-/// form builds its `read-inline`/`read-block` application *inside*
-/// `build_value`, called with the innermost (fully-extended) scope, so the
-/// wrapping ends up nested *inside* every curried parameter exactly like the
-/// original direct implementation. The general (genuine-pattern) path lowers
+/// The all-variable-parameter fast path (every binding in the bundled
+/// packages) emits a plain `Lambda` chain. It must: `elaborate_let_inline`'s
+/// "lightweight" (`%context`-wrapping) form builds its
+/// `read-inline`/`read-block` application *inside* `build_value`, called with
+/// the innermost (fully-extended) scope, so the wrapping has to end up nested
+/// *inside* every curried parameter. The general (genuine-pattern) path lowers
 /// each parameter to its own `Lambda(%cmd_argN, Match(%cmd_argN, [pat ->
 /// rest]))` — a refutable parameter pattern (e.g. `Some(x)`) can fail to
 /// match at *application* time, exactly like a `match` arm would (see
@@ -1579,9 +1554,8 @@ fn curry_cmd_params<'s>(
 /// Each `param` is upstream's `arg` (`cst.rs`'s `Param` doc comment — a full
 /// patbot, a `?:`-marked variable, or — optional-arg-rows increment 3a — a
 /// `?(l = x, …)` labeled-optional bundle), curried via the bundle-aware
-/// `curry_cmd_params_v1` (which delegates to the original `curry_cmd_params`
-/// wholesale when no bundle is present, so this stays byte-identical for
-/// every existing binding).
+/// `curry_cmd_params_v1` (which delegates wholesale to `curry_cmd_params`
+/// when no bundle is present).
 ///
 /// Two forms, confirmed against v0.0.6 `parser.mly`:
 /// * with an explicit leading context variable, the value is elaborated
@@ -1668,7 +1642,7 @@ fn rec_bindings<'s>(
     // (`$M.name`) and redirect its (self/mutual/sibling) bare references there,
     // so the recursive value never leaks into the flat program scope under its
     // bare name (see `export_alias`). A top-level (`mod_path` empty) `let-rec`
-    // keeps bare keys — the golden fast path.
+    // keeps bare keys.
     let key_of = |name: &str| -> String {
         if mod_path.is_empty() {
             name.to_string()
@@ -1703,11 +1677,10 @@ fn rec_bindings<'s>(
 /// clauses elsewhere).
 ///
 /// The single-clause, all-variable-parameter case (`let-rec f x y = ..`, no
-/// `|` at all — overwhelmingly the common shape) is special-cased to the
-/// original direct `Lambda` chain: behaviorally identical to the general
-/// path (variable patterns always match and simply bind), it just skips
-/// building a throwaway `Match`/fresh-variable indirection for what nearly
-/// every binding actually looks like.
+/// `|` at all — overwhelmingly the common shape) is special-cased to a
+/// direct `Lambda` chain: behaviorally identical to the general path
+/// (variable patterns always match and simply bind), it just skips building
+/// a throwaway `Match`/fresh-variable indirection.
 fn rec_clause_value<'s>(
     params0: &[c::PatBot],
     value0: &c::Expr,
@@ -1868,17 +1841,16 @@ fn lambda_opt_from<'s>(
 /// [`lambda_opt_from`]) instead of a plain `Ast::Lambda`/`Match`.
 ///
 /// **Delegates wholesale to [`curry_cmd_params`]** when `params` contains no
-/// `Bundled` entry at all — the exact same tested code path as before this
-/// increment, so every 0.0.6 command binding and every V0_1 one that
-/// doesn't use a bundle (the overwhelming majority) is byte-identical.
+/// `Bundled` entry at all — every 0.0.6 command binding and every V0_1 one
+/// that doesn't use a bundle (the overwhelming majority).
 ///
 /// **Version-gated** exactly like `fun_rows_to_ast`: a `Bundled` entry
-/// reaching the general fold below under `!scope.version.
-/// has_row_polymorphism()` is rejected with the same version error — purely
-/// defensive, since only `v1/lower.rs::lower_command_params` ever
-/// constructs `Param::Bundled`, and `lower_value_math` additionally rejects
-/// it outright for a `val math` binding's own parameter list before it ever
-/// reaches elaboration (math command bundles are optional-arg-rows
+/// reaching the general fold below under
+/// `!scope.version.has_row_polymorphism()` is rejected with the same version
+/// error — purely defensive, since only `v1/lower.rs::lower_command_params`
+/// ever constructs `Param::Bundled`, and `lower_value_math` additionally
+/// rejects it outright for a `val math` binding's own parameter list before it
+/// ever reaches elaboration (math command bundles are optional-arg-rows
 /// increment 3b).
 fn curry_cmd_params_v1<'s>(
     params: &[c::Param],
@@ -2237,8 +2209,7 @@ fn expr<'s>(e: &c::Expr, scope: &Scope<'s>) -> Result<Ast<'s>, ElabError> {
         // must target the SAME mangled key its `LetMutableIn` is bound
         // under, or the typechecker's own `Ast::Overwrite` arm (which looks
         // the name up directly in `env`, independent of `Scope`) reports it
-        // unbound (module-completion bug fix — see `push_named_binding`'s
-        // doc comment).
+        // unbound — see `push_named_binding`'s doc comment.
         c::Expr::Overwrite { name, value, .. } => {
             if !scope.contains(&name.name) {
                 return err(
@@ -2301,9 +2272,8 @@ enum Assoc {
 /// the time that OCaml `&&`/`||` runs, *both* VM-stack operands are already
 /// popped (i.e. both sides were fully evaluated as ordinary call-by-value
 /// arguments), so real SATySFi does not short-circuit `&&`/`||` at the
-/// source-language level either. This port's `primitives.rs` already
-/// registers `"&&"`/`"||"` as strict 2-arg primitives — that already
-/// matches v0.0.6 exactly, so no `if`-desugaring is added here.
+/// source-language level either. `primitives.rs` registers `"&&"`/`"||"` as
+/// strict 2-arg primitives to match; no `if`-desugaring here.
 fn op_prec(tok: &Token) -> (u8, Assoc) {
     match tok {
         Token::BinopBar(_) => (1, Assoc::Left),
@@ -2331,8 +2301,8 @@ fn op_chain<'s>(chain: &c::OpChain, scope: &Scope<'s>) -> Result<Ast<'s>, ElabEr
         let mut ops: VecDeque<(String, Span, Token)> = VecDeque::with_capacity(chain.tail.len());
         for rhs in &chain.tail {
             let text = rhs.op.op_text();
-            // `|>` (frontend-completion.md §Slice1-A / stdlib-port.md Blocker
-            // B) is handled entirely by `climb`'s special case below — it is
+            // `|>` (Slice 1-A / Blocker B) is handled entirely by `climb`'s
+            // special case below — it is
             // deliberately NOT a `scope`-bound name (no runtime primitive, no
             // `prim_types` entry: `a |> f` lowers straight to `Apply(f, a)`,
             // ordinary application the inferencer/evaluator already handle),
@@ -2424,8 +2394,8 @@ fn app_expr<'s>(a: &c::AppExpr, scope: &Scope<'s>) -> Result<Ast<'s>, ElabError>
     // so we recognise the logical-negation form only in HEAD position with at
     // least one argument: re-fold the arguments into a single inner
     // application and apply the `not` primitive to it. A bare `not` (no args)
-    // or a `not` sitting in argument position keeps resolving to the `not`
-    // primitive as an ordinary value, exactly as before.
+    // or a `not` sitting in argument position resolves to the `not`
+    // primitive as an ordinary value.
     if a.minus.is_none() && a.excl.is_none() && a.stage.is_none() && a.head_accesses.is_empty() && !a.args.is_empty() {
         if let c::Atomic::Var(v) = &a.head {
             if v.name == "not" && scope.contains("not") && scope.resolve_text("not") == "not" {
@@ -2493,26 +2463,23 @@ fn app_chain_generic<'s>(a: &c::AppExpr, scope: &Scope<'s>) -> Result<Ast<'s>, E
     // that declared shape:
     //
     //  - at a declared OPTIONAL position, an explicit `?:e`/`?*` marker is
-    //    consumed as before (an EXPLICIT call site, e.g. `document r ?:(c)
-    //    body`, is elaborated exactly as before — this only ever adds
-    //    behavior, never removes it); anything else (a bare/unmarked arg, a
-    //    `?(l=e)` bundle, or no argument left at all mid-application) is
+    //    consumed (an EXPLICIT call site, e.g. `document r ?:(c) body`, is
+    //    elaborated exactly as written); anything else (a bare/unmarked arg,
+    //    a `?(l=e)` bundle, or no argument left at all mid-application) is
     //    NOT consumed — a plain `None` is synthesized for that slot instead,
     //    and the same argument is re-examined against the NEXT declared
-    //    position. This is what fixes the "positional-after-omitted-
-    //    optional mis-binds against the omitted slot" bug: `document record
-    //    body` (no marker at all) becomes `Apply(Apply(Apply(document,
-    //    record), None), body)`, matching what an explicit `document record
-    //    ?* body` would already elaborate to, instead of unifying `body`
-    //    straight against `configopt`'s domain.
+    //    position. Without this, a positional argument after an omitted
+    //    optional mis-binds against the omitted slot: `document record body`
+    //    (no marker) must become `Apply(Apply(Apply(document, record), None),
+    //    body)`, matching an explicit `document record ?* body`, not unify
+    //    `body` straight against `configopt`'s domain.
     //  - at a declared MANDATORY position, the next argument (of any kind)
-    //    is consumed positionally, same as plain application always was.
+    //    is consumed positionally, like plain application.
     //  - once every declared position has been visited (or the head's shape
     //    is unknown/empty — the overwhelmingly common case), any remaining
-    //    arguments are applied exactly as before (`apply_one_arg` per
-    //    argument), so a call with MORE arguments than the head's own
-    //    declared arity (currying into whatever the fully-applied head
-    //    itself returns) is unaffected.
+    //    arguments are applied one at a time (`apply_one_arg`), so a call
+    //    with MORE arguments than the head's declared arity (currying into
+    //    whatever the fully-applied head returns) is unaffected.
     //
     // Guarded on a non-empty `a.args` so a bare function-VALUE reference (no
     // application at all, e.g. `to-math` passed to `List.map`) is left
@@ -2781,8 +2748,8 @@ fn atomic<'s>(a: &c::Atomic, scope: &Scope<'s>) -> Result<Ast<'s>, ElabError> {
         // `op_chain`, below) would look up.
         c::Atomic::OpRef(op) => scoped_var(&op.name, op.span, scope),
         // `(command \cmd)` — a first-class reference to an inline command's
-        // own binding (`class-signature-lang-gaps.md` gap 1). No new
-        // binding machinery: the command's own `let-inline` binding is the
+        // own binding (gap 1). No new binding machinery: the command's own
+        // `let-inline` binding is the
         // referent, so this is just its `Var` under the same sigil'd key
         // `InlineElem::Cmd` resolves — reusing `scoped_var` also gives the
         // usual "unbound command" diagnostic for free.

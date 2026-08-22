@@ -13,9 +13,8 @@
 //! loader (`rustyfi_loader::load`, `lib_root = dist-v01/packages`,
 //! `RustyfiVersion::V0_1`) — not merely parsed.
 //!
-//! Harness copied from `v01_itemize_proof_mdja.rs`/`v01_stdlib.rs`
-//! (reproduced locally per those files' own established convention — no
-//! shared test-support library target exists in this crate): real loader
+//! Harness (reproduced locally — no shared test-support library target
+//! exists in this crate): real loader
 //! -> per-file `lower_file_v1` prelude concatenation -> `elaborate_program`
 //! -> `typecheck` -> `eval::Interp::eval`/`compile_document_v1`, plus the
 //! same `assert_bare_access_unbound` qualified-export negative probe every
@@ -27,9 +26,8 @@
 //! always-rendered table-of-contents `目次`, `\figure`'s `図` caption
 //! prefix) — unlike `std-ja-book`'s/`std-ja-report`'s own capstones, which
 //! carefully stay Latin-only by never calling `\figure`, there is no way
-//! to exercise either `document` without hitting CJK glyphs. So, exactly
-//! like `v01_itemize_proof_mdja.rs`'s own `md-ja` capstone (same
-//! situation, same fix), the `Mono` stub below advances EVERY character
+//! to exercise either `document` without hitting CJK glyphs. So the `Mono`
+//! stub below advances EVERY character
 //! (not just ASCII) rather than trying to source a real CJK-covering TTF
 //! font — these are `rustyfi-lang` "value bar" tests (real
 //! `compile_document_v1` page/line assertions), not `rustyfi`'s
@@ -74,10 +72,8 @@ impl Drop for TempDoc {
 
 /// A real, FULLY-COVERING `FontMetrics` — both capstones below render
 /// unavoidable CJK text (see this file's module doc comment), so unlike
-/// `v01_stdlib.rs`'s ASCII-only `Mono`, this stub advances EVERY
-/// character. Mirrors `v01_itemize_proof_mdja.rs`'s own `Mono` (same
-/// rationale, same fix, for the same reason: `md-ja`'s back-matter heading
-/// forced the same widening there).
+/// the ASCII-only `Mono` stubs elsewhere in this crate, this stub advances
+/// EVERY character.
 struct Mono;
 
 impl FontMetrics for Mono {
@@ -101,23 +97,16 @@ fn as_v01(f: &LoadedFile) -> &rustyfi_syntax::cst_v1::FileV1 {
 
 /// Load `src` through the REAL multi-file loader, assemble the synthetic
 /// `cst::File` exactly the way `compile_document_v1_with_trials` does,
-/// then elaborate -> typecheck -> eval directly to a `Value` (mirrors
-/// `v01_stdlib.rs`'s/`v01_itemize_proof_mdja.rs`'s own
-/// `compile_v01_via_loader`, with ONE fix: those two files build their
-/// `Scope` with plain `Scope::new(env.names())`, which defaults to
-/// `RustyfiVersion::V0_0` (`elaborate.rs`'s own `Scope::new` doc
-/// comment) — harmless for THEIR packages (none of `itemize`/`proof`/
-/// `md-ja`'s OWN bare-unbound probes transitively `@require:` a package
-/// whose `?(l = x)`-shaped command definitions get elaborated along the
-/// way), but `mitou-report`/`mitou-detail` both transitively `@require:
-/// math`, and `math.satyh`'s own `+math ?(tag = tagopt)`/`\eqn ?(tag =
-/// tagopt)` command definitions DO hit `elaborate.rs`'s `fun_rows_to_ast`
-/// version gate, which then rejects them as "compiled as 0.0.6". Using
-/// `Scope::new_with_version(names, V0_1)` here (exactly what the real
-/// `compile_document_v1` path already does, and what `Scope::new_with_
-/// version`'s own doc comment says the V0_1 compile path is FOR) fixes
-/// it — this is a latent gap in the copied-template helper, not a defect
-/// in `math.satyh` or in `mitou-report.satyh`/`mitou-detail.satyh`.
+/// then elaborate -> typecheck -> eval directly to a `Value`.
+///
+/// The `Scope` MUST be built with `Scope::new_with_version(names, V0_1)`,
+/// not the plain `Scope::new` (which defaults to `RustyfiVersion::V0_0`):
+/// `mitou-report`/`mitou-detail` both transitively `@require: math`, and
+/// `math.satyh`'s own `+math ?(tag = tagopt)`/`\eqn ?(tag = tagopt)`
+/// command definitions hit `elaborate.rs`'s `fun_rows_to_ast` version
+/// gate, which rejects them as "compiled as 0.0.6". A package with no
+/// `?(l = x)`-shaped command definition anywhere in its `@require:`
+/// closure never notices the difference.
 fn compile_v01_via_loader(tag: &str, src: &str) -> Result<Value, String> {
     let doc = TempDoc::new(tag, src);
     let opts = LoadOptions {
@@ -178,9 +167,7 @@ fn assert_bare_access_unbound(tag: &str, require: &str, bare_expr: &str) {
 }
 
 /// `annot`'s (and other deep `@require:` chains') CST recursion can
-/// overflow the default 8 MiB test-thread stack — mirrors
-/// `v01_stdlib.rs`'s/`v01_itemize_proof_mdja.rs`'s own helper of the same
-/// name.
+/// overflow the default 8 MiB test-thread stack.
 fn run_with_big_stack(f: impl FnOnce() + Send + 'static) {
     std::thread::Builder::new()
         .stack_size(64 * 1024 * 1024)

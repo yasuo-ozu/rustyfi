@@ -4,15 +4,13 @@
 //! [`AtomStream`]: syan core has no `IntoParseStream for Vec<_>`, so the
 //! buffering lives here.
 //!
-//! Two things this module used to carry are gone, both obsoleted by syan:
-//!
-//! * `EraseStream`/`InfallibleAdapter` — a `&mut dyn ParseStream` tower that
-//!   pinned the grammar to one monomorphization. `Parse::parse_stream` now
-//!   takes `&mut S` and recursion reborrows, so `S` is a genuine fixed point
-//!   and the instantiation set is finite without erasing anything. Every
-//!   stream operation in the parser stops being a virtual call.
-//! * the failure high-water mark — `ParseError` is span-generic now and every
-//!   variant carries the position it failed at, so the error reports itself.
+//! Neither stream erasure (a `&mut dyn ParseStream` tower) nor a failure
+//! high-water mark belongs here, obsoleted by syan on both counts:
+//! `Parse::parse_stream` takes `&mut S` and recursion reborrows, so `S` is a
+//! genuine fixed point and the instantiation set is finite without erasing
+//! anything (and no stream operation is a virtual call); and `ParseError` is
+//! span-generic, every variant carrying the position it failed at, so the
+//! error reports itself.
 
 use crate::token::Atom;
 use std::convert::Infallible;

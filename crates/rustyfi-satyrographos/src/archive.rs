@@ -1,7 +1,7 @@
-//! Install-source sniffing and archive extraction (plan §7.1). A source is
+//! Install-source sniffing and archive extraction. A source is
 //! either a directory (used in place) or a `.tar.gz`/`.tgz` archive
 //! (extracted, under `<root>/.satyrographos/tmp/`, with path-traversal
-//! rejection — plan §6/§10's zip-slip guard, a phase-1 blocker).
+//! rejection — the zip-slip guard).
 
 use std::path::{Path, PathBuf};
 
@@ -88,7 +88,7 @@ fn extract_tar_gz(archive: &Path, dest: &Path) -> Result<(), Error> {
             .into_owned();
         // `unpack_in` refuses (returns Ok(false)) any entry whose path is
         // absolute or climbs out of `dest` via `..` — that is our zip-slip
-        // guard (plan §6/§10). A refused entry is a hard error, not a skip.
+        // guard. A refused entry is a hard error, not a skip.
         let unpacked = entry
             .unpack_in(dest)
             .map_err(|e| Error::io(dest.join(&entry_path), e))?;

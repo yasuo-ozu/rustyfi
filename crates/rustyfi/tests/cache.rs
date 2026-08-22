@@ -1,25 +1,18 @@
-//! Compile-cache behaviour, driven through the *built* `rustyfi` binary
-//! (plan: content-addressed cache so an unchanged recompile is near-instant).
+//! Compile-cache behaviour, driven through the *built* `rustyfi` binary.
 //!
-//! Every test points `--cache-dir` at its own unique temp directory, so the
-//! cache never touches the developer's real `~/.cache/rustyfi` and no two
-//! tests can interfere. (Key correctness — a SHA-256 over the resolved input
-//! bytes — already rules out false hits between distinct documents; the
-//! per-test dir is belt-and-braces plus a clean slate for the miss/hit
-//! assertions.)
+//! Every test points `--cache-dir` at its own unique temp directory, so no
+//! two tests can interfere. The cache key is a SHA-256 over the resolved
+//! input bytes.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-/// The built `rustyfi` binary (cargo hands this to the integration tests
-/// of the crate that defines the `[[bin]]`).
 fn bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_rustyfi"))
 }
 
-/// This repo's `lib-rustyfi/`, resolved from the crate manifest dir exactly as
-/// `tests/e2e.rs` does — the fixtures `@require: stdja-mini` from there.
+/// This repo's `lib-rustyfi/`; fixtures `@require: stdja-mini` from there.
 fn repo_lib_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../lib-rustyfi")
 }
@@ -28,7 +21,6 @@ fn minimal_fixture() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/minimal.saty")
 }
 
-/// A fresh, unique temp directory for one test (created).
 fn tmpdir(tag: &str) -> PathBuf {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -45,9 +37,7 @@ fn tmpdir(tag: &str) -> PathBuf {
     p
 }
 
-/// Compile `input` to `output`, resolving packages against this repo's
-/// `lib-rustyfi/` and using `cache_dir` for the compile cache. `extra` carries
-/// flags like `--no-cache`.
+/// `extra` carries flags like `--no-cache`.
 fn compile(input: &Path, output: &Path, cache_dir: &Path, extra: &[&str]) -> Output {
     Command::new(bin())
         .arg(input)
@@ -75,8 +65,7 @@ fn assert_ok(out: &Output, ctx: &str) {
     );
 }
 
-/// How many `<hex>.pdf` cache payloads exist under `dir` (0 if the dir does
-/// not exist).
+/// `<hex>.pdf` cache payloads under `dir`; 0 if it does not exist.
 fn cached_pdf_count(dir: &Path) -> usize {
     std::fs::read_dir(dir)
         .map(|rd| {
@@ -87,8 +76,6 @@ fn cached_pdf_count(dir: &Path) -> usize {
         .unwrap_or(0)
 }
 
-/// First run misses and renders; the second run hits and writes byte-for-byte
-/// the same PDF, skipping compile+render.
 #[test]
 fn cache_miss_then_hit_is_byte_identical() {
     let work = tmpdir("miss-hit");
@@ -119,12 +106,9 @@ fn cache_miss_then_hit_is_byte_identical() {
     std::fs::remove_dir_all(&work).ok();
 }
 
-/// `--no-cache` never reads nor writes: no `(cached)` marker on a repeat run,
-/// and the cache directory is never even created.
 #[test]
 fn no_cache_flag_never_touches_the_cache() {
     let work = tmpdir("no-cache");
-    // A path that does not exist yet: if the run writes the cache, it appears.
     let cache_dir = work.join("never-created");
     let out = work.join("out.pdf");
 
@@ -147,15 +131,12 @@ fn no_cache_flag_never_touches_the_cache() {
     std::fs::remove_dir_all(&work).ok();
 }
 
-/// Changing one input byte changes the key: the next run misses again, and a
-/// further unchanged run hits under the *new* key.
 #[test]
 fn editing_the_input_invalidates_the_cache() {
     let work = tmpdir("invalidate");
     let cache_dir = work.join("cache");
     let out = work.join("out.pdf");
 
-    // A writable copy of the fixture (still `@require: stdja-mini`).
     let src = work.join("doc.saty");
     std::fs::copy(minimal_fixture(), &src).unwrap();
 
@@ -167,7 +148,6 @@ fn editing_the_input_invalidates_the_cache() {
     assert_ok(&warm, "warm run");
     assert!(was_cached(&warm), "unchanged rerun hits");
 
-    // Mutate one paragraph's text — still a valid document, different bytes.
     let text = std::fs::read_to_string(&src).unwrap();
     let edited = text.replace("Hello, world!", "Hello, cache!");
     assert_ne!(edited, text, "the edit must actually change the source");
@@ -185,7 +165,6 @@ fn editing_the_input_invalidates_the_cache() {
         "the edit stores a second payload under the new key"
     );
 
-    // The new content now caches under its own key.
     let rewarm = compile(&src, &out, &cache_dir, &[]);
     assert_ok(&rewarm, "post-edit rerun");
     assert!(was_cached(&rewarm), "the edited document now hits too");
@@ -193,9 +172,8 @@ fn editing_the_input_invalidates_the_cache() {
     std::fs::remove_dir_all(&work).ok();
 }
 
-/// Timing demonstration (run with `cargo test -p rustyfi --ignored`): a
-/// warm hit is dramatically faster than a cold miss, since it skips
-/// elaborate/typecheck/eval/render. Prints both wall-clock times.
+/// A warm hit skips elaborate/typecheck/eval/render entirely, so it beats a
+/// cold miss by a wide margin.
 #[test]
 #[ignore = "timing demonstration; run explicitly with --ignored"]
 fn cache_hit_is_much_faster_than_miss() {

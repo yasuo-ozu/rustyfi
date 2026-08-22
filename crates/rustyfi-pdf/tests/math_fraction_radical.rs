@@ -1,15 +1,11 @@
-//! (fractions + radicals via a graphics- rules channel): proof that
-//! `Math::Fraction`/`Math::Radical` produce a REAL bar/radical-sign `Fill`
-//! at the correct box-local (y-**up**) position — replacing the old ASCII
-//! `"num / den"` / U+221A stand-ins — under BOTH a real OpenType MATH font
-//! (`MathC`'s real-formula branch) and `Base14Metrics` (`MathC`'s
-//! no-MATH-table fallback branch, the zero-regression floor: no bundled
-//! fixture reaches these arms, so this is the ONLY place base-14
-//! fraction/radical layout is exercised at all).
+//! Fractions + radicals via a graphics-rules channel: `Math::Fraction`/
+//! `Math::Radical` produce a real bar/radical-sign `Fill` at the correct
+//! box-local (y-**up**) position — never an ASCII `"num / den"` / U+221A
+//! glyph — under both a real OpenType MATH font and `Base14Metrics` (the
+//! zero-regression floor: no bundled fixture reaches these arms, so this is
+//! the only place base-14 fraction/radical layout is exercised at all).
 //!
-//! Font discovery mirrors `tests/math_table.rs`/`tests/math_font.rs`:
-//! fontconfig first, then a handful of common distro/nix paths, then a
-//! graceful skip for the MATH-font-only tests.
+//! Font discovery mirrors `tests/math_table.rs`/`tests/math_font.rs`.
 
 use std::path::{Path as FsPath, PathBuf};
 use std::process::Command;
@@ -22,25 +18,12 @@ use rustyfi_lang::value::Value;
 use rustyfi_lang::{elaborate, eval, primitives, typecheck, CompileError};
 use rustyfi_pdf::{render_pdf, render_pdf_ttf, Base14Metrics, TtfFontStore};
 
-// ----------------------------------------------------------------------
-// Font discovery (copied, not shared — matches this repo's existing
-// per-file convention for these small fixture-locator helpers).
-// ----------------------------------------------------------------------
+// Font discovery (copied, not shared — matches this repo's per-file
+// convention for these small fixture-locator helpers).
 
 fn find_math_font() -> Option<PathBuf> {
-    // Slice B, re-baselined for the upstream-correct default (see
-    // `download-fonts.sh`'s header comment): the repo now bundles
-    // the REAL Latin Modern Math at
-    // `lib-rustyfi/dist/fonts/latinmodern-math.otf` (fetched by
-    // `download-fonts.sh`, same as ipaexm/Junicode) and wires it as
-    // `default-font.satysfi-hash`'s `"math"` default. Check it FIRST so this
-    // test no longer depends on a host-wide font install once that script
-    // has been run. Every assertion in this file recomputes its expected
-    // value from whatever font is actually loaded (`store.math_constants`
-    // etc.), so it holds for LM Math exactly as it did for DejaVu Math TeX
-    // Gyre. Fall back to the previously-bundled DejaVu Math TeX Gyre (still
-    // fetched as a secondary abbrev) only if LM Math isn't present, then
-    // fontconfig/distro paths.
+    // Every assertion in this file recomputes its expected value
+    // from whatever font is actually loaded, so it is font-independent.
     let bundled_lmmath = FsPath::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../lib-rustyfi/dist/fonts/latinmodern-math.otf");
     if bundled_lmmath.is_file() {
@@ -104,9 +87,7 @@ macro_rules! need_math_font {
     };
 }
 
-// ----------------------------------------------------------------------
 // Pipeline helpers (mirrors `math_table.rs`'s `run_math`/`with_ctx`).
-// ----------------------------------------------------------------------
 
 fn run_math(src: &str, metrics: &dyn FontMetrics) -> Result<Value, CompileError> {
     let file = rustyfi_syntax::parse_file(src)?;
@@ -157,7 +138,7 @@ fn as_math_parts(bx: PureHorzBox) -> (Length, Length, Length, Vec<rustyfi_backen
 
 /// Every `Fill` in `rules` whose bounding box (`graphics_bbox`) is
 /// non-degenerate (more than one distinct point) — i.e. skips the height-
-/// only "extent marker" `Fill`s (§B2's `l_extra`-reporting technique in the
+/// only "extent marker" `Fill`s (the `l_extra`-reporting technique in the
 /// `Radical` arm), leaving only the actually-drawn shapes (bar/overbar,
 /// radical sign).
 fn drawn_fills(rules: &[GraphicsElem]) -> Vec<(Color, (Length, Length), (Length, Length))> {
@@ -181,9 +162,7 @@ fn approx(a: Length, b: Length, tol: f64) -> bool {
     (a.0 - b.0).abs() < tol
 }
 
-// ============================================================================
 // Fraction — real MATH font.
-// ============================================================================
 
 #[test]
 fn fraction_bar_fill_at_axis_with_math_font() {
@@ -197,7 +176,7 @@ fn fraction_bar_fill_at_axis_with_math_font() {
     let v = run_math(&src, &store).expect("math-frac 1 2 should compile and evaluate");
     let (width, _height, _depth, glyphs, rules) = as_math_parts(math_box(v));
 
-    // No more ASCII '/' stand-in: exactly the two digit glyphs.
+    // No ASCII '/' glyph: exactly the two digit glyphs.
     assert_eq!(glyphs.len(), 2, "expected 2 glyphs (num '1', den '2'), got {glyphs:?}");
     assert_eq!(glyphs[0].text, "1");
     assert_eq!(glyphs[1].text, "2");
@@ -253,8 +232,8 @@ fn fraction_bar_fallback_with_base14_is_real_and_deterministic() {
     let fills = drawn_fills(&rules1);
     assert_eq!(fills.len(), 1, "base-14 fallback should still draw one bar Fill, got {fills:?}");
     let (_, lo, hi) = fills[0];
-    // MathC's documented no-MATH-table fallback ratios (§B1's axis, §B2's
-    // frac_rule): axis = 0.25 * size, rule = 0.04 * size.
+    // MathC's documented no-MATH-table fallback ratios (the axis and
+    // frac_rule constants): axis = 0.25 * size, rule = 0.04 * size.
     let axis = size * 0.25;
     let rule = size * 0.04;
     assert!(
@@ -264,16 +243,12 @@ fn fraction_bar_fallback_with_base14_is_real_and_deterministic() {
         hi.1
     );
 
-    // Byte-stable: an independent second run produces the identical rules
-    // (no nondeterminism sneaks into the fallback path).
     let v2 = run_math(&src, &Base14Metrics).expect("math-frac should compile under base-14");
     let (_, _, _, _, rules2) = as_math_parts(math_box(v2));
     assert_eq!(rules1, rules2, "base-14 fallback rules must be deterministic across runs");
 }
 
-// ============================================================================
 // Radical — real MATH font.
-// ============================================================================
 
 #[test]
 fn radical_overbar_and_sign_fills_with_math_font() {
@@ -285,7 +260,7 @@ fn radical_overbar_and_sign_fills_with_math_font() {
     let v = run_math(&src, &store).expect("math-radical None 2 should compile and evaluate");
     let (_width, height, depth, glyphs, rules) = as_math_parts(math_box(v));
 
-    // No more U+221A stand-in: exactly the one radicand glyph.
+    // No U+221A glyph: exactly the one radicand glyph.
     assert_eq!(glyphs.len(), 1, "expected 1 glyph (radicand '2'), got {glyphs:?}");
     assert_eq!(glyphs[0].text, "2");
     assert_eq!(glyphs[0].dy, Length::ZERO, "radicand should stay at its own baseline (dy=0)");
@@ -312,17 +287,14 @@ fn radical_overbar_and_sign_fills_with_math_font() {
         2,
         "expected two drawn Fills (radical sign + overbar), got {fills:?}"
     );
-    // The overbar: the Fill whose bbox y-range is exactly [h_bar, h_bar+t_bar].
     let overbar = fills
         .iter()
         .find(|(_, lo, hi)| approx(lo.1, h_bar, 1e-6) && approx(hi.1, h_bar + t_bar, 1e-6))
         .unwrap_or_else(|| panic!("expected an overbar Fill at y=[{h_bar:?},{:?}], got {fills:?}", h_bar + t_bar));
     assert_eq!(overbar.0, Color::Gray(0.0));
 
-    // The radical sign: the OTHER Fill (not the overbar) — it sits entirely
-    // to the LEFT of the overbar (the sign is placed before the overbar/
-    // radicand, `radical_sign_geometry`'s own `wid` being the overbar's
-    // `sign_w` x-offset), and has more than the overbar's 4 corners (an
+    // The radical sign is the OTHER Fill: it sits entirely to the LEFT of
+    // the overbar (`radical_sign_geometry`'s `wid`) and has more corners (a
     // 9-point checkmark polygon vs. a plain rectangle).
     let sign = fills
         .iter()
@@ -344,7 +316,7 @@ fn radical_overbar_and_sign_fills_with_math_font() {
     // Depth: NOT upstream's own `d_whole = d_cont` simplification (that
     // formula's upstream comment literally flags it "temporary; should
     // consider the depth of the radical sign") — this port's rules-aware
-    // `graphics_bbox` fold in `layout_math_value` (§B2's correctness fix)
+    // `graphics_bbox` fold in `layout_math_value` (a correctness fix)
     // picks up the SIGN's own deeper ink instead: `default_radical`'s
     // checkmark intentionally reaches `nonnegdpt = d_cont + size*0.1` below
     // the baseline (padding for the downward stroke), which is what a
@@ -377,9 +349,7 @@ fn radical_fallback_with_base14_is_real_and_deterministic() {
     assert_eq!(rules1, rules2, "base-14 fallback rules must be deterministic across runs");
 }
 
-// ============================================================================
-// E2E: a real rendered PDF shows fill ops, not the old ASCII stand-ins.
-// ============================================================================
+// E2E: a real rendered PDF shows fill ops, not ASCII glyphs.
 
 fn page_for(bx: PureHorzBox, geometry: &PageGeometry) -> Page {
     Page {
@@ -421,16 +391,13 @@ fn fraction_and_radical_render_fill_ops_not_ascii_under_base14() {
         render_pdf(&geometry, std::slice::from_ref(&rad_page), &[]).expect("radical PDF render");
     assert!(rad_bytes.starts_with(b"%PDF-"));
     let rad_hay = String::from_utf8_lossy(&rad_bytes);
-    // The old stand-in wrote a literal U+221A `Tj`, which base-14/WinAnsi
-    // can't even encode — `winansi` would have errored; the fact this
-    // render SUCCEEDS at all is already part of the proof, alongside the
-    // fill op below.
+    // base-14/WinAnsi cannot encode a literal U+221A `Tj` at all (`winansi`
+    // would error), so the fact this render SUCCEEDS is already part of the
+    // proof, alongside the fill op below.
     assert!(
         rad_hay.contains("f*"),
         "radical must emit fill (f*) operators for its sign+overbar:\n{rad_hay}"
     );
-    // Exactly one Tj (the radicand '2') — no second glyph for a bygone
-    // ASCII sqrt stand-in.
     assert_eq!(
         rad_hay.matches(" Tj").count(),
         1,

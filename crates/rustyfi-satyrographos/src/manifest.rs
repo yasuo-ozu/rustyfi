@@ -1,9 +1,9 @@
-//! `rustyfi-package.toml` parsing (plan §5.1) and the no-manifest fallback
-//! discovery, producing a flat [`PackagePlan`]: the concrete list of
-//! (absolute source file → root-relative destination) pairs that the
-//! installer stages and materialises.
+//! `rustyfi-package.toml` parsing and the no-manifest fallback discovery,
+//! producing a flat [`PackagePlan`]: the concrete list of (absolute source
+//! file → root-relative destination) pairs that the installer stages and
+//! materialises.
 //!
-//! The `kind` → destination mapping is plan §5.5's table verbatim:
+//! The `kind` → destination mapping:
 //!
 //! | kind | destination |
 //! |---|---|
@@ -42,8 +42,8 @@ pub struct Manifest {
 pub struct PackageMeta {
     pub name: String,
     pub version: String,
-    /// Required per §5.1; phase 1 only *warns* against it, no hard gate
-    /// (§10), so this crate merely records it.
+    /// Required, but phase 1 only *warns* against it — no hard gate, so
+    /// this crate merely records it.
     #[serde(rename = "rustyfi-version-compat")]
     pub rustyfi_version_compat: String,
     #[serde(default)]
@@ -109,7 +109,7 @@ impl Lang {
     }
 }
 
-/// A source-declaration kind (plan §5.1/§5.5).
+/// A source-declaration kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum FileKind {
@@ -147,18 +147,17 @@ pub struct PackagePlan {
     pub lang: Lang,
     pub version: String,
     pub description: Option<String>,
-    /// Recorded only; never resolved through phase 3 (plan §10).
+    /// Recorded only; never resolved through phase 3.
     pub dependencies: BTreeMap<String, String>,
     pub files: Vec<PlannedFile>,
     /// True when this plan came from the no-manifest `packages/`-fallback
-    /// (plan §5.1) rather than a real `rustyfi-package.toml`.
+    /// rather than a real `rustyfi-package.toml`.
     pub from_fallback: bool,
 }
 
 /// Discover the install plan(s) under `source_root`, in precedence order:
 /// `rustyfi-package.toml` manifest, else an upstream `Satyristes` build file
-/// (phase 4, plan §5.5), else the `packages/`-directory flat-copy fallback
-/// (plan §5.1).
+/// (phase 4), else the `packages/`-directory flat-copy fallback.
 ///
 /// Returns a `Vec` because a single `Satyristes` may declare several
 /// `(library ...)` blocks; the `toml` and fallback paths always yield exactly
@@ -225,14 +224,13 @@ pub(crate) fn plan_from_manifest(source_root: &Path, manifest: Manifest) -> Resu
                 push_file(&src_abs, &format!("{dist}/doc/{name}/{dst}"), &mut files)?
             }
             FileKind::Hash => {
-                // Flat, no per-library namespace (plan §5.5) — and shared, so
+                // Flat, no per-library namespace — and shared, so
                 // merged rather than copied: `fonts.satysfi-hash` holds every
                 // font package's entries at once.
                 let dst = require_dst(decl, "hash")?;
                 push_merge_file(&src_abs, &format!("{dist}/hash/{dst}"), &mut files)?
             }
             FileKind::File => {
-                // Arbitrary, root-relative under dist/.
                 let dst = require_dst(decl, "file")?;
                 push_file(&src_abs, &format!("{dist}/{dst}"), &mut files)?
             }

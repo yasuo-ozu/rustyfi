@@ -1,8 +1,6 @@
-//! Gap 5 (char-class value model) / Gap 6 (text-in-math degrade) / Gap 7
-//! (`set-math-variant-char`/`get-left-math-class`/`get-right-math-class`)
-//! acceptance coverage. Pure- pipeline `run`/helper shapes copied from
-//! `math_optional_args.rs` (per that file's own copy-not-share convention
-//! for standalone test harnesses) — no `@require:`, no loader,
+//! Char-class value model, text-in-math degrade, and
+//! `set-math-variant-char`/`get-left-math-class`/`get-right-math-class`
+//! acceptance coverage. Pure pipeline — no `@require:`, no loader,
 //! `rustyfi_syntax::parse_file` straight through elaborate/typecheck/eval.
 
 use rustyfi_backend::{FontKey, FontMetrics, HorzBox, Length, MathGlyph, PureHorzBox};
@@ -10,10 +8,9 @@ use rustyfi_lang::value::Value;
 use rustyfi_lang::{elaborate, eval, primitives, typecheck, CompileError};
 
 /// A fully permissive `FontMetrics` stub — `Some(size * 0.5)` for EVERY
-/// char, including the non-ASCII Mathematical-Alphanumeric remap targets
-/// gap 5 introduces — so the metrics-probe fallback in
-/// `resolve_variant_char` always succeeds and the full remap is
-/// observable/unit-testable. Mirrors `math_package.rs`'s own `Mono`.
+/// char, including the non-ASCII Mathematical-Alphanumeric remap targets —
+/// so the metrics-probe fallback in `resolve_variant_char` always succeeds
+/// and the full remap is observable/unit-testable.
 struct Mono;
 
 impl FontMetrics for Mono {
@@ -29,9 +26,9 @@ impl FontMetrics for Mono {
 }
 
 /// An ASCII-only `FontMetrics` stub (mirrors `Base14Metrics`'s WinAnsi-only
-/// shape, and `eval_phase2b.rs`'s own `Mono`) — the metrics probe fails for
-/// every remapped Mathematical-Alphanumeric codepoint (all outside ASCII),
-/// so gap 5's fallback policy must keep the SOURCE char.
+/// shape) — the metrics probe fails for every remapped Mathematical-
+/// Alphanumeric codepoint (all outside ASCII), so the fallback policy
+/// must keep the SOURCE char.
 struct AsciiMono;
 
 impl FontMetrics for AsciiMono {
@@ -89,11 +86,9 @@ fn math_box(v: Value) -> (Length, Vec<MathGlyph>) {
     }
 }
 
-/// A `context` with no package loaded, built the same way
-/// `math_package.rs`'s Gap 1 override test does (a local `\dummy`
-/// `[math] inline-cmd`, installed via `get-initial-context`'s second
-/// argument, never actually invoked by these tests — they all call
-/// `embed-math` directly).
+/// A `context` with no package loaded: a local `\dummy` `[math] inline-cmd`
+/// installed via `get-initial-context`'s second argument, never actually
+/// invoked by these tests — they all call `embed-math` directly.
 fn with_ctx(body: &str) -> String {
     format!(
         "let-inline ctx \\dummy m = inline-nil\n\
@@ -104,8 +99,7 @@ fn with_ctx(body: &str) -> String {
 }
 
 // ============================================================================
-// Gap 5 — whole-token class-map reclassification + spacing
-// (row 5).
+// Whole-token class-map reclassification + spacing.
 // ============================================================================
 
 /// `${a-b}`: `-` is its own MATHCHAR token, reclassified `Bin` (and
@@ -287,10 +281,9 @@ fn gap5_change_char_class_to_bold_italic() {
     assert_eq!(glyphs[0].text, "\u{1D499}");
 }
 
-/// Under an ASCII-only font (mirrors `Base14Metrics`'s WinAnsi-only shape),
-/// the metrics probe for U+1D465 fails, so `resolve_variant_char` falls
-/// back to the SOURCE char `x` — the "zero regression under base-14" policy
-/// gap 5's whole design hinges on.
+/// Under an ASCII-only font the metrics probe for U+1D465 fails, so
+/// `resolve_variant_char` falls back to the SOURCE char `x` — the "zero
+/// regression under base-14" policy the whole design hinges on.
 #[test]
 fn gap5_ascii_only_font_falls_back_to_source_char() {
     let src = with_ctx("embed-math ctx ${x}");
@@ -304,8 +297,8 @@ fn gap5_ascii_only_font_falls_back_to_source_char() {
 }
 
 // ============================================================================
-// Gap 7 — `set-math-variant-char` / `get-left-math-class` /
-// `get-right-math-class` (row 7).
+// `set-math-variant-char` / `get-left-math-class` /
+// `get-right-math-class`.
 // ============================================================================
 
 /// `set-math-variant-char MathItalic 0x78 0x79 ctx` installs a runtime
@@ -366,7 +359,7 @@ fn gap7_get_left_math_class_on_empty_math_is_none() {
 }
 
 // ============================================================================
-// Gap 6 — text-in-math degrade (row 6).
+// Text-in-math degrade.
 // ============================================================================
 
 /// `text-in-math MathOrd (fun c -> read-inline c {ab})`, embedded via
@@ -394,7 +387,7 @@ fn gap6_text_in_math_renders_through_read_inline() {
 // ============================================================================
 // `convert-string-for-math` — the whole-string Mathematical-Alphanumeric
 // remap (`vminstdef.yaml` `PrimitiveConvertStringForMath`;
-// `types.cppo.ml:1602` `convert_math_variant_char`). Reuses gap 5's
+// `types.cppo.ml:1602` `convert_math_variant_char`). Reuses the
 // `default_math_variant_char` + `default_math_class_map` over a whole string
 // under a passed `math-char-class`.
 // ============================================================================
@@ -425,7 +418,6 @@ fn convert_string_for_math_italic_maps_abc_to_1d44e_block() {
 fn convert_string_for_math_italic_passthrough_and_h_exception() {
     let src = with_ctx("convert-string-for-math ctx MathItalic `h 7`");
     let v = run(&src).expect("convert-string-for-math should compile and evaluate");
-    // 'h' -> U+210E, ' ' and '7' have no Italic variant -> unchanged.
     assert_eq!(as_string(v), "\u{210E} 7");
 }
 

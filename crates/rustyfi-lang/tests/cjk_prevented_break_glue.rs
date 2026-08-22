@@ -9,11 +9,10 @@
 //! PreventBreak  -> LBPure(glue)
 //! ```
 //!
-//! `text_to_boxes` used to emit the first arm and nothing at all for the
-//! second, so a CJK line carried elasticity only at the subset of its
-//! boundaries UAX#14 happened to allow a break at — and in Japanese prose LB13
-//! forbids a break before `、`/`。`/`」`/`）` and LB14 after `（`/`「`, which is
-//! one boundary in several.
+//! Emitting the first arm alone would give a CJK line elasticity only at the
+//! subset of boundaries UAX#14 happens to allow a break at — and in Japanese
+//! prose LB13 forbids a break before `、`/`。`/`」`/`）` and LB14 after
+//! `（`/`「`, which is one boundary in several.
 //!
 //! What is pinned here:
 //!
@@ -62,7 +61,6 @@ fn boxes_for(ctx: &Context, text: &str) -> Vec<HorzBox> {
     primitives::read_inline(&mut interp, ctx, &elems, &Env::root()).expect("read_inline")
 }
 
-/// Every `Discretionary`, as `(penalty, is_break_point, no_break)`.
 fn discretionaries(boxes: &[HorzBox]) -> Vec<(i32, bool, Vec<PureHorzBox>)> {
     boxes
         .iter()
@@ -92,8 +90,6 @@ fn strings(boxes: &[HorzBox]) -> Vec<String> {
 fn prevented_boundary_carries_unbreakable_elastic_glue() {
     let ctx = Context::initial(Length::pt(200.0));
     let boxes = boxes_for(&ctx, "あ、");
-    // Both characters are still typeset, and the run is split at the boundary
-    // (a box had to go between them).
     assert_eq!(strings(&boxes), vec!["あ", "、"]);
 
     let discs = discretionaries(&boxes);
@@ -135,8 +131,8 @@ fn prevented_boundary_adds_no_natural_width() {
     // `」。` is the extreme case: `(Close, FullStop)` is one of
     // `pure_space_between_classes`'s two `None` rows, so upstream's kern gets no
     // class space paying it back and the pair really is half an em tighter than
-    // its glyphs. The port does not model that yet, and this pins that it did
-    // not start modelling it by accident.
+    // its glyphs. The port does not model that yet — pins that this wasn't
+    // started by accident.
     let (w, _, _) = natural_metrics(&boxes_for(&ctx, "あ」。い"));
     // Four half-em glyphs at 12pt, nothing else.
     assert!(

@@ -1,6 +1,6 @@
-//! Phase-3 registry CLI tests (plan §5.4/§8/§9) — **no network**. Drive the
-//! *built* `rustyfi` binary under its `satyrographos` personality against
-//! a plain-directory `file://` index (built in a tempdir), covering:
+//! Registry CLI tests — **no network**: drive the built `rustyfi`
+//! binary under its `satyrographos` personality against a plain-directory
+//! `file://` index in a tempdir, covering:
 //!
 //! - `install <name> --registry file://…` (registry form: the arg names no
 //!   path on disk, so it is a registry package) → golden stdout + `dist/`;
@@ -8,8 +8,7 @@
 //! - `update` → golden upgrade report against a reconciled `Satyristes.lock`;
 //! - a corrupted index digest → exit `5`, nothing under `dist/`.
 //!
-//! All of this runs with the default (feature-off) binary, so the whole test
-//! stays offline via `file://`.
+//! All with the default (feature-off) binary.
 
 #![cfg(unix)]
 

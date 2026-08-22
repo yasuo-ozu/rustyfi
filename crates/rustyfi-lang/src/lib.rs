@@ -42,23 +42,19 @@ pub enum CompileError {
     NotADocument(&'static str),
     #[error(transparent)]
     Lower(#[from] v1::lower::LowerError),
-    /// Cross-version import (X1): a `V0_0` dependency spliced into a `V0_1`
-    /// program referenced `name`, a builtin primitive/type that is
-    /// version-forked (bound, or shaped, differently between `V0_0` and
-    /// `V0_1` —
-    /// `primitives::forked_prim_names`/`typecheck::forked_type_names`). The
+    /// A `V0_0` dependency spliced into a `V0_1` program referenced `name`, a
+    /// builtin primitive/type that is version-forked (bound, or shaped,
+    /// differently between `V0_0` and `V0_1` — see
+    /// `typecheck::forked_type_names`). The
     /// merged program's single `base_env_with_version(V0_1)` can only bind
-    /// ONE closure per name (§3.2's R1), so silently accepting this would
-    /// mis-resolve `name` to the WRONG version's primitive; `slice` names
-    /// the milestone (`"X1"`) so a later slice's error text can update in
-    /// lockstep with what it actually fixes.
-    /// The trailing `— {}` is [`v1::xver_adapt::forked_note`], keyed on
-    /// `name`: WHY this particular name cannot cross. Without it every
-    /// refusal read "only supports the version-neutral subset", which
-    /// describes a missing feature — true for some members of the set and
-    /// flatly wrong for others (`page`, `font`), where the two generations
-    /// disagree about what the runtime value IS and no amount of bridge
-    /// work changes that. The note says which kind this is.
+    /// ONE closure per name, so accepting this would silently mis-resolve
+    /// `name` to the WRONG version's primitive.
+    ///
+    /// The trailing `— {}` is `v1::xver_adapt::forked_note`, keyed on
+    /// `name`: WHY this particular name cannot cross — a missing bridge
+    /// feature (a wrapper could be written), or a REPRESENTATION fork
+    /// (`page`, `font`) where the generations disagree about what the
+    /// runtime value IS and no amount of bridge work helps.
     #[error(
         "cross-version import ({slice}): dependency {dep} references `{name}`, a \
          version-forked builtin — {}",
@@ -86,8 +82,7 @@ pub fn compile_document(
 /// enters here.
 ///
 /// Thin wrapper over [`compile_document_cst_with_trials`] that drops the
-/// trial count — kept as a stable, unchanged entry point for the CLI
-/// (`main.rs`) and every pre-Slice-1 caller.
+/// trial count — the stable entry point for the CLI (`main.rs`).
 pub fn compile_document_cst(
     file: &rustyfi_syntax::cst::File,
     metrics: &dyn FontMetrics,
@@ -158,13 +153,12 @@ fn note_stage(
 /// symmetric: a `@stage: persistent` binding may not read a default-stage one.
 /// Every generated wrapper/shadow here re-applies a dependency's own export by
 /// name, so splicing it at the default stage silently makes it unreadable from
-/// the very consumers X3b/X3c exist to serve — the failure surfaces as
+/// the very consumers the forward deco/paren wrapper and its view-scheduling
+/// exist to serve — the failure surfaces as
 /// `invalid occurrence of variable .. as to stage`, which reads like a user
-/// error in a document that mentions neither binding. `unite_helper_prelude`
-/// already carries an explicit `Persistent0` for the same reason; this is that
-/// argument generalized, since a fixed stage would be wrong for a
-/// `@stage: 0`/default dependency the way the default is wrong for a
-/// persistent one.
+/// error in a document that mentions neither binding. A FIXED stage would be
+/// as wrong for a `@stage: 0`/default dependency as the default is for a
+/// persistent one (cf. `unite_helper_prelude`'s explicit `Persistent0`).
 fn splice_staged(
     prelude: &mut Vec<rustyfi_syntax::cst::TopBinding>,
     stages: &mut std::collections::HashMap<usize, types::Stage>,
@@ -179,7 +173,7 @@ fn splice_staged(
 }
 
 /// One [`v1::xver_adapt::deco_upgrade_prelude`] call per DISTINCT declared
-/// stage among `exports` (Slice X3c), each spliced at that stage.
+/// stage among `exports`, each spliced at that stage.
 ///
 /// Grouping rather than one flat call is what keeps [`splice_staged`]'s
 /// argument true when a program crosses exports from dependencies that
@@ -238,7 +232,7 @@ pub fn compile_document_cst_with_stages(
     // command arguments by `&Ast` ADDRESS (`eval.rs`'s `arg_cache`), which is
     // sound only while every node it can reach is pinned. Binding it to a
     // local (rather than passing `&debrand(..)` as a temporary) is what pins
-    // it, exactly as the elaborated `program` used to.
+    // it.
     let body = {
         let store = symbol::SymbolStore::new();
         let scope = elaborate::Scope::new(&store, env0.names());
@@ -285,24 +279,20 @@ pub fn compile_document_cst_with_stages(
 
 /// The compile-once + fixpoint-trial tail shared by the `V0_0` and `V0_1`
 /// entry points (`compile_document_cst_with_trials` above and
-/// `compile_document_v1_with_trials` below). Extracted verbatim from what
-/// used to be inline in `compile_document_cst_with_trials` — the only
-/// version-sensitive step is the fresh per-trial env
-/// (`primitives::base_env_with_version(version)`); everything else
-/// (crossrefs persistence, `fire_hooks`, `DocExtras` attach) is identical
-/// regardless of which SATySFi generation produced `compiled`.
+/// `compile_document_v1_with_trials` below). The only version-sensitive step
+/// is the fresh per-trial env (`primitives::base_env_with_version(version)`);
+/// everything else (crossrefs persistence, `fire_hooks`, `DocExtras` attach)
+/// is identical regardless of which SATySFi generation produced `compiled`.
 fn eval_document_trials(
     compiled: &compile::CompiledExpr,
     metrics: &dyn FontMetrics,
     version: rustyfi_syntax::RustyfiVersion,
     aux: &mut crossref::AuxTable,
 ) -> Result<(std::rc::Rc<DocumentValue>, u32), CompileError> {
-    // Seed the fixpoint from the previous run's auxiliary table, if any, then
-    // police the result: if the final trial READ a seeded value it never
-    // re-derived, the layout depended on something this run cannot verify, so
-    // redo cold. That is what keeps a warm build byte-identical to a cold one
-    // — the aux file may only change how FAST the fixpoint converges, never
-    // what it converges to (see `CrossRefs::seed_unvalidated`).
+    // Seed the fixpoint from the previous run's auxiliary table, if any; if
+    // the final trial read a seeded value it never re-derived, redo cold
+    // instead (see `CrossRefs::seed_unvalidated`) — this is what keeps a warm
+    // build byte-identical to a cold one.
     if !aux.is_empty() {
         let (doc, trials, table, unvalidated) =
             eval_trials_seeded(compiled, metrics, version, aux.clone())?;
@@ -326,8 +316,6 @@ fn eval_trials_seeded(
     version: rustyfi_syntax::RustyfiVersion,
     seed: crossref::AuxTable,
 ) -> Result<(std::rc::Rc<DocumentValue>, u32, crossref::AuxTable, bool), CompileError> {
-    // The cross-reference table persists across trials — it *is* the
-    // fixpoint state (Risks: "what resets per trial vs what persists").
     let timing = std::env::var_os("RUSTYFI_TIMING").is_some();
     let crossrefs = Rc::new(RefCell::new(CrossRefs::seeded(seed)));
     let mut trials = 0u32;
@@ -338,20 +326,18 @@ fn eval_trials_seeded(
         // `env_freezed` re-eval), and a fresh `Interp` resets `hooks`/
         // `images` too — only `crossrefs` is threaded through.
         //
-        // The runtime environment is now just an empty root frame (Phase 4):
-        // the base environment is a COMPILE-time table, folded into the
-        // compiled tree already, and top-level bindings live in the
-        // compiler's slot table, which the spine rewrites as it re-executes
-        // each trial. Nothing resolves a name here.
+        // The runtime environment is just an empty root frame: the base
+        // environment is a COMPILE-time table already folded into the
+        // compiled tree, and top-level bindings live in the compiler's slot
+        // table, which the spine rewrites as it re-executes each trial.
+        // Nothing resolves a name here.
         let env = value::Env::root();
         let mut interp = eval::Interp::new(metrics);
         interp.crossrefs = crossrefs.clone();
-        // math-split spec §3.4: threads `version` onto the `Interp` so
-        // `read_inline`'s `EmbedMath` fallback arm (no installed math
-        // command — unit-test contexts only) can dispatch between
-        // `reflect_math_elem`/`reflect_math_elem_v01`. Both callers of this
-        // shared tail already receive/pass the real `version`, so this is a
-        // single, version-agnostic line.
+        // Threads `version` onto the `Interp` so `read_inline`'s `EmbedMath`
+        // fallback arm (no installed math command — unit-test contexts
+        // only) can dispatch between `reflect_math_elem`/
+        // `reflect_math_elem_v01`.
         interp.version = version;
         let doc = match compiled.run(&env, &mut interp)? {
             Value::Document(doc) => doc,
@@ -386,7 +372,7 @@ fn eval_trials_seeded(
                     page_graphics: std::mem::take(&mut interp.page_graphics),
                     doc_info: interp.doc_info.take(),
                 };
-                // S2: the DecoId-keyed link/destination side-channel, same
+                // The DecoId-keyed link/destination side-channel, same
                 // timing as `extras` above (only known once `fire_hooks`
                 // has run).
                 final_doc.reflow_links = std::mem::take(&mut interp.link_decos);
@@ -406,14 +392,14 @@ fn eval_trials_seeded(
 /// Compile a loader-resolved SATySFi 0.1 program (`LoadOptions { version:
 /// V0_1, .. }`): dependency libraries (`files[..n-1]`, loader
 /// dependency-first order) are each lowered to one `TopBinding::Module`
-/// (qualified exports; Sub-slice 2a — see `v1/lower.rs`'s module doc) via
+/// (qualified exports — see `v1/lower.rs`'s module doc) via
 /// [`v1::lower::lower_file_v1`], the entry (`files[n-1]`, always last —
 /// `LoadedProgram::files`'s contract) via [`v1::lower::lower_document_v1`],
 /// assembled into ONE synthetic `cst::File` — the same shape the CLI's
 /// `merge_program` builds for 0.0.6 — and pushed through the SHARED
 /// elaborate -> typecheck(V0_1) -> compile -> fixpoint-eval pipeline.
 /// Signature ascriptions (`:>`) are enforced per binding by
-/// `v1::module_check::check_program` — Sub-slice 2d-1.
+/// `v1::module_check::check_program`.
 pub fn compile_document_v1(
     files: &[rustyfi_loader::LoadedFile],
     metrics: &dyn FontMetrics,
@@ -431,11 +417,9 @@ pub fn compile_document_v1_with_trials(
     compile_document_v1_with_aux(files, metrics, &mut crossref::AuxTable::new())
 }
 
-/// [`compile_document_v1_with_trials`] threading an AUXILIARY cross-reference table: `aux` seeds the
-/// fixpoint from a previous run and is overwritten with the final table.
-/// Seeding only affects how fast the fixpoint converges — see
-/// [`crossref::CrossRefs::seeded`] and [`crossref::CrossRefs::seed_unvalidated`],
-/// which together guarantee the output is the same as a cold run's.
+/// [`compile_document_v1_with_trials`] threading an AUXILIARY cross-reference
+/// table — see [`compile_document_cst_with_aux`]'s doc comment for what
+/// seeding `aux` does and why it can't change the output.
 pub fn compile_document_v1_with_aux(
     files: &[rustyfi_loader::LoadedFile],
     metrics: &dyn FontMetrics,
@@ -448,10 +432,11 @@ pub fn compile_document_v1_with_aux(
         .split_last()
         .expect("loader always yields at least the entry file");
     // Only ever called on the entry: under `compile_document_v1`, the entry
-    // is ALWAYS `V0_1` (the loader's own contract — `load_legacy`'s Q4 rule
+    // is ALWAYS `V0_1` (the loader's own contract — `load_legacy`'s per-file
+    // version-detection rule
     // only ever downgrades a DEPENDENCY to `V0_0`, never the entry; see
     // `LoadedFile::version`'s doc comment). A `V0_0` dependency is instead
-    // routed through the cross-version splice arm below (X1) — it never
+    // routed through the cross-version splice arm below — it never
     // reaches this helper.
     fn as_v01(f: &rustyfi_loader::LoadedFile) -> &rustyfi_syntax::cst_v1::FileV1 {
         match &f.cst {
@@ -463,29 +448,25 @@ pub fn compile_document_v1_with_aux(
             ),
         }
     }
-    // Sub-slice 2d-3 (`…/tmp/slice2d3-module-sig-decls.md` §2.1): one
-    // `SurfaceEnv` threaded across every V0_1 dependency in load order, so a
-    // module alias/named-signature reference in a LATER-loaded library can
-    // resolve an EARLIER one (`module M = OtherLib`, `:> OtherLib.S`).
-    // `build_file_surface` runs (pure `cst_v1` walk, no lowering needed)
-    // BEFORE each dep is lowered, so that dep's own internal aliases/named
-    // signatures resolve too (`v1/surface.rs`'s doc comment).
+    // One `SurfaceEnv` threaded across every V0_1 dependency
+    // in load order, so a module alias/named-signature reference in a
+    // LATER-loaded library can resolve an EARLIER one (`module M =
+    // OtherLib`, `:> OtherLib.S`). `build_file_surface` runs (pure `cst_v1`
+    // walk, no lowering needed) BEFORE each dep is lowered, so a dep's own
+    // internal aliases/named signatures resolve too.
     //
-    // X1/X2a (design-cross-version-import.md §5, §"Slice X2 — per-group
-    // primitive environment"): `deps` is now a MIXED-version list
-    // (`LoadedFile::version`). A `V0_1` dep is lowered exactly as before; a
-    // `V0_0` dep contributes its `cst::File.prelude` bindings DIRECTLY
-    // (they are already `cst::TopBinding`s — §1.1's "no syntactic bridge
-    // needed"), positioned dependency-first (loader order, unchanged).
+    // `deps` is a MIXED-version list (`LoadedFile::version`). A `V0_1`
+    // dep is lowered as usual; a `V0_0` dep contributes its `cst::File.prelude`
+    // bindings DIRECTLY (they are already `cst::TopBinding`s — no syntactic
+    // bridge needed), positioned dependency-first (loader order).
     // `v006_indices` records which TOP-LEVEL `prelude` slots a V0_0 dep
-    // contributed, so `elaborate::elaborate_program_with_versions` (below)
-    // can wrap those bindings' RHS in `Ast::VersionScope(V0_0, _)`
-    // (Option C, X2.2) — the mechanism that makes a version-forked
-    // primitive referenced INSIDE such a dependency (`page-break`,
-    // `math-*`, …) resolve against `V0_0`'s `PrimDef`/type/runtime-version
-    // instead of the merged program's ambient `V0_1` (X1's R1). `dep_csts`
-    // collects the V0_1 subset only — `check_program` (below) has no
-    // `cst_v1` vocabulary for a `V0_0` file (§2.5/R3, unchanged by X2a).
+    // contributed, so `elaborate::elaborate_program_with_versions` (below) can
+    // wrap those bindings' RHS in `Ast::VersionScope(V0_0, _)` — the mechanism
+    // that makes a version-forked primitive referenced INSIDE such a dependency
+    // (`page-break`, `math-*`, …) resolve against `V0_0`'s
+    // `PrimDef`/type/runtime-version instead of the merged program's ambient
+    // `V0_1`. `dep_csts` collects the V0_1 subset only — `check_program`
+    // (below) has no `cst_v1` vocabulary for a `V0_0` file.
     let mut surfaces = v1::surface::SurfaceEnv::default();
     let mut prelude = Vec::new();
     let mut dep_csts: Vec<&rustyfi_syntax::cst_v1::FileV1> = Vec::new();
@@ -496,38 +477,38 @@ pub fn compile_document_v1_with_aux(
     // generation and not the other.
     let mut stages: std::collections::HashMap<usize, types::Stage> =
         std::collections::HashMap::new();
-    // Slice X3c placement: every `deco`/`deco-set`/`paren` export X3b has
+    // Placement state for the forward view-scheduling mechanism: every
+    // `deco`/`deco-set`/`paren` export the forward deco/paren wrapper has
     // adapted so far, and whether the 0.0.6-shaped (UNWRAPPED) view of them is
     // the one currently installed at this point in the merged prelude.
     //
-    // X3b installs the 0.1-shaped view by shadowing the export's own name, and
-    // that shadow is permanent: the prelude is one flat `Ast::LetIn` chain and
-    // `Ast::VersionScope(V0_0, _)` wraps a binding's RHS, not the continuation
-    // after it. A LATER 0.0.6-AUTHORED dependency consuming the same export
-    // therefore read it at 0.1's shape and failed to typecheck — `math.satyh`'s
-    // `val paren-right : paren` against `latexcmds`' five-argument call, and
-    // the `graphics list`/`graphics` mismatch for `deco`. The view is now
-    // SCHEDULED instead, exactly as X4b schedules the reverse one: captured
-    // once under a private name while the wrapped view is in force, the
-    // ORIGINAL restored on entering a 0.0.6-authored block, the wrapped view
-    // re-installed on entering a 0.1-authored one (the entry always is, and is
-    // always last). See `xver_adapt`'s "X3c" banner for the full derivation.
+    // The forward wrapper installs the 0.1-shaped view by shadowing the
+    // export's own name,
+    // and a shadow is permanent — the prelude is one flat `Ast::LetIn`
+    // chain, and `Ast::VersionScope(V0_0, _)` wraps a binding's RHS, not the
+    // continuation after it. So the view is SCHEDULED (as the reverse deco
+    // coercion schedules the
+    // reverse one): captured once under a private name while the wrapped
+    // view is in force, the ORIGINAL restored on entering a 0.0.6-authored
+    // block, the wrapped view re-installed on entering a 0.1-authored one
+    // (the entry always is, and is always last). Without this, a LATER
+    // 0.0.6-authored dependency reads the export at 0.1's shape:
+    // `math.satyh`'s `val paren-right : paren` against `latexcmds`'
+    // five-argument call, and the `graphics list`/`graphics` mismatch for
+    // `deco`.
     //
-    // Both transitions are lazy, so a program whose 0.0.6 dependencies never
-    // consume each other's crossed exports emits NOTHING extra.
+    // Both transitions are lazy, so a program whose 0.0.6 dependencies
+    // never consume each other's crossed exports emits NOTHING extra.
     // `deco_view_captured` counts how many of `deco_exports` already have a
-    // private `Capture` of their WRAPPED view in the prelude — the schedule
-    // grows as later dependencies cross more exports, and an `Install` may
-    // only name a view that has been captured.
+    // private `Capture` of their WRAPPED view in the prelude — an `Install`
+    // may only name a view that has been captured.
     //
     // Each export is carried with the DECLARED STAGE of the dependency that
     // exported it, because the glue NAMES that dependency's own binding and
     // `Stage::can_reference` is not symmetric: a `@stage: persistent`
     // dependency may not read a default-stage binding, so a `Restore` of
     // `M.frame` spliced at the default stage would make the very consumer
-    // this slice exists for fail with a STAGE error instead of a type one.
-    // Same reasoning as `unite_helper_prelude`'s explicit `Persistent0`, one
-    // step further: the right stage is the dependency's, not a fixed one.
+    // this mechanism exists for fail with a STAGE error instead of a type one.
     let mut deco_exports: Vec<(v1::xver_adapt::DecoExport, Option<types::Stage>)> = Vec::new();
     let mut v006_view_installed = false;
     let mut deco_view_captured: usize = 0;
@@ -536,7 +517,7 @@ pub fn compile_document_v1_with_aux(
             rustyfi_loader::LoadedCst::V0_1(cst) => {
                 // Transition back INTO 0.1-authored code: this dependency
                 // reads any crossed export at the adapted 0.1 shape, which is
-                // what X3b's wrapper is for.
+                // what the forward deco/paren wrapper is for.
                 if v006_view_installed {
                     splice_upgrade_glue(
                         &mut prelude,
@@ -551,9 +532,10 @@ pub fn compile_document_v1_with_aux(
                 dep_csts.push(cst);
             }
             rustyfi_loader::LoadedCst::V0_0(cst) => {
-                // Slice X3c — transition INTO 0.0.6-authored code: this
+                // Transition INTO 0.0.6-authored code: this
                 // dependency means 0.0.6's shape by every name it writes, so
-                // any export X3b has already adapted must read as its
+                // any export the forward wrapper has already adapted must
+                // read as its
                 // UNWRAPPED original here. Deliberately emitted BEFORE `start`
                 // is taken below, so this 0.1-authored glue never lands in
                 // `v006_indices`/`stages`.
@@ -561,9 +543,9 @@ pub fn compile_document_v1_with_aux(
                 // The `Capture` rides along with the FIRST such transition
                 // rather than being emitted per-dependency: this is the last
                 // position at which naming the export's own key still yields
-                // X3b's wrapped view, and emitting it lazily is what keeps a
+                // the forward wrapper's wrapped view, and emitting it lazily is what keeps a
                 // program with no 0.0.6-to-0.0.6 consumption byte-identical to
-                // the pre-X3c splice.
+                // the splice as it stood before this view-scheduling was added.
                 if !v006_view_installed || deco_view_captured < deco_exports.len() {
                     if deco_view_captured < deco_exports.len() {
                         splice_upgrade_glue(
@@ -582,119 +564,60 @@ pub fn compile_document_v1_with_aux(
                     );
                     v006_view_installed = !deco_exports.is_empty();
                 }
-                // X2a: the value half of X1's forked-name guard
-                // (`free.values` against `forked_prim_names`) is REMOVED —
-                // its whole reason to exist (a single `base_env_with_version
-                // (V0_1)` can only bind one closure per name) no longer
-                // holds once this dependency's bindings are version-scoped
-                // (below): inside `Ast::VersionScope(V0_0, _)` the
-                // `compile.rs` fold picks the `V0_0` `PrimDef`, and
-                // `eval.rs` runs it under `Interp::version = V0_0`. The
-                // type half (`free.types` against `forked_type_names`) STAYS
-                // conservative — but X2b (design-cross-import-version.md's
-                // "Slice X2" §X2.3/X2.4) NARROWS it to the export boundary
-                // only: `collect_free_globals`'s walk (below) now emits a
-                // forked type name into `free.types` ONLY from an
-                // export-position surface site — a TOP-LEVEL
-                // `TopBinding::LetRec`'s (or its `and` siblings') own `: ty`
-                // ascription, a `TopBinding::Module`'s `sig` items, or a
-                // `TopBinding::Type` declaration's body (the one site that is
-                // ALWAYS boundary-relevant regardless of use, since it is
-                // registered under the merged program's single ambient
-                // `V0_1` `Checker` — never `Ast::VersionScope`-wrapped, see
-                // `v1::xver_adapt`'s module doc comment) — and NO LONGER from
-                // an INTERNAL `Expr::LetRecIn`'s own ascription (a local `let
-                // rec : ty = ..` nested inside some other binding's body,
-                // which can never itself become part of any export's
-                // observable signature text). So `bar : page -> document`
-                // (a TOP-LEVEL export) is still rejected here, but a
-                // dependency whose exported command merely USES a
-                // forked-typed helper INTERNALLY (e.g. `let make-doc body =
-                // let-rec get-page : page | () = A4Paper in page-break
-                // (get-page ()) .. body`, `make-doc`'s own inferred type
-                // staying the neutral `block-boxes -> document`) now passes
-                // this guard — see `walk_rec_binding_body`'s `boundary`
-                // parameter for the mechanism. Conservatism (see that
-                // function's doc comment too): every OTHER textual site
-                // stays exactly as boundary-checked as before X2b; the one
-                // acknowledged residual gap — an UNANNOTATED top-level
-                // binding whose inferred type could still carry a forked
-                // shape through some internal helper it returns, with no
-                // syntactic ascription anywhere to catch it — is a
-                // pre-existing limitation of this purely-textual guard
-                // (X3.0(2): "there is no per-name PolyType table"), not one
-                // this narrowing introduces; any such genuine cross-version
-                // misuse is still caught by ordinary whole-program HM
-                // unification failure at any incompatible use site, exactly
-                // as it always has been.
+                // `collect_free_globals` below only checks `free.types`
+                // against `forked_type_names` (see the "guard-narrowing"
+                // banner comment for which surface sites count and why).
+                // Residual gap (no per-name PolyType table): an UNANNOTATED
+                // top-level binding whose inferred type carries a forked
+                // shape has no syntactic site to catch. Genuine misuse still
+                // fails whole-program HM unification at the use site.
                 //
-                // X3a (design-cross-version-import.md's "Slice X3 — forked-
-                // type export adapter", X3.1-X3.3, `v1::xver_adapt`): turns
-                // exactly ONE of those rejections into an acceptance —
                 // `math` is representationally IDENTICAL to `V0_1`'s
                 // `math-text` (both `Base(MathText)`, `types.rs`; the same
                 // shared `Value::MathText`/`Value::Math` runtime rep,
-                // value.rs:39-56), so it can be safely RELABELED with zero
-                // value-level coercion. `reject_type_names()` is
-                // `forked_type_names()` PLUS `page` (X3.1's note: `page`'s
-                // bare name lowers identically under both versions, so it
-                // never appears in the automatic `forked_type_names` diff,
-                // but its runtime rep still forks — 9-ctor ADT vs a tuple —
-                // so it is rejected explicitly here too).
+                // value.rs:39-56), so it RELABELS with zero value-level
+                // coercion. `reject_type_names()` is `forked_type_names()`
+                // PLUS `page`, whose bare name lowers identically under both
+                // versions (never appearing in the automatic diff) but whose
+                // runtime rep forks (9-ctor ADT vs a tuple), so it is
+                // rejected explicitly.
                 //
-                // X3b (design-cross-version-import.md's "Slice X3" §X3.5,
-                // `v1::xver_adapt::classify_deco_exports`/
-                // `deco_coercion_prelude`): turns a SECOND, narrower slice of
-                // those rejections into an acceptance — `deco`/`deco-set`,
-                // the (b)-class case X3a deferred. Unlike `math`, `deco`'s
-                // bare NAME already means the right thing once accepted
-                // (`typecheck::name_to_mono("deco", V0_1)` resolves it to
-                // `t_deco(V0_1)` unconditionally — no relabel needed), so a
-                // TEXTUAL `deco`/`deco-set` mention with no attached VALUE (a
-                // `type .. = deco` synonym) is *already* safe with zero
-                // further work. What still needs adapting is the VALUE: a
-                // `V0_0` `deco` closure returns `graphics list`
-                // (`prim_types::t_graphics_output`/`coerce_graphics_result`),
-                // but every `V0_1` call site that applies a `deco`
-                // (`primitives::apply_deco`, fired by `fire_inline_frame`/
-                // `fire_hooks` — genuinely, not a stand-in) expects a SINGLE
-                // `graphics` back. X3b's SCOPED fix: for exactly a bare
-                // top-level `let-rec name : deco | patbot* = ..`/`: deco-set`
-                // export (`classify_deco_exports` — no leading Fun-arrow
-                // args, not nested in a `module .. sig .. end`, both
-                // conservative restrictions kept for soundness — see that
-                // function's doc comment for what still rejects), splice a
-                // SECOND, un-scoped (`V0_1`-authored, NOT in `v006_indices`)
-                // binding of the SAME name that shadows the original: it
-                // re-applies the (still-in-scope, unshadowed-at-that-point)
-                // original positionally and unites its `graphics list`
-                // result into one `graphics` via the real `V0_1`
-                // `unite-graphics` primitive (`primitives.rs`'s
-                // `prim_unite_graphics`, `Value::Graphics(GraphicsElem::
-                // Group(..))`) — a genuine value-level coercion, HM-checked
-                // (if the original's actual inferred type doesn't fit, the
-                // wrapper fails to typecheck — never a silent mis-render).
-                // Every OTHER forked name (`page`, and any deco/deco-set
-                // mention this scoped classifier can't prove safe) STAYS
-                // rejected, tagged `"X3"` (the type half's check moved: it
-                // now runs `v1::xver_adapt`'s classification instead of a
-                // bare set-membership test).
+                // `deco`/`deco-set` cross too
+                // (`classify_deco_exports`/`deco_coercion_prelude`). Their
+                // bare NAME already means the right thing
+                // (`typecheck::name_to_mono("deco", V0_1)` is
+                // `t_deco(V0_1)` unconditionally), so a textual mention with
+                // no attached VALUE (a `type .. = deco` synonym) is already
+                // safe. The VALUE needs adapting: a `V0_0` `deco` closure
+                // returns `graphics list`
+                // (`prim_types::t_graphics_output`/`coerce_graphics_result`)
+                // but every `V0_1` call site applying a `deco`
+                // (`primitives::apply_deco`) expects a SINGLE `graphics`.
+                // For a bare top-level `let-rec name : deco | patbot* = ..`/
+                // `: deco-set` export, splice a SECOND, un-scoped binding of
+                // the SAME name shadowing the original: it re-applies the
+                // still-unshadowed original positionally and unites its
+                // `graphics list` into one `graphics` via the real `V0_1`
+                // `unite-graphics` (`primitives::prim_unite_graphics`).
+                // HM-checked, so a wrapper that doesn't fit fails to
+                // typecheck rather than mis-rendering. Every OTHER forked
+                // name stays rejected.
+                //
                 // `reject_type_names_from_v006`, not the shared
-                // `reject_type_names`: this dependency's text is 0.0.6-
-                // AUTHORED, and `code` forks only in that reading (0.0.6 has
-                // no `code` spelling, so `τ code` is an opaque nominal there,
-                // while the merged program's hard-coded `V0_1` `Checker` reads
-                // the same text as the real staged type). The reverse arm
-                // keeps the shared set — a foreign 0.1 dependency's `code` is
-                // already in the ambient vocabulary. See that function's doc
-                // comment; an INFERRED `code` export writes no type text and
-                // is unaffected either way.
+                // `reject_type_names`: this dependency's text is
+                // 0.0.6-AUTHORED, and `code` forks only in that reading
+                // (0.0.6 has no `code` spelling, so `τ code` is an opaque
+                // nominal there, while the merged program's hard-coded
+                // `V0_1` `Checker` reads the same text as the real staged
+                // type). The reverse arm keeps the shared set — a foreign
+                // 0.1 dependency's `code` is already in the ambient
+                // vocabulary.
                 let free = collect_free_globals(&cst.prelude);
                 let reject_t = v1::xver_adapt::reject_type_names_from_v006();
                 let touched: std::collections::BTreeSet<String> =
                     free.types.intersection(&reject_t).cloned().collect();
-                // Anything outside X3a/X3b's combined whitelist (`math`,
-                // `deco`, `deco-set`) rejects the WHOLE dependency — S3: no
+                // Anything outside the combined whitelist above (`math`,
+                // `deco`, `deco-set`) rejects the WHOLE dependency — no
                 // partial acceptance.
                 if let Some(name) = touched
                     .iter()
@@ -745,20 +668,15 @@ pub fn compile_document_v1_with_aux(
                 let start = prelude.len();
                 if touched.is_empty() {
                     // No forked-type-name text anywhere in this dep —
-                    // splice verbatim, byte-identical to every pre-X3
-                    // path (the GOLDEN/non-regression fast path).
+                    // splice verbatim (the GOLDEN/non-regression fast path).
                     prelude.extend(cst.prelude.iter().cloned());
                 } else if touched.contains("math") {
-                    // X3a: relabel every `math` leaf inside a `type`
-                    // declaration's body (the one surface site this port's
-                    // typechecker actually consults for type text —
-                    // `v1::xver_adapt`'s module doc comment) to `math-text`,
-                    // and splice the adapted prelude. The already-evaluated
-                    // `Value` crosses untouched (X3.0(1)) — a pure surface
-                    // relabel, no runtime coercion. (`deco`/`deco-set`, if
-                    // also touched, need no textual relabel at all — see
-                    // above — so this single call covers the whole prelude
-                    // regardless of which combination of the two is touched.)
+                    // Relabel every `math` leaf inside a `type` declaration's
+                    // body to `math-text` (the note above) and splice the
+                    // adapted prelude. `deco`/`deco-set`, if also touched,
+                    // need no textual relabel — so this one call covers the
+                    // whole prelude regardless of which combination of the
+                    // two is touched.
                     let adapted = v1::xver_adapt::relabel_type_decls(
                         &cst.prelude,
                         RustyfiVersion::V0_0,
@@ -805,28 +723,20 @@ pub fn compile_document_v1_with_aux(
                             slice: "X3b",
                         }
                     })?;
-                    // Deliberately NOT added to `v006_indices`: this
-                    // synthetic code is genuinely `V0_1`-authored (it calls
-                    // `unite-graphics`, a `V0_1`-only primitive), not part of
-                    // the spliced `V0_0` dependency. (Compile-time folding
-                    // would in fact still resolve it correctly even from
-                    // inside a `VersionScope(V0_0, _)` — no `V0_0`
-                    // `PrimDef` shares this name to collide with, so the fold
-                    // cursor misses and `compile.rs` falls back to the
-                    // ordinary eval-time `env.lookup`, which always resolves
-                    // against the single ambient `V0_1` runtime env,
-                    // `eval_document_trials`'s `env` — see X2.0's "compile
-                    // constant-folds primitives". Leaving it un-scoped is
-                    // simply the structurally honest choice, not a
-                    // soundness requirement.)
-                    // Two halves. A TOP-LEVEL export is shadowed by a new
+                    // Deliberately NOT added to `v006_indices` (structural
+                    // honesty, not a soundness requirement): this synthetic
+                    // code is genuinely `V0_1`-authored (it calls
+                    // `unite-graphics`, a `V0_1`-only primitive) — no `V0_0`
+                    // `PrimDef` shares this name, so even inside a
+                    // `VersionScope(V0_0, _)` the fold cursor would miss and
+                    // `compile.rs` would fall back to the eval-time
+                    // `env.lookup` against the ambient `V0_1` runtime env.
+                    // Two halves: a TOP-LEVEL export is shadowed by a new
                     // top-level binding appended after the dependency
-                    // (`deco_coercion_prelude`). A MODULE-scoped one cannot
-                    // be — `let Deco.simple-frame` is not syntax — so its
-                    // wrapper is appended inside that module's own `decls`,
-                    // in the copy of the prelude just spliced above
-                    // (`inject_module_deco_wrappers`), where the same
-                    // sequential shadowing applies one scope deeper.
+                    // (`deco_coercion_prelude`); a MODULE-scoped one cannot
+                    // be (`let Deco.simple-frame` is not syntax), so its
+                    // wrapper is appended inside that module's own `decls`
+                    // (`inject_module_deco_wrappers`), one scope deeper.
                     v1::xver_adapt::inject_module_deco_wrappers(&mut prelude[start..], &exports);
                     // At the DEPENDENCY's own stage, not the default one: this
                     // top-level wrapper re-applies the dependency's export by
@@ -843,7 +753,7 @@ pub fn compile_document_v1_with_aux(
                         dep_stage,
                         v1::xver_adapt::deco_coercion_prelude(&exports),
                     );
-                    // Slice X3c: from here on this export has TWO views in the
+                    // From here on this export has TWO views in the
                     // program — the wrapper just spliced, and the unwrapped
                     // original the two injectors above kept reachable under
                     // `xver-fwd-orig-`. Record it so the transitions can pick
@@ -855,7 +765,8 @@ pub fn compile_document_v1_with_aux(
     }
     // The last (and, for every single-generation dependency set, the ONLY)
     // transition back into 0.1-authored code: the entry itself, which is
-    // always `V0_1` here and reads every crossed export at X3b's adapted
+    // always `V0_1` here and reads every crossed export at the forward
+    // wrapper's adapted
     // shape. Emitted only if some intervening 0.0.6 dependency restored the
     // originals; with no such dependency the whole schedule stays silent.
     if v006_view_installed {
@@ -903,9 +814,8 @@ pub fn compile_document_v1_with_aux(
         // rather than a free variable?" — and version-correct resolution still
         // happens downstream: `compile.rs`'s fold picks the `V0_0` `PrimDef`
         // inside a `VersionScope(V0_0, _)`, and `typecheck.rs` picks that
-        // version's scheme. A pure `V0_1` program takes the `else` branch and
-        // is byte-identical, keeping its "unbound variable" diagnostics for
-        // `V0_0`-only names exactly as sharp as before.
+        // version's scheme. A pure `V0_1` program takes the other branch and
+        // keeps its "unbound variable" diagnostics for `V0_0`-only names.
         let scope_names: Vec<String> = if v006_indices.is_empty() {
             env0.names()
         } else {
@@ -916,13 +826,11 @@ pub fn compile_document_v1_with_aux(
             n
         };
         let scope = elaborate::Scope::new_with_version(&store, scope_names, RustyfiVersion::V0_1);
-        // X2a: `v006_indices` is empty whenever no `V0_0` dependency was
-        // spliced above (every pre-X2a caller, and every mixed load with only
-        // `V0_1` deps) — `elaborate_program_with_versions` then emits no
-        // `Ast::VersionScope` node at all, so `program`/`compiled` are
-        // structurally IDENTICAL to what the pre-X2a `elaborate_program`/
-        // `compile_program` calls would have produced (the GOLDEN/v01-capstone
-        // non-regression gate).
+        // `v006_indices` is empty whenever no `V0_0` dependency was
+        // spliced above, and `elaborate_program_with_versions` then emits no
+        // `Ast::VersionScope` node at all — so a `V0_1`-only load's
+        // `program`/`compiled` are structurally identical to a plain
+        // `elaborate_program`/`compile_program` pair's.
         let program =
             elaborate::elaborate_program_with_versions(
                 &file,
@@ -945,32 +853,23 @@ pub fn compile_document_v1_with_aux(
 
 /// Compile a loader-resolved SATySFi 0.0.6 program (`LoadOptions { version:
 /// V0_0, .. }`) whose entry (or one of its native 0.0.6 co-dependencies)
-/// `@require:`s at least one **foreign 0.1** package — Slice X4a
-/// (specifically §X4.2's recommended "Option B" mechanism and §X4.3's
-/// file-by-file inventory, item 4).
+/// `@require:`s at least one **foreign 0.1** package.
 ///
-/// This is the REVERSE of [`compile_document_v1_with_trials`]'s whole
-/// direction, but reuses its exact polarity rather than flipping it: the
-/// AMBIENT elaborate/typecheck/compile tag stays `V0_1` (0.1's grammar is a
-/// strict syntactic superset of 0.0.6's — §X4.1 — so elaborating genuinely
-/// 0.0.6-authored code under an ambient `V0_1` scope never rejects it), and
-/// it is the 0.0.6-authored code — the ENTRY's own top-level bindings and
-/// document tail, plus any native 0.0.6 co-dependency's bindings — that gets
-/// wrapped in [`ast::Ast::VersionScope`]`(V0_0, _)` (X2a's Option C,
-/// unchanged). A foreign 0.1 dependency splices in UNWRAPPED, exactly like a
-/// native 0.1 dependency does in `compile_document_v1_with_trials` — its own
-/// `:>`-sealed exports are enforced by [`v1::module_check::check_program`]
-/// (newly REACHABLE from a 0.0.6-rooted compile, but not modified at all —
-/// §X4.1 point 2, the Q2/sealing resolution) exactly as they would be for a
-/// pure-0.1 consumer.
+/// This is the REVERSE of [`compile_document_v1_with_trials`]'s direction, but
+/// reuses its exact polarity rather than flipping it: the AMBIENT
+/// elaborate/typecheck/compile tag stays `V0_1` (0.1's grammar is a strict
+/// syntactic superset of 0.0.6's, so elaborating genuinely 0.0.6-authored code
+/// under an ambient `V0_1` scope never rejects it), and it is the
+/// 0.0.6-authored code — the ENTRY's own top-level bindings and document tail,
+/// plus any native 0.0.6 co-dependency's bindings — that gets wrapped in
+/// [`ast::Ast::VersionScope`]`(V0_0, _)`. A foreign 0.1 dependency splices in
+/// UNWRAPPED, exactly like a native 0.1 dependency does in
+/// `compile_document_v1_with_trials`; its own `:>`-sealed exports are enforced
+/// by `v1::module_check::check_program` exactly as for a pure-0.1 consumer.
 ///
-/// **This is a wholly separate sibling of `compile_document_v1_with_trials`,
-/// not a modification of it** — every prior slice's non-regression
-/// discipline: a pure-0.0.6 load (no 0.1 dependency) never reaches this
-/// function at all (the CLI/loader only route here once a `V0_0`-rooted
-/// load's dependency graph actually contains a `LoadedCst::V0_1` node), so
-/// [`compile_document_cst_with_trials`] and every existing 0.0.6 corpus
-/// fixture stay byte-identical.
+/// A pure-0.0.6 load (no 0.1 dependency) never reaches this function — the
+/// CLI/loader only route here once a `V0_0`-rooted load's dependency graph
+/// actually contains a `LoadedCst::V0_1` node.
 pub fn compile_document_v006_xver(
     files: &[rustyfi_loader::LoadedFile],
     metrics: &dyn FontMetrics,
@@ -986,11 +885,9 @@ pub fn compile_document_v006_xver_with_trials(
     compile_document_v006_xver_with_aux(files, metrics, &mut crossref::AuxTable::new())
 }
 
-/// [`compile_document_v006_xver_with_trials`] threading an AUXILIARY cross-reference table: `aux` seeds the
-/// fixpoint from a previous run and is overwritten with the final table.
-/// Seeding only affects how fast the fixpoint converges — see
-/// [`crossref::CrossRefs::seeded`] and [`crossref::CrossRefs::seed_unvalidated`],
-/// which together guarantee the output is the same as a cold run's.
+/// [`compile_document_v006_xver_with_trials`] threading an AUXILIARY
+/// cross-reference table — see [`compile_document_cst_with_aux`]'s doc
+/// comment for what seeding `aux` does and why it can't change the output.
 pub fn compile_document_v006_xver_with_aux(
     files: &[rustyfi_loader::LoadedFile],
     metrics: &dyn FontMetrics,
@@ -1001,7 +898,7 @@ pub fn compile_document_v006_xver_with_aux(
     // The entry is whichever file is a document (`LoadedCst::is_document`) —
     // NOT necessarily `files.last()` (that assumption is specific to
     // `compile_document_v1_with_trials`'s pure-V0_1-entry contract); scan
-    // defensively, per §X4.3 item 4's own caution.
+    // defensively.
     let (entry_idx, entry) = files
         .iter()
         .enumerate()
@@ -1025,25 +922,24 @@ pub fn compile_document_v006_xver_with_aux(
     // generation and not the other.
     let mut stages: std::collections::HashMap<usize, types::Stage> =
         std::collections::HashMap::new();
-    // Slice X4b: the qualified member keys (`"M.frame"`) this arm rebinds to
+    // The qualified member keys (`"M.frame"`) this arm rebinds to
     // a version-adapted view, exempted from a SECOND `:>` seal check below.
     let mut xver_shadows: std::collections::HashSet<String> = std::collections::HashSet::new();
-    // Slice X4b placement: every `deco`/`deco-set` export crossed so far, and
+    // Placement state for the reverse deco coercion: every `deco`/`deco-set` export crossed so far, and
     // whether the 0.0.6-shaped VIEW of them is the one currently installed at
     // this point in the merged prelude.
     //
     // The prelude is one flat `Ast::LetIn` chain and `Ast::VersionScope(V0_0,
-    // _)` wraps a binding's RHS, not the continuation after it, so a rebinding
-    // of `M.frame` is visible to EVERYTHING that follows regardless of which
-    // generation authored it. What makes a position-indexed view sufficient is
-    // that each block spliced below is homogeneous — a `V0_0` dependency's
-    // whole `prelude` goes into `v006_indices`, a `V0_1` dependency's whole
-    // `lowered` stays out of it, the entry (always 0.0.6-authored) is last —
-    // and that the loader orders dependencies topologically, so a consumer's
-    // block always follows what it `@require:`s. So the coerced view is
-    // installed lazily on entering a 0.0.6-authored block and put back on
-    // entering a 0.1-authored one; see `xver_adapt::deco_downgrade_prelude`'s
-    // **Placement** section for the full derivation.
+    // _)` wraps a binding's RHS, not the continuation after it, so a
+    // rebinding of `M.frame` is visible to EVERYTHING that follows
+    // regardless of which generation authored it. A position-indexed view
+    // is sufficient because each block spliced below is homogeneous — a
+    // `V0_0` dependency's whole `prelude` goes into `v006_indices`, a `V0_1`
+    // dependency's whole `lowered` stays out of it, the entry (always
+    // 0.0.6-authored) is last — and the loader orders dependencies
+    // topologically, so a consumer's block always follows what it
+    // `@require:`s. So the coerced view installs lazily on entering a
+    // 0.0.6-authored block and is put back on entering a 0.1-authored one.
     //
     // Both transitions are lazy, so the common case (every 0.1 dependency,
     // then the 0.0.6 entry — every bundled package) emits exactly one install
@@ -1058,16 +954,14 @@ pub fn compile_document_v006_xver_with_aux(
         match &dep.cst {
             // Native 0.0.6 co-dependency (e.g. the entry ALSO `@require:`s
             // an ordinary 0.0.6 package `list.satyg`-style): splice + wrap.
-            // Its VALUE half keeps the unrestricted-0.0.6-primitive-use
-            // posture (§X4.3 item 4) — every binding here is
+            // Its VALUE half is unrestricted — every binding here is
             // `Ast::VersionScope(V0_0, _)`-wrapped, so a forked primitive
-            // resolves against 0.0.6's own `PrimDef`.
-            //
-            // Its TYPE-DECLARATION half is NOT unrestricted, and used to be
-            // unchecked: Slice X4c (`guard_v006_type_text`, and the banner
-            // comment above it) refuses/relabels the 0.0.6-authored `type`
-            // text that a merged program's hard-coded-`V0_1` `Checker` would
-            // otherwise re-read with the wrong vocabulary.
+            // resolves against 0.0.6's own `PrimDef`. Its TYPE-DECLARATION
+            // half is NOT unrestricted: the reverse arm's 0.0.6 type-text guard
+            // (`guard_v006_type_text`,
+            // and the banner above it) refuses/relabels 0.0.6-authored
+            // `type` text that a merged program's hard-coded-`V0_1` `Checker`
+            // would otherwise re-read with the wrong vocabulary.
             rustyfi_loader::LoadedCst::V0_0(cst) => {
                 let adapted = guard_v006_type_text(&cst.prelude, &dep.path)?;
                 // Transition INTO 0.0.6-authored code: this dependency reads
@@ -1088,104 +982,82 @@ pub fn compile_document_v006_xver_with_aux(
             }
             // Foreign 0.1 dependency: lower (exactly like a native V0_1 dep
             // in `compile_document_v1_with_trials`) and splice UNWRAPPED
-            // (ambient V0_1) — PLUS the X4a boundary guard on what it
-            // EXPORTS (§X4.3 item 5, mirroring the X1/X2b/X3 guard in the
-            // FORWARD arm, reversed) — with ONE load-bearing correction to
-            // the design draft's own sketch, discovered by reading
-            // `v1::module_check::check_program_inner` (`module_check.rs`
-            // :238-239,271`): `Checker.version` for TYPE DECLARATIONS
-            // (`ck.declare_synonym`/`declare_variant`, and the
-            // `base_type_env_with_version` seeding the phase-D spine walk)
-            // is HARD-CODED to `RustyfiVersion::V0_1` — not parameterized,
-            // and (per this slice's own hard constraint) `module_check.rs`
-            // is NEVER modified. This means EVERY type declaration in the
-            // WHOLE merged program — from ANY source, forward OR reverse —
-            // is read under V0_1 vocabulary, unconditionally. That is
-            // EXACTLY why the FORWARD arm's `relabel_type_decls(dep.prelude,
-            // V0_0, V0_1)` (above) is necessary: a 0.0.6 dependency's OWN
-            // "math" spelling must be REWRITTEN into "math-text" before it
-            // reaches `program.type_decls`, or the hard-coded V0_1 lookup
-            // would resolve it to an unrelated unbound nominal.
+            // (ambient V0_1), PLUS the reverse import guard on what it EXPORTS
+            // (the forward arm's forked-name guard — narrowed to export
+            // position, with the whitelist adaptation — reversed).
             //
-            // The REVERSE consequence is the opposite of a naive mirror: a
-            // FOREIGN 0.1 dependency's OWN "math-text"/"math-boxes" spelling
-            // is ALREADY exactly the ambient (hard-coded V0_1) vocabulary —
-            // ZERO relabeling needed OR wanted. Renaming it to 0.0.6's
-            // "math" spelling (as `v1::xver_adapt::relabel_or_reject_name`'s
-            // new `(V0_1, V0_0)` arm CAN do, and is exercised directly by
-            // that module's own unit tests) would be actively WRONG here: it
-            // would corrupt text a hard-coded-V0_1 `Checker` needs to read
-            // natively, turning a working type into an unbound-nominal
-            // mismatch. So this arm calls `collect_free_globals` (below
-            // `compile_document_v1_with_trials`, unmodified — it already
-            // operates on `&[cst::TopBinding]`, exactly the shape a LOWERED
-            // 0.1 dependency is in by the time this loop touches it, per
-            // §1.1's "a 0.1 dependency lowers into the same cst::TopBinding
-            // vocabulary") purely as a WHITELIST GUARD: any export-boundary
-            // forked type name OUTSIDE `{"math-text", "math-boxes"}` — X4a's
-            // proven-identical-representation set (the shared
-            // `Value::MathText`/`Value::Math` runtime rep, re-derived for
-            // this coarsening direction — 0.0.6-authored code has no syntax
-            // that could ever observe the lost math-text/math-boxes
-            // distinction, since it never had that distinction to begin
-            // with) — rejects the WHOLE dependency, conservatively (S1/S4:
-            // false-reject is safe, false-accept is not — the task brief's
-            // mandatory soundness bar). `page`/`graphics`/`deco`/
-            // `pre-path`/`path`/`image`/`font`/`paren` all still reject in
-            // THIS direction too. Once the whitelist check passes, the
-            // dependency splices VERBATIM (never relabeled) — both the safe
-            // AND the correct choice here.
+            // `Checker.version` for TYPE DECLARATIONS
+            // (`v1::module_check::check_program_inner`'s
+            // `ck.declare_synonym`/`declare_variant`, and the
+            // `base_type_env_with_version` seeding the phase-D spine walk;
+            // `module_check.rs:238-239,271`) is HARD-CODED to
+            // `RustyfiVersion::V0_1` on BOTH arms — every type declaration in
+            // the merged program is read under V0_1 vocabulary
+            // unconditionally. That is why the FORWARD arm's
+            // `relabel_type_decls(dep.prelude, V0_0, V0_1)` (above) is
+            // necessary: a 0.0.6 dependency's own "math" spelling must
+            // become "math-text" before it reaches `program.type_decls`, or
+            // the V0_1 lookup resolves it to an unrelated unbound nominal.
             //
-            // X4b (`docs/plans/design-cross-version-import.md`'s "Slice X4"
-            // §X4.5, extended beyond its own math-only sketch): `deco`/
-            // `deco-set` CROSS in this direction too — the reverse mirror of
-            // X3b's `unite-graphics` wrap, coercing the OPPOSITE way. A
-            // crossing `V0_1` deco returns a single `graphics`; every REAL
-            // `V0_0`-authored consumer call site (and every `V0_0`-scoped
-            // `inline-frame-outer`/`inline-frame-breakable` TYPE) expects a
-            // `graphics list`, so the wrap is a SINGLETON LIST, `[name p w h
-            // d]`. See `v1::xver_adapt`'s own "X4b" section for the full
-            // derivation; the mechanics here are three steps:
+            // The REVERSE consequence is NOT the naive mirror: a foreign 0.1
+            // dependency's own "math-text"/"math-boxes" spelling is ALREADY
+            // the ambient vocabulary, so no relabeling is needed or wanted —
+            // renaming it to 0.0.6's "math" would corrupt text the
+            // hard-coded-V0_1 `Checker` must read natively, turning a
+            // working type into an unbound-nominal mismatch. So this arm
+            // calls `collect_free_globals` purely as a WHITELIST GUARD: any
+            // export-boundary forked type name outside `{"math-text",
+            // "math-boxes"}` — a proven-identical-representation set
+            // (shared `Value::MathText`/`Value::Math` runtime rep; 0.0.6
+            // code has no syntax that could observe the lost distinction) —
+            // rejects the WHOLE dependency. False-reject is safe,
+            // false-accept is not. `page`/`graphics`/`deco`/`pre-path`/
+            // `path`/`image`/`font`/`paren` all still reject in THIS
+            // direction too. Past the whitelist, the dependency splices
+            // VERBATIM.
+            //
+            // `deco`/`deco-set` CROSS in this direction too — the
+            // reverse mirror of the forward wrapper's `unite-graphics` wrap, coercing the
+            // OPPOSITE way. A crossing `V0_1` deco returns a single
+            // `graphics`; every `V0_0`-authored consumer call site (and
+            // every `V0_0`-scoped `inline-frame-outer`/`inline-frame-
+            // breakable` TYPE) expects a `graphics list`, so the wrap is a
+            // SINGLETON LIST, `[name p w h d]`. Three steps:
             //
             //   1. `classify_deco_exports_v01_sig` reads the dependency's
             //      PRE-lowering `cst_v1` sig (the ONE textual site 0.1's
-            //      grammar can name a `deco` export's type at all — an
-            //      ordinary `val` carries no ascription syntax, and lowering
-            //      DROPS `sig_annot` entirely, so this scan must happen
-            //      here and not off `lowered`). It descends through nested
+            //      grammar can name a `deco` export's type at all — lowering
+            //      DROPS `sig_annot` entirely, so this scan must happen here
+            //      and not off `lowered`). It descends through nested
             //      `module`/`include` decls and dereferences named signature
-            //      references against `surfaces` — which is exactly why
-            //      `build_file_surface` above must run FIRST, so this
-            //      dependency's own `signature S = ..` binds are already
-            //      registered. Anything it still cannot express — a `paren`,
-            //      a `deco` buried in a compound, an OPEN optional row, or a
-            //      `deco` behind a functor signature member (whose members
-            //      have no member path at all until some later file APPLIES
-            //      it) — REJECTS, with the same clear `slice: "X4b"`
-            //      diagnostic as before.
+            //      references against `surfaces`, which is exactly why
+            //      `build_file_surface` above must run FIRST. Anything it
+            //      still cannot express — a `paren`, a `deco` buried in a
+            //      compound, an OPEN optional row, or a `deco` behind a
+            //      functor signature member (whose members have no member
+            //      path until some later file APPLIES it) — REJECTS.
             //   2. `deco_downgrade_prelude` generates the coercion glue: a
-            //      private `Capture` of the 0.1 original immediately after the
-            //      dependency, then an `Install` — a top-level rebinding of
-            //      each export's own qualified key (`M.frame`) whose body
-            //      re-applies the captured original positionally and wraps the
-            //      result in a singleton list — deferred to the next
-            //      0.0.6-authored block, and a `Restore` on the way back into
-            //      a 0.1-authored one (see `deco_exports`/`v006_view_installed`
-            //      above). None of it is added to `v006_indices` — this is
-            //      `V0_1`-authored glue, exactly like the forward arm's
-            //      `deco_coercion_prelude`.
-            //   3. those qualified keys are collected into `xver_shadows` and
-            //      handed to `check_program_with_xver_shadows` below, which
-            //      exempts the SECOND `Ast::LetIn` of each from the `:>`
-            //      seal re-check (the module's own alias is still checked;
-            //      see that function's doc comment for why that exemption
-            //      cannot hide a real violation).
+            //      private `Capture` of the 0.1 original immediately after
+            //      the dependency, then an `Install` — a top-level rebinding
+            //      of each export's own qualified key (`M.frame`) that
+            //      re-applies the captured original positionally and wraps
+            //      the result in a singleton list — deferred to the next
+            //      0.0.6-authored block, and a `Restore` on the way back
+            //      into a 0.1-authored one (see `deco_exports`/
+            //      `v006_view_installed` above). None of it is added to
+            //      `v006_indices` — this is `V0_1`-authored glue, exactly
+            //      like the forward arm's `deco_coercion_prelude`.
+            //   3. those qualified keys are collected into `xver_shadows`
+            //      and handed to `check_program_with_xver_shadows` below,
+            //      which exempts the SECOND `Ast::LetIn` of each from the
+            //      `:>` seal re-check (the module's own alias is still
+            //      checked; see that function's doc comment for why that
+            //      exemption cannot hide a real violation).
             //
             // A BARE `type foo = deco` synonym (no value attached, safe with
             // zero coercion — same reasoning as the forward direction's
             // `type xver-deco-alias = deco`) is UNAFFECTED: it is not a sig
-            // `val` item at all, so this scan never sees it, and it splices
-            // verbatim exactly like any other unconstrained mention.
+            // `val` item, so this scan never sees it and it splices verbatim.
             rustyfi_loader::LoadedCst::V0_1(cst) => {
                 // Transition back INTO 0.1-authored code: this dependency
                 // reads any crossed `deco` export at 0.1's own single-
@@ -1264,12 +1136,12 @@ pub fn compile_document_v006_xver_with_aux(
     }
 
     // Entry's OWN top-level lets: splice + wrap, same as a native 0.0.6 dep
-    // (§X4.3 item 4 — this is the "one new source of V0_0-tagged items"
-    // X4a adds beyond X2.2: not just dependencies, but the entry itself) —
-    // and, Slice X4c, through the same 0.0.6-authored type-text guard, for
-    // the same reason: the entry's `type` declarations are hoisted into
-    // `Program::type_decls` alongside everyone else's and read under the one
-    // hard-coded `V0_1` `Checker`, with no `Ast::VersionScope` in reach.
+    // (a new source of V0_0-tagged items beyond dependency splicing: not just
+    // dependencies, but the entry itself) — and through the same
+    // 0.0.6-authored type-text guard, for the same reason: the entry's
+    // `type` declarations are hoisted into `Program::type_decls` alongside
+    // everyone else's and read under the one hard-coded `V0_1` `Checker`,
+    // with no `Ast::VersionScope` in reach.
     let entry_adapted = guard_v006_type_text(&entry_cst.prelude, &entry.path)?;
     let entry_start = prelude.len();
     prelude.extend(entry_adapted);
@@ -1283,17 +1155,17 @@ pub fn compile_document_v006_xver_with_aux(
         eoi: entry_cst.eoi.clone(),
     };
 
-    // -- the shared pipeline, ambient V0_1-tagged (§X4.1: the elaborate
-    //    syntax gate is the one asymmetry — keeping the ambient tag at V0_1
-    //    is what lets genuinely 0.0.6-authored code elaborate unrejected,
-    //    since 0.1's grammar is a strict superset) --
+    // -- the shared pipeline, ambient V0_1-tagged (the elaborate syntax gate
+    //    is the one asymmetry — keeping the ambient tag at V0_1 is what lets
+    //    genuinely 0.0.6-authored code elaborate unrejected, since 0.1's
+    //    grammar is a strict superset) --
     let env0 = primitives::base_env_with_version(RustyfiVersion::V0_1);
     let store = symbol::SymbolStore::new();
     let scope = elaborate::Scope::new_with_version(&store, env0.names(), RustyfiVersion::V0_1);
     // `wrap_body_version = Some(V0_0)`: the ENTRY's own document tail
     // (`file.body`, always 0.0.6-authored here) is wrapped in
     // `Ast::VersionScope(V0_0, _)` too — the one new elaborate.rs
-    // capability X4a adds beyond X2.2 (§X4.3 item 3).
+    // capability this reverse direction adds beyond wrapping dependency bindings.
     let program = elaborate::elaborate_program_with_versions(
         &file,
         &scope,
@@ -1301,19 +1173,16 @@ pub fn compile_document_v006_xver_with_aux(
         &stages,
         Some(RustyfiVersion::V0_0),
     )?;
-    // Newly REACHABLE from a 0.0.6-rooted compile (previously had exactly
-    // one caller): `dep_csts` here is the foreign 0.1 dependencies' OWN
-    // `cst_v1` trees, so a `:>`-sealed export (e.g. `V01Sealed.t`) is
-    // enforced against the WHOLE merged spine exactly as it would be for a
-    // pure-0.1 consumer (§X4.1 point 2 — the Q2/sealing resolution).
+    // `dep_csts` here is the foreign 0.1 dependencies' OWN `cst_v1` trees, so
+    // a `:>`-sealed export (e.g. `V01Sealed.t`) is enforced against the WHOLE
+    // merged spine exactly as it would be for a pure-0.1 consumer.
     //
-    // `xver_shadows` (Slice X4b) is the ONE thing this arm asks the checker
+    // `xver_shadows` is the ONE thing this arm asks the checker
     // to treat differently, and only for names it has itself just rebound:
     // the exporting module's own alias is still conformance-checked, and
     // only the coercion shadow that FOLLOWS it is exempted from a second
     // check against a signature it deliberately does not match. Empty
-    // whenever no 0.1 `deco` export crossed, which makes every other
-    // reverse-direction compile byte-identical to the pre-X4b path.
+    // whenever no 0.1 `deco` export crossed.
     v1::module_check::check_program_with_xver_shadows(&dep_csts, &program, &xver_shadows)?;
     let env0_v006 = primitives::base_env_with_version(RustyfiVersion::V0_0);
     // `v006_indices` is NEVER empty here (the entry's own bindings are
@@ -1330,52 +1199,37 @@ pub fn compile_document_v006_xver_with_aux(
 }
 
 // ============================================================================
-// X1 forked-name guard (design-cross-version-import.md §5): before splicing
-// a V0_0 dependency's `prelude` into a V0_1 program (above), walk it for
-// the free (unqualified, unshadowed) primitive/type names it references and
-// hard-reject any that is version-forked. This is what keeps X1 *sound*
-// rather than silently wrong (§3.2's R1) — see `compile_document_v1_with_
-// trials`'s dep loop for the actual check against `primitives::
-// forked_prim_names`/`typecheck::forked_type_names`.
+// Forked-name guard: before splicing a V0_0 dependency's `prelude` into a
+// V0_1 program (above), walk it for the free (unqualified, unshadowed)
+// primitive/type names it references and hard-reject any that is
+// version-forked. This is what keeps the splice sound rather than silently wrong —
+// see `compile_document_v1_with_trials`'s dep loop for the actual check.
 //
-// Greenfield: there is no generic CST visitor in this crate (the closest
-// precedent is `typecheck.rs`'s `walk_atom`/`walk_expr` quartet, which walks
-// only `ast::TypeExpr` for tyvars); this is modeled on it, but covers the
-// FULL `cst::TopBinding`/`ast::Expr`/`ast::Pattern`/`ast::TypeExpr` grammar.
+// There is no generic CST visitor in this crate (the closest precedent,
+// `typecheck.rs`'s `walk_atom`/`walk_expr` quartet, walks only
+// `ast::TypeExpr` for tyvars); this is modeled on it but covers the FULL
+// `cst::TopBinding`/`ast::Expr`/`ast::Pattern`/`ast::TypeExpr` grammar.
 //
-// X2b guard-narrowing (design-cross-import-version.md's "Slice X2" §X2.3/
-// X2.4): `free.values` is checked against nothing anymore (X2a removed that
-// half — see `compile_document_v1_with_trials`'s dep-loop comment). For
-// `free.types`, this walk deliberately does NOT collect every textual type
-// occurrence in the dependency anymore — only occurrences at an EXPORT-
-// POSITION surface site, i.e. one a `V0_1` consumer of this dependency can
-// actually observe:
+// Guard-narrowing: `free.values` is checked against nothing. For
+// `free.types` the walk collects EXPORT-POSITION surface sites only — the
+// ones a `V0_1` consumer of this dependency can actually observe:
 //   - a TOP-LEVEL `TopBinding::LetRec`'s (or `and` sibling's) own `: ty`
 //     ascription (`walk_top_binding`'s `LetRec` arm, `boundary = true`);
 //   - a `TopBinding::Module`'s `sig` items (`walk_sig_annot` — a `module ..`
-//     is inherently only ever a top-level/struct-decl construct, never
-//     nested inside an expression, so every site it's walked from is
-//     already boundary);
-//   - a `TopBinding::Type` declaration's body (`walk_type_decl` — kept
-//     UNCONDITIONALLY boundary, never narrowed: unlike a value binding's
-//     RHS, a `type` declaration's ctor payload/synonym body is registered
-//     ONCE, under the merged program's single ambient `V0_1` `Checker`,
-//     never inside an `Ast::VersionScope` — see `v1::xver_adapt`'s module
-//     doc comment — so it is ALWAYS potentially boundary-relevant regardless
-//     of whether anything inside this dependency actually uses it; a flat
-//     splice makes the declared name visible to the consumer too, so
-//     "unused within this dependency" is not provable-safe here).
-// An INTERNAL `Expr::LetRecIn`'s own ascription (a local `let rec : ty = ..`
-// nested inside some OTHER binding's expression body — the one place a
-// forked type name could appear "buried in an expression body" in this
-// port's 0.0.6 grammar, which has no local-lambda-parameter or local-`type`-
-// declaration ascription syntax at all) is now SKIPPED (`boundary = false`,
-// `walk_expr`'s `LetRecIn` arm) — see `walk_rec_binding_body`'s doc comment
-// for the mechanism and the residual-risk note (an unannotated top-level
-// binding whose *inferred* type could still be forked through such a helper
-// is a pre-existing, documented limitation of this purely-textual guard —
-// X3.0(2) — not a new hole; real cross-version misuse is still caught by
-// ordinary HM unification failure at any incompatible use site).
+//     is only ever a top-level/struct-decl construct, never nested inside an
+//     expression, so every site it is walked from is already boundary);
+//   - a `TopBinding::Type` declaration's body (`walk_type_decl`, kept
+//     UNCONDITIONALLY boundary: a `type` declaration's ctor payload/synonym
+//     body is registered ONCE under the merged program's single ambient
+//     `V0_1` `Checker`, never inside an `Ast::VersionScope`, and a flat
+//     splice makes the declared name visible to the consumer — so "unused
+//     within this dependency" is not provable-safe here).
+// An INTERNAL `Expr::LetRecIn` ascription is SKIPPED (`boundary = false`,
+// `walk_expr`'s `LetRecIn` arm); it is the one place a forked type name can
+// appear buried in an expression body in this port's 0.0.6 grammar, which has
+// no local-lambda-parameter or local-`type` ascription syntax at all. See
+// `walk_rec_binding_body`'s doc comment for the mechanism and the residual
+// risk.
 // ============================================================================
 
 /// The free, unqualified global names a spliced V0_0 dependency's
@@ -1387,12 +1241,12 @@ struct FreeGlobals {
     /// Value-position occurrences that could resolve to `base_env`:
     /// `Atomic::Var`/`Ctor`/`OpRef`/`Command`, the `Plain` arm of an
     /// `AnyHorz`/`Vert`/`MathCmdTok` reference, and an unqualified
-    /// `…Elem::Embed`/`MathBot::Embed`. (X2a: no longer checked against
+    /// `…Elem::Embed`/`MathBot::Embed`. (No longer checked against
     /// anything — collected for completeness/tests only, see this module's
     /// banner comment above `walk_top_binding`.)
     values: BTreeSet<String>,
-    /// EXPORT-BOUNDARY type-position occurrences only (X2b — see this
-    /// module's "X2b guard-narrowing" banner comment above): `TypeAtom::Name`
+    /// EXPORT-BOUNDARY type-position occurrences only (see this
+    /// module's "Guard-narrowing" banner comment above): `TypeAtom::Name`
     /// and the `ctor` of `TypeApp::Applied`, collected ONLY from a top-level
     /// binding's own ascription, a module's `sig`, or a `type` declaration's
     /// body — never from a purely-internal/local ascription.
@@ -1492,7 +1346,7 @@ fn walk_top_binding(
                 scope.push_value(&and.binding.name.name);
             }
             // TOP-LEVEL — a consumer-observable export; `boundary = true`
-            // (X2b: this binding's own `: ty` ascription IS export-position
+            // (this binding's own `: ty` ascription IS export-position
             // text).
             walk_rec_binding_body(first, true, scope, out);
             for and in ands {
@@ -1501,13 +1355,10 @@ fn walk_top_binding(
         }
         TopBinding::Let(tl) => {
             // TOP-LEVEL, so this binding's own `: ty` ascription is
-            // export-position text, exactly as `LetRec`'s is (`boundary =
-            // true` there). Missing it let `let x : page = ...` cross the
-            // version boundary silently while `type alias = page` was
-            // rejected -- the same forked name, caught or not depending on
-            // which way the package happened to spell it. The elaborator
-            // itself parses-and-ignores ascriptions, which is why nothing
-            // else had reason to walk this field.
+            // export-position text, exactly as `LetRec`'s is. Skipping it
+            // would let `let x : page = ...` cross silently while `type
+            // alias = page` was rejected — the same forked name, caught or
+            // not depending on which way the package spelled it.
             if let Some(asc) = &tl.ascription {
                 walk_type_expr(&asc.ty, scope, out);
             }
@@ -1610,23 +1461,13 @@ fn walk_top_binding(
 /// `TopBinding::LetRec` and `Expr::LetRecIn`) — every clause's parameters are
 /// scoped to that clause alone.
 ///
-/// `boundary` (X2b,, X2.3/X2.4's guard-narrowing): whether THIS `RecBinding`
-/// is itself a TOP-LEVEL, consumer-observable export
-/// (`TopBinding::LetRec`/its `and` siblings — `true`) or a purely LOCAL
-/// binding nested inside some other binding's expression body
-/// (`Expr::LetRecIn` — `false`). Only when `boundary` is true does the
-/// binding's OWN `: ty` ascription get walked into `out.types` — see this
-/// module's "X2b guard-narrowing" doc block above `collect_free_globals` for
-/// why this is the one site in this port's 0.0.6 grammar where that
-/// distinction is both MEANINGFUL (an internal `let rec`'s ascription can
-/// never itself become part of ANY export's observable signature text) and
-/// SOUND (over-approximating in the other direction — TopBinding::Type
-/// bodies and SigAnnot items — is UNCHANGED, still always boundary-checked;
-/// see the conservatism note there for the ONE class of case this does NOT
-/// close: an unannotated top-level binding whose inferred type happens to
-/// carry a forked shape through an internal helper it returns — a
-/// pre-existing gap of the same textual-heuristic kind X3.0(2) already
-/// documents, not one this change introduces).
+/// `boundary`: whether THIS `RecBinding` is a TOP-LEVEL,
+/// consumer-observable export (`TopBinding::LetRec`/its `and` siblings —
+/// `true`) or a purely LOCAL binding nested inside another binding's
+/// expression body (`Expr::LetRecIn` — `false`). Only when `boundary` is
+/// true does the binding's OWN `: ty` ascription get walked into
+/// `out.types` — see the "Guard-narrowing" banner above
+/// `collect_free_globals`.
 fn walk_rec_binding_body(
     rb: &rustyfi_syntax::cst::ast::RecBinding,
     boundary: bool,
@@ -1728,67 +1569,61 @@ fn walk_patbot_binder(
 }
 
 // ============================================================================
-// Slice X4c — the REVERSE arm's guard on **0.0.6-authored** type text
+// The REVERSE arm's guard on **0.0.6-authored** type text
 // (`compile_document_v006_xver_with_aux`'s `LoadedCst::V0_0` branch and the
 // entry's own prelude).
 //
-// **The misreading.** It is not the mirror of the forward arm's; it is the
-// SAME one, reached from the other side. A merged cross-version program has
-// exactly one `Checker`, and its `version` is hard-coded to `V0_1`
-// (`v1::module_check::check_program_inner`'s `ck.set_version`), on BOTH arms —
-// `elaborate` hoists every `type` declaration out of the `Ast` spine into
-// `Program::type_decls`/`synonym_decls`, so a type declaration is never inside
-// an `Ast::VersionScope` and there is no place left for a per-file version to
-// act. Forward, the 0.0.6-authored text that gets re-read under 0.1's
-// vocabulary is a spliced dependency's; reverse, it is the ENTRY's own prelude
-// plus every native 0.0.6 co-dependency — i.e. potentially the whole 0.0.6
-// corpus. The reading is identical, the file set is not.
+// **The misreading**, reached from the other side of the forward arm's: a
+// merged cross-version program has exactly one `Checker`, hard-coded to
+// `V0_1` (`v1::module_check::check_program_inner`'s `ck.set_version`) on
+// BOTH arms, because `elaborate` hoists every `type` declaration out of the
+// `Ast` spine into `Program::type_decls`/`synonym_decls` — never inside an
+// `Ast::VersionScope`. Forward, the 0.0.6 text re-read under 0.1's
+// vocabulary is a spliced dependency's; reverse, it is the ENTRY's own
+// prelude plus every native 0.0.6 co-dependency — potentially the whole
+// 0.0.6 corpus.
 //
-// That settles the `math` question the forward arm answers with a relabel: the
-// reverse needs the **same** relabel, `math` -> `math-text`
-// (`xver_adapt::relabel_type_decls(_, V0_0, V0_1)`), NOT the mirror
-// `math-text` -> `math`. There is nothing to mirror, because the target
-// vocabulary is `V0_1` in both directions. (The mirror arm exists in
-// `relabel_or_reject_name` and is deliberately NOT wired to the reverse arm's
-// `LoadedCst::V0_1` branch, for the same reason: a foreign 0.1 dependency's
-// text is ALREADY in the ambient vocabulary. See that function's doc comment.)
+// So `math` takes the **same** relabel here as forward, `math` ->
+// `math-text` (`xver_adapt::relabel_type_decls(_, V0_0, V0_1)`), NOT the
+// mirror `math-text` -> `math`: the target vocabulary is `V0_1` either way.
+// (`relabel_or_reject_name`'s mirror arm is deliberately not wired to the
+// reverse arm's `LoadedCst::V0_1` branch — a foreign 0.1 dependency's text
+// is already in the ambient vocabulary.)
 //
-// **Why this scan is narrower than `collect_free_globals`.** The forward arm
-// over-approximates on purpose: it also collects from a `let-rec`'s `: ty`
-// ascription and from a `module .. : sig .. end`'s `val` items. Both are
-// parsed and then entirely ignored by `elaborate.rs` (`v1::xver_adapt`'s
-// module doc comment, "Where the type text that actually matters lives"), so
-// neither can be misread by a `Checker` that never sees it — over-rejecting
-// there costs a 0.1 document one 0.0.6 package it could have had. Reversed,
-// the same over-approximation is not a conservative choice but a wrong one:
-// the bundled 0.0.6 corpus writes forked names in exactly those decorative
-// positions all the time (`vdecoset.satyh`'s `val paper : deco-set`,
-// `math.satyh`'s `direct \frac : [math; math] math-cmd`), and rejecting on
-// them would refuse ordinary 0.0.6 documents for text no phase reads. So this
-// walk collects from `TopBinding::Type` bodies alone, recursing through
-// `TopBinding::Module`'s nested `decls` — exactly the site set
-// `xver_adapt::relabel_type_decls` rewrites, and exactly the text that reaches
+// **Why this scan is narrower than `collect_free_globals`.** The forward
+// arm over-approximates on purpose, also collecting from a `let-rec`'s
+// `: ty` ascription and a `module .. : sig .. end`'s `val` items — both
+// parsed and then ignored by `elaborate.rs`, so over-rejecting on them only
+// costs a 0.1 document a 0.0.6 package it could have had. Reversed, the
+// same over-approximation would be WRONG, not conservative: the bundled
+// 0.0.6 corpus writes forked names in exactly those decorative positions
+// all the time (`vdecoset.satyh`'s `val paper : deco-set`, `math.satyh`'s
+// `direct \frac : [math; math] math-cmd`), so rejecting on them would
+// refuse ordinary 0.0.6 documents for text no phase reads. This walk
+// instead collects from `TopBinding::Type` bodies alone (recursing through
+// `TopBinding::Module`'s nested `decls`) — exactly the site set
+// `xver_adapt::relabel_type_decls` rewrites, and the text that reaches
 // `declare_variant`/`declare_synonym`.
 //
-// **What is refused.** `reject_type_names_from_v006()` — the producer-keyed
-// set, the same one the forward arm's `V0_0` branch uses, so `code` refuses
-// here too and a foreign 0.1 dependency's `code` (the reverse arm's OTHER
-// branch, which keeps the shared `reject_type_names()`) still does not. The
-// whitelist is `{"math"}` and nothing else: unlike the forward arm, this
-// branch has no `classify_deco_exports`/`deco_coercion_prelude` pairing to
-// make a `deco`/`deco-set`/`paren` mention safe, and the 0.1 reading of those
-// names is the wrong one for a 0.0.6-authored consumer anyway (0.0.6's `deco`
-// returns `graphics list`, `name_to_mono("deco", V0_1)` types it as returning
-// a single `graphics`). `page` is the sharp one, exactly as X3.1 says: its
-// bare name lowers to the same nominal `Variant("page",[])` under both
-// versions, so a mismatch is not a type error at all — it is a 9-ctor
-// `Value::Ctor` meeting a `length * length` `Value::Product`.
+// **What is refused.** `reject_type_names_from_v006()` — the same
+// producer-keyed set the forward arm's `V0_0` branch uses, so `code`
+// refuses here too (a foreign 0.1 dependency's `code`, the reverse arm's
+// OTHER branch, keeps the shared `reject_type_names()` and does not). The
+// whitelist is `{"math"}` alone: this branch has no
+// `classify_deco_exports`/`deco_coercion_prelude` pairing to make a
+// `deco`/`deco-set`/`paren` mention safe, and the 0.1 reading of those names
+// is wrong for a 0.0.6-authored consumer anyway (0.0.6's `deco` returns
+// `graphics list`; `name_to_mono("deco", V0_1)` types it as a single
+// `graphics`). `page` is the sharp one: its bare name lowers to the
+// same nominal `Variant("page",[])` under both versions, so a mismatch is
+// not a type error at all — a 9-ctor `Value::Ctor` meeting a `length *
+// length` `Value::Product`.
 // ============================================================================
 
 /// The free type names a 0.0.6-authored `prelude`'s `type` DECLARATIONS
 /// mention — the whole of that prelude's text a merged cross-version
 /// program's single hard-coded-`V0_1` `Checker` actually reads (see this
-/// module's "Slice X4c" banner above for why the decorative
+/// module's banner above for why the decorative
 /// ascription/`sig` sites are deliberately NOT collected here, though
 /// `collect_free_globals` does collect them for the forward arm).
 fn collect_type_decl_globals(
@@ -1830,14 +1665,14 @@ fn walk_type_decls_only(
     }
 }
 
-/// Slice X4c: check one 0.0.6-authored `prelude` on the REVERSE arm and
+/// Check one 0.0.6-authored `prelude` on the REVERSE arm and
 /// return the bindings to splice — relabeled (`math` -> `math-text`) when
 /// that is all it touches, cloned verbatim when it touches nothing, and a
 /// `CompileError::CrossVersionUnsupportedName` naming the offending type
 /// otherwise. `path` is the file the text was authored in (the 0.0.6 entry,
-/// or a native 0.0.6 co-dependency); `slice: "X4c"` is what says which
-/// DIRECTION refused, since `"X3"` is the forward arm's tag for the same
-/// producer-keyed set.
+/// or a native 0.0.6 co-dependency); the resulting error records which
+/// DIRECTION refused, since the forward arm's guard checks the same
+/// producer-keyed set under its own tag.
 fn guard_v006_type_text(
     prelude: &[rustyfi_syntax::cst::TopBinding],
     path: &std::path::Path,
@@ -1857,7 +1692,7 @@ fn guard_v006_type_text(
         });
     }
     if touched.is_empty() {
-        // Byte-identical to the pre-X4c `prelude.extend(cst.prelude.iter()
+        // Byte-identical to the `prelude.extend(cst.prelude.iter()
         // .cloned())` fast path every non-`math` 0.0.6 file takes.
         return Ok(prelude.to_vec());
     }
@@ -1942,7 +1777,7 @@ fn walk_expr(e: &rustyfi_syntax::cst::ast::Expr, scope: &mut XverScope, out: &mu
                 scope.push_value(&and.binding.name.name);
             }
             // INTERNAL — a local binding nested inside some enclosing
-            // binding's own body; `boundary = false` (X2b: this `let rec`'s
+            // binding's own body; `boundary = false` (this `let rec`'s
             // OWN `: ty` ascription is not, by itself, any export's
             // observable signature text — see `walk_rec_binding_body`'s doc
             // comment).
@@ -2504,7 +2339,7 @@ fn walk_type_atom(
 }
 
 /// One `block-frame-breakable` frame currently between its `FrameStart`/
-/// `FrameEnd` markers on the page being walked (§C3).
+/// `FrameEnd` markers on the page being walked.
 struct OpenFrame {
     id: DecoId,
     /// The `FrameStart` marker's own `PlacedLine.x` — the frame's left edge.
@@ -2553,10 +2388,8 @@ struct OpenInlineFrame {
     height: Length,
     depth: Length,
     /// `true` once an earlier fragment of this frame has already fired, i.e.
-    /// the frame really did split. Drives the same S/H/M/T choice `OpenFrame`
-    /// makes: not carried and closing -> `decoS`, carried and closing ->
-    /// `decoT`, not carried and continuing -> `decoH`, carried and continuing
-    /// -> `decoM`.
+    /// the frame really did split — same S/H/M/T choice as `OpenFrame`'s
+    /// `carried` field above.
     carried: bool,
 }
 
@@ -2607,7 +2440,7 @@ fn fire_inline_frame_fragment(
     };
     let width = right - frame.x;
     let pt = (frame.x, doc.geometry.paper_height - frame.baseline_y);
-    // S2: see the block-frame call site's identical comment — `annot.satyh`'s
+    // See the block-frame call site's identical comment — `annot.satyh`'s
     // `\href` fires `register-link-to-uri` from exactly this closure.
     interp.current_deco_id = Some(frame.id);
     let gr = primitives::apply_deco(
@@ -2624,22 +2457,22 @@ fn fire_inline_frame_fragment(
     Ok(())
 }
 
-/// Fire every placed page-break hook and §D decoration, in document order,
-/// now that final page numbers and points are known. THIS is the port's
-/// `make_hook` + `handlePdf.ml:234/337`'s invocation (hooks) and
-/// `EvHorzFrame`/`EvVertFrame` (decos), relocated to the one place that
-/// legally holds `&mut Interp` — the backend produced the geometry (POD
-/// `HookId`/`DecoId` tokens riding inside placed boxes, per `hbox.rs`); this
-/// reads them back and re-enters the evaluator. callback architecture, §D.
+/// Fire every placed page-break hook and decoration, in document order, now
+/// that final page numbers and points are known. This is the port's
+/// callback architecture: `make_hook` + `handlePdf.ml:234/337`'s invocation
+/// (hooks) and `EvHorzFrame`/`EvVertFrame` (decos), relocated to the one
+/// place that legally holds `&mut Interp` — the backend produced the
+/// geometry (POD `HookId`/`DecoId` tokens riding inside placed boxes, per
+/// `hbox.rs`); this reads them back and re-enters the evaluator.
 ///
 /// Sets `interp.current_page` to `Some(i)` for the duration of page `i`'s
-/// walk (§0.5's "during page break" window: `register-destination`/
+/// walk (the "during page break" window: `register-destination`/
 /// `register-link-to-*` — called directly by a hook or, more commonly,
 /// transitively by a fired deco closure, e.g. `annot.satyh`'s `\href` —
 /// only succeed inside this window) and back to `None` once every page is
 /// done.
 ///
-/// **Known scope cuts** (documented deviations, see the plan's Risks):
+/// **Known scope cuts** (documented deviations):
 /// - Frames nested inside a `Tabular` cell or an `EmbeddedBlock`'s stacked
 ///   lines are NOT discovered by this walk — their placed positions would
 ///   need the writers' cell/stack arithmetic replicated lang-side. No
@@ -2666,7 +2499,7 @@ pub fn fire_hooks(interp: &mut eval::Interp, doc: &DocumentValue) -> Result<(), 
     // and `FrameEnd` straddle a page break stays in `open` between pages so its
     // head/middle fragments fire at each boundary and its tail fires when the
     // `FrameEnd` finally arrives. Single-page frames are pushed and removed
-    // within one page's walk exactly as before.
+    // within one page's walk.
     let mut open: Vec<OpenFrame> = Vec::new();
     // Inline frames persist across LINES the same way, and across pages too
     // (the line a frame continues onto can be the first line of the next
@@ -2941,7 +2774,7 @@ fn fire_block_frame_fragment(
         bottom
     };
     let pt = (frame.x, doc.geometry.paper_height - frame_bottom);
-    // S2: record which DecoId is firing so a `register-destination` call
+    // Record which DecoId is firing so a `register-destination` call
     // inside the deco (annot.satyh's `register-location-frame`) can tag
     // itself with it — see `Interp::current_deco_id`'s doc comment.
     interp.current_deco_id = Some(frame.id);
@@ -3059,14 +2892,12 @@ fn fire_embedded_block_frames(
                     }
                 }
                 // An INLINE frame (`inline-frame-outer`/`-inner`/`-breakable`)
-                // can hide in here too, and its deco is the only thing that
-                // draws it. latexcmds' `\fbox`/`\doublebox`/`\ovalbox`/
-                // `\shadowbox` are exactly this — used inside `+listing` items,
-                // whose lines live in an embedded block rather than the page
-                // flow — so 26 of the document's 144 inline frames never fired
-                // at all and every one of those boxes rendered as bare text.
-                // `Tabular`/`Graphics` too — see the identical arm in
-                // `fire_hooks`.
+                // can hide in here too — latexcmds' `\fbox`/`\doublebox`/
+                // `\ovalbox`/`\shadowbox` used inside `+listing` items, whose
+                // lines live in an embedded block rather than the page flow
+                // (26 of 144 inline frames in one document went undrawn
+                // without this). `Tabular`/`Graphics` too — see the identical
+                // arm in `fire_hooks`.
                 PureHorzBox::Frame { .. }
                 | PureHorzBox::Tabular(_)
                 | PureHorzBox::Graphics { .. } => {
@@ -3115,28 +2946,16 @@ fn fire_embedded_block_frames(
     Ok(())
 }
 
-/// Fire one placed inline frame's deco (and any frames nested in its
-/// contents) with its final geometry — the port of `EvHorzFrame`'s
-/// `deco (xpos, yposbaseline) wid hgt dpt` (handlePdf.ml:123-129), point
-/// pre-flipped to PDF y-up exactly like the hook point above. The returned
-/// `graphics list` (absolute page coordinates, `make_frame_deco`'s contract)
-/// is accumulated onto this page's underlay.
-///
-/// `interp.current_page` is already `Some(page)` here (set by `fire_hooks`'s
-/// caller), so a deco body calling `register-link-to-uri` (exactly
-/// `annot.satyh:11-14`) lands its `Annot` on the right page — this is the
 /// Apply one `hook-page-break` closure to `(pbinfo, point)`.
 ///
-/// Extracted so the walk can fire a hook wherever it is found, not only at the
-/// top level of a placed line. `stdja`'s `+section` appends its
-/// `hook-page-break` to the heading's inline boxes, and the heading is wrapped
-/// in the title deco's inline FRAME — so all 7 of this manual's hooks sat one
-/// level down and none of them ever fired. That is what left every TOC page
-/// number unresolved: `stdja.satyh:448` registers `<label>:page` from inside
-/// this closure, so the key never reached the cross-reference table, the
-/// fixpoint, or the aux file, and `get-cross-reference` rendered `?`. On pages
-/// 1-2 alone the port emitted 11 such `?` for easytable and 21 for enumitem
-/// where SATySFi emits none.
+/// Extracted so the walk can fire a hook wherever it is found, not only at
+/// the top level of a placed line: `stdja`'s `+section` appends its
+/// `hook-page-break` to the heading's inline boxes, wrapped in the title
+/// deco's inline FRAME, so all 7 of this manual's hooks sat one level down
+/// and none fired without this. `stdja.satyh:448` registers `<label>:page`
+/// from inside this closure, so an unfired hook left `get-cross-reference`
+/// rendering `?`: 11 such `?` for easytable and 21 for enumitem on pages
+/// 1-2 alone, where SATySFi emits none.
 fn fire_page_break_hook(
     interp: &mut eval::Interp,
     doc: &DocumentValue,
@@ -3165,6 +2984,16 @@ fn fire_page_break_hook(
     }
 }
 
+/// Fire one placed inline frame's deco (and any frames nested in its
+/// contents) with its final geometry — the port of `EvHorzFrame`'s
+/// `deco (xpos, yposbaseline) wid hgt dpt` (handlePdf.ml:123-129), point
+/// pre-flipped to PDF y-up exactly like the hook point above. The returned
+/// `graphics list` (absolute page coordinates, `make_frame_deco`'s contract)
+/// is accumulated onto this page's underlay.
+///
+/// `interp.current_page` is already `Some(page)` here (set by `fire_hooks`'s
+/// caller), so a deco body calling `register-link-to-uri` (exactly
+/// `annot.satyh:11-14`) lands its `Annot` on the right page — this is the
 /// entire `\href` unlock.
 ///
 /// Also the entry point for firing whatever is nested INSIDE a placed box:
@@ -3198,7 +3027,7 @@ fn fire_inline_frame(
                 }
             };
             let pt = (x, doc.geometry.paper_height - baseline_y);
-            // S2: see the block-frame call site's identical comment —
+            // See the block-frame call site's identical comment —
             // `annot.satyh`'s `\href` fires `register-link-to-uri` from exactly
             // this closure.
             interp.current_deco_id = Some(*deco);

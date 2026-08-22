@@ -12,7 +12,7 @@
 # Real names (`registered.<registry-hash>.<pkg>.<version>`) and dependency
 # shapes (`{name, used_as}`) are copied verbatim from the lock; only the
 # store-relative `path` values are synthesized (the real store layout is a
-# saphe implementation detail, out of scope here — Ld3b spec §3.5/§0.2).
+# saphe implementation detail, out of scope here).
 envelopes:
 - name: registered.6f2b80e9bb7c4e8af2104999fc25dbb3.stdlib.0.0.1
   path: "{{ROOT}}/store/stdlib.0.0.1/rustyfi-envelope.yaml"

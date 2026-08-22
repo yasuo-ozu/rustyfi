@@ -1,13 +1,9 @@
 //! Page-level primitives blocking `mitou-report.satyh`/`stdjareport.satyh`:
-//! `clear-page`, `hook-page-break-block`, `page-break-multicolumn`. Two
-//! styles, mirroring existing coverage:
-//! - **Typecheck + eval-through-`compile_document`** (`context_box.rs`/
-//!   `typecheck.rs`'s style) for `clear-page`/`page-break-multicolumn` —
-//!   real source text end to end, checking page counts.
-//! - **Raw `Ast` apply chains through `eval::Interp`** (`hooks_crossref.rs`'s
-//!   style) for `hook-page-break-block`, since that test needs to inspect
-//!   the returned `Value::BlockBoxes`/`interp.hooks` directly, the same way
-//!   the inline `hook-page-break` is pinned there.
+//! `clear-page`, `hook-page-break-block`, `page-break-multicolumn`.
+//! `clear-page`/`page-break-multicolumn` are proven end to end via
+//! `compile_document`; `hook-page-break-block` via raw `Ast` apply chains
+//! through `eval::Interp`, to inspect `Value::BlockBoxes`/`interp.hooks`
+//! directly.
 
 use rustyfi_backend::{
     chop_page, FontKey, FontMetrics, HookId, Length, Page, PageGeometry, PureHorzBox, VertBox,
@@ -36,9 +32,7 @@ impl FontMetrics for Mono {
     }
 }
 
-// ============================================================================
-// Typecheck helpers (mirrors context_box.rs/typecheck.rs).
-// ============================================================================
+// Typecheck helpers.
 
 fn typecheck_str(src: &str) -> Result<(), CompileError> {
     let file = rustyfi_syntax::parse_file(src)?;
@@ -56,7 +50,7 @@ fn assert_well_typed(src: &str) {
     }
 }
 
-// ---- small Ast-builder helpers (mirrors hooks_crossref.rs) -----------------
+// ---- small Ast-builder helpers ---------------------------------------------
 
 fn var(name: &str) -> Ast {
     Ast::Var(name.to_string(), Span::default())
@@ -74,9 +68,8 @@ fn str_lit(s: &str) -> Ast {
     Ast::Str(s.to_string())
 }
 
-// A shared skeleton: a 200pt-wide context, a generous single-column content
-// scheme, and an empty header/footer — just enough page-break plumbing for
-// `clear-page`/`page-break-multicolumn` to exercise real page geometry.
+// A shared skeleton: 200pt-wide context, single-column content scheme,
+// empty header/footer — enough page-break plumbing for real page geometry.
 const PREAMBLE: &str = "
 let-inline ctx \\math m = inline-nil
 in
@@ -88,9 +81,7 @@ let parts pbinfo =
 in
 ";
 
-// ============================================================================
 // `clear-page` (mitou-report.satyh's `document`).
-// ============================================================================
 
 #[test]
 fn clear_page_typechecks_as_block_boxes() {
@@ -126,8 +117,8 @@ fn clear_page_forces_the_second_body_onto_a_new_page() {
 
 #[test]
 fn without_clear_page_both_bodies_share_one_page() {
-    // Same document, minus the `clear-page` marker: control case proving the
-    // 2-page split above is really caused by `clear-page`, not by overflow.
+    // Control: same document minus `clear-page`, proving the 2-page split
+    // above is caused by `clear-page`, not overflow.
     let mono = Mono;
     let src = format!(
         "{PREAMBLE}
@@ -140,9 +131,7 @@ fn without_clear_page_both_bodies_share_one_page() {
     assert_eq!(doc.pages[0].lines.len(), 2);
 }
 
-// ============================================================================
 // backend-level: `chop_page`'s `VertBox::ClearPage` handling directly.
-// ============================================================================
 
 fn text_line() -> VertBox {
     VertBox::Line {
@@ -180,10 +169,7 @@ fn chop_page_swallows_a_leading_clear_page_with_nothing_placed_yet() {
     assert!(vboxes.is_empty());
 }
 
-// ============================================================================
-// `hook-page-break-block` (stdjareport.satyh's `document`) — mirrors
-// hooks_crossref.rs's inline `hook-page-break` coverage.
-// ============================================================================
+// `hook-page-break-block` (stdjareport.satyh's `document`).
 
 #[test]
 fn hook_page_break_block_typechecks_as_block_boxes() {
@@ -221,11 +207,8 @@ fn hook_page_break_block_pushes_a_closure_and_returns_a_hookid_marker() {
 }
 
 /// End to end: evaluate `hook-page-break-block`, place its marker through
-/// the real `chop_page` (the same function `page-break`'s per-page loop
-/// uses), and confirm `fire_hooks` finds and fires it with the placed
-/// page's number — exactly `hooks_crossref.rs`'s
-/// `fire_hooks_invokes_the_closure_with_the_correct_page_number`, one box
-/// kind up.
+/// the real `chop_page`, and confirm `fire_hooks` fires it with the
+/// placed page's number.
 #[test]
 fn hook_page_break_block_fires_through_chop_page_and_fire_hooks() {
     let env = primitives::base_env();
@@ -292,12 +275,10 @@ fn hook_page_break_block_fires_through_chop_page_and_fire_hooks() {
     );
 }
 
-// ============================================================================
 // `page-break-multicolumn` (stdjareport.satyh's `document`) — FAITHFUL: a
-// `[]` shift list is a genuine ONE-column layout whose hooks still fire
-// (`page_break_core`). Real multi-column geometry (2+ shifts) is covered
-// by `crates/rustyfi-lang/tests/multicolumn.rs`.
-// ============================================================================
+// `[]` shift list is a genuine ONE-column layout whose hooks still fire.
+// Real multi-column geometry (2+ shifts) is covered by
+// `crates/rustyfi-lang/tests/multicolumn.rs`.
 
 #[test]
 fn page_break_multicolumn_typechecks_over_the_full_7_arg_signature() {
@@ -333,17 +314,14 @@ fn page_break_multicolumn_with_an_empty_shift_list_is_one_column_and_evaluates()
     assert_eq!(doc.pages[0].lines.len(), 1);
 }
 
-// ============================================================================
-// L7 — the `page-break` retype: version-tagged primitive table
-// proof-of-concept. Proves `VersionSpan`/
-// `RustyfiVersion::has_page_adt()` gating is wired end to end through
-// `PrimDef`, the type table, and `builtin_variants`.
-// ============================================================================
+// The `page-break` retype: version-tagged primitive table proof-of-
+// concept. Proves `VersionSpan`/`RustyfiVersion::has_page_adt()` gating is
+// wired end to end through `PrimDef`, the type table, and
+// `builtin_variants`.
 
-/// v0.0.6: `page-break`'s first argument is still the `page` ADT
-/// (`MonoType::Variant("page", [])`). v0.1: it's a plain `length * length`
-/// tuple (`MonoType::Product([Length, Length])`), never the ADT — the two
-/// resolved type schemes must differ.
+/// v0.0.6: `page-break`'s first arg is still the `page` ADT
+/// (`Variant("page", [])`); v0.1: a plain `length * length` tuple, never
+/// the ADT — the two resolved type schemes must differ.
 #[test]
 fn page_break_retypes_per_version() {
     let v006 = primitive_type_with_version("page-break", RustyfiVersion::V0_0)
@@ -384,17 +362,12 @@ fn page_break_retypes_per_version() {
         other => panic!("expected page-break's type to be a function, got {other:?}"),
     }
 
-    // The two resolved schemes are genuinely different shapes (ADT variant
-    // vs. plain tuple) — a debug-string inequality is a cheap extra check
-    // on top of the structural assertions above.
     assert_ne!(format!("{v006:?}"), format!("{v01:?}"));
 }
 
-/// `page`'s `VariantDecl` is registered under v0.0.6 (where `has_page_adt()`
-/// is true) and absent under v0.1 (where it's false) — the ADT is genuinely
-/// GONE in 0.1, not merely discouraged: a v0.1 program that writes
-/// `A4Paper` must see an unbound-constructor error, which requires `page`'s
-/// declaration to be entirely missing from `builtin_variants_with_version`.
+/// `page`'s `VariantDecl` is registered under v0.0.6 (`has_page_adt()`
+/// true) and absent under v0.1 — a v0.1 program writing `A4Paper` must
+/// see an unbound-constructor error.
 #[test]
 fn page_adt_gone_under_v0_1() {
     let v006_variants = builtin_variants_with_version(RustyfiVersion::V0_0);

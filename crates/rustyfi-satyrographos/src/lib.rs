@@ -1,53 +1,52 @@
 //! Satyrographos-style package management for the `rustyfi` port.
 //!
-//! This crate is the clap-free library half of the chimera CLI (see the
-//! plan document): given an options struct and a source path, it
-//! materialises SATySFi packages under
+//! This crate is the clap-free library half of the chimera CLI: given an
+//! options struct and a source path, it materialises SATySFi packages under
 //! `<lib_root>/dist/{packages,fonts,hash,md}/` (mirroring real
 //! Satyrographos' layout) and records per-package receipts under
 //! `<lib_root>/.satyrographos/receipts/`, so the thin `rustyfi` shell
 //! only parses arguments and calls in here.
 //!
-//! ## Phase 1 scope (implemented here)
+//! ## Phase 1
 //!
-//! - Root resolution (`roots`, plan §3/§4) and the managed-root marker.
+//! - Root resolution (`roots`) and the managed-root marker.
 //! - `rustyfi-package.toml` manifest parsing plus the no-manifest
-//!   `packages/`-flat-copy fallback (`manifest`, plan §5.1/§5.5).
+//!   `packages/`-flat-copy fallback (`manifest`).
 //! - Directory *and* `.tar.gz`/`.tgz` sources, with a path-traversal
-//!   ("zip-slip") guard (`archive`/`stage`, plan §6/§10).
-//! - Per-package receipts (`receipts`, plan §5.2).
+//!   ("zip-slip") guard (`archive`/`stage`).
+//! - Per-package receipts (`receipts`).
 //! - The atomic install transaction — stage under `<root>/.satyrographos/
 //!   tmp/`, then swap into place, orphaning a prior receipt's files on
-//!   `--force` (`stage`, plan §6).
-//! - `ops::{install, uninstall, list, status}` (plan §4.1-4.4).
-//! - Phase 4's `Satyristes` S-expression reader (`satyristes`, plan §5.5):
+//!   `--force` (`stage`).
+//! - `ops::{install, uninstall, list, status}`.
+//! - Phase 4's `Satyristes` S-expression reader (`satyristes`):
 //!   an alternative front-end that feeds the same install pipeline, so
 //!   packages authored for real (OCaml) Satyrographos install directly.
 //!
-//! ## Phase 2 scope (also implemented here)
+//! ## Phase 2
 //!
 //! - The project-level `Satyristes` manifest + `Satyristes.lock`
-//!   lockfile (`satyrfile`/`lockfile`, plan §5.3).
+//!   lockfile (`satyrfile`/`lockfile`).
 //! - `ops::reconcile::install_manifest` — the no-`PATH` `satyrographos
 //!   install`: diff each manifest entry's source hash against the lockfile
 //!   and the installed receipts, and re-materialise only changed/missing
-//!   entries via the phase-1 `install` primitive (plan §8 phase 2).
+//!   entries via the phase-1 `install` primitive.
 //!
-//! ## Phase 3 scope (also implemented here)
+//! ## Phase 3
 //!
-//! - The remote registry (`registry`, plan §5.4): a git-hosted or
+//! - The remote registry (`registry`): a git-hosted or
 //!   plain-directory TOML index (`packages/<name>.toml`), acquired by shelling
 //!   out to `git` (or read in place for a local index), with per-version
 //!   `tarball_url` + `sha256`.
 //! - `ops::registry_install` — the fetch → verify → materialise algorithm:
 //!   download the tarball, verify its SHA-256 *before* touching `dist/`, then
 //!   feed it through the phase-1 install pipeline with a `registry` receipt
-//!   source (plan §5.4 steps 1-4).
-//! - `{ registry = … }` sources in `Satyristes` now reconcile, locking the
+//!   source.
+//! - `{ registry = … }` sources in `Satyristes` reconcile, locking the
 //!   resolved `(version, url, sha256)` into `Satyristes.lock` for reproducible
 //!   re-installs without re-consulting the index.
 //! - `ops::{search, update}` — index substring search and lockfile-vs-index
-//!   upgrade reporting (plan §8).
+//!   upgrade reporting.
 //! - The HTTP transport (`registry`'s `http` module) is behind the `http`
 //!   cargo feature, default-on for this crate (saphe phase 7d slice S1);
 //!   `--no-default-features` builds a pure-offline embedder with no HTTP
@@ -59,13 +58,12 @@
 //!   and offline mode turns any would-be network request into a clean
 //!   [`error::Error::Offline`] instead of a silent fetch.
 //! - `{ git = … }` sources in `Satyristes` (phase 7d slice S3): cloned via
-//!   the `git` CLI (`registry::acquire_git_source`), pinned to `rev` when
-//!   given, into their own cache leaf honouring `--offline`/`$RUSTYFI_OFFLINE`
-//!   the same way a registry archive does; the checkout is then materialised
-//!   through the phase-1 install pipeline exactly like a `{ path = … }`
-//!   source, with the lockfile recording the git url and resolved commit sha.
-//!   Optional bearer-token auth for the HTTP tarball transport
-//!   (`RUSTYFI_REGISTRY_TOKEN`).
+//!   the `git` CLI (`registry::acquire_git_source`) into their own cache leaf,
+//!   honouring `--offline`/`$RUSTYFI_OFFLINE` the same way a registry archive
+//!   does; the checkout is then materialised through the phase-1 install
+//!   pipeline exactly like a `{ path = … }` source, with the lockfile
+//!   recording the git url and resolved commit sha. Optional bearer-token
+//!   auth for the HTTP tarball transport (`RUSTYFI_REGISTRY_TOKEN`).
 //!
 //! Phase 5 (system fonts) is out of scope here.
 
@@ -92,7 +90,7 @@ pub use config::{Config, Registries};
 pub use error::Error;
 pub use manifest::Lang;
 
-// Flat re-exports of the public API named in the plan's §7.2.
+// Flat re-exports of the crate's public API.
 pub use ops::build::{build, BuildOptions, BuildReport};
 pub use ops::install::{install, install_url, is_url, InstallOptions, InstallReport};
 pub use ops::list::{list, PackageSummary};
@@ -100,19 +98,19 @@ pub use ops::reconcile::{install_manifest, install_manifest_reg, install_manifes
 pub use ops::status::{status, PackageStatus, StatusReport};
 pub use ops::uninstall::{uninstall, RootOptions};
 
-// Phase-2 manifest/lockfile schema types (plan §5.3).
+// Phase-2 manifest/lockfile schema types.
 pub use lockfile::{LockEntry, Lockfile};
 pub use satyristes::{find_upward, Project};
 pub use source::{LibraryEntry, RegistryConfig, RegistryKind, SourceSpec};
 
-// Phase-3 registry (plan §5.4): index client + the fetch/verify/materialize
+// Phase-3 registry: index client + the fetch/verify/materialize
 // entry points and the new `search`/`update` operations.
 pub use ops::registry_install::{install_registry, Resolved};
 pub use ops::search::{search, SearchHit};
 pub use ops::update::{update, update_multi, Upgrade, UpdateReport};
 pub use registry::{AcquiredRepo, MultiRegistryDepSource, RegistryDepSource, RegistryOptions};
 
-// Phase-7c solver (plan §7c / design-saphe-solver.md): the version/constraint
-// value types and the backtracking dependency resolver.
+// Phase-7c solver: the version/constraint value types and the backtracking
+// dependency resolver.
 pub use solve::{solve, DepSource, Solution};
 pub use version::{Constraint, Version};

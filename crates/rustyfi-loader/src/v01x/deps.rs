@@ -1,23 +1,16 @@
-//! `rustyfi-deps.yaml` decoder — Ld3b-1 (Axis B increment Ld3b, §3.1/§5.1 of
-//! `/home/yasuo/.claude/jobs/a7244c0b/tmp/axis-b-ld3b.md`). Transcribed from
+//! `rustyfi-deps.yaml` decoder. Transcribed from
 //! `saphe-split @ b836d512689248d18970674021ecaca409e0d897`,
 //! `src/frontend/depsConfig.ml` (decoder) +
 //! `src-common/envelopeSystemBase.ml:89-107` (record shapes) +
 //! `src/frontend/configUtil.ml` / `src-common/commonUtil.ml` (field
 //! validators) + `src-util/absPath.ml` (absolute-path normalization).
 //!
-//! This is the compiler-side **decoder only**: nothing in this crate calls
-//! [`load`] yet (that wiring — the envelope-graph resolver and `open_doc`'s
-//! deps gate — is Ld3b-2). `#![allow(dead_code)]` at the top of this module
-//! reflects exactly that; every item here is exercised by this module's own
-//! unit tests.
-//!
 //! `rustyfi-deps.yaml` is what `saphe` *writes* before invoking `rustyfi
 //! build --deps <path>`; it is gitignored everywhere upstream (no in-tree
 //! fixture exists), so this module's shape is confirmed only by upstream's
 //! encoder/decoder pair agreeing field-for-field (`src-saphe/depsConfig.ml`
-//! vs. `src/frontend/depsConfig.ml`) — see the Ld3b spec §0.2. The future
-//! `rustyfi-saphe` crate (plan Sa1) exchanges this same file format and MUST
+//! vs. `src/frontend/depsConfig.ml`). The future
+//! `rustyfi-saphe` crate exchanges this same file format and MUST
 //! use the same YAML crate as this module (`serde_yaml`, see this crate's
 //! `Cargo.toml`).
 #![allow(dead_code)]
@@ -213,9 +206,9 @@ mod tests {
 
     /// Write `content` to a unique file in the OS temp dir; removed on drop.
     /// Mirrors `tests/loader.rs`'s `TempDir` helper, scaled down to a single
-    /// file since `deps.rs`'s unit tests never need a directory tree (deps
-    /// configs reference envelopes by absolute *path string*, not by
-    /// reading through them — Ld3b-1 is decode-only).
+    /// file since these unit tests never need a directory tree: a deps config
+    /// references envelopes by absolute *path string*, never by reading
+    /// through them.
     struct TempFile(PathBuf);
 
     impl TempFile {
@@ -251,7 +244,7 @@ mod tests {
         "/tests/fixtures/v01x/deps/deps-demo-shaped.yaml.tpl"
     ));
 
-    /// d1: the empty-graph template, via the real (file-reading) `load`.
+    /// The empty-graph template, via the real (file-reading) `load`.
     #[test]
     fn deps_minimal_decodes() {
         let f = TempFile::write("minimal", DEPS_MINIMAL);
@@ -261,7 +254,7 @@ mod tests {
         assert!(cfg.explicit_test_dependencies.is_empty());
     }
 
-    /// d2: the demo-lock-shaped 3-envelope template (stdlib / math /
+    /// The demo-lock-shaped 3-envelope template (stdlib / math /
     /// tabular), via `load`, plus `make_used_as_map`'s contents.
     #[test]
     fn deps_demo_shaped_decodes_and_used_as_map() {
@@ -323,7 +316,7 @@ mod tests {
         assert_eq!(map.get("Foo").map(String::as_str), Some("pkg.b"));
     }
 
-    /// d4: `test_dependencies` absent entirely is an error — every one of
+    /// `test_dependencies` absent entirely is an error — every one of
     /// the three top-level keys is `get` (required), not `get_or_else`.
     #[test]
     fn deps_missing_test_dependencies_errors() {
@@ -332,7 +325,7 @@ mod tests {
         assert!(matches!(err, LoadError::DepsConfigDecode { .. }));
     }
 
-    /// d3: a relative `envelopes[].path` is rejected (`abs_path_decoder`).
+    /// A relative `envelopes[].path` is rejected (`abs_path_decoder`).
     #[test]
     fn deps_negative_relative_envelope_path() {
         let f = TempFile::write(
@@ -355,7 +348,7 @@ test_dependencies: []
         }
     }
 
-    /// d3: `..` walking past the root of an absolute path is an error
+    /// `..` walking past the root of an absolute path is an error
     /// (`Alist.chop_last` on an empty accumulator, `absPath.ml:68-78`).
     #[test]
     fn deps_negative_dotdot_past_root() {
@@ -388,7 +381,7 @@ test_dependencies: []
         assert_eq!(parse_abs_path("/.."), None);
     }
 
-    /// d3: a lowercase `used_as` is rejected (`is_uppercased_identifier`).
+    /// A lowercase `used_as` is rejected (`is_uppercased_identifier`).
     #[test]
     fn deps_negative_lowercase_used_as() {
         let f = TempFile::write(
@@ -409,7 +402,7 @@ test_dependencies: []
         }
     }
 
-    /// d3: `used_as` with an embedded space is rejected (not `[-A-Za-z0-9]`).
+    /// `used_as` with an embedded space is rejected (not `[-A-Za-z0-9]`).
     #[test]
     fn deps_negative_used_as_with_space() {
         let f = TempFile::write(
@@ -427,8 +420,8 @@ test_dependencies: []
 
     /// Two `envelopes[].name` entries sharing a name decode successfully —
     /// the *conflict* is a resolver-level error (`EnvelopeNameConflict`,
-    /// `closedEnvelopeDependencyResolver.ml:50-51`), which is Ld3b-2
-    /// (`closed::sort_envelopes`) territory, not this decoder's.
+    /// `closedEnvelopeDependencyResolver.ml:50-51`), which is
+    /// `closed::sort_envelopes` territory, not this decoder's.
     #[test]
     fn deps_duplicate_envelope_name_decodes_fine() {
         let f = TempFile::write(

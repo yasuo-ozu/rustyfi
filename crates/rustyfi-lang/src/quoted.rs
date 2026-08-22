@@ -1,29 +1,20 @@
 //! Quoted text in its **compiled** form — what `{ … }` / `'< … >` / `${ … }`
-//! become once [`crate::compile`] has lowered them, and what
+//! become once `crate::compile` has lowered them, and what
 //! [`crate::value::Value`]'s `InlineText`/`BlockText`/`MathText` variants
 //! carry.
 //!
-//! Phase 3 of (§4, "THE CRUX").
-//!
 //! # Why these exist
 //!
-//! Quoted text used to be carried as raw [`crate::ast`] nodes plus a captured
-//! `Env`, and resolved **lazily, by string, at layout time**: a `\emph`'s
-//! command name went through `env.lookup` on every occurrence, and every
-//! embedded expression re-entered the compiler mid-evaluation (memoized by AST
-//! pointer address) with global constant-folding switched *off*, because the
-//! captured environment's local frames were statically unknown.
+//! The compiler *does* know the lexical scope at a quote site — it is exactly
+//! the scope stack at that point — so command names and embedded expressions
+//! are resolved there, once, like any other expression, rather than lazily by
+//! string at layout time. What survives into the runtime is this name-free
+//! tree: every `Cmd` already holds the `CompiledExpr` that yields its
+//! command value, and every argument is already compiled. Nothing here is ever
+//! looked up by name.
 //!
-//! None of that is necessary. The compiler *does* know the lexical scope at
-//! the quote site — it is exactly the scope stack at that point — so command
-//! names and embedded expressions are resolved there, once, like any other
-//! expression. What survives into the runtime is this name-free tree: every
-//! `Cmd` already holds the [`CompiledExpr`] that yields its command value, and
-//! every argument is already compiled.
-//!
-//! The captured `Env` is still needed (a compiled node resolves its *locals*
-//! against the environment it runs in), but nothing here is ever looked up by
-//! name any more.
+//! The captured `Env` is still needed — a compiled node resolves its *locals*
+//! against the environment it runs in.
 //!
 //! # Shape
 //!
@@ -63,9 +54,8 @@ pub enum IText {
     Cmd {
         /// Yields the command's value — the `\emph` binding, already resolved
         /// against the quote site's lexical scope. Running it can still fail
-        /// with the same "unbound inline command '…' at run time" error the
-        /// `env.lookup` used to produce, for the defensive case where the name
-        /// was in no compile-time scope.
+        /// with "unbound inline command '…' at run time", for the defensive
+        /// case where the name was in no compile-time scope.
         cmd: CompiledExpr,
         args: Vec<CmdArg>,
     },
@@ -121,8 +111,6 @@ pub enum MathElem {
 }
 
 impl IText {
-    /// Build an `#expr;` embed element, compiling `expr` against `env`.
-    ///
     /// [`crate::primitives::read_inline`] is public and takes these elements,
     /// so there has to be a way to build one from outside the crate — but
     /// `CompiledExpr` is deliberately crate-internal, so the compile step

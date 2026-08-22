@@ -4,12 +4,11 @@
 //!   [`read_to_string`], [`read_dir_paths`], [`remove_file_if_exists`], and the
 //!   atomic [`write_toml_atomic`] (temp-sibling + rename), each threading the
 //!   operated-on path into [`Error::io`] uniformly;
-//! - an RFC 3339 UTC timestamp for receipts (plan §5.2's `installed_at`) and
-//!   SHA-256 digests (plan §5.2's optional-phase-1 `sha256`). Kept here rather
-//!   than pulling in `chrono`: the plan (§7.1) names `sha2`/`toml`/`tar`/
-//!   `flate2` as the crate's deps and nothing for time, and the timestamp is
-//!   only ever *written*, never parsed back, so a hand-rolled formatter
-//!   suffices.
+//! - an RFC 3339 UTC timestamp for receipts (`installed_at`) and SHA-256
+//!   digests (a receipt's optional `sha256`). Kept here rather than pulling
+//!   in `chrono`: the crate's deps are `sha2`/`toml`/`tar`/`flate2` and
+//!   nothing for time, and the timestamp is only ever *written*, never
+//!   parsed back, so a hand-rolled formatter suffices.
 
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -153,8 +152,8 @@ pub fn sha512_file(path: &Path) -> Result<String, Error> {
     Ok(hasher.finalize().iter().map(|b| format!("{b:02x}")).collect())
 }
 
-/// A deterministic content digest of the source at `path` (plan §5.3's
-/// content-addressed lockfile hash). A regular file hashes to its own
+/// A deterministic content digest of the source at `path` — the
+/// content-addressed lockfile hash. A regular file hashes to its own
 /// [`sha256_file`]; a directory hashes to a Merkle-style digest over its
 /// files — each contributing `"<rel-path>\0<file-sha256>\n"` in sorted order,
 /// so the digest is stable regardless of directory-iteration order and

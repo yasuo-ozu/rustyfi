@@ -11,7 +11,7 @@ rustyfi-syntax.workspace = true
 safegraph.workspace = true
 thiserror.workspace = true
 serde.workspace = true
-# Decode-only, scoped to this crate (Ld3b spec §4): both `rustyfi-deps.yaml`
+# Decode-only, scoped to this crate: both `rustyfi-deps.yaml`
 # and `rustyfi-envelope.yaml` are small, trusted, saphe-written/hand-written
 # YAML documents. `serde_yaml` is archived upstream but libyaml-derived like
 # the OCaml `Yaml` package this format's own decoder (`yamlDecoder.ml`) is

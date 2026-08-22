@@ -1,15 +1,13 @@
-//! Chimera CLI dispatch tests (plan §1/§4/§9): drive the *built* binary
-//! under its three personalities by overriding `argv[0]` (`Command::arg0` on
-//! unix, and via a real hardlink alias for the `multicall install` helper),
-//! plus one install→loader-resolves round trip proving the installer's
-//! materialised layout matches `rustyfi_loader`'s `@require:` contract.
+//! Chimera CLI dispatch tests: drive the *built* binary under its three
+//! personalities by overriding `argv[0]` (`Command::arg0` on unix, and via a
+//! real hardlink alias for the `multicall install` helper), plus one
+//! install→loader-resolves round trip proving the installer's materialised
+//! layout matches `rustyfi_loader`'s `@require:` contract.
 
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-/// The built `rustyfi` binary (cargo provides this env var to the
-/// integration tests of the crate that defines the `[[bin]]`).
 fn bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_rustyfi"))
 }
@@ -51,9 +49,8 @@ fn argv0_rustyfi_is_compiler_and_package_manager() {
         stdout.contains("Compile a SATySFi"),
         "rustyfi --help should describe the compiler:\n{stdout}"
     );
-    // One personality carrying both roles. The package commands used to hide
-    // under a `satyrographos` subcommand; they are top-level now, so the
-    // compiler's own help lists them.
+    // One personality carrying both roles: the package commands are top-level,
+    // so the compiler's own help lists them.
     assert!(
         stdout.contains("install") && stdout.contains("search"),
         "rustyfi --help should offer the package commands:\n{stdout}"
@@ -79,14 +76,11 @@ fn argv0_satyrographos_is_package_manager() {
 #[cfg(unix)]
 #[test]
 fn package_commands_are_top_level() {
-    // The package-manager entry points, reached directly — no `satyrographos`
-    // subcommand in between.
     let root = tmpdir("sg-subcommand");
     let out = run_as("rustyfi", &["list", "--dest", root.to_str().unwrap()]);
     assert!(out.status.success());
     assert!(String::from_utf8_lossy(&out.stdout).contains("(no packages installed)"));
 
-    // And the old nesting is gone rather than silently accepted.
     let out = run_as(
         "rustyfi",
         &["satyrographos", "list", "--dest", root.to_str().unwrap()],
@@ -125,14 +119,13 @@ fn multicall_install_creates_working_aliases() {
     // Invoking the real alias file (its own basename drives dispatch).
     let root = tmpdir("aliases-root");
     let out = Command::new(&satyro_alias)
-        .arg0("satyrographos") // basename is already satyrographos; explicit for clarity
+        .arg0("satyrographos")
         .args(["list", "--dest", root.to_str().unwrap()])
         .output()
         .expect("spawn alias");
     assert!(out.status.success());
     assert!(String::from_utf8_lossy(&out.stdout).contains("(no packages installed)"));
 
-    // Re-running is idempotent (targets already point at this exe).
     let out = Command::new(bin())
         .args(["multicall", "install", "--dir", dir.to_str().unwrap()])
         .output()
@@ -143,17 +136,14 @@ fn multicall_install_creates_working_aliases() {
     );
 }
 
-/// Phase-2 manifest mode (plan §5.3, §8): `satyrographos install` with no
-/// PATH locates `Satyristes` by upward search from the process's working
-/// directory, reconciles it, and writes `Satyristes.lock`. A second run with
-/// nothing changed reports every entry as `unchanged`.
+/// Manifest mode: `satyrographos install` with no PATH locates
+/// `Satyristes` via upward search from cwd.
 #[cfg(unix)]
 #[test]
 fn manifest_mode_install_reconciles_and_writes_lock() {
     use std::os::unix::process::CommandExt as _;
     let work = tmpdir("manifest-mode");
 
-    // A vendored package source.
     let pkg = work.join("vendor/mylib");
     std::fs::create_dir_all(pkg.join("packages")).unwrap();
     std::fs::write(
@@ -170,7 +160,6 @@ fn manifest_mode_install_reconciles_and_writes_lock() {
     .unwrap();
     std::fs::write(pkg.join("packages/mylib.satyh"), "let mylib = 1\n").unwrap();
 
-    // The project directory with its Satyristes (the process cwd for the run).
     let proj = work.join("proj");
     std::fs::create_dir_all(&proj).unwrap();
     std::fs::write(
@@ -199,7 +188,6 @@ fn manifest_mode_install_reconciles_and_writes_lock() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("installed mylib"), "{stdout}");
 
-    // Second run: nothing changed → skipped.
     let out = run("second");
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
@@ -227,11 +215,10 @@ fn manifest_mode_without_a_manifest_exits_3() {
 }
 
 /// A leading global flag (`--config`, before the subcommand) must behave
-/// exactly like the same flag after it — this is the bug `dispatch::get_matches`
-/// exists to fix. `--config` names a config FILE that must exist to be read
-/// (see `cmd::registry_fallbacks`'s doc comment), so give it a real,
-/// registry-less one; the point of this test is dispatch, not what the file
-/// says.
+/// exactly like the same flag after it — the bug `dispatch::get_matches`
+/// exists to fix. `--config` names a file that must exist to be read, so
+/// give it a real, registry-less one; the point here is dispatch, not the
+/// file's contents.
 #[cfg(unix)]
 #[test]
 fn leading_global_flag_reaches_a_subcommand() {
@@ -278,13 +265,12 @@ fn leading_global_flag_reaches_a_subcommand() {
 }
 
 /// The narrower failure mode: with nothing else on the command line to
-/// expose the mistake, `rustyfi --config F install` used to parse
-/// SUCCESSFULLY as compile mode with `input = "install"` (attempting to
-/// compile a file literally named `install`) instead of dispatching the
-/// `install` subcommand — because `--config` had already matched before
-/// clap reached the word `install`. `install` with no PATH means "reconcile
-/// the nearest Satyristes" (no leading flag needed to see that); a leading
-/// flag must resolve the exact same ambiguity the exact same way.
+/// expose the mistake, `rustyfi --config F install` parses SUCCESSFULLY as
+/// compile mode with `input = "install"` (a file literally named `install`)
+/// instead of dispatching the `install` subcommand, because `--config` has
+/// already matched before clap reaches the word `install`. `install` with no
+/// PATH means "reconcile the nearest Satyristes"; a leading flag must resolve
+/// the exact same ambiguity the exact same way.
 #[cfg(unix)]
 #[test]
 fn leading_global_flag_does_not_swallow_a_bare_subcommand_name() {
@@ -319,9 +305,9 @@ fn leading_global_flag_does_not_swallow_a_bare_subcommand_name() {
     assert_eq!(with_leading_flag.stderr, bare.stderr);
 }
 
-/// The pre-fix nesting closed off by `package_commands_are_top_level` must
-/// stay closed even with a leading global flag in front of it — the hoist
-/// pre-pass must not accidentally resurrect `rustyfi satyrographos list`.
+/// The nesting closed off by `package_commands_are_top_level` must stay
+/// closed even with a leading global flag in front of it — the hoist pre-pass
+/// must not accidentally resurrect `rustyfi satyrographos list`.
 #[cfg(unix)]
 #[test]
 fn leading_global_flag_does_not_revive_the_old_nesting() {
@@ -367,14 +353,11 @@ fn leading_global_flag_help_is_subcommand_specific() {
     assert_eq!(with_leading_flag.stdout, direct.stdout);
 }
 
-/// The value-aware fix's own case: a flag VALUE that happens to collide with
-/// a subcommand name (`--lib-root search install PATH`, `search` being
-/// `--lib-root`'s value, not a subcommand) must not be mistaken for the
-/// split point — the pre-pass must skip over it and hoist at the REAL
-/// subcommand (`install`) instead. Proven end-to-end: a lib-root directory
-/// literally named `search` ends up holding the installed package, which can
-/// only happen if `search` was consumed as `--lib-root`'s value and `install`
-/// dispatched with `PATH` as its package source.
+/// A flag VALUE that collides with a subcommand name (`--lib-root search
+/// install PATH`, `search` being `--lib-root`'s value, not a subcommand)
+/// must not be mistaken for the split point; the pre-pass must hoist at the
+/// REAL subcommand (`install`). Proven by a lib-root directory literally
+/// named `search` ending up holding the installed package.
 #[cfg(unix)]
 #[test]
 fn leading_flag_value_matching_a_subcommand_name_is_not_the_split_point() {
@@ -396,8 +379,6 @@ fn leading_flag_value_matching_a_subcommand_name_is_not_the_split_point() {
     .unwrap();
     std::fs::write(work.join("pkgsrc/packages/mylib.satyh"), "let mylib = 1\n").unwrap();
 
-    // `search` is BOTH a real subcommand name and, here, a relative lib-root
-    // directory name — the exact collision the fix closes.
     let out = Command::new(bin())
         .arg0("rustyfi")
         .current_dir(&work)
@@ -446,16 +427,15 @@ fn leading_global_flag_equals_spelling_reaches_a_subcommand() {
     assert!(String::from_utf8_lossy(&out.stdout).contains("(no packages installed)"));
 }
 
-/// End-to-end phase-1 contract: install a tiny package into a temp root
+/// End-to-end contract: install a tiny package into a temp root
 /// (through the library API the CLI calls into), then load a document that
 /// `@require:`s it against that same root — proving the installer's nested
 /// `dist/packages/<name>/<name>.satyh` layout is exactly what the loader's
-/// third resolver candidate (plan §3) finds.
+/// third resolver candidate finds.
 #[test]
 fn install_then_loader_resolves_the_package() {
     let work = tmpdir("roundtrip");
 
-    // A minimal manifest package declaring a library `greetlib`.
     let src = work.join("src");
     std::fs::create_dir_all(src.join("packages")).unwrap();
     std::fs::write(
@@ -487,10 +467,8 @@ fn install_then_loader_resolves_the_package() {
     )
     .expect("install ok");
 
-    // Sanity: materialised at the nested layout.
     assert!(root.join("dist/packages/greetlib/greetlib.satyh").is_file());
 
-    // A document that requires the just-installed package.
     let doc = work.join("doc.saty");
     std::fs::write(&doc, "@require: greetlib\ndocument (||) '<>\n").unwrap();
 
@@ -503,7 +481,6 @@ fn install_then_loader_resolves_the_package() {
     )
     .expect("loader must resolve @require: greetlib against the install root");
 
-    // The loaded program contains the library plus the entry document.
     let names: Vec<String> = program
         .files
         .iter()

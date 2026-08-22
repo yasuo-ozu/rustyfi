@@ -1,148 +1,55 @@
-//! Structural CST-to-CST transcription: `cst_v1::ast` -> `cst::ast`
-//! (the finale spec's §1-§3).
+//! Structural CST-to-CST transcription: `cst_v1::ast` -> `cst::ast`.
 //!
-//! **Strategy (§1 of the finale spec).** Rather than widening
-//! `elaborate.rs`'s ~30 expression-lowering helpers to also walk
-//! `cst_v1::ast` nodes (which would re-implement the entire recursive walk —
-//! operator-precedence climbing, itemize regrouping, pattern currying — over
-//! a second node type), this module converts a parsed [`cst_v1::FileV1`]
-//! into ordinary [`cst::TopBinding`]s / [`cst::ast::Expr`], and the caller
-//! (`compile_document_v1` in `lib.rs`) assembles one synthetic [`cst::File`]
-//! — exactly the shape the CLI's `merge_program` already produces for
-//! 0.0.6 — and hands it to the **untouched** `elaborate::elaborate_program`
-//! -> `typecheck_with_version(V0_1)` -> `compile`/`eval` pipeline.
+//! Rather than widen `elaborate.rs`'s ~30 expression-lowering helpers to walk a
+//! second node type, this converts a parsed [`cst_v1::FileV1`] into ordinary
+//! [`cst::TopBinding`]s / [`cst::ast::Expr`]; the caller assembles one
+//! synthetic [`cst::File`] — the shape `merge_program` already produces for
+//! 0.0.6 — and hands it to the untouched elaborate -> typecheck -> compile
+//! pipeline. Both sides import the same `rustyfi_syntax::leaf` token types, so
+//! most of this moves tokens rather than re-encoding them. The one non-1:1
+//! seam is `lower_cmd_tail`: `cst_v1` kept the older "one application-chain
+//! `Expr`" argument encoding, `cst.rs` has since moved to a flat `AppArg`
+//! list.
 //!
-//! **Why this is near-mechanical.** `cst_v1::ast` imports the very same
-//! `rustyfi_syntax::leaf` token types `cst::ast` uses — `VarTok`, `DefEqTok`,
-//! `ParenGroup<()>`, `LengthTok`, keyword leaves, … are literally identical
-//! types on both sides, so most of the transcription below *moves/clones
-//! tokens*, it does not re-encode them. The one genuinely non-1:1 seam is
-//! the `CmdTail` bridge (§3.3, [`lower_cmd_tail`]): `cst_v1` kept the older
-//! "one application-chain `Expr`" argument encoding, while `cst.rs` has
-//! since moved to a flat `AppArg` list.
+//! What does NOT lower — a real [`LowerError`], never a panic:
 //!
-//! **What this module deliberately does NOT lower** (§3.4 of the finale
-//! spec — a real user-facing [`LowerError`], never a panic):
+//! - a labeled-optional BUNDLE on an inline/block/math *command* parameter,
+//!   and `?(…)` at the TYPE level. Ordinary labeled-optional arguments and
+//!   parameter bundles do lower; the 0.0.6 `?:`/`?*` positional markers do not
+//!   exist under V0_1 (the lexer emits only `?` = `OptionalType`);
+//! - a module-qualified command name (`\Mod.cmd`/`+Mod.cmd`) in BINDING
+//!   position — the target field is a bare `HorzCmdTok`/`VertCmdTok`;
+//! - a type constructor applied to more than one argument: 0.0.6's
+//!   `cst::ast::TypeApp` is single-argument postfix, 0.1's prefix form is
+//!   n-ary, so `lower_type_app` accepts arity 0/1 and rejects arity >= 2;
+//! - a `:>` whose left side is neither a `struct … end` literal nor a bare
+//!   module name, and functors — both need a static module environment this
+//!   port does not build.
 //!
-//! - SATySFi 0.1 labeled-optional arguments (`?(l = e, …)`) and parameter
-//!   bundles ARE lowered now (optional-arg-rows increment 1):
-//!   [`AppArg::Bundled`]/[`AppArg::BundledCtor`] and [`Param::opts`] bridge
-//!   to the additive `cst::ast::AppArg::Bundled`/`Expr::FunRows` nodes; the
-//!   0.0.6 `?:`/`?*` positional markers no longer exist under V0_1 (the
-//!   lexer emits only `?` = `OptionalType`). A bundle on an inline/block/
-//!   math *command* parameter, and `?(…)` on the *type* level, remain a
-//!   `LowerError` (roadmap increments 2/3).
-//! - 0.1 math (`Atomic::MathText`, `InlineElem::EmbedMath`, and the whole
-//!   math-element layer) — lowered since the math-split spec (L6): the
-//!   deferral above turned out unnecessary. `${…}`'s *value* is version-
-//!   independent ([`rustyfi_syntax::RustyfiVersion::math_is_split`] only
-//!   changes the surrounding TYPE/prim tables, `typecheck.rs`'s
-//!   `name_to_mono`), so `Atomic::MathText`/`InlineElem::EmbedMath`
-//!   transcribe structurally like every other node here — see
-//!   `lower_math_elem_cst`/`lower_math_bot`/`lower_math_script`/
-//!   `lower_math_group_arg`/`lower_math_arg`, below.
-//! - A module-qualified command name (`\Mod.cmd`/`+Mod.cmd`) in *binding*
-//!   position — the cst target field (`TopBinding::LetInline::cmd` /
-//!   `LetBlock::cmd`) is a bare `HorzCmdTok`/`VertCmdTok`.
-//! - An applied type constructor with more than one argument (`type t =
-//!   pair int int`) — the 0.0.6 cst target (`cst::ast::TypeApp`) is
-//!   single-argument postfix (`cst.rs:1297-1312`); 0.1's prefix `TypeApp` is
-//!   n-ary, so the prefix→postfix bridge ([`lower_type_app`]) accepts arity
-//!   0/1 and rejects arity ≥ 2 with a real `LowerError` (Sub-slice 2b, §3.4/
-//!   §8 of the sub-slice 2b spec).
+//! **`type` names are pre-qualified here**, rewritten to their
+//! `qualify_key`-identical fully-qualified string (`"M.t"`) at three sites —
+//! the declared name, synonym/payload references, and applied-constructor
+//! heads — via `TypeNameEnv`. Constructor names stay unqualified. A dotted
+//! `M.t` reference is a FOURTH site with a different formula:
+//! `qualify_type_key` on the token's own `mods`/`name`, bypassing
+//! `TypeNameEnv::qualify`, because an absolute reference has nothing to
+//! resolve against the local module's names. Whether the result names a
+//! concrete type, an abstract stamp or an error is undecidable here — lowering
+//! runs before any seal table exists.
 //!
-//! **`type` names are pre-qualified during lowering** (Sub-slice 2b,
-//! resolving slice2 spec §5 item 7): a module-local `type` name is rewritten
-//! to its `qualify_key`-identical fully-qualified string (`"M.t"`) at
-//! exactly three sites — the declared name, synonym/payload type
-//! references, and applied-constructor heads (all in [`lower_type_single`]/
-//! [`lower_type_atom`]/[`lower_type_app`]) — via [`TypeNameEnv`], threaded
-//! through [`lower_bind_v1`]/[`lower_module_bind`]. Constructor names stay
-//! unqualified (the carve-out; see [`TypeNameEnv`]'s doc comment). This is
-//! confined to `v1/lower.rs`: `elaborate.rs`/`typecheck.rs` see the already-
-//! dotted string as an ordinary opaque nominal key. Sub-slice 2d-2's
-//! `LONG_LOWER` type names (`M.t`, [`ast_v1::TypeAtom::LongName`]/
-//! [`ast_v1::TypeApp::AppliedLong`]) are the fourth site, but a DIFFERENT
-//! formula: [`qualify_type_key`] applied to the token's own `mods`/`name`
-//! directly, bypassing `TypeNameEnv::qualify` entirely — the reference is
-//! already absolute (a dotted head), so there is nothing to resolve against
-//! the LOCAL module's `type` names. Whether the resulting string names a
-//! concrete type, an abstract stamp, or an error is undecidable HERE
-//! (lowering runs before any seal table exists — 2d-1's zero-residue rule);
-//! `v1/module_check.rs` resolves it later by string key.
+//! **`sig_annot` lowers to NOTHING.** A sealed module produces the
+//! byte-identical `TopBinding::Module { sig: None, .. }` its unsealed twin
+//! does; width/depth matching, sealing and hiding are entirely
+//! `v1/module_check.rs`'s job, read back off the original `cst_v1` tree. The
+//! ordering is load-bearing: the struct BODY lowers first, so a body error
+//! surfaces with its own message whether or not the module carries a `:>` —
+//! pinned by `sig_annot_body_still_lowers_first`.
 //!
-//! **Real modules, qualified exports (Sub-slice 2a).** [`lower_file_v1`] on
-//! `FileV1::Library { module_kw, name, eq, struct_kw, binds, end_kw, .. }`
-//! wraps `binds` in a single [`cst::TopBinding::Module`] — byte-shaped like
-//! a 0.0.6 package file's own `module … = struct … end` — instead of
-//! splicing them flat. `elaborate.rs`'s untouched `walk_bindings` Module arm
-//! (`elaborate.rs:546-606`) then exports every binding **qualified**
-//! (`Mod.x`, `export_alias`), and — same as every 0.0.6 module — only the
-//! qualified names remain visible after the module closes: a V0_1 document
-//! reaches a dependency's bindings via `Mod.x`, `\Mod.cmd`/`+Mod.cmd`, or
-//! `let open Mod in`, never bare. Nested `module N = struct … end` binds
-//! lower the same way (`lower_bind_v1`'s `Bind::Module` arm), sharing
-//! `lower_module_bind` with the top-level case.
-//!
-//! **Sub-slice 2c/2d-1: module/signature grammar, ascription enforced.**
-//! `cst_v1`'s grammar covers the FULL module/signature surface (functors,
-//! `:>` coercion, `signature`/`include`, `sig … end`, `with type`) — but
-//! this module still lowers only [`ast_v1::ModExpr::Struct`] bodies to real
-//! semantics (2a's [`lower_module_bind`], unchanged). A `sig_annot` on a
-//! struct-literal module is (as of 2d-1) simply DROPPED here — it carries
-//! no runtime information at all, so lowering a sealed module produces the
-//! byte-identical `TopBinding::Module` its unsealed twin would; enforcement
-//! is entirely `v1/module_check.rs`'s job, reading the same annotation back
-//! off the original `cst_v1` tree (`v1/static_env.rs` + `v1/sig_subtype.rs`
-//! + `v1/module_check.rs`). Everything else reaching lowering still yields
-//! a precise [`LowerError`] naming its owning sub-slice: non-struct-literal
-//! `:>` coercion of a non-bare-name left side is 2f (a `:>` whose LEFT side
-//! isn't a `struct … end` literal or a bare module name needs the static
-//! module environment this port doesn't build until then), functors are 2f.
-//! Module aliases/paths (`module M = N`, `module M = N :> S`) landed for
-//! real in Sub-slice 2d-3 (member-copy expansion, [`lower_module_alias`]);
-//! `include M` (struct-include, `Bind::Include`'s `Var`-bodied case) landed
-//! for real in Sub-slice 2e-1, reusing the SAME member-copy generator
-//! ([`alias_member_decls`]) spliced unwrapped instead of alias-wrapped —
-//! see the "Sub-slice 2e-1" heading below. `signature`/sig-side `include`
-//! (`Decl::Include`) are 2e-2. `Decl`/`SigExpr` never reach lowering on
-//! their own — they occur only under a `sig_annot`/`Signature` position,
-//! and (for binds) this module still never walks them structurally (no
-//! `lower_decl`/`lower_sig_expr` exist here); `v1/module_check.rs` is the
-//! one place that does, working directly from `cst_v1`.
-//!
-//! **Sub-slice 2e-1: `include M` (struct-include).** `Bind::Include`'s
-//! `Var`-bodied case (`lower_bind_v1`'s `Include` arm) splices copies of
-//! ALL of the target module's exported members DIRECTLY into the includer's
-//! own decls — [`alias_member_decls`] called with `alias_path` = the
-//! includer's OWN path (not a fresh sub-path), its output unwrapped from
-//! `StructDecl` boxes rather than wrapped in one synthetic
-//! `TopBinding::Module` (contrast [`lower_module_alias`], which wraps).
-//! Resolution is frozen at surface-build time
-//! (`v1/surface.rs::SurfaceEnv::include_targets`, the `alias_targets`
-//! twin) — an unresolved/forward-referencing/self-including target is a
-//! precise `LowerError`, never a panic. `App`/`Functor` bodies reuse the
-//! EXISTING 2f functor error wordings verbatim (now reachable through
-//! `include`, e.g. `include Make Int`); `Struct`/`Coerce` bodies are new
-//! 2e-scoped "not this increment" errors (§7 of the sub-slice 2e spec).
-//! [`TypeNameEnv::child`] also learns about `include`: a later bare type
-//! reference in the SAME body resolves through the included copy exactly
-//! as if `type t = M.t` had been written directly.
-//!
-//! **The seal rule (load-bearing ordering).** `module M :> S = struct …
-//! end` lowers its struct BODY FIRST (through 2a's `lower_module_bind`,
-//! exactly as if there were no annotation), and only THEN — as of Sub-slice
-//! 2d-1 — the annotation itself is lowered to NOTHING: `sig_annot` is
-//! simply ignored by lowering (zero runtime residue; a sealed source lowers
-//! to the byte-identical `TopBinding::Module { sig: None, .. }` its
-//! unsealed twin does). Enforcement (width/depth `val` matching, sealing,
-//! hiding) lives entirely in `v1/module_check.rs`, which reads the
-//! annotation straight off the `cst_v1` tree this module never touches for
-//! that purpose — see that module's doc comment. This still means a body
-//! error (0.1 math, `?:` args, arity-≥2 type apps, …) surfaces with its own
-//! precise message, unaffected by whether the module carries a `:>` at all
-//! — pinned by `sig_annot_body_still_lowers_first` (§5.3 test 2 of the
-//! sub-slice 2c spec).
+//! **`include M` splices at the includer's OWN path**, its member copies
+//! unwrapped from `StructDecl` boxes — contrast `lower_module_alias`, which
+//! wraps them in a synthetic module at a lengthened path. Resolution is frozen
+//! at surface-build time (`v1/surface.rs`), so an unresolved, forward-
+//! referencing or self-including target is a precise error, never a panic.
 
 use crate::v1::functor;
 use crate::v1::surface::{self, ModSurface, SurfaceEnv};
@@ -151,8 +58,8 @@ use rustyfi_syntax::cst_v1::{self, ast as ast_v1};
 use rustyfi_syntax::leaf::*;
 use rustyfi_syntax::Span;
 
-/// A 0.1 construct Slice 1 deliberately does not lower yet. A real user
-/// error (not a panic): points at the construct and the roadmap.
+/// A 0.1 construct this port deliberately does not lower yet. A real user
+/// error (not a panic): points at the construct and why it isn't supported yet.
 #[derive(Debug, Clone, thiserror::Error)]
 #[error(
     "{span}: SATySFi 0.1 construct not supported yet in this port's Slice 1: {construct} ({hint})"
@@ -171,9 +78,9 @@ fn unsupported(construct: &'static str, hint: &'static str, span: Span) -> Lower
     }
 }
 
-/// Sub-slice 2f-2a (`…/tmp/slice2d3b-2f2-sigmembers.md` §4.2): the lowering-
-/// time RELATIVE-SIBLING absolutization rule — a [`functor::HeadRewrite`]
-/// impl sharing `v1/functor.rs`'s clone+rewrite walker with 2f-1's functor-
+/// The lowering-time
+/// RELATIVE-SIBLING absolutization rule — a [`functor::HeadRewrite`]
+/// impl sharing `v1/functor.rs`'s clone+rewrite walker with its functor-
 /// parameter substitution (the module doc comment's risk-6 "one head-splice"
 /// guard). Where [`functor::ParamSubstRewrite`] splices a parameter's
 /// argument path, this rewrite resolves a nested-sibling module head
@@ -214,12 +121,12 @@ impl functor::HeadRewrite for AbsolutizeRewrite<'_, '_> {
         Ok(Some(out))
     }
 
-    // Spec §4.2 point 4/5: a bare single-segment slot (`let open Foo in …`,
-    // `Foo :> S`) cannot grammatically hold a multi-segment absolutized
-    // path, and no demand needs it rewritten at all — those sites already
-    // resolve correctly via `surface.rs`'s own outward search (module-level
-    // aliases/coercions are resolved there, never re-walked textually
-    // here); signature bodies are deliberately never absolutized.
+    // A bare single-segment slot (`let open Foo in …`, `Foo :> S`) cannot
+    // grammatically hold a multi-segment absolutized path, and needs no
+    // rewrite: those sites already resolve correctly via `surface.rs`'s own
+    // outward search (module-level aliases/coercions are resolved there,
+    // never re-walked textually here). Signature bodies are deliberately
+    // never absolutized.
     fn rewrite_bare_names(&self) -> bool {
         false
     }
@@ -228,7 +135,7 @@ impl functor::HeadRewrite for AbsolutizeRewrite<'_, '_> {
         false
     }
 
-    // Spec §4.2 point 3: a `ModExpr::Functor` node encountered while
+    // A `ModExpr::Functor` node encountered while
     // absolutizing ORDINARY binds is an everyday sibling-level functor
     // DEFINITION (never itself lowered directly — only an application's
     // substituted body is absolutized, fresh, at the instantiated site) —
@@ -238,11 +145,10 @@ impl functor::HeadRewrite for AbsolutizeRewrite<'_, '_> {
     }
 }
 
-/// Module-path pre-qualification of 0.1 `type` names (Sub-slice 2b; see
-/// slice2-module-system.md §5 item 7). Maps a locally-visible bare type
-/// name to its fully-qualified nominal key, using EXACTLY
-/// `elaborate::qualify_key`'s scheme (`elaborate.rs:289-295`): `"M.N.t"`
-/// for `type t` inside `module M = struct module N = … end`.
+/// Module-path pre-qualification of 0.1 `type` names. Maps a
+/// locally-visible bare type name to its fully-qualified nominal key, using
+/// EXACTLY `elaborate::qualify_key`'s scheme (`elaborate.rs:289-295`):
+/// `"M.N.t"` for `type t` inside `module M = struct module N = … end`.
 /// `elaborate::qualify_key` itself is private to that module, so
 /// [`qualify_type_key`] reproduces the identical formula here rather than
 /// importing it — the two must never drift; both are one-liners.
@@ -250,17 +156,15 @@ impl functor::HeadRewrite for AbsolutizeRewrite<'_, '_> {
 /// **Ctor carve-out:** constructor names (`Known`, `Some`) are NEVER looked
 /// up here — they stay surfaced unqualified (`UserTypeDecl.ctors`,
 /// `elaborate.rs:147-154`), referenced as bare `Atomic::Ctor`/`PatBot::Ctor`
-/// strings. 0.1 spells a qualified ctor `M.Ctor` via `LONG_UPPER`, which has
-/// no token until Sub-slice 2c, so a pre-qualified ctor could not be
-/// referenced from anywhere; cross-package ctor collisions remain a
-/// documented latent 0.0.6-inherited limitation, resolved in 2d alongside
-/// the static type env.
-/// `pub(crate)`: Sub-slice 2d-1's `v1/module_check.rs` reuses this exact
-/// type (and [`TypeNameEnv::child`]/`qualify`) to pre-qualify a sig's own
-/// `val` type annotations against the SAME module-local `type` names the
-/// struct body resolves against — a single-implementation guarantee that
-/// the two walks (body lowering here, sig elaboration there) can never
-/// drift apart on what a bare type name means (spec §4.2 steps 1c/1e).
+/// strings. Cross-package ctor collisions remain a latent 0.0.6-inherited
+/// limitation.
+///
+/// `pub(crate)`: `v1/module_check.rs` reuses this exact type (and
+/// [`TypeNameEnv::child`]/`qualify`) to pre-qualify a sig's own `val` type
+/// annotations against the SAME module-local `type` names the struct body
+/// resolves against — a single-implementation guarantee that the two walks
+/// (body lowering here, sig elaboration there) can never drift apart on what
+/// a bare type name means.
 #[derive(Clone, Default)]
 pub(crate) struct TypeNameEnv(std::collections::HashMap<String, String>);
 
@@ -268,8 +172,8 @@ pub(crate) struct TypeNameEnv(std::collections::HashMap<String, String>);
 /// here since that function is private to the `elaborate` module — see
 /// [`TypeNameEnv`]'s doc comment. `pub(crate)`: also the formula
 /// `v1/module_check.rs` uses to key `StaticEnv::seals`/`hidden` by qualified
-/// member name (spec §4.2 step 1e) — value names and type names share the
-/// same qualification scheme.
+/// member name — value names and type names share the same qualification
+/// scheme.
 pub(crate) fn qualify_type_key(mod_path: &[String], local: &str) -> String {
     if mod_path.is_empty() {
         local.to_string()
@@ -295,7 +199,8 @@ impl TypeNameEnv {
     /// `mod_path` is the FULL path at which `binds` lives (i.e. already
     /// includes this module's own name — the caller, [`lower_module_bind`],
     /// computes it before calling this).
-    /// Sub-slice 2e-1 §2.1 step 4: gains `surfaces` so an `include M` bind's
+    ///
+    /// `surfaces` is threaded so an `include M` bind's
     /// spliced TYPE members join the map too — a later `val f (x : t) = …`
     /// in the SAME body must read bare `t` as the included copy
     /// (`⟨mod_path⟩.t`), exactly as if `type t = M.t` had been written
@@ -338,15 +243,14 @@ impl TypeNameEnv {
                             }
                         }
                     }
-                    // Sub-slice 2f-1 §2.3: `include Make Arg`'s substituted
-                    // body's own `type` names join the map too — the
-                    // instantiated body's DECLARED type names are exactly
-                    // the functor body's OWN (unsubstituted — substitution
-                    // only ever touches REFERENCES, never declared names,
-                    // module doc comment's §2.1 note), so this reads
-                    // straight off the functor body's binds, not off a
-                    // separately-registered target surface (there isn't
-                    // one for a fresh instantiation).
+                    // `include Make Arg`'s substituted body's
+                    // own `type` names join the map too. The instantiated
+                    // body's DECLARED type names are exactly the functor
+                    // body's OWN — substitution only ever touches REFERENCES,
+                    // never declared names — so this reads straight off the
+                    // functor body's binds, not off a separately-registered
+                    // target surface (there isn't one for a fresh
+                    // instantiation).
                     ast_v1::ModExpr::App { func, arg: _ } => {
                         let app_span = mod_chain_span(func);
                         if let Some(Some(surface::AppResolution { functor_path, .. })) =
@@ -382,7 +286,7 @@ impl TypeNameEnv {
         TypeNameEnv(map)
     }
 
-    /// Sub-slice 2d-3b (`…/tmp/slice2d3b-2f2-sigmembers.md` §3.3): the
+    /// The
     /// [`Self::child`] twin for a synthetic seal over an
     /// `ImplView::Surface` (an alias/coerce/application-result body, or a
     /// `Decl::Module` member recursed via a target's own already-computed
@@ -412,7 +316,7 @@ impl TypeNameEnv {
 
 /// Lower one dependency library (`module Name = struct binds end`) to a
 /// single real [`cst::TopBinding::Module`] — names exported **qualified**
-/// (Sub-slice 2a; see the module doc comment). `FileV1::Document` input is a
+/// (see the module doc comment). `FileV1::Document` input is a
 /// caller bug (the loader's `DocumentAsDependency` check already rejects it
 /// before this is ever reached): a `LowerError`, not a panic.
 pub fn lower_file_v1(file: &cst_v1::FileV1) -> Result<Vec<cst::TopBinding>, LowerError> {
@@ -421,7 +325,7 @@ pub fn lower_file_v1(file: &cst_v1::FileV1) -> Result<Vec<cst::TopBinding>, Lowe
     // integration test file that has no cross-file alias/named-signature
     // need): build a throwaway `SurfaceEnv` from THIS file alone. A
     // single-file `SurfaceEnv` still resolves every alias/named-signature
-    // reference *within* the same library (§2.5's ordering rule is a
+    // reference *within* the same library (the ordering rule is a
     // within-file/bind-order rule first) — only a reference reaching an
     // EARLIER, SEPARATELY-LOADED dependency file needs the threaded
     // `lower_file_v1_with_surfaces` sibling below, which `lib.rs`'s real
@@ -431,7 +335,7 @@ pub fn lower_file_v1(file: &cst_v1::FileV1) -> Result<Vec<cst::TopBinding>, Lowe
     lower_file_v1_with_surfaces(file, &surfaces)
 }
 
-/// Sub-slice 2d-3 (spec §2.1's "Where the env lives"): the threaded sibling
+/// The threaded sibling
 /// `lib.rs`'s dep loop uses — `surfaces` must already contain every EARLIER
 /// dependency file's surface (built via [`surface::build_file_surface`] in
 /// load order) AND, after [`surface::build_file_surface`] has ALSO been
@@ -456,10 +360,8 @@ pub(crate) fn lower_file_v1_with_surfaces<'a>(
             ..
         } => {
             // The seal rule (module doc comment): lower the struct body
-            // FIRST — exactly as if there were no annotation. As of
-            // Sub-slice 2d-1, `sig_annot` is then simply DROPPED: it is
-            // enforced by `v1/module_check.rs`, which reads it back off the
-            // original `cst_v1` tree, never lowered (zero runtime residue).
+            // FIRST, exactly as if there were no annotation; `sig_annot` is
+            // then simply DROPPED.
             let module = lower_module_bind(
                 module_kw,
                 name,
@@ -487,13 +389,12 @@ pub(crate) fn lower_file_v1_with_surfaces<'a>(
 /// nested `module N = struct … end` bind, whose `binds` field is a
 /// `Vec<StructBindV1>` — see [`cst_v1::StructBindV1`]'s doc comment for why
 /// the two differ). Both produce a `cst::TopBinding::Module` with `sig:
-/// None` (no signature annotation until Sub-slice 2c/2d) wrapping the
-/// lowered binds. `mod_path` is the path of the ENCLOSING scope (`[]` at
-/// the top level); this function extends it with `name` itself before
-/// pre-scanning `binds` for `type` names ([`TypeNameEnv::child`], Sub-slice
-/// 2b's pre-qualification, §4) and lowering each bind against the extended
-/// env/path — `flat_map`, preserving source order, since a `Type` `and`-
-/// chain now lowers to N consecutive `TopBinding`s (§3.0).
+/// None` wrapping the lowered binds. `mod_path` is the path of the ENCLOSING
+/// scope (`[]` at the top level); this function extends it with `name` itself
+/// before pre-scanning `binds` for `type` names ([`TypeNameEnv::child`]'s
+/// pre-qualification) and lowering each bind against the
+/// extended env/path — `flat_map`, preserving source order, since a `Type`
+/// `and`-chain lowers to N consecutive `TopBinding`s.
 fn lower_module_bind<'a, 's>(
     module_kw: &KwModule,
     name: &CtorTok,
@@ -507,7 +408,7 @@ fn lower_module_bind<'a, 's>(
 ) -> Result<cst::TopBinding, LowerError> {
     let mut child_path = mod_path.to_vec();
     child_path.push(name.name.clone());
-    // Sub-slice 2f-2a (spec §4.2 step 3): absolutize relative-sibling module
+    // Absolutize relative-sibling module
     // heads BEFORE lowering — an owned clone, consumed immediately below.
     // Applies uniformly to plain modules, alias targets' synthesized trees
     // (no-op — copies are already absolute), and instantiated functor bodies
@@ -553,10 +454,10 @@ pub fn lower_document_v1(file: &cst_v1::FileV1) -> Result<cst::ast::Expr, LowerE
 
 /// `mod_path` is the path of the SCOPE `b` itself lives in (not including
 /// any module `b` might itself introduce — see [`lower_module_bind`]'s doc
-/// comment); `tyenv` is that same scope's `type`-name pre-qualification env
-/// (§4). Returns a `Vec` (not a single `TopBinding`) since Sub-slice 2b's
-/// `Type` arm's `and`-chain lowers to N consecutive `TopBinding::Type`s
-/// (§3.0) — 1-element for every other arm.
+/// comment); `tyenv` is that same scope's `type`-name pre-qualification env.
+/// Returns a `Vec` (not a single `TopBinding`) since the `Type`
+/// arm's `and`-chain lowers to N consecutive `TopBinding::Type`s —
+/// 1-element for every other arm.
 fn lower_bind_v1<'s>(
     b: &cst_v1::Bind,
     mod_path: &[String],
@@ -693,12 +594,9 @@ fn lower_bind_v1<'s>(
                 binds,
                 end_kw,
             } => {
-                // 2a's path, one eraser hop deeper: the struct-literal body
+                // The seal rule (module doc comment): the struct-literal body
                 // lowers to a real TopBinding::Module regardless of the
-                // annotation (the seal rule, module doc comment) — as of
-                // Sub-slice 2d-1, `sig_annot` is then simply DROPPED here;
-                // `v1/module_check.rs` enforces it straight off the
-                // original `cst_v1` tree.
+                // annotation, which is DROPPED here.
                 let module = lower_module_bind(
                     module_kw,
                     name,
@@ -712,7 +610,7 @@ fn lower_bind_v1<'s>(
                 )?;
                 Ok(vec![module])
             }
-            // Sub-slice 2d-3 §2.1: `module M = N` / `module M = A.B.C` —
+            // `module M = N` / `module M = A.B.C` —
             // member-copy alias expansion (`lower_module_alias`). The
             // annotation (if any, `module M :> S = N`) is dropped here —
             // same seal rule as the struct-literal case above — and
@@ -726,19 +624,18 @@ fn lower_bind_v1<'s>(
                 &chain.render(),
                 mod_chain_span(chain),
             )?]),
-            // Sub-slice 2f-1 §2.3 (extended by 2f-2a, spec §4.1): `module M =
-            // Make Arg` — instantiate the functor generatively at `M`'s own
-            // path, then WRAP the substituted body in one synthetic
+            // `module M = Make Arg` —
+            // instantiate the functor generatively at `M`'s own path, then
+            // WRAP the substituted body in one synthetic
             // `TopBinding::Module` (the `lower_module_alias`/
-            // `alias_member_decls` wrap precedent, §2.3's "reuse 2d-3's
-            // wrap"). `Arg` may itself be an ENCLOSING functor's own
-            // parameter (`set.satyg`'s `Map.Make Elem` shape) — `v1/
-            // surface.rs`'s `ParamSubst` stack already resolves that case
-            // when the enclosing functor is applied, so `frozen_app_target`
-            // returning anything other than `Some(Some(_))` now means a
-            // genuinely unknown functor/argument name (or a non-struct
-            // functor body) — a precise `LowerError`, never a panic (the
-            // `frozen_include_target` posture).
+            // `alias_member_decls` wrap precedent). `Arg` may itself be an
+            // ENCLOSING functor's own parameter (`set.satyg`'s `Map.Make
+            // Elem` shape) — `v1/surface.rs`'s `ParamSubst` stack already
+            // resolves that case when the enclosing functor is applied, so
+            // `frozen_app_target` returning anything other than
+            // `Some(Some(_))` means a genuinely unknown functor/argument name
+            // (or a non-struct functor body) — a precise `LowerError`, never
+            // a panic (the `frozen_include_target` posture).
             ast_v1::ModExpr::App { func, arg: _ } => {
                 let app_span = mod_chain_span(func);
                 match surface::frozen_app_target(surfaces, mod_path, app_span) {
@@ -781,13 +678,13 @@ fn lower_bind_v1<'s>(
                     )),
                 }
             }
-            // Sub-slice 2f-1 §2.3: `module M = fun (X:S) -> body` — a
-            // functor DEFINITION emits ZERO runtime bindings (it is not a
-            // value — exactly `Bind::Signature`'s posture, `:583` below).
-            // The `FunctorDef` itself was already registered by
+            // `module M = fun (X:S) -> body` — a functor
+            // DEFINITION emits ZERO runtime bindings (it is not a value —
+            // exactly `Bind::Signature`'s posture, `:583` below). The
+            // `FunctorDef` itself was already registered by
             // `v1/surface.rs::build_binds` — nothing left to do here.
             ast_v1::ModExpr::Functor { .. } => Ok(Vec::new()),
-            // `module M = N :> S` — Sub-slice 2d-3 §2.1: lowers EXACTLY
+            // `module M = N :> S` — lowers EXACTLY
             // like `Var` (the full surface of `N` copied, not `S`-filtered
             // — the seal HIDES undeclared members via the established
             // non-commit path, byte-matching the struct-literal behavior);
@@ -802,23 +699,21 @@ fn lower_bind_v1<'s>(
                 target.span,
             )?]),
         },
-        // Sub-slice 2d-3 §2.2: a signature has no runtime/expression-spine
+        // A signature has no runtime/expression-spine
         // content at all — only `v1/surface.rs`'s `SurfaceEnv`/
         // `v1/module_check.rs`'s static environment record it.
         cst_v1::Bind::Signature { .. } => Ok(Vec::new()),
-        // Sub-slice 2e-1 §2.1 step 3: `include M` splices copies of ALL of
-        // `M`'s exported members directly into THIS body — the alias
-        // member-copy generator (`alias_member_decls`) called with
-        // `alias_path` = `mod_path` (the INCLUDER's OWN path, not a fresh
-        // sub-path — the 2d-3 §9 handoff's "empty prefix"), unwrapped from
-        // its `StructDecl` boxes into this arm's `Vec<TopBinding>` so the
-        // copies splice inline (contrast `lower_module_alias`, which wraps
-        // its copies in ONE synthetic `TopBinding::Module`). Only a `Var`
-        // body resolves (an earlier module already in scope); every other
-        // shape is a precise §7 error — `App`/`Functor` reuse the EXISTING
-        // 2f functor wordings verbatim (now reachable through `include`,
-        // e.g. `include Make Int`), `Struct`/`Coerce` are new 2e-scoped
-        // "not this increment" errors.
+        // `include M` splices copies of ALL of `M`'s exported
+        // members directly into THIS body — the alias member-copy generator
+        // (`alias_member_decls`) called with `alias_path` = `mod_path` (the
+        // INCLUDER's OWN path, not a fresh sub-path), unwrapped from its
+        // `StructDecl` boxes into this arm's `Vec<TopBinding>` so the copies
+        // splice inline (contrast `lower_module_alias`, which wraps its
+        // copies in ONE synthetic `TopBinding::Module`). Only a `Var` body
+        // resolves (an earlier module already in scope); every other shape is
+        // a precise error — `App`/`Functor` reuse the EXISTING functor
+        // wordings verbatim (reachable through `include`, e.g. `include Make
+        // Int`), `Struct`/`Coerce` require the target be named first.
         cst_v1::Bind::Include { kw, body } => match &*body.0 {
             ast_v1::ModExpr::Var(chain) => {
                 match surface::frozen_include_target(surfaces, mod_path, kw.0) {
@@ -837,7 +732,7 @@ fn lower_bind_v1<'s>(
                     )),
                 }
             }
-            // Sub-slice 2f-1 §2.3: `include Make Arg` (map.satyg's `include
+            // `include Make Arg` (map.satyg's `include
             // Make Int` shape) — instantiate the functor generatively at
             // THIS includer's OWN path, then splice the substituted body's
             // lowered binds UNWRAPPED (the `Var` arm's unwrap-`StructDecl`-
@@ -914,7 +809,7 @@ fn mod_chain_span(c: &ast_v1::ModChainV1) -> Span {
     }
 }
 
-// ---- Sub-slice 2d-3 §2.1: module aliases (`module M = N`, `module M = N :> S`) — lowering-time member-copy expansion from `v1/surface.rs`'s
+// ---- Module aliases (`module M = N`, `module M = N :> S`) — lowering-time member-copy expansion from `v1/surface.rs`'s
 // syntactic `SurfaceEnv`. ---------------------------------------------------
 
 /// `module M = N` / `module M = A.B.C` (`ModExpr::Var`) and `module M = N
@@ -923,9 +818,9 @@ fn mod_chain_span(c: &ast_v1::ModChainV1) -> Span {
 /// faithfully): resolve the target outward from `mod_path` against
 /// `surfaces`, then emit ONE synthetic `cst::TopBinding::Module` whose decls
 /// are member-copies of the target's (already seal-filtered, if sealed)
-/// surface, in the target's own source order (§2.1). An unresolved target —
-/// unknown name, or a forward reference to a module not yet registered —
-/// is a precise `LowerError` (§7's `L3` row), not a panic.
+/// surface, in the target's own source order. An unresolved target — unknown
+/// name, or a forward reference to a module not yet registered — is a
+/// precise `LowerError`, not a panic.
 fn lower_module_alias(
     module_kw: &KwModule,
     name: &CtorTok,
@@ -939,7 +834,7 @@ fn lower_module_alias(
     let mut alias_path = mod_path.to_vec();
     alias_path.push(name.name.clone());
     // Consult the FROZEN, in-source-order resolution `v1/surface.rs`
-    // recorded when it walked this alias bind (§2.5): a forward reference
+    // recorded when it walked this alias bind: a forward reference
     // (target defined LATER in the same body) was `None` there and stays a
     // `LowerError` here, even though `surfaces.modules` now contains the
     // later target. `frozen_alias_target` returning `None` at all would
@@ -971,14 +866,14 @@ fn lower_module_alias(
     })
 }
 
-/// The member-copy list itself (§2.1's "Alias expansion"), recursing into
+/// The member-copy list itself (alias expansion), recursing into
 /// `surface.mods` for each nested module re-export. Every fabricated node
 /// reuses `span` throughout (never re-unparsed — the same "fabricate
 /// `cst::ast` nodes directly" precedent as `val math`'s synthesis helpers,
 /// `var_tok`/`apply_chain`/`fun1` above) and every reference is the
-/// target's FULL ABSOLUTE path (`target_path`, e.g. `"Lib.N"`) — §0.4 fact
-/// 2's exact-join lookup is exactly what makes an absolute reference the
-/// only kind that can ever resolve at the elaborator layer.
+/// target's FULL ABSOLUTE path (`target_path`, e.g. `"Lib.N"`) — the
+/// elaborator's exact-join lookup makes an absolute reference the only kind
+/// that can ever resolve there.
 fn alias_member_decls(
     span: Span,
     alias_path: &[String],
@@ -1079,7 +974,7 @@ fn alias_member_decls(
             end_kw: KwEnd(span),
         })));
     }
-    // Signature members: zero runtime/type-spine residue (§2.1) — the
+    // Signature members: zero runtime/type-spine residue — the
     // surface env re-exports the name (`M.S` resolves to the same
     // `SigDef`); nothing to emit here.
     Ok(out)
@@ -1122,7 +1017,7 @@ fn lower_rec_clause(c: &ast_v1::RecClauseV1) -> Result<cst::ast::RecBinding, Low
     })
 }
 
-// ---- type binds (Sub-slice 2b) -----------------------------------------
+// ---- type binds -----------------------------------------
 
 fn lower_type_single(
     kw: &KwType,
@@ -1172,7 +1067,7 @@ fn lower_variant_def(
     tyenv: &TypeNameEnv,
 ) -> Result<cst::VariantDef, LowerError> {
     Ok(cst::VariantDef {
-        // Ctors stay UNQUALIFIED — §4's carve-out.
+        // Ctors stay UNQUALIFIED — the `TypeNameEnv` carve-out.
         ctor: v.ctor.clone(),
         of_ty: v
             .of_ty
@@ -1196,19 +1091,19 @@ pub(crate) fn lower_type_expr(
             // 0.1 has no `?->` domain-suffix syntax at all (that's 0.0.6's
             // own fused sigil, dropped in 0.1) — `opts` here is always empty.
             // The 0.1 `?(…) ->` PREFIX form is `ast_v1::TypeExpr::OptRowFun`,
-            // a separate arm below (optional-arg-rows increment 2).
+            // a separate arm below.
             opts: Vec::new(),
             dom: lower_type_prod(dom, tyenv)?,
             arrow: arrow.clone(),
             cod: Box::new(lower_type_expr(cod, tyenv)?),
         },
         ast_v1::TypeExpr::Atom(p) => cst::ast::TypeExpr::Atom(lower_type_prod(p, tyenv)?),
-        // `?(l1 : ty1, … [| ?'r]) dom -> cod` (optional-arg-rows increment
-        // 2). A row-variable tail is parsed but rejected here: it needs
+        // `?(l1 : ty1, … [| ?'r]) dom -> cod`. A row-variable tail is
+        // parsed but rejected here: it needs
         // signature-level row quantification (`rowquant`/`quant`,
-        // `parser_v1.mly:631-633`) — L4/2d territory, not this increment
-        // (contrast the record-type row-tail below, which THIS increment
-        // DOES complete — a bare record type has no `quant`-list obligation
+        // `parser_v1.mly:631-633`), which this port does not implement
+        // (contrast the record-type row-tail below, which is accepted
+        // — a bare record type has no `quant`-list obligation
         // to satisfy).
         ast_v1::TypeExpr::OptRowFun {
             opt_dom,
@@ -1276,14 +1171,14 @@ fn lower_type_prod(
     })
 }
 
-/// The PREFIX → POSTFIX bridge (§3.5 item 1): 0.1 `list int` ↔ cst `int
+/// The PREFIX → POSTFIX bridge: 0.1 `list int` ↔ cst `int
 /// list`. A real `LowerError` (not a panic) on arity ≥ 2 — the cst target
 /// (`cst::ast::TypeApp`) is single-argument by design (`cst.rs:1297-1312`,
-/// "N-ary applied constructors are not [supported]"). Sub-slice 2d-2 adds
+/// "N-ary applied constructors are not [supported]"). This also adds
 /// `InlineCmdTy`/`BlockCmdTy` (→ `cst::ast::TypeAtom::Cmd`, wrapped in
 /// `TypeApp::Atom` — a command type is never itself "applied") and
 /// `AppliedLong` (the same prefix→postfix bridge as `Applied`, minus
-/// `tyenv.qualify`: a `LONG_LOWER` head is already absolute, spec §2.4).
+/// `tyenv.qualify`: a `LONG_LOWER` head is already absolute).
 fn lower_type_app(
     a: &ast_v1::TypeApp,
     tyenv: &TypeNameEnv,
@@ -1305,7 +1200,7 @@ fn lower_type_app(
             },
             rest: Vec::new(),
         }),
-        // `math […]` (math-package completion M1). `lower_type_atom`'s Cmd
+        // `math […]`. `lower_type_atom`'s Cmd
         // arm in `typecheck.rs` already produces `MonoType::MathCmd` for
         // `CmdTypeKind::Math` and `unify.rs` already dispatches it — no
         // typecheck/unify change needed for the head itself.
@@ -1365,10 +1260,10 @@ fn lower_applied(
 }
 
 /// Each `[…]`-bracketed command-type slot lowers to one
-/// `cst::ast::TypeCmdArgItem` (`opt: None` — 2d-2's grammar has no `?`
+/// `cst::ast::TypeCmdArgItem` (`opt: None` — this grammar has no `?`
 /// suffix of its own; `semi: None` — these synthetic items are never
 /// re-unparsed, only fed to `elaborate`/`typecheck`, so the `;`-separator
-/// token is immaterial). `opt_labels` (optional-arg-rows increment 3a)
+/// token is immaterial). `opt_labels`
 /// carries this slot's `?(l:τ,…)` prefix bundle, if any — a flat,
 /// *surface-order* list; `typecheck.rs`'s `lower_type_atom` `Cmd` arm is
 /// responsible for sorting it into the closed map's canonical order (kept
@@ -1422,13 +1317,12 @@ fn lower_type_atom(
             paren: paren.clone(),
             inner: cst::TyErased(Box::new(lower_type_expr(&inner.0, tyenv)?)),
         },
-        // Closed form (`row_tail: None`) transcribes to the existing
-        // `cst::ast::TypeAtom::Record`, byte-identical to before this
-        // increment. Open form (`row_tail: Some(_)`, optional-arg-rows
-        // increment 2) transcribes to the additive
+        // Closed form (`row_tail: None`) transcribes to
+        // `cst::ast::TypeAtom::Record`. Open form (`row_tail: Some(_)`)
+        // transcribes to the additive
         // `cst::ast::TypeAtom::RecordOpen` instead — a fresh row variable at
         // the `typecheck.rs` end, not the SAME variable across occurrences
-        // (this increment models one open record type at a time, not
+        // (this models one open record type at a time, not
         // cross-signature shared-row polymorphism).
         ast_v1::TypeAtom::Record { rec, inner } if inner.row_tail.is_none() => {
             cst::ast::TypeAtom::Record {
@@ -1516,8 +1410,7 @@ fn plain_vert(name: &AnyVertCmdTok) -> Result<VertCmdTok, LowerError> {
 /// `UTFunction` per `param_unit`).
 ///
 /// - **Every unit plain** (`opts: None`): the params lower directly and
-///   `body` is returned unchanged — byte-identical to the pre-optional-arg
-///   path.
+///   `body` is returned unchanged.
 /// - **Any unit bundled** (`?(l = x, …)`): the whole list right-folds into a
 ///   nested `FunRows`/`Fun` lambda chain, and the returned param list is
 ///   empty — so the target `TopLet`/`RecBinding`/`LetIn` shape stays frozen
@@ -1561,14 +1454,13 @@ fn lower_param_units(
 /// unlike the value-level `FunRows` desugar, which right-folds a bundled
 /// unit into a lambda chain and returns an EMPTY param list, a command
 /// binding's `params` vec carries order straight into `curry_cmd_params_v1`).
-/// A plain (non-bundled) unit lowers to `Param::Pat` as before (optional-
-/// arg-rows increment 1 and earlier); a `?(l = x, …)`-bundled unit
-/// (optional-arg-rows increment 3a) lowers to the additive
+/// A plain (non-bundled) unit lowers to `Param::Pat` as before; a
+/// `?(l = x, …)`-bundled unit lowers to the additive
 /// `cst::ast::Param::Bundled`, consumed by `elaborate.rs`'s bundle-aware
 /// `curry_cmd_params_v1`. Shared by `ValueInline`/`ValueBlock` (which accept
 /// a bundle freely) AND `ValueMath` (`lower_value_math` rejects a bundle
-/// itself, BEFORE calling this — math command parameter bundles are
-/// optional-arg-rows increment 3b, `?(name=…)` on `val math ctx \derive`).
+/// itself, BEFORE calling this — math command parameter bundles use the
+/// same `?(name=…)` syntax on `val math ctx \derive`).
 fn lower_command_params(params: &[cst_v1::Param]) -> Result<Vec<cst::ast::Param>, LowerError> {
     params
         .iter()
@@ -1647,7 +1539,7 @@ fn clone_paren(p: &ParenGroup<()>) -> ParenGroup<()> {
     }
 }
 
-// ---- `val math` (math-split spec §4.3): the target — the EXISTING
+// ---- `val math`: the target — the EXISTING
 // `cst::TopBinding::LetMath` — is deliberately NOT extended with ctx/scripts
 // fields (a back-compat break on the 0.0.6 grammar the same derive parses);
 // instead the ctx/sub/sup binders are synthesized directly into the bind's
@@ -1724,7 +1616,7 @@ fn fun1(param_name: &str, span: Span, body: cst::ast::Expr) -> cst::ast::Expr {
     }
 }
 
-/// Lower one `Bind::ValueMath` (math-split spec §4.1/§4.2/§4.3): `val math
+/// Lower one `Bind::ValueMath`: `val math
 /// <ctx> \cmd <param>* [with <sub> <sup>] = <body>`. Target: the existing
 /// `cst::TopBinding::LetMath` — `elaborate_let_math` (unchanged) curries the
 /// user's own `params` around the synthesized `fun ctx -> fun sub -> fun sup
@@ -1752,8 +1644,8 @@ fn lower_value_math(
     body: &ast_v1::Expr,
 ) -> Result<cst::TopBinding, LowerError> {
     // A `?(l = x, …)` bundle on a `val math` parameter (`val math ctx \derive
-    // ?(name = …) …`) is optional-arg-rows increment 3b-α: `lower_command_params`
-    // (shared with `ValueInline`/`ValueBlock` since increment 3a) already
+    // ?(name = …) …`) works: `lower_command_params`
+    // (shared with `ValueInline`/`ValueBlock`) already
     // accepts it freely, `curry_cmd_params_v1` already emits `Ast::LambdaOpt`
     // for it (elaborate.rs), and `math_command_scheme_v01` (typecheck.rs) now
     // harvests the resulting `Row` into the command's closed label map, same
@@ -2101,10 +1993,9 @@ fn lower_atomic(a: &ast_v1::Atomic) -> Result<cst::ast::Atomic, LowerError> {
                 .map(lower_block_elem)
                 .collect::<Result<_, _>>()?,
         }),
-        // math-split spec §3.1: the `${…}`/`math`-elaboration split lives
-        // version-independently in `elaborate.rs`'s SHARED math path — only
-        // structural transcription is needed here, exactly like every other
-        // `Atomic` arm above.
+        // The `${…}`/`math`-elaboration split lives version-independently
+        // in `elaborate.rs`'s SHARED math path — only structural
+        // transcription is needed here, like every other `Atomic` arm.
         ast_v1::Atomic::MathText { mgrp, elems } => Ok(cst::ast::Atomic::MathText {
             mgrp: mgrp.clone(),
             elems: lower_math_elems(elems)?,
@@ -2141,8 +2032,7 @@ fn lower_record_field(f: &ast_v1::RecordField) -> Result<cst::ast::RecordField, 
         eq: f.eq.clone(),
         value: erase_expr(lower_expr(&f.value)?),
         // The `,` separator is dropped (`semi: None`) — harmless: the
-        // synthetic tree this module builds is never unparsed. See the
-        // finale spec §11's "Separator-token loss" risk note.
+        // synthetic tree this module builds is never unparsed.
         semi: None,
     })
 }
@@ -2182,8 +2072,7 @@ fn lower_inline_elem(e: &ast_v1::InlineElem) -> Result<cst::ast::InlineElem, Low
             var: var.clone(),
             semi: semi.clone(),
         }),
-        // math-split spec §3.1: mechanical transcription, mirror of
-        // `Atomic::MathText` above.
+        // Mechanical transcription, mirror of `Atomic::MathText` above.
         ast_v1::InlineElem::EmbedMath { mgrp, elems } => Ok(cst::ast::InlineElem::EmbedMath {
             mgrp: mgrp.clone(),
             elems: lower_math_elems(elems)?,
@@ -2210,7 +2099,7 @@ fn lower_block_elem(e: &ast_v1::BlockElem) -> Result<cst::ast::BlockElem, LowerE
     }
 }
 
-/// The `CmdTail` bridge (§3.3 of the finale spec) — the one non-1:1
+/// The `CmdTail` bridge — the one non-1:1
 /// transcription. `cst_v1` kept the OLD "one application-chain `Expr`"
 /// argument encoding (`Args { args: ExprErasedV1, semi }`), while `cst.rs`
 /// has since moved to the flat `AppArg` list (`Args { first, rest, semi }`).
@@ -2247,11 +2136,11 @@ fn lower_cmd_tail(t: &ast_v1::CmdTail) -> Result<cst::ast::CmdTail, LowerError> 
                 ));
             }
             let a = &chain.head;
-            // optional-arg-rows increment 3b-β: a LEADING `?(l = e, …)` bundle
+            // A LEADING `?(l = e, …)` bundle
             // (peeled off in the grammar because the app-chain head can't be
             // `?`-headed — see `cst_v1::CmdTail`) re-attaches to the first
             // argument here, producing a `cst::ast::AppArg::Bundled` exactly
-            // as an inc1 mid-chain bundle would. An empty `?()` is a
+            // as an ordinary mid-chain bundle would. An empty `?()` is a
             // `LowerError` via `lower_opt_args`.
             let first = cst::AppArgErased(Box::new(match lead_opts {
                 Some(opts) => {
@@ -2298,7 +2187,7 @@ fn lower_cmd_tail(t: &ast_v1::CmdTail) -> Result<cst::ast::CmdTail, LowerError> 
     }
 }
 
-// ---- Math (math-split spec §3.1) -----------------------------------------
+// ---- Math ---------------------------------------------------------------
 //
 // The cst_v1 math layer is declared shape-identical to `crate::cst::ast`'s
 // (cst_v1.rs's own module doc comment: "no 0.1 delta"), so every function
@@ -2306,7 +2195,7 @@ fn lower_cmd_tail(t: &ast_v1::CmdTail) -> Result<cst::ast::CmdTail, LowerError> 
 // module — the ONE non-mechanical seam is `lower_math_arg`'s bridge from
 // cst_v1's flat 6-variant `MathArg` (no `?:`/`?*` forms at all — 0.1's
 // optional math-command arguments are `?(l = e)` labeled bundles, a
-// grammar production this port's `MathArg` node doesn't parse yet, phase 4)
+// grammar production this port's `MathArg` node doesn't parse yet)
 // onto cst.rs's two-level `MathArg::Plain(MathArgBody::…)` shape.
 
 fn lower_math_elems(elems: &[cst_v1::MathErasedV1]) -> Result<Vec<cst::MathErased>, LowerError> {
@@ -2330,14 +2219,12 @@ fn lower_math_elem_cst(m: &ast_v1::MathElemCst) -> Result<cst::ast::MathElemCst,
 fn lower_math_bot(b: &ast_v1::MathBot) -> Result<cst::ast::MathBot, LowerError> {
     Ok(match b {
         ast_v1::MathBot::Cmd { name, args } => cst::ast::MathBot::Cmd {
-            // `ast_v1::MathBot::Cmd.name` is ALREADY `AnyMathCmdTok`
-            // (math-package completion M4 fix — cst_v1.rs's grammar used to
-            // spell this `MathCmdTok` (sigil-only), which silently
-            // couldn't parse a `\Mod.cmd` qualified math command at all,
-            // even though the shared lexer always emitted
-            // `Token::MathCmdWithMod` for one; both cst.rs's 0.0.6 `MathBot`
-            // and this node now share the exact same tag), so no `Plain`
-            // wrapping is needed here — just carry it through.
+            // `ast_v1::MathBot::Cmd.name` is ALREADY `AnyMathCmdTok` — the
+            // exact same tag cst.rs's 0.0.6 `MathBot` carries — so no
+            // `Plain` wrapping is needed here, just carry it through. It must
+            // stay `AnyMathCmdTok`: a sigil-only `MathCmdTok` silently cannot
+            // parse a `\Mod.cmd` qualified math command, even though the
+            // shared lexer always emits `Token::MathCmdWithMod` for one.
             name: name.clone(),
             args: args.iter().map(lower_math_arg).collect::<Result<_, _>>()?,
         },
@@ -2477,12 +2364,12 @@ fn lower_pat_bot(p: &ast_v1::PatBot) -> Result<cst::ast::PatBot, LowerError> {
     }
 }
 
-/// A [`ast_v1::Param`]'s trailing shape (optional-arg-rows increment 2):
+/// A [`ast_v1::Param`]'s trailing shape:
 /// either a plain `patbot` (unchanged path), or a `( pattern : typ )`
 /// ascribed pattern. The ascription's `typ` is DROPPED — a documented
 /// carve-out, precedent `cst::ast::RecBinding.ascription`'s own
 /// parse-and-ignore (`cst.rs:729-737`; enforcing it needs an `Ast`-level
-/// ascription node, a typechecker-completion follow-up, not this increment).
+/// ascription node, a later follow-up).
 /// Once dropped, `( pat : typ )` reduces exactly to a trivially-parenthesized
 /// FULL pattern — precisely [`cst::ast::PatBot::Paren`]'s own shape (a single
 /// `first` pattern, no `rest`), since the ascribed form's parens were already
@@ -2545,9 +2432,8 @@ mod tests {
         rustyfi_syntax::parse_file_v1(src).unwrap_or_else(|e| panic!("v1 parse failed: {e}"))
     }
 
-    /// §6.2: expression-level `let rec … and … in` lowers to a full
-    /// `Expr::LetRecIn` (Sub-slice 2b retires the old single-clause
-    /// `LowerError`) with the `RecBinding` reshape's 0.1-only fields all
+    /// Expression-level `let rec … and … in` lowers to a full
+    /// `Expr::LetRecIn` with the `RecBinding` reshape's 0.1-only fields all
     /// empty/`None` (no ascription/leading-bar/multi-clause sugar exists in
     /// 0.1's `bind_value_nonrec`).
     #[test]
@@ -2568,7 +2454,7 @@ mod tests {
         assert_eq!(ands[0].binding.name.name, "odd");
     }
 
-    /// §6.2: `val rec … and …` lowers to `TopBinding::LetRec` inside the
+    /// `val rec … and …` lowers to `TopBinding::LetRec` inside the
     /// module's `decls`.
     #[test]
     fn val_rec_library_lowers_to_top_binding_letrec() {
@@ -2591,7 +2477,7 @@ mod tests {
         assert_eq!(ands[0].binding.name.name, "odd");
     }
 
-    /// §6.2: `val mutable` → `TopBinding::LetMutable`.
+    /// `val mutable` → `TopBinding::LetMutable`.
     #[test]
     fn val_mutable_lowers_to_top_binding_letmutable() {
         let file = parse_v1("module M = struct\nval mutable c <- 0\nend");
@@ -2607,7 +2493,7 @@ mod tests {
         );
     }
 
-    /// §6.2: `let mutable … in` → `Expr::LetMutableIn`.
+    /// `let mutable … in` → `Expr::LetMutableIn`.
     #[test]
     fn let_mutable_in_document_lowers_to_expr_letmutablein() {
         let file = parse_v1("let mutable c <- 0 in c <- !c + 1");
@@ -2618,7 +2504,7 @@ mod tests {
         );
     }
 
-    /// §6.2 / §4: `type t = int and u = t` inside `module M` lowers to TWO
+    /// `type t = int and u = t` inside `module M` lowers to TWO
     /// consecutive `TopBinding::Type` decls, both names qualified
     /// (`"M.t"`/`"M.u"`), and `u`'s synonym body references the ALREADY-
     /// qualified `"M.t"` — the pre-qualification pin.
@@ -2666,7 +2552,7 @@ mod tests {
         );
     }
 
-    /// §6.2 / §4: nested-module pre-qualification — `module M = struct type
+    /// Nested-module pre-qualification — `module M = struct type
     /// t = int module N = struct type u = t end end` → `"M.N.u"`'s body
     /// references `"M.t"` (outer types stay visible inside a nested
     /// module, per ordinary module scoping).
@@ -2718,7 +2604,7 @@ mod tests {
         );
     }
 
-    /// §3.4/§6.2: the prefix→postfix `TypeApp` bridge — `type t = option
+    /// The prefix→postfix `TypeApp` bridge — `type t = option
     /// int` (0.1 prefix, arity 1) lowers to the cst target's postfix
     /// `Applied { arg: int, ctor: option }` shape.
     #[test]
@@ -2751,8 +2637,8 @@ mod tests {
         );
     }
 
-    /// §3.4/§6.2/§8: an applied type constructor with arity ≥ 2 (`pair int
-    /// int`) now lowers to the 0.0.6 cst target's N-ary atom run — `head =
+    /// An applied type constructor with arity ≥ 2 (`pair int
+    /// int`) lowers to the 0.0.6 cst target's N-ary atom run — `head =
     /// int`, `rest = [int, pair]` (the two arguments then the constructor).
     #[test]
     fn type_app_arity_2_lowers_to_nary_atom_run() {
@@ -2778,7 +2664,7 @@ mod tests {
         assert!(matches!(&prod.first.rest[1], cst::ast::TypeAtom::Name(n) if n.name == "pair"));
     }
 
-    /// §9 risk 5: a variant↔variant mutual pair (`type a = A of b and b = B
+    /// A variant↔variant mutual pair (`type a = A of b and b = B
     /// of a`) lowers to two consecutive `TopBinding::Type` decls — the
     /// forward-reference tolerance `typecheck.rs` provides is exercised at
     /// the typecheck/elaborate layer, not here; this only pins the
@@ -2800,7 +2686,7 @@ mod tests {
         assert!(matches!(&*decls[1].0, cst::TopBinding::Type(d) if d.name.name == "M.b"));
     }
 
-    /// G2: `type t = (| x : int, y : bool |)` lowers to `cst::ast::
+    /// `type t = (| x : int, y : bool |)` lowers to `cst::ast::
     /// TypeAtom::Record` with the field list transcribed field-by-field
     /// (labels, colons, and lowered field types) — the pure-transcription
     /// arm in `lower_type_atom`.
@@ -2896,8 +2782,8 @@ mod tests {
         );
     }
 
-    /// SATySFi 0.1 dropped the fused `?:`/`?*` optional sigils entirely
-    /// (optional-arg-rows increment 1): under V0_1 the lexer emits only `?` =
+    /// SATySFi 0.1 dropped the fused `?:`/`?*` optional sigils entirely:
+    /// under V0_1 the lexer emits only `?` =
     /// `OptionalType`, so `?:1`/`?*` now lex as `?` + `:`/`*` — a downstream
     /// PARSE error, no longer reaching the lowerer. Replaced by the labeled
     /// `?(l = e)` bundle.
@@ -2919,9 +2805,7 @@ mod tests {
         );
     }
 
-    /// math-split spec §3.1: `${…}` now lowers STRUCTURALLY — the
-    /// deferral this test used to pin (`math_text_is_a_lower_error`) turned
-    /// out unnecessary, since `${…}`'s *value* is version-independent (only
+    /// `${…}` lowers STRUCTURALLY: its *value* is version-independent (only
     /// the surrounding type/prim tables differ, per `typecheck.rs`'s
     /// `name_to_mono`). Round-trips `${x}` through `Atomic::MathText` down
     /// to its one `MathBot::Chars("x")` element.
@@ -2952,7 +2836,7 @@ mod tests {
     /// This exercises `plain_horz`/`plain_vert` directly (a hand-built
     /// token, not a parse) so the `LowerError` arm itself is still proven,
     /// same rationale as the `CmdTail` bridge's own unreachable-in-practice
-    /// guards (§3.3's doc comment).
+    /// guards.
     #[test]
     fn mod_qualified_command_name_in_bind_is_a_lower_error() {
         let tok = HorzCmdWithModTok {
@@ -2984,7 +2868,7 @@ mod tests {
         assert!(lower_document_v1(&file).is_err());
     }
 
-    /// Sub-slice 2a: `lower_file_v1` on a `Library` yields exactly ONE
+    /// `lower_file_v1` on a `Library` yields exactly ONE
     /// `TopBinding::Module` (not a spliced-flat `Vec` of the inner binds),
     /// with `sig: None` and the right name/decl count.
     #[test]
@@ -3012,7 +2896,7 @@ mod tests {
         assert_eq!(decls.len(), 2);
     }
 
-    /// Sub-slice 2a: a nested `module N = struct … end` bind lowers to a
+    /// A nested `module N = struct … end` bind lowers to a
     /// nested `TopBinding::Module` inside the outer module's `decls`.
     #[test]
     fn lower_file_v1_nested_module_bind_lowers_to_nested_module() {
@@ -3046,14 +2930,12 @@ mod tests {
         assert_eq!(inner_decls.len(), 1);
     }
 
-    // ---- Sub-slice 2d-1: sealing lowers to NOTHING (zero runtime residue) -
+    // ---- Sealing lowers to NOTHING (zero runtime residue) -----------------
 
-    /// §4.3-E4 / §5.4 test T17 twin 1: a library-level `:>` ascription is no
-    /// longer a `LowerError` at all — it lowers to the byte-identical
-    /// `TopBinding::Module { sig: None, .. }` shape its unsealed twin does
-    /// (enforcement moved entirely to `v1/module_check.rs`, which reads the
-    /// annotation back off the original `cst_v1` tree — this module never
-    /// sees it again after this point).
+    /// Sealing-erasure twin 1: a library-level `:>` ascription lowers to the
+    /// byte-identical `TopBinding::Module { sig: None, .. }` shape its
+    /// unsealed twin does — enforcement is entirely `v1/module_check.rs`'s,
+    /// off the original `cst_v1` tree.
     #[test]
     fn sig_annot_on_library_lowers_like_its_unsealed_twin() {
         let sealed = parse_v1("module M :> sig val x : int end = struct\nval x = 1\nend");
@@ -3088,14 +2970,11 @@ mod tests {
         assert!(matches!(&*unsealed_decls[0].0, cst::TopBinding::Let(_)));
     }
 
-    /// §4.3-E4 / §5.4 test T17 twin 2: the struct body still lowers
-    /// (surfacing its own precise error) whether or not the module carries
-    /// a `:>` annotation — a body error is identical either way, since the
-    /// annotation is no longer consulted by lowering at all. Body error: an
-    /// `include` of an inline `struct … end` literal — still unsupported
-    /// (§2e-1). (Swapped in from the original `pair int int` arity example,
-    /// which now lowers via the N-ary `TypeApp` support, so it can no longer
-    /// serve as this test's "still errors" body.)
+    /// Sealing-erasure twin 2: the struct body still lowers (surfacing its own precise
+    /// error) whether or not the module carries a `:>` annotation — a body
+    /// error is identical either way, since lowering never consults the
+    /// annotation. Body error: an `include` of an inline `struct … end`
+    /// literal, unsupported.
     #[test]
     fn sig_annot_body_error_is_identical_with_or_without_a_seal() {
         let sealed = parse_v1("module M :> sig end = struct\ninclude struct val x = 1 end\nend");
@@ -3110,7 +2989,7 @@ mod tests {
         assert_eq!(sealed_err.hint, unsealed_err.hint);
     }
 
-    /// §4.3-E4 / §5.4 test T17 twin 3: the bind-level twin of
+    /// Sealing-erasure twin 3: the bind-level twin of
     /// `sig_annot_on_library_lowers_like_its_unsealed_twin` — a nested
     /// `module N :> sig .. end = struct .. end` lowers to the same nested
     /// `TopBinding::Module { sig: None, .. }` shape as its unsealed twin.
@@ -3176,10 +3055,9 @@ mod tests {
         assert_eq!(sealed_inner.len(), unsealed_inner.len());
     }
 
-    /// Sub-slice 2d-3 §2.1/§7 (superseding the old 2d-1-era placeholder
-    /// pin, §5.3 test 4): a module alias/path binding naming an UNKNOWN
-    /// target is still a precise `LowerError` — `N` is never defined
-    /// anywhere in this file, so `lower_module_alias` can't resolve it.
+    /// A module alias/path binding naming an UNKNOWN target
+    /// is a precise `LowerError` — `N` is never defined anywhere in this
+    /// file, so `lower_module_alias` can't resolve it.
     #[test]
     fn module_alias_with_unknown_target_is_a_lower_error() {
         let file = parse_v1("module M = struct\nmodule P = N\nend");
@@ -3187,7 +3065,7 @@ mod tests {
         assert!(err.to_string().contains("module alias"), "{err}");
     }
 
-    /// Sub-slice 2d-3 §2.1: a module alias to an EARLIER, real sibling
+    /// A module alias to an EARLIER, real sibling
     /// module lowers for real — one `Let` per exported value member,
     /// referencing the target's absolute qualified name.
     #[test]
@@ -3228,10 +3106,10 @@ mod tests {
         }
     }
 
-    /// Sub-slice 2d-3 §2.1: a FORWARD reference (`module M = Later` before
+    /// A FORWARD reference (`module M = Later` before
     /// `Later` is itself defined) is the same "unknown module" error as a
     /// genuinely nonexistent name — an alias may only target an EARLIER
-    /// module (§2.5's ordering rule).
+    /// module.
     #[test]
     fn module_alias_forward_reference_is_a_lower_error() {
         let file = parse_v1(
@@ -3244,7 +3122,7 @@ mod tests {
         assert!(err.to_string().contains("module alias"), "{err}");
     }
 
-    /// §5.3 test 5: a functor application.
+    /// A functor application.
     #[test]
     fn functor_application_is_a_lower_error() {
         let file = parse_v1("module M = struct\nmodule P = F X\nend");
@@ -3252,11 +3130,10 @@ mod tests {
         assert!(err.to_string().contains("functor application"), "{err}");
     }
 
-    /// Sub-slice 2f-1 (superseding §5.3 test 6's old 2c-era placeholder pin):
-    /// a functor DEFINITION (`module F = fun (X:S) -> ...`) now emits ZERO
-    /// runtime bindings — a functor is not a value (exactly `Bind::Signature`'s
-    /// posture) — rather than the old placeholder `LowerError`. `M`'s own
-    /// `TopBinding::Module` still lowers, just with no `F` member inside it.
+    /// A functor DEFINITION (`module F = fun (X:S) -> ...`)
+    /// emits ZERO runtime bindings — a functor is not a value, exactly
+    /// `Bind::Signature`'s posture. `M`'s own `TopBinding::Module` still
+    /// lowers, just with no `F` member inside it.
     #[test]
     fn functor_literal_emits_zero_runtime_bindings() {
         let file = parse_v1(
@@ -3275,10 +3152,9 @@ mod tests {
         );
     }
 
-    /// Sub-slice 2d-3 §2.1 (superseding the old 2d-1-era placeholder pin,
-    /// §5.3 test 7): a bare module coercion `N :> S` naming an UNKNOWN `N`
-    /// is still a precise `LowerError` — the same "unknown module" wording
-    /// a bare `Var` alias produces (`lower_module_alias` is shared).
+    /// A bare module coercion `N :> S` naming an UNKNOWN
+    /// `N` is a precise `LowerError` — the same "unknown module" wording a
+    /// bare `Var` alias produces (`lower_module_alias` is shared).
     #[test]
     fn module_coercion_with_unknown_target_is_a_lower_error() {
         let file = parse_v1("module M = struct\nmodule P = N :> S\nend");
@@ -3286,7 +3162,7 @@ mod tests {
         assert!(err.to_string().contains("module alias"), "{err}");
     }
 
-    /// Sub-slice 2d-3 §2.1: `module M = N :> S` lowers the SAME member-copy
+    /// `module M = N :> S` lowers the SAME member-copy
     /// shape as `module M = N` (the seal-rule pin, alias flavor) — the
     /// `:> S` annotation is dropped by lowering and enforced entirely by
     /// `v1/module_check.rs`. (Compared structurally, not by full-AST
@@ -3344,8 +3220,7 @@ mod tests {
         assert_eq!(bare.1, vec![vec!["M.Base".to_string()]]);
     }
 
-    /// Sub-slice 2d-3 §2.2 (superseding the old 2d-1-era placeholder pin,
-    /// §5.3 test 8): a `signature S = ...` bind lowers to NOTHING — zero
+    /// A `signature S = ...` bind lowers to NOTHING — zero
     /// runtime/type-spine residue.
     #[test]
     fn signature_bind_lowers_to_nothing() {
@@ -3358,9 +3233,8 @@ mod tests {
         assert!(matches!(&*decls[0].0, cst::TopBinding::Let(_)));
     }
 
-    /// Sub-slice 2e-1 §7 (superseding the old 2e-placeholder pin, §5.3 test
-    /// 9): `include N` naming an UNKNOWN module is a precise `LowerError` —
-    /// `N` is never defined anywhere in this file.
+    /// `include N` naming an UNKNOWN module is a precise
+    /// `LowerError` — `N` is never defined anywhere in this file.
     #[test]
     fn include_of_an_unknown_module_is_a_lower_error() {
         let file = parse_v1("module M = struct\ninclude N\nend");
@@ -3370,7 +3244,7 @@ mod tests {
         assert!(msg.contains("unknown module"), "{msg}");
     }
 
-    /// Sub-slice 2e-1 §2.1: `include M` naming an EARLIER real sibling
+    /// `include M` naming an EARLIER real sibling
     /// module splices copies of ALL its exported members DIRECTLY into the
     /// includer's own decls — no synthetic wrapper module (contrast the
     /// alias arm's `module_alias_to_a_real_target_lowers_member_copies`).
@@ -3405,7 +3279,7 @@ mod tests {
         }
     }
 
-    /// Sub-slice 2e-1 §2.1 step 1: a FORWARD reference (`include Later`
+    /// A FORWARD reference (`include Later`
     /// before `Later` is itself defined) is the same "unknown module" error
     /// as a genuinely nonexistent name (the `alias_targets`-style frozen
     /// resolution twin, `include_targets`).
@@ -3421,17 +3295,16 @@ mod tests {
         assert!(err.to_string().contains("unknown module"), "{err}");
     }
 
-    /// Sub-slice 2e-1 §7: `include F X` (a functor application) reuses the
-    /// EXISTING 2f functor `LowerError` wording verbatim — the `map.satyg
+    /// `include F X` (a functor application) reuses the
+    /// EXISTING functor `LowerError` wording verbatim — the `map.satyg
     /// :344` `include Make Int` shape.
     #[test]
     fn include_of_a_functor_application_is_the_2f_functor_error() {
-        // Sub-slice 2f-2a reworded this error (spec §6's file-by-file plan):
-        // `F` here is a plain STRUCT, not a functor, so `include F X` still
-        // freezes an unresolved (`None`) app target — "unknown" replaces
-        // the old "Sub-slice 2f-2" wording now that a parameter-argument
-        // application (once its enclosing functor is applied) is no longer
-        // automatically out of scope.
+        // `F` here is a plain STRUCT, not a functor, so `include F X`
+        // freezes an unresolved (`None`) app target — hence the "unknown"
+        // wording rather than an out-of-scope one (a
+        // parameter-argument application does resolve, once its enclosing
+        // functor is applied).
         let file = parse_v1("module M = struct\nmodule F = struct end\ninclude F X\nend");
         let err = lower_file_v1(&file).unwrap_err();
         let msg = err.to_string();
@@ -3439,7 +3312,7 @@ mod tests {
         assert!(msg.contains("unknown"), "{msg}");
     }
 
-    /// Sub-slice 2e-1 §7: `include struct … end` (an inline struct literal)
+    /// `include struct … end` (an inline struct literal)
     /// is its own precise out-of-scope error — zero upstream-stdlib demand.
     #[test]
     fn include_of_an_inline_struct_literal_is_a_lower_error() {
@@ -3450,7 +3323,7 @@ mod tests {
         assert!(msg.contains("name the module first"), "{msg}");
     }
 
-    /// Sub-slice 2e-1 §7: `include M :> S` (a coerced module body) is its
+    /// `include M :> S` (a coerced module body) is its
     /// own precise out-of-scope error.
     #[test]
     fn include_of_a_coerced_module_is_a_lower_error() {
@@ -3465,7 +3338,7 @@ mod tests {
         assert!(msg.contains("coerced module"), "{msg}");
     }
 
-    /// Sub-slice 2e-1 §2.1 step 1: self-include (`module P = struct include
+    /// Self-include (`module P = struct include
     /// P end`) is the same "unknown module" error — `P` only registers in
     /// `env.modules` AFTER its own body walk finishes, so it is never its
     /// own earlier module.
@@ -3476,7 +3349,7 @@ mod tests {
         assert!(err.to_string().contains("unknown module"), "{err}");
     }
 
-    /// The CmdTail bridge (§3.3): `\cmd{a}{b}` parses under `cst_v1` as one
+    /// The CmdTail bridge: `\cmd{a}{b}` parses under `cst_v1` as one
     /// application chain (`AppExpr { head: {a}, args: [{b}] }`) and must
     /// lower to the same shape `cst.rs`'s own `\cmd{a}{b}` parse produces
     /// (`CmdTail::Args { first: {a}, rest: [{b}] }`).

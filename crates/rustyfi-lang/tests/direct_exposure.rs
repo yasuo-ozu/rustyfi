@@ -2,13 +2,7 @@
 //! struct ... end` must expose `\cmd`/`+cmd` UNQUALIFIED at the enclosing
 //! scope, aliasing the module's own qualified binding (`elaborate.rs`'s
 //! `direct_cmd_name` + `TopBinding::Module` arm) — while non-`direct` sig
-//! items (`val`/`type`) stay module-qualified only, exactly as before this
-//! change.
-//!
-//! End-to-end: real source text through `parse_file` -> `elaborate_program`
-//! -> `typecheck` (type-checks) and, separately, `parse_file` ->
-//! `elaborate` -> `eval::Interp` (evaluates), mirroring
-//! `tests/typecheck.rs`'s and `tests/elaborate_phase2b.rs`'s own helpers.
+//! items (`val`/`type`) stay module-qualified only.
 
 use rustyfi_backend::{FontKey, FontMetrics, Length};
 use rustyfi_lang::value::Value;
@@ -66,11 +60,6 @@ fn eval_str(src: &str) -> Result<Value, CompileError> {
     Ok(interp.eval(&env, &rustyfi_lang::ast::debrand(&ast, &store))?)
 }
 
-// ============================================================================
-// Acceptance fixture: a `direct \cmd : [string] inline-cmd` sig item exposes
-// `\greet` unqualified at the module's enclosing scope.
-// ============================================================================
-
 const GREET_MODULE: &str = "
     module M : sig
       direct \\greet : [string] inline-cmd
@@ -88,12 +77,9 @@ fn direct_inline_command_is_usable_unqualified_and_typechecks() {
 #[test]
 fn direct_inline_command_is_usable_unqualified_and_evaluates() {
     let src = format!("{GREET_MODULE} in {{ \\greet(`hi`); }}");
-    // A bare `{ .. }` literal evaluates to `Value::InlineText` (a closure
-    // awaiting a `read-inline ctx` to render it — see `eval_phase2b.rs`'s
-    // own tests); the point here is just that evaluation *succeeds* at all
-    // (no "unbound `\greet`" `EvalError`), which only happens if the
-    // unqualified alias this change adds actually resolved to `M`'s own
-    // `\greet` closure.
+    // The point is just that evaluation *succeeds* at all (no "unbound
+    // `\greet`" `EvalError`), which only happens if the unqualified alias
+    // resolved to `M`'s own `\greet` closure.
     let v = eval_str(&src).expect("direct-exposed \\greet should elaborate and evaluate");
     assert!(
         matches!(v, Value::InlineText { .. }),
@@ -107,10 +93,6 @@ fn direct_inline_command_also_still_reachable_qualified() {
     let src = format!("{GREET_MODULE} in {{ \\M.greet(`hi`); }}");
     assert_well_typed(&src);
 }
-
-// ============================================================================
-// `direct +cmd : [..] block-cmd` — the block-command form of the same rule.
-// ============================================================================
 
 #[test]
 fn direct_block_command_is_usable_unqualified_and_typechecks() {
@@ -126,11 +108,8 @@ fn direct_block_command_is_usable_unqualified_and_typechecks() {
     assert_well_typed(src);
 }
 
-// ============================================================================
-// Non-`direct` sig items stay module-qualified only (regression: `direct`
-// must not leak every command, just the ones the signature marks).
-// ============================================================================
-
+// Regression: `direct` must not leak every command, just the ones the
+// signature marks.
 #[test]
 fn non_direct_command_in_a_signature_stays_qualified_only() {
     let src = "
@@ -165,13 +144,9 @@ fn non_direct_command_in_a_signature_is_still_reachable_qualified() {
     assert_well_typed(src);
 }
 
-// ============================================================================
 // A `direct`-declared command the struct never actually defines is a
 // (cheap, `direct`-only) sig-preservation error, not a silently-dangling
-// alias — `typechecker-completion.md` §3's fuller `val`/`type` reflects
-// check stays deferred; this is the narrow slice §4 asks for.
-// ============================================================================
-
+// alias. The fuller `val`/`type` sig-reflection check stays deferred.
 #[test]
 fn direct_declared_but_unimplemented_command_is_rejected() {
     let src = "
@@ -191,12 +166,9 @@ fn direct_declared_but_unimplemented_command_is_rejected() {
     );
 }
 
-// ============================================================================
 // Nested modules: a `direct` item declared on an inner module bubbles its
 // unqualified exposure out through the enclosing module too (the same
 // `exported` bubbling qualified names already get).
-// ============================================================================
-
 #[test]
 fn direct_command_from_a_nested_module_is_usable_unqualified_at_the_top_level() {
     let src = "

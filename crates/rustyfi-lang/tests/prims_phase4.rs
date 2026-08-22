@@ -1,4 +1,4 @@
-//! Phase-4-part-1 primitive inventory tests: the context-op and
+//! Primitive inventory tests: the context-op and
 //! box-combinator primitives added ahead of a future `.saty`-defined
 //! `document`/`+p`/`\emph`. Follows `eval_phase2.rs`'s style — `Ast` apply
 //! chains driven through `eval::Interp` and `primitives::base_env()`, no
@@ -118,10 +118,10 @@ fn get_initial_context_text_width_matches_the_given_length() {
 #[test]
 fn get_initial_context_defaults_paragraph_margins_to_eighteen_points() {
     // The default paragraph margin is 18pt, straight from SATySFi's source
-    // (`primitives.ml:546-548` `paragraph_top`/`paragraph_bottom`). An earlier
-    // "9pt" value had been reverse-fitted to the page-count proxy; the faithful
-    // stacking model (content-base advance + collapsed margins, commit 7ccea09)
-    // restored it to SATySFi's real 18pt. See the layout-fidelity-ceiling memo.
+    // (`primitives.ml:546-548` `paragraph_top`/`paragraph_bottom`). Do NOT
+    // reverse-fit it to a page-count proxy (an earlier 9pt did): the faithful
+    // stacking model (content-base advance + collapsed margins) needs the
+    // real 18pt.
     match run(&initial_ctx(100.0)) {
         Value::Context(ctx) => {
             assert_eq!(ctx.paragraph_top, Length::pt(18.0));
@@ -167,10 +167,8 @@ fn set_paragraph_margin_sets_top_and_bottom_independently() {
 /// `rustyfi-backend/tests/pagebreak.rs`'s
 /// `inter_block_advance_is_prev_depth_plus_margin_plus_height`.
 ///
-/// This was `#[ignore]`d for a while: `line-break` used to push the RAW
-/// `ctx.paragraph_top` and `chop_page` clamped the line height to 9pt after the
-/// collapse instead. The two differ only when the previous block's bottom
-/// margin wins, and correcting it regressed the enumitem corpus document until
+/// The two placements differ only when the previous block's bottom margin
+/// wins, and correcting this one regressed the enumitem corpus document until
 /// the space DEFICIT that was masking the surplus (a breakable frame's
 /// `paddingT`, dropped on continuation pages) was found. See the header of
 /// `rustyfi-backend/tests/pagebreak.rs`'s inter-block-advance section.
@@ -319,9 +317,8 @@ fn inline_glue_field_order_matches_vminst_param_order() {
 
 #[test]
 fn inline_skip_width_is_accounted_for_by_line_breaking() {
-    // A single wide line (no wrapping): two inline-skips back to back should
-    // lay out at x=0 and x=50 respectively, and the line's own natural
-    // width should include both.
+    // A 1000pt measure, so the two inline-skips never wrap and both land on
+    // one line.
     let ast = app3(
         "line-break",
         Ast::Bool(false),
@@ -340,8 +337,8 @@ fn inline_skip_width_is_accounted_for_by_line_breaking() {
 
     match run(&ast) {
         Value::BlockBoxes(lines) => {
-            // line-break now brackets the paragraph with paragraph_top/bottom
-            // margin Skips (design-silent-fields FIX 3); find the formed Line.
+            // line-break brackets the paragraph with paragraph_top/bottom
+            // margin Skips; find the formed Line.
             let line = lines
                 .into_iter()
                 .find(|vb| matches!(vb, VertBox::Line { .. }))
@@ -425,9 +422,9 @@ fn initial_ctx_helper_produces_a_context_value() {
 }
 
 // ============================================================================
-// frontend-completion.md §Slice 1.A: the ~18 pure primitives (`|>` excluded
-// — it has no `Ast`-level identity at all to apply here; see
-// `elaborate_phase2.rs`'s operator-precedence section for its coverage).
+// the ~18 pure primitives (`|>` excluded — it has no
+// `Ast`-level identity at all to apply here; see `elaborate_phase2.rs`'s
+// operator-precedence section for its coverage).
 // ============================================================================
 
 fn run_err(ast: &Ast) -> eval::EvalError {

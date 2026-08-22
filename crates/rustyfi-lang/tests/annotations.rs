@@ -1,27 +1,12 @@
-//! the prim surface `annot.satyh` needs
-//! (`get-leftmost-script`/`get-rightmost-script`,
-//! `inline-frame-breakable`, `register-destination`,
-//! `register-link-to-uri`, `register-link-to-location`) — build-order step
-//! 9, stdja's last unported `@require`. Two halves, mirroring
-//! `tests/context_box.rs`'s split:
-//! - **Typecheck** (real source text through `parse_file` ->
-//!   `elaborate::elaborate_program` -> `typecheck::typecheck`) — pins each
-//!   new prim's declared signature end-to-end, including the surface syntax
-//!   `annot.satyh` actually uses.
-//! - **Eval** (direct `Ast` apply chains through `eval::Interp` +
-//!   `primitives::base_env()`, mirroring `tests/prims_phase4.rs`'s style) —
-//!   `inline-frame-breakable` builds a real atomic `PureHorzBox::Frame` and
-//!   interns its decoset's `decoS`; the register-* prims are FAITHFUL as of
-//! roadmap Group A: they
-//!   error outside `fire_hooks`' `current_page` window (§0.5) and record a
-//!   real `Annot`/`NamedDest` inside it — see `primitives.rs`'s
-//!   `prim_register_destination`/`register_link` doc comments.
+//! Prim surface `annot.satyh` needs: a typecheck half (real source through
+//! the real pipeline) and an eval half (direct `Ast` apply chains). The
+//! register-* prims are FAITHFUL as of Group A: they error outside
+//! `fire_hooks`' `current_page` window and record a real `Annot`/
+//! `NamedDest` inside it.
 //!
-//! `annot.satyh` itself is loaded by the capstone suite (`register-*`/
-//! `inline-frame-breakable` reach the PDF end-to-end via `crates/rustyfi/
-//! tests/fixtures/href.saty`) — this file only proves the primitive surface
-//! type-checks against `vminstdef.yaml` and evaluates correctly in
-//! isolation.
+//! `annot.satyh` itself reaches the PDF end-to-end via the capstone suite
+//! (`crates/rustyfi/tests/fixtures/href.saty`); this file only proves the
+//! primitive surface type-checks and evaluates correctly in isolation.
 
 use rustyfi_backend::{FontKey, FontMetrics, HorzBox, Length, PureHorzBox};
 use rustyfi_lang::ast::Ast;
@@ -46,10 +31,6 @@ impl FontMetrics for Mono {
     }
 }
 
-// ============================================================================
-// Registration coverage
-// ============================================================================
-
 const NEW_NAMES: &[&str] = &[
     "get-leftmost-script",
     "get-rightmost-script",
@@ -73,10 +54,6 @@ fn every_new_primitive_resolves_in_base_env_and_has_a_registered_type() {
         );
     }
 }
-
-// ============================================================================
-// Typecheck half
-// ============================================================================
 
 fn typecheck_str(src: &str) -> Result<(), CompileError> {
     let file = rustyfi_syntax::parse_file(src)?;
@@ -183,10 +160,7 @@ fn the_href_shaped_composition_typechecks() {
     );
 }
 
-// ============================================================================
-// Eval half — `Ast` apply chains through `eval::Interp`, mirroring
-// `prims_phase4.rs`'s style; no parser involved.
-// ============================================================================
+// Eval half — `Ast` apply chains through `eval::Interp`; no parser involved.
 
 fn var(name: &str) -> Ast {
     Ast::Var(name.to_string(), Span::default())
@@ -309,12 +283,9 @@ fn inline_frame_breakable_splices_its_contents_between_markers() {
 }
 
 /// `register-destination`/`register-link-to-*` are gated on
-/// `interp.current_page` (§0.5: they only succeed while `fire_hooks` is
-/// walking a page — i.e. from a hook or a fired decoration).
+/// `interp.current_page`: they only succeed while `fire_hooks` is walking a
+/// page — i.e. from a hook or a fired decoration.
 fn eval_during_page_break(ast: &Ast) -> Result<(Value, eval::Interp<'static>), eval::EvalError> {
-    // `Mono` is a unit struct (no data), so leaking one `'static` reference
-    // is cheap and lets the returned `Interp` outlive this function without
-    // fighting the borrow checker over `mono`'s local lifetime.
     let metrics: &'static Mono = Box::leak(Box::new(Mono));
     let env = primitives::base_env();
     let mut interp = eval::Interp::new(metrics);
@@ -440,7 +411,7 @@ fn register_link_to_uri_rejects_a_malformed_border_argument_without_panicking() 
             len(1.0),
             len(1.0),
             len(1.0),
-            Ast::Int(5), // not an option
+            Ast::Int(5),
         ],
     );
     let err = try_run(&ast).expect_err("a malformed border must be a clean EvalError, not a panic");

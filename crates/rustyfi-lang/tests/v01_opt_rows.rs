@@ -1,5 +1,5 @@
-//! SATySFi 0.1 value-level labeled optional arguments (optional-arg-rows
-//! increment 1): `?(l = e, …)` application bundles and `?(l = x, …)`
+//! SATySFi 0.1 value-level labeled optional arguments (optional-arg-rows):
+//! `?(l = e, …)` application bundles and `?(l = x, …)`
 //! parameter bundles, end-to-end (parse V0_1 -> `v1::lower` -> `elaborate`
 //! (V0_1 scope) -> `typecheck` -> `eval::Interp::eval`), plus the frozen
 //! 0.0.6 version-gate. Mirrors `v01_lang_completeness.rs`'s harness, but the
@@ -82,9 +82,7 @@ fn as_tuple(v: Value) -> Vec<Value> {
     }
 }
 
-// ============================================================================
-// T1 — defaulting + subset + label order (a param bundle at a plain `let`).
-// ============================================================================
+// Defaulting + subset + label order (a param bundle at a plain `let`).
 
 #[test]
 fn t1_defaulting_subset_and_order() {
@@ -104,9 +102,7 @@ in (add 1, add ?(bias = 10) 1, add ?(scale = 3, bias = 1) 2)";
     );
 }
 
-// ============================================================================
-// T2 — higher-order / row polymorphism.
-// ============================================================================
+// Higher-order / row polymorphism.
 
 #[test]
 fn t2_higher_order_row_poly() {
@@ -121,10 +117,8 @@ let apply-plain g y = g y in
     assert_eq!(got, vec![5, 7]);
 }
 
-// ============================================================================
-// T3 — record row polymorphism through the V0_1 surface (pre-existing
+// Record row polymorphism through the V0_1 surface (pre-existing
 // `AccessField` machinery, now pinned reachable alongside opt rows).
-// ============================================================================
 
 #[test]
 fn t3_record_row_poly() {
@@ -135,9 +129,7 @@ fn t3_record_row_poly() {
     );
 }
 
-// ============================================================================
-// T5 — unknown-label rejection (typecheck error).
-// ============================================================================
+// Unknown-label rejection (typecheck error).
 
 #[test]
 fn t5_unknown_label_rejected() {
@@ -149,9 +141,7 @@ fn t5_unknown_label_rejected() {
     );
 }
 
-// ============================================================================
-// T6 — duplicate-label rejection (elaborate error), app + param bundles.
-// ============================================================================
+// Duplicate-label rejection (elaborate error), app + param bundles.
 
 #[test]
 fn t6_duplicate_label_rejected() {
@@ -170,11 +160,9 @@ fn t6_duplicate_label_rejected() {
     );
 }
 
-// ============================================================================
-// T7 — the frozen 0.0.6 version gate. The additive `cst` nodes make these
-// PARSE under 0.0.6 (they used to be parse errors); elaboration then rejects
+// The frozen 0.0.6 version gate. The additive `cst` nodes make these
+// PARSE under 0.0.6; elaboration then rejects
 // them with a version error rather than silently accepting.
-// ============================================================================
 
 #[test]
 fn t7_v006_version_gate() {
@@ -190,9 +178,7 @@ fn t7_v006_version_gate() {
     );
 }
 
-// ============================================================================
-// T9 — lower placeholders: an empty `?()` bundle is a lower error.
-// ============================================================================
+// Lower placeholders: an empty `?()` bundle is a lower error.
 
 #[test]
 fn t9_empty_bundle_is_error() {
@@ -201,13 +187,10 @@ fn t9_empty_bundle_is_error() {
     assert!(err.contains("optional-argument bundle"), "got: {err}");
 }
 
-// ============================================================================
-// optional-arg-rows increment 2 — ascribed params `( pat : τ )`. The
-// ascription's type is parsed but DROPPED (documented carve-out, precedent
-// `cst::ast::RecBinding.ascription`'s own parse-and-ignore) — enforcing it
-// needs an `Ast`-level ascription node, a typechecker-completion follow-up,
-// not this increment.
-// ============================================================================
+// optional-arg-rows — ascribed params `( pat : τ )`. The
+// ascription's type is parsed but DROPPED (precedent `cst::ast::
+// RecBinding.ascription`'s own parse-and-ignore) — enforcing it needs an
+// `Ast`-level ascription node, not here.
 
 #[test]
 fn ascribed_param_pattern_is_accepted() {
@@ -217,11 +200,10 @@ fn ascribed_param_pattern_is_accepted() {
 
 #[test]
 fn ascribed_param_takes_a_full_pattern_not_just_a_patbot() {
-    // `x :: xs` is a CONS pattern — one level above `patbot` in the grammar
-    // (`PatCons`, not reachable as a bare `PatBot`) — proving the ascribed
-    // form's `pat` really does route through the full-pattern lowering, not
-    // `lower_pat_bot`. (Type `list int` is PREFIX application — SATySFi 0.1's
-    // own order — and list literals use `,`, not 0.0.6's `;`.)
+    // `x :: xs` is a CONS pattern, one level above `patbot` (`PatCons`, not
+    // reachable as a bare `PatBot`) — proving ascription routes through
+    // full-pattern lowering, not `lower_pat_bot`. (`list int` is PREFIX
+    // application; list literals use `,`, not 0.0.6's `;`.)
     let v = eval_v01("let f (x :: xs : list int) = x in f [1, 2, 3]")
         .expect("a cons-pattern ascription should compile");
     assert_eq!(as_int(v), 1);
@@ -230,29 +212,23 @@ fn ascribed_param_takes_a_full_pattern_not_just_a_patbot() {
 #[test]
 fn ascribed_param_type_is_not_enforced() {
     // A deliberately WRONG ascription (`string`, used with an `int`) is
-    // accepted — because the annotation is dropped, not consulted. Pins the
-    // documented carve-out.
+    // accepted — the annotation is dropped, not consulted.
     let v = eval_v01("let f (x : string) = x + 1 in f 1")
         .expect("the ascription's type is dropped, so this must still compile");
     assert_eq!(as_int(v), 2);
 }
 
-// ============================================================================
-// optional-arg-rows increment 2 — `?(l : ty) dom -> cod` optional-argument
-// TYPE domains (upstream `typ_opt_dom typ_prod ARROW typ`, `parser_v1.mly:688`
-// — the `?(…)` prefix is directly followed by the mandatory domain, with NO
-// arrow between them; the only arrow is the usual `dom -> cod` one).
-// `t_opt_row_fun_type_domain_v006_version_gate` is the type-level analogue of
-// T7 (the additive `cst.rs::TypeExpr::OptRowFun` node is version-blind at
-// PARSE time — this is new 0.0.6 accept-surface, gated at `typecheck.rs`'s
-// `check_type_expr_v0_1_only`, not at parse time).
-// ============================================================================
+// optional-arg-rows — `?(l : ty) dom -> cod` optional-argument
+// TYPE domains (upstream `typ_opt_dom typ_prod ARROW typ`,
+// `parser_v1.mly:688`). `t_opt_row_fun_type_domain_v006_version_gate` is
+// the type-level analogue of the frozen 0.0.6 version gate above — the additive `cst.rs::TypeExpr::
+// OptRowFun` node is version-blind at PARSE time, gated instead at
+// `typecheck.rs`'s `check_type_expr_v0_1_only`.
 
-/// A 0.0.6 program declaring a `?(bias : int) int -> int` synonym parses
-/// (the additive `cst.rs` node), but `typecheck`'s dual-version `Checker`
-/// path (`declare_synonym`) rejects it with a version error rather than
-/// silently building a nonsense type — mirrors `type_synonym.rs`'s own
-/// harness (`parse_file` -> `elaborate_program` -> `typecheck`).
+/// A 0.0.6 program declaring a `?(bias : int) int -> int` synonym parses,
+/// but `typecheck`'s dual-version `Checker` (`declare_synonym`) rejects it
+/// with a version error rather than building a nonsense type — mirrors
+/// `type_synonym.rs`'s own harness.
 #[test]
 fn t_opt_row_fun_type_domain_v006_version_gate() {
     let file = parse_file("type adder = ?(bias : int) int -> int in 0")
@@ -270,11 +246,10 @@ fn t_opt_row_fun_type_domain_v006_version_gate() {
     );
 }
 
-/// The same `?(bias : int) int -> int` type declaration, this time inside
-/// a V0_1 library — `declare_synonym`'s `check_type_expr_v0_1_only` gate is
-/// a no-op once `has_row_polymorphism()` is true, so this compiles cleanly
-/// (proving BOTH dual-version entry points — this one and the sealed-sig
-/// path `v01_sealing.rs` pins — accept the SAME node under V0_1).
+/// The same `?(bias : int) int -> int` declaration inside a V0_1 library —
+/// `declare_synonym`'s `check_type_expr_v0_1_only` gate is a no-op once
+/// `has_row_polymorphism()` is true, proving BOTH dual-version entry points
+/// (this one and the sealed-sig path `v01_sealing.rs` pins) accept it.
 #[test]
 fn t_opt_row_fun_type_domain_declares_cleanly_under_v01() {
     let lib_file = parse_file_v1(

@@ -1,12 +1,9 @@
-//! Sub-slice 2d-1 (`…/tmp/slice2d-sealing.md` §2.2, §3.4, §4.2 step 5): the
-//! subsumption algorithm — "does the module's inferred scheme subsume the
-//! declared one" (upstream `subtype_poly_type`, `signatureSubtyping.
-//! ml:530-553`). 2d-1 ships the value half; 2d-2 adds type-entry matching;
-//! 2d-3 adds recursive struct-sig matching. All of it is *pure* over the
-//! existing public type machinery — no new unifier, no `types.rs`/
-//! `unify.rs` edits.
+//! The subsumption algorithm — "does the module's inferred
+//! scheme subsume the declared one" (upstream `subtype_poly_type`,
+//! `signatureSubtyping.ml:530-553`). Pure over the existing public type
+//! machinery — no new unifier, no `types.rs`/`unify.rs` edits.
 //!
-//! **Encoding (§3.4, skolemize-by-lowering).** The declared side's
+//! **Encoding (skolemize-by-lowering).** The declared side's
 //! quantified variables are pre-lowered to rigid nominal stamps (`"'a#7"`,
 //! by [`crate::v1::module_check`]'s seal-table walk, NOT here); this module
 //! only instantiates the inferred scheme with fresh FLEXIBLE variables and
@@ -16,8 +13,8 @@
 //! or with another distinctly-stamped rigid — only with a flexible
 //! variable, which is exactly what an instantiated bound variable is).
 //!
-//! **The escaped-skolem check (§4.2 step 5, upstream's `PolyFree`
-//! rejection, `signatureSubtyping.ml:411-413`).** After a successful unify,
+//! **The escaped-skolem check** (upstream's `PolyFree` rejection,
+//! `signatureSubtyping.ml:411-413`). After a successful unify,
 //! resolve-walk the ORIGINAL (un-instantiated) inferred scheme's body
 //! looking for any `MonoType::Variant` name ending in this check's own
 //! stamp marker. `instantiate` never touches the inferred scheme's own
@@ -27,7 +24,7 @@
 //! binding one of the scheme's SHARED (free, unquantified) variables during
 //! this very unify call, i.e. the module's value is *less polymorphic* than
 //! its signature claims (e.g. a `val mutable` cell declared with a
-//! quantifier — spec §4.5 test T13).
+//! quantifier).
 
 use crate::types::{instantiate, resolve, resolve_row, MonoType, PolyType, Row, TypeContext};
 use crate::unify::{unify, UnifyError};
@@ -100,21 +97,18 @@ fn row_mentions_stamp(row: &Row, marker: &str) -> bool {
 }
 
 // ============================================================================
-// Sub-slice 2f (`…/tmp/slice2f-functors.md` §2.5): functor SIGNATURE
-// subtyping errors — a structurally distinct concern from ordinary VALUE
-// subsumption ([`SubsumeError`], above), reached only once 2f-2 wires up
-// functor sig-members (`Decl::Module { Make : (K:S)->… }` in a `:> sig`) and
-// the codomain-abstraction substitution. Defined now, at 2f-1, so the one
-// shape upstream leaves undefined has a TYPED rejection from day one, even
-// though no 2f-1 source can ever reach it (§1's cut: 2f-1 ships unsealed
-// functor values only).
+// Functor SIGNATURE subtyping errors — a structurally
+// distinct concern from ordinary VALUE subsumption ([`SubsumeError`],
+// above), reached through functor sig-members (`Decl::Module { Make :
+// (K:S)->… }` in a `:> sig`) and the codomain-abstraction substitution. The
+// one shape upstream leaves undefined gets a TYPED rejection here.
 // ============================================================================
 
 /// Errors from functor signature subtyping. A separate enum from
-/// [`SubsumeError`] (per the spec's recommendation, §2.5): functor-sig
-/// subtyping is a recursive structural match over domain/codomain pairs,
-/// not a single `unify` call, so its error shape will grow independently in
-/// 2f-2 (domain contravariance, codomain covariance, arity mismatches, …).
+/// [`SubsumeError`]: functor-sig subtyping is a recursive structural match
+/// over domain/codomain pairs, not a single `unify` call, so its error shape
+/// grows independently (domain contravariance, codomain covariance, arity
+/// mismatches, …).
 #[derive(Debug)]
 pub(crate) enum SigSubtypeError {
     /// Upstream `signatureSubtyping.ml`'s `substitute_concrete` `ConcFunctor`
@@ -123,18 +117,17 @@ pub(crate) enum SigSubtypeError {
     /// flagged "TODO: remove this … Bochao–Ohori style static
     /// interpretation"). Reached when a functor sig-member's declared
     /// CODOMAIN is itself a functor signature (`(Y:S2)->S3`, a curried/
-    /// higher-order functor member) — this port's first-order 2f-2 slice
-    /// never constructs such a signature (no demand package is higher-order,
-    /// §0.6), so this is a DEFINED rejection for the one shape upstream
-    /// leaves undefined, never a panic/`failwith`.
+    /// higher-order functor member) — this port's first-order functor support
+    /// never constructs such a signature (no demand package is
+    /// higher-order), so this is a DEFINED rejection for the one shape
+    /// upstream leaves undefined, never a panic/`failwith`.
     NestedFunctorSubstitution { span: Span },
 }
 
-/// Sub-slice 2f-2b (`…/tmp/slice2d3b-2f2-sigmembers.md` §5.1 step 4): the
-/// codomain-shape guard, now REACHABLE from real source — driven both at
-/// functor sig-member REGISTRATION time (`module_check.rs`'s
-/// `Decl::Module`-functor arm) and at APPLICATION-substitution time (the
-/// per-application abstract-result sealing, §5.2-2). `cod` is the functor
+/// The codomain-shape guard, driven both at functor
+/// sig-member REGISTRATION time (`module_check.rs`'s `Decl::Module`-functor
+/// arm) and at APPLICATION-substitution time (the per-application
+/// abstract-result sealing). `cod` is the functor
 /// member's declared codomain (already substituted `[param := arg]` at the
 /// application site, or un-substituted at registration time — the shape
 /// guard is substitution-invariant). A `SigExpr::Functor` codomain (curried/
@@ -176,8 +169,8 @@ mod tests {
     }
 
     /// Specialize: `∀a. a -> a` subsumes the declared `int -> int` (the
-    /// module's polymorphic value is used at a specific instance) — T3's
-    /// unit-level twin.
+    /// module's polymorphic value is used at a specific instance) — the
+    /// unit-level twin of the equivalent end-to-end test.
     #[test]
     fn specialize_accepts() {
         let mut c = ctx();
@@ -193,7 +186,8 @@ mod tests {
 
     /// Generalize-rejection: a monomorphic `int -> int` inferred scheme
     /// does NOT subsume a declared `'a -> 'a` (the signature claims MORE
-    /// polymorphism than the implementation has) — T12's unit-level twin.
+    /// polymorphism than the implementation has) — the unit-level twin of
+    /// the equivalent end-to-end test.
     #[test]
     fn generalize_rejection_fails() {
         let mut c = ctx();
@@ -209,8 +203,8 @@ mod tests {
     /// Skolem-escape: a `val mutable`-shaped inferred scheme (mono, with a
     /// SHARED — not quantified — free variable inside a `ref`) checked
     /// against a declared `('a list) ref` binds that free variable to the
-    /// rigid stamp during unify, which the escape check must catch — T13's
-    /// unit-level twin.
+    /// rigid stamp during unify, which the escape check must catch — the
+    /// unit-level twin of the equivalent end-to-end test.
     #[test]
     fn skolem_escape_detected() {
         let mut c = ctx();
@@ -243,7 +237,7 @@ mod tests {
         assert!(!mono_mentions_stamp(inferred.body(), "#6"));
     }
 
-    /// Sub-slice 2d-2 spec §5 U14b: interleaved mint draws for the
+    /// Interleaved mint draws for the
     /// ABSTRACT-TYPE stamp shape (`"M.t#1"`, `module_check.rs`'s opaque
     /// stamping — distinct from this test file's own skolemized-tyvar
     /// shape `"'a#7"`, but the exact same suffix-probe mechanism). A
@@ -252,7 +246,7 @@ mod tests {
     /// not false-positive THIS val decl's own escape check (marker `"#2"`,
     /// a later, distinct draw) — the same per-draw-uniqueness argument as
     /// [`unrelated_stamp_marker_does_not_escape`], made empirical for the
-    /// shape 2d-2 actually mints.
+    /// shape this port actually mints.
     #[test]
     fn interleaved_abstract_type_stamp_does_not_escape() {
         let mut c = ctx();
@@ -291,7 +285,7 @@ mod tests {
         (**sig_).clone()
     }
 
-    /// T-sub1 (spec §5/§6), now reachable from 2f-2b source: a curried
+    /// A curried
     /// functor-sig MEMBER (`module F : (X : S) -> (Y : S2) -> S3`) parsed
     /// off a real umbrella, driven through `substitute_result_sig`, yields
     /// the typed rejection.

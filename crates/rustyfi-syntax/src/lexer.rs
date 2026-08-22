@@ -26,8 +26,8 @@ enum Mode {
 }
 
 /// Lex a whole source file under SATySFi 0.0.6's grammar (a `.saty` document,
-/// i.e. program mode at the top). This is the crate's original, frozen entry
-/// point: unchanged behavior, now a thin wrapper over [`lex_with_version`].
+/// i.e. program mode at the top) — a thin wrapper over
+/// [`lex_with_version`].
 pub fn lex(src: &str) -> Result<Vec<Atom>, LexError> {
     lex_with_version(src, RustyfiVersion::V0_0)
 }
@@ -124,22 +124,18 @@ impl Lexer {
     /// `V0_1` these words still lex the same way (e.g. `let-rec`/`when`/
     /// `while`/`before` simply have no corresponding grammar rule in
     /// `cst_v1.rs`, so using them there is a *parse* error, not a lex
-    /// error). Only the nine Slice-1/Sub-slice-2b/Sub-slice-2c/Axis-B/
-    /// math-split additions (`rec`/`inline`/`block`/`mutable`/`signature`/
-    /// `include`/`use`/`package`/`math`) are version-gated: SATySFi 0.1's
-    /// `val rec`/`val inline`/`val block`/`val mutable`/`val math` binds,
-    /// `signature …`/`include …` binds/decls, and `use …`/`use package …`
-    /// headers need them as keywords, but 0.0.6 source may use any of them
-    /// as an ordinary identifier (there is no 0.0.6 grammar that would want
-    /// them as keywords), so gating keeps `lex`/`lex_with_version(_,
-    /// V0_0)` byte-identical to before this change.
+    /// error). Only the 0.1
+    /// additions (`rec`/`inline`/`block`/`mutable`/`signature`/
+    /// `include`/`use`/`package`/`math`/`persistent`) are version-gated:
+    /// SATySFi 0.1 needs them as keywords, but 0.0.6 source may use any of
+    /// them as an ordinary identifier (no 0.0.6 grammar would want them
+    /// reserved), so gating is what keeps `lex`/`lex_with_version(_, V0_0)`
+    /// byte-identical.
     fn keyword(&self, s: &str) -> Option<Token> {
         use Token::*;
         if let Some(tok) = match s {
-            // `not` is deliberately NOT reserved — it lexes as an ordinary
-            // `Var`/`VarTok` (see `token.rs`'s `Token::Mod` doc comment), so
-            // `not expr` parses through the existing `AppExpr` application
-            // chain in both generations.
+            // `not` is deliberately NOT reserved — see the note beside
+            // `token.rs`'s `Token::Mod`.
             "mod" => Some(Mod),
             "if" => Some(If),
             "then" => Some(Then),
@@ -415,11 +411,11 @@ impl Lexer {
 
     /// Horizontal-mode (inline-text) backtick literal, lexed to its own
     /// `Token::CodeText` so the elaborator can route it through the context's
-    /// code-text command the way upstream does. (It used to lex to a plain
-    /// `Token::Char` run — see that token's doc comment for what that cost.
-    /// A dedicated token keeps the `Vec<InlineElem>` collection parser
-    /// single-token-decidable, which is what the earlier attempt at a
-    /// character-level `InlineElem::Literal` arm could not manage.) The
+    /// code-text command the way upstream does. (Not a plain `Token::Char`
+    /// run — see that token's doc comment for what that costs. A dedicated
+    /// token also keeps the `Vec<InlineElem>` collection parser
+    /// single-token-decidable, which a character-level `InlineElem::Literal`
+    /// arm could not manage.) The
     /// `#`-controlled flags trim the body's leading (`omit_pre`) / trailing
     /// (`omit_post`) spaces, mirroring the elaborator's `omit_pre_spaces`/
     /// `omit_post_spaces` (the multi-line indent shave `omit_spaces` also does
@@ -580,14 +576,12 @@ impl Lexer {
                     // V0_1 language-completeness sweep): a first-class
                     // `command`-value in program position must accept a
                     // module-qualified name exactly like inline-text mode's
-                    // own `\` handling does (`lex_horizontal`, below) —
-                    // switched from a plain `name_len_at` scan to the same
-                    // `scan_dotted` dotted-path scanner, emitting
-                    // `Token::HorzCmdWithMod` when a `Mod.` prefix was
-                    // present. No mode-stack change either way (program
-                    // mode never pushes a new mode for a bare `\cmd`
-                    // atomic, unlike inline-text mode) — the fix is
-                    // confined to this one arm.
+                    // own `\` handling does (`lex_horizontal`, below), so
+                    // this scans a dotted path and emits
+                    // `Token::HorzCmdWithMod` on a `Mod.` prefix. No
+                    // mode-stack change either way — program mode never
+                    // pushes a new mode for a bare `\cmd` atomic, unlike
+                    // inline-text mode.
                     self.bump();
                     let Some((mods, name, _)) = self.scan_dotted() else {
                         return self.error(start, "illegal token '\\' in a program area");
@@ -780,7 +774,7 @@ impl Lexer {
                     // Under V0_0 this stays byte-identical (pinned by
                     // `lex_with_version_differential.rs`).
                     //
-                    // optional-arg-rows increment 2: under V0_1, `?` directly
+                    // Under V0_1, `?` directly
                     // followed by `'` + a lowercase name (no space — one
                     // lexeme, matching upstream `ROWVAR`, `lexer_v1.mll:310
                     // -311`) is a row variable (`Token::RowVar`), e.g. `?'r`
@@ -1203,7 +1197,7 @@ impl Lexer {
                 }
                 '?' => {
                     self.bump();
-                    // SATySFi 0.1 (optional-arg-rows increment 3b-β): a command
+                    // SATySFi 0.1: a command
                     // APPLIED in an active area (`\cmd ?(l = e){…}` /
                     // `+cmd ?(l = e)<…>`) carries a `?(l = e, …)` labeled-
                     // optional bundle — the `?` is `OptionalType` and the

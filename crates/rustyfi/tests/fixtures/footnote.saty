@@ -1,4 +1,4 @@
-% F1 fixture: a DIRECT `add-footnote` call, with no `footnote-scheme.satyh`
+% Fixture: a DIRECT `add-footnote` call, with no `footnote-scheme.satyh`
 % dependency — this proves the `chop_page` float accumulator itself, not the
 % cross-reference fixpoint `footnote-scheme.satyh` layers on top. A single
 % reference line embeds a zero-metric footnote marker whose block carries

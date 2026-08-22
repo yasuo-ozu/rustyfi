@@ -1,7 +1,7 @@
-//! Phase-2 evaluator/primitive coverage. These tests build `Ast` values
-//! directly (no parser — the surface syntax for `if`/`let rec`/`match` is
-//! being built in a parallel worktree) and drive them through
-//! `eval::Interp` and `primitives::base_env()`.
+//! Evaluator/primitive coverage. These tests build `Ast` values
+//! directly (no parser) and drive them through `eval::Interp` and
+//! `primitives::base_env()`; the block comment above each fixture is the
+//! surface syntax it corresponds to.
 
 use std::rc::Rc;
 
@@ -231,7 +231,7 @@ fn match_pattern_cons_tail_is_rest_of_list() {
         Box::new(Pattern::Var("h".to_string())),
         Box::new(Pattern::Var("t".to_string())),
     );
-    // `match_pattern` binds POSITIONALLY now (Phase 4): slot 0 is `h`, slot 1
+    // `match_pattern` binds POSITIONALLY now: slot 0 is `h`, slot 1
     // is `t`, in the left-to-right order the pattern names them.
     let mut bindings = Vec::new();
     assert!(match_pattern(&pat, &value, &mut bindings));
@@ -623,7 +623,7 @@ fn itext_embed_splices_inline_text() {
         env: Env::root(),
     };
     // `greeting` is a compile-time binding: `IText::embed` below compiles its
-    // reference against this environment (Phase 4 — the runtime frame chain
+    // reference against this environment (the runtime frame chain
     // holds no names).
     let mut outer_env = base_env.child();
     outer_env.define("greeting", embedded_value);

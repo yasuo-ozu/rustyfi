@@ -1,12 +1,10 @@
 //! Interpreter state and beta-reduction.
 //!
-//! This was the tree-walking evaluator (the naive-interpreter shape of
-//! evaluator.cppo.ml; the bytecode VM was intentionally not ported). Phases 3
-//! and 4 of retired the tree-walk itself — expression evaluation lives
-//! entirely in [`crate::compile`] now — leaving here what is genuinely
-//! runtime: the [`Interp`] state every primitive threads (images, hooks,
-//! cross-references, decorations, …), function application, and pattern
-//! matching.
+//! Expression evaluation lives entirely in [`crate::compile`]; what remains
+//! here is genuinely runtime: the [`Interp`] state every primitive threads
+//! (images, hooks, cross-references, decorations, …), function application,
+//! and pattern matching. The port follows `evaluator.cppo.ml`'s naive
+//! interpreter, not its bytecode VM, which was deliberately not ported.
 
 use crate::ast::{Ast, Pattern};
 use crate::crossref::CrossRefs;
@@ -19,13 +17,11 @@ use std::rc::Rc;
 /// See [`Interp::decos`].
 ///
 /// Each entry records the `interp.version` that was active when the deco
-/// closure was CAPTURED ([`DecoEntry::version`]). This used to be the X2b
-/// audit's known residual gap: the entry carried no version, and its
-/// consumer (`primitives::apply_deco`, called only from `lib.rs`'s
-/// post-page-break hook-firing pass) read `interp.version` at FIRE time
-/// instead. Fire time is always outside every `VersionScope`'s save/restore
-/// window, so in a cross-version program the flag there is the ENTRY's
-/// generation, never the deco author's.
+/// closure was CAPTURED ([`DecoEntry::version`]). Reading `interp.version` at
+/// FIRE time instead is wrong: the consumer (`primitives::apply_deco`, called
+/// only from `lib.rs`'s post-page-break hook-firing pass) always runs outside
+/// every `VersionScope`'s save/restore window, so in a cross-version program
+/// the flag there is the ENTRY's generation, never the deco author's.
 ///
 /// The corpus makes that concrete: `uline`, `enumitem` and `figbox` are
 /// ordinary 0.0.6 packages that call `inline-frame-*`/`block-frame-*`
@@ -52,8 +48,6 @@ pub enum DecoEntry {
         width: rustyfi_backend::Length,
         /// `(decoS, decoH, decoM, decoT)` — evalUtil.ml:169 `get_decoset`.
         decoset: [Value; 4],
-        /// The generation whose `deco` calling convention these closures
-        /// obey — see this enum's doc comment.
         version: RustyfiVersion,
     },
     /// `inline-frame-breakable`'s deco set, behind a
@@ -68,8 +62,6 @@ pub enum DecoEntry {
         pads: rustyfi_backend::Paddings,
         /// `(decoS, decoH, decoM, decoT)` — evalUtil.ml:169 `get_decoset`.
         decoset: [Value; 4],
-        /// The generation whose `deco` calling convention these closures
-        /// obey — see this enum's doc comment.
         version: RustyfiVersion,
     },
 }
@@ -154,8 +146,8 @@ pub struct Interp<'a> {
     pub destinations: Vec<rustyfi_backend::NamedDest>,
     pub outline: Vec<rustyfi_backend::OutlineEntry>,
     pub page_graphics: Vec<Vec<rustyfi_backend::GraphicsElem>>,
-    /// `register-document-information`'s accumulator (prim-retype-sweep
-    /// §2.4) — LAST WRITE WINS, same reset-per-trial policy as
+    /// `register-document-information`'s accumulator — LAST WRITE WINS, the
+    /// same reset-per-trial policy as
     /// `outline`/`annotations`/`destinations` above (a fresh `Interp` per
     /// trial resets this to `None`; the final trial's value is drained into
     /// `DocExtras::doc_info` by `lib.rs`'s `eval_document_trials`).
@@ -208,8 +200,8 @@ pub struct Interp<'a> {
     /// from a line-breaking post-pass with no version context of its own.
     pub outer_graphics: Vec<(Value, RustyfiVersion)>,
     /// The target language version this evaluation run is checking against
-    /// (math-split spec §3.4) — consulted only by `read_inline`'s
-    /// `IText::EmbedMath` FALLBACK arm (no installed math command; unit-test
+    /// — consulted only by `read_inline`'s `IText::EmbedMath` FALLBACK arm
+    /// (no installed math command; unit-test
     /// contexts only — the installed-command path is version-blind already).
     /// Default `V0_0`; `lib.rs`'s `eval_document_trials` (the shared tail
     /// both `compile_document_cst_with_trials` and
@@ -244,22 +236,16 @@ impl<'a> Interp<'a> {
 
     /// Evaluate `ast` by compiling it against `env` and running the result.
     ///
-    /// This used to be the reference **tree-walking** interpreter, kept beside
-    /// [`crate::compile`]'s closure compiler so the two could be cross-checked.
-    /// Phase 3 of retired it: quoted text is now compiled eagerly into
-    /// [`crate::quoted`]'s name-free form, so a tree-walker can no longer build
-    /// a `Value::InlineText` at all without invoking the compiler — there is
-    /// exactly one evaluator now.
-    ///
-    /// Kept as this thin shim because ~25 integration tests drive the
-    /// evaluator through it. It is precisely what those tests' compiled
-    /// counterpart already did, which is why the differential harness that
-    /// used to compare the two paths is gone: there is nothing left to differ.
+    /// A thin shim: ~25 integration tests drive the evaluator through it, and
+    /// it is precisely what their compiled counterpart already does. There is
+    /// exactly one evaluator — quoted text is compiled eagerly into
+    /// [`crate::quoted`]'s name-free form, so nothing can build a
+    /// `Value::InlineText` without invoking the compiler.
     ///
     /// `base` is the COMPILE-time environment `ast`'s free names resolve
     /// against; the program itself runs in a fresh, empty runtime frame chain
-    /// (Phase 4 — the base environment is no longer that chain's root,
-    /// because nothing resolves a name at run time).
+    /// — the base environment is NOT that chain's root, because nothing
+    /// resolves a name at run time.
     pub fn eval(&mut self, base: &BaseEnv, ast: &Ast) -> Result<Value, EvalError> {
         crate::compile::compile_program(ast, base).run(&Env::root(), self)
     }
@@ -342,8 +328,7 @@ impl<'a> Interp<'a> {
 /// Append one slot per declared SATySFi 0.1 labeled-optional parameter, in
 /// declaration order: `Some v` when `opt_vals` supplies that label, `None`
 /// otherwise (upstream `reduce_beta`'s fold over the closure's own label map).
-/// Supplied labels a closure does not declare are silently ignored — safe only
-/// because typecheck rejects wrong labels first.
+/// See `Interp::apply_with_opts` for why unknown labels are ignored.
 fn push_opt_slots(slots: &mut Vec<Value>, opt_labels: &[String], opt_vals: &[(String, Value)]) {
     for label in opt_labels {
         slots.push(match opt_vals.iter().find(|(l, _)| l == label) {
@@ -362,9 +347,8 @@ fn push_opt_slots(slots: &mut Vec<Value>, opt_labels: &[String], opt_vals: &[(St
 /// The push order here is the same left-to-right traversal
 /// `compile::pattern_vars` uses to collect the arm's names, so position `i` in
 /// `bindings` is slot `i` of the frame the arm runs in (Phase 4). Keep the two
-/// in step. A pattern
-/// and a value of mismatched shape is simply "no match", never an error:
-/// this untyped evaluator relies on the (separate, not-yet-ported)
+/// in step. A pattern and a value of mismatched shape is simply "no match",
+/// never an error: this untyped evaluator relies on the separate
 /// exhaustiveness/type checker to rule out ill-typed matches ahead of time.
 pub fn match_pattern(pat: &Pattern, value: &Value, bindings: &mut Vec<Value>) -> bool {
     match pat {

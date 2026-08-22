@@ -1,10 +1,9 @@
-//! `cst_v1` round-trip and negative tests — the S5 slice's own test plan
-//! items 2 and 3 (cst_v1 design spec §7): parse+unparse a hand-written
-//! 0.1-syntax snippet and assert every `FileV1`/`Bind`/`Expr` node
-//! round-trips losslessly (`Parse` ∘ `Unparse` = id at the token level),
-//! plus assert that SATySFi-0.1-invalid input is rejected. Lowering/e2e
-//! tests (spec items 4-6) are out of scope for this slice —
-//! `rustyfi-syntax` only produces `FileV1`/`parse_file_v1`.
+//! `cst_v1` round-trip and negative tests: parse+unparse a
+//! hand-written 0.1-syntax snippet and assert every `FileV1`/`Bind`/`Expr`
+//! node round-trips losslessly (`Parse` ∘ `Unparse` = id at the token level),
+//! plus assert that SATySFi-0.1-invalid input is rejected. Lowering/e2e tests
+//! are out of scope here — `rustyfi-syntax` only produces
+//! `FileV1`/`parse_file_v1`.
 
 use rustyfi_syntax::cst_v1::{self, parse_file_v1};
 use rustyfi_syntax::lexer::lex_with_version;
@@ -44,8 +43,8 @@ fn document_let_forms() {
     assert_roundtrip_v1("let [a, b] = [1, 2] in a");
 }
 
-/// Sub-slice 2b: expression-level `let rec … and … in` — the full
-/// `and`-chain (Slice 1's single-clause restriction is retired).
+/// Expression-level `let rec … and … in` — the full
+/// `and`-chain (the earlier single-clause restriction is retired).
 #[test]
 fn document_let_rec_and_in() {
     assert_roundtrip_v1(
@@ -68,7 +67,7 @@ fn document_let_rec_and_in() {
     assert_eq!(ands[0].clause.name.name, "odd");
 }
 
-/// Sub-slice 2b: expression-level `let mutable x <- init in body`.
+/// Expression-level `let mutable x <- init in body`.
 #[test]
 fn document_let_mutable_in() {
     assert_roundtrip_v1("let mutable c <- 0 in c <- !c + 1");
@@ -83,7 +82,7 @@ fn document_let_mutable_in() {
     assert_eq!(name.name, "c");
 }
 
-/// Sub-slice 2b exclusion: 0.0.6 has no `Expr::LetInlineIn`/`LetBlockIn` at
+/// 0.0.6 has no `Expr::LetInlineIn`/`LetBlockIn` at
 /// all (`LETHORZ`/`LETVERT` are top-level-only), so there is nothing to
 /// transcribe an expression-level `let inline`/`let block` to — a parse
 /// error, documented.
@@ -93,19 +92,17 @@ fn let_inline_or_block_in_is_a_parse_error() {
     assert!(parse_file_v1("let block ctx +c = 0 in 1").is_err());
 }
 
-/// math-split spec §4.1/§6.3 test 8: `val math` now parses via
-/// `Bind::ValueMath`. `ctx` is MANDATORY — unlike `val inline`/`val block`,
-/// there is no lightweight ctx-less form (contrast `bind_inline`'s two
-/// productions) — so `val math \m = e` (no ctx variable before the `\cmd`)
-/// stays a parse error, just for a different reason than before this spec
-/// (a missing `ctx: VarTok`, not "no arm exists").
+/// On `Bind::ValueMath`, `ctx` is MANDATORY — unlike `val inline`/`val
+/// block` there is no lightweight ctx-less form (contrast `bind_inline`'s
+/// two productions) — so `val math \m = e` (no ctx variable before the
+/// `\cmd`) is a parse error.
 #[test]
 fn val_math_without_ctx_is_a_parse_error() {
     assert!(parse_file_v1(r"module M = struct val math \m = e end").is_err());
 }
 
-/// math-split spec §4.1/§6.3 test 8: `val math ctx \f m = e` (no `with sub
-/// sup`) parses to `Bind::ValueMath` with `scripts: None`.
+/// `val math ctx \f m = e` (no `with sub sup`) parses to
+/// `Bind::ValueMath` with `scripts: None`.
 #[test]
 fn val_math_with_ctx_parses() {
     let src = r"module M = struct val math ctx \f m = e end";
@@ -124,8 +121,8 @@ fn val_math_with_ctx_parses() {
     assert!(scripts.is_none());
 }
 
-/// math-split spec §4.1/§6.3 test 8: `val math ctx \f with sub sup = e`
-/// parses to `Bind::ValueMath` with `scripts: Some(..)`.
+/// `val math ctx \f with sub sup = e` parses to `Bind::ValueMath` with
+/// `scripts: Some(..)`.
 #[test]
 fn val_math_with_scripts_parses() {
     let src = r"module M = struct val math ctx \f with sub sup = e end";
@@ -145,9 +142,9 @@ fn val_math_with_scripts_parses() {
     assert_eq!(scripts.sup.name, "sup");
 }
 
-/// math-split spec §6.3 test 8: under V0_0, `math` stays an ordinary
-/// identifier (the keyword gate is V0_1-only) — `let math = 3` still
-/// lexes `math` as a plain `Var`, never `Token::Math`.
+/// Under V0_0, `math` stays an ordinary identifier (the keyword gate is
+/// V0_1-only) — `let math = 3` still lexes `math` as a plain `Var`, never
+/// `Token::Math`.
 #[test]
 fn math_keyword_is_gated_to_v0_1() {
     let toks = lex_with_version("val math ctx \\f m = e", RustyfiVersion::V0_1).unwrap();
@@ -228,11 +225,10 @@ fn document_labeled_optional_arguments() {
     assert_roundtrip_v1("f ?(a = 1) None");
 }
 
-/// optional-arg-rows increment 3a: a `?(l = x, …)` labeled-optional bundle
-/// on an inline/block command's OWN parameter list — grammar-wise this
-/// already parsed at increment 1 (`cst_v1::Param.opts`), this pins it stays
-/// that way once `lower_command_params` actually consumes it (rather than
-/// erroring) rather than a grammar regression.
+/// A `?(l = x, …)` labeled-optional bundle
+/// on an inline/block command's OWN parameter list. Grammar-wise this
+/// reuses `cst_v1::Param.opts`; the pin is that it keeps parsing now
+/// that `lower_command_params` consumes rather than rejects it.
 #[test]
 fn command_param_bundle_round_trips() {
     assert_roundtrip_v1(
@@ -330,7 +326,7 @@ fn document_math() {
 
 /// `(command \cmd)` — a first-class reference to an inline command as a
 /// value (upstream `parser_v1.mly:906-908`), needed by `v01-mini.satyh`'s
-/// `get-initial-context 440pt (command \math)` (§2.1 of the finale spec).
+/// `get-initial-context 440pt (command \math)`.
 #[test]
 fn document_command_reference() {
     assert_roundtrip_v1(r"(command \math)");
@@ -361,11 +357,10 @@ fn document_command_reference() {
 /// Language-completeness sweep gap 4: `(command \Mod.cmd)` — the SAME
 /// first-class command-reference syntax as [`document_command_reference`]
 /// above, but module-qualified (upstream's `parser_v1.mly:906-908`
-/// `backslash_cmd` accepts `LONG_HORZCMD`, not just bare `HORZCMD`). The
-/// grammar (`Atomic::Command { name: AnyHorzCmdTok, .. }`) already had an
-/// `AnyHorzCmdTok::Mod` arm and needed no CST change — the gap was purely
-/// the lexer's program-mode `\` handling never scanning a dotted path (see
-/// `lexer.rs` tests' `program_mode_qualified_command`).
+/// `backslash_cmd` accepts `LONG_HORZCMD`, not just bare `HORZCMD`). The CST
+/// side is `Atomic::Command { name: AnyHorzCmdTok, .. }`'s `Mod` arm; the
+/// lexer side is program-mode `\` scanning a dotted path (see `lexer.rs`
+/// tests' `program_mode_qualified_command`).
 #[test]
 fn document_qualified_command_reference() {
     assert_roundtrip_v1(r"(command \Mod.cmd)");
@@ -405,7 +400,7 @@ fn library_val_forms() {
     );
 }
 
-/// Sub-slice 2b: `val rec … and …` — lossless round-trip; parsed shape has
+/// `val rec … and …` — lossless round-trip; parsed shape has
 /// `ValueRec` with 1 `and`.
 #[test]
 fn library_val_rec_and_chain() {
@@ -428,7 +423,7 @@ fn library_val_rec_and_chain() {
     assert_eq!(ands[0].clause.name.name, "odd");
 }
 
-/// Sub-slice 2b: `val mutable x <- e`.
+/// `val mutable x <- e`.
 #[test]
 fn library_val_mutable() {
     let src = "module M = struct\n\
@@ -444,7 +439,7 @@ fn library_val_mutable() {
     assert!(matches!(&binds[0], cst_v1::Bind::ValueMutable { name, .. } if name.name == "c"));
 }
 
-/// Sub-slice 2b: `type` binds — the variant/synonym split, postfix-tyvars
+/// `type` binds — the variant/synonym split, postfix-tyvars
 /// parse (`u 'a`), products (`int * int`), and prefix application
 /// (`option t`, 1 argument — the arity guard only fires at LOWERING, so a
 /// 2-argument application is pinned as a lowering-error test instead, not
@@ -480,7 +475,7 @@ fn library_type_binds() {
     };
 }
 
-/// Sub-slice 2b: `bound_identifier` retirement — `val (+++) a b = a`.
+/// `bound_identifier` retirement — `val (+++) a b = a`.
 #[test]
 fn library_op_named_value() {
     let src = "module M = struct\n\
@@ -496,10 +491,10 @@ fn library_op_named_value() {
     assert!(matches!(&binds[0], cst_v1::Bind::Value { name, .. } if name.name == "+++"));
 }
 
-/// G2: closed type-level records (`(| l : ty |)`) now parse (`TypeAtom::
+/// Closed type-level records (`(| l : ty |)`) now parse (`TypeAtom::
 /// Record`) — round-trips, and the field list/names come through as
-/// expected. The `| ?'r` row-var tail form NOW ALSO parses (optional-arg-rows
-/// increment 2 — see `type_record_rowvar_tail_now_parses_and_round_trips`
+/// expected. The `| ?'r` row-var tail form NOW ALSO parses (see
+/// `type_record_rowvar_tail_now_parses_and_round_trips`
 /// below).
 #[test]
 fn type_record_round_trips() {
@@ -544,7 +539,7 @@ fn type_record_multi_field_and_nested_round_trips() {
 }
 
 /// A closed record type used as a `Fun` domain, and in a sig `val` decl —
-/// the scout's G2 acceptance shape.
+/// the scout's acceptance shape.
 #[test]
 fn type_record_as_fun_domain_and_in_sig_round_trips() {
     assert_roundtrip_v1(
@@ -556,7 +551,7 @@ fn type_record_as_fun_domain_and_in_sig_round_trips() {
     );
 }
 
-/// optional-arg-rows increment 2: the open form's `| ?'r` row-var tail now
+/// The open form's `| ?'r` row-var tail now
 /// parses (round-trips) and its `row_tail` comes through with the expected
 /// row-variable name.
 #[test]
@@ -612,12 +607,12 @@ fn type_record_semicolon_separator_is_a_parse_error() {
     .is_err());
 }
 
-/// The `stdja-mini.satyh` transliteration from the cst_v1 design spec's §3
-/// (Slice-1 `Bind` ground truth), covering all three `Bind` arms plus a
-/// comma-record inside `document`'s call, one tuple (`page-break`'s
-/// argument), and one `let open M in`-shaped local use elsewhere in the
-/// file's expr layer (via a small standalone snippet below — `stdja-mini`
-/// itself has no module reference to open).
+/// The `stdja-mini.satyh` transliteration (the `Bind` ground truth),
+/// covering all three `Bind` arms plus a comma-record inside
+/// `document`'s call, one tuple (`page-break`'s argument), and one
+/// `let open M in`-shaped local use elsewhere in the file's expr layer
+/// (via a small standalone snippet below — `stdja-mini` itself has no
+/// module reference to open).
 #[test]
 fn library_v01_mini_transliteration() {
     let src = "\
@@ -650,7 +645,7 @@ end
     assert!(matches!(binds[3], cst_v1::Bind::ValueInline { .. }));
 }
 
-/// Sub-slice 2a: a nested `module N = struct … end` bind round-trips
+/// A nested `module N = struct … end` bind round-trips
 /// losslessly and the parsed shape is exactly the nested `Bind::Module`.
 #[test]
 fn library_nested_module_bind() {
@@ -688,9 +683,8 @@ fn library_nested_module_bind() {
     assert!(matches!(binds[2], cst_v1::Bind::Value { .. }));
 }
 
-/// Sub-slice 2c retires the Slice-1/2a struct-literal-only restriction:
-/// `module M = N` (a bare module alias) now parses fine, as
-/// `ModExpr::Var` — it is Sub-slice 2d's `LowerError` at LOWERING time, not
+/// `module M = N` (a bare module alias) parses fine as `ModExpr::Var`
+/// — it is a `LowerError` at LOWERING time, not
 /// a parse error (see `v1/lower.rs`'s `module_alias_is_a_lower_error`).
 /// What remains a parse error is `FileV1`'s own top-level shape: neither of
 /// these has any `FileV1` production at all.
@@ -715,7 +709,7 @@ fn module_alias_at_top_level_is_still_a_parse_error() {
 
 /// Regression pin: a document's module-qualified variable reference still
 /// parses as `Atomic::VarWithMod` (unaffected by the new `Bind::Module`
-/// arm — `VarWithMod` was already Slice-1 grammar).
+/// arm — `VarWithMod` was already present grammar).
 #[test]
 fn document_qualified_var_still_parses_as_var_with_mod() {
     assert_roundtrip_v1("M.x");
@@ -744,7 +738,7 @@ fn library_with_headers() {
     );
 }
 
-// ---- Negative tests (spec item 3) --------------------------------------------
+// ---- Negative tests ---------------------------------------------------------
 
 #[test]
 fn stage_header_is_a_lex_error_under_v0_1() {
@@ -813,9 +807,9 @@ fn v0_0_source_is_not_valid_v0_1_library_syntax() {
     assert!(parse_file_v1(&v006_src).is_err());
 }
 
-// ---- Sub-slice 2c: module/signature grammar ----------------------------
+// ---- module/signature grammar -------------------------------------------
 
-/// §5.1 item 1: `main_lib`'s `:>` signature annotation.
+/// `main_lib`'s `:>` signature annotation.
 #[test]
 fn library_sig_annot() {
     let src = "module M :> sig val x : int end = struct\n\
@@ -840,7 +834,7 @@ fn library_sig_annot() {
     );
 }
 
-/// §5.1 item 2: the bind-level `option(sig_annot)`.
+/// The bind-level `option(sig_annot)`.
 #[test]
 fn library_nested_module_sig_annot() {
     let src = "module M = struct\n\
@@ -862,7 +856,7 @@ fn library_nested_module_sig_annot() {
     assert!(sig_annot.is_some());
 }
 
-/// §5.1 item 3: module aliases and (possibly long) module paths.
+/// Module aliases and (possibly long) module paths.
 #[test]
 fn library_module_alias_and_paths() {
     let src = "module M = struct\n\
@@ -898,7 +892,7 @@ fn library_module_alias_and_paths() {
     assert_eq!(long.name, "C");
 }
 
-/// §5.1 item 4: a functor literal bind (also exercises `VarWithMod` `X.x`
+/// A functor literal bind (also exercises `VarWithMod` `X.x`
 /// inside the functor body).
 #[test]
 fn library_functor_bind() {
@@ -921,7 +915,7 @@ fn library_functor_bind() {
     );
 }
 
-/// §5.1 item 5: functor application, plus the App-vs-Var backtrack pin.
+/// Functor application, plus the App-vs-Var backtrack pin.
 #[test]
 fn library_functor_application() {
     let src = "module M = struct\n\
@@ -976,7 +970,7 @@ fn library_functor_application() {
     assert!(matches!(binds[3], cst_v1::Bind::Value { .. }));
 }
 
-/// §5.1 item 6: a `signature` bind plus full `decl` coverage inside its
+/// A `signature` bind plus full `decl` coverage inside its
 /// `sig … end` body — all eight `Decl` forms, `sig end` (empty).
 #[test]
 fn library_signature_bind_and_full_decl_coverage() {
@@ -1057,7 +1051,7 @@ fn library_signature_bind_and_full_decl_coverage() {
     assert!(matches!(&*decls[9].0, cst_v1::ast::Decl::Include { .. }), "{:?}", decls[9].0);
 }
 
-/// §5.1 item 7: `with [path] type … and …` refinement.
+/// `with [path] type … and …` refinement.
 #[test]
 fn library_with_type() {
     let src = "module M :> S with type t = int and u = bool = struct\n\
@@ -1094,7 +1088,7 @@ fn library_with_type() {
     assert!(matches!(path2, Some(cst_v1::ast::ModChainV1::Long(_))));
 }
 
-/// §5.1 item 8: `include` binds.
+/// `include` binds.
 #[test]
 fn library_include_bind() {
     let src = "module M = struct\n\
@@ -1118,7 +1112,7 @@ fn library_include_bind() {
     assert!(matches!(&*b1.0, cst_v1::ast::ModExpr::Var(cst_v1::ast::ModChainV1::Long(_))));
 }
 
-/// §5.1 item 9: a `:>` signature PATH annotation.
+/// A `:>` signature PATH annotation.
 #[test]
 fn library_sig_path_annot() {
     let src = "module M :> A.B.S = struct\n\
@@ -1134,10 +1128,10 @@ fn library_sig_path_annot() {
     assert!(matches!(&*sig_annot.sig_.0, cst_v1::ast::SigExpr::Bot(cst_v1::ast::SigBotV1::Path(_))));
 }
 
-// ---- Sub-slice 2c: negative pins -----------------------------------------
+// ---- negative pins --------------------------------------------------------
 
-/// §5.1 item 10 (the left-recursion correction's behavioral fingerprint):
-/// upstream rejects chained `with`, and so does the bot+suffix encoding.
+/// The left-recursion correction's behavioral fingerprint: upstream
+/// rejects chained `with`, and so does the bot+suffix encoding.
 #[test]
 fn with_cannot_chain() {
     assert!(parse_file_v1(
@@ -1148,19 +1142,17 @@ fn with_cannot_chain() {
     .is_err());
 }
 
-/// §5.1 item 11: 0.1's annotation sigil is `:>`, never 0.0.6's `: sig …
-/// end` shape.
+/// 0.1's annotation sigil is `:>`, never 0.0.6's `: sig … end` shape.
 #[test]
 fn bare_colon_module_annotation_is_a_parse_error() {
     assert!(parse_file_v1("module M : sig end = struct val x = 1 end").is_err());
 }
 
-// (§5.1 item 12, "a staged `val` decl is a parse error", is retired: staged
-// decls now have their own `Decl::Val.stage` field — see
-// `signature_staged_value_decls` below.)
+// (No negative pin for a staged `val` decl: it parses, through
+// `Decl::Val.stage` — see `signature_staged_value_decls` below.)
 
-/// §5.1 item 13 (phase 5 — macro decls lex as `HorzMacro`/`VertMacro`, not
-/// `HorzCmdTok`/`VertCmdTok`, so no `Decl` arm accepts them).
+/// Macro decls lex as `HorzMacro`/`VertMacro`, not
+/// `HorzCmdTok`/`VertCmdTok`, so no `Decl` arm accepts them.
 #[test]
 fn macro_decl_is_a_parse_error() {
     assert!(parse_file_v1(
@@ -1169,8 +1161,8 @@ fn macro_decl_is_a_parse_error() {
     .is_err());
 }
 
-/// §5.1 item 14 (phase 4 — no `ROWVAR` token, so `?'r` cannot appear where
-/// a `Decl::Val` expects a `quant`/`colon`).
+/// No `ROWVAR` token, so `?'r` cannot appear where a
+/// `Decl::Val` expects a `quant`/`colon`.
 #[test]
 fn row_quantifier_is_a_parse_error() {
     assert!(parse_file_v1(
@@ -1179,7 +1171,7 @@ fn row_quantifier_is_a_parse_error() {
     .is_err());
 }
 
-// ---- Ld3a: HeaderV1 (the `use`-header union grammar) ------------------------
+// ---- HeaderV1 (the `use`-header union grammar) ----------------------------
 
 /// Every `use`-header form round-trips, pulled from the real `saphe-split`
 /// demo headers (`demo/demo.saty`, `demo/local.satyh`), plus the Legacy
@@ -1241,8 +1233,8 @@ fn header_v1_display_names() {
 }
 
 // ============================================================================
-// Sub-slice 2d-2: `inline […]`/`block […]` command types, `M.t` LONG_LOWER
-// qualified type paths (§4-A of the opaque-types spec, U18).
+// `inline […]`/`block […]` command types, `M.t` LONG_LOWER
+// qualified type paths.
 // ============================================================================
 
 /// `inline [τ, …]`/`block […]` round-trip in sig `val` position, including a
@@ -1356,18 +1348,16 @@ fn command_type_and_long_lower_shapes() {
     assert_eq!(ctor.name, "t");
 }
 
-/// Negatives: `math […]` now PARSES (math-package completion M1 — see
-/// `math_command_type_head_round_trips`/`math_command_type_shape` below;
-/// this test used to pin it as a parse error under increment 3b). A
-/// `?`-suffixed slot (`int?`) still never parses (0.1 has no such
-/// positional-optional marker at all, only the closed-map `?(…)` prefix),
-/// and a `?(…)`-prefixed slot with NO mandatory type following the bundle
-/// (`[?(l : int)]` alone, nothing after the bundle) still fails — the
+/// Negatives. `math […]` itself PARSES (see
+/// `math_command_type_head_round_trips`/`math_command_type_shape` below), and
+/// so does a well-formed `?(l:τ,…) τ_arg` slot (see
+/// `command_type_opt_labels_round_trips`). What never parses: a
+/// `?`-suffixed slot (`int?`), since 0.1 has no positional-optional marker
+/// at all, only the closed-map `?(…)` prefix; and a `?(…)`-prefixed slot
+/// with NO mandatory type after the bundle (`[?(l : int)]` alone) — the
 /// bundle prefix is optional, but the slot's own `ty` is not
 /// (`TypeCmdArgItemV1.opts: Option<..>`, `ty: TyErasedV1`, not
-/// `Option<TyErasedV1>`). A well-formed `?(l:τ,…) τ_arg` DOES now parse —
-/// see `command_type_opt_labels_round_trips` (optional-arg-rows increment
-/// 3a, "roadmap phase 4" landed).
+/// `Option<TyErasedV1>`).
 #[test]
 fn command_type_negatives() {
     assert!(parse_file_v1(
@@ -1396,7 +1386,7 @@ fn command_type_negatives() {
     .is_err());
 }
 
-/// optional-arg-rows increment 3a: `inline [?(l:τ,…) τ_arg, …]` / `block
+/// `inline [?(l:τ,…) τ_arg, …]` / `block
 /// […]` — the `?(l : τ, …)` labeled-optional command-type row PREFIX,
 /// round-tripping on a single- and a two-label bundle, mixed with a
 /// trailing plain (unbundled) slot, plus the empty-list `opts: None` case
@@ -1415,8 +1405,8 @@ fn command_type_opt_labels_round_trips() {
 
 /// Shape assertion for the `?(l:τ,…)` command-type row: the parsed tree
 /// actually carries `opts` with the right entries (surface order, NOT yet
-/// sorted — sorting is a `typecheck.rs`-side concern, §7.3/§14 risk 3), and
-/// a plain slot right after a bundled one still parses with `opts: None`.
+/// sorted — sorting is a `typecheck.rs`-side concern), and a plain slot
+/// right after a bundled one still parses with `opts: None`.
 #[test]
 fn command_type_opt_labels_shape() {
     let src = "module M = struct\n\
@@ -1465,12 +1455,11 @@ fn command_type_empty_opt_labels_parses_but_is_a_lower_concern() {
 }
 
 // ============================================================================
-// Math-package completion M1: `math […]` command-type head
-// (`TypeApp::MathCmdTy`) — T-M1-roundtrip.
+// `math […]` command-type head (`TypeApp::MathCmdTy`).
 // ============================================================================
 
 /// `math []`, `math [math-text, math-text]`, `math [?(a : int) int]` (a
-/// labeled-optional row, inheriting inc3a's `TypeCmdArgItemV1.opts` for
+/// labeled-optional row, reusing `TypeCmdArgItemV1.opts` for
 /// free), and `math [list (math-text * inline-text)]` (the `\cases` shape,
 /// upstream `math.satyh:394`) all round-trip byte-for-byte.
 #[test]

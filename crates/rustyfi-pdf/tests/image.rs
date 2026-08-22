@@ -1,4 +1,4 @@
-//! Slice 1 (raster images) end-to-end test: compile a real `.saty`-shaped
+//! Raster-images end-to-end test: compile a real `.saty`-shaped
 //! document that `load-image`s the checked-in `dot.png` fixture and
 //! `use-image-by-width`s it into a paragraph, then render the result with this
 //! crate's own `render_pdf` and inspect the PDF bytes. Mirrors
@@ -58,11 +58,11 @@ fn jpeg_fixture_path() -> String {
         .to_string()
 }
 
-/// `document`/`+p`/`\emph` are no longer hardcoded Rust natives (phase 4 of
-/// the rustyfi-lang port): they're ordinary bindings in the real
-/// `stdja-mini` stdlib package (`lib-rustyfi/dist/packages/stdja-mini.satyh`).
-/// Compile `src` the same way the multi-file loader's `merge_program` does —
-/// concatenate the package's prelude ahead of `src`'s own.
+/// `document`/`+p`/`\emph` are ordinary bindings in the real `stdja-mini`
+/// stdlib package (`lib-rustyfi/dist/packages/stdja-mini.satyh`), not Rust
+/// natives. Compile `src` the same way the multi-file loader's
+/// `merge_program` does — concatenate the package's prelude ahead of
+/// `src`'s own.
 fn compile_document_with_stdlib(src: &str) -> Rc<DocumentValue> {
     let lib_path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../lib-rustyfi/dist/packages/stdja-mini.satyh");
@@ -85,9 +85,6 @@ fn compile_document_with_stdlib(src: &str) -> Rc<DocumentValue> {
 
 #[test]
 fn image_in_a_paragraph_renders_as_a_pdf_image_xobject() {
-    // let-inline ctx \fig it = use-image-by-width (load-image `<fixture>`) 40pt
-    // in
-    // document (||) '< +p { here: \fig{ignored} done } >
     let src = "let-inline ctx \\fig it = use-image-by-width (load-image `__FIXTURE__`) 40pt
          in
          document (||) '< +p { here: \\fig{ignored} done } >"
@@ -134,7 +131,7 @@ fn image_in_a_paragraph_renders_as_a_pdf_image_xobject() {
         text.contains(" Do"),
         "expected a content-stream `Do` (x_object) operator: {text}"
     );
-    // `DeviceRGB`/`BitsPerComponent 8`, per this slice's flat-RGB8 XObject
+    // `DeviceRGB`/`BitsPerComponent 8`, per this test's flat-RGB8 XObject
     // encoding (see rustyfi-backend's `ImageResource` doc comment).
     assert!(text.contains("/DeviceRGB"), "expected a DeviceRGB color space: {text}");
     assert!(
@@ -145,7 +142,7 @@ fn image_in_a_paragraph_renders_as_a_pdf_image_xobject() {
 
 #[test]
 fn text_only_document_has_no_xobject_and_is_unaffected_by_the_images_parameter() {
-    // A regression guard for the plan's "text-only documents render
+    // A regression guard for the "text-only documents render
     // byte-identically to now" invariant: a document that never touches
     // `load-image` produces an empty `DocumentValue::images`, and the
     // writer must emit no `/XObject` resource or Image XObject at all.
@@ -164,8 +161,6 @@ fn text_only_document_has_no_xobject_and_is_unaffected_by_the_images_parameter()
 
 #[test]
 fn jpeg_image_embeds_via_dctdecode_passthrough_not_a_flate_reencode() {
-    // Same shape as `image_in_a_paragraph_renders_as_a_pdf_image_xobject`
-    // above, but with the JPEG fixture instead of the PNG one.
     let src = "let-inline ctx \\fig it = use-image-by-width (load-image `__FIXTURE__`) 40pt
          in
          document (||) '< +p { here: \\fig{ignored} done } >"
@@ -224,7 +219,7 @@ fn jpeg_image_embeds_via_dctdecode_passthrough_not_a_flate_reencode() {
     // decode-then-reencode form: 8x4 RGB8 with no padding is only 96 bytes,
     // far shorter than (and byte-for-byte different from) the original
     // JPEG file — so this is genuinely asserting "original JPEG size", not
-    // "decoded RGB size", per this slice's whole point.
+    // "decoded RGB size", per this test's whole point.
     let decoded_rgb_len = 8 * 4 * 3;
     assert_ne!(
         original.len(),

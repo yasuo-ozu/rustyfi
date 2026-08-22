@@ -45,9 +45,8 @@ pub enum BaseType {
     /// `block-text` (v0.0.6: `TextColType`).
     BlockText,
     /// `math` (v0.0.6: `MathType`) — quoted math text. Reused, unmodified,
-    /// as V0_1's `math-text` (upstream literally renamed 0.0.6's `math`,
-    /// `research-stdlib-prims-backend.md:144-147`); see `MathBoxes` for the
-    /// new V0_1-only half of the split.
+    /// as V0_1's `math-text` (upstream literally renamed 0.0.6's `math`);
+    /// see `MathBoxes` for the new V0_1-only half of the split.
     MathText,
     /// `math-boxes` (V0_1 only; `dev-0-1-0` `MathBoxesType`) — the
     /// evaluated math tree, bridged from `MathText` by the V0_1 primitive
@@ -592,15 +591,14 @@ pub enum Row {
 ///
 /// This is the hottest function in the typechecker — ~316k calls on a corpus
 /// document, and its cost is dominated by COPYING types, not by following
-/// links. It used to return an owned `MonoType`, which meant the common case
-/// (the argument is already resolved: not a variable, or a free one) ended in
-/// `ty.clone()` — a full deep copy of a type produced solely to hand back an
-/// owned value the caller then only inspected. Measured, that pointless tail
-/// copy was **87-89% of all type nodes cloned during typechecking**, and
-/// typecheck time tracks cloned-node volume near-linearly across the whole
-/// corpus.
+/// links. Do NOT make it return an owned `MonoType`: that makes the common
+/// case (the argument is already resolved — not a variable, or a free one)
+/// end in `ty.clone()`, a full deep copy produced solely to hand back an owned
+/// value the caller then only inspects. Measured, that pointless tail copy was
+/// **87-89% of all type nodes cloned during typechecking**, and typecheck time
+/// tracks cloned-node volume near-linearly across the whole corpus.
 ///
-/// So the common case now borrows. Only the link-following path allocates,
+/// So the common case borrows. Only the link-following path allocates,
 /// and only because the `Bound` payload lives behind a `RefCell` whose guard
 /// cannot outlive this frame. Callers that just match on the result want
 /// `&*resolve(..)`; the few that keep it want `.into_owned()`.
@@ -1054,10 +1052,6 @@ fn fmt_mono(ty: &MonoType, f: &mut fmt::Formatter<'_>, namer: &mut VarNamer) -> 
         MonoType::Var(v) => write!(f, "{}", namer.name_for(v.ptr_key())),
         MonoType::Base(b) => write!(f, "{b}"),
         MonoType::Func(row, dom, cod) => {
-            // A row that resolves to bare `Empty` (every 0.0.6 function)
-            // prints nothing extra, keeping every pinned 0.0.6 error-message
-            // string byte-identical. A non-empty row prints `?(l : τ, …) `
-            // before the domain (a free-var tail adds `| ?'rN`).
             fmt_func_row(row, f, namer)?;
             fmt_operand(dom, f, namer)?;
             f.write_str(" -> ")?;

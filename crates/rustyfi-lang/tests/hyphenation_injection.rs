@@ -1,10 +1,10 @@
-//! S2 golden fixture (S2): drives `primitives::read_inline`
-//! (`text_to_boxes`'s `flush_word` hyphenation injection, §4) together
+//! Golden fixture: drives `primitives::read_inline`
+//! (`text_to_boxes`'s `flush_word` hyphenation injection) together
 //! with `rustyfi_backend::break_into_lines`, proving end to end:
 //!
 //! 1. With no dictionary installed (`Context::initial`'s default), a
 //!    hyphenatable word still produces exactly one `InnerString` — the
-//!    byte-identity gate (D4/§6) at the box-construction level.
+//!    byte-identity gate at the box-construction level.
 //! 2. With a dictionary installed, `read_inline` splits the word into
 //!    `InnerString` fragments separated by `Discretionary`s whose
 //!    `pre_break` is exactly a `-` glyph, and the fragments rejoin to the
@@ -43,8 +43,8 @@ impl FontMetrics for Mono {
     }
 }
 
-/// A word real dictionaries hyphenate at more than one point (the design
-/// doc's own D2 example: `hy-phen-ation`).
+/// A word real dictionaries hyphenate at more than one point (as in
+/// `hy-phen-ation`).
 const WORD: &str = "hyphenation";
 
 /// Run `word` through `read_inline` (i.e. `text_to_boxes`/`flush_word`)
@@ -61,8 +61,6 @@ fn boxes_for_word(ctx: &Context, word: &str) -> Vec<HorzBox> {
     boxes
 }
 
-/// [`boxes_for_word`] specialized to [`WORD`] — kept as the S2 fixtures'
-/// original entry point.
 fn boxes_for(ctx: &Context) -> Vec<HorzBox> {
     boxes_for_word(ctx, WORD)
 }
@@ -80,7 +78,6 @@ fn no_dictionary_installed_yields_a_single_unsplit_inner_string() {
     );
     ctx.hyphen_dictionary = None;
     let boxes = boxes_for(&ctx);
-    // boxes: [InnerString(WORD), OuterFil] — no Discretionary at all.
     assert_eq!(
         boxes.len(),
         2,
@@ -172,9 +169,6 @@ fn narrow_column_forces_a_mid_word_break_with_a_trailing_hyphen() {
         saw_trailing_hyphen,
         "expected a wrapped line ending in the hyphen glyph: {lines:?}"
     );
-    // Every line's contents include the literal hyphen glyph InnerString
-    // wherever a break was taken (that's the point) — strip those out and
-    // the word's own letters must still all be present, in order.
     assert_eq!(
         rejoined.replace('-', ""),
         WORD,
@@ -185,16 +179,13 @@ fn narrow_column_forces_a_mid_word_break_with_a_trailing_hyphen() {
 
 #[test]
 fn a_huge_hyphen_penalty_disables_the_break_even_though_the_line_overflows() {
-    // The `set-hyphen-penalty 100000` disable idiom (D6) does NOT extend to the
+    // The `set-hyphen-penalty 100000` disable idiom does NOT extend to the
     // case where the hyphenated line is itself overfull, because upstream's
     // graph rule outranks any penalty: `hyphen-` is 42pt on this 40pt measure,
     // so it is already `LBTooLong`, and a source node contributes only its
     // FIRST too-long edge before being dropped (`lineBreak.ml:1017-1027`). The
     // whole-word line is that node's SECOND too-long option, so it is never
     // offered — no penalty can bring back an edge the graph never had.
-    //
-    // (This asserted a single overfull line when the port scored every overfull
-    // candidate independently, which let a huge penalty outvote them all.)
     let mut ctx = Context::initial(Length::pt(40.0));
     ctx.hyphen_dictionary = Some(HyphenLang::EnglishUS);
     ctx.hyphen_badness = 100_000;
@@ -216,17 +207,15 @@ fn a_huge_hyphen_penalty_disables_the_break_even_though_the_line_overflows() {
             _ => None,
         })
         .collect();
-    // The break IS taken, so the first line ends with a printed hyphen — that
-    // is the `pre_break` slot doing its job.
     assert_eq!(
         joined, "hyphen-",
         "the taken break prints its hyphen on line 1"
     );
 }
 
-// ---- S3 ---------------------------
+// ------------------------------------
 
-/// Item 1 (soft-hyphen priority): with a dictionary installed, an explicit
+/// Soft-hyphen priority: with a dictionary installed, an explicit
 /// U+00AD embedded in the input word must win over dictionary-derived
 /// breaks and must not leak into any rendered fragment's text — the word
 /// splits exactly (and only) at the marked point.
@@ -284,27 +273,25 @@ fn explicit_soft_hyphen_wins_over_dictionary_breaks_and_is_not_rendered() {
     );
 }
 
-/// Item 1 continued: the byte-identity gate must hold for soft-hyphen text
-/// too — with `hyphen_dictionary == None` (the default), a word containing
-/// a literal U+00AD must produce exactly the same boxes as before this
-/// slice (this project's general non-ASCII/UAX#14 tokenizing of a soft
-/// hyphen, unrelated to and untouched by the hyphenation feature). This
-/// pins that the new `is_gated_soft_hyphen` check in `text_to_boxes` only
-/// ever fires when a dictionary is installed.
+/// The byte-identity gate must hold for soft-hyphen text
+/// too — with `hyphen_dictionary == None` (the default), a word containing a
+/// literal U+00AD must still take this project's general non-ASCII/UAX#14
+/// tokenizing, unrelated to and untouched by the hyphenation feature. This
+/// pins that `is_gated_soft_hyphen` in `text_to_boxes` only ever fires when a
+/// dictionary is installed.
 #[test]
 fn soft_hyphen_with_no_dictionary_installed_is_untouched_by_this_slice() {
     let mut ctx = Context::initial(Length::pt(400.0));
-    ctx.hyphen_dictionary = None; // this test is about the no-dictionary path
+    ctx.hyphen_dictionary = None;
     let word_with_shy = "hy\u{ad}phenation";
     let boxes = boxes_for_word(&ctx, word_with_shy);
 
-    // Pre-existing (untouched) behavior: the general UAX#14 tokenizer
-    // treats U+00AD as an ordinary "break-after" boundary and flushes the
-    // word right there, embedding the literal soft-hyphen character in the
-    // leading fragment's text and emitting an empty (no visible glyph)
-    // Discretionary — exactly what `uax14_boundaries`/`break_opportunities`
-    // already did for any non-ASCII break-after character before this
-    // slice touched anything gated on `hyphen_dictionary`.
+    // The general UAX#14 tokenizer treats U+00AD as an ordinary
+    // "break-after" boundary and flushes the word right there, embedding the
+    // literal soft-hyphen character in the leading fragment's text and
+    // emitting an empty (no visible glyph) Discretionary — what
+    // `uax14_boundaries`/`break_opportunities` do for any non-ASCII
+    // break-after character.
     assert_eq!(
         boxes.len(),
         4,
@@ -345,7 +332,7 @@ fn soft_hyphen_with_no_dictionary_installed_is_untouched_by_this_slice() {
     }
 }
 
-/// Item 2 (per-run font correctness): the injected hyphen glyph must carry
+/// Per-run font correctness: the injected hyphen glyph must carry
 /// the *run's own* font, not a hardcoded default — two runs typeset under
 /// different `ctx.font` values must get hyphen boxes tagged with their own
 /// distinct font key.
@@ -387,10 +374,10 @@ fn hyphen_glyph_uses_the_run_own_font_not_a_hardcoded_default() {
     );
 }
 
-/// Item 3 (min-fragment override): `set-hyphen-min`'s live
+/// Min-fragment override: `set-hyphen-min`'s live
 /// `left_hyphen_min`/`right_hyphen_min` must actually constrain which
 /// dictionary breaks the injection accepts — not just the defaults
-/// (already covered indirectly by the S2 fixtures), but a *non-default*
+/// (already covered indirectly by the fixtures above), but a *non-default*
 /// override.
 #[test]
 fn min_fragment_override_from_the_live_context_is_respected() {

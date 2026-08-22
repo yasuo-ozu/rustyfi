@@ -14,7 +14,7 @@
 //!    it handles nearly all real v0.0.x source; the success *rate* must stay
 //!    above [`LEX_RATE_FLOOR`]. A drop means a lexer regression.
 //! 3. **Parse ratchet:** the number of files that fully parse is tracked and
-//!    printed; as the parser grows (the phase-2 grammar remainder), bump
+//!    printed; as the parser grows (the remaining grammar), bump
 //!    [`PARSE_RATE_FLOOR`] to lock in the gain. It starts at 0 — full packages
 //!    exceed the subset today — so this tier only *ratchets up*, never blocks.
 //!

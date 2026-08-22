@@ -1,17 +1,13 @@
-//! Library-level phase-1 tests (plan §9): fixture package trees built under
-//! unique temp directories (cleaned on drop, no extra dev-dependencies — the
-//! same `TempDir` pattern as `rustyfi-loader/tests/loader.rs`), exercised
-//! directly through the `ops::{install,uninstall,list,status}` API.
+//! Fixture package trees built under unique temp directories (cleaned on
+//! drop, no extra dev-dependencies — the same `TempDir` pattern as
+//! `rustyfi-loader/tests/loader.rs`), exercised directly through the
+//! `ops::{install,uninstall,list,status}` API.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use rustyfi_satyrographos::{self as sg, InstallOptions, RootOptions};
-
-// ---------------------------------------------------------------------------
-// Temp-dir fixture helper (transcribed from rustyfi-loader/tests/loader.rs).
-// ---------------------------------------------------------------------------
 
 struct TempDir(PathBuf);
 
@@ -52,7 +48,7 @@ impl Drop for TempDir {
     }
 }
 
-/// Build the plan's canonical two-source `great-package`-style manifest fixture
+/// Build the canonical two-source `great-package`-style manifest fixture
 /// (`package-dir` + `font-dir`) under `<tmp>/src`, declaring package `name`.
 fn write_manifest_pkg(tmp: &TempDir, name: &str, version: &str, satyh_body: &str) {
     tmp.write(
@@ -90,10 +86,6 @@ fn root_opts(root: &Path) -> RootOptions {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Tests.
-// ---------------------------------------------------------------------------
-
 #[test]
 fn install_manifest_materializes_nested_layout_and_receipt() {
     let tmp = TempDir::new("manifest");
@@ -122,7 +114,7 @@ fn install_no_manifest_falls_back_to_flat_copy() {
     let root = tmp.path().join("root");
 
     sg::install(&tmp.path().join("src"), &dest_opts(&root)).expect("fallback install ok");
-    // Flat, no per-library namespace (plan §5.1).
+    // Flat, no per-library namespace.
     assert!(root.join("dist/packages/foo.satyh").is_file());
     assert!(!root.join("dist/packages/foo/foo.satyh").exists());
 }
@@ -136,11 +128,9 @@ fn collision_refused_without_force_then_replaced_with_force() {
 
     sg::install(&src, &dest_opts(&root)).expect("first install ok");
 
-    // Second install without --force is refused.
     let err = sg::install(&src, &dest_opts(&root)).unwrap_err();
     assert!(matches!(err, sg::Error::AlreadyInstalled { .. }), "{err}");
 
-    // Change the source, install with --force: the file is replaced.
     fs::write(src.join("packages/bar.satyh"), "let bar = 999\n").unwrap();
     let forced = InstallOptions {
         force: true,
@@ -156,14 +146,11 @@ fn unmanaged_collision_refused() {
     let tmp = TempDir::new("unmanaged");
     write_manifest_pkg(&tmp, "bar", "1.0.0", "let bar = 1\n");
     let root = tmp.path().join("root");
-    // Pre-place an unmanaged file where the install would land, with no
-    // receipt claiming it.
     fs::create_dir_all(root.join("dist/packages/bar")).unwrap();
     fs::write(root.join("dist/packages/bar/bar.satyh"), "hand placed\n").unwrap();
 
     let err = sg::install(&tmp.path().join("src"), &dest_opts(&root)).unwrap_err();
     assert!(matches!(err, sg::Error::UnmanagedCollision { .. }), "{err}");
-    // The hand-placed content is untouched.
     let kept = fs::read_to_string(root.join("dist/packages/bar/bar.satyh")).unwrap();
     assert_eq!(kept, "hand placed\n");
 }
@@ -175,13 +162,11 @@ fn uninstall_removes_only_receipted_files() {
     let root = tmp.path().join("root");
     sg::install(&tmp.path().join("src"), &dest_opts(&root)).expect("install ok");
 
-    // A user hand-adds an unrelated file under the package's own directory.
     let extra = root.join("dist/packages/bar/HAND_ADDED.txt");
     fs::write(&extra, "keep me\n").unwrap();
 
     sg::uninstall("bar", &root_opts(&root)).expect("uninstall ok");
 
-    // Receipted files and the receipt are gone.
     assert!(!root.join("dist/packages/bar/bar.satyh").exists());
     assert!(!root.join(".satyrographos/receipts/bar.toml").exists());
     // The hand-added file survives (never rm -rf'd), so its parent dir must
@@ -203,10 +188,8 @@ fn list_shows_sorted_packages() {
     let tmp = TempDir::new("list");
     let root = tmp.path().join("root");
 
-    // Empty root: no error, empty list.
     assert!(sg::list(&root_opts(&root)).unwrap().is_empty());
 
-    // Two packages, installed out of alphabetical order.
     for (name, ver) in [("zebra", "0.1.0"), ("alpha", "3.2.1")] {
         let sub = TempDir::new(name);
         write_manifest_pkg(&sub, name, ver, "let x = 1\n");
@@ -227,11 +210,9 @@ fn status_flags_missing_files() {
     let root = tmp.path().join("root");
     sg::install(&tmp.path().join("src"), &dest_opts(&root)).expect("install ok");
 
-    // All present initially.
     let report = sg::status(None, &root_opts(&root)).unwrap();
     assert!(!report.any_missing());
 
-    // Delete one recorded file; status must flag it.
     fs::remove_file(root.join("dist/fonts/bar/x.ttf")).unwrap();
     let report = sg::status(Some("bar"), &root_opts(&root)).unwrap();
     assert!(report.any_missing());
@@ -272,9 +253,7 @@ fn zip_slip_is_refused_and_writes_nothing() {
     assert!(!root.join("dist").exists());
 }
 
-// ---------------------------------------------------------------------------
-// Phase 4: Satyristes S-expression front-end (plan §5.5/§9).
-// ---------------------------------------------------------------------------
+// Satyristes S-expression front-end.
 
 /// The upstream README's own great-package `Satyristes`, verbatim (fetched
 /// 2026-07-04 via `gh api repos/na4zagin3/satyrographos/contents/README.md`).
@@ -325,7 +304,6 @@ fn satyristes_readme_example_installs_per_kind_destinations() {
     let root = tmp.path().join("root");
 
     let report = sg::install(&tmp.path().join("src"), &dest_opts(&root)).expect("satyristes install");
-    // §5.5 field-by-field: name/version straight off the (library ...) block.
     assert_eq!(report.name, "great-package");
     assert_eq!(report.version, "1.0");
 
@@ -333,7 +311,7 @@ fn satyristes_readme_example_installs_per_kind_destinations() {
     assert!(root.join("dist/packages/great-package/great-package.satyh").is_file());
     // fontDir -> recursively into dist/fonts/<name>/.
     assert!(root.join("dist/fonts/great-package/interesting-font.ttf").is_file());
-    // hash -> FLAT dist/hash/<dst>, no per-library namespace (§5.5 asymmetry).
+    // hash -> FLAT dist/hash/<dst>, no per-library namespace (the asymmetry).
     assert!(root.join("dist/hash/fonts.satysfi-hash").is_file());
     assert!(!root.join("dist/hash/great-package/fonts.satysfi-hash").exists());
 
@@ -387,11 +365,9 @@ fn satyristes_multiple_libraries_require_selection() {
     tmp.write("src/packages/x.satyh", "let x = 1\n");
     let root = tmp.path().join("root");
 
-    // No --library filter, two libraries: ambiguous.
     let err = sg::install(&tmp.path().join("src"), &dest_opts(&root)).unwrap_err();
     assert!(matches!(err, sg::Error::AmbiguousLibrary { .. }), "{err}");
 
-    // --library selects exactly one.
     let opts = InstallOptions {
         libraries: Some(vec!["beta".to_string()]),
         ..dest_opts(&root)
@@ -399,7 +375,6 @@ fn satyristes_multiple_libraries_require_selection() {
     let report = sg::install(&tmp.path().join("src"), &opts).expect("selected install");
     assert_eq!(report.name, "beta");
     assert!(root.join("dist/packages/beta/x.satyh").is_file());
-    // alpha was not materialised.
     assert!(!root.join("dist/packages/alpha").exists());
 }
 
@@ -426,7 +401,6 @@ fn satyristes_unknown_form_errors_naming_it() {
 fn both_manifests_are_ambiguous() {
     let tmp = TempDir::new("satyristes-both");
     write_readme_great_package(&tmp);
-    // Also drop a rustyfi-package.toml alongside the Satyristes.
     tmp.write(
         "src/rustyfi-package.toml",
         "[package]\nname = \"x\"\nversion = \"1\"\nrustyfi-version-compat = \"*\"\n",
@@ -449,10 +423,8 @@ fn satyristes_tar_gz_round_trip() {
     assert!(root.join("dist/hash/fonts.satysfi-hash").is_file());
 }
 
-// ---------------------------------------------------------------------------
-// Archive-building helpers (tar + flate2 are normal deps of this crate, so
-// they are available to integration tests without new dev-dependencies).
-// ---------------------------------------------------------------------------
+// tar + flate2 are normal deps of this crate already, so these are usable
+// here without adding a dev-dependency.
 
 fn make_tar_gz(src_dir: &Path, out: &Path) {
     let file = fs::File::create(out).unwrap();

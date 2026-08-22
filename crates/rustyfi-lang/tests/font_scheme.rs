@@ -1,4 +1,4 @@
-//! Group D, D1b: per-script font scheme
+//! Per-script font scheme
 //! + `set-font` real wiring + script-segmented `text_to_boxes`. Drives
 //! `set-font`/`primitives::read_inline` directly through `Interp::apply`
 //! (like `tests/text_info.rs`'s "eval half"), sidestepping the parser.
@@ -10,8 +10,8 @@ use rustyfi_lang::quoted::IText;
 use rustyfi_lang::value::{BaseEnv, Env, Value};
 
 /// Every glyph is half an em wide; `resolve_font_abbrev` names two registry
-/// abbrevs (the D1a upgrade `set-font`/`set-math-font` now consult before
-/// falling back to the milestone-1 3-face heuristic).
+/// abbrevs (`set-font`/`set-math-font` now consult before
+/// falling back to the 3-face heuristic).
 struct Stub;
 
 impl FontMetrics for Stub {
@@ -167,7 +167,7 @@ fn set_font_latin_also_moves_ctx_font() {
 
 #[test]
 fn set_font_unknown_abbrev_falls_back_to_heuristic() {
-    // No registry entry for "boldish" -> the milestone-1 3-face name
+    // No registry entry for "boldish" -> the 3-face name
     // heuristic (`resolve_font_abbrev` free fn in primitives.rs) fires
     // instead of erroring (this port's existing accept-and-degrade stance).
     let stub = Stub;
@@ -238,8 +238,6 @@ fn manual_rising_is_added_to_inner_string_rising() {
     let mut interp = Interp::new(&stub);
     let elems = vec![IText::Text("hi".to_string())];
 
-    // Baseline: default context (manual_rising == ZERO) — Latin sf.rising is
-    // 0.0, so the run's rising is exactly ZERO (byte-identity control).
     let base_ctx = Context::initial(Length::pt(400.0));
     let base_boxes = primitives::read_inline(&mut interp, &base_ctx, &elems, &Env::root())
         .expect("read_inline should succeed");
@@ -258,7 +256,6 @@ fn manual_rising_is_added_to_inner_string_rising() {
         "default manual_rising leaves rising at ZERO"
     );
 
-    // With a manual rise installed, the run's rising picks it up exactly.
     let mut risen_ctx = Context::initial(Length::pt(400.0));
     risen_ctx.manual_rising = Length::pt(3.0);
     let risen_boxes = primitives::read_inline(&mut interp, &risen_ctx, &elems, &Env::root())
@@ -304,8 +301,6 @@ fn other_script_resolves_through_the_dominant_narrow_script() {
     };
     let elems = vec![IText::Text("\u{25A1}".to_string())];
 
-    // Default `dominant_narrow_script == OtherScript`: the slot itself, i.e.
-    // exactly the pre-normalization behaviour.
     let boxes = primitives::read_inline(&mut interp, &ctx, &elems, &Env::root()).unwrap();
     let (font, size) = boxes
         .iter()
@@ -323,7 +318,6 @@ fn other_script_resolves_through_the_dominant_narrow_script() {
     );
     assert_eq!(size, ctx.font_size);
 
-    // `set-dominant-narrow-script Kana` redirects it, ratio included.
     ctx.dominant_narrow_script = Script::Kana;
     let boxes = primitives::read_inline(&mut interp, &ctx, &elems, &Env::root()).unwrap();
     let (font, size) = boxes

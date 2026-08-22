@@ -1,13 +1,13 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/rustyfi-syntax",
-    "crates/rustyfi-backend",
-    "crates/rustyfi-lang",
-    "crates/rustyfi-pdf",
-    "crates/rustyfi",
-    "crates/rustyfi-loader",
-    "crates/rustyfi-satyrographos",
+  "crates/rustyfi-syntax",
+  "crates/rustyfi-backend",
+  "crates/rustyfi-lang",
+  "crates/rustyfi-pdf",
+  "crates/rustyfi",
+  "crates/rustyfi-loader",
+  "crates/rustyfi-satyrographos",
 ]
 
 [workspace.package]
@@ -17,9 +17,6 @@ license = "MIT"
 authors = ["Yasuo Ozu <yasuo@ozu.email>"]
 
 [workspace.dependencies]
-# syan from crates.io. It was vendored as a submodule while the parser fixes
-# this port needed were unreleased; 0.2.0 carries them, so the submodule is
-# gone and the dependency is an ordinary version requirement again.
 syan = "0.2.0"
 rustyfi-syntax = { path = "crates/rustyfi-syntax" }
 rustyfi-backend = { path = "crates/rustyfi-backend" }
@@ -35,70 +32,22 @@ flate2 = "1"
 sha2 = "0.10"
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
-# Renders the man page from the same `clap::Command` the CLI parses with,
-# so the page cannot describe a different program than the one installed.
 clap_mangen = "0.2"
 pdf-writer = "0.13"
 safegraph = "0.1"
 ttf-parser = "0.25"
 newer-type = "0.3"
 newer-type-std = "0.3"
-# Raster image decoding for `load-image`. Slice 1 only needs PNG (the checked-in test fixture) and JPEG (cheap,
-# pure-Rust, and the format v0.0.6 special-cases for `DCTDecode`
-# passthrough — not implemented yet, but decoding it to flat RGB8 like any
-# other format costs nothing extra); the rest of `image`'s default formats
-# (avif/bmp/dds/exr/ff/gif/hdr/ico/pnm/qoi/tga/tiff/webp) and its `rayon`
-# feature are left off to keep the dependency footprint minimal.
-image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
-# PDF object-model reader for `load-pdf-image` (S0): parses a foreign PDF's page tree/content stream/resources so a page can be
-# re-embedded as a Form XObject. Pure Rust, no C toolchain. Consumed by
-# rustyfi-lang (parse side) and rustyfi-pdf (re-emit side); rustyfi-backend stays
-# lopdf-free (neutral ImportedObjects/ObjRepr types only).
+image = { version = "0.25", default-features = false, features = [
+  "png",
+  "jpeg",
+] }
 lopdf = "0.36"
 
-# ---------------------------------------------------------------------------
-# Debug info: "limited" (= `debug = 1`), not cargo's `debug = 2` default.
-#
-# `debug = 2` (`-C debuginfo=full`) emits complete DWARF type descriptions for
-# every generic instantiation. `rustyfi-syntax` derives syan `Parse`/`Unparse`
-# across 173 types — 2242 impls in the expanded crate — and full debuginfo on
-# that is catastrophic. Measured, incrementally, after touching one file:
-#
-#   ONE crate, incremental (rustyfi-syntax, after touching one file):
-#            cargo check            14s          (so it is NOT typeck or macros)
-#   debug =  2 / "full"         18m 55s   3.93 GB rlib
-#   debug =  1 / "limited"       2m 54s   2.35 GB
-#   debug = "line-tables-only"   3m 30s   1.23 GB
-#
-#   WHOLE workspace, clean `cargo test` (the number that actually matters —
-#   the per-crate figures above hide the cost across the dependency graph):
-#   debug =  1 / "limited"          955s    138 GB target/debug   <- current
-#   debug = "line-tables-only"      400s     43 GB
-#
-# So `1` is 2.4x slower and 3.2x larger than `line-tables-only` in practice.
-# It is set here because it was asked for; `line-tables-only` is the cheaper
-# choice if the disk matters more than function-parameter type info. 138 GB is
-# enough to refill this machine's disk on its own — a link failed with SIGBUS
-# (`ld returned 135`) at 98% full while measuring this.
-#
-# A 7000-line crate was producing a 3.93 GB rlib — the largest artifact in the
-# workspace by ~4x, in a target/debug that had reached 71 GB. That is also the
-# likely root of this project's recurring disk exhaustion, since every agent
-# worktree carries its own copy.
-#
-# On rustc 1.90 the numeric levels are 0=none, 1=limited, 2=full, with
-# `line-tables-only` a separate level BETWEEN 0 and 1 — cheaper still (half the
-# rlib) but carrying nothing beyond the line table. `1`/"limited" keeps type
-# information for functions and their parameters, so a backtrace or profiler
-# shows more than file:line, at ~2x the artifact size. That trade is the point
-# of choosing it here.
-#
-# If you need to step through code and inspect locals, override per session:
-#
-#   CARGO_PROFILE_DEV_DEBUG=full cargo build -p <crate>
-#
-# `profile.test` inherits this, so `cargo test` gets it too — which also
-# retires the ad-hoc `CARGO_PROFILE_TEST_DEBUG=0` that was being passed by hand
-# to keep the disk from filling.
+#                            incremental    cold   target/debug
+#   debug = 0                      10.3s     78s         3.1 GB
+#   debug = "line-tables-only"     20.4s     78s         6.7 GB
+#   debug = 1                      24.1s     78s         9.1 GB
+#   debug = 2                      40.6s    119s          15 GB   <- cargo default
 [profile.dev]
 debug = 1

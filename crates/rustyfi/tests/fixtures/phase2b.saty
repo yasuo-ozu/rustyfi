@@ -1,8 +1,8 @@
-% phase-2b fixture: a module + module-qualified reference, `#label` field
+% Fixture: a module + module-qualified reference, `#label` field
 % access, and a `let-mutable`/`while`/`before`-driven countdown that decides
 % which of two inline texts to show, plus +p.
 %
-% Note: the milestone-2b stdlib has no "turn a runtime string into inline
+% Note: the stdlib has no "turn a runtime string into inline
 % text" primitive yet (only literal, source-quoted `{ .. }` text becomes
 % inline content, via `read-inline`) — so the countdown counter drives a
 % *branch* (which literal inline text gets shown) rather than being spliced

@@ -1,8 +1,8 @@
-//! L5a (`…/tmp/prim-retype-sweep.md` §4.1 test 8): `register-document-
-//! information`'s PDF `/Info` dictionary emission (`write_document_info`,
-//! `rustyfi-pdf/src/lib.rs`/`cid.rs`), driven through the public
-//! `render_pdf_with` entry point with a hand-built `DocExtras` — the same
-//! shape as `tests/annots.rs`'s Group A coverage (no lang layer involved;
+//! `register-document-information`'s PDF `/Info` dictionary
+//! emission (`write_document_info`, `rustyfi-pdf/src/lib.rs`/`cid.rs`),
+//! driven through the public `render_pdf_with` entry point with a
+//! hand-built `DocExtras` — the same shape as `tests/annots.rs`'s
+//! coverage (no lang layer involved;
 //! `crates/rustyfi/tests/fixtures/v01-strings.saty` is the end-to-end
 //! version through the real `register-document-information` primitive).
 
@@ -45,7 +45,6 @@ fn render_pdf_with_emits_info_dict_when_registered() {
     ] {
         assert!(hay.contains(needle), "content missing {needle:?}:\n{hay}");
     }
-    // `subject` was `None` — no `/Subject` key at all.
     assert!(
         !hay.contains("/Subject"),
         "unregistered /Subject leaked into the dict:\n{hay}"
@@ -58,11 +57,11 @@ fn render_pdf_with_emits_info_dict_when_registered() {
     );
 }
 
-/// §7 acceptance 4 / §4.3: a document that never calls `register-document-
-/// information` (`extras.doc_info == None`, `DocExtras::default()`) must
+/// A document that never calls `register-document-information`
+/// (`extras.doc_info == None`, `DocExtras::default()`) must
 /// render byte-identical to `render_pdf` (the `&DocExtras::default()`
 /// wrapper) — no `/Info` object at all, keeping every 0.0.6 fixture's PDF
-/// unchanged by this slice.
+/// unchanged.
 #[test]
 fn render_pdf_with_omits_info_dict_when_unregistered() {
     let geometry = geometry();

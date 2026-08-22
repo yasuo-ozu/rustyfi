@@ -1,25 +1,19 @@
-//! The milestone-1+2a surface grammar (a subset of the v0.0.6 `parser.mly`),
+//! The SATySFi 0.0.6 surface grammar (a subset of the v0.0.6 `parser.mly`),
 //! parsed with syan derives over the SATySFi token atoms.
 //!
-//! Application and the binary-operator levels are left-recursive in the Menhir
-//! grammar; here they are head-plus-arguments sequences (`Vec`), folded left
-//! during elaboration — recursive descent must never see left recursion.
-//!
-//! **Operator-precedence flattening.** `parser.mly` spreads binary operators
-//! across ten precedence levels (`nxlor`..`nxrtimes`, some left- some
-//! right-associative). Reproducing that exactly would multiply every level
-//! into its own non-left-recursive rule; instead all binops are flattened
-//! into one `OpChain` (`head` `AppExpr` + a flat `Vec` of `(op, AppExpr)`
-//! pairs), deferring precedence/associativity resolution to the elaborator
-//! (not this crate's job). This is a deliberate deviation from `parser.mly`'s
-//! *structure* (not its *token set* — every operator it accepts is accepted
-//! here too).
+//! Application and the `nxlor`..`nxrtimes` binary-operator levels are
+//! left-recursive in the Menhir grammar; here they are head-plus-arguments
+//! `Vec`s, folded left during elaboration — recursive descent must never see
+//! left recursion. All ten binop precedence levels are flattened into one
+//! `OpChain`, deferring precedence/associativity to the elaborator — a
+//! deliberate deviation from `parser.mly`'s *structure*, not its *token set*
+//! (every operator it accepts is accepted here too).
 //!
 //! **`let-inline`/`let-block` are top-level-only**, matching `parser.mly`:
 //! `LETHORZ`/`LETVERT` only appear in `nxtoplevel`/`nxstruct` (via
-//! `nxhorzdec`/`nxvertdec`), never in `nxletsub`, so unlike `let`/`let-rec`
-//! they have no local (`in`-bodied) form nested inside an arbitrary
-//! expression — only as one of a file's leading [`TopBinding`]s.
+//! `nxhorzdec`/`nxvertdec`), never in `nxletsub` — unlike `let`/`let-rec` they
+//! have no local (`in`-bodied) form, only as one of a file's leading
+//! [`TopBinding`]s.
 
 use crate::leaf::*;
 use crate::span::Span;
@@ -29,11 +23,9 @@ use syan::parse::{Parse, Unparse};
 /// A whole `.saty`/`.satyh` file: headers, top-level bindings, `in`, the
 /// document expression (`main`/`nxtoplevel`/`nxtopsubseq` in parser.mly).
 ///
-/// **Library-file form.** A `.satyh` library is just headers + top-level
-/// bindings + `EOI`, with no `in body` at all (`nxtopsubseq`'s bare `EOI`
-/// alternative) — so unlike phase-1/2a, `body` is now optional: `in_kw`
-/// present implies `body` present (checked at elaboration, not here), but a
-/// file can also end right after `prelude` with neither.
+/// A `.satyh` library is just headers + bindings + `EOI`, no `in body`
+/// (`nxtopsubseq`'s bare `EOI` alternative) — hence `body` is optional:
+/// `in_kw` present implies `body` present, checked at elaboration, not here.
 #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
 pub struct File {
     pub headers: Vec<Header>,
@@ -53,34 +45,24 @@ pub enum Header {
     /// Accepted and currently ignored (driven by the loader crate).
     Import(HeaderImportTok),
     /// `@stage: persistent` / `@stage: 0` / `@stage: 1` — the stage EVERY
-    /// binding in this file is written at (0.0.6 declares it per file; 0.1
-    /// dropped the header and says the same thing per binding, see
-    /// [`TopStage`]). Honoured, not ignored: the loader's prelude merge
-    /// records the entry range each file contributed
-    /// (`rustyfi_lang::note_stage`) and `elaborate.rs` wraps every one of
-    /// that file's bindings — `let`, `let-rec`, `let-inline`, `let-block`,
-    /// `let-math` and `let-mutable` alike — in `Ast::StageScope`, so a
-    /// stage-0 library may use `&(…)` and the document that requires it may
-    /// not.
+    /// binding in this file is written at (0.1 says the same thing per
+    /// binding instead, see [`TopStage`]). Unlike `Require`/`Import`, this
+    /// one is HONOURED: `elaborate.rs` wraps every one of that file's
+    /// bindings in `Ast::StageScope`, so a stage-0 library may use `&(…)` and
+    /// the document that requires it may not.
     Stage(HeaderStageTok),
 }
 
 /// A binding-position NAME: a plain variable, or `( ‹op› )` — a
 /// parenthesized (possibly user-defined) operator name (`OpNameTok`), e.g.
-/// `let (+++>) = ..` (`itemize.satyh`), `let (-->) t1 t2 = ..` / `val
-/// (-->) : ty` (`progsynt.satyh`). Upstream's `var` nonterminal folds `VAR`
-/// and `LPAREN binop RPAREN` into one production; this is that nonterminal,
-/// reused by [`TopLet::name`], [`ast::Expr::LetIn`]'s `name`,
-/// [`ast::RecBinding::name`], and [`SigItem::Val`]'s `name` — the four
-/// binding positions upstream admits it in. `.name`/`.span` mirror
-/// `VarTok`'s own public fields exactly (e.g. `"+++>"`/the whole `(..)`'s
-/// span for `(+++>)`), so every existing `elaborate.rs`/`typecheck.rs`
-/// callsite that reads `foo.name.name`/`foo.name.span` on one of the four
-/// positions keeps compiling unchanged now that the field type there moves
-/// from `VarTok` to this — an operator name binds/resolves exactly like an
-/// ordinary variable of that string from here on. See also
-/// [`ast::Atomic::OpRef`], the matching atomic-expression form (a bare
-/// value reference, e.g. `(+++)`/`(-->)`).
+/// `let (+++>) = ..`. Upstream's `var` nonterminal folds `VAR` and `LPAREN
+/// binop RPAREN` into one production; this is that nonterminal, reused by
+/// [`TopLet::name`], [`ast::Expr::LetIn`]'s `name`, [`ast::RecBinding::name`],
+/// and [`SigItem::Val`]'s `name` — the four binding positions upstream admits
+/// it in. `.name`/`.span` mirror `VarTok`'s own public fields exactly, so an
+/// `elaborate.rs`/`typecheck.rs` callsite reading `foo.name.name`/
+/// `foo.name.span` works against either type. See also
+/// [`ast::Atomic::OpRef`], the matching atomic-expression form.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BindName {
     pub name: String,
@@ -88,13 +70,10 @@ pub struct BindName {
     repr: BindNameRepr,
 }
 
-/// [`BindName`]'s two surface forms, parsed with syan's ordinary
-/// enum-variant backtracking (the same technique `Atomic`'s many
-/// alternatives use below) — kept as a separate, non-`pub`-facing enum
-/// purely so `#[derive(Parse, Unparse)]` can pick between them; [`BindName`]
-/// itself is hand-written so it can additionally expose the precomputed
-/// `name`/`span` fields. `Op` first: not a real ambiguity (a plain `VarTok`
-/// never starts with `LParen`), just documents the intended priority.
+/// [`BindName`]'s two surface forms — kept as a separate, non-`pub`-facing
+/// enum purely so `#[derive(Parse, Unparse)]` can pick between them;
+/// [`BindName`] itself is hand-written so it can additionally expose the
+/// precomputed `name`/`span` fields.
 #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
 enum BindNameRepr {
     Op(OpNameTok),
@@ -126,14 +105,10 @@ impl Unparse<crate::token::Atom> for BindName {
 }
 
 impl From<VarTok> for BindName {
-    /// Synthesize a binding name from a bare variable token. Used only by
-    /// the 0.1 lowering (`rustyfi-lang/src/v1/lower.rs`), which builds
-    /// synthetic 0.0.6 CST out of parsed `cst_v1` nodes. Purely additive:
-    /// no parse production changes, no existing behavior touched — the
-    /// "frozen" contract on this file (`cst_v1.rs`'s module doc) is about
-    /// the 0.0.6 grammar/behavior, which an inherent conversion cannot
-    /// affect, same spirit as the plan's blessed visibility-only edits
-    /// (Acceptance (b)).
+    /// Synthesizes a binding name from a bare variable token; used only by
+    /// the 0.1 lowering (`v1/lower.rs`), which builds synthetic 0.0.6 CST.
+    /// Adds no parse production, so this doesn't breach the "frozen"
+    /// 0.0.6-grammar contract (`cst_v1.rs`'s module doc).
     fn from(v: VarTok) -> BindName {
         BindName {
             name: v.name.clone(),
@@ -160,13 +135,10 @@ mod bind_name_tests {
 }
 
 /// A top-level non-recursive binding: `let name param* = expr`. `params` is
-/// `Vec<ast::PatBot>` (not merely `Vec<VarTok>`), matching `RecBinding`'s
-/// field of the same name (`nxnonrecdec`'s `argpart` is `patbot*` upstream
-/// too, e.g. the bundled `gr.satyh`'s `let rectangle (x1, y1) (x2, y2) =
-/// ..` and `let circle (cx, cy) r = ..` — plain, non-`let-rec` top-level
-/// functions with tuple-destructuring parameters). Elaborated by the same
-/// `rec_clause_value` helper `RecBinding` uses (`elaborate.rs`), with no
-/// multi-clause `extra`.
+/// `Vec<ast::PatBot>` (not merely `Vec<VarTok>`) — `nxnonrecdec`'s `argpart`
+/// is `patbot*` upstream too, matching [`ast::RecBinding`]'s field of the same
+/// name. Elaborated by the same `rec_clause_value` helper `RecBinding` uses
+/// (`elaborate.rs`), with no multi-clause `extra`.
 #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
 pub struct TopLet {
     pub let_kw: KwLet,
@@ -354,7 +326,7 @@ pub enum TopBinding {
 /// `#[derive(Parse)]`, which (without the `#[recurse]` engine to back it)
 /// is an `E0275` hazard (an unbounded recursive trait-bound obligation).
 /// Hand-writing `Parse`/`Unparse` here — the same trick as
-/// [`ast::ExprErased`] et al. — sidesteps that: the impl has no recursive
+/// [`ExprErased`] et al. — sidesteps that: the impl has no recursive
 /// where-bound for the compiler to try to satisfy, it just calls
 /// `TopBinding::parse` through the stream-erasing adapter at runtime.
 #[derive(Debug, Clone, PartialEq)]
@@ -461,7 +433,7 @@ pub struct SigConstraint {
 /// `kxtop`: `(| l1 : ty1; … |)`, a record-kind bound — "the constrained
 /// type variable must be a record containing at least these labels"
 /// (upstream `MRecordKind`; lowers to this port's `Kind::Record` row
-/// obligation, presence-only this milestone — see `typecheck.rs`).
+/// obligation, presence-only — see `typecheck.rs`).
 #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
 pub struct RecordKind {
     pub rec: RecordGroup<()>,
@@ -472,7 +444,7 @@ pub struct RecordKind {
 /// One `l : ty;` field of a [`RecordKind`] (`txrecord`,
 /// `parser.mly:962-965`). The field *type* is parsed but currently dropped
 /// during lowering (only the label is kept, matching `Kind::Record`'s
-/// label-only representation) — a documented Slice-1 limitation, not a
+/// label-only representation) — a documented limitation, not a
 /// grammar gap.
 #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
 pub struct RecordKindField {
@@ -501,7 +473,7 @@ pub struct TypeDecl {
 }
 
 /// One `and 'a name = body` continuation of a [`TypeDecl`]'s mutual-recursion
-/// chain (mirrors [`AndBinding`] for `let`-rec).
+/// chain (mirrors [`ast::AndBinding`] for `let`-rec).
 #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
 pub struct AndTypeClause {
     pub and_kw: KwAnd,
@@ -584,12 +556,10 @@ macro_rules! erased_leaf {
             impl Parse<crate::token::Atom> for $name {
                 type Error = syan::error::ParseError<crate::span::Span>;
 
-                // No erasure any more. `parse_stream` takes `&mut S` and
+                // No stream erasure: `parse_stream` takes `&mut S` and
                 // recursion REBORROWS, so `S` is a genuine fixed point and the
-                // instantiation set is finite by construction — which is what
-                // `EraseStream` used to buy by pinning everything to
-                // `&mut dyn ParseStream`, at the price of a virtual call per
-                // stream operation. The wrapper now only boxes the value.
+                // instantiation set is finite by construction. The wrapper
+                // only boxes the value.
                 fn parse_stream<S: syan::parse::ParseStream<Atom = crate::token::Atom>>(
                     stream: &mut S,
                 ) -> Result<Self, Self::Error> {
@@ -860,11 +830,11 @@ pub mod ast {
     /// alternative), e.g. the bundled `itemize.satyh`'s `let-rec
     /// listing-item : context -> int -> bool -> bool -> itemize ->
     /// block-boxes | ctx depth is-first is-last (Item(...)) = ..`. Parsed
-    /// but not enforced: this milestone has no signature-*enforcement* pass
-    /// for value-level ascriptions (only module `val`/`direct` signature
-    /// items reach `typecheck.rs`'s `command_scheme`/sig machinery), so the
-    /// ascription is simply a documented parse-and-ignore stand-in — its
-    /// only job is making verbatim upstream source parse. `params` is
+    /// but not enforced — there is no enforcement pass for value-level
+    /// ascriptions (only module `val`/`direct` signature items reach
+    /// `typecheck.rs`'s `command_scheme`/sig machinery) — so it is a
+    /// parse-and-ignore stand-in whose only job is making verbatim upstream
+    /// source parse. `params` is
     /// `patbot*` (`recdecargpart`'s plain `argpats` form, optionally
     /// preceded by a `leading_bar` — `recdecargpart`'s `BAR argpatlst`
     /// alternative, used both for the OCaml-style "every clause, including
@@ -986,8 +956,8 @@ pub mod ast {
     /// left-recursive in `parser.mly` — flattened to a postfix `Vec` here,
     /// the same technique as `PatCons`'s `::`), and an application-chain
     /// tail (`nxapp nxunsub` / `nxapp CONSTRUCTOR` / `nxapp OPTIONAL
-    /// nxunsub` / `nxapp OMISSION`, left-folded during elaboration). `not`
-    /// is not implemented yet; `EXACT_AMP`/`EXACT_TILDE` (`&`/`~`) are the
+    /// nxunsub` / `nxapp OMISSION`, left-folded during elaboration).
+    /// `EXACT_AMP`/`EXACT_TILDE` (`&`/`~`) are the
     /// staging prefixes, carried in `stage` (see [`StagePrefix`]). First-class command references (`command \cmd`,
     /// upstream's `nxapp: COMMAND hcmd`) are modeled one level down, as
     /// [`Atomic::Command`] — see its doc comment for the rationale.
@@ -1136,7 +1106,7 @@ pub mod ast {
         /// parenthesized, e.g. `(command \math)`). Only the horizontal
         /// form is spelled upstream; if a package ever writes `command
         /// +cmd`/a math form, extend with an `AnyVertCmdTok`/math
-        /// alternative then (see `class-signature-lang-gaps.md` R1).
+        /// alternative then.
         Command { kw: CommandTok, name: AnyHorzCmdTok },
         /// `()`
         Unit { paren: UnitParen },
@@ -1295,7 +1265,7 @@ pub mod ast {
 
     /// A command's arguments (`narg* sargs` in parser.mly, upstream's own
     /// dedicated grammar — *not* a reuse of the general application chain
-    /// like phase-2's `AppExpr`). Either a bare `;` (no arguments) or a flat,
+    /// like `AppExpr`). Either a bare `;` (no arguments) or a flat,
     /// non-empty sequence of [`AppArg`]s: each is `?: value` (a supplied
     /// optional `narg`), `?*` (an omitted optional `narg`), or a plain
     /// (possibly `!`/`#access`-decorated) atomic value — `(expr)`,
@@ -1304,9 +1274,8 @@ pub mod ast {
     /// uniformly (this port's usual simplification: `AppArg::Atom`'s
     /// `Atomic` already spans every shape upstream splits across `narg`/
     /// `sargs`). Optional/omitted `narg`s may lead (`\ref?:(x){text}`,
-    /// `\ref?*{text}`) since every element is independently one `AppArg`,
-    /// unlike the old `Expr`-based encoding whose head could only ever be a
-    /// plain atom.
+    /// `\ref?*{text}`) since every element is independently one `AppArg` —
+    /// an `Expr`-based encoding could not, its head being a plain atom.
     #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
     pub enum CmdTail {
         /// `;` — no arguments.
@@ -1362,11 +1331,11 @@ pub mod ast {
         Optional { q: OptionalTok, name: VarTok },
         Pat(PatBot),
         /// A SATySFi 0.1 `?(l = x, …)` labeled-optional command-parameter
-        /// bundle (optional-arg-rows increment 3a), lowered from
+        /// bundle, lowered from
         /// `cst_v1::Param { opts: Some(_), body }` by
         /// `v1/lower.rs::lower_command_params`. Reuses [`CstOptBinders`]
         /// verbatim (the same node a value-level `fun ?(l = x) p -> ..`
-        /// bundle lowers to, increment 1) — `?(`-headed, so distinct from
+        /// bundle lowers to) — `?(`-headed, so distinct from
         /// the 0.0.6 `?:`-headed [`Param::Optional`] above (no arm overlap,
         /// no grammar ambiguity: this variant is never PARSED directly by
         /// this 0.0.6-frozen `cst.rs`, only ever *constructed* by the 0.1
@@ -1492,21 +1461,19 @@ pub mod ast {
         Atom(TypeProd),
         /// `?(l1 : ty1, …) dom -> cod` — a SATySFi 0.1 labeled-optional
         /// function TYPE domain (upstream `typ`'s second production,
-        /// `parser_v1.mly:688-691`; "optional-arg-rows increment 2"). Lowered
+        /// `parser_v1.mly:688-691`). Lowered
         /// (`typecheck.rs`) to `MonoType::Func(Row::Cons(l1, ty1, …
         /// Row::Empty), dom, cod)` — a CLOSED row, matching what
-        /// `Ast::LambdaOpt` infers (increment 1), so an explicit `?(l:τ)->`
+        /// `Ast::LambdaOpt` infers, so an explicit `?(l:τ)->`
         /// signature unifies against an actual `?(l=x)`-taking function.
         /// `?`-headed — token-disjoint from `Fun`/`Atom` (neither
         /// [`TypeProd`] nor [`TypeAtom`] can start with [`OptionalTypeTok`]),
         /// so declared order is safety-neutral; appended last, this file's
-        /// convention for 0.1 additions. Additive 0.0.6 accept-surface
-        /// widening (this whole track's established §7 pattern): a 0.0.6
-        /// program containing `?(l : int) -> int` NOW parses (previously a
-        /// parse error — no old `TypeExpr` arm starts with `?`) and reaches
-        /// `typecheck.rs::lower_type_expr`'s version gate, which rejects it
-        /// under `V0_0` with a version-error message (an improvement over
-        /// the old parse error).
+        /// convention for 0.1 additions. It widens the 0.0.6 ACCEPT surface:
+        /// a 0.0.6 program containing `?(l : int) -> int` parses here and
+        /// reaches `typecheck.rs::lower_type_expr`'s version gate, which
+        /// rejects it under `V0_0` with a version-error message (better
+        /// diagnostics than a parse error).
         OptRowFun {
             opt_dom: CstTypeOptDom,
             dom: TypeProd,
@@ -1518,8 +1485,8 @@ pub mod ast {
     /// `?(l = ty, …)` — the closed labeled-optional-domain prefix of
     /// [`TypeExpr::OptRowFun`]. No row-variable-tail field: row-tailed
     /// optional domains need signature-level row quantification
-    /// (`parser_v1.mly`'s `rowquant`/`quant`) — L4/2d territory, not this
-    /// increment; `cst_v1`'s own `TypeOptDomInnerV1` models the tail at parse
+    /// (`parser_v1.mly`'s `rowquant`/`quant`) — not implemented here;
+    /// `cst_v1`'s own `TypeOptDomInnerV1` models the tail at parse
     /// level and rejects it with a `LowerError` before ever reaching here
     /// (`v1/lower.rs`).
     #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
@@ -1625,7 +1592,7 @@ pub mod ast {
         /// grammar position — only reachable where an `Expr` is expected,
         /// never in type position) purely by lexer-level delimiter token:
         /// `(|`/`|)` lex as the dedicated `BRecordTok`/`ERecordTok` pair
-        /// (same as [`RecordKind`]'s use at `constraint 'a :: (|…|)`), so no
+        /// (same as [`super::RecordKind`]'s use at `constraint 'a :: (|…|)`), so no
         /// backtracking between any of these three shapes is needed.
         Record {
             rec: RecordGroup<()>,
@@ -1647,8 +1614,8 @@ pub mod ast {
         NameMod(VarWithModTok),
         /// `(| l1 : ty1, … | ?'r |)` — a SATySFi 0.1 OPEN record type: a
         /// row-variable tail after the fields (upstream `typ_bot`'s SECOND
-        /// `L_RECORD`/`R_RECORD` production, `parser_v1.mly:748-749`;
-        /// "optional-arg-rows increment 2"). Lowered (`typecheck.rs`) to
+        /// `L_RECORD`/`R_RECORD` production, `parser_v1.mly:748-749`).
+        /// Lowered (`typecheck.rs`) to
         /// `MonoType::Record(Row::Cons(l1, ty1, … Row::Var(fresh)))` — the
         /// row variable unifies structurally as an open record's tail
         /// (permitting additional fields at the unification site), reusing
@@ -1656,8 +1623,8 @@ pub mod ast {
         /// new type machinery needed. Genuinely a NEW shape, not a widening
         /// of the frozen [`TypeAtom::Record`] (0.0.6's `txrecord` grammar has
         /// no row-var tail at all, confirmed by grep of upstream
-        /// `parser.mly`) — additive, appended after `Record`/`Var`/`Name`.
-        /// Comma-separated fields, matching this file's other 0.1 additive
+        /// `parser.mly`). Comma-separated fields, matching this file's 0.1
+        /// additive
         /// nodes ([`CstOptArgEntry`], [`CstOptBinderEntry`]) rather than the
         /// frozen `Record`'s upstream-0.0.6 `;` separator. Unreachable from a
         /// `V0_0` token stream by construction: [`RowVarTok`] is only ever
@@ -1721,16 +1688,15 @@ pub mod ast {
     /// `AppArgErased`'s doc comment for the identical hazard) and per this
     /// port's usual permissive-superset simplification.
     ///
-    /// `opt_labels` (optional-arg-rows increment 3a) is the lowered
+    /// `opt_labels` is the lowered
     /// `?(l:τ,…)` command-type row PREFIX on this slot (`TypeCmdOptDomV1` at
     /// the `cst_v1` side): a flat list of `label : ty` fields, no wrapping
     /// `?(` sigil/group of its own at this (already-lowered) target — purely
     /// a data carrier, populated by `v1/lower.rs::lower_type_cmd_args` and
-    /// read by `typecheck.rs`'s `lower_type_atom` `Cmd` arm. Since no real
-    /// 0.0.6 `TypeCmdArgItem` position can ever contain a bare `label :`
-    /// shape (0.0.6's grammar has no colon here at all), every 0.0.6-parsed
-    /// fixture yields `opt_labels == []`, byte-identical to before this
-    /// field existed.
+    /// read by `typecheck.rs`'s `lower_type_atom` `Cmd` arm. Every
+    /// 0.0.6-parsed fixture yields `opt_labels == []`: no real 0.0.6
+    /// `TypeCmdArgItem` position can contain a bare `label :` shape (0.0.6's
+    /// grammar has no colon here at all).
     #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
     pub struct TypeCmdArgItem {
         pub opt_labels: Vec<TypeCmdOptField>,
@@ -1740,7 +1706,7 @@ pub mod ast {
     }
 
     /// One `label : ty,` field of a [`TypeCmdArgItem::opt_labels`] bundle
-    /// (optional-arg-rows increment 3a; the last `,` is optional, matching
+    /// (the last `,` is optional, matching
     /// this port's other 0.1-additive comma-separated satellite fields —
     /// [`CstOptBinderEntry`], [`CstTypeOptEntry`]).
     #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
@@ -1773,13 +1739,11 @@ pub mod ast {
     /// reference to "one math element" (`matharg`'s math-mode argument,
     /// `Atomic::MathText`'s program-mode embed, `InlineElem::EmbedMath`'s
     /// inline-text embed, `MathGroupArg`'s `{ … }` script operand). So
-    /// `MathElemCst` ends up structurally acyclic within `#[recurse]`'s SCC
-    /// analysis — like `OpChain`/`AppExpr`/`Atomic` — and is monomorphized
-    /// exactly once (one stream type) regardless of how many distinct call
-    /// sites embed math content. This is *safer* than carving out a real
-    /// self-loop would have been, not a shortcut: every recursive edge is
-    /// erased, so there is no bounded-depth engine to blow up in the first
-    /// place.
+    /// `MathElemCst` is structurally acyclic within `#[recurse]`'s SCC
+    /// analysis — like `OpChain`/`AppExpr`/`Atomic` — and monomorphizes
+    /// exactly once (one stream type). This is *safer* than carving out a
+    /// real self-loop would have been, not a shortcut: every recursive edge
+    /// is erased, so there is no bounded-depth engine to blow up.
     #[derive(Parse, Unparse, Debug, Clone, PartialEq)]
     pub struct MathElemCst {
         pub base: MathBot,
@@ -1920,8 +1884,6 @@ pub fn parse_file(src: &str) -> Result<File, ParseFileError> {
         span: e.span,
         message: e.msg,
     })?;
-    // The error carries the position it failed at, so no high-water mark is
-    // needed: syan's `ParseError` is span-generic and every variant holds one.
     let mut stream = crate::stream::AtomStream::new(atoms);
     <File as Parse<_>>::parse(&mut stream).map_err(|e| ParseFileError {
         span: *e.span(),

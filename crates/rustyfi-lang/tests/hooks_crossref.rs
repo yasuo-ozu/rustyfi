@@ -1,10 +1,7 @@
-//! Slice 1 unit coverage: the
-//! `hook-page-break`/`register-cross-reference`/`get-cross-reference`
-//! primitives, and the `fire_hooks` seam itself invoked directly against a
-//! hand-built `DocumentValue` — the same `Ast`-apply-chain style
-//! `prims_phase4.rs`/`images.rs` use, no parser involved. The full 2-pass
-//! fixpoint round trip (compile → fire hooks → re-run) is covered
-//! separately by `rustyfi`'s e2e `hook-page.saty` fixture.
+//! Unit coverage for `hook-page-break`/`register-cross-reference`/
+//! `get-cross-reference` and the `fire_hooks` seam, driven directly via
+//! hand-built `Ast` apply chains (no parser). The full 2-pass fixpoint
+//! round trip is covered separately by `rustyfi`'s e2e `hook-page.saty`.
 
 use rustyfi_backend::{
     FontKey, FontMetrics, HookId, HorzBox, Length, Page, PageGeometry, PlacedLine, PureHorzBox,
@@ -47,8 +44,8 @@ fn str_lit(s: &str) -> Ast {
     Ast::Str(s.to_string())
 }
 
-/// `fun pbinfo _ -> unit` — a minimal, well-typed-enough (this is the
-/// untyped tree-walker, no typecheck involved) hook closure body.
+/// `fun pbinfo _ -> unit` — a minimal hook closure body (untyped
+/// tree-walker, no typecheck involved).
 fn trivial_hook_closure() -> Ast {
     Ast::Lambda(
         "pbinfo".to_string(),
@@ -155,11 +152,9 @@ fn probe_hit_after_register_round_trips() {
     }
 }
 
-/// (iii) `fire_hooks` over a hand-built one-hook `DocumentValue` invokes the
-/// closure with `page-number = 1` — no compile/fixpoint driver involved, so
-/// this pins the seam itself: `PureHorzBox::HookPageBreak`'s `HookId` looks
-/// up the right closure in `interp.hooks`, and the `pbinfo` record it's
-/// called with carries the placed page's 1-based number.
+/// (iii) Hand-built, no compile/fixpoint driver — pins the seam itself:
+/// `HookPageBreak`'s `HookId` looks up the closure in `interp.hooks`, and
+/// the `pbinfo` record carries the placed page's 1-based number.
 #[test]
 fn fire_hooks_invokes_the_closure_with_the_correct_page_number() {
     let env = primitives::base_env();

@@ -1,7 +1,5 @@
-//! math-split spec §6.3: the `math-text`/`math-boxes` split + `read-math` +
-//! `val math` integration tests. Harness copied from `v01_slice1.rs:95-160`
-//! (hand-built `LoadedFile`s + a `Mono` metrics stub +
-//! `compile_document_v1_with_trials`, and `assert_geometry_equivalent`).
+//! The `math-text`/`math-boxes` split + `read-math` + `val math`
+//! integration tests.
 
 use std::path::{Path, PathBuf};
 
@@ -17,11 +15,10 @@ fn repo(rel: &str) -> PathBuf {
         .join(rel)
 }
 
-/// Same ASCII-advancing `FontMetrics` stub `v01_slice1.rs` uses — the
-/// fixtures render real ASCII glyphs (`a^2 + b^2 = c^2`, digits, `x`, …),
-/// so `advance` must return `Some` for every ASCII char. No MATH table
-/// (`math_constants` defaults to `None`), matching every other base-14
-/// fixture in this crate.
+/// An ASCII-advancing `FontMetrics` stub — the fixtures render real ASCII
+/// glyphs (`a^2 + b^2 = c^2`, digits, `x`, …), so `advance` must return
+/// `Some` for every ASCII char. No MATH table (`math_constants` defaults to
+/// `None`), matching every other base-14 fixture in this crate.
 struct Mono;
 
 impl FontMetrics for Mono {
@@ -66,8 +63,6 @@ fn entry_file_from_disk(rel: &str) -> LoadedFile {
     }
 }
 
-/// An in-code V0_1 entry document (no on-disk fixture) — same `LoadedCst`
-/// shape, just parsed straight from `src` with a placeholder path.
 fn entry_file_inline(src: &str) -> LoadedFile {
     LoadedFile {
         path: PathBuf::from("<inline-test-entry>"),
@@ -79,10 +74,8 @@ fn entry_file_inline(src: &str) -> LoadedFile {
     }
 }
 
-/// A hand-built V0_1 *library* source, parsed the same way `v01_mini_file`
-/// parses a real one — used by tests that need a `module … = struct … end`
-/// wrapper (`val math` can only bind inside a library, never at document
-/// top level — `FileV1::Document` is just an expression).
+/// `val math` can only bind inside a library, never at document top level
+/// (`FileV1::Document` is just an expression) — hence a separate helper.
 fn lib_file_inline(name: &str, src: &str) -> LoadedFile {
     LoadedFile {
         path: PathBuf::from(format!("<inline-test-lib:{name}>")),
@@ -94,9 +87,6 @@ fn lib_file_inline(name: &str, src: &str) -> LoadedFile {
     }
 }
 
-/// Merge a loader-resolved 0.0.6 program's preludes into one synthetic
-/// `cst::File`, exactly like `rustyfi`'s private `merge_program`
-/// (reproduced locally the same way `v01_slice1.rs` does).
 fn merge_program_006(program: LoadedProgram) -> rustyfi_syntax::cst::File {
     fn as_v006(cst: LoadedCst) -> rustyfi_syntax::cst::File {
         match cst {
@@ -121,9 +111,8 @@ fn merge_program_006(program: LoadedProgram) -> rustyfi_syntax::cst::File {
     }
 }
 
-/// The plan's "same core IR, different surface" bar (`v01_slice1.rs`'s own
-/// helper, reproduced): equal page geometry, equal per-page line counts,
-/// equal placed-line x/baseline_y sequences.
+/// The "same core IR, different surface" bar: equal page geometry,
+/// equal per-page line counts, equal placed-line x/baseline_y sequences.
 fn assert_geometry_equivalent(a: &DocumentValue, b: &DocumentValue) {
     assert_eq!(
         a.geometry, b.geometry,
@@ -153,10 +142,9 @@ fn assert_geometry_equivalent(a: &DocumentValue, b: &DocumentValue) {
     }
 }
 
-/// Test 1 (§6.3): `${a^2}` and `\frac` through `read-math` + the v01 math
-/// prims produce IDENTICAL glyph geometry to the 0.0.6 twin's `as_math`
-/// path — both feed the same layout engine. This is the capstone
-/// assertion the math-split spec calls out.
+/// `${a^2}` and `\frac` through `read-math` + the v01 math prims produce
+/// IDENTICAL glyph geometry to the 0.0.6 twin's `as_math` path — both feed
+/// the same layout engine. The capstone assertion.
 #[test]
 fn v01_math_matches_006_twin_geometry() {
     let files = vec![
@@ -191,9 +179,9 @@ fn v01_math_matches_006_twin_geometry() {
     assert_geometry_equivalent(&doc_v1, &doc_006);
 }
 
-/// Test 2 (§6.3): the with-scripts smoke fixture compiles, produces one
-/// page, and the `\lim` paragraph's line exists (no 0.0.6 twin — 0.0.6's
-/// `\lim` scripting would render corner scripts, not limits).
+/// The with-scripts smoke fixture compiles, produces one page, and the
+/// `\lim` paragraph's line exists (no 0.0.6 twin — 0.0.6's `\lim` scripting
+/// would render corner scripts, not limits).
 #[test]
 fn v01_scripts_render() {
     let files = vec![
@@ -210,8 +198,8 @@ fn v01_scripts_render() {
     );
 }
 
-/// Test 3 (§6.3): `math-text` and `math-boxes` are genuinely distinct V0_1
-/// types — `read-math`'s OWN result (`math-boxes`) cannot be fed back into
+/// `math-text` and `math-boxes` are genuinely distinct V0_1 types —
+/// `read-math`'s OWN result (`math-boxes`) cannot be fed back into
 /// `read-math`'s `math-text` argument slot. Negative test.
 #[test]
 fn read_math_result_cannot_be_used_as_math_text() {
@@ -238,13 +226,13 @@ let y = read-math ctx x in
     );
 }
 
-/// Test 4 (§6.3): `val math ctx \bad m = m` — returning the command's own
-/// `math-text` PARAMETER directly, never routed through `read-math` — must
-/// fail: a V0_1 math command's result must be `math-boxes`. `m`'s own type
-/// is pinned to `math-text` by a throwaway `read-math ctx m` (with no
-/// other use, `m` would stay a free/generalized variable and this scheme
-/// would type-check vacuously — Milner generalization means a call-site
-/// constraint can't retroactively narrow an already-generalized scheme).
+/// `val math ctx \bad m = m` — returning the command's own `math-text`
+/// PARAMETER directly, never routed through `read-math` — must fail: a
+/// V0_1 math command's result must be `math-boxes`. `m`'s own type is
+/// pinned to `math-text` by a throwaway `read-math ctx m` (without it, `m`
+/// would stay a free/generalized variable and this scheme would type-check
+/// vacuously — Milner generalization means a call-site constraint can't
+/// retroactively narrow an already-generalized scheme).
 #[test]
 fn val_math_result_must_be_math_boxes() {
     let lib = "module BadMath = struct\n  \
@@ -266,10 +254,9 @@ fn val_math_result_must_be_math_boxes() {
     );
 }
 
-/// Test 5 (§6.3): the 6 prims 0.1 removes outright (`math-split` spec
-/// §2.1) are unbound in BOTH the runtime env and the type table under
-/// V0_1, and stay bound under V0_0 (the positive twin) — env and
-/// type-env agree by construction (both key on
+/// The 6 prims 0.1 removes outright are unbound in BOTH the runtime env and
+/// the type table under V0_1, and stay bound under V0_0 (the positive
+/// twin) — env and type-env agree by construction (both key on
 /// `RustyfiVersion::math_is_split`/`VersionSpan`).
 #[test]
 fn removed_prims_are_unbound_in_v01() {
@@ -291,7 +278,6 @@ fn removed_prims_are_unbound_in_v01() {
             prim_types::primitive_type_with_version(name, RustyfiVersion::V0_1).is_none(),
             "'{name}' should have no V0_1 type"
         );
-        // Twin positive: unaffected under V0_0.
         assert!(
             primitives::base_env_with_version(RustyfiVersion::V0_0)
                 .lookup(name)
@@ -305,9 +291,8 @@ fn removed_prims_are_unbound_in_v01() {
     }
 }
 
-/// Test 6 (§6.3): the 8 prims 0.1 adds (math-split spec §2.2), plus G6's 4
-/// table prims (`…/tmp/g6-g7-standins.md` §5.1), are unbound under V0_0
-/// in both the runtime env and the type table, and bound under V0_1.
+/// The 8 prims 0.1 adds, plus 4 more table prims, are unbound under V0_0 in
+/// both the runtime env and the type table, and bound under V0_1.
 #[test]
 fn added_prims_are_unbound_in_006() {
     for name in [
@@ -319,7 +304,6 @@ fn added_prims_are_unbound_in_006() {
         "embed-inline-to-math",
         "get-math-axis-height-ratio",
         "%math-attach-scripts",
-        // G6 table prims:
         "load-hyphenation-dictionary",
         "load-unicode-char-database",
         "set-hyphenation-dictionary",
@@ -348,9 +332,9 @@ fn added_prims_are_unbound_in_006() {
     }
 }
 
-/// G6 (`…/tmp/g6-g7-standins.md` §5.1): `here` is a bare CONSTANT (not a
-/// `prims!` table row), so it needs its own gating assertion — unbound (env
-/// + type table) under V0_0, bound under V0_1.
+/// `here` is a bare CONSTANT (not a `prims!` table row), so it needs
+/// its own gating assertion — unbound (env + type table) under V0_0, bound
+/// under V0_1.
 #[test]
 fn here_constant_is_unbound_in_006() {
     assert!(
@@ -375,16 +359,11 @@ fn here_constant_is_unbound_in_006() {
     );
 }
 
-/// Like `compile_document_v1`, but returns the entry expression's RAW
-/// evaluated `Value` instead of requiring it to be a `DocumentValue` — for
-/// tests that need to inspect an intermediate value (e.g. `inline-boxes`
-/// ink) rather than a full page-broken document. Mirrors
-/// `compile_document_v1_with_trials`'s own assembly (each dep lowered via
-/// `v1::lower::lower_file_v1`, the entry via `v1::lower::lower_document_v1`,
-/// merged into one synthetic `cst::File`) but skips `compile::compile_program`
-/// /the fixpoint-eval/hook-firing loop entirely (irrelevant for a bare
-/// expression with no page break in it) — a single direct
-/// `eval::Interp::eval` call over the elaborated `Ast` suffices.
+/// Like `compile_document_v1`, but returns the entry expression's raw
+/// evaluated `Value` instead of requiring a `DocumentValue` — skips
+/// `compile::compile_program`'s fixpoint-eval/hook-firing loop (no page
+/// break in a bare expression), so a single `eval::Interp::eval` call
+/// suffices.
 fn eval_v01_raw_value(
     files: &[LoadedFile],
     metrics: &dyn FontMetrics,
@@ -439,14 +418,12 @@ fn eval_v01_raw_value(
         .map_err(|e| format!("eval: {e}"))
 }
 
-// ============================================================================
-// Math-package completion M2: the `t_paren` 0.1 retype (`length -> length ->
+// Math-package completion: the `t_paren` 0.1 retype (`length -> length ->
 // context -> inline-boxes * (length -> length)`).
-// ============================================================================
 
-/// T-M2-seal: `val paren-left : paren` seals against a real 0.1-shaped
+/// `val paren-left : paren` seals against a real 0.1-shaped
 /// `paren-left hgt dpt ctx = …` body — pins `typecheck.rs`'s
-/// `name_to_mono("paren", V0_1)` case (§3.3) resolving structurally to
+/// `name_to_mono("paren", V0_1)` case resolving structurally to
 /// `t_paren(V0_1)`, matching the impl's own inferred type by construction.
 #[test]
 fn t_m2_paren_seals_against_the_v01_shape() {
@@ -471,11 +448,11 @@ end
     }
 }
 
-/// T-M2-type/T-M2-eval combined: `math-paren ctx paren-left paren-right m`
-/// with REAL 0.1-shaped closures (`hgt dpt ctx -> (inline-boxes, kernf)`,
-/// §3.1) type-checks and evaluates through `embed-math`/`read-inline`, and
-/// — pinning the BIGGEST M2 risk (§8 risk 1: forgetting `c2.font_size =
-/// size` in `make_paren_run`'s V0_1 arm) — the closure route actually ran
+/// `math-paren ctx paren-left paren-right m`
+/// with REAL 0.1-shaped closures (`hgt dpt ctx -> (inline-boxes, kernf)`)
+/// type-checks and evaluates through `embed-math`/`read-inline`, and —
+/// pinning the BIGGEST risk (forgetting `c2.font_size = size` in
+/// `make_paren_run`'s V0_1 arm) — the closure route actually ran
 /// (not the font-glyph fallback): the produced graphics contain `Fill` ink,
 /// which `paren_variant_fallback` never emits.
 #[test]
@@ -527,14 +504,12 @@ embed-math ctx (math-paren ctx M.paren-left M.paren-right (read-math ctx ${x}))
     );
 }
 
-// ============================================================================
-// Math-package completion M3: 9 -> 14 `math-char-class` constructors.
-// ============================================================================
+// Math-package completion: 9 -> 14 `math-char-class` constructors.
 
-/// T-M3-type/T-M3-remap: `set-math-char-class MathSansSerif`/
+/// `set-math-char-class MathSansSerif`/
 /// `MathTypewriter` type-check and evaluate under V0_1, and
 /// `convert-string-for-math` remaps `A`/`a` to the expected codepoints
-/// (`math.rs`'s capitals/smalls offsets, §4.1).
+/// (`math.rs`'s capitals/smalls offsets).
 #[test]
 fn t_m3_new_char_classes_typecheck_and_remap() {
     let entry = "\
@@ -570,7 +545,7 @@ let tt-a = convert-string-for-math ctx-tt MathTypewriter (string-unexplode [65])
     assert_eq!(first_cp(&parts[2]), 0x1D670, "MathTypewriter capital A");
 }
 
-/// T-M3-frozen: under V0_0, `MathSansSerif` stays an unknown constructor
+/// Under V0_0, `MathSansSerif` stays an unknown constructor
 /// (pins the registration gate — the frozen 0.0.6 surface never learns the
 /// 5 new names).
 #[test]

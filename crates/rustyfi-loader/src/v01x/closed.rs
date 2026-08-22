@@ -2,7 +2,7 @@
 //! `src/frontend/closedFileDependencyResolver.ml` (module-name graph inside
 //! one envelope) + `src/frontend/closedEnvelopeDependencyResolver.ml`
 //! (envelope-level graph across the deps config). Pure graph logic over the
-//! Ld3b-1-decoded configs — no YAML of its own.
+//! already-decoded configs — no YAML of its own.
 //!
 //! Both reuse [`crate::graph::toposort`] (u32 adjacency, dependency-first)
 //! with a local name↔u32 interning map, mapping cycle ids back to

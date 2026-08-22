@@ -1,6 +1,6 @@
-//! `status` (plan §4.4): per-package presence check. With a `NAME`, one
-//! package's full file list flagging any missing path; without, a summary
-//! per receipt. The CLI exits `1` when anything is missing (CI-friendly).
+//! `status`: per-package presence check. With a `NAME`, one package's full
+//! file list flagging any missing path; without, a summary per receipt. The
+//! CLI exits `1` when anything is missing.
 
 use std::path::PathBuf;
 
@@ -9,12 +9,10 @@ use crate::ops::uninstall::RootOptions;
 use crate::roots::RootSelection;
 use crate::{receipts, stage};
 
-/// Presence report for one package.
 #[derive(Debug, Clone)]
 pub struct PackageStatus {
     pub name: String,
     pub version: String,
-    /// Total files the receipt records.
     pub total_files: usize,
     /// Files the receipt lists that are no longer present on disk
     /// (root-relative).
@@ -22,7 +20,6 @@ pub struct PackageStatus {
 }
 
 impl PackageStatus {
-    /// Files present = total − missing.
     pub fn present_files(&self) -> usize {
         self.total_files - self.missing_files.len()
     }

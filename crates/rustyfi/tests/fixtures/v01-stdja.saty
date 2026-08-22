@@ -1,4 +1,4 @@
-% THE CAPSTONE (doc-class-capstone-road.md CP7 item 5 / CP8): a real
+% THE CAPSTONE: a real
 % upstream SATySFi 0.1 document class, `std-ja`
 % (dist-v01/packages/std-ja.satyh — vendored verbatim, modulo the two
 % documented math-package stand-ins its `Math` dependency needed), driving
@@ -6,7 +6,7 @@
 % transitive resolution across annot/math/code/hyph-english/unidata/the 4
 % font stand-ins/the 15 stdlib leaf packages) -> v1 lowering -> shared
 % elaborate/typecheck(V0_1)/sealing -> eval -> line break -> page break ->
-% PDF. Latin-only, math-free body (per the G7 single-DejaVu-face
+% PDF. Latin-only, math-free body (per the single-DejaVu-face
 % constraint — `std-ja`'s CJK path, `set-cjk-font`/`FontIpaEx`, is real and
 % present in the class but simply never exercised by this fixture, exactly
 % like the tier4 capstone's own Latin-only body never exercises stdjabook's

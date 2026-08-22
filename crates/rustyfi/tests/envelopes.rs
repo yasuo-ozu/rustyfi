@@ -1,12 +1,4 @@
-//! Ld3a CLI end-to-end tests for `LoadMode::Envelopes` (Axis B): a two-file
-//! `use … of` document compiling to a PDF with no new flags (the sniffer pins
-//! both axes off the `use` header), and the rejected 0.0.6+Envelopes
-//! combination surfacing the axis-naming CLI error.
-//!
-//! Both drive the *built* `rustyfi` binary as a subprocess (the
-//! `CARGO_BIN_EXE_*` env var cargo provides to this crate's integration
-//! tests), so they exercise `resolve_version_and_mode` + the loader dispatch
-//! for real.
+//! Ld3a: `LoadMode::Envelopes` (Axis B) CLI end-to-end tests.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -26,11 +18,9 @@ fn out_pdf(tag: &str) -> PathBuf {
     ))
 }
 
-/// A `use … of`-only 0.1 document (`tests/fixtures/envelopes/doc.saty`, which
-/// depends on `./v01-mini` via a local `use` header) compiles end-to-end to a
-/// PDF with only `--lang 0.1` — the sniffer sees the `use` header
-/// and pins `LoadMode::Envelopes` itself (the plan's detection-ladder step-3
-/// promise). The acceptance capstone for Ld3a.
+/// The sniffer pins `LoadMode::Envelopes` from the `use` header alone
+/// (detection ladder step 3), so no new flag is needed. Acceptance capstone
+/// for Ld3a.
 #[test]
 fn envelopes_use_of_document_compiles_to_pdf() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/envelopes/doc.saty");
@@ -64,9 +54,8 @@ fn envelopes_use_of_document_compiles_to_pdf() {
     let _ = std::fs::remove_file(&out);
 }
 
-/// `--deps` (Axis B = Envelopes) with `--lang 0.0` (Axis A =
-/// 0.0.6) is the one combination with no upstream analogue. The CLI rejects
-/// it early with a message naming the flag that pinned each axis (the loader's
+/// `--deps` (Axis B) with `--lang 0.0` (Axis A) has no upstream analogue; the
+/// CLI rejects it early naming the flag that pinned each axis (the loader's
 /// `InvalidModeVersion` is only the backstop).
 #[test]
 fn deps_with_v006_errors_naming_both_axes() {

@@ -1,4 +1,4 @@
-% F3 fixture (item #8): real `page-break-multicolumn` with a NON-trivial
+% Fixture: real `page-break-multicolumn` with a NON-trivial
 % `columnhookf` — a 2-column layout (`[250pt]`, i.e. 2 columns after the
 % prepended zero shift) whose hook emits a recognizable marker line at the
 % start of EVERY column, so a full page carries exactly 2 hook lines (one

@@ -47,8 +47,6 @@ fn stage_prefix(tag: &str) -> PathBuf {
     prefix
 }
 
-/// Run the staged binary with every relevant variable cleared, from a
-/// directory that is not inside the prefix.
 fn run(prefix: &Path, cwd: &Path, args: &[&str]) -> std::process::Output {
     Command::new(prefix.join("bin/rustyfi"))
         .args(args)
@@ -89,7 +87,6 @@ fn the_shipped_config_is_found_relative_to_the_executable() {
     let prefix = stage_prefix("share");
     let work = tmpdir("share-work");
 
-    // A repository the shipped config names, so its effect is observable.
     let index = prefix.join("index/packages");
     fs::create_dir_all(&index).unwrap();
     fs::write(
@@ -114,7 +111,6 @@ fn the_shipped_config_is_found_relative_to_the_executable() {
         String::from_utf8_lossy(&out.stderr)
     );
 
-    // And a config the user wrote shadows the shipped one.
     let user = tmpdir("share-user");
     fs::write(user.join("config.toml"), "[registry]\nurl = \"file:///nowhere\"\n").unwrap();
     let out = Command::new(prefix.join("bin/rustyfi"))
@@ -156,7 +152,6 @@ fn the_config_flag_names_the_file_and_reports_its_failures() {
     )
     .unwrap();
 
-    // The file the flag names is read, even though nothing else points there.
     let out = run(&prefix, &work, &["search", "demo", "--config", named.to_str().unwrap()]);
     assert!(
         String::from_utf8_lossy(&out.stdout).contains("great-package"),
@@ -169,7 +164,6 @@ fn the_config_flag_names_the_file_and_reports_its_failures() {
     let out = run(&prefix, &work, &["search", "demo", "--config", "/no/such/config.toml"]);
     assert!(!out.status.success(), "a named-but-missing config should fail");
 
-    // And a malformed one says so, naming the file.
     let bad = work.join("bad.toml");
     fs::write(&bad, "[registry]\nurl = 42\n").unwrap();
     let out = run(&prefix, &work, &["search", "demo", "--config", bad.to_str().unwrap()]);
@@ -183,8 +177,6 @@ fn the_config_flag_names_the_file_and_reports_its_failures() {
 
 #[test]
 fn the_config_flag_is_accepted_by_every_command() {
-    // It used to exist only on the commands that read it, so `list --config F`
-    // was a usage error — surprising for a flag describing the run.
     let prefix = stage_prefix("global-flag");
     let work = tmpdir("global-flag-work");
     let cfg = work.join("config.toml");

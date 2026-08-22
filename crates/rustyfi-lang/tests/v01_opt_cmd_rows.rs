@@ -1,4 +1,4 @@
-//! SATySFi 0.1 optional-argument rows, **increment 3a**: inline/block
+//! SATySFi 0.1 optional-argument rows: inline/block
 //! command optional-argument PARAMETER bundles (`val inline ctx \cmd
 //! ?(l = x, …) p = …`) and command **TYPE rows** (`inline [?(l:τ,…) τ_arg,
 //! …]` / `block […]`) in signatures — end-to-end (parse V0_1 -> `v1::lower`
@@ -10,7 +10,7 @@
 //! `NotADocument`-tolerant "type-checking accepted" bar — see that file's
 //! own doc comment for why treating `Ok`/`NotADocument` alike is sound: type-
 //! checking always runs, and fails first, before evaluation ever gets a
-//! chance to produce a non-`Document` value). A handful of tests (T1/T2)
+//! chance to produce a non-`Document` value). A handful of tests
 //! additionally prove the RUNTIME None-defaulting path: `compile_document_v1`
 //! always calls `eval::Interp::eval` even when the result isn't a document
 //! (`NotADocument` is only reached AFTER a successful eval), so
@@ -18,14 +18,6 @@
 //! a dummy `1`) is already end-to-end proof that an unbundled call defaults
 //! every declared optional label to `None` without an `EvalError` — no
 //! FontMetrics-based box-content introspection needed.
-//!
-//! The `T1`–`T9`/`t_m1_*` tests below are increment-3a + math-package-M1
-//! shaped: inline/block command param bundles + type rows, and BARE
-//! `math […]` sig rows. The `inc3b_*` tests at the END of this file exercise
-//! optional-arg-rows increment 3b: `val math` PARAMETER bundles (3b-α,
-//! `math_command_scheme_v01`'s row harvest + the ctx/sub/sup tail-trio peel)
-//! and command-APPLICATION `?(l = e)` bundles at a call site (3b-β, the
-//! option flowing through elaborate/typecheck/eval).
 
 use rustyfi_backend::{FontKey, FontMetrics, Length};
 use rustyfi_lang::CompileError;
@@ -35,7 +27,7 @@ use rustyfi_syntax::{parse_file, parse_file_v1};
 
 /// Never actually exercised (every fixture below either fails type-checking
 /// or fails at the `NotADocument` stage before glyph metrics matter, OR — for
-/// T1/T2 — only needs `advance` to return *some* width so `read-inline`/
+/// the tests proving the runtime defaulting path — only needs `advance` to return *some* width so `read-inline`/
 /// `read-block` don't choke on an unmeasurable glyph) — same stub shape as
 /// `v01_sealing.rs`'s `Mono`.
 struct Mono;
@@ -99,7 +91,7 @@ fn assert_type_error(lib_src: &str, doc_src: &str) -> String {
 }
 
 // ============================================================================
-// T1 — inline command param bundle: real invocation, unbundled -> `None`.
+// Inline command param bundle: real invocation, unbundled -> `None`.
 // ============================================================================
 
 /// `\mathstub` supplies `get-initial-context`'s second argument (`[math-
@@ -125,7 +117,7 @@ read-inline ctx {\\M.emphwith{hello}}";
 }
 
 // ============================================================================
-// T2 — block command, two labels (the std-ja `+section`/`+subsection`
+// Block command, two labels (the std-ja `+section`/`+subsection`
 // shape): real invocation, both optionals default, evaluates.
 // ============================================================================
 
@@ -148,10 +140,9 @@ read-block ctx '< +M.sec{Title}< > >";
 }
 
 // ============================================================================
-// T3 — THE sealing gate: a sealed sig with a `?(l:τ,…)` command-type row
+// THE sealing gate: a sealed sig with a `?(l:τ,…)` command-type row
 // matches its impl's `?(l=e,…)` parameter bundle, labels in NON-alphabetical
-// surface order (`outline-title` before `label`) to prove sort-
-// insensitivity (spec §14 risk 3).
+// surface order (`outline-title` before `label`) to prove sort-insensitivity.
 // ============================================================================
 
 const T3_LIB: &str = "\
@@ -169,7 +160,7 @@ fn t3_sealed_command_opt_labels_round_trip() {
 }
 
 // ============================================================================
-// T4 — seal label-set mismatch rejected (both directions: sig is a strict
+// Seal label-set mismatch rejected (both directions: sig is a strict
 // subset of the impl's bundle, and the mirror — sig has an extra label the
 // impl never binds).
 // ============================================================================
@@ -200,7 +191,7 @@ end
 }
 
 // ============================================================================
-// T5 — annot `\href` shape: compound label type (`length * color`), sealed.
+// Annot `\href` shape: compound label type (`length * color`), sealed.
 // ============================================================================
 
 const T5_LIB: &str = "\
@@ -218,10 +209,10 @@ fn t5_sealed_href_shape_compound_label_type() {
 }
 
 // ============================================================================
-// T6 — the frozen 0.0.6 version gate: a `?(l = x)` command-parameter bundle
+// The frozen 0.0.6 version gate: a `?(l = x)` command-parameter bundle
 // PARSES under 0.0.6 (the additive-`cst` accept surface — `Param::Bundled`
-// reuses `CstOptBinders`, already 0.0.6-parseable since increment 1's
-// `Expr::FunRows`), but elaboration rejects it with a version error rather
+// reuses `CstOptBinders`, already 0.0.6-parseable via `Expr::FunRows`),
+// but elaboration rejects it with a version error rather
 // than silently accepting it.
 // ============================================================================
 
@@ -241,7 +232,7 @@ fn t6_v006_command_param_bundle_version_gate() {
 }
 
 // ============================================================================
-// T9 — lower placeholders.
+// Lower placeholders.
 // ============================================================================
 
 /// An empty `?()` PARAMETER bundle on a command binding is a lower error
@@ -265,7 +256,7 @@ fn t9_empty_param_bundle_on_command_is_lower_error() {
 }
 
 /// An empty `?()` command-TYPE optional-label bundle is likewise a lower
-/// error (`lower_type_cmd_args`'s new empty-check, §5.2) — surfaced through
+/// error (`lower_type_cmd_args`'s new empty-check) — surfaced through
 /// the sig-sealing path (a sig's declared type is dropped at
 /// `lower_file_v1` time and only ever lowered by `v1/module_check.rs`'s
 /// `process_seal_member`, which wraps any `LowerError` it hits into a
@@ -287,19 +278,17 @@ end
     );
 }
 
-/// `math […]` command TYPE heads — increment 3b's "still a parse error"
-/// verdict is FLIPPED by math-package completion M1: `cst_v1::TypeApp::
-/// MathCmdTy` is a `KwMath`-headed grammar arm reusing `TypeCmdArgItemV1`
-/// exactly like `InlineCmdTy`/`BlockCmdTy` (inheriting its `?(l:τ,…)`
-/// optional-label PREFIX for free), so the exact `val \derive : math
-/// [?(name:math-text) list math-text, math-text]` row this test used to
-/// pin as a parse error now PARSES. (Name kept for continuity with the
-/// increment-3b history; the assertion is inverted.) Only the SIG grammar
-/// is exercised here — pairing this labeled row with a matching bundled
-/// IMPL is optional-arg-rows increment 3b's remaining M-opt slice
+/// `math […]` command TYPE heads (math-package completion):
+/// `cst_v1::TypeApp::MathCmdTy` is a `KwMath`-headed grammar arm reusing
+/// `TypeCmdArgItemV1` exactly like `InlineCmdTy`/`BlockCmdTy` (inheriting
+/// its `?(l:τ,…)` optional-label PREFIX for free), so `val \derive : math
+/// [?(name:math-text) list math-text, math-text]` PARSES. (The name dates
+/// from when this pinned a parse error; the assertion is
+/// inverted.) Only the SIG grammar is exercised here — pairing this labeled
+/// row with a matching bundled IMPL is the remaining work
 /// (`v1/lower.rs`'s `lower_value_math` still rejects `?(…)` bundles on
 /// `val math` params; deferred, needed only by the `proof` package, zero
-/// demand in `math.satyh`) — T-M1-seal below exercises the full seal path
+/// demand in `math.satyh`) — `t_m1_seal_bare_math_rows` below exercises the full seal path
 /// with the BARE `math […]` rows `math.satyh` actually uses.
 #[test]
 fn t9_math_command_type_head_with_labeled_row_parses() {
@@ -312,10 +301,10 @@ fn t9_math_command_type_head_with_labeled_row_parses() {
     );
 }
 
-/// T-M1-seal: the sealing gate for a BARE `math […]` row (the shape
+/// The sealing gate for a BARE `math […]` row (the shape
 /// `math.satyh` actually uses — zero `?(` in any upstream `math […]` sig
-/// row) — pins §2.2 (the `MathCmdTy` lowering arm), §2.4 (`CmdShape::
-/// Inline` accepting `MonoType::MathCmd`), and `math_command_scheme_v01`'s
+/// row) — pins the `MathCmdTy` lowering arm, `CmdShape::Inline` accepting
+/// `MonoType::MathCmd`, and `math_command_scheme_v01`'s
 /// `MathCmd([])`/`MathCmd([mandatory, mandatory])` rows.
 #[test]
 fn t_m1_seal_bare_math_rows() {
@@ -334,9 +323,9 @@ end
     assert_accepts(lib, "1");
 }
 
-/// T-M1-roundtrip's typecheck-level twin: the same sig, checked against a
+/// The sealing test's typecheck-level twin: the same sig, checked against a
 /// MISMATCHED arity impl (1 declared math-command argument, 2 actual params)
-/// — `ArityMismatch`-shaped rejection (T-M1-mismatch(a)).
+/// — `ArityMismatch`-shaped rejection.
 #[test]
 fn t_m1_mismatch_arity() {
     let lib = "\
@@ -353,7 +342,7 @@ end
     assert!(!msg.is_empty(), "expected a non-empty type-error message");
 }
 
-/// T-M1-mismatch(b): a sig declaring `inline […]` for a binding that is
+/// A sig declaring `inline […]` for a binding that is
 /// actually a `val math` — the seal shape guard now PASSES (both `\`-sigiled
 /// shapes are accepted early), but subsumption/unify must still reject the
 /// kind mismatch (`InlineCmd` vs `MathCmd`).
@@ -370,7 +359,7 @@ end
     assert!(!msg.is_empty(), "expected a non-empty type-error message");
 }
 
-/// T-M1-mismatch(c): the mirror — a sig declaring `math […]` for a binding
+/// The mirror — a sig declaring `math […]` for a binding
 /// that is actually a `val inline`.
 #[test]
 fn t_m1_mismatch_math_sig_for_inline_impl() {
@@ -385,7 +374,7 @@ end
     assert!(!msg.is_empty(), "expected a non-empty type-error message");
 }
 
-/// T-M1-scripts: `val math ctx \lim with sub sup = …`'s synthesized
+/// `val math ctx \lim with sub sup = …`'s synthesized
 /// `with sub sup` trio must not surface as declared command-type slots —
 /// sealed against a ZERO-arity `math []` row.
 #[test]
@@ -404,7 +393,7 @@ end
 }
 
 // ============================================================================
-// INCREMENT 3b-α — `val math` command PARAMETER bundles.
+// `val math` command PARAMETER bundles.
 //
 // `math_command_scheme_v01` now harvests each LEADING slot's `?(l:τ,…)` row
 // (via `peel_func_chain_rows` + the shared `harvest_slot`), while the
@@ -505,10 +494,10 @@ end
 }
 
 // ============================================================================
-// INCREMENT 3b-β — command APPLICATION `?(l = e)` bundles at a call site.
+// Command APPLICATION `?(l = e)` bundles at a call site.
 //
-// A command applied with `?(label = e)` args (vs 3a/3b-α which are the
-// declaration side): the bundle rides on the per-arg `CmdArg.opts`
+// A command applied with `?(label = e)` args (vs the
+// declaration side, above): the bundle rides on the per-arg `CmdArg.opts`
 // (elaborate's `cmd_arg_to_ast`), is checked against that slot's closed
 // `opt_labels` map (typecheck's `check_cmd_args`, upstream
 // `UnexpectedOptionalLabel` for a stray label), and folds through
@@ -608,15 +597,12 @@ end
 
 #[test]
 fn inc3b_beta_app_bundle_value_observably_reaches_eval() {
-    // Supplied -> `Some 3` -> the non-aborting branch -> accepts.
     let doc_supplied = "\
 let ctx = get-initial-context 400pt (command \\M.mathstub) in
 read-inline ctx {\\M.needcolor ?(color = 3){x}}";
     assert_accepts(INC3B_BETA_OBS_LIB, doc_supplied);
 
-    // Omitted -> `None` -> the aborting branch -> a run-time (Eval) error,
-    // NOT a type error: proof the omitted label really defaulted to `None`
-    // at eval (had it leaked as `Some`, this would have accepted).
+    // Had the omission leaked as `Some`, this would have accepted instead.
     let doc_omitted = "\
 let ctx = get-initial-context 400pt (command \\M.mathstub) in
 read-inline ctx {\\M.needcolor{x}}";

@@ -13,7 +13,6 @@ use std::io::Write;
 /// them: after the options and subcommands, before the version footer.
 const EXTRA: &str = include_str!("man_extra.roff");
 
-/// Render the page as roff.
 pub fn render(out: &mut dyn Write) -> std::io::Result<()> {
     // `build_cli()` is a multicall root whose subcommands are the personalities
     // (`rustyfi`, `satyrographos`), so rendering it directly would produce a

@@ -72,7 +72,7 @@ pub enum Value {
     /// `math-boxes` (V0_1 only; `BaseType::MathBoxes`) — the evaluated math
     /// tree `read-math` produces, wrapping the SAME `Math` atom tree
     /// `Value::Math` uses so every layout/primitive helper is shared
-    /// unchanged (math-split spec §1.2). Distinct from `Value::Math`: no
+    /// unchanged. Distinct from `Value::Math`: no
     /// V0_0 primitive ever produces or consumes this variant, and no V0_1
     /// primitive ever produces `Value::Math` — the two are kept apart so a
     /// V0_1 program can't silently pass a `math-text` where `math-boxes` is
@@ -97,12 +97,8 @@ pub enum Value {
     /// A closure. Its body is an already-compiled [`CompiledExpr`], run
     /// directly by [`crate::eval::Interp::apply`].
     ///
-    /// The name is historical: this used to sit beside an AST-bodied
-    /// `Value::Closure` that the reference tree-walking interpreter produced.
-    /// Phase 3 of retired that evaluator (quoted text is now compiled eagerly,
-    /// so a tree-walker cannot build a `Value::InlineText` without invoking
-    /// the compiler anyway), and with it the only producer of the AST-bodied
-    /// variant.
+    /// The name is historical — there is no AST-bodied closure variant beside
+    /// it; this is the only closure representation.
     CompiledClosure {
         /// SATySFi 0.1 labeled optional LABELS, in binder order; empty for
         /// every 0.0.6-built closure. Each receives an `option`-typed value at
@@ -161,13 +157,12 @@ pub enum Value {
     /// `dist/hash/fonts.satysfi-hash`, and no such name is recoverable from
     /// a key.
     Font(rustyfi_backend::FontKey),
-    /// `text-info` (context-box-prims.md §G sliver).
+    /// `text-info` (the text-mode-context sliver).
     TextInfo(TextInfo),
     /// `hyphenation` (`load-hyphenation-dictionary`'s result; S1) — the
     /// tag `set-hyphenation- dictionary` writes into
-    /// `Context::hyphen_dictionary`. Was always `Value::Unit` (a
-    /// discarded no-op token) before this slice; now actually carries
-    /// which dictionary was requested.
+    /// `Context::hyphen_dictionary` — it carries which dictionary was
+    /// requested.
     Hyphenation(HyphenLang),
 }
 
@@ -268,8 +263,8 @@ pub enum Math {
     /// (`\sum^n_i`-style). The closure is carried opaquely, same as
     /// `Paren`'s; only actually invoked by the real layout engine.
     PullInScripts(MathKind, MathKind, Box<Value>),
-    /// V0_1 only: `read-math`'s captured reading context (math-split spec
-    /// §1.2/§3.3) — the port's coarse-grained stand-in for upstream's
+    /// V0_1 only: `read-math`'s captured reading context — the port's
+    /// coarse-grained stand-in for upstream's
     /// per-node `context` fields (`types.cppo.ml:1051-1110`). Constructed
     /// ONLY by the V0_1 primitive `read-math`; no V0_0 path ever builds
     /// or matches this variant. Its layout arm (`primitives.rs`'s
@@ -277,7 +272,7 @@ pub enum Math {
     /// and size = `ctx.font_size` as an ABSOLUTE override — a `WithContext`
     /// produced under an `enter_script`ed context already carries the
     /// script-shrunk size, so the engine's own Sup/Sub shrink never
-    /// double-applies to it (see risk 3 in the math-split spec).
+    /// double-applies to it.
     WithContext(Box<Context>, Vec<Math>),
 }
 
@@ -333,7 +328,7 @@ pub enum MathElement {
     /// available to metrics-probe the remap (`resolve_variant_char`).
     VariantCharPending(String),
     /// V0_1 only: `embed-inline-to-math`'s payload — already-evaluated
-    /// inline boxes carrying an explicit math class (math-split spec §1.2).
+    /// inline boxes carrying an explicit math class.
     /// Contrast `EmbeddedText`'s 0.0.6 closure (evaluated lazily at layout
     /// time under a `context`); this is eager, already-materialized data,
     /// matching upstream's `embed_inline_to_math` (which has no context to
@@ -401,9 +396,8 @@ pub struct DocumentValue {
     /// (`FrameStart`/`FrameEnd` marker pairs), and `ClearPage` all intact,
     /// not yet sliced into pages and not yet carrying injected
     /// headers/footers/footnotes. `page_break_core` populates this
-    /// unconditionally (an "unconditional cheap clone" — the design doc's
-    /// simplest recommended capture strategy, cost "one `Vec<VertBox>` clone
-    /// per compile, negligible" — rather than threading a `want_reflow` flag
+    /// unconditionally (an unconditional cheap clone — one `Vec<VertBox>`
+    /// clone per compile, negligible — rather than threading a `want_reflow` flag
     /// through every `compile_document_*`/`prim_page_break_*` entry point).
     /// `Option` (rather than a bare `Vec`) keeps the field's *meaning*
     /// "present only for a reflow-capable compile" self-documenting even
@@ -411,12 +405,10 @@ pub struct DocumentValue {
     /// legitimately can't capture it (e.g. a hand-built `DocumentValue` in a
     /// test) can still leave it `None`.
     ///
-    /// **Purely additive.** Neither `rustyfi_pdf::render_pdf*` nor
-    /// the `html-support` branch's faithful HTML backend (the faithful
-    /// backend) ever reads this field — only
-    /// its reflowable backend
-    /// (the reflowable backend) does — so its presence changes no byte of
-    /// their output.
+    /// **Purely additive.** Neither `rustyfi_pdf::render_pdf*` nor the
+    /// `html-support` branch's faithful HTML backend reads this field — only
+    /// that branch's REFLOWABLE backend does — so its presence changes no byte
+    /// of their output.
     pub reflow_source: Option<Vec<VertBox>>,
     /// S2 links ("Links/metadata"): one `(DecoId, action)` per
     /// `register-link-to-uri`/`-to-location` call made from inside a firing
@@ -433,8 +425,8 @@ pub struct DocumentValue {
     /// alongside `extras`, AFTER `fire_hooks` (hooks/decos haven't fired yet
     /// when `page_break_core` packages the initial `DocumentValue`). Empty
     /// (not absent) by default — same "purely additive, cheap when unused"
-    /// policy as `reflow_source`; neither `rustyfi_pdf` nor the faithful
-    /// the `html-support` branch's faithful HTML backend reads it.
+    /// policy as `reflow_source`; neither `rustyfi_pdf` nor the
+    /// `html-support` branch's faithful HTML backend reads it.
     pub reflow_links: Vec<(DecoId, AnnotAction)>,
     /// Same idea as `reflow_links`, for `register-destination`
     /// (`annot.satyh`'s `register-location-frame` idiom): `(DecoId, name)`.
@@ -512,14 +504,12 @@ type FxMap = HashMap<Rc<str>, Value, FxBuild>;
 /// references against, and whose [`BaseEnv::names`] seed the elaborator's
 /// scope.
 ///
-/// This is deliberately NOT the runtime environment. Before Phase 4 of one
-/// `Env` served both roles, with the base environment sitting at the root of
-/// the runtime frame chain. Nothing resolves a name at run time any more —
+/// This is deliberately NOT the runtime environment, and is not the root of
+/// the runtime frame chain (Phase 4). Nothing resolves a name at run time —
 /// top-level bindings go through the compiler's `Globals` table, locals
 /// through slot indices, and unshadowed base names are constant-folded at
-/// compile time — so the runtime chain no longer reaches here at all, and the
-/// two can be what they actually are: a name map used while compiling, and a
-/// stack of positional frames used while running.
+/// compile time — so the two are what they actually are: a name map used
+/// while compiling, and a stack of positional frames used while running.
 #[derive(Clone, Debug, Default)]
 pub struct BaseEnv {
     vars: FxMap,
@@ -560,8 +550,7 @@ impl BaseEnv {
 ///
 /// `RefCell` because `let rec` back-patches its siblings into a shared frame
 /// one at a time: the frame is created pre-sized with placeholders and filled
-/// in order, and a closure that captured it sees the later fills, exactly as
-/// the name-keyed version did.
+/// in order, and a closure that captured it sees the later fills.
 #[derive(Clone, Debug)]
 pub struct Env(Rc<Frame>);
 

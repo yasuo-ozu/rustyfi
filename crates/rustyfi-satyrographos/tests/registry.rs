@@ -1,25 +1,10 @@
-//! Phase-3 registry tests (plan §5.4, §9 phase 3) — **no network**. Every
-//! fixture is built in a unique temp directory: a package `.tar.gz` served via
-//! a `file://` URL, and a registry index in two forms —
+//! Phase-3 registry tests — no network. Fixtures build a package `.tar.gz`
+//! served via `file://`, and a registry index either as a plain directory
+//! (`<dir>/packages/<name>.toml`) or a bare git repo (`--registry` pointed
+//! at `file://…/bare.git`, so `acquire` shells out to `git clone`).
 //!
-//! - a **plain-directory index** (`<dir>/packages/<name>.toml`, read in place);
-//! - a **bare git index** (`git init` a work tree, `git clone --bare` it, and
-//!   point `--registry` at `file://…/bare.git` so `acquire` shells out to
-//!   `git clone` into a hermetic cache dir).
-//!
-//! Coverage:
-//! - happy path (both index forms): registry install materialises files under
-//!   `dist/` and records a `registry` receipt with the resolved version/sha256;
-//! - **sha256 mismatch**: a corrupted index digest aborts the install and
-//!   leaves `dist/` and the receipts directory completely untouched (step 3);
-//! - reconcile of a `(registry …)` dependency source locks the resolved
-//!   `(version, url, sha256)` and re-materialises reproducibly *without*
-//!   re-consulting the index (the index dir is deleted before the 2nd run);
-//! - `search` substring matching and `update` upgrade reporting (§8).
-//!
-//! The default `cargo test` run exercises all of this with the `http` cargo
-//! feature **off** (no HTTP client compiled in) — `file://` tarballs keep the
-//! whole suite offline, matching plan §8.
+//! `http` is a default feature, but every case here serves `file://`
+//! tarballs, so the suite still reaches no network.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -27,10 +12,6 @@ use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use rustyfi_satyrographos::{self as sg, InstallOptions, RegistryOptions, RootOptions};
-
-// ---------------------------------------------------------------------------
-// Temp-dir fixture helper (same pattern as tests/ops.rs / tests/reconcile.rs).
-// ---------------------------------------------------------------------------
 
 struct TempDir(PathBuf);
 
@@ -71,14 +52,9 @@ impl Drop for TempDir {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Fixture builders.
-// ---------------------------------------------------------------------------
-
 /// Build a `.tar.gz` of a manifest package `<name>` at `<tmp>/tarballs/
 /// <name>-<version>.tar.gz`, returning `(path, lowercase-hex-sha256)`.
 fn make_tarball(tmp: &TempDir, name: &str, version: &str, body: &str) -> (PathBuf, String) {
-    // The package source tree.
     let src = tmp.path().join(format!("src/{name}-{version}"));
     fs::create_dir_all(src.join("packages")).unwrap();
     fs::write(
@@ -171,10 +147,9 @@ fn write_index(
 }
 
 /// Write a plain-directory index entry for `name` whose single `version`
-/// declares `deps` (`dep_name -> constraint text`) in a
-/// `[versions."<v>".dependencies]` table (design §3.2's
-/// `VersionEntry.dependencies`) — the phase-7c solver test fixture, alongside
-/// the deps-free [`write_index`]/[`Ver`] used by the rest of this file.
+/// declares `deps` in a `[versions."<v>".dependencies]` table — the
+/// phase-7c solver test fixture, alongside the deps-free
+/// [`write_index`]/[`Ver`] used by the rest of this file.
 fn write_index_entry_with_deps(
     tmp: &TempDir,
     index_rel: &str,
@@ -214,10 +189,6 @@ fn root_opts(root: &Path) -> RootOptions {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Happy path — plain-directory index.
-// ---------------------------------------------------------------------------
-
 #[test]
 fn plain_directory_registry_install_happy_path() {
     let tmp = TempDir::new("plain-happy");
@@ -248,12 +219,10 @@ fn plain_directory_registry_install_happy_path() {
     assert_eq!(resolved.version, "1.0.0");
     assert_eq!(resolved.sha256, sha);
 
-    // Files materialised under dist/.
     assert!(root
         .join("dist/packages/great-package/great-package.satyh")
         .is_file());
 
-    // The receipt records a `registry` source with version/url/sha256.
     let receipt = fs::read_to_string(root.join(".satyrographos/receipts/great-package.toml"))
         .expect("receipt written");
     assert!(receipt.contains("kind = \"registry\""), "{receipt}");
@@ -261,10 +230,6 @@ fn plain_directory_registry_install_happy_path() {
     assert!(receipt.contains("version = \"1.0.0\""), "{receipt}");
     assert!(receipt.contains(&sha), "receipt records the sha256:\n{receipt}");
 }
-
-// ---------------------------------------------------------------------------
-// sha256 mismatch — nothing touched (plan §5.4 step 3).
-// ---------------------------------------------------------------------------
 
 #[test]
 fn sha256_mismatch_leaves_dist_and_receipts_untouched() {
@@ -297,7 +262,6 @@ fn sha256_mismatch_leaves_dist_and_receipts_untouched() {
         "expected ChecksumMismatch, got {err}"
     );
 
-    // Nothing under dist/, and the receipts directory has no receipt.
     assert!(!root.join("dist").exists(), "dist/ must not be created on mismatch");
     let receipts = root.join(".satyrographos/receipts");
     let count = fs::read_dir(&receipts)
@@ -305,7 +269,6 @@ fn sha256_mismatch_leaves_dist_and_receipts_untouched() {
         .unwrap_or(0);
     assert_eq!(count, 0, "no receipt may be written on mismatch");
 
-    // And the downloaded (unverified) tarball was cleaned out of tmp/.
     let tmp_dir = root.join(".satyrographos/tmp");
     let leftovers = fs::read_dir(&tmp_dir)
         .map(|rd| rd.filter_map(|e| e.ok()).count())
@@ -313,9 +276,7 @@ fn sha256_mismatch_leaves_dist_and_receipts_untouched() {
     assert_eq!(leftovers, 0, "unverified download must be cleaned up");
 }
 
-// ---------------------------------------------------------------------------
 // Happy path — bare git index (shells out to git).
-// ---------------------------------------------------------------------------
 
 fn git(args: &[&str], cwd: Option<&Path>) {
     let mut cmd = Command::new("git");
@@ -399,10 +360,8 @@ fn bare_git_registry_install_happy_path() {
         .is_file());
 }
 
-// ---------------------------------------------------------------------------
 // Reconcile a registry dependency source → lockfile pins (version, url, sha256)
 // and is reproducible without re-consulting the index.
-// ---------------------------------------------------------------------------
 
 #[test]
 fn reconcile_registry_locks_and_is_reproducible_without_index() {
@@ -421,8 +380,8 @@ fn reconcile_registry_locks_and_is_reproducible_without_index() {
         }],
     );
 
-    // A Satyristes whose only dependency is a registry source, with the index
-    // URL declared in a top-level (registry ...) form (the fallback when no flag/env set).
+    // The index URL is declared in a top-level (registry ...) form (the
+    // fallback used when no flag/env is set).
     let manifest = tmp.write(
         "proj/Satyristes",
         &format!(
@@ -443,7 +402,6 @@ fn reconcile_registry_locks_and_is_reproducible_without_index() {
         .join("dist/packages/great-package/great-package.satyh")
         .is_file());
 
-    // The lockfile pins the resolved version, url, and sha256.
     let lock = fs::read_to_string(tmp.path().join("proj/Satyristes.lock")).unwrap();
     assert!(lock.contains("version = \"1.0.0\""), "{lock}");
     assert!(lock.contains(&file_url(&tarball)), "lock pins the url:\n{lock}");
@@ -458,9 +416,7 @@ fn reconcile_registry_locks_and_is_reproducible_without_index() {
     assert!(report.installed.is_empty());
 }
 
-// ---------------------------------------------------------------------------
 // Phase-7c solver wiring: a transitive dependency reaches the closure.
-// ---------------------------------------------------------------------------
 
 #[test]
 fn reconcile_registry_resolves_transitive_dependency_into_the_closure() {
@@ -517,11 +473,8 @@ fn reconcile_registry_resolves_transitive_dependency_into_the_closure() {
     );
     assert!(lock.contains(&base_sha), "transitive dep's sha256 is pinned:\n{lock}");
 
-    // Delete the index entirely: a second reconcile must reproduce the WHOLE
-    // closure (direct + transitive) without re-consulting it — the same
-    // no-index reproducibility guarantee `reconcile_registry_locks_and_is_
-    // reproducible_without_index` checks for a single direct entry, now
-    // extended to a transitive one.
+    // Delete the index again: reproducibility must hold for the whole
+    // closure, not just a single direct entry.
     fs::remove_dir_all(&index).unwrap();
     let report =
         sg::install_manifest_reg(&manifest, &root_opts(&root), &RegistryOptions::default())
@@ -531,10 +484,6 @@ fn reconcile_registry_resolves_transitive_dependency_into_the_closure() {
     skipped.sort();
     assert_eq!(skipped, ["base-package", "great-package"]);
 }
-
-// ---------------------------------------------------------------------------
-// search
-// ---------------------------------------------------------------------------
 
 #[test]
 fn search_matches_name_and_description() {
@@ -560,7 +509,6 @@ fn search_matches_name_and_description() {
         ..Default::default()
     };
 
-    // Match on name.
     let hits = sg::search(&["great"], &reg, None).unwrap();
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0].name, "great-package");
@@ -578,17 +526,12 @@ fn search_matches_name_and_description() {
     assert_eq!(names, ["fonts-theano", "great-package"]);
 }
 
-// ---------------------------------------------------------------------------
-// update
-// ---------------------------------------------------------------------------
-
 #[test]
 fn update_reports_available_upgrade() {
     let tmp = TempDir::new("update");
     let (t10, sha10) = make_tarball(&tmp, "great-package", "1.0.0", "let g = 1\n");
     let (t11, sha11) = make_tarball(&tmp, "great-package", "1.1.0", "let g = 2\n");
 
-    // Index initially offers 1.0.0 only.
     let index = write_index(
         &tmp,
         "index",
@@ -615,12 +558,10 @@ fn update_reports_available_upgrade() {
         ..Default::default()
     };
 
-    // No newer version yet.
     let rep = sg::update(&manifest, &reg).expect("update ok");
     assert!(rep.upgrades.is_empty(), "no upgrade before 1.1.0 is published");
     assert_eq!(rep.up_to_date, ["great-package"]);
 
-    // Publish 1.1.0 into the index.
     write_index(
         &tmp,
         "index",
@@ -641,11 +582,9 @@ fn update_reports_available_upgrade() {
 
 /// A newer-but-incompatible version present in the index must NOT be
 /// reported: `great-package` has 1.0.0/1.1.0/2.0.0 published, but a second
-/// locked package (`capper`) declares `great-package ^1.0.0` — capping it
-/// below 2.0.0. `update`'s solver-based diff (design §5.2) must report the
-/// highest version that still fits the *whole* solved graph (1.1.0), not the
-/// index's bare maximum (2.0.0) the pre-solver `select_version(.., None)`
-/// loop would have reported.
+/// locked package (`capper`) declares `great-package ^1.0.0`, capping it
+/// below 2.0.0. `update` must report the highest version that fits the
+/// whole solved graph (1.1.0), not the index's bare maximum (2.0.0).
 #[test]
 fn update_caps_the_upgrade_at_the_highest_mutually_compatible_version() {
     let tmp = TempDir::new("update-cap");
@@ -674,7 +613,6 @@ fn update_caps_the_upgrade_at_the_highest_mutually_compatible_version() {
     sg::install_manifest_reg(&manifest, &root_opts(&root), &RegistryOptions::default())
         .expect("reconcile at 1.0.0/1.0.0");
 
-    // Now publish great-package 1.1.0 AND 2.0.0.
     let index_toml = format!(
         "[versions.\"1.0.0\"]\ntarball_url = \"{}\"\nsha256 = \"{}\"\n\n\
          [versions.\"1.1.0\"]\ntarball_url = \"{}\"\nsha256 = \"{}\"\n\n\
@@ -702,19 +640,14 @@ fn update_caps_the_upgrade_at_the_highest_mutually_compatible_version() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// Several configured repositories: `update`/reconcile consult ALL of them, in
-// order, not just the first — the same coverage `search`/`install NAME`
-// already had (task's gap #1).
-// ---------------------------------------------------------------------------
+// Several configured repositories: `update`/reconcile consult ALL of them,
+// in order.
 
 #[test]
 fn reconcile_and_update_multi_consult_every_configured_repository() {
     // `great-package` lives ONLY in the SECOND configured repository; the
-    // first is reachable but simply does not carry it. The single-registry
-    // `install_manifest_reg`/`update` (consulting only the first, or a bare
-    // `--registry` URL) has no way to resolve this at all; the `_multi`
-    // entry points must.
+    // single-registry `install_manifest_reg`/`update` has no way to resolve
+    // this at all; the `_multi` entry points must.
     let tmp = TempDir::new("update-multi");
     let (t10, sha10) = make_tarball(&tmp, "great-package", "1.0.0", "let g = 1\n");
     let (t11, sha11) = make_tarball(&tmp, "great-package", "1.1.0", "let g = 2\n");
@@ -735,9 +668,8 @@ fn reconcile_and_update_multi_consult_every_configured_repository() {
         &[Ver { version: "1.0.0", tarball: &t10, real_sha: &sha10, bad_sha: None }],
     );
 
-    // No `(registry ...)` form here on purpose: this manifest names no
-    // repository of its own, so the only way it resolves at all is through
-    // the `repos` list every caller passes down.
+    // No `(registry ...)` form here on purpose: the only way this resolves
+    // is through the `repos` list passed down.
     let manifest = tmp.write(
         "proj/Satyristes",
         "(version 0.0.2)\n\
@@ -754,7 +686,6 @@ fn reconcile_and_update_multi_consult_every_configured_repository() {
         .expect("reconcile finds great-package through the second repository");
     assert!(root.join("dist/packages/great-package/great-package.satyh").is_file());
 
-    // Publish 1.1.0 into the second repository only.
     write_index(
         &tmp,
         "repo2",
@@ -775,11 +706,10 @@ fn reconcile_and_update_multi_consult_every_configured_repository() {
 
 #[test]
 fn update_multi_reports_one_unreachable_repository_without_failing() {
-    // The first configured repository does not exist at all (fully offline: a
-    // `git clone` against a nonexistent local path fails immediately, no
-    // network involved); the second is the real index. One unreachable
-    // repository must not hide what the reachable one still reports —
-    // mirrors `cmd_search`'s own behaviour.
+    // The first configured repository does not exist at all (a `git clone`
+    // against a nonexistent local path fails immediately, no network
+    // involved); one unreachable repository must not hide what the
+    // reachable one still reports — mirrors `cmd_search`'s own behaviour.
     let tmp = TempDir::new("update-multi-unreachable");
     let (t10, sha10) = make_tarball(&tmp, "great-package", "1.0.0", "let g = 1\n");
     let (t11, sha11) = make_tarball(&tmp, "great-package", "1.1.0", "let g = 2\n");
@@ -829,10 +759,6 @@ fn update_multi_reports_one_unreachable_repository_without_failing() {
     assert_eq!(rep.upgrades.len(), 1, "{:?}", rep.upgrades);
     assert_eq!(rep.upgrades[0].latest, "1.1.0");
 }
-
-// ---------------------------------------------------------------------------
-// Error paths.
-// ---------------------------------------------------------------------------
 
 #[test]
 fn no_registry_configured_errors() {

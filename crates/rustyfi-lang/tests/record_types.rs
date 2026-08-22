@@ -1,19 +1,15 @@
 //! End-to-end coverage for record TYPES in type-expression position
-//! (`cst.rs`'s `TypeAtom::Record`, `(| l : ty; … |)` — `class-signature-
-//! lang-gaps.md` R5): the same field-list shape `RecordKind` already parses
-//! at `constraint 'a :: (|…|)`, but here in ordinary type position, lowering
-//! to `MonoType::Record` (a *closed* row: `Row::Cons` chain ending in
-//! `Row::Empty`), not `Kind::Record` (a label-only lower bound).
+//! (`cst.rs`'s `TypeAtom::Record`, `(| l : ty; … |)`), lowering to
+//! `MonoType::Record` (a *closed* row), not `Kind::Record` (a label-only
+//! lower bound, which the same field-list shape also parses as at
+//! `constraint 'a :: (|…|)`).
 //!
-//! Harness mirrors `tests/type_synonym.rs`: as that module's doc comment
-//! explains, this grammar has no expression/let-level type-annotation syntax
-//! at all, so the vehicle for driving a `TypeExpr` through
-//! `elaborate::elaborate_program` -> `typecheck::typecheck` end-to-end is a
-//! variant ctor's `of ty` payload (directly, or via a `type` synonym body).
-//! The `val .. : ty` sig-annotation shape (`tabularx.satyh`/`progsynt.satyh`-
-//! style declarations) is covered at the parse level only, since
-//! `typecheck.rs` doesn't consult `sig .. end` blocks yet (see that module's
-//! doc comment) — a CST-shape assertion is the honest way to test it.
+//! Mirrors `tests/type_synonym.rs`: this grammar has no expression/let-
+//! level type-annotation syntax, so the vehicle for driving a `TypeExpr`
+//! through `elaborate_program` -> `typecheck` is a variant ctor's `of ty`
+//! payload (directly, or via a `type` synonym). The `val .. : ty` sig-
+//! annotation shape is covered at the parse level only, since
+//! `typecheck.rs` doesn't consult `sig .. end` blocks yet.
 
 use rustyfi_lang::{elaborate, primitives, typecheck, CompileError};
 use rustyfi_syntax::cst::ast::{TypeApp, TypeAtom, TypeExpr, TypeProd};
@@ -43,10 +39,9 @@ fn assert_type_error(src: &str) -> CompileError {
     }
 }
 
-/// Pull the record type's `Vec<TypeRecordField>` field-name list out of a
-/// `TypeExpr`, panicking with a descriptive message if the shape isn't a
-/// bare `(| … |)` atom (defends the CST-shape assertions below against a
-/// silent grammar regression).
+/// Pulls the record type's field names out of a `TypeExpr`; panics if the
+/// shape isn't a bare `(| … |)` atom (guards the CST-shape assertions
+/// below against a silent grammar regression).
 fn record_field_names(ty: &TypeExpr) -> Vec<String> {
     let TypeExpr::Atom(TypeProd { first, rest }) = ty else {
         panic!("expected a bare TypeProd, got {ty:?}");
@@ -62,10 +57,8 @@ fn record_field_names(ty: &TypeExpr) -> Vec<String> {
     fields.iter().map(|f| f.name.name.clone()).collect()
 }
 
-// ============================================================================
 // Grammar: `(| l : ty; … |)` parses as a TYPE (a `type` synonym body), the
-// `tabularx.satyh`-shaped declaration named in the task.
-// ============================================================================
+// `tabularx.satyh`-shaped declaration.
 
 #[test]
 fn record_type_synonym_parses_with_expected_fields() {
@@ -82,9 +75,7 @@ fn record_type_synonym_parses_with_expected_fields() {
     assert_eq!(record_field_names(ty), vec!["left", "right"]);
 }
 
-/// The `val .. : ty` sig-annotation shape (`progsynt.satyh`/`tabularx.satyh`
-/// style): parses even though `typecheck.rs` doesn't consult `sig .. end`
-/// blocks end-to-end yet (see this file's doc comment).
+/// The `val .. : ty` sig-annotation shape — parse-level only.
 #[test]
 fn record_type_in_sig_val_annotation_parses_with_expected_fields() {
     let file = rustyfi_syntax::parse_file(
@@ -108,9 +99,9 @@ fn record_type_in_sig_val_annotation_parses_with_expected_fields() {
     assert_eq!(record_field_names(ty), vec!["left", "right"]);
 }
 
-/// A record type spelled directly as a ctor's `of ty` payload (no synonym
-/// indirection) — proves the grammar addition works at every `TypeExpr`
-/// position, not merely a synonym body.
+/// Spelled directly as a ctor's `of ty` payload (no synonym indirection)
+/// — proves the grammar works at every `TypeExpr` position, not merely a
+/// synonym body.
 #[test]
 fn record_type_directly_as_ctor_payload_parses() {
     let file =
@@ -126,10 +117,8 @@ fn record_type_directly_as_ctor_payload_parses() {
     assert_eq!(record_field_names(of_ty), vec!["left", "right"]);
 }
 
-// ============================================================================
 // Lowering + typecheck: `MonoType::Record` unified against a real record
 // value, driven through a variant ctor payload (synonym and direct).
-// ============================================================================
 
 #[test]
 fn record_type_synonym_lowers_and_unifies_against_a_matching_record_value() {
@@ -168,9 +157,8 @@ fn record_type_rejects_a_field_with_the_wrong_type() {
 
 #[test]
 fn record_type_field_itself_may_be_a_function_arrow() {
-    // Exercises `TypeAtom::Record`'s field type going through the full
-    // `TyErased` -> `TypeExpr` recursive grammar (not just a bare name),
-    // e.g. an arrow type nested inside a record field.
+    // Exercises a field type going through the full recursive grammar
+    // (an arrow type nested inside a record field), not just a bare name.
     assert_well_typed(
         "type cell-record = (| left : bool; get : int -> int |)
          type cell = | Cell of cell-record

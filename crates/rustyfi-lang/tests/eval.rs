@@ -33,12 +33,10 @@ fn eval_str(src: &str) -> Result<Value, rustyfi_lang::CompileError> {
     Ok(interp.eval(&env, &rustyfi_lang::ast::debrand(&ast, &store))?)
 }
 
-/// `document`/`+p`/`\emph` are no longer hardcoded Rust natives (phase 4):
-/// they're now ordinary bindings in the real `stdja-mini` stdlib package
-/// (`lib-rustyfi/dist/packages/stdja-mini.satyh`). Tests below that need
-/// them compile `src` the same way the multi-file loader's `merge_program`
-/// does — concatenate the package's prelude ahead of `src`'s own — rather
-/// than pulling in the whole loader crate for a single-file test.
+/// `document`/`+p`/`\emph` live in the real `stdja-mini` stdlib package
+/// (`lib-rustyfi/dist/packages/stdja-mini.satyh`); tests needing them
+/// concatenate its prelude ahead of `src`'s own, the same way the loader's
+/// `merge_program` does, without pulling in the whole loader crate.
 fn compile_document_with_stdlib(
     src: &str,
     metrics: &dyn rustyfi_backend::FontMetrics,
@@ -158,7 +156,6 @@ fn long_paragraph_wraps() {
 
 #[test]
 fn eval_matches_block_boxes_shape() {
-    // +p through the public primitives: one paragraph = at least one Line.
     let doc = compile_document_with_stdlib("document (||) '< +p { x } +p { y } >", &Mono).unwrap();
     assert!(doc.pages[0].lines.len() >= 2);
     let _shape_check: Vec<VertBox> = Vec::new();

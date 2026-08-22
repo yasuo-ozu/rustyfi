@@ -1,7 +1,7 @@
-//! Math value / box model — Slice 1 of. Trimmed analog of `math.ml`'s
+//! Math value / box model — Slice 1. Trimmed analog of `math.ml`'s
 //! `math_kind` (`horzBox.ml:134`) and `low_math_atom` (`math.ml:9`),
 //! holding only what a fixed-constant super/subscript layout needs (no
-//! MATH-table metrics — see the plan's roadmap §B).
+//! MATH-table metrics — that is §B).
 
 use crate::hbox::HorzStringInfo;
 use crate::length::Length;

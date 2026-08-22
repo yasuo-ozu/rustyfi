@@ -1,8 +1,8 @@
-//! Per-package receipts (plan §5.2): `<root>/.satyrographos/receipts/
+//! Per-package receipts: `<root>/.satyrographos/receipts/
 //! <name>.toml`. This port's own bookkeeping, deliberately richer than
 //! upstream Satyrographos' metadata sexp (which carries no file list),
 //! because uninstall here is *incremental* — the receipt's `[[files]]` list
-//! is the single source of truth for what `uninstall` may delete (plan §6).
+//! is the single source of truth for what `uninstall` may delete.
 
 use std::path::{Path, PathBuf};
 
@@ -12,7 +12,7 @@ use crate::error::Error;
 use crate::roots;
 use crate::util;
 
-/// The current receipt schema version (plan §5.2).
+/// The current receipt schema version.
 pub const SCHEMA_VERSION: u32 = 1;
 
 /// A single installed-package receipt.
@@ -32,7 +32,7 @@ pub struct Receipt {
     pub files: Vec<FileEntry>,
 }
 
-/// Where the package came from (plan §5.2/§5.4). Phase 1's `path`/`archive`
+/// Where the package came from. Phase 1's `path`/`archive`
 /// variants carry only `kind` + `value`; the phase-3 `registry` variant
 /// additionally records the resolved `version`, tarball `url`, and verified
 /// `sha256`, so a later `list`/`status` can report exactly what was fetched.
@@ -73,7 +73,7 @@ pub struct FileEntry {
     /// `dist/packages/great-package/great-package.satyh`. Always stored with
     /// `/` separators.
     pub dst: String,
-    /// Lowercase-hex SHA-256 (optional in phase 1, plan §5.2).
+    /// Lowercase-hex SHA-256 (optional in phase 1).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sha256: Option<String>,
     /// For a *shared* destination — a `*.satysfi-hash` that several packages
@@ -181,8 +181,8 @@ pub fn remove_for(root: &Path, name: &str, lang: crate::manifest::Lang) -> Resul
 }
 
 /// All receipts under `root`, sorted by package name. An absent
-/// `receipts/` directory is *empty*, not an error (plan §4.3: empty isn't an
-/// error, only an unmanaged root is).
+/// `receipts/` directory is *empty*, not an error (only an unmanaged root
+/// is).
 pub fn list_all(root: &Path) -> Result<Vec<Receipt>, Error> {
     let dir = roots::receipts_dir(root);
     if !dir.is_dir() {

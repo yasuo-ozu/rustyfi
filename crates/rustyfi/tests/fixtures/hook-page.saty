@@ -1,4 +1,4 @@
-% Slice 1 fixture: a `hook-page-break` closure registers the current (final)
+% Fixture: a `hook-page-break` closure registers the current (final)
 % page number as a cross-reference, and a `get-cross-reference` read-back
 % renders it as text. On trial 1 the table gets `p = "1"` and is flagged
 % `changed`, forcing trial 2; on trial 2 `get-cross-reference` returns

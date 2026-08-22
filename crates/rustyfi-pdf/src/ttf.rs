@@ -45,16 +45,13 @@ pub enum FontError {
 /// pages, one parse per glyph lookup). This keeps `TtfFontStore` a plain,
 /// safe struct.
 pub struct TtfFontStore {
-    /// One entry per physical font file that was actually loaded.
     files: Vec<Vec<u8>>,
     /// `FontKey(0)=regular, 1=bold, 2=oblique, 3.. = registry abbrevs` ->
     /// index into `files`. Missing bold/oblique share the regular slot
-    /// (index 0). WAS a fixed `[usize; 3]`; grown to `Vec` (D1a) so
-    /// `FontRegistry::build_store` can allocate one slot per configured
-    /// abbrev beyond the three seeded defaults, with `slots[0..3]` staying
-    /// regular/bold/oblique exactly as before — a 3-slot store (every call
-    /// site that only ever used `TtfFontStore::load`) is byte-identical to
-    /// pre-D1a behavior.
+    /// (index 0). `FontRegistry::build_store` (D1a) allocates one slot per
+    /// configured abbrev beyond the three seeded defaults; `slots[0..3]`
+    /// always stay regular/bold/oblique, so a bare `TtfFontStore::load`
+    /// store has exactly 3.
     slots: Vec<usize>,
     /// Registry abbrev ("ipaexm", "Junicode-b", ...) -> the `FontKey`
     /// allocated for it by `FontRegistry::build_store`. Empty for a bare
@@ -140,9 +137,7 @@ impl TtfFontStore {
     }
 
     /// Clamp an arbitrary `FontKey` onto the known slots, mirroring
-    /// `base14::Base14Metrics`'s treatment of out-of-range keys. Was
-    /// `min(2)` when the store only ever had 3 slots; a 3-slot store's
-    /// clamp is unchanged (`min(2) == min(len - 1)` when `len == 3`).
+    /// `base14::Base14Metrics`'s treatment of out-of-range keys.
     fn key_slot(&self, font: FontKey) -> usize {
         (font.0 as usize).min(self.slots.len() - 1)
     }
@@ -253,28 +248,20 @@ impl FontMetrics for TtfFontStore {
 
     // ---- OpenType MATH table ---------
     //
-    // Every accessor below was checked against the installed ttf-parser
-    // 0.25.1 `tables::math` module (`~/.cargo/registry/.../ttf-parser-0.25.1/
-    // src/tables/math.rs`): `Face::tables().math -> Option<math::Table>`
-    // with `.constants: Option<Constants>` / `.glyph_info: Option<GlyphInfo>`
-    // / `.variants: Option<Variants>`; every `Constants` accessor except the
-    // two percent-scale-downs returns `MathValue { value: i16, device }` (a
-    // struct, not a plain integer) — hence the `mv.value` field access in
+    // Read through ttf-parser 0.25.1's `tables::math`:
+    // `Face::tables().math -> Option<math::Table>` with `.constants` /
+    // `.glyph_info` / `.variants`. Every `Constants` accessor except the two
+    // percent-scale-downs returns a `MathValue { value: i16, device }`
+    // struct, not a plain integer — hence the `mv.value` field access in
     // `r(...)` below. `GlyphInfo.italic_corrections`/`.kern_infos` are
-    // `Option<MathValues>`/`Option<KernInfos>` fields (not methods), each
-    // with a `.get(GlyphId) -> Option<...>` accessor. `KernInfo`'s four
-    // corners are `Option<Kern>` fields. `Kern::count()/height(i)/kern(i)`
-    // all matched the spec's assumed shape exactly — no deviations found.
+    // fields, not methods, each with a `.get(GlyphId)` accessor;
+    // `KernInfo`'s four corners are `Option<Kern>` fields.
     //
     // §B3 (`math_vertical_variant`, below) consumes `Variants` itself:
-    // `Variants { min_connector_overlap: u16, vertical_constructions:
-    // GlyphConstructions, horizontal_constructions: GlyphConstructions }`;
-    // `GlyphConstructions::get(GlyphId) -> Option<GlyphConstruction>`;
-    // `GlyphConstruction { assembly: Option<GlyphAssembly>, variants:
-    // LazyArray16<GlyphVariant> }`; `GlyphVariant { variant_glyph: GlyphId,
-    // advance_measurement: u16 }`. `LazyArray16::len() -> u16` /
-    // `::get(index: u16) -> Option<T>` (both confirmed against `parser.rs`)
-    // — no deviation from the spec's assumed shape.
+    // `Variants { min_connector_overlap: u16, vertical_constructions,
+    // horizontal_constructions }`; `GlyphConstruction { assembly:
+    // Option<GlyphAssembly>, variants: LazyArray16<GlyphVariant> }`;
+    // `GlyphVariant { variant_glyph: GlyphId, advance_measurement: u16 }`.
 
     fn math_constants(&self, font: FontKey) -> Option<MathConstants> {
         let face = self.face(font)?;
@@ -349,8 +336,8 @@ impl FontMetrics for TtfFontStore {
     /// §B3 (`MathVariants`): pick a vertically-grown variant of `c` per
     /// `policy` and report its real per-glyph ink metrics at `size`.
     /// Assembly-only constructions (`variants.len() == 0`, big enough
-    /// stretchy delimiters in some fonts) are out of this slice's scope —
-    /// `GlyphAssembly` is a documented follow-up (§B3b-2 area).
+    /// stretchy delimiters in some fonts) return `None` here — they are
+    /// `math_vertical_assembly`'s (§B) job.
     fn math_vertical_variant(
         &self,
         font: FontKey,
@@ -480,7 +467,7 @@ impl FontMetrics for TtfFontStore {
         Some(out)
     }
 
-    // ---- D1a: registry-abbrev resolution (§1a) ---------------------------------------------------------------
+    // ---- D1a: registry-abbrev resolution --------------------------------------------------------------------
 
     fn resolve_font_abbrev(&self, abbrev: &str) -> Option<FontKey> {
         self.abbrev_key(abbrev)

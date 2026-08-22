@@ -1,10 +1,7 @@
-//! Page breaking. Slice 1: a single **stateless** per-page chopper
-//! (`chop_page`) plus a fixed-origin placement helper
-//! (`place_block_at`), replacing the old whole-document `break_pages` —
-//! the per-page loop now lives lang-side
-//! (`rustyfi-lang/src/primitives.rs`'s `prim_page_break`), the one place
-//! that legally holds `&mut Interp` to apply the two scheme closures per
-//! page (see that plan's "who drives it" section).
+//! Page breaking: a **stateless** per-page chopper (`chop_page`) plus a
+//! fixed-origin placement helper (`place_block_at`). The per-page loop lives
+//! lang-side (`primitives.rs`'s `prim_page_break`), the one place that legally
+//! holds `&mut Interp` to apply the two scheme closures per page.
 
 use crate::hbox::PureHorzBox;
 use crate::length::Length;
@@ -37,10 +34,9 @@ pub struct Page {
     ///
     /// `fire_hooks` needs the split: a `block-frame-breakable` carried across a
     /// page boundary is "open" for the whole of the next page's walk, so
-    /// accumulating its fragment extent over EVERY line swallowed the header
-    /// and footer too — every carried frame's `decoH` fragment came out
-    /// spanning y=30 (the header baseline) to y=788 (the footer), painting its
-    /// background over the entire page instead of over its own content.
+    /// accumulating its fragment extent over EVERY line swallows the header and
+    /// footer too — the `decoH` fragment then spans y=30 (header baseline) to
+    /// y=788 (footer), painting its background over the whole page.
     ///
     /// `usize::MAX` means "all lines are body" (no header/footer), which is
     /// what hand-built test pages want.
@@ -48,13 +44,10 @@ pub struct Page {
 }
 
 /// The line's own `(height-above-baseline, depth-below-baseline)` as-placed,
-/// or `None` if `line` carries no real content (only zero-width markers —
-/// `HookPageBreak`/`FrameMarker`, or nothing but glue). Used by
-/// `fire_hooks`'s block-fragment extent accumulation (§D) to derive a frame
-/// fragment's rect from the real lines between its `FrameStart`/`FrameEnd`
-/// markers, since `PlacedLine` itself doesn't carry the height/depth
-/// `chop_page` used when placing it — recomputed here from each box's own
-/// dimensions, the same per-box shape `linebreak.rs`'s `justify_line` uses.
+/// or `None` if `line` carries no real content (only zero-width markers, or
+/// nothing but glue). Used by `fire_hooks`'s block-fragment extent
+/// accumulation; `PlacedLine` does not carry the height/depth `chop_page`
+/// placed it with, so it is recomputed here from each box's own dimensions.
 pub fn placed_line_extent(line: &PlacedLine) -> Option<(Length, Length)> {
     fn go(bx: &PureHorzBox, height: &mut Length, depth: &mut Length, has_real: &mut bool) {
         match bx {
@@ -116,8 +109,7 @@ pub fn placed_line_extent(line: &PlacedLine) -> Option<(Length, Length)> {
 /// Fill ONE page's content area (the port of `chop_single_column`,
 /// `pageBreak.ml`): consume `vboxes` from the front until the next line
 /// would overflow `origin.1 + height`, leaving whatever didn't fit in
-/// `vboxes` for the caller's next page. No looping, no closures, no lang
-/// knowledge.
+/// `vboxes` for the caller's next page.
 ///
 /// **Termination guarantee**: a page always places at least one *real*
 /// line (regardless of `height`) — the overflow check only fires once one
@@ -125,7 +117,7 @@ pub fn placed_line_extent(line: &PlacedLine) -> Option<(Length, Length)> {
 /// since a `HookPageBreak` marker can occupy a `PlacedLine` slot without
 /// being real content) — so a degenerate scheme (`height <= 0`, or a line
 /// taller than the area) still makes forward progress and the lang-side
-/// loop is bounded by the vbox count (Risks: "Progress / termination").
+/// loop is bounded by the vbox count.
 ///
 /// `VertBox::ClearPage` (`clear-page`) ends the page immediately once at
 /// least one real line has been placed (mirrors `pageBreak.ml`'s
@@ -134,11 +126,9 @@ pub fn placed_line_extent(line: &PlacedLine) -> Option<(Length, Length)> {
 /// so a leading `clear-page` doesn't produce a pointless blank page.
 ///
 /// `VertBox::HookPageBreak` (`hook-page-break-block`) is placed as a
-/// zero-height marker `PlacedLine` carrying the hook's `PureHorzBox`
-/// wrapper at the position it sits in the flow — `fire_hooks` (rustyfi-lang)
-/// already scans every placed line's contents for this box regardless of
-/// whether it came from the inline or block-level hook primitive, so no
-/// change to that seam is needed.
+/// zero-height marker `PlacedLine` at the position it sits in the flow;
+/// `fire_hooks` scans every placed line's contents for it regardless of
+/// whether it came from the inline or the block-level hook primitive.
 ///
 /// **Footnotes** (`add-footnote`; upstream `pageBreak.ml:131-142` +
 /// `handlePdf.ml:400-403`): the moment a `VertBox::Line` is COMMITTED to
@@ -173,9 +163,8 @@ pub fn chop_page(
     // `leading` (≈18pt) always exceeds `prev_depth + height` (≈2.5 + 9) so this
     // is a no-op — but a DEEP box (e.g. a multi-row figbox `vconcat` whose
     // top-anchored `EmbeddedBlock` has a large depth) forces the next baseline
-    // down by its full depth, so its vertical extent is actually spent on the
-    // page rather than being overlapped by the following line (which made the
-    // pager under-count pages around tall figures).
+    // down by its full depth, so its extent is actually spent on the page
+    // instead of being overlapped by the following line.
     let mut prev_depth = Length::ZERO;
     let mut pending_skip = Length::ZERO;
     // Additive frame padding (`FramePad`) — stacks ON TOP of `pending_skip`
@@ -220,12 +209,9 @@ pub fn chop_page(
         match &vboxes[idx] {
             VertBox::Skip(l) => {
                 // Adjacent vertical skips COLLAPSE to their maximum, not sum:
-                // these are paragraph/block margins (`line-break` wraps each
-                // block in a Skip(paragraph_top) … Skip(paragraph_bottom), so
-                // between two blocks the previous block's bottom margin meets
-                // the next block's top margin). SATySFi's block-box margin
+                // these are paragraph/block margins, and SATySFi's block-box
                 // model combines adjacent margins by max (like CSS/TeX margin
-                // collapsing); summing them double-counted every block boundary
+                // collapsing). Summing them double-counted every block boundary
                 // (~+25pt each), the dominant source of the port's
                 // over-pagination vs the original SATySFi.
                 pending_skip = pending_skip.max(*l);
@@ -233,10 +219,10 @@ pub fn chop_page(
             }
             VertBox::ParagTop(l) => {
                 // Same max-collapse as `Skip`. The `min_first_line_ascender`
-                // pad is already INSIDE this value — `prim_line_break` folds it
-                // in where upstream does (`lineBreak.ml:855-857`), before the
-                // collapse — so nothing extra happens here; the variant stays
-                // distinct only because the HTML reflow walker reads it.
+                // pad is already INSIDE this value (`prim_line_break` folds it
+                // in where upstream does, `lineBreak.ml:855-857`, before the
+                // collapse); the variant stays distinct only because the HTML
+                // reflow walker reads it.
                 pending_skip = pending_skip.max(*l);
                 idx += 1;
             }
@@ -300,15 +286,13 @@ pub fn chop_page(
                 });
                 idx += 1;
             }
-            // (the byte-identity argument): a PURE skip — unlike
-            // `FrameStart`/`FrameEnd` above, this marker has no downstream
-            // (PDF/faithful-HTML) consumer at all, so it doesn't even get a
-            // placeholder `PlacedLine`; it simply never reaches placement.
-            // It already rode into `reflow_source` (cloned by
-            // `page_break_core` BEFORE this function runs, `primitives.rs`'s
-            // `page_break_core` doc comment) — that clone is the only place
-            // `VertBox::ListMark` survives to be read, by the reflow HTML
-            // walker.
+            // A PURE skip — unlike `FrameStart`/`FrameEnd` above, this marker
+            // has no downstream (PDF/faithful-HTML) consumer at all, so it
+            // doesn't even get a placeholder `PlacedLine`; it simply never
+            // reaches placement. It already rode into `reflow_source` (cloned
+            // by `page_break_core` BEFORE this function runs) — that clone is
+            // the only place `VertBox::ListMark` survives to be read, by the
+            // reflow HTML walker.
             VertBox::ListMark(_) => {
                 idx += 1;
             }
@@ -318,13 +302,11 @@ pub fn chop_page(
                 leading,
                 contents,
             } => {
-                // FIX 3's page-top glue suppression: any `VertBox::Skip`
+                // Page-top glue suppression: any `VertBox::Skip`
                 // accumulated before the FIRST real line of this page/column
                 // (`prev_baseline == None`) is discarded, not added to `y0`
-                // — mirroring upstream's page-top glue discard (glue at the
-                // very top of a page/column doesn't accumulate; the OCaml
-                // page breaker drops leading glue the same way TeX drops
-                // glue/kerns at the top of a page). This is what keeps a
+                // — mirroring upstream's page-top glue discard, the same way
+                // TeX drops glue/kerns at the top of a page. This keeps a
                 // paragraph's `paragraph_top` margin from adding a spurious
                 // gap above the first paragraph of a page — without it,
                 // wiring `paragraph_top` in would shift every page's content
@@ -351,28 +333,22 @@ pub fn chop_page(
                 // the extent it RESERVES match the extent actually drawn.
                 let baseline = match prev_baseline {
                     None => y0 + pending_pad + *h,
-                    // When the pending margin EXCEEDS the leading it is a
-                    // positioning skip (e.g. slydifi's ~125pt bg-graphic
-                    // offset that seats a frame body at its true top), not an
-                    // inter-line gap. SATySFi's stacking rule folds the skip
-                    // into the advance (`max(leading, prev_depth+skip+height)`)
-                    // rather than stacking leading on top of it; for a large
-                    // skip that means `prev_depth + skip + height`, so the line
-                    // sits at the skip's target instead of a spurious
-                    // `leading - height` lower. Small inter-paragraph margins
-                    // (skip <= leading) keep the additive model the flowing
-                    // corpus docs are calibrated to.
-                    // SATySFi's inter-block advance is `prev_depth + margin +
-                    // height` — the NATURAL content height plus the (collapsed)
-                    // paragraph margin, with NO leading floor. Verified by a
-                    // controlled `set-paragraph-margin` sweep against real
+                    // A pending margin goes straight into the advance, with NO
+                    // leading floor: SATySFi's inter-block advance is
+                    // `prev_depth + margin + height` — the NATURAL content
+                    // height plus the (collapsed) paragraph margin. Verified by
+                    // a controlled `set-paragraph-margin` sweep against real
                     // SATySFi 0.0.11: gap == 12pt (content) + margin, exactly
                     // linear (X=0→12, 5→17, 10→22, 20→32). The leading grid
                     // (≈18pt) governs only lines WITHIN one paragraph, where
                     // `pending_skip == 0`; between blocks a small margin gives a
                     // gap BELOW the leading (e.g. an itemize item-gap of 10 →
                     // 22pt, not 28). Applying the leading floor to block gaps was
-                    // the bug that over-spaced every list/table by ~6pt/row.
+                    // the bug that over-spaced every list/table by ~6pt/row —
+                    // and for a large POSITIONING skip (slydifi's ~125pt
+                    // bg-graphic offset, which seats a frame body at its true
+                    // top) it would leave the line a spurious
+                    // `leading - height` short of its target.
                     // NO `min_first_line_ascender` floor is applied HERE.
                     // Upstream folds that pad into the paragraph's own
                     // `margin_top` in `line-break`
@@ -437,8 +413,8 @@ pub fn chop_page(
     // adds the pad to the running column height (`pageBreak.ml:322`,
     // `hgttotal_before = hgttotal +% pads.paddingT`), keeping the FULL `pads`
     // for a midway fragment rather than zeroing them (`:352-357`, whose own
-    // "design consideration" comment records that zeroing "may be better" —
-    // i.e. it deliberately does not); `handlePdf.ml:325-330` then lays every
+    // comment records that zeroing "may be better" — it deliberately does not);
+    // `handlePdf.ml:325-330` then lays every
     // fragment's contents out at `ypos -% pads.paddingT` and spans the deco
     // rect from `ypos`. Dropping it seated every continuation page's first line
     // flush against the text-area top: measured against SATySFi 0.0.11, the
@@ -498,12 +474,10 @@ fn unmatched_frame_ends(vboxes: &[VertBox]) -> usize {
 /// `place_block_at` does (`leading.max(height)` between lines; a trailing
 /// skip after the last line is not counted, mirroring its unflushed
 /// `pending_skip`). The port of `get_height_of_evaled_vert_box_list`
-/// (handlePdf.ml:401) — computed with the SAME rule as placement so the
-/// bottom reservation always equals the drawn extent. (Tiny faithful-in-
-/// spirit deviation from upstream, which reserves `Σ(h+d)` per line instead
-/// of this leading-aware advance; they differ only when a footnote line's
-/// `leading > height + next depth`, and only by whitespace — see the plan's
-/// Risks note.)
+/// (handlePdf.ml:401) — computed with the SAME rule as placement so the bottom
+/// reservation always equals the drawn extent. Upstream instead reserves
+/// `Σ(h+d)` per line; the two differ only when a footnote line's
+/// `leading > height + next depth`, and only by whitespace.
 fn stack_height(vboxes: &[VertBox]) -> Length {
     let mut prev_baseline: Option<Length> = None;
     let mut prev_depth = Length::ZERO;
@@ -512,9 +486,6 @@ fn stack_height(vboxes: &[VertBox]) -> Length {
     let mut bottom = Length::ZERO;
     for vb in vboxes {
         match vb {
-            // Collapse adjacent margins (max, not sum) and advance by the same
-            // faithful `prev_depth + margin + height` rule `place_block_at` uses,
-            // so the reserved extent equals the drawn extent.
             VertBox::Skip(l) | VertBox::ParagTop(l) => pending_skip = pending_skip.max(*l),
             VertBox::FramePad(l) => pending_pad += *l,
             VertBox::ClearPage | VertBox::HookPageBreak(_) => {}
@@ -617,15 +588,15 @@ pub fn place_block_at(origin: (Length, Length), vboxes: Vec<VertBox>) -> Vec<Pla
     for vbox in vboxes {
         match vbox {
             // Collapse adjacent vertical margins to their max, NOT their sum —
-            // the same rule `chop_page` applies (commit "collapse adjacent
-            // vertical margins"). `place_block_at` both measures an embedded
-            // block's height (via `make_embedded_block`) and renders it (via
-            // `place_embedded_block`), so summing here made every embedded
-            // block over-tall: e.g. a slydifi frame body's `+listing` items,
-            // each a `line-break` emitting `Skip(item-gap)` before and after,
-            // got `item-gap + item-gap` between consecutive items instead of
-            // one collapsed `item-gap`, roughly doubling list spacing and
-            // pushing the atomic frame past its page (an extra page per slide).
+            // the same rule `chop_page` applies. `place_block_at` both
+            // measures an embedded block's height (via `make_embedded_block`)
+            // and renders it (via `place_embedded_block`), so summing made
+            // every embedded block over-tall: e.g. a slydifi frame body's
+            // `+listing` items, each a `line-break` emitting `Skip(item-gap)`
+            // before and after, got `item-gap + item-gap` between consecutive
+            // items instead of one collapsed `item-gap`, roughly doubling list
+            // spacing and pushing the atomic frame past its page (an extra
+            // page per slide).
             VertBox::Skip(l) | VertBox::ParagTop(l) => pending_skip = pending_skip.max(l),
             // Additive frame padding (see `chop_page`).
             VertBox::FramePad(l) => pending_pad += l,
@@ -668,20 +639,14 @@ pub fn place_block_at(origin: (Length, Length), vboxes: Vec<VertBox>) -> Vec<Pla
                 leading,
                 contents,
             } => {
-                // Same page/column-top leading-glue suppression as `chop_page`
-                // (FIX 3): a solidified block (header/footer/footnote column)
+                // Same page/column-top leading-glue suppression as `chop_page`:
+                // a solidified block (header/footer/footnote column)
                 // placed at a fixed origin discards any leading `VertBox::Skip`
                 // before its first real line, so a footer whose content is
                 // built via `line-break` (default `paragraph_top` = 18pt, e.g.
                 // `stdja-mini`'s page-number footer) stays anchored at its
                 // `footer-origin` rather than dropping 18pt below it. The
-                // advance folds the paragraph margin into the max AND clears
-                // the previous line's depth, so a deep inline box (a
-                // `+fig-center` figure) is not overlapped by the next line.
-                // Faithful inter-block advance (see `chop_page`): natural
-                // content height plus the collapsed margin, no leading floor —
-                // `prev_depth + margin + height`. The leading grid governs only
-                // margin-free lines within one paragraph (`pending_skip == 0`).
+                // advance itself is `chop_page`'s, unchanged.
                 let baseline = match prev_baseline {
                     None => y0 + height,
                     Some(b) if pending_skip + pending_pad > Length::ZERO => {

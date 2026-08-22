@@ -1,10 +1,10 @@
-//! Manifest-mode install (plan §5.3, §8 phase 2): the no-`PATH`
+//! Manifest-mode install (phase 2): the no-`PATH`
 //! `satyrographos install`. Read `Satyristes` + `Satyristes.lock`, diff
 //! each entry's freshly-computed source hash against the lock (and against the
 //! installed receipt), and re-materialise **only** the entries that actually
 //! changed — leaving unchanged entries' files bit-for-bit untouched (so their
 //! mtimes survive a no-op install). Every re-materialisation goes through the
-//! phase-1 [`install`](crate::ops::install::install) primitive (§4.1); this
+//! phase-1 [`install`](crate::ops::install::install) primitive; this
 //! module adds only the diff-and-drive layer on top.
 //!
 //! ## Reconcile decision (per manifest entry `name` with source `src`)
@@ -17,9 +17,9 @@
 //! | no (new entry) | — | — | **install** — fresh |
 //!
 //! An entry that is in the old lock but *not* in the manifest is **left in
-//! place** — phase 2 does not prune dropped dependencies. The plan's §5.3
-//! specifies only "diff … and re-materialise entries whose hash changed"; it
-//! is silent on removal, so removed entries keep their installed files and
+//! place** — phase 2 does not prune dropped dependencies. The contract is
+//! only "diff … and re-materialise entries whose hash changed"; it is
+//! silent on removal, so removed entries keep their installed files and
 //! receipt, and are merely reported (and drop out of the rewritten lockfile).
 
 use std::collections::HashSet;
@@ -38,12 +38,10 @@ use crate::source::{RegistryConfig, SourceKind};
 use crate::version::Constraint;
 use crate::{receipts, stage, util};
 
-/// What manifest-mode [`install_manifest`] did.
 #[derive(Debug, Default)]
 pub struct ManifestReport {
     /// Entries that were (re-)materialised, in manifest order.
     pub installed: Vec<InstallReport>,
-    /// Entry names skipped because nothing changed (files left untouched).
     pub skipped: Vec<String>,
     /// Entry names present in the old lockfile but no longer in the manifest;
     /// left installed (not pruned), only reported (see module docs).
@@ -76,7 +74,7 @@ pub fn install_manifest(
 /// Reconcile `manifest_path`'s `Satyristes` against its sibling
 /// `Satyristes.lock` and the receipts in the resolved root, materialising only
 /// changed/missing/new entries and rewriting the lockfile to mirror the
-/// manifest (plan §5.3/§5.4). `reg_opts` supplies the registry URL/cache for
+/// manifest. `reg_opts` supplies the registry URL/cache for
 /// `{ registry = … }` sources and the clone cache/`--offline` for `{ git = …
 /// }` sources (saphe 7d slice S3); `{ path = … }` sources never consult it.
 pub fn install_manifest_reg(
@@ -89,11 +87,10 @@ pub fn install_manifest_reg(
 
 /// As [`install_manifest_reg`], but consulting every repository in `repos`,
 /// in order, when `reg_opts` does not already pin one explicit
-/// `--registry`/`$RUSTYFI_REGISTRY` URL (task: multiple `[[registry]]`
-/// repositories are configurable, the same as `search`/`install NAME` already
-/// consult, but reconcile used to talk to only the first). Only the "re-solve
-/// the whole registry sub-graph fresh" path in `install_registry_closure`
-/// ever consults `repos` — the reused-pin fast path is index-free either way.
+/// `--registry`/`$RUSTYFI_REGISTRY` URL — the same coverage `search`/`install
+/// NAME` have. Only the "re-solve the whole registry sub-graph fresh" path in
+/// `install_registry_closure` ever consults `repos`; the reused-pin fast path
+/// is index-free either way.
 pub fn install_manifest_reg_multi(
     manifest_path: &Path,
     opts: &RootOptions,
@@ -107,8 +104,8 @@ pub fn install_manifest_reg_multi(
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."));
 
-    // Merge the manifest's own `[registry] mirrors`/`kind` (mirrors/sparse
-    // design §2.1/§3.2) into `reg_opts` when the caller did not already set
+    // Merge the manifest's own `[registry] mirrors`/`kind` into `reg_opts`
+    // when the caller did not already set
     // them explicitly (same explicit-wins-over-manifest precedence as
     // `resolve_url`/`resolve_mirrors`) — a project can declare mirrors or a
     // sparse index kind in `Satyristes` and every registry-sourced entry
@@ -131,8 +128,8 @@ pub fn install_manifest_reg_multi(
 
     // Registry-sourced entries are handled in a second pass (below): the
     // solver needs every direct registry root at once to compute one
-    // consistent transitive closure (design §5.1), so path/git entries are
-    // materialised first, in manifest order, exactly as before.
+    // consistent transitive closure, so path/git entries are
+    // materialised first, in manifest order.
     let mut reg_directs: Vec<RegDirect> = Vec::new();
 
     for lib in &manifest.libraries {
@@ -140,7 +137,6 @@ pub fn install_manifest_reg_multi(
         let install_opts = |force: bool| InstallOptions {
             // A reconciled entry names its library, so the manifest decides.
             prefer_library: Some(lib.name.clone()),
-            // A reconciled dependency inherits the run's own network policy.
             offline: reg_opts.is_offline(),
             verbose: true,
             // A reconciled dependency takes whatever its own manifest declares.
@@ -191,12 +187,7 @@ pub fn install_manifest_reg_multi(
                 });
             }
             SourceKind::Git { git, rev } => {
-                // Saphe 7d slice S3: clone (or reuse the cached clone of)
-                // `git`, pinned to `rev` when given, then materialise the
-                // checkout through the exact same path a `{ path = … }`
-                // source takes — `reg_opts` carries the git-source cache dir
-                // and `--offline`/`$RUSTYFI_OFFLINE` (design §3 S3: honoured
-                // identically to the registry archive cache).
+                // Saphe 7d slice S3 (see this fn's doc for the cache/--offline behavior).
                 let checkout = registry::acquire_git_source(git, rev, reg_opts)?;
                 let current_hash = util::sha256_tree(&checkout.root)?;
                 let hash_matches = locked.map(|l| l.sha256 == current_hash).unwrap_or(false);
@@ -207,7 +198,6 @@ pub fn install_manifest_reg_multi(
                 }
                 let force = receipts::exists(&root, &lib.name);
                 if !force && locked.is_some() {
-                    // Self-heal a hand-deleted receipt whose files linger.
                     clear_orphans(&root, &checkout.root)?;
                 }
                 let source = receipts::Source {
@@ -241,8 +231,7 @@ pub fn install_manifest_reg_multi(
         )?;
     }
 
-    // Entries dropped from the manifest are left installed, only reported —
-    // "dropped" means neither a manifest library still names it NOR the fresh
+    // "Dropped" means neither a manifest library still names it NOR the fresh
     // closure just re-locked it (a transitive-only registry package has no
     // manifest entry of its own but is still part of the current lock).
     for old in &old_lock.libraries {
@@ -273,16 +262,15 @@ struct RegDirect {
 }
 
 /// Resolve every `{ registry = … }` entry in `reg_directs` to the full
-/// transitive closure and materialise it (design §5.1), pushing one
+/// transitive closure and materialise it, pushing one
 /// [`LockEntry`] per closure member (direct **and** transitive) onto
 /// `new_entries`.
 ///
-/// Reproducibility is preserved the same way the pre-solver code achieved it
-/// for a single direct entry: when every direct root's constraint is already
-/// satisfied by a url-bearing pin in `old_lock`, this whole pass reuses the
-/// existing closure (every registry-kind entry in `old_lock`, direct or
-/// transitive) via its locked `(version, url, sha256)` — **without touching
-/// the index at all**. The solver (and thus the index) is consulted only when
+/// Reproducibility: when every direct root's constraint is already satisfied
+/// by a url-bearing pin in `old_lock`, this whole pass reuses the existing
+/// closure (every registry-kind entry in `old_lock`, direct or transitive)
+/// via its locked `(version, url, sha256)` — **without touching the index at
+/// all**. The solver (and thus the index) is consulted only when
 /// at least one direct root is new or its requested version/constraint
 /// changed; in that case the *entire* registry sub-graph is re-solved fresh
 /// (not incrementally pinned), and the resulting closure replaces every prior
@@ -337,11 +325,6 @@ fn install_registry_closure(
         return Ok(());
     }
 
-    // At least one direct root is new or changed: re-solve the whole
-    // registry sub-graph fresh (design §5.1 step 2), against every
-    // configured repository — one unreachable repository is recorded in
-    // `report.unreachable_registries` rather than aborting, as long as at
-    // least one is reachable (mirrors `cmd_search`).
     let fallback = manifest.registry_url();
     let (acquired, unreachable) = registry::acquire_all(repos, reg_opts, fallback)?;
     report.unreachable_registries.extend(unreachable);
@@ -380,8 +363,7 @@ fn install_registry_closure(
 }
 
 /// Whether `d`'s constraint is already satisfied by a url-bearing pin in
-/// `old_lock`, keyed by its alias — the no-index-consultation fast path
-/// (design §5.1).
+/// `old_lock`, keyed by its alias — the no-index-consultation fast path.
 fn direct_is_reusable(d: &RegDirect, old_lock: &Lockfile) -> bool {
     old_lock
         .get(&d.alias)
@@ -405,8 +387,8 @@ fn resolved_from_lock(l: &LockEntry) -> Resolved {
         version: l.source.version.clone().unwrap_or_default(),
         url: l.url.clone().expect("registry lock entry always carries a url"),
         sha256: l.sha256.clone(),
-        // A lock pins one digest; it is the sha256 field, whichever algorithm
-        // resolved it, because that is what the lockfile has always recorded.
+        // A lock pins one digest, in the sha256 field regardless of which
+        // algorithm resolved it.
         sha512: None,
     }
 }
@@ -455,7 +437,7 @@ fn materialize_registry_pin(
 
 /// Build a lockfile entry for a freshly-resolved registry install, pinning the
 /// concrete resolved version (in `source.version`), tarball url, and verified
-/// tarball sha256 (plan §5.4 step 4).
+/// tarball sha256.
 fn registry_lock_entry(name: &str, pkg: &str, resolved: &Resolved) -> LockEntry {
     LockEntry {
         name: name.to_string(),

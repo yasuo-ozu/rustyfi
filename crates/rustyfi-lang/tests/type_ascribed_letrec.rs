@@ -1,15 +1,14 @@
-//! Acceptance coverage for Gap 1 (`class-signature-lang-gaps.md`-style):
-//! type-ascribed multi-clause `let-rec`, i.e. `cst.rs`'s `RecBinding` now
-//! accepting an optional `: ty` between the bound name and its
-//! `[|] patbot* = value` clause group(s) — the shape upstream's `parser.mly`
-//! calls `recdecargpart`'s `COLON ty BAR argpatlst` alternative, needed by
-//! the bundled `itemize.satyh`'s `listing-item`. The ascription is parsed and
-//! otherwise ignored (no signature-enforcement pass exists yet for
-//! value-level ascriptions — see `RecBinding`'s doc comment); what this
-//! closes is purely the *parse* collision between `: ty` and the `|`-clause
-//! sugar, so every test below also typechecks/evaluates to prove the
-//! existing multi-clause machinery (`elaborate.rs`'s `rec_clause_value`) is
-//! untouched by the new field.
+//! Acceptance coverage for type-ascribed multi-clause `let-rec`,
+//! i.e. `cst.rs`'s `RecBinding` now accepting an optional `: ty` between
+//! the bound name and its `[|] patbot* = value` clause group(s) — the shape
+//! upstream's `parser.mly` calls `recdecargpart`'s `COLON ty BAR argpatlst`
+//! alternative, needed by the bundled `itemize.satyh`'s `listing-item`. The
+//! ascription is parsed and otherwise ignored (no signature-enforcement pass
+//! exists yet for value-level ascriptions — see `RecBinding`'s doc comment);
+//! what this closes is purely the *parse* collision between `: ty` and the
+//! `|`-clause sugar, so every test below also typechecks/evaluates to prove
+//! the existing multi-clause machinery (`elaborate.rs`'s `rec_clause_value`)
+//! is untouched by the new field.
 
 use rustyfi_backend::{FontKey, FontMetrics, Length};
 use rustyfi_lang::value::Value;
@@ -52,8 +51,7 @@ fn int(src: &str) -> i64 {
     }
 }
 
-/// The acceptance example from the task: a *local* (`Expr::LetRecIn`)
-/// ascribed multi-clause `let-rec` parses, typechecks, and evaluates.
+/// The *local* form — `Expr::LetRecIn`, `nxlet`'s alternative.
 #[test]
 fn local_ascribed_multi_clause_let_rec() {
     let src = "in

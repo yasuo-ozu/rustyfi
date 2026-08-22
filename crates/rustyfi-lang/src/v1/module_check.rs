@@ -1,158 +1,62 @@
-//! Sub-slice 2d-1 (`…/tmp/slice2d-sealing.md` §2.3, §4.2), extended by
-//! Sub-slice 2d-2 (`…/tmp/slice2d2-opaque-types.md`): the per-binding
-//! module-checking driver — the V0_1 replacement for `typecheck::
-//! typecheck_with_version` at `lib.rs`'s V0_1 pipeline (upstream analogue:
-//! `moduleTypechecker.ml:596 typecheck_module` + `coerce_signature:375`,
-//! collapsed onto the flat-spine model `elaborate.rs` already produces).
+//! The per-binding module-checking driver — the V0_1 replacement for
+//! `typecheck::typecheck_with_version` at `lib.rs`'s V0_1 pipeline (upstream
+//! analogue: `moduleTypechecker.ml:596 typecheck_module` +
+//! `coerce_signature:375`, collapsed onto the flat-spine model `elaborate.rs`
+//! produces).
 //!
-//! **Architecture (2d-1 spec §3.3, extended by 2d-2 spec §3): a spine walk
-//! keyed by a cst_v1-derived seal table, now built in two passes.** The
-//! *signature* information comes from the `cst_v1` trees (they are the only
-//! place `:>` survives — `v1/lower.rs` erases it by design, 2d-1 spec §0
-//! fact 3), while the *expressions* checked are the elaborated spine's
-//! (`program.body`'s `Let`-chain, walked exactly like `typecheck.rs`'s
-//! `l3_per_binding_tests::drive_manually`). [`check_program`]'s algorithm,
-//! in full (2d-2 spec §3's phase letters):
+//! **A spine walk keyed by a cst_v1-derived seal table.** Signature info
+//! comes from the `cst_v1` trees (the only place `:>` survives — `v1/lower.rs`
+//! erases it); the expressions checked are the elaborated spine's
+//! (`program.body`'s `Let`-chain). [`check_program`]'s phases (each phase
+//! function documents its own detail):
 //!
-//! - **Phase A — syntactic seal pre-scan, no [`Checker`]**
-//!   ([`phase_a_prescan`]/[`prescan_seal_types`]): walk every dependency's
-//!   `cst_v1::FileV1::Library`, recursing through nested `Bind::Module`s
-//!   with the identical `mod_path`/`TypeNameEnv` threading `v1/lower.rs`'s
-//!   `lower_module_bind` uses. At each sealed module: build the impl-type
-//!   table from its `Bind::Type`s; process every `Decl::TypeOpaque` (mint a
-//!   fresh stamp via [`StampMint`], width/kind/arity-check, populate
-//!   [`StaticEnv::types`]) and `Decl::Type` (width-check, queue a
-//!   [`PendingTransparent`] equality check for phase C — no [`Checker`]
-//!   exists yet to run it); mark every un-declared impl type
-//!   [`StaticEnv::hidden_types`]; compute the ctor-hide list (§2.2) and
-//!   record its deferred trigger — the qualified alias of the module's LAST
-//!   value member ([`StaticEnv::ctor_hide_triggers`]), or an immediate hide
-//!   for a zero-value-member module. `Decl::Val`/`ValHorzCmd`/`ValVertCmd`
-//!   are NOT processed here (phase C); `Module`/`Signature`/`Include` decls
-//!   still error via [`non_val_decl_error`].
-//! - **Phase B — session setup with the external-reference rewrite**
-//!   (inside [`check_program`] itself, using [`maybe_rewrite_program_types`]):
-//!   mirrors 2d-1's session-setup statement order (`Checker::empty` →
-//!   synonyms → `check_cycles` → builtins → variants) exactly, except: when
-//!   phase A found ANY sealed type (`StaticEnv::types`/`hidden_types`
-//!   non-empty), every `UserSynonymDecl`/`UserTypeDecl` is first passed
-//!   through the [`rename_type_expr`] walker (the §2.5 leak fix: a
-//!   `type s = M.t` elsewhere in the program must not resolve straight
-//!   through `M`'s seal) — an EMPTY-map fast path passes the ORIGINAL decls
-//!   through untouched (2d-1's T9 bit-parity argument, extended). Then any
-//!   `immediate_hides` (zero-value-member modules) fire via
-//!   [`Checker::hide_ctors`].
-//! - **Phase C — the seal-table val/type half** ([`phase_c_finish`]): with
-//!   the checker session now live, resolve every queued
-//!   [`PendingTransparent`] equality check ([`check_transparent_type`] —
-//!   rigid-lower both sides with a shared positional tyvar map and `unify`,
-//!   store `Transparent(MonoType)`), then re-walk each seal's `Decl::Val`/
-//!   `ValHorzCmd`/`ValVertCmd` items ([`process_seal_member`]): width +
-//!   tyvar-closure-check as 2d-1, PLUS the new `ext`/`own` [`RenameCtx`]
-//!   rewrite before lowering (external sealed-type references become
-//!   stamps on BOTH sides; THIS seal's own abstract types stay concrete on
-//!   the rigid/check side but become stamps on the committed/scheme side —
-//!   2d-2 spec §2.1's "opacity enters at exactly two places"), a command-
-//!   type shape guard for `ValHorzCmd`/`ValVertCmd`, then `seals` insert as
-//!   2d-1. Un-declared value members join `hidden` as before.
-//! - **Phase D — the spine walk with interception** (the main `loop` in
-//!   [`check_program`]): `Ast::LetIn`'s alias-commit case looks itself up in
-//!   `seals`/`hidden` and either subsumption-checks + commits the DECLARED
-//!   scheme (sealing), skips the commit entirely (hiding), or falls through
-//!   to the ordinary `with_all` commit — THEN, if this alias is a ctor-hide
-//!   trigger, fires [`Checker::hide_ctors`] (§2.2's deferred deregistration:
-//!   elaboration emits every member's alias contiguously and in source
-//!   order, so the trigger member's commit is the first program point after
-//!   which nothing inside the sealing module executes).
+//! - **Phase A** ([`phase_a_prescan`]/[`prescan_seal_types`]): syntactic seal
+//!   pre-scan, no [`Checker`] yet — mints stamps for opaque types, queues
+//!   transparent-type equality checks for phase C, and builds the
+//!   hidden-type/ctor-hide tables. Vals are deferred to phase C.
+//! - **Phase B** ([`maybe_rewrite_program_types`]): session setup, rewriting
+//!   every top-level type decl through [`rename_type_expr`] so it can't
+//!   resolve straight through a seal — skipped (an empty-map fast path) when
+//!   phase A sealed nothing.
+//! - **Phase C** ([`phase_c_finish`]): resolves the queued transparent-type
+//!   checks, then checks each seal's val/command members
+//!   ([`process_seal_member`]) and inserts them into `seals`.
+//! - **Phase D** (the main loop in [`check_program`]): the spine walk — each
+//!   `Ast::LetIn` alias is looked up in `seals`/`hidden` and either sealed,
+//!   hidden, or committed ordinarily, with any deferred ctor-hide fired right
+//!   after (sound because elaboration emits every member's alias
+//!   contiguously in source order).
 //!
-//! **Sealing has zero runtime residue** (2d-1 spec §0 fact 3, unchanged by
-//! 2d-2): this module reads signature information from the pre-lowering
-//! `cst_v1` trees purely for type-checking; the elaborated/compiled/
-//! evaluated program never differs from its unsealed twin.
+//! **Sealing has zero runtime residue**: this module reads `cst_v1` purely
+//! for type-checking; the elaborated/compiled/evaluated program never
+//! differs from its unsealed twin.
 //!
-//! **Every outgoing message is stamp-stripped** ([`strip_stamps`], 2d-2 spec
-//! §2.6): applied once, at [`check_program`]'s own boundary (folding a
-//! `TypeError`'s `source` into its `message` first, since `UnifyError`'s
-//! `Display` — a frozen `unify.rs`/`types.rs` surface — is where a raw
-//! `M.t#3` would otherwise leak), so no `#N` stamp ever reaches a user-
-//! facing string regardless of which phase produced the error.
+//! **Every outgoing message is stamp-stripped** ([`strip_stamps`]), once, at
+//! [`check_program`]'s own boundary, so no `#N` stamp reaches user-facing
+//! text regardless of which phase produced the error.
 //!
-//! **Sub-slice 2d-3 (`…/tmp/slice2d3-module-sig-decls.md`), landed here:**
-//! named signatures resolve at every ascription site ([`resolve_sig_decls`]
-//! → `v1/surface.rs::find_sig`, threaded from the same `SurfaceEnv`
-//! `v1/lower.rs` builds): a `:> S` / `:> A.B.S` seal re-elaborates the
-//! resolved decls through the SAME phase-A/C pipeline an inline `sig … end`
-//! would, so opaque types stamp FRESH per site (generativity — spec §2.2,
-//! `v01_sealing.rs`'s N7). An unresolved name is a precise "unknown
-//! signature name" error. Module ALIASES (`module M = N`, `module M = N :>
-//! S`) are handled entirely in `v1/lower.rs` (member-copy expansion) — an
-//! UNSEALED alias's copies then type-check as ordinary bindings through the
-//! spine walk below, with no special handling needed here.
+//! Named signatures resolve at every ascription site ([`resolve_sig`]);
+//! opaque types stamp FRESH per site (generativity — pinned by a
+//! dedicated `v01_sealing.rs` test). Module aliases are expanded entirely in
+//! `v1/lower.rs`, so an unsealed alias's copies just type-check as ordinary
+//! bindings here.
 //!
-//! **Sub-slice 2d-3b (`…/tmp/slice2d3b-2f2-sigmembers.md` §3), landed here:**
-//! nested-module sig MEMBERS (`Decl::Module { N : S_N }`, recursively matched
-//! against the struct's own `Bind::Module { N }` — [`ImplView`] parameterizes
-//! [`prescan_seal_types`] over a struct-literal's binds vs. an alias/coerce
-//! target's syntactic surface, so an unsealed child gets a SYNTHETIC child
-//! seal with PARENT-DEFERRED hiding (`member_revoke_triggers`, §3.4) and a
-//! sealed child gets a [`PendingLink`] layer-check instead of clobbering the
-//! child's own `env.seals` entries); `Decl::Signature` members (syntactic
-//! token-identity equality — semantic `sig_equal` up to alpha-variance is
-//! explicitly deferred, §3.5); and seal-narrowing on an alias BODY
-//! (`module M :> S = N`, `module M = N :> S` — [`walk_nested_seals_a`]'s
-//! four-way body match).
+//! Further pieces with their own doc comments at point of use: nested
+//! module/signature sig-members ([`ImplView`], [`PendingLink`],
+//! [`handle_nested_module_decl`]); functor sig-members and their
+//! per-application instantiation ([`StaticEnv::sealed_functors`],
+//! [`InstantiatedApp`]); struct `include` bookkeeping
+//! ([`struct_member_names_spliced`], [`build_impl_type_table`]);
+//! sig-side `include`/`with type` ([`resolve_sig`], [`check_sig_conflicts`]).
 //!
-//! **Sub-slice 2f-2b (`…/tmp/slice2d3b-2f2-sigmembers.md` §5), landed here:**
-//! functor sig-members inside a `:> sig … end` umbrella (`Decl::Module` whose
-//! declared type is a `SigExpr::Functor`) — [`StaticEnv::sealed_functors`]
-//! records the declared domain/codomain; every frozen application of such a
-//! functor is checked against the declared domain and its RESULT sealed with
-//! the declared codomain substituted `[param := arg]` (fresh stamps per
-//! application — generative, §0.4's caveat), via a small owned "instantiation
-//! store" ([`InstantiatedApp`]) built in a phase A0 pre-pass so the
-//! synthesized codomain decls/body outlive the borrowed-from-`deps`
-//! `PendingSeal`/`PendingLink` machinery they otherwise reuse unchanged.
-//!
-//! **Still explicitly out of scope** (§10 of the spec — permanent, sound
-//! placeholders, not "not yet enforced"): semantic (alpha-variant)
-//! `Decl::Signature` equality; structural (non-identical) functor-domain
-//! subtyping; higher-order functors (curried sig-members —
-//! [`sig_subtype::SigSubtypeError::NestedFunctorSubstitution`], now
-//! reachable); a functor-sig ASCRIPTION directly on a struct bind
-//! (`module M :> (X:S)->S2 = struct…`); `Decl::Module`/`Signature` inside a
-//! functor's PARAMETER signature; relative-sibling references INSIDE
-//! signature bodies (Sub-slice 2f-2a's absolutizer deliberately skips
-//! signature bodies); `include` of a sealed functor's application result.
-//!
-//! **Sub-slice 2e-1, landed here:** `include M` (`Bind::Include`, struct-
-//! include — `v1/lower.rs`'s job for real, this module's is bookkeeping)
-//! needs NOTHING from the spine walk itself — its member copies elaborate
-//! to ordinary qualified `Let`/`Type` binds, which the existing seal
-//! machinery already covers. What this module DOES learn about: seal
-//! *bookkeeping* sees included members as defined —
-//! [`struct_member_names_spliced`] (the include-aware twin of the retired
-//! `struct_member_names`) and [`build_impl_type_table`] (also include-
-//! aware; an included type member is always [`ImplTypeBody::Synonym`],
-//! never `Variant` — a seal must not hide the INCLUDING module's included
-//! ctors, since they still belong to, and are exported by, the target)
-//! both consult `surfaces`/`v1/surface.rs::frozen_include_target`, never
-//! re-resolving.
-//!
-//! **Sub-slice 2e-2, landed here:** SIG-side `include` (`Decl::Include`)
-//! and `with type` (`SigExpr::WithType`) — both live entirely inside
-//! signature RESOLUTION ([`resolve_sig`], replacing 2d-3's
-//! `resolve_sig_decls`): an `include S` decl is recursively FLATTENED into
-//! the enclosing signature's own decl list (a resolved-table-key cycle
-//! guard rejects a self-referential chain; a duplicate post-splice is a
-//! hard [`check_sig_conflicts`] error), so [`prescan_seal_types`] and every
-//! other consumer never sees a `Decl::Include` at all — the whole
-//! [`non_val_decl_error`] `Include` row is now purely defensive dead code.
-//! `with type` is collected as a [`surface::Refine`] alongside the
-//! flattened decls and intercepts [`prescan_seal_types`]'s `TypeOpaque` arm
-//! BEFORE it mints a stamp (the Abstract → Transparent rewrite). A functor
-//! PARAMETER signature stays checked name/arity-only (2f-1's own posture,
-//! unchanged) — a `with type` there is an explicit reject
-//! ([`check_functor_applications`]), never silently unenforced.
+//! **Still explicitly out of scope** — permanent, sound placeholders:
+//! semantic (alpha-variant) signature equality; structural functor-domain
+//! subtyping; higher-order functors
+//! ([`sig_subtype::SigSubtypeError::NestedFunctorSubstitution`]); a
+//! functor-sig ascription directly on a struct bind; `Decl::Module`/
+//! `Signature` inside a functor parameter signature; relative-sibling
+//! references inside signature bodies; `include` of a sealed functor's
+//! application result.
 
 use crate::ast::branded::Ast;
 use crate::elaborate::{Program, UserSynonymDecl, UserTypeDecl};
@@ -178,7 +82,7 @@ use std::collections::HashMap;
 /// warnings the whole-program path would; errors are ordinary
 /// `typecheck::TypeError`s (pub fields) so `lib.rs`'s
 /// `CompileError::Type(#[from])` covers them unchanged. Stamp-strips every
-/// outgoing error message (module doc comment, §2.6) — the one thing this
+/// outgoing error message (see the module doc comment) — the one thing this
 /// wrapper adds over [`check_program_inner`].
 pub(crate) fn check_program<'s>(
     deps: &[&cst_v1::FileV1],
@@ -187,32 +91,22 @@ pub(crate) fn check_program<'s>(
     check_program_with_xver_shadows(deps, program, &std::collections::HashSet::new())
 }
 
-/// [`check_program`] plus Slice X4b's cross-version coercion exemption.
+/// [`check_program`] plus the reverse deco/paren cross-version coercion exemption.
 ///
-/// `xver_shadows` names the qualified members (`"M.frame"`) that `lib.rs`'s
-/// reverse splice arm has REBOUND, after the exporting module closed, to a
-/// version-adapted view of the module's own export
-/// (`v1::xver_adapt::deco_downgrade_prelude` — a 0.1 `deco` re-wrapped so a
-/// 0.0.6-authored consumer's `graphics list` call sites accept it). Such a
-/// rebinding is a SECOND `Ast::LetIn` under a name the phase-D walk below
-/// has a `seals` entry for, and the whole point of it is to have a
-/// DIFFERENT shape from the sealed one — so it must not be re-checked
-/// against the exporter's signature.
+/// `xver_shadows` names qualified members (`"M.frame"`) `lib.rs`'s reverse
+/// splice arm has REBOUND, after the exporting module closed, to a
+/// version-adapted view of its own export
+/// (`v1::xver_adapt::deco_downgrade_prelude`). That rebinding is a SECOND
+/// `Ast::LetIn` under a name phase D already has a `seals` entry for, and
+/// the whole point is to have a DIFFERENT shape from the sealed one — so it
+/// must not be re-checked against the exporter's signature.
 ///
-/// The exemption is deliberately minimal and cannot silence a genuine
-/// violation:
-///
-/// - it applies only to the SECOND-and-later `Ast::LetIn` of a listed name.
-///   The FIRST one — the exporting module's own `export_alias` — is
-///   conformance-checked exactly as before, so the module still has to match
-///   its own `:>` signature;
-/// - the exempted binding is not left unchecked, only unsealed: it still
-///   goes through `infer_binding` and commits its own INFERRED scheme, so
-///   the generated coercion's body is fully HM-checked against the sealed
-///   original it wraps;
-/// - the set is empty for every caller but the reverse cross-version arm —
-///   [`check_program`] itself passes an empty one — so no pure-0.1 and no
-///   forward cross-version compile changes behaviour at all.
+/// The exemption is minimal and cannot silence a genuine violation: it
+/// applies only to the SECOND-and-later `Ast::LetIn` of a listed name (the
+/// FIRST — the module's own `export_alias` — is still conformance-checked);
+/// the exempted binding still commits its own INFERRED scheme (fully
+/// HM-checked, just unsealed); and the set is empty for every caller but the
+/// reverse cross-version arm, so no other compile path changes behaviour.
 pub(crate) fn check_program_with_xver_shadows<'s>(
     deps: &[&cst_v1::FileV1],
     program: &Program<'s>,
@@ -226,11 +120,9 @@ fn check_program_inner<'s, 'a>(
     program: &Program<'s>,
     xver_shadows: &std::collections::HashSet<String>,
 ) -> Result<Vec<MatchWarning>, TypeError> {
-    // Sub-slice 2d-3 §2.2/§2.1: the syntactic surface + named-signature
-    // table, rebuilt from the SAME `deps` `v1/lower.rs` built its own copy
-    // from (pure + cheap; single implementation, `v1/surface.rs`). Feeds
-    // named-signature resolution at every ascription site (`sig_decls_of`)
-    // and alias-body width surfaces (`ImplView::Alias`, phase C).
+    // The syntactic surface + named-signature table, rebuilt
+    // from the same `deps` `v1/lower.rs` builds its own copy from — feeds
+    // named-signature resolution and alias-body width surfaces (phase C).
     let mut surfaces = SurfaceEnv::default();
     for file in deps.iter().copied() {
         surface::build_file_surface(file, &mut surfaces);
@@ -241,28 +133,20 @@ fn check_program_inner<'s, 'a>(
     let mut mint = StampMint::default();
     let mut immediate_hides: Vec<(String, String)> = Vec::new();
 
-    // Sub-slice 2f-2b (spec §5.1): a lightweight early pass discovering
-    // every functor sig-member (`sealed_functors`/`hidden_functors`) BEFORE
-    // `check_functor_applications`/phase A0 need to consult them — the main
-    // `phase_a_prescan` walk below re-visits the same `Decl::Module`-functor
-    // arms and re-registers `sealed_functors` identically (idempotent); its
-    // OWN `hidden_functors` computation (per seal, alongside type-hiding)
-    // is therefore redundant with — but consistent with — this early pass.
+    // An early pass discovering every functor sig-member
+    // (`sealed_functors`/`hidden_functors`) before `check_functor_
+    // applications`/phase A0 need them; `phase_a_prescan` re-registers
+    // `sealed_functors` idempotently later.
     discover_sealed_functors(deps, &surfaces, &mut static_env)?;
 
-    // Sub-slice 2f-1 §2.2, extended by 2f-2b §5.1 step 5: every frozen
-    // functor-application site's parameter-signature check (purely
-    // syntactic, off `surfaces` alone) PLUS the hidden-functor check (off
-    // `static_env.hidden_functors`, populated by the discovery pass just
-    // above) — see `check_functor_applications`'s own doc comment for why
-    // this deliberately does NOT otherwise reuse the seal machinery's
-    // `Checker`/`StampMint` state.
+    // The functor-application parameter-signature check,
+    // purely off `surfaces` — deliberately not reusing the seal machinery's
+    // `Checker`/`StampMint` state (see this function's own doc comment).
     check_functor_applications(&surfaces, &static_env)?;
 
-    // Sub-slice 2f-2b §5.2-4: the instantiation store — materialize every
-    // sealed-functor application's substituted codomain + body BEFORE
-    // `pending`/`links` (plain lexical outliving: `PendingSeal`/
-    // `PendingLink` below borrow FROM this local, never the other way).
+    // Materialize every sealed-functor application's
+    // substituted codomain + body before `pending`/`links`, which borrow
+    // from this store (never the other way).
     let inst_store = build_instantiations(deps, &surfaces, &static_env)?;
 
     let (pending, links) = phase_a_prescan(
@@ -308,16 +192,15 @@ fn check_program_inner<'s, 'a>(
     phase_c_finish(&pending, &links, &mut ck, &mut mint, &mut static_env)?;
 
     // ---- phase D: the spine walk with interception ----
-    // The static-env tables (`seals`, `hidden`, `ctor_hide_triggers`, …) are
-    // keyed by member-name TEXT — they are built from signature declarations,
-    // not from the elaborated tree — so the spine walk resolves each binder
-    // symbol back to its text to probe them.
+    // `seals`/`hidden`/`ctor_hide_triggers` are keyed by member-name TEXT
+    // (built from signature decls, not the elaborated tree), so the spine
+    // walk resolves each binder symbol back to text to probe them.
     let store = program.store;
     let mut env = typecheck::base_type_env_with_version(store, RustyfiVersion::V0_1);
     let mut ast: &Ast<'s> = &program.body;
-    // Slice X4b: which `xver_shadows` names have already had their ORIGINAL
-    // (module-own) alias sealed, so a later rebinding of the same name is the
-    // cross-version coercion shadow — see `check_program_with_xver_shadows`.
+    // Names whose ORIGINAL alias is already sealed, so a later
+    // rebinding is the cross-version coercion shadow (see
+    // `check_program_with_xver_shadows`).
     let mut xver_sealed_once: std::collections::HashSet<String> = std::collections::HashSet::new();
     loop {
         ast = match ast {
@@ -334,22 +217,20 @@ fn check_program_inner<'s, 'a>(
                 // still the same binding, so it keeps its own stage.
                 let bind_stage = ck.binding_stage(value);
                 env = match static_env.seals.get(name_text) {
-                    // Slice X4b: the cross-version coercion REBINDING of an
+                    // The cross-version coercion REBINDING of an
                     // already-sealed member — commit its own inferred scheme
                     // (the version-adapted view), do NOT re-check it against
                     // the exporter's signature.
                     Some(_) if is_xver_shadow => env.with_all(schemes, bind_stage),
                     // the alias binding of a SEALED member: subsumption-
-                    // check, then commit the DECLARED scheme (§4.2 steps
-                    // 4-5 — sealing).
+                    // check, then commit the DECLARED scheme (sealing).
                     Some(decl) => {
                         // The STAGE half of conformance, checked before the
                         // type half exactly as upstream orders it
                         // (`signatureSubtyping.ml:286-298`): `sig val ~c :
-                        // int end = struct val c = 1 end` has matching types
-                        // and still promises a member the struct does not
-                        // provide. Type-first would report nothing at all
-                        // here, which is the gap this closes.
+                        // int end = struct val c = 1 end` has matching
+                        // types but the wrong stage — type-first would
+                        // report nothing here, the gap this closes.
                         if !stage_conforms(bind_stage, decl.stage) {
                             return Err(stage_mismatch_error(name_text, decl, bind_stage));
                         }
@@ -372,7 +253,7 @@ fn check_program_inner<'s, 'a>(
                     // opens).
                     None => env.with_all(schemes, bind_stage),
                 };
-                // Sub-slice 2d-2 §2.2: this alias may be a deferred
+                // This alias may be a deferred
                 // ctor-hide trigger (the sealing module's LAST value
                 // member) — fire it AFTER the commit above, so the
                 // module's own members (which just finished checking)
@@ -380,15 +261,12 @@ fn check_program_inner<'s, 'a>(
                 if let Some(hides) = static_env.ctor_hide_triggers.get(name_text) {
                     ck.hide_ctors(hides);
                 }
-                // Sub-slice 2d-3b §3.4: this alias may ALSO be a deferred
-                // parent-imposed MEMBER-revocation trigger (a `Decl::Module`
-                // sig member whose sub-signature omitted values the child
-                // itself exports) — fire it AFTER the commit above too, so
-                // the child's own members still saw the un-narrowed
-                // bindings while they themselves were checking. The
-                // `hidden` insert happens ONLY NOW, not in phase A-C —
-                // inserting earlier would trip the phase-D skip-commit arm
-                // just above and break sibling visibility.
+                // This alias may also be a deferred
+                // parent-imposed member-revocation trigger — fired AFTER the
+                // commit above (so the child's own members still saw the
+                // un-narrowed bindings while checking), and only inserted
+                // into `hidden` now, or it would trip the skip-commit arm
+                // above and break sibling visibility.
                 if let Some((owner, revoked)) =
                     static_env.member_revoke_triggers.get(name_text).cloned()
                 {
@@ -434,27 +312,19 @@ fn check_program_inner<'s, 'a>(
 }
 
 /// `Result` combinator threading every `infer_binding`/`infer_expr` call
-/// through [`rewrite_hidden_error`] (§4.2 step 6).
+/// through [`rewrite_hidden_error`].
 fn catch_hidden<T>(r: Result<T, TypeError>, static_env: &StaticEnv) -> Result<T, TypeError> {
     r.map_err(|e| rewrite_hidden_error(e, static_env))
 }
 
-/// §4.2 step 6, extended by 2d-2 §3 phase D: any `TypeError` propagating out
-/// of the spine walk passes through this filter. Five exact message formats
-/// are pinned (both from THIS module's own unit tests and from
-/// `typecheck.rs`'s call sites, at the time of writing):
-///
-/// - the plain unbound-variable format (`typecheck.rs`'s `Ast::Var` arm,
-///   `:1564`) and the unbound-inline/-block-command formats (`check_itext`/
-///   `check_btext`, `:1981`/`:2038`) — all three consult
-///   [`StaticEnv::hidden`], which now also carries hidden COMMAND members
-///   (2d-1 only matched the plain-variable format, so a hidden command
-///   member used to leak the "internal error" wording — closed here, spec
-///   test U20);
-/// - the two "unknown constructor" formats (`infer_ctor`/`bind_pattern`,
-///   `:1833`/`:1923`) — consult [`StaticEnv::hidden_ctors`] (2d-2, §2.2).
-///
-/// Every other error passes through unchanged.
+/// Any `TypeError` propagating out of the spine walk passes through this
+/// filter. Five exact message formats are pinned, from `typecheck.rs`'s
+/// call sites at the time of writing: the plain unbound-variable format
+/// (`Ast::Var`, `:1564`) and the unbound-inline/-block-command formats
+/// (`:1981`/`:2038`) consult [`StaticEnv::hidden`] (hidden COMMAND
+/// members too); the two "unknown constructor" formats (`:1833`/`:1923`)
+/// consult [`StaticEnv::hidden_ctors`]. Every other error passes
+/// through unchanged.
 fn rewrite_hidden_error(err: TypeError, static_env: &StaticEnv) -> TypeError {
     for (prefix, suffix) in [
         (
@@ -581,11 +451,9 @@ fn local_name(qualified: &str) -> &str {
         .unwrap_or(qualified)
 }
 
-/// 2d-2 spec §2.6: remove every maximal `#[0-9]+` run from a diagnostic
-/// string. `#` is unlexable in either version's identifier grammar and no
-/// type `Display` otherwise emits it, so this rewrite cannot mangle a
-/// legitimate rendering — it can only ever strip a stamp suffix `module_
-/// check.rs` itself minted (`StampMint`'s doc comment).
+/// Remove every maximal `#[0-9]+` run — `#` is unlexable in either
+/// version's grammar, so this can only strip a stamp this module minted
+/// (`StampMint`'s doc comment), never mangle a legitimate rendering.
 fn strip_stamps(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut chars = s.chars().peekable();
@@ -605,12 +473,10 @@ fn strip_stamps(s: &str) -> String {
     out
 }
 
-/// [`check_program`]'s outermost error transform: fold `source` (a frozen
-/// `UnifyError`'s `Display`, which may itself render a stamped nominal) into
-/// `message` before stripping, so the ENTIRE rendered diagnostic — not just
-/// the hand-written `message` half — is stamp-free (spec §2.6, acceptance
-/// item 5). This necessarily drops the `source` chain (`std::error::Error::
-/// source`); nothing in the V0_1 pipeline inspects it beyond `Display`.
+/// [`check_program`]'s outermost error transform: fold `source` (may itself
+/// render a stamped nominal) into `message` before stripping, so the ENTIRE
+/// diagnostic is stamp-free. Drops the `source` chain, but nothing in the
+/// V0_1 pipeline inspects it beyond `Display`.
 fn strip_stamps_error(e: TypeError) -> TypeError {
     let mut msg = e.message;
     if let Some(src) = &e.source {
@@ -624,7 +490,7 @@ fn strip_stamps_error(e: TypeError) -> TypeError {
 }
 
 // ============================================================================
-// Phase A: the syntactic seal pre-scan (no `Checker`) — spec §3 phase A.
+// Phase A: the syntactic seal pre-scan (no `Checker`).
 // ============================================================================
 
 /// An impl `type` bind's shape, syntactic-only (no lowering): a variant's
@@ -642,10 +508,8 @@ struct ImplTypeInfo {
 }
 
 /// A sig `type t = τ` decl (synonym-bodied) queued in phase A for phase C's
-/// checker-needed equality check (spec §3 phase A step 3 / phase C step 1).
-/// Borrows straight from the `cst_v1` tree (`deps` outlives the whole
-/// `check_program` call), so no cloning of the declared type expression is
-/// needed.
+/// checker-needed equality check — borrows straight from the `cst_v1` tree
+/// (`deps` outlives the whole call), so no cloning is needed.
 struct PendingTransparent<'a> {
     /// The type's qualified name, e.g. `"M.sz"`.
     qualified: String,
@@ -659,60 +523,42 @@ struct PendingTransparent<'a> {
 /// One sealed module, fully pre-scanned by phase A, awaiting phase C's
 /// checker-needed val/type-equality work.
 struct PendingSeal<'a> {
-    /// Sub-slice 2e-2 §2.2: FLATTENED (every `Decl::Include` recursively
-    /// spliced away) — owned, since a `resolve_sig` call may collect decls
-    /// from more than one borrowed source (a literal `sig … end`'s own
-    /// slice AND, through a splice, a NAMED sig's own decls elsewhere in
-    /// `deps`) with no single contiguous slice to point at.
+    /// FLATTENED (every `Decl::Include` spliced away) and
+    /// owned — a `resolve_sig` call may collect decls from more than one
+    /// borrowed source, so there's no single contiguous slice to point at.
     sig_decls: Vec<&'a cst_v1::StructDeclV1>,
     mod_path: Vec<String>,
     tyenv: TypeNameEnv,
     module_name: String,
     pending_transparent: Vec<PendingTransparent<'a>>,
-    /// Whether this seal's sig declares AT LEAST ONE `type`/`type ::` decl
-    /// of its own — self-containment enforcement (spec §3 phase C step 2)
-    /// is opt-in on this flag. A sig with ZERO type decls never restricted
-    /// type visibility in the first place (2d-1's pre-2d-2 behavior, pinned
-    /// by `v01_sealing.rs`'s T6: `val f : t -> t`/`val mk : t` bare-
-    /// referencing an entirely undeclared own type stays accepted); once a
-    /// sig declares even one type, it has opted into explicit type control,
-    /// and any OTHER bare own-type reference it left undeclared is a real
-    /// gap (U13).
+    /// Whether this seal's sig declares at least one `type`/`type ::` decl
+    /// — phase C's self-containment enforcement is opt-in on this flag. A
+    /// sig with ZERO type decls never restricted type visibility; once
+    /// it declares one, any OTHER undeclared own-type reference is a real
+    /// gap.
     declares_any_type: bool,
-    /// Sub-slice 2e-1 §2.1 step 5: this seal's member-name lists, INCLUDE-
-    /// SPLICED (via [`struct_member_names_spliced`]) and computed ONCE here
-    /// in phase A — [`phase_c_finish`] reads these back instead of
-    /// recomputing (`struct_member_names(&seal.binds)` would miss any
-    /// included members), which also avoids re-threading `surfaces` into
-    /// phase C at all.
+    /// Member-name lists, INCLUDE-SPLICED
+    /// ([`struct_member_names_spliced`]) and computed ONCE in phase A —
+    /// [`phase_c_finish`] reads these back rather than recomputing (which
+    /// would miss included members), avoiding re-threading `surfaces` into
+    /// phase C.
     value_names: Vec<String>,
     other_names: Vec<String>,
-    /// Sub-slice 2d-3b (spec §3.3-6): `Some((trigger, owner))` for a
-    /// SYNTHETIC child seal created by a parent's `Decl::Module` member (an
-    /// unsealed or alias/app-bodied child narrowed by an ENCLOSING seal,
-    /// never the child's own `:>`) — un-declared value members go to
-    /// `StaticEnv::member_revoke_triggers` under `trigger` (diagnostics
-    /// naming `owner`, the TRUE revoking ancestor — NOT this seal's own
-    /// `module_name`, which is the CHILD being narrowed) instead of
-    /// `StaticEnv::hidden` (phase C), and ctor hides join `trigger`'s
-    /// `ctor_hide_triggers` entry instead of this seal's own last-value
-    /// alias (phase A) — both deferred to the PARENT's own spine point
-    /// (§3.3-6's "hiding is parent-deferred" rule). `None` for every real
-    /// `:>`/named-sig/instantiated-functor-result seal (today's ONLY case
-    /// before 2d-3b) — immediate hiding, unchanged.
+    /// `Some((trigger, owner))` for a SYNTHETIC child seal
+    /// (an unsealed/alias/app-bodied child narrowed by an ENCLOSING seal,
+    /// never its own `:>`) — undeclared members defer to `owner`'s
+    /// `member_revoke_triggers`/`ctor_hide_triggers` under `trigger` instead
+    /// of committing to `hidden`/this seal's own trigger immediately
+    /// ("hiding is parent-deferred"). `None` for every real seal —
+    /// immediate hiding.
     parent_trigger: Option<(String, String)>,
 }
 
-/// Sub-slice 2d-3b (`…/tmp/slice2d3b-2f2-sigmembers.md` §3.1): what a
-/// signature is checked AGAINST — parameterizes [`prescan_seal_types`] over
-/// a struct literal's own binds (2d-1/2d-2's only case, and every
-/// `Decl::Module` recursion's synthetic-child-over-an-unsealed-struct case)
-/// vs. an alias/coerce/application-result body's already seal-filtered
-/// syntactic surface (§3.2's alias-body narrowing; §3.3's synthetic-child-
-/// over-an-alias case). A functor application's instantiated result (2f-2b
-/// §5.2) reuses `Struct` over its OWNED, substituted body binds (borrowed
-/// from the phase-A0 instantiation store, §"instantiation store" below) —
-/// no third variant needed.
+/// What a signature is checked AGAINST — a struct
+/// literal's own binds, or an alias/coerce/application-result body's
+/// already seal-filtered syntactic surface (`narrow_alias_body`). A functor
+/// application's instantiated result reuses `Struct` over its OWNED
+/// substituted binds — no third variant needed.
 enum ImplView<'a> {
     Struct(Vec<&'a cst_v1::Bind>),
     Surface(&'a ModSurface),
@@ -757,11 +603,10 @@ fn impl_view_member_names(
     }
 }
 
-/// Sub-slice 2d-3b §3.3/§3.5: the impl's own module names and signature
-/// names, SEPARATELY (distinct from `impl_view_member_names`'s conflated
-/// `other_names`, kept as-is for backward-compatible width-error wording
-/// elsewhere) — needed to width-check a `Decl::Module`/`Decl::Signature`
-/// member and to compute `hidden_sigs`.
+/// The impl's own module and signature names, SEPARATELY
+/// (distinct from `impl_view_member_names`'s conflated `other_names`) —
+/// needed to width-check a `Decl::Module`/`Decl::Signature` member and to
+/// compute `hidden_sigs`.
 fn impl_view_mod_and_sig_names(view: &ImplView) -> (Vec<String>, Vec<String>) {
     match view {
         ImplView::Struct(binds) => {
@@ -783,7 +628,7 @@ fn impl_view_mod_and_sig_names(view: &ImplView) -> (Vec<String>, Vec<String>) {
     }
 }
 
-/// Sub-slice 2d-3b §3.3 step 3: what a `Decl::Module { N : S_N }` member's
+/// What a `Decl::Module { N : S_N }` member's
 /// implementation looks like, located by scanning the PARENT's own
 /// [`ImplView`].
 enum ChildModuleShape<'a> {
@@ -801,7 +646,7 @@ enum ChildModuleShape<'a> {
     ViaSurface(&'a ModSurface),
     /// A functor literal, or an unresolved/absent surface (an unresolved
     /// alias/app target already died in lowering before `check_program`
-    /// ever runs, §3.3 step 3's defensive note) — cannot recurse.
+    /// ever runs — a defensive arm) — cannot recurse.
     Unavailable,
 }
 
@@ -873,10 +718,9 @@ fn phase_a_prescan<'a>(
             ..
         } = file
         else {
-            // A dependency is always a Library (the loader's
-            // `DocumentAsDependency` check already rejects anything else
-            // before this is ever reached, mirroring `v1/lower.rs::
-            // lower_file_v1`'s own defensive `LowerError` arm).
+            // A dependency is always a Library (the loader already rejects
+            // anything else, mirroring `v1/lower.rs::lower_file_v1`'s own
+            // defensive arm).
             continue;
         };
         let mod_path = vec![name.name.clone()];
@@ -911,15 +755,12 @@ fn phase_a_prescan<'a>(
             &mut links,
         )?;
     }
-    // Sub-slice 2f-2b (spec §5.2-4): phase A0's per-application abstract
-    // codomain seals — one synthetic `PendingSeal` per instantiated,
-    // sealed-functor application, immediate hiding (the codomain seal IS
-    // the application's own boundary, §5.2-3). Sub-slice 2e-2: a `with
-    // type` on a sealed functor's declared codomain is rejected at
-    // `collect_instantiations_in_binds`'s own construction site (the
-    // instantiation store is fully OWNED, so a borrowed `Refine<'a>` can't
-    // ride along — §8-4's ownership note); `cod_decls` itself is already
-    // FLATTENED there, so no `refines` slice is threaded through here.
+    // One synthetic, immediately-hidden `PendingSeal` per
+    // instantiated sealed-functor application (its codomain seal IS the
+    // boundary). A `with type` there is rejected earlier, at
+    // `collect_instantiations_in_binds`'s construction site (the store is
+    // fully OWNED, so no `Refine<'a>` can ride along) — `cod_decls` is
+    // already FLATTENED.
     for app in inst_store {
         let body_refs: Vec<&cst_v1::Bind> = app.body_binds.iter().collect();
         let cod_decls: Vec<&cst_v1::StructDeclV1> = app.cod_decls.iter().collect();
@@ -941,22 +782,16 @@ fn phase_a_prescan<'a>(
     Ok((pending, links))
 }
 
-/// Recurse through every nested `Bind::Module { .. }` looking for further
-/// seals — independent of whether THIS level is itself sealed (2d-1 spec
-/// §4.5 test T7). The phase-A twin of 2d-1's `walk_nested_seals`.
+/// Recurse through every nested `Bind::Module { .. }` for further seals,
+/// independent of whether THIS level is sealed.
 ///
-/// Sub-slice 2d-3b §3.2: a NON-struct module body carrying its OWN seal
-/// (`module M :> S = N`, `sig_annot: Some` over a `Var` body; `module M = N
-/// :> S`, a `Coerce` body) is now narrowed too — resolved to the target's
-/// syntactic surface (`ImplView::Surface`), fed through the SAME
-/// `prescan_seal_types` pipeline a struct literal gets. A `Coerce` body
-/// whose OUTER `sig_annot` is ALSO present (`module M :> S1 = N :> S2`) is a
-/// SEAL CHAIN: the INNER `S2` (on the `Coerce`) becomes the real
-/// `PendingSeal` (what the spine enforces via `env.seals`), the OUTER `S1`
-/// (the `sig_annot`) becomes a [`PendingLink`] layer on top — innermost
-/// first. An `App`/`Functor` body is 2f-2b territory (its own seal, if any,
-/// is the per-application codomain seal computed in phase A0 above) — left
-/// untouched here.
+/// A non-struct module body with its OWN seal (`module M
+/// :> S = N`; `module M = N :> S`) is narrowed too, resolved to the
+/// target's syntactic surface and fed through the SAME
+/// `prescan_seal_types` pipeline. A `Coerce` body whose OUTER `sig_annot`
+/// is ALSO present (`module M :> S1 = N :> S2`) is a SEAL CHAIN: the INNER
+/// `S2` becomes the real `PendingSeal`, the OUTER `S1` a [`PendingLink`]
+/// on top. An `App`/`Functor` body is out of scope here, left untouched.
 #[allow(clippy::too_many_arguments)]
 fn walk_nested_seals_a<'a>(
     binds: &[&'a cst_v1::Bind],
@@ -1034,13 +869,11 @@ fn walk_nested_seals_a<'a>(
             ast_v1::ModExpr::Coerce {
                 sig_: inner_sig, ..
             } => {
-                // The seal-chain rule: the `Coerce`'s OWN `sig_` is always
-                // the innermost layer (the real `PendingSeal`); an OUTER
-                // `sig_annot`, if present, is an additional link on top —
-                // only pushed when the inner narrowing actually applied
-                // (`narrow_alias_body`'s own literal-sig scope guard): a
-                // link referencing a seal that was never registered would
-                // itself misreport as a width error.
+                // Seal-chain rule: the `Coerce`'s OWN `sig_` is always the
+                // innermost layer (the real `PendingSeal`); an OUTER
+                // `sig_annot` is an additional link on top, only pushed
+                // when the inner narrowing applied — else a link would
+                // reference a seal that was never registered.
                 let inner_applied = narrow_alias_body(
                     inner_sig,
                     &child_path,
@@ -1064,12 +897,10 @@ fn walk_nested_seals_a<'a>(
                             reject_link_refines(&outer_resolved.refines, &child_path.join("."))?;
                             links.push(PendingLink {
                                 child_path: child_path.clone(),
-                                // `M` ITSELF is the "owner" here (its OWN
-                                // `:>` is doing the narrowing over `N`'s —
-                                // unlike `handle_nested_module_decl`'s
-                                // `Decl::Module` case, there is no
-                                // grandparent imposing this from further
-                                // out).
+                                // `M` itself is the "owner" (its OWN `:>`
+                                // narrows over `N`'s) — unlike
+                                // `handle_nested_module_decl`'s case, no
+                                // grandparent imposes this.
                                 parent_name: child_path.join("."),
                                 decls: outer_resolved.decls,
                                 tyenv: tyenv.child(&child_path, std::iter::empty(), surfaces),
@@ -1081,9 +912,9 @@ fn walk_nested_seals_a<'a>(
                 }
             }
             ast_v1::ModExpr::App { .. } | ast_v1::ModExpr::Functor { .. } => {
-                // 2f-2b territory: an `App`-bodied module's own seal (if
+                // An `App`-bodied module's own seal (if
                 // any) is the per-application codomain seal (phase A0); a
-                // direct functor-literal ascription is an unsupported §10
+                // direct functor-literal ascription is an unsupported
                 // shape. Neither needs anything from this walk.
             }
         }
@@ -1093,35 +924,27 @@ fn walk_nested_seals_a<'a>(
 
 /// A literal `sig … end` body — the ONLY shape [`narrow_alias_body`]/
 /// [`handle_nested_module_decl`]'s `ViaSurface` arm apply full narrowing to
-/// (§3.2/§3.3's scope guard, below).
+/// (the scope guard documented below).
 fn sig_is_literal_inline(s: &ast_v1::SigExpr) -> bool {
     matches!(s, ast_v1::SigExpr::Bot(ast_v1::SigBotV1::Sig { .. }))
 }
 
-/// Sub-slice 2d-3b §3.2: resolve an alias/coerce body's TARGET to its
-/// (possibly seal-filtered) syntactic surface and feed it through
-/// `prescan_seal_types` as an `ImplView::Surface` — shared by
-/// `walk_nested_seals_a`'s `Var` and `Coerce` arms. An UNRESOLVED target
-/// already died in lowering before `check_program` ever runs — defensively
-/// skip (never invent).
+/// Resolve an alias/coerce body's TARGET to its (possibly
+/// seal-filtered) syntactic surface and feed it through `prescan_seal_types`
+/// as an `ImplView::Surface`. An unresolved target already died in
+/// lowering — defensively skip, never invent.
 ///
-/// **Scope guard**: only applied when `sig` is a LITERAL `sig … end`
-/// (`sig_is_literal_inline`); a NAMED signature reference (`Var`/`Path`) is
-/// left un-narrowed here — the too-permissive (sound) direction, matching
-/// the pre-2d-3b posture for this one shape. Reason: a named sig's own bare
-/// type references (e.g. an external type visible only via an `include` at
-/// the sig's OWN DEFINITION site) need that DEFINITION site's own
-/// [`TypeNameEnv`], which this module has no way to reconstruct for an
-/// arbitrary already-elaborated dependency module without a much deeper
-/// def-site-tyenv-cache change — out of 2d-3b's scope (pinned by the
-/// pre-existing `i9`/`i9b` regression tests, which this exact guard keeps
-/// green). A literal inline `sig … end` never has this problem: every type
-/// it can reference is either its OWN declared member (handled via
-/// [`TypeNameEnv::child_from_names`] off the target's [`ModSurface`]) or an
-/// already-absolute `LONG_LOWER` name.
-/// Returns whether narrowing was actually applied (the `Coerce` arm's own
-/// caller uses this to decide whether an outer seal-chain link is safe to
-/// register at all).
+/// Returns whether narrowing was applied (the `Coerce` caller uses this to
+/// decide whether an outer seal-chain link is safe to register).
+///
+/// **Scope guard**: only applied to a LITERAL `sig … end`
+/// (`sig_is_literal_inline`); a NAMED signature reference is left
+/// un-narrowed here (too-permissive, but sound) — a named sig's own bare
+/// type references need that sig's DEFINITION site's [`TypeNameEnv`], which
+/// this module can't reconstruct for an arbitrary dependency module
+/// (pinned by the `i9`/`i9b` regression tests). A literal inline `sig …
+/// end` never has this problem: every type it references is either its own
+/// declared member or an already-absolute name.
 #[allow(clippy::too_many_arguments)]
 fn narrow_alias_body<'a>(
     sig: &'a ast_v1::SigExpr,
@@ -1140,13 +963,10 @@ fn narrow_alias_body<'a>(
     let Some(Some(target_path)) = surface::frozen_alias_target(surfaces, alias_path) else {
         return Ok(false);
     };
-    // The TARGET's own surface — NOT `alias_path`'s own registered entry
-    // (`env.modules[alias_path]`), which `v1/surface.rs::build_binds`
-    // already seal-filters by whichever annotation(s) apply to the ALIAS
-    // itself (this `sig`, for a `Var` body; possibly a DIFFERENT, OUTER
-    // `sig_annot` too, for a `Coerce` body under a seal-chain) — using the
-    // self-referential entry here would apply the wrong (or a doubly-
-    // narrowed) filter to THIS check.
+    // The TARGET's own surface, not `alias_path`'s own registered entry
+    // (already seal-filtered by whichever annotation applies to the ALIAS
+    // itself) — using the self-referential entry would apply the wrong (or
+    // doubly-narrowed) filter here.
     let Some(target_surf) = surfaces.modules.get(target_path) else {
         return Ok(false);
     };
@@ -1170,53 +990,37 @@ fn narrow_alias_body<'a>(
     Ok(true)
 }
 
-/// One parent-sig layer over a child that ALREADY has its own seal entries
-/// (its own `:>`, or an inner seal-chain layer): phase C checks inner ⊑
-/// outer per member and REPLACES the committed scheme with the outer one
-/// (spec §3.4). Never registers a second `env.seals` entry at the same
-/// qualified key — `env.seals`/`env.types` are plain `HashMap`s keyed by
-/// qualified name, so a second registration would silently clobber the
-/// first (the exact cross-contamination `check_functor_applications`'s doc
-/// comment already refuses for a different reason).
+/// One parent-sig layer over a child that ALREADY has its own seal entries:
+/// phase C checks inner ⊑ outer per member and REPLACES the committed
+/// scheme with the outer one. Never registers a second `env.seals` entry at
+/// the same key — that would silently clobber the first (the same
+/// cross-contamination risk `check_functor_applications` refuses).
 struct PendingLink<'a> {
     /// `"M.N"` as segments.
     child_path: Vec<String>,
     /// `"M"`, diagnostics.
     parent_name: String,
     /// `S_N` (or, for a seal chain, the OUTER `S1`), resolved and FLATTENED
-    /// (Sub-slice 2e-2 §2.2 — same ownership note as [`PendingSeal::
-    /// sig_decls`]). A non-empty `with type` refinement on this layer is
-    /// rejected at construction time (§2.3's scope note: a `PendingLink`
-    /// layer only re-checks `Decl::Val`-family members, never type decls —
-    /// see [`reject_link_refines`]).
+    /// (same ownership note as [`PendingSeal::sig_decls`]). A non-empty
+    /// `with type` refinement here is rejected at construction time — a
+    /// link only re-checks `Decl::Val`-family members, never types (see
+    /// [`reject_link_refines`]).
     decls: Vec<&'a cst_v1::StructDeclV1>,
     /// For lowering `S_N`'s val types at `M.N`.
     tyenv: TypeNameEnv,
-    /// The `Decl::Module`/`Coerce`'s own span — diagnostics-reserved (every
-    /// current link error already carries a more precise per-member span).
+    /// The `Decl::Module`/`Coerce`'s own span — diagnostics-reserved.
     #[allow(dead_code)]
     span: Span,
-    /// Sub-slice 2d-3b §3.4: the PARENT's own deferred-revoke trigger key
-    /// (`Some` when this link's `child_path` sits under a synthetic,
-    /// parent-imposed seal chain — practically: always `None` on the
-    /// direct `module M :> S1 = N :> S2` chain shape, since `M` itself is
-    /// the top-level seal there; reserved for a `Decl::Module` sig member
-    /// whose own child is ITSELF sealed under a further-nested parent
-    /// seal, a corner 2d-3b's D-tests do not exercise but this field keeps
-    /// sound by construction: `None` here means "member omissions become
-    /// this link's own module's `hidden` immediately", matching every
-    /// tested shape).
+    /// The PARENT's deferred-revoke trigger key, `Some`
+    /// when this link sits under a synthetic seal chain. `None` means
+    /// omissions become this link's own module's `hidden` immediately.
     parent_trigger: Option<String>,
 }
 
-/// Sub-slice 2f-2b (`…/tmp/slice2d3b-2f2-sigmembers.md` §5.2-4): one
-/// materialized sealed-functor application — the OWNED, substituted
-/// codomain decls + body binds a per-application abstract-result seal is
-/// built from. Fully owned (no lifetime parameter): `deps`-borrowed
-/// `PendingSeal`/`PendingLink` reuse it by borrowing FROM this store, which
-/// is declared (in `check_program_inner`) BEFORE `pending`/`links` — plain
-/// lexical outliving, no arena crate, no self-reference (§5.2-4's "the
-/// instantiation store").
+/// One materialized sealed-functor application — OWNED
+/// substituted codomain decls + body binds for a per-application seal.
+/// `PendingSeal`/`PendingLink` borrow FROM this store, declared before them
+/// in `check_program_inner` (plain lexical outliving).
 struct InstantiatedApp {
     app_path: Vec<String>,
     cod_decls: Vec<cst_v1::StructDeclV1>,
@@ -1228,17 +1032,13 @@ struct InstantiatedApp {
 }
 
 /// Resolve one `:> sig .. end` annotation's TYPE half against the struct
-/// body it seals (spec §3 phase A): width-check + kind/arity-check +
-/// stamp-mint every `Decl::TypeOpaque`; width-check + queue every
-/// `Decl::Type`; mark every un-named impl type hidden; compute the ctor-hide
-/// list and its deferred trigger. `Decl::Module`/`Decl::Signature` members
-/// recurse/compare per Sub-slice 2d-3b §3.3/§3.5 (a `Decl::Module` whose
-/// declared type is itself a `SigExpr::Functor` is a 2f-2b functor sig-
-/// member, §5.1, dispatched separately). Sub-slice 2e-2 §2.3: `refines`
-/// (already off `decls` — [`resolve_sig`]'s caller, since `decls` itself
-/// always arrives pre-FLATTENED, so `Decl::Include` never reaches this
-/// function's own match) intercepts a matching `Decl::TypeOpaque`'s stamp
-/// mint — the Abstract → Transparent rewrite BEFORE stamping.
+/// body it seals (phase A): width/kind/arity-check + stamp-mint every
+/// `Decl::TypeOpaque`; width-check + queue every `Decl::Type`; hide every
+/// un-named impl type; compute the ctor-hide list and its deferred trigger.
+/// `Decl::Module`/`Decl::Signature` members recurse/compare (a
+/// functor-typed `Decl::Module` dispatches elsewhere instead). `refines`
+/// intercepts a matching `Decl::TypeOpaque`'s stamp mint —
+/// the Abstract → Transparent rewrite BEFORE stamping.
 #[allow(clippy::too_many_arguments)]
 fn prescan_seal_types<'a>(
     decls: Vec<&'a cst_v1::StructDeclV1>,
@@ -1265,17 +1065,12 @@ fn prescan_seal_types<'a>(
     let mut declared_functors: Vec<String> = Vec::new();
     let mut hide_list: Vec<(String, String)> = Vec::new();
     let mut pending_transparent: Vec<PendingTransparent<'a>> = Vec::new();
-    // Sub-slice 2e-2 §2.3 step 3: refine names a `TypeOpaque` decl actually
-    // consumed — anything left over at the end of the loop is a precise
-    // error (undeclared name, or a second refine of an already-transparent
-    // one, upstream's `CannotRestrictTransparentType`/`UndefinedTypeName`).
-    // Tracked by INDEX into `refines`, not by name: two chained refines of
-    // the SAME name (e.g. a named sig's OWN stored refine plus an outer
-    // `S2 with type t = …` at the use site) are two DISTINCT entries, and
-    // only the FIRST (in `refines`' order) is ever consumed — the second
-    // must still fall through to the "leftover" check below and error
-    // there (upstream's ordered-first-match `CannotRestrictTransparentType`
-    // semantics, W6's chained-refine pin).
+    // `refine` names a `TypeOpaque` decl actually consumed —
+    // anything left over errors (undeclared name, or a second refine of an
+    // already-transparent one). Tracked by INDEX, not name: two chained
+    // refines of the SAME name are distinct entries, and only the FIRST is
+    // consumed — the second falls through to the "leftover" check and
+    // errors there (upstream's ordered-first-match semantics).
     let mut consumed_refine_idx: Vec<usize> = Vec::new();
 
     for d in decls.iter().copied() {
@@ -1303,13 +1098,9 @@ fn prescan_seal_types<'a>(
                         info.arity,
                     ));
                 }
-                // Sub-slice 2e-2 §2.3 step 1: a `with type` refinement on
-                // THIS opaque decl (first match wins — a second refine of
-                // the same name falls through to the "leftover refines"
-                // check below and errors there, upstream's ordered-first-
-                // match semantics) skips the stamp mint entirely — push
-                // exactly what a literal transparent decl at this position
-                // would have queued instead.
+                // A `with type` refinement on THIS decl (first match wins,
+                // see above) skips the stamp mint — push what a literal
+                // transparent decl here would have queued instead.
                 if let Some((idx, refine)) = refines
                     .iter()
                     .enumerate()
@@ -1425,10 +1216,9 @@ fn prescan_seal_types<'a>(
                     param, dom, cod, ..
                 } => {
                     let _ = param;
-                    // `S with Make type t = τ` on a FUNCTOR member: a functor
-                    // has no type members at any path of its own — its
-                    // codomain's types exist only at an APPLICATION's path —
-                    // so there is nothing here to refine.
+                    // `S with Make type t = τ`: a functor has no type
+                    // members of its own — a codomain's types exist only
+                    // at an APPLICATION's path — so nothing to refine.
                     if let Some(r) = refines.iter().find(|r| r.path.first() == Some(&name.name)) {
                         return Err(simple_error(
                             Some(r.span),
@@ -1456,11 +1246,10 @@ fn prescan_seal_types<'a>(
                 }
                 other_sig => {
                     let owned_trigger = subtree_trigger.clone().map(|t| (t, module_name.clone()));
-                    // Sub-slice 2e-2 §2.3, extended: every `S with N type t =
-                    // τ` refinement addressed to THIS member descends into it
-                    // with one segment consumed, so the child layer sees an
-                    // ordinary refinement of its own decls (and reports its
-                    // own precise error if it declares no such type).
+                    // A `S with N type t = τ` refinement
+                    // addressed to THIS member descends with one segment
+                    // consumed, so the child sees an ordinary refinement of
+                    // its own decls.
                     let child_refines: Vec<surface::Refine<'a>> = refines
                         .iter()
                         .enumerate()
@@ -1503,7 +1292,7 @@ fn prescan_seal_types<'a>(
                 )?;
                 declared_sigs.push(name.name.clone());
             }
-            // Sub-slice 2e-2: `decls` always arrives pre-flattened
+            // `decls` always arrives pre-flattened
             // ([`resolve_sig`]'s job) — a `Decl::Include` reaching THIS
             // match is unreachable in practice; a defensive
             // (non-panicking) error rather than `unreachable!()`.
@@ -1513,17 +1302,15 @@ fn prescan_seal_types<'a>(
         }
     }
 
-    // Sub-slice 2e-2 §2.3 step 3: any refine no `Decl::TypeOpaque` consumed
-    // — either it names a type this signature declares TRANSPARENTLY
-    // already (upstream `CannotRestrictTransparentType`) or a name the
-    // signature never declares at all (upstream `UndefinedTypeName`).
+    // Any refine no `Decl::TypeOpaque` consumed either
+    // restricts an already-TRANSPARENT type or names one the signature
+    // never declares.
     for (idx, refine) in refines.iter().enumerate() {
         if consumed_refine_idx.contains(&idx) {
             continue;
         }
-        // A PATHED refine no `Decl::Module` member claimed: the signature
-        // declares no sub-module of that name at all (a functor member of
-        // that name has already errored, above, with its own derivation).
+        // A PATHED refine no `Decl::Module` claimed: no sub-module of that
+        // name exists (a functor member already errored above).
         if let Some(head) = refine.path.first() {
             return Err(simple_error(
                 Some(refine.span),
@@ -1555,8 +1342,7 @@ fn prescan_seal_types<'a>(
         ));
     }
 
-    // Type hiding (spec §3 phase A step 4): every impl type NOT named by
-    // any sig type decl.
+    // Type hiding (phase A): every impl type not named by any sig decl.
     for (tname, info) in &impl_table {
         if !declared_types.contains(tname) {
             let qualified = lower::qualify_type_key(mod_path, tname);
@@ -1570,7 +1356,7 @@ fn prescan_seal_types<'a>(
         }
     }
 
-    // Sub-slice 2d-3b §3.5: signature-member hiding — every struct
+    // Signature-member hiding — every struct
     // `signature S = ..` bind this seal never declared.
     let (_, sig_names) = impl_view_mod_and_sig_names(&impl_view);
     for sn in &sig_names {
@@ -1580,8 +1366,7 @@ fn prescan_seal_types<'a>(
         }
     }
 
-    // Sub-slice 2f-2b §5.1 step 5: functor hiding — every DIRECT-child
-    // functor (`surfaces.functors`, keyed by full qualified path) this
+    // Functor hiding — every direct-child functor this
     // seal's `Decl::Module` members never declared.
     let functor_prefix = format!("{module_name}.");
     for fpath in surfaces.functors.keys() {
@@ -1593,8 +1378,8 @@ fn prescan_seal_types<'a>(
         }
     }
 
-    // Seal point (spec §3 phase A step 5), extended by 2d-3b §3.3-6:
-    // parent-imposed hiding is deferred to the PARENT's own trigger.
+    // Seal point (phase A): parent-imposed hiding is
+    // deferred to the PARENT's own trigger.
     if let Some((trigger, _owner)) = &parent_trigger {
         env.ctor_hide_triggers
             .entry(trigger.clone())
@@ -1624,15 +1409,14 @@ fn prescan_seal_types<'a>(
     Ok(())
 }
 
-/// Sub-slice 2d-3b §3.3: recursive matching for a non-functor
+/// Recursive matching for a non-functor
 /// `Decl::Module { N : S_N }` member.
 ///
-/// `parent_refines` are the enclosing signature's `S with N ⟨…⟩ type t = τ`
-/// refinements addressed to THIS member, already stripped of the `N` segment
-/// — they compose with (and are applied after) the member's own declared
-/// `S_N with type …`, so `sig module N : S with type t = int end` and `sig
-/// module N : S end with N type t = int` reach `prescan_seal_types` in the
-/// same shape.
+/// `parent_refines` — the enclosing sig's `S with N ⟨…⟩ type t = τ`
+/// refinements for THIS member, `N`-stripped — compose with (and apply
+/// after) the member's own `S_N with type …`, so `sig module N : S with
+/// type t = int end` and `sig module N : S end with N type t = int` reach
+/// `prescan_seal_types` identically.
 #[allow(clippy::too_many_arguments)]
 fn handle_nested_module_decl<'a>(
     kw_span: Span,
@@ -1664,9 +1448,9 @@ fn handle_nested_module_decl<'a>(
     }
     let mut child_path = mod_path.to_vec();
     child_path.push(child_name.to_string());
-    // Sub-slice 2e-2 §9's handoff note: routing this through the SAME
-    // `resolve_sig` funnel means `module N : S_incl` (a nested sig member
-    // whose own declared signature includes/refines) just works.
+    // Routing through the SAME `resolve_sig` funnel means `module N :
+    // S_incl` (a nested sig member whose own sig includes/refines) just
+    // works.
     let mut s_n_resolved = resolve_sig(s_n, &child_path.join("."), surfaces, &child_path)?;
     s_n_resolved.refines.extend(parent_refines.iter().cloned());
     match locate_child_module(view, child_name, &child_path, surfaces) {
@@ -1700,10 +1484,9 @@ fn handle_nested_module_decl<'a>(
             });
         }
         ChildModuleShape::ViaSurface(child_surf) => {
-            // Sub-slice 2d-3b §3.3, the SAME scope guard as
-            // `narrow_alias_body` (its own doc comment explains why): only
-            // a LITERAL `sig … end` for `S_N` gets a synthetic child seal
-            // here — width is already verified above regardless.
+            // Same scope guard as `narrow_alias_body` —
+            // only a LITERAL `sig … end` gets a synthetic child seal here
+            // (width is already verified above regardless).
             if sig_is_literal_inline(s_n) {
                 let child_tyenv = tyenv
                     .child_from_names(&child_path, child_surf.types.iter().map(|(n, _)| n.clone()));
@@ -1755,7 +1538,7 @@ fn nested_module_width_error(
     simple_error(Some(span), message)
 }
 
-/// Sub-slice 2d-3b §3.5: a `Decl::Signature` member — syntactic token-
+/// A `Decl::Signature` member — syntactic token-
 /// identity equality (semantic `sig_equal` up to alpha-variance is
 /// explicitly deferred).
 fn handle_signature_decl<'a>(
@@ -1808,7 +1591,7 @@ fn handle_signature_decl<'a>(
     Ok(())
 }
 
-/// Sub-slice 2f-2b §5.1: a functor sig-member (`Decl::Module { Make :
+/// A functor sig-member (`Decl::Module { Make :
 /// (Key : S_dom) -> S_cod }`).
 fn handle_functor_sig_member(
     kw_span: Span,
@@ -1879,13 +1662,11 @@ fn functor_codomain_error(module_name: &str, member: &str, err: SigSubtypeError)
     }
 }
 
-/// Sub-slice 2d-3b §3.4: the trigger key for a parent-imposed synthetic
-/// child seal — the qualified alias of the PARENT's LAST value member
-/// ACROSS ITS WHOLE SUBTREE, in source order (elaboration emits every
-/// member's alias contiguously in source order, the 2d-2 §2.2 invariant).
-/// `None` when the subtree has zero value members (nothing ever commits, so
-/// the ordinary immediate-hiding path — `prescan_seal_types`'s own
-/// `value_names.is_empty()` fallback — already suffices).
+/// The trigger key for a parent-imposed synthetic child
+/// seal — the qualified alias of the PARENT's LAST value member across its
+/// whole subtree, in source order (the contiguous-alias invariant).
+/// `None` when the subtree has zero value members — the ordinary
+/// immediate-hiding fallback already suffices.
 fn last_value_alias_in_subtree(
     view: &ImplView,
     mod_path: &[String],
@@ -1985,12 +1766,10 @@ fn last_value_alias_in_surface_subtree(surf: &ModSurface, mod_path: &[String]) -
         .map(|v| lower::qualify_type_key(mod_path, v))
 }
 
-/// Record one ctor-hide entry, updating both the deferred `hide_list` (fed
-/// to `Checker::hide_ctors` at this seal's trigger) and `env.hidden_ctors`
-/// (consulted by [`rewrite_hidden_error`] for the precise diagnostic — safe
-/// to populate immediately, unlike the hide itself, since it only affects
-/// error TEXT and is only ever consulted after `self.ctors` genuinely no
-/// longer has the entry).
+/// Record one ctor-hide entry: the deferred `hide_list` (fed to
+/// `Checker::hide_ctors` at this seal's trigger) and `env.hidden_ctors`
+/// (for [`rewrite_hidden_error`]'s diagnostic — safe to populate
+/// immediately, since it only affects error TEXT).
 fn record_hide(
     hide_list: &mut Vec<(String, String)>,
     env: &mut StaticEnv,
@@ -2008,34 +1787,24 @@ fn record_hide(
     );
 }
 
-/// Sub-slice 2e-2 §2.2/§2.3: what an ascription's `SigExpr` resolves to —
-/// the FLATTENED decl list (every `Decl::Include` recursively replaced by
-/// the included signature's own decls, in place — [`resolve_sig`]) plus
-/// every `with type` refinement collected along the way, in application
-/// order ([`surface::Refine`], owned by `v1/surface.rs` since a NAMED
-/// signature's own stored refinements — §2.3's "named-sig storage" — are
-/// inherited from there too).
+/// What an ascription's `SigExpr` resolves to — the
+/// FLATTENED decl list (every `Decl::Include` spliced in place) plus every
+/// `with type` refinement collected along the way, in application order.
 struct ResolvedSig<'a> {
     decls: Vec<&'a cst_v1::StructDeclV1>,
     refines: Vec<surface::Refine<'a>>,
 }
 
 /// Resolve one ascription's [`ast_v1::SigExpr`] to its FULLY FLATTENED decl
-/// list (Sub-slice 2e-2 §2.2, replacing 2d-3's `resolve_sig_decls`, whose
-/// non-`Include`/non-`WithType` behavior this function reproduces exactly):
-/// a literal `sig … end` is itself, minus every `Decl::Include` it
-/// (recursively) contains, spliced in place; a named `Var(S)`/`Path(A.B.S)`
-/// resolves outward from `site_path` through `surfaces.sigs`
-/// (`v1/surface.rs::find_sig`) — the resolved decls then feed the SAME
-/// prescan/phase-C pipeline an inline body would, so opaque types stamp
-/// FRESH at THIS site (generativity — spec §2.2, test N7). An unresolved
-/// name is the precise "unknown signature name" error; an `include` cycle
-/// (through names — literal nesting is finite, §8 risk 7) is a precise
-/// error too; a duplicate declaration post-splice is a hard
-/// `ConflictInSignature`-shaped error (§2.2's "one linear pass",
-/// [`check_sig_conflicts`]); `with type` collects [`surface::Refine`]s
-/// (§2.3) rather than resolving further; a functor signature stays its 2f
-/// placeholder.
+/// list: a literal `sig … end` is itself with every
+/// `Decl::Include` spliced in; a named `Var(S)`/`Path(A.B.S)` resolves
+/// outward from `site_path` (`v1/surface.rs::find_sig`) — the resolved
+/// decls then feed the SAME prescan/phase-C pipeline an inline body would,
+/// so opaque types stamp FRESH at THIS site (generativity — pinned by a dedicated test). An
+/// unresolved name, an `include` cycle, and a duplicate post-splice decl
+/// are each precise errors ([`check_sig_conflicts`]); `with type` collects
+/// [`surface::Refine`]s instead of resolving further; a functor signature
+/// stays its own placeholder.
 fn resolve_sig<'a>(
     sig: &'a ast_v1::SigExpr,
     module_name: &str,
@@ -2059,18 +1828,12 @@ fn resolve_sig_visited<'a>(
         ast_v1::SigExpr::Bot(bot) => {
             resolve_sig_bot(bot, module_name, surfaces, site_path, visited)
         }
-        // `S with type t = τ` (§2.2/§2.3): resolve the base (a `SigBotV1` —
-        // never itself a `with`, the grammar's own left-recursion note),
-        // then APPEND this node's own refines.
-        //
-        // `S with M type t = τ` (a SUB-MODULE refinement) resolves exactly
-        // the same way — the chain rides along as the collected
-        // [`surface::Refine::path`], and `prescan_seal_types` routes it into
-        // the `Decl::Module` member of that name, where it lands as an
-        // ordinary empty-path refinement of the child layer's own `type t ::
-        // o`. Until 2d-3b landed, a signature could not have `Decl::Module`
-        // members at all, so this arm was a flat reject naming that slice;
-        // there is nothing left for it to wait on.
+        // `S with type t = τ`: resolve the base (never itself a `with` —
+        // the grammar's own left-recursion note), then APPEND this node's
+        // own refines. `S with M type t = τ` (a SUB-MODULE refinement)
+        // resolves the same way — the chain rides along as the collected
+        // [`surface::Refine::path`], which `prescan_seal_types` routes into
+        // the `Decl::Module` member of that name.
         ast_v1::SigExpr::WithType {
             base, path, binds, ..
         } => {
@@ -2118,10 +1881,9 @@ fn resolve_sig_bot<'a>(
 }
 
 /// A NAMED signature reference (`Var`/`Path`): find it, cycle-guard on its
-/// RESOLVED table key (§8 risk 7 — keying the written suffix would
-/// false-positive on two differently-pathed same-suffix sigs), splice its
-/// own decls, and inherit its own STORED refines (§2.3's named-sig
-/// composition, W6).
+/// RESOLVED table key (keying the written suffix would false-positive on two
+/// differently-pathed same-suffix sigs), splice its own decls, and inherit
+/// its own STORED refines (named-sig composition).
 fn resolve_named_sig<'a>(
     name: &str,
     span: Span,
@@ -2148,13 +1910,13 @@ fn resolve_named_sig<'a>(
     })
 }
 
-/// §2.2's flattening: a non-`Include` decl passes through; a `Decl::Include
-/// { sig_ }` resolves `sig_` and splices its (recursively flattened) decls
-/// AND refines in place — order preserved (deterministic error order, and
-/// the spliced opaque decls sit exactly where a later `TypeOpaque`
-/// interception, §2.3, or the ctor-hide/revocation "last value member"
-/// trigger would expect them, 2e-1's own splice-position argument extended
-/// to signatures).
+/// Sig-include flattening: a non-`Include` decl passes through; a
+/// `Decl::Include { sig_ }` resolves `sig_` and splices its (recursively
+/// flattened) decls AND refines in place — order preserved (deterministic
+/// error order, and the spliced opaque decls sit exactly where a later
+/// `TypeOpaque` interception, or the ctor-hide/revocation "last value member"
+/// trigger, expects them — the same splice-position argument struct
+/// `include` uses, extended to signatures).
 fn splice_decls<'a>(
     decls: &'a [cst_v1::StructDeclV1],
     module_name: &str,
@@ -2176,15 +1938,12 @@ fn splice_decls<'a>(
     Ok((out, refines))
 }
 
-/// §2.2's conflict check (upstream `ConflictInSignature`, `staticEnv.ml:
+/// The conflict check (upstream `ConflictInSignature`, `staticEnv.ml:
 /// 404-428`): one linear pass over the FLATTENED decl list, per-category
-/// name sets (vals incl. command keys / types / modules / signatures —
-/// mirrors `surface.rs::filter_surface`'s own category walk) — a repeat
-/// within a category is a hard error at the SECOND decl's span. Only
-/// spliced lists can realistically trip this in practice, but it applies
-/// uniformly (a literal sig with two DIRECT `val x` decls now also rejects
-/// — the ONE previously-accepted-input behavior 2e-2 tightens, §8 risk 5;
-/// pinned by S4).
+/// name sets (vals incl. command keys / types / modules / signatures) — a
+/// repeat within a category is a hard error at the SECOND decl's span.
+/// Applies uniformly, even to a literal sig with two DIRECT `val x` decls
+/// (pinned by a dedicated test).
 fn check_sig_conflicts(
     decls: &[&cst_v1::StructDeclV1],
     module_name: &str,
@@ -2224,9 +1983,7 @@ fn check_sig_conflicts(
                 check_one_conflict(&mut sigs, &name.name, name.span, module_name)?
             }
             // `splice_decls` already expanded every `Decl::Include` above —
-            // unreachable in practice; a defensive (non-panicking) error
-            // rather than `unreachable!()`, per this module's "no panics
-            // anywhere" posture.
+            // unreachable in practice; defensive, non-panicking.
             ast_v1::Decl::Include { kw, .. } => {
                 return Err(simple_error(
                     Some(kw.0),
@@ -2260,19 +2017,14 @@ fn check_one_conflict<'a>(
     Ok(())
 }
 
-/// The SHALLOW twin of [`resolve_sig`] — Sub-slice 2d-3's original
-/// single-dereference behavior, UNCHANGED: a literal `sig … end` is
-/// itself (`Decl::Include` inside it is NOT flattened); a named `Var`/
-/// `Path` resolves outward exactly once. Used ONLY by the two structural
-/// (syntactic token-identity) comparators that pre-date 2e-2 and never
-/// needed semantic splicing — [`handle_signature_decl`]'s `Decl::Signature`
-/// member identity check and [`handle_functor_sig_member`]'s declared-vs-
-/// impl parameter-signature identity check — both already handle a literal
-/// `Decl::Include` node fine (`decls_eq_ignoring_span`'s own `sig_expr_eq`
-/// compares it structurally, like any other decl); a `with type` node,
-/// which those two comparators have no way to compare meaningfully (they
-/// only compare NAMES/decls, never refines), is an explicit, precise
-/// reject here instead — never silently ignored.
+/// The SHALLOW twin of [`resolve_sig`]: a literal `sig … end` is itself
+/// (`Decl::Include` inside it is NOT flattened); a named `Var`/`Path`
+/// resolves outward exactly once. Used only by the two structural
+/// (syntactic token-identity) comparators that never need semantic
+/// splicing ([`handle_signature_decl`], [`handle_functor_sig_member`]) —
+/// both already handle a literal `Decl::Include` fine structurally; a
+/// `with type` node, which neither comparator can compare meaningfully, is
+/// an explicit reject here instead — never silently ignored.
 fn resolve_sig_shallow<'a>(
     sig: &'a ast_v1::SigExpr,
     module_name: &str,
@@ -2316,11 +2068,9 @@ fn unknown_sig_error(name: &str, span: Span) -> TypeError {
     simple_error(Some(span), format!("unknown signature name `{name}`"))
 }
 
-/// Sub-slice 2e-2 §2.3(b)-6/step-1's PendingLink-scope note: a
-/// [`PendingLink`] layer only re-checks `Decl::Val`-family members
-/// (`process_link_member`), never type decls — a `with type` refinement
-/// on that layer would be silently unenforced rather than really applied,
-/// so it is an explicit reject instead (never silence).
+/// PendingLink-scope rule: a [`PendingLink`] layer only
+/// re-checks `Decl::Val`-family members, never type decls — a `with type`
+/// refinement there is an explicit reject instead of silent unenforcement.
 fn reject_link_refines(refines: &[surface::Refine], owner: &str) -> Result<(), TypeError> {
     if let Some(refine) = refines.first() {
         return Err(simple_error(
@@ -2336,39 +2086,27 @@ fn reject_link_refines(refines: &[surface::Refine], owner: &str) -> Result<(), T
 }
 
 // ============================================================================
-// Sub-slice 2f-1 §2.2: the functor-application parameter-signature check.
-// ============================================================================
+// The functor-application parameter-signature check.// ============================================================================
 
-/// Walk every frozen `ModExpr::App` resolution ([`surface::AppResolution`],
-/// `v1/surface.rs::SurfaceEnv::app_targets`) and width/arity-check the
+/// Walk every frozen `ModExpr::App` resolution and width/arity-check the
 /// argument's [`ModSurface`] against the functor's parameter signature `S`.
 ///
 /// **Deliberately NAME/ARITY-only, no [`Checker`]/[`StampMint`]/
-/// [`StaticEnv`] involvement** — a real ascription re-check (as the spec's
-/// §2.2 "factor `check_module_against_sig` out of `prescan_seal_types`"
-/// literally proposes) would have to register the SAME qualified member
-/// keys (`"Int.compare"`) `prescan_seal_types`/`process_seal_member` already
-/// use for the ARGUMENT's own (possibly separate, real) `:>` seal, if it has
-/// one — `env.seals`/`env.types` are plain `HashMap`s keyed by that
-/// qualified name, so a second registration at the SAME key would silently
-/// clobber the argument's own real seal (whichever prescan runs last wins),
-/// a genuine cross-contamination risk this port will not take. This check
-/// therefore stays entirely within `surfaces` (built once, read-only from
-/// here on): it catches a MISSING member/wrong-arity type precisely, with a
-/// functor-framed message (T-chk2's primary shape); an argument providing a
-/// member at the wrong VALUE TYPE is instead caught naturally, later, when
-/// the instantiated body's own use of that member fails to type-check
-/// through the ordinary elaborator (a less specific message, but
-/// `check_program` still rejects — this module's own "REJECTS, never
-/// wrong-accepts" posture, doc comment above).
+/// [`StaticEnv`] involvement.** A real ascription re-check would have to
+/// register the SAME qualified member keys `prescan_seal_types`/
+/// `process_seal_member` already use for the ARGUMENT's own real `:>` seal
+/// — a second registration at that key would silently clobber it (whichever
+/// prescan runs last wins). This check stays entirely within `surfaces`
+/// instead: it catches a MISSING member/wrong-arity type precisely;
+/// a wrong VALUE TYPE is caught later, less specifically, when
+/// the instantiated body's use of that member fails to type-check.
 fn check_functor_applications<'a>(
     surfaces: &'a SurfaceEnv<'a>,
     env: &StaticEnv,
 ) -> Result<(), TypeError> {
     for (_site_path, _span, resolution) in &surfaces.app_targets {
         let Some(res) = resolution else { continue };
-        // Sub-slice 2f-2b §5.1 step 5: an application of a functor an
-        // umbrella seal never exported.
+        // An application of a functor an        // umbrella seal never exported.
         if let Some(owner) = env.hidden_functors.get(&res.functor_path) {
             return Err(simple_error(
                 None,
@@ -2386,12 +2124,10 @@ fn check_functor_applications<'a>(
             continue;
         };
         let resolved = resolve_sig(fdef.param_sig, &res.functor_path, surfaces, &fdef.def_path)?;
-        // Sub-slice 2e-2 §(b)-6's forced decision: functor parameter
-        // signatures are checked NAME/ARITY-only (2f-1's own posture,
-        // `check_module_against_sig`'s own doc comment) — a `with type`
-        // there is name-invisible (a refinement never changes the name
-        // set), so it would be SILENTLY unenforced beyond arity if allowed
-        // through. Explicit reject instead, never silence.
+        // Functor parameter signatures are checked NAME/ARITY-only — a
+        // `with type` there is name-invisible, so it would be SILENTLY
+        // unenforced beyond arity if allowed through. Explicit reject
+        // instead.
         if let Some(refine) = resolved.refines.first() {
             return Err(simple_error(
                 Some(refine.span),
@@ -2408,13 +2144,10 @@ fn check_functor_applications<'a>(
     Ok(())
 }
 
-/// The width/arity half of §2.2's ascription-equivalent check: does
-/// `arg_surf` (the argument module's own [`ModSurface`]) provide every
-/// member `decls` (the parameter signature `S`'s resolved decl list)
-/// declares, at a matching type-arity? A `Decl::Module`/`Signature`/
-/// `Include` in a functor's parameter signature is a precise deferred error
-/// (no demand package's `Ord`/`Settings`-shaped parameter sig ever declares
-/// one).
+/// The width/arity half of the ascription-equivalent check: does
+/// `arg_surf` provide every member `decls` declares, at matching
+/// type-arity? A `Decl::Module`/`Signature`/`Include` in a functor
+/// parameter signature is a precise deferred error.
 fn check_module_against_sig(
     decls: &[&cst_v1::StructDeclV1],
     arg_surf: &ModSurface,
@@ -2551,15 +2284,11 @@ fn functor_sig_member_error(functor_path: &str, what: &str, span: Span) -> TypeE
 }
 
 // ============================================================================
-// Sub-slice 2f-2b (`…/tmp/slice2d3b-2f2-sigmembers.md` §5.1): the early
-// functor sig-member discovery pass — must run BEFORE `check_functor_
-// applications`/phase A0's instantiation store need `StaticEnv::
-// sealed_functors`/`hidden_functors`. The main `phase_a_prescan` walk
-// re-visits the same `Decl::Module`-functor arms and re-registers
-// `sealed_functors` identically (idempotent) via the SAME
-// [`handle_functor_sig_member`]; only `hidden_functors` is computed here
-// exclusively (mirrored, not duplicated, inside `prescan_seal_types` too —
-// see that function's own hidden-functor loop).
+// The early functor sig-member discovery pass — must run
+// BEFORE `check_functor_applications`/phase A0's instantiation store need
+// `StaticEnv::sealed_functors`/`hidden_functors`. `phase_a_prescan` later
+// re-registers `sealed_functors` identically (idempotent); only
+// `hidden_functors` is computed here exclusively.
 // ============================================================================
 
 fn discover_sealed_functors<'a>(
@@ -2579,15 +2308,11 @@ fn discover_sealed_functors<'a>(
         };
         let mod_path = vec![name.name.clone()];
         if let Some(sa) = sig_annot {
-            // Sub-slice 2e-2: best-effort (swallowed, never `?`) — this
-            // pass's own job is EARLY functor-member discovery; a
-            // resolution failure here (including a genuinely malformed
-            // sig) still surfaces for REAL later, when `phase_a_prescan`
-            // re-runs the identical `resolve_sig` call and does NOT
-            // swallow it. Using the DEEP resolver (rather than a shallow
-            // one) closes a gap the pre-2e-2 code never had to consider: a
-            // functor sig-member reachable only through a spliced
-            // `include` is now discovered too.
+            // Best-effort (swallowed, never `?`) — a resolution failure
+            // here still surfaces for REAL later, when `phase_a_prescan`
+            // re-runs the identical `resolve_sig` call. The DEEP resolver
+            // is what makes a functor sig-member reachable only through a
+            // spliced `include` discoverable.
             if let Ok(resolved) = resolve_sig(&sa.sig_.0, &mod_path.join("."), surfaces, &mod_path)
             {
                 discover_functor_members_in_decls(&resolved.decls, &mod_path, surfaces, env)?;
@@ -2682,7 +2407,7 @@ fn discover_functor_members_in_decls<'a>(
 }
 
 // ============================================================================
-// Sub-slice 2f-2b §5.2-4: the instantiation store — one [`InstantiatedApp`]
+// The instantiation store — one [`InstantiatedApp`]
 // per frozen application of a SEALED functor, materialized before phase A
 // runs.
 // ============================================================================
@@ -2743,18 +2468,16 @@ fn collect_instantiations_in_binds<'a>(
                                     .map_err(|e| {
                                         functor_codomain_error(&mod_path.join("."), &name.name, e)
                                     })?;
-                                    // Sub-slice 2e-2: `include` in a sealed
-                                    // functor's codomain IS supported (the
+                                    // `include` in a sealed                                    // functor's codomain IS supported (the
                                     // decls are cloned out immediately, so
                                     // no self-reference risk); `with type`
                                     // there is an explicit reject instead —
                                     // `InstantiatedApp` is fully OWNED (no
-                                    // lifetime parameter, §8-4's ownership
-                                    // note), and a `Refine<'a>` borrows the
-                                    // (here, LOCAL/substituted) `cst_v1`
-                                    // tree, so it cannot ride along without
-                                    // an owned `Refine` shape this
-                                    // zero-demand corner does not warrant.
+                                    // lifetime parameter), but a `Refine<'a>`
+                                    // borrows the LOCAL/substituted `cst_v1`
+                                    // tree, so it can't ride along without an
+                                    // owned `Refine` shape this zero-demand
+                                    // corner doesn't warrant.
                                     let cod_resolved = resolve_sig(
                                         &cod_substituted,
                                         &child_path.join("."),
@@ -2817,19 +2540,13 @@ fn lower_error_to_type_error(e: &lower::LowerError) -> TypeError {
 }
 
 // ============================================================================
-// Sub-slice 2d-3b §3.5: syntactic (span-ignoring) structural equality over
-// `ast_v1` decl trees — the comparator `handle_signature_decl`'s
-// `Decl::Signature` identity check and `handle_functor_sig_member`'s
-// declared-vs-impl parameter-signature identity check both drive. Deliberately
-// NOT the full `Unparse`-to-token-stream comparator the spec's own wording
-// suggests (`syan`'s `Unparse` trait is not a direct dependency of this
-// crate, and adding one would touch `Cargo.toml`/`Cargo.lock` — both frozen
-// for this increment); this hand-written structural walk is EQUIVALENT
-// soundness-wise (Parse/Unparse round-trip: identical structural trees minus
-// spans ⟺ identical token streams), just implemented locally. Sound in the
-// same direction as the spec's own comparator: syntactic identity ⊂
-// semantic equality ⟹ never wrong-accepts, may rejects some alpha-variants
-// upstream would accept (documented, §10 row).
+// Syntactic (span-ignoring) structural equality over// `ast_v1` decl trees, driving `handle_signature_decl`'s and
+// `handle_functor_sig_member`'s identity checks. Deliberately hand-written
+// rather than `Unparse`-to-token-stream (not a dependency of this crate) —
+// equivalent soundness-wise (Parse/Unparse round-trip: identical trees
+// minus spans ⟺ identical token streams), and conservative: syntactic
+// identity ⊂ semantic equality ⟹ never wrong-accepts, may reject some
+// alpha-variants upstream would accept (out of scope per the module header).
 // ============================================================================
 
 fn decls_eq_ignoring_span(a: &[cst_v1::StructDeclV1], b: &[cst_v1::StructDeclV1]) -> bool {
@@ -3242,15 +2959,11 @@ fn type_atom_eq(a: &ast_v1::TypeAtom, b: &ast_v1::TypeAtom) -> bool {
     }
 }
 
-/// §4.7's placeholder table, now down to the ONE `Decl` arm that stays
-/// unenforced after Sub-slice 2d-3b (`Module`/`Signature` members are now
-/// processed for real — see [`handle_nested_module_decl`]/
-/// [`handle_signature_decl`]/[`handle_functor_sig_member`]).
-/// Sub-slice 2e-2: after the sig-include flattening lands, a `Decl::Include`
-/// reaching `prescan_seal_types`'s own decl match is unreachable in
-/// practice (`resolve_sig` always splices it away first) — this arm is now
-/// a purely DEFENSIVE fallback (never a silent narrowing, never a panic),
-/// not a feature placeholder.
+/// The ONE `Decl` arm signature enforcement does not process for real
+/// (`Module`/`Signature` go through their own handlers): a `Decl::Include`
+/// reaching `prescan_seal_types`'s match is unreachable in practice, since
+/// `resolve_sig` splices it away first — a defensive fallback, never a
+/// silent narrowing or a panic.
 fn non_val_decl_error(module_name: &str, decl: &ast_v1::Decl) -> TypeError {
     let (span, what): (Span, String) = match decl {
         ast_v1::Decl::Include { kw, .. } => (
@@ -3259,8 +2972,7 @@ fn non_val_decl_error(module_name: &str, decl: &ast_v1::Decl) -> TypeError {
              (expected `resolve_sig` to flatten it first)"
                 .to_string(),
         ),
-        // `prescan_seal_types` only ever calls this for `Include`; kept
-        // total (no `unreachable!`) as a defensive fallback.
+        // `prescan_seal_types` only ever calls this for `Include`.
         _ => (
             Span::default(),
             "this signature declaration is not enforced yet".to_string(),
@@ -3272,17 +2984,12 @@ fn non_val_decl_error(module_name: &str, decl: &ast_v1::Decl) -> TypeError {
     )
 }
 
-/// Sub-slice 2e-1 §2.1 step 5: include-aware — a `Bind::Include` with a
-/// resolved frozen target contributes each of the target surface's type
-/// members as an [`ImplTypeInfo`] with [`ImplTypeBody::Synonym`] — NEVER
-/// `Variant`, even when the target's own `t` is a variant: the include's
-/// copy IS a synonym (`type ⟨P⟩.t = M.t`, `alias_member_decls`'s output),
-/// and — decisively — a seal on `P` abstracting an included variant type
-/// must NOT hide the TARGET's constructors (they still belong to, and are
-/// exported by, `M`; hiding them here would break `M`'s own users). This is
-/// the sound direction: upstream would hide `P`'s own ctor re-exports while
-/// leaving `M`'s originals untouched; the port's flat ctor namespace can
-/// only keep the originals.
+/// Include-aware — a `Bind::Include` with a resolved
+/// frozen target contributes the target surface's type members as
+/// [`ImplTypeInfo`] with [`ImplTypeBody::Synonym`] — NEVER `Variant`, even
+/// when the target's own `t` is a variant: the include's copy IS a synonym,
+/// and a seal on `P` must NOT hide the TARGET's constructors (they still
+/// belong to, and are exported by, `M`).
 fn build_impl_type_table(
     binds: &[&cst_v1::Bind],
     mod_path: &[String],
@@ -3343,8 +3050,8 @@ fn flatten_type_binds(binds: &cst_v1::TypeBindsErasedV1) -> Vec<&cst_v1::TypeBin
     out
 }
 
-/// `kind` (§3.1's kind-checking rules): every base must spell `"o"` — this
-/// port's first-order slice has no other kind.
+/// `kind`-checking: every base must spell `"o"` — this
+/// port only supports first-order kinds; no other kind exists.
 fn check_kind_all_o(kind: &ast_v1::KindV1) -> Result<(), TypeError> {
     if kind.first.name != "o" {
         return Err(unsupported_kind_error(&kind.first.name, kind.first.span));
@@ -3390,7 +3097,7 @@ fn arity_mismatch_error(
     )
 }
 
-/// Sub-slice 2e-2 §2.3 step 1: `with type t` declared with the WRONG arity
+/// `with type t` declared with the WRONG arity
 /// against the signature's OWN `type t :: kind` — upstream's
 /// `KindContradiction` (`moduleTypechecker.ml:465-470`).
 fn refine_arity_error(
@@ -3410,8 +3117,8 @@ fn refine_arity_error(
     )
 }
 
-/// Sub-slice 2e-2 §2.3 step 1 / §7: a `with type` refinement whose τ is a
-/// variant literal — 2d-3b's own standing "re-declaring a variant in a
+/// A `with type` refinement whose τ is a
+/// variant literal — the standing "re-declaring a variant in a
 /// signature is not supported" rule, extended to refinement.
 fn refine_variant_body_error(module_name: &str, name: &str, span: Span) -> TypeError {
     simple_error(
@@ -3425,16 +3132,14 @@ fn refine_variant_body_error(module_name: &str, name: &str, span: Span) -> TypeE
 }
 
 // ============================================================================
-// Phase B: the external-reference rewrite (spec §2.5, §3 phase B).
+// Phase B: the external-reference rewrite.
 // ============================================================================
 
 /// Rewrite EVERY `program.type_decls`/`synonym_decls` through
-/// [`rename_type_expr`] (scope = the decl's own qualified name — the
-/// generic owner-scope rule, §2.5), UNLESS no seal declared any type at all
-/// (`env.types` and `env.hidden_types` both empty), in which case `None` is
-/// returned and the caller passes the ORIGINAL `program` decls through
-/// untouched — preserving 2d-1's T9 bit-parity argument on every seal-free
-/// program (spec §3 phase B, "empty-map fast path").
+/// [`rename_type_expr`] (scope = the decl's own qualified name), UNLESS no
+/// seal declared any type at all, in which case `None` is returned and the
+/// caller passes the ORIGINAL decls through untouched — preserving the
+/// bit-parity argument on every seal-free program.
 fn maybe_rewrite_program_types<'s>(
     program: &Program<'s>,
     env: &StaticEnv,
@@ -3484,34 +3189,30 @@ fn maybe_rewrite_program_types<'s>(
 }
 
 /// Parameters shared by every call into the [`rename_type_expr`] family
-/// (spec §2.5/§3 phase B-C2):
+/// (phases B through C2):
 ///
-/// - `scope`: the qualified name of "whoever is asking" — a decl's own
-///   qualified name (phase B, phase C1's transparent-equality check), or a
-///   sealing module's own path (phase C2's `val`/command decls).
-/// - `force_stamp_owner`: when `Some(p)`, a reference whose owner is `p`
-///   gets stamped even though the owner-scope rule would otherwise keep it
-///   concrete — phase C2's "own" map (a seal's OWN abstract types must
-///   still be opaque on the COMMITTED scheme side). `None` everywhere else
-///   (including phase C2's "ext"/rigid-side map).
-/// - `enforce_self_containment`: phase C2 only (spec §3 phase C step 2) — a
-///   bare reference to THIS module's own type, when that type is hidden
-///   (impl defines it, sig never declared it), is a self-containment error
-///   rather than silently left concrete. `false` for phase B's general pass
-///   and phase C1's transparent-equality check (an impl's OWN internal type
-///   references are never restricted by its OWN hiding — hiding is purely
-///   an EXTERNAL-boundary concept).
+/// - `scope`: qualified name of "whoever is asking" — a decl's own name
+///   (phase B, C1) or a sealing module's path (phase C2's val/command decls).
+/// - `force_stamp_owner`: when `Some(p)`, a reference owned by `p` is
+///   stamped even though the owner-scope rule would keep it concrete —
+///   phase C2's "own" map (a seal's OWN abstract types must still be opaque
+///   on the COMMITTED scheme side). `None` everywhere else.
+/// - `enforce_self_containment`: phase C2 only — a bare reference to THIS
+///   module's own HIDDEN type is a self-containment error rather than left
+///   concrete. `false` elsewhere (an impl's own internal type references
+///   are never restricted by its own hiding — hiding is an EXTERNAL
+///   concept).
 struct RenameCtx<'a> {
     scope: &'a str,
     force_stamp_owner: Option<&'a str>,
     enforce_self_containment: bool,
 }
 
-/// The exhaustive `cst::ast::TypeExpr → TypeExpr` renamer (spec §2.5/§3
-/// phase B): every type-name atom, bare or applied-head, is resolved
+/// The exhaustive `cst::ast::TypeExpr → TypeExpr` renamer (phase B):
+/// every type-name atom, bare or applied-head, is resolved
 /// against `env.types`/`env.hidden_types` by [`rename_type_name`]. No `_`
 /// arm anywhere in this family — a future `cst::ast` type-grammar arm
-/// breaks the build here, not silently (spec §8 risk 4).
+/// breaks the build here, not silently.
 fn rename_type_expr(
     ty: &cst::ast::TypeExpr,
     ctx: &RenameCtx,
@@ -3538,11 +3239,9 @@ fn rename_type_expr(
             cod: Box::new(rename_type_expr(cod, ctx, env)?),
         },
         cst::ast::TypeExpr::Atom(p) => cst::ast::TypeExpr::Atom(rename_type_prod(p, ctx, env)?),
-        // optional-arg-rows increment 2: `?(l1 : ty1, …) dom -> cod` — no
-        // type NAME of its own to resolve at this level (`opt_dom`'s entries
-        // are `label : ty` pairs, not type references), so this arm just
-        // recurses into every `ty`/`dom`/`cod` sub-expression, exactly like
-        // `Fun`'s `opts`/`dom`/`cod` above.
+        // `?(l1 : ty1, …) dom -> cod` has no
+        // type NAME of its own at this level, so this arm just recurses
+        // into every `ty`/`dom`/`cod` sub-expression, like `Fun` above.
         cst::ast::TypeExpr::OptRowFun {
             opt_dom,
             dom,
@@ -3604,12 +3303,11 @@ fn rename_type_app(
             rest: Vec::new(),
         });
     }
-    // `arg1 … argN ctor`: the arguments (`head` + all but the last of `rest`)
-    // rename as ordinary 0-ary atoms; the final constructor renames through
-    // `rename_type_name` with the correct arity so the abstract-type
-    // arity-check (`used_arity`) still matches. A `Mod.t` constructor is a
-    // genuinely qualified reference (unrelated to this sealing pass's own
-    // dotted-string encoding), passed through like the old `AppliedMod`.
+    // `arg1 … argN ctor`: arguments rename as ordinary 0-ary atoms; the
+    // final constructor renames through `rename_type_name` with the
+    // correct arity so the abstract-type arity-check still matches. A
+    // `Mod.t` constructor is a qualified reference (unrelated to this
+    // pass's dotted-string encoding) and passes through.
     let n = a.rest.len();
     let arity = n; // total arguments = 1 (head) + (n - 1) = n
     let head = rename_type_atom(&a.head, ctx, env)?;
@@ -3639,11 +3337,10 @@ fn rename_type_atom(
                 .iter()
                 .map(|it| {
                     Ok(cst::ast::TypeCmdArgItem {
-                        // optional-arg-rows increment 3a: a `?(l:τ,…)` label
-                        // type could itself name a sealed abstract type
-                        // (`?(deco : M.t)`) — recurse each field's `ty` the
-                        // same as the slot's own mandatory `ty` below, or a
-                        // seal-pierce leak follows (spec §8/§14 risk 2).
+                        // A `?(l:τ,…)` label type can itself name a sealed
+                        // abstract type — recurse each field's `ty` like
+                        // the slot's own mandatory `ty` below, or a
+                        // seal-pierce leak follows.
                         opt_labels: it
                             .opt_labels
                             .iter()
@@ -3691,9 +3388,8 @@ fn rename_type_atom(
         // `Mod.t` — see `TypeApp::AppliedMod`'s arm above: pass through
         // unchanged, not this pass's own dotted-string encoding.
         cst::ast::TypeAtom::NameMod(n) => cst::ast::TypeAtom::NameMod(n.clone()),
-        // optional-arg-rows increment 2: an open record type's row-variable
-        // tail names no TYPE (it's a row variable, a different namespace
-        // entirely — `rename_type_name` never sees it), so only the field
+        // An open record's row-variable tail names no TYPE (a different
+        // namespace `rename_type_name` never sees), so only the field
         // types need renaming; `bar`/`var` pass through unchanged.
         cst::ast::TypeAtom::RecordOpen { orec, inner } => cst::ast::TypeAtom::RecordOpen {
             orec: orec.clone(),
@@ -3717,21 +3413,21 @@ fn rename_type_atom(
     })
 }
 
-/// The one place a type-name atom's fate is decided (spec §2.5/§3 phase B):
+/// The one place a type-name atom's fate is decided (phase B):
 ///
 /// 1. Not a dotted name at all (`"int"`, a builtin/unqualified nominal) —
 ///    never a sealed key; left unchanged.
-/// 2. "Under" `owner`'s scope (spec's `starts_with("M.N.")` rule) and NOT
+/// 2. "Under" `owner`'s scope (the `starts_with("M.N.")` rule) and NOT
 ///    force-stamped: this is a self-reference. If `enforce_self_
 ///    containment` and the type is `hidden_types` (defined by the impl but
-///    never declared in THIS sig), a self-containment error (spec §3 phase
-///    C step 2's "mentions its type … without declaring it"); otherwise
+///    never declared in THIS sig), a self-containment error ("mentions its
+///    type … without declaring it"); otherwise
 ///    left unchanged (concrete).
 /// 3. Otherwise (external, or force-stamped self): a `hidden_types` hit is
 ///    the "not exported" error; an `Abstract` hit renames to its stamp
 ///    (arity-checked); a `Transparent` hit — or no entry at all (unsealed)
 ///    — is left unchanged (transparent resolution happens later, through
-///    the ordinary synonym table, §2.1's θ-for-free argument).
+///    the ordinary synonym table — the θ-for-free argument).
 fn rename_type_name(
     name: &str,
     span: Span,
@@ -3746,14 +3442,11 @@ fn rename_type_name(
         });
     };
     let under = ctx.scope == owner || ctx.scope.starts_with(&format!("{owner}."));
-    // `force_stamp_owner` only ever overrides the "stay concrete" shortcut
-    // for a GENUINELY ABSTRACT type — a transparent, or entirely
-    // undeclared-but-not-abstract, own-type reference must stay concrete
-    // regardless of the "own" map's force flag (that map's whole point is
-    // "also stamp THIS seal's own abstract types on the committed side";
-    // it must never accidentally route a non-abstract own reference into
-    // the external/hidden-types dispatch below, where a same-owner
-    // reference was never meant to land).
+    // `force_stamp_owner` only overrides "stay concrete" for a GENUINELY
+    // ABSTRACT type — a transparent or undeclared-but-not-abstract own-type
+    // reference must stay concrete regardless, or a non-abstract own
+    // reference would wrongly route into the external/hidden-types
+    // dispatch below.
     let is_abstract_here = matches!(
         env.types.get(name).map(|d| &d.opacity),
         Some(TypeOpacity::Abstract { .. })
@@ -3810,7 +3503,7 @@ fn rename_type_name(
 }
 
 // ============================================================================
-// Phase C: the seal-table val/type half (spec §3 phase C).
+// Phase C: the seal-table val/type half.
 // ============================================================================
 
 fn phase_c_finish<'s>(
@@ -3825,13 +3518,10 @@ fn phase_c_finish<'s>(
             check_transparent_type(pt, seal, ck, mint, env)?;
         }
 
-        // Sub-slice 2e-1 §2.1 step 5: `seal.value_names`/`other_names` are
-        // ALREADY include-spliced (computed once in phase A by
-        // `struct_member_names_spliced`) — reusing them here (instead of
-        // recomputing off `seal.binds`, which has no way to see a
-        // `Bind::Include`'s target members) is what makes width-checking and
-        // hiding see an included member as defined, without re-threading
-        // `surfaces` into phase C at all.
+        // `seal.value_names`/`other_names` are already
+        // include-spliced (phase A) — reusing them here (rather than
+        // recomputing off `seal.binds`) is what makes width-checking and
+        // hiding see an included member as defined.
         let value_names = &seal.value_names;
         let other_names = &seal.other_names;
         let mut declared: Vec<String> = Vec::new();
@@ -3905,25 +3595,19 @@ fn phase_c_finish<'s>(
                     )?;
                     declared.push(cmd.name.clone());
                 }
-                // `TypeOpaque`/`Type` already fully handled by phase A/this
-                // function's `pending_transparent` loop above;
-                // `Module`/`Signature`/`Include` already errored in phase A
-                // (so this seal's `Result` would never have reached phase
-                // C at all) — nothing left to do for any other arm.
+                // `TypeOpaque`/`Type` handled by the `pending_transparent`
+                // loop above; `Module`/`Signature`/`Include` already
+                // errored in phase A — nothing left for any other arm.
                 _ => {}
             }
         }
         for vn in value_names {
             if !declared.contains(vn) {
                 let qualified = lower::qualify_type_key(&seal.mod_path, vn);
-                // Sub-slice 2d-3b §3.3-6: a PARENT-imposed synthetic child
-                // seal defers hiding to the parent's own trigger
-                // (`StaticEnv::member_revoke_triggers`, phase D) instead of
-                // committing `hidden` immediately — immediate commit here
-                // would break the parent-imposed-deferral rule (a SIBLING
-                // use of the omitted member, elsewhere in the parent's own
-                // subtree but before the parent's trigger fires, must still
-                // accept).
+                // A PARENT-imposed synthetic seal defers                // hiding to the parent's own trigger instead of committing
+                // `hidden` immediately — immediate commit would break a
+                // SIBLING use of the omitted member elsewhere in the
+                // parent's subtree, before the parent's trigger fires.
                 match &seal.parent_trigger {
                     Some((trigger, owner)) => {
                         let entry = env
@@ -3940,10 +3624,8 @@ fn phase_c_finish<'s>(
         }
     }
 
-    // Sub-slice 2d-3b §3.4/§3.6: all `PendingSeal`s ran first (insertion
-    // order); NOW the `PendingLink`s — links only READ+UPDATE existing
-    // `env.seals` entries (never register a new key), so parent-before-
-    // child prescan order stops mattering here.
+    // All `PendingSeal`s ran first; NOW the `PendingLink`s    // — links only READ+UPDATE existing `env.seals` entries, so
+    // parent-before-child prescan order stops mattering here.
     for link in links {
         let mut declared: Vec<String> = Vec::new();
         for d in &link.decls {
@@ -4009,14 +3691,11 @@ fn phase_c_finish<'s>(
                 _ => {}
             }
         }
-        // §3.4's last bullet: members `N` exports that `S_N` omits → the
-        // parent revoke list when this link itself sits under a synthetic,
-        // parent-imposed seal (deferred, like a `PendingSeal`'s own
-        // `parent_trigger`); otherwise (the direct `module M :> S1 = N :>
-        // S2` chain shape, `link.parent_trigger: None`) `M` IS the real
-        // top-level seal — nothing else depends on seeing the un-narrowed
-        // member first, so hiding is IMMEDIATE, exactly like a real (non-
-        // synthetic) `PendingSeal`'s own `env.hidden` commit.
+        // Members `N` exports that `S_N` omits go to the parent revoke
+        // list when this link sits under a synthetic, parent-imposed seal
+        // chain; otherwise (`link.parent_trigger: None`, `M` IS the
+        // top-level seal) hiding is IMMEDIATE, like a real `PendingSeal`'s
+        // own `env.hidden` commit.
         let prefix = format!("{}.", link.child_path.join("."));
         let omitted: Vec<String> = env
             .seals
@@ -4036,12 +3715,11 @@ fn phase_c_finish<'s>(
                 }
                 None => {
                     for m in omitted {
-                        // The member is likely ALREADY present in
-                        // `env.seals` (registered by the child's own REAL,
-                        // inner seal) — phase D's dispatch checks `seals`
-                        // BEFORE `hidden`, so an immediate hide here must
+                        // The member is likely ALREADY in `env.seals`
+                        // (from the child's own real inner seal) — phase D
+                        // checks `seals` before `hidden`, so this must
                         // also RETRACT the `seals` entry, or the inner
-                        // seal's commit would win regardless.
+                        // seal would win regardless.
                         env.seals.remove(&m);
                         env.hidden.insert(m, link.parent_name.clone());
                     }
@@ -4052,15 +3730,12 @@ fn phase_c_finish<'s>(
     Ok(())
 }
 
-/// Sub-slice 2d-3b §3.4: the [`PendingLink`] twin of [`process_seal_member`]
-/// — lower `S_N`'s (the outer, imposed) declared type exactly like a real
-/// seal member would, then check INNER ⊑ OUTER (`env.seals[qualified]`'s
-/// already-committed scheme, from the child's OWN real seal, must subsume
-/// what the parent additionally declares) and, on success, REPLACE the
-/// committed scheme with the outer one (rigid/stamp_marker stay the INNER
-/// ones — the spine still enforces the child's OWN seal against the real
-/// inference; soundness: inferred ⊑ inner (spine) ∧ inner ⊑ outer (link) ⟹
-/// inferred ⊑ outer, what escapes through the parent).
+/// The [`PendingLink`] twin of [`process_seal_member`] —/// lower `S_N`'s declared type like a real seal member would, then check
+/// INNER ⊑ OUTER (the child's own committed scheme must subsume what the
+/// parent additionally declares) and REPLACE the committed scheme with the
+/// outer one (rigid/stamp_marker stay INNER, since the spine still enforces
+/// the child's own seal); soundness: inferred ⊑ inner (spine) ∧ inner ⊑
+/// outer (link) ⟹ inferred ⊑ outer.
 #[allow(clippy::too_many_arguments)]
 fn process_link_member<'s>(
     _kw_span: Span,
@@ -4087,23 +3762,17 @@ fn process_link_member<'s>(
         ));
     };
 
-    // The STAGE half of the layer check, and the same relation the
-    // implementation-vs-signature half uses — upstream runs BOTH through one
-    // fold: `subtype_concrete_with_concrete`'s `ConcStructure/ConcStructure`
-    // case matches `(stage1, stage2)` (inner against outer) and only calls
-    // `subtype_poly_type` on an accepting row, reporting
-    // `NotASubtypeAboutValueStage` otherwise (`dev-0-1-0
-    // signatureSubtyping.ml:279-298`). Here `inner.stage` is the CHILD's own
-    // declared stage — cloned along with the rest of its `DeclaredVal`, so
-    // without this the parent's `val ~y` and the child's `val y` never met and
-    // the disagreement was silently accepted (the types unify).
+    // The STAGE half of the layer check — upstream folds this into the same
+    // `subtype_concrete_with_concrete`/`ConcStructure` case that checks the
+    // type, reporting `NotASubtypeAboutValueStage` on failure (`dev-0-1-0
+    // signatureSubtyping.ml:279-298`). Without it a parent's `val ~y` and a
+    // child's `val y` never meet — the types unify, so the disagreement
+    // would be silently accepted.
     //
-    // The stage is NOT overwritten the way the scheme is below. `inner.stage`
-    // is a check input only (the spine compares the BINDING against it,
-    // `check_program`'s sealed arm), and leaving it alone keeps the same
-    // soundness argument the scheme's doc comment makes: bound ⊑ inner (spine)
-    // ∧ inner ⊑ outer (here) ⟹ bound ⊑ outer, since `stage_conforms` is
-    // transitive.
+    // `inner.stage` is NOT overwritten the way the scheme is below — it
+    // stays a check input only (the spine compares the binding against it),
+    // which keeps the same transitive soundness argument: bound ⊑ inner
+    // (spine) ∧ inner ⊑ outer (here) ⟹ bound ⊑ outer.
     if !stage_conforms(inner.stage, outer_stage) {
         return Err(link_stage_mismatch_error(
             link,
@@ -4161,12 +3830,11 @@ fn process_link_member<'s>(
     Ok(())
 }
 
-/// The stage twin of [`link_mismatch_error`] — and the link twin of
-/// [`stage_mismatch_error`], deliberately the same shape as both: a sub-module
-/// member is sealed at one stage and the PARENT's signature re-declares it at
-/// another. Both stages are named, spelled the way every other staging
-/// diagnostic spells one ([`types::Stage::as_str`]), so the reader can see
-/// which `~` to add or drop and on which of the two signatures.
+/// The stage twin of [`link_mismatch_error`] and the link twin of
+/// [`stage_mismatch_error`]: a sub-module member is sealed at one stage and
+/// the PARENT's signature re-declares it at another. Both stages are named
+/// via [`types::Stage::as_str`], so the reader can see which `~` to add or
+/// drop.
 fn link_stage_mismatch_error(
     link: &PendingLink,
     member: &str,
@@ -4217,15 +3885,13 @@ fn link_mismatch_error(
     }
 }
 
-/// Spec §3 phase C step 1 / §2.1's "transparent `type t 'a… = τ` equality":
-/// lower BOTH sides with the SAME positional rigid tyvar map (one fresh
-/// [`StampMint`] draw), expand both through the session synonym table, and
-/// `unify` — with both sides fully rigid, `unify` degenerates to structural
-/// equality. The sig's declared τ is first passed through [`rename_type_expr`]
-/// (scope = this type's own qualified name) so an external abstract
-/// reference inside it (`type s = N.t`) resolves to the SAME stamp the
-/// impl's already-registered (and already leak-fix-rewritten, phase B)
-/// synonym body does.
+/// Phase C step 1, "transparent `type t 'a… = τ` equality": lower BOTH
+/// sides with the SAME positional rigid tyvar map, expand through the
+/// session synonym table, and `unify` — fully rigid, so `unify` degenerates
+/// to structural equality. The sig's declared τ is first passed through
+/// [`rename_type_expr`] so an external abstract reference inside it
+/// resolves to the SAME stamp the impl's already-registered synonym body
+/// does.
 fn check_transparent_type<'s>(
     pt: &PendingTransparent,
     seal: &PendingSeal,
@@ -4291,7 +3957,7 @@ fn check_transparent_type<'s>(
 }
 
 /// Which command-type shape (if any) a `Decl::Val`-family member must
-/// unify to, post-expansion (spec §2.3's shape guard).
+/// unify to, post-expansion (the shape guard).
 #[derive(Clone, Copy)]
 enum CmdShape {
     None,
@@ -4299,11 +3965,10 @@ enum CmdShape {
     Block,
 }
 
-/// Spec §3 phase C steps 2-3: the shared width/tyvar-closure/lower/rename/
+/// Phase C steps 2-3: the shared width/tyvar-closure/lower/rename/
 /// stamp/subsumption-prep pipeline for `Decl::Val`/`ValHorzCmd`/`ValVertCmd`
-/// — the same per-decl work 2d-1's `process_seal` did, plus the `ext`/`own`
-/// [`RenameCtx`] rewrite (§2.1's two opacity-entry-points) and, for a
-/// command decl, the post-expansion shape guard (§2.3).
+/// — plus the `ext`/`own` [`RenameCtx`] rewrite (the two opacity-entry
+/// points) and, for a command decl, the post-expansion shape guard.
 #[allow(clippy::too_many_arguments)]
 fn process_seal_member<'s>(
     kw_span: Span,
@@ -4341,11 +4006,10 @@ fn process_seal_member<'s>(
         )
     })?;
 
-    // `ext` (rigid/check side): THIS seal's own types stay concrete;
-    // OTHER sealed modules' abstract types become stamps; a bare own-type
-    // name the sig never declared is a self-containment error — but ONLY
-    // when this seal opted into type control at all (`declares_any_type`,
-    // `PendingSeal`'s doc comment; T6's pinned zero-type-decl accept).
+    // `ext` (rigid/check side): THIS seal's own types stay concrete; OTHER
+    // sealed modules' abstract types become stamps; a bare own-type name
+    // the sig never declared is a self-containment error, but only when
+    // this seal opted into type control (`declares_any_type`).
     let ext_ctx = RenameCtx {
         scope: &seal.module_name,
         force_stamp_owner: None,
@@ -4353,7 +4017,7 @@ fn process_seal_member<'s>(
     };
     let ext_ty = rename_type_expr(&cst_ty, &ext_ctx, env)?;
     // `own` (scheme/committed side): `ext` PLUS this seal's OWN abstract
-    // types also become stamps (§2.1 point 1 — every scheme escaping the
+    // types also become stamps (every scheme escaping the
     // seal mentions only the stamp).
     let own_ctx = RenameCtx {
         scope: &seal.module_name,
@@ -4383,14 +4047,12 @@ fn process_seal_member<'s>(
     let rigid_body = ck.expand_synonyms_in(&rigid_raw)?;
 
     match shape {
-        // Math commands share the `\` sigil with inline commands (no
-        // separate sig keyword upstream — `val \frac : math […]` is a
-        // `ValHorzCmd` exactly like `val \it : inline […]`), precedent
-        // `command_scheme`'s alias pass-through (`typecheck.rs:1441-1443`).
-        // Soundness is preserved: a sig declaring `math […]` for an inline
-        // binding (or vice versa) still fails at subsumption/unify
-        // (`UnifyError::Mismatch`) — this guard is only the early,
-        // better-message filter (math-package completion M1).
+        // Math commands share the `\` sigil with inline commands (`val
+        // \frac : math […]` is a `ValHorzCmd`, precedent
+        // `typecheck.rs:1441-1443`). Soundness holds regardless: a sig
+        // declaring `math […]` for an inline binding still fails at
+        // subsumption/unify — this guard is only the early, better-message
+        // filter.
         CmdShape::Inline
             if !matches!(&scheme_body, MonoType::InlineCmd(_) | MonoType::MathCmd(_)) =>
         {
@@ -4452,21 +4114,17 @@ fn width_missing_error(
     simple_error(Some(span), message)
 }
 
-/// The struct's defined member names, split into (value members — every
-/// `Decl::Val`-family width-check candidate — and type/module/signature
-/// names, kept separate purely for `width_missing_error`'s nicer wording).
-/// The same accessors `v1/lower.rs::lower_bind_v1` clones.
+/// The struct's defined member names, split into value members (every
+/// `Decl::Val`-family width-check candidate) and type/module/signature
+/// names, kept separate for `width_missing_error`'s nicer wording.
 ///
-/// **Sub-slice 2e-1 §2.1 step 5, include-aware.** At a `Bind::Include` with
-/// a resolved frozen target, extends `values`/`others` with the target
-/// surface's own member names, IN PLACE at the include's position —
-/// preserving interleaved source order, since the ctor-hide/revocation
-/// trigger key is "the LAST value member in source order" (§2.1 step 5) and
-/// elaboration's contiguous-alias assumption both count spliced members at
-/// the include's position. This function, `v1/surface.rs::build_binds`'s
-/// splice, and `v1/lower.rs`'s lowering splice all read the SAME frozen
-/// target surface, in the SAME order — never re-resolving — so the three
-/// stay in lock-step by construction.
+/// include-aware.** At a `Bind::Include` with a resolved
+/// frozen target, extends `values`/`others` with the target surface's own
+/// member names, IN PLACE at the include's position — preserving
+/// interleaved source order, since the ctor-hide/revocation trigger key is
+/// "the LAST value member in source order". This function and
+/// `v1/lower.rs`'s lowering splice both read the SAME frozen target
+/// surface, in the SAME order, so the two stay in lock-step.
 fn struct_member_names_spliced(
     binds: &[&cst_v1::Bind],
     mod_path: &[String],
@@ -4528,7 +4186,7 @@ fn any_vert_name(cmd: &AnyVertCmdTok) -> String {
     }
 }
 
-// ---- the v1 tyvar walker (spec §4.2 step 1b) -------------------------------
+// ---- the v1 tyvar walker ---------------------------------------------------
 
 /// Every distinct type-variable occurrence in `ty`, with its span — the v1
 /// twin of `typecheck.rs::collect_type_vars`, operating over `ast_v1::
@@ -4540,11 +4198,10 @@ fn collect_v1_type_vars(ty: &ast_v1::TypeExpr, out: &mut Vec<(String, Span)>) {
             collect_v1_type_vars(cod, out);
         }
         ast_v1::TypeExpr::Atom(p) => collect_v1_type_vars_prod(p, out),
-        // optional-arg-rows increment 2: a labeled-optional domain's entry
-        // types are nested type positions — walk each one, same as `dom`/
-        // `cod` (the row-variable tail, if any, is a ROW var, a different
-        // namespace this walker doesn't track — `check_tyvar_closure` below
-        // only enforces closure over TYPE vars).
+        // A labeled-optional domain's entry types are nested type
+        // positions — walk each one, same as `dom`/`cod` (the row-variable
+        // tail, if any, is a different namespace this walker doesn't
+        // track).
         ast_v1::TypeExpr::OptRowFun {
             opt_dom, dom, cod, ..
         } => {
@@ -4573,12 +4230,9 @@ fn collect_v1_type_vars_app(a: &ast_v1::TypeApp, out: &mut Vec<(String, Span)>) 
                 collect_v1_type_vars_atom(r, out);
             }
         }
-        // Command-type argument slots (Sub-slice 2d-2) are full `TypeExpr`s
-        // — walk each one, same as any other nested type position. A slot's
-        // `?(l:τ,…)` optional-label bundle (optional-arg-rows increment 3a)
-        // is the same kind of nested type position — walk its field types
-        // too, or a quantified type variable used ONLY inside a bundle
-        // (`?(l : 'a)`) would go unregistered.
+        // Command-type argument slots are full `TypeExpr`s        // — walk each one. A slot's `?(l:τ,…)` optional-label bundle is the
+        // same kind of nested type position — walk its field types too, or
+        // a quantified var used ONLY inside a bundle would go unregistered.
         ast_v1::TypeApp::InlineCmdTy { args, .. }
         | ast_v1::TypeApp::BlockCmdTy { args, .. }
         | ast_v1::TypeApp::MathCmdTy { args, .. } => {
@@ -4599,22 +4253,20 @@ fn collect_v1_type_vars_atom(a: &ast_v1::TypeAtom, out: &mut Vec<(String, Span)>
     match a {
         ast_v1::TypeAtom::Paren { inner, .. } => collect_v1_type_vars(&inner.0, out),
         // A closed record type's field types are nested type positions —
-        // walk each one, same as any other (mirrors `InlineCmdTy`/
-        // `BlockCmdTy`'s `args` walk above).
+        // walk each one, same as `InlineCmdTy`/`BlockCmdTy`'s `args` above.
         ast_v1::TypeAtom::Record { inner, .. } => {
             for f in &inner.fields {
                 collect_v1_type_vars(&f.ty.0, out);
             }
         }
         ast_v1::TypeAtom::Var(tv) => out.push((tv.name.clone(), tv.span)),
-        // `M.t` (Sub-slice 2d-2) is an ABSOLUTE reference — it can never
-        // spell one of THIS decl's own quantified type variables.
+        // `M.t` is an ABSOLUTE reference — it can never        // spell one of THIS decl's own quantified type variables.
         ast_v1::TypeAtom::LongName(_) => {}
         ast_v1::TypeAtom::Name(_) => {}
     }
 }
 
-/// §4.2 step 1b: every type variable `ty` mentions must be bound by `quant`
+/// Every type variable `ty` mentions must be bound by `quant`
 /// — deliberately stricter than `typecheck.rs::lower_type_atom`'s
 /// permissive fresh-var fallback (permissiveness here would silently weaken
 /// the seal).
@@ -4666,9 +4318,8 @@ mod tests {
     }
 
     /// Elaborate a dependency library (`module … = struct … end`) plus a
-    /// document body together, the same assembly `lib.rs::
-    /// compile_document_v1_with_trials` and `tests/v01_modules.rs::
-    /// elaborate_with_lib` both use.
+    /// document body together, the same assembly `lib.rs`/`v01_modules.rs`
+    /// tests use.
     fn elaborate_with_lib<'s>(
         store: &'s SymbolStore,
         lib_src: &str,
@@ -4698,12 +4349,10 @@ mod tests {
         (lib_file, program)
     }
 
-    /// T9: `check_program` ≡ `typecheck_verbose_with_version` on seal-free
-    /// inputs — same shape as `typecheck.rs`'s `l3_per_binding_tests::
-    /// assert_equivalent`, driven at the module-checker layer instead of
-    /// the raw per-binding API. `deps` is empty: no module system is
-    /// involved at all, isolating the parity claim to step 0's session-setup
-    /// order (spec §4.2 step 0's rationale).
+    /// `check_program` ≡ `typecheck_verbose_with_version` on seal-free
+    /// inputs, driven at the module-checker layer. `deps` is empty: no
+    /// module system is involved, isolating the parity claim to step 0's
+    /// session-setup order.
     fn assert_parity_no_deps(doc_src: &str) {
         let store = SymbolStore::new();
         let program = elaborate_doc_only(&store, doc_src);
@@ -4742,14 +4391,12 @@ mod tests {
         }
     }
 
-    /// T9's module-bearing twin: an UNSEALED dependency library exercises
-    /// the driver's `with_all` fallback arm (an alias present in neither
-    /// `seals` nor `hidden`) against the same whole-program comparison.
-    /// Sub-slice 2d-2's U16 extension: the unsealed module ALSO declares a
-    /// variant type, a synonym, and a command — exercising phase B's
-    /// empty-map fast path (this module has no seal at all, so `static_env.
-    /// types`/`hidden_types` stay empty for the WHOLE program) even though
-    /// `program.type_decls`/`synonym_decls` are non-empty.
+    /// The module-bearing twin of the whole-program/per-binding parity test
+    /// above: an UNSEALED dependency exercises the
+    /// driver's `with_all` fallback arm against the same whole-program
+    /// comparison. The module ALSO declares a variant type,
+    /// a synonym, and a command — exercising phase B's empty-map fast path
+    /// even though `program.type_decls`/`synonym_decls` are non-empty.
     #[test]
     fn seal_free_parity_with_unsealed_module() {
         let lib_src = "module M = struct\n\
@@ -4786,12 +4433,10 @@ mod tests {
         }
     }
 
-    /// Pins [`rewrite_hidden_error`]'s string coupling from BOTH sides (spec
-    /// §6 risk 2): the exact unbound-variable format
-    /// `typecheck.rs::infer`'s `Ast::Var` arm produces (`typecheck.rs:1383`
-    /// at the time of writing) must still trigger the rewrite. If this test
-    /// starts failing, `typecheck.rs`'s message was reworded — fix
-    /// `rewrite_hidden_error`'s PREFIX/SUFFIX constants in the SAME commit.
+    /// Pins [`rewrite_hidden_error`]'s string coupling: the exact
+    /// unbound-variable format `typecheck.rs`'s `Ast::Var` arm produces
+    /// must still trigger the rewrite. If this test fails, that message
+    /// was reworded — fix the PREFIX/SUFFIX constants in the SAME commit.
     #[test]
     fn hidden_rewrite_matches_typecheck_unbound_var_format() {
         let mut static_env = StaticEnv::default();
@@ -4830,9 +4475,9 @@ mod tests {
         );
     }
 
-    /// Sub-slice 2d-2 U20 pin: a HIDDEN command member's use, both inline
-    /// and block, must rewrite through `static_env.hidden` too (2d-1 only
-    /// matched the plain-variable format).
+    /// A HIDDEN command member's use, both inline
+    /// and block, must rewrite through `static_env.hidden` too (the earlier
+    /// check only matched the plain-variable format).
     #[test]
     fn hidden_rewrite_matches_command_formats() {
         let mut static_env = StaticEnv::default();
@@ -4870,7 +4515,7 @@ mod tests {
         );
     }
 
-    /// Sub-slice 2d-2 U9 pin: a hidden constructor's use, both expression
+    /// A hidden constructor's use, both expression
     /// and pattern sites, rewrites through `static_env.hidden_ctors`.
     #[test]
     fn hidden_rewrite_matches_ctor_formats() {
@@ -4916,7 +4561,7 @@ mod tests {
         );
     }
 
-    /// Sub-slice 2d-2 §2.6 pin: `strip_stamps` removes every maximal `#N`
+    /// `strip_stamps` removes every maximal `#N`
     /// run and nothing else.
     #[test]
     fn strip_stamps_removes_only_hash_digit_runs() {
@@ -4931,16 +4576,14 @@ mod tests {
     }
 
     // ========================================================================
-    // Sub-slice 2f-1 (`…/tmp/slice2f-functors.md` §5): the functor
-    // parameter-signature check + generativity-by-path pins.
+    // The functor parameter-signature check +    // generativity-by-path pins.
     // ========================================================================
 
-    /// Shared functor fixture for T-chk1/T-chk3: `Make = fun (Key : Ord) ->
-    /// struct val cmp2 x = Key.compare x x end`, applied to two differently-
-    /// shaped concrete arguments (`IntOrd`/`FlagOrd`). `use`'s parameter
-    /// type is forced by the REAL `Key.compare` reference (substituted to
-    /// `IntOrd.compare`/`FlagOrd.compare` per application) — a genuine
-    /// application constraint, not a possibly-unenforced type ascription.
+    /// Shared functor fixture for the tests below: `Make = fun (Key : Ord) ->
+    /// struct val cmp2 x = Key.compare x x end`, applied to two
+    /// differently-shaped arguments (`IntOrd`/`FlagOrd`) — the parameter
+    /// type is forced by the REAL `Key.compare` reference, a genuine
+    /// application constraint, not a possibly-unenforced ascription.
     const FUNCTOR_LIB: &str = "\
 module Lib = struct
   signature Ord = sig
@@ -4964,7 +4607,7 @@ module Lib = struct
 end
 ";
 
-    /// T-chk1 (spec §5): a functor applied to an argument that satisfies its
+    /// A functor applied to an argument that satisfies its
     /// parameter signature — `check_program` accepts.
     #[test]
     fn t_chk1_functor_param_sig_accept() {
@@ -4974,17 +4617,14 @@ end
             .expect("IntOrd satisfies Ord — check_program accepts");
     }
 
-    /// T-chk3 (spec §5, generativity): `Make IntOrd` and `Make FlagOrd` are
-    /// two INDEPENDENT instantiations — `Lib.A.cmp2`'s parameter type is
-    /// forced to `IntOrd.t` (= `int`) by its own substituted `Key.compare`
-    /// reference, which does NOT accept a `FlagOrd.t`-typed value
-    /// (`Lib.FlagOrd.y ()`, exposing `FlagOrd`'s `Yes` ctor through a plain
-    /// function, since a BARE qualified ctor reference like
-    /// `Lib.FlagOrd.Yes` has no expression-grammar support in this port,
-    /// `v1/lower.rs`'s "ctor carve-out" doc comment) — even though both
-    /// instantiations share the IDENTICAL functor body source, pinning
-    /// that each application is checked against its OWN substituted
-    /// argument, never a merged/confused one.
+    /// Generativity: `Make IntOrd` and `Make FlagOrd` are two
+    /// INDEPENDENT instantiations — `Lib.A.cmp2`'s parameter type is forced
+    /// to `IntOrd.t` (= `int`) by its own substituted `Key.compare`
+    /// reference, which does NOT accept a `FlagOrd.t`-typed value (via
+    /// `Lib.FlagOrd.y ()`, since a bare qualified ctor has no
+    /// expression-grammar support here) — even though both instantiations
+    /// share the IDENTICAL functor body, pinning that each application is
+    /// checked against its OWN substituted argument.
     #[test]
     fn t_chk3_functor_generativity_distinct_instantiations_do_not_cross_unify() {
         let store = SymbolStore::new();
@@ -4995,13 +4635,12 @@ end
         assert!(!err.message.is_empty());
     }
 
-    /// T-chk2 (spec §5, the core acceptance-negative test): a functor
-    /// applied to an argument MISSING a member its parameter signature
-    /// requires (`BadOrd` has no `compare`) is REJECTED with a
-    /// functor-framed "does not match … parameter signature" message —
-    /// even though the functor body here never itself calls `compare` (so
-    /// elaboration alone would never catch this; the dedicated width check,
-    /// `check_functor_applications`, is what rejects it).
+    /// The core acceptance-negative test: a functor applied to an
+    /// argument MISSING a member its parameter signature requires
+    /// (`BadOrd` has no `compare`) is REJECTED with a functor-framed
+    /// message — even though the functor body never itself calls
+    /// `compare`, so only the dedicated width check
+    /// (`check_functor_applications`) catches it.
     #[test]
     fn t_chk2_functor_param_sig_mismatch_missing_member_is_rejected() {
         let lib = "\

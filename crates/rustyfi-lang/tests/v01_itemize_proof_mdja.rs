@@ -1,32 +1,17 @@
 //! Vendoring wave-4 Batch B: `itemize.satyh`/`proof.satyh`/`md-ja.satyh` —
-//! three more real upstream SATySFi 0.1 packages, transliterated from
-//! `saphe-split@b836d512` (see each package file's own header banner for
-//! its exact upstream path + deltas) and PROVEN through the real
-//! production loader (`rustyfi_loader::load`, `lib_root =
-//! dist-v01/packages`, `RustyfiVersion::V0_1`) — not merely parsed.
-//! Dependency order: `itemize` (no deps) -> `proof` (independent) ->
-//! `md-ja` (LAST: `@require:`s `itemize`, transitively `math`/`code`/
+//! three more upstream SATySFi 0.1 packages, transliterated from
+//! `saphe-split@b836d512` (see each package's own header banner for its
+//! exact upstream path + deltas), PROVEN through the real production
+//! loader. Dependency order: `itemize` (no deps) -> `proof` (independent)
+//! -> `md-ja` (LAST: `@require:`s `itemize`, transitively `math`/`code`/
 //! `annot`/`hyph-english`/`unidata`/the 4 font stand-ins).
 //!
-//! Harness copied from `v01_stdlib.rs` (reproduced locally per that file's
-//! own established convention — no shared test-support library target
-//! exists in this crate): real loader -> per-file `lower_file_v1` prelude
-//! concatenation -> `elaborate_program` -> `typecheck` -> `eval::Interp::
-//! eval`, plus the same `assert_bare_access_unbound` qualified-export
-//! negative probe every vendored package gets once (`v01_modules.rs`'s
-//! `TopBinding::Module` wrapping makes every member reachable only as
-//! `Pkg.member`).
-//!
-//! All three packages here export ONLY command bindings (`+cmd`/`\cmd`, or
-//! `\cmd : math […]` for `proof`) — no plain top-level value. So instead
-//! of asserting a bare `Value` straight off a package function (as
-//! `v01_stdlib.rs` does for e.g. `Length.max`), the "value" probes below
-//! build a real `context`, invoke the command through `read-block`/
-//! `read-inline`/`read-math`, and extract a real computed `Length` via
-//! `get-natural-length`/`Inline.get-natural-advance` (`itemize`/`proof`) —
-//! or, for `md-ja` (whose `document` needs a full page-break to mean
-//! anything), a real rendered `DocumentValue` via `compile_document_v1`,
-//! mirroring `v01_stdlib.rs`'s own font/hyph-unidata capstone tests.
+//! All three packages export ONLY command bindings — no plain top-level
+//! value — so the "value" probes below build a real `context`, invoke the
+//! command through `read-block`/`read-inline`/`read-math`, and extract a
+//! computed `Length` via `get-natural-length`/`Inline.get-natural-advance`
+//! (`itemize`/`proof`), or a rendered `DocumentValue` via
+//! `compile_document_v1` (`md-ja`).
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -64,10 +49,8 @@ impl Drop for TempDoc {
     }
 }
 
-/// `FontMetrics` stub for the pure-computation ("value bar") tests below —
-/// never actually consulted for glyph shaping in a meaningful way (the
-/// `itemize`/`proof` value probes only measure natural lengths of ASCII-
-/// free or near-empty content); mirrors `v01_stdlib.rs`'s `NoFonts`.
+/// Stub — never consulted; the itemize/proof value probes only measure
+/// natural lengths of ASCII-free or near-empty content.
 struct NoFonts;
 
 impl FontMetrics for NoFonts {
@@ -82,15 +65,11 @@ impl FontMetrics for NoFonts {
     }
 }
 
-/// A real, FULLY-COVERING `FontMetrics`, for `md-ja`'s document capstone,
-/// which DOES render real text through `MDJa.document`'s `read-inline`/
-/// `read-block` passes. Unlike `v01_stdlib.rs`'s/`v01_slice1.rs`'s own
-/// ASCII-only `Mono`, this stub advances EVERY character: `md-ja`'s
-/// `document` renders a CJK back-matter heading (`参考文献`, "References")
-/// whenever `\reference` has populated `reference-acc` — which this
-/// capstone exercises — so an ASCII-only stub would fail glyph lookup on
-/// `参`. `itemize`/`proof`'s own value probes reuse this same stub (they
-/// only render ASCII, so the wider coverage is harmless there).
+/// A FULLY-COVERING `FontMetrics` (advances EVERY character, unlike the
+/// ASCII-only `Mono` elsewhere): `md-ja`'s document renders a CJK back-
+/// matter heading (`参考文献`) whenever `\reference` has populated
+/// `reference-acc`, which this capstone exercises — an ASCII-only stub
+/// would fail glyph lookup on `参`.
 struct Mono;
 
 impl FontMetrics for Mono {
@@ -112,10 +91,7 @@ fn as_v01(f: &LoadedFile) -> &rustyfi_syntax::cst_v1::FileV1 {
     }
 }
 
-/// Load `src` through the REAL multi-file loader, assemble the synthetic
-/// `cst::File` exactly the way `compile_document_v1_with_trials` does
-/// (`lib.rs:165-195`), then elaborate -> typecheck -> eval directly to a
-/// `Value` (mirrors `v01_stdlib.rs`'s own `compile_v01_via_loader`).
+/// Reproduces `compile_document_v1_with_trials` (`lib.rs:165-195`).
 fn compile_v01_via_loader(tag: &str, src: &str) -> Result<Value, String> {
     compile_v01_via_loader_with_metrics(tag, src, &NoFonts)
 }
@@ -156,14 +132,9 @@ fn compile_v01_via_loader_with_metrics(
     };
 
     let env = primitives::base_env_with_version(RustyfiVersion::V0_1);
-    // NOTE (vs `v01_stdlib.rs`'s harness, which uses the bare
-    // `Scope::new`): the elaborate scope's version gates the `?(l = x)`
-    // labeled-optional path (`elaborate.rs`'s `fun_rows_to_ast`/bundle
-    // lowering rejects it under 0.0.6), and `Scope::new` defaults to
-    // 0.0.6. The wave-0 stdlib packages never used a `?(…)` binder, so
-    // `v01_stdlib.rs` never hit this; `itemize`/`proof`/`md-ja` all do
-    // (def-site optional command bundles), so this harness must elaborate
-    // under an explicit V0_1 scope.
+    // `Scope::new` defaults to 0.0.6, which rejects the `?(l = x)`
+    // labeled-optional path these packages all use — hence the explicit
+    // V0_1 scope.
     let store = rustyfi_lang::symbol::SymbolStore::new();
     let scope = elaborate::Scope::new_with_version(&store, env.names(), RustyfiVersion::V0_1);
     let elaborated =
@@ -171,24 +142,20 @@ fn compile_v01_via_loader_with_metrics(
     typecheck::typecheck_with_version(&elaborated, RustyfiVersion::V0_1)
         .map_err(|e| format!("typecheck: {e}"))?;
     let mut interp = eval::Interp::new(metrics);
-    // `coerce_graphics_result` (mirrors `v01_stdlib_graphics.rs`'s harness)
-    // forks on `interp.version` at EVAL time (unlike primitive *selection*,
-    // which `base_env_with_version` already resolved): a graphics callback
-    // primitive (`inline-graphics`/`unite-graphics`/the deco family, all
-    // fired for real by `itemize`'s bullets and `proof`'s inference bar)
-    // expects the callback to return a single `graphics` under V0_1 but a
-    // `list graphics` under the default V0_0 — so this must be set, or
-    // those callbacks eval-error with "expected list, got graphics".
+    // `coerce_graphics_result` forks on `interp.version` at EVAL time (not
+    // primitive selection, already resolved by `base_env_with_version`):
+    // graphics callbacks (fired by itemize's bullets, proof's inference
+    // bar) return `graphics` under V0_1 but `list graphics` under the
+    // default V0_0 — must be set or these eval-error "expected list, got
+    // graphics".
     interp.version = RustyfiVersion::V0_1;
     interp
         .eval(&env, &rustyfi_lang::ast::debrand(&elaborated.body, &store))
         .map_err(|e| format!("eval: {e}"))
 }
 
-/// The qualified-export negative probe every vendored package gets once
-/// (see this module's doc comment): `bare_expr` referencing a package
-/// member WITHOUT its `Pkg.` qualifier, after only `@require: <require>`,
-/// must fail "unbound variable".
+/// The qualified-export negative probe every vendored package gets once:
+/// `bare_expr` without its `Pkg.` qualifier must fail "unbound variable".
 fn assert_bare_access_unbound(tag: &str, require: &str, bare_expr: &str) {
     let src = format!("@require: {require}\n{bare_expr}");
     let err = compile_v01_via_loader(tag, &src)
@@ -207,13 +174,8 @@ fn as_length(v: Value) -> Length {
     }
 }
 
-/// Run `f` on a thread with a generously large stack — every package in
-/// this file transitively `@require:`s `list.satyg` (over 280 lines,
-/// bigger than `stdlib_tier0.rs`'s own `gr.satyh` benchmark), which needs
-/// more depth than the default stack allows through syan's recursive-
-/// descent parser (mirrors `v01_stdlib.rs`'s own `run_with_big_stack`,
-/// reproduced locally per this crate's established per-file-helper
-/// convention).
+/// Needs a big stack: every package here transitively `@require:`s
+/// `list.satyg` (280+ lines), exceeding syan's default recursion depth.
 fn run_with_big_stack(f: impl FnOnce() + Send + 'static) {
     std::thread::Builder::new()
         .stack_size(64 * 1024 * 1024)
@@ -223,16 +185,10 @@ fn run_with_big_stack(f: impl FnOnce() + Send + 'static) {
         .expect("big-stack thread panicked (see assertion above)");
 }
 
-// ============================================================================
-// `itemize.satyh` — sealed; `+listing`/`\listing`/`+enumerate`/`\enumerate`
-// are ALL commands (no plain value export), so the "value" probe below
-// builds a `context` (via `get-initial-context`, needing only a command
-// VALUE for the initial inline-math command slot — `V01Mini`'s own
-// `\math`) and measures `+Itemize.listing`'s/`+Itemize.enumerate`'s
-// rendered `block-boxes` through the bare global `get-natural-length`
-// primitive (`primitives.rs`'s own doc comment on it: "`get-natural-
-// width`'s block sibling").
-// ============================================================================
+// `itemize.satyh` — sealed; `+listing`/`\listing`/`+enumerate`/
+// `\enumerate` are ALL commands (no plain value export), so the probe
+// below builds a `context` and measures rendered `block-boxes` via the
+// bare `get-natural-length` primitive.
 
 #[test]
 fn itemize_bare_listing_is_unbound_without_qualification() {
@@ -278,21 +234,14 @@ in
     });
 }
 
-// ============================================================================
-// `proof.satyh` — sealed; `\derive`/`\derive-multi` are `math […]` command
-// bindings with a LEADING `?(name:math-text, b:bool)` optional bundle
-// (optional-arg-rows increment 3b-α, `typecheck.rs`'s `math_command_
-// scheme_v01` — landed, see that increment's own seal-gate tests in
+// `proof.satyh` — sealed; `\derive`/`\derive-multi` are `math […]`
+// commands with a LEADING `?(name:math-text, b:bool)` optional bundle
+// (`typecheck.rs`'s `math_command_scheme_v01`; seal-gate tests live in
 // `v01_opt_cmd_rows.rs`). Math-mode command APPLICATION has no `?(…)`
-// bundle form (increment 3b-α's own test comment: "the call is
-// necessarily unbundled"), so `name`/`b` simply default to `None` here —
-// this probe only needs the two MANDATORY arguments to exercise the
-// command end-to-end. The `list math-text` mandatory argument is built as
-// an ordinary value OUTSIDE math mode (`[${...}, ${...}]`) and threaded in
-// via `MathArg::ParenEscape` (`!(...)`, `cst_v1.rs`'s own `MathArg` enum);
-// the trailing `math-text` argument uses the ordinary `{...}` math-group
-// arg form.
-// ============================================================================
+// bundle form, so `name`/`b` default to `None` here — this probe only
+// exercises the two mandatory arguments. The `list math-text` argument is
+// built outside math mode and threaded in via `MathArg::ParenEscape`
+// (`!(...)`).
 
 #[test]
 fn proof_bare_derive_is_unbound_without_qualification() {
@@ -323,25 +272,13 @@ Inline.get-natural-advance (embed-math ctx (read-math ctx ${\\Proof.derive!(mlst
     });
 }
 
-// ============================================================================
 // `md-ja.satyh` — sealed; a real document CLASS (`document : (| title,
-// author |) -> block-text -> document`, its own `page-break`), so unlike
-// `itemize`/`proof` above this package is exercised with a real, full,
-// hand-written `.saty` document — mirroring `v01_stdlib.rs`'s font/hyph-
-// unidata capstone tests AND `crates/rustyfi/tests/e2e.rs`'s
-// `v01_stdja_capstone_renders_to_extractable_text` (same shape, scoped to
-// this crate's own `compile_document_v1` entry point rather than a full
-// PDF render). Exercises: `+h1` (auto-numbering), `+p`, `\emph`/`\strong`,
-// `\link`/`\reference` (the PDF-annotation frame + back-matter reference
-// list), `\code`/inline monospace framing, `\hard-break`, `+ul-block`
-// (which internally calls `+Itemize.listing?(break = true)(...)` — the
-// batch's itemize -> md-ja dependency, exercised for real here), `+code`
-// (this package's own ADAPTED implementation — see `md-ja.satyh`'s header
-// banner — routing through `\Code.Default.code` since this port's `code`
-// stand-in has no block-level `+code`/`Console`), `+quote`, `+hr`. `\img`
-// is deliberately NOT exercised (would need a real loadable image file on
-// disk, out of scope for this probe).
-// ============================================================================
+// author |) -> block-text -> document`), so unlike `itemize`/`proof` this
+// is exercised with a real, full document rather than a bare probe.
+// `+code` is this package's own ADAPTED implementation, routing through
+// `\Code.Default.code` since this port's `code` stand-in has no block-
+// level `+code`/`Console`. `\img` is deliberately NOT exercised (needs a
+// real loadable image file on disk).
 
 #[test]
 fn mdja_bare_emph_is_unbound_without_qualification() {

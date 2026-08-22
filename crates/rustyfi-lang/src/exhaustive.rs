@@ -1,5 +1,5 @@
-//! Match exhaustiveness and redundancy checking (typechecker-completion plan,
-//! §Slice 1) — a row-major reimplementation of the Maranget "usefulness"
+//! Match exhaustiveness and redundancy checking (Slice 1) — a row-major
+//! reimplementation of the Maranget "usefulness"
 //! matrix algorithm v0.0.6 uses in `src/frontend/exhchecker.ml`. Non-fatal:
 //! this module only produces [`MatchWarning`]s, never a [`crate::typecheck::TypeError`]
 //! (mirrors `exhchecker.ml`'s own warn-and-continue policy — see that
@@ -61,8 +61,8 @@ enum HeadKey {
 /// One row/column entry of the usefulness matrix: `Vec<Pattern>` (a row),
 /// `Vec<Vec<Pattern>>` (a whole matrix `P`). Patterns are cloned freely
 /// throughout this module rather than borrowed — matches are small
-/// hand-written things, not a performance-critical path (see the plan's
-/// "Matrix blow-up" risk note: no mitigation needed at this milestone).
+/// hand-written things, not a performance-critical path (matrix blow-up
+/// needs no mitigation at this milestone).
 type Matrix<'s> = Vec<Vec<Pattern<'s>>>;
 
 /// Classify a pattern's head shape, normalizing away `Var`/`As` first
@@ -101,7 +101,7 @@ fn head_of<'s>(p: &Pattern<'s>) -> Option<(HeadKey, Vec<Pattern<'s>>)> {
 /// Pattern-bound *variables* are interned, so this takes the store and
 /// resolves them back to their source text — the rendered string lands
 /// verbatim in a [`MatchWarning`] the golden tests diff, so it must be the
-/// name the user wrote, never a symbol index (design doc §7).
+/// name the user wrote, never a symbol index.
 fn render_pattern<'s>(store: &'s SymbolStore, p: &Pattern<'s>) -> String {
     let go = |q: &Pattern<'s>| render_pattern(store, q);
     match p {

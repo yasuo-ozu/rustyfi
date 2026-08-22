@@ -1,4 +1,4 @@
-//! The elaborated abstract syntax tree (a milestone-1 subset of
+//! The elaborated abstract syntax tree (a subset of
 //! `abstract_tree` in types.cppo.ml). Produced from the surface CST by
 //! `elaborate`; consumed by the evaluator.
 //!
@@ -6,22 +6,21 @@
 //!
 //! Every node type here is generic over `I`, the representation of a
 //! **lexical identifier** — precisely those names that become keys in the
-//! runtime environment ([`crate::value::Env`]). Two instantiations exist
-//! (Phase 1):
+//! runtime environment ([`crate::value::Env`]). Two instantiations exist:
 //!
 //! * `Ast<Symbol<'s>>` — the *compile-side* tree, produced by
 //!   [`crate::elaborate`] and consumed by [`crate::typecheck`]. Identifiers
 //!   are interned [`crate::symbol::Symbol`]s: `Copy`, 4 bytes, compared and
 //!   hashed as integers, and branded to the [`crate::symbol::SymbolStore`]
 //!   that minted them.
-//! * `Ast<String>` — the *runtime* tree, and the *default* (so `Ast`
-//!   unadorned still means exactly what it always did). This is what
-//!   [`crate::compile`] lowers and what [`crate::value::Value`] embeds in its
-//!   quoted-text and closure payloads. It has **no lifetime**, which is the
-//!   whole point: a branded `Symbol<'s>` reaching `Value` would cascade `'s`
-//!   through all 172 `prim_*` functions for zero speed (design doc §1).
+//! * `Ast<String>` — the *runtime* tree, and the *default*, so unadorned
+//!   `Ast` means this one. It is what `crate::compile` lowers and what
+//!   [`crate::value::Value`] embeds in its quoted-text and closure payloads.
+//!   It has **no lifetime**, which is the whole point: a branded `Symbol<'s>`
+//!   reaching `Value` would cascade `'s` through all 172 `prim_*` functions
+//!   for zero speed.
 //!
-//! [`crate::compile::compile_program`] is the membrane between the two: it
+//! `compile::compile_program` is the membrane between the two: it
 //! [de-brands](Ast::map_idents) the branded tree to `Ast<String>` once, at
 //! compile time, so the compiler and the entire runtime stay untouched.
 //!
@@ -32,7 +31,7 @@
 //! char data. Record field labels, constructor tags, and labeled-optional
 //! *labels* are separate data namespaces that reach the runtime as
 //! `BTreeMap` keys and value tags — they stay `String` end-to-end and must
-//! never be symbolized (design doc §7). Note the asymmetry in
+//! never be symbolized. Note the asymmetry in
 //! [`Ast::LambdaOpt`]: an optional argument's **label** is data (`String`),
 //! its **binder** is a lexical variable (`I`).
 
@@ -44,11 +43,10 @@ use std::rc::Rc;
 /// [`crate::elaborate`] produces and [`crate::typecheck`] consumes, with each
 /// lexical identifier interned into a [`crate::symbol::SymbolStore`].
 ///
-/// The names deliberately shadow the unparameterised ones, so the front half
-/// of the pipeline reads exactly as it did before interning — `use
-/// crate::ast::branded::{Ast, Pattern, ..}` and every `Ast::Var(..)` /
-/// `match .. { Ast::LetIn(..) => }` site is unchanged apart from the `<'s>`
-/// its enclosing signature now carries.
+/// The names deliberately shadow the unparameterised ones, so that after a
+/// `use crate::ast::branded::{Ast, Pattern, ..}` the front half of the
+/// pipeline reads exactly like the unbranded one, apart from the `<'s>` its
+/// enclosing signature carries.
 pub mod branded {
     use crate::symbol::Symbol;
 
@@ -77,12 +75,11 @@ pub enum Ast<I = String> {
     /// `Lambda`, all names are in scope in all bodies.
     LetRecIn(Vec<(I, Rc<Ast<I>>)>, Box<Ast<I>>),
     /// `let-math \cmd param* = expr in body` — a math-command binding.
-    /// Evaluates identically to `LetIn` (a plain named binding; see
-    /// `eval.rs`); the DISTINCT variant exists purely so the typechecker
-    /// can tell it apart from an ordinary `\`-sigiled `LetIn` (a
-    /// `let-inline` binding or a qualified-name alias of one) without
-    /// re-deriving that from the shared `\` sigil — see `typecheck.rs`'s
-    /// `Checker::math_command_scheme`.
+    /// Evaluates identically to `LetIn`; the DISTINCT variant exists purely
+    /// so the typechecker can tell it apart from an ordinary `\`-sigiled
+    /// `LetIn` (a `let-inline` binding, or a qualified-name alias of one)
+    /// without re-deriving that from the shared `\` sigil — see
+    /// `typecheck.rs`'s `Checker::math_command_scheme`.
     LetMathIn(I, Box<Ast<I>>, Box<Ast<I>>),
     IfThenElse(Box<Ast<I>>, Box<Ast<I>>, Box<Ast<I>>),
     Match(Box<Ast<I>>, Vec<MatchArm<I>>),
@@ -97,7 +94,7 @@ pub enum Ast<I = String> {
     InlineText(Rc<Vec<IText<I>>>),
     /// Quoted block text: evaluated only when `read-block` runs it.
     BlockText(Rc<Vec<BText<I>>>),
-    /// Quoted math text (`${…}`); typesetting is deferred to phase 7, the
+    /// Quoted math text (`${…}`); typesetting is deferred, the
     /// value is carried opaquely until then.
     MathText(Rc<Vec<MathElem<I>>>),
     /// `let-mutable x <- init in body` — binds `x` to a mutable cell.
@@ -116,10 +113,10 @@ pub enum Ast<I = String> {
     /// `f ?(l = e, …) arg` — SATySFi 0.1 labeled-optional application
     /// (upstream `Apply(labmap, e1, e2)`). `opts` is non-empty by
     /// construction: a bundle-less 0.1 application lowers to plain
-    /// [`Ast::Apply`]. Labels are deduplicated at elaboration. At
+    /// [`Ast::Apply`]. Labels are deduplicated at elaboration; at
     /// beta-reduction a provided `?(l = e)` binds the closure's `l` binder to
-    /// `Some e`; any of the closure's declared labels the call omits bind
-    /// `None` (see `eval::Interp::apply_with_opts`).
+    /// `Some e`, and any declared label the call omits binds `None` (see
+    /// `eval::Interp::apply_with_opts`).
     ApplyOpt {
         func: Box<Ast<I>>,
         opts: Vec<(String, Ast<I>)>,
@@ -140,51 +137,38 @@ pub enum Ast<I = String> {
         body: Rc<Ast<I>>,
     },
     /// A version tag around one spliced cross-version dependency binding's
-    /// RHS (Slice X2a,, Option C). `elaborate.rs`'s cross-version splice
-    /// wraps each binding contributed by a `LoadedCst::V0_0` dependency
-    /// (`lib.rs`'s `compile_document_v1_with_trials` splice arm) in
+    /// RHS. `elaborate.rs`'s cross-version splice
+    /// wraps each binding contributed by a `LoadedCst::V0_0` dependency in
     /// `VersionScope(V0_0, rhs)`, at RHS granularity (never the surrounding
-    /// `LetIn`/`LetRecIn` node, and never the continuation that follows it
-    /// — see `elaborate::elaborate_program_with_versions`'s doc comment).
-    /// Three consumers read the tag, all pushing/popping a cursor around
-    /// recursing into `body`:
+    /// `LetIn`/`LetRecIn` node, and never the continuation that follows it).
+    /// Three consumers push/pop a cursor around recursing into `body`:
     /// - `compile.rs`'s `Compiler::current_version` — which base
     ///   environment (`V0_1`'s or `V0_0`'s) an unshadowed `Ast::Var`
     ///   constant-folds against, so a version-forked primitive
     ///   (`page-break`, `math-*`, …) freezes to the RIGHT version's
-    ///   `PrimDef` at compile time (`compile.rs:120-192`'s existing fold —
-    ///   X2a's whole mechanism rides on that fold already being the only
-    ///   version-sensitive resolution in the pipeline).
-    /// - `eval.rs`'s `Interp::version` — the R2 fix: any runtime fork that
-    ///   reads it (`primitives.rs`'s `reflect_math_elem`/
-    ///   `coerce_graphics_result`/`make_paren_run`) sees `V0_0` while
-    ///   evaluating on behalf of this subtree.
+    ///   `PrimDef` at compile time (the only version-sensitive resolution in
+    ///   the whole pipeline).
+    /// - `eval.rs`'s `Interp::version` — any runtime fork that reads it
+    ///   (`primitives.rs`'s `reflect_math_elem`/`coerce_graphics_result`/
+    ///   `make_paren_run`) sees `V0_0` while evaluating on behalf of this
+    ///   subtree.
     /// - `typecheck.rs`'s base-type-env swap — the subtree's *internal*
-    ///   forked-primitive-type use (e.g. constructing a `page` ADT to hand
-    ///   to `page-break`) checks against `V0_0`'s primitive types.
+    ///   forked-primitive-type use checks against `V0_0`'s primitive types.
     ///
-    /// **Never emitted on a pure single-version load** — `elaborate_program`
-    /// delegates to `elaborate_program_with_versions` with an empty index
-    /// set, so this variant is structurally inert (no arm anywhere ever
-    /// executes) on the pure-0.0.6 and pure-0.1 paths; the GOLDEN
-    /// byte-identical invariant holds because the code producing/consuming
-    /// it is simply never reached there, not because of any runtime check.
+    /// **Never emitted on a pure single-version load** — structurally inert
+    /// on the pure-0.0.6/pure-0.1 paths: no arm executes, no runtime check
+    /// is involved.
     VersionScope(RustyfiVersion, Box<Ast<I>>),
     /// `ModuleScope(["M", "N"], rhs)`: marks that `rhs` is the body of a
     /// member of module `M.N`, so a BARE constructor reference inside it
-    /// resolves against that module's constructors first (the type/ctor analog
-    /// of `push_named_binding`'s value `Scope::rename`). Transparent
-    /// everywhere except `Checker::infer`/`bind_pattern`, which push the path
-    /// onto `Checker::ctor_scope` and try qualified ctor keys before the bare
-    /// fallback — no constructor NAME string ever changes (so eval,
-    /// exhaustiveness, and error/warning text stay byte-identical). Wraps a
-    /// module member's RHS only (never the spine `LetIn`/`LetRecIn` node),
-    /// exactly like `VersionScope`.
+    /// resolves against that module's constructors first (the type/ctor
+    /// analog of `push_named_binding`'s value `Scope::rename`). Transparent
+    /// everywhere except `Checker::infer`/`bind_pattern`, which push the
+    /// path and try qualified ctor keys before the bare fallback — no
+    /// constructor NAME string ever changes (eval, exhaustiveness, and
+    /// error/warning text stay byte-identical). Wraps a module member's RHS
+    /// only, exactly like `VersionScope`.
     ModuleScope(Vec<String>, Box<Ast<I>>),
-    /// `&e` — quote. Evaluated at stage 0, it does NOT run `e`: it
-    /// partially evaluates it into residual code and yields that code as a
-    /// value (`Value::Code`), typed `code ty`. Upstream's `UTNext`/`Next`
-    /// (`parser.mly:796`, `evaluator.cppo.ml`'s `interpret_1`).
     /// Marks `body` as coming from a file that declared a stage other than
     /// the default (`@stage: 0` / `@stage: persistent`), so the typechecker
     /// reads it at that stage and its `&` quotes are legal there.
@@ -194,6 +178,10 @@ pub enum Ast<I = String> {
     /// per-file property has to travel with the bindings it came from or be
     /// lost at the merge.
     StageScope(crate::types::Stage, Box<Ast<I>>),
+    /// `&e` — quote. Evaluated at stage 0, it does NOT run `e`: it partially
+    /// evaluates it into residual code and yields that code as a value
+    /// (`Value::Code`), typed `code ty`. Upstream's `UTNext`/`Next`
+    /// (`parser.mly:796`, `evaluator.cppo.ml`'s `interpret_1`).
     Next(Box<Ast<I>>),
     /// `~e` — splice. Legal inside a quote (stage 1): `e` is evaluated NOW,
     /// at stage 0, and the code it yields is spliced in where the `~e` stood.
@@ -201,18 +189,15 @@ pub enum Ast<I = String> {
     Prev(Box<Ast<I>>),
 }
 
-/// One command-application argument (SATySFi 0.1 optional-arg-rows increment
-/// 3b-β): `arg` is the ordinary positional argument value (exactly what
-/// `Vec<Ast>` used to carry directly), `opts` is this argument's supplied
+/// One command-application argument (3b-β): `arg` is the ordinary
+/// positional argument value, `opts` is this argument's supplied
 /// `?(l = e, …)` labeled-optional bundle — upstream's `UTCommandArg of
-/// (label * expr) list * expr` (`types.cppo.ml:583-584`). Every producer
-/// this port has BEFORE increment 3b (all of 0.0.6, and every V0_1 command
-/// call with no bundle — the only kind increment 3a's demand census found)
-/// emits `opts: vec![]`, so this is additive: an empty bundle behaves
-/// exactly like the old bare `Ast` did. At runtime, a non-empty `opts` folds
-/// through `eval::Interp::apply_with_opts` (like `Ast::ApplyOpt` does for a
-/// plain-value application) instead of a plain `apply`; each label the
-/// command declares but this call omits still defaults to `None` there.
+/// (label * expr) list * expr` (`types.cppo.ml:583-584`). All of 0.0.6, and
+/// every V0_1 command call with no bundle, emits `opts: vec![]`, behaving
+/// exactly like a bare `Ast`. A non-empty `opts` folds through
+/// `eval::Interp::apply_with_opts` (like `Ast::ApplyOpt`) instead of a plain
+/// `apply`; each label the command declares but this call omits still
+/// defaults to `None` there.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CmdArg<I = String> {
     pub opts: Vec<(String, Ast<I>)>,
@@ -220,7 +205,7 @@ pub struct CmdArg<I = String> {
 }
 
 /// One quoted math element (structure mirrors the `mathmain`/`mathtop`/
-/// `mathbot` rules; only carried, not typeset, until phase 7).
+/// `mathbot` rules; only carried, not typeset, until later).
 #[derive(Clone, Debug, PartialEq)]
 pub enum MathElem<I = String> {
     /// A run of math characters/symbols (`MATHCHAR`).
@@ -234,12 +219,11 @@ pub enum MathElem<I = String> {
     /// `base '`+ (primes count as a superscript)
     Primes(Box<MathElem<I>>, usize),
     /// `\cmd args…` in math mode; sigil included. `args` is [`CmdArg`]-shaped
-    /// for uniformity with `IText::Cmd`/`BText::Cmd` (`check_cmd_args`/the
-    /// runtime command fold are shared across all three); the math-mode
-    /// application grammar (`cst::ast::MathArg`) has no `?(l=e)` bundle form
-    /// at all (math command *arguments* are always bracket groups — `{…}` /
-    /// `!{…}` / `!<…>` / `!(…)`, upstream `narg`), so every `CmdArg` here
-    /// has `opts: vec![]` by construction — see `elaborate::math_bot`.
+    /// for uniformity with `IText::Cmd`/`BText::Cmd` (the runtime command
+    /// fold is shared across all three); the math-mode application grammar
+    /// has no `?(l=e)` bundle form at all (math command *arguments* are
+    /// always bracket groups — `{…}` / `!{…}` / `!<…>` / `!(…)`, upstream
+    /// `narg`), so every `CmdArg` here has `opts: vec![]` by construction.
     Cmd {
         name: I,
         span: Span,
@@ -297,13 +281,12 @@ pub enum IText<I = String> {
         span: Span,
     },
     /// `${…}` embedded math (`UTInputHorzEmbeddedMath`). `read_inline`'s
-    /// `EmbedMath` arm (`primitives.rs`) applies the context's installed
-    /// `[math] inline-cmd` (`Context::math_command`, Gap 1 —
-    /// `class-signature-lang-gaps.md`) to `(ctx, math value)`, exactly like
+    /// `EmbedMath` arm applies the context's installed `[math] inline-cmd`
+    /// (`Context::math_command`) to `(ctx, math value)`, exactly like
     /// upstream — `\cmd`/`#var` inside the literal go through
     /// `reflect_math_elem`/`as_math`. Contexts with no installed command
     /// (built by `Context::initial` directly, i.e. unit tests) fall back to
-    /// reflecting + laying out through the same faithful engine directly.
+    /// reflecting + laying out directly.
     EmbedMath {
         elems: Rc<Vec<MathElem<I>>>,
         span: Span,
@@ -325,28 +308,12 @@ pub enum BText<I = String> {
 }
 
 // ---------------------------------------------------------------------------
-// Identifier remapping — the compile membrane's de-branding
+// Identifier remapping — the compile membrane's de-branding (see `debrand`)
 // ---------------------------------------------------------------------------
-//
-// `map_idents` rebuilds a tree with every *lexical identifier* (and nothing
-// else — see the module doc comment) passed through `f`. Its one production
-// use is `compile::compile_program`, which turns the branded compile-side
-// `Ast<Symbol<'s>>` into the lifetime-free runtime `Ast<String>` by resolving
-// each symbol back to its text. Everything else — literals, record labels,
-// constructor tags, optional-argument labels, spans — is cloned verbatim, so
-// the result is *structurally identical* to the tree elaboration produced
-// before identifiers were interned. That is what makes the interning phase
-// byte-identical by construction.
-//
-// This is a deep copy: `Rc` payloads are rebuilt rather than shared. The
-// elaborated tree is a pure tree (no DAG sharing), so nothing that was
-// previously shared gets duplicated, and the copy happens exactly once per
-// compile — not once per fixpoint trial.
 
 impl<I> Ast<I> {
     /// Rebuild this tree with every lexical identifier mapped through `f`.
     pub fn map_idents<J>(&self, f: &impl Fn(&I) -> J) -> Ast<J> {
-        // A local alias keeps the arms below readable.
         let go = |a: &Ast<I>| a.map_idents(f);
         match self {
             Ast::Unit => Ast::Unit,
@@ -526,21 +493,14 @@ impl<I> MathElem<I> {
 
 /// **The compile membrane**: resolve every interned `Symbol` in a branded,
 /// elaborated tree back to its text, producing the lifetime-free
-/// `Ast<String>` that [`crate::compile`] lowers and the whole runtime works
-/// on.
+/// `Ast<String>` that `crate::compile` lowers and the whole runtime works
+/// on — nothing downstream ever sees a `Symbol` or the `'s` it carries (see
+/// the module doc comment).
 ///
-/// This is where the identifier brand is discharged. Nothing downstream —
-/// the compiler, `CompiledExpr` (whose boxed closure is implicitly
-/// `'static`), [`crate::value::Value`]'s quoted-text and closure payloads,
-/// `Interp`, the 172 `prim_*` functions — ever sees a `Symbol` or the `'s`
-/// it carries. That is exactly what keeps the brand from cascading a
-/// lifetime through the entire runtime for zero speed (design doc §1).
-///
-/// Byte-identical by construction: [`Ast::map_idents`] rebuilds the same tree
-/// with each symbol replaced by precisely the string it was interned from, so
-/// the compiler receives the tree elaboration used to hand it before
-/// identifiers were interned. Cost is one deep copy per compile — not per
-/// fixpoint trial, since the trials re-run the resulting compiled closure.
+/// [`Ast::map_idents`] rebuilds the same tree with each symbol replaced by
+/// precisely the string it was interned from. Cost is one deep copy per
+/// compile — not per fixpoint trial, since the trials re-run the resulting
+/// compiled closure.
 pub fn debrand(ast: &branded::Ast<'_>, store: &crate::symbol::SymbolStore) -> Ast {
     ast.map_idents(&|sym| store.resolve(*sym).to_string())
 }

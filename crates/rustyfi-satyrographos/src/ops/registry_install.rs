@@ -1,24 +1,17 @@
-//! Registry-source install (plan §5.4's fetch/verify/materialize algorithm):
-//! the `satyrographos install <name>[@version]` form, and the reproducible
-//! "install from an already-locked (url, sha256)" form that
+//! Registry-source install: `satyrographos install <name>[@version]`, and the
+//! reproducible "install from an already-locked (url, sha256)" form
 //! [`reconcile`](crate::ops::reconcile) uses.
 //!
-//! The algorithm, step for step against plan §5.4:
+//! 1. Acquire the index (`registry::acquire`) and select the version
+//!    (`registry::select_version`).
+//! 2. Download the chosen `tarball_url` into `<root>/.satyrographos/tmp/`.
+//! 3. **Verify the SHA-256 and abort before touching `dist/`** on mismatch
+//!    (`registry::verify_sha256`) — a failed verify leaves `dist/` and
+//!    receipts untouched.
+//! 4. Feed the verified tarball through the phase-1
+//!    [`install`] materializer.
 //!
-//! 1. Resolve the registry URL and **acquire** the index
-//!    ([`registry::acquire`]); look up `packages/<name>.toml` and **select**
-//!    the version ([`registry::select_version`], steps 1-2).
-//! 2. Resolve the library root and download the chosen `tarball_url` into
-//!    `<root>/.satyrographos/tmp/` (step 3).
-//! 3. **Verify** the SHA-256 and *abort before touching `dist/`* on mismatch
-//!    ([`registry::verify_sha256`], step 3) — a failed verify leaves the root's
-//!    `dist/` and receipts completely untouched.
-//! 4. Feed the verified tarball through the exact phase-1
-//!    [`install`](crate::ops::install) materializer, recording a
-//!    `registry`-flavored receipt source (step 4).
-//!
-//! No transitive dependency resolution (step 5) — that stays out of scope
-//! through phase 3.
+//! No transitive dependency resolution (step 5) happens here.
 
 use std::path::PathBuf;
 
@@ -31,7 +24,7 @@ use crate::stage;
 
 /// The concrete `(version, tarball_url, sha256)` an index lookup resolved to —
 /// exactly what the lockfile pins so a later install is reproducible without
-/// re-consulting the index (plan §5.4 step 4 / §5.3 lock semantics).
+/// re-consulting the index.
 #[derive(Debug, Clone)]
 pub struct Resolved {
     pub version: String,
@@ -42,7 +35,7 @@ pub struct Resolved {
     pub sha512: Option<String>,
 }
 
-/// Resolve `name`[`@version`] through the registry index, returning the
+/// Resolve `name[@version]` through the registry index, returning the
 /// concrete pin without downloading anything (used by `reconcile`/`update`).
 pub fn resolve(
     name: &str,
@@ -62,7 +55,7 @@ pub fn resolve(
     })
 }
 
-/// The full index-consulting install (plan §5.4): resolve → download → verify →
+/// The full index-consulting install: resolve → download → verify →
 /// materialize. Returns both the install report and the resolved pin (so a
 /// caller can record it in the lockfile).
 pub fn install_registry(
@@ -77,12 +70,10 @@ pub fn install_registry(
     Ok((report, resolved))
 }
 
-/// Download + verify + materialize an already-resolved pin (plan §5.4 steps
-/// 3-4). This is the reproducible path: given a `(url, sha256)` — whether just
-/// looked up or carried forward from a lockfile — it never consults the index.
-/// `reg_opts` supplies the archive cache location and `--offline`/
-/// `$RUSTYFI_OFFLINE` (phase 7d S2) for [`registry::fetch_tarball`]; it is
-/// otherwise unused here (no index lookup happens on this path).
+/// Download + verify + materialize an already-resolved pin: given a
+/// `(url, sha256)`, this never consults the index — the reproducible path.
+/// `reg_opts` supplies the archive cache and `--offline`/`$RUSTYFI_OFFLINE`
+/// (phase 7d S2) for `registry::fetch_tarball`; otherwise unused here.
 pub fn install_resolved(
     name: &str,
     resolved: &Resolved,
@@ -90,7 +81,7 @@ pub fn install_resolved(
     reg_opts: &RegistryOptions,
 ) -> Result<InstallReport, Error> {
     // Resolve the root now so the download lands under it (same filesystem as
-    // `dist/`, plan §5.4 step 3 / §6) and is verified before anything is staged.
+    // `dist/`) and is verified before anything is staged.
     let root = opts.resolve_managed_root()?;
 
     let tarball = roots::tmp_dir(&root).join(format!(

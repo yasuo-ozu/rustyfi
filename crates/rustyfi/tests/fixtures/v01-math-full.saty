@@ -1,6 +1,6 @@
-% math-package completion M4: a real render exercising the newly-restored
-% `\paren` family (M2) and `\mathsf`/`\mathtt` (M3), through the SEALED
-% `Math` module (M1's `:>` + ~190-row sig + M2's `paren` rows). `V01Mini`
+% Math-package fixture: a real render exercising the newly-restored
+% `\paren` family and `\mathsf`/`\mathtt`, through the SEALED
+% `Math` module (its `:>` + ~190-row sig, including the `paren` rows). `V01Mini`
 % supplies `document`/`+p`/`get-initial-context`; `Math`'s commands are
 % referenced fully qualified (`\Math.paren`/`\Math.frac`/…) rather than via
 % `let open Math in` — `open` brings EVERY `"Math."`-prefixed name into

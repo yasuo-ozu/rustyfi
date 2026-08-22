@@ -6,13 +6,12 @@
 //! channel through the real CID pipeline (`render_pdf_ttf`).
 //!
 //! Font discovery mirrors `tests/math_font.rs`/`tests/math_fraction_radical.rs`
-//! (copied, not shared — matches this repo's existing per-file convention):
-//! fontconfig first, then a handful of common distro/nix paths, then a
-//! graceful skip. Unlike the shared `find_math_font` (whichever family
-//! resolves first), §B3's unit tests (test plan item 1) need BOTH fonts
-//! independently — DejaVu Math TeX Gyre exercises the glyf path, Noto Sans
-//! Math the CFF `glyph_bounding_box` path (`ttf-parser` lib.rs:2172) — so
-//! this file adds per-family locators alongside the shared either-font one.
+//! (copied, not shared): fontconfig first, then common distro/nix paths, then
+//! a graceful skip. Unlike the shared `find_math_font` (whichever family
+//! resolves first), this file's unit tests need BOTH fonts independently — DejaVu
+//! Math TeX Gyre exercises the glyf path, Noto Sans Math the CFF
+//! `glyph_bounding_box` path (`ttf-parser` lib.rs:2172) — so this file adds
+//! per-family locators alongside the shared either-font one.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -27,10 +26,9 @@ use ttf_parser::Face;
 /// `VertVariantPolicy::AtLeast` selection (`ttf.rs`): the smallest
 /// `vertical_constructions` record whose `advance_measurement` (design
 /// units, scaled by `size`/`units_per_em`) covers `target`, else the
-/// largest record — used to check the SELECTION independently of what the
-/// returned `MathVariantGlyph.advance` field happens to mean (see this
-/// file's module doc comment / the `vertical_variant_unit_*` tests' own
-/// comment on why `.advance` itself isn't the right thing to assert
+/// largest record — checks the SELECTION independently of what
+/// `MathVariantGlyph.advance` happens to mean (see the `vertical_variant_unit_*`
+/// tests' own comment on why `.advance` isn't the right thing to assert
 /// `>= target` against).
 fn expected_at_least_gid(face: &Face, c: char, size: Length, target: Length) -> u16 {
     let gid = face.glyph_index(c).expect("cmap has the char");
@@ -115,16 +113,13 @@ fn find_noto_math() -> Option<PathBuf> {
 }
 
 /// Either font — used by the e2e tests, which only need ONE real MATH font,
-/// mirroring `math_font.rs`'s `find_math_font`. Re-baselined to prefer the
-/// bundled Latin Modern Math (`lib-rustyfi/dist/fonts/latinmodern-math.otf`,
-/// `download-fonts.sh`'s new upstream-correct default — a CFF face,
-/// same outline family as this file's "Noto Sans Math" case) FIRST, so the
-/// e2e tests below no longer depend on a host-wide font install once that
-/// script has been run; only fall through to fontconfig (whichever of Noto
-/// Sans Math / DejaVu Math TeX Gyre resolves first) when it hasn't. Every
-/// assertion in the e2e tests below derives its expected gids/values from
-/// the font actually loaded (via `ttf-parser`, no hardcoded gids), so they
-/// hold for LM Math exactly as they did for DejaVu/Noto.
+/// mirroring `math_font.rs`'s `find_math_font`. Prefers the bundled Latin
+/// Modern Math (`lib-rustyfi/dist/fonts/latinmodern-math.otf`,
+/// `download-fonts.sh`'s default — a CFF face) first, so the e2e tests below
+/// depend on that script having been run rather than a host-wide font
+/// install; only falls through to fontconfig when it hasn't. Every
+/// assertion in the e2e tests derives its expected gids/values from the
+/// font actually loaded (via `ttf-parser`, no hardcoded gids).
 fn find_math_font() -> Option<PathBuf> {
     let bundled_lmmath = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../lib-rustyfi/dist/fonts/latinmodern-math.otf");
@@ -157,12 +152,12 @@ macro_rules! need_font {
 }
 
 // ----------------------------------------------------------------------
-// Test plan item 1 (unit): `TtfFontStore::math_vertical_variant`.
+// Unit: `TtfFontStore::math_vertical_variant`.
 // ----------------------------------------------------------------------
 
-/// Runs every unit assertion from the spec's test plan against one font,
-/// panicking (with the font path in every message) on failure so a `#[test]`
-/// per font gives a precise, attributable failure.
+/// Runs every unit assertion against one font, panicking (with the font
+/// path in every message) so a `#[test]` per font gives an attributable
+/// failure.
 fn assert_vertical_variant_unit(path: &Path) {
     let store = TtfFontStore::load(path, None, None).expect("load math font");
     let face = store.face(FontKey(0)).expect("parse face");
@@ -240,19 +235,15 @@ fn assert_vertical_variant_unit(path: &Path) {
         .variant_glyph
         .0;
 
-    // NOTE on `.advance`: `MathVariantGlyph.advance` is the variant GLYPH's
-    // own horizontal advance width (`face.glyph_hor_advance`, hmtx-based) —
-    // matching upstream `fontFormat.ml`'s `get_math_glyph_metrics`, whose
-    // `wid` is likewise `get_glyph_metrics`'s (hmtx) width, not the
-    // OpenType `advance_measurement` used to SELECT the record. It's the
-    // right quantity for a caller's horizontal cursor step
-    // (`push_delimiter_glyph`'s `*x += v.advance`) but, for a narrow glyph
-    // like `(` that only grows TALLER (not much wider) as it stretches, it
-    // does NOT itself grow past `target` (a VERTICAL measurement) — so the
-    // correct thing to check here is that the SELECTION POLICY picked the
-    // right record (independently replicated via `expected_at_least_gid`,
-    // directly off `advance_measurement`), not that the returned
-    // `.advance` field exceeds `target`.
+    // `MathVariantGlyph.advance` is the variant glyph's own horizontal
+    // advance width (`face.glyph_hor_advance`, hmtx-based — matching
+    // upstream `fontFormat.ml`'s `get_math_glyph_metrics`), not the
+    // OpenType `advance_measurement` used to SELECT the record. For a
+    // narrow glyph like `(` that only grows taller (not much wider), it
+    // does NOT itself grow past `target` (a VERTICAL measurement) — so we
+    // check that the SELECTION POLICY picked the right record
+    // (independently replicated via `expected_at_least_gid`, directly off
+    // `advance_measurement`), not that `.advance` exceeds `target`.
     let target = size * 2.0;
     let expected_gid = expected_at_least_gid(&face, '(', size, target);
     // Sanity: for this to be a meaningful test, `target` must actually
@@ -306,8 +297,8 @@ fn assert_vertical_variant_unit(path: &Path) {
 }
 
 // ----------------------------------------------------------------------
-// Test plan item 1b (unit): `TtfFontStore::math_vertical_assembly`
-// (§B — GlyphAssembly stretch beyond the largest discrete variant).
+// Unit: `TtfFontStore::math_vertical_assembly`
+// (GlyphAssembly stretch beyond the largest discrete variant).
 // ----------------------------------------------------------------------
 
 /// Independently read `(`'s vertical `GlyphAssembly` off the font (ttf-parser,
@@ -478,9 +469,6 @@ fn vertical_variant_unit_dejavu() {
 
 #[test]
 fn vertical_variant_unit_noto() {
-    // Noto Sans Math is a CFF (OpenType-CFF) font — `Face::glyph_bounding_box`
-    // takes the outline-tracing path (`ttf-parser` lib.rs:2172), not the
-    // glyf `loca`/`glyf` table path DejaVu (a TrueType-outline font) uses.
     let path = need_font!(find_noto_math(), "Noto Sans Math");
     assert_vertical_variant_unit(&path);
 }
@@ -551,15 +539,13 @@ fn page_for(bx: PureHorzBox, geometry: &PageGeometry) -> Page {
 // PDF content-stream introspection: byte-exact reproduction of
 // `pdf-writer` 0.13's `Str::write` escaping (verified against
 // `pdf-writer-0.13.0/src/object.rs`) so we can search the REAL emitted
-// bytes for a specific 2-byte-BE glyph id's `Tj` operand — searching the
-// lossy-UTF8 string (like `math_fraction_radical.rs` does for pure-ASCII
-// operators such as `f*`) would corrupt non-ASCII glyph-id bytes, and
-// searching the raw bytes naively would risk a false-positive hit inside
-// the ALSO-embedded (whole, unsubsetted) font file. We narrow the search to
-// just the content stream: `render_pdf_ttf` embeds exactly two `stream` /
-// `endstream` objects for a single-page, no-image document (the content
-// stream and the font file), and the content stream is always by far the
-// smaller of the two.
+// bytes for a specific 2-byte-BE glyph id's `Tj` operand — a lossy-UTF8
+// string search would corrupt non-ASCII glyph-id bytes, and a naive raw
+// search risks a false hit inside the also-embedded (whole, unsubsetted)
+// font file. We narrow to just the content stream: `render_pdf_ttf` embeds
+// exactly two `stream`/`endstream` objects for a single-page, no-image
+// document (content stream + font file), and the content stream is always
+// the smaller of the two.
 // ----------------------------------------------------------------------
 
 fn pdf_str_repr(bytes: &[u8]) -> Vec<u8> {
@@ -698,32 +684,25 @@ fn approx(a: Length, b: Length, tol: f64) -> bool {
 }
 
 // ----------------------------------------------------------------------
-// S2 gid-remap-robust CID prediction: a CFF-outline math font (this file's
-// "Noto Sans Math" case) now takes the writer's `write_font_cff` S2 path,
-// which emits `subsetter`'s REMAPPED gid (CID == new gid) as the
-// content-stream CID rather than the raw face gid
-// `ttf-parser`/`face.glyph_index` returns — the CFF sibling of D5's
-// long-standing glyf-file subsetting, except CFF has no `/CIDToGIDMap` to
-// hide the renumbering behind (`cid.rs`'s module doc). Below,
-// `original_gids_used`/`expected_cid` independently replicate EXACTLY the
-// two calls `render_pdf_ttf_with`/`write_font_cff` themselves make
-// (`subsetter::GlyphRemapper::new_from_glyphs_sorted` +
-// `subsetter::subset`) against the SAME full per-font usage set a test's
-// page actually contains, so the tests below assert against a value DERIVED
-// from the real subsetter API — never a hardcoded/re-pinned CID number,
-// which would silently rot the next time this host's fontconfig resolves a
-// different "Noto Sans Math" build (different `usage` -> a different
-// remapping).
+// Gid-remap-robust CID prediction: a CFF-outline math font (this file's
+// "Noto Sans Math" case) takes the writer's `write_font_cff` subsetting path, which
+// emits `subsetter`'s REMAPPED gid (CID == new gid) as the content-stream
+// CID rather than the raw face gid — CFF has no `/CIDToGIDMap` to hide the
+// renumbering behind (`cid.rs`'s module doc). `original_gids_used`/
+// `expected_cid` below independently replicate EXACTLY the two calls
+// `render_pdf_ttf_with`/`write_font_cff` make
+// (`subsetter::GlyphRemapper::new_from_glyphs_sorted` + `subsetter::subset`)
+// against the same per-font usage set a test's page actually contains, so
+// assertions are never against a hardcoded CID, which would silently rot
+// when fontconfig resolves a different "Noto Sans Math" build.
 
 /// The ORIGINAL face gid every `MathGlyph` in `glyphs` resolves to — a raw
-/// MATH-table variant (`gid: Some(_)`) is used directly, otherwise (`gid:
-/// None`) each char of `.text` goes through `face.glyph_index`, mirroring
-/// `emit_box`'s `Math` arm / `encode_glyph_run` (`cid.rs`) exactly. Since
-/// every test below renders a single-box page against a single physical
-/// font file (`FontKey(0)`, no bold/oblique), this is exactly the
-/// `usage.glyphs` key set `render_pdf_ttf_with`'s Pass 1a would build for
-/// that file — independently reconstructed here without touching the
-/// writer's internals.
+/// MATH-table variant (`gid: Some(_)`) is used directly, otherwise each
+/// char of `.text` goes through `face.glyph_index`, mirroring `emit_box`'s
+/// `Math` arm / `encode_glyph_run` (`cid.rs`). Since every test below
+/// renders a single-box page against a single physical font file
+/// (`FontKey(0)`), this is exactly the `usage.glyphs` key set
+/// `render_pdf_ttf_with`'s Pass 1a would build for that file.
 fn original_gids_used(face: &Face, glyphs: &[rustyfi_backend::MathGlyph]) -> Vec<u16> {
     glyphs
         .iter()
@@ -738,16 +717,13 @@ fn original_gids_used(face: &Face, glyphs: &[rustyfi_backend::MathGlyph]) -> Vec
         .collect()
 }
 
-/// The exact CID `write_font_cff`'s S2 subsetting will emit for
-/// `original_gid`, given the full original-gid usage set the document
-/// actually references for this font file (`used_gids`, from
-/// `original_gids_used` above) — computed via the SAME
+/// The exact CID `write_font_cff`'s subsetting will emit for
+/// `original_gid`, given the full usage set (`used_gids`, from
+/// `original_gids_used` above) — computed via the same
 /// `subsetter::GlyphRemapper::new_from_glyphs_sorted` + `subsetter::subset`
-/// calls `render_pdf_ttf_with`/`write_font_cff` make (`cid.rs`), so this
-/// tracks the real writer instead of predicting/hardcoding a specific
-/// number. Falls back to `original_gid` unchanged when subsetting this
-/// exact usage set fails (mirrors `write_font_cff`'s S1 whole-OTF
-/// fallback for a seac composite / CFF2 face).
+/// calls `render_pdf_ttf_with`/`write_font_cff` make (`cid.rs`). Falls back
+/// to `original_gid` unchanged when subsetting fails (mirrors
+/// `write_font_cff`'s whole-OTF fallback for a seac composite/CFF2 face).
 fn expected_cid(font_bytes: &[u8], used_gids: &[u16], original_gid: u16) -> u16 {
     let remapper = subsetter::GlyphRemapper::new_from_glyphs_sorted(used_gids);
     match subsetter::subset(font_bytes, 0, &remapper) {
@@ -757,7 +733,7 @@ fn expected_cid(font_bytes: &[u8], used_gids: &[u16], original_gid: u16) -> u16 
 }
 
 // ----------------------------------------------------------------------
-// Test plan item 2 (e2e B3a): `∑` grows via `math-big-char`.
+// e2e: `∑` grows via `math-big-char`.
 // ----------------------------------------------------------------------
 
 #[test]
@@ -820,21 +796,15 @@ fn big_char_sum_variant_grows_and_emits_variant_gid() {
     );
 
     // -- Growth: >20% more height+depth than the base (non-variant) glyph's
-    // own ink bbox. NOT a comparison against the plain (non-big) run's
-    // `PureHorzBox::Math` height/depth above (`base_h`/`base_d`) — those
-    // come from `push_char_glyph`, which (a long-standing, pre-§B3
-    // convention this port's whole math engine relies on, e.g.
-    // `math_fraction_radical.rs`'s own documented "ascender/descender ARE
-    // h_cont/d_cont" comment) reports the FONT-WIDE ascender/descender for
-    // every plain glyph, not that glyph's own ink — an inflated, unrelated
-    // quantity that can (and empirically does, for at least one of the two
-    // test fonts) already exceed even a stretched-variant's real ink,
-    // making that comparison meaningless. `math_vertical_variant`'s own
-    // `MathVariantGlyph.height`/`.depth` are real per-glyph ink bboxes
-    // (`ttf.rs`'s doc comment on the struct), so the fair, ink-vs-ink
-    // baseline is the UNSTRETCHED base glyph's own bbox — computed
-    // independently via `ttf-parser`, exactly like `assert_vertical_variant_unit`'s
-    // `base_h`/`base_d` above.
+    // own ink bbox. NOT the plain run's `PureHorzBox::Math` height/depth
+    // above: those come from `push_char_glyph`, which reports the FONT-WIDE
+    // ascender/descender for every plain glyph (see `math_fraction_radical.rs`'s
+    // "ascender/descender ARE h_cont/d_cont" comment) — an inflated quantity
+    // that already exceeds even a stretched variant's real ink on one test
+    // font. `MathVariantGlyph.height`/`.depth` ARE real per-glyph ink bboxes
+    // (`ttf.rs`'s doc comment on the struct), so the fair baseline is the
+    // unstretched base glyph's own bbox, computed independently via
+    // `ttf-parser`.
     let base_bbox = face
         .glyph_bounding_box(base_gid)
         .expect("base ∑ glyph has a bbox");
@@ -851,11 +821,9 @@ fn big_char_sum_variant_grows_and_emits_variant_gid() {
 
     // e2e through the real CID pipeline: the content stream's Tj operand for
     // this run is the exact 2-byte-BE CID the writer assigns the variant
-    // gid, not the base gid. For a CFF font (S2), that CID is `subsetter`'s
-    // REMAPPED gid, not the raw face gid — `expected_cid` (this file's
-    // module-level helper) derives it via the real subsetter API against
-    // this page's actual usage set (a single glyph: the variant itself),
-    // rather than hardcoding/re-pinning a number.
+    // gid, not the base gid. `expected_cid` derives that CID (remapped,
+    // for a CFF font) from this page's actual usage set — a single glyph,
+    // the variant itself.
     let geometry = PageGeometry::default();
     let e2e_box = math_box(run_math(&big_src, &store).unwrap());
     let (_, _, _, e2e_glyphs) = as_math_parts(e2e_box.clone());
@@ -880,8 +848,7 @@ fn big_char_sum_variant_grows_and_emits_variant_gid() {
     // The base (non-variant) gid was never used anywhere in this page, so it
     // never gets a CID assignment at all (`GlyphRemapper` only maps glyphs it
     // was asked to remap) — its RAW gid bytes should not appear as a Tj
-    // operand, exactly like the pre-S2 assertion, just no longer assuming
-    // the variant's own bytes are unremapped.
+    // operand.
     let base_bytes = base_gid.0.to_be_bytes();
     let base_repr = pdf_str_repr(&base_bytes);
     if base_repr != variant_repr {
@@ -895,30 +862,23 @@ fn big_char_sum_variant_grows_and_emits_variant_gid() {
 }
 
 // ----------------------------------------------------------------------
-// Test plan item 3 (e2e B3b): `(`/`)` stretch around a tall inner, with a
+// e2e: `(`/`)` stretch around a tall inner, with a
 // short-inner control that must fall back to record[0].
 // ----------------------------------------------------------------------
 
 /// A well-typed but POISONED `paren` closure (`length -> length -> length ->
 /// length -> color -> (inline-boxes, length -> length)`, `prim_types::
-/// t_paren`) — under §B3b-2, the closure route is PRIMARY (`make_paren_run`
-/// actually invokes `_l`/`_r`), so a closure that returns a valid
-/// `(inline-boxes, kernf)` tuple (this constant's pre-§B3b-2 shape) would
-/// now be INVOKED and its (empty, `inline-nil`) result used verbatim,
-/// breaking every assertion below that expects the §B3b(i) MATH-native
-/// variant-gid fallback path (record[0]/stretched selection, `dy`
-/// centering, …). Poisoned with a runtime (not typecheck) error —
-/// `string-sub \`x\` 9 9` is well-typed (`string -> int -> int -> string`)
+/// t_paren`): the closure route is PRIMARY (`make_paren_run`
+/// invokes `_l`/`_r`), so a closure that merely returned a valid tuple would
+/// be invoked and used verbatim, breaking every assertion below that
+/// expects the MATH-native variant-gid fallback path. Poisoned with
+/// a runtime (not typecheck) error — `string-sub \`x\` 9 9` is well-typed
 /// but out-of-bounds on the 1-char string `` `x` `` (`prim_string_sub`
-/// rejects `pos+wid > len`) — inside a discarded function application, so
-/// the poison only fires once the closure is actually CALLED with 5 args
-/// (curried, call-by-value: the outer `fun hgt dpt hgtaxis fontsize color
-/// -> ...` doesn't evaluate its body, hence doesn't evaluate the
-/// application/its argument, until fully applied). `make_paren_run`
-/// forwards that `EvalError` up through `interp.apply`'s `?`, and
-/// `Math::Paren`'s `Err(_) => paren_variant_fallback(...)` arm catches it —
-/// exercising exactly the §B3b(i) fallback this file's existing assertions
-/// need, now via the EvalError path rather than "never invoked".
+/// rejects `pos+wid > len`) — inside a discarded application, so it only
+/// fires once the closure is CALLED with all 5 args (curried, call-by-value).
+/// `make_paren_run` forwards that `EvalError` through `interp.apply`'s `?`,
+/// and `Math::Paren`'s `Err(_) => paren_variant_fallback(...)` arm catches
+/// it — exercising exactly the fallback this file's assertions need.
 const DUMMY_PAREN: &str = "(fun hgt dpt hgtaxis fontsize color -> \
      (fun s -> (inline-nil, (fun x -> x))) (string-sub `x` 9 9))";
 
@@ -927,16 +887,11 @@ fn paren_stretches_around_tall_inner_and_short_inner_stays_record0() {
     let path = need_font!(find_math_font(), "MATH");
     let store = TtfFontStore::load(&path, None, None).expect("load math font");
     let face = store.face(FontKey(0)).expect("parse face");
-    // `with_ctx`'s `get-initial-context` defaults `font_size` to 12pt
-    // (`Context::initial`) -- matches `math_fraction_radical.rs`'s own
-    // `size` convention for the same reason.
     let size = Length::pt(12.0);
 
     // `(` and `)` are DIFFERENT glyphs with their own, independent
     // `GlyphConstruction`s -- record[0] gids must be computed separately for
-    // each (an earlier version of this test wrongly reused '('s record[0]
-    // for ')' too, which fails on both fonts since open/close parens are
-    // never the same glyph).
+    // each; open/close parens are never the same glyph.
     let record0_gid_of = |c: char| -> u16 {
         let gid = face.glyph_index(c).expect("cmap has the char");
         face.tables()
@@ -963,17 +918,12 @@ fn paren_stretches_around_tall_inner_and_short_inner_stays_record0() {
 
     // -- Control: a short (empty) inner must emit record[0]'s gid (no
     // stretch needed). NOT a single ordinary char (`x`): `push_char_glyph`
-    // reports a plain glyph's height/depth as the FONT-WIDE ascender/
-    // descender (the same long-standing, pre-§B3 convention noted in
-    // `big_char_sum_variant_grows_and_emits_variant_gid`'s comment above),
-    // which for both test fonts is comfortably TALLER than record[0]'s own
-    // coverage (empirically: DejaVu's target from one plain char is
-    // ~12.4pt vs. record[0]'s own ~10.8pt; Noto's is ~19.0pt vs. ~11.3pt) —
-    // i.e. under the REAL, ascender/descender-based `inner_ink_extent` this
-    // port's whole math engine uses (`layout_math_value`'s own fold, which
-    // `Math::Paren`'s target formula deliberately mirrors — see that arm's
-    // comment), a single ordinary character is NOT actually "short" enough
-    // to stay at record[0] on either test font. An EMPTY inner (`${}`,
+    // reports a plain glyph's height/depth as the font-wide ascender/
+    // descender, which for both test fonts is comfortably TALLER than
+    // record[0]'s own coverage (empirically: DejaVu's target from one
+    // plain char is ~12.4pt vs. record[0]'s own ~10.8pt; Noto's is ~19.0pt
+    // vs. ~11.3pt) — so a single ordinary character is NOT "short" enough
+    // to stay at record[0] on either font. An EMPTY inner (`${}`,
     // `inner_ink_extent` folds to `(ZERO, ZERO)`) robustly IS: its target
     // reduces to `2*axis` (~6.6-6.7pt on both fonts), well under
     // record[0]'s own coverage on both.
@@ -1068,11 +1018,8 @@ fn paren_stretches_around_tall_inner_and_short_inner_stays_record0() {
     }
 
     // e2e through the real CID pipeline: the content stream contains the
-    // '(' variant gid's Tj operand. For a CFF font (S2) the CID actually
-    // emitted is `subsetter`'s REMAPPED gid, not the raw face gid —
-    // `expected_cid` derives it via the real subsetter API against this
-    // page's actual 3-glyph usage set ('(', ∑-variant, ')'), not a
-    // hardcoded number.
+    // '(' variant gid's Tj operand, at the CID `expected_cid` derives from
+    // this page's actual 3-glyph usage set ('(', ∑-variant, ')').
     let geometry = PageGeometry::default();
     let e2e_box = math_box(run_math(&tall_src, &store).unwrap());
     let (_, _, _, e2e_glyphs) = as_math_parts(e2e_box.clone());
@@ -1094,9 +1041,9 @@ fn paren_stretches_around_tall_inner_and_short_inner_stays_record0() {
 }
 
 // ----------------------------------------------------------------------
-// Test plan item 1c (e2e wiring): a delimiter taller than any discrete
+// e2e wiring: a delimiter taller than any discrete
 // variant record is built from `GlyphAssembly` parts by
-// `push_delimiter_glyph` (§B) — driven through the real lang layout.
+// `push_delimiter_glyph` — driven through the real lang layout.
 // ----------------------------------------------------------------------
 
 /// The set of `(`'s enumerated `GlyphAssembly` part gids (ttf-parser, no
@@ -1181,18 +1128,13 @@ fn very_tall_paren_is_built_from_assembly_parts() {
 
     // e2e: the assembly part gids flow through the real CID pipeline. This
     // tall run embeds the (unsubsetted, ~half-MB) font whose raw CFF/glyf
-    // bytes contain stray `BT`/`Tf`/`stream` byte sequences, so the
-    // "smallest stream" / "stream with BT" heuristics can't reliably isolate
-    // the page content stream here. Instead verify the assembly part gid
-    // reached the ToUnicode CMap (`beginbfchar`) — a distinctive, cleanly
-    // isolated stream that render_pdf_ttf only populates with gids it
-    // actually emitted, proving the part became a real emitted glyph. The
-    // CMap's source CID is keyed by whatever the writer actually emitted for
-    // that glyph, which for a CFF font (S2) is `subsetter`'s REMAPPED gid
-    // rather than the raw face gid — `expected_cid` (this file's
-    // module-level helper) derives that CID via the real subsetter API
-    // against this page's own full usage set (`glyphs`, above), instead of
-    // assuming the CMap key equals the raw gid.
+    // bytes contain stray `BT`/`Tf`/`stream` sequences, so the
+    // "smallest stream"/"stream with BT" heuristics can't reliably isolate
+    // the content stream here. Instead verify the part gid reached the
+    // ToUnicode CMap (`beginbfchar`) — a distinctive stream that
+    // render_pdf_ttf only populates with gids it actually emitted. The
+    // CMap's source CID comes from `expected_cid` against this page's own
+    // full usage set (`glyphs`, above) — not the raw face gid.
     let geometry = PageGeometry::default();
     let page = page_for(math_box(run_math(&src, &store).unwrap()), &geometry);
     let pdf_bytes = render_pdf_ttf(&geometry, &[page], &store, &[]).expect("render");

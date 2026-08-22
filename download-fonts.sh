@@ -1,41 +1,34 @@
 #!/bin/sh
-# Fetch the real CJK+Latin faces stdja/mdja actually name (item #1), and
-# write this port's
+# Fetch the real CJK+Latin faces stdja/mdja name, and write this port's
 # `dist/hash/{fonts,default-font}.satysfi-hash` (plain-JSON schema —
 # rustyfi-pdf's `fonts.rs` module doc — NOT upstream's Yojson variant
 # syntax). Mirrors upstream SATySFi's own `download-fonts.sh` (cache dir +
 # sha1-pinned downloads), targeting this repo's `lib-rustyfi/dist/fonts/`.
 #
-# Fetches:
+# Fetches, each with its licence text copied alongside the font:
 #   - IPAex (ipaexm.ttf, ipaexg.ttf) — IPA Font License Agreement v1.0,
-#     redistributable; the license text is copied alongside the fonts.
-#     Real TrueType (`glyf`) outlines: embeddable by this port's CID writer.
-#   - Junicode (Junicode.ttf / -Bold.ttf / -Italic.ttf) — SIL OFL 1.1.
-#     Real TrueType outlines: embeddable.
+#     redistributable. Real TrueType (`glyf`) outlines: embeddable by this
+#     port's CID writer.
+#   - Junicode (Junicode.ttf / -Bold.ttf / -Italic.ttf / -BoldItalic.ttf) —
+#     SIL OFL 1.1. Real TrueType outlines: embeddable.
 #   - Latin Modern Math (latinmodern-math.otf) — GUST e-foundry's own math
 #     companion to the Latin Modern family, the REAL upstream face (same
 #     build CTAN's `lm-math` package ships), under the GUST Font License
-#     (GFL — see `LICENSE-GUST-FontLicense.txt`, reused from the lmsans/lmmono
-#     block below, same license). Pinned-zip download (hermetic, like
+#     (GFL — see `LICENSE-GUST-FontLicense.txt`, shared with the lmsans/
+#     lmmono block below). Pinned-zip download (hermetic, like
 #     IPAex/Junicode/lmsans/lmmono — no fontconfig lookup needed). CFF-outline
 #     (`OTTO`) OpenType with a real `MATH` table — embeddable via this port's
-#     `CIDFontType0`/`FontFile3` (CFF) path (`cid.rs`'s `write_font_cff`,
-#     commit `526e1f3`, subsetting added in `962addc`) AND readable by
-#     `ttf.rs`'s MATH parser. Registered as the `"lmmath"` abbrev and wired as
-#     `default-font.satysfi-hash`'s `"math"` default — this is upstream
-#     SATySFi's own default math font, so this is the upstream-correct
-#     choice (Slice B originally wired DejaVu Math TeX Gyre here as a
-#     `glyf`-outline stand-in, from before the
-#     CFF embedding path existed; now that CFF embedding + subsetting both
-#     land, LM Math replaces it as the default).
+#     `CIDFontType0`/`FontFile3` (CFF) path (`cid.rs`'s `write_font_cff`) AND
+#     readable by `ttf.rs`'s MATH parser. Registered as the `"lmmath"` abbrev
+#     and wired as `default-font.satysfi-hash`'s `"math"` default, which is
+#     upstream SATySFi's own default math font.
 #
 #   - DejaVu Math TeX Gyre (DejaVuMathTeXGyre.ttf) — Bitstream Vera-style
 #     license (DejaVu terms; see `LICENSE-DejaVu.txt`, written alongside the
 #     font below). `glyf`-outline TrueType with a real OpenType `MATH` table
 #     — embeddable by this port's CID writer AND readable by `ttf.rs`'s MATH
-#     parser. Still registered as the `"dejavu-math"` abbrev (kept as a
-#     fallback/option), but no longer the `"math"` default now that real LM
-#     Math (above) is bundled. No pinned-zip download exists for this one
+#     parser. Registered as the `"dejavu-math"` abbrev, a fallback rather than
+#     the `"math"` default. No pinned-zip download exists for this one
 #     (unlike IPAex/Junicode/LM Math) — it is located via `fc-match`/
 #     fontconfig on the machine running this script (present via the
 #     `dejavu-fonts` package on this repo's dev/CI images) and copied
@@ -49,43 +42,35 @@
 #     under the GUST Font License (GFL — an LPPL-1.3c-equivalent, freely
 #     redistributable license; the full text is copied alongside the fonts,
 #     see `LICENSE-GUST-FontLicense.txt`, written below). These are
-#     CFF-outline (`OTTO`) OpenType fonts, embeddable via this port's
-#     `CIDFontType0`/`FontFile3` (CFF) path added in commit `526e1f3`
-#     (`cid.rs`'s `write_font_cff`, "S1" — whole-OTF embed, no subsetting
-#     yet). Registered as the `lmsans`/`lmmono` abbrevs (Slice 1/3),
-#     replacing the earlier Noto Sans/Noto Sans Mono `glyf` stand-in
-#     (commit `0ef39ef`) that was needed only because `FontFile2`/glyf-only
-#     embedding couldn't carry a CFF face at the time.
+#     CFF-outline (`OTTO`) OpenType fonts, embeddable via the same
+#     `CIDFontType0`/`FontFile3` path. Registered as the `lmsans`/`lmmono`
+#     abbrevs.
 #
 # Still NOT fetched: `lmroman`/`lmroman-b`/`lmroman-it` (Latin Modern Roman)
 # — nothing in stdja's own `set-font` calls names them (`Junicode` is the
 # port's Latin default instead — see the written `default-font.satysfi-hash`
 # below); add a block mirroring the lmsans/lmmono one below if a document
 # ever needs them. `lmodern` is registered as an alias for the bundled LM
-# Math font (see below) so `set-math-font \`lmodern\`` resolves — it now
-# points at the real `lmmath` font (previously aliased to the DejaVu Math
-# stand-in, before LM Math itself was bundled).
+# Math font (see below) so `set-math-font \`lmodern\`` resolves.
 #
 # Never commits font binaries: `lib-rustyfi/dist/fonts/*.ttf` is
-# `.gitignore`d (see that directory's `.gitignore`); this script (and the
-# hash files it writes under `lib-rustyfi/dist/hash/`) is the only checked-in
-# artifact. Nor does it write anything else into the working tree — the
-# download cache is under `$TMPDIR` (see `CACHE` below).
+# `.gitignore`d; this script (and the hash files it writes under
+# `lib-rustyfi/dist/hash/`) is the only checked-in artifact. Nor does it write
+# anything else into the working tree — the download cache is under `$TMPDIR`
+# (see `CACHE` below).
 
 set -ue
 
 MESSAGE_PREFIX="[download-fonts.sh]"
 cd "$(dirname "$0")"   # repo root
 # The archive cache lives in the system temp dir, not in the working tree: it
-# is ~175 MB of pinned upstream zips, none of it source, and a copy sitting in
-# the working tree shows up in every `du`, backup and grep for the rest of time.
+# is ~175 MB of pinned upstream zips, none of it source.
 #
 # A STABLE path, deliberately, not `mktemp -d`: the whole point of the cache is
-# that a re-run verifies sha1s instead of re-downloading ~150 MB, and a fresh
-# directory per run would throw that away. The cost is that a machine which
-# clears its temp dir on reboot re-downloads once; the archives are pinned, so
-# that is slow rather than risky. `RUSTYFI_FONTCACHE` overrides it — set that to
-# a persistent path on a metered connection.
+# that a re-run verifies sha1s instead of re-downloading ~150 MB. The cost is
+# that a machine which clears its temp dir on reboot re-downloads once; the
+# archives are pinned, so that is slow rather than risky. `RUSTYFI_FONTCACHE`
+# overrides it — set that to a persistent path on a metered connection.
 CACHE="${RUSTYFI_FONTCACHE:-${TMPDIR:-/tmp}/rustyfi-fontcache}"
 FONTS_DIR="lib-rustyfi/dist/fonts"
 HASH_DIR="lib-rustyfi/dist/hash"
@@ -279,7 +264,16 @@ show_message "installed LICENSE-Junicode-OFL.txt (SIL OFL 1.1)"
 
 
 # ---- DejaVu Math TeX Gyre (see header comment) ----------------------------
+# `fc-match` NEVER fails: with no match it returns a best-effort substitute and
+# exits 0, so guarding on its status would copy an arbitrary system font to
+# DejaVuMathTeXGyre.ttf and ship it under LICENSE-DejaVu.txt. Match on the
+# family it actually returned.
 MATH_SRC="$(fc-match --format='%{file}' 'DejaVu Math TeX Gyre' 2>/dev/null || true)"
+MATH_FAMILY="$(fc-match --format='%{family}' 'DejaVu Math TeX Gyre' 2>/dev/null || true)"
+case $MATH_FAMILY in
+  *"DejaVu Math TeX Gyre"*) ;;
+  *) MATH_SRC= ;;
+esac
 if [ -n "$MATH_SRC" ] && [ -f "$MATH_SRC" ]; then
   cp "$MATH_SRC" "$FONTS_DIR/DejaVuMathTeXGyre.ttf"
   # DejaVu's own LICENSE (Bitstream Vera terms + the TeX Gyre DJV Math
@@ -432,10 +426,9 @@ fi
 # ---- lmsans / lmmono: real Latin Modern Sans / Latin Modern Mono ----------
 # GUST e-foundry's pinned "flat" OpenType release zip (see header comment) —
 # a single zip holding all 72 Latin Modern OTFs at top level (no subdirs), so
-# we extract just the two faces we need. Mirrors the IPAex/Junicode
-# `download_file` discipline above — no `fc-match`, hermetic, reproducible on
-# any host. Both faces are CFF-outline (`OTTO`) OpenType, verified via the
-# sfnt magic (`4f 54 54 4f` = "OTTO") at pin time.
+# we extract just the two faces we need. No `fc-match`: hermetic and
+# reproducible on any host. Both faces are CFF-outline (`OTTO`) OpenType,
+# verified via the sfnt magic (`4f 54 54 4f` = "OTTO") at pin time.
 LM_ZIP="Latin_Modern-otf-2_007-31_03_2026.zip"
 download_file "$LM_ZIP" \
   "https://www.gust.org.pl/projects/e-foundry/latin-modern/download/$LM_ZIP" \
@@ -447,8 +440,7 @@ cp "$CACHE/LatinModernOTF/lmmono10-regular.otf" "$FONTS_DIR/lmmono10-regular.otf
 # GUST Font License (GFL) v1.0 — an LPPL-1.3c-equivalent, freely
 # redistributable license; embedded verbatim (fetched once at authoring
 # time from https://www.gust.org.pl/projects/e-foundry/licenses/GUST-FONT-LICENSE.txt)
-# rather than downloaded at run time, so this step has no extra network
-# dependency and works offline/in CI, mirroring the DejaVu license below.
+# so this step works offline/in CI.
 cat > "$FONTS_DIR/LICENSE-GUST-FontLicense.txt" <<'GFL_LICENSE_EOF'
 % This is version 1.0, dated 22 June 2009, of the GUST Font License.
 % (GUST is the Polish TeX Users Group, https://www.gust.org.pl)
@@ -486,12 +478,10 @@ show_message "installed lmsans10-regular.otf / lmmono10-regular.otf (real Latin 
 # ---- lmmath: real Latin Modern Math (see header comment) ------------------
 # GUST e-foundry's own pinned release zip for the LM Math companion face —
 # a single face (`otf/latinmodern-math.otf`) under a versioned top-level
-# directory, unlike the flat lmsans/lmmono zip above. Same
-# `download_file`/hermetic discipline — no `fc-match`, reproducible on any
-# host. CFF-outline (`OTTO`) OpenType, verified via the sfnt magic
-# (`4f 54 54 4f` = "OTTO") plus a `MATH` table at pin time (see header
-# comment). Reuses the GFL license file written just above (same license,
-# same upstream GUST e-foundry project) — no separate license file needed.
+# directory, unlike the flat lmsans/lmmono zip above. CFF-outline (`OTTO`)
+# OpenType, verified via the sfnt magic (`4f 54 54 4f` = "OTTO") plus a `MATH`
+# table at pin time. Reuses the GFL license file written just above (same
+# license, same upstream GUST e-foundry project).
 LM_MATH_ZIP="latinmodern-math-1959.zip"
 download_file "$LM_MATH_ZIP" \
   "https://www.gust.org.pl/projects/e-foundry/lm-math/download/$LM_MATH_ZIP" \
@@ -505,12 +495,10 @@ if [ -f "$FONTS_DIR/latinmodern-math.otf" ]; then
   LMMATH_SRC="dist/fonts/latinmodern-math.otf"
   show_message "installed latinmodern-math.otf (real Latin Modern Math, GUST Font License)"
 else
-  # Defensive fallback only — download_file already hard-fails the whole
-  # script on a checksum mismatch or network error, same as IPAex/Junicode/
-  # lmsans/lmmono above, so this branch should be unreachable in practice.
-  # Kept so the JSON-writing gate below degrades gracefully (`"math"` left
-  # unset) rather than referencing a file that doesn't exist, matching the
-  # DejaVu-absent case.
+  # Unreachable in practice: download_file already hard-fails the script on a
+  # checksum mismatch or network error. Kept so the JSON-writing gate below
+  # degrades gracefully (`"math"` left unset) rather than referencing a file
+  # that doesn't exist, matching the DejaVu-absent case.
   LMMATH_SRC=""
 fi
 
@@ -528,9 +516,8 @@ fi
   if [ -n "$LMMATH_SRC" ]; then
     printf ',\n  "lmmath":     { "src": "%s" }' "$LMMATH_SRC"
     # `lmodern` is the abbrev stdja/std-ja actually name (`set-math-font
-    # \`lmodern\``, `FontLatinModernMath.main`) — alias it to the real LM
-    # Math face now that it is bundled (Slice 0); previously aliased to the
-    # DejaVu Math stand-in.
+    # \`lmodern\``, `FontLatinModernMath.main`), aliased to the real LM Math
+    # face.
     printf ',\n  "lmodern":    { "src": "%s" }' "$LMMATH_SRC"
   fi
   if [ -n "$MATH_SRC" ]; then
@@ -543,9 +530,9 @@ fi
   printf '{\n'
   printf '  "regular": "Junicode", "bold": "Junicode-b", "oblique": "Junicode-it",\n'
   # LM Math is the upstream-correct default when present; DejaVu Math TeX
-  # Gyre (glyf stand-in) is kept as a fallback only if LM Math is somehow
-  # unavailable. If neither is present, "math" stays unset entirely
-  # (Context::math_font stays FontKey(0), pre-Slice-B behavior).
+  # Gyre is the fallback if LM Math is somehow unavailable. If neither is
+  # present, "math" stays unset entirely (Context::math_font stays
+  # FontKey(0)).
   if [ -n "$LMMATH_SRC" ]; then
     printf '  "math": "lmmath",\n'
   elif [ -n "$MATH_SRC" ]; then

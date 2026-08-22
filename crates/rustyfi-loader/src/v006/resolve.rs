@@ -61,17 +61,14 @@ pub(crate) fn resolve_import(dir: &Path, name: &str) -> Result<PathBuf, Vec<Path
 ///      points directly at a package tree, e.g. in tests).
 ///   3. `<lib_root>/dist/packages/<name>/<name>` (the *nested* per-library
 ///      layout real Satyrographos produces and this port's manifest-driven
-///      installer materialises — see the chimera plan §3). Purely additive:
-///      candidates 1 and 2 are unchanged.
-///   4. `<lib_root>/dist-v01/packages/<name>` (Slice X4a, item 1 — the 0.1
+///      installer materialises).
+///   4. `<lib_root>/dist-v01/packages/<name>` (the 0.1
 ///      corpus, mirroring candidate 1). This is what lets a `V0_0`-rooted
 ///      load's `@require:` reach a 0.1 package under
 ///      `lib-rustyfi/dist-v01/packages/` from the SAME `lib_root` a 0.0.6
-///      document also `@require:`s the 0.0.6 corpus from. Purely additive —
-///      appended LAST for a 0.0.6 load, so it only ever adds NEW successful
-///      resolutions; it never changes which candidate wins for any name that
-///      candidates 1-3 already resolve (a pure-0.0.6 load with no
-///      `dist-v01/packages/<name>` target is completely unaffected).
+///      document also `@require:`s the 0.0.6 corpus from. Ordered LAST for a
+///      0.0.6 load, so it only ever adds resolutions and never changes which
+///      candidate wins for a name candidates 1-3 already resolve.
 ///   5. `<lib_root>/dist-v01/packages/<name>/<name>` — candidate 3's analogue
 ///      for the 0.1 corpus. `install --lang 0.1` of a package whose manifest
 ///      declares `(packageDir ...)`, which is what real Satyrographos packages
@@ -88,8 +85,7 @@ pub(crate) fn resolve_require(
 ) -> Result<PathBuf, Vec<PathBuf>> {
     // Every root in turn, nearest first: a project-local root that carries one
     // package must not hide the development tree or the system install that
-    // carry the rest. Within a root the candidate order below is unchanged, so
-    // a single-root load resolves exactly what it always did.
+    // carry the rest.
     let mut searched = Vec::new();
     for root in roots {
         match resolve_require_in(root, name, version) {
@@ -117,10 +113,9 @@ fn resolve_require_in(
     // is really just the wrong file.
     //
     // Cross-generation resolution stays available as a FALLBACK in both
-    // directions — that is what makes cross-version import reachable at all
-    // (X1-X3) — so this reorders which candidate wins for a name present in
-    // both, and never removes a resolution. A 0.0.6 load is unchanged: its
-    // order is exactly what it always was.
+    // directions — that is what makes cross-version import reachable at
+    // all — so this only reorders which candidate wins for a name present
+    // in both, and never removes a resolution.
     let bases: Vec<PathBuf> = if version == RustyfiVersion::V0_1 {
         vec![
             dist_v01_packages.clone(),

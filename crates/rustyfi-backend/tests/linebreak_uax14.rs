@@ -20,8 +20,6 @@ fn latin_breaks_only_at_the_space() {
 #[test]
 fn no_break_inside_a_word() {
     let breaks = break_opportunities("hello");
-    // Nothing but the always-present end-of-text marker: no break
-    // opportunity anywhere inside the word itself.
     assert_eq!(breaks, vec![(5, BreakKind::Mandatory)]);
 }
 
@@ -39,8 +37,6 @@ fn cjk_breaks_between_every_ideograph() {
 #[test]
 fn no_break_before_close_punctuation() {
     let breaks = break_opportunities("a)");
-    // No break opportunity between 'a' and ')'; only the end-of-text
-    // marker survives.
     assert_eq!(breaks, vec![(2, BreakKind::Mandatory)]);
 }
 
@@ -52,8 +48,6 @@ fn mandatory_break_at_newline() {
     // ...distinct from the always-present end-of-text marker at the end.
     assert!(breaks.contains(&(3, BreakKind::Mandatory)));
 }
-
-// ---- DP over discretionaries ----------------------------------------------
 
 /// Every glyph is half an em wide, matching `tests/linebreak.rs`'s `Mono`.
 struct Mono;
@@ -124,10 +118,9 @@ fn lines_of(v: &[VertBox]) -> Vec<String> {
 /// stretch, which is upstream's `LBTooShort`: `calculate_ratios` divides by a
 /// zero stretch and `lineBreak.ml:527` gives that pair NO graph edge at all. So
 /// a one-per-line partition is unreachable for both engines, and the breaker
-/// takes two ideographs (4pt overfull, `LBTooLong`) instead. This test used to
-/// assert one-per-line, from when the port scored rigid underfull lines by
-/// capped absolute shortfall rather than dropping them — the same divergence
-/// that let it prefer a 108pt line on a 440pt column.
+/// takes two ideographs (4pt overfull, `LBTooLong`) instead. Scoring rigid
+/// underfull lines by capped absolute shortfall instead of dropping them is
+/// what made the port prefer a 108pt line on a 440pt column.
 ///
 /// Real CJK prose does not go through this path: `text_to_boxes` now hangs
 /// `adjacent_space` glue in each discretionary's `no_break` slot, so a genuine

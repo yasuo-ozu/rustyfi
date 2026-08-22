@@ -159,7 +159,7 @@ fn as_int(v: Value) -> i64 {
 
 #[test]
 fn a_quote_and_a_splice_round_trip_a_value_in_a_zero_one_file() {
-    // The minimum proof that `&`/`~` exist in 0.1 at all: before this slice
+    // The minimum proof that `&`/`~` exist in 0.1 at all: before this
     // the 0.1 grammar had no slot for either token, so this was a parse
     // error. `~(&e)` is legal at the document stage (stage 1: a splice is
     // allowed, and it reads its operand one stage earlier, where the quote

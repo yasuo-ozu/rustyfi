@@ -15,6 +15,11 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT"
 authors = ["Yasuo Ozu <yasuo@ozu.email>"]
+repository = "https://github.com/yasuo-ozu/rustyfi"
+homepage = "https://github.com/yasuo-ozu/rustyfi"
+keywords = ["satysfi", "typesetting", "pdf", "typography"]
+categories = ["text-processing", "command-line-utilities"]
+readme = "README.md"
 
 [workspace.dependencies]
 syan = "0.2.0"

@@ -1,4 +1,4 @@
-#![doc = include_str!("../../../README.md")]
+#![doc = include_str!("../README.md")]
 //!
 //! Multicall binary: behaves as `rustyfi` (compiler, default) or
 //! `satyrographos` (package manager), dispatched on `argv[0]`'s basename and

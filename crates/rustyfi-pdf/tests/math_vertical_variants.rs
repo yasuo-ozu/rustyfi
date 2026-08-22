@@ -112,27 +112,43 @@ fn find_noto_math() -> Option<PathBuf> {
     )
 }
 
-/// Either font — used by the e2e tests, which only need ONE real MATH font,
-/// mirroring `math_font.rs`'s `find_math_font`. Prefers the bundled Latin
-/// Modern Math (`lib-rustyfi/dist/fonts/latinmodern-math.otf`,
-/// `download-fonts.sh`'s default — a CFF face) first, so the e2e tests below
-/// depend on that script having been run rather than a host-wide font
-/// install; only falls through to fontconfig when it hasn't. Every
-/// assertion in the e2e tests derives its expected gids/values from the
-/// font actually loaded (via `ttf-parser`, no hardcoded gids).
+/// A CFF-outline MATH font for the e2e tests, mirroring `math_font.rs`'s
+/// `find_math_font`. Prefers the bundled Latin Modern Math
+/// (`lib-rustyfi/dist/fonts/latinmodern-math.otf`, `download-fonts.sh`'s
+/// default), so these depend on that script having been run rather than on a
+/// host-wide font install; only falls through to fontconfig when it hasn't.
+///
+/// The face must be CFF (`OTTO`), and that is not fussiness. The assertions
+/// derive their gids from the loaded font, but the CIDs they expect come from
+/// `expected_cid`, which models `cid.rs`'s `write_font_cff` subsetting — a
+/// `glyf` face takes the `CIDFontType2`/`FontFile2` path instead and emits
+/// its gids unremapped, so every CID expectation here would be wrong for it.
+/// A host with only a `glyf` math face (a CI runner with no bundled fonts,
+/// which finds Noto Sans Math through fontconfig) therefore SKIPS rather than
+/// failing on a difference that is not a defect.
 fn find_math_font() -> Option<PathBuf> {
+    let is_cff = |p: &Path| {
+        std::fs::read(p)
+            .map(|b| b.starts_with(b"OTTO"))
+            .unwrap_or(false)
+    };
+
     let bundled_lmmath = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../lib-rustyfi/dist/fonts/latinmodern-math.otf");
-    if bundled_lmmath.is_file() {
+    if bundled_lmmath.is_file() && is_cff(&bundled_lmmath) {
         return Some(bundled_lmmath);
     }
 
     for family in ["Noto Sans Math", "DejaVu Math TeX Gyre"] {
         if let Some(p) = find_family(family, &[]) {
-            return Some(p);
+            if is_cff(&p) {
+                return Some(p);
+            }
         }
     }
-    find_dejavu_math().or_else(find_noto_math)
+    find_dejavu_math()
+        .or_else(find_noto_math)
+        .filter(|p| is_cff(p))
 }
 
 macro_rules! need_font {

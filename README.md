@@ -15,47 +15,27 @@
 
 **[SATySFi](https://github.com/gfngfn/SATySFi), reimplemented in Rust.** One
 binary takes a `.saty` document and writes a PDF — same language, same packages,
-same output, no OCaml toolchain to install.
+same output, faster compilation, no OCaml toolchain to install.
 
-It speaks both dialects: **0.0** (upstream v0.0.6) and **0.1**
-(`dev-0-1-0`/`saphe-split`), and a document in one may use packages from the
-other.
+It speaks both dialects: **0.0** (upstream v0.0.x) and **0.1** (`dev-0-1-0`),
+and a document in one may use packages from the other.
 
 ## Install
 
+### From latest release
+
 ```console
+$ # User-wide installation (~/.local/)
 $ curl -fsSL https://raw.githubusercontent.com/yasuo-ozu/rustyfi/main/install.sh | bash
-$ rustyfi --version
-```
 
-That picks the right release archive for your platform, checks it against the
-published SHA-256, and unpacks it under **`~/.local`**. Run it with `sudo` and
-the default becomes **`/usr`** instead:
-
-```console
+$ # System-wide installation (/usr/*)
 $ curl -fsSL https://raw.githubusercontent.com/yasuo-ozu/rustyfi/main/install.sh | sudo bash
-```
 
-Either way `--prefix` wins over both, and `bash -s --` is how you get arguments
-past the pipe:
+$ # Or manual prefix
+$ curl -fsSL https://raw.githubusercontent.com/yasuo-ozu/rustyfi/main/install.sh | sudo bash -s -- --prefix /opt/rustyfi
+$ curl -fsSL https://raw.githubusercontent.com/yasuo-ozu/rustyfi/main/install.sh | PREFIX=/opt/rustyfi sudo bash
 
-```console
-$ curl -fsSL .../install.sh | bash -s -- --prefix /opt/rustyfi
-$ curl -fsSL .../install.sh | PREFIX=/opt/rustyfi bash
-```
-
-Piping a script into a shell runs code you haven't read; `curl -O` it first if
-you'd rather look. `install.sh --help` lists every option and the exact layout
-it writes.
-
-### From an archive
-
-The releases page has the same archives if you'd sooner unpack one yourself.
-Each ships with a `.sha256` beside it:
-
-```console
-$ shasum -a 256 -c rustyfi-<tag>-x86_64-unknown-linux-gnu.tar.gz.sha256
-$ tar -xzf rustyfi-<tag>-x86_64-unknown-linux-gnu.tar.gz --strip-components=1 -C ~/.local
+$ rustyfi --version
 ```
 
 ### From source
@@ -90,8 +70,7 @@ $ rustyfi doc.saty
 
 ### A project with a `Satyristes`
 
-For anything larger than one file, describe the project in a `Satyristes` —
-Satyrographos' own S-expression build file, which this port reads directly:
+Describe the project in a `Satyristes` (no opam file is required by rustyfi):
 
 ```lisp
 (version 0.0.2)
@@ -111,7 +90,7 @@ Satyrographos' own S-expression build file, which this port reads directly:
 
 `(library …)` says what the project *publishes*: `(packageDir "src")` installs
 every `.satyh`/`.satyg` under `src/` as the package `mylib`. Install it into a
-project-local root and it becomes `@require:`-able:
+project-local root (`.rustyfi/`) and it becomes `@require:`-able:
 
 ```console
 $ rustyfi install . --dest .rustyfi
@@ -123,12 +102,6 @@ mylib 0.1.0 (lang 0.0, 1 files)
   .rustyfi/dist/packages/mylib
 ```
 
-A document anywhere beside that `Satyristes` now finds `.rustyfi/` on its own —
-it is the second root in the search order below — so nothing needs exporting,
-and the project's own copy layers over a system-wide one rather than hiding it.
-`rustyfi status` reports whether the installed files are still present, and
-`rustyfi install` with no path reconciles the declared dependencies instead.
-
 `(libraryDoc …)` is a build target rather than a package: `rustyfi build` runs
 its `(build …)` commands in `(workingDirectory …)`, then installs what
 `(sources …)` names.
@@ -138,12 +111,7 @@ $ rustyfi build
   rustyfi manual.saty
 ```
 
-Other top-level forms real `Satyristes` files carry — `(opam …)`,
-`(compatibility …)` — are parsed and ignored, so an existing Satyrographos
-project needs no edits to build here. An unrecognised form is an error naming
-itself rather than a silent skip.
-
-## Packages
+## Package management
 
 `@require:` resolves against **lib roots** (`<root>/dist/packages/`). Name one
 with `--lib-root` or `$RUSTYFI_LIB_ROOT` and it is used alone; name none and
@@ -157,10 +125,6 @@ they are discovered, nearest first:
 All of them are searched in that order, so a package a project installed for
 itself layers over the system one rather than hiding it — and a clone needs no
 configuration at all.
-
-Roughly 30 upstream packages ship with it, including `stdja`, `stdjabook`,
-`stdjareport`, `itemize`, `code`, `math`, `tabular`, `annot` and `proof`, plus
-the 0.1 tree (`std-ja`, `inline`, `block`, `map`, `set`, …) under `dist-v01/`.
 
 To install someone else's package, the same binary is a Satyrographos analog:
 
@@ -184,176 +148,6 @@ url = "https://github.com/na4zagin3/satyrographos-repo"
 url = "https://example.org/another-index"
 ```
 
-`search` covers every repository listed and labels each hit; `install NAME`
-tries them in order and takes the first that has the package.
-
-Archives ship their own `share/rustyfi/config.toml`, which the binary finds
-relative to itself (`<exe>/../share/rustyfi`) — as it finds its packages at
-`<exe>/../lib/rustyfi` — so an unpacked archive is self-contained wherever it
-sits. Precedence, lowest last: `--registry`, `$RUSTYFI_REGISTRY`, the project's
-own `(registry (url …))` in `Satyristes`, your config, the shipped one.
-
-It reads upstream `Satyristes` manifests, keeps a project lockfile, and verifies
-registry downloads by sha256. A manifest's `(libraryDoc …)` targets — documents
-built *from* a library — are built by running their own declared commands:
-
-```console
-$ rustyfi build                    # or --doc NAME, when several are declared
-```
-
-## Language versions
-
-SATySFi comes in two incompatible generations and this handles both. `0.0`
-(0.0.6) is the default; `--lang 0.1` selects the newer one, and a 0.1-style
-`use` header selects it on its own:
-
-```console
-$ rustyfi doc.saty              # 0.0.6
-$ rustyfi --lang 0.1 doc.saty   # 0.1
-```
-
-Packages carry a generation too. A `Satyristes` says which one each library is
-written for, and one manifest may declare the same name for both; `--lang` picks
-among what it declares, and is only needed to disambiguate.
-
-```lisp
-(library (name "greet") (version "1.0") (lang 0.1)
-  (sources ((packageDir "src"))))
-```
-
-```console
-$ rustyfi install ./greet --lang 0.1
-installed greet 1.0 (1 path(s)):
-  dist-v01/packages/greet
-```
-
-0.1 packages live in `<root>/dist-v01/packages/`, 0.0 ones in
-`<root>/dist/packages/`, and both can be installed side by side under one name.
-`@require:` prefers your document's own generation and falls back to the other —
-which matters, because names like `itemize`, `list` and `code` exist in both
-corpora with genuinely different APIs, and you get the one written for the
-language you are compiling.
-
-That fallback is also what lets a **0.1 document `@require:` a 0.0.6 package**,
-which works end to end. The limit is types whose runtime representation forks
-between generations: `page`, `font`, `math-text` and `math-boxes` are refused
-with an error naming the type rather than quietly mis-rendered, `math` is
-relabelled to `math-text` for you, and `deco`/`deco-set`/`paren` cross through
-generated wrappers. The reverse direction is partial — see
-[Known gaps](#known-gaps).
-
-## Staging
-
-A program runs in two stages. **Stage 1** is the document stage: it produces the
-PDF, and it is where a `.saty` file's own code lives. **Stage 0** runs before any
-of that, and its job is to build stage-1 code rather than to typeset anything.
-
-Two prefixes move between them, and they are inverses. `&e` **quotes**: it does
-not run `e`, it yields a value standing for it. `~e` **splices**: it runs `e` one
-stage earlier and inserts the code value that comes back into the program at
-that point. `~(&e)` is `e`. A quote is legal only at stage 0 and a splice only at
-stage 1, which is why the macro below needs a stage of its own to live at.
-
-```satysfi
-% macros.satyh
-@stage: 0
-
-let twice c = &( ~c ^ ~c )
-```
-
-```satysfi
-% doc.saty
-@require: stdja-mini
-@import: macros
-
-let s = ~(twice &(`ab`)) in
-document (|
-  title = {Staging};
-  author = {yasuo};
-|) '<
-  +p(embed-string s);
->
-```
-
-```console
-$ rustyfi doc.saty
-  output written on doc.pdf (1 page(s), 2 line(s)).
-```
-
-The page reads `abab`. `twice` ran before the document did and leaves no trace in
-it; what the document evaluates is `` `ab` ^ `ab` ``.
-
-A file says which stage it is written at differently in each generation:
-
-- **0.0.6** — one header for the whole file: `@stage: 0`, `@stage: 1` (the
-  default, so documents need no header) or `@stage: persistent`. `persistent` is
-  its own stage, nameable from both of the others; upstream's `list.satyg` and
-  `option.satyg` are written at it, which is what lets a document call `List.map`
-  at all.
-- **0.1** — no header, one qualifier per binding: `val ~x = e` is stage 0, `val
-  persistent ~x = e` is persistent, a plain `val x = e` is stage 1. It goes in
-  front of every binding shape — `val ~rec`, `val ~mutable`, `val ~inline`, `val
-  ~block`, `val ~math`.
-
-```satysfi
-% macros.satyh — the same macro, 0.1
-module Macro :> sig
-  val ~twice : code string -> code string
-end = struct
-  val ~twice c = &( ~c ^ ~c )
-end
-```
-
-The document splices it the same way, writing ``~(Macro.twice &(`ab`))``:
-
-```console
-$ rustyfi --lang 0.1 doc.saty
-  output written on doc.pdf (1 page(s), 2 line(s)).
-```
-
-`code τ` is the type `&` produces, and it is a **0.1 spelling only** — 0.0.6 has
-none, deliberately: upstream's 0.0.6 type decoder knows `list` and `ref` and
-nothing else, so `int code` there is an undefined type name and stays one here. A
-0.1 signature declares its member's stage as well as its type, and the `struct`
-has to provide both.
-
-Staging crosses the generation boundary, too: a `@stage: 0` 0.0.6 library's
-macro is usable from a 0.1 document, and the other way round, with each side
-keeping its own stage rules. A quote keeps the generation it was **written**
-in, whichever generation forces it — a `&` inside a 0.0.6 package still means
-0.0.6's primitives when a 0.1 document splices it, so a macro cannot change
-meaning by being imported. The one thing refused is a 0.0.6 package that writes
-`code` in a `type` declaration: since 0.0.6 has no such spelling, that text
-would quietly become 0.1's real `code` type on the way in, so it errors instead
-of changing meaning.
-
-The rule that catches people out: **a stage-0 binding cannot be named from stage
-1.** Only `persistent` crosses. So the reference has to sit inside a splice —
-`~(twice …)`, never `twice …`:
-
-```console
-$ rustyfi doc.saty
-Error: doc.saty: line 4, characters 8-13: invalid occurrence of variable 'twice' as to stage: it is bound at stage 0, but this is stage 1
-```
-
-The same rule applies *inside* a quote, which is the surprising half: a quote's
-body is one stage later, so a stage-0 parameter is out of scope there. `let twice
-c = &( c ^ c )` is refused for naming `c`; `&( ~c ^ ~c )` is what you meant,
-because `~c` reads `c` back at stage 0.
-
-One deviation from upstream. Upstream resolves every splice in a preprocessing
-pass, before any stage-1 code runs, so all splices happen first and in file
-order; here a splice runs where it stands. For the pure code-building staging is
-for, the value is identical — the two differ only for side effects interleaved
-between a splice and the stage-1 code around it.
-
-## HTML output — on a branch
-
-Two HTML backends exist but are **not built on `main`**: a layout-faithful one
-that serializes the same placed pages the PDF writer renders, and a reflowable,
-semantic one. Both live on the `html-support` branch, with the
-`--format html`/`html-reflow` arms.
-
 ## Useful options
 
 | flag | what it does |
@@ -368,50 +162,10 @@ semantic one. Both live on the `html-support` branch, with the
 | `--no-aux` | do not read or write the `.satysfi-aux` cross-reference file |
 | `--timing` | per-phase timing to stderr (load / typecheck / eval / render) |
 
-The `.satysfi-aux` file is upstream's format, so the two engines can share one.
+## Performance
 
-## How close is it?
-
-Each document below is rebuilt and compared against the PDF the original
-SATySFi produced (`layout-tests/fidelity.py`; the corpus's seventh document,
-`gakushin`, is checked against its own snapshot instead — upstream cannot
-build it without a Satyrographos-installed font package). Lines are counted
-from each PDF's own content stream and content is compared character by
-character, because both of the obvious `pdftotext` measurements — clustering
-glyph boxes into lines, and counting words — move on things that are not the
-layout at all; the script's docstring has the details and the evidence.
-
-| doc | pages | lines (port / SATySFi) | characters missing / extra | exercises |
-|---|---|---|---|---|
-| latexcmds | 12 / 12 | 343 / 343 | 4 / 11 of 7 972 | math, framed and coloured boxes |
-| xpath | 11 / 11 | 292 / 290 | 0 / 11 of 8 292 | paths, béziers, diagrams |
-| enumitem | 27 / 27 | 882 / 883 | 10 / 22 of 18 460 | deeply nested, customized lists |
-| easytable | 19 / 19 | 567 / 565 | 3 / 2 of 15 992 | tables, rules, spans |
-| figbox | 21 / 21 | 590 / 590 | 0 / 6 of 14 207 | figures, floats, captions |
-| slydifi | 30 / 30 | 393 / 393 | 0 / 0 of 8 625 | slides, overlays, themes |
-
-Every document paginates exactly as upstream does, sets its text on the same
-number of baselines to within two, and typesets **99.95 %** of upstream's
-characters at worst per document (17 missing of 73 548 across the corpus, and
-`slydifi` is exact). Glyph metrics agree to within 0.75 pt at the 95th
-percentile — the widest is latexcmds at 0.722 pt.
-
-("extra" is the other direction, and is usually the port doing better: an
-upstream math superscript often carries no usable `ToUnicode`, so `𝐸=𝑚𝑐²`'s
-exponent extracts as nothing from the reference and as `2` from the port —
-that is all six of figbox's.)
-
-It is also fast. Minimum CPU time over three interleaved runs against SATySFi
+Minimum CPU time over three interleaved runs against SATySFi
 0.0.11, all five configurations measured in one pass (`benchmark.py`):
-
-- **cold** — the port with its compile cache disabled: every phase really runs.
-- **cached** — an unchanged rebuild, cache allowed.
-- **SATySFi** — upstream as the fidelity harness invokes it.
-- **`--bytecomp`** — upstream's bytecode compiler, the fair comparison for the
-  evaluator.
-- **warm aux** — upstream with the previous run's `.satysfi-aux` left in place,
-  so its cross-reference fixpoint starts seeded. This is upstream's *only*
-  warm path; it has no compile cache.
 
 | doc | pages | rustyfi cold | rustyfi cached | SATySFi | `--bytecomp` | warm aux |
 |---|---|---|---|---|---|---|
@@ -421,36 +175,6 @@ It is also fast. Minimum CPU time over three interleaved runs against SATySFi
 | figbox | 21 | 1.28 s | **0.16 s** | 2.55 s | 2.43 s | 1.12 s |
 | slydifi | 30 | 1.21 s | **0.13 s** | 1.74 s | 1.28 s | 1.16 s |
 | xpath | 11 | 3.00 s | **0.10 s** | 9.49 s | 2.65 s | 3.37 s |
-
-Like for like, cold against cold, the port beats upstream's bytecode VM on five
-of six — 0.21× on latexcmds, 0.41× enumitem, 0.47× easytable, 0.53× figbox,
-0.95× slydifi — and beats the plain interpreter on all six, by 3.2× on xpath.
-Warm against warm it is 7–34× faster, because the two warm paths are not
-comparable in kind: the port skips compilation entirely, while upstream can only
-skip a typesetting pass.
-
-That last point is the interesting one. A seeded aux is worth *more* to upstream
-than bytecode is on every layout-bound document — easytable 2.85 s with
-`--bytecomp` against 1.19 s with a warm aux — because those documents spend
-their time in typesetting passes, not in the evaluator. `xpath` inverts it
-(2.65 s against 3.37 s), which is the same fact from the other side.
-
-`xpath` is the one cold loss, and it is the one document dominated by user-level
-arithmetic rather than layout: a closure-tree interpreter against a real VM.
-That is architectural, not a tuning gap — note the bytecode compiler earns 9.49 s
-→ 2.65 s there and almost nothing elsewhere.
-
-Peak RSS is lower on five of six (52 MB against 84 for latexcmds, 74 against
-111 for easytable, 86 against 90 for slydifi) and worse on exactly one —
-figbox, at 185 MB against 118 MB.
-
-`gakushin` is absent because upstream cannot build it — it needs a
-Satyrographos-installed `fonts-junicode` package and stops with "cannot find a
-font named 'fonts-junicode:Junicode-Bold'". The port renders it in 0.22 s cold.
-
-Reproduce with `nix build .#satysfi` (the pinned 0.0.11) and `benchmark.py
---satysfi <path>`: it interleaves configurations, reports the minimum rather
-than the mean, and builds in a scratch workspace.
 
 ## Known gaps
 
@@ -498,11 +222,6 @@ lib-rustyfi/              bundled packages: dist/ (0.0) and dist-v01/ (0.1)
 layout-tests/             layout fidelity gate, corpus, probes, measurement
 install.sh, download-fonts.sh, benchmark.py
 ```
-
-The grammar is derived, not hand-written, using the
-[`syan`](https://crates.io/crates/syan) parser framework: the CST types *are*
-the grammar. `cargo test --workspace` runs 1785 tests; CI adds the corpus
-regression and the layout-fidelity comparison above.
 
 ## License
 

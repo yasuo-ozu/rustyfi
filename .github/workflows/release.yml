@@ -112,7 +112,8 @@ jobs:
         run: |
           ./install.sh \
             --prefix "stage/$DIR" \
-            --bin "target/${{ matrix.target }}/release/rustyfi${{ matrix.exe }}"
+            --bin "target/${{ matrix.target }}/release/rustyfi${{ matrix.exe }}" \
+            --no-fonts
 
       - name: Add the bundled fonts
         uses: actions/download-artifact@v4

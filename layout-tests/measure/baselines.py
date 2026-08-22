@@ -3,10 +3,9 @@
 
 `pdftotext -bbox` reports a word's GLYPH BOX, whose top/bottom come from the
 font descriptor — and the two engines emit different descriptors for the same
-latin glyphs, so those boxes are not comparable across engines (CLAUDE.md's
-measurement trap). The text-positioning operators are: `BT ... Tm/Td ... Tj`
-places a run at an exact baseline in PDF user space, identically for both
-writers.
+latin glyphs, so those boxes are not comparable across engines. The
+text-positioning operators are: `BT ... Tm/Td ... Tj` places a run at an exact
+baseline in PDF user space, identically for both writers.
 
 This walks each page's (possibly Flate-compressed) content stream with a tiny
 tokenizer, tracks the text matrix AND the graphics-state CTM, and prints one row
@@ -356,7 +355,7 @@ def page_baselines(pdf: Path, tol: float = 0.05) -> list[list[float]]:
 
     `tol=0.0` returns the RAW distinct baselines (exact duplicates collapsed
     only), which a caller can then cluster at any tolerance it likes without
-    re-reading the file — what `layout_fidelity.py --tol-sweep` does.
+    re-reading the file — what `fidelity.py --tol-sweep` does.
     """
     data = pdf.read_bytes()
     objs = parse_objects(data)

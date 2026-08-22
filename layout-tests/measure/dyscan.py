@@ -4,11 +4,10 @@
 Aligns the two documents' word sequences (reading order, whole document) with
 difflib, then reports where the port's vertical position drifts from upstream's.
 
-MEASUREMENT TRAP (see CLAUDE.md / the task notes): the two PDF writers emit
-DIFFERENT font descriptors for the same LATIN glyphs, so a latin word's `yMin`
-can differ by several points with identical baselines. CJK descriptors agree
-(19.36 vs 19.34), so `--cjk-only` restricts every dy to CJK-bearing words,
-which is the trustworthy signal.
+MEASUREMENT TRAP: the two PDF writers emit DIFFERENT font descriptors for the
+same LATIN glyphs, so a latin word's `yMin` can differ by several points with
+identical baselines. CJK descriptors agree (19.36 vs 19.34), so `--cjk-only`
+restricts every dy to CJK-bearing words, which is the trustworthy signal.
 
 Usage:
   dyscan.py PORT.pdf REF.pdf [--cjk-only] [--per-page] [--first-diverge]

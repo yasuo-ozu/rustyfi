@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Where does a corpus document's vertical space actually diverge?
 
-`layout_fidelity.py` reports one number per document; `layout_probe.py` isolates
-one construct in a hand-written probe. This is the middle: given the port's and
+`fidelity.py` reports one number per document; `tools/probe.py` isolates one
+construct in a hand-written probe. This is the middle: given the port's and
 upstream's PDFs of the SAME document, it groups words into LINES, aligns the two
 line sequences by text, and reports the per-gap difference in baseline advance
 (`dy_port - dy_upstream`) for every consecutive aligned pair that lands on the

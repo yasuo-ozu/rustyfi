@@ -36,15 +36,10 @@ A corpus document tells you *that* something diverges; a probe tells you
 still shows the defect, and its header comment records the measurement that
 motivated it — read those before touching one.
 
-Several have graduated from scratch work into regression inputs and are now
-named from Rust test doc comments (`pagebreak.rs`, `frame_margins.rs`,
-`math_cramped.rs`, `math_table.rs`, `math_fraction_radical.rs`). Renaming or
-editing one of those means updating the citation.
-
-The `vspace_*` group and `frame_across_page.saty` came from one vertical-spacing
-investigation and were numbered `p01`..`p06`; they were renamed by topic when
-they merged in here, because a bare `p04` means nothing next to
-`math_script_drop.saty`.
+Several are cited by name from Rust test doc comments (`pagebreak.rs`,
+`frame_margins.rs`, `math_cramped.rs`, `math_table.rs`,
+`math_fraction_radical.rs`). Renaming or editing one of those means updating the
+citation.
 
 ## The measuring instrument
 

@@ -51,22 +51,20 @@ jobs:
     # `layout-tests/corpus/`, and the fixed point
     # `layout-tests/baseline.json` was recorded against.
     #
-    # It does NOT install the original typesetter to re-render those references.
-    # It used to, via `nix develop`, and that was the bug: SATySFi finds its
-    # stdlib and fonts on its own default config path, so the flake's build
-    # produced slightly different references than the ones the baseline came
-    # from, and the job failed reporting a regression in the PORT that the port
-    # had not committed (see the RUSTYFI_GEN_REFS comment in
-    # crates/rustyfi/tests/layout_fidelity.rs). Regenerating references is now
-    # opt-in and belongs to a deliberate re-baselining, not to CI.
+    # It does NOT install the original typesetter to re-render those references,
+    # and must not start: SATySFi finds its stdlib and fonts on its own default
+    # config path, so a `nix develop` build produced slightly different
+    # references than the ones the baseline came from and the job failed
+    # reporting a regression in the PORT that the port had not committed.
+    # Regenerating references is opt-in and belongs to a deliberate
+    # re-baselining, not to CI.
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
           # The corpus documents AND their upstream reference PDFs are vendored
-          # under `layout-tests/corpus/`, so there is nothing to
-          # check out beyond this repo (it used to need `submodules: recursive`
-          # for the 11 docs-corpus/* submodules).
+          # under `layout-tests/corpus/`, so there is nothing to check out
+          # beyond this repo.
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
       - name: Cache
@@ -148,13 +146,12 @@ jobs:
           grep -q "fonts-theano:TheanoDidot" root/dist/hash/fonts.satysfi-hash
           grep -q "ipaexm" root/dist/hash/fonts.satysfi-hash
 
-      # A class package.
       - name: Install a class package
         run: |
           ./target/debug/rustyfi install ./pkgs/slydifi --dest ./root
           test -d root/dist/packages/class-slydifi
 
-      # An ordinary package. It declares two libraries, so it names one.
+      # An ordinary package: it declares two libraries, so `--library` names one.
       - name: Install a normal package
         run: |
           ./target/debug/rustyfi install ./pkgs/xpath --dest ./root --library xpath
@@ -200,12 +197,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      # The regression corpus: the author's real-world SATySFi packages. These
-      # are SATySFi packages, published under their own upstream names — the
-      # `satysfi-` prefix here is theirs and is NOT this port's old name, so it
-      # must survive the satysfi->rustyfi rename untouched. (It did not once:
-      # all three were rewritten to `rustyfi-*`, repositories that do not
-      # exist, and this job failed at checkout.)
+      # The regression corpus: the author's real-world SATySFi packages,
+      # published under their own upstream names — the `satysfi-` prefix here is
+      # theirs and is NOT this port's old name, so it must survive the
+      # satysfi->rustyfi rename untouched. Rewriting all three to `rustyfi-*`
+      # once broke this job at checkout: those repositories do not exist.
       #
       # The harness lexes/parses every .saty/.satyh/.satyg in these repos and
       # enforces "never panic" + a lex-coverage floor + a parse ratchet (see

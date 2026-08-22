@@ -19,6 +19,7 @@ REPO_DEFAULT=yasuo-ozu/rustyfi
 repo=${RUSTYFI_REPO:-$REPO_DEFAULT}
 version=${RUSTYFI_VERSION:-}
 prefix=${PREFIX:-}
+skip_fonts=${RUSTYFI_SKIP_FONTS:-}
 bin=${RUSTYFI_BIN:-}
 mode=
 
@@ -31,7 +32,8 @@ have() { command -v "$1" >/dev/null 2>&1; }
 
 usage() {
     cat <<'EOF'
-Usage: ./install.sh [--prefix DIR] [--bin PATH] [--version TAG] [--local|--remote]
+Usage: ./install.sh [--prefix DIR] [--bin PATH] [--version TAG]
+                    [--local|--remote] [--no-fonts]
        curl -fsSL https://raw.githubusercontent.com/yasuo-ozu/rustyfi/main/install.sh | bash
 
 Install rustyfi, either from the checkout the script sits in or from a
@@ -49,6 +51,10 @@ Options:
                  lives in; CI passes target/<triple>/release/rustyfi[.exe].
   --version TAG  Remote mode only: install release TAG instead of the latest.
                  Also settable as $RUSTYFI_VERSION.
+  --no-fonts     Local mode only: do not fetch the bundled faces even when
+                 lib-rustyfi/dist/fonts is empty. Also settable as
+                 $RUSTYFI_SKIP_FONTS. The release workflow passes this because
+                 it unpacks a prebuilt fonts artifact over the staged tree.
   --local        Force local mode; fails if the script is not in a checkout.
   --remote       Force remote mode even inside a checkout.
   -h, --help     Show this help.
@@ -71,7 +77,9 @@ Resulting layout, relative to the prefix:
   lib/rustyfi/dist-v01/packages/   0.1 packages
   share/rustyfi/config.toml        shipped defaults, read from <exe>/../share
   share/man/man1/rustyfi.1
-  share/doc/rustyfi/README.md, LICENSE
+  share/doc/rustyfi/README.md, LICENSE, LICENSE.LGPL-3.0,
+                            LICENSE.GPL-3.0, THIRD-PARTY-NOTICES.md
+  lib/rustyfi/LICENSE              the bundled packages' own terms
 
 The binary finds lib/ and share/ relative to itself, so the tree is
 self-contained: copy or unpack it anywhere and nothing needs exporting.
@@ -125,6 +133,10 @@ while [ $# -gt 0 ]; do
             ;;
         --remote)
             mode=remote
+            shift
+            ;;
+        --no-fonts)
+            skip_fonts=1
             shift
             ;;
         -h | --help)
@@ -214,14 +226,13 @@ or point at an existing one with --bin PATH (or RUSTYFI_BIN=PATH)."
 
     [ -f "$bin" ] || die "not a file: $bin (--bin/RUSTYFI_BIN)"
 
-    # Always install as `rustyfi`, keeping only the Windows `.exe` suffix.
     case $bin in
         *.exe) exe_name=rustyfi.exe ;;
         *) exe_name=rustyfi ;;
     esac
 
-    if [ -z "$(ls -A "$REPO_ROOT/lib-rustyfi/dist/fonts" 2>/dev/null | grep -v '^\.gitignore$')" ]; then
-        if [ -x "$REPO_ROOT/download-fonts.sh" ]; then
+    if [ -z "$skip_fonts" ] && [ -z "$(ls -A "$REPO_ROOT/lib-rustyfi/dist/fonts" 2>/dev/null | grep -v '^\.gitignore$')" ]; then
+        if [ -f "$REPO_ROOT/download-fonts.sh" ]; then
             printf 'no bundled faces in lib-rustyfi/dist/fonts — fetching them\n'
             sh "$REPO_ROOT/download-fonts.sh"
         else
@@ -242,7 +253,10 @@ or point at an existing one with --bin PATH (or RUSTYFI_BIN=PATH)."
     cp "$bin" "$prefix/bin/$exe_name"
     cp -R "$REPO_ROOT/lib-rustyfi/dist" "$REPO_ROOT/lib-rustyfi/dist-v01" "$prefix/lib/rustyfi/"
     cp "$REPO_ROOT/config.toml" "$prefix/share/rustyfi/"
-    cp "$REPO_ROOT/README.md" "$REPO_ROOT/LICENSE" "$prefix/share/doc/rustyfi/"
+    cp "$REPO_ROOT/README.md" "$REPO_ROOT/LICENSE" \
+       "$REPO_ROOT/LICENSE.LGPL-3.0" "$REPO_ROOT/LICENSE.GPL-3.0" \
+       "$REPO_ROOT/THIRD-PARTY-NOTICES.md" "$prefix/share/doc/rustyfi/"
+    cp "$REPO_ROOT/lib-rustyfi/LICENSE" "$prefix/lib/rustyfi/LICENSE"
 
     # The man page is rendered from the same clap command tree as `--help`, so
     # generating it here keeps it from drifting out of sync with the CLI.
@@ -251,8 +265,8 @@ or point at an existing one with --bin PATH (or RUSTYFI_BIN=PATH)."
     test -s "$prefix/share/man/man1/rustyfi.1"
 
     # `dist/{fonts,hash}` carry a .gitignore that has no meaning in an install.
-    # Scoped to lib/rustyfi, not the whole prefix as the workflow's inline
-    # version did: a real prefix may hold other software's .gitignore files.
+    # Scoped to lib/rustyfi, not the whole prefix: a real prefix may hold other
+    # software's .gitignore files.
     find "$prefix/lib/rustyfi" -name .gitignore -delete
 
     printf 'installed rustyfi to %s/bin/%s\n' "$prefix" "$exe_name"

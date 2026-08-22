@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Performance comparison: this Rust port vs. upstream SATySFi.
 
-The sibling `layout_fidelity.py` asks whether the port produces the same
+`layout-tests/fidelity.py` asks whether the port produces the same
 LAYOUT as upstream. This asks what it costs to produce it — wall clock, CPU and
 peak memory — over the same vendored corpus, so a performance claim in a commit
 message can be reproduced instead of taken on trust.
@@ -17,7 +17,7 @@ Four configurations, per document:
   port-cached      the port with its content-addressed compile cache allowed
                    (still `--no-aux`), after a warm-up run. What an unchanged
                    rebuild costs.
-  satysfi          upstream, as `layout_fidelity.py` invokes it for references.
+  satysfi          upstream, as `layout-tests/fidelity.py` invokes it for references.
   satysfi-bytecomp upstream with `--bytecomp`, if this build has the flag. This
                    is the fair comparison point for the port's evaluator, and
                    the one the project's past measurements used.
@@ -57,12 +57,12 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-# The corpus, the lib-root assembly and the document list are `layout_fidelity`'s
+# The corpus, the lib-root assembly and the document list are `layout-tests/fidelity.py`'s
 # and are imported rather than restated: the two harnesses MUST agree on what
 # they are building and against which packages, or their results cannot be read
 # together.
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-import layout_fidelity as lf  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parent / "layout-tests"))
+import fidelity as lf  # noqa: E402
 
 REPO = lf.REPO
 CORPUS = lf.CORPUS
@@ -70,11 +70,11 @@ LIB_RUSTYFI = lf.LIB_RUSTYFI
 
 
 def default_bin() -> Path:
-    """The RELEASE binary, unlike `layout_fidelity.py`'s debug default.
+    """The RELEASE binary, unlike `layout-tests/fidelity.py`'s debug default.
 
-    A debug build of this workspace is roughly an order of magnitude slower and
-    says nothing about the port's actual performance; comparing it against an
-    optimised OCaml binary would not be a measurement, it would be a libel.
+    A debug build of this workspace is roughly an order of magnitude slower, so
+    comparing it against an optimised OCaml binary would measure the build
+    profile rather than the port.
     """
     return REPO / "target" / "release" / "rustyfi"
 
@@ -196,7 +196,7 @@ def _tail(proc: subprocess.CompletedProcess) -> str:
 def port_argv(
     bin_path: Path, src_name: str, lib_root: Path, out: Path, cache_dir: Path, *, cache: bool
 ) -> list[str]:
-    """Mirrors `layout_fidelity.build_pdf`'s argv, plus `--cache-dir`.
+    """Mirrors `fidelity.build_pdf`'s argv, plus `--cache-dir`.
 
     `--no-aux` always: an aux file changes the cross-reference fixpoint's trial
     count, so honouring one would make a timing depend on whatever a previous
@@ -220,7 +220,7 @@ def port_argv(
 
 
 def satysfi_argv(satysfi: str, src_name: str, lib_root: Path, out: Path, *, bytecomp: bool) -> list[str]:
-    """Mirrors `layout_fidelity.build_ref_satysfi`'s argv."""
+    """Mirrors `fidelity.build_ref_satysfi`'s argv."""
     argv = [satysfi, src_name, "-o", str(out), "-C", str(lib_root)]
     if bytecomp:
         argv.append("--bytecomp")
@@ -231,12 +231,10 @@ def clear_aux(doc_dir: Path) -> None:
     """Delete any `.satysfi-aux` before an upstream run.
 
     Upstream reads one if it finds it, and a seeded cross-reference fixpoint can
-    save it a whole typesetting pass. The port is measured with `--no-aux`, so
-    leaving upstream's aux in place would time two different amounts of work and
-    call the difference a result: run 1 cold, runs 2..n warm, and the median
-    quietly reports the warm figure. Both engines are measured cold on
-    cross-references. (Upstream WITH a warm aux is a legitimate thing to
-    measure; it is simply not this column.)
+    save it a whole typesetting pass: run 1 cold, runs 2..n warm, and the median
+    quietly reports the warm figure. The port is measured with `--no-aux`, so
+    both engines are measured cold on cross-references. (Upstream WITH a warm
+    aux is a legitimate thing to measure; it is simply not this column.)
     """
     for aux in doc_dir.glob("*.satysfi-aux"):
         aux.unlink()
@@ -299,8 +297,8 @@ def main() -> int:
     port_root = lf.assemble_lib_root(root / "libroot-port", docs)
     sfi_root = lf.assemble_satysfi_lib_root(root / "libroot-satysfi", docs) if satysfi else None
 
-    # Each doc is built in a COPY of its corpus package, never in the repo:
-    # upstream writes a `.satysfi-aux` beside the source it builds.
+    # A COPY of each corpus package: upstream writes a `.satysfi-aux` beside the
+    # source it builds.
     work: dict[str, Path] = {}
     for doc in docs:
         pkg = Path(doc.src).parts[0]
@@ -388,8 +386,7 @@ def main() -> int:
             None,
         )
         # Units live on every datum, not once in a column header: these tables
-        # get pasted into commit messages and issues a row at a time, and a
-        # number that arrives without its unit is a number someone will guess at.
+        # get pasted into commit messages and issues a row at a time.
         for metric, get in (
             ("wall min/med", lambda r: _fmt2(r.wall_min, r.wall_med)),
             ("cpu  min/med", lambda r: _fmt2(r.cpu_min, r.cpu_med)),

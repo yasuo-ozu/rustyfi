@@ -1,0 +1,22 @@
+The SATySFi packages under this directory are NOT covered by the MIT licence
+in the repository root. They are upstream SATySFi's work, and are redistributed
+here under the GNU Lesser General Public License version 3.
+
+    Copyright (c) gfngfn and the SATySFi contributors
+    https://github.com/gfngfn/SATySFi
+
+The licence texts are ../LICENSE.LGPL-3.0 and ../LICENSE.GPL-3.0 (LGPL-3.0
+incorporates the GPL-3.0 by reference, so both are required).
+
+  dist/packages/       Copied from SATySFi v0.0.6. 27 of the 30 files are
+                       byte-identical to upstream. math.satyh and picture.satyh
+                       differ from upstream only by added comments.
+                       stdja-mini.satyh is this project's own work and is MIT.
+
+  dist-v01/packages/   MODIFIED versions of SATySFi's `saphe-split` branch,
+                       adapted for this port. No file is byte-identical to
+                       upstream, but roughly 73% of the lines are upstream's.
+                       LGPL-3.0 section 4 requires modified versions to be
+                       marked as such; this notice is that marking.
+
+The Rust engine that reads these packages is a separate work, licensed MIT.

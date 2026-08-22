@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
 """Line-BREAK and intra-line SPACING agreement between the port and upstream.
 
-`layout_fidelity.py` is the regression gate; two of its numbers are the wrong
+`fidelity.py` is the regression gate; two of its numbers are the wrong
 instrument for a line-breaker change:
 
 - `text_match` compares the flat WORD sequence, which is insensitive to WHERE
   lines break — the only thing a breaker change moves;
-- `lines` is largely a `pdftotext` clustering artifact (see that script's own
-  `line_count` docstring: the port-minus-upstream delta for easytable swings
-  from -180 to +2 as the tolerance goes 1.0 -> 8.0).
+- `lines` counts BASELINES, so it does not move at all when a break shifts
+  without changing how many lines the paragraph occupies.
 
 This measures the two quantities a line-breaker or inter-character-spacing
 change actually moves, both against the committed reference PDFs:
@@ -21,13 +20,13 @@ change actually moves, both against the committed reference PDFs:
             is identical in both engines. Offsets are measured from each line's
             OWN first character, so this is engine-relative: no cross-engine
             font-descriptor comparison is involved (the measurement trap in
-            `layout_probe.py`'s docstring) and the page margin drops out. This
+            `tools/probe.py`'s docstring) and the page margin drops out. This
             is the number inter-CJK glue moves.
 
-Run `layout_fidelity.py` first — it leaves `<doc>.port.pdf` and
-`<doc>.satysfi.pdf` side by side in each corpus directory, which is what this
-reads. To compare two builds, give `layout_fidelity.py --out-dir DIR` for the
-first one and pass DIR here as `--port-dir`.
+Run `fidelity.py` first — it leaves `<doc>.port.pdf` and `<doc>.satysfi.pdf`
+side by side in each corpus directory, which is what this reads. To compare two
+builds, give `fidelity.py --out-dir DIR` for the first one and pass DIR here as
+`--port-dir`.
 
     layout-tests/fidelity.py --bin target/debug/rustyfi
     layout-tests/tools/linebreak.py
@@ -74,7 +73,7 @@ def raw_words(pdf: Path) -> list[list[tuple[float, float, float, str]]]:
 
 def cluster(pages, tol: float):
     """Group each page's words into baselines, ascending. Mirrors
-    `layout_fidelity.line_count`'s clustering so the counts here agree with the
+    `fidelity.line_count`'s clustering so the counts here agree with the
     gate's."""
     for words in pages:
         cur: list[tuple[float, float, str]] = []
@@ -146,7 +145,7 @@ def main() -> int:
         "--port-dir",
         type=Path,
         default=None,
-        help="read <doc>.port.pdf from this ONE directory (layout_fidelity.py "
+        help="read <doc>.port.pdf from this ONE directory (fidelity.py "
         "--out-dir) instead of each doc's own corpus directory",
     )
     ap.add_argument("--tol", type=float, action="append", default=[])
@@ -165,7 +164,7 @@ def main() -> int:
         )
         ref = CORPUS / doc / f"{doc}.satysfi.pdf"
         if not port.exists() or not ref.exists():
-            print(f"{doc:<10} SKIP — run layout_fidelity.py first (missing {port.name})")
+            print(f"{doc:<10} SKIP — run layout-tests/fidelity.py first (missing {port.name})")
             continue
         pw, rw = raw_words(port), raw_words(ref)
         bits = []

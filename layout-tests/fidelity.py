@@ -11,8 +11,8 @@ box placement) — exactly what we want to measure.
 
 Each comparison reads each PDF twice, and which half answers which question is
 the whole design. GEOMETRY (`lines`) comes from the PDF CONTENT STREAM's
-text-positioning operators, via `vspace_probe/baselines.py`. TEXT comes from
-poppler `pdftotext -bbox`, which is what decodes `ToUnicode`, but is compared as
+text-positioning operators, via `measure/baselines.py`. TEXT comes from poppler
+`pdftotext -bbox`, which is what decodes `ToUnicode`, but is compared as
 CHARACTERS, never as words. Both halves deliberately avoid a `pdftotext` glyph
 BOX and a `pdftotext` word SPLIT — read on.
 
@@ -27,28 +27,24 @@ below covers every complex part of the corpus that the port can currently build:
   slydifi    slides: frames, layers, absolute placement
   gakushin   a real grant-application form (self-snapshot only)
 
-(`gakushin` has no committed upstream PDF to compare against — it is checked in
+`gakushin` has no committed upstream PDF to compare against — it is checked in
 SELF-SNAPSHOT mode — and upstream cannot build it at all without the
 Satyrographos-installed `fonts-junicode` package, which the vendored corpus does
-not carry. An earlier version of this note said `slydifi` was excluded for
-needing an un-bundled `railway` package and an unimplemented math primitive;
-that stopped being true when `railway` was vendored and the primitive landed —
-it is in `DOCS`, it builds, and it matches upstream's 30 pages.)
+not carry.
 
-TWO CONFOUNDS THIS HARNESS USED TO HAVE, AND HOW THE METRICS AVOID THEM
-----------------------------------------------------------------------
+TWO `pdftotext` CONFOUNDS, AND HOW THE METRICS AVOID THEM
+---------------------------------------------------------
 
-Both are artifacts of `pdftotext`, and each one misdirected investigations
-before it was pinned down. Every metric below is chosen so that neither can
-move it:
+Each one misdirected an investigation before it was pinned down. Every metric
+below is chosen so that neither can move it:
 
 1. **The font-descriptor trap.** A word's `pdftotext -bbox` box has its top and
    bottom from the FONT DESCRIPTOR, and the two writers emit different
    descriptors for identical glyphs. So the same word on the same baseline gets
    a different `yMin` in each engine, and a mixed CJK/latin line clusters as one
    line in one engine and two in the other with the layout IDENTICAL. `lines`
-   therefore comes from the PDF CONTENT STREAM (`vspace_probe/baselines.py`),
-   never from glyph boxes — see `line_count`.
+   therefore comes from the PDF CONTENT STREAM (`measure/baselines.py`), never
+   from glyph boxes — see `line_count`.
 
 2. **Word splits are justification-sensitive.** `pdftotext` splits words on
    inter-glyph GAPS, so an identical CJK run tokenizes one way on an unjustified
@@ -109,32 +105,19 @@ A guarded number nobody has read the cause of turns back into folklore, so:
               here — the enumitem case below, same class) and one `-` from a
               hyphenated break. `chars_extra` is 2: the `6` that replaced that
               `5`, and one math exponent that upstream's `ToUnicode` does not
-              carry (the port being better, as above).
+              carry (the port being better, as above). `lines_dev` is 2, the
+              line-packing floor: p11's table matches the reference
+              baseline-for-baseline.
 
-              This entry used to read 56, "the only one that is a BUG rather
-              than a rounding of glyph coverage", and blamed the port's
-              renderer for dropping the merged cells out of the `set-fmt`/
-              `merge` showcase on p11 and the 2020-holidays table. That was
-              WRONG, and the way it was wrong is worth keeping: SATySFi 0.0.11
-              (flake.nix's `satysfi`) drops exactly the same cells from the
-              same sources — the two engines agreed all along. The cause was
-              `easytable/src/matrix.satyg`'s `Matrix.set-nth`, written against
-              an INDEX-based `List.take`/`List.split-at` and vendored here next
-              to a COUNT-based `satysfi-base`, so `Matrix.set` grew or shrank
-              the row it wrote to and `TableBuilder.build`'s `Matrix.eachmap`
-              truncated the grid. `doc/easytable.pdf` (the reference, built by
-              the package author against the older base) was simply not
-              reachable from the vendored pairing. Repaired in that file, with
-              the measurement, at its `set-nth`.
-
-              Unmasking it cost `lines_dev` 0 -> 2 and `chars_extra` 0 -> 2.
-              Neither is new port behaviour: with the tables truncated the port
-              was 2 baselines SHORT on the pages that hold them and 2 long
-              elsewhere, and 565 == 565 was the sum of those cancelling (no
-              page's count matched: the per-page deltas were -1 -1 -2 -1 +3 +2
-              +2 -1 +1 -2). With the tables whole, p11's table now matches the
-              reference baseline-for-baseline and the residual +2 is the
-              line-packing floor, which is where it always was.
+              Reaching those numbers needed a REPAIR to the vendored corpus, at
+              `easytable/src/matrix.satyg`'s `Matrix.set-nth`: it is written
+              against an INDEX-based `List.take`/`List.split-at` and vendored
+              here next to a COUNT-based `satysfi-base`, so `Matrix.set` grew or
+              shrank the row it wrote to and `TableBuilder.build`'s
+              `Matrix.eachmap` truncated the grid — in BOTH engines, dropping
+              the merged cells of the `set-fmt`/`merge` showcase on p11 and the
+              2020-holidays table. The measurement is recorded at that
+              `set-nth`.
   enumitem    13 = three `✓` (a checkmark the doc builds by overprinting
               glyphs), nine leader dots in the table of contents, and one TOC
               page number (`19` upstream, `18` here) — a cross-reference
@@ -149,7 +132,7 @@ A guarded number nobody has read the cause of turns back into folklore, so:
 
 None of these are fixed here; this script measures, it does not typeset.
 
-The baseline (`layout_fidelity_baseline.json`) pins each metric at its current
+The baseline (`layout-tests/baseline.json`) pins each metric at its current
 value, so this PASSES today and FAILS on a regression. Re-baseline with
 `--update` after an intentional change.
 
@@ -157,7 +140,7 @@ Output: each run leaves the pair it compared beside the package it came from,
 
   layout-tests/corpus/<doc>/<doc>.port.pdf      the port's render
   layout-tests/corpus/<doc>/<doc>.satysfi.pdf   the reference it was
-                                                           compared against
+                                                compared against
 
 so when a metric moves you can open the two PDFs the number came from instead of
 re-running to reproduce them. Both suffixes are gitignored; the vendored
@@ -171,7 +154,7 @@ Usage:
 
 Exit status: 0 iff every compared document meets its baseline (or --update).
 Self-skips (exit 0 with a SKIP note) if poppler, the port binary, or the
-the vendored corpus is missing, so it is safe to invoke unconditionally.
+vendored corpus is missing, so it is safe to invoke unconditionally.
 """
 
 from __future__ import annotations
@@ -191,10 +174,9 @@ from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 from pathlib import Path
 
-# The content-stream baseline reader `lines` is measured with. It already
-# existed — it is what settled the math-metrics work — so this imports it rather
-# than growing a second copy that can drift out of agreement with the probe
-# scripts (`vspace_probe/pagetops.py` reads the same `runs_of`).
+# The content-stream baseline reader `lines` is measured with. Imported rather
+# than copied, so it cannot drift out of agreement with the probe scripts
+# (`measure/pagetops.py` reads the same `runs_of`).
 sys.path.insert(0, str(Path(__file__).resolve().parent / "measure"))
 from baselines import page_baselines  # noqa: E402
 
@@ -541,7 +523,7 @@ def line_count(baselines: list[list[float]]) -> int:
     Tm/Td .. Tj` places a run at an exact baseline in PDF user space, identically
     for both.
 
-    The old glyph-box count and this one, measured on the same renders:
+    A glyph-box count and this one, measured on the same renders:
 
         doc         glyph-box (tol 3.0)      baselines (tol 0.05)
                     port / up  delta         port / up  delta
@@ -553,14 +535,14 @@ def line_count(baselines: list[list[float]]) -> int:
         slydifi      336 / 337   -1           392 / 393   -1
         gakushin      66 / --                 156 / --        (self-snapshot)
 
-    easytable's headline "37 lines short" was ENTIRELY the artifact: the two
-    engines set the same 565 lines. The old column also moved wildly with the
-    clustering tolerance (easytable swung -180 -> -36 -> -10 -> +2 between tol
-    1.0 and 8.0) whereas this one is flat from 0.02 to 0.5 on every document,
-    because runs of one line share a baseline exactly and consecutive lines are
-    ~19pt apart. Re-check with `--tol-sweep` — and note what it shows at tol
-    1.0 and above, where slydifi's stable -1 becomes -8 and then +9: that is
-    the merging artifact reappearing, and the old metric's 3.0 lived in it.
+    easytable's headline "37 lines short" is ENTIRELY the artifact: the two
+    engines set the same 565 lines. The glyph-box column also moves wildly with
+    the clustering tolerance (easytable swings -180 -> -36 -> -10 -> +2 between
+    tol 1.0 and 8.0) whereas this one is flat from 0.02 to 0.5 on every
+    document, because runs of one line share a baseline exactly and consecutive
+    lines are ~19pt apart. Re-check with `--tol-sweep` — and note what it shows
+    at tol 1.0 and above, where slydifi's stable -1 becomes -8 and then +9:
+    that is the merging artifact, which a glyph-box metric's 3.0 lives inside.
 
     The absolute counts are HIGHER than the glyph-box ones on the two documents
     with embedded PDF pages (figbox 541 -> 590, gakushin 66 -> 156) because
@@ -676,10 +658,9 @@ def compare(
     """Port-side layout metrics; against `ref` if given (vs-upstream), else
     just the self-snapshot counts (the comparison metrics left None).
 
-    Two extractions per PDF feed this, deliberately: GEOMETRY comes from the
-    content stream (`*_baselines`, immune to the font-descriptor trap) and TEXT
-    comes from `pdftotext` (which is what decodes `ToUnicode`), compared as
-    characters so its word splitting cannot leak in.
+    Two extractions per PDF feed this: GEOMETRY from the content stream
+    (`*_baselines`) and TEXT from `pdftotext`, compared as characters. The
+    module docstring says why each half must avoid the other's instrument.
     """
     port_words = all_words(port)
     text_match: float | None = None
@@ -770,12 +751,9 @@ def check_against_baseline(name: str, m: Metrics, base: dict) -> list[str]:
             )
     # Counts are checked as a DEVIATION FROM UPSTREAM that may shrink but never
     # grow — the same convergence guard `page_gap` already applies to pages.
-    #
-    # They used to be compared against the PORT'S OWN recorded counts ±6%, which
-    # measures drift from our past rather than fidelity, and actively misleads:
-    # latexcmds sat at 1096 words against upstream's 1095 — as close as it has
-    # ever been — and was still reported as a regression because the pinned
-    # baseline said 1029. A document that MOVES TOWARD SATySFi must never fail.
+    # Comparing against the port's OWN recorded counts instead would measure
+    # drift from our past rather than fidelity, and a document that MOVES TOWARD
+    # SATySFi must never fail.
     for key, dev_key in (("lines", "lines_dev"),):
         ref = getattr(m, f"ref_{key}")
         if ref is not None and dev_key in base:
@@ -963,15 +941,9 @@ def main() -> int:
 
             # Persist both renders next to the package they came from, so the
             # pair a failure refers to is sitting where you would look for it
-            # rather than in a temp dir that is already gone. `--out-dir`
-            # collects every doc into one directory instead; `--no-persist`
-            # keeps the old discard-everything behaviour.
-            #
-            # Both suffixes are gitignored, and deliberately so: `.satysfi.pdf`
-            # is a COPY of the reference (which lives at doc.ref under its own
-            # upstream name, e.g. latexcmds/doc/latexcmds-doc.pdf, and stays
-            # tracked). Copying it under the predictable name is what makes the
-            # pair directly diffable — `<doc>.port.pdf` vs `<doc>.satysfi.pdf`.
+            # rather than in a temp dir that is already gone. Copying the
+            # reference under the predictable name is what makes the pair
+            # directly diffable — see the module docstring's Output section.
             if not args.no_persist:
                 dest = args.out_dir if args.out_dir else (CORPUS / doc.name)
                 dest.mkdir(parents=True, exist_ok=True)

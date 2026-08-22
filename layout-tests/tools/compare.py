@@ -13,7 +13,7 @@ fidelity harness does. Run under `nix develop` so `satysfi` is on PATH.
 Only lines from ONE engine are ever compared to lines of the SAME engine unless
 you look at pure-CJK rows: the two PDF writers emit different font descriptors
 for identical latin glyphs, so a latin word's reported yMin is NOT comparable
-across engines (see CLAUDE.md's measurement trap).
+across engines.
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ REPO = HERE.parent.parent
 CORPUS = REPO / "layout-tests" / "corpus"
 LIB = REPO / "lib-rustyfi"
 
-# Corpus packages staged under a published prefix, mirroring layout_fidelity.py.
+# Corpus packages staged under a published prefix, mirroring fidelity.py.
 STAGE = {
     "enumitem": "enumitem/src",
     "easytable": "easytable/src",

@@ -273,24 +273,9 @@ fn analyze_takes_its_argument_literally_with_no_fallback() {
 /// analysed with the 0.0.6 grammar and every one of them lit up.
 #[test]
 fn the_vendored_corpora_produce_no_diagnostics() {
-    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../../lib-rustyfi");
-    let mut checked = 0usize;
-    let mut complaints = Vec::new();
-    visit(std::path::Path::new(root), &mut |path, src| {
-        checked += 1;
-        let (version, diags) = analyze_detected(src);
-        for d in diags {
-            complaints.push(format!("{} [as {version}] {}:{} {}", path.display(), d.line + 1, d.character, d.message));
-        }
-    });
-    assert!(
-        complaints.is_empty(),
-        "false positives on files that compile:\n{}",
-        complaints.join("\n")
-    );
     // Floor, so a broken path silently checking nothing cannot pass. The two
-    // corpora hold 29 and 34 source files at the time of writing.
-    assert!(checked >= 60, "expected the whole corpus, checked only {checked}");
+    // corpora hold 30 and 47 source files at the time of writing.
+    sweep("/../../lib-rustyfi", 70);
 }
 
 /// The `rustyfi` crate's own document fixtures, which its test suite compiles
@@ -300,18 +285,42 @@ fn the_vendored_corpora_produce_no_diagnostics() {
 /// modules, and exercise lexer modes the packages never enter.
 #[test]
 fn the_document_fixtures_produce_no_diagnostics() {
-    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../../crates/rustyfi/tests/fixtures");
+    sweep("/../../crates/rustyfi/tests/fixtures", 40);
+}
+
+/// Analyse every SATySFi source file under `rel` (relative to this crate) and
+/// fail on any diagnostic at all, naming every one.
+///
+/// `floor` is a minimum file count, so that a mistyped path — which
+/// `read_dir` would report, but a filter that matches nothing would not —
+/// cannot make the sweep pass vacuously.
+fn sweep(rel: &str, floor: usize) {
+    let root = format!("{}{rel}", env!("CARGO_MANIFEST_DIR"));
     let mut checked = 0usize;
     let mut complaints = Vec::new();
-    visit(std::path::Path::new(root), &mut |path, src| {
+    visit(std::path::Path::new(&root), &mut |path, src| {
         checked += 1;
         let (version, diags) = analyze_detected(src);
         for d in diags {
-            complaints.push(format!("{} [as {version}] {}:{} {}", path.display(), d.line + 1, d.character, d.message));
+            complaints.push(format!(
+                "{} [as {version}] line {}, char {}: {}",
+                path.display(),
+                d.line + 1,
+                d.character,
+                d.message
+            ));
         }
     });
-    assert!(complaints.is_empty(), "false positives:\n{}", complaints.join("\n"));
-    assert!(checked >= 40, "expected the fixture set, checked only {checked}");
+    assert!(
+        complaints.is_empty(),
+        "false positives on {} files that compile:\n{}",
+        complaints.len(),
+        complaints.join("\n")
+    );
+    assert!(
+        checked >= floor,
+        "expected at least {floor} files under {root}, checked only {checked}"
+    );
 }
 
 /// Call `f` for every SATySFi source file under `dir`, recursively.
@@ -333,4 +342,72 @@ fn visit(dir: &std::path::Path, f: &mut impl FnMut(&std::path::Path, &str)) {
         let src = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         f(&path, &src);
     }
+}
+
+// ---------------------------------------------------------------------------
+// The backtracking budget
+// ---------------------------------------------------------------------------
+
+/// The vendored 0.1 library whose truncations trigger the parser's
+/// exponential backtracking.
+fn pathological_prefix() -> String {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../lib-rustyfi/dist-v01/packages/std-ja.satyh"
+    );
+    let src = std::fs::read_to_string(path).expect("the vendored 0.1 corpus must be present");
+    src[..14_223.min(src.len())].to_string()
+}
+
+/// A truncated 0.1 library — an ordinary mid-typing state — must not hang.
+///
+/// The 0.1 grammar backtracks exponentially on some incomplete inputs. On
+/// prefixes of this very file, a release build measured 13 ms at 13,484
+/// bytes, 69 ms at 13,669, 334 ms at 13,853 and **11.5 seconds** at 14,223,
+/// still climbing by roughly x5 per 200 bytes typed. An editor runs this on
+/// nearly every keystroke, so `HighWaterStream`'s serve budget caps it — and
+/// the whole 247-file corpus analyses in 0.56 s with a 30 ms worst case, so
+/// nothing real comes anywhere near the cap.
+///
+/// The assertion is on the *message*, not on a stopwatch, so it means the
+/// same thing on every machine: reaching the cap is reported as reaching the
+/// cap, rather than as a confident claim about the token the parse stopped
+/// at. The loose time bound underneath is the backstop for a regression that
+/// removes the budget outright — without it, that failure mode is a CI
+/// timeout with no explanation attached.
+///
+/// If the vendored `std-ja.satyh` is ever edited and this prefix stops
+/// exhausting, the fix is to re-find one that does (sweep
+/// `(200..src.len()).step_by(197)` and time each), not to delete the test.
+#[test]
+fn a_pathological_prefix_gives_up_instead_of_hanging() {
+    let src = pathological_prefix();
+    let started = std::time::Instant::now();
+    let diags = analyze(&src, RustyfiVersion::V0_1);
+    let elapsed = started.elapsed();
+
+    let d = only(&diags);
+    assert!(
+        d.message.contains("gave up"),
+        "expected the budget to stop the parse, got: {}",
+        d.message
+    );
+    assert!(
+        elapsed < std::time::Duration::from_secs(30),
+        "the budget did not bound the parse: {elapsed:?}"
+    );
+}
+
+/// The same buffer through the auto-detecting entry point, which is what the
+/// server actually calls: the cross-generation re-check must not turn one
+/// bounded parse into an unbounded one.
+#[test]
+fn the_version_recheck_is_bounded_too() {
+    let src = pathological_prefix();
+    let started = std::time::Instant::now();
+    let _ = analyze_auto(&src);
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(60),
+        "both generations together must still be bounded"
+    );
 }

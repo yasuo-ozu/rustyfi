@@ -30,10 +30,11 @@ use crate::RustyfiVersion;
 pub struct Options {
     /// `rustyfi lsp --lang 0.1`: force every buffer to one generation.
     ///
-    /// `None` — the default — detects per file, exactly as the CLI does for
-    /// the entry document (see [`crate::detect_version`]). An override is
-    /// worth having for a project that is wholly one generation and contains
-    /// library files whose text carries no version signal.
+    /// `None` — the default — detects per file (see [`crate::analyze_auto`],
+    /// which is the CLI's own entry-document rule plus a re-check for buffers
+    /// that signal no version at all). An override is worth having for a
+    /// project that is wholly one generation and whose library files, being
+    /// signal-free, would otherwise each be parsed twice.
     pub lang: Option<RustyfiVersion>,
 }
 
@@ -151,38 +152,30 @@ impl State {
     /// rather than producing a message.
     fn notification(&mut self, method: &str, params: Value) -> Vec<Value> {
         // Notifications before `initialize` "should be dropped" per the
-        // specification, except `exit`.
-        if !self.initialized {
+        // specification, except `exit` (handled by the caller). The same
+        // applies once `shutdown` has been answered: the session is winding
+        // down, and pushing diagnostics at a client that has stopped
+        // listening is at best noise.
+        if !self.initialized || self.shutdown_requested {
             return Vec::new();
         }
         match method {
+            // The two carry the buffer differently — `didOpen` inside the
+            // `textDocument` object, `didChange` in `contentChanges` — and
+            // are otherwise the same notification.
             "textDocument/didOpen" => {
-                let Some(doc) = params.get("textDocument") else {
-                    return Vec::new();
-                };
-                let (Some(uri), Some(text)) = (str_field(doc, "uri"), str_field(doc, "text"))
-                else {
-                    return Vec::new();
-                };
-                vec![self.diagnostics_for(&uri, &text, doc.get("version").cloned())]
+                let text = params.get("textDocument").and_then(|d| str_field(d, "text"));
+                self.publish(&params, text)
             }
+            // `full_replacement` yields `None` for a *ranged* change under a
+            // Full-sync agreement: the client is not honouring the advertised
+            // capability, and applying it would need the incremental splicing
+            // this server does not do. Publishing nothing leaves the previous
+            // diagnostics on screen — stale, but never pointing at text that
+            // is not there.
             "textDocument/didChange" => {
-                let Some(doc) = params.get("textDocument") else {
-                    return Vec::new();
-                };
-                let Some(uri) = str_field(doc, "uri") else {
-                    return Vec::new();
-                };
-                let Some(text) = full_replacement(&params) else {
-                    // A ranged change under a Full-sync agreement: the client
-                    // is not honouring the advertised capability, and applying
-                    // it would need the incremental splicing this server does
-                    // not do. Publishing nothing leaves the previous
-                    // diagnostics on screen — stale, but never pointing at
-                    // text that is not there.
-                    return Vec::new();
-                };
-                vec![self.diagnostics_for(&uri, &text, doc.get("version").cloned())]
+                let text = full_replacement(&params);
+                self.publish(&params, text)
             }
             "textDocument/didClose" => {
                 let Some(uri) = params.get("textDocument").and_then(|d| str_field(d, "uri")) else {
@@ -200,6 +193,24 @@ impl State {
             // a server for an unknown notification.
             _ => Vec::new(),
         }
+    }
+
+    /// Publish diagnostics for `text` against the URI and version in
+    /// `params.textDocument`, or nothing if either the URI or the text is
+    /// missing.
+    ///
+    /// `text` is a parameter rather than read from `params` because that is
+    /// the *only* thing `didOpen` and `didChange` disagree about; everything
+    /// else — the URI, the version echo, the "drop a malformed notification
+    /// silently" rule — is shared, and was previously written twice.
+    fn publish(&self, params: &Value, text: Option<&str>) -> Vec<Value> {
+        let Some(doc) = params.get("textDocument") else {
+            return Vec::new();
+        };
+        let (Some(uri), Some(text)) = (str_field(doc, "uri"), text) else {
+            return Vec::new();
+        };
+        vec![self.diagnostics_for(uri, text, doc.get("version"))]
     }
 
     /// `initializationOptions.lang`, if the client sent one and the command
@@ -224,7 +235,7 @@ impl State {
 
     /// Analyse `text` and build the whole `textDocument/publishDiagnostics`
     /// notification, envelope included.
-    fn diagnostics_for(&self, uri: &str, text: &str, version: Option<Value>) -> Value {
+    fn diagnostics_for(&self, uri: &str, text: &str, version: Option<&Value>) -> Value {
         let diags = match self.opts.lang {
             Some(lang) => crate::analyze(text, lang),
             None => crate::analyze_auto(text),
@@ -248,7 +259,7 @@ impl State {
         // client can discard a result that a later edit has already
         // invalidated (LSP 3.17 `PublishDiagnosticsParams.version`).
         if let Some(v @ Value::Number(_)) = version {
-            params["version"] = v;
+            params["version"] = v.clone();
         }
         jsonrpc::notification("textDocument/publishDiagnostics", params)
     }
@@ -277,8 +288,12 @@ fn server_capabilities() -> Value {
 }
 
 /// A string field of a JSON object.
-fn str_field(value: &Value, name: &str) -> Option<String> {
-    value.get(name).and_then(Value::as_str).map(str::to_owned)
+///
+/// Borrowed, not owned: `text` here is the whole document, and the `params`
+/// it lives in outlive every use of it, so copying the buffer to look at it
+/// would be one wasted allocation of the file's size per keystroke.
+fn str_field<'a>(value: &'a Value, name: &str) -> Option<&'a str> {
+    value.get(name).and_then(Value::as_str)
 }
 
 /// The new full text of a `didChange`, if every change in it is a whole-
@@ -289,182 +304,11 @@ fn str_field(value: &Value, name: &str) -> Option<String> {
 /// order. A `range` on any entry means the client is doing incremental sync
 /// regardless of what was advertised, and this returns `None` rather than
 /// silently treating a fragment as the whole file.
-fn full_replacement(params: &Value) -> Option<String> {
+fn full_replacement(params: &Value) -> Option<&str> {
     let changes = params.get("contentChanges")?.as_array()?;
     let last = changes.last()?;
     if last.get("range").is_some_and(|r| !r.is_null()) {
         return None;
     }
     str_field(last, "text")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn frame(body: &Value) -> Vec<u8> {
-        let s = serde_json::to_vec(body).unwrap();
-        let mut out = format!("Content-Length: {}\r\n\r\n", s.len()).into_bytes();
-        out.extend(s);
-        out
-    }
-
-    /// Drive `run` over a scripted message list, returning every message the
-    /// server wrote plus its exit code.
-    fn drive(msgs: &[Value], opts: Options) -> (Vec<Value>, i32) {
-        let mut input: Vec<u8> = Vec::new();
-        for m in msgs {
-            input.extend(frame(m));
-        }
-        let mut reader = io::Cursor::new(input);
-        let mut out: Vec<u8> = Vec::new();
-        let exit = run(&mut reader, &mut out, opts).expect("the server must not fail on I/O");
-        let mut cursor = io::Cursor::new(out);
-        let mut seen = Vec::new();
-        while let Some(v) = jsonrpc::read_message(&mut cursor).unwrap() {
-            seen.push(v);
-        }
-        (seen, exit)
-    }
-
-    fn init() -> Value {
-        json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})
-    }
-
-    fn did_open(uri: &str, text: &str) -> Value {
-        json!({
-            "jsonrpc": "2.0",
-            "method": "textDocument/didOpen",
-            "params": { "textDocument": {
-                "uri": uri, "languageId": "satysfi", "version": 1, "text": text,
-            }},
-        })
-    }
-
-    #[test]
-    fn a_request_before_initialize_is_refused() {
-        let (out, _) = drive(
-            &[json!({"jsonrpc": "2.0", "id": 7, "method": "shutdown"})],
-            Options::default(),
-        );
-        assert_eq!(out[0]["id"], 7);
-        assert_eq!(out[0]["error"]["code"], code::SERVER_NOT_INITIALIZED);
-    }
-
-    #[test]
-    fn a_notification_before_initialize_is_dropped_silently() {
-        let (out, _) = drive(&[did_open("file:///a.saty", "let x = ] in x")], Options::default());
-        assert!(out.is_empty(), "expected silence, got {out:?}");
-    }
-
-    #[test]
-    fn an_unknown_request_is_method_not_found_and_the_session_survives() {
-        let (out, exit) = drive(
-            &[
-                init(),
-                json!({"jsonrpc": "2.0", "id": 2, "method": "textDocument/hover", "params": {}}),
-                json!({"jsonrpc": "2.0", "id": 3, "method": "shutdown"}),
-                json!({"jsonrpc": "2.0", "method": "exit"}),
-            ],
-            Options::default(),
-        );
-        assert_eq!(out[1]["error"]["code"], code::METHOD_NOT_FOUND);
-        assert_eq!(out[2]["id"], 3);
-        assert!(out[2]["result"].is_null());
-        assert_eq!(exit, 0);
-    }
-
-    #[test]
-    fn exit_without_shutdown_is_a_failure_code() {
-        let (_, exit) = drive(&[init(), json!({"jsonrpc": "2.0", "method": "exit"})], Options::default());
-        assert_eq!(exit, 1, "the specification requires exit code 1 here");
-    }
-
-    #[test]
-    fn a_closed_pipe_without_exit_is_a_clean_disconnect() {
-        let (_, exit) = drive(&[init()], Options::default());
-        assert_eq!(exit, 0);
-    }
-
-    #[test]
-    fn did_close_retracts_the_diagnostics() {
-        let (out, _) = drive(
-            &[
-                init(),
-                did_open("file:///a.saty", "let x = ] in x"),
-                json!({
-                    "jsonrpc": "2.0",
-                    "method": "textDocument/didClose",
-                    "params": { "textDocument": { "uri": "file:///a.saty" }},
-                }),
-            ],
-            Options::default(),
-        );
-        assert!(!out[1]["params"]["diagnostics"].as_array().unwrap().is_empty());
-        let last = out.last().unwrap();
-        assert_eq!(last["method"], "textDocument/publishDiagnostics");
-        assert_eq!(last["params"]["uri"], "file:///a.saty");
-        assert!(last["params"]["diagnostics"].as_array().unwrap().is_empty());
-    }
-
-    #[test]
-    fn a_ranged_change_is_ignored_rather_than_misapplied() {
-        // Full sync was advertised; a client sending a fragment must not have
-        // it mistaken for the whole buffer.
-        let (out, _) = drive(
-            &[
-                init(),
-                did_open("file:///a.saty", "let x = 1 in x"),
-                json!({
-                    "jsonrpc": "2.0",
-                    "method": "textDocument/didChange",
-                    "params": {
-                        "textDocument": { "uri": "file:///a.saty", "version": 2 },
-                        "contentChanges": [{
-                            "range": {"start": {"line": 0, "character": 0},
-                                      "end": {"line": 0, "character": 1}},
-                            "text": "]",
-                        }],
-                    },
-                }),
-            ],
-            Options::default(),
-        );
-        // One publish (from didOpen) and nothing for the ranged change.
-        assert_eq!(out.len(), 2, "{out:?}");
-    }
-
-    #[test]
-    fn malformed_json_gets_a_parse_error_and_the_session_survives() {
-        let mut input = b"Content-Length: 5\r\n\r\n{bad}".to_vec();
-        input.extend(frame(&init()));
-        let mut reader = io::Cursor::new(input);
-        let mut out: Vec<u8> = Vec::new();
-        run(&mut reader, &mut out, Options::default()).unwrap();
-        let mut cursor = io::Cursor::new(out);
-        let first = jsonrpc::read_message(&mut cursor).unwrap().unwrap();
-        assert_eq!(first["error"]["code"], code::PARSE_ERROR);
-        assert!(first["id"].is_null());
-        let second = jsonrpc::read_message(&mut cursor).unwrap().unwrap();
-        assert!(second["result"]["capabilities"].is_object(), "session survived");
-    }
-
-    #[test]
-    fn initialization_options_can_pin_the_generation() {
-        // `module M = struct .. end` carries no version signal, so with no
-        // pin it is analysed as 0.0.6 and then re-checked; pinned to 0.1 it
-        // is analysed as 0.1 directly. Both are clean here — what is asserted
-        // is that a bad `lang` string does not crash and does not pin.
-        let (out, _) = drive(
-            &[
-                json!({
-                    "jsonrpc": "2.0", "id": 1, "method": "initialize",
-                    "params": { "initializationOptions": { "lang": "nonsense" }},
-                }),
-                did_open("file:///a.saty", "@require: p\nlet x = 1 in x\n"),
-            ],
-            Options::default(),
-        );
-        assert!(out[1]["params"]["diagnostics"].as_array().unwrap().is_empty());
-    }
 }

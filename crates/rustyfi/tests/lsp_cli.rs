@@ -11,40 +11,33 @@ use std::io::Write as _;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
+use rustyfi_lsp::jsonrpc;
 use serde_json::{json, Value};
 
 fn bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_rustyfi"))
 }
 
-/// Frame a message the way the LSP base protocol requires.
+/// Frame a message, and read a framed stream back, through the server's own
+/// base-protocol codec.
+///
+/// A hand-rolled decoder here would be a second, weaker implementation to
+/// keep in step — weaker because it would inevitably be spelled
+/// `strip_prefix("Content-Length: ")`, where `read_message` is
+/// case-insensitive and whitespace-tolerant per RFC 7230. Using the real one
+/// also means this test fails if the *writer* emits a byte count that does
+/// not match its body, which is the framing bug worth catching.
 fn frame(msg: &Value) -> Vec<u8> {
-    let body = serde_json::to_vec(msg).unwrap();
-    let mut out = format!("Content-Length: {}\r\n\r\n", body.len()).into_bytes();
-    out.extend(body);
+    let mut out = Vec::new();
+    jsonrpc::write_message(&mut out, msg).expect("writing to a Vec cannot fail");
     out
 }
 
-/// Split a framed byte stream back into messages, checking each
-/// `Content-Length` against the bytes that follow it.
-fn unframe(mut data: &[u8]) -> Vec<Value> {
+fn unframe(data: &[u8]) -> Vec<Value> {
+    let mut cursor = std::io::Cursor::new(data);
     let mut out = Vec::new();
-    while !data.is_empty() {
-        let split = data
-            .windows(4)
-            .position(|w| w == b"\r\n\r\n")
-            .unwrap_or_else(|| panic!("no header terminator in {:?}", String::from_utf8_lossy(data)));
-        let headers = std::str::from_utf8(&data[..split]).expect("headers are ASCII");
-        let len: usize = headers
-            .lines()
-            .find_map(|l| l.strip_prefix("Content-Length: "))
-            .expect("a Content-Length header")
-            .trim()
-            .parse()
-            .expect("a numeric Content-Length");
-        let body = &data[split + 4..split + 4 + len];
-        out.push(serde_json::from_slice(body).expect("a JSON body of exactly Content-Length bytes"));
-        data = &data[split + 4 + len..];
+    while let Some(v) = jsonrpc::read_message(&mut cursor).expect("a well-framed stream") {
+        out.push(v);
     }
     out
 }
@@ -170,20 +163,31 @@ fn a_bad_lang_flag_is_a_usage_error_not_a_broken_session() {
 }
 
 #[test]
-fn the_subcommand_is_listed_in_help() {
+fn the_subcommand_is_listed_in_help_without_displacing_compile_mode() {
     let out = Command::new(bin()).arg("--help").output().expect("spawn");
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(text.contains("lsp"), "`lsp` should be discoverable:\n{text}");
+    assert!(
+        text.contains("Compile a SATySFi"),
+        "compile mode is still the default personality:\n{text}"
+    );
 }
 
 #[test]
-fn compiling_still_works_exactly_as_before() {
-    // `lsp` is additive. The one way to get this wrong is a clap tree change
-    // that makes the compile positional stop resolving.
+fn a_bare_path_still_reaches_compile_mode_rather_than_the_new_subcommand() {
+    // `lsp` is additive, and the way to break that is a clap tree change that
+    // makes the compile positional stop resolving. A path that does not exist
+    // must therefore fail as a *compile* error (exit 1), not as a clap usage
+    // error (exit 2) — the latter would mean the positional never bound.
     let out = Command::new(bin())
-        .arg("--help")
+        .arg("/nonexistent/definitely-not-here.saty")
         .output()
         .expect("spawn");
-    let text = String::from_utf8_lossy(&out.stdout);
-    assert!(text.contains("Compile a SATySFi"), "compile mode is still the default:\n{text}");
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "expected a compile failure, got: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(String::from_utf8_lossy(&out.stderr).contains("definitely-not-here.saty"));
 }

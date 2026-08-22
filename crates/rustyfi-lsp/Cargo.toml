@@ -30,9 +30,7 @@ syan.workspace = true
 # behind the default-on `server` feature all the same, so a
 # `wasm32-unknown-unknown` consumer of `analyze` can build with
 # `default-features = false` and pull in nothing but `rustyfi-syntax`.
-serde_json = { version = "1", optional = true, default-features = false, features = [
-  "std",
-] }
+serde_json = { version = "1", optional = true }
 
 [features]
 default = ["server"]

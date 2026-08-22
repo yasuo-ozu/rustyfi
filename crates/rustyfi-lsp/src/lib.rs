@@ -4,8 +4,8 @@
 //! The crate is deliberately two halves with a hard line between them:
 //!
 //! - [`analyze`] and friends ([`analyze_auto`], [`analyze_detected`],
-//!   [`Diag`], [`Severity`], [`LineIndex`], [`detect_version`]) — **no LSP
-//!   types, no filesystem, no I/O**, and nothing outside `rustyfi-syntax`.
+//!   [`Diag`], [`Severity`], [`LineIndex`]) — **no LSP types, no
+//!   filesystem, no I/O**, and nothing outside `rustyfi-syntax`.
 //!   This half builds for `wasm32-unknown-unknown`, so the browser
 //!   playground's editor gets exactly the diagnostics the editor on the
 //!   desktop does, out of the same code:
@@ -51,7 +51,6 @@
 mod analysis;
 mod high_water;
 mod line_index;
-mod version;
 
 #[cfg(feature = "server")]
 pub mod jsonrpc;
@@ -60,7 +59,6 @@ pub mod server;
 
 pub use analysis::{analyze, analyze_auto, analyze_detected, Diag, Severity};
 pub use line_index::{LineIndex, Position};
-pub use version::detect_version;
 
 /// Re-exported so a consumer of [`analyze`] does not have to depend on
 /// `rustyfi-syntax` directly just to name its second argument.

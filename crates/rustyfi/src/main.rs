@@ -97,15 +97,16 @@ fn run() -> i32 {
 /// message and desynchronize the session. Diagnostics-about-the-server go to
 /// stderr, which editors surface in an output pane.
 fn run_lsp(m: &ArgMatches) -> i32 {
-    let lang = match m.get_one::<String>("lang") {
-        Some(s) => match s.parse::<rustyfi_syntax::RustyfiVersion>() {
-            Ok(v) => Some(v),
-            Err(e) => {
-                eprintln!("error: --lang: {e}");
-                return 2;
-            }
-        },
-        None => None,
+    // Exit 2 rather than compile mode's 1: `run`'s own doc reserves 2 for a
+    // usage error, and clap itself exits 2 for a rejected flag value. (Compile
+    // mode reports the same failure through `anyhow` and so exits 1; that is
+    // pre-existing behaviour this subcommand deliberately does not change.)
+    let lang = match parse_lang_flag(m.get_one::<String>("lang").map(String::as_str)) {
+        Ok(lang) => lang,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return 2;
+        }
     };
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
@@ -410,6 +411,16 @@ fn discover_deps_lock_digest(input: &std::path::Path) -> Option<String> {
     Some(lock.digest())
 }
 
+/// Parse a `--lang VERSION` flag value, shared by every subcommand that takes
+/// one so that the accepted spellings and the failure wording cannot drift
+/// apart between them. (`install`/`list`'s `--lang` is deliberately not a
+/// caller: it parses a `satyrographos::Lang`, a different type.)
+fn parse_lang_flag(flag: Option<&str>) -> anyhow::Result<Option<rustyfi_syntax::RustyfiVersion>> {
+    flag.map(str::parse::<rustyfi_syntax::RustyfiVersion>)
+        .transpose()
+        .map_err(|e| anyhow::anyhow!("--lang: {e}"))
+}
+
 /// Resolve BOTH axes of the load — language version (Axis A) and packaging
 /// mode (Axis B, `rustyfi_loader::LoadMode`) — from `--lang`, `--deps`, and
 /// header sniffing (Ld3a-minimal). Axis A: an explicit `--lang` wins
@@ -427,10 +438,7 @@ fn resolve_version_and_mode(
 ) -> anyhow::Result<(rustyfi_syntax::RustyfiVersion, rustyfi_loader::LoadMode)> {
     use rustyfi_syntax::RustyfiVersion;
 
-    let flag = flag
-        .map(str::parse::<RustyfiVersion>)
-        .transpose()
-        .map_err(|e| anyhow::anyhow!("--lang: {e}"))?;
+    let flag = parse_lang_flag(flag)?;
     // Sniffing is advisory only: if the file is unreadable, let the loader
     // report the I/O error on its own terms.
     let sniff = std::fs::read_to_string(input)

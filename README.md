@@ -199,7 +199,13 @@ chooses it for the entry document — a `use` header or a `val` head selects
 0.1, a `@stage:` header or a `let-*` head selects 0.0, and a file that signals
 neither is checked against both rather than guessed at. Measured against every
 `.saty`/`.satyh`/`.satyg` file in this repository — 247 of them, 64 of which
-are 0.1 — it reports **no diagnostics at all on files that compile.**
+are 0.1 — it reports **no diagnostics at all on files that compile**, in 0.56 s
+for the whole set (30 ms worst case).
+
+An analysis is also bounded: the 0.1 grammar backtracks exponentially on some
+half-typed inputs — 11.5 seconds on one 14 KB buffer, and climbing — so the
+server caps how much backtracking one parse may do and says so plainly when it
+hits the cap, rather than freezing the editor.
 
 It deliberately stops short of typechecking. Type errors in SATySFi are a
 property of a whole *program* — the entry document plus every `@require:`d

@@ -130,9 +130,12 @@ fn header_value<'a>(line: &'a str, name: &str) -> Option<&'a str> {
 }
 
 /// Classify a decoded message.
-pub fn classify(msg: Value) -> Incoming {
+pub fn classify(mut msg: Value) -> Incoming {
     let method = msg.get("method").and_then(Value::as_str).map(str::to_owned);
-    let params = msg.get("params").cloned().unwrap_or(Value::Null);
+    // Moved out, not cloned: for a `didChange` the params hold the entire
+    // document text, so cloning them would copy the whole buffer once per
+    // keystroke for nothing — `msg` is owned here and dropped straight after.
+    let params = msg.get_mut("params").map(Value::take).unwrap_or(Value::Null);
     match (method, msg.get("id")) {
         (Some(method), Some(id)) => Incoming::Request {
             id: id.clone(),

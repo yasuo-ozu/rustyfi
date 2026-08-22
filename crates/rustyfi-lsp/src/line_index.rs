@@ -74,9 +74,14 @@ impl<'s> LineIndex<'s> {
         LineIndex { src, line_starts }
     }
 
-    /// Total number of lines (always ≥ 1).
-    pub fn line_count(&self) -> u32 {
-        self.line_starts.len() as u32
+    /// The text this index was built over.
+    ///
+    /// Exists so a caller that needs both the index and the source cannot be
+    /// handed two that disagree — see [`crate::analyze`]'s `span_to_range`,
+    /// which would otherwise take them as two parameters and silently produce
+    /// nonsense if they were ever mismatched.
+    pub fn source(&self) -> &'s str {
+        self.src
     }
 
     /// Convert a UTF-8 byte offset into a zero-based UTF-16 [`Position`].
@@ -93,29 +98,30 @@ impl<'s> LineIndex<'s> {
         // `line_starts[0] == 0 <= byte`.
         let line = self.line_starts.partition_point(|&s| s <= byte) - 1;
         let line_start = self.line_starts[line];
-        let character = utf16_len(floor_char_boundary(self.src, line_start, byte));
+        // `line_start` is a boundary by construction, and `floor_boundary`
+        // never goes below its argument's own floor, so this slice is safe
+        // for any `byte` at all.
+        let character = utf16_len(&self.src[line_start..floor_boundary(self.src, byte)]);
         Position {
             line: line as u32,
             character,
         }
     }
-
-    /// The position one past the last character of the file — the end of a
-    /// range for an error the parser could only report as "ran out of input".
-    pub fn eof(&self) -> Position {
-        self.position(self.src.len())
-    }
 }
 
-/// `src[start..end]`, with `end` rounded down to the nearest character
-/// boundary at or after `start`. Never panics for `start <= end <=
-/// src.len()` with `start` on a boundary.
-fn floor_char_boundary(src: &str, start: usize, end: usize) -> &str {
-    let mut end = end.max(start);
-    while end > start && !src.is_char_boundary(end) {
-        end -= 1;
+/// `byte`, rounded **down** to the nearest UTF-8 character boundary.
+///
+/// The single place this crate copes with an offset that points into the
+/// middle of a character. Rounding down rather than panicking is deliberate:
+/// a diagnostic range that is a character too generous is useful, whereas a
+/// panic in a language server takes the editor's whole diagnostics pane down
+/// with it.
+pub(crate) fn floor_boundary(src: &str, mut byte: usize) -> usize {
+    byte = byte.min(src.len());
+    while byte > 0 && !src.is_char_boundary(byte) {
+        byte -= 1;
     }
-    &src[start..end]
+    byte
 }
 
 /// Length of `s` in UTF-16 code units. Astral-plane characters (emoji, rarer
@@ -175,7 +181,6 @@ mod tests {
     fn crlf_terminators_count_once() {
         let src = "a\r\nb\r\nc";
         let idx = LineIndex::new(src);
-        assert_eq!(idx.line_count(), 3);
         assert_eq!(idx.position(3), Position { line: 1, character: 0 });
         assert_eq!(idx.position(6), Position { line: 2, character: 0 });
     }
@@ -184,7 +189,6 @@ mod tests {
     fn lone_cr_terminates_a_line_like_the_lexer_says() {
         let src = "a\rb";
         let idx = LineIndex::new(src);
-        assert_eq!(idx.line_count(), 2);
         assert_eq!(idx.position(2), Position { line: 1, character: 0 });
     }
 
@@ -200,16 +204,14 @@ mod tests {
     }
 
     #[test]
-    fn empty_file_has_one_line_and_a_zero_eof() {
+    fn an_empty_file_maps_offset_zero_to_the_origin() {
         let idx = LineIndex::new("");
-        assert_eq!(idx.line_count(), 1);
-        assert_eq!(idx.eof(), Position { line: 0, character: 0 });
+        assert_eq!(idx.position(0), Position { line: 0, character: 0 });
     }
 
     #[test]
-    fn trailing_newline_opens_a_final_empty_line() {
+    fn a_trailing_newline_opens_a_final_empty_line() {
         let idx = LineIndex::new("a\n");
-        assert_eq!(idx.line_count(), 2);
-        assert_eq!(idx.eof(), Position { line: 1, character: 0 });
+        assert_eq!(idx.position(2), Position { line: 1, character: 0 });
     }
 }

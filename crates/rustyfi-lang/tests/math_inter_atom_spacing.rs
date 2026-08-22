@@ -125,7 +125,7 @@ fn operator_takes_op_space_on_both_sides() {
     assert_pt(
         width_of(
             "embed-math ctx (math-concat (math-char MathOrd `a`) \
-             (math-concat (math-char MathOp `f`) (math-char MathOrd `b`)))"
+             (math-concat (math-char MathOp `f`) (math-char MathOrd `b`)))",
         ),
         3.0 * GLYPH + 2.0 * FS * 0.125,
         "3 glyphs + 2 op spaces",
@@ -141,7 +141,7 @@ fn inner_takes_inner_space_on_both_sides() {
         width_of(
             "embed-math ctx (math-concat (math-char MathOrd `a`) \
              (math-concat (math-group MathInner MathInner (math-char MathOrd `i`)) \
-             (math-char MathOrd `b`)))"
+             (math-char MathOrd `b`)))",
         ),
         3.0 * GLYPH + 2.0 * FS * 0.125,
         "3 glyphs + 2 inner spaces",
@@ -162,7 +162,7 @@ fn close_takes_no_space_even_after_a_relation() {
     assert_pt(
         width_of(
             "embed-math ctx (math-concat (math-char MathRel `=`) \
-             (math-group MathClose MathClose (math-char MathOrd `x`)))"
+             (math-group MathClose MathClose (math-char MathOrd `x`)))",
         ),
         2.0 * GLYPH,
         "a closing delimiter is reached before the relation rows: no space",
@@ -178,7 +178,7 @@ fn punct_outranks_close_because_its_arm_comes_first() {
     assert_pt(
         width_of(
             "embed-math ctx (math-concat (math-char MathPunct `,`) \
-             (math-group MathClose MathClose (math-char MathOrd `x`)))"
+             (math-group MathClose MathClose (math-char MathOrd `x`)))",
         ),
         2.0 * GLYPH + FS * 0.125,
         "2 glyphs + one punct space, NOT the `(_, Close)` arm's nothing",
@@ -193,7 +193,7 @@ fn open_after_a_relation_still_takes_relation_space() {
     assert_pt(
         width_of(
             "embed-math ctx (math-concat (math-char MathRel `=`) \
-             (math-group MathOpen MathOpen (math-char MathOrd `x`)))"
+             (math-group MathOpen MathOpen (math-char MathOrd `x`)))",
         ),
         2.0 * GLYPH + FS * 0.375,
         "2 glyphs + one relation space",
@@ -228,7 +228,7 @@ fn script_level_keeps_op_spacing_at_the_script_size() {
         width_of(
             "embed-math ctx (math-sup (math-char MathOrd `a`) \
              (math-concat (math-char MathOrd `b`) \
-             (math-concat (math-char MathOp `f`) (math-char MathOrd `c`))))"
+             (math-concat (math-char MathOp `f`) (math-char MathOrd `c`))))",
         ),
         GLYPH + 3.0 * SCRIPT_GLYPH + 2.0 * SCRIPT_FS * 0.125,
         "the base + 3 script glyphs + 2 op spaces AT THE SCRIPT SIZE",
@@ -243,7 +243,7 @@ fn the_same_list_at_base_level_scales_its_op_spacing_by_the_base_size() {
     assert_pt(
         width_of(
             "embed-math ctx (math-concat (math-char MathOrd `b`) \
-             (math-concat (math-char MathOp `f`) (math-char MathOrd `c`)))"
+             (math-concat (math-char MathOp `f`) (math-char MathOrd `c`)))",
         ),
         3.0 * GLYPH + 2.0 * FS * 0.125,
         "3 glyphs + 2 op spaces, sized by the BASE font",

@@ -107,7 +107,40 @@ download_file () {
     show_message "'$NAME' already cached and verified in '$CACHE/'"
   else
     show_message "downloading '$NAME'"
-    curl -fsSL -o "$CACHE/$NAME" "$URL"
+    # Retried, because these are third-party servers and at least one of them
+    # (GUST, which hosts Latin Modern) intermittently refuses connections for
+    # minutes at a time — a CI run has failed on exactly that, with curl's
+    # exit 28 after a 133-second connect timeout.
+    #
+    # Retry rather than mirror: the SHA1 below is pinned, and no mirror serves
+    # these archives byte-identically (CTAN repackages Latin Modern under its
+    # own layout), so a fallback URL would download successfully and then fail
+    # verification — which is the correct behaviour, and therefore useless as a
+    # fallback.
+    #
+    # Deliberately WITHOUT curl's own `--retry`: measured on curl 8.14.1, a
+    # transfer that ultimately fails still exits 0 when `--retry` is given
+    # (the identical request without it exits 7). That would turn a failed
+    # download into a "SHA1 mismatch" further down — a real failure reported
+    # as the wrong thing. The loop below reads curl's true exit status.
+    #
+    # Only widely-supported options are used, since this script also runs on
+    # whatever curl a contributor happens to have.
+    ATTEMPT=1
+    MAX_ATTEMPTS=3
+    while : ; do
+      if curl -fsSL --connect-timeout 20 --max-time 600 -o "$CACHE/$NAME" "$URL"; then
+        break
+      fi
+      if [ "$ATTEMPT" -ge "$MAX_ATTEMPTS" ]; then
+        echo "$MESSAGE_PREFIX could not download '$NAME' from '$URL' after" \
+             "$MAX_ATTEMPTS attempts." >&2
+        exit 1
+      fi
+      show_message "download of '$NAME' failed; retrying ($ATTEMPT/$MAX_ATTEMPTS)"
+      ATTEMPT=$((ATTEMPT + 1))
+      sleep 5
+    done
     if ! validate_file "$NAME" "$SHA1"; then
       echo "$MESSAGE_PREFIX SHA1 mismatch for '$NAME' — refusing to use it." >&2
       exit 1

@@ -367,8 +367,13 @@ pub struct GaveUp;
 
 struct Matcher<'i> {
     input: &'i [char],
-    /// Steps remaining. Decremented once per [`Matcher::node`] entry, which
-    /// is every alternative the backtracker tries.
+    /// Work remaining. One unit per [`Matcher::node`] entry — every
+    /// alternative the backtracker tries — plus one per CHARACTER for the two
+    /// places a single entry buys a whole scan: `repeat`'s single-character
+    /// fast path and a backreference's slice compare. Charging those keeps
+    /// the budget a bound on work rather than merely on step count; without
+    /// it a step is O(input) and the wall clock is quadratic while the
+    /// counter looks linear.
     fuel: Cell<u64>,
     /// Remaining nesting depth for [`Matcher::repeat`]'s general branch, the
     /// one that recurses once per repetition. Separate from `fuel` because
@@ -388,13 +393,30 @@ struct Matcher<'i> {
 struct Budget;
 
 impl Budget {
-    /// Steps per input character. A linear scan costs a handful per
-    /// character, so this is orders of magnitude of headroom.
-    const PER_CHAR: u64 = 4_096;
+    /// Work units per input character.
+    ///
+    /// Measured, not guessed. Across all 80 patterns `satysfi-code-printer`'s
+    /// `code-syntax.satyg` can produce — every `syntax-rule-line`, both halves
+    /// of every `syntax-rule-block`, and every keyword list joined the way
+    /// `strlst-to-syntax-rule` joins it — the worst honest cost against a
+    /// deliberately hostile 200,000-character input (an unterminated string
+    /// body, `"[^"]*"`, which scans to the end and then retries the closing
+    /// quote at every offset) is **2 units per character**. Everything else in
+    /// the corpus is O(1) in the input, because the single-character
+    /// quantifier takes the iterative fast path. 64 is a 32× margin on that.
+    ///
+    /// The old value here was 4,096, and the cost of that slack is paid on
+    /// the pathological side, because the give-up point is `PER_CHAR × len`
+    /// units away: `\(a*\)*b` against 200,000 characters took **21.7 s** to
+    /// give up. It now takes 0.17 s. Erring high is not free — a bound this
+    /// loose is a bound in name only, since nothing in a document is
+    /// interactive at twenty seconds.
+    const PER_CHAR: u64 = 64;
 
     /// Floor, so a pattern against a short input is not capped below what a
-    /// long one gets. At roughly 10M steps a second this is about a tenth of
-    /// a second of trying.
+    /// long one gets. Also measured: the most work any corpus pattern does in
+    /// one anchored match is 835 units (the ~470-branch COBOL keyword
+    /// alternation), so this is a 1,197× margin, and about 25 ms of trying.
     const FLOOR: u64 = 1_000_000;
 
     fn for_input(len: usize) -> u64 {
@@ -437,21 +459,23 @@ impl<'i> Matcher<'i> {
         }
     }
 
-    /// Spend one step. `false` means the budget is gone and the caller must
-    /// unwind — every `node` alternative checks this, so exhaustion stops the
-    /// whole match rather than being mistaken for a failed alternative.
-    fn spend(&self) -> bool {
+    /// Spend `n` units of work. `false` means the budget is gone and the
+    /// caller must unwind — every `node` alternative checks this, so
+    /// exhaustion stops the whole match rather than being mistaken for a
+    /// failed alternative.
+    fn spend(&self, n: u64) -> bool {
         if self.gave_up.get() {
             return false;
         }
-        match self.fuel.get() {
-            0 => {
+        match self.fuel.get().checked_sub(n) {
+            Some(left) => {
+                self.fuel.set(left);
+                true
+            }
+            None => {
+                self.fuel.set(0);
                 self.gave_up.set(true);
                 false
-            }
-            f => {
-                self.fuel.set(f - 1);
-                true
             }
         }
     }
@@ -484,7 +508,7 @@ impl<'i> Matcher<'i> {
         caps: &mut Vec<Option<(usize, usize)>>,
         k: Cont<'_>,
     ) -> Option<usize> {
-        if !self.spend() {
+        if !self.spend(1) {
             return None;
         }
         match node {
@@ -523,7 +547,17 @@ impl<'i> Matcher<'i> {
                     None => return k(pos, caps),
                 };
                 let len = e - s;
-                if pos + len <= self.input.len() && self.input[pos..pos + len] == self.input[s..e] {
+                if pos + len > self.input.len() {
+                    return None;
+                }
+                // The compare below is O(len) for what the entry step already
+                // paid one unit for, and a group can capture the whole input:
+                // `\(a*\)\1\1x` did 5e9 character compares against 200,000
+                // characters while spending 200,001 units. Charge the compare.
+                if !self.spend(len as u64) {
+                    return None;
+                }
+                if self.input[pos..pos + len] == self.input[s..e] {
                     k(pos + len, caps)
                 } else {
                     None
@@ -597,36 +631,50 @@ impl<'i> Matcher<'i> {
         // a code block a few thousand characters long would then risk
         // overflowing on a pattern as ordinary as a string literal's body.
         if matches!(node, Node::Char(_) | Node::Any | Node::Class { .. }) {
-            let mut ends: Vec<usize> = vec![pos];
+            // One `single` call per repetition is real work that the single
+            // step this `node` entry already paid for would otherwise buy
+            // without limit, so clamp the scan to what is left of the budget
+            // and charge what it consumes.
+            let hard = max.map_or(u64::MAX, u64::from);
+            let afford = self.fuel.get();
+            let cap = hard.min(afford);
             let mut cur = pos;
-            let cap = max.unwrap_or(u32::MAX);
-            let mut count = 0u32;
+            let mut count = 0u64;
             while count < cap {
                 match self.single(node, cur) {
                     Some(next) => {
                         cur = next;
-                        ends.push(cur);
                         count += 1;
                     }
                     None => break,
                 }
             }
-            // `ends` holds one offset per admissible repetition count, from 0
-            // up to however many matched, so `min` repetitions are available
-            // exactly when `ends.len() > min`.
-            let lo = min as usize;
-            if ends.len() <= lo {
+            self.fuel.set(afford - count);
+            if count == cap && cap < hard {
+                // Stopped because the budget ran out, not because the input
+                // did: a truncated repetition would be a WRONG answer.
+                self.gave_up.set(true);
                 return None;
             }
+            // A single-character node consumes exactly one character, so the
+            // end offset for `i` repetitions is `pos + i` — the admissible
+            // ones run from `min` to `count`. (This used to be materialised as
+            // a `Vec` of offsets, which is an O(input) allocation per scan for
+            // a sequence that is just addition.)
+            let lo = u64::from(min);
+            if count < lo {
+                return None;
+            }
+            let mut try_at = |i: u64| k(pos + i as usize, caps);
             if greedy {
-                for i in (lo..ends.len()).rev() {
-                    if let Some(v) = k(ends[i], caps) {
+                for i in (lo..=count).rev() {
+                    if let Some(v) = try_at(i) {
                         return Some(v);
                     }
                 }
             } else {
-                for i in lo..ends.len() {
-                    if let Some(v) = k(ends[i], caps) {
+                for i in lo..=count {
+                    if let Some(v) = try_at(i) {
                         return Some(v);
                     }
                 }
@@ -891,5 +939,40 @@ mod tests {
             t0.elapsed().as_secs() < 5,
             "the search re-seeded its budget per start position"
         );
+    }
+
+    /// The work a step buys must be bounded, or the counter is linear while
+    /// the clock is quadratic: the group here captures a prefix of the input
+    /// and the backreference compares it character by character, so one step
+    /// used to buy an O(input) `memcmp`. 200,000 characters cost 5e9 compares
+    /// for 200,001 steps.
+    #[test]
+    fn a_backreference_is_charged_for_the_characters_it_compares() {
+        let input: String = "a".repeat(20_000);
+        let chars: Vec<char> = input.chars().collect();
+        let t0 = std::time::Instant::now();
+        assert!(Regexp::parse("\\(a*\\)\\1\\1x").match_at(&chars, 0).is_err());
+        assert!(t0.elapsed().as_secs() < 5, "the compare was not charged");
+        // A backreference to a SHORT group — the shape real patterns use, a
+        // matching quote or bracket — is unaffected.
+        assert_eq!(scan(r"\(['`]\)[a-z]*\1", "'abc'!").as_deref(), Some("'abc'"));
+    }
+
+    /// Same point for `repeat`'s single-character fast path, which scans the
+    /// whole input for the one step its `node` entry paid for. Charging it is
+    /// what keeps a give-up fast: `\(a*\)*b` against 200,000 characters took
+    /// 21.7 s to give up before, and 0.17 s after.
+    #[test]
+    fn a_quantifier_scan_is_charged_for_the_characters_it_consumes() {
+        let input: String = "a".repeat(200_000);
+        let chars: Vec<char> = input.chars().collect();
+        let t0 = std::time::Instant::now();
+        assert!(Regexp::parse("\\(a*\\)*b").match_at(&chars, 0).is_err());
+        assert!(
+            t0.elapsed().as_secs() < 10,
+            "giving up took longer than doing the work would have"
+        );
+        // The charge must not make an honest scan of the same input fail.
+        assert_eq!(scan("[a-z]*", &input).map(|s| s.len()), Some(200_000));
     }
 }

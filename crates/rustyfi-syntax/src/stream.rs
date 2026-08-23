@@ -32,9 +32,12 @@
 //!
 //! # The budget
 //!
-//! Both grammars backtrack exponentially on some incomplete inputs — see
-//! [`Budget`] for the measurements and for why a *compiler*, and not only a
-//! language server, wants a cap.
+//! Both grammars are ordered-choice backtrackers, so an unfactored common
+//! prefix costs a *factor* per nesting level rather than a constant. The one
+//! such prefix that had been measured is gone (see [`Budget`]); the cap
+//! remains, because it is what makes the next one a slow error instead of a
+//! hang — see [`Budget`] for why a *compiler*, and not only a language
+//! server, wants one.
 
 use crate::span::Span;
 use crate::token::Atom;
@@ -62,22 +65,27 @@ use syan::parse::ParseStream;
 /// | 15 lines | line 12 | exit 1, 32 ms |
 /// | 35 lines | line 32 | **still running after 100 s** |
 ///
-/// The cause is a plain unfactored common prefix, and it is worth naming
-/// precisely so that nobody hunts for it again: `Expr::LetIn` and
-/// `Expr::LetPatternIn` both begin `let ‹target› = ‹expr› in ‹body›`, so a
-/// failure in the innermost body is re-derived exactly twice per enclosing
+/// The cause was a plain unfactored common prefix: `Expr::LetIn` and
+/// `Expr::LetPatternIn` both began `let ‹target› = ‹expr› in ‹body›`, so a
+/// failure in the innermost body was re-derived exactly twice per enclosing
 /// `let`. Measured, serves against chain length: 1,115 at 3, 9,459 at 6,
-/// 76,211 at 9, 610,227 at 12, 4,882,355 at 15 — ×2.000 each time. Deleting
-/// `LetPatternIn` (which is *shadowed* for a bare-variable target, as its own
-/// doc comment says) collapses the same measurements to 374, 677, 980, 1,283,
-/// 1,586: linear, 17 serves per atom.
+/// 76,211 at 9, 610,227 at 12, 4,882,355 at 15 — ×2.000 each time.
 ///
-/// Factoring the two into one variant is the real repair, and it is a CST
-/// change that reaches `elaborate.rs`, so it is deliberately not done here.
-/// Nor would it be the end of it — the 0.1 grammar blows up the same way on
-/// truncated prefixes of the bundled `std-ja.satyh`, ×5 per 200 bytes, from a
-/// different prefix. What a budget buys, and a grammar fix does not, is that
-/// the *next* such prefix is a slow error instead of a hang.
+/// **That prefix is now factored** and the table above is history:
+/// `cst::PatNonVarErased` refuses a bare-variable destructuring target — the
+/// restriction upstream 0.1 spells `pattern_non_var` — which makes the two
+/// alternatives disjoint at the token after `let`. The same chain costs 411,
+/// 750, 1,089, 1,428, 1,767: an arithmetic progression, +113 per `let`,
+/// pinned as an exact equality by `parse_errors.rs`'s
+/// `one_more_let_costs_a_constant_number_of_serves`. No input is known that
+/// reaches this cap any more.
+///
+/// The cap stays anyway, and the row above is why it was worth having: the
+/// 0.1 grammar was separately observed to blow up ×5 per 200 bytes on
+/// truncated prefixes of the bundled `std-ja.satyh`, from a *different*
+/// prefix that has not been chased down. What a budget buys, and a grammar
+/// fix does not, is that the next such prefix is a slow error instead of a
+/// hang.
 ///
 /// The give-up is reported as a give-up
 /// ([`crate::ParseFailureKind::GaveUp`]), never as a claim about the token
@@ -110,12 +118,15 @@ impl Budget {
     ///
     /// Without it a ten-line file would be capped at a few thousand serves and
     /// would give up on constructs a hundred-line file resolves. At roughly
-    /// 10M serves per second this is about a second of trying, and it is what
-    /// lets a broken chain of fifteen `let`s still reach a real verdict —
-    /// past which, the exponential above being what it is, each further
-    /// doubling of the floor buys exactly one more `let`. That is the argument
-    /// against simply raising it: the budget cannot buy diagnostic quality
-    /// here, only bound the damage.
+    /// 10M serves per second this is about a second of trying.
+    ///
+    /// **Do not raise this to fix a give-up.** While the `let` prefix above
+    /// was unfactored, the floor bought a broken chain of fifteen `let`s a
+    /// real verdict and each further doubling bought exactly one more `let` —
+    /// which is the shape of the argument in general: against a superlinear
+    /// grammar the budget cannot buy diagnostic quality, only bound the
+    /// damage. A give-up means a production needs left-factoring; the number
+    /// to change is in `cst.rs`, not here.
     pub const FLOOR: u64 = 8_000_000;
 
     /// The allowance for a token vector of `atoms` atoms.

@@ -626,6 +626,63 @@ erased_leaf_v1! {
     TypeBindsErasedV1 => TypeBindsV1;
 }
 
+impl ast::Pattern {
+    /// Whether this pattern is a lone variable — the 0.1 twin of
+    /// [`crate::cst::ast::Pattern::is_bare_var`], over this module's
+    /// identically-shaped pattern types.
+    pub fn is_bare_var(&self) -> bool {
+        self.as_clause.is_none()
+            && self.head.tail.is_empty()
+            && matches!(self.head.head, ast::PatBot::Var(_))
+    }
+}
+
+/// An [`ast::Pattern`] that is **not** a bare variable — upstream 0.1's own
+/// `pattern_non_var` (`parser_v1.mly:796`), and the 0.1 twin of
+/// [`crate::cst::PatNonVarErased`], whose doc comment carries the whole
+/// story.
+///
+/// 0.1 blows up the same way and slightly harder: over a chain of
+/// `let vN = N in` ending in a broken `let`, 5,755 serves at 3, 46,971 at 6,
+/// 376,699 at 9, 3,014,523 at 12, 24,117,115 at 15 — the same ×2.000 per
+/// `let`, off a larger constant. [`Expr::LetIn`] subsumes every
+/// bare-variable target here too (its `params` is greedy but no
+/// [`Param`](ast::Param) begins with `=`), so refusing one costs nothing and
+/// makes the two `let` alternatives disjoint.
+#[implement(newer_type_std::ops::Deref)]
+#[derive(Debug, Clone, PartialEq)]
+pub struct PatNonVarErasedV1(pub Box<ast::Pattern>);
+
+impl Parse<crate::token::Atom> for PatNonVarErasedV1 {
+    type Error = syan::error::ParseError<crate::span::Span>;
+
+    fn parse_stream<S: syan::parse::ParseStream<Atom = crate::token::Atom>>(
+        stream: &mut S,
+    ) -> Result<Self, Self::Error> {
+        let value = <ast::Pattern as Parse<_>>::parse_stream(stream)?;
+        if value.is_bare_var() {
+            // See `cst::PatNonVarErased` — same guard, same reasoning.
+            let ast::PatBot::Var(v) = &value.head.head else {
+                unreachable!("a bare-variable pattern has a variable head")
+            };
+            return Err(syan::error::ParseError::expected(
+                v.span,
+                "a destructuring pattern (a plain `let x = …` is not one)",
+            ));
+        }
+        Ok(PatNonVarErasedV1(Box::new(value)))
+    }
+}
+
+impl Unparse<crate::token::Atom> for PatNonVarErasedV1 {
+    fn unparse<S: syan::parse::unparse::Emitter<crate::token::Atom>>(
+        &self,
+        sink: &mut S,
+    ) -> Result<(), S::Error> {
+        self.0.unparse(sink)
+    }
+}
+
 /// The recursive expression/pattern/type/text grammar for SATySFi 0.1.
 /// A copy of [`crate::cst::ast`] with the deltas documented on each
 /// type; see the module doc comment for the SCC/root story.
@@ -769,11 +826,15 @@ pub mod ast {
             body: Box<Expr>,
         },
         /// `let pat = value in body` (`parser_v1.mly:796`,
-        /// `pattern_non_var`) — any pattern shape, tried only after the
-        /// bare-variable form [`Expr::LetIn`] fails to match.
+        /// `pattern_non_var`) — any pattern shape EXCEPT a bare variable,
+        /// which [`Expr::LetIn`] already covers. The exclusion is upstream's
+        /// (the nonterminal is literally named `pattern_non_var`) and is
+        /// carried by the field's type, [`super::PatNonVarErasedV1`], rather
+        /// than by variant order: leaving the two alternatives overlapping
+        /// made a failure inside `body` cost ×2 per enclosing `let`.
         LetPatternIn {
             kw: KwLet,
-            pat: super::PatErasedV1,
+            pat: super::PatNonVarErasedV1,
             eq: DefEqTok,
             value: Box<Expr>,
             in_kw: KwIn,

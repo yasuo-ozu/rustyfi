@@ -1758,7 +1758,7 @@ fn lower_expr(e: &ast_v1::Expr) -> Result<cst::ast::Expr, LowerError> {
             body,
         } => Ok(cst::ast::Expr::LetPatternIn {
             kw: kw.clone(),
-            pat: erase_pat(lower_pattern(pat)?),
+            pat: erase_pat_non_var(lower_pattern(pat)?),
             eq: eq.clone(),
             value: Box::new(lower_expr(value)?),
             in_kw: in_kw.clone(),
@@ -2422,6 +2422,24 @@ fn erase_expr(e: cst::ast::Expr) -> cst::ExprErased {
 
 fn erase_pat(p: cst::ast::Pattern) -> cst::PatErased {
     cst::PatErased(Box::new(p))
+}
+
+/// [`erase_pat`] into the destructuring-`let` target, whose parser refuses a
+/// bare variable (see [`cst::PatNonVarErased`]).
+///
+/// Only reachable from a 0.1 `Expr::LetPatternIn`, whose own target is a
+/// [`cst_v1::PatNonVarErasedV1`] — so the source pattern is already
+/// non-variable, and `lower_pattern` maps `PatBot::Var` to `PatBot::Var` and
+/// every other shape to its counterpart, preserving that. The assertion says
+/// so rather than trusting it: a future lowering that flattened, say, a
+/// one-element tuple pattern to its element would otherwise synthesize a node
+/// this grammar cannot re-parse.
+fn erase_pat_non_var(p: cst::ast::Pattern) -> cst::PatNonVarErased {
+    debug_assert!(
+        !p.is_bare_var(),
+        "a destructuring `let`'s target lowered to a bare variable"
+    );
+    cst::PatNonVarErased(Box::new(p))
 }
 
 #[cfg(test)]

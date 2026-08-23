@@ -1,16 +1,11 @@
 //! `document_symbols` over both generations.
 //!
-//! Most assertions here are made against a **rendered outline** — one line
-//! per symbol, indented by depth, `name [kind] detail` — rather than against
-//! a hand-built `Vec<Symbol>`. Two reasons: the expected value reads as the
-//! thing an editor would show, and the shape of the tree (which is the whole
-//! point of `DocumentSymbol` over `SymbolInformation`) is visible in the
-//! test source rather than buried in nested constructors.
+//! Most assertions are made against a **rendered outline** — one line per
+//! symbol, indented by depth, `name [kind] detail` — rather than a hand-built
+//! `Vec<Symbol>`, so the expected value reads as what an editor would show and
+//! the tree's shape is visible instead of buried in nested constructors.
 //!
-//! Ranges are checked separately, because they are the part a reader cannot
-//! eyeball: [`ranges_are_utf16_and_well_formed`] runs over every file in the
-//! corpus, and the targeted tests pin the two failure modes that a
-//! byte-offset implementation passes every ASCII test with.
+//! Ranges are checked separately, being the part a reader cannot eyeball.
 
 use rustyfi_lsp::{document_symbols, document_symbols_auto, RustyfiVersion, Symbol, SymbolKind};
 
@@ -65,9 +60,6 @@ fn count(syms: &[Symbol]) -> usize {
 // ---------------------------------------------------------------------------
 
 /// Every declaration form 0.0.6 has, in one library, as one outline.
-///
-/// Read the expected value as the symbol pane: the two headers, then the
-/// prelude, then `Mod`'s signature and body folded under `Mod`.
 #[test]
 fn every_0_0_6_declaration_form_shows_up() {
     let src = r#"@require: stdjabook
@@ -128,9 +120,8 @@ Mod [Module] module
     );
 }
 
-/// A module's members are its *children*. This is the difference between an
-/// outline and a wall of names, so it gets its own assertion rather than
-/// riding on the big one above.
+/// A module's members are its *children* — the difference between an outline
+/// and a wall of names.
 #[test]
 fn a_0_0_6_module_owns_its_members() {
     let src = "module A = struct\n  let x = 1\n  module B = struct\n    let y = 2\n  end\nend\n";
@@ -142,9 +133,8 @@ fn a_0_0_6_module_owns_its_members() {
     );
 }
 
-/// A 0.0.6 *document* keeps its declarations in the prelude, before `in` —
-/// but `let … in` after it is legal and the corpus writes it (an
-/// `xpath-doc.saty` binds its context that way).
+/// A 0.0.6 *document* keeps its declarations in the prelude, before `in`, but
+/// `let … in` after it is legal and the corpus writes it.
 #[test]
 fn a_0_0_6_document_body_spine_is_walked() {
     let src = "@require: stdja\n\nlet-inline ctx \\c it = it\n\nlet ctx = get-initial-context 16pt in\nopen Foo in\nlet-mutable n <- 0 in\ndocument (||) '<>\n";
@@ -163,11 +153,8 @@ n [Variable] let-mutable
 // 0.1
 // ---------------------------------------------------------------------------
 
-/// Every declaration form 0.1 has, in one library.
-///
-/// Note the stage qualifiers: `val ~x` and `val persistent ~x` are the one
-/// thing about a 0.1 binding that its name does not tell you, so they are
-/// spelled out in the detail.
+/// Every declaration form 0.1 has, in one library — including the stage
+/// qualifiers, which a binding's name does not tell you.
 #[test]
 fn every_0_1_declaration_form_shows_up() {
     let src = r#"use package Stdlib
@@ -246,9 +233,9 @@ Lib [Module] module
     );
 }
 
-/// A 0.1 *document* has no top-level binding sequence at all — every `let`
-/// chains its own `in` — so the whole outline is the body's spine. Getting
-/// this wrong means a 0.1 document shows nothing but its headers.
+/// A 0.1 *document* has no top-level binding sequence — every `let` chains its
+/// own `in` — so the whole outline is the body's spine. Getting this wrong
+/// leaves a 0.1 document showing nothing but its headers.
 #[test]
 fn a_0_1_document_declares_everything_in_its_let_spine() {
     let src = r#"use package Stdlib
@@ -274,10 +261,9 @@ show [Function] let
     );
 }
 
-/// One declaration can name several things. A mutually recursive `type … and
-/// …` chain — `satysfi-base`'s `stream.satyg` writes one — must put its
-/// clauses beside each other rather than nesting the second inside the first,
-/// both in a `struct` and in a `sig`.
+/// One declaration can name several things: a `type … and …` chain must put
+/// its clauses beside each other rather than nesting the second inside the
+/// first, both in a `struct` and in a `sig`.
 #[test]
 fn an_and_chained_type_names_every_clause_as_a_sibling() {
     let src = "module M :> sig\n  type a = int\n  and b = bool\nend = struct\n  type c = int\n  and d = bool\nend\n";
@@ -324,11 +310,10 @@ Set [Module] module
 // Version detection
 // ---------------------------------------------------------------------------
 
-/// A `module M = struct` head is deliberately no version signal, so the
-/// automatic entry point has to reach the same conclusion `analyze_detected`
-/// does — via the same code. Under the 0.0.6 grammar this file's `val`
-/// bindings are not declarations at all, so the wrong answer is not a
-/// slightly different outline, it is an empty one.
+/// A `module M = struct` head is no version signal, so the automatic entry
+/// point has to reach `analyze_detected`'s conclusion via the same code. Under
+/// the 0.0.6 grammar this file's `val` bindings are not declarations at all,
+/// so the wrong answer is not a slightly different outline but an empty one.
 #[test]
 fn a_signal_free_0_1_library_is_read_as_0_1() {
     let src = "module Lib = struct\n  val f x = x\n  type t = int\nend\n";
@@ -336,8 +321,8 @@ fn a_signal_free_0_1_library_is_read_as_0_1() {
         outline(&document_symbols_auto(src)),
         "Lib [Module] module\n  f [Function] val\n  t [TypeParameter] type\n"
     );
-    // And the 0.0.6 reading of the same text really is empty, so the test
-    // above is not passing by coincidence.
+    // The 0.0.6 reading really is empty, so the assertion above is not passing
+    // by coincidence.
     assert!(document_symbols(src, RustyfiVersion::V0_0).is_empty());
 }
 
@@ -361,12 +346,10 @@ fn an_explicit_generation_is_obeyed() {
     );
 }
 
-/// A `let` whose `in` has not been typed yet still declares its name.
-///
-/// Deliberate, and the thing that separates a useful outline from a correct
-/// one: `let total = ` at the bottom of a document is *the* state a buffer is
-/// in while its author is working, and the name is already unambiguous. The
-/// spine stops there rather than guessing at what follows.
+/// A `let` whose `in` has not been typed yet still declares its name: that is
+/// the state a buffer is in while its author is working, and the name is
+/// already unambiguous. The spine stops there rather than guessing at what
+/// follows.
 #[test]
 fn a_final_let_without_its_in_still_declares_its_name() {
     for (src, lang) in [
@@ -385,9 +368,8 @@ fn a_final_let_without_its_in_still_declares_its_name() {
 // Partial buffers
 // ---------------------------------------------------------------------------
 
-/// The state an editor buffer is in on most keystrokes. Everything above the
-/// unfinished declaration must survive — a symbol pane that empties itself
-/// while you type is worse than one that lags.
+/// Everything above an unfinished declaration must survive: a symbol pane that
+/// empties itself while you type is worse than one that lags.
 #[test]
 fn a_half_typed_0_0_6_library_keeps_what_is_above_the_error() {
     let src = "@require: list\n\nlet done-one x = x\n\nlet-inline ctx \\emph it = it\n\nlet half y = if y then\n";
@@ -415,8 +397,7 @@ g [Function] let rec
     );
 }
 
-/// A buffer with nothing in it, and one with nothing but a comment, have
-/// nothing to declare — under either grammar, and without a panic.
+/// Under either grammar, and without a panic.
 #[test]
 fn an_empty_buffer_has_no_symbols() {
     for src in ["", "   \n\n", "% just a comment\n"] {
@@ -426,9 +407,8 @@ fn an_empty_buffer_has_no_symbols() {
     }
 }
 
-/// A file that does not even lex yields no symbols rather than a panic. (The
-/// diagnostic path is what reports it; there is no prefix of a token stream
-/// to walk when lexing is what failed.)
+/// A file that does not even lex yields no symbols rather than a panic; the
+/// diagnostic path is what reports it.
 #[test]
 fn an_unlexable_buffer_yields_nothing_rather_than_panicking() {
     let src = "let x = 1\nlet y = \u{0}\u{1}\u{2}\n";
@@ -439,12 +419,10 @@ fn an_unlexable_buffer_yields_nothing_rather_than_panicking() {
 // Ranges
 // ---------------------------------------------------------------------------
 
-/// The failure a byte-offset implementation passes every ASCII test with.
-///
-/// Two declarations on one line, with Japanese in the first one's value, so
-/// the second's columns are only right if they are counted in UTF-16 code
-/// units: `let title = ` is 12 characters, the backtick-quoted `日本語のタイトル`
-/// is 8 kanji/kana plus two backticks — 22 UTF-16 units, but **42 bytes**.
+/// The failure a byte-offset implementation passes every ASCII test with: two
+/// declarations on one line, Japanese in the first one's value, so the
+/// second's columns are only right when counted in UTF-16 code units. The
+/// backtick-quoted `日本語のタイトル` is 22 UTF-16 units but **42 bytes**.
 #[test]
 fn a_column_after_japanese_is_counted_in_utf16_units() {
     let src = "let title = `日本語のタイトル` let sub = 2\n";
@@ -475,9 +453,9 @@ fn an_astral_character_before_a_symbol_counts_as_two() {
     assert_eq!(b.range.start.character, 15);
 }
 
-/// `range` must contain `selection_range`, and must not run past the end of
-/// the declaration into the following line — a `@require:` header token spans
-/// its own line terminator, so an untrimmed range would.
+/// A range must not run past the end of its declaration into the following
+/// line — a `@require:` header token spans its own line terminator, so an
+/// untrimmed range would.
 #[test]
 fn a_range_stops_at_the_end_of_the_declaration() {
     let src = "@require: list\n\nlet x = 1\n";
@@ -493,8 +471,8 @@ fn a_range_stops_at_the_end_of_the_declaration() {
     assert_eq!(x.range.end.character, 9);
 }
 
-/// A multi-line declaration's range covers all of it — the whole point of
-/// having a `range` distinct from the `selectionRange`.
+/// A multi-line declaration's range covers all of it — the point of having a
+/// `range` distinct from the `selectionRange`.
 #[test]
 fn a_multi_line_declarations_range_covers_all_of_it() {
     let src = "let f x =\n  let y = x in\n  y\n\nlet g = 1\n";
@@ -514,28 +492,22 @@ fn a_multi_line_declarations_range_covers_all_of_it() {
 
 /// Every SATySFi file this repository ships, through both entry points.
 ///
-/// Three things are being ruled out, in order of how expensive they are to
-/// find later:
+/// Three things are being ruled out:
 ///
-/// 1. **A panic.** A language server that crashes takes the editor's whole
-///    outline pane down with it, and the walk runs on whatever tree the parse
-///    produced — including a truncated one.
+/// 1. **A panic.** The walk runs on whatever tree the parse produced,
+///    including a truncated one.
 /// 2. **A malformed range.** A `selectionRange` outside its `range`, or a
-///    range running past the end of the file, makes a client discard the
-///    *entire* response — so one bad symbol silently costs the file's whole
-///    outline, with nothing in any log.
+///    range past the end of the file, makes a client discard the *entire*
+///    response — so one bad symbol silently costs the file's whole outline,
+///    with nothing in any log.
 /// 3. **A file that declares nothing.** Every one of these compiles, and a
-///    library that compiles declares something. The only exception is
-///    admitted explicitly below rather than absorbed into a threshold.
+///    library that compiles declares something.
 #[test]
 fn the_whole_corpus_yields_plausible_outlines() {
-    // Genuinely zero bytes long, so genuinely nothing to declare. Named
-    // rather than tolerated by a count, so that a *second* empty outline
-    // fails the test instead of hiding behind it.
+    // Zero bytes long, so genuinely nothing to declare. Named rather than
+    // tolerated by a count, so a *second* empty outline fails the test.
     const KNOWN_EMPTY: &[&str] = &["counter.satyh"];
-    // Floors, so a mistyped path cannot make this pass vacuously. The
-    // corpus holds 247 files and yields a little under ten thousand symbols
-    // at the time of writing; both numbers only grow.
+    // Floors, so a mistyped path cannot make this pass vacuously.
     const FILE_FLOOR: usize = 240;
     const SYMBOL_FLOOR: usize = 9_000;
 
@@ -575,7 +547,7 @@ fn the_whole_corpus_yields_plausible_outlines() {
         symbols >= SYMBOL_FLOOR,
         "only {symbols} symbols in {files} files"
     );
-    // Visible under `--nocapture`, so the two floors above can be re-derived
+    // Visible under `--nocapture`, so the floors above can be re-derived
     // rather than guessed at when the corpus changes.
     eprintln!("swept {files} files, {symbols} symbols");
 }
@@ -657,8 +629,8 @@ fn visit(dir: &std::path::Path, f: &mut impl FnMut(&std::path::Path, &str)) {
 
 /// The outline walk runs the same parser the diagnostics do, so it inherits
 /// the same exponential-backtracking hazard and must inherit the same bound.
-/// Without the budget this prefix takes 11.5 seconds; an editor asks for an
-/// outline on every jump to a symbol.
+/// Without the budget this prefix takes over ten seconds, and an editor asks
+/// for an outline on every jump to a symbol.
 #[test]
 fn a_pathological_prefix_is_bounded_here_too() {
     let path = concat!(

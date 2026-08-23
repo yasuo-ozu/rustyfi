@@ -1,33 +1,21 @@
 //! `workspace/symbol`: the same outline extraction, across a whole project.
 //!
-//! This is the one part of the server that touches the filesystem, and it is
-//! kept in its own module for exactly that reason — [`crate::symbols`] and
-//! [`crate::analyze`] stay pure and wasm-safe, and everything here is behind
-//! the `server` feature.
-//!
-//! # What it does
+//! The one part of the server that touches the filesystem, kept in its own
+//! module for that reason — [`crate::symbols`] and [`crate::analyze`] stay
+//! pure and wasm-safe, and everything here is behind the `server` feature.
 //!
 //! Walks the workspace folders the client named at `initialize`, extracts
 //! [`crate::Symbol`]s from every SATySFi file it finds, flattens the trees and
 //! filters by the query. An **open buffer wins over the file on disk**, so a
 //! rename you have not saved yet is findable under its new name.
 //!
-//! # Why it caches
+//! An editor sends `workspace/symbol` on every keystroke of the query box, and
+//! extracting a whole corpus takes about a second, so results are cached per
+//! file and re-derived only when its length or modification time changes.
 //!
-//! An editor sends `workspace/symbol` on every keystroke of the query box.
-//! Extracting the bundled corpus costs about a second, which would make the
-//! feature unusable and the editor unresponsive with it — so results are kept
-//! per file and re-derived only when the file's length or modification time
-//! changes. The first query pays for the scan; the rest are a filter over
-//! memory.
-//!
-//! # Bounds
-//!
-//! [`MAX_FILES`] and [`MAX_RESULTS`] are hard caps. A language server pointed
-//! at a home directory by an over-eager client must degrade to "incomplete
-//! answers" rather than to "reads a million files"; neither limit is
-//! reachable by a real SATySFi project (the largest thing in this repository
-//! is 247 files).
+//! [`MAX_FILES`] and [`MAX_RESULTS`] are hard caps: a server pointed at a home
+//! directory by an over-eager client must degrade to incomplete answers rather
+//! than read a million files. Neither is reachable by a real project.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -73,10 +61,9 @@ impl Workspace {
     /// Read the roots out of an `initialize` request.
     ///
     /// `workspaceFolders` is the modern spelling and may name several;
-    /// `rootUri` is the older single-folder one, and `rootPath` older still.
-    /// All three are optional — a client may attach to a single file with no
-    /// workspace at all, and then there is nothing to search but the open
-    /// buffers, which is handled without any roots.
+    /// `rootUri` is the older single-folder one, `rootPath` older still. All
+    /// three are optional — a client may attach to a single file, and then
+    /// only the open buffers are searched.
     pub(crate) fn absorb_initialize(&mut self, params: &Value) {
         if let Some(folders) = params.get("workspaceFolders").and_then(Value::as_array) {
             for f in folders {
@@ -113,9 +100,9 @@ impl Workspace {
 
         let needle = query.to_lowercase();
         let mut out = Vec::new();
-        // Sorted, so the answer to the same query is the same list in the
-        // same order twice running — `read_dir` order is not stable across
-        // filesystems and an outline that reshuffles itself is disorienting.
+        // Sorted, so the same query answers in the same order twice running:
+        // `read_dir` order is not stable across filesystems, and a result list
+        // that reshuffles itself moves the entry under the user's cursor.
         let mut paths: Vec<&PathBuf> = self.cache.keys().collect();
         paths.sort();
         for path in paths {
@@ -190,9 +177,9 @@ impl Workspace {
 
 /// Flatten one file's tree into `SymbolInformation`-shaped matches.
 ///
-/// The wire shape is `{name, kind, location, containerName}`, which is both a
-/// `SymbolInformation` and a `WorkspaceSymbol` with a full `Location` — so it
-/// works with a client of either protocol vintage.
+/// `{name, kind, location, containerName}` is both a `SymbolInformation` and a
+/// `WorkspaceSymbol` with a full `Location`, so it works with a client of
+/// either protocol vintage.
 fn collect(
     syms: &[Symbol],
     container: Option<&str>,
@@ -276,9 +263,7 @@ fn stamp_of(path: &Path) -> Option<Stamp> {
 
 /// `file:///a/b%20c.saty` → `/a/b c.saty`.
 ///
-/// Only the `file` scheme: nothing else names something this server can read.
-/// A `file://host/…` URI with a non-empty authority is declined rather than
-/// guessed at.
+/// Only the `file` scheme; nothing else names something this server can read.
 pub(crate) fn uri_to_path(uri: &str) -> Option<PathBuf> {
     let rest = uri.strip_prefix("file://")?;
     // `file:///path` leaves `/path`; `file://host/path` leaves `host/path`,
@@ -305,9 +290,9 @@ pub(crate) fn path_to_uri(path: &Path) -> String {
         out.push('/');
     }
     for b in raw.bytes() {
-        // RFC 3986's unreserved set, plus the separators a path needs to keep
-        // literal. Everything else — spaces, `#`, `?`, and every non-ASCII
-        // byte of a Japanese directory name — is escaped.
+        // RFC 3986's unreserved set plus the separators a path keeps literal.
+        // Everything else — spaces, `#`, `?`, and every non-ASCII byte of a
+        // Japanese directory name — is escaped.
         if b.is_ascii_alphanumeric() || b"-_.~/:".contains(&b) {
             out.push(b as char);
         } else {
@@ -318,7 +303,7 @@ pub(crate) fn path_to_uri(path: &Path) -> String {
 }
 
 /// Percent-decoding, rejecting a sequence that is not valid UTF-8 rather than
-/// replacing it — a path this server cannot name is better skipped than
+/// replacing it: a path this server cannot name is better skipped than
 /// silently pointed somewhere else.
 fn percent_decode(s: &str) -> Option<String> {
     if !s.contains('%') {

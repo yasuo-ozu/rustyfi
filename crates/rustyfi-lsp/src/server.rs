@@ -6,31 +6,20 @@
 //!
 //! # What is implemented
 //!
-//! `initialize`, `initialized`, `shutdown`, `exit`,
-//! `textDocument/didOpen` / `didChange` / `didClose`, and
-//! `textDocument/publishDiagnostics`. The `initialize` reply advertises
-//! exactly that and nothing more — an over-claimed capability costs the user
-//! a hang or an empty popup on every keystroke, so the reply lists only what
-//! is actually wired up. (The whole-program tier changes what a diagnostic
-//! can be *about*, not which methods exist, so it adds no capability: a
-//! client that spoke to the parse-only server speaks to this one unchanged.)
-//! `textDocument/didOpen` / `didChange` / `didClose`,
-//! `textDocument/publishDiagnostics`, `textDocument/documentSymbol` and
-//! `workspace/symbol`. The `initialize` reply advertises exactly that and
-//! nothing more — an over-claimed capability costs the user a hang or an
-//! empty popup on every keystroke, so the reply lists only what is actually
-//! wired up.
+//! `initialize`, `initialized`, `shutdown`, `exit`, `textDocument/didOpen` /
+//! `didChange` / `didClose`, `textDocument/publishDiagnostics`,
+//! `textDocument/documentSymbol` and `workspace/symbol`. The `initialize`
+//! reply advertises exactly that and nothing more — an over-claimed capability
+//! costs the user a hang or an empty popup on every keystroke.
 //!
-//! Everything but `workspace/symbol` is pure: it answers from the text the
-//! client sent. `workspace/symbol` has to read the project's other files, and
-//! is the module's only filesystem access — see the crate-private
-//! `workspace` module, which owns all of it.
+//! Everything but `workspace/symbol` answers from the text the client sent.
+//! `workspace/symbol` reads the project's other files and is the module's only
+//! filesystem access — see the crate-private `workspace` module.
 //!
 //! Document sync is **full**, not incremental. Incremental sync would mean
-//! reimplementing UTF-16-range splicing over the buffer, and the whole
-//! analysis re-parses the file anyway (this port's parser has no incremental
-//! mode), so the only thing incremental sync could save is the bytes on the
-//! wire. Full sync is the honest choice here and is advertised as such.
+//! UTF-16-range splicing over the buffer, and the analysis re-parses the file
+//! anyway (this port's parser has no incremental mode), so all it could save
+//! is bytes on the wire.
 
 use std::collections::HashMap;
 use std::io::{self, BufRead, Write};
@@ -46,22 +35,18 @@ use crate::{RustyfiVersion, Symbol};
 pub struct Options {
     /// `rustyfi lsp --lang 0.1`: force every buffer to one generation.
     ///
-    /// `None` — the default — detects per file (see [`crate::analyze_auto`],
-    /// which is the CLI's own entry-document rule plus a re-check for buffers
-    /// that signal no version at all). An override is worth having for a
-    /// project that is wholly one generation and whose library files, being
-    /// signal-free, would otherwise each be parsed twice.
+    /// `None` — the default — detects per file (see [`crate::analyze_auto`]).
+    /// An override saves a second parse per signal-free library file in a
+    /// project that is wholly one generation.
     pub lang: Option<RustyfiVersion>,
 
     /// Whole-program analysis: resolve each buffer's `@require:`/`@import:`
-    /// graph and typecheck it, not just parse it
-    /// ([`crate::project::check`]).
+    /// graph and typecheck it, not just parse it ([`crate::project::check`]).
     ///
     /// `None` — the default — is the parse tier alone, which is what a
-    /// consumer with no filesystem to offer (and every test in
-    /// `tests/server_stdio.rs`) wants. `rustyfi lsp` sets `Some(..)` unless
-    /// `--no-typecheck` is given, and fills in root discovery, which it can
-    /// do and this crate deliberately cannot (see
+    /// consumer with no filesystem to offer wants. `rustyfi lsp` sets
+    /// `Some(..)` unless `--no-typecheck` is given, and fills in the root
+    /// discovery this crate deliberately cannot do (see
     /// [`crate::project::CheckOptions::discover_roots`]).
     ///
     /// [`Self::lang`] wins over the copy inside it, so the two cannot say
@@ -73,16 +58,12 @@ pub struct Options {
 /// Run the server against a pair of streams until the client disconnects or
 /// sends `exit`, returning the process exit code.
 ///
-/// Streams rather than `stdin()`/`stdout()` so the whole protocol can be
-/// driven in-process by a test with two byte buffers — which is what
-/// `tests/server_stdio.rs` does, so the end-to-end path under test is the
-/// same code path the binary runs, not a re-implementation of it.
+/// Streams rather than `stdin()`/`stdout()` so a test can drive the whole
+/// protocol in-process over the same code path the binary runs.
 ///
 /// The exit code follows the specification's `exit` rules: `0` if `shutdown`
-/// was received first, `1` otherwise. A client that simply closes the pipe
-/// without either is treated as a clean disconnect (`0`) — that is the normal
-/// way an editor goes away when it crashes or is killed, and there is nothing
-/// to report to.
+/// came first, `1` otherwise. A client that just closes the pipe is a clean
+/// disconnect (`0`) — that is how an editor goes away when it is killed.
 pub fn run(input: &mut impl BufRead, output: &mut impl Write, opts: Options) -> io::Result<i32> {
     let mut state = State::new(opts);
     loop {
@@ -90,9 +71,8 @@ pub fn run(input: &mut impl BufRead, output: &mut impl Write, opts: Options) -> 
             Ok(Some(msg)) => msg,
             Ok(None) => return Ok(0),
             Err(e) if e.kind() == io::ErrorKind::InvalidData => {
-                // Malformed JSON: answer with a null-id parse error (the only
-                // response JSON-RPC allows when the id is unknowable) and
-                // keep the session alive.
+                // Malformed JSON: a null-id parse error is the only response
+                // JSON-RPC allows when the id is unknowable. The session lives.
                 jsonrpc::write_message(
                     output,
                     &jsonrpc::error_response(Value::Null, code::PARSE_ERROR, &e.to_string()),
@@ -128,30 +108,19 @@ pub fn run(input: &mut impl BufRead, output: &mut impl Write, opts: Options) -> 
 /// `(code, message)` for an error response.
 type RequestError = (i64, String);
 
-/// Everything the server remembers between messages.
+/// Everything the server remembers between messages, including the open
+/// buffers.
 ///
-/// Notably NOT the open buffers. A full-sync server is handed the complete
-/// text with every `didOpen`/`didChange`, and the analysis is a function of
-/// that text and of the files on disk around it, so a document store would be
-/// write-only state — and write-only state in a server is where staleness
-/// bugs come from.
+/// Diagnostics are *pushed* from the text a notification carries and would
+/// need no store, but a `textDocument/documentSymbol` **request** carries only
+/// a URI. Reading that URI back off disk would answer about the saved file
+/// rather than the buffer being edited, and would put filesystem access in a
+/// server that otherwise has none.
 ///
-/// The document URI is a key to publish back against, and — under the
-/// `typecheck` feature — the one thing that is also *read*: the whole-program
-/// tier needs the buffer's path to resolve `@import:` and to discover a
-/// library root ([`crate::project::path_from_uri`]). Nothing is written
-/// anywhere, and a URI with no path simply stays on the parse tier.
-/// Including the open buffers, which a diagnostics-only server did not need:
-/// diagnostics are *pushed* from the text a notification carries, but a
-/// `textDocument/documentSymbol` **request** carries only a URI, so the text
-/// has to have been kept. The alternative — reading the URI back off disk —
-/// would answer about the saved file rather than the buffer being edited, and
-/// would put filesystem access in a server that otherwise has none.
-///
-/// The store is keyed by the URI as an opaque string; it is still never
-/// parsed or resolved to a path. Entries live from `didOpen` to `didClose`,
-/// which is exactly the window the specification says a server may be asked
-/// about a document in.
+/// The store is keyed by the URI as an opaque string, never resolved to a
+/// path except by the whole-program tier ([`crate::project::path_from_uri`]).
+/// Entries live from `didOpen` to `didClose`, exactly the window the
+/// specification says a server may be asked about a document in.
 struct State {
     opts: Options,
     initialized: bool,
@@ -214,11 +183,9 @@ impl State {
     /// `exit` is handled by the loop, not here, because it ends the process
     /// rather than producing a message.
     fn notification(&mut self, method: &str, params: Value) -> Vec<Value> {
-        // Notifications before `initialize` "should be dropped" per the
-        // specification, except `exit` (handled by the caller). The same
-        // applies once `shutdown` has been answered: the session is winding
-        // down, and pushing diagnostics at a client that has stopped
-        // listening is at best noise.
+        // The specification says notifications before `initialize` should be
+        // dropped, `exit` excepted. The same goes once `shutdown` has been
+        // answered: the client has stopped listening.
         if !self.initialized || self.shutdown_requested {
             return Vec::new();
         }
@@ -236,10 +203,8 @@ impl State {
             }
             // `full_replacement` yields `None` for a *ranged* change under a
             // Full-sync agreement: the client is not honouring the advertised
-            // capability, and applying it would need the incremental splicing
-            // this server does not do. Publishing nothing leaves the previous
-            // diagnostics on screen — stale, but never pointing at text that
-            // is not there.
+            // capability. Publishing nothing leaves the previous diagnostics
+            // on screen — stale, but never pointing at text that is not there.
             "textDocument/didChange" => {
                 let text = full_replacement(&params).map(str::to_string);
                 self.remember(&params, text.as_deref());
@@ -257,21 +222,17 @@ impl State {
                     json!({ "uri": uri, "diagnostics": [] }),
                 )]
             }
-            // `initialized`, `$/cancelRequest`, `$/setTrace`, and anything
-            // else: silently ignored, which is what the specification asks of
-            // a server for an unknown notification.
+            // `initialized`, `$/cancelRequest`, `$/setTrace` and anything
+            // else: silently ignored, as the specification asks.
             _ => Vec::new(),
         }
     }
 
     /// Publish diagnostics for `text` against the URI and version in
-    /// `params.textDocument`, or nothing if either the URI or the text is
-    /// missing.
+    /// `params.textDocument`, or nothing if either is missing.
     ///
-    /// `text` is a parameter rather than read from `params` because that is
-    /// the *only* thing `didOpen` and `didChange` disagree about; everything
-    /// else — the URI, the version echo, the "drop a malformed notification
-    /// silently" rule — is shared, and was previously written twice.
+    /// `text` is a parameter rather than read from `params` because it is the
+    /// *only* thing `didOpen` and `didChange` disagree about.
     fn publish(&self, params: &Value, text: Option<&str>) -> Vec<Value> {
         let Some(doc) = params.get("textDocument") else {
             return Vec::new();
@@ -282,15 +243,13 @@ impl State {
         vec![self.diagnostics_for(uri, text, doc.get("version"))]
     }
 
-    /// Absorb `initializationOptions`, for the settings a client can send
-    /// that the command line may not have pinned.
     /// Store (or replace) the text of the document `params` names.
     ///
     /// A `didChange` this server cannot apply — a *ranged* change under a
-    /// Full-sync agreement — arrives here as `None`, and then the previous
-    /// text is **dropped** rather than kept. Keeping it would leave a
-    /// `documentSymbol` answering about text the client has already edited
-    /// past, and a stale outline is harder to notice than a missing one.
+    /// Full-sync agreement — arrives here as `None`, and the previous text is
+    /// then **dropped** rather than kept: a `documentSymbol` answering about
+    /// text the client has already edited past is harder to notice than a
+    /// missing outline.
     fn remember(&mut self, params: &Value, text: Option<&str>) {
         let Some(uri) = params.get("textDocument").and_then(|d| str_field(d, "uri")) else {
             return;
@@ -307,11 +266,9 @@ impl State {
 
     /// `textDocument/documentSymbol`: the outline of one open buffer.
     ///
-    /// A URI this server has never been given is answered with an empty list
-    /// rather than an error. The specification lets a server return `null`,
-    /// but an editor showing "request failed" in its outline pane for a file
-    /// it simply has not opened yet is noise; an empty outline says the same
-    /// thing quietly.
+    /// A URI this server was never given is answered with an empty list rather
+    /// than the `null` the specification also allows, so an editor does not
+    /// show "request failed" in its outline pane for an unopened file.
     fn document_symbols(&self, params: &Value) -> Value {
         let text = params
             .get("textDocument")
@@ -327,15 +284,12 @@ impl State {
         Value::Array(symbols.iter().map(symbol_json).collect())
     }
 
-    /// `initializationOptions.lang`, if the client sent one and the command
-    /// line did not already pin the generation.
+    /// Apply the settings a client may send in `initializationOptions`.
     ///
-    /// The command line wins on every one of them: it is the more explicit of
-    /// the two, and an editor that guesses wrong in its client config should
-    /// not be able to override what the user typed when launching the server.
-    /// For the flag-shaped options that means "the command line only ever
-    /// *disables*", which is why each is applied here only in the direction
-    /// the flag cannot have chosen.
+    /// The command line wins on every one of them, so an editor's client
+    /// config cannot override what the user typed when launching the server.
+    /// For the flag-shaped options the command line only ever *disables*,
+    /// which is why each is applied here in one direction only.
     fn absorb_initialization_options(&mut self, params: &Value) {
         let Some(o) = params.get("initializationOptions") else {
             return;
@@ -357,11 +311,9 @@ impl State {
                 if o.get("checkLibraries") == Some(&Value::Bool(true)) {
                     project.check_libraries = true;
                 }
-                // `libRoot` accepts a string or an array of them — the
-                // loader's search path is a list, and an editor configuring
-                // one project-local root plus a shared one should not have to
-                // choose. Named roots replace discovery entirely, exactly as
-                // `--lib-root` does for the compiler.
+                // `libRoot` accepts a string or an array: the loader's search
+                // path is a list. Named roots replace discovery entirely,
+                // exactly as `--lib-root` does for the compiler.
                 let roots: Vec<std::path::PathBuf> = match o.get("libRoot") {
                     Some(Value::String(s)) => vec![s.into()],
                     Some(Value::Array(items)) => {
@@ -408,11 +360,9 @@ impl State {
     /// configured and the URI names a path it can reach, the parse tier
     /// otherwise.
     ///
-    /// A URI that is not a `file:` one — `untitled:`, an editor's own
-    /// scratch scheme — has no path, so there is no directory to resolve
-    /// `@import:` against and no library root to discover. That buffer gets
-    /// the parse tier, which is exactly what it would have got before this
-    /// tier existed.
+    /// A non-`file:` URI (`untitled:`, an editor's scratch scheme) has no
+    /// path, so there is no directory to resolve `@import:` against and no
+    /// library root to discover; that buffer gets the parse tier.
     #[cfg(feature = "typecheck")]
     fn diagnose(&self, uri: &str, text: &str) -> Vec<crate::Diag> {
         let Some(project) = &self.opts.project else {
@@ -422,9 +372,8 @@ impl State {
             return self.parse_only(text);
         };
         let opts = crate::project::CheckOptions {
-            // The command line's `--lang` wins over the copy the caller put
-            // in `project`, so the two halves of one server cannot disagree
-            // about which generation a buffer is.
+            // `--lang` wins over the copy the caller put in `project`, so the
+            // two halves cannot disagree about a buffer's generation.
             lang: self.opts.lang.or(project.lang),
             ..project.clone()
         };
@@ -447,9 +396,8 @@ impl State {
 
 /// One [`Symbol`] as LSP's `DocumentSymbol`, children and all.
 ///
-/// `detail` and `children` are omitted when they are empty — both are
-/// optional in the protocol, and a thousand `"children": []` members is a
-/// measurable fraction of the payload for a library with a big signature.
+/// `detail` and `children` are optional in the protocol and omitted when
+/// empty, which is a real fraction of the payload for a big signature.
 fn symbol_json(s: &Symbol) -> Value {
     let mut out = json!({
         "name": s.name,
@@ -489,10 +437,8 @@ fn server_capabilities() -> Value {
             },
             "documentSymbolProvider": true,
             "workspaceSymbolProvider": true,
-            // The protocol's default, stated explicitly because it is the
-            // one thing about this server most likely to be got wrong by
-            // whoever touches `line_index` next: every `character` below is
-            // a UTF-16 code unit.
+            // The protocol's default, stated explicitly: every `character`
+            // this server emits is a UTF-16 code unit.
             "positionEncoding": "utf-16",
         },
         "serverInfo": {
@@ -504,21 +450,18 @@ fn server_capabilities() -> Value {
 
 /// A string field of a JSON object.
 ///
-/// Borrowed, not owned: `text` here is the whole document, and the `params`
-/// it lives in outlive every use of it, so copying the buffer to look at it
-/// would be one wasted allocation of the file's size per keystroke.
+/// Borrowed, not owned: one of these fields is the whole document text, and
+/// copying it to look at it would cost a file-sized allocation per keystroke.
 fn str_field<'a>(value: &'a Value, name: &str) -> Option<&'a str> {
     value.get(name).and_then(Value::as_str)
 }
 
-/// The new full text of a `didChange`, if every change in it is a whole-
-/// document replacement.
+/// The new full text of a `didChange`, if it is a whole-document replacement.
 ///
-/// A Full-sync change list is normally one entry with only a `text` member.
-/// The last entry wins if a client batches several, since they apply in
-/// order. A `range` on any entry means the client is doing incremental sync
-/// regardless of what was advertised, and this returns `None` rather than
-/// silently treating a fragment as the whole file.
+/// The last entry wins if a client batches several, since they apply in order.
+/// A `range` on it means the client is doing incremental sync regardless of
+/// what was advertised, and this answers `None` rather than silently treating
+/// a fragment as the whole file.
 fn full_replacement(params: &Value) -> Option<&str> {
     let changes = params.get("contentChanges")?.as_array()?;
     let last = changes.last()?;

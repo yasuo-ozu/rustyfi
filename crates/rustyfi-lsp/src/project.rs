@@ -2,57 +2,45 @@
 //! it.
 //!
 //! [`crate::analyze`] stops at parsing because a detached buffer has no
-//! program around it: elaboration runs over the entry document's prelude
-//! spliced behind every `@require:`d package's, so a single file checked alone
-//! reports `document`, `\emph`, `+p` and every imported name as unbound. This
-//! module removes the *cause* rather than the symptom — it resolves the same
-//! program the compiler would (`rustyfi_loader::load`, the CLI's own version
-//! dispatch) and runs the same elaborate → typecheck → `:>`-check front half
-//! (`rustyfi_lang::check_document_program`) — and stops there, before the
-//! closure tree, the font store and the fixpoint the CLI needs to make pages.
+//! program around it. This module resolves the same program the compiler would
+//! (`rustyfi_loader::load`) and runs the same elaborate → typecheck →
+//! `:>`-check front half (`rustyfi_lang::check_document_program`), stopping
+//! before the closure tree, the font store and the fixpoint.
 //!
 //! Everything here needs the filesystem, so it is behind the `typecheck`
 //! feature and never reaches the wasm-safe [`crate::analyze`] seam.
 //!
-//! # The four decisions
+//! Four things about it are not obvious:
 //!
 //! **The buffer overrides its own file.** The server holds text the disk has
-//! not seen; the loader reads paths. `rustyfi_loader::LoadOptions::sources`
-//! is the seam that reconciles them: [`BufferSources`] answers the loader's
-//! three filesystem questions itself for the entry path and delegates
-//! everything else to `std::fs`. So an unsaved buffer is analysed as it is
-//! typed, while its dependencies come off the disk. A buffer with no path at
-//! all (an `untitled:` URI) is not resolvable and stays at parse-only.
+//! not seen; the loader reads paths. `LoadOptions::sources` reconciles them:
+//! `BufferSources` answers the loader's filesystem questions itself for the
+//! entry path and delegates everything else to `std::fs`. A buffer with no
+//! path (an `untitled:` URI) is not resolvable and stays at parse-only.
 //!
-//! **A library is checked as a dependency of a synthetic document.** Most of
-//! the corpus is libraries, and `elaborate_program` rejects one outright
-//! ("this file has no document expression"). Rather than give up, this module
-//! writes — in memory, never on disk — a stub entry document beside the
-//! library carrying *the library's own headers* and a `()` body, hands it to
-//! the loader, and splices the buffer's own parsed CST in as the last
-//! dependency. The library's `@require:`s therefore resolve exactly as they
-//! do in real use, its `@stage:` header still applies (the merge reads it off
-//! the file, and the buffer is a dependency here, not the entry), and every
-//! span in a diagnostic is an offset into the buffer's own text.
+//! **A library is checked as a dependency of a synthetic document**, because
+//! `elaborate_program` rejects a file with no document expression. This module
+//! builds — in memory, never on disk — a stub entry beside the library
+//! carrying *the library's own headers* and a `()` body, and splices the
+//! buffer's parsed CST in as the last dependency. So the library's
+//! `@require:`s resolve as they do in real use, its `@stage:` header still
+//! applies (the merge reads it off the file, and the buffer is a dependency
+//! here, not the entry), and diagnostic spans are offsets into the buffer's
+//! own text. Not equivalent to compiling the library for real — see
+//! [`CheckOptions::check_libraries`].
 //!
-//! That is honest but *not* equivalent to how a library is compiled in
-//! anger — see [`CheckOptions::check_libraries`], which is off by default and
-//! names exactly which real, valid libraries it would misjudge.
-//!
-//! **Resolution failure degrades to parse-only.** No library root configured,
-//! a `@require:` that names an uninstalled package, an `@import:` typo: none
-//! of these is a reason to paint the buffer red, and a wall of "cannot
-//! resolve" on every keystroke is precisely the worse-than-nothing failure
-//! mode this crate exists to avoid. The load error is recorded in
-//! [`Analysis::note`] and no diagnostic is produced.
+//! **Resolution failure degrades to parse-only.** No library root, an
+//! uninstalled package, an `@import:` typo: a wall of "cannot resolve" on
+//! every keystroke is the worse-than-nothing failure mode this crate exists to
+//! avoid. The load error goes in [`Analysis::note`] and no diagnostic is
+//! produced.
 //!
 //! **A span that is not this buffer's is not shown as if it were.** A
-//! `rustyfi_syntax::Span` carries no file identity, and the program under
-//! analysis is a merge of many files, so a type error's span may be an offset
-//! into a *dependency*. Painting that at the same offset in the buffer would
-//! be a confident lie. [`belongs_to_buffer`] tests the span's own
-//! `(line, col, byte)` triple against the buffer and, when it does not hold
-//! up, the diagnostic is reported at the top of the file and says so.
+//! `Span` carries no file identity and the program is a merge of many files,
+//! so a type error's span may be an offset into a *dependency*.
+//! `belongs_to_buffer` tests the span's `(line, col, byte)` triple against
+//! the buffer; when it does not hold up, the diagnostic goes at the top of the
+//! file and says so.
 
 use std::path::{Path, PathBuf};
 
@@ -72,43 +60,31 @@ pub struct CheckOptions {
     /// The library-root search path, highest priority first. When non-empty
     /// the first entry is the load's `lib_root` and the rest its
     /// `fallback_roots`, and [`Self::discover_roots`] is not consulted at
-    /// all — the CLI's rule, for the CLI's reason: a *named* root is exactly
-    /// that one root, or a build would depend on what happens to be installed
-    /// on the machine.
+    /// all — the CLI's rule: a *named* root is exactly that one root, or a
+    /// build depends on what happens to be installed on the machine.
     pub lib_roots: Vec<PathBuf>,
     /// How to find library roots when none was named: given the document's own
     /// directory, return the whole search path.
     ///
-    /// A function pointer rather than a dependency because discovery lives in
-    /// `rustyfi-satyrographos`, which pulls in tar/flate2/sha2/TLS — an
-    /// unreasonable dependency for an editor front end. The `rustyfi lsp`
-    /// binary, which already links it, passes `sg::roots::discover_all` in;
-    /// anything else names its roots explicitly or gets none.
+    /// A function pointer rather than a dependency, because discovery lives in
+    /// `rustyfi-satyrographos`, which pulls in tar/flate2/sha2/TLS — too much
+    /// for an editor front end. The `rustyfi lsp` binary already links it and
+    /// passes `sg::roots::discover_all` in.
     pub discover_roots: Option<fn(&Path) -> Vec<PathBuf>>,
     /// Whether to check a *library* buffer, by the synthetic-document route
     /// this module's doc comment describes.
     ///
-    /// **Off by default, and the default is the measurement talking.** It is
-    /// not that the route does not work — swept over every library this
-    /// repository ships (`tests/project.rs`), 76 of the 77 bundled packages
-    /// and 68 of the 68 resolvable corpus package sources check clean, and
-    /// the one bundled failure is a real pre-existing breakage that `rustyfi`
-    /// itself reports. It is that the remaining three corpus files are
-    /// *valid* and cannot pass: SATySFi's global-merge module model lets a
-    /// library use a module it never `@require:`s (`satysfi-base`'s
-    /// `tabular2.satyh` calls `Color.black` and requires only `list`/`table`),
-    /// leaving it to whichever document pulls it in to have required that
-    /// package first. Checked alone, such a file reports an unbound name that
-    /// is not a mistake — and "a red squiggle on a file that compiles" is the
-    /// one outcome worth defaulting away from.
+    /// **Off by default**, not because the route does not work but because
+    /// SATySFi's global-merge module model lets a library use a module it
+    /// never `@require:`s (`satysfi-base`'s `tabular2.satyh` calls
+    /// `Color.black` and requires only `list`/`table`), leaving it to
+    /// whichever document pulls it in to have required that package. Checked
+    /// alone, such a valid file reports an unbound name that is not a
+    /// mistake — a red squiggle on a file that compiles.
     ///
-    /// So this is opt-in (`rustyfi lsp --check-libraries`, or
-    /// `initializationOptions.checkLibraries`), which is the right shape for
-    /// it: a package author editing a `.satyh` knows whether their library
-    /// stands on its own.
-    ///
-    /// Parse diagnostics are produced for a library either way; this only
-    /// controls the whole-program tier.
+    /// Opt in with `rustyfi lsp --check-libraries` or
+    /// `initializationOptions.checkLibraries`. Parse diagnostics are produced
+    /// for a library either way; this only controls the whole-program tier.
     pub check_libraries: bool,
 }
 
@@ -139,9 +115,8 @@ pub struct Analysis {
     /// diagnostic: it describes the *analysis*, not the user's file.
     pub note: Option<String>,
     /// How many files the resolved program had, entry included. `0` when the
-    /// analysis never got that far — a cheap way for a test to prove the
-    /// dependencies really were loaded rather than the check passing
-    /// vacuously.
+    /// analysis never got that far, which lets a test prove the dependencies
+    /// really were loaded rather than the check passing vacuously.
     pub files: usize,
 }
 
@@ -169,13 +144,11 @@ impl Analysis {
 
 /// The stack the analysis runs on.
 ///
-/// The recursive-descent parser and the elaborator both recurse per syntactic
-/// nesting level, and the CLI already spawns its whole run on a 256 MB stack
-/// because the official ~300-line demo overflows the default 8 MB main-thread
-/// one (`rustyfi`'s `main`). A language server is handed exactly those
-/// documents, from whatever thread the client's I/O loop happens to be on, so
-/// the analysis brings its own stack rather than hoping the caller's is big
-/// enough.
+/// The parser and the elaborator recurse per syntactic nesting level, and the
+/// CLI already spawns its whole run on a 256 MB stack because a real ~300-line
+/// document overflows the default 8 MB main-thread one. A language server is
+/// handed the same documents on whatever thread the client's I/O loop is on,
+/// so the analysis brings its own stack.
 const ANALYSIS_STACK: usize = 256 * 1024 * 1024;
 
 /// Analyse `source` as the file at `path`: parse it, resolve the program
@@ -185,18 +158,15 @@ const ANALYSIS_STACK: usize = 256 * 1024 * 1024;
 /// It does not have to exist on disk (an unsaved buffer does not), but its
 /// directory does, since that is what `@import:` resolves against.
 ///
-/// Never panics and never hangs on a stack overflow: the whole analysis runs
-/// on its own [`ANALYSIS_STACK`]-sized thread, and a panic inside it is
-/// reported as a degraded result rather than taking the server's I/O loop
-/// down with it.
+/// Never panics and never overflows the caller's stack: the analysis runs on
+/// its own 256 MB thread, and a panic inside it becomes a degraded result
+/// rather than taking the server's I/O loop down.
 pub fn check(path: &Path, source: &str, opts: &CheckOptions) -> Analysis {
     let (version, parsed) = analysis::parse_with(source, opts.lang);
     let parsed = match parsed {
         Ok(parsed) => parsed,
         // A buffer that does not parse gets the parse diagnostic and nothing
-        // else. Typechecking a file the parser could not read is not
-        // possible, and reporting a second, derived complaint next to the
-        // real one is noise.
+        // else; a second, derived complaint next to the real one is noise.
         Err(failure) => return Analysis::parse_only(version, vec![failure.into_diag(source)]),
     };
     if matches!(parsed, Parsed::None) {
@@ -209,11 +179,9 @@ pub fn check(path: &Path, source: &str, opts: &CheckOptions) -> Analysis {
              libraries is off (see CheckOptions::check_libraries)",
         );
     }
-    // `use`-family headers select Envelopes packaging, which resolves
-    // dependencies from a pre-solved `rustyfi-deps.yaml` and reads its
-    // configs through `std::fs` directly — the loader refuses a
-    // `SourceProvider` alongside it rather than serve a graph half out of
-    // memory, so there is no way to give it the unsaved buffer.
+    // `use`-family headers select Envelopes packaging, which reads its configs
+    // through `std::fs` directly; the loader refuses a `SourceProvider`
+    // alongside it, so there is no seam for the unsaved buffer.
     if rustyfi_syntax::sniff_headers(source).envelope_headers {
         return Analysis::degraded(
             version,
@@ -232,10 +200,10 @@ pub fn check(path: &Path, source: &str, opts: &CheckOptions) -> Analysis {
     });
     match result {
         Ok(analysis) => analysis,
-        // The front half is the compiler's own, and it carries `unreachable!`
+        // The front half is the compiler's own and carries `unreachable!`
         // assertions about shapes the loader is supposed to have ruled out. A
-        // buffer that finds one must not cost the user their editor's whole
-        // diagnostics pane; it costs this one analysis.
+        // buffer that finds one costs this analysis, not the editor's whole
+        // diagnostics pane.
         Err(_panic) => Analysis::degraded(
             version,
             "the whole-program analysis panicked; only parse diagnostics are available \
@@ -254,9 +222,8 @@ fn resolve_and_check(
     opts: &CheckOptions,
 ) -> Analysis {
     let buffer_path = normalize(path);
-    // A document is its own entry. A library is spliced in as the last
-    // dependency of a stub document that carries its headers — see the module
-    // doc comment.
+    // A document is its own entry; a library is spliced in as the last
+    // dependency of a stub document carrying its headers.
     let library = (!parsed.is_document()).then(|| stub_for_library(&buffer_path, &parsed));
     let (entry_path, entry_text) = match &library {
         Some((stub_path, stub_text)) => (stub_path.clone(), stub_text.clone()),
@@ -276,28 +243,26 @@ fn resolve_and_check(
     };
     let mut program = match rustyfi_loader::load(&entry_path, &load_opts) {
         Ok(program) => program,
-        // Not the user's mistake to answer for: an uninstalled package, a
-        // machine with no library root, a document opened outside its
-        // project. Degrade to what the parse already proved.
+        // An uninstalled package, no library root, a document opened outside
+        // its project: not the user's mistake to answer for.
         Err(e) => return Analysis::degraded(version, format!("cannot resolve the program: {e}")),
     };
 
     if library.is_some() {
         let cst = into_loaded(parsed);
         match program.files.iter().position(|f| f.path == buffer_path) {
-            // The graph already contains this very file: a library that one of
-            // its own dependencies `@require:`s back. The loader read that
-            // copy off the disk (the overlay only stands in for the stub), so
-            // swap in the buffer's text rather than adding a second copy of
-            // every binding.
+            // The graph already contains this file: a library one of its own
+            // dependencies `@require:`s back. The loader read that copy off
+            // the disk (the overlay only stands in for the stub), so swap in
+            // the buffer's text rather than adding a second copy of every
+            // binding.
             Some(i) => {
                 program.files[i].cst = cst;
                 program.files[i].version = version;
             }
-            // The ordinary case: the buffer's own bindings, positioned
-            // dependency-first — after everything the stub's (== the
-            // library's) headers pulled in, and before the stub itself, which
-            // the loader always yields last.
+            // The ordinary case: the buffer's own bindings, dependency-first —
+            // after everything the library's headers pulled in, and before the
+            // stub, which the loader always yields last.
             None => {
                 let at = program.files.len() - 1;
                 program.files.insert(
@@ -363,10 +328,8 @@ fn into_loaded(parsed: Parsed) -> LoadedCst {
 /// own headers.
 ///
 /// The headers are re-spelled from the parse rather than sliced out of the
-/// source text. Both would work for `@require:`/`@import:`, whose surface
-/// syntax is one line, but re-spelling cannot accidentally carry a *third* of
-/// a construct along with them, and it makes the stub's text independent of
-/// how the buffer happens to be laid out.
+/// source text, so the stub cannot accidentally carry part of a following
+/// construct and does not depend on the buffer's layout.
 fn stub_for_library(buffer: &Path, parsed: &Parsed) -> (PathBuf, String) {
     let mut text = String::new();
     match parsed {
@@ -388,9 +351,8 @@ fn stub_for_library(buffer: &Path, parsed: &Parsed) -> (PathBuf, String) {
         }
         Parsed::None => {}
     }
-    // A document is `header* … body`, and `()` is a body in both grammars.
-    // Nothing evaluates it — the check stops after typechecking — so its type
-    // never has to be `document`.
+    // `()` is a body in both grammars. Nothing evaluates it — the check stops
+    // after typechecking — so its type never has to be `document`.
     text.push_str("()\n");
 
     let name = buffer
@@ -401,10 +363,9 @@ fn stub_for_library(buffer: &Path, parsed: &Parsed) -> (PathBuf, String) {
     (dir.join(format!(".{name}.rustyfi-lsp-entry.saty")), text)
 }
 
-/// Re-spell one Legacy header onto the stub. `@stage:` is deliberately
-/// dropped: it is a property of the *library's* bindings, the merge reads it
-/// off the library's own file, and repeating it on the stub would additionally
-/// stage the stub's `()`.
+/// Re-spell one Legacy header onto the stub. `@stage:` is dropped on purpose:
+/// it is a property of the *library's* bindings, the merge reads it off the
+/// library's own file, and repeating it here would also stage the stub's `()`.
 fn push_header(out: &mut String, header: &rustyfi_syntax::cst::Header) {
     use rustyfi_syntax::cst::Header;
     match header {
@@ -416,17 +377,14 @@ fn push_header(out: &mut String, header: &rustyfi_syntax::cst::Header) {
 
 /// The loader's filesystem, with one path served from memory.
 ///
-/// The entry is the only overridden path: everything a `@require:`/`@import:`
-/// reaches is a file on disk that the editor is not holding, and reading it
-/// from disk is both correct and what the compiler would do. (An editor with
-/// several dirty buffers open in one project is a real case; serving all of
-/// them would mean a document store, per-buffer invalidation and an answer to
-/// "which version of that file did this diagnostic come from". That is a
-/// larger design than this one, and this seam is where it would go.)
+/// The entry is the only overridden path; everything a `@require:`/`@import:`
+/// reaches comes off the disk, which is what the compiler would do. Serving
+/// several dirty buffers at once would need a document store and per-buffer
+/// invalidation, and this seam is where that would go.
 struct BufferSources {
-    /// The entry's identity, as [`normalize`] computes it — which is also
-    /// what [`SourceProvider::canonicalize`] hands back for it, so the
-    /// loader's graph keys agree with this comparison.
+    /// The entry's identity, as [`normalize`] computes it — which is also what
+    /// [`SourceProvider::canonicalize`] hands back for it, so the loader's
+    /// graph keys agree with this comparison.
     entry: PathBuf,
     /// The buffer's text, or the synthetic stub's.
     text: String,
@@ -447,9 +405,8 @@ impl SourceProvider for BufferSources {
     }
 
     fn is_file(&self, path: &Path) -> bool {
-        // The entry exists even when the disk disagrees: an unsaved buffer,
-        // or the stub document a library is checked underneath, which is
-        // never written anywhere.
+        // The entry exists even when the disk disagrees: an unsaved buffer, or
+        // the stub document, which is never written anywhere.
         self.is_entry(path) || path.is_file()
     }
 
@@ -463,27 +420,22 @@ impl SourceProvider for BufferSources {
 
 /// The filesystem path a `file:` URI names, or `None` for any other scheme.
 ///
-/// The crate's JSON-RPC half treats a document URI as an opaque key and
-/// deliberately does not depend on `url` (see `jsonrpc`'s module comment on
-/// why `lsp-types` was declined); this is the one place a path is actually
-/// needed, and `file:` URIs are simple enough to decode honestly:
+/// The rest of the crate treats a document URI as an opaque key and does not
+/// depend on `url`; this is the one place a path is needed.
 ///
-/// - `file:///a/b.saty` and the host-bearing `file://localhost/a/b.saty` both
-///   name `/a/b.saty`; any other authority is a remote file this server
-///   cannot read, so it declines rather than guess.
-/// - `%XX` escapes are decoded — a path with a space arrives as `%20`, and
-///   the Japanese corpus means non-ASCII path components are ordinary here.
-///   Decoding is byte-wise and the result is required to be UTF-8, which
-///   every URI-encoded path produced by an editor is.
+/// - `file:///a/b.saty` and `file://localhost/a/b.saty` both name
+///   `/a/b.saty`; any other authority is a remote file this server cannot
+///   read, so it declines rather than guess.
+/// - `%XX` escapes are decoded byte-wise and the result must be UTF-8. The
+///   Japanese corpus makes non-ASCII path components ordinary here.
 /// - A Windows drive letter (`file:///C:/x`) loses the leading slash.
 ///
 /// `untitled:` and an editor's private schemes return `None`: they name no
 /// file, and the whole-program tier has nothing to resolve against.
 pub fn path_from_uri(uri: &str) -> Option<PathBuf> {
     let rest = uri.strip_prefix("file://")?;
-    // `file:/a/b` (no authority) is legal too, but every LSP client sends the
-    // three-slash form; anything with a non-empty, non-localhost authority is
-    // a file on another machine.
+    // Every LSP client sends the three-slash form; a non-empty, non-localhost
+    // authority is a file on another machine.
     let path = match rest.find('/') {
         Some(0) => rest,
         _ => {
@@ -563,19 +515,14 @@ fn diagnose(err: &rustyfi_lang::CompileError, source: &str) -> Diag {
             message,
         };
     }
-    // No usable position *in this buffer*. The error is still real — the
-    // program this buffer is the entry of does not compile — so it is
-    // reported, at the top of the file, saying which of the two reasons it
-    // is rather than pointing at a line the user did not write.
-    //
-    // The two are worth telling apart. "In another file" is about the
-    // program: some dependency is at fault and the buffer may be perfect.
-    // "No position" is about this port: `typecheck.rs`'s `ast_span` only
-    // recovers a span from a `Var`/`Overwrite`/`AccessField` node, so a
-    // mismatch inside, say, an operator application genuinely has nowhere to
-    // point (`1 + \`x\`` is the everyday example). Conflating them would
-    // send a user hunting through their packages for an error in the line
-    // they just typed.
+    // No usable position *in this buffer*, but the error is real, so it is
+    // reported at the top of the file rather than at a line the user did not
+    // write. The two reasons are kept apart: "in another file" means some
+    // dependency is at fault and the buffer may be perfect, while "no
+    // position" means `typecheck.rs`'s `ast_span` had nothing to recover a
+    // span from (it only handles `Var`/`Overwrite`/`AccessField`, so `1 + `x``
+    // has nowhere to point). Conflating them sends the user hunting through
+    // their packages for an error in the line they just typed.
     let end = index.position(first_char_end(source));
     let why = match span {
         Some(_) => "the position it carries belongs to another file of the program",
@@ -598,8 +545,8 @@ fn first_char_end(source: &str) -> usize {
 }
 
 /// A failure's best span and its message, without the `Display` position
-/// prefix (the range carries the position; repeating it in words is noise, and
-/// for an unattributable span it would be an outright lie).
+/// prefix — the range carries the position, and for an unattributable span
+/// repeating it in words would be a lie.
 fn located(err: &rustyfi_lang::CompileError) -> (Option<Span>, String) {
     use rustyfi_lang::CompileError as E;
     match err {
@@ -615,10 +562,8 @@ fn located(err: &rustyfi_lang::CompileError) -> (Option<Span>, String) {
             Some(e.span),
             format!("unsupported 0.1 construct: {} ({})", e.construct, e.hint),
         ),
-        // `Parse` here is a *dependency*'s parse error (the buffer's own parse
-        // already succeeded, or this code would not be running), and the rest
-        // — a cross-version refusal, an evaluation failure that this path
-        // never reaches — carry no span at all.
+        // `Parse` here is a *dependency*'s parse error — the buffer's own
+        // parse already succeeded — and the rest carry no span at all.
         other => (None, other.to_string()),
     }
 }
@@ -626,19 +571,15 @@ fn located(err: &rustyfi_lang::CompileError) -> (Option<Span>, String) {
 /// Whether `span` is an offset into `source` rather than into one of the
 /// dependency files merged alongside it.
 ///
-/// A `Span` is a `(line, col, byte)` triple per endpoint, computed by the
-/// lexer against whichever file it read, and it carries no file identity. The
-/// triple is therefore its own checksum: for a foreign file's span to be
-/// mistaken for this buffer's, the same byte offset would have to fall on the
-/// same line at the same column here as it did there. Requiring it of *both*
-/// endpoints makes an accidental match unlikely enough to be worth the
-/// precision, and the failure direction is safe — a rejected span is reported
-/// at the top of the file, with the reason attached, rather than at a
+/// A `Span` is a `(line, col, byte)` triple per endpoint and carries no file
+/// identity, so the triple is used as its own checksum: a foreign span passes
+/// only if its byte offset falls on the same line at the same column here as
+/// it did there, at *both* endpoints. Failure is safe — a rejected span is
+/// reported at the top of the file with the reason attached, rather than at a
 /// confidently wrong place.
 ///
 /// A `line` of 0 is `Span::default()`, the marker for a synthesized node with
-/// no source position at all (real lines are 1-based). It is rejected here by
-/// the same test that rejects everything else.
+/// no source position (real lines are 1-based), and the same test rejects it.
 fn belongs_to_buffer(source: &str, span: Span) -> bool {
     loc_matches(source, span.start) && loc_matches(source, span.end)
 }
@@ -654,14 +595,13 @@ fn loc_matches(source: &str, loc: Loc) -> bool {
 
 /// The lexer's own `(line, col)` for a byte offset: 1-based lines, 0-based
 /// `char` columns, `\r\n` counted once — `rustyfi_syntax`'s `Lexer::bump`,
-/// transcribed. It has to be `bump`'s rule and not [`LineIndex`]'s: this is a
-/// comparison against numbers `bump` produced, so a lone `\r` and a CRLF have
-/// to be counted exactly the way it counts them.
-/// The walk runs over the WHOLE source rather than the `..byte` prefix, and
-/// stops at `byte`: a `\r` that is the last character of the prefix has a
-/// `\n` after it in the file, and the lexer can see that. Deciding from the
-/// prefix alone counts CRLF as a terminator there and lands every comparison
-/// on the wrong line.
+/// transcribed. It must be `bump`'s rule and not [`LineIndex`]'s, because this
+/// compares against numbers `bump` produced.
+///
+/// The walk runs over the WHOLE source and stops at `byte`, never over the
+/// `..byte` prefix: a `\r` at the end of the prefix has a `\n` after it in the
+/// file and the lexer can see that, so deciding from the prefix alone counts
+/// CRLF as a terminator there and lands every comparison on the wrong line.
 fn line_col(source: &str, byte: usize) -> (u32, u32) {
     let mut line = 1u32;
     let mut col = 0u32;
@@ -722,14 +662,12 @@ mod tests {
     fn a_span_from_another_file_is_not_claimed_as_this_ones() {
         let source = "let x = 1\nlet y = 2\n";
         let loc = |line, col, byte| Loc { line, col, byte };
-        // A real span of this buffer.
         let here = Span {
             start: loc(2, 4, 14),
             end: loc(2, 5, 15),
         };
         assert!(belongs_to_buffer(source, here));
-        // The same byte offsets, but the line/col of a *different* file's
-        // layout: rejected.
+        // The same byte offsets, but a different file's line/col layout.
         let elsewhere = Span {
             start: loc(9, 4, 14),
             end: loc(9, 5, 15),

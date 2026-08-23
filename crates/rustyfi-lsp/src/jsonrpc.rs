@@ -1,33 +1,14 @@
 //! Base-protocol framing and JSON-RPC message shapes.
 //!
-//! # Why this is hand-rolled
+//! Hand-rolled rather than `lsp-types`/`lsp-server`, so that the crate adds no
+//! dependency beyond the `serde_json` already in the workspace — in particular
+//! it does not pull `url`, and a document URI is an opaque key everywhere
+//! except `project::path_from_uri`.
 //!
-//! The obvious alternative is `lsp-types` + `lsp-server` (rust-analyzer's,
-//! both MIT). They were evaluated and declined, on weight:
-//!
-//! - The framing is `Content-Length: N\r\n\r\n<json>` and nothing else. That
-//!   is the whole of the base protocol, and it is the ~60 lines below.
-//! - This server implements eight methods, every one of whose payloads is a
-//!   handful of scalars. `lsp-types` is a large crate of type definitions for
-//!   a protocol surface ~50× the one in use here, and it pulls `url` — which
-//!   brings `idna`, `unicode-bidi`, `tinyvec`, `percent-encoding` and friends
-//!   — for a field this server treats as an opaque document key and never
-//!   parses.
-//! - `lsp-server` adds `crossbeam-channel` and a reader/writer thread pair,
-//!   for a loop that is inherently sequential: read a message, answer it,
-//!   read the next.
-//!
-//! Against that, `serde_json` is *already* in this workspace's dependency
-//! graph (`rustyfi`, `rustyfi-pdf`), so the hand-rolled route adds **no new
-//! crate at all**, and the whole protocol layer stays under 200 lines. The
-//! workspace is deliberately lean and there is no async runtime here for the
-//! same reason.
-//!
-//! The trade is real and worth naming: `serde_json::Value` params are checked
-//! at use, not by the type system, so a shape mistake is a runtime `None`
-//! rather than a compile error. That is an acceptable price at eight methods;
-//! it would not be at eighty, and if this server grows hover, completion and
-//! rename, `lsp-types` becomes the right call.
+//! The trade: `serde_json::Value` params are checked at use rather than by the
+//! type system, so a shape mistake is a runtime `None`, not a compile error.
+//! Fine at eight methods; if this server grows hover, completion and rename,
+//! `lsp-types` becomes the right call.
 
 use std::io::{self, BufRead, Write};
 
@@ -38,10 +19,9 @@ use serde_json::Value;
 pub enum Incoming {
     /// A request: has both `method` and `id`, and must be answered.
     Request {
-        /// The `id` to echo in the response. Any JSON value per JSON-RPC —
-        /// kept as a `Value` rather than narrowed to an integer, because a
-        /// client is entitled to send a string and echoing back the wrong
-        /// type silently breaks its request matching.
+        /// The `id` to echo in the response. Kept as a `Value` rather than
+        /// narrowed to an integer: JSON-RPC allows a string id, and echoing
+        /// back the wrong type silently breaks a client's request matching.
         id: Value,
         /// The method name.
         method: String,
@@ -55,9 +35,9 @@ pub enum Incoming {
         /// The `params` member, or `Value::Null` if absent.
         params: Value,
     },
-    /// A response to a request *we* sent. This server sends none, so these
-    /// are ignored; the variant exists so they are ignored deliberately
-    /// rather than misread as a malformed request.
+    /// A response to a request *we* sent. This server sends none; the variant
+    /// exists so such a message is ignored rather than misread as a malformed
+    /// request.
     Response,
 }
 
@@ -75,11 +55,9 @@ pub mod code {
 
 /// Read one framed message, or `Ok(None)` at a clean end of input.
 ///
-/// Only `Content-Length` is interpreted; every other header (`Content-Type`,
-/// which the spec allows and some clients send) is skipped. Header lines are
-/// accepted with either `\r\n` or a bare `\n` terminator — the spec mandates
-/// `\r\n`, but accepting `\n` costs nothing and makes a hand-written test
-/// script or a `printf` debugging session work.
+/// Only `Content-Length` is interpreted; every other header is skipped. Header
+/// lines are accepted with `\r\n` or a bare `\n`, so a hand-written test script
+/// works even though the spec mandates `\r\n`.
 pub fn read_message(input: &mut impl BufRead) -> io::Result<Option<Value>> {
     let mut content_length: Option<usize> = None;
     let mut line = String::new();
@@ -116,8 +94,8 @@ pub fn read_message(input: &mut impl BufRead) -> io::Result<Option<Value>> {
     input.read_exact(&mut body)?;
     match serde_json::from_slice::<Value>(&body) {
         Ok(v) => Ok(Some(v)),
-        // Surfaced as `InvalidData` so the caller can answer with a
-        // `PARSE_ERROR` response rather than tearing the connection down.
+        // `InvalidData` so the caller can answer with a `PARSE_ERROR` response
+        // rather than tearing the connection down.
         Err(e) => Err(io::Error::new(io::ErrorKind::InvalidData, e.to_string())),
     }
 }
@@ -132,9 +110,8 @@ fn header_value<'a>(line: &'a str, name: &str) -> Option<&'a str> {
 /// Classify a decoded message.
 pub fn classify(mut msg: Value) -> Incoming {
     let method = msg.get("method").and_then(Value::as_str).map(str::to_owned);
-    // Moved out, not cloned: for a `didChange` the params hold the entire
-    // document text, so cloning them would copy the whole buffer once per
-    // keystroke for nothing — `msg` is owned here and dropped straight after.
+    // Moved out, not cloned: a `didChange`'s params hold the whole document
+    // text, and `msg` is owned here and dropped straight after.
     let params = msg.get_mut("params").map(Value::take).unwrap_or(Value::Null);
     match (method, msg.get("id")) {
         (Some(method), Some(id)) => Incoming::Request {
@@ -149,8 +126,8 @@ pub fn classify(mut msg: Value) -> Incoming {
 
 /// Write one framed message.
 ///
-/// Always emits `\r\n`, whatever was accepted on the way in, and flushes:
-/// an editor waiting on a response must not be held up by a buffer.
+/// Always emits `\r\n`, whatever was accepted on the way in, and flushes: an
+/// editor waiting on a response must not be held up by a buffer.
 pub fn write_message(out: &mut impl Write, msg: &Value) -> io::Result<()> {
     let body = serde_json::to_vec(msg)?;
     write!(out, "Content-Length: {}\r\n\r\n", body.len())?;
@@ -217,8 +194,8 @@ mod tests {
 
     #[test]
     fn content_length_counts_bytes_not_characters() {
-        // A body with multibyte content: a character-counting reader would
-        // truncate it and then desynchronize the whole stream.
+        // A character-counting reader would truncate this and then
+        // desynchronize the whole stream.
         let body = r#"{"text":"こんにちは"}"#;
         assert_ne!(body.len(), body.chars().count());
         let mut r = io::Cursor::new(frame(body));
@@ -243,8 +220,6 @@ mod tests {
 
     #[test]
     fn a_string_id_survives_the_round_trip() {
-        // JSON-RPC allows a string id; narrowing it to an integer would break
-        // clients that use one.
         let req = classify(serde_json::json!({"id": "abc", "method": "m"}));
         let Incoming::Request { id, .. } = req else {
             panic!("expected a request")

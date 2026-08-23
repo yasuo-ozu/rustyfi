@@ -1,71 +1,46 @@
 //! Language Server Protocol support for SATySFi, and the protocol-free
 //! single-file analysis underneath it.
 //!
-//! The crate is deliberately two halves with a hard line between them:
+//! The crate is two halves with a hard line between them:
 //!
 //! - [`analyze`] and friends ([`analyze_auto`], [`analyze_detected`],
-//!   [`Diag`], [`Severity`], [`LineIndex`]) — **no LSP types, no
-//!   filesystem, no I/O**, and nothing outside `rustyfi-syntax`.
-//!   This half builds for `wasm32-unknown-unknown`, so the browser
-//!   playground's editor gets exactly the diagnostics the editor on the
-//!   desktop does, out of the same code:
+//!   [`Diag`], [`Severity`], [`LineIndex`]) — no LSP types, no filesystem, no
+//!   I/O, and nothing outside `rustyfi-syntax`. This half builds for
+//!   `wasm32-unknown-unknown`, so the browser playground's editor gets the
+//!   same diagnostics the desktop one does out of the same code:
 //!
 //!   ```console
 //!   $ cargo build -p rustyfi-lsp --target wasm32-unknown-unknown --no-default-features
 //!   ```
-//!
-//!   (The default features build for wasm too — `serde_json` is portable —
-//!   but `--no-default-features` leaves `rustyfi-syntax` as the only
-//!   dependency in the graph.)
 //! - [`project`] (feature `typecheck`, on by default) — the *whole-program*
 //!   tier: resolve the buffer's `@require:`/`@import:` graph off the disk and
-//!   typecheck the resulting program. Needs a filesystem, so it is deliberately
-//!   on the far side of the line from [`analyze`] and absent from the wasm
-//!   build.
+//!   typecheck the resulting program. Needs a filesystem, so it is on the far
+//!   side of the line and absent from the wasm build.
 //! - [`server`] (feature `server`, on by default) — the stdio JSON-RPC loop
 //!   `rustyfi lsp` runs. It owns every LSP-shaped structure in the crate.
 //!
 //! # Positions
 //!
 //! Every position this crate produces is an LSP position: **zero-based**
-//! lines, and characters counted in **UTF-16 code units**. Neither of the
-//! obvious shortcuts works — `rustyfi_syntax::Loc` is 1-based with a `char`
-//! column, and a byte offset is wrong for the whole Japanese corpus. See
-//! [`LineIndex`].
+//! lines, characters in **UTF-16 code units**. Neither obvious shortcut
+//! works — `rustyfi_syntax::Loc` is 1-based with a `char` column, and a byte
+//! offset is wrong for the whole Japanese corpus. See [`LineIndex`].
 //!
-//! # Two tiers, and why the line is where it is
+//! # Two tiers
 //!
-//! [`analyze`] reports **lex and parse** diagnostics and no others. That is a
-//! deliberate ceiling for a *detached buffer*, not an unfinished edge:
+//! [`analyze`] reports **lex and parse** diagnostics and no others. This
+//! port's elaboration and typechecking run over a whole *program* — the entry
+//! file's prelude spliced behind every `@require:`d package's — so a single
+//! file checked alone reports every imported name (`document`, `\emph`, `+p`,
+//! `List.map`) as unbound. That would bury the one genuine error under a
+//! hundred false ones on exactly the documents that compile. A parse error, by
+//! contrast, is a property of the file's own text.
 //!
-//! Elaboration and typechecking in this port run over a whole *program* — the
-//! entry file's prelude spliced behind every `@require:`d package's, in
-//! dependency order (`rustyfi_loader::load` → `rustyfi_lang::
-//! compile_document_*`). A single file analysed on its own has none of that,
-//! so every name a real document imports — `document`, `\emph`, `+p`,
-//! `List.map` — is an unbound variable. Emitting those would bury the one
-//! genuine error under a hundred false ones on precisely the documents that
-//! compile fine, and "spurious diagnostics on a valid document are worse than
-//! none". Parse errors, by contrast, are a property of the file's own text
-//! and are honest without any context at all.
-//!
-//! [`project::check`] is the answer to that, and it answers it by supplying
-//! the missing program rather than by lowering the standard: it resolves the
-//! buffer's real dependency graph off the disk (with the *buffer's* text
-//! standing in for its own file, unsaved edits included) and typechecks that.
-//! Where the program cannot be resolved — no library root, an uninstalled
-//! package, a `use`-header document whose packaging mode has no seam for an
-//! in-memory buffer — it degrades to exactly the parse tier above and records
-//! why. A file's own text is analysable anywhere; its program is not, and the
-//! two tiers say so separately.
-//!
-//! The cost is real and is the reason the tiers are separate at all: a parse
-//! is sub-millisecond, whereas resolving and typechecking a document with a
-//! full document class behind it is tens to hundreds of milliseconds
-//! (measured in `tests/project.rs`). Both run per `didOpen`/`didChange`
-//! today, which is honest for documents of the size this corpus holds; a
-//! debounce and a dependency-graph cache are the next things to add, not a
-//! reason to withhold the tier.
+//! [`project::check`] supplies the missing program instead of lowering the
+//! standard: it resolves the buffer's real dependency graph off the disk (the
+//! *buffer's* text standing in for its own file, unsaved edits included) and
+//! typechecks that. Where the program cannot be resolved it degrades to the
+//! parse tier and records why.
 
 mod analysis;
 mod high_water;

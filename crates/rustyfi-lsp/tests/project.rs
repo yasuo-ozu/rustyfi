@@ -39,11 +39,9 @@ fn only(diags: &[Diag]) -> &Diag {
 }
 
 /// A path in a real directory inside the repository — so `@import:` has
-/// somewhere to resolve against — naming a file that does NOT exist, which is
-/// the interesting half: an editor's buffer is analysed long before it is
-/// first saved, and every one of these tests would still pass against a
-/// loader that quietly read the path instead of the buffer if the file were
-/// there.
+/// somewhere to resolve against — naming a file that does NOT exist. That is
+/// the load-bearing half: if the file existed, these tests would still pass
+/// against a loader that quietly read the path instead of the buffer.
 fn unsaved(name: &str) -> PathBuf {
     repo().join("layout-tests").join(name)
 }
@@ -55,8 +53,7 @@ fn unsaved(name: &str) -> PathBuf {
 #[test]
 fn an_imported_name_is_not_reported_as_unbound() {
     // Every name here comes from `stdjabook`/`math`/`annot`, none of which is
-    // in the buffer. This is the exact failure mode single-file elaboration
-    // has and the reason `analyze` stops at parsing.
+    // in the buffer.
     let src = "@require: stdjabook\n\
                @require: annot\n\
                document (| title = {t}; author = {a}; show-title = true; show-toc = false |) '<\n\
@@ -70,9 +67,8 @@ fn an_imported_name_is_not_reported_as_unbound() {
 
 #[test]
 fn a_genuine_type_error_is_reported_at_its_position_in_0_0_6() {
-    //          0123456789012
-    // line 4 is `let m = succ s in`; `succ` starts at character 8, and the
-    // span the checker records for a bad application is the FUNCTION's.
+    // `succ` starts at character 8 of line 4, and the span the checker records
+    // for a bad application is the FUNCTION's.
     let src = "@require: stdjabook\n\
                let succ n = n + 1 in\n\
                let s = `oops` in\n\
@@ -93,12 +89,10 @@ fn a_genuine_type_error_is_reported_at_its_position_in_0_0_6() {
 
 #[test]
 fn a_genuine_type_error_is_reported_at_its_position_in_0_1() {
-    // A 0.1 document is `header* expr EOI` — it has no top-level `val`, so
-    // nothing in it can signal its generation and the detection ladder reads
-    // it as 0.0.6 (which is also what the CLI does with no `--lang`; see
-    // `a_0_1_document_carries_no_version_signal_of_its_own` below). This test
-    // is about the 0.1 pipeline, so it pins the generation the way a user
-    // whose project is 0.1 would: `rustyfi lsp --lang 0.1`.
+    // A 0.1 document is `header* expr EOI` and has no top-level `val`, so
+    // nothing in it signals its generation. This test is about the 0.1
+    // pipeline, so it pins the generation the way `rustyfi lsp --lang 0.1`
+    // would rather than relying on detection.
     let src = "@require: v01-mini\n\
                let succ n = n + 1 in\n\
                let s = `oops` in\n\
@@ -123,13 +117,10 @@ fn a_genuine_type_error_is_reported_at_its_position_in_0_1() {
 
 #[test]
 fn a_0_1_document_is_found_by_the_ambiguity_recheck_not_by_a_sniff() {
-    // A 0.1 *document* has no top-level `val` — it is `header* expr EOI` —
-    // so `sniff_version` finds no signal and the ladder starts at 0.0.6.
-    // What rescues it is the re-check `analyze_detected` already does for
-    // libraries: the 0.0.6 grammar cannot read `StdJa.document (| … |)`'s
-    // 0.1 record commas, the 0.1 one can, and a clean re-check wins. The
-    // whole-program tier inherits that decision, which is why this file is
-    // checked as 0.1 with no `--lang` at all.
+    // `sniff_version` finds no signal, so the ladder starts at 0.0.6; the
+    // re-check rescues it, because the 0.0.6 grammar cannot read
+    // `StdJa.document (| … |)`'s 0.1 record commas and the 0.1 one can. Hence
+    // no `--lang` here.
     let path = repo().join("crates/rustyfi/tests/fixtures/v01-stdja.saty");
     let src = std::fs::read_to_string(&path).expect("the fixture must exist");
     let a = project::check(&path, &src, &opts());
@@ -159,10 +150,9 @@ fn no_library_root_degrades_to_parse_only_rather_than_reporting_every_import() {
 
 #[test]
 fn discovery_supplies_the_roots_when_none_is_named() {
-    // The hook `rustyfi lsp` fills with `sg::roots::discover_all`. It is a
-    // function pointer rather than a dependency (this crate must not pull
-    // tar/flate2/TLS in for an editor front end), so the thing worth pinning
-    // is that it is actually consulted.
+    // The hook `rustyfi lsp` fills with `sg::roots::discover_all`. Being a
+    // function pointer rather than a dependency, nothing else proves it is
+    // consulted at all.
     fn discover(_dir: &Path) -> Vec<PathBuf> {
         vec![PathBuf::from(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -208,9 +198,8 @@ fn a_library_buffer_is_left_alone_unless_asked_for() {
 
 #[test]
 fn a_library_is_checked_against_its_own_headers() {
-    // `Option.map` is not in the buffer; `@require: option` is what makes it
-    // exist. The stub document the library is checked underneath has to carry
-    // that header, or this reports an unbound variable.
+    // The stub document the library is checked underneath has to carry
+    // `@require: option`, or `Option.map` is reported unbound.
     let src = "@require: option\n\
                let-rec twice o = Option.map (fun x -> x * 2) o\n";
     let a = project::check(&unsaved("unsaved-lib.satyh"), src, &library_opts());
@@ -218,9 +207,9 @@ fn a_library_is_checked_against_its_own_headers() {
     assert_eq!(a.diagnostics, Vec::new());
     assert!(a.files >= 2, "option.satyg must really be in the program: {a:?}");
 
-    // The control: drop the header and the same buffer stops resolving the
-    // name — which is also the failure mode `check_libraries` is off by
-    // default for, since a library may legitimately leave that to a consumer.
+    // The control: drop the header and the name stops resolving — the failure
+    // mode `check_libraries` is off by default for, since a library may
+    // legitimately leave that to its consumer.
     let src = "let-rec twice o = Option.map (fun x -> x * 2) o\n";
     let a = project::check(&unsaved("unsaved-lib.satyh"), src, &library_opts());
     assert!(
@@ -232,11 +221,10 @@ fn a_library_is_checked_against_its_own_headers() {
 
 #[test]
 fn a_library_buffers_own_stage_header_still_applies() {
-    // `&e` (quote) is legal at stage 0 and not at stage 1. A library carries
-    // its stage in a `@stage:` header, which the merge reads off the file
-    // itself — the buffer is a *dependency* of the synthetic entry here, so
-    // that still works. If the stub swallowed the header, or the buffer were
-    // spliced as the entry, this would be a stage error.
+    // `&e` (quote) is legal at stage 0 and not at stage 1. The merge reads the
+    // `@stage:` header off the file itself, which works because the buffer is
+    // a *dependency* of the synthetic entry. If the stub swallowed the header,
+    // or the buffer were spliced as the entry, this would be a stage error.
     let staged = "@stage: 0\nlet quoted = &(1 + 1)\n";
     let a = project::check(&unsaved("unsaved-staged.satyh"), staged, &library_opts());
     assert_eq!(a.depth, Depth::Program, "note: {:?}", a.note);
@@ -274,9 +262,9 @@ fn an_empty_buffer_is_not_an_error_at_this_tier_either() {
 
 #[test]
 fn the_buffers_own_text_wins_over_the_file_on_disk() {
-    // A real file in the corpus, analysed with different text than it holds.
-    // If the loader read the path instead of the buffer, the injected error
-    // would not be reported (and the real file's content would be).
+    // A real corpus file, analysed with different text than it holds. If the
+    // loader read the path instead of the buffer, the injected error would not
+    // be reported.
     let path = repo().join("crates/rustyfi/tests/fixtures/minimal.saty");
     let on_disk = std::fs::read_to_string(&path).expect("the fixture must exist");
     let clean = project::check(&path, &on_disk, &opts());
@@ -306,10 +294,9 @@ fn the_buffers_own_text_wins_over_the_file_on_disk() {
 
 #[test]
 fn a_type_errors_column_is_counted_in_utf16_units() {
-    // `こんにちは` is 5 chars / 15 bytes / 5 UTF-16 units, and it sits BEFORE
-    // the error on the same line — so a byte-offset implementation is ten
-    // columns out, and `Loc::col`'s char column happens to agree here only
-    // because there is no astral character in the way.
+    // `こんにちは` is 5 chars / 15 bytes / 5 UTF-16 units and sits BEFORE the
+    // error on the same line, so a byte-offset implementation is ten columns
+    // out.
     let src = "@require: stdjabook\n\
                let succ n = n + 1 in\n\
                let s = `こんにちは` in let m = succ s in\n\
@@ -336,10 +323,9 @@ fn a_type_errors_column_is_counted_in_utf16_units() {
 fn an_error_that_belongs_to_another_file_is_reported_without_a_false_position() {
     let dir = tempdir("xver-refusal");
     let dep = dir.join("broken.satyh");
-    // Type-correct on its own, but its ONE binding names a variable nothing
-    // defines — an elaboration error whose span is an offset into THIS file,
-    // deliberately far enough down that the same offset exists in the entry
-    // buffer at a different line.
+    // An elaboration error whose span is an offset into THIS file, placed far
+    // enough down that the same offset exists in the entry buffer at a
+    // different line.
     std::fs::write(&dep, "\n\n\n\n\n\n\nlet from-the-dependency = no-such-name-anywhere\n")
         .expect("write the dependency");
     let entry = dir.join("doc.saty");
@@ -362,10 +348,9 @@ fn an_error_that_belongs_to_another_file_is_reported_without_a_false_position() 
 
 #[test]
 fn an_error_with_no_recorded_position_says_that_rather_than_guessing() {
-    // `1 + \`oops\``: the failing application's function is itself an
+    // In `1 + \`oops\`` the failing application's function is itself an
     // application (`(+) 1`), and `typecheck::ast_span` only recovers a span
-    // from a `Var`/`Overwrite`/`AccessField`. There is genuinely nowhere to
-    // point, and the message must not pretend otherwise.
+    // from a `Var`/`Overwrite`/`AccessField`.
     let src = "@require: stdjabook\n\
                let n = 1 + `oops` in\n\
                document (| title = {t}; author = {a}; show-title = false; show-toc = false |) '<\n\
@@ -378,7 +363,7 @@ fn an_error_with_no_recorded_position_says_that_rather_than_guessing() {
     assert!(d.message.contains("no position"), "{}", d.message);
 }
 
-/// A fresh directory under the OS temp dir. Not `tempfile` — this crate has no
+/// A fresh directory under the OS temp dir. Not `tempfile`: this crate has no
 /// dev-dependencies and one directory per test does not justify the first.
 fn tempdir(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!(
@@ -398,11 +383,9 @@ fn tempdir(name: &str) -> PathBuf {
 /// The parse budget still governs this tier, because this tier never runs
 /// without a clean parse.
 ///
-/// `high_water.rs` exists because the 0.1 grammar backtracks exponentially on
-/// some half-typed buffers — 11.5 s on the 14 KB prefix below. The loader has
-/// no such budget, so the property that matters is that a buffer which
-/// exhausts the budget is reported and *stops*, rather than being handed to
-/// `rustyfi_loader::load` to be parsed a second time without one.
+/// The loader has no budget of its own, so what matters is that a buffer which
+/// exhausts `high_water`'s budget is reported and *stops*, rather than being
+/// handed to `rustyfi_loader::load` to be parsed a second time without one.
 #[test]
 fn a_pathological_buffer_never_reaches_the_loader() {
     let path = repo().join("lib-rustyfi/dist-v01/packages/std-ja.satyh");
@@ -422,13 +405,10 @@ fn a_pathological_buffer_never_reaches_the_loader() {
 /// What the tier costs on the largest document this repository ships, printed
 /// (`--nocapture`) rather than merely asserted.
 ///
-/// The bound is deliberately loose. Its job is to catch a change that makes
+/// The bound is deliberately loose: its job is to catch a change that makes
 /// the tier pathological — a re-resolution per binding, a lost parse budget,
-/// an accidental evaluation — not to police milliseconds on a shared runner
-/// where this runs in a debug build alongside every other test. The real
-/// numbers, from a release build on one machine: 2 ms for a two-file
-/// document, 100–200 ms for the ones with a full document class behind them
-/// (`v01-stdja-book.saty`, 28 files, 203 ms), and 1.7 ms for the smallest.
+/// an accidental evaluation — not to police milliseconds in a debug build on
+/// a shared runner.
 #[test]
 fn checking_the_largest_shipped_document_stays_within_an_editors_patience() {
     let path = repo().join("crates/rustyfi/tests/fixtures/v01-stdja-book.saty");
@@ -453,33 +433,27 @@ fn checking_the_largest_shipped_document_stays_within_an_editors_patience() {
 /// Every `.saty` DOCUMENT this repository ships, through the whole-program
 /// tier, with zero diagnostics required.
 ///
-/// These all compile — the corpus documents are rendered to PDF by
-/// `layout-tests`, the fixtures by the `rustyfi` crate's own end-to-end
-/// tests — so any diagnostic here is a false positive, the failure mode that
-/// makes a language server worse than no language server.
+/// These all compile, so any diagnostic here is a false positive — the failure
+/// mode that makes a language server worse than no language server.
 #[test]
 fn every_shipped_document_typechecks_clean() {
     sweep(&documents(), &opts(), 40);
 }
 
 /// The two vendored package corpora, checked as **libraries** — the tier that
-/// is off by default, swept here so that turning it on is a measured choice
-/// rather than a hopeful one.
-///
-/// The parse-tier sweep in `tests/analysis.rs` covers these same 77 files;
-/// this is the same files through elaboration, typechecking and `:>` sealing.
+/// is off by default. The parse-tier sweep in `tests/analysis.rs` covers the
+/// same files; this puts them through elaboration, typechecking and `:>`
+/// sealing.
 #[test]
 fn every_bundled_package_typechecks_clean_as_a_library() {
     sweep(&bundled_packages(), &library_opts(), 70);
 }
 
-/// The document corpus's own package sources — 114 files of real
-/// third-party SATySFi, none of it written with this port in mind.
+/// The document corpus's own package sources: real third-party SATySFi, none
+/// of it written with this port in mind.
 ///
-/// Most of them degrade rather than check: they `@require:` packages
-/// (`base/list-ext`, `easytable/easytable`, `fss/fss`) that this repository
-/// does not install, and `layout-tests` compiles them by pointing the loader
-/// at the corpus's own directories. The ones that do resolve are the point.
+/// Most of them degrade rather than check, because they `@require:` packages
+/// this repository does not install. The ones that do resolve are the point.
 #[test]
 fn the_corpus_package_sources_typecheck_clean_as_libraries() {
     sweep(&corpus_libraries(), &library_opts(), 60);
@@ -487,12 +461,10 @@ fn the_corpus_package_sources_typecheck_clean_as_libraries() {
 
 /// Every excluded file must still be failing.
 ///
-/// An exclusion list is only honest if it cannot outlive its reasons. Three of
-/// these seven are waiting on something that could plausibly land — the missing
-/// `get-space-ratio-between-scripts` primitive, `inline.satyh`'s signature —
-/// and a name left here after its file started passing would be a quietly
-/// narrower sweep. So each one is checked to still produce a diagnostic; when
-/// it stops, this fails and the name comes off the list.
+/// Some of these wait on something that could plausibly land, and a name left
+/// on the list after its file started passing would quietly narrow the sweep.
+/// So each is checked to still produce a diagnostic; when one stops, this
+/// fails and the name comes off.
 #[test]
 fn the_exclusions_are_still_needed() {
     let all: Vec<PathBuf> = documents()
@@ -520,9 +492,9 @@ fn the_exclusions_are_still_needed() {
 /// one.
 ///
 /// Files that never reach [`Depth::Program`] are skipped, not counted:
-/// degrading is a legitimate outcome (an uninstalled package), but it is also
-/// how this sweep could quietly stop testing anything — hence `floor`, the
-/// number of files that must actually have been *checked*.
+/// degrading is legitimate (an uninstalled package), but it is also how this
+/// sweep could quietly stop testing anything — hence `floor`, the number of
+/// files that must actually have been *checked*.
 fn sweep(paths: &[PathBuf], opts: &CheckOptions, floor: usize) {
     let mut checked = 0usize;
     let mut complaints = Vec::new();
@@ -559,45 +531,37 @@ fn sweep(paths: &[PathBuf], opts: &CheckOptions, floor: usize) {
 
 /// The seven files the sweeps do not check, each with the reason.
 ///
-/// Every one of them fails for a reason that is **not** the analysis being
-/// wrong: three do not compile in this port at all (verified by asking
-/// `rustyfi` itself), and three are valid files that the language relies on a
-/// *consumer* to complete. Listing them by name, with the reason, is the
-/// point — the alternative is a sweep whose bar quietly drops.
+/// None of them fails because the analysis is wrong: three do not compile in
+/// this port at all (verified against `rustyfi` itself), and three are valid
+/// files the language relies on a *consumer* to complete. Naming each with its
+/// reason is the point — the alternative is a sweep whose bar quietly drops.
 fn excluded(path: &Path) -> Option<&'static str> {
     let name = path.file_name()?.to_str()?;
     let parent = path.parent()?.to_str()?;
     Some(match name {
-        // Compiled by its own harness (`xver_capstone.rs`) against a
-        // deliberately 0.0.6-ONLY library root — a temp directory that
-        // symlinks `dist/` and hides `dist-v01/` — because the fixture exists
-        // to prove `@require: list` crosses a version boundary. Against the
-        // full bundled root, `list` resolves to the 0.1 corpus's own `list`,
-        // which has no `List.fold-left`. `rustyfi --lib-root lib-rustyfi`
-        // says exactly the same thing; nothing in the buffer, the path or the
-        // filesystem could tell a language server about the harness's root.
+        // `xver_capstone.rs` compiles this against a 0.0.6-ONLY root, because
+        // the fixture exists to prove `@require: list` crosses a version
+        // boundary. Against the full bundled root, `list` resolves to the 0.1
+        // corpus's `list`, which has no `List.fold-left`. Nothing in the
+        // buffer, the path or the filesystem could tell a language server
+        // about the harness's root.
         "xver-capstone.saty" => "compiled against a 0.0.6-only root by its own harness",
-        // A genuine, pre-existing breakage in the vendored 0.1 corpus, not an
-        // artefact of checking it standalone: `Logo` calls `Inline.\kern`,
-        // and `inline.satyh`'s signature declares the value `kern` but not
-        // the command `\kern`, so the `:>` seal rejects it. Reproduced
-        // outside this crate with `rustyfi --lang 0.1` on a document that
-        // `@require: logo` — same message, same cause.
+        // A pre-existing breakage in the vendored 0.1 corpus, not an artefact
+        // of checking it standalone: `inline.satyh`'s signature declares the
+        // value `kern` but not the command `\kern`, so the `:>` seal rejects
+        // `Logo`'s call. `rustyfi --lang 0.1` reports the same thing.
         "logo.satyh" if parent.ends_with("dist-v01/packages") => {
             "vendored `logo.satyh` calls `Inline.\\kern`, which `Inline`'s signature does not export"
         }
-        // Two `satysfi-base` files reach for `get-space-ratio-between-
-        // scripts`, a primitive this port does not implement (it is in
-        // neither generation's `PRIM_DEFS`). No program containing them
-        // compiles here, standalone or not.
+        // `get-space-ratio-between-scripts` is in neither generation's
+        // `PRIM_DEFS`, so no program containing these compiles here.
         "context.satyh" | "satysfi-it.satyh" if parent.contains("satysfi-base") => {
             "uses `get-space-ratio-between-scripts`, a primitive this port does not implement"
         }
         // The global-merge case, and the reason `check_libraries` is off by
-        // default: each of these uses a module (`Option`, `Color`) that it
-        // never `@require:`s, relying on whichever document pulls it in to
-        // have required that package first. They are valid, they compile as
-        // part of a real program, and they cannot typecheck alone.
+        // default: each uses a module it never `@require:`s, relying on
+        // whichever document pulls it in to have required that package. They
+        // are valid and compile as part of a real program.
         "tabular2.satyh" if parent.contains("satysfi-base") => {
             "uses `Color.*` without requiring `color` (global-merge module model)"
         }

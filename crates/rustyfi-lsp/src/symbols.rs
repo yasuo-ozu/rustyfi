@@ -5,12 +5,9 @@
 //! `rustyfi-syntax`. The server turns the tree into JSON; the wasm playground
 //! could render it however it likes.
 //!
-//! # What it is, and what it cannot be
-//!
-//! A **pure structural walk of the CST**. No name resolution, no types, no
-//! `@require:` following — so unlike a diagnostic it cannot be *wrong*, only
-//! incomplete. Every symbol here corresponds to a declaration the parser
-//! actually read out of this one file.
+//! A **pure structural walk of the CST**: no name resolution, no types, no
+//! `@require:` following, so unlike a diagnostic it cannot be *wrong*, only
+//! incomplete.
 //!
 //! # Partial buffers
 //!
@@ -18,29 +15,24 @@
 //! empties itself while you type is worse than one that lags. So the walk
 //! never parses the file as one all-or-nothing [`rustyfi_syntax::cst::File`]:
 //! it parses the top-level declaration *sequence* (`Vec<TopBinding>` for
-//! 0.0.6, `Vec<Bind>` for 0.1), which is a syan repetition — it stops at the
-//! first declaration that does not parse, rolls that one back, and hands over
-//! everything before it. The document body's `let … in …` spine is walked the
-//! same way, one clause at a time, for the same reason: a 0.1 *document*
-//! declares everything in that spine and nowhere else, so parsing it whole
-//! would mean one typo costs the entire outline.
+//! 0.0.6, `Vec<Bind>` for 0.1), a syan repetition that stops at the first
+//! declaration which does not parse and hands over everything before it. The
+//! document body's `let … in …` spine is walked one clause at a time for the
+//! same reason: a 0.1 *document* declares everything in that spine, so parsing
+//! it whole would cost the entire outline for one typo.
 //!
-//! The same backtracking budget that bounds the diagnostics parse (the
-//! crate-private `high_water` module) bounds this one, and for the same
-//! reason.
+//! The `high_water` backtracking budget bounds this walk as it does the
+//! diagnostics parse.
 //!
 //! # Ranges
 //!
-//! Every [`Symbol`] carries two, exactly as LSP asks:
-//!
-//! - `range` — the whole declaration, taken from the tokens the node would
-//!   *unparse* to (see [`node_span`]), so it is exact rather than guessed
-//!   from where the next sibling starts;
-//! - `selection_range` — just the name, for "go to symbol" to land on.
+//! Every [`Symbol`] carries two: `range`, the whole declaration, taken from
+//! the tokens the node would *unparse* to (see [`node_span`]); and
+//! `selection_range`, just the name, for "go to symbol" to land on.
 //!
 //! Both are zero-based lines and **UTF-16** characters (see
 //! [`crate::LineIndex`]), and `range` is widened to contain `selection_range`
-//! by construction: a client that finds them inconsistent drops the whole
+//! by construction — a client that finds them inconsistent drops the whole
 //! response.
 
 use rustyfi_syntax::token::Atom;
@@ -68,7 +60,7 @@ pub struct Range {
 /// anything to say about.
 ///
 /// The numbering is LSP's own (see [`SymbolKind::code`]), but the type names
-/// nothing from the protocol, so the analysis half stays protocol-free.
+/// nothing from the protocol, keeping the analysis half protocol-free.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SymbolKind {
     /// `@import:` / `use … of \`…\`` — a dependency named by file path.
@@ -115,9 +107,7 @@ impl SymbolKind {
 /// itself.
 ///
 /// The tree shape is the point. A library is one `module`, and flattening its
-/// thirty members up beside it turns a navigable outline into a wall of
-/// names — so a module's members are its `children`, and a nested module's
-/// are its own.
+/// members up beside it turns a navigable outline into a wall of names.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Symbol {
     /// The declared name, written the way the source writes it — `\emph`
@@ -142,9 +132,9 @@ pub struct Symbol {
 /// `lang` is taken literally — there is no fallback to the other generation.
 /// Use [`document_symbols_auto`] to have it chosen from the text.
 pub fn document_symbols(source: &str, lang: RustyfiVersion) -> Vec<Symbol> {
-    // A lex failure leaves nothing to walk. Unlike a parse failure this one
-    // is not partial-recoverable: the token stream is what the walk consumes,
-    // and there is no prefix of it to keep. Diagnostics already report it.
+    // A lex failure leaves nothing to walk: the token stream is what the walk
+    // consumes, so unlike a parse failure there is no prefix to keep.
+    // Diagnostics already report it.
     let Ok(atoms) = rustyfi_syntax::lex_with_version(source, lang) else {
         return Vec::new();
     };
@@ -163,10 +153,10 @@ pub fn document_symbols(source: &str, lang: RustyfiVersion) -> Vec<Symbol> {
 
 /// [`document_symbols`], choosing the generation from the buffer itself.
 ///
-/// Uses [`crate::analyze_detected`]'s rule rather than a second one of its
-/// own — including the re-check that 32 of the 34 bundled 0.1 packages
-/// depend on, since a `module M = struct` head is deliberately no version
-/// signal at all. See [`crate::detect_version`].
+/// Uses [`crate::detect_version`]'s rule rather than a second one of its own,
+/// including the ambiguity re-check most of the bundled 0.1 corpus depends on:
+/// reading a 0.1 file with the 0.0.6 grammar yields an **empty** outline, not
+/// a wrong one, so the mistake is easy to miss.
 pub fn document_symbols_auto(source: &str) -> Vec<Symbol> {
     document_symbols_detected(source).1
 }
@@ -188,11 +178,10 @@ pub(crate) struct Ranges<'s>(LineIndex<'s>);
 impl Ranges<'_> {
     /// A span as an LSP range, with trailing whitespace trimmed off the end.
     ///
-    /// The trim is not cosmetic. A `@require: foo` header token spans its own
-    /// line terminator, so the untrimmed range ends at `{line + 1, 0}` — an
-    /// editor then highlights the line break and the breadcrumb claims the
-    /// header contains the first thing on the next line. The same applies to
-    /// any declaration whose last token carries trailing layout.
+    /// Not cosmetic: a `@require: foo` header token spans its own line
+    /// terminator, so the untrimmed range ends at `{line + 1, 0}` and the
+    /// breadcrumb claims the header contains the next line's first item. The
+    /// same goes for any declaration whose last token carries trailing layout.
     fn range(&self, span: Span) -> Range {
         let src = self.0.source();
         let start = floor_boundary(src, span.start.byte);
@@ -212,10 +201,9 @@ impl Ranges<'_> {
 
 /// A [`Symbol`] under construction, in source-byte coordinates.
 ///
-/// Kept separate from [`Symbol`] so the walks never have to thread a
-/// [`Ranges`] through every helper just to convert two spans, and so the
-/// "`range` must contain `selection_range`" rule is enforced in exactly one
-/// place ([`Sym::build`]) instead of at forty call sites.
+/// Separate from [`Symbol`] so the walks need not thread a [`Ranges`] through
+/// every helper, and so the "`range` must contain `selection_range`" rule is
+/// enforced in one place ([`Sym::build`]) rather than at every call site.
 pub(crate) struct Sym {
     name: String,
     detail: Option<String>,
@@ -253,9 +241,8 @@ impl Sym {
             detail: self.detail,
             kind: self.kind,
             // United, not merely asserted: a client that receives a
-            // `selectionRange` outside its `range` rejects the whole
-            // response, and losing every symbol in the file to one bad pair
-            // is a far worse outcome than a range one token too generous.
+            // `selectionRange` outside its `range` rejects the WHOLE response,
+            // so one bad pair would cost the file's entire outline.
             range: r.range(self.whole.unite(self.sel)),
             selection_range: r.range(self.sel),
             children: self.children,
@@ -265,16 +252,14 @@ impl Sym {
 
 /// The exact source extent of any CST node.
 ///
-/// Neither the CST nodes nor the syan derive carry a `Spanned` impl, and
-/// hand-writing one per node would mean transcribing thirty-odd `Expr`
-/// variants. But every node *does* implement `Unparse`, and the leaves replay
-/// the spans they were parsed with — so writing the node into a sink that
-/// keeps nothing but the union of the spans it is handed recovers the extent
-/// exactly, at the cost of one walk over the node's own tokens.
+/// Neither the CST nodes nor the syan derive carry a `Spanned` impl. Every
+/// node *does* implement `Unparse`, and the leaves replay the spans they were
+/// parsed with, so writing the node into a sink that keeps only the union of
+/// those spans recovers the extent exactly.
 ///
-/// The alternative — ending a declaration where the next one begins — was
-/// tried first and is worse: it swallows the comment between two
-/// declarations, and it needs a different terminator for every kind of block.
+/// Ending a declaration where the next one begins would be the obvious
+/// alternative and is worse: it swallows the comment between two declarations
+/// and needs a different terminator for every kind of block.
 pub(crate) fn node_span<T: Unparse<Atom> + ?Sized>(node: &T) -> Span {
     let mut sink = SpanSink {
         span: Span::default(),
@@ -316,9 +301,8 @@ pub(crate) fn opt<T: Parse<Atom>>(stream: &mut HighWaterStream) -> Option<T> {
 /// Parse as many `T`s as will parse, stopping (and rolling back) at the first
 /// that will not.
 ///
-/// This is the whole partial-buffer story: syan's repetition impl never
-/// fails, so a half-typed declaration ends the sequence instead of destroying
-/// it.
+/// The whole partial-buffer story: syan's repetition impl never fails, so a
+/// half-typed declaration ends the sequence instead of destroying it.
 pub(crate) fn many<T: Parse<Atom>>(stream: &mut HighWaterStream) -> Vec<T> {
     <Vec<T> as Parse<Atom>>::parse_stream(stream).unwrap_or_default()
 }
@@ -327,8 +311,7 @@ pub(crate) fn many<T: Parse<Atom>>(stream: &mut HighWaterStream) -> Vec<T> {
 /// writes them.
 ///
 /// The lexer keeps the sigil on the *name* (`Token::HorzCmd("\\emph")`) and
-/// the module path beside it, so a qualified command has to be reassembled
-/// rather than joined: a naive `mods.join(".") + "." + name` reads
+/// the module path beside it, so a naive `mods.join(".") + "." + name` reads
 /// `Mod.\emph`.
 pub(crate) fn qualified_command(mods: &[String], name: &str) -> String {
     if mods.is_empty() {

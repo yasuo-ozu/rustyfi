@@ -1,13 +1,9 @@
 //! `workspace/symbol` driven end to end over a real directory tree.
 //!
 //! Kept apart from `server_stdio.rs` because it is the one part of the server
-//! that needs a filesystem: every test here builds a throwaway project under
-//! the system temp directory, points `initialize` at it, and asserts the
-//! matches that come back.
-//!
-//! No `tempfile` dependency — the crate graph is deliberately small, and a
-//! directory named after the process and a counter is enough for a test that
-//! removes it again.
+//! that needs a filesystem: every test builds a throwaway project under the
+//! system temp directory, points `initialize` at it, and asserts the matches
+//! that come back.
 
 use rustyfi_lsp::jsonrpc;
 use rustyfi_lsp::server::{self, Options};
@@ -141,9 +137,9 @@ fn a_query_matches_across_the_whole_project() {
     assert_eq!(got, ["alpha@a.satyh", "alphabet@a.satyh"]);
 }
 
-/// Both generations are read with their own grammar, from the same query —
-/// the 0.1 library here is signal-free (`module M = struct …`), so this is
-/// also the version re-check working through the workspace path.
+/// Both generations are read with their own grammar from the same query. The
+/// 0.1 library here is signal-free (`module M = struct …`), so this also
+/// exercises the version re-check on the workspace path.
 #[test]
 fn both_generations_contribute() {
     let p = Project::new("gens", &[("a.satyh", LIB_006), ("sub/b.satyh", LIB_01)]);
@@ -154,9 +150,8 @@ fn both_generations_contribute() {
     assert_eq!(got, ["Beta@b.satyh", "beta-one@b.satyh"]);
 }
 
-/// A nested symbol carries the name of the declaration it lives in, which is
-/// what an editor shows in the second column of its "go to symbol in
-/// workspace" list.
+/// A nested symbol carries the name of the declaration it lives in — the
+/// second column of an editor's "go to symbol in workspace" list.
 #[test]
 fn a_nested_match_names_its_container() {
     let p = Project::new("container", &[("b.satyh", LIB_01)]);
@@ -171,8 +166,8 @@ fn a_nested_match_names_its_container() {
     assert!(top.get("containerName").is_none(), "{top}");
 }
 
-/// The location is a real, usable jump target: the declaration's own range,
-/// in the same UTF-16 coordinates everything else in this crate uses.
+/// The location is a usable jump target: the declaration's own range, in the
+/// same UTF-16 coordinates everything else in this crate uses.
 #[test]
 fn a_match_points_at_the_declaration() {
     let p = Project::new("location", &[("a.satyh", LIB_006)]);
@@ -248,9 +243,9 @@ fn a_session_with_no_root_still_searches_its_open_buffers() {
     assert_eq!(hits(&reply(&out, 2)["result"]), ["solo@detached.satyh"]);
 }
 
-/// Two identical queries answer identically. `read_dir` order is not stable
-/// across filesystems, and a result list that reshuffles itself between
-/// keystrokes moves the entry under the user's cursor.
+/// `read_dir` order is not stable across filesystems, and a result list that
+/// reshuffles itself between keystrokes moves the entry under the user's
+/// cursor.
 #[test]
 fn repeating_a_query_gives_the_same_order() {
     let p = Project::new(

@@ -1,11 +1,7 @@
 //! `analyze` and friends: the protocol-free half of the crate.
 //!
-//! The three cases the brief singles out — a clean document, a parse error at
-//! a known position, and a document with Japanese text *before* the error —
-//! are `a_clean_document_*`, `a_parse_error_lands_on_*` and the
-//! `utf16_columns` group below. The last is the one that matters most: every
-//! other test in this file passes just as happily against a byte-offset
-//! implementation.
+//! The `utf16_columns` group is the one that matters most — every other test
+//! here passes just as happily against a byte-offset implementation.
 
 use rustyfi_lsp::{analyze, analyze_auto, analyze_detected, Diag, RustyfiVersion, Severity};
 
@@ -48,11 +44,9 @@ fn a_clean_0_1_library_has_no_diagnostics() {
 
 #[test]
 fn a_buffer_with_no_tokens_is_not_an_error() {
-    // An editor opens a new file before a single character is typed, and a
-    // red squiggle on an empty buffer would be absurd. Checked under BOTH
-    // generations because they disagree natively — 0.1's `FileV1` requires at
-    // least one binding — and the point is that the disagreement does not
-    // reach the user.
+    // Checked under BOTH generations because they disagree natively — 0.1's
+    // `FileV1` requires at least one binding — and the point is that the
+    // disagreement does not reach the user.
     for src in ["", "   \n\n\t", "% just a comment\n% and another\n"] {
         for v in RustyfiVersion::supported() {
             assert_eq!(analyze(src, *v), Vec::new(), "{src:?} under {v}");
@@ -67,8 +61,7 @@ fn a_buffer_with_no_tokens_is_not_an_error() {
 
 #[test]
 fn a_parse_error_lands_on_the_offending_token_in_0_0_6() {
-    //            0123456789
-    // line 2 is `let y = ] in x`, and `]` is at character 8.
+    // Line 2 is `let y = ] in x`; `]` is at character 8.
     let src = "@require: stdjabook\n\
                let x = 1 in\n\
                let y = ] in x\n";
@@ -81,8 +74,8 @@ fn a_parse_error_lands_on_the_offending_token_in_0_0_6() {
 
 #[test]
 fn a_parse_error_lands_on_the_offending_token_in_0_1() {
-    // line 3 is `  val b = = 2`; the second `=` is at character 10 and is
-    // where the expression should have started.
+    // Line 3 is `  val b = = 2`; the second `=` is at character 10, where the
+    // expression should have started.
     let src = "@require: basic\n\
                module M = struct\n\
                \x20 val a = 1\n\
@@ -147,9 +140,7 @@ fn utf16_columns_japanese_before_the_error_on_the_same_line() {
 
 #[test]
 fn utf16_columns_japanese_on_earlier_lines_does_not_shift_later_ones() {
-    // Multi-byte text on preceding lines must not leak into the column of a
-    // later line — the bug a "count bytes since the start of the file"
-    // implementation has.
+    // The bug a "count bytes since the start of the file" implementation has.
     let src = "@require: stdjabook\n\
                let greeting = `こんにちは、世界` in\n\
                let y = ] in y\n";
@@ -160,9 +151,8 @@ fn utf16_columns_japanese_on_earlier_lines_does_not_shift_later_ones() {
 
 #[test]
 fn utf16_columns_japanese_in_a_0_1_library() {
-    // Same check on the other generation, where the error is located by the
-    // high-water mark rather than by the error tree — a different code path,
-    // and one that also has to convert through `LineIndex`.
+    // The other generation, where the error is located by the high-water mark
+    // rather than by the error tree — a different code path to `LineIndex`.
     let src = "@require: basic\n\
                module M = struct\n\
                \x20 val greeting = `こんにちは、世界`\n\
@@ -175,10 +165,9 @@ fn utf16_columns_japanese_in_a_0_1_library() {
 
 #[test]
 fn utf16_columns_astral_characters_count_as_two() {
-    // An emoji is one `char` but two UTF-16 code units, so this separates a
-    // correct implementation from a `char`-counting one — which is what
-    // `rustyfi_syntax::Loc::col` is, and why this crate re-derives columns
-    // from `Loc::byte` instead of using it.
+    // An emoji is one `char` but two UTF-16 code units, which separates a
+    // correct implementation from a `char`-counting one — `Loc::col` being
+    // exactly that, and why this crate re-derives columns from `Loc::byte`.
     let emoji = "let x = `🎉` in let y = ] in y";
     let ascii = "let x = `a` in let y = ] in y";
     let emoji_col = only(&analyze(emoji, RustyfiVersion::V0_0)).character;
@@ -197,10 +186,9 @@ fn utf16_columns_astral_characters_count_as_two() {
 
 #[test]
 fn a_0_1_file_read_with_the_0_0_grammar_is_a_screenful_of_nonsense() {
-    // The failure mode the whole `detect_version` / `analyze_detected` dance
-    // exists to prevent. Asserted directly, so that a regression in the
-    // detector shows up as this test's *sibling* failing rather than as a
-    // silent quality loss.
+    // The failure mode `detect_version` exists to prevent, asserted directly
+    // so that a regression in the detector fails a test rather than quietly
+    // costing quality.
     let src = "@require: basic\n\
                module M :> sig\n\
                  val double : int -> int\n\
@@ -219,9 +207,7 @@ fn a_0_1_file_read_with_the_0_0_grammar_is_a_screenful_of_nonsense() {
 
 #[test]
 fn a_decisive_version_signal_is_obeyed_even_when_the_file_is_broken() {
-    // `use Foo` pins 0.1. The file is broken under both grammars; reporting
-    // the 0.0.6 reading of a file whose first line is a 0.1-only construct
-    // would describe a language the author is not writing.
+    // `use Foo` pins 0.1, and the file is broken under both grammars.
     let (v, diags) = analyze_detected("use Foo\nval x = = 1\n");
     assert_eq!(v, RustyfiVersion::V0_1);
     assert!(!diags.is_empty());
@@ -248,9 +234,8 @@ fn an_ambiguous_broken_file_is_reported_under_whichever_grammar_got_further() {
 
 #[test]
 fn analyze_takes_its_argument_literally_with_no_fallback() {
-    // `analyze` is the seam the playground builds against; a hidden retry
-    // under the other generation would make its result depend on something
-    // the caller cannot see.
+    // A hidden retry under the other generation would make the result depend
+    // on something the caller cannot see.
     let src = "@require: basic\nmodule M = struct\n  val a = 1\nend\n";
     assert!(analyze(src, RustyfiVersion::V0_1).is_empty());
     assert!(
@@ -267,22 +252,18 @@ fn analyze_takes_its_argument_literally_with_no_fallback() {
 ///
 /// These are the port's own shipped libraries and they compile, so **any**
 /// diagnostic here is a false positive — the failure mode that makes a
-/// language server worse than no language server. It is also the check that
-/// caught the original version-detection bug: without the ambiguity
-/// re-check in `analyze_detected`, 32 of the 34 `dist-v01` packages were
-/// analysed with the 0.0.6 grammar and every one of them lit up.
+/// language server worse than no language server. It is also what catches a
+/// broken ambiguity re-check, which would have most of `dist-v01` read with
+/// the 0.0.6 grammar and lighting up.
 #[test]
 fn the_vendored_corpora_produce_no_diagnostics() {
-    // Floor, so a broken path silently checking nothing cannot pass. The two
-    // corpora hold 30 and 47 source files at the time of writing.
     sweep("/../../lib-rustyfi", 70);
 }
 
 /// The `rustyfi` crate's own document fixtures, which its test suite compiles
-/// end to end — so, again, any diagnostic is a false positive. Included
-/// alongside the corpora because they are `.saty` *documents* (headers, a
-/// `document` expression, inline/block/math text) rather than library
-/// modules, and exercise lexer modes the packages never enter.
+/// end to end, so again any diagnostic is a false positive. Kept alongside the
+/// corpora because they are `.saty` *documents* and exercise lexer modes the
+/// library packages never enter.
 #[test]
 fn the_document_fixtures_produce_no_diagnostics() {
     sweep("/../../crates/rustyfi/tests/fixtures", 40);
@@ -291,9 +272,8 @@ fn the_document_fixtures_produce_no_diagnostics() {
 /// Analyse every SATySFi source file under `rel` (relative to this crate) and
 /// fail on any diagnostic at all, naming every one.
 ///
-/// `floor` is a minimum file count, so that a mistyped path — which
-/// `read_dir` would report, but a filter that matches nothing would not —
-/// cannot make the sweep pass vacuously.
+/// `floor` is a minimum file count, so that a filter matching nothing cannot
+/// make the sweep pass vacuously.
 fn sweep(rel: &str, floor: usize) {
     let root = format!("{}{rel}", env!("CARGO_MANIFEST_DIR"));
     let mut checked = 0usize;
@@ -361,24 +341,18 @@ fn pathological_prefix() -> String {
 
 /// A truncated 0.1 library — an ordinary mid-typing state — must not hang.
 ///
-/// The 0.1 grammar backtracks exponentially on some incomplete inputs. On
-/// prefixes of this very file, a release build measured 13 ms at 13,484
-/// bytes, 69 ms at 13,669, 334 ms at 13,853 and **11.5 seconds** at 14,223,
-/// still climbing by roughly x5 per 200 bytes typed. An editor runs this on
-/// nearly every keystroke, so `HighWaterStream`'s serve budget caps it — and
-/// the whole 247-file corpus analyses in 0.56 s with a 30 ms worst case, so
-/// nothing real comes anywhere near the cap.
+/// The 0.1 grammar backtracks exponentially on some incomplete inputs, and
+/// this prefix takes over ten seconds without `HighWaterStream`'s budget.
 ///
-/// The assertion is on the *message*, not on a stopwatch, so it means the
-/// same thing on every machine: reaching the cap is reported as reaching the
-/// cap, rather than as a confident claim about the token the parse stopped
-/// at. The loose time bound underneath is the backstop for a regression that
-/// removes the budget outright — without it, that failure mode is a CI
-/// timeout with no explanation attached.
+/// The assertion is on the *message*, not on a stopwatch, so it means the same
+/// thing on every machine: reaching the cap must be reported as reaching the
+/// cap, not as a claim about the token the parse stopped at. The loose time
+/// bound is only a backstop against a regression that removes the budget
+/// outright, which would otherwise surface as an unexplained CI timeout.
 ///
-/// If the vendored `std-ja.satyh` is ever edited and this prefix stops
-/// exhausting, the fix is to re-find one that does (sweep
-/// `(200..src.len()).step_by(197)` and time each), not to delete the test.
+/// If the vendored `std-ja.satyh` is edited and this prefix stops exhausting,
+/// re-find one that does (sweep `(200..src.len()).step_by(197)` and time
+/// each); do not delete the test.
 #[test]
 fn a_pathological_prefix_gives_up_instead_of_hanging() {
     let src = pathological_prefix();

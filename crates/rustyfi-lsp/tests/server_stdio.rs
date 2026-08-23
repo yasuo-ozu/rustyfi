@@ -1,18 +1,13 @@
 //! The server driven end to end over a framed byte stream.
 //!
-//! Everything here scripts a real session through the same
-//! [`rustyfi_lsp::server::run`] the `rustyfi lsp` binary calls, and asserts
-//! the JSON that comes back — byte for byte where the exact shape matters.
-//! `run` takes streams rather than `stdin()`/`stdout()` precisely so this can
-//! be the real code path rather than a re-implementation of it, and the whole
-//! server surface is public, so none of it needs to be a `#[cfg(test)]` module
-//! inside `server.rs` with a second copy of this harness.
+//! Every test scripts a real session through the same
+//! [`rustyfi_lsp::server::run`] the `rustyfi lsp` binary calls and asserts the
+//! JSON that comes back.
 //!
-//! The failure mode being ruled out is the one that costs a whole afternoon
-//! in an editor: **a server that compiles, handshakes, accepts documents and
-//! never emits a single diagnostic.** Every test here that opens a broken
-//! document asserts a `publishDiagnostics` arrived with a non-empty list and
-//! a range in the right place, so that path cannot silently go dead.
+//! The failure mode being ruled out is **a server that compiles, handshakes,
+//! accepts documents and never emits a single diagnostic**, so every test that
+//! opens a broken document asserts a `publishDiagnostics` arrived with a
+//! non-empty list and a range in the right place.
 
 use rustyfi_lsp::jsonrpc::{self, code};
 use rustyfi_lsp::server::{self, Options};
@@ -23,9 +18,8 @@ use serde_json::{json, Value};
 // Harness
 // ---------------------------------------------------------------------------
 
-/// Frame one message the way the base protocol requires — through the
-/// server's own writer, so a change to the framing cannot pass here by being
-/// mirrored in the test.
+/// Frame one message through the server's own writer, so a change to the
+/// framing cannot pass here by being mirrored in the test.
 fn frame(msg: &Value) -> Vec<u8> {
     let mut out = Vec::new();
     jsonrpc::write_message(&mut out, msg).expect("writing to a Vec cannot fail");
@@ -130,8 +124,8 @@ fn the_full_lifecycle_produces_a_diagnostic_and_exits_cleanly() {
     assert_eq!(out.len(), 3, "initialize reply, one publish, shutdown reply: {out:#?}");
 
     // 1. The initialize reply, asserted in full: the capability set is the
-    //    server's contract with the editor, and an accidental addition here
-    //    would be a promise nothing keeps.
+    //    server's contract with the editor, and an accidental addition would
+    //    be a promise nothing keeps.
     assert_eq!(out[0]["jsonrpc"], "2.0");
     assert_eq!(out[0]["id"], 1);
     assert_eq!(
@@ -317,10 +311,9 @@ fn a_ranged_change_is_ignored_rather_than_misapplied() {
 
 #[test]
 fn a_0_1_document_is_analysed_with_the_0_1_grammar() {
-    // The single most likely way this server ends up subtly useless: reading
-    // a 0.1 buffer with the 0.0.6 parser and painting nonsense over a file
-    // that compiles. Both halves are asserted — the clean file stays clean,
-    // and a real 0.1 error is still caught.
+    // The likeliest way this server ends up subtly useless: reading a 0.1
+    // buffer with the 0.0.6 parser and painting nonsense over a file that
+    // compiles. Both halves are asserted.
     let clean = "@require: basic\n\
                  module M :> sig\n\
                    val double : int -> int\n\
@@ -339,9 +332,8 @@ fn a_0_1_document_is_analysed_with_the_0_1_grammar() {
 
 #[test]
 fn a_lang_override_is_honoured_over_the_buffers_own_signal() {
-    // `let-rec` sniffs as 0.0.6. Forced to 0.1 it must not parse, which is
-    // how we know the override reached the analysis rather than being
-    // quietly dropped.
+    // `let-rec` sniffs as 0.0.6. Forced to 0.1 it must not parse, which is how
+    // we know the override reached the analysis rather than being dropped.
     let src = "let-rec f x = x\n";
     let opts = Options {
         lang: Some(RustyfiVersion::V0_1),
@@ -392,12 +384,10 @@ fn utf16_columns_survive_the_wire() {
 
 #[test]
 fn crlf_line_numbers_agree_with_the_lexers_own_rule() {
-    // `LineIndex` counts lines itself rather than trusting
-    // `rustyfi_syntax::Loc::line`, so the two definitions of "what terminates
-    // a line" have to agree. They only differ on CRLF — where a naive
-    // implementation counts `\r\n` as two lines and reports every subsequent
-    // diagnostic one line too far down — and every fixture in both crates is
-    // `\n`-only, so this is the test that pins it.
+    // `LineIndex` counts lines itself rather than trusting `Loc::line`, so the
+    // two definitions of "what terminates a line" have to agree. They differ
+    // only on CRLF, where a naive implementation counts `\r\n` as two lines,
+    // and every other fixture in both crates is `\n`-only.
     let src = "@require: stdjabook\r\nlet x = 1 in\r\nlet y = ] in x\r\n";
     let (out, _) = session(&[initialize(1), did_open("file:///crlf.saty", src)]);
     assert_eq!(
@@ -425,10 +415,9 @@ fn reply(out: &[Value], id: i64) -> &Value {
         .unwrap_or_else(|| panic!("no reply with id {id}: {out:#?}"))
 }
 
-/// The whole exchange, asserted as JSON: this is the wire format an editor
-/// reads, and the one place a field-name slip (`selectionRange` written
-/// `selection_range`) shows up as a broken outline rather than as a type
-/// error.
+/// The whole exchange, asserted as JSON: the one place a field-name slip
+/// (`selectionRange` written `selection_range`) shows up as a broken outline
+/// rather than as a type error.
 #[test]
 fn document_symbol_returns_the_outline_of_an_open_buffer() {
     let src = "@require: list\n\nmodule M = struct\n  let f x = x\nend\n";
@@ -487,9 +476,8 @@ fn document_symbol_returns_the_outline_of_an_open_buffer() {
     );
 }
 
-/// A `didChange` replaces the stored buffer, so the outline follows the edits
-/// rather than the text the file was opened with. The failure this rules out
-/// is a symbol pane that is correct once and then frozen.
+/// A `didChange` replaces the stored buffer, ruling out a symbol pane that is
+/// correct once and then frozen.
 #[test]
 fn document_symbol_follows_did_change() {
     let uri = "file:///doc.satyh";
@@ -509,9 +497,8 @@ fn document_symbol_follows_did_change() {
     assert_eq!(names, ["after", "also"]);
 }
 
-/// A URI the server was never given — never opened, or closed again — is
-/// answered with an empty outline rather than an error, so an editor does not
-/// show "request failed" in a pane for a file it has not opened.
+/// A URI the server was never given — never opened, or closed again — gets an
+/// empty outline rather than an error.
 #[test]
 fn document_symbol_on_an_unknown_uri_is_an_empty_outline() {
     let uri = "file:///gone.satyh";
@@ -530,9 +517,9 @@ fn document_symbol_on_an_unknown_uri_is_an_empty_outline() {
     assert_eq!(reply(&out, 3)["result"], json!([]), "didClose must forget");
 }
 
-/// The UTF-16 rule, end to end and on the outline path this time: `title`'s
-/// value is 42 bytes of Japanese, and `sub`'s columns are only right if the
-/// server counts code units.
+/// The UTF-16 rule on the outline path: `title`'s value is 42 bytes of
+/// Japanese, so `sub`'s columns are only right if the server counts code
+/// units.
 #[test]
 fn document_symbol_columns_are_utf16_over_the_wire() {
     let src = "let title = `日本語のタイトル` let sub = 2\n";
@@ -552,9 +539,9 @@ fn document_symbol_columns_are_utf16_over_the_wire() {
     );
 }
 
-/// `--lang` pins the generation for the outline just as it does for
-/// diagnostics: a 0.1 library asked for as 0.0.6 declares nothing, and the
-/// server must not quietly fall back to the reading that works better.
+/// `--lang` pins the generation for the outline as it does for diagnostics: a
+/// 0.1 library asked for as 0.0.6 declares nothing, and the server must not
+/// quietly fall back to the reading that works better.
 #[test]
 fn document_symbol_obeys_an_explicit_lang() {
     let src = "module Lib = struct\n  val f x = x\nend\n";

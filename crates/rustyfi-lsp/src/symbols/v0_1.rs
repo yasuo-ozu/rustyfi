@@ -12,12 +12,12 @@
 //! Both are reached from the same place: after the headers, `Vec<Bind>` is
 //! tried. Every `Bind` arm is keyword-headed (`val`/`type`/`module`/
 //! `signature`/`include`) and no 0.1 expression can begin with one of those,
-//! so an empty result means "this is a document" with no lookahead of its
-//! own, and the spine walk takes over.
+//! so an empty result means "this is a document" with no lookahead of its own
+//! and the spine walk takes over.
 //!
-//! Header family: `use package M`, `use M`, `use M of \`path\``, and the
-//! legacy `@require:`/`@import:` — all four accepted by this one grammar
-//! (which family is *legal* is the loader's question, not the outline's).
+//! All four header families — `use package M`, `use M`, `use M of \`path\``
+//! and the legacy `@require:`/`@import:` — are accepted here; which is
+//! *legal* is the loader's question, not the outline's.
 
 use rustyfi_syntax::cst_v1::{self as v1, ast};
 use rustyfi_syntax::leaf::*;
@@ -66,9 +66,8 @@ fn header(h: &v1::HeaderV1, r: &Ranges<'_>) -> Option<Symbol> {
                         .detail("@import:")
                         .build(r),
                 ),
-                // 0.1 has no `@stage:` header — the lexer rejects one — so
-                // this arm is unreachable through a 0.1 parse. Skipped for
-                // the same reason 0.0.6 skips it: it names nothing.
+                // Unreachable through a 0.1 parse — the lexer rejects
+                // `@stage:` — and it would name nothing anyway.
                 v1::Header::Stage(_) => None,
             };
         }
@@ -79,8 +78,8 @@ fn header(h: &v1::HeaderV1, r: &Ranges<'_>) -> Option<Symbol> {
 /// One `bind` — the 0.1 declaration form, at the top level of a library or
 /// inside any `struct … end`.
 fn bind(b: &v1::Bind, r: &Ranges<'_>, out: &mut Vec<Symbol>) {
-    // Lazy: the two `and`-chained forms below build a span per clause instead,
-    // and `node_span` on a `module` walks every token it contains.
+    // Lazy: the `and`-chained forms build a span per clause instead, and
+    // `node_span` on a `module` walks every token it contains.
     let whole = || node_span(b);
     match b {
         v1::Bind::Value {
@@ -237,10 +236,10 @@ fn ctor(v: &v1::VariantDefV1, r: &Ranges<'_>) -> Symbol {
 
 /// The binds of a module expression, as that module's children.
 ///
-/// Only a `struct … end` has members to list. A functor's body is descended
-/// into (`fun (X : S) -> struct … end` declares the same things a plain
-/// `struct` does, once applied); a bare path, an application and a coercion
-/// name a module declared elsewhere and contribute nothing this file can see.
+/// A functor's body is descended into, since `fun (X : S) -> struct … end`
+/// declares the same things a plain `struct` does once applied. A bare path,
+/// an application and a coercion name a module declared elsewhere and
+/// contribute nothing this file can see.
 fn struct_binds(m: &ast::ModExpr, r: &Ranges<'_>, out: &mut Vec<Symbol>) {
     match m {
         ast::ModExpr::Struct { binds, .. } => {
@@ -254,8 +253,8 @@ fn struct_binds(m: &ast::ModExpr, r: &Ranges<'_>, out: &mut Vec<Symbol>) {
 }
 
 /// A `:>` annotation's `sig … end` block, as one collapsible node — the same
-/// treatment 0.0.6's `: sig … end` gets, for the same reason (its items
-/// re-declare what the `struct` body binds).
+/// treatment 0.0.6's `: sig … end` gets, since its items re-declare what the
+/// `struct` body binds.
 ///
 /// A `:> S` naming a signature declared elsewhere has no items *here*, so it
 /// contributes no node at all rather than an empty one.
@@ -292,13 +291,12 @@ fn decl_list(decls: &[v1::StructDeclV1], r: &Ranges<'_>) -> Vec<Symbol> {
 ///
 /// - `S with type t = …` refines `S`; the members are still `S`'s.
 /// - `(X : S1) -> S2` is a functor signature, and a functor's members are the
-///   **codomain's** — `module Make : (Ord : Ord) -> sig … end` is how the
-///   bundled `set.satyg`/`map.satyg` declare theirs, so declining here would
-///   leave those two declaring nothing at all.
+///   **codomain's**. The bundled `set.satyg`/`map.satyg` declare theirs as
+///   `module Make : (Ord : Ord) -> sig … end`, so declining here would leave
+///   both packages declaring nothing at all.
 ///
-/// A bare `S`/`M.N.S` names a signature declared elsewhere; this file has no
-/// decl list for it, which is exactly what the caller has to distinguish from
-/// "an empty `sig … end`".
+/// A bare `S`/`M.N.S` names a signature declared elsewhere and yields `None`,
+/// which the caller must distinguish from an empty `sig … end`.
 fn sig_bot(s: &ast::SigExpr) -> Option<&ast::SigBotV1> {
     match s {
         ast::SigExpr::Bot(b) => Some(b),
@@ -310,8 +308,8 @@ fn sig_bot(s: &ast::SigExpr) -> Option<&ast::SigBotV1> {
 /// One item of a `sig … end`, appended to `out`.
 ///
 /// Appended rather than returned for the same reason [`bind`] is: `type t = …
-/// and u = …` is one `decl` naming two types, and they belong beside each
-/// other rather than one inside the other.
+/// and u = …` is one `decl` naming two types, which belong beside each other
+/// rather than one inside the other.
 fn decl(d: &ast::Decl, r: &Ranges<'_>, out: &mut Vec<Symbol>) {
     let whole = || node_span(d);
     match d {
@@ -322,10 +320,9 @@ fn decl(d: &ast::Decl, r: &Ranges<'_>, out: &mut Vec<Symbol>) {
                 .detail(staged("val", stage.as_ref()))
                 .build(r),
         ),
-        // A command is always callable, whatever its declared type looks
-        // like: `inline`/`block`/`math` command types are type ATOMS, not
-        // arrows, so reading the type would call every `val \emph : …` a
-        // variable.
+        // A command is always callable whatever its declared type looks like:
+        // `inline`/`block`/`math` command types are type ATOMS, not arrows, so
+        // reading the type would call every `val \emph : …` a variable.
         ast::Decl::ValHorzCmd { cmd, .. } => out.push(
             Sym::new(&cmd.name, SymbolKind::Function, whole(), cmd.span)
                 .detail("val")
@@ -342,8 +339,8 @@ fn decl(d: &ast::Decl, r: &Ranges<'_>, out: &mut Vec<Symbol>) {
                 .build(r),
         ),
         // A `type` decl carries a whole `bind_type` chain: the head clause
-        // takes the declaration's own range and each `and` clause its own,
-        // the same shaping `Bind::Type` uses.
+        // takes the declaration's range and each `and` clause its own, the
+        // same shaping `Bind::Type` uses.
         ast::Decl::Type { kw, binds } => {
             out.push(
                 type_clause(&binds.first, kw.span().unite(node_span(&binds.first)), r).build(r),
@@ -414,13 +411,12 @@ fn sig_expr_label(s: &ast::SigExpr) -> String {
 
 /// The document body's `let … in` spine, one clause at a time.
 ///
-/// This is where a 0.1 *document* keeps everything it declares, so partial
-/// recovery matters far more here than it does under 0.0.6: parsing the body
-/// as one expression would mean an unfinished `let` at the bottom of the file
-/// costs every symbol above it. Each arm mirrors one `let`-headed variant of
-/// `cst_v1::ast::Expr`; 0.1 spells `let rec`/`let mutable`/`let open` as two
-/// tokens where 0.0.6 fuses them into one, so the second token is what
-/// discriminates.
+/// A 0.1 *document* keeps everything it declares here, so partial recovery
+/// matters far more than under 0.0.6: parsing the body as one expression would
+/// let an unfinished `let` at the bottom of the file cost every symbol above
+/// it. Each arm mirrors one `let`-headed variant of `cst_v1::ast::Expr`; 0.1
+/// spells `let rec`/`let mutable`/`let open` as two tokens where 0.0.6 fuses
+/// them into one, so the second token discriminates.
 fn spine(stream: &mut HighWaterStream, r: &Ranges<'_>, out: &mut Vec<Symbol>) {
     loop {
         let Some(kw) = opt::<KwLet>(stream) else {
@@ -497,8 +493,8 @@ fn spine(stream: &mut HighWaterStream, r: &Ranges<'_>, out: &mut Vec<Symbol>) {
                 .build(r),
             );
         } else {
-            // Destructuring: the names live inside a pattern, which is a
-            // separate walk; the spine steps over it.
+            // Destructuring: the names live inside a pattern, a separate walk.
+            // The spine steps over it.
             if opt::<v1::PatErasedV1>(stream).is_none()
                 || opt::<DefEqTok>(stream).is_none()
                 || opt::<v1::ExprErasedV1>(stream).is_none()
@@ -512,9 +508,9 @@ fn spine(stream: &mut HighWaterStream, r: &Ranges<'_>, out: &mut Vec<Symbol>) {
     }
 }
 
-/// 0.1 declares a stage per binding rather than per file, so this is on every
+/// 0.1 declares a stage per binding rather than per file, hence this on every
 /// `val` arm. `val ~x` is stage 0, `val persistent ~x` the persistent stage,
-/// and a bare `val` the document stage — which needs no annotation.
+/// and a bare `val` the document stage, which needs no annotation.
 fn staged(kw: &str, stage: Option<&v1::BindStageV1>) -> String {
     match stage {
         None => kw.to_string(),

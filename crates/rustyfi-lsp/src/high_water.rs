@@ -6,74 +6,36 @@
 //! syan reports a failure as a tree of alternatives, each carrying the span it
 //! failed at — but **a repetition rule discards the failure that ended it**.
 //! `Vec<TopBinding>` stops on the first binding that does not parse and rolls
-//! the stream back, and nothing in the error it eventually reports remembers
-//! how far that attempt got. What survives is the enclosing rule's own
-//! complaint ("expected end of input") at the *start* of the binding, plus
-//! whatever `ParseError::from_cause` kept — and its own comment concedes it
-//! has "no record of how far each alternative got", so it keeps the FIRST
-//! alternative's span.
+//! the stream back; what survives is the enclosing rule's complaint ("expected
+//! end of input") at the *start* of that binding, and `ParseError::from_cause`
+//! keeps the FIRST alternative's span because it has no record of how far each
+//! alternative got. Under the 0.1 grammar a whole library file is *one*
+//! top-level binding, so every error in it would be reported on line 1's
+//! `module` keyword; 0.0.6 has the same problem inside a long top-level `let`.
 //!
-//! The consequence is worst under the 0.1 grammar, where a whole library file
-//! is *one* top-level binding (`module M :> sig … end = struct … end`): every
-//! error in the file, wherever it is, would be reported on the `module`
-//! keyword on line 1. But it is not 0.1-specific — measured on 0.0.6, an
-//! error sixty bytes into a long top-level `let` reports at the `let`, byte 3.
-//! Both generations need this.
-//!
-//! The furthest-position-reached mark is the standard answer for a
-//! backtracking parser, and the stream is the only place it can be observed:
-//! it is a property of the *parse*, not of any one error value. This wrapper
-//! records the furthest atom ever handed out and never forgets it, so
-//! backtracking cannot erase the evidence.
+//! The furthest position reached is the standard answer, and the stream is the
+//! only place it can be observed — it is a property of the *parse*, not of any
+//! one error value. This wrapper records the furthest atom ever handed out and
+//! never lowers it, so backtracking cannot erase the evidence.
 //!
 //! # The budget
 //!
 //! The 0.1 grammar backtracks exponentially on some incomplete inputs, and an
-//! editor buffer is incomplete on most keystrokes. Measured, release build,
-//! on prefixes of the bundled `dist-v01/packages/std-ja.satyh`:
-//!
-//! | prefix | 0.1 grammar | 0.0.6 grammar |
-//! |---|---|---|
-//! | 13,484 B | 13 ms | 0.2 ms |
-//! | 13,669 B | 69 ms | 0.2 ms |
-//! | 13,853 B | 334 ms | 0.2 ms |
-//! | 14,223 B | **11.5 s** | 0.3 ms |
-//!
-//! Roughly ×5 per 200 bytes typed, and it does not stop there. A language
-//! server that inherits that freezes the editor's diagnostics for the rest of
-//! the session, on a file the user is in the middle of writing — which is
-//! worse than having no language server at all.
+//! editor buffer is incomplete on most keystrokes: a few hundred more bytes of
+//! a half-typed library can take the parse from milliseconds to tens of
+//! seconds, which would freeze the editor's diagnostics for the rest of the
+//! session.
 //!
 //! So the stream counts what it serves and reports end-of-input past
-//! [`BUDGET`]. The parser reads that as a file that stopped early and unwinds
-//! promptly; nothing has to know the budget exists, because
-//! `analysis::parse_failure` already locates a failure from the mark. The
-//! caller can distinguish the two outcomes with [`Self::exhausted`], and does,
-//! so that a give-up is reported as a give-up rather than as a confident claim
-//! about the token the parse happened to stop at.
+//! [`BUDGET`]. The parser reads that as a file that stopped early and unwinds;
+//! nothing else has to know the budget exists, because `analysis` already
+//! locates a failure from the mark. The caller distinguishes the two outcomes
+//! with [`Self::exhausted`] so that a give-up is reported as a give-up rather
+//! than as a confident claim about the token the parse stopped at.
 //!
-//! A count, not a clock: `analyze` must be a pure function of its input — the
-//! same buffer has to produce the same diagnostics in a test, on a fast
-//! machine and on a slow one, and in a browser.
-//!
-//! # Why here and not in `rustyfi-syntax`
-//!
-//! Because it is a scope call, not a design one. `rustyfi-syntax`'s `stream`
-//! module explicitly declines to carry a mark — "Neither stream erasure … nor
-//! a failure high-water mark belongs here, obsoleted by syan on both counts,
-//! … `ParseError` is span-generic, every variant carrying the position it
-//! failed at, so the error reports itself" — and the evidence above shows
-//! that claim does not hold: the error reports a position, but not the one
-//! the user needs.
-//!
-//! So this belongs upstream, folded into `AtomStream` itself, with
-//! `analysis`'s reducer moved beside `parse_file`. That would fix the
-//! *compiler's* diagnostics too, which are worse than the editor's: `rustyfi
-//! doc.saty` today points at line 1 for an error on line 5, and for a 0.1
-//! file prints kilobytes of `Debug`-formatted `Loc { … }`, because `cst.rs`'s
-//! `render_parse_error` is `format!("{err:?}")` over the whole tree. Left as
-//! a follow-up rather than done here, so that adding a language server does
-//! not also rewrite the shared parser's error path.
+//! A count, not a clock: `analyze` must be a pure function of its input, so
+//! the same buffer produces the same diagnostics on a fast machine, a slow one
+//! and in a browser.
 
 use std::convert::Infallible;
 
@@ -85,13 +47,10 @@ use syan::parse::ParseStream;
 /// How many atoms one parse may consume — counting every backtracked re-read
 /// — before the stream declares end of input.
 ///
-/// Calibrated from measurement, not guessed. A *clean* parse costs 16–20
-/// serves per token; the most expensive file in the bundled corpus
-/// (`dist/packages/math.satyh`, 9,698 tokens) finishes in about 190,000. This
-/// is an order of magnitude above that, and about two orders of magnitude
-/// below the 78 million the pathological prefix in the table above wanted —
-/// so no real file can reach it, and the worst case a user can provoke is a
-/// fraction of a second rather than eleven seconds.
+/// An order of magnitude above what the most expensive file in the bundled
+/// corpus needs, and far below what a pathological half-typed 0.1 buffer would
+/// take, so no real file can reach it. Lowering it risks cutting a real parse
+/// short; raising it gives back the multi-second stalls it exists to bound.
 pub const BUDGET: u64 = 2_000_000;
 
 /// [`AtomStream`], plus a monotone record of the furthest point the parse
@@ -100,9 +59,7 @@ pub struct HighWaterStream {
     inner: AtomStream,
     /// End byte of the furthest atom ever served; `0` if none was.
     furthest: usize,
-    /// The span of that atom — kept as it is observed, rather than recovered
-    /// afterwards by scanning a copy of every token's span, which is what
-    /// this replaces.
+    /// The span of that atom, kept as it is observed.
     furthest_span: Option<Span>,
     served: u64,
 }
@@ -132,27 +89,26 @@ impl HighWaterStream {
     /// stopped at.
     ///
     /// It is the token *ending* at the mark, not the one starting after it:
-    /// the generated leaf parsers are `next()` → match → `push()`-back-on-
-    /// mismatch (`rustyfi-syntax`'s `leaf.rs`), so the offending token has
-    /// already been pulled through the stream by the time the leaf rejects
-    /// it. Reporting the token after it would put every squiggle one token to
-    /// the right.
+    /// the generated leaf parsers are `next()` → match → push-back-on-mismatch
+    /// (`rustyfi-syntax`'s `leaf.rs`), so the offending token has already been
+    /// pulled through the stream when the leaf rejects it. Reporting the token
+    /// after it would put every squiggle one token to the right.
     pub fn furthest_span(&self) -> Option<Span> {
         self.furthest_span
     }
 
     /// Whether the parse hit [`BUDGET`] rather than reaching a real verdict.
     ///
-    /// When this is true, the failure the parser reported means only "the
-    /// stream ended", which is this type's doing and not the buffer's — so
-    /// the caller must not dress it up as a claim about the source.
+    /// When true, the failure the parser reported means only "the stream
+    /// ended", which is this type's doing and not the buffer's — so the caller
+    /// must not dress it up as a claim about the source.
     pub fn exhausted(&self) -> bool {
         self.served >= BUDGET
     }
 
     fn observe(&mut self, span: Span) {
-        // Monotone by construction: a rollback re-serves atoms already seen,
-        // and the point of the mark is that backtracking does not lower it.
+        // Monotone: a rollback re-serves atoms already seen, and the point of
+        // the mark is that backtracking does not lower it.
         if span.end.byte > self.furthest || self.furthest_span.is_none() {
             self.furthest = span.end.byte;
             self.furthest_span = Some(span);

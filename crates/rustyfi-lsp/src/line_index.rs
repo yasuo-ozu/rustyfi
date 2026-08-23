@@ -1,8 +1,10 @@
 //! Byte offset → LSP `Position` (zero-based line, **UTF-16 code unit**
 //! character).
 //!
-//! This is the one piece of the server that is easy to get subtly, silently
-//! wrong. Three separate column conventions are in play:
+//! Three column conventions are in play, and they agree only on ASCII — which
+//! is why a byte- or char-based implementation passes every ASCII test and
+//! then misplaces every squiggle in the Japanese documents this port exists to
+//! typeset:
 //!
 //! | who | line | character |
 //! |---|---|---|
@@ -10,22 +12,16 @@
 //! | LSP `Position` | 0-based | 0-based **UTF-16 code units** |
 //! | a naive implementation | — | bytes |
 //!
-//! For ASCII all three agree, which is exactly why a byte- or char-based
-//! implementation passes every ASCII test and then puts every squiggle in the
-//! wrong place on the Japanese documents this port exists to typeset. `あ` is
-//! 3 bytes, 1 `char` and 1 UTF-16 unit; `🎉` is 4 bytes, 1 `char` and **2**
-//! UTF-16 units (a surrogate pair). So `Loc::col` is not usable either — it
-//! is right for `あ` and wrong for `🎉`.
-//!
-//! Hence this module ignores [`rustyfi_syntax::Loc`]'s `line`/`col` entirely
-//! and re-derives both coordinates from `Loc::byte`, which is a plain UTF-8
-//! offset the lexer maintains with `char::len_utf8` and is therefore exact.
+//! `あ` is 3 bytes, 1 `char` and 1 UTF-16 unit; `🎉` is 4 bytes, 1 `char` and
+//! **2** UTF-16 units. So `Loc::col` is not usable either. This module ignores
+//! `Loc`'s `line`/`col` entirely and re-derives both coordinates from
+//! `Loc::byte`, a plain UTF-8 offset that is exact.
 
 /// Line-start byte offsets for one source text, for repeated byte → position
 /// queries.
 ///
-/// Built once per analysis pass: the conversion is O(log lines) for the line
-/// and O(line length) for the character, rather than O(file) per diagnostic.
+/// Built once per analysis pass: a conversion is then O(log lines) for the
+/// line and O(line length) for the character, rather than O(file).
 pub struct LineIndex<'s> {
     src: &'s str,
     /// Byte offset of the first byte of each line. Always starts with `0`, so
@@ -46,10 +42,9 @@ pub struct Position {
 impl<'s> LineIndex<'s> {
     /// Index `src`.
     ///
-    /// Line terminators recognized are `\n` and a lone `\r`, matching the
-    /// lexer's own `bump` (`\r\n` counts once, as the `\n`). Getting this to
-    /// agree with the lexer matters only for CRLF files, where disagreeing
-    /// would offset every diagnostic after the first line by a whole line.
+    /// Line terminators are `\n` and a lone `\r`, matching the lexer's own
+    /// `bump` (`\r\n` counts once). Disagreeing with the lexer would offset
+    /// every diagnostic in a CRLF file by a whole line.
     pub fn new(src: &'s str) -> Self {
         let mut line_starts = vec![0usize];
         let bytes = src.as_bytes();
@@ -58,8 +53,8 @@ impl<'s> LineIndex<'s> {
             match bytes[i] {
                 b'\n' => line_starts.push(i + 1),
                 b'\r' => {
-                    // `\r\n` is one terminator; the `\n` arm above will not
-                    // fire for it because we skip past both here.
+                    // `\r\n` is one terminator; skipping past both here keeps
+                    // the `\n` arm above from firing for it.
                     if bytes.get(i + 1) == Some(&b'\n') {
                         line_starts.push(i + 2);
                         i += 1;
@@ -76,31 +71,25 @@ impl<'s> LineIndex<'s> {
 
     /// The text this index was built over.
     ///
-    /// Exists so a caller that needs both the index and the source cannot be
-    /// handed two that disagree — see [`crate::analyze`]'s `span_to_range`,
-    /// which would otherwise take them as two parameters and silently produce
-    /// nonsense if they were ever mismatched.
+    /// Exists so a caller needing both the index and the source cannot be
+    /// handed two that disagree, which would silently produce nonsense.
     pub fn source(&self) -> &'s str {
         self.src
     }
 
     /// Convert a UTF-8 byte offset into a zero-based UTF-16 [`Position`].
     ///
-    /// Out-of-range offsets clamp to the end of the file, and an offset that
-    /// lands inside a multi-byte character rounds **down** to that
-    /// character's start. Both are deliberate: a diagnostic with a slightly
-    /// generous range is useful, whereas a panic in a language server takes
+    /// Out-of-range offsets clamp to the end of the file, and an offset inside
+    /// a multi-byte character rounds **down** to that character's start. A
+    /// slightly generous range is useful; a panic in a language server takes
     /// the editor's whole diagnostics pane down with it.
     pub fn position(&self, byte: usize) -> Position {
         let byte = byte.min(self.src.len());
-        // `partition_point` gives the count of line starts at or before
-        // `byte`; minus one is that line's index. Never underflows —
-        // `line_starts[0] == 0 <= byte`.
+        // Never underflows: `line_starts[0] == 0 <= byte`.
         let line = self.line_starts.partition_point(|&s| s <= byte) - 1;
         let line_start = self.line_starts[line];
-        // `line_start` is a boundary by construction, and `floor_boundary`
-        // never goes below its argument's own floor, so this slice is safe
-        // for any `byte` at all.
+        // `line_start` is a boundary by construction and `floor_boundary`
+        // never goes below its argument's floor, so this slice is always safe.
         let character = utf16_len(&self.src[line_start..floor_boundary(self.src, byte)]);
         Position {
             line: line as u32,
@@ -111,11 +100,9 @@ impl<'s> LineIndex<'s> {
 
 /// `byte`, rounded **down** to the nearest UTF-8 character boundary.
 ///
-/// The single place this crate copes with an offset that points into the
-/// middle of a character. Rounding down rather than panicking is deliberate:
-/// a diagnostic range that is a character too generous is useful, whereas a
-/// panic in a language server takes the editor's whole diagnostics pane down
-/// with it.
+/// The single place this crate copes with an offset pointing into the middle
+/// of a character; rounding down rather than panicking keeps a bad offset from
+/// costing the editor its whole diagnostics pane.
 pub(crate) fn floor_boundary(src: &str, mut byte: usize) -> usize {
     byte = byte.min(src.len());
     while byte > 0 && !src.is_char_boundary(byte) {
@@ -164,8 +151,7 @@ mod tests {
 
     #[test]
     fn astral_characters_count_as_two_units() {
-        // `🎉` is 1 char, 4 bytes, 2 UTF-16 units — the case a `char`-based
-        // column (which `rustyfi_syntax::Loc::col` is) gets wrong.
+        // 1 char, 4 bytes, 2 UTF-16 units — the case `Loc::col` gets wrong.
         let src = "🎉x";
         let idx = LineIndex::new(src);
         assert_eq!(
@@ -196,7 +182,6 @@ mod tests {
     fn out_of_range_and_mid_character_offsets_clamp_rather_than_panic() {
         let src = "あい";
         let idx = LineIndex::new(src);
-        // Past the end.
         assert_eq!(idx.position(999), Position { line: 0, character: 2 });
         // Inside `い`'s three bytes: rounds down to its start.
         assert_eq!(idx.position(4), Position { line: 0, character: 1 });

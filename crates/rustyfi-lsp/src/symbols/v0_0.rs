@@ -11,9 +11,9 @@
 //! | `val` / `direct` / `type` items | a `sig … end` block |
 //! | `let … in` / `let-math … in` / `let-mutable … in` | the document body, after `in` |
 //!
-//! The prelude is where a 0.0.6 document puts everything, so the body spine
-//! matters much less here than it does under 0.1 — but it costs one shared
-//! walk, and `open Foo in let x = …` after the `in` is legal and does happen.
+//! A 0.0.6 document puts almost everything in the prelude, so the body spine
+//! matters much less here than under 0.1 — but `open Foo in let x = …` after
+//! the `in` is legal and the corpus writes it.
 
 use rustyfi_syntax::cst::{self, ast};
 use rustyfi_syntax::leaf::*;
@@ -34,10 +34,9 @@ pub(super) fn walk(stream: &mut HighWaterStream, r: &Ranges<'_>) -> Vec<Symbol> 
     for b in many::<cst::TopBinding>(stream) {
         binding(&b, r, &mut out);
     }
-    // `in` is absent for a library, and also for a document with an empty
-    // prelude (`@require: x` then straight into `document (| … |) '<…>`), so
-    // it is optional and the spine walk runs either way — on a body that is
-    // not `let`-headed it stops immediately.
+    // `in` is absent for a library and for a document with an empty prelude,
+    // so it is optional; the spine walk runs either way and stops immediately
+    // on a body that is not `let`-headed.
     let _ = opt::<KwIn>(stream);
     spine(stream, r, &mut out);
     out
@@ -65,11 +64,11 @@ fn header(h: &cst::Header, r: &Ranges<'_>) -> Option<Symbol> {
 /// things: `let-rec f = … and g = …` and `type t = … and u = …` each produce
 /// one symbol per clause, so that "go to symbol" can reach `g` and `u`.
 fn binding(b: &cst::TopBinding, r: &Ranges<'_>, out: &mut Vec<Symbol>) {
-    // Lazy: the two `and`-chained forms below build a span per clause instead,
-    // and `node_span` on a `module` walks every token it contains.
+    // Lazy: the `and`-chained forms build a span per clause instead, and
+    // `node_span` on a `module` walks every token it contains.
     let whole = || node_span(b);
     // Matched exhaustively on purpose: `TopBinding` is not
-    // `#[non_exhaustive]`, so a new declaration form added to the grammar is a
+    // `#[non_exhaustive]`, so a new declaration form in the grammar is a
     // compile error here rather than a silently missing symbol.
     match b {
         cst::TopBinding::LetRec {
@@ -96,10 +95,9 @@ fn binding(b: &cst::TopBinding, r: &Ranges<'_>, out: &mut Vec<Symbol>) {
                     .build(r),
             );
         }
-        // A destructuring `let (a, b) = …` binds names inside a pattern.
-        // Walking patterns is a separate (and much larger) job than walking
-        // declarations, and this shape is rare at the top level, so it is
-        // deliberately left out rather than half-done.
+        // A destructuring `let (a, b) = …` binds names inside a pattern, and
+        // walking patterns is a separate, much larger job. Left out rather
+        // than half-done; the shape is rare at the top level.
         cst::TopBinding::LetPattern { .. } => {}
         cst::TopBinding::LetInline { stage, cmd, .. } => out.push(
             Sym::new(&cmd.name, SymbolKind::Function, whole(), cmd.span)
@@ -185,11 +183,8 @@ fn ctor(v: &cst::VariantDef, r: &Ranges<'_>) -> Symbol {
 
 /// The `: sig … end` annotation on a module, as one collapsible node.
 ///
-/// Its items are *declarations of the same names* the `struct` body binds, so
-/// hoisting them up beside the implementations would double every entry.
-/// Under their own node they stay one keystroke away and one fold out of the
-/// way — and the `direct` items, which are the only place a 0.0.6 package
-/// states which commands it exports, are visible.
+/// Its items declare the same names the `struct` body binds, so hoisting them
+/// up beside the implementations would double every entry.
 fn sig_annot(s: &cst::SigAnnot, r: &Ranges<'_>) -> Symbol {
     let children = s.items.iter().map(|i| sig_item(i, r)).collect();
     Sym::new("sig", SymbolKind::Interface, node_span(s), s.sig_kw.span())
@@ -199,7 +194,7 @@ fn sig_annot(s: &cst::SigAnnot, r: &Ranges<'_>) -> Symbol {
 
 fn sig_item(i: &cst::SigItem, r: &Ranges<'_>) -> Symbol {
     let whole = node_span(i);
-    // A command is always callable, whatever its declared type looks like:
+    // A command is always callable whatever its declared type looks like:
     // `inline-cmd`/`block-cmd`/`math-cmd` are type ATOMS, not arrows, so
     // reading the type would call every `direct \href : … inline-cmd` a
     // variable.
@@ -240,11 +235,10 @@ fn declared_kind(ty: &ast::TypeExpr) -> SymbolKind {
 
 /// The document body's `let … in` spine, one clause at a time.
 ///
-/// Clause by clause rather than "parse the body, then walk the tree": a
-/// failure in clause seven then still leaves the first six on screen. Each
-/// arm mirrors one variant of `cst::ast::Expr`'s `let`-headed family field
-/// for field; anything else ends the spine, which is the common case (the
-/// body is normally `document (| … |) '<…>`).
+/// Clause by clause rather than "parse the body, then walk the tree", so a
+/// failure in clause seven still leaves the first six on screen. Each arm
+/// mirrors one `let`-headed variant of `cst::ast::Expr` field for field;
+/// anything else ends the spine.
 fn spine(stream: &mut HighWaterStream, r: &Ranges<'_>, out: &mut Vec<Symbol>) {
     loop {
         // `let-rec … and … in`
@@ -365,11 +359,8 @@ fn spine(stream: &mut HighWaterStream, r: &Ranges<'_>, out: &mut Vec<Symbol>) {
     }
 }
 
-/// `"let"` → `"let"`, but `"let"` under `~` → `"let (stage 0)"`.
-///
-/// The stage qualifier is the one thing about a 0.0.6 binding that is not
-/// visible from its name, and 0.1 puts it on every binding, so both walks
-/// render it the same way.
+/// `"let"` → `"let"`, but `"let"` under `~` → `"let (stage 0)"`. Rendered the
+/// same way by the 0.1 walk, so the two agree.
 fn staged(kw: &str, stage: Option<&cst::TopStage>) -> String {
     match stage {
         None => kw.to_string(),

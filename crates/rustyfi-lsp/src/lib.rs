@@ -4,8 +4,10 @@
 //! The crate is deliberately two halves with a hard line between them:
 //!
 //! - [`analyze`] and friends ([`analyze_auto`], [`analyze_detected`],
-//!   [`Diag`], [`Severity`], [`LineIndex`]) — **no LSP types, no
-//!   filesystem, no I/O**, and nothing outside `rustyfi-syntax`.
+//!   [`Diag`], [`Severity`], [`LineIndex`]), the cursor-driven half
+//!   ([`build_model`], [`hover`], [`definition`], [`completions`]) and the
+//!   outline ([`document_symbols`]) — **no LSP types, no filesystem, no
+//!   I/O**, and nothing outside `rustyfi-syntax`.
 //!   This half builds for `wasm32-unknown-unknown`, so the browser
 //!   playground's editor gets exactly the diagnostics the editor on the
 //!   desktop does, out of the same code:
@@ -66,11 +68,37 @@
 //! today, which is honest for documents of the size this corpus holds; a
 //! debounce and a dependency-graph cache are the next things to add, not a
 //! reason to withhold the tier.
+//!
+//! # What the cursor-driven half does
+//!
+//! [`hover`], [`definition`] and [`completions`] answer from a [`Model`] — a
+//! **cursor → syntax** mapping over the one buffer, built once by
+//! [`build_model`] and shared by all three. They stay on the single-file side
+//! of the line: [`project`]'s resolved program is not consulted, so
+//! [`analyze`]'s ceiling applies to them too, and it shows up as *silence
+//! rather than invention*: a name this file does not bind gets a hover saying
+//! what kind of name it is and that it comes from elsewhere, no jump at all,
+//! and no place in any completion list. Where a type appears in a hover it is
+//! the type the **author wrote**, quoted from the buffer — an ascription, a
+//! `sig`'s `val`, a synonym's right-hand side — never one this crate inferred.
+//!
+//! Half-typed buffers are the normal case for all three, not an edge: see
+//! [`build_model`] for how a file that does not parse — or does not even lex —
+//! still yields everything written before the break.
+//!
+//! [`document_symbols`] is a fourth reader of the same buffer, with the same
+//! ceiling, but its own CST walk rather than the [`Model`]'s: it wants the
+//! *outline* of every top-level binding, where the cursor half wants whatever
+//! sits under one offset.
 
 mod analysis;
+mod features;
 mod high_water;
 mod line_index;
+mod model;
 mod symbols;
+mod walk006;
+mod walk01;
 
 #[cfg(feature = "server")]
 pub mod jsonrpc;
@@ -82,7 +110,9 @@ pub mod server;
 mod workspace;
 
 pub use analysis::{analyze, analyze_auto, analyze_detected, detect_version, Diag, Severity};
+pub use features::{completions, definition, hover, Completion, Definition, Hover};
 pub use line_index::{LineIndex, Position};
+pub use model::{build_model, ByteRange, Def, HeaderKind, HeaderRef, Hit, Model, Ns, Opaque, Ref};
 pub use symbols::{
     document_symbols, document_symbols_auto, document_symbols_detected, Range, Symbol, SymbolKind,
 };

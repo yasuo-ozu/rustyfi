@@ -275,6 +275,12 @@ impl Sym {
 /// The alternative — ending a declaration where the next one begins — was
 /// tried first and is worse: it swallows the comment between two
 /// declarations, and it needs a different terminator for every kind of block.
+///
+/// Shared with the cursor-driven half ([`crate::walk006`], [`crate::walk01`]),
+/// which reaches for it only where a boundary keyword cannot supply the
+/// answer — the extent of a type ascription, which ends wherever it happens to
+/// end. Every *scope* boundary there comes from a keyword instead, which is
+/// cheaper and needs no walk at all.
 pub(crate) fn node_span<T: Unparse<Atom> + ?Sized>(node: &T) -> Span {
     let mut sink = SpanSink {
         span: Span::default(),

@@ -84,6 +84,50 @@ impl<'s> LineIndex<'s> {
         self.src
     }
 
+    /// Convert a zero-based UTF-16 [`Position`] into a UTF-8 byte offset —
+    /// the inverse of [`Self::position`], and the direction every *request*
+    /// needs: an editor asks about a cursor, and everything below the
+    /// protocol works in bytes.
+    ///
+    /// Total, by the same reasoning [`Self::position`] gives for clamping: a
+    /// client that is one keystroke ahead of the server sends a position past
+    /// the end of the text the server holds, and the useful answer is "the end
+    /// of the file", not a panic that takes the session down. So a line past
+    /// the last one clamps to the end of the text, a character past the end of
+    /// its line clamps to that line's terminator, and a character landing on
+    /// the second half of a surrogate pair rounds **down** to the start of
+    /// that character (the mirror of `floor_boundary`'s rule).
+    ///
+    /// Round-trips with [`Self::position`] for every position that names a
+    /// real character boundary, which is the property the tests pin.
+    pub fn offset(&self, pos: Position) -> usize {
+        let Some(&line_start) = self.line_starts.get(pos.line as usize) else {
+            return self.src.len();
+        };
+        // Stop at this line's terminator rather than running into the next
+        // line: an over-long `character` is a clamp, not a reason to return an
+        // offset the client would see as a different line.
+        let line_end = self
+            .line_starts
+            .get(pos.line as usize + 1)
+            .map(|&next| line_terminator_start(self.src, line_start, next))
+            .unwrap_or(self.src.len());
+
+        let mut units = 0u32;
+        for (rel, c) in self.src[line_start..line_end].char_indices() {
+            // `>` rather than `>=`, in one test: it fires both when the target
+            // IS this character's start (`units == pos.character`) and when the
+            // target is the second unit of this character's surrogate pair
+            // (`units < pos.character < units + 2`). The latter is the
+            // round-down case.
+            if units + c.len_utf16() as u32 > pos.character {
+                return line_start + rel;
+            }
+            units += c.len_utf16() as u32;
+        }
+        line_end
+    }
+
     /// Convert a UTF-8 byte offset into a zero-based UTF-16 [`Position`].
     ///
     /// Out-of-range offsets clamp to the end of the file, and an offset that
@@ -122,6 +166,25 @@ pub(crate) fn floor_boundary(src: &str, mut byte: usize) -> usize {
         byte -= 1;
     }
     byte
+}
+
+/// Where the terminator of the line starting at `start` and ending (exclusive
+/// of the next line's first byte) at `next` begins.
+///
+/// `next` is the *following* line's start, so it sits one past a `\n`, a lone
+/// `\r`, or a `\r\n` pair; this backs over whichever of the three is there.
+/// Written against the bytes rather than by remembering the terminator at
+/// index-building time so that [`LineIndex::new`] stays a plain scan.
+fn line_terminator_start(src: &str, start: usize, next: usize) -> usize {
+    let bytes = src.as_bytes();
+    let mut end = next;
+    if end > start && bytes.get(end - 1) == Some(&b'\n') {
+        end -= 1;
+    }
+    if end > start && bytes.get(end - 1) == Some(&b'\r') {
+        end -= 1;
+    }
+    end
 }
 
 /// Length of `s` in UTF-16 code units. Astral-plane characters (emoji, rarer
@@ -213,5 +276,101 @@ mod tests {
     fn a_trailing_newline_opens_a_final_empty_line() {
         let idx = LineIndex::new("a\n");
         assert_eq!(idx.position(2), Position { line: 1, character: 0 });
+    }
+
+    // ---- the request direction: UTF-16 position -> byte offset -------------
+
+    /// The property that matters: for every character boundary in the text,
+    /// `offset(position(b)) == b`. Swept over a buffer mixing ASCII, kana and
+    /// an astral character, on several lines, so a units-vs-bytes slip cannot
+    /// pass.
+    #[test]
+    fn offset_inverts_position_at_every_character_boundary() {
+        let src = "let あ = 1\n  \\emph{🎉 ok}\nlet 漢字 = 2\n";
+        let idx = LineIndex::new(src);
+        for (b, _) in src.char_indices().chain(std::iter::once((src.len(), ' '))) {
+            assert_eq!(idx.offset(idx.position(b)), b, "byte {b} of {src:?}");
+        }
+    }
+
+    #[test]
+    fn offset_counts_utf16_units_not_bytes_or_chars() {
+        // `こんにちは x`: the `x` is 6 UTF-16 units in and 16 bytes in.
+        let idx = LineIndex::new("こんにちは x");
+        assert_eq!(
+            idx.offset(Position {
+                line: 0,
+                character: 6
+            }),
+            16
+        );
+        // `🎉` is two units wide; the `x` after it is at unit 2, byte 4.
+        let idx = LineIndex::new("🎉x");
+        assert_eq!(
+            idx.offset(Position {
+                line: 0,
+                character: 2
+            }),
+            4
+        );
+    }
+
+    /// A position pointing at the *second* unit of a surrogate pair is not a
+    /// character boundary. Rounding down matches `floor_boundary`'s rule for
+    /// the other direction, and is what keeps a cursor inside an emoji from
+    /// slicing a `str`.
+    #[test]
+    fn a_position_inside_a_surrogate_pair_rounds_down() {
+        let idx = LineIndex::new("🎉x");
+        assert_eq!(
+            idx.offset(Position {
+                line: 0,
+                character: 1
+            }),
+            0
+        );
+    }
+
+    #[test]
+    fn out_of_range_positions_clamp_rather_than_panic() {
+        let src = "ab\ncd\n";
+        let idx = LineIndex::new(src);
+        // Past the last line entirely.
+        assert_eq!(
+            idx.offset(Position {
+                line: 99,
+                character: 0
+            }),
+            src.len()
+        );
+        // Past the end of a line: clamps to that line's terminator, NOT into
+        // the next line.
+        assert_eq!(
+            idx.offset(Position {
+                line: 0,
+                character: 99
+            }),
+            2
+        );
+    }
+
+    #[test]
+    fn offset_stops_before_a_crlf_terminator() {
+        let src = "ab\r\ncd";
+        let idx = LineIndex::new(src);
+        assert_eq!(
+            idx.offset(Position {
+                line: 0,
+                character: 5
+            }),
+            2
+        );
+        assert_eq!(
+            idx.offset(Position {
+                line: 1,
+                character: 0
+            }),
+            4
+        );
     }
 }

@@ -736,9 +736,16 @@ fn lsp_command() -> Command {
                 .value_name("DIR")
                 .help(
                     "Resolve @require: against this package root instead of \
-                     discovering one from each document's directory. Same meaning \
-                     as the compiler's --lib-root, including that a named root is \
-                     the ONLY root.",
+                     discovering one from each document's directory — both when \
+                     following a header to its file for go-to-definition and when \
+                     resolving a buffer's dependency graph to typecheck it. Same \
+                     meaning as the compiler's --lib-root, including that a named \
+                     root is the ONLY root and that packages live under \
+                     <lib-root>/dist/packages/. Falls back to $RUSTYFI_LIB_ROOT, \
+                     then to the client's own initializationOptions.libRoot. With \
+                     no root configured, @require: simply does not resolve; \
+                     @import:, which is relative to the importing file, always \
+                     does.",
                 )
                 .value_parser(value_parser!(PathBuf)),
         )

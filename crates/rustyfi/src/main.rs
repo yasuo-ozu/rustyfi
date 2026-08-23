@@ -87,8 +87,8 @@ fn run() -> i32 {
 /// the editor disconnects.
 ///
 /// A thin adapter and nothing else — the loop, the framing and the analysis
-/// all live in `rustyfi-lsp`, so this function's whole job is to turn
-/// `--lang` into an option and lock the two standard streams. It inherits the
+/// all live in `rustyfi-lsp`, so this function's whole job is to turn the
+/// flags into an `Options` and lock the two standard streams. It inherits the
 /// 256 MB worker stack `main` spawns, which matters: the parser recurses as
 /// deeply on a buffer in an editor as it does on a file being compiled.
 ///
@@ -108,18 +108,22 @@ fn run_lsp(m: &ArgMatches) -> i32 {
             return 2;
         }
     };
-    // The whole-program tier, unless it was turned off. Root resolution
-    // mirrors `cmd_compile`'s exactly — `--lib-root`, else
-    // `$RUSTYFI_LIB_ROOT`, else discovery from the DOCUMENT's own directory —
-    // except that a language server does not know the document until a
-    // buffer arrives, so discovery is handed over as a function rather than
-    // run here. `rustyfi-lsp` deliberately does not depend on
-    // `rustyfi-satyrographos` (tar/flate2/sha2/TLS, for an editor front end),
-    // so this binary, which already links it, is where the two meet.
+    // One flag, two consumers. For go-to-definition it is the root a
+    // `@require:` header is followed against; `None` leaves that to
+    // `$RUSTYFI_LIB_ROOT` or the client's `initializationOptions`, both of
+    // which the server reads itself.
+    let lib_root = m.get_one::<PathBuf>("lib_root").cloned();
+    // For the whole-program tier — unless it was turned off — root resolution
+    // mirrors `cmd_compile`'s exactly: `--lib-root`, else `$RUSTYFI_LIB_ROOT`,
+    // else discovery from the DOCUMENT's own directory. A language server does
+    // not know the document until a buffer arrives, so discovery is handed
+    // over as a function rather than run here. `rustyfi-lsp` deliberately does
+    // not depend on `rustyfi-satyrographos` (tar/flate2/sha2/TLS, for an
+    // editor front end), so this binary, which already links it, is where the
+    // two meet.
     let project = (!m.get_flag("no_typecheck")).then(|| {
-        let named = m
-            .get_one::<PathBuf>("lib_root")
-            .cloned()
+        let named = lib_root
+            .clone()
             .or_else(|| std::env::var_os("RUSTYFI_LIB_ROOT").map(PathBuf::from));
         rustyfi_lsp::project::CheckOptions {
             lang,
@@ -132,7 +136,11 @@ fn run_lsp(m: &ArgMatches) -> i32 {
     let stdout = std::io::stdout();
     let mut input = stdin.lock();
     let mut output = stdout.lock();
-    let opts = rustyfi_lsp::server::Options { lang, project };
+    let opts = rustyfi_lsp::server::Options {
+        lang,
+        lib_root,
+        project,
+    };
     match rustyfi_lsp::server::run(&mut input, &mut output, opts) {
         Ok(code) => code,
         Err(e) => {

@@ -32,19 +32,29 @@ syan.workspace = true
 # `default-features = false` and pull in nothing but `rustyfi-syntax`.
 serde_json = { version = "1", optional = true }
 
-# The whole-program half (`project`), and ONLY it: dependency resolution
-# against the filesystem, and the compiler's own elaborate → typecheck →
-# `:>`-check front half. Neither is wasm-safe (`rustyfi-loader` reads paths),
-# which is exactly why they are optional — `--no-default-features` leaves the
-# `analyze` seam with `rustyfi-syntax` as its only dependency.
+# Everything that touches the filesystem, and ONLY that. Two callers:
+#
+#   * go-to-definition on a `@require:`/`@import:` header, which calls the very
+#     `resolve_require`/`resolve_import` the compiler's loader calls, so the
+#     editor and the build cannot disagree about which file a header names —
+#     reimplementing the candidate-extension search here would be four lines
+#     that drift;
+#   * the whole-program tier (`project`): dependency resolution against the
+#     filesystem, then the compiler's own elaborate → typecheck → `:>`-check
+#     front half.
+#
+# Neither is wasm-safe (`rustyfi-loader` reads paths), which is exactly why
+# they are optional — `--no-default-features` leaves the `analyze` seam with
+# `rustyfi-syntax` as its only dependency.
 rustyfi-loader = { workspace = true, optional = true }
 rustyfi-lang = { workspace = true, optional = true }
 
 [features]
 default = ["server", "typecheck"]
 # The stdio JSON-RPC server (`server`, `jsonrpc` modules) and everything that
-# needs a runtime JSON encoder. Off ⇒ the crate is the pure, no-I/O,
-# wasm-safe `analyze` seam and nothing else.
-server = ["dep:serde_json"]
+# needs a runtime JSON encoder or the filesystem. Off ⇒ the crate is the pure,
+# no-I/O, wasm-safe `analyze`/`build_model`/`hover`/`definition`/`completions`
+# seam and nothing else.
+server = ["dep:serde_json", "dep:rustyfi-loader"]
 # The whole-program tier (`project` module, and the server's use of it).
 typecheck = ["dep:rustyfi-loader", "dep:rustyfi-lang"]

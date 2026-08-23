@@ -192,7 +192,10 @@ $ rustyfi lsp                # detect each file's generation from its own text
 $ rustyfi lsp --lang 0.1     # analyse everything as 0.1
 ```
 
-What it does today is **diagnostics**, live as you type, in two tiers.
+It answers **diagnostics**, **hover**, **go-to-definition**, **completion**
+and **symbols** — for both SATySFi generations, and on half-typed buffers.
+
+### Diagnostics
 
 **Lex and parse errors** are reported for any buffer at all, under whichever
 SATySFi generation the file is written in. Both 0.0.6 and 0.1 are supported,
@@ -200,12 +203,6 @@ and the generation is chosen per file the same way a compile chooses it for the
 entry document — a `use` header or a `val` head selects 0.1, a `@stage:` header
 or a `let-*` head selects 0.0, and a file that signals neither is checked
 against both rather than guessed at. Measured against every
-**Diagnostics** are lex and parse errors, live as you type,
-under whichever SATySFi generation the file is written in. Both 0.0.6 and 0.1
-are supported, and the generation is chosen per file the same way a compile
-chooses it for the entry document — a `use` header or a `val` head selects
-0.1, a `@stage:` header or a `let-*` head selects 0.0, and a file that signals
-neither is checked against both rather than guessed at. Measured against every
 `.saty`/`.satyh`/`.satyg` file in this repository — 247 of them, 64 of which
 are 0.1 — it reports **no diagnostics at all on files that compile**, in 0.56 s
 for the whole set (30 ms worst case).
@@ -246,21 +243,40 @@ Three things follow from doing it that way, and each is deliberate:
   matches this buffer. Otherwise the diagnostic goes to the top of the file and
   says where it really came from.
 
-The cost is the reason the tiers are separate: a parse is under a millisecond,
-while resolving and typechecking a real document is 2 ms for a two-file one and
-100–200 ms for one with a full document class behind it (28 files, release
-build). `--no-typecheck` turns the tier off. `initializationOptions` accepts
-`lang`, `libRoot` (a string or an array), `checkLibraries` and `typecheck`,
-with the command line winning wherever both speak.
+The cost is the reason the two tiers are separate: a parse is under a
+millisecond, while resolving and typechecking a real document is 2 ms for a
+two-file one and 100–200 ms for one with a full document class behind it (28
+files, release build). `--no-typecheck` turns the whole-program tier off.
 
-Hover, go-to-definition and completion are not implemented.
+### Hover, go-to-definition and completion
 
-The parse tier is also available as a plain library function,
-`rustyfi_lsp::analyze(source, lang) -> Vec<Diag>`, with no LSP types in its
-signature, no filesystem access and no default features needed — so the same
-diagnostics can run in a browser editor compiled to `wasm32-unknown-unknown`.
-The whole-program tier is `rustyfi_lsp::project::check`, behind the (default-on)
-`typecheck` feature, which is where the filesystem enters.
+All three answer from one cursor → syntax mapping over the buffer, and all
+three under the same rule: *say only what the file proves.*
+
+- **Hover** names what is under the cursor — an inline command, a module, a
+  variant constructor, a record label — and, when the file binds it, how it was
+  bound and on which line. Where the author wrote a type (an ascription, a
+  `sig`'s `val`, a synonym) it is shown, quoted from the buffer; no type is
+  ever inferred, so none is ever wrong. A name that comes from a `@require:`d
+  package still gets an answer, and that answer says it comes from elsewhere.
+- **Go to definition** jumps within the file, honouring shadowing, the five
+  identifier namespaces (`\cmd`, `+cmd`, math `\cmd`, values, types) and
+  `Module.member` paths, and it jumps from a `@require:`/`@import:` header to
+  the file it names — resolved by the compiler's own loader, so the editor
+  cannot disagree with the build. Where it cannot be sure it returns nothing:
+  an `open` of a module the file cannot see makes every name bound before it
+  unresolvable, because that `open` may be shadowing them.
+- **Completion** offers names actually in scope, and is deliberately quiet.
+  `\` in inline text offers inline commands, `\` inside `${…}` offers math
+  commands, `+` offers block commands, `M.` offers `M`'s own members, and a
+  bare word in prose offers nothing at all.
+
+All three keep working on a buffer that does not parse — and on one that does
+not even *lex*, which is what `{\emp` is the moment you start typing a command:
+everything written before the break is still answered about.
+
+### Symbols
+
 **Symbols** fill the outline pane, the breadcrumb and "go to symbol", for one
 file (`textDocument/documentSymbol`) and across the project
 (`workspace/symbol`). Both generations' declaration forms are covered —
@@ -279,20 +295,29 @@ incomplete one, and it works on a half-typed buffer: it reads the top-level
 declaration sequence one declaration at a time, so an unfinished `let` at the
 bottom of the file costs you that one symbol rather than the whole outline.
 
-It deliberately stops short of typechecking. Type errors in SATySFi are a
-property of a whole *program* — the entry document plus every `@require:`d
-package, in dependency order — and reporting them for one file in isolation
-would bury the real error under a hundred "unbound variable"s for names the
-document legitimately imports. Hover, go-to-definition and completion are not
-implemented either.
+### Configuration
 
-Both are also available as plain library functions —
-`rustyfi_lsp::analyze(source, lang) -> Vec<Diag>` and
-`rustyfi_lsp::document_symbols(source, lang) -> Vec<Symbol>` — with no LSP
-types in their signatures, no filesystem access and no default features
-needed, so a browser editor compiled to `wasm32-unknown-unknown` gets exactly
-what the desktop one does. (`workspace/symbol` is the one exception: searching
-a project means reading it, so that part lives in the server half.)
+`--lib-root <dir>` (or `$RUSTYFI_LIB_ROOT`, or the client's
+`initializationOptions.libRoot`) serves both halves that need one: following a
+`@require:` header to its package file, and resolving a buffer's dependency
+graph for the type tier. `@import:`, being relative to the importing file,
+needs no configuration. `initializationOptions` accepts `lang`, `libRoot` (a
+string or an array), `checkLibraries` and `typecheck`, with the command line
+winning wherever both speak.
+
+### As a library
+
+Everything except the whole-program tier and `workspace/symbol` is also
+available as a plain library function, with no LSP types in its signature, no
+filesystem access and no default features needed —
+`rustyfi_lsp::analyze(source, lang) -> Vec<Diag>`,
+`rustyfi_lsp::document_symbols(source, lang) -> Vec<Symbol>`, and
+`build_model` / `hover` / `definition` / `completions`. So a browser editor
+compiled to `wasm32-unknown-unknown` gets exactly what the desktop one does.
+The two exceptions are where the filesystem enters: the whole-program tier is
+`rustyfi_lsp::project::check`, behind the (default-on) `typecheck` feature, and
+searching a project for a symbol means reading it, so that part lives in the
+server half.
 
 ## Performance
 

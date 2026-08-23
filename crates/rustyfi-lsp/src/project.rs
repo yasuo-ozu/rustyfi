@@ -18,7 +18,7 @@
 //!
 //! **The buffer overrides its own file.** The server holds text the disk has
 //! not seen; the loader reads paths. `rustyfi_loader::LoadOptions::sources`
-//! is the seam that reconciles them: [`BufferSources`] answers the loader's
+//! is the seam that reconciles them: `BufferSources` answers the loader's
 //! three filesystem questions itself for the entry path and delegates
 //! everything else to `std::fs`. So an unsaved buffer is analysed as it is
 //! typed, while its dependencies come off the disk. A buffer with no path at
@@ -50,7 +50,7 @@
 //! `rustyfi_syntax::Span` carries no file identity, and the program under
 //! analysis is a merge of many files, so a type error's span may be an offset
 //! into a *dependency*. Painting that at the same offset in the buffer would
-//! be a confident lie. [`belongs_to_buffer`] tests the span's own
+//! be a confident lie. `belongs_to_buffer` tests the span's own
 //! `(line, col, byte)` triple against the buffer and, when it does not hold
 //! up, the diagnostic is reported at the top of the file and says so.
 
@@ -186,7 +186,7 @@ const ANALYSIS_STACK: usize = 256 * 1024 * 1024;
 /// directory does, since that is what `@import:` resolves against.
 ///
 /// Never panics and never hangs on a stack overflow: the whole analysis runs
-/// on its own [`ANALYSIS_STACK`]-sized thread, and a panic inside it is
+/// on its own `ANALYSIS_STACK`-sized thread, and a panic inside it is
 /// reported as a degraded result rather than taking the server's I/O loop
 /// down with it.
 pub fn check(path: &Path, source: &str, opts: &CheckOptions) -> Analysis {

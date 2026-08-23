@@ -701,6 +701,20 @@ pub mod ast {
         /// (no additional curried parameters after the pattern) form is
         /// implemented — `nxnonrecdec`'s `argpart` has no use in the
         /// bundled stdlib.
+        ///
+        /// **This variant is the port's worst backtracking blow-up**, and the
+        /// paragraph above is why: on a bare-variable target it is shadowed by
+        /// [`Expr::LetIn`] but still *tried*, so when a body deep inside a
+        /// `let … in` chain fails, every enclosing `let` re-derives the whole
+        /// failure a second time. Measured on a chain ending in a `let` with
+        /// no right-hand side, the parse costs exactly ×2 per `let` — 610,227
+        /// stream reads at twelve, 4,882,355 at fifteen, and it does not stop;
+        /// removing this variant collapses the same chain to 17 reads per
+        /// token. The repair is to factor the two variants into one with a
+        /// target that is a name-and-params *or* a pattern, which is a CST
+        /// change that reaches `elaborate.rs`. Until then
+        /// [`crate::stream::Budget`] bounds it, and a chain deeper than about
+        /// fifteen is reported as a give-up rather than diagnosed.
         LetPatternIn {
             kw: KwLet,
             pat: super::PatErased,
@@ -1865,33 +1879,19 @@ pub mod ast {
     }
 }
 
-/// A parse failure with the source position recovered from the failing parse.
+/// A parse failure, positioned at the construct that caused it.
 ///
-/// The span is whatever syan's span-carrying [`ParseError`](syan::error::ParseError)
-/// reports for the failure (recovered via `span_of::<Span>`); with our
-/// [`Span::migrate`](crate::span::Span) being a union it covers the attempted
-/// region rather than pinpointing a single token.
-#[derive(Debug, thiserror::Error)]
-#[error("{span}: parse error: {message}")]
-pub struct ParseFileError {
-    pub span: Span,
-    pub message: String,
-}
+/// Defined in [`crate::parse_error`] and re-exported here, where it has always
+/// been named from; that module also holds [`parse_file`]'s error rendering,
+/// which [`crate::cst_v1::parse_file_v1`] needs verbatim.
+pub use crate::parse_error::ParseFileError;
 
 /// Lex and parse a whole `.saty` source file.
 pub fn parse_file(src: &str) -> Result<File, ParseFileError> {
-    let atoms = crate::lexer::lex(src).map_err(|e| ParseFileError {
-        span: e.span,
-        message: e.msg,
-    })?;
+    let atoms = crate::lexer::lex(src).map_err(ParseFileError::from_lex)?;
     let mut stream = crate::stream::AtomStream::new(atoms);
-    <File as Parse<_>>::parse(&mut stream).map_err(|e| ParseFileError {
-        span: *e.span(),
-        message: render_parse_error(&e),
-    })
-}
-
-/// Flatten syan's nested error tree into one readable line.
-fn render_parse_error(err: &syan::error::ParseError<Span>) -> String {
-    format!("{err:?}")
+    match <File as Parse<_>>::parse(&mut stream) {
+        Ok(file) => Ok(file),
+        Err(e) => Err(crate::parse_error::locate(src, &stream, &e)),
+    }
 }

@@ -63,7 +63,10 @@
 use std::collections::HashMap;
 use std::fmt::Write as _;
 
-use rustyfi_backend::{DecoId, OutlineEntry, PureHorzBox, TabularBox, TabularCellBox};
+use rustyfi_backend::{
+    graphics_bbox, path_bbox, Color, DecoId, FrameDecoration, GraphicsElem, Length, OutlineEntry,
+    PathSeg, PureHorzBox, TabularBox, TabularCellBox,
+};
 
 use super::Ctx;
 
@@ -246,13 +249,30 @@ pub(crate) fn render_table(out: &mut String, tab: &TabularBox, extra_attrs: &str
         last_x = Some(x);
     }
 
+    let paired;
+    let rules: &[GraphicsElem] = if tab.rules.is_empty() {
+        paired = ctx
+            .tabular_rules
+            .borrow()
+            .iter()
+            .rev()
+            .find(|(w, h, _)| {
+                (w - tab.width.0).abs() < RULE_EPS_PT && (h - tab.height.0).abs() < RULE_EPS_PT
+            })
+            .map(|(_, _, r)| r.clone());
+        paired.as_deref().unwrap_or(&[])
+    } else {
+        &tab.rules
+    };
+    let borders = Borders::solve(&rows, rules);
+
     let mut table = String::new();
     let mut any_content = false;
     let _ = write!(table, "<table class=\"tabular\"{extra_attrs}>\n");
-    for row in rows {
+    for (r, row) in rows.iter().enumerate() {
         table.push_str("<tr>\n");
-        for cell in row {
-            table.push_str("<td>");
+        for (c, cell) in row.iter().enumerate() {
+            let _ = write!(table, "<td{}>", borders.style_for(r, c, row.len()));
             // A cell is a hard flow boundary in both directions: glue left
             // pending by the previous cell must not open this one with a
             // space, and this cell's last character must not decide the
@@ -275,4 +295,291 @@ pub(crate) fn render_table(out: &mut String, tab: &TabularBox, extra_attrs: &str
     if any_content {
         out.push_str(&table);
     }
+}
+
+/// Which grid lines a table actually draws, recovered from
+/// `TabularBox::rules`.
+///
+/// A stylesheet cannot know this. `rules` is whatever the document's own rule
+/// callback drew, and the conventions differ completely: `easytable`'s
+/// default draws three horizontal rules and no verticals (the booktabs look),
+/// while a `\easytable` with explicit column separators draws a full grid.
+/// Giving every cell the same border made the first render as the second, and
+/// no table in the corpus looked like its PDF.
+///
+/// The rules are ordinary graphics — thin filled rectangles or strokes — so
+/// each one's bounding box says where it lies, and its position against the
+/// cell origins says which boundary it is. Rules the geometry cannot place
+/// (a diagonal, a decorative flourish) are simply not reproduced; they draw
+/// nothing rather than something wrong.
+struct Borders {
+    /// `horizontal[r]` is the rule ABOVE row `r`; the extra last entry is the
+    /// rule below the final row.
+    horizontal: Vec<Option<Rule>>,
+    /// `vertical[c]` is the rule LEFT of column `c`; the extra last entry is
+    /// the rule right of the final column.
+    vertical: Vec<Option<Rule>>,
+}
+
+/// One recovered grid line: how thick, and in what colour.
+#[derive(Clone, Copy)]
+struct Rule {
+    width: f64,
+    color: Color,
+}
+
+/// A rule thinner than this (pt) is invisible in a browser anyway; a
+/// coordinate closer than this to a boundary counts as being on it.
+const RULE_EPS_PT: f64 = 0.05;
+
+impl Borders {
+    fn solve(rows: &[Vec<&TabularCellBox>], rules: &[GraphicsElem]) -> Self {
+        let ncols = rows.iter().map(Vec::len).max().unwrap_or(0);
+        let mut borders = Borders {
+            horizontal: vec![None; rows.len() + 1],
+            vertical: vec![None; ncols + 1],
+        };
+        // Row baselines DESCEND (`Solved::ys` runs from the table's height
+        // down to 0), so a rule sits above row `r` when its y is above that
+        // row's baseline and below the previous row's.
+        let baselines: Vec<f64> = rows
+            .iter()
+            .map(|row| row.first().map_or(0.0, |c| c.baseline_y.0))
+            .collect();
+        let lefts: Vec<f64> = (0..ncols)
+            .map(|c| {
+                rows.iter()
+                    .filter_map(|row| row.get(c).map(|cell| cell.x.0))
+                    .fold(f64::INFINITY, f64::min)
+            })
+            .collect();
+        for elem in rules {
+            collect_rule(elem, &baselines, &lefts, &mut borders);
+        }
+        borders
+    }
+
+    /// The ` style="…"` fragment for the cell at `(r, c)`, or the empty
+    /// string when no rule touches it. Each cell states only its own top and
+    /// left edge, plus the bottom/right of the last row/column — with
+    /// `border-collapse: collapse` that draws each shared line exactly once.
+    fn style_for(&self, r: usize, c: usize, row_len: usize) -> String {
+        let mut decls = String::new();
+        let mut edge = |side: &str, rule: Option<Rule>| {
+            if let Some(rule) = rule {
+                let _ = write!(
+                    decls,
+                    "border-{side}:{}pt solid {};",
+                    rule.width,
+                    crate::svg::css_color(rule.color),
+                );
+            }
+        };
+        edge("top", self.horizontal.get(r).copied().flatten());
+        edge("left", self.vertical.get(c).copied().flatten());
+        if r + 1 == self.horizontal.len() - 1 {
+            edge("bottom", self.horizontal[r + 1]);
+        }
+        if c + 1 == row_len {
+            edge("right", self.vertical.get(c + 1).copied().flatten());
+        }
+        if decls.is_empty() {
+            String::new()
+        } else {
+            format!(" style=\"{decls}\"")
+        }
+    }
+}
+
+/// Place one rule graphic on the grid, recursing through `Group`/`Clip` so a
+/// united rule set is read the same way a flat one is.
+fn collect_rule(
+    elem: &GraphicsElem,
+    baselines: &[f64],
+    lefts: &[f64],
+    borders: &mut Borders,
+) {
+    let (color, stroke_w) = match elem {
+        GraphicsElem::Fill(c, _) => (*c, None),
+        GraphicsElem::Stroke(w, c, _) | GraphicsElem::DashedStroke(w, _, c, _) => (*c, Some(w.0)),
+        GraphicsElem::Group(inner) | GraphicsElem::Clip(_, inner) => {
+            for e in inner {
+                collect_rule(e, baselines, lefts, borders);
+            }
+            return;
+        }
+        _ => return,
+    };
+    let Some((lo, hi)) = graphics_bbox(elem) else {
+        return;
+    };
+    let (Length(x0), Length(y0)) = lo;
+    let (Length(x1), Length(y1)) = hi;
+    let (w, h) = (x1 - x0, y1 - y0);
+    if w >= h {
+        // Horizontal: above row `r` = the number of rows whose baseline is
+        // above this rule's own centre line.
+        let y = (y0 + y1) / 2.0;
+        let above = baselines.iter().filter(|b| **b > y + RULE_EPS_PT).count();
+        let rule = Rule {
+            width: stroke_w.unwrap_or(h).max(RULE_EPS_PT),
+            color,
+        };
+        if let Some(slot) = borders.horizontal.get_mut(above) {
+            *slot = Some(rule);
+        }
+    } else {
+        let x = (x0 + x1) / 2.0;
+        let left_of = lefts.iter().filter(|l| **l < x - RULE_EPS_PT).count();
+        let rule = Rule {
+            width: stroke_w.unwrap_or(w).max(RULE_EPS_PT),
+            color,
+        };
+        if let Some(slot) = borders.vertical.get_mut(left_of) {
+            *slot = Some(rule);
+        }
+    }
+}
+
+/// What a framed `<div>` needs in order to show its own decoration.
+pub(crate) struct FrameRender {
+    /// Appended to `class="frame…"`.
+    pub(crate) extra_class: &'static str,
+    /// CSS declarations for the `<div>` itself.
+    pub(crate) style: String,
+    /// Markup to emit as the div's FIRST child, before its content.
+    pub(crate) svg: String,
+}
+
+impl FrameRender {
+    fn none() -> Self {
+        FrameRender {
+            extra_class: "",
+            style: String::new(),
+            svg: String::new(),
+        }
+    }
+}
+
+/// Turn a block frame's recorded decoration into something a browser can draw
+/// at any width.
+///
+/// Two shapes, because they want different answers:
+///
+/// - **A plain filled panel** — one `Fill` covering the frame, which is what
+///   `+code`'s grey box and most highlight frames are — becomes a real
+///   `background-color`. Exact at every width, and it costs no markup.
+/// - **Anything else** — the rounded double stroke around a `stdjabook`
+///   title, a rule under a heading — becomes an `<svg>` sized to the div and
+///   stretched (`preserveAspectRatio="none"`). Stretching is the honest
+///   compromise: the drawing was authored for one specific width, and the
+///   reader's column is a different one. A corner radius therefore distorts
+///   in proportion to how far the column has moved from the original.
+///
+/// The frame's own padding rides along in both cases: without it the content
+/// sits on top of the border it is supposed to be inside.
+pub(crate) fn frame_decoration(deco: &DecoId, ctx: &Ctx) -> FrameRender {
+    let Some(frame) = ctx.frame_decos.get(deco) else {
+        return FrameRender::none();
+    };
+    if frame.elems.is_empty() || frame.width.0 <= 0.0 || frame.height.0 <= 0.0 {
+        return FrameRender::none();
+    }
+    if let Some(color) = solid_panel(frame) {
+        return FrameRender {
+            extra_class: " framed",
+            style: format!("background:{};{}", crate::svg::css_color(color), pad_right(frame)),
+            svg: String::new(),
+        };
+    }
+    let mut svg = String::new();
+    crate::svg::emit_graphics(
+        &mut svg,
+        &frame.elems,
+        frame.width.0,
+        frame.height.0,
+        0.0,
+        0.0,
+        frame.height.0,
+        &mut |_svg, _bx, _x, _y| {},
+    );
+    FrameRender {
+        extra_class: " framed",
+        style: pad_right(frame),
+        svg: retarget_svg(&svg, frame),
+    }
+}
+
+/// The one padding the flow does not already carry — see
+/// `FrameDecoration::pads`.
+fn pad_right(frame: &FrameDecoration) -> String {
+    let r = frame.pads.1 .0;
+    if r > 0.5 {
+        format!("padding-right:{r}pt;")
+    } else {
+        String::new()
+    }
+}
+
+/// Replace `emit_graphics`' opening `<svg>` — written for the faithful
+/// backend, absolutely positioned at a page point and sized in points — with
+/// one that fills the `<div>` instead.
+///
+/// The `viewBox` is widened to the drawing's OWN extent where that reaches
+/// outside the frame box, which it routinely does: a rounded frame's corners
+/// bulge 14pt past each edge, and at the box's own width those 14pt hung off
+/// the side of the reading column. Fitting the window to the ink keeps the
+/// whole decoration inside the element that owns it, at the cost of drawing
+/// it a few percent smaller than the frame it surrounds.
+fn retarget_svg(svg: &str, frame: &FrameDecoration) -> String {
+    let (w, h) = (frame.width.0, frame.height.0);
+    let (mut x0, mut y0, mut x1, mut y1) = (0.0f64, 0.0f64, w, h);
+    for elem in &frame.elems {
+        if let Some(((Length(ex0), Length(ey0)), (Length(ex1), Length(ey1)))) = graphics_bbox(elem)
+        {
+            x0 = x0.min(ex0);
+            y0 = y0.min(ey0);
+            x1 = x1.max(ex1);
+            y1 = y1.max(ey1);
+        }
+    }
+    // `emit_graphics`' `<g>` maps box-local y-up onto a y-down viewBox by
+    // `y_down = height - y_up`, so the widened window's top edge is the
+    // drawing's HIGHEST point.
+    let view = format!(
+        "viewBox=\"{} {} {} {}\"",
+        x0,
+        h - y1,
+        (x1 - x0).max(0.01),
+        (y1 - y0).max(0.01),
+    );
+    let Some(end) = svg.find('>') else {
+        return svg.to_string();
+    };
+    format!(
+        "<svg class=\"frame-deco\" preserveAspectRatio=\"none\" {view}{}",
+        &svg[end..]
+    )
+}
+
+/// The colour of a decoration that is nothing but a filled rectangle covering
+/// the whole frame, or `None` for anything with an outline, a curve, or more
+/// than one element.
+fn solid_panel(frame: &FrameDecoration) -> Option<Color> {
+    let [GraphicsElem::Fill(color, path)] = frame.elems.as_slice() else {
+        return None;
+    };
+    let ((Length(x0), Length(y0)), (Length(x1), Length(y1))) = path_bbox(path);
+    let covers = x0 <= RULE_EPS_PT
+        && y0 <= RULE_EPS_PT
+        && (x1 - frame.width.0).abs() < 1.0
+        && (y1 - frame.height.0).abs() < 1.0;
+    // A rectangle has four corners and no curves; anything else drawn edge to
+    // edge (a rounded panel, a blob) has to go through the SVG path.
+    let rectangular = path.subpaths.len() == 1
+        && path.subpaths[0]
+            .segs
+            .iter()
+            .all(|s| matches!(s, PathSeg::Line(_)));
+    (covers && rectangular).then_some(*color)
 }

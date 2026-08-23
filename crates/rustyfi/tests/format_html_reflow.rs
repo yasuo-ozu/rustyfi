@@ -150,13 +150,20 @@ fn rendered_text(html: &str) -> String {
 }
 
 /// The defining difference from the faithful twin: nothing in the reflowed
-/// document is positioned. `top:`/`left:` may appear only as the tail of a
-/// flow-safe longhand — `margin-top`, `border-left`, `padding-left` — never
-/// as the bare positioned property.
-fn assert_no_positioned_offsets(html: &str) {
+/// document's CONTENT is positioned. `top:`/`left:` may appear only as the
+/// tail of a flow-safe longhand — `margin-top`, `border-left`,
+/// `padding-left` — never as the bare positioned property.
+///
+/// The check is on the content, not the whole file: the stylesheet carries
+/// one absolute rule for a framed block's DRAWING layer (`css.rs`'s
+/// `svg.frame-deco`), which is the same licence math and inline graphics
+/// already have and is not page positioning. `rustyfi-html`'s own
+/// `reflow_output_never_uses_absolute_positioning` pins that rule by count.
+fn assert_no_positioned_offsets(full: &str) {
+    let html = body_of_doc(full);
     assert!(
         !html.contains("position:absolute") && !html.contains("position: absolute"),
-        "reflow output must never use position:absolute:\n{html}"
+        "reflow content must never use position:absolute:\n{html}"
     );
     for prop in ["top:", "left:"] {
         for (idx, _) in html.match_indices(prop) {
@@ -244,13 +251,6 @@ fn format_html_writes_flowing_paragraphs_in_reading_order() {
         "paragraphs are out of reading order:\n{html}"
     );
 
-    // The defining difference from the faithful twin: no absolute
-    // positioning. `left:` never appears at all; `top:` only ever appears
-    // as part of a flow-safe longhand (`margin-top:`/`border-top:`).
-    assert!(
-        !html.contains("position:absolute") && !html.contains("position: absolute"),
-        "html-reflow output must never use position:absolute:\n{html}"
-    );
     assert_no_positioned_offsets(&html);
 
     std::fs::remove_dir_all(&work).ok();
@@ -515,4 +515,10 @@ fn an_unknown_format_is_rejected_by_name() {
     );
 
     std::fs::remove_dir_all(&work).ok();
+}
+
+/// The document body — everything after `<body>`. The stylesheet is excluded
+/// deliberately; see `assert_no_positioned_offsets`.
+fn body_of_doc(html: &str) -> &str {
+    html.split("<body>").nth(1).unwrap_or(html)
 }

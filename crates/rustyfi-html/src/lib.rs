@@ -70,7 +70,10 @@ mod svg;
 // re-exported at the crate root so CLI dispatch calls it exactly like the
 // faithful `render_html_fixed`/`render_html_fixed_ttf_with` pair above (argument-for-
 // argument symmetry, not a new API shape to learn).
-pub use reflow::{render_html_reflow, render_html_reflow_ttf_with};
+pub use reflow::{
+    render_html_reflow, render_html_reflow_ttf_with, render_html_reflow_ttf_with_decos,
+    render_html_reflow_with_decos,
+};
 
 use std::cell::RefCell;
 use std::collections::BTreeSet;

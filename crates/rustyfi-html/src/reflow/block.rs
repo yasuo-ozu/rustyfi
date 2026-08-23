@@ -61,6 +61,24 @@ struct Para {
     /// floor below which its paragraph flushes must not close anything. See
     /// `inline::close_open_wrappers`.
     wrapper_base: usize,
+    /// The smallest left offset (pt) of any content on this paragraph's
+    /// lines, i.e. its indentation.
+    ///
+    /// `block-frame-breakable` does not record its horizontal padding as a
+    /// marker — `primitives.rs`'s `indent_left` folds `pad_l` into every
+    /// contained line's per-box `x` instead. This walker discards `x`
+    /// everywhere else (it has no page geometry to replay), so nesting a
+    /// frame inside a frame produced no visible indentation at all: an
+    /// `enumitem` list, which indents purely this way, came out with every
+    /// level flush left.
+    indent: Option<f64>,
+    /// Every text run so far was fixed-pitch (and there was at least one), so
+    /// this paragraph is a code block: its upstream line breaks are real, and
+    /// it must not be justified or hyphenated. See `Ctx::mono_run`.
+    mono: bool,
+    /// Set once a proportional run appears, which disqualifies [`Para::mono`]
+    /// for good — a `+code` block never mixes.
+    mixed: bool,
 }
 
 impl Para {
@@ -72,6 +90,22 @@ impl Para {
             leading_fil: false,
             trailing_fil: false,
             wrapper_base,
+            indent: None,
+            mono: false,
+            mixed: false,
+        }
+    }
+
+    /// The `margin-left` declaration for this paragraph's recovered
+    /// indentation, or the empty string.
+    ///
+    /// Suppressed inside a real `<ul>`/`<ol>`: there the markup already
+    /// indents, and adding the box stream's own offset on top would double
+    /// every level of an instrumented `itemize` list.
+    fn indent_decl(&self, in_list: bool) -> String {
+        match self.indent {
+            Some(x) if x >= INDENT_MIN_PT && !in_list => format!("margin-left:{x}pt;"),
+            _ => String::new(),
         }
     }
 
@@ -108,6 +142,17 @@ pub(crate) fn walk_vboxes(out: &mut String, vboxes: &[VertBox], ctx: &Ctx) {
     for (idx, vb) in vboxes.iter().enumerate() {
         match vb {
             VertBox::Line { contents, .. } => {
+                // The line's own left edge. A line that OPENS with an
+                // `inline-fil` is aligned, not indented — everything after
+                // the fil sits at whatever offset the alignment produced
+                // (163pt for a centred table), which is not an indent and
+                // must not become one. `data-align` already carries it.
+                if !matches!(contents.first(), Some((_, PureHorzBox::OuterFil))) {
+                    if let Some((x, _)) = contents.first() {
+                        let x = x.0;
+                        para.indent = Some(para.indent.map_or(x, |cur: f64| cur.min(x)));
+                    }
+                }
                 for (_, bx) in contents {
                     match bx {
                         // The one inline box that itself carries a nested
@@ -117,7 +162,7 @@ pub(crate) fn walk_vboxes(out: &mut String, vboxes: &[VertBox], ctx: &Ctx) {
                         // legally) follows on the SAME `Line` into a fresh
                         // paragraph.
                         PureHorzBox::EmbeddedBlock { block, .. } => {
-                            flush_para(out, &mut para, &mut pending_margin, ctx);
+                            flush_para(out, &mut para, &mut pending_margin, ctx, !list_stack.is_empty());
                             let margin = take_margin(&mut pending_margin);
                             let _ = write!(out, "<div class=\"embed\"{margin}>\n");
                             walk_vboxes(out, block, ctx);
@@ -131,7 +176,7 @@ pub(crate) fn walk_vboxes(out: &mut String, vboxes: &[VertBox], ctx: &Ctx) {
                         // `inline-fil` glue `single-centering-line` wraps it
                         // in) and emit a real `<table>` as its own element.
                         PureHorzBox::Tabular(tab) => {
-                            flush_para(out, &mut para, &mut pending_margin, ctx);
+                            flush_para(out, &mut para, &mut pending_margin, ctx, !list_stack.is_empty());
                             let margin = take_margin(&mut pending_margin);
                             structure::render_table(out, tab, &margin, ctx);
                         }
@@ -167,6 +212,14 @@ pub(crate) fn walk_vboxes(out: &mut String, vboxes: &[VertBox], ctx: &Ctx) {
                             if para.text.len() != before {
                                 para.trailing_fil = false;
                             }
+                            if matches!(other, PureHorzBox::InnerString { .. }) {
+                                if ctx.mono_run.get() {
+                                    para.mono = !para.mixed;
+                                } else {
+                                    para.mono = false;
+                                    para.mixed = true;
+                                }
+                            }
                         }
                     }
                 }
@@ -182,9 +235,19 @@ pub(crate) fn walk_vboxes(out: &mut String, vboxes: &[VertBox], ctx: &Ctx) {
                 // both the hyphen and the space have to go — see
                 // `rejoin_hyphenated_word`.
                 if para.open {
-                    let next_first = vboxes.get(idx + 1).and_then(first_text_char);
-                    if !rejoin_hyphenated_word(&mut para.text, next_first) {
-                        ctx.note_glue(WORD_SPACE_PT);
+                    if para.mono {
+                        // Fixed-pitch text: the break is the AUTHOR's, not
+                        // the line breaker's, so it survives as a `<br>`
+                        // rather than collapsing to a space. Without this a
+                        // `+code` block arrived as one long line.
+                        inline::close_run(&mut para.text, ctx);
+                        para.text.push_str("<br>\n");
+                        ctx.reset_flow();
+                    } else {
+                        let next_first = vboxes.get(idx + 1).and_then(first_text_char);
+                        if !rejoin_hyphenated_word(&mut para.text, next_first) {
+                            ctx.note_glue(WORD_SPACE_PT);
+                        }
                     }
                 }
             }
@@ -200,26 +263,32 @@ pub(crate) fn walk_vboxes(out: &mut String, vboxes: &[VertBox], ctx: &Ctx) {
             // 5.28pt — roughly two blank lines inserted between every pair
             // of paragraphs in the document.
             VertBox::Skip(len) | VertBox::ParagTop(len) | VertBox::FramePad(len) => {
-                flush_para(out, &mut para, &mut pending_margin, ctx);
+                flush_para(out, &mut para, &mut pending_margin, ctx, !list_stack.is_empty());
                 pending_margin = pending_margin.max(len.0);
             }
             VertBox::ClearPage => {
-                flush_para(out, &mut para, &mut pending_margin, ctx);
+                flush_para(out, &mut para, &mut pending_margin, ctx, !list_stack.is_empty());
                 let margin = take_margin(&mut pending_margin);
                 let _ = write!(out, "<hr class=\"clearpage\"{margin}>\n");
             }
             // No reflow meaning (design doc §3's mapping table) — dropped.
             VertBox::HookPageBreak(_) => {}
             VertBox::FrameStart(deco) => {
-                flush_para(out, &mut para, &mut pending_margin, ctx);
-                let margin = take_margin(&mut pending_margin);
+                flush_para(out, &mut para, &mut pending_margin, ctx, !list_stack.is_empty());
+                let margin = margin_decl(&mut pending_margin);
                 // Real nesting (design doc §3): a `FrameStart`/`FrameEnd`
-                // pair opens/closes one `<div>` — the decoration itself
-                // (`DecoId`) is a lang-side callback this backend can't run
-                // (same documented gap the faithful mode has for block-frame
-                // decos), so only a generic `.frame` class + this pending
-                // margin ride along; a future slice can resolve common decos
-                // to CSS (design doc §6, Slice 3).
+                // pair opens/closes one `<div>`.
+                //
+                // The decoration is drawn too, when there is one — see
+                // `Ctx::frame_decos`. `fire_hooks` already ran the callback
+                // for the PDF; `structure::frame_decoration` turns the
+                // resulting graphics into either a CSS background (a plain
+                // filled panel) or a scalable SVG (anything else), so a
+                // `stdjabook` title block keeps its frame instead of
+                // arriving as bare centred text. A frame whose deco draws
+                // nothing — the great majority, since packages use
+                // `block-frame-breakable` for plain grouping — still gets
+                // nothing, which is why this cannot be a blanket CSS border.
                 //
                 // S2 (design doc §4 "Links/metadata"): `annot.satyh`'s
                 // `register-location-frame` fires `register-destination`
@@ -232,10 +301,16 @@ pub(crate) fn walk_vboxes(out: &mut String, vboxes: &[VertBox], ctx: &Ctx) {
                     Some(name) => format!(" id=\"{}\"", crate::escape_html(name)),
                     None => String::new(),
                 };
-                let _ = write!(out, "<div class=\"frame\"{id_attr}{margin}>\n");
+                let deco_render = structure::frame_decoration(deco, ctx);
+                let style = style_attr(&[&margin, &deco_render.style]);
+                let _ = write!(
+                    out,
+                    "<div class=\"frame{}\"{id_attr}{style}>\n{}",
+                    deco_render.extra_class, deco_render.svg,
+                );
             }
             VertBox::FrameEnd(_deco) => {
-                flush_para(out, &mut para, &mut pending_margin, ctx);
+                flush_para(out, &mut para, &mut pending_margin, ctx, !list_stack.is_empty());
                 out.push_str("</div>\n");
             }
             // S4 ("Block level"): real nested `<ul>`/`<ol>`/`<li>`, the
@@ -244,7 +319,7 @@ pub(crate) fn walk_vboxes(out: &mut String, vboxes: &[VertBox], ctx: &Ctx) {
             // above — a marker is always a block-level boundary, never
             // mid-paragraph content.
             VertBox::ListMark(kind) => {
-                flush_para(out, &mut para, &mut pending_margin, ctx);
+                flush_para(out, &mut para, &mut pending_margin, ctx, !list_stack.is_empty());
                 let margin = take_margin(&mut pending_margin);
                 match kind {
                     ListMarkKind::ListStart { ordered } => {
@@ -270,7 +345,7 @@ pub(crate) fn walk_vboxes(out: &mut String, vboxes: &[VertBox], ctx: &Ctx) {
             }
         }
     }
-    flush_para(out, &mut para, &mut pending_margin, ctx);
+    flush_para(out, &mut para, &mut pending_margin, ctx, !list_stack.is_empty());
     // A footnote referenced from a construct that never opens a paragraph (a
     // table cell, a bare frame) would otherwise have nowhere to land. Not a
     // second home for footnotes — just the guarantee that none is dropped.
@@ -368,7 +443,13 @@ fn rejoin_hyphenated_word(text: &mut String, next_first: Option<char>) -> bool {
 /// Footnote bodies queued by `inline.rs` (see its `Footnote` arm) are
 /// drained straight after the closing tag, so each lands immediately below
 /// the paragraph that referenced it.
-fn flush_para(out: &mut String, para: &mut Para, pending_margin: &mut f64, ctx: &Ctx) {
+fn flush_para(
+    out: &mut String,
+    para: &mut Para,
+    pending_margin: &mut f64,
+    ctx: &Ctx,
+    in_list: bool,
+) {
     if para.open {
         // A run span, and possibly a whole `inline-frame-breakable` wrapper
         // region, may still be open at the end of the paragraph's own
@@ -379,13 +460,14 @@ fn flush_para(out: &mut String, para: &mut Para, pending_margin: &mut f64, ctx: 
         inline::close_open_wrappers(&mut para.text, ctx, para.wrapper_base);
         let trimmed = para.text.trim();
         if super::text::has_visible_content(trimmed) {
-            let margin = take_margin(pending_margin);
+            let margin = margin_decl(pending_margin);
             match para.heading_level {
                 Some(level) => {
                     let tag = structure::heading_tag(level);
+                    let style = style_attr(&[&margin]);
                     let _ = write!(
                         out,
-                        "<h{tag} class=\"heading\" data-outline-level=\"{level}\"{margin}>{trimmed}</h{tag}>\n"
+                        "<h{tag} class=\"heading\" data-outline-level=\"{level}\"{style}>{trimmed}</h{tag}>\n"
                     );
                 }
                 None => {
@@ -393,7 +475,9 @@ fn flush_para(out: &mut String, para: &mut Para, pending_margin: &mut f64, ctx: 
                         Some(a) => format!(" data-align=\"{a}\""),
                         None => String::new(),
                     };
-                    let _ = write!(out, "<p class=\"para\"{align}{margin}>{trimmed}</p>\n");
+                    let class = if para.mono { "para code" } else { "para" };
+                    let style = style_attr(&[&margin, &para.indent_decl(in_list)]);
+                    let _ = write!(out, "<p class=\"{class}\"{align}{style}>{trimmed}</p>\n");
                 }
             }
             drain_footnotes(out, ctx);
@@ -404,6 +488,9 @@ fn flush_para(out: &mut String, para: &mut Para, pending_margin: &mut f64, ctx: 
     para.heading_level = None;
     para.leading_fil = false;
     para.trailing_fil = false;
+    para.indent = None;
+    para.mono = false;
+    para.mixed = false;
     // A paragraph boundary is a hard boundary for the inline-flow state: a
     // glue recorded at the end of one paragraph must not put a space at the
     // start of the next.
@@ -436,11 +523,33 @@ fn drain_footnotes(out: &mut String, ctx: &Ctx) {
 /// accumulation — `Length` skips are never legitimately negative, but a
 /// stray `0.0` should not emit a vacuous `style=""`).
 fn take_margin(pending_margin: &mut f64) -> String {
+    style_attr(&[&margin_decl(pending_margin)])
+}
+
+/// The accumulated `Skip` as a bare `margin-top:_pt;` declaration, for a
+/// caller that has more than one declaration to write.
+fn margin_decl(pending_margin: &mut f64) -> String {
     let m = *pending_margin;
     *pending_margin = 0.0;
     if m > 0.0 {
-        format!(" style=\"margin-top:{m}pt;\"")
+        format!("margin-top:{m}pt;")
     } else {
         String::new()
     }
 }
+
+/// Join CSS declarations into one ` style="…"` attribute fragment, or the
+/// empty string when they are all empty — a single element may carry only one
+/// `style` attribute, so the pieces have to be assembled before it is written.
+fn style_attr(decls: &[&str]) -> String {
+    let joined: String = decls.concat();
+    if joined.is_empty() {
+        String::new()
+    } else {
+        format!(" style=\"{joined}\"")
+    }
+}
+
+/// Below this (pt) a recovered left offset is a kern or a rounding artefact,
+/// not an indent worth reproducing.
+const INDENT_MIN_PT: f64 = 1.0;

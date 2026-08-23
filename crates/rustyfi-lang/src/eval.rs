@@ -157,6 +157,12 @@ pub struct Interp<'a> {
     /// (`annot.satyh`'s `register-location-frame` idiom): `(DecoId, name)`.
     /// Drained into `DocumentValue::reflow_dests`.
     pub dest_decos: Vec<(rustyfi_backend::DecoId, String)>,
+    /// Each block frame's own decoration at its natural size, box-local —
+    /// see `rustyfi_backend::FrameDecoration`. Recorded by `fire_hooks` and
+    /// drained into `DocumentValue::reflow_frame_decos`, so a renderer with
+    /// no page grid can draw the frame the document actually asked for
+    /// instead of nothing at all. Unread by the PDF path.
+    pub frame_decos: Vec<(rustyfi_backend::DecoId, rustyfi_backend::FrameDecoration)>,
     /// `namedDest.ml`'s key -> "nameddest{N}" sanitizer table: arbitrary
     /// user keys become stable PDF name strings, shared by
     /// register-destination / register-link-to-location / register-outline
@@ -203,6 +209,7 @@ impl<'a> Interp<'a> {
             pending_dests: None,
             link_decos: Vec::new(),
             dest_decos: Vec::new(),
+            frame_decos: Vec::new(),
             dest_names: std::collections::HashMap::new(),
             decos: Vec::new(),
             outer_graphics: Vec::new(),

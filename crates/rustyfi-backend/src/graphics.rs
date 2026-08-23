@@ -197,6 +197,31 @@ pub fn linear_transform_path(mat: (f64, f64, f64, f64), path: &Path) -> Path {
     map_path(path, |p| linear_transform_point(mat, p))
 }
 
+/// One block frame's own decoration, captured at its natural size so a
+/// backend with no page grid can still draw it.
+///
+/// The graphics are BOX-LOCAL (origin at the frame's bottom-left, y up) and
+/// span `width` x `height`, which is what lets a reflowable renderer scale
+/// them to whatever width the reader's window gives the frame. `fire_hooks`
+/// records one per `DecoId` the first time that frame fires as a SINGLE
+/// fragment (`decoS`); a frame split across pages has no whole-frame drawing
+/// and records nothing.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FrameDecoration {
+    pub width: crate::Length,
+    pub height: crate::Length,
+    /// The frame's own paddings, `(left, right, top, bottom)`.
+    ///
+    /// Three of the four are already visible in the flow — `indent_left`
+    /// folds `left` into every contained line's x offset, and the two
+    /// vertical ones arrive as `VertBox::FramePad` — so a reflowing renderer
+    /// needs only `right`, which nothing else records: the content is simply
+    /// laid out narrower, and once the frame is redrawn at the reader's own
+    /// width a right-aligned line lands on its border.
+    pub pads: (crate::Length, crate::Length, crate::Length, crate::Length),
+    pub elems: Vec<GraphicsElem>,
+}
+
 /// `shift-graphics : point -> graphics -> graphics` (vminst.ml:2451) —
 /// `graphicD.ml`'s `shift_element`.
 pub fn shift_graphics(v: Point, elem: &GraphicsElem) -> GraphicsElem {

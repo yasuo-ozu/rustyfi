@@ -123,7 +123,8 @@ use std::collections::{BTreeSet, HashMap};
 use std::fmt::Write as _;
 
 use rustyfi_backend::{
-    AnnotAction, DecoId, DocExtras, FontKey, ImageResource, PageGeometry, VertBox,
+    AnnotAction, DecoId, DocExtras, FontKey, FrameDecoration, GraphicsElem, ImageResource,
+    PageGeometry, VertBox,
 };
 
 use rustyfi_pdf::TtfFontStore;
@@ -221,6 +222,39 @@ pub(crate) struct Ctx<'a> {
     /// space; reset to `None` by opaque boxes (`<svg>`, `<img>`, `<table>`),
     /// which have no last character to speak of.
     pub(crate) last_char: Cell<Option<char>>,
+    /// Whether the last text run written was set in a fixed-pitch face.
+    ///
+    /// This is the only signal in the box stream that distinguishes a line
+    /// boundary the browser should REDO from one it must KEEP. Both arrive as
+    /// two consecutive `VertBox::Line`s with nothing between them: a wrapped
+    /// paragraph and a `+code` block are structurally identical, because
+    /// `code.satyh` calls `line-break` once per source line exactly as the
+    /// line breaker does per wrapped line. Reset to `false` by any
+    /// proportional run, so it means "still inside monospace text".
+    pub(crate) mono_run: Cell<bool>,
+    /// Rules belonging to a table whose own `TabularBox` does not carry them,
+    /// as `(width, height, rules)`.
+    ///
+    /// `easytable` draws a table as TWO overlaid `tabular`s at one anchor:
+    /// one holds the rules over PHANTOM cells, the other the real content and
+    /// no rules at all (its own source shows the shape plainly — `ib-rule`
+    /// and `ib-table`, both `draw-text` into one `inline-graphics`). Rendered
+    /// independently, the rules land on a table with nothing in it — dropped
+    /// as empty — and the visible table comes out with no rules. Pushed by
+    /// `inline.rs`'s text-only graphics path, which is the only place the two
+    /// halves are visible together, and matched back by geometry.
+    pub(crate) tabular_rules: RefCell<Vec<(f64, f64, Vec<GraphicsElem>)>>,
+    /// `DecoId -> the frame's own decoration`, from
+    /// `DocumentValue::reflow_frame_decos`.
+    ///
+    /// A block frame's decoration is a lang-side callback, and this backend
+    /// has no page grid to run it on — which is why `.frame` drew nothing at
+    /// all, and every `stdjabook` title block, `+code` panel and framed
+    /// figure arrived as bare text. `fire_hooks` already runs the callback
+    /// for the PDF path; this is the same graphics, recorded box-local at the
+    /// frame's natural size so it can be SCALED to whatever width the reader
+    /// gives it rather than replayed at a fixed one.
+    pub(crate) frame_decos: HashMap<DecoId, &'a FrameDecoration>,
     /// Footnote bodies whose reference marker has been emitted but whose
     /// text has not yet been placed. `block.rs`'s `flush_para` drains this
     /// immediately after closing the referencing paragraph — see this
@@ -275,6 +309,18 @@ impl Ctx<'_> {
         self.used_fonts.borrow_mut().insert(file_idx);
         let family = store.file_family_name(file_idx)?;
         Some(crate::fonts::reflow_font_stack(&family))
+    }
+
+    /// Whether `font` is a fixed-pitch face. Unlike [`Ctx::font_family_for`]
+    /// this does NOT mark the file used: asking what a face IS must not pull
+    /// it into the document's font set.
+    pub(crate) fn is_monospace(&self, font: Option<FontKey>) -> bool {
+        let (Some(store), Some(font)) = (self.fonts, font) else {
+            return false;
+        };
+        store
+            .file_family_name(store.file_index(font))
+            .is_some_and(|f| crate::fonts::is_monospace_family(&f))
     }
 
     /// Record that a glue box of `natural_pt` natural width stands here.
@@ -382,7 +428,22 @@ pub fn render_html_reflow(
     links: &[(DecoId, AnnotAction)],
     dests: &[(DecoId, String)],
 ) -> Result<String, HtmlError> {
-    render_html_reflow_impl(source, geometry, images, extras, links, dests, None)
+    render_html_reflow_impl(source, geometry, images, extras, links, dests, &[], None)
+}
+
+/// [`render_html_reflow`] plus the frame decorations
+/// (`DocumentValue::reflow_frame_decos`), so framed blocks draw their own
+/// decoration instead of nothing.
+pub fn render_html_reflow_with_decos(
+    source: Option<&[VertBox]>,
+    geometry: &PageGeometry,
+    images: &[ImageResource],
+    extras: &DocExtras,
+    links: &[(DecoId, AnnotAction)],
+    dests: &[(DecoId, String)],
+    frame_decos: &[(DecoId, FrameDecoration)],
+) -> Result<String, HtmlError> {
+    render_html_reflow_impl(source, geometry, images, extras, links, dests, frame_decos, None)
 }
 
 /// Same as [`render_html_reflow`], but rendering under a real
@@ -400,7 +461,32 @@ pub fn render_html_reflow_ttf_with(
     links: &[(DecoId, AnnotAction)],
     dests: &[(DecoId, String)],
 ) -> Result<String, HtmlError> {
-    render_html_reflow_impl(source, geometry, images, extras, links, dests, Some(store))
+    render_html_reflow_impl(source, geometry, images, extras, links, dests, &[], Some(store))
+}
+
+/// [`render_html_reflow_ttf_with`] plus the frame decorations — the
+/// full-fidelity entry point the CLI uses.
+#[allow(clippy::too_many_arguments)]
+pub fn render_html_reflow_ttf_with_decos(
+    source: Option<&[VertBox]>,
+    geometry: &PageGeometry,
+    store: &TtfFontStore,
+    images: &[ImageResource],
+    extras: &DocExtras,
+    links: &[(DecoId, AnnotAction)],
+    dests: &[(DecoId, String)],
+    frame_decos: &[(DecoId, FrameDecoration)],
+) -> Result<String, HtmlError> {
+    render_html_reflow_impl(
+        source,
+        geometry,
+        images,
+        extras,
+        links,
+        dests,
+        frame_decos,
+        Some(store),
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -411,6 +497,7 @@ fn render_html_reflow_impl(
     extras: &DocExtras,
     links: &[(DecoId, AnnotAction)],
     dests: &[(DecoId, String)],
+    frame_decos: &[(DecoId, FrameDecoration)],
     font_store: Option<&TtfFontStore>,
 ) -> Result<String, HtmlError> {
     // One read-only pass over the flow before anything is written: which
@@ -435,6 +522,9 @@ fn render_html_reflow_impl(
         body: body_style,
         pending_glue: Cell::new(None),
         last_char: Cell::new(None),
+        mono_run: Cell::new(false),
+        tabular_rules: RefCell::new(Vec::new()),
+        frame_decos: frame_decos.iter().map(|(id, d)| (*id, d)).collect(),
         footnotes: RefCell::new(Vec::new()),
         footnote_seq: Cell::new(0),
         shared_images: RefCell::new(Vec::new()),

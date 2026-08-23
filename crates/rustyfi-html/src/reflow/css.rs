@@ -21,17 +21,20 @@
 //! scales the whole document by changing one number rather than fighting a
 //! per-run absolute point size.
 //!
-//! ## What this stylesheet deliberately does NOT draw
+//! ## Why `.frame` has no border of its own
 //!
-//! `.frame` has no border. A `FrameStart`/`FrameEnd` pair is
-//! `block-frame-breakable`, which real packages use for section bodies, list
-//! items, figure wrappers and quotation blocks as readily as for anything
-//! that actually has a rule around it — the `enumitem` manual alone opens
-//! 336 of them. The decoration that would say which is which is a lang-side
-//! callback this backend cannot run, so drawing a box around every one
-//! turned the page into nested rounded rectangles. It stays a semantic
-//! grouping element with margins, and the class remains for anyone who wants
-//! to restyle it.
+//! A `FrameStart`/`FrameEnd` pair is `block-frame-breakable`, which real
+//! packages use for section bodies, list items, figure wrappers and
+//! quotation blocks as readily as for anything that actually has a rule
+//! around it — the `enumitem` manual alone opens 336 of them. Drawing a box
+//! around every one turned the page into nested rounded rectangles.
+//!
+//! What distinguishes them is the frame's own decoration, and that IS now
+//! drawn: `fire_hooks` records each one box-local
+//! (`DocumentValue::reflow_frame_decos`), and `structure::frame_decoration`
+//! turns it into a `background` or a scalable `<svg>` under `.frame.framed`.
+//! So a frame that draws nothing still draws nothing, and one that draws a
+//! title box keeps it.
 
 use std::fmt::Write as _;
 
@@ -85,6 +88,28 @@ body {{\n\
 .para[data-align=\"center\"] {{ text-align: center; }}\n\
 .para[data-align=\"right\"] {{ text-align: right; }}\n\
 .frame {{ margin: 0.6em 0; }}\n\
+/* A frame that DREW something: the drawing is a sibling SVG stretched\n\
+   over the whole box, so the box has to be its containing block.\n\
+   No padding of its own: the frame's left padding is already folded into\n\
+   the contained lines' own offsets (`indent_left`) and its vertical ones\n\
+   arrive as `FramePad` skips, so adding CSS padding here would double all\n\
+   three. Only `padding-right`, which nothing else records, is written — per\n\
+   frame, from its real value. */\n\
+.frame.framed {{ position: relative; }}\n\
+/* Content sits ABOVE the drawing. `:not(.frame-deco)` is load-bearing:\n\
+   `.frame.framed > *` outranks `svg.frame-deco` on specificity, so without\n\
+   it the decoration is pulled into normal flow and every framed block\n\
+   renders as an empty box with its content underneath. */\n\
+.frame.framed > *:not(.frame-deco) {{ position: relative; }}\n\
+.frame.framed > svg.frame-deco {{\n\
+  position: absolute;\n\
+  left: 0;\n\
+  top: 0;\n\
+  width: 100%;\n\
+  height: 100%;\n\
+  overflow: visible;\n\
+  pointer-events: none;\n\
+}}\n\
 .embed {{ margin: 0.5em 0; }}\n\
 .iframe {{ display: inline; }}\n\
 .hskip {{ display: inline-block; }}\n\
@@ -145,10 +170,21 @@ table.tabular {{\n\
   margin: 1em auto;\n\
   max-width: 100%;\n\
 }}\n\
+/* No border here: which grid lines a table draws is the DOCUMENT's, read\n\
+   off `TabularBox::rules` and written per cell (`structure.rs`'s `Borders`).\n\
+   A blanket rule turned every booktabs-style table into a full grid.\n\
+   No padding either — the cell's own margins arrive as real `hskip` struts\n\
+   inside it, so a CSS pad would be added on top of them. */\n\
 table.tabular td {{\n\
-  border: 1px solid rgba(127,127,127,0.4);\n\
-  padding: 0.3em 0.6em;\n\
+  padding: 0.15em 0;\n\
   vertical-align: baseline;\n\
+}}\n\
+/* Fixed-pitch text: upstream's line breaks are the author's and survive as\n\
+   a hard break, so justification and hyphenation must not fight them. */\n\
+.para.code {{\n\
+  text-align: left;\n\
+  hyphens: none;\n\
+  overflow-x: auto;\n\
 }}\n\
 ul.list, ol.list {{\n\
   margin: 0 0 1em 0;\n\

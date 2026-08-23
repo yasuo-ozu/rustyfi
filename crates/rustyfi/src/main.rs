@@ -391,7 +391,7 @@ fn cmd_compile(m: &ArgMatches) -> anyhow::Result<()> {
         // become real `<a href>`s. Mirrors the arm above for the font-store
         // branch.
         format::OutputFormat::Html => match &font_store {
-            Some(store) => rustyfi_html::render_html_reflow_ttf_with(
+            Some(store) => rustyfi_html::render_html_reflow_ttf_with_decos(
                 doc.reflow_source.as_deref(),
                 &doc.geometry,
                 store,
@@ -399,15 +399,17 @@ fn cmd_compile(m: &ArgMatches) -> anyhow::Result<()> {
                 &doc.extras,
                 &doc.reflow_links,
                 &doc.reflow_dests,
+                &doc.reflow_frame_decos,
             )?
             .into_bytes(),
-            None => rustyfi_html::render_html_reflow(
+            None => rustyfi_html::render_html_reflow_with_decos(
                 doc.reflow_source.as_deref(),
                 &doc.geometry,
                 &doc.images,
                 &doc.extras,
                 &doc.reflow_links,
                 &doc.reflow_dests,
+                &doc.reflow_frame_decos,
             )?
             .into_bytes(),
         },

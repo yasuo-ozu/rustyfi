@@ -266,6 +266,7 @@ fn hook_page_break_block_fires_through_chop_page_and_fire_hooks() {
         reflow_source: None,
         reflow_links: Vec::new(),
         reflow_dests: Vec::new(),
+        reflow_frame_decos: Vec::new(),
     };
     rustyfi_lang::fire_hooks(&mut interp, &doc).expect("fire_hooks should succeed");
     assert_eq!(

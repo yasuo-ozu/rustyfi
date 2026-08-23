@@ -414,6 +414,7 @@ fn emit_run(out: &mut String, info: &HorzStringInfo, text: &str, ctx: &Ctx) {
     }
     ctx.resolve_glue(out, text.chars().next());
     ctx.last_char.set(text.chars().next_back());
+    ctx.mono_run.set(ctx.is_monospace(Some(info.font)));
 
     let mut style = String::new();
     if !ctx.body.matches(info.font, info.size.0) {
@@ -613,6 +614,24 @@ fn emit_graphics_box(
     if elems.is_empty() {
         return;
     }
+    // A graphics box whose every element is a `draw-text` DRAWS nothing: the
+    // `<svg>` comes out with an empty `<g>` and all the content goes to
+    // `nested`. Emitting the wrapper anyway reserved the box's full size a
+    // second time, on top of the content's own — `easytable` wraps each table
+    // in exactly this shape, and every table in a document arrived under a
+    // table-sized rectangle of blank space.
+    if elems.iter().all(is_pure_text) {
+        // The overlaid halves of one table are visible together only here —
+        // see `Ctx::tabular_rules`. Collect any rules-only tabular's rules
+        // before emitting, and drop them again after, so the pairing can
+        // never reach an unrelated table later in the document.
+        let pushed = collect_overlaid_rules(elems, ctx);
+        let mut nested = String::new();
+        emit_text_only(&mut nested, elems, ctx);
+        ctx.tabular_rules.borrow_mut().truncate(pushed);
+        out.push_str(&nested);
+        return;
+    }
     open_opaque(out, ctx);
     let total_h = height + depth;
     let _ = write!(
@@ -634,6 +653,69 @@ fn emit_graphics_box(
     );
     out.push_str(&nested);
     out.push_str("</span>\n");
+}
+
+/// Whether `elem` contributes no ink of its own — a `draw-text`, or a group
+/// containing only those. `Group`/`Clip` recurse so a `unite-graphics` of
+/// text runs is recognised too.
+fn is_pure_text(elem: &GraphicsElem) -> bool {
+    match elem {
+        GraphicsElem::Text { .. } => true,
+        GraphicsElem::Group(inner) | GraphicsElem::Clip(_, inner) => inner.iter().all(is_pure_text),
+        _ => false,
+    }
+}
+
+/// Record every rules-bearing `Tabular` in this overlay on
+/// [`Ctx::tabular_rules`], returning the stack depth to truncate back to.
+fn collect_overlaid_rules(elems: &[GraphicsElem], ctx: &Ctx) -> usize {
+    let base = ctx.tabular_rules.borrow().len();
+    walk_tabulars(elems, &mut |tab| {
+        if !tab.rules.is_empty() {
+            ctx.tabular_rules.borrow_mut().push((
+                tab.width.0,
+                tab.height.0,
+                tab.rules.clone(),
+            ));
+        }
+    });
+    base
+}
+
+/// Visit every `Tabular` reachable through a text-only graphics group's
+/// nested boxes.
+fn walk_tabulars(elems: &[GraphicsElem], f: &mut impl FnMut(&rustyfi_backend::TabularBox)) {
+    for elem in elems {
+        match elem {
+            GraphicsElem::Text { contents, .. } => {
+                for (_, bx) in contents {
+                    if let PureHorzBox::Tabular(tab) = bx {
+                        f(tab);
+                    }
+                }
+            }
+            GraphicsElem::Group(inner) | GraphicsElem::Clip(_, inner) => walk_tabulars(inner, f),
+            _ => {}
+        }
+    }
+}
+
+/// The counterpart of [`is_pure_text`]: emit those runs' contents inline, in
+/// document order, with no wrapper of their own.
+fn emit_text_only(out: &mut String, elems: &[GraphicsElem], ctx: &Ctx) {
+    for elem in elems {
+        match elem {
+            GraphicsElem::Text { contents, .. } => {
+                for (_, cbx) in contents {
+                    emit_nested_text(out, cbx, ctx);
+                }
+            }
+            GraphicsElem::Group(inner) | GraphicsElem::Clip(_, inner) => {
+                emit_text_only(out, inner, ctx)
+            }
+            _ => {}
+        }
+    }
 }
 
 /// `draw-text`'s nested boxes, rendered for the reflow backend.

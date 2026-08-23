@@ -4,8 +4,8 @@ use crate::compile::CompiledExpr;
 use crate::primitives::PrimDef;
 use crate::quoted::{BText, IText, MathElem};
 use rustyfi_backend::{
-    AnnotAction, Color, Context, DecoId, DocExtras, HorzBox, HyphenLang, ImageId, ImageResource,
-    Length, MathCharClass, MathKind, Page, PageGeometry, VertBox,
+    AnnotAction, Color, Context, DecoId, DocExtras, FrameDecoration, HorzBox, HyphenLang, ImageId,
+    ImageResource, Length, MathCharClass, MathKind, Page, PageGeometry, VertBox,
 };
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
@@ -408,6 +408,12 @@ pub struct DocumentValue {
     /// Same idea as `reflow_links`, for `register-destination`
     /// (`annot.satyh`'s `register-location-frame` idiom): `(DecoId, name)`.
     pub reflow_dests: Vec<(DecoId, String)>,
+    /// Each block frame's own decoration at its natural size, box-local
+    /// (`FrameDecoration`). Same provenance and lifetime as `reflow_dests`:
+    /// filled by `fire_hooks`, drained by `eval_document_trials`, read only
+    /// by the reflowable HTML backend — which has no page grid and so cannot
+    /// re-run a deco callback itself.
+    pub reflow_frame_decos: Vec<(DecoId, FrameDecoration)>,
 }
 
 /// FxHash — the fast, NON-cryptographic hasher `rustc` uses (rustc-hash),

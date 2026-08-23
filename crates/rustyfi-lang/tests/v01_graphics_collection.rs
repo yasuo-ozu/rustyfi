@@ -480,6 +480,7 @@ fn deco_callback_result_coerces_per_version_when_fired() {
             reflow_source: None,
             reflow_links: Vec::new(),
             reflow_dests: Vec::new(),
+            reflow_frame_decos: Vec::new(),
         }
     }
 

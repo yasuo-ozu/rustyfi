@@ -451,22 +451,44 @@ fn reflow_output_never_uses_absolute_positioning() {
     ];
     let html = render(&vboxes);
 
+    // The CONTENT never positions anything. This is the invariant that
+    // matters: no run, paragraph, frame or table is placed at a coordinate.
+    let body = body_of(&html);
     assert!(
-        !html.contains("position:absolute") && !html.contains("position: absolute"),
-        "reflow output must never use position:absolute:\n{html}"
+        !body.contains("position:absolute") && !body.contains("position: absolute"),
+        "reflow content must never use position:absolute:\n{body}"
+    );
+    // The STYLESHEET has exactly one absolute rule, and it is a DRAWING
+    // layer, not page positioning: a framed block's decoration is stretched
+    // over its own relatively-positioned box (`css.rs`'s `svg.frame-deco`,
+    // the same licence the inline `svg`/math wrappers already have — see
+    // this module's doc comment). Pinned by count so a second one cannot
+    // arrive unnoticed.
+    let sheet = html.split("<style>").nth(1).expect("a stylesheet");
+    let sheet = sheet.split("</style>").next().unwrap();
+    assert_eq!(
+        sheet.matches("position: absolute").count()
+            + sheet.matches("position:absolute").count(),
+        1,
+        "unexpected absolute positioning in the stylesheet:\n{sheet}"
+    );
+    assert!(
+        sheet.contains("svg.frame-deco"),
+        "the one absolute rule should be the decoration layer:\n{sheet}"
     );
     // `top:`/`left:` are allowed only as the tail of a flow-safe longhand
     // (`margin-top`, `border-top`, `padding-left`, … — used by the static
     // `.clearpage`/`aside.footnote`/`nav.toc` stylesheet rules, `css.rs`),
-    // never as the bare positioned `top`/`left` property.
+    // never as the bare positioned `top`/`left` property — except inside
+    // that one decoration rule.
     for prop in ["top:", "left:"] {
-        for (idx, _) in html.match_indices(prop) {
-            let before = &html[..idx];
+        for (idx, _) in body.match_indices(prop) {
+            let before = &body[..idx];
             assert!(
                 ["margin-", "border-", "padding-", "-"]
                     .iter()
                     .any(|p| before.ends_with(p)),
-                "found a bare `{prop}` CSS declaration at byte {idx}:\n{html}"
+                "found a bare `{prop}` CSS declaration at byte {idx}:\n{body}"
             );
         }
     }
@@ -1678,4 +1700,427 @@ fn output_fetches_nothing_and_runs_nothing() {
             "output must be self-contained, found {forbidden}:\n{html}"
         );
     }
+}
+
+// ============================================================================
+// Constructs that reached the browser looking nothing like the PDF: code
+// blocks, indentation, and table rules. Each of the four was reported against
+// a real document, and each has a single cause named in the test below.
+// ============================================================================
+
+/// A straight horizontal or vertical line, for a table rule.
+fn rule_line(x0: f64, y0: f64, x1: f64, y1: f64, width: f64) -> GraphicsElem {
+    GraphicsElem::Stroke(
+        Length::pt(width),
+        Color::Gray(0.0),
+        Path {
+            subpaths: vec![Subpath {
+                start: (Length::pt(x0), Length::pt(y0)),
+                segs: vec![PathSeg::Line((Length::pt(x1), Length::pt(y1)))],
+                closing: Closing::Open,
+            }],
+        },
+    )
+}
+
+fn grid_cell(x: f64, y: f64, text: &str) -> TabularCellBox {
+    TabularCellBox {
+        x: Length::pt(x),
+        baseline_y: Length::pt(y),
+        contents: vec![(Length::ZERO, text_run(text))],
+    }
+}
+
+/// A two-row grid with cells at x = 0/20 and baselines DESCENDING (row 0
+/// above row 1), matching `Solved::ys`.
+fn two_by_two(rules: Vec<GraphicsElem>) -> TabularBox {
+    TabularBox {
+        width: Length::pt(40.0),
+        height: Length::pt(20.0),
+        depth: Length::ZERO,
+        cells: vec![
+            grid_cell(0.0, 14.0, "R0C0"),
+            grid_cell(20.0, 14.0, "R0C1"),
+            grid_cell(0.0, 4.0, "R1C0"),
+            grid_cell(20.0, 4.0, "R1C1"),
+        ],
+        rules,
+    }
+}
+
+/// A line whose boxes carry an x offset — what `primitives.rs`'s
+/// `indent_left` leaves behind for a `block-frame-breakable`'s `pad_l`.
+fn indented_line(x: f64, text: &str) -> VertBox {
+    VertBox::Line {
+        height: Length::pt(9.0),
+        depth: Length::pt(2.0),
+        leading: Length::pt(12.0),
+        contents: vec![(Length::pt(x), text_run(text))],
+    }
+}
+
+/// A `block-frame-breakable`'s left padding exists ONLY as the x offset
+/// `indent_left` folded into each contained line — no marker carries it. The
+/// walker discards x everywhere else, so an `enumitem` list, which indents
+/// purely this way, came out with every level flush left.
+#[test]
+fn frame_left_padding_survives_as_a_margin_left() {
+    let out = render(&[indented_line(36.0, "nested item")]);
+    let html = body_of(&out);
+    assert!(
+        html.contains("margin-left:36pt;"),
+        "indentation lost:\n{html}"
+    );
+}
+
+/// The control: an unindented paragraph must gain no margin at all, and a
+/// sub-point offset is a kern, not an indent.
+#[test]
+fn an_unindented_paragraph_gets_no_margin_left() {
+    let flush = render(&[text_line("flush left")]);
+    let kerned = render(&[indented_line(0.4, "still flush left")]);
+    for html in [body_of(&flush), body_of(&kerned)] {
+        assert!(
+            !html.contains("margin-left"),
+            "spurious indent:\n{html}"
+        );
+    }
+}
+
+/// A CENTRED line's content sits at a large x — that is the alignment
+/// offset, not an indent, and `data-align` already carries it. Reading it as
+/// an indent pushed every centred table 163pt to the right AND kept it
+/// centred within what remained.
+#[test]
+fn a_centred_line_reports_no_indent() {
+    let vboxes = vec![VertBox::Line {
+        height: Length::pt(9.0),
+        depth: Length::pt(2.0),
+        leading: Length::pt(12.0),
+        contents: vec![
+            (Length::ZERO, PureHorzBox::OuterFil),
+            (Length::pt(60.0), text_run("centred")),
+            (Length::pt(100.0), PureHorzBox::OuterFil),
+        ],
+    }];
+    let out = render(&vboxes);
+    let html = body_of(&out);
+    assert!(
+        html.contains("data-align=\"center\""),
+        "lost the centring:\n{html}"
+    );
+    assert!(
+        !html.contains("margin-left"),
+        "alignment offset misread as an indent:\n{html}"
+    );
+}
+
+/// Which grid lines a table draws is the DOCUMENT's business, carried by
+/// `TabularBox::rules`. A blanket `td { border }` rendered `easytable`'s
+/// three-rule booktabs look as a full grid. Here: one rule above row 0 and
+/// nothing else.
+#[test]
+fn table_rules_become_per_cell_borders_and_nothing_else_does() {
+    let tab = two_by_two(vec![rule_line(0.0, 20.0, 40.0, 20.0, 1.0)]);
+    let out = render(&[line(PureHorzBox::Tabular(tab))]);
+    let html = body_of(&out);
+
+    assert_eq!(
+        html.matches("border-top:1pt solid").count(),
+        2,
+        "expected the rule on both cells of row 0 only:\n{html}"
+    );
+    assert!(
+        !html.contains("border-left") && !html.contains("border-right"),
+        "invented a vertical rule the document never drew:\n{html}"
+    );
+    assert!(
+        !html.contains("border-bottom"),
+        "invented a bottom rule:\n{html}"
+    );
+}
+
+/// A vertical rule lands on a column boundary, as `border-left`.
+#[test]
+fn a_vertical_rule_becomes_a_column_border() {
+    let tab = two_by_two(vec![rule_line(20.0, 0.0, 20.0, 20.0, 0.5)]);
+    let out = render(&[line(PureHorzBox::Tabular(tab))]);
+    let html = body_of(&out);
+    assert_eq!(
+        html.matches("border-left:0.5pt solid").count(),
+        2,
+        "expected the rule left of column 1, on both rows:\n{html}"
+    );
+    assert!(!html.contains("border-top"), "misread as horizontal:\n{html}");
+}
+
+/// A table with no rules gets no borders — the stylesheet must not supply
+/// one of its own.
+#[test]
+fn a_ruleless_table_draws_no_borders() {
+    let out = render(&[line(PureHorzBox::Tabular(two_by_two(vec![])))]);
+    let html = body_of(&out);
+    assert!(
+        !html.contains("border-"),
+        "a table the document left unruled gained borders:\n{html}"
+    );
+}
+
+/// `easytable` draws a table as TWO overlaid `tabular`s in one
+/// `inline-graphics`: rules over phantom cells, then content with no rules.
+/// Rendered independently the rules were dropped with the empty table and the
+/// visible one came out bare. See `Ctx::tabular_rules`.
+#[test]
+fn overlaid_rule_and_content_tabulars_are_paired() {
+    let phantom = TabularBox {
+        cells: two_by_two(vec![])
+            .cells
+            .into_iter()
+            .map(|c| TabularCellBox {
+                contents: vec![],
+                ..c
+            })
+            .collect(),
+        ..two_by_two(vec![rule_line(0.0, 20.0, 40.0, 20.0, 1.0)])
+    };
+    let overlay = PureHorzBox::Graphics {
+        width: Length::pt(40.0),
+        height: Length::pt(20.0),
+        depth: Length::ZERO,
+        origin_independent: false,
+        elems: vec![
+            draw_text(PureHorzBox::Tabular(phantom)),
+            draw_text(PureHorzBox::Tabular(two_by_two(vec![]))),
+        ],
+    };
+    let out = render(&[line(overlay)]);
+    let html = body_of(&out);
+
+    assert_eq!(
+        html.matches("<table").count(),
+        1,
+        "the phantom half must not render as a table of its own:\n{html}"
+    );
+    assert!(html.contains("R0C0"), "lost the content half:\n{html}");
+    assert_eq!(
+        html.matches("border-top:1pt solid").count(),
+        2,
+        "the rules did not reach the visible table:\n{html}"
+    );
+}
+
+/// A graphics box whose every element is a `draw-text` draws NOTHING: its
+/// `<svg>` comes out with an empty `<g>`. Emitting the sized wrapper anyway
+/// reserved the box's full extent a second time, on top of the content's own
+/// — every `easytable` table sat under a table-sized rectangle of blank space.
+#[test]
+fn a_text_only_graphics_box_emits_no_sized_wrapper() {
+    let overlay = PureHorzBox::Graphics {
+        width: Length::pt(40.0),
+        height: Length::pt(20.0),
+        depth: Length::ZERO,
+        origin_independent: false,
+        elems: vec![draw_text(text_run("drawn text"))],
+    };
+    let out = render(&[line(overlay)]);
+    let html = body_of(&out);
+    assert!(html.contains("drawn text"), "lost the content:\n{html}");
+    assert!(
+        !html.contains("class=\"gfx\""),
+        "emitted a wrapper for a box that draws nothing:\n{html}"
+    );
+    // The control: a box that DOES draw keeps its wrapper.
+    let drawn = PureHorzBox::Graphics {
+        width: Length::pt(40.0),
+        height: Length::pt(20.0),
+        depth: Length::ZERO,
+        origin_independent: false,
+        elems: vec![rule_line(0.0, 0.0, 40.0, 0.0, 1.0)],
+    };
+    assert!(
+        render(&[line(drawn)]).contains("class=\"gfx\""),
+        "a real drawing lost its wrapper"
+    );
+}
+
+fn draw_text(bx: PureHorzBox) -> GraphicsElem {
+    GraphicsElem::Text {
+        pt: (Length::ZERO, Length::ZERO),
+        contents: vec![(Length::ZERO, bx)],
+        width: Length::pt(40.0),
+        height: Length::pt(20.0),
+        depth: Length::ZERO,
+        transform: None,
+    }
+}
+
+/// A `+code` block and a wrapped paragraph are structurally IDENTICAL in the
+/// box stream — both are consecutive `Line`s with nothing between them,
+/// because `code.satyh` calls `line-break` once per source line exactly as
+/// the line breaker does per wrapped line. The face is the only signal that
+/// separates them, so a code block arrived as one long line of proportional
+/// serif: `let rec map f xs = match xs with | [] -> [] | x :: rest -> …`.
+#[test]
+fn a_monospace_paragraph_keeps_its_line_breaks_and_says_so() {
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../lib-rustyfi/dist/fonts/lmmono10-regular.otf");
+    let Ok(store) = rustyfi_pdf::TtfFontStore::load(&path, None, None) else {
+        eprintln!("skipping: {} did not load", path.display());
+        return;
+    };
+    let vboxes = vec![text_line("line one"), text_line("line two")];
+    let html = rustyfi_html::render_html_reflow_ttf_with(
+        Some(&vboxes),
+        &geometry(),
+        &store,
+        &[],
+        &DocExtras::default(),
+        &[],
+        &[],
+    )
+    .expect("reflow HTML rendering must succeed");
+    let body = body_of(&html);
+
+    assert!(body.contains("<br>"), "line break collapsed:\n{body}");
+    assert!(
+        body.contains("class=\"para code\""),
+        "not marked as code, so the stylesheet still justifies it:\n{body}"
+    );
+    assert!(
+        html.contains("monospace"),
+        "no monospace fallback in the stack:\n{html}"
+    );
+    // The control: the same two lines with NO font store rejoin as prose.
+    let prose = render(&vboxes);
+    assert!(
+        !body_of(&prose).contains("<br>"),
+        "a proportional paragraph must still rejoin its lines:\n{prose}"
+    );
+}
+
+/// A block frame's decoration is a lang-side callback, and this backend has
+/// no page grid to run it on — so `.frame` drew NOTHING, and a `stdjabook`
+/// title block, a `+code` panel and every framed figure arrived as bare text.
+/// `fire_hooks` already runs the callback for the PDF; its graphics now reach
+/// here box-local (`DocumentValue::reflow_frame_decos`) and get stretched
+/// over the div.
+#[test]
+fn a_frames_own_decoration_is_drawn_over_it() {
+    let deco = DecoId(7);
+    let decos = vec![(
+        deco,
+        rustyfi_backend::FrameDecoration {
+            width: Length::pt(100.0),
+            height: Length::pt(40.0),
+            pads: (
+                Length::pt(6.0),
+                Length::pt(8.0),
+                Length::pt(4.0),
+                Length::pt(4.0),
+            ),
+            // A stroked outline, so NOT the plain-panel shortcut.
+            elems: vec![rule_line(0.0, 0.0, 100.0, 0.0, 1.0)],
+        },
+    )];
+    let vboxes = vec![
+        VertBox::FrameStart(deco),
+        text_line("inside"),
+        VertBox::FrameEnd(deco),
+    ];
+    let out = rustyfi_html::render_html_reflow_with_decos(
+        Some(&vboxes),
+        &geometry(),
+        &[],
+        &DocExtras::default(),
+        &[],
+        &[],
+        &decos,
+    )
+    .expect("reflow HTML rendering must succeed");
+    let html = body_of(&out);
+
+    assert!(
+        html.contains("class=\"frame framed\""),
+        "the frame is not marked as decorated:\n{html}"
+    );
+    assert!(
+        html.contains("<svg class=\"frame-deco\""),
+        "the decoration was not drawn:\n{html}"
+    );
+    assert!(
+        html.contains("preserveAspectRatio=\"none\""),
+        "the decoration must stretch with the box:\n{html}"
+    );
+    // Only `padding-right` — the other three are already in the flow, as the
+    // contained lines' own x offsets and as `FramePad` skips.
+    assert!(html.contains("padding-right:8pt;"), "{html}");
+    assert!(!html.contains("padding-left"), "{html}");
+    assert!(html.contains("inside"), "lost the frame's content:\n{html}");
+    assert_balanced_tags(&out);
+}
+
+/// A frame that draws NOTHING must still draw nothing — `block-frame-
+/// breakable` is how packages group content, and `enumitem`'s manual alone
+/// opens 336 of them.
+#[test]
+fn an_undecorated_frame_is_left_alone() {
+    let vboxes = vec![
+        VertBox::FrameStart(DecoId(1)),
+        text_line("plain grouping"),
+        VertBox::FrameEnd(DecoId(1)),
+    ];
+    let out = render(&vboxes);
+    let html = body_of(&out);
+    assert!(html.contains("class=\"frame\""), "{html}");
+    assert!(!html.contains("framed"), "invented a decoration:\n{html}");
+    assert!(!html.contains("frame-deco"), "{html}");
+}
+
+/// A decoration that is nothing but a filled rectangle covering the frame —
+/// `+code`'s grey panel, and most highlight boxes — becomes a real
+/// `background`, which is exact at every width and costs no markup.
+#[test]
+fn a_plain_filled_panel_becomes_a_background_not_an_svg() {
+    let deco = DecoId(3);
+    let panel = Path {
+        subpaths: vec![Subpath {
+            start: (Length::ZERO, Length::ZERO),
+            segs: vec![
+                PathSeg::Line((Length::pt(100.0), Length::ZERO)),
+                PathSeg::Line((Length::pt(100.0), Length::pt(40.0))),
+                PathSeg::Line((Length::ZERO, Length::pt(40.0))),
+            ],
+            closing: Closing::Line,
+        }],
+    };
+    let decos = vec![(
+        deco,
+        rustyfi_backend::FrameDecoration {
+            width: Length::pt(100.0),
+            height: Length::pt(40.0),
+            pads: (Length::ZERO, Length::ZERO, Length::ZERO, Length::ZERO),
+            elems: vec![GraphicsElem::Fill(Color::Gray(0.9), panel)],
+        },
+    )];
+    let vboxes = vec![
+        VertBox::FrameStart(deco),
+        text_line("code"),
+        VertBox::FrameEnd(deco),
+    ];
+    let out = rustyfi_html::render_html_reflow_with_decos(
+        Some(&vboxes),
+        &geometry(),
+        &[],
+        &DocExtras::default(),
+        &[],
+        &[],
+        &decos,
+    )
+    .expect("reflow HTML rendering must succeed");
+    let html = body_of(&out);
+    assert!(html.contains("background:"), "no background panel:\n{html}");
+    assert!(
+        !html.contains("frame-deco"),
+        "a flat panel should need no SVG:\n{html}"
+    );
 }

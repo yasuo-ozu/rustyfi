@@ -93,11 +93,26 @@ pub(super) fn reflow_font_stack(family: &str) -> String {
         .chars()
         .filter(|c| !matches!(c, '\'' | '"' | '\\' | '<' | '>'))
         .collect();
-    if SANS_MARKERS.iter().any(|m| lower.contains(m)) {
+    if is_monospace_family(family) {
+        format!("'{safe}', 'DejaVu Sans Mono', Menlo, Consolas, monospace")
+    } else if SANS_MARKERS.iter().any(|m| lower.contains(m)) {
         format!("'{safe}', 'Noto Sans CJK JP', 'Hiragino Sans', sans-serif")
     } else {
         format!("'{safe}', 'Noto Serif CJK JP', 'Hiragino Mincho ProN', Georgia, serif")
     }
+}
+
+/// Whether a family name reads as a fixed-pitch face.
+///
+/// Checked BEFORE the serif/sans split, because the markers overlap: `code.
+/// satyh` sets `lmmono`, and "DejaVu Sans Mono" would otherwise be classified
+/// by its "sans". Getting this wrong is not a fallback nicety — a code block
+/// set in a proportional serif is unreadable as code, and this is also what
+/// tells `block.rs` that a line boundary inside the run is a HARD break.
+pub(super) fn is_monospace_family(family: &str) -> bool {
+    const MONO_MARKERS: [&str; 6] = ["mono", "courier", "consol", "menlo", "typewriter", "teletype"];
+    let lower = family.to_ascii_lowercase();
+    MONO_MARKERS.iter().any(|m| lower.contains(m))
 }
 
 #[cfg(test)]
@@ -123,5 +138,17 @@ mod tests {
         // default for running prose.
         assert!(reflow_font_stack("Junicode").ends_with("serif"));
         assert!(!reflow_font_stack("Junicode").ends_with("sans-serif"));
+    }
+
+    #[test]
+    fn a_fixed_pitch_face_ends_in_monospace_and_beats_the_sans_marker() {
+        // `code.satyh`'s own face, which used to land in the serif stack.
+        let lm = reflow_font_stack("LMMono10");
+        assert!(lm.starts_with("'LMMono10',"), "{lm}");
+        assert!(lm.ends_with("monospace"), "{lm}");
+        // "Sans" appears in the name; "Mono" has to win.
+        assert!(reflow_font_stack("DejaVu Sans Mono").ends_with("monospace"));
+        assert!(!is_monospace_family("Junicode"));
+        assert!(!is_monospace_family("IPAexGothic"));
     }
 }

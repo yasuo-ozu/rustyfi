@@ -688,6 +688,55 @@ fn page_footer_fixture_overflows_to_multiple_pages_with_incrementing_footer_numb
     );
 }
 
+fn compile_float_hook_fixture() -> std::rc::Rc<rustyfi_lang::value::DocumentValue> {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/float-hook.saty");
+    let merged = load_and_merge(&fixture);
+    let metrics = rustyfi_pdf::Base14Metrics;
+    rustyfi_lang::compile_document_cst(&merged, &metrics).expect("float-hook fixture must compile")
+}
+
+/// The FLOATING-FIGURE protocol `stdjareport`/`stdjabook`'s `\figure` is built
+/// out of: a `hook-page-break` pushes the figure onto a `let-mutable` list and
+/// the PAGE-PARTS callback drains it onto a page whose number exceeds the one
+/// the hook recorded. It only works if page N's body hooks have already run
+/// when page N+1's parts callback is applied — upstream's order, since
+/// `add_column_to_page` builds the column's ops (firing `EvVertHookPageBreak`,
+/// handlePdf.ml:336) before `write_page` invokes `pagepartsf` (:465).
+///
+/// Firing every hook AFTER the page loop, which is what this port did, left
+/// the list empty at every read, so no figure was ever emitted, in PDF or
+/// HTML. The load-bearing assertions are both halves of the placement: the
+/// floated content is on page 2 AND absent from page 1 — a hook that fired
+/// too EARLY (before the page it is registered on is complete) would put it
+/// on page 1.
+#[test]
+fn float_hook_fixture_emits_the_floated_block_in_the_next_pages_header() {
+    let doc = compile_float_hook_fixture();
+    assert_eq!(
+        doc.pages.len(),
+        2,
+        "the 40-paragraph body must overflow onto exactly 2 pages, got {}",
+        doc.pages.len()
+    );
+
+    let page1 = rustyfi_pdf::render_pdf(&doc.geometry, &doc.pages[0..1], &doc.images)
+        .expect("page 1 must render");
+    let page2 = rustyfi_pdf::render_pdf(&doc.geometry, &doc.pages[1..2], &doc.images)
+        .expect("page 2 must render");
+    let hay1 = String::from_utf8_lossy(&page1);
+    let hay2 = String::from_utf8_lossy(&page2);
+
+    assert!(
+        hay2.contains("(FLOATED)"),
+        "page 2's header is missing the floated block registered on page 1:\n{hay2}"
+    );
+    assert!(
+        !hay1.contains("(FLOATED)"),
+        "the float must not appear on the page it was registered on \
+         (`pn < pageno` excludes it):\n{hay1}"
+    );
+}
+
 // /Annots + /Dests + /Outlines emission — `annot-hook.saty` reaches
 // them via a raw `hook-page-break` closure (no frame/deco firing needed);
 // `href_fixture_*` below exercises the frame/deco path (`inline-frame-breakable`)

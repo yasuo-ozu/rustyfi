@@ -1,0 +1,61 @@
+% Fixture: the FLOATING-FIGURE protocol, reduced to its skeleton.
+%
+% `stdjareport`/`stdjabook`'s `\figure` puts nothing in the document flow.
+% It registers a `hook-page-break` that pushes `(page-number, block-boxes)`
+% onto a `let-mutable` list, and the PAGE-PARTS callback drains every entry
+% whose recorded page number is LESS than the page being built, emitting it
+% into that page's header. A figure is therefore page furniture, produced
+% during page breaking, and the whole thing rests on page N's body hooks
+% having already run when page N+1's parts callback is applied — which is
+% upstream's order (`add_column_to_page` builds the column's ops, firing
+% `EvVertHookPageBreak` at handlePdf.ml:336, before `write_page` invokes
+% `pagepartsf` at :465).
+%
+% Here the "figure" is the word FLOATED. It is registered on page 1 and must
+% appear in page 2's header, and NOT in page 1's. Fire the hooks after the
+% page loop instead and the list is empty every time it is read, so the word
+% is in neither — which is exactly what this port used to do.
+
+@require: stdja-mini
+
+let ctx = get-initial-context 440pt (command \math)
+
+let-mutable floats <- []
+
+let content pbinfo = (| text-origin = (72pt, 100pt); text-height = 640pt |)
+
+% `stdjareport` writes this with `List.fold-left`; spelled out here so the
+% fixture depends on nothing but `stdja-mini`.
+let-rec drain pageno lst =
+  match lst with
+  | []              -> (block-nil, [])
+  | (pn, bb) :: tl  ->
+      let (bbacc, acc) = drain pageno tl in
+        if pn < pageno then (bb +++ bbacc, acc) else (bbacc, (pn, bb) :: acc)
+
+let parts pbinfo =
+  let pageno = pbinfo#page-number in
+  let (bb-drained, kept) = drain pageno (!floats) in
+  let () = floats <- kept in
+  (| header-origin = (72pt, 60pt);  header-content = bb-drained;
+     footer-origin = (72pt, 800pt); footer-content =
+       line-break true true ctx
+         (inline-fil ++ (read-inline ctx (embed-string (arabic pageno))) ++ inline-fil) |)
+
+% The registration itself: a zero-width hook riding in the body of page 1.
+let register-float =
+  let bb = line-break true true ctx (read-inline ctx {FLOATED} ++ inline-fil) in
+  line-break true true ctx
+    (hook-page-break (fun pbinfo _ -> (
+      floats <- (pbinfo#page-number, bb) :: !floats
+    )))
+
+let-rec repeat n f =
+  if n <= 0 then block-nil
+  else (f n) +++ (repeat (n - 1) f)
+
+let paragraph n =
+  read-block ctx '< +p { This line helps overflow the page. } >
+
+in
+page-break A4Paper content parts (register-float +++ (repeat 40 paragraph))

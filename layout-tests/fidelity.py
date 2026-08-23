@@ -276,6 +276,13 @@ DOCS: list[Doc] = [
         },
     ),
     Doc(
+        "floatfig",
+        "floatfig/floatfig.saty",
+        "",  # hand-written for this port -> self-snapshot mode
+        "stdjareport floating figures: hook-page-break feeding the page-parts callback",
+        {},
+    ),
+    Doc(
         "gakushin",
         "gakushin/dc.saty",
         "",  # no upstream PDF committed -> self-snapshot mode

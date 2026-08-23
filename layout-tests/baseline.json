@@ -113,6 +113,13 @@
     "upstream_pages": 30,
     "page_gap": 0
   },
+  "floatfig": {
+    "pages": 4,
+    "words": 109,
+    "lines": 60,
+    "chars": 1611,
+    "covers": "stdjareport floating figures: hook-page-break feeding the page-parts callback"
+  },
   "gakushin": {
     "pages": 5,
     "words": 125,

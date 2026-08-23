@@ -167,7 +167,15 @@ fn the_full_lifecycle_produces_a_diagnostic_and_exits_cleanly() {
                     },
                     "severity": 1,
                     "source": "rustyfi",
-                    "message": "too many closing",
+                    // The lexer's own words, behind the framing every
+                    // diagnostic in this port now shares. It read
+                    // "too many closing" while this crate rendered lex
+                    // failures itself; it gained the prefix when the reducer
+                    // moved into `rustyfi_syntax::parse_error`, so that the
+                    // editor and the terminal say the same sentence about the
+                    // same file. Position and severity are unchanged, and
+                    // the reason text is still verbatim from the lexer.
+                    "message": "parse error: too many closing",
                 }],
             },
         }),

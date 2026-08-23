@@ -48,6 +48,22 @@ impl syan::span::Span for Span {
     }
 }
 
+/// The largest `char` boundary at or below `byte`, clamped to `src.len()`.
+///
+/// Every consumer of a [`Span`] that wants to *slice* the source needs this:
+/// a span's byte offsets come from the lexer and are boundaries by
+/// construction, but a caller may have widened, clamped or defaulted one, and
+/// slicing a `str` off a boundary panics. Rounding down rather than panicking
+/// is the useful behaviour on both sides — a diagnostic covering one extra
+/// character beats no diagnostic at all.
+pub fn floor_char_boundary(src: &str, mut byte: usize) -> usize {
+    byte = byte.min(src.len());
+    while byte > 0 && !src.is_char_boundary(byte) {
+        byte -= 1;
+    }
+    byte
+}
+
 impl std::fmt::Display for Span {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if self.start.line == self.end.line {

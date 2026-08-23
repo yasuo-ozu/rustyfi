@@ -75,7 +75,6 @@
 //! never forms a rootless static sub-cycle.
 
 use crate::leaf::*;
-use crate::span::Span;
 use newer_type::implement;
 use syan::parse::{Parse, Unparse};
 
@@ -1921,20 +1920,14 @@ pub mod ast {
 /// [`crate::cst::ParseFileError`] (no new error type).
 pub fn parse_file_v1(src: &str) -> Result<FileV1, crate::cst::ParseFileError> {
     let atoms = crate::lexer::lex_with_version(src, crate::version::RustyfiVersion::V0_1)
-        .map_err(|e| crate::cst::ParseFileError {
-            span: e.span,
-            message: e.msg,
-        })?;
+        .map_err(crate::cst::ParseFileError::from_lex)?;
     let mut stream = crate::stream::AtomStream::new(atoms);
-    <FileV1 as Parse<_>>::parse(&mut stream).map_err(|e| crate::cst::ParseFileError {
-        span: *e.span(),
-        message: render_parse_error(&e),
-    })
-}
-
-/// Flatten syan's nested error tree into one readable line. A private copy
-/// of [`crate::cst`]'s identical helper (not `pub(crate)` there, and
-/// `cst.rs` stays untouched — see the module doc comment).
-fn render_parse_error(err: &syan::error::ParseError<Span>) -> String {
-    format!("{err:?}")
+    match <FileV1 as Parse<_>>::parse(&mut stream) {
+        Ok(file) => Ok(file),
+        // The one shared reducer, not the private copy this used to keep: a
+        // 0.1 library is ONE top-level `module` binding, so it is the
+        // generation that most needs the high-water mark. See
+        // [`crate::parse_error`].
+        Err(e) => Err(crate::parse_error::locate(src, &stream, &e)),
+    }
 }

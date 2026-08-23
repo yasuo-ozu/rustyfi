@@ -365,9 +365,9 @@ fn pathological_prefix() -> String {
 /// prefixes of this very file, a release build measured 13 ms at 13,484
 /// bytes, 69 ms at 13,669, 334 ms at 13,853 and **11.5 seconds** at 14,223,
 /// still climbing by roughly x5 per 200 bytes typed. An editor runs this on
-/// nearly every keystroke, so `HighWaterStream`'s serve budget caps it — and
-/// the whole 247-file corpus analyses in 0.56 s with a 30 ms worst case, so
-/// nothing real comes anywhere near the cap.
+/// nearly every keystroke, so `budget::BUDGET` caps it — and the whole
+/// 247-file corpus analyses in 0.56 s with a 30 ms worst case, so nothing real
+/// comes anywhere near the cap.
 ///
 /// The assertion is on the *message*, not on a stopwatch, so it means the
 /// same thing on every machine: reaching the cap is reported as reaching the

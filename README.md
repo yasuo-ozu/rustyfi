@@ -207,10 +207,14 @@ against both rather than guessed at. Measured against every
 are 0.1 — it reports **no diagnostics at all on files that compile**, in 0.56 s
 for the whole set (30 ms worst case).
 
-An analysis is also bounded: the 0.1 grammar backtracks exponentially on some
-half-typed inputs — 11.5 seconds on one 14 KB buffer, and climbing — so the
-server caps how much backtracking one parse may do and says so plainly when it
-hits the cap, rather than freezing the editor.
+An analysis is also bounded: both grammars backtrack exponentially on some
+half-typed inputs — 11.5 seconds on one 14 KB buffer, and climbing — so a parse
+caps how much backtracking it may do and says so plainly when it hits the cap,
+rather than freezing the editor. `rustyfi` itself does the same, with a larger
+cap that scales with the file: a compiler is asked once and can afford to try
+harder than an editor asked on every keystroke, but neither should run forever.
+A parse stopped by the cap is reported as having given up, never as a syntax
+error.
 
 **Type errors** are reported for a document whose program can be resolved. A
 type error in SATySFi is a property of a whole *program*, not of a file — the

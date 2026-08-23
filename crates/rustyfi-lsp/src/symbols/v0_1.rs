@@ -25,10 +25,10 @@ use rustyfi_syntax::Span;
 use syan::span::Spanned;
 
 use super::{many, node_span, opt, qualified_command, Ranges, Sym, Symbol, SymbolKind};
-use crate::high_water::HighWaterStream;
+use rustyfi_syntax::stream::AtomStream;
 
 /// Walk a whole 0.1 buffer.
-pub(super) fn walk(stream: &mut HighWaterStream, r: &Ranges<'_>) -> Vec<Symbol> {
+pub(super) fn walk(stream: &mut AtomStream, r: &Ranges<'_>) -> Vec<Symbol> {
     let mut out = Vec::new();
     for h in many::<v1::HeaderV1>(stream) {
         if let Some(s) = header(&h, r) {
@@ -421,7 +421,7 @@ fn sig_expr_label(s: &ast::SigExpr) -> String {
 /// `cst_v1::ast::Expr`; 0.1 spells `let rec`/`let mutable`/`let open` as two
 /// tokens where 0.0.6 fuses them into one, so the second token is what
 /// discriminates.
-fn spine(stream: &mut HighWaterStream, r: &Ranges<'_>, out: &mut Vec<Symbol>) {
+fn spine(stream: &mut AtomStream, r: &Ranges<'_>, out: &mut Vec<Symbol>) {
     loop {
         let Some(kw) = opt::<KwLet>(stream) else {
             return;

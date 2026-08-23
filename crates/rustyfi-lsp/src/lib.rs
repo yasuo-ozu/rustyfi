@@ -92,8 +92,8 @@
 //! sits under one offset.
 
 mod analysis;
+mod budget;
 mod features;
-mod high_water;
 mod line_index;
 mod model;
 mod symbols;

@@ -398,11 +398,12 @@ fn tempdir(name: &str) -> PathBuf {
 /// The parse budget still governs this tier, because this tier never runs
 /// without a clean parse.
 ///
-/// `high_water.rs` exists because the 0.1 grammar backtracks exponentially on
-/// some half-typed buffers — 11.5 s on the 14 KB prefix below. The loader has
-/// no such budget, so the property that matters is that a buffer which
-/// exhausts the budget is reported and *stops*, rather than being handed to
-/// `rustyfi_loader::load` to be parsed a second time without one.
+/// `budget.rs` caps a parse because the 0.1 grammar backtracks exponentially
+/// on some half-typed buffers — 11.5 s on the 14 KB prefix below. The loader
+/// applies the *compiler's* budget, which is deliberately larger, so the
+/// property that matters is that a buffer which exhausts this crate's budget
+/// is reported and *stops*, rather than being handed to `rustyfi_loader::load`
+/// to be parsed a second time on the compiler's terms.
 #[test]
 fn a_pathological_buffer_never_reaches_the_loader() {
     let path = repo().join("lib-rustyfi/dist-v01/packages/std-ja.satyh");

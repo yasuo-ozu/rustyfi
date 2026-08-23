@@ -21,10 +21,10 @@ use rustyfi_syntax::Span;
 use syan::span::Spanned;
 
 use super::{many, node_span, opt, Ranges, Sym, Symbol, SymbolKind};
-use crate::high_water::HighWaterStream;
+use rustyfi_syntax::stream::AtomStream;
 
 /// Walk a whole 0.0.6 buffer: `header* binding* [in body]`.
-pub(super) fn walk(stream: &mut HighWaterStream, r: &Ranges<'_>) -> Vec<Symbol> {
+pub(super) fn walk(stream: &mut AtomStream, r: &Ranges<'_>) -> Vec<Symbol> {
     let mut out = Vec::new();
     for h in many::<cst::Header>(stream) {
         if let Some(s) = header(&h, r) {
@@ -245,7 +245,7 @@ fn declared_kind(ty: &ast::TypeExpr) -> SymbolKind {
 /// arm mirrors one variant of `cst::ast::Expr`'s `let`-headed family field
 /// for field; anything else ends the spine, which is the common case (the
 /// body is normally `document (| … |) '<…>`).
-fn spine(stream: &mut HighWaterStream, r: &Ranges<'_>, out: &mut Vec<Symbol>) {
+fn spine(stream: &mut AtomStream, r: &Ranges<'_>, out: &mut Vec<Symbol>) {
     loop {
         // `let-rec … and … in`
         if let Some(kw) = opt::<KwLetRec>(stream) {

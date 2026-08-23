@@ -26,7 +26,7 @@
 //! would mean one typo costs the entire outline.
 //!
 //! The same backtracking budget that bounds the diagnostics parse (the
-//! crate-private `high_water` module) bounds this one, and for the same
+//! crate-private `budget` module) bounds this one, and for the same
 //! reason.
 //!
 //! # Ranges
@@ -48,7 +48,7 @@ use rustyfi_syntax::{RustyfiVersion, Span, Token};
 use syan::parse::unparse::{Emitter, Unparse};
 use syan::parse::Parse;
 
-use crate::high_water::HighWaterStream;
+use rustyfi_syntax::stream::AtomStream;
 use crate::line_index::{floor_boundary, LineIndex};
 use crate::Position;
 
@@ -152,7 +152,7 @@ pub fn document_symbols(source: &str, lang: RustyfiVersion) -> Vec<Symbol> {
         return Vec::new();
     }
     let ranges = Ranges(LineIndex::new(source));
-    let mut stream = HighWaterStream::new(atoms);
+    let mut stream = crate::budget::stream(atoms);
     match lang {
         RustyfiVersion::V0_1 => v0_1::walk(&mut stream, &ranges),
         // `RustyfiVersion` is `#[non_exhaustive]`; anything not explicitly
@@ -313,7 +313,7 @@ impl Emitter<Atom> for SpanSink {
 ///
 /// `Option<T>`'s own syan impl is what does the rollback; this only spells
 /// away its `Result<_, Infallible>`.
-pub(crate) fn opt<T: Parse<Atom>>(stream: &mut HighWaterStream) -> Option<T> {
+pub(crate) fn opt<T: Parse<Atom>>(stream: &mut AtomStream) -> Option<T> {
     <Option<T> as Parse<Atom>>::parse_stream(stream)
         .ok()
         .flatten()
@@ -325,7 +325,7 @@ pub(crate) fn opt<T: Parse<Atom>>(stream: &mut HighWaterStream) -> Option<T> {
 /// This is the whole partial-buffer story: syan's repetition impl never
 /// fails, so a half-typed declaration ends the sequence instead of destroying
 /// it.
-pub(crate) fn many<T: Parse<Atom>>(stream: &mut HighWaterStream) -> Vec<T> {
+pub(crate) fn many<T: Parse<Atom>>(stream: &mut AtomStream) -> Vec<T> {
     <Vec<T> as Parse<Atom>>::parse_stream(stream).unwrap_or_default()
 }
 

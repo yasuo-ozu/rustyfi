@@ -160,13 +160,11 @@ impl<'s> LineIndex<'s> {
 /// a diagnostic range that is a character too generous is useful, whereas a
 /// panic in a language server takes the editor's whole diagnostics pane down
 /// with it.
-pub(crate) fn floor_boundary(src: &str, mut byte: usize) -> usize {
-    byte = byte.min(src.len());
-    while byte > 0 && !src.is_char_boundary(byte) {
-        byte -= 1;
-    }
-    byte
-}
+///
+/// Shared with the parser, which needs the identical rule to quote the token a
+/// parse stopped at: two copies could disagree about a clamp and put a
+/// diagnostic's message and its range on different characters.
+pub(crate) use rustyfi_syntax::span::floor_char_boundary as floor_boundary;
 
 /// Where the terminator of the line starting at `start` and ending (exclusive
 /// of the next line's first byte) at `next` begins.

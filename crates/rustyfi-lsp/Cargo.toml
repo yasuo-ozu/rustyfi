@@ -18,11 +18,12 @@ authors.workspace = true
 # single-file elaboration cannot produce honest diagnostics.
 rustyfi-syntax.workspace = true
 # The parser framework `rustyfi-syntax`'s grammar is written in. Needed
-# directly because `rustyfi_syntax::parse_file` flattens syan's error TREE
-# into a `String` with `format!("{err:?}")`, and the tree is what carries the
-# furthest-failure position and the short per-alternative reasons a usable
-# diagnostic needs (`analysis::best_failure`). Not a new crate in this
-# workspace: `rustyfi-syntax` already depends on it.
+# directly because this crate drives the grammar rules itself rather than
+# through `parse_file`: it chooses the generation, keeps the tree, and — for
+# the symbol outline and the semantic model — parses `File`'s fields one at a
+# time so a half-typed buffer still yields everything before the error. All of
+# that is `<T as Parse<_>>::parse`. Not a new crate in this workspace:
+# `rustyfi-syntax` already depends on it.
 syan.workspace = true
 
 # The protocol half only. `serde_json` is already in this workspace's

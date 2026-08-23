@@ -65,7 +65,7 @@ use rustyfi_syntax::span::Span;
 use rustyfi_syntax::{cst, cst_v1, RustyfiVersion};
 use syan::parse::Parse;
 
-use crate::high_water::HighWaterStream;
+use rustyfi_syntax::stream::AtomStream;
 
 // ---------------------------------------------------------------------------
 // Ranges
@@ -762,7 +762,7 @@ impl<'s> Builder<'s> {
     /// or as much of it as recovers. Returns whether the whole file parsed.
     fn parse_and_walk_v006(&mut self, source: &str) -> bool {
         let (atoms, lex_failed) = lex(source, RustyfiVersion::V0_0);
-        let mut stream = HighWaterStream::new(atoms.clone());
+        let mut stream = crate::budget::stream(atoms.clone());
         if !lex_failed {
             if let Ok(file) = <cst::File as Parse<_>>::parse(&mut stream) {
                 self.v006_file(&file);
@@ -773,7 +773,7 @@ impl<'s> Builder<'s> {
         // `Vec<T>` is total (syan's collection impl stops at the first element
         // that fails and returns what it has), so this yields every complete
         // top-level binding before the one being typed.
-        let mut stream = HighWaterStream::new(atoms);
+        let mut stream = crate::budget::stream(atoms);
         let headers = <Vec<cst::Header> as Parse<_>>::parse(&mut stream).unwrap_or_default();
         let prelude = <Vec<cst::TopBinding> as Parse<_>>::parse(&mut stream).unwrap_or_default();
         let text_end = remainder_start(&mut stream, source);
@@ -795,14 +795,14 @@ impl<'s> Builder<'s> {
     /// its headers and, when the expression itself still parses, its body.
     fn parse_and_walk_v01(&mut self, source: &str) -> bool {
         let (atoms, lex_failed) = lex(source, RustyfiVersion::V0_1);
-        let mut stream = HighWaterStream::new(atoms.clone());
+        let mut stream = crate::budget::stream(atoms.clone());
         if !lex_failed {
             if let Ok(file) = <cst_v1::FileV1 as Parse<_>>::parse(&mut stream) {
                 self.v01_file(&file);
                 return true;
             }
         }
-        let mut stream = HighWaterStream::new(atoms);
+        let mut stream = crate::budget::stream(atoms);
         let headers = <Vec<cst_v1::HeaderV1> as Parse<_>>::parse(&mut stream).unwrap_or_default();
         let head = <Option<V01LibraryHead> as Parse<_>>::parse(&mut stream)
             .ok()
@@ -837,7 +837,7 @@ impl<'s> Builder<'s> {
 /// back the element that failed, so the next atom to be served is exactly the
 /// first token of the remainder, whereas the mark remembers how far the failed
 /// attempt reached before it was undone.
-fn remainder_start(stream: &mut HighWaterStream, source: &str) -> usize {
+fn remainder_start(stream: &mut AtomStream, source: &str) -> usize {
     use syan::parse::ParseStream;
     stream
         .peek()

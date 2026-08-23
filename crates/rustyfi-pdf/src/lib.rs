@@ -52,84 +52,37 @@ const FONT_RES_NAMES: [&str; 3] = ["F0", "F1", "F2"];
 /// `include-image` call mints its own `ImageId`, so even when the same file
 /// is also placed normally, the deco's id is distinct and its `/ImN Do`
 /// would dangle.
+///
+/// An `Image` can hide arbitrarily deep: inside a `Tabular` cell, an
+/// `EmbeddedBlock`'s stacked lines, a `Frame`'s contents, a discretionary's
+/// `no_break` slot, or a `draw-text` run nested in a `unite-graphics` group.
+/// This used to be a pair of hand-written mutually recursive scans, and they
+/// had drifted: the box scan's `Graphics` arm inlined its own copy of the
+/// `GraphicsElem::Text` case rather than calling the graphics scan beside it,
+/// so a `draw-text` under a `Group`/`Clip` declared no XObject while
+/// `place_graphics` still emitted its `/ImN Do`. A dangling reference like
+/// that is structurally valid PDF, renders blank, and nothing reports it — so
+/// the enumeration is now `rustyfi_backend::visit`'s generated traversal, and
+/// the single `Image` arm below is the whole of what this function knows
+/// about the shape of the box tree.
 fn used_images(pages: &[Page], overlays: &[Vec<GraphicsElem>]) -> BTreeSet<usize> {
     let mut used = BTreeSet::new();
-    for page in pages {
-        for line in &page.lines {
-            for (_, bx) in &line.contents {
-                scan_box_images(bx, &mut used);
+    {
+        let mut note = |bx: &PureHorzBox| {
+            if let PureHorzBox::Image { image, .. } = bx {
+                used.insert(image.0);
             }
+        };
+        for page in pages {
+            page.visit(&mut note);
         }
-    }
-    for overlay in overlays {
-        for elem in overlay {
-            scan_graphics_images(elem, &mut used);
+        for overlay in overlays {
+            for elem in overlay {
+                elem.visit(&mut note);
+            }
         }
     }
     used
-}
-
-fn scan_graphics_images(elem: &GraphicsElem, used: &mut BTreeSet<usize>) {
-    match elem {
-        GraphicsElem::Text { contents, .. } => {
-            for (_, b) in contents {
-                scan_box_images(b, used);
-            }
-        }
-        GraphicsElem::Group(inner) => {
-            for e in inner {
-                scan_graphics_images(e, used);
-            }
-        }
-        GraphicsElem::Clip(_, inner) => {
-            for e in inner {
-                scan_graphics_images(e, used);
-            }
-        }
-        GraphicsElem::Fill(..) | GraphicsElem::Stroke(..) | GraphicsElem::DashedStroke(..) => {}
-    }
-}
-
-/// An `Image` can also hide inside a `Tabular` cell, an `EmbeddedBlock`'s
-/// stacked lines, a `Frame`'s contents, or a `draw-text` run's
-/// `GraphicsElem::Text` contents.
-fn scan_box_images(bx: &PureHorzBox, used: &mut BTreeSet<usize>) {
-    match bx {
-        PureHorzBox::Image { image, .. } => {
-            used.insert(image.0);
-        }
-        PureHorzBox::Frame { contents, .. } => {
-            for (_, b) in contents {
-                scan_box_images(b, used);
-            }
-        }
-        PureHorzBox::Graphics { elems, .. } => {
-            for elem in elems {
-                if let GraphicsElem::Text { contents, .. } = elem {
-                    for (_, b) in contents {
-                        scan_box_images(b, used);
-                    }
-                }
-            }
-        }
-        PureHorzBox::Tabular(tab) => {
-            for cell in &tab.cells {
-                for (_, b) in &cell.contents {
-                    scan_box_images(b, used);
-                }
-            }
-        }
-        PureHorzBox::EmbeddedBlock { block, .. } => {
-            for vb in block {
-                if let VertBox::Line { contents, .. } = vb {
-                    for (_, b) in contents {
-                        scan_box_images(b, used);
-                    }
-                }
-            }
-        }
-        _ => {}
-    }
 }
 
 /// The PDF resource name for image `id` (e.g. `Im3`) — used verbatim by both

@@ -276,6 +276,55 @@ fn graphics_box_renders_svg_path_with_fill_and_stroke() {
     );
 }
 
+/// A `draw-text` run's `<span>`s must be emitted AFTER the `</svg>`, never
+/// inside it — and everything the drawing has left must still be inside.
+///
+/// `span` is on the HTML parser's foreign-content breakout list, so a
+/// `<span>` written inside an `<svg>` closes the `<svg>` where it stands
+/// and every element after it is parsed as ordinary HTML. That is not a
+/// well-formedness nicety: 16 of `latexcmds`' 208 `--format html-fixed`
+/// `<path>`s were landing outside their drawing and not rendering at all,
+/// and the source looked perfectly good — it is valid XML. Nothing moves
+/// as a result of the fix: these boxes carry page-absolute coordinates.
+#[test]
+fn a_draw_text_runs_spans_are_emitted_after_the_svg_not_inside_it() {
+    let bx = PureHorzBox::Graphics {
+        origin_independent: false,
+        width: Length::pt(20.0),
+        height: Length::pt(20.0),
+        depth: Length::ZERO,
+        elems: vec![
+            GraphicsElem::Text {
+                pt: (Length::pt(2.0), Length::pt(3.0)),
+                contents: vec![(Length::ZERO, text_run("NESTED"))],
+                width: Length::pt(20.0),
+                height: Length::pt(20.0),
+                depth: Length::ZERO,
+                transform: None,
+            },
+            // Written AFTER the text, so a breakout would eject it.
+            GraphicsElem::Fill(Color::Rgb(0.0, 1.0, 0.0), rectangle_path()),
+        ],
+    };
+    let html = render(&page_with_run(bx));
+    let open = html.find("<svg").expect("no <svg> emitted");
+    let close = html.find("</svg>").expect("unclosed <svg>");
+    let body = &html[open..close];
+    assert!(
+        !body.contains("NESTED"),
+        "a draw-text run's HTML is inside the <svg>; the browser will \
+         close the <svg> there and drop the rest of the drawing:\n{body}"
+    );
+    assert!(
+        body.contains("fill=\"rgb(0,255,0)\""),
+        "the element written after the draw-text left the <svg>:\n{body}"
+    );
+    assert!(
+        html[close..].contains("NESTED"),
+        "the draw-text run's content vanished entirely:\n{html}"
+    );
+}
+
 #[test]
 fn cmyk_fill_converts_to_rgb() {
     // Pure CMYK cyan (C=1, everything else 0) should drop the red channel

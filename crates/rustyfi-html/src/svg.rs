@@ -42,6 +42,19 @@
 //! documented divergence from the PDF writer's `place_graphics` (whose
 //! `emit_nested` callback runs INSIDE the `q`/`cm` block precisely because
 //! PDF text ops DO compose with the CTM).
+//!
+//! **"OUTSIDE" is enforced HERE, not left to the caller.** The callback is
+//! handed a SIDE buffer that [`emit_graphics`] appends after its own
+//! `</svg>`, never the `out` the drawing is going into. An HTML element
+//! inside `<svg>` and outside a `<foreignObject>` is not merely unusual, it
+//! ends the parser's foreign-content insertion mode: `span` is on the HTML
+//! parser's own breakout list, so the browser CLOSES the `<svg>` at the
+//! first nested run and every element after it lands outside the drawing
+//! and never renders. That was measurable — 16 of `latexcmds`' 208
+//! `--format html-fixed` `<path>`s were parsed clean out of their `<svg>`
+//! — and invisible in the source, which is well-formed XML. Placement is
+//! unaffected: the nested boxes carry absolute coordinates of their own, so
+//! where in the DOM they sit does not move them.
 
 use rustyfi_backend::{Closing, Color, GraphicsElem, Path, PathSeg, PureHorzBox};
 use std::fmt::Write as _;
@@ -84,16 +97,26 @@ pub(super) fn emit_graphics(
          width=\"{width}pt\" height=\"{total_h}pt\" viewBox=\"0 0 {width} {total_h}\">\n\
          <g transform=\"translate(0,{height}) scale(1,-1)\">\n",
     );
-    emit_elems(out, elems, tx, ty, nested);
+    // `after` is the ONLY buffer the nested emitter ever sees — see this
+    // module's doc comment on why an HTML child of `<svg>` silently ejects
+    // the rest of the drawing from it.
+    let mut after = String::new();
+    emit_elems(out, &mut after, elems, tx, ty, nested);
     out.push_str("</g>\n</svg>\n");
+    out.push_str(&after);
 }
 
 /// The recursive element walker (`Group`/`Clip` reenter this, not
 /// [`emit_graphics`], so a nested container never gets its own `<svg>`
 /// wrapper — exactly `place_graphics`'s own `Group`/`Clip` arms, which
 /// recurse into itself, not `page_content`'s `q`/`cm` prologue).
+///
+/// `out` is the `<svg>`'s own content; `after` is what [`emit_graphics`]
+/// will append AFTER the `</svg>`, and is the only place a
+/// `GraphicsElem::Text`'s nested HTML may go.
 fn emit_elems(
     out: &mut String,
+    after: &mut String,
     elems: &[GraphicsElem],
     tx: f64,
     ty: f64,
@@ -145,7 +168,7 @@ fn emit_elems(
                 for (dx, bx) in contents {
                     let page_x = tx + (pt.0 + *dx).0;
                     let page_y = ty - pt.1 .0;
-                    nested(out, bx, page_x, page_y);
+                    nested(after, bx, page_x, page_y);
                 }
             }
             // L5b (prim-retype-sweep.md §3.3): 0.1's `graphics` collection
@@ -157,7 +180,7 @@ fn emit_elems(
             // `Group`/`Clip`) already applies.
             GraphicsElem::Group(inner) => {
                 out.push_str("<g>\n");
-                emit_elems(out, inner, tx, ty, nested);
+                emit_elems(out, after, inner, tx, ty, nested);
                 out.push_str("</g>\n");
             }
             // `graphicD.ml:323-336`'s clip: an SVG `<clipPath>` definition
@@ -174,7 +197,7 @@ fn emit_elems(
                      <g clip-path=\"url(#html-clip-{id})\">\n",
                     path_d(path),
                 );
-                emit_elems(out, inner, tx, ty, nested);
+                emit_elems(out, after, inner, tx, ty, nested);
                 out.push_str("</g>\n");
             }
             // Not ink: a deferred `register-destination` marker, already

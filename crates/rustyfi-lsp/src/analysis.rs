@@ -118,22 +118,44 @@ pub fn analyze_auto(source: &str) -> Vec<Diag> {
 /// under — after the ambiguity re-check, so this is the generation the buffer
 /// actually parses as, not merely the sniffed guess.
 pub fn analyze_detected(source: &str) -> (RustyfiVersion, Vec<Diag>) {
+    let (version, failure) = detect(source);
+    (
+        version,
+        failure.into_iter().map(|f| f.into_diag(source)).collect(),
+    )
+}
+
+/// Which generation this buffer reads as, without producing diagnostics.
+///
+/// Exactly the rule [`analyze_detected`] applies — sniff, then re-check the
+/// other generation when the buffer signalled nothing and the default did not
+/// parse — so a second feature cannot drift into a second answer for the same
+/// file. [`crate::document_symbols_auto`] is what needs it: extracting an
+/// outline under the wrong grammar produces no symbols at all, on precisely
+/// the signal-free `module M = struct` library files that make up most of a
+/// 0.1 corpus.
+pub fn detect_version(source: &str) -> RustyfiVersion {
+    detect(source).0
+}
+
+/// The shared body of [`analyze_detected`] and [`detect_version`].
+fn detect(source: &str) -> (RustyfiVersion, Option<Failure>) {
     let sniffed = rustyfi_syntax::sniff_version(source);
     let primary = sniffed.unwrap_or(RustyfiVersion::DEFAULT);
 
     let Some(failure) = parse_failure(source, primary) else {
-        return (primary, Vec::new());
+        return (primary, None);
     };
 
     // A decisive signal is obeyed even when it does not parse: reporting the
     // 0.0 reading of a file whose first line is `use Foo` would be a lie.
     if sniffed.is_some() {
-        return (primary, vec![failure.into_diag(source)]);
+        return (primary, Some(failure));
     }
 
     let other = other_generation(primary);
     match parse_failure(source, other) {
-        None => (other, Vec::new()),
+        None => (other, None),
         // Both readings fail, so the buffer is broken under either grammar
         // and the question is only which error to show. Show the one from the
         // grammar that got FURTHER through the text — the same
@@ -153,8 +175,8 @@ pub fn analyze_detected(source: &str) -> (RustyfiVersion, Vec<Diag>) {
         // overwhelmingly the RIGHT grammar struggling with an incomplete
         // buffer, while the verdict is the wrong grammar dying early, so that
         // rule reported 0.0.6's complaint about a half-typed 0.1 library.
-        Some(alt) if alt.furthest > failure.furthest => (other, vec![alt.into_diag(source)]),
-        Some(_) => (primary, vec![failure.into_diag(source)]),
+        Some(alt) if alt.furthest > failure.furthest => (other, Some(alt)),
+        Some(_) => (primary, Some(failure)),
     }
 }
 

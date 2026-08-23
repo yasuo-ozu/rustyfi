@@ -140,6 +140,7 @@ fn doc_with_pages(pages: Vec<Page>) -> DocumentValue {
         reflow_source: None,
         reflow_links: Vec::new(),
         reflow_dests: Vec::new(),
+        reflow_frame_decos: Vec::new(),
     }
 }
 

@@ -21,8 +21,8 @@ pub mod visit;
 
 use crossref::{CrossRefs, Verdict};
 use rustyfi_backend::{
-    place_block_at, placed_line_extent, DecoId, FontMetrics, GraphicsElem, Length, PureHorzBox,
-    VertBox,
+    place_block_at, placed_line_extent, shift_graphics, DecoId, FontMetrics, GraphicsElem, Length,
+    PureHorzBox, VertBox,
 };
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
@@ -497,6 +497,7 @@ fn eval_trials_seeded(
                 // has run).
                 final_doc.reflow_links = std::mem::take(&mut interp.link_decos);
                 final_doc.reflow_dests = std::mem::take(&mut interp.dest_decos);
+                final_doc.reflow_frame_decos = std::mem::take(&mut interp.frame_decos);
                 let refs = crossrefs.borrow();
                 return Ok((
                     Rc::new(final_doc),
@@ -3010,16 +3011,26 @@ fn fire_block_frame_fragment(
     // inside the deco (annot.satyh's `register-location-frame`) can tag
     // itself with it — see `Interp::current_deco_id`'s doc comment.
     interp.current_deco_id = Some(frame.id);
-    let gr = primitives::apply_deco(
-        interp,
-        deco_version,
-        deco,
-        pt,
-        width,
-        frame_bottom - frame_top,
-        Length::ZERO,
-    )?;
+    let height = frame_bottom - frame_top;
+    let gr = primitives::apply_deco(interp, deco_version, deco, pt, width, height, Length::ZERO)?;
     interp.current_deco_id = None;
+    // A WHOLE-frame decoration (`decoS`, index 0), recorded box-local for the
+    // reflow backend — see `FrameDecoration`. The deco drew at `pt`, so
+    // shifting by `-pt` puts the origin back at the frame's own bottom-left.
+    // A frame split across pages fires `decoH`/`decoM`/`decoT` instead and is
+    // deliberately not recorded: there is no single drawing to scale.
+    if deco_idx == 0 && !gr.is_empty() {
+        let back = (Length::ZERO - pt.0, Length::ZERO - pt.1);
+        interp.frame_decos.push((
+            frame.id,
+            rustyfi_backend::FrameDecoration {
+                width,
+                height,
+                pads: (pads.l, pads.r, pads.t, pads.b),
+                elems: gr.iter().map(|e| shift_graphics(back, e)).collect(),
+            },
+        ));
+    }
     Ok(gr)
 }
 

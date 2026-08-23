@@ -29,6 +29,7 @@ rustyfi-lang.workspace = true
 rustyfi-loader.workspace = true
 rustyfi-lsp.workspace = true
 rustyfi-pdf.workspace = true
+rustyfi-html.workspace = true
 rustyfi-satyrographos.workspace = true
 clap.workspace = true
 clap_mangen.workspace = true

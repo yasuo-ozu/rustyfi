@@ -1536,6 +1536,7 @@ dependencies = [
  "clap_mangen",
  "image",
  "rustyfi-backend",
+ "rustyfi-html",
  "rustyfi-lang",
  "rustyfi-loader",
  "rustyfi-lsp",
@@ -1554,6 +1555,15 @@ dependencies = [
  "newer-type-std",
  "syan",
  "unicode-linebreak",
+]
+
+[[package]]
+name = "rustyfi-html"
+version = "0.1.1"
+dependencies = [
+ "rustyfi-backend",
+ "rustyfi-pdf",
+ "thiserror",
 ]
 
 [[package]]

@@ -201,6 +201,7 @@ fn fire_hooks_invokes_the_closure_with_the_correct_page_number() {
         reflow_source: None,
         reflow_links: Vec::new(),
         reflow_dests: Vec::new(),
+        reflow_frame_decos: Vec::new(),
     };
 
     rustyfi_lang::fire_hooks(&mut interp, &doc).expect("fire_hooks should succeed");
@@ -264,6 +265,7 @@ fn fire_hooks_numbers_pages_one_based_in_document_order() {
         reflow_source: None,
         reflow_links: Vec::new(),
         reflow_dests: Vec::new(),
+        reflow_frame_decos: Vec::new(),
     };
 
     rustyfi_lang::fire_hooks(&mut interp, &doc).expect("fire_hooks should succeed");

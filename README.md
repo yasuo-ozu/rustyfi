@@ -173,7 +173,7 @@ url = "https://example.org/another-index"
 | flag | what it does |
 |---|---|
 | `-o <path>` | output path (default: the input with a `.pdf` extension) |
-| `--format <fmt>` | `pdf` (HTML is on the `html-support` branch) |
+| `--format <fmt>` | `pdf` (default), `html`, `html-fixed` — see [HTML output](#html-output) |
 | `--lib-root <dir>` | where `@require:` looks for packages |
 | `--lang <v>` | `0.0` (default) or `0.1`; a `use` header auto-selects `0.1` |
 | `--font <file>` | use a TrueType/OpenType file as the regular face |
@@ -181,6 +181,99 @@ url = "https://example.org/another-index"
 | `--no-cache` | bypass the compile cache |
 | `--no-aux` | do not read or write the `.satysfi-aux` cross-reference file |
 | `--timing` | per-phase timing to stderr (load / typecheck / eval / render) |
+
+## HTML output
+
+```console
+$ rustyfi --format html doc.saty        # a web page
+$ rustyfi --format html-fixed doc.saty  # a picture of the PDF, in HTML
+```
+
+`--format html` writes **one continuous, self-contained web document**. There
+are no pages in it: it is built from the flat block stream as it stood
+*before* page breaking, so nothing is cut at a page boundary and there are no
+headers, footers or page numbers. The browser does the typesetting — real
+`<p>` paragraphs it breaks, hyphenates and justifies itself, at whatever
+width the window happens to be.
+
+What survives as structure:
+
+- **headings**, from `register-outline` paired with the destination frame the
+  doc class wraps each title in — a structural match on the destination name,
+  never a guess from font size. They get real `id=` anchors, but no table of
+  contents is generated: a document that wants one typesets it, and a second
+  generated copy above the title duplicated it in every real manual;
+- **lists** as `<ul>`/`<ol>`/`<li>`, **emphasis** as `<em>`/`<strong>`, where
+  the list/emphasis commands opt in by emitting the inert `list-mark` /
+  `inline-mark` boxes (the bundled 0.1 `itemize`, `std-ja` and `v01-mini` do).
+  A list package that does not — the corpus `enumitem` — still indents, because
+  the indentation a `block-frame-breakable` folds into its lines' offsets is
+  recovered as a `margin-left`;
+- **tables** as real `<table>`/`<tr>`/`<td>`, with **the rules the document
+  actually drew**: which grid lines exist is read off the table's own rule
+  graphics, so `easytable`'s three-rule booktabs look stays three rules
+  instead of becoming a full grid;
+- **framed blocks** keep their own decoration — a `stdjabook` title box, a
+  `+code` panel — because the deco callback the PDF path already runs is
+  recorded box-local and replayed as a `background` (a flat panel) or a
+  stretched `<svg>` (anything else). A frame whose deco draws nothing, which
+  is most of them, still draws nothing;
+- **code blocks** as code: a fixed-pitch face reaches the browser as a
+  monospace stack, and its line breaks survive as `<br>` rather than
+  collapsing to spaces. The face is the only signal that separates a `+code`
+  block from a wrapped paragraph — both are consecutive lines in the box
+  stream, because `code.satyh` calls `line-break` once per source line
+  exactly as the line breaker does per wrapped line;
+- **links** as `<a href>`, to a URL or to an in-document anchor;
+- **footnotes** as an `<aside>` immediately below the paragraph that
+  references them — there is no page foot to collect them at, and putting
+  them where they are read beats sending the reader to the end;
+- **images** as `<img>` with the picture inlined as a data URI (a JPEG passes
+  through byte-for-byte; a picture placed repeatedly is emitted once and
+  shared);
+- **centring and flush-right**, recovered from the `inline-fil` that produced
+  them.
+
+Math, graphics and rules become inline `<svg>` sized to fit the line. That is
+deliberate: they are drawings, not text. Math in particular is flattened to
+positioned glyphs during evaluation, so no MathML structure survives to
+recover.
+
+Nothing is fetched and nothing is executed — no external stylesheet, no
+script, no remote font. Fonts are **named**, not embedded: a reflowed
+document is not metric-faithful by construction, so pinning the exact face
+would buy nothing and cost megabytes (with the bundled Japanese faces, one
+manual came to 20 MB). The reader gets the real face if they have it and a
+sensible generic if they do not.
+
+`--format html-fixed` is the other thing: a layout-faithful serialization of
+exactly the placed boxes the PDF writer consumes, one `div` per page with
+every run at its own absolute coordinate, fonts embedded so the metrics
+match. It is a visual-diff aid for checking this port's layout against the
+PDF in a browser — not something to read. (`--format html-reflow`, the name
+the reflowable backend had while `html` meant the faithful one, still works
+as an alias for `html`.)
+
+### What does not survive
+
+- **Preformatted code blocks reflow like prose.** A `+code` listing's line
+  breaks are gone by the time the box stream exists, and nothing in it marks
+  a block as preformatted — the only available proxy is "this run is in a
+  fixed-pitch face", which is equally true of inline code and of a document
+  that simply chose a monospace body. Honouring it would also mean
+  `white-space: pre`, which is the one thing a reflowable backend must not
+  do.
+- **Block-frame decorations are not drawn.** A `block-frame-breakable`'s deco
+  is a lang-side callback this backend cannot run, and packages use the
+  construct for section bodies, list items and quotation blocks as readily as
+  for anything with a rule around it, so `.frame` is a plain grouping element
+  with margins. The class is there to restyle.
+- **`load-pdf-image` shows a labelled box.** Rasterizing an embedded PDF page
+  is out of scope for an HTML writer, so it keeps the right size and says
+  what it is rather than emitting a broken image.
+- **A `draw-text` run's text follows its drawing** instead of sitting at its
+  point inside it: HTML content cannot live inside an `<svg>`, and there are
+  no page coordinates left to place it at.
 
 ## Editor support
 

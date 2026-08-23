@@ -25,7 +25,8 @@ pub use font::{
 };
 pub use graphics::{
     graphics_bbox, linear_transform_graphics, linear_transform_path, path_bbox, shift_graphics,
-    shift_path, Closing, Color, Dash, GraphicsElem, Path, PathSeg, Point, PrePath, Subpath,
+    shift_path, Closing, Color, Dash, FrameDecoration, GraphicsElem, Path, PathSeg, Point, PrePath,
+    Subpath,
 };
 pub use hbox::{
     DecoId, GraphicsFnId, HookId, HorzBox, HorzStringInfo, ImageId, ImageResource, ImportedObjects,

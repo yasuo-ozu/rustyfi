@@ -452,6 +452,42 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// A PDF compile and an HTML compile of the exact same document/version/font must hash
+    /// to DIFFERENT keys — otherwise a `--format html` run could hit a key a
+    /// prior `--format pdf` run populated (or vice versa) and write the
+    /// wrong-format bytes to the requested output.
+    #[test]
+    fn key_changes_with_output_format() {
+        let dir = scratch();
+        let a = dir.join("a.saty");
+        std::fs::write(&a, b"document (||) '<>\n").unwrap();
+        let pdf = hash_inputs(
+            [a.as_path()].into_iter(),
+            "0.1.0",
+            RustyfiVersion::DEFAULT,
+            &a,
+            None,
+            OutputFormat::Pdf,
+            None,
+        )
+        .unwrap();
+        let html = hash_inputs(
+            [a.as_path()].into_iter(),
+            "0.1.0",
+            RustyfiVersion::DEFAULT,
+            &a,
+            None,
+            OutputFormat::Html,
+            None,
+        )
+        .unwrap();
+        assert_ne!(
+            pdf, html,
+            "--format pdf and --format html must hash to different keys"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     /// The resolved dependency lock's digest must
     /// be part of the key — otherwise re-solving to a different locked
     /// version, with the document's own bytes unchanged, would silently keep

@@ -3698,6 +3698,7 @@ fn page_break_core(
         // `DocumentValue::reflow_links`'s doc comment.
         reflow_links: Vec::new(),
         reflow_dests: Vec::new(),
+        reflow_frame_decos: Vec::new(),
     })))
 }
 

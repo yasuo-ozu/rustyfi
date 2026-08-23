@@ -40,7 +40,7 @@
 //! `FontFile2`/`FontFile3` requires — embedding a raw TTC index directly
 //! would be invalid).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use pdf_writer::types::{CidFontType, FontFlags};
 use pdf_writer::{Content, Finish, Name, Pdf, Rect, Ref, Str};
@@ -72,6 +72,46 @@ pub(crate) fn font_res_name(file_idx: usize) -> String {
 struct FontUsage {
     /// gid -> first char that produced it.
     glyphs: BTreeMap<u16, char>,
+    /// Every character this file had no `cmap` entry for, and so emitted as
+    /// gid 0. Collected rather than warned about inline so one unrenderable
+    /// character repeated across a document produces one line, not hundreds
+    /// — see [`report_missing_glyphs`].
+    missing: BTreeSet<char>,
+}
+
+/// Warn, once per (font file, character), about every character that had to
+/// be emitted as `.notdef`.
+///
+/// **Why this is not cosmetic.** Until it existed, an uncovered character was
+/// a completely silent failure. `.notdef` is a visible tofu box in a TrueType
+/// face, but in a CFF/OTF face it is usually EMPTY — and
+/// `latinmodern-math.otf` is both this port's default math font and a CFF
+/// face, so `\mathcal`-style Mathematical Alphanumerics simply vanished:
+/// right advance, no ink, exit status 0. The bug report this fixes was
+/// "some fonts are not drawn in PDF mode", which is precisely what that
+/// looks like from outside.
+///
+/// Upstream warns per occurrence (`Logging.warn_no_glyph`,
+/// `logging.ml:160-165`, "No glyph is provided for U+%04X by font `%s`");
+/// this dedupes to one line per character per font, since a missing letter
+/// in body text would otherwise produce a warning per occurrence, and prints
+/// to STDERR rather than upstream's STDOUT — the same deliberate divergence
+/// `primitives.rs`'s `display-message` documents.
+fn report_missing_glyphs(usage: &BTreeMap<usize, FontUsage>, store: &TtfFontStore) {
+    for (&file_idx, file_usage) in usage {
+        if file_usage.missing.is_empty() {
+            continue;
+        }
+        let label = store.file_label(file_idx);
+        for &c in &file_usage.missing {
+            eprintln!(
+                "  [Warning] No glyph is provided for U+{:04X} ({}) by font `{label}`; \
+                 it is drawn as .notdef, which this face may render as nothing at all.",
+                c as u32,
+                c.escape_debug(),
+            );
+        }
+    }
 }
 
 /// Serialize typeset pages into a PDF that embeds real TrueType fonts as
@@ -135,6 +175,11 @@ pub fn render_pdf_ttf_with(
     }
     let cid_remaps: BTreeMap<usize, &subsetter::GlyphRemapper> =
         cff_subsets.iter().map(|(&idx, (_, r))| (idx, r)).collect();
+
+    // Reported off pass 1a, which has already seen every glyph in the
+    // document, and before pass 1c re-runs the same walk — so each
+    // unrenderable character is named once rather than once per page.
+    report_missing_glyphs(&usage, store);
 
     // Pass 1c: the REAL content streams. `usage` ends up with the exact same
     // original-gid keys (remapping changes only the bytes emitted, not which
@@ -473,7 +518,13 @@ fn encode_glyph_run(
         // rather than aborting the whole PDF — matching `measure_run`'s
         // half-em placeholder box. (Uncovered glyphs like `□`/`〚` in
         // satysfi-base docs; faithful per-glyph font-fallback is future work.)
-        let gid = face.glyph_index(c).unwrap_or(GlyphId(0));
+        // Recorded so `report_missing_glyphs` can SAY so: `.notdef` is a tofu
+        // box in a TrueType face but usually EMPTY in a CFF/OTF one, so on
+        // e.g. `latinmodern-math.otf` this silently drops the character.
+        let gid = face.glyph_index(c).unwrap_or_else(|| {
+            usage.missing.insert(c);
+            GlyphId(0)
+        });
         usage.glyphs.entry(gid.0).or_insert(c);
         let cid = remap.and_then(|r| r.get(gid.0)).unwrap_or(gid.0);
         out.extend_from_slice(&cid.to_be_bytes());

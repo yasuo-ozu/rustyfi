@@ -1709,7 +1709,7 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
         // vminst.ml:935 `TextBreak`.
         "break" => poly0(arrow(t_text_info(), t_string())),
 
-        // ==== 11 new v0.1-only rows, unbound under V0_0 (the same
+        // ==== 10 new v0.1-only rows, unbound under V0_0 (the same
         // mirror-guard idiom as the 0.1-only math rows). ====
         //
         // Bitwise ops (dev-0-1-0 vminst.ml :2495/:2477/:2527/:2541/:2513/

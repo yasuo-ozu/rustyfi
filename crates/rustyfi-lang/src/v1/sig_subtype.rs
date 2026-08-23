@@ -81,8 +81,19 @@ fn mono_mentions_stamp(ty: &MonoType, marker: &str) -> bool {
         MonoType::Variant(name, args) => {
             name.ends_with(marker) || args.iter().any(|t| mono_mentions_stamp(t, marker))
         }
+        // Both `MonoType`-bearing fields of a slot — a skolem escaping
+        // through a `?(l : τ)` optional-label bundle used to slip past this
+        // probe silently, which is a sealing-soundness hole rather than a
+        // crash. Structurally the derived traversal in `crate::visit` would
+        // cover it, but this walk `resolve`s at every level and so cannot
+        // use it.
         MonoType::InlineCmd(cs) | MonoType::BlockCmd(cs) | MonoType::MathCmd(cs) => {
-            cs.iter().any(|c| mono_mentions_stamp(&c.ty, marker))
+            cs.iter().any(|c| {
+                c.opt_labels
+                    .iter()
+                    .any(|(_, t)| mono_mentions_stamp(t, marker))
+                    || mono_mentions_stamp(&c.ty, marker)
+            })
         }
     }
 }

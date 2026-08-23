@@ -367,9 +367,15 @@ fn occurs_var(tv: &TyVarRef, ty: &MonoType) -> bool {
         MonoType::List(t) | MonoType::Ref(t) | MonoType::Code(t) => occurs_var(tv, &t),
         MonoType::Record(row) => occurs_var_in_row(tv, &row),
         MonoType::Variant(_, args) => args.iter().any(|t| occurs_var(tv, t)),
-        MonoType::InlineCmd(cs) | MonoType::BlockCmd(cs) | MonoType::MathCmd(cs) => {
-            cs.iter().any(|c| occurs_var(tv, &c.ty))
-        }
+        // Both `MonoType`-bearing fields of a slot. `opt_labels` (0.1's
+        // closed `?(l : τ, …)` map) is easy to forget and was: an occurs
+        // cycle, or a variable needing its level lowered, hiding inside an
+        // optional-label bundle escaped this check entirely. It cannot use
+        // `crate::visit`'s derived traversal — that one is structural, and
+        // this walk must `resolve` through bound variables at every level.
+        MonoType::InlineCmd(cs) | MonoType::BlockCmd(cs) | MonoType::MathCmd(cs) => cs
+            .iter()
+            .any(|c| c.opt_labels.iter().any(|(_, t)| occurs_var(tv, t)) || occurs_var(tv, &c.ty)),
     }
 }
 
@@ -394,8 +400,14 @@ fn occurs_rowvar_in_type(rv: &RowVarRef, ty: &MonoType) -> bool {
         MonoType::List(t) | MonoType::Ref(t) | MonoType::Code(t) => occurs_rowvar_in_type(rv, &t),
         MonoType::Record(row) => occurs_rowvar_in_row(rv, &row),
         MonoType::Variant(_, args) => args.iter().any(|t| occurs_rowvar_in_type(rv, t)),
+        // See `occurs_var`'s twin arm: `opt_labels` counts too.
         MonoType::InlineCmd(cs) | MonoType::BlockCmd(cs) | MonoType::MathCmd(cs) => {
-            cs.iter().any(|c| occurs_rowvar_in_type(rv, &c.ty))
+            cs.iter().any(|c| {
+                c.opt_labels
+                    .iter()
+                    .any(|(_, t)| occurs_rowvar_in_type(rv, t))
+                    || occurs_rowvar_in_type(rv, &c.ty)
+            })
         }
     }
 }

@@ -17,6 +17,7 @@ pub mod types;
 pub mod unify;
 pub mod v1;
 pub mod value;
+pub mod visit;
 
 use crossref::{CrossRefs, Verdict};
 use rustyfi_backend::{

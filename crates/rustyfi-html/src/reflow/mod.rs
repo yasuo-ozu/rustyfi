@@ -56,8 +56,7 @@
 //! **Slice 3 scope** (design doc §6 "S3", the "above-flat structure" slice
 //! — see `reflow/structure.rs` for the implementation and its own doc
 //! comment on exactly what is/isn't recoverable):
-//! - `extras.outline` → a `<nav class="toc">` nested list (`structure::
-//!   render_toc`), plus BEST-EFFORT promotion of the matching in-flow
+//! - `extras.outline` → BEST-EFFORT promotion of the matching in-flow
 //!   paragraph to `<h1>`..`<h6>` (`structure::find_heading_level`,
 //!   `block.rs`'s `Para::heading_level`) — correlated to the outline entry
 //!   by `dest_name`, the SAME string both `register-outline` and
@@ -533,13 +532,11 @@ fn render_html_reflow_impl(
     };
 
     let mut body = String::new();
-    // S3 (design doc §6 "S3"): a navigable table of contents, built once
-    // from `extras.outline` regardless of whether any heading in the flow
-    // ends up promoted (the nav's own `<a href="#dest_name">`s work off the
-    // SAME `id="dest_name"` anchors `block.rs`/`inline.rs` already place via
-    // `ctx.dests`, S2) — a no-op (`<nav>` never emitted) when the doc class
-    // never called `register-outline`.
-    structure::render_toc(&mut body, &extras.outline);
+    // No generated table of contents. `extras.outline` still drives heading
+    // promotion and the `id=` anchors that in-document links land on, but a
+    // document that wants a contents page TYPESETS one (`stdjabook`'s
+    // `\table-of-contents`), and emitting a second, differently-styled copy
+    // above the title duplicated it in every real manual.
     body.push_str("<div class=\"doc\">\n");
     if let Some(vboxes) = source {
         block::walk_vboxes(&mut body, vboxes, &ctx);

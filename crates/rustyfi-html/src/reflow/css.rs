@@ -148,23 +148,6 @@ a.link {{ color: #1a5fb4; text-decoration: underline; }}\n\
      title renders at 3.7em. */\n\
   font-size: inherit;\n\
 }}\n\
-nav.toc {{\n\
-  margin: 0 auto 2em auto;\n\
-  max-width: {max_width}pt;\n\
-  width: 100%;\n\
-  box-sizing: border-box;\n\
-  border: 1px solid rgba(127,127,127,0.4);\n\
-  border-radius: 4px;\n\
-  padding: 0.75em 1.5em;\n\
-}}\n\
-/* No list marker: an outline entry's own text already begins with the\n\
-   number the document assigned it, so the UA decimal counter would\n\
-   render that number a second time. */\n\
-nav.toc ol {{ margin: 0.2em 0; padding: 0 0 0 1.2em; list-style: none; }}\n\
-nav.toc > ol {{ padding-left: 0; }}\n\
-nav.toc li {{ margin: 0.15em 0; }}\n\
-nav.toc a {{ text-decoration: none; }}\n\
-nav.toc a:hover {{ text-decoration: underline; }}\n\
 table.tabular {{\n\
   border-collapse: collapse;\n\
   margin: 1em auto;\n\

@@ -613,49 +613,29 @@ fn no_outline_means_no_nav_and_no_heading_promotion() {
     );
 }
 
-/// `extras.outline` (even without any matching in-flow destination frame)
-/// must render a navigable `<nav class="toc">` nested list with a real
-/// `<a href="#dest_name">` — design doc §3's "Navigation (always safe)".
+/// `extras.outline` drives heading promotion and the `id=` anchors, but must
+/// NOT generate a table of contents of its own: a document that wants one
+/// typesets it (`stdjabook`'s `\table-of-contents`), and the generated copy
+/// duplicated it above the title in every real manual.
 #[test]
-fn outline_renders_a_navigable_toc_nav() {
+fn an_outline_generates_no_table_of_contents() {
     let extras = DocExtras {
-        outline: vec![
-            OutlineEntry {
-                level: 0,
-                text: "Chapter One".to_string(),
-                dest_name: "ch1".to_string(),
-                is_open: false,
-            },
-            OutlineEntry {
-                level: 1,
-                text: "Section 1.1".to_string(),
-                dest_name: "ch1sec1".to_string(),
-                is_open: false,
-            },
-        ],
+        outline: vec![OutlineEntry {
+            level: 0,
+            text: "Chapter One".to_string(),
+            dest_name: "ch1".to_string(),
+            is_open: false,
+        }],
         ..DocExtras::default()
     };
     let html = render_with_extras(&[text_line("body")], &extras, &[], &[]);
 
+    assert!(!html.contains("<nav"), "generated a TOC nav:\n{html}");
     assert!(
-        html.contains("<nav class=\"toc\">"),
-        "missing TOC nav:\n{html}"
+        !html.contains("Chapter One"),
+        "the outline's own text must not be emitted as content:\n{html}"
     );
-    assert!(
-        html.contains("<a href=\"#ch1\">Chapter One</a>"),
-        "missing top-level TOC entry:\n{html}"
-    );
-    assert!(
-        html.contains("<a href=\"#ch1sec1\">Section 1.1</a>"),
-        "missing nested TOC entry:\n{html}"
-    );
-    // The level-1 entry must be nested inside a SECOND <ol>, not a sibling
-    // of the level-0 <li> at the same depth.
-    assert_eq!(
-        html.matches("<ol>").count(),
-        2,
-        "expected one nested <ol> for the level-1 entry:\n{html}"
-    );
+    assert!(html.contains("body"), "lost the document:\n{html}");
 }
 
 /// `PureHorzBox::Tabular` (design doc §3's `Tabular` row: "genuinely

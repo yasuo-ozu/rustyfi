@@ -249,13 +249,15 @@ sensible generic if they do not.
 
 ### What does not survive
 
-- **Preformatted code blocks reflow like prose.** A `+code` listing's line
-  breaks are gone by the time the box stream exists, and nothing in it marks
-  a block as preformatted — the only available proxy is "this run is in a
-  fixed-pitch face", which is equally true of inline code and of a document
-  that simply chose a monospace body. Honouring it would also mean
-  `white-space: pre`, which is the one thing a reflowable backend must not
-  do.
+- **A code block's indentation is lost.** Its line breaks survive, as the
+  code-blocks bullet above says, but the leading whitespace that made them
+  worth keeping does not: indentation reaches the box stream as glue, and
+  glue collapses to a single space so the browser can rejoin ordinary prose.
+  Preserving it would mean `white-space: pre`, which is the one thing a
+  reflowable backend must not do. The `<br>`s also stop for the rest of a
+  paragraph once a proportional run appears in it — the fixed-pitch face is
+  the only signal that the breaks are the author's, and a mixed paragraph
+  withdraws it.
 - **Block-frame decorations are not drawn.** A `block-frame-breakable`'s deco
   is a lang-side callback this backend cannot run, and packages use the
   construct for section bodies, list items and quotation blocks as readily as

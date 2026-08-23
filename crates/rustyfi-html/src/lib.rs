@@ -15,7 +15,7 @@
 //!
 //! **Location.** This is its own `rustyfi-html` crate, a peer of
 //! `rustyfi-pdf`. It depends on `rustyfi-backend` for every box/geometry type
-//! used below, plus `rustyfi-pdf` for [`rustyfi_pdf::TtfFontStore`] (the one
+//! it walks, plus `rustyfi-pdf` for [`rustyfi_pdf::TtfFontStore`] (the one
 //! type this crate reuses rather than re-implements — only its `pub`
 //! `file_index`/`file_family_name` accessors are used, so this is a plain
 //! one-way dependency, not a cycle: `rustyfi-pdf` does not depend on

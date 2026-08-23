@@ -66,11 +66,10 @@ pub enum VertBox {
     /// `enumerate-item`. Zero height/depth, contributes nothing to any
     /// measurement (`measure_block`) or placement (`chop_page`/
     /// `place_block_at`) — it never reaches a `PlacedLine`, so PDF output is
-    /// byte-identical whether or not a document's stdlib
-    /// emits these. Read only by the reflow HTML walker
-    /// (`rustyfi-html/src/reflow/block.rs`'s `walk_vboxes`), which
-    /// uses the Start/End nesting to rebuild real `<ul>`/`<ol>`/`<li>`
-    /// structure.
+    /// byte-identical whether or not a document's stdlib emits these. Read
+    /// only by the reflow HTML walker (`rustyfi-html/src/reflow/block.rs`'s
+    /// `walk_vboxes`), which uses the Start/End nesting to rebuild real
+    /// `<ul>`/`<ol>`/`<li>` structure.
     ListMark(ListMarkKind),
 }
 

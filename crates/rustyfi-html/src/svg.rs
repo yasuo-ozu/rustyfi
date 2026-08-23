@@ -1,10 +1,8 @@
-//! HTML output backend, Slice 2 (: "graphics (inline SVG)"). The
-//! `place_graphics`/`emit_path` analogue (`rustyfi-pdf/src/lib.rs:708,803`) for the
-//! HTML writer: turns a `PureHorzBox::Graphics`/`TabularBox::rules` element list
-//! into one inline `<svg>…</svg>` (one per graphics-bearing box, per the design
-//! doc's per-primitive table), a private submodule of the `rustyfi-html` crate (not
-//! `pub`, not crate-wide — see that module's doc comment on why this whole feature
-//! lives inside `rustyfi-pdf` rather than a new crate).
+//! The `place_graphics`/`emit_path` analogue (`rustyfi-pdf/src/lib.rs`) for
+//! the HTML backend: turns a `PureHorzBox::Graphics`/`TabularBox::rules`
+//! element list into one inline `<svg>…</svg>`, one per graphics-bearing
+//! box. A private submodule of the `rustyfi-html` crate — `pub(super)`, not
+//! `pub`: nothing outside the crate builds SVG.
 //!
 //! **Coordinate system, reconciled once here.** `GraphicsElem`'s `Path`
 //! coordinates are box-local and y-**up** from the box's own baseline-left
@@ -13,53 +11,56 @@
 //! (no flip — PDF device space is *already* y-up, so box-local coordinates
 //! need no flip to become PDF-native, only a shift to the box's placed
 //! anchor). HTML/SVG's page space is y-**down** (CSS `top`), so here the
-//! per-box wrapper needs an actual flip, not
-//! just a translate: [`emit_graphics`] gives each `<svg>` its own tiny
-//! `width×(height+depth)` viewport with `viewBox="0 0 width (height+depth)"`
-//! (so 1 SVG user unit = 1 pt, matching every `Length` value here directly,
-//! with no unit conversion), CSS-positions that viewport's TOP-LEFT corner
-//! at the box's placed top-left `(tx, ty - height)` (the usual "baseline
-//! minus ascent" arithmetic), and wraps the contents in one inner `<g
+//! per-box wrapper needs an actual flip, not just a translate:
+//! [`emit_graphics`] gives each `<svg>` its own tiny `width×(height+depth)`
+//! viewport with `viewBox="0 0 width (height+depth)"` (so 1 SVG user unit =
+//! 1 pt, matching every `Length` value here directly, with no unit
+//! conversion), CSS-positions that viewport's TOP-LEFT corner at the box's
+//! top-left `(tx, ty - height)` (the usual "baseline minus ascent"
+//! arithmetic), and wraps the contents in one inner `<g
 //! transform="translate(0,height) scale(1,-1)">` — the SVG analogue of
-//! `place_graphics`'s `cm`, decomposed
-//! into "CSS position of the svg root" (the translate-to-anchor half) plus
-//! "one local flip" (the y-up-to-y-down half PDF never needs). A local point
-//! `(px, py)` then lands at SVG-local `(px, height - py)`, i.e. outer-frame
-//! `(tx + px, ty - py)`.
+//! `place_graphics`'s `cm`, decomposed into "CSS position of the svg root"
+//! (the translate-to-anchor half) plus "one local flip" (the y-up-to-y-down
+//! half PDF never needs). A local point `(px, py)` then lands at SVG-local
+//! `(px, height - py)`, i.e. outer-frame `(tx + px, ty - py)`.
 //!
 //! **`GraphicsElem::Text` breaks that decomposition on purpose.** A
 //! `draw-text` run's placed sub-boxes are ordinary `PureHorzBox`es (text
 //! runs, possibly nested graphics/images), which the caller emits as
 //! `<span>`/`<svg>` children positioned relative to the nearest positioned
-//! ancestor, NOT this box's local `<g transform>` (CSS
-//! absolute positioning does not compose with an SVG sibling's coordinate
-//! transform the way a PDF content-stream operator composes with the active
-//! CTM). So `Text` is handled OUTSIDE the `<svg>`/`<g>` nest entirely: its
-//! nested boxes are handed to the `nested` callback with coordinates
-//! computed by hand (`tx + pt.x + dx`, `ty - pt.y`), the one
-//! documented divergence from the PDF writer's `place_graphics` (whose
-//! `emit_nested` callback runs INSIDE the `q`/`cm` block precisely because
-//! PDF text ops DO compose with the CTM).
+//! ancestor, NOT this box's local `<g transform>` (CSS absolute positioning
+//! does not compose with an SVG sibling's coordinate transform the way a PDF
+//! content-stream operator composes with the active CTM). So `Text` is
+//! handled OUTSIDE the `<svg>`/`<g>` nest entirely: its nested boxes are
+//! handed to the `nested` callback with coordinates computed by hand
+//! (`tx + pt.x + dx`, `ty - pt.y`), the one documented divergence from the
+//! PDF writer's `place_graphics` (whose `emit_nested` callback runs INSIDE
+//! the `q`/`cm` block precisely because PDF text ops DO compose with the
+//! CTM).
 
 use rustyfi_backend::{Closing, Color, GraphicsElem, Path, PathSeg, PureHorzBox};
 use std::fmt::Write as _;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// The nested-emitter callback type — the `&mut String` analogue of
-/// `rustyfi-pdf`'s `NestedEmitter` (`lib.rs:681`). [`emit_graphics`] invokes
+/// `rustyfi-pdf`'s own `NestedEmitter` (`lib.rs`). [`emit_graphics`] invokes
 /// this only for `GraphicsElem::Text`'s sub-boxes (see this module's doc
 /// comment on why they can't stay inside the SVG's local coordinate frame);
 /// every other variant is handled directly by this module.
 pub(super) type NestedEmitter<'a> = &'a mut dyn FnMut(&mut String, &PureHorzBox, f64, f64);
 
 /// Emit one graphics-bearing box's `elems` as a single inline `<svg>`,
-/// CSS-positioned at the box's placed top-left corner (`tx` the left edge,
-/// `ty` the baseline — the same convention every other `emit_box` arm uses).
+/// CSS-positioned at `(tx, ty - height)`: `tx` is the box's left edge and
+/// `ty` its BASELINE, both in whatever frame the caller has made the
+/// `position:relative` ancestor. Every caller today passes `(0.0, height)` —
+/// a baseline `height` down from the top of the inline-block wrapper it has
+/// just opened — so the `<svg>` lands at that wrapper's own top-left corner.
 /// `width`/`height`/`depth` are the box's own outer metrics (`Graphics`'s or
 /// `TabularBox`'s own fields), used only to size the `<svg>` viewport/
 /// `viewBox` (see the module doc comment). Emits nothing for an empty
-/// `elems` (mirrors `page_content`'s `place_graphics` guard, `lib.rs:575`,
-/// which skips the wrapper entirely rather than emitting a vacuous `q…Q`).
+/// `elems` — the same guard `page_content` puts around its own
+/// `place_graphics` overlay call, which skips the wrapper entirely rather
+/// than emitting a vacuous `q…Q`.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn emit_graphics(
     out: &mut String,

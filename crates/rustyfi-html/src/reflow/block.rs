@@ -29,10 +29,10 @@ use super::{inline, structure, Ctx};
 /// Accumulated state for "the paragraph currently being built" — `text` is
 /// the flowing inline HTML gathered so far (escaped/styled runs, glue
 /// collapsed to plain spaces so the BROWSER re-breaks lines, rather than
-/// keeping the box stream's own fixed per-glyph advances); `open` distinguishes "no
-/// paragraph started yet" (nothing to flush) from "a paragraph with only
-/// whitespace so far" (still flushed as an empty-ish `<p>`, matching
-/// upstream's own willingness to lay out a blank line).
+/// keeping the box stream's own fixed per-glyph advances); `open`
+/// distinguishes "no paragraph started yet" (nothing to flush) from "a
+/// paragraph with only whitespace so far" (still flushed as an empty-ish
+/// `<p>`, matching upstream's own willingness to lay out a blank line).
 struct Para {
     text: String,
     open: bool,
@@ -409,9 +409,9 @@ fn drop_break_hyphen(text: &mut String) {
 /// data-outline-level="{level}" {margin}>{trimmed text}</h{level+1}>`
 /// instead: same accumulated inline content, same margin bookkeeping, just
 /// a promoted tag. A no-op when nothing has been accumulated (e.g. two
-/// consecutive `Skip`s, or a `Skip` before any real content) — mirrors
-/// `render_html_impl`'s own "nothing to emit" guards elsewhere in this
-/// crate.
+/// consecutive `Skip`s, or a `Skip` before any real content) — the same
+/// "emit nothing rather than an empty wrapper" guard `svg::emit_graphics`
+/// and `inline::emit_graphics_box` make for an empty element list.
 ///
 /// A paragraph whose content is entirely whitespace emits NOTHING and keeps
 /// its pending margin for whatever comes next: the box stream is full of

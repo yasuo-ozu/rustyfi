@@ -1,9 +1,9 @@
 //! Reflowable/semantic HTML — what `--format html` produces.
 //!
 //! Where the PDF writer consumes the post-page-break placed-box model, this
-//! mode branches at the pre-page-break flat
-//! `Vec<VertBox>` (`DocumentValue::reflow_source` in `rustyfi-lang`, the
-//! design doc's "Option B") and emits REAL flowing HTML.
+//! mode branches at the pre-page-break flat `Vec<VertBox>`
+//! (`DocumentValue::reflow_source` in `rustyfi-lang`, the design doc's
+//! "Option B") and emits REAL flowing HTML.
 //!
 //! **There are no pages here.** Reading the stream before page breaking is
 //! what makes that true rather than merely stitched-together: nothing is cut
@@ -13,11 +13,10 @@
 //! and justifies at whatever width it is read.
 //!
 //! **No `position`/`top`/`left` anywhere in this module's own output.** The
-//! one exception is
-//! deliberate and is not page positioning: math and graphics are DRAWINGS,
-//! and each is an intrinsically-sized inline `<svg>` whose own contents are
-//! positioned within its own tiny viewport (see `inline.rs`'s
-//! `emit_math_svg`/`emit_graphics_box`).
+//! one exception is deliberate and is not page positioning: math and
+//! graphics are DRAWINGS, and each is an intrinsically-sized inline `<svg>`
+//! whose own contents are positioned within its own tiny viewport (see
+//! `inline.rs`'s `emit_math_svg`/`emit_graphics_box`).
 //!
 //! Three concerns big enough to have their own explanations:
 //!
@@ -157,10 +156,10 @@ pub(crate) struct Ctx<'a> {
     /// S4 ("Inline level"): the stack of currently-open `<em>`/`<strong>`
     /// spans, keyed by their `InlineMarkKind::EmphStart::strong` bit —
     /// `EmphEnd` carries no payload of its own, so the matching open tag
-    /// has to be remembered somewhere; `RefCell` (not a threaded `&mut`)
-    /// mirrors `used_fonts` above, keeping `inline::emit_inline`'s
-    /// `&Ctx`-only signature (no caller needs to change to thread a stack
-    /// through).
+    /// has to be remembered somewhere. `RefCell` rather than a threaded
+    /// `&mut`, so `inline::emit_inline` keeps its `&Ctx`-only signature and
+    /// no caller has to change to pass a stack through — the same bargain
+    /// every other interior-mutable field here makes.
     pub(crate) emph_stack: RefCell<Vec<bool>>,
     /// S4 (design doc §4.1 "BulletStart/End fence"): a nesting counter
     /// (not a bare flag — `BulletStart`/`BulletEnd` pairs are never nested
@@ -191,9 +190,8 @@ pub(crate) struct Ctx<'a> {
     /// The document's image table, so an `Image` box can resolve its
     /// `ImageId` to an `ImageResource` and become a real `<img>` data URI
     /// (`crate::image::data_uri`). Slices 1-4 rendered an inert placeholder
-    /// here; a document
-    /// like `figbox`'s manual is 39 figures, so the placeholder was most of
-    /// what the document is about.
+    /// here; a document like `figbox`'s manual is 39 figures, so the
+    /// placeholder was most of what the document is about.
     pub(crate) images: &'a [ImageResource],
     /// The `(font, size)` pair most of the document's characters are set in
     /// — see [`BodyStyle`]. `css.rs` puts it on `body`; `inline.rs` omits it
@@ -307,9 +305,10 @@ impl Ctx<'_> {
         Some(crate::fonts::reflow_font_stack(&family))
     }
 
-    /// Whether `font` is a fixed-pitch face. Unlike [`Ctx::font_family_for`]
-    /// this does NOT mark the file used: asking what a face IS must not pull
-    /// it into the document's font set.
+    /// Whether `font` is a fixed-pitch face, read off the same family name
+    /// [`Ctx::font_family_for`] builds its stack out of
+    /// (`fonts::is_monospace_family` — a name heuristic, and labelled as one
+    /// there). `false` in base-14 mode, where there is no file to ask.
     pub(crate) fn is_monospace(&self, font: Option<FontKey>) -> bool {
         let (Some(store), Some(font)) = (self.fonts, font) else {
             return false;
@@ -403,18 +402,20 @@ fn canonical_images(
 /// Serialize the pre-page-break `Vec<VertBox>` (`source` —
 /// `DocumentValue::reflow_source`, `None` when unavailable, e.g. a
 /// hand-built `DocumentValue` in a test) to a single, self-contained,
-/// REFLOWABLE HTML document, using generic system-font fallback (no
-/// `@font-face` block) — the base-14 twin of [`render_html_reflow_ttf_with`],
-/// exactly mirroring `rustyfi_pdf::render_pdf_with`'s relationship to
+/// REFLOWABLE HTML document, leaving every run's face to the stylesheet's
+/// own generic stack — the base-14 twin of
+/// [`render_html_reflow_ttf_with`], exactly mirroring
+/// `rustyfi_pdf::render_pdf_with`'s relationship to
 /// `rustyfi_pdf::render_pdf_ttf_with`.
 ///
-/// `images`/`extras` are accepted for argument-for-argument symmetry with
-/// the PDF writer; Slice 1 did not read them, Slice 2 reads `images`
-/// for `Image` `<img>` data-URIs (TODO: still deferred, see `inline.rs`) and
-/// `extras` is superseded here by the more precise `links`/`dests` slices
-/// (`DocumentValue::reflow_links`/`reflow_dests` — `DecoId`-keyed, not
-/// `extras.annotations`/`destinations`'s page-absolute rects, see
-/// `Ctx::links`'s doc comment on why).
+/// `images` is read for real: each `Image` box resolves against it and
+/// becomes an `<img>` data URI (`crate::image::data_uri`). `extras` is
+/// accepted mostly for argument-for-argument symmetry with the PDF writer —
+/// `extras.outline` drives heading promotion (`Ctx::outline_by_dest`), but
+/// its `annotations`/`destinations` are superseded here by the more precise
+/// `links`/`dests` slices (`DocumentValue::reflow_links`/`reflow_dests` —
+/// `DecoId`-keyed, not page-absolute rects; see `Ctx::links`'s doc comment
+/// on why).
 #[allow(clippy::too_many_arguments)]
 pub fn render_html_reflow(
     source: Option<&[VertBox]>,
@@ -443,11 +444,13 @@ pub fn render_html_reflow_with_decos(
 }
 
 /// Same as [`render_html_reflow`], but rendering under a real
-/// [`TtfFontStore`] — every inline run's `<span>` gets an explicit
-/// `font-family` stack NAMING the face the document was typeset in
-/// (`crate::fonts::reflow_font_stack`), rather than the generic fallback
-/// the base-14 path leaves to the stylesheet. Nothing is embedded; see
-/// `crate::fonts` for why a reflowed document does not pay for that.
+/// [`TtfFontStore`] — the document's faces are then NAMED
+/// (`crate::fonts::reflow_font_stack`) rather than left to the stylesheet's
+/// generic stack: the dominant face goes on the `body` rule (`css.rs`), and
+/// only a run that departs from it names a family of its own (`inline.rs`'s
+/// `emit_run`) — so the bulk of the prose stays bare text with no `<span>`
+/// at all. Nothing is embedded; see `crate::fonts` for why a reflowed
+/// document does not pay for that.
 #[allow(clippy::too_many_arguments)]
 pub fn render_html_reflow_ttf_with(
     source: Option<&[VertBox]>,

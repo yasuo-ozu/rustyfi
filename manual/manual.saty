@@ -74,12 +74,13 @@ $ rustyfi document.saty -o out/document.pdf
     >
     +subsection{Output formats}<
       +p{
-        `--format pdf` is the default. `--format html` is a faithful,
-        non-reflowing serialization of the same laid-out pages the PDF writer
-        renders — every run absolutely positioned — intended as a preview and
-        visual-diff aid. `--format html-reflow` is a separate, semantic
-        serialization with real flowing paragraphs and CSS layout: readable,
-        but deliberately not layout-faithful.
+        `--format pdf` is the default. `--format html` writes one continuous,
+        self-contained web document: real flowing paragraphs the browser
+        breaks and justifies itself, with headings, lists, tables, links and
+        in-flow footnotes, built from the block stream as it stood before
+        page breaking — so there are no pages in it, and it is readable
+        rather than layout-faithful. `--format html-reflow` is accepted as an
+        alias of `html`.
       }
     >
   >

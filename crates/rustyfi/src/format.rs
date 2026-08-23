@@ -53,13 +53,58 @@ impl OutputFormat {
     /// identical input never collide under the same cache key (and so a
     /// hit's stored bytes are never written to the wrong-format output).
     ///
-    /// `Html`'s tag stays the historical `html-reflow` rather than becoming
-    /// plain `html`: the tag is a cache key, and renaming it would silently
-    /// invalidate every existing entry for no behavioural gain.
+    /// `Html`'s tag stays the historical `html-reflow`, and tidying it up to
+    /// plain `html` would be a BUG, not a cosmetic change. `html` was the tag
+    /// of the layout-faithful `--format html-fixed` backend that used to sit
+    /// beside this one, and nothing else in the key tells the two apart: the
+    /// cache stores every format's payload as a bare `<key>.pdf`
+    /// (`cache.rs`'s `pdf_path`), and removing that backend did not bump
+    /// `CARGO_PKG_VERSION`, which is the only other version-ish field in the
+    /// key. So a binary spelling this `html` would HIT, and serve, entries an
+    /// equally-versioned older binary wrote for `html-fixed` — a page of
+    /// absolutely-positioned `<div class="page">`s handed back where a
+    /// reflowed document was asked for, under the same `.html` name, with
+    /// nothing downstream to notice. Keeping the historical spelling also
+    /// keeps existing reflow entries valid, but that is the smaller half of
+    /// the reason. Pinned by `the_html_cache_tag_is_not_the_removed_backends`
+    /// below.
     pub(crate) fn cache_tag(self) -> &'static str {
         match self {
             OutputFormat::Pdf => "pdf",
             OutputFormat::Html => "html-reflow",
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The cache tags are a compatibility surface, not an internal spelling:
+    /// see [`OutputFormat::cache_tag`]. `html` in particular is RETIRED — it
+    /// belonged to the removed `--format html-fixed` backend, and an
+    /// equally-versioned older binary's entries under it are still on disk in
+    /// users' cache directories.
+    #[test]
+    fn the_html_cache_tag_is_not_the_removed_backends() {
+        assert_eq!(OutputFormat::Html.cache_tag(), "html-reflow");
+        assert_ne!(OutputFormat::Html.cache_tag(), "html");
+        assert_ne!(
+            OutputFormat::Pdf.cache_tag(),
+            OutputFormat::Html.cache_tag()
+        );
+    }
+
+    /// `html-fixed` is retired as a FLAG VALUE too, not merely reassigned:
+    /// it must no longer parse at all, so the removal cannot be papered over
+    /// by silently accepting the old spelling.
+    #[test]
+    fn html_fixed_no_longer_parses() {
+        assert!("html-fixed".parse::<OutputFormat>().is_err());
+        assert_eq!("html".parse::<OutputFormat>(), Ok(OutputFormat::Html));
+        assert_eq!(
+            "html-reflow".parse::<OutputFormat>(),
+            Ok(OutputFormat::Html)
+        );
     }
 }

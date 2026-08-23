@@ -440,6 +440,7 @@ fn every_registered_primitive_has_a_type() {
         "regexp-of-string",
         "string-match",
         "split-on-regexp",
+        "string-scan",
         "embed-string",
         "inline-fil",
         // ---- part 1 additions ----
@@ -595,14 +596,21 @@ fn every_registered_primitive_has_a_type() {
         "add-footnote",
         // ---- page-level prims blocking mitou-report/stdjareport ----
         "clear-page",
+        // ---- moved OUT of `V01_ONLY_NAMES`: `read-file` landed on the
+        // 0.0.6 dev line, not in 0.1, so it is bound under BOTH versions.
+        // See `prim_types.rs` for the evidence (code-printer 1.1.1 calls it
+        // while pinning `satysfi < "0.1"`). ----
+        "read-file",
     ];
     assert_eq!(
         NAMES.len(),
-        177,
+        179,
         "keep this list in sync with primitives.rs's prims! table \
          (reflow S4 lists added 2: list-mark, inline-mark; \
          layout-fidelity slydifi added 2: set-space-ratio-between-scripts, and \
-         set-hyphen-min which had a prim+type but was missing from the name lists)"
+         set-hyphen-min which had a prim+type but was missing from the name \
+         lists; the code-printer sweep added string-scan, and moved read-file \
+         here from V01_ONLY_NAMES)"
     );
     for name in NAMES {
         assert!(
@@ -633,8 +641,9 @@ fn every_v01_only_primitive_has_a_type_under_v0_1_and_none_under_v0_0() {
         "embed-inline-to-math",
         "get-math-axis-height-ratio",
         "%math-attach-scripts",
-        // ---- bitwise ops, Unicode string ops, `read-file`,
-        // `register-document-information` ----
+        // ---- bitwise ops, Unicode string ops,
+        // `register-document-information`. `read-file` used to be listed
+        // here and is NOT any more: it is bound under both versions. ----
         "<<",
         ">>",
         "band",
@@ -644,7 +653,6 @@ fn every_v01_only_primitive_has_a_type_under_v0_1_and_none_under_v0_0() {
         "normalize-string-to-nfc",
         "normalize-string-to-nfd",
         "split-grapheme-cluster",
-        "read-file",
         "register-document-information",
         // ---- the 2 graphics-collection additions. The 3 named + 6
         // hidden retypes are NOT here — each is one shared name whose

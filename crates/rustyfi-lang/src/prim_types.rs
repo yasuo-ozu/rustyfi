@@ -773,6 +773,13 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
         // character-class patterns (`[0-9]`, `[A-Za-z]`, …).
         "regexp-of-string" => poly0(arrow(t_string(), t_string())),
         "string-match" => poly0(arrows(vec![t_string(), t_string()], t_bool())),
+        // vminstdef.yaml:1961 `PrimitiveStringScan`:
+        // `~% (tRE @-> tS @-> tOPT (tPROD [tS; tS]))` — the matched prefix and
+        // the remainder. `satysfi-code-printer`'s lexer is built on it.
+        "string-scan" => poly0(arrows(
+            vec![t_string(), t_string()],
+            t_option(product(vec![t_string(), t_string()])),
+        )),
         // vminst.ml `PrimitiveSplitOnRegExp` — split points paired with the
         // segment between them (`satysfi-base`/figbox split a path on `\.`).
         "split-on-regexp" => poly0(arrows(
@@ -1725,9 +1732,16 @@ pub fn primitive_type_with_version(name: &str, version: RustyfiVersion) -> Optio
             poly0(arrow(t_string(), list(t_string())))
         }
         // dev-0-1-0 vminst.ml:3073 — REAL, `primitives.rs`'s `prim_read_file`.
-        "read-file" if version == RustyfiVersion::V0_1 => {
-            poly0(arrow(t_string(), list(t_string())))
-        }
+        //
+        // Bound under BOTH generations, unlike its neighbours here. It was
+        // added on the 0.0.6 DEV line, not in 0.1: `satysfi-code-printer`
+        // 1.1.1 calls it from `+file-printer` while its own opam pins
+        // `satysfi { >= "0.0.6-53-g2867e4d9" & < "0.1" }`, which is direct
+        // evidence that a 0.0.6-generation compiler has it. Gating it to
+        // `V0_1` made the whole package fail to load under 0.0.6 — an
+        // `unbound variable 'read-file'` from a module body, so not even
+        // reachable-code-dependent.
+        "read-file" => poly0(arrow(t_string(), list(t_string()))),
         // dev-0-1-0 vminst.ml:2978 — REAL, `primitives.rs`'s
         // `prim_register_document_information`.
         "register-document-information" if version == RustyfiVersion::V0_1 => {

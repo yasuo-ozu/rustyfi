@@ -1,5 +1,5 @@
-//! The block-level `Vec<VertBox>` walker ("Block level"). Unlike the faithful
-//! backend's `Page`/`PlacedLine` walk (already-placed, absolutely positioned),
+//! The block-level `Vec<VertBox>` walker ("Block level"). Unlike the PDF
+//! writer's `Page`/`PlacedLine` walk (already-placed, absolutely positioned),
 //! this walks the FLAT pre-page-break list with a single linear pass, using a
 //! small amount of local state (a "current paragraph" text accumulator and a
 //! "pending top margin" carried from the last `Skip`) instead of a `Page`'s
@@ -28,8 +28,8 @@ use super::{inline, structure, Ctx};
 
 /// Accumulated state for "the paragraph currently being built" — `text` is
 /// the flowing inline HTML gathered so far (escaped/styled runs, glue
-/// collapsed to plain spaces so the BROWSER re-breaks lines, unlike the
-/// faithful mode's fixed per-glyph positioning); `open` distinguishes "no
+/// collapsed to plain spaces so the BROWSER re-breaks lines, rather than
+/// keeping the box stream's own fixed per-glyph advances); `open` distinguishes "no
 /// paragraph started yet" (nothing to flush) from "a paragraph with only
 /// whitespace so far" (still flushed as an empty-ish `<p>`, matching
 /// upstream's own willingness to lay out a blank line).

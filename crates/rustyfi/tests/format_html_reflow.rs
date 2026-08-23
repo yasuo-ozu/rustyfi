@@ -1,18 +1,16 @@
 //! `--format html` — the reflowable, semantic backend — end-to-end, driven
-//! through the *built* `rustyfi` binary ("CLI"), mirroring
-//! `tests/format_html.rs`'s process-spawn harness style for the faithful
-//! `--format html-fixed`.
+//! through the *built* `rustyfi` binary ("CLI"), mirroring `tests/cache.rs`'s
+//! process-spawn harness style.
 //!
 //! Also the additivity guard (design doc §8): the SAME fixture compiled with
-//! `--format html-fixed` and the default `--format pdf` must still behave
-//! exactly as `tests/format_html.rs`/`tests/e2e.rs` already expect — the
-//! reflow backend is reached only through its own match arm (`main.rs`'s
-//! `format::OutputFormat::Html`), so it cannot have touched either of those
-//! paths' own code.
+//! the default `--format pdf` must still behave exactly as `tests/e2e.rs`
+//! already expects — the reflow backend is reached only through its own match
+//! arm (`main.rs`'s `format::OutputFormat::Html`), so it cannot have touched
+//! that path's own code.
 //!
-//! `--format html-reflow`, the name this backend had while `html` meant the
-//! faithful one, is still accepted as an alias; both spellings appear below
-//! deliberately.
+//! `--format html-reflow`, the name this backend had while `html` meant a
+//! second, layout-faithful backend, is still accepted as an alias; both
+//! spellings appear below deliberately.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -149,7 +147,7 @@ fn rendered_text(html: &str) -> String {
     out
 }
 
-/// The defining difference from the faithful twin: nothing in the reflowed
+/// The invariant that defines this backend: nothing in the reflowed
 /// document's CONTENT is positioned. `top:`/`left:` may appear only as the
 /// tail of a flow-safe longhand — `margin-top`, `border-left`,
 /// `padding-left` — never as the bare positioned property.
@@ -179,8 +177,7 @@ fn assert_no_positioned_offsets(full: &str) {
 }
 
 /// `--format html` writes real flowing `<p>` paragraphs (one per `+p`), in
-/// reading order, with their text HTML-escaped-but-intact — and, the
-/// defining difference from the faithful `--format html-fixed` twin, NO
+/// reading order, with their text HTML-escaped-but-intact — and NO
 /// absolute positioning anywhere in the document's own stylesheet/inline
 /// styles, and no page divs at all.
 #[test]
@@ -207,9 +204,8 @@ fn format_html_writes_flowing_paragraphs_in_reading_order() {
     // Reading order: bracketed paragraph, then announced paragraph, then
     // the match-computed "Countdown complete." (finished = count-down 5,
     // which recurses down to 0 -> true -> the `true` arm of `chosen`). Each
-    // `+p`'s text is tokenized into one `InnerString` PER WORD (same
-    // granularity the faithful mode's own per-run `<span>`s use, see
-    // `tests/format_html.rs`), so this checks each word individually rather
+    // `+p`'s text is tokenized into one `InnerString` PER WORD, so this
+    // checks each word individually rather
     // than a contiguous sentence substring — the words are still adjacent
     // in the flowing text, just each in its own `<span>`.
     // Checked against the TEXT, with tags stripped, not against raw markup: a
@@ -256,40 +252,7 @@ fn format_html_writes_flowing_paragraphs_in_reading_order() {
     std::fs::remove_dir_all(&work).ok();
 }
 
-/// Additivity guard (design doc §8): compiling the SAME fixture with the
-/// faithful `--format html` still produces its established shape (a
-/// `<div class="page">` twin of the PDF, per `tests/format_html.rs`) — the
-/// new `html-reflow` format could not have touched this code path, since it
-/// is reached only through a brand-new, separate `match` arm.
-#[test]
-fn format_html_faithful_mode_is_unaffected_by_the_new_reflow_format() {
-    let work = tmpdir("faithful");
-    let out = compile(&phase2_fixture(), &work, "html-fixed", "html");
-
-    let html = std::fs::read_to_string(&out).expect("--format html must write the output file");
-    assert!(
-        html.starts_with("<!doctype html>"),
-        "missing doctype:\n{html}"
-    );
-    assert!(
-        html.contains("<div class=\"page\""),
-        "missing page div:\n{html}"
-    );
-    assert!(
-        rendered_text(&html).contains("Bracketed"),
-        "missing expected fixture text:\n{html}"
-    );
-    // The faithful mode's own defining trait, unchanged: every run IS
-    // absolutely positioned.
-    assert!(
-        html.contains("position: absolute"),
-        "faithful mode must still be absolutely positioned:\n{html}"
-    );
-
-    std::fs::remove_dir_all(&work).ok();
-}
-
-/// Additivity guard: the default (`pdf`) format is unaffected too.
+/// Additivity guard: the default (`pdf`) format is unaffected.
 #[test]
 fn default_pdf_format_is_unaffected_by_the_new_reflow_format() {
     let work = tmpdir("pdf");
@@ -435,52 +398,10 @@ fn itemize_fixture_still_produces_a_valid_pdf() {
     std::fs::remove_dir_all(&work).ok();
 }
 
-/// Same inert-marker proof for the FAITHFUL `--format html` twin: it must
-/// still be the established absolutely-positioned shape (`tests/
-/// format_html.rs`'s own invariant), completely unaffected by the fixture
-/// actually calling `Itemize.listing`/`Itemize.enumerate`/`\V01Mini.emph`.
-#[test]
-fn itemize_fixture_faithful_html_is_still_absolutely_positioned() {
-    let work = tmpdir("itemize-faithful");
-    let out = compile_v01(&itemize_fixture(), &work, "html-fixed", "html");
-
-    let html = std::fs::read_to_string(&out).expect("--format html must write the output file");
-    assert!(
-        html.starts_with("<!doctype html>"),
-        "missing doctype:\n{html}"
-    );
-    assert!(
-        html.contains("<div class=\"page\""),
-        "missing page div:\n{html}"
-    );
-    assert!(
-        html.contains("position: absolute"),
-        "faithful mode must still be absolutely positioned:\n{html}"
-    );
-    // The markers must not leak into faithful HTML as visible tags either
-    // (chop_page never places them; both writers wildcard the box kind).
-    assert!(
-        !html.contains("<ul"),
-        "faithful HTML must never render <ul> (S4 is reflow-only):\n{html}"
-    );
-    assert!(
-        !html.contains("<em>"),
-        "faithful HTML must never render <em> (S4 is reflow-only):\n{html}"
-    );
-    for text in ["item", "nested", "entry"] {
-        assert!(
-            html.contains(text),
-            "missing expected fixture text {text:?}:\n{html}"
-        );
-    }
-
-    std::fs::remove_dir_all(&work).ok();
-}
-
 /// `--format html-reflow` is the name the reflowable backend had while
-/// `html` meant the faithful one. It still parses, as an alias, so the
-/// rename breaks no existing script — and it must select the SAME backend,
-/// not merely be accepted.
+/// `html` meant a second, layout-faithful backend. It still parses, as an
+/// alias, so the rename breaks no existing script — and it must select the
+/// SAME backend, not merely be accepted.
 #[test]
 fn html_reflow_is_still_accepted_as_an_alias_of_html() {
     let work = tmpdir("alias");
@@ -495,7 +416,7 @@ fn html_reflow_is_still_accepted_as_an_alias_of_html() {
     std::fs::remove_dir_all(&work).ok();
 }
 
-/// An unknown format names the two real spellings, so a mistyped flag says
+/// An unknown format names the real spellings, so a mistyped flag says
 /// what to type instead.
 #[test]
 fn an_unknown_format_is_rejected_by_name() {
@@ -510,8 +431,12 @@ fn an_unknown_format_is_rejected_by_name() {
     assert!(!result.status.success(), "a bogus --format must fail");
     let msg = String::from_utf8_lossy(&result.stderr);
     assert!(
-        msg.contains("html") && msg.contains("html-fixed"),
+        msg.contains("pdf") && msg.contains("html"),
         "the rejection should name the available formats:\n{msg}"
+    );
+    assert!(
+        !msg.contains("html-fixed"),
+        "the removed faithful backend must not be offered:\n{msg}"
     );
 
     std::fs::remove_dir_all(&work).ok();

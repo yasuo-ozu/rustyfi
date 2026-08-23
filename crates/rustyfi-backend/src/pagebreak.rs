@@ -289,7 +289,7 @@ pub fn chop_page(
                 idx += 1;
             }
             // A PURE skip — unlike `FrameStart`/`FrameEnd` above, this marker
-            // has no downstream (PDF/faithful-HTML) consumer at all, so it
+            // has no downstream (PDF) consumer at all, so it
             // doesn't even get a placeholder `PlacedLine`; it simply never
             // reaches placement. It already rode into `reflow_source` (cloned
             // by `page_break_core` BEFORE this function runs) — that clone is

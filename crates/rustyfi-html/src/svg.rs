@@ -12,33 +12,31 @@
 //! `place_graphics` reconciles this with a single per-box `cm` TRANSLATE
 //! (no flip — PDF device space is *already* y-up, so box-local coordinates
 //! need no flip to become PDF-native, only a shift to the box's placed
-//! anchor). HTML/SVG's page space is y-**down** (CSS `top`, `render_html_fixed`'s
-//! own doc comment), so here the per-box wrapper needs an actual flip, not
+//! anchor). HTML/SVG's page space is y-**down** (CSS `top`), so here the
+//! per-box wrapper needs an actual flip, not
 //! just a translate: [`emit_graphics`] gives each `<svg>` its own tiny
 //! `width×(height+depth)` viewport with `viewBox="0 0 width (height+depth)"`
 //! (so 1 SVG user unit = 1 pt, matching every `Length` value here directly,
 //! with no unit conversion), CSS-positions that viewport's TOP-LEFT corner
-//! at the box's placed top-left `(tx, ty - height)` (the same "baseline
-//! minus ascent" arithmetic `emit_run`/`emit_box`'s `InnerString` arm uses),
-//! and wraps the contents in one inner `<g transform="translate(0,height)
-//! scale(1,-1)">` — the SVG analogue of `place_graphics`'s `cm`, decomposed
+//! at the box's placed top-left `(tx, ty - height)` (the usual "baseline
+//! minus ascent" arithmetic), and wraps the contents in one inner `<g
+//! transform="translate(0,height) scale(1,-1)">` — the SVG analogue of
+//! `place_graphics`'s `cm`, decomposed
 //! into "CSS position of the svg root" (the translate-to-anchor half) plus
 //! "one local flip" (the y-up-to-y-down half PDF never needs). A local point
-//! `(px, py)` then lands at SVG-local `(px, height - py)`, i.e. page
-//! `(tx + px, ty - py)` — exactly mirroring how `emit_box`'s `InnerString`
-//! arm turns a y-up `rising` into a page-y-down subtraction.
+//! `(px, py)` then lands at SVG-local `(px, height - py)`, i.e. outer-frame
+//! `(tx + px, ty - py)`.
 //!
 //! **`GraphicsElem::Text` breaks that decomposition on purpose.** A
 //! `draw-text` run's placed sub-boxes are ordinary `PureHorzBox`es (text
-//! runs, possibly nested graphics/images) emitted through the SAME
-//! `emit_box` used everywhere else, which positions `<span>`/`<svg>`
-//! children via CSS `position:absolute` relative to the nearest positioned
-//! ancestor — the `.page` div, NOT this box's local `<g transform>` (CSS
+//! runs, possibly nested graphics/images), which the caller emits as
+//! `<span>`/`<svg>` children positioned relative to the nearest positioned
+//! ancestor, NOT this box's local `<g transform>` (CSS
 //! absolute positioning does not compose with an SVG sibling's coordinate
 //! transform the way a PDF content-stream operator composes with the active
 //! CTM). So `Text` is handled OUTSIDE the `<svg>`/`<g>` nest entirely: its
-//! nested boxes are placed at page-absolute coordinates computed by hand
-//! (`tx + pt.x + dx`, `ty - pt.y`) via the `nested` callback, the one
+//! nested boxes are handed to the `nested` callback with coordinates
+//! computed by hand (`tx + pt.x + dx`, `ty - pt.y`), the one
 //! documented divergence from the PDF writer's `place_graphics` (whose
 //! `emit_nested` callback runs INSIDE the `q`/`cm` block precisely because
 //! PDF text ops DO compose with the CTM).
@@ -189,9 +187,9 @@ fn emit_elems(
 }
 
 /// Process-global monotonic counter for `<clipPath id>` uniqueness (SVG IDs
-/// must be unique within one document; a page can contain arbitrarily many
-/// independent `Clip` elements, and `render_html_fixed` has no other natural
-/// "clip index" to thread through the box walker).
+/// must be unique within one document; a document can contain arbitrarily
+/// many independent `Clip` elements, and the box walker has no other natural
+/// "clip index" to thread through).
 static NEXT_CLIP_ID: AtomicUsize = AtomicUsize::new(0);
 
 fn next_clip_id() -> usize {

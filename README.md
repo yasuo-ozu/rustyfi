@@ -173,7 +173,7 @@ url = "https://example.org/another-index"
 | flag | what it does |
 |---|---|
 | `-o <path>` | output path (default: the input with a `.pdf` extension) |
-| `--format <fmt>` | `pdf` (default), `html`, `html-fixed` — see [HTML output](#html-output) |
+| `--format <fmt>` | `pdf` (default) or `html` — see [HTML output](#html-output) |
 | `--lib-root <dir>` | where `@require:` looks for packages |
 | `--lang <v>` | `0.0` (default) or `0.1`; a `use` header auto-selects `0.1` |
 | `--font <file>` | use a TrueType/OpenType file as the regular face |
@@ -185,8 +185,7 @@ url = "https://example.org/another-index"
 ## HTML output
 
 ```console
-$ rustyfi --format html doc.saty        # a web page
-$ rustyfi --format html-fixed doc.saty  # a picture of the PDF, in HTML
+$ rustyfi --format html doc.saty  # a web page
 ```
 
 `--format html` writes **one continuous, self-contained web document**. There
@@ -246,13 +245,7 @@ would buy nothing and cost megabytes (with the bundled Japanese faces, one
 manual came to 20 MB). The reader gets the real face if they have it and a
 sensible generic if they do not.
 
-`--format html-fixed` is the other thing: a layout-faithful serialization of
-exactly the placed boxes the PDF writer consumes, one `div` per page with
-every run at its own absolute coordinate, fonts embedded so the metrics
-match. It is a visual-diff aid for checking this port's layout against the
-PDF in a browser — not something to read. (`--format html-reflow`, the name
-the reflowable backend had while `html` meant the faithful one, still works
-as an alias for `html`.)
+`--format html-reflow` is accepted as an alias for `html`.
 
 ### What does not survive
 

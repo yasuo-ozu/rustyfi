@@ -444,8 +444,8 @@ fn pad_right(frame: &FrameDecoration) -> String {
     }
 }
 
-/// Replace `emit_graphics`' opening `<svg>` — written for the faithful
-/// backend, absolutely positioned at a page point and sized in points — with
+/// Replace `emit_graphics`' opening `<svg>` — absolutely positioned at its
+/// caller's anchor point and sized in points — with
 /// one that fills the `<div>` instead.
 ///
 /// The `viewBox` is widened to the drawing's OWN extent where that reaches

@@ -358,16 +358,13 @@ fn compile_command(name: &'static str) -> Command {
                 .long("format")
                 .value_name("FORMAT")
                 .help(
-                    "Output format: pdf (default), html, or html-fixed. html is a \
+                    "Output format: pdf (default) or html. html is a \
                      semantic, reflowable web document — one continuous flow of real \
                      paragraphs the browser breaks and justifies, with headings, \
                      lists, links and in-flow footnotes; readable, not \
-                     layout-faithful. html-fixed is the layout-FAITHFUL twin: the \
-                     same laid-out pages the PDF writer renders, one div per page \
-                     with every run absolutely positioned — a visual-diff aid, not \
-                     web output. (html-reflow is accepted as an alias of html.)",
+                     layout-faithful. (html-reflow is accepted as an alias of html.)",
                 )
-                .value_parser(["pdf", "html", "html-fixed", "html-reflow"])
+                .value_parser(["pdf", "html", "html-reflow"])
                 .default_value("pdf"),
         )
         .arg(

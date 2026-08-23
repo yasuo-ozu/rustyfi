@@ -21,7 +21,7 @@
 //! captured, so this arm is realistically unreachable; kept as an honest
 //! placeholder rather than assumed-dead code).
 //! `HookPageBreak`/`FrameMarker` render nothing (no reflow meaning, same as
-//! both the faithful HTML writer and the PDF writer's own wildcard arms).
+//! the PDF writer's own wildcard arm).
 //!
 //! Slice 3 (design doc §6 "S3", `structure.rs`'s doc comment) replaces the
 //! `Tabular` PLACEHOLDER `<span>` with a real `<table>` — see this module's
@@ -211,13 +211,12 @@ pub(crate) fn emit_inline(out: &mut String, bx: &PureHorzBox, ctx: &Ctx) {
 
         // Math is flattened to positioned glyphs at eval time (design doc
         // §4) — no fraction/sub/sup structure survives to render as MathML,
-        // so (Slice 2, design doc §4's "the honest option") this renders the
-        // SAME way the faithful backend's approximation does: each glyph as
-        // positioned text, each rule (fraction bar/radical) as an SVG path
-        // — but bundled into ONE self-contained, intrinsically-sized inline
-        // `<svg>` (see [`emit_math_svg`]) instead of the faithful mode's
-        // page-absolute `<span>`s, since reflow has no page to be absolute
-        // WITHIN.
+        // so (Slice 2, design doc §4's "the honest option") this renders
+        // each glyph as positioned text and each rule (fraction bar/radical)
+        // as an SVG path, bundled into ONE self-contained,
+        // intrinsically-sized inline `<svg>` (see [`emit_math_svg`]) — there
+        // is no page here to position a glyph WITHIN, so the drawing carries
+        // its own coordinate space.
         PureHorzBox::Math {
             width,
             height,
@@ -241,7 +240,7 @@ pub(crate) fn emit_inline(out: &mut String, bx: &PureHorzBox, ctx: &Ctx) {
         // resolved only by `resolve_outer_graphics_in_contents` at
         // `line-break` time, well before `reflow_source` is captured — see
         // this module's doc comment); the backend has no way to run it, same
-        // limitation the faithful writer has (its own `emit_box` has no arm
+        // limitation the PDF writer has (its own `emit_box` has no arm
         // for this variant at all, silently matching its wildcard). Kept as
         // an honest placeholder rather than silently dropped.
         PureHorzBox::GraphicsOuter { .. } => {
@@ -253,9 +252,8 @@ pub(crate) fn emit_inline(out: &mut String, bx: &PureHorzBox, ctx: &Ctx) {
         // A real `<img>` with a self-contained data URI, sized in the
         // document's own points but capped at the column width so a figure
         // wider than a narrow viewport shrinks instead of overflowing
-        // (`css.rs`'s `img.img` rule) — the reflowable counterpart of the
-        // faithful backend's absolutely-positioned `<img>`, sharing
-        // `crate::image::data_uri` verbatim with it.
+        // (`css.rs`'s `img.img` rule), with the bytes inlined by
+        // `crate::image::data_uri`.
         PureHorzBox::Image {
             width,
             height,
@@ -267,8 +265,7 @@ pub(crate) fn emit_inline(out: &mut String, bx: &PureHorzBox, ctx: &Ctx) {
                 // samples at all (`ImageResource::pdf`), and rasterizing one
                 // is out of scope for an HTML writer, so this keeps an
                 // honestly-labelled box at the right size rather than
-                // emitting a degenerate 0x0 `<img>`. The faithful backend
-                // does exactly the same.
+                // emitting a degenerate 0x0 `<img>`.
                 Some(res) if res.pdf.is_some() => {
                     let _ = write!(
                         out,
@@ -310,8 +307,8 @@ pub(crate) fn emit_inline(out: &mut String, bx: &PureHorzBox, ctx: &Ctx) {
                         height.0,
                     );
                 }
-                // Out-of-range `ImageId` — should not happen; the faithful
-                // writer and the PDF writer both skip rather than panic.
+                // Out-of-range `ImageId` — should not happen; the PDF writer
+                // skips rather than panics, and so does this.
                 None => {}
             }
         }
@@ -379,8 +376,8 @@ pub(crate) fn emit_inline(out: &mut String, bx: &PureHorzBox, ctx: &Ctx) {
         // through.
         PureHorzBox::EmbeddedBlock { .. } => {}
 
-        // No reflow meaning (zero-width markers/hooks; matches the
-        // faithful writer's own wildcard treatment of these two).
+        // No reflow meaning (zero-width markers/hooks; matches the PDF
+        // writer's own wildcard treatment of these two).
         PureHorzBox::HookPageBreak { .. } | PureHorzBox::FrameMarker { .. } => {}
     }
 }
@@ -422,25 +419,19 @@ fn emit_run(out: &mut String, info: &HorzStringInfo, text: &str, ctx: &Ctx) {
 
     let mut style = String::new();
     if !ctx.body.matches(info.font, info.size.0) {
+        // A run in the body's OWN face names no family of its own — the
+        // `body` rule already names it.
         if Some(info.font) != ctx.body.font {
             if let Some(stack) = ctx.font_family_for(info.font) {
                 let _ = write!(style, "font-family:{stack};");
             }
-        } else {
-            // Same face as the body, so the `@font-face` rule for it is
-            // needed even though this run names no family of its own.
-            let _ = ctx.font_family_for(info.font);
         }
         if (info.size.0 - ctx.body.size).abs() >= 0.005 {
             let _ = write!(style, "font-size:{:.4}em;", info.size.0 / ctx.body.size);
         }
-    } else {
-        // Body-styled: still record the face as used, so `font_face_rules`
-        // embeds it for the `body` rule that names it.
-        let _ = ctx.font_family_for(info.font);
     }
-    // Non-black only, mirroring the faithful writer's own guard, so a plain
-    // black run stays unwrapped.
+    // Non-black only, mirroring the PDF writer's own fill-color guard, so a
+    // plain black run stays unwrapped.
     if info.color != Color::Gray(0.0) {
         let _ = write!(style, "color:{};", crate::svg::css_color(info.color));
     }
@@ -600,13 +591,12 @@ fn open_opaque(out: &mut String, ctx: &Ctx) {
 ///
 /// `nested` (for `GraphicsElem::Text`/`draw-text`, the one arm that steps
 /// outside the local coordinate frame — see `svg.rs`'s own doc comment)
-/// re-enters THIS module's [`emit_inline`] rather than the faithful writer's
-/// page-absolute `emit_box`, since reflow has no page coordinates to place
+/// re-enters THIS module's [`emit_inline`] rather than any page-absolute box
+/// emitter, since reflow has no page coordinates to place
 /// nested content at; the `_x`/`_y` callback args are therefore unused here
 /// (a `draw-text` run's nested boxes render inline, at their natural flow
 /// position within the wrapper, not at their SVG-local point — a documented
-/// approximation for this rare construction, same spirit as the faithful
-/// mode's own `Math.glyph.gid` approximation).
+/// approximation for this rare construction).
 fn emit_graphics_box(
     out: &mut String,
     width: f64,
@@ -726,9 +716,8 @@ fn emit_text_only(out: &mut String, elems: &[GraphicsElem], ctx: &Ctx) {
 ///
 /// They are collected into a SIDE buffer and appended after the `</svg>`,
 /// never written where `svg::emit_graphics`'s callback offers them — which
-/// is inside the `<svg>`'s `<g>`. The faithful backend can put them there
-/// because everything it emits is an absolutely-positioned page-level
-/// element; here they are `<span>`s and `<a>`s of flowing text, and an HTML
+/// is inside the `<svg>`'s `<g>`. What this module emits there would be
+/// `<span>`s and `<a>`s of flowing text, and an HTML
 /// element inside `<svg>` outside a `<foreignObject>` is not valid markup at
 /// all — the browser's parser closes the `<svg>` at the first one and the
 /// rest of the drawing escapes into the document.
@@ -744,8 +733,8 @@ fn emit_nested_text(nested: &mut String, bx: &PureHorzBox, ctx: &Ctx) {
 
 /// Slice 2 (design doc §4 "Math"): MathML is not recoverable (structure is
 /// flattened to positioned glyphs by `read_math`/`layout_math_value` well
-/// before any box exists), so this renders the SAME honest approximation the
-/// faithful backend does — each glyph as positioned text, each `rules`
+/// before any box exists), so this renders the honest approximation instead
+/// — each glyph as positioned text, each `rules`
 /// element (fraction bar/radical) as an SVG path — bundled into ONE
 /// self-contained, intrinsically-sized inline `<svg>` (the design doc's
 /// "inline `<svg>` sized to the box").
@@ -754,8 +743,9 @@ fn emit_nested_text(nested: &mut String, bx: &PureHorzBox, ctx: &Ctx) {
 /// - **Glyphs**: native SVG `<text>` elements, positioned directly in the
 ///   `<svg>`'s own native (y-DOWN) coordinate space — `MathGlyph.dx`/`dy`
 ///   are box-local y-**up** offsets from the box's own baseline (the same
-///   convention `GraphicsElem::Path` points use, confirmed by the faithful
-///   writer's `ty - g.dy.0` arithmetic, `lib.rs`'s `Math` arm), so a local
+///   convention `GraphicsElem::Path` points use, confirmed by the PDF
+///   writer's own `anchor_y + glyph.dy` arithmetic in its y-up space,
+///   `rustyfi-pdf`'s `place_math`), so a local
 ///   `(dx, dy)` lands at SVG-native `(dx, height - dy)` — computed BY HAND
 ///   here (not via a `<g transform>` flip) specifically so `<text>` glyphs
 ///   are never inside a `scale(1,-1)` group, which would render them

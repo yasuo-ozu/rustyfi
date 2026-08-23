@@ -1,7 +1,6 @@
 //! Integration tests for the reflowable/semantic HTML writer
 //! (`render_html_reflow`, `--format html`): hand-built `Vec<VertBox>`
-//! fixtures, mirroring `tests/html.rs`'s synthetic box-construction style
-//! for the faithful writer.
+//! fixtures built by hand rather than compiled from a document.
 //!
 //! Roughly in the order the file runs: paragraph grouping and splitting,
 //! frame and embedded-block nesting, run styling, math/graphics/table/link
@@ -19,8 +18,8 @@
 //!   misnested markup rather than a crash. `assert_balanced_tags` is the
 //!   guard.
 //!
-//! Throughout: the "no absolute positioning" invariant that is the defining
-//! difference from the faithful mode.
+//! Throughout: the "no absolute positioning" invariant that defines this
+//! backend.
 
 use rustyfi_backend::{
     AnnotAction, Closing, Color, DecoId, DocExtras, FontKey, GraphicsElem, HorzStringInfo,
@@ -435,7 +434,7 @@ fn goto_name_link_and_matching_destination_frame_wire_together() {
     );
 }
 
-/// The defining difference from the faithful (`render_html_fixed`) mode: NOTHING
+/// The invariant that defines this backend: NOTHING
 /// in reflow output is absolutely positioned. `left:` is never emitted at
 /// all; every occurrence of the substring `top:` must be part of
 /// `margin-top:` (a legitimate flow property), never a bare CSS `top`

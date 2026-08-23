@@ -1,8 +1,6 @@
 //! The reflow document's base stylesheet (Slice 1: "Base document CSS (max-width
 //! column, line-height, font stack, dark/light neutral)"). Everything here is
-//! FLOW layout — no `position: absolute`/`top`/`left` anywhere (the defining
-//! difference from `crate::render_html_fixed`'s faithful `.page`/`.run` rules,
-//! which position every run at its exact placed coordinate).
+//! FLOW layout — no `position: absolute`/`top`/`left` anywhere.
 //!
 //! S4 adds `ul.list`/`ol.list` spacing rules for the real
 //! `<ul>`/`<ol>`/`<li>` `block.rs`'s `VertBox::ListMark` arm now emits —
@@ -200,7 +198,7 @@ aside.footnote .para + .para {{ margin-top: 0.3em; }}\n\
 
 /// One `background-image` rule per image the flow placed more than once
 /// (`Ctx::shared_images`, filled during the body walk — so this must be
-/// called AFTER it, exactly like `fonts::font_face_rules`). Each image's
+/// called AFTER it). Each image's
 /// bytes appear once here instead of once per placement; see `inline.rs`'s
 /// `Image` arm for why that matters and what it costs.
 pub(crate) fn shared_image_rules(ctx: &Ctx) -> String {

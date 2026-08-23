@@ -113,6 +113,13 @@
     "upstream_pages": 30,
     "page_gap": 0
   },
+  "code-printer": {
+    "pages": 23,
+    "words": 2475,
+    "lines": 763,
+    "chars": 18130,
+    "covers": "syntax highlighting: string-scan regexps, 38 languages, 24 themes"
+  },
   "floatfig": {
     "pages": 4,
     "words": 109,

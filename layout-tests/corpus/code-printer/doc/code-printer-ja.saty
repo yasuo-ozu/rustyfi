@@ -1,0 +1,540 @@
+@require: stdjabook
+@require: itemize
+@require: annot
+
+%@import: ../src/code-printer
+%@import: ../src/code-syntax
+%@import: ../src/code-theme
+%@import: ../src/code-design
+@require: code-printer/code-printer
+@require: code-printer/code-design
+@require: code-printer/code-syntax
+@require: code-printer/code-theme
+
+@import: local
+
+
+document (|
+  title = {\inline-code(`code-printer`); Manual};
+  author = {Naoki Kaneko a.k.a puripuri2100};
+  show-title = true;
+  show-toc = true;
+|) '<
+  +p{このライブラリはソースコードの表示のための機能を提供します。ソースコードのシンタックスハイライトやコードの枠の装飾などを行い、かつユーザーが自身の手で表示部分を調節することができるようになっています。\LaTeX;でのlistingsパッケージと同じような機能を持っています。}
+  +section {簡単な使い方} <
+    +p{satyrographosでインストールした後に、\inline-code(`@require: code-printer/code-printer`);をプリアンブルに書くことでコマンドが使えるようになります。モジュール名は\inline-code(`CodePrinter`);です。}
+    +p{提供するコマンドは
+      \listing {
+        * \inline-code (`\inline-code`);
+        * \inline-code (`+code-printer`);
+        * \inline-code (`\code-printer`);
+        * \inline-code (`+file-printer`);
+        * \inline-code (`\file-printer`);
+      }%
+      の5つです。
+      この5つのコマンドの型はどれも\inline-code(`[code-printer-config?; string]`);となっており、「シンタックスハイライトや装飾に関する設定」を省略可能なオプション引数で与え、次に、表示したいコードそのものもしくは表示したいファイルへのパスを\inline-code(`string`);型で与える形になっています。}
+    +p{\inline-code(`\inline-code`);コマンドは行中にコードを表示する際に使用します。
+      \inline-code (`+code-printer`);と\inline-code(`\code-printer`);はどちらもブロックでコードを表示する際に使います。\inline-code(`\code-printer`);はinline-text中に書けるようになっているだけで、効果は\inline-code(`+code-printer`);と変わりません。
+      \inline-code(`+file-printer`);と\inline-code(`\file-printer`);はファイルへのパスを与えると、その中身をコードとして\inline-code(`+code-printer`);に与えた時と同じように表示します。}
+    +p{シンタックスハイライトや装飾についての設定を一切行わないときは非常にシンプルになります。
+    例えば、左のようなコードを与えると右のように出力されます。}
+    +row ?:(20pt) {|
+      \mini-page (0.4) <
+        +code-printer ?:(
+          CodePrinter.make-config CodeSyntax.satysfi CodeTheme.basic-light
+          |> CodePrinter.set-number-fun CodeDesign.number-fun-null
+        )
+(```+code-printer
+(`fn main() {
+  println!("Hi!");
+}`);
+```);
+      >
+    |
+      \mini-page (0.5) <
+        +code-printer
+(`fn main() {
+  println!("Hi!");
+}`);
+      >
+    |}
+    +p{見てわかる通り、\inline-code(`+code-printer`);コマンドに与えられたコードが表示されていると思います。デフォルトでは行番号が付き、背景が灰色の枠付きのコード表示となっています。}
+  >
+  +section {シンタックスハイライトを付ける} <
+    +p{code-printerライブラリではコードの解析を行う部分と、解析結果に色付けなどをする部分を切り離しています。プログラミング言語ごとに解析用の設定を纏めて一つの定数として提供し、それとは別にテーマごとに色やフォントを変えるための設定を纏めた定数として提供しています。ユーザーはこれらを組み合わせて自分好みの表示を作成するようになっています。}
+    +p{解析用の設定値とテーマ用の設定値を組み合わせてコマンドに渡すための設定値を生成するには、\inline-code(`CodePrinter`);モジュールで提供されている\inline-code(`make-config`);を使う必要があります。\inline-code(`make-config`);関数は二つ引数を取り、一つ目は解析用の設定値で二つ目がテーマ用の設定値です。この二つを渡して生成した設定値はそのままコマンドのオプショナル引数に渡すことで動作します。つまり、}
+    +code-printer ?:(
+          CodePrinter.make-config CodeSyntax.satysfi CodeTheme.basic-light
+        )
+(```+code-printer ?:(
+    CodePrinter.make-config syntax theme
+)(`code`);
+```);
+    +p{のようにすることで、\inline-code(`syntax`);で設定された通りにコードが解析され、その結果が\inline-code(`theme`);で設定された通りに描画される、ということです。}
+    +p{ここでの\inline-code(`syntax`);と\inline-code(`theme`);に相当する設定値はユーザー自身が作成することもできますが、code-printerライブラリの提供する機能の一つとして既にいくつかのパターンを用意しています。ここではこのライブラリで提供している設定値を紹介します。}
+    +p{デフォルトの\inline-code(`syntax`);と\inline-code(`theme`);の設定値はそれぞれ\inline-code(`CodePrinter.default-syntax`);と\inline-code(`CodePrinter.default-theme`);として公開されています。}
+    +p{毎回\inline-code(`syntax`);と\inline-code(`theme`);を設定することが面倒な場合のために、\inline-code(`CodePrinter.make-config syntax theme`);と同じ効果を持つ\inline-code(`CodePrinter.default`);関数があります。また、\inline-code(`syntax`);と\inline-code(`theme`);のそれぞれを独自に変更するための関数である\inline-code(`set-syntax`);と\inline-code(`set-theme`);が提供されています。}
+    +p{そのため、以下のように書くこともできます。}
+    +code-printer ?:(
+          CodePrinter.make-config CodeSyntax.satysfi CodeTheme.basic-light
+        )
+(```+code-printer ?:(
+    CodePrinter.default
+    |> CodePrinter.set-syntax syntax
+    |> CodePrinter.set-theme theme
+)(`code`);
+```);
+
+    +p{プログラミング言語ごとに纏められた解析用の設定は、code-syntax.satygファイルによって提供されています。\inline-code(`@require: code-printer/code-syntax`);によって読み込んでください。モジュール名は\inline-code(`CodeSyntax`);です。}
+    +p{テーマ用の設定値はcode-theme.satyhファイルによって提供されています。ファイルの先頭に\inline-code(`@require: code-printer/code-theme`);と書いて読み込んでください。モジュール名は\inline-code(`CodeTheme`);です。}
+    +p{まずは解析用の設定値の紹介です。その設定値を使って解析した結果のシンタックスハイライトと一緒に載せています。}
+    +code-syntax-demo-lst [
+      (CodeSyntax.satysfi, `satysfi`, `demo/demo.satyh`);
+      (CodeSyntax.ocaml, `ocaml`, `demo/demo.ml`);
+      (CodeSyntax.rust, `rust`, `demo/demo.rs`);
+      (CodeSyntax.cobol, `cobol`, `demo/demo.cbl`);
+      (CodeSyntax.c, `c`, `demo/demo.c`);
+      (CodeSyntax.cpp, `cpp`, `demo/demo.cpp`);
+      (CodeSyntax.csharp, `csharp`, `demo/demo.cs`);
+      (CodeSyntax.d, `d`, `demo/demo.d`);
+      (CodeSyntax.erlang, `erlang`, `demo/demo.erl`);
+      (CodeSyntax.fsharp, `fsharp`, `demo/demo.fs`);
+      (CodeSyntax.fortran, `fortran`, `demo/demo.f90`);
+      (CodeSyntax.go, `go`, `demo/demo.go`);
+      (CodeSyntax.haskell, `haskell`, `demo/demo.hs`);
+      (CodeSyntax.html, `html`, `demo/demo.html`);
+      (CodeSyntax.java, `java`, `demo/demo.java`);
+      (CodeSyntax.javascript, `javascript`, `demo/demo.js`);
+      (CodeSyntax.json, `json`, `demo/demo.json`);
+      (CodeSyntax.json5, `json5`, `demo/demo.json5`);
+      (CodeSyntax.julia, `julia`, `demo/demo.jl`);
+      (CodeSyntax.kotlin, `kotlin`, `demo/demo.kt`);
+      (CodeSyntax.lua, `lua`, `demo/demo.lua`);
+      (CodeSyntax.lisp, `lisp`, `demo/demo.lisp`);
+      (CodeSyntax.nim, `nim`, `demo/demo.nim`);
+      (CodeSyntax.makefile, `makefile`, `demo/demo.make`);
+      (CodeSyntax.shell, `shell`, `demo/demo.sh`);
+      (CodeSyntax.perl, `perl`, `demo/demo.prl`);
+      (CodeSyntax.prolog, `prolog`, `demo/demo.pl`);
+      (CodeSyntax.php, `php`, `demo/demo.php`);
+      (CodeSyntax.python, `python`, `demo/demo.py`);
+      (CodeSyntax.r, `r`, `demo/demo.R`);
+      (CodeSyntax.ruby, `ruby`, `demo/demo.rb`);
+      (CodeSyntax.scala, `scala`, `demo/demo.scala`);
+      (CodeSyntax.swift, `swift`, `demo/demo.swift`);
+      (CodeSyntax.tex, `tex`, `demo/demo.tex`);
+      (CodeSyntax.toml, `toml`, `demo/demo.toml`);
+      (CodeSyntax.typescript, `typescript`, `demo/demo.ts`);
+      (CodeSyntax.visualbasic, `visualbasic`, `demo/demo.vb`);
+      (CodeSyntax.xml, `xml`, `demo/demo.xml`);
+    ];
+    +p{現在提供している解析用の設定値は以上になります。}
+    +p{次はテーマ用の設定値の紹介です。}
+    +code-theme-demo-lst [
+      (CodeTheme.basic-light, `basic-light`);
+      (CodeTheme.basic-dark, `basic-dark`);
+      (CodeTheme.basic-font, `basic-font`);
+      (CodeTheme.gruvbox-light, `gruvbox-light`);
+      (CodeTheme.gruvbox-dark, `gruvbox-dark`);
+      (CodeTheme.dracula, `dracula`);
+      (CodeTheme.iceberg-light, `iceberg-light`);
+      (CodeTheme.iceberg-dark, `iceberg-dark`);
+      (CodeTheme.tokyo-night, `tokyo-night`);
+      (CodeTheme.tokyo-night-strom, `tokyo-night-strom`);
+      (CodeTheme.tokyo-night-light, `tokyo-night-light`);
+      (CodeTheme.ayu-dark, `ayu-dark`);
+      (CodeTheme.ayu-mirage, `ayu-mirage`);
+      (CodeTheme.ayu-light, `ayu-light`);
+      (CodeTheme.spacegray-eighties, `spacegray-eighties`);
+      (CodeTheme.spacegray-mocha, `spacegray-mocha`);
+      (CodeTheme.spacegray-ocean-dark, `spacegray-ocean-dark`);
+      (CodeTheme.spacegray-ocean-light, `spacegray-ocean-light`);
+      (CodeTheme.night-owl, `night-owl`);
+      (CodeTheme.light-owl, `light-owl`);
+      (CodeTheme.winteriscoming-dark-blue, `winteriscoming-dark-blue`);
+      (CodeTheme.winteriscoming-dark-black, `winteriscoming-dark-black`);
+      (CodeTheme.winteriscoming-light, `winteriscoming-light`);
+      (CodeTheme.one-light, `one-light`);
+    ];
+    +p{現在提供しているテーマ用の設定値は以上になります。}
+  >
+  +section {デザインを弄る} <
+    +p{\inline-code(`CodePrinter`);モジュールでは、コードブロックのデザインを変更する機能を提供しています。}
+    +p{変更できる項目は以下のようになっています。
+    \listing{
+      * フォントサイズの指定（フォントサイズを変更するテーマを使用した場合は上書きされます）
+      * 行番号の出力結果の指定
+      * 行ごとに色を変えるかどうかの選択と、変更先の色の指定
+      * 改行されたときに、その場所に出力するものの指定
+      * タブ文字をどの大きさで表すかの指定
+      * \inline-code(`inline-code`);コマンドの出力結果の装飾
+      * \inline-code(`inline-code`);コマンドの出力結果の周囲の余白
+      * コードブロックの装飾
+      * コードブロック周囲の余白
+    }}
+    +p{フォントサイズの指定は\inline-code(`set-basic-font-size`);という関数で行います。一つ目の引数の値がフォントサイズを表す\inline-code(`length`);型です。}
+    +code-printer ?:(
+      CodePrinter.make-config CodeSyntax.satysfi CodeTheme.basic-light
+      |> CodePrinter.set-number-fun CodeDesign.number-fun-null
+    )
+(```+code-printer ?:(
+  CodePrinter.make-config syntax theme
+  |> CodePrinter.set-basic-font-size 10pt;
+) (`code`);
+```);
+    +p{のようにして使います。}
+
+    +p{行番号の出力結果の変更は\inline-code(`set-number-fun`);という関数で行います。この関数は一つ目の引数が「コードを組むときに使うcontextデータと、行数を表す整数値を受け取って、行番号を表すinline-boxes型のデータを返す関数」となっています。ですので、一つ目の引数の型は\inline-code(`context -> int -> inline-boxes`);となっています。そのこと除けばをフォントサイズ設定用の関数と使い方は同じです。例えば、}
+    +code-printer ?:(
+      CodePrinter.make-config CodeSyntax.satysfi CodeTheme.basic-light
+      |> CodePrinter.set-number-fun CodeDesign.number-fun-null
+    )
+(```+code-printer ?:(
+  CodePrinter.make-config
+    CodeSyntax.satysfi
+    CodeTheme.basic-light
+  |> CodePrinter.set-number-fun (fun ctx i -> (
+    let ctx = set-text-color Color.black ctx in
+    let number-it = i |> arabic |> embed-string in
+    read-inline ctx {#number-it;行目}
+  ))
+) (`let x = 1 in
+x * 2`);
+```);
+    +p{と設定すると、}
+    +code-printer ?:(
+  CodePrinter.make-config CodeSyntax.satysfi CodeTheme.basic-light
+  |> CodePrinter.set-number-fun (fun ctx i -> (
+    let ctx = set-text-color Color.black ctx in
+    let number-it = i |> arabic |> embed-string in
+    read-inline ctx {#number-it;行目}
+  ))
+) (`let x = 1 in
+x * 2`);
+    +p{という風に出力されます。code-design.satyhファイル（提供しているモジュールの名称は\inline-code(`CodeDesign`);）では行番号出力結果を変更するための\inline-code(`set-number-fun`);の一つ目の引数に渡すことができる関数をいくつか提供しています。それは
+    \listing {
+      * \inline-code(`number-fun-null`);：何も出力しないための関数
+      * \inline-code(`number`);：行番号のみを出力する関数
+    }の2つです。}
+
+    +p{このライブラリでは「行ごとに色を変えるかどうかの選択と、変更先の色の指定」ができるようになっています。この指定は\inline-code(`set-line-background-color`);という関数で行います。「特定の行数を目立たせたい」・「偶奇で背景色を変えたい」という時に役に立ちます。}
+    +p{\inline-code(`set-line-background-color`);関数の一つ目の引数には「行番号を表す整数値を受け取って\inline-code(`color option`);を返す関数」を渡します。この関数の方は\inline-code(`int -> color option`);です。色を変更したい行番号が来た時には\inline-code(`Some(Color.red)`);のように、値を返します。このとき指定した色によって自動的にその行の背景色が変更されます。また、「色を変更しない」という指定をするときには\inline-code(`None`);を返します。これを返すと背景色は変更されません。\inline-code(`set-line-background-color`);の使い方はフォントサイズ設定用の関数と同じです。}
+    +p{デフォルトでは「行番号に関わらず\inline-code(`None`);が指定され、背景色は変更されない」という状態になっています。}
+    +p{例えば、特定の関数の使用部分を強調したいときに、以下の様にコードを書くと、}
+    +code-printer ?:(
+      CodePrinter.make-config CodeSyntax.satysfi CodeTheme.basic-light
+      |> CodePrinter.set-number-fun CodeDesign.number-fun-null
+    )
+(```+code-printer ?:(
+  CodePrinter.make-config
+    CodeSyntax.rust CodeTheme.basic-light
+  |> CodePrinter.set-line-background-color (fun i -> (
+    if i == 7 then
+      Some(Color.yellow)
+    else
+      None
+  ))
+) (`fn f(i: usize) -> usize {
+  i + 5
+}
+
+fn main() {
+  let x = 5;
+  let y = f(5);
+  println!("{}", y);
+}`);```);
+    +p{以下の様に出力され、7行目の背景が黄色になり、その他の行では元から設定されている背景色のままでいることがわかります。}
+    +code-printer ?:(
+    CodePrinter.make-config
+      CodeSyntax.rust CodeTheme.basic-light
+    |> CodePrinter.set-line-background-color (fun i -> (
+      if i == 7 then
+        Some(Color.yellow)
+      else
+        None
+    ))
+    ) (`fn f(i: usize) -> usize {
+  i + 5
+}
+
+fn main() {
+  let x = 5;
+  let y = f(5);
+  println!("{}", y);
+}`);
+
+
+    +p{「改行されたときに、その場所に出力するものの指定」を行うことができます。改行箇所の直前と直後に入れるinline-boxesをそれぞれ指定できます。そのための関数は\inline-code(`set-line-break-mark`);で、型は\inline-code(`(context -> length -> (inline-boxes * inline-boxes)) -> code-printer-config -> code-printer-config`);です。一つ目の引数に与える関数は「contextと、一文字分の横幅を基に、改行前後に入れるinline-boxesをペアで生成する」というものになります。インデントは自動で入るため、その分は考えないでください。}
+    +p{デフォルトでは矢印のグラフィックを改行直前と改行直後に入れています。}
+    +p{これを、「改行直前には何も入れず、改行直後には文字の矢印を入れる」という設定にしてみます。以下の様にコードを書くと、}
+    +code-printer ?:(
+      CodePrinter.make-config CodeSyntax.satysfi CodeTheme.basic-light
+      |> CodePrinter.set-number-fun CodeDesign.number-fun-null
+    )
+(```+code-printer ?:(
+  CodePrinter.make-config
+    CodeSyntax.rust CodeTheme.basic-light
+  |> CodePrinter.set-line-break-mark (fun ctx default-width -> (
+    let before-mark =
+      let mark-ib =
+        `→`
+        |> embed-string
+        |> read-inline ctx
+      in
+      mark-ib ++ (inline-skip (default-width *' 0.5))
+    in
+    (inline-nil, before-mark)
+  ))
+) (`fn main() {
+  let x = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
+  println!("{:?}", x);
+}`);```);
+    +p{以下の様に出力され、}
+    +code-printer ?:(
+      CodePrinter.make-config
+        CodeSyntax.rust CodeTheme.basic-light
+      |> CodePrinter.set-line-break-mark (fun ctx default-width -> (
+        let before-mark =
+          let mark-ib =
+            `→`
+            |> embed-string
+            |> read-inline ctx
+          in
+          mark-ib ++ (inline-skip (default-width *' 0.5))
+        in
+        (inline-nil, before-mark)
+      ))
+    ) (`fn main() {
+  let x = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
+  println!("{:?}", x);
+}`);
+    +p{改行直前には何も入らず、改行直後が文字の矢印となっているのがわかります。また、文字の矢印の後ろに少しだけスペースが入っているのも、設定した通りとなっています。}
+
+
+    +p{「タブ文字をどの大きさで表すかの指定」は、\inline-code(`set-tab-size`);関数で行います。型は\inline-code(`float -> code-printer-config -> code-printer-config`);です。一つ目の引数で「タブ文字が一文字の横幅の何倍で出力されるか」を指定します。デフォルトでは\inline-code(`2.0`);です。}
+
+    +p{「\inline-code(`inline-code`);コマンドの出力結果の装飾」は\inline-code(`set-inline-hdeco-set`);という関数で行います。これは、一つ目の引数に「背景色の\inline-code(`color`);型のデータを受け取って装飾を表すdeco-setデータを返す」関数です。「\inline-code(`inline-code`);コマンドの出力結果の周囲の余白」の設定は\inline-code(`set-inline-paddings`);関数で行います。この関数は一つ目の引数に\inline-code(`length`);4つのタプルを受け取ります。どちらも\inline-code(`inline-frame-breakable`);プリミティブに渡す値です。また、これも使い方はフォントサイズ設定用の関数と変わりません。}
+    +p{例えば、現在はインラインコードの背景は角が丸みを帯びていますが、これを無くして完全な長方形にし、余白を無くそうと考えたら、この設定関数を使います。}
+    +p{以下の様にコードを書くと、}
+    +code-printer ?:(
+      CodePrinter.make-config CodeSyntax.satysfi CodeTheme.basic-light
+    ) (```+p{普通のインラインコード：\inline-code ?:(CodePrinter.make-config CodePrinter.default-syntax CodeTheme.basic-dark) (`code`);}
++p{背景の角を落とし、余白を無くすインラインコード：
+  \inline-code ?:(
+    CodePrinter.make-config
+      CodePrinter.default-syntax
+      CodeTheme.basic-dark
+    |> CodePrinter.set-inline-hdeco-set (fun backcolor -> (
+      let deco (x, y) w h d =
+        [
+          fill backcolor (
+            Gr.rectangle
+              (x, y +' h)
+              (x +' w, y -' d)
+          )
+        ]
+      in
+      (deco, deco, deco, deco)
+    ))
+    |> CodePrinter.set-inline-paddings (0pt,0pt,0pt,0pt)
+  ) (`code`);}```);
+    +p{以下の様に出力されます。}
+    +p{普通のインラインコード：\inline-code ?:(CodePrinter.make-config CodePrinter.default-syntax CodeTheme.basic-dark) (`code`);}
+    +p{背景の角を落とし、余白を無くすインラインコード：
+  \inline-code ?:(
+    CodePrinter.make-config
+      CodePrinter.default-syntax
+      CodeTheme.basic-dark
+    |> CodePrinter.set-inline-hdeco-set (fun backcolor -> (
+      let deco (x, y) w h d =
+        [
+          fill backcolor (
+            Gr.rectangle
+              (x, y +' h)
+              (x +' w, y -' d)
+          )
+        ]
+      in
+      (deco, deco, deco, deco)
+    ))
+    |> CodePrinter.set-inline-paddings (0pt,0pt,0pt,0pt)
+  ) (`code`);}
+  +p{しっかりと意図したとおりに出力されていることがわかります。}
+
+    +p{「コードブロックの装飾」は\inline-code(`set-block-vdeco-set`);という関数で行います。これは、一つ目の引数に「背景色の\inline-code(`color`);型のデータを受け取って装飾を表すdeco-setデータを返す」関数です。「コードブロックの出力結果の周囲の余白」の設定は\inline-code(`set-block-paddings`);関数で行います。どちらも\inline-code(`block-frame-breakable`);プリミティブに渡す関数で、それ以外は\inline-code(`inline-code`);の装飾の設定用の関数と変わりません。}
+    +p{ここでも同様に「指定された色で背景色だけを塗り、余白無し」のデザインを設定してみます。以下の様にコードを書くと、}
+    +code-printer ?:(
+      CodePrinter.make-config CodeSyntax.satysfi CodeTheme.basic-light
+    ) (```+code-printer ?:(
+    CodePrinter.make-config
+      CodeSyntax.rust
+      CodeTheme.basic-dark
+    |> CodePrinter.set-block-vdeco-set (fun backcolor -> (
+      let deco (x, y) w h d =
+        [
+          fill backcolor (
+            Gr.rectangle
+              (x, y +' h)
+              (x +' w, y -' d)
+          )
+        ]
+      in
+      (deco, deco, deco, deco)
+    ))
+    |> CodePrinter.set-block-paddings (0pt,0pt,0pt,0pt)
+  ) (`fn main() {
+  let lst = vec![1, 3, 5, 7, 9];
+  println!("{:?}", lst);
+}`);```);
+
+    +p{以下のように出力されます。}
+    +code-printer ?:(
+      CodePrinter.make-config
+        CodeSyntax.rust
+        CodeTheme.basic-dark
+      |> CodePrinter.set-block-vdeco-set (fun backcolor -> (
+        let deco (x, y) w h d =
+          [
+            fill backcolor (
+              Gr.rectangle
+                (x, y +' h)
+                (x +' w, y -' d)
+            )
+          ]
+        in
+        (deco, deco, deco, deco)
+      ))
+      |> CodePrinter.set-block-paddings (0pt,0pt,0pt,0pt)
+    ) (`fn main() {
+  let lst = vec![1, 3, 5, 7, 9];
+  println!("{:?}", lst);
+}`);
+    +p{意図した通り、「背景色塗るだけで余白無し」になっていますね。}
+  >
+
+  +section {SyntaxとThemeの作り方} <
+    +p{\inline-code(`CodePrinter.make-config`);で使用するSyntaxとThemeは、ユーザーが作成することもできます。ここではその作り方を説明します。}
+    +subsection {Syntaxの作り方} <
+      +p{Syntaxは\inline-code(`CodePrinter.syntax`);型によって表現されます。この型の実装は公開されていません。この型を生成するためには\inline-code(`CodePrinter.make-syntax`);関数を使う必要があります。この関数は
+      \code-printer ?:(
+        CodePrinter.make-config CodeSyntax.satysfi CodeTheme.basic-light
+      )(`(|
+  line-comment : syntax-rule;
+  block-comment : syntax-rule;
+  string : syntax-rule;
+  keywords : string list;
+  identifier : syntax-rule;
+  others : (string * syntax-rule) list;
+|)`);
+      というレコードを引数に取ることで\inline-code(`CodePrinter.syntax`);型のデータを生成します。レコードのそれぞれのラベルの意味はそれぞれ、
+      \listing{
+        * \inline-code(`line-comment`);：一行で終了するコメント
+        * \inline-code(`block-comment`);：開始文字列と終了文字列で挟まれたコメント
+        * \inline-code(`string`);：文字列
+        * \inline-code(`keywords`);：特別扱いとなる単語
+        * \inline-code(`identifier`);：その他関数名や変数名、数字など
+        * \inline-code(`others`);：markdownなどの、上記の区分けに分類できないものを表すためのもの
+      }です。}
+      +p{\inline-code(`keywords`);に与えるものは、そのキーワードそのものを表す文字列のリストを与えます。リストの先頭から評価されるため、先にある文字列が部分文字列となっている文字列があると、その文字列は上手く評価されません。例えば、
+      \inline-code(```[`do`; `double`]```);というリストを与えた時、\inline-code(`do`);が先に判定に使われるため、\inline-code(`double`);が上手く評価されなくなります。この場合は順番を入れ替えて\inline-code(```[`double`; `do`]```);とすると上手く評価されます。}
+      +p{その他のラベルに与える\inline-code(`syntax-rule`);というデータは、syntaxを表すデータです。定義は公開されていません。このデータは
+      \listing {
+        * \inline-code(`CodePrinter.syntax-rule-line`);
+        * \inline-code(`CodePrinter.syntax-rule-block`);
+        * \inline-code(`CodePrinter.syntax-rule-fun`);
+      }の3つの関数でそれぞれ作成することができます。}
+      +p{\inline-code(`syntax-rule-line`);関数の型は\inline-code(`string -> syntax-rule`);です。その構文のルールを表す正規表現文字列を与えることで、\inline-code(`syntax-rule`);を生成します。この正規表現文字列は\SATySFi;の\inline-code(`regexp-of-string`);プリミティブによって\SATySFi;内部の正規表現型に変換され、\SATySFi;の\inline-code(`string-scan`);プリミティブに渡されます。}
+      +p{\inline-code(`regexp-of-string`);は内部でOCamlのStrライブラリで提供されている\inline-code(`regexp`);という関数を使用しています。そのため、この\inline-code(`syntax-rule-line`);に渡すことができる正規表現文字列は以下の構文を持ちます。
+      \listing{
+        * \inline-code(`.`);：改行を除くすべての文字にマッチします。
+        * \inline-code(`*`);：後置で使います。先行する正規表現の0回以上の繰り返しにマッチします。
+        * \inline-code(`+`);：後置で使います。先行する正規表現の1回以上の繰り返しにマッチします。
+        * \inline-code(`?`);：後置で使います。先行する正規表現の0回もしくは1回の出現にマッチします。
+        * \inline-code(`^`);：マッチさせる文字の先頭、もしくは改行文字の直後にマッチします。
+        * \inline-code(`$`);：マッチさせる文字の末尾、もしくは改行文字の直前にマッチします。
+        * \inline-code(`\|`);：中置で使います。二つの正規表現のどちらかにマッチさせたいときに使用します。
+        * \inline-code(`[ .. ]`);：文字集合を表します。\inline-code(`[a-zA-Z]`);のようにして使い、\inline-code(`-`);で範囲を表します。\inline-code(`-`);そのものを表したいときは、\inline-code(`-`);を集合の先頭か末尾に書きます。\inline-code(`[^0-9]`);のように、集合の先頭に\inline-code(`^`);を書くと、補集合を表します。
+        * \inline-code(`\( .. \)`);：正規表現をグループ化します。
+        * \inline-code(`\`);：特殊文字をエスケープします。次の文字が特殊文字です。\inline-code(`^`);・\inline-code(`$`);・\inline-code(`.`);・\inline-code(`*`);・\inline-code(`+`);・\inline-code(`?`);・\inline-code(`\`);・\inline-code(`[`);・\inline-code(`]`);
+      }
+      \inline-code(`string-scan`);というプリミティブは内部でOCamlのStrライブラリで提供されている\inline-code(`string-match`);という関数を使用しています。\inline-code(`string-scan`);とうプリミティブは、与えられた文字列と正規表現について、その文字列の先頭から始まる部分文字列でその正規表現にマッチするものがあった場合はその部分文字列を返し、マッチする部分文字列が無かった場合は\inline-code(`None`);を返す。という挙動をします。}
+      +p{例えば、「整数を\inline-code(`identifier`);に分類したい」という場合は、
+      \code-printer ?:(
+        CodePrinter.make-config CodeSyntax.satysfi CodeTheme.basic-light
+        |> CodePrinter.set-number-fun CodeDesign.number-fun-null
+      )(``` identifier = syntax-rule-line `0\|-?[1-9][0-9]*`; ```);という風に書きます。}
+      +p{\inline-code(`syntax-rule-block`);は\inline-code(`string -> string -> syntax-rule`);という型を持っていて、一つ目の引数に「開始部分の文字列にマッチする正規表現を表す文字列」を与え、二つ目の引数には終了部分のそれを与えます。正規表現を表す文字列のルールについては\inline-code(`syntax-rule-line`);と同じです。終了部分の文字列については、もっとも近い場所にあるものが採用されます。終了部分の文字列がマッチしたときにはじめて、開始部分の文字列の先頭から終了部分の文字列の末尾までの全ての文字が登録されます。}
+      +p{例えば、「\inline-code(`%`);からはじまり、改行文字で終わる文字列をコメントに分類したい」という場合は
+      \code-printer ?:(
+        CodePrinter.make-config CodeSyntax.satysfi CodeTheme.basic-light
+        |> CodePrinter.set-number-fun CodeDesign.number-fun-null
+      )(``` line-comment = syntax-rule-block `%` `$`; ```);という風に書きます。}
+
+      +p{\inline-code(`syntax-rule-fun`);は正規表現では表すことのできない複雑なルールに対応する際に使用します。型は\inline-code(` (string -> (string * string) option)-> syntax-rule`);です。「文字列を受け取り、それを読み進めていき、もしルールにマッチする1文字目から始まる部分文字列があった場合は、その部分文字列と残りの文字列のペアを返し、マッチしなかった場合は\inline-code(`None`);」を返す、という挙動をする関数を与えてください（\inline-code(`string-scan`);の挙動を手動で行うイメージです）。}
+      +p{「何もマッチさせたくない」というときはこの\inline-code(`syntax-rule-fun`);を用い、
+      \code-printer ?:(
+        CodePrinter.make-config CodeSyntax.satysfi CodeTheme.basic-light
+        |> CodePrinter.set-number-fun CodeDesign.number-fun-null
+      )(``` block-comment = syntax-rule-fun (fun _ -> None); ```);という風に書きます。}
+
+      +p{\inline-code(`others`);ラベルに与えるものは、\inline-code(`syntax-rule`);とそのルールに付ける名前のペアのリストです。\inline-code(`line-comment`);や\inline-code(`string`);といったラベルを独自に作ることができるイメージです。リストの先頭から評価されます。もし、このルールにマッチした文字列があり、さらにそのルールに付けたラベルに対応する装飾がthemeの方にも定義されていた場合、そのThemeに従って装飾されます。そのラベルに対応する装飾がThemeの方に定義されていなかった場合はその他の文字と同じ扱いになります。}
+    >
+
+    +subsection{Themeの作り方} <
+      +p{Themeは\inline-code(`CodePrinter.theme`);型によって表現されます。この型の実装は公開されていません。この型を生成するためには\inline-code(`CodePrinter.make-theme`);関数を使う必要があります。この関数は
+      \code-printer ?:(
+        CodePrinter.make-config CodeSyntax.satysfi CodeTheme.basic-light
+      )(`(|
+  backcolor : color;
+  basic : context -> context;
+  comment : context -> context;
+  string : context -> context;
+  keyword : context -> context;
+  identifier : context -> context;
+  others : (string * (context -> context)) list;
+|)`);
+      というレコードを引数に採ることで\inline-code(`theme`);データを生成します。}
+      +p{\inline-code(`backcolor`);ラベルには、そのコードの背景色を\inline-code(`color`);型で与えます。}
+      +p{\inline-code(`basic`);ラベルには\inline-code(`context -> context`);の関数を与えます。この関数に外部から与えられた文脈型が適用されたものが文字を組む際に使用されます。
+      ここでフォントの変更や文字色の変更を行います。
+      \footnote{厳密には、コマンド外部の文脈型に対して
+      \listing{
+        * \inline-code(`set-font`);
+        * \inline-code(`set-leading`);
+        * \inline-code(`set-paragraph-margin`);
+        * \inline-code(`set-min-gap-of-lines`);
+      }で調節した後に\inline-code(`set-basic-font-size`);が適用された文脈型がこの関数に与えられ、それによって生成された新しい文脈型に対して
+      \listing{
+        * \inline-code(`set-hyphen-penalty`);
+        * \inline-code(`set-space-ratio`);
+        * \inline-code(`set-space-ratio-between-scripts`);
+      }でさらに調節を加えた後に文字を組む際に使用されます。}
+      これによって生成された文脈型を便宜的に「basic文脈」と呼びます。このbasic文脈はSyntaxで\inline-code(`line-comment`);・\inline-code(`block-comment`);・\inline-code(`string`);・\inline-code(`keywords`);・\inline-code(`identifier`);・\inline-code(`others`);のいずれにも分類されなかった文字に適用されます。また、\inline-code(`others`);に分類されても対応する装飾が無かった文字列もこのbasic文脈が適用されます。}
+
+      +p{\listing{
+          * \inline-code(`comment`);
+          * \inline-code(`string`);
+          * \inline-code(`keyword`);
+          * \inline-code(`identifier`);
+        }に渡す関数は\inline-code(`basic`);に渡す関数と同じく、フォントや文字色などを変える関数です。ただし、その関数に与えられる文脈型はbasic文脈です。}
+      +p{\inline-code(`others`);に渡すものは、\inline-code(`make-syntax`);関数に渡すレコードの\inline-code(`others`);に渡されたルールに対応するラベルと、それに対応する文脈型を変更する関数のリストです。}
+    >
+  >
+
+  +section {必要なバージョンや依存など} <
+    +p{このライブラリは\inline-code(`read-file`);プリミティブを使用しています。
+    そのため、\SATySFi;のバージョン0.0.6より後、特に\href (`https://github.com/gfngfn/SATySFi/commit/56895a1b843da427e970a4dd84c433e78dca4a56`) {\inline-code(`56895a1`);}コミット以降のものを使用してください。}
+    +p{また、このライブラリは\SATySFi;の標準ライブラリと、\href(`https://github.com/nyuichi/satysfi-base`){satysfi-base}と\href(`https://github.com/zeptometer/SATySFi-fonts-dejavu`){satysfi-fonts-dejavu}の2つの外部ライブラリに依存しています。それぞれのインストールはsatyrographosを使用することを想定しています。}
+  >
+  +section {バグ報告・修正や機能追加の提案}<
+    +p{このパッケージはバグが存在するかもしれません。バグを発見した場合は以下のURLに報告してください。}
+    +p{\href(`https://github.com/puripuri2100/satysfi-code-printer/issues`){\inline-code(`https://github.com/puripuri2100/satysfi-code-printer/issues`);}}
+    +p{このパッケージに対してコードの修正や機能追加の提案をしたい場合は、GitHubの機能を用いて以下のURLにプルリクエストを送ってください。}
+    +p{\href(`https://github.com/puripuri2100/satysfi-code-printer/pulls`){\inline-code(`https://github.com/puripuri2100/satysfi-code-printer/pulls`);}}
+    +p{バグ報告・修正提案・機能追加提案をお待ちしております。}
+  >
+  +section{ライセンスとコピーライト}<
+    +p{このパッケージとドキュメントはMITライセンスのもとで配布されます。}
+    +p{Copyright (c) 2021 Naoki Kaneko (a.k.a. "puripuri2100")}
+  >
+>

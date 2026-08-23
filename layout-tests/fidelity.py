@@ -276,6 +276,13 @@ DOCS: list[Doc] = [
         },
     ),
     Doc(
+        "code-printer",
+        "code-printer/doc/code-printer-ja.saty",
+        "",  # upstream PDF not committed -> self-snapshot mode
+        "syntax highlighting: string-scan regexps, 38 languages, 24 themes",
+        {"code-printer": "code-printer/src", "base": "satysfi-base/src"},
+    ),
+    Doc(
         "floatfig",
         "floatfig/floatfig.saty",
         "",  # hand-written for this port -> self-snapshot mode

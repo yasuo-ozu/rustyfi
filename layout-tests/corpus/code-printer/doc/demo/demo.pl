@@ -1,0 +1,1 @@
+desc(X, Y) :- child(X, Y).

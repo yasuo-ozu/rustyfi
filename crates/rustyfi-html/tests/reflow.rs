@@ -338,7 +338,7 @@ fn math_glyph_font_size_is_in_svg_user_units_not_points() {
         }],
         rules: vec![],
     };
-    let html = render(&vec![line(math_box)]);
+    let html = render(&[line(math_box)]);
     let text_elem = html
         .lines()
         .find(|l| l.contains("<text"))
@@ -385,6 +385,140 @@ fn math_rules_render_as_svg_paths() {
         html.contains("<path"),
         "missing SVG <path> for the fraction-bar rule:\n{html}"
     );
+}
+
+/// Every length written INSIDE an `<svg>` must be in the viewport's own
+/// user units, i.e. carry no unit at all — or, where CSS forces one
+/// (`font-size`, which is a declaration rather than an attribute), the `px`
+/// that SVG defines as exactly one user unit.
+///
+/// The generalisation of `math_glyph_font_size_is_in_svg_user_units_
+/// not_points`. That test pins the one emitter that got it wrong; this one
+/// pins the RULE, over every emitter at once — `<text>`'s `x`/`y` and
+/// `font-size`, and `svg.rs`'s `d`, `stroke-width`, `stroke-dasharray` and
+/// `stroke-dashoffset` — so a new length written into SVG content with a
+/// `pt` on it fails here even if nobody thinks to extend the other test.
+/// The `<svg>` OPENING tag is deliberately exempt: its `width`/`height` and
+/// its CSS `left`/`top` live in the PARENT's coordinate space, where `pt`
+/// is exactly right and is what makes one user unit come out as one point.
+#[test]
+fn no_absolute_length_unit_appears_inside_an_svg_body() {
+    let dashed = GraphicsElem::DashedStroke(
+        Length::pt(0.8),
+        (Length::pt(3.0), Length::pt(2.0), Length::pt(1.0)),
+        Color::Rgb(0.0, 0.0, 1.0),
+        Path {
+            subpaths: vec![Subpath {
+                start: (Length::pt(0.0), Length::pt(10.0)),
+                segs: vec![PathSeg::Line((Length::pt(20.0), Length::pt(0.0)))],
+                closing: Closing::Open,
+            }],
+        },
+    );
+    let clipped = GraphicsElem::Clip(
+        Path {
+            subpaths: vec![Subpath {
+                start: (Length::pt(0.0), Length::pt(0.0)),
+                segs: vec![PathSeg::Line((Length::pt(20.0), Length::pt(20.0)))],
+                closing: Closing::Line,
+            }],
+        },
+        vec![GraphicsElem::Group(vec![rule_line(0.0, 0.0, 20.0, 10.0, 1.5)])],
+    );
+    let math_box = PureHorzBox::Math {
+        width: Length::pt(20.0),
+        height: Length::pt(14.0),
+        depth: Length::pt(4.0),
+        glyphs: vec![glyph("x", 12.0, 0.0, 0.0)],
+        rules: vec![dashed.clone(), clipped.clone()],
+    };
+    let gfx_box = PureHorzBox::Graphics {
+        origin_independent: false,
+        width: Length::pt(20.0),
+        height: Length::pt(20.0),
+        depth: Length::ZERO,
+        elems: vec![dashed, clipped],
+    };
+    let html = render(&[line(math_box), line(gfx_box)]);
+    let bodies = svg_bodies(&html);
+    assert!(!bodies.is_empty(), "no <svg> emitted at all:\n{html}");
+    for body in bodies {
+        if let Some((num, unit)) = first_absolute_length(body) {
+            panic!(
+                "`{num}{unit}` inside an <svg> body: the viewBox makes one \
+                 user unit one point, so an absolute unit is resolved \
+                 against the CSS reference pixel FIRST and comes out {}/1 \
+                 too big:\n{body}",
+                if unit == "pt" { "4/3" } else { "some other ratio" },
+            );
+        }
+    }
+}
+
+/// One positioned math glyph: `text` at box-local `(dx, dy)`, set at
+/// `size` pt.
+fn glyph(text: &str, size: f64, dx: f64, dy: f64) -> MathGlyph {
+    MathGlyph {
+        text: text.to_string(),
+        gid: None,
+        dx: Length::pt(dx),
+        dy: Length::pt(dy),
+        info: HorzStringInfo {
+            font: FontKey(0),
+            size: Length::pt(size),
+            rising: Length::ZERO,
+            color: Color::Gray(0.0),
+        },
+        width: Length::pt(size * 0.6),
+        height: Length::pt(size * 0.7),
+        depth: Length::ZERO,
+    }
+}
+
+/// The `<svg>` bodies of `html`, i.e. what lies between each `<svg …>` and
+/// its `</svg>`. These never nest (`emit_graphics` is the only emitter and
+/// it never re-enters itself), so a flat scan is exact.
+fn svg_bodies(html: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut rest = html;
+    while let Some(open) = rest.find("<svg") {
+        let after_tag = rest[open..]
+            .find('>')
+            .map(|i| open + i + 1)
+            .expect("unterminated <svg> tag");
+        let close = rest[after_tag..]
+            .find("</svg>")
+            .map(|i| after_tag + i)
+            .expect("unclosed <svg>");
+        out.push(&rest[after_tag..close]);
+        rest = &rest[close + "</svg>".len()..];
+    }
+    out
+}
+
+/// The first `<digit><unit>` in `s` for any absolute or font-relative CSS
+/// unit other than `px`, or `None`. Scans for the UNIT and looks left, so a
+/// unit inside a word (`Modern`, `points`) is rejected by the digit test.
+fn first_absolute_length(s: &str) -> Option<(char, &'static str)> {
+    const UNITS: [&str; 11] = [
+        "pt", "pc", "in", "mm", "cm", "rem", "em", "ex", "ch", "vw", "vh",
+    ];
+    let bytes = s.as_bytes();
+    for (i, _) in s.char_indices() {
+        for unit in UNITS {
+            if !s[i..].starts_with(unit) {
+                continue;
+            }
+            let before = bytes[..i].last().copied();
+            let after = bytes.get(i + unit.len()).copied();
+            let digit_before = before.is_some_and(|b| b.is_ascii_digit());
+            let word_after = after.is_some_and(|b| b.is_ascii_alphanumeric());
+            if digit_before && !word_after {
+                return Some((before.unwrap() as char, unit));
+            }
+        }
+    }
+    None
 }
 
 /// Slice 2 (§4 "Graphics — inline SVG, reuse `svg::emit_graphics`

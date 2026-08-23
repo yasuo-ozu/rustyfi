@@ -846,11 +846,33 @@ fn emit_math_svg(
 /// below. The PDF was never affected: it positions each glyph absolutely and
 /// sets the size in the content stream's own points.
 ///
-/// `px` rather than a bare number because a unitless CSS `font-size` is not
-/// valid CSS (browsers that accept it are being lenient); in SVG `1px` is
-/// exactly one user unit, which is what we want. So the number is unchanged
-/// and only the unit is corrected: 12pt of document size -> `font-size:12px`
-/// -> 12 user units -> 12pt rendered.
+/// **Why `px` and not a bare number**, which is what "user units" literally
+/// means. A unitless length is legal in SVG only as a PRESENTATION
+/// ATTRIBUTE (`font-size="12"`); this size goes into `style="…"`, which is
+/// CSS, and CSS requires a unit on a non-zero `<length>`. Measured in
+/// chromium inside a `viewBox="0 0 100 100"`/`width="100pt"` viewport, four
+/// spellings of "12" on the same `<text>`:
+///
+/// | written                     | computed | user units |
+/// |-----------------------------|----------|-----------:|
+/// | `style="font-size:12pt"`    | `16px`   |         16 |
+/// | `style="font-size:12px"`    | `12px`   |         12 |
+/// | `style="font-size:12"`      | `12px`   |         12 |
+/// | `font-size="12"` (attribute)| `12px`   |         12 |
+///
+/// So the bare `style` spelling happens to work in Blink — Blink runs the
+/// SVG presentation-attribute grammar over the declaration — but it is
+/// invalid CSS and Gecko drops it, which would leave the glyph at the
+/// INHERITED body size with no error anywhere. `px` is the portable
+/// spelling of one user unit (SVG fixes 1px = 1 user unit), so the number
+/// is unchanged and only the unit is corrected: 12pt of document size ->
+/// `font-size:12px` -> 12 user units -> 12pt rendered.
+///
+/// Every other length inside this viewport is already unitless, because
+/// every other one is an attribute rather than CSS: `x`/`y` here, and
+/// `svg.rs`'s `d`, `stroke-width`, `stroke-dasharray` and
+/// `stroke-dashoffset`. `font-size` is the only one that had to be a
+/// declaration, which is why it was the only one that got this wrong.
 fn math_font_size_uu(size_pt: f64) -> String {
     format!("{size_pt}px")
 }

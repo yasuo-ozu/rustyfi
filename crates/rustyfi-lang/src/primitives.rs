@@ -1854,12 +1854,12 @@ fn box_trailing_char(b: &HorzBox) -> Option<char> {
 /// `OuterEmpty` with zero shrink and stretch is still `is_glue()` — which is
 /// also why a ratio of 0.0 emits a zero-width box rather than nothing.
 ///
-/// `default_script_space_map`'s natural ratio for a Latin↔CJK pair
-/// (`primitives.cppo.ml:488`) is 0.24; `set-space-ratio-between-scripts` does
-/// not reach it yet.
-fn interscript_glue(ctx: &Context) -> PureHorzBox {
+/// The ratio comes from `ctx.script_space_map`, so
+/// `set-space-ratio-between-scripts` reaches it (slydifi's arctic theme zeroes
+/// all four Latin↔CJK directions).
+fn interscript_glue(ctx: &Context, left: Script, right: Script) -> PureHorzBox {
     PureHorzBox::OuterEmpty {
-        natural: ctx.font_size * 0.24,
+        natural: ctx.font_size * ctx.script_space_map[left as usize][right as usize],
         shrinkable: Length::ZERO,
         stretchable: Length::ZERO,
     }
@@ -1873,10 +1873,9 @@ fn insert_box_interscript_glue(boxes: Vec<HorzBox>, ctx: &Context) -> Vec<HorzBo
     for b in boxes {
         if let (Some(pc), Some(cc)) = (out.last().and_then(box_trailing_char), box_leading_char(&b))
         {
-            if is_latin_cjk_boundary(char_script(pc), char_script(cc))
-                && !interscript_glue_suppressed(pc, cc)
-            {
-                out.push(HorzBox::Pure(interscript_glue(ctx)));
+            let (ls, rs) = (char_script(pc), char_script(cc));
+            if is_latin_cjk_boundary(ls, rs) && !interscript_glue_suppressed(pc, cc) {
+                out.push(HorzBox::Pure(interscript_glue(ctx, ls, rs)));
             }
         }
         out.push(b);
@@ -2100,7 +2099,7 @@ fn text_to_boxes(
                         flush_word(&mut word, s, out)?;
                     }
                 }
-                out.push(HorzBox::Pure(interscript_glue(ctx)));
+                out.push(HorzBox::Pure(interscript_glue(ctx, prev, script)));
             }
         }
         if let Some(cur) = word_script {
@@ -9230,23 +9229,39 @@ fn prim_set_space_ratio(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Va
 }
 
 /// `set-space-ratio-between-scripts : float -> float -> float -> script ->
-/// script -> context -> context` (slydifi's arctic theme). STAND-IN: there is
-/// nowhere to store a per-script-pair ratio yet, so the primitive validates
-/// its arguments (three ratios and two scripts) and returns the context
-/// unchanged. slydifi only ever calls it with `0. 0. 0.` to SUPPRESS
-/// inter-script spacing, so what this costs is a 0.24em space at every
-/// Japanese/Latin junction of its code font that upstream does not set.
+/// script -> context -> context` (`vminstdef.yaml:1230-1250`) — writes one
+/// ordered script pair's entry of `ctx.script_space_map`
+/// (`convertText.ml:34-50` reads it back).
+///
+/// Only the NATURAL ratio is stored. The other two arguments are accepted and
+/// dropped, because upstream drops them too: `pure_space_between_scripts`
+/// misplaces them into `LBAtom`'s height and depth slots, so no
+/// `set-space-ratio-between-scripts` call in any document has ever been able
+/// to give this glue stretch or shrink. See [`interscript_glue`].
+///
+/// This was a STAND-IN that ignored all three, on the reasoning that slydifi
+/// only ever calls it with `0. 0. 0.` to SUPPRESS the spacing and the port
+/// inserted none anyway. The port has inserted Latin↔CJK glue for some time
+/// now, so ignoring the call left slydifi with a 0.24em space at every
+/// Japanese/Latin junction that upstream does not set.
 fn prim_set_space_ratio_between_scripts(
     _interp: &mut Interp,
     mut args: Vec<Value>,
 ) -> Result<Value, EvalError> {
     let ctx = as_context(args.pop().unwrap())?;
-    let _script2 = as_script(args.pop().unwrap())?;
-    let _script1 = as_script(args.pop().unwrap())?;
+    let script2 = as_script(args.pop().unwrap())?;
+    let script1 = as_script(args.pop().unwrap())?;
     let _stretch = as_float(args.pop().unwrap())?;
     let _shrink = as_float(args.pop().unwrap())?;
-    let _natural = as_float(args.pop().unwrap())?;
-    Ok(Value::Context(Box::new(ctx)))
+    // `max 0.`, as `vminstdef.yaml`'s own `set_space_ratio_between_scripts`
+    // clamps each ratio before storing it.
+    let natural = as_float(args.pop().unwrap())?.max(0.0);
+    let mut script_space_map = ctx.script_space_map;
+    script_space_map[script1 as usize][script2 as usize] = natural;
+    Ok(Value::Context(Box::new(Context {
+        script_space_map,
+        ..ctx
+    })))
 }
 
 /// `split-into-lines : string -> (int * string) list` (vminst.ml:2269) —

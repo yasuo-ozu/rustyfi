@@ -38,6 +38,12 @@
 //!    under stdja's 0.88 CJK ratio, and punctuation carries ten times the
 //!    stretch of an ordinary inter-character gap.
 //!
+//! A third group covers `set-space-ratio-between-scripts`, which is where the
+//! first one's ratio comes from. It used to be a stand-in that ignored the
+//! call outright — defensible when the port inserted no inter-script glue at
+//! all, and a bug once it did, since slydifi's arctic theme zeroes all four
+//! Latin↔CJK directions for its code font and was getting 0.24em anyway.
+//!
 //! The natural width of a punctuation pair is the same either way — the kern
 //! and the class space that pays it back scale together, so the error cancels
 //! — which is why `nakaten_kern_natural_width_uses_corrected_size` reaches for
@@ -46,11 +52,15 @@
 //! the corrected-size bug is visible only in elasticity, and so only in a
 //! JUSTIFIED line — which is exactly why it survived so long.
 
-use rustyfi_backend::{Context, FontKey, FontMetrics, HorzBox, Length, PureHorzBox, Script};
+use rustyfi_backend::{
+    default_script_space_map, Context, FontKey, FontMetrics, HorzBox, Length, PureHorzBox, Script,
+};
+use rustyfi_lang::ast::Ast;
 use rustyfi_lang::eval::Interp;
 use rustyfi_lang::primitives;
 use rustyfi_lang::quoted::IText;
-use rustyfi_lang::value::Env;
+use rustyfi_lang::value::{Env, Value};
+use rustyfi_syntax::Span;
 
 /// Every char is half an em wide (mirrors `cjk_prevented_break_glue.rs`), so no
 /// real font data is needed — none of these assertions is about a glyph.
@@ -184,7 +194,128 @@ fn interscript_space_is_rigid_cjk_to_latin_and_still_breakable() {
 }
 
 // ---------------------------------------------------------------------------
-// 2. Corrected size for the JLreq layer, raw size for `adjacent_space`.
+// 2. `set-space-ratio-between-scripts` reaches that glue.
+// ---------------------------------------------------------------------------
+
+/// slydifi's arctic theme zeroes all four Latin↔CJK directions for its code
+/// font (`src/theme/arctic.satyh:177-180`). The ratio must come from
+/// `ctx.script_space_map`, and a 0.0 entry must still leave a zero-width break
+/// opportunity rather than no box at all.
+#[test]
+fn interscript_space_honours_the_script_space_map() {
+    let mut ctx = Context::initial(Length::pt(200.0));
+    ctx.script_space_map[Script::Latin as usize][Script::Kana as usize] = 0.0;
+    let boxes = boxes_for(&ctx, "Aあ");
+    let gs = glues(&boxes);
+    assert_eq!(gs.len(), 1, "the box survives at ratio 0: {gs:?}");
+    assert!(gs[0].is_break_point(), "…and is still a break opportunity");
+    match &gs[0] {
+        PureHorzBox::OuterEmpty { natural, .. } => {
+            assert_eq!(*natural, Length::ZERO, "ratio 0 means no space")
+        }
+        other => panic!("expected glue, got {other:?}"),
+    }
+}
+
+/// The map is DIRECTIONAL: upstream keys `ScriptSpaceMap` on the ordered pair
+/// and registers the four Latin↔CJK directions separately
+/// (`primitives.cppo.ml:491-494`), so zeroing `Latin -> Kana` must leave
+/// `Kana -> Latin` alone.
+#[test]
+fn script_space_map_is_directional() {
+    let mut ctx = Context::initial(Length::pt(200.0));
+    ctx.script_space_map[Script::Latin as usize][Script::Kana as usize] = 0.0;
+    match &glues(&boxes_for(&ctx, "あA"))[0] {
+        PureHorzBox::OuterEmpty { natural, .. } => {
+            assert_pt(*natural, 0.24 * 12.0, "the reverse direction is untouched")
+        }
+        other => panic!("expected glue, got {other:?}"),
+    }
+}
+
+/// `set-space-ratio-between-scripts` itself, driven through the evaluator, so
+/// the primitive is pinned and not just the field it writes. Without this the
+/// whole group passes on the old STAND-IN that validated its arguments and
+/// returned the context unchanged.
+#[test]
+fn set_space_ratio_between_scripts_writes_the_map() {
+    fn script(name: &str) -> Ast {
+        Ast::Ctor(name.to_string(), None)
+    }
+    fn apply(f: Ast, a: Ast) -> Ast {
+        Ast::Apply(Box::new(f), Box::new(a))
+    }
+    // `set-space-ratio-between-scripts 0. 0. 0. Latin Kana
+    //     (get-initial-context 100pt ())`
+    let mut ast = Ast::Var(
+        "set-space-ratio-between-scripts".to_string(),
+        Span::default(),
+    );
+    for arg in [
+        Ast::Float(0.0),
+        Ast::Float(0.0),
+        Ast::Float(0.0),
+        script("Latin"),
+        script("Kana"),
+        apply(
+            apply(
+                Ast::Var("get-initial-context".to_string(), Span::default()),
+                Ast::Length(Length::pt(100.0)),
+            ),
+            Ast::Unit,
+        ),
+    ] {
+        ast = apply(ast, arg);
+    }
+
+    let env = primitives::base_env();
+    let mono = Mono;
+    let mut interp = Interp::new(&mono);
+    match interp.eval(&env, &ast).expect("evaluation should succeed") {
+        Value::Context(ctx) => {
+            assert_eq!(
+                ctx.script_space_map[Script::Latin as usize][Script::Kana as usize],
+                0.0,
+                "the call must reach the map"
+            );
+            assert_eq!(
+                ctx.script_space_map[Script::Kana as usize][Script::Latin as usize],
+                0.24,
+                "and must not touch the other three directions"
+            );
+        }
+        other => panic!("expected a context, got {other:?}"),
+    }
+}
+
+/// The default map is upstream's: the four Latin↔CJK directions, nothing else.
+#[test]
+fn default_script_space_map_is_the_four_latin_cjk_directions() {
+    let m = default_script_space_map();
+    for (l, r) in [
+        (Script::Latin, Script::Kana),
+        (Script::Kana, Script::Latin),
+        (Script::Latin, Script::HanIdeographic),
+        (Script::HanIdeographic, Script::Latin),
+    ] {
+        assert_eq!(m[l as usize][r as usize], 0.24, "{l:?} -> {r:?}");
+    }
+    // Every other ordered pair is unset. `Latin -> Latin` and `Kana -> Han` in
+    // particular: a same-script junction never consults this map, and a
+    // CJK -> CJK one is `adjacent_space`'s job.
+    let mut set = 0;
+    for row in &m {
+        for v in row {
+            if *v != 0.0 {
+                set += 1;
+            }
+        }
+    }
+    assert_eq!(set, 4, "exactly four entries: {m:?}");
+}
+
+// ---------------------------------------------------------------------------
+// 3. Corrected size for the JLreq layer, raw size for `adjacent_space`.
 // ---------------------------------------------------------------------------
 
 /// `、あ` — `(JLCM, _) -> hwsoft1` (`convertText.ml:211`), whose size is

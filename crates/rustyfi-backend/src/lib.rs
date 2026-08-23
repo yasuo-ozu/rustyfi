@@ -14,8 +14,8 @@ pub mod tabular;
 pub mod vbox;
 
 pub use context::{
-    Context, HyphenLang, Language, MathCmdId, MathScriptLevel, PageGeometry, PaperSize, Script,
-    ScriptFont,
+    default_script_space_map, Context, HyphenLang, Language, MathCmdId, MathScriptLevel,
+    PageGeometry, PaperSize, Script, ScriptFont,
 };
 pub use doc::{Annot, AnnotAction, DocExtras, DocInfo, NamedDest, OutlineEntry};
 pub use font::{

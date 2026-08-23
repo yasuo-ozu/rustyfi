@@ -124,6 +124,35 @@ pub struct Context {
     /// BOTH so the two stay in sync, leaving a bare
     /// `set-font-key`/`\bold`/`\emph` (which only touches `font`) unaffected.
     pub font_scheme: [ScriptFont; 4],
+    /// `set-space-ratio-between-scripts` (v0.0.6
+    /// `context_main.script_space_map`, horzBox.ml:222) — the space inserted
+    /// between two adjacent runs of DIFFERENT scripts, as a ratio of
+    /// `font_size`. Indexed `[left script][right script]` by `Script`'s
+    /// discriminant, so the map is directional: upstream keys
+    /// `ScriptSpaceMap` on the ordered pair and registers the four Latin↔CJK
+    /// directions separately (`primitives.cppo.ml:491-494`).
+    ///
+    /// **Only the NATURAL ratio is stored, because only it is observable.**
+    /// The primitive takes three (natural, shrink, stretch), and upstream's
+    /// `ScriptSpaceMap` really does hold all three — but
+    /// `pure_space_between_scripts` spends them as
+    /// `LBAtom((natural (size *% r0), size *% r1, size *% r2), _)`, whose
+    /// first field is `metrics = length_info * length * length`, i.e. *(width
+    /// info, height, depth)*. `r1` and `r2` land in the height and depth slots
+    /// and never reach the glue's elasticity; see `primitives.rs`'s
+    /// `interscript_glue` for the full argument. Keeping the two dead ratios
+    /// here would imply a stretch this glue does not have.
+    ///
+    /// Upstream's map is SPARSE and a miss falls through to the JLreq class
+    /// table and then to `adjacent_space`; this dense array cannot distinguish
+    /// "absent" from "present and 0.0". That costs nothing, because the port
+    /// only ever consults it at a `is_latin_cjk_boundary`, where upstream's
+    /// fall-through is already unreachable — the four Latin↔CJK keys are
+    /// exactly the ones the default map fills. A 0.0 entry still emits a
+    /// zero-width glue rather than nothing, keeping the break opportunity
+    /// upstream's `discretionary_if_breakable` wrapper grants regardless of
+    /// the box's width.
+    pub script_space_map: [[f64; 4]; 4],
     /// `set-text-color`/`get-text-color` (row 1-2; v0.0.6
     /// `context_main.text_color`). Copied into each run's
     /// `HorzStringInfo::color` at box-construction time — which is what both
@@ -201,6 +230,22 @@ pub struct Context {
     pub math_cramped: bool,
 }
 
+/// `default_script_space_map` (`primitives.cppo.ml:487-494`): the four
+/// Latin↔CJK directions carry `space_latin_cjk`, every other ordered pair is
+/// unset. Only the natural ratio survives into layout — see
+/// [`Context::script_space_map`].
+pub fn default_script_space_map() -> [[f64; 4]; 4] {
+    // `let space_latin_cjk = (0.24, 0.08, 0.16)` — the 0.08 and 0.16 are the
+    // shrink and stretch upstream never actually applies.
+    const LATIN_CJK_NATURAL: f64 = 0.24;
+    let mut m = [[0.0; 4]; 4];
+    for cjk in [Script::HanIdeographic, Script::Kana] {
+        m[Script::Latin as usize][cjk as usize] = LATIN_CJK_NATURAL;
+        m[cjk as usize][Script::Latin as usize] = LATIN_CJK_NATURAL;
+    }
+    m
+}
+
 impl Context {
     /// The default context `get-initial-context` hands to `document`.
     pub fn initial(paragraph_width: Length) -> Context {
@@ -227,6 +272,7 @@ impl Context {
                 ratio: 1.0,
                 rising: 0.0,
             }; 4],
+            script_space_map: default_script_space_map(),
             // v0.0.6's `get_pdf_mode_initial_context` (primitives.cppo.ml):
             // `text_color = DeviceGray 0.`, `hyphen_badness = 100`,
             // `space_natural = 0.33`, `space_shrink = 0.08`,

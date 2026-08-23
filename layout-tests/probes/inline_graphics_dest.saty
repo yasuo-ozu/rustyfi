@@ -1,7 +1,13 @@
 % Probe: can a PDF named destination be registered from an `inline-graphics`
-% callback?
+% callback? azmath's `equation.satyh` anchors every `\label`ed equation exactly
+% the way this document does, and it used to abort the port outright: upstream
+% runs the callback DURING page breaking, this port runs it eagerly at
+% construction time (`prim_inline_graphics`'s "eager-callback shortcut"), where
+% no page exists and `annotation.ml:15`'s gate rightly refuses the call. The fix
+% RE-TIMES the registration instead of relaxing the gate --- see
+% `prim_inline_graphics` and `crates/rustyfi-lang/tests/inline_graphics_dest.rs`.
 %
-% Both engines now render this, and the anchor lands in both PDFs:
+% Both engines now render this and the anchor lands in both PDFs:
 %
 %   layout-tests/tools/probe.py layout-tests/probes/inline_graphics_dest.saty
 %
@@ -10,41 +16,6 @@
 %
 % The y agrees to 0.001pt; the 0.65pt in x is this document's ordinary
 % text-advance delta for the word before the anchor, not an anchor error.
-%
-% It USED to be the port's loudest corpus blocker:
-%
-%   Error: register-destination can only be called during page breaking
-%          (from a page-break hook or a decoration)
-%
-% Upstream and this port agree on the GATE --- `annotation.ml:15` raises
-% `State.NotDuringPageBreak` outside the window too, so relaxing it would have
-% been the unfaithful fix. They disagreed on WHEN the callback runs.
-% `primitives.rs`'s `prim_inline_graphics` documents the deviation as its
-% "eager-callback shortcut": a lang closure cannot live inside a
-% `PureHorzBox::Graphics`, so the callback is applied once at construction
-% time at `(0pt, 0pt)` (and a second time at a probe point, to detect a
-% page-absolute callback) and the writer's per-box `cm` supplies the placed
-% position later. That is exact for a shift-covariant graphics generator and
-% was fatal for a SIDE-EFFECTING one: at construction time no page exists, so
-% `interp.current_page` is `None` and the gate fired.
-%
-% The fix RE-TIMES the call rather than relaxing the gate. The eager
-% application records it (`Interp::pending_dests`), the box carries it as a
-% `GraphicsElem::Destination` marker, and `fire_hooks` --- which already
-% recurses into a graphics box's elements --- replays it against the box's real
-% page and placed point. Riding `elems` rather than a field of its own is what
-% makes the ANCHOR-ONLY shape below work: its ink is `[]` at both call points,
-% so on ink alone the box would be classified page-absolute and the anchor
-% would never move to where the box landed.
-%
-% Pinned by `crates/rustyfi-lang/tests/inline_graphics_dest.rs`.
-%
-% Measured on azmath (satysfi-azmath 0.0.3), whose `equation.satyh`
-% `ib-annotation` is exactly the shape below --- it anchors every `\label`ed
-% equation, and this gap was the whole reason the port could not build its
-% manual. It now builds unstubbed, with all 16 of upstream's named
-% destinations present (14 pages, 571 lines against upstream's 15/583;
-% char_match 0.9569).
 @require: stdjabook
 
 let-inline ctx \anchor key =

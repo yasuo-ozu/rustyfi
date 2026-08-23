@@ -3097,11 +3097,10 @@ fn fire_inline_frame(
 }
 
 /// Fire every hook, decoration and deferred destination carried by a graphics
-/// box's elements — the inline runs a `draw-text` (`GraphicsElem::Text`)
-/// holds, and the `GraphicsElem::Destination` markers an `inline-graphics`
-/// callback's `register-destination` calls left behind — recursing through
-/// `Group`/`Clip`. `anchor_x`/`anchor_y` are the box's placed origin in this
-/// walk's (x, y-DOWN) page coordinates.
+/// box's elements — the inline runs a `draw-text` (`GraphicsElem::Text`) holds,
+/// and the `GraphicsElem::Destination` markers an `inline-graphics` callback
+/// left behind — recursing through `Group`/`Clip`. `anchor_x`/`anchor_y` are
+/// the box's placed origin in this walk's (x, y-DOWN) page coordinates.
 ///
 /// A `Text` element's own `transform` (from `rotate-graphics`/
 /// `scale-graphics`) is deliberately NOT applied: a decoration's rect is an
@@ -3132,24 +3131,18 @@ fn fire_nested_in_graphics(
             GraphicsElem::Group(inner) | GraphicsElem::Clip(_, inner) => {
                 fire_nested_in_graphics(interp, doc, page, anchor_x, anchor_y, inner)?;
             }
-            // A `register-destination` made from an eagerly-applied
-            // `inline-graphics` callback, replayed now that the box HAS a page
-            // and a placed point — the whole reason the eager shortcut does
-            // not simply lose it. `pt` is PDF y-UP from the anchor, as a
-            // `Text`'s is, and a `NamedDest`'s `y` is y-up too, so converting
-            // the anchor back out of this walk's y-down frame is the only
-            // arithmetic needed. An `origin_independent` box arrives here with
-            // `anchor_y = paper_height`/`anchor_x = 0` (see the caller), which
-            // makes this the identity — exactly the page-absolute reading its
-            // ink gets from the writers.
+            // `pt` is y-UP from the anchor, as a `Text`'s is, and a
+            // `NamedDest`'s `y` is y-up too, so lifting the anchor out of this
+            // walk's y-DOWN frame is the only arithmetic needed. An
+            // `origin_independent` box arrives with `anchor_x = 0`/`anchor_y =
+            // paper_height` (see the caller), making that the identity — the
+            // same page-absolute reading its ink gets from the writers.
             GraphicsElem::Destination { key, pt } => {
                 let name = interp.dest_name(key);
                 let x = anchor_x + pt.0;
                 let y = doc.geometry.paper_height - anchor_y + pt.1;
-                // Same `current_deco_id` tagging as a direct call: an
-                // `inline-graphics` anchor can sit inside a firing deco's
-                // contents, and the reflow backend resolves a destination to
-                // its Frame through this id.
+                // As in a direct call: the reflow backend resolves a
+                // destination to its Frame through this id.
                 if let Some(deco_id) = interp.current_deco_id {
                     interp.dest_decos.push((deco_id, name.clone()));
                 }

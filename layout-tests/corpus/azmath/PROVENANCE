@@ -1,130 +1,57 @@
-azmath — where this came from, what was changed, and why it is not gated yet
-============================================================================
+azmath — where this came from, and what was changed
+===================================================
 
 Upstream
 --------
   repository  https://github.com/monaqa/satysfi-azmath
-  version     0.0.3 (tag v0.0.3, 2020-11-07 — the latest RELEASE; the only
-              later tags are v0.0.1/v0.0.2, and master has moved on, see below)
+  version     0.0.3 (tag v0.0.3, 2020-11-07 — the latest release)
   tarball     https://github.com/monaqa/satysfi-azmath/archive/v0.0.3.tar.gz
   sha512      725917ab03e5599f7ef2d5065afa904197bf58ddd61ebec0b7dd160f1bce1e60
               bbfe4fecddc40f753c6e33fc103fe5a0ef36d3fe9dcab58c40bb2236617b3812
-  licence     MIT (satysfi-azmath.opam `license: "MIT"`; LICENSE is vendored
-              beside this file)
+              (the one the package index publishes for 0.0.3)
+  licence     MIT (LICENSE is vendored beside this file)
   author      Shinichi Mogami <mogassy@yahoo.co.jp>
 
-The sha512 above is the one the package index at
-https://yasuo-ozu.github.io/rustyfi-packages/packages/azmath.toml publishes for
-0.0.3, and it matches the archive that was actually unpacked here.
+Vendored: `src/` and `doc/azmath.saty`, the corpus convention. `Satyristes`,
+the `.opam` files, `HISTORY.md`, `commands.md`, `README.md` and the
+upstream-built `doc/azmath.pdf` are not — see "the reference PDF" below for why
+that last one would be actively misleading.
 
-Vendored: `src/` and `doc/azmath.saty`, the corpus convention (each project's
-own document plus its package sources). `Satyristes`, the `.opam` files,
-`HISTORY.md`, `commands.md`, `README.md` and the upstream-built `doc/azmath.pdf`
-are NOT vendored — see "the reference PDF" below for why that last one would be
-actively misleading.
-
-WHY NOT master
---------------
-master (67bf1e0a, 2022-05-15) is newer and its `+description` already speaks
-enumitem 3, which would have saved one of the two changes below. It is
-unusable here anyway: master's document added a "Unicode を用いた数式の記述"
-section that writes `${ x ÷ y }`, and a raw Unicode character in MATH mode is a
-SATySFi 0.0.7 feature — 0.0.6's lexer (`lexer.mll:128`, `mathsymboltop`) accepts
-only `+-*/:=<>~.,\`?`. This port targets 0.0.6 and rejects it, correctly.
-Upstream SATySFi 0.0.11 does accept it and then recurses forever on master's
-document (>12 CPU-minutes, 1.8 GB, killed), which is consistent with master's
-own opam pinning `satysfi {>= "0.0.6" & < "0.0.7"}`.
+NOT master, though master (67bf1e0a) is newer: its document writes `${ x ÷ y }`,
+and a raw Unicode character in MATH mode is a SATySFi 0.0.7 feature — 0.0.6's
+lexer (`lexer.mll:128`, `mathsymboltop`) accepts only `+-*/:=<>~.,\`?`, and this
+port targets 0.0.6. Upstream SATySFi 0.0.11 accepts it and then recurses forever
+on master's document, which is consistent with master's own opam pinning
+`satysfi {>= "0.0.6" & < "0.0.7"}`.
 
 TWO CHANGES TO THE VENDORED SOURCE
 ----------------------------------
 Both are recorded at the site as well; this is the index.
 
-1. `doc/azmath.saty` — enumitem 2 -> 3. Lifted verbatim from azmath's own
-   master branch (commit e6775b6, "Bump enumitem to 3"): the `+dd` helper and
-   the `+description<...>` rewrite. enumitem 2 gave `+description` an `itemize`
-   argument, enumitem 3 gives it a `block-text` of `+ditem`s, and
-   `fidelity.py`'s `assemble_lib_root` merges every document's stage map into
-   ONE lib root, so the corpus can hold exactly one enumitem — which is 3.
-   Without this the document does not typecheck in EITHER engine.
+1. `doc/azmath.saty` — enumitem 2 -> 3, lifted verbatim from azmath's own master
+   (commit e6775b6, "Bump enumitem to 3"): the `+dd` helper and the
+   `+description<...>` rewrite. `fidelity.py`'s `assemble_lib_root` merges every
+   document's stage map into ONE lib root, so the corpus can hold exactly one
+   enumitem — and it is 3. Without this the document does not typecheck in
+   EITHER engine.
 
-2. `src/equation.satyh` — `group-by-`'s two `- 1`s dropped. Same index-vs-count
-   `List.take`/`List.split-at` hazard `easytable/src/matrix.satyg`'s
-   `Matrix.set-nth` already carries in this corpus. As written,
-   `split-at (n - 1)` with `+gather`'s n = 1 splits at 0 against a COUNT-based
-   `satysfi-base`, so the recursive `aux` is handed back the list it was given
-   and never terminates. This is azmath's own bug, not either engine's:
+2. `src/equation.satyh` — `group-by-`'s two `- 1`s dropped. The same
+   index-vs-count `List.take`/`List.split-at` hazard `easytable/src/matrix.satyg`
+   already carries in this corpus: `split-at (n - 1)` with `+gather`'s n = 1
+   splits at 0 against a COUNT-based `satysfi-base`, so the recursive `aux` is
+   handed back the list it was given and never terminates. This is azmath's own
+   bug, not either engine's — a two-row `+gather` overflows this port's
+   evaluator stack AND upstream SATySFi 0.0.11's, and a one-row equation
+   terminated but silently rendered blank (`take (1*1 - 1)` = `[]`).
 
-     - a two-row `+gather` in a 13-line document overflows this port's 256 MB
-       evaluator stack in 0.8 s AND upstream SATySFi 0.0.11's 8 MB one in 0.2 s;
-     - it is not proportional to input size — one row terminates, two do not;
-     - a ONE-row equation terminated but silently DROPPED its own contents
-       (`take (1*1 - 1)` = `take 0` = `[]`), so `+eqn` rendered a blank line.
-
-   With this fixed, upstream SATySFi 0.0.11 builds the whole document in 1.6 s
-   (15 pages).
-
-THE BLOCKER THAT IS NOW CLOSED
-------------------------------
-The port used to refuse this document outright:
-
-  Error: register-destination can only be called during page breaking
-         (from a page-break hook or a decoration)
-
-`equation.satyh`'s `ib-annotation` anchors every `\label`ed equation by calling
-`register-destination` from inside an `inline-graphics` callback, and
-`primitives.rs`'s `prim_inline_graphics` documents its "eager-callback
-shortcut": the callback runs at CONSTRUCTION time, where no page exists, rather
-than at page-break time where upstream runs it. The gate itself is faithful —
-upstream's `annotation.ml:15` raises `State.NotDuringPageBreak` outside the
-window too, so relaxing it would have been the wrong fix.
-
-It is fixed by RE-TIMING instead: the eager call records the request, the box
-carries it as a `GraphicsElem::Destination` marker, and `fire_hooks` replays it
-once the box has a page and a placed point. `layout-tests/probes/
-inline_graphics_dest.saty` is the package-free confirmation (both engines
-render it, y agreeing to 0.001pt) and
-`crates/rustyfi-lang/tests/inline_graphics_dest.rs` is the regression test.
-
-The document now builds unstubbed, and its anchors are REAL: 16 named
-destinations, exactly upstream's 16, in the same right-hand tag column. Their
-absolute positions carry the document's ordinary layout drift, but their
-relative spacing does not — consecutive equation anchors sit 20.255pt apart
-here against upstream's 20.134pt.
-
-WHY THIS IS STILL NOT IN fidelity.py's `DOCS`
----------------------------------------------
-Measured UNSTUBBED, with every fix in place:
-
-    char_match=0.9720  chars: port=11092 upstream=11001 (missing=1 extra=92)
-    pages: port=15 upstream=15 (+0)   lines: port=582 upstream=583 (-1)
-    width_p95=0.233pt
-
-`width_p95` 0.233pt makes this the second most accurate document in the corpus
-on glyph geometry, behind xpath's 0.230. It was 0.926 — the worst — when these
-sources were vendored, and the document did not build at all.
-
-What the two remaining numbers are, so neither gets re-investigated:
-
-  * `missing=1` is a single character. The 49 that used to be here were
-    table-of-contents leader dots, and they were never a port defect NOR a font
-    pin problem: `fidelity.py --gen-refs` was building the reference with the
-    SATySFi installation's OWN fonts while the port rendered with its bundled
-    ones, so `width_p95` and the dot count were reading a Junicode version gap.
-    `assemble_satysfi_lib_root` now stages the port's `dist/fonts` into the
-    `-C` root, and the deficit went 49 -> 1 from that line alone.
-
-  * `extra=92` is upstream's ToUnicode gap, not port output. Upstream DRAWS
-    11093 glyphs and poppler extracts 11001; the 92 it drops are exactly the
-    CIDs upstream's own ToUnicode CMap has no entry for, and they are all
-    variant glyphs — `two.st` x72, `zero.st` x5, `three.st` x3, `u1D458.st` x3,
-    `infinity.st` x3, `one.st` x2, plus `integral.v1`/`summation.v1`/
-    `product.v1`. The port maps them, so poppler reads 92 more out of its PDF.
-    Note `port extracted 11092 == upstream drawn 11093 - 1`. The same holds in
-    latexcmds (11 unmapped <-> 11 extra), easytable and figbox, so `chars_extra`
-    corpus-wide is largely this, not a port difference.
-
-Registering it is a six-line `DOCS` entry plus a decision about the reference
-PDF (see below), not a code change:
+NOT REGISTERED IN fidelity.py's `DOCS`
+--------------------------------------
+Both engines build the document — the port's `register-destination`-from-inside-
+an-`inline-graphics`-callback blocker is closed, and its anchors are real: 16
+named destinations, exactly upstream's 16, in the same right-hand tag column.
+It is not gated because no reference PDF is committed for it (see below) and its
+glyph and line agreement is not yet inside the band the seven gated documents
+hold. Registering it is a `DOCS` entry plus a reference PDF, not a code change:
 
     Doc(
         "azmath",
@@ -134,53 +61,24 @@ PDF (see below), not a code change:
         {"enumitem": "enumitem/src"},   # azmath arrives by relative @import:
     ),
 
-WHAT THE 49 LEADER DOTS WERE (RESOLVED — THE HARNESS, NOT THE FONT PIN)
------------------------------------------------------------------------
-This entry is kept because the first diagnosis was WRONG in a way worth not
-repeating.
-
-The symptom: 49 missing characters, all table-of-contents leader dots, every
-line uniformly short by ~6.2%. `stdjabook.satyh`'s `make-dots-line` emits
-`round (w /' wdot)` dots, where `wdot` is the natural width of `{.}` plus 1pt —
-a direct readout of the Latin font — so the deficit correctly identified a
-FONT-METRIC difference rather than a content loss or a port bug.
-
-The first conclusion was that the pin was at fault: the port downloads Junicode
-**1.002** (upem 2048, period 520 = 0.2539 em) while the flake's SATySFi 0.0.11
-bundles **2.222** (upem 1000, period 234 = 0.234 em), an 8.5% wider dot cell,
-so the port fit 745 dots against upstream's 794. That measurement was right,
-and — this was over-corrected once, so state it carefully — the pin is a REAL
-issue too, just not the one this metric was reporting. Against a stock SATySFi
-0.0.11 the port on 1.002 really does render 49 fewer leader dots here (and 112
-fewer in enumitem), in its own output, for any user. What was NOT true is that
-the metric proved it: the harness was charging the port for the font gap twice,
-so the measured deficit was inflated and the remedy inferred from it —
-regenerate the corpus's committed references — did not follow.
-
-The actual cause is one line of the HARNESS: `fidelity.py --gen-refs` built the
-reference with the SATySFi installation's own fonts, because
-`assemble_satysfi_lib_root` deliberately did not copy `lib-rustyfi`. So every
-`--gen-refs` measurement in this corpus was reading a Junicode version gap on
-top of the layout difference. Staging the port's `dist/fonts` into the `-C`
-root — which upstream searches before its own (`main.ml:1063`) — took azmath
-from `missing=49, width_p95=0.926pt` to `missing=1, width_p95=0.386pt`, with no
-change to the pin, no new download, and no reference regenerated.
-
-Two lessons, since this cost three investigations:
-
-  * when a metric implicates an ASSET, check that both sides of the comparison
-    were given the same asset before concluding the asset is wrong; and
-  * a mismeasurement does not make the underlying suspicion false. Fixing the
-    ruler (this change) and fixing the artifact (repinning the font) are
-    different repairs to different problems, and only the first is done here.
-    The second is argued in `download-fonts.sh`'s pin comment.
+Two residuals cost an investigation each; do not repeat them. The
+table-of-contents leader dots that showed up as ~49 MISSING characters were a
+Junicode version gap between the two sides of the comparison, not a port defect
+— `fidelity.py --gen-refs` was building the reference with the SATySFi
+installation's own fonts, and `assemble_satysfi_lib_root` now stages the port's
+`dist/fonts` into the `-C` root. (The pin is a separate real gap, argued in
+`download-fonts.sh`.) And the ~92 EXTRA characters are upstream's ToUnicode gap,
+not port output: they are CIDs upstream's own CMap has no entry for, all of them
+`.st`/`.v1` variant glyphs, which the port maps and poppler therefore extracts.
+The same holds in latexcmds, easytable and figbox, so corpus-wide `chars_extra`
+is largely this rather than a port difference.
 
 THE REFERENCE PDF
 -----------------
-Not vendored, deliberately. Upstream's own `doc/azmath.pdf` in the 0.0.3
-tarball was built from the UNPATCHED document — enumitem 2's `+description` and
-the runaway `group-by-` — so it is not a render of the source in this
-directory and would silently anchor the comparison to the wrong text.
+Not vendored, deliberately. Upstream's own `doc/azmath.pdf` in the 0.0.3 tarball
+was built from the UNPATCHED document — enumitem 2's `+description` and the
+runaway `group-by-` — so it is not a render of the source in this directory and
+would silently anchor the comparison to the wrong text.
 
 Produce the real one the way `fidelity.py --gen-refs` does, from the flake's
 SATySFi 0.0.11 (`nix build .#satysfi --no-link --print-out-paths`), with a `-C`

@@ -943,11 +943,9 @@ pub(crate) fn place_graphics(
     content.save_state();
     content.transform([1.0, 0.0, 0.0, 1.0, tx, ty]);
     for elem in elems {
-        // A deferred `register-destination`, not ink: `rustyfi-lang`'s
-        // `fire_hooks` consumed it into `DocExtras::destinations` long before
-        // the writer ran, and `/Dests` is a catalog entry rather than a
-        // content-stream op. Skipped ahead of the per-element `q`/`Q` so it
-        // costs the stream nothing at all.
+        // Not ink: `fire_hooks` already consumed it into
+        // `DocExtras::destinations`, and `/Dests` is a catalog entry rather
+        // than a content-stream op. Skipped ahead of the per-element `q`/`Q`.
         if matches!(elem, GraphicsElem::Destination { .. }) {
             continue;
         }
@@ -1022,10 +1020,7 @@ pub(crate) fn place_graphics(
                 content.end_path();
                 place_graphics(content, inner, 0.0, 0.0, &mut *emit_nested)?;
             }
-            // A deferred `register-destination`, not ink: `rustyfi-lang`'s
-            // `fire_hooks` consumed it into `DocExtras::destinations` long
-            // before the writer ran, and `/Dests` is a catalog entry rather
-            // than a content-stream op. Nothing to emit.
+            // Skipped above; this arm is only for exhaustiveness.
             GraphicsElem::Destination { .. } => {}
         }
         content.restore_state();

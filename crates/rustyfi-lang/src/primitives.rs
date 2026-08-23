@@ -2668,12 +2668,11 @@ fn normalize_math_kind(prev: MathKind, next: MathKind, raw: MathKind) -> MathKin
 }
 
 /// The six inter-atom space ratios `space_between_math_kinds` multiplies the
-/// math font size by — `primitives.cppo.ml:528-533`'s `space_math_bin`,
-/// `_rel`, `_op`, `_punct`, `_inner`, `_prefix`. Upstream carries the
-/// NATURAL/shrink/stretch triple on `HorzBox.context_main` and no primitive
-/// in v0.0.6 writes it, so a document cannot observe the difference between
-/// a context field and a constant; only the natural component is kept here,
-/// since this port's math spacer emits a fixed kern rather than glue.
+/// math font size by — `primitives.cppo.ml:528-533`'s `space_math_bin`, `_rel`,
+/// `_op`, `_punct`, `_inner`, `_prefix`. Upstream keeps them as a
+/// natural/shrink/stretch triple on `HorzBox.context_main` that no v0.0.6
+/// primitive writes, and this port's math spacer emits a fixed kern rather than
+/// glue, so only the natural component is needed.
 const SPACE_MATH_BIN: f64 = 0.25;
 const SPACE_MATH_REL: f64 = 0.375;
 const SPACE_MATH_OP: f64 = 0.125;
@@ -2681,29 +2680,22 @@ const SPACE_MATH_PUNCT: f64 = 0.125;
 const SPACE_MATH_INNER: f64 = 0.125;
 const SPACE_MATH_PREFIX: f64 = 0.125;
 
-/// `space_between_math_kinds` (`math.ml:319-410`), arm for arm and in the
-/// same ORDER — OCaml's `match` is first-match, so `(Punct, Close)` has to
-/// reach the `(Punct, _)` arm and not `(_, Close)`, and `(Bin, Close)` the
-/// other way round. Every ratio is `primitives.cppo.ml:528-533`'s.
+/// `space_between_math_kinds` (`math.ml:319-410`), arm for arm and in the same
+/// ORDER: OCaml's `match` is first-match, so `(Punct, Close)` must reach the
+/// `(Punct, _)` arm and not `(_, Close)`. Every ratio is
+/// `primitives.cppo.ml:528-533`'s.
 ///
-/// `in_script` is `not (MathContext.is_in_base_level mathctx)`: inside a
-/// sub/superscript upstream suppresses the WHOLE table except the five
-/// operator pairs. This port used to apply full base-level spacing at every
-/// depth, which in a script-dense document is the larger of the two errors
-/// the old stand-in made — the other being the ratios themselves (it used
-/// 0.22 for `Bin` and 0.28 for `Rel` against upstream's 0.25 and 0.375, so
-/// an `${x = y}` came out 1.14 pt narrow at 12 pt and an `${x + 1}` 0.72 pt).
+/// `in_script` is `not (MathContext.is_in_base_level mathctx)` — inside a
+/// sub/superscript upstream suppresses the whole table except the five operator
+/// pairs. `font_size` is `FontInfo.actual_math_font_size mathctx`, the size of
+/// the LEVEL being laid out and not the ambient base size, which is why callers
+/// pass their local `size`.
 ///
-/// `font_size` is `FontInfo.actual_math_font_size mathctx`, i.e. the size of
-/// the level being laid out, NOT the ambient base size — which is why the
-/// callers pass their local `size`.
-///
-/// The `space_correction` channel upstream threads alongside `mkprev` is
-/// pinned at `NoSpace` here: the three arms that read it — `(_, Close)`,
-/// `(Ord|Prefix, Open)` and the `_` fallthrough — therefore all yield no
-/// space, which is exactly what upstream yields for `NoSpace` and is the
-/// conservative reading of the other two (a trailing italics correction, and
-/// the MATH table's `space_after_script`).
+/// Upstream's `space_correction` channel is pinned at `NoSpace` here, so the
+/// three arms that read it — `(_, Close)`, `(Ord|Prefix, Open)` and the
+/// fallthrough — all yield nothing: exact for `NoSpace`, and the conservative
+/// reading of a trailing italics correction and the MATH table's
+/// `space_after_script`.
 fn space_before(prev: MathKind, cur: MathKind, in_script: bool, font_size: Length) -> Length {
     use MathKind::*;
     let ratio = if in_script {
@@ -2743,15 +2735,13 @@ fn space_before(prev: MathKind, cur: MathKind, in_script: bool, font_size: Lengt
     font_size * ratio
 }
 
-/// `not (MathContext.is_in_base_level mathctx)` for a `(ctx, size)` pair, the
-/// shape this port's math layout threads instead of upstream's
-/// `math_context`. Two independent witnesses, because the two engines record
-/// the level differently: `layout_math_atom`'s script arms shrink only the
-/// LOCAL `size` and hand the recursion the ambient `ctx` unchanged, whereas
-/// `attach_scripts` (and `read-math`'s `Math::WithContext`) go through
-/// `enter_script`, which advances `Context::math_script_level` and scales
-/// `font_size` together — so a `WithContext` captured under a script arrives
-/// with `size == ctx.font_size` and has to be recognised by its level.
+/// `not (MathContext.is_in_base_level mathctx)` for the `(ctx, size)` pair this
+/// port threads instead of upstream's `math_context`. BOTH witnesses are
+/// needed: `layout_math_atom`'s script arms shrink only the local `size` and
+/// pass the ambient `ctx` down, while `enter_script` (`attach_scripts`,
+/// `read-math`'s `Math::WithContext`) advances `Context::math_script_level` and
+/// scales `font_size` together — so a `WithContext` captured under a script
+/// arrives with `size == ctx.font_size` and is recognisable only by its level.
 fn math_in_script(ctx: &Context, size: Length) -> bool {
     size != ctx.font_size || ctx.math_script_level != MathScriptLevel::Base
 }
@@ -2785,14 +2775,10 @@ fn push_char_glyph(
     x: &mut Length,
 ) -> Result<(), EvalError> {
     let font = math_glyph_font(interp, ctx, c, size);
-    // `fontInfo.ml:379-383`: a math glyph that is NOT at base level is set in
-    // the font's `ssty` (Math Script Style) variant — a purpose-drawn
-    // exponent/index form, not merely the base glyph shrunk. Its advance
-    // differs (Latin Modern Math's `two.st` is 569/1000 em against `two`'s
-    // 500), so this is a WIDTH fix as much as a shape one. On any miss — no
-    // GSUB, no `ssty`, no coverage for this glyph, every base-14 provider —
-    // the base glyph is used unchanged, so nothing outside a script and
-    // nothing in a MATH-table-less font moves.
+    // `fontInfo.ml:379-383`: a math glyph below base level is set in the font's
+    // `ssty` variant — a purpose-drawn form with its own advance, not the base
+    // glyph shrunk (see `FontMetrics::math_script_variant`). Any miss falls
+    // through to the base glyph unchanged.
     if math_in_script(ctx, size) {
         if let Some(v) = interp.metrics.math_script_variant(font, c, size) {
             out.push(MathGlyph {
@@ -4781,21 +4767,15 @@ fn prim_stroke(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, Eval
 
 /// Apply a graphics callback under the eager-call window, returning its
 /// resolved elements with every `register-destination` it made appended as a
-/// [`GraphicsElem::Destination`] marker.
+/// [`GraphicsElem::Destination`] marker. Markers go AFTER the real elements, so
+/// ink z-order is untouched and a callback that registers nothing yields the
+/// same `elems` as before.
 ///
-/// The eager call runs outside any page-break window, so a
-/// `register-destination` inside it has no page to bind to. Rather than error
-/// (see `prim_register_destination`), it lands in `Interp::pending_dests`;
-/// here those requests become box-local markers that `fire_hooks` replays
-/// once the box is placed. They are appended AFTER the real elements, so ink
-/// z-order is untouched and a callback that registers nothing produces a
-/// byte-identical `elems` to before.
-///
-/// The window is not opened INSIDE a page-break walk (`current_page` is
-/// `Some` — a deco can build an `inline-graphics` of its own): a box built
-/// there is drawn straight into `page_graphics`, which `fire_hooks` never
-/// re-walks, so a marker minted for it would be silently dropped. There the
-/// direct registration is both available and correct.
+/// The window is deliberately NOT opened inside a page-break walk
+/// (`current_page` is `Some` — a deco can build an `inline-graphics` of its
+/// own): a box built there is drawn straight into `page_graphics`, which
+/// `fire_hooks` never re-walks, so a marker minted for it would be silently
+/// dropped. There the direct registration is available and correct.
 fn apply_graphics_callback(
     interp: &mut Interp,
     version: RustyfiVersion,
@@ -4843,19 +4823,13 @@ fn apply_graphics_callback(
 /// enforced by this signature.
 ///
 /// **The one SIDE EFFECT that survives the shortcut** is
-/// `register-destination`, which the shortcut would otherwise make
-/// impossible rather than merely approximate: at construction time there is
-/// no page, so `annotation.ml:15`'s gate refuses it and the whole document
-/// fails (azmath's `equation.satyh` anchors every `\label`ed equation exactly
-/// this way). It is deferred properly — [`apply_graphics_callback`] turns
-/// each call into a `GraphicsElem::Destination` marker riding in `elems`, and
-/// `fire_hooks` replays it against the box's real page and placed point. The
-/// marker rides `elems` rather than a field of its own so it inherits the
-/// whole existing pipeline: the `origin_independent` probe below,
-/// `fire_hooks`' existing recursion into a graphics box's elements, and
-/// `shift_graphics`/`linear_transform_graphics` wherever those move a box's
-/// ink. (`GraphicsElem::Destination` records the one walk that still drops
-/// it, `math_boxes_of_inline_boxes`' harvest into a math run's `rules`.)
+/// `register-destination`: at construction time there is no page, so
+/// `annotation.ml:15`'s gate would refuse it and fail the document (azmath's
+/// `equation.satyh` anchors every `\label`ed equation this way).
+/// [`apply_graphics_callback`] turns each call into a
+/// `GraphicsElem::Destination` marker riding in `elems` — rather than a field
+/// of its own, so it inherits the `origin_independent` probe below and the
+/// existing `fire_hooks`/`shift_graphics` pipeline.
 fn prim_inline_graphics(
     interp: &mut Interp,
     version: RustyfiVersion,
@@ -4884,15 +4858,13 @@ fn prim_inline_graphics(
     // Upstream (`handlePdf.ml`) always calls the callback with the true placed
     // point and never post-translates; this recovers that for the constant
     // case without a post-layout deferral. (The extra evaluation must be free
-    // of observable side effects — true of every `Gr`/`draw-text` generator,
-    // and the one effect that is NOT free, `register-destination`, is captured
-    // per call rather than committed, so the probe's copy is simply dropped.)
+    // of observable side effects — true of every `Gr`/`draw-text` generator;
+    // `register-destination` is captured per call rather than committed, so
+    // the probe's copy is dropped.)
     //
-    // Comparing the marker-bearing `elems` is what keeps an ANCHOR-ONLY
-    // callback (`fun (x, y) -> register-destination k (x, y); []`) honest:
-    // its ink is `[]` at both points, so on ink alone it would look
-    // page-absolute and its anchor would never be translated to where the box
-    // actually landed.
+    // The comparison includes the markers on purpose: an ANCHOR-ONLY callback
+    // draws no ink at either point, so comparing ink alone would classify it
+    // page-absolute and pin every anchor at the raw callback argument.
     let origin_independent = {
         let probe = make_point_value((Length::pt(4096.0), Length::pt(2731.0)));
         match apply_graphics_callback(interp, version, move |it| it.apply(gfun, probe)) {
@@ -4975,9 +4947,9 @@ fn resolve_outer_graphics_in_contents(
             // (`line-break`/`tabular`/`draw-text`), so `interp.version` here
             // is the entry document's, not the callback author's.
             //
-            // Deferred, but still deferred to LINE-BREAK time rather than page
-            // break, so a `register-destination` in here has no page either:
-            // it goes through the same capture as `prim_inline_graphics`.
+            // Deferred to LINE-BREAK time, not page break, so a
+            // `register-destination` here still has no page: same capture as
+            // `prim_inline_graphics`.
             let elems = apply_graphics_callback(interp, gver, move |it| {
                 let partial = it.apply(gfun, Value::Length(w))?;
                 it.apply(partial, make_point_value((Length::ZERO, Length::ZERO)))
@@ -5704,14 +5676,13 @@ fn as_border_option(v: Value) -> Result<Option<(Length, Color)>, EvalError> {
 /// page. Errors outside that window (`annotation.ml:15`'s
 /// `State.during_page_break` gate).
 ///
-/// **One exception, and it is a re-timing rather than a relaxation of the
-/// gate.** Inside an eagerly-applied `inline-graphics` callback the port is
-/// running code upstream would only run DURING page breaking (see
-/// `prim_inline_graphics`), so refusing here refuses a call upstream accepts.
-/// Such a call is instead DEFERRED — recorded in `Interp::pending_dests`, from
-/// where the caller mints a `GraphicsElem::Destination` marker that
-/// `fire_hooks` replays against the box's real page and placed point. Outside
-/// that one window the gate is unchanged: no page, no destination.
+/// **ONE exception, a re-timing rather than a relaxation of the gate.** Inside
+/// an eagerly-applied `inline-graphics` callback this port is running code
+/// upstream would only run DURING page breaking (see `prim_inline_graphics`),
+/// so refusing here would refuse a call upstream accepts. Such a call is
+/// recorded in `Interp::pending_dests` instead, and the caller mints a
+/// `GraphicsElem::Destination` marker from it. Outside that one window the gate
+/// is unchanged: no page, no destination.
 fn prim_register_destination(
     interp: &mut Interp,
     mut args: Vec<Value>,
@@ -8877,15 +8848,12 @@ fn math_glyphs_of_inline_boxes(boxes: &[HorzBox]) -> (Vec<MathGlyph>, Length) {
 /// `PureHorzBox::Math` box (a paren closure could, in principle, embed one
 /// via `text-in-math`/`embed-math`).
 ///
-/// ONE arm genuinely diverges from that sibling, and it makes this walk
-/// VERTICAL too: `dy` (y-up, box-local — `MathGlyph::dy`'s own frame) carries
-/// the offset of the stacked line a nested `EmbeddedBlock`'s content sits on,
-/// so a `line-stack-top`/`-bottom` box handed back to math through
-/// `text-in-math` contributes its ink at the right height instead of only its
-/// width. See that arm. Every other container still contributes width alone:
-/// `Frame` and `Tabular` could be descended into the same way, but no corpus
-/// document puts either inside a `text-in-math` body, so neither has a
-/// measured shape to be faithful to.
+/// ONE arm diverges from that sibling and makes this walk VERTICAL too: `dy`
+/// (y-up, box-local — `MathGlyph::dy`'s own frame) carries the offset of the
+/// stacked line a nested `EmbeddedBlock`'s content sits on. `Frame` and
+/// `Tabular` still contribute width alone; they could be descended into the
+/// same way, but nothing in the corpus puts either inside a `text-in-math`
+/// body, so neither has a measured shape to be faithful to.
 fn math_boxes_of_inline_boxes(boxes: &[HorzBox]) -> (Vec<MathGlyph>, Vec<GraphicsElem>, Length) {
     fn go(
         pure: &PureHorzBox,
@@ -8950,25 +8918,20 @@ fn math_boxes_of_inline_boxes(boxes: &[HorzBox]) -> (Vec<MathGlyph>, Vec<Graphic
             }
             PureHorzBox::HookPageBreak { .. } => {}
             PureHorzBox::Tabular(tab) => *x += tab.width,
-            // A `line-stack-top`/`-bottom` (or `embed-block-top`/`-bottom`)
-            // box handed BACK to math through `text-in-math` — azmath's
-            // `\overbrace`/`\underbrace` (`parens.satyh:533`/`:561`) stack
-            // the brace over the braced formula exactly this way. Keeping
-            // only `width` here dropped the whole stack, brace and contents
-            // alike, leaving a correctly-sized hole: the same nested-container
-            // walk bug the `EmbeddedText` arm's comment records for
-            // `\underset`/`\overset`, one container further in.
-            //
-            // Placing it is `place_embedded_block`'s (rustyfi-pdf) geometry,
-            // in this walk's y-UP frame: `place_block_at` seats the stack at
-            // a page-y-DOWN origin, the anchored line (`anchor_last`: the
-            // LAST for `-bottom`, the FIRST for `-top` — upstream's
-            // `adjust_to_last_line`/`adjust_to_first_line`) lands on the math
-            // baseline, and every other line is offset by the NEGATED
-            // difference of their placed baselines. That is the same split
-            // `make_embedded_block` measured the box's own height/depth from,
-            // so the glyph/rule extents `layout_math_value` folds back up
-            // agree with the box metrics the rest of the pipeline already saw.
+            // A `line-stack-top`/`-bottom` (or `embed-block-top`/`-bottom`) box
+            // handed BACK to math through `text-in-math` — azmath's
+            // `\overbrace`/`\underbrace` (`parens.satyh:533`/`:561`) stack the
+            // brace over the braced formula this way. Placed with
+            // `place_embedded_block`'s (rustyfi-pdf) geometry but in this walk's
+            // y-UP frame: `place_block_at` seats the stack at a page-y-DOWN
+            // origin, the anchored line lands on the math baseline
+            // (`anchor_last`: the LAST for `-bottom`, the FIRST for `-top` —
+            // upstream's `adjust_to_last_line`/`adjust_to_first_line`), and
+            // every other line is offset by the NEGATED difference of their
+            // placed baselines. That is the same split `make_embedded_block`
+            // measured the box's own height/depth from, so what
+            // `layout_math_value` folds back up agrees with the box metrics the
+            // rest of the pipeline already saw.
             PureHorzBox::EmbeddedBlock {
                 width,
                 block,
@@ -8986,10 +8949,9 @@ fn math_boxes_of_inline_boxes(boxes: &[HorzBox]) -> (Vec<MathGlyph>, Vec<Graphic
                     for line in &placed {
                         let line_dy = dy - (line.baseline_y - anchor_y);
                         for (cdx, cbx) in &line.contents {
-                            // Each stacked line has its own horizontal
-                            // origin; a nested box must not advance the
-                            // OUTER run's pen, which the block's own `width`
-                            // accounts for once, below.
+                            // Each stacked line has its own horizontal origin,
+                            // and must not advance the OUTER run's pen — the
+                            // block's own `width` accounts for that once below.
                             let mut cx = *x + line.x + *cdx;
                             go(cbx, out, rules, &mut cx, line_dy);
                         }

@@ -51,7 +51,7 @@ pub(crate) fn stylesheet(geometry: &PageGeometry, ctx: &Ctx) -> String {
     // generic stack — so body text renders in the face it was typeset in and
     // `inline.rs` need not repeat it on every run.
     let body_family = match ctx.body.font.and_then(|f| ctx.font_family_for(f)) {
-        Some(family) => format!("\"{family}\", "),
+        Some(family) => format!("{family}, "),
         None => String::new(),
     };
     format!(

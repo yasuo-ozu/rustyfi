@@ -23,8 +23,9 @@
 //! `PureHorzBox::Frame`'s deco) become real `<a href>` elements — see
 //! `Ctx::links`'s doc comment for HOW a page-absolute `Annot` gets matched
 //! back to a specific pre-page-break `Frame` (the `DecoId` both carry, not
-//! a geometry guess). `Image`/`Footnote` remain placeholders (no dedicated
-//! recovery lever exists for either — out of scope for this backend).
+//! a geometry guess). (`Image` and `Footnote` were placeholders in this
+//! slice; both are real now — see "What a continuous document does with the
+//! things a page had", below.)
 //!
 //! **Slice 3 scope** (design doc §6 "S3", the "above-flat structure" slice
 //! — see `reflow/structure.rs` for the implementation and its own doc
@@ -72,10 +73,43 @@
 //!   third-party or `md-ja.satyh` `\emph` degrades to today's plain text,
 //!   by design (never a font/size/color heuristic).
 //!
+//! ## What a continuous document does with the things a page had
+//!
+//! This mode is what `--format html` now means (`rustyfi`'s
+//! `format::OutputFormat`, whose doc comment says why). Three page-shaped
+//! constructs have no page to live on any more, and each is answered here
+//! rather than dropped:
+//!
+//! - **Footnotes** become a numbered `<sup>` reference in the text and an
+//!   `<aside class="footnote" role="doc-footnote">` immediately after the
+//!   paragraph that referenced them, linked both ways
+//!   (`block.rs`'s `flush_para`/`drain_footnotes`). *Just after the
+//!   paragraph* was chosen over *collected at the end*: a footnote is an
+//!   aside to a specific sentence, and in a document with no pages "the
+//!   end" can be an arbitrarily long scroll away, which turns every note
+//!   into a round trip. It is also what a reader of a web page expects the
+//!   `<aside>` to mean. Collecting them would be a one-line change to
+//!   `drain_footnotes`' call sites if that judgement is ever reversed.
+//!   Nothing is silently dropped: `walk_vboxes` drains the queue at the end
+//!   of every block, so a footnote referenced from a table cell or a bare
+//!   frame — somewhere no paragraph ever opens — still lands.
+//! - **Headers, footers and page numbers** are absent, and that is not a
+//!   gap: `page_break_core` captures `reflow_source` BEFORE
+//!   `pagepartsf` runs, so the running head a document repeats 27 times
+//!   never enters this backend at all.
+//! - **`\clearpage`** becomes an `<hr class="clearpage">` — a thematic break
+//!   is the honest remainder of a page break once pages are gone.
+//!
+//! Ink stays ink. Math, diagrams and rules are drawings, and each becomes
+//! one inline `<svg>` with its own intrinsic size sitting on the text
+//! baseline (`inline.rs`'s `emit_math_svg`/`emit_graphics_box`). MathML is
+//! not an option and never was: `read_math`/`layout_math_value` flatten a
+//! formula to positioned glyphs at eval time, so no structure survives to
+//! mark up.
+//!
 //! **Additivity** (design doc §8): this module is reached only through the
-//! two `pub fn`s below, themselves reached only via the CLI's
-//! `--format html-reflow` (`rustyfi`). Nothing here changes the
-//! behavior of [`crate::render_html_fixed`]/[`crate::render_html_fixed_ttf_with`] or
+//! two `pub fn`s below. Nothing here changes the behavior of
+//! [`crate::render_html_fixed`]/[`crate::render_html_fixed_ttf_with`] or
 //! `rustyfi_pdf::render_pdf*` — it only reuses their already-`pub(super)`
 //! (crate-visible) helpers ([`crate::escape_html`], [`crate::svg::css_color`],
 //! [`crate::svg::emit_graphics`], [`crate::fonts`], [`crate::image::data_uri`])
@@ -189,6 +223,15 @@ pub(crate) struct Ctx<'a> {
     /// Monotonic footnote number, shared by the `<sup>` reference and the
     /// `<aside>` body so the two can link to each other.
     pub(crate) footnote_seq: Cell<usize>,
+    /// Already-rendered BLOCK-level HTML that turned up while an inline
+    /// paragraph was open — a `<table>` or a `<div class="embed">` reached
+    /// through a `Frame`'s contents or out of a `draw-text`, rather than at
+    /// the top level of a `Line` where `block.rs` can flush the paragraph
+    /// around it first. `<table>` inside `<p>` is not valid HTML (a parser
+    /// closes the `<p>` at the `<table>` and leaves the `</p>` stray), so
+    /// these are queued exactly like [`Ctx::footnotes`] and emitted by
+    /// `flush_para` immediately after the paragraph closes.
+    pub(crate) deferred_blocks: RefCell<Vec<String>>,
 }
 
 impl Ctx<'_> {
@@ -312,6 +355,7 @@ fn render_html_reflow_impl(
         last_char: Cell::new(None),
         footnotes: RefCell::new(Vec::new()),
         footnote_seq: Cell::new(0),
+        deferred_blocks: RefCell::new(Vec::new()),
     };
 
     let mut body = String::new();

@@ -110,6 +110,47 @@ fn consecutive_lines_coalesce_and_skip_splits_into_two_paragraphs() {
     );
 }
 
+/// Rejoining two lines of one paragraph puts an ordinary space between
+/// them — that is what a line break between two Latin words is.
+#[test]
+fn rejoined_lines_take_one_space_between_words() {
+    let html = render(&[text_line("Hello,"), text_line("world!")]);
+    assert!(
+        html.contains("<p class=\"para\">Hello, world!</p>"),
+        "two lines of one paragraph should rejoin with one space:\n{html}"
+    );
+}
+
+/// …but NOT after a hyphen the line breaker itself inserted. A taken
+/// hyphenation leaves the discretionary's `pre_break` — a lone one-character
+/// run — spliced at the line's end (`linebreak.rs`'s `line_content`); the
+/// document says `figbox`, and rejoining naively said `fig- box`. The hyphen
+/// goes back to being the soft hyphen it stands for.
+#[test]
+fn a_line_breaker_hyphen_becomes_a_soft_hyphen_not_a_space() {
+    let html = render(&[
+        line_of(vec![text_run("fig"), text_run("-")]),
+        text_line("box"),
+    ]);
+    assert!(
+        html.contains("<p class=\"para\">fig&shy;box</p>"),
+        "the breaker's hyphen should rejoin as a soft hyphen:\n{html}"
+    );
+}
+
+/// …and not after a hyphen that was in the TEXT either. UAX#14 breaks AFTER
+/// an explicit hyphen, so `align-right` splits as `align-` / `right` with
+/// the hyphen still part of its run — it must be kept, and still not gain a
+/// space.
+#[test]
+fn an_explicit_hyphen_at_a_line_end_keeps_its_hyphen_and_gains_no_space() {
+    let html = render(&[text_line("align-"), text_line("right")]);
+    assert!(
+        html.contains("<p class=\"para\">align-right</p>"),
+        "an explicit hyphen must survive the rejoin without a space:\n{html}"
+    );
+}
+
 #[test]
 fn frame_start_end_becomes_a_nested_div() {
     let vboxes = vec![
@@ -186,9 +227,47 @@ fn styled_run_carries_color_and_rising_as_css_not_position() {
         html.contains("vertical-align:3pt"),
         "missing rising-as-vertical-align CSS:\n{html}"
     );
+}
+
+/// The document's own dominant `(font, size)` goes on `body`
+/// (`text::BodyStyle::dominant`, `css.rs`), so a run set in it needs no
+/// element at all: body prose serializes as bare escaped text. This is what
+/// makes the output readable markup rather than one `<span>` per syllable.
+#[test]
+fn a_body_styled_run_is_written_as_bare_text_with_no_span() {
+    let html = render(&[text_line("ordinary prose")]);
     assert!(
-        html.contains("font-size:12pt"),
-        "missing font-size CSS:\n{html}"
+        html.contains("<p class=\"para\">ordinary prose</p>"),
+        "a body-styled run should carry no <span> at all:\n{html}"
+    );
+    assert!(
+        html.contains("font-size: 12pt"),
+        "the dominant size should be stated once, on `body`:\n{html}"
+    );
+}
+
+/// A run that DIFFERS from the body style states its size as an `em` RATIO
+/// of the body size, not an absolute point size — so the whole document
+/// rescales from the single value on `body`. Here the 12pt runs win the
+/// count and become the body, and the one 18pt run comes out at 1.5em.
+#[test]
+fn an_off_body_size_becomes_an_em_ratio_of_the_body_size() {
+    let mut big = text_run("BIG");
+    if let PureHorzBox::InnerString { info, .. } = &mut big {
+        info.size = Length::pt(18.0);
+    }
+    let html = render(&[
+        text_line("plenty of ordinary body text here"),
+        text_line("and more of it, to win the count"),
+        line(big),
+    ]);
+    assert!(
+        html.contains("font-size:1.5000em"),
+        "an off-body size should be an em ratio:\n{html}"
+    );
+    assert!(
+        !html.contains("font-size:18pt"),
+        "an off-body size should not be frozen at an absolute point size:\n{html}"
     );
 }
 
@@ -325,6 +404,100 @@ fn graphics_renders_as_an_inline_svg() {
     );
 }
 
+/// `draw-text` inside a graphic must come out as SVG `<text>`, not as an
+/// HTML `<span>`. `span` is on the HTML parser's foreign-content BREAKOUT
+/// list, so a `<span>` between `<g>` and `</g>` makes a browser close the
+/// `<svg>` early and reparse the rest of the drawing as HTML — the text is
+/// not merely mispositioned, the whole graphic is mangled. See `svg.rs`'s
+/// doc comment.
+#[test]
+fn draw_text_inside_a_graphic_renders_as_svg_text_not_an_html_span() {
+    let gfx_box = PureHorzBox::Graphics {
+        origin_independent: false,
+        width: Length::pt(40.0),
+        height: Length::pt(10.0),
+        depth: Length::ZERO,
+        elems: vec![GraphicsElem::Text {
+            pt: (Length::pt(2.0), Length::pt(3.0)),
+            contents: vec![(Length::ZERO, text_run("drawn"))],
+            width: Length::pt(40.0),
+            height: Length::pt(9.0),
+            depth: Length::pt(2.0),
+            transform: None,
+        }],
+    };
+    let html = render(&[line(gfx_box)]);
+
+    let svg_start = html.find("<svg").expect("missing the graphic's <svg>");
+    let svg_end = html[svg_start..].find("</svg>").expect("unclosed <svg>") + svg_start;
+    let inside = &html[svg_start..svg_end];
+    assert!(
+        inside.contains("<text"),
+        "the drawn run should be an SVG <text>:\n{html}"
+    );
+    assert!(
+        inside.contains(">drawn</text>"),
+        "the drawn run should keep its text:\n{html}"
+    );
+    assert!(
+        !inside.contains("<span"),
+        "no HTML element may appear inside an <svg>:\n{html}"
+    );
+    // The enclosing `<g>` flips the y axis for paths; a glyph must be
+    // counter-flipped or it renders mirrored.
+    assert!(
+        inside.contains("scale(1,-1)\" style="),
+        "the drawn text must undo the box flip:\n{html}"
+    );
+}
+
+/// A `draw-text` carrying something SVG cannot host — `figbox`'s figures put
+/// images, tables and embedded blocks there — must still reach the document.
+/// It comes back through `svg::Deferred` and is emitted after the wrapper
+/// closes, as ordinary flowing content: a `<table>` OUTSIDE the `<svg>`,
+/// never inside it.
+#[test]
+fn a_table_drawn_into_a_graphic_is_emitted_after_the_svg_not_inside_it() {
+    let cell = TabularCellBox {
+        x: Length::ZERO,
+        baseline_y: Length::ZERO,
+        contents: vec![(Length::ZERO, text_run("cell"))],
+    };
+    let table = PureHorzBox::Tabular(TabularBox {
+        width: Length::pt(20.0),
+        height: Length::pt(9.0),
+        depth: Length::pt(2.0),
+        cells: vec![cell],
+        rules: vec![],
+    });
+    let gfx_box = PureHorzBox::Graphics {
+        origin_independent: false,
+        width: Length::pt(40.0),
+        height: Length::pt(12.0),
+        depth: Length::ZERO,
+        elems: vec![GraphicsElem::Text {
+            pt: (Length::ZERO, Length::ZERO),
+            contents: vec![(Length::ZERO, table)],
+            width: Length::pt(20.0),
+            height: Length::pt(9.0),
+            depth: Length::pt(2.0),
+            transform: None,
+        }],
+    };
+    let html = render(&[line(gfx_box)]);
+
+    let svg_end = html.find("</svg>").expect("missing the graphic's <svg>");
+    let table_at = html.find("<table").expect("the drawn table went missing");
+    assert!(
+        table_at > svg_end,
+        "the table must be emitted after the </svg>, not inside it:\n{html}"
+    );
+    assert!(
+        html.contains("cell"),
+        "the cell's text went missing:\n{html}"
+    );
+}
+
 /// Slice 2 (§4 "Links/metadata"): a `PureHorzBox::Frame` whose `DecoId`
 /// matches an observed `register-link-to-uri` call (`DocumentValue::
 /// reflow_links`, here passed straight in as the test's own side-channel)
@@ -389,11 +562,33 @@ fn goto_name_link_and_matching_destination_frame_wire_together() {
     );
 }
 
-/// The defining difference from the faithful (`render_html_fixed`) mode: NOTHING
-/// in reflow output is absolutely positioned. `left:` is never emitted at
-/// all; every occurrence of the substring `top:` must be part of
-/// `margin-top:` (a legitimate flow property), never a bare CSS `top`
-/// positioning declaration.
+/// The two CSS box-offset properties, and the flow-safe longhands that end
+/// in the same word. `top`/`left` as bare declarations are page positioning;
+/// `margin-top`/`border-left`/`padding-left`/… are ordinary flow properties
+/// that merely share the suffix, and the stylesheet uses several of them
+/// (the `.clearpage` rule, the footnote `<aside>`'s rule).
+pub(crate) fn assert_no_box_offsets(html: &str) {
+    assert!(
+        !html.contains("position:absolute") && !html.contains("position: absolute"),
+        "reflow output must never use position:absolute:\n{html}"
+    );
+    for prop in ["top:", "left:", "right:", "bottom:"] {
+        for (idx, _) in html.match_indices(prop) {
+            let before = &html[..idx];
+            assert!(
+                ["margin-", "border-", "padding-", "inset-", "scroll-margin-"]
+                    .iter()
+                    .any(|p| before.ends_with(p)),
+                "found a bare `{prop}` CSS declaration at byte {idx}:\n{html}"
+            );
+        }
+    }
+}
+
+/// The defining difference from the faithful (`render_html_fixed`) mode:
+/// NOTHING in reflow output is absolutely positioned — no
+/// `position:absolute`, and no bare `top`/`left`/`right`/`bottom`
+/// declaration. See [`assert_no_box_offsets`].
 #[test]
 fn reflow_output_never_uses_absolute_positioning() {
     let vboxes = vec![
@@ -403,26 +598,7 @@ fn reflow_output_never_uses_absolute_positioning() {
         text_line("second"),
         VertBox::FrameEnd(DecoId(1)),
     ];
-    let html = render(&vboxes);
-
-    assert!(
-        !html.contains("position:absolute") && !html.contains("position: absolute"),
-        "reflow output must never use position:absolute:\n{html}"
-    );
-    assert!(
-        !html.contains("left:"),
-        "reflow output must never use `left:`:\n{html}"
-    );
-    // `top:` is only allowed as a suffix of a flow-safe longhand
-    // (`margin-top:`, `border-top:` — used by the static `.clearpage`/
-    // `.frame` stylesheet rules, `css.rs`), never as the bare positioned
-    // `top` property.
-    for (idx, _) in html.match_indices("top:") {
-        assert!(
-            html[..idx].ends_with("margin-") || html[..idx].ends_with("border-"),
-            "found a bare `top:` CSS declaration (not margin-top/border-top) at byte {idx}:\n{html}"
-        );
-    }
+    assert_no_box_offsets(&render(&vboxes));
 }
 
 #[test]
@@ -638,6 +814,84 @@ fn tabular_renders_as_a_real_table_with_rows_and_cells() {
     for text in ["R0C0", "R0C1", "R1C0", "R1C1"] {
         assert!(html.contains(text), "missing cell text {text}:\n{html}");
     }
+}
+
+/// A `Tabular` reached through inline content — inside a `Frame`, or drawn
+/// into a graphic — cannot be written where it stands: `<table>` inside
+/// `<p>` is not valid HTML, and a parser closes the paragraph at the
+/// `<table>` and leaves the `</p>` stray (the easytable manual had 18 of
+/// them). It is queued and emitted just after the paragraph instead.
+#[test]
+fn a_table_inside_inline_content_is_emitted_after_the_paragraph_not_within_it() {
+    let table = PureHorzBox::Tabular(TabularBox {
+        width: Length::pt(20.0),
+        height: Length::pt(9.0),
+        depth: Length::ZERO,
+        cells: vec![TabularCellBox {
+            x: Length::ZERO,
+            baseline_y: Length::ZERO,
+            contents: vec![(Length::ZERO, text_run("cell"))],
+        }],
+        rules: vec![],
+    });
+    let framed = PureHorzBox::Frame {
+        width: Length::pt(20.0),
+        height: Length::pt(9.0),
+        depth: Length::ZERO,
+        deco: DecoId(0),
+        contents: vec![(Length::ZERO, table)],
+    };
+    let html = render(&[line_of(vec![text_run("before"), framed])]);
+
+    let para_close = html.find("</p>").expect("missing the paragraph");
+    let table_at = html.find("<table").expect("the nested table went missing");
+    assert!(
+        table_at > para_close,
+        "a <table> must never open inside a <p>:\n{html}"
+    );
+    assert!(
+        html.contains("before"),
+        "the paragraph's own text went missing:\n{html}"
+    );
+}
+
+/// A table package pads its own cells with `inline-skip` struts on both
+/// sides — `easytable`'s manual emits two per cell, 2136 in all. `<td>`'s CSS
+/// padding is HTML's way to say that, so the struts at a cell's edges go;
+/// one BETWEEN two words is spacing the author wrote and stays.
+#[test]
+fn a_cells_own_padding_struts_are_dropped_but_inner_spacing_is_kept() {
+    let pad = || PureHorzBox::FixedEmpty {
+        width: Length::pt(6.0),
+    };
+    let tab = TabularBox {
+        width: Length::pt(40.0),
+        height: Length::pt(20.0),
+        depth: Length::ZERO,
+        cells: vec![TabularCellBox {
+            x: Length::ZERO,
+            baseline_y: Length::ZERO,
+            contents: vec![
+                (Length::ZERO, pad()),
+                (Length::ZERO, text_run("a")),
+                (Length::ZERO, pad()),
+                (Length::ZERO, text_run("b")),
+                (Length::ZERO, pad()),
+            ],
+        }],
+        rules: vec![],
+    };
+    let html = render(&[line(PureHorzBox::Tabular(tab))]);
+
+    assert_eq!(
+        html.matches("class=\"hskip\"").count(),
+        1,
+        "only the strut between the two words should survive:\n{html}"
+    );
+    assert!(
+        html.contains("<td>a<span class=\"hskip\" style=\"width:6pt;\"></span>b</td>"),
+        "the cell should start and end on its own text:\n{html}"
+    );
 }
 
 // ============================================================================
@@ -938,9 +1192,9 @@ fn href_through_a_breakable_inline_frame_renders_as_an_anchor_link() {
 
 /// The end marker carries no payload saying which tag it closes, so the
 /// walker keeps a stack. Nested pairs must therefore close innermost-first:
-/// a plain frame inside a link frame closes its `</span>` before the `</a>`.
-/// Getting this wrong produces overlapping tags that browsers silently
-/// reinterpret, so it would not show up as a crash.
+/// an anchor frame inside a link frame closes its `</span>` before the
+/// `</a>`. Getting this wrong produces overlapping tags that browsers
+/// silently reinterpret, so it would not show up as a crash.
 #[test]
 fn nested_breakable_inline_frames_close_innermost_first() {
     let vboxes = vec![line_of(vec![
@@ -951,13 +1205,106 @@ fn nested_breakable_inline_frames_close_innermost_first() {
         iframe_marker(22, true),
         iframe_marker(21, true),
     ])];
-    let links = vec![(DecoId(21), AnnotAction::Uri("https://example.org".to_string()))];
-    let html = render_with_links(&vboxes, &links, &[]);
+    let links = vec![(
+        DecoId(21),
+        AnnotAction::Uri("https://example.org".to_string()),
+    )];
+    let dests = vec![(DecoId(22), "inner-anchor".to_string())];
+    let html = render_with_links(&vboxes, &links, &dests);
 
-    let span_close = html.find("</span>").expect("inner frame must close a <span>");
+    let span_close = html
+        .find("</span>")
+        .expect("inner frame must close a <span>");
     let a_close = html.find("</a>").expect("outer link must close an </a>");
     assert!(
         span_close < a_close,
         "inner </span> must close before the outer </a>:\n{html}"
+    );
+}
+
+/// An `inline-frame-breakable` that is NEITHER a link NOR a named
+/// destination has nothing to say — every `\code`-style command in the
+/// corpus goes through one — so it emits no element at all. An empty
+/// wrapper is not merely noise: it would split two adjacent identical runs
+/// that [`a_body_styled_run_is_written_as_bare_text_with_no_span`]'s sibling
+/// coalescing would otherwise join.
+#[test]
+fn a_breakable_inline_frame_with_no_link_or_anchor_emits_no_wrapper() {
+    let vboxes = vec![line_of(vec![
+        iframe_marker(31, false),
+        text_run("plain"),
+        iframe_marker(31, true),
+    ])];
+    let html = render(&vboxes);
+
+    assert!(
+        html.contains("<p class=\"para\">plain</p>"),
+        "a decoration-less inline frame should leave its text bare:\n{html}"
+    );
+    assert!(
+        !html.contains("class=\"iframe\""),
+        "no wrapper should be emitted for a frame with nothing to say:\n{html}"
+    );
+}
+
+/// Two runs that carry the SAME style are one `<span>`, not two — including
+/// across the word space between them. The box stream splits text at every
+/// UAX#14 chunk boundary and between every pair of CJK characters, so
+/// without this a Japanese title serialises as one element per character.
+#[test]
+fn adjacent_runs_with_the_same_style_become_one_span() {
+    let styled = |text: &str| {
+        let mut bx = text_run(text);
+        if let PureHorzBox::InnerString { info, .. } = &mut bx {
+            info.color = Color::Rgb(1.0, 0.0, 0.0);
+        }
+        bx
+    };
+    let html = render(&[line_of(vec![
+        styled("Latex"),
+        styled("Cmds"),
+        PureHorzBox::OuterEmpty {
+            natural: Length::pt(3.5),
+            shrinkable: Length::ZERO,
+            stretchable: Length::ZERO,
+        },
+        styled("パ"),
+        styled("ッ"),
+    ])]);
+
+    assert_eq!(
+        html.matches("<span class=\"run\"").count(),
+        1,
+        "four same-styled runs should be one span:\n{html}"
+    );
+    assert!(
+        html.contains(">LatexCmds パッ</span>"),
+        "the merged span should hold all four runs' text, space included:\n{html}"
+    );
+}
+
+/// …but only when the style genuinely matches. A run that differs in any
+/// property opens its own span, and the one after it does not silently join
+/// the WRONG neighbour.
+#[test]
+fn a_differently_styled_run_still_opens_its_own_span() {
+    let mut red = text_run("red");
+    if let PureHorzBox::InnerString { info, .. } = &mut red {
+        info.color = Color::Rgb(1.0, 0.0, 0.0);
+    }
+    let mut blue = text_run("blue");
+    if let PureHorzBox::InnerString { info, .. } = &mut blue {
+        info.color = Color::Rgb(0.0, 0.0, 1.0);
+    }
+    let html = render(&[line_of(vec![red, blue])]);
+
+    assert_eq!(
+        html.matches("<span class=\"run\"").count(),
+        2,
+        "two differently-coloured runs must stay two spans:\n{html}"
+    );
+    assert!(
+        html.contains(">red</span>") && html.contains(">blue</span>"),
+        "each run keeps its own text:\n{html}"
     );
 }

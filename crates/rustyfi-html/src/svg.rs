@@ -28,31 +28,53 @@
 //! `(tx + px, ty - py)` — exactly mirroring how `emit_box`'s `InnerString`
 //! arm turns a y-up `rising` into a page-y-down subtraction.
 //!
-//! **`GraphicsElem::Text` breaks that decomposition on purpose.** A
-//! `draw-text` run's placed sub-boxes are ordinary `PureHorzBox`es (text
-//! runs, possibly nested graphics/images) emitted through the SAME
-//! `emit_box` used everywhere else, which positions `<span>`/`<svg>`
-//! children via CSS `position:absolute` relative to the nearest positioned
-//! ancestor — the `.page` div, NOT this box's local `<g transform>` (CSS
-//! absolute positioning does not compose with an SVG sibling's coordinate
-//! transform the way a PDF content-stream operator composes with the active
-//! CTM). So `Text` is handled OUTSIDE the `<svg>`/`<g>` nest entirely: its
-//! nested boxes are placed at page-absolute coordinates computed by hand
-//! (`tx + pt.x + dx`, `ty - pt.y`) via the `nested` callback, the one
-//! documented divergence from the PDF writer's `place_graphics` (whose
-//! `emit_nested` callback runs INSIDE the `q`/`cm` block precisely because
-//! PDF text ops DO compose with the CTM).
+//! **`GraphicsElem::Text` stays inside the `<svg>`, as SVG.** A `draw-text`
+//! run's placed sub-boxes are ordinary `PureHorzBox`es (text runs, possibly
+//! nested graphics), and both writers used to hand them back to their own
+//! per-box emitter through a callback, which emitted HTML `<span>`s — while
+//! the walk was between `<g …>` and `</g>`. That is not merely a
+//! coordinate-frame divergence, it is invalid: `span` is on the HTML
+//! parser's foreign-content BREAKOUT list, so a browser reading it closes
+//! the `<svg>` early and reparses the rest of the drawing as HTML. The
+//! easytable manual alone emitted 1559 such elements.
+//!
+//! So [`draw_box`] renders those sub-boxes as real SVG instead: a text run
+//! becomes `<text>`, a nested graphic a translated `<g>`. Both live in the
+//! box-local y-up frame the enclosing `<g transform>` already establishes,
+//! so no page coordinates are involved at all and the caller supplies only a
+//! font resolver ([`FontResolver`]) rather than a whole nested emitter. Text
+//! needs one extra `scale(1,-1)` of its own to come out upright inside that
+//! flip — glyphs, unlike filled paths, are not orientation-independent.
+//!
+//! What SVG genuinely cannot host is a nested `Image`, `Tabular` or
+//! `EmbeddedBlock` — an image needs the document's image table, which this
+//! module has no access to, and the other two are block layout, which SVG
+//! only takes through `<foreignObject>`. `figbox`'s manual puts all three
+//! under a `draw-text`, so dropping them is not an option: they go into
+//! [`emit_graphics`]'s `deferred` out-parameter with their box-local
+//! coordinates, for the caller to emit AFTER the `</svg>` — where the
+//! faithful writer positions them absolutely, exactly as its old callback
+//! did, and the reflowing one lets them flow.
 
-use rustyfi_backend::{Closing, Color, GraphicsElem, Path, PathSeg, PureHorzBox};
+use rustyfi_backend::{
+    Closing, Color, FontKey, GraphicsElem, HorzStringInfo, Path, PathSeg, PureHorzBox,
+};
 use std::fmt::Write as _;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-/// The nested-emitter callback type — the `&mut String` analogue of
-/// `rustyfi-pdf`'s `NestedEmitter` (`lib.rs:681`). [`emit_graphics`] invokes
-/// this only for `GraphicsElem::Text`'s sub-boxes (see this module's doc
-/// comment on why they can't stay inside the SVG's local coordinate frame);
-/// every other variant is handled directly by this module.
-pub(super) type NestedEmitter<'a> = &'a mut dyn FnMut(&mut String, &PureHorzBox, f64, f64);
+/// Resolves a run's [`FontKey`] to the CSS `font-family` naming its
+/// `@font-face` embedding, recording the file as used — i.e. each writer's
+/// own `Ctx::font_family_for`. `None` in base-14 mode. This is all
+/// [`emit_graphics`] needs from its caller now that `GraphicsElem::Text` is
+/// rendered here rather than handed back (see this module's doc comment).
+pub(super) type FontResolver<'a> = &'a mut dyn FnMut(FontKey) -> Option<String>;
+
+/// A `draw-text` sub-box SVG cannot host, with its BOX-LOCAL y-up position
+/// (`x` from the box's left edge, `y` from its baseline) — see this module's
+/// doc comment. The caller emits these after [`emit_graphics`] returns; the
+/// page-space anchor is `(tx + x, ty - y)`, the same formula every other arm
+/// of a writer's own `emit_box` uses.
+pub(super) type Deferred = Vec<(f64, f64, PureHorzBox)>;
 
 /// Emit one graphics-bearing box's `elems` as a single inline `<svg>`,
 /// CSS-positioned at the box's placed top-left corner (`tx` the left edge,
@@ -71,7 +93,8 @@ pub(super) fn emit_graphics(
     depth: f64,
     tx: f64,
     ty: f64,
-    nested: NestedEmitter<'_>,
+    fonts: FontResolver<'_>,
+    deferred: &mut Deferred,
 ) {
     if elems.is_empty() {
         return;
@@ -84,7 +107,7 @@ pub(super) fn emit_graphics(
          width=\"{width}pt\" height=\"{total_h}pt\" viewBox=\"0 0 {width} {total_h}\">\n\
          <g transform=\"translate(0,{height}) scale(1,-1)\">\n",
     );
-    emit_elems(out, elems, tx, ty, nested);
+    emit_elems(out, elems, fonts, deferred);
     out.push_str("</g>\n</svg>\n");
 }
 
@@ -95,9 +118,8 @@ pub(super) fn emit_graphics(
 fn emit_elems(
     out: &mut String,
     elems: &[GraphicsElem],
-    tx: f64,
-    ty: f64,
-    nested: NestedEmitter<'_>,
+    fonts: FontResolver<'_>,
+    deferred: &mut Deferred,
 ) {
     for elem in elems {
         match elem {
@@ -137,17 +159,41 @@ fn emit_elems(
                     dash.2 .0,
                 );
             }
-            // `draw-text` (roadmap C1 upstream; see this module's doc
-            // comment on why this is the one arm that steps OUTSIDE the
-            // local `<g>` frame): re-enter the writer's own per-box emission
-            // at PAGE-absolute coordinates `(tx + pt.x + dx, ty - pt.y)`.
-            GraphicsElem::Text { pt, contents, .. } => {
-                for (dx, bx) in contents {
-                    let page_x = tx + (pt.0 + *dx).0;
-                    let page_y = ty - pt.1 .0;
-                    nested(out, bx, page_x, page_y);
+            // `draw-text` (roadmap C1 upstream): its sub-boxes are drawn as
+            // SVG, in this same box-local y-up frame, at the element's own
+            // point plus each box's `dx`. See this module's doc comment on
+            // why they are no longer handed back to the caller as HTML.
+            //
+            // `transform` (`linear-transform-graphics`) is the run's own 2×2
+            // about its local origin, applied BEFORE the `pt` translation —
+            // exactly the PDF writer's `cm [a c b d ptx pty]`
+            // (`rustyfi-pdf/src/lib.rs`'s own `Text` arm), which is
+            // component-for-component an SVG `matrix(a,c,b,d,ptx,pty)`. The
+            // callback this arm replaced ignored it outright, so a rotated
+            // `draw-text` came out upright.
+            GraphicsElem::Text {
+                pt,
+                contents,
+                transform,
+                ..
+            } => match transform {
+                None => {
+                    for (dx, bx) in contents {
+                        draw_box(out, bx, (pt.0 + *dx).0, pt.1 .0, fonts, deferred);
+                    }
                 }
-            }
+                Some((a, b, c, d)) => {
+                    let _ = write!(
+                        out,
+                        "<g transform=\"matrix({a},{c},{b},{d},{},{})\">\n",
+                        pt.0 .0, pt.1 .0,
+                    );
+                    for (dx, bx) in contents {
+                        draw_box(out, bx, dx.0, 0.0, fonts, deferred);
+                    }
+                    out.push_str("</g>\n");
+                }
+            },
             // L5b (prim-retype-sweep.md §3.3): 0.1's `graphics` collection
             // container nodes — never reached by any 0.0.6 program (see
             // `GraphicsElem`'s own doc comment), handled anyway for parity
@@ -157,7 +203,7 @@ fn emit_elems(
             // `Group`/`Clip`) already applies.
             GraphicsElem::Group(inner) => {
                 out.push_str("<g>\n");
-                emit_elems(out, inner, tx, ty, nested);
+                emit_elems(out, inner, fonts, deferred);
                 out.push_str("</g>\n");
             }
             // `graphicD.ml:323-336`'s clip: an SVG `<clipPath>` definition
@@ -174,7 +220,7 @@ fn emit_elems(
                      <g clip-path=\"url(#html-clip-{id})\">\n",
                     path_d(path),
                 );
-                emit_elems(out, inner, tx, ty, nested);
+                emit_elems(out, inner, fonts, deferred);
                 out.push_str("</g>\n");
             }
             // Not ink: a deferred `register-destination` marker, already
@@ -186,6 +232,101 @@ fn emit_elems(
             GraphicsElem::Destination { .. } => {}
         }
     }
+}
+
+/// One `draw-text` sub-box, drawn as SVG at box-local y-up `(x, y)` —
+/// `y` being its baseline. Recursive: a `Frame` is transparent, a nested
+/// `Graphics` becomes a translated `<g>` whose contents go back through
+/// [`emit_elems`] in the same frame. See this module's doc comment for what
+/// is deliberately not drawn, and why this is SVG rather than HTML.
+fn draw_box(
+    out: &mut String,
+    bx: &PureHorzBox,
+    x: f64,
+    y: f64,
+    fonts: FontResolver<'_>,
+    deferred: &mut Deferred,
+) {
+    match bx {
+        PureHorzBox::InnerString { info, text, .. } => {
+            draw_text_run(out, info, text, x, y + info.rising.0, fonts)
+        }
+        // Transparent: every child sits on the frame's own baseline, only
+        // `dx` varying — the same treatment the two page writers' `Frame`
+        // arms give it.
+        PureHorzBox::Frame { contents, .. } => {
+            for (dx, cbx) in contents {
+                draw_box(out, cbx, x + dx.0, y, fonts, deferred);
+            }
+        }
+        // A graphic inside a `draw-text` inside a graphic. Its `elems` are
+        // local to ITS baseline-left origin, so one translate places them —
+        // no second flip, since the outer `<g>`'s is still in force.
+        PureHorzBox::Graphics { elems, .. } => {
+            let _ = write!(out, "<g transform=\"translate({x},{y})\">\n");
+            emit_elems(out, elems, fonts, deferred);
+            out.push_str("</g>\n");
+        }
+        // Math flattens to positioned glyphs plus rules, both already in the
+        // y-up box-local convention — the same two layers `reflow/inline.rs`
+        // draws for a top-level `Math` box.
+        PureHorzBox::Math { glyphs, rules, .. } => {
+            for g in glyphs {
+                draw_text_run(
+                    out,
+                    &g.info,
+                    &g.text,
+                    x + g.dx.0,
+                    y + g.dy.0 + g.info.rising.0,
+                    fonts,
+                );
+            }
+            if !rules.is_empty() {
+                let _ = write!(out, "<g transform=\"translate({x},{y})\">\n");
+                emit_elems(out, rules, fonts, deferred);
+                out.push_str("</g>\n");
+            }
+        }
+        // Block layout and images: SVG has no element for these, so they go
+        // back to the caller with their box-local position (see this
+        // module's doc comment and [`Deferred`]).
+        PureHorzBox::Image { .. } | PureHorzBox::Tabular(_) | PureHorzBox::EmbeddedBlock { .. } => {
+            deferred.push((x, y, bx.clone()))
+        }
+        // Glue, markers and hooks carry no ink at all.
+        _ => {}
+    }
+}
+
+/// One run of drawn text as an SVG `<text>` whose origin is its baseline
+/// start. The `scale(1,-1)` undoes [`emit_graphics`]'s per-box flip for this
+/// element only: a filled path is orientation-independent and wants the
+/// flip, a glyph is not and would come out mirrored.
+fn draw_text_run(
+    out: &mut String,
+    info: &HorzStringInfo,
+    text: &str,
+    x: f64,
+    y: f64,
+    fonts: FontResolver<'_>,
+) {
+    if text.is_empty() {
+        return;
+    }
+    let mut style = format!("font-size:{}pt;", info.size.0);
+    if let Some(family) = fonts(info.font) {
+        // Unquoted — `fonts::font_family_name` is a bare CSS identifier
+        // exactly so it survives an attribute.
+        let _ = write!(style, "font-family:{family};");
+    }
+    if info.color != Color::Gray(0.0) {
+        let _ = write!(style, "fill:{};", css_color(info.color));
+    }
+    let _ = write!(
+        out,
+        "<text transform=\"translate({x},{y}) scale(1,-1)\" style=\"{style}\">{}</text>\n",
+        crate::escape_html(text),
+    );
 }
 
 /// Process-global monotonic counter for `<clipPath id>` uniqueness (SVG IDs

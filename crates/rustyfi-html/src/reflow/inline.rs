@@ -116,7 +116,15 @@ pub(crate) fn emit_inline(out: &mut String, bx: &PureHorzBox, ctx: &Ctx) {
                         "</span>",
                     )
                 } else {
-                    ("<span class=\"iframe\">".to_string(), "</span>")
+                    // Neither a link nor an anchor: an ordinary
+                    // `inline-frame-breakable`, which every `\code`/`\emph`
+                    // style command in the corpus goes through. A wrapper
+                    // with nothing to say is pure noise (`.iframe` is
+                    // `display:inline`, i.e. no-op), and worse, it SPLITS
+                    // two adjacent identical runs that `emit_run` would
+                    // otherwise coalesce. The stack still gets its entry, so
+                    // the end marker stays balanced.
+                    (String::new(), "")
                 };
                 if !suppressed {
                     out.push_str(&open);
@@ -157,7 +165,11 @@ pub(crate) fn emit_inline(out: &mut String, bx: &PureHorzBox, ctx: &Ctx) {
         PureHorzBox::FixedEmpty { width } => {
             if width.0 >= HSKIP_MIN_PT {
                 ctx.resolve_glue(out, None);
-                let _ = write!(out, "<span class=\"hskip\" style=\"width:{}pt;\"></span>", width.0);
+                let _ = write!(
+                    out,
+                    "<span class=\"hskip\" style=\"width:{}pt;\"></span>",
+                    width.0
+                );
             } else {
                 ctx.note_glue(width.0);
             }
@@ -216,11 +228,12 @@ pub(crate) fn emit_inline(out: &mut String, bx: &PureHorzBox, ctx: &Ctx) {
                 }
                 out.push_str("</span>");
             } else {
-                out.push_str("<span class=\"iframe\">");
+                // No link, no anchor, no decoration this backend can run —
+                // so no element. See the `InlineFrameMarker` arm above on why
+                // an empty wrapper is worse than none.
                 for (_, cbx) in contents {
                     emit_inline(out, cbx, ctx);
                 }
-                out.push_str("</span>");
             }
         }
 
@@ -316,7 +329,9 @@ pub(crate) fn emit_inline(out: &mut String, bx: &PureHorzBox, ctx: &Ctx) {
         // surrounding paragraph to flush here, so no `extra_attrs` margin.
         PureHorzBox::Tabular(tab) => {
             open_opaque(out, ctx);
-            super::structure::render_table(out, tab, "", ctx)
+            let mut html = String::new();
+            super::structure::render_table(&mut html, tab, "", ctx);
+            defer_block(html, ctx);
         }
         // A footnote has nowhere to be collected TO in a continuous
         // document — there is no page foot any more — so it becomes a
@@ -335,14 +350,17 @@ pub(crate) fn emit_inline(out: &mut String, bx: &PureHorzBox, ctx: &Ctx) {
             // footnote's own last character must not decide the spacing of
             // the word after the reference in the main text.
             let saved = (ctx.pending_glue.take(), ctx.last_char.take());
-            // Park the queue too: the nested walk drains whatever it finds
-            // there when it finishes, and an earlier sibling footnote from
-            // this same paragraph must not end up nested inside this one.
+            // Park both queues too: the nested walk drains whatever it finds
+            // in them when it finishes, and an earlier sibling footnote (or
+            // table) from this same paragraph must not end up nested inside
+            // this one.
             let parked = std::mem::take(&mut *ctx.footnotes.borrow_mut());
+            let parked_blocks = std::mem::take(&mut *ctx.deferred_blocks.borrow_mut());
             let mut body = String::new();
             super::block::walk_vboxes(&mut body, block, ctx);
             ctx.pending_glue.set(saved.0);
             ctx.last_char.set(saved.1);
+            *ctx.deferred_blocks.borrow_mut() = parked_blocks;
             let mut queue = ctx.footnotes.borrow_mut();
             *queue = parked;
             queue.push((n, body));
@@ -352,14 +370,25 @@ pub(crate) fn emit_inline(out: &mut String, bx: &PureHorzBox, ctx: &Ctx) {
             );
         }
 
-        // `EmbeddedBlock` is handled one level up, in `block.rs`'s own
-        // per-`Line`-contents loop (it needs to CLOSE the open paragraph,
-        // which this function's `&mut String` signature has no way to do)
-        // — unreachable in practice, kept as an explicit inert arm rather
-        // than a silent catch-all so a future new `PureHorzBox` variant
-        // still forces a compile error here instead of silently falling
-        // through.
-        PureHorzBox::EmbeddedBlock { .. } => {}
+        // `block.rs`'s own per-`Line`-contents loop handles the common case
+        // directly, flushing the open paragraph around it. This arm catches
+        // the one that reaches here instead: an `EmbeddedBlock` drawn into a
+        // graphic by a `draw-text` (`svg::Deferred`), which `figbox`'s
+        // figures do. Closing the paragraph is not something this function's
+        // `&mut String` can do, so it queues like a `Tabular` above.
+        PureHorzBox::EmbeddedBlock { block, .. } => {
+            open_opaque(out, ctx);
+            // Park the queue: the nested walk drains whatever it finds there
+            // when it finishes, and an earlier sibling's table from THIS
+            // paragraph must not end up inside this block. Same reason the
+            // `Footnote` arm below parks it.
+            let parked = std::mem::take(&mut *ctx.deferred_blocks.borrow_mut());
+            let mut html = String::from("<div class=\"embed\">\n");
+            super::block::walk_vboxes(&mut html, block, ctx);
+            html.push_str("</div>\n");
+            *ctx.deferred_blocks.borrow_mut() = parked;
+            defer_block(html, ctx);
+        }
 
         // No reflow meaning (zero-width markers/hooks; matches the
         // faithful writer's own wildcard treatment of these two).
@@ -383,6 +412,13 @@ const HSKIP_MIN_PT: f64 = 0.5;
 /// the size as an `em` RATIO rather than an absolute point size, so the
 /// whole document rescales from the single value on `body`.
 ///
+/// A run whose style matches the one immediately before it EXTENDS that
+/// span rather than opening a second identical one
+/// ([`extend_point`]) — the box stream splits text at every UAX#14 chunk
+/// boundary and between every pair of CJK characters, so without this a
+/// title reads `<span…>パ</span><span…>ッ</span><span…>ケ</span>` and a
+/// word reads `<span…>Latex</span><span…>Cmds</span>`.
+///
 /// Still no `left`/`top`/`position` — this is flowing content, not a placed
 /// box; `vertical-align` (not `position`) handles a non-zero `rising`, since
 /// it needs no positioned ancestor and composes with the inline flow.
@@ -390,14 +426,20 @@ fn emit_run(out: &mut String, info: &HorzStringInfo, text: &str, ctx: &Ctx) {
     if text.is_empty() {
         return;
     }
-    ctx.resolve_glue(out, text.chars().next());
+    // Into its own buffer, not straight into `out`: when this run extends the
+    // previous span, the separating space belongs INSIDE that span, after the
+    // `</span>` this is about to remove.
+    let mut sep = String::new();
+    ctx.resolve_glue(&mut sep, text.chars().next());
     ctx.last_char.set(text.chars().next_back());
 
     let mut style = String::new();
     if !ctx.body.matches(info.font, info.size.0) {
         if Some(info.font) != ctx.body.font {
             if let Some(family) = ctx.font_family_for(info.font) {
-                let _ = write!(style, "font-family:\"{family}\";");
+                // Unquoted: this lands in a `style="…"` ATTRIBUTE, and a `"`
+                // would close it. See `crate::fonts::font_family_name`.
+                let _ = write!(style, "font-family:{family};");
             }
         } else {
             // Same face as the body, so the `@font-face` rule for it is
@@ -422,11 +464,49 @@ fn emit_run(out: &mut String, info: &HorzStringInfo, text: &str, ctx: &Ctx) {
     }
 
     let escaped = crate::escape_html(text);
+    // Body-styled text needs no element, so consecutive runs of it already
+    // coalesce for free — there is nothing to extend.
     if style.is_empty() {
+        out.push_str(&sep);
         out.push_str(&escaped);
-    } else {
-        let _ = write!(out, "<span class=\"run\" style=\"{style}\">{escaped}</span>");
+        return;
     }
+    match extend_point(out, &style) {
+        Some(cut) => {
+            out.truncate(cut);
+            out.push_str(&sep);
+            out.push_str(&escaped);
+            out.push_str("</span>");
+        }
+        None => {
+            out.push_str(&sep);
+            let _ = write!(
+                out,
+                "<span class=\"run\" style=\"{style}\">{escaped}</span>"
+            );
+        }
+    }
+}
+
+/// If `out` ends with a `.run` span whose style is EXACTLY `style`, the byte
+/// offset of that span's `</span>` — truncating there reopens it for more
+/// text. `None` when the previous thing written was anything else at all: a
+/// differently-styled run, a `&shy;`, a closing wrapper tag, bare body text,
+/// or nothing.
+///
+/// Deliberately structural rather than a remembered offset: `emit_inline`
+/// writes into a different `String` for a paragraph, a table cell, a
+/// footnote body and an SVG wrapper, and an offset remembered from one of
+/// those must never be applied to another. Reading the buffer itself cannot
+/// be wrong about which buffer it is. It is also cheap — a run's own text is
+/// short, and it is HTML-ESCAPED, so it contains no `<` of its own and the
+/// last `<` before the closing tag is necessarily the span's opening tag.
+fn extend_point(out: &str, style: &str) -> Option<usize> {
+    let body_end = out.strip_suffix("</span>")?.len();
+    let open = out[..body_end].rfind('<')?;
+    out[open..body_end]
+        .starts_with(&format!("<span class=\"run\" style=\"{style}\">"))
+        .then_some(body_end)
 }
 
 /// Does a `Discretionary`'s `pre_break` carry a visible character (the
@@ -460,6 +540,15 @@ fn open_opaque(out: &mut String, ctx: &Ctx) {
     ctx.last_char.set(None);
 }
 
+/// Queue already-rendered BLOCK-level HTML for `block.rs`'s `flush_para` to
+/// place just after the paragraph closes — see [`Ctx::deferred_blocks`] on
+/// why it cannot go inline where it stands.
+fn defer_block(html: String, ctx: &Ctx) {
+    if !html.trim().is_empty() {
+        ctx.deferred_blocks.borrow_mut().push(html);
+    }
+}
+
 /// Slice 2 (design doc §4 "Graphics — inline SVG, reuse `svg::emit_graphics`
 /// verbatim"): wrap a graphics-bearing box's `elems` in an intrinsically
 /// sized `<span>` (`position:relative; display:inline-block`, sized to the
@@ -477,15 +566,13 @@ fn open_opaque(out: &mut String, ctx: &Ctx) {
 /// block-level layout (the design doc's own "inline SVG for math/graphics is
 /// fine — that's intrinsic sizing, not page positioning").
 ///
-/// `nested` (for `GraphicsElem::Text`/`draw-text`, the one arm that steps
-/// outside the local coordinate frame — see `svg.rs`'s own doc comment)
-/// re-enters THIS module's [`emit_inline`] rather than the faithful writer's
-/// page-absolute `emit_box`, since reflow has no page coordinates to place
-/// nested content at; the `_x`/`_y` callback args are therefore unused here
-/// (a `draw-text` run's nested boxes render inline, at their natural flow
-/// position within the wrapper, not at their SVG-local point — a documented
-/// approximation for this rare construction, same spirit as the faithful
-/// mode's own `Math.glyph.gid` approximation).
+/// A `draw-text` run's own text and nested graphics are drawn as SVG inside
+/// the wrapper (`svg.rs`'s `draw_box`). What SVG cannot host — an image, a
+/// table, an embedded block, which is exactly what `figbox`'s figures put
+/// there — comes back in `svg::Deferred` and is emitted AFTER the wrapper
+/// closes, as ordinary flowing content. Its SVG-local point is discarded on
+/// purpose: a figure that reflows with the text is what this backend is for,
+/// and there is no page to place it on.
 fn emit_graphics_box(
     out: &mut String,
     width: f64,
@@ -505,6 +592,7 @@ fn emit_graphics_box(
          width:{width}pt; height:{total_h}pt; vertical-align:{}pt;\">\n",
         -depth,
     );
+    let mut deferred = crate::svg::Deferred::new();
     crate::svg::emit_graphics(
         out,
         elems,
@@ -513,9 +601,13 @@ fn emit_graphics_box(
         depth,
         0.0,
         height,
-        &mut |out, cbx, _x, _y| emit_inline(out, cbx, ctx),
+        &mut |font| ctx.font_family_for(font),
+        &mut deferred,
     );
     out.push_str("</span>\n");
+    for (_, _, bx) in deferred {
+        emit_inline(out, &bx, ctx);
+    }
 }
 
 /// Slice 2 (design doc §4 "Math"): MathML is not recoverable (structure is
@@ -568,7 +660,8 @@ fn emit_math_svg(
         let y = height - g.dy.0 - g.info.rising.0;
         let mut style = format!("font-size:{}pt;", g.info.size.0);
         if let Some(family) = ctx.font_family_for(g.info.font) {
-            style.push_str(&format!("font-family:\"{family}\";"));
+            // Unquoted — this is an attribute; see `fonts::font_family_name`.
+            style.push_str(&format!("font-family:{family};"));
         }
         if g.info.color != Color::Gray(0.0) {
             style.push_str(&format!("fill:{};", crate::svg::css_color(g.info.color)));
@@ -581,6 +674,10 @@ fn emit_math_svg(
     }
     out.push_str("</svg>\n");
     if !rules.is_empty() {
+        // A fraction bar or radical carries no `draw-text`, so nothing can
+        // be deferred out of it — but the parameter is not optional, and an
+        // ignored non-empty one would silently drop content.
+        let mut deferred = crate::svg::Deferred::new();
         crate::svg::emit_graphics(
             out,
             rules,
@@ -589,8 +686,14 @@ fn emit_math_svg(
             depth,
             0.0,
             height,
-            &mut |out, cbx, _x, _y| emit_inline(out, cbx, ctx),
+            &mut |font| ctx.font_family_for(font),
+            &mut deferred,
         );
+        out.push_str("</span>\n");
+        for (_, _, bx) in deferred {
+            emit_inline(out, &bx, ctx);
+        }
+        return;
     }
     out.push_str("</span>\n");
 }

@@ -22,6 +22,16 @@ use super::base64;
 /// by the `@font-face` rule's `font-family` and by every run's inline
 /// `font-family` style (`html.rs`'s `Ctx::font_family_for`), which must
 /// agree exactly for the browser to pick up the embedded face.
+///
+/// **Deliberately a bare CSS identifier** — a letter, then only letters,
+/// digits and hyphens — so it needs no quoting anywhere, and in particular
+/// none in a `style="…"` ATTRIBUTE, where a `"` would end the attribute and
+/// silently drop the rest of the declaration list. (It did: every
+/// `@font-face`-embedded run's `style` attribute used to terminate at the
+/// quote before this name, so the browser saw no font-family, no colour and
+/// no `vertical-align` on any of them.) A quoted string and an identifier
+/// are the same family to CSS's own matching, so the `@font-face` rule below
+/// may keep its quotes.
 pub(super) fn font_family_name(file_idx: usize) -> String {
     format!("rustyfi-html-font-{file_idx}")
 }
@@ -58,5 +68,24 @@ mod tests {
     #[test]
     fn family_names_are_distinct_per_file_index() {
         assert_ne!(font_family_name(0), font_family_name(1));
+    }
+
+    /// The name must be a bare CSS identifier, so that writing it unquoted
+    /// into a `style="…"` attribute is both legal and safe — see
+    /// [`font_family_name`]'s doc comment on the bug that made this matter.
+    #[test]
+    fn family_names_need_no_quoting_in_an_attribute() {
+        for idx in [0usize, 7, 42] {
+            let name = font_family_name(idx);
+            let mut chars = name.chars();
+            assert!(
+                chars.next().is_some_and(|c| c.is_ascii_alphabetic()),
+                "{name} must start with a letter"
+            );
+            assert!(
+                chars.all(|c| c.is_ascii_alphanumeric() || c == '-'),
+                "{name} must be letters/digits/hyphens only"
+            );
+        }
     }
 }

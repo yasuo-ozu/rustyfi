@@ -510,9 +510,21 @@ fn ttf_render_emits_font_face_with_embedded_ttf_and_spans_reference_it() {
             .find('"')
             .expect("unterminated font-family value");
     let family = &html[start..end];
+    // The RUN's copy is unquoted: it lives in a `style="…"` attribute, where a
+    // `"` would end the attribute and drop the rest of the declarations. CSS
+    // matches an identifier and a quoted string as the same family name, so
+    // this still resolves to the `@font-face` rule above — see
+    // `fonts::font_family_name`'s doc comment for the bug this pins.
     assert!(
-        html.contains(&format!("font-family:\"{family}\"")),
+        html.contains(&format!("font-family:{family};")),
         "span did not reference the @font-face family {family:?}:\n{html}"
+    );
+    // The `@font-face` rule writes `font-family: "…"` (with a space, inside a
+    // `<style>` ELEMENT, where quoting is fine); an inline `font-family:"…"`
+    // with no space could only be an attribute, and would be the bug.
+    assert!(
+        !html.contains("font-family:\""),
+        "a style attribute must never embed a quote:\n{html}"
     );
 }
 
@@ -524,9 +536,14 @@ fn ttf_render_emits_font_face_with_embedded_ttf_and_spans_reference_it() {
 fn ttf_render_with_no_runs_emits_no_font_face() {
     let path = need_font!();
     let store = TtfFontStore::load(&path, None, None).expect("load font");
-    let html =
-        rustyfi_html::render_html_fixed_ttf_with(&geometry(), &[], &store, &[], &DocExtras::default())
-            .expect("HTML rendering must succeed");
+    let html = rustyfi_html::render_html_fixed_ttf_with(
+        &geometry(),
+        &[],
+        &store,
+        &[],
+        &DocExtras::default(),
+    )
+    .expect("HTML rendering must succeed");
     assert!(
         !html.contains("@font-face"),
         "an empty document must not emit @font-face:\n{html}"
@@ -807,8 +824,9 @@ fn page_graphics_underlay_renders_as_a_flipped_svg_underneath_the_text() {
     )]];
 
     let page = page_with_run(text_run("on top"));
-    let html = rustyfi_html::render_html_fixed(&geometry(), std::slice::from_ref(&page), &[], &extras)
-        .expect("HTML rendering must succeed");
+    let html =
+        rustyfi_html::render_html_fixed(&geometry(), std::slice::from_ref(&page), &[], &extras)
+            .expect("HTML rendering must succeed");
 
     // The underlay <svg> covers the whole page (paper_w x paper_h from the
     // `geometry` fixture: 200pt x 300pt), anchored at the page's own

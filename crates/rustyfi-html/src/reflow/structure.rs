@@ -229,25 +229,74 @@ pub(crate) fn render_table(out: &mut String, tab: &TabularBox, extra_attrs: &str
         last_x = Some(x);
     }
 
-    let _ = write!(out, "<table class=\"tabular\"{extra_attrs}>\n");
+    let mut table = String::new();
+    let mut any_content = false;
+    let _ = write!(table, "<table class=\"tabular\"{extra_attrs}>\n");
     for row in rows {
-        out.push_str("<tr>\n");
+        table.push_str("<tr>\n");
         for cell in row {
-            out.push_str("<td>");
+            table.push_str("<td>");
             // A cell is a hard flow boundary in both directions: glue left
             // pending by the previous cell must not open this one with a
             // space, and this cell's last character must not decide the
             // spacing of the next.
             ctx.reset_flow();
+            // A `<td>` IS a block container, so unlike a `<p>` it can host
+            // whatever `emit_inline` deferred (`Ctx::deferred_blocks`) — and
+            // it must: a fixed-width column wraps its text in an
+            // `EmbeddedBlock`, which is every cell of `easytable`'s own
+            // `lw`/`cw`/`rw` example. Park the enclosing paragraph's queue
+            // so only THIS cell's own blocks land in it.
+            let parked = std::mem::take(&mut *ctx.deferred_blocks.borrow_mut());
             let mut cell_html = String::new();
             for (_, bx) in &cell.contents {
                 super::inline::emit_inline(&mut cell_html, bx, ctx);
             }
             ctx.reset_flow();
-            out.push_str(cell_html.trim());
-            out.push_str("</td>\n");
+            let trimmed = trim_cell_padding(cell_html.trim());
+            any_content |= !trimmed.is_empty();
+            table.push_str(trimmed);
+            for html in std::mem::replace(&mut *ctx.deferred_blocks.borrow_mut(), parked) {
+                any_content |= !html.trim().is_empty();
+                table.push_str(&html);
+            }
+            table.push_str("</td>\n");
         }
-        out.push_str("</tr>\n");
+        table.push_str("</tr>\n");
     }
-    out.push_str("</table>\n");
+    table.push_str("</table>\n");
+    // A grid whose every cell came out empty is not a table anyone can read,
+    // and in practice it is not one anyone wrote: `easytable` puts a
+    // CONTENTLESS copy of each solved tabular into the graphic it draws the
+    // rules with, so its manual produced 19 phantom 3x3 grids of blank
+    // bordered cells next to the 20 real tables. A deliberately blank grid
+    // (unheard of in the corpus) is the cost of not printing those.
+    if any_content {
+        out.push_str(&table);
+    }
+}
+
+/// Drop the `inline-skip` struts a table package puts at each cell's edges
+/// as its own cell padding — `easytable`'s manual alone emits 2136 of them,
+/// two per cell. In HTML that job belongs to `td { padding }`
+/// (`css.rs`), and keeping both pads every cell twice. Only struts at the
+/// very edges go; one between two words is spacing the author asked for.
+fn trim_cell_padding(mut s: &str) -> &str {
+    const OPEN: &str = "<span class=\"hskip\"";
+    const CLOSE: &str = "></span>";
+    while let Some(rest) = s.strip_prefix(OPEN) {
+        let Some(i) = rest.find(CLOSE) else { break };
+        s = rest[i + CLOSE.len()..].trim_start();
+    }
+    while let Some(body) = s.strip_suffix("</span>") {
+        // A strut is empty, so its opening tag is the last `<` before the
+        // close — anything else there means this `</span>` closes something
+        // with content, which is not padding.
+        let Some(open) = body.rfind('<') else { break };
+        if !body[open..].starts_with(OPEN) {
+            break;
+        }
+        s = body[..open].trim_end();
+    }
+    s
 }

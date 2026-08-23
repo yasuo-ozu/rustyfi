@@ -222,15 +222,8 @@ fn render_html_impl(
             .get(i)
             .map(|v| v.as_slice())
             .unwrap_or(&[]);
-        svg::emit_graphics(
-            &mut body,
-            overlay,
-            paper_w,
-            paper_h,
-            0.0,
-            0.0,
-            paper_h,
-            &mut |out, cbx, x, y| emit_box(out, cbx, x, y, &ctx),
+        emit_graphics_box(
+            &mut body, overlay, paper_w, paper_h, 0.0, 0.0, paper_h, &ctx,
         );
         for line in &page.lines {
             for (dx, bx) in &line.contents {
@@ -381,16 +374,7 @@ fn emit_box(out: &mut String, bx: &PureHorzBox, tx: f64, ty: f64, ctx: &Ctx) {
             elems,
             origin_independent: _,
         } => {
-            svg::emit_graphics(
-                out,
-                elems,
-                width.0,
-                height.0,
-                depth.0,
-                tx,
-                ty,
-                &mut |out, cbx, x, y| emit_box(out, cbx, x, y, ctx),
-            );
+            emit_graphics_box(out, elems, width.0, height.0, depth.0, tx, ty, ctx);
         }
         // §Slice 3 (`Math` row): each already-positioned `MathGlyph` is
         // rendered through the SAME run path as `InnerString` (a `<span>`,
@@ -422,16 +406,7 @@ fn emit_box(out: &mut String, bx: &PureHorzBox, tx: f64, ty: f64, ctx: &Ctx) {
                 let x = tx + g.dx.0;
                 emit_run(out, &g.info, &g.text, x, top, ctx);
             }
-            svg::emit_graphics(
-                out,
-                rules,
-                width.0,
-                height.0,
-                depth.0,
-                tx,
-                ty,
-                &mut |out, cbx, x, y| emit_box(out, cbx, x, y, ctx),
-            );
+            emit_graphics_box(out, rules, width.0, height.0, depth.0, tx, ty, ctx);
         }
         // §Slice 2 (mirrors `emit_box`'s `Tabular` arm, `lib.rs:646-658`):
         // each cell's already-laid-out boxes at their resolved offset —
@@ -457,7 +432,7 @@ fn emit_box(out: &mut String, bx: &PureHorzBox, tx: f64, ty: f64, ctx: &Ctx) {
                     );
                 }
             }
-            svg::emit_graphics(
+            emit_graphics_box(
                 out,
                 &tab.rules,
                 tab.width.0,
@@ -465,7 +440,7 @@ fn emit_box(out: &mut String, bx: &PureHorzBox, tx: f64, ty: f64, ctx: &Ctx) {
                 tab.depth.0,
                 tx,
                 ty,
-                &mut |out, cbx, x, y| emit_box(out, cbx, x, y, ctx),
+                ctx,
             );
         }
         // §Slice 2 (mirrors `emit_box`'s `EmbeddedBlock` arm, `lib.rs:659-
@@ -489,6 +464,41 @@ fn emit_box(out: &mut String, bx: &PureHorzBox, tx: f64, ty: f64, ctx: &Ctx) {
             }
         }
         _ => {}
+    }
+}
+
+/// [`svg::emit_graphics`] plus the `draw-text` sub-boxes SVG cannot host
+/// (`svg::Deferred` — an image, a table, an embedded block), emitted
+/// afterwards at their page-space anchor `(tx + x, ty - y)`. That is the
+/// same formula the old nested callback computed, and document order does
+/// not matter to an absolutely-positioned element, so this is where they
+/// used to be — just outside the `<svg>` instead of inside it, where a
+/// browser would have broken out of the drawing to reach them.
+#[allow(clippy::too_many_arguments)]
+fn emit_graphics_box(
+    out: &mut String,
+    elems: &[rustyfi_backend::GraphicsElem],
+    width: f64,
+    height: f64,
+    depth: f64,
+    tx: f64,
+    ty: f64,
+    ctx: &Ctx,
+) {
+    let mut deferred = svg::Deferred::new();
+    svg::emit_graphics(
+        out,
+        elems,
+        width,
+        height,
+        depth,
+        tx,
+        ty,
+        &mut |font| ctx.font_family_for(font),
+        &mut deferred,
+    );
+    for (x, y, bx) in deferred {
+        emit_box(out, &bx, tx + x, ty - y, ctx);
     }
 }
 
@@ -527,8 +537,11 @@ fn emit_embedded_block(out: &mut String, block: &[VertBox], tx: f64, ty: f64, ct
 /// system serif default applies.
 fn emit_run(out: &mut String, info: &HorzStringInfo, text: &str, tx: f64, top: f64, ctx: &Ctx) {
     let size = info.size.0;
+    // Unquoted: this is an attribute, and `fonts::font_family_name` is a bare
+    // CSS identifier precisely so it can go in one — a `"` here would close
+    // the `style="…"` attribute and drop everything after it.
     let family_style = match ctx.font_family_for(info.font) {
-        Some(family) => format!(" font-family:\"{family}\";"),
+        Some(family) => format!(" font-family:{family};"),
         None => String::new(),
     };
     // Non-black only, mirroring both PDF writers' `q…Q`-scoped fill-color

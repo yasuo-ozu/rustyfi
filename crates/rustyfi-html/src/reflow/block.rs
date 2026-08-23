@@ -103,7 +103,17 @@ pub(crate) fn walk_vboxes(out: &mut String, vboxes: &[VertBox], ctx: &Ctx) {
     for vb in vboxes {
         match vb {
             VertBox::Line { contents, .. } => {
-                for (_, bx) in contents {
+                // The line breaker has already run, and this backend is
+                // undoing it. A break it TOOK at a hyphenation point left the
+                // discretionary's `pre_break` — the hyphen — spliced in as
+                // the line's own last box (`linebreak.rs`'s `line_content`).
+                // Rejoined into flowing text that hyphen is not in the
+                // document: `figbox`, broken as `fig-` / `box`, came out as
+                // `fig- box`. Drop it and put back the soft hyphen it stands
+                // for, so the BROWSER decides whether to show one.
+                let spliced = spliced_hyphen_index(contents);
+                let body = &contents[..spliced.unwrap_or(contents.len())];
+                for (_, bx) in body {
                     match bx {
                         // The one inline box that itself carries a nested
                         // block: close whatever paragraph text has been
@@ -166,7 +176,19 @@ pub(crate) fn walk_vboxes(out: &mut String, vboxes: &[VertBox], ctx: &Ctx) {
                 // characters (an upstream line break falls between two
                 // characters that must NOT gain a space when rejoined) and
                 // keep it between two Latin words.
-                if para.open {
+                //
+                // Except after a hyphen, in EITHER of its two forms: the
+                // breaker's own, replaced by a soft hyphen just above, and
+                // one that was in the text all along (`align-` / `right` is
+                // a UAX#14 break AFTER the hyphen, which stays part of the
+                // run). Both rejoin as one word. This is deliberately not a
+                // rule in `text::wants_space`: a real glue next to a dash
+                // (`SATySFi - a typesetter`) is a real space, and only THIS
+                // boundary is a line break being undone.
+                if spliced.is_some() {
+                    para.text.push_str("&shy;");
+                    ctx.last_char.set(None);
+                } else if para.open && !ctx.last_char.get().is_some_and(is_hyphen) {
                     ctx.note_glue(WORD_SPACE_PT);
                 }
             }
@@ -242,9 +264,11 @@ pub(crate) fn walk_vboxes(out: &mut String, vboxes: &[VertBox], ctx: &Ctx) {
         }
     }
     flush_para(out, &mut para, &mut pending_margin, ctx);
-    // A footnote referenced from a construct that never opens a paragraph (a
-    // table cell, a bare frame) would otherwise have nowhere to land. Not a
-    // second home for footnotes — just the guarantee that none is dropped.
+    // A footnote (or a nested table) reached from a construct that never
+    // opens a paragraph — a table cell, a bare frame — would otherwise have
+    // nowhere to land. Not a second home for either, just the guarantee that
+    // none is dropped.
+    drain_deferred_blocks(out, ctx);
     drain_footnotes(out, ctx);
 }
 
@@ -254,6 +278,32 @@ pub(crate) fn walk_vboxes(out: &mut String, vboxes: &[VertBox], ctx: &Ctx) {
 /// threshold, since the decision it feeds is "is this a CJK pair" rather
 /// than "how wide".
 const WORD_SPACE_PT: f64 = 3.0;
+
+/// The hyphens a broken word can end a line on: ASCII, Unicode HYPHEN, and
+/// the non-breaking one (which a break should never fall after, but costs
+/// nothing to cover).
+fn is_hyphen(c: char) -> bool {
+    matches!(c, '-' | '\u{2010}' | '\u{2011}')
+}
+
+/// The index of the hyphen a TAKEN discretionary contributed to the end of
+/// this line, if it did. `linebreak.rs`'s `line_content` appends the chosen
+/// break's `pre_break` slot last and nothing after it, and the hyphenation
+/// dictionary's `pre_break` is a single one-character run — whereas a hyphen
+/// that was in the SOURCE is part of a longer chunk (`align-`), since UAX#14
+/// breaks after it rather than splitting it off. So a lone trailing
+/// hyphen-only run is the breaker's, and only the breaker's.
+fn spliced_hyphen_index(contents: &[(rustyfi_backend::Length, PureHorzBox)]) -> Option<usize> {
+    let last = contents.len().checked_sub(1)?;
+    match &contents[last].1 {
+        PureHorzBox::InnerString { text, .. } => {
+            let mut chars = text.chars();
+            let one_hyphen = chars.next().is_some_and(is_hyphen) && chars.next().is_none();
+            one_hyphen.then_some(last)
+        }
+        _ => None,
+    }
+}
 
 /// Close the current paragraph (if any content was gathered), writing `<p
 /// class="para"{margin}>{trimmed text}</p>` to `out` — or, when S3's
@@ -295,9 +345,14 @@ fn flush_para(out: &mut String, para: &mut Para, pending_margin: &mut f64, ctx: 
                     let _ = write!(out, "<p class=\"para\"{align}{margin}>{trimmed}</p>\n");
                 }
             }
+            drain_deferred_blocks(out, ctx);
             drain_footnotes(out, ctx);
         }
     }
+    // A paragraph that emitted nothing (whitespace only) can still have
+    // queued a block — a `Line` holding only an `inline-fil` and a nested
+    // `Tabular` is exactly that — so this drain is outside the guard above.
+    drain_deferred_blocks(out, ctx);
     para.text.clear();
     para.open = false;
     para.heading_level = None;
@@ -307,6 +362,16 @@ fn flush_para(out: &mut String, para: &mut Para, pending_margin: &mut f64, ctx: 
     // glue recorded at the end of one paragraph must not put a space at the
     // start of the next.
     ctx.reset_flow();
+}
+
+/// Emit every block-level element that turned up mid-paragraph (a nested
+/// `<table>`, an `EmbeddedBlock` drawn into a graphic) and clear the queue —
+/// see [`super::Ctx::deferred_blocks`]. Ordered before the footnotes: the
+/// table is part of what the paragraph SAYS, the footnote is a note about it.
+fn drain_deferred_blocks(out: &mut String, ctx: &Ctx) {
+    for html in std::mem::take(&mut *ctx.deferred_blocks.borrow_mut()) {
+        out.push_str(&html);
+    }
 }
 
 /// Emit every queued footnote body as an `<aside>`, in reference order, and

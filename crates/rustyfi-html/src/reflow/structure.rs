@@ -63,7 +63,7 @@
 use std::collections::HashMap;
 use std::fmt::Write as _;
 
-use rustyfi_backend::{OutlineEntry, PureHorzBox, TabularBox, TabularCellBox};
+use rustyfi_backend::{DecoId, OutlineEntry, PureHorzBox, TabularBox, TabularCellBox};
 
 use super::Ctx;
 
@@ -95,20 +95,37 @@ pub(crate) fn heading_tag(level: i64) -> u8 {
 /// two destination frames for the same heading, so this tie-break is
 /// unobserved in practice). See this module's doc comment for why this is a
 /// structural match, not a heuristic.
+///
+/// **`InlineFrameMarker` is checked too, and that is what makes this work at
+/// all on a real document.** `inline-frame-breakable` splices its contents
+/// between a marker PAIR rather than building a `Frame`, so that the frame
+/// can split across a line break — and that is how every bundled doc class
+/// writes a section title (`stdjabook.satyh:551`, `stdjareport.satyh:445`:
+/// `inline-frame-breakable no-pads (Annot.register-location-frame label)`).
+/// Matching only `Frame`, as this did, meant no heading in any
+/// `stdjabook`/`stdjareport` document was ever promoted: the `latexcmds`
+/// manual's seven `+section`s all came out as `<p>`, with the `<nav>`
+/// linking to anchors on paragraphs. Only the START marker is consulted —
+/// the `end: true` twin carries the same `DecoId` and would match a second
+/// time for nothing.
 pub(crate) fn find_heading_level(bx: &PureHorzBox, ctx: &Ctx) -> Option<i64> {
     match bx {
-        PureHorzBox::Frame { deco, contents, .. } => {
-            if let Some(name) = ctx.dests.get(deco) {
-                if let Some(level) = ctx.outline_by_dest.get(*name) {
-                    return Some(*level);
-                }
-            }
+        PureHorzBox::InlineFrameMarker { id, end: false, .. } => level_of_deco(id, ctx),
+        PureHorzBox::Frame { deco, contents, .. } => level_of_deco(deco, ctx).or_else(|| {
             contents
                 .iter()
                 .find_map(|(_, inner)| find_heading_level(inner, ctx))
-        }
+        }),
         _ => None,
     }
+}
+
+/// `DecoId` -> destination name (S2's `ctx.dests`) -> outline level
+/// (`ctx.outline_by_dest`), the two-hop structural lookup both arms of
+/// [`find_heading_level`] share.
+fn level_of_deco(deco: &DecoId, ctx: &Ctx) -> Option<i64> {
+    let name = ctx.dests.get(deco)?;
+    ctx.outline_by_dest.get(*name).copied()
 }
 
 /// `<nav class="toc">`: a nested `<ol>` walk of `extras.outline`'s flat
@@ -132,25 +149,39 @@ pub(crate) fn render_toc(out: &mut String, outline: &[OutlineEntry]) {
         return;
     }
     out.push_str("<nav class=\"toc\">\n");
-    let mut open_level: i64 = -1; // no <ol> open yet
-    let mut li_open = false;
+    // Whether the `<li>` at each open depth is still open. A single flag was
+    // not enough: descending a level nests the child `<ol>` INSIDE the
+    // parent's `<li>`, so the parent's `<li>` is still open while the child
+    // list is being written, and coming back up has to close the child list
+    // and THEN the parent's `<li>`. With one flag the parent's `</li>` was
+    // simply lost, and every `latexcmds`/`easytable` table of contents came
+    // out misnested.
+    let mut li_open: Vec<bool> = Vec::new();
     for entry in outline {
         let target = entry.level.max(0);
-        while open_level < target {
+        while (li_open.len() as i64) < target + 1 {
             out.push_str("<ol>\n");
-            open_level += 1;
-            li_open = false;
+            li_open.push(false);
         }
-        while open_level > target {
-            if li_open {
+        while (li_open.len() as i64) > target + 1 {
+            if li_open.pop() == Some(true) {
                 out.push_str("</li>\n");
-                li_open = false;
             }
             out.push_str("</ol>\n");
-            open_level -= 1;
+            // Closing a nested list also finishes the parent entry that
+            // contained it.
+            if let Some(parent) = li_open.last_mut() {
+                if *parent {
+                    out.push_str("</li>\n");
+                    *parent = false;
+                }
+            }
         }
-        if li_open {
-            out.push_str("</li>\n");
+        if let Some(here) = li_open.last_mut() {
+            if *here {
+                out.push_str("</li>\n");
+            }
+            *here = true;
         }
         let _ = write!(
             out,
@@ -158,15 +189,18 @@ pub(crate) fn render_toc(out: &mut String, outline: &[OutlineEntry]) {
             crate::escape_html(&entry.dest_name),
             crate::escape_html(&entry.text),
         );
-        li_open = true;
     }
-    while open_level >= 0 {
-        if li_open {
+    while let Some(open) = li_open.pop() {
+        if open {
             out.push_str("</li>\n");
-            li_open = false;
         }
         out.push_str("</ol>\n");
-        open_level -= 1;
+        if let Some(parent) = li_open.last_mut() {
+            if *parent {
+                out.push_str("</li>\n");
+                *parent = false;
+            }
+        }
     }
     out.push_str("</nav>\n");
 }
@@ -212,19 +246,33 @@ pub(crate) fn render_table(out: &mut String, tab: &TabularBox, extra_attrs: &str
         last_x = Some(x);
     }
 
-    let _ = write!(out, "<table class=\"tabular\"{extra_attrs}>\n");
+    let mut table = String::new();
+    let mut any_content = false;
+    let _ = write!(table, "<table class=\"tabular\"{extra_attrs}>\n");
     for row in rows {
-        out.push_str("<tr>\n");
+        table.push_str("<tr>\n");
         for cell in row {
-            out.push_str("<td>");
+            table.push_str("<td>");
+            // A cell is a hard flow boundary in both directions: glue left
+            // pending by the previous cell must not open this one with a
+            // space, and this cell's last character must not decide the
+            // spacing of the next.
+            ctx.reset_flow();
             let mut cell_html = String::new();
             for (_, bx) in &cell.contents {
                 super::inline::emit_inline(&mut cell_html, bx, ctx);
             }
-            out.push_str(cell_html.trim());
-            out.push_str("</td>\n");
+            super::inline::close_run(&mut cell_html, ctx);
+            ctx.reset_flow();
+            let trimmed = cell_html.trim();
+            any_content |= super::text::has_visible_content(trimmed);
+            table.push_str(trimmed);
+            table.push_str("</td>\n");
         }
-        out.push_str("</tr>\n");
+        table.push_str("</tr>\n");
     }
-    out.push_str("</table>\n");
+    table.push_str("</table>\n");
+    if any_content {
+        out.push_str(&table);
+    }
 }

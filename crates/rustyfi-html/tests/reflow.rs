@@ -1,10 +1,26 @@
 //! Integration tests for the reflowable/semantic HTML writer
-//! (`render_html_reflow`, Slice 1): hand-built `Vec<VertBox>` fixtures
-//! (mirroring `tests/html.rs`'s synthetic box-construction style for the
-//! faithful writer) exercising paragraph grouping/splitting,
-//! frame/embedded-block nesting, inline run styling, and the "no absolute
-//! positioning" invariant that is the defining difference from the faithful
-//! mode.
+//! (`render_html_reflow`, `--format html`): hand-built `Vec<VertBox>`
+//! fixtures, mirroring `tests/html.rs`'s synthetic box-construction style
+//! for the faithful writer.
+//!
+//! Roughly in the order the file runs: paragraph grouping and splitting,
+//! frame and embedded-block nesting, run styling, math/graphics/table/link
+//! structure, lists and emphasis — then three groups that carry most of the
+//! weight:
+//!
+//! - **"Text is TEXT"**: what a glue box becomes. The box stream is not a
+//!   word stream, and mapping glue to U+0020 rendered Japanese one
+//!   `<span>`-per-character with a space between each. See
+//!   `reflow/text.rs`.
+//! - **Footnotes, images, alignment, headings, margins**: the constructs
+//!   that used to be dropped or mis-derived.
+//! - **Well-formedness**: run coalescing deliberately leaves a `<span>`
+//!   open across boxes, so a missing close at any boundary yields silently
+//!   misnested markup rather than a crash. `assert_balanced_tags` is the
+//!   guard.
+//!
+//! Throughout: the "no absolute positioning" invariant that is the defining
+//! difference from the faithful mode.
 
 use rustyfi_backend::{
     AnnotAction, Closing, Color, DecoId, DocExtras, FontKey, GraphicsElem, HorzStringInfo,
@@ -174,8 +190,13 @@ fn styled_run_carries_color_and_rising_as_css_not_position() {
     if let PureHorzBox::InnerString { info, .. } = &mut bx {
         info.color = Color::Rgb(1.0, 0.0, 0.0);
         info.rising = Length::pt(3.0);
+        info.size = Length::pt(18.0);
     }
-    let vboxes = vec![line(bx)];
+    // A second, longer run at the default 12pt, so THAT is the document's
+    // body style and the 18pt one is genuinely an exception — otherwise the
+    // styled run would itself be the dominant style and correctly carry no
+    // size of its own (see `body_styled_runs_need_no_span`).
+    let vboxes = vec![line(bx), text_line("plain body text, and more of it")];
     let html = render(&vboxes);
 
     assert!(
@@ -186,9 +207,34 @@ fn styled_run_carries_color_and_rising_as_css_not_position() {
         html.contains("vertical-align:3pt"),
         "missing rising-as-vertical-align CSS:\n{html}"
     );
+    // Sizes are RATIOS of the body size (18/12), not absolute points, so the
+    // whole document rescales from the single value on `body`.
     assert!(
-        html.contains("font-size:12pt"),
-        "missing font-size CSS:\n{html}"
+        html.contains("font-size:1.5000em"),
+        "missing the em-ratio font-size:\n{html}"
+    );
+    assert!(
+        html.contains("font-size: 12pt"),
+        "the body rule should carry the document's dominant size:\n{html}"
+    );
+}
+
+/// The document's dominant `(font, size)` goes on `body`, so the runs that
+/// use it — the overwhelming majority in any real document — are written as
+/// bare text with no element at all. Before this, the `enumitem` manual
+/// emitted 13 592 `<span class="run">`s; it now emits a few hundred.
+#[test]
+fn body_styled_runs_need_no_span() {
+    let vboxes = vec![text_line("ordinary prose")];
+    let html = render(&vboxes);
+    let body = html.split("<body>").nth(1).expect("a body");
+    assert!(
+        body.contains("<p class=\"para\">ordinary prose</p>"),
+        "body-styled text should be bare, unwrapped text:\n{body}"
+    );
+    assert!(
+        !body.contains("class=\"run\""),
+        "no run span should be emitted for body-styled text:\n{body}"
     );
 }
 
@@ -389,7 +435,7 @@ fn goto_name_link_and_matching_destination_frame_wire_together() {
     );
 }
 
-/// The defining difference from the faithful (`render_html`) mode: NOTHING
+/// The defining difference from the faithful (`render_html_fixed`) mode: NOTHING
 /// in reflow output is absolutely positioned. `left:` is never emitted at
 /// all; every occurrence of the substring `top:` must be part of
 /// `margin-top:` (a legitimate flow property), never a bare CSS `top`
@@ -409,19 +455,20 @@ fn reflow_output_never_uses_absolute_positioning() {
         !html.contains("position:absolute") && !html.contains("position: absolute"),
         "reflow output must never use position:absolute:\n{html}"
     );
-    assert!(
-        !html.contains("left:"),
-        "reflow output must never use `left:`:\n{html}"
-    );
-    // `top:` is only allowed as a suffix of a flow-safe longhand
-    // (`margin-top:`, `border-top:` — used by the static `.clearpage`/
-    // `.frame` stylesheet rules, `css.rs`), never as the bare positioned
-    // `top` property.
-    for (idx, _) in html.match_indices("top:") {
-        assert!(
-            html[..idx].ends_with("margin-") || html[..idx].ends_with("border-"),
-            "found a bare `top:` CSS declaration (not margin-top/border-top) at byte {idx}:\n{html}"
-        );
+    // `top:`/`left:` are allowed only as the tail of a flow-safe longhand
+    // (`margin-top`, `border-top`, `padding-left`, … — used by the static
+    // `.clearpage`/`aside.footnote`/`nav.toc` stylesheet rules, `css.rs`),
+    // never as the bare positioned `top`/`left` property.
+    for prop in ["top:", "left:"] {
+        for (idx, _) in html.match_indices(prop) {
+            let before = &html[..idx];
+            assert!(
+                ["margin-", "border-", "padding-", "-"]
+                    .iter()
+                    .any(|p| before.ends_with(p)),
+                "found a bare `{prop}` CSS declaration at byte {idx}:\n{html}"
+            );
+        }
     }
 }
 
@@ -951,13 +998,684 @@ fn nested_breakable_inline_frames_close_innermost_first() {
         iframe_marker(22, true),
         iframe_marker(21, true),
     ])];
-    let links = vec![(DecoId(21), AnnotAction::Uri("https://example.org".to_string()))];
+    let links = vec![(
+        DecoId(21),
+        AnnotAction::Uri("https://example.org".to_string()),
+    )];
     let html = render_with_links(&vboxes, &links, &[]);
 
-    let span_close = html.find("</span>").expect("inner frame must close a <span>");
+    let span_close = html
+        .find("</span>")
+        .expect("inner frame must close a <span>");
     let a_close = html.find("</a>").expect("outer link must close an </a>");
     assert!(
         span_close < a_close,
         "inner </span> must close before the outer </a>:\n{html}"
     );
+}
+
+// ============================================================================
+// Text is TEXT: what a glue box becomes.
+//
+// The box stream is not a word stream — `convertText.ml`'s port splits a run
+// at every UAX#14 chunk boundary and puts glue between the pieces — so "glue
+// means U+0020", which is what this backend used to do, rendered Japanese as
+// one `<span>` per character with a space between each, and the `\LaTeX`
+// logo's negative kerns as `L AT EX`. See `reflow/text.rs`.
+// ============================================================================
+
+/// A `size`-pt run of `text`, for the glue tests.
+fn sized_run(text: &str, size: f64) -> PureHorzBox {
+    PureHorzBox::InnerString {
+        info: HorzStringInfo {
+            font: FontKey(0),
+            size: Length::pt(size),
+            rising: Length::ZERO,
+            color: Color::Gray(0.0),
+        },
+        text: text.to_string(),
+        width: Length::pt(8.0),
+        height: Length::pt(9.0),
+        depth: Length::pt(2.0),
+    }
+}
+
+fn glue(natural: f64) -> PureHorzBox {
+    PureHorzBox::OuterEmpty {
+        natural: Length::pt(natural),
+        shrinkable: Length::pt(1.0),
+        stretchable: Length::pt(1.0),
+    }
+}
+
+fn body_of(html: &str) -> &str {
+    html.split("<body>").nth(1).expect("a <body>")
+}
+
+/// The whole point of `text.rs`. Between two CJK characters the port emits
+/// `adjacent_space` glue — natural 0, stretch only — at EVERY character
+/// boundary, plus a JLreq class space (nonzero) after punctuation. Neither
+/// may become a space: `研 究 計 画` is not Japanese, is not selectable as a
+/// word, and gives the browser nothing to line-break.
+#[test]
+fn cjk_characters_join_into_one_run_with_no_spaces_between() {
+    let vboxes = vec![line_of(vec![
+        sized_run("研", 12.0),
+        glue(0.0),
+        sized_run("究", 12.0),
+        glue(0.0),
+        sized_run("計", 12.0),
+        glue(5.28),
+        sized_run("画", 12.0),
+    ])];
+    let html = render(&vboxes);
+    let body = body_of(&html);
+    assert!(
+        body.contains("研究計画"),
+        "CJK characters must join into one uninterrupted string:\n{body}"
+    );
+    assert!(
+        !body.contains("研 究"),
+        "no space may be inserted between two CJK characters:\n{body}"
+    );
+}
+
+/// A zero-width glue inside a Latin word (`Con|trib|utors`) is a break
+/// OPPORTUNITY, not spacing — and the pieces must rejoin into one word, or
+/// the text is neither readable nor searchable.
+#[test]
+fn zero_width_glue_inside_a_word_rejoins_it() {
+    let vboxes = vec![line_of(vec![
+        sized_run("Con", 12.0),
+        glue(0.0),
+        sized_run("trib", 12.0),
+        glue(0.0),
+        sized_run("utors", 12.0),
+    ])];
+    let html = render(&vboxes);
+    assert!(
+        body_of(&html).contains("Contributors"),
+        "chunks of one word must rejoin:\n{html}"
+    );
+}
+
+/// A real inter-word glue still becomes a space, and so does a
+/// Japanese/Latin boundary, where the port emits inter-SCRIPT glue — a
+/// space is what HTML wants there.
+#[test]
+fn word_spaces_and_script_boundaries_still_take_a_space() {
+    let vboxes = vec![line_of(vec![
+        sized_run("hello", 12.0),
+        glue(3.5),
+        sized_run("world", 12.0),
+        glue(2.6),
+        sized_run("を", 12.0),
+    ])];
+    let html = render(&vboxes);
+    let body = body_of(&html);
+    assert!(body.contains("hello world"), "{body}");
+    assert!(body.contains("world を"), "{body}");
+}
+
+/// A negative `inline-skip` is a kern (the `\LaTeX` logo has four), never a
+/// space and never a strut.
+#[test]
+fn a_negative_inline_skip_is_a_kern_not_a_space() {
+    let vboxes = vec![line_of(vec![
+        sized_run("L", 12.0),
+        PureHorzBox::FixedEmpty {
+            width: Length::pt(-4.0),
+        },
+        sized_run("A", 12.0),
+    ])];
+    let html = render(&vboxes);
+    let body = body_of(&html);
+    assert!(
+        body.contains("LA"),
+        "kerned letters must not split:\n{body}"
+    );
+    assert!(!body.contains("L A"), "{body}");
+    assert!(
+        !body.contains("hskip"),
+        "a negative skip is not a strut:\n{body}"
+    );
+}
+
+/// A deliberate, visible `inline-skip` (a paragraph indent, a cell pad)
+/// keeps its width as an inline-block strut — intrinsic sizing, not
+/// positioning.
+#[test]
+fn a_wide_inline_skip_survives_as_a_sized_strut() {
+    let vboxes = vec![line_of(vec![
+        PureHorzBox::FixedEmpty {
+            width: Length::pt(10.5),
+        },
+        sized_run("indented", 12.0),
+    ])];
+    let html = render(&vboxes);
+    assert!(
+        html.contains("<span class=\"hskip\" style=\"width:10.5pt;\">"),
+        "{html}"
+    );
+}
+
+/// A `Discretionary` carrying a hyphen in `pre_break` is a real dictionary
+/// hyphenation point and becomes a soft hyphen. One carrying only glue is a
+/// UAX#14 chunk boundary and must NOT, or the browser is invited to
+/// hyphenate at a point no dictionary sanctioned.
+#[test]
+fn only_a_hyphen_bearing_discretionary_becomes_a_soft_hyphen() {
+    let with_hyphen = PureHorzBox::Discretionary {
+        penalty: 0,
+        pre_break: vec![sized_run("-", 12.0)],
+        post_break: vec![],
+        no_break: vec![],
+    };
+    let bare = PureHorzBox::Discretionary {
+        penalty: 0,
+        pre_break: vec![glue(0.0)],
+        post_break: vec![],
+        no_break: vec![],
+    };
+    let a = render(&[line_of(vec![
+        sized_run("La", 12.0),
+        with_hyphen,
+        sized_run("tex", 12.0),
+    ])]);
+    assert!(a.contains("&shy;"), "{a}");
+
+    let b = render(&[line_of(vec![
+        sized_run("Con", 12.0),
+        bare,
+        sized_run("trib", 12.0),
+    ])]);
+    let b = body_of(&b);
+    assert!(
+        !b.contains("&shy;"),
+        "a bare chunk boundary is not a hyphen:\n{b}"
+    );
+    assert!(b.contains("Contrib"), "{b}");
+}
+
+// ============================================================================
+// Footnotes, images, alignment, headings, margins.
+// ============================================================================
+
+/// A continuous document has no page foot, so a footnote goes where it is
+/// referenced: an `<aside>` immediately after the referencing paragraph,
+/// carrying the `id` its in-text anchor links back from. Dropping it — the
+/// inert `footnote-placeholder` this used to emit — is not an option.
+#[test]
+fn a_footnote_lands_as_an_aside_right_after_its_paragraph() {
+    let note = PureHorzBox::Footnote {
+        block: vec![text_line("the note body")],
+    };
+    let vboxes = vec![
+        line_of(vec![text_run("body text"), note]),
+        VertBox::Skip(Length::pt(6.0)),
+        text_line("the next paragraph"),
+    ];
+    let html = render(&vboxes);
+    let body = body_of(&html);
+
+    let para = body.find("body text").expect("the referencing paragraph");
+    let aside = body
+        .find("<aside class=\"footnote\" id=\"fn-1\"")
+        .unwrap_or_else(|| panic!("missing the footnote aside:\n{body}"));
+    let next = body
+        .find("the next paragraph")
+        .expect("the following paragraph");
+    assert!(
+        para < aside && aside < next,
+        "the aside must sit between its own paragraph and the next:\n{body}"
+    );
+    assert!(body.contains("the note body"), "{body}");
+    // A zero-width anchor, not a second visible marker: the document
+    // typesets its own reference mark right beside the box.
+    assert!(
+        body.contains("<span class=\"fnref\" id=\"fnref-1\"></span>"),
+        "{body}"
+    );
+    assert!(
+        body.contains("href=\"#fnref-1\""),
+        "missing the back-link:\n{body}"
+    );
+    assert!(
+        !body.contains("footnote-placeholder"),
+        "footnotes must not be dropped:\n{body}"
+    );
+}
+
+fn tiny_image(fill: u8) -> rustyfi_backend::ImageResource {
+    rustyfi_backend::ImageResource {
+        samples: vec![fill; 3 * 4],
+        px_w: 2,
+        px_h: 2,
+        jpeg_dct: None,
+        pdf: None,
+    }
+}
+
+fn image_line(id: usize) -> VertBox {
+    line(PureHorzBox::Image {
+        width: Length::pt(40.0),
+        height: Length::pt(30.0),
+        image: rustyfi_backend::ImageId(id),
+    })
+}
+
+fn render_with_images(vboxes: &[VertBox], images: &[rustyfi_backend::ImageResource]) -> String {
+    rustyfi_html::render_html_reflow(
+        Some(vboxes),
+        &geometry(),
+        images,
+        &DocExtras::default(),
+        &[],
+        &[],
+    )
+    .expect("reflow HTML rendering must succeed")
+}
+
+/// An `Image` becomes a real, self-contained `<img>` data URI — not the
+/// inert placeholder this used to emit, which for `figbox`'s manual meant
+/// losing all 39 figures.
+#[test]
+fn an_image_renders_as_a_self_contained_img() {
+    let html = render_with_images(&[image_line(0)], &[tiny_image(7)]);
+    assert!(
+        html.contains("<img class=\"img\" src=\"data:image/"),
+        "{html}"
+    );
+    assert!(html.contains("width:40pt; height:30pt;"), "{html}");
+    assert!(!html.contains("image-placeholder"), "{html}");
+}
+
+/// The SAME picture placed many times must have its bytes emitted ONCE, as
+/// a shared CSS rule. `figbox`'s manual places two figures seventeen times
+/// between them, and inlining a data URI per placement made a 13 MB file.
+/// Each placement is a DISTINCT `ImageId` — `include-image` mints a fresh
+/// resource every call — so the dedup has to key on content, not identity.
+#[test]
+fn a_repeated_image_is_emitted_once_as_a_shared_rule() {
+    let images = vec![tiny_image(9), tiny_image(9)];
+    let vboxes = vec![image_line(0), VertBox::Skip(Length::pt(4.0)), image_line(1)];
+    let html = render_with_images(&vboxes, &images);
+    assert_eq!(
+        html.matches("data:image/").count(),
+        1,
+        "the picture's bytes must appear exactly once:\n{html}"
+    );
+    assert_eq!(
+        html.matches("shared-img-0").count(),
+        3,
+        "one CSS rule plus one class per placement:\n{html}"
+    );
+}
+
+/// Two DIFFERENT pictures are not conflated by the content dedup.
+#[test]
+fn distinct_images_are_not_shared_with_each_other() {
+    let images = vec![tiny_image(1), tiny_image(2)];
+    let vboxes = vec![image_line(0), VertBox::Skip(Length::pt(4.0)), image_line(1)];
+    let html = render_with_images(&vboxes, &images);
+    assert_eq!(
+        html.matches("data:image/").count(),
+        2,
+        "each distinct picture keeps its own bytes:\n{html}"
+    );
+    assert!(!html.contains("shared-img-"), "{html}");
+}
+
+/// `inline-fil` is not content, it is the alignment signal — leading AND
+/// trailing means centred, leading only means flush right. An ORDINARY
+/// paragraph ends with `inline-fil` (that is how the last line fills), so a
+/// trailing one alone must mean nothing.
+#[test]
+fn leading_and_trailing_fil_recover_centring_and_right_alignment() {
+    let centred = render(&[line_of(vec![
+        PureHorzBox::OuterFil,
+        text_run("centred"),
+        PureHorzBox::OuterFil,
+    ])]);
+    assert!(centred.contains("data-align=\"center\""), "{centred}");
+
+    let right = render(&[line_of(vec![
+        PureHorzBox::OuterFil,
+        text_run("flush right"),
+    ])]);
+    assert!(right.contains("data-align=\"right\""), "{right}");
+
+    let ordinary = render(&[line_of(vec![text_run("ordinary"), PureHorzBox::OuterFil])]);
+    let ordinary = body_of(&ordinary);
+    assert!(
+        !ordinary.contains("data-align"),
+        "a trailing fil alone is just the last line filling:\n{ordinary}"
+    );
+}
+
+/// Every bundled doc class writes a section title with
+/// `inline-frame-breakable` (`stdjabook.satyh:551`), which splices an
+/// `InlineFrameMarker` PAIR rather than building a `Frame`. Matching only
+/// `Frame`, as the heading promotion did, meant no heading in any
+/// `stdjabook`/`stdjareport` document was ever promoted — the `latexcmds`
+/// manual's seven `+section`s all came out as `<p>`.
+#[test]
+fn a_heading_behind_a_breakable_inline_frame_is_promoted() {
+    let extras = DocExtras {
+        outline: vec![OutlineEntry {
+            level: 0,
+            text: "1. Introduction".to_string(),
+            dest_name: "sec1".to_string(),
+            is_open: false,
+        }],
+        ..DocExtras::default()
+    };
+    let vboxes = vec![line_of(vec![
+        iframe_marker(7, false),
+        text_run("1. Introduction"),
+        iframe_marker(7, true),
+    ])];
+    let dests = vec![(DecoId(7), "sec1".to_string())];
+    let html = render_with_extras(&vboxes, &extras, &[], &dests);
+    assert!(
+        html.contains("<h1 class=\"heading\" data-outline-level=\"0\""),
+        "the outline-registered title must become a heading:\n{html}"
+    );
+}
+
+/// Adjacent vertical margins COLLAPSE, they do not add up — SATySFi's own
+/// `squash_margins` rule, and CSS's. Summing them put roughly two blank
+/// lines between every pair of paragraphs in a real document.
+#[test]
+fn consecutive_skips_collapse_to_the_largest() {
+    let vboxes = vec![
+        text_line("first"),
+        VertBox::Skip(Length::pt(6.0)),
+        VertBox::ParagTop(Length::pt(9.0)),
+        VertBox::Skip(Length::pt(4.0)),
+        text_line("second"),
+    ];
+    let html = render(&vboxes);
+    assert!(
+        html.contains("margin-top:9pt;"),
+        "three adjacent skips must collapse to the largest, not sum to 19pt:\n{html}"
+    );
+}
+
+/// A paragraph whose whole content is whitespace emits nothing and keeps
+/// its margin for what follows. The box stream is full of lines holding
+/// only the `inline-fil` that `single-centering-line` wraps a table in, and
+/// each one used to become an empty `<p>` worth a blank line of leading.
+#[test]
+fn a_whitespace_only_paragraph_emits_nothing() {
+    let vboxes = vec![
+        VertBox::Skip(Length::pt(7.0)),
+        line(PureHorzBox::OuterFil),
+        text_line("real content"),
+    ];
+    let html = render(&vboxes);
+    let body = body_of(&html);
+    assert_eq!(
+        body.matches("<p class=\"para\"").count(),
+        1,
+        "only the paragraph with content should be emitted:\n{body}"
+    );
+    assert!(
+        body.contains("margin-top:7pt;"),
+        "the dropped paragraph's margin must carry forward:\n{body}"
+    );
+}
+
+/// A `Tabular` whose every cell is empty renders nothing. `easytable`
+/// builds every table TWICE (`table-builder.satyh`'s `build`) — once for
+/// the content and once as a PHANTOM grid of empty cells carrying only the
+/// rule callbacks — so rendering the carrier literally put an empty
+/// bordered grid above every real table in its manual, forty of them.
+#[test]
+fn an_all_empty_phantom_table_renders_nothing() {
+    let pad = || {
+        (
+            Length::ZERO,
+            PureHorzBox::FixedEmpty {
+                width: Length::pt(6.0),
+            },
+        )
+    };
+    let empty = TabularBox {
+        width: Length::pt(60.0),
+        height: Length::pt(20.0),
+        depth: Length::ZERO,
+        cells: vec![
+            TabularCellBox {
+                x: Length::ZERO,
+                baseline_y: Length::ZERO,
+                contents: vec![pad(), pad()],
+            },
+            TabularCellBox {
+                x: Length::pt(30.0),
+                baseline_y: Length::ZERO,
+                contents: vec![pad(), pad()],
+            },
+        ],
+        rules: vec![],
+    };
+    let html = render(&[line(PureHorzBox::Tabular(empty))]);
+    let body = body_of(&html);
+    assert!(
+        !body.contains("<table"),
+        "a phantom rule-carrier table must not be rendered:\n{body}"
+    );
+}
+
+// ============================================================================
+// Well-formedness.
+// ============================================================================
+
+/// Every element opened must be closed, in order. Run coalescing leaves a
+/// `<span>` open ACROSS boxes on purpose, so a missing `close_run` at any of
+/// the boundaries that need one produces silently misnested markup rather
+/// than a crash — a browser reinterprets it and the document merely looks
+/// wrong somewhere else.
+fn assert_balanced_tags(html: &str) {
+    const VOID: [&str; 4] = ["img", "br", "hr", "meta"];
+    let mut stack: Vec<&str> = Vec::new();
+    let mut i = 0;
+    while let Some(rel) = html[i..].find('<') {
+        let open = i + rel;
+        let Some(rel_end) = html[open..].find('>') else {
+            break;
+        };
+        let close = open + rel_end;
+        let inner = &html[open + 1..close];
+        i = close + 1;
+        if inner.starts_with('!') || inner.starts_with('?') || inner.ends_with('/') {
+            continue;
+        }
+        let (is_end, rest) = match inner.strip_prefix('/') {
+            Some(r) => (true, r),
+            None => (false, inner),
+        };
+        let name = rest.split([' ', '\n', '\t']).next().unwrap_or("").trim();
+        if name.is_empty() || VOID.contains(&name) {
+            continue;
+        }
+        if is_end {
+            assert_eq!(
+                stack.pop(),
+                Some(name),
+                "unbalanced </{name}> — open stack {stack:?}"
+            );
+        } else {
+            stack.push(name);
+        }
+    }
+    assert!(stack.is_empty(), "unclosed elements: {stack:?}");
+}
+
+/// An inline region may not straddle a block boundary. An
+/// `inline-frame-breakable` whose start and end markers land in different
+/// paragraphs — which is what `\ref` does whenever a `Skip` falls between
+/// them — has to be closed at the flush and re-opened after it. The
+/// re-opened copy must NOT repeat the `id`, which belongs to the first
+/// fragment alone.
+#[test]
+fn an_inline_frame_split_by_a_paragraph_break_stays_balanced() {
+    let vboxes = vec![
+        line_of(vec![iframe_marker(9, false), text_run("before")]),
+        VertBox::Skip(Length::pt(6.0)),
+        line_of(vec![text_run("after"), iframe_marker(9, true)]),
+    ];
+    let dests = vec![(DecoId(9), "anchor".to_string())];
+    let html = render_with_links(&vboxes, &[], &dests);
+    assert_eq!(
+        body_of(&html).matches("id=\"anchor\"").count(),
+        1,
+        "the anchor id must appear exactly once:\n{html}"
+    );
+    assert_balanced_tags(&html);
+}
+
+/// The invariant run coalescing rests on, over a fixture touching every
+/// boundary that has to close an open run: a wrapper, a strut, an `<svg>`,
+/// a footnote body, a heading and a frame.
+#[test]
+fn a_document_touching_every_boundary_stays_balanced() {
+    let extras = DocExtras {
+        outline: vec![OutlineEntry {
+            level: 0,
+            text: "T".to_string(),
+            dest_name: "d".to_string(),
+            is_open: false,
+        }],
+        ..DocExtras::default()
+    };
+    let vboxes = vec![
+        line_of(vec![
+            iframe_marker(1, false),
+            text_run("title"),
+            iframe_marker(1, true),
+        ]),
+        VertBox::Skip(Length::pt(5.0)),
+        line_of(vec![
+            PureHorzBox::FixedEmpty {
+                width: Length::pt(10.0),
+            },
+            sized_run("prose", 18.0),
+            glue(3.0),
+            sized_run("more", 18.0),
+            PureHorzBox::Footnote {
+                block: vec![text_line("note")],
+            },
+            PureHorzBox::Graphics {
+                width: Length::pt(10.0),
+                height: Length::pt(10.0),
+                depth: Length::ZERO,
+                elems: vec![GraphicsElem::Fill(
+                    Color::Gray(0.0),
+                    Path {
+                        subpaths: vec![Subpath {
+                            start: (Length::ZERO, Length::ZERO),
+                            segs: vec![PathSeg::Line((Length::pt(5.0), Length::ZERO))],
+                            closing: Closing::Line,
+                        }],
+                    },
+                )],
+                origin_independent: false,
+            },
+            text_run("tail"),
+        ]),
+        VertBox::FrameStart(DecoId(3)),
+        text_line("framed"),
+        VertBox::FrameEnd(DecoId(3)),
+    ];
+    let html = render_with_extras(&vboxes, &extras, &[], &[(DecoId(1), "d".to_string())]);
+    assert_balanced_tags(&html);
+}
+
+/// A nested block — a footnote body, an `embed-block-top` — runs while the
+/// ENCLOSING paragraph's inline wrappers are still on the stack, deliberately
+/// (they are waiting to be re-opened after the flush). Its own paragraph
+/// flushes must not close them a second time inside the nested block.
+#[test]
+fn a_nested_block_inside_an_open_inline_frame_stays_balanced() {
+    let vboxes = vec![line_of(vec![
+        iframe_marker(4, false),
+        text_run("linked "),
+        PureHorzBox::Footnote {
+            block: vec![text_line("note inside a link")],
+        },
+        PureHorzBox::EmbeddedBlock {
+            width: Length::pt(50.0),
+            height: Length::pt(10.0),
+            depth: Length::ZERO,
+            block: vec![text_line("embedded inside a link")],
+            anchor_last: false,
+            breakable: false,
+        },
+        text_run("tail"),
+        iframe_marker(4, true),
+    ])];
+    let links = vec![(
+        DecoId(4),
+        AnnotAction::Uri("https://example.net".to_string()),
+    )];
+    let html = render_with_links(&vboxes, &links, &[]);
+    let body = body_of(&html);
+    // The link is closed before the nested blocks and re-opened after them,
+    // so it appears twice — and, crucially, is not left dangling around
+    // them. Without the depth floor the nested blocks' own paragraph
+    // flushes emitted a third, spurious `</a>` inside themselves.
+    assert_eq!(
+        body.matches("<a class=\"link\"").count(),
+        2,
+        "the link should be closed around the nested blocks and re-opened:\n{body}"
+    );
+    assert!(
+        !body
+            .split("<div class=\"embed\">")
+            .nth(1)
+            .unwrap()
+            .starts_with("</a>"),
+        "a nested block must not close its enclosing paragraph's wrapper:\n{body}"
+    );
+    assert_balanced_tags(&html);
+}
+
+/// A word the LINE BREAKER hyphenated must come back together: its hyphen
+/// is spliced onto the closed line as ordinary text
+/// (`rustyfi-backend`'s `line_content`), so rejoining naively produced
+/// `vestibu- lum`. An authored hyphen before a capital is left alone.
+#[test]
+fn a_word_hyphenated_by_the_line_breaker_is_rejoined() {
+    let vboxes = vec![
+        line(sized_run("vestibu-", 12.0)),
+        line(sized_run("lum sed", 12.0)),
+    ];
+    let html = render(&vboxes);
+    let body = body_of(&html);
+    assert!(body.contains("vestibulum"), "{body}");
+    assert!(!body.contains("vestibu- lum"), "{body}");
+
+    // Not a hyphenation: the next line starts with a capital.
+    let kept = render(&[
+        line(sized_run("well-", 12.0)),
+        line(sized_run("Known name", 12.0)),
+    ]);
+    let kept = body_of(&kept);
+    assert!(kept.contains("well- Known"), "{kept}");
+}
+
+/// Self-containment: nothing fetched, nothing executed. The reflow backend
+/// NAMES fonts rather than embedding them (`fonts::reflow_font_stack`) —
+/// that is a size decision, not a self-containment one, since a named
+/// family the reader lacks falls back to a generic and is never requested.
+#[test]
+fn output_fetches_nothing_and_runs_nothing() {
+    let html = render(&[text_line("hello")]);
+    for forbidden in ["<script", "@import", "http://", "https://", "url(/"] {
+        assert!(
+            !html.contains(forbidden),
+            "output must be self-contained, found {forbidden}:\n{html}"
+        );
+    }
 }

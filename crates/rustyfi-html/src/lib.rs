@@ -1,8 +1,21 @@
-//! HTML output backend. This serializes the SAME post-page-break
-//! `Page`/`PlacedLine` model the PDF writer (`lib.rs`) consumes — the
-//! design doc's "Option A": a faithful, non-reflowing, "PDF-in-a-div" twin
-//! of the PDF output (preview / visual-diffing use case, not reflowable
-//! web publishing — see the design doc's §Decision).
+//! HTML output backends. There are two, and they answer different
+//! questions.
+//!
+//! **This module is the LAYOUT-FAITHFUL one** (`--format html-fixed`,
+//! [`render_html_fixed`]): it serializes the SAME post-page-break
+//! `Page`/`PlacedLine` model the PDF writer (`rustyfi-pdf`'s `lib.rs`)
+//! consumes — the design doc's "Option A", a non-reflowing "PDF-in-a-div"
+//! twin of the PDF output. Its use is visual diffing: putting this port's
+//! layout in a browser where a run's coordinates can be inspected, rather
+//! than eyeballing two renderings side by side. It is not a web page and
+//! is not meant to be read as one.
+//!
+//! **The [`reflow`] submodule is the readable one** (`--format html`,
+//! [`render_html_reflow`]): one continuous, semantic document with no pages
+//! in it, built from the flat block stream as it stood BEFORE page
+//! breaking. See its own doc comment.
+//!
+//! Everything below concerns the faithful backend.
 //!
 //! **Slice 1** (§Slice 1, "text + block layout of a single-page document"):
 //! `InnerString` runs as positioned `<span>`s, plus the `<div class="page">`
@@ -15,13 +28,13 @@
 //! **Slice 3** (§Slice 3, "real fonts + math"): `@font-face` data-URI
 //! embedding (`fonts.rs`) so text/math runs use the SAME TrueType face
 //! the [`rustyfi_pdf::TtfFontStore`] PDF path embeds (metric-faithful
-//! positioning — see this module's `Ctx`/`render_html_ttf_with`), `Image`
+//! positioning — see this module's `Ctx`/`render_html_fixed_ttf_with`), `Image`
 //! boxes as `<img>` data URIs (`image.rs`, a hand-rolled uncompressed
 //! BMP container — no PNG/image-codec dependency), and `Math` glyphs as
 //! positioned `<span>`s (reusing the same run-emission path as
 //! `InnerString`, per the design doc's math row) with `Math.rules` (the
 //! fraction bar/radical) through the Slice-2 SVG path. The base-14 (no font
-//! store) path is UNCHANGED from Slice 1/2: [`render_html`] still emits the
+//! store) path is UNCHANGED from Slice 1/2: [`render_html_fixed`] still emits the
 //! generic `.run` CSS default font-family, no `@font-face` block at all.
 //!
 //! **Slice 4** (§Slice 4, "multi-page + print pagination"), this revision:
@@ -55,7 +68,7 @@ mod svg;
 
 // Reflowable/semantic HTML output mode (`reflow/mod.rs`'s doc comment) —
 // re-exported at the crate root so CLI dispatch calls it exactly like the
-// faithful `render_html`/`render_html_ttf_with` pair above (argument-for-
+// faithful `render_html_fixed`/`render_html_fixed_ttf_with` pair above (argument-for-
 // argument symmetry, not a new API shape to learn).
 pub use reflow::{render_html_reflow, render_html_reflow_ttf_with};
 
@@ -73,7 +86,7 @@ use rustyfi_pdf::TtfFontStore;
 /// Slice 1 never actually constructs this — every text run is valid
 /// UTF-8/HTML-escapable, and no font/image embedding (the error-prone parts,
 /// per the design doc's later slices) happens yet. The `Result` return
-/// shape is kept anyway so `render_html` is argument-for-argument (module
+/// shape is kept anyway so `render_html_fixed` is argument-for-argument (module
 /// signature, not module fallibility) with `render_pdf_with`
 /// (`lib.rs:459`), and so Slices 2/3 (SVG graphics, real fonts/`@font-face`,
 /// image data-URIs) can surface a real error without a breaking signature
@@ -87,7 +100,7 @@ pub enum HtmlError {
 /// Shared render-time state threaded through every `emit_*` function below
 /// (Slice 3): the document's image table (so `Image` boxes can resolve an
 /// `ImageId` to its `ImageResource`) and, when rendering under a real
-/// [`TtfFontStore`] (`render_html_ttf_with`), the store itself plus a
+/// [`TtfFontStore`] (`render_html_fixed_ttf_with`), the store itself plus a
 /// running set of which physical font FILES (`TtfFontStore::file_index`,
 /// not `FontKey` slots — bold/oblique with no configured face dedup to the
 /// regular file exactly like the CID PDF writer's own `FontUsage`,
@@ -124,7 +137,7 @@ impl Ctx<'_> {
 /// generic system-font fallback (Slice 1/2 behavior, unchanged): no
 /// `@font-face` block, every run styled by the plain `.run` CSS class. This
 /// is the base-14 twin of [`rustyfi_pdf::render_pdf_with`] — pass
-/// [`render_html_ttf_with`] a real [`TtfFontStore`] instead when the
+/// [`render_html_fixed_ttf_with`] a real [`TtfFontStore`] instead when the
 /// document was typeset against real embedded fonts, for metric-faithful
 /// output (Slice 3, see this module's doc comment).
 ///
@@ -145,7 +158,7 @@ impl Ctx<'_> {
 /// coordinates are already y-**down** from the paper top
 /// (`PlacedLine`'s own doc comment, `pagebreak.rs:13`), which is exactly
 /// CSS's `top` convention, so unlike the PDF writer this needs **no y-flip**.
-pub fn render_html(
+pub fn render_html_fixed(
     geometry: &PageGeometry,
     pages: &[Page],
     images: &[ImageResource],
@@ -154,7 +167,7 @@ pub fn render_html(
     render_html_impl(geometry, pages, images, extras, None)
 }
 
-/// Same as [`render_html`], but rendering under a real [`TtfFontStore`] —
+/// Same as [`render_html_fixed`], but rendering under a real [`TtfFontStore`] —
 /// the HTML twin of [`rustyfi_pdf::render_pdf_ttf_with`] (`cid.rs`). Every text
 /// and math run's `<span>` gets an explicit `font-family` naming the
 /// `@font-face` embedding this function adds to the `<style>` block for
@@ -162,7 +175,7 @@ pub fn render_html(
 /// browser lays text out in the SAME face whose metrics the layout was
 /// computed with (the design doc's §Risks "font-metric fidelity" mitigation,
 /// Slice 3's whole point).
-pub fn render_html_ttf_with(
+pub fn render_html_fixed_ttf_with(
     geometry: &PageGeometry,
     pages: &[Page],
     store: &TtfFontStore,
@@ -518,7 +531,7 @@ fn emit_embedded_block(out: &mut String, block: &[VertBox], tx: f64, ty: f64, ct
 /// One `InnerString`/`Math`-glyph-shaped run: an absolutely-positioned
 /// `<span>` at its top-left corner `(tx, top)`, sized in CSS `pt` (1:1 with
 /// SATySFi points) via `info.size`, with `text` HTML-escaped. Slice 3: when
-/// `ctx` carries a real [`TtfFontStore`] (`render_html_ttf_with`), the span
+/// `ctx` carries a real [`TtfFontStore`] (`render_html_fixed_ttf_with`), the span
 /// gets an explicit inline `font-family` naming the `@font-face` this
 /// document's `<style>` block embeds for `info.font`'s backing file
 /// (`Ctx::font_family_for`, which also records the file as used); in

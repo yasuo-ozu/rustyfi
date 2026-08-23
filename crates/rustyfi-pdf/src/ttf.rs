@@ -209,6 +209,31 @@ impl TtfFontStore {
         &self.files[file_index]
     }
 
+    /// The typographic family name a physical file declares in its `name`
+    /// table (English where the font offers it, since that is what a CSS
+    /// `font-family` has to match), or `None` for a file with no usable
+    /// family record.
+    ///
+    /// `pub` for `rustyfi-html`'s reflow backend, which NAMES fonts rather
+    /// than embedding them: a reflowed document is explicitly not
+    /// metric-faithful, so paying several megabytes of base64 to pin the
+    /// exact face would buy nothing it wants and cost the reader everything
+    /// (`fonts::reflow_font_stack`). The faithful backend still embeds.
+    pub fn file_family_name(&self, file_index: usize) -> Option<String> {
+        let face = Face::parse(self.files.get(file_index)?, 0).ok()?;
+        face.names()
+            .into_iter()
+            .filter(|n| {
+                // 16 = typographic/preferred family, 1 = legacy family. The
+                // typographic name is the one that groups an optical or
+                // weight family correctly, so prefer it when present.
+                (n.name_id == 16 || n.name_id == 1) && n.is_unicode()
+            })
+            .min_by_key(|n| if n.name_id == 16 { 0 } else { 1 })
+            .and_then(|n| n.to_string())
+            .filter(|s| !s.trim().is_empty())
+    }
+
     /// Resolve a registry abbrev ("ipaexm", "Junicode-b", ...) to its
     /// allocated `FontKey`, or `None` if the store has no such abbrev
     /// (either it wasn't configured, or the store came from a bare `load`).

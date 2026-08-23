@@ -1,4 +1,4 @@
-//! Integration test for the Slice 1 HTML writer (`render_html`): a page
+//! Integration test for the Slice 1 HTML writer (`render_html_fixed`): a page
 //! whose only content is an `InnerString` run serializes to a `<div
 //! class="page">` containing an absolutely-positioned `<span>` at the run's
 //! placed `(x, y)`, mirroring `tests/graphics.rs`'s content-stream substring
@@ -50,7 +50,7 @@ fn page_with_run(bx: PureHorzBox) -> Page {
 }
 
 fn render(page: &Page) -> String {
-    rustyfi_html::render_html(
+    rustyfi_html::render_html_fixed(
         &geometry(),
         std::slice::from_ref(page),
         &[],
@@ -80,7 +80,7 @@ fn text_run_renders_as_a_positioned_span_with_expected_text() {
 
     // left = line.x + dx = 50 + 0; top = baseline_y - rising - height =
     // 100 - 0 - 9 = 91 (no y-flip — SATySFi's page-down y already matches
-    // CSS `top`, see `render_html`'s doc comment).
+    // CSS `top`, see `render_html_fixed`'s doc comment).
     assert!(html.contains("left:50pt"), "missing left offset:\n{html}");
     assert!(html.contains("top:91pt"), "missing top offset:\n{html}");
     assert!(
@@ -281,7 +281,7 @@ fn cmyk_fill_converts_to_rgb() {
     // Pure CMYK cyan (C=1, everything else 0) should drop the red channel
     // only, the same naive conversion `svg::css_color` uses (unit-tested
     // directly in `src/html/svg.rs`) — checked here end-to-end through
-    // `render_html` too.
+    // `render_html_fixed` too.
     let bx = PureHorzBox::Graphics {
         origin_independent: false,
         width: Length::pt(20.0),
@@ -468,7 +468,7 @@ macro_rules! need_font {
     };
 }
 
-/// (a) `render_html_ttf_with` under a real `TtfFontStore` emits one
+/// (a) `render_html_fixed_ttf_with` under a real `TtfFontStore` emits one
 /// `@font-face` rule with a `data:font/ttf;base64,` src, and the run's own
 /// `<span>` names that SAME `font-family` — the metric-fidelity mechanism
 /// the design doc's §Risks flags as Option A's core risk (Slice 3's whole
@@ -479,7 +479,7 @@ fn ttf_render_emits_font_face_with_embedded_ttf_and_spans_reference_it() {
     let store = TtfFontStore::load(&path, None, None).expect("load font");
 
     let page = page_with_run(text_run("Hello"));
-    let html = rustyfi_html::render_html_ttf_with(
+    let html = rustyfi_html::render_html_fixed_ttf_with(
         &geometry(),
         std::slice::from_ref(&page),
         &store,
@@ -516,7 +516,7 @@ fn ttf_render_emits_font_face_with_embedded_ttf_and_spans_reference_it() {
     );
 }
 
-/// A `render_html_ttf_with` document that never emits any run marks no font
+/// A `render_html_fixed_ttf_with` document that never emits any run marks no font
 /// file as used, so no `@font-face` rule should appear — the store being
 /// configured at all must not, on its own, force an embed (mirrors the CID
 /// PDF writer only writing fonts for `usage.keys()`, `cid.rs`).
@@ -525,7 +525,7 @@ fn ttf_render_with_no_runs_emits_no_font_face() {
     let path = need_font!();
     let store = TtfFontStore::load(&path, None, None).expect("load font");
     let html =
-        rustyfi_html::render_html_ttf_with(&geometry(), &[], &store, &[], &DocExtras::default())
+        rustyfi_html::render_html_fixed_ttf_with(&geometry(), &[], &store, &[], &DocExtras::default())
             .expect("HTML rendering must succeed");
     assert!(
         !html.contains("@font-face"),
@@ -533,7 +533,7 @@ fn ttf_render_with_no_runs_emits_no_font_face() {
     );
 }
 
-/// Base-14 mode (`render_html`, no store) must stay Slice 1/2's behavior
+/// Base-14 mode (`render_html_fixed`, no store) must stay Slice 1/2's behavior
 /// exactly: no `@font-face` block, no per-run `font-family` override.
 #[test]
 fn base14_render_still_emits_no_font_face() {
@@ -575,7 +575,7 @@ fn image_box_renders_as_an_img_data_uri() {
         image: ImageId(0),
     };
     let page = page_with_run(bx);
-    let html = rustyfi_html::render_html(
+    let html = rustyfi_html::render_html_fixed(
         &geometry(),
         std::slice::from_ref(&page),
         &[small_image()],
@@ -676,7 +676,7 @@ fn math_box_renders_glyph_spans_and_fraction_rule() {
     };
 
     let page = page_with_run(math);
-    let html = rustyfi_html::render_html_ttf_with(
+    let html = rustyfi_html::render_html_fixed_ttf_with(
         &geometry(),
         std::slice::from_ref(&page),
         &store,
@@ -727,7 +727,7 @@ fn pages_with_runs(n: usize) -> Vec<Page> {
 #[test]
 fn two_page_document_renders_two_page_divs() {
     let pages = pages_with_runs(2);
-    let html = rustyfi_html::render_html(&geometry(), &pages, &[], &DocExtras::default())
+    let html = rustyfi_html::render_html_fixed(&geometry(), &pages, &[], &DocExtras::default())
         .expect("HTML rendering must succeed");
 
     assert_eq!(
@@ -748,7 +748,7 @@ fn two_page_document_renders_two_page_divs() {
 #[test]
 fn print_css_sizes_the_page_and_breaks_between_pages() {
     let pages = pages_with_runs(2);
-    let html = rustyfi_html::render_html(&geometry(), &pages, &[], &DocExtras::default())
+    let html = rustyfi_html::render_html_fixed(&geometry(), &pages, &[], &DocExtras::default())
         .expect("HTML rendering must succeed");
 
     // `@page` pins the printed sheet to the document's own paper size
@@ -777,7 +777,7 @@ fn single_page_document_has_no_page_break_after_rule_match() {
     // since the rule text itself is unconditionally emitted (see the test
     // above) regardless of page count.
     let pages = pages_with_runs(1);
-    let html = rustyfi_html::render_html(&geometry(), &pages, &[], &DocExtras::default())
+    let html = rustyfi_html::render_html_fixed(&geometry(), &pages, &[], &DocExtras::default())
         .expect("HTML rendering must succeed");
     assert_eq!(
         html.matches("<div class=\"page\"").count(),
@@ -807,7 +807,7 @@ fn page_graphics_underlay_renders_as_a_flipped_svg_underneath_the_text() {
     )]];
 
     let page = page_with_run(text_run("on top"));
-    let html = rustyfi_html::render_html(&geometry(), std::slice::from_ref(&page), &[], &extras)
+    let html = rustyfi_html::render_html_fixed(&geometry(), std::slice::from_ref(&page), &[], &extras)
         .expect("HTML rendering must succeed");
 
     // The underlay <svg> covers the whole page (paper_w x paper_h from the

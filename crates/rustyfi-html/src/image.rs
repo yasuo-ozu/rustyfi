@@ -18,12 +18,35 @@ use rustyfi_backend::ImageResource;
 
 use super::base64;
 
-/// `ImageResource` -> a `data:image/bmp;base64,...` URI, ready to drop
-/// straight into an `<img src="...">` attribute.
+/// `ImageResource` -> a self-contained `data:` URI, ready to drop straight
+/// into an `<img src="...">` attribute.
+///
+/// A **baseline JPEG passes through byte-for-byte** as `image/jpeg`
+/// (`JpegDct::bytes` is the complete original file, kept for exactly this
+/// kind of verbatim re-embedding — it is what the PDF writer hands to
+/// `/DCTDecode`). Only a source with no such stream — a PNG, or a JPEG
+/// variant `sniff_baseline_jpeg_dct` declines — falls back to the
+/// uncompressed BMP below.
+///
+/// The passthrough is not an optimisation detail. The reflow backend renders
+/// images for real, and re-encoding a photograph as uncompressed 24-bit BMP
+/// and then base64 costs about 4 bytes per pixel: `figbox`'s manual, 39
+/// figures, came out as a **21 MB** HTML file. Handing the browser the JPEG
+/// it was given brings the same document to 1.5 MB, and is lossless in the
+/// literal sense — the bytes are unchanged.
 pub(super) fn data_uri(image: &ImageResource) -> String {
-    let mut out = String::from("data:image/bmp;base64,");
-    out.push_str(&base64::encode(&encode_bmp(image)));
-    out
+    match &image.jpeg_dct {
+        Some(jpeg) => {
+            let mut out = String::from("data:image/jpeg;base64,");
+            out.push_str(&base64::encode(&jpeg.bytes));
+            out
+        }
+        None => {
+            let mut out = String::from("data:image/bmp;base64,");
+            out.push_str(&base64::encode(&encode_bmp(image)));
+            out
+        }
+    }
 }
 
 /// Encode `image`'s row-major, top-to-bottom, 3-bytes-per-pixel RGB8
@@ -156,6 +179,31 @@ mod tests {
         assert!(
             uri.starts_with("data:image/bmp;base64,"),
             "unexpected URI: {uri}"
+        );
+    }
+
+    /// A baseline JPEG is handed to the browser verbatim rather than
+    /// re-encoded as an uncompressed BMP — the difference between a 1.9 MB
+    /// document and a 21 MB one for a manual with photographs in it. The
+    /// bytes must be the ORIGINAL file's, not a re-render of the decoded
+    /// samples (which are deliberately mismatched here to catch exactly
+    /// that).
+    #[test]
+    fn a_baseline_jpeg_passes_through_verbatim() {
+        let jpeg_bytes = vec![0xFF, 0xD8, 0xFF, 0xE0, 1, 2, 3, 0xFF, 0xD9];
+        let res = ImageResource {
+            jpeg_dct: Some(rustyfi_backend::JpegDct {
+                bytes: jpeg_bytes.clone(),
+                components: 3,
+            }),
+            ..tiny_2x2()
+        };
+        let uri = data_uri(&res);
+        assert!(uri.starts_with("data:image/jpeg;base64,"), "{uri}");
+        assert_eq!(
+            uri,
+            format!("data:image/jpeg;base64,{}", super::base64::encode(&jpeg_bytes)),
+            "the original JPEG stream must be embedded unchanged"
         );
     }
 }

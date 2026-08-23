@@ -207,17 +207,49 @@ half-typed inputs — 11.5 seconds on one 14 KB buffer, and climbing — so the
 server caps how much backtracking one parse may do and says so plainly when it
 hits the cap, rather than freezing the editor.
 
+It also answers **hover**, **go-to-definition** and **completion**, all three
+from one cursor → syntax mapping over the buffer, and all three under the same
+rule: *say only what the file proves.*
+
+- **Hover** names what is under the cursor — an inline command, a module, a
+  variant constructor, a record label — and, when the file binds it, how it was
+  bound and on which line. Where the author wrote a type (an ascription, a
+  `sig`'s `val`, a synonym) it is shown, quoted from the buffer; no type is
+  ever inferred, so none is ever wrong. A name that comes from a `@require:`d
+  package still gets an answer, and that answer says it comes from elsewhere.
+- **Go to definition** jumps within the file, honouring shadowing, the five
+  identifier namespaces (`\cmd`, `+cmd`, math `\cmd`, values, types) and
+  `Module.member` paths, and it jumps from a `@require:`/`@import:` header to
+  the file it names — resolved by the compiler's own loader, so the editor
+  cannot disagree with the build. Where it cannot be sure it returns nothing:
+  an `open` of a module the file cannot see makes every name bound before it
+  unresolvable, because that `open` may be shadowing them.
+- **Completion** offers names actually in scope, and is deliberately quiet.
+  `\` in inline text offers inline commands, `\` inside `${…}` offers math
+  commands, `+` offers block commands, `M.` offers `M`'s own members, and a
+  bare word in prose offers nothing at all.
+
+All three keep working on a buffer that does not parse — and on one that does
+not even *lex*, which is what `{\emp` is the moment you start typing a command:
+everything written before the break is still answered about.
+
+`--lib-root <dir>` (or `$RUSTYFI_LIB_ROOT`, or the client's
+`initializationOptions.libRoot`) is what lets a `@require:` header be followed
+to its package file. `@import:`, being relative to the importing file, needs
+no configuration.
+
 It deliberately stops short of typechecking. Type errors in SATySFi are a
 property of a whole *program* — the entry document plus every `@require:`d
 package, in dependency order — and reporting them for one file in isolation
 would bury the real error under a hundred "unbound variable"s for names the
-document legitimately imports. Hover, go-to-definition and completion are not
-implemented either.
+document legitimately imports.
 
-The analysis is also available as a plain library function,
-`rustyfi_lsp::analyze(source, lang) -> Vec<Diag>`, with no LSP types in its
-signature, no filesystem access and no default features needed — so the same
-diagnostics can run in a browser editor compiled to `wasm32-unknown-unknown`.
+All of this is also available as plain library functions with no LSP types in
+their signatures, no filesystem access and no default features needed —
+`rustyfi_lsp::analyze(source, lang) -> Vec<Diag>`, and
+`build_model` / `hover` / `definition` / `completions` — so the same
+diagnostics and the same editor answers can run in a browser editor compiled to
+`wasm32-unknown-unknown`.
 
 ## Performance
 

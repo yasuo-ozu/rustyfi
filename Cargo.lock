@@ -1585,6 +1585,7 @@ dependencies = [
 name = "rustyfi-lsp"
 version = "0.1.0"
 dependencies = [
+ "rustyfi-loader",
  "rustyfi-syntax",
  "serde_json",
  "syan",

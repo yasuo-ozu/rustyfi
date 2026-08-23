@@ -139,6 +139,12 @@ fn the_full_lifecycle_produces_a_diagnostic_and_exits_cleanly() {
         json!({
             "textDocumentSync": { "openClose": true, "change": 1 },
             "positionEncoding": "utf-16",
+            "hoverProvider": true,
+            "definitionProvider": true,
+            "completionProvider": {
+                "triggerCharacters": ["\\", "+", "#", "."],
+                "resolveProvider": false,
+            },
         }),
     );
     assert_eq!(out[0]["result"]["serverInfo"]["name"], "rustyfi-lsp");
@@ -184,9 +190,11 @@ fn a_notification_before_initialize_is_dropped_silently() {
 
 #[test]
 fn an_unknown_request_is_method_not_found_and_the_session_survives() {
+    // `rename` is a capability this server does not advertise; a client that
+    // asks anyway gets an error rather than a silent hang.
     let (out, code_) = session(&[
         initialize(1),
-        json!({"jsonrpc": "2.0", "id": 2, "method": "textDocument/hover", "params": {}}),
+        json!({"jsonrpc": "2.0", "id": 2, "method": "textDocument/rename", "params": {}}),
         shutdown(3),
         exit(),
     ]);
@@ -343,6 +351,7 @@ fn a_lang_override_is_honoured_over_the_buffers_own_signal() {
     let src = "let-rec f x = x\n";
     let opts = Options {
         lang: Some(RustyfiVersion::V0_1),
+        ..Options::default()
     };
     let (out, _) = session_with(&[initialize(1), did_open("file:///f.saty", src)], opts);
     assert!(
@@ -402,4 +411,277 @@ fn crlf_line_numbers_agree_with_the_lexers_own_rule() {
         json!({ "line": 2, "character": 8 }),
         "CRLF must not shift the line number: {out:#?}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Hover, definition and completion, over the wire
+// ---------------------------------------------------------------------------
+//
+// The three interactive requests are *pulled*: the client sends a URI and a
+// position and no text, so each of these also exercises the document store —
+// a server that forgot to keep the buffer answers `null` to every one of them
+// and looks, from the editor, exactly like a server that has no feature.
+
+/// A `textDocument/<method>` request at a zero-based UTF-16 position.
+fn at(id: i64, method: &str, uri: &str, line: u32, character: u32) -> Value {
+    json!({
+        "jsonrpc": "2.0", "id": id, "method": format!("textDocument/{method}"),
+        "params": {
+            "textDocument": { "uri": uri },
+            "position": { "line": line, "character": character },
+        },
+    })
+}
+
+/// The `result` of the reply with this id.
+fn result(out: &[Value], id: i64) -> &Value {
+    out.iter()
+        .find(|m| m["id"] == id)
+        .unwrap_or_else(|| panic!("no reply with id {id}: {out:#?}"))
+        .get("result")
+        .unwrap_or_else(|| panic!("reply {id} has no result: {out:#?}"))
+}
+
+#[test]
+fn hover_answers_with_markdown_and_a_range() {
+    let src = "let-inline \\emph it = it\nlet doc = {\\emph{hi}}\n";
+    let (out, _) = session(&[
+        initialize(1),
+        did_open("file:///d.saty", src),
+        // Line 1, character 12: inside the `\emph` USE.
+        at(2, "hover", "file:///d.saty", 1, 12),
+    ]);
+    let r = result(&out, 2);
+    assert_eq!(r["contents"]["kind"], "markdown");
+    assert!(
+        r["contents"]["value"]
+            .as_str()
+            .unwrap()
+            .contains("bound by `let-inline` on line 1"),
+        "{r:#?}"
+    );
+    assert_eq!(
+        r["range"],
+        json!({
+            "start": { "line": 1, "character": 11 },
+            "end":   { "line": 1, "character": 16 },
+        }),
+    );
+}
+
+#[test]
+fn hover_on_nothing_answers_null_rather_than_an_error() {
+    // A cursor on a keyword names nothing, and `null` is how LSP spells "no
+    // result". An error response would make the client log a failure for what
+    // is the commonest outcome of all.
+    let (out, _) = session(&[
+        initialize(1),
+        did_open("file:///d.saty", "let x = 1\n"),
+        at(2, "hover", "file:///d.saty", 0, 1),
+    ]);
+    assert_eq!(*result(&out, 2), Value::Null);
+    assert!(out.iter().all(|m| m.get("error").is_none()), "{out:#?}");
+}
+
+#[test]
+fn definition_answers_a_location_in_the_same_document() {
+    let src = "let greeting = 1\nlet other = greeting\n";
+    let (out, _) = session(&[
+        initialize(1),
+        did_open("file:///d.saty", src),
+        at(2, "definition", "file:///d.saty", 1, 14),
+    ]);
+    assert_eq!(
+        *result(&out, 2),
+        json!({
+            "uri": "file:///d.saty",
+            "range": {
+                "start": { "line": 0, "character": 4 },
+                "end":   { "line": 0, "character": 12 },
+            },
+        }),
+    );
+}
+
+#[test]
+fn definition_follows_an_import_header_to_the_file_beside_it() {
+    // `@import:` resolves relative to the importing file and needs nothing
+    // configured, so this is the cross-file jump that works in any project.
+    // It goes through `rustyfi_loader::resolve_import`, the compiler's own.
+    let dir = std::env::temp_dir().join(format!("rustyfi-lsp-import-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let dep = dir.join("helper.satyh");
+    std::fs::write(&dep, "let helper = 1\n").unwrap();
+    let doc = dir.join("doc.saty");
+    let uri = format!("file://{}", doc.display());
+
+    let (out, _) = session(&[
+        initialize(1),
+        did_open(&uri, "@import: helper\nlet x = 1 in x\n"),
+        at(2, "definition", &uri, 0, 3),
+    ]);
+    let r = result(&out, 2);
+    assert_eq!(
+        r["uri"].as_str().unwrap(),
+        format!("file://{}", dep.display()),
+        "{r:#?}"
+    );
+    assert_eq!(r["range"]["start"], json!({ "line": 0, "character": 0 }));
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn definition_on_a_require_with_no_library_root_answers_null() {
+    // Nothing is configured, so there is nowhere to look — and searching
+    // somewhere plausible would open the wrong file.
+    let (out, _) = session(&[
+        initialize(1),
+        did_open("file:///d.saty", "@require: stdjabook\nlet x = 1 in x\n"),
+        at(2, "definition", "file:///d.saty", 0, 3),
+    ]);
+    assert_eq!(*result(&out, 2), Value::Null);
+}
+
+#[test]
+fn completion_answers_items_with_a_text_edit_over_the_typed_word() {
+    let src = "let-inline \\emph it = it\nlet doc = {\\emp";
+    let (out, _) = session(&[
+        initialize(1),
+        did_open("file:///d.saty", src),
+        // End of the buffer, just past `\emp`.
+        at(2, "completion", "file:///d.saty", 1, 15),
+    ]);
+    let r = result(&out, 2);
+    assert_eq!(r["isIncomplete"], false);
+    let items = r["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1, "{r:#?}");
+    assert_eq!(items[0]["label"], "\\emph");
+    assert_eq!(items[0]["kind"], 3, "CompletionItemKind::Function");
+    assert_eq!(items[0]["detail"], "let-inline");
+    assert_eq!(
+        items[0]["textEdit"],
+        json!({
+            "range": {
+                // The edit covers the `\` too, because the label carries it.
+                "start": { "line": 1, "character": 11 },
+                "end":   { "line": 1, "character": 15 },
+            },
+            "newText": "\\emph",
+        }),
+    );
+}
+
+#[test]
+fn the_interactive_requests_work_at_a_utf16_column_after_japanese() {
+    let src = "let-inline \\ruby it = it\nlet doc = {日本語と\\ruby{かな}}\n";
+    let uri = "file:///jp.saty";
+    let (out, _) = session(&[
+        initialize(1),
+        did_open(uri, src),
+        // `let doc = {` is 11 units and `日本語と` is 4 more, so the command
+        // starts at character 15 — 12 bytes further along than that.
+        at(2, "hover", uri, 1, 16),
+        at(3, "definition", uri, 1, 16),
+    ]);
+    assert!(
+        result(&out, 2)["contents"]["value"]
+            .as_str()
+            .unwrap()
+            .contains("Inline command"),
+        "{out:#?}"
+    );
+    assert_eq!(
+        result(&out, 3)["range"]["start"],
+        json!({ "line": 0, "character": 11 }),
+    );
+}
+
+#[test]
+fn the_interactive_requests_survive_a_half_typed_buffer() {
+    // Neither lexes nor parses whole: `{\emp` leaves a command applied to
+    // nothing. Everything written before it is still answered about.
+    let src = "let alpha = 1\nlet beta = alpha\nlet doc = {\\emp";
+    let uri = "file:///half.saty";
+    let (out, _) = session(&[
+        initialize(1),
+        did_open(uri, src),
+        at(2, "hover", uri, 1, 13),      // the `alpha` mention
+        at(3, "definition", uri, 1, 13), // the same
+        at(4, "completion", uri, 2, 15), // just past `\emp`
+    ]);
+    assert!(
+        result(&out, 2)["contents"]["value"]
+            .as_str()
+            .unwrap()
+            .contains("bound by `let` on line 1"),
+        "{out:#?}"
+    );
+    assert_eq!(
+        result(&out, 3)["range"]["start"],
+        json!({ "line": 0, "character": 4 }),
+    );
+    // No inline command is bound in this buffer, so there is nothing to offer
+    // — but the request must still answer a well-formed, empty list.
+    assert_eq!(result(&out, 4)["items"], json!([]));
+}
+
+#[test]
+fn a_request_about_a_closed_document_answers_null() {
+    let uri = "file:///d.saty";
+    let (out, _) = session(&[
+        initialize(1),
+        did_open(uri, "let x = 1\nlet y = x\n"),
+        json!({
+            "jsonrpc": "2.0", "method": "textDocument/didClose",
+            "params": { "textDocument": { "uri": uri } },
+        }),
+        at(2, "hover", uri, 1, 9),
+    ]);
+    assert_eq!(*result(&out, 2), Value::Null);
+}
+
+#[test]
+fn a_did_change_keeps_the_stored_buffer_in_step() {
+    let uri = "file:///d.saty";
+    let (out, _) = session(&[
+        initialize(1),
+        did_open(uri, "let alpha = 1\nlet z = alpha\n"),
+        did_change(uri, 2, "let renamed = 1\nlet z = renamed\n"),
+        at(2, "hover", uri, 1, 10),
+    ]);
+    let value = result(&out, 2)["contents"]["value"].as_str().unwrap();
+    assert!(value.contains("renamed"), "{value}");
+    assert!(
+        !value.contains("alpha"),
+        "the store must not be stale: {value}"
+    );
+}
+
+#[test]
+fn a_ranged_did_change_forgets_the_buffer_rather_than_answering_from_stale_text() {
+    // Full sync was advertised; a ranged change means the client is not
+    // honouring it, and the server's copy is now known to be out of date.
+    // Diagnostics may stay on screen through that (at worst mispositioned),
+    // but a hover computed from stale text describes characters that are not
+    // there.
+    let uri = "file:///d.saty";
+    let (out, _) = session(&[
+        initialize(1),
+        did_open(uri, "let alpha = 1\nlet z = alpha\n"),
+        json!({
+            "jsonrpc": "2.0", "method": "textDocument/didChange",
+            "params": {
+                "textDocument": { "uri": uri, "version": 2 },
+                "contentChanges": [{
+                    "range": {
+                        "start": { "line": 0, "character": 4 },
+                        "end":   { "line": 0, "character": 9 },
+                    },
+                    "text": "beta",
+                }],
+            },
+        }),
+        at(2, "hover", uri, 1, 10),
+    ]);
+    assert_eq!(*result(&out, 2), Value::Null);
 }

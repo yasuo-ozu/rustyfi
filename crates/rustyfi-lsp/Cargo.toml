@@ -32,9 +32,17 @@ syan.workspace = true
 # `default-features = false` and pull in nothing but `rustyfi-syntax`.
 serde_json = { version = "1", optional = true }
 
+# The protocol half only, and only for go-to-definition on a
+# `@require:`/`@import:` header: `resolve_require`/`resolve_import` are the
+# very functions the compiler's loader calls, so the editor and the build
+# cannot disagree about which file a header names. Reimplementing the
+# candidate-extension search here would be four lines that drift.
+rustyfi-loader = { workspace = true, optional = true }
+
 [features]
 default = ["server"]
 # The stdio JSON-RPC server (`server`, `jsonrpc` modules) and everything that
-# needs a runtime JSON encoder. Off ⇒ the crate is the pure, no-I/O,
-# wasm-safe `analyze` seam and nothing else.
-server = ["dep:serde_json"]
+# needs a runtime JSON encoder or the filesystem. Off ⇒ the crate is the pure,
+# no-I/O, wasm-safe `analyze`/`build_model`/`hover`/`definition`/`completions`
+# seam and nothing else.
+server = ["dep:serde_json", "dep:rustyfi-loader"]

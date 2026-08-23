@@ -6,27 +6,42 @@
 //! # What is implemented
 //!
 //! `initialize`, `initialized`, `shutdown`, `exit`,
-//! `textDocument/didOpen` / `didChange` / `didClose`, and
-//! `textDocument/publishDiagnostics`. The `initialize` reply advertises
-//! exactly that and nothing more — an over-claimed capability costs the user
-//! a hang or an empty popup on every keystroke, so the reply lists only what
-//! is actually wired up.
+//! `textDocument/didOpen` / `didChange` / `didClose`,
+//! `textDocument/publishDiagnostics`, and the three interactive requests —
+//! `textDocument/hover`, `textDocument/definition` and
+//! `textDocument/completion`. The `initialize` reply advertises exactly that
+//! and nothing more — an over-claimed capability costs the user a hang or an
+//! empty popup on every keystroke, so the reply lists only what is actually
+//! wired up.
 //!
 //! Document sync is **full**, not incremental. Incremental sync would mean
 //! reimplementing UTF-16-range splicing over the buffer, and the whole
 //! analysis re-parses the file anyway (this port's parser has no incremental
 //! mode), so the only thing incremental sync could save is the bytes on the
 //! wire. Full sync is the honest choice here and is advertised as such.
+//!
+//! # Why there is now a document store
+//!
+//! Diagnostics are *pushed*: the notification that changes a buffer carries
+//! the buffer, so nothing had to be remembered between messages, and not
+//! remembering is how staleness bugs are avoided. The three interactive
+//! requests are *pulled* — `textDocument/hover` carries a URI and a position
+//! and no text at all — so the server has to hold what the client last sent
+//! it. [`State::docs`] is that and only that: it is written on
+//! `didOpen`/`didChange`, dropped on `didClose`, and never derived from.
 
+use std::collections::HashMap;
 use std::io::{self, BufRead, Write};
+use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
 
 use crate::jsonrpc::{self, code, Incoming};
-use crate::RustyfiVersion;
+use crate::model::HeaderKind;
+use crate::{ByteRange, Definition, LineIndex, Position, RustyfiVersion};
 
 /// How the server was started.
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone)]
 pub struct Options {
     /// `rustyfi lsp --lang 0.1`: force every buffer to one generation.
     ///
@@ -36,6 +51,14 @@ pub struct Options {
     /// project that is wholly one generation and whose library files, being
     /// signal-free, would otherwise each be parsed twice.
     pub lang: Option<RustyfiVersion>,
+    /// Where `@require:` looks, for go-to-definition on a header.
+    ///
+    /// The same root `rustyfi --lib-root` names, and resolved by the same
+    /// function the compiler uses (`rustyfi_loader::resolve_require`), so the
+    /// editor cannot disagree with the build about which file a header names.
+    /// `None` means no root is configured and a `@require:` simply does not
+    /// resolve — `@import:`, which is relative to the file itself, still does.
+    pub lib_root: Option<PathBuf>,
 }
 
 /// Run the server against a pair of streams until the client disconnects or
@@ -97,18 +120,16 @@ pub fn run(input: &mut impl BufRead, output: &mut impl Write, opts: Options) -> 
 type RequestError = (i64, String);
 
 /// Everything the server remembers between messages.
-///
-/// Notably NOT the open buffers. A full-sync server is handed the complete
-/// text with every `didOpen`/`didChange`, and the analysis is a pure function
-/// of that text, so a document store would be write-only state — and
-/// write-only state in a server is where staleness bugs come from. The
-/// document URI is likewise never parsed or resolved to a path; nothing here
-/// touches the filesystem, so it is only ever an opaque key to publish
-/// back against.
 struct State {
     opts: Options,
     initialized: bool,
     shutdown_requested: bool,
+    /// The text of each open buffer, keyed by URI — see the module comment.
+    /// Nothing derived is cached beside it: a [`crate::Model`] is rebuilt per
+    /// request, because a cache keyed on a buffer that changes on every
+    /// keystroke is a staleness bug waiting for a race, and the parse is
+    /// budgeted (`high_water`) so its cost is bounded.
+    docs: HashMap<String, String>,
 }
 
 impl State {
@@ -117,6 +138,7 @@ impl State {
             opts,
             initialized: false,
             shutdown_requested: false,
+            docs: HashMap::new(),
         }
     }
 
@@ -142,8 +164,126 @@ impl State {
                 self.shutdown_requested = true;
                 Ok(Value::Null)
             }
+            // The three interactive requests. Each answers `null` — never an
+            // error — when it has nothing to say: LSP treats `null` as "no
+            // result", and an error response makes a client log a failure for
+            // what is an ordinary outcome (a cursor on a keyword, a name from
+            // a package this buffer cannot see).
+            "textDocument/hover" => Ok(self.hover(&params)),
+            "textDocument/definition" => Ok(self.definition(&params)),
+            "textDocument/completion" => Ok(self.completion(&params)),
             _ => Err((code::METHOD_NOT_FOUND, format!("{method} is not supported"))),
         }
+    }
+
+    /// The buffer a request is about, and the byte offset its position names.
+    ///
+    /// `None` when the client asks about a document it never sent — which
+    /// happens legitimately, when a request crosses a `didClose` on the wire.
+    fn locate<'a>(&'a self, params: &Value) -> Option<(&'a str, usize)> {
+        let doc = params.get("textDocument")?;
+        let text = self.docs.get(str_field(doc, "uri")?)?;
+        let pos = params.get("position")?;
+        let position = Position {
+            line: pos.get("line")?.as_u64()? as u32,
+            character: pos.get("character")?.as_u64()? as u32,
+        };
+        Some((text, LineIndex::new(text).offset(position)))
+    }
+
+    fn hover(&self, params: &Value) -> Value {
+        let Some((text, byte)) = self.locate(params) else {
+            return Value::Null;
+        };
+        let model = crate::build_model(text, self.opts.lang);
+        match crate::hover(&model, byte) {
+            None => Value::Null,
+            Some(h) => json!({
+                "contents": { "kind": "markdown", "value": h.markdown },
+                "range": lsp_range(text, h.range),
+            }),
+        }
+    }
+
+    fn definition(&self, params: &Value) -> Value {
+        let (Some(uri), Some((text, byte))) = (
+            params.get("textDocument").and_then(|d| str_field(d, "uri")),
+            self.locate(params),
+        ) else {
+            return Value::Null;
+        };
+        let model = crate::build_model(text, self.opts.lang);
+        match crate::definition(&model, byte) {
+            Some(Definition::Here(range)) => json!({
+                "uri": uri,
+                "range": lsp_range(text, range),
+            }),
+            Some(Definition::OtherFile { kind, name }) => match self.resolve_header(uri, kind, &name)
+            {
+                // The whole file, from its origin: a client that jumps here
+                // opens it at the top, which is where a package's own
+                // documentation and its `module` head are.
+                Some(path) => json!({
+                    "uri": path_to_uri(&path),
+                    "range": { "start": { "line": 0, "character": 0 },
+                               "end": { "line": 0, "character": 0 } },
+                }),
+                None => Value::Null,
+            },
+            None => Value::Null,
+        }
+    }
+
+    /// Turn a `@require:`/`@import:` name into a path, exactly the way the
+    /// compiler's loader does.
+    ///
+    /// `@import:` needs nothing configured — it is relative to the file that
+    /// wrote the header — so it resolves in any project. `@require:` needs a
+    /// library root, and without one this answers nothing rather than
+    /// searching somewhere plausible.
+    fn resolve_header(&self, uri: &str, kind: HeaderKind, name: &str) -> Option<PathBuf> {
+        let here = uri_to_path(uri)?;
+        let sources = rustyfi_loader::FsSources;
+        match kind {
+            HeaderKind::Import => {
+                rustyfi_loader::resolve_import(&sources, here.parent()?, name).ok()
+            }
+            HeaderKind::Require => {
+                let root = self.opts.lib_root.as_deref()?;
+                let version = self.opts.lang.unwrap_or(RustyfiVersion::DEFAULT);
+                rustyfi_loader::resolve_require(&sources, &[root], name, version).ok()
+            }
+            // 0.1's `use package` is resolved through an envelope graph, not a
+            // search path; guessing at a file for it would be a guess.
+            HeaderKind::Use => None,
+        }
+    }
+
+    fn completion(&self, params: &Value) -> Value {
+        let Some((text, byte)) = self.locate(params) else {
+            return Value::Null;
+        };
+        let model = crate::build_model(text, self.opts.lang);
+        let items: Vec<Value> = crate::completions(&model, byte)
+            .into_iter()
+            .map(|c| {
+                json!({
+                    "label": c.label,
+                    "kind": c.kind,
+                    "detail": c.detail,
+                    // A `textEdit` rather than bare insertion: the word being
+                    // replaced starts before the cursor (and, for a command,
+                    // before its `\`), and a client left to guess the replaced
+                    // range from its own word pattern would leave the sigil
+                    // behind.
+                    "textEdit": {
+                        "range": lsp_range(text, c.range),
+                        "newText": c.label,
+                    },
+                })
+            })
+            .collect();
+        json!({ "isIncomplete": false, "items": items })
     }
 
     /// Handle a notification, returning any messages to send as a result.
@@ -164,8 +304,12 @@ impl State {
             // `textDocument` object, `didChange` in `contentChanges` — and
             // are otherwise the same notification.
             "textDocument/didOpen" => {
-                let text = params.get("textDocument").and_then(|d| str_field(d, "text"));
-                self.publish(&params, text)
+                let text = params
+                    .get("textDocument")
+                    .and_then(|d| str_field(d, "text"))
+                    .map(str::to_string);
+                self.remember(&params, text.as_deref());
+                self.publish(&params, text.as_deref())
             }
             // `full_replacement` yields `None` for a *ranged* change under a
             // Full-sync agreement: the client is not honouring the advertised
@@ -174,13 +318,19 @@ impl State {
             // diagnostics on screen — stale, but never pointing at text that
             // is not there.
             "textDocument/didChange" => {
-                let text = full_replacement(&params);
-                self.publish(&params, text)
+                let text = full_replacement(&params).map(str::to_string);
+                self.remember(&params, text.as_deref());
+                self.publish(&params, text.as_deref())
             }
             "textDocument/didClose" => {
-                let Some(uri) = params.get("textDocument").and_then(|d| str_field(d, "uri")) else {
+                let Some(uri) = params
+                    .get("textDocument")
+                    .and_then(|d| str_field(d, "uri"))
+                    .map(str::to_string)
+                else {
                     return Vec::new();
                 };
+                self.docs.remove(&uri);
                 // An empty list is how a server retracts diagnostics; without
                 // it the editor keeps showing them for a file that is gone.
                 vec![jsonrpc::notification(
@@ -203,6 +353,33 @@ impl State {
     /// the *only* thing `didOpen` and `didChange` disagree about; everything
     /// else — the URI, the version echo, the "drop a malformed notification
     /// silently" rule — is shared, and was previously written twice.
+    /// Store what the client just sent, so a later `hover`/`definition`/
+    /// `completion` — which carry a position and no text — has a buffer to
+    /// answer about.
+    ///
+    /// A notification with no text **forgets** the buffer rather than keeping
+    /// the previous one. That is a ranged `didChange` under a Full-sync
+    /// agreement — the client is not honouring the advertised capability — and
+    /// the text the server holds is then known to be out of date. Diagnostics
+    /// may stay on screen through such a change (they are at worst
+    /// mispositioned), but a hover computed from stale text *answers about
+    /// characters that are not there*, and a jump computed from it lands
+    /// somewhere the user did not ask for. Answering nothing is the only
+    /// honest option.
+    fn remember(&mut self, params: &Value, text: Option<&str>) {
+        let Some(uri) = params
+            .get("textDocument")
+            .and_then(|d| str_field(d, "uri"))
+            .map(str::to_string)
+        else {
+            return;
+        };
+        match text {
+            Some(text) => self.docs.insert(uri, text.to_string()),
+            None => self.docs.remove(&uri),
+        };
+    }
+
     fn publish(&self, params: &Value, text: Option<&str>) -> Vec<Value> {
         let Some(doc) = params.get("textDocument") else {
             return Vec::new();
@@ -220,17 +397,27 @@ impl State {
     /// editor that guesses wrong in its client config should not be able to
     /// override what the user typed when launching the server.
     fn absorb_initialization_options(&mut self, params: &Value) {
-        if self.opts.lang.is_some() {
-            return;
+        let options = params.get("initializationOptions");
+        if self.opts.lang.is_none() {
+            if let Some(lang) = options
+                .and_then(|o| o.get("lang"))
+                .and_then(Value::as_str)
+                .and_then(|s| s.parse::<RustyfiVersion>().ok())
+            {
+                self.opts.lang = Some(lang);
+            }
         }
-        let Some(lang) = params
-            .get("initializationOptions")
-            .and_then(|o| o.get("lang"))
-            .and_then(Value::as_str)
-        else {
-            return;
-        };
-        self.opts.lang = lang.parse::<RustyfiVersion>().ok();
+        // `libRoot` follows the same precedence rule and for the same reason,
+        // and falls back to the environment variable the CLI already honours
+        // so that an editor started from a configured shell needs no client
+        // configuration at all.
+        if self.opts.lib_root.is_none() {
+            self.opts.lib_root = options
+                .and_then(|o| o.get("libRoot"))
+                .and_then(Value::as_str)
+                .map(PathBuf::from)
+                .or_else(|| std::env::var_os("RUSTYFI_LIB_ROOT").map(PathBuf::from));
+        }
     }
 
     /// Analyse `text` and build the whole `textDocument/publishDiagnostics`
@@ -265,6 +452,82 @@ impl State {
     }
 }
 
+/// A [`ByteRange`] as an LSP range over `text`.
+fn lsp_range(text: &str, range: ByteRange) -> Value {
+    let index = LineIndex::new(text);
+    let (start, end) = (index.position(range.start), index.position(range.end));
+    json!({
+        "start": { "line": start.line, "character": start.character },
+        "end": { "line": end.line, "character": end.character },
+    })
+}
+
+/// `file:///a/b%20c.saty` → `/a/b c.saty`.
+///
+/// Deliberately minimal, and `None` for anything that is not a plain local
+/// `file:` URI: the only thing a path is used for here is following a
+/// `@require:`/`@import:` header, and a scheme this does not understand is one
+/// where guessing at a path would open the wrong file — or none.
+fn uri_to_path(uri: &str) -> Option<PathBuf> {
+    let rest = uri.strip_prefix("file://")?;
+    // `file://host/path` names another machine; only an empty authority (or
+    // `localhost`) is this filesystem.
+    let path = match rest.strip_prefix("localhost") {
+        Some(p) => p,
+        None => rest,
+    };
+    if !path.starts_with('/') {
+        return None;
+    }
+    let decoded = percent_decode(path)?;
+    // `file:///C:/x` — a Windows drive letter arrives with a leading slash
+    // that is part of the URI grammar and not of the path.
+    let bytes = decoded.as_bytes();
+    let trimmed = match bytes.len() >= 3 && bytes[0] == b'/' && bytes[2] == b':' {
+        true => &decoded[1..],
+        false => &decoded[..],
+    };
+    Some(PathBuf::from(trimmed))
+}
+
+/// The inverse, escaping the characters a URI may not carry literally.
+fn path_to_uri(path: &Path) -> String {
+    let text = path.to_string_lossy();
+    let mut out = String::from("file://");
+    // A Windows path has no leading slash of its own.
+    if !text.starts_with('/') {
+        out.push('/');
+    }
+    for b in text.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' | b':' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
+/// Decode `%XX` escapes. `None` for a malformed escape, which is a URI this
+/// server should not be inventing a path from.
+fn percent_decode(s: &str) -> Option<String> {
+    let bytes = s.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            let hex = s.get(i + 1..i + 3)?;
+            out.push(u8::from_str_radix(hex, 16).ok()?);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
 /// The `initialize` result.
 fn server_capabilities() -> Value {
     json!({
@@ -273,6 +536,19 @@ fn server_capabilities() -> Value {
                 "openClose": true,
                 // 1 = Full. See the module comment for why not Incremental.
                 "change": 1,
+            },
+            "hoverProvider": true,
+            "definitionProvider": true,
+            "completionProvider": {
+                // The sigils that decide a namespace, plus `.` for a module
+                // member. A client that only auto-triggers on these gets the
+                // cases this server is confident about and nothing else; one
+                // that also triggers on word characters still gets a sensible
+                // answer, because a bare word in prose completes to nothing.
+                "triggerCharacters": ["\\", "+", "#", "."],
+                // Nothing is filled in lazily: every item is complete when it
+                // is sent, so there is no `completionItem/resolve` to answer.
+                "resolveProvider": false,
             },
             // The protocol's default, stated explicitly because it is the
             // one thing about this server most likely to be got wrong by

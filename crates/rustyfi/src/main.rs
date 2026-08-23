@@ -108,11 +108,16 @@ fn run_lsp(m: &ArgMatches) -> i32 {
             return 2;
         }
     };
+    // `--lib-root` here does one job: following a `@require:` header to the
+    // package file it names. `None` leaves that to `$RUSTYFI_LIB_ROOT` or the
+    // client's `initializationOptions`, both of which the server reads itself.
+    let lib_root = m.get_one::<PathBuf>("lib_root").cloned();
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
     let mut input = stdin.lock();
     let mut output = stdout.lock();
-    match rustyfi_lsp::server::run(&mut input, &mut output, rustyfi_lsp::server::Options { lang }) {
+    let opts = rustyfi_lsp::server::Options { lang, lib_root };
+    match rustyfi_lsp::server::run(&mut input, &mut output, opts) {
         Ok(code) => code,
         Err(e) => {
             eprintln!("error: language server I/O: {e}");

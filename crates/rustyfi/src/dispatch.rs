@@ -730,6 +730,21 @@ fn lsp_command() -> Command {
                      a compile would detect it for the entry document.",
                 ),
         )
+        .arg(
+            Arg::new("lib_root")
+                .long("lib-root")
+                .value_name("DIR")
+                .value_parser(clap::value_parser!(std::path::PathBuf))
+                .help(
+                    "Package root for following a @require: header to its file \
+                     (same convention as the compiler's --lib-root: packages \
+                     under <lib-root>/dist/packages/). Falls back to \
+                     $RUSTYFI_LIB_ROOT, then to the client's own \
+                     initializationOptions.libRoot. With no root configured, \
+                     @require: simply does not resolve; @import:, which is \
+                     relative to the importing file, always does.",
+                ),
+        )
 }
 
 fn multicall_command() -> Command {

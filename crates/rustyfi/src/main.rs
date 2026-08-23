@@ -334,7 +334,7 @@ fn cmd_compile(m: &ArgMatches) -> anyhow::Result<()> {
     // compile) is shared; only this terminal render+write step differs,
     // branching on `--format`. `Html` reuses the exact same
     // `doc.geometry`/`doc.pages`/`doc.images`/`doc.extras` inputs the PDF
-    // arm does — `render_html` is argument-for-argument with
+    // arm does — `render_html_fixed` is argument-for-argument with
     // `render_pdf_with`. The HTML backend lives in its own `rustyfi-html`
     // crate, a peer of `rustyfi-pdf`.
     if timing {
@@ -358,12 +358,15 @@ fn cmd_compile(m: &ArgMatches) -> anyhow::Result<()> {
                 rustyfi_pdf::render_pdf_with(&doc.geometry, &doc.pages, &doc.images, &doc.extras)?
             }
         },
-        // Mirrors the PDF arm immediately above — a configured `font_store`
-        // renders through `render_html_ttf_with` (real `@font-face`-embedded
-        // fonts, metric-faithful with the layout), `None` keeps the base-14
-        // `render_html` path exactly.
-        format::OutputFormat::Html => match &font_store {
-            Some(store) => rustyfi_html::render_html_ttf_with(
+        // The layout-faithful HTML twin of the PDF arm immediately above,
+        // reached by `--format html-fixed` — a configured `font_store`
+        // renders through `render_html_fixed_ttf_with` (real
+        // `@font-face`-embedded fonts, metric-faithful with the layout),
+        // `None` keeps the base-14 `render_html_fixed` path exactly. See
+        // `format::OutputFormat` on why this is no longer what plain
+        // `--format html` means.
+        format::OutputFormat::HtmlFixed => match &font_store {
+            Some(store) => rustyfi_html::render_html_fixed_ttf_with(
                 &doc.geometry,
                 &doc.pages,
                 store,
@@ -371,21 +374,23 @@ fn cmd_compile(m: &ArgMatches) -> anyhow::Result<()> {
                 &doc.extras,
             )?
             .into_bytes(),
-            None => rustyfi_html::render_html(&doc.geometry, &doc.pages, &doc.images, &doc.extras)?
-                .into_bytes(),
+            None => {
+                rustyfi_html::render_html_fixed(&doc.geometry, &doc.pages, &doc.images, &doc.extras)?
+                    .into_bytes()
+            }
         },
-        // Reflowable/semantic HTML: a THIRD, independent serialization of
-        // the SAME compiled `doc` above — `doc.reflow_source` (the
-        // pre-page-break flat `Vec<VertBox>`, populated unconditionally by
-        // every `compile_document_*` path through the shared
-        // `page_break_core`) feeds the reflow backend instead of `doc.pages`.
-        // It additionally threads
-        // `doc.reflow_links`/`reflow_dests` — the `DecoId`-keyed link/
-        // destination side-channel `eval_document_trials` fills alongside
-        // `extras`, once `fire_hooks` has run — so `\href`s become real `<a
-        // href>`s. Mirrors the `Html` arm immediately above for the font-store
+        // Reflowable/semantic HTML — what `--format html` now means. A
+        // SEPARATE serialization of the SAME compiled `doc` above:
+        // `doc.reflow_source` (the pre-page-break flat `Vec<VertBox>`,
+        // populated unconditionally by every `compile_document_*` path
+        // through the shared `page_break_core`) feeds it instead of
+        // `doc.pages`, so the page grid never enters the picture. It
+        // additionally threads `doc.reflow_links`/`reflow_dests` — the
+        // `DecoId`-keyed link/destination side-channel `eval_document_trials`
+        // fills alongside `extras`, once `fire_hooks` has run — so `\href`s
+        // become real `<a href>`s. Mirrors the arm above for the font-store
         // branch.
-        format::OutputFormat::HtmlReflow => match &font_store {
+        format::OutputFormat::Html => match &font_store {
             Some(store) => rustyfi_html::render_html_reflow_ttf_with(
                 doc.reflow_source.as_deref(),
                 &doc.geometry,

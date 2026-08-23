@@ -1,13 +1,18 @@
-//! `--format html-reflow` end-to-end, driven through the *built*
-//! `rustyfi` binary ("CLI"), mirroring `tests/format_html.rs`'s
-//! process-spawn harness style for the faithful `--format html`.
+//! `--format html` — the reflowable, semantic backend — end-to-end, driven
+//! through the *built* `rustyfi` binary ("CLI"), mirroring
+//! `tests/format_html.rs`'s process-spawn harness style for the faithful
+//! `--format html-fixed`.
 //!
 //! Also the additivity guard (design doc §8): the SAME fixture compiled with
-//! `--format html` (faithful) and the default `--format pdf` must still
-//! behave exactly as `tests/format_html.rs`/`tests/e2e.rs` already expect —
-//! `html-reflow` is reached only through a brand-new match arm
-//! (`main.rs`'s `format::OutputFormat::HtmlReflow`), so it cannot have
-//! touched either of those paths' own code.
+//! `--format html-fixed` and the default `--format pdf` must still behave
+//! exactly as `tests/format_html.rs`/`tests/e2e.rs` already expect — the
+//! reflow backend is reached only through its own match arm (`main.rs`'s
+//! `format::OutputFormat::Html`), so it cannot have touched either of those
+//! paths' own code.
+//!
+//! `--format html-reflow`, the name this backend had while `html` meant the
+//! faithful one, is still accepted as an alias; both spellings appear below
+//! deliberately.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -118,10 +123,7 @@ fn compile_v01(fixture: &Path, work: &Path, fmt: &str, out_ext: &str) -> PathBuf
         .args(["--lang", "0.1"])
         .output()
         .expect("spawn rustyfi");
-    assert_ok(
-        &result,
-        &format!("compile --format {fmt} --lang 0.1"),
-    );
+    assert_ok(&result, &format!("compile --format {fmt} --lang 0.1"));
     out
 }
 
@@ -147,18 +149,43 @@ fn rendered_text(html: &str) -> String {
     out
 }
 
-/// `--format html-reflow` writes real flowing `<p>` paragraphs (one per
-/// `+p`), in reading order, with their text HTML-escaped-but-intact — and,
-/// the defining difference from the faithful `--format html` twin, NO
-/// absolute positioning anywhere in the document's own stylesheet/inline
-/// styles.
-#[test]
-fn format_html_reflow_writes_flowing_paragraphs_in_reading_order() {
-    let work = tmpdir("basic");
-    let out = compile(&phase2_fixture(), &work, "html-reflow", "html");
+/// The defining difference from the faithful twin: nothing in the reflowed
+/// document is positioned. `top:`/`left:` may appear only as the tail of a
+/// flow-safe longhand — `margin-top`, `border-left`, `padding-left` — never
+/// as the bare positioned property.
+fn assert_no_positioned_offsets(html: &str) {
+    assert!(
+        !html.contains("position:absolute") && !html.contains("position: absolute"),
+        "reflow output must never use position:absolute:\n{html}"
+    );
+    for prop in ["top:", "left:"] {
+        for (idx, _) in html.match_indices(prop) {
+            let before = &html[..idx];
+            assert!(
+                ["margin-", "border-", "padding-", "-"]
+                    .iter()
+                    .any(|p| before.ends_with(p)),
+                "found a bare `{prop}` CSS declaration at byte {idx}:\n{html}"
+            );
+        }
+    }
+}
 
-    let html =
-        std::fs::read_to_string(&out).expect("--format html-reflow must write the output file");
+/// `--format html` writes real flowing `<p>` paragraphs (one per `+p`), in
+/// reading order, with their text HTML-escaped-but-intact — and, the
+/// defining difference from the faithful `--format html-fixed` twin, NO
+/// absolute positioning anywhere in the document's own stylesheet/inline
+/// styles, and no page divs at all.
+#[test]
+fn format_html_writes_flowing_paragraphs_in_reading_order() {
+    let work = tmpdir("basic");
+    let out = compile(&phase2_fixture(), &work, "html", "html");
+
+    let html = std::fs::read_to_string(&out).expect("--format html must write the output file");
+    assert!(
+        !html.contains("class=\"page\""),
+        "the reflowed document must have no pages at all:\n{html}"
+    );
     assert!(
         html.starts_with("<!doctype html>"),
         "missing doctype:\n{html}"
@@ -224,16 +251,7 @@ fn format_html_reflow_writes_flowing_paragraphs_in_reading_order() {
         !html.contains("position:absolute") && !html.contains("position: absolute"),
         "html-reflow output must never use position:absolute:\n{html}"
     );
-    assert!(
-        !html.contains("left:"),
-        "html-reflow output must never use `left:`:\n{html}"
-    );
-    for (idx, _) in html.match_indices("top:") {
-        assert!(
-            html[..idx].ends_with("margin-") || html[..idx].ends_with("border-"),
-            "found a bare `top:` CSS declaration at byte {idx}:\n{html}"
-        );
-    }
+    assert_no_positioned_offsets(&html);
 
     std::fs::remove_dir_all(&work).ok();
 }
@@ -246,7 +264,7 @@ fn format_html_reflow_writes_flowing_paragraphs_in_reading_order() {
 #[test]
 fn format_html_faithful_mode_is_unaffected_by_the_new_reflow_format() {
     let work = tmpdir("faithful");
-    let out = compile(&phase2_fixture(), &work, "html", "html");
+    let out = compile(&phase2_fixture(), &work, "html-fixed", "html");
 
     let html = std::fs::read_to_string(&out).expect("--format html must write the output file");
     assert!(
@@ -384,14 +402,7 @@ fn format_html_reflow_renders_nested_lists_and_emphasis_for_itemize() {
 
     // Still no absolute positioning anywhere, same invariant as the basic
     // reflow test.
-    assert!(
-        !html.contains("position:absolute") && !html.contains("position: absolute"),
-        "html-reflow output must never use position:absolute:\n{html}"
-    );
-    assert!(
-        !html.contains("left:"),
-        "html-reflow output must never use `left:`:\n{html}"
-    );
+    assert_no_positioned_offsets(&html);
 
     std::fs::remove_dir_all(&work).ok();
 }
@@ -431,7 +442,7 @@ fn itemize_fixture_still_produces_a_valid_pdf() {
 #[test]
 fn itemize_fixture_faithful_html_is_still_absolutely_positioned() {
     let work = tmpdir("itemize-faithful");
-    let out = compile_v01(&itemize_fixture(), &work, "html", "html");
+    let out = compile_v01(&itemize_fixture(), &work, "html-fixed", "html");
 
     let html = std::fs::read_to_string(&out).expect("--format html must write the output file");
     assert!(
@@ -462,6 +473,46 @@ fn itemize_fixture_faithful_html_is_still_absolutely_positioned() {
             "missing expected fixture text {text:?}:\n{html}"
         );
     }
+
+    std::fs::remove_dir_all(&work).ok();
+}
+
+/// `--format html-reflow` is the name the reflowable backend had while
+/// `html` meant the faithful one. It still parses, as an alias, so the
+/// rename breaks no existing script — and it must select the SAME backend,
+/// not merely be accepted.
+#[test]
+fn html_reflow_is_still_accepted_as_an_alias_of_html() {
+    let work = tmpdir("alias");
+    let via_alias =
+        std::fs::read_to_string(compile(&phase2_fixture(), &work, "html-reflow", "html"))
+            .expect("--format html-reflow must still write the output file");
+    assert!(
+        via_alias.contains("<p class=\"para\"") && !via_alias.contains("class=\"page\""),
+        "the alias must select the REFLOW backend:\n{via_alias}"
+    );
+
+    std::fs::remove_dir_all(&work).ok();
+}
+
+/// An unknown format names the two real spellings, so a mistyped flag says
+/// what to type instead.
+#[test]
+fn an_unknown_format_is_rejected_by_name() {
+    let work = tmpdir("badfmt");
+    let result = Command::new(bin())
+        .arg(phase2_fixture())
+        .args(["-o".as_ref(), work.join("out.html").as_os_str()])
+        .args(["--lib-root".as_ref(), repo_lib_root().as_os_str()])
+        .args(["--format", "htlm"])
+        .output()
+        .expect("spawn rustyfi");
+    assert!(!result.status.success(), "a bogus --format must fail");
+    let msg = String::from_utf8_lossy(&result.stderr);
+    assert!(
+        msg.contains("html") && msg.contains("html-fixed"),
+        "the rejection should name the available formats:\n{msg}"
+    );
 
     std::fs::remove_dir_all(&work).ok();
 }

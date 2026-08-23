@@ -1,6 +1,12 @@
-//! `--format html` end-to-end, driven through the *built* `rustyfi` binary
-//! ("Slice-1 e2e"), mirroring `tests/cache.rs`'s process-spawn harness
-//! style.
+//! `--format html-fixed` end-to-end, driven through the *built* `rustyfi`
+//! binary ("Slice-1 e2e"), mirroring `tests/cache.rs`'s process-spawn
+//! harness style.
+//!
+//! `html-fixed` is the LAYOUT-FAITHFUL backend — one absolutely-positioned
+//! `div` per page, exactly the placed boxes the PDF writer consumes. It held
+//! the plain `html` name until the reflowable backend took it over; see
+//! `format::OutputFormat` for why, and `format_html_reflow.rs` for what
+//! `--format html` means now.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -47,12 +53,12 @@ fn assert_ok(out: &Output, ctx: &str) {
     );
 }
 
-/// `--format html` writes an `.html` file (the default `-o` extension
+/// `--format html-fixed` writes an `.html` file (the default `-o` extension
 /// derived from the format, `main.rs`'s `cmd_compile`) whose page div and a
 /// known word span are present — the CLI-level twin of
 /// `crates/rustyfi-pdf/tests/html.rs`'s unit-level assertions.
 #[test]
-fn format_html_writes_a_page_div_and_a_word_span() {
+fn format_html_fixed_writes_a_page_div_and_a_word_span() {
     let work = tmpdir("basic");
     let out = work.join("out.html");
 
@@ -61,12 +67,13 @@ fn format_html_writes_a_page_div_and_a_word_span() {
         .args(["-o".as_ref(), out.as_os_str()])
         .args(["--lib-root".as_ref(), repo_lib_root().as_os_str()])
         .args(["--cache-dir".as_ref(), work.join("cache").as_os_str()])
-        .args(["--format", "html"])
+        .args(["--format", "html-fixed"])
         .output()
         .expect("spawn rustyfi");
-    assert_ok(&result, "compile --format html");
+    assert_ok(&result, "compile --format html-fixed");
 
-    let html = std::fs::read_to_string(&out).expect("--format html must write the output file");
+    let html =
+        std::fs::read_to_string(&out).expect("--format html-fixed must write the output file");
     assert!(
         html.starts_with("<!doctype html>"),
         "missing doctype:\n{html}"

@@ -541,10 +541,16 @@ fn a_stacked_math_line_above_the_anchor_keeps_its_vertical_offset() {
 // ============================================================================
 
 /// A `FontMetrics` stub that covers ASCII *and* the Italic remap block, but
-/// nothing else — the shape a real math font has. `latinmodern-math.otf`, this
-/// port's own default math font, covers U+1D44E.. (italic) and has no `cmap`
-/// entry at all for U+1D4B6.. (script) or the Greek runs; the bundled text
-/// faces cover neither.
+/// nothing else — a deliberately narrow stand-in for the uneven coverage real
+/// faces have. Measured off the bundled `cmap`s, the real shape is:
+/// `latinmodern-math.otf` covers every assigned codepoint of the block EXCEPT
+/// the two script LOWERCASE runs (U+1D4B6..=U+1D4CF, U+1D4EA..=U+1D503, plus
+/// the Letterlike `ℯ ℊ ℴ` filling their holes) and the two bold digammas —
+/// its Greek, Fraktur, Double-struck and script-CAPITAL runs are complete.
+/// The bundled TEXT faces (Junicode, IPAex) cover none of the block at all,
+/// which is the configuration that matters: a document with an uploaded text
+/// font and no math font gets `.notdef` for every Mathematical Alphanumeric,
+/// including every `\pi` in `math.satyh`.
 struct ItalicOnly;
 
 impl FontMetrics for ItalicOnly {
@@ -577,8 +583,9 @@ impl FontMetrics for ItalicOnly {
 /// the page showed a gap.
 ///
 /// U+1D4C1 MATHEMATICAL SCRIPT SMALL L is the real case (`manual/logo.md`
-/// records the same codepoints "coming out EMPTY from `lmmath`"); it must
-/// degrade to `l`.
+/// records the same codepoints "coming out EMPTY from `lmmath`", and the
+/// `cmap` confirms it: the script lowercase run is the one run of the block
+/// `latinmodern-math.otf` genuinely lacks); it must degrade to `l`.
 #[test]
 fn an_uncoverable_variant_char_degrades_to_its_base_letter() {
     let src = with_ctx(
@@ -696,4 +703,83 @@ fn an_undrawable_base_letter_leaves_the_source_char_alone() {
         glyphs[0].text, "\u{1D4C1}",
         "with no drawable substitute the original codepoint is kept"
     );
+}
+
+/// The case every stub above is blind to, because they all answer the same
+/// for every `FontKey`: the math font and the text font DISAGREE about the
+/// codepoint. `math_char_available` ORs the two probes, and
+/// `math_glyph_font` picks whichever one covers it — so a codepoint only ONE
+/// of them has must be left exactly alone in both arrangements. A guard
+/// written against `ctx.math_font` alone (the obvious way to write it) would
+/// substitute in the first arrangement and silently restyle a glyph that
+/// renders perfectly well today.
+///
+/// `default_math_font` is what `get-initial-context` consults to split the
+/// two keys apart, so the stub answers `FontKey(1)` there and keys `advance`
+/// on the font.
+#[test]
+fn a_char_only_the_text_font_covers_is_not_degraded() {
+    /// `FontKey(1)` (math) has ASCII only; `FontKey(0)` (text) additionally
+    /// has U+1D4C1 — the arrangement a document reaches by keeping a
+    /// text-only math face and uploading a text face that happens to be rich.
+    struct TextFontHasIt;
+    impl FontMetrics for TextFontHasIt {
+        fn advance(&self, f: FontKey, c: char, size: Length) -> Option<Length> {
+            let covered = c.is_ascii() || (f == FontKey(0) && c == '\u{1D4C1}');
+            covered.then(|| size * 0.5)
+        }
+        fn ascender(&self, _f: FontKey, size: Length) -> Length {
+            size * 0.75
+        }
+        fn descender(&self, _f: FontKey, size: Length) -> Length {
+            size * 0.25
+        }
+        fn default_math_font(&self) -> Option<FontKey> {
+            Some(FontKey(1))
+        }
+    }
+    /// The mirror: the MATH font has it, the text font does not.
+    struct MathFontHasIt;
+    impl FontMetrics for MathFontHasIt {
+        fn advance(&self, f: FontKey, c: char, size: Length) -> Option<Length> {
+            let covered = c.is_ascii() || (f == FontKey(1) && c == '\u{1D4C1}');
+            covered.then(|| size * 0.5)
+        }
+        fn ascender(&self, _f: FontKey, size: Length) -> Length {
+            size * 0.75
+        }
+        fn descender(&self, _f: FontKey, size: Length) -> Length {
+            size * 0.25
+        }
+        fn default_math_font(&self) -> Option<FontKey> {
+            Some(FontKey(1))
+        }
+    }
+
+    let src = with_ctx(
+        "let s = string-unexplode [0x1D4C1] in\n\
+         let scr = math-variant-char MathOrd (|\n\
+           italic = s; bold-italic = s; roman = s; bold-roman = s;\n\
+           script = s; bold-script = s; fraktur = s; bold-fraktur = s;\n\
+           double-struck = s;\n\
+         |) in\n\
+         embed-math ctx scr",
+    );
+    let (_, glyphs) = math_box(run_with(&src, &TextFontHasIt).expect("should evaluate"));
+    assert_eq!(
+        glyphs[0].text, "\u{1D4C1}",
+        "only the TEXT font covers it, but it still renders — must not degrade"
+    );
+    assert_eq!(
+        glyphs[0].info.font,
+        FontKey(0),
+        "and it must be drawn in the font that actually has it"
+    );
+
+    let (_, glyphs) = math_box(run_with(&src, &MathFontHasIt).expect("should evaluate"));
+    assert_eq!(
+        glyphs[0].text, "\u{1D4C1}",
+        "only the MATH font covers it — must not degrade either"
+    );
+    assert_eq!(glyphs[0].info.font, FontKey(1));
 }

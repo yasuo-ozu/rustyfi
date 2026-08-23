@@ -6,11 +6,11 @@
 //! # What is implemented
 //!
 //! `initialize`, `initialized`, `shutdown`, `exit`,
-//! `textDocument/didOpen` / `didChange` / `didClose`, and
-//! `textDocument/publishDiagnostics`. The `initialize` reply advertises
-//! exactly that and nothing more — an over-claimed capability costs the user
-//! a hang or an empty popup on every keystroke, so the reply lists only what
-//! is actually wired up.
+//! `textDocument/didOpen` / `didChange` / `didClose`,
+//! `textDocument/publishDiagnostics` and `textDocument/documentSymbol`. The
+//! `initialize` reply advertises exactly that and nothing more — an
+//! over-claimed capability costs the user a hang or an empty popup on every
+//! keystroke, so the reply lists only what is actually wired up.
 //!
 //! Document sync is **full**, not incremental. Incremental sync would mean
 //! reimplementing UTF-16-range splicing over the buffer, and the whole
@@ -18,12 +18,13 @@
 //! mode), so the only thing incremental sync could save is the bytes on the
 //! wire. Full sync is the honest choice here and is advertised as such.
 
+use std::collections::HashMap;
 use std::io::{self, BufRead, Write};
 
 use serde_json::{json, Value};
 
 use crate::jsonrpc::{self, code, Incoming};
-use crate::RustyfiVersion;
+use crate::{RustyfiVersion, Symbol};
 
 /// How the server was started.
 #[derive(Debug, Default, Clone, Copy)]
@@ -98,17 +99,24 @@ type RequestError = (i64, String);
 
 /// Everything the server remembers between messages.
 ///
-/// Notably NOT the open buffers. A full-sync server is handed the complete
-/// text with every `didOpen`/`didChange`, and the analysis is a pure function
-/// of that text, so a document store would be write-only state — and
-/// write-only state in a server is where staleness bugs come from. The
-/// document URI is likewise never parsed or resolved to a path; nothing here
-/// touches the filesystem, so it is only ever an opaque key to publish
-/// back against.
+/// Including the open buffers, which a diagnostics-only server did not need:
+/// diagnostics are *pushed* from the text a notification carries, but a
+/// `textDocument/documentSymbol` **request** carries only a URI, so the text
+/// has to have been kept. The alternative — reading the URI back off disk —
+/// would answer about the saved file rather than the buffer being edited, and
+/// would put filesystem access in a server that otherwise has none.
+///
+/// The store is keyed by the URI as an opaque string; it is still never
+/// parsed or resolved to a path. Entries live from `didOpen` to `didClose`,
+/// which is exactly the window the specification says a server may be asked
+/// about a document in.
 struct State {
     opts: Options,
     initialized: bool,
     shutdown_requested: bool,
+    /// Open buffers, by URI. Replaced wholesale on every `didChange` (sync is
+    /// Full), so it cannot go stale against what the client has.
+    docs: HashMap<String, String>,
 }
 
 impl State {
@@ -117,6 +125,7 @@ impl State {
             opts,
             initialized: false,
             shutdown_requested: false,
+            docs: HashMap::new(),
         }
     }
 
@@ -142,6 +151,7 @@ impl State {
                 self.shutdown_requested = true;
                 Ok(Value::Null)
             }
+            "textDocument/documentSymbol" => Ok(self.document_symbols(&params)),
             _ => Err((code::METHOD_NOT_FOUND, format!("{method} is not supported"))),
         }
     }
@@ -164,8 +174,12 @@ impl State {
             // `textDocument` object, `didChange` in `contentChanges` — and
             // are otherwise the same notification.
             "textDocument/didOpen" => {
-                let text = params.get("textDocument").and_then(|d| str_field(d, "text"));
-                self.publish(&params, text)
+                let text = params
+                    .get("textDocument")
+                    .and_then(|d| str_field(d, "text"))
+                    .map(str::to_string);
+                self.remember(&params, text.as_deref());
+                self.publish(&params, text.as_deref())
             }
             // `full_replacement` yields `None` for a *ranged* change under a
             // Full-sync agreement: the client is not honouring the advertised
@@ -174,13 +188,15 @@ impl State {
             // diagnostics on screen — stale, but never pointing at text that
             // is not there.
             "textDocument/didChange" => {
-                let text = full_replacement(&params);
-                self.publish(&params, text)
+                let text = full_replacement(&params).map(str::to_string);
+                self.remember(&params, text.as_deref());
+                self.publish(&params, text.as_deref())
             }
             "textDocument/didClose" => {
                 let Some(uri) = params.get("textDocument").and_then(|d| str_field(d, "uri")) else {
                     return Vec::new();
                 };
+                self.docs.remove(uri);
                 // An empty list is how a server retracts diagnostics; without
                 // it the editor keeps showing them for a file that is gone.
                 vec![jsonrpc::notification(
@@ -211,6 +227,49 @@ impl State {
             return Vec::new();
         };
         vec![self.diagnostics_for(uri, text, doc.get("version"))]
+    }
+
+    /// Store (or replace) the text of the document `params` names.
+    ///
+    /// A `didChange` this server cannot apply — a *ranged* change under a
+    /// Full-sync agreement — arrives here as `None`, and then the previous
+    /// text is **dropped** rather than kept. Keeping it would leave a
+    /// `documentSymbol` answering about text the client has already edited
+    /// past, and a stale outline is harder to notice than a missing one.
+    fn remember(&mut self, params: &Value, text: Option<&str>) {
+        let Some(uri) = params.get("textDocument").and_then(|d| str_field(d, "uri")) else {
+            return;
+        };
+        match text {
+            Some(text) => {
+                self.docs.insert(uri.to_string(), text.to_string());
+            }
+            None => {
+                self.docs.remove(uri);
+            }
+        }
+    }
+
+    /// `textDocument/documentSymbol`: the outline of one open buffer.
+    ///
+    /// A URI this server has never been given is answered with an empty list
+    /// rather than an error. The specification lets a server return `null`,
+    /// but an editor showing "request failed" in its outline pane for a file
+    /// it simply has not opened yet is noise; an empty outline says the same
+    /// thing quietly.
+    fn document_symbols(&self, params: &Value) -> Value {
+        let text = params
+            .get("textDocument")
+            .and_then(|d| str_field(d, "uri"))
+            .and_then(|uri| self.docs.get(uri));
+        let Some(text) = text else {
+            return Value::Array(Vec::new());
+        };
+        let symbols = match self.opts.lang {
+            Some(lang) => crate::document_symbols(text, lang),
+            None => crate::document_symbols_auto(text),
+        };
+        Value::Array(symbols.iter().map(symbol_json).collect())
     }
 
     /// `initializationOptions.lang`, if the client sent one and the command
@@ -265,6 +324,39 @@ impl State {
     }
 }
 
+/// One [`Symbol`] as LSP's `DocumentSymbol`, children and all.
+///
+/// `detail` and `children` are omitted when they are empty — both are
+/// optional in the protocol, and a thousand `"children": []` members is a
+/// measurable fraction of the payload for a library with a big signature.
+fn symbol_json(s: &Symbol) -> Value {
+    let mut out = json!({
+        "name": s.name,
+        "kind": s.kind.code(),
+        "range": {
+            "start": { "line": s.range.start.line, "character": s.range.start.character },
+            "end": { "line": s.range.end.line, "character": s.range.end.character },
+        },
+        "selectionRange": {
+            "start": {
+                "line": s.selection_range.start.line,
+                "character": s.selection_range.start.character,
+            },
+            "end": {
+                "line": s.selection_range.end.line,
+                "character": s.selection_range.end.character,
+            },
+        },
+    });
+    if let Some(detail) = &s.detail {
+        out["detail"] = Value::String(detail.clone());
+    }
+    if !s.children.is_empty() {
+        out["children"] = Value::Array(s.children.iter().map(symbol_json).collect());
+    }
+    out
+}
+
 /// The `initialize` result.
 fn server_capabilities() -> Value {
     json!({
@@ -274,6 +366,7 @@ fn server_capabilities() -> Value {
                 // 1 = Full. See the module comment for why not Incremental.
                 "change": 1,
             },
+            "documentSymbolProvider": true,
             // The protocol's default, stated explicitly because it is the
             // one thing about this server most likely to be got wrong by
             // whoever touches `line_index` next: every `character` below is

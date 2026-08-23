@@ -200,12 +200,30 @@ What survives as structure:
 
 - **headings**, from `register-outline` paired with the destination frame the
   doc class wraps each title in — a structural match on the destination name,
-  never a guess from font size — plus a `<nav>` table of contents linking to
-  them;
+  never a guess from font size. They get real `id=` anchors, but no table of
+  contents is generated: a document that wants one typesets it, and a second
+  generated copy above the title duplicated it in every real manual;
 - **lists** as `<ul>`/`<ol>`/`<li>`, **emphasis** as `<em>`/`<strong>`, where
   the list/emphasis commands opt in by emitting the inert `list-mark` /
-  `inline-mark` boxes (the bundled 0.1 `itemize`, `std-ja` and `v01-mini` do);
-- **tables** as real `<table>`/`<tr>`/`<td>`;
+  `inline-mark` boxes (the bundled 0.1 `itemize`, `std-ja` and `v01-mini` do).
+  A list package that does not — the corpus `enumitem` — still indents, because
+  the indentation a `block-frame-breakable` folds into its lines' offsets is
+  recovered as a `margin-left`;
+- **tables** as real `<table>`/`<tr>`/`<td>`, with **the rules the document
+  actually drew**: which grid lines exist is read off the table's own rule
+  graphics, so `easytable`'s three-rule booktabs look stays three rules
+  instead of becoming a full grid;
+- **framed blocks** keep their own decoration — a `stdjabook` title box, a
+  `+code` panel — because the deco callback the PDF path already runs is
+  recorded box-local and replayed as a `background` (a flat panel) or a
+  stretched `<svg>` (anything else). A frame whose deco draws nothing, which
+  is most of them, still draws nothing;
+- **code blocks** as code: a fixed-pitch face reaches the browser as a
+  monospace stack, and its line breaks survive as `<br>` rather than
+  collapsing to spaces. The face is the only signal that separates a `+code`
+  block from a wrapped paragraph — both are consecutive lines in the box
+  stream, because `code.satyh` calls `line-break` once per source line
+  exactly as the line breaker does per wrapped line;
 - **links** as `<a href>`, to a URL or to an in-document anchor;
 - **footnotes** as an `<aside>` immediately below the paragraph that
   references them — there is no page foot to collect them at, and putting

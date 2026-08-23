@@ -359,28 +359,25 @@ fn pathological_prefix() -> String {
     src[..14_223.min(src.len())].to_string()
 }
 
-/// A truncated 0.1 library — an ordinary mid-typing state — must not hang.
+/// A truncated 0.1 library — an ordinary mid-typing state — is analysed
+/// promptly, and gets a real answer.
 ///
-/// The 0.1 grammar backtracks exponentially on some incomplete inputs. On
-/// prefixes of this very file, a release build measured 13 ms at 13,484
-/// bytes, 69 ms at 13,669, 334 ms at 13,853 and **11.5 seconds** at 14,223,
-/// still climbing by roughly x5 per 200 bytes typed. An editor runs this on
-/// nearly every keystroke, so `budget::BUDGET` caps it — and the whole
-/// 247-file corpus analyses in 0.56 s with a 30 ms worst case, so nothing real
-/// comes anywhere near the cap.
+/// **This prefix used to be the crate's worst case, and it no longer is.** The
+/// 0.1 grammar backtracked exponentially here: a release build measured 13 ms
+/// at 13,484 bytes, 69 ms at 13,669, 334 ms at 13,853 and **11.5 seconds** at
+/// 14,223, climbing by roughly ×5 per 200 bytes typed, and `budget::BUDGET`
+/// existed to cut it off — so this test asserted only that the give-up
+/// arrived. The cause turned out to be the same unfactored `let` prefix that
+/// made the *compiler* hang (`rustyfi_syntax::cst::PatNonVarErased`); with the
+/// two `let` alternatives disjoint, this prefix costs a few thousand serves
+/// and the parse reaches a genuine verdict.
 ///
-/// The assertion is on the *message*, not on a stopwatch, so it means the
-/// same thing on every machine: reaching the cap is reported as reaching the
-/// cap, rather than as a confident claim about the token the parse stopped
-/// at. The loose time bound underneath is the backstop for a regression that
-/// removes the budget outright — without it, that failure mode is a CI
-/// timeout with no explanation attached.
-///
-/// If the vendored `std-ja.satyh` is ever edited and this prefix stops
-/// exhausting, the fix is to re-find one that does (sweep
-/// `(200..src.len()).step_by(197)` and time each), not to delete the test.
+/// So the assertion is now the stronger one: a real diagnostic, not a
+/// give-up. The loose time bound underneath stays as the backstop for a
+/// regression that reintroduces a blow-up — without it, that failure mode is
+/// a CI timeout with no explanation attached.
 #[test]
-fn a_pathological_prefix_gives_up_instead_of_hanging() {
+fn a_truncated_library_is_analysed_promptly_and_gets_a_real_verdict() {
     let src = pathological_prefix();
     let started = std::time::Instant::now();
     let diags = analyze(&src, RustyfiVersion::V0_1);
@@ -388,13 +385,14 @@ fn a_pathological_prefix_gives_up_instead_of_hanging() {
 
     let d = only(&diags);
     assert!(
-        d.message.contains("gave up"),
-        "expected the budget to stop the parse, got: {}",
+        !d.message.contains("gave up"),
+        "the parse should reach a verdict, not exhaust the budget: {}",
         d.message
     );
+    assert!(!d.message.is_empty(), "an empty diagnostic says nothing");
     assert!(
         elapsed < std::time::Duration::from_secs(30),
-        "the budget did not bound the parse: {elapsed:?}"
+        "the parse is pathological again: {elapsed:?}"
     );
 }
 

@@ -395,17 +395,19 @@ fn tempdir(name: &str) -> PathBuf {
 // Staying responsive
 // ---------------------------------------------------------------------------
 
-/// The parse budget still governs this tier, because this tier never runs
-/// without a clean parse.
+/// A buffer that does not parse stops at this tier, because this tier never
+/// runs without a clean parse.
 ///
-/// `budget.rs` caps a parse because the 0.1 grammar backtracks exponentially
-/// on some half-typed buffers — 11.5 s on the 14 KB prefix below. The loader
-/// applies the *compiler's* budget, which is deliberately larger, so the
-/// property that matters is that a buffer which exhausts this crate's budget
-/// is reported and *stops*, rather than being handed to `rustyfi_loader::load`
-/// to be parsed a second time on the compiler's terms.
+/// The 14 KB prefix below used to take 11.5 s to parse and be cut off by
+/// `budget.rs`; the assertion was that the give-up arrived and that nothing
+/// had been loaded. The blow-up is gone — it was the unfactored `let` prefix
+/// `rustyfi_syntax::cst::PatNonVarErased` now left-factors — so the prefix
+/// simply fails to parse, fast. What is being pinned is unchanged and is the
+/// part that matters: a buffer that fails to parse is reported *here* and
+/// stops, rather than being handed to `rustyfi_loader::load` to be parsed a
+/// second time on the compiler's (larger) budget.
 #[test]
-fn a_pathological_buffer_never_reaches_the_loader() {
+fn a_buffer_that_does_not_parse_never_reaches_the_loader() {
     let path = repo().join("lib-rustyfi/dist-v01/packages/std-ja.satyh");
     let src = std::fs::read_to_string(&path).expect("the vendored 0.1 corpus must be present");
     let src = &src[..14_223.min(src.len())];
@@ -416,7 +418,10 @@ fn a_pathological_buffer_never_reaches_the_loader() {
 
     assert_eq!(a.depth, Depth::Parse);
     assert_eq!(a.files, 0, "nothing may have been loaded");
-    assert!(only(&a.diagnostics).message.contains("gave up"), "{a:?}");
+    assert!(
+        !only(&a.diagnostics).message.is_empty(),
+        "the truncated buffer must still be diagnosed: {a:?}"
+    );
     assert!(elapsed < std::time::Duration::from_secs(60), "{elapsed:?}");
 }
 

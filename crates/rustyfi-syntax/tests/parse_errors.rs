@@ -16,9 +16,13 @@
 //!    finished after 100 s at 35.
 //!
 //! The first two are fixed by `AtomStream`'s high-water mark and
-//! `parse_error::locate`; the third by `stream::Budget`. The last group in
-//! this file is the budget's premise — that no honest file comes near it —
-//! measured against the bundled corpus rather than asserted.
+//! `parse_error::locate`. The third was *bounded* by `stream::Budget`, which
+//! turned the hang into a "gave up" — and then **removed** by left-factoring
+//! the grammar that caused it (`cst::PatNonVarErased`): the two `let` forms no
+//! longer overlap, so the same chain is linear and reaches a real verdict at
+//! any depth. The budget stays, as the bound on the *next* such prefix; the
+//! last group in this file is its premise — that no honest file comes near it
+//! — measured against the bundled corpus rather than asserted.
 
 use std::path::{Path, PathBuf};
 
@@ -167,7 +171,9 @@ fn no_message_contains_a_debug_dump() {
         // dump if only the mark had been added.
         err_of_v1(RUNS_OFF_THE_END_V1).to_string(),
     ];
-    messages.push(gave_up_on(&let_chain(30)).to_string());
+    // A genuine give-up, which no grammar reaches on its own any more — see
+    // `an_exhausted_budget_is_still_reported_as_a_give_up`.
+    messages.push(parse_with_budget(&let_chain(30), Budget::exactly(50)).to_string());
     for m in &messages {
         assert!(!m.contains("Loc {"), "Debug dump in: {m}");
         assert!(!m.contains("Span {"), "Debug dump in: {m}");
@@ -283,48 +289,127 @@ fn parse_within(src: &str, secs: u64) -> ParseFileError {
     }
 }
 
-fn gave_up_on(src: &str) -> ParseFileError {
-    parse_within(src, 120)
+/// Parse `src` under an explicit budget, so the give-up machinery can be
+/// exercised without a grammar that actually blows up.
+fn parse_with_budget(src: &str, budget: Budget) -> ParseFileError {
+    use syan::parse::Parse;
+    let atoms = rustyfi_syntax::lex(src).expect("lexes");
+    let mut stream = AtomStream::with_budget(atoms, budget);
+    let err = <rustyfi_syntax::cst::File as Parse<_>>::parse(&mut stream)
+        .err()
+        .expect("must not parse");
+    rustyfi_syntax::parse_error::locate(src, &stream, &err)
+}
+
+/// Serves spent on `src` under `v` with no cap, whether or not it parses.
+///
+/// [`cost`] declines to answer for a source that does not parse, because it
+/// measures what an *honest* parse costs; this one measures what a *failing*
+/// one costs, which is the direction backtracking blows up in.
+fn serves(src: &str, v: rustyfi_syntax::RustyfiVersion) -> u64 {
+    use syan::parse::Parse;
+    let atoms = rustyfi_syntax::lex_with_version(src, v).expect("lexes");
+    let mut stream = AtomStream::with_budget(atoms, Budget::unlimited());
+    let _ = match v {
+        rustyfi_syntax::RustyfiVersion::V0_1 => {
+            <rustyfi_syntax::FileV1 as Parse<_>>::parse(&mut stream).is_ok()
+        }
+        _ => <rustyfi_syntax::cst::File as Parse<_>>::parse(&mut stream).is_ok(),
+    };
+    stream.served()
 }
 
 /// The 35-line chain from the bug report: before the budget it was still
-/// running after 100 seconds.
+/// running after 100 seconds, and after the budget it terminated but only as
+/// a give-up. Now it terminates *and* says what is wrong.
 ///
-/// The time bound here is deliberately loose — the assertion that carries the
-/// meaning is on the *kind*, which is machine-independent, and the clock is
-/// only the backstop for a regression that removes the budget outright.
+/// The time bound is deliberately loose — the assertions that carry the
+/// meaning are on the kind and the line, which are machine-independent, and
+/// the clock is only the backstop for a regression that reintroduces the
+/// blow-up.
 #[test]
-fn a_long_let_chain_terminates_and_says_it_gave_up() {
+fn a_long_let_chain_terminates_with_a_real_verdict() {
     let e = parse_within(&let_chain(34), 120);
-    assert_eq!(e.kind, ParseFailureKind::GaveUp, "{e}");
-    // Reported as a give-up, never as a claim about the source.
-    assert!(e.render().starts_with("gave up:"), "{e}");
-    assert!(!e.render().contains("parse error"), "{e}");
-    // And the position is not a consolation prize: the mark reaches the
-    // offending `let bad = in` before the backtracking explodes, so a give-up
-    // still names the line the author has to look at. Only the *reason* is
-    // less specific than a verdict's.
+    assert_eq!(e.kind, ParseFailureKind::Syntax, "{e}");
+    assert!(e.render().starts_with("parse error:"), "{e}");
+    assert!(!e.render().contains("gave up"), "{e}");
+    // `let bad = in` is on the line after the 34 bindings and the header.
     assert_eq!(e.span.start.line, 36, "{e}");
 }
 
-/// Chains up to the depth the budget can afford reach a real verdict, and the
-/// verdict is right. Without this the budget could "fix" the hang by giving up
-/// on everything.
+/// The depth at which the old grammar gave up (16 `let`s cost 9.7M serves
+/// against a floor of 8M) is nowhere near a limit any more.
 ///
-/// The ceiling is `Budget::FLOOR`, and the cost is ×2 per `let` (see
-/// `Budget`), so 15 is a little under it and 16 a little over: this is the
-/// deepest chain the floor buys, not a round number. If the floor changes,
-/// this list moves with it — but so does nothing else, which is the point of
-/// the exponential.
+/// 400 is not a round number chosen for comfort: it is past the point where
+/// the old ×2-per-`let` cost exceeded the atom count of the observable
+/// universe, so a regression cannot creep back in under this test.
 #[test]
-fn short_let_chains_still_get_a_real_verdict() {
-    for n in [3, 9, 15] {
+fn a_very_long_broken_let_chain_still_gets_a_real_verdict() {
+    let e = parse_within(&let_chain(400), 60);
+    assert_eq!(e.kind, ParseFailureKind::Syntax, "{e}");
+    assert_eq!(e.span.start.line, 402, "{e}");
+}
+
+/// Chains reach a real verdict at every depth, and the verdict is right.
+///
+/// The list used to stop at 15 because that was the deepest chain
+/// `Budget::FLOOR` bought; the cost is linear now, so depth is not a
+/// parameter of correctness and the list says so.
+#[test]
+fn let_chains_of_every_depth_get_a_real_verdict() {
+    for n in [3, 9, 15, 16, 40, 120] {
         let src = let_chain(n);
         let e = parse_within(&src, 60);
         assert_eq!(e.kind, ParseFailureKind::Syntax, "chain of {n}: {e}");
         // `let bad = in` is on the line after the `n` bindings and the header.
         assert_eq!(e.span.start.line, n as u32 + 2, "chain of {n}: {e}");
     }
+}
+
+/// **The fix, stated as arithmetic**: one more enclosing `let` costs a
+/// *constant* number of extra serves, not a constant *factor*.
+///
+/// This is the assertion the whole left-factoring exists to satisfy, and it
+/// is written as an exact equality rather than a threshold because the
+/// sequence really is an arithmetic progression — 411, 750, 1,089, 1,428,
+/// 1,767 at n = 3, 6, 9, 12, 15, i.e. +113 per `let`. Before the fix the same
+/// five numbers were 1,115, 9,459, 76,211, 610,227, 4,882,355: ×2.000 each
+/// time, and 17.9M for the 129-line document that prompted this.
+///
+/// A threshold would let the cost creep back up by a factor and still pass;
+/// an equality cannot.
+#[test]
+fn one_more_let_costs_a_constant_number_of_serves() {
+    for v in [
+        rustyfi_syntax::RustyfiVersion::V0_0,
+        rustyfi_syntax::RustyfiVersion::V0_1,
+    ] {
+        let at = |n: usize| serves(&let_chain(n), v);
+        let step = at(6) - at(3);
+        assert!(step > 0, "{v:?}: a longer chain must cost something");
+        for (a, b) in [(3, 6), (6, 9), (9, 12), (12, 15), (15, 18), (18, 21)] {
+            assert_eq!(
+                at(b) - at(a),
+                step,
+                "{v:?}: cost from {a} to {b} `let`s is not the constant {step}"
+            );
+        }
+    }
+}
+
+/// The budget still works — it is the bound on the *next* superlinear prefix,
+/// not a fossil of this one.
+///
+/// Deleting it would leave nothing between a future grammar bug and a hang,
+/// so this pins the mechanism (an exhausted stream is reported as a give-up,
+/// never as a claim about the source) independently of any grammar that can
+/// currently reach it.
+#[test]
+fn an_exhausted_budget_is_still_reported_as_a_give_up() {
+    let e = parse_with_budget(&let_chain(34), Budget::exactly(50));
+    assert_eq!(e.kind, ParseFailureKind::GaveUp, "{e}");
+    assert!(e.render().starts_with("gave up:"), "{e}");
+    assert!(!e.render().contains("parse error"), "{e}");
 }
 
 /// A give-up is not a claim that the file is broken, so it must not be
@@ -338,6 +423,137 @@ fn a_long_valid_let_chain_parses() {
     }
     src.push_str("document (| title = `t` |) '<\n  +p { x }\n>\n");
     assert!(rustyfi_syntax::parse_file(&src).is_ok());
+}
+
+// ---------------------------------------------------------------------------
+// The `let`/`let pattern` overlap — the shape that made the blow-up
+// ---------------------------------------------------------------------------
+
+/// The document that prompted this: a `let … in` chain whose author dropped
+/// one `in`, so a top-level `let` appears where the chain's body should
+/// continue.
+///
+/// Named after the *shape* rather than the file, because the file is
+/// incidental — what matters is that the failure is deep inside a nesting of
+/// `let`s, which is where the two overlapping alternatives compounded. An
+/// excerpt of the port's own `manual/logo.saty`, sixteen `let`s deep, cost
+/// 17.9M serves and was reported as "gave up: this file needs more
+/// backtracking than the parser allows"; the missing `in` is now named
+/// outright.
+#[test]
+fn a_let_chain_with_one_missing_in_names_the_offending_let() {
+    let mut src = String::from("@require: stdjabook\n");
+    for i in 0..20 {
+        src.push_str(&format!("let v{i} = {i} in\n"));
+    }
+    // No `in`: in expression position (which is where the first `in` above
+    // put us) this cannot begin anything.
+    src.push_str("let oops = 1\n");
+    src.push_str("let fine = 2 in\n");
+    src.push_str("document (| title = `t` |) '<\n  +p { x }\n>\n");
+
+    let e = parse_within(&src, 60);
+    assert_eq!(e.kind, ParseFailureKind::Syntax, "{e}");
+    // The `let` on the line AFTER the unfinished one: that is the token that
+    // appears where `in` was wanted, and the one the author has to look at.
+    assert_eq!(e.span.start.line, 23, "{e}");
+    assert!(e.render().contains("let"), "{e}");
+}
+
+/// Every destructuring target still takes the `LetPatternIn` route, and every
+/// bare-variable one still takes `LetIn` — the left factor removed an
+/// alternative that could never succeed, and nothing else.
+///
+/// The wildcard and the constructor forms are the ones a careless guard would
+/// break: neither is a `BindName`, so neither has an ordinary-`let` fallback
+/// to be shadowed by.
+#[test]
+fn every_let_target_shape_still_parses() {
+    let body = "document (| title = `t` |) '<\n  +p { x }\n>\n";
+    for target in [
+        "x",                // the bare variable — `LetIn`
+        "_",                // wildcard
+        "(a, b)",           // tuple destructuring
+        "(a)",              // parenthesised variable: not a BARE variable
+        "[a; b]",           // list pattern
+        "Some a",           // applied constructor
+        "None",             // nullary constructor
+        "a :: rest",        // cons
+        "x as y",           // as-binding on a variable
+        "(a, b) as p",      // as-binding on a tuple
+    ] {
+        // Expression position.
+        let src = format!("@require: stdjabook\nlet {target} = e in\n{body}");
+        assert!(
+            rustyfi_syntax::parse_file(&src).is_ok(),
+            "expression-level `let {target} = …` no longer parses"
+        );
+        // Top-level (`TopBinding::Let`/`LetPattern`) position.
+        let src = format!("@require: stdjabook\nlet {target} = e\nin\n{body}");
+        assert!(
+            rustyfi_syntax::parse_file(&src).is_ok(),
+            "top-level `let {target} = …` no longer parses"
+        );
+    }
+}
+
+/// The same, through the 0.1 grammar, whose `LetPatternIn` carries upstream's
+/// own `pattern_non_var` restriction.
+#[test]
+fn every_let_target_shape_still_parses_in_0_1() {
+    for target in ["x", "_", "(a, b)", "Some a", "None", "a :: rest", "x as y"] {
+        let src = format!("module M = struct\n  val f = let {target} = e in 0\nend\n");
+        assert!(
+            rustyfi_syntax::parse_file_v1(&src).is_ok(),
+            "0.1 `let {target} = …` no longer parses"
+        );
+    }
+}
+
+/// A bare-variable `let` still parses as `LetIn`, and a destructuring one
+/// still parses as `LetPatternIn` — at both levels.
+///
+/// The left factor is a *parse* change, so the tree it produces has to be the
+/// one the elaborator already saw: asserting only that both still parse would
+/// miss a guard that quietly rerouted every `let` through one variant.
+#[test]
+fn each_let_target_still_picks_the_variant_it_used_to() {
+    use rustyfi_syntax::cst;
+    let doc = "document (| title = `t` |) '<\n  +p { x }\n>\n";
+
+    // Top level: `TopBinding::Let` vs `TopBinding::LetPattern`.
+    let f = rustyfi_syntax::parse_file(&format!(
+        "@require: stdjabook\nlet x = 1\nlet (a, b) = p\nin\n{doc}"
+    ))
+    .expect("parses");
+    assert!(
+        matches!(f.prelude[0], cst::TopBinding::Let(_)),
+        "a bare-variable top-level `let` did not parse as `Let`"
+    );
+    assert!(
+        matches!(f.prelude[1], cst::TopBinding::LetPattern { .. }),
+        "a destructuring top-level `let` did not parse as `LetPattern`"
+    );
+
+    // Expression level: `Expr::LetIn` vs `Expr::LetPatternIn`. The leading
+    // `let outer` is what puts the rest into expression position at all — the
+    // prelude would otherwise absorb these as top-level bindings.
+    for (target, is_pattern) in [("x", false), ("(a, b)", true)] {
+        let f = rustyfi_syntax::parse_file(&format!(
+            "@require: stdjabook\nlet outer = 0 in\nlet {target} = 1 in\n{doc}"
+        ))
+        .expect("parses");
+        let body = f.body.expect("has a body");
+        let got_pattern = matches!(body, cst::ast::Expr::LetPatternIn { .. });
+        assert!(
+            matches!(body, cst::ast::Expr::LetIn { .. }) || got_pattern,
+            "`let {target} = …` parsed as neither `let` variant"
+        );
+        assert_eq!(
+            got_pattern, is_pattern,
+            "`let {target} = …` picked the wrong `let` variant"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

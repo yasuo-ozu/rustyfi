@@ -16,8 +16,8 @@
 //! arrives after the user has typed three more lines. So it spends a flat
 //! [`BUDGET`] and gives up sooner.
 //!
-//! Measured, release build, on prefixes of the bundled 0.1
-//! `dist-v01/packages/std-ja.satyh` — the shape that forced this:
+//! The shape that forced this was measured, release build, on prefixes of the
+//! bundled 0.1 `dist-v01/packages/std-ja.satyh`:
 //!
 //! | prefix | 0.1 grammar | 0.0.6 grammar |
 //! |---|---|---|
@@ -26,7 +26,15 @@
 //! | 13,853 B | 334 ms | 0.2 ms |
 //! | 14,223 B | **11.5 s** | 0.3 ms |
 //!
-//! Roughly ×5 per 200 bytes typed, and it does not stop there.
+//! Roughly ×5 per 200 bytes typed. **That table is history**: the cause was
+//! the unfactored `let` prefix that also hung the compiler, and with
+//! [`rustyfi_syntax::cst::PatNonVarErased`] making the two `let` alternatives
+//! disjoint, a sweep of all 110 such prefixes now finishes in 122 ms with a
+//! worst case of 42,356 serves — under a fiftieth of [`BUDGET`].
+//!
+//! The policy stays, because it is a promise about latency and not a patch for
+//! one grammar bug: an editor is asked again on every keystroke, about a file
+//! that is *expected* to be incomplete, and it must be able to stop.
 
 use rustyfi_syntax::stream::{AtomStream, Budget};
 use rustyfi_syntax::token::Atom;

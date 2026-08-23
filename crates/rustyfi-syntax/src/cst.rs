@@ -233,11 +233,14 @@ pub enum TopBinding {
     /// reason it sits after `Expr::LetIn` — **must stay after `Let`**: an
     /// ordinary `let x = e` parses through `Let` first (its `name: BindName`
     /// only accepts a bare var/op), leaving this to match only a non-variable
-    /// pattern target. No `argpart` (curried params after the pattern), as
-    /// upstream's `nxnonrecdec` never uses one here.
+    /// pattern target. That "leaving" is enforced by the target's own type
+    /// ([`PatNonVarErased`]) rather than left to variant order, so the two
+    /// alternatives are disjoint and neither re-parses the other's `value`.
+    /// No `argpart` (curried params after the pattern), as upstream's
+    /// `nxnonrecdec` never uses one here.
     LetPattern {
         let_kw: KwLet,
-        pat: PatErased,
+        pat: PatNonVarErased,
         eq: DefEqTok,
         value: ast::Expr,
     },
@@ -613,6 +616,101 @@ erased_leaf! {
     AppArgErased => ast::AppArg;
 }
 
+impl ast::Pattern {
+    /// Whether this pattern is a lone variable — `x`, and nothing else: no
+    /// `:: rest`, no `as y`.
+    ///
+    /// This is the predicate that separates a DESTRUCTURING `let` from an
+    /// ordinary one, and it exists because the two must not overlap; see
+    /// [`PatNonVarErased`] for what the overlap used to cost.
+    pub fn is_bare_var(&self) -> bool {
+        self.as_clause.is_none()
+            && self.head.tail.is_empty()
+            && matches!(self.head.head, ast::PatBot::Var(_))
+    }
+}
+
+/// An [`ast::Pattern`] that is **not** a bare variable — the target of a
+/// destructuring `let`, and the left factor that keeps the two `let` forms
+/// from backtracking over each other.
+///
+/// # Why this type exists
+///
+/// `let ‹target› = ‹value› in ‹body›` is written twice in this grammar, as
+/// [`ast::Expr::LetIn`] (target a [`BindName`], plus curried `params`) and
+/// [`ast::Expr::LetPatternIn`] (target a full pattern) — and at the top level
+/// again as [`TopBinding::Let`]/[`TopBinding::LetPattern`]. Upstream writes
+/// each of those ONCE: 0.0.6's `nxnonrecdec` is the single production
+/// `patbot nonrecdecargpart DEFEQ nxlet` (`parser.mly:652-656`), and 0.1
+/// spells the second target `pattern_non_var` (`parser_v1.mly:796`) — a
+/// nonterminal that, as its name says, cannot derive a bare variable.
+///
+/// Splitting one production into two whose common prefix is not factored is
+/// what made this port's worst backtracking blow-up. `LetIn` is tried first
+/// and subsumes every bare-variable target, so `LetPatternIn` could never
+/// *succeed* on one — but it was still *tried*, and trying it re-parses
+/// `value` and `body` in full. With `body` being the rest of the file, each
+/// enclosing `let` doubled the cost of every failure below it: measured over
+/// a chain of `let vN = N in` ending in a broken `let`, 1,115 serves at 3,
+/// 9,459 at 6, 76,211 at 9, 610,227 at 12, 4,882,355 at 15 — ×2.000 per
+/// `let`, in both grammars. A 129-line document with a missing `in`
+/// sixteen `let`s deep cost 17.9M serves and was reported as
+/// [`crate::ParseFailureKind::GaveUp`] rather than as the one-word syntax
+/// error it is.
+///
+/// Requiring a non-variable target here restores upstream's disjointness: the
+/// two alternatives now differ at the token *after* `let`, so the choice is
+/// made on the target alone and no tail is ever parsed twice. The same chain
+/// costs 374, 677, 980, 1,283, 1,586 — linear, ~17 serves per atom.
+///
+/// # Why it loses nothing
+///
+/// `LetPatternIn` on a bare-variable target is unreachable-on-success today,
+/// and provably so rather than by inspection: if it matched, the token after
+/// the name is `=`, so `LetIn`'s greedy `params` is empty (no [`ast::Param`]
+/// begins with `=`), its optional `ascription`/`leading_bar` are absent, and
+/// its `value`/`in_kw`/`body` are the identical grammar — so `LetIn`, tried
+/// first, has already succeeded and this variant is never reached. Only
+/// `PatBot::Var` is excluded: `_`, `Ctor`, `(a, b)`, `[…]`, `x :: xs` and
+/// `x as y` all still take this route, because [`BindName`] accepts none of
+/// them.
+#[implement(newer_type_std::ops::Deref)]
+#[derive(Debug, Clone, PartialEq)]
+pub struct PatNonVarErased(pub Box<ast::Pattern>);
+
+impl Parse<crate::token::Atom> for PatNonVarErased {
+    type Error = syan::error::ParseError<crate::span::Span>;
+
+    fn parse_stream<S: syan::parse::ParseStream<Atom = crate::token::Atom>>(
+        stream: &mut S,
+    ) -> Result<Self, Self::Error> {
+        let value = <ast::Pattern as Parse<_>>::parse_stream(stream)?;
+        if value.is_bare_var() {
+            // `is_bare_var` guarantees this shape; the match is how the
+            // offending token's span is named, not a second test.
+            let ast::PatBot::Var(v) = &value.head.head else {
+                unreachable!("a bare-variable pattern has a variable head")
+            };
+            // The enclosing variant's checkpoint rolls the consumed pattern
+            // back, exactly as it would for any other field that rejects.
+            return Err(syan::error::ParseError::expected(
+                v.span,
+                "a destructuring pattern (a plain `let x = …` is not one)",
+            ));
+        }
+        Ok(PatNonVarErased(Box::new(value)))
+    }
+}
+
+impl Unparse<crate::token::Atom> for PatNonVarErased {
+    fn unparse<S: syan::parse::unparse::Emitter<crate::token::Atom>>(
+        &self,
+        sink: &mut S,
+    ) -> Result<(), S::Error> {
+        self.0.unparse(sink)
+    }
+}
+
 /// The recursive expression/pattern/type/text grammar. Program expressions
 /// embed inline/block text (`{…}`, `'<…>`), text embeds commands, and
 /// command arguments re-enter program expressions.
@@ -693,31 +791,26 @@ pub mod ast {
         /// shape, which upstream keys off the bound target being a plain
         /// variable — the two shapes never overlap in real source (a
         /// destructuring target is never itself applied to further curried
-        /// parameters). **Must stay after `LetIn`**: a bare-variable target
-        /// like `let x = 1 in x` parses as this variant too (`PatBot::Var`),
-        /// so `LetIn` (tried first, and not needing any pattern-lowering)
-        /// wins for every ordinary `let`, leaving this variant to match only
-        /// when the target isn't a plain variable. Only the no-`argpart`
-        /// (no additional curried parameters after the pattern) form is
-        /// implemented — `nxnonrecdec`'s `argpart` has no use in the
-        /// bundled stdlib.
+        /// parameters). Only the no-`argpart` (no additional curried
+        /// parameters after the pattern) form is implemented —
+        /// `nxnonrecdec`'s `argpart` has no use in the bundled stdlib.
         ///
-        /// **This variant is the port's worst backtracking blow-up**, and the
-        /// paragraph above is why: on a bare-variable target it is shadowed by
-        /// [`Expr::LetIn`] but still *tried*, so when a body deep inside a
-        /// `let … in` chain fails, every enclosing `let` re-derives the whole
-        /// failure a second time. Measured on a chain ending in a `let` with
-        /// no right-hand side, the parse costs exactly ×2 per `let` — 610,227
-        /// stream reads at twelve, 4,882,355 at fifteen, and it does not stop;
-        /// removing this variant collapses the same chain to 17 reads per
-        /// token. The repair is to factor the two variants into one with a
-        /// target that is a name-and-params *or* a pattern, which is a CST
-        /// change that reaches `elaborate.rs`. Until then
-        /// [`crate::stream::Budget`] bounds it, and a chain deeper than about
-        /// fifteen is reported as a give-up rather than diagnosed.
+        /// **This variant used to be the port's worst backtracking blow-up.**
+        /// A bare-variable target like `let x = 1 in x` derives through here
+        /// too (`PatBot::Var`), and while [`Expr::LetIn`] is tried first and
+        /// always wins, this one was still *tried* — re-deriving `value` and
+        /// `body` in full, so a failure deep inside a `let … in` chain cost
+        /// ×2 per enclosing `let`. The target is now
+        /// [`super::PatNonVarErased`], which refuses a bare variable outright
+        /// (upstream 0.1 spells the same restriction `pattern_non_var`,
+        /// `parser_v1.mly:796`); the two alternatives are disjoint at the
+        /// token after `let` and the chain is linear. That type's doc comment
+        /// carries the measurements and the proof that nothing is lost.
+        /// **Must still stay after `LetIn`** — variant order no longer
+        /// decides correctness, but it keeps the common case first.
         LetPatternIn {
             kw: KwLet,
-            pat: super::PatErased,
+            pat: super::PatNonVarErased,
             eq: DefEqTok,
             value: Box<Expr>,
             in_kw: KwIn,

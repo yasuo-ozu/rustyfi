@@ -851,7 +851,23 @@ fn prim_string_scan(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value,
     let pattern = as_str(args.pop().unwrap())?;
     let re = crate::regexp::compile(&pattern);
     let chars: Vec<char> = input.chars().collect();
-    Ok(match re.match_at(&chars, 0) {
+    let outcome = re.match_at(&chars, 0).map_err(|_| {
+        // The budget is gone: the pattern is backtracking superlinearly. Say
+        // so rather than answering "no match", which would silently produce
+        // wrong output — see `regexp::GaveUp`.
+        EvalError {
+            span: None,
+            msg: format!(
+            "string-scan: the pattern `{pattern}` needs more backtracking than \
+             the matcher allows against this input ({} characters). A quantifier \
+             inside a quantified group — `\\(a*\\)*` and the like — costs a factor \
+             per nesting level; rewriting it so the inner and outer repetitions \
+             cannot match the same text will make it fast.",
+                chars.len(),
+            ),
+        }
+    })?;
+    Ok(match outcome {
         Some(end) => {
             let matched: String = chars[..end].iter().collect();
             let rest: String = chars[end..].iter().collect();

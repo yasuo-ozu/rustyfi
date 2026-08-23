@@ -37,7 +37,7 @@
 //! (line anchors), `\|`, `\(`…`\)`, `\b`, `\1`–`\9` backreferences, and `\`
 //! quoting of any special character.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -297,25 +297,95 @@ impl Regexp {
 
     /// Anchored match at `start`, returning the end offset (in `char`s) of the
     /// match — `Str.string_match` plus `Str.match_end`.
-    pub fn match_at(&self, input: &[char], start: usize) -> Option<usize> {
+    ///
+    /// A pattern that exhausts its step budget reports `Err(GaveUp)` rather
+    /// than "no match": see [`Budget`]. Silently answering `None` would turn a
+    /// hang into wrong output, which is worse.
+    pub fn match_at(&self, input: &[char], start: usize) -> Result<Option<usize>, GaveUp> {
+        let m = Matcher::with_budget(input);
         let mut caps: Vec<Option<(usize, usize)>> = vec![None; self.groups + 1];
-        let m = Matcher { input };
-        m.node(&self.root, start, &mut caps, &|end, _| Some(end))
+        let out = m.node(&self.root, start, &mut caps, &|end, _| Some(end));
+        if m.gave_up.get() {
+            Err(GaveUp)
+        } else {
+            Ok(out)
+        }
     }
 
     /// Leftmost match at or after `start` — `Str.search_forward`.
-    pub fn search_from(&self, input: &[char], start: usize) -> Option<(usize, usize)> {
+    pub fn search_from(&self, input: &[char], start: usize) -> Result<Option<(usize, usize)>, GaveUp> {
         for i in start..=input.len() {
-            if let Some(end) = self.match_at(input, i) {
-                return Some((i, end));
+            if let Some(end) = self.match_at(input, i)? {
+                return Ok(Some((i, end)));
             }
         }
-        None
+        Ok(None)
     }
 }
 
+/// The matcher ran out of steps or nesting depth before deciding.
+///
+/// This is the regexp twin of `rustyfi-syntax`'s `ParseFailureKind::GaveUp`,
+/// and it exists for the same reason: the matcher is an ordered-choice
+/// backtracker, so a pattern with a quantified group inside a quantifier
+/// (`\(a*\)*b`) costs a factor per nesting level. Unbounded, thirty
+/// characters of input take two minutes and thirty-two never finish — in a
+/// browser tab that is a freeze with no cancel, because the playground
+/// compiles on the main thread.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GaveUp;
+
 struct Matcher<'i> {
     input: &'i [char],
+    /// Steps remaining. Decremented once per [`Matcher::node`] entry, which
+    /// is every alternative the backtracker tries.
+    fuel: Cell<u64>,
+    /// Remaining nesting depth for [`Matcher::repeat`]'s general branch, the
+    /// one that recurses once per repetition. Separate from `fuel` because
+    /// the failure it prevents is different: not slowness but a stack
+    /// overflow, which aborts the process natively and traps unrecoverably
+    /// in wasm, where the shadow stack is fixed at link time.
+    depth: Cell<u32>,
+    gave_up: Cell<bool>,
+}
+
+/// How much work a single [`Regexp::match_at`] may do.
+///
+/// Modelled on `rustyfi-syntax`'s `Budget`, and seeded the same way — a floor
+/// so a short input still gets a real answer, plus an allowance per input
+/// character so a long one is not cut off for being long. Only SUPERLINEAR
+/// backtracking can outrun it.
+struct Budget;
+
+impl Budget {
+    /// Steps per input character. A linear scan costs a handful per
+    /// character, so this is orders of magnitude of headroom.
+    const PER_CHAR: u64 = 4_096;
+
+    /// Floor, so a pattern against a short input is not capped below what a
+    /// long one gets. At roughly 10M steps a second this is about a tenth of
+    /// a second of trying.
+    const FLOOR: u64 = 1_000_000;
+
+    fn for_input(len: usize) -> u64 {
+        ((len as u64).saturating_mul(Self::PER_CHAR)).max(Self::FLOOR)
+    }
+
+    /// Nesting cap for the recursive repeat branch. Each level costs roughly
+    /// 650 bytes of stack, so this is about 3 MB at the limit — comfortably
+    /// inside the wasm build's 32 MB shadow stack and the CLI's 256 MB
+    /// worker, while still allowing far more nesting than any real pattern.
+    const MAX_DEPTH: u32 = 5_000;
+}
+
+/// Returns a [`Matcher::depth`] unit on scope exit, so a backtracked branch
+/// does not permanently consume nesting the way a bare decrement would.
+struct DepthGuard<'a, 'i>(&'a Matcher<'i>);
+
+impl Drop for DepthGuard<'_, '_> {
+    fn drop(&mut self) {
+        self.0.depth.set(self.0.depth.get() + 1);
+    }
 }
 
 /// The continuation a node hands its remainder to. Returning `Some(end)`
@@ -328,6 +398,34 @@ fn is_word_char(c: char) -> bool {
 }
 
 impl<'i> Matcher<'i> {
+    fn with_budget(input: &'i [char]) -> Self {
+        Matcher {
+            input,
+            fuel: Cell::new(Budget::for_input(input.len())),
+            depth: Cell::new(Budget::MAX_DEPTH),
+            gave_up: Cell::new(false),
+        }
+    }
+
+    /// Spend one step. `false` means the budget is gone and the caller must
+    /// unwind — every `node` alternative checks this, so exhaustion stops the
+    /// whole match rather than being mistaken for a failed alternative.
+    fn spend(&self) -> bool {
+        if self.gave_up.get() {
+            return false;
+        }
+        match self.fuel.get() {
+            0 => {
+                self.gave_up.set(true);
+                false
+            }
+            f => {
+                self.fuel.set(f - 1);
+                true
+            }
+        }
+    }
+
     fn single(&self, node: &Node, pos: usize) -> Option<usize> {
         let c = *self.input.get(pos)?;
         let ok = match node {
@@ -356,6 +454,9 @@ impl<'i> Matcher<'i> {
         caps: &mut Vec<Option<(usize, usize)>>,
         k: Cont<'_>,
     ) -> Option<usize> {
+        if !self.spend() {
+            return None;
+        }
         match node {
             Node::Empty => k(pos, caps),
             Node::Char(_) | Node::Any | Node::Class { .. } => match self.single(node, pos) {
@@ -363,7 +464,7 @@ impl<'i> Matcher<'i> {
                 None => None,
             },
             Node::Bol => {
-                if pos == 0 || self.input[pos - 1] == '\n' {
+                if pos == 0 || self.input.get(pos - 1) == Some(&'\n') {
                     k(pos, caps)
                 } else {
                     None
@@ -377,7 +478,7 @@ impl<'i> Matcher<'i> {
                 }
             }
             Node::WordBoundary => {
-                let before = pos > 0 && is_word_char(self.input[pos - 1]);
+                let before = pos > 0 && self.input.get(pos - 1).copied().is_some_and(is_word_char);
                 let after = pos < self.input.len() && is_word_char(self.input[pos]);
                 if before != after {
                     k(pos, caps)
@@ -503,11 +604,20 @@ impl<'i> Matcher<'i> {
             return None;
         }
 
-        // General case: `node` can consume a variable amount, so recurse.
+        // General case: `node` can consume a variable amount, so recurse —
+        // one frame per repetition, which is what the depth cap bounds.
         let more = |m: &Matcher<'i>, p: usize, caps: &mut Vec<Option<(usize, usize)>>| {
             if max == Some(0) {
                 return None;
             }
+            match m.depth.get() {
+                0 => {
+                    m.gave_up.set(true);
+                    return None;
+                }
+                d => m.depth.set(d - 1),
+            }
+            let _restore = DepthGuard(m);
             let next_min = min.saturating_sub(1);
             let next_max = max.map(|m| m - 1);
             m.node(node, p, caps, &|q, caps| {
@@ -542,7 +652,18 @@ thread_local! {
     /// patterns are re-parsed once per scanned character. Memoizing keeps that
     /// linear in the input rather than in input × pattern length.
     static CACHE: RefCell<HashMap<String, Rc<Regexp>>> = RefCell::new(HashMap::new());
+
+    /// Total pattern TEXT cached, in chars. The cap is on bytes rather than on
+    /// entry count because the entries are not uniform: a parsed pattern is
+    /// roughly thirty times its own text, so 4,096 twenty-thousand-character
+    /// patterns — cheap to generate from a document, `arabic i ^ body` will do
+    /// — reach 2.6 GB while never approaching an entry-count limit.
+    static CACHE_CHARS: Cell<usize> = const { Cell::new(0) };
 }
+
+/// Cached pattern text allowed before the table is dropped, in chars. The
+/// real corpus caches a few hundred characters in total.
+const CACHE_CHAR_LIMIT: usize = 4 * 1024 * 1024;
 
 /// Parse `pattern`, reusing a previously parsed copy when possible.
 pub fn compile(pattern: &str) -> Rc<Regexp> {
@@ -554,9 +675,13 @@ pub fn compile(pattern: &str) -> Rc<Regexp> {
         // The pattern set a document uses is small and fixed (one per
         // language rule), but cap the table anyway so a program generating
         // patterns cannot grow it without bound.
-        if c.len() > 4096 {
-            c.clear();
-        }
+        CACHE_CHARS.with(|n| {
+            if n.get() + pattern.chars().count() > CACHE_CHAR_LIMIT {
+                c.clear();
+                n.set(0);
+            }
+            n.set(n.get() + pattern.chars().count());
+        });
         let re = Rc::new(Regexp::parse(pattern));
         c.insert(pattern.to_string(), Rc::clone(&re));
         re
@@ -571,7 +696,15 @@ mod tests {
         let re = Regexp::parse(pat);
         let chars: Vec<char> = input.chars().collect();
         re.match_at(&chars, 0)
+            .expect("this pattern must not exhaust the budget")
             .map(|end| chars[..end].iter().collect())
+    }
+
+    /// `scan`, for a pattern that is EXPECTED to run out of budget.
+    fn scan_gives_up(pat: &str, input: &str) -> bool {
+        let re = Regexp::parse(pat);
+        let chars: Vec<char> = input.chars().collect();
+        re.match_at(&chars, 0).is_err()
     }
 
     #[test]
@@ -659,11 +792,48 @@ mod tests {
         assert_eq!(scan("[a-z]*", &long).map(|s| s.len()), Some(200_000));
     }
 
+    /// The case the test above does NOT cover, and which used to abort the
+    /// process: a repeated GROUP takes `repeat`'s recursive branch, one frame
+    /// per repetition. `[a-z]*` above is the single-character fast path — it
+    /// was never at risk, so it could not have caught this.
+    #[test]
+    fn a_repeated_group_over_a_long_input_gives_up_instead_of_overflowing() {
+        let long: String = std::iter::repeat('a').take(200_000).collect();
+        // Either it matches or it gives up; what it must not do is abort.
+        let re = Regexp::parse("\\(a\\)*");
+        let chars: Vec<char> = long.chars().collect();
+        let _ = re.match_at(&chars, 0);
+    }
+
+    /// Catastrophic backtracking is bounded. Unbounded, this took two minutes
+    /// at thirty characters and did not finish at thirty-two.
+    #[test]
+    fn a_quantified_group_inside_a_quantifier_gives_up_rather_than_hanging() {
+        let input: String = std::iter::repeat('a').take(64).collect::<String>() + "!";
+        assert!(
+            scan_gives_up("\\(a*\\)*b", &input),
+            "the exponential pattern should have exhausted its budget"
+        );
+        // And the budget must not fire on ordinary work: the same shape that
+        // CAN match still does, promptly.
+        assert_eq!(scan("\\(a*\\)*b", "aaab").as_deref(), Some("aaab"));
+    }
+
+    /// `match_at` is `pub` and takes an arbitrary `start`; `^` and `\b` used
+    /// to index `input[pos - 1]` unguarded and panic past the end.
+    #[test]
+    fn match_at_past_the_end_does_not_panic() {
+        let chars: Vec<char> = "abc".chars().collect();
+        for pat in ["^a", "\\ba", "a$"] {
+            let _ = Regexp::parse(pat).match_at(&chars, 4);
+        }
+    }
+
     #[test]
     fn search_forward_finds_leftmost() {
         let re = Regexp::parse("b+");
         let chars: Vec<char> = "aabbbc".chars().collect();
-        assert_eq!(re.search_from(&chars, 0), Some((2, 5)));
-        assert_eq!(re.search_from(&chars, 5), None);
+        assert_eq!(re.search_from(&chars, 0), Ok(Some((2, 5))));
+        assert_eq!(re.search_from(&chars, 5), Ok(None));
     }
 }

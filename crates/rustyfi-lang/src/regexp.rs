@@ -303,8 +303,8 @@ impl Regexp {
     /// hang into wrong output, which is worse.
     pub fn match_at(&self, input: &[char], start: usize) -> Result<Option<usize>, GaveUp> {
         let m = Matcher::with_budget(input);
-        let mut caps: Vec<Option<(usize, usize)>> = vec![None; self.groups + 1];
-        let out = m.node(&self.root, start, &mut caps, &|end, _| Some(end));
+        let mut caps = self.fresh_caps();
+        let out = self.attempt(&m, start, &mut caps);
         if m.gave_up.get() {
             Err(GaveUp)
         } else {
@@ -313,13 +313,43 @@ impl Regexp {
     }
 
     /// Leftmost match at or after `start` — `Str.search_forward`.
-    pub fn search_from(&self, input: &[char], start: usize) -> Result<Option<(usize, usize)>, GaveUp> {
+    pub fn search_from(
+        &self,
+        input: &[char],
+        start: usize,
+    ) -> Result<Option<(usize, usize)>, GaveUp> {
+        // ONE budget for the whole search, not one per start position. A fresh
+        // `Matcher` per position — which is what calling `match_at` in the
+        // loop built — makes the total `input.len() × budget`, i.e. the budget
+        // stops bounding anything as soon as the input is long, which is
+        // precisely when it needs to.
+        let m = Matcher::with_budget(input);
+        let mut caps = self.fresh_caps();
         for i in start..=input.len() {
-            if let Some(end) = self.match_at(input, i)? {
+            caps.iter_mut().for_each(|c| *c = None);
+            let hit = self.attempt(&m, i, &mut caps);
+            if m.gave_up.get() {
+                return Err(GaveUp);
+            }
+            if let Some(end) = hit {
                 return Ok(Some((i, end)));
             }
         }
         Ok(None)
+    }
+
+    fn fresh_caps(&self) -> Vec<Option<(usize, usize)>> {
+        vec![None; self.groups + 1]
+    }
+
+    /// One anchored attempt against an already-seeded budget.
+    fn attempt(
+        &self,
+        m: &Matcher<'_>,
+        start: usize,
+        caps: &mut Vec<Option<(usize, usize)>>,
+    ) -> Option<usize> {
+        m.node(&self.root, start, caps, &|end, _| Some(end))
     }
 }
 
@@ -842,5 +872,24 @@ mod tests {
         let chars: Vec<char> = "aabbbc".chars().collect();
         assert_eq!(re.search_from(&chars, 0), Ok(Some((2, 5))));
         assert_eq!(re.search_from(&chars, 5), Ok(None));
+    }
+
+    /// `search_from` tries every start position, so a per-position budget
+    /// would let the total reach `len × budget` — the bound would stop
+    /// bounding exactly when the input got long. One shared budget means a
+    /// pattern that is pathological at ONE position is refused for the whole
+    /// search rather than being paid for at every one of them.
+    #[test]
+    fn a_leftmost_search_shares_one_budget_across_start_positions() {
+        let input: String = "a".repeat(4_000);
+        let chars: Vec<char> = input.chars().collect();
+        let re = Regexp::parse("\\(a*\\)*b");
+        let t0 = std::time::Instant::now();
+        assert_eq!(re.search_from(&chars, 0), Err(GaveUp));
+        // Per-position budgets would multiply this by 4,000.
+        assert!(
+            t0.elapsed().as_secs() < 5,
+            "the search re-seeded its budget per start position"
+        );
     }
 }

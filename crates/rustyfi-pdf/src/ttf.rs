@@ -367,39 +367,25 @@ impl FontMetrics for TtfFontStore {
         Some(size * (kern.kern(idx)?.value as f64 / upem))
     }
 
-    /// Pick a vertically-grown MATH variant (`MathVariants`) of `c` per
-    /// `policy` and report its real per-glyph ink metrics at `size`.
-    /// Assembly-only constructions (`variants.len() == 0`, big enough
-    /// stretchy delimiters in some fonts) return `None` here — they are
-    /// `math_vertical_assembly`'s job.
-    /// `ssty` (Math Script Style), the GSUB feature a math font uses to swap
-    /// in purpose-drawn exponent/index forms — upstream's
-    /// `FontFormat.get_math_script_variant` (`fontFormat.ml:2216-2241`), which
-    /// resolves the feature once at `math_decoder` construction and then
-    /// folds its `single` and `alt` substitutions over one glyph.
+    /// `ssty` (Math Script Style): the GSUB feature a math font uses to swap in
+    /// purpose-drawn exponent/index forms — upstream's
+    /// `FontFormat.get_math_script_variant` (`fontFormat.ml:2216-2241`).
     ///
-    /// Two deliberate simplifications of that fold, neither reachable in the
-    /// math fonts this port ships or tests against:
+    /// Two divergences from upstream's fold, neither reachable in the math
+    /// fonts this port ships or tests against:
     ///
     ///   * upstream reaches `ssty` through a SCRIPT and its default langsys
-    ///     (`fontFormat.ml:2185-2194`), while this scans the feature LIST by
-    ///     tag. A font whose `ssty` differs per script would diverge; math
-    ///     fonts register one `ssty` under `math`/`DFLT` (Latin Modern Math,
-    ///     DejaVu Math TeX Gyre and Noto Sans Math all do);
-    ///   * an `Alternate` substitution takes the FIRST alternate, which is
-    ///     upstream's `gidorgto :: _` verbatim. OpenType would index it by
-    ///     script LEVEL (0 = first-level script, 1 = second); upstream does
-    ///     not, and neither does this — matching upstream is the point, and
-    ///     the port's own script-level scale is already flat (see
-    ///     `MathC::script_scale`).
+    ///     (`fontFormat.ml:2185-2194`); this scans the feature LIST by tag, so
+    ///     a font whose `ssty` differs per script would diverge;
+    ///   * an `Alternate` substitution takes the FIRST alternate — upstream's
+    ///     `gidorgto :: _` verbatim, where OpenType would index it by script
+    ///     LEVEL. Matching upstream is the point.
     ///
-    /// Ordering: upstream substitutes `ssty` BEFORE looking for a
-    /// `MathVariants` vertical variant (`fontInfo.ml:379-401`). This port
-    /// applies `ssty` in `push_char_glyph` only, so a BIG operator inside a
-    /// script keeps its unsubstituted vertical variant. `MathVariants`
-    /// constructions and `ssty` coverage are disjoint in practice — a
-    /// `summation` has vertical variants and no `ssty` entry, a `two` the
-    /// reverse — so the two orders agree on every glyph in the corpus.
+    /// Upstream substitutes `ssty` BEFORE looking for a `MathVariants` vertical
+    /// variant (`fontInfo.ml:379-401`); this port applies it in
+    /// `push_char_glyph` only, so a big operator inside a script keeps its
+    /// unsubstituted vertical variant. The two coverages are disjoint in the
+    /// fonts here, so the orders agree.
     fn math_script_variant(
         &self,
         font: FontKey,
@@ -467,6 +453,11 @@ impl FontMetrics for TtfFontStore {
         })
     }
 
+    /// Pick a vertically-grown MATH variant (`MathVariants`) of `c` per
+    /// `policy` and report its real per-glyph ink metrics at `size`.
+    /// Assembly-only constructions (`variants.len() == 0`, big enough
+    /// stretchy delimiters in some fonts) return `None` here — they are
+    /// `math_vertical_assembly`'s job.
     fn math_vertical_variant(
         &self,
         font: FontKey,

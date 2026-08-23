@@ -28,15 +28,10 @@ The reference PDFs are the fixed point the whole comparison rests on. Do not
 regenerate them to make a number go green.
 
 One project is vendored WITHOUT being registered in `DOCS`: `corpus/azmath/`.
-Both engines now build it — the `register-destination`-from-inside-an-
-`inline-graphics`-callback gap that used to make the port refuse it outright is
-closed (`probes/inline_graphics_dest.saty`, and
-`crates/rustyfi-lang/tests/inline_graphics_dest.rs` for the regression test) —
-but it still measures `page_gap` 1 and `char_match` 0.9569, outside where the
-seven registered docs sit, so gating it today would land a red CI rather than a
-measurement. `corpus/azmath/PROVENANCE` carries the whole account and the
-`DOCS` entry to paste in once that closes. It is staged rather than gated so
-nothing here goes red over it.
+Both engines build it, but no reference PDF is committed for it and its
+agreement is not yet inside the band the seven registered docs hold, so it is
+staged rather than gated. `corpus/azmath/PROVENANCE` has the details and the
+`DOCS` entry to paste in once that closes.
 
 ## The probes
 

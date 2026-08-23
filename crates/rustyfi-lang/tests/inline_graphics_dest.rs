@@ -1,20 +1,13 @@
 //! `register-destination` called from inside an `inline-graphics` callback.
 //!
-//! Upstream runs that callback DURING page breaking, with the box's true
-//! placed point, so a `register-destination` inside it is squarely inside
-//! `annotation.ml:15`'s window. This port runs it EAGERLY at construction
-//! time (`prim_inline_graphics`'s documented shortcut), where no page exists
-//! — so the same call used to hit the gate and abort the whole document.
-//! `azmath`'s `equation.satyh` anchors every `\label`ed equation exactly this
-//! way (`layout-tests/probes/inline_graphics_dest.saty` is the package-free
-//! reproduction), so this was the single thing keeping its manual from
-//! building at all.
-//!
-//! The fix RE-TIMES the call rather than relaxing the gate: the eager
-//! application records it, the box carries it as a
-//! `GraphicsElem::Destination` marker, and `fire_hooks` replays it once the
-//! box has a page and a placed point. These tests pin both halves and the
-//! join, plus the fact that the gate is untouched everywhere else.
+//! Upstream runs that callback DURING page breaking, so the call sits squarely
+//! inside `annotation.ml:15`'s window; this port runs it EAGERLY at
+//! construction time (`prim_inline_graphics`'s documented shortcut), where no
+//! page exists. The fix RE-TIMES the call rather than relaxing the gate: the
+//! eager application records it, the box carries a `GraphicsElem::Destination`
+//! marker, and `fire_hooks` replays it once the box has a page and a placed
+//! point. These tests pin both halves, the join, and the fact that the gate is
+//! untouched everywhere else.
 
 use rustyfi_backend::{
     FontKey, FontMetrics, GraphicsElem, HorzBox, Length, Page, PageGeometry, PlacedLine,
@@ -54,9 +47,9 @@ fn len(pt: f64) -> Ast {
     Ast::Length(Length::pt(pt))
 }
 
-/// `fun p -> register-destination <key> p before []` — azmath's
-/// `ib-annotation` shape reduced to its essentials: a callback whose ONLY
-/// effect is the registration and whose ink is empty.
+/// `fun p -> register-destination <key> p before []` — azmath's `ib-annotation`
+/// reduced to its essentials: the registration is the callback's only effect,
+/// and its ink is empty.
 fn anchor_callback(key: &str) -> Ast {
     Ast::Lambda(
         "p".to_string(),
@@ -139,9 +132,8 @@ fn marker_box(key: &str, pt: (f64, f64), origin_independent: bool) -> PureHorzBo
 // The primitive half: the eager call records instead of erroring.
 // ---------------------------------------------------------------------------
 
-/// THE regression. Before the fix this errored with "register-destination can
-/// only be called during page breaking", which is what azmath's manual and
-/// `layout-tests/probes/inline_graphics_dest.saty` both died on.
+/// THE regression: before the fix this errored with "register-destination can
+/// only be called during page breaking".
 #[test]
 fn register_destination_inside_an_inline_graphics_callback_does_not_error() {
     let mono = Mono;
@@ -172,9 +164,8 @@ fn register_destination_inside_an_inline_graphics_callback_does_not_error() {
     );
 }
 
-/// The probe run's copy of the registration is discarded, not committed
-/// twice: `prim_inline_graphics` applies the callback a second time at a
-/// far-off point to classify it.
+/// `prim_inline_graphics` applies the callback a second time at a far-off point
+/// to classify it; that run's copy of the registration must be discarded.
 #[test]
 fn the_origin_independence_probe_does_not_duplicate_the_registration() {
     let mono = Mono;
@@ -191,13 +182,10 @@ fn the_origin_independence_probe_does_not_duplicate_the_registration() {
 }
 
 /// An anchor-only callback draws NOTHING, so on ink alone the origin and probe
-/// runs look identical and the box would be classified page-absolute — which
-/// would then place every anchor at the callback's raw argument instead of
-/// where the box actually landed. The classifier compares the marker-bearing
-/// elements for exactly this reason.
-///
-/// Mutation check: drop the markers from either side of the
-/// `origin_independent` comparison in `prim_inline_graphics` and this fails.
+/// runs look identical, the box gets classified page-absolute, and every anchor
+/// lands at the callback's raw argument instead of where the box did. The
+/// classifier compares the marker-bearing elements for exactly this reason:
+/// drop the markers from either side of that comparison and this fails.
 #[test]
 fn an_anchor_only_callback_is_not_classified_page_absolute() {
     let mono = Mono;
@@ -271,8 +259,8 @@ fn a_page_absolute_boxs_marker_is_taken_as_already_final() {
     assert_eq!((d.x, d.y), (Length::pt(3.0), Length::pt(7.0)));
 }
 
-/// End to end across the two halves, which is what azmath actually needs: the
-/// value the primitive builds, placed and fired, yields the destination.
+/// End to end across the two halves: the value the primitive builds, placed and
+/// fired, yields the destination.
 #[test]
 fn an_evaluated_anchor_box_becomes_a_named_destination_once_placed() {
     let mono = Mono;
@@ -328,8 +316,7 @@ fn the_during_page_break_gate_still_refuses_a_bare_call() {
 
 /// Inside a page-break window the DIRECT path wins: a box built there is drawn
 /// straight into `page_graphics`, which `fire_hooks` never re-walks, so a
-/// marker minted for it would be silently dropped. `current_page` is `Some`,
-/// the registration is real and immediate, and the box carries no marker.
+/// marker minted for it would be silently dropped.
 #[test]
 fn a_callback_running_during_a_page_break_registers_directly() {
     let mono = Mono;
@@ -345,9 +332,8 @@ fn a_callback_running_during_a_page_break_registers_directly() {
         },
         other => panic!("expected inline-boxes, got {other:?}"),
     }
-    // Both the origin run and the probe run registered directly — the probe is
-    // pre-existing behaviour inside the window, and `write_named_dests` dedupes
-    // by name. What matters is that the registrations are real.
+    // Both the origin and probe runs register directly here; `write_named_dests`
+    // dedupes by name. What matters is that the registrations are real.
     assert!(!interp.destinations.is_empty());
     assert!(interp.destinations.iter().all(|d| d.page == 0));
 }
@@ -357,11 +343,10 @@ fn a_callback_running_during_a_page_break_registers_directly() {
 // ---------------------------------------------------------------------------
 
 /// A marker is an ordinary box-local coordinate and must move with the ink
-/// around it under `shift_graphics` — `math_boxes_of_inline_boxes` `dx`-shifts
-/// a harvested graphics box's elements through exactly this call. (`fire_hooks`
-/// has no `Math` arm today, so such a marker does not yet fire; see
-/// `GraphicsElem::Destination`'s doc comment. The arithmetic is pinned here so
-/// adding that arm is one arm and nothing else.)
+/// around it. `math_boxes_of_inline_boxes` `dx`-shifts a harvested graphics
+/// box's elements through exactly this call, and `fire_hooks` has no `Math` arm
+/// today (see `GraphicsElem::Destination`), so pinning the arithmetic here is
+/// what makes adding that arm one arm and nothing else.
 #[test]
 fn shift_graphics_moves_a_destination_marker_with_the_ink() {
     let m = GraphicsElem::Destination {

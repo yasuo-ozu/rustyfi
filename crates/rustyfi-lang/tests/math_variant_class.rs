@@ -467,14 +467,10 @@ fn math_box_full(v: Value) -> (Length, Vec<MathGlyph>, Vec<rustyfi_backend::Grap
 }
 
 /// azmath's `\overbrace`/`\underbrace` (`parens.satyh:533`/`:561`) stack the
-/// brace over the braced formula with `line-stack-bottom`/`-top` and hand
-/// the result BACK to math through `text-in-math`. That makes the
-/// `text-in-math` body a single `PureHorzBox::EmbeddedBlock`, and
-/// `math_boxes_of_inline_boxes` used to keep only its WIDTH — so every
-/// `\overbrace{…}` in the corpus rendered as a correctly-sized hole, brace
-/// and contents alike. This is the same nested-container walk bug as the
-/// `\underset`/`\overset` one the `EmbeddedText` arm's comment records, one
-/// container further in.
+/// brace over the braced formula with `line-stack-bottom`/`-top` and hand the
+/// result BACK to math through `text-in-math`, which makes the `text-in-math`
+/// body a single `PureHorzBox::EmbeddedBlock`. Keeping only its WIDTH renders
+/// every `\overbrace{…}` as a correctly-sized hole, brace and contents alike.
 #[test]
 fn text_in_math_descends_into_a_line_stacked_embedded_block() {
     let src = with_ctx(
@@ -500,8 +496,7 @@ fn text_in_math_descends_into_a_line_stacked_embedded_block() {
     assert!(width > Length::ZERO, "the box keeps its width");
 
     // `line-stack-bottom` anchors the LAST line, so the brace line above it
-    // sits at a POSITIVE `dy` — the stack's vertical offsets have to reach
-    // the glyphs, not just their horizontal ones.
+    // sits at a POSITIVE `dy`.
     let braced_line_dy = glyphs[0].dy;
     assert_eq!(
         braced_line_dy,
@@ -519,12 +514,10 @@ fn text_in_math_descends_into_a_line_stacked_embedded_block() {
     );
 }
 
-/// The same walk's vertical thread, on the GLYPH side: with the math line
-/// stacked above the anchored one, its glyphs have to come out above the
-/// math baseline too. Harvesting a nested `PureHorzBox::Math`'s glyphs
-/// without adding the stacked line's offset collapses every line onto one
-/// baseline — the brace overprinting the formula rather than sitting over
-/// it, which reads as a rendering artifact instead of the walk bug it is.
+/// The same walk's vertical thread, on the GLYPH side. Harvesting a nested
+/// `PureHorzBox::Math`'s glyphs without adding the stacked line's offset
+/// collapses every line onto one baseline — the brace overprinting the formula
+/// instead of sitting over it.
 #[test]
 fn a_stacked_math_line_above_the_anchor_keeps_its_vertical_offset() {
     let src = with_ctx(

@@ -5,17 +5,14 @@
 //! `FontFormat.get_math_script_variant` (`fontFormat.ml:2216-2241`) driven by
 //! `fontInfo.ml:379-383`'s `if is_in_base_level then gidraw else …`.
 //!
-//! Why this is a WIDTH test and not only a shape one: a `.st` glyph is not the
-//! base glyph scaled. In Latin Modern Math `two.st` advances 569/1000 em where
-//! plain `two` advances 500, so a port that ignores the feature sets every
-//! script digit ~14% narrow and the error compounds outwards through whatever
-//! encloses the script. Nothing here hardcodes 569 — every expectation is read
-//! back off the loaded face, so the tests hold for any math font with an
-//! `ssty` feature.
+//! A WIDTH test as much as a shape one, because a `.st` glyph is not the base
+//! glyph scaled — it has its own advance. Nothing here hardcodes one: every
+//! expectation is read back off the loaded face, so the tests hold for any math
+//! font with an `ssty` feature.
 //!
-//! Font discovery is copied from `math_vertical_variants.rs` (fontconfig,
-//! then common distro/nix paths, then a graceful skip), for the same reason:
-//! these need a real MATH/GSUB font and CI may not have one.
+//! Font discovery is copied from `math_vertical_variants.rs` (fontconfig, then
+//! common distro/nix paths, then a graceful skip), for the same reason: these
+//! need a real MATH/GSUB font and CI may not have one.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -80,9 +77,9 @@ fn find_noto_math() -> Option<PathBuf> {
 }
 
 /// The bundled Latin Modern Math if `download-fonts.sh` has been run, else
-/// whatever math face the host has — the e2e tests only need SOME face with
-/// an `ssty` feature, and unlike `math_vertical_variants.rs`'s CID
-/// assertions nothing here depends on the outline format.
+/// whatever math face the host has: these tests need only SOME face with an
+/// `ssty` feature, and unlike `math_vertical_variants.rs`'s CID assertions
+/// nothing here depends on the outline format.
 fn find_math_font() -> Option<PathBuf> {
     let bundled = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../lib-rustyfi/dist/fonts/latinmodern-math.otf");
@@ -109,15 +106,14 @@ macro_rules! need_font {
 }
 
 // ----------------------------------------------------------------------
-// An independent `ssty` reader, so the assertions do not derive their
-// expectations from the implementation under test.
+// An independent `ssty` reader.
 // ----------------------------------------------------------------------
 
-/// Walk GSUB for `ssty` and return the substitute glyph for `c`, reading the
-/// feature list, lookup list and coverage tables directly. Deliberately a
-/// SECOND implementation: `TtfFontStore::math_script_variant` short-circuits
-/// on the first hit and this one collects every hit, so a font where the two
-/// disagree would fail here rather than silently agree with a bug.
+/// Walk GSUB for `ssty` and return the substitute glyphs for `c`, reading the
+/// feature, lookup and coverage tables directly. Deliberately a SECOND
+/// implementation — `TtfFontStore::math_script_variant` short-circuits on the
+/// first hit and this collects every hit — so the assertions do not derive
+/// their expectations from the code under test.
 fn ssty_substitutes(face: &Face, c: char) -> Vec<GlyphId> {
     let gid = face.glyph_index(c).expect("cmap has the char");
     let Some(gsub) = face.tables().gsub else {
@@ -173,9 +169,8 @@ fn assert_script_variant_unit(path: &Path) {
     let size = Length::pt(8.4);
     let upem = face.units_per_em() as f64;
 
-    // A digit is the case the corpus exercises hardest (every `x^2`); assert
-    // it substitutes at all, so a font without `ssty` coverage for digits
-    // would fail loudly here rather than make the rest vacuous.
+    // Assert a digit substitutes at all, so a font without `ssty` coverage for
+    // digits fails loudly here rather than making the rest vacuous.
     let base_gid = face.glyph_index('2').expect("cmap has '2'");
     let expected = ssty_substitutes(&face, '2');
     assert!(
@@ -221,8 +216,8 @@ fn assert_script_variant_unit(path: &Path) {
     );
     assert!(got.depth.0 >= 0.0, "{path:?}: depth is never negative");
 
-    // A glyph with no `ssty` coverage declines rather than returning the base
-    // glyph dressed up as a variant — `push_char_glyph` keys "use the base
+    // A glyph with no `ssty` coverage must decline rather than return the base
+    // glyph dressed up as a variant: `push_char_glyph` keys "use the base
     // unchanged" on the `None`.
     for c in [' ', '\u{221A}'] {
         if face.glyph_index(c).is_some() && ssty_substitutes(&face, c).is_empty() {

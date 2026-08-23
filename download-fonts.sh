@@ -147,41 +147,17 @@ show_message "installed ipaexm.ttf / ipaexg.ttf (IPA Font License v1.0)"
 # latexcmds 0.722 -> 0.864 — and `chars_extra` explodes (enumitem 22 -> 122)
 # as the dot counts overshoot instead. The layout gate fails on enumitem.
 #
-# So the leader-dot residual is a corpus-asset difference, not a port defect.
-# The PIN STANDS — but the second half of that 2026-08-21 conclusion ("chasing
-# it through font versions makes real metric agreement worse") was an artifact
-# of WHICH references it measured against, and 2026-08-23 re-measured it:
+# So the leader-dot residual is a corpus-asset difference, not a port defect,
+# and the PIN STANDS — but NOT because 1.002 is the better font. That paragraph
+# measured against the COMMITTED reference PDFs, which the one above it already
+# says came from a third Junicode; regenerate both sides with `--gen-refs` and
+# 2.222 wins nearly everywhere, on `width_p95` and on `chars_missing` alike.
 #
-# those numbers come from the COMMITTED reference PDFs, and the paragraph above
-# already says those came from a third Junicode. They did not come from this
-# flake's SATySFi either — regenerate them with `--gen-refs` and UPSTREAM's own
-# character count moves (enumitem 18460 -> 18563, easytable 15992 -> 16051), so
-# comparing a font swap against them varies the font and the whole reference
-# environment at once. Held apples-to-apples, with BOTH sides freshly generated
-# from the flake's 0.0.11, 2.222 wins nearly everywhere:
-#
-#              width_p95 1.002 -> 2.222      chars missing/extra 1.002 -> 2.222
-#   latexcmds     0.854 -> 0.587                   2/11  ->   2/12
-#   xpath         0.291 -> 0.229                   0/11  ->   0/11
-#   enumitem      1.711 -> 0.468                 113/22  ->   4/22
-#   easytable     1.222 -> 0.540                  61/1   ->   1/3
-#   figbox        0.904 -> 0.361                   0/6   ->   0/6
-#   slydifi       0.335 -> 0.335                   0/0   ->   0/0
-#   azmath        0.926 -> 0.360                  49/92  ->   0/94
-#
-# (azmath has no committed reference at all, so it is ALWAYS measured this way
-# — which is why its 49 missing characters are 49 leader dots and nothing else.)
-# The port's own leader arithmetic is exact: under 2.222 it reproduces
-# upstream's `wdot` 3.808pt, `w` and dot count to the digit, and `prim_round`
-# already truncates the way upstream's misnamed `PrimitiveRound` does.
-#
-# Moving the pin is therefore a real improvement that is NOT free: it needs the
-# six committed reference PDFs regenerated (they are the corpus's fixed point,
-# and each package's PROVENANCE calls them the upstream-BUILT artifact), a
-# re-recorded `layout-tests/baseline.json`, and a new pinned download — 2.222
-# is not on SourceForge but in psb1558/Junicode-font's GitHub releases. It also
-# costs one line tick each on latexcmds (extra 11 -> 12) and enumitem
-# (lines -1 -> -2). That is a corpus decision, not a font-script one.
+# What holds the pin is the cost of moving it: the six committed reference PDFs
+# are the corpus's fixed point and would all need regenerating,
+# `layout-tests/baseline.json` re-recording, and 2.222 is not on SourceForge but
+# in psb1558/Junicode-font's GitHub releases. That is a corpus decision, not a
+# font-script one.
 JUNICODE_ZIP="junicode-1.002.zip"
 download_file "$JUNICODE_ZIP" \
   "https://downloads.sourceforge.net/project/junicode/junicode/junicode-1.002/junicode-1.002.zip" \

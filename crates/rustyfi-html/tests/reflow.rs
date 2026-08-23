@@ -2146,6 +2146,152 @@ fn a_text_only_graphics_box_emits_no_sized_wrapper() {
     );
 }
 
+/// A wrapper that carries a `draw-text` run's HTML states its reserved
+/// size as a MINIMUM, not as a fixed `width`/`height`.
+///
+/// The wrapper is an `inline-block`. A fixed height is right while its only
+/// children are the absolutely-positioned `<svg>`s, but a `draw-text` run's
+/// boxes cannot go inside the `<svg>` (they eject the rest of the drawing
+/// from it, see `svg.rs`), so they land in the wrapper as FLOW content —
+/// and flow content does not make a fixed-size inline-block grow, it
+/// overflows, painting over the lines above and below. Measured on
+/// `latexcmds`, where the `∑` of a `\sum` arrives as a nested run rather
+/// than as a `MathGlyph`: 6.1pt of ink below a 10.4pt box, into the next
+/// line. Both wrappers, since both had it.
+///
+/// The control below is the point: a wrapper with NO nested content keeps
+/// the fixed size, because there the reservation is exact and letting the
+/// box grow would let a stray line box change the layout.
+#[test]
+fn a_wrapper_carrying_draw_text_reserves_a_minimum_size_not_a_fixed_one() {
+    let math_box = PureHorzBox::Math {
+        width: Length::pt(20.0),
+        height: Length::pt(8.0),
+        depth: Length::pt(2.0),
+        glyphs: vec![glyph("\u{22ef}", 12.0, 0.0, 0.0)],
+        rules: vec![draw_text(text_run("BIGSIGMA"))],
+    };
+    let gfx_box = PureHorzBox::Graphics {
+        origin_independent: false,
+        width: Length::pt(20.0),
+        height: Length::pt(20.0),
+        depth: Length::ZERO,
+        elems: vec![
+            rule_line(0.0, 0.0, 20.0, 10.0, 1.0),
+            draw_text(text_run("DRAWN")),
+        ],
+    };
+    for (bx, cls, marker) in [(math_box, "math", "BIGSIGMA"), (gfx_box, "gfx", "DRAWN")] {
+        let out = render(&[line(bx)]);
+        let html = body_of(&out);
+        assert!(html.contains(marker), "lost the nested content:\n{html}");
+        let open = format!("<span class=\"{cls}\"");
+        let wrapper = span_body(html, &open)
+            .unwrap_or_else(|| panic!("no `{open}` wrapper emitted:\n{html}"));
+        assert!(
+            wrapper.contains(marker),
+            "the nested `draw-text` run left its wrapper:\n{wrapper}"
+        );
+        let tag = &html[html.find(&open).unwrap()..][..html[html.find(&open).unwrap()..]
+            .find('>')
+            .unwrap()];
+        assert!(
+            tag.contains("min-height:") && tag.contains("min-width:"),
+            "a `{cls}` wrapper carrying flow content must reserve a MINIMUM \
+             size, or the content overflows it onto the neighbouring \
+             lines:\n{tag}"
+        );
+        // And nowhere inside an <svg> either — an HTML child there makes the
+        // parser close the <svg> and drops the rest of the drawing.
+        for body in svg_bodies(html) {
+            assert!(
+                !body.contains(marker),
+                "nested HTML inside an <svg>:\n{body}"
+            );
+        }
+    }
+    // The control: no nested content, so the reservation stays exact.
+    let plain = PureHorzBox::Math {
+        width: Length::pt(20.0),
+        height: Length::pt(8.0),
+        depth: Length::pt(2.0),
+        glyphs: vec![glyph("x", 12.0, 0.0, 0.0)],
+        rules: vec![],
+    };
+    let out = render(&[line(plain)]);
+    assert!(
+        out.contains("display:inline-block; width:20pt; height:10pt;"),
+        "a wrapper with no flow content must keep its exact size:\n{out}"
+    );
+}
+
+/// A math box that draws nothing of its own — no glyphs, and every rule a
+/// `draw-text` — must emit no wrapper at all, exactly as
+/// `a_text_only_graphics_box_emits_no_sized_wrapper` requires of a graphics
+/// box. `latexcmds` builds two `\paren`-style decorations this way, and
+/// each one reserved a blank rectangle the full size of the equation and
+/// then painted the equation's real content on top of the following lines.
+#[test]
+fn a_text_only_math_box_emits_no_sized_wrapper() {
+    let math_box = PureHorzBox::Math {
+        width: Length::pt(60.0),
+        height: Length::pt(30.0),
+        depth: Length::pt(8.0),
+        glyphs: vec![],
+        rules: vec![draw_text(text_run("only drawn text"))],
+    };
+    let out = render(&[line(math_box)]);
+    let html = body_of(&out);
+    assert!(
+        html.contains("only drawn text"),
+        "lost the content:\n{html}"
+    );
+    assert!(
+        !html.contains("class=\"math\""),
+        "emitted a wrapper for a math box that draws nothing:\n{html}"
+    );
+    // The control: one real glyph and the wrapper comes back.
+    let drawn = PureHorzBox::Math {
+        width: Length::pt(60.0),
+        height: Length::pt(30.0),
+        depth: Length::pt(8.0),
+        glyphs: vec![glyph("x", 12.0, 0.0, 0.0)],
+        rules: vec![draw_text(text_run("only drawn text"))],
+    };
+    assert!(
+        render(&[line(drawn)]).contains("class=\"math\""),
+        "a math box with a real glyph lost its wrapper"
+    );
+}
+
+/// The contents of the first `<span …>` in `html` whose opening tag starts
+/// with `open`, matching nested `<span>`s so an inner wrapper does not end
+/// the outer one early.
+fn span_body<'a>(html: &'a str, open: &str) -> Option<&'a str> {
+    let start = html.find(open)?;
+    let body_at = start + html[start..].find('>')? + 1;
+    let mut depth = 1usize;
+    let mut i = body_at;
+    while depth > 0 {
+        let next_open = html[i..].find("<span").map(|d| i + d);
+        let next_close = html[i..].find("</span>").map(|d| i + d)?;
+        match next_open {
+            Some(o) if o < next_close => {
+                depth += 1;
+                i = o + "<span".len();
+            }
+            _ => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(&html[body_at..next_close]);
+                }
+                i = next_close + "</span>".len();
+            }
+        }
+    }
+    None
+}
+
 fn draw_text(bx: PureHorzBox) -> GraphicsElem {
     GraphicsElem::Text {
         pt: (Length::ZERO, Length::ZERO),

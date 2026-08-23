@@ -12,7 +12,7 @@
 //! `place_graphics` reconciles this with a single per-box `cm` TRANSLATE
 //! (no flip — PDF device space is *already* y-up, so box-local coordinates
 //! need no flip to become PDF-native, only a shift to the box's placed
-//! anchor). HTML/SVG's page space is y-**down** (CSS `top`, `render_html`'s
+//! anchor). HTML/SVG's page space is y-**down** (CSS `top`, `render_html_fixed`'s
 //! own doc comment), so here the per-box wrapper needs an actual flip, not
 //! just a translate: [`emit_graphics`] gives each `<svg>` its own tiny
 //! `width×(height+depth)` viewport with `viewBox="0 0 width (height+depth)"`
@@ -177,13 +177,20 @@ fn emit_elems(
                 emit_elems(out, inner, tx, ty, nested);
                 out.push_str("</g>\n");
             }
+            // Not ink: a deferred `register-destination` marker, already
+            // consumed by `fire_hooks` into `DocExtras::destinations`. The PDF
+            // writer skips it for the same reason (`rustyfi-pdf/src/lib.rs`'s
+            // `place_graphics` guard) — there it becomes a `/Dests` catalog
+            // entry rather than a content-stream op; here the anchor is
+            // emitted by the surrounding writer, not by the SVG.
+            GraphicsElem::Destination { .. } => {}
         }
     }
 }
 
 /// Process-global monotonic counter for `<clipPath id>` uniqueness (SVG IDs
 /// must be unique within one document; a page can contain arbitrarily many
-/// independent `Clip` elements, and `render_html` has no other natural
+/// independent `Clip` elements, and `render_html_fixed` has no other natural
 /// "clip index" to thread through the box walker).
 static NEXT_CLIP_ID: AtomicUsize = AtomicUsize::new(0);
 

@@ -125,6 +125,19 @@ pub fn analyze_detected(source: &str) -> (RustyfiVersion, Vec<Diag>) {
     )
 }
 
+/// Which generation this buffer reads as, without producing diagnostics.
+///
+/// Exactly the rule [`analyze_detected`] applies — sniff, then re-check the
+/// other generation when the buffer signalled nothing and the default did not
+/// parse — so a second feature cannot drift into a second answer for the same
+/// file. [`crate::document_symbols_auto`] is what needs it: extracting an
+/// outline under the wrong grammar produces no symbols at all, on precisely
+/// the signal-free `module M = struct` library files that make up most of a
+/// 0.1 corpus.
+pub fn detect_version(source: &str) -> RustyfiVersion {
+    detect(source).0
+}
+
 /// The verdict alone — [`parse_detected`] with the tree dropped.
 fn detect(source: &str) -> (RustyfiVersion, Option<Failure>) {
     let (version, parsed) = parse_detected(source);

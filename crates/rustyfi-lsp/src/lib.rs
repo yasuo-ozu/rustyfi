@@ -70,6 +70,7 @@
 mod analysis;
 mod high_water;
 mod line_index;
+mod symbols;
 
 #[cfg(feature = "server")]
 pub mod jsonrpc;
@@ -77,9 +78,14 @@ pub mod jsonrpc;
 pub mod project;
 #[cfg(feature = "server")]
 pub mod server;
+#[cfg(feature = "server")]
+mod workspace;
 
-pub use analysis::{analyze, analyze_auto, analyze_detected, Diag, Severity};
+pub use analysis::{analyze, analyze_auto, analyze_detected, detect_version, Diag, Severity};
 pub use line_index::{LineIndex, Position};
+pub use symbols::{
+    document_symbols, document_symbols_auto, document_symbols_detected, Range, Symbol, SymbolKind,
+};
 
 /// Re-exported so a consumer of [`analyze`] does not have to depend on
 /// `rustyfi-syntax` directly just to name its second argument.

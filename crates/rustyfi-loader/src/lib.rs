@@ -20,7 +20,7 @@
 
 mod error;
 mod graph;
-mod v006;
+pub mod v006;
 mod v01x;
 
 use std::collections::{HashMap, HashSet};
@@ -28,6 +28,16 @@ use std::path::{Path, PathBuf};
 
 pub use error::LoadError;
 pub use rustyfi_syntax::RustyfiVersion;
+
+/// Header resolution on its own, without loading anything.
+///
+/// [`load`] is the whole pipeline — resolve, read, parse, order — and a
+/// language server answering "where does this `@require:` point?" wants only
+/// the first step, against a buffer that may not compile and dependencies it
+/// has no reason to read. These are the very functions [`load`] itself calls,
+/// exported rather than reimplemented so the editor and the compiler can never
+/// disagree about which file a header names.
+pub use v006::resolve::{resolve_import, resolve_require};
 
 /// Where the Legacy loader gets source text from.
 ///

@@ -112,6 +112,19 @@ download_file () {
     # minutes at a time — a CI run has failed on exactly that, with curl's
     # exit 28 after a 133-second connect timeout.
     #
+    # The outage is per-ROUTE, not host-wide, so it is invisible from anywhere
+    # else at the same moment: on run 32593970228 the `packages` job could not
+    # connect to www.gust.org.pl three times across 70 s while, in that same
+    # run, the `layout-fidelity` job on another runner fetched the identical
+    # URL in 2.5 s. So there is nothing to probe and nothing to fail fast on —
+    # only a window to outlast. The budget below is sized against that
+    # measurement: five attempts with a doubling backoff outlast ~175 s of
+    # unreachability (5 x 20 s of connect timeout, plus 5+10+20+40 s of sleep),
+    # where the original three-with-a-flat-5s reached exactly the 70 s that run
+    # took to fail and was therefore just barely too short. CI caches this whole
+    # directory across runs (see `.github/workflows/ci.yml`), so the steady
+    # state does not reach GUST at all and this loop only guards a cold cache.
+    #
     # Retry rather than mirror: the SHA1 below is pinned, and no mirror serves
     # these archives byte-identically (CTAN repackages Latin Modern under its
     # own layout), so a fallback URL would download successfully and then fail
@@ -127,7 +140,8 @@ download_file () {
     # Only widely-supported options are used, since this script also runs on
     # whatever curl a contributor happens to have.
     ATTEMPT=1
-    MAX_ATTEMPTS=3
+    MAX_ATTEMPTS=5
+    BACKOFF=5
     while : ; do
       if curl -fsSL --connect-timeout 20 --max-time 600 -o "$CACHE/$NAME" "$URL"; then
         break
@@ -137,9 +151,10 @@ download_file () {
              "$MAX_ATTEMPTS attempts." >&2
         exit 1
       fi
-      show_message "download of '$NAME' failed; retrying ($ATTEMPT/$MAX_ATTEMPTS)"
+      show_message "download of '$NAME' failed; retrying in ${BACKOFF}s ($ATTEMPT/$MAX_ATTEMPTS)"
       ATTEMPT=$((ATTEMPT + 1))
-      sleep 5
+      sleep "$BACKOFF"
+      BACKOFF=$((BACKOFF * 2))
     done
     if ! validate_file "$NAME" "$SHA1"; then
       echo "$MESSAGE_PREFIX SHA1 mismatch for '$NAME' — refusing to use it." >&2

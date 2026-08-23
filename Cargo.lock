@@ -1538,6 +1538,7 @@ dependencies = [
  "rustyfi-backend",
  "rustyfi-lang",
  "rustyfi-loader",
+ "rustyfi-lsp",
  "rustyfi-pdf",
  "rustyfi-satyrographos",
  "rustyfi-syntax",
@@ -1580,6 +1581,17 @@ dependencies = [
  "serde",
  "serde_yaml",
  "thiserror",
+]
+
+[[package]]
+name = "rustyfi-lsp"
+version = "0.1.0"
+dependencies = [
+ "rustyfi-lang",
+ "rustyfi-loader",
+ "rustyfi-syntax",
+ "serde_json",
+ "syan",
 ]
 
 [[package]]

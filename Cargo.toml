@@ -8,6 +8,7 @@ members = [
   "crates/rustyfi",
   "crates/rustyfi-loader",
   "crates/rustyfi-satyrographos",
+  "crates/rustyfi-lsp",
 ]
 
 [workspace.package]
@@ -29,6 +30,7 @@ rustyfi-lang = { path = "crates/rustyfi-lang", version = "0.1.0" }
 rustyfi-pdf = { path = "crates/rustyfi-pdf", version = "0.1.0" }
 rustyfi-loader = { path = "crates/rustyfi-loader", version = "0.1.0" }
 rustyfi-satyrographos = { path = "crates/rustyfi-satyrographos", version = "0.1.0" }
+rustyfi-lsp = { path = "crates/rustyfi-lsp", version = "0.1.0" }
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"

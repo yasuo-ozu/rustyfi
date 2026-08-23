@@ -64,6 +64,7 @@ fn run() -> i32 {
         Some(("rustyfi", m)) => match m.subcommand() {
             Some((name, sm)) if is_package_command(name) => run_package(name, sm),
             Some(("multicall", sm)) => run_multicall(sm),
+            Some(("lsp", sm)) => run_lsp(sm),
             Some(("man", _)) => match man::render(&mut std::io::stdout().lock()) {
                 Ok(()) => 0,
                 Err(e) => {
@@ -78,6 +79,73 @@ fn run() -> i32 {
         _ => {
             eprintln!("error: no command given");
             2
+        }
+    }
+}
+
+/// `rustyfi lsp`: speak the Language Server Protocol over stdin/stdout until
+/// the editor disconnects.
+///
+/// A thin adapter and nothing else — the loop, the framing and the analysis
+/// all live in `rustyfi-lsp`, so this function's whole job is to turn the
+/// flags into an `Options` and lock the two standard streams. It inherits the
+/// 256 MB worker stack `main` spawns, which matters: the parser recurses as
+/// deeply on a buffer in an editor as it does on a file being compiled.
+///
+/// **Nothing may be written to stdout here.** stdout is the protocol
+/// channel; a stray `println!` would be read by the editor as a malformed
+/// message and desynchronize the session. Diagnostics-about-the-server go to
+/// stderr, which editors surface in an output pane.
+fn run_lsp(m: &ArgMatches) -> i32 {
+    // Exit 2 rather than compile mode's 1: `run`'s own doc reserves 2 for a
+    // usage error, and clap itself exits 2 for a rejected flag value. (Compile
+    // mode reports the same failure through `anyhow` and so exits 1; that is
+    // pre-existing behaviour this subcommand deliberately does not change.)
+    let lang = match parse_lang_flag(m.get_one::<String>("lang").map(String::as_str)) {
+        Ok(lang) => lang,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return 2;
+        }
+    };
+    // One flag, two consumers. For go-to-definition it is the root a
+    // `@require:` header is followed against; `None` leaves that to
+    // `$RUSTYFI_LIB_ROOT` or the client's `initializationOptions`, both of
+    // which the server reads itself.
+    let lib_root = m.get_one::<PathBuf>("lib_root").cloned();
+    // For the whole-program tier — unless it was turned off — root resolution
+    // mirrors `cmd_compile`'s exactly: `--lib-root`, else `$RUSTYFI_LIB_ROOT`,
+    // else discovery from the DOCUMENT's own directory. A language server does
+    // not know the document until a buffer arrives, so discovery is handed
+    // over as a function rather than run here. `rustyfi-lsp` deliberately does
+    // not depend on `rustyfi-satyrographos` (tar/flate2/sha2/TLS, for an
+    // editor front end), so this binary, which already links it, is where the
+    // two meet.
+    let project = (!m.get_flag("no_typecheck")).then(|| {
+        let named = lib_root
+            .clone()
+            .or_else(|| std::env::var_os("RUSTYFI_LIB_ROOT").map(PathBuf::from));
+        rustyfi_lsp::project::CheckOptions {
+            lang,
+            lib_roots: named.into_iter().collect(),
+            discover_roots: Some(sg::roots::discover_all),
+            check_libraries: m.get_flag("check_libraries"),
+        }
+    });
+    let stdin = std::io::stdin();
+    let stdout = std::io::stdout();
+    let mut input = stdin.lock();
+    let mut output = stdout.lock();
+    let opts = rustyfi_lsp::server::Options {
+        lang,
+        lib_root,
+        project,
+    };
+    match rustyfi_lsp::server::run(&mut input, &mut output, opts) {
+        Ok(code) => code,
+        Err(e) => {
+            eprintln!("error: language server I/O: {e}");
+            1
         }
     }
 }
@@ -254,7 +322,7 @@ fn cmd_compile(m: &ArgMatches) -> anyhow::Result<()> {
                     .map_err(|e| anyhow::anyhow!("{}: {e}", input.display()))?
                     .0
             } else {
-                let (merged, stages) = merge_program(program);
+                let (merged, stages) = rustyfi_lang::merge_v006_program(program);
                 rustyfi_lang::compile_document_cst_with_stages(&merged, metrics, &mut aux, &stages)
                     .map_err(|e| anyhow::anyhow!("{}: {e}", input.display()))?
                     .0
@@ -372,6 +440,16 @@ fn discover_deps_lock_digest(input: &std::path::Path) -> Option<String> {
     Some(lock.digest())
 }
 
+/// Parse a `--lang VERSION` flag value, shared by every subcommand that takes
+/// one so that the accepted spellings and the failure wording cannot drift
+/// apart between them. (`install`/`list`'s `--lang` is deliberately not a
+/// caller: it parses a `satyrographos::Lang`, a different type.)
+fn parse_lang_flag(flag: Option<&str>) -> anyhow::Result<Option<rustyfi_syntax::RustyfiVersion>> {
+    flag.map(str::parse::<rustyfi_syntax::RustyfiVersion>)
+        .transpose()
+        .map_err(|e| anyhow::anyhow!("--lang: {e}"))
+}
+
 /// Resolve BOTH axes of the load — language version (Axis A) and packaging
 /// mode (Axis B, `rustyfi_loader::LoadMode`) — from `--lang`, `--deps`, and
 /// header sniffing (Ld3a-minimal). Axis A: an explicit `--lang` wins
@@ -389,10 +467,7 @@ fn resolve_version_and_mode(
 ) -> anyhow::Result<(rustyfi_syntax::RustyfiVersion, rustyfi_loader::LoadMode)> {
     use rustyfi_syntax::RustyfiVersion;
 
-    let flag = flag
-        .map(str::parse::<RustyfiVersion>)
-        .transpose()
-        .map_err(|e| anyhow::anyhow!("--lang: {e}"))?;
+    let flag = parse_lang_flag(flag)?;
     // Sniffing is advisory only: if the file is unreadable, let the loader
     // report the I/O error on its own terms.
     let sniff = std::fs::read_to_string(input)
@@ -449,56 +524,6 @@ fn resolve_version_and_mode(
 
     Ok((version, mode))
 }
-
-/// Concatenate the dependency-ordered library preludes ahead of the entry
-/// document's own prelude, producing one synthetic file for elaboration.
-fn merge_program(
-    program: rustyfi_loader::LoadedProgram,
-) -> (
-    rustyfi_syntax::cst::File,
-    std::collections::HashMap<usize, rustyfi_lang::types::Stage>,
-) {
-    fn as_v006(cst: rustyfi_loader::LoadedCst) -> rustyfi_syntax::cst::File {
-        match cst {
-            rustyfi_loader::LoadedCst::V0_0(f) => f,
-            rustyfi_loader::LoadedCst::V0_1(_) => unreachable!(
-                "merge_program is the V0_0-only path; V0_1 goes through compile_document_v1 once it exists"
-            ),
-        }
-    }
-
-    let mut files = program.files;
-    let entry = files.pop().expect("loader always yields the entry last");
-    let entry_cst = as_v006(entry.cst);
-    let mut prelude = Vec::new();
-    // Concatenation drops each file's headers, so `@stage:` — a property of
-    // its BINDINGS, not of the file as a document — is recorded here
-    // against the slots they land in. The entry document is stage 1 by
-    // definition and contributes nothing.
-    let mut stages = std::collections::HashMap::new();
-    for lib in files {
-        let cst = as_v006(lib.cst);
-        let stage = rustyfi_lang::declared_stage(&cst);
-        let start = prelude.len();
-        prelude.extend(cst.prelude);
-        if let Some(stage) = stage.filter(|s| *s != rustyfi_lang::types::Stage::default()) {
-            stages.extend((start..prelude.len()).map(|i| (i, stage)));
-        }
-    }
-    prelude.extend(entry_cst.prelude);
-    (
-        rustyfi_syntax::cst::File {
-            headers: Vec::new(),
-            prelude,
-            in_kw: entry_cst.in_kw,
-            body: entry_cst.body,
-            eoi: entry_cst.eoi,
-        },
-        stages,
-    )
-}
-
-
 
 use rustyfi_satyrographos as sg;
 

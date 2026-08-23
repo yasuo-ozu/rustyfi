@@ -40,7 +40,7 @@ fn candidates_in(base: &Path, name: &str) -> Vec<PathBuf> {
 ///
 /// Returns the first candidate that exists, or `Err` with the full list of
 /// paths tried (for `UnresolvedImport::searched`).
-pub(crate) fn resolve_import(
+pub fn resolve_import(
     sources: &dyn SourceProvider,
     dir: &Path,
     name: &str,
@@ -83,7 +83,7 @@ pub(crate) fn resolve_import(
 ///
 /// If `lib_root` is `None`, there is nowhere to search: returns `Err(vec![])`
 /// immediately (surfaced by `UnresolvedRequire` as "no candidates").
-pub(crate) fn resolve_require(
+pub fn resolve_require(
     sources: &dyn SourceProvider,
     roots: &[&Path],
     name: &str,

@@ -74,11 +74,34 @@ jobs:
       # come out of both PDFs.
       - name: Install poppler-utils (pdftotext)
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends poppler-utils
+      # The pinned archives, kept across runs so the steady state never reaches
+      # the upstream font servers at all — GUST, which serves the two Latin
+      # Modern zips, intermittently refuses connections from the runners (see
+      # the note in `download-fonts.sh`). Safe by construction: every archive
+      # carries a sha1 in that script, and it re-verifies a cached file before
+      # using it, so a restored copy is checked exactly as a freshly downloaded
+      # one is. Keyed on the script, which is where the URLs and their
+      # checksums live, so re-pinning a font invalidates the cache.
+      - name: Cache the pinned font archives
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/rustyfi-fontcache
+          key: font-archives-${{ hashFiles('download-fonts.sh') }}
+          # Editing the script for any reason — a comment, a new face — changes
+          # the key and would otherwise mean a fully cold refetch, which is
+          # exactly the moment the outage above bites. Fall back to the newest
+          # existing archive cache instead: the script re-verifies every sha1,
+          # so a stale entry whose pin changed is re-downloaded on its own
+          # merits and the untouched ones are still reused.
+          restore-keys: |
+            font-archives-
       # The corpus docs set Japanese text in the bundled IPAex fonts, so the
       # sha1-pinned fonts must be present (else the port falls back to base-14
       # and every Japanese run is unencodable).
       - name: Download fonts (download-fonts.sh)
         run: sh download-fonts.sh
+        env:
+          RUSTYFI_FONTCACHE: ${{ runner.temp }}/rustyfi-fontcache
       # The script self-skips (green) if a prerequisite is somehow absent.
       - name: Layout-fidelity test (vs the vendored SATySFi references)
         run: cargo test -p rustyfi --test layout_fidelity -- --ignored --nocapture
@@ -118,12 +141,30 @@ jobs:
           repository: yasuo-ozu/satysfi-xpath
           path: pkgs/xpath
 
+      # Same cache, and deliberately the same key, as the layout-fidelity job
+      # above: whichever run populates it first spares every later one the
+      # download.
+      - name: Cache the pinned font archives
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/rustyfi-fontcache
+          key: font-archives-${{ hashFiles('download-fonts.sh') }}
+          # Editing the script for any reason — a comment, a new face — changes
+          # the key and would otherwise mean a fully cold refetch, which is
+          # exactly the moment the outage above bites. Fall back to the newest
+          # existing archive cache instead: the script re-verifies every sha1,
+          # so a stale entry whose pin changed is re-downloaded on its own
+          # merits and the untouched ones are still reused.
+          restore-keys: |
+            font-archives-
       # The faces the standard library needs, then the standard library itself,
       # INTO THE ROOT THE PACKAGES INSTALL INTO — the order matters. Every font
       # package merges its entries into the one shared
       # `dist/hash/fonts.satysfi-hash`, so seeding the root afterwards would
       # overwrite what they contributed.
       - name: Seed the root with the bundled standard library
+        env:
+          RUSTYFI_FONTCACHE: ${{ runner.temp }}/rustyfi-fontcache
         run: |
           sh download-fonts.sh
           mkdir -p root/dist

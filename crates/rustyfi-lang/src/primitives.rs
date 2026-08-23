@@ -3569,14 +3569,62 @@ fn prim_page_break_multicolumn_v01(
 /// remaining content — the port of `chop_single_column_with_insertion`
 /// (pageBreak.ml:699-702; the upstream `normalize` is a no-op here because
 /// block-boxes are already solid `Vec<VertBox>`).
+///
+/// Reports whether the hook actually inserted anything: for the COLUMN-END
+/// hook that is the difference between a remainder upstream would normalize
+/// away and one it would turn into a real page — see `page_break_core`'s
+/// blank-page suppression.
 fn apply_column_hook(
     interp: &mut Interp,
     hook: &Value,
     remaining: &mut Vec<VertBox>,
-) -> Result<(), EvalError> {
+) -> Result<bool, EvalError> {
     let inserted = as_block_boxes(interp.apply(hook.clone(), Value::Unit)?)?;
+    let any = !inserted.is_empty();
     remaining.splice(0..0, inserted);
-    Ok(())
+    Ok(any)
+}
+
+/// Walk one run of a page's just-placed lines with the hooks-only half of
+/// [`crate::PlacedWalk`].
+///
+/// Both flags are set for the duration of the walk and cleared after it, so
+/// nothing ELSE the page loop evaluates — the content scheme, the parts
+/// scheme, the column hooks — inherits either: `fire_pass` because those are
+/// not walks, and `current_page` because it is upstream's
+/// `State.during_page_break` window, which a `register-destination` outside a
+/// fired callback must still be refused by.
+fn walk_hooks(
+    interp: &mut Interp,
+    walk: &mut crate::PlacedWalk,
+    paper_height: Length,
+    page: usize,
+    lines: &[rustyfi_backend::PlacedLine],
+    body: bool,
+) -> Result<(), EvalError> {
+    interp.fire_pass = crate::eval::FirePass::HooksOnly;
+    interp.current_page = Some(page);
+    let r = walk.lines(interp, paper_height, page, lines, body);
+    interp.current_page = None;
+    interp.fire_pass = crate::eval::FirePass::All;
+    r
+}
+
+/// [`walk_hooks`]' page-closing twin. Fires nothing in this pass — every frame
+/// fragment is a decoration — but it is what advances the cross-page frame
+/// state, so the two passes stay in step about which fragment is which.
+fn end_page_hooks(
+    interp: &mut Interp,
+    walk: &mut crate::PlacedWalk,
+    paper_height: Length,
+    page: usize,
+) -> Result<(), EvalError> {
+    interp.fire_pass = crate::eval::FirePass::HooksOnly;
+    interp.current_page = Some(page);
+    let r = walk.end_page(interp, paper_height, page);
+    interp.current_page = None;
+    interp.fire_pass = crate::eval::FirePass::All;
+    r
 }
 
 /// The shared per-page loop backing `page-break`, `page-break-two-column`,
@@ -3621,12 +3669,21 @@ fn page_break_core(
     let mut remaining = bb;
     let mut pages: Vec<Page> = Vec::new();
     let mut pageno: i64 = 1;
+    // The per-page `hook-page-break` pass, threaded through the whole loop so
+    // that a `block-frame-breakable` straddling a page break keeps its state —
+    // see `crate::PlacedWalk` for what the two passes divide between them, and
+    // `eval::FirePass` for why there are two.
+    let mut walk = crate::PlacedWalk::default();
+    // Did the PREVIOUS page's column-end hook inject the content this page is
+    // being made out of? See the blank-page suppression below.
+    let mut columnend_injected = false;
     loop {
         if pageno > PAGE_NUMBER_LIMIT {
             return eval_error(format!(
                 "page number limit exceeded ({PAGE_NUMBER_LIMIT}); a column hook keeps injecting content"
             ));
         }
+        let page_index = (pageno - 1) as usize;
         let mut pb_fields = BTreeMap::new();
         pb_fields.insert("page-number".to_string(), Value::Int(pageno));
         let pbinfo = Value::Record(pb_fields);
@@ -3637,19 +3694,49 @@ fn page_break_core(
         let (x0, y0) = origin;
 
         // ---- columns ----
-        let mut lines = Vec::new();
+        let mut lines: Vec<rustyfi_backend::PlacedLine> = Vec::new();
+        walk.begin_page();
         for shift in &origin_shifts {
             if let Some(hook) = &columnhookf {
                 apply_column_hook(interp, hook, &mut remaining)?;
             }
+            let placed_before = lines.len();
             lines.extend(chop_page((x0 + *shift, y0), height, &mut remaining));
+            // Upstream fires this column's hooks HERE, and says so:
+            // `pageBreak.ml:747` is commented "Adds the column to the page and
+            // invokes hook functions". `add_column_to_page` (`:748`) builds
+            // the column's PDF ops eagerly and `EvVertHookPageBreak` invokes
+            // the closure as they are built (`handlePdf.ml:336`) — after
+            // `chop_single_column_with_insertion` (`:744`) and before BOTH
+            // `columnendhookf` (`:752`) and `write_page`'s `pagepartsf`
+            // (`:775` -> `handlePdf.ml:464`). Single-column `main` is the same
+            // three steps at `:715-717`.
+            //
+            // That order is the whole mechanism behind a floating figure:
+            // `stdjareport`'s `\figure` is a `hook-page-break` that pushes the
+            // figure onto `ref-float-boxes`, and the page-parts callback drains
+            // that list onto a page whose number EXCEEDS the one it was pushed
+            // on. Firing after the page loop (which is what this port used to
+            // do) left every page-parts callback reading an empty list, and no
+            // figure was ever emitted. `columnendhookf` reads hook state too:
+            // `does-page-breaking-reach-last`, set by the
+            // `hook-page-break-block` at the very end of the document.
+            walk_hooks(
+                interp,
+                &mut walk,
+                paper_h,
+                page_index,
+                &lines[placed_before..],
+                true,
+            )?;
             if remaining.is_empty() {
                 break; // content exhausted: remaining columns are skipped
             }
         }
-        if let Some(hook) = &columnendhookf {
-            apply_column_hook(interp, hook, &mut remaining)?;
-        }
+        let injected_now = match &columnendhookf {
+            Some(hook) => apply_column_hook(interp, hook, &mut remaining)?,
+            None => false,
+        };
 
         // A trailing pure-skip/glue (e.g. the last block's `paragraph_bottom`)
         // can roll past the previous page's bottom into a final `chop_page`
@@ -3658,9 +3745,26 @@ fn page_break_core(
         // blank page (glue at the end of the vertical list is dropped), so when
         // the body is empty AND content is now exhausted, stop before turning
         // that leftover into a spurious blank page (header/footer included).
-        if remaining.is_empty() && !lines.iter().any(|l| placed_line_extent(l).is_some()) {
+        //
+        // UNLESS the previous page's COLUMN-END HOOK is what put the content
+        // here, which is a page the document deliberately asked for. Upstream
+        // draws exactly that line: leftovers from the chop are normalized
+        // (`normalize_after_break`, pageBreak.ml:101-121, maps `[]` and a lone
+        // trailing breakable skip to `NormalizedEmpty`, so `restopt` is `None`
+        // and no further page is created), but the column-end hook's insertion
+        // bypasses it — `iter_on_column` returns it as the remainder (`:737`,
+        // `:752`) and `iter_on_page` only tests that remainder for emptiness
+        // (`:776-778`).
+        // `stdjareport`'s `columnendhookf` buys the extra page its TRAILING
+        // figures float onto with precisely that `block-skip 0pt`, and a
+        // blanket suppression deleted the page and the figures with it.
+        if !columnend_injected
+            && remaining.is_empty()
+            && !lines.iter().any(|l| placed_line_extent(l).is_some())
+        {
             break;
         }
+        columnend_injected = injected_now;
 
         // ---- parts scheme: this page's header + footer ----
         // Everything placed so far is body/column content; the header and
@@ -3671,6 +3775,19 @@ fn page_break_core(
             read_parts_scheme(parts)?;
         lines.extend(place_block_at(header_origin, header_content));
         lines.extend(place_block_at(footer_origin, footer_content));
+        // The header's and footer's own hooks, in upstream's position too:
+        // `write_page` runs `pagepartsf` (handlePdf.ml:464) and then walks the
+        // parts' boxes through the same `ops_of_evaled_vert_box_list` (`:467`,
+        // `:471`) that fired the body's.
+        walk_hooks(
+            interp,
+            &mut walk,
+            paper_h,
+            page_index,
+            &lines[body_lines..],
+            false,
+        )?;
+        end_page_hooks(interp, &mut walk, paper_h, page_index)?;
 
         pages.push(Page { lines, body_lines });
         if remaining.is_empty() {
@@ -3678,6 +3795,9 @@ fn page_break_core(
         }
         pageno += 1;
     }
+    // Tells the `fire_hooks` that runs once this document is returned to fire
+    // the DECORATIONS only: every `hook-page-break` above has already run.
+    interp.page_break_hooks_fired = true;
 
     // Every image `load-image` decoded while evaluating this document (see
     // `Interp::images`'s doc comment) rides along in the packaged

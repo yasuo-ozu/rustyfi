@@ -87,6 +87,41 @@ pub(crate) fn available_fields(map: &std::collections::BTreeMap<String, Value>) 
     keys.join(", ")
 }
 
+/// Which callbacks a walk over placed geometry (`crate::fire_hooks` and the
+/// helpers it shares with `page_break_core`) is allowed to invoke.
+///
+/// Upstream fires both halves in ONE pass, from `ops_of_evaled_vert_box_list`
+/// (`handlePdf.ml:336` for `EvVertHookPageBreak`, `:325` for `EvVertFrame`'s
+/// deco), and that pass runs per page INSIDE the page loop — page N's body
+/// callbacks before page N's own `pagepartsf`. That ordering is load-bearing:
+/// `stdjareport`'s `\figure` is a `hook-page-break` that pushes the figure
+/// onto a `let-mutable` list which the page-parts callback drains onto a LATER
+/// page, so a hook that fires after the loop registers into a list nobody
+/// reads again.
+///
+/// This port cannot fire both halves there, because a decoration's rect needs
+/// the frame's per-page top/bottom EXTENT, which is only known once the page's
+/// header and footer are placed and the page is complete. So the walk runs
+/// twice: `page_break_core` drives a [`FirePass::HooksOnly`] pass per column
+/// (upstream's position, `pageBreak.ml:747-748`), and the post-run
+/// `fire_hooks` drives a [`FirePass::DecosOnly`] one. Each callback still
+/// fires exactly once.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum FirePass {
+    /// One undivided pass — every hook and every decoration. What a
+    /// hand-built `DocumentValue` handed straight to `fire_hooks` gets.
+    #[default]
+    All,
+    /// `hook-page-break` closures only. Frame decorations are skipped, but
+    /// the walk still descends through frames, tabular cells and graphics
+    /// runs, so a hook nested in one of them fires here and nowhere else.
+    HooksOnly,
+    /// Frame decorations, `GraphicsElem::Destination` markers and everything
+    /// else the walk records — but not one `hook-page-break`, which the
+    /// preceding [`FirePass::HooksOnly`] pass already ran.
+    DecosOnly,
+}
+
 /// Evaluation state threaded through every primitive: font metrics, images,
 /// hooks, cross-references, and the per-trial accumulators below.
 pub struct Interp<'a> {
@@ -125,10 +160,22 @@ pub struct Interp<'a> {
     /// `register-document-information`'s accumulator — LAST WRITE WINS,
     /// same reset-per-trial policy as `outline`/`annotations`/`destinations`.
     pub doc_info: Option<DocInfo>,
-    /// `Some(0-based page)` only while `fire_hooks` is walking that page —
-    /// the port of upstream's `State.during_page_break` + "current page"
-    /// (`annotation.ml:15`, `namedDest.ml`'s `notify_pagebreak`).
+    /// `Some(0-based page)` only while a placed-geometry walk is on that page
+    /// — the port of upstream's `State.during_page_break` + "current page"
+    /// (`annotation.ml:15`, `namedDest.ml`'s `notify_pagebreak`). Both walks
+    /// set it: `page_break_core`'s per-page hook pass and `fire_hooks`.
     pub current_page: Option<usize>,
+    /// Which half of the placed-geometry walk is running right now. The walk
+    /// happens TWICE per trial and each pass must fire exactly one half of it
+    /// — see [`FirePass`].
+    pub fire_pass: FirePass,
+    /// Set by `page_break_core` once it has finished driving its per-page
+    /// [`FirePass::HooksOnly`] pass, so the `fire_hooks` call that follows the
+    /// page loop knows to run [`FirePass::DecosOnly`] and not fire every
+    /// `hook-page-break` a second time. Stays `false` for a `DocumentValue`
+    /// assembled by hand (unit tests drive `fire_hooks` directly), which then
+    /// runs the undivided [`FirePass::All`].
+    pub page_break_hooks_fired: bool,
     /// Links/metadata: the `DecoId` of the deco closure currently
     /// being fired by `fire_hooks`' two `apply_deco` call sites, `None`
     /// outside any such window. This is the STRUCTURAL link between a
@@ -205,6 +252,8 @@ impl<'a> Interp<'a> {
             page_graphics: Vec::new(),
             doc_info: None,
             current_page: None,
+            fire_pass: FirePass::All,
+            page_break_hooks_fired: false,
             current_deco_id: None,
             pending_dests: None,
             link_decos: Vec::new(),

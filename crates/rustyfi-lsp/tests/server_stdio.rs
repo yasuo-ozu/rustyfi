@@ -139,6 +139,7 @@ fn the_full_lifecycle_produces_a_diagnostic_and_exits_cleanly() {
         json!({
             "textDocumentSync": { "openClose": true, "change": 1 },
             "documentSymbolProvider": true,
+            "workspaceSymbolProvider": true,
             "positionEncoding": "utf-16",
         }),
     );

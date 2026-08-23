@@ -57,6 +57,8 @@ mod symbols;
 pub mod jsonrpc;
 #[cfg(feature = "server")]
 pub mod server;
+#[cfg(feature = "server")]
+mod workspace;
 
 pub use analysis::{analyze, analyze_auto, analyze_detected, detect_version, Diag, Severity};
 pub use line_index::{LineIndex, Position};

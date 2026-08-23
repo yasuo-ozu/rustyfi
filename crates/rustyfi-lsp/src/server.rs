@@ -7,10 +7,16 @@
 //!
 //! `initialize`, `initialized`, `shutdown`, `exit`,
 //! `textDocument/didOpen` / `didChange` / `didClose`,
-//! `textDocument/publishDiagnostics` and `textDocument/documentSymbol`. The
-//! `initialize` reply advertises exactly that and nothing more — an
-//! over-claimed capability costs the user a hang or an empty popup on every
-//! keystroke, so the reply lists only what is actually wired up.
+//! `textDocument/publishDiagnostics`, `textDocument/documentSymbol` and
+//! `workspace/symbol`. The `initialize` reply advertises exactly that and
+//! nothing more — an over-claimed capability costs the user a hang or an
+//! empty popup on every keystroke, so the reply lists only what is actually
+//! wired up.
+//!
+//! Everything but `workspace/symbol` is pure: it answers from the text the
+//! client sent. `workspace/symbol` has to read the project's other files, and
+//! is the module's only filesystem access — see the crate-private
+//! `workspace` module, which owns all of it.
 //!
 //! Document sync is **full**, not incremental. Incremental sync would mean
 //! reimplementing UTF-16-range splicing over the buffer, and the whole
@@ -24,6 +30,7 @@ use std::io::{self, BufRead, Write};
 use serde_json::{json, Value};
 
 use crate::jsonrpc::{self, code, Incoming};
+use crate::workspace::Workspace;
 use crate::{RustyfiVersion, Symbol};
 
 /// How the server was started.
@@ -117,6 +124,10 @@ struct State {
     /// Open buffers, by URI. Replaced wholesale on every `didChange` (sync is
     /// Full), so it cannot go stale against what the client has.
     docs: HashMap<String, String>,
+    /// The project's folders and their cached outlines, for
+    /// `workspace/symbol`. The only part of this server that reads the
+    /// filesystem — see the `workspace` module.
+    workspace: Workspace,
 }
 
 impl State {
@@ -126,6 +137,7 @@ impl State {
             initialized: false,
             shutdown_requested: false,
             docs: HashMap::new(),
+            workspace: Workspace::default(),
         }
     }
 
@@ -140,6 +152,7 @@ impl State {
         match method {
             "initialize" => {
                 self.absorb_initialization_options(&params);
+                self.workspace.absorb_initialize(&params);
                 self.initialized = true;
                 Ok(server_capabilities())
             }
@@ -152,6 +165,11 @@ impl State {
                 Ok(Value::Null)
             }
             "textDocument/documentSymbol" => Ok(self.document_symbols(&params)),
+            "workspace/symbol" => {
+                let query = params.get("query").and_then(Value::as_str).unwrap_or("");
+                let lang = self.opts.lang;
+                Ok(Value::Array(self.workspace.query(query, &self.docs, lang)))
+            }
             _ => Err((code::METHOD_NOT_FOUND, format!("{method} is not supported"))),
         }
     }
@@ -367,6 +385,7 @@ fn server_capabilities() -> Value {
                 "change": 1,
             },
             "documentSymbolProvider": true,
+            "workspaceSymbolProvider": true,
             // The protocol's default, stated explicitly because it is the
             // one thing about this server most likely to be got wrong by
             // whoever touches `line_index` next: every `character` below is

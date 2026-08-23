@@ -265,6 +265,7 @@ prims! {
     "string-explode" (1) => prim_string_explode;
     "regexp-of-string" (1) => prim_regexp_of_string;
     "string-match" (2) => prim_string_match;
+    "string-scan" (2) => prim_string_scan;
     "split-on-regexp" (2) => prim_split_on_regexp;
 
     // ---- text embedding (vminst.ml:1707 PrimitiveEmbed: string -> inline- text; the interp body wraps the string as a one-element quoted text) --
@@ -403,7 +404,10 @@ prims! {
     // isn't plumbed into `Interp` at all yet, so this resolves against the
     // process cwd instead of upstream's job directory — documented
     // deviation, see `prim_read_file`'s own doc comment.
-    v01 "read-file" (1) => prim_read_file;
+    //
+    // NOT `v01`-gated: it landed on the 0.0.6 dev line rather than in 0.1.
+    // See the matching note in `prim_types.rs` for the evidence.
+    "read-file" (1) => prim_read_file;
     // `register-document-information : document-information-dictionary ->
     // unit` (dev-0-1-0 vminst.ml :2978) — REAL:
     // stores into `Interp::doc_info` (last-write-wins), drained into
@@ -820,6 +824,47 @@ fn prim_string_match(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value
     let input = as_str(args.pop().unwrap())?;
     let pattern = as_str(args.pop().unwrap())?;
     Ok(Value::Bool(regexp_full_match(&pattern, &input)))
+}
+
+/// `string-scan : regexp -> string -> (string * string) option`
+/// (vminstdef.yaml:1961 `PrimitiveStringScan`) — FAITHFUL:
+///
+/// ```ocaml
+/// if Str.string_match pat str 0 then
+///   let matched = Str.matched_string str in
+///   ... Some (matched, rest)
+/// else None
+/// ```
+///
+/// i.e. an *anchored* match at offset 0, returning the matched prefix paired
+/// with everything after it. Unlike the two older regexp primitives beside it
+/// this goes through `crate::regexp`, a real backtracking engine for `Str`'s
+/// dialect, because its only consumer — `satysfi-code-printer`'s lexer —
+/// drives it with alternations, groups and quantifiers rather than the bare
+/// character classes `satysfi-base` uses.
+///
+/// Offsets are in `char`s throughout: `Str` counts bytes, but a byte split of
+/// a multi-byte character would produce an invalid `Value::Str`, and every
+/// pattern in the corpus is ASCII so the two agree wherever it matters.
+fn prim_string_scan(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value, EvalError> {
+    let input = as_str(args.pop().unwrap())?;
+    let pattern = as_str(args.pop().unwrap())?;
+    let re = crate::regexp::compile(&pattern);
+    let chars: Vec<char> = input.chars().collect();
+    Ok(match re.match_at(&chars, 0) {
+        Some(end) => {
+            let matched: String = chars[..end].iter().collect();
+            let rest: String = chars[end..].iter().collect();
+            Value::Ctor(
+                "Some".to_string(),
+                Some(Box::new(Value::Tuple(vec![
+                    Value::Str(matched),
+                    Value::Str(rest),
+                ]))),
+            )
+        }
+        None => Value::Ctor("None".to_string(), None),
+    })
 }
 
 fn regexp_full_match(pattern: &str, input: &str) -> bool {

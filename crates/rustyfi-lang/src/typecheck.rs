@@ -148,6 +148,7 @@ pub const PRIMITIVE_NAMES: &[&str] = &[
     "string-explode",
     "regexp-of-string",
     "string-match",
+    "string-scan",
     "split-on-regexp",
     "embed-string",
     "inline-fil",
@@ -342,12 +343,15 @@ pub const PRIMITIVE_NAMES: &[&str] = &[
     "set-unicode-char-database",
     "here",
     // ---- added in 0.1 — bitwise ops, Unicode string ops,
-    // `read-file`, `register-document-information`. All 11
+    // `register-document-information`. All 10
     // unbound under V0_0 (`base_type_env_with_version`'s
     // `primitive_type_with_version` filter skips them there, same as the
     // 8 math-split names just above). `get-initial-text-info` is NOT
     // listed again here — it's already present above as one
-    // shared name whose *type* forks per version (`prim_types.rs`). ----
+    // shared name whose *type* forks per version (`prim_types.rs`).
+    // `read-file` sits in this block for grouping only — it is bound under
+    // BOTH versions, having been added on the 0.0.6 dev line (see
+    // `prim_types.rs`), so it is NOT one of the 10. ----
     "<<",
     ">>",
     "band",

@@ -182,7 +182,11 @@ document (| title = {t}; author = {a}; show-title = false; show-toc = false |) '
 "#,
         ),
         expect_cross: false,
-        expect_v006: false,
+        // Its 0.0.6 control now PASSES: `string-scan` is implemented, which
+        // was the one thing the package was missing. The crossing arm still
+        // refuses, on the documented `deco-set`-behind-a-function-argument
+        // gap that has nothing to do with regexps.
+        expect_v006: true,
     },
     Case {
         package: "colorbox",

@@ -11,6 +11,7 @@ pub mod hyphenation;
 pub mod prim_types;
 pub mod primitives;
 pub mod quoted;
+pub mod regexp;
 pub mod symbol;
 pub mod typecheck;
 pub mod types;

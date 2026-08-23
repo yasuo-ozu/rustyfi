@@ -316,7 +316,7 @@ fn primitive_names_are_cross_checked_against_primitives_source() {
     let src = include_str!("../src/primitives.rs");
     assert_eq!(
         typecheck::PRIMITIVE_NAMES.len(),
-        211,
+        212,
         "real-world-compat round 6 added 3: regexp-of-string, string-match, \
          split-on-regexp (satysfi-base char.satyg / figbox). keep this in sync \
          with primitives.rs's prims! table and \
@@ -338,7 +338,10 @@ fn primitive_names_are_cross_checked_against_primitives_source() {
          build-out added 1: load-single-font, V0_1-only; the registry-corpus \
          sweep added 2: get-font (vminstdef.yaml:1350, version-forked like \
          set-font) and line-stack-top (:1109), which is what `ruby` and \
-         `quotation` were missing)"
+         `quotation` were missing; the code-printer sweep added 1: \
+         string-scan (vminstdef.yaml:1961), whose backtracking `Str`-dialect \
+         engine lives in `regexp.rs` — note `read-file` did NOT change this \
+         count, it only stopped being V0_1-gated)"
     );
     for name in typecheck::PRIMITIVE_NAMES {
         // Escape backslashes as they appear in Rust source text (e.g. one

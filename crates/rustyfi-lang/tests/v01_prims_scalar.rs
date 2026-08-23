@@ -454,9 +454,23 @@ fn get_initial_text_info_forks() {
 }
 
 // ============================================================================
-// 7. Version-gating: the 11 added names are unbound under V0_0
+// 7. Version-gating: the 10 still-gated names are unbound under V0_0
 // ============================================================================
 
+/// `read-file` was in this list and is no longer: `string-scan`'s change
+/// binds it under both generations, because `code-printer` calls it from a
+/// `let-block` body and so cannot load at all without it.
+///
+/// That is defensible on its own terms — the package's opam pins
+/// `>= "0.0.6-53-g2867e4d9"`, a commit that does carry `read-file` — but it
+/// does NOT settle what V0_0 means here, and this list is where that shows.
+/// `read-file` is absent from upstream's own v0.0.6 (`vminstdef.yaml` has no
+/// row for it; the tag was cut before PR #200 added it in v0.0.7), and so are
+/// at least `band`, `bxor`, `bnot`, `set-math-char` and
+/// `register-document-information` — which are still gated, three lines
+/// below. So the port now applies two different definitions of V0_0 to names
+/// with identical provenance. Whoever resolves that should move the whole
+/// group at once, in one change that says which definition wins.
 #[test]
 fn added_prims_gate_by_version() {
     const NAMES: &[&str] = &[
@@ -469,7 +483,6 @@ fn added_prims_gate_by_version() {
         "normalize-string-to-nfc",
         "normalize-string-to-nfd",
         "split-grapheme-cluster",
-        "read-file",
         "register-document-information",
     ];
     let env006 = primitives::base_env();

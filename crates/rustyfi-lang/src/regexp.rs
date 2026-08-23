@@ -471,7 +471,7 @@ impl<'i> Matcher<'i> {
                 }
             }
             Node::Eol => {
-                if pos == self.input.len() || self.input[pos] == '\n' {
+                if pos == self.input.len() || self.input.get(pos) == Some(&'\n') {
                     k(pos, caps)
                 } else {
                     None
@@ -821,11 +821,18 @@ mod tests {
 
     /// `match_at` is `pub` and takes an arbitrary `start`; `^` and `\b` used
     /// to index `input[pos - 1]` unguarded and panic past the end.
+    ///
+    /// The patterns below the fold are the ones that actually REACH the
+    /// anchor: `"a$"` does not, because the `a` fails on `input.get(pos)`
+    /// first and the `$` is never evaluated — so `$`, indexing `input[pos]`
+    /// forward, was still panicking after `^` and `\b` had been fixed. A
+    /// guard test has to be written against the node under test, not against
+    /// a pattern that merely contains it.
     #[test]
     fn match_at_past_the_end_does_not_panic() {
         let chars: Vec<char> = "abc".chars().collect();
-        for pat in ["^a", "\\ba", "a$"] {
-            let _ = Regexp::parse(pat).match_at(&chars, 4);
+        for pat in ["^a", "\\ba", "a$", "$", "a*$", "^", "\\b", "\\(a\\)*$"] {
+            let _ = Regexp::parse(pat).match_at(&chars, 7);
         }
     }
 

@@ -6,4 +6,4 @@
 //! crate root (`graph.rs`): it is mode-agnostic (`u32`/`PathBuf` only) and
 //! the Envelopes backend (`v01x/`) needs the identical machinery.
 
-pub(crate) mod resolve;
+pub mod resolve;

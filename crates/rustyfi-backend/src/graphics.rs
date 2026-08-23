@@ -74,7 +74,11 @@ pub struct PrePath {
 
 /// One `graphics` element (`GraphicD.element`). `place_graphics`
 /// (rustyfi-pdf) matches this exhaustively, without a wildcard arm.
-#[derive(Clone, Debug, PartialEq)]
+///
+/// See [`crate::hbox::PureHorzBox`] for what the `#[subast]` list means and
+/// what checks it.
+#[derive(Clone, Debug, PartialEq, syan::visit::Ast)]
+#[subast(crate::graphics::GraphicsElem, crate::hbox::PureHorzBox)]
 pub enum GraphicsElem {
     /// Filled region, even-odd rule (upstream's `op_f'`).
     Fill(Color, Path),
@@ -116,6 +120,23 @@ pub enum GraphicsElem {
     /// The port's `Path` already carries N subpaths, standing in for
     /// upstream's `path list`. Never constructed by any 0.0.6 path, as `Group`.
     Clip(Path, Vec<GraphicsElem>),
+    /// A DEFERRED `register-destination` call, carrying NO ink. `pt` is
+    /// box-local in the same y-**up** frame as every other element's
+    /// coordinates, so the existing transform pipeline carries it, and
+    /// `rustyfi-lang`'s `fire_hooks` replays it once the box has a page and a
+    /// placed point.
+    ///
+    /// It exists because this port applies an `inline-graphics` callback
+    /// eagerly at construction time (`prim_inline_graphics`) rather than during
+    /// page breaking as upstream does, so a `register-destination` inside one
+    /// has no page and `annotation.ml:15`'s gate — faithfully — refuses it.
+    ///
+    /// KNOWN GAP: `math_boxes_of_inline_boxes` (rustyfi-lang) harvests a
+    /// graphics box's elements into a `PureHorzBox::Math`'s `rules` and
+    /// `fire_hooks` has no `Math` arm, so an anchor inside a `make_paren`
+    /// delimiter closure never fires. `shift_graphics` carries the point
+    /// correctly, so closing it is one arm and no arithmetic.
+    Destination { key: String, pt: Point },
 }
 
 // `shift-path`/`shift-graphics`/`linear-transform-path`/
@@ -206,6 +227,12 @@ pub fn shift_graphics(v: Point, elem: &GraphicsElem) -> GraphicsElem {
             shift_path(v, path),
             gs.iter().map(|g| shift_graphics(v, g)).collect(),
         ),
+        // The anchor point is an ordinary box-local coordinate: it moves with
+        // the ink around it.
+        GraphicsElem::Destination { key, pt } => GraphicsElem::Destination {
+            key: key.clone(),
+            pt: shift_point(v, *pt),
+        },
     }
 }
 
@@ -251,6 +278,11 @@ pub fn linear_transform_graphics(mat: (f64, f64, f64, f64), elem: &GraphicsElem)
             linear_transform_path(mat, path),
             gs.iter().map(|g| linear_transform_graphics(mat, g)).collect(),
         ),
+        // As in `shift_graphics`: an ordinary box-local coordinate.
+        GraphicsElem::Destination { key, pt } => GraphicsElem::Destination {
+            key: key.clone(),
+            pt: linear_transform_point(mat, *pt),
+        },
     }
 }
 
@@ -412,6 +444,9 @@ pub fn graphics_bbox(elem: &GraphicsElem) -> Option<(Point, Point)> {
             .iter()
             .filter_map(graphics_bbox)
             .reduce(union_bbox),
+        // No ink: an anchor must not inflate its box's bbox (it is typically a
+        // `0pt 0pt 0pt` `inline-graphics`).
+        GraphicsElem::Destination { .. } => None,
     }
 }
 

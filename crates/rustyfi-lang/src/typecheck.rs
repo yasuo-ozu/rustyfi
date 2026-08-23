@@ -1524,38 +1524,27 @@ fn build_synonym_decl(decl: &UserSynonymDecl, version: RustyfiVersion) -> Synony
 /// mentioned inside `ty`, ignoring argument count — used only to build the
 /// "synonym references synonym" graph for [`check_synonym_cycles`], where
 /// arity is irrelevant (a cycle is a cycle no matter how many arguments each
-/// step is nominally applied to).
+/// step is nominally applied to). Pre-order, duplicates included.
+///
+/// **Derived, not hand-written** ([`crate::visit`]). This walk was the live
+/// instance of this port's recurring bug: its `InlineCmd`/`BlockCmd`/
+/// `MathCmd` arm recursed into each slot's `ty` and not into that slot's
+/// `opt_labels`, so a cycle routed through a `?(l : τ)` optional-label map
+/// was invisible here while `expand_synonyms_cmd_args` expanded straight
+/// into it — a stack overflow instead of a `cyclic type synonym` error
+/// (`tests/synonym_cycle_opt_labels.rs`).
+///
+/// Semantics are unchanged otherwise: the traversal is structural (it does
+/// **not** `resolve` through a bound type variable), pre-order, and
+/// unconditional, exactly as the hand-written pair was.
 fn synonym_refs(ty: &MonoType, synonyms: &HashMap<String, SynonymDecl>, out: &mut Vec<String>) {
-    match ty {
-        MonoType::Var(_) | MonoType::Base(_) => {}
-        MonoType::Func(row, dom, cod) => {
-            synonym_refs_row(row, synonyms, out);
-            synonym_refs(dom, synonyms, out);
-            synonym_refs(cod, synonyms, out);
-        }
-        MonoType::Product(ts) => ts.iter().for_each(|t| synonym_refs(t, synonyms, out)),
-        MonoType::List(t) | MonoType::Ref(t) | MonoType::Code(t) => synonym_refs(t, synonyms, out),
-        MonoType::Record(row) => synonym_refs_row(row, synonyms, out),
-        MonoType::Variant(name, args) => {
+    ty.visit(|t: &MonoType| {
+        if let MonoType::Variant(name, _) = t {
             if synonyms.contains_key(name) {
                 out.push(name.clone());
             }
-            args.iter().for_each(|t| synonym_refs(t, synonyms, out));
         }
-        MonoType::InlineCmd(cs) | MonoType::BlockCmd(cs) | MonoType::MathCmd(cs) => {
-            cs.iter().for_each(|c| synonym_refs(&c.ty, synonyms, out));
-        }
-    }
-}
-
-fn synonym_refs_row(row: &Row, synonyms: &HashMap<String, SynonymDecl>, out: &mut Vec<String>) {
-    match row {
-        Row::Empty | Row::Var(_) => {}
-        Row::Cons(_, t, rest) => {
-            synonym_refs(t, synonyms, out);
-            synonym_refs_row(rest, synonyms, out);
-        }
-    }
+    });
 }
 
 /// Reject a cyclic synonym (`type a = b` / `type b = a`, or a directly

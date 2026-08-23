@@ -56,6 +56,18 @@
 //!   `text_match` 0.8743 -> 0.8539). More elasticity puts MORE lines inside the
 //!   free band, so `LINE_PENALTY` gets more say, not less.
 //!
+//!   RETRIED a third time, after the inter-script space was made rigid and the
+//!   JLreq class spaces were rescaled to the corrected font size — i.e. once
+//!   the stretch budget of a Japanese line was itself correct, which is the
+//!   input the free band is measured against. This is the closest it has come
+//!   and it still does not land: every `width_p95` improves (latexcmds 0.634 ->
+//!   0.631, xpath 0.160 -> 0.138, enumitem 0.547 -> 0.527, easytable 0.650 ->
+//!   0.622, figbox 0.693 -> 0.665) and no line or page count moves, but figbox
+//!   DROPS a character (`chars_missing` 0 -> 1) and the gate fails on it. The
+//!   diagnosis below is unchanged and is the reason: a free band is only
+//!   survivable with a search that breaks ties the way upstream's does, and
+//!   tightening the cost model cannot supply one.
+//!
 //!   And a note on what the remaining gap actually is, so the next reader does
 //!   not look for a cost that closes it. Upstream's weight is `badness +
 //!   pnltybreak` with NO per-line term, so within the free band every partition

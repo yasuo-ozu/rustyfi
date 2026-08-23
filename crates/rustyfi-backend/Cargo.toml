@@ -12,6 +12,7 @@ readme.workspace = true
 authors.workspace = true
 
 [dependencies]
+syan.workspace = true
 newer-type.workspace = true
 newer-type-std.workspace = true
 # UAX#14 line breaking: a compiled Unicode pair table, no unidata files to

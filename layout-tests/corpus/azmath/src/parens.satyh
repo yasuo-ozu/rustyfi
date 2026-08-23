@@ -1,0 +1,570 @@
+% azmath/parens.satyh
+@require: pervasives
+@require: list
+@require: gr
+@import: util
+
+% 欲しい括弧の高さ，フォントサイズ，括弧の色を指定し，
+% グラフィックス及び括弧のバウンディングボックス，kernの補正関数を返す関数．
+% ただしkernの補正関数は「括弧の中心軸をy座標の0ptとする」関数である．
+type graphicf-paren = length -> length -> color -> (graphics list * point * point * (length -> length))
+
+% どのような大きさの括弧で囲むかを決める関数．
+% 囲む対象の深さ，高さ，軸の高さ，fontsize を与えて，
+% 組みたい括弧の高さの半分の長さを返す．
+type half-height-paren = length -> length -> length -> length -> length
+
+module AZMathParens : sig
+
+  direct \genparen : [paren; paren; math;] math-cmd
+
+  val round-bracket-l  : paren
+  val round-bracket-r  : paren
+  val curly-bracket-l  : paren
+  val curly-bracket-r  : paren
+  val square-bracket-l : paren
+  val square-bracket-r : paren
+  val abs-bracket-l    : paren
+  val abs-bracket-m    : paren
+  val abs-bracket-r    : paren
+  val norm-bracket-l   : paren
+  val norm-bracket-r   : paren
+  val angle-bracket-l  : paren
+  val angle-bracket-r  : paren
+  val empty-bracket-l  : paren
+  val empty-bracket-r  : paren
+
+  val paren-scheme : graphicf-paren -> half-height-paren -> paren
+
+  val gr-round-bracket  : bool -> graphicf-paren
+  val gr-curly-bracket  : bool -> graphicf-paren
+  val gr-square-bracket : length -> bool -> graphicf-paren
+  val gr-abs-bracket    : length -> bool -> graphicf-paren
+  val gr-norm-bracket   : length -> bool -> graphicf-paren
+  val gr-angle-bracket  : length -> bool -> graphicf-paren
+
+  val half-height-default : half-height-paren
+  val half-height-with-paddings : float -> half-height-paren
+  val half-height-fixed : length -> half-height-paren
+
+  direct \p      : [length?; math;] math-cmd
+  direct \pb     : [length?; math;] math-cmd
+  direct \pB     : [length?; math;] math-cmd
+  direct \pabs   : [length?; math;] math-cmd
+  direct \pnorm  : [length?; math;] math-cmd
+  direct \pangle : [length?; math;] math-cmd
+
+  direct \set-builder : [math; math;] math-cmd
+  direct \overbrace : [math] math-cmd
+  direct \underbrace : [math] math-cmd
+
+end = struct
+
+% 便利関数
+
+  let minus l = 0pt -' l
+
+  let reflect-x = linear-transform-path (0.0 -. 1.0) 0.0 0.0 1.0
+
+  let raise-math l = math-transform (raise-inline l) MathOrd
+
+  let half-height-default hgt dpt hgtaxis fontsize =
+    let minhalflen = fontsize *' 0.5 in
+      length-max minhalflen (length-max (hgt -' hgtaxis) (hgtaxis +' dpt))
+
+  let half-height-with-paddings vpadr hgt dpt hgtaxis fontsize =
+    half-height-default hgt dpt hgtaxis fontsize +' fontsize *' vpadr
+
+  % あたかも中身が hgt-objective の高さを持っているかのように振る舞わせる．
+  let half-height-fixed hgt-objective hgt dpt hgtaxis fontsize =
+      length-max (hgt-objective -' hgtaxis) hgtaxis
+
+
+  % 一般的な括弧を描く．
+  let-math \genparen popen pclose inner = math-paren popen pclose inner
+
+
+% paren-scheme
+
+  % 以下の3つの情報から， paren を返す関数
+  % graphicf: 欲しい括弧の高さ，フォントサイズ，括弧の色を指定し，
+  %           グラフィックス及び括弧のバウンディングボックス，kernの補正関数を返す関数．
+  %           ただしkernの補正関数は「括弧の中心軸をy座標の0ptとする」関数である．
+  % vpad: どのような大きさの括弧で囲むかを決める関数．
+  %       囲む対象の深さ，高さ，軸の高さ，fontsize を与えて，
+  %       組みたい括弧の高さの半分の長さを返す．
+  % kinfo: kerning に関する情報．そのまま渡される
+  let paren-scheme graphicf htparenf hgt dpt hgtaxis fsize color =
+
+    % 長さの計算
+    let halflen = htparenf hgt dpt hgtaxis fsize in
+
+    % 括弧の graphics の作成
+    let (gr-paren, (xmin, ymin), (xmax, ymax), kinfo-paren) = graphicf halflen fsize color in
+
+    % kerning info の基準位置を補正
+    let kinfo y = kinfo-paren (y -' hgtaxis) in
+
+    % 最西端の x 座標を lpad にする
+    let gr-paren-shifted = gr-paren |> List.map (shift-graphics (minus xmin, hgtaxis)) in
+
+    let wid-paren = xmax -' xmin in
+    let hgt-paren = ymax +' hgtaxis in
+    let dpt-paren = minus (ymin +' hgtaxis) in
+    (inline-graphics wid-paren hgt-paren dpt-paren
+      (fun pt -> gr-paren-shifted |> List.map (shift-graphics pt)),
+      kinfo)
+
+
+% default kerninfo
+
+  let kern-default _ = 0pt
+
+
+% empty-bracket
+
+  let empty-bracket-l _ _ _ _ _ = (inline-nil, (fun _ -> 0pt))
+  let empty-bracket-r _ _ _ _ _ = (inline-nil, (fun _ -> 0pt))
+
+
+% round-bracket
+
+  let gr-round-bracket is-open vlen fsize color =
+    % 基準となる横の位置 (h) 及び 縦の位置 (v) の座標．
+    let hmin = minus fsize *' 0.08 in
+    let h0 = 0pt in
+    let ha = vlen *' 0.02 +' fsize *' 0.05 in
+    let hb = ha +' vlen *' 0.25 in
+    let hdelta = fsize *' 0.01 in
+    let hmax = hb +' fsize *' 0.1 in
+    let v0 = 0pt in
+    let va = vlen in
+    let vdelta = fsize *' 0.01 in
+
+    % 結ぶことになる点の座標．
+    let (x0, y0) = (0pt, 0pt) in
+    let (x3, y3) = (ha, 0pt) in
+    let (x1, y1) = (hb, va) in
+    let (x5, y5) = (hb, minus va) in
+    let (x2, y2) = (x1 +' hdelta, y1 -' vdelta) in
+    let (x4, y4) = (x5 +' hdelta, y5 +' vdelta) in
+
+    % Bezier 曲線を描くときのハンドル
+    let (p0in , q0in ) = (0pt, minus vlen *' 0.4) in
+    let (p0out, q0out) = (0pt,       vlen *' 0.4) in
+    let (p3in , q3in ) = (0pt,       vlen *' 0.5) in
+    let (p3out, q3out) = (0pt, minus vlen *' 0.5) in
+    let (p1in , q1in ) = ((minus hb *' 0.75), minus vlen *' 0.3) in
+    let (p5out, q5out) = ((minus hb *' 0.75),       vlen *' 0.3) in
+    let (p2out, q2out) = ((minus vlen *' 0.125), minus vlen *' 0.2) in
+    let (p4in , q4in ) = ((minus vlen *' 0.125),       vlen *' 0.2) in
+    let (p1out, q1out) = ((      hb *' 0.075),       vlen *' 0.03) in
+    let (p5in , q5in ) = ((      hb *' 0.075), minus vlen *' 0.03) in
+    let (p2in , q2in ) = ((      vlen *' 0.025),       vlen *' 0.04) in
+    let (p4out, q4out) = ((      vlen *' 0.025), minus vlen *' 0.04) in
+
+    let path =
+      start-path (x0, y0)
+        |> bezier-to (x0 +' p0out, y0 +' q0out) (x1 +' p1in, y1 +' q1in) (x1, y1)
+        |> bezier-to (x1 +' p1out, y1 +' q1out) (x2 +' p2in, y2 +' q2in) (x2, y2)
+        |> bezier-to (x2 +' p2out, y2 +' q2out) (x3 +' p3in, y3 +' q3in) (x3, y3)
+        |> bezier-to (x3 +' p3out, y3 +' q3out) (x4 +' p4in, y4 +' q4in) (x4, y4)
+        |> bezier-to (x4 +' p4out, y4 +' q4out) (x5 +' p5in, y5 +' q5in) (x5, y5)
+        |> close-with-bezier (x5 +' p5out, y5 +' q5out) (x0 +' p0in, y0 +' q0in)
+    in
+    let path = if is-open then path else reflect-x path in
+    let xmin = if is-open then hmin else minus hmax in
+    let xmax = if is-open then hmax else minus hmin in
+    (
+      [fill color path],
+      (xmin, minus vlen), (xmax, vlen),
+      (fun _ -> (minus hmin) *' 0.6)
+    )
+
+  let round-bracket-l = paren-scheme (gr-round-bracket true) half-height-default
+  let round-bracket-r = paren-scheme (gr-round-bracket false) half-height-default
+  let-math \p ?:ht m =
+    let half-height = match ht with
+      | Some(ht) -> half-height-fixed ht
+      | None -> half-height-default
+    in
+    math-paren
+      (paren-scheme (gr-round-bracket true) half-height)
+        (paren-scheme (gr-round-bracket false) half-height)
+          m
+
+% curly-bracket
+
+  let path-curly-bracket vlen fsize =
+    let h0 = 0pt in
+    let ha = fsize *' 0.10 in
+    let hb = fsize *' 0.15 in
+    let hc = fsize *' 0.225 in
+    let hd = fsize *' 0.325 in
+    let hdelta = fsize *' 0.015 in
+    let v0 = 0pt in
+    let va = fsize *' 0.15 in
+    let vb = vlen *' 0.98 -' fsize *' 0.05 in
+    let vc = vlen +' fsize *' 0.05 in
+    let vdelta = fsize *' 0.025 in
+
+    % 結ぶことになる点の座標．
+    let (x00, y00) = (0pt, 0pt) in
+    let (x01, y01) = (hb, va) in
+    let (x13, y13) = (hb, minus va) in
+    let (x02, y02) = (hb, vb) in
+    let (x12, y12) = (hb, minus vb) in
+    let (x03, y03) = (hd, vc) in
+    let (x11, y11) = (hd, minus vc) in
+    let (x04, y04) = (x03 +' hdelta, y03 -' vdelta) in
+    let (x10, y10) = (x03 +' hdelta, minus y03 +' vdelta) in
+    let (x05, y05) = (hc, vb) in
+    let (x09, y09) = (hc, minus vb) in
+    let (x06, y06) = (hc, va) in
+    let (x08, y08) = (hc, minus va) in
+    let (x07, y07) = (ha, 0pt) in
+
+    % Bezier 曲線を描くときのハンドル
+    let (p00in , q00in ) = (hb *' 0.15, minus va *' 0.1) in
+    let (p00out, q00out) = (hb *' 0.15,       va *' 0.1) in
+    let (p07in , q07in ) = (hb *' 0.10,       va *' 0.1) in
+    let (p07out, q07out) = (hb *' 0.10, minus va *' 0.1) in
+
+    let (p01in , q01in ) = (0pt, minus fsize *' 0.10) in
+    let (p13out, q13out) = (0pt,       fsize *' 0.10) in
+    let (p06out, q06out) = (0pt, minus fsize *' 0.10) in
+    let (p08in , q08in ) = (0pt,       fsize *' 0.10) in
+
+    let (p02out, q02out) = (0pt,       fsize *' 0.10) in
+    let (p12in , q12in ) = (0pt, minus fsize *' 0.10) in
+    let (p05in , q05in ) = (0pt,       fsize *' 0.10) in
+    let (p09out, q09out) = (0pt, minus fsize *' 0.10) in
+
+    let (p03in , q03in ) = (0pt, 0pt) in
+    let (p11out, q11out) = (0pt, 0pt) in
+    let (p04out, q04out) = (0pt, 0pt) in
+    let (p10in , q10in ) = (0pt, 0pt) in
+
+    let path = 
+      start-path (x00, y00)
+        |> bezier-to (x00 +' p00out, y00 +' q00out) (x01 +' p01in, y01 +' q01in) (x01, y01)
+        |> line-to (x02, y02)
+        |> bezier-to (x02 +' p02out, y02 +' q02out) (x03 +' p03in, y03 +' q03in) (x03, y03)
+        |> line-to (x04, y04)
+        |> bezier-to (x04 +' p04out, y04 +' q04out) (x05 +' p05in, y05 +' q05in) (x05, y05)
+        |> line-to (x06, y06)
+        |> bezier-to (x06 +' p06out, y06 +' q06out) (x07 +' p07in, y07 +' q07in) (x07, y07)
+        |> bezier-to (x07 +' p07out, y07 +' q07out) (x08 +' p08in, y08 +' q08in) (x08, y08)
+        |> line-to (x09, y09)
+        |> bezier-to (x09 +' p09out, y09 +' q09out) (x10 +' p10in, y10 +' q10in) (x10, y10)
+        |> line-to (x11, y11)
+        |> bezier-to (x11 +' p11out, y11 +' q11out) (x12 +' p12in, y12 +' q12in) (x12, y12)
+        |> line-to (x13, y13)
+        |> close-with-bezier (x13 +' p13out, y13 +' q13out) (x00 +' p00in, y00 +' q00in)
+    in
+    (path, (0pt, minus vlen), (hd, vlen))
+
+  let gr-curly-bracket is-open vlen fsize color =
+    % 基準となる横の位置 (h) 及び 縦の位置 (v) の座標．
+    let (path, (hmin, ymin), (hmax, ymax)) = path-curly-bracket vlen fsize in
+
+    % 余白補正
+    let hmin = hmin -' fsize *' 0.06 in  % 開き括弧の前
+    let hmax = hmax +' fsize *' 0.08 in  % 開き括弧の後
+
+    let path = if is-open then path else reflect-x path in
+    let xmin = if is-open then hmin else minus hmax in
+    let xmax = if is-open then hmax else minus hmin in
+    (
+      [fill color path],
+      (xmin, ymin), (xmax, ymax),
+      (fun _ -> (fsize *' 0.15 -' hmin) *' 0.6)
+    )
+
+  let curly-bracket-l = paren-scheme (gr-curly-bracket true) half-height-default
+  let curly-bracket-r = paren-scheme (gr-curly-bracket false) half-height-default
+  let-math \pb ?:ht m =
+    let half-height = match ht with
+      | Some(ht) -> half-height-fixed ht
+      | None -> half-height-default
+    in
+    math-paren
+      (paren-scheme (gr-curly-bracket true) half-height)
+        (paren-scheme (gr-curly-bracket false) half-height)
+          m
+
+
+% square-bracket
+
+let pads-square-bracket is-open fsize =
+    let (pad-inner, pad-outer) = (fsize *' 0.02, fsize *' 0.12) in
+    if is-open then (pad-outer, pad-inner, 0pt) else (pad-inner, pad-outer, 0pt)
+
+  let gr-square-bracket thk is-open vlen fsize color =
+
+    % 基準となる横の位置 (h) 及び 縦の位置 (v) の座標．
+    let hmin = minus fsize *' 0.12 in
+    let h0 = 0pt in
+    let ha = vlen *' 0.07 +' fsize *' 0.1 in
+    let hmax = ha +' fsize *' 0.02 in
+    let va = vlen in
+
+    % 結ぶことになる点の座標．
+    let (x0, y0) = (ha, va) in
+    let (x1, y1) = (0pt, va) in
+    let (x2, y2) = (0pt, minus va) in
+    let (x3, y3) = (ha, minus va) in
+
+    let path =
+      start-path (x0, y0)
+        |> line-to (x1, y1)
+        |> line-to (x2, y2)
+        |> line-to (x3, y3)
+        |> terminate-path
+    in
+    let path = if is-open then path else reflect-x path in
+    let xmin = if is-open then hmin else minus hmax in
+    let xmax = if is-open then hmax else minus hmin in
+    (
+      [stroke thk color path],
+      (xmin, minus vlen), (xmax, vlen),
+      kern-default
+    )
+
+  let square-bracket-l = paren-scheme (gr-square-bracket 0.5pt true) half-height-default
+  let square-bracket-r = paren-scheme (gr-square-bracket 0.5pt false) half-height-default
+  let-math \pB ?:ht m =
+    let half-height = match ht with
+      | Some(ht) -> half-height-fixed ht
+      | None -> half-height-default
+    in
+    math-paren
+      (paren-scheme (gr-square-bracket 0.5pt true) half-height)
+        (paren-scheme (gr-square-bracket 0.5pt false) half-height)
+          m
+
+
+% abs-bracket
+
+  let gr-abs-bracket thk is-open vlen fsize color =
+
+    % 基準となる横の位置 (h) 及び 縦の位置 (v) の座標．
+    let hmin = minus fsize *' 0.18 in
+    let h0 = 0pt in
+    let hmax = fsize *' 0.16 in
+    let va = vlen in
+
+    % 結ぶことになる点の座標．
+    let (x0, y0) = (0pt, va) in
+    let (x1, y1) = (0pt, minus va) in
+
+    let path =
+      start-path (x0, y0)
+        |> line-to (x1, y1)
+        |> terminate-path
+    in
+    let xmin = if is-open then hmin else minus hmax in
+    let xmax = if is-open then hmax else minus hmin in
+    (
+      [stroke thk color path],
+      (xmin, minus vlen), (xmax, vlen),
+      (fun _ -> (minus hmin) *' 0.4)
+    )
+
+  let gr-abs-bracket-m thk vlen fsize color =
+
+    % 基準となる横の位置 (h) 及び 縦の位置 (v) の座標．
+    let hmin = minus fsize *' 0.2 in
+    let h0 = 0pt in
+    let hmax = fsize *' 0.2 in
+    let va = vlen in
+
+    % 結ぶことになる点の座標．
+    let (x0, y0) = (0pt, va) in
+    let (x1, y1) = (0pt, minus va) in
+
+    let path =
+      start-path (x0, y0)
+        |> line-to (x1, y1)
+        |> terminate-path
+    in
+    let xmin = hmin in
+    let xmax = hmax in
+    (
+      [stroke thk color path],
+      (xmin, minus vlen), (xmax, vlen),
+      (fun _ -> 0pt)
+    )
+
+  let abs-bracket-l = paren-scheme (gr-abs-bracket 0.5pt true) (half-height-with-paddings 0.08)
+  let abs-bracket-m = paren-scheme (gr-abs-bracket-m 0.5pt) (half-height-with-paddings 0.08)
+  let abs-bracket-r = paren-scheme (gr-abs-bracket 0.5pt false) (half-height-with-paddings 0.08)
+  let-math \pabs ?:ht m =
+    let half-height = match ht with
+      | Some(ht) -> half-height-fixed ht
+      | None -> half-height-with-paddings 0.08
+    in
+    math-paren
+      (paren-scheme (gr-abs-bracket 0.5pt true) half-height)
+        (paren-scheme (gr-abs-bracket 0.5pt false) half-height)
+          m
+
+
+% norm-bracket
+
+  let gr-norm-bracket thk is-open vlen fsize color =
+
+    % 基準となる横の位置 (h) 及び 縦の位置 (v) の座標．
+    let hmin = minus fsize *' 0.18 in
+    let h0 = 0pt in
+    let ha = fsize *' 0.13 in
+    let hmax = ha +' fsize *' 0.16 in
+    let va = vlen in
+
+    % 結ぶことになる点の座標．
+    let (x0, y0) = (h0, va) in
+    let (x1, y1) = (h0, minus va) in
+    let (x2, y2) = (ha, va) in
+    let (x3, y3) = (ha, minus va) in
+
+    let path1 =
+      start-path (x0, y0)
+        |> line-to (x1, y1)
+        |> terminate-path
+    in
+    let path2 =
+      start-path (x2, y2)
+        |> line-to (x3, y3)
+        |> terminate-path
+    in
+    let path2 = if is-open then path2 else reflect-x path2 in
+    let xmin = if is-open then hmin else minus hmax in
+    let xmax = if is-open then hmax else minus hmin in
+    (
+      [stroke thk color path1; stroke thk color path2],
+      (xmin, minus vlen), (xmax, vlen),
+      (fun _ -> (minus hmin) *' 0.4)
+    )
+
+  let norm-bracket-l = paren-scheme (gr-norm-bracket 0.5pt true) (half-height-with-paddings 0.08)
+  let norm-bracket-r = paren-scheme (gr-norm-bracket 0.5pt false) (half-height-with-paddings 0.08)
+  let-math \pnorm ?:ht m =
+    let half-height = match ht with
+      | Some(ht) -> half-height-fixed ht
+      | None -> half-height-with-paddings 0.08
+    in
+    math-paren
+      (paren-scheme (gr-norm-bracket 0.5pt true) half-height)
+        (paren-scheme (gr-norm-bracket 0.5pt false) half-height)
+          m
+
+
+% angle-bracket
+
+  let gr-angle-bracket thk is-open vlen fsize color =
+
+    % 基準となる横の位置 (h) 及び 縦の位置 (v) の座標．
+    let hmin = minus fsize *' 0.1 in
+    let h0 = 0pt in
+    let ha = vlen *' 0.375 in
+    let hmax = ha +' fsize *' 0.08 in
+    let va = vlen in
+
+    % 結ぶことになる点の座標．
+    let (x0, y0) = (ha, va) in
+    let (x1, y1) = (0pt, 0pt) in
+    let (x2, y2) = (ha, minus va) in
+
+    let path =
+      start-path (x0, y0)
+        |> line-to (x1, y1)
+        |> line-to (x2, y2)
+        |> terminate-path
+    in
+    let path = if is-open then path else reflect-x path in
+    let xmin = if is-open then hmin else minus hmax in
+    let xmax = if is-open then hmax else minus hmin in
+    (
+      [stroke thk color path],
+      (xmin, minus vlen), (xmax, vlen),
+      (fun y -> y *' 0.3)  % 0.375 より気持ち控えめに
+    )
+
+  let angle-bracket-l = paren-scheme (gr-angle-bracket 0.5pt true) half-height-default
+  let angle-bracket-r = paren-scheme (gr-angle-bracket 0.5pt false) half-height-default
+  let-math \pangle ?:ht m =
+    let half-height = match ht with
+      | Some(ht) -> half-height-fixed ht
+      | None -> half-height-default
+    in
+    math-paren
+      (paren-scheme (gr-angle-bracket 0.5pt true) half-height)
+        (paren-scheme (gr-angle-bracket 0.5pt false) half-height)
+          m
+
+
+% other commands
+
+  let-math \set-builder m m-cond =
+    let lparen = paren-scheme (gr-curly-bracket true) half-height-default in
+    let mparen = paren-scheme (gr-abs-bracket-m 0.5pt) half-height-default in
+    let rparen = paren-scheme (gr-curly-bracket false) half-height-default in
+    math-paren-with-middle lparen rparen mparen [m; m-cond]
+
+  let-math \overbrace m =
+    let mathpullf _ sup ctx =
+      let fsize = get-font-size ctx in
+      let clr = get-text-color ctx in
+      let ib = embed-math ctx m in
+      let (wid, _, _) = get-natural-metrics ib in
+      let ib-brace =
+        let (path-brace, (xmin, ymin), (xmax, ymax)) =
+          % ちょっと大きめの fontsize を与えて，括弧を太くするテク
+          path-curly-bracket (wid *' 0.5) (fsize *' 1.5)
+        in
+        let xmin = xmin -' fsize *' 0.05 in
+        let xmax = xmax +' fsize *' 0.25 in
+        % (minus ymax, xmin), (minus ymin, xmax) の箱を持つ brace が出来上がる
+        let path-brace-rotate = Gr.rotate-path (0pt, 0pt) 270.0 path-brace in
+        inline-graphics (ymax -' ymin) (xmax -' xmin) 0pt (fun (x, y) -> [
+          fill clr (path-brace-rotate |> shift-path (x +' ymax, y +' xmax))
+        ])
+      in
+      let ib-with-brace = line-stack-bottom [ib-brace; ib] in
+      let m-with-brace = text-in-math MathOrd (fun _ -> ib-with-brace) in
+      match sup with
+      | Some(sup) -> math-upper m-with-brace sup
+      | None -> m-with-brace
+    in
+    math-pull-in-scripts MathOrd MathOrd
+      (fun sub sup -> math-in-math MathOrd (mathpullf sub sup))
+
+  let-math \underbrace m =
+    let mathpullf sub _ ctx =
+      let fsize = get-font-size ctx in
+      let clr = get-text-color ctx in
+      let ib = embed-math ctx m in
+      let (wid, _, _) = get-natural-metrics ib in
+      let ib-brace =
+        let (path-brace, (xmin, ymin), (xmax, ymax)) =
+          % ちょっと大きめの fontsize を与えて，括弧を太くするテク
+          path-curly-bracket (wid *' 0.5) (fsize *' 1.5)
+        in
+        let xmin = xmin -' fsize *' 0.05 in
+        let xmax = xmax +' fsize *' 0.25 in
+        % (minus ymax, xmin), (minus ymin, xmax) の箱を持つ brace が出来上がる
+        let path-brace-rotate = Gr.rotate-path (0pt, 0pt) 90.0 path-brace in
+        inline-graphics (ymax -' ymin) (xmax -' xmin) 0pt (fun (x, y) -> [
+          fill clr (path-brace-rotate |> shift-path (x +' ymax, y -' xmin))
+        ])
+      in
+      let ib-with-brace = line-stack-top [ib; ib-brace] in
+      let m-with-brace = text-in-math MathOrd (fun _ -> ib-with-brace) in
+      match sub with
+      | Some(sub) -> math-lower m-with-brace sub
+      | None -> m-with-brace
+    in
+    math-pull-in-scripts MathOrd MathOrd
+      (fun sub sup -> math-in-math MathOrd (mathpullf sub sup))
+
+end

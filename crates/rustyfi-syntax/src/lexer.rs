@@ -39,6 +39,32 @@ pub fn lex(src: &str) -> Result<Vec<Atom>, LexError> {
 /// asserting identical token streams
 /// (`crates/rustyfi-syntax/tests/lex_with_version_differential.rs`).
 pub fn lex_with_version(src: &str, version: RustyfiVersion) -> Result<Vec<Atom>, LexError> {
+    match Lexer::new(src, Mode::Program, version).run() {
+        (atoms, None) => Ok(atoms),
+        (_, Some(e)) => Err(e),
+    }
+}
+
+/// [`lex_with_version`], keeping the tokens produced **before** a failure
+/// instead of discarding them.
+///
+/// The tokens are identical to [`lex_with_version`]'s up to the failure point;
+/// past it there are none, and the returned [`LexError`] is the same one
+/// [`lex_with_version`] would have returned. A successful lex returns
+/// `(atoms, None)` and ends with [`Token::Eoi`] as usual; a failed one has no
+/// `Eoi`, because the input never reached one.
+///
+/// Exists for the language server, where the buffer is half-typed by
+/// definition and the commonest failures are *local*: `{\emp` with the command
+/// not yet applied to anything is "unexpected token in an active area", and
+/// `'<+p` with no closing `>` is an unterminated group. Both leave every token
+/// before the cursor perfectly well-formed, and those are exactly the tokens
+/// that say which text area the cursor is in and which names are in scope
+/// there. Discarding them costs completion its two most important cases.
+///
+/// The compiler keeps using [`lex_with_version`]: a partial token stream is
+/// the right input for an editor question and the wrong input for a build.
+pub fn lex_partial(src: &str, version: RustyfiVersion) -> (Vec<Atom>, Option<LexError>) {
     Lexer::new(src, Mode::Program, version).run()
 }
 
@@ -303,17 +329,25 @@ impl Lexer {
         }
     }
 
-    fn run(mut self) -> Result<Vec<Atom>, LexError> {
+    /// Drive the mode machine to end of input, or to the first failure.
+    ///
+    /// Returns the tokens produced either way; `lex_with_version` throws the
+    /// partial ones away and `lex_partial` keeps them, which is the whole
+    /// difference between the two.
+    fn run(mut self) -> (Vec<Atom>, Option<LexError>) {
         loop {
-            match self.stack.last().copied().expect("mode stack never empty") {
-                Mode::Program => self.lex_program()?,
-                Mode::Vertical => self.lex_vertical()?,
-                Mode::Horizontal => self.lex_horizontal()?,
-                Mode::Active => self.lex_active()?,
-                Mode::Math => self.lex_math()?,
+            let step = match self.stack.last().copied().expect("mode stack never empty") {
+                Mode::Program => self.lex_program(),
+                Mode::Vertical => self.lex_vertical(),
+                Mode::Horizontal => self.lex_horizontal(),
+                Mode::Active => self.lex_active(),
+                Mode::Math => self.lex_math(),
+            };
+            if let Err(e) = step {
+                return (self.out, Some(e));
             }
             if matches!(self.out.last(), Some(a) if a.slot == Token::Eoi) {
-                return Ok(self.out);
+                return (self.out, None);
             }
         }
     }

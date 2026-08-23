@@ -17,6 +17,7 @@ pub mod types;
 pub mod unify;
 pub mod v1;
 pub mod value;
+pub mod visit;
 
 use crossref::{CrossRefs, Verdict};
 use rustyfi_backend::{
@@ -292,6 +293,110 @@ pub fn compile_document_cst_with_stages(
     )
 }
 
+/// [`compile_document_cst_with_stages`]'s front half and nothing else:
+/// elaborate and typecheck, then STOP — no closure tree, no font store, no
+/// evaluation. The 0.0.6 sibling of [`check_document_v1`]; see that function
+/// for what the distinction is for.
+pub fn check_document_cst_with_stages(
+    file: &rustyfi_syntax::cst::File,
+    stages: &std::collections::HashMap<usize, types::Stage>,
+) -> Result<(), CompileError> {
+    let env0 = primitives::base_env();
+    let store = symbol::SymbolStore::new();
+    let scope = elaborate::Scope::new(&store, env0.names());
+    let program = elaborate::elaborate_program_with_stages(file, &scope, stages)?;
+    typecheck::typecheck(&program)?;
+    Ok(())
+}
+
+/// Concatenate a loader-resolved 0.0.6 program's dependency-ordered library
+/// preludes ahead of the entry document's own, producing the one synthetic
+/// file [`compile_document_cst_with_stages`] and
+/// [`check_document_cst_with_stages`] elaborate — plus the per-slot `@stage:`
+/// table the concatenation would otherwise lose.
+///
+/// The 0.0.6 counterpart of `assemble_v1`, and the CLI's `merge_program`:
+/// both the compiler and the language server need it, so it lives here rather
+/// than in either of them.
+///
+/// Panics if handed a `LoadedCst::V0_1` file — a mixed-generation 0.0.6-rooted
+/// load belongs on [`compile_document_v006_xver_with_aux`]'s (or
+/// [`check_document_v006_xver`]'s) path, which the caller selects by testing
+/// for a `V0_1` file before calling this.
+pub fn merge_v006_program(
+    program: rustyfi_loader::LoadedProgram,
+) -> (
+    rustyfi_syntax::cst::File,
+    std::collections::HashMap<usize, types::Stage>,
+) {
+    fn as_v006(cst: rustyfi_loader::LoadedCst) -> rustyfi_syntax::cst::File {
+        match cst {
+            rustyfi_loader::LoadedCst::V0_0(f) => f,
+            rustyfi_loader::LoadedCst::V0_1(_) => unreachable!(
+                "merge_v006_program is the V0_0-only path; a V0_1 file belongs \
+                 on compile_document_v1's or compile_document_v006_xver's"
+            ),
+        }
+    }
+
+    let mut files = program.files;
+    let entry = files.pop().expect("loader always yields the entry last");
+    let entry_cst = as_v006(entry.cst);
+    let mut prelude = Vec::new();
+    // Concatenation drops each file's headers, so `@stage:` — a property of
+    // its BINDINGS, not of the file as a document — is recorded here
+    // against the slots they land in. The entry document is stage 1 by
+    // definition and contributes nothing.
+    let mut stages = std::collections::HashMap::new();
+    for lib in files {
+        let mut cst = as_v006(lib.cst);
+        let start = prelude.len();
+        prelude.extend(std::mem::take(&mut cst.prelude));
+        note_stage(&mut stages, &cst, start, prelude.len());
+    }
+    prelude.extend(entry_cst.prelude);
+    (
+        rustyfi_syntax::cst::File {
+            headers: Vec::new(),
+            prelude,
+            in_kw: entry_cst.in_kw,
+            body: entry_cst.body,
+            eoi: entry_cst.eoi,
+        },
+        stages,
+    )
+}
+
+/// Typecheck a whole loader-resolved program, whichever of the three shapes it
+/// is, without evaluating it.
+///
+/// The dispatch mirrors the CLI's own (`rustyfi`'s `cmd_compile`) exactly, and
+/// for the same reasons: a `V0_1` load is a module program; a `V0_0` load that
+/// carries a foreign `V0_1` dependency is a cross-version splice; anything
+/// else is the flat 0.0.6 prelude merge. `version` is the load's own
+/// [`rustyfi_loader::LoadOptions::version`] — Axis A, the entry's generation —
+/// not any individual file's.
+pub fn check_document_program(
+    program: rustyfi_loader::LoadedProgram,
+    version: rustyfi_syntax::RustyfiVersion,
+) -> Result<(), CompileError> {
+    match version {
+        rustyfi_syntax::RustyfiVersion::V0_1 => check_document_v1(&program.files),
+        _ => {
+            let has_v01_dep = program
+                .files
+                .iter()
+                .any(|f| matches!(f.cst, rustyfi_loader::LoadedCst::V0_1(_)));
+            if has_v01_dep {
+                check_document_v006_xver(&program.files)
+            } else {
+                let (merged, stages) = merge_v006_program(program);
+                check_document_cst_with_stages(&merged, &stages)
+            }
+        }
+    }
+}
+
 /// The compile-once + fixpoint-trial tail shared by the `V0_0` and `V0_1`
 /// entry points (`compile_document_cst_with_trials` above and
 /// `compile_document_v1_with_trials` below). The only version-sensitive step
@@ -440,6 +545,121 @@ pub fn compile_document_v1_with_aux(
     metrics: &dyn FontMetrics,
     aux: &mut crossref::AuxTable,
 ) -> Result<(std::rc::Rc<DocumentValue>, u32), CompileError> {
+    use rustyfi_syntax::RustyfiVersion;
+
+    let asm = assemble_v1(files)?;
+    let env0 = primitives::base_env_with_version(RustyfiVersion::V0_1);
+    // Branded front half scoped so the store, the `Ast<Symbol>` tree and the
+    // module checker's tables are dead before the fixpoint trials run; the
+    // de-branded `body` stays pinned for the trials' sake — see
+    // `compile_document_cst_with_trials` for both halves of that contract.
+    let body = {
+        let store = symbol::SymbolStore::new();
+        let program = check_v1(&asm, &store, &env0)?;
+        ast::debrand(&program.body, &store)
+    };
+    let compiled = if asm.v006_indices.is_empty() {
+        compile::compile_program(&body, &env0)
+    } else {
+        let env0_v006 = primitives::base_env_with_version(RustyfiVersion::V0_0);
+        compile::compile_program_xver(&body, &env0, &env0_v006)
+    };
+    eval_document_trials(&compiled, metrics, RustyfiVersion::V0_1, aux)
+}
+
+/// [`compile_document_v1_with_aux`]'s front half and nothing else: assemble,
+/// elaborate, typecheck, enforce every `:>` seal — then STOP, without
+/// compiling a closure tree, without a font store, and without evaluating
+/// anything.
+///
+/// What it is for is a language server. Elaboration, typechecking and sealing
+/// are what take a document from "parses" to "would compile", and they are
+/// also the phases that need the whole resolved program rather than one
+/// buffer. What follows them — `compile::compile_program` and the fixpoint
+/// trials — produces pages, which an editor has no use for and which cost far
+/// more than the answer is worth on every keystroke.
+pub fn check_document_v1(files: &[rustyfi_loader::LoadedFile]) -> Result<(), CompileError> {
+    let asm = assemble_v1(files)?;
+    let env0 = primitives::base_env_with_version(rustyfi_syntax::RustyfiVersion::V0_1);
+    let store = symbol::SymbolStore::new();
+    check_v1(&asm, &store, &env0).map(|_program| ())
+}
+
+/// The synthetic single-file program a loader-resolved 0.1 load is compiled
+/// through, plus the three side tables the elaborator and the module checker
+/// need to read it correctly. Produced by [`assemble_v1`], consumed by
+/// [`check_v1`].
+struct AssembledV1<'a> {
+    /// The merged `cst::File` — every dependency's bindings, dependency-first,
+    /// then the entry's own body.
+    file: rustyfi_syntax::cst::File,
+    /// The 0.1 dependencies' own `cst_v1` trees, for `:>` seal enforcement.
+    dep_csts: Vec<&'a rustyfi_syntax::cst_v1::FileV1>,
+    /// Which top-level `file.prelude` slots a spliced 0.0.6 dependency
+    /// contributed (`Ast::VersionScope(V0_0, _)`).
+    v006_indices: std::collections::HashSet<usize>,
+    /// Which slots came from a file that declared a non-default `@stage:`.
+    stages: std::collections::HashMap<usize, types::Stage>,
+}
+
+/// Elaborate + typecheck + `:>`-check an [`AssembledV1`], returning the
+/// elaborated program (which the compile path then de-brands, and the check
+/// path drops).
+fn check_v1<'s>(
+    asm: &AssembledV1<'_>,
+    store: &'s symbol::SymbolStore,
+    env0: &value::BaseEnv,
+) -> Result<elaborate::Program<'s>, CompileError> {
+    use rustyfi_syntax::RustyfiVersion;
+
+    // A spliced `V0_0` dependency may name a `V0_0`-ONLY primitive
+    // (`text-in-math`, `get-axis-height`, `math-color`, …). Elaboration
+    // resolves names against ONE flat set built from the ambient version,
+    // and it runs BEFORE `Ast::VersionScope` can mean anything — the scope
+    // wraps an already-elaborated RHS — so such a name was simply
+    // "unbound variable" at elaborate time, no matter how correctly the
+    // later phases were version-scoped.
+    //
+    // So when (and ONLY when) a `V0_0` dependency was actually spliced,
+    // widen the elaboration name set to the UNION of both versions'
+    // primitives. This set answers one question — "is this a known global
+    // rather than a free variable?" — and version-correct resolution still
+    // happens downstream: `compile.rs`'s fold picks the `V0_0` `PrimDef`
+    // inside a `VersionScope(V0_0, _)`, and `typecheck.rs` picks that
+    // version's scheme. A pure `V0_1` program takes the other branch and
+    // keeps its "unbound variable" diagnostics for `V0_0`-only names.
+    let scope_names: Vec<String> = if asm.v006_indices.is_empty() {
+        env0.names()
+    } else {
+        let mut n = env0.names();
+        n.extend(primitives::base_env_with_version(RustyfiVersion::V0_0).names());
+        n.sort();
+        n.dedup();
+        n
+    };
+    let scope = elaborate::Scope::new_with_version(store, scope_names, RustyfiVersion::V0_1);
+    // `v006_indices` is empty whenever no `V0_0` dependency was
+    // spliced above, and `elaborate_program_with_versions` then emits no
+    // `Ast::VersionScope` node at all — so a `V0_1`-only load's
+    // `program`/`compiled` are structurally identical to a plain
+    // `elaborate_program`/`compile_program` pair's.
+    let program = elaborate::elaborate_program_with_versions(
+        &asm.file,
+        &scope,
+        &asm.v006_indices,
+        &asm.stages,
+        None,
+    )?;
+    v1::module_check::check_program(&asm.dep_csts, &program)?;
+    Ok(program)
+}
+
+/// Assemble a loader-resolved 0.1 program into the one synthetic `cst::File`
+/// the shared pipeline runs on — `merge_program`'s V0_1 analogue, plus the
+/// whole cross-version splice (X1/X3/X3b/X3c).
+fn assemble_v1<'a>(
+    files: &'a [rustyfi_loader::LoadedFile],
+) -> Result<AssembledV1<'a>, CompileError> {
     use rustyfi_syntax::RustyfiVersion;
 
     // -- assemble the synthetic cst::File (merge_program's V0_1 analogue) --
@@ -806,64 +1026,12 @@ pub fn compile_document_v1_with_aux(
         eoi,
     };
 
-    // -- the shared pipeline, V0_1-tagged (mirrors
-    //    compile_document_cst_with_trials line for line) --
-    let env0 = primitives::base_env_with_version(RustyfiVersion::V0_1);
-    // Branded front half scoped so the store, the `Ast<Symbol>` tree and the
-    // module checker's tables are dead before the fixpoint trials run; the
-    // de-branded `body` stays pinned for the trials' sake — see
-    // `compile_document_cst_with_trials` for both halves of that contract.
-    let body = {
-        let store = symbol::SymbolStore::new();
-        // A spliced `V0_0` dependency may name a `V0_0`-ONLY primitive
-        // (`text-in-math`, `get-axis-height`, `math-color`, …). Elaboration
-        // resolves names against ONE flat set built from the ambient version,
-        // and it runs BEFORE `Ast::VersionScope` can mean anything — the scope
-        // wraps an already-elaborated RHS — so such a name was simply
-        // "unbound variable" at elaborate time, no matter how correctly the
-        // later phases were version-scoped.
-        //
-        // So when (and ONLY when) a `V0_0` dependency was actually spliced,
-        // widen the elaboration name set to the UNION of both versions'
-        // primitives. This set answers one question — "is this a known global
-        // rather than a free variable?" — and version-correct resolution still
-        // happens downstream: `compile.rs`'s fold picks the `V0_0` `PrimDef`
-        // inside a `VersionScope(V0_0, _)`, and `typecheck.rs` picks that
-        // version's scheme. A pure `V0_1` program takes the other branch and
-        // keeps its "unbound variable" diagnostics for `V0_0`-only names.
-        let scope_names: Vec<String> = if v006_indices.is_empty() {
-            env0.names()
-        } else {
-            let mut n = env0.names();
-            n.extend(primitives::base_env_with_version(RustyfiVersion::V0_0).names());
-            n.sort();
-            n.dedup();
-            n
-        };
-        let scope = elaborate::Scope::new_with_version(&store, scope_names, RustyfiVersion::V0_1);
-        // `v006_indices` is empty whenever no `V0_0` dependency was
-        // spliced above, and `elaborate_program_with_versions` then emits no
-        // `Ast::VersionScope` node at all — so a `V0_1`-only load's
-        // `program`/`compiled` are structurally identical to a plain
-        // `elaborate_program`/`compile_program` pair's.
-        let program =
-            elaborate::elaborate_program_with_versions(
-                &file,
-                &scope,
-                &v006_indices,
-                &stages,
-                None,
-            )?;
-        v1::module_check::check_program(&dep_csts, &program)?;
-        ast::debrand(&program.body, &store)
-    };
-    let compiled = if v006_indices.is_empty() {
-        compile::compile_program(&body, &env0)
-    } else {
-        let env0_v006 = primitives::base_env_with_version(RustyfiVersion::V0_0);
-        compile::compile_program_xver(&body, &env0, &env0_v006)
-    };
-    eval_document_trials(&compiled, metrics, RustyfiVersion::V0_1, aux)
+    Ok(AssembledV1 {
+        file,
+        dep_csts,
+        v006_indices,
+        stages,
+    })
 }
 
 /// Compile a loader-resolved SATySFi 0.0.6 program (`LoadOptions { version:
@@ -910,6 +1078,89 @@ pub fn compile_document_v006_xver_with_aux(
 ) -> Result<(std::rc::Rc<DocumentValue>, u32), CompileError> {
     use rustyfi_syntax::RustyfiVersion;
 
+    let asm = assemble_v006_xver(files)?;
+    let env0 = primitives::base_env_with_version(RustyfiVersion::V0_1);
+    let store = symbol::SymbolStore::new();
+    let program = check_v006_xver(&asm, &store, &env0)?;
+    let env0_v006 = primitives::base_env_with_version(RustyfiVersion::V0_0);
+    // `v006_indices` is NEVER empty here (the entry's own bindings are
+    // always indexed into it above), so this always takes the `_xver` fold
+    // path — matching `compile_document_v1_with_trials`'s own `if v006_
+    // indices.is_empty() { .. } else { compile_program_xver }` branch,
+    // specialized since the `else` arm is the only reachable one.
+    // Bound to a local, not passed as a temporary: `Interp::eval_arg`
+    // memoizes by `&Ast` address, so the de-branded tree must outlive the
+    // trials (see `compile_document_cst_with_trials`).
+    let body = ast::debrand(&program.body, &store);
+    let compiled = compile::compile_program_xver(&body, &env0, &env0_v006);
+    eval_document_trials(&compiled, metrics, RustyfiVersion::V0_0, aux)
+}
+
+/// [`compile_document_v006_xver_with_aux`]'s front half and nothing else —
+/// the reverse-direction sibling of [`check_document_v1`], with the same
+/// rationale.
+pub fn check_document_v006_xver(files: &[rustyfi_loader::LoadedFile]) -> Result<(), CompileError> {
+    let asm = assemble_v006_xver(files)?;
+    let env0 = primitives::base_env_with_version(rustyfi_syntax::RustyfiVersion::V0_1);
+    let store = symbol::SymbolStore::new();
+    check_v006_xver(&asm, &store, &env0).map(|_program| ())
+}
+
+/// [`AssembledV1`]'s reverse-direction counterpart: additionally carries the
+/// qualified member keys the reverse deco coercion rebound, which the `:>`
+/// seal check must exempt from a second conformance test.
+struct AssembledXver<'a> {
+    file: rustyfi_syntax::cst::File,
+    dep_csts: Vec<&'a rustyfi_syntax::cst_v1::FileV1>,
+    v006_indices: std::collections::HashSet<usize>,
+    stages: std::collections::HashMap<usize, types::Stage>,
+    xver_shadows: std::collections::HashSet<String>,
+}
+
+/// Elaborate + typecheck + `:>`-check an [`AssembledXver`] — [`check_v1`]'s
+/// reverse-direction counterpart.
+fn check_v006_xver<'s>(
+    asm: &AssembledXver<'_>,
+    store: &'s symbol::SymbolStore,
+    env0: &value::BaseEnv,
+) -> Result<elaborate::Program<'s>, CompileError> {
+    use rustyfi_syntax::RustyfiVersion;
+
+    let scope = elaborate::Scope::new_with_version(store, env0.names(), RustyfiVersion::V0_1);
+    // `wrap_body_version = Some(V0_0)`: the ENTRY's own document tail
+    // (`file.body`, always 0.0.6-authored here) is wrapped in
+    // `Ast::VersionScope(V0_0, _)` too — the one new elaborate.rs
+    // capability this reverse direction adds beyond wrapping dependency bindings.
+    let program = elaborate::elaborate_program_with_versions(
+        &asm.file,
+        &scope,
+        &asm.v006_indices,
+        &asm.stages,
+        Some(RustyfiVersion::V0_0),
+    )?;
+    // `dep_csts` here is the foreign 0.1 dependencies' OWN `cst_v1` trees, so
+    // a `:>`-sealed export (e.g. `V01Sealed.t`) is enforced against the WHOLE
+    // merged spine exactly as it would be for a pure-0.1 consumer.
+    //
+    // `xver_shadows` is the ONE thing this arm asks the checker
+    // to treat differently, and only for names it has itself just rebound:
+    // the exporting module's own alias is still conformance-checked, and
+    // only the coercion shadow that FOLLOWS it is exempted from a second
+    // check against a signature it deliberately does not match. Empty
+    // whenever no 0.1 `deco` export crossed.
+    v1::module_check::check_program_with_xver_shadows(
+        &asm.dep_csts,
+        &program,
+        &asm.xver_shadows,
+    )?;
+    Ok(program)
+}
+
+/// Assemble a loader-resolved 0.0.6-rooted program that carries at least one
+/// foreign 0.1 dependency — [`assemble_v1`]'s reverse-direction counterpart.
+fn assemble_v006_xver<'a>(
+    files: &'a [rustyfi_loader::LoadedFile],
+) -> Result<AssembledXver<'a>, CompileError> {
     // The entry is whichever file is a document (`LoadedCst::is_document`) —
     // NOT necessarily `files.last()` (that assumption is specific to
     // `compile_document_v1_with_trials`'s pure-V0_1-entry contract); scan
@@ -1170,47 +1421,13 @@ pub fn compile_document_v006_xver_with_aux(
         eoi: entry_cst.eoi.clone(),
     };
 
-    // -- the shared pipeline, ambient V0_1-tagged (the elaborate syntax gate
-    //    is the one asymmetry — keeping the ambient tag at V0_1 is what lets
-    //    genuinely 0.0.6-authored code elaborate unrejected, since 0.1's
-    //    grammar is a strict superset) --
-    let env0 = primitives::base_env_with_version(RustyfiVersion::V0_1);
-    let store = symbol::SymbolStore::new();
-    let scope = elaborate::Scope::new_with_version(&store, env0.names(), RustyfiVersion::V0_1);
-    // `wrap_body_version = Some(V0_0)`: the ENTRY's own document tail
-    // (`file.body`, always 0.0.6-authored here) is wrapped in
-    // `Ast::VersionScope(V0_0, _)` too — the one new elaborate.rs
-    // capability this reverse direction adds beyond wrapping dependency bindings.
-    let program = elaborate::elaborate_program_with_versions(
-        &file,
-        &scope,
-        &v006_indices,
-        &stages,
-        Some(RustyfiVersion::V0_0),
-    )?;
-    // `dep_csts` here is the foreign 0.1 dependencies' OWN `cst_v1` trees, so
-    // a `:>`-sealed export (e.g. `V01Sealed.t`) is enforced against the WHOLE
-    // merged spine exactly as it would be for a pure-0.1 consumer.
-    //
-    // `xver_shadows` is the ONE thing this arm asks the checker
-    // to treat differently, and only for names it has itself just rebound:
-    // the exporting module's own alias is still conformance-checked, and
-    // only the coercion shadow that FOLLOWS it is exempted from a second
-    // check against a signature it deliberately does not match. Empty
-    // whenever no 0.1 `deco` export crossed.
-    v1::module_check::check_program_with_xver_shadows(&dep_csts, &program, &xver_shadows)?;
-    let env0_v006 = primitives::base_env_with_version(RustyfiVersion::V0_0);
-    // `v006_indices` is NEVER empty here (the entry's own bindings are
-    // always indexed into it above), so this always takes the `_xver` fold
-    // path — matching `compile_document_v1_with_trials`'s own `if v006_
-    // indices.is_empty() { .. } else { compile_program_xver }` branch,
-    // specialized since the `else` arm is the only reachable one.
-    // Bound to a local, not passed as a temporary: `Interp::eval_arg`
-    // memoizes by `&Ast` address, so the de-branded tree must outlive the
-    // trials (see `compile_document_cst_with_trials`).
-    let body = ast::debrand(&program.body, &store);
-    let compiled = compile::compile_program_xver(&body, &env0, &env0_v006);
-    eval_document_trials(&compiled, metrics, RustyfiVersion::V0_0, aux)
+    Ok(AssembledXver {
+        file,
+        dep_csts,
+        v006_indices,
+        stages,
+        xver_shadows,
+    })
 }
 
 // ============================================================================
@@ -3096,10 +3313,11 @@ fn fire_inline_frame(
     fire_nested_in_contents(interp, doc, page, x, baseline_y, contents)
 }
 
-/// Fire every hook and decoration carried by a graphics box's elements —
-/// i.e. inside the inline runs a `draw-text` (`GraphicsElem::Text`) holds,
-/// recursing through `Group`/`Clip`. `anchor_x`/`anchor_y` are the box's
-/// placed origin in this walk's (x, y-DOWN) page coordinates.
+/// Fire every hook, decoration and deferred destination carried by a graphics
+/// box's elements — the inline runs a `draw-text` (`GraphicsElem::Text`) holds,
+/// and the `GraphicsElem::Destination` markers an `inline-graphics` callback
+/// left behind — recursing through `Group`/`Clip`. `anchor_x`/`anchor_y` are
+/// the box's placed origin in this walk's (x, y-DOWN) page coordinates.
 ///
 /// A `Text` element's own `transform` (from `rotate-graphics`/
 /// `scale-graphics`) is deliberately NOT applied: a decoration's rect is an
@@ -3129,6 +3347,28 @@ fn fire_nested_in_graphics(
             }
             GraphicsElem::Group(inner) | GraphicsElem::Clip(_, inner) => {
                 fire_nested_in_graphics(interp, doc, page, anchor_x, anchor_y, inner)?;
+            }
+            // `pt` is y-UP from the anchor, as a `Text`'s is, and a
+            // `NamedDest`'s `y` is y-up too, so lifting the anchor out of this
+            // walk's y-DOWN frame is the only arithmetic needed. An
+            // `origin_independent` box arrives with `anchor_x = 0`/`anchor_y =
+            // paper_height` (see the caller), making that the identity — the
+            // same page-absolute reading its ink gets from the writers.
+            GraphicsElem::Destination { key, pt } => {
+                let name = interp.dest_name(key);
+                let x = anchor_x + pt.0;
+                let y = doc.geometry.paper_height - anchor_y + pt.1;
+                // As in a direct call: the reflow backend resolves a
+                // destination to its Frame through this id.
+                if let Some(deco_id) = interp.current_deco_id {
+                    interp.dest_decos.push((deco_id, name.clone()));
+                }
+                interp.destinations.push(rustyfi_backend::NamedDest {
+                    page,
+                    name,
+                    x,
+                    y,
+                });
             }
             GraphicsElem::Fill(..) | GraphicsElem::Stroke(..) | GraphicsElem::DashedStroke(..) => {}
         }

@@ -9,6 +9,7 @@ members = [
   "crates/rustyfi",
   "crates/rustyfi-loader",
   "crates/rustyfi-satyrographos",
+  "crates/rustyfi-lsp",
 ]
 
 [workspace.package]
@@ -23,7 +24,7 @@ categories = ["text-processing", "command-line-utilities"]
 readme = "README.md"
 
 [workspace.dependencies]
-syan = "0.2.0"
+syan = "0.2.2"
 rustyfi-syntax = { path = "crates/rustyfi-syntax", version = "0.1.0" }
 rustyfi-backend = { path = "crates/rustyfi-backend", version = "0.1.0" }
 rustyfi-lang = { path = "crates/rustyfi-lang", version = "0.1.0" }
@@ -31,6 +32,7 @@ rustyfi-pdf = { path = "crates/rustyfi-pdf", version = "0.1.0" }
 rustyfi-html = { path = "crates/rustyfi-html", version = "0.1.0" }
 rustyfi-loader = { path = "crates/rustyfi-loader", version = "0.1.0" }
 rustyfi-satyrographos = { path = "crates/rustyfi-satyrographos", version = "0.1.0" }
+rustyfi-lsp = { path = "crates/rustyfi-lsp", version = "0.1.0" }
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"

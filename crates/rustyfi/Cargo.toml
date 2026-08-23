@@ -27,6 +27,7 @@ rustyfi-syntax.workspace = true
 rustyfi-backend.workspace = true
 rustyfi-lang.workspace = true
 rustyfi-loader.workspace = true
+rustyfi-lsp.workspace = true
 rustyfi-pdf.workspace = true
 rustyfi-html.workspace = true
 rustyfi-satyrographos.workspace = true

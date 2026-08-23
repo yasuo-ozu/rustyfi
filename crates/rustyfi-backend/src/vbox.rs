@@ -2,7 +2,11 @@ use crate::hbox::{DecoId, HookId, PureHorzBox};
 use crate::length::Length;
 
 /// A milestone-1 subset of `vert_box`: a typeset line or vertical space.
-#[derive(Clone, Debug, PartialEq)]
+///
+/// See [`crate::hbox::PureHorzBox`] for what the `#[subast]` list means and
+/// what checks it.
+#[derive(Clone, Debug, PartialEq, syan::visit::Ast)]
+#[subast(crate::hbox::PureHorzBox)]
 pub enum VertBox {
     /// One typeset line: boxes with their x offsets from the line start.
     Line {

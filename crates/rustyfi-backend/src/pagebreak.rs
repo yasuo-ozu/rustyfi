@@ -18,14 +18,16 @@ pub const MIN_FIRST_ASCENDER: Length = Length::pt(9.0);
 
 /// One typeset line placed on a page, in page coordinates (y grows downward
 /// from the paper top; the PDF writer flips it).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, syan::visit::Ast)]
+#[subast(crate::hbox::PureHorzBox)]
 pub struct PlacedLine {
     pub x: Length,
     pub baseline_y: Length,
     pub contents: Vec<(Length, PureHorzBox)>,
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, syan::visit::Ast)]
+#[subast(crate::pagebreak::PlacedLine)]
 pub struct Page {
     pub lines: Vec<PlacedLine>,
     /// How many leading entries of `lines` are BODY (column) content. The

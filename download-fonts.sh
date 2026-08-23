@@ -107,7 +107,55 @@ download_file () {
     show_message "'$NAME' already cached and verified in '$CACHE/'"
   else
     show_message "downloading '$NAME'"
-    curl -fsSL -o "$CACHE/$NAME" "$URL"
+    # Retried, because these are third-party servers and at least one of them
+    # (GUST, which hosts Latin Modern) intermittently refuses connections for
+    # minutes at a time — a CI run has failed on exactly that, with curl's
+    # exit 28 after a 133-second connect timeout.
+    #
+    # The outage is per-ROUTE, not host-wide, so it is invisible from anywhere
+    # else at the same moment: on run 32593970228 the `packages` job could not
+    # connect to www.gust.org.pl three times across 70 s while, in that same
+    # run, the `layout-fidelity` job on another runner fetched the identical
+    # URL in 2.5 s. So there is nothing to probe and nothing to fail fast on —
+    # only a window to outlast. The budget below is sized against that
+    # measurement: five attempts with a doubling backoff outlast ~175 s of
+    # unreachability (5 x 20 s of connect timeout, plus 5+10+20+40 s of sleep),
+    # where the original three-with-a-flat-5s reached exactly the 70 s that run
+    # took to fail and was therefore just barely too short. CI caches this whole
+    # directory across runs (see `.github/workflows/ci.yml`), so the steady
+    # state does not reach GUST at all and this loop only guards a cold cache.
+    #
+    # Retry rather than mirror: the SHA1 below is pinned, and no mirror serves
+    # these archives byte-identically (CTAN repackages Latin Modern under its
+    # own layout), so a fallback URL would download successfully and then fail
+    # verification — which is the correct behaviour, and therefore useless as a
+    # fallback.
+    #
+    # Deliberately WITHOUT curl's own `--retry`: measured on curl 8.14.1, a
+    # transfer that ultimately fails still exits 0 when `--retry` is given
+    # (the identical request without it exits 7). That would turn a failed
+    # download into a "SHA1 mismatch" further down — a real failure reported
+    # as the wrong thing. The loop below reads curl's true exit status.
+    #
+    # Only widely-supported options are used, since this script also runs on
+    # whatever curl a contributor happens to have.
+    ATTEMPT=1
+    MAX_ATTEMPTS=5
+    BACKOFF=5
+    while : ; do
+      if curl -fsSL --connect-timeout 20 --max-time 600 -o "$CACHE/$NAME" "$URL"; then
+        break
+      fi
+      if [ "$ATTEMPT" -ge "$MAX_ATTEMPTS" ]; then
+        echo "$MESSAGE_PREFIX could not download '$NAME' from '$URL' after" \
+             "$MAX_ATTEMPTS attempts." >&2
+        exit 1
+      fi
+      show_message "download of '$NAME' failed; retrying in ${BACKOFF}s ($ATTEMPT/$MAX_ATTEMPTS)"
+      ATTEMPT=$((ATTEMPT + 1))
+      sleep "$BACKOFF"
+      BACKOFF=$((BACKOFF * 2))
+    done
     if ! validate_file "$NAME" "$SHA1"; then
       echo "$MESSAGE_PREFIX SHA1 mismatch for '$NAME' — refusing to use it." >&2
       exit 1
@@ -148,7 +196,16 @@ show_message "installed ipaexm.ttf / ipaexg.ttf (IPA Font License v1.0)"
 # as the dot counts overshoot instead. The layout gate fails on enumitem.
 #
 # So the leader-dot residual is a corpus-asset difference, not a port defect,
-# and chasing it through font versions makes real metric agreement worse.
+# and the PIN STANDS — but NOT because 1.002 is the better font. That paragraph
+# measured against the COMMITTED reference PDFs, which the one above it already
+# says came from a third Junicode; regenerate both sides with `--gen-refs` and
+# 2.222 wins nearly everywhere, on `width_p95` and on `chars_missing` alike.
+#
+# What holds the pin is the cost of moving it: the six committed reference PDFs
+# are the corpus's fixed point and would all need regenerating,
+# `layout-tests/baseline.json` re-recording, and 2.222 is not on SourceForge but
+# in psb1558/Junicode-font's GitHub releases. That is a corpus decision, not a
+# font-script one.
 JUNICODE_ZIP="junicode-1.002.zip"
 download_file "$JUNICODE_ZIP" \
   "https://downloads.sourceforge.net/project/junicode/junicode/junicode-1.002/junicode-1.002.zip" \

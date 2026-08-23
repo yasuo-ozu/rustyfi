@@ -304,6 +304,7 @@ pub fn build_cli() -> Command {
         .subcommand(
             package_subcommands(compile_command("rustyfi"))
                 .subcommand(multicall_command())
+                .subcommand(lsp_command())
                 .subcommand(man_command())
                 .args_conflicts_with_subcommands(true)
                 .subcommand_negates_reqs(true),
@@ -714,6 +715,69 @@ fn man_command() -> Command {
     Command::new("man")
         .about("Write the man page (roff) to stdout.")
         .hide(true)
+}
+
+/// `rustyfi lsp` — the editor-facing personality.
+///
+/// Deliberately NOT hidden: unlike `man`/`multicall`, which are packaging
+/// steps, this is something a user configures their editor to run and so
+/// needs to be discoverable in `--help`.
+fn lsp_command() -> Command {
+    Command::new("lsp")
+        .about("Run a Language Server Protocol server for SATySFi over stdio.")
+        .arg(
+            Arg::new("lang")
+                .long("lang")
+                .value_name("VERSION")
+                .help(
+                    "Analyse every buffer as this SATySFi generation: 0.0 or 0.1. \
+                     Same spelling as the compiler's --lang. When omitted, the \
+                     generation is detected per file from its own text, exactly as \
+                     a compile would detect it for the entry document.",
+                ),
+        )
+        .arg(
+            Arg::new("lib_root")
+                .long("lib-root")
+                .value_name("DIR")
+                .help(
+                    "Resolve @require: against this package root instead of \
+                     discovering one from each document's directory — both when \
+                     following a header to its file for go-to-definition and when \
+                     resolving a buffer's dependency graph to typecheck it. Same \
+                     meaning as the compiler's --lib-root, including that a named \
+                     root is the ONLY root and that packages live under \
+                     <lib-root>/dist/packages/. Falls back to $RUSTYFI_LIB_ROOT, \
+                     then to the client's own initializationOptions.libRoot. With \
+                     no root configured, @require: simply does not resolve; \
+                     @import:, which is relative to the importing file, always \
+                     does.",
+                )
+                .value_parser(value_parser!(PathBuf)),
+        )
+        .arg(
+            Arg::new("no_typecheck")
+                .long("no-typecheck")
+                .action(clap::ArgAction::SetTrue)
+                .help(
+                    "Report only lex/parse diagnostics: do not resolve each \
+                     buffer's dependency graph or typecheck it. Cheaper per \
+                     keystroke, and the only mode available for a buffer whose \
+                     program cannot be resolved anyway.",
+                ),
+        )
+        .arg(
+            Arg::new("check_libraries")
+                .long("check-libraries")
+                .action(clap::ArgAction::SetTrue)
+                .help(
+                    "Typecheck .satyh/.satyg library buffers too, as a dependency \
+                     of a synthetic document carrying their own headers. Off by \
+                     default because a library may legitimately use a module it \
+                     never @require:s, leaving that to its consumer — such a file \
+                     is valid and cannot typecheck alone.",
+                ),
+        )
 }
 
 fn multicall_command() -> Command {

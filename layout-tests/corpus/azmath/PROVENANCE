@@ -1,0 +1,89 @@
+azmath — where this came from, and what was changed
+===================================================
+
+Upstream
+--------
+  repository  https://github.com/monaqa/satysfi-azmath
+  version     0.0.3 (tag v0.0.3, 2020-11-07 — the latest release)
+  tarball     https://github.com/monaqa/satysfi-azmath/archive/v0.0.3.tar.gz
+  sha512      725917ab03e5599f7ef2d5065afa904197bf58ddd61ebec0b7dd160f1bce1e60
+              bbfe4fecddc40f753c6e33fc103fe5a0ef36d3fe9dcab58c40bb2236617b3812
+              (the one the package index publishes for 0.0.3)
+  licence     MIT (LICENSE is vendored beside this file)
+  author      Shinichi Mogami <mogassy@yahoo.co.jp>
+
+Vendored: `src/` and `doc/azmath.saty`, the corpus convention. `Satyristes`,
+the `.opam` files, `HISTORY.md`, `commands.md`, `README.md` and the
+upstream-built `doc/azmath.pdf` are not — see "the reference PDF" below for why
+that last one would be actively misleading.
+
+NOT master, though master (67bf1e0a) is newer: its document writes `${ x ÷ y }`,
+and a raw Unicode character in MATH mode is a SATySFi 0.0.7 feature — 0.0.6's
+lexer (`lexer.mll:128`, `mathsymboltop`) accepts only `+-*/:=<>~.,\`?`, and this
+port targets 0.0.6. Upstream SATySFi 0.0.11 accepts it and then recurses forever
+on master's document, which is consistent with master's own opam pinning
+`satysfi {>= "0.0.6" & < "0.0.7"}`.
+
+TWO CHANGES TO THE VENDORED SOURCE
+----------------------------------
+Both are recorded at the site as well; this is the index.
+
+1. `doc/azmath.saty` — enumitem 2 -> 3, lifted verbatim from azmath's own master
+   (commit e6775b6, "Bump enumitem to 3"): the `+dd` helper and the
+   `+description<...>` rewrite. `fidelity.py`'s `assemble_lib_root` merges every
+   document's stage map into ONE lib root, so the corpus can hold exactly one
+   enumitem — and it is 3. Without this the document does not typecheck in
+   EITHER engine.
+
+2. `src/equation.satyh` — `group-by-`'s two `- 1`s dropped. The same
+   index-vs-count `List.take`/`List.split-at` hazard `easytable/src/matrix.satyg`
+   already carries in this corpus: `split-at (n - 1)` with `+gather`'s n = 1
+   splits at 0 against a COUNT-based `satysfi-base`, so the recursive `aux` is
+   handed back the list it was given and never terminates. This is azmath's own
+   bug, not either engine's — a two-row `+gather` overflows this port's
+   evaluator stack AND upstream SATySFi 0.0.11's, and a one-row equation
+   terminated but silently rendered blank (`take (1*1 - 1)` = `[]`).
+
+NOT REGISTERED IN fidelity.py's `DOCS`
+--------------------------------------
+Both engines build the document — the port's `register-destination`-from-inside-
+an-`inline-graphics`-callback blocker is closed, and its anchors are real: 16
+named destinations, exactly upstream's 16, in the same right-hand tag column.
+It is not gated because no reference PDF is committed for it (see below) and its
+glyph and line agreement is not yet inside the band the seven gated documents
+hold. Registering it is a `DOCS` entry plus a reference PDF, not a code change:
+
+    Doc(
+        "azmath",
+        "azmath/doc/azmath.saty",
+        "azmath/doc/azmath.pdf",
+        "display math: aligned equations, matrices, auto-sized parens, accents",
+        {"enumitem": "enumitem/src"},   # azmath arrives by relative @import:
+    ),
+
+Two residuals cost an investigation each; do not repeat them. The
+table-of-contents leader dots that showed up as ~49 MISSING characters were a
+Junicode version gap between the two sides of the comparison, not a port defect
+— `fidelity.py --gen-refs` was building the reference with the SATySFi
+installation's own fonts, and `assemble_satysfi_lib_root` now stages the port's
+`dist/fonts` into the `-C` root. (The pin is a separate real gap, argued in
+`download-fonts.sh`.) And the ~92 EXTRA characters are upstream's ToUnicode gap,
+not port output: they are CIDs upstream's own CMap has no entry for, all of them
+`.st`/`.v1` variant glyphs, which the port maps and poppler therefore extracts.
+The same holds in latexcmds, easytable and figbox, so corpus-wide `chars_extra`
+is largely this rather than a port difference.
+
+THE REFERENCE PDF
+-----------------
+Not vendored, deliberately. Upstream's own `doc/azmath.pdf` in the 0.0.3 tarball
+was built from the UNPATCHED document — enumitem 2's `+description` and the
+runaway `group-by-` — so it is not a render of the source in this directory and
+would silently anchor the comparison to the wrong text.
+
+Produce the real one the way `fidelity.py --gen-refs` does, from the flake's
+SATySFi 0.0.11 (`nix build .#satysfi --no-link --print-out-paths`), with a `-C`
+root holding `satysfi-base/src` as `base` and `enumitem/src` as `enumitem`:
+
+    satysfi doc/azmath.saty -o doc/azmath.pdf -C <root>
+
+Run it from `doc/`, so the document's `@import: ../src/azmath` resolves.

@@ -1539,6 +1539,7 @@ dependencies = [
  "rustyfi-html",
  "rustyfi-lang",
  "rustyfi-loader",
+ "rustyfi-lsp",
  "rustyfi-pdf",
  "rustyfi-satyrographos",
  "rustyfi-syntax",
@@ -1552,6 +1553,7 @@ version = "0.1.0"
 dependencies = [
  "newer-type 0.3.0",
  "newer-type-std",
+ "syan",
  "unicode-linebreak",
 ]
 
@@ -1574,6 +1576,7 @@ dependencies = [
  "rustyfi-backend",
  "rustyfi-loader",
  "rustyfi-syntax",
+ "syan",
  "thiserror",
  "unicode-normalization",
  "unicode-segmentation",
@@ -1588,6 +1591,17 @@ dependencies = [
  "serde",
  "serde_yaml",
  "thiserror",
+]
+
+[[package]]
+name = "rustyfi-lsp"
+version = "0.1.0"
+dependencies = [
+ "rustyfi-lang",
+ "rustyfi-loader",
+ "rustyfi-syntax",
+ "serde_json",
+ "syan",
 ]
 
 [[package]]
@@ -1860,9 +1874,9 @@ dependencies = [
 
 [[package]]
 name = "syan"
-version = "0.2.0"
+version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "54353c0a2f815413fac040277b06376fde8c362a90958f380511d810cd51078d"
+checksum = "dab2576b9c6ff713fe9a94a4440c0937bbe91b6a6fa1cd7fb603400380d56439"
 dependencies = [
  "decycle",
  "newer-type 0.1.2",
@@ -1873,9 +1887,9 @@ dependencies = [
 
 [[package]]
 name = "syan-macro"
-version = "0.2.0"
+version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8a9310037cf2687527a976807a4e45cf652fb8e2adc17ffd2eaa7bb623389fa1"
+checksum = "b87918c6a819330b5be95b898e9b41a948481f50703ab15b0ebe2f1a31479ccd"
 dependencies = [
  "decycle",
  "derive-syn-parse 0.2.0",

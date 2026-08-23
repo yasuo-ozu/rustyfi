@@ -51,7 +51,8 @@ pub enum Cell {
 /// box's own baseline-left origin) and its content already fitted to the
 /// cell's (or, for a span, combined) column width. `EmptyCell`s produce no
 /// entry at all.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, syan::visit::Ast)]
+#[subast(crate::hbox::PureHorzBox)]
 pub struct TabularCellBox {
     pub x: Length,
     pub baseline_y: Length,
@@ -61,7 +62,8 @@ pub struct TabularCellBox {
 /// The solved `PHGFixedTabular` payload (horzBox.ml:279), minus `rules`
 /// (filled in lang-side once the rule callback runs, `primitives.rs`'s
 /// `prim_tabular`).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, syan::visit::Ast)]
+#[subast(crate::tabular::TabularCellBox, crate::graphics::GraphicsElem)]
 pub struct TabularBox {
     pub width: Length,
     pub height: Length,

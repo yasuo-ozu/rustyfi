@@ -12,10 +12,11 @@ pub mod math;
 pub mod pagebreak;
 pub mod tabular;
 pub mod vbox;
+pub mod visit;
 
 pub use context::{
-    Context, HyphenLang, Language, MathCmdId, MathScriptLevel, PageGeometry, PaperSize, Script,
-    ScriptFont,
+    default_script_space_map, Context, HyphenLang, Language, MathCmdId, MathScriptLevel,
+    PageGeometry, PaperSize, Script, ScriptFont,
 };
 pub use doc::{Annot, AnnotAction, DocExtras, DocInfo, NamedDest, OutlineEntry};
 pub use font::{

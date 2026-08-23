@@ -13,7 +13,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.2"
+version = "0.1.3"
 edition = "2021"
 license = "MIT"
 authors = ["Yasuo Ozu <yasuo@ozu.email>"]
@@ -25,14 +25,14 @@ readme = "README.md"
 
 [workspace.dependencies]
 syan = "0.2.2"
-rustyfi-syntax = { path = "crates/rustyfi-syntax", version = "0.1.2" }
-rustyfi-backend = { path = "crates/rustyfi-backend", version = "0.1.2" }
-rustyfi-lang = { path = "crates/rustyfi-lang", version = "0.1.2" }
-rustyfi-pdf = { path = "crates/rustyfi-pdf", version = "0.1.2" }
-rustyfi-html = { path = "crates/rustyfi-html", version = "0.1.2" }
-rustyfi-loader = { path = "crates/rustyfi-loader", version = "0.1.2" }
-rustyfi-satyrographos = { path = "crates/rustyfi-satyrographos", version = "0.1.2" }
-rustyfi-lsp = { path = "crates/rustyfi-lsp", version = "0.1.2" }
+rustyfi-syntax = { path = "crates/rustyfi-syntax", version = "0.1.3" }
+rustyfi-backend = { path = "crates/rustyfi-backend", version = "0.1.3" }
+rustyfi-lang = { path = "crates/rustyfi-lang", version = "0.1.3" }
+rustyfi-pdf = { path = "crates/rustyfi-pdf", version = "0.1.3" }
+rustyfi-html = { path = "crates/rustyfi-html", version = "0.1.3" }
+rustyfi-loader = { path = "crates/rustyfi-loader", version = "0.1.3" }
+rustyfi-satyrographos = { path = "crates/rustyfi-satyrographos", version = "0.1.3" }
+rustyfi-lsp = { path = "crates/rustyfi-lsp", version = "0.1.3" }
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"

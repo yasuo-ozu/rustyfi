@@ -61,7 +61,6 @@ pub(crate) fn stylesheet(geometry: &PageGeometry, ctx: &Ctx) -> String {
         .unwrap_or_else(|| "Georgia, \"Noto Serif\", \"Noto Serif CJK JP\", serif".to_string());
     format!(
         "\
-:root {{ color-scheme: light dark; }}\n\
 body {{\n\
   margin: 0;\n\
   padding: 2rem 1rem;\n\
@@ -70,9 +69,6 @@ body {{\n\
   line-height: 1.7;\n\
   background: #fff;\n\
   color: #1a1a1a;\n\
-}}\n\
-@media (prefers-color-scheme: dark) {{\n\
-  body {{ background: #14161a; color: #e8e8e8; }}\n\
 }}\n\
 .doc {{\n\
   max-width: {max_width}pt;\n\
@@ -116,9 +112,6 @@ span.img {{\n\
   background-position: center;\n\
 }}\n\
 a.link {{ color: #1a5fb4; text-decoration: underline; }}\n\
-@media (prefers-color-scheme: dark) {{\n\
-  a.link {{ color: #62a0ea; }}\n\
-}}\n\
 .heading {{\n\
   margin: 1.4em 0 0.5em 0;\n\
   font-weight: bold;\n\

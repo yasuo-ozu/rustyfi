@@ -192,7 +192,7 @@ $ rustyfi lsp                # detect each file's generation from its own text
 $ rustyfi lsp --lang 0.1     # analyse everything as 0.1
 ```
 
-What it does today is **diagnostics**: lex and parse errors, live as you type,
+**Diagnostics** are lex and parse errors, live as you type,
 under whichever SATySFi generation the file is written in. Both 0.0.6 and 0.1
 are supported, and the generation is chosen per file the same way a compile
 chooses it for the entry document — a `use` header or a `val` head selects
@@ -207,6 +207,24 @@ half-typed inputs — 11.5 seconds on one 14 KB buffer, and climbing — so the
 server caps how much backtracking one parse may do and says so plainly when it
 hits the cap, rather than freezing the editor.
 
+**Symbols** fill the outline pane, the breadcrumb and "go to symbol", for one
+file (`textDocument/documentSymbol`) and across the project
+(`workspace/symbol`). Both generations' declaration forms are covered —
+0.0.6's `let`/`let-rec`/`let-inline`/`let-block`/`let-math`/`let-mutable`/
+`type`/`module … : sig … end` and the `direct` items in a signature, 0.1's
+`val` family with its `~`/`persistent ~` stage qualifiers, `type`,
+`signature`, `include` and nested `module`s, and both header families. A
+module's members are its *children*, so a library folds down to one entry
+rather than thirty. Over the same 247-file corpus the outline extraction finds
+9,843 declarations in 1.2 s, and the only file that yields nothing is the one
+that is zero bytes long.
+
+The walk is deliberately structural — no name resolution, no types, no
+following `@require:` — so it cannot produce a *wrong* answer, only an
+incomplete one, and it works on a half-typed buffer: it reads the top-level
+declaration sequence one declaration at a time, so an unfinished `let` at the
+bottom of the file costs you that one symbol rather than the whole outline.
+
 It deliberately stops short of typechecking. Type errors in SATySFi are a
 property of a whole *program* — the entry document plus every `@require:`d
 package, in dependency order — and reporting them for one file in isolation
@@ -214,10 +232,13 @@ would bury the real error under a hundred "unbound variable"s for names the
 document legitimately imports. Hover, go-to-definition and completion are not
 implemented either.
 
-The analysis is also available as a plain library function,
-`rustyfi_lsp::analyze(source, lang) -> Vec<Diag>`, with no LSP types in its
-signature, no filesystem access and no default features needed — so the same
-diagnostics can run in a browser editor compiled to `wasm32-unknown-unknown`.
+Both are also available as plain library functions —
+`rustyfi_lsp::analyze(source, lang) -> Vec<Diag>` and
+`rustyfi_lsp::document_symbols(source, lang) -> Vec<Symbol>` — with no LSP
+types in their signatures, no filesystem access and no default features
+needed, so a browser editor compiled to `wasm32-unknown-unknown` gets exactly
+what the desktop one does. (`workspace/symbol` is the one exception: searching
+a project means reading it, so that part lives in the server half.)
 
 ## Performance
 

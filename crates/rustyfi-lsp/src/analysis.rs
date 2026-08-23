@@ -118,22 +118,96 @@ pub fn analyze_auto(source: &str) -> Vec<Diag> {
 /// under — after the ambiguity re-check, so this is the generation the buffer
 /// actually parses as, not merely the sniffed guess.
 pub fn analyze_detected(source: &str) -> (RustyfiVersion, Vec<Diag>) {
+    let (version, failure) = detect(source);
+    (
+        version,
+        failure.into_iter().map(|f| f.into_diag(source)).collect(),
+    )
+}
+
+/// The verdict alone — [`parse_detected`] with the tree dropped.
+fn detect(source: &str) -> (RustyfiVersion, Option<Failure>) {
+    let (version, parsed) = parse_detected(source);
+    (version, parsed.err())
+}
+
+/// A buffer that lexed and parsed, tagged by the grammar that read it —
+/// [`parse_detected`]'s success value.
+///
+/// `None` is a buffer with no tokens at all (see [`parse_source`]): nothing
+/// was parsed, and nothing is wrong either.
+///
+/// Without the `typecheck` feature nothing reads the trees — [`analyze`] only
+/// ever wants the verdict — so the payloads are dead code in the wasm build
+/// specifically. Building them costs nothing there either: the parser
+/// constructs the CST whether or not anyone keeps it.
+#[cfg_attr(not(feature = "typecheck"), allow(dead_code))]
+pub(crate) enum Parsed {
+    None,
+    V0_0(rustyfi_syntax::cst::File),
+    V0_1(rustyfi_syntax::cst_v1::FileV1),
+}
+
+#[cfg_attr(not(feature = "typecheck"), allow(dead_code))]
+impl Parsed {
+    /// Whether this buffer is a *document* (has a body expression) rather
+    /// than a library. Mirrors `rustyfi_loader::LoadedCst::is_document`, which
+    /// cannot be reused because this half of the crate does not depend on the
+    /// loader.
+    pub(crate) fn is_document(&self) -> bool {
+        match self {
+            Parsed::None => false,
+            Parsed::V0_0(f) => f.body.is_some(),
+            Parsed::V0_1(f) => matches!(f, rustyfi_syntax::cst_v1::FileV1::Document { .. }),
+        }
+    }
+}
+
+/// [`parse_detected`], or a forced generation when the caller has one — the
+/// parse-keeping counterpart of the server's `match self.opts.lang { Some =>
+/// analyze, None => analyze_auto }`, written once so the two entry points
+/// cannot drift.
+#[cfg(feature = "typecheck")]
+pub(crate) fn parse_with(
+    source: &str,
+    lang: Option<RustyfiVersion>,
+) -> (RustyfiVersion, Result<Parsed, Failure>) {
+    match lang {
+        Some(lang) => (lang, parse_source(source, lang)),
+        None => parse_detected(source),
+    }
+}
+
+/// [`analyze_detected`]'s engine: the same generation ladder, keeping the
+/// parse tree instead of throwing it away.
+///
+/// Whole-program analysis (`crate::project`) needs three things this returns
+/// and [`analyze_detected`] cannot: the generation to hand the loader, the
+/// buffer's own CST (so a library can be checked without being parsed a third
+/// time), and whether it is a document at all.
+///
+/// This is the ONE place the ladder is written. Anything else that needs to
+/// know a buffer's generation goes through it (`detect`, and hence
+/// `analyze_detected`), so a second feature cannot drift into a second answer
+/// for the same file.
+pub(crate) fn parse_detected(source: &str) -> (RustyfiVersion, Result<Parsed, Failure>) {
     let sniffed = rustyfi_syntax::sniff_version(source);
     let primary = sniffed.unwrap_or(RustyfiVersion::DEFAULT);
 
-    let Some(failure) = parse_failure(source, primary) else {
-        return (primary, Vec::new());
+    let failure = match parse_source(source, primary) {
+        Ok(parsed) => return (primary, Ok(parsed)),
+        Err(f) => f,
     };
 
     // A decisive signal is obeyed even when it does not parse: reporting the
     // 0.0 reading of a file whose first line is `use Foo` would be a lie.
     if sniffed.is_some() {
-        return (primary, vec![failure.into_diag(source)]);
+        return (primary, Err(failure));
     }
 
     let other = other_generation(primary);
-    match parse_failure(source, other) {
-        None => (other, Vec::new()),
+    match parse_source(source, other) {
+        Ok(parsed) => (other, Ok(parsed)),
         // Both readings fail, so the buffer is broken under either grammar
         // and the question is only which error to show. Show the one from the
         // grammar that got FURTHER through the text — the same
@@ -153,8 +227,8 @@ pub fn analyze_detected(source: &str) -> (RustyfiVersion, Vec<Diag>) {
         // overwhelmingly the RIGHT grammar struggling with an incomplete
         // buffer, while the verdict is the wrong grammar dying early, so that
         // rule reported 0.0.6's complaint about a half-typed 0.1 library.
-        Some(alt) if alt.furthest > failure.furthest => (other, vec![alt.into_diag(source)]),
-        Some(_) => (primary, vec![failure.into_diag(source)]),
+        Err(alt) if alt.furthest > failure.furthest => (other, Err(alt)),
+        Err(_) => (primary, Err(failure)),
     }
 }
 
@@ -170,7 +244,7 @@ fn other_generation(v: RustyfiVersion) -> RustyfiVersion {
 }
 
 /// A lex or parse failure, before it is turned into LSP coordinates.
-struct Failure {
+pub(crate) struct Failure {
     span: Span,
     message: String,
     /// How far into the source the attempt got before giving up — the
@@ -181,7 +255,7 @@ struct Failure {
 }
 
 impl Failure {
-    fn into_diag(self, source: &str) -> Diag {
+    pub(crate) fn into_diag(self, source: &str) -> Diag {
         let (start, end) = span_to_range(&LineIndex::new(source), self.span);
         Diag {
             line: start.line,
@@ -197,16 +271,24 @@ impl Failure {
 /// Lex and parse `source` under `lang`, returning the failure if there is
 /// one.
 ///
+/// A thin wrapper over [`parse_source`] for the callers that only want the
+/// verdict; see there for why this is not `rustyfi_syntax::parse_file`.
+fn parse_failure(source: &str, lang: RustyfiVersion) -> Option<Failure> {
+    parse_source(source, lang).err()
+}
+
+/// Lex and parse `source` under `lang`, keeping the tree.
+///
 /// This deliberately re-implements [`rustyfi_syntax::parse_file`]'s two steps
 /// rather than calling it, for one reason: `parse_file` flattens syan's error
 /// tree with `format!("{err:?}")` into a `String`, and by then the structure
 /// is gone. The tree is what makes a usable message — see [`best_failure`].
-fn parse_failure(source: &str, lang: RustyfiVersion) -> Option<Failure> {
+fn parse_source(source: &str, lang: RustyfiVersion) -> Result<Parsed, Failure> {
     let atoms = match rustyfi_syntax::lex_with_version(source, lang) {
         Ok(atoms) => atoms,
         // Lex errors already carry a hand-written message and a tight span.
         Err(e) => {
-            return Some(Failure {
+            return Err(Failure {
                 furthest: e.span.end.byte,
                 span: e.span,
                 message: e.msg,
@@ -223,17 +305,21 @@ fn parse_failure(source: &str, lang: RustyfiVersion) -> Option<Failure> {
     // Declining to complain hides nothing — there is no construct present to
     // be wrong.
     if atoms.iter().all(|a| a.slot == rustyfi_syntax::Token::Eoi) {
-        return None;
+        return Ok(Parsed::None);
     }
     let mut stream = HighWaterStream::new(atoms);
     let err = match lang {
-        RustyfiVersion::V0_1 => {
-            <rustyfi_syntax::cst_v1::FileV1 as Parse<_>>::parse(&mut stream).err()
-        }
+        RustyfiVersion::V0_1 => match <rustyfi_syntax::cst_v1::FileV1 as Parse<_>>::parse(&mut stream) {
+            Ok(file) => return Ok(Parsed::V0_1(file)),
+            Err(e) => e,
+        },
         // `RustyfiVersion` is `#[non_exhaustive]`; anything not explicitly
         // 0.1 is read with the 0.0.6 grammar, which is `DEFAULT`'s behaviour.
-        _ => <rustyfi_syntax::cst::File as Parse<_>>::parse(&mut stream).err(),
-    }?;
+        _ => match <rustyfi_syntax::cst::File as Parse<_>>::parse(&mut stream) {
+            Ok(file) => return Ok(Parsed::V0_0(file)),
+            Err(e) => e,
+        },
+    };
 
     let furthest = stream.furthest();
     let stalled = stream.furthest_span();
@@ -244,7 +330,7 @@ fn parse_failure(source: &str, lang: RustyfiVersion) -> Option<Failure> {
     // must not be repeated as if it described the source.
     if stream.exhausted() {
         let span = stalled.unwrap_or(*err.span());
-        return Some(Failure {
+        return Err(Failure {
             span,
             message: "parse error: gave up analysing this file — it needs more \
                       backtracking than the language server allows, which usually \
@@ -263,14 +349,14 @@ fn parse_failure(source: &str, lang: RustyfiVersion) -> Option<Failure> {
     // repetition swallowed the real failure and the tree is stale, and then
     // the mark is the only signal there is. See `high_water`.
     if span.end.byte >= furthest {
-        return Some(Failure {
+        return Err(Failure {
             span,
             message,
             furthest,
         });
     }
     let stalled = stalled.unwrap_or(span);
-    Some(Failure {
+    Err(Failure {
         message: stalled_message(source, stalled),
         span: stalled,
         furthest,
@@ -437,7 +523,10 @@ fn join_alternatives(reasons: &[String]) -> String {
 ///   attribute to a single point) would otherwise render as an invisible
 ///   caret. Widening to the next character — or, at end of file, to the
 ///   previous one — gives the editor something to draw.
-fn span_to_range(index: &LineIndex<'_>, span: Span) -> (crate::Position, crate::Position) {
+pub(crate) fn span_to_range(
+    index: &LineIndex<'_>,
+    span: Span,
+) -> (crate::Position, crate::Position) {
     // Taken from the index rather than as a second parameter, so the two can
     // never be handed a different buffer each.
     let source = index.source();

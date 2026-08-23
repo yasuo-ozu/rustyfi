@@ -343,6 +343,7 @@ fn a_lang_override_is_honoured_over_the_buffers_own_signal() {
     let src = "let-rec f x = x\n";
     let opts = Options {
         lang: Some(RustyfiVersion::V0_1),
+        ..Default::default()
     };
     let (out, _) = session_with(&[initialize(1), did_open("file:///f.saty", src)], opts);
     assert!(

@@ -730,6 +730,41 @@ fn lsp_command() -> Command {
                      a compile would detect it for the entry document.",
                 ),
         )
+        .arg(
+            Arg::new("lib_root")
+                .long("lib-root")
+                .value_name("DIR")
+                .help(
+                    "Resolve @require: against this package root instead of \
+                     discovering one from each document's directory. Same meaning \
+                     as the compiler's --lib-root, including that a named root is \
+                     the ONLY root.",
+                )
+                .value_parser(value_parser!(PathBuf)),
+        )
+        .arg(
+            Arg::new("no_typecheck")
+                .long("no-typecheck")
+                .action(clap::ArgAction::SetTrue)
+                .help(
+                    "Report only lex/parse diagnostics: do not resolve each \
+                     buffer's dependency graph or typecheck it. Cheaper per \
+                     keystroke, and the only mode available for a buffer whose \
+                     program cannot be resolved anyway.",
+                ),
+        )
+        .arg(
+            Arg::new("check_libraries")
+                .long("check-libraries")
+                .action(clap::ArgAction::SetTrue)
+                .help(
+                    "Typecheck .satyh/.satyg library buffers too, as a dependency \
+                     of a synthetic document carrying their own headers. Off by \
+                     default because a library may legitimately use a module it \
+                     never @require:s, leaving that to its consumer — such a file \
+                     is valid and cannot typecheck alone.",
+                ),
+        )
 }
 
 fn multicall_command() -> Command {

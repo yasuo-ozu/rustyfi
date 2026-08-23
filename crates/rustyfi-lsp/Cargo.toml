@@ -32,9 +32,19 @@ syan.workspace = true
 # `default-features = false` and pull in nothing but `rustyfi-syntax`.
 serde_json = { version = "1", optional = true }
 
+# The whole-program half (`project`), and ONLY it: dependency resolution
+# against the filesystem, and the compiler's own elaborate → typecheck →
+# `:>`-check front half. Neither is wasm-safe (`rustyfi-loader` reads paths),
+# which is exactly why they are optional — `--no-default-features` leaves the
+# `analyze` seam with `rustyfi-syntax` as its only dependency.
+rustyfi-loader = { workspace = true, optional = true }
+rustyfi-lang = { workspace = true, optional = true }
+
 [features]
-default = ["server"]
+default = ["server", "typecheck"]
 # The stdio JSON-RPC server (`server`, `jsonrpc` modules) and everything that
 # needs a runtime JSON encoder. Off ⇒ the crate is the pure, no-I/O,
 # wasm-safe `analyze` seam and nothing else.
 server = ["dep:serde_json"]
+# The whole-program tier (`project` module, and the server's use of it).
+typecheck = ["dep:rustyfi-loader", "dep:rustyfi-lang"]

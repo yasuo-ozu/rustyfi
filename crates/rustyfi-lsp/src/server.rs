@@ -1,7 +1,8 @@
 //! The stdio language server: lifecycle, document sync, and diagnostics.
 //!
-//! Everything the server *knows* is in [`crate::analyze`]; this module only
-//! decides when to ask and how to phrase the answer.
+//! Everything the server *knows* is in [`crate::analyze`] and
+//! [`crate::project::check`]; this module only decides which of the two to
+//! ask, and how to phrase the answer.
 //!
 //! # What is implemented
 //!
@@ -10,7 +11,9 @@
 //! `textDocument/publishDiagnostics`. The `initialize` reply advertises
 //! exactly that and nothing more — an over-claimed capability costs the user
 //! a hang or an empty popup on every keystroke, so the reply lists only what
-//! is actually wired up.
+//! is actually wired up. (The whole-program tier changes what a diagnostic
+//! can be *about*, not which methods exist, so it adds no capability: a
+//! client that spoke to the parse-only server speaks to this one unchanged.)
 //!
 //! Document sync is **full**, not incremental. Incremental sync would mean
 //! reimplementing UTF-16-range splicing over the buffer, and the whole
@@ -26,7 +29,7 @@ use crate::jsonrpc::{self, code, Incoming};
 use crate::RustyfiVersion;
 
 /// How the server was started.
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone)]
 pub struct Options {
     /// `rustyfi lsp --lang 0.1`: force every buffer to one generation.
     ///
@@ -36,6 +39,22 @@ pub struct Options {
     /// project that is wholly one generation and whose library files, being
     /// signal-free, would otherwise each be parsed twice.
     pub lang: Option<RustyfiVersion>,
+
+    /// Whole-program analysis: resolve each buffer's `@require:`/`@import:`
+    /// graph and typecheck it, not just parse it
+    /// ([`crate::project::check`]).
+    ///
+    /// `None` — the default — is the parse tier alone, which is what a
+    /// consumer with no filesystem to offer (and every test in
+    /// `tests/server_stdio.rs`) wants. `rustyfi lsp` sets `Some(..)` unless
+    /// `--no-typecheck` is given, and fills in root discovery, which it can
+    /// do and this crate deliberately cannot (see
+    /// [`crate::project::CheckOptions::discover_roots`]).
+    ///
+    /// [`Self::lang`] wins over the copy inside it, so the two cannot say
+    /// different things about the same buffer.
+    #[cfg(feature = "typecheck")]
+    pub project: Option<crate::project::CheckOptions>,
 }
 
 /// Run the server against a pair of streams until the client disconnects or
@@ -99,12 +118,16 @@ type RequestError = (i64, String);
 /// Everything the server remembers between messages.
 ///
 /// Notably NOT the open buffers. A full-sync server is handed the complete
-/// text with every `didOpen`/`didChange`, and the analysis is a pure function
-/// of that text, so a document store would be write-only state — and
-/// write-only state in a server is where staleness bugs come from. The
-/// document URI is likewise never parsed or resolved to a path; nothing here
-/// touches the filesystem, so it is only ever an opaque key to publish
-/// back against.
+/// text with every `didOpen`/`didChange`, and the analysis is a function of
+/// that text and of the files on disk around it, so a document store would be
+/// write-only state — and write-only state in a server is where staleness
+/// bugs come from.
+///
+/// The document URI is a key to publish back against, and — under the
+/// `typecheck` feature — the one thing that is also *read*: the whole-program
+/// tier needs the buffer's path to resolve `@import:` and to discover a
+/// library root ([`crate::project::path_from_uri`]). Nothing is written
+/// anywhere, and a URI with no path simply stays on the parse tier.
 struct State {
     opts: Options,
     initialized: bool,
@@ -213,34 +236,60 @@ impl State {
         vec![self.diagnostics_for(uri, text, doc.get("version"))]
     }
 
-    /// `initializationOptions.lang`, if the client sent one and the command
-    /// line did not already pin the generation.
+    /// Absorb `initializationOptions`, for the settings a client can send
+    /// that the command line may not have pinned.
     ///
-    /// The command line wins: it is the more explicit of the two, and an
-    /// editor that guesses wrong in its client config should not be able to
-    /// override what the user typed when launching the server.
+    /// The command line wins on every one of them: it is the more explicit of
+    /// the two, and an editor that guesses wrong in its client config should
+    /// not be able to override what the user typed when launching the server.
+    /// For the flag-shaped options that means "the command line only ever
+    /// *disables*", which is why each is applied here only in the direction
+    /// the flag cannot have chosen.
     fn absorb_initialization_options(&mut self, params: &Value) {
-        if self.opts.lang.is_some() {
-            return;
-        }
-        let Some(lang) = params
-            .get("initializationOptions")
-            .and_then(|o| o.get("lang"))
-            .and_then(Value::as_str)
-        else {
+        let Some(o) = params.get("initializationOptions") else {
             return;
         };
-        self.opts.lang = lang.parse::<RustyfiVersion>().ok();
+        if self.opts.lang.is_none() {
+            if let Some(lang) = o.get("lang").and_then(Value::as_str) {
+                self.opts.lang = lang.parse::<RustyfiVersion>().ok();
+            }
+        }
+        #[cfg(feature = "typecheck")]
+        {
+            // `typecheck: false` turns the whole tier off; nothing here can
+            // turn it ON, because the roots and the discovery hook come from
+            // the process that started the server.
+            if o.get("typecheck") == Some(&Value::Bool(false)) {
+                self.opts.project = None;
+            }
+            if let Some(project) = &mut self.opts.project {
+                if o.get("checkLibraries") == Some(&Value::Bool(true)) {
+                    project.check_libraries = true;
+                }
+                // `libRoot` accepts a string or an array of them — the
+                // loader's search path is a list, and an editor configuring
+                // one project-local root plus a shared one should not have to
+                // choose. Named roots replace discovery entirely, exactly as
+                // `--lib-root` does for the compiler.
+                let roots: Vec<std::path::PathBuf> = match o.get("libRoot") {
+                    Some(Value::String(s)) => vec![s.into()],
+                    Some(Value::Array(items)) => {
+                        items.iter().filter_map(Value::as_str).map(Into::into).collect()
+                    }
+                    _ => Vec::new(),
+                };
+                if !roots.is_empty() && project.lib_roots.is_empty() {
+                    project.lib_roots = roots;
+                }
+            }
+        }
     }
 
     /// Analyse `text` and build the whole `textDocument/publishDiagnostics`
     /// notification, envelope included.
     fn diagnostics_for(&self, uri: &str, text: &str, version: Option<&Value>) -> Value {
-        let diags = match self.opts.lang {
-            Some(lang) => crate::analyze(text, lang),
-            None => crate::analyze_auto(text),
-        };
-        let items: Vec<Value> = diags
+        let items: Vec<Value> = self
+            .diagnose(uri, text)
             .into_iter()
             .map(|d| {
                 json!({
@@ -262,6 +311,46 @@ impl State {
             params["version"] = v.clone();
         }
         jsonrpc::notification("textDocument/publishDiagnostics", params)
+    }
+
+    /// The diagnostics themselves: the whole-program tier where it is
+    /// configured and the URI names a path it can reach, the parse tier
+    /// otherwise.
+    ///
+    /// A URI that is not a `file:` one — `untitled:`, an editor's own
+    /// scratch scheme — has no path, so there is no directory to resolve
+    /// `@import:` against and no library root to discover. That buffer gets
+    /// the parse tier, which is exactly what it would have got before this
+    /// tier existed.
+    #[cfg(feature = "typecheck")]
+    fn diagnose(&self, uri: &str, text: &str) -> Vec<crate::Diag> {
+        let Some(project) = &self.opts.project else {
+            return self.parse_only(text);
+        };
+        let Some(path) = crate::project::path_from_uri(uri) else {
+            return self.parse_only(text);
+        };
+        let opts = crate::project::CheckOptions {
+            // The command line's `--lang` wins over the copy the caller put
+            // in `project`, so the two halves of one server cannot disagree
+            // about which generation a buffer is.
+            lang: self.opts.lang.or(project.lang),
+            ..project.clone()
+        };
+        crate::project::check(&path, text, &opts).diagnostics
+    }
+
+    #[cfg(not(feature = "typecheck"))]
+    fn diagnose(&self, _uri: &str, text: &str) -> Vec<crate::Diag> {
+        self.parse_only(text)
+    }
+
+    /// Lex + parse only — [`crate::analyze`] under the configured generation.
+    fn parse_only(&self, text: &str) -> Vec<crate::Diag> {
+        match self.opts.lang {
+            Some(lang) => crate::analyze(text, lang),
+            None => crate::analyze_auto(text),
+        }
     }
 }
 

@@ -17,6 +17,11 @@
 //!   (The default features build for wasm too — `serde_json` is portable —
 //!   but `--no-default-features` leaves `rustyfi-syntax` as the only
 //!   dependency in the graph.)
+//! - [`project`] (feature `typecheck`, on by default) — the *whole-program*
+//!   tier: resolve the buffer's `@require:`/`@import:` graph off the disk and
+//!   typecheck the resulting program. Needs a filesystem, so it is deliberately
+//!   on the far side of the line from [`analyze`] and absent from the wasm
+//!   build.
 //! - [`server`] (feature `server`, on by default) — the stdio JSON-RPC loop
 //!   `rustyfi lsp` runs. It owns every LSP-shaped structure in the crate.
 //!
@@ -28,10 +33,10 @@
 //! column, and a byte offset is wrong for the whole Japanese corpus. See
 //! [`LineIndex`].
 //!
-//! # Why the analysis stops at parsing
+//! # Two tiers, and why the line is where it is
 //!
 //! [`analyze`] reports **lex and parse** diagnostics and no others. That is a
-//! deliberate ceiling, not an unfinished edge:
+//! deliberate ceiling for a *detached buffer*, not an unfinished edge:
 //!
 //! Elaboration and typechecking in this port run over a whole *program* — the
 //! entry file's prelude spliced behind every `@require:`d package's, in
@@ -44,9 +49,23 @@
 //! none". Parse errors, by contrast, are a property of the file's own text
 //! and are honest without any context at all.
 //!
-//! Whole-program typechecking needs a resolved library root, a font store and
-//! a build's worth of work per keystroke; it belongs behind a debounce and a
-//! cache, and it is left for later rather than half-done here.
+//! [`project::check`] is the answer to that, and it answers it by supplying
+//! the missing program rather than by lowering the standard: it resolves the
+//! buffer's real dependency graph off the disk (with the *buffer's* text
+//! standing in for its own file, unsaved edits included) and typechecks that.
+//! Where the program cannot be resolved — no library root, an uninstalled
+//! package, a `use`-header document whose packaging mode has no seam for an
+//! in-memory buffer — it degrades to exactly the parse tier above and records
+//! why. A file's own text is analysable anywhere; its program is not, and the
+//! two tiers say so separately.
+//!
+//! The cost is real and is the reason the tiers are separate at all: a parse
+//! is sub-millisecond, whereas resolving and typechecking a document with a
+//! full document class behind it is tens to hundreds of milliseconds
+//! (measured in `tests/project.rs`). Both run per `didOpen`/`didChange`
+//! today, which is honest for documents of the size this corpus holds; a
+//! debounce and a dependency-graph cache are the next things to add, not a
+//! reason to withhold the tier.
 
 mod analysis;
 mod high_water;
@@ -54,6 +73,8 @@ mod line_index;
 
 #[cfg(feature = "server")]
 pub mod jsonrpc;
+#[cfg(feature = "typecheck")]
+pub mod project;
 #[cfg(feature = "server")]
 pub mod server;
 

@@ -45,6 +45,7 @@ use rustyfi_backend::{
 };
 
 use super::Ctx;
+use crate::image;
 
 /// Append `bx`'s reflow rendering to `out`. Never touches `out`'s
 /// surrounding whitespace/paragraph bookkeeping — that is the caller's
@@ -136,20 +137,47 @@ pub(crate) fn emit_inline(out: &mut String, bx: &PureHorzBox, ctx: &Ctx) {
 
         PureHorzBox::InnerString { info, text, .. } => emit_run(out, info, text, ctx),
 
-        // Glue: the browser re-breaks lines itself, so the exact
-        // natural/stretch/shrink amounts have no meaning here — collapse to
-        // one space (HTML's own whitespace-collapsing then does the rest,
-        // since this module's CSS never sets `white-space: pre`, unlike the
-        // faithful mode).
-        PureHorzBox::OuterEmpty { .. } | PureHorzBox::OuterFil | PureHorzBox::FixedEmpty { .. } => {
-            out.push(' ');
+        // Glue does NOT become a space here — it is RECORDED, and judged
+        // once the following character is known. The box stream puts glue
+        // between every pair of CJK characters and inside every hyphenatable
+        // Latin word, so "glue means space" (what this arm used to do)
+        // rendered Japanese as `研 究 計 画` and `\LaTeX` as `L AT EX`. See
+        // `text.rs`'s doc comment for the whole argument and `wants_space`
+        // for the rule.
+        PureHorzBox::OuterEmpty { natural, .. } => ctx.note_glue(natural.0),
+        // `inline-fil`: infinite stretch, no natural width. Never a space;
+        // `block.rs` reads its POSITION instead, as the alignment signal it
+        // is (leading + trailing fil = centred, leading only = flush right).
+        PureHorzBox::OuterFil => ctx.note_glue(0.0),
+        // `inline-skip`: an explicit, deliberately-sized, non-breakable gap.
+        // Above a visible threshold it keeps its width as an inline-block
+        // strut (intrinsic sizing, not positioning — the same licence math
+        // and graphics have); below it, it is a kern and goes through the
+        // ordinary glue rule, which drops it.
+        PureHorzBox::FixedEmpty { width } => {
+            if width.0 >= HSKIP_MIN_PT {
+                ctx.resolve_glue(out, None);
+                let _ = write!(out, "<span class=\"hskip\" style=\"width:{}pt;\"></span>", width.0);
+            } else {
+                ctx.note_glue(width.0);
+            }
         }
 
-        // A break point that may or may not be taken; the browser
-        // re-hyphenates on its own; render a soft hyphen so a manual
-        // hyphenation opportunity survives without forcing a visible one.
-        PureHorzBox::Discretionary { .. } => {
-            out.push_str("&shy;");
+        // A break point that may or may not be taken. When it carries text
+        // in `pre_break` it is a real hyphenation point (the pattern
+        // dictionary's, `Latex&shy;Cmds`) and a soft hyphen is exactly
+        // right: the browser re-breaks and shows the hyphen only if it
+        // breaks there. When `pre_break` is bare glue it is a UAX#14 chunk
+        // boundary — a soft hyphen there would invite the browser to
+        // hyphenate `Con-tributors` at a point the dictionary never
+        // sanctioned, and between two CJK characters it would be nonsense —
+        // so it goes through the ordinary glue rule instead.
+        PureHorzBox::Discretionary { pre_break, .. } => {
+            if pre_break_carries_text(pre_break) {
+                out.push_str("&shy;");
+            } else {
+                ctx.note_glue(glue_width(pre_break));
+            }
         }
 
         // A real inline frame: no atomic-width fitting to preserve (that
@@ -232,17 +260,51 @@ pub(crate) fn emit_inline(out: &mut String, bx: &PureHorzBox, ctx: &Ctx) {
         // for this variant at all, silently matching its wildcard). Kept as
         // an honest placeholder rather than silently dropped.
         PureHorzBox::GraphicsOuter { .. } => {
+            open_opaque(out, ctx);
             out.push_str(
                 "<span class=\"gfx-placeholder\" title=\"unresolved inline-graphics-outer (lang-side callback)\"></span>",
             );
         }
-        // Out of scope for this backend so far — no dedicated recovery lever
-        // exists for either (`Image` has no data-URI plumbing here yet;
-        // `Footnote` has no linked-`<aside>` collection pass).
-        PureHorzBox::Image { .. } => {
-            out.push_str(
-                "<span class=\"image-placeholder\" title=\"image rendering deferred to a later reflow slice\"></span>",
-            );
+        // A real `<img>` with a self-contained data URI, sized in the
+        // document's own points but capped at the column width so a figure
+        // wider than a narrow viewport shrinks instead of overflowing
+        // (`css.rs`'s `img.img` rule) — the reflowable counterpart of the
+        // faithful backend's absolutely-positioned `<img>`, sharing
+        // `crate::image::data_uri` verbatim with it.
+        PureHorzBox::Image {
+            width,
+            height,
+            image,
+        } => {
+            open_opaque(out, ctx);
+            match ctx.images.get(image.0) {
+                // `load-pdf-image`: an imported PDF page carries no raster
+                // samples at all (`ImageResource::pdf`), and rasterizing one
+                // is out of scope for an HTML writer, so this keeps an
+                // honestly-labelled box at the right size rather than
+                // emitting a degenerate 0x0 `<img>`. The faithful backend
+                // does exactly the same.
+                Some(res) if res.pdf.is_some() => {
+                    let _ = write!(
+                        out,
+                        "<span class=\"pdf-image\" style=\"width:{}pt; height:{}pt;\" \
+                         title=\"embedded PDF page (not rasterized)\"></span>",
+                        width.0, height.0,
+                    );
+                }
+                Some(res) => {
+                    let _ = write!(
+                        out,
+                        "<img class=\"img\" src=\"{}\" style=\"width:{}pt; height:{}pt;\" alt=\"\">",
+                        image::data_uri(res),
+                        width.0,
+                        height.0,
+                    );
+                }
+                // Out-of-range `ImageId` — should not happen; the faithful
+                // writer and the PDF writer both skip rather than panic.
+                None => {}
+            }
         }
         // S3 ("S3", `structure.rs`'s "Tables — genuinely recoverable"): a
         // real `<table>`. `block.rs`'s own `VertBox::Line` walk already
@@ -252,10 +314,41 @@ pub(crate) fn emit_inline(out: &mut String, bx: &PureHorzBox, ctx: &Ctx) {
         // module recurses into on its own (a `Frame`'s `contents`, or a
         // table cell that itself contains a nested `Tabular`) — no
         // surrounding paragraph to flush here, so no `extra_attrs` margin.
-        PureHorzBox::Tabular(tab) => super::structure::render_table(out, tab, "", ctx),
-        PureHorzBox::Footnote { .. } => {
-            out.push_str(
-                "<span class=\"footnote-placeholder\" title=\"footnote rendering deferred to a later reflow slice\"></span>",
+        PureHorzBox::Tabular(tab) => {
+            open_opaque(out, ctx);
+            super::structure::render_table(out, tab, "", ctx)
+        }
+        // A footnote has nowhere to be collected TO in a continuous
+        // document — there is no page foot any more — so it becomes a
+        // numbered reference here and its body is queued for `block.rs`'s
+        // `flush_para` to place as an `<aside>` immediately after the
+        // paragraph that referenced it. See the `reflow` module's doc
+        // comment for why "just after the paragraph" was chosen over
+        // "collected at the end".
+        PureHorzBox::Footnote { block } => {
+            open_opaque(out, ctx);
+            let n = ctx.footnote_seq.get() + 1;
+            ctx.footnote_seq.set(n);
+            // Render the body NOW, at the point the marker rides, so it sees
+            // the surrounding context — but into its own buffer, and with
+            // the inline-flow state saved/restored around it, since the
+            // footnote's own last character must not decide the spacing of
+            // the word after the reference in the main text.
+            let saved = (ctx.pending_glue.take(), ctx.last_char.take());
+            // Park the queue too: the nested walk drains whatever it finds
+            // there when it finishes, and an earlier sibling footnote from
+            // this same paragraph must not end up nested inside this one.
+            let parked = std::mem::take(&mut *ctx.footnotes.borrow_mut());
+            let mut body = String::new();
+            super::block::walk_vboxes(&mut body, block, ctx);
+            ctx.pending_glue.set(saved.0);
+            ctx.last_char.set(saved.1);
+            let mut queue = ctx.footnotes.borrow_mut();
+            *queue = parked;
+            queue.push((n, body));
+            let _ = write!(
+                out,
+                "<sup class=\"fnref\" id=\"fnref-{n}\"><a href=\"#fn-{n}\">{n}</a></sup>",
             );
         }
 
@@ -274,29 +367,97 @@ pub(crate) fn emit_inline(out: &mut String, bx: &PureHorzBox, ctx: &Ctx) {
     }
 }
 
-/// One `InnerString` run: escaped text wrapped in a `<span>` carrying its
-/// font/size/color/rising as CSS — no `left`/`top`/`position` (this is
-/// flowing content, not a placed box). `vertical-align` (not `position`)
-/// handles a non-zero `rising`, since it needs no positioned ancestor and
-/// composes correctly with the surrounding inline flow.
+/// A `FixedEmpty` (`inline-skip`) at least this wide (pt) survives as a real
+/// sized strut; anything narrower is a kern. Half a point is below the
+/// threshold of visibility at any reading size, and every kern the corpus
+/// emits — the `\LaTeX` logo's, the CJK compensations — is well under it.
+const HSKIP_MIN_PT: f64 = 0.5;
+
+/// One `InnerString` run.
+///
+/// The text is written as TEXT: a run set in the document's body style (see
+/// `text::BodyStyle`, which `css.rs` puts on `body`) gets no element around
+/// it at all, so a paragraph of ordinary prose serialises as ordinary prose
+/// rather than as one `<span style="font-size:10.56pt">` per syllable. Only
+/// the properties that genuinely differ from the body style are emitted, and
+/// the size as an `em` RATIO rather than an absolute point size, so the
+/// whole document rescales from the single value on `body`.
+///
+/// Still no `left`/`top`/`position` — this is flowing content, not a placed
+/// box; `vertical-align` (not `position`) handles a non-zero `rising`, since
+/// it needs no positioned ancestor and composes with the inline flow.
 fn emit_run(out: &mut String, info: &HorzStringInfo, text: &str, ctx: &Ctx) {
-    let mut style = String::new();
-    if let Some(family) = ctx.font_family_for(info.font) {
-        style.push_str(&format!("font-family:\"{family}\";"));
+    if text.is_empty() {
+        return;
     }
-    style.push_str(&format!("font-size:{}pt;", info.size.0));
+    ctx.resolve_glue(out, text.chars().next());
+    ctx.last_char.set(text.chars().next_back());
+
+    let mut style = String::new();
+    if !ctx.body.matches(info.font, info.size.0) {
+        if Some(info.font) != ctx.body.font {
+            if let Some(family) = ctx.font_family_for(info.font) {
+                let _ = write!(style, "font-family:\"{family}\";");
+            }
+        } else {
+            // Same face as the body, so the `@font-face` rule for it is
+            // needed even though this run names no family of its own.
+            let _ = ctx.font_family_for(info.font);
+        }
+        if (info.size.0 - ctx.body.size).abs() >= 0.005 {
+            let _ = write!(style, "font-size:{:.4}em;", info.size.0 / ctx.body.size);
+        }
+    } else {
+        // Body-styled: still record the face as used, so `font_face_rules`
+        // embeds it for the `body` rule that names it.
+        let _ = ctx.font_family_for(info.font);
+    }
     // Non-black only, mirroring the faithful writer's own guard, so a plain
-    // black run's `<span>` stays uncluttered.
+    // black run stays unwrapped.
     if info.color != Color::Gray(0.0) {
-        style.push_str(&format!("color:{};", crate::svg::css_color(info.color)));
+        let _ = write!(style, "color:{};", crate::svg::css_color(info.color));
     }
     if info.rising.0 != 0.0 {
-        style.push_str(&format!("vertical-align:{}pt;", info.rising.0));
+        let _ = write!(style, "vertical-align:{}pt;", info.rising.0);
     }
-    out.push_str(&format!(
-        "<span class=\"run\" style=\"{style}\">{}</span>",
-        crate::escape_html(text),
-    ));
+
+    let escaped = crate::escape_html(text);
+    if style.is_empty() {
+        out.push_str(&escaped);
+    } else {
+        let _ = write!(out, "<span class=\"run\" style=\"{style}\">{escaped}</span>");
+    }
+}
+
+/// Does a `Discretionary`'s `pre_break` carry a visible character (the
+/// hyphenation dictionary's hyphen), as opposed to bare glue?
+fn pre_break_carries_text(pre_break: &[PureHorzBox]) -> bool {
+    pre_break.iter().any(|b| match b {
+        PureHorzBox::InnerString { text, .. } => !text.is_empty(),
+        _ => false,
+    })
+}
+
+/// The total natural width of a `Discretionary`'s `pre_break` glue, fed to
+/// the ordinary glue rule when there is no hyphen to show.
+fn glue_width(pre_break: &[PureHorzBox]) -> f64 {
+    pre_break
+        .iter()
+        .map(|b| match b {
+            PureHorzBox::OuterEmpty { natural, .. } => natural.0,
+            PureHorzBox::FixedEmpty { width } => width.0,
+            _ => 0.0,
+        })
+        .sum()
+}
+
+/// Write an opaque, non-textual inline element (`<svg>`, `<img>`,
+/// `<table>`, a footnote reference): settle any pending glue against "no
+/// following character", then forget the last character, since the next
+/// glue has nothing textual on its left to be judged against.
+fn open_opaque(out: &mut String, ctx: &Ctx) {
+    ctx.resolve_glue(out, None);
+    ctx.last_char.set(None);
 }
 
 /// Slice 2 (design doc §4 "Graphics — inline SVG, reuse `svg::emit_graphics`
@@ -336,6 +497,7 @@ fn emit_graphics_box(
     if elems.is_empty() {
         return;
     }
+    open_opaque(out, ctx);
     let total_h = height + depth;
     let _ = write!(
         out,
@@ -391,6 +553,7 @@ fn emit_math_svg(
     if glyphs.is_empty() && rules.is_empty() {
         return;
     }
+    open_opaque(out, ctx);
     let total_h = height + depth;
     let _ = write!(
         out,

@@ -1,6 +1,6 @@
 //! Reflowable/semantic HTML output mode (Slice 1: "reflowing paragraphs + inline
 //! text + CSS"). Alongside the existing FAITHFUL twin
-//! ([`crate::render_html`]/[`crate::render_html_ttf_with`], which serializes the
+//! ([`crate::render_html_fixed`]/[`crate::render_html_fixed_ttf_with`], which serializes the
 //! same post-page-break placed-box model the PDF writer consumes, one
 //! absolutely-positioned `<span>` per glyph run), this mode branches at the
 //! pre-page-break flat `Vec<VertBox>` (`DocumentValue::reflow_source` in
@@ -75,7 +75,7 @@
 //! **Additivity** (design doc §8): this module is reached only through the
 //! two `pub fn`s below, themselves reached only via the CLI's
 //! `--format html-reflow` (`rustyfi`). Nothing here changes the
-//! behavior of [`crate::render_html`]/[`crate::render_html_ttf_with`] or
+//! behavior of [`crate::render_html_fixed`]/[`crate::render_html_fixed_ttf_with`] or
 //! `rustyfi_pdf::render_pdf*` — it only reuses their already-`pub(super)`
 //! (crate-visible) helpers ([`crate::escape_html`], [`crate::svg::css_color`],
 //! [`crate::svg::emit_graphics`], [`crate::fonts`], [`crate::image::data_uri`])
@@ -85,9 +85,11 @@ mod block;
 mod css;
 mod inline;
 mod structure;
+mod text;
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeSet, HashMap};
+use std::fmt::Write as _;
 
 use rustyfi_backend::{
     AnnotAction, DecoId, DocExtras, FontKey, ImageResource, PageGeometry, VertBox,
@@ -96,6 +98,8 @@ use rustyfi_backend::{
 use rustyfi_pdf::TtfFontStore;
 
 use crate::HtmlError;
+
+pub(crate) use text::BodyStyle;
 
 /// Render-time state shared by every `emit_*` function in this module — the
 /// reflow twin of `crate::Ctx` (kept as a separate type rather than reused
@@ -151,6 +155,40 @@ pub(crate) struct Ctx<'a> {
     /// opened an `<a>` or a `<span>` — so, exactly like `emph_stack` above,
     /// the matching closer has to be remembered rather than recomputed.
     pub(crate) iframe_stack: RefCell<Vec<&'static str>>,
+    /// The document's image table, so an `Image` box can resolve its
+    /// `ImageId` to an `ImageResource` and become a real `<img>` data URI
+    /// (`crate::image::data_uri`, shared verbatim with the faithful
+    /// backend). Slices 1-4 rendered an inert placeholder here; a document
+    /// like `figbox`'s manual is 39 figures, so the placeholder was most of
+    /// what the document is about.
+    pub(crate) images: &'a [ImageResource],
+    /// The `(font, size)` pair most of the document's characters are set in
+    /// — see [`BodyStyle`]. `css.rs` puts it on `body`; `inline.rs` omits it
+    /// from every run that matches, and most runs do.
+    pub(crate) body: BodyStyle,
+    /// The natural width (pt) of glue seen since the last thing that was
+    /// actually written, awaiting the character that follows it before
+    /// `text::wants_space` can judge whether it is a space, a kern, or a
+    /// bare break opportunity. Consecutive glues merge by taking the widest
+    /// — two adjacent glues are still at most one space.
+    pub(crate) pending_glue: Cell<Option<f64>>,
+    /// The last character actually written into the flow, the `prev` half of
+    /// [`text::wants_space`]'s decision. Deliberately NOT reset by the
+    /// transparent wrappers (`Frame`, `InlineFrameMarker`, `InlineMark`), so
+    /// a CJK/CJK pair straddling a `\ref`'s `<a>` still suppresses its
+    /// space; reset to `None` by opaque boxes (`<svg>`, `<img>`, `<table>`),
+    /// which have no last character to speak of.
+    pub(crate) last_char: Cell<Option<char>>,
+    /// Footnote bodies whose reference marker has been emitted but whose
+    /// text has not yet been placed. `block.rs`'s `flush_para` drains this
+    /// immediately after closing the referencing paragraph — see this
+    /// crate's `reflow` module doc comment on why "just after the
+    /// paragraph" is where a footnote belongs once there is no page foot to
+    /// put it at.
+    pub(crate) footnotes: RefCell<Vec<(usize, String)>>,
+    /// Monotonic footnote number, shared by the `<sup>` reference and the
+    /// `<aside>` body so the two can link to each other.
+    pub(crate) footnote_seq: Cell<usize>,
 }
 
 impl Ctx<'_> {
@@ -163,6 +201,37 @@ impl Ctx<'_> {
         self.used_fonts.borrow_mut().insert(file_idx);
         Some(crate::fonts::font_family_name(file_idx))
     }
+
+    /// Record that a glue box of `natural_pt` natural width stands here.
+    /// Nothing is written yet: whether it becomes a space depends on the
+    /// character that follows (`text::wants_space`), which is not known
+    /// until the next run arrives.
+    pub(crate) fn note_glue(&self, natural_pt: f64) {
+        let merged = match self.pending_glue.get() {
+            Some(prev) if prev >= natural_pt => prev,
+            _ => natural_pt,
+        };
+        self.pending_glue.set(Some(merged));
+    }
+
+    /// Resolve the pending glue against the character about to be written
+    /// (`next`, `None` before an opaque box or at a paragraph edge),
+    /// appending a space to `out` if one is warranted.
+    pub(crate) fn resolve_glue(&self, out: &mut String, next: Option<char>) {
+        if let Some(width) = self.pending_glue.take() {
+            if text::wants_space(self.last_char.get(), next, width) {
+                out.push(' ');
+            }
+        }
+    }
+
+    /// Drop any pending glue and forget the last character — used at a hard
+    /// boundary (a new paragraph, a table cell, a footnote body) where a
+    /// space carried over from the previous context would be wrong.
+    pub(crate) fn reset_flow(&self) {
+        self.pending_glue.set(None);
+        self.last_char.set(None);
+    }
 }
 
 /// Serialize the pre-page-break `Vec<VertBox>` (`source` —
@@ -170,8 +239,8 @@ impl Ctx<'_> {
 /// hand-built `DocumentValue` in a test) to a single, self-contained,
 /// REFLOWABLE HTML document, using generic system-font fallback (no
 /// `@font-face` block) — the base-14 twin of [`render_html_reflow_ttf_with`],
-/// exactly mirroring [`crate::render_html`]'s relationship to
-/// [`crate::render_html_ttf_with`].
+/// exactly mirroring [`crate::render_html_fixed`]'s relationship to
+/// [`crate::render_html_fixed_ttf_with`].
 ///
 /// `images`/`extras` are accepted for argument-for-argument symmetry with
 /// the faithful backend; Slice 1 did not read them, Slice 2 reads `images`
@@ -196,7 +265,7 @@ pub fn render_html_reflow(
 /// [`TtfFontStore`] — every inline run's `<span>` gets an explicit
 /// `font-family` naming the `@font-face` this function's `<style>` block
 /// embeds for every physical font file actually referenced, exactly
-/// [`crate::render_html_ttf_with`]'s Slice-3 fidelity mitigation.
+/// [`crate::render_html_fixed_ttf_with`]'s Slice-3 fidelity mitigation.
 #[allow(clippy::too_many_arguments)]
 pub fn render_html_reflow_ttf_with(
     source: Option<&[VertBox]>,
@@ -214,12 +283,17 @@ pub fn render_html_reflow_ttf_with(
 fn render_html_reflow_impl(
     source: Option<&[VertBox]>,
     geometry: &PageGeometry,
-    _images: &[ImageResource],
+    images: &[ImageResource],
     extras: &DocExtras,
     links: &[(DecoId, AnnotAction)],
     dests: &[(DecoId, String)],
     font_store: Option<&TtfFontStore>,
 ) -> Result<String, HtmlError> {
+    // One read-only pass over the flow before anything is written: which
+    // `(font, size)` most of the text is in, and how much of it is CJK. Both
+    // are document-wide facts the per-run emitter needs BEFORE it emits its
+    // first run, so they cannot be accumulated as it goes.
+    let body_style = BodyStyle::dominant(source);
     let ctx = Ctx {
         fonts: font_store,
         used_fonts: RefCell::new(BTreeSet::new()),
@@ -232,6 +306,12 @@ fn render_html_reflow_impl(
         emph_stack: RefCell::new(Vec::new()),
         bullet_suppress: RefCell::new(0),
         iframe_stack: RefCell::new(Vec::new()),
+        images,
+        body: body_style,
+        pending_glue: Cell::new(None),
+        last_char: Cell::new(None),
+        footnotes: RefCell::new(Vec::new()),
+        footnote_seq: Cell::new(0),
     };
 
     let mut body = String::new();
@@ -254,9 +334,20 @@ fn render_html_reflow_impl(
     body.push_str("</div>\n");
 
     let mut out = String::new();
-    out.push_str("<!doctype html>\n<html>\n<head>\n<meta charset=\"utf-8\">\n");
+    // `hyphens: auto` is inert without a language — a browser will not guess
+    // one — so the root carries the language the text actually is. The
+    // threshold is deliberately low: a Japanese document interleaves enough
+    // Latin (code, package names, math) that "mostly Japanese" is well under
+    // half, while an English document with a few kana in an example is well
+    // under a tenth.
+    let lang = if ctx.body.cjk_ratio > 0.1 { "ja" } else { "en" };
+    let _ = write!(
+        out,
+        "<!doctype html>\n<html lang=\"{lang}\">\n<head>\n<meta charset=\"utf-8\">\n\
+         <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n"
+    );
     out.push_str("<style>\n");
-    out.push_str(&css::stylesheet(geometry));
+    out.push_str(&css::stylesheet(geometry, &ctx));
     if let Some(store) = font_store {
         let used = ctx.used_fonts.borrow();
         out.push_str(&crate::fonts::font_face_rules(store, &used));

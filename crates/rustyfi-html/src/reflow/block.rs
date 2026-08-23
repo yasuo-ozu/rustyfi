@@ -44,6 +44,19 @@ struct Para {
     /// matching `Frame` decides its tag; further boxes on the same line(s)
     /// cannot un-decide it), only on the next `flush_para`.
     heading_level: Option<i64>,
+    /// An `inline-fil` stood before any content — the classic TeX
+    /// right-flush/centre idiom (`\align-center` is `inline-fil ++ body ++
+    /// inline-fil`, `\align-right` is `inline-fil ++ body`). Together with
+    /// [`Para::trailing_fil`] this is the ONLY alignment signal the box
+    /// stream carries once the eager line breaker's own justification is
+    /// discarded, and it is a real one, not a guess.
+    leading_fil: bool,
+    /// The last thing seen was an `inline-fil` and nothing has been written
+    /// since. Reset by any real content, so it genuinely means "trailing".
+    /// On its own it means nothing — an ORDINARY paragraph ends with
+    /// `inline-fil` (that is how `read-inline ctx {..} ++ inline-fil` fills
+    /// the last line), so only the leading+trailing PAIR is centring.
+    trailing_fil: bool,
 }
 
 impl Para {
@@ -52,6 +65,18 @@ impl Para {
             text: String::new(),
             open: false,
             heading_level: None,
+            leading_fil: false,
+            trailing_fil: false,
+        }
+    }
+
+    /// The CSS `text-align` this paragraph's fil pattern asks for, or `None`
+    /// for the stylesheet's default (justified).
+    fn alignment(&self) -> Option<&'static str> {
+        match (self.leading_fil, self.trailing_fil) {
+            (true, true) => Some("center"),
+            (true, false) => Some("right"),
+            _ => None,
         }
     }
 }
@@ -87,7 +112,7 @@ pub(crate) fn walk_vboxes(out: &mut String, vboxes: &[VertBox], ctx: &Ctx) {
                         // legally) follows on the SAME `Line` into a fresh
                         // paragraph.
                         PureHorzBox::EmbeddedBlock { block, .. } => {
-                            flush_para(out, &mut para, &mut pending_margin);
+                            flush_para(out, &mut para, &mut pending_margin, ctx);
                             let margin = take_margin(&mut pending_margin);
                             let _ = write!(out, "<div class=\"embed\"{margin}>\n");
                             walk_vboxes(out, block, ctx);
@@ -101,9 +126,21 @@ pub(crate) fn walk_vboxes(out: &mut String, vboxes: &[VertBox], ctx: &Ctx) {
                         // `inline-fil` glue `single-centering-line` wraps it
                         // in) and emit a real `<table>` as its own element.
                         PureHorzBox::Tabular(tab) => {
-                            flush_para(out, &mut para, &mut pending_margin);
+                            flush_para(out, &mut para, &mut pending_margin, ctx);
                             let margin = take_margin(&mut pending_margin);
                             structure::render_table(out, tab, &margin, ctx);
+                        }
+                        // `inline-fil` is not content: it is the alignment
+                        // signal, read POSITIONALLY here rather than emitted
+                        // (see `Para::leading_fil`). Handled at this level,
+                        // not in `inline.rs`, because only the block walker
+                        // knows where the paragraph starts and ends.
+                        PureHorzBox::OuterFil => {
+                            if para.text.trim().is_empty() {
+                                para.leading_fil = true;
+                            }
+                            para.trailing_fil = true;
+                            inline::emit_inline(&mut para.text, bx, ctx);
                         }
                         other => {
                             // S3: does THIS box carry (or nest) the `DecoId`
@@ -114,31 +151,38 @@ pub(crate) fn walk_vboxes(out: &mut String, vboxes: &[VertBox], ctx: &Ctx) {
                                 para.heading_level = structure::find_heading_level(other, ctx);
                             }
                             para.open = true;
+                            let before = para.text.len();
                             inline::emit_inline(&mut para.text, other, ctx);
+                            if para.text.len() != before {
+                                para.trailing_fil = false;
+                            }
                         }
                     }
                 }
                 // A `Line`-to-`Line` boundary within the same paragraph run
                 // is exactly the line-break glue the browser is supposed to
-                // redo itself — collapse it to a single space (the eager
-                // upstream break is discarded on purpose, design doc §3).
+                // redo itself — record it as ordinary word-space-width glue
+                // so the CJK rule can suppress it between two Japanese
+                // characters (an upstream line break falls between two
+                // characters that must NOT gain a space when rejoined) and
+                // keep it between two Latin words.
                 if para.open {
-                    para.text.push(' ');
+                    ctx.note_glue(WORD_SPACE_PT);
                 }
             }
             VertBox::Skip(len) | VertBox::ParagTop(len) | VertBox::FramePad(len) => {
-                flush_para(out, &mut para, &mut pending_margin);
+                flush_para(out, &mut para, &mut pending_margin, ctx);
                 pending_margin += len.0;
             }
             VertBox::ClearPage => {
-                flush_para(out, &mut para, &mut pending_margin);
+                flush_para(out, &mut para, &mut pending_margin, ctx);
                 let margin = take_margin(&mut pending_margin);
                 let _ = write!(out, "<hr class=\"clearpage\"{margin}>\n");
             }
             // No reflow meaning (design doc §3's mapping table) — dropped.
             VertBox::HookPageBreak(_) => {}
             VertBox::FrameStart(deco) => {
-                flush_para(out, &mut para, &mut pending_margin);
+                flush_para(out, &mut para, &mut pending_margin, ctx);
                 let margin = take_margin(&mut pending_margin);
                 // Real nesting (design doc §3): a `FrameStart`/`FrameEnd`
                 // pair opens/closes one `<div>` — the decoration itself
@@ -162,7 +206,7 @@ pub(crate) fn walk_vboxes(out: &mut String, vboxes: &[VertBox], ctx: &Ctx) {
                 let _ = write!(out, "<div class=\"frame\"{id_attr}{margin}>\n");
             }
             VertBox::FrameEnd(_deco) => {
-                flush_para(out, &mut para, &mut pending_margin);
+                flush_para(out, &mut para, &mut pending_margin, ctx);
                 out.push_str("</div>\n");
             }
             // S4 ("Block level"): real nested `<ul>`/`<ol>`/`<li>`, the
@@ -171,7 +215,7 @@ pub(crate) fn walk_vboxes(out: &mut String, vboxes: &[VertBox], ctx: &Ctx) {
             // above — a marker is always a block-level boundary, never
             // mid-paragraph content.
             VertBox::ListMark(kind) => {
-                flush_para(out, &mut para, &mut pending_margin);
+                flush_para(out, &mut para, &mut pending_margin, ctx);
                 let margin = take_margin(&mut pending_margin);
                 match kind {
                     ListMarkKind::ListStart { ordered } => {
@@ -197,8 +241,19 @@ pub(crate) fn walk_vboxes(out: &mut String, vboxes: &[VertBox], ctx: &Ctx) {
             }
         }
     }
-    flush_para(out, &mut para, &mut pending_margin);
+    flush_para(out, &mut para, &mut pending_margin, ctx);
+    // A footnote referenced from a construct that never opens a paragraph (a
+    // table cell, a bare frame) would otherwise have nowhere to land. Not a
+    // second home for footnotes — just the guarantee that none is dropped.
+    drain_footnotes(out, ctx);
 }
+
+/// A plain inter-word space, in points, standing in for the line break
+/// between two consecutive `Line`s of one paragraph. The exact value is
+/// immaterial — it only has to be above `text::wants_space`'s zero-width
+/// threshold, since the decision it feeds is "is this a CJK pair" rather
+/// than "how wide".
+const WORD_SPACE_PT: f64 = 3.0;
 
 /// Close the current paragraph (if any content was gathered), writing `<p
 /// class="para"{margin}>{trimmed text}</p>` to `out` — or, when S3's
@@ -209,26 +264,66 @@ pub(crate) fn walk_vboxes(out: &mut String, vboxes: &[VertBox], ctx: &Ctx) {
 /// consecutive `Skip`s, or a `Skip` before any real content) — mirrors
 /// `render_html_impl`'s own "nothing to emit" guards elsewhere in this
 /// crate.
-fn flush_para(out: &mut String, para: &mut Para, pending_margin: &mut f64) {
+///
+/// A paragraph whose content is entirely whitespace emits NOTHING and keeps
+/// its pending margin for whatever comes next: the box stream is full of
+/// lines that hold only an `inline-fil` (the glue `single-centering-line`
+/// wraps a table or figure in), and each one used to become an empty `<p>`
+/// carrying a stray blank line's worth of leading.
+///
+/// Footnote bodies queued by `inline.rs` (see its `Footnote` arm) are
+/// drained straight after the closing tag, so each lands immediately below
+/// the paragraph that referenced it.
+fn flush_para(out: &mut String, para: &mut Para, pending_margin: &mut f64, ctx: &Ctx) {
     if para.open {
-        let margin = take_margin(pending_margin);
         let trimmed = para.text.trim();
-        match para.heading_level {
-            Some(level) => {
-                let tag = structure::heading_tag(level);
-                let _ = write!(
-                    out,
-                    "<h{tag} class=\"heading\" data-outline-level=\"{level}\"{margin}>{trimmed}</h{tag}>\n"
-                );
+        if !trimmed.is_empty() {
+            let margin = take_margin(pending_margin);
+            match para.heading_level {
+                Some(level) => {
+                    let tag = structure::heading_tag(level);
+                    let _ = write!(
+                        out,
+                        "<h{tag} class=\"heading\" data-outline-level=\"{level}\"{margin}>{trimmed}</h{tag}>\n"
+                    );
+                }
+                None => {
+                    let align = match para.alignment() {
+                        Some(a) => format!(" data-align=\"{a}\""),
+                        None => String::new(),
+                    };
+                    let _ = write!(out, "<p class=\"para\"{align}{margin}>{trimmed}</p>\n");
+                }
             }
-            None => {
-                let _ = write!(out, "<p class=\"para\"{margin}>{trimmed}</p>\n");
-            }
+            drain_footnotes(out, ctx);
         }
     }
     para.text.clear();
     para.open = false;
     para.heading_level = None;
+    para.leading_fil = false;
+    para.trailing_fil = false;
+    // A paragraph boundary is a hard boundary for the inline-flow state: a
+    // glue recorded at the end of one paragraph must not put a space at the
+    // start of the next.
+    ctx.reset_flow();
+}
+
+/// Emit every queued footnote body as an `<aside>`, in reference order, and
+/// clear the queue. Each carries the `id` its `<sup>` reference links to and
+/// a back-link to that reference, so the pair navigates in both directions —
+/// the continuous-document replacement for "the reader looks down at the
+/// foot of the page".
+fn drain_footnotes(out: &mut String, ctx: &Ctx) {
+    let pending: Vec<(usize, String)> = std::mem::take(&mut *ctx.footnotes.borrow_mut());
+    for (n, body) in pending {
+        let _ = write!(
+            out,
+            "<aside class=\"footnote\" id=\"fn-{n}\" role=\"doc-footnote\">\
+             <a class=\"fnback\" href=\"#fnref-{n}\">{n}</a>\n{}</aside>\n",
+            body.trim(),
+        );
+    }
 }
 
 /// Consume the accumulated `Skip` length as a `style="margin-top:_pt;"`

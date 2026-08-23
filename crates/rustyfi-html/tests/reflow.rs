@@ -389,7 +389,7 @@ fn goto_name_link_and_matching_destination_frame_wire_together() {
     );
 }
 
-/// The defining difference from the faithful (`render_html`) mode: NOTHING
+/// The defining difference from the faithful (`render_html_fixed`) mode: NOTHING
 /// in reflow output is absolutely positioned. `left:` is never emitted at
 /// all; every occurrence of the substring `top:` must be part of
 /// `margin-top:` (a legitimate flow property), never a bare CSS `top`

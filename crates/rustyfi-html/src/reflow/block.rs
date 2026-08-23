@@ -139,7 +139,7 @@ pub(crate) fn walk_vboxes(out: &mut String, vboxes: &[VertBox], ctx: &Ctx) {
     // bookkeeping needed.
     let mut list_stack: Vec<bool> = Vec::new();
 
-    for (idx, vb) in vboxes.iter().enumerate() {
+    for vb in vboxes {
         match vb {
             VertBox::Line { contents, .. } => {
                 // The line's own left edge. A line that OPENS with an
@@ -242,12 +242,19 @@ pub(crate) fn walk_vboxes(out: &mut String, vboxes: &[VertBox], ctx: &Ctx) {
                         // `+code` block arrived as one long line.
                         inline::close_run(&mut para.text, ctx);
                         para.text.push_str("<br>\n");
+                        ctx.break_hyphen.set(false);
                         ctx.reset_flow();
+                    } else if ctx.break_hyphen.replace(false) {
+                        // The breaker hyphenated here. Drop its hyphen and
+                        // rejoin the word — no space either.
+                        drop_break_hyphen(&mut para.text);
+                    } else if ends_with_hyphen(&para.text) {
+                        // An AUTHORED hyphen the breaker chose to break after
+                        // (UAX#14 allows it). The hyphen stays — it is the
+                        // author's — but the two halves of `code-printer` must
+                        // not gain a space between them.
                     } else {
-                        let next_first = vboxes.get(idx + 1).and_then(first_text_char);
-                        if !rejoin_hyphenated_word(&mut para.text, next_first) {
-                            ctx.note_glue(WORD_SPACE_PT);
-                        }
+                        ctx.note_glue(WORD_SPACE_PT);
                     }
                 }
             }
@@ -359,69 +366,41 @@ pub(crate) fn walk_vboxes(out: &mut String, vboxes: &[VertBox], ctx: &Ctx) {
 /// than "how wide".
 const WORD_SPACE_PT: f64 = 3.0;
 
-/// The first character of text in `vb`, if it is a `Line` — the lookahead
-/// [`rejoin_hyphenated_word`] needs.
-fn first_text_char(vb: &VertBox) -> Option<char> {
-    let VertBox::Line { contents, .. } = vb else {
-        return None;
-    };
-    contents.iter().find_map(|(_, bx)| first_char_of(bx))
+/// Remove the hyphen the LINE BREAKER put at the end of this line, so a word
+/// it split comes back together for the browser to re-break its own way.
+///
+/// Called only when `InlineMarkKind::BreakHyphen` said the hyphen is the
+/// breaker's. That marker is what makes this exact: the splice
+/// (`linebreak::line_content`) produces an ordinary `InnerString`, so without
+/// it the only available test was the shape of the text — line ends
+/// `letter + hyphen`, next line opens with a lowercase ASCII letter — which is
+/// also the shape of an AUTHORED compound at a line end. It deleted real
+/// hyphens: a paragraph wrapping at `code-printer` rendered as `codeprinter`.
+///
+/// The hyphen may sit just inside a run span that has since closed, so the
+/// closing tag is lifted off and put back.
+/// Whether the line just closed ends with a hyphen — looking through a run
+/// span that has since closed, as [`drop_break_hyphen`] does.
+fn ends_with_hyphen(text: &str) -> bool {
+    let body = text.strip_suffix("</span>").unwrap_or(text);
+    matches!(body.chars().next_back(), Some('-' | '\u{2010}'))
 }
 
-fn first_char_of(bx: &PureHorzBox) -> Option<char> {
-    match bx {
-        PureHorzBox::InnerString { text, .. } => text.chars().next(),
-        PureHorzBox::Frame { contents, .. } => {
-            contents.iter().find_map(|(_, inner)| first_char_of(inner))
-        }
-        _ => None,
-    }
-}
-
-/// Undo a hyphenation the LINE BREAKER inserted, so a word split across two
-/// upstream lines comes back together for the browser to re-break its own
-/// way.
-///
-/// When the breaker takes a discretionary it splices that break's `pre_break`
-/// slot — the hyphen — onto the end of the closed line
-/// (`rustyfi-backend`'s `line_content`), as an ordinary `InnerString`
-/// carrying no mark of where it came from. Rejoining the lines naively
-/// therefore produced `vestibu- lum` and `nt- size`: five of them in the
-/// `latexcmds` manual alone.
-///
-/// The test is the classic de-hyphenation one, and it is a heuristic, which
-/// is unavoidable — the box stream genuinely does not distinguish a hyphen
-/// the breaker added from one the author typed. It fires only when the line
-/// ends `letter + hyphen` and the next line opens with a LOWERCASE ASCII
-/// letter, which is the shape hyphenation always produces and an authored
-/// compound at a line end usually is not (`well-Known` and `well-` followed
-/// by a capital, a digit, or any CJK character are all left alone). Returns
-/// `true` when it rejoined, in which case the caller must not add the
-/// inter-line space either.
-fn rejoin_hyphenated_word(text: &mut String, next_first: Option<char>) -> bool {
-    if !next_first.is_some_and(|c| c.is_ascii_lowercase()) {
-        return false;
-    }
-    // The hyphen may sit just inside a run span that has since closed.
+fn drop_break_hyphen(text: &mut String) {
     let closed = text.ends_with("</span>");
     let body = if closed {
         &text[..text.len() - "</span>".len()]
     } else {
         &text[..]
     };
-    let mut chars = body.chars().rev();
-    if !matches!(chars.next(), Some('-' | '\u{2010}')) {
-        return false;
-    }
-    if !chars.next().is_some_and(|c| c.is_alphabetic()) {
-        return false;
+    if !matches!(body.chars().next_back(), Some('-' | '\u{2010}')) {
+        return;
     }
     let hyphen_len = body.chars().next_back().map_or(0, char::len_utf8);
     let cut = body.len() - hyphen_len;
     let tail = text[body.len()..].to_string();
     text.truncate(cut);
     text.push_str(&tail);
-    true
 }
 
 /// Close the current paragraph (if any content was gathered), writing `<p

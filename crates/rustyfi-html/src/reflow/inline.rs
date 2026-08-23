@@ -78,6 +78,10 @@ pub(crate) fn emit_inline(out: &mut String, bx: &PureHorzBox, ctx: &Ctx) {
                 let mut n = ctx.bullet_suppress.borrow_mut();
                 *n = n.saturating_sub(1);
             }
+            // Everything after this on the line is the LINE BREAKER's hyphen,
+            // not the author's. `block.rs` undoes it when it rejoins the
+            // lines; all this arm does is say so.
+            InlineMarkKind::BreakHyphen => ctx.break_hyphen.set(true),
         },
 
         // `inline-frame-breakable` does NOT build a `Frame`: it splices its

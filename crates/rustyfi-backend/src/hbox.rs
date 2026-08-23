@@ -499,6 +499,17 @@ pub enum InlineMarkKind {
     BulletStart,
     /// Closes the bullet fence.
     BulletEnd,
+    /// Immediately precedes the `pre_break` slot the LINE BREAKER spliced onto
+    /// a line it chose to end here — the hyphen that prints before the break.
+    ///
+    /// It exists so a reflowing renderer can undo the hyphenation exactly. The
+    /// splice produces an ordinary `InnerString`, indistinguishable from a
+    /// hyphen the author typed, so rejoining the lines had to guess from the
+    /// shape of the text — and the guess deleted real hyphens: a paragraph
+    /// wrapping at `code-printer` came out as `codeprinter`. Emitted by
+    /// `linebreak::line_content`, zero-width and rendered by nothing, exactly
+    /// like the other marks here.
+    BreakHyphen,
 }
 
 /// TeX's forced-break convention: a discretionary penalty this low or

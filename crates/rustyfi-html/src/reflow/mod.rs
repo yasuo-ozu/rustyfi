@@ -231,6 +231,16 @@ pub(crate) struct Ctx<'a> {
     /// line breaker does per wrapped line. Reset to `false` by any
     /// proportional run, so it means "still inside monospace text".
     pub(crate) mono_run: Cell<bool>,
+    /// The line currently being built ends with a hyphen the LINE BREAKER
+    /// inserted (`InlineMarkKind::BreakHyphen`), so rejoining it to the next
+    /// line must drop that hyphen.
+    ///
+    /// Set per line and cleared by `block.rs` at each line boundary. Before
+    /// this existed the rejoin guessed from the text's shape — "ends with
+    /// letter+hyphen, next line starts lowercase" — and the guess deleted
+    /// authored hyphens: a paragraph wrapping at `code-printer` rendered as
+    /// `codeprinter`.
+    pub(crate) break_hyphen: Cell<bool>,
     /// Rules belonging to a table whose own `TabularBox` does not carry them,
     /// as `(width, height, rules)`.
     ///
@@ -522,6 +532,7 @@ fn render_html_reflow_impl(
         pending_glue: Cell::new(None),
         last_char: Cell::new(None),
         mono_run: Cell::new(false),
+        break_hyphen: Cell::new(false),
         tabular_rules: RefCell::new(Vec::new()),
         frame_decos: frame_decos.iter().map(|(id, d)| (*id, d)).collect(),
         footnotes: RefCell::new(Vec::new()),

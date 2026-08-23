@@ -83,7 +83,7 @@
 //!   the line-packing floor the port's notes record as proven.
 
 use crate::context::Context;
-use crate::hbox::{HorzBox, PureHorzBox, FORCED_BREAK_PENALTY};
+use crate::hbox::{HorzBox, InlineMarkKind, PureHorzBox, FORCED_BREAK_PENALTY};
 use crate::length::Length;
 use crate::vbox::VertBox;
 
@@ -926,6 +926,11 @@ fn line_content(pure: &[PureHorzBox], start: usize, raw_end: usize) -> Vec<PureH
     }
     if raw_end < pure.len() {
         if let PureHorzBox::Discretionary { pre_break, .. } = &pure[raw_end] {
+            if !pre_break.is_empty() {
+                // Mark what follows as the BREAKER's, not the author's — see
+                // `InlineMarkKind::BreakHyphen`.
+                out.push(PureHorzBox::InlineMark(InlineMarkKind::BreakHyphen));
+            }
             out.extend(pre_break.iter().cloned());
         }
     }

@@ -49,6 +49,7 @@ LINE 1 x=72.000 baseline_y=138.100
   dx=390.097 InnerString font=0 size=12.000 rising=0.000 w=23.352 h=8.616 d=2.484 text="onto"
   dx=413.449 OuterEmpty natural=3.960 shrink=0.960 stretch=1.920
   dx=417.332 InnerString font=0 size=12.000 rising=0.000 w=18.672 h=8.616 d=2.484 text="sev"
+  dx=436.004 InlineMark kind=BreakHyphen
   dx=436.004 InnerString font=0 size=12.000 rising=0.000 w=3.996 h=8.616 d=2.484 text="-"
 LINE 2 x=72.000 baseline_y=156.100
   dx=0.000 InnerString font=0 size=12.000 rising=0.000 w=20.004 h=8.616 d=2.484 text="eral"

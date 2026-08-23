@@ -1643,28 +1643,59 @@ fn a_nested_block_inside_an_open_inline_frame_stays_balanced() {
     assert_balanced_tags(&html);
 }
 
-/// A word the LINE BREAKER hyphenated must come back together: its hyphen
-/// is spliced onto the closed line as ordinary text
-/// (`rustyfi-backend`'s `line_content`), so rejoining naively produced
-/// `vestibu- lum`. An authored hyphen before a capital is left alone.
+/// A word the LINE BREAKER split rejoins, and an AUTHORED hyphen does not
+/// disappear when the breaker happens to break after it.
+///
+/// The two are told apart by `InlineMarkKind::BreakHyphen`, which
+/// `linebreak::line_content` emits immediately before the `pre_break` slot it
+/// splices onto a closed line. Without it the only test available was the
+/// shape of the text, and that guess deleted real hyphens: a paragraph
+/// wrapping at `code-printer` rendered as `codeprinter`.
 #[test]
-fn a_word_hyphenated_by_the_line_breaker_is_rejoined() {
-    let vboxes = vec![
-        line(sized_run("vestibu-", 12.0)),
-        line(sized_run("lum sed", 12.0)),
-    ];
-    let html = render(&vboxes);
-    let body = body_of(&html);
-    assert!(body.contains("vestibulum"), "{body}");
-    assert!(!body.contains("vestibu- lum"), "{body}");
+fn a_breaker_hyphen_is_undone_and_an_authored_one_is_not() {
+    // What the breaker actually emits: the marker, then the hyphen.
+    let hyphenated = VertBox::Line {
+        height: Length::pt(9.0),
+        depth: Length::pt(2.0),
+        leading: Length::pt(12.0),
+        contents: vec![
+            (Length::ZERO, sized_run("vestibu", 12.0)),
+            (
+                Length::pt(40.0),
+                PureHorzBox::InlineMark(InlineMarkKind::BreakHyphen),
+            ),
+            (Length::pt(40.0), sized_run("-", 12.0)),
+        ],
+    };
+    let out = render(&[hyphenated, line(sized_run("lum sed", 12.0))]);
+    let body = body_of(&out);
+    assert!(body.contains("vestibulum"), "not rejoined:\n{body}");
+    assert!(!body.contains("vestibu-"), "the breaker's hyphen survived:\n{body}");
 
-    // Not a hyphenation: the next line starts with a capital.
+    // No marker: the hyphen is the AUTHOR's. It stays, and the two halves
+    // still rejoin without a space.
+    let authored = render(&[
+        line(sized_run("code-", 12.0)),
+        line(sized_run("printer runs", 12.0)),
+    ]);
+    let authored = body_of(&authored);
+    assert!(
+        authored.contains("code-printer"),
+        "an authored hyphen was mangled:\n{authored}"
+    );
+    assert!(
+        !authored.contains("code- printer") && !authored.contains("codeprinter"),
+        "{authored}"
+    );
+
+    // A line ending in a hyphen before a CAPITAL is still one word, and the
+    // hyphen is still the author's.
     let kept = render(&[
         line(sized_run("well-", 12.0)),
         line(sized_run("Known name", 12.0)),
     ]);
     let kept = body_of(&kept);
-    assert!(kept.contains("well- Known"), "{kept}");
+    assert!(kept.contains("well-Known"), "{kept}");
 }
 
 /// Self-containment: nothing fetched, nothing executed. The reflow backend

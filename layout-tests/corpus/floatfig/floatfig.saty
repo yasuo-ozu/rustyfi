@@ -1,0 +1,101 @@
+% A `stdjareport` document whose figures FLOAT — the construct this port could
+% not render at all until `hook-page-break` started firing inside the page
+% loop, where upstream fires it.
+%
+% `\figure` puts nothing in the flow. It registers a `hook-page-break` closure
+% that pushes its block onto the class's own `ref-float-boxes`, and the
+% page-parts callback drains that list into the header of a LATER page
+% (`stdjareport.satyh`'s `if pn < pageno`). So a figure only appears if the
+% hook has already run by the time the next page's parts are built.
+%
+% This document is written to exercise that ordering rather than to look
+% pretty: figures are registered on three different pages, one of them on the
+% LAST page of body text, so the trailing float has to force a page of its own
+% via the column-end hook.
+
+@require: stdjareport
+@require: itemize
+@require: color
+
+let-inline ctx \swatch clr =
+  let s = 9pt in
+  inline-graphics s s 0pt (fun (x, y) -> (
+    let c = (x +' s *' 0.5, y +' s *' 0.5) in
+    [ fill clr (Gr.circle c (s *' 0.42));
+      stroke 0.6pt Color.black (Gr.circle c (s *' 0.42)); ]
+  ))
+
+let-inline ctx \bars n =
+  let w = 46pt in
+  let h = 14pt in
+  inline-graphics w h 0pt (fun (x, y) -> (
+    [0; 1; 2; 3; 4] |> List.map (fun i -> (
+      let fi = float (i + n) in
+      let bw = w *' 0.14 in
+      let bx = x +' w *' (0.02 +. float i *. 0.2) in
+      let bh = h *' (0.22 +. fi *. 0.13) in
+      fill (Color.gray (0.78 -. fi *. 0.09))
+        (Gr.rectangle (bx, y) (bx +' bw, y +' bh))
+    ))
+  ))
+
+let-block ctx +center it =
+  line-break true true ctx (inline-fil ++ read-inline ctx it ++ inline-fil)
+
+let filler = {図版はページ先頭のヘッダ領域に浮動配置される。参照した位置ではなく、
+その図を登録したページより後のページの上端に現れる。したがってこの段落のように
+本文を並べてページを送らないと、図は現れる場所を得られない。}
+in
+
+document (|
+  title = {浮動する図版};
+  author = {rustyfi layout corpus};
+|) '<
+  +chapter {最初のページで登録する} <
+    +p {
+      ここで二つの図を登録する。\figure ?:(`fig-a`) {棒グラフ その一} <
+        +center { \bars(0);\bars(1);\bars(2); }
+      >
+      と \figure ?:(`fig-b`) {色見本} <
+        +center {
+          \swatch(Color.rgb 0.85 0.25 0.2);\swatch(Color.rgb 0.95 0.7 0.1);
+          \swatch(Color.rgb 0.2 0.6 0.3);\swatch(Color.rgb 0.2 0.4 0.8);
+        }
+      >
+      は、いずれもこのページではなく次のページの上端に出る。
+    }
+    +p { #filler; }
+    +p { #filler; }
+    +p { #filler; }
+    +p { #filler; }
+    +p { #filler; }
+    +p { #filler; }
+  >
+  +chapter {二ページ目でもう一つ} <
+    +p {
+      \figure ?:(`fig-c`) {棒グラフ その二} < +center { \bars(3); } >
+      をここで登録する。番号は登録順につく。
+    }
+    +p { #filler; }
+    +p { #filler; }
+    +p { #filler; }
+    +p { #filler; }
+    +p { #filler; }
+    +p { #filler; }
+    +listing {
+      * \ref(`fig-a`); は最初の章で登録した
+      * \ref(`fig-c`); はこの章で登録した
+    }
+  >
+  +chapter {最後に登録する} <
+    +p {
+      \figure ?:(`fig-d`) {最後の図} <
+        +center { \bars(4);\swatch(Color.rgb 0.6 0.3 0.7); }
+      >
+      は本文の最終ページで登録される。置き場所となる後続ページが存在しないので、
+      クラスの column-end フックが一枚追加する。それが空白ページとして
+      捨てられてしまうと、この図は消える。
+    }
+    +p { #filler; }
+  >
+>

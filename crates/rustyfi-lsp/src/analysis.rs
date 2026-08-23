@@ -3,10 +3,8 @@
 //! See the crate doc comment for why this stops at parsing.
 
 use rustyfi_syntax::{RustyfiVersion, Span};
-use syan::error::ParseError;
 use syan::parse::Parse;
 
-use crate::high_water::HighWaterStream;
 use crate::line_index::{floor_boundary, LineIndex};
 
 /// How bad a [`Diag`] is. The numbering matches LSP's `DiagnosticSeverity`
@@ -267,6 +265,23 @@ pub(crate) struct Failure {
     furthest: usize,
 }
 
+impl From<rustyfi_syntax::ParseFileError> for Failure {
+    /// A located failure, with `furthest` read off its span.
+    ///
+    /// Exact rather than approximate in every case
+    /// [`rustyfi_syntax::parse_error::locate`] produces: a lex failure ends
+    /// where it failed, a mark-located parse failure ends *at* the mark by
+    /// construction, and a tree-located one is only preferred over the mark
+    /// when the two agree.
+    fn from(e: rustyfi_syntax::ParseFileError) -> Self {
+        Failure {
+            furthest: e.span.end.byte,
+            span: e.span,
+            message: e.render(),
+        }
+    }
+}
+
 impl Failure {
     pub(crate) fn into_diag(self, source: &str) -> Diag {
         let (start, end) = span_to_range(&LineIndex::new(source), self.span);
@@ -292,21 +307,18 @@ fn parse_failure(source: &str, lang: RustyfiVersion) -> Option<Failure> {
 
 /// Lex and parse `source` under `lang`, keeping the tree.
 ///
-/// This deliberately re-implements [`rustyfi_syntax::parse_file`]'s two steps
-/// rather than calling it, for one reason: `parse_file` flattens syan's error
-/// tree with `format!("{err:?}")` into a `String`, and by then the structure
-/// is gone. The tree is what makes a usable message — see [`best_failure`].
+/// This re-implements [`rustyfi_syntax::parse_file`]'s two steps rather than
+/// calling it for two reasons that both come down to `parse_file` answering a
+/// narrower question: the generation is chosen here rather than by the file
+/// extension, and this crate keeps the parse *tree* even when it also wants
+/// the failure. The failure itself is located by `parse_file`'s own reducer
+/// ([`rustyfi_syntax::parse_error::locate`]) — the message a user reads must
+/// not depend on whether it reached them through an editor or a terminal.
 fn parse_source(source: &str, lang: RustyfiVersion) -> Result<Parsed, Failure> {
     let atoms = match rustyfi_syntax::lex_with_version(source, lang) {
         Ok(atoms) => atoms,
         // Lex errors already carry a hand-written message and a tight span.
-        Err(e) => {
-            return Err(Failure {
-                furthest: e.span.end.byte,
-                span: e.span,
-                message: e.msg,
-            })
-        }
+        Err(e) => return Err(Failure::from(rustyfi_syntax::ParseFileError::from_lex(e))),
     };
     // A buffer with no tokens at all — empty, or nothing but whitespace and
     // `%` comments — has nothing to diagnose. (The lexer always appends an
@@ -320,7 +332,7 @@ fn parse_source(source: &str, lang: RustyfiVersion) -> Result<Parsed, Failure> {
     if atoms.iter().all(|a| a.slot == rustyfi_syntax::Token::Eoi) {
         return Ok(Parsed::None);
     }
-    let mut stream = HighWaterStream::new(atoms);
+    let mut stream = crate::budget::stream(atoms);
     let err = match lang {
         RustyfiVersion::V0_1 => match <rustyfi_syntax::cst_v1::FileV1 as Parse<_>>::parse(&mut stream) {
             Ok(file) => return Ok(Parsed::V0_1(file)),
@@ -333,195 +345,9 @@ fn parse_source(source: &str, lang: RustyfiVersion) -> Result<Parsed, Failure> {
             Err(e) => e,
         },
     };
-
-    let furthest = stream.furthest();
-    let stalled = stream.furthest_span();
-
-    // The parse never reached a verdict — it was cut off by the stream's
-    // budget (see `high_water`). The `ParseError` in hand says only "the
-    // input ended", which this crate caused and the buffer did not, so it
-    // must not be repeated as if it described the source.
-    if stream.exhausted() {
-        let span = stalled.unwrap_or(*err.span());
-        return Err(Failure {
-            span,
-            message: "parse error: gave up analysing this file — it needs more \
-                      backtracking than the language server allows, which usually \
-                      means it is still incomplete here"
-                .to_string(),
-            furthest,
-        });
-    }
-
-    let (span, message) = best_failure(&err);
-    // Where the error TREE points, versus how far the parse actually got. The
-    // mark is >= any leaf's end by construction (a leaf's span comes from a
-    // token that was served), so this partitions cleanly: EQUAL means the
-    // tree knows as much as the stream, and its message is strictly more
-    // informative because it names the expected alternatives; LESS means a
-    // repetition swallowed the real failure and the tree is stale, and then
-    // the mark is the only signal there is. See `high_water`.
-    if span.end.byte >= furthest {
-        return Err(Failure {
-            span,
-            message,
-            furthest,
-        });
-    }
-    let stalled = stalled.unwrap_or(span);
-    Err(Failure {
-        message: stalled_message(source, stalled),
-        span: stalled,
-        furthest,
-    })
-}
-
-/// Message for a failure located by the high-water mark rather than by the
-/// error tree.
-///
-/// The tree's own message cannot be reused here: it describes the *outermost*
-/// alternative that failed ("expected end of input", for a 0.1 file whose one
-/// top-level `module` binding did not parse), which paired with an inner
-/// position would read as a claim about that position that is not true. What
-/// is known for certain is which token the parse could not get past, so that
-/// is what the message says — quoting the buffer's own text, so the user sees
-/// exactly the characters involved.
-fn stalled_message(source: &str, span: Span) -> String {
-    const MAX: usize = 24;
-    let start = floor_boundary(source, span.start.byte);
-    let end = floor_boundary(source, span.end.byte.max(start));
-    let raw = source[start..end].trim();
-    if raw.is_empty() {
-        return "parse error here".to_string();
-    }
-    // One line, so a token spanning a whole `'<...>` block does not paste a
-    // paragraph into the editor's diagnostics pane.
-    let text: String = raw.chars().take_while(|c| *c != '\n' && *c != '\r').collect();
-    let text = text.trim_end();
-    if text.chars().count() > MAX {
-        let cut: String = text.chars().take(MAX).collect();
-        return format!("parse error: unexpected `{cut}...`");
-    }
-    format!("parse error: unexpected `{text}`")
-}
-
-/// Reduce syan's error tree to one position and one message.
-///
-/// Two problems with the aggregate node the parser hands back:
-///
-/// - **Its span is useless.** `ParseError::from_cause` documents that an
-///   `Alternatives` aggregate "takes the FIRST alternative's span: with no
-///   record of how far each alternative got, that is the only deterministic
-///   choice available". For a top-level file rule the first alternative
-///   typically fails on the very first token, so the aggregate points at
-///   byte 0 — a squiggle on the first word of a 300-line document whose
-///   error is on line 250.
-/// - **Its `Debug` is a wall of `Span { start: Loc { .. } }`.** An editor
-///   renders a diagnostic message on one line.
-///
-/// Both are fixed by the standard furthest-failure rule: walk the tree to its
-/// leaves, keep the ones that got deepest into the token stream, and report
-/// their position with their (short, `Display`-rendered) reasons joined. The
-/// depth measure is the leaf span's **end** byte, because that is how far the
-/// parser had consumed when it gave up.
-fn best_failure(err: &ParseError<Span>) -> (Span, String) {
-    let mut deepest: Option<Span> = None;
-    let mut reasons: Vec<String> = Vec::new();
-    visit_leaves(err, &mut |leaf| {
-        let span = *leaf.span();
-        let depth = span.end.byte;
-        let best = deepest.map(|s| s.end.byte);
-        if best.is_none_or(|b| depth > b) {
-            deepest = Some(span);
-            reasons.clear();
-        }
-        if deepest.map(|s| s.end.byte) == Some(depth) {
-            let reason = leaf_reason(leaf);
-            if !reasons.contains(&reason) {
-                reasons.push(reason);
-            }
-        }
-    });
-
-    let span = deepest.unwrap_or(*err.span());
-    (span, render_reasons(&reasons))
-}
-
-/// Join the furthest-failure reasons into one message.
-///
-/// Two touches beyond a plain join:
-///
-/// - **The list is capped.** A grammar this size offers dozens of
-///   continuations at a single position, and "expected A, B, C, … and 40
-///   more" is no more useful than the first few.
-/// - **A shared `expected` is factored out.** Every leaf renders as
-///   `"expected 'let'"`, so a naive join gives "expected 'let', expected
-///   'if', expected 'fun'", which reads like three separate complaints.
-///   Factoring only happens when *every* reason has the prefix — a mixed
-///   list (an `expected` beside a hand-written `ParseError::Other`) is joined
-///   verbatim rather than mangled into a false parallel.
-fn render_reasons(reasons: &[String]) -> String {
-    const MAX_REASONS: usize = 4;
-    const PREFIX: &str = "expected ";
-
-    if reasons.is_empty() {
-        return "parse error".to_string();
-    }
-    let (kept, extra) = match reasons.len() > MAX_REASONS {
-        true => (&reasons[..MAX_REASONS], reasons.len() - MAX_REASONS),
-        false => (reasons, 0),
-    };
-    let all_expected = kept.iter().all(|r| r.starts_with(PREFIX));
-    let body = if all_expected {
-        let stripped: Vec<String> = kept
-            .iter()
-            .map(|r| r[PREFIX.len()..].to_string())
-            .collect();
-        format!("expected {}", join_alternatives(&stripped))
-    } else {
-        join_alternatives(kept)
-    };
-    match extra {
-        0 => format!("parse error: {body}"),
-        n => format!("parse error: {body} (and {n} more)"),
-    }
-}
-
-/// Depth-first walk over the non-`Alternatives` leaves of an error tree. An
-/// `Alternatives` node with no children is itself a leaf (syan builds one for
-/// an empty alternative set).
-fn visit_leaves(err: &ParseError<Span>, f: &mut impl FnMut(&ParseError<Span>)) {
-    let alts = err.alternatives();
-    if alts.is_empty() {
-        f(err);
-        return;
-    }
-    for alt in alts {
-        visit_leaves(alt, f);
-    }
-}
-
-/// One leaf's reason, without syan's `Display` position suffix.
-///
-/// `ParseError`'s own `Display` appends `" at {span:?}"` for a spanned error,
-/// which would put a `Span { start: Loc { line: .., col: .., byte: .. } }`
-/// dump in the middle of the message. The span is already the diagnostic's
-/// range, so it is dropped here rather than repeated in words.
-fn leaf_reason(leaf: &ParseError<Span>) -> String {
-    let rendered = leaf.to_string();
-    match rendered.rfind(" at Span {") {
-        Some(cut) => rendered[..cut].to_string(),
-        None => rendered,
-    }
-}
-
-/// `["a", "b", "c"]` → `"a, b, or c"`.
-fn join_alternatives(reasons: &[String]) -> String {
-    match reasons {
-        [] => String::new(),
-        [one] => one.clone(),
-        [head @ .., last] => format!("{}, or {last}", head.join(", ")),
-    }
+    Err(Failure::from(rustyfi_syntax::parse_error::locate(
+        source, &stream, &err,
+    )))
 }
 
 /// Turn a [`rustyfi_syntax::Span`] into a non-degenerate LSP range.
@@ -565,55 +391,5 @@ pub(crate) fn span_to_range(
         ),
         // Empty file. A zero-width range at the origin is all there is.
         None => (index.position(0), index.position(0)),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn join_alternatives_reads_as_english() {
-        assert_eq!(join_alternatives(&[]), "");
-        assert_eq!(join_alternatives(&["a".into()]), "a");
-        assert_eq!(join_alternatives(&["a".into(), "b".into()]), "a, or b");
-        assert_eq!(
-            join_alternatives(&["a".into(), "b".into(), "c".into()]),
-            "a, b, or c"
-        );
-    }
-
-    #[test]
-    fn render_reasons_factors_out_a_shared_expected() {
-        assert_eq!(render_reasons(&[]), "parse error");
-        assert_eq!(
-            render_reasons(&["expected 'let'".into(), "expected 'if'".into()]),
-            "parse error: expected 'let', or 'if'"
-        );
-        // Mixed with a non-`expected` reason: joined verbatim, because
-        // factoring would attach `expected` to something that is not a thing
-        // the parser expected.
-        assert_eq!(
-            render_reasons(&["expected 'let'".into(), "unexpected end of input".into()]),
-            "parse error: expected 'let', or unexpected end of input"
-        );
-    }
-
-    #[test]
-    fn render_reasons_caps_a_long_alternative_list() {
-        let many: Vec<String> = (0..9).map(|i| format!("expected '{i}'")).collect();
-        assert_eq!(
-            render_reasons(&many),
-            "parse error: expected '0', '1', '2', or '3' (and 5 more)"
-        );
-    }
-
-    #[test]
-    fn leaf_reason_drops_syans_span_suffix() {
-        let span = Span::default();
-        let leaf = ParseError::expected(span, "end of input");
-        let rendered = leaf.to_string();
-        assert!(rendered.contains("at Span {"), "syan changed its Display: {rendered}");
-        assert_eq!(leaf_reason(&leaf), "expected end of input");
     }
 }

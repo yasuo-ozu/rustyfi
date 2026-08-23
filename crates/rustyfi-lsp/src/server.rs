@@ -178,7 +178,7 @@ struct State {
     /// Nothing derived is cached beside it: a [`crate::Model`] is rebuilt per
     /// request, because a cache keyed on a buffer that changes on every
     /// keystroke is a staleness bug waiting for a race, and the parse is
-    /// budgeted (`high_water`) so its cost is bounded.
+    /// budgeted (`budget`) so its cost is bounded.
     docs: HashMap<String, String>,
     /// The project's folders and their cached outlines, for
     /// `workspace/symbol`. Unlike [`Self::docs`] this one *does* read the

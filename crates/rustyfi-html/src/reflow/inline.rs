@@ -765,6 +765,11 @@ fn emit_nested_text(nested: &mut String, bx: &PureHorzBox, ctx: &Ctx) {
 ///   shape as [`emit_graphics_box`]) for `rules` — these ARE orientation-
 ///   independent paths, so they go through the normal `<g transform>` flip
 ///   this helper already implements.
+///
+/// **`font-size` is written in USER UNITS, not `pt`, and that is the whole
+/// point of [`math_font_size_uu`]** — see that function for why writing the
+/// `pt` value with a `pt` suffix inside this viewport magnifies every glyph
+/// by exactly 4/3 while leaving `dx`/`dy` and the `rules` paths alone.
 fn emit_math_svg(
     out: &mut String,
     width: f64,
@@ -790,7 +795,7 @@ fn emit_math_svg(
     for g in glyphs {
         let x = g.dx.0;
         let y = height - g.dy.0 - g.info.rising.0;
-        let mut style = format!("font-size:{}pt;", g.info.size.0);
+        let mut style = format!("font-size:{};", math_font_size_uu(g.info.size.0));
         if let Some(stack) = ctx.font_family_for(g.info.font) {
             style.push_str(&format!("font-family:{stack};"));
         }
@@ -819,4 +824,33 @@ fn emit_math_svg(
     }
     out.push_str(&nested);
     out.push_str("</span>\n");
+}
+
+/// A math glyph's `pt` font size, spelled for the inside of
+/// [`emit_math_svg`]'s viewport — i.e. in SVG USER UNITS, as a `px` length.
+///
+/// **The bug this exists to prevent.** The math `<svg>` is
+/// `width="{w}pt" viewBox="0 0 {w} {h}"`, so one user unit renders as exactly
+/// one `pt` — the deliberate "1 user unit = 1 pt" contract `svg.rs`'s module
+/// comment states, and what makes `MathGlyph::dx`/`dy` and every `rules` path
+/// coordinate emittable as a bare `Length` with no conversion. An ABSOLUTE
+/// CSS length inside that viewport does NOT get the same treatment: `pt`
+/// resolves against the CSS reference pixel *before* the viewBox transform
+/// (SVG fixes 1px = 1 user unit for absolute-unit conversion), so
+/// `font-size:12pt` becomes 16 user units and then renders at 16pt. Every
+/// glyph came out 4/3 too big while its POSITION stayed right, so glyphs
+/// overlapped each other, overflowed the fraction bars and radical overbars
+/// (which, being `rules` paths, were correctly scaled), and — because the
+/// wrapper `<span>` reserves only the box's own `height`/`depth` while the
+/// `<svg>` is `overflow:visible` — spilled ink into the lines above and
+/// below. The PDF was never affected: it positions each glyph absolutely and
+/// sets the size in the content stream's own points.
+///
+/// `px` rather than a bare number because a unitless CSS `font-size` is not
+/// valid CSS (browsers that accept it are being lenient); in SVG `1px` is
+/// exactly one user unit, which is what we want. So the number is unchanged
+/// and only the unit is corrected: 12pt of document size -> `font-size:12px`
+/// -> 12 user units -> 12pt rendered.
+fn math_font_size_uu(size_pt: f64) -> String {
+    format!("{size_pt}px")
 }

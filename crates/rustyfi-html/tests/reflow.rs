@@ -298,6 +298,64 @@ fn math_renders_as_an_inline_svg_with_glyph_text() {
     );
 }
 
+/// A math glyph's `font-size` must be in the math `<svg>`'s own USER UNITS,
+/// never an absolute `pt` length.
+///
+/// The `<svg>` is `width="{w}pt" … viewBox="0 0 {w} {h}"`, so one user unit
+/// renders as one `pt` — which is exactly why `dx`/`dy` and the `rules` path
+/// coordinates are emitted as bare `Length` numbers. An absolute CSS length
+/// does NOT get that treatment: SVG converts `pt` to user units at
+/// 1px = 1 user unit, so `font-size:12pt` inside this viewport resolves to
+/// 16 user units and paints at 16pt. Every glyph came out 4/3 too big at a
+/// position computed for 12pt, so glyphs overlapped each other, overflowed
+/// the fraction bars and radical overbars beside them (`rules` paths, which
+/// were correctly scaled all along), and spilled outside the wrapper
+/// `<span>`'s reserved height into the lines above and below. Inline and
+/// displayed math alike, since both are this one `PureHorzBox::Math` arm.
+///
+/// Asserting on the ABSENCE of `pt` here rather than on an exact string, so
+/// the test keeps its meaning if the size is ever reformatted.
+#[test]
+fn math_glyph_font_size_is_in_svg_user_units_not_points() {
+    let math_box = PureHorzBox::Math {
+        width: Length::pt(10.0),
+        height: Length::pt(8.0),
+        depth: Length::ZERO,
+        glyphs: vec![MathGlyph {
+            text: "x".to_string(),
+            gid: None,
+            dx: Length::ZERO,
+            dy: Length::ZERO,
+            info: HorzStringInfo {
+                font: FontKey(0),
+                size: Length::pt(12.0),
+                rising: Length::ZERO,
+                color: Color::Gray(0.0),
+            },
+            width: Length::pt(10.0),
+            height: Length::pt(8.0),
+            depth: Length::ZERO,
+        }],
+        rules: vec![],
+    };
+    let html = render(&vec![line(math_box)]);
+    let text_elem = html
+        .lines()
+        .find(|l| l.contains("<text"))
+        .unwrap_or_else(|| panic!("no SVG <text> glyph emitted:\n{html}"));
+    assert!(
+        !text_elem.contains("font-size:12pt"),
+        "math glyph font-size is an absolute `pt` length inside a \
+         1-user-unit-per-pt viewBox — it will paint 4/3 too big:\n{text_elem}"
+    );
+    // 12 user units is what "12pt of document font size" means in here;
+    // `px` is the standards-safe spelling of one user unit.
+    assert!(
+        text_elem.contains("font-size:12px"),
+        "math glyph font-size is not the box's own 12 user units:\n{text_elem}"
+    );
+}
+
 /// A `Math` box's `rules` (fraction bar / radical) must ALSO render — via
 /// the same `svg::emit_graphics` path `Graphics` boxes use — as an SVG
 /// `<path>` inside the math `<svg>`.

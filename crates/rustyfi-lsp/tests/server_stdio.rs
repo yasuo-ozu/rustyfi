@@ -138,13 +138,15 @@ fn the_full_lifecycle_produces_a_diagnostic_and_exits_cleanly() {
         out[0]["result"]["capabilities"],
         json!({
             "textDocumentSync": { "openClose": true, "change": 1 },
-            "positionEncoding": "utf-16",
             "hoverProvider": true,
             "definitionProvider": true,
             "completionProvider": {
                 "triggerCharacters": ["\\", "+", "#", "."],
                 "resolveProvider": false,
             },
+            "documentSymbolProvider": true,
+            "workspaceSymbolProvider": true,
+            "positionEncoding": "utf-16",
         }),
     );
     assert_eq!(out[0]["result"]["serverInfo"]["name"], "rustyfi-lsp");
@@ -202,6 +204,77 @@ fn an_unknown_request_is_method_not_found_and_the_session_survives() {
     assert_eq!(out[2]["id"], 3);
     assert!(out[2]["result"].is_null());
     assert_eq!(code_, 0);
+}
+
+/// Every capability the `initialize` reply advertises is answered in one
+/// session, and nothing it does not advertise is.
+///
+/// The per-capability tests further down each drive one request in isolation;
+/// this one exists for the failure they cannot see between them — a dispatch
+/// arm dropped while the capability that promises it survives, which looks
+/// from the editor like a feature that silently does nothing. Reading the
+/// advertised set back off the reply rather than restating it is the point:
+/// adding a provider without a handler fails here, not in review.
+#[test]
+fn every_advertised_capability_answers_in_one_session() {
+    let uri = "file:///all.saty";
+    let src = "let-inline \\emph it = it\nlet greeting = 1\nlet doc = {\\emph{hi}} greeting\n";
+    let (out, code_) = session(&[
+        initialize(1),
+        did_open(uri, src),
+        at(2, "hover", uri, 2, 12),
+        at(3, "definition", uri, 2, 23),
+        at(4, "completion", uri, 2, 12),
+        document_symbol(5, uri),
+        json!({
+            "jsonrpc": "2.0", "id": 6, "method": "workspace/symbol",
+            "params": { "query": "greeting" },
+        }),
+        shutdown(7),
+        exit(),
+    ]);
+    assert_eq!(code_, 0);
+
+    // The advertised set, read back rather than restated.
+    let caps = out[0]["result"]["capabilities"].as_object().unwrap();
+    let advertised: Vec<&str> = caps
+        .keys()
+        .map(String::as_str)
+        .filter(|k| k.ends_with("Provider"))
+        .collect();
+    assert_eq!(
+        advertised,
+        [
+            "completionProvider",
+            "definitionProvider",
+            "documentSymbolProvider",
+            "hoverProvider",
+            "workspaceSymbolProvider",
+        ],
+        "a provider was added without a case in this test: {caps:#?}"
+    );
+
+    // …and every one of them answered something other than `null`, which is
+    // how a lost handler would show up: an advertised capability whose every
+    // reply is empty.
+    for (id, what) in [
+        (2, "hover"),
+        (3, "definition"),
+        (4, "completion"),
+        (5, "documentSymbol"),
+        (6, "workspace/symbol"),
+    ] {
+        let r = reply(&out, id);
+        assert!(r.get("error").is_none(), "{what} errored: {r:#?}");
+        assert!(
+            !r["result"].is_null() && r["result"] != json!([]),
+            "{what} advertised but answered nothing: {r:#?}"
+        );
+    }
+
+    // Diagnostics are pushed, not requested, so they are checked by their
+    // absence of an error rather than by a reply id: the buffer compiles.
+    assert!(diagnostics(&out, 0).is_empty(), "{out:#?}");
 }
 
 #[test]
@@ -684,4 +757,176 @@ fn a_ranged_did_change_forgets_the_buffer_rather_than_answering_from_stale_text(
         at(2, "hover", uri, 1, 10),
     ]);
     assert_eq!(*result(&out, 2), Value::Null);
+}
+
+// ---------------------------------------------------------------------------
+// textDocument/documentSymbol
+// ---------------------------------------------------------------------------
+
+fn document_symbol(id: i64, uri: &str) -> Value {
+    json!({
+        "jsonrpc": "2.0", "id": id, "method": "textDocument/documentSymbol",
+        "params": { "textDocument": { "uri": uri } },
+    })
+}
+
+/// The reply to the request with this id.
+fn reply(out: &[Value], id: i64) -> &Value {
+    out.iter()
+        .find(|m| m["id"] == id)
+        .unwrap_or_else(|| panic!("no reply with id {id}: {out:#?}"))
+}
+
+/// The whole exchange, asserted as JSON: this is the wire format an editor
+/// reads, and the one place a field-name slip (`selectionRange` written
+/// `selection_range`) shows up as a broken outline rather than as a type
+/// error.
+#[test]
+fn document_symbol_returns_the_outline_of_an_open_buffer() {
+    let src = "@require: list\n\nmodule M = struct\n  let f x = x\nend\n";
+    let (out, _) = session(&[
+        initialize(1),
+        did_open("file:///lib.satyh", src),
+        document_symbol(2, "file:///lib.satyh"),
+    ]);
+
+    assert_eq!(
+        reply(&out, 2)["result"],
+        json!([
+            {
+                "name": "list",
+                "detail": "@require:",
+                // 4 = Package.
+                "kind": 4,
+                "range": {
+                    "start": { "line": 0, "character": 0 },
+                    "end":   { "line": 0, "character": 14 },
+                },
+                "selectionRange": {
+                    "start": { "line": 0, "character": 0 },
+                    "end":   { "line": 0, "character": 14 },
+                },
+            },
+            {
+                "name": "M",
+                "detail": "module",
+                // 2 = Module.
+                "kind": 2,
+                "range": {
+                    "start": { "line": 2, "character": 0 },
+                    "end":   { "line": 4, "character": 3 },
+                },
+                "selectionRange": {
+                    "start": { "line": 2, "character": 7 },
+                    "end":   { "line": 2, "character": 8 },
+                },
+                "children": [{
+                    "name": "f",
+                    "detail": "let",
+                    // 12 = Function.
+                    "kind": 12,
+                    "range": {
+                        "start": { "line": 3, "character": 2 },
+                        "end":   { "line": 3, "character": 13 },
+                    },
+                    "selectionRange": {
+                        "start": { "line": 3, "character": 6 },
+                        "end":   { "line": 3, "character": 7 },
+                    },
+                }],
+            },
+        ]),
+    );
+}
+
+/// A `didChange` replaces the stored buffer, so the outline follows the edits
+/// rather than the text the file was opened with. The failure this rules out
+/// is a symbol pane that is correct once and then frozen.
+#[test]
+fn document_symbol_follows_did_change() {
+    let uri = "file:///doc.satyh";
+    let (out, _) = session(&[
+        initialize(1),
+        did_open(uri, "let before = 1\n"),
+        did_change(uri, 2, "let after = 1\nlet also = 2\n"),
+        document_symbol(3, uri),
+    ]);
+
+    let names: Vec<&str> = reply(&out, 3)["result"]
+        .as_array()
+        .expect("an array of symbols")
+        .iter()
+        .map(|s| s["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["after", "also"]);
+}
+
+/// A URI the server was never given — never opened, or closed again — is
+/// answered with an empty outline rather than an error, so an editor does not
+/// show "request failed" in a pane for a file it has not opened.
+#[test]
+fn document_symbol_on_an_unknown_uri_is_an_empty_outline() {
+    let uri = "file:///gone.satyh";
+    let (out, _) = session(&[
+        initialize(1),
+        document_symbol(2, "file:///never-opened.satyh"),
+        did_open(uri, "let x = 1\n"),
+        json!({
+            "jsonrpc": "2.0", "method": "textDocument/didClose",
+            "params": { "textDocument": { "uri": uri } },
+        }),
+        document_symbol(3, uri),
+    ]);
+
+    assert_eq!(reply(&out, 2)["result"], json!([]));
+    assert_eq!(reply(&out, 3)["result"], json!([]), "didClose must forget");
+}
+
+/// The UTF-16 rule, end to end and on the outline path this time: `title`'s
+/// value is 42 bytes of Japanese, and `sub`'s columns are only right if the
+/// server counts code units.
+#[test]
+fn document_symbol_columns_are_utf16_over_the_wire() {
+    let src = "let title = `日本語のタイトル` let sub = 2\n";
+    assert_eq!(src.find("sub ="), Some(43), "byte offset, for contrast");
+    let (out, _) = session(&[
+        initialize(1),
+        did_open("file:///jp.satyh", src),
+        document_symbol(2, "file:///jp.satyh"),
+    ]);
+
+    assert_eq!(
+        reply(&out, 2)["result"][1]["selectionRange"],
+        json!({
+            "start": { "line": 0, "character": 27 },
+            "end":   { "line": 0, "character": 30 },
+        }),
+    );
+}
+
+/// `--lang` pins the generation for the outline just as it does for
+/// diagnostics: a 0.1 library asked for as 0.0.6 declares nothing, and the
+/// server must not quietly fall back to the reading that works better.
+#[test]
+fn document_symbol_obeys_an_explicit_lang() {
+    let src = "module Lib = struct\n  val f x = x\nend\n";
+    let uri = "file:///lib.satyh";
+    let msgs = [initialize(1), did_open(uri, src), document_symbol(2, uri)];
+
+    let (auto, _) = session(&msgs);
+    assert_eq!(reply(&auto, 2)["result"][0]["name"], "Lib");
+    assert_eq!(
+        reply(&auto, 2)["result"][0]["children"][0]["name"],
+        "f",
+        "the ambiguity re-check must read this as 0.1"
+    );
+
+    let (pinned, _) = session_with(
+        &msgs,
+        Options {
+            lang: Some(RustyfiVersion::V0_0),
+            ..Options::default()
+        },
+    );
+    assert_eq!(reply(&pinned, 2)["result"], json!([]));
 }

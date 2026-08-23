@@ -28,7 +28,8 @@ use rustyfi_syntax::cst::{self, ast};
 use rustyfi_syntax::leaf::*;
 use rustyfi_syntax::span::Span;
 
-use crate::model::{node_span, Builder, ByteRange, Def, Ns};
+use crate::model::{Builder, ByteRange, Def, Ns};
+use crate::symbols::node_span;
 
 /// Byte offset of a span's first byte — the boundary form every scope
 /// computation below wants.
@@ -43,7 +44,7 @@ fn past(span: Span) -> usize {
 
 /// The range an ascription's type occupies, for hover to quote.
 fn ascription_span(a: Option<&ast::RecAscription>) -> Option<ByteRange> {
-    a.map(|a| node_span(&a.ty))
+    a.map(|a| ByteRange::of(node_span(&a.ty)))
 }
 
 /// Where a top-level (or `struct`-level) binding's text begins.
@@ -411,7 +412,7 @@ impl Builder<'_> {
             scope,
             form,
             ty: match body {
-                cst::TypeDeclBody::Synonym(t) => Some(node_span(t)),
+                cst::TypeDeclBody::Synonym(t) => Some(ByteRange::of(node_span(t))),
                 _ => None,
             },
             container,
@@ -438,7 +439,7 @@ impl Builder<'_> {
             name_span: ByteRange::of(v.ctor.span),
             scope,
             form: "variant constructor",
-            ty: v.of_ty.as_ref().map(|o| node_span(&o.ty)),
+            ty: v.of_ty.as_ref().map(|o| ByteRange::of(node_span(&o.ty))),
             container,
             declaration: false,
         });
@@ -466,7 +467,7 @@ impl Builder<'_> {
                 // `Model::member` reaches it by container, not by scope.
                 scope: ByteRange::new(0, 0),
                 form,
-                ty: Some(node_span(ty)),
+                ty: Some(ByteRange::of(node_span(ty))),
                 container: Some(module),
                 declaration: true,
             });

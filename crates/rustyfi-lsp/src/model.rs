@@ -509,42 +509,6 @@ impl<'s> Model<'s> {
 }
 
 // ---------------------------------------------------------------------------
-// Node extents
-// ---------------------------------------------------------------------------
-
-/// The byte range a CST node occupies.
-///
-/// The nodes derive `Parse`/`Unparse` but not syan's `Spanned` — adding a third
-/// derive would put it through the `#[recurse]` engine `cst.rs` documents as
-/// compile-time-explosive — so the extent is recovered by *unparsing* the node
-/// into a sink that keeps the union of the spans it is handed. Exact by
-/// construction: `Unparse` replays the very atoms the node was parsed from,
-/// each with its own span, so there is no terminator to special-case and no
-/// way for a subtree to be forgotten.
-///
-/// Used only where a boundary keyword cannot supply the answer — the extent of
-/// a type ascription, which ends wherever it happens to end. Every *scope*
-/// boundary comes from a keyword instead (see [`crate::walk006`]), which is
-/// cheaper and needs no allocation at all.
-pub(crate) fn node_span(node: &impl syan::parse::Unparse<rustyfi_syntax::Atom>) -> ByteRange {
-    #[derive(Default)]
-    struct Extent(Span);
-    impl syan::parse::unparse::Emitter<rustyfi_syntax::Atom> for Extent {
-        type Error = std::convert::Infallible;
-        fn write_one(&mut self, atom: rustyfi_syntax::Atom) -> Result<(), Self::Error> {
-            self.0 = self.0.unite(atom.span);
-            Ok(())
-        }
-        fn write_sep(&mut self) -> Result<(), Self::Error> {
-            Ok(())
-        }
-    }
-    let mut extent = Extent::default();
-    let Ok(()) = node.unparse(&mut extent);
-    ByteRange::of(extent.0)
-}
-
-// ---------------------------------------------------------------------------
 // Building
 // ---------------------------------------------------------------------------
 

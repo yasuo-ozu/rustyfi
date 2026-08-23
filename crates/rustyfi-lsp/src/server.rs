@@ -1,18 +1,30 @@
 //! The stdio language server: lifecycle, document sync, and diagnostics.
 //!
-//! Everything the server *knows* is in [`crate::analyze`]; this module only
-//! decides when to ask and how to phrase the answer.
+//! Everything the server *knows* is somewhere else — [`crate::analyze`] and
+//! [`crate::project::check`] for diagnostics, [`crate::build_model`] for the
+//! cursor-driven requests, [`crate::document_symbols`] for the outline. This
+//! module only decides which of them to ask, and how to phrase the answer.
 //!
 //! # What is implemented
 //!
 //! `initialize`, `initialized`, `shutdown`, `exit`,
 //! `textDocument/didOpen` / `didChange` / `didClose`,
-//! `textDocument/publishDiagnostics`, and the three interactive requests —
+//! `textDocument/publishDiagnostics`, the three interactive requests —
 //! `textDocument/hover`, `textDocument/definition` and
-//! `textDocument/completion`. The `initialize` reply advertises exactly that
-//! and nothing more — an over-claimed capability costs the user a hang or an
-//! empty popup on every keystroke, so the reply lists only what is actually
-//! wired up.
+//! `textDocument/completion` — and the two outline ones,
+//! `textDocument/documentSymbol` and `workspace/symbol`. The `initialize`
+//! reply advertises exactly that and nothing more — an over-claimed
+//! capability costs the user a hang or an empty popup on every keystroke, so
+//! the reply lists only what is actually wired up. (The whole-program tier is
+//! the one thing here that is not a capability at all: it changes what a
+//! diagnostic can be *about*, not which methods exist, so a client that spoke
+//! to the parse-only server speaks to this one unchanged.)
+//!
+//! Two of those touch the filesystem and the rest answer purely from the text
+//! the client sent: `workspace/symbol` reads the project's other files — see
+//! the crate-private `workspace` module, which owns all of that — and
+//! `textDocument/definition` follows a `@require:`/`@import:` header through
+//! the compiler's own loader (`State::resolve_header`).
 //!
 //! Document sync is **full**, not incremental. Incremental sync would mean
 //! reimplementing UTF-16-range splicing over the buffer, and the whole
@@ -24,11 +36,14 @@
 //!
 //! Diagnostics are *pushed*: the notification that changes a buffer carries
 //! the buffer, so nothing had to be remembered between messages, and not
-//! remembering is how staleness bugs are avoided. The three interactive
-//! requests are *pulled* — `textDocument/hover` carries a URI and a position
-//! and no text at all — so the server has to hold what the client last sent
-//! it. [`State::docs`] is that and only that: it is written on
-//! `didOpen`/`didChange`, dropped on `didClose`, and never derived from.
+//! remembering is how staleness bugs are avoided. Every other request is
+//! *pulled* — `textDocument/hover` carries a URI and a position and no text
+//! at all, `textDocument/documentSymbol` a URI and nothing else — so the
+//! server has to hold what the client last sent it. `State::docs` is that
+//! and only that: it is written on `didOpen`/`didChange`, dropped on
+//! `didClose`, and never derived from. The alternative — reading the URI back
+//! off disk — would answer about the saved file rather than the buffer being
+//! edited, and would put filesystem access in the pure half of this module.
 
 use std::collections::HashMap;
 use std::io::{self, BufRead, Write};
@@ -38,7 +53,8 @@ use serde_json::{json, Value};
 
 use crate::jsonrpc::{self, code, Incoming};
 use crate::model::HeaderKind;
-use crate::{ByteRange, Definition, LineIndex, Position, RustyfiVersion};
+use crate::workspace::Workspace;
+use crate::{ByteRange, Definition, LineIndex, Position, RustyfiVersion, Symbol};
 
 /// How the server was started.
 #[derive(Debug, Default, Clone)]
@@ -51,6 +67,7 @@ pub struct Options {
     /// project that is wholly one generation and whose library files, being
     /// signal-free, would otherwise each be parsed twice.
     pub lang: Option<RustyfiVersion>,
+
     /// Where `@require:` looks, for go-to-definition on a header.
     ///
     /// The same root `rustyfi --lib-root` names, and resolved by the same
@@ -58,7 +75,28 @@ pub struct Options {
     /// editor cannot disagree with the build about which file a header names.
     /// `None` means no root is configured and a `@require:` simply does not
     /// resolve — `@import:`, which is relative to the file itself, still does.
+    ///
+    /// Separate from the copy inside [`Self::project`] because the two are
+    /// independently optional: `--no-typecheck` leaves the whole-program tier
+    /// off and a header still has to be followable. `rustyfi lsp` fills both
+    /// in from the one `--lib-root`.
     pub lib_root: Option<PathBuf>,
+
+    /// Whole-program analysis: resolve each buffer's `@require:`/`@import:`
+    /// graph and typecheck it, not just parse it
+    /// ([`crate::project::check`]).
+    ///
+    /// `None` — the default — is the parse tier alone, which is what a
+    /// consumer with no filesystem to offer (and every test in
+    /// `tests/server_stdio.rs`) wants. `rustyfi lsp` sets `Some(..)` unless
+    /// `--no-typecheck` is given, and fills in root discovery, which it can
+    /// do and this crate deliberately cannot (see
+    /// [`crate::project::CheckOptions::discover_roots`]).
+    ///
+    /// [`Self::lang`] wins over the copy inside it, so the two cannot say
+    /// different things about the same buffer.
+    #[cfg(feature = "typecheck")]
+    pub project: Option<crate::project::CheckOptions>,
 }
 
 /// Run the server against a pair of streams until the client disconnects or
@@ -120,16 +158,32 @@ pub fn run(input: &mut impl BufRead, output: &mut impl Write, opts: Options) -> 
 type RequestError = (i64, String);
 
 /// Everything the server remembers between messages.
+///
+/// Including the open buffers, which a diagnostics-only server did not need —
+/// see the module comment. The store is keyed by the URI as an **opaque
+/// string**; a path is derived from it only where one is genuinely needed
+/// (the whole-program tier, to resolve `@import:` and discover a library root
+/// — [`crate::project::path_from_uri`] — and go-to-definition on a header),
+/// and a URI with no path simply falls back to the parse tier. Entries live
+/// from `didOpen` to `didClose`, which is exactly the window the
+/// specification says a server may be asked about a document in.
 struct State {
     opts: Options,
     initialized: bool,
     shutdown_requested: bool,
-    /// The text of each open buffer, keyed by URI — see the module comment.
+    /// The text of each open buffer, keyed by URI. Replaced wholesale on
+    /// every `didChange` (sync is Full), so it cannot go stale against what
+    /// the client has.
+    ///
     /// Nothing derived is cached beside it: a [`crate::Model`] is rebuilt per
     /// request, because a cache keyed on a buffer that changes on every
     /// keystroke is a staleness bug waiting for a race, and the parse is
     /// budgeted (`high_water`) so its cost is bounded.
     docs: HashMap<String, String>,
+    /// The project's folders and their cached outlines, for
+    /// `workspace/symbol`. Unlike [`Self::docs`] this one *does* read the
+    /// filesystem — see the `workspace` module, which owns all of it.
+    workspace: Workspace,
 }
 
 impl State {
@@ -139,6 +193,7 @@ impl State {
             initialized: false,
             shutdown_requested: false,
             docs: HashMap::new(),
+            workspace: Workspace::default(),
         }
     }
 
@@ -153,6 +208,7 @@ impl State {
         match method {
             "initialize" => {
                 self.absorb_initialization_options(&params);
+                self.workspace.absorb_initialize(&params);
                 self.initialized = true;
                 Ok(server_capabilities())
             }
@@ -164,7 +220,7 @@ impl State {
                 self.shutdown_requested = true;
                 Ok(Value::Null)
             }
-            // The three interactive requests. Each answers `null` — never an
+            // The three cursor-driven requests. Each answers `null` — never an
             // error — when it has nothing to say: LSP treats `null` as "no
             // result", and an error response makes a client log a failure for
             // what is an ordinary outcome (a cursor on a keyword, a name from
@@ -172,6 +228,16 @@ impl State {
             "textDocument/hover" => Ok(self.hover(&params)),
             "textDocument/definition" => Ok(self.definition(&params)),
             "textDocument/completion" => Ok(self.completion(&params)),
+            // The two outline requests, on the same principle but with an
+            // empty *list* as their "nothing to say" — a pane, unlike a popup,
+            // is always on screen, and an error in it reads as a broken server
+            // rather than as an empty file.
+            "textDocument/documentSymbol" => Ok(self.document_symbols(&params)),
+            "workspace/symbol" => {
+                let query = params.get("query").and_then(Value::as_str).unwrap_or("");
+                let lang = self.opts.lang;
+                Ok(Value::Array(self.workspace.query(query, &self.docs, lang)))
+            }
             _ => Err((code::METHOD_NOT_FOUND, format!("{method} is not supported"))),
         }
     }
@@ -345,17 +411,9 @@ impl State {
         }
     }
 
-    /// Publish diagnostics for `text` against the URI and version in
-    /// `params.textDocument`, or nothing if either the URI or the text is
-    /// missing.
-    ///
-    /// `text` is a parameter rather than read from `params` because that is
-    /// the *only* thing `didOpen` and `didChange` disagree about; everything
-    /// else — the URI, the version echo, the "drop a malformed notification
-    /// silently" rule — is shared, and was previously written twice.
-    /// Store what the client just sent, so a later `hover`/`definition`/
-    /// `completion` — which carry a position and no text — has a buffer to
-    /// answer about.
+    /// Store (or replace) what the client just sent, so a later
+    /// `hover`/`definition`/`completion`/`documentSymbol` — which carry a URI
+    /// and no text — has a buffer to answer about.
     ///
     /// A notification with no text **forgets** the buffer rather than keeping
     /// the previous one. That is a ranged `didChange` under a Full-sync
@@ -363,9 +421,9 @@ impl State {
     /// the text the server holds is then known to be out of date. Diagnostics
     /// may stay on screen through such a change (they are at worst
     /// mispositioned), but a hover computed from stale text *answers about
-    /// characters that are not there*, and a jump computed from it lands
-    /// somewhere the user did not ask for. Answering nothing is the only
-    /// honest option.
+    /// characters that are not there*, a jump computed from it lands somewhere
+    /// the user did not ask for, and a stale outline is harder to notice than
+    /// a missing one. Answering nothing is the only honest option.
     fn remember(&mut self, params: &Value, text: Option<&str>) {
         let Some(uri) = params
             .get("textDocument")
@@ -380,6 +438,14 @@ impl State {
         };
     }
 
+    /// Publish diagnostics for `text` against the URI and version in
+    /// `params.textDocument`, or nothing if either the URI or the text is
+    /// missing.
+    ///
+    /// `text` is a parameter rather than read from `params` because that is
+    /// the *only* thing `didOpen` and `didChange` disagree about; everything
+    /// else — the URI, the version echo, the "drop a malformed notification
+    /// silently" rule — is shared, and was previously written twice.
     fn publish(&self, params: &Value, text: Option<&str>) -> Vec<Value> {
         let Some(doc) = params.get("textDocument") else {
             return Vec::new();
@@ -390,12 +456,38 @@ impl State {
         vec![self.diagnostics_for(uri, text, doc.get("version"))]
     }
 
-    /// `initializationOptions.lang`, if the client sent one and the command
-    /// line did not already pin the generation.
+    /// `textDocument/documentSymbol`: the outline of one open buffer.
     ///
-    /// The command line wins: it is the more explicit of the two, and an
-    /// editor that guesses wrong in its client config should not be able to
-    /// override what the user typed when launching the server.
+    /// A URI this server has never been given is answered with an empty list
+    /// rather than an error. The specification lets a server return `null`,
+    /// but an editor showing "request failed" in its outline pane for a file
+    /// it simply has not opened yet is noise; an empty outline says the same
+    /// thing quietly.
+    fn document_symbols(&self, params: &Value) -> Value {
+        let text = params
+            .get("textDocument")
+            .and_then(|d| str_field(d, "uri"))
+            .and_then(|uri| self.docs.get(uri));
+        let Some(text) = text else {
+            return Value::Array(Vec::new());
+        };
+        let symbols = match self.opts.lang {
+            Some(lang) => crate::document_symbols(text, lang),
+            None => crate::document_symbols_auto(text),
+        };
+        Value::Array(symbols.iter().map(symbol_json).collect())
+    }
+
+    /// Absorb `initializationOptions` — `lang`, `libRoot`, `typecheck`,
+    /// `checkLibraries` — for the settings a client can send that the command
+    /// line may not have pinned.
+    ///
+    /// The command line wins on every one of them: it is the more explicit of
+    /// the two, and an editor that guesses wrong in its client config should
+    /// not be able to override what the user typed when launching the server.
+    /// For the flag-shaped options that means "the command line only ever
+    /// *disables*", which is why each is applied here only in the direction
+    /// the flag cannot have chosen.
     fn absorb_initialization_options(&mut self, params: &Value) {
         let options = params.get("initializationOptions");
         if self.opts.lang.is_none() {
@@ -410,7 +502,8 @@ impl State {
         // `libRoot` follows the same precedence rule and for the same reason,
         // and falls back to the environment variable the CLI already honours
         // so that an editor started from a configured shell needs no client
-        // configuration at all.
+        // configuration at all. That fallback is also why this function does
+        // not bail out when the client sent no `initializationOptions` at all.
         if self.opts.lib_root.is_none() {
             self.opts.lib_root = options
                 .and_then(|o| o.get("libRoot"))
@@ -418,16 +511,47 @@ impl State {
                 .map(PathBuf::from)
                 .or_else(|| std::env::var_os("RUSTYFI_LIB_ROOT").map(PathBuf::from));
         }
+        #[cfg(feature = "typecheck")]
+        {
+            if let Some(o) = options {
+                // `typecheck: false` turns the whole tier off; nothing here
+                // can turn it ON, because the roots and the discovery hook
+                // come from the process that started the server.
+                if o.get("typecheck") == Some(&Value::Bool(false)) {
+                    self.opts.project = None;
+                }
+                if let Some(project) = &mut self.opts.project {
+                    if o.get("checkLibraries") == Some(&Value::Bool(true)) {
+                        project.check_libraries = true;
+                    }
+                    // `libRoot` accepts a string or an array of them — the
+                    // loader's search path is a list, and an editor
+                    // configuring one project-local root plus a shared one
+                    // should not have to choose. Named roots replace
+                    // discovery entirely, exactly as `--lib-root` does for
+                    // the compiler.
+                    let roots: Vec<PathBuf> = match o.get("libRoot") {
+                        Some(Value::String(s)) => vec![s.into()],
+                        Some(Value::Array(items)) => items
+                            .iter()
+                            .filter_map(Value::as_str)
+                            .map(Into::into)
+                            .collect(),
+                        _ => Vec::new(),
+                    };
+                    if !roots.is_empty() && project.lib_roots.is_empty() {
+                        project.lib_roots = roots;
+                    }
+                }
+            }
+        }
     }
 
     /// Analyse `text` and build the whole `textDocument/publishDiagnostics`
     /// notification, envelope included.
     fn diagnostics_for(&self, uri: &str, text: &str, version: Option<&Value>) -> Value {
-        let diags = match self.opts.lang {
-            Some(lang) => crate::analyze(text, lang),
-            None => crate::analyze_auto(text),
-        };
-        let items: Vec<Value> = diags
+        let items: Vec<Value> = self
+            .diagnose(uri, text)
             .into_iter()
             .map(|d| {
                 json!({
@@ -450,6 +574,79 @@ impl State {
         }
         jsonrpc::notification("textDocument/publishDiagnostics", params)
     }
+
+    /// The diagnostics themselves: the whole-program tier where it is
+    /// configured and the URI names a path it can reach, the parse tier
+    /// otherwise.
+    ///
+    /// A URI that is not a `file:` one — `untitled:`, an editor's own
+    /// scratch scheme — has no path, so there is no directory to resolve
+    /// `@import:` against and no library root to discover. That buffer gets
+    /// the parse tier, which is exactly what it would have got before this
+    /// tier existed.
+    #[cfg(feature = "typecheck")]
+    fn diagnose(&self, uri: &str, text: &str) -> Vec<crate::Diag> {
+        let Some(project) = &self.opts.project else {
+            return self.parse_only(text);
+        };
+        let Some(path) = crate::project::path_from_uri(uri) else {
+            return self.parse_only(text);
+        };
+        let opts = crate::project::CheckOptions {
+            // The command line's `--lang` wins over the copy the caller put
+            // in `project`, so the two halves of one server cannot disagree
+            // about which generation a buffer is.
+            lang: self.opts.lang.or(project.lang),
+            ..project.clone()
+        };
+        crate::project::check(&path, text, &opts).diagnostics
+    }
+
+    #[cfg(not(feature = "typecheck"))]
+    fn diagnose(&self, _uri: &str, text: &str) -> Vec<crate::Diag> {
+        self.parse_only(text)
+    }
+
+    /// Lex + parse only — [`crate::analyze`] under the configured generation.
+    fn parse_only(&self, text: &str) -> Vec<crate::Diag> {
+        match self.opts.lang {
+            Some(lang) => crate::analyze(text, lang),
+            None => crate::analyze_auto(text),
+        }
+    }
+}
+
+/// One [`Symbol`] as LSP's `DocumentSymbol`, children and all.
+///
+/// `detail` and `children` are omitted when they are empty — both are
+/// optional in the protocol, and a thousand `"children": []` members is a
+/// measurable fraction of the payload for a library with a big signature.
+fn symbol_json(s: &Symbol) -> Value {
+    let mut out = json!({
+        "name": s.name,
+        "kind": s.kind.code(),
+        "range": {
+            "start": { "line": s.range.start.line, "character": s.range.start.character },
+            "end": { "line": s.range.end.line, "character": s.range.end.character },
+        },
+        "selectionRange": {
+            "start": {
+                "line": s.selection_range.start.line,
+                "character": s.selection_range.start.character,
+            },
+            "end": {
+                "line": s.selection_range.end.line,
+                "character": s.selection_range.end.character,
+            },
+        },
+    });
+    if let Some(detail) = &s.detail {
+        out["detail"] = Value::String(detail.clone());
+    }
+    if !s.children.is_empty() {
+        out["children"] = Value::Array(s.children.iter().map(symbol_json).collect());
+    }
+    out
 }
 
 /// A [`ByteRange`] as an LSP range over `text`.
@@ -550,6 +747,8 @@ fn server_capabilities() -> Value {
                 // is sent, so there is no `completionItem/resolve` to answer.
                 "resolveProvider": false,
             },
+            "documentSymbolProvider": true,
+            "workspaceSymbolProvider": true,
             // The protocol's default, stated explicitly because it is the
             // one thing about this server most likely to be got wrong by
             // whoever touches `line_index` next: every `character` below is

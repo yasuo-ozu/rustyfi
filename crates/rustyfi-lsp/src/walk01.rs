@@ -26,7 +26,8 @@ use rustyfi_syntax::cst_v1::{self as v1, ast};
 use rustyfi_syntax::leaf::*;
 use rustyfi_syntax::span::Span;
 
-use crate::model::{node_span, Builder, ByteRange, Def, HeaderKind, Ns};
+use crate::model::{Builder, ByteRange, Def, HeaderKind, Ns};
+use crate::symbols::node_span;
 
 fn at(span: Span) -> usize {
     span.start.byte
@@ -451,7 +452,7 @@ impl Builder<'_> {
             scope,
             form,
             ty: match &t.body {
-                v1::TypeBodyV1::Synonym(ty) => Some(node_span(ty)),
+                v1::TypeBodyV1::Synonym(ty) => Some(ByteRange::of(node_span(ty))),
                 _ => None,
             },
             container: Some(container),
@@ -478,7 +479,7 @@ impl Builder<'_> {
             name_span: ByteRange::of(v.ctor.span),
             scope,
             form: "variant constructor",
-            ty: v.of_ty.as_ref().map(|o| node_span(&o.ty)),
+            ty: v.of_ty.as_ref().map(|o| ByteRange::of(node_span(&o.ty))),
             container: Some(container),
             declaration: false,
         });
@@ -582,7 +583,7 @@ impl Builder<'_> {
                 owner,
                 "type",
                 match &t.body {
-                    v1::TypeBodyV1::Synonym(ty) => Some(node_span(ty)),
+                    v1::TypeBodyV1::Synonym(ty) => Some(ByteRange::of(node_span(ty))),
                     _ => None,
                 },
             );
@@ -645,7 +646,7 @@ impl Builder<'_> {
                     name.span,
                     owner,
                     "val",
-                    Some(node_span(ty)),
+                    Some(ByteRange::of(node_span(ty))),
                 );
                 self.v01_quant(quant);
                 self.v01_type(ty);
@@ -657,7 +658,7 @@ impl Builder<'_> {
                     cmd.span,
                     owner,
                     "val",
-                    Some(node_span(ty)),
+                    Some(ByteRange::of(node_span(ty))),
                 );
                 self.v01_quant(quant);
                 self.v01_type(ty);
@@ -669,7 +670,7 @@ impl Builder<'_> {
                     cmd.span,
                     owner,
                     "val",
-                    Some(node_span(ty)),
+                    Some(ByteRange::of(node_span(ty))),
                 );
                 self.v01_quant(quant);
                 self.v01_type(ty);

@@ -96,7 +96,7 @@ impl<'s> LineIndex<'s> {
     /// the last one clamps to the end of the text, a character past the end of
     /// its line clamps to that line's terminator, and a character landing on
     /// the second half of a surrogate pair rounds **down** to the start of
-    /// that character (the mirror of [`floor_boundary`]'s rule).
+    /// that character (the mirror of `floor_boundary`'s rule).
     ///
     /// Round-trips with [`Self::position`] for every position that names a
     /// real character boundary, which is the property the tests pin.

@@ -192,12 +192,17 @@ $ rustyfi lsp                # detect each file's generation from its own text
 $ rustyfi lsp --lang 0.1     # analyse everything as 0.1
 ```
 
-What it does today is **diagnostics**: lex and parse errors, live as you type,
-under whichever SATySFi generation the file is written in. Both 0.0.6 and 0.1
-are supported, and the generation is chosen per file the same way a compile
-chooses it for the entry document — a `use` header or a `val` head selects
-0.1, a `@stage:` header or a `let-*` head selects 0.0, and a file that signals
-neither is checked against both rather than guessed at. Measured against every
+It answers **diagnostics**, **hover**, **go-to-definition**, **completion**
+and **symbols** — for both SATySFi generations, and on half-typed buffers.
+
+### Diagnostics
+
+**Lex and parse errors** are reported for any buffer at all, under whichever
+SATySFi generation the file is written in. Both 0.0.6 and 0.1 are supported,
+and the generation is chosen per file the same way a compile chooses it for the
+entry document — a `use` header or a `val` head selects 0.1, a `@stage:` header
+or a `let-*` head selects 0.0, and a file that signals neither is checked
+against both rather than guessed at. Measured against every
 `.saty`/`.satyh`/`.satyg` file in this repository — 247 of them, 64 of which
 are 0.1 — it reports **no diagnostics at all on files that compile**, in 0.56 s
 for the whole set (30 ms worst case).
@@ -207,9 +212,46 @@ half-typed inputs — 11.5 seconds on one 14 KB buffer, and climbing — so the
 server caps how much backtracking one parse may do and says so plainly when it
 hits the cap, rather than freezing the editor.
 
-It also answers **hover**, **go-to-definition** and **completion**, all three
-from one cursor → syntax mapping over the buffer, and all three under the same
-rule: *say only what the file proves.*
+**Type errors** are reported for a document whose program can be resolved. A
+type error in SATySFi is a property of a whole *program*, not of a file — the
+entry document plus every `@require:`d package, in dependency order — so the
+server resolves that program first, exactly as a compile does (`rustyfi-loader`
+against the same library roots, then elaboration, typechecking and `:>` seal
+checking; it stops before evaluation, so no fonts and no pages). The **buffer's
+own text** stands in for its file, so unsaved edits are what gets checked.
+
+Three things follow from doing it that way, and each is deliberate:
+
+- **When the program cannot be resolved, nothing is reported.** No library root
+  configured, a `@require:` naming a package that is not installed, a `use`
+  header document (whose packaging mode resolves dependencies from a
+  pre-solved `rustyfi-deps.yaml` and has no seam for an in-memory buffer): all
+  of these fall back to the parse tier and say nothing. A wall of "cannot
+  resolve" on a file that is not at fault is worse than silence.
+- **Library buffers are parse-only unless you ask.** `rustyfi lsp
+  --check-libraries` typechecks a `.satyh`/`.satyg` too, as a dependency of a
+  synthetic document carrying its own headers. It is off by default because
+  SATySFi's global-merge module model lets a library use a module it never
+  `@require:`s — `satysfi-base`'s `tabular2.satyh` calls `Color.black` and
+  requires only `list` and `table` — which is valid and cannot typecheck alone.
+  Swept over every library this repository ships, 76 of 77 bundled packages and
+  68 of 68 resolvable corpus sources check clean; the exceptions are listed by
+  name, with reasons, in `crates/rustyfi-lsp/tests/project.rs`.
+- **An error from another file is not drawn on yours.** Spans in this port
+  carry no file identity, and the program under analysis is a merge of many
+  files, so a span is only trusted when its own `(line, column, byte)` triple
+  matches this buffer. Otherwise the diagnostic goes to the top of the file and
+  says where it really came from.
+
+The cost is the reason the two tiers are separate: a parse is under a
+millisecond, while resolving and typechecking a real document is 2 ms for a
+two-file one and 100–200 ms for one with a full document class behind it (28
+files, release build). `--no-typecheck` turns the whole-program tier off.
+
+### Hover, go-to-definition and completion
+
+All three answer from one cursor → syntax mapping over the buffer, and all
+three under the same rule: *say only what the file proves.*
 
 - **Hover** names what is under the cursor — an inline command, a module, a
   variant constructor, a record label — and, when the file binds it, how it was
@@ -233,23 +275,49 @@ All three keep working on a buffer that does not parse — and on one that does
 not even *lex*, which is what `{\emp` is the moment you start typing a command:
 everything written before the break is still answered about.
 
+### Symbols
+
+**Symbols** fill the outline pane, the breadcrumb and "go to symbol", for one
+file (`textDocument/documentSymbol`) and across the project
+(`workspace/symbol`). Both generations' declaration forms are covered —
+0.0.6's `let`/`let-rec`/`let-inline`/`let-block`/`let-math`/`let-mutable`/
+`type`/`module … : sig … end` and the `direct` items in a signature, 0.1's
+`val` family with its `~`/`persistent ~` stage qualifiers, `type`,
+`signature`, `include` and nested `module`s, and both header families. A
+module's members are its *children*, so a library folds down to one entry
+rather than thirty. Over the same 247-file corpus the outline extraction finds
+9,843 declarations in 1.2 s, and the only file that yields nothing is the one
+that is zero bytes long.
+
+The walk is deliberately structural — no name resolution, no types, no
+following `@require:` — so it cannot produce a *wrong* answer, only an
+incomplete one, and it works on a half-typed buffer: it reads the top-level
+declaration sequence one declaration at a time, so an unfinished `let` at the
+bottom of the file costs you that one symbol rather than the whole outline.
+
+### Configuration
+
 `--lib-root <dir>` (or `$RUSTYFI_LIB_ROOT`, or the client's
-`initializationOptions.libRoot`) is what lets a `@require:` header be followed
-to its package file. `@import:`, being relative to the importing file, needs
-no configuration.
+`initializationOptions.libRoot`) serves both halves that need one: following a
+`@require:` header to its package file, and resolving a buffer's dependency
+graph for the type tier. `@import:`, being relative to the importing file,
+needs no configuration. `initializationOptions` accepts `lang`, `libRoot` (a
+string or an array), `checkLibraries` and `typecheck`, with the command line
+winning wherever both speak.
 
-It deliberately stops short of typechecking. Type errors in SATySFi are a
-property of a whole *program* — the entry document plus every `@require:`d
-package, in dependency order — and reporting them for one file in isolation
-would bury the real error under a hundred "unbound variable"s for names the
-document legitimately imports.
+### As a library
 
-All of this is also available as plain library functions with no LSP types in
-their signatures, no filesystem access and no default features needed —
-`rustyfi_lsp::analyze(source, lang) -> Vec<Diag>`, and
-`build_model` / `hover` / `definition` / `completions` — so the same
-diagnostics and the same editor answers can run in a browser editor compiled to
-`wasm32-unknown-unknown`.
+Everything except the whole-program tier and `workspace/symbol` is also
+available as a plain library function, with no LSP types in its signature, no
+filesystem access and no default features needed —
+`rustyfi_lsp::analyze(source, lang) -> Vec<Diag>`,
+`rustyfi_lsp::document_symbols(source, lang) -> Vec<Symbol>`, and
+`build_model` / `hover` / `definition` / `completions`. So a browser editor
+compiled to `wasm32-unknown-unknown` gets exactly what the desktop one does.
+The two exceptions are where the filesystem enters: the whole-program tier is
+`rustyfi_lsp::project::check`, behind the (default-on) `typecheck` feature, and
+searching a project for a symbol means reading it, so that part lives in the
+server half.
 
 ## Performance
 

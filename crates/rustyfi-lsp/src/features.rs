@@ -231,7 +231,7 @@ enum Area {
 /// - **a qualified prefix stays inside its module.** `M.` offers `M`'s
 ///   members, and offers nothing at all when `M` came from a `use` header —
 ///   its members live in a file this buffer cannot see.
-/// - **a type position offers types.** See [`in_type_position`].
+/// - **a type position offers types.** See `in_type_position`.
 pub fn completions(model: &Model<'_>, byte: usize) -> Vec<Completion> {
     let source = model.source();
     let byte = crate::line_index::floor_boundary(source, byte);
